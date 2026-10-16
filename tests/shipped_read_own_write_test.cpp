@@ -55,7 +55,7 @@ TEST(ShippedReadOwnWrite, ATransactionReadsItsOwnUncommittedWriteOnAPeer) {
     // around; the cell now pins read-your-own-write on the session's core.
     ASSERT_EQ(d0.Dispatch("CREATE TABLE r1 (id int64, v int64) BTREE").response.substr(0, 3),
               "CRE");
-    auto oid = rig->core(0).catalog().FindTableOidByName("r1");
+    auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "r1");
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
 
@@ -127,7 +127,7 @@ TEST(ShippedReadOwnWrite, AJoinInsideATransactionOnAPeerSeesItsOwnWrites) {
         "CRE");
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
     for (const char* name : {"acct", "fill"}) {
-        auto oid = rig->core(0).catalog().FindTableOidByName(name);
+        auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, name);
         ASSERT_TRUE(oid.ok()) << name;
     }
 

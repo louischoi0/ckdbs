@@ -10,9 +10,14 @@
 
 namespace kds::catalog {
 
-const Oid* CatalogCache::FindOidByName(std::string_view name) noexcept {
-    auto it = name_to_oid_.find(name);
-    if (it == name_to_oid_.end()) {
+const Oid* CatalogCache::FindOidByName(Oid namespace_oid, std::string_view name) noexcept {
+    const auto names = name_to_oid_.find(namespace_oid);
+    if (names == name_to_oid_.end()) {
+        ++stats_.misses;
+        return nullptr;
+    }
+    auto it = names->second.find(name);
+    if (it == names->second.end()) {
         ++stats_.misses;
         return nullptr;
     }
@@ -20,11 +25,11 @@ const Oid* CatalogCache::FindOidByName(std::string_view name) noexcept {
     return &it->second;
 }
 
-void CatalogCache::PutOidByName(std::string_view name, Oid oid) {
+void CatalogCache::PutOidByName(Oid namespace_oid, std::string_view name, Oid oid) {
     // try_emplace, not insert_or_assign: an entry already present must keep
     // its address and value, because a caller may be holding the pointer
     // FindOidByName() handed out.
-    auto [it, inserted] = name_to_oid_.try_emplace(std::string(name), oid);
+    auto [it, inserted] = name_to_oid_[namespace_oid].try_emplace(std::string(name), oid);
     (void)it;
     if (inserted) ++stats_.fills;
 }

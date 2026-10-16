@@ -76,7 +76,7 @@ protected:
     };
 
     Placed Insert(const std::string& table, const std::vector<parser::AstValue>& body) {
-        auto oid = boot_->catalog.FindTableOidByName(table);
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, table);
         EXPECT_TRUE(oid.ok()) << oid.status().message();
         auto access = boot_->catalog.InitTableAccess(oid.value());
         EXPECT_TRUE(access.ok()) << access.status().message();
@@ -113,7 +113,7 @@ protected:
     // test is the *reader*.
     void SupersedeWith(const std::string& table, const Placed& at,
                        const std::vector<parser::AstValue>& new_body, std::uint64_t writer) {
-        auto oid = boot_->catalog.FindTableOidByName(table);
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, table);
         ASSERT_TRUE(oid.ok());
         auto access = boot_->catalog.InitTableAccess(oid.value());
         ASSERT_TRUE(access.ok());

@@ -65,8 +65,19 @@ struct CabinDdlResult {
 // (`exec/cabin_expr.hpp`, whose refusals are its), and its text written to
 // sys.cabin_exprs through `Catalog::CreateExprCabin`'s callback; `store` and
 // `wal` are that relation's.
+//
+// The relation's name resolves as every statement's does: an unqualified one
+// means `default_namespace` (`USE`, namespace.md NS5); so for `DropCabin`.
+//
+// The relation is resolved under `view`. A Cabin is created with no
+// transaction, so its row outlives any rollback, and the caller passes a
+// committed-now view: a row naming another transaction's uncommitted
+// relation would name a dead oid once that relation rolled back. Null reads
+// unfiltered, for a caller with no transaction manager.
 StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, storage::PageStore& store,
-                                     wal::WalManager* wal, const parser::CabinStmt& stmt);
+                                     wal::WalManager* wal, const parser::CabinStmt& stmt,
+                                     catalog::Oid default_namespace,
+                                     const txn::ReadView* view = nullptr);
 
 // Removes the Cabin on `(table, column)` and returns its `cabin_id`, so the
 // caller can drop the observed sets that the catalog cannot see.
@@ -81,7 +92,8 @@ StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, storage::PageSto
 // An expression or predicate Cabin is found by its compiled `F`, and its
 // sys.cabin_exprs row goes with it.
 StatusOr<std::uint64_t> DropCabin(catalog::Catalog& catalog, storage::PageStore& store,
-                                  wal::WalManager* wal, const parser::CabinStmt& stmt);
+                                  wal::WalManager* wal, const parser::CabinStmt& stmt,
+                                  catalog::Oid default_namespace);
 
 // The declaration loader's Cabin half (`Catalog::SetDeclarationLoader`):
 // every `access.expr_cabins` entry's `F`, recompiled from its sys.cabin_exprs

@@ -1,10 +1,12 @@
 # Namespaces — logical grouping over one global oid space
 
-Decisions NS1–NS10. **A namespace is a name, and it declares the affinity
-of the relations created in it** (NS10) — a statement about which relations
-belong together, which nothing reads: no relation is bound to a core, so a
-qualifier **declares grouping, never identity and never placement** —
-relation names stay instance-global (NS5, NS6).
+Decisions NS1–NS10. **A namespace is a name-collision domain, and it
+declares the affinity of the relations created in it** (NS10) — a
+statement about which relations belong together, which nothing reads: no
+relation is bound to a core, so a qualifier **selects a name, never
+identity and never placement**. A relation's name is unique within its
+namespace (NS6); an unqualified name means the session's namespace, set by
+`USE` (NS5, NS8). Its identity is still its oid (NS2).
 
 This spec **ratifies and completes** something the engine already carries
 rather than introducing it: `kNamespaceSys` (0) and `kNamespacePublic` (1)
@@ -45,7 +47,8 @@ layer and this engine deliberately does not:
 The one-line test for anything else proposed for this layer: **if removing
 every namespace and renaming objects to be unique would change the answer,
 it does not belong here** — and the affinity declaration passes that test
-too, because nothing reads it.
+too, because nothing reads it. The name a relation is reached by is the
+pair `(namespace, name)`, which a unique rename preserves.
 
 ## NS2 — Oids are globally unique; the namespace never enters the identity
 
@@ -103,48 +106,79 @@ namespace its relations are in.
 
 ## NS5 — Resolution
 
-A name is either **qualified** (`ns.table`) or **unqualified** (`table`),
-and a relation's name is **instance-global**:
+A name is either **qualified** (`ns.table`) or **unqualified** (`table`), and
+a relation's name is the pair `(namespace, name)` (NS6):
 
-- Unqualified: resolves to the one relation of that name, wherever it
-  lives.
-- Qualified: resolves the same relation and then **verifies** the
-  qualifier against the relation's stored `namespace_oid`. A disagreement
-  is `NotFound` naming both parts *and the namespace the relation is
-  actually in* — the useful answer to a wrong qualifier is the right
-  one. `Catalog::CheckRelationQualifier` is the one implementation;
-  `parser/ast.hpp`'s namespace-qualifier rule is the one statement of the
-  rule.
-- `CREATE TABLE ns.t` is the exception and the only place a qualifier
-  *decides* rather than asserts: it selects the namespace, and through
-  NS10 the relation's declared affinity. An unknown namespace is refused with its byte and is
+- Qualified: the qualifier selects the namespace and the name is looked up
+  in it alone. An unknown namespace is `NotFound` naming it, with its byte.
+- Unqualified: means `default.table`, where `default` is the session's
+  namespace (NS8) - `public` until a `USE`, and `public` for every caller
+  with no session (a KWP load, an engine-internal statement).
+- **There is no search.** One namespace is asked; a relation of the name in
+  another namespace is not found. The miss is `NotFound`, `no relation named
+  '<as written>' (byte N)`, and **names every namespace that does hold the
+  name** - `no relation named 't' in namespace 'public'; 't' is in namespace
+  'orders' - write orders.t (byte 14)` - because writing the qualifier is
+  the user's next act.
+- `CREATE TABLE ns.t` creates in `ns`; `CREATE TABLE t` creates in the
+  session's namespace. An unknown namespace is refused with its byte and is
   **never created by being named**: a typo must not be indistinguishable
   from an intent.
+- **`sys` never resolves for a statement.** Its relations are catalog views,
+  read as `SELECT ... FROM sys.<view>` on the view path, which never reaches
+  this resolution; every other statement naming `sys.x` is `Unsupported`,
+  and an unqualified catalog name (`tables`) is a miss in the session's
+  namespace that says `read it as sys.tables`. A catalog relation has no
+  column rows a statement could bind, which is why the unqualified name used
+  to reach `no columns for this rel_id`. `SHOW RELAYOUT sys.x` alone answers
+  for a catalog relation by name, with the reason the mover cannot touch it.
+- Every place a relation is named resolves through
+  `Catalog::ResolveRelation` - `exec::CompileBlock`'s binding loop for every
+  `SELECT` shape (FROM, every JOIN, every subquery block), each write's and
+  DDL's handler, `REFERENCES`, `DESCRIBE`, `sys.columns`' `rel_name` key,
+  `SHOW RELAYOUT`, and the KWP load's relation (`ns.t` or `t`).
 
-There is no fallback resolution and no search path. A name reaches exactly
-one relation (NS6), so there is nothing to search; and a search-path list
-(PostgreSQL's model) is declined because ordered-list resolution makes the
-meaning of a name depend on session state that is invisible in the
-statement, the failure mode `docs/rules/rules.md` guards against elsewhere
-by preferring explicit constants to inferred ones. `sys` is never on any
-resolution path but its own: catalog relations are addressed as
-`sys.objects`, so a user relation named `tables` can neither shadow nor be
-shadowed by a system one.
+**Why a session namespace and not a search path.** A search path (an ordered
+list) makes the meaning of a name depend on which namespaces exist and on
+their order; one namespace makes it depend on one word the session set, and
+a miss can always say which qualifier to write. The cost is the one NS8
+names: an unqualified name's meaning is session state.
 
-## NS6 — Uniqueness: `(name)` alone
+**Persisted declarations are not re-resolved by name.** An assertion, a
+Transition and a foreign key store their relations' oids; a re-read of the
+declaration text binds by oid, so neither a `USE` nor a second relation of
+the same name elsewhere changes what they govern.
 
-A relation's name is unique **instance-wide** among live relations:
-`Catalog::FindTableOidByName` takes a name and no namespace, and it is the
-gate, because SQL reaches a relation by name and never by oid. Two
-namespaces cannot hold two relations called `orders`. A namespace is
-**not a name-collision domain**, deliberately: `(namespace_oid, name)`
-scoping would put a namespace argument on `FindTableOidByName` and on
-every one of its callers, plus session state (NS8) to give an unqualified
-name a meaning.
+**Advisory structures are untouched** (NS2): a statement's fingerprint is
+its text, so `SELECT * FROM t` under two `USE`s is one pattern over two
+relations. That shares a `sys.patterns` row and costs a miss, never an
+answer: every trail entry carries its `rel_oid` and replay skips one that is
+not the step's (`exec/trail_replay.cpp`).
 
-The dropped-relation tombstone participates by oid, not by name: a retyped
-`kTypeDroppedTable` row keeps its `namespace_oid` for provenance, and its
-name is free for reuse — the same rule DROP TABLE already follows.
+## NS6 — Uniqueness: `(namespace, name)`
+
+A relation's name is unique **within its namespace** among live relations.
+Two namespaces may each hold a relation called `orders`; each is reached by
+its own qualifier, or unqualified from a session whose namespace it is.
+`Catalog::FindTableOidByName` takes the namespace and the name, and the name
+cache is keyed by the pair.
+
+The binding check (`catalog.md` CT7) asks a relation's name in its
+namespace alone, under `sys.objects`' root-page hold: `CREATE TABLE` in the
+namespace it creates in, `ALTER TABLE ... RENAME TO` in the relation's own.
+The dropped-relation tombstone keeps its `namespace_oid`, so an undecided
+drop holds its name in that namespace only.
+
+A namespace's own name, an index's, an assertion's, a Transition's and a
+Cabin's stay **instance-wide**: only relation names are scoped.
+
+**Every catalog view that names a relation names its namespace beside it**
+(a `namespace` column, `child_namespace` / `parent_namespace` in
+`sys.fkeys`, `references_namespace` in `sys.columns`), as the SQL spelling:
+a name alone no longer identifies a relation to a reader of the catalog.
+`manual/sql/sql.md` §6 lists them. A view keyed by a relation name resolves
+a bare key in the namespace a `namespace = '<literal>'` conjunct names, else
+in the session's.
 
 ## NS7 — DDL surface
 
@@ -160,9 +194,9 @@ name is free for reuse — the same rule DROP TABLE already follows.
   drop or move that relation. The row is **retyped to
   `kTypeDroppedNamespace` and never retired**: it is `GenerateUserOid()`'s
   floor evidence.
-- `CREATE TABLE [ns.]name` — unqualified creates in `public`, there being
-  no session current namespace (NS8). A named namespace must already
-  exist.
+- `CREATE TABLE [ns.]name` — unqualified creates in the session's
+  namespace (NS8). A named namespace must already exist.
+- `USE <namespace>` — sets the session's namespace (NS8).
 - `SHOW NAMESPACES` — NS9's listing. The two bootstrap namespaces are
   listed by their **SQL spellings** (`sys`, `public`) rather than by the
   registry names their rows carry (`namespaceSys`, `namespacePublic`),
@@ -171,24 +205,40 @@ name is free for reuse — the same rule DROP TABLE already follows.
   `well_known.hpp`.
 - Qualified names are accepted anywhere a relation name is accepted:
   `SELECT` (`FROM` and every `JOIN`, and inside every subquery block),
-  `INSERT`, `UPDATE`, `DELETE`, `REFERENCES`, `ALTER TABLE`, `DROP TABLE`,
-  `CREATE INDEX`, `CREATE CABIN`, `CREATE ASSERTION`, `DESCRIBE` and
-  `SHOW RELAYOUT`. Verified, never ignored (NS5). Every site
-  calls `Catalog::CheckRelationQualifier` — `exec::CompileBlock`'s
-  relation-binding loop for every `SELECT` shape, and each other
-  statement's handler (dispatcher, index, Cabin and assertion DDL).
+  `INSERT`, `UPDATE`, `DELETE`, `PURGE`, `REFERENCES`, `ALTER TABLE`,
+  `DROP TABLE`, `CREATE INDEX`, `CREATE CABIN`, `CREATE ASSERTION`,
+  `CREATE TRANSITION`, `DESCRIBE` and `SHOW RELAYOUT`. Each resolves as NS5
+  states.
 
 A namespace DDL runs where its session is, as every DDL does: every core
 writes the catalog's pages under the page latch.
 
-## NS8 — Session state: none
+## NS8 — Session state: the session's namespace
 
-**No session carries a current namespace.** With names instance-global
-(NS5, NS6) there is nothing for one to select between: an unqualified name
-already reaches exactly one relation, and a "current namespace" that
-changed which relation a name reached would be the session-state-dependent
-meaning NS5 declines. A name therefore means the same thing on every
-core.
+**Every session carries one namespace**, the one an unqualified relation
+name means (NS5) and an unqualified `CREATE TABLE` lands in. It starts as
+`public` and is set by `USE <namespace>`:
+
+- The namespace resolves under the session's view, so one this
+  transaction created can be used. An unknown one is `NotFound` at its
+  byte; anything but one identifier (and one trailing `;`) is
+  `InvalidArgument`; `USE sys` is refused, its relations being read only
+  qualified (NS5).
+- The reply is `USE namespace=<name>`. A refused `USE` leaves the session
+  where it was.
+- **Session state, not transactional**: admitted inside a transaction, it
+  changes what a name written later means and no view; a `ROLLBACK` does not
+  undo it. It is routed as `SET` is (`DispatchInner`), is never
+  fingerprinted, and needs the readonly role.
+- A statement reads the namespace once, when it starts
+  (`exec::StatementContext::default_namespace`), so a parked write resumes
+  against the namespace it began in.
+- A namespace dropped after the `USE` leaves the session in an oid that
+  resolves nothing: every unqualified name is a miss and an unqualified
+  `CREATE TABLE` is refused by the namespace-live check, until the next
+  `USE`. `DROP NAMESPACE` does not ask which sessions use it.
+- The session moves whole between cores (`crosscore.md`), so its namespace
+  goes with it, and a name means the same thing on every core.
 
 ## NS10 — The namespace declares the affinity of its relations
 
@@ -228,6 +278,7 @@ and the design is wrong.
 
 ## Open, and deliberately not decided here
 
-Privileges, `DROP NAMESPACE CASCADE`, a search path, namespace-scoped
-names, what an affinity consumer reads (D18, AS-E), and renaming a
-namespace are undecided; the decisions are not recorded here.
+Privileges, `DROP NAMESPACE CASCADE`, what an affinity consumer reads (D18,
+AS-E), renaming a namespace, and moving a relation between namespaces are
+undecided; the decisions are not recorded here. A search path is declined
+(NS5).

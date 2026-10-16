@@ -102,9 +102,19 @@ every open, after the count) changed while it read, and resolves again
 under a view if it did. A DDL moves the generation before its first
 catalog write, so a reader that found its row sees the move. A write's
 `WHERE` subqueries resolve through it too, and `CREATE INDEX` builds only
-over the relation it resolved and borrowed. The routes that resolve with
-no view at all - `DROP INDEX`'s index name, `CREATE CABIN`, `C_LOAD_BEGIN`
-- are `docs/inflight/bugs/names-resolved-with-no-view.md`'s. With none in flight every catalog row is
+over the relation it resolved and borrowed. `DROP INDEX`'s index name
+resolves through it, and again under the relation `X` under a view taken
+once the scope counted the drop; `C_LOAD_BEGIN`'s bind resolves through
+it (`CommandDispatcher::ResolveRelationName`); `CREATE CABIN`, written with
+no transaction, resolves under a committed-now view, so its own row never
+names a relation that has not committed - the creating session's own
+included. **A statement head reads the count before it revalidates the
+cache**, and `ViewFor` takes the unfiltered path only if neither that
+reading nor its own sees a DDL open: a closing DDL moves the schema word
+before it uncounts, so a head that read the count as zero read the word
+after every move a closed DDL made. A DDL that opens and closes wholly
+inside one statement, after its head, is not covered (`known-gaps.md`).
+With none in flight every catalog row is
 either a bootstrap row or a committed one, so an unfiltered, cached read
 is correct for every reader. While one is open, a statement resolves
 names under a view — its own transaction's, or a fresh committed-now view

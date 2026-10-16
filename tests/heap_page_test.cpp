@@ -401,6 +401,8 @@ TEST(HeapPageTest, TupleHeaderIsTwentyBytesWithTrxIdFirst) {
 // ReadTupleIn() is it plus the wording - so each reason maps to the code and
 // message a reader of ReadTupleIn() has always seen, and a read fills the
 // same tuple. A reason that drifted from its wording would show here.
+// PayloadAt() answers every slot as ReadTupleIn() does, so slots 2 and 3 are
+// Corruption there too, never a span read past the frame or past the slot.
 TEST(HeapPageTest, TryReadTupleInGivesReadTupleInsReasonForEverySlot) {
     PageBuf buf{};
     auto created = PageView::CreateEmpty(AsSpan(buf), 0);
@@ -427,6 +429,7 @@ TEST(HeapPageTest, TryReadTupleInGivesReadTupleInsReasonForEverySlot) {
     EXPECT_FALSE(t.deleted);
     EXPECT_EQ(StringOf(t.payload), "row");
     EXPECT_EQ(StringOf(page.ReadTupleIn(0, n).value().payload), "row");
+    EXPECT_EQ(StringOf(page.PayloadAt(0, n).value()), "row");
 
     struct Case {
         std::uint16_t slot;
@@ -448,6 +451,10 @@ TEST(HeapPageTest, TryReadTupleInGivesReadTupleInsReasonForEverySlot) {
         EXPECT_EQ(worded.status().code(), c.code) << c.slot;
         EXPECT_NE(worded.status().message().find(c.message), std::string::npos)
             << worded.status().message();
+        auto payload = page.PayloadAt(c.slot, n);
+        ASSERT_FALSE(payload.ok()) << c.slot;
+        EXPECT_EQ(payload.status().code(), c.code) << c.slot;
+        EXPECT_EQ(payload.status().message(), worded.status().message());
     }
 }
 

@@ -60,6 +60,7 @@
 #include "kds/storage/log_page_image.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/parser/lexer.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -73,6 +74,15 @@ namespace kds::server {
 void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept;
 
 namespace {
+
+// The statement's constants (`exec/functions.hpp`) for a statement the
+// session runs: `NOW()`'s instant and the namespace an unqualified relation
+// name means (`USE`, namespace.md NS8).
+exec::StatementContext StatementContextFor(const Session& session) {
+    exec::StatementContext context = exec::StatementContextNow();
+    context.default_namespace = session.default_namespace();
+    return context;
+}
 
 std::string_view Trim(std::string_view s) {
     while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
@@ -887,6 +897,12 @@ CommandDispatcher::StatementEpochScope::StatementEpochScope(CommandDispatcher& d
         if (d_.epoch_seam_for_test_ && d_.epoch_seam_at_ == at) d_.epoch_seam_for_test_();
     };
     if (outermost && d_.epochs_ != nullptr) d_.epochs_->Enter(d_.core_id_);
+    // **The count before the word** (`ViewFor`): a closing DDL moves the word
+    // and then uncounts, so a head that read the word before the move and the
+    // count after the uncount would keep a cache filled while the DDL was
+    // open and still take the fast path. Read first, a count of zero means
+    // the word read below is past every move a closed DDL made.
+    d_.ddl_open_at_head_ = d_.txn_ != nullptr && d_.txn_->visibility().AnyDdlOpen();
     d_.catalog_.Revalidate(d_.epoch_seam_for_test_
                                ? std::function<void()>([&] { seam(EpochSeam::kAfterRead); })
                                : std::function<void()>{});
@@ -1167,7 +1183,7 @@ Role RequiredRole(std::string_view cmd, std::string_view rest) {
     if (IEquals(cmd, "PING") || IEquals(cmd, "SELECT") || IEquals(cmd, "WITH") ||
         IEquals(cmd, "ANALYZE") || IEquals(cmd, "SHOW") || IEquals(cmd, "DESCRIBE") ||
         IEquals(cmd, "DESC") || IEquals(cmd, "BEGIN") ||
-        IEquals(cmd, "START") ||
+        IEquals(cmd, "START") || IEquals(cmd, "USE") ||
         IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT") ||
         IEquals(cmd, "SAVEPOINT") || IEquals(cmd, "RELEASE")) {
         // SAVEPOINT and RELEASE are refused for every role; at this floor a
@@ -1281,6 +1297,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         const Status s = RefuseWhole(line, cmd, std::string(cmd) + " is not supported");
         return {ErrorReply(s), false, 0, s};
     }
+    if (IEquals(cmd, "USE")) return HandleUse(line, rest, session);
     if (IEquals(cmd, "SET")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "ISOLATION")) return HandleSetIsolation(sub_rest, session);
@@ -2127,13 +2144,13 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
         // namespace does not exist, absorbing the qualifier instead of
         // verifying it.
         auto create_ns = ResolveNames(session, [&](const txn::ReadView* v) {
-            return ResolveCreateNamespace(qualifier, /*byte_offset=*/0, v);
+            return ResolveCreateNamespace(qualifier, /*byte_offset=*/0, session, v);
         });
         if (!create_ns.ok()) {
             return {ErrorReply(create_ns.status()), false, 0, create_ns.status()};
         }
 
-        if (auto exists = ExistingRelationReply(qualifier, name, /*byte_offset=*/0);
+        if (auto exists = ExistingRelationReply(create_ns.value(), name);
             exists.has_value()) {
             return *exists;
         }
@@ -2215,19 +2232,28 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         //
         // A name that does not resolve takes no borrow: a create is refused
         // below, a drop falls through to the refusal `exec::DropIndex` owns,
-        // with its byte position. **An index name is read with no view**
-        // (`FindIndexByName` takes none), so a drop can find an index another
-        // transaction has not committed (`names-resolved-with-no-view.md`).
+        // with its byte position. An index name is a resolution route like a
+        // relation's: an index another transaction's open `CREATE INDEX`
+        // wrote is not found, so no drop delete-marks a row nobody decided.
         std::optional<catalog::Oid> relation;
+        Status miss;  // why a create's relation did not resolve
         if (stmt.drop || stmt.reindex) {
-            if (auto ix = catalog_.FindIndexByName(stmt.index_name); ix.ok()) {
-                relation = ix.value().table_oid;
-            }
-        } else {
             relation = ResolveNames(session, [&](const txn::ReadView* v) {
-                auto oid = catalog_.FindTableOidByName(stmt.table_name, v);
-                return oid.ok() ? std::optional<catalog::Oid>(oid.value()) : std::nullopt;
+                auto ix = catalog_.FindIndexByName(stmt.index_name, v);
+                return ix.ok() ? std::optional<catalog::Oid>(ix.value().table_oid)
+                               : std::nullopt;
             });
+        } else {
+            auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
+                return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                                session.default_namespace(),
+                                                stmt.table_byte_offset, v);
+            });
+            if (oid.ok()) {
+                relation = oid.value();
+            } else {
+                miss = oid.status();
+            }
         }
         if (relation.has_value()) {
             if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, *relation);
@@ -2235,6 +2261,16 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                 return {ErrorReply(*held), false, 0, *held};
             }
         }
+
+        // The name asked again under the `X`, at latest state with this
+        // DDL's own id: another transaction's open create is still not found,
+        // this transaction's own is, and a drop that committed during the
+        // wait reads as gone. The statement's view would be older than the
+        // wait and answer "being dropped" about a drop already committed.
+        const auto latest_name_view = [&](const DdlScope& ddl) -> std::optional<txn::ReadView> {
+            if (txn_ == nullptr) return std::nullopt;
+            return txn_->MintCheckView(ddl.txn != nullptr ? ddl.trx_id : txn::kNoTrxId);
+        };
 
         if (stmt.reindex) {
             // **A drop and a create in one transaction, under the `X` above**
@@ -2246,8 +2282,10 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
             catalog::CatalogRowRef created_row;
+            const std::optional<txn::ReadView> name_view = latest_name_view(ddl);
             auto result = exec::ReindexIndex(
-                catalog_, page_store_, stmt, relation, ddl.trx_id,
+                catalog_, page_store_, stmt, relation,
+                name_view.has_value() ? &*name_view : nullptr, ddl.trx_id,
                 ddl.txn != nullptr ? &change : nullptr,
                 ddl.txn != nullptr ? &created_row : nullptr, wal_, txn_);
             NoteIndexRowDropped(ddl, change);
@@ -2282,11 +2320,13 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             // against whichever way the drop went.
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
+            const std::optional<txn::ReadView> name_view = latest_name_view(ddl);
             // Only an index on the relation held above (`exec::DropIndex`'s
             // contract): a name that took no hold, or that another
             // transaction moved since, writes nothing.
-            auto index_oid = exec::DropIndex(catalog_, stmt, relation, ddl.trx_id,
-                                             ddl.txn != nullptr ? &change : nullptr);
+            auto index_oid = exec::DropIndex(catalog_, stmt, relation,
+                                             name_view.has_value() ? &*name_view : nullptr,
+                                             ddl.trx_id, ddl.txn != nullptr ? &change : nullptr);
             NoteIndexRowDropped(ddl, change);
             if (!index_oid.ok()) {
                 return {ErrorReply(index_oid.status()), false, 0, index_oid.status()};
@@ -2304,12 +2344,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         // is built only over the relation borrowed above. A later lookup
         // could find one created since, which holds no `X` of this
         // statement's.
-        if (!relation.has_value()) {
-            const Status s = Status::NotFound("no relation named '" + stmt.table_name +
-                                              "' (byte " +
-                                              std::to_string(stmt.table_byte_offset) + ")");
-            return {ErrorReply(s), false, 0, s};
-        }
+        if (!relation.has_value()) return {ErrorReply(miss), false, 0, miss};
         DdlScope create_ddl = DdlScopeFor(scope);
         catalog::CatalogRowRef created_row;
         // Resolved under the session's view (spec §5's rule: an index is a
@@ -2318,7 +2353,8 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         // view is taken after the scope opened, which counted this DDL, so
         // it is a minted one wherever a manager runs.
         const std::optional<txn::ReadView> build_view = ViewFor(session);
-        auto result = exec::CreateIndex(catalog_, page_store_, stmt, create_ddl.trx_id,
+        auto result = exec::CreateIndex(catalog_, page_store_, stmt, session.default_namespace(),
+                                        create_ddl.trx_id,
                                         create_ddl.txn != nullptr ? &created_row : nullptr,
                                         build_view.has_value() ? &*build_view : nullptr, wal_,
                                         txn_);
@@ -2347,7 +2383,7 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line, Session& s
         return {"ERR expected a CREATE CABIN or DROP CABIN statement", false};
     }
     const auto& stmt = std::get<parser::CabinStmt>(parsed.value());
-    if (stmt.shape == catalog::kCabinShapeColumn) return RunCabinDdl(stmt);
+    if (stmt.shape == catalog::kCabinShapeColumn) return RunCabinDdl(stmt, session.default_namespace());
 
     // ---- AQ-S1: an expression or predicate Cabin takes the relation `X` --
     //
@@ -2361,7 +2397,8 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line, Session& s
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         const std::optional<catalog::Oid> relation =
             ResolveNames(session, [&](const txn::ReadView* v) {
-                auto oid = catalog_.FindTableOidByName(stmt.table_name, v);
+                auto oid = catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                                    session.default_namespace(), 0, v);
                 return oid.ok() ? std::optional<catalog::Oid>(oid.value()) : std::nullopt;
             });
         if (relation.has_value()) {
@@ -2370,16 +2407,18 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line, Session& s
                 return {ErrorReply(*held), false, 0, *held};
             }
         }
-        return RunCabinDdl(stmt);
+        return RunCabinDdl(stmt, session.default_namespace());
     });
 }
 
-DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt) {
+DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt,
+                                             catalog::Oid default_namespace) {
     // One handler for both, because the two statements share a parse and a
     // reply shape and differ only in which catalog call they reach - the same
     // reason CabinStmt is one struct (ast.hpp).
     if (stmt.drop) {
-        auto cabin_id = exec::DropCabin(catalog_, page_store_, wal_, stmt);
+        auto cabin_id =
+            exec::DropCabin(catalog_, page_store_, wal_, stmt, default_namespace);
         if (!cabin_id.ok()) {
             return {ErrorReply(cabin_id.status()), false, 0, cabin_id.status()};
         }
@@ -2402,7 +2441,13 @@ DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt) {
         return {os.str(), false};
     }
 
-    auto result = exec::CreateCabin(catalog_, page_store_, wal_, stmt);
+    // Committed now, not the session's view: the row is written with no
+    // transaction and outlives a rollback, so even the session's own
+    // uncommitted relation is one it must not name.
+    std::optional<txn::ReadView> committed;
+    if (txn_ != nullptr) committed = txn_->MintCheckView(txn::kNoTrxId);
+    auto result = exec::CreateCabin(catalog_, page_store_, wal_, stmt, default_namespace,
+                                    committed.has_value() ? &*committed : nullptr);
     if (!result.ok()) {
         return {ErrorReply(result.status()), false, 0, result.status()};
     }
@@ -2595,19 +2640,14 @@ StatusOr<catalog::Oid> CommandDispatcher::ResolveAlterTarget(const parser::Alter
                                                             Session& session) {
     // You cannot alter a relation you cannot see (DT3c).
     auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(stmt.schema, stmt.table_name, stmt.byte_offset, v);
+        return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                        session.default_namespace(), stmt.byte_offset, v);
     });
-    if (!oid.ok()) return oid.status();
     // AL7: the catalog's own names are load-bearing for bootstrap and are
-    // nobody's to change - refused here so every form shares the answer, and
-    // `RenameTable`'s own guard is defense rather than the door.
-    auto system = InSystemNamespace(oid.value());
-    if (!system.ok()) return system.status();
-    if (system.value()) {
-        return Status::InvalidArgument("'" + stmt.table_name +
-                                        "' is a system relation and cannot be altered");
-    }
-    return oid.value();
+    // nobody's to change - a system relation never resolves
+    // (`Catalog::ResolveRelation` refuses `sys`), and `RenameTable`'s own
+    // guard is defense rather than the door.
+    return oid;
 }
 
 StatusOr<catalog::Oid> CommandDispatcher::AlterColumnRelation(const parser::AlterStmt& stmt,
@@ -2768,7 +2808,8 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
 
         // Nor drop one (DT3c).
         auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
-            return ResolveQualifiedRelation(stmt.schema, stmt.table_name, stmt.byte_offset, v);
+            return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                            session.default_namespace(), stmt.byte_offset, v);
         });
         if (!oid.ok()) {
             return {ErrorReply(oid.status()), false, 0, oid.status()};
@@ -3065,7 +3106,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         return txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
     };
     const txn::ReadView view = settled_view();
-    auto target = exec::AssertionTargetOid(catalog_, stmt, &view);
+    auto target = exec::AssertionTargetOid(catalog_, stmt, session.default_namespace(), &view);
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
     DdlBuildLock build_lock;
@@ -3086,7 +3127,8 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // nothing: the settled name is read again and must still be the locked oid.
     // A name that is gone is the `NotFound` a retry would give.
     if (build_lock.txn != nullptr) {
-        auto settled = exec::AssertionTargetOid(catalog_, stmt, &check_view);
+        auto settled =
+            exec::AssertionTargetOid(catalog_, stmt, session.default_namespace(), &check_view);
         if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
         if (settled.value() != target.value()) {
             const Status moved = Status::TxnConflict(
@@ -3167,7 +3209,7 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
         }
         target = def.value()->target_oid;
     } else {
-        target = exec::TransitionTargetOid(catalog_, stmt, &view);
+        target = exec::TransitionTargetOid(catalog_, stmt, session.default_namespace(), &view);
     }
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
@@ -3215,7 +3257,8 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
     // on another relation; the grant is on the old one, so what is built
     // must be too, or nothing.
     if (build_lock.txn != nullptr) {
-        auto settled = exec::TransitionTargetOid(catalog_, stmt, &check_view);
+        auto settled =
+            exec::TransitionTargetOid(catalog_, stmt, session.default_namespace(), &check_view);
         if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
         if (settled.value() != target.value()) {
             const Status moved = Status::TxnConflict(
@@ -3919,8 +3962,11 @@ void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::
 
 StatusOr<catalog::Oid> CommandDispatcher::ResolveCreateNamespace(std::string_view qualifier,
                                                                 std::uint32_t byte_offset,
+                                                                const Session& session,
                                                                 const txn::ReadView* view) {
-    if (qualifier.empty()) return catalog::kNamespacePublic;
+    // The session's namespace was live at its `USE`; whether it still is,
+    // `Catalog::CreateTable` asks under the hold a drop's RESTRICT takes.
+    if (qualifier.empty()) return session.default_namespace();
     auto ns = catalog_.FindNamespaceOidByName(qualifier, view);
     if (ns.ok()) {
         // `sys` resolves - it has to, or `sys.tables` would stop naming the
@@ -4133,18 +4179,15 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         }
         auto& stmt = std::get<parser::CreateTableStmt>(parsed.value());
 
-        // AF-T3: the one qualifier that decides rather than asserts. An
-        // unqualified name is `public`, so every statement written before
-        // AF means exactly what it meant; a named namespace must already
-        // exist, because implicit creation is what makes a typo
+        // The qualifier decides the namespace; an unqualified name lands in
+        // the session's (`USE`, namespace.md NS7). A named namespace must
+        // already exist, because implicit creation is what makes a typo
         // indistinguishable from an intent (AF-6, shape (a) over (b)).
         //
-        // **Resolved before the name-collision check below**, so
-        // `CREATE TABLE ordrs.t` is refused for its namespace rather than
-        // answered `EXISTS` for some `t` elsewhere. An unqualified name
-        // reads no catalog here.
+        // **Resolved before the name-collision check below**, which asks
+        // for the name in that namespace alone (NS6).
         auto create_ns = ResolveNames(session, [&](const txn::ReadView* v) {
-            return ResolveCreateNamespace(stmt.schema, stmt.table_byte_offset, v);
+            return ResolveCreateNamespace(stmt.schema, stmt.table_byte_offset, session, v);
         });
         if (!create_ns.ok()) {
             return {ErrorReply(create_ns.status()), false, 0, create_ns.status()};
@@ -4153,8 +4196,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // The duplicate check, answered early so a taken name costs no type
         // resolution and no foreign-key lookup; `ExistingRelationReply` says
         // why it is unfiltered and why it is not the answer that binds.
-        if (auto exists = ExistingRelationReply(stmt.schema, stmt.table_name,
-                                                stmt.table_byte_offset);
+        if (auto exists = ExistingRelationReply(create_ns.value(), stmt.table_name);
             exists.has_value()) {
             return *exists;
         }
@@ -4211,27 +4253,13 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             // Under the session's view (DT3c): a child may reference a parent
             // its own transaction created, and may not reference one another
             // transaction has not committed.
-            // AF-T3: `REFERENCES orders.customer` asserts where the parent
-            // lives, and a wrong assertion is refused - under the same view.
-            bool unknown = false;
+            // `REFERENCES orders.customer` names where the parent lives; an
+            // unqualified parent is in the session's namespace (NS5).
             auto parent_oid = ResolveNames(session, [&](const txn::ReadView* v) {
-                auto oid = catalog_.FindTableOidByName(col.references_table, v);
-                unknown = !oid.ok();
-                if (unknown) return oid;
-                if (Status s = catalog_.CheckRelationQualifier(
-                        col.references_schema, col.references_table, oid.value(),
-                        col.references_byte_offset, v);
-                    !s.ok()) {
-                    return StatusOr<catalog::Oid>(s);
-                }
-                return oid;
+                return catalog_.ResolveRelation(col.references_schema, col.references_table,
+                                                session.default_namespace(),
+                                                col.references_byte_offset, v);
             });
-            if (unknown) {
-                return {"ERR column '" + col.name + "' references unknown relation '" +
-                            col.references_table + "' (byte " +
-                            std::to_string(col.references_byte_offset) + ")",
-                        false};
-            }
             if (!parent_oid.ok()) {
                 return {ErrorReply(parent_oid.status()), false, 0, parent_oid.status()};
             }
@@ -4293,8 +4321,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             // and only while nothing was written, since a non-`ERR` reply
             // lets autocommit commit whatever was.
             if (oid.status().code() == StatusCode::kAlreadyExists && !wrote_rows) {
-                if (auto exists = ExistingRelationReply(stmt.schema, stmt.table_name,
-                                                        stmt.table_byte_offset);
+                if (auto exists = ExistingRelationReply(create_ns.value(), stmt.table_name);
                     exists.has_value()) {
                     return *exists;
                 }
@@ -5141,6 +5168,14 @@ std::optional<DispatchOutcome> CommandDispatcher::ArchiveRefusal() const {
     return DispatchOutcome{ErrorReply(s), false, 0, s};
 }
 
+StatusOr<catalog::Oid> CommandDispatcher::ResolveRelationName(Session& session,
+                                                              std::string_view qualifier,
+                                                              std::string_view name) {
+    return ResolveNames(session, [&](const txn::ReadView* v) {
+        return catalog_.ResolveRelation(qualifier, name, session.default_namespace(), 0, v);
+    });
+}
+
 DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
                                                  Session& session) {
     // The KWP load stream comes in here, past `DispatchInner`'s gate.
@@ -5178,7 +5213,7 @@ StatusOr<parser::InsertStmt> CommandDispatcher::InsertSelectRows(const catalog::
     auto snapshot = SnapshotFor(*scope.session);
     if (!snapshot.ok()) return snapshot.status();
     auto rs = RunLayerQuery(*written.select, written.select_text, *scope.session,
-                            snapshot.value().snap, exec::StatementContextNow());
+                            snapshot.value().snap, StatementContextFor(*scope.session));
     if (!rs.ok()) return rs.status();
     const std::vector<exec::LayerColumn>& from = rs.value().columns;
     auto targets = InsertTargetColumns(ta, written, from.size());
@@ -5259,8 +5294,13 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     // relation another transaction created and has not committed must not
     // find it.
     auto oid = ResolveNames(scope.session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(written.schema, written.table_name,
-                                        written.table_byte_offset, v);
+        // An INSERT is never parked, so the session's namespace is the
+        // statement's; `public` with no session (NS5).
+        return catalog_.ResolveRelation(
+            written.schema, written.table_name,
+            scope.session != nullptr ? scope.session->default_namespace()
+                                     : catalog::kNamespacePublic,
+            written.table_byte_offset, v);
     });
     if (!oid.ok()) {
         return {ErrorReply(oid.status()), false, 0, oid.status()};
@@ -6690,22 +6730,13 @@ Status CommandDispatcher::EnsureStatementBoundary(Session& session) {
 std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
     // The fast path, and the one nearly every statement takes. **The
     // instance's count, not this core's `ddl_txns_`**: a DDL open on
-    // another core writes rows this core's unfiltered read would bind.
-    if (txn_ == nullptr || !txn_->visibility().AnyDdlOpen()) return std::nullopt;
-    return MintResolveView(session);
-}
-
-StatusOr<catalog::Oid> CommandDispatcher::ResolveQualifiedRelation(std::string_view qualifier,
-                                                                  std::string_view name,
-                                                                  std::uint32_t byte_offset,
-                                                                  const txn::ReadView* view) {
-    auto oid = catalog_.FindTableOidByName(name, view);
-    if (!oid.ok()) return oid.status();
-    if (Status s = catalog_.CheckRelationQualifier(qualifier, name, oid.value(), byte_offset, view);
-        !s.ok()) {
-        return s;
+    // another core writes rows this core's unfiltered read would bind. And the
+    // count the statement head read before it revalidated: a DDL open then
+    // may have closed since, leaving a cache this head did not drop.
+    if (txn_ == nullptr || (!ddl_open_at_head_ && !txn_->visibility().AnyDdlOpen())) {
+        return std::nullopt;
     }
-    return oid.value();
+    return MintResolveView(session);
 }
 
 txn::ReadView CommandDispatcher::MintResolveView(Session& session) {
@@ -6728,7 +6759,7 @@ txn::ReadView CommandDispatcher::MintResolveView(Session& session) {
 }
 
 std::optional<DispatchOutcome> CommandDispatcher::ExistingRelationReply(
-    std::string_view qualifier, std::string_view name, std::uint32_t byte_offset) {
+    catalog::Oid namespace_oid, std::string_view name) {
     // **Deliberately unfiltered, and this is a decision rather than an
     // omission** (ddl-transactional.md §6's second open item: what two
     // transactions creating the same name should do).
@@ -6746,21 +6777,13 @@ std::optional<DispatchOutcome> CommandDispatcher::ExistingRelationReply(
     // taken - and it names a relation the asker cannot see. Improving that
     // message, or holding the second create instead of refusing it, is
     // what the spec still has open.
-    auto existing = catalog_.FindTableOidByName(name);
+    //
+    // A name is taken within its namespace (namespace.md NS6), so the same
+    // name in another namespace is no collision.
+    auto existing = catalog_.FindTableOidByName(namespace_oid, name);
     if (existing.status().code() == StatusCode::kNotFound) return std::nullopt;
     if (!existing.ok()) {
         return DispatchOutcome{ErrorReply(existing.status()), false, 0, existing.status()};
-    }
-    // **`EXISTS` is truthful only about the name, so a qualifier that
-    // disagrees gets a sentence rather than that token** (AF-T3).
-    // Relation names are instance-global, so
-    // `ledger.plain` cannot be created while a `plain` sits in `public` -
-    // but replying `EXISTS` to it asserts that `ledger.plain` exists, which
-    // is the one thing that is false. The qualifier check answers with the
-    // namespace the name is actually held in.
-    if (Status s = catalog_.CheckRelationQualifier(qualifier, name, existing.value(), byte_offset);
-        !s.ok()) {
-        return DispatchOutcome{ErrorReply(s), false, 0, s};
     }
     return DispatchOutcome{"EXISTS oid=" + std::to_string(existing.value()), false};
 }
@@ -7039,7 +7062,7 @@ DispatchOutcome CommandDispatcher::HandleShow(std::string_view line, std::string
         return DispatchOutcome{ErrorReply(s), false, 0, s};
     };
     static constexpr std::string_view kBudget[] = {
-        "oid", "name", "next_id", "ids_issued", "ids_remaining", "budget_used_ppm",
+        "oid", "namespace", "name", "next_id", "ids_issued", "ids_remaining", "budget_used_ppm",
         "budget_warning", "budget_exhausted"};
     static constexpr std::string_view kPage[] = {
         "page_id", "page_type", "page_lsn", "level", "min_key", "nr_slots", "lower", "upper",
@@ -7191,6 +7214,23 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             key = std::move(literal);
             key_at = i;
             break;
+        }
+        // A relation-name key written bare takes its namespace from a
+        // `namespace = '<literal>'` conjunct when there is one, rather than
+        // from the session (NS5): `WHERE namespace = 'ledger' AND rel_name =
+        // 't'` names `ledger.t`. That conjunct still filters the rows, which
+        // all carry the namespace the key resolved in.
+        if (key.has_value() && spec->key_type == catalog::kTypeValVarchar &&
+            key->str_val.find('.') == std::string::npos) {
+            for (const parser::Condition& cond : stmt.where) {
+                if (cond.kind == parser::PredicateKind::kCompareValue &&
+                    cond.op == parser::CompareOp::kEq && cond.rhs_kind == parser::RhsKind::kLiteral &&
+                    IEquals(cond.col.name, "namespace") &&
+                    cond.val.type == parser::ValueType::kStr) {
+                    key->str_val = cond.val.str_val + "." + key->str_val;
+                    break;
+                }
+            }
         }
         if (!key.has_value() && spec->key_mode == ViewKeyMode::kRequired) {
             const Status s = Status::InvalidArgument(
@@ -7657,6 +7697,13 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // **Everything the statement reads lives on its run** (BA-S15), which
     // the plain path hands on so its walk can outlive this function.
     const auto run = std::make_shared<SelectRun>(*this, session);
+    // The statement's constants, the session's namespace among them, taken
+    // here when no caller carries its own; read only by the compile below.
+    exec::StatementContext own_context;
+    if (context == nullptr) {
+        own_context = StatementContextFor(session);
+        context = &own_context;
+    }
     auto snapshot = pinned != nullptr
                         ? StatusOr<txn::LeasedSnapshot>(txn::LeasedSnapshot{*pinned, {}})
                         : SnapshotFor(session);
@@ -7711,7 +7758,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
             IEquals(stmt.from.schema, exec::kCatalogSchema) &&
             FindSysView(stmt.from.table_name) != nullptr;
         // The same test the FROM relation gets: under a user namespace a
-        // non-empty qualifier is not a view (AF-T3).
+        // non-empty qualifier is not a view.
         bool any_join_is_view = false;
         for (const parser::JoinClause& join : stmt.joins) {
             if (IEquals(join.relation.schema, exec::kCatalogSchema) &&
@@ -7752,23 +7799,9 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
                         known + ")",
                     false};
         }
-        // A user namespace is a qualifier too (AF-T3): a name that resolves
-        // falls through to the compiler, which checks the qualifier
-        // against the relation (`step_compiler.cpp`, one site for FROM,
-        // JOIN and every subquery). Only a missing namespace is refused
-        // here, by name.
-        auto ns = ResolveNames(session, [&](const txn::ReadView* v) {
-            return catalog_.FindNamespaceOidByName(stmt.from.schema, v);
-        });
-        if (!ns.ok()) {
-            if (ns.status().code() != StatusCode::kNotFound) {
-                return {ErrorReply(ns.status()), false, 0, ns.status()};
-            }
-            return {"ERR no namespace named '" + stmt.from.schema + "' (byte " +
-                        std::to_string(stmt.from.byte_offset) +
-                        "); the catalog views are under `sys`",
-                    false};
-        }
+        // A user namespace falls through to the compiler, whose resolution
+        // (NS5) refuses an unknown one at its byte - one site for FROM, JOIN
+        // and every subquery.
     }
 
     // V17: parse -> compile -> execute. Which relation, which access path
@@ -8258,7 +8291,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         auto opened = BeginWrite(session);
         if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
         scope = opened.value();
-        context = exec::StatementContextNow();
+        context = StatementContextFor(session);
 
         // The read view this UPDATE filters through. An UPDATE reads before
         // it writes, and it must not see a row a SELECT in the same
@@ -8369,7 +8402,9 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
     // A subquery that fails both is left for the real run to refuse in its own
     // words.
     if (Status correlated = ResolveNames(session, [&](const txn::ReadView* resolve_view) {
-            if (exec::Compile(catalog_, *node.subquery, resolve_view).ok()) return Status::OK();
+            if (exec::Compile(catalog_, *node.subquery, resolve_view, nullptr, &context).ok()) {
+                return Status::OK();
+            }
             parser::SelectStmt probe;
             probe.from.schema = stmt.schema;
             probe.from.table_name = stmt.table_name;
@@ -8377,7 +8412,7 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
             exists.kind = parser::PredicateKind::kExists;
             exists.subquery = node.subquery;
             probe.where.push_back(std::move(exists));
-            auto chain = exec::Compile(catalog_, probe, resolve_view);
+            auto chain = exec::Compile(catalog_, probe, resolve_view, nullptr, &context);
             if (!chain.ok()) return Status::OK();
             for (const exec::Step& step : chain.value().steps) {
                 for (const exec::SubChain& sub : step.sub_chains) {
@@ -8511,7 +8546,7 @@ public:
         // statement's one borrow, held until the statement ends (AT-S1): a
         // `DROP TABLE` waits for the layer's walks, as for a native read's.
         auto chain = d_.ResolveNames(session_, [&](const txn::ReadView* v) {
-            return exec::Compile(d_.catalog_, probe, v, &borrow_);
+            return exec::Compile(d_.catalog_, probe, v, &borrow_, &context_);
         });
         if (!chain.ok()) return chain.status();
         auto access = d_.catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
@@ -8615,7 +8650,7 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
             std::to_string(returning->byte_offset) + ")"));
     }
     auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(schema, table, 0, v);
+        return catalog_.ResolveRelation(schema, table, session.default_namespace(), 0, v);
     });
     if (!oid.ok()) return refuse(oid.status());
     auto access = catalog_.InitTableAccess(oid.value());
@@ -8757,7 +8792,7 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
     if (!query.ok()) return std::nullopt;
 
     const exec::StatementContext now =
-        context != nullptr ? *context : exec::StatementContextNow();
+        context != nullptr ? *context : StatementContextFor(session);
     auto result = RunLayerQuery(query.value(), line, session, snap, now);
     if (!result.ok()) return DispatchOutcome{ErrorReply(result.status()), false, 0, result.status()};
 
@@ -8821,7 +8856,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // relation another transaction created and has not committed must not
     // find it.
     auto oid = ResolveNames(scope.session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(stmt.schema, stmt.table_name, stmt.table_byte_offset, v);
+        // The statement's namespace, carried across a park with its NOW().
+        return catalog_.ResolveRelation(stmt.schema, stmt.table_name, context.default_namespace,
+                                        stmt.table_byte_offset, v);
     });
     if (!oid.ok()) {
         return {ErrorReply(oid.status()), false, 0, oid.status()};
@@ -9897,6 +9934,48 @@ DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {
     return {"ROLLBACK trx_id=" + std::to_string(id), false};
 }
 
+// `USE <namespace>` - the namespace an unqualified relation name means for
+// every later statement of the session (namespace.md NS8). A session
+// statement, routed on `DispatchInner`'s tokens as `SET` is and for
+// `HandleSetDurability`'s reason; never fingerprinted.
+//
+// Admitted inside a transaction: it changes what a name written later
+// means, not what any view sees, and is not undone by a `ROLLBACK`. The
+// namespace resolves under the session's view, so one this transaction
+// created can be used. `sys` is refused: its relations are catalog views,
+// read only qualified.
+DispatchOutcome CommandDispatcher::HandleUse(std::string_view line, std::string_view args,
+                                             Session& session) {
+    // One trailing `;`, as every parsed statement takes.
+    std::string_view name = Trim(args);
+    if (!name.empty() && name.back() == ';') name = Trim(name.substr(0, name.size() - 1));
+    // `args` is empty, with no position in `line`, when nothing follows the
+    // verb: the refusal points past the line's end.
+    const std::string_view whole = Trim(line);
+    const auto byte = static_cast<std::uint32_t>(
+        (name.empty() ? whole.data() + whole.size() : name.data()) - line.data());
+    const auto refuse = [](Status s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
+    const auto at = " (byte " + std::to_string(byte) + ")";
+    if (!parser::IsIdentifier(name)) {
+        return refuse(Status::InvalidArgument("USE takes one namespace name" + at));
+    }
+    auto ns = ResolveNames(session, [&](const txn::ReadView* v) {
+        return catalog_.FindNamespaceOidByName(name, v);
+    });
+    if (!ns.ok()) {
+        if (ns.status().code() != StatusCode::kNotFound) return refuse(ns.status());
+        return refuse(Status::NotFound("no namespace named '" + std::string(name) + "'" + at));
+    }
+    if (catalog::IsSystemNamespace(ns.value())) {
+        return refuse(Status::InvalidArgument(
+            "namespace '" + std::string(name) +
+            "' holds the catalog, whose relations are read qualified as catalog views "
+            "(sys.tables); it cannot be the session's namespace" + at));
+    }
+    session.set_default_namespace(ns.value());
+    return {"USE namespace=" + std::string(name), false};
+}
+
 DispatchOutcome CommandDispatcher::HandleSetIsolation(std::string_view args, Session& session) {
     auto [level_word, name] = SplitFirstToken(args);
     if (!IEquals(level_word, "LEVEL")) {
@@ -10237,21 +10316,6 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
                                                                mode});
     }
     return under.value();
-}
-
-StatusOr<bool> CommandDispatcher::InSystemNamespace(catalog::Oid oid) {
-    // Unfiltered, and filtering could not change it: this asks whether an
-    // **already-resolved** oid belongs to a system namespace, and every
-    // system relation is a bootstrap row visible to every view (DT3c).
-    auto tables = catalog_.ListTables();
-    if (!tables.ok()) return tables.status();
-    // An oid names one row, so the search **stops** at it rather than
-    // walking every relation in the instance to find nothing more.
-    const auto named =
-        std::find_if(tables.value().begin(), tables.value().end(),
-                     [&](const catalog::SysObjectRow& row) { return row.oid == oid; });
-    // AF-P3: identity, not permission (well_known.hpp).
-    return named != tables.value().end() && catalog::IsSystemNamespace(named->namespace_oid);
 }
 
 CommandDispatcher::TupleKeyWindow CommandDispatcher::FoldTupleKeyWindow(
@@ -10758,7 +10822,7 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
         auto opened = BeginWrite(session);
         if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
         scope = opened.value();
-        context = exec::StatementContextNow();
+        context = StatementContextFor(session);
 
         // After `BeginWrite`: `HandleUpdate`'s order, for its reason (Census A row 4).
         auto snapshot = SnapshotFor(session);
@@ -10856,31 +10920,15 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     const auto& stmt = std::get<parser::PurgeStmt>(parsed.value());
     const std::string at_name = " (byte " + std::to_string(stmt.table_byte_offset) + ")";
 
-    // The qualifier is judged under the view the name resolved under, and
-    // answered after the system-relation check (BH-Q17's order).
-    Status qualifier;
+    // A system relation never resolves (`Catalog::ResolveRelation` refuses
+    // `sys`), so the catalog's marks - the engine's own purge - are out of
+    // reach before anything calls `InitTableAccess`, which has no columns
+    // for one.
     auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
-        auto found = catalog_.FindTableOidByName(stmt.table_name, v);
-        if (found.ok()) {
-            qualifier = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name,
-                                                        found.value(), stmt.table_byte_offset, v);
-        }
-        return found;
+        return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                        session.default_namespace(), stmt.table_byte_offset, v);
     });
     if (!oid.ok()) return refuse(oid.status());
-    // BH-Q17, before the heap check - every system relation is a catalog
-    // heap chain - and before anything calls `InitTableAccess`, which has
-    // no columns for one: the qualifier check is the first that does. The
-    // catalog's marks are the engine's own purge.
-    auto system = InSystemNamespace(oid.value());
-    if (!system.ok()) return refuse(system.status());
-    if (system.value()) {
-        return refuse(Status::Unsupported("'" + stmt.table_name +
-                                          "' is a system relation; PURGE frees keys of user "
-                                          "relations only" +
-                                          at_name));
-    }
-    if (!qualifier.ok()) return refuse(qualifier);
     ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // IS, AT-R1
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return refuse(access.status());
@@ -11065,7 +11113,9 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
     // As INSERT and UPDATE (DT3c): a write resolves under its session.
     auto oid = ResolveNames(scope.session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(stmt.schema, stmt.table_name, stmt.table_byte_offset, v);
+        // The statement's namespace, carried across a park with its NOW().
+        return catalog_.ResolveRelation(stmt.schema, stmt.table_name, context.default_namespace,
+                                        stmt.table_byte_offset, v);
     });
     if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
     ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1

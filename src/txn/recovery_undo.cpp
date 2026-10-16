@@ -21,13 +21,16 @@ namespace {
 // no readable tuple - out of range, dead, or a payload too short to carry a
 // Keystone word. The three are not distinguished here on purpose: the
 // caller's next question is always "is this the row I meant", and every one
-// of them answers no.
-std::optional<std::uint64_t> TupleKeyAt(heap::PageView& view, std::uint16_t slot) {
+// of them answers no. A slot that leaves the page or whose data_len runs past
+// it is Corruption, passed up: it is damage, and counting it as an undo
+// already done would hide it behind a clean mount.
+StatusOr<std::optional<std::uint64_t>> TupleKeyAt(heap::PageView& view, std::uint16_t slot) {
     auto payload = view.PayloadAt(slot, view.slot_count());
-    if (!payload.ok()) return std::nullopt;
+    if (payload.status().code() == StatusCode::kNotFound) return std::optional<std::uint64_t>{};
+    if (!payload.ok()) return payload.status();
     auto id = KeystoneIdOfPayload(payload.value());
-    if (!id.ok()) return std::nullopt;
-    return id.value();
+    if (!id.ok()) return std::optional<std::uint64_t>{};
+    return std::optional<std::uint64_t>{id.value()};
 }
 
 }  // namespace
@@ -113,7 +116,9 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
     }
 
     heap::PageView view(bytes.value().bytes());
-    const std::optional<std::uint64_t> here = TupleKeyAt(view, rec.target_slot);
+    auto read_here = TupleKeyAt(view, rec.target_slot);
+    if (!read_here.ok()) return read_here.status();
+    const std::optional<std::uint64_t> here = read_here.value();
 
     // ---- Nothing to retire? ---------------------------------------------
     //

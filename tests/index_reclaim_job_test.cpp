@@ -94,7 +94,7 @@ catalog::Oid IndexOid(Expeditor& db, const std::string& name) {
 
 // The slots `table`'s anchor holds.
 std::vector<catalog::Oid> Slots(Expeditor& db, const std::string& table) {
-    auto oid = db.catalog().FindTableOidByName(table);
+    auto oid = db.catalog().FindTableOidByName(catalog::kNamespacePublic, table);
     EXPECT_TRUE(oid.ok());
     auto row = db.catalog().GetSysTableRow(oid.value());
     EXPECT_TRUE(row.ok());
@@ -241,8 +241,10 @@ TEST(IndexReclaimJobTest, ARelationsJobAheadWithTheLaterGateOwnsTheIndexTree) {
     Ok(db, "CREATE INDEX by_v ON t (v)");
     Ok(db, "CREATE TABLE u (id int64, v varchar)");
     const catalog::Oid ix = IndexOid(db, "by_v");
-    const catalog::Oid rel = db.catalog().FindTableOidByName("t").value();
-    const catalog::Oid other = db.catalog().FindTableOidByName("u").value();
+    const catalog::Oid rel =
+        db.catalog().FindTableOidByName(catalog::kNamespacePublic, "t").value();
+    const catalog::Oid other =
+        db.catalog().FindTableOidByName(catalog::kNamespacePublic, "u").value();
     const auto row = db.catalog().GetSysTableRow(rel).value();
     const PageId anchor = row.anchor_page_id;
     // The roots the drop's tombstone records (BF-R2).
@@ -286,7 +288,7 @@ TEST(IndexReclaimJobTest, ADropTableAfterADropIndexFreesEveryPageOnceAndOwesNoth
     CurrentCoreGuard as(0);
     Seed(db);
     const catalog::Oid ix = IndexOid(db, "by_v");
-    const auto rel = db.catalog().FindTableOidByName("t").value();
+    const auto rel = db.catalog().FindTableOidByName(catalog::kNamespacePublic, "t").value();
     const std::size_t pages = PagesOf(db.store(), ix).size() + PagesOf(db.store(), rel).size();
     const std::uint64_t freed_before = db.store().pages_freed();
     Ok(db, "DROP INDEX by_v");

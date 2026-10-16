@@ -89,7 +89,7 @@ void LoadBtree(Instance& db) {
 // Creates an optimizer-owned Cabin directly - the CREATE action's catalog
 // half, isolated - and returns its id.
 std::uint64_t MakeAutoCabin(Instance& db, const char* table) {
-    auto oid = db.catalog().FindTableOidByName(table);
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, table);
     EXPECT_TRUE(oid.ok());
     auto created = db.catalog().CreateCabin(oid.value(), /*col_pos=*/1,
                                             catalog::kCabinOriginAuto);
@@ -102,7 +102,7 @@ stats::ActionItem ExtendAction(Instance& db, const char* table, std::uint64_t ca
     action.action = stats::CabinAction::kExtend;
     action.reason = stats::ActionReason::kCoverageExpansion;
     action.cabin_id = cabin_id;
-    action.rel_oid = db.catalog().FindTableOidByName(table).value();
+    action.rel_oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, table).value();
     action.col_pos = 1;
     return action;
 }
@@ -294,7 +294,7 @@ TEST(CabinOptimizerExecTest, DropRemovesTheRowTheSetsAndTheControllerEntry) {
     stats::CabinOptimizer controller;
     exec::CabinOptimizerExecutor executor(db.catalog(), db.store(), db.cabins(), controller);
     ASSERT_TRUE(executor.Apply({ExtendAction(db, "b", cabin_id)}, kAlwaysOn).ok());
-    controller.NoteCreated(db.catalog().FindTableOidByName("b").value(), 1, cabin_id, 3);
+    controller.NoteCreated(db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "b").value(), 1, cabin_id, 3);
     ASSERT_EQ(controller.pages_committed(), 3u);
 
     stats::ActionItem drop = ExtendAction(db, "b", cabin_id);
@@ -324,7 +324,7 @@ TEST(CabinOptimizerExecTest, AnExtendReportsItsNewPageTotalToTheBudget) {
     // A deliberately wrong CREATE-time count, so the edge is visible: the
     // report is the proxy's *total* (1 page for these sets), not a delta on
     // top of whatever the estimate said.
-    controller.NoteCreated(db.catalog().FindTableOidByName("b").value(), 1, cabin_id, 7);
+    controller.NoteCreated(db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "b").value(), 1, cabin_id, 7);
     ASSERT_EQ(controller.pages_committed(), 7u);
 
     ASSERT_TRUE(executor.Apply({ExtendAction(db, "b", cabin_id)}, kAlwaysOn).ok());
@@ -488,7 +488,7 @@ TEST(CabinOptimizerExecTest, AFunctionsArgumentIsNeverTheCandidate) {
     ASSERT_NE(db.Run("ANALYZE " + sql).find("FilterScan"), std::string::npos);
     db.Run(sql);
 
-    const auto oid = db.catalog().FindTableOidByName("f");
+    const auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "f");
     ASSERT_TRUE(oid.ok());
     bool seen = false;
     for (const stats::SnapshotFingerprint& fp : db.signals().Snapshot().fingerprints) {

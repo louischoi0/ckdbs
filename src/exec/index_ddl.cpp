@@ -346,19 +346,12 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
 StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
                                                      const parser::IndexStmt& stmt,
+                                                     catalog::Oid default_namespace,
                                                      const txn::ReadView* view,
                                                      std::uint64_t trx_id) {
-    auto oid = catalog.FindTableOidByName(stmt.table_name, view);
-    if (!oid.ok()) {
-        return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
-                                std::to_string(stmt.table_byte_offset) + ")");
-    }
-    // AF-T3, as at every other relation name.
-    if (Status s = catalog.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
-                                                  stmt.table_byte_offset, view);
-        !s.ok()) {
-        return s;
-    }
+    auto oid = catalog.ResolveRelation(stmt.schema, stmt.table_name, default_namespace,
+                                       stmt.table_byte_offset, view);
+    if (!oid.ok()) return oid.status();
     auto access = catalog.InitTableAccess(oid.value());
     if (!access.ok()) return access.status();
 
@@ -506,14 +499,15 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
 
 namespace {
 
-// The index `stmt` names, on `relation` only (`DropIndex`'s contract): the
-// name was resolved once to take the `X` and is resolved again here, and
-// between the two another transaction may have dropped the index and
-// created one by its name on another relation (BY-R8).
+// The index `stmt` names under `view`, on `relation` only (`DropIndex`'s
+// contract): the name was resolved once to take the `X` and is resolved again
+// here, and between the two another transaction may have dropped the index
+// and created one by its name on another relation (BY-R8).
 StatusOr<catalog::SysIndexRow> FindNamedIndex(catalog::Catalog& catalog,
                                               const parser::IndexStmt& stmt,
-                                              std::optional<catalog::Oid> relation) {
-    auto row = catalog.FindIndexByName(stmt.index_name);
+                                              std::optional<catalog::Oid> relation,
+                                              const txn::ReadView* view) {
+    auto row = catalog.FindIndexByName(stmt.index_name, view);
     if (!relation.has_value() || !row.ok()) {
         return Status::NotFound("no index named '" + stmt.index_name + "' (byte " +
                                 std::to_string(stmt.byte_offset) + ")");
@@ -600,11 +594,11 @@ StatusOr<IndexDdlResult> BuildAndWriteIndex(catalog::Catalog& catalog, storage::
 }  // namespace
 
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
-                                     const parser::IndexStmt& stmt, std::uint64_t trx_id,
-                                     catalog::CatalogRowRef* written,
+                                     const parser::IndexStmt& stmt, catalog::Oid default_namespace,
+                                     std::uint64_t trx_id, catalog::CatalogRowRef* written,
                                      const txn::ReadView* view, wal::WalManager* wal,
                                      const txn::TransactionManager* txns) {
-    auto prepared = PrepareIndexDef(catalog, stmt, view, trx_id);
+    auto prepared = PrepareIndexDef(catalog, stmt, default_namespace, view, trx_id);
     if (!prepared.ok()) return prepared.status();
     auto out =
         BuildAndWriteIndex(catalog, store, prepared.value(), stmt, trx_id, written, wal, txns);
@@ -633,9 +627,10 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
 }
 
 StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
-                                  std::optional<catalog::Oid> relation, std::uint64_t trx_id,
+                                  std::optional<catalog::Oid> relation,
+                                  const txn::ReadView* view, std::uint64_t trx_id,
                                   catalog::CatalogRowChange* change) {
-    auto row = FindNamedIndex(catalog, stmt, relation);
+    auto row = FindNamedIndex(catalog, stmt, relation, view);
     if (!row.ok()) return row.status();
     if (Status s = DropNamedIndex(catalog, stmt, row.value().index_oid, trx_id, change);
         !s.ok()) {
@@ -646,11 +641,12 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
 
 StatusOr<IndexDdlResult> ReindexIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                       const parser::IndexStmt& stmt,
-                                      std::optional<catalog::Oid> relation, std::uint64_t trx_id,
+                                      std::optional<catalog::Oid> relation,
+                                      const txn::ReadView* view, std::uint64_t trx_id,
                                       catalog::CatalogRowChange* dropped,
                                       catalog::CatalogRowRef* written, wal::WalManager* wal,
                                       const txn::TransactionManager* txns) {
-    auto old = FindNamedIndex(catalog, stmt, relation);
+    auto old = FindNamedIndex(catalog, stmt, relation, view);
     if (!old.ok()) return old.status();
     const catalog::SysIndexRow& row = old.value();
 

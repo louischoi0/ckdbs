@@ -51,7 +51,7 @@ protected:
     }
 
     const catalog::TableAccess& Access(const std::string& table) {
-        auto oid = boot_->catalog.FindTableOidByName(table);
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, table);
         EXPECT_TRUE(oid.ok()) << oid.status().message();
         auto access = boot_->catalog.InitTableAccess(oid.value());
         EXPECT_TRUE(access.ok()) << access.status().message();

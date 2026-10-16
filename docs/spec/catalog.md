@@ -185,9 +185,9 @@ what the check asks, below, not the latch. `RegisterPattern` (page 9) and
 
 | write | relation (root page) | held across |
 |---|---|---|
-| `CreateTable` | `sys.objects` (6) | the binding check and the `sys.objects` insert. The same check is asked unheld at the top, so a taken name costs no oid and no page; a create that loses under the hold has burned an oid and its pages, as a failure anywhere after them does |
+| `CreateTable` | `sys.objects` (6) | the binding check and the `sys.objects` insert. The same check is asked unheld at the top, so a taken name costs no oid and no page; a create that loses under the hold has burned an oid and its pages, as a failure anywhere after them does. A relation's name is asked in the namespace it is created in (`namespace.md` NS6) |
 | `CreateNamespace` | `sys.objects` (6) | the check and the insert; the oid is issued before the hold |
-| `RenameTable` | `sys.objects` (6) | the check and the in-place rewrite |
+| `RenameTable` | `sys.objects` (6) | the check and the in-place rewrite; the new name is asked in the relation's own namespace |
 | `RenameColumn` | `sys.columns` (5) | the sibling check and the rewrite — `ALTER` holds no relation lock |
 | `CreateIndex` | `sys.indexes` (8) | the check and the insert; `CheckIndexDef` asks it unheld, earlier, so a taken name is refused before a build |
 | `InsertAssertion` | `sys.assertions` (14) | the check and the insert; `CreateAssertion` asks unheld before its build, for the same reason |

@@ -329,7 +329,7 @@ TEST_F(ColumnNameCaseTest, AnExactTwinIsRefusedByEveryResolution) {
 
     // RENAME's catalog door refuses the pair on its own; DROP's takes the
     // position the dispatcher resolved, which refused the pair above.
-    auto oid = boot_->catalog.FindTableOidByName("t");
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok());
     const Status renamed = boot_->catalog.RenameColumn(oid.value(), "Aa", "w");
     EXPECT_EQ(renamed.code(), StatusCode::kInvalidArgument) << renamed.message();
@@ -346,7 +346,7 @@ TEST_F(ColumnNameCaseTest, ARenameRacingADropColumnCannotMoveItOntoAnotherColumn
     Ok("CREATE TABLE t (id int64, b int64, c int64)");
     Ok("INSERT INTO t VALUES (1, 2)");
     Ok("CREATE INDEX t_c ON t (c)");
-    auto oid = boot_->catalog.FindTableOidByName("t");
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok());
     int fired = 0;
     dispatcher_->SetBeforeDropColumnWriteForTest([&] {

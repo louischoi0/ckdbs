@@ -75,11 +75,16 @@ struct IndexDdlResult {
 // key column whose type has no index encoding, and whatever `CheckIndexDef`
 // answers for the rest - passed through rather than restated, so there is
 // one answer to "why not" and not two that can drift.
-// `trx_id` is the DDL's own transaction: a name it delete-marked is free to
-// it (BY-R8), which the view's own id - none, in autocommit - cannot say.
-StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(
-    catalog::Catalog& catalog, const parser::IndexStmt& stmt, const txn::ReadView* view,
-    std::uint64_t trx_id);
+//
+// The relation's name resolves as every statement's does: an unqualified one
+// means `default_namespace` (`USE`, namespace.md NS5). `trx_id` is the DDL's
+// own transaction: a name it delete-marked is free to it (BY-R8), which the
+// view's own id - none, in autocommit - cannot say.
+StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
+                                                     const parser::IndexStmt& stmt,
+                                                     catalog::Oid default_namespace,
+                                                     const txn::ReadView* view,
+                                                     std::uint64_t trx_id);
 
 // The page half: the root allocated from `store` and formatted, the tree
 // backfilled over everything `access` already holds (spec §10a - every
@@ -122,9 +127,9 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
 // next mount reclaims it (BY-R1, BY-R2).
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                      const parser::IndexStmt& stmt,
-                                     std::uint64_t trx_id, catalog::CatalogRowRef* written,
-                                     const txn::ReadView* view, wal::WalManager* wal,
-                                     const txn::TransactionManager* txns);
+                                     catalog::Oid default_namespace, std::uint64_t trx_id,
+                                     catalog::CatalogRowRef* written, const txn::ReadView* view,
+                                     wal::WalManager* wal, const txn::TransactionManager* txns);
 
 // Removes the index named by `stmt` and returns its `index_oid`.
 //
@@ -134,7 +139,9 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
 // As above, but a drop **delete-marks** its `sys.indexes` row rather than
 // retiring it when transactional, so a rollback clears the mark. Unlike
 // `DROP TABLE` this is isolated too - there is no in-place retype here
-// (ddl-transactional.md §5a).
+// (ddl-transactional.md §5a). The name is resolved under `view`, as
+// `CreateIndex` resolves its relation: an index another transaction has not
+// committed is not found.
 //
 // **Only an index on `relation`**, the relation the caller took the `X` on
 // when it first resolved the name: no relation (the name did not resolve
@@ -142,7 +149,8 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
 // dropped and created again by another transaction in between (BY-R8) - is
 // `TxnConflict`, since writing it would be under no hold of this statement's.
 StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
-                                  std::optional<catalog::Oid> relation, std::uint64_t trx_id,
+                                  std::optional<catalog::Oid> relation,
+                                  const txn::ReadView* view, std::uint64_t trx_id,
                                   catalog::CatalogRowChange* change);
 
 // **`REINDEX INDEX <name>`** (BY-R6,
@@ -158,7 +166,8 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
 // `replaced_oid` is the dropped index's.
 StatusOr<IndexDdlResult> ReindexIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                       const parser::IndexStmt& stmt,
-                                      std::optional<catalog::Oid> relation, std::uint64_t trx_id,
+                                      std::optional<catalog::Oid> relation,
+                                      const txn::ReadView* view, std::uint64_t trx_id,
                                       catalog::CatalogRowChange* dropped,
                                       catalog::CatalogRowRef* written, wal::WalManager* wal,
                                       const txn::TransactionManager* txns);

@@ -216,7 +216,7 @@ TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore
     ASSERT_FALSE(update.done.load(std::memory_order_acquire))
         << "core 1's UPDATE did not wait: " << update.out.response;
     // Registered on the row's own entry, the unit that refused the range.
-    auto oid = rig->core(0).catalog().FindTableOidByName("t");
+    auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     EXPECT_EQ(rig->locks().WaiterCount(txn::LockKey::Tuple(oid.value(), 1)), 1u)
         << "the range's refusal left no registration on the row that refused it";
@@ -267,7 +267,7 @@ void HoldRowLate(TwoCoreRig& rig, Session& holder, LateRelease& late) {
     CommandDispatcher& d0 = rig.core(0).dispatcher();
     ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
     ASSERT_FALSE(StartsWith(d0.Dispatch("INSERT INTO t VALUES (1, 0)").response, "ERR"));
-    auto oid = rig.core(0).catalog().FindTableOidByName("t");
+    auto oid = rig.core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN"));
     ASSERT_NE(holder.transaction(), nullptr);

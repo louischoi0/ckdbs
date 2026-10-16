@@ -154,6 +154,16 @@ public:
     txn::IsolationLevel isolation() const noexcept { return isolation_; }
     void set_isolation(txn::IsolationLevel level) noexcept { isolation_ = level; }
 
+    // ---- The namespace an unqualified relation name means (`USE`) -------
+    //
+    // namespace.md NS8: `public` until a `USE <namespace>`, which sets it
+    // for every later statement of the connection. Session state, not
+    // transactional: a `ROLLBACK` does not undo a `USE`. A namespace
+    // dropped after the `USE` leaves the session in an oid that resolves
+    // nothing, and every unqualified name answers NotFound until the next.
+    catalog::Oid default_namespace() const noexcept { return default_namespace_; }
+    void set_default_namespace(catalog::Oid oid) noexcept { default_namespace_ = oid; }
+
     // ---- Durability, the same three rungs (docs/spec/protocol.md §9) ----
     //
     // **The chain `isolation`'s comment above already names**, now with the
@@ -367,6 +377,7 @@ private:
 
     State state_ = State::kIdle;
     txn::IsolationLevel isolation_ = txn::IsolationLevel::kReadCommitted;
+    catalog::Oid default_namespace_ = catalog::kNamespacePublic;
     ResultSink* result_sink_ = nullptr;
     std::shared_ptr<std::atomic<bool>> cancel_ = std::make_shared<std::atomic<bool>>(false);
     std::optional<wal::DurabilityClass> durability_;      // SET DURABILITY

@@ -309,7 +309,7 @@ TEST_F(ColumnSlotDispatchTest, SpareIsRecordedAndShownOnSysTables) {
     Ok("INSERT INTO t VALUES (7)");
     EXPECT_EQ(Run("SELECT * FROM t"), "id,v\\n1,7");
 
-    const auto oid = boot_->catalog.FindTableOidByName("t");
+    const auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok());
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());

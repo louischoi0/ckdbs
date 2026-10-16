@@ -72,12 +72,12 @@ protected:
         ASSERT_EQ(Run("CREATE TABLE p (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
         ASSERT_EQ(Run("CREATE TABLE c (id int64, pid int64 REFERENCES p) BTREE").rfind("CREATED", 0),
                   0u);
-        auto oid = boot_->catalog.FindTableOidByName("p");
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "p");
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto access = boot_->catalog.InitTableAccess(oid.value());
         ASSERT_TRUE(access.ok()) << access.status().message();
         parent_leaf_ = access.value()->desc_page_id;  // one row: the root is the leaf
-        auto child = boot_->catalog.FindTableOidByName("c");
+        auto child = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "c");
         ASSERT_TRUE(child.ok()) << child.status().message();
         auto child_access = boot_->catalog.InitTableAccess(child.value());
         ASSERT_TRUE(child_access.ok()) << child_access.status().message();
@@ -96,7 +96,7 @@ protected:
     // rather than through another session's write, which the undecided
     // delete refuses whether the `X` is held or not.
     void ExpectRowXHeld(Session& session, std::uint64_t tuple_key) {
-        auto p = boot_->catalog.FindTableOidByName("p");
+        auto p = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "p");
         ASSERT_TRUE(p.ok()) << p.status().message();
         const txn::LockKey row = txn::LockKey::Tuple(p.value(), tuple_key);
         ASSERT_NE(session.transaction(), nullptr);

@@ -96,7 +96,7 @@ protected:
     }
 
     Oid TableOid(const std::string& table) {
-        auto oid = catalog().FindTableOidByName(table);
+        auto oid = catalog().FindTableOidByName(kNamespacePublic, table);
         EXPECT_TRUE(oid.ok());
         return oid.ok() ? oid.value() : 0;
     }
@@ -191,7 +191,7 @@ TEST_F(IndexReclaimCatalogTest, ALiveIndexWhoseSlotIsGoneIsCorruptionNotItsCreat
     Ok("CREATE INDEX by_a ON t (a)");
     ASSERT_TRUE(catalog().RemoveIndexSlot(TableOid("t"), Anchor("t"), IndexOid("by_a")).ok());
     catalog().InvalidateAfterCompensation();
-    auto oid = catalog().FindTableOidByName("t");
+    auto oid = catalog().FindTableOidByName(kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok());
     auto access = catalog().InitTableAccess(oid.value());
     ASSERT_FALSE(access.ok());
@@ -223,8 +223,11 @@ TEST(AnchorSlotRemoveCrashTest, AMountReplaysTheRemovalAndOwesNothing) {
         kept = cat.FindIndexByName("by_b").value().index_oid;
         crash_rig::Ok(d0, "DROP INDEX by_a");
         const PageId anchor =
-            cat.GetSysTableRow(cat.FindTableOidByName("t").value()).value().anchor_page_id;
-        ASSERT_TRUE(cat.RemoveIndexSlot(cat.FindTableOidByName("t").value(), anchor, dropped).ok());
+            cat.GetSysTableRow(cat.FindTableOidByName(catalog::kNamespacePublic, "t").value())
+                .value()
+                .anchor_page_id;
+        const catalog::Oid rel = cat.FindTableOidByName(catalog::kNamespacePublic, "t").value();
+        ASSERT_TRUE(cat.RemoveIndexSlot(rel, anchor, dropped).ok());
         ASSERT_TRUE(rig->Snapshot(snap.path).ok());
     }
     auto mounted = crash_rig::Mount(snap.path);
@@ -234,7 +237,9 @@ TEST(AnchorSlotRemoveCrashTest, AMountReplaysTheRemovalAndOwesNothing) {
     ASSERT_TRUE(owed.ok()) << owed.status().message();
     EXPECT_TRUE(owed.value().empty());
     const PageId anchor =
-        cat.GetSysTableRow(cat.FindTableOidByName("t").value()).value().anchor_page_id;
+        cat.GetSysTableRow(cat.FindTableOidByName(catalog::kNamespacePublic, "t").value())
+            .value()
+            .anchor_page_id;
     auto page = mounted.value()->store().GetForRead(anchor);
     ASSERT_TRUE(page.ok());
     auto slots = storage::AnchorIndexSlots(page.value().bytes());

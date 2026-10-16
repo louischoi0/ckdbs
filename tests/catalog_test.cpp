@@ -76,7 +76,7 @@ TEST_F(CatalogTest, BootstrapRegistersWellKnownObjects) {
 TEST_F(CatalogTest, BootstrapMakesSysTablesFindableByName) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
-    auto oid = catalog_.FindTableOidByName("tables");
+    auto oid = catalog_.FindTableOidByName(::kds::catalog::kNamespaceSys, "tables");
     ASSERT_TRUE(oid.ok());
     EXPECT_EQ(oid.value(), kSysTablesTable);
 
@@ -91,7 +91,7 @@ TEST_F(CatalogTest, BootstrapMakesSysTablesFindableByName) {
 TEST_F(CatalogTest, BootstrapCreatesNoRangeDirectory) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
-    auto oid = catalog_.FindTableOidByName("ranges");
+    auto oid = catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "ranges");
     EXPECT_EQ(oid.status().code(), StatusCode::kNotFound) << oid.status().message();
 }
 
@@ -272,7 +272,7 @@ TEST_F(CatalogTest, CreateTableInsertsObjectTableAndColumnRows) {
     auto oid = catalog_.CreateTable(kNamespacePublic, "accounts", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
-    auto found_oid = catalog_.FindTableOidByName("accounts");
+    auto found_oid = catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "accounts");
     ASSERT_TRUE(found_oid.ok());
     EXPECT_EQ(found_oid.value(), oid.value());
 
@@ -322,7 +322,6 @@ TEST_F(CatalogTest, InitTableAccessReturnsSchemaAndDescPageId) {
     EXPECT_EQ(access.value()->oid, oid.value());
     EXPECT_EQ(access.value()->clustered_type, ClusteredType::kHeap);
     EXPECT_EQ(access.value()->schema.columns.size(), 1u);
-    EXPECT_EQ(access.value()->namespace_oid, kNamespacePublic);
 
     // Second open is the same cached entry, not a rebuilt copy.
     auto again = catalog_.InitTableAccess(oid.value());
@@ -1019,7 +1018,7 @@ TEST_F(CatalogTest, AllocateRowIdAndReadsDoNotBumpTheCatalogVersion) {
         auto id = catalog_.AllocateRowId(oid.value());
         ASSERT_TRUE(id.ok()) << id.status().message();
     }
-    ASSERT_TRUE(catalog_.FindTableOidByName("seq").ok());
+    ASSERT_TRUE(catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "seq").ok());
     ASSERT_TRUE(catalog_.GetSysTableRow(oid.value()).ok());
     ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
     ASSERT_TRUE(catalog_.ResolveTypeByVal(kTypeValInt64).ok());
@@ -1079,7 +1078,7 @@ TEST_F(CatalogTest, DdlRefreshesTheTableListAndKeepsTypes) {
 TEST_F(CatalogTest, FindTableOidByNameFailsForUnknownName) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
-    auto oid = catalog_.FindTableOidByName("does_not_exist");
+    auto oid = catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "does_not_exist");
     EXPECT_FALSE(oid.ok());
     EXPECT_EQ(oid.status().code(), StatusCode::kNotFound);
 }
@@ -1102,7 +1101,7 @@ TEST(CatalogCacheWriteAmplificationTest, CachedReadsDoNotDirtyCatalogPages) {
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // Warm the three cached facts, then flush so every frame starts clean.
-    ASSERT_TRUE(catalog.FindTableOidByName("hot").ok());
+    ASSERT_TRUE(catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "hot").ok());
     ASSERT_TRUE(catalog.InitTableAccess(oid.value()).ok());
     ASSERT_TRUE(catalog.ResolveTypeByVal(kTypeValInt64).ok());
     ASSERT_TRUE(catalog.ListTables().ok());
@@ -1111,7 +1110,7 @@ TEST(CatalogCacheWriteAmplificationTest, CachedReadsDoNotDirtyCatalogPages) {
 
     // The catalog work a SELECT or an UPDATE does, fifty times over.
     for (int i = 0; i < 50; ++i) {
-        ASSERT_TRUE(catalog.FindTableOidByName("hot").ok());
+        ASSERT_TRUE(catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "hot").ok());
         ASSERT_TRUE(catalog.InitTableAccess(oid.value()).ok());
         ASSERT_TRUE(catalog.ResolveTypeByVal(kTypeValInt64).ok());
         ASSERT_TRUE(catalog.ListTables().ok());
@@ -1158,7 +1157,7 @@ protected:
 };
 
 TEST_F(PatternCatalogTest, BootstrapCreatesTheRelation) {
-    auto oid = catalog_.FindTableOidByName("patterns");
+    auto oid = catalog_.FindTableOidByName(::kds::catalog::kNamespaceSys, "patterns");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     EXPECT_EQ(oid.value(), kSysPatternsTable);
 
@@ -1662,7 +1661,7 @@ TEST(CatalogChain, NameLookupFindsARelationOnALaterPage) {
                                         WideSchema(1), ClusteredType::kHeap)
                         .ok());
     }
-    auto oid = catalog.FindTableOidByName("t59");
+    auto oid = catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t59");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // The 60 user relations plus the bootstrap ones - the point is that the
@@ -1751,7 +1750,7 @@ TEST_F(CatalogTest, ARelationCreatedByAnUnseenTransactionDoesNotExistForThatRead
     other.visibility = &vis;
     other.snapshot_lsn = 1000;
 
-    EXPECT_EQ(catalog_.FindTableOidByName("pending", &other).status().code(),
+    EXPECT_EQ(catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "pending", &other).status().code(),
               StatusCode::kNotFound)
         << "a reader saw a relation whose creating transaction it cannot see";
 
@@ -1770,13 +1769,13 @@ TEST_F(CatalogTest, ARelationCreatedByAnUnseenTransactionDoesNotExistForThatRead
     own.visibility = &vis;
     own.snapshot_lsn = 1000;
     own.own_trx_id = kCreator;
-    auto mine = catalog_.FindTableOidByName("pending", &own);
+    auto mine = catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "pending", &own);
     ASSERT_TRUE(mine.ok()) << "a transaction cannot see its own CREATE TABLE";
     EXPECT_EQ(mine.value(), oid.value());
 
     // And an internal read - bootstrap, recovery, anything with no reader -
     // still sees everything, which is every pre-DT3 caller.
-    auto unfiltered = catalog_.FindTableOidByName("pending");
+    auto unfiltered = catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "pending");
     ASSERT_TRUE(unfiltered.ok());
     EXPECT_EQ(unfiltered.value(), oid.value());
 }
@@ -1797,13 +1796,13 @@ TEST_F(CatalogTest, ATransactionalLookupNeitherReadsNorFillsTheSharedCache) {
     own.visibility = &vis;
     own.snapshot_lsn = 1000;
     own.own_trx_id = kCreator;
-    ASSERT_TRUE(catalog_.FindTableOidByName("half_open", &own).ok());  // creator sees it
+    ASSERT_TRUE(catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "half_open", &own).ok());  // creator sees it
 
     // Nothing about that lookup may have leaked into the shared cache.
     txn::ReadView other;
     other.visibility = &vis;
     other.snapshot_lsn = 1000;
-    EXPECT_EQ(catalog_.FindTableOidByName("half_open", &other).status().code(),
+    EXPECT_EQ(catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "half_open", &other).status().code(),
               StatusCode::kNotFound)
         << "the creator's lookup published its uncommitted relation through the cache";
 }
@@ -1849,14 +1848,14 @@ TEST_F(CatalogTest, ARolledBackCreateTableLeavesNoRelationEvenToALaterReader) {
     ASSERT_GT(resolved.Floor(), txn.value()->id());
     txn::ReadView later;
     later.visibility = &resolved;
-    EXPECT_EQ(catalog_.FindTableOidByName("doomed", &later).status().code(),
+    EXPECT_EQ(catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "doomed", &later).status().code(),
               StatusCode::kNotFound)
         << "the rolled-back relation survived its own rollback";
 
     // And an unfiltered read - the one that sees literally everything -
     // agrees, which is what proves the rows were retired rather than
     // merely filtered.
-    EXPECT_EQ(catalog_.FindTableOidByName("doomed").status().code(), StatusCode::kNotFound)
+    EXPECT_EQ(catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "doomed").status().code(), StatusCode::kNotFound)
         << "the rows are still on the page; the rollback only hid them";
 }
 
@@ -1922,7 +1921,7 @@ TEST_F(CatalogTest, AnUndoHookThatFailsOnTheTailLeavesTheChainAsItWas) {
     // reached (`heap_page.cpp`'s dense-slot refusal).
     EXPECT_EQ(ChainShape(store_, kCatalogPageObjects), before)
         << "the row the failed create placed is still on the page";
-    EXPECT_EQ(catalog_.FindTableOidByName("unhooked").status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "unhooked").status().code(), StatusCode::kNotFound);
 }
 
 TEST_F(CatalogTest, AnUndoHookThatFailsOnANewPageLeavesItEmptyUnlinkedAndUnreported) {
@@ -2027,7 +2026,7 @@ TEST_F(CatalogTest, ARowWhoseRecordCannotBeAppendedIsRetiredWhereItLies) {
     EXPECT_EQ(after.back().slots, before.back().slots + 1) << "the slot was taken back";
     EXPECT_EQ(after.back().live, before.back().live)
         << "the row the failed create placed is still live on the page";
-    EXPECT_EQ(catalog_.FindTableOidByName("unlogged").status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(catalog_.FindTableOidByName(::kds::catalog::kNamespacePublic, "unlogged").status().code(), StatusCode::kNotFound);
 }
 
 }  // namespace

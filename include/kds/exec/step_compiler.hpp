@@ -35,7 +35,7 @@ namespace kds::exec {
 //
 // Fails with (among others):
 //   the catalog's status  a relation the statement names does not resolve
-//                         (`Catalog::FindTableOidByName`)
+//                         (`Catalog::ResolveRelation`)
 //   InvalidArgument       a column that resolves to no relation, or to more
 //                         than one, or a mistyped comparison; the message
 //                         carries the byte position
