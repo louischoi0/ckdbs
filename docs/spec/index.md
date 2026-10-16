@@ -521,6 +521,7 @@ walk, which returns the identical rows because the residual is untouched.
 ```
 CREATE INDEX <name> ON <table> (<col> [, <col>]...) [COVERING (<col> [, <col>]...)]
 DROP INDEX <name>
+REINDEX INDEX <name>
 SHOW INDEXES
 ```
 
@@ -534,7 +535,8 @@ of a unique key, and `UNIQUE` before anything but `INDEX` is refused
 > `kFingerprintVersion` does not move. The golden corpus is the evidence, and
 > every pre-existing line must pass unchanged.
 
-`CREATE INDEX` and `DROP INDEX` run under a transaction;
+`CREATE INDEX`, `DROP INDEX` and `REINDEX INDEX` (§12, BY) run under a
+transaction;
 `docs/spec/ddl-transactional.md` owns what each guarantees. Both take the
 relation's `X` (AT-S5e), and **on a relation other relations reference
 that `X` waits for every open child writer's `IS` on it** as well as for
@@ -574,6 +576,25 @@ calls invisible without a baseline. A **delete-marked** row is walked like
 any other: gone for newer readers, still there for older ones, which is
 exactly the case the undo chain exists for.
 
+**The walk stops where the oldest reader would.** A version whose superseding
+writer is resolved for every live and future reader
+(`TransactionManager::ResolvedForEveryReader`) is reachable by none, and the
+undo purge may already have recycled its record, so the pointer to it is
+stale. The walk appends the version that writer wrote and does not read the
+pointer below it; a row whose current writer is resolved contributes its
+current version alone. A record whose tuple key is not the row's is
+refused `Corruption` - unless its superseder was resolved between the check
+and the read (another core's purge recycled it), when the walk ends there.
+That window has one rarer case: a recycled record holding **another
+relation's** row of the same tuple key passes the check, and its append is
+then refused or leaves a surplus entry (IX2) - a refusal or an extra entry,
+never a wrong answer (`known-gaps.md`). With no transaction manager the walk runs to the
+chain's end.
+
+**A failed append refuses the `CREATE INDEX`**, naming the row: the walk's
+visitor fails by its `Status` (`UndoLog::Walk`), so no version a reader can
+reach is dropped from a published index.
+
 *Distinct* needs no bookkeeping: a version that did not move the key produces
 a byte-identical entry, and `IndexInsert` already reports one rather than
 storing it twice (IX4b).
@@ -595,6 +616,8 @@ runs **before** the walk, through `Catalog::CheckIndexDef` — the same checks
 `CreateIndex` makes, factored out rather than copied, so a heap relation is
 refused by name instead of surfacing as a page-type error from inside the
 build.
+
+**A `REINDEX` is this backfill again** (BY-R6); §12 states what it keeps.
 
 ---
 
@@ -713,14 +736,53 @@ The row's `root_page_id` is the root allocated at `CREATE INDEX` and is
 never rewritten: a root split writes the relation's **anchor slot** for the
 index (`Catalog::StageAnchorRoot`, inside the split's own `BTREE_SPLIT`,
 `wal.md` §5.2, as the clustered tree's is), and `InitTableAccess` reads the
-root from the anchor, falling back to the row's value only for a slot the
-anchor does not hold. The storage layer has no catalog, so it reports a new
-root and something above it writes one down.
-`DropIndex` **retires** the row rather than delete-marking it (a catalog read
-has no snapshot to filter a mark against) and **frees no page at its own
-commit** (BF-Q8 (b) declined): the anchor slot still names the tree, which is
-reclaimed with its relation when that relation is dropped (`drop-table.md`
-DT1). **A failed `CREATE INDEX`'s tree is freed since BX-Q6 (b)**: a failed
+root from the anchor. **A live index with no slot is `Corruption`** (BY-R10):
+the slot is written at create - **before the row**, so no core reads a live
+row whose slot is not yet down - and removed only once its tree is
+reclaimed, so its absence would mean the row's creation root names a freed
+page. The storage layer has no catalog, so it reports a new root and
+something above it writes one down.
+`DropIndex` **delete-marks** the row under the statement's transaction -
+an autocommit statement's implicit one included - which a rollback clears;
+it **retires** the row only at the bootstrap id (no transaction manager).
+
+**A dropped index's tree is reclaimed since BY** (BF-Q8 reversed,
+`instructions/v3.2.0/workorder-by-reindex-drop-index-reclaim.md`). The
+anchor slot outlives the row and names the current root, so it is the
+durable record of what is owed (BY-R1): a slot of a live relation whose
+index no live row names. A committed `DROP INDEX`, a rolled-back
+`CREATE INDEX` and the old tree of a `REINDEX` each queue an **index job**
+at the decide (BY-R2), gated as a relation's drop is - the durable redo
+start past the decide (BF-R4) and every statement epoch past its schema
+word (BF-R9) - and the mount re-drives what a crash left, read unfiltered
+after undo. The job reads the root from the slot when it walks, frees the
+tree children first, and then **removes the slot** (`ANCHOR_SLOT_REMOVE`,
+kind 33, superblock 29; BY-R5), which is what lifts the anchor's slot cap.
+**One job owns a tree** (BY-R3): a relation's drop job walks every slot,
+so it drops that relation's index jobs before any job walks. A
+`CREATE INDEX` refused after its tree is logged seeds its slot if the
+refusal came before it, and the next mount reclaims it.
+
+**`REINDEX INDEX <name>`** (BY-R6) drops the index and builds it again
+under a new `index_oid` (BY-Q2 (a)) and the same name, in one autocommit
+statement under the relation `X`; inside `BEGIN` it is refused
+`NotImplemented`. A transaction's own delete-mark frees an index name for
+it (BY-R8), so the new row takes the old one's - and so may
+`DROP INDEX x; CREATE INDEX x` in one transaction. The new tree holds an
+entry for each row's current version and every older one a reader can
+still reach (§10.1, IX10a) - so a rebuild drops the entries of rows that
+left the relation (rolled back, purged) and of versions no reader reaches,
+an `UPDATE`'s superseded values among them. The rebuilt definition is the old
+row's own column positions, widths and unique flag, never names re-resolved
+(a `RENAME COLUMN` takes no `X`), and an index the name no longer finds on
+the relation the `X` was taken for is `TxnConflict`. Through
+`CREATE INDEX`'s build, the old row, slot and tree are untouched by a
+refusal (BY-R7). **A rebuild needs a free anchor slot**: the old slot is
+held until the reclaimer frees the old tree, so on a relation whose anchor
+is full a `REINDEX` is refused `ResourceExhausted` before any page is
+built - a stated limit, cleared by the reclaimer's progress.
+
+**A failed `CREATE INDEX`'s tree is freed since BX-Q6 (b)**: a failed
 backfill walks the tree from the root it grew to - refusing a page that is
 not an index page carrying the index's oid, or one reached twice - and gives
 each page back through `FreePage` (`page.md` §5): nothing has logged the
@@ -883,7 +945,8 @@ off is a catalog act: `DROP INDEX`.
 
 The decisions this spec leaves unsettled — `kIndexStringKeyBytes`, the leaf
 split point and fill factor, the column caps, reclamation of superseded
-entries, an index-only scan, NULLs in a unique key (a nullable key column
+entries in place (a `REINDEX` drops only the entries of versions no
+longer in the relation, §12; nothing removes one from a live tree), an index-only scan, NULLs in a unique key (a nullable key column
 stays refused, BX-Q5 (a)), descending/partial/expression
 indexes, and index cost as a `CABIN AUTO` input — are unrecorded here; the refusals that stand
 in their place are §11's.

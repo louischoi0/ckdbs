@@ -76,7 +76,18 @@ Status ConfigureAcceptedSocket(int fd, std::uint32_t keepalive_s) {
     return Status::OK();
 }
 
-StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port, bool reuse_port) {
+bool TcpServer::IsListenAddress(const std::string& address) {
+    in_addr parsed{};
+    return ::inet_pton(AF_INET, address.c_str(), &parsed) == 1;
+}
+
+StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port, bool reuse_port,
+                                      const std::string& address) {
+    in_addr bind_addr{};
+    if (::inet_pton(AF_INET, address.c_str(), &bind_addr) != 1) {
+        return Status::InvalidArgument("listen address '" + address +
+                                       "' is not an IPv4 address");
+    }
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         return Status::IoError(std::string("socket() failed: ") + std::strerror(errno));
@@ -102,7 +113,7 @@ StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port, bool reuse_port) {
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_addr = bind_addr;
     addr.sin_port = htons(port);
 
     // The reinterpret_cast below is the standard POSIX sockaddr_in* ->

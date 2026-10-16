@@ -32,7 +32,7 @@
 //    checks make that re-drive idempotent: a freed page is passed over, and
 //    one another relation has reused fails the owner check.
 //
-// **Which jobs exist.** Two kinds. The tombstones a mount finds pending
+// **Which jobs exist.** A relation's: the tombstones a mount finds pending
 // (BF-R8): no statement of that run can reach their pages - the name
 // resolves NotFound, every memo and cache is built after the mount, and a
 // trail entry for the dead oid is dropped at `TrailReplay::Build`
@@ -41,10 +41,19 @@
 // reached the schema word the commit moved to (`statement_epoch.hpp`). A
 // crash loses that queue; the next mount finds the tombstone pending.
 //
-// **Threading.** Stepped from one thread, core 0's reactor. The inbox
-// `EnqueueCommittedDrop` writes is the one structure any core touches, under
-// its own latch; the counters are atomic because `SHOW META` reads them
-// from any core. The store calls it
+// **An index tree's** (BY, `instructions/v3.2.0/workorder-by-reindex-drop-
+// index-reclaim.md`): a live relation's slot whose index no live row names -
+// a committed `DROP INDEX`, a rolled-back or failed `CREATE INDEX` - found
+// at mount (BY-R1) or queued at its decide (BY-R2), gated the same way. Its
+// walk reads the slot's root and takes nothing else of the anchor; its
+// clear removes the slot (BY-R4, BY-R5). **One job owns a tree** (BY-R3): a
+// relation's job walks every slot, so every index job of the same relation
+// is dropped before any job of the step walks.
+//
+// **Threading.** Stepped from one thread, core 0's reactor. The inbox the
+// `Enqueue*` calls write is the one structure any core touches, under its
+// own latch; the counters are atomic because `SHOW META` reads them from
+// any core. The store calls it
 // makes are the store's own concurrency (`device_page_store.hpp`), and the
 // clear is an ordinary catalog write under the page latch.
 
@@ -75,7 +84,7 @@ inline constexpr std::size_t kReclaimBatchPages = 64;
 
 // BF-R11's reclaim half, read by `SHOW META` on every core.
 struct ReclaimCounters {
-    std::atomic<std::uint64_t> pending{0};   // tombstones still owed
+    std::atomic<std::uint64_t> pending{0};   // jobs still owed: tombstones, index trees
     std::atomic<std::uint64_t> deferred{0};  // frees a held frame deferred
     std::atomic<std::uint64_t> skipped{0};   // pages BF-R3's check refused
     std::atomic<std::uint64_t> refused{0};   // jobs refused, left pending
@@ -109,6 +118,15 @@ public:
     // next mount finds the tombstone pending and drives it (BF-R7).
     void EnqueueCommittedDrop(catalog::Oid oid, catalog::PendingRoots roots,
                               wal::Lsn commit_lsn, std::uint64_t word);
+
+    // **An index tree its DDL orphaned during the run** (BY-R2,
+    // `instructions/v3.2.0/workorder-by-reindex-drop-index-reclaim.md`): a
+    // committed `DROP INDEX`, or a rolled-back `CREATE INDEX` whose tree was
+    // logged. Gated as a relation's drop is, until the redo start reaches
+    // `gate` and every statement epoch `word`; the root is read from the slot when the job
+    // walks, and the job ends by removing the slot (BY-R4, BY-R5).
+    void EnqueueOrphanedIndex(catalog::Oid rel_oid, PageId anchor, catalog::Oid index_oid,
+                              wal::Lsn gate, std::uint64_t word);
 
     // One bounded step against the durable redo start `durable_redo_start`.
     // Returns OK when it did nothing or made progress; a job that cannot
@@ -166,7 +184,10 @@ private:
     enum class Phase : std::uint8_t { kWalk, kFree, kClear, kRefused };
 
     struct Job {
+        // The relation; with `index_oid`, the relation whose anchor holds the
+        // owed slot, and `roots.anchor` that anchor (BY-R4).
         catalog::Oid oid = 0;
+        catalog::Oid index_oid = 0;
         catalog::PendingRoots roots;
         wal::Lsn gate = 0;
         // The schema word every running statement must have revalidated at
@@ -208,6 +229,15 @@ private:
     // Frees up to `budget` pages; false when the job refused.
     bool FreeSome(Job& job, std::size_t& budget);
     void Refuse(Job& job, const std::string& why);
+    // BY-R3: drops every index job whose relation has a job of its own.
+    void DropIndexJobsOfRelationJobs();
+    static Job MakeJob(catalog::Oid oid, catalog::Oid index_oid, catalog::PendingRoots roots,
+                       wal::Lsn gate, std::uint64_t word);
+    void Enqueue(Job job);
+    // The job's owing record settled once every free is durable: a
+    // tombstone's word, or an index's slot (BY-R5).
+    Status Clear(const Job& job);
+    static std::string JobName(const Job& job);
     void Skip(Job& job, PageId page, const std::string& why);
 
     catalog::Catalog& catalog_;

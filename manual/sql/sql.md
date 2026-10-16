@@ -17,7 +17,7 @@ dispatcher's own commands):
 | Class | Statements |
 |---|---|
 | Session | `USE <namespace>` |
-| DDL | `CREATE TABLE`, `CREATE NAMESPACE` / `DROP NAMESPACE`, `CREATE INDEX` / `DROP INDEX`, `CREATE ASSERTION` / `DROP ASSERTION`, `CREATE CABIN` / `DROP CABIN` |
+| DDL | `CREATE TABLE`, `CREATE NAMESPACE` / `DROP NAMESPACE`, `CREATE INDEX` / `DROP INDEX` / `REINDEX INDEX`, `CREATE ASSERTION` / `DROP ASSERTION`, `CREATE CABIN` / `DROP CABIN` |
 | DML | `INSERT`, `UPDATE`, `DELETE` |
 | Query | `SELECT` (joins, subqueries, `GROUP BY`, aggregates), `ANALYZE <select>` |
 | Transactions | `BEGIN`/`START`, `COMMIT`, `ROLLBACK`/`ABORT`, `SET ISOLATION LEVEL` |
@@ -28,7 +28,7 @@ dispatcher's own commands):
 sections): a drop tombstones the oid and its pages are reclaimed after it
 commits, a rename edits a label, and `ADD`/`DROP COLUMN` change a column's
 catalog row and no stored row. The catalog is append-only apart
-from those, `DROP CABIN`, `DROP INDEX` and `DROP ASSERTION`.
+from those, `DROP CABIN`, `DROP INDEX`, `REINDEX INDEX` and `DROP ASSERTION`.
 
 ---
 
@@ -329,7 +329,7 @@ structure of the relation reaches - a failed split's, a failed
   schema instead of failing part way, and an open transaction that has
   written a row of the relation is waited for until it commits or rolls
   back. Two things follow for a client: a `DROP TABLE` can now sit for a
-  while, and one that waits more than 11 seconds is refused with a
+  while, and one that waits more than 1 second is refused with a
   retryable conflict rather than dropping the table - so a drop issued
   against a busy relation may need retrying. A read that *starts* after the
   drop has begun is not waited for and still sees the drop early, which is
@@ -461,8 +461,47 @@ DROP INDEX ix_owner;
 - `CREATE INDEX` and `DROP INDEX` **wait** for every open write to the
   relation and for a statement already reading it, and hold new writes
   until they commit or roll back - on any core. Like `DROP TABLE`, a wait
-  that reaches the lock family's 11 s bound is refused `TXN_CONFLICT`.
+  that reaches the lock family's 1 s bound is refused `TXN_CONFLICT`.
 - `SHOW INDEXES` lists them.
+- **A dropped index's pages are returned** (BY, v3.2.0). They are not freed
+  at the `DROP INDEX` itself: once the drop is committed, checkpoints have
+  moved the recovery start past it, and every statement that started
+  before it has ended, a
+  background job frees the tree and they are reused by later allocations
+  (the data file never shrinks). The same happens to the tree of a
+  `CREATE INDEX` that rolled back. A crash in between only defers it to
+  the next start.
+
+### REINDEX INDEX (BY, v3.2.0)
+
+```sql
+REINDEX INDEX ix_owner;
+-- REINDEXED INDEX name=ix_owner index_oid=12 replaced=9 root=4410
+```
+
+Builds the index again from the relation's current contents: the same key
+and covered columns, the same `UNIQUE`, the same name, under a new
+`index_oid` (`replaced=` names the old one). Because index maintenance is
+append-only, an index keeps entries for rows that no longer exist - rolled
+back inserts, rows removed by `PURGE` - and for every earlier value an
+`UPDATE` moved an indexed or covered column away from; a rebuild leaves
+out each of them that no running transaction can still read. A deleted row
+not yet purged keeps its entry.
+
+- **Autocommit only.** Inside `BEGIN` it is refused `NOT_IMPLEMENTED`, and
+  the transaction goes on.
+- It **waits** like `CREATE INDEX`: for every open write to the relation and
+  every statement already reading it, and holds new writes until it ends.
+- Queries answer exactly as before; the old tree's pages are returned as a
+  dropped index's are.
+- A refused rebuild changes nothing: the old index stays and serves.
+- **A relation's anchor page holds at most 679 index slots**, and a dropped
+  index keeps its slot until its pages are returned, so on a relation whose
+  slots are all taken `REINDEX` is refused `RESOURCE_EXHAUSTED` until that
+  happens.
+- `REINDEX TABLE` and other forms are refused `INVALID_ARGUMENT`.
+- Inside one transaction, `DROP INDEX x` followed by `CREATE INDEX x` is
+  accepted: the name is free to the transaction that dropped it.
 
 ### CREATE ASSERTION / DROP ASSERTION (built and **enforcing**, AST01-AST10)
 
@@ -1582,7 +1621,7 @@ in §7 below now carries and which both used to reach a client as a bare
 | Assigning the tuple key in UPDATE | `Unsupported` — `ERR UNSUPPORTED retryable=0 tuple key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
 | Unknown SET target in UPDATE | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
 | A column assigned twice in one UPDATE's SET list | `InvalidArgument` — `ERR column '<name>' is assigned more than once at byte <n>` (the second name's byte; refused at compile, so nothing is written) |
-| Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE)` |
+| Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE, REINDEX)` |
 | `PURGE` inside a transaction | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE inside a transaction is not implemented; run it in autocommit (byte 0)`; the transaction is not poisoned |
 | `PURGE` of a system or heap relation | `Unsupported` — `ERR UNSUPPORTED retryable=0 '<t>' is a system relation; PURGE frees keys of user relations only (byte <n>)`, or `… is a heap relation, whose chain grows only at its tail; PURGE frees keys of btree relations only (byte <n>)` |
 | `PURGE` with no `WHERE`, or a conjunct other than a tuple key comparison with an integer literal | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE needs a WHERE naming the tuple key; … (byte <n>)`, or `… PURGE admits only comparisons of the tuple key with an integer literal (=, <, <=, >, >=, BETWEEN); this conjunct is not one (byte <n>)` |

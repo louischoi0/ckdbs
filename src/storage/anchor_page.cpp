@@ -1,5 +1,6 @@
 #include "kds/storage/anchor_page.hpp"
 
+#include <cstring>
 #include <string>
 
 #include "kds/storage/page_bytes.hpp"
@@ -105,6 +106,24 @@ Status SetAnchorIndexRoot(std::span<std::byte, kPageSize> page, std::uint64_t in
                                   static_cast<std::uint16_t>(nr.value() + 1));
     }
     StoreField<std::uint32_t>(page, EntryOffset(i) + sizeof(std::uint64_t), root);
+    return Status::OK();
+}
+
+Status RemoveAnchorIndexSlot(std::span<std::byte, kPageSize> page, std::uint64_t index_oid) {
+    auto nr = EntryCount(page);
+    if (!nr.ok()) return nr.status();
+    const std::size_t i = FindEntry(page, index_oid, nr.value());
+    if (i == nr.value()) {
+        return Status::NotFound("anchor page holds no slot for index oid " +
+                                std::to_string(index_oid));
+    }
+    // Compacted: every later entry moves down one, so the table stays dense
+    // and a removed slot's place is the next create's.
+    const std::size_t last = nr.value() - 1;
+    std::memmove(page.data() + EntryOffset(i), page.data() + EntryOffset(i + 1),
+                 (last - i) * kAnchorEntrySize);
+    std::memset(page.data() + EntryOffset(last), 0, kAnchorEntrySize);
+    StoreField<std::uint16_t>(page, kAnchorNrIndexOffset, static_cast<std::uint16_t>(last));
     return Status::OK();
 }
 

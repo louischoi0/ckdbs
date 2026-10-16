@@ -207,6 +207,14 @@ enum class RecordType : std::uint8_t {
     // backup.
     kBackupBegin = 31,
     kBackupEnd = 32,
+    // **One anchor slot removed** (BY-R5,
+    // `instructions/v3.2.0/workorder-by-reindex-drop-index-reclaim.md`):
+    // a dropped or orphaned index's slot, written once its tree is reclaimed
+    // and every free durable. The envelope names the anchor page, the payload
+    // the index oid. Strict: a slot the page does not hold is `Corruption`,
+    // because redo reaches this only for a page below the record's LSN, and
+    // every ANCHOR_UPDATE for the oid precedes it. Since superblock 29.
+    kAnchorSlotRemove = 33,
     // INDEX_PAGE_INIT (index.md §12.1's proposal) is not assigned: a new
     // index page leaves a divide holding half the entries, so only a full
     // page image describes it.
@@ -218,7 +226,7 @@ enum class RecordType : std::uint8_t {
 // Keep it pinned to the last enumerator; the test that every named type
 // encodes proves it.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
-    static_cast<std::uint8_t>(RecordType::kBackupEnd);
+    static_cast<std::uint8_t>(RecordType::kAnchorSlotRemove);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 

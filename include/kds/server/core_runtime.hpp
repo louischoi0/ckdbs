@@ -326,7 +326,8 @@ public:
     // identity sources minting from independent counters can issue one
     // session id twice. The text protocol is passed explicitly by the tests
     // that exercise the newline surface.
-    Status ListenAndAttach(std::uint16_t port, const TcpServer::ClientSetup& setup = {});
+    Status ListenAndAttach(std::uint16_t port, const TcpServer::ClientSetup& setup = {},
+                           const std::string& address = kLoopbackAddress);
 
     // **D19's fallback** (AT-S10c, `connection_handoff.hpp`): where the port
     // cannot be shared, core 0 alone binds it and this core runs the

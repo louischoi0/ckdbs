@@ -86,6 +86,9 @@ add_executable(kds_tests
     index_maintain_test.cpp
     index_unique_test.cpp
     index_unique_rig_test.cpp
+    index_reclaim_test.cpp
+    index_reclaim_job_test.cpp
+    index_reindex_test.cpp
     index_compile_test.cpp
     index_contract_test.cpp
     superblock_test.cpp

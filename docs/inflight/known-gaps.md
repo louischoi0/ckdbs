@@ -729,7 +729,11 @@ pages and the cases it does not reach.
   - a failed `CREATE INDEX`'s page that its freeing does not reach (BX-Q6
     (b), `index.md` §12): one a failed divide left unlinked, one whose
     frame a writeback held, every page of a tree the guarded walk refused,
-    and every page after a crash before the map was written;
+    and every page after a crash before the map was written. A create
+    refused **after** its tree is logged is not here since BY: its slot is
+    owed and an index job reclaims it (BY-R1, BY-R2) - unless the slot's
+    best-effort seed itself failed, which leaves the tree no slot names.
+    Verified on `reindex-drop-index-reclaim` at `4f55b8a2`;
   - a failed or rolled-back `CREATE TABLE`'s pages, which no tombstone
     names;
   - a refused catalog report's page (WAL, above);
@@ -776,6 +780,30 @@ pages and the cases it does not reach.
   map region, a map flush writes the region's one page whole, so the
   per-level syncs matter only to a tree spanning regions - past 65,280
   pages - and no cell builds one.
+- **A `REINDEX` on a relation whose anchor is full is refused.** The new
+  tree needs a slot while the old one's is held until the reclaimer frees
+  the old tree (BY-R5), so at `kAnchorMaxIndexEntries` slots the rebuild
+  is refused `ResourceExhausted` before any page is built, until the
+  reclaimer's jobs remove dropped indexes' slots (`index.md` §12). Verified
+  on `reindex-drop-index-reclaim` at `9da66f0e`
+  (`AtTheSlotCapARebuildIsRefusedAndTheOldIndexStands`).
+- **A `REINDEX` whose backfill fails is not tested on its own.** It goes
+  through `CREATE INDEX`'s build (BY-R7), whose BX-S6 free is tested
+  through a unique build over duplicates; a `REINDEX` cannot meet that
+  failure - the old unique index already refused the duplicates - and no
+  other backfill failure is reachable by a cell without exhausting the
+  pool or the device. Verified on
+  `reindex-drop-index-reclaim` at `9da66f0e`.
+
+- **A backfill can be refused, or index a stranger, through a recycled
+  undo record.** Between `ResolvedForEveryReader`'s check and the read,
+  another core's purge can recycle the record, and a new record holding
+  another relation's row with the same tuple key passes the backfill's
+  identity check: its append is refused `Corruption` or leaves a surplus
+  entry readers re-check (IX2). Never a wrong answer; no cell forces the
+  window (`index.md` §10.1). Verified on `reindex-drop-index-reclaim` at
+  `83204ebc` with the backfill fix merged.
+
 ## Statement scheduling
 
 Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and

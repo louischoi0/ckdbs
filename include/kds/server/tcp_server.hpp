@@ -87,9 +87,16 @@ Status ConfigureAcceptedSocket(int fd, std::uint32_t keepalive_s);
 // burst in 16 reactor turns rather than 1,000.
 inline constexpr int kMaxAcceptsPerEvent = 64;
 
+// The address every listener binds unless the default port is given
+// another by `listen_address`.
+inline constexpr const char* kLoopbackAddress = "127.0.0.1";
+
 class TcpServer {
 public:
-    // Binds and listens on 127.0.0.1:port. Fails with IoError if the
+    // Binds and listens on `address`:port - an IPv4 address in dotted
+    // form, loopback unless the caller passes the instance's
+    // `listen_address`; one that does not parse is InvalidArgument. Fails
+    // with IoError if the
     // socket/bind/listen syscalls fail (e.g. the port is already in use).
     // `reuse_port` sets SO_REUSEPORT before bind, so N listeners - one per
     // core - share one port and the kernel distributes accepted
@@ -99,7 +106,12 @@ public:
     // platform that refuses the option answers Unsupported**, never a
     // listener that silently binds exclusively - the caller's cue for D19's
     // fallback, core 0 accepting alone and handing off (`set_handoff`).
-    static StatusOr<TcpServer> Listen(std::uint16_t port, bool reuse_port = false);
+    static StatusOr<TcpServer> Listen(std::uint16_t port, bool reuse_port = false,
+                                      const std::string& address = kLoopbackAddress);
+
+    // Whether `address` is an IPv4 address `Listen` binds, so a config file
+    // naming one it would not is refused before anything opens.
+    static bool IsListenAddress(const std::string& address);
 
     // **A server with no socket** (AT-S10c): it accepts nothing and runs the
     // connections handed to it (`Host`). A peer's arrangement under D19's

@@ -3731,6 +3731,18 @@ StatusOr<Statement> Parser::Parse() {
         auto s = ParsePurge();
         if (!s.ok()) return s.status();
         stmt = std::move(s.value());
+    } else if (IEquals(tok.text, "REINDEX")) {
+        // `REINDEX INDEX <name>` (BY-Q1 (a)): one index by name, nothing
+        // else after it. `REINDEX TABLE` names no object this build rebuilds.
+        if (Status s = ExpectKeyword("INDEX"); !s.ok()) return s;
+        IndexStmt index;
+        index.reindex = true;
+        index.byte_offset = lexer_.Peek().byte_offset;
+        auto name = ParseIdent();
+        if (!name.ok()) return name.status();
+        index.index_name = std::move(name.value());
+        ConsumeOptionalSemicolon();
+        stmt = std::move(index);
     } else if (IEquals(tok.text, "ALTER")) {
         auto s = ParseAlter();
         if (!s.ok()) return s.status();
@@ -3747,7 +3759,7 @@ StatusOr<Statement> Parser::Parse() {
     } else {
         return Status::InvalidArgument(
             "unknown SQL keyword '" + std::string(tok.text) +
-            "' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE)");
+            "' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE, REINDEX)");
     }
 
     // After a successful parse, only EOF may remain (a trailing semicolon

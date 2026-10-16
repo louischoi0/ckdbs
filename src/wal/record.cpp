@@ -75,6 +75,7 @@ const char* RecordTypeName(RecordType type) noexcept {
         case RecordType::kAssertSnapshot: return "ASSERT_SNAPSHOT";
         case RecordType::kPageHandoff: return "PAGE_HANDOFF";
         case RecordType::kAnchorUpdate: return "ANCHOR_UPDATE";
+        case RecordType::kAnchorSlotRemove: return "ANCHOR_SLOT_REMOVE";
         case RecordType::kTxnPrepare: return "TXN_PREPARE";
     }
     return "UNKNOWN";

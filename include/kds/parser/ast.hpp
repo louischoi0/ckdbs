@@ -1152,6 +1152,7 @@ struct IndexStmt {
     std::uint32_t table_byte_offset = 0;
     bool drop = false;
     bool unique = false;  // `CREATE UNIQUE INDEX` (BX)
+    bool reindex = false;  // `REINDEX INDEX <name>` (BY): only the name is set
 };
 
 // `CREATE ASSERTION <name> ON <rel> GROUP BY (<col>, ...)

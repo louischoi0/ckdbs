@@ -101,6 +101,10 @@ public:
     struct Config {
         std::string data_file = "kds.db";
         std::uint16_t port = 15432;
+        // `listen_address`: the IPv4 address the default port binds, on
+        // every core. Loopback unless set; `debug_text_port` and `kwp_port`
+        // stay loopback whatever it says.
+        std::string listen_address = kLoopbackAddress;
 
         // **Not a configuration key**: the test seam D19's fallback needs
         // (AT-S10c). Above one core, core 0 binds the port alone and hands

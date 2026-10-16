@@ -97,6 +97,13 @@ StatusOr<std::size_t> EncodeAnchorUpdate(std::span<std::byte> out,
                                          const AnchorUpdatePayload& fields);
 StatusOr<AnchorUpdatePayload> DecodeAnchorUpdate(std::span<const std::byte> in);
 
+// ANCHOR_SLOT_REMOVE (BY-R5): the index whose slot the envelope's anchor
+// page loses. 8 bytes on disk.
+inline constexpr std::size_t kAnchorSlotRemovePayloadSize = 8;
+
+StatusOr<std::size_t> EncodeAnchorSlotRemove(std::span<std::byte> out, std::uint64_t index_oid);
+StatusOr<std::uint64_t> DecodeAnchorSlotRemove(std::span<const std::byte> in);
+
 // ---- BACKUP_BEGIN / BACKUP_END (BR-S2) ----------------------------------
 //
 // One shape for both: the backup's id and the start LSN its window opened

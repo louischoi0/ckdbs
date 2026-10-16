@@ -63,7 +63,7 @@ std::string Expeditor::Config::LogPath() const {
 }
 
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
-    return {"data_file",  "port",     "wal_dir",  "archive_dir", "archive_command",
+    return {"data_file",  "port",     "listen_address", "wal_dir",  "archive_dir", "archive_command",
             "checkpoint_interval_ms", "durability",
             "tls",        "tls_cert_file",        "tls_key_file",
             "auth",       "users_file",
@@ -225,6 +225,15 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
                                             " is outside 1..65535");
         }
         port = static_cast<std::uint16_t>(v.value());
+    }
+    if (file.Has("listen_address")) {
+        auto v = file.GetString("listen_address");
+        if (!v.ok()) return v.status();
+        if (!TcpServer::IsListenAddress(v.value())) {
+            return Status::InvalidArgument(file.origin() + ": listen_address '" + v.value() +
+                                           "' is not an IPv4 address");
+        }
+        listen_address = std::move(v.value());
     }
     if (file.Has("wal_dir")) {
         auto v = file.GetString("wal_dir");
@@ -1665,12 +1674,13 @@ Status Expeditor::Start() {
     // on Linux, which never refuses.
     bool handoff = config_.cores > 1 && config_.force_listener_handoff;
     {
-        auto opened = TcpServer::Listen(config_.port, /*reuse_port=*/config_.cores > 1 && !handoff);
+        auto opened = TcpServer::Listen(config_.port, /*reuse_port=*/config_.cores > 1 && !handoff,
+                                        config_.listen_address);
         if (!opened.ok() && opened.status().code() == StatusCode::kUnsupported) {
             logger_->Warn("expeditor", "the port cannot be shared (" + opened.status().message() +
                                            "); core 0 accepts and hands connections off");
             handoff = true;
-            opened = TcpServer::Listen(config_.port, /*reuse_port=*/false);
+            opened = TcpServer::Listen(config_.port, /*reuse_port=*/false, config_.listen_address);
         }
         if (!opened.ok()) return opened.status();
         listener.emplace(std::move(opened.value()));
@@ -1919,7 +1929,8 @@ Status Expeditor::Start() {
             // runs what core 0 hands it where the port cannot be shared.
             if (Status s = handoff
                                ? core.value()->HostHandedConnections(*handoff_, client_setup)
-                               : core.value()->ListenAndAttach(config_.port, client_setup);
+                               : core.value()->ListenAndAttach(config_.port, client_setup,
+                                                                config_.listen_address);
                 !s.ok()) {
                 return s;
             }
@@ -2129,7 +2140,8 @@ Status Expeditor::Start() {
                              "until checkpoint or shutdown");
     }
 
-    logger_->Info("expeditor", "listening on 127.0.0.1:" + std::to_string(config_.port));
+    logger_->Info("expeditor", "listening on " + config_.listen_address + ":" +
+                                   std::to_string(config_.port));
     // The instance is assembled and running: peers on their threads, ports
     // bound, and this thread has not yet entered core 0's reactor. That is
     // the seam `RunUntilStopped()` picks up, and the moment AM-S0(a)'s cell

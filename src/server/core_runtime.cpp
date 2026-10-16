@@ -506,10 +506,11 @@ Status CoreRuntime::ShutdownCheckpoint() {
     return Checkpoint();
 }
 
-Status CoreRuntime::ListenAndAttach(std::uint16_t port, const TcpServer::ClientSetup& setup) {
+Status CoreRuntime::ListenAndAttach(std::uint16_t port, const TcpServer::ClientSetup& setup,
+                                    const std::string& address) {
     // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
     const CurrentCoreGuard as_this_core(core_id());
-    auto listener = TcpServer::Listen(port, /*reuse_port=*/true);
+    auto listener = TcpServer::Listen(port, /*reuse_port=*/true, address);
     if (!listener.ok()) return listener.status();
     if (Status s = AttachListener(std::move(listener.value()), setup); !s.ok()) return s;
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {

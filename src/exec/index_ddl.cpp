@@ -18,6 +18,7 @@
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 #include "kds/storage/index/index_tree.hpp"
+#include "kds/txn/manager.hpp"
 #include "kds/txn/read_view.hpp"
 #include "kds/txn/undo_log.hpp"
 
@@ -60,6 +61,7 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
 // page rather than at one relation.
 struct StagedRow {
     std::uint64_t tuple_key = 0;
+    std::uint64_t trx_id = 0;  // the current version's writer (a delete-mark's deleter)
     std::uint64_t undo_ptr = 0;
     bool deleted = false;
     std::vector<std::byte> payload;
@@ -212,18 +214,30 @@ StatusOr<std::vector<parser::AstValue>> AppendVersion(storage::PageStore& store,
 // readers and still there for older ones, which is exactly the case the undo
 // chain exists for.
 //
+// **Every version a reader can reach, and no further.** A version whose
+// superseding writer is resolved for every reader (`ResolvedForEveryReader`)
+// is invisible to every live and future view, so a reader stops above it and
+// the undo purge may already have recycled its record: the pointer to it is
+// stale, and what it names may be another row's version. The walk stops where
+// the oldest reader would, before reading that pointer. `txns` null - a
+// dispatcher with no transaction manager, where no snapshot exists and undo is
+// never recycled - walks to the chain's end.
+//
 // `ix` is the caller's, so its `root_page_id` names the root the tree has
 // grown to even when the backfill fails - which is what a failed build frees
 // from (BX-Q6 (b)).
 StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess& access,
-                          catalog::TableAccess::IndexRef& ix) {
+                          catalog::TableAccess::IndexRef& ix,
+                          const txn::TransactionManager* txns) {
+    const auto unreachable_below = [txns](std::uint64_t superseder) {
+        return txns != nullptr && txns->ResolvedForEveryReader(superseder);
+    };
     // Reads only, so a locally-built log is correct: Read/Walk resolve a
-    // pointer against pages and carry no allocation state. And safe under
-    // the undo purge for two reasons that must both stay true: this walk
-    // appends nothing, so no growth can trigger a reclaim mid-walk on this
-    // cooperative core; and the statement's own undo appends (the DDL undo
-    // hook's) all happen after the backfill returns, inside
-    // Catalog::CreateIndex.
+    // pointer against pages and carry no allocation state. A writer refused
+    // by `unreachable_below` can be resolved between the check and the read,
+    // and another core's purge can then recycle its record: a read that
+    // fails, or returns another row's version, is asked again after the walk,
+    // and once its superseder is resolved the walk just ends there.
     txn::UndoLog undo(store);
 
     auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);
@@ -258,6 +272,7 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
                 StagedRow row;
                 row.tuple_key = tuple_key.value();
+                row.trx_id = tuple.value().trx_id;
                 row.undo_ptr = tuple.value().undo_ptr;
                 row.deleted = tuple.value().deleted;
                 row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
@@ -271,21 +286,49 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
             auto latest = AppendVersion(store, access, ix, row.tuple_key, row.payload);
             if (!latest.ok()) return latest.status();
 
-            // A failed append stops the walk and fails the build: a version
-            // with no entry is a row an older snapshot misses (spec §10a).
+            // The writer that superseded the version the walk reads next. A
+            // row whose current writer every reader sees contributes its
+            // current version alone.
+            std::uint64_t superseder = row.trx_id;
+            // A failed append leaves the walk by its Status and fails the
+            // build: the index must not be published without that version's
+            // entry or any older one of the row, or an old snapshot reaches
+            // its row through no entry (spec §10a). Kept apart from a failed
+            // read, which the superseder's resolution may excuse.
             Status appended = Status::OK();
-            Status walked = undo.Walk(
-                row.undo_ptr, [&](const txn::UndoVersion& version) -> bool {
-                    // A delete-mark's image is empty because a mark changes
-                    // no tuple bytes - the version it supersedes is the one
-                    // already appended, so there is nothing new here.
-                    if (version.image.empty()) return true;
-                    auto older = AppendVersion(store, access, ix, row.tuple_key, version.image);
-                    if (!older.ok()) appended = older.status();
-                    return older.ok();
-                });
-            if (!walked.ok()) return walked;
-            if (!appended.ok()) return appended;
+            if (!unreachable_below(superseder)) {
+                Status walked = undo.Walk(
+                    row.undo_ptr,
+                    [&](const txn::UndoVersion& version) -> StatusOr<storage::VisitControl> {
+                        // Judged after the walk, as a failed read is.
+                        if (version.tuple_key != row.tuple_key) {
+                            return Status::Corruption(
+                                "undo chain of the row with tuple key " +
+                                std::to_string(row.tuple_key) +
+                                " reached a version of tuple key " +
+                                std::to_string(version.tuple_key));
+                        }
+                        // A delete-mark's image is empty because a mark
+                        // changes no tuple bytes - the version it supersedes
+                        // is the one already appended, so there is nothing
+                        // new here.
+                        if (!version.image.empty()) {
+                            auto older = AppendVersion(store, access, ix, row.tuple_key,
+                                                       version.image);
+                            if (!older.ok()) {
+                                appended = older.status().WithContext(
+                                    "indexing an older version of the row with tuple key " +
+                                    std::to_string(row.tuple_key));
+                                return appended;
+                            }
+                        }
+                        superseder = version.prior_trx_id;  // wrote this version
+                        return unreachable_below(superseder) ? storage::VisitControl::kStop
+                                                             : storage::VisitControl::kContinue;
+                    });
+                if (!appended.ok()) return appended;
+                if (!walked.ok() && !unreachable_below(superseder)) return walked;
+            }
             if (ix.unique) {
                 if (Status s = CheckBuiltKeyUnique(store, access, ix, row, latest.value());
                     !s.ok()) {
@@ -304,7 +347,8 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
                                                      const parser::IndexStmt& stmt,
                                                      catalog::Oid default_namespace,
-                                                     const txn::ReadView* view) {
+                                                     const txn::ReadView* view,
+                                                     std::uint64_t trx_id) {
     auto oid = catalog.ResolveRelation(stmt.schema, stmt.table_name, default_namespace,
                                        stmt.table_byte_offset, view);
     if (!oid.ok()) return oid.status();
@@ -364,7 +408,7 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
     // - so this buys the *position* of the failure and nothing else: a
     // heap relation refused by name rather than as a page-type error from
     // inside the build.
-    if (Status s = catalog.CheckIndexDef(def, view != nullptr ? view->own_trx_id : txn::kNoTrxId);
+    if (Status s = catalog.CheckIndexDef(def, trx_id);
         !s.ok()) {
         return s;
     }
@@ -380,7 +424,7 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
 
 StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableAccess& access,
                                 const catalog::Catalog::IndexDef& def, std::uint64_t trx_id,
-                                wal::WalManager* wal) {
+                                wal::WalManager* wal, const txn::TransactionManager* txns) {
     // The layout the definition's widths encode: `PrepareIndexDef` stored
     // `entry_width` as `leaf_entry_width()`, so the covered width is what
     // is left after the key and the tuple key. Re-derived rather than carried, and
@@ -432,7 +476,7 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
         building.covered_cols[i] = def.covered_cols[i];
     }
 
-    auto final_root = Backfill(store, access, building);
+    auto final_root = Backfill(store, access, building, txns);
     if (!final_root.ok()) {
         // Nothing has logged the tree yet and nothing names it, so its pages
         // go back now rather than leaking for the volume's life (BX-Q6 (b)).
@@ -453,18 +497,62 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
     return final_root.value();
 }
 
-StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
-                                     const parser::IndexStmt& stmt, catalog::Oid default_namespace,
-                                     std::uint64_t trx_id,
-                                     catalog::CatalogRowRef* written,
-                                     const txn::ReadView* view, wal::WalManager* wal) {
-    auto prepared = PrepareIndexDef(catalog, stmt, default_namespace, view);
-    if (!prepared.ok()) return prepared.status();
-    catalog::Catalog::IndexDef& def = prepared.value();
+namespace {
 
+// The index `stmt` names under `view`, on `relation` only (`DropIndex`'s
+// contract): the name was resolved once to take the `X` and is resolved again
+// here, and between the two another transaction may have dropped the index
+// and created one by its name on another relation (BY-R8).
+StatusOr<catalog::SysIndexRow> FindNamedIndex(catalog::Catalog& catalog,
+                                              const parser::IndexStmt& stmt,
+                                              std::optional<catalog::Oid> relation,
+                                              const txn::ReadView* view) {
+    auto row = catalog.FindIndexByName(stmt.index_name, view);
+    if (!relation.has_value() || !row.ok()) {
+        return Status::NotFound("no index named '" + stmt.index_name + "' (byte " +
+                                std::to_string(stmt.byte_offset) + ")");
+    }
+    if (row.value().table_oid != *relation) {
+        return Status::TxnConflict("index '" + stmt.index_name +
+                                   "' moved to another relation while the statement waited (byte " +
+                                   std::to_string(stmt.byte_offset) + ")");
+    }
+    return row;
+}
+
+Status DropNamedIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
+                      catalog::Oid index_oid, std::uint64_t trx_id,
+                      catalog::CatalogRowChange* change) {
+    Status s = catalog.DropIndex(index_oid, trx_id, change);
+    // The byte belongs to the statement, and only this layer has it.
+    // `WithContext` would prefix instead of append and would bury the
+    // position mid-sentence, so the one refusal that names the user's
+    // object gets it spelled out the way `FindNamedIndex` does - through
+    // `WithMessage`, which keeps whatever code arrived rather than naming
+    // one here. Naming one is how a re-wrap answers "could a later release
+    // lift this?" with its own guess.
+    if (s.ok() || (s.code() != StatusCode::kUnsupported &&
+                   s.code() != StatusCode::kNotImplemented)) {
+        return s;
+    }
+    return s.WithMessage("index '" + stmt.index_name + "': " + s.message() + " (byte " +
+                         std::to_string(stmt.byte_offset) + ")");
+}
+
+// The build and the write, for a definition already checked and given its
+// oid: `CREATE INDEX`'s and `REINDEX`'s one door - the backfill, BX's
+// duplicate check for a unique index, BX-S6's free on a failed build, the
+// slot seeded on a refusal after the tree is logged. `stmt` gives the name
+// and the byte a refusal carries.
+StatusOr<IndexDdlResult> BuildAndWriteIndex(catalog::Catalog& catalog, storage::PageStore& store,
+                                            catalog::Catalog::IndexDef& def,
+                                            const parser::IndexStmt& stmt, std::uint64_t trx_id,
+                                            catalog::CatalogRowRef* written,
+                                            wal::WalManager* wal,
+                                            const txn::TransactionManager* txns) {
     auto access = catalog.InitTableAccess(def.table_oid);
     if (!access.ok()) return access.status();
-    auto root = BuildIndexTree(store, *access.value(), def, trx_id, wal);
+    auto root = BuildIndexTree(store, *access.value(), def, trx_id, wal, txns);
     if (!root.ok()) {
         // A duplicate the unique build found (BX-R7) is the statement's
         // refusal, so it carries the index name's byte. It is the build's
@@ -479,7 +567,20 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     def.root_page_id = root.value();
 
     auto index_oid = catalog.CreateIndex(def, trx_id, written);
-    if (!index_oid.ok()) return index_oid.status();
+    if (!index_oid.ok()) {
+        // **The tree is logged and nothing may name it** (BY-S2's review): a
+        // refusal before the slot went down - a name another core took after
+        // `PrepareIndexDef` asked - would leave a tree no slot names, which no
+        // mount's owed-slot scan finds (BY-R1). So the slot is seeded here,
+        // best-effort, and the tree is owed from it. A slot already down is
+        // left as it is; a seed that fails leaves the leak there was.
+        auto table = catalog.GetSysTableRow(def.table_oid);
+        if (table.ok() && table.value().anchor_page_id != kInvalidPageId) {
+            (void)catalog.WriteAnchorRoot(table.value().anchor_page_id, def.table_oid,
+                                          def.index_oid, def.root_page_id, trx_id);
+        }
+        return index_oid.status();
+    }
 
     IndexDdlResult out;
     out.index_oid = index_oid.value();
@@ -487,10 +588,25 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     out.root_page_id = def.root_page_id;
     out.key_width = def.key_width;
     out.entry_width = def.entry_width;
+    return out;
+}
 
+}  // namespace
+
+StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
+                                     const parser::IndexStmt& stmt, catalog::Oid default_namespace,
+                                     std::uint64_t trx_id, catalog::CatalogRowRef* written,
+                                     const txn::ReadView* view, wal::WalManager* wal,
+                                     const txn::TransactionManager* txns) {
+    auto prepared = PrepareIndexDef(catalog, stmt, default_namespace, view, trx_id);
+    if (!prepared.ok()) return prepared.status();
+    auto out =
+        BuildAndWriteIndex(catalog, store, prepared.value(), stmt, trx_id, written, wal, txns);
+    if (!out.ok()) return out;
     // Collected after the write, because none of them is a reason not to
     // write.
-    out.warnings = IndexCreationWarnings(catalog, def, stmt.key_columns[0].name);
+    out.value().warnings =
+        IndexCreationWarnings(catalog, prepared.value(), stmt.key_columns[0].name);
     return out;
 }
 
@@ -511,28 +627,57 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
 }
 
 StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
-                                  std::uint64_t trx_id, catalog::CatalogRowChange* change,
-                                  const txn::ReadView* view) {
-    auto row = catalog.FindIndexByName(stmt.index_name, view);
-    if (!row.ok()) {
-        return Status::NotFound("no index named '" + stmt.index_name + "' (byte " +
-                                std::to_string(stmt.byte_offset) + ")");
-    }
-    if (Status s = catalog.DropIndex(row.value().index_oid, trx_id, change); !s.ok()) {
-        // The byte belongs to the statement, and only this layer has it.
-        // `WithContext` would prefix instead of append and would bury the
-        // position mid-sentence, so the one refusal that names the user's
-        // object gets it spelled out the way the sibling above does -
-        // through `WithMessage`, which keeps whatever code arrived rather
-        // than naming one here. Naming one is how a re-wrap answers "could
-        // a later release lift this?" with its own guess.
-        if (s.code() != StatusCode::kUnsupported && s.code() != StatusCode::kNotImplemented) {
-            return s;
-        }
-        return s.WithMessage("index '" + stmt.index_name + "': " + s.message() + " (byte " +
-                             std::to_string(stmt.byte_offset) + ")");
+                                  std::optional<catalog::Oid> relation,
+                                  const txn::ReadView* view, std::uint64_t trx_id,
+                                  catalog::CatalogRowChange* change) {
+    auto row = FindNamedIndex(catalog, stmt, relation, view);
+    if (!row.ok()) return row.status();
+    if (Status s = DropNamedIndex(catalog, stmt, row.value().index_oid, trx_id, change);
+        !s.ok()) {
+        return s;
     }
     return row.value().index_oid;
+}
+
+StatusOr<IndexDdlResult> ReindexIndex(catalog::Catalog& catalog, storage::PageStore& store,
+                                      const parser::IndexStmt& stmt,
+                                      std::optional<catalog::Oid> relation,
+                                      const txn::ReadView* view, std::uint64_t trx_id,
+                                      catalog::CatalogRowChange* dropped,
+                                      catalog::CatalogRowRef* written, wal::WalManager* wal,
+                                      const txn::TransactionManager* txns) {
+    auto old = FindNamedIndex(catalog, stmt, relation, view);
+    if (!old.ok()) return old.status();
+    const catalog::SysIndexRow& row = old.value();
+
+    // **The definition is the row's own positions, never names** (B2): a
+    // `RENAME COLUMN` takes no relation `X`, so a definition re-spelled by
+    // column names could resolve to other columns than the index was built
+    // on. Widths and flags are the row's too - stored constants a column's
+    // type cannot move under (types are not alterable, `alter.md` AL11).
+    catalog::Catalog::IndexDef def;
+    def.table_oid = row.table_oid;
+    def.name = stmt.index_name;
+    def.key_width = row.key_width;
+    def.entry_width = row.entry_width;
+    def.flags = row.flags;
+    def.key_cols.assign(row.key_cols.begin(), row.key_cols.begin() + row.nkeys);
+    def.covered_cols.assign(row.covered_cols.begin(), row.covered_cols.begin() + row.ncovered);
+
+    // The old row first: its delete-mark is this transaction's, which is what
+    // lets the new row take the name (BY-R8).
+    if (Status s = DropNamedIndex(catalog, stmt, row.index_oid, trx_id, dropped); !s.ok()) {
+        return s;
+    }
+    if (Status s = catalog.CheckIndexDef(def, trx_id); !s.ok()) return s;
+    // Issued before any page exists, as `PrepareIndexDef` issues it (page.md
+    // §2a).
+    auto new_oid = catalog.AllocateRowId(catalog::kSysIndexesTable);
+    if (!new_oid.ok()) return new_oid.status();
+    def.index_oid = new_oid.value();
+    auto out = BuildAndWriteIndex(catalog, store, def, stmt, trx_id, written, wal, txns);
+    if (out.ok()) out.value().replaced_oid = row.index_oid;
+    return out;
 }
 
 }  // namespace kds::exec

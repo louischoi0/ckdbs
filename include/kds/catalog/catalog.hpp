@@ -648,6 +648,29 @@ public:
     };
     StatusOr<std::vector<PendingReclaim>> PendingReclaims();
 
+    // ---- Owed index trees (BY-R1,
+    // `instructions/v3.2.0/workorder-by-reindex-drop-index-reclaim.md`) ----
+    //
+    // Every anchor slot of a live user relation whose index oid names no
+    // live `sys.indexes` row: a dropped index's tree, or a rolled-back or
+    // failed create's logged one. **Read at mount only, after undo, and
+    // unfiltered** `[quiet-wrong]`: a view-filtered read would call an open
+    // `CREATE INDEX`'s slot owed and hand a tree being built to the
+    // reclaimer. A dropped relation's slots are its tombstone's to reclaim
+    // (BY-R3) and are not listed.
+    struct OwedIndexTree {
+        Oid rel_oid = 0;
+        PageId anchor_page_id = kInvalidPageId;
+        Oid index_oid = 0;
+    };
+    StatusOr<std::vector<OwedIndexTree>> OwedIndexTrees();
+
+    // Removes `index_oid`'s slot from `anchor_page_id` under the page's
+    // latch, logging ANCHOR_SLOT_REMOVE under the same hold (BY-R5). Called
+    // once the slot's tree is reclaimed and every free durable; outside any
+    // transaction, as `ClearPendingRoots` is.
+    Status RemoveIndexSlot(Oid rel_oid, PageId anchor_page_id, Oid index_oid);
+
     // Overwrites `oid`'s tombstone word to 0 once its reclaim is durable
     // (BF-R7): logged outside any transaction, as the mark retire is, and
     // keeping the row's `trx_id` and `undo_ptr`, so the decided-tombstone

@@ -23,8 +23,8 @@
 //
 // The entry table is append-ordered and linear-scanned: an index count is
 // bounded by DDL, not by data, and the scan runs at bind time, not per
-// row. Removal deliberately does not exist yet - the note at the foot of
-// this header says why, and what shape it takes when it arrives.
+// row. A slot is removed only once its tree is reclaimed
+// (`RemoveAnchorIndexSlot`, BY-R5).
 //
 // Mutation protocol: under the page latch, like every relation page - any
 // core's statement may write it. Every mutation is WAL-logged by the caller
@@ -55,9 +55,9 @@ void SetAnchorClusteredRoot(std::span<std::byte, kPageSize> page, PageId root);
 // out-of-bounds read or write otherwise (3f07eda's review, C1).
 
 // Every `{index_oid, root}` slot the anchor holds, in slot order - a
-// dropped index's and a rolled-back one's included, since no slot is ever
-// removed. What a dropped relation's reclaim walks from (BF-R3); Corruption
-// when the page's count is not a count.
+// dropped index's and a rolled-back one's included until its tree is
+// reclaimed and the slot removed (BY-R5). What a dropped relation's reclaim
+// walks from (BF-R3); Corruption when the page's count is not a count.
 struct AnchorIndexSlot {
     std::uint64_t index_oid = 0;
     PageId root = kInvalidPageId;
@@ -83,18 +83,19 @@ Status CheckAnchorRoomForIndex(std::span<const std::byte, kPageSize> page,
                                std::uint64_t index_oid);
 
 // Inserts or updates the entry for `index_oid`. Refuses exactly as
-// CheckAnchorRoomForIndex does. The cap is reachable: entries accumulate
-// across DROP INDEX - no removal exists, and index oids never reissue - so
-// ~679 create-then-drop cycles on one relation fill the table, and the next
-// index's first root split fails an ordinary INSERT.
+// CheckAnchorRoomForIndex does. The slot is written at CREATE INDEX
+// (PW2-3), so at the cap the create itself is refused.
 Status SetAnchorIndexRoot(std::span<std::byte, kPageSize> page, std::uint64_t index_oid,
                           PageId root);
 
-// There is deliberately no RemoveAnchorIndexRoot yet: a removal is a
-// mutation the log could not describe (redo of an older ANCHOR_UPDATE
-// would resurrect the entry), and DROP INDEX is transactional - a
-// rollback must keep the slot - so the removal belongs at DDL
-// *resolution*, the §5d catalog-mark purge's shape, with its own record.
-// Its absence is what makes the accumulation above real.
+// Removes `index_oid`'s entry and compacts the table (BY-R5,
+// `instructions/v3.2.0/workorder-by-reindex-drop-index-reclaim.md`):
+// `NotFound` when the anchor holds none. Written once a dropped or orphaned
+// index's tree is reclaimed and every free of it durable, by its own record
+// (`ANCHOR_SLOT_REMOVE`), so redo meets it after every `ANCHOR_UPDATE` that
+// named the oid - the page LSN gates each - and nothing writes the oid's slot
+// again: its row is gone, so no write maintains its tree. Before BY no slot
+// was ever removed, and ~679 create-then-drop cycles filled the table.
+Status RemoveAnchorIndexSlot(std::span<std::byte, kPageSize> page, std::uint64_t index_oid);
 
 }  // namespace kds::storage

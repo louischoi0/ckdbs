@@ -354,6 +354,65 @@ TEST_F(RedoTest, AnAnchorReplaysItsInitAndItsSlotUpdates) {
     EXPECT_EQ(idx.value(), 300u);
 }
 
+TEST_F(RedoTest, AnAnchorSlotRemoveReplaysAfterTheUpdatesThatNamedTheSlot) {
+    // BY-R5: three slots, the middle one removed. Redo applies every
+    // ANCHOR_UPDATE first - each precedes the removal in the log - and the
+    // table is compacted, the third slot moving into the second's place.
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        WalStream& w = *s.value();
+        std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
+        const PageInitPayload fields{/*min_key=*/0,
+                                     static_cast<std::uint8_t>(PageType::kAnchor),
+                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/4001};
+        ASSERT_TRUE(EncodePageInit(init, fields).ok());
+        ASSERT_TRUE(w.Append({RecordType::kPageInit, 1, kPage}, init).ok());
+        std::array<std::byte, kAnchorUpdatePayloadSize> upd{};
+        for (const auto& [oid, root] : {std::pair<std::uint64_t, std::uint32_t>{9001, 300},
+                                        {9002, 301}, {9003, 302}, {9002, 303}}) {
+            ASSERT_TRUE(EncodeAnchorUpdate(upd, AnchorUpdatePayload{oid, root}).ok());
+            ASSERT_TRUE(w.Append({RecordType::kAnchorUpdate, 1, kPage}, upd).ok());
+        }
+        std::array<std::byte, kAnchorSlotRemovePayloadSize> rm{};
+        ASSERT_TRUE(EncodeAnchorSlotRemove(rm, 9002).ok());
+        ASSERT_TRUE(w.Append({RecordType::kAnchorSlotRemove, 0, kPage}, rm).ok());
+        ASSERT_TRUE(w.Sync().ok());
+    }
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    ASSERT_TRUE(r.ok()) << r.status().message();
+
+    auto page = store_.Get(kPage);
+    ASSERT_TRUE(page.ok());
+    auto slots = storage::AnchorIndexSlots(page.value().bytes());
+    ASSERT_TRUE(slots.ok()) << slots.status().message();
+    ASSERT_EQ(slots.value().size(), 2u);
+    EXPECT_EQ(slots.value()[0].index_oid, 9001u);
+    EXPECT_EQ(slots.value()[1].index_oid, 9003u);
+    EXPECT_EQ(slots.value()[1].root, 302u);
+}
+
+TEST_F(RedoTest, AnAnchorSlotRemoveOfASlotThePageDoesNotHoldIsCorruption) {
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        WalStream& w = *s.value();
+        std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
+        const PageInitPayload fields{/*min_key=*/0,
+                                     static_cast<std::uint8_t>(PageType::kAnchor),
+                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/4001};
+        ASSERT_TRUE(EncodePageInit(init, fields).ok());
+        ASSERT_TRUE(w.Append({RecordType::kPageInit, 1, kPage}, init).ok());
+        std::array<std::byte, kAnchorSlotRemovePayloadSize> rm{};
+        ASSERT_TRUE(EncodeAnchorSlotRemove(rm, 9002).ok());
+        ASSERT_TRUE(w.Append({RecordType::kAnchorSlotRemove, 0, kPage}, rm).ok());
+        ASSERT_TRUE(w.Sync().ok());
+    }
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
+}
+
 TEST_F(RedoTest, AnAnchorUpdateAgainstANonAnchorPageIsCorruption) {
     // The 3f07eda review's C2: the applier must refuse a record that is
     // not this page's - a heap page's body bytes read as an entry count

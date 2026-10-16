@@ -21,7 +21,9 @@ BF-R2).
 - the anchor;
 - the clustered tree, by descent and by its leaf chain;
 - every tree an anchor slot names - a dropped or rolled-back index's
-  included, since no slot is ever removed;
+  included, while its own index job (`index.md` §12, BY) has not yet
+  removed the slot; the relation's job drops that index job first, so one
+  job owns each tree (BY-R3);
 - the var-heap chain;
 - a pre-SUS-1 heap chain.
 
@@ -53,7 +55,10 @@ idempotent (BF-R7). A freed id comes back through the store's free list
 
 **What stays leaked** is every page no root reaches:
 - pages left unlinked by a failed growth or split;
-- a failed `CREATE INDEX`'s tree;
+- a failed `CREATE INDEX`'s tree where neither BX-S6's free nor BY's
+  index job reaches it - a failed build's pages its free does not walk to,
+  and a tree logged before a refusal whose slot seed failed (`index.md`
+  §12);
 - a failed or rolled-back `CREATE TABLE`'s pages;
 - a refused catalog report's page;
 - a previous run's undo pages (UP4);

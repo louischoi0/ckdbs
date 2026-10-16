@@ -1,0 +1,23 @@
+# One command to try KDS:   docker compose run --rm cli
+# It builds the image, starts the server and opens a SQL prompt.
+# The server alone:         docker compose up -d kds   (127.0.0.1:15432)
+services:
+  kds:
+    build: .
+    image: kds:local
+    ports:
+      - "127.0.0.1:15432:15432"
+    volumes:
+      - kds-data:/var/lib/kds
+
+  cli:
+    image: kds:local
+    depends_on:
+      kds:
+        condition: service_healthy
+    entrypoint: ["python3", "/opt/kds/tools/ckdbs_cli.py", "--host", "kds", "--port", "15432"]
+    stdin_open: true
+    tty: true
+
+volumes:
+  kds-data:

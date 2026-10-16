@@ -197,14 +197,14 @@ TEST(CatalogNameRigTest, AnIndexCreateOnOneCoreIsRefusedWhileAnotherCoresDropOfI
     EXPECT_EQ(named, 1);
 }
 
-TEST(CatalogNameRigTest, ItsOwnOpenDropIsRefusedAsNotRetryable) {
+TEST(CatalogNameRigTest, ItsOwnOpenDropAdmitsAnIndexAndRefusesARenameAsNotRetryable) {
     // The two own-transaction cases, which a retry can never clear because
     // the only transaction they wait on is the asker's (AT-S17's review,
     // findings 1 and 2):
     //
-    //   - recreating an index inside the transaction that drops it keeps
-    //     the refusal it had before AT-S17 - the name is the dropped
-    //     index's until the drop commits - and not `TXN_CONFLICT`;
+    //   - recreating an index inside the transaction that drops it takes
+    //     the name since BY-R8 (it was `ALREADY_EXISTS` from AT-S17), never
+    //     `TXN_CONFLICT`, and the rollback leaves the dropped index alone;
     //   - renaming onto a name the transaction is dropping is refused
     //     `UNSUPPORTED`: the rename is not undone by the drop's rollback.
     //
@@ -224,10 +224,15 @@ TEST(CatalogNameRigTest, ItsOwnOpenDropIsRefusedAsNotRetryable) {
     ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
     ASSERT_TRUE(StartsWith(d0.Dispatch("DROP INDEX ix", &ddl).response, "DROPPED INDEX"));
     const std::string again = d0.Dispatch("CREATE INDEX ix ON t (v)", &ddl).response;
-    EXPECT_TRUE(StartsWith(again, "ERR")) << again;
-    EXPECT_NE(again.find("already exists"), std::string::npos) << again;
-    EXPECT_EQ(again.find("retryable=1"), std::string::npos) << again;
+    EXPECT_TRUE(StartsWith(again, "CREATED INDEX")) << again;
     ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+    auto indexes = rig->core(0).catalog().ListIndexes();
+    ASSERT_TRUE(indexes.ok()) << indexes.status().message();
+    int named = 0;
+    for (const catalog::SysIndexRow& row : indexes.value()) {
+        named += catalog::NameView(row.name) == "ix" ? 1 : 0;
+    }
+    EXPECT_EQ(named, 1);
 
     ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
     ASSERT_TRUE(StartsWith(d0.Dispatch("DROP TABLE t", &ddl).response, "DROPPED TABLE"));
