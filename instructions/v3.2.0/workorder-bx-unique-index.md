@@ -3,6 +3,9 @@
 Written 2026-10-15 on `worktree-bx-unique-index` from `87d2893c`
 (`v3.2.0-58-g87d2893c`), on the operator's word, recorded in English:
 
+**CLOSED 2026-10-16 on the operator's word** (`raft-marks-2026-10-16.md`
+§1), pushed to `main` at `0479cb29`; §7 is the stage log.
+
 - **W0**: "Compose the milestone for the UNIQUE constraint and index."
 - **W2** (2026-10-15): *"Q6 $!b, go ahead"* - BX-Q6 marked (b), BX-S6
   opened (`raft-marks-2026-10-15.md` §7).
@@ -506,3 +509,11 @@ equal-sort-keys refusal or a failed divide. The softened claim - `FormatRoot`
 failing would leak the root - is moot: `CheckIndexLayout` refuses that
 layout first. Overhead not measured: the change runs only on a failed
 build.
+
+**BX closed - 2026-10-16** on the operator's word (`raft-marks-2026-10-16.md`
+§1). Pushed to `main` at `0479cb29`, the hook skipped: the full suite ran
+green on the build inputs pushed (4055/4055 at `7ea52998`; the last merge
+brought `instructions/` only). Left open, each recorded where it lives:
+`ON CONFLICT` against a unique index (`known-gaps.md`), INSERT resume
+(BX-Q3 (b)), NULLs in a unique key, `UNIQUE` in `CREATE TABLE`, a foreign
+key referencing a unique column. No tag, no version.
