@@ -42,11 +42,15 @@ usage: kds_server [<data_file>] [--config <path>] [--port <n>]
 ```
 
 ```sh
-./build/kds_server                     # defaults: kds.db, port 15432, ./kdb.log
-./build/kds_server --config kds.conf   # from a settings file
-scripts/run.sh                         # build + run with defaults
-scripts/stop.sh                        # graceful stop (sends STOP via the CLI)
+./build/kds_server --config kds.conf.sample   # kds.db, port 15432, ./kdb.log
+./build/kds_server --config kds.conf          # from your own settings file
+scripts/run.sh                                # build + run with kds.conf.sample
+scripts/stop.sh                               # graceful stop (sends STOP via the CLI)
 ```
+
+**A config file is required to start**: `buffer_pool_frames` has no
+default, so a bare `./build/kds_server` is refused at startup.
+`kds.conf.sample` sets it to 131072 frames (1 GiB of page memory).
 
 On startup the server prints the data file, page count, superblock version,
 log destination and the port, then blocks in `Serve()` for the life of the
