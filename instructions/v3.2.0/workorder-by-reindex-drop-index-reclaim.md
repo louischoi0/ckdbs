@@ -129,14 +129,18 @@ a tree being built. While the instance runs, an owed tree is known only
 from the DDL that made it (BY-R2).
 
 **BY-R2 — every ending that orphans a tree queues it.** A committed
-`DROP INDEX`, a rolled-back or failed `CREATE INDEX` whose tree was logged,
-and the old tree of a committed `REINDEX` each queue an **index job**
+`DROP INDEX`, a rolled-back `CREATE INDEX`, and the old tree of a committed
+`REINDEX` each queue an **index job**
 `{relation oid, anchor page, index oid}` at the decide, with the schema
 word the decide moved to (BF-R9) and a gate past the decide's record
 (BF-R4). The job reads the root **from the slot when it walks**, after its
 gates - not at the drop `[quiet-wrong]`: the dropper's own writes still
 maintain the index until commit and can split its root, and a root taken at
-drop time reaches only part of the tree.
+drop time reaches only part of the tree. **A `CREATE INDEX` that fails
+after its tree is logged** queues nothing - the failed statement reports
+no oid - and is reclaimed at the next mount (BY-R1); a failure before its
+slot went down seeds the slot first, so the tree is owed from it rather than
+named by nothing (BY-S2's review).
 
 **BY-R3 — one job owns a tree** `[quiet-wrong]`. A relation's drop job walks
 every slot (§1), so a `DROP TABLE` after a `DROP INDEX` could plan the same
@@ -324,5 +328,35 @@ structural check (three existing, two new), one `sys.tables` scan,
 `memmove` compaction, the duplicate include, the two missing cells. Not
 done - a cell forcing the row-before-slot window (no seam between the two
 writes; the order makes it unreachable), and the redo tests' repeated anchor
-`PAGE_INIT` setup. Suite: 4068/4068 before the review's fixes. Overhead not
-measured; measured at the milestone's close.
+`PAGE_INIT` setup. Suite: 4068/4068 before the review's fixes, 4070/4070
+after. Overhead not measured; measured at the milestone's close.
+
+**BY-S2 - landed 2026-10-16** on `worktree-reindex-drop-index-reclaim`.
+`PageReclaimer` gains the index job (`Job::index_oid`): its anchor visit
+reads the slot's root and takes nothing else, its clear removes the slot
+(`NotFound` read as done), one `MakeJob`/`Enqueue` for every job kind;
+`CollectAtMount` loads `Catalog::OwedIndexTrees`; BY-R3's
+`DropIndexJobsOfRelationJobs` runs after every inbox drain, before any walk.
+`CommandDispatcher` records a drop's and a create's tree at the statement
+(`NoteOwedIndex`) and queues it at the decide (`EndDdlScopeById`): a drop
+at its commit, gate past the commit; a create at any other ending, gate the
+log's end. `exec::CreateIndex` seeds the slot when the catalog refuses
+after the tree is logged (the review's C2). Cells
+(`tests/index_reclaim_job_test.cpp`): nothing freed before the redo start
+passes the drop, then the whole tree and the slot; a rolled-back drop owes
+nothing; a rolled-back create's tree reclaimed after one checkpoint; the
+dropper's own inserts grow the tree and the whole tree is reclaimed; the
+relation's job ahead with the later gate owns the tree - a mutant without
+BY-R3 fails it (its index job ends refused on the reused anchor; the
+live-page check did not trip in that run); `DROP INDEX` then `DROP TABLE`
+frees every page once; 699 create/drop cycles never reach the slot cap; a
+job cut anywhere is finished by the next mount. Found while building: a
+rollback's gate was one past the log's end, so the job waited a checkpoint
+longer than it had to. `critics-developer`: accepted - C1 (the cell that
+could not fail without BY-R3, rewritten), C2 (the failed-after-log create's
+unnamed tree), `MakeJob`/`Enqueue`, the gate passed directly, one `Clear`,
+the header's contract text. Rejected - reading a reused anchor as a finished
+clear (it would also read a damaged anchor as one). Not done - moving the
+test helpers into `reclaim_census.hpp`, an epoch-gate cell (one core's
+dispatch holds no memo past a statement). Suite: 4077/4077 before the
+review's fixes, 4078/4078 after. Overhead not measured; measured at the milestone's close.

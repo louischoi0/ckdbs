@@ -24,32 +24,57 @@ Status PageReclaimer::CollectAtMount(wal::Lsn gate_lsn) {
     auto pending = catalog_.PendingReclaims();
     if (!pending.ok()) return pending.status();
     for (const catalog::Catalog::PendingReclaim& owed : pending.value()) {
-        Job job;
-        job.oid = owed.oid;
-        job.roots = owed.roots;
-        job.gate = gate_lsn;
-        job.frontier.push_back(Visit{owed.roots.anchor, Expect::kAnchor, owed.oid, kAnyLevel});
-        jobs_.push_back(std::move(job));
+        jobs_.push_back(MakeJob(owed.oid, /*index_oid=*/0, owed.roots, gate_lsn, /*word=*/0));
+    }
+    // BY-R1: the trees live relations owe - dropped indexes, rolled-back
+    // creates - read here, after recovery's undo, unfiltered. A dropped
+    // relation's slots are not listed: its tombstone's job above owns them.
+    auto trees = catalog_.OwedIndexTrees();
+    if (!trees.ok()) return trees.status();
+    for (const catalog::Catalog::OwedIndexTree& tree : trees.value()) {
+        jobs_.push_back(MakeJob(tree.rel_oid, tree.index_oid,
+                                catalog::PendingRoots{tree.anchor_page_id, kInvalidPageId},
+                                gate_lsn, /*word=*/0));
     }
     counters_.pending.store(jobs_.size(), std::memory_order_relaxed);
     if (!jobs_.empty() && log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("reclaim", std::to_string(jobs_.size()) +
-                                  " dropped relation(s) owe pages; reclaimed once the redo "
-                                  "start passes lsn " + std::to_string(gate_lsn));
+                                  " dropped relation(s) or index tree(s) owe pages; reclaimed "
+                                  "once the redo start passes lsn " + std::to_string(gate_lsn));
     }
     return Status::OK();
 }
 
-void PageReclaimer::EnqueueCommittedDrop(catalog::Oid oid, catalog::PendingRoots roots,
-                                         wal::Lsn commit_lsn, std::uint64_t word) {
+Status PageReclaimer::Clear(const Job& job) {
+    if (job.index_oid == 0) return catalog_.ClearPendingRoots(job.oid);
+    // An index job's clear is its slot's removal (BY-R5); a slot already gone
+    // is a re-drive finding the clear done. An anchor that is no longer the
+    // relation's stays a refusal: it frees nothing, and telling a reused
+    // anchor from a damaged one is not this call's to guess.
+    Status removed = catalog_.RemoveIndexSlot(job.oid, job.roots.anchor, job.index_oid);
+    return removed.code() == StatusCode::kNotFound ? Status::OK() : removed;
+}
+
+std::string PageReclaimer::JobName(const Job& job) {
+    if (job.index_oid == 0) return "dropped relation oid=" + std::to_string(job.oid);
+    return "orphaned index oid=" + std::to_string(job.index_oid) + " of relation oid=" +
+           std::to_string(job.oid);
+}
+
+PageReclaimer::Job PageReclaimer::MakeJob(catalog::Oid oid, catalog::Oid index_oid,
+                                          catalog::PendingRoots roots, wal::Lsn gate,
+                                          std::uint64_t word) {
     Job job;
     job.oid = oid;
+    job.index_oid = index_oid;
     job.roots = roots;
-    // Every record that names the relation's pages precedes the commit, so
-    // a redo start past the commit replays none of them (BF-R4).
-    job.gate = commit_lsn + 1;
+    job.gate = gate;
     job.word = word;
     job.frontier.push_back(Visit{roots.anchor, Expect::kAnchor, oid, kAnyLevel});
+    return job;
+}
+
+void PageReclaimer::Enqueue(Job job) {
     // Counted under the latch, before the push: a step on core 0 that
     // drains and finishes the job then decrements a count that already
     // holds it, so `pending` never wraps below zero.
@@ -58,12 +83,45 @@ void PageReclaimer::EnqueueCommittedDrop(catalog::Oid oid, catalog::PendingRoots
     inbox_.push_back(std::move(job));
 }
 
+void PageReclaimer::EnqueueCommittedDrop(catalog::Oid oid, catalog::PendingRoots roots,
+                                         wal::Lsn commit_lsn, std::uint64_t word) {
+    // Every record that names the relation's pages precedes the commit, so
+    // a redo start past the commit replays none of them (BF-R4).
+    Enqueue(MakeJob(oid, /*index_oid=*/0, roots, commit_lsn + 1, word));
+}
+
+void PageReclaimer::EnqueueOrphanedIndex(catalog::Oid rel_oid, PageId anchor,
+                                         catalog::Oid index_oid, wal::Lsn gate,
+                                         std::uint64_t word) {
+    Enqueue(MakeJob(rel_oid, index_oid, catalog::PendingRoots{anchor, kInvalidPageId}, gate,
+                    word));
+}
+
+void PageReclaimer::DropIndexJobsOfRelationJobs() {
+    // BY-R3: one job owns a tree. A relation's job walks every slot, so any
+    // index job for the same relation is dropped before it walks: a page that
+    // job already freed is `NotFound` or another owner's to the relation's
+    // walk, and both are skipped, never freed twice. Same thread as every
+    // step, so no plan of the dropped job runs after this.
+    std::unordered_set<catalog::Oid> relations;
+    for (const Job& job : jobs_) {
+        if (job.index_oid == 0) relations.insert(job.oid);
+    }
+    if (relations.empty()) return;
+    const auto before = jobs_.size();
+    std::erase_if(jobs_, [&](const Job& job) {
+        return job.index_oid != 0 && relations.contains(job.oid);
+    });
+    counters_.pending.fetch_sub(before - jobs_.size(), std::memory_order_relaxed);
+}
+
 Status PageReclaimer::Step(wal::Lsn durable_redo_start, const StatementEpochs* epochs) {
     {
         const std::lock_guard<std::mutex> hold(inbox_latch_);
         for (Job& job : inbox_) jobs_.push_back(std::move(job));
         inbox_.clear();
     }
+    DropIndexJobsOfRelationJobs();
     std::size_t budget = kReclaimBatchPages;
     for (auto it = jobs_.begin(); it != jobs_.end() && budget > 0;) {
         Job& job = *it;
@@ -105,16 +163,15 @@ Status PageReclaimer::Step(wal::Lsn durable_redo_start, const StatementEpochs* e
         // Every free is durable: the last plan step synced the map. Only now
         // may the tombstone stop owing (BF-R7).
         Cut("before the clear");
-        if (Status s = catalog_.ClearPendingRoots(job.oid); !s.ok()) {
-            Refuse(job, "its tombstone could not be cleared: " + s.message());
+        if (Status cleared = Clear(job); !cleared.ok()) {
+            Refuse(job, "its owing record could not be cleared: " + cleared.message());
             ++it;
             continue;
         }
         Cut("after the clear");
         if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-            log_->Info("reclaim", "dropped relation oid=" + std::to_string(job.oid) +
-                                      " reclaimed: " + std::to_string(job.plan.size()) +
-                                      " page(s) freed");
+            log_->Info("reclaim", JobName(job) + " reclaimed: " +
+                                      std::to_string(job.plan.size()) + " page(s) freed");
         }
         it = jobs_.erase(it);
         counters_.pending.fetch_sub(1, std::memory_order_relaxed);
@@ -194,6 +251,24 @@ bool PageReclaimer::VisitOne(Job& job, const Visit& visit) {
                 // durable, so an anchor that is gone - reused by another
                 // relation - says the rest is gone too.
                 Skip(job, visit.page, "is not this relation's anchor");
+                return true;
+            }
+            // **An index job reads its one slot and takes nothing else**
+            // (BY-R4): the anchor is the live relation's, never freed, and
+            // the root is the slot's now - after the gates - not the drop's,
+            // since the dropper's own writes can split it before commit
+            // (BY-R2). No slot, or no root, is a tree already reclaimed.
+            if (job.index_oid != 0) {
+                auto root = storage::AnchorIndexRoot(bytes, job.index_oid);
+                if (!root.ok()) {
+                    Refuse(job, "its anchor's index slots do not read: " +
+                                    root.status().message());
+                    return false;
+                }
+                if (root.value() != kInvalidPageId) {
+                    job.frontier.push_back(
+                        Visit{root.value(), Expect::kIndex, job.index_oid, kAnyLevel});
+                }
                 return true;
             }
             if (!Take(job, visit, visit.page)) return false;
@@ -393,7 +468,7 @@ void PageReclaimer::Refuse(Job& job, const std::string& why) {
     if (job.census) return;
     counters_.refused.fetch_add(1, std::memory_order_relaxed);
     if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
-        log_->Warn("reclaim", "dropped relation oid=" + std::to_string(job.oid) +
+        log_->Warn("reclaim", JobName(job) +
                                   " is left pending until the next mount: " + why);
     }
 }
@@ -403,7 +478,7 @@ void PageReclaimer::Skip(Job& job, PageId page, const std::string& why) {
     if (job.census) return;
     counters_.skipped.fetch_add(1, std::memory_order_relaxed);
     if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
-        log_->Warn("reclaim", "dropped relation oid=" + std::to_string(job.oid) + ": page " +
+        log_->Warn("reclaim", JobName(job) + ": page " +
                                   std::to_string(page) + " " + why +
                                   "; neither freed nor walked through");
     }

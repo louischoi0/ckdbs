@@ -1183,6 +1183,9 @@ private:
     // every other: a drop the transaction made is queued for reclamation
     // only on the first (BF-R9), and forgotten on either.
     void EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed_lsn = wal::kNoLsn);
+    // BY-R2: records what an index DDL may orphan, settled at its decide.
+    void NoteOwedIndex(const WriteScope& scope, catalog::Oid rel_oid, catalog::Oid index_oid,
+                       bool created);
 
     // The view a statement resolves relation names under
     // (workplan-ddl-transactional.md DT3c), or `nullopt` for "see
@@ -2549,6 +2552,19 @@ private:
         catalog::PendingRoots roots;
     };
     std::vector<OwedDrop> owed_drops_;
+    // **What an open transaction's index DDL may orphan** (BY-R2): a
+    // `DROP INDEX`'s tree, queued at the transaction's commit, and a
+    // `CREATE INDEX`'s logged tree, queued at any other ending. A create that
+    // failed after its slot went down records nothing; the next mount's
+    // owed-slot scan finds it (BY-R1).
+    struct OwedIndex {
+        std::uint64_t txn_id = 0;
+        catalog::Oid rel_oid = 0;
+        PageId anchor = kInvalidPageId;
+        catalog::Oid index_oid = 0;
+        bool created = false;  // queued at a rollback, not at a commit
+    };
+    std::vector<OwedIndex> owed_indexes_;
 
     // The live assertions and their reservation bookkeeping (workplan
     // AST06/AST07): CREATE ASSERTION's build moves its LiveAssertion in

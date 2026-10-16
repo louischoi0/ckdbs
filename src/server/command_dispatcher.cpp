@@ -2252,6 +2252,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             if (!index_oid.ok()) {
                 return {ErrorReply(index_oid.status()), false, 0, index_oid.status()};
             }
+            NoteOwedIndex(scope, *relation, index_oid.value(), /*created=*/false);
             std::ostringstream os;
             os << "DROPPED INDEX name=" << stmt.index_name << " index_oid=" << index_oid.value();
             if (logging(LogLevel::kInfo)) {
@@ -2288,6 +2289,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             NoteDdlRows(create_ddl);
         }
         if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
+        NoteOwedIndex(scope, *relation, result.value().index_oid, /*created=*/true);
         if (logging(LogLevel::kInfo)) {
             log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
         }
@@ -6758,6 +6760,17 @@ void CommandDispatcher::EndDdlScope(const Session& session, wal::Lsn committed_l
     EndDdlScopeById(txn->id(), committed_lsn);
 }
 
+void CommandDispatcher::NoteOwedIndex(const WriteScope& scope, catalog::Oid rel_oid,
+                                      catalog::Oid index_oid, bool created) {
+    // Only a decide can settle it, and only a real transaction decides; a
+    // bootstrap-id DDL (tests) is left to the next mount's scan (BY-R1).
+    if (reclaim_queue_ == nullptr || scope.txn == nullptr) return;
+    auto table = catalog_.GetSysTableRow(rel_oid);
+    if (!table.ok() || table.value().anchor_page_id == kInvalidPageId) return;
+    owed_indexes_.push_back(
+        OwedIndex{scope.txn->id(), rel_oid, table.value().anchor_page_id, index_oid, created});
+}
+
 void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed_lsn) {
     const bool held_ddl = std::erase(ddl_txns_, txn_id) > 0;
     // **Both endings invalidate.** A rollback compensates through the page,
@@ -6786,6 +6799,24 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
                                                  catalog_.schema_word_now());
         }
         owed = owed_drops_.erase(owed);
+    }
+    // BY-R2: a committed drop's tree, and a create's tree at every other
+    // ending. The gate: past a commit; at a rollback, which names no commit,
+    // the log's end now - every record that names the tree, the build's
+    // images, lies below it.
+    const bool committed = committed_lsn != wal::kNoLsn;
+    const wal::Lsn gate =
+        committed ? committed_lsn + 1 : (wal_ != nullptr ? wal_->appended_lsn() : 0);
+    for (auto owed = owed_indexes_.begin(); owed != owed_indexes_.end();) {
+        if (owed->txn_id != txn_id) {
+            ++owed;
+            continue;
+        }
+        if (owed->created != committed) {
+            reclaim_queue_->EnqueueOrphanedIndex(owed->rel_oid, owed->anchor, owed->index_oid,
+                                                 gate, catalog_.schema_word_now());
+        }
+        owed = owed_indexes_.erase(owed);
     }
 }
 

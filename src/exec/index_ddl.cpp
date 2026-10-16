@@ -485,7 +485,20 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     def.root_page_id = root.value();
 
     auto index_oid = catalog.CreateIndex(def, trx_id, written);
-    if (!index_oid.ok()) return index_oid.status();
+    if (!index_oid.ok()) {
+        // **The tree is logged and nothing may name it** (BY-S2's review): a
+        // refusal before the slot went down - a name another core took after
+        // `PrepareIndexDef` asked - would leave a tree no slot names, which no
+        // mount's owed-slot scan finds (BY-R1). So the slot is seeded here,
+        // best-effort, and the tree is owed from it. A slot already down is
+        // left as it is; a seed that fails leaves the leak there was.
+        auto table = catalog.GetSysTableRow(def.table_oid);
+        if (table.ok() && table.value().anchor_page_id != kInvalidPageId) {
+            (void)catalog.WriteAnchorRoot(table.value().anchor_page_id, def.table_oid,
+                                          def.index_oid, def.root_page_id, trx_id);
+        }
+        return index_oid.status();
+    }
 
     IndexDdlResult out;
     out.index_oid = index_oid.value();
