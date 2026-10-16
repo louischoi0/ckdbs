@@ -180,7 +180,7 @@ Sample at `trace`:
 1785309852 TRACE [client] fd=8 request "INSERT INTO acct VALUES ('alice')"
 1785309852 TRACE [heap] insert page=128 slot=0 id=1 bytes=15
 1785309852 DEBUG [query] "INSERT INTO acct VALUES ('alice')" -> 29B reply in 81us
-1785309852 WARN [query] "SELECT * FROM nosuchtable" -> ERR no table with this name in 32us
+1785309852 WARN [query] "SELECT * FROM nosuchtable" -> ERR no relation named 'nosuchtable' (byte 14) in 32us
 1785309849 TRACE [wal] append CHECKPOINT_BEGIN lsn=4096 txn=0 page=4294967295 bytes=40
 1785309849 DEBUG [wal] sync durable_lsn=4176 appended_lsn=4176 pending_group_commits=0
 1785309852 TRACE [catalog] issued row id 1 for table oid 1000

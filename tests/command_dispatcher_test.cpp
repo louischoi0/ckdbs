@@ -344,7 +344,7 @@ TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response,
               "ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP ASSERTION and "
               "DROP TRANSITION are supported");
-    EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR no table with this name");
+    EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR no relation named 't' (byte 11)");
 
     const auto parsed = parser::Parse("DROP EVERYTHING");
     ASSERT_FALSE(parsed.ok());

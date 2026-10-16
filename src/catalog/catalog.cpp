@@ -1522,7 +1522,7 @@ StatusOr<Oid> Catalog::FindTableOidByName(Oid namespace_oid, std::string_view na
     // NotFound before creating it, and a second Catalog over the same store
     // can create a table this instance never saw. A remembered absence
     // makes both answers wrong, where a repeated scan is only slow.
-    return Status::NotFound(std::string(kNoSuchRelationMessage));
+    return Status::NotFound("no table with this name");
 }
 
 namespace {
@@ -2022,12 +2022,6 @@ StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name,
     return Status::NotFound("no namespace with this name");
 }
 
-Status NamedRelationMiss(const Status& miss, std::string_view name, std::uint32_t byte_offset) {
-    if (miss.message() != Catalog::kNoSuchRelationMessage) return miss;
-    return Status::NotFound("no relation named '" + std::string(name) + "' (byte " +
-                            std::to_string(byte_offset) + ")");
-}
-
 std::string Catalog::NamespaceSpelling(Oid namespace_oid, const txn::ReadView* view) {
     // A relation in `public` or `sys` has no row of its own spelling
     // (`well_known.hpp`), so the two are answered from the constants.
@@ -2069,37 +2063,37 @@ StatusOr<Oid> Catalog::ResolveRelation(std::string_view qualifier, std::string_v
     auto oid = FindTableOidByName(ns, name, view);
     if (oid.ok() || oid.status().code() != StatusCode::kNotFound) return oid;
 
-    // The miss. Which other namespaces hold the name - each is a relation
-    // the statement could have meant, reached only by its qualifier.
-    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view, txn_);
-    if (!rows.ok()) return rows.status();
-    std::vector<Oid> holders;
-    for (const SysObjectRow& row : rows.value()) {
-        if (row.type_oid == kTypeTable && row.namespace_oid != ns && NameView(row.name) == name) {
-            holders.push_back(row.namespace_oid);
-        }
-    }
-    if (holders.empty()) return Status::NotFound(std::string(kNoSuchRelationMessage));
-    if (holders.size() == 1 && holders[0] == kNamespaceSys) {
-        return at(Status::NotFound("no relation '" + std::string(name) + "' in namespace '" +
-                                   NamespaceSpelling(ns, view) + "'; '" + std::string(name) +
-                                   "' is a catalog relation: read it as sys." +
-                                   std::string(name)));
-    }
-    std::string where;
-    std::string example;
-    for (const Oid holder : holders) {
-        if (holder == kNamespaceSys) continue;
-        const std::string spelled = NamespaceSpelling(holder, view);
-        if (!where.empty()) where += ", ";
-        where += "'" + spelled + "'";
-        if (example.empty()) example = spelled + "." + std::string(name);
-    }
+    // The miss, and which other namespaces hold the name - each is a
+    // relation the statement could have meant, reached only by its qualifier.
     const std::string written =
         qualifier.empty() ? std::string(name) : std::string(qualifier) + "." + std::string(name);
-    return at(Status::NotFound("no relation '" + written + "' in namespace '" +
-                               NamespaceSpelling(ns, view) + "'; '" + std::string(name) +
-                               "' is in namespace " + where + " - write " + example));
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view, txn_);
+    if (!rows.ok()) return rows.status();
+    std::string catalog_hint;
+    std::string where;
+    std::string example;
+    for (const SysObjectRow& row : rows.value()) {
+        if (row.type_oid != kTypeTable || row.namespace_oid == ns || NameView(row.name) != name) {
+            continue;
+        }
+        if (row.namespace_oid == kNamespaceSys) {
+            catalog_hint = "; '" + std::string(name) +
+                           "' is a catalog relation: read it as sys." + std::string(name);
+            continue;
+        }
+        const std::string spelled = NamespaceSpelling(row.namespace_oid, view);
+        where += (where.empty() ? "'" : ", '") + spelled + "'";
+        if (example.empty()) example = spelled + "." + std::string(name);
+    }
+    std::string message = "no relation named '" + written + "'";
+    if (!catalog_hint.empty() || !where.empty()) {
+        message += " in namespace '" + NamespaceSpelling(ns, view) + "'" + catalog_hint;
+        if (!where.empty()) {
+            message += "; '" + std::string(name) + "' is in namespace " + where + " - write " +
+                       example;
+        }
+    }
+    return at(Status::NotFound(message));
 }
 
 StatusOr<std::vector<SysObjectRow>> Catalog::ListNamespaces(const txn::ReadView* view) {

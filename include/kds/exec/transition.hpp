@@ -92,8 +92,8 @@ Status CheckTransitionDelete(const catalog::TableAccess& access,
 // An unqualified name means `default_namespace` (`USE`, namespace.md NS5).
 StatusOr<catalog::Oid> TransitionTargetOid(catalog::Catalog& catalog,
                                            const parser::TransitionStmt& stmt,
-                                           const txn::ReadView* view = nullptr,
-                                           catalog::Oid default_namespace = catalog::kNamespacePublic);
+                                           catalog::Oid default_namespace,
+                                           const txn::ReadView* view = nullptr);
 
 struct TransitionDdlResult {
     std::uint64_t transition_id = 0;

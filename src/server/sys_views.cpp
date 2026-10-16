@@ -310,14 +310,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
         const auto [qualifier, bare] = SplitQualifiedArg(rel_name->str_val);
         auto oid = catalog_.ResolveRelation(qualifier, bare, default_namespace,
                                             rel_name->byte_offset, view_of);
-        if (!oid.ok()) {
-            if (oid.status().message() != catalog::Catalog::kNoSuchRelationMessage) {
-                return oid.status();
-            }
-            return oid.status().WithMessage(oid.status().message() + " '" + rel_name->str_val +
-                                            "' (byte " + std::to_string(rel_name->byte_offset) +
-                                            ")");
-        }
+        if (!oid.ok()) return oid.status();
         auto all = catalog_.ListTables(view_of);
         if (!all.ok()) return all.status();
         for (const catalog::SysObjectRow& object : all.value()) {
@@ -756,13 +749,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelayoutView(const parser::AstVal
                        ? catalog_.FindTableOidByName(catalog::kNamespaceSys, bare)
                        : catalog_.ResolveRelation(qualifier, bare, default_namespace,
                                                   name->byte_offset);
-        if (!oid.ok()) {
-            if (oid.status().message() != catalog::Catalog::kNoSuchRelationMessage) {
-                return oid.status();
-            }
-            return Status::NotFound("unknown relation '" + name->str_val + "' (byte " +
-                                    std::to_string(name->byte_offset) + ")");
-        }
+        if (!oid.ok()) return oid.status();
         exec::Budget budget(budget_.limit());
         auto one = stats::PlanRelation(catalog_, page_store_, oid.value(), budget, clock_,
                                        decay_half_life_ns_);

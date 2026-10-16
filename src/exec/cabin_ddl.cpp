@@ -24,9 +24,7 @@ StatusOr<Resolved> ResolveRelation(catalog::Catalog& catalog, const parser::Cabi
                                    catalog::Oid default_namespace) {
     auto oid = catalog.ResolveRelation(stmt.schema, stmt.table_name, default_namespace,
                                        stmt.byte_offset);
-    if (!oid.ok()) {
-        return catalog::NamedRelationMiss(oid.status(), stmt.table_name, stmt.byte_offset);
-    }
+    if (!oid.ok()) return oid.status();
 
     auto access = catalog.InitTableAccess(oid.value());
     if (!access.ok()) return access.status();

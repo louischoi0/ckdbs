@@ -115,11 +115,11 @@ a relation's name is the pair `(namespace, name)` (NS6):
   namespace (NS8) - `public` until a `USE`, and `public` for every caller
   with no session (a KWP load, an engine-internal statement).
 - **There is no search.** One namespace is asked; a relation of the name in
-  another namespace is not found. The miss is `NotFound` at the name's byte
-  and **names every namespace that does hold the name** - `no relation 't'
-  in namespace 'public'; 't' is in namespace 'orders' - write orders.t` -
-  because writing the qualifier is the user's next act. A name held in no
-  namespace answers `no table with this name`.
+  another namespace is not found. The miss is `NotFound`, `no relation named
+  '<as written>' (byte N)`, and **names every namespace that does hold the
+  name** - `no relation named 't' in namespace 'public'; 't' is in namespace
+  'orders' - write orders.t (byte 14)` - because writing the qualifier is
+  the user's next act.
 - `CREATE TABLE ns.t` creates in `ns`; `CREATE TABLE t` creates in the
   session's namespace. An unknown namespace is refused with its byte and is
   **never created by being named**: a typo must not be indistinguishable
@@ -213,8 +213,9 @@ name means (NS5) and an unqualified `CREATE TABLE` lands in. It starts as
 
 - The namespace resolves under the session's view, so one this
   transaction created can be used. An unknown one is `NotFound` at its
-  byte; anything but one identifier is `InvalidArgument`; `USE sys` is
-  refused, its relations being read only qualified (NS5).
+  byte; anything but one identifier (and one trailing `;`) is
+  `InvalidArgument`; `USE sys` is refused, its relations being read only
+  qualified (NS5).
 - The reply is `USE namespace=<name>`. A refused `USE` leaves the session
   where it was.
 - **Session state, not transactional**: admitted inside a transaction, it

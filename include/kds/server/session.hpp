@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <string>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -159,16 +158,11 @@ public:
     //
     // namespace.md NS8: `public` until a `USE <namespace>`, which sets it
     // for every later statement of the connection. Session state, not
-    // transactional: a `ROLLBACK` does not undo a `USE`. The spelling is
-    // kept beside the oid for the reply and for messages; a namespace
+    // transactional: a `ROLLBACK` does not undo a `USE`. A namespace
     // dropped after the `USE` leaves the session in an oid that resolves
     // nothing, and every unqualified name answers NotFound until the next.
     catalog::Oid default_namespace() const noexcept { return default_namespace_; }
-    std::string_view default_namespace_name() const noexcept { return default_namespace_name_; }
-    void set_default_namespace(catalog::Oid oid, std::string_view name) {
-        default_namespace_ = oid;
-        default_namespace_name_ = std::string(name);
-    }
+    void set_default_namespace(catalog::Oid oid) noexcept { default_namespace_ = oid; }
 
     // ---- Durability, the same three rungs (docs/spec/protocol.md §9) ----
     //
@@ -384,7 +378,6 @@ private:
     State state_ = State::kIdle;
     txn::IsolationLevel isolation_ = txn::IsolationLevel::kReadCommitted;
     catalog::Oid default_namespace_ = catalog::kNamespacePublic;
-    std::string default_namespace_name_{catalog::kNamespacePublicName};
     ResultSink* result_sink_ = nullptr;
     std::shared_ptr<std::atomic<bool>> cancel_ = std::make_shared<std::atomic<bool>>(false);
     std::optional<wal::DurabilityClass> durability_;      // SET DURABILITY

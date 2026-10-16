@@ -276,15 +276,13 @@ Status CheckTransitionDelete(const catalog::TableAccess& access,
 
 StatusOr<catalog::Oid> TransitionTargetOid(catalog::Catalog& catalog,
                                            const parser::TransitionStmt& stmt,
-                                           const txn::ReadView* view,
-                                           catalog::Oid default_namespace) {
+                                           catalog::Oid default_namespace,
+                                           const txn::ReadView* view) {
     // A system relation never resolves (`Catalog::ResolveRelation` refuses
     // `sys`), so none can carry a Transition.
     auto oid = catalog.ResolveRelation(stmt.schema, stmt.table_name, default_namespace,
                                        stmt.table_byte_offset, view);
-    if (!oid.ok()) {
-        return catalog::NamedRelationMiss(oid.status(), stmt.table_name, stmt.table_byte_offset);
-    }
+    if (!oid.ok()) return oid.status();
     return oid.value();
 }
 

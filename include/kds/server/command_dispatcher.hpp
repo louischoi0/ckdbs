@@ -1193,14 +1193,6 @@ private:
     std::optional<txn::ReadView> ViewFor(Session& session);
     // `ViewFor`'s minting half, whatever the count says.
     txn::ReadView MintResolveView(Session& session);
-    // A relation's name and the qualifier written with it, under `view`;
-    // an unqualified name means `session`'s namespace (`USE`, namespace.md
-    // NS8), `public` with no session.
-    StatusOr<catalog::Oid> ResolveQualifiedRelation(std::string_view qualifier,
-                                                    std::string_view name,
-                                                    std::uint32_t byte_offset,
-                                                    const Session* session,
-                                                    const txn::ReadView* view);
 
     // **Every name resolution goes through this** (`ddl-transactional.md`
     // §4): `resolve(view)` runs under `ViewFor`'s answer, and once more under

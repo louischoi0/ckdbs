@@ -205,14 +205,11 @@ StatusOr<AssertionColumns> ResolveAssertionColumns(const catalog::TableAccess& a
 // yet, and what it fenced is what the build reads.
 StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
                                           const parser::AssertionStmt& stmt,
-                                          const txn::ReadView* view,
-                                          catalog::Oid default_namespace) {
-    // Only an absent name is §3.1's refusal; a read that failed is itself.
+                                          catalog::Oid default_namespace,
+                                          const txn::ReadView* view) {
     auto oid = catalog.ResolveRelation(stmt.schema, stmt.table_name, default_namespace,
                                        stmt.table_byte_offset, view);
-    if (!oid.ok()) {
-        return catalog::NamedRelationMiss(oid.status(), stmt.table_name, stmt.table_byte_offset);
-    }
+    if (!oid.ok()) return oid.status();
     return oid.value();
 }
 

@@ -60,6 +60,7 @@
 #include "kds/storage/log_page_image.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/parser/lexer.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -2225,14 +2226,14 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             }
         } else {
             auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
-                return ResolveQualifiedRelation(stmt.schema, stmt.table_name,
-                                                stmt.table_byte_offset, &session, v);
+                return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                                session.default_namespace(),
+                                                stmt.table_byte_offset, v);
             });
             if (oid.ok()) {
                 relation = oid.value();
             } else {
-                miss = catalog::NamedRelationMiss(oid.status(), stmt.table_name,
-                                                  stmt.table_byte_offset);
+                miss = oid.status();
             }
         }
         if (relation.has_value()) {
@@ -2290,10 +2291,10 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         // view is taken after the scope opened, which counted this DDL, so
         // it is a minted one wherever a manager runs.
         const std::optional<txn::ReadView> build_view = ViewFor(session);
-        auto result = exec::CreateIndex(catalog_, page_store_, stmt, create_ddl.trx_id,
+        auto result = exec::CreateIndex(catalog_, page_store_, stmt, session.default_namespace(),
+                                        create_ddl.trx_id,
                                         create_ddl.txn != nullptr ? &created_row : nullptr,
-                                        build_view.has_value() ? &*build_view : nullptr, wal_,
-                                        session.default_namespace());
+                                        build_view.has_value() ? &*build_view : nullptr, wal_);
         // Before the status is read: a create that failed after the catalog
         // row went down still left it there.
         if (create_ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {
@@ -2335,7 +2336,8 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line, Session& s
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         const std::optional<catalog::Oid> relation =
             ResolveNames(session, [&](const txn::ReadView* v) {
-                auto oid = ResolveQualifiedRelation(stmt.schema, stmt.table_name, 0, &session, v);
+                auto oid = catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                                    session.default_namespace(), 0, v);
                 return oid.ok() ? std::optional<catalog::Oid>(oid.value()) : std::nullopt;
             });
         if (relation.has_value()) {
@@ -2572,8 +2574,8 @@ StatusOr<catalog::Oid> CommandDispatcher::ResolveAlterTarget(const parser::Alter
                                                             Session& session) {
     // You cannot alter a relation you cannot see (DT3c).
     auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(stmt.schema, stmt.table_name, stmt.byte_offset, &session,
-                                        v);
+        return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                        session.default_namespace(), stmt.byte_offset, v);
     });
     // AL7: the catalog's own names are load-bearing for bootstrap and are
     // nobody's to change - a system relation never resolves
@@ -2740,8 +2742,8 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
 
         // Nor drop one (DT3c).
         auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
-            return ResolveQualifiedRelation(stmt.schema, stmt.table_name, stmt.byte_offset,
-                                            &session, v);
+            return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                            session.default_namespace(), stmt.byte_offset, v);
         });
         if (!oid.ok()) {
             return {ErrorReply(oid.status()), false, 0, oid.status()};
@@ -3038,7 +3040,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         return txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
     };
     const txn::ReadView view = settled_view();
-    auto target = exec::AssertionTargetOid(catalog_, stmt, &view, session.default_namespace());
+    auto target = exec::AssertionTargetOid(catalog_, stmt, session.default_namespace(), &view);
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
     DdlBuildLock build_lock;
@@ -3060,7 +3062,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // A name that is gone is the `NotFound` a retry would give.
     if (build_lock.txn != nullptr) {
         auto settled =
-            exec::AssertionTargetOid(catalog_, stmt, &check_view, session.default_namespace());
+            exec::AssertionTargetOid(catalog_, stmt, session.default_namespace(), &check_view);
         if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
         if (settled.value() != target.value()) {
             const Status moved = Status::TxnConflict(
@@ -3141,7 +3143,7 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
         }
         target = def.value()->target_oid;
     } else {
-        target = exec::TransitionTargetOid(catalog_, stmt, &view, session.default_namespace());
+        target = exec::TransitionTargetOid(catalog_, stmt, session.default_namespace(), &view);
     }
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
@@ -3190,7 +3192,7 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
     // must be too, or nothing.
     if (build_lock.txn != nullptr) {
         auto settled =
-            exec::TransitionTargetOid(catalog_, stmt, &check_view, session.default_namespace());
+            exec::TransitionTargetOid(catalog_, stmt, session.default_namespace(), &check_view);
         if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
         if (settled.value() != target.value()) {
             const Status moved = Status::TxnConflict(
@@ -4186,22 +4188,12 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             // its own transaction created, and may not reference one another
             // transaction has not committed.
             // `REFERENCES orders.customer` names where the parent lives; an
-            // unqualified parent is in the session's namespace (NS5). A name
-            // held in no namespace gets this statement's own sentence; one
-            // held elsewhere gets the resolution's, which names where.
-            bool unknown = false;
+            // unqualified parent is in the session's namespace (NS5).
             auto parent_oid = ResolveNames(session, [&](const txn::ReadView* v) {
-                auto oid = ResolveQualifiedRelation(col.references_schema, col.references_table,
-                                                    col.references_byte_offset, &session, v);
-                unknown = oid.status().message() == catalog::Catalog::kNoSuchRelationMessage;
-                return oid;
+                return catalog_.ResolveRelation(col.references_schema, col.references_table,
+                                                session.default_namespace(),
+                                                col.references_byte_offset, v);
             });
-            if (unknown) {
-                return {"ERR column '" + col.name + "' references unknown relation '" +
-                            col.references_table + "' (byte " +
-                            std::to_string(col.references_byte_offset) + ")",
-                        false};
-            }
             if (!parent_oid.ok()) {
                 return {ErrorReply(parent_oid.status()), false, 0, parent_oid.status()};
             }
@@ -5228,8 +5220,13 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     // relation another transaction created and has not committed must not
     // find it.
     auto oid = ResolveNames(scope.session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(written.schema, written.table_name,
-                                        written.table_byte_offset, scope.session, v);
+        // An INSERT is never parked, so the session's namespace is the
+        // statement's; `public` with no session (NS5).
+        return catalog_.ResolveRelation(
+            written.schema, written.table_name,
+            scope.session != nullptr ? scope.session->default_namespace()
+                                     : catalog::kNamespacePublic,
+            written.table_byte_offset, v);
     });
     if (!oid.ok()) {
         return {ErrorReply(oid.status()), false, 0, oid.status()};
@@ -6664,17 +6661,6 @@ std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
     return MintResolveView(session);
 }
 
-StatusOr<catalog::Oid> CommandDispatcher::ResolveQualifiedRelation(std::string_view qualifier,
-                                                                  std::string_view name,
-                                                                  std::uint32_t byte_offset,
-                                                                  const Session* session,
-                                                                  const txn::ReadView* view) {
-    return catalog_.ResolveRelation(
-        qualifier, name,
-        session != nullptr ? session->default_namespace() : catalog::kNamespacePublic,
-        byte_offset, view);
-}
-
 txn::ReadView CommandDispatcher::MintResolveView(Session& session) {
     // Take the statement boundary if nothing has yet, so a route that
     // never reaches `SnapshotFor`/`BeginWrite` still resolves under a
@@ -7634,7 +7620,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
             IEquals(stmt.from.schema, exec::kCatalogSchema) &&
             FindSysView(stmt.from.table_name) != nullptr;
         // The same test the FROM relation gets: under a user namespace a
-        // non-empty qualifier is not a view (AF-T3).
+        // non-empty qualifier is not a view.
         bool any_join_is_view = false;
         for (const parser::JoinClause& join : stmt.joins) {
             if (IEquals(join.relation.schema, exec::kCatalogSchema) &&
@@ -7675,23 +7661,9 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
                         known + ")",
                     false};
         }
-        // A user namespace is a qualifier too (AF-T3): a name that resolves
-        // falls through to the compiler, which checks the qualifier
-        // against the relation (`step_compiler.cpp`, one site for FROM,
-        // JOIN and every subquery). Only a missing namespace is refused
-        // here, by name.
-        auto ns = ResolveNames(session, [&](const txn::ReadView* v) {
-            return catalog_.FindNamespaceOidByName(stmt.from.schema, v);
-        });
-        if (!ns.ok()) {
-            if (ns.status().code() != StatusCode::kNotFound) {
-                return {ErrorReply(ns.status()), false, 0, ns.status()};
-            }
-            return {"ERR no namespace named '" + stmt.from.schema + "' (byte " +
-                        std::to_string(stmt.from.byte_offset) +
-                        "); the catalog views are under `sys`",
-                    false};
-        }
+        // A user namespace falls through to the compiler, whose resolution
+        // (NS5) refuses an unknown one at its byte - one site for FROM, JOIN
+        // and every subquery.
     }
 
     // V17: parse -> compile -> execute. Which relation, which access path
@@ -8540,7 +8512,7 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
             std::to_string(returning->byte_offset) + ")"));
     }
     auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(schema, table, 0, &session, v);
+        return catalog_.ResolveRelation(schema, table, session.default_namespace(), 0, v);
     });
     if (!oid.ok()) return refuse(oid.status());
     auto access = catalog_.InitTableAccess(oid.value());
@@ -8746,8 +8718,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // relation another transaction created and has not committed must not
     // find it.
     auto oid = ResolveNames(scope.session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(stmt.schema, stmt.table_name, stmt.table_byte_offset,
-                                        scope.session, v);
+        // The statement's namespace, carried across a park with its NOW().
+        return catalog_.ResolveRelation(stmt.schema, stmt.table_name, context.default_namespace,
+                                        stmt.table_byte_offset, v);
     });
     if (!oid.ok()) {
         return {ErrorReply(oid.status()), false, 0, oid.status()};
@@ -9835,17 +9808,17 @@ DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {
 // read only qualified.
 DispatchOutcome CommandDispatcher::HandleUse(std::string_view line, std::string_view args,
                                              Session& session) {
-    const std::string_view name = Trim(args);
+    // One trailing `;`, as every parsed statement takes.
+    std::string_view name = Trim(args);
+    if (!name.empty() && name.back() == ';') name = Trim(name.substr(0, name.size() - 1));
+    // `args` is empty, with no position in `line`, when nothing follows the
+    // verb: the refusal points past the line's end.
+    const std::string_view whole = Trim(line);
     const auto byte = static_cast<std::uint32_t>(
-        (name.empty() ? args.data() + args.size() : name.data()) - line.data());
+        (name.empty() ? whole.data() + whole.size() : name.data()) - line.data());
     const auto refuse = [](Status s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
     const auto at = " (byte " + std::to_string(byte) + ")";
-    bool identifier = !name.empty() && (std::isalpha(static_cast<unsigned char>(name[0])) ||
-                                        name[0] == '_');
-    for (const char c : name) {
-        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') identifier = false;
-    }
-    if (!identifier) {
+    if (!parser::IsIdentifier(name)) {
         return refuse(Status::InvalidArgument("USE takes one namespace name" + at));
     }
     auto ns = ResolveNames(session, [&](const txn::ReadView* v) {
@@ -9861,7 +9834,7 @@ DispatchOutcome CommandDispatcher::HandleUse(std::string_view line, std::string_
             "' holds the catalog, whose relations are read qualified as catalog views "
             "(sys.tables); it cannot be the session's namespace" + at));
     }
-    session.set_default_namespace(ns.value(), name);
+    session.set_default_namespace(ns.value());
     return {"USE namespace=" + std::string(name), false};
 }
 
@@ -10814,8 +10787,8 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     // reach before anything calls `InitTableAccess`, which has no columns
     // for one.
     auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(stmt.schema, stmt.table_name, stmt.table_byte_offset,
-                                        &session, v);
+        return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                        session.default_namespace(), stmt.table_byte_offset, v);
     });
     if (!oid.ok()) return refuse(oid.status());
     ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // IS, AT-R1
@@ -11002,8 +10975,9 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
     // As INSERT and UPDATE (DT3c): a write resolves under its session.
     auto oid = ResolveNames(scope.session, [&](const txn::ReadView* v) {
-        return ResolveQualifiedRelation(stmt.schema, stmt.table_name, stmt.table_byte_offset,
-                                        scope.session, v);
+        // The statement's namespace, carried across a park with its NOW().
+        return catalog_.ResolveRelation(stmt.schema, stmt.table_name, context.default_namespace,
+                                        stmt.table_byte_offset, v);
     });
     if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
     ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1

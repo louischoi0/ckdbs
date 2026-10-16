@@ -154,7 +154,7 @@ TEST(ShowRelayoutTest, RefusalsNameTheProblemAndItsByte) {
 
     const std::string unknown = db.Run("SHOW RELAYOUT nope");
     EXPECT_EQ(unknown.rfind("ERR", 0), 0u) << unknown;
-    EXPECT_NE(unknown.find("unknown relation 'nope' (byte 14)"), std::string::npos) << unknown;
+    EXPECT_NE(unknown.find("no relation named 'nope' (byte 14)"), std::string::npos) << unknown;
     const std::string two = db.Run("SHOW RELAYOUT h b");
     EXPECT_EQ(two.rfind("ERR", 0), 0u) << two;
     EXPECT_NE(two.find("takes at most one relation name (byte 16)"), std::string::npos) << two;

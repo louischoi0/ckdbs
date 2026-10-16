@@ -70,9 +70,10 @@ struct IndexDdlResult {
 //
 // The relation's name resolves as every statement's does: an unqualified one
 // means `default_namespace` (`USE`, namespace.md NS5).
-StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(
-    catalog::Catalog& catalog, const parser::IndexStmt& stmt, const txn::ReadView* view = nullptr,
-    catalog::Oid default_namespace = catalog::kNamespacePublic);
+StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
+                                                     const parser::IndexStmt& stmt,
+                                                     catalog::Oid default_namespace,
+                                                     const txn::ReadView* view = nullptr);
 
 // The page half: the root allocated from `store` and formatted, the tree
 // backfilled over everything `access` already holds (spec §10a - every
@@ -110,11 +111,11 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
 // it (`drop-table.md` DT1's stated leaks).
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                      const parser::IndexStmt& stmt,
+                                     catalog::Oid default_namespace,
                                      std::uint64_t trx_id = catalog::kBootstrapXid,
                                      catalog::CatalogRowRef* written = nullptr,
                                      const txn::ReadView* view = nullptr,
-                                     wal::WalManager* wal = nullptr,
-                                     catalog::Oid default_namespace = catalog::kNamespacePublic);
+                                     wal::WalManager* wal = nullptr);
 
 // Removes the index named by `stmt` and returns its `index_oid`.
 //

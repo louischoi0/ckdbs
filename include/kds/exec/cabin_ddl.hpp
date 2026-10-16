@@ -70,7 +70,7 @@ struct CabinDdlResult {
 // means `default_namespace` (`USE`, namespace.md NS5); so for `DropCabin`.
 StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, storage::PageStore& store,
                                      wal::WalManager* wal, const parser::CabinStmt& stmt,
-                                     catalog::Oid default_namespace = catalog::kNamespacePublic);
+                                     catalog::Oid default_namespace);
 
 // Removes the Cabin on `(table, column)` and returns its `cabin_id`, so the
 // caller can drop the observed sets that the catalog cannot see.
@@ -86,7 +86,7 @@ StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, storage::PageSto
 // sys.cabin_exprs row goes with it.
 StatusOr<std::uint64_t> DropCabin(catalog::Catalog& catalog, storage::PageStore& store,
                                   wal::WalManager* wal, const parser::CabinStmt& stmt,
-                                  catalog::Oid default_namespace = catalog::kNamespacePublic);
+                                  catalog::Oid default_namespace);
 
 // The declaration loader's Cabin half (`Catalog::SetDeclarationLoader`):
 // every `access.expr_cabins` entry's `F`, recompiled from its sys.cabin_exprs

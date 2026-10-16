@@ -123,11 +123,6 @@ struct CatalogRowChange {
     std::vector<std::byte> prior_image;
 };
 
-// A DDL statement's refusal for a relation name that resolved to nothing:
-// `no relation named 't' (byte N)` for a name held in no namespace, and
-// `Catalog::ResolveRelation`'s own refusal - which names where the name
-// does live, or why it cannot be named - for everything else.
-Status NamedRelationMiss(const Status& miss, std::string_view name, std::uint32_t byte_offset);
 
 class Catalog {
 public:
@@ -489,10 +484,6 @@ public:
     // `SHOW TABLES` does.
     StatusOr<std::vector<SysObjectRow>> ListNamespaces(const txn::ReadView* view = nullptr);
 
-    // The whole message of a relation name held in no namespace, which
-    // callers that word their own refusal for it compare against.
-    static constexpr std::string_view kNoSuchRelationMessage = "no table with this name";
-
     // **Resolves a relation name as a statement wrote it** (namespace.md
     // NS5): `qualifier.name`, or `name` alone, which means
     // `default_namespace.name` - the session's namespace (`USE`, NS8), and
@@ -505,12 +496,12 @@ public:
     // here, and have no column rows a statement could bind - the
     // `no columns for this rel_id` an unqualified `tables` used to reach.
     //
-    // A miss is `kNotFound` at `byte_offset`, and a name that does live in
-    // other namespaces gets them named, because writing the qualifier is the
-    // user's next act. The bare "no table with this name" stays the answer
-    // for a name held nowhere. `byte_offset` 0 means nowhere: a statement's
-    // first token is its verb, so no relation name sits at byte 0, and the
-    // debug surfaces that take a bare argument have no offset to give.
+    // A miss is `kNotFound`, `no relation named '<as written>'` at
+    // `byte_offset`, and a name that does live in other namespaces gets them
+    // named, because writing the qualifier is the user's next act.
+    // `byte_offset` 0 means nowhere: a statement's first token is its verb,
+    // so no relation name sits at byte 0, and the debug surfaces that take a
+    // bare argument have no offset to give.
     //
     // `view` is `FindTableOidByName`'s: a resolution route (DT3), for the
     // namespace and the relation alike.

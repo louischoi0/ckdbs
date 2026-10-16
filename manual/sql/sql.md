@@ -99,16 +99,23 @@ USE <namespace>;
 
 ```
 > CREATE NAMESPACE ledger
-CREATED NAMESPACE ledger oid=4001
+CREATED NAMESPACE ledger oid=4000
 > CREATE TABLE ledger.accounts (id int64, owner varchar) BTREE
-CREATED TABLE ledger.accounts oid=4002
+CREATED oid=4001
 > SELECT * FROM accounts
-ERR NOT_FOUND retryable=0 no relation 'accounts' in namespace 'public'; 'accounts' is in namespace 'ledger' - write ledger.accounts (byte 14)
+ERR no relation named 'accounts' in namespace 'public'; 'accounts' is in namespace 'ledger' - write ledger.accounts (byte 14)
 > USE ledger
 USE namespace=ledger
 > SELECT * FROM accounts
 id,owner
+> CREATE TABLE public.accounts (id int64) BTREE
+CREATED oid=4004
+> SELECT * FROM tables
+ERR no relation named 'tables' in namespace 'ledger'; 'tables' is a catalog relation: read it as sys.tables (byte 14)
 ```
+
+(Transcript from the debug text surface; a namespace name is matched
+exactly, so `USE LEDGER` is `no namespace named 'LEDGER'`.)
 
 - There is no search path: a relation in another namespace is reached only
   by its qualifier, and the refusal names the qualifier to write.

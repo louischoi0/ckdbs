@@ -315,12 +315,13 @@ TEST(CatalogNameRigTest, AnUncommittedCreateIsInvisibleToAnotherCoreUntilItCommi
     ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)", &ddl).response,
                            "CREATED"));
 
-    EXPECT_EQ(d1.Dispatch("SELECT * FROM t").response, "ERR no table with this name");
+    EXPECT_EQ(d1.Dispatch("SELECT * FROM t").response, "ERR no relation named 't' (byte 14)");
     const std::string insert = d1.Dispatch("INSERT INTO t VALUES (5)").response;
-    EXPECT_EQ(insert, "ERR no table with this name");
+    EXPECT_EQ(insert, "ERR no relation named 't' (byte 12)");
     Session reader;
     ASSERT_TRUE(StartsWith(d1.Dispatch("BEGIN", &reader).response, "BEGIN"));
-    EXPECT_EQ(d1.Dispatch("SELECT * FROM t", &reader).response, "ERR no table with this name");
+    EXPECT_EQ(d1.Dispatch("SELECT * FROM t", &reader).response,
+              "ERR no relation named 't' (byte 14)");
     ASSERT_TRUE(StartsWith(d1.Dispatch("ROLLBACK", &reader).response, "ROLLBACK"));
     // The creating core still sees its own relation.
     EXPECT_EQ(d0.Dispatch("SELECT * FROM t", &ddl).response, "id,v");
@@ -352,9 +353,9 @@ TEST(CatalogNameRigTest, ACreateOpenedBetweenAnotherCoresCheckAndLookupIsNotBoun
     const std::string read = d1.Dispatch("SELECT * FROM t").response;
     d1.SetAfterViewForTest(nullptr);
     ASSERT_TRUE(fired);
-    EXPECT_EQ(read, "ERR no table with this name");
+    EXPECT_EQ(read, "ERR no relation named 't' (byte 14)");
     const std::string insert = d1.Dispatch("INSERT INTO t VALUES (5)").response;
-    EXPECT_EQ(insert, "ERR no table with this name");
+    EXPECT_EQ(insert, "ERR no relation named 't' (byte 12)");
 
     ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
     EXPECT_EQ(RelationsNamed(*rig, "t"), 0);
@@ -375,10 +376,10 @@ TEST(CatalogNameRigTest, AWritesSubqueryDoesNotBindAnotherCoresUncommittedRelati
 
     const std::string deleted =
         d1.Dispatch("DELETE FROM t WHERE EXISTS (SELECT id FROM u WHERE u.w = t.v)").response;
-    EXPECT_EQ(deleted, "ERR no table with this name") << deleted;
+    EXPECT_EQ(deleted, "ERR no relation named 'u' (byte 43)") << deleted;
     const std::string updated =
         d1.Dispatch("UPDATE t SET v = 1 WHERE EXISTS (SELECT id FROM u WHERE u.w = t.v)").response;
-    EXPECT_EQ(updated, "ERR no table with this name") << updated;
+    EXPECT_EQ(updated, "ERR no relation named 'u' (byte 48)") << updated;
 
     ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
 }
@@ -393,10 +394,10 @@ TEST(CatalogNameRigTest, ARolledBackCreateWasNeverVisibleToAnotherCore) {
     ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)", &ddl).response,
                            "CREATED"));
     const std::string insert = d1.Dispatch("INSERT INTO t VALUES (5)").response;
-    EXPECT_EQ(insert, "ERR no table with this name");
+    EXPECT_EQ(insert, "ERR no relation named 't' (byte 12)");
 
     ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
-    EXPECT_EQ(d1.Dispatch("SELECT * FROM t").response, "ERR no table with this name");
+    EXPECT_EQ(d1.Dispatch("SELECT * FROM t").response, "ERR no relation named 't' (byte 14)");
     EXPECT_EQ(RelationsNamed(*rig, "t"), 0);
 }
 

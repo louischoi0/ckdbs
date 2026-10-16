@@ -303,13 +303,11 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
 StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
                                                      const parser::IndexStmt& stmt,
-                                                     const txn::ReadView* view,
-                                                     catalog::Oid default_namespace) {
+                                                     catalog::Oid default_namespace,
+                                                     const txn::ReadView* view) {
     auto oid = catalog.ResolveRelation(stmt.schema, stmt.table_name, default_namespace,
                                        stmt.table_byte_offset, view);
-    if (!oid.ok()) {
-        return catalog::NamedRelationMiss(oid.status(), stmt.table_name, stmt.table_byte_offset);
-    }
+    if (!oid.ok()) return oid.status();
     auto access = catalog.InitTableAccess(oid.value());
     if (!access.ok()) return access.status();
 
@@ -456,11 +454,11 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
 }
 
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
-                                     const parser::IndexStmt& stmt, std::uint64_t trx_id,
+                                     const parser::IndexStmt& stmt, catalog::Oid default_namespace,
+                                     std::uint64_t trx_id,
                                      catalog::CatalogRowRef* written,
-                                     const txn::ReadView* view, wal::WalManager* wal,
-                                     catalog::Oid default_namespace) {
-    auto prepared = PrepareIndexDef(catalog, stmt, view, default_namespace);
+                                     const txn::ReadView* view, wal::WalManager* wal) {
+    auto prepared = PrepareIndexDef(catalog, stmt, default_namespace, view);
     if (!prepared.ok()) return prepared.status();
     catalog::Catalog::IndexDef& def = prepared.value();
 

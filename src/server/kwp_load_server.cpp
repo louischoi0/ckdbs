@@ -382,10 +382,11 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // so it publishes this core's epoch and revalidates the catalog itself.
     const CommandDispatcher::StatementEpochScope epoch(*dispatcher_);
     auto& catalog = dispatcher_->catalog();
-    // `ns.t` or `t`; a load session has no `USE`, so an unqualified
-    // relation is in `public` (namespace.md NS5).
+    // `ns.t` or `t`, a bare name in the load session's namespace - `public`,
+    // a load having no `USE` (namespace.md NS5) - as every chunk's insert
+    // resolves it.
     const auto [qualifier, bare] = SplitQualifiedArg(begin.value().relation);
-    auto oid = catalog.ResolveRelation(qualifier, bare, catalog::kNamespacePublic);
+    auto oid = catalog.ResolveRelation(qualifier, bare, conn.session.default_namespace());
     if (!oid.ok()) {
         SendError(conn, oid.status());
         return;
@@ -408,7 +409,8 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // issue - per row, so one chunk may mix the two as one T1 statement may.
     // Every storable type loads (BI16); no column is refused here.
     LoadState load;
-    load.relation = begin.value().relation;
+    load.qualifier = std::string(qualifier);
+    load.relation = std::string(bare);
     // Every chunk's rows are positional against this shape, and each chunk
     // re-resolves the relation by name: a drop and an add of equal net width
     // between here and a chunk's `IX` would land values in other columns,
@@ -503,9 +505,8 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     // a relation, so the NULL has no other reading to collide with.
     const std::string chunk = "chunk " + std::to_string(header.value().chunk_seq);
     parser::InsertStmt stmt;
-    const auto [qualifier, bare] = SplitQualifiedArg(conn.load.relation);
-    stmt.schema = std::string(qualifier);
-    stmt.table_name = std::string(bare);
+    stmt.schema = conn.load.qualifier;
+    stmt.table_name = conn.load.relation;
     stmt.described = conn.load.shape;
     stmt.rows.reserve(rows.value().size());
     for (std::size_t r = 0; r < rows.value().size(); ++r) {

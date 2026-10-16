@@ -65,6 +65,7 @@ private:
 
     struct LoadState {
         std::uint64_t load_id = 0;
+        std::string qualifier;  // the namespace written, empty for none
         std::string relation;
         std::uint32_t next_seq = 0;      // strictly increasing from 0
         std::uint64_t rows_accepted = 0; // cumulative, echoed in every ACK
