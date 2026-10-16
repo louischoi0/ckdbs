@@ -247,24 +247,9 @@ StatusOr<PageView::Tuple> PageView::ReadTupleIn(std::uint16_t slot_idx,
 
 StatusOr<std::span<const std::byte>> PageView::PayloadAt(std::uint16_t slot_idx,
                                                           std::uint16_t nr_slots) const {
-    if (slot_idx >= nr_slots) {
-        return Status::NotFound("slot index out of range");
-    }
-
-    HeapSlotFields slot = ReadSlot(slot_idx);
-    if ((slot.flags & kSlotFlagDead) != 0 || slot.length == 0) {
-        return Status::NotFound("slot is dead");
-    }
-
-    // data_len rather than slot.length: the slot's length is the *reserved*
-    // span (header + payload capacity, see SlotCapacity) and a tuple may
-    // occupy less of it, so data_len is what ReadTuple() hands out and what
-    // this has to agree with.
-    const std::byte* tuple_base = page_.data() + slot.offset;
-    std::uint16_t data_len;
-    std::memcpy(&data_len, tuple_base + kTupleDataLenOffset, sizeof(data_len));
-
-    return std::span<const std::byte>(tuple_base + kTupleHeaderOnDiskSize, data_len);
+    Tuple t{};
+    if (TryReadTupleIn(slot_idx, nr_slots, t) == TupleRead::kRead) return t.payload;
+    return ReadTupleIn(slot_idx, nr_slots).status();  // the refusal's wording
 }
 
 StatusOr<std::uint16_t> PageView::SlotCapacity(std::uint16_t slot_idx) const {
