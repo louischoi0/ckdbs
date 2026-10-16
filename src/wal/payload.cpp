@@ -143,6 +143,35 @@ StatusOr<AnchorUpdatePayload> DecodeAnchorUpdate(std::span<const std::byte> in) 
     return fields;
 }
 
+// ---- ANCHOR_SLOT_REMOVE --------------------------------------------------
+
+StatusOr<std::size_t> EncodeAnchorSlotRemove(std::span<std::byte> out, std::uint64_t index_oid) {
+    if (Status s = CheckOutputSize(out, kAnchorSlotRemovePayloadSize, "ANCHOR_SLOT_REMOVE");
+        !s.ok()) {
+        return s;
+    }
+    // Refused at the writer, not left to fail at replay.
+    if (index_oid == 0) {
+        return Status::InvalidArgument("wal payload: ANCHOR_SLOT_REMOVE names index oid 0, the "
+                                       "clustered root, which is never removed");
+    }
+    Store<std::uint64_t>(out, 0, index_oid);
+    return kAnchorSlotRemovePayloadSize;
+}
+
+StatusOr<std::uint64_t> DecodeAnchorSlotRemove(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kAnchorSlotRemovePayloadSize, "ANCHOR_SLOT_REMOVE");
+        !s.ok()) {
+        return s;
+    }
+    const auto index_oid = Load<std::uint64_t>(in, 0);
+    // No index oid is 0 - 0 names the clustered root, which is never removed.
+    if (index_oid == 0) {
+        return Status::Corruption("wal payload: ANCHOR_SLOT_REMOVE names index oid 0");
+    }
+    return index_oid;
+}
+
 // ---- BACKUP_BEGIN / BACKUP_END ------------------------------------------
 
 StatusOr<std::size_t> EncodeBackupMark(std::span<std::byte> out, const BackupMarkPayload& fields) {

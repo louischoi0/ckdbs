@@ -300,4 +300,29 @@ Every question is marked (W1). BY-S1 is the first stage.
 
 ## 7. Stage log
 
-Empty: no stage has opened.
+**BY-S1 - landed 2026-10-16** on `worktree-reindex-drop-index-reclaim`.
+`storage::RemoveAnchorIndexSlot` (the table compacted); `ANCHOR_SLOT_REMOVE`
+(kind 33: payload, emitter, strict redo); superblock 29;
+`Catalog::OwedIndexTrees` (BY-R1: unfiltered, one `sys.tables` scan, a
+dropped relation's slots excluded, a rootless slot skipped) and
+`Catalog::RemoveIndexSlot` (latched, logged, stamped, the anchor's type and
+owner checked); BY-R10's `Corruption` for a live index with no slot.
+**And `CreateIndex` writes the slot before the row** (the review's finding
+1): BY-R10 read a row written before its slot - another core opening the
+relation in that window - as `Corruption`; a slot with no row is read by
+nothing while the instance runs and is owed after a crash. Cells: the slot
+table at its cap, compacted and refilled; the payload through the envelope,
+oid 0 refused at the writer and the reader; redo of the removal after the
+updates that named the slot, and of an absent slot (`Corruption`); the owed
+predicate for a live, a committed-dropped, a rolled-back-drop, a
+rolled-back-create, a removed and a dropped relation's slot; a removed
+slot's place taken through `CREATE INDEX`; BY-R10; two crash cells - a
+removal replayed at mount, and a create open at the crash owed after undo.
+`critics-developer`: accepted - the slot-first order, the root clause, the
+writer's oid-0 refusal, one `CheckAnchorOf` for the five anchor readers'
+structural check (three existing, two new), one `sys.tables` scan,
+`memmove` compaction, the duplicate include, the two missing cells. Not
+done - a cell forcing the row-before-slot window (no seam between the two
+writes; the order makes it unreachable), and the redo tests' repeated anchor
+`PAGE_INIT` setup. Suite: 4068/4068 before the review's fixes. Overhead not
+measured; measured at the milestone's close.

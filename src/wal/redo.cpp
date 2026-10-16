@@ -270,6 +270,23 @@ Status ApplyAnchorUpdate(std::span<std::byte, kPageSize> page, const DecodedReco
     return Status::OK();
 }
 
+// **A slot removed** (ANCHOR_SLOT_REMOVE, BY-R5). Strict: the page is below
+// the record's LSN, so every ANCHOR_UPDATE that named the oid has been
+// applied to it, and a slot it does not hold is a record that is not this
+// page's.
+Status ApplyAnchorSlotRemove(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
+    if (storage::RawPageType(page) != static_cast<std::uint8_t>(PageType::kAnchor)) {
+        return Status::Corruption("ANCHOR_SLOT_REMOVE names page type " +
+                                  std::to_string(storage::RawPageType(page)) + ", not an anchor");
+    }
+    auto index_oid = DecodeAnchorSlotRemove(record.payload);
+    if (!index_oid.ok()) return index_oid.status();
+    if (Status s = storage::RemoveAnchorIndexSlot(page, index_oid.value()); !s.ok()) {
+        return Status::Corruption("ANCHOR_SLOT_REMOVE: " + s.message());
+    }
+    return Status::OK();
+}
+
 // **A row placed where its key sorts** (BTREE_INSERT, BD-R3 E2). Strict:
 // redo reaches this only for a page below the record's LSN, so the leaf is
 // the one the record was written against, and the slot the record names is
@@ -321,6 +338,7 @@ Applier ApplierFor(RecordType type) noexcept {
         case RecordType::kVarHeapRelease: return ApplyVarHeapRelease;
         case RecordType::kIndexInsert: return ApplyIndexInsert;
         case RecordType::kAnchorUpdate: return ApplyAnchorUpdate;
+        case RecordType::kAnchorSlotRemove: return ApplyAnchorSlotRemove;
         default: return nullptr;
     }
 }

@@ -27,4 +27,15 @@ inline StatusOr<Lsn> LogAnchorUpdate(WalManager* wal, std::uint64_t trx_id, Page
     return wal->Append(RecordSpec{RecordType::kAnchorUpdate, trx_id, anchor_page}, buf);
 }
 
+// The one ANCHOR_SLOT_REMOVE emitter (BY-R5): `index_oid`'s slot leaves the
+// anchor. The caller holds the anchor's latch across the removal and this
+// append, and stamps the page with the returned LSN.
+inline StatusOr<Lsn> LogAnchorSlotRemove(WalManager* wal, std::uint64_t trx_id,
+                                         PageId anchor_page, std::uint64_t index_oid) {
+    if (wal == nullptr) return kNoLsn;
+    std::array<std::byte, kAnchorSlotRemovePayloadSize> buf{};
+    if (auto n = EncodeAnchorSlotRemove(buf, index_oid); !n.ok()) return n.status();
+    return wal->Append(RecordSpec{RecordType::kAnchorSlotRemove, trx_id, anchor_page}, buf);
+}
+
 }  // namespace kds::wal

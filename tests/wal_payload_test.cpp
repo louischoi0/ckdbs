@@ -534,9 +534,12 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBtreeSplit), 30);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBackupBegin), 31);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBackupEnd), 32);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAnchorSlotRemove), 33);
     // Derived from the enum now, not typed here: pinning it as a literal is
     // what let type 23 ship unwritable (record.hpp).
-    EXPECT_EQ(kMaxAssignedRecordType, 32);
+    EXPECT_EQ(kMaxAssignedRecordType, 33);
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kAnchorSlotRemove)));
+    EXPECT_STREQ(RecordTypeName(RecordType::kAnchorSlotRemove), "ANCHOR_SLOT_REMOVE");
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kBackupBegin)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kBackupEnd)));
 
@@ -597,6 +600,25 @@ TEST(WalPayloadTest, AnchorUpdateRoundTripsThroughTheEnvelope) {
     ASSERT_TRUE(decoded.ok()) << decoded.status().message();
     EXPECT_EQ(decoded.value().index_oid, 9001u);
     EXPECT_EQ(decoded.value().root, 310u);
+}
+
+TEST(WalPayloadTest, AnchorSlotRemoveRoundTripsThroughTheEnvelopeAndRefusesOidZero) {
+    // BY-R5: written through the envelope, so a kind `EncodeRecord` could not
+    // write would fail here.
+    const auto record = ThroughEnvelope(RecordType::kAnchorSlotRemove,
+                                        [](std::span<std::byte> out) {
+                                            return EncodeAnchorSlotRemove(out, 9001);
+                                        });
+    auto decoded = DecodeAnchorSlotRemove(PayloadOf(record));
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value(), 9001u);
+
+    std::array<std::byte, kAnchorSlotRemovePayloadSize> zero{};
+    EXPECT_EQ(DecodeAnchorSlotRemove(zero).status().code(), StatusCode::kCorruption)
+        << "oid 0 is the clustered root, which is never removed";
+    std::array<std::byte, kAnchorSlotRemovePayloadSize - 1> tight{};
+    EXPECT_FALSE(EncodeAnchorSlotRemove(tight, 1).ok());
+    EXPECT_FALSE(DecodeAnchorSlotRemove(tight).ok());
 }
 
 // ---- INDEX_INSERT --------------------------------------------------------

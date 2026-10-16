@@ -8,6 +8,7 @@
 #include <cctype>
 #include <limits>
 #include <optional>
+#include <unordered_set>
 
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -326,6 +327,21 @@ Status LogCatAnchorUpdate(wal::WalManager* wal, storage::PageStore& store, std::
     if (!rec.ok()) return rec.status();
     if (rec.value() == wal::kNoLsn) return Status::OK();  // unlogged store
     return store.StampPageLsn(anchor_page, rec.value());
+}
+
+// The two structural checks every anchor reader makes: a page that is not
+// `owner`'s anchor cannot answer for `owner`'s slots, and reading one as
+// though it were would act on another relation's table.
+Status CheckAnchorOf(std::span<const std::byte, kPageSize> bytes, PageId anchor_page,
+                     Oid owner) {
+    if (Status s = storage::ValidatePageHeader(bytes, PageType::kAnchor); !s.ok()) return s;
+    if (storage::GetOwnerOid(bytes) != owner) {
+        return Status::Corruption("anchor page " + std::to_string(anchor_page) +
+                                  " belongs to relation oid " +
+                                  std::to_string(storage::GetOwnerOid(bytes)) + ", not oid " +
+                                  std::to_string(owner));
+    }
+    return Status::OK();
 }
 
 // The old tail's link edit when a chain grows: no record type describes a
@@ -898,6 +914,60 @@ StatusOr<std::vector<Catalog::PendingReclaim>> Catalog::PendingReclaims() {
     return out;
 }
 
+StatusOr<std::vector<Catalog::OwedIndexTree>> Catalog::OwedIndexTrees() {
+    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+    if (!objects.ok()) return objects.status();
+    auto tables = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
+    if (!tables.ok()) return tables.status();
+    auto indexes = ListIndexes();
+    if (!indexes.ok()) return indexes.status();
+    std::unordered_set<Oid> live_relations;
+    for (const SysObjectRow& object : objects.value()) {
+        if (object.type_oid == kTypeTable) live_relations.insert(object.oid);
+    }
+    std::unordered_set<Oid> live_indexes;
+    for (const SysIndexRow& row : indexes.value()) live_indexes.insert(row.index_oid);
+
+    std::vector<OwedIndexTree> out;
+    for (const SysTableRow& table : tables.value()) {
+        // A system relation has no anchor and carries no index slot; a
+        // dropped one's slots are its tombstone's (BY-R3).
+        if (table.anchor_page_id == kInvalidPageId || !live_relations.contains(table.oid)) {
+            continue;
+        }
+        auto anchor = store_.GetForRead(table.anchor_page_id);
+        if (!anchor.ok()) return anchor.status();
+        if (Status s = CheckAnchorOf(anchor.value().bytes(), table.anchor_page_id, table.oid);
+            !s.ok()) {
+            return s;
+        }
+        auto slots = storage::AnchorIndexSlots(anchor.value().bytes());
+        if (!slots.ok()) return slots.status();
+        for (const storage::AnchorIndexSlot& slot : slots.value()) {
+            // BY-R1's root clause: no slot is written without a root today,
+            // and one that were would name no tree to walk.
+            if (live_indexes.contains(slot.index_oid) || slot.root == kInvalidPageId) continue;
+            out.push_back(OwedIndexTree{table.oid, table.anchor_page_id, slot.index_oid});
+        }
+    }
+    return out;
+}
+
+Status Catalog::RemoveIndexSlot(Oid rel_oid, PageId anchor_page_id, Oid index_oid) {
+    auto anchor = store_.Get(anchor_page_id);
+    if (!anchor.ok()) return anchor.status();
+    if (Status s = CheckAnchorOf(anchor.value().bytes(), anchor_page_id, rel_oid); !s.ok()) {
+        return s;
+    }
+    if (Status s = storage::RemoveAnchorIndexSlot(anchor.value().bytes(), index_oid); !s.ok()) {
+        return s;
+    }
+    auto rec = wal::LogAnchorSlotRemove(wal_, wal::kNoTxnId, anchor_page_id, index_oid);
+    if (!rec.ok()) return rec.status();
+    if (rec.value() == wal::kNoLsn) return Status::OK();  // unlogged store
+    return store_.StampPageLsn(anchor_page_id, rec.value());
+}
+
 Status Catalog::ClearPendingRoots(Oid oid) {
     auto cleared = ForFirstRow<SysObjectRow>(
         store_, kCatalogPageObjects,
@@ -1155,19 +1225,9 @@ Status Catalog::CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_o
     if (anchor_page == kInvalidPageId) return Status::OK();
     auto anchor = store_.GetForRead(anchor_page);
     if (!anchor.ok()) return anchor.status().WithContext("faulting anchor to check index room");
-    // The same two structural checks WriteAnchorRoot makes, for the same
-    // reason: a page that is not this relation's anchor cannot answer for
-    // this relation's table, and reading one as though it were would
-    // refuse - or admit - on another relation's count.
-    if (Status s = storage::ValidatePageHeader(anchor.value().bytes(), PageType::kAnchor);
+    if (Status s = CheckAnchorOf(anchor.value().bytes(), anchor_page, expected_owner_oid);
         !s.ok()) {
         return s;
-    }
-    if (storage::GetOwnerOid(anchor.value().bytes()) != expected_owner_oid) {
-        return Status::Corruption(
-            "anchor page " + std::to_string(anchor_page) + " belongs to relation oid " +
-            std::to_string(storage::GetOwnerOid(anchor.value().bytes())) + ", not oid " +
-            std::to_string(expected_owner_oid));
     }
     return storage::CheckAnchorRoomForIndex(anchor.value().bytes(), index_oid);
 }
@@ -1194,15 +1254,9 @@ StatusOr<storage::PageRef> Catalog::StageAnchorRoot(PageId anchor_page, Oid expe
     // aimed at a non-anchor page, SetAnchorClusteredRoot would overwrite
     // four bytes of somebody's tuple data with no error anywhere; aimed at
     // another relation's anchor, it would move the wrong tree's root.
-    if (Status s = storage::ValidatePageHeader(anchor.value().bytes(), PageType::kAnchor);
+    if (Status s = CheckAnchorOf(anchor.value().bytes(), anchor_page, expected_owner_oid);
         !s.ok()) {
         return s;
-    }
-    if (storage::GetOwnerOid(anchor.value().bytes()) != expected_owner_oid) {
-        return Status::Corruption(
-            "anchor page " + std::to_string(anchor_page) + " belongs to relation oid " +
-            std::to_string(storage::GetOwnerOid(anchor.value().bytes())) + ", not oid " +
-            std::to_string(expected_owner_oid));
     }
     if (index_oid == 0) {
         storage::SetAnchorClusteredRoot(anchor.value().bytes(), root);
@@ -2613,13 +2667,22 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
         // sys.indexes row is CREATE-fixed, and a root move writes the
         // anchor slot. Read from the ref held across the whole fill, so
         // clustered and index roots come from one page state and a forged
-        // count is as loud here as it is for the clustered arm. A slot
-        // the anchor does not hold (an index seeded before anchors, never
-        // moved) keeps the row's value.
+        // count is as loud here as it is for the clustered arm.
+        //
+        // **A live index with no slot is `Corruption`** (BY-R10): the slot
+        // is written at create (PW2-3) and removed only once its tree is
+        // reclaimed (BY-R5), so its absence means a freed tree, and the
+        // row's creation root names a page that may already be another's.
         if (anchor_held.has_value()) {
             auto slot = storage::AnchorIndexRoot(anchor_held->bytes(), row.index_oid);
             if (!slot.ok()) return slot.status();
-            if (slot.value() != kInvalidPageId) ref.root_page_id = slot.value();
+            if (slot.value() == kInvalidPageId) {
+                return Status::Corruption("index oid " + std::to_string(row.index_oid) +
+                                          " has a live sys.indexes row but no slot in its "
+                                          "relation's anchor page " +
+                                          std::to_string(anchor_held->page_id()));
+            }
+            ref.root_page_id = slot.value();
         }
         ref.key_width = row.key_width;
         ref.entry_width = row.entry_width;
@@ -3719,6 +3782,29 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
         row.covered_cols[i] = def.covered_cols[i];
     }
 
+    // PW2-3: the anchor slot is seeded at creation, so the anchor is the
+    // index root's whole truth from birth. The creating core seeds it.
+    //
+    // **Before the row** (BY-S1's review): `InitTableAccess` reads rows
+    // unfiltered and refuses a live row with no slot (BY-R10), so a row
+    // written first is a window in which another core opening the relation
+    // reads `Corruption`. A slot written first, with no row, is read by
+    // nothing while the instance runs; a refusal below leaves it, and its
+    // tree, owed (BY-R1, BY-R2).
+    {
+        auto rel = GetSysTableRow(def.table_oid);
+        if (!rel.ok()) {
+            return rel.status().WithContext("resolving the relation for the index anchor seed");
+        }
+        if (rel.value().anchor_page_id != kInvalidPageId) {
+            if (Status s = WriteAnchorRoot(rel.value().anchor_page_id, def.table_oid,
+                                           row.index_oid, row.root_page_id, trx_id);
+                !s.ok()) {
+                return s;
+            }
+        }
+    }
+
     // **One name, one row** (AT-S17): `sys.indexes`' root page held
     // exclusive across the name check and the insert. Index names are
     // instance-wide and the relation `X` this DDL holds covers its own
@@ -3738,24 +3824,6 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
     if (where != nullptr) {
         where->oid = row.index_oid;
         where->rel_oid = kSysIndexesTable;
-    }
-
-    // PW2-3: the anchor slot is seeded at creation, so the anchor is the
-    // index root's whole truth from birth - without this the row would
-    // stay a second source forever ("slot absent, fall back") instead of
-    // for the transition alone. The creating core seeds it.
-    {
-        auto rel = GetSysTableRow(def.table_oid);
-        if (!rel.ok()) {
-            return rel.status().WithContext("resolving the relation for the index anchor seed");
-        }
-        if (rel.value().anchor_page_id != kInvalidPageId) {
-            if (Status s = WriteAnchorRoot(rel.value().anchor_page_id, def.table_oid,
-                                           row.index_oid, row.root_page_id, trx_id);
-                !s.ok()) {
-                return s;
-            }
-        }
     }
 
     // **Bumped**, where InsertIndexRow() deliberately did not. That comment
