@@ -37,7 +37,18 @@ Everything the engine learns is advisory by construction: delete all of it and e
 
 ## Quick start
 
-Requirements: CMake ≥ 3.20 and a C++20 compiler.
+### Try it with Docker
+
+```sh
+git clone https://github.com/louischoi0/ckdbs && cd ckdbs
+docker compose run --rm cli
+```
+
+This builds the image, starts the server and opens a SQL prompt. To run the server alone, use `docker compose up -d kds`; it listens on `127.0.0.1:15432` and keeps its data in the `kds-data` volume.
+
+### Build from source
+
+Requirements: CMake ≥ 3.20, a C++20 compiler and OpenSSL 3.
 
 ```sh
 scripts/build.sh                     # build into ./build

@@ -1,0 +1,15 @@
+# Only what the image build reads: sources, CMake files and the client.
+.git
+.claude
+build*/
+bench/
+instructions/
+docs/
+manual/
+CIP/
+v2.6.0/
+*.deb
+*.log
+kds.db
+kds.db.*
+kds.conf

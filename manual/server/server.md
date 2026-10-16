@@ -52,6 +52,21 @@ scripts/stop.sh                               # graceful stop (sends STOP via th
 default, so a bare `./build/kds_server` is refused at startup.
 `kds.conf.sample` sets it to 131072 frames (1 GiB of page memory).
 
+**In Docker**, `compose.yaml` at the repository root builds a Release image
+and runs it with `docker/kds.conf` (`listen_address = 0.0.0.0`, 256 MiB of
+page memory, data under the `kds-data` volume):
+
+```sh
+docker compose run --rm cli    # build, start the server, open a SQL prompt
+docker compose up -d kds       # the server alone, published on 127.0.0.1:15432
+docker compose down            # stop it (SIGTERM: a clean shutdown checkpoint)
+```
+
+The port is published on the host's loopback only, because `auth` is off;
+set `auth = scram` and `tls = on` in `docker/kds.conf` before publishing it
+wider. A container build has no `.git`, so the version a backup manifest
+records is `unknown`.
+
 On startup the server prints the data file, page count, superblock version,
 log destination and the port, then blocks in `Serve()` for the life of the
 process. The data file is created if absent; the WAL segments live in
@@ -66,7 +81,8 @@ roots in its tombstone, 22 carries the 48-bit Keystone id, 27 marks a
 unique index, 28 orders a secondary index by its whole entry, and 29 logs
 the removal of a dropped index's anchor slot.
 
-The listener is **loopback only** (`127.0.0.1`), plain TCP, no TLS, no
+The listener is **loopback only** (`127.0.0.1`) unless `listen_address`
+says otherwise, plain TCP, no TLS, no
 authentication — a development/inspection surface, not a production API.
 The binary wire protocol (KWP/1, `docs/spec/protocol.md`) is specified with a
 handshake and auth stages, but only its frame codec exists in code.
@@ -107,7 +123,8 @@ out-of-range values, each naming the file and line.
 | Key | Default | Meaning |
 |---|---|---|
 | `data_file` | `kds.db` | Data file path (also the positional argument). |
-| `port` | `15432` | TCP port, loopback only. |
+| `port` | `15432` | TCP port of the default (KWP) listener. |
+| `listen_address` | `127.0.0.1` | **The IPv4 address the default port binds**, on every core; `0.0.0.0` is every interface, which is what a container needs to publish the port. A name or anything that is not a dotted IPv4 address is refused at startup. `debug_text_port` and `kwp_port` stay loopback whatever it says. With `auth = off` a non-loopback address serves anyone who can reach it. |
 | `tcp_keepalive_s` | `60` | **Seconds of silence before an accepted client socket is probed.** Six probes follow a sixth of this apart, and `TCP_USER_TIMEOUT` is set to the same total, so a client that vanished without closing - power lost, a cable pulled - is reaped after about twice this. Every listener: the default port, `debug_text_port` and `kwp_port`. A live idle client is never ended - there is no idle-session timeout - **but a live client that leaves a reply unread (a zero receive window) for about twice this is**, which is what the user timeout costs. `0` turns keepalive off; above `32767` (Linux's `MAX_TCP_KEEPIDLE`) is refused at startup. |
 | `wal_dir` | `<data_file>.wal` | WAL segment directory. |
 | `cores` | `1` | Reactor cores, pinned one per CPU. **The count is not pinned to the volume**: a mount under a different count records the new one in the superblock and logs the change. Above 1 the cores share one WAL stream and one log: core 0 owns it, peers append through it, and every `fdatasync` is issued once (`docs/spec/wal.md` §3). |

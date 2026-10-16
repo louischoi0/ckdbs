@@ -473,7 +473,8 @@ int main(int argc, char** argv) {
               // Flushed rather than left buffered: Serve() blocks for the
               // life of the process, so a buffered banner would not appear
               // until shutdown - exactly when it is no longer useful.
-              << "listening on 127.0.0.1:" << db.config().port << std::endl;
+              << "listening on " << db.config().listen_address << ":" << db.config().port
+              << std::endl;
 
     if (kds::Status s = db.Serve(); !s.ok()) {
         std::cerr << "server stopped: " << s.message() << "\n";

@@ -173,6 +173,17 @@ TEST(ExpeditorConfigTest, AnOutOfRangePortIsRejected) {
     EXPECT_FALSE(config.ApplyFile(WithPool("port = 0\n")).ok());
 }
 
+TEST(ExpeditorConfigTest, ListenAddressIsLoopbackUnlessSetAndMustBeIPv4) {
+    Expeditor::Config config;
+    EXPECT_EQ(config.listen_address, "127.0.0.1");
+    ASSERT_TRUE(config.ApplyFile(WithPool("listen_address = 0.0.0.0\n")).ok());
+    EXPECT_EQ(config.listen_address, "0.0.0.0");
+
+    Status s = config.ApplyFile(WithPool("listen_address = localhost\n"));
+    EXPECT_FALSE(s.ok());
+    EXPECT_NE(s.message().find("localhost"), std::string::npos) << s.message();
+}
+
 TEST(ExpeditorConfigTest, AnUnknownLogLevelIsRejected) {
     Expeditor::Config config;
     Status s = config.ApplyFile(WithPool("log_level = chatty\n"));

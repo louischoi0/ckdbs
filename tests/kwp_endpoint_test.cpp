@@ -172,6 +172,21 @@ TEST_F(KwpEndpointTest, TheDefaultProtocolIsKwp) {
     EXPECT_EQ(listener.value().protocol(), Protocol::kKwp);
 }
 
+TEST_F(KwpEndpointTest, AListenerBindsTheAddressItIsGivenAndRefusesOneThatIsNotIPv4) {
+    // `listen_address`: loopback by default, any IPv4 address when set -
+    // what a container needs to publish the port - and a name or a typo is
+    // refused rather than bound to something else.
+    auto wildcard = TcpServer::Listen(25476, /*reuse_port=*/false, "0.0.0.0");
+    ASSERT_TRUE(wildcard.ok()) << wildcard.status().message();
+    const int fd = Connect(25476);
+    EXPECT_GE(fd, 0);
+    if (fd >= 0) ::close(fd);
+
+    auto named = TcpServer::Listen(25477, /*reuse_port=*/false, "localhost");
+    ASSERT_FALSE(named.ok());
+    EXPECT_EQ(named.status().code(), StatusCode::kInvalidArgument);
+}
+
 TEST_F(KwpEndpointTest, ConfigurationSurvivesTheMoveThatOwnsTheListener) {
     // **A listener is configured and then moved** into whatever owns it -
     // `Expeditor::Serve` does exactly this for the debug port. A setting
