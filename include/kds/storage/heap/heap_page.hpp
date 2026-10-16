@@ -294,7 +294,9 @@ public:
     // Reads the tuple at `slot`. A delete-marked tuple is returned, with
     // `deleted` set - whether the reader may see it depends on its snapshot
     // versus `trx_id`, which is not this layer's decision. Fails with
-    // NotFound only if `slot` is out of range or physically retired.
+    // NotFound if `slot` is out of range or physically retired, and with
+    // Corruption if the slot leaves the page (BF-R10) or its data_len runs
+    // past the slot.
     StatusOr<Tuple> ReadTuple(std::uint16_t slot) const;
 
     // ReadTuple() with the page header's slot count supplied by the caller,
@@ -357,9 +359,11 @@ public:
     // by tuple key pair this with KeystoneIdOfPayload() from
     // storage/keystone.hpp.
     //
-    // Fails with NotFound on exactly the slots ReadTuple() does (out of
-    // range, or physically retired), so a search can treat NotFound as "no
-    // key here" and keep going. A delete-marked slot still has its bytes
+    // Fails on exactly the slots ReadTupleIn() does, with its code and
+    // message: NotFound when out of range or physically retired, so a
+    // search can treat NotFound as "no key here" and keep going, and
+    // Corruption when the slot leaves the page (BF-R10) or its data_len
+    // runs past the slot. A delete-marked slot still has its bytes
     // and still returns them, for the same reason ReadTuple() still returns
     // the tuple: visibility is not this layer's decision.
     StatusOr<std::span<const std::byte>> PayloadAt(std::uint16_t slot,
