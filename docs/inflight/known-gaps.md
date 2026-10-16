@@ -669,6 +669,36 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   works today into a refusal, so it is recorded rather than applied. Owner:
   `docs/spec/ddl-transactional.md` DT3c.
 
+- **A resolution `ResolveNames` discards keeps its `IS`.** Read 2026-10-14
+  at `7ad21023` by the reviews of the instance-wide open-DDL gate; still so
+  on `worktree-fix-names-resolved-with-no-view` off `01d04fa8`. When the
+  generation moved and the name is resolved again under a view, whatever
+  `IS` the first compile declared on the relation it bound is held until
+  the statement ends. That relation was never bound for use, so no answer
+  is wrong; a DDL wanting its `X` waits for the statement. Owner:
+  `docs/spec/ddl-transactional.md` §4.
+
+- **A DDL that opens and closes inside one statement leaves that
+  statement's cache window open.** Read 2026-10-16 on
+  `worktree-fix-names-resolved-with-no-view` off `01d04fa8` by the
+  `critics-developer` review. The head records the open-DDL count before it
+  revalidates (`ViewFor`), which covers a DDL that closes across the head.
+  A DDL that opens after the head and closes before a later resolution in
+  the same statement leaves both readings zero. A cache entry filled while
+  it was open - the duplicate check, the name renderer, or a resolution
+  `ResolveNames` discarded - is then served. Not reproduced; the cross-head
+  form of the same window, run by
+  `CatalogNameRigTest.AStatementHeadThatRevalidatedBeforeARollbackDoesNotBindItsRelation`
+  with the head's reading removed, answered
+  `ERR no sys.tables row for this oid`: a refusal with a wrong
+  reason, not a wrong row, because oids are never reissued and a reclaim is
+  gated on the statement epoch. The full close is `ViewFor` taking the fast
+  path only while `Catalog::MemoIsCurrent()` holds. It went red on
+  `InRunReclaimTest.ABindPastAGateDefectIsRefusedByTheRootCheck`, which
+  binds through a stale memo to reach BF-R10's root check, so taking it
+  needs that cell to reach the check another way. Owner:
+  `docs/spec/ddl-transactional.md` §4.
+
 ## Page reclamation
 
 What BF (`instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md`)

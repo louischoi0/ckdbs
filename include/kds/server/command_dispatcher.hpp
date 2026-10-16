@@ -1195,7 +1195,9 @@ private:
     // statement, because a filtered lookup deliberately bypasses the
     // shared cache (DT3). That is ddl-transactional.md §6's cache
     // decision, taken: pay for isolation only where isolation is at
-    // stake.
+    // stake. **Or while one was open when the statement head read the
+    // count**, before it revalidated: one that closed since may have left
+    // an entry the head did not drop.
     std::optional<txn::ReadView> ViewFor(Session& session);
     // `ViewFor`'s minting half, whatever the count says.
     txn::ReadView MintResolveView(Session& session);
@@ -1595,6 +1597,10 @@ public:
     // rule, same atomicity. The load session synthesizes an InsertStmt per
     // chunk and calls this.
     DispatchOutcome ExecuteInsert(const parser::InsertStmt& stmt, Session& session);
+    // The load's bind (`C_LOAD_BEGIN`): `name` resolved under `session`'s view
+    // through `ResolveNames`, so a relation the session cannot see is not
+    // answered READY.
+    StatusOr<catalog::Oid> ResolveRelationName(Session& session, std::string_view name);
 
     // For the sibling platform layers (the KWP load endpoint's schema
     // reads). The catalog's own discipline applies unchanged.
@@ -2533,6 +2539,9 @@ private:
     PageReclaimer* reclaim_queue_ = nullptr;
     // Statement heads open on this core: only the outermost publishes.
     int epoch_depth_ = 0;
+    // Whether a DDL was open anywhere when the last statement head read the
+    // count, before it revalidated (`ViewFor`).
+    bool ddl_open_at_head_ = false;
     EpochSeam epoch_seam_at_ = EpochSeam::kBeforePublish;
     std::function<void()> epoch_seam_for_test_;
     std::function<void()> before_drop_exclusive_for_test_;

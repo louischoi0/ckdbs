@@ -119,9 +119,12 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
 // As above, but a drop **delete-marks** its `sys.indexes` row rather than
 // retiring it when transactional, so a rollback clears the mark. Unlike
 // `DROP TABLE` this is isolated too - there is no in-place retype here
-// (ddl-transactional.md §5a).
+// (ddl-transactional.md §5a). The name is resolved under `view`, as
+// `CreateIndex` resolves its relation: an index another transaction has not
+// committed is not found.
 StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
                                   std::uint64_t trx_id = catalog::kBootstrapXid,
-                                  catalog::CatalogRowChange* change = nullptr);
+                                  catalog::CatalogRowChange* change = nullptr,
+                                  const txn::ReadView* view = nullptr);
 
 }  // namespace kds::exec

@@ -887,6 +887,12 @@ CommandDispatcher::StatementEpochScope::StatementEpochScope(CommandDispatcher& d
         if (d_.epoch_seam_for_test_ && d_.epoch_seam_at_ == at) d_.epoch_seam_for_test_();
     };
     if (outermost && d_.epochs_ != nullptr) d_.epochs_->Enter(d_.core_id_);
+    // **The count before the word** (`ViewFor`): a closing DDL moves the word
+    // and then uncounts, so a head that read the word before the move and the
+    // count after the uncount would keep a cache filled while the DDL was
+    // open and still take the fast path. Read first, a count of zero means
+    // the word read below is past every move a closed DDL made.
+    d_.ddl_open_at_head_ = d_.txn_ != nullptr && d_.txn_->visibility().AnyDdlOpen();
     d_.catalog_.Revalidate(d_.epoch_seam_for_test_
                                ? std::function<void()>([&] { seam(EpochSeam::kAfterRead); })
                                : std::function<void()>{});
@@ -2204,14 +2210,16 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         //
         // A name that does not resolve takes no borrow: a create is refused
         // below, a drop falls through to the refusal `exec::DropIndex` owns,
-        // with its byte position. **An index name is read with no view**
-        // (`FindIndexByName` takes none), so a drop can find an index another
-        // transaction has not committed (`names-resolved-with-no-view.md`).
+        // with its byte position. An index name is a resolution route like a
+        // relation's: an index another transaction's open `CREATE INDEX`
+        // wrote is not found, so no drop delete-marks a row nobody decided.
         std::optional<catalog::Oid> relation;
         if (stmt.drop) {
-            if (auto ix = catalog_.FindIndexByName(stmt.index_name); ix.ok()) {
-                relation = ix.value().table_oid;
-            }
+            relation = ResolveNames(session, [&](const txn::ReadView* v) {
+                auto ix = catalog_.FindIndexByName(stmt.index_name, v);
+                return ix.ok() ? std::optional<catalog::Oid>(ix.value().table_oid)
+                               : std::nullopt;
+            });
         } else {
             relation = ResolveNames(session, [&](const txn::ReadView* v) {
                 auto oid = catalog_.FindTableOidByName(stmt.table_name, v);
@@ -2241,8 +2249,18 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             // against whichever way the drop went.
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
+            // Asked again under the `X`, at latest state with this drop's own
+            // id: another transaction's open create is still not found, this
+            // transaction's own is, and a drop that committed during the wait
+            // reads as gone. The statement's view would be older than the
+            // wait and answer "being dropped" about a drop already committed.
+            std::optional<txn::ReadView> drop_view;
+            if (txn_ != nullptr) {
+                drop_view = txn_->MintCheckView(ddl.txn != nullptr ? ddl.trx_id : txn::kNoTrxId);
+            }
             auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
-                                             ddl.txn != nullptr ? &change : nullptr);
+                                             ddl.txn != nullptr ? &change : nullptr,
+                                             drop_view.has_value() ? &*drop_view : nullptr);
             if (ddl.txn != nullptr && change.page_id != kInvalidPageId) {
                 txn_->NoteDeleteMark(*ddl.txn, static_cast<std::uint32_t>(change.rel_oid),
                                      change.page_id, change.slot, change.oid,
@@ -2363,7 +2381,13 @@ DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt) {
         return {os.str(), false};
     }
 
-    auto result = exec::CreateCabin(catalog_, page_store_, wal_, stmt);
+    // Committed now, not the session's view: the row is written with no
+    // transaction and outlives a rollback, so even the session's own
+    // uncommitted relation is one it must not name.
+    std::optional<txn::ReadView> committed;
+    if (txn_ != nullptr) committed = txn_->MintCheckView(txn::kNoTrxId);
+    auto result = exec::CreateCabin(catalog_, page_store_, wal_, stmt,
+                                    committed.has_value() ? &*committed : nullptr);
     if (!result.ok()) {
         return {ErrorReply(result.status()), false, 0, result.status()};
     }
@@ -5102,6 +5126,13 @@ std::optional<DispatchOutcome> CommandDispatcher::ArchiveRefusal() const {
     return DispatchOutcome{ErrorReply(s), false, 0, s};
 }
 
+StatusOr<catalog::Oid> CommandDispatcher::ResolveRelationName(Session& session,
+                                                              std::string_view name) {
+    return ResolveNames(session, [&](const txn::ReadView* v) {
+        return catalog_.FindTableOidByName(name, v);
+    });
+}
+
 DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
                                                  Session& session) {
     // The KWP load stream comes in here, past `DispatchInner`'s gate.
@@ -6651,8 +6682,12 @@ Status CommandDispatcher::EnsureStatementBoundary(Session& session) {
 std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
     // The fast path, and the one nearly every statement takes. **The
     // instance's count, not this core's `ddl_txns_`**: a DDL open on
-    // another core writes rows this core's unfiltered read would bind.
-    if (txn_ == nullptr || !txn_->visibility().AnyDdlOpen()) return std::nullopt;
+    // another core writes rows this core's unfiltered read would bind. And the
+    // count the statement head read before it revalidated: a DDL open then
+    // may have closed since, leaving a cache this head did not drop.
+    if (txn_ == nullptr || (!ddl_open_at_head_ && !txn_->visibility().AnyDdlOpen())) {
+        return std::nullopt;
+    }
     return MintResolveView(session);
 }
 

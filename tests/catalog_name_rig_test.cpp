@@ -400,5 +400,102 @@ TEST(CatalogNameRigTest, ARolledBackCreateWasNeverVisibleToAnotherCore) {
     EXPECT_EQ(RelationsNamed(*rig, "t"), 0);
 }
 
+// ---- `names-resolved-with-no-view.md`'s routes ------------------------------
+
+TEST(CatalogNameRigTest, ADropIndexDoesNotFindAnotherCoresUncommittedIndex) {
+    // `FindIndexByName` read with no view, so core 1's drop found `ix` and
+    // asked for `t`'s `X`. The open create holds it, so the drop waited out
+    // the fault net and answered `TXN_CONFLICT` about an index it cannot see,
+    // where the name does not resolve. Red so with the views removed.
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    ASSERT_TRUE(
+        StartsWith(d0.Dispatch("CREATE INDEX ix ON t (v)", &ddl).response, "CREATED INDEX"));
+
+    const std::string dropped = d1.Dispatch("DROP INDEX ix").response;
+    EXPECT_NE(dropped.find("no index named 'ix'"), std::string::npos) << dropped;
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("COMMIT", &ddl).response, "COMMIT"));
+    EXPECT_TRUE(rig->core(0).catalog().FindIndexByName("ix").ok()) << "the drop took the index";
+}
+
+TEST(CatalogNameRigTest, ACabinIsNotCreatedOnAnotherCoresUncommittedRelation) {
+    // `CREATE CABIN` resolved unfiltered with no transaction: its row named
+    // `t`'s oid, and outlived the rollback that removed `t`.
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)", &ddl).response,
+                           "CREATED"));
+
+    const std::string made = d1.Dispatch("CREATE CABIN ON t(v)").response;
+    EXPECT_NE(made.find("no relation named 't'"), std::string::npos) << made;
+    // Committed now, so not even the creating session's own relation.
+    const std::string own = d0.Dispatch("CREATE CABIN ON t(v)", &ddl).response;
+    EXPECT_NE(own.find("no relation named 't'"), std::string::npos) << own;
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+    auto cabins = rig->core(0).catalog().ListCabins();
+    ASSERT_TRUE(cabins.ok()) << cabins.status().message();
+    EXPECT_TRUE(cabins.value().empty()) << "a sys.cabins row names a rolled-back relation";
+}
+
+TEST(CatalogNameRigTest, ALoadBindDoesNotResolveAnotherCoresUncommittedRelation) {
+    // `C_LOAD_BEGIN`'s bind (`KwpLoadServer::HandleLoadBegin`) resolved
+    // unfiltered and answered READY for a relation the session cannot see.
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)", &ddl).response,
+                           "CREATED"));
+
+    Session loader;
+    EXPECT_EQ(d1.ResolveRelationName(loader, "t").status().code(), StatusCode::kNotFound);
+    EXPECT_TRUE(d0.ResolveRelationName(ddl, "t").ok()) << "the creator sees its own relation";
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("COMMIT", &ddl).response, "COMMIT"));
+    EXPECT_TRUE(d1.ResolveRelationName(loader, "t").ok());
+}
+
+TEST(CatalogNameRigTest, AStatementHeadThatRevalidatedBeforeARollbackDoesNotBindItsRelation) {
+    // **The cache window.** Core 1 fills its cache with `t` while core 0's
+    // create is open (the duplicate check reads unfiltered). Its next
+    // statement head reads the schema word; core 0's rollback then moves the
+    // word and uncounts. Read after the head, the count says no DDL is open,
+    // and the fast path hit the cached oid the rollback removed.
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)", &ddl).response,
+                           "CREATED"));
+    ASSERT_TRUE(StartsWith(d1.Dispatch("CREATE TABLE t (id int64, w int64)").response, "EXISTS"));
+
+    bool fired = false;
+    d1.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterRead, [&] {
+        if (fired) return;
+        fired = true;
+        ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+    });
+    const std::string read = d1.Dispatch("SELECT * FROM t").response;
+    d1.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterRead, nullptr);
+    ASSERT_TRUE(fired);
+    EXPECT_EQ(read, "ERR no table with this name");
+    EXPECT_EQ(RelationsNamed(*rig, "t"), 0);
+}
+
 }  // namespace
 }  // namespace kds::server

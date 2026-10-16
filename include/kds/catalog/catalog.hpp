@@ -1211,7 +1211,10 @@ public:
     // whatever is on the page.
     StatusOr<std::vector<SysIndexRow>> ListIndexes(const txn::ReadView* view = nullptr);
     StatusOr<std::vector<SysIndexRow>> FindIndexesForTable(Oid table_oid);
-    StatusOr<SysIndexRow> FindIndexByName(std::string_view name);
+    // `view` as on `ListIndexes`: `DROP INDEX` resolves a name, so it must
+    // not find an index another transaction's open `CREATE INDEX` wrote.
+    StatusOr<SysIndexRow> FindIndexByName(std::string_view name,
+                                          const txn::ReadView* view = nullptr);
 
     // An index whose **leading** key column is `col_pos`.
     //

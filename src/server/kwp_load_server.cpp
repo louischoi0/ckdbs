@@ -381,7 +381,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // so it publishes this core's epoch and revalidates the catalog itself.
     const CommandDispatcher::StatementEpochScope epoch(*dispatcher_);
     auto& catalog = dispatcher_->catalog();
-    auto oid = catalog.FindTableOidByName(begin.value().relation);
+    auto oid = dispatcher_->ResolveRelationName(conn.session, begin.value().relation);
     if (!oid.ok()) {
         SendError(conn, oid.status());
         return;
