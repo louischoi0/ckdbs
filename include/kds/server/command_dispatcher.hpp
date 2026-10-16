@@ -1502,6 +1502,9 @@ private:
     // needed. Never called from an execute path - resolving a name during
     // execution is what parser-v2.md I11 forbids.
     std::string RelationNameOf(catalog::Oid oid);
+    // The SQL spelling of a relation's namespace for a catalog view's
+    // `namespace` column, NULL for a relation no longer listed.
+    parser::AstValue NamespaceOf(catalog::Oid rel_oid);
 
     DispatchOutcome HandleInsert(std::string_view line, Session& session);
 

@@ -1428,6 +1428,15 @@ column is a `uint64` and every other a `varchar`, so `name = 5`, `oid =
 'x'`, a negative literal and one past 2^64 - 1 are each refused with the
 literal's byte, before any row is read.
 
+**A view that names a relation names its namespace beside it**, because a
+relation's name is unique only within its namespace: `namespace` next to the
+relation's name in `sys.tables`, `sys.objects`, `sys.columns` (so
+`DESCRIBE`), `sys.indexes`, `sys.access_stats`, `sys.relation_stats`,
+`sys.cabins`, `sys.assertions`, `sys.transitions`, `sys.relayout` and
+`sys.cabin_optimizer`, and `child_namespace` / `parent_namespace` in
+`sys.fkeys`. Each is the SQL spelling (`sys`, `public`, or the name a
+`CREATE NAMESPACE` gave), and NULL where the relation's name is.
+
 There is also a legacy non-SQL form: `CREATE TABLE <name>` with **no column
 list** routes to a pre-SQL handler (the dispatcher routes on the presence
 of `(`). It answers `EXISTS oid=<n>` if the name is taken; otherwise the

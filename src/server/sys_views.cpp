@@ -212,10 +212,24 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
 
 // ---- The catalog's own relations ------------------------------------------
 
+parser::AstValue CommandDispatcher::NamespaceOf(catalog::Oid rel_oid) {
+    // A relation's namespace beside its name, which since namespace.md NS6
+    // is the pair that names it. Unfiltered, as `RelationNameOf`: a label
+    // for an oid the caller already holds; NULL for a relation gone, as its
+    // name is (`RelName`).
+    if (auto tables = catalog_.ListTables(); tables.ok()) {
+        for (const catalog::SysObjectRow& obj : tables.value()) {
+            if (obj.oid == rel_oid) return Str(catalog_.NamespaceSpelling(obj.namespace_oid));
+        }
+    }
+    return Null();
+}
+
 StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* view_of) {
     exec::CatalogView view;
     Define(view, {{"oid", kInt},
                   {"namespace_oid", kInt},
+                  {"namespace", kStr},
                   {"name", kStr},
                   {"desc_page_id", kInt},
                   {"root_page_id", kInt},
@@ -244,6 +258,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* v
                          access.value()->layout.vacant_slot_bit_begin;
         }
         view.rows.push_back({Int(row.value().oid), Int(row.value().namespace_oid),
+                             Str(catalog_.NamespaceSpelling(row.value().namespace_oid, view_of)),
                              Str(catalog::NameView(row.value().name)),
                              Int(row.value().desc_page_id), Int(root.value()),
                              Str(ClusteredName(row.value().clustered_type)),
@@ -272,6 +287,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ObjectsView(const txn::ReadView* 
     exec::CatalogView view;
     Define(view, {{"oid", kInt},
                   {"namespace_oid", kInt},
+                  {"namespace", kStr},
                   {"type_oid", kInt},
                   {"rel_id", kInt},
                   {"name", kStr}});
@@ -281,8 +297,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::ObjectsView(const txn::ReadView* 
     auto objects = catalog_.ListTables(view_of);
     if (!objects.ok()) return objects.status();
     for (const catalog::SysObjectRow& object : objects.value()) {
-        view.rows.push_back({Int(object.oid), Int(object.namespace_oid), Int(object.type_oid),
-                             Int(object.pending_roots), Str(catalog::NameView(object.name))});
+        view.rows.push_back({Int(object.oid), Int(object.namespace_oid),
+                             Str(catalog_.NamespaceSpelling(object.namespace_oid, view_of)),
+                             Int(object.type_oid), Int(object.pending_roots),
+                             Str(catalog::NameView(object.name))});
     }
     return view;
 }
@@ -292,6 +310,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
                                                            catalog::Oid default_namespace) {
     exec::CatalogView view;
     Define(view, {{"rel_id", kInt},
+                  {"namespace", kStr},
                   {"rel_name", kStr},
                   {"pos", kInt},
                   {"name", kStr},
@@ -332,6 +351,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
         }
         auto access = catalog_.InitTableAccess(object.oid);
         const std::string rel(catalog::NameView(object.name));
+        const std::string ns = catalog_.NamespaceSpelling(object.namespace_oid, view_of);
         for (std::size_t i = 0; i < schema.value().columns.size(); ++i) {
             const catalog::SysColumnRow& column = schema.value().columns[i];
             // `sys.columns` and `DESCRIBE` list live columns (BW-R6, BW-R12).
@@ -358,7 +378,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
                     }
                 }
             }
-            view.rows.push_back({Int(column.rel_id), Str(rel), Int(column.pos),
+            view.rows.push_back({Int(column.rel_id), Str(ns), Str(rel), Int(column.pos),
                                  Str(catalog::NameView(column.name)), Int(column.type_val),
                                  Str(catalog::ColumnTypeText(column, base)),
                                  Bool(column.notnull), Bool(tuple_key), std::move(cabin),
@@ -434,6 +454,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
     Define(view, {{"index_oid", kInt},
                   {"name", kStr},
                   {"rel_oid", kInt},
+                  {"namespace", kStr},
                   {"rel_name", kStr},
                   {"keys", kStr},
                   {"covering", kStr},
@@ -473,7 +494,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
         auto entries = index::IndexEntryCount(page_store_, root, layout);
         view.rows.push_back(
             {Int(row.index_oid), Str(catalog::NameView(row.name)), Int(row.table_oid),
-             RelName(RelationNameOf(row.table_oid)), Str(columns(row.key_cols.data(), row.nkeys)),
+             NamespaceOf(row.table_oid), RelName(RelationNameOf(row.table_oid)), Str(columns(row.key_cols.data(), row.nkeys)),
              row.ncovered == 0 ? Null() : Str(columns(row.covered_cols.data(), row.ncovered)),
              Int(root), Int(row.key_width),
              Int(row.entry_width), height.ok() ? Int(height.value()) : Null(),
@@ -486,8 +507,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
 StatusOr<exec::CatalogView> CommandDispatcher::FkeysView(const txn::ReadView* view_of) {
     exec::CatalogView view;
     Define(view, {{"fk_id", kInt},
+                  {"child_namespace", kStr},
                   {"child", kStr},
                   {"column", kStr},
+                  {"parent_namespace", kStr},
                   {"parent", kStr},
                   {"action", kStr},
                   {"nullable", kInt}});
@@ -503,8 +526,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::FkeysView(const txn::ReadView* vi
             [&](const catalog::SysObjectRow& obj) { return obj.oid == row.child_rel_oid; });
         if (!seen) continue;
         auto child = catalog_.InitTableAccess(row.child_rel_oid);
-        view.rows.push_back({Int(row.fk_id), RelName(RelationNameOf(row.child_rel_oid)),
+        view.rows.push_back({Int(row.fk_id), NamespaceOf(row.child_rel_oid),
+                             RelName(RelationNameOf(row.child_rel_oid)),
                              Str(ColumnLabel(child, row.child_column_no)),
+                             NamespaceOf(row.parent_rel_oid),
                              RelName(RelationNameOf(row.parent_rel_oid)), Str("RESTRICT"),
                              Bool((row.flags & catalog::kFkNullable) != 0)});
     }
@@ -516,6 +541,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::FkeysView(const txn::ReadView* vi
 StatusOr<exec::CatalogView> CommandDispatcher::AccessStatsView() {
     exec::CatalogView view;
     Define(view, {{"rel_oid", kInt},
+                  {"namespace", kStr},
                   {"rel_name", kStr},
                   {"kind", kStr},
                   {"columns", kStr},
@@ -533,7 +559,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::AccessStatsView() {
             if (!columns.empty()) columns += ',';
             columns += ColumnLabel(access, col);
         }
-        view.rows.push_back({Int(row.rel_id), RelName(RelationNameOf(row.rel_id)),
+        view.rows.push_back({Int(row.rel_id), NamespaceOf(row.rel_id),
+                             RelName(RelationNameOf(row.rel_id)),
                              Str(kind.has_value() ? exec::AccessKindName(*kind) : "?"),
                              Str(std::move(columns)), Int(row.column_mask), Int(row.use_count),
                              Int(row.last_seen)});
@@ -546,6 +573,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
     // The budget columns are exact, derived at read through `BudgetOf`; the
     // shape columns walk the clustered tree, as `DESCRIBE` did.
     Define(view, {{"oid", kInt},
+                  {"namespace", kStr},
                   {"name", kStr},
                   {"next_id", kInt},
                   {"ids_issued", kInt},
@@ -577,7 +605,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
         // double's product can land a unit either side of the floor.
         const auto used_ppm = static_cast<std::uint64_t>(
             static_cast<unsigned __int128>(budget.issued) * 1'000'000 / budget.capacity);
-        view.rows.push_back({Int(obj.oid), Str(catalog::NameView(obj.name)),
+        view.rows.push_back({Int(obj.oid), Str(catalog_.NamespaceSpelling(obj.namespace_oid)),
+                             Str(catalog::NameView(obj.name)),
                              Int(row.value().next_id), Int(budget.issued), Int(budget.remaining),
                              Int(used_ppm), Bool(budget.warn), Bool(budget.exhausted),
                              std::move(height), std::move(leaves)});
@@ -591,6 +620,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinsView() {
     // (`cabins = off`): unknown, not zero.
     Define(view, {{"cabin_id", kInt},
                   {"rel_oid", kInt},
+                  {"namespace", kStr},
                   {"rel_name", kStr},
                   {"column", kStr},
                   {"origin", kStr},
@@ -622,6 +652,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinsView() {
         std::vector<parser::AstValue> out{
             Int(row.cabin_id),
             Int(row.rel_oid),
+            NamespaceOf(row.rel_oid),
             RelName(RelationNameOf(row.rel_oid)),
             column_label,
             Str(row.origin == catalog::kCabinOriginUser ? "user" : "auto"),
@@ -651,6 +682,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::AssertionsView() {
     Define(view, {{"assertion_id", kInt},
                   {"name", kStr},
                   {"rel_oid", kInt},
+                  {"namespace", kStr},
                   {"rel_name", kStr},
                   {"enforcing", kInt},
                   {"checks", kInt},
@@ -662,7 +694,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::AssertionsView() {
     if (!rows.ok()) return rows.status();
     for (const exec::AssertionDef& def : rows.value()) {
         std::vector<parser::AstValue> out{
-            Int(def.id), Str(def.name), Int(def.target_oid), RelName(RelationNameOf(def.target_oid)),
+            Int(def.id), Str(def.name), Int(def.target_oid), NamespaceOf(def.target_oid),
+            RelName(RelationNameOf(def.target_oid)),
             // Enforced when it has a directory and the registry holds it
             // (`assertion.md` §6.1, §8.1).
             Bool(def.cabin_root != kInvalidPageId && enforcer_->Holds(def.id))};
@@ -691,6 +724,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::TransitionsView() {
     Define(view, {{"transition_id", kInt},
                   {"name", kStr},
                   {"rel_oid", kInt},
+                  {"namespace", kStr},
                   {"rel_name", kStr},
                   {"column_no", kInt},
                   {"column", kStr},
@@ -700,7 +734,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::TransitionsView() {
     for (const exec::TransitionDef& def : rows.value()) {
         auto access = catalog_.InitTableAccess(def.target_oid);
         view.rows.push_back({Int(def.id), Str(def.name), Int(def.target_oid),
-                             RelName(RelationNameOf(def.target_oid)), Int(def.column_no),
+                             NamespaceOf(def.target_oid), RelName(RelationNameOf(def.target_oid)),
+                             Int(def.column_no),
                              Str(ColumnLabel(access, def.column_no)), Str(def.source_text)});
     }
     return view;
@@ -720,7 +755,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelayoutView(const parser::AstVal
     // says why. The survey columns are NULL where no survey ran - a bare read
     // plans every relation without walking any (`PlanAllRelations`); naming
     // one walks it (`PlanRelation`), as `SHOW RELAYOUT <t>` did.
-    Define(view, {{"name", kStr},
+    Define(view, {{"namespace", kStr},
+                  {"name", kStr},
                   {"clustered", kStr},
                   {"shapes", kInt},
                   {"walk_weight_q8", kInt},
@@ -759,7 +795,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelayoutView(const parser::AstVal
 
     for (const stats::RelationReport& report : reports) {
         std::vector<parser::AstValue> head{
-            Str(report.name),
+            NamespaceOf(report.rel_oid), Str(report.name),
             Str(report.clustered_type == catalog::ClusteredType::kBtree ? "btree" : "heap"),
             Int(report.shapes.size()), Int(stats::WalkWeightOf(report.shapes))};
         if (report.survey.has_value()) {
@@ -805,6 +841,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinOptimizerView(std::uint32_t 
     // One row per managed entry. The controller's and executor's own
     // counters are `sys.meta` fields (`cabin_optimizer_*`).
     Define(view, {{"rel_oid", kInt},
+                  {"namespace", kStr},
                   {"rel_name", kStr},
                   {"column", kStr},
                   {"state", kStr},
@@ -822,7 +859,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinOptimizerView(std::uint32_t 
     for (const stats::ManagedEntryView& entry : cabin_controller_->ManagedEntries()) {
         auto access = catalog_.InitTableAccess(entry.rel_oid);
         std::vector<parser::AstValue> row{
-            Int(entry.rel_oid),      RelName(RelationNameOf(entry.rel_oid)),
+            Int(entry.rel_oid),      NamespaceOf(entry.rel_oid),
+            RelName(RelationNameOf(entry.rel_oid)),
             Str(ColumnLabel(access, entry.col_pos)), Str(entry.state),
             Int(entry.cabin_id),     Int(entry.pages),
             Int(entry.confirm_streak), Int(entry.benefit),

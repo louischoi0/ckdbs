@@ -172,6 +172,11 @@ drop holds its name in that namespace only.
 A namespace's own name, an index's, an assertion's, a Transition's and a
 Cabin's stay **instance-wide**: only relation names are scoped.
 
+**Every catalog view that names a relation names its namespace beside it**
+(a `namespace` column, `child_namespace` / `parent_namespace` in
+`sys.fkeys`), as the SQL spelling: a name alone no longer identifies a
+relation to a reader of the catalog. `manual/sql/sql.md` §6 lists them.
+
 ## NS7 — DDL surface
 
 - `CREATE NAMESPACE <name>` — allocates an oid, writes one `sys.objects`

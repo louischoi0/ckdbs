@@ -1469,6 +1469,42 @@ TEST_F(CommandDispatcherTest, AnUnqualifiedCreateLandsInTheSessionsNamespace) {
     EXPECT_NE(d.Dispatch("SELECT amt FROM public.other").response.find("20"), std::string::npos);
 }
 
+TEST_F(CommandDispatcherTest, EveryViewNamingARelationNamesItsNamespace) {
+    // Since NS6 a relation is named by (namespace, name), so a view that
+    // lists a relation by name lists its namespace beside it.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE NAMESPACE ledger").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, v int64)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE ledger.t (id int64, p int64 REFERENCES public.t)")
+                  .response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE INDEX ix ON ledger.t(p)").response.substr(0, 7), "CREATED");
+
+    const auto tables = testing_view::ReadViewText(
+        d.Dispatch("SELECT namespace, name FROM sys.tables WHERE name = 't'").response);
+    EXPECT_EQ(tables.Column("namespace"), (std::vector<std::string>{"public", "ledger"}));
+    const auto objects = testing_view::ReadViewText(
+        d.Dispatch("SELECT namespace FROM sys.objects WHERE name = 'objects'").response);
+    EXPECT_EQ(objects.Column("namespace"), (std::vector<std::string>{"sys"}));
+
+    const auto columns =
+        testing_view::ReadViewText(d.Dispatch("SELECT * FROM sys.columns WHERE rel_name = 'ledger.t'")
+                                       .response);
+    EXPECT_EQ(columns.Column("namespace"), (std::vector<std::string>{"ledger", "ledger"}));
+    EXPECT_EQ(testing_view::ReadViewText(d.Dispatch("DESCRIBE t").response).Column("namespace"),
+              (std::vector<std::string>{"public", "public"}));
+
+    const auto indexes = testing_view::ReadViewText(d.Dispatch("SELECT * FROM sys.indexes").response);
+    EXPECT_EQ(indexes.Find("name", "ix", "namespace"), "ledger");
+    const auto fkeys = testing_view::ReadViewText(d.Dispatch("SELECT * FROM sys.fkeys").response);
+    EXPECT_EQ(fkeys.Column("child_namespace"), (std::vector<std::string>{"ledger"}));
+    EXPECT_EQ(fkeys.Column("parent_namespace"), (std::vector<std::string>{"public"}));
+
+    const auto stats = testing_view::ReadViewText(
+        d.Dispatch("SELECT namespace, name FROM sys.relation_stats WHERE name = 't'").response);
+    EXPECT_EQ(stats.Column("namespace"), (std::vector<std::string>{"public", "ledger"}));
+}
+
 TEST_F(CommandDispatcherTest, UseRefusesWhatCannotBeASessionsNamespace) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto missing = d.Dispatch("USE ordrs");
