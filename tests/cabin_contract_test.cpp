@@ -307,9 +307,9 @@ TEST(CabinContractTest, CorruptedLocationHintsChangeNoReply) {
     // Reach into the store's entry sets directly. There is no statement that
     // corrupts a Cabin - which is the point - so the test does what a bug
     // would do.
-    auto b_oid = db.catalog().FindTableOidByName("b");
+    auto b_oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "b");
     ASSERT_TRUE(b_oid.ok());
-    auto h_oid = db.catalog().FindTableOidByName("h");
+    auto h_oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "h");
     ASSERT_TRUE(h_oid.ok());
 
     std::size_t poisoned = 0;
@@ -369,9 +369,9 @@ TEST(CabinContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
     // The heal is stamped, not inferred: every surviving hint now carries
     // the bumped epoch, on the btree relation (healed in place) and the
     // heap one (re-recorded from the walk) alike.
-    auto b_oid = db.catalog().FindTableOidByName("b");
+    auto b_oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "b");
     ASSERT_TRUE(b_oid.ok());
-    auto h_oid = db.catalog().FindTableOidByName("h");
+    auto h_oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "h");
     ASSERT_TRUE(h_oid.ok());
     std::size_t checked = 0;
     for (const catalog::Oid oid : {b_oid.value(), h_oid.value()}) {
@@ -408,7 +408,7 @@ TEST(CabinContractTest, DanglingTupleKeysChangeNoReply) {
     DeclareCabins(db);
     std::vector<std::string> replies = RunAll(db, 3);
 
-    auto b_oid = db.catalog().FindTableOidByName("b");
+    auto b_oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "b");
     ASSERT_TRUE(b_oid.ok());
     auto access = db.catalog().InitTableAccess(b_oid.value());
     ASSERT_TRUE(access.ok());
@@ -507,7 +507,7 @@ TEST(CabinContractTest, AnUpdateThatDoesNotTouchTheKeyColumnAppendsNothing) {
     // Observe 'aaa' (declared, so one execution is enough).
     ASSERT_EQ(db.Run("SELECT * FROM b WHERE sym = 'aaa'").substr(0, 2), "id");
 
-    auto oid = db.catalog().FindTableOidByName("b");
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "b");
     ASSERT_TRUE(oid.ok());
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -557,7 +557,7 @@ TEST(CabinContractTest, AQuotaStoppedWalkCommitsNoObservation) {
     // ...and observed nothing: no entry set exists for the value, even
     // though the cabin is declared (n = 1) and the walk it stopped was
     // recording.
-    auto oid = db.catalog().FindTableOidByName("h");
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "h");
     ASSERT_TRUE(oid.ok());
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -832,7 +832,7 @@ TEST(CabinContractTest, ANamedKeyBelowTheMarkIsWitnessedAndADuplicateIsNot) {
     EXPECT_EQ(db.Run(sql), want) << "the recording walk";
     EXPECT_EQ(db.Run(sql), want) << "the served execution";
 
-    auto oid = db.catalog().FindTableOidByName("e");
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "e");
     ASSERT_TRUE(oid.ok());
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -897,7 +897,7 @@ TEST(CabinContractTest, ACorrelatedExistsConvergesToObservedSets) {
     // The witness: after the second execution the probed values are
     // observed sets, not eternal misses - the completed-through-stop walk
     // is what lets each commit.
-    auto oid = db.catalog().FindTableOidByName("h", nullptr);
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "h", nullptr);
     ASSERT_TRUE(oid.ok());
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -1036,7 +1036,7 @@ TEST(CabinContractTest, ANeverRepeatingKeyObservesNothing) {
         "WHERE x.id BETWEEN 4 AND 4";
     EXPECT_EQ(db.Run(q), ref.Run(q));
 
-    auto oid = db.catalog().FindTableOidByName("h", nullptr);
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "h", nullptr);
     ASSERT_TRUE(oid.ok());
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -1175,7 +1175,7 @@ TEST(CabinContractTest, AHeapCoversFailedHintBanksNothing) {
         "SELECT * FROM eh WHERE ts BETWEEN '2026-10-01 00:00:00' AND '2026-10-01 23:59:59'";
     ASSERT_EQ(db.Run(day), ref.Run(day));  // observes the day
 
-    auto oid = db.catalog().FindTableOidByName("eh");
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "eh");
     ASSERT_TRUE(oid.ok());
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());

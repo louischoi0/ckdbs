@@ -147,7 +147,7 @@ TEST_F(AssertionCatalogTest, ADeclarationIsRecordedAndReadBackVerbatim) {
     EXPECT_EQ(def.flags, 0u);
     EXPECT_GT(def.id, 0u);
 
-    auto oid = catalog().FindTableOidByName("purchases");
+    auto oid = catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "purchases");
     ASSERT_TRUE(oid.ok());
     EXPECT_EQ(def.target_oid, oid.value());
 }
@@ -196,8 +196,8 @@ TEST_F(AssertionCatalogTest, LookupByNameIsCaseInsensitiveAndLookupByTargetIsExa
     }
     EXPECT_FALSE(FindAssertionByName(catalog(), store_, "nope").value().has_value());
 
-    auto purchases = catalog().FindTableOidByName("purchases");
-    auto other = catalog().FindTableOidByName("other");
+    auto purchases = catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "purchases");
+    auto other = catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "other");
     ASSERT_TRUE(purchases.ok() && other.ok());
 
     auto on_purchases = AssertionsOnRelation(catalog(), store_, purchases.value());
@@ -218,7 +218,7 @@ TEST_F(AssertionCatalogTest, LookupByNameIsCaseInsensitiveAndLookupByTargetIsExa
 // once it is dropped.
 TEST_F(AssertionCatalogTest, TheRestrictPredicateAnswersWhileAnAssertionReferencesTheRelation) {
     CreatePurchases();
-    auto oid = catalog().FindTableOidByName("purchases");
+    auto oid = catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "purchases");
     ASSERT_TRUE(oid.ok());
 
     EXPECT_TRUE(AssertionsOnRelation(catalog(), store_, oid.value()).value().empty());

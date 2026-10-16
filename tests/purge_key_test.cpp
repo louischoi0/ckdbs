@@ -280,17 +280,16 @@ TEST_F(PurgeKeyTest, CensusBAWaystoneReplayLandsWhereAFreshDescentWould) {
 
 // ---- Census D: how `DELETE` refuses a system relation ---------------------
 
-TEST_F(PurgeKeyTest, CensusDADeleteOfASystemRelationIsRefusedOnlyByAccident) {
+TEST_F(PurgeKeyTest, CensusDADeleteOfASystemRelationIsRefusedByDesign) {
     // PU10's second row asked what `DELETE` does with a system relation, so
-    // `PURGE` could do the same. **It refuses nothing by design**: the name
-    // resolves, and `InitTableAccess` fails because a bootstrap relation has
-    // no `sys.columns` rows (`catalog.cpp`'s `"no columns for this rel_id"`).
-    // That is not a refusal to follow, so BH-Q17 gives `PURGE` an explicit
-    // one (`EveryRefusalCarriesItsCodeAndByte` below). This cell pins the
-    // accident, so a change to it is seen.
+    // `PURGE` could do the same. Until the namespace resolution of NS5 it
+    // refused by accident - the name resolved and `InitTableAccess` found no
+    // `sys.columns` rows ("no columns for this rel_id"). `sys` now never
+    // resolves for a statement, so `DELETE` and `PURGE` share one refusal.
     const DispatchOutcome out = d_->Dispatch("DELETE FROM sys.tables WHERE id = 1");
-    EXPECT_EQ(out.response, "ERR no columns for this rel_id");
-    EXPECT_EQ(out.status.code(), StatusCode::kNotFound) << out.response;
+    EXPECT_EQ(out.status.code(), StatusCode::kUnsupported) << out.response;
+    EXPECT_NE(out.response.find("is a catalog relation"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("(byte 12)"), std::string::npos) << out.response;
 }
 
 // ---- The statement ---------------------------------------------------------
@@ -391,7 +390,7 @@ TEST_F(PurgeKeyTest, APartlyPurgedLeafTakesKeysBelowItsLastOneDescending) {
     }
     Ok(load, "INSERTED");
     // The second leaf's keys, read off the tree: `[low, high]`.
-    auto oid = boot_->catalog.FindTableOidByName("t");
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok());
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -464,7 +463,8 @@ TEST_F(PurgeKeyTest, EveryRefusalCarriesItsCodeAndByte) {
         std::uint32_t byte;
     };
     const Case cases[] = {
-        {"PURGE FROM tables WHERE id = 1", StatusCode::kUnsupported, 11},
+        // A bare catalog name is no relation of the session's namespace (NS5).
+        {"PURGE FROM tables WHERE id = 1", StatusCode::kNotFound, 11},
         {"PURGE FROM sys.tables WHERE id = 1", StatusCode::kUnsupported, 11},
         {"PURGE FROM h WHERE id = 1", StatusCode::kUnsupported, 11},
         {"PURGE FROM t", StatusCode::kNotImplemented, 12},
@@ -503,7 +503,7 @@ TEST_F(PurgeKeyTest, ARefusalWhileWritingKeepsTheKeysItPurgedAndSaysHowMany) {
         Ok("INSERT INTO t VALUES (" + std::to_string(id) + ", '" + spilled + "')", "INSERTED");
         Ok("DELETE FROM t WHERE id = " + std::to_string(id), "DELETED 1");
     }
-    auto oid = boot_->catalog.FindTableOidByName("t");
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok());
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());

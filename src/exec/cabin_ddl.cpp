@@ -20,19 +20,11 @@ struct Resolved {
     std::uint16_t col_pos = 0;
 };
 
-StatusOr<Resolved> ResolveRelation(catalog::Catalog& catalog, const parser::CabinStmt& stmt) {
-    auto oid = catalog.FindTableOidByName(stmt.table_name);
-    if (!oid.ok()) {
-        return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
-                                std::to_string(stmt.byte_offset) + ")");
-    }
-    // AF-T3: `ns.t` asserts where the relation lives, and a wrong assertion
-    // is refused rather than absorbed.
-    if (Status s = catalog.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
-                                                  stmt.byte_offset);
-        !s.ok()) {
-        return s;
-    }
+StatusOr<Resolved> ResolveRelation(catalog::Catalog& catalog, const parser::CabinStmt& stmt,
+                                   catalog::Oid default_namespace) {
+    auto oid = catalog.ResolveRelation(stmt.schema, stmt.table_name, default_namespace,
+                                       stmt.byte_offset);
+    if (!oid.ok()) return oid.status();
 
     auto access = catalog.InitTableAccess(oid.value());
     if (!access.ok()) return access.status();
@@ -42,8 +34,9 @@ StatusOr<Resolved> ResolveRelation(catalog::Catalog& catalog, const parser::Cabi
     return out;
 }
 
-StatusOr<Resolved> Resolve(catalog::Catalog& catalog, const parser::CabinStmt& stmt) {
-    auto relation = ResolveRelation(catalog, stmt);
+StatusOr<Resolved> Resolve(catalog::Catalog& catalog, const parser::CabinStmt& stmt,
+                           catalog::Oid default_namespace) {
+    auto relation = ResolveRelation(catalog, stmt, default_namespace);
     if (!relation.ok()) return relation.status();
     const catalog::Schema& schema = relation.value().access->schema;
     auto found = schema.FindColumn(stmt.column_name, stmt.column_byte_offset);
@@ -114,8 +107,9 @@ StatusOr<bool> HoldsKey(catalog::Catalog& catalog, storage::PageStore& store,
 }
 
 StatusOr<CabinDdlResult> CreateExprCabin(catalog::Catalog& catalog, storage::PageStore& store,
-                                         wal::WalManager* wal, const parser::CabinStmt& stmt) {
-    auto resolved = ResolveRelation(catalog, stmt);
+                                         wal::WalManager* wal, const parser::CabinStmt& stmt,
+                                         catalog::Oid default_namespace) {
+    auto resolved = ResolveRelation(catalog, stmt, default_namespace);
     if (!resolved.ok()) return resolved.status();
     const catalog::Oid rel_oid = resolved.value().rel_oid;
     auto f = CompileCabinExpr(stmt, resolved.value().access->schema);
@@ -175,9 +169,12 @@ StatusOr<std::optional<std::uint64_t>> FindExprCabin(catalog::Catalog& catalog,
 }  // namespace
 
 StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, storage::PageStore& store,
-                                     wal::WalManager* wal, const parser::CabinStmt& stmt) {
-    if (stmt.shape != catalog::kCabinShapeColumn) return CreateExprCabin(catalog, store, wal, stmt);
-    auto resolved = Resolve(catalog, stmt);
+                                     wal::WalManager* wal, const parser::CabinStmt& stmt,
+                                     catalog::Oid default_namespace) {
+    if (stmt.shape != catalog::kCabinShapeColumn) {
+        return CreateExprCabin(catalog, store, wal, stmt, default_namespace);
+    }
+    auto resolved = Resolve(catalog, stmt, default_namespace);
     if (!resolved.ok()) return resolved.status();
 
     // The tuple key refusal and the duplicate refusal both live in the catalog, and
@@ -215,9 +212,10 @@ StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, storage::PageSto
 }
 
 StatusOr<std::uint64_t> DropCabin(catalog::Catalog& catalog, storage::PageStore& store,
-                                  wal::WalManager* wal, const parser::CabinStmt& stmt) {
+                                  wal::WalManager* wal, const parser::CabinStmt& stmt,
+                                  catalog::Oid default_namespace) {
     if (stmt.shape != catalog::kCabinShapeColumn) {
-        auto relation = ResolveRelation(catalog, stmt);
+        auto relation = ResolveRelation(catalog, stmt, default_namespace);
         if (!relation.ok()) return relation.status();
         auto f = CompileCabinExpr(stmt, relation.value().access->schema);
         if (!f.ok()) return f.status();
@@ -238,7 +236,7 @@ StatusOr<std::uint64_t> DropCabin(catalog::Catalog& catalog, storage::PageStore&
                                 TextName(cabin_id));
         return cabin_id;
     }
-    auto resolved = Resolve(catalog, stmt);
+    auto resolved = Resolve(catalog, stmt, default_namespace);
     if (!resolved.ok()) return resolved.status();
 
     auto row = catalog.FindCabinOnColumn(resolved.value().rel_oid, resolved.value().col_pos);

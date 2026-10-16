@@ -17,7 +17,7 @@ TEST(BootstrapTest, FreshDatabaseCreatesSuperBlockAndCatalog) {
     EXPECT_EQ(result.value().superblock.version(), server::kSuperBlockVersion);
     EXPECT_EQ(result.value().superblock.create_time(), 1000u);
 
-    auto tables_oid = result.value().catalog.FindTableOidByName("tables");
+    auto tables_oid = result.value().catalog.FindTableOidByName(::kds::catalog::kNamespaceSys, "tables");
     ASSERT_TRUE(tables_oid.ok());
     EXPECT_EQ(tables_oid.value(), catalog::kSysTablesTable);
 }
@@ -57,7 +57,7 @@ TEST(BootstrapTest, SecondBootstrapLoadsExistingSuperBlockWithoutReRunningCatalo
     EXPECT_EQ(second.value().superblock.last_mount_time(), 2000u);
 
     // The table created before the second bootstrap call is still there.
-    auto found = second.value().catalog.FindTableOidByName("widgets");
+    auto found = second.value().catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "widgets");
     ASSERT_TRUE(found.ok());
     EXPECT_EQ(found.value(), table_oid.value());
 }

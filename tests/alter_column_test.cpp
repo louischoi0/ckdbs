@@ -133,7 +133,7 @@ TEST_F(AlterColumnTest, AChangedColumnSetRefusesTheShortFormThatWouldShiftValues
 // the shape, it described. Driven through the load's own seam.
 TEST_F(AlterColumnTest, ALoadChunkAgainstAChangedShapeIsRefused) {
     Ok("CREATE TABLE t (id int64, a int64, b int64) SPARE 1");
-    const auto oid = boot_->catalog.FindTableOidByName("t");
+    const auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok());
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -188,7 +188,7 @@ TEST_F(AlterColumnTest, ThePkAnAbsentColumnAndASystemRelationAreRefused) {
     Ok("CREATE TABLE t (id int64, a int32)");
     Refused("ALTER TABLE t DROP COLUMN id", "tuple key");
     Refused("ALTER TABLE t DROP COLUMN zz", "byte 26");
-    Refused("ALTER TABLE tables DROP COLUMN name", "system relation");
+    Refused("ALTER TABLE sys.tables DROP COLUMN name", "catalog relation");
 }
 
 // ---- BW-R8: what names the column refuses the drop -------------------------
@@ -402,7 +402,7 @@ TEST_F(AlterColumnTest, WhatAnAddCannotHoldIsRefusedWithItsByte) {
     Refused("ALTER TABLE t ADD COLUMN p int64 NULL REFERENCES t", "CREATE TABLE only");
     Refused("ALTER TABLE t ADD COLUMN q int64 NULL CABIN", "CREATE CABIN");
     Refused("ALTER TABLE t ADD COLUMN f float NULL", "float");
-    Refused("ALTER TABLE tables ADD COLUMN x int64 NULL", "system relation");
+    Refused("ALTER TABLE sys.tables ADD COLUMN x int64 NULL", "catalog relation");
     // Nothing was taken by a refusal.
     EXPECT_EQ(Run("SELECT name, spare_free FROM sys.tables WHERE name = 't'"),
               "name,spare_free\\nt,2");

@@ -513,7 +513,7 @@ TEST_F(InsertWalTest, GrowingTheVarHeapChainLogsTheNewPageAndTheLinkThatReachesI
     //
     // Found by walking the chain: every page but the last is a tail whose link
     // was edited, so each must carry an image.
-    auto oid = boot_->catalog.FindTableOidByName("t");
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok()) << access.status().message();

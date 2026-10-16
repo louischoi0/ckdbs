@@ -6,10 +6,23 @@
 
 namespace kds::parser {
 
+bool IsIdentStart(char c) noexcept {
+    return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
+}
+bool IsIdentCont(char c) noexcept {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+}
+
+bool IsIdentifier(std::string_view text) noexcept {
+    if (text.empty() || !IsIdentStart(text.front())) return false;
+    for (const char c : text) {
+        if (!IsIdentCont(c)) return false;
+    }
+    return true;
+}
+
 namespace {
 
-bool IsIdentStart(char c) { return std::isalpha(static_cast<unsigned char>(c)) || c == '_'; }
-bool IsIdentCont(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
 
 // ASCII-only, locale-independent. std::tolower consults the locale, and
 // which words this lexer reserves must not depend on the locale the server

@@ -359,6 +359,7 @@ TEST_F(ShowSugarTest, AQualifiedNameDescribesTheRelationItNames) {
     ASSERT_EQ(Text("CREATE NAMESPACE ns").substr(0, 7), "CREATED");
     ASSERT_EQ(Text("CREATE TABLE ns.q (id int64, w int32)").substr(0, 7), "CREATED");
     const std::string described = Text("DESCRIBE ns.q");
+    ASSERT_EQ(Text("USE ns"), "USE namespace=ns");  // a bare `q` is `ns.q` (NS5)
     EXPECT_EQ(described, Text("DESCRIBE q"));
     EXPECT_EQ(described, Text("SELECT * FROM sys.columns WHERE rel_name = 'ns.q'"));
     EXPECT_NE(described.find("\\n"), std::string::npos) << "no rows: " << described;

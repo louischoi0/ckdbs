@@ -287,7 +287,8 @@ TEST_F(CommandDispatcherTest, DescribeCarriesNoKeyOrderField) {
 
 TEST_F(CommandDispatcherTest, DescAbbreviationIsAccepted) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    EXPECT_EQ(d.Dispatch("DESC tables").response.substr(0, 7), "rel_id,");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64)").response.substr(0, 7), "CREATED");
+    EXPECT_EQ(d.Dispatch("DESC acct").response.substr(0, 7), "rel_id,");
 }
 
 TEST_F(CommandDispatcherTest, DescribeMissingNameIsError) {
@@ -343,7 +344,7 @@ TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response,
               "ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP ASSERTION and "
               "DROP TRANSITION are supported");
-    EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR no table with this name");
+    EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR no relation named 't' (byte 11)");
 
     const auto parsed = parser::Parse("DROP EVERYTHING");
     ASSERT_FALSE(parsed.ok());
@@ -1346,18 +1347,11 @@ TEST_F(CommandDispatcherTest, ACreatesQualifierSelectsTheNamespaceAndIsNeverImpl
             << out.response;
     }
 
-    // **The same arm with a namespace that *does* exist** (the review's
-    // finding 5). `orders.acct` cannot be created - names are
-    // instance-global and `public` holds `acct` - but `EXISTS` would assert
-    // that `orders.acct` exists, which is the one thing that is false. The
-    // reply names where the name actually is.
-    auto held = d.Dispatch("CREATE TABLE orders.acct (id int64)");
-    EXPECT_EQ(held.response.substr(0, 4), "ERR ") << held.response;
-    EXPECT_NE(held.response.find("is in namespace 'public'"), std::string::npos)
-        << held.response;
-
-    // And the unqualified form is untouched: it still answers the
-    // documented token, because about a bare name `EXISTS` is true.
+    // **A name is taken within its namespace** (NS6): `public` holding
+    // `acct` leaves `orders.acct` free, and each name answers `EXISTS` only
+    // in the namespace that holds it.
+    EXPECT_EQ(d.Dispatch("CREATE TABLE orders.acct (id int64)").response.substr(0, 7), "CREATED");
+    EXPECT_EQ(d.Dispatch("CREATE TABLE orders.acct (id int64)").response.substr(0, 6), "EXISTS");
     EXPECT_EQ(d.Dispatch("CREATE TABLE acct (id int64)").response.substr(0, 6), "EXISTS");
 }
 
@@ -1399,7 +1393,125 @@ TEST_F(CommandDispatcherTest, AQualifierIsCheckedWhereverARelationIsNamed) {
     }
 
     // The relation is untouched by every one of those.
-    EXPECT_NE(d.Dispatch("SELECT * FROM line").response.find("b"), std::string::npos);
+    EXPECT_NE(d.Dispatch("SELECT * FROM orders.line").response.find("b"), std::string::npos);
+}
+
+// ---- USE and namespace-scoped names (namespace.md NS5, NS6, NS8) ----------
+
+TEST_F(CommandDispatcherTest, AnUnqualifiedNameMeansTheSessionsNamespaceOnly) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE NAMESPACE orders").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE orders.line (id int64, note varchar)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO orders.line VALUES ('o')").response.substr(0, 8),
+              "INSERTED");
+
+    // The session starts in `public`: a relation elsewhere is reached only
+    // by its qualifier, and the refusal says which one to write.
+    for (const char* sql : {"SELECT * FROM line", "INSERT INTO line VALUES ('x')",
+                            "UPDATE line SET note = 'x' WHERE id = 1",
+                            "DELETE FROM line WHERE id = 1", "DESCRIBE line",
+                            "DROP TABLE line", "CREATE INDEX ix ON line(note)"}) {
+        auto out = d.Dispatch(sql);
+        EXPECT_EQ(out.response.substr(0, 4), "ERR ") << sql << " -> " << out.response;
+        EXPECT_NE(out.response.find("write orders.line"), std::string::npos)
+            << sql << " -> " << out.response;
+    }
+
+    // `USE orders` makes the bare name mean `orders.line`.
+    EXPECT_EQ(d.Dispatch("USE orders").response, "USE namespace=orders");
+    EXPECT_NE(d.Dispatch("SELECT * FROM line").response.find("1,o"), std::string::npos);
+    EXPECT_EQ(d.Dispatch("UPDATE line SET note = 'p' WHERE id = 1").response.substr(0, 7),
+              "UPDATED");
+    // A subquery and a join bind in the same namespace.
+    EXPECT_NE(d.Dispatch("SELECT * FROM line WHERE id IN (SELECT id FROM line)")
+                  .response.find("1,p"),
+              std::string::npos);
+
+    // And `public` is now the qualified one.
+    ASSERT_EQ(d.Dispatch("CREATE TABLE public.acct (id int64)").response.substr(0, 7), "CREATED");
+    auto bare = d.Dispatch("SELECT * FROM acct");
+    EXPECT_NE(bare.response.find("write public.acct"), std::string::npos) << bare.response;
+    EXPECT_EQ(d.Dispatch("SELECT * FROM public.acct").response, "id");
+}
+
+TEST_F(CommandDispatcherTest, AnUnqualifiedCreateLandsInTheSessionsNamespace) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE NAMESPACE ledger").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("USE ledger").response, "USE namespace=ledger");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE entry (id int64, amt int64)").response.substr(0, 7),
+              "CREATED");
+    auto placed = d.Dispatch("SELECT namespace_oid FROM sys.tables WHERE name = 'entry'");
+    EXPECT_NE(placed.response.find(std::to_string(catalog::kUserOidStart)), std::string::npos)
+        << "an unqualified create under USE ledger did not land in it: " << placed.response;
+
+    // Two namespaces may each hold a relation of one name; each name means
+    // the one in the namespace it is resolved in.
+    ASSERT_EQ(d.Dispatch("CREATE TABLE public.entry (id int64, amt int64)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO entry VALUES (10)").response.substr(0, 8), "INSERTED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO public.entry VALUES (20)").response.substr(0, 8),
+              "INSERTED");
+    EXPECT_NE(d.Dispatch("SELECT amt FROM entry").response.find("10"), std::string::npos);
+    EXPECT_EQ(d.Dispatch("SELECT amt FROM entry").response.find("20"), std::string::npos);
+    EXPECT_NE(d.Dispatch("SELECT amt FROM public.entry").response.find("20"), std::string::npos);
+    EXPECT_NE(d.Dispatch("SELECT amt FROM ledger.entry").response.find("10"), std::string::npos);
+
+    // A rename is asked in the relation's own namespace.
+    EXPECT_EQ(d.Dispatch("ALTER TABLE entry RENAME TO entry").response.substr(0, 4), "ERR ");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE other (id int64)").response.substr(0, 7), "CREATED");
+    EXPECT_EQ(d.Dispatch("ALTER TABLE public.entry RENAME TO other").response.substr(0, 4),
+              "RENA")
+        << "public holds no `other`, so the rename is free there";
+
+    // Dropping one leaves the other.
+    ASSERT_EQ(d.Dispatch("DROP TABLE entry").response.substr(0, 7), "DROPPED");
+    EXPECT_NE(d.Dispatch("SELECT amt FROM public.other").response.find("20"), std::string::npos);
+}
+
+TEST_F(CommandDispatcherTest, UseRefusesWhatCannotBeASessionsNamespace) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto missing = d.Dispatch("USE ordrs");
+    EXPECT_EQ(missing.response.substr(0, 4), "ERR ") << missing.response;
+    EXPECT_NE(missing.response.find("no namespace named 'ordrs' (byte 4)"), std::string::npos)
+        << missing.response;
+
+    auto sys = d.Dispatch("USE sys");
+    EXPECT_EQ(sys.response.substr(0, 4), "ERR ") << sys.response;
+    EXPECT_NE(sys.response.find("holds the catalog"), std::string::npos) << sys.response;
+
+    for (const char* bad : {"USE", "USE a b", "USE a.b"}) {
+        auto out = d.Dispatch(bad);
+        EXPECT_NE(out.response.find("USE takes one namespace name"), std::string::npos)
+            << bad << " -> " << out.response;
+    }
+    // A refused USE leaves the session where it was.
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64)").response.substr(0, 7), "CREATED");
+    EXPECT_EQ(d.Dispatch("SELECT * FROM t").response, "id");
+    EXPECT_EQ(d.Dispatch("USE public").response, "USE namespace=public");
+}
+
+TEST_F(CommandDispatcherTest, ACatalogRelationIsNamedOnlyAsAQualifiedView) {
+    // The defect this closes: `SELECT * FROM tables` bound the bootstrap
+    // relation, which has no column rows, and answered "no columns for this
+    // rel_id".
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    for (const char* sql : {"SELECT * FROM tables", "SELECT name FROM columns",
+                            "SELECT * FROM public.tables"}) {
+        auto out = d.Dispatch(sql);
+        EXPECT_EQ(out.response.find("no columns"), std::string::npos) << sql << " -> " << out.response;
+        EXPECT_NE(out.response.find("read it as sys."), std::string::npos)
+            << sql << " -> " << out.response;
+    }
+    for (const char* sql : {"DELETE FROM sys.tables WHERE oid = 1", "DESCRIBE sys.tables",
+                            "SELECT oid FROM sys.tables WHERE oid IN (SELECT oid FROM sys.objects)"}) {
+        auto out = d.Dispatch(sql);
+        EXPECT_EQ(out.response.substr(0, 4), "ERR ") << sql << " -> " << out.response;
+        EXPECT_EQ(out.response.find("no columns"), std::string::npos) << sql << " -> " << out.response;
+    }
+    // The view itself still reads.
+    EXPECT_NE(d.Dispatch("SELECT name FROM sys.tables").response.find("objects"),
+              std::string::npos);
 }
 
 TEST_F(CommandDispatcherTest, ANamespaceHoldingARelationIsNotDropped) {

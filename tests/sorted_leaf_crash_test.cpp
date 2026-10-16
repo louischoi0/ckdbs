@@ -73,7 +73,7 @@ void ExpectRelation(Expeditor& db, const std::set<std::uint64_t>& want, const st
                   std::vector<std::uint64_t>{id})
             << where << ": a descent does not find " << id;
     }
-    auto oid = db.catalog().FindTableOidByName("t");
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok()) << access.status().message();
@@ -129,7 +129,7 @@ std::uint64_t IndexRootSplitter(const std::function<void(CommandDispatcher&)>& c
     CurrentCoreGuard as(0);
     create(d0);
     const auto index_root = [&]() -> PageId {
-        auto oid = rig.core(0).catalog().FindTableOidByName("t");
+        auto oid = rig.core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
         EXPECT_TRUE(oid.ok());
         auto access = rig.core(0).catalog().InitTableAccess(oid.value());
         EXPECT_TRUE(access.ok());

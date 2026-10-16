@@ -296,7 +296,7 @@ TEST(OptimizerSignalsTest, AnOptimizerOwnedCabinRowSurvivesARestartWithItsTag) {
     // by construction.
     Instance db;
     ASSERT_EQ(db.Run("CREATE TABLE b (id int64, sym varchar) BTREE").substr(0, 7), "CREATED");
-    auto oid = db.catalog().FindTableOidByName("b");
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "b");
     ASSERT_TRUE(oid.ok());
 
     auto created = db.catalog().CreateCabin(oid.value(), /*col_pos=*/1,

@@ -153,9 +153,9 @@ TEST_F(DropTableTest, APatternGhostIsHarmless) {
 }
 
 TEST_F(DropTableTest, ASystemRelationIsRefused) {
-    const std::string out = Run("DROP TABLE tables");
+    const std::string out = Run("DROP TABLE sys.tables");
     EXPECT_EQ(out.rfind("ERR", 0), 0u);
-    EXPECT_NE(out.find("system relation"), std::string::npos) << out;
+    EXPECT_NE(out.find("catalog relation"), std::string::npos) << out;
 }
 
 // **This test asserted the opposite until 2026-08-16**, and it was right

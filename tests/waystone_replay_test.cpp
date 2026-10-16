@@ -206,7 +206,7 @@ TEST_F(WaystoneReplayTest, AnEntryRecordedAgainstAnotherRelationIsDroppedAtBuild
     const std::string correct = RunUntilRecorded(sql);
 
     exec::TouchedTuple entry = EntryOf(sql);
-    auto other = boot_->catalog.FindTableOidByName("h");
+    auto other = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "h");
     ASSERT_TRUE(other.ok());
     entry.rel_oid = other.value();
     PoisonTrail(sql, entry);

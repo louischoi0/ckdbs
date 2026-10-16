@@ -83,7 +83,7 @@ protected:
     }
 
     void Insert(const std::string& table, const std::vector<parser::AstValue>& body) {
-        auto oid = boot_->catalog.FindTableOidByName(table);
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, table);
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto access = boot_->catalog.InitTableAccess(oid.value());
         ASSERT_TRUE(access.ok()) << access.status().message();

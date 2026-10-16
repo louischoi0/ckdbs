@@ -2023,8 +2023,14 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     refs.push_back(&stmt.from);
     for (const parser::JoinClause& j : stmt.joins) refs.push_back(&j.relation);
 
+    // NS5: an unqualified name means the statement's namespace, which every
+    // block reads off the outermost one's context.
+    const catalog::Oid default_namespace = ContextOf(scope).default_namespace;
     for (const parser::RelationRef* rel : refs) {
-        auto oid = catalog.FindTableOidByName(rel->table_name, view);
+        // One site for FROM, every JOIN and every subquery block - they all
+        // bind through this loop.
+        auto oid = catalog.ResolveRelation(rel->schema, rel->table_name, default_namespace,
+                                           rel->byte_offset, view);
         if (!oid.ok()) return oid.status();
         // AT-R1: the declaration, between the name and the schema
         // (`step_compiler.hpp` on `declare`). The whole id space, because a
@@ -2032,13 +2038,6 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // walk narrows it to a slice later through this same sink.
         if (declare != nullptr) {
             declare->Position(oid.value(), 0, kIdSpaceEnd);
-        }
-        // AF-T3, and this is the one site that covers FROM, every JOIN and
-        // every subquery block - they all bind through this loop.
-        if (Status s = catalog.CheckRelationQualifier(rel->schema, rel->table_name, oid.value(),
-                                                      rel->byte_offset, view);
-            !s.ok()) {
-            return s;
         }
         auto access = catalog.InitTableAccess(oid.value());
         if (!access.ok()) return access.status();

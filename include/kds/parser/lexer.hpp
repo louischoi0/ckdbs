@@ -27,6 +27,13 @@
 
 namespace kds::parser {
 
+// The identifier rule every name the lexer reads follows: a letter or `_`,
+// then letters, digits and `_`. Exposed for the session statements routed
+// before the parser (`USE`), so a name they take is one a statement can write.
+bool IsIdentStart(char c) noexcept;
+bool IsIdentCont(char c) noexcept;
+bool IsIdentifier(std::string_view text) noexcept;
+
 class Lexer {
 public:
     explicit Lexer(std::string_view sql) noexcept : src_(sql), pos_(0) {}

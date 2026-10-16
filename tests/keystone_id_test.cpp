@@ -85,7 +85,7 @@ protected:
     }
 
     catalog::Oid OidOf(const std::string& rel) {
-        auto oid = boot_->catalog.FindTableOidByName(rel);
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, rel);
         EXPECT_TRUE(oid.ok()) << oid.status().message();
         return oid.ok() ? oid.value() : 0;
     }
@@ -382,7 +382,7 @@ TEST_F(KeystoneIdWalCrashTest, ACrashReissuesIdsThatTheDurableLogStillClaims) {
     CommandDispatcher d(boot.value().superblock, boot.value().catalog, *store.value());
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (77)").response.substr(0, 8), "INSERTED");
 
-    auto oid = boot.value().catalog.FindTableOidByName("t");
+    auto oid = boot.value().catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto reissued = boot.value().catalog.AllocateRowId(oid.value());
     ASSERT_TRUE(reissued.ok());
@@ -434,7 +434,7 @@ TEST_F(KeystoneIdWalCrashTest, ASyncedShutdownLeavesTheSequenceAboveEveryLoggedI
     ASSERT_TRUE(store.ok());
     auto boot = bootstrap::BootstrapDatabase(*store.value(), 2000);
     ASSERT_TRUE(boot.ok());
-    auto oid = boot.value().catalog.FindTableOidByName("t");
+    auto oid = boot.value().catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok());
     auto next = boot.value().catalog.AllocateRowId(oid.value());
     ASSERT_TRUE(next.ok());
@@ -477,7 +477,7 @@ TEST_F(KeystoneIdCrashTest, ObjectOidsAreUniqueAcrossABoot) {
         ASSERT_EQ(d.Dispatch("CREATE TABLE a (id int64, v int64)").response.substr(0, 7),
                   "CREATED");
         ASSERT_EQ(d.Dispatch("INSERT INTO a VALUES (11)").response.substr(0, 8), "INSERTED");
-        auto oid = cat.FindTableOidByName("a");
+        auto oid = cat.FindTableOidByName(::kds::catalog::kNamespacePublic, "a");
         ASSERT_TRUE(oid.ok());
         a_oid = oid.value();
         EXPECT_EQ(a_oid, catalog::kUserOidStart);
@@ -503,7 +503,7 @@ TEST_F(KeystoneIdCrashTest, ObjectOidsAreUniqueAcrossABoot) {
 
         ASSERT_EQ(d.Dispatch("CREATE TABLE c (id int64, v int64)").response.substr(0, 7),
                   "CREATED");
-        auto c_oid = cat.FindTableOidByName("c");
+        auto c_oid = cat.FindTableOidByName(::kds::catalog::kNamespacePublic, "c");
         ASSERT_TRUE(c_oid.ok());
 
         // The property §1.2 of docs/rules/keystoneid-invariant.md claims and could
@@ -537,9 +537,9 @@ TEST_F(KeystoneIdCrashTest, ObjectOidsAreUniqueAcrossABoot) {
     Boot([&](CommandDispatcher& d, catalog::Catalog& cat, storage::PageStore&) {
         ASSERT_EQ(d.Dispatch("CREATE TABLE e (id int64, v int64)").response.substr(0, 7),
                   "CREATED");
-        auto e_oid = cat.FindTableOidByName("e");
+        auto e_oid = cat.FindTableOidByName(::kds::catalog::kNamespacePublic, "e");
         ASSERT_TRUE(e_oid.ok());
-        auto c_oid = cat.FindTableOidByName("c");
+        auto c_oid = cat.FindTableOidByName(::kds::catalog::kNamespacePublic, "c");
         ASSERT_TRUE(c_oid.ok());
         EXPECT_GT(e_oid.value(), c_oid.value());
         EXPECT_NE(e_oid.value(), a_oid);
