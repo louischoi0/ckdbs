@@ -228,10 +228,7 @@ key:
   `tuple_key = 99` is placed, and a multi-row `VALUES` may name its keys in any
   order. A named key is refused because of its value for **exactly two
   reasons**, each naming the key's byte in the statement, and nothing is
-  written (one known defect adds a third: inserting, rolling back and
-  re-naming one key about 600 times with the same indexed value and a new
-  covered value can be refused `AlreadyExists` by a covering index, and
-  `TxnConflict` after that):
+  written:
   - **duplicate**, `AlreadyExists`: a row with this key exists, live
     (`ERR duplicate tuple key <k> already present at page <p> slot <s>
     (byte <n>)`) or deleted (`ERR duplicate tuple key <k>: a row with
@@ -458,9 +455,6 @@ DROP INDEX ix_owner;
     does not grow the file.
   - Reads are unchanged: a unique index answers queries exactly as an
     ordinary one does. `SHOW INDEXES` has a `unique` column (1 or 0).
-  - A row whose covered column is updated about 600 times starts refusing
-    its writes - a known defect every index shares
-    (`docs/inflight/bugs/`); it never admits a duplicate key.
 - Maintenance is append-only; DELETE does not touch an index; there is no
   index-only scan (no visibility witness exists outside the tuple), so
   `COVERING` buys avoided base descents, nothing more.

@@ -109,7 +109,8 @@ unit. It changes nothing on the read path.
   (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`):
   about 600 entries with one `(key, tuple key)` refuse that row's later
   appends for good. It is fail-closed and reaches a unique index exactly
-  as it reaches any other.
+  as it reaches any other. **Fixed since `32beda89`** (merged at
+  `228fc689`, after BX closed) and its entry deleted; see BX-R11.
 
 ---
 
@@ -211,7 +212,10 @@ probe still returns a set, and IX8's argument is about the set.
 **BX-R11 — the equal-sort-keys bug is not a gate.** It is fail-closed (a
 refusal, never a duplicate admitted), it reaches every index today, and BX
 does not make it more reachable. Its entry gains one line: a unique index
-inherits it.
+inherits it. **Moot since `32beda89`** (merged to `main` at `228fc689`, after
+BX closed): an index entry's sort key is the whole entry, so a run of one
+`(key, tuple key)` divides cleanly, the bug entry is deleted, and no index -
+unique or not - refuses that row's writes.
 
 ---
 
