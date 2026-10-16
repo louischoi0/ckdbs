@@ -17,6 +17,7 @@ const char* StatementTypeName(const Statement& stmt) {
             }
             if constexpr (std::is_same_v<T, IndexStmt>) {
                 if (s.drop) return "DROP INDEX";
+                if (s.reindex) return "REINDEX INDEX";
                 return s.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
             }
             if constexpr (std::is_same_v<T, AssertionStmt>) {

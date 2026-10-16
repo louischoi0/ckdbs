@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <set>
 #include <string>
@@ -17,6 +18,7 @@
 #include "kds/server/page_reclaim.hpp"
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/device_page_store.hpp"
+#include "kds/wal/record.hpp"
 
 // BY-S2 (`instructions/v3.2.0/workorder-by-reindex-drop-index-reclaim.md`):
 // a dropped index's tree, and a rolled-back create's, go back to the
@@ -319,6 +321,60 @@ TEST(IndexReclaimJobTest, CreateDropReclaimCyclesNeverReachTheSlotCap) {
     EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
 }
 
+TEST(IndexReclaimJobTest, AReindexsOldTreeIsReclaimedAndTheNewOneServes) {
+    // BY-R6: the old tree is queued at the REINDEX's commit, as a drop's.
+    TempDir dir;
+    auto opened = Mount(dir.path);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    CurrentCoreGuard as(0);
+    Seed(db);
+    const catalog::Oid old_ix = IndexOid(db, "by_v");
+    const std::set<PageId> old_tree = PagesOf(db.store(), old_ix);
+    Ok(db, "REINDEX INDEX by_v");
+    const catalog::Oid new_ix = IndexOid(db, "by_v");
+    ASSERT_NE(new_ix, old_ix);
+    CleanCheckpoint(db);
+    Settle(db);
+    EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
+    for (const PageId id : old_tree) EXPECT_FALSE(db.store().IsAllocated(id)) << "page " << id;
+    EXPECT_FALSE(Holds(Slots(db, "t"), old_ix));
+    EXPECT_TRUE(Holds(Slots(db, "t"), new_ix));
+    EXPECT_FALSE(PagesOf(db.store(), new_ix).empty());
+    EXPECT_EQ(db.dispatcher().Dispatch("SELECT id FROM t WHERE v = 'row7'").response, "id\\n8");
+}
+
+void CrashImage(const fs::path& from, const fs::path& to);
+
+TEST(IndexReclaimJobTest, ACrashAfterAReindexMountsOneIndexAndOwesTheOldTree) {
+    TempDir dir;
+    catalog::Oid old_ix = 0;
+    TempDir image;
+    {
+        auto opened = Mount(dir.path);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        Seed(db);
+        old_ix = IndexOid(db, "by_v");
+        Ok(db, "REINDEX INDEX by_v");
+        ASSERT_TRUE(db.wal().Flush().ok());
+        CrashImage(dir.path, image.path);
+    }
+    auto mounted = Mount(image.path);
+    ASSERT_TRUE(mounted.ok()) << mounted.status().message();
+    Expeditor& db = *mounted.value();
+    CurrentCoreGuard as(0);
+    auto rows = db.catalog().ListIndexes();
+    ASSERT_TRUE(rows.ok());
+    ASSERT_EQ(rows.value().size(), 1u) << "one index by the name after the crash";
+    EXPECT_NE(rows.value()[0].index_oid, old_ix);
+    Settle(db);
+    EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
+    EXPECT_TRUE(PagesOf(db.store(), old_ix).empty()) << "the old tree was owed at mount";
+    EXPECT_EQ(db.dispatcher().Dispatch("SELECT id FROM t WHERE v = 'row7'").response, "id\\n8");
+}
+
 // ---- A crash anywhere in the job ------------------------------------------
 
 void CrashImage(const fs::path& from, const fs::path& to) {
@@ -327,6 +383,115 @@ void CrashImage(const fs::path& from, const fs::path& to) {
     fs::copy(from / "wal", to / "wal",
              fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 }
+
+fs::path SegmentOf(const fs::path& image, std::uint64_t segment_size, wal::Lsn lsn) {
+    return image / "wal" / ("wal-0-" + std::to_string(lsn / segment_size) + ".log");
+}
+
+// Zeroes `image`'s log from `lsn` to the end of its segment: the log a crash
+// at `lsn` leaves. A segment is pre-written zero (`FileLogDevice`'s
+// `Prewrite`), so this is a tail never written (an LSN is a byte offset,
+// `wal.md` §1).
+void CutLogAt(const fs::path& image, std::uint64_t segment_size, wal::Lsn lsn) {
+    const fs::path segment = SegmentOf(image, segment_size, lsn);
+    std::fstream file(segment, std::ios::in | std::ios::out | std::ios::binary);
+    ASSERT_TRUE(file.is_open()) << segment;
+    file.seekp(static_cast<std::streamoff>(lsn % segment_size));
+    const std::vector<char> zeros(segment_size - lsn % segment_size, 0);
+    file.write(zeros.data(), static_cast<std::streamsize>(zeros.size()));
+    ASSERT_TRUE(file.good()) << segment;
+}
+
+// Every record `image`'s log holds in [from, to): its start and its type.
+std::vector<std::pair<wal::Lsn, wal::RecordType>> RecordsBetween(const fs::path& image,
+                                                                 std::uint64_t segment_size,
+                                                                 wal::Lsn from, wal::Lsn to) {
+    std::ifstream file(SegmentOf(image, segment_size, from), std::ios::binary);
+    EXPECT_TRUE(file.is_open());
+    std::vector<std::byte> bytes(to - from);
+    file.seekg(static_cast<std::streamoff>(from % segment_size));
+    file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    EXPECT_TRUE(file.good());
+    std::vector<std::pair<wal::Lsn, wal::RecordType>> out;
+    wal::RecordReader reader(bytes, from);
+    for (wal::Lsn at = from; auto record = reader.Next(); at = reader.end_lsn()) {
+        out.emplace_back(at, record->type());
+    }
+    EXPECT_EQ(reader.end_lsn(), to) << "the log between the flushes did not decode whole";
+    return out;
+}
+
+TEST(IndexReclaimJobTest, ACrashAtEveryRecordOfAReindexMountsTheOldIndexOrTheNewNeverNeither) {
+    // BY-S3's crash cell: the log cut at the start of every record the
+    // `REINDEX` wrote - the old row's mark, the new tree's images, the new
+    // slot and row, the commit - and at its end, each over the data file as
+    // it was before the statement, so no page is ahead of the cut log. A cut
+    // before the commit rolls the swap back whole and the old index serves;
+    // a cut past it, the new one; never neither, never both.
+    TempDir dir;
+    TempDir images;
+    catalog::Oid old_ix = 0;
+    wal::Lsn from = 0;
+    wal::Lsn to = 0;
+    std::uint64_t segment_size = 0;
+    {
+        auto opened = Mount(dir.path);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        Ok(db, "CREATE TABLE t (id int64, v varchar)");
+        Fill(db.dispatcher(), "t", 200);
+        Ok(db, "CREATE INDEX by_v ON t (v)");
+        CleanCheckpoint(db);
+        ASSERT_TRUE(db.wal().Flush().ok());
+        from = db.wal().flushed_lsn();
+        CrashImage(dir.path, images.path / "before");
+        old_ix = IndexOid(db, "by_v");
+        Ok(db, "REINDEX INDEX by_v");
+        ASSERT_TRUE(db.wal().Flush().ok());
+        to = db.wal().flushed_lsn();
+        segment_size = db.wal().segment_size();
+        CrashImage(dir.path, images.path / "after");
+    }
+    ASSERT_GT(to, from);
+    ASSERT_EQ(from / segment_size, to / segment_size) << "the cell cuts one segment";
+    const auto records = RecordsBetween(images.path / "after", segment_size, from, to);
+    const auto commit = std::find_if(records.begin(), records.end(), [](const auto& r) {
+        return r.second == wal::RecordType::kTxnCommit;
+    });
+    ASSERT_NE(commit, records.end()) << "the REINDEX logged no commit";
+    ASSERT_GE(commit - records.begin(), 3) << "a mark, a tree and a row come before it";
+
+    std::vector<wal::Lsn> cuts;
+    for (const auto& record : records) cuts.push_back(record.first);
+    cuts.push_back(to);
+    for (std::size_t i = 0; i < cuts.size(); ++i) {
+        const wal::Lsn cut = cuts[i];
+        const bool committed = cut > commit->first;
+        const std::string where = "cut " + std::to_string(i) + " at +" +
+                                  std::to_string(cut - from) + " of " +
+                                  std::to_string(to - from);
+        const fs::path image = images.path / std::to_string(i);
+        fs::create_directories(image);
+        fs::copy_file(images.path / "before" / "kds.db", image / "kds.db");
+        fs::copy(images.path / "after" / "wal", image / "wal", fs::copy_options::recursive);
+        CutLogAt(image, segment_size, cut);
+        auto mounted = Mount(image);
+        ASSERT_TRUE(mounted.ok()) << where << ": " << mounted.status().message();
+        Expeditor& db = *mounted.value();
+        CurrentCoreGuard as(0);
+        auto rows = db.catalog().ListIndexes();
+        ASSERT_TRUE(rows.ok()) << where;
+        ASSERT_EQ(rows.value().size(), 1u) << where;
+        EXPECT_EQ(rows.value()[0].index_oid == old_ix, !committed) << where;
+        Settle(db);
+        EXPECT_EQ(db.reclaim_counters().refused.load(), 0u) << where;
+        EXPECT_EQ(db.dispatcher().Dispatch("SELECT id FROM t WHERE v = 'row7'").response,
+                  "id\\n8")
+            << where;
+    }
+}
+
 
 TEST(IndexReclaimJobTest, AJobCutAnywhereIsFinishedByTheNextMount) {
     // Every cut a crash can make - after each free, each map sync, and on

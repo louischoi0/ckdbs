@@ -226,22 +226,35 @@ const std::vector<std::string>& Queries() {
 
 // ---- §1: the four configurations agree, byte for byte -------------------
 
+// 5: maintained, then every index rebuilt (BY-R6): the new trees hold an
+// entry for each row's current version and every version its undo chain
+// still carries (IX10a), and answer as the old ones did.
+void LoadRebuilt(Instance& db) {
+    LoadMaintained(db);
+    for (const char* name : {"by_owner", "by_owner_qty", "by_sym", "by_code"}) {
+        ASSERT_EQ(db.Run(std::string("REINDEX INDEX ") + name).substr(0, 9), "REINDEXED") << name;
+    }
+}
+
 TEST(IndexContractTest, EveryConfigurationReturnsTheSameBytes) {
     Instance maintained(/*indexes=*/true);
     Instance backfilled(/*indexes=*/true);
     Instance ignored(/*indexes=*/false);
     Instance plain(/*indexes=*/true);
+    Instance rebuilt(/*indexes=*/true);
 
     LoadMaintained(maintained);
     LoadBackfilled(backfilled);
     LoadMaintained(ignored);
     LoadPlain(plain);
+    LoadRebuilt(rebuilt);
 
     for (const std::string& sql : Queries()) {
         const std::string expected = plain.Run(sql);
         EXPECT_EQ(maintained.Run(sql), expected) << "write-hook-filled index: " << sql;
         EXPECT_EQ(backfilled.Run(sql), expected) << "backfilled index: " << sql;
         EXPECT_EQ(ignored.Run(sql), expected) << "indexes = off: " << sql;
+        EXPECT_EQ(rebuilt.Run(sql), expected) << "rebuilt index: " << sql;
     }
 }
 

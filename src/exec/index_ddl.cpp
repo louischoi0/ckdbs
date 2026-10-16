@@ -303,7 +303,8 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
 StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
                                                      const parser::IndexStmt& stmt,
-                                                     const txn::ReadView* view) {
+                                                     const txn::ReadView* view,
+                                                     std::uint64_t trx_id) {
     auto oid = catalog.FindTableOidByName(stmt.table_name, view);
     if (!oid.ok()) {
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
@@ -371,7 +372,7 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
     // - so this buys the *position* of the failure and nothing else: a
     // heap relation refused by name rather than as a page-type error from
     // inside the build.
-    if (Status s = catalog.CheckIndexDef(def, view != nullptr ? view->own_trx_id : txn::kNoTrxId);
+    if (Status s = catalog.CheckIndexDef(def, trx_id);
         !s.ok()) {
         return s;
     }
@@ -460,14 +461,57 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
     return final_root.value();
 }
 
-StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
-                                     const parser::IndexStmt& stmt, std::uint64_t trx_id,
-                                     catalog::CatalogRowRef* written,
-                                     const txn::ReadView* view, wal::WalManager* wal) {
-    auto prepared = PrepareIndexDef(catalog, stmt, view);
-    if (!prepared.ok()) return prepared.status();
-    catalog::Catalog::IndexDef& def = prepared.value();
+namespace {
 
+// The index `stmt` names, on `relation` only (`DropIndex`'s contract): the
+// name was resolved once to take the `X` and is resolved again here, and
+// between the two another transaction may have dropped the index and
+// created one by its name on another relation (BY-R8).
+StatusOr<catalog::SysIndexRow> FindNamedIndex(catalog::Catalog& catalog,
+                                              const parser::IndexStmt& stmt,
+                                              std::optional<catalog::Oid> relation) {
+    auto row = catalog.FindIndexByName(stmt.index_name);
+    if (!relation.has_value() || !row.ok()) {
+        return Status::NotFound("no index named '" + stmt.index_name + "' (byte " +
+                                std::to_string(stmt.byte_offset) + ")");
+    }
+    if (row.value().table_oid != *relation) {
+        return Status::TxnConflict("index '" + stmt.index_name +
+                                   "' moved to another relation while the statement waited (byte " +
+                                   std::to_string(stmt.byte_offset) + ")");
+    }
+    return row;
+}
+
+Status DropNamedIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
+                      catalog::Oid index_oid, std::uint64_t trx_id,
+                      catalog::CatalogRowChange* change) {
+    Status s = catalog.DropIndex(index_oid, trx_id, change);
+    // The byte belongs to the statement, and only this layer has it.
+    // `WithContext` would prefix instead of append and would bury the
+    // position mid-sentence, so the one refusal that names the user's
+    // object gets it spelled out the way `FindNamedIndex` does - through
+    // `WithMessage`, which keeps whatever code arrived rather than naming
+    // one here. Naming one is how a re-wrap answers "could a later release
+    // lift this?" with its own guess.
+    if (s.ok() || (s.code() != StatusCode::kUnsupported &&
+                   s.code() != StatusCode::kNotImplemented)) {
+        return s;
+    }
+    return s.WithMessage("index '" + stmt.index_name + "': " + s.message() + " (byte " +
+                         std::to_string(stmt.byte_offset) + ")");
+}
+
+// The build and the write, for a definition already checked and given its
+// oid: `CREATE INDEX`'s and `REINDEX`'s one door - the backfill, BX's
+// duplicate check for a unique index, BX-S6's free on a failed build, the
+// slot seeded on a refusal after the tree is logged. `stmt` gives the name
+// and the byte a refusal carries.
+StatusOr<IndexDdlResult> BuildAndWriteIndex(catalog::Catalog& catalog, storage::PageStore& store,
+                                            catalog::Catalog::IndexDef& def,
+                                            const parser::IndexStmt& stmt, std::uint64_t trx_id,
+                                            catalog::CatalogRowRef* written,
+                                            wal::WalManager* wal) {
     auto access = catalog.InitTableAccess(def.table_oid);
     if (!access.ok()) return access.status();
     auto root = BuildIndexTree(store, *access.value(), def, trx_id, wal);
@@ -506,10 +550,23 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     out.root_page_id = def.root_page_id;
     out.key_width = def.key_width;
     out.entry_width = def.entry_width;
+    return out;
+}
 
+}  // namespace
+
+StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
+                                     const parser::IndexStmt& stmt, std::uint64_t trx_id,
+                                     catalog::CatalogRowRef* written,
+                                     const txn::ReadView* view, wal::WalManager* wal) {
+    auto prepared = PrepareIndexDef(catalog, stmt, view, trx_id);
+    if (!prepared.ok()) return prepared.status();
+    auto out = BuildAndWriteIndex(catalog, store, prepared.value(), stmt, trx_id, written, wal);
+    if (!out.ok()) return out;
     // Collected after the write, because none of them is a reason not to
     // write.
-    out.warnings = IndexCreationWarnings(catalog, def, stmt.key_columns[0].name);
+    out.value().warnings =
+        IndexCreationWarnings(catalog, prepared.value(), stmt.key_columns[0].name);
     return out;
 }
 
@@ -530,27 +587,54 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
 }
 
 StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
-                                  std::uint64_t trx_id, catalog::CatalogRowChange* change) {
-    auto row = catalog.FindIndexByName(stmt.index_name);
-    if (!row.ok()) {
-        return Status::NotFound("no index named '" + stmt.index_name + "' (byte " +
-                                std::to_string(stmt.byte_offset) + ")");
-    }
-    if (Status s = catalog.DropIndex(row.value().index_oid, trx_id, change); !s.ok()) {
-        // The byte belongs to the statement, and only this layer has it.
-        // `WithContext` would prefix instead of append and would bury the
-        // position mid-sentence, so the one refusal that names the user's
-        // object gets it spelled out the way the sibling above does -
-        // through `WithMessage`, which keeps whatever code arrived rather
-        // than naming one here. Naming one is how a re-wrap answers "could
-        // a later release lift this?" with its own guess.
-        if (s.code() != StatusCode::kUnsupported && s.code() != StatusCode::kNotImplemented) {
-            return s;
-        }
-        return s.WithMessage("index '" + stmt.index_name + "': " + s.message() + " (byte " +
-                             std::to_string(stmt.byte_offset) + ")");
+                                  std::optional<catalog::Oid> relation, std::uint64_t trx_id,
+                                  catalog::CatalogRowChange* change) {
+    auto row = FindNamedIndex(catalog, stmt, relation);
+    if (!row.ok()) return row.status();
+    if (Status s = DropNamedIndex(catalog, stmt, row.value().index_oid, trx_id, change);
+        !s.ok()) {
+        return s;
     }
     return row.value().index_oid;
+}
+
+StatusOr<IndexDdlResult> ReindexIndex(catalog::Catalog& catalog, storage::PageStore& store,
+                                      const parser::IndexStmt& stmt,
+                                      std::optional<catalog::Oid> relation, std::uint64_t trx_id,
+                                      catalog::CatalogRowChange* dropped,
+                                      catalog::CatalogRowRef* written, wal::WalManager* wal) {
+    auto old = FindNamedIndex(catalog, stmt, relation);
+    if (!old.ok()) return old.status();
+    const catalog::SysIndexRow& row = old.value();
+
+    // **The definition is the row's own positions, never names** (B2): a
+    // `RENAME COLUMN` takes no relation `X`, so a definition re-spelled by
+    // column names could resolve to other columns than the index was built
+    // on. Widths and flags are the row's too - stored constants a column's
+    // type cannot move under (types are not alterable, `alter.md` AL11).
+    catalog::Catalog::IndexDef def;
+    def.table_oid = row.table_oid;
+    def.name = stmt.index_name;
+    def.key_width = row.key_width;
+    def.entry_width = row.entry_width;
+    def.flags = row.flags;
+    def.key_cols.assign(row.key_cols.begin(), row.key_cols.begin() + row.nkeys);
+    def.covered_cols.assign(row.covered_cols.begin(), row.covered_cols.begin() + row.ncovered);
+
+    // The old row first: its delete-mark is this transaction's, which is what
+    // lets the new row take the name (BY-R8).
+    if (Status s = DropNamedIndex(catalog, stmt, row.index_oid, trx_id, dropped); !s.ok()) {
+        return s;
+    }
+    if (Status s = catalog.CheckIndexDef(def, trx_id); !s.ok()) return s;
+    // Issued before any page exists, as `PrepareIndexDef` issues it (page.md
+    // §2a).
+    auto new_oid = catalog.AllocateRowId(catalog::kSysIndexesTable);
+    if (!new_oid.ok()) return new_oid.status();
+    def.index_oid = new_oid.value();
+    auto out = BuildAndWriteIndex(catalog, store, def, stmt, trx_id, written, wal);
+    if (out.ok()) out.value().replaced_oid = row.index_oid;
+    return out;
 }
 
 }  // namespace kds::exec

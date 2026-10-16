@@ -1235,7 +1235,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // (BACKUP, SYNC, STOP) still run; a statement that writes the log does not.
     if (IEquals(cmd, "INSERT") || IEquals(cmd, "UPDATE") || IEquals(cmd, "DELETE") ||
         IEquals(cmd, "CREATE") || IEquals(cmd, "DROP") || IEquals(cmd, "ALTER") ||
-        IEquals(cmd, "PURGE")) {
+        IEquals(cmd, "PURGE") || IEquals(cmd, "REINDEX")) {
         if (auto refused = ArchiveRefusal(); refused.has_value()) return *refused;
     }
 
@@ -1414,6 +1414,10 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // identity guarantee, which is not a read-write session's decision.
     if (IEquals(cmd, "PURGE")) {
         return HandlePurge(Trim(line), session);
+    }
+    // Unclassified in `RequiredRole`, so admin's, as every DDL is (BY).
+    if (IEquals(cmd, "REINDEX")) {
+        return HandleIndex(Trim(line), session);
     }
     if (IEquals(cmd, "SYNC")) {
         return HandleSync();
@@ -2186,6 +2190,13 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
     }
     const parser::IndexStmt stmt = std::get<parser::IndexStmt>(std::move(parsed.value()));
+    // BY-Q4 (a): autocommit only. Refused before a scope opens, so an
+    // explicit transaction is not poisoned by asking - `PURGE`'s shape.
+    if (stmt.reindex && session.in_explicit_txn()) {
+        const Status s = Status::NotImplemented(
+            "REINDEX inside a transaction is not implemented; run it in autocommit (byte 0)");
+        return {ErrorReply(s), false, 0, s};
+    }
 
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         // ---- AT-S5e: the relation `X`, for both statements --------------
@@ -2208,7 +2219,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         // (`FindIndexByName` takes none), so a drop can find an index another
         // transaction has not committed (`names-resolved-with-no-view.md`).
         std::optional<catalog::Oid> relation;
-        if (stmt.drop) {
+        if (stmt.drop || stmt.reindex) {
             if (auto ix = catalog_.FindIndexByName(stmt.index_name); ix.ok()) {
                 relation = ix.value().table_oid;
             }
@@ -2223,6 +2234,36 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                 held.has_value()) {
                 return {ErrorReply(*held), false, 0, *held};
             }
+        }
+
+        if (stmt.reindex) {
+            // **A drop and a create in one transaction, under the `X` above**
+            // (BY-R6): the old row delete-marked, the new one written under
+            // the same name (BY-R8), and both trees settled at the decide -
+            // the old one queued at commit, the new one at any other ending
+            // (BY-R2). Only an index on the relation held above is rebuilt
+            // (`exec::DropIndex`'s contract).
+            DdlScope ddl = DdlScopeFor(scope);
+            catalog::CatalogRowChange change;
+            catalog::CatalogRowRef created_row;
+            auto result = exec::ReindexIndex(
+                catalog_, page_store_, stmt, relation, ddl.trx_id,
+                ddl.txn != nullptr ? &change : nullptr,
+                ddl.txn != nullptr ? &created_row : nullptr, wal_);
+            NoteIndexRowDropped(ddl, change);
+            NoteIndexRowWritten(ddl, created_row);
+            if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
+            const catalog::Oid old_oid = result.value().replaced_oid;
+            NoteOwedIndex(scope, *relation, old_oid, /*created=*/false);
+            NoteOwedIndex(scope, *relation, result.value().index_oid, /*created=*/true);
+            if (logging(LogLevel::kInfo)) {
+                log_->Info("ddl", "rebuilt index '" + stmt.index_name + "'");
+            }
+            std::ostringstream os;
+            os << "REINDEXED INDEX name=" << stmt.index_name
+               << " index_oid=" << result.value().index_oid << " replaced=" << old_oid
+               << " root=" << result.value().root_page_id;
+            return {os.str(), false};
         }
 
         if (stmt.drop) {
@@ -2241,14 +2282,12 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             // against whichever way the drop went.
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
-            auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
+            // Only an index on the relation held above (`exec::DropIndex`'s
+            // contract): a name that took no hold, or that another
+            // transaction moved since, writes nothing.
+            auto index_oid = exec::DropIndex(catalog_, stmt, relation, ddl.trx_id,
                                              ddl.txn != nullptr ? &change : nullptr);
-            if (ddl.txn != nullptr && change.page_id != kInvalidPageId) {
-                txn_->NoteDeleteMark(*ddl.txn, static_cast<std::uint32_t>(change.rel_oid),
-                                     change.page_id, change.slot, change.oid,
-                                     change.prior_trx_id, change.prior_undo_ptr);
-                MarkHoldsDdl(*ddl.txn);
-            }
+            NoteIndexRowDropped(ddl, change);
             if (!index_oid.ok()) {
                 return {ErrorReply(index_oid.status()), false, 0, index_oid.status()};
             }
@@ -2284,10 +2323,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                         build_view.has_value() ? &*build_view : nullptr, wal_);
         // Before the status is read: a create that failed after the catalog
         // row went down still left it there.
-        if (create_ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {
-            create_ddl.written.push_back(created_row);
-            NoteDdlRows(create_ddl);
-        }
+        NoteIndexRowWritten(create_ddl, created_row);
         if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
         NoteOwedIndex(scope, *relation, result.value().index_oid, /*created=*/true);
         if (logging(LogLevel::kInfo)) {
@@ -6769,6 +6805,20 @@ void CommandDispatcher::NoteOwedIndex(const WriteScope& scope, catalog::Oid rel_
     if (!table.ok() || table.value().anchor_page_id == kInvalidPageId) return;
     owed_indexes_.push_back(
         OwedIndex{scope.txn->id(), rel_oid, table.value().anchor_page_id, index_oid, created});
+}
+
+void CommandDispatcher::NoteIndexRowDropped(DdlScope& ddl,
+                                            const catalog::CatalogRowChange& change) {
+    if (ddl.txn == nullptr || change.page_id == kInvalidPageId) return;
+    txn_->NoteDeleteMark(*ddl.txn, static_cast<std::uint32_t>(change.rel_oid), change.page_id,
+                         change.slot, change.oid, change.prior_trx_id, change.prior_undo_ptr);
+    MarkHoldsDdl(*ddl.txn);
+}
+
+void CommandDispatcher::NoteIndexRowWritten(DdlScope& ddl, const catalog::CatalogRowRef& row) {
+    if (ddl.txn == nullptr || row.page_id == kInvalidPageId) return;
+    ddl.written.push_back(row);
+    NoteDdlRows(ddl);
 }
 
 void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed_lsn) {

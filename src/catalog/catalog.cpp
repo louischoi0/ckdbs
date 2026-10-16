@@ -3943,9 +3943,19 @@ StatusOr<std::vector<SysIndexRow>> Catalog::FindIndexesForTable(Oid table_oid) {
 StatusOr<SysIndexRow> Catalog::FindIndexByName(std::string_view name) {
     auto rows = ListIndexes();
     if (!rows.ok()) return rows.status();
+    // BY-R8: a name can be held twice inside one transaction - the row it
+    // delete-marked, which the unfiltered read still returns while it is in
+    // flight, and the row it then created. The later row is the live one,
+    // and the later row has the larger oid - `sys.indexes`' row-id sequence
+    // only rises - where scan order says nothing: a row may land in a
+    // retired slot of an earlier page.
+    std::optional<SysIndexRow> found;
     for (const SysIndexRow& row : rows.value()) {
-        if (NameView(row.name) == name) return row;
+        if (NameView(row.name) == name && (!found.has_value() || row.index_oid > found->index_oid)) {
+            found = row;
+        }
     }
+    if (found.has_value()) return *found;
     return Status::NotFound("no index by that name");
 }
 
@@ -3981,8 +3991,14 @@ Status Catalog::CheckIndexNameFree(std::string_view name, std::uint64_t own_trx_
             auto row = SysIndexRow::Decode(tuple.value().payload);
             if (!row.ok()) return row.status();
             if (NameView(row.value().name) != name) return storage::VisitControl::kContinue;
-            const bool pending_elsewhere =
-                tuple.value().deleted && !(own_trx_id != txn::kNoTrxId && stamp == own_trx_id);
+            const bool own_mark =
+                tuple.value().deleted && own_trx_id != txn::kNoTrxId && stamp == own_trx_id;
+            // **A row this transaction delete-marked frees the name for it**
+            // (BY-R8): `REINDEX`'s new row takes the old one's name, and so may
+            // `CREATE INDEX x` after `DROP INDEX x` in one transaction. Its
+            // rollback clears the mark and retires the new row together.
+            if (own_mark) return storage::VisitControl::kContinue;
+            const bool pending_elsewhere = tuple.value().deleted;
             verdict = pending_elsewhere
                           ? PendingDropRefusal("index", name)
                           : Status::AlreadyExists("catalog: an index named '" +

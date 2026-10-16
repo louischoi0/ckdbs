@@ -46,9 +46,13 @@ Two features, the second built on the first:
    and its anchor slot is removed.
 2. **`REINDEX INDEX <name>`** builds the index again from the relation under
    a new oid and the same name, and the old tree is reclaimed through (1).
-   The new tree holds an entry for every version some live snapshot can
-   still reach (IX10a's backfill), so every surplus entry IX2 accumulated is
-   gone from it.
+   The new tree holds an entry for every version the relation still holds -
+   each row's current one and every one its undo chain still carries
+   (IX10a's backfill) - so the surplus entries of rows that left the
+   relation (rolled back, purged) are gone from it. **A version still on an
+   undo chain keeps its entry**, needed or not by a live snapshot: what a
+   rebuild reclaims grows as the undo purge advances (corrected at BY-S3,
+   where the first wording, "every surplus entry", was found to overclaim).
 
 Neither is a purge of a live tree: BY removes no entry from a tree anyone
 reads, so IX14's premise ("no index entry is removed") stands untouched.
@@ -186,7 +190,12 @@ and tree are untouched.
 
 **BY-R8 — the name during the swap** (BY-Q5 (a)). `CheckIndexNameFree`
 admits a name whose only holder is a row this transaction delete-marked,
-and `FindIndexByName` skips a row the asking transaction delete-marked.
+and `FindIndexByName` returns, of the rows holding a name, the one with the
+largest `index_oid` - the later row, since `sys.indexes`' row-id sequence
+only rises, where scan order says nothing (a row may land in a retired slot
+of an earlier page). Its own mark is still in flight to the asker, so the
+unfiltered read returns both; the larger oid is the row the transaction
+wrote last.
 Scope, stated: this also admits `DROP INDEX x; CREATE INDEX x` inside one
 explicit transaction, which is refused today.
 
@@ -360,3 +369,59 @@ clear (it would also read a damaged anchor as one). Not done - moving the
 test helpers into `reclaim_census.hpp`, an epoch-gate cell (one core's
 dispatch holds no memo past a statement). Suite: 4077/4077 before the
 review's fixes, 4078/4078 after. Overhead not measured; measured at the milestone's close.
+
+**BY-S3 - landed 2026-10-16** on `worktree-reindex-drop-index-reclaim`.
+`REINDEX INDEX <name>` parsed into `IndexStmt.reindex`, routed to
+`HandleIndex`, on the archive's fail-closed list, refused `NotImplemented`
+inside `BEGIN` before a scope opens (BY-Q4 (a)), and run under one
+`DdlScope` and the relation `X`. `exec::ReindexIndex` delete-marks the old
+row, then builds the definition from that row's own positions, widths and
+flag - never names re-resolved, so a `RENAME COLUMN`, which holds no `X`,
+cannot move it - checks it under the transaction's id, issues a new oid and
+goes through `BuildAndWriteIndex`, the one door it now shares with
+`CREATE INDEX` (split out of `CreateIndex(stmt)`). BY-R8 as built:
+`CheckIndexNameFree` skips the asker's own mark, and `FindIndexByName`
+returns the largest `index_oid` holding the name (the text of BY-R8 above
+was aligned to the code). **`exec::DropIndex` and `ReindexIndex` act only
+on the relation the `X` was taken for**: no relation is `NotFound`, an
+index the name now finds elsewhere is `TxnConflict`. Cells
+(`tests/index_reindex_test.cpp`, `index_reclaim_job_test.cpp`,
+`ddl_fence_rig_test.cpp`, the contract suite's `LoadRebuilt`
+configuration): a rolled-back and purged churn's entries gone, a new oid,
+every query identical; a unique index rebuilt unique; refused inside
+`BEGIN` with the transaction going on; an unknown name and `REINDEX TABLE`
+refused; `DROP INDEX x; CREATE INDEX x` in one transaction, committed and
+rolled back; another transaction's open drop still holding the name; at the
+slot cap a rebuild refused `ResourceExhausted` with the old index, its
+entries and the page count unchanged; the old tree reclaimed and the new
+serving; a crash after the statement; **a crash at every record the
+statement wrote**, over the data file as it was before it: every cut before
+the commit mounts the old index, every cut past it the new; two cores, a
+`REINDEX` on core 0 parking on a writer's `IX` on core 1, then holding its
+row and serving core 1's probe and insert. **BY-R8's scope changed one
+existing cell**: `CatalogNameRigTest`'s own-drop cell expected
+`CREATE INDEX` after `DROP INDEX` in one transaction to be refused, and now
+expects it admitted (renamed
+`ItsOwnOpenDropAdmitsAnIndexAndRefusesARenameAsNotRetryable`; its rename
+half stands); `catalog.md` CT7 says so. `critics-developer`, two passes.
+First: accepted - B1 (a name that took no hold rebuilt), B2 (the rebuild
+re-spelled by names, racing `RENAME COLUMN`), B3 (the "every surplus entry"
+wording in the header and the contract cell), the BY-R8 text, the dispatcher
+helpers `NoteIndexRowDropped`/`NoteIndexRowWritten`, `ExpectKeyword`, one
+message-wrapping rule (`DropNamedIndex`), `PrepareIndexDef`'s unused
+defaults, and the missing cells. Second: accepted - B1's hole in the
+`DROP INDEX` arm (an unresolved name dropped under no hold and an empty
+`std::optional` dereferenced; one `FindNamedIndex(stmt, relation)` now
+serves both arms), `replaced_oid` in `IndexDdlResult` for the out-parameter,
+`REINDEX` in the parser's unknown-keyword list, and the crash cell rebuilt
+on record boundaries over a data file copied before the statement (the first
+version cut at sixteenths and could not show a loser holding the new row).
+Rejected - passing the row-change pointers unconditionally (the guard is the
+create and drop arms' existing shape and changes nothing the helpers do),
+moving `PrepareIndexDef` out of the header (it is one of the three seams
+the header documents `CreateIndex` as). Not done - a cell for the name
+moving between the dispatcher's lookup and the statement's (no seam between
+two catalog reads on one reactor), and a `REINDEX` whose backfill fails
+(`known-gaps.md`, Page reclamation). Suite: 4085/4086 before the reviews
+(the own-drop cell), 4089/4089 after the first review's fixes, 4089/4089
+after the second's. Overhead not measured; measured at the milestone's close.

@@ -214,8 +214,10 @@ what the check asks, below, not the latch. `RegisterPattern` (page 9) and
   - a create of a table or a namespace takes the name
     (`DROP TABLE t; CREATE TABLE t` in one transaction, which one rollback
     undoes whole);
-  - a create of an index is `AlreadyExists`, as before AT-S17: the name is
-    the dropped index's until the drop commits;
+  - a create of an index takes the name since BY-R8
+    (`DROP INDEX ix; CREATE INDEX ix` in one transaction, which one
+    rollback undoes whole) - the rule `REINDEX`'s swap rests on; it was
+    `AlreadyExists` from AT-S17 until then;
   - a rename is `Unsupported` — it lands for good, and the drop's rollback
     would restore the name beside it; commit the drop first.
 

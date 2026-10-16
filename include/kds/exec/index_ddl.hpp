@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,6 +43,9 @@ struct IndexDdlResult {
     PageId root_page_id = kInvalidPageId;
     std::uint16_t key_width = 0;
     std::uint16_t entry_width = 0;
+    // `REINDEX` only: the dropped index's oid, whose tree the caller queues
+    // at commit (BY-R2).
+    catalog::Oid replaced_oid = 0;
 
     // One line per check that passed but has something to say. Never a
     // reason the statement failed - a failure is a Status.
@@ -67,8 +71,11 @@ struct IndexDdlResult {
 // key column whose type has no index encoding, and whatever `CheckIndexDef`
 // answers for the rest - passed through rather than restated, so there is
 // one answer to "why not" and not two that can drift.
+// `trx_id` is the DDL's own transaction: a name it delete-marked is free to
+// it (BY-R8), which the view's own id - none, in autocommit - cannot say.
 StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(
-    catalog::Catalog& catalog, const parser::IndexStmt& stmt, const txn::ReadView* view = nullptr);
+    catalog::Catalog& catalog, const parser::IndexStmt& stmt, const txn::ReadView* view,
+    std::uint64_t trx_id);
 
 // The page half: the root allocated from `store` and formatted, the tree
 // backfilled over everything `access` already holds (spec §10a - every
@@ -101,9 +108,10 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
 // `trx_id` / `written` make the DDL transactional
 // (workplan-ddl-transactional.md DT5): the catalog row is stamped with
 // the creating transaction and its address reported, so a rollback can
-// retire it. Defaulted to the autocommit path. A failure after the tree is
-// built leaks it: no anchor slot names the tree, so no reclaim walk reaches
-// it (`drop-table.md` DT1's stated leaks).
+// retire it. Defaulted to the autocommit path. A build that fails frees its
+// unlogged tree (BX-S6); a failure after the tree is logged leaves it owed in
+// its anchor slot, seeded if the catalog refused before writing it, and the
+// next mount reclaims it (BY-R1, BY-R2).
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                      const parser::IndexStmt& stmt,
                                      std::uint64_t trx_id = catalog::kBootstrapXid,
@@ -113,15 +121,38 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
 
 // Removes the index named by `stmt` and returns its `index_oid`.
 //
-// **Frees no page at its own commit** (BF-Q8 (b) declined): the anchor slot
-// still names the tree, which is reclaimed with its relation when that
-// relation is dropped (`drop-table.md` DT1).
+// **Frees no page at its own commit**: the anchor slot still names the tree,
+// which the reclaimer frees once the commit is past the redo start and every
+// older statement has ended (BY-R2), then removes the slot (BY-R5).
 // As above, but a drop **delete-marks** its `sys.indexes` row rather than
 // retiring it when transactional, so a rollback clears the mark. Unlike
 // `DROP TABLE` this is isolated too - there is no in-place retype here
 // (ddl-transactional.md §5a).
+//
+// **Only an index on `relation`**, the relation the caller took the `X` on
+// when it first resolved the name: no relation (the name did not resolve
+// then) is `NotFound`, and an index the name now finds on another relation -
+// dropped and created again by another transaction in between (BY-R8) - is
+// `TxnConflict`, since writing it would be under no hold of this statement's.
 StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
-                                  std::uint64_t trx_id = catalog::kBootstrapXid,
-                                  catalog::CatalogRowChange* change = nullptr);
+                                  std::optional<catalog::Oid> relation, std::uint64_t trx_id,
+                                  catalog::CatalogRowChange* change);
+
+// **`REINDEX INDEX <name>`** (BY-R6,
+// `instructions/v3.2.0/workorder-by-reindex-drop-index-reclaim.md`): the
+// index named by `stmt` is dropped as `DROP INDEX` drops it, and built again
+// through `CREATE INDEX`'s build - the row's own key and covered column
+// positions, widths and unique flag, the same name, under a new `index_oid`
+// (BY-Q2 (a)) - in one transaction, under the `X` the caller holds on
+// `relation`, refused as `DropIndex` refuses off it. The backfill writes an
+// entry for every version still on a row's undo chain (IX10a), so a rebuild
+// drops the surplus entries (IX2) of rows that left the relation and keeps
+// an entry for every version a chain still holds. The result's
+// `replaced_oid` is the dropped index's.
+StatusOr<IndexDdlResult> ReindexIndex(catalog::Catalog& catalog, storage::PageStore& store,
+                                      const parser::IndexStmt& stmt,
+                                      std::optional<catalog::Oid> relation, std::uint64_t trx_id,
+                                      catalog::CatalogRowChange* dropped,
+                                      catalog::CatalogRowRef* written, wal::WalManager* wal);
 
 }  // namespace kds::exec

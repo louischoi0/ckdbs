@@ -392,5 +392,64 @@ TEST(DdlFenceRigTest, AnUpdateOnAPeerWaitsForACreateIndexOnCoreZeroAndMaintainsI
     EXPECT_NE(found.find(",77"), std::string::npos) << "the index missed the moved value: " << found;
 }
 
+TEST(DdlFenceRigTest, AReindexOnCoreZeroWaitsForAWriterOnAPeerAndTheNewTreeHoldsItsRow) {
+    // **BY-R6's hold.** A `REINDEX` runs under the relation `X`, as `CREATE
+    // INDEX` does: a writer on core 1 holding the relation's `IX` in an open
+    // transaction parks the rebuild on core 0 until it commits, and the new
+    // tree's backfill then reads the writer's row. Core 1 next resolves the
+    // new index through the schema word and probes and maintains it.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    const catalog::Oid oid = PeerRelation(*rig, "fenced_rx");
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_EQ(rig->core(0).dispatcher().Dispatch("CREATE INDEX rx ON fenced_rx (v)").response.rfind(
+                  "CREATED INDEX", 0),
+              0u);
+    auto old_ix = rig->core(0).catalog().FindIndexByName("rx");
+    ASSERT_TRUE(old_ix.ok());
+
+    Session writer;
+    ASSERT_EQ(d1.Dispatch("BEGIN", &writer).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(d1.Dispatch("INSERT INTO fenced_rx VALUES (7)", &writer).response.rfind("INSERTED", 0),
+              0u);
+
+    Statement reindex;
+    reindex.sql = "REINDEX INDEX rx";
+    Statement commit;
+    commit.sql = "COMMIT";
+    commit.session = &writer;
+    Submit(*rig, 0, reindex);
+    rig->Start();
+    reindex.go.store(true, std::memory_order_release);
+
+    const txn::LockKey rel = txn::LockKey::Relation(oid);
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return rig->locks().WaiterCount(rel) == 1; }))
+        << "the rebuild never parked on the writer's relation: " << reindex.out.response;
+    EXPECT_FALSE(reindex.done.load(std::memory_order_acquire)) << reindex.out.response;
+
+    Submit(*rig, 1, commit);
+    commit.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return commit.done.load(std::memory_order_acquire); }));
+    ASSERT_EQ(commit.out.response.rfind("COMMIT", 0), 0u) << commit.out.response;
+    ASSERT_TRUE(
+        KickUntil(*rig, 0, [&] { return reindex.done.load(std::memory_order_acquire); }, 5000ms))
+        << "the rebuild never resumed after the writer committed";
+    EXPECT_EQ(reindex.out.response.rfind("REINDEXED INDEX", 0), 0u) << reindex.out.response;
+    rig->Stop();
+
+    auto new_ix = rig->core(1).catalog().FindIndexByName("rx");
+    ASSERT_TRUE(new_ix.ok());
+    EXPECT_NE(new_ix.value().index_oid, old_ix.value().index_oid);
+    ASSERT_EQ(d1.Dispatch("INSERT INTO fenced_rx VALUES (8)").response.rfind("INSERTED", 0), 0u);
+    const std::string plan = d1.Dispatch("ANALYZE SELECT * FROM fenced_rx WHERE v = 7").response;
+    EXPECT_NE(plan.find("IndexProbe"), std::string::npos) << plan;
+    EXPECT_NE(d1.Dispatch("SELECT * FROM fenced_rx WHERE v = 7").response.find(",7"),
+              std::string::npos)
+        << "the new tree missed the writer's row";
+    const std::string shown = d1.Dispatch("SELECT name, entries FROM sys.indexes").response;
+    EXPECT_EQ(testing_view::ReadViewText(shown).Find("name", "rx", "entries"), "2") << shown;
+}
+
 }  // namespace
 }  // namespace kds::server
