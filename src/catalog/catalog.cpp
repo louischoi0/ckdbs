@@ -3905,8 +3905,9 @@ StatusOr<std::vector<SysIndexRow>> Catalog::FindIndexesForTable(Oid table_oid) {
     return out;
 }
 
-StatusOr<SysIndexRow> Catalog::FindIndexByName(std::string_view name) {
-    auto rows = ListIndexes();
+StatusOr<SysIndexRow> Catalog::FindIndexByName(std::string_view name,
+                                               const txn::ReadView* view) {
+    auto rows = ListIndexes(view);
     if (!rows.ok()) return rows.status();
     for (const SysIndexRow& row : rows.value()) {
         if (NameView(row.name) == name) return row;
