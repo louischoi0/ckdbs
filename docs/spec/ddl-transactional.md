@@ -138,7 +138,12 @@ Built, and what each gets:
   on every core: it takes the relation `X` and builds where its session is
   (§5e).
 - **`DROP INDEX`** — atomic and isolated on every core, admitted inside a
-  transaction (§5b, §5e).
+  transaction (§5b, §5e); a `CREATE INDEX` of the name it dropped is
+  admitted in the same transaction (BY-R8, `catalog.md` CT7).
+- **`REINDEX INDEX`** (BY) — a `DROP INDEX` and a `CREATE INDEX` of the
+  same name in one transaction, under one relation `X`, so atomic and
+  isolated as they are; autocommit only, refused `NotImplemented` inside
+  one (`index.md` §12).
 - **`CREATE ASSERTION`** — built and published where its session is,
   on any core, since AT-S5d; admitted inside a transaction
   (§5f).
@@ -437,8 +442,9 @@ the waiter's core.
 **Atomic and isolated, on every core.** A `CREATE INDEX` backfills with no
 concurrent writer, so the finished index holds every row, and nothing names
 it until its commit; a rollback leaves the tree in its anchor slot, as a
-dropped index's stays, and both are reclaimed with their relation
-(`drop-table.md` DT1). A `DROP INDEX` inside a transaction is admitted: a writer on
+committed drop's stays, and each is reclaimed by an index job queued at
+the decide, or with its relation if that is dropped first (`index.md` §12, BY;
+`drop-table.md` DT1). A `DROP INDEX` inside a transaction is admitted: a writer on
 another core resolves the relation with the index still in it (§5b, since
 AX-S2), and in any case writes nothing until the drop decides, and the
 decide moves the word before it releases, so the writer re-resolves and
