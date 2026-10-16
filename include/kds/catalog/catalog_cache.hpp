@@ -85,15 +85,16 @@ public:
 
     // ---- name -> oid (sys.objects) ---------------------------------------
 
-    // nullptr on a miss. The returned pointer is valid until the next
-    // Invalidate().
-    const Oid* FindOidByName(std::string_view name) noexcept;
+    // A relation's name is unique within its namespace (namespace.md NS6),
+    // so the key is the pair. nullptr on a miss. The returned pointer is
+    // valid until the next Invalidate().
+    const Oid* FindOidByName(Oid namespace_oid, std::string_view name) noexcept;
 
     // Copies `name` into the cache: a key that outlives the request must
     // not borrow the request's buffer (parser.md I4's copy-at-the-boundary
     // rule). Already-present keys are left alone, so a pointer handed out
     // earlier keeps pointing at the same value.
-    void PutOidByName(std::string_view name, Oid oid);
+    void PutOidByName(Oid namespace_oid, std::string_view name, Oid oid);
 
     // ---- oid -> TableAccess (sys.tables + sys.columns) -------------------
 
@@ -228,7 +229,11 @@ public:
     // about cache state without perturbing what it is measuring.
     bool types_loaded() const noexcept { return types_.has_value(); }
     std::size_t table_access_entries() const noexcept { return table_access_.size(); }
-    std::size_t name_entries() const noexcept { return name_to_oid_.size(); }
+    std::size_t name_entries() const noexcept {
+        std::size_t n = 0;
+        for (const auto& [ns, names] : name_to_oid_) n += names.size();
+        return n;
+    }
     std::size_t pattern_entries() const noexcept { return patterns_.size(); }
     // Generations an `Invalidate` retired under a pin and not yet freed.
     std::size_t retired_generations() const noexcept { return graveyard_.size(); }
@@ -248,7 +253,10 @@ private:
     // property PutTableAccess() promises (see above). A flat map would
     // break every held pointer on growth.
     std::unordered_map<Oid, TableAccess> table_access_;
-    std::unordered_map<std::string, Oid, NameHash, std::equal_to<>> name_to_oid_;
+    using NameMap = std::unordered_map<std::string, Oid, NameHash, std::equal_to<>>;
+    // Namespace oid -> name -> relation oid: nested so a lookup by
+    // string_view needs no composite key built per statement.
+    std::unordered_map<Oid, NameMap> name_to_oid_;
 
     // Node-based for the same reference-stability reason as table_access_,
     // and additionally because UpdatePatternWaystone() mutates an entry a
@@ -275,7 +283,7 @@ private:
     struct Generation {
         std::uint64_t generation;
         std::unordered_map<Oid, TableAccess> table_access;
-        std::unordered_map<std::string, Oid, NameHash, std::equal_to<>> name_to_oid;
+        std::unordered_map<Oid, NameMap> name_to_oid;
         std::optional<std::vector<SysObjectRow>> table_list;
         std::unordered_map<std::uint64_t, PatternAccess> patterns;
     };

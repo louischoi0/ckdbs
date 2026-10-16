@@ -12,6 +12,7 @@
 
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/type_literals.hpp"
+#include "kds/server/sys_views.hpp"
 
 // KWP v0's socket half (`workplan-kwp-load.md` KL02/KL03, at 1769487). The syscall
 // idioms are tcp_server.cpp's, including the MSG_NOSIGNAL lesson: a client
@@ -381,7 +382,10 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // so it publishes this core's epoch and revalidates the catalog itself.
     const CommandDispatcher::StatementEpochScope epoch(*dispatcher_);
     auto& catalog = dispatcher_->catalog();
-    auto oid = catalog.FindTableOidByName(begin.value().relation);
+    // `ns.t` or `t`; a load session has no `USE`, so an unqualified
+    // relation is in `public` (namespace.md NS5).
+    const auto [qualifier, bare] = SplitQualifiedArg(begin.value().relation);
+    auto oid = catalog.ResolveRelation(qualifier, bare, catalog::kNamespacePublic);
     if (!oid.ok()) {
         SendError(conn, oid.status());
         return;
@@ -499,7 +503,9 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     // a relation, so the NULL has no other reading to collide with.
     const std::string chunk = "chunk " + std::to_string(header.value().chunk_seq);
     parser::InsertStmt stmt;
-    stmt.table_name = conn.load.relation;
+    const auto [qualifier, bare] = SplitQualifiedArg(conn.load.relation);
+    stmt.schema = std::string(qualifier);
+    stmt.table_name = std::string(bare);
     stmt.described = conn.load.shape;
     stmt.rows.reserve(rows.value().size());
     for (std::size_t r = 0; r < rows.value().size(); ++r) {

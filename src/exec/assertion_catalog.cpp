@@ -205,19 +205,13 @@ StatusOr<AssertionColumns> ResolveAssertionColumns(const catalog::TableAccess& a
 // yet, and what it fenced is what the build reads.
 StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
                                           const parser::AssertionStmt& stmt,
-                                          const txn::ReadView* view) {
-    auto oid = catalog.FindTableOidByName(stmt.table_name, view);
+                                          const txn::ReadView* view,
+                                          catalog::Oid default_namespace) {
+    // Only an absent name is §3.1's refusal; a read that failed is itself.
+    auto oid = catalog.ResolveRelation(stmt.schema, stmt.table_name, default_namespace,
+                                       stmt.table_byte_offset, view);
     if (!oid.ok()) {
-        // Only an absent name is §3.1's refusal; a read that failed is itself.
-        if (oid.status().code() != StatusCode::kNotFound) return oid.status();
-        return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
-                                std::to_string(stmt.table_byte_offset) + ")");
-    }
-    // AF-T3, as at every other relation name.
-    if (Status s = catalog.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
-                                                  stmt.table_byte_offset);
-        !s.ok()) {
-        return s;
+        return catalog::NamedRelationMiss(oid.status(), stmt.table_name, stmt.table_byte_offset);
     }
     return oid.value();
 }

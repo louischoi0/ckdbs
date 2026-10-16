@@ -59,7 +59,7 @@ protected:
     }
 
     void Insert(std::int64_t v) {
-        auto oid = boot_->catalog.FindTableOidByName("t");
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
         ASSERT_TRUE(oid.ok());
         auto access = boot_->catalog.InitTableAccess(oid.value());
         ASSERT_TRUE(access.ok());
@@ -80,7 +80,7 @@ protected:
     }
 
     PageId Root() {
-        auto oid = boot_->catalog.FindTableOidByName("t");
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
         auto access = boot_->catalog.InitTableAccess(oid.value());
         return access.value()->desc_page_id;
     }

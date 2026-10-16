@@ -408,27 +408,17 @@ struct ColumnDef {
 // beside its `table_name`, empty when the name was written unqualified.
 // Stated once here rather than nine times:
 //
-// **A relation's name is instance-global, and a qualifier does not change
-// which relation a name reaches.** That is AF-T3's decision, and it is the
-// half of `docs/spec/namespace.md` NS5/NS6 that AF declines: AF-2 makes a
-// namespace a *placement* declaration and AF-9 says outright that it is not
-// a name-collision domain. So `orders.customer` and `customer` resolve to
-// the same row, and two namespaces still cannot hold two relations of one
-// name.
+// **A relation's name is unique within its namespace, and the qualifier
+// selects the namespace** (`docs/spec/namespace.md` NS5, NS6): `orders.t`
+// and `ledger.t` are two relations. An unqualified name means the session's
+// namespace - `public` until a `USE` (NS8) - and nothing else: there is no
+// search, so a relation in another namespace is reached only by its
+// qualifier. `Catalog::ResolveRelation` is the one implementation; a miss
+// names the namespaces that do hold the name, at its byte. At `CREATE TABLE`
+// the qualifier, or the session's namespace, is where the relation lands.
 //
-// What a qualifier *is*, then, is an assertion the engine checks:
-//
-//   - at `CREATE TABLE ns.t` it **selects** the namespace, which is the one
-//     place it decides anything (the namespace's affinity is declared and
-//     read by nothing, docs/spec/namespace.md);
-//   - everywhere else it is verified against the relation's stored
-//     `namespace_oid` and a disagreement is refused by name with its byte
-//     (`Catalog::CheckRelationQualifier`). Accepting a false qualifier
-//     silently would be the "truthfulness beats convenience" rule broken on
-//     the one statement a reader uses to see where a relation lives.
-//
-// `sys` keeps its older meaning - the catalog views - and is refused as a
-// user namespace (`well_known.hpp`), so no statement changes meaning.
+// `sys` keeps its older meaning - the catalog views - and never resolves for
+// any other statement, so a catalog relation is read only as `sys.<view>`.
 //
 // The parser does not resolve any of this: which namespaces exist is the
 // catalog's question, exactly as `RelationRef::schema` has always said.

@@ -1305,7 +1305,9 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // The name, asked early so a taken one - or one an open drop holds -
     // costs no oid and no page. Not the answer that binds: that is asked
     // again under page 6 at the insert below.
-    if (Status s = CheckNameFree(name, kTypeTable, trx_id, /*own_drop_frees=*/true); !s.ok()) {
+    if (Status s = CheckNameFree(name, kTypeTable, namespace_oid, trx_id,
+                                 /*own_drop_frees=*/true);
+        !s.ok()) {
         return s;
     }
 
@@ -1431,7 +1433,8 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         // already does.
         auto names = store_.Get(kCatalogPageObjects);
         if (!names.ok()) return names.status();
-        if (Status s = CheckNameFree(name, kTypeTable, trx_id, /*own_drop_frees=*/true);
+        if (Status s = CheckNameFree(name, kTypeTable, namespace_oid, trx_id,
+                                     /*own_drop_frees=*/true);
             !s.ok()) {
             return s;
         }
@@ -1489,7 +1492,8 @@ StatusOr<SysTableRow> Catalog::GetSysTableRow(Oid table_oid) {
     return Status::NotFound("no sys.tables row for this oid");
 }
 
-StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name, const txn::ReadView* view) {
+StatusOr<Oid> Catalog::FindTableOidByName(Oid namespace_oid, std::string_view name,
+                                          const txn::ReadView* view) {
     // **A transactional lookup neither reads nor fills the cache** (DT3;
     // ddl-transactional.md §4's option (a)). The cache is one map for
     // the whole instance and answers "does this name exist" with no idea
@@ -1498,7 +1502,7 @@ StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name, const txn::Read
     // one would publish that relation to everybody. Scoped to callers that
     // pass a view: with none, this is the path that always existed.
     if (view == nullptr) {
-        if (const Oid* cached = cache_.FindOidByName(name); cached != nullptr) {
+        if (const Oid* cached = cache_.FindOidByName(namespace_oid, name); cached != nullptr) {
             return *cached;
         }
     }
@@ -1507,8 +1511,9 @@ StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name, const txn::Read
     if (!rows.ok()) return rows.status();
 
     for (const auto& row : rows.value()) {
-        if (row.type_oid == kTypeTable && NameView(row.name) == name) {
-            if (view == nullptr) cache_.PutOidByName(name, row.oid);
+        if (row.type_oid == kTypeTable && row.namespace_oid == namespace_oid &&
+            NameView(row.name) == name) {
+            if (view == nullptr) cache_.PutOidByName(namespace_oid, name, row.oid);
             return row.oid;
         }
     }
@@ -1517,7 +1522,7 @@ StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name, const txn::Read
     // NotFound before creating it, and a second Catalog over the same store
     // can create a table this instance never saw. A remembered absence
     // makes both answers wrong, where a repeated scan is only slow.
-    return Status::NotFound("no table with this name");
+    return Status::NotFound(std::string(kNoSuchRelationMessage));
 }
 
 namespace {
@@ -1580,8 +1585,8 @@ Status CheckObjects(storage::PageStore& store, const txn::TransactionManager* tx
 
 }  // namespace
 
-Status Catalog::CheckNameFree(std::string_view name, Oid live_type, std::uint64_t own_trx_id,
-                              bool own_drop_frees) {
+Status Catalog::CheckNameFree(std::string_view name, Oid live_type, Oid namespace_oid,
+                              std::uint64_t own_trx_id, bool own_drop_frees) {
     const bool table = live_type == kTypeTable;
     const std::string_view kind = table ? "relation" : "namespace";
     const Oid dropped_type = table ? kTypeDroppedTable : kTypeDroppedNamespace;
@@ -1596,9 +1601,11 @@ Status Catalog::CheckNameFree(std::string_view name, Oid live_type, std::uint64_
     return CheckObjects(store_, txn_, own_trx_id, [&](const SysObjectRow& row,
                                                       Stamp whose) -> Status {
         if (NameView(row.name) != name) return Status::OK();
+        if (table && row.namespace_oid != namespace_oid) return Status::OK();
         if (row.type_oid == live_type) {
-            return Status::AlreadyExists("a " + std::string(kind) + " named '" +
-                                         std::string(name) + "' already exists");
+            return Status::AlreadyExists(
+                "a " + std::string(kind) + " named '" + std::string(name) + "' already exists" +
+                (table ? " in namespace '" + NamespaceSpelling(namespace_oid) + "'" : ""));
         }
         if (row.type_oid != dropped_type || whose == Stamp::kDecided) return Status::OK();
         if (whose == Stamp::kOther) return PendingDropRefusal(kind, name);
@@ -1709,9 +1716,15 @@ Status Catalog::RenameTable(Oid table_oid, std::string_view new_name,
     // even this session's open drop of the name holds it - that drop's
     // rollback would restore the name beside a rename nothing takes back -
     // and `own_trx_id` only makes that refusal say so instead of retryable.
+    //
+    // The new name is asked in the relation's own namespace (NS6), read
+    // before the hold: no statement moves a relation between namespaces.
+    auto table_row = GetSysTableRow(table_oid);
+    if (!table_row.ok()) return table_row.status();
     auto names = store_.Get(kCatalogPageObjects);
     if (!names.ok()) return names.status();
-    if (Status s = CheckNameFree(new_name, kTypeTable, own_trx_id, /*own_drop_frees=*/false);
+    if (Status s = CheckNameFree(new_name, kTypeTable, table_row.value().namespace_oid, own_trx_id,
+                                 /*own_drop_frees=*/false);
         !s.ok()) {
         return s;
     }
@@ -2009,55 +2022,84 @@ StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name,
     return Status::NotFound("no namespace with this name");
 }
 
-Status Catalog::CheckRelationQualifier(std::string_view qualifier, std::string_view rel_name,
-                                       Oid rel_oid, std::uint32_t byte_offset,
-                                       const txn::ReadView* view) {
-    if (qualifier.empty()) return Status::OK();
+Status NamedRelationMiss(const Status& miss, std::string_view name, std::uint32_t byte_offset) {
+    if (miss.message() != Catalog::kNoSuchRelationMessage) return miss;
+    return Status::NotFound("no relation named '" + std::string(name) + "' (byte " +
+                            std::to_string(byte_offset) + ")");
+}
 
-    // Byte 0 is "nowhere", not a position: a statement's first token is its
-    // verb, so no relation name can sit there, and the debug surfaces that
-    // take a bare argument have no offsets to give. They get a refusal with
-    // no position rather than one pointing at byte 0.
-    const auto at = [byte_offset](Status s) {
-        return byte_offset == 0 ? s : s.WithContext("byte " + std::to_string(byte_offset));
-    };
-
-    auto ns = FindNamespaceOidByName(qualifier, view);
-    if (!ns.ok()) {
-        if (ns.status().code() != StatusCode::kNotFound) return ns.status();
-        return at(Status::NotFound("no namespace named '" + std::string(qualifier) + "'"));
-    }
-
-    // Through the **cached** access rather than `GetSysTableRow`, which
-    // scans the catalog page: this runs per statement on every qualified
-    // name, and the answer is a field `TableAccess` already carries. It is
-    // also that field's first reader - `schema.hpp` said AF would be, and
-    // said so precisely to keep this a decision rather than a discovery.
-    auto access = InitTableAccess(rel_oid);
-    if (!access.ok()) return access.status();
-    const Oid actual_oid = access.value()->namespace_oid;
-    if (actual_oid == ns.value()) return Status::OK();
-
-    // Names where it *is*, not only where it is not: the qualifier asserts
-    // the relation's namespace (grouping, never placement since AT-S9), so
-    // the useful answer to a wrong one is the namespace. A relation in `public` has no spelling of its own
-    // (`well_known.hpp`), which is why that case says so in words.
-    std::string actual;
-    if (actual_oid == kNamespaceSys) {
-        actual = kNamespaceSysName;
-    } else if (actual_oid == kNamespacePublic) {
-        actual = kNamespacePublicName;
-    } else {
-        actual = "oid " + std::to_string(actual_oid);
-        auto live = ListNamespaces(view);
-        if (!live.ok()) return live.status();
-        for (const SysObjectRow& ns_row : live.value()) {
-            if (ns_row.oid == actual_oid) actual = NameView(ns_row.name);
+std::string Catalog::NamespaceSpelling(Oid namespace_oid, const txn::ReadView* view) {
+    // A relation in `public` or `sys` has no row of its own spelling
+    // (`well_known.hpp`), so the two are answered from the constants.
+    if (namespace_oid == kNamespaceSys) return std::string(kNamespaceSysName);
+    if (namespace_oid == kNamespacePublic) return std::string(kNamespacePublicName);
+    auto live = ListNamespaces(view);
+    if (live.ok()) {
+        for (const SysObjectRow& row : live.value()) {
+            if (row.oid == namespace_oid) return std::string(NameView(row.name));
         }
     }
-    return at(Status::NotFound("no relation '" + std::string(qualifier) + "." +
-                               std::string(rel_name) + "'; '" + std::string(rel_name) +
-                               "' is in namespace '" + actual + "'"));
+    return "oid " + std::to_string(namespace_oid);
+}
+
+StatusOr<Oid> Catalog::ResolveRelation(std::string_view qualifier, std::string_view name,
+                                       Oid default_namespace, std::uint32_t byte_offset,
+                                       const txn::ReadView* view) {
+    const auto at = [byte_offset](Status s) {
+        return byte_offset == 0
+                   ? s
+                   : s.WithMessage(s.message() + " (byte " + std::to_string(byte_offset) + ")");
+    };
+    Oid ns = default_namespace;
+    if (!qualifier.empty()) {
+        auto named = FindNamespaceOidByName(qualifier, view);
+        if (!named.ok()) {
+            if (named.status().code() != StatusCode::kNotFound) return named.status();
+            return at(Status::NotFound("no namespace named '" + std::string(qualifier) + "'"));
+        }
+        ns = named.value();
+    }
+    if (ns == kNamespaceSys) {
+        return at(Status::Unsupported(
+            "'" + std::string(kNamespaceSysName) + "." + std::string(name) +
+            "' is a catalog relation: read it as a catalog view (SELECT ... FROM sys." +
+            std::string(name) + "); no other statement names one"));
+    }
+
+    auto oid = FindTableOidByName(ns, name, view);
+    if (oid.ok() || oid.status().code() != StatusCode::kNotFound) return oid;
+
+    // The miss. Which other namespaces hold the name - each is a relation
+    // the statement could have meant, reached only by its qualifier.
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view, txn_);
+    if (!rows.ok()) return rows.status();
+    std::vector<Oid> holders;
+    for (const SysObjectRow& row : rows.value()) {
+        if (row.type_oid == kTypeTable && row.namespace_oid != ns && NameView(row.name) == name) {
+            holders.push_back(row.namespace_oid);
+        }
+    }
+    if (holders.empty()) return Status::NotFound(std::string(kNoSuchRelationMessage));
+    if (holders.size() == 1 && holders[0] == kNamespaceSys) {
+        return at(Status::NotFound("no relation '" + std::string(name) + "' in namespace '" +
+                                   NamespaceSpelling(ns, view) + "'; '" + std::string(name) +
+                                   "' is a catalog relation: read it as sys." +
+                                   std::string(name)));
+    }
+    std::string where;
+    std::string example;
+    for (const Oid holder : holders) {
+        if (holder == kNamespaceSys) continue;
+        const std::string spelled = NamespaceSpelling(holder, view);
+        if (!where.empty()) where += ", ";
+        where += "'" + spelled + "'";
+        if (example.empty()) example = spelled + "." + std::string(name);
+    }
+    const std::string written =
+        qualifier.empty() ? std::string(name) : std::string(qualifier) + "." + std::string(name);
+    return at(Status::NotFound("no relation '" + written + "' in namespace '" +
+                               NamespaceSpelling(ns, view) + "'; '" + std::string(name) +
+                               "' is in namespace " + where + " - write " + example));
 }
 
 StatusOr<std::vector<SysObjectRow>> Catalog::ListNamespaces(const txn::ReadView* view) {
@@ -2110,7 +2152,8 @@ StatusOr<Oid> Catalog::CreateNamespace(std::string_view name, std::uint64_t trx_
 
     auto names = store_.Get(kCatalogPageObjects);
     if (!names.ok()) return names.status();
-    if (Status s = CheckNameFree(name, kTypeNamespace, trx_id, /*own_drop_frees=*/true);
+    if (Status s = CheckNameFree(name, kTypeNamespace, kNamespaceSys, trx_id,
+                                 /*own_drop_frees=*/true);
         !s.ok()) {
         return s;
     }
@@ -2458,10 +2501,6 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     if (!schema.ok()) return schema.status();
 
     TableAccess access{};
-    // The relation's namespace comes from its sys.tables row rather than
-    // from the caller: the entry is shared, so a caller-supplied value would
-    // let whichever caller filled it first decide it for everyone.
-    access.namespace_oid = table_row.value().namespace_oid;
     access.oid = oid;
     access.schema = std::move(schema.value());
     // The slot count rides with the columns because the layout is the

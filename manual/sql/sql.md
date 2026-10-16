@@ -16,6 +16,7 @@ dispatcher's own commands):
 
 | Class | Statements |
 |---|---|
+| Session | `USE <namespace>` |
 | DDL | `CREATE TABLE`, `CREATE NAMESPACE` / `DROP NAMESPACE`, `CREATE INDEX` / `DROP INDEX`, `CREATE ASSERTION` / `DROP ASSERTION`, `CREATE CABIN` / `DROP CABIN` |
 | DML | `INSERT`, `UPDATE`, `DELETE` |
 | Query | `SELECT` (joins, subqueries, `GROUP BY`, aggregates), `ANALYZE <select>` |
@@ -48,11 +49,12 @@ CREATE NAMESPACE <name>;
 DROP   NAMESPACE <name>;
 ```
 
-**A namespace groups relations that belong together, and nothing else.**
-It is not a separate storage area, it does not scope a transaction, it does
-not scope a *name* — see "Qualified names" below — and since v3.0.0's M3 it
-decides nothing about cores: every statement runs on the core its session
-is on, whatever namespaces its relations are in.
+**A namespace groups relations and scopes their names, and nothing else.**
+It is not a separate storage area, it does not scope a transaction, and
+since v3.0.0's M3 it decides nothing about cores: every statement runs on
+the core its session is on, whatever namespaces its relations are in. Two
+namespaces may each hold a relation of one name — see "Qualified names and
+USE" below.
 
 **Put relations that are joined, foreign-keyed or read together in one
 namespace.** That is the grouping the engine records for a future use
@@ -60,8 +62,8 @@ namespace.** That is the grouping the engine records for a future use
 sees; today it changes no answer and no cost.
 
 - `sys` and `public` are reserved and cannot be created or dropped. `sys`
-  names the catalog views; `public` is where an unqualified `CREATE TABLE`
-  lands.
+  names the catalog views; `public` is every session's namespace until a
+  `USE`.
 - `DROP NAMESPACE` is **RESTRICT**: a namespace holding any relation is
   refused, and the refusal names one of the relations that blocked it.
   There is no `CASCADE`.
@@ -78,30 +80,47 @@ sys public ledger
 DROPPED NAMESPACE ledger oid=4001
 ```
 
-### Qualified names
+### Qualified names and USE
 
 Any relation name may be written `<namespace>.<relation>`, everywhere a
 relation is named: `FROM`, every `JOIN`, inside a subquery, `INSERT INTO`,
-`UPDATE`, `DELETE FROM`, `REFERENCES`, `ALTER TABLE`, `DROP TABLE`,
-`CREATE INDEX ON`, `CREATE CABIN ON`, `CREATE ASSERTION ON`, `DESCRIBE`
-and `SHOW RELAYOUT`.
+`UPDATE`, `DELETE FROM`, `PURGE FROM`, `REFERENCES`, `ALTER TABLE`,
+`DROP TABLE`, `CREATE INDEX ON`, `CREATE CABIN ON`, `CREATE ASSERTION ON`,
+`CREATE TRANSITION ON`, `DESCRIBE` and `SHOW RELAYOUT`.
 
-**A relation's name is unique across the whole instance, and a qualifier
-does not change which relation a name reaches.** Two namespaces cannot hold
-two relations called `orders`. What a qualifier does depends on where it is
-written:
-
-- at `CREATE TABLE ns.t` it **chooses** the namespace;
-- everywhere else it is **checked**. A qualifier that disagrees with where
-  the relation actually lives is refused, and the refusal says where it is:
+**A relation's name is unique within its namespace.** `ledger.accounts` and
+`trading.accounts` are two relations. A qualified name means the relation in
+that namespace; an **unqualified name means the relation in the session's
+namespace**, and only there — `public` until the session says otherwise:
 
 ```
-> SELECT * FROM trading.accounts
-ERR no relation 'trading.accounts'; 'accounts' is in namespace 'ledger' (byte 14)
+USE <namespace>;
 ```
 
-An unqualified name means exactly what it always meant, so every statement
-written before namespaces existed still means the same thing.
+```
+> CREATE NAMESPACE ledger
+CREATED NAMESPACE ledger oid=4001
+> CREATE TABLE ledger.accounts (id int64, owner varchar) BTREE
+CREATED TABLE ledger.accounts oid=4002
+> SELECT * FROM accounts
+ERR NOT_FOUND retryable=0 no relation 'accounts' in namespace 'public'; 'accounts' is in namespace 'ledger' - write ledger.accounts (byte 14)
+> USE ledger
+USE namespace=ledger
+> SELECT * FROM accounts
+id,owner
+```
+
+- There is no search path: a relation in another namespace is reached only
+  by its qualifier, and the refusal names the qualifier to write.
+- An unqualified `CREATE TABLE` creates in the session's namespace.
+- `USE` lasts for the connection, may be given inside a transaction, and is
+  not undone by `ROLLBACK`. An unknown namespace is refused with its byte,
+  and `USE sys` is refused.
+- **The catalog is read only as `sys.<view>`**: `SELECT * FROM sys.tables`.
+  A bare `tables` is no relation of the session's namespace and the refusal
+  says `read it as sys.tables`; no statement other than a `SELECT` of a view
+  (and `SHOW RELAYOUT sys.<name>`) names a catalog relation.
+- A KWP load names its relation `ns.t`, or `t` for `public`'s.
 
 ### CREATE TABLE
 

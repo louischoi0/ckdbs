@@ -50,7 +50,7 @@ TEST(WaystoneAcrossCores, APeersRepeatedStatementRegistersItsPattern) {
     CommandDispatcher& d0 = rig->core(0).dispatcher();
     ASSERT_EQ(d0.Dispatch("CREATE TABLE r0 (id int64, v int64) BTREE").response.substr(0, 3),
               "CRE");
-    auto oid = rig->core(0).catalog().FindTableOidByName("r0");
+    auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "r0");
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
     ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES (7)").response.substr(0, 8), "INSERTED");

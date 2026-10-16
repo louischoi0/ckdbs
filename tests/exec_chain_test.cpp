@@ -77,7 +77,7 @@ protected:
     // Inserts one row through the same path the dispatcher uses, so the
     // tuples under test are the ones a real INSERT produces.
     void Insert(const std::string& table, const std::vector<parser::AstValue>& body) {
-        auto oid = boot_->catalog.FindTableOidByName(table);
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, table);
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto access = boot_->catalog.InitTableAccess(oid.value());
         ASSERT_TRUE(access.ok()) << access.status().message();
@@ -644,7 +644,7 @@ TEST_F(ExecChainTest, AResumedPrefixCoversEveryInnerRowAcrossADivideThatDropsARe
         Insert("au", row);
     }
 
-    auto tr_oid = boot_->catalog.FindTableOidByName("tr");
+    auto tr_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "tr");
     ASSERT_TRUE(tr_oid.ok());
     auto tr = boot_->catalog.InitTableAccess(tr_oid.value());
     ASSERT_TRUE(tr.ok());
@@ -672,7 +672,7 @@ TEST_F(ExecChainTest, AResumedPrefixCoversEveryInnerRowAcrossADivideThatDropsARe
                     .ok());
 
     DivideAtTheBoundary sink;
-    sink.outer = boot_->catalog.FindTableOidByName("au").value();
+    sink.outer = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "au").value();
     std::vector<std::uint64_t> got;
     std::size_t divides = 0;
     std::uint64_t inserted = 0;

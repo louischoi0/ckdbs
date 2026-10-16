@@ -752,7 +752,7 @@ TEST_F(StepCompileTest, ACabinStepsKeyColumnIsAlwaysInItsFilterMask) {
     // and the mask is derived from that same residual. This fails the day
     // someone reorders the mask pass past the kind assignment - which is
     // the only way the recording could read a stale slot.
-    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    auto trade_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trade", nullptr);
     ASSERT_TRUE(trade_oid.ok());
     ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
 
@@ -767,7 +767,7 @@ TEST_F(StepCompileTest, AJoinOnACabinedColumnCompilesToACorrelatedCabinProbe) {
     // the shape that walked the inner relation once per outer row, and the
     // only accelerable shape a heap relation's join column has. Both ON
     // orientations must give the same probe, per the tuple key arm's argument.
-    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    auto trade_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trade", nullptr);
     ASSERT_TRUE(trade_oid.ok());
     ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
 
@@ -787,7 +787,7 @@ TEST_F(StepCompileTest, ALiteralCabinEqualityBeatsTheCorrelatedForm) {
     // A compile-time key needs no per-row read, so the literal arm stays
     // first: `trade.acct_id = 7` wins over the join equality on the same
     // cabined column, and the plan carries a value, not a key source.
-    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    auto trade_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trade", nullptr);
     ASSERT_TRUE(trade_oid.ok());
     ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
 
@@ -806,7 +806,7 @@ TEST_F(StepCompileTest, TheCorrelatedCabinDeclinesAMismatchedDescriptor) {
     // cabin column's type, and only an identical descriptor makes the
     // outer row's decoded value the form the set was keyed on.
     Create("CREATE TABLE narrow2 (id int64, small int32)");
-    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    auto trade_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trade", nullptr);
     ASSERT_TRUE(trade_oid.ok());
     ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
 
@@ -823,7 +823,7 @@ TEST_F(StepCompileTest, ACorrelatedSubChainProbesTheCabinThroughTheFrame) {
     // equality reaches outward (up == 1), which is the "available before
     // this step runs" case - the enclosing row is bound before the
     // sub-chain opens.
-    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    auto trade_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trade", nullptr);
     ASSERT_TRUE(trade_oid.ok());
     ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
 
@@ -1008,7 +1008,7 @@ TEST_F(StepCompileTest, AFilterScanStillWinsOverTheBuild) {
 TEST_F(StepCompileTest, ABankedStructureStillWinsOverTheBuild) {
     // Ladder order is the economics (spec §5): a converged Cabin serve
     // beats any per-statement rebuild, so the banked arm stays ahead.
-    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    auto trade_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trade", nullptr);
     ASSERT_TRUE(trade_oid.ok());
     ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
 
@@ -1040,7 +1040,7 @@ TEST_F(StepCompileTest, ADmlSubChainDeclinesAndIsOtherwiseByteIdentical) {
         parser::Parse(std::string("UPDATE acct SET name = 'x' WHERE ") + subquery);
     ASSERT_TRUE(parsed.ok()) << parsed.status().message();
     const auto& update = std::get<parser::UpdateStmt>(parsed.value());
-    auto oid = boot_->catalog.FindTableOidByName("acct", nullptr);
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "acct", nullptr);
     ASSERT_TRUE(oid.ok());
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -1115,7 +1115,7 @@ TEST_F(StepCompileTest, CompileWhereMasksTheColumnsItsPredicateReads) {
     auto parsed = parser::Parse("UPDATE acct SET name = 'x' WHERE name = 'y'");
     ASSERT_TRUE(parsed.ok()) << parsed.status().message();
     const auto& update = std::get<parser::UpdateStmt>(parsed.value());
-    auto oid = boot_->catalog.FindTableOidByName("acct", nullptr);
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "acct", nullptr);
     ASSERT_TRUE(oid.ok());
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -1139,7 +1139,7 @@ TEST_F(StepCompileTest, CompileWhereGivesUpItsMaskToASubquery) {
         "WHERE trade.sym = acct.name)");
     ASSERT_TRUE(parsed.ok()) << parsed.status().message();
     const auto& update = std::get<parser::UpdateStmt>(parsed.value());
-    auto oid = boot_->catalog.FindTableOidByName("acct", nullptr);
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "acct", nullptr);
     ASSERT_TRUE(oid.ok());
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -1163,7 +1163,7 @@ TEST_F(StepCompileTest, CompileWhereGivesUpItsMaskOnAWideRelation) {
     auto parsed = parser::Parse("UPDATE wide_upd SET c1 = 1 WHERE c2 = 2");
     ASSERT_TRUE(parsed.ok()) << parsed.status().message();
     const auto& update = std::get<parser::UpdateStmt>(parsed.value());
-    auto oid = boot_->catalog.FindTableOidByName("wide_upd", nullptr);
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "wide_upd", nullptr);
     ASSERT_TRUE(oid.ok());
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -1307,7 +1307,7 @@ protected:
         if (!parsed.ok()) return parsed.status();
         const auto& up = std::get<parser::UpdateStmt>(parsed.value());
 
-        auto oid = boot_->catalog.FindTableOidByName(up.table_name);
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, up.table_name);
         EXPECT_TRUE(oid.ok()) << oid.status().message();
         if (!oid.ok()) return oid.status();
 

@@ -480,7 +480,7 @@ TEST_F(KwpLoadServerTest, EveryTypeLoadsAndOneChunkMixesNamedAndIssuedKeys) {
                        "j char(4), k varchar, n int64 NULL)")
             .response;
     ASSERT_EQ(created.rfind("CREATED", 0), 0u) << created;
-    auto access = boot_->catalog.InitTableAccess(boot_->catalog.FindTableOidByName("t").value());
+    auto access = boot_->catalog.InitTableAccess(boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t").value());
     ASSERT_TRUE(access.ok());
     const catalog::Schema schema = access.value()->schema;
 
@@ -581,6 +581,57 @@ TEST_F(KwpLoadServerTest, ATupleKeyOnlyRelationLoadsIssuedAndNamedKeys) {
         int text_fd = ConnectToLoopback(kTextPort);
         ASSERT_GE(text_fd, 0);
         EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT id FROM t"), "id\\n1\\n7\\n8");
+        ::close(text_fd);
+    });
+
+    RunReactor(text.value(), kwp.value());
+    client.join();
+}
+
+// A load session has no `USE`: `ns.t` names a relation outside `public`, and a
+// bare name means `public`'s (namespace.md NS5).
+TEST_F(KwpLoadServerTest, ALoadNamesARelationOutsidePublicByItsQualifier) {
+    constexpr std::uint16_t kTextPort = 25727;
+    constexpr std::uint16_t kKwpPort = 25728;
+    ASSERT_EQ(dispatcher_->Dispatch("CREATE NAMESPACE ns").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE ns.t (id int64)").response.substr(0, 7),
+              "CREATED");
+    catalog::Schema schema;
+    schema.columns = {Col(catalog::kTypeValInt64)};
+
+    auto text = TcpServer::Listen(kTextPort);
+    auto kwp = KwpLoadServer::Listen(kKwpPort);
+    ASSERT_TRUE(text.ok());
+    ASSERT_TRUE(kwp.ok());
+
+    std::thread client([&] {
+        StopGuard stop{kTextPort};
+        {
+            int fd = ConnectToLoopback(kKwpPort);
+            ASSERT_GE(fd, 0);
+            wire::FrameDecoder decoder;
+            ASSERT_TRUE(Handshake(fd, decoder));
+            EXPECT_FALSE(Begin(fd, decoder, "t").has_value()) << "a bare `t` is public's";
+            ::close(fd);
+        }
+        int fd = ConnectToLoopback(kKwpPort);
+        ASSERT_GE(fd, 0);
+        wire::FrameDecoder decoder;
+        ASSERT_TRUE(Handshake(fd, decoder));
+        const auto ready = Begin(fd, decoder, "ns.t");
+        ASSERT_TRUE(ready.has_value());
+        const auto chunk = Chunk(ready->first, 0, schema, {{Int(3)}});
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk);
+        auto ack = ReadFrame(fd, decoder);
+        ASSERT_TRUE(ack.has_value());
+        ASSERT_EQ(ack->type, static_cast<std::uint8_t>(wire::ServerFrameType::kLoadAck));
+        SendFrame(fd, wire::ClientFrameType::kLoadEnd, {});
+        ASSERT_TRUE(ReadFrame(fd, decoder).has_value());
+        ::close(fd);
+
+        int text_fd = ConnectToLoopback(kTextPort);
+        ASSERT_GE(text_fd, 0);
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT id FROM ns.t"), "id\\n3");
         ::close(text_fd);
     });
 

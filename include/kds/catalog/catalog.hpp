@@ -123,6 +123,12 @@ struct CatalogRowChange {
     std::vector<std::byte> prior_image;
 };
 
+// A DDL statement's refusal for a relation name that resolved to nothing:
+// `no relation named 't' (byte N)` for a name held in no namespace, and
+// `Catalog::ResolveRelation`'s own refusal - which names where the name
+// does live, or why it cannot be named - for everything else.
+Status NamedRelationMiss(const Status& miss, std::string_view name, std::uint32_t byte_offset);
+
 class Catalog {
 public:
     // `inline_cell_width` is the instance-pinned kds.inline_cell_width
@@ -483,36 +489,38 @@ public:
     // `SHOW TABLES` does.
     StatusOr<std::vector<SysObjectRow>> ListNamespaces(const txn::ReadView* view = nullptr);
 
-    // Checks the namespace qualifier a statement wrote in front of a
-    // relation name (AF-T3; `parser/ast.hpp`'s namespace-qualifier rule).
+    // The whole message of a relation name held in no namespace, which
+    // callers that word their own refusal for it compare against.
+    static constexpr std::string_view kNoSuchRelationMessage = "no table with this name";
+
+    // **Resolves a relation name as a statement wrote it** (namespace.md
+    // NS5): `qualifier.name`, or `name` alone, which means
+    // `default_namespace.name` - the session's namespace (`USE`, NS8), and
+    // `public` for a caller with no session. One namespace is asked, never
+    // a search: a relation in another namespace is reached only by its
+    // qualifier.
     //
-    // An empty qualifier is `OK` and asks nothing: a name is
-    // instance-global and an unqualified one means exactly what it always
-    // meant. A written qualifier is **verified, not resolved** - the
-    // relation was already found by name - and a disagreement is
-    // `kNotFound` naming both parts, because "there is no `orders.customer`"
-    // is what actually happened even though a `customer` exists elsewhere.
+    // `sys` is refused whichever way it is reached: its relations are read
+    // as catalog views (`SELECT ... FROM sys.tables`), which never come
+    // here, and have no column rows a statement could bind - the
+    // `no columns for this rel_id` an unqualified `tables` used to reach.
     //
-    // `byte_offset` is where the name was written, and **0 means
-    // nowhere**: a statement's first token is its verb, so no relation name
-    // can sit at byte 0, and the debug surfaces that take a bare argument
-    // (`DESCRIBE`, `SHOW RELAYOUT`, the bare `CREATE TABLE`) have no offsets
-    // to give. Those get a refusal with no position rather than one
-    // pointing at byte 0. Taken here rather than appended by each caller
-    // because six call sites had copied the same two lines.
+    // A miss is `kNotFound` at `byte_offset`, and a name that does live in
+    // other namespaces gets them named, because writing the qualifier is the
+    // user's next act. The bare "no table with this name" stays the answer
+    // for a name held nowhere. `byte_offset` 0 means nowhere: a statement's
+    // first token is its verb, so no relation name sits at byte 0, and the
+    // debug surfaces that take a bare argument have no offset to give.
     //
-    // **What it costs, stated rather than assumed.** An unqualified name
-    // returns before reading anything, so the ordinary statement pays
-    // nothing. `sys.` and `public.` resolve from two constants. Any other
-    // qualifier pays **one `sys.objects` scan per statement**
-    // (`FindNamespaceOidByName`); the relation's own namespace comes from
-    // the cached `TableAccess` and costs nothing. That scan is not cached
-    // and deliberately so for now - a namespace name-to-oid cache is new
-    // invalidation machinery (`catalog_cache.hpp`'s rule) and nothing has
-    // measured the scan yet. Price it before building the cache.
-    Status CheckRelationQualifier(std::string_view qualifier, std::string_view rel_name,
-                                   Oid rel_oid, std::uint32_t byte_offset = 0,
-                                   const txn::ReadView* view = nullptr);
+    // `view` is `FindTableOidByName`'s: a resolution route (DT3), for the
+    // namespace and the relation alike.
+    StatusOr<Oid> ResolveRelation(std::string_view qualifier, std::string_view name,
+                                  Oid default_namespace, std::uint32_t byte_offset = 0,
+                                  const txn::ReadView* view = nullptr);
+
+    // The SQL spelling of a namespace oid for a message: `sys`, `public`, a
+    // live namespace's name, or `oid N` for one no longer live.
+    std::string NamespaceSpelling(Oid namespace_oid, const txn::ReadView* view = nullptr);
 
     // Drops one. **RESTRICT**, the rule `DROP TABLE` already uses for
     // foreign keys and assertions: a namespace holding any relation is
@@ -531,8 +539,11 @@ public:
     StatusOr<SysTableRow> GetSysTableRow(Oid table_oid);
 
     // Scans sys.objects (disk, not the in-memory well-known registry -
-    // CreateTable() only writes the disk row) for a row named `name`
-    // with type_oid == kTypeTable.
+    // CreateTable() only writes the disk row) for the relation named `name`
+    // in namespace `namespace_oid` - the pair is the relation's name
+    // (namespace.md NS6). Statements resolve through `ResolveRelation`;
+    // this is the lookup under it, for callers that already hold the
+    // namespace.
     //
     // `view` is the reader's visibility (workplan-ddl-transactional.md
     // DT3). With one, a relation whose creating transaction this view
@@ -545,7 +556,7 @@ public:
     // oid, so a name that does not resolve is a relation that cannot be
     // touched - which is why DT3 filters here and leaves `InitTableAccess`
     // on the cache.
-    StatusOr<Oid> FindTableOidByName(std::string_view name,
+    StatusOr<Oid> FindTableOidByName(Oid namespace_oid, std::string_view name,
                                       const txn::ReadView* view = nullptr);
 
     // Lists every table registered in sys.objects (type_oid == kTypeTable),
@@ -1332,8 +1343,13 @@ private:
     //     TABLE t; CREATE TABLE t` in one transaction, which the create's
     //     own rollback undoes with it - and otherwise is `Unsupported`: a
     //     rename is not undone by that rollback.
-    Status CheckNameFree(std::string_view name, Oid live_type, std::uint64_t own_trx_id,
-                         bool own_drop_frees);
+    //
+    // A relation's name is taken within its namespace (namespace.md NS6), so
+    // for `kTypeTable` only rows in `namespace_oid` are asked - a tombstone
+    // keeps the namespace it was dropped from. A namespace's name is
+    // instance-wide and `namespace_oid` is not read.
+    Status CheckNameFree(std::string_view name, Oid live_type, Oid namespace_oid,
+                         std::uint64_t own_trx_id, bool own_drop_frees);
 
     // **A relation's namespace, asked where its membership is written**
     // (AT-S17b, the AT-close order's §7.3): a relation's `sys.objects` row

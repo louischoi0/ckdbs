@@ -128,7 +128,7 @@ TEST(ReadBorrowRigTest, ANamedKeyAdmitsOnAPeer) {
     const std::string written =
         rig->core(1).dispatcher().Dispatch("INSERT INTO nk_peer VALUES (7, 1)", &on_peer).response;
     EXPECT_EQ(written.rfind("INSERTED", 0), 0u) << written;
-    auto oid = rig->core(0).catalog().FindTableOidByName("nk_peer");
+    auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "nk_peer");
     ASSERT_TRUE(oid.ok());
     rig->core(0).catalog().Revalidate();
     auto row = rig->core(0).catalog().GetSysTableRow(oid.value());
@@ -173,7 +173,7 @@ TEST(ReadBorrowRigTest, TwoCoresCreatingRelationsIssueDistinctOids) {
     rig->core(0).catalog().Revalidate();
     std::vector<catalog::Oid> oids;
     for (const char* name : kName) {
-        auto oid = rig->core(0).catalog().FindTableOidByName(name);
+        auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, name);
         ASSERT_TRUE(oid.ok()) << name << ": " << oid.status().message();
         oids.push_back(oid.value());
     }
@@ -198,7 +198,7 @@ TEST(ReadBorrowRigTest, ADropOnCoreZeroWaitsForAPositionedReaderOnAPeer) {
     CommandDispatcher& d0 = rig->core(0).dispatcher();
     ASSERT_EQ(d0.Dispatch("CREATE TABLE r (id int64, v int64) BTREE").response.rfind("CRE", 0), 0u);
 
-    auto oid = rig->core(0).catalog().FindTableOidByName("r");
+    auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "r");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
 

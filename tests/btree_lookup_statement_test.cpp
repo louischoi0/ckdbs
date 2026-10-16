@@ -58,7 +58,7 @@ protected:
         // ids append, so the first leaf fills in key order and a second opens
         // when it is full.
         ASSERT_EQ(Run("CREATE TABLE p (id int64, pad char(1000)) BTREE").rfind("CREATED", 0), 0u);
-        auto oid = boot_->catalog.FindTableOidByName("p");
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "p");
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto access = boot_->catalog.InitTableAccess(oid.value());
         ASSERT_TRUE(access.ok()) << access.status().message();
@@ -89,7 +89,7 @@ protected:
     // here, before the seam is armed - the root from the catalog, which a
     // level growth repoints, not `root_`, which the growth left a leaf.
     void DivideOnRefetch() {
-        auto oid = boot_->catalog.FindTableOidByName("p");
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "p");
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto access = boot_->catalog.InitTableAccess(oid.value());
         ASSERT_TRUE(access.ok()) << access.status().message();

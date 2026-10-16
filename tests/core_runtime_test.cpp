@@ -385,7 +385,7 @@ TEST_F(CoreRuntimeTest, APeerResolvesARelationCoreZeroCreated) {
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    auto found = peer.value()->catalog().FindTableOidByName("t");
+    auto found = peer.value()->catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(found.ok()) << found.status().message();
     EXPECT_EQ(found.value(), oid.value());
 
@@ -457,7 +457,7 @@ TEST_F(CoreRuntimeTest, APeerSeesADdlAtItsNextCachedReadWithNothingSent) {
     // a statement, and what this cell does by hand because it reads the
     // catalog directly. Nothing sent, nothing dropped by anyone else.
     peer.value()->catalog().Revalidate();
-    auto found = peer.value()->catalog().FindTableOidByName("late");
+    auto found = peer.value()->catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "late");
     EXPECT_TRUE(found.ok()) << found.status().message();
     auto relisted = peer.value()->catalog().ListTables();
     ASSERT_TRUE(relisted.ok());
@@ -513,7 +513,7 @@ TEST_F(CoreRuntimeTest, APeerResolvesARelationWhoseCatalogRowsSpilledOntoAnOverf
 
     // The last relation created is the one whose rows are furthest along
     // the chain, so resolving it is what walks onto the overflow page.
-    auto found = peer.value()->catalog().FindTableOidByName(spilled);
+    auto found = peer.value()->catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, spilled);
     ASSERT_TRUE(found.ok()) << found.status().message();
     auto access = peer.value()->catalog().InitTableAccess(found.value());
     ASSERT_TRUE(access.ok()) << access.status().message()
@@ -1828,7 +1828,7 @@ TEST_F(CoreRuntimeTest, APeersDdlRunsOnThePeerAndCoreZeroSeesIt) {
 
     // Core 0's catalog resolves the relation the peer created - one set of
     // catalog pages - and the peer may write them (AT-S5).
-    auto oid = rig.catalog2->FindTableOidByName("cb4_new");
+    auto oid = rig.catalog2->FindTableOidByName(::kds::catalog::kNamespacePublic, "cb4_new");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     rig.peer->store().SetResidentLimit(kFirstUserPageId);
     {

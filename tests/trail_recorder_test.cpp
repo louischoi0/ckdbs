@@ -143,7 +143,7 @@ TEST_F(TrailRecorderTest, ARecordedEntryNamesWhereTheRowActuallyWas) {
     EXPECT_NE(trail[0].page_id, kInvalidPageId);
     EXPECT_NE(trail[0].flags & kWaystoneEntryValid, 0);
 
-    auto oid = boot_->catalog.FindTableOidByName("t");
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok());
     EXPECT_EQ(trail[0].rel_oid, oid.value());
 }

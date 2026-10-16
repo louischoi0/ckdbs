@@ -50,7 +50,7 @@ protected:
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
 
     catalog::Oid OidOf(const std::string& name) {
-        auto oid = boot_->catalog.FindTableOidByName(name);
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, name);
         EXPECT_TRUE(oid.ok());
         return oid.ok() ? oid.value() : 0;
     }

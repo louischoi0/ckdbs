@@ -250,7 +250,7 @@ TEST_F(CabinExprTest, TwoKeysSharingAnExprIdAreKeptApart) {
 }
 
 TEST_F(CabinExprTest, AStoredTextThatIsNotCanonicalIsCorruption) {
-    auto schema = boot_->catalog.InitTableAccess(boot_->catalog.FindTableOidByName("t").value());
+    auto schema = boot_->catalog.InitTableAccess(boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t").value());
     ASSERT_TRUE(schema.ok());
     const catalog::Schema& s = schema.value()->schema;
     EXPECT_TRUE(exec::DecodeCabinExpr(catalog::kCabinShapeExpression, "date($3)", s).ok());
@@ -331,7 +331,7 @@ TEST_F(CabinExprTest, AReopenedCatalogRecompilesEveryKeyFromItsText) {
     EXPECT_EQ(view.Find("shape", "expression", "key"), "DATE(ts)");
     EXPECT_EQ(view.Find("shape", "predicate", "key"), "state = 'closed' AND amount > 1000");
 
-    auto access = reopened.InitTableAccess(reopened.FindTableOidByName("t").value());
+    auto access = reopened.InitTableAccess(reopened.FindTableOidByName(::kds::catalog::kNamespacePublic, "t").value());
     ASSERT_TRUE(access.ok());
     ASSERT_EQ(access.value()->expr_cabins.size(), 2u);
     for (const auto& ref : access.value()->expr_cabins) {
@@ -494,7 +494,7 @@ TEST_F(CabinExprServeTest, AnUpdateOfAColumnFNeverReadsAppendsNothing) {
 // served, the reply would carry 2026-10-02's row.
 TEST_F(CabinExprServeTest, ASurplusEntryIsReCheckedByTheConjunct) {
     Observe();
-    const auto oid = boot_->catalog.FindTableOidByName("t");
+    const auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok());
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());

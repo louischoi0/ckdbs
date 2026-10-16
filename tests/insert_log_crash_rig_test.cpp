@@ -107,7 +107,7 @@ std::uint64_t ReplyField(const std::string& reply, const std::string& name) {
 
 // `t`'s tree, as the mounted catalog names its root.
 void ExpectTreeWhole(Expeditor& db) {
-    auto oid = db.catalog().FindTableOidByName("t");
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok()) << access.status().message();
@@ -330,7 +330,7 @@ TEST(InsertLogCrashRigTest, AParentWrittenBackBeforeItsSplitIsLoggedDoesNotRoute
         ASSERT_TRUE(rig->store().Sync().ok());  // everything so far on disk, logged
         PageId root = kInvalidPageId;
         {
-            auto oid = rig->core(0).catalog().FindTableOidByName("t");
+            auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
             ASSERT_TRUE(oid.ok());
             auto access = rig->core(0).catalog().InitTableAccess(oid.value());
             ASSERT_TRUE(access.ok());
@@ -397,7 +397,7 @@ TEST(InsertLogCrashRigTest, AParentWrittenBackBeforeItsDivideIsLoggedDoesNotRout
         ASSERT_TRUE(rig->store().Sync().ok());  // everything so far on disk, logged
         PageId root = kInvalidPageId;
         {
-            auto oid = rig->core(0).catalog().FindTableOidByName("t");
+            auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
             ASSERT_TRUE(oid.ok());
             auto access = rig->core(0).catalog().InitTableAccess(oid.value());
             ASSERT_TRUE(access.ok());

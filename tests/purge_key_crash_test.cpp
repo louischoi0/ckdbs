@@ -114,7 +114,7 @@ Loaded Load(TwoCoreRig& rig) {
     Ok(*l.d0, "INSERT INTO t VALUES (5, '" + kLong + "')");
     Ok(*l.d0, "INSERT INTO t VALUES (9, '" + kLong + "')");
     Ok(*l.d0, "DELETE FROM t WHERE id = 5");
-    auto oid = rig.core(0).catalog().FindTableOidByName("t");
+    auto oid = rig.core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     EXPECT_TRUE(oid.ok()) << oid.status().message();
     auto access = rig.core(0).catalog().InitTableAccess(oid.value());
     EXPECT_TRUE(access.ok()) << access.status().message();
@@ -401,7 +401,7 @@ TEST(PurgeKeySqlCrashTest, ACompactedLeafSurvivesACrashAtEveryRecordAndStaysRout
         }
         Ok(d0, load);
         // The second leaf, emptied of keys: every row of it deleted and purged.
-        auto oid = rig->core(0).catalog().FindTableOidByName("t");
+        auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
         ASSERT_TRUE(oid.ok());
         auto access = rig->core(0).catalog().InitTableAccess(oid.value());
         ASSERT_TRUE(access.ok());
@@ -444,7 +444,7 @@ TEST(PurgeKeySqlCrashTest, ACompactedLeafSurvivesACrashAtEveryRecordAndStaysRout
         } else {
             EXPECT_TRUE(at.empty()) << where << ": an uncommitted row survived";
         }
-        auto oid = db.catalog().FindTableOidByName("t");
+        auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
         ASSERT_TRUE(oid.ok());
         auto access = db.catalog().InitTableAccess(oid.value());
         ASSERT_TRUE(access.ok());

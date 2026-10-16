@@ -298,10 +298,6 @@ struct TransitionRef {
 };
 
 struct TableAccess {
-    // Filled from the `sys.tables` row. Its one reader is
-    // `Catalog::CheckRelationQualifier`, which asks whether a qualified
-    // name's namespace is the relation's own.
-    Oid namespace_oid;
     Oid oid;
     Schema schema;
     PageId desc_page_id;

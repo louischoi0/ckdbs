@@ -38,7 +38,7 @@ std::unique_ptr<TwoCoreRig> OpenRig() {
 }
 
 void ExpectTreeWhole(TwoCoreRig& rig, const std::string& table) {
-    auto oid = rig.core(0).catalog().FindTableOidByName(table);
+    auto oid = rig.core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, table);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto access = rig.core(0).catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok()) << access.status().message();

@@ -5,6 +5,7 @@
 #include <span>
 #include <string_view>
 
+#include "kds/catalog/well_known.hpp"
 #include "kds/parser/ast.hpp"
 
 // The function catalog (instructions/v3.0.0/ar1-architecture-revision-cabin-
@@ -65,8 +66,14 @@ DeterminismClass ClassOf(Purity purity) noexcept;
 // parked mid-walk (AO-S3b) is compiled again when it resumes, so the dispatcher
 // takes the context when the statement starts and carries it across the park
 // (Session::ParkedWrite).
+//
+// `default_namespace` is the other such constant: the namespace an unqualified
+// relation name means (`USE`, namespace.md NS8), read off the session when the
+// statement starts, so a parked write resumes against the namespace it began
+// in. `public` for a statement with no session.
 struct StatementContext {
     std::int64_t now_us = 0;  // microseconds since the epoch, UTC (types.md TY4)
+    catalog::Oid default_namespace = catalog::kNamespacePublic;
 };
 
 // The context of a statement starting now: the wall clock, UTC.

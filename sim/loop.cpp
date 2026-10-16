@@ -888,7 +888,7 @@ void ReconcileDrops(Iteration& it) {
     std::map<PageId, std::string> reached;
     for (const auto& [table, rows] : it.oracle.tables()) {
         (void)rows;
-        auto oid = it.instance.catalog().FindTableOidByName(table);
+        auto oid = it.instance.catalog().FindTableOidByName(catalog::kNamespacePublic, table);
         if (!oid.ok()) continue;  // a lost CREATE, which Reconcile has counted
         auto row = it.instance.catalog().GetSysTableRow(oid.value());
         if (!row.ok()) continue;
