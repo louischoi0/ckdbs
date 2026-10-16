@@ -58,6 +58,14 @@ namespace kds::sim {
 enum class FaultProfile : std::uint8_t {
     kNone = 0,
     kIo = 1,
+    // A failed capacity growth alone. `io`'s two log kinds fail-stop the log
+    // (BC-S4, `fsync-fail-stop`), so under `io` a run rarely serves long
+    // past its first log fault, and what a refused growth
+    // leaves for the inserts after it - a split that could not place its
+    // new page - is reached only where no stopping fault came first (H9,
+    // `SimFaults.AnErroredGrowLeavesTheLeafChainAscending`). A growth
+    // refusal is a statement's error, never a stop.
+    kGrow = 2,
 };
 
 const char* FaultProfileName(FaultProfile profile);

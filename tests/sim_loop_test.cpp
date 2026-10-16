@@ -648,6 +648,12 @@ TEST(SimFaults, TheScheduleIsAPureFunctionOfTheSeed) {
     // profile that silently injected nothing would be a fault run that
     // proved nothing.
     EXPECT_EQ(FaultSchedule(Rng(7), 10, FaultProfile::kIo, 40).size(), 1u);
+    // `grow` draws growth refusals and nothing that stops the instance.
+    const FaultSchedule grow(Rng(7), 2000, FaultProfile::kGrow, 40);
+    ASSERT_FALSE(grow.empty());
+    for (const ScheduledFault& fault : grow.all()) {
+        EXPECT_EQ(fault.kind, FaultKind::kPageFailGrow) << fault.Describe();
+    }
 }
 
 // The contract SIM05 exists to assert: under injected device errors every
@@ -697,6 +703,12 @@ TEST(SimFaults, TheCorpusReallyFiresInjectionsAndErrorsStatements) {
 // unrouted one, and the chain descended. The sweep read it as `min_key 78
 // does not exceed a predecessor page's max id 183`. Both profiles, because
 // both failed identically when it was found.
+//
+// **Under `grow`, not `io`, since BC-S4**: a failed log write fail-stops the
+// log, so under `io` this seed stopped at op 48 and never met a growth
+// fault - green and proving nothing. `grow` arms growth refusals alone, on a
+// one-page extent, so splits and appends meet them throughout and the run
+// keeps serving; the cell asks that they reached statements.
 TEST(SimFaults, AnErroredGrowLeavesTheLeafChainAscending) {
     for (const Profile profile : {Profile::kUniform, Profile::kZipfian}) {
         SimConfig config;
@@ -705,11 +717,13 @@ TEST(SimFaults, AnErroredGrowLeavesTheLeafChainAscending) {
         config.mode = SimMode::kClean;
         config.iterations = 2;
         config.profile = profile;
-        config.faults = FaultProfile::kIo;
+        config.faults = FaultProfile::kGrow;
         config.fault_rate = 40;
         const SimVerdict verdict = RunSimulation(config);
         EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
         EXPECT_GT(verdict.faults_fired, 0u) << verdict.Summary(config);
+        EXPECT_GT(verdict.errored_ops, 0u) << verdict.Summary(config);
+        EXPECT_EQ(verdict.fail_stops, 0u) << verdict.Summary(config);
     }
 }
 
@@ -1006,7 +1020,8 @@ TEST(SimCase, EveryNamedEnumRoundTrips) {
     for (const Profile profile : {Profile::kUniform, Profile::kZipfian, Profile::kColliding}) {
         EXPECT_EQ(ParseProfile(ProfileName(profile)), profile);
     }
-    for (const FaultProfile faults : {FaultProfile::kNone, FaultProfile::kIo}) {
+    for (const FaultProfile faults :
+         {FaultProfile::kNone, FaultProfile::kIo, FaultProfile::kGrow}) {
         EXPECT_EQ(ParseFaultProfile(FaultProfileName(faults)), faults);
     }
     for (const FaultKind kind :

@@ -6,7 +6,7 @@
 //   ckdbs-sim --seed N [--ops N] [--iterations N]
 //             [--mode clean|sync-crash|crash]
 //             [--profile uniform|zipfian|colliding]
-//             [--faults none|io] [--fault-rate N]
+//             [--faults none|io|grow] [--fault-rate N]
 //             [--toggles off|on|cabins|waystone] [--pair]
 //             [--minimize [--out FILE]]
 //   ckdbs-sim --replay FILE
@@ -30,7 +30,7 @@ int Usage(const char* argv0) {
                  "usage: %s --seed N [--ops N] [--iterations N]\n"
                  "          [--mode clean|sync-crash|crash]\n"
                  "          [--profile uniform|zipfian|colliding]\n"
-                 "          [--faults none|io] [--fault-rate N]\n"
+                 "          [--faults none|io|grow] [--fault-rate N]\n"
                  "          [--toggles off|on|cabins|waystone] [--pair]\n"
                  "          [--minimize [--out FILE] [--max-replays N]] | [--replay FILE]\n"
                  "          [--skip-recovery] [--checkpoint-every N] [--backup]\n",
