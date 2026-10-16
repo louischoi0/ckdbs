@@ -85,7 +85,7 @@ inline void CheckIndex(storage::PageStore& store, const index::IndexLayout& layo
         leaves.insert(node);
         index::IndexLeafView leaf(bytes.value().bytes());
         for (std::uint16_t i = 0; i < leaf.entry_count(); ++i) {
-            auto key = leaf.SortKey(i);
+            auto key = leaf.Entry(i);
             ASSERT_TRUE(key.ok()) << key.status().message();
             EXPECT_TRUE(inside(key.value()))
                 << "entry " << i << " of leaf " << node

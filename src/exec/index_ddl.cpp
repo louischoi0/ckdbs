@@ -473,9 +473,9 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     auto root = BuildIndexTree(store, *access.value(), def, trx_id, wal);
     if (!root.ok()) {
         // A duplicate the unique build found (BX-R7) is the statement's
-        // refusal, so it carries the index name's byte. The build's only
-        // other `AlreadyExists` is the equal-sort-keys bug's separator
-        // refusal, which this would mark the same way.
+        // refusal, so it carries the index name's byte. It is the build's
+        // only `AlreadyExists`: no two entries share a sort key, so no
+        // divide is refused one (index.md IX4b).
         if (root.status().code() == StatusCode::kAlreadyExists) {
             return root.status().WithMessage(root.status().message() + " (byte " +
                                              std::to_string(stmt.byte_offset) + ")");

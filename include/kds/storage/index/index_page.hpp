@@ -26,52 +26,63 @@
 // `leftmost_child`, `level`, binary search - because the shape was right;
 // the key type is what differs, and it differs all the way down.
 //
-// ---- The sort key is (key, tuple key), not the key --------------------------
+// ---- The sort key is the whole entry, not the key --------------------------
 //
 // A secondary key is not unique, so two entries can share one key. If the
 // tree routed on the key alone, a separator equal to a duplicated key would
 // let a descent land past entries that belong to it - the duplicates would
 // straddle a boundary and half of them would be unreachable.
 //
-// So the ordering key of every entry, and every separator, is the full
-// `key || tuple key` pair: `kIndexTupleKeyWidth` bytes of tuple key, **big-endian**,
-// appended to the encoded key. Big-endian for the same reason the key
-// itself is (exec/index_key.hpp): it is compared with `memcmp` and by
-// nothing else. A seek for key K then uses `(K, 0)`, which sorts at or
-// below every entry carrying K, and the walk crosses `right_sibling` links
-// while the key part still matches.
+// Nor is `key || tuple key` unique: an UPDATE that moves a covered column
+// appends an entry with the same key and tuple key and different covered
+// bytes (index_tree.hpp, "Duplicates"), so one hot row builds a run of
+// equal pairs. A run longer than a leaf has no divide point outside it, and
+// a divide inside it copies up a separator equal to one already in the
+// parent - two subtrees with one low key, which `InsertEntry` refuses.
+//
+// So the ordering key of every entry, and every separator, is the **whole
+// entry**: the encoded key, then `kIndexTupleKeyWidth` bytes of tuple key,
+// **big-endian**, then the covered bytes (index.md IX4b). Big-endian for
+// the same reason the key itself is (exec/index_key.hpp): it is compared
+// with `memcmp` and by nothing else. A byte-identical entry is never stored
+// twice, so no two entries share a sort key and no divide can promote a
+// separator its parent already holds. A seek for key K then uses `(K, 0,
+// 0...)`, which sorts at or below every entry carrying K, and the walk
+// crosses `right_sibling` links while the key part still matches.
 //
 // Invariant 7 is satisfied by the value, not the byte order: what is stored
 // is a zero-extended `uint64` whose bits above kKeystoneIdBits are 0.
 //
 // ---- A probe is padded, never shortened ---------------------------------
 //
-// Every comparison in this file is over a **full** `key_width +
-// kIndexTupleKeyWidth` bytes, and a caller that knows less than a whole sort key
-// zero-pads the rest. That is not a convenience: a short comparison would be
-// wrong. A separator whose key equals a probe's would compare *equal* under
-// a truncated memcmp and route the descent right, past entries in the left
-// subtree carrying that same key with a lower tuple key - which is exactly the
-// duplicate-straddling failure the (key, tuple key) sort key exists to prevent.
+// Every comparison in this file is over a **full** `sort_key_width()`
+// bytes, and a caller that knows less than a whole sort key zero-pads the
+// rest. That is not a convenience: a short comparison would be wrong. A
+// separator whose key equals a probe's would compare *equal* under a
+// truncated memcmp and route the descent right, past entries in the left
+// subtree carrying that same key with a lower tuple key - which is exactly
+// the duplicate-straddling failure the whole-entry sort key exists to
+// prevent.
 //
 // Zero-padding gives the true lower bound instead, and it does so for free:
 // a key column's leading discriminator byte is `kIndexKeyPresent` (1) for
 // every value that exists, so a zero byte in that position sorts below all
 // of them. `WHERE a = 3` on an index over `(a, b)` therefore encodes column
-// `a`, leaves `b` and the tuple key zero, and lands on the first entry that can
-// match.
+// `a`, leaves `b`, the tuple key and the covered bytes zero, and lands on
+// the first entry that can match.
 //
 // ---- Key bytes are opaque here ------------------------------------------
 //
 // Nothing in this file or in index_tree.hpp interprets a key byte. Ordering
-// is `memcmp` over `key_width + kIndexTupleKeyWidth` bytes, and what those bytes
-// mean is `exec::EncodeIndexKey`'s business. That is what keeps the tree
-// free of the schema, of a per-type dispatch, and of any chance of
-// disagreeing with `CompareValues`.
+// is `memcmp` over the whole entry, and what those bytes mean is
+// `exec::EncodeIndexKey`'s business. That is what keeps the tree free of
+// the schema, of a per-type dispatch, and of any chance of disagreeing with
+// `CompareValues`.
 //
 // ---- Checked redundancy -------------------------------------------------
 //
-// Every page stores its own `key_width` (and a leaf its `entry_width`),
+// Every page stores its own `key_width` (and a leaf its `entry_width`, an
+// internal node its `sort_key_width`),
 // duplicating what the catalog's index row already says. They carry no new
 // information and exist to be **checked**: a page whose widths disagree
 // with the index definition is `Corruption`, never interpreted. Same rule
@@ -104,13 +115,16 @@ struct IndexLayout {
     // no COVERING clause.
     std::uint16_t covered_width = 0;
 
-    // What the tree orders by, and what a separator is.
-    constexpr std::uint32_t sort_key_width() const {
+    // `key || tuple key`: where an entry's covered bytes start.
+    constexpr std::uint32_t covered_offset() const {
         return static_cast<std::uint32_t>(key_width) + kIndexTupleKeyWidth;
     }
     constexpr std::uint32_t leaf_entry_width() const {
-        return sort_key_width() + covered_width;
+        return covered_offset() + covered_width;
     }
+    // What the tree orders by, and what a separator is: the whole entry
+    // (see the header).
+    constexpr std::uint32_t sort_key_width() const { return leaf_entry_width(); }
     // A separator plus the child it routes to.
     constexpr std::uint32_t internal_entry_width() const {
         return sort_key_width() + static_cast<std::uint32_t>(sizeof(PageId));
@@ -166,7 +180,11 @@ struct IndexInternalHeaderFields {
     // with no exception, and so an empty-but-valid root has somewhere to
     // point.
     PageId leftmost_child;
-    std::uint32_t reserved0;
+    // A separator's width, `sort_key_width()`: the whole leaf entry, which
+    // `key_width` alone no longer gives. Checked against the layout like
+    // the leaf's `entry_width`.
+    std::uint16_t sort_key_width;
+    std::uint16_t reserved0;
 };
 
 inline constexpr std::size_t kIndexInternalFlagsOffset = 0;
@@ -174,7 +192,8 @@ inline constexpr std::size_t kIndexInternalNrEntriesOffset = 2;
 inline constexpr std::size_t kIndexInternalKeyWidthOffset = 4;
 inline constexpr std::size_t kIndexInternalLevelOffset = 6;
 inline constexpr std::size_t kIndexInternalLeftmostChildOffset = 8;
-inline constexpr std::size_t kIndexInternalReserved0Offset = 12;
+inline constexpr std::size_t kIndexInternalSortKeyWidthOffset = 12;
+inline constexpr std::size_t kIndexInternalReserved0Offset = 14;
 inline constexpr std::size_t kIndexInternalHeaderSize = 16;  // same derivation as the leaf's
 
 static_assert(offsetof(IndexInternalHeaderFields, flags) == kIndexInternalFlagsOffset);
@@ -183,6 +202,8 @@ static_assert(offsetof(IndexInternalHeaderFields, key_width) == kIndexInternalKe
 static_assert(offsetof(IndexInternalHeaderFields, level) == kIndexInternalLevelOffset);
 static_assert(offsetof(IndexInternalHeaderFields, leftmost_child) ==
               kIndexInternalLeftmostChildOffset);
+static_assert(offsetof(IndexInternalHeaderFields, sort_key_width) ==
+              kIndexInternalSortKeyWidthOffset);
 static_assert(offsetof(IndexInternalHeaderFields, reserved0) == kIndexInternalReserved0Offset);
 static_assert(sizeof(IndexInternalHeaderFields) == kIndexInternalHeaderSize);
 
@@ -231,8 +252,10 @@ constexpr std::uint16_t MaxInternalEntries(const IndexLayout& layout) {
 void PutIndexTupleKey(std::span<std::byte> out, std::uint64_t tuple_key);
 std::uint64_t GetIndexTupleKey(std::span<const std::byte> in);
 
-// Composes an entry's sort key - `key || tuple key` - into `out`, which must be
-// exactly `layout.sort_key_width()` bytes.
+// Composes `key || tuple key` into the front of `out`, which must be exactly
+// `layout.sort_key_width()` bytes, and zeroes the covered bytes after it:
+// the lowest sort key carrying that pair, which an insert then completes
+// with its covered bytes.
 Status EncodeIndexSortKey(const IndexLayout& layout, std::span<const std::byte> key,
                           std::uint64_t tuple_key, std::span<std::byte> out);
 
@@ -257,10 +280,9 @@ public:
     PageId right_sibling() const;
     void set_right_sibling(PageId page_id);
 
-    // The whole entry, and its `key || tuple key` prefix. Both fail with OutOfRange
+    // The whole entry, which is also its sort key. Fails with OutOfRange
     // past `entry_count()`.
     StatusOr<std::span<const std::byte>> Entry(std::uint16_t idx) const;
-    StatusOr<std::span<const std::byte>> SortKey(std::uint16_t idx) const;
 
     bool IsFull() const;
 
@@ -270,9 +292,9 @@ public:
     void MarkGrownOver();
 
     // Index of the first entry whose sort key is >= `sort_key`, or
-    // `entry_count()` if there is none. `sort_key` is a full
-    // `key_width + kIndexTupleKeyWidth` bytes; a caller holding less pads with
-    // zeros, which is the lower bound - see the header.
+    // `entry_count()` if there is none. `sort_key` is a full entry's
+    // bytes; a caller holding less pads with zeros, which is the lower
+    // bound - see the header.
     std::uint16_t LowerBound(std::span<const std::byte> sort_key) const;
 
     // Inserts `entry` at its sorted position. Fails with OutOfSpace when
@@ -334,7 +356,8 @@ public:
     // Inserts (separator -> child) in sorted position. Fails with
     // OutOfSpace when full and AlreadyExists if the separator is already
     // present, since two subtrees sharing a low key would make the descent's
-    // choice between them arbitrary and one of them unreachable.
+    // choice between them arbitrary and one of them unreachable. A divide
+    // never asks for it: no two entries share a sort key (see the header).
     Status InsertEntry(const IndexLayout& layout, std::span<const std::byte> separator,
                        PageId child);
 

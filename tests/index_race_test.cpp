@@ -39,13 +39,14 @@
 // **Excluded by assertion, not by hope**: a root that divides during the
 // rounds. That is the walk back up (window 2, AT-S16's), and a separator
 // promoted into a parent another core divided is a different failure this
-// cell must not be able to report as its own. The layout keeps the root
-// far from full: covered bytes make a *leaf* entry wide (eight to a page,
-// so divides are constant) and leave a *separator* narrow (hundreds to a
-// page).
+// cell must not be able to report as its own. A separator is as wide as a
+// leaf entry (index.md IX4b), so the root holds about as many children as
+// a leaf holds entries: sixteen-entry leaves keep divides frequent, and
+// three regions keep the leaf count under the root's fifteen separators.
 //
 // **Mutation**: drop the coverage arm from `DescendTo` - killed 20 runs in
-// 20 (2026-09-26, each run six fresh trees). The first draft AT-S5c
+// 20 (2026-09-26, each run six fresh trees), and 20 in 20 again on the
+// three-region layout (2026-10-15, thirty fresh trees). The first draft AT-S5c
 // rejected, a comparison of the leaf's right link across the descent's own
 // two fetches, is killed 20 in 20 as well: with real threads the divide
 // lands before the leaf is read about as often as between its two fetches.
@@ -55,7 +56,9 @@ namespace kds::index {
 namespace {
 
 constexpr std::uint16_t kKeyWidth = 4;
-constexpr std::uint16_t kCoveredWidth = 1000;  // eight entries to a leaf
+// 8144 / (4 + 8 + 497) = 16 entries to a leaf, 8144 / 513 = 15 separators
+// to a node.
+constexpr std::uint16_t kCoveredWidth = 497;
 
 IndexLayout Layout() { return IndexLayout{kKeyWidth, kCoveredWidth}; }
 
@@ -83,13 +86,15 @@ using testing_race::Rendezvous;
 // two inserts land inside one existing leaf rather than past the chain's
 // end. Per region per round, thread t inserts `region * kStride + 1 +
 // 2 * round + t`: unique, and inside the region.
-constexpr std::uint32_t kRegions = 16;
+constexpr std::uint32_t kRegions = 3;
 constexpr std::uint32_t kStride = 1000;
-constexpr std::uint32_t kPrefillPerRegion = 8;
+constexpr std::uint32_t kPrefillPerRegion = 16;
+constexpr std::uint32_t kPrefillGap = kStride / kPrefillPerRegion;  // above every round's key
 constexpr int kRoundsPerRegion = 12;
 constexpr int kThreads = 2;
-// Fresh trees: one run of the rounds is a sample, not a proof.
-constexpr int kRepeats = 6;
+// Fresh trees: one run of the rounds is a sample, not a proof. Thirty keep
+// the rendezvous count of the sixteen-region layout this replaced.
+constexpr int kRepeats = 30;
 
 TEST(IndexRaceTest, TwoCoresDividingOneIndexLeaveEveryEntryWhereAProbeFindsIt) {
     const IndexLayout layout = Layout();
@@ -111,7 +116,7 @@ TEST(IndexRaceTest, TwoCoresDividingOneIndexLeaveEveryEntryWhereAProbeFindsIt) {
         std::vector<std::pair<std::uint32_t, std::uint64_t>> placed;
         for (std::uint32_t region = 0; region < kRegions; ++region) {
             for (std::uint32_t j = 0; j < kPrefillPerRegion; ++j) {
-                const std::uint32_t key = region * kStride + 100 * j;
+                const std::uint32_t key = region * kStride + kPrefillGap * j;
                 auto r = IndexInsert(*store, root, layout, Key(key), key, covered, 0);
                 ASSERT_TRUE(r.ok()) << "prefill " << key << ": " << r.status().message();
                 if (r.value().new_root != kInvalidPageId) root = r.value().new_root;
@@ -168,7 +173,7 @@ TEST(IndexRaceTest, TwoCoresDividingOneIndexLeaveEveryEntryWhereAProbeFindsIt) {
             *store, root, layout, storage::PageAccess::kRead,
             [&](PageId page_id, IndexLeafView& leaf,
                 std::uint16_t idx) -> StatusOr<storage::VisitControl> {
-                auto key = leaf.SortKey(idx);
+                auto key = leaf.Entry(idx);
                 if (!key.ok()) return key.status();
                 if (failure.empty() && !previous.empty() &&
                     std::memcmp(previous.data(), key.value().data(), previous.size()) > 0) {
@@ -289,7 +294,7 @@ TEST(IndexRaceTest, TwoCoresDividingOneParentLeaveEverySeparatorOverItsSubtree) 
             auto bytes = store->GetForRead(leaf_a);
             ASSERT_TRUE(bytes.ok()) << bytes.status().message();
             IndexLeafView view(bytes.value().bytes());
-            auto last = view.SortKey(static_cast<std::uint16_t>(view.entry_count() - 1));
+            auto last = view.Entry(static_cast<std::uint16_t>(view.entry_count() - 1));
             ASSERT_TRUE(last.ok()) << last.status().message();
             key_a = KeyOf(last.value().subspan(0, kWideKey));
         }

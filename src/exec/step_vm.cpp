@@ -1449,8 +1449,9 @@ private:
         layout.key_width = ix->key_width;
         layout.covered_width =
             static_cast<std::uint16_t>(ix->entry_width - ix->key_width - index::kIndexTupleKeyWidth);
-        const std::size_t sort_key_width = layout.sort_key_width();
-        if (probe.low.size() != sort_key_width || probe.high.size() != sort_key_width) {
+        // A bound is a whole entry, which is the sort key (index_page.hpp).
+        const std::size_t entry_width = ix->entry_width;
+        if (probe.low.size() != entry_width || probe.high.size() != entry_width) {
             // The index was redefined under a compiled chain. Same answer as
             // a dropped one.
             co_return co_await RunWalkStep(steps, index, step, access);
@@ -1519,18 +1520,16 @@ private:
                 std::uint16_t at) -> StatusOr<storage::VisitControl> {
                 auto entry = leaf.Entry(at);
                 if (!entry.ok()) return entry.status();
-                const std::span<const std::byte> sort_key =
-                    entry.value().subspan(0, sort_key_width);
 
                 // The descent lands on the first leaf that *could* hold the
                 // low bound, so the entries before it are skipped rather
                 // than assumed absent.
-                if (std::memcmp(sort_key.data(), low->data(), sort_key_width) < 0) {
+                if (std::memcmp(entry.value().data(), low->data(), entry_width) < 0) {
                     return storage::VisitControl::kContinue;
                 }
                 // Past the high bound: the leaves to the right are never
                 // fetched, which is what makes a range cost its range.
-                if (std::memcmp(sort_key.data(), high->data(), sort_key_width) > 0) {
+                if (std::memcmp(entry.value().data(), high->data(), entry_width) > 0) {
                     return storage::VisitControl::kStop;
                 }
                 ++step_stats.index_entries_scanned;
@@ -1554,7 +1553,7 @@ private:
                 if (layout.covered_width > 0) {
                     if (seen_tuple_keys_.contains(tuple_key)) return storage::VisitControl::kContinue;
                     auto kept = CoveredRowSurvives(step, access, *ix,
-                                                   entry.value().subspan(sort_key_width));
+                                                   entry.value().subspan(layout.covered_offset()));
                     if (!kept.ok()) return kept.status();
                     if (!kept.value()) {
                         filtered_tuple_keys_.insert(tuple_key);

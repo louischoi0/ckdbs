@@ -33,8 +33,8 @@
 //      and loses rows silently.
 //   2. **Duplicate keys stay reachable.** A secondary key is not unique, so
 //      duplicates straddle leaf boundaries - the reason the sort key is
-//      (key, tuple key) and the reason a probe is zero-padded rather than
-//      shortened.
+//      the whole entry, not the key, and the reason a probe is zero-padded
+//      rather than shortened.
 //   3. **A walk is in key order and complete.** Everything inserted comes
 //      back, once, sorted.
 
@@ -250,7 +250,7 @@ TEST(IndexTreeTest, EveryLeafsKeysSitBelowItsRightSiblings) {
 // ---- Duplicates ---------------------------------------------------------
 
 TEST(IndexTreeTest, ADuplicatedKeyStaysReachableAcrossLeafBoundaries) {
-    // The case the (key, tuple key) sort key exists for. 2,000 entries share one
+    // The case a sort key wider than the key exists for. 2,000 entries share one
     // key, which is three leaves' worth, so the duplicates certainly
     // straddle boundaries and a separator lands inside the run.
     Fixture f;
@@ -584,22 +584,23 @@ PageId BuildFullLeftLeaf(Fixture& f) {
 }
 
 // **The tree's structural invariant**, asked of the whole chain rather
-// than of one key: every sort key sits at or above the one before it,
-// across leaf boundaries. An entry placed in a leaf that had given its key
-// to the right sibling is the first thing this sees.
+// than of one key: every sort key sits above the one before it, across leaf
+// boundaries - strictly, since no two entries share one. An entry placed in
+// a leaf that had given its key to the right sibling is the first thing
+// this sees.
 void ExpectSortKeysAscend(Fixture& f) {
     std::vector<std::byte> previous;
     Status s = IndexVisit(
         f.store, f.root, f.layout, storage::PageAccess::kRead,
         [&](PageId page_id, IndexLeafView& leaf,
             std::uint16_t idx) -> StatusOr<storage::VisitControl> {
-            auto key = leaf.SortKey(idx);
+            auto key = leaf.Entry(idx);
             if (!key.ok()) return key.status();
             if (!previous.empty()) {
-                EXPECT_LE(std::memcmp(previous.data(), key.value().data(), previous.size()), 0)
+                EXPECT_LT(std::memcmp(previous.data(), key.value().data(), previous.size()), 0)
                     << "entry " << idx << " of leaf " << page_id << " (key "
                     << KeyOf(key.value().subspan(0, f.layout.key_width))
-                    << ") sorts below the entry before it";
+                    << ") does not sort above the entry before it";
             }
             previous.assign(key.value().begin(), key.value().end());
             return storage::VisitControl::kContinue;
@@ -742,7 +743,7 @@ TEST(IndexTreeTest, APromotionIntoAParentAnotherCoreDividedLandsInTheHalfHolding
         auto bytes = f.store.GetForRead(leaf);
         ASSERT_TRUE(bytes.ok()) << bytes.status().message();
         IndexLeafView view(bytes.value().bytes());
-        auto last = view.SortKey(static_cast<std::uint16_t>(view.entry_count() - 1));
+        auto last = view.Entry(static_cast<std::uint16_t>(view.entry_count() - 1));
         ASSERT_TRUE(last.ok()) << last.status().message();
         key_a = KeyOf(last.value().subspan(0, f.layout.key_width));
     }
@@ -835,6 +836,71 @@ TEST(IndexTreeTest, ALeafRootAnotherCoreGrewOverIsNotGrownOverASecondTime) {
     EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
     ExpectEverySeparatorBoundsItsSubtree(f);
     ASSERT_TRUE(f.Insert(0, tuple_key++).ok()) << "the retry, from the current root";
+    ExpectEverySeparatorBoundsItsSubtree(f);
+}
+
+// ---- A run of equal (key, tuple key) pairs --------------------------------
+
+TEST(IndexTreeTest, ARowWhoseCoveredColumnMovesThousandsOfTimesStaysInsertable) {
+    // One hot row - an index on `owner` covering `balance`, the balance
+    // updated again and again - appends one entry per version with the same
+    // (key, tuple key). That run once had no divide point outside it: a
+    // divide inside it copied up a separator its parent already held, and
+    // the insert at 610 was refused `AlreadyExists`, every later one
+    // `TxnConflict`. The covered bytes are part of the sort key now
+    // (index.md IX4b), so the run is ordered and every divide is clean.
+    Fixture f(Layout(kKeyWidth, /*covered=*/8));
+    constexpr std::uint64_t kVersions = 3000;  // ~6 leaves of one run
+    auto covered = [](std::uint64_t v) {
+        std::vector<std::byte> out(8);
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            out[i] = static_cast<std::byte>((v >> (8 * i)) & 0xFF);  // a cell's own order
+        }
+        return out;
+    };
+    for (std::uint64_t v = 0; v < kVersions; ++v) {
+        ASSERT_TRUE(f.Insert(42, 1, covered(v)).ok()) << "version " << v;
+    }
+    ASSERT_GT(IndexLeafCount(f.store, f.root, f.layout).value(), 2u)
+        << "the run must straddle leaves, or the cell tested nothing";
+    EXPECT_EQ(kVersions, f.Walk().size());
+    EXPECT_EQ(std::vector<std::uint64_t>(kVersions, 1), f.Probe(42));
+    ExpectSortKeysAscend(f);
+    ExpectEverySeparatorBoundsItsSubtree(f);
+
+    // The byte-identical check is complete across the leaves the run spans,
+    // not only in the leaf a (key, tuple key) descent would land on.
+    for (std::uint64_t v : {std::uint64_t{0}, kVersions / 2, kVersions - 1}) {
+        auto again = IndexInsert(f.store, f.root, f.layout, Key(42), 1, covered(v),
+                                 /*owner_oid=*/0);
+        ASSERT_TRUE(again.ok()) << again.status().message();
+        EXPECT_TRUE(again.value().already_present) << "version " << v << " was stored twice";
+    }
+    EXPECT_EQ(kVersions, f.Walk().size());
+}
+
+TEST(IndexTreeTest, ARunOfOnePairDividesInternalNodesAndGrowsLevelsCleanly) {
+    // The same run, over every level: a 1,000-byte covered clause puts eight
+    // entries in a leaf and eight separators in a node, so one row's
+    // versions divide internal nodes and grow the root inside the run - the
+    // pushed-up median, not only the copied-up leaf boundary, must never
+    // equal a separator its parent holds.
+    Fixture f(Layout(kKeyWidth, /*covered=*/1000));
+    constexpr std::uint64_t kVersions = 300;
+    auto covered = [](std::uint64_t v) {
+        std::vector<std::byte> out(1000, std::byte{0});
+        out[0] = static_cast<std::byte>(v & 0xFF);
+        out[1] = static_cast<std::byte>((v >> 8) & 0xFF);
+        return out;
+    };
+    for (std::uint64_t v = 0; v < kVersions; ++v) {
+        ASSERT_TRUE(f.Insert(42, 1, covered(v)).ok()) << "version " << v;
+    }
+    ASSERT_GE(IndexHeight(f.store, f.root, f.layout).value(), 3u)
+        << "the run must divide an internal node, or the cell tested only leaves";
+    EXPECT_EQ(kVersions, f.Walk().size());
+    EXPECT_EQ(std::vector<std::uint64_t>(kVersions, 1), f.Probe(42));
+    ExpectSortKeysAscend(f);
     ExpectEverySeparatorBoundsItsSubtree(f);
 }
 

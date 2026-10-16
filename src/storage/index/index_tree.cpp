@@ -63,11 +63,9 @@ struct Descent {
 // sibling's first entry can rise above the separator, and this test would
 // then send a key the sibling does not cover back to the sibling - revisit
 // it then, with the removal. **And it assumes every linked sibling has its
-// separator in a parent.** A run of equal sort keys can make a divide whose
-// promotion is refused after the sibling is linked
-// (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`);
-// every insert over that sibling's range then routes here, fails this test
-// and exhausts the restarts - refused on every attempt, not misplaced.
+// separator in a parent**, which a divide gives because its separator is
+// above every one the parent holds below it (index_page.hpp: no two entries
+// share a sort key).
 //
 // The caller holds this leaf; the sibling is taken shared and released
 // here. The order is leaf-then-right-neighbour, which is a walk's order,
@@ -86,7 +84,7 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView
     }
     IndexLeafView sibling(AsPage(bytes.value().bytes()));
     if (Status s = sibling.CheckAgainst(layout, right); !s.ok()) return s;
-    auto low = sibling.SortKey(0);
+    auto low = sibling.Entry(0);
     if (!low.ok()) {
         // A divide leaves both halves non-empty and nothing removes an
         // entry, so a right sibling with none is not a state the tree makes.
@@ -323,25 +321,17 @@ StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root, const Inde
 
 // The byte-identical entry already in this leaf, if there is one.
 //
-// Complete for the leaf the descent lands on. Entries sharing a sort key
-// are contiguous, but a run of them longer than half a leaf can straddle a
-// divide, and the descent lands on the run's *right* part - so a
-// byte-identical entry in the left part is missed and stored twice, which
-// the probe's tuple key dedup absorbs
-// (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`).
+// Complete for the index: the entry is its own sort key, so the leaf the
+// descent lands on - checked to cover it - is the one place it can be.
 StatusOr<bool> FindExactDuplicate(IndexLeafView& leaf, std::span<const std::byte> entry,
-                                   std::size_t sort_key_len, std::uint16_t* at) {
-    const std::uint16_t n = leaf.entry_count();
-    for (std::uint16_t i = leaf.LowerBound(entry.subspan(0, sort_key_len)); i < n; ++i) {
-        auto stored = leaf.Entry(i);
-        if (!stored.ok()) return stored.status();
-        if (std::memcmp(stored.value().data(), entry.data(), sort_key_len) != 0) break;
-        if (std::memcmp(stored.value().data(), entry.data(), entry.size()) == 0) {
-            *at = i;
-            return true;
-        }
-    }
-    return false;
+                                   std::uint16_t* at) {
+    const std::uint16_t i = leaf.LowerBound(entry);
+    if (i == leaf.entry_count()) return false;
+    auto stored = leaf.Entry(i);
+    if (!stored.ok()) return stored.status();
+    if (std::memcmp(stored.value().data(), entry.data(), entry.size()) != 0) return false;
+    *at = i;
+    return true;
 }
 
 }  // namespace
@@ -368,19 +358,16 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
 
     // The whole entry on the stack: bounded by kMaxIndexEntryWidth, which
     // CheckIndexLayout has already established.
+    // It is also its own sort key (index_page.hpp).
     std::array<std::byte, kMaxIndexEntryWidth> entry_buf{};
     const std::size_t sort_key_len = layout.sort_key_width();
-    const std::size_t entry_len = layout.leaf_entry_width();
-    std::span<std::byte> entry(entry_buf.data(), entry_len);
-    if (Status s = EncodeIndexSortKey(layout, key, tuple_key, entry.subspan(0, sort_key_len)); !s.ok()) {
-        return s;
-    }
+    std::span<std::byte> entry(entry_buf.data(), sort_key_len);
+    if (Status s = EncodeIndexSortKey(layout, key, tuple_key, entry); !s.ok()) return s;
     if (!covered.empty()) {
-        std::memcpy(entry.data() + sort_key_len, covered.data(), covered.size());
+        std::memcpy(entry.data() + layout.covered_offset(), covered.data(), covered.size());
     }
 
-    auto descent = DescendTo(store, root, layout, entry.subspan(0, sort_key_len),
-                             /*leaf_for_write=*/true);
+    auto descent = DescendTo(store, root, layout, entry, /*leaf_for_write=*/true);
     if (!descent.ok()) return descent.status();
     const PageId leaf_id = descent.value().path[descent.value().depth];
     IndexLeafView leaf(descent.value().leaf.bytes());
@@ -388,7 +375,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     IndexInsertResult out;
 
     std::uint16_t dup_at = 0;
-    auto duplicate = FindExactDuplicate(leaf, entry, sort_key_len, &dup_at);
+    auto duplicate = FindExactDuplicate(leaf, entry, &dup_at);
     if (!duplicate.ok()) return duplicate.status();
     if (duplicate.value()) {
         out.page_id = leaf_id;
@@ -417,7 +404,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     //
     // The parents the divide will write are found and held first (AT-S16):
     // a refusal there leaves the tree as it was, the entry not inserted.
-    auto parents = SecureParents(store, descent.value(), layout, entry.subspan(0, sort_key_len));
+    auto parents = SecureParents(store, descent.value(), layout, entry);
     if (!parents.ok()) return parents.status();
     // And every page it creates is claimed before it writes one
     // (btree.cpp's `PlaceUnderHold` says why): a refusal here leaves the
@@ -457,7 +444,9 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // The separator is the **first entry of the right sibling**, copied up:
     // its sort key stays in the leaf, unlike an internal node's median,
     // which leaves. index_page.hpp's SplitInto documents the difference.
-    auto first_right = new_leaf.value().SortKey(0);
+    // It is above every entry left behind and below the parent's next
+    // separator, so the parent holds no equal one (index_page.hpp).
+    auto first_right = new_leaf.value().Entry(0);
     if (!first_right.ok()) return first_right.status();
     std::array<std::byte, kMaxIndexEntryWidth> sep_buf{};
     std::span<std::byte> sep(sep_buf.data(), sort_key_len);
@@ -492,8 +481,8 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // Peak pins (MG03): the leaf, the `k` held parents and the one node a
     // level creates - `2 + k`, and `3 + k` for a growth, whose anchor is
     // pinned. **Unbounded by a constant**, unlike the clustered tree's: an
-    // index node holds as few separators as its key is wide allows (eight at
-    // a 1,000-byte key), so `k` can pass the five that
+    // index node holds as few separators as its entry is wide allows (eight
+    // at a 1,000-byte entry, covered bytes included), so `k` can pass the five that
     // DevicePageStore::kPinCeiling leaves room for, and a debug build at
     // `cores = 1` aborts there. Open, AT-S16's review F1: the ceiling is the
     // operator's to re-derive.

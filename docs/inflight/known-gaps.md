@@ -572,8 +572,7 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   - **A wide window collects every target before it writes**, so its
     target list grows with the window.
   - **A purged version's secondary-index entries are never removed** (BH-Q8
-    (a)), so the equal-index-sort-keys defect gains a path
-    (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`).
+    (a)); a key placed again appends beside them (`index.md` IX4b).
   - **The audit claim carries the exception**: a key is never reissued
     except by an explicit, logged `PURGE`, and an external system that
     captured a Keystone id must treat a purged key as a new identity.
@@ -715,10 +714,7 @@ pages and the cases it does not reach.
 - **A refused reclaim stays pending.** A reclaim refused - a page reached
   twice by the walk, an unreadable page, a failed free or map sync - leaves
   the tombstone owing for the rest of the run. It is driven again at the
-  next mount, and each refusal is counted `reclaim_refused`. The equal-sort-keys index bug
-  (`bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`),
-  if it ever makes two descents reach one child, lands here: a refusal,
-  never a page freed twice.
+  next mount, and each refusal is counted `reclaim_refused`.
 - **`SHOW PAGE` of a reused id shows its new owner's bytes.** It reads any
   page id a client names.
 - **BF-R10's per-page owner checks inside a descent, a chain walk and a
