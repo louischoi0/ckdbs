@@ -8,6 +8,7 @@ const char* FaultProfileName(FaultProfile profile) {
     switch (profile) {
         case FaultProfile::kNone: return "none";
         case FaultProfile::kIo: return "io";
+        case FaultProfile::kGrow: return "grow";
     }
     return "unknown";
 }
@@ -25,7 +26,8 @@ const char* FaultKindName(FaultKind kind) {
 }
 
 std::optional<FaultProfile> ParseFaultProfile(std::string_view name) {
-    for (const FaultProfile profile : {FaultProfile::kNone, FaultProfile::kIo}) {
+    for (const FaultProfile profile :
+         {FaultProfile::kNone, FaultProfile::kIo, FaultProfile::kGrow}) {
         if (name == FaultProfileName(profile)) return profile;
     }
     return std::nullopt;
@@ -61,17 +63,28 @@ constexpr WeightedKind kIoKinds[] = {
     {FaultKind::kPageFailSync, 15}, {FaultKind::kPageFailGrow, 5},
     {FaultKind::kLogFailWrite, 15}, {FaultKind::kLogFailSync, 15},
 };
+constexpr WeightedKind kGrowKinds[] = {{FaultKind::kPageFailGrow, 1}};
 
-FaultKind DrawKind(Rng& rng) {
+// No default, so a new profile is a compile warning here, not `io`'s table.
+std::span<const WeightedKind> KindsFor(FaultProfile profile) {
+    switch (profile) {
+        case FaultProfile::kGrow: return kGrowKinds;
+        case FaultProfile::kNone:
+        case FaultProfile::kIo: break;
+    }
+    return kIoKinds;
+}
+
+FaultKind DrawKind(Rng& rng, std::span<const WeightedKind> kinds) {
     std::uint32_t total = 0;
-    for (const WeightedKind& entry : kIoKinds) total += entry.weight;
+    for (const WeightedKind& entry : kinds) total += entry.weight;
 
     std::uint64_t roll = rng.Below(total);
-    for (const WeightedKind& entry : kIoKinds) {
+    for (const WeightedKind& entry : kinds) {
         if (roll < entry.weight) return entry.kind;
         roll -= entry.weight;
     }
-    return kIoKinds[0].kind;  // unreachable: the roll is below the total
+    return kinds[0].kind;  // unreachable: the roll is below the total
 }
 
 }  // namespace
@@ -85,11 +98,12 @@ FaultSchedule::FaultSchedule(Rng rng, std::size_t ops, FaultProfile profile,
     std::size_t count = ops * rate / 1000;
     if (count == 0) count = 1;
 
+    const std::span<const WeightedKind> kinds = KindsFor(profile);
     faults_.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
         ScheduledFault fault;
         fault.op_index = static_cast<std::size_t>(rng.Below(ops));
-        fault.kind = DrawKind(rng);
+        fault.kind = DrawKind(rng, kinds);
         faults_.push_back(fault);
     }
     std::sort(faults_.begin(), faults_.end(),

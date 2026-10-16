@@ -76,7 +76,9 @@ run_one() {
 
 for seed in $COMMITTED $FRESH_SEEDS; do
     for mode in clean sync-crash crash; do
-        for faults in none io; do
+        # `grow` as well as `io`: under `io` a log fault fail-stops the run
+        # early (BC-S4), so a refused growth is met only under `grow`.
+        for faults in none io grow; do
             # All three value profiles, not just the default: `colliding`
             # (v over [0,4]) is what makes a FilterScan set interesting, and
             # it is where the Cabin finding in docs/inflight/known-gaps.md lives. A

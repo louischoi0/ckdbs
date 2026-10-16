@@ -938,6 +938,11 @@ SimInstance::Options InstanceOptions(const SimConfig& config, const FeatureToggl
     // shape that rarely evicts.
     constexpr std::array<std::size_t, 3> kCaps{512, 1024, 8192};
     options.buffer_pool_frames = kCaps[config.seed % kCaps.size()];
+    // `grow` faults a growth, so every new page past the device's end is
+    // one: an armed fault waits for the next growth, and at the default
+    // 64-page extent a 12,000-op run of seed 20260826003 fired 1 of its 480
+    // (on `8cacbb3d`, 2026-10-16).
+    if (config.faults == FaultProfile::kGrow) options.extent_pages = 1;
     return options;
 }
 

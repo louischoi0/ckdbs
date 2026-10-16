@@ -73,6 +73,22 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Testing
 
+- **A split page created after the split's first write is guarded by one
+  unit cell, not the sim.** Found 2026-10-16 on
+  `worktree-fix-h9-chain-ascent` off `8cacbb3d`, closing H9. Two shapes
+  create a page after writing one: a full parent's divide or right-split,
+  and a root grown over a leaf `SplitLeafAndInsert` divided (the old leaf
+  is rebuilt before the root is created). Both are safe because the split
+  claims every page, device room included, before it writes. A mutant that
+  grows the device at a page's creation instead of at its claim passed all
+  1,200 runs of `--faults grow` (200 seeds x uniform/zipfian x
+  clean/sync-crash/crash, 1,500 ops x 2 iterations): at those sizes no
+  parent fills, and a first split of a rising key stream is an append,
+  which writes nothing before its root. The mutant is killed by
+  `BtreeTest.ADivideWhoseSecondPageTheDeviceRefusesWritesNothing` alone.
+  Whether the sim ever grows a root over a divided leaf has not been
+  counted. **Owner: none.**
+
 - **`DropTableReclaimServingTest.ATwoCoreMountReclaimsOnceEveryCoreHasCheckpointedWhileServing`
   failed once under host load.** On `worktree-bm-scan-kernel-open` at
   `6b771ec1`'s tree, one full Debug `-j8` suite failed its
