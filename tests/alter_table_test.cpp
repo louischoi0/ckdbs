@@ -232,9 +232,9 @@ TEST_F(AlterTableTest, ARenameInsideATransactionIsNotRolledBack) {
 
 // AL7: the catalog's names are load-bearing for bootstrap.
 TEST_F(AlterTableTest, ASystemRelationIsRefused) {
-    const std::string out = Run("ALTER TABLE tables RENAME TO stuff");
+    const std::string out = Run("ALTER TABLE sys.tables RENAME TO stuff");
     EXPECT_EQ(out.rfind("ERR", 0), 0u);
-    EXPECT_NE(out.find("system relation"), std::string::npos) << out;
+    EXPECT_NE(out.find("catalog relation"), std::string::npos) << out;
 }
 
 // AF-T0: AL7's refusal is about the *catalog's own* relations, and a user
@@ -273,6 +273,8 @@ TEST_F(AlterTableTest, ARelationInAUserNamespaceIsNotASystemRelation) {
     // the one below fails. Run the other way round, the table rename's
     // refusal deletes the relation this line names and both revert the
     // same way.
+    // Unqualified, so the session's namespace (NS5).
+    ASSERT_EQ(Run("USE af_test"), "USE namespace=af_test");
     const std::string col = Run("ALTER TABLE orders_line RENAME COLUMN id TO key");
     EXPECT_EQ(col.find("system relation"), std::string::npos)
         << "a user relation outside `public` was refused as a system relation: " << col;

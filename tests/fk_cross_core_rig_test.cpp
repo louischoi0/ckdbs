@@ -197,10 +197,10 @@ struct FkRig {
             !s.ok()) {
             return s;
         }
-        auto parent_rel = rig->core(0).catalog().FindTableOidByName("p");
+        auto parent_rel = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "p");
         if (!parent_rel.ok()) return parent_rel.status();
         parent_oid = parent_rel.value();
-        auto child = rig->core(0).catalog().FindTableOidByName("c");
+        auto child = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "c");
         if (!child.ok()) return child.status();
         if (Status s = rig->store().FlushPages(catalog::kEveryCatalogPage); !s.ok()) return s;
         return Status::OK();
@@ -458,7 +458,7 @@ TEST(FkCrossCoreRigTest, ASelfReferencingChildsOpenReferenceParksTheParentsDelet
     ScriptRig f({"DELETE FROM s WHERE id = 1"}, {"BEGIN", "INSERT INTO s VALUES (2, 1)", "COMMIT"},
                {"CREATE TABLE s (id int64, pid int64 NULL) BTREE", "INSERT INTO s VALUES (1, NULL)"},
                [&](TwoCoreRig& rig) {
-                   auto oid = rig.core(0).catalog().FindTableOidByName("s");
+                   auto oid = rig.core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "s");
                    if (!oid.ok()) return false;
                    s_oid = oid.value();
                    auto fk = rig.core(0).catalog().CreateForeignKey(s_oid, 1, s_oid);
@@ -487,7 +487,7 @@ TEST(FkCrossCoreRigTest, ASelfReferencingChildWaitsOutItsParentsWriterAndPasses)
     ScriptRig f({"BEGIN", "INSERT INTO s VALUES (1, NULL)", "COMMIT"},
                 {"INSERT INTO s VALUES (2, 1)"},
                 {"CREATE TABLE s (id int64, pid int64 NULL) BTREE"}, [&](TwoCoreRig& rig) {
-                    auto oid = rig.core(0).catalog().FindTableOidByName("s");
+                    auto oid = rig.core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "s");
                     if (!oid.ok()) return false;
                     s_oid = oid.value();
                     auto fk = rig.core(0).catalog().CreateForeignKey(s_oid, 1, s_oid);
@@ -715,7 +715,7 @@ TEST(FkCrossCoreRigTest, AChildMovedOntoASeedBehindTheControllersBuildIsInTheSet
     // An optimizer-owned Cabin on `c.pid`, and 7 sighted once: seeded, not
     // observed (the auto threshold is two).
     catalog::Catalog& catalog = r.rig->core(0).catalog();
-    auto c_oid = catalog.FindTableOidByName("c");
+    auto c_oid = catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "c");
     ASSERT_TRUE(c_oid.ok());
     auto cabin = catalog.CreateCabin(c_oid.value(), /*col_pos=*/1, catalog::kCabinOriginAuto);
     ASSERT_TRUE(cabin.ok()) << cabin.status().message();
@@ -782,7 +782,7 @@ TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBan
     // An optimizer-owned Cabin on `c.pid`, and 7 sighted once: seeded, not
     // observed (the auto threshold is two).
     catalog::Catalog& catalog = r.rig->core(0).catalog();
-    auto c_oid = catalog.FindTableOidByName("c");
+    auto c_oid = catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "c");
     ASSERT_TRUE(c_oid.ok());
     auto cabin = catalog.CreateCabin(c_oid.value(), /*col_pos=*/1, catalog::kCabinOriginAuto);
     ASSERT_TRUE(cabin.ok()) << cabin.status().message();

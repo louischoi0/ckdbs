@@ -12,7 +12,6 @@ namespace {
 
 TableAccess MakeAccess(Oid oid, std::size_t ncols) {
     TableAccess access{};
-    access.namespace_oid = kNamespacePublic;
     access.oid = oid;
     access.desc_page_id = static_cast<PageId>(1000 + oid);
     access.clustered_type = ClusteredType::kHeap;
@@ -40,29 +39,43 @@ SysTypeRow MakeType(Oid oid, std::string_view name, std::uint32_t type_val) {
 TEST(CatalogCacheTest, NameToOidRoundTrips) {
     CatalogCache cache;
 
-    EXPECT_EQ(cache.FindOidByName("accounts"), nullptr);
-    cache.PutOidByName("accounts", 4000);
+    EXPECT_EQ(cache.FindOidByName(kNamespacePublic, "accounts"), nullptr);
+    cache.PutOidByName(kNamespacePublic, "accounts", 4000);
 
-    const Oid* found = cache.FindOidByName("accounts");
+    const Oid* found = cache.FindOidByName(kNamespacePublic, "accounts");
     ASSERT_NE(found, nullptr);
     EXPECT_EQ(*found, 4000u);
 
     // Exact match only: the catalog's name lookup has always been
     // case-sensitive (only sys.types matching is not).
-    EXPECT_EQ(cache.FindOidByName("ACCOUNTS"), nullptr);
+    EXPECT_EQ(cache.FindOidByName(kNamespacePublic, "ACCOUNTS"), nullptr);
+}
+
+TEST(CatalogCacheTest, OneNameInTwoNamespacesIsTwoEntries) {
+    // A relation's name is unique within its namespace (namespace.md NS6).
+    CatalogCache cache;
+    constexpr Oid kLedger = 4100;
+    cache.PutOidByName(kNamespacePublic, "t", 4000);
+    EXPECT_EQ(cache.FindOidByName(kLedger, "t"), nullptr);
+    cache.PutOidByName(kLedger, "t", 4001);
+    ASSERT_NE(cache.FindOidByName(kNamespacePublic, "t"), nullptr);
+    ASSERT_NE(cache.FindOidByName(kLedger, "t"), nullptr);
+    EXPECT_EQ(*cache.FindOidByName(kNamespacePublic, "t"), 4000u);
+    EXPECT_EQ(*cache.FindOidByName(kLedger, "t"), 4001u);
+    EXPECT_EQ(cache.name_entries(), 2u);
 }
 
 TEST(CatalogCacheTest, PutOidByNameKeepsTheFirstValue) {
     CatalogCache cache;
-    cache.PutOidByName("t", 4000);
-    const Oid* first = cache.FindOidByName("t");
+    cache.PutOidByName(kNamespacePublic, "t", 4000);
+    const Oid* first = cache.FindOidByName(kNamespacePublic, "t");
     ASSERT_NE(first, nullptr);
 
-    cache.PutOidByName("t", 9999);
+    cache.PutOidByName(kNamespacePublic, "t", 9999);
 
     // Same address, same value: a re-fill must not move or rewrite an entry
     // a caller may be holding.
-    EXPECT_EQ(cache.FindOidByName("t"), first);
+    EXPECT_EQ(cache.FindOidByName(kNamespacePublic, "t"), first);
     EXPECT_EQ(*first, 4000u);
     EXPECT_EQ(cache.name_entries(), 1u);
 }
@@ -143,14 +156,14 @@ TEST(CatalogCacheTest, TableListRoundTrips) {
 
 TEST(CatalogCacheTest, InvalidateDropsDdlFactsAndKeepsTypes) {
     CatalogCache cache;
-    cache.PutOidByName("accounts", 4000);
+    cache.PutOidByName(kNamespacePublic, "accounts", 4000);
     cache.PutTableAccess(MakeAccess(4000, 1));
     cache.PutTableList(std::vector<SysObjectRow>{});
     cache.PutTypes(std::vector<SysTypeRow>{MakeType(kTypeInt64, "int64", kTypeValInt64)});
 
     cache.Invalidate();
 
-    EXPECT_EQ(cache.FindOidByName("accounts"), nullptr);
+    EXPECT_EQ(cache.FindOidByName(kNamespacePublic, "accounts"), nullptr);
     EXPECT_EQ(cache.FindTableAccess(4000), nullptr);
     EXPECT_EQ(cache.FindTableList(), nullptr);
     EXPECT_EQ(cache.table_access_entries(), 0u);
@@ -169,10 +182,10 @@ TEST(CatalogCacheTest, StatsCountHitsMissesFillsAndInvalidations) {
     EXPECT_NE(cache.FindTableAccess(4000), nullptr);  // hit
     EXPECT_NE(cache.FindTableAccess(4000), nullptr);  // hit
 
-    cache.PutOidByName("accounts", 4000);             // fill
-    cache.PutOidByName("accounts", 4000);             // already present: no fill
-    EXPECT_NE(cache.FindOidByName("accounts"), nullptr);  // hit
-    EXPECT_EQ(cache.FindOidByName("nope"), nullptr);       // miss
+    cache.PutOidByName(kNamespacePublic, "accounts", 4000);             // fill
+    cache.PutOidByName(kNamespacePublic, "accounts", 4000);             // already present: no fill
+    EXPECT_NE(cache.FindOidByName(kNamespacePublic, "accounts"), nullptr);  // hit
+    EXPECT_EQ(cache.FindOidByName(kNamespacePublic, "nope"), nullptr);       // miss
 
     cache.Invalidate();
 

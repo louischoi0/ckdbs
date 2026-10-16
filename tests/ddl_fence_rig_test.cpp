@@ -79,7 +79,7 @@ catalog::Oid PeerRelation(TwoCoreRig& rig, const std::string& name) {
                                  .Dispatch("CREATE TABLE " + name + " (id int64, v int64) BTREE")
                                  .response;
     EXPECT_EQ(made.rfind("CREATED", 0), 0u) << made;
-    auto oid = rig.core(0).catalog().FindTableOidByName(name);
+    auto oid = rig.core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, name);
     EXPECT_TRUE(oid.ok()) << oid.status().message();
     return oid.value();
 }

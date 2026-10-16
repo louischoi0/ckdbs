@@ -175,7 +175,7 @@ void Load(Instance& db) {
 }
 
 catalog::Oid OidOf(Instance& db, const char* name) {
-    auto oid = db.catalog().FindTableOidByName(name);
+    auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, name);
     EXPECT_TRUE(oid.ok()) << oid.status().message();
     return oid.value();
 }

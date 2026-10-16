@@ -60,7 +60,7 @@ std::uint16_t LiveValues(storage::PageStore& store, PageId varheap_page) {
 }
 
 const catalog::TableAccess* AccessOf(TwoCoreRig& rig) {
-    auto oid = rig.core(0).catalog().FindTableOidByName("t");
+    auto oid = rig.core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     EXPECT_TRUE(oid.ok()) << oid.status().message();
     auto access = rig.core(0).catalog().InitTableAccess(oid.value());
     EXPECT_TRUE(access.ok()) << access.status().message();

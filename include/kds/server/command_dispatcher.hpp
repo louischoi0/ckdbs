@@ -718,6 +718,7 @@ private:
     DispatchOutcome HandleBegin(std::string_view args, Session& session);
     DispatchOutcome HandleCommit(Session& session);
     DispatchOutcome HandleRollback(Session& session);
+    DispatchOutcome HandleUse(std::string_view line, std::string_view args, Session& session);
     DispatchOutcome HandleSetIsolation(std::string_view args, Session& session);
     // `SET DURABILITY {STRICT|GROUP|RELAXED}` (protocol-wp.md P03,
     // docs/spec/protocol.md §9). The session rung of the same chain
@@ -1059,12 +1060,6 @@ private:
     TupleKeyWindow FoldTupleKeyWindow(const catalog::TableAccess& access,
                           const std::vector<parser::Condition>& where) const;
 
-    // Whether an already-resolved relation lives in the `sys` namespace
-    // (AF-P3: identity, not permission) - ALTER's refusal and `PURGE`'s
-    // (BH-Q17). A system relation is a bootstrap row visible to every view,
-    // so the walk is unfiltered.
-    StatusOr<bool> InSystemNamespace(catalog::Oid oid);
-
     // **The DDL's relation `X`** (AO-S6e-b; AR2 §3's DDL row). Empty when
     // it was taken - and it is taken for the DDL transaction, so its decide
     // is what releases it. A conflict answers the refusal and, where there
@@ -1128,16 +1123,15 @@ private:
     DispatchOutcome HandleCreateTableSql(std::string_view line, Session& session);
 
     // The duplicate-name check's answer, for **both** CREATE TABLE forms:
-    // `EXISTS oid=` when a relation of `name` is on the page, the qualifier
-    // refusal when it lives in another namespace than the statement says,
-    // nullopt when the name is free. Unfiltered, deliberately
+    // `EXISTS oid=` when a relation of `name` is on the page in
+    // `namespace_oid` (a name is unique within its namespace, namespace.md
+    // NS6), nullopt when the name is free there. Unfiltered, deliberately
     // (`ddl-transactional.md`'s duplicate check), and **not the answer that
     // binds**: `Catalog::CreateTable` asks again under `sys.objects`' held
     // root page (AT-S17), and a create that loses the name there comes back
     // through this so it answers as if it had arrived second.
-    std::optional<DispatchOutcome> ExistingRelationReply(std::string_view qualifier,
-                                                         std::string_view name,
-                                                         std::uint32_t byte_offset);
+    std::optional<DispatchOutcome> ExistingRelationReply(catalog::Oid namespace_oid,
+                                                         std::string_view name);
 
     // The DDL half of a transaction: the id a catalog row should carry,
     // and where to put the rows it wrote so `ROLLBACK` can retire them.
@@ -1201,11 +1195,6 @@ private:
     std::optional<txn::ReadView> ViewFor(Session& session);
     // `ViewFor`'s minting half, whatever the count says.
     txn::ReadView MintResolveView(Session& session);
-    // A relation's name and the qualifier written with it, under `view`.
-    StatusOr<catalog::Oid> ResolveQualifiedRelation(std::string_view qualifier,
-                                                    std::string_view name,
-                                                    std::uint32_t byte_offset,
-                                                    const txn::ReadView* view);
 
     // **Every name resolution goes through this** (`ddl-transactional.md`
     // §4): `resolve(view)` runs under `ViewFor`'s answer, and once more under
@@ -1304,7 +1293,7 @@ private:
     DispatchOutcome HandleCabin(std::string_view line, Session& session);
     // Both statements' catalog half and reply, under whatever hold
     // `HandleCabin` took.
-    DispatchOutcome RunCabinDdl(const parser::CabinStmt& stmt);
+    DispatchOutcome RunCabinDdl(const parser::CabinStmt& stmt, catalog::Oid default_namespace);
 
     // `ALTER TABLE ... RENAME TO | RENAME COLUMN` (docs/spec/alter.md,
     // workplan ALT03). One handler for both forms, for HandleCabin's
@@ -1499,13 +1488,14 @@ private:
     // (FK-M4). Never fails a write.
     void RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_oid, std::uint64_t column_mask);
 
-    // The namespace a `CREATE TABLE ns.t` names, or `kNamespacePublic` for
-    // an unqualified name (AF-T3). The one qualifier in the grammar that
-    // decides rather than asserts: it decides the namespace the relation is
-    // created in. An unknown namespace is refused with its byte and is
-    // **not** created - see `ast.hpp`'s namespace-qualifier rule.
+    // The namespace a `CREATE TABLE ns.t` names, or the session's (`USE`)
+    // for an unqualified name (namespace.md NS7): it decides the namespace
+    // the relation is created in. An unknown namespace is refused with its
+    // byte and is **not** created - see `ast.hpp`'s namespace-qualifier
+    // rule.
     StatusOr<catalog::Oid> ResolveCreateNamespace(std::string_view qualifier,
                                                   std::uint32_t byte_offset,
+                                                  const Session& session,
                                                   const txn::ReadView* view);
 
     // A relation's name for a human-readable reply, or `oid=<n>` when it
@@ -1597,10 +1587,12 @@ public:
     // rule, same atomicity. The load session synthesizes an InsertStmt per
     // chunk and calls this.
     DispatchOutcome ExecuteInsert(const parser::InsertStmt& stmt, Session& session);
-    // The load's bind (`C_LOAD_BEGIN`): `name` resolved under `session`'s view
-    // through `ResolveNames`, so a relation the session cannot see is not
-    // answered READY.
-    StatusOr<catalog::Oid> ResolveRelationName(Session& session, std::string_view name);
+    // The load's bind (`C_LOAD_BEGIN`): `qualifier.name`, or a bare `name` in
+    // the session's namespace, resolved under `session`'s view through
+    // `ResolveNames`, so a relation the session cannot see is not answered
+    // READY.
+    StatusOr<catalog::Oid> ResolveRelationName(Session& session, std::string_view qualifier,
+                                               std::string_view name);
 
     // For the sibling platform layers (the KWP load endpoint's schema
     // reads). The catalog's own discipline applies unchanged.
@@ -2146,7 +2138,8 @@ private:
     StatusOr<exec::CatalogView> TablesView(const txn::ReadView* view);
     StatusOr<exec::CatalogView> ObjectsView(const txn::ReadView* view);
     StatusOr<exec::CatalogView> ColumnsView(const txn::ReadView* view,
-                                            const parser::AstValue* rel_name);
+                                            const parser::AstValue* rel_name,
+                                            catalog::Oid default_namespace);
     StatusOr<exec::CatalogView> TypesView();
     StatusOr<exec::CatalogView> PatternsView();
     StatusOr<exec::CatalogView> NamespacesView(const txn::ReadView* view);
@@ -2157,7 +2150,8 @@ private:
     StatusOr<exec::CatalogView> CabinsView();
     StatusOr<exec::CatalogView> AssertionsView();
     StatusOr<exec::CatalogView> TransitionsView();
-    StatusOr<exec::CatalogView> RelayoutView(const parser::AstValue* name, std::uint32_t byte);
+    StatusOr<exec::CatalogView> RelayoutView(const parser::AstValue* name, std::uint32_t byte,
+                                             catalog::Oid default_namespace);
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> StatementStatsView();

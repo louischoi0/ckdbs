@@ -189,7 +189,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "cabins") return CabinsView();
     if (n == "assertions") return AssertionsView();
     if (n == "transitions") return TransitionsView();
-    if (n == "relayout") return RelayoutView(key, byte);
+    if (n == "relayout") return RelayoutView(key, byte, session.default_namespace());
     if (n == "cabin_optimizer") return CabinOptimizerView(byte);
     if (n == "lock_waits") return LockWaitsView();
     if (n == "statement_stats") return StatementStatsView();
@@ -201,7 +201,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     return ResolveNames(
         session, [&](const txn::ReadView* view) -> StatusOr<exec::CatalogView> {
             if (n == "tables") return TablesView(view);
-            if (n == "columns") return ColumnsView(view, key);
+            if (n == "columns") return ColumnsView(view, key, session.default_namespace());
             if (n == "objects") return ObjectsView(view);
             if (n == "namespaces") return NamespacesView(view);
             if (n == "indexes") return IndexesView(view);
@@ -288,7 +288,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::ObjectsView(const txn::ReadView* 
 }
 
 StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* view_of,
-                                                           const parser::AstValue* rel_name) {
+                                                           const parser::AstValue* rel_name,
+                                                           catalog::Oid default_namespace) {
     exec::CatalogView view;
     Define(view, {{"rel_id", kInt},
                   {"rel_name", kStr},
@@ -304,20 +305,12 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
     std::vector<catalog::SysObjectRow> relations;
     if (rel_name != nullptr) {
         // `DESCRIBE <t>`'s refusal, kept (BO-Q11): a name that resolves to
-        // nothing is refused, under the session's view and with its
-        // qualifier checked, never answered with no rows.
+        // nothing is refused, under the session's view and in its namespace
+        // (NS5), never answered with no rows.
         const auto [qualifier, bare] = SplitQualifiedArg(rel_name->str_val);
-        auto oid = catalog_.FindTableOidByName(bare, view_of);
-        if (!oid.ok()) {
-            return oid.status().WithMessage(oid.status().message() + " '" + rel_name->str_val +
-                                            "' (byte " + std::to_string(rel_name->byte_offset) +
-                                            ")");
-        }
-        if (Status s = catalog_.CheckRelationQualifier(qualifier, bare, oid.value(),
-                                                       rel_name->byte_offset, view_of);
-            !s.ok()) {
-            return s;
-        }
+        auto oid = catalog_.ResolveRelation(qualifier, bare, default_namespace,
+                                            rel_name->byte_offset, view_of);
+        if (!oid.ok()) return oid.status();
         auto all = catalog_.ListTables(view_of);
         if (!all.ok()) return all.status();
         for (const catalog::SysObjectRow& object : all.value()) {
@@ -714,7 +707,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::TransitionsView() {
 }
 
 StatusOr<exec::CatalogView> CommandDispatcher::RelayoutView(const parser::AstValue* name,
-                                                            std::uint32_t byte) {
+                                                            std::uint32_t byte,
+                                                            catalog::Oid default_namespace) {
     if (relayout_mode_ == PhysicalOptimizerMode::kOff) {
         return Status::InvalidArgument(
             "sys.relayout has no plans to report: the physical optimizer is off "
@@ -748,16 +742,14 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelayoutView(const parser::AstVal
         reports = std::move(all.value());
     } else {
         const auto [qualifier, bare] = SplitQualifiedArg(name->str_val);
-        auto oid = catalog_.FindTableOidByName(bare);
-        if (!oid.ok()) {
-            return Status::NotFound("unknown relation '" + name->str_val + "' (byte " +
-                                    std::to_string(name->byte_offset) + ")");
-        }
-        if (Status s = catalog_.CheckRelationQualifier(qualifier, bare, oid.value(),
-                                                       name->byte_offset);
-            !s.ok()) {
-            return s;
-        }
+        // A catalog relation is never resolved by a statement, but this view
+        // answers for one by name - `sys.patterns` - with the reason the
+        // mover cannot touch it.
+        auto oid = qualifier == catalog::kNamespaceSysName
+                       ? catalog_.FindTableOidByName(catalog::kNamespaceSys, bare)
+                       : catalog_.ResolveRelation(qualifier, bare, default_namespace,
+                                                  name->byte_offset);
+        if (!oid.ok()) return oid.status();
         exec::Budget budget(budget_.limit());
         auto one = stats::PlanRelation(catalog_, page_store_, oid.value(), budget, clock_,
                                        decay_half_life_ns_);

@@ -151,7 +151,7 @@ TEST(CatalogNameRaceTest, TwoCoresCreatingOneTableNameLeaveOneRow) {
     auto out = OnTwoCores([&](int core, int round) {
         const std::string name = Name("t", round);
         gate.Wait();
-        const auto seen = cats[core].FindTableOidByName(name);
+        const auto seen = cats[core].FindTableOidByName(::kds::catalog::kNamespacePublic, name);
         gate.Wait();  // both have looked; neither has written
         if (seen.ok()) return Status::AlreadyExists("seen before the write");
         return cats[core].CreateTable(kNamespacePublic, name, schema, ClusteredType::kBtree)

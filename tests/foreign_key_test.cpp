@@ -97,8 +97,8 @@ TEST_F(ForeignKeyTest, ReferencesDeclaresAForeignKey) {
     ASSERT_TRUE(rows.ok()) << rows.status().message();
     ASSERT_EQ(rows.value().size(), 1u);
 
-    auto accounts = boot_->catalog.FindTableOidByName("accounts");
-    auto trades = boot_->catalog.FindTableOidByName("trades");
+    auto accounts = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "accounts");
+    auto trades = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades");
     ASSERT_TRUE(accounts.ok());
     ASSERT_TRUE(trades.ok());
 
@@ -122,7 +122,7 @@ TEST_F(ForeignKeyTest, BothRelationsCarryTheForeignKey) {
 
     // Opened - and therefore cached - *before* the child exists, which is
     // exactly the entry a missing invalidation would leave stale.
-    auto parent_oid = boot_->catalog.FindTableOidByName("accounts");
+    auto parent_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "accounts");
     ASSERT_TRUE(parent_oid.ok());
     ASSERT_TRUE(boot_->catalog.InitTableAccess(parent_oid.value()).ok());
 
@@ -130,7 +130,7 @@ TEST_F(ForeignKeyTest, BothRelationsCarryTheForeignKey) {
                   .substr(0, 7),
               "CREATED");
 
-    auto child_oid = boot_->catalog.FindTableOidByName("trades");
+    auto child_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades");
     ASSERT_TRUE(child_oid.ok());
 
     auto child = boot_->catalog.InitTableAccess(child_oid.value());
@@ -241,7 +241,7 @@ TEST_F(ForeignKeyTest, AnUnknownParentRefusesAndCreatesNothing) {
                                 "nosuch) BTREE");
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
     EXPECT_NE(out.find("nosuch"), std::string::npos) << out;
-    EXPECT_FALSE(boot_->catalog.FindTableOidByName("trades").ok());
+    EXPECT_FALSE(boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades").ok());
 }
 
 // F1 puts the reference on the parent's Keystone id, and a heap relation
@@ -253,7 +253,7 @@ TEST_F(ForeignKeyTest, AHeapParentIsRefused) {
         Run("CREATE TABLE trades (id int64, account_id int64 REFERENCES accounts) BTREE");
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
     EXPECT_NE(out.find("BTREE"), std::string::npos) << out;
-    EXPECT_FALSE(boot_->catalog.FindTableOidByName("trades").ok());
+    EXPECT_FALSE(boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades").ok());
 }
 
 TEST_F(ForeignKeyTest, AColumnThatCannotHoldAKeystoneIdIsRefused) {
@@ -264,7 +264,7 @@ TEST_F(ForeignKeyTest, AColumnThatCannotHoldAKeystoneIdIsRefused) {
         Run("CREATE TABLE trades (id int64, account varchar REFERENCES accounts) BTREE");
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
     EXPECT_NE(out.find("Keystone id"), std::string::npos) << out;
-    EXPECT_FALSE(boot_->catalog.FindTableOidByName("trades").ok());
+    EXPECT_FALSE(boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades").ok());
 }
 
 // The tuple key is the row's identity, not a field of it: a reference stored there
@@ -277,7 +277,7 @@ TEST_F(ForeignKeyTest, AForeignKeyOnTheTupleKeyIsRefused) {
         Run("CREATE TABLE trades (id int64 REFERENCES accounts, qty int64) BTREE");
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
     EXPECT_NE(out.find("tuple key"), std::string::npos) << out;
-    EXPECT_FALSE(boot_->catalog.FindTableOidByName("trades").ok());
+    EXPECT_FALSE(boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades").ok());
 }
 
 // `REFERENCES parent(col)` names the only column it could name, or one the
@@ -306,8 +306,8 @@ TEST_F(ForeignKeyTest, ASecondForeignKeyOnOneColumnIsRefused) {
                   .substr(0, 7),
               "CREATED");
 
-    auto trades = boot_->catalog.FindTableOidByName("trades");
-    auto symbols = boot_->catalog.FindTableOidByName("symbols");
+    auto trades = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades");
+    auto symbols = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "symbols");
     ASSERT_TRUE(trades.ok());
     ASSERT_TRUE(symbols.ok());
 
@@ -322,8 +322,8 @@ TEST_F(ForeignKeyTest, TheCatalogRefusesADeclarationTheDdlSurfaceWouldHaveCaught
     ASSERT_EQ(Run("CREATE TABLE trades (id int64, account_id int64) BTREE").substr(0, 7),
               "CREATED");
 
-    auto trades = boot_->catalog.FindTableOidByName("trades");
-    auto accounts = boot_->catalog.FindTableOidByName("accounts");
+    auto trades = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades");
+    auto accounts = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "accounts");
     ASSERT_TRUE(trades.ok());
     ASSERT_TRUE(accounts.ok());
 
@@ -757,7 +757,7 @@ TEST_F(ForeignKeyCheckTest, AHeapChildWhoseHintFailsIsWalkedNotCleared) {
     ASSERT_EQ(Run("INSERT INTO trades_h VALUES (1, 100)").substr(0, 8), "INSERTED");
     ASSERT_EQ(RowCount("SELECT * FROM trades_h WHERE account_id = 1"), 1u);  // banks 1's set
 
-    auto oid = boot_->catalog.FindTableOidByName("trades_h", nullptr);
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades_h", nullptr);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok()) << access.status().message();
@@ -862,7 +862,8 @@ TEST_F(ForeignKeyPlacementTest, AForeignKeyBetweenRelationsFromTwoCoresIsAdmitte
               "CREATED");
 
     const std::string out =
-        Run("CREATE TABLE trading.trades (id int64, account_id int64 REFERENCES accounts) BTREE");
+        Run("CREATE TABLE trading.trades (id int64, account_id int64 REFERENCES ledger.accounts) "
+            "BTREE");
     // **Admitted** - the pair is legal since AH-T4, and a refusal here
     // would be the constraint coming back.
     ASSERT_EQ(out.substr(0, 7), "CREATED") << out;
@@ -883,7 +884,8 @@ TEST_F(ForeignKeyPlacementTest, AForeignKeyInsideOneNamespaceIsSilent) {
               "CREATED");
 
     const std::string out =
-        Run("CREATE TABLE ledger.trades (id int64, account_id int64 REFERENCES accounts) BTREE");
+        Run("CREATE TABLE ledger.trades (id int64, account_id int64 REFERENCES ledger.accounts) "
+            "BTREE");
     ASSERT_EQ(out.substr(0, 7), "CREATED") << out;
     EXPECT_EQ(out.find("WARN"), std::string::npos) << out;
 }

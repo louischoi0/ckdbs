@@ -276,26 +276,13 @@ Status CheckTransitionDelete(const catalog::TableAccess& access,
 
 StatusOr<catalog::Oid> TransitionTargetOid(catalog::Catalog& catalog,
                                            const parser::TransitionStmt& stmt,
+                                           catalog::Oid default_namespace,
                                            const txn::ReadView* view) {
-    auto oid = catalog.FindTableOidByName(stmt.table_name, view);
-    if (!oid.ok()) {
-        if (oid.status().code() != StatusCode::kNotFound) return oid.status();
-        return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
-                                std::to_string(stmt.table_byte_offset) + ")");
-    }
-    if (Status s = catalog.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
-                                                  stmt.table_byte_offset);
-        !s.ok()) {
-        return s;
-    }
-    auto access = catalog.InitTableAccess(oid.value());
-    if (!access.ok()) return access.status();
-    if (catalog::IsSystemNamespace(access.value()->namespace_oid)) {
-        return Status::InvalidArgument("'" + stmt.table_name +
-                                       "' is a system relation and cannot carry a Transition "
-                                       "(byte " +
-                                       std::to_string(stmt.table_byte_offset) + ")");
-    }
+    // A system relation never resolves (`Catalog::ResolveRelation` refuses
+    // `sys`), so none can carry a Transition.
+    auto oid = catalog.ResolveRelation(stmt.schema, stmt.table_name, default_namespace,
+                                       stmt.table_byte_offset, view);
+    if (!oid.ok()) return oid.status();
     return oid.value();
 }
 

@@ -257,8 +257,10 @@ StatusOr<AssertionDdlResult> CreateAssertion(
 // under a view that cannot see another transaction's relation, takes the
 // relation `X` on that oid and passes it in - so what is fenced is what is
 // built.
+// An unqualified name means `default_namespace` (`USE`, namespace.md NS5).
 StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
                                           const parser::AssertionStmt& stmt,
+                                          catalog::Oid default_namespace,
                                           const txn::ReadView* view = nullptr);
 
 // `DROP ASSERTION`: `ASSERT_DROP` logged when `wal` is attached (before the

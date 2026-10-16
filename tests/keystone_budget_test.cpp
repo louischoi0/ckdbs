@@ -115,7 +115,7 @@ protected:
     // Drives `acct`'s sequence to `next_id` by writing the catalog row -
     // 2^48 inserts is not a test, and the surface only reads the number.
     void SetNextId(std::uint64_t next_id) {
-        auto oid = boot_->catalog.FindTableOidByName("acct");
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "acct");
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto bytes = store_.Get(catalog::kCatalogPageTables);
         ASSERT_TRUE(bytes.ok());
