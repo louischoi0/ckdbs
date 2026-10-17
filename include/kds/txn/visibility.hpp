@@ -32,7 +32,8 @@
 // workload, and every catalog row forever - is decided by Classify() with
 // no copy and no fetch: a bootstrap row or the view's own writer costs one
 // comparison, a writer below the instance's floor one atomic load, and a
-// writer above it one latched window lookup (`read_view.hpp`, AN-S2). Only
+// writer above it one latched window lookup (`read_view.hpp`, AN-S2) - once
+// per writer, not per row, on the step VM's walk (`VisibilityMemo`). Only
 // an invisible writer pays for the scratch copy, and the copy is a fixed
 // number of bytes because invariant 13 makes a row's size a schema
 // constant.
@@ -57,13 +58,11 @@ enum class Visibility : std::uint8_t {
     kNeedsUndoWalk,
 };
 
-// Phase 1 (txn.md section 4.3 step 2 and 3). No page fetch, safe to call
-// with a page span live. **Not pure**: a writer at or above the floor costs
-// the view one latched window lookup (`read_view.hpp`) - but still no
-// fetch, which is the property the span rule needs.
-inline Visibility Classify(const ReadView& view, std::uint64_t trx_id, bool deleted,
-                           std::uint64_t undo_ptr) {
-    if (view.Visible(trx_id)) {
+// Phase 1's three answers, given whether the view can see the writer. The
+// one body both Classify() forms below share, so the step VM's memoized form
+// and the UPDATE/DELETE path's live one cannot drift apart.
+inline Visibility ClassifyFor(bool writer_visible, bool deleted, std::uint64_t undo_ptr) {
+    if (writer_visible) {
         // The version exists iff it is not delete-marked. A delete-mark by
         // a writer I can see is a row that is gone for me.
         return deleted ? Visibility::kNoVersion : Visibility::kVisible;
@@ -78,14 +77,23 @@ inline Visibility Classify(const ReadView& view, std::uint64_t trx_id, bool dele
     return Visibility::kNeedsUndoWalk;
 }
 
+// Phase 1 (txn.md section 4.3 step 2 and 3). No page fetch, safe to call
+// with a page span live. **Not pure**: a writer at or above the floor costs
+// the view one latched window lookup (`read_view.hpp`) - but still no
+// fetch, which is the property the span rule needs.
+inline Visibility Classify(const ReadView& view, std::uint64_t trx_id, bool deleted,
+                           std::uint64_t undo_ptr) {
+    return ClassifyFor(view.Visible(trx_id), deleted, undo_ptr);
+}
+
 // Convenience over a tuple the caller already read. Same phase-1 contract:
 // no fetch, safe under a span.
 inline Visibility Classify(const ReadView& view, const heap::PageView::Tuple& tuple) {
     return Classify(view, tuple.trx_id, tuple.deleted, tuple.undo_ptr);
 }
 
-// **`ReadView::Visible`, remembered for one view** (BZ, `workorder-bz-*.md`
-// §7). A writer at or above the floor costs the view a lookup under the
+// **`ReadView::Visible`, remembered for one view** (BZ,
+// `instructions/v3.2.0/workorder-bz-background-advisory-optimizer.md` §7). A writer at or above the floor costs the view a lookup under the
 // instance's one window latch, and a walk meets the same few writers row
 // after row - a bulk load's rows share one `trx_id` per batch - so the
 // latch was being taken once per row for an answer it gave the previous
@@ -96,7 +104,11 @@ inline Visibility Classify(const ReadView& view, const heap::PageView::Tuple& tu
 // below `snapshot_lsn` was in the window when the view was minted, every
 // commit after it lands above it, and the floor passes an entry above a
 // live snapshot only once no registered view needs it. So the first answer
-// is the answer, and remembering it is the predicate.
+// is the answer, and remembering it is the predicate. **An unregistered
+// view is no exception in the memo's direction**: its live answer can move
+// false -> true when the floor passes a writer that committed after its
+// snapshot, and the frozen first answer is then the one its snapshot is
+// entitled to.
 //
 // One memo per view and per caller: it is never shared between threads,
 // and a holder that takes another view takes another memo.
@@ -116,11 +128,11 @@ private:
     // Four writers: one statement's rows rarely span more at once, and a
     // miss costs only the lookup the memo would have saved.
     static constexpr std::size_t kEntries = 4;
-    // No trx id reaches 2^48 (invariant 12), so the empty slot matches none.
-    static constexpr std::uint64_t kEmpty = ~std::uint64_t{0};
+    // An empty slot holds the always-visible id's answer, which is every
+    // view's (`read_view.hpp`), so it is never a wrong one.
     struct Entry {
-        std::uint64_t trx_id = kEmpty;
-        bool visible = false;
+        std::uint64_t trx_id = kAlwaysVisibleTrxId;
+        bool visible = true;
     };
     Entry entries_[kEntries]{};
     std::size_t next_ = 0;
@@ -130,10 +142,7 @@ private:
 // per writer rather than once per row.
 inline Visibility Classify(const ReadView& view, VisibilityMemo& memo,
                            const heap::PageView::Tuple& tuple) {
-    if (memo.Visible(view, tuple.trx_id)) {
-        return tuple.deleted ? Visibility::kNoVersion : Visibility::kVisible;
-    }
-    return tuple.undo_ptr == kNoUndoPtr ? Visibility::kNoVersion : Visibility::kNeedsUndoWalk;
+    return ClassifyFor(memo.Visible(view, tuple.trx_id), tuple.deleted, tuple.undo_ptr);
 }
 
 // Phase 2 (txn.md section 4.3 step 4). Called only after Classify()

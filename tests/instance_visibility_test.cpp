@@ -15,6 +15,7 @@
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
+#include "kds/txn/visibility.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 
@@ -195,6 +196,60 @@ TEST(InstanceVisibilityTest, AReaderHoldsTheFloorBelowItsSnapshot) {
     vis.PublishSnapshotBound(kCore1, kUnboundedBound);
     EXPECT_EQ(vis.Reclaim(), 2u);
     EXPECT_EQ(vis.Floor(), 9000u);
+}
+
+// **The step VM's memo answers what the live view answers** (BZ C1,
+// `txn/visibility.hpp`'s `VisibilityMemo`), asked first and then again
+// after every event that could move a live answer: a commit after the mint,
+// an abort, a reclamation pass under a registered reader, and one after the
+// reader is gone. Only the last moves the live view - false -> true for a
+// writer that committed after the snapshot - and the memo keeps the
+// snapshot's answer, which is the one the view is entitled to.
+TEST(InstanceVisibilityTest, AVisibilityMemoAnswersWhatItsViewAnswered) {
+    InstanceVisibility vis;
+    vis.PublishIssueCursor(kCore0, 9000);
+    vis.PublishOldestUnresolved(kCore0, kUnboundedBound);
+    vis.PublishCommit(100, 10);
+    vis.PublishCommit(200, 30);
+    vis.PublishSnapshotBound(kCore1, 20);
+
+    ReadView view;
+    view.snapshot_lsn = 20;
+    view.visibility = &vis;
+    VisibilityMemo memo;
+
+    // An empty slot holds the always-visible id, and answers it.
+    EXPECT_TRUE(memo.Visible(view, kAlwaysVisibleTrxId));
+
+    // 100 committed below the snapshot, 200 above it, 300 and 400 not at
+    // all. Four writers, the memo's size, so none is evicted below and every
+    // later answer is the remembered one.
+    constexpr std::uint64_t kAsked[] = {100, 200, 300, 400};
+    const auto agrees = [&] {
+        for (std::uint64_t id : kAsked) {
+            EXPECT_EQ(memo.Visible(view, id), view.Visible(id)) << "trx " << id;
+        }
+    };
+    agrees();
+    EXPECT_TRUE(memo.Visible(view, 100));
+    EXPECT_FALSE(memo.Visible(view, 200));
+
+    // 300 commits after the mint; 400 aborts, which publishes nothing.
+    vis.PublishCommit(300, 40);
+    agrees();
+
+    // The registered reader at 20 lets 100 go and pins the floor at 200.
+    EXPECT_EQ(vis.Reclaim(), 1u);
+    EXPECT_EQ(vis.Floor(), 200u);
+    agrees();
+
+    // The reader withdraws, so the view is now unregistered: the floor
+    // passes 200 and 300 and the live view moves to true for both.
+    vis.PublishSnapshotBound(kCore1, kUnboundedBound);
+    EXPECT_EQ(vis.Reclaim(), 2u);
+    EXPECT_TRUE(view.Visible(200));
+    EXPECT_FALSE(memo.Visible(view, 200));
+    EXPECT_FALSE(memo.Visible(view, 300));
 }
 
 TEST(InstanceVisibilityTest, HorizonIsTheMinimumOverCores) {
