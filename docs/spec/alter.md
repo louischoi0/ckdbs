@@ -233,6 +233,16 @@ in every tuple.
   names, a Transition governs or a Cabin is on - each named - and every
   column of a relation an assertion is declared on (AL4's predicate).
 
+**A heap's hidden tuple key** (`heap-and-tuple.md` §3.1b) is flagged
+`kColumnHidden` (`0x04`) and skipped by every surface site that skips a
+dropped column, the KWP load descriptor excepted; no `DROP` or `RENAME
+COLUMN` can name it. Hidden is not dropped: storage reads it as the tuple
+key. On a heap a positional row carries exactly the declared live columns,
+whatever `ALTER` changed, and its key is always issued, so the count
+question below does not arise there. A heap's last declared column is not
+dropped, `InvalidArgument` at its byte: without it no statement could write
+or read the relation (BZ-Q3).
+
 **Positional rows after a change** (BW-Q9 (a)) `[quiet-wrong]`. On a
 relation whose column set has changed (`RowLayout::column_set_changed`), a
 positional row carries every live column, its key `NULL` to have one

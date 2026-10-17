@@ -1,5 +1,5 @@
 # Physical optimizer manual
 
-`physical-optimizer.md` — the shadow planner and `SHOW RELAYOUT`, the
-decay score, the three enactment gates, and the Cabin controller's status.
-Verified against code 2026-08-10.
+`physical-optimizer.md` — the decay score, the page epoch, and the Cabin
+controller's status. Relayout (`SHOW RELAYOUT`, `physical_optimizer`) is
+deleted since BZ (2026-10-17).

@@ -100,13 +100,13 @@ the relation is created, so a refusable declaration writes nothing
 foreign key comes through — the argument `CreateCabin` already makes
 about `NO CABIN`.
 
-**A heap parent is refused, `NotImplemented`** (`include/kds/base/status.hpp`:
-a thing a later release could build, not one the architecture cannot
-admit). F1 puts the reference on the parent's Keystone id, and a heap
-relation has no tuple key index: `LocateByTupleKey` answers `kScan` for one, so every
-child INSERT would scan the parent — the whole parent when the row is
-missing, which is the case the check exists to catch. Refusing keeps a
-constraint's cost a descent.
+**A heap parent is refused, `Unsupported`** at `REFERENCES`
+(`catalog::CheckForeignKeyDeclaration`). F1 puts the reference on the
+parent's Keystone id, and a heap's tuple key is hidden
+(`heap-and-tuple.md` §3.1b): no statement reads or names it, so no client
+could write a child value the constraint would accept. **A heap child is
+admitted**: its foreign-key column is a declared column like any other.
+A system relation as parent is refused `InvalidArgument`.
 
 **Nothing back-checks existing rows**: a foreign key is declared only at
 `CREATE TABLE`, on an empty relation; there is no `ADD CONSTRAINT`.
@@ -324,8 +324,8 @@ constraint reporting success, which §1 names as the one degraded mode a
 constraint may not have.
 
 **So the check sees all of them.** `CheckNoChildReferences` walks the
-child relation whole - its one heap chain from `desc_page_id`, or a btree
-child descended whole, on the core the statement runs on.
+child relation whole - its clustered tree from `desc_page_id`, every user
+relation being one - on the core the statement runs on.
 
 **It runs per row inside the walk.**
 There is nothing to hoist: a check that asks nobody needs no answer in
@@ -386,8 +386,7 @@ on three things:
   rows are committed and visible to any later bank.
 
 **A loop that gives the set up is not exhausted**, and the walk answers:
-a heap child whose hint fails (no descent heals it, and the value is
-un-observed), and a row an undecided writer moved off the parent, whose tuple key
+a row an undecided writer moved off the parent, whose tuple key
 stays in the set while its page holds the new value (AY-Q8).
 
 ## 3. Reverse check — parent DELETE
@@ -416,8 +415,8 @@ walk child_rel
   consults an active Cabin on the child's fk column **read-only**, an
   observed value's entry set is resolved and key-re-checked, a live match
   there answers `kFkViolation` or busy without walking, and a set that
-  drains answers "no children" without walking (§3a). A heap child with a failed hint, or a row an
-  undecided writer moved off the parent, gives the set up and walks.
+  drains answers "no children" without walking (§3a). A row an undecided
+  writer moved off the parent gives the set up and walks.
 
 There is no reverse check for parent UPDATE: K2 makes tuple key update
 Unsupported, so the case is closed by contract, not by code.

@@ -130,13 +130,12 @@ a relation's name is the pair `(namespace, name)` (NS6):
   and an unqualified catalog name (`tables`) is a miss in the session's
   namespace that says `read it as sys.tables`. A catalog relation has no
   column rows a statement could bind, which is why the unqualified name used
-  to reach `no columns for this rel_id`. `SHOW RELAYOUT sys.x` alone answers
-  for a catalog relation by name, with the reason the mover cannot touch it.
+  to reach `no columns for this rel_id`.
 - Every place a relation is named resolves through
   `Catalog::ResolveRelation` - `exec::CompileBlock`'s binding loop for every
   `SELECT` shape (FROM, every JOIN, every subquery block), each write's and
   DDL's handler, `REFERENCES`, `DESCRIBE`, `sys.columns`' `rel_name` key,
-  `SHOW RELAYOUT`, and the KWP load's relation (`ns.t` or `t`).
+  and the KWP load's relation (`ns.t` or `t`).
 
 **Why a session namespace and not a search path.** A search path (an ordered
 list) makes the meaning of a name depend on which namespaces exist and on
@@ -207,7 +206,7 @@ in the session's.
   `SELECT` (`FROM` and every `JOIN`, and inside every subquery block),
   `INSERT`, `UPDATE`, `DELETE`, `PURGE`, `REFERENCES`, `ALTER TABLE`,
   `DROP TABLE`, `CREATE INDEX`, `CREATE CABIN`, `CREATE ASSERTION`,
-  `CREATE TRANSITION`, `DESCRIBE` and `SHOW RELAYOUT`. Each resolves as NS5
+  `CREATE TRANSITION` and `DESCRIBE`. Each resolves as NS5
   states.
 
 A namespace DDL runs where its session is, as every DDL does: every core

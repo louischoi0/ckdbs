@@ -179,9 +179,11 @@ def create_table(conn, table, clustered):
     """Creates the run's table in one storage organization or the other.
 
     The trailing HEAP/BTREE word is the CREATE TABLE storage clause
-    (docs/spec/client-manual.md section 3): HEAP is a chain of heap pages, BTREE
-    is a clustered B+ tree over the same leaf format. It is a create-time
-    property with no ALTER, so the two are only ever compared across runs.
+    (docs/spec/client-manual.md section 3): both are a clustered B+ tree, and
+    HEAP's tuple key is a hidden column the engine adds (heap-and-tuple.md
+    §3.1b), so this run's `id` is an ordinary column there. It is a
+    create-time property with no ALTER, so the two are only ever compared
+    across runs.
     """
     clause = "" if clustered == "heap" else f" {clustered.upper()}"
     reply = format_reply(conn.send_command(f"CREATE TABLE {table} ({COLUMNS}){clause}"))

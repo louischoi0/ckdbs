@@ -67,7 +67,7 @@ The out-of-line value store. Its design goal is to be **boring**: the mobility p
 
 ## 6. Interactions with Confirmed Design
 
-- **min_key heap:** strengthened — tuple addresses change only under deliberate relayout.
+- **min_key pages:** strengthened — tuple addresses change only under a deliberate leaf division or compaction.
 - **MVCC (`trx_id` + `undo_ptr`):** unchanged; the undo record's old-cell image is fixed-size like everything else, and under V2 it is just the old tag+bytes-or-pointer.
 - **Trails/Waystone:** pure beneficiary — fewer epoch bumps, higher validated-hit rates; no format impact.
 - **Physical optimizer:** moves get cheaper (cell memcpy) and `kVarHeap` is explicitly outside its jurisdiction.

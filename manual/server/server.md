@@ -75,11 +75,12 @@ mounts has **one WAL stream for the instance**, whatever `cores` says, and
 `SHOW META`'s `wal_topology` field says so. A volume whose superblock
 records more than one stream **does not mount**: there is no migration,
 and the refusal names it. Recreate the database. The same holds
-for every volume older than superblock version 29 (2026-10-16): 20 keeps a
+for every volume older than superblock version 30 (2026-10-17): 20 keeps a
 B+ tree leaf in key order by placement, 21 records a dropped relation's
 roots in its tombstone, 22 carries the 48-bit Keystone id, 27 marks a
-unique index, 28 orders a secondary index by its whole entry, and 29 logs
-the removal of a dropped index's anchor slot.
+unique index, 28 orders a secondary index by its whole entry, 29 logs
+the removal of a dropped index's anchor slot, and 30 stores a heap as a
+B+ tree with a hidden tuple key.
 
 The listener is **loopback only** (`127.0.0.1`) unless `listen_address`
 says otherwise, plain TCP, no TLS, no
@@ -137,7 +138,6 @@ out-of-range values, each naming the file and line.
 | `max_rows_touched` | `100000000` | Per-statement tuple ceiling; exceeding it is `ResourceExhausted`. An availability knob, not a performance one. `0` = unlimited. |
 | `waystone_recording` / `waystone_replay` | `on` / `on` | The Waystone switches. Turning either off must never change a reply (invariant 8). |
 | `access_statistics` | `on` | Per-shape access recording for `SHOW ACCESS`. +1-2% on a point lookup. |
-| `physical_optimizer` | `shadow` | `off` or `shadow`. `on` is **refused at startup** naming the three gates that block every plan (`docs/spec/physical-optimizer.md` §6). |
 | `decay_half_life` | `600` | Seconds for an untouched decay score to halve. `0` refused. |
 | `cabin_optimizer` | `off` | The Cabin controller (PHY04): `on` lets it CREATE/EXTEND/HEAL/DROP Observational Cabins for `CABIN AUTO` columns. Tuning keys (`cabin_optimizer_page_budget`, `_theta_*_pct`, `_confirm_snapshots`, `_amort_windows` — 64, the build-cost amortization window ratified from `bench/results-cabin-optimizer-days.md` — `_cooldown_half_lives` — 128, the DECAYING dwell, its own parameter since 2026-08-10 and the one that provides overnight survival — and `_snapshot_interval_ms`) documented in `kds.conf.sample`. |
 | `max_insert_rows` | `1024` | Cap on rows in one multi-row `INSERT ... VALUES (...), (...)`. Over-cap refuses the whole statement, inserting nothing. |
@@ -152,9 +152,9 @@ out-of-range values, each naming the file and line.
 
 `inline_cell_width` is the one superblock-pinned key and the one that can
 refuse a mount: it is read once when a *new* database is bootstrapped, and
-every later start validates the running value against it. Four keys are
+every later start validates the running value against it. Five keys are
 refused by name - `peer_listeners`, `in_doubt_ceiling_ms`,
-`placement` and `range_size_ids` - each refusal saying what replaced it.
+`placement`, `range_size_ids` and `physical_optimizer` - each refusal saying what replaced it.
 
 ## 4. Connecting
 
@@ -202,7 +202,7 @@ tags and per-level detail: `docs/spec/client-manual.md` §1.
 **Health and inspection.** `PING` → `PONG`. `SHOW META` (instance),
 `SHOW TABLES` / `DESCRIBE`, `SHOW BUDGET` (Keystone id headroom, with
 `warning=`/`exhausted=` counts), `SHOW ACCESS` (access shapes),
-`SHOW RELAYOUT` (physical-optimizer shadow report), `SHOW PAGE <id>
+`SHOW PAGE <id>
 [VALUES]` (page-level debugging). Full list: `manual/sql/sql.md` §6.
 
 **Multi-core.** `cores > 1` spawns one pinned reactor thread per core.

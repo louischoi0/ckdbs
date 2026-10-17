@@ -62,7 +62,7 @@ Every SELECT-class statement compiles to a **step chain**: an ordered list of st
 | `Lookup` | tuple-key-equality descent (constant or bound param) | **yes** — completeness follows from tuple key uniqueness, **and only under rule 0** (I17) |
 | `Probe` | tuple-key-equality descent keyed by a value produced by an earlier step or outer row | **yes** — same argument, per producing row, **and only under rule 0** (I17) |
 | `Range` | tuple key range via the leaf chain | no — search; prefetch only |
-| `Scan` | heap chain or full scan with a predicate | no — search; prefetch only |
+| `Scan` | full walk with a predicate | no — search; prefetch only |
 | `Exists` | semi-join probe: stop at the first qualifying row | **positive result only** (§4) |
 | `NotExists` | anti-join: prove absence | **never** — absence has no witness |
 
@@ -117,7 +117,7 @@ A named `INSERT` key is checked against `[1, 2^48 − 1]` on its raw digit text 
 
 ## 4. Grammar surface
 
-**I7 — `CREATE TABLE` options.** There is no `WITH (key = value, …)` option table; the storage form (`HEAP`/`BTREE`) is a trailing clause. **Waystone is not a table option**: it is keyed on `(fetch_id, arg_hash)`, not on a relation.
+**I7 — `CREATE TABLE` options.** There is no `WITH (key = value, …)` option table; the storage form (`HEAP`/`BTREE`) is a trailing clause, `HEAP` asking for a hidden tuple key (`heap-and-tuple.md` §3.1b). **Waystone is not a table option**: it is keyed on `(fetch_id, arg_hash)`, not on a relation.
 
 **I8 — Session and admin statements.** `SET DURABILITY {STRICT|GROUP|RELAXED}`, `SET ISOLATION LEVEL …`, `SHOW META`, `SHOW TABLES` and the other `SHOW` forms are *dispatcher* commands, not parser statements: ordinary statements returning ordinary result sets — one surface, one auth story. SET is excluded from fingerprinting.
 
@@ -195,7 +195,7 @@ A small step VM in `src/exec/`: compile once (AST → `StepChain`, alongside cla
 Two things the VM inherits from I15 rather than choosing: frames own their decoded rows (R1), and nested steps are read-only (R2). One thing it must not do: hold a `TableAccess` pointer across anything that can bump the catalog version.
 
 **The walk and the scan kernel** (BM, `instructions/v3.0.0/workorder-bm-scan-row-kernel.md`).
-- **A btree walk owns its slot loop.** Every walk step on a btree relation - the outermost and a nested one alike - fetches each leaf (`btree::BtreeFetchLeaf`) and calls its slot visitor directly: no `std::function` and no `StatusOr` per slot, the page's slot count read once per leaf (`PageView::ReadTupleIn`). A heap chain's page, and the row loops `UPDATE` and `DELETE` run, still go through their primitives.
+- **A btree walk owns its slot loop.** Every walk step on a btree relation - the outermost and a nested one alike - fetches each leaf (`btree::BtreeFetchLeaf`) and calls its slot visitor directly: no `std::function` and no `StatusOr` per slot, the page's slot count read once per leaf (`PageView::ReadTupleIn`). The row loops `UPDATE` and `DELETE` run still go through their primitives.
 - **What cannot change within a statement is checked once per step.** The decode's schema-and-layout checks and the residual's malformed-chain checks run at a step's first visible row, by whichever access kind reaches it, with their messages; every later row pays the payload's length check and the comparisons. A malformed later conjunct is therefore refused even where an earlier one false on every row would have masked it. `UPDATE`'s and `DELETE`'s own row walks check their `WHERE` conjuncts the same way, once at their first row, and compare per row (BT, `instructions/v3.0.0/workorder-bt-accept-tuple-row.md`, BT-R5).
 - **The scan kernel is a pre-filter, never the answer.** A conjunct `column <op> literal` on the step's own relation is compiled, when its type allows, to the comparison `CompareValues` would make on the decoded column, made on the cell's bytes: the int widths, date, timestamp and narrow decimal sign-extended, bool zero-extended, `uint64` unsigned, the 128-bit decimal pair, column 0 as its 48-bit Keystone id (never its 8-byte cell), `char(N)` after its NUL trim, and a `varchar` cell only through `DecodeCell` and only inline. It may only reject a row the residual would reject; every row it passes is filtered by the residual unchanged. A NULL operand, a literal of another kind or scale, a `uint64` tuple key, the `IS` pair, a spilled or refused cell and a correlated conjunct are the residual's.
 - **It reads only what the walk holds** (R1): a visible version on the page under the walk's read hold, after the length check and before the copy; a version reconstructed through undo from the reader's own buffer, never the page; no fetch. It is armed once the step's check has run, so a step's first visible row takes the full path, and never while that step's Cabin recording is live.
@@ -241,7 +241,7 @@ None recorded.
 5. **Refusal surfaces:** every J2 form errors with its own code and an exact position, and nothing falls through to a generic path.
 6. **Depth and numbering:** chains at the cap; global `step_id` stability across executions of one instance.
 7. **Fingerprint invariance:** every pre-existing corpus statement's `pattern_id` is unchanged by every grammar addition; convergence of inline and bound forms; a correlated statement's `arg_hash` stable across outer rows.
-8. **Execution equivalence:** every case runs heap×heap, heap×btree and btree×btree with identical rows in identical order; `Probe` and `Scan` strategies agree row-for-row; execution order matches written order for both orderings of one query.
+8. **Execution equivalence:** `Probe` and `Scan` strategies agree row-for-row; execution order matches written order for both orderings of one query.
 9. **Nested access:** a stopping visitor touches no page past the stop; a false uncorrelated `EXISTS` opens zero pages of the outer relation; a correlated `EXISTS` short-circuits, proven by page-touch count.
 10. **Grammar:** golden parse trees for every production; byte- and token-level fuzzing — never crashes, always returns `Status`; a corpus of nesting attempts outside predicate position contains no accepted parse.
 11. **Zero-copy:** token text is a view into the statement and lexing allocates nothing (`include/kds/parser/token.hpp`); the fingerprint is accumulated during the parse rather than by a second lex.

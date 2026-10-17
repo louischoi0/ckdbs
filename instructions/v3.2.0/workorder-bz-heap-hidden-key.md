@@ -220,6 +220,15 @@ order, as any btree's - the engine promises no order, as before.
   with child values no client can obtain. **Adopted (a)** on the
   operator's standing go-ahead of 2026-10-17 (go-ahead-achieving-milestone).
 
+- **BZ-Q3 — a heap's last declared column under `DROP COLUMN`.** Raised
+  by BZ-S1's review: with every declared column dropped, a heap has no
+  column a statement can write or read - `SELECT *` describes no field and
+  no positional or listed `INSERT` reaches it. (a) refused, `InvalidArgument`
+  at the column's byte; (b) admitted, the relation left writable only by a
+  KWP load. CLA proposes (a): (b) leaves a relation no SQL can use, which
+  no client asked for. **Adopted (a)** on the operator's standing go-ahead of
+  2026-10-17 (go-ahead-achieving-milestone).
+
 The close measurement is not a question (Session Workflow step 3): one
 interleaved A/B in `build-release`, from `e1333a77` to the close, btree
 `INSERT` and point `SELECT`, plus a heap relation against its btree twin
@@ -278,4 +287,21 @@ them; the strawman questions and the separate deletion stages cut.
 
 ## 7. Stage log
 
-Nothing landed.
+- **BZ-S1 + S2** (built as one stage, §5) - `0205444b`, the review's fixes
+  on top: the hidden key, SUS-1 lifted, the user chain, the sorted fill,
+  relayout Part I and `physical_optimizer` deleted, superblock 30. Review
+  (`critics-developer` at `0205444b`): no position shift found; applied -
+  `NormalizeHeapInsertRows` folded into `NormalizeInsertRows` (the heap gets
+  the copy-free path back, a one-too-long row still refused), the heap's
+  `ON CONFLICT (col)` message, `transition.cpp`'s dead clustered branch,
+  `ColumnLabel` on `visible()`, `WalkCursor`'s heap position fields and two
+  stale `ChainVisitOnePage` citations, BZ-Q3 (a) and cells for ALTER ADD/DROP
+  on a heap, its last column and `ON CONFLICT`; rejected - one shared
+  copy-out leaf walker for the assertion build, the Cabin executor and the
+  Transition check (a refactor outside BZ), and making `ChainTail`
+  test-local (BZ-R5 keeps it by name). Full suite 4065/4065. Overhead not
+  measured; measured at the milestone's close.
+- **BZ-S3** - the text: `heap-and-tuple.md` §3.1b, §4, §8 and every spec,
+  rule, manual page and CLAUDE.md row that stated the old heap, SUS-1, the
+  sorted fill, relayout Part I or `physical_optimizer`; the benchmark
+  drivers that meant `id` as a key declare `BTREE`.

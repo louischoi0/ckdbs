@@ -1,5 +1,13 @@
 # AS — SUS-1: heap relations suspended
 
+> **Lifted by BZ (2026-10-17)**
+> (`instructions/v3.2.0/workorder-bz-heap-hidden-key.md`): `HEAP` creates a
+> btree relation with a hidden tuple key, the suspension's refusal and test
+> seam and the `heap-suspended` label are deleted, and the chain-stored user
+> heap this order suspended is deleted with them. What follows is the order
+> as it stood; `docs/spec/heap-and-tuple.md` §3.1b owns the current
+> contract.
+
 Status: **ordered by the operator, 2026-09-05. AS-S0 and AS-S1 both built
 the same day**; the one item AS-S1 does not deliver is the `heap-suspended`
 label's *application*, which waits on AS-Q4 (there is no nightly runner in

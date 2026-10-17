@@ -176,7 +176,7 @@ def main():
         for card in cardinalities:
             table = "aggscan%d" % card
             name = ("%s%s" % (table, args.suffix)) if args.skip_load else load(
-                conn, table, args.rows, card, "HEAP", args.suffix)
+                conn, table, args.rows, card, "BTREE", args.suffix)
             folded = time_statement(
                 conn, "SELECT bucket, COUNT(*), SUM(qty) FROM %s GROUP BY bucket" % name,
                 args.reps)

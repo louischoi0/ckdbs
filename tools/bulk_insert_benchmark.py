@@ -9,7 +9,7 @@ The matrix is rows-per-statement (1 / 10 / 100 / 1000 by default), at a
 fixed total row count so every configuration does equal work and the
 throughput numbers compare. Every batch size writes into a fresh relation
 of scenario1's `write_probe` shape - `(id int64, a int64, b int64,
-c int64, d int64) HEAP`, four int64 values supplied per row - so the
+c int64, d int64) BTREE`, four int64 values supplied per row - so the
 batch-1 phase is directly comparable against the old baseline's insert
 sweep.
 
@@ -67,7 +67,7 @@ TRACE = False
 # scenario1's write_probe shape: the Keystone pk plus four int64 body
 # columns, heap-clustered, so batch-1 numbers line up against
 # bench/results-scenario1-vs-pg.md's insert sweep.
-COLUMNS = "(id int64, a int64, b int64, c int64, d int64) HEAP"
+COLUMNS = "(id int64, a int64, b int64, c int64, d int64) BTREE"
 
 BULK_REPLY = re.compile(
     r"^INSERTED oid=\d+ rows=(\d+) first_id=(\d+) last_id=(\d+)$")

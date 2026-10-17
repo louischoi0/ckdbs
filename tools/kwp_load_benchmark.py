@@ -64,7 +64,7 @@ C_LOAD_BEGIN, C_LOAD_CHUNK, C_LOAD_END, C_LOAD_ABORT = 16, 17, 18, 19
 S_HELLO, S_ERROR, S_COMPLETE, S_PONG = 1, 10, 8, 11
 S_LOAD_READY, S_LOAD_ACK = 16, 17
 
-COLUMNS = "(id int64, a int64, b int64, c int64, d int64) HEAP"
+COLUMNS = "(id int64, a int64, b int64, c int64, d int64) BTREE"
 
 
 def frame(ftype, payload=b""):

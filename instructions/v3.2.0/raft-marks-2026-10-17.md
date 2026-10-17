@@ -17,6 +17,6 @@ The operator's words of 2026-10-17, recorded by CLA. Each is recorded
 | | |
 |---|---|
 | **Word** | `/go-ahead-achieving-milestone` - *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
-| **Mark** | **BZ opened.** BZ-Q1 **(b)**, a `sys.columns` hidden flag - CLA's proposal revised from (a) against the tree before adoption (the order's §4 says why); BZ-Q2 **(a)**, a heap FK parent refused. Both **adopted on the operator's standing go-ahead of 2026-10-17 (go-ahead-achieving-milestone)**, not marked by the operator item by item |
+| **Mark** | **BZ opened.** BZ-Q1 **(b)**, a `sys.columns` hidden flag - CLA's proposal revised from (a) against the tree before adoption (the order's §4 says why); BZ-Q2 **(a)**, a heap FK parent refused; BZ-Q3 **(a)**, a heap's last declared column not dropped (raised by BZ-S1's review). All **adopted on the operator's standing go-ahead of 2026-10-17 (go-ahead-achieving-milestone)**, not marked by the operator item by item |
 | **Does not settle** | push, merge to `main`, tag, version |
 | **Recorded at** | this file; the order's header, §4 and §7; `index.md`'s BZ row |

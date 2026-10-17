@@ -253,14 +253,14 @@ SCHEMA = {
         "id int64, bar_id int64, symbol_id int64, session_no int32, "
         "ret_bp int64, mom5_bp int64, mom20_bp int64, mom60_bp int64, "
         "mom120_bp int64, vol10_bp int64, vol20_bp int64, vol60_bp int64",
-        "HEAP"),
+        "BTREE"),
     "models": (
         "id int64, name varchar, family int32, lookback int32, top_k int32, "
         "param_bp int64", "BTREE"),
     "model_results": (
         "id int64, model_id int64, period_no int32, session_no int32, "
         "pnl_bp int64, equity_bp int64, positions int32, trades int32",
-        "HEAP"),
+        "BTREE"),
 }
 
 # Creation order matters under --fk: a parent has to exist before a child
@@ -1660,7 +1660,7 @@ def run_write_sweep(client, suffix, batches, ops):
     """
     table = f"write_probe_{suffix}"
     reply = client(f"CREATE TABLE {table} (id int64, a int64, b int64, "
-                   f"c int64, d int64) HEAP")
+                   f"c int64, d int64) BTREE")
     if reply.startswith("ERR"):
         print(f"  write sweep skipped: {reply}")
         return []
