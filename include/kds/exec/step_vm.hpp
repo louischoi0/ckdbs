@@ -224,13 +224,21 @@ struct ExecStats {
     // is defined here so it inlines: it runs per counter bump on every row a
     // walk examines (BN-S3,
     // `workorder-bn-opt-read-update-path.md`).
+    //
+    // The growth is out of line so that what inlines is a compare and an
+    // index: with `resize` in the body the compiler kept `For` a call, 2 %
+    // of a scan's server CPU (`bench/v3.2.0/results-bz-s0-premise-*.md`).
+    // `Execute` pre-sizes, so the walk never takes the cold path.
     StepStats& For(std::uint32_t step_id) {
-        if (step_id >= steps.size()) steps.resize(step_id + 1);
+        if (step_id >= steps.size()) [[unlikely]] return Grow(step_id);
         return steps[step_id];
     }
 
     // Summed across every step - the old statement-wide view.
     StepStats Total() const noexcept;
+
+private:
+    StepStats& Grow(std::uint32_t step_id);
 };
 
 // Runs `chain` and calls `sink` for each row that satisfies it.

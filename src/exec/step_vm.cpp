@@ -3018,6 +3018,11 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     return *this;
 }
 
+StepStats& ExecStats::Grow(std::uint32_t step_id) {
+    steps.resize(step_id + 1);
+    return steps[step_id];
+}
+
 StepStats ExecStats::Total() const noexcept {
     StepStats total;
     for (const StepStats& step : steps) total += step;
