@@ -16,8 +16,19 @@ English (`raft-marks-2026-10-17.md` §1):
   processing from the background."
 - **W2**: "And now we open a real milestone, not a CN."
 
-**Opened 2026-10-17 on W2.** BZ-Q1..Q6 (§4) are open; BZ-S0 (§5) depends
-on none of them and is startable.
+- **W3** (2026-10-17): "For now treat this milestone as an exploratory
+  one: apply several possibilities, find in the end a way that improves
+  performance in all of scenarios 1, 2, 3 and 4, and report it." With
+  `/go-ahead-achieving-milestone`, the standing word to adopt CLA's
+  proposals (`raft-marks-2026-10-17.md` §2).
+
+**Opened 2026-10-17 on W2; exploratory since W3.** The scenarios are the
+four drivers `tools/scenario1_backtest.py` (its BTREE copy, SUS-1),
+`scenario2_freight.py`, `scenario3_library.py` and
+`scenario4_cabinopt_days.py`. The measure of an option is all four
+(§5a). BZ-Q1..Q6 are adopted on the operator's standing go-ahead of
+2026-10-17 (go-ahead-achieving-milestone), BZ-Q1 revised against the tree
+first (§4).
 
 **Claim tags**: `[operator]` for W0-W2; `[source-read]` with `path:line` at
 `e1333a77`; `[measured]` with the version it was measured at; `[design]` for
@@ -377,6 +388,24 @@ witness bug gives a wrong answer, where a hint with the same bug gives a
 miss. **CLA proposes (a)**. W1 decides it, and the operator has twice
 preferred deleting a source to flagging it.
 
+**Revised before adoption (W3), and adopted as revised: (c) for BZ.**
+
+- **The premise, re-read against the tree.** Scenario 4's `on` arm is
+  the controller itself (`SET CABIN_OPTIMIZER ON`,
+  `tools/scenario4_cabinopt_days.py`), and W3 makes the four scenarios the
+  measure of BZ.
+- **What (a) would do.** It would delete one arm of one of the four
+  scenarios. It would move no number of the other arms: the controller is
+  off by default and creates nothing while off.
+- **What (c) does.** It keeps Part II unchanged for this exploratory
+  milestone. Deleting the controller is a separate decision, and W1's
+  reading of it stands for that decision.
+- **What BZ still does here.** The stale comments of §1.3 are corrected
+  either way.
+
+Adopted on the operator's standing go-ahead of 2026-10-17
+(go-ahead-achieving-milestone).
+
 **BZ-Q2 — where the route lives.** Decided before BZ-S1, because S1's drain
 writes into whichever it is.
 
@@ -449,6 +478,33 @@ The two boot keys `waystone_recording` and `waystone_replay` stay the only
 switches, re-scoped to the route. No measurement asks for a runtime one.
 
 ---
+
+## 5a. The exploratory method (W3) `[design]`
+
+W3 replaces §5's fixed order with a search, under one test.
+
+**The test.** An option lands only if it improves all four scenarios'
+headline numbers, or leaves one unchanged within its noise while
+improving the others. A regression in any one of the four is not traded
+for a gain in another.
+
+**Per round:**
+
+1. Build each candidate as its own commit on the work branch.
+2. Run it in `build-release` against the round's base, using the
+   reduced, interleaved "quad" harness that BZ-S0 builds
+   (`bench/v3.2.0/archive/bz-*`). Each scenario is shrunk to fit the
+   measurement budget, and every cut is stated in the results file.
+3. Keep the candidate, or revert it with the numbers that sank it
+   recorded in §7.
+
+**Which candidates are tried first.** The order follows S0's CPU
+attribution and its config arms. The arms set `waystone_recording`,
+`waystone_replay` and `access_statistics` off; they price the upper bound
+of taking the advisory work off the statement, before any code moves it.
+
+**What this changes in §5.** The stages below are the candidate pool. The
+pool is not a sequence, and §5's question gates are adopted (§4).
 
 ## 5. Stages
 
