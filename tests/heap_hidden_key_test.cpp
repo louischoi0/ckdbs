@@ -142,6 +142,49 @@ TEST_F(HeapHiddenKeyTest, ASecondaryIndexOnAHeapServesItsLookup) {
               (std::vector<std::vector<std::string>>{{"21"}}));
 }
 
+// BW's ADD and DROP meet BZ-R3 here: a heap's positional row stays the
+// declared columns' width after either, a dropped position reads nothing and
+// an added one is written where it sits (`[quiet-wrong]` if the count were
+// off by one, which two int64s would absorb).
+TEST_F(HeapHiddenKeyTest, AddAndDropColumnKeepThePositionalRowTheDeclaredWidth) {
+    ASSERT_EQ(Run("CREATE TABLE g (a int64, b int64) SPARE 1 HEAP").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO g VALUES (1, 2)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("ALTER TABLE g ADD COLUMN c int64 NULL").substr(0, 5), "ADDED");
+    ASSERT_EQ(Run("INSERT INTO g VALUES (3, 4, 5)").substr(0, 8), "INSERTED");
+    // An old-width row cannot be told from a misplaced one, so it is refused.
+    EXPECT_EQ(Run("INSERT INTO g VALUES (6, 7)").rfind("ERR", 0), 0u);
+    EXPECT_EQ(Rows("SELECT * FROM g").rows,
+              (std::vector<std::vector<std::string>>{{"1", "2", "NULL"}, {"3", "4", "5"}}));
+
+    ASSERT_EQ(Run("ALTER TABLE g DROP COLUMN a").substr(0, 7), "DROPPED");
+    ASSERT_EQ(Run("INSERT INTO g VALUES (8, 9)").substr(0, 8), "INSERTED");
+    const auto shown = Rows("SELECT * FROM g");
+    EXPECT_EQ(shown.columns, (std::vector<std::string>{"b", "c"}));
+    EXPECT_EQ(shown.rows,
+              (std::vector<std::vector<std::string>>{{"2", "NULL"}, {"4", "5"}, {"8", "9"}}));
+}
+
+// BZ-Q3: a heap keeps at least one declared column - without it no statement
+// could write or read the relation.
+TEST_F(HeapHiddenKeyTest, AHeapsLastDeclaredColumnIsNotDropped) {
+    ASSERT_EQ(Run("CREATE TABLE one (a int64) HEAP").substr(0, 7), "CREATED");
+    const std::string refused = Run("ALTER TABLE one DROP COLUMN a");
+    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
+    EXPECT_NE(refused.find("last declared column"), std::string::npos) << refused;
+    ASSERT_EQ(Run("ALTER TABLE h DROP COLUMN a").substr(0, 7), "DROPPED");
+    EXPECT_EQ(Run("ALTER TABLE h DROP COLUMN b").rfind("ERR", 0), 0u);
+}
+
+// ON CONFLICT on a heap: the target-less form is admitted (a heap's issued
+// key never collides), and a named target is refused saying why.
+TEST_F(HeapHiddenKeyTest, OnConflictTakesNoTargetOnAHeap) {
+    const std::string bare = Run("INSERT INTO h VALUES (1, 2) ON CONFLICT DO NOTHING");
+    EXPECT_EQ(bare.rfind("INSERTED", 0), 0u) << bare;
+    const std::string named = Run("INSERT INTO h VALUES (1, 2) ON CONFLICT (a) DO NOTHING");
+    EXPECT_EQ(named.rfind("ERR", 0), 0u) << named;
+    EXPECT_NE(named.find("heap's is hidden"), std::string::npos) << named;
+}
+
 // Rows land in insertion order: the issued key is the leaf order, so a scan
 // without ORDER BY reads them as written - across a leaf split, too.
 TEST_F(HeapHiddenKeyTest, RowsReadBackInInsertionOrderAcrossLeaves) {

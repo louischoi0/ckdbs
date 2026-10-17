@@ -299,12 +299,9 @@ StatusOr<std::size_t> CheckExistingRows(storage::PageStore& store,
     const std::vector<std::string> states = StateSet(t);
     const catalog::SysColumnRow& column = access.schema.columns[t.column_no];
 
-    PageId leaf = access.desc_page_id;
-    if (access.clustered_type == catalog::ClusteredType::kBtree) {
-        auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);
-        if (!first.ok()) return first.status();
-        leaf = first.value();
-    }
+    auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);
+    if (!first.ok()) return first.status();
+    PageId leaf = first.value();
     std::size_t checked = 0;
     const PageId origin = leaf;
     for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {

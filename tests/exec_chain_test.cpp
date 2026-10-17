@@ -17,7 +17,7 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/device_page_store.hpp"
-#include "kds/storage/heap/heap_chain.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -80,32 +80,26 @@ protected:
         auto payload = EncodeRow(access.value()->schema, access.value()->layout, id.value(), body);
         ASSERT_TRUE(payload.ok()) << payload.status().message();
 
-        if (access.value()->clustered_type == catalog::ClusteredType::kBtree) {
-            auto placed = btree::BtreeInsert(store_, access.value()->desc_page_id, id.value(),
-                                             payload.value(), /*trx_id=*/1, access.value()->oid);
-            ASSERT_TRUE(placed.ok()) << placed.status().message();
-            // **The root moves when the tree grows a level**, and until
-            // AO-S6e-b's cell needed a multi-leaf relation nothing here
-            // insisted on it: this helper kept handing `BtreeInsert` the
-            // old root, which after the first split is a full *leaf*. Every
-            // later insert then appended a leaf and spliced it in front of
-            // that one, building a chain that descends - the exact shape
-            // `btree.cpp`'s append path calls unsurvivable (H9) - and a
-            // scan of a relation this fixture filled read its rows out of
-            // key order. The dispatcher has adopted the new root since
-            // PW2-4 (`command_dispatcher.cpp`, `Catalog::PublishRoot`);
-            // this is that line, and it is what makes a fixture-built
-            // relation the same shape as a served one.
-            if (placed.value().new_root != kInvalidPageId) {
-                ASSERT_TRUE(boot_->catalog
-                                .PublishRoot(oid.value(), /*index_oid=*/0, placed.value().new_root,
-                                                        access.value()->anchor_page_id)
-                                .ok());
-            }
-        } else {
-            auto placed = heap::ChainInsert(store_, access.value()->desc_page_id, id.value(),
-                                            payload.value(), /*trx_id=*/1, access.value()->oid);
-            ASSERT_TRUE(placed.ok()) << placed.status().message();
+        auto placed = btree::BtreeInsert(store_, access.value()->desc_page_id, id.value(),
+                                         payload.value(), /*trx_id=*/1, access.value()->oid);
+        ASSERT_TRUE(placed.ok()) << placed.status().message();
+        // **The root moves when the tree grows a level**, and until
+        // AO-S6e-b's cell needed a multi-leaf relation nothing here
+        // insisted on it: this helper kept handing `BtreeInsert` the
+        // old root, which after the first split is a full *leaf*. Every
+        // later insert then appended a leaf and spliced it in front of
+        // that one, building a chain that descends - the exact shape
+        // `btree.cpp`'s append path calls unsurvivable (H9) - and a
+        // scan of a relation this fixture filled read its rows out of
+        // key order. The dispatcher has adopted the new root since
+        // PW2-4 (`command_dispatcher.cpp`, `Catalog::PublishRoot`);
+        // this is that line, and it is what makes a fixture-built
+        // relation the same shape as a served one.
+        if (placed.value().new_root != kInvalidPageId) {
+            ASSERT_TRUE(boot_->catalog
+                            .PublishRoot(oid.value(), /*index_oid=*/0, placed.value().new_root,
+                                                    access.value()->anchor_page_id)
+                            .ok());
         }
     }
 
@@ -305,47 +299,6 @@ TEST_F(ExecChainTest, ASelfJoinBindsTwoRowsOfOneRelation) {
 
     EXPECT_EQ(Run("SELECT b.label, a.label FROM t AS b JOIN t AS a ON b.parent_id = a.id"),
               (std::vector<std::string>{"child|root"}));
-}
-
-// ---- Across storage forms -------------------------------------------------
-
-TEST_F(ExecChainTest, HeapAndBtreeRelationsReturnIdenticalRowsInIdenticalOrder) {
-    // A btree leaf *is* a heap page, so the codec, the reads and the walk
-    // are shared. This is what proves the sharing is real: the same rows,
-    // the same order, from both storage forms.
-    Create("CREATE TABLE h (id int64, name varchar) HEAP");
-    Create("CREATE TABLE b (id int64, name varchar) BTREE");
-    for (int i = 0; i < 6; ++i) {
-        Insert("h", {Str("n" + std::to_string(i))});
-        Insert("b", {Str("n" + std::to_string(i))});
-    }
-
-    EXPECT_EQ(Run("SELECT h.id, h.name FROM h"), Run("SELECT b.id, b.name FROM b"));
-    EXPECT_EQ(Run("SELECT h.name FROM h WHERE id = 4"), Run("SELECT b.name FROM b WHERE id = 4"));
-    EXPECT_EQ(Run("SELECT h.name FROM h WHERE id = 4"), (std::vector<std::string>{"n3"}));
-}
-
-TEST_F(ExecChainTest, AJoinIsTheSameAcrossEveryCombinationOfStorageForms) {
-    Create("CREATE TABLE ah (id int64, name varchar) HEAP");
-    Create("CREATE TABLE ab (id int64, name varchar) BTREE");
-    Create("CREATE TABLE th (id int64, a_id int64, sym varchar) HEAP");
-    Create("CREATE TABLE tb (id int64, a_id int64, sym varchar) BTREE");
-    for (int i = 0; i < 4; ++i) {
-        Insert("ah", {Str("a" + std::to_string(i))});
-        Insert("ab", {Str("a" + std::to_string(i))});
-        Insert("th", {Int(i + 1), Str("s" + std::to_string(i))});
-        Insert("tb", {Int(i + 1), Str("s" + std::to_string(i))});
-    }
-
-    const std::vector<std::string> expected =
-        Run("SELECT th.sym, ah.name FROM th JOIN ah ON th.a_id = ah.id");
-    ASSERT_EQ(expected.size(), 4u);
-
-    // heap x btree, btree x heap, btree x btree - the probe side is the
-    // one that differs, and it must not show.
-    EXPECT_EQ(Run("SELECT th.sym, ab.name FROM th JOIN ab ON th.a_id = ab.id"), expected);
-    EXPECT_EQ(Run("SELECT tb.sym, ah.name FROM tb JOIN ah ON tb.a_id = ah.id"), expected);
-    EXPECT_EQ(Run("SELECT tb.sym, ab.name FROM tb JOIN ab ON tb.a_id = ab.id"), expected);
 }
 
 // ---- Stopping, and the R1 guard ------------------------------------------

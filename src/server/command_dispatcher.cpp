@@ -2742,6 +2742,14 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
                                                       "dropped (invariant 11)" + at);
             return {ErrorReply(s), false, 0, s};
         }
+        // A heap's last declared column (BZ-Q3): without it the relation has
+        // no column a statement can write or read, only its hidden key.
+        if (access.value()->schema.heap() && access.value()->layout.live_columns == 2) {
+            const Status s = Status::InvalidArgument(
+                "column '" + stmt.old_column + "' is the heap's last declared column and cannot "
+                "be dropped; a heap keeps at least one" + at);
+            return {ErrorReply(s), false, 0, s};
+        }
         auto restricted =
             DropColumnRestriction(oid.value(), static_cast<std::uint16_t>(column->pos));
         if (!restricted.ok()) {
@@ -3486,45 +3494,6 @@ StatusOr<parser::InsertStmt> NormalizeListedInsertRows(const catalog::TableAcces
     return out;
 }
 
-// **A heap's positional rows** (BZ-R3 of
-// `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`): a row carries
-// exactly the visible columns, and the key is always issued - no length
-// names it, so BW-Q9's ambiguity between a full and a short row cannot
-// arise, and a changed relation takes the same rule. A dropped position is
-// a NULL placeholder, as in `NormalizeListedInsertRows`.
-StatusOr<std::optional<parser::InsertStmt>> NormalizeHeapInsertRows(
-    const catalog::TableAccess& ta, const parser::InsertStmt& written) {
-    const std::vector<catalog::SysColumnRow>& columns = ta.schema.columns;
-    const std::size_t visible = ta.layout.live_columns - 1;
-    parser::InsertStmt out = InsertShellOf(written);
-    out.rows.reserve(written.rows.size());
-    for (std::size_t k = 0; k < written.rows.size(); ++k) {
-        const std::vector<parser::AstValue>& row = written.rows[k];
-        if (row.size() != visible) {
-            const std::string byte = !row.empty() && row.front().byte_offset != 0
-                                         ? " (byte " + std::to_string(row.front().byte_offset) +
-                                               ")"
-                                         : "";
-            const std::string at =
-                written.rows.size() > 1 ? " (row " + std::to_string(k + 1) + ")" : "";
-            return Status::InvalidArgument("expected " + std::to_string(visible) +
-                                           " value(s), one per column; got " +
-                                           std::to_string(row.size()) + byte + at);
-        }
-        std::vector<parser::AstValue>& physical = out.rows.emplace_back();
-        physical.reserve(columns.size() - 1);
-        auto next = row.begin();
-        for (std::size_t i = 1; i < columns.size(); ++i) {
-            if (columns[i].dropped()) {
-                physical.emplace_back().type = parser::ValueType::kNull;
-            } else {
-                physical.push_back(*next++);
-            }
-        }
-    }
-    return std::optional<parser::InsertStmt>(std::move(out));
-}
-
 // **Each row in the shape everything downstream reads**: the tuple key value first
 // when the row names one, then one value per physical column, a NULL
 // placeholder at every dropped position (BW-R6) - so the body is indexed by
@@ -3542,6 +3511,14 @@ StatusOr<std::optional<parser::InsertStmt>> NormalizeHeapInsertRows(
 // catch** (BW-Q11, `known-gaps.md`): after a `DROP`, an old row with its
 // tuple key left out has the new full length. A column list closes it
 // (BW-S6).
+//
+// **A heap's row is the short form, always** (BZ-R3 of
+// `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`): it carries exactly
+// the visible columns and its key is issued - no length names the hidden key,
+// so BW-Q9's ambiguity cannot arise and a changed heap takes the same rule.
+// `[quiet-wrong]`: a heap row one value longer must be refused, never read
+// as naming the key. A KWP load describes the hidden key as its field 0
+// (BI15), so its rows take the general rule.
 StatusOr<std::optional<parser::InsertStmt>> NormalizeInsertRows(
     const catalog::TableAccess& ta, const parser::InsertStmt& written) {
     if (!written.columns.empty()) {
@@ -3549,36 +3526,42 @@ StatusOr<std::optional<parser::InsertStmt>> NormalizeInsertRows(
         if (!listed.ok()) return listed.status();
         return std::optional<parser::InsertStmt>(std::move(listed.value()));
     }
-    // A load describes the hidden key as its field 0 (BZ-R3's exemption,
-    // BI15), so its full rows take the path below like any relation's.
-    if (ta.schema.heap() && written.described.oid == 0) return NormalizeHeapInsertRows(ta, written);
+    const bool heap = ta.schema.heap() && written.described.oid == 0;
     const std::size_t live = ta.layout.live_columns;
     const bool changed = ta.layout.column_set_changed();
-    const auto names_null_key = [&](const std::vector<parser::AstValue>& row) {
+    // A row the copy below must reshape or refuse: on a heap, any row but
+    // the short form; elsewhere one asking for an issued key with a NULL.
+    const auto needs_copy = [&](const std::vector<parser::AstValue>& row) {
+        if (heap) return row.size() + 1 != live;
         return row.size() == live && row.front().type == parser::ValueType::kNull;
     };
-    // The common case copies nothing: an unchanged relation's rows, none of
-    // them asking for an issued key with a NULL, are already the shape.
-    if (!changed && std::none_of(written.rows.begin(), written.rows.end(), names_null_key)) {
+    // The common case copies nothing: an unchanged relation's rows are
+    // already the shape.
+    if (!changed && std::none_of(written.rows.begin(), written.rows.end(), needs_copy)) {
         return std::optional<parser::InsertStmt>();
     }
     parser::InsertStmt out = InsertShellOf(written);
     out.rows.reserve(written.rows.size());
     for (std::size_t k = 0; k < written.rows.size(); ++k) {
         const std::vector<parser::AstValue>& row = written.rows[k];
-        const bool full = row.size() == live;
-        if (!full && (changed || row.size() + 1 != live)) {
+        const bool full = !heap && row.size() == live;
+        if (!full && ((changed && !heap) || row.size() + 1 != live)) {
             // The row's ordinal, as the bulk loop appends to its refusals
             // (BB-S3's review): a KWP client reads the `Status`, not the line.
             const std::string at =
                 written.rows.size() > 1 ? " (row " + std::to_string(k + 1) + ")" : "";
-            if (!changed) {
-                return Status::InvalidArgument(InsertArityRefusal(ta, live, row).message() + at);
-            }
             const std::string byte = !row.empty() && row.front().byte_offset != 0
                                          ? " (byte " + std::to_string(row.front().byte_offset) +
                                                ")"
                                          : "";
+            if (heap) {
+                return Status::InvalidArgument("expected " + std::to_string(live - 1) +
+                                               " value(s), one per column; got " +
+                                               std::to_string(row.size()) + byte + at);
+            }
+            if (!changed) {
+                return Status::InvalidArgument(InsertArityRefusal(ta, live, row).message() + at);
+            }
             return Status::InvalidArgument(
                 "expected " + std::to_string(live) + " value(s), one per column, with "
                 "tuple key column '" +
@@ -5427,7 +5410,11 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
                 const Status s = Status::NotImplemented(
                     "ON CONFLICT (" + written.conflict_target->name + ") at byte " +
                     std::to_string(written.conflict_target->byte_offset) +
-                    ": the tuple key is the one conflict there is (BU-Q18); name it or no column");
+                    (ta->schema.heap()
+                         ? ": the tuple key is the one conflict there is (BU-Q18), and a "
+                           "heap's is hidden (BZ-R4); name no column"
+                         : ": the tuple key is the one conflict there is (BU-Q18); name it or "
+                           "no column"));
                 return {ErrorReply(s), false, 0, s};
             }
         }

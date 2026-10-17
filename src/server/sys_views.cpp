@@ -190,10 +190,11 @@ std::string StorageName(const catalog::TableAccess* access) {
 
 // A column's name, or its position when the schema cannot say - a dropped
 // column's included, whose name left the SQL surface (BW-R6) while a
-// `sys.access_stats` mask or a Cabin controller entry may still carry it.
+// `sys.access_stats` mask or a Cabin controller entry may still carry it,
+// and a heap's hidden tuple key, which never had one there (BZ-R3).
 std::string ColumnLabel(const StatusOr<const catalog::TableAccess*>& access, std::size_t col) {
     if (access.ok() && col < access.value()->schema.columns.size() &&
-        !access.value()->schema.columns[col].dropped()) {
+        access.value()->schema.columns[col].visible()) {
         return std::string(catalog::NameView(access.value()->schema.columns[col].name));
     }
     return std::to_string(col);
