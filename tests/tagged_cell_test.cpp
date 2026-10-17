@@ -242,5 +242,35 @@ TEST(TaggedCellTest, EveryLegalWidthRoundTripsAtItsOwnBoundary) {
     }
 }
 
+// **`InlineCellBytes` answers exactly the cells `DecodeCell` answers
+// `kInline`, with the same bytes** (BZ C4): the scan kernel and the column
+// decode take it first, so a looser one would hand them a corrupt cell
+// the codec refuses. Every tag byte, the lengths either side of capacity,
+// and the widths either side of the legal range.
+TEST(TaggedCellTest, TheInlineFastPathAcceptsExactlyWhatDecodeCellCallsInline) {
+    for (std::uint32_t width : {15u, 16u, kW, 4096u, 4097u}) {
+        const std::uint32_t capacity = width >= 3 ? width - 3 : 0;
+        for (unsigned tag = 0; tag < 256; ++tag) {
+            for (std::uint32_t len : {0u, 1u, capacity - 1, capacity, capacity + 1}) {
+                Cell cell = FreshCell(width);
+                cell[kCellTagOffset] = static_cast<std::byte>(tag);
+                cell[kCellInlineLenOffset] = static_cast<std::byte>(len & 0xFF);
+                cell[kCellInlineLenOffset + 1] = static_cast<std::byte>((len >> 8) & 0xFF);
+
+                std::span<const std::byte> fast;
+                const bool took = InlineCellBytes(cell, fast);
+                auto decoded = DecodeCell(cell);
+                const bool inline_cell = decoded.ok() && decoded.value().tag == CellTag::kInline;
+                ASSERT_EQ(took, inline_cell) << "width " << width << " tag " << tag << " len " << len;
+                if (took) {
+                    EXPECT_EQ(fast.data(), decoded.value().bytes.data());
+                    EXPECT_EQ(fast.size(), decoded.value().bytes.size());
+                    EXPECT_EQ(decoded.value().len, len);
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 }  // namespace kds::storage

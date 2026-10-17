@@ -110,20 +110,21 @@ StatusOr<CellValue> DecodeCell(std::span<const std::byte> cell) {
         case CellTag::kNull:
             return CellValue{};
         case CellTag::kInline: {
-            const std::uint64_t len = GetLE(cell.data() + kCellInlineLenOffset, 2);
-            const std::uint32_t capacity = InlineCapacity(static_cast<std::uint32_t>(cell.size()));
-            if (len > capacity) {
-                // Never size a read from a length the page disagrees with.
-                return Status::Corruption("inline cell claims " + std::to_string(len) +
-                                           " byte(s) but only " + std::to_string(capacity) +
-                                           " fit in a " + std::to_string(cell.size()) +
-                                           "-byte cell");
-            }
+            // One definition of a valid inline cell, the scan's and this
+            // one's (tagged_cell.hpp); with the width and tag checked above,
+            // only the length can refuse it.
             CellValue value;
-            value.tag = CellTag::kInline;
-            value.bytes = cell.subspan(kCellInlineBytesOffset, static_cast<std::size_t>(len));
-            value.len = static_cast<std::uint32_t>(len);
-            return value;
+            if (InlineCellBytes(cell, value.bytes)) {
+                value.tag = CellTag::kInline;
+                value.len = static_cast<std::uint32_t>(value.bytes.size());
+                return value;
+            }
+            // Never size a read from a length the page disagrees with.
+            return Status::Corruption(
+                "inline cell claims " +
+                std::to_string(GetLE(cell.data() + kCellInlineLenOffset, 2)) + " byte(s) but only " +
+                std::to_string(InlineCapacity(static_cast<std::uint32_t>(cell.size()))) +
+                " fit in a " + std::to_string(cell.size()) + "-byte cell");
         }
         case CellTag::kSpilled: {
             CellValue value;
