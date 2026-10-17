@@ -84,6 +84,58 @@ inline Visibility Classify(const ReadView& view, const heap::PageView::Tuple& tu
     return Classify(view, tuple.trx_id, tuple.deleted, tuple.undo_ptr);
 }
 
+// **`ReadView::Visible`, remembered for one view** (BZ, `workorder-bz-*.md`
+// §7). A writer at or above the floor costs the view a lookup under the
+// instance's one window latch, and a walk meets the same few writers row
+// after row - a bulk load's rows share one `trx_id` per batch - so the
+// latch was being taken once per row for an answer it gave the previous
+// row.
+//
+// **Sound because a view's answer for a writer does not change**
+// (`read_view.hpp`; `instance_visibility.hpp`, AN-R9): every commit at or
+// below `snapshot_lsn` was in the window when the view was minted, every
+// commit after it lands above it, and the floor passes an entry above a
+// live snapshot only once no registered view needs it. So the first answer
+// is the answer, and remembering it is the predicate.
+//
+// One memo per view and per caller: it is never shared between threads,
+// and a holder that takes another view takes another memo.
+class VisibilityMemo {
+public:
+    bool Visible(const ReadView& view, std::uint64_t trx_id) {
+        for (const Entry& entry : entries_) {
+            if (entry.trx_id == trx_id) return entry.visible;
+        }
+        const bool visible = view.Visible(trx_id);
+        entries_[next_] = Entry{trx_id, visible};
+        next_ = (next_ + 1) % kEntries;
+        return visible;
+    }
+
+private:
+    // Four writers: one statement's rows rarely span more at once, and a
+    // miss costs only the lookup the memo would have saved.
+    static constexpr std::size_t kEntries = 4;
+    // No trx id reaches 2^48 (invariant 12), so the empty slot matches none.
+    static constexpr std::uint64_t kEmpty = ~std::uint64_t{0};
+    struct Entry {
+        std::uint64_t trx_id = kEmpty;
+        bool visible = false;
+    };
+    Entry entries_[kEntries]{};
+    std::size_t next_ = 0;
+};
+
+// Classify() through a memo: the same three answers, the window asked once
+// per writer rather than once per row.
+inline Visibility Classify(const ReadView& view, VisibilityMemo& memo,
+                           const heap::PageView::Tuple& tuple) {
+    if (memo.Visible(view, tuple.trx_id)) {
+        return tuple.deleted ? Visibility::kNoVersion : Visibility::kVisible;
+    }
+    return tuple.undo_ptr == kNoUndoPtr ? Visibility::kNoVersion : Visibility::kNeedsUndoWalk;
+}
+
 // Phase 2 (txn.md section 4.3 step 4). Called only after Classify()
 // answered kNeedsUndoWalk **and the caller's page span has been released**.
 //

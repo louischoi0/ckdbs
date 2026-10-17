@@ -2349,7 +2349,7 @@ private:
             // out of range, retired, or malformed - is no row here, as before.
             heap::PageView::Tuple tuple{};
             if (page.TryReadTupleIn(slot, nr_slots, tuple) == heap::PageView::TupleRead::kRead) {
-                switch (txn::Classify(snapshot_.view, tuple)) {
+                switch (txn::Classify(snapshot_.view, visibility_memo_, tuple)) {
                     case txn::Visibility::kNoVersion:
                         // No version of this tuple exists for this reader.
                         // Not an error and not a row: the statement simply
@@ -2769,6 +2769,9 @@ private:
     // Held by value: a Snapshot is a POD and copying one is cheaper than
     // a pointer indirection on every row.
     txn::Snapshot snapshot_;
+    // `snapshot_.view`'s answers, one per writer (txn/visibility.hpp).
+    // Valid for the runner's life because `snapshot_` never changes in it.
+    txn::VisibilityMemo visibility_memo_;
 
     // Where an invisible writer's visible version is reconstructed. Reused
     // across rows, and **touched only when the undo chain is actually
