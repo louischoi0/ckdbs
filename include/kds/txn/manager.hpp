@@ -790,10 +790,14 @@ private:
     std::uint64_t last_ahead_cursor_ = std::numeric_limits<std::uint64_t>::max();
 
     // How large the commit window must be before a burn is worth a
-    // superblock write or a granted block. `[PROPOSED]`, not measured:
-    // four reclamation thresholds, so an instance whose floor is moving
-    // never reaches it and one whose floor is pinned reaches it quickly.
-    static constexpr std::size_t kBurnWindowThreshold = 4096;
+    // superblock write or a granted block: **any entry at all** since BZ.
+    // The window is not only memory. Every row a writer above the floor
+    // left is read through `LookupCommit`'s latch (`read_view.hpp`), and a
+    // pinned floor kept every committed batch there for as long as the
+    // pinning core stayed idle - 12 % of a scan's server CPU in scenario 1
+    // (`bench/v3.2.0/results-bz-s0-premise-*.md`). An idle core burns at
+    // most once per block the busy cores carve past it, on its own tick.
+    static constexpr std::size_t kBurnWindowThreshold = 1;
 
     // Live transactions, in id order. A vector because the set is the size
     // of the sessions holding one, and a scan over it beats a hash for the
