@@ -640,8 +640,9 @@ TransactionManager::BurnOutcome TransactionManager::MaybeBurnIdleBlock() {
     // own (`instance_visibility.hpp`).
     if (!visibility_->PinsFloor(core_)) return BurnOutcome::kNotNeeded;
 
-    // Pinned, with nothing in the window to drain: no reader is paying for
-    // the pinned floor, so a burn would buy nothing (`manager.hpp`).
+    // Pinned, but the window has not grown enough to pay for the burn. An
+    // instance can sit here indefinitely and lose nothing: the floor is
+    // held, and what the floor holds is memory nobody is short of yet.
     if (visibility_->window_size() < kBurnWindowThreshold) return BurnOutcome::kNotNeeded;
 
     if (Status s = ids_.BurnWindow(); !s.ok()) {
