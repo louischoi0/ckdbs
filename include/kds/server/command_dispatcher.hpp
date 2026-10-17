@@ -1180,11 +1180,11 @@ private:
     // BY-R2: records what an index DDL may orphan, settled at its decide.
     void NoteOwedIndex(const WriteScope& scope, catalog::Oid rel_oid, catalog::Oid index_oid,
                        bool created);
-    // An index DDL's `sys.indexes` delete-mark and written row, handed to
-    // the transaction so a rollback undoes them; each a no-op when nothing
-    // was written or the scope has no transaction.
+    // An index DDL's `sys.indexes` delete-mark, and any DDL's written
+    // catalog row, handed to the transaction so a rollback undoes them;
+    // each a no-op when nothing was written or the scope has no transaction.
     void NoteIndexRowDropped(DdlScope& ddl, const catalog::CatalogRowChange& change);
-    void NoteIndexRowWritten(DdlScope& ddl, const catalog::CatalogRowRef& row);
+    void NoteRowWritten(DdlScope& ddl, const catalog::CatalogRowRef& row);
 
     // The view a statement resolves relation names under
     // (workplan-ddl-transactional.md DT3c), or `nullopt` for "see

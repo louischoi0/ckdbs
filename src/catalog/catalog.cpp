@@ -3304,7 +3304,8 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
 }
 
 StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
-                                              std::uint8_t origin) {
+                                              std::uint8_t origin, std::uint64_t trx_id,
+                                              CatalogRowRef* where) {
     if (origin != kCabinOriginAuto && origin != kCabinOriginUser) {
         return Status::InvalidArgument("catalog: unknown cabin origin");
     }
@@ -3380,15 +3381,22 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // is a statement that was going to scan anyway.
     row.status = kCabinStatusActive;
 
-    if (Status s = InsertCabinRow(row); !s.ok()) return s;
+    if (Status s = InsertCabinRow(row, trx_id, where); !s.ok()) return s;
     return row.cabin_id;
 }
 
-Status Catalog::InsertCabinRow(const SysCabinRow& row) {
-    if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageCabins, row, kBootstrapXid);
-        !s.ok()) {
-        return s;
+Status Catalog::InsertCabinRow(const SysCabinRow& row, std::uint64_t trx_id,
+                               CatalogRowRef* where) {
+    const Status inserted =
+        InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageCabins, row, trx_id, where);
+    // The identity a rollback's compensation re-reads, set on a failure too:
+    // InsertRow reports a row it logged before failing, and that row is
+    // still the rollback's to retire.
+    if (where != nullptr) {
+        where->oid = row.cabin_id;
+        where->rel_oid = kSysCabinsTable;
     }
+    if (!inserted.ok()) return inserted;
     // **Bumped, unlike RegisterPattern().** A pattern appearing stales
     // nothing cached; a Cabin appearing stales `TableAccess::cabin_mask` and
     // `expr_cabins` on every held entry for this relation, which are facts
@@ -3496,7 +3504,7 @@ StatusOr<std::uint64_t> Catalog::CreateExprCabin(Oid rel_oid, std::uint8_t shape
     row.shape = shape;
     row.origin = origin;
     row.status = kCabinStatusActive;
-    if (Status s = InsertCabinRow(row); !s.ok()) return s;
+    if (Status s = InsertCabinRow(row, kBootstrapXid, nullptr); !s.ok()) return s;
     return row.cabin_id;
 }
 

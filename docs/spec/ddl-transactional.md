@@ -139,7 +139,11 @@ Built, and what each gets:
   open drop has freed, answering `TXN_CONFLICT retryable=1` (`catalog.md`
   CT7, which also covers
   `RENAME TO`, `CREATE NAMESPACE`, `RENAME COLUMN`, index and assertion
-  names, and a column's cabin).
+  names, and a column's cabin). **A `CABIN` column's Cabin is a row of
+  the `CREATE TABLE`**: its `sys.cabins` row carries the transaction's id
+  and is on its trail, so `ROLLBACK` and the mount's undo of a loser
+  retire it with the relation (`cabin.md` §8.1). The `sys.fkeys` rows a
+  `REFERENCES` clause writes are not on the trail, and stay (below).
 - **`DROP TABLE`** — **atomic only**, and deliberately not isolated;
   §5a is the whole argument. Every production drop delete-marks its
   dependent rows, autocommit's implicit transaction included; a drop at
@@ -167,8 +171,8 @@ Built, and what each gets:
 - The autocommit path is unchanged in behaviour: a bare `CREATE TABLE`
   commits immediately.
 
-**Not transactional:** `ALTER TABLE`'s renames, cabins, assertions and
-foreign keys.
+**Not transactional:** `ALTER TABLE`'s renames, `CREATE CABIN` and
+`DROP CABIN`, assertions and foreign keys.
 Their catalog writes are logged and durable (§7) but not undone by
 `ROLLBACK`.
 

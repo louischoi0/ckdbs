@@ -775,7 +775,11 @@ pages and the cases it does not reach.
 - **An orphan Cabin set lives until a restart.** A probe compiled before a
   drop may bank a set of the dropped relation's locations after it; only a
   stale memo naming that `cabin_id` can reach it, and the statement epoch
-  covers that.
+  covers that. A rolled-back `CREATE TABLE` whose `CABIN` column observed
+  values leaves its set the same way: the rollback retires the
+  `sys.cabins` row and nothing forgets the set, but no row names the
+  `cabin_id` afterwards and the id is never reissued. Read on
+  `fix-rolled-back-cabin` off `f2ef45c1`.
 - **A tree freed in one pass would pass every cell.** On a volume of one
   map region, a map flush writes the region's one page whole, so the
   per-level syncs matter only to a tree spanning regions - past 65,280

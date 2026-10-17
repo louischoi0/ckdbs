@@ -515,6 +515,37 @@ TEST_F(Rv3CrashTest, AnUncommittedCreateAtCrashLeavesNoRelation) {
     EXPECT_EQ(Run("CREATE TABLE ghost (id int64, v int64)").substr(0, 7), "CREATED");
 }
 
+// A `CABIN` column's Cabin is a row of the `CREATE TABLE` that declared it,
+// so whatever takes the relation back takes the Cabin with it: a
+// `ROLLBACK`, through the trail, and the mount's undo of a loser, through
+// the undo record the catalog's hook appended - the second held before the
+// row reached the trail and is pinned here as coverage.
+TEST_F(Rv3CrashTest, ARolledBackCreateTableTakesItsCabinWithIt) {
+    MakeStrict();
+    ASSERT_EQ(Run("BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run("CREATE TABLE ghost (id int64, v int64 CABIN)").substr(0, 7), "CREATED");
+    EXPECT_NE(Run("SHOW CABINS").find("active"), std::string::npos)
+        << "the creating transaction does not see its own Cabin";
+    ASSERT_EQ(Run("ROLLBACK").substr(0, 8), "ROLLBACK");
+    EXPECT_EQ(Run("SHOW CABINS").find("active"), std::string::npos) << Run("SHOW CABINS");
+
+    // The name and the column are free: a re-create gets its Cabin again.
+    const std::string again = Run("CREATE TABLE ghost (id int64, v int64 CABIN)");
+    ASSERT_EQ(again.substr(0, 7), "CREATED");
+    ASSERT_EQ(again.find("WARN"), std::string::npos) << again;
+    EXPECT_NE(Run("SHOW CABINS").find("active"), std::string::npos);
+}
+
+TEST_F(Rv3CrashTest, AnUncommittedCreateTableAtCrashLeavesNoCabin) {
+    MakeStrict();
+    ASSERT_EQ(Run("BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run("CREATE TABLE ghost (id int64, v int64 CABIN)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("SYNC"), "OK synced");
+    instance_->Crash();
+    ASSERT_TRUE(instance_->Reboot().ok());
+    EXPECT_EQ(Run("SHOW CABINS").find("active"), std::string::npos) << Run("SHOW CABINS");
+}
+
 TEST_F(Rv3CrashTest, AnUncommittedDropAtCrashLeavesTheRelationWhole) {
     MakeStrict();
     ASSERT_EQ(Run("CREATE TABLE keep (id int64, v int64)").substr(0, 7), "CREATED");

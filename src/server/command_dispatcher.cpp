@@ -2289,7 +2289,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                 ddl.txn != nullptr ? &change : nullptr,
                 ddl.txn != nullptr ? &created_row : nullptr, wal_, txn_);
             NoteIndexRowDropped(ddl, change);
-            NoteIndexRowWritten(ddl, created_row);
+            NoteRowWritten(ddl, created_row);
             if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
             const catalog::Oid old_oid = result.value().replaced_oid;
             NoteOwedIndex(scope, *relation, old_oid, /*created=*/false);
@@ -2360,7 +2360,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                         txn_);
         // Before the status is read: a create that failed after the catalog
         // row went down still left it there.
-        NoteIndexRowWritten(create_ddl, created_row);
+        NoteRowWritten(create_ddl, created_row);
         if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
         NoteOwedIndex(scope, *relation, result.value().index_oid, /*created=*/true);
         if (logging(LogLevel::kInfo)) {
@@ -2709,14 +2709,10 @@ DispatchOutcome CommandDispatcher::HandleAddColumn(const parser::AlterStmt& stmt
 
         DdlScope ddl = DdlScopeFor(scope);
         catalog::CatalogRowRef created;
-        const Status added = catalog_.AddColumn(oid.value(), row, ddl.trx_id,
-                                                ddl.txn != nullptr ? &created : nullptr);
+        const Status added = catalog_.AddColumn(oid.value(), row, ddl.trx_id, &created);
         // Before the status, CREATE INDEX's reason: a failed add that wrote
         // its row still left it there.
-        if (ddl.txn != nullptr && created.page_id != kInvalidPageId) {
-            ddl.written.push_back(created);
-            NoteDdlRows(ddl);
-        }
+        NoteRowWritten(ddl, created);
         if (!added.ok()) {
             const Status s = added.WithContext("byte " + std::to_string(stmt.column_byte_offset));
             return {ErrorReply(s), false, 0, s};
@@ -4369,16 +4365,20 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // like `enabled`.
         //
         // A failure here does not fail the CREATE TABLE. The relation exists and
-        // is correct; what is missing is an accelerator, and reporting it as a
-        // warning beats leaving a half-created table behind - there is no
-        // transaction to roll one back into.
+        // is correct; what is missing is an accelerator, so it is a warning.
+        // The row is the CREATE TABLE's own, on its trail, so a ROLLBACK
+        // retires it with the relation.
         std::vector<std::string> warnings;
         for (const catalog::SysColumnRow& col : schema.columns) {
             if (catalog::EffectiveCabinPolicy(col.cabin_policy) != catalog::kCabinPolicyEnabled) {
                 continue;
             }
+            catalog::CatalogRowRef written;
             auto cabin = catalog_.CreateCabin(oid.value(), static_cast<std::uint16_t>(col.pos),
-                                               catalog::kCabinOriginUser);
+                                               catalog::kCabinOriginUser, ddl.trx_id, &written);
+            // Before the status: a row logged before a later failure is
+            // still the rollback's to retire.
+            NoteRowWritten(ddl, written);
             if (!cabin.ok()) {
                 warnings.push_back("column '" + std::string(catalog::NameView(col.name)) +
                                    "' asked for a cabin and did not get one: " +
@@ -6839,7 +6839,7 @@ void CommandDispatcher::NoteIndexRowDropped(DdlScope& ddl,
     MarkHoldsDdl(*ddl.txn);
 }
 
-void CommandDispatcher::NoteIndexRowWritten(DdlScope& ddl, const catalog::CatalogRowRef& row) {
+void CommandDispatcher::NoteRowWritten(DdlScope& ddl, const catalog::CatalogRowRef& row) {
     if (ddl.txn == nullptr || row.page_id == kInvalidPageId) return;
     ddl.written.push_back(row);
     NoteDdlRows(ddl);

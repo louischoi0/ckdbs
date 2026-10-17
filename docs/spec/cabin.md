@@ -627,7 +627,10 @@ leave an operator believing they had said something.
 The policy is stored on the `sys.columns` row and enforced in exactly two
 places: `CREATE TABLE` creates the Cabin an *enabled* column asks for, and
 `Catalog::CreateCabin` refuses a *disabled* one whoever asks — the single
-door every Cabin comes through, so no creator can skip the check.
+door every Cabin comes through, so no creator can skip the check. The
+Cabin `CREATE TABLE` creates is that statement's own row, written under
+its transaction and on its trail, so a rollback of the relation takes the
+Cabin with it (`ddl-transactional.md` §5).
 
 **C5 changes the ceiling, not the policy.** Full observation of a
 column is *permitted*: with 24 B entries (C6), a fully observed Cabin

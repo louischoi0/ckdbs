@@ -1016,8 +1016,16 @@ public:
     // TableAccess is derived from these rows, so a Cabin appearing stales
     // every cached relation entry. That makes this a DDL-shaped call and it
     // must not be made from a statement path holding a `const TableAccess*`.
+    //
+    // `trx_id` and `where` as CreateIndex() takes them: a `CABIN` column
+    // clause writes its row under the `CREATE TABLE`'s transaction and
+    // reports it for that transaction's trail, so a rollback retires the
+    // Cabin with the relation. `CREATE CABIN` and the controller write
+    // committed (`kBootstrapXid`) on a relation already committed.
     StatusOr<std::uint64_t> CreateCabin(Oid rel_oid, std::uint16_t col_pos,
-                                        std::uint8_t origin = kCabinOriginUser);
+                                        std::uint8_t origin = kCabinOriginUser,
+                                        std::uint64_t trx_id = kBootstrapXid,
+                                        CatalogRowRef* where = nullptr);
 
     // Removes a Cabin's row. **Retires the slot rather than delete-marking
     // it**, and the .cpp states the argument in full: catalog reads have no
@@ -1060,7 +1068,7 @@ public:
 
 private:
     // Both doors' last act: the row, the schema word, the log line.
-    Status InsertCabinRow(const SysCabinRow& row);
+    Status InsertCabinRow(const SysCabinRow& row, std::uint64_t trx_id, CatalogRowRef* where);
 
 public:
 
