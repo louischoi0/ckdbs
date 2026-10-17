@@ -220,8 +220,8 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `client-manual.md`'s ring-counter row state the gap. Owner:
   `docs/spec/wal.md` §16.
 
-- **Two drivers' text still describes the old heap.** Verified at BZ-S1
-  by grep: the drivers that declared `(id int64, ...) HEAP` and meant `id`
+- **Two drivers' text still describes the old heap.** Verified at
+  `18e7b511` by grep: the drivers that declared `(id int64, ...) HEAP` and meant `id`
   as the tuple key (`aggregate_benchmark.py`, `kwp_load_benchmark.py`,
   `bulk_insert_benchmark.py`, `scenario1_backtest.py`) declare `BTREE` since
   BZ, the storage BZ's heap has with the key still declared. The prose of

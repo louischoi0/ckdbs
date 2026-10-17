@@ -11,7 +11,7 @@ How rows arrive in KDS in quantity, in two tiers: **Tier 1** (multi-row
 
 | # | Decision | Choice |
 |---|---|---|
-| BI1 | Scope | Two tiers: **T1** multi-row `VALUES`, **T2** KWP binary load stream. Both are built; the sorted heap fill that was T3 is deleted since BZ (§8) |
+| BI1 | Scope | Two tiers: **T1** multi-row `VALUES`, **T2** KWP binary load stream. Both are built |
 | BI2 | Correctness shortcut | **None, ever.** Every row through T1/T2 runs the full single-row write pipeline — FK check, assertion admission, Keystone allocation, encode + var-heap spill, placement, Cabin witness, index maintenance, WAL — **in the same per-row order** as a single-row `INSERT` (§4). Bulk buys amortization of parse/framing/round-trip, never of authority |
 | BI3 | T1 grammar | `INSERT INTO t VALUES (…), (…) [, …]` — comma-separated row lists; per-statement row cap `max_insert_rows` (config key, default **1024**, `parser::kDefaultMaxInsertRows`) |
 | BI4 | Atomicity | A bulk statement (T1) and a load session (T2) are **atomic**: all rows or none, unwound by the existing transaction scope. Any per-row refusal fails the whole statement with the 1-based row ordinal in the message. No partial-accept mode, no error table, no slow path |
@@ -282,16 +282,6 @@ and for a million.
   buffering under a fast client.
 - **Crash mid-load**: restart after a crash between chunks recovers to the
   transaction boundary — no partial load visible.
-
----
-
-## 8. Tier 3 — deleted
-
-The sorted heap fill (T3-2 and its gate, `SortedFillEligible`, and the id
-carve `AllocateRowIdRange`) is deleted since BZ
-(`instructions/v3.2.0/workorder-bz-heap-hidden-key.md` BZ-R5): it served
-the chain-stored user heap, which no longer exists. Every bulk row takes
-§4's per-row path.
 
 ---
 

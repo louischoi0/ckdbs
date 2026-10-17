@@ -2,12 +2,8 @@
 
 **One umbrella, two halves.** Part I (this file through §10) is what the
 engine's physical optimization rests on: the lazy-decay score (R1) and the
-page epoch (R4). **Relayout - the shadow planner, `SHOW RELAYOUT`, the
-`sys.relayout` view and the `physical_optimizer` config key - is deleted
-since BZ** (`instructions/v3.2.0/workorder-bz-heap-hidden-key.md` BZ-R5):
-it planned only for the chain-stored user heap, which no longer exists, and
-a file still setting `physical_optimizer` is refused at startup by name.
-No mover exists. Part II (from the divider after §10) is **autonomous
+page epoch (R4). No relayout planner or mover exists, and a config file
+setting `physical_optimizer` is refused at startup by name (§8). Part II (from the divider after §10) is **autonomous
 advisory Cabin management** — the `CABIN AUTO` promotion pipeline,
 decisions `PO1`-`PO10`, built — and consumes Part I's R1.
 
@@ -41,9 +37,9 @@ exists for (`heap-and-tuple.md` §1). Its input half is built —
 
 | ID | Decision |
 |----|----------|
-| R1 | **The lazy-decay score.** Exponential half-life decay computed lazily from a stored `{score, last_bump}` pair: a touch decays-then-increments, a read decays only, and there is no background decay pass — idle data costs nothing and is never visited. One implementation (`include/kds/stats/decay.hpp`), `sched::Clock`-injected; with no clock the score degrades to a raw count, the same best-effort stance `sys.access_stats.last_seen` already takes. Half-life is the `decay_half_life` config key, per instance, default 600 s `[PROPOSED]`. Declared consumers: hot/cold classification here, trail-retention ordering (`pattern-tracking-levels.md`), and EV1's experimental temperature hook. Scores are memory-resident and never persisted `[PROPOSED]`. **Two reads:** the Q24.8 `ValueAt` — which underflows to zero after ~16 half-lives, so it ranks live data only — and `Log2ValueAt`, the same state read in the log domain, where decay is a subtraction and ordering survives indefinitely. Any consumer that must order *idle* things (an eviction victim, a retirement) uses the log read (§II.4). |
+| R1 | **The lazy-decay score.** Exponential half-life decay computed lazily from a stored `{score, last_bump}` pair: a touch decays-then-increments, a read decays only, and there is no background decay pass — idle data costs nothing and is never visited. One implementation (`include/kds/stats/decay.hpp`), `sched::Clock`-injected; with no clock the score degrades to a raw count, the same best-effort stance `sys.access_stats.last_seen` already takes. Half-life is the `decay_half_life` config key, per instance, default 600 s `[PROPOSED]`. Declared consumers: the Cabin controller (Part II), trail-retention ordering (`pattern-tracking-levels.md`), and EV1's experimental temperature hook. Scores are memory-resident and never persisted `[PROPOSED]`. **Two reads:** the Q24.8 `ValueAt` — which underflows to zero after ~16 half-lives, so it ranks live data only — and `Log2ValueAt`, the same state read in the log domain, where decay is a subtraction and ordering survives indefinitely. Any consumer that must order *idle* things (an eviction victim, a retirement) uses the log read (§II.4). |
 | R4 | **The page epoch**: `PageHeaderFields::reserved0` (offset 16, u64) is `relayout_epoch`. Every existing page carries 0 there, so **no format bump**: a zero reads as epoch 0. Durable by construction (it is header bytes), which trails need because trail pages are durable. Bumped only when tuples move - today by a btree leaf division and an in-place leaf compaction (`heap-and-tuple.md` §4.1); INSERT/UPDATE/DELETE never bump, because the fixed-length rule makes them address-stable — that stability is the whole reason replay is safe. Wraparound is unreachable at u64 width rather than handled. **Pairing rule: no consumer may accept a location on epoch equality alone** — the epoch is a fast whole-page invalidation layered over the Keystone-id check (K1), never a substitute for it. |
-| R2 | **Inputs are the existing collectors only**: `sys.access_stats` (the shape axis), Waystone sightings (the value axis), and what a page itself says when walked. An input the optimizer lacks becomes a collection change in the layer that owns collection, spec'd there first. |
+| R2 | **Inputs are the existing collectors only**: the Cabin controller (Part II) reads `sys.access_stats` (the shape axis) and the Cabin store's counters through `stats/optimizer_signals.hpp`. An input it lacks becomes a collection change in the layer that owns collection, spec'd there first. |
 
 ---
 
@@ -70,12 +66,6 @@ Rules:
 - The half-life is one instance-wide config key. Per-consumer half-lives do
   not exist; one would be a new key, not a parameter that silently forks the
   meaning of "hot".
-
----
-
-## 4. and 5. — deleted
-
-The legal-move table and the relayout planner went with relayout (BZ-R5).
 
 ---
 
