@@ -225,11 +225,12 @@ struct ExecStats {
     // walk examines (BN-S3,
     // `workorder-bn-opt-read-update-path.md`).
     //
-    // The growth is out of line so that what inlines is a compare and an
-    // index: with `resize` in the body the compiler kept `For` a call, 2 %
-    // of a scan's server CPU (`bench/v3.2.0/results-bz-s0-premise-*.md`).
-    // `Execute` pre-sizes, so the walk never takes the cold path.
-    StepStats& For(std::uint32_t step_id) {
+    // Forced inline, the growth out of line: GCC kept `For` a call at all
+    // 25 sites in the walk's coroutine bodies, 2 % of a scan's server CPU
+    // (`bench/v3.2.0/results-bz-s0-premise-*.md`), and moving `resize` out
+    // alone did not change its mind. `Execute` pre-sizes, so the walk never
+    // takes the cold path.
+    [[gnu::always_inline]] StepStats& For(std::uint32_t step_id) {
         if (step_id >= steps.size()) [[unlikely]] return Grow(step_id);
         return steps[step_id];
     }
