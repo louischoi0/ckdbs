@@ -182,4 +182,26 @@ struct CellValue {
 // page store would be a cell codec no test could call.
 StatusOr<CellValue> DecodeCell(std::span<const std::byte> cell);
 
+// **An inline cell's value bytes, with DecodeCell()'s checks and no Status**
+// (BZ C4): the scan reads one cell per row, and building and dropping a
+// `StatusOr` around an out-of-line call was 10 % of a varchar-filtered
+// walk's server CPU (`bench/v3.2.0/results-bz-r2-*.md`). Answers only the
+// cell DecodeCell() would answer `kInline` - the width, the tag and the
+// length each checked as it checks them - and nothing for every other cell,
+// which the caller hands to DecodeCell() for its tag or its refusal.
+inline bool InlineCellBytes(std::span<const std::byte> cell,
+                            std::span<const std::byte>& bytes) noexcept {
+    if (cell.size() < kMinInlineCellWidth || cell.size() > kMaxInlineCellWidth) return false;
+    if (static_cast<std::uint8_t>(cell[kCellTagOffset]) !=
+        static_cast<std::uint8_t>(CellTag::kInline)) {
+        return false;
+    }
+    const std::uint32_t len =
+        static_cast<std::uint32_t>(cell[kCellInlineLenOffset]) |
+        (static_cast<std::uint32_t>(cell[kCellInlineLenOffset + 1]) << 8);
+    if (len > InlineCapacity(static_cast<std::uint32_t>(cell.size()))) return false;
+    bytes = cell.subspan(kCellInlineBytesOffset, len);
+    return true;
+}
+
 }  // namespace kds::storage

@@ -557,6 +557,15 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             return Status::OK();
         }
         case kTypeValVarchar: {
+            // The common cell first, with no Status (tagged_cell.hpp); every
+            // other one - NULL-tagged, spilled, refused - takes the full
+            // decode below for its answer.
+            if (std::span<const std::byte> bytes; storage::InlineCellBytes(cell, bytes)) {
+                out.type = parser::ValueType::kStr;
+                AssignBytes(out.str_val, bytes);
+                out.raw_int_text.clear();
+                return Status::OK();
+            }
             auto decoded = storage::DecodeCell(cell);
             if (!decoded.ok()) {
                 return decoded.status().WithContext("column '" + NameOf() + "'");
@@ -1497,9 +1506,10 @@ bool ScanKernelRejects(const ScanKernel& kernel, const catalog::RowLayout& layou
             case ScanKernelTerm::Kind::kVarchar: {
                 // Only an inline value the cell codec vouches for; anything
                 // else - spilled, NULL-tagged, refused - is the residual's.
-                auto cell = storage::DecodeCell(CellOf(layout, payload, term.column));
-                if (!cell.ok() || cell.value().tag != storage::CellTag::kInline) continue;
-                const auto bytes = cell.value().bytes;
+                std::span<const std::byte> bytes;
+                if (!storage::InlineCellBytes(CellOf(layout, payload, term.column), bytes)) {
+                    continue;
+                }
                 keep = ApplyCompare<std::string_view>(
                     std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
                     term.text, term.op);
