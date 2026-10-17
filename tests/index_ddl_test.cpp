@@ -186,13 +186,6 @@ TEST_F(IndexDdlTest, CreateThenShowThenDrop) {
     EXPECT_NE(Run("DROP INDEX by_owner").response.find("ERR"), std::string::npos);
 }
 
-TEST_F(IndexDdlTest, AHeapRelationIsRefusedAndSaysWhy) {
-    ASSERT_EQ(Run("CREATE TABLE h (id int64, owner int64) HEAP").response.substr(0, 3), "CRE");
-    const std::string out = Run("CREATE INDEX ix ON h (owner)").response;
-    EXPECT_EQ(out.substr(0, 3), "ERR") << out;
-    EXPECT_NE(out.find("heap-clustered"), std::string::npos) << out;
-}
-
 TEST_F(IndexDdlTest, TheTupleKeyAndAnUnknownColumnAreBothRefused) {
     ASSERT_EQ(Run("CREATE TABLE t (id int64, owner int64) BTREE").response.substr(0, 3),
               "CRE");

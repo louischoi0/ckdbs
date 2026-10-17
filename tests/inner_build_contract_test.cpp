@@ -186,8 +186,7 @@ TEST_F(InnerBuildContractTest, ANullProbeNotInStopsItsWalkAndAnswersTheSameBuilt
         schema.columns.push_back(row);
     }
     ASSERT_TRUE(boot_->catalog
-                    .CreateTable(catalog::kNamespacePublic, "np", schema,
-                                 catalog::ClusteredType::kBtree)
+                    .CreateTable(catalog::kNamespacePublic, "np", schema)
                     .ok());
     parser::AstValue null_value;
     null_value.type = parser::ValueType::kNull;

@@ -21,7 +21,7 @@ dispatcher's own commands):
 | DML | `INSERT`, `UPDATE`, `DELETE` |
 | Query | `SELECT` (joins, subqueries, `GROUP BY`, aggregates), `ANALYZE <select>` |
 | Transactions | `BEGIN`/`START`, `COMMIT`, `ROLLBACK`/`ABORT`, `SET ISOLATION LEVEL` |
-| Introspection | `SHOW META/TABLES/NAMESPACES/PAGE/PATTERNS/ACCESS/BUDGET/CABINS/INDEXES/FKEYS/ASSERTIONS/RELAYOUT`, `DESCRIBE` |
+| Introspection | `SHOW META/TABLES/NAMESPACES/PAGE/PATTERNS/ACCESS/BUDGET/CABINS/INDEXES/FKEYS/ASSERTIONS/TRANSITIONS/CABIN_OPTIMIZER`, `DESCRIBE` |
 | Session | `PING`, `SYNC`, `STOP` |
 
 `DROP TABLE` and `ALTER TABLE` exist and are **catalog-only** (see their
@@ -86,7 +86,7 @@ Any relation name may be written `<namespace>.<relation>`, everywhere a
 relation is named: `FROM`, every `JOIN`, inside a subquery, `INSERT INTO`,
 `UPDATE`, `DELETE FROM`, `PURGE FROM`, `REFERENCES`, `ALTER TABLE`,
 `DROP TABLE`, `CREATE INDEX ON`, `CREATE CABIN ON`, `CREATE ASSERTION ON`,
-`CREATE TRANSITION ON`, `DESCRIBE` and `SHOW RELAYOUT`.
+`CREATE TRANSITION ON` and `DESCRIBE`.
 
 **A relation's name is unique within its namespace.** `ledger.accounts` and
 `trading.accounts` are two relations. A qualified name means the relation in
@@ -126,7 +126,7 @@ exactly, so `USE LEDGER` is `no namespace named 'LEDGER'`.)
 - **The catalog is read only as `sys.<view>`**: `SELECT * FROM sys.tables`.
   A bare `tables` is no relation of the session's namespace and the refusal
   says `read it as sys.tables`; no statement other than a `SELECT` of a view
-  (and `SHOW RELAYOUT sys.<name>`) names a catalog relation.
+  names a catalog relation.
 - A KWP load names its relation `ns.t`, or `t` for `public`'s.
 
 ### CREATE TABLE
@@ -164,17 +164,23 @@ CREATE TABLE [<namespace>.]<name>
   `spare_slots` and `spare_free`. `SPARE` is an identifier, not a reserved
   word; a count past 64 or a second `SPARE` is refused with its byte.
 
-- **`HEAP` is suspended and the storage clause defaults to `BTREE`.** Writing
-  `HEAP` is refused: `ERR HEAP storage is suspended (SUS-1) and no new heap
-  relation is created (byte <n>); BTREE is the default and every existing
-  heap relation still mounts and serves`. The suspension is a refusal at
-  *creation* only — a database that already holds heap relations opens,
-  reads, writes and recovers them exactly as before, and nothing about them
-  is deprecated.
-- `BTREE` gives the relation a clustered B+ tree on the tuple key; only a
-  btree relation can carry a secondary index or be an FK parent. With `HEAP`
-  suspended those are no longer distinctions between two choices you can
-  make: they describe the one storage form a new relation takes.
+- **The storage clause defaults to `BTREE`**: a clustered B+ tree on the
+  tuple key, which is the relation's first column and must be an integer
+  type.
+- **`HEAP` declares a relation with no tuple key column.** Every column you
+  write is an ordinary one — the first may be any type, nullable and
+  updatable — and the engine adds a hidden tuple key in front of them,
+  issued per row in insertion order. The relation is still a B+ tree
+  underneath, ordered by that key, so a scan without `ORDER BY` reads rows in
+  insertion order (not a promise). No statement can name the hidden key:
+  `SELECT *`, `RETURNING *`, `DESCRIBE` and `sys.columns` show only your
+  columns; a positional `INSERT` supplies exactly your columns, and every
+  row's key is issued. Only the KWP load stream carries it, as field 0 — a
+  NULL there takes an issued key, a value names one. A `HEAP` relation may
+  carry secondary indexes, Cabins, assertions and Transitions and be an FK
+  child; it cannot be an FK parent and cannot be `PURGE`d (both name tuple
+  keys). `sys.tables.clustered_type` reads `HEAP`, `BTREE`, or `CHAIN` for
+  a system relation.
 - **There is no key mode.** Every relation takes a caller-named tuple key
   or issues one when `INSERT` omits it, so nothing about keys is declared
   here. `EXPLICIT` is still accepted and **does nothing** — it states what is
@@ -190,8 +196,7 @@ CREATE TABLE [<namespace>.]<name>
 - The words are ordinary **identifiers**, not reserved (see the appendix) — a
   column may still be named `explicit` or `btree`.
 - **`EXPLICIT` does not change the storage default.** `CREATE TABLE t (...)`
-  and `CREATE TABLE t (...) EXPLICIT` are both `BTREE`, as is every
-  unqualified `CREATE TABLE` while `HEAP` is suspended.
+  and `CREATE TABLE t (...) EXPLICIT` are both `BTREE`.
 - At least one column is required.
 - The optional per-column suffixes come in a **fixed order**: nullability,
   then `REFERENCES`, then the cabin policy. Two optional suffixes in either
@@ -201,14 +206,14 @@ CREATE TABLE [<namespace>.]<name>
   opts it in, and writing `NOT NULL` spells the default out loud for
   standard-minded schemas. This is deliberate (null.md D1): a
   nullable-by-default rule would have silently reinterpreted every
-  `CREATE TABLE` written before the feature existed. Consequences: the
-  first column (the tuple key) may not be `NULL`; neither may any index
+  `CREATE TABLE` written before the feature existed. Consequences: a
+  declared tuple key (the first column, except on a `HEAP`) may not be `NULL`; neither may any index
   key or covered column (D2 — `IS NULL` answers by scan); a nullable
   column costs its relation a tail bitmap byte per 8 nullable columns,
   and a relation with none costs nothing.
 
-**The Keystone contract (tuple key).** The first column *is* the tuple
-key:
+**The Keystone contract (tuple key).** On every relation not created
+`HEAP`, the first column *is* the tuple key (a `HEAP`'s is hidden, above):
 
 - It must be declared with an integer type (`catalog::CheckKeystoneColumn`,
   checked at CREATE TABLE).
@@ -249,8 +254,8 @@ key:
   `AlreadyExists` at once. A named key can also wait on another session's
   open write over a range that covers it. Every `BTREE` page's rows stay in
   key order however keys arrive, so `ORDER BY <tuple key>` costs nothing (see
-  ORDER BY). A `HEAP` relation (none can be created since SUS-1) still
-  refuses a named key below its high-water mark, `OutOfRange`.
+  ORDER BY). No relation refuses a named key for being below the keys it
+  already holds.
 - It cannot be `UPDATE`d: it is the tuple's identity, not a field of it.
   Naming a key at insert and changing one afterwards are unrelated
   permissions; only the first is granted.
@@ -284,8 +289,9 @@ CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts, amount int6
 - No parent column is written **and none may be**: the parent side is always
   the referenced relation's Keystone id. `REFERENCES accounts(id)` is refused
   (`Unsupported`) — it would spell out the only thing it could mean.
-- A heap-clustered parent is refused at declaration: a parent needs a tuple key
-  index for the check not to be a scan.
+- A `HEAP` parent is refused at declaration (`Unsupported`): the child's
+  column holds the parent's tuple key, and a heap's is hidden, so no child
+  value could name a parent row. A `HEAP` child is fine.
 - v1 is RESTRICT-only and fail-fast. INSERT/UPDATE of an fk column checks the
   parent exists; DELETE of a parent checks for live children and stops at the
   first one. Violations answer `ERR FK_VIOLATION retryable=0 ...`.
@@ -673,7 +679,7 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 
 | Declared name | Storage | Notes |
 |---|---|---|
-| `int8`, `int16`, `int32`, `int64` | 1/2/4/8 bytes | first column must be one of the integer types |
+| `int8`, `int16`, `int32`, `int64` | 1/2/4/8 bytes | a declared tuple key (the first column) must be one of the integer types |
 | `uint64` | 8 bytes | full range preserved via the literal's digit text |
 | `bool` | 1 byte | |
 | `varchar` | one tagged cell of `inline_cell_width` (64) bytes | longer values spill to the var-heap; > 8144 bytes is `NotImplemented` |
@@ -766,6 +772,9 @@ INSERT INTO trades (sym, id, qty) VALUES ('IBM', 8000, 2);
   no body column individually — so a wrong
   length is refused naming both:
   `ERR expected 3 value(s) including tuple key column 'id', or 2 to have it issued; got 4 (byte <n>)`.
+- **A `HEAP` relation has one arity**: one value per declared column, and
+  the key is always issued. Any other length is refused:
+  `ERR expected 2 value(s), one per column; got 3 (byte <n>)`.
 - **A `NULL` tuple key asks for an issued one** (as a KWP load row's
   does): `INSERT INTO trades VALUES (NULL, 'AMD', 1)` is the issued-key row
   at full width.
@@ -996,9 +1005,10 @@ is placed as if the key had never been used. It is the one exception to
   or for an undecided writer of the key. It polls for up to 1 s, then is
   refused `TXN_CONFLICT retryable=1` naming the key, having purged nothing.
   While it waits it holds nothing, so DDL on the relation is not delayed.
-- **Autocommit only, `BTREE` only, admin only.** Inside `BEGIN` it is
-  refused `NOT_IMPLEMENTED` without poisoning the transaction; a system or
-  heap relation is `UNSUPPORTED`; it needs the admin role.
+- **Autocommit only, declared tuple key only, admin only.** Inside `BEGIN`
+  it is refused `NOT_IMPLEMENTED` without poisoning the transaction; a
+  system or `HEAP` relation is `UNSUPPORTED` (a heap's tuple key is hidden,
+  so no window can name it); it needs the admin role.
 - **Reply:** `PURGED <n>`, the keys freed; `rows_affected` on the wire. It
   is durable as any commit is, under the session's durability class.
 - **Partial outcomes.** The whole window is judged before anything is
@@ -1445,7 +1455,6 @@ Dispatcher commands, not parser statements:
 | `SHOW FKEYS` | declared foreign keys |
 | `SHOW ASSERTIONS` | assertions with `enforcing=` and live counters (checks/violations/reserved/aborted) |
 | `SHOW TRANSITIONS` | Transitions: id, name, relation, governed column's position, and the declaration verbatim |
-| `SHOW RELAYOUT [<table>]` | the physical optimizer's shadow report (candidate moves, each blocked by a named gate) |
 | `DESCRIBE <table>` (`DESC`) | columns, types, `clustered_type=`, `next_id`, `ids_issued`/`ids_remaining`/`budget_used`. A tuple key column reports `autoincrement=if-omitted`, every other column `no` |
 | `PING` | `PONG` |
 | `SYNC` | forces log + store durability: `OK synced` |
@@ -1471,13 +1480,12 @@ literal's byte, before any row is read.
 relation's name is unique only within its namespace: `namespace` next to the
 relation's name in `sys.tables`, `sys.objects`, `sys.columns` (so
 `DESCRIBE`), `sys.indexes`, `sys.access_stats`, `sys.relation_stats`,
-`sys.cabins`, `sys.assertions`, `sys.transitions`, `sys.relayout` and
+`sys.cabins`, `sys.assertions`, `sys.transitions` and
 `sys.cabin_optimizer`, `child_namespace` / `parent_namespace` in
 `sys.fkeys`, and `references_namespace` beside `sys.columns.references`.
 Each is the SQL spelling (`sys`, `public`, or the name a `CREATE NAMESPACE`
 gave), and NULL where the relation's name is. `SHOW BUDGET` prints it too.
-A view read by a relation name (`sys.columns`' `rel_name`, `sys.relayout`'s
-`name`) takes a bare name's namespace from a `namespace = '<name>'`
+A view read by a relation name (`sys.columns`' `rel_name`) takes a bare name's namespace from a `namespace = '<name>'`
 condition when there is one, else from the session: `WHERE namespace =
 'ledger' AND rel_name = 't'` is `ledger.t`.
 
@@ -1614,16 +1622,15 @@ in §7 below now carries and which both used to reach a client as a bare
 | A row whose length is not the `INSERT` column list's | `InvalidArgument` — `ERR expected <n> value(s), one per listed column; got <k> at byte <b>`, with ` (row <r>)` on a multi-row statement |
 | A non-integer supplied tuple key | `InvalidArgument` — `ERR tuple key column '<name>' needs an integer literal (byte <n>)` |
 | A supplied tuple key outside `[1, 2^48 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR tuple key <k> is outside the Keystone id space [1, 281474976710655] (byte <n>)` |
-| A supplied tuple key already bound on a `BTREE` relation — *duplicate* | `AlreadyExists` — `ERR duplicate tuple key <k> already present at page <p> slot <s> (byte <n>)`, or for a `DELETE`d row's key, until a `PURGE` frees it, `ERR duplicate tuple key <k>: a row with this key was deleted; PURGE frees its key (page <p> slot <s>) (byte <n>)` |
-| A supplied tuple key below the high-water mark of a `HEAP` relation (none can be created since SUS-1) | `OutOfRange` — `ERR tuple key <k> is below relation <oid>'s high-water mark <m>; a named key must sort above every key the relation has placed or issued, which is what keeps every page's slot order its key order`, or when the key sorts below the chain's tail `ERR tuple key <k> is below the relation's high-water mark: the chain's tail, page <p>, opens at <m>, an id already placed; a named key must sort above every key the relation has placed or issued` (neither form carries a byte) |
-| An omitted tuple key on a `BTREE` relation whose issued id met a concurrently named key 8 times in a row | `AlreadyExists` — `ERR duplicate tuple key <k> already present at page <p> slot <s>` (no byte: the key was issued, not written) |
+| A supplied tuple key already bound — *duplicate* | `AlreadyExists` — `ERR duplicate tuple key <k> already present at page <p> slot <s> (byte <n>)`, or for a `DELETE`d row's key, until a `PURGE` frees it, `ERR duplicate tuple key <k>: a row with this key was deleted; PURGE frees its key (page <p> slot <s>) (byte <n>)` |
+| An omitted tuple key whose issued id met a concurrently named key 8 times in a row | `AlreadyExists` — `ERR duplicate tuple key <k> already present at page <p> slot <s>` (no byte: the key was issued, not written) |
 | `ASSIGNED` in CREATE TABLE | `Unsupported` — `ERR UNSUPPORTED retryable=0 the ASSIGNED key mode no longer exists (byte <n>) - ...` (removed 2026-08-25 and not coming back, which is why it is the permanent half; `EXPLICIT` is accepted and does nothing) |
 | Assigning the tuple key in UPDATE | `Unsupported` — `ERR UNSUPPORTED retryable=0 tuple key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
 | Unknown SET target in UPDATE | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
 | A column assigned twice in one UPDATE's SET list | `InvalidArgument` — `ERR column '<name>' is assigned more than once at byte <n>` (the second name's byte; refused at compile, so nothing is written) |
 | Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE, REINDEX)` |
 | `PURGE` inside a transaction | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE inside a transaction is not implemented; run it in autocommit (byte 0)`; the transaction is not poisoned |
-| `PURGE` of a system or heap relation | `Unsupported` — `ERR UNSUPPORTED retryable=0 '<t>' is a system relation; PURGE frees keys of user relations only (byte <n>)`, or `… is a heap relation, whose chain grows only at its tail; PURGE frees keys of btree relations only (byte <n>)` |
+| `PURGE` of a system or `HEAP` relation | `Unsupported` — `ERR UNSUPPORTED retryable=0 '<t>' is a system relation; PURGE frees keys of user relations only (byte <n>)`, or `… '<t>' is a heap, whose tuple key is hidden; PURGE's window names tuple keys, so it frees none on a heap (byte <n>)` |
 | `PURGE` with no `WHERE`, or a conjunct other than a tuple key comparison with an integer literal | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE needs a WHERE naming the tuple key; … (byte <n>)`, or `… PURGE admits only comparisons of the tuple key with an integer literal (=, <, <=, >, >=, BETWEEN); this conjunct is not one (byte <n>)` |
 | `PURGE` naming one live key, or a negative tuple key literal | `InvalidArgument` — `ERR tuple key <k> is live; PURGE frees only a key whose row was deleted (byte <n>)`, or `ERR tuple key literal <k> is negative, and no key is below 1 (byte <n>)` |
 | `PURGE` meeting an older snapshot, or an undecided writer, for 1 s | `TxnConflict`, retryable — `ERR TXN_CONFLICT retryable=1 PURGE cannot free tuple key <k> yet: …; nothing was purged, and running it again once that ends will` |

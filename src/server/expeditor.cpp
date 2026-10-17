@@ -82,7 +82,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "join_build_max_rows",   "scan_kernel",  "lock_wait_fault_net_ms",
             "max_locks_per_txn",     "tcp_keepalive_s",
             "txn_lifetime_ceiling_ms",
-            "decay_half_life",       "physical_optimizer",
+            "decay_half_life",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
             "cabin_optimizer_theta_swap_pct",   "cabin_optimizer_theta_extend_pct",
@@ -194,6 +194,10 @@ std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfi
         {"range_size_ids",
          "range_size_ids is retired since v3.0.0's M3: insert spreading went with range "
          "ownership, so no range is opened and a relation is one structure; remove the key"},
+        // BZ-R5: relayout Part I, the planner this key switched, is deleted.
+        {"physical_optimizer",
+         "physical_optimizer is retired since BZ: the relayout planner and SHOW RELAYOUT it "
+         "switched are deleted; the Cabin controller is 'cabin_optimizer'; remove the key"},
     };
 }
 
@@ -482,31 +486,6 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
                 ", the largest idle Linux takes (MAX_TCP_KEEPIDLE); 0 turns keepalive off");
         }
         tcp_keepalive_s = static_cast<std::uint32_t>(v.value());
-    }
-    if (file.Has("physical_optimizer")) {
-        auto v = file.GetString("physical_optimizer");
-        if (!v.ok()) return v.status();
-        std::string mode = v.value();
-        for (char& c : mode) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (mode == "off") {
-            physical_optimizer = PhysicalOptimizerMode::kOff;
-        } else if (mode == "shadow") {
-            physical_optimizer = PhysicalOptimizerMode::kShadow;
-        } else if (mode == "on") {
-            // Refused naming every gate, so the operator learns what is
-            // missing rather than what word to try next
-            // (docs/spec/physical-optimizer.md §6).
-            return Status::InvalidArgument(
-                file.origin() +
-                ": physical_optimizer = on is not available: every relayout plan is blocked - "
-                "compact on the reader horizon (no user-relation purge consumes it, txn.md §4.1), cluster "
-                "on the ordered-between property kRange pruning reads, defrag on cross-relation "
-                "page reuse breaking trail validation (docs/spec/physical-optimizer.md §6). "
-                "Use 'shadow' for the report, 'off' to silence it.");
-        } else {
-            return Status::InvalidArgument(file.origin() + ": physical_optimizer '" + v.value() +
-                                           "' is not off|shadow (on is refused, naming why)");
-        }
     }
     if (file.Has("decay_half_life")) {
         auto v = file.GetUint("decay_half_life");
@@ -1382,8 +1361,6 @@ Status Expeditor::PersistTrxIdCeiling() {
 
 OptimizerSurface Expeditor::Optimizer() {
     OptimizerSurface surface;
-    surface.relayout_mode = config_.physical_optimizer;
-    surface.decay_half_life_ns = config_.decay_half_life_ns;
     surface.signals = &*optimizer_signals_;
     surface.cabin_optimizer_on = &cabin_optimizer_on_;
     if (cabin_controller_) {

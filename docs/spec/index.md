@@ -111,22 +111,20 @@ Cabin. An ordinary index refuses no write for a reason of its own; a
 ## 3. Which clustered types may carry one
 
 > **IX3 — a secondary index is built on a btree-clustered relation only.**
-> `CREATE INDEX` on a heap-clustered relation is refused
+> Every user relation is one - a heap too, under its hidden tuple key
+> (`heap-and-tuple.md` §3.1b) - so the refusal reaches only a system
+> relation, whose catalog chain has no tuple key descent
 > (`Catalog::CheckIndexDef`, `InvalidArgument`, naming this rule).
 
-An entry's payload is the tuple key. Resolving a tuple key costs one descent on a btree
-relation and a **chain scan** on a heap one, so an index over a heap
-relation would turn one full scan into N partial ones — the identical
-argument as `foreign-keys.md` F1's refusal of a heap parent. A heap
-relation's banked acceleration on a non-tuple-key column is its Cabin
-(`cabin.md` §4a), whose hint-plus-walk fallback exists precisely because a
-heap has no tuple key descent to heal with.
+An entry's payload is the tuple key, and resolving one costs one descent of
+the clustered tree. A heap's index entries carry its hidden key like any
+other relation's; no statement names that key, and none needs to.
 
 Three consequences of the entry format:
 
 1. **The entry carries no location hint** — no `(page_id, slot)`, no
    epoch — so nothing here can dangle and nothing needs healing.
-2. **Relayout cannot invalidate an index.** A tuple key is stable for life
+2. **No tuple move can invalidate an index.** A tuple key is stable for life
    (invariant 11, K1), so moving a tuple moves nothing an index knows about.
 3. **An index step grants no key order.** Phase 1 collects in index-key
    order and sorts into **tuple key** order before resolving (IX8a), so an
@@ -613,9 +611,9 @@ the page's tuples out, drop the span, then append — because appending fetches
 pages and `parser-v2.md` I15's R1 forbids a fetch under a live span; that also
 bounds the memory at one page rather than at one relation. And every refusal
 runs **before** the walk, through `Catalog::CheckIndexDef` — the same checks
-`CreateIndex` makes, factored out rather than copied, so a heap relation is
-refused by name instead of surfacing as a page-type error from inside the
-build.
+`CreateIndex` makes, factored out rather than copied, so a system relation
+is refused by name instead of surfacing as a page-type error from inside
+the build.
 
 **A `REINDEX` is this backfill again** (BY-R6); §12 states what it keeps.
 
@@ -676,7 +674,8 @@ unique when it committed. The read path does not move (§8, BX-R10).
 
 Refused, each naming the reason:
 
-- **A heap-clustered relation** (IX3, `InvalidArgument`).
+- **A system relation** (IX3, `InvalidArgument`): its catalog chain has no
+  tuple key descent. A heap is admitted (`heap-and-tuple.md` §3.1b).
 - **A nullable key column** (`NotImplemented`, `docs/spec/null.md`).
 - **An index on the tuple key** — the clustered tree already is one.
 - **A `float` column** — nothing settled its encoding, so it is not
@@ -708,7 +707,7 @@ Refused, each naming the reason:
 ## 12. Catalog, format and WAL
 
 > **IX12 — `SysIndexRow` is 116 bytes.** It arrived with superblock 12; the
-> superblock now refuses every version but 27, so every mountable volume
+> superblock now refuses every version but the current one (30), so every mountable volume
 > carries it. Its `flags` byte carries `kIndexFlagUnique` since 27 (IX11).
 
 The row (`include/kds/catalog/rows.hpp`):

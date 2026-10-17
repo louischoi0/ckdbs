@@ -44,8 +44,7 @@ TEST(BootstrapTest, SecondBootstrapLoadsExistingSuperBlockWithoutReRunningCatalo
     schema.columns.push_back(col);
 
     auto table_oid =
-        first.value().catalog.CreateTable(catalog::kNamespacePublic, "widgets", schema,
-                                           catalog::ClusteredType::kHeap);
+        first.value().catalog.CreateTable(catalog::kNamespacePublic, "widgets", schema);
     ASSERT_TRUE(table_oid.ok());
 
     auto second = BootstrapDatabase(store, 2000);
@@ -103,8 +102,7 @@ TEST(BootstrapTest, AFreshDatabasePinsTheConfiguredCellWidth) {
     s.type_val = catalog::kTypeValVarchar;
     schema.columns = {id, s};
 
-    auto oid = result.value().catalog.CreateTable(catalog::kNamespacePublic, "t", schema,
-                                                  catalog::ClusteredType::kHeap);
+    auto oid = result.value().catalog.CreateTable(catalog::kNamespacePublic, "t", schema);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto access = result.value().catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok()) << access.status().message();

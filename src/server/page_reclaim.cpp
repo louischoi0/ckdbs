@@ -300,14 +300,6 @@ bool PageReclaimer::VisitOne(Job& job, const Visit& visit) {
                 Skip(job, visit.page, "is owned by oid " + std::to_string(owner));
                 return true;
             }
-            // A pre-SUS-1 heap relation's anchor names its chain's head:
-            // walked as a chain, from this page.
-            if (!index && visit.level == kAnyLevel && type == TypeByte(PageType::kHeap)) {
-                job.chains.emplace_back();
-                job.frontier.push_back(Visit{visit.page, Expect::kHeapChain, visit.owner, 0,
-                                             static_cast<std::uint32_t>(job.chains.size() - 1)});
-                return true;
-            }
             if (type == TypeByte(leaf) && (visit.level == 0 || visit.level == kAnyLevel)) {
                 if (!Take(job, visit, visit.page)) return false;
                 if (job.levels.empty()) job.levels.emplace_back();
@@ -369,19 +361,14 @@ bool PageReclaimer::VisitOne(Job& job, const Visit& visit) {
             return true;
         }
 
-        case Expect::kHeapChain:
         case Expect::kVarHeapChain: {
-            const PageType want =
-                visit.expect == Expect::kHeapChain ? PageType::kHeap : PageType::kVarHeap;
-            if (type != TypeByte(want) || owner != visit.owner) {
+            if (type != TypeByte(PageType::kVarHeap) || owner != visit.owner) {
                 Skip(job, visit.page, "is not a page of this relation's chain");
                 return true;
             }
             if (!Take(job, visit, visit.page)) return false;
             job.chains[visit.chain].push_back(visit.page);
-            const PageId next = visit.expect == Expect::kHeapChain
-                                    ? heap::PageView(bytes).next_page_id()
-                                    : varheap::PageNextPageId(bytes);
+            const PageId next = varheap::PageNextPageId(bytes);
             if (next != kInvalidPageId) {
                 job.frontier.push_back(Visit{next, visit.expect, visit.owner, 0, visit.chain});
             }

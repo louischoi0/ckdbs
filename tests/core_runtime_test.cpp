@@ -377,8 +377,7 @@ catalog::Schema TwoColumnSchema() {
 TEST_F(CoreRuntimeTest, APeerResolvesARelationCoreZeroCreated) {
     // The point of the whole phase: a non-zero core can read the catalog,
     // so it can resolve a relation, so it can serve a statement.
-    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap);
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     FlushCatalog();
 
@@ -408,8 +407,7 @@ TEST_F(CoreRuntimeTest, APeerStatementSeesADdlThroughItsOwnBoundary) {
     // mutant removing that head's `Revalidate()` kills.
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "early", TwoColumnSchema(),
-                                           catalog::ClusteredType::kBtree);
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "early", TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     Session s;
     const std::string first = peer.value()->dispatcher().Dispatch("DESCRIBE early", &s).response;
@@ -441,16 +439,14 @@ TEST_F(CoreRuntimeTest, APeerSeesADdlAtItsNextCachedReadWithNothingSent) {
     // exists, and a cached "no such name" is not a thing - so the fact
     // that goes stale is the table list.
     ASSERT_TRUE(core0_->catalog
-                    .CreateTable(catalog::kNamespacePublic, "early", TwoColumnSchema(),
-                                 catalog::ClusteredType::kHeap)
+                    .CreateTable(catalog::kNamespacePublic, "early", TwoColumnSchema())
                     .ok());
     auto listed = peer.value()->catalog().ListTables();
     ASSERT_TRUE(listed.ok()) << listed.status().message();
     const std::size_t before = listed.value().size();
 
     ASSERT_TRUE(core0_->catalog
-                    .CreateTable(catalog::kNamespacePublic, "late", TwoColumnSchema(),
-                                 catalog::ClusteredType::kHeap)
+                    .CreateTable(catalog::kNamespacePublic, "late", TwoColumnSchema())
                     .ok());
 
     // The peer's next boundary - what `DispatchAndStage`'s head does for
@@ -500,8 +496,7 @@ TEST_F(CoreRuntimeTest, APeerResolvesARelationWhoseCatalogRowsSpilledOntoAnOverf
     for (int i = 0; i < 64 && !core0_store_->IsAllocated(first_overflow); ++i) {
         spilled = "spill" + std::to_string(i);
         auto created = core0_->catalog.CreateTable(catalog::kNamespacePublic, spilled,
-                                                   TwoColumnSchema(),
-                                                   catalog::ClusteredType::kHeap);
+                                                   TwoColumnSchema());
         ASSERT_TRUE(created.ok()) << created.status().message();
     }
     ASSERT_TRUE(core0_store_->IsAllocated(first_overflow))
@@ -572,8 +567,7 @@ TEST_F(CoreRuntimeTest, APeerIssuesRowIdsFromTheRelationsOwnMarkInIssueOrder) {
     // with spreading off. The lease this replaced handed a peer a block
     // ahead of core 0's mark, so core 0's next id sat above the peer's
     // later ones.
-    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap);
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema());
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -864,7 +858,7 @@ TEST(CheckpointGateTest, TwoThreadsNeverHoldTheRunAtOnce) {
 // now, and one handed the instance's resumes none - the next cell.)
 TEST_F(CoreRuntimeTest, UnderOneStreamAPeerWithAnAssertionInTheCatalogStillMounts) {
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "asserted",
-                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
+                                           TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(exec::InsertAssertion(core0_->catalog, *core0_store_, /*wal=*/nullptr,
                                       /*id=*/1, oid.value(), "a_bound",
@@ -895,7 +889,7 @@ TEST_F(CoreRuntimeTest, APeerHandedTheInstancesAssertionRegistryResumesNothing) 
     // leave it in the registry's unenforceable set; one that did not leaves
     // the registry exactly as it was handed.
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "asserted_shared",
-                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
+                                           TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(exec::InsertAssertion(core0_->catalog, *core0_store_, /*wal=*/nullptr,
                                       /*id=*/1, oid.value(), "a_bound",
@@ -1059,8 +1053,7 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedHere) {
     // which is the point. Since AT-S9 no relation has an owner and no read
     // opens the pipeline, split or not.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated", TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto access = catalog2.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -1126,7 +1119,7 @@ TEST_F(CoreRuntimeTest, APeerOnASharedPoolTakesNoBudgetOfItsOwn) {
 }
 
 TEST_F(CoreRuntimeTest, APeerInsertsIntoARelationItCreatedEndToEnd) {
-    // PW1c-5's e2e: a peer runs a single-row INSERT into a heap relation
+    // PW1c-5's e2e: a peer runs a single-row INSERT into a relation
     // core 0 created and reads it back. It needed every funding piece -
     // fault grant, write grant, a row-id block, a trx-id block - until
     // each retired: the grants at AW-S1b, when the peer began writing
@@ -1134,8 +1127,7 @@ TEST_F(CoreRuntimeTest, APeerInsertsIntoARelationItCreatedEndToEnd) {
     // began carving its transaction ids and bumping the relation's mark
     // itself.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "owned", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "owned", TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -1179,8 +1171,7 @@ void CoreRuntimeTest::PeerPagesSurviveARestart(bool flush_before_restart,
                                                const std::string& name) {
     {
         catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
-        auto oid = catalog2.CreateTable(catalog::kNamespacePublic, name, TwoColumnSchema(),
-                                        catalog::ClusteredType::kHeap);
+        auto oid = catalog2.CreateTable(catalog::kNamespacePublic, name, TwoColumnSchema());
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -1250,8 +1241,7 @@ TEST_F(CoreRuntimeTest, APeerGrowsABtreeWithoutMovingItsSysTablesRow) {
     // move in the relation's anchor (the lease and the grant that funded
     // both went at AW-S1b) - and the sys.tables row never moves.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "btree_owned", TwoColumnSchema(),
-                                    catalog::ClusteredType::kBtree);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "btree_owned", TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto row = catalog2.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
@@ -1288,7 +1278,7 @@ TEST_F(CoreRuntimeTest, ACreatedRelationsAnchorIsWiredWholeThroughTheCatalog) {
     // pinned by the redo replay test and exercised by the sim's crash
     // sweep, which remounts created relations.)
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "anchored",
-                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
+                                           TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto row = core0_->catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
@@ -1314,8 +1304,7 @@ TEST_F(CoreRuntimeTest, TheAnchorNotTheRowIsTheClusteredRootsTruth) {
     // the next fill while the CREATE-fixed row stays put. Simulated by
     // moving the anchor's slot by hand and filling through a fresh
     // catalog over the same store - the cache-miss path.
-    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "moved", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap);
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "moved", TwoColumnSchema());
     ASSERT_TRUE(oid.ok());
     auto row = core0_->catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
@@ -1345,8 +1334,7 @@ TEST_F(CoreRuntimeTest, ACreateIndexOnARelationAnotherCoreCreatedBuildsWhereItRu
     // client had nothing to reach it with. `CREATE INDEX` builds where its
     // session is now, and no relation has an owner since AT-S9.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated_ix", TwoColumnSchema(),
-                                    catalog::ClusteredType::kBtree);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated_ix", TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -1421,10 +1409,10 @@ TEST_F(CoreRuntimeTest, APeerListenerServesAReadAndAWriteWithNothingGrantedAndRo
     // since AT-S9 (`local0` was core 0's, the foreign control, until then).
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto rotated = catalog2.CreateTable(catalog::kNamespacePublic, "rotated",
-                                        TwoColumnSchema(), catalog::ClusteredType::kHeap);
+                                        TwoColumnSchema());
     ASSERT_TRUE(rotated.ok()) << rotated.status().message();
     auto local0 = core0_->catalog.CreateTable(catalog::kNamespacePublic, "local0",
-                                              TwoColumnSchema(), catalog::ClusteredType::kHeap);
+                                              TwoColumnSchema());
     ASSERT_TRUE(local0.ok()) << local0.status().message();
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -1728,8 +1716,7 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     // not know it had to.
     rig.catalog2->SetOidSequence(&oid_sequence_);
     rig.catalog2->SetMarkCounter(&pending_marks_);
-    auto oid = rig.catalog2->CreateTable(catalog::kNamespacePublic, table, TwoColumnSchema(),
-                                         catalog::ClusteredType::kBtree);
+    auto oid = rig.catalog2->CreateTable(catalog::kNamespacePublic, table, TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     rig.oid = oid.value();
     auto row = rig.catalog2->GetSysTableRow(rig.oid);
@@ -2458,7 +2445,7 @@ TEST_F(CoreRuntimeTest, AStatementSpanningRelationsFromTwoCoresRunsHere) {
     // A second relation, created through core 0's catalog; the join spanned
     // two owners until AT-S9.
     auto local = rig.catalog2->CreateTable(catalog::kNamespacePublic, "span_local",
-                                           TwoColumnSchema(), catalog::ClusteredType::kBtree);
+                                           TwoColumnSchema());
     ASSERT_TRUE(local.ok()) << local.status().message();
     auto row = rig.catalog2->GetSysTableRow(local.value());
     ASSERT_TRUE(row.ok());

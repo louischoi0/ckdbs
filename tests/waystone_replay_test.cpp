@@ -44,10 +44,8 @@ protected:
         MakeDispatcher(/*record=*/true, /*replay=*/true);
 
         ASSERT_EQ(Run("CREATE TABLE t (id int64, v int64) BTREE").substr(0, 7), "CREATED");
-        // **HEAP, pinned since SUS-1**: `t` above is the btree half. Replay
-        // replaces a descent on one and a chain scan on the other, so a pair
-        // that is btree twice tests one of the two.
-        ASSERT_EQ(Run("CREATE TABLE h (id int64, v int64) HEAP").substr(0, 7), "CREATED");
+        // A second relation, for the cells that tell two apart.
+        ASSERT_EQ(Run("CREATE TABLE h (id int64, v int64) BTREE").substr(0, 7), "CREATED");
         for (int i = 1; i <= 5; ++i) {
             ASSERT_EQ(Run("INSERT INTO t VALUES (" + std::to_string(i * 10) + ")").substr(0, 8),
                       "INSERTED");
@@ -134,17 +132,6 @@ TEST_F(WaystoneReplayTest, AReplayedStepReturnsExactlyWhatTheDescentReturned) {
     const std::string analyzed = Run("ANALYZE " + sql);
     EXPECT_NE(analyzed.find("replays=1"), std::string::npos)
         << "expected the step to be served from the trail; got: " << analyzed;
-}
-
-TEST_F(WaystoneReplayTest, ReplayTurnsAHeapChainScanIntoOneRead) {
-    // The case spec section 7 calls large: a heap relation has no tuple key index,
-    // so the authoritative path for `WHERE id = n` is a full chain scan.
-    const std::string sql = "SELECT * FROM h WHERE id = 4";
-    const std::string replayed = RunUntilRecorded(sql);
-
-    // Same answer as the scan gave.
-    MakeDispatcher(/*record=*/false, /*replay=*/false);
-    EXPECT_EQ(Run(sql), replayed);
 }
 
 // ---- The miss causes, one test each --------------------------------------

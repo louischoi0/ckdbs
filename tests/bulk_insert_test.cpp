@@ -172,34 +172,18 @@ TEST_F(BulkInsertTest, RowsMayNameTheirOwnKeysOrNotWithinOneStatement) {
     // The inverse of what this asserted until 2026-08-25 (§4.1): naming the
     // tuple key is an arity, not a violation, and BI2's per-row pipeline means one
     // statement may mix the two. Row 1 takes an issued id, row 2 names 2 -
-    // which is exactly what the mark had reached, so a heap relation admits
-    // it - and row 3 takes the next issued one, above the named one.
+    // which is exactly what the mark had reached - and row 3 takes the next
+    // issued one, above the named one.
     Ok("CREATE TABLE t (id int64, n int64)");
     const std::string out = Run("INSERT INTO t VALUES (1), (2, 99), (3)");
     EXPECT_NE(out.rfind("ERR", 0), 0u) << out;
     EXPECT_EQ(Run("SELECT n FROM t"), "n\\n1\\n99\\n3") << out;
 }
 
-TEST_F(BulkInsertTest, ABelowMarkKeyIsRefusedWithItsOrdinalOnAHeapAndPlacedOnABtree) {
-    // A heap refuses a named key below its mark (BB-R3, kept for the heap by
-    // BD-Q4): its tail cannot take a key below its highest. BI4 does with it
-    // what it does with any refused row - the offending row is named and the
-    // whole statement inserts nothing. A btree places it where it sorts
-    // (BD-R2, `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`),
-    // and the mark it leaves alone gates nothing there.
-    Ok("CREATE TABLE h (id int64, n int64) HEAP");
-    Ok("INSERT INTO h VALUES (500, 1)");
-    // Row 1 names 600, above the mark, and is admitted and placed; row 2
-    // names 550, below the 601 row 1 moved the mark to.
-    const std::string out = Run("INSERT INTO h VALUES (600, 2), (550, 3)");
-    EXPECT_EQ(out.rfind("ERR", 0), 0u) << out;
-    EXPECT_NE(out.find("high-water mark"), std::string::npos) << out;
-    EXPECT_NE(out.find("(row 2)"), std::string::npos) << out;
-    EXPECT_EQ(Run("SELECT n FROM h"), "n\\n1") << out;
-    // The mark: the refused row moved nothing, and row 1's 600 burned with
-    // its unwind (BI9), so the next issued id is 601.
-    EXPECT_NE(Run("INSERT INTO h VALUES (4)").find(" id=601 "), std::string::npos);
-
+TEST_F(BulkInsertTest, ABelowMarkKeyIsPlacedWhereItSorts) {
+    // A btree places a named key below its mark where it sorts (BD-R2,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), and the
+    // mark it leaves alone gates nothing - on every relation since BZ (W2).
     Ok("CREATE TABLE b (id int64, n int64) BTREE");
     Ok("INSERT INTO b VALUES (500, 1)");
     const std::string placed = Run("INSERT INTO b VALUES (600, 2), (550, 3)");
@@ -301,75 +285,6 @@ TEST_F(BulkInsertTest, IndexesSeeEveryBulkRow) {
     const std::string plan = Run("ANALYZE SELECT id FROM t WHERE owner = 1");
     EXPECT_NE(plan.find("index_scanned="), std::string::npos) << plan;
     EXPECT_EQ(Run("SELECT id FROM t WHERE owner = 1"), "id\\n1\\n3\\n5");
-}
-
-// ---- T3: the sorted heap fill (docs/inflight/in-progress/workplan-t3.md) -----------------------
-//
-// The contract is byte-identical behavior across the gate: a statement
-// that takes the sorted fill and one that takes the row loop answer the
-// same and leave the same relation state. The gate can only widen.
-
-TEST_F(BulkInsertTest, TheSortedFillMatchesTheRowLoopAcrossTheGate) {
-    // `a` is inside T3-2's gate (heap, int-only, nothing maintained);
-    // `b` is the same schema pushed outside it by a declared Cabin.
-    Ok("CREATE TABLE a (id int64, n int64, m int64)");
-    Ok("CREATE TABLE b (id int64, n int64, m int64)");
-    Ok("CREATE CABIN ON b(n)");
-
-    const std::string ins = " VALUES (1, 10), (2, 20), (3, 30)";
-    const std::string ra = Run("INSERT INTO a" + ins);
-    const std::string rb = Run("INSERT INTO b" + ins);
-    EXPECT_NE(ra.find(" rows=3 first_id=1 last_id=3"), std::string::npos) << ra;
-    EXPECT_NE(rb.find(" rows=3 first_id=1 last_id=3"), std::string::npos) << rb;
-
-    EXPECT_EQ(Run("SELECT n, m FROM a"), Run("SELECT n, m FROM b"));
-    EXPECT_EQ(Run("SELECT m FROM a WHERE id = 2"), Run("SELECT m FROM b WHERE id = 2"));
-}
-
-TEST_F(BulkInsertTest, TheSortedFillSpansPagesWithExactMinKeys) {
-    Ok("CREATE TABLE t (id int64, n int64)");
-    std::string stmt = "INSERT INTO t VALUES (0)";
-    for (int i = 1; i < 500; ++i) stmt += ", (" + std::to_string(i) + ")";
-    const std::string reply = Run(stmt);
-    EXPECT_NE(reply.find(" rows=500 first_id=1 last_id=500"), std::string::npos) << reply;
-
-    EXPECT_EQ(Run("SELECT n FROM t WHERE id = 1"), "n\\n0");
-    EXPECT_EQ(Run("SELECT n FROM t WHERE id = 500"), "n\\n499");
-    EXPECT_EQ(Run("SELECT COUNT(*) FROM t"), "count(*)\\n500");
-    // The tuple key range crosses at least one page boundary and stays exact.
-    EXPECT_EQ(Run("SELECT COUNT(*) FROM t WHERE id BETWEEN 190 AND 210"), "count(*)\\n21");
-}
-
-TEST_F(BulkInsertTest, ASortedFillRollsBackWhole) {
-    Ok("CREATE TABLE t (id int64, n int64)");
-    Session session;
-    ASSERT_EQ(Run(session, "BEGIN").substr(0, 5), "BEGIN");
-    EXPECT_EQ(Run(session, "INSERT INTO t VALUES (1), (2), (3)").rfind("ERR", 0),
-              std::string::npos);
-    Run(session, "ROLLBACK");
-    EXPECT_EQ(Run("SELECT n FROM t"), "n");
-}
-
-// BI9 sharpened by T3: the admission-class checks run before the range is
-// allocated, so a refused statement burns *nothing* - and a failure past
-// the range (a bad literal at encode) burns exactly the range.
-TEST_F(BulkInsertTest, TheSortedFillBurnsItsWholeRangeAndANamedKeyDeclinesIt) {
-    Ok("CREATE TABLE t (id int64, n int64) HEAP");  // SUS-1: the sorted fill is heap-gated
-
-    // Every row omits its key, so the fill is eligible: it carves 1..3 up
-    // front, the encode fails at row 2 on a literal no int column can hold -
-    // past the range - and all three ids burn.
-    EXPECT_EQ(Run("INSERT INTO t VALUES (1), ('x'), (3)").rfind("ERR", 0), 0u);
-    EXPECT_NE(Run("INSERT INTO t VALUES (8)").find(" id=4 "), std::string::npos);
-
-    // A row that names its key makes the statement ineligible for the fill:
-    // the carved range has no place for a key the caller chose (§4.1). The
-    // statement still runs, through the per-row path, which is why this is
-    // ineligibility and not a refusal - and the arity case this test used to
-    // check here is unreachable now, since the fill is entered only when
-    // every row omits.
-    EXPECT_NE(Run("INSERT INTO t VALUES (9), (100, 10)").rfind("ERR", 0), 0u);
-    EXPECT_EQ(Run("SELECT n FROM t"), "n\\n8\\n9\\n10");
 }
 
 }  // namespace

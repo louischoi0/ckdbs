@@ -232,10 +232,11 @@ struct SysColumnRow {
     // not on the `sys.cabins` row.
     std::uint8_t cabin_policy;
 
-    // kColumnDropped / kColumnInSlot below (BW-R6, BW-R9 of
-    // `workorder-bw-instant-add-drop-column.md`). Explicit masks, never a
-    // bitfield (invariant 6). 0 for every column `CREATE TABLE` declared and
-    // nothing dropped.
+    // kColumnDropped / kColumnInSlot / kColumnHidden below (BW-R6, BW-R9 of
+    // `workorder-bw-instant-add-drop-column.md`; BZ-R2 of
+    // `workorder-bz-heap-hidden-key.md`). Explicit masks, never a bitfield
+    // (invariant 6). 0 for every column `CREATE TABLE` declared and nothing
+    // dropped.
     std::uint8_t flags = 0;
 
     // A dropped column: its row stays at its `pos`, so every stored position
@@ -245,9 +246,16 @@ struct SysColumnRow {
     // A column `ALTER TABLE ADD COLUMN` placed in one of the relation's
     // 16-byte slots, rather than one `CREATE TABLE` packed.
     bool in_slot() const noexcept { return (flags & kColumnInSlot) != 0; }
+    // A heap's tuple key (BZ-R1): column 0, which the engine added and no
+    // statement names. Unlike a dropped column it is read and written on
+    // every row; only the surface leaves it out (BZ-R3).
+    bool hidden() const noexcept { return (flags & kColumnHidden) != 0; }
+    // What a user sees of the relation: no dropped and no hidden column.
+    bool visible() const noexcept { return (flags & (kColumnDropped | kColumnHidden)) == 0; }
 
     static constexpr std::uint8_t kColumnDropped = 0x01;
     static constexpr std::uint8_t kColumnInSlot = 0x02;
+    static constexpr std::uint8_t kColumnHidden = 0x04;
 
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kRelIdOffset = 8;

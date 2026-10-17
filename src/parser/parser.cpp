@@ -12,23 +12,6 @@
 namespace kds::parser {
 
 namespace {
-// SUS-1's bypass (parser.hpp).
-//
-// **Atomic**: `SuspendHeapStorageForTest` writes it from a cell while a
-// multi-threaded reactor fixture may parse on another thread, a race tsan
-// reports (AS-R6 runs under tsan). Relaxed: nothing is published through it.
-std::atomic<bool> g_heap_storage_allowed_for_test{false};
-}  // namespace
-
-void SetHeapStorageAllowedForTest(bool allowed) noexcept {
-    g_heap_storage_allowed_for_test.store(allowed, std::memory_order_relaxed);
-}
-
-bool HeapStorageAllowedForTest() noexcept {
-    return g_heap_storage_allowed_for_test.load(std::memory_order_relaxed);
-}
-
-namespace {
 
 bool IEquals(std::string_view a, std::string_view b);
 
@@ -1843,24 +1826,8 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
                     "second (byte " +
                     std::to_string(word.byte_offset) + ")");
             }
-            // **SUS-1: heap relations are suspended.** Refused rather than
-            // quietly turned into a btree (the truthfulness rule).
-            // `Unsupported` is the operator's choice (AS-R1) though the heap
-            // is built and existing heaps still serve, so the message
-            // carries the reason and names the order.
-            if (is_heap && !HeapStorageAllowedForTest()) {
-                return Status::Unsupported(
-                    "HEAP storage is suspended (SUS-1) and no new heap relation is created "
-                    "(byte " +
-                    std::to_string(word.byte_offset) +
-                    "); BTREE is the default and every existing heap relation still mounts "
-                    "and serves. The suspension, its rulings and the condition that lifts it "
-                    "are instructions/v3.0.0/workorder-as-sus1-heap-suspended.md");
-            }
             storage_given = true;
-            stmt.clustered_given = true;
-            stmt.clustered = is_heap ? catalog::ClusteredType::kHeap
-                                     : catalog::ClusteredType::kBtree;
+            stmt.heap = is_heap;
         } else if (is_assigned) {
             return Status::Unsupported(
                 "the ASSIGNED key mode no longer exists (byte " +

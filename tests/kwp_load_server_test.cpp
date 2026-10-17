@@ -588,6 +588,53 @@ TEST_F(KwpLoadServerTest, ATupleKeyOnlyRelationLoadsIssuedAndNamedKeys) {
     client.join();
 }
 
+// **A heap's hidden key is the load's field 0** (BZ-R3's exemption, BZ-R4,
+// W2 of `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`): `S_LOAD_READY`
+// describes it, a NULL takes an issued id, and a named key below the mark -
+// 3 after 50 and 51 were placed - is placed where it sorts, not refused by
+// any mark. `SELECT *` then shows the declared column alone, in key order.
+TEST_F(KwpLoadServerTest, AHeapLoadNamesItsHiddenKeyBelowTheMark) {
+    constexpr std::uint16_t kTextPort = 25741;
+    constexpr std::uint16_t kKwpPort = 25742;
+    ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE h (v int64) HEAP").response.substr(0, 7),
+              "CREATED");
+    catalog::Schema schema;
+    schema.columns = {Col(catalog::kTypeValInt64), Col(catalog::kTypeValInt64)};
+
+    auto text = TcpServer::Listen(kTextPort);
+    auto kwp = KwpLoadServer::Listen(kKwpPort);
+    ASSERT_TRUE(text.ok());
+    ASSERT_TRUE(kwp.ok());
+
+    std::thread client([&] {
+        StopGuard stop{kTextPort};
+        int fd = ConnectToLoopback(kKwpPort);
+        ASSERT_GE(fd, 0);
+        wire::FrameDecoder decoder;
+        ASSERT_TRUE(Handshake(fd, decoder));
+        const auto ready = Begin(fd, decoder, "h");
+        ASSERT_TRUE(ready.has_value());
+        EXPECT_EQ(ready->second, 2u);
+        const auto chunk = Chunk(ready->first, 0, schema,
+                                 {{Int(50), Int(1)}, {Null(), Int(2)}, {Int(3), Int(3)}});
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk);
+        auto ack = ReadFrame(fd, decoder);
+        ASSERT_TRUE(ack.has_value());
+        ASSERT_EQ(ack->type, static_cast<std::uint8_t>(wire::ServerFrameType::kLoadAck));
+        SendFrame(fd, wire::ClientFrameType::kLoadEnd, {});
+        ASSERT_TRUE(ReadFrame(fd, decoder).has_value());
+        ::close(fd);
+
+        int text_fd = ConnectToLoopback(kTextPort);
+        ASSERT_GE(text_fd, 0);
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT * FROM h"), "v\\n3\\n1\\n2");
+        ::close(text_fd);
+    });
+
+    RunReactor(text.value(), kwp.value());
+    client.join();
+}
+
 // A load session has no `USE`: `ns.t` names a relation outside `public`, and a
 // bare name means `public`'s (namespace.md NS5).
 TEST_F(KwpLoadServerTest, ALoadNamesARelationOutsidePublicByItsQualifier) {

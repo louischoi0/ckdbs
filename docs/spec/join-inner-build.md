@@ -36,11 +36,10 @@ replayed, or shared.
 `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`). The
 statement writes nothing between its build and its probes, but another
 core may, and a leaf places a row where its key sorts, shifting the rows
-after it. So a probe reads a btree entry through `VerifyTupleAt` - the
+after it. So a probe reads an entry through `VerifyTupleAt` - the
 Keystone id at the slot against the bucketed tuple key - and resolves a miss by a
-tuple key lookup. A heap page never shifts, so a heap entry goes through the same
-verifier and a miss there is a page that changed class or owner under the
-statement, refused `Corruption` (BF-R10; `step_vm.cpp`'s build probe).
+tuple key lookup (`step_vm.cpp`'s build probe); every user relation is a
+btree, a heap included (`heap-and-tuple.md` §3.1b).
 
 ## 3. Why this does not break the written-order contract
 
@@ -121,12 +120,10 @@ The design does not complete it — it makes partiality safe:
 
 - **The map is a walk-order prefix.** Rows are bucketed up to a
   high-water mark, and every walk traverses the engine's one walk
-  order, so what the map covers is a position, not a guess. **On a btree
-  the mark is a key** - the last tuple key the walk covered, a resume skipping
-  every row at or below it - because another core's placement can shift a
-  marked leaf's rows between two walks, and keys only move right (BD-R3
-  E4). On a heap it is a page and how many of its rows the walk covered,
-  since a heap page never shifts.
+  order, so what the map covers is a position, not a guess. **The mark is a
+  key** - the last tuple key the walk covered, a resume skipping every row
+  at or below it - because another core's placement can shift a marked
+  leaf's rows between two walks, and keys only move right (BD-R3 E4).
 - **A hit is conclusive.** A bucketed row, re-checked against the full
   residual, proves the row exists — the positive-only rule
   `docs/spec/parser-v2.md` §6 states for `Exists` replay: a partial

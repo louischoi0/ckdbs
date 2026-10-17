@@ -406,8 +406,8 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
     // Every refusal, before a page is walked. `Catalog::CreateIndex` runs
     // the same check again at the write - one implementation, two callers
     // - so this buys the *position* of the failure and nothing else: a
-    // heap relation refused by name rather than as a page-type error from
-    // inside the build.
+    // refusal by name rather than as a page-type error from inside the
+    // build.
     if (Status s = catalog.CheckIndexDef(def, trx_id);
         !s.ok()) {
         return s;

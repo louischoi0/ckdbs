@@ -68,47 +68,25 @@ namespace kds::server {
 // (AO-S3b). `active` false is "from the head", which is what an unset
 // cursor means and what every first walk carries.
 //
-// **Slots, not accepted rows** - the opposite of `exec::WalkMark`, and for
-// a reason that only a *write* walk has. A mark counts rows the walk
-// accepted, which is stable for a SELECT because nothing it does changes
-// whether a row matches; an UPDATE changes exactly that (`SET v = 1 WHERE
-// v = 0` unmatches every row it writes), so an accepted-row ordinal would
-// resume in the wrong place the moment the statement's own writes are
-// counted again. `ChainVisitOnePage` walks `0..slot_count()` in slot
-// order, so the slot is the position.
-//
-// **Why skipping is sound across a park.** Resuming at
-// `(page, slot)` skips every earlier page of the chain and every lower
-// slot of this page. A row can appear in one
-// of those places while this statement is parked - another session may
-// insert - but such a row is invisible to this statement's
-// snapshot, which was minted before the park, so skipping it changes no
-// answer. Heap pages append slots and a heap chain never loses a page, so
-// nothing this walk already passed moves to a position it has yet to reach.
-//
-// **A btree resumes by key instead, and `tuple_key` is that key.** A clustered
-// btree leaf splits by moving its upper half to a new right sibling, so a
-// split whose midpoint fell below a `(page, slot)` cursor would carry rows
-// this walk had already written into a page it had yet to visit, and it
-// would write them twice. The key ordering is what removes the hazard: the
-// resume **descends afresh** to whichever leaf now holds `tuple_key` and skips
-// every key below it, so wherever a split moved a row, one this walk has
-// finished sorts below `tuple_key` and one it has not sorts at or above. That
-// makes the btree arm immune to concurrent structure change rather than
-// merely unlikely to meet it.
+// **A walk resumes by key, and `tuple_key` is that key.** A clustered btree
+// leaf splits by moving its upper half to a new right sibling, so a split
+// whose midpoint fell below a remembered `(page, slot)` would carry rows this
+// walk had already written into a page it had yet to visit, and it would
+// write them twice. The resume **descends afresh** to whichever leaf now
+// holds `tuple_key` and skips every key below it, so wherever a split moved
+// a row, one this walk has finished sorts below `tuple_key` and one it has
+// not sorts at or above. A row another session inserted while this one was
+// parked is invisible to its snapshot, minted before the park, so skipping
+// it changes no answer.
 //
 // Lives here rather than on `CommandDispatcher` because the state it
 // positions is the *session's*: two sessions on one reactor can be parked
 // at once (that is what a deadlock cell needs), so a dispatcher member
 // would be one cursor shared by both.
 struct WalkCursor {
-    PageId page = kInvalidPageId;
-    std::uint16_t slot = 0;
     // The key the walk stopped **at** - the row it is waiting for, which it
     // has not written - so a resume offers that same key again rather than
-    // stepping past it. Btree relations only: a heap page is unordered
-    // (invariant 4), so there is no key to resume a heap walk from and the
-    // position above is what it carries.
+    // stepping past it.
     std::uint64_t tuple_key = 0;
     bool active = false;
     // **How many rows the statement has written so far**, carried because

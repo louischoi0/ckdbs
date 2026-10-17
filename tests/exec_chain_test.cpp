@@ -17,7 +17,7 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/device_page_store.hpp"
-#include "kds/storage/heap/heap_chain.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -25,12 +25,6 @@
 // V17 - the step VM, linear chains (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // The tests that matter here are **equivalences**, not single results:
-//
-//   across storage   a heap relation and a btree relation must return the
-//                    same rows in the same order. The row codec, PageView
-//                    and the walk are shared by design (a btree leaf *is*
-//                    a heap page), and this is what proves the sharing is
-//                    real rather than nominal.
 //
 //   across strategy  a Probe and a Scan must agree row-for-row. That is
 //                    what makes invariant 9's fall-through safe: a
@@ -69,8 +63,7 @@ protected:
             row.notnull = true;
             schema.columns.push_back(row);
         }
-        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema,
-                                                  ct.clustered);
+        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema);
         ASSERT_TRUE(created.ok()) << created.status().message();
     }
 
@@ -87,32 +80,26 @@ protected:
         auto payload = EncodeRow(access.value()->schema, access.value()->layout, id.value(), body);
         ASSERT_TRUE(payload.ok()) << payload.status().message();
 
-        if (access.value()->clustered_type == catalog::ClusteredType::kBtree) {
-            auto placed = btree::BtreeInsert(store_, access.value()->desc_page_id, id.value(),
-                                             payload.value(), /*trx_id=*/1, access.value()->oid);
-            ASSERT_TRUE(placed.ok()) << placed.status().message();
-            // **The root moves when the tree grows a level**, and until
-            // AO-S6e-b's cell needed a multi-leaf relation nothing here
-            // insisted on it: this helper kept handing `BtreeInsert` the
-            // old root, which after the first split is a full *leaf*. Every
-            // later insert then appended a leaf and spliced it in front of
-            // that one, building a chain that descends - the exact shape
-            // `btree.cpp`'s append path calls unsurvivable (H9) - and a
-            // scan of a relation this fixture filled read its rows out of
-            // key order. The dispatcher has adopted the new root since
-            // PW2-4 (`command_dispatcher.cpp`, `Catalog::PublishRoot`);
-            // this is that line, and it is what makes a fixture-built
-            // relation the same shape as a served one.
-            if (placed.value().new_root != kInvalidPageId) {
-                ASSERT_TRUE(boot_->catalog
-                                .PublishRoot(oid.value(), /*index_oid=*/0, placed.value().new_root,
-                                                        access.value()->anchor_page_id)
-                                .ok());
-            }
-        } else {
-            auto placed = heap::ChainInsert(store_, access.value()->desc_page_id, id.value(),
-                                            payload.value(), /*trx_id=*/1, access.value()->oid);
-            ASSERT_TRUE(placed.ok()) << placed.status().message();
+        auto placed = btree::BtreeInsert(store_, access.value()->desc_page_id, id.value(),
+                                         payload.value(), /*trx_id=*/1, access.value()->oid);
+        ASSERT_TRUE(placed.ok()) << placed.status().message();
+        // **The root moves when the tree grows a level**, and until
+        // AO-S6e-b's cell needed a multi-leaf relation nothing here
+        // insisted on it: this helper kept handing `BtreeInsert` the
+        // old root, which after the first split is a full *leaf*. Every
+        // later insert then appended a leaf and spliced it in front of
+        // that one, building a chain that descends - the exact shape
+        // `btree.cpp`'s append path calls unsurvivable (H9) - and a
+        // scan of a relation this fixture filled read its rows out of
+        // key order. The dispatcher has adopted the new root since
+        // PW2-4 (`command_dispatcher.cpp`, `Catalog::PublishRoot`);
+        // this is that line, and it is what makes a fixture-built
+        // relation the same shape as a served one.
+        if (placed.value().new_root != kInvalidPageId) {
+            ASSERT_TRUE(boot_->catalog
+                            .PublishRoot(oid.value(), /*index_oid=*/0, placed.value().new_root,
+                                                    access.value()->anchor_page_id)
+                            .ok());
         }
     }
 
@@ -312,47 +299,6 @@ TEST_F(ExecChainTest, ASelfJoinBindsTwoRowsOfOneRelation) {
 
     EXPECT_EQ(Run("SELECT b.label, a.label FROM t AS b JOIN t AS a ON b.parent_id = a.id"),
               (std::vector<std::string>{"child|root"}));
-}
-
-// ---- Across storage forms -------------------------------------------------
-
-TEST_F(ExecChainTest, HeapAndBtreeRelationsReturnIdenticalRowsInIdenticalOrder) {
-    // A btree leaf *is* a heap page, so the codec, the reads and the walk
-    // are shared. This is what proves the sharing is real: the same rows,
-    // the same order, from both storage forms.
-    Create("CREATE TABLE h (id int64, name varchar) HEAP");
-    Create("CREATE TABLE b (id int64, name varchar) BTREE");
-    for (int i = 0; i < 6; ++i) {
-        Insert("h", {Str("n" + std::to_string(i))});
-        Insert("b", {Str("n" + std::to_string(i))});
-    }
-
-    EXPECT_EQ(Run("SELECT h.id, h.name FROM h"), Run("SELECT b.id, b.name FROM b"));
-    EXPECT_EQ(Run("SELECT h.name FROM h WHERE id = 4"), Run("SELECT b.name FROM b WHERE id = 4"));
-    EXPECT_EQ(Run("SELECT h.name FROM h WHERE id = 4"), (std::vector<std::string>{"n3"}));
-}
-
-TEST_F(ExecChainTest, AJoinIsTheSameAcrossEveryCombinationOfStorageForms) {
-    Create("CREATE TABLE ah (id int64, name varchar) HEAP");
-    Create("CREATE TABLE ab (id int64, name varchar) BTREE");
-    Create("CREATE TABLE th (id int64, a_id int64, sym varchar) HEAP");
-    Create("CREATE TABLE tb (id int64, a_id int64, sym varchar) BTREE");
-    for (int i = 0; i < 4; ++i) {
-        Insert("ah", {Str("a" + std::to_string(i))});
-        Insert("ab", {Str("a" + std::to_string(i))});
-        Insert("th", {Int(i + 1), Str("s" + std::to_string(i))});
-        Insert("tb", {Int(i + 1), Str("s" + std::to_string(i))});
-    }
-
-    const std::vector<std::string> expected =
-        Run("SELECT th.sym, ah.name FROM th JOIN ah ON th.a_id = ah.id");
-    ASSERT_EQ(expected.size(), 4u);
-
-    // heap x btree, btree x heap, btree x btree - the probe side is the
-    // one that differs, and it must not show.
-    EXPECT_EQ(Run("SELECT th.sym, ab.name FROM th JOIN ab ON th.a_id = ab.id"), expected);
-    EXPECT_EQ(Run("SELECT tb.sym, ah.name FROM tb JOIN ah ON tb.a_id = ah.id"), expected);
-    EXPECT_EQ(Run("SELECT tb.sym, ab.name FROM tb JOIN ab ON tb.a_id = ab.id"), expected);
 }
 
 // ---- Stopping, and the R1 guard ------------------------------------------
@@ -578,32 +524,6 @@ TEST_F(ExecChainTest, AWalkReportsWhereItIsAtEveryPageBoundary) {
     ASSERT_EQ(small.at.size(), 1u) << "a one-page walk declares its position exactly once";
     EXPECT_EQ(small.at.front().lo, 0u);
     EXPECT_EQ(small.at.front().hi, kIdSpaceEnd);
-}
-
-TEST_F(ExecChainTest, AHeapWalkDeclaresTheRelationAndNoSlice) {
-    // The other half of the same ruling, and the reason it is not an
-    // omission: a heap chain is not walked in key order - invariant 4
-    // leaves a page's tuples unordered - so
-    // `min_key` of the page a heap walk is on bounds nothing about what it
-    // has left to read. Declaring a slice from it would name an interval
-    // the walk is not in.
-    Create("CREATE TABLE h (id int64, v int64) HEAP");
-    for (int i = 0; i < 600; ++i) Insert("h", {Int(i)});
-
-    RecordingPosition seen;
-    const StepChain chain = CompileSql("SELECT id FROM h");
-    Status ran = Execute(
-        boot_->catalog, store_, chain,
-        [&](const ChainFrame&) -> StatusOr<storage::VisitControl> {
-            return storage::VisitControl::kContinue;
-        },
-        /*stats=*/nullptr, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
-        /*snapshot=*/nullptr, /*indexes=*/true, &seen);
-    ASSERT_TRUE(ran.ok()) << ran.message();
-
-    ASSERT_EQ(seen.at.size(), 1u) << "a heap walk reports once, before its first page";
-    EXPECT_EQ(seen.at.front().lo, 0u);
-    EXPECT_EQ(seen.at.front().hi, kIdSpaceEnd);
 }
 
 // ---- BD-S4: JB6's mark is a key on a btree (BD-R3 E4) ---------------------

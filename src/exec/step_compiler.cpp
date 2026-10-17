@@ -2454,9 +2454,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // the projection empty too, and labelling its output with the
         // relation's columns would name a row it never emits.
         for (const auto& column : scope.relations[0].access->schema.columns) {
-            // A dropped column is not in `*` (BW-R6); `DescribeStar` skips
-            // the same columns, so names and values stay aligned.
-            if (column.dropped()) continue;
+            // A dropped column is not in `*` (BW-R6), nor a heap's hidden
+            // tuple key (BZ-R3); `DescribeStar` skips the same columns, so
+            // names and values stay aligned.
+            if (!column.visible()) continue;
             chain.column_names.push_back(std::string(catalog::NameView(column.name)));
         }
     }
@@ -2493,11 +2494,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // The premise is that step 0 emits in tuple key order. A walk or range does
     // (page-wise `min_key`, which a division preserves); an index step does
     // because IX8a sorts its tuple keys back into that order deliberately; a
-    // lookup or probe emits one row. **Every page's slot order is its key
-    // order** - a btree leaf's by placement (BD-R1,
-    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), a heap
-    // page's by issue order under its tail's hold (BB-R7) - which is the
-    // premise all of that rests on. A Cabin probe stays excluded by
+    // lookup or probe emits one row. **A leaf's slot order is its key
+    // order** by placement (BD-R1,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), which is
+    // the premise all of that rests on. A Cabin probe stays excluded by
     // name: a served set is sorted by tuple key into the walk's order, but the
     // exclusion is a fix, not a precaution - the discarding version of this
     // clause answered `ORDER BY <tuple key>` over a Cabin-probed relation with

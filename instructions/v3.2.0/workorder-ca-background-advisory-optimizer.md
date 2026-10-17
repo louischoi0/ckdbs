@@ -2,7 +2,7 @@
 
 Written 2026-10-17 on `worktree-bz-background-advisory-optimizer` from
 `e1333a77` (`v3.2.0-150-ge1333a77`), on the operator's words, recorded in
-English (`raft-marks-2026-10-17.md` §1):
+English (`raft-marks-2026-10-17.md` §3):
 
 - **W0**: "Things are now reasonably in order; this is the stage of
   optimizing performance from statistics. First, for frequently used query
@@ -20,7 +20,7 @@ English (`raft-marks-2026-10-17.md` §1):
   one: apply several possibilities, find in the end a way that improves
   performance in all of scenarios 1, 2, 3 and 4, and report it." With
   `/go-ahead-achieving-milestone`, the standing word to adopt CLA's
-  proposals (`raft-marks-2026-10-17.md` §2).
+  proposals (`raft-marks-2026-10-17.md` §4).
 
 **Explored and landed on the work branch 2026-10-17; not merged, not
 closed** (§7, §8). **Opened 2026-10-17 on W2; exploratory since W3.** The scenarios are the

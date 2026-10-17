@@ -449,23 +449,13 @@ struct CreateTableStmt {
     std::string schema;
     std::uint32_t table_byte_offset = 0;
     std::vector<ColumnDef> columns;
-    // **BTREE since SUS-1** (2026-09-05,
-    // `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`): heap
-    // relations are suspended, so an unqualified `CREATE TABLE` makes a
-    // btree one. The default is spelled **three** times, all `kBtree`:
-    // here (test fixtures read it off the parsed statement),
-    // `HandleCreateTableSql`'s `clustered_given` fallback, and
-    // `HandleCreateTable`'s call for the bare debug form.
-    catalog::ClusteredType clustered = catalog::ClusteredType::kBtree;
-
-    // There is no key-mode field (removed 2026-08-25, heap-and-tuple.md
-    // §4.1): `EXPLICIT` is accepted as vacuous and `ASSIGNED` is refused in
-    // the parser with its byte.
-
-    // Whether the statement *said* a storage word, as opposed to landing on
-    // `clustered`'s default - which is one of the two nameable values, so
-    // the field alone cannot tell.
-    bool clustered_given = false;
+    // `HEAP` (BZ-R1 of `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`):
+    // a btree relation whose tuple key the engine adds as a hidden column
+    // 0, so every declared column is an ordinary one. `BTREE`, or no
+    // storage word, is a relation whose first declared column is its tuple
+    // key. Both are `ClusteredType::kBtree`; there is no key-mode field
+    // (removed 2026-08-25, heap-and-tuple.md §4.1).
+    bool heap = false;
 
     // `SPARE <n>` (BW-R1 of
     // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the

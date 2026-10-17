@@ -14,7 +14,7 @@ TableAccess MakeAccess(Oid oid, std::size_t ncols) {
     TableAccess access{};
     access.oid = oid;
     access.desc_page_id = static_cast<PageId>(1000 + oid);
-    access.clustered_type = ClusteredType::kHeap;
+    access.clustered_type = ClusteredType::kBtree;
     for (std::size_t i = 0; i < ncols; ++i) {
         SysColumnRow col{};
         col.rel_id = oid;

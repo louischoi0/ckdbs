@@ -105,17 +105,7 @@ protected:
         dispatcher_->set_locks(locks_.get());
         scheduler_.emplace(clock_, io_);
 
-        // **HEAP, pinned since SUS-1** (AS-R5, `instructions/v3.0.0/
-        // workorder-as-sus1-heap-suspended.md`). `t` is this file's only
-        // heap relation, and `MidWalkWaitTest` below spells out why it has
-        // to stay one: it resumes its walk **by position** while `tb`
-        // resumes **by key**, so on the flipped default the two arms would
-        // be the same walk run twice and the position arm - AO-S3b's, the
-        // one that already shipped a wrong answer once - would execute
-        // nowhere. The test binary lifts the suspension
-        // (`tests/heap_suspension_env.cpp`), which is what lets this word
-        // stand.
-        ASSERT_EQ(Local("CREATE TABLE t (id int64, v int64) HEAP").rfind("CREATED", 0), 0u);
+        ASSERT_EQ(Local("CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
     }
 
     std::string Local(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
@@ -335,29 +325,6 @@ TEST_F(LockCapOfOneTest, AnInsertTakesTheBorrowOfTheRowItWrites) {
     EXPECT_EQ(out.status.code(), StatusCode::kResourceExhausted)
         << "the INSERT took no borrow, so the wait's blocker cannot come from the table: "
         << out.response;
-    EXPECT_EQ(out.resource_detail, static_cast<std::uint16_t>(wire::ResourceDetail::kLockCap))
-        << out.response;
-}
-
-TEST_F(LockCapOfOneTest, ASortedFillBorrowsTheIdBlockItCarved) {
-    // The INSERT path that routes **past** `InsertOneRow`: `t` is HEAP with
-    // no var-heap, no index, no cabin and no assertion, so a multi-row
-    // VALUES whose every row omits its tuple key goes to `SortedFillInner`. Until
-    // AO-S6c-a it wrote rows and borrowed nothing at all - the one writer
-    // left in the "header `trx_id`, no table entry" shape the sub-stage
-    // exists to remove, and the review is what found it.
-    //
-    // One `Range` over the carved block rather than an entry per row, so
-    // the observation is the same as any coarse unit's under a cap of one:
-    // the relation `IX` fills the ledger and the range itself is refused
-    // and counted. A run that borrowed nothing would count nothing.
-    // As the single-row cell above: the cap admits the relation `IX` and
-    // refuses the range under it, so a fill that borrows its block is
-    // refused and one that borrows nothing is not.
-    Session session;
-    const DispatchOutcome out = RunAsync("INSERT INTO t VALUES (5), (6)", session);
-    EXPECT_EQ(out.status.code(), StatusCode::kResourceExhausted)
-        << "the sorted fill placed rows without borrowing the ids it carved: " << out.response;
     EXPECT_EQ(out.resource_detail, static_cast<std::uint16_t>(wire::ResourceDetail::kLockCap))
         << out.response;
 }
@@ -1139,33 +1106,6 @@ TEST_F(LockDeadlockTest, AnInsertIntoAFencedWindowWaitsForItsHolder) {
     EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
 }
 
-TEST_F(LockDeadlockTest, AnIllegalKeyIsRefusedWithoutWaitingOnAFence) {
-    // The regression AO-S6c-c's own first draft introduced and its review
-    // caught. Moving the borrow ahead of `AdmitExplicitRowId` was right for
-    // the re-run, but that call is the **only** validation a caller-named
-    // key ever gets - `TableAccess` carries no `next_id` on purpose - so it
-    // also put the borrow ahead of every reason to refuse the key at all.
-    // An insert that could never succeed then waited out a fence, burned
-    // ledger entries, and inside an explicit transaction could be killed as
-    // a deadlock victim for a statement with no future.
-    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
-    ASSERT_EQ(Local("INSERT INTO t VALUES (6, 0)").rfind("INSERTED", 0), 0u);
-
-    Session a;
-    Session b;
-    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
-    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id > 4 AND v = 99", &a).response,
-              "UPDATED 0");
-
-    // Key 5 sits inside A's window and below the relation's high-water
-    // mark, so on a heap relation it can never be written by anyone. It
-    // must be told so at once.
-    Started wb = Start("INSERT INTO t VALUES (5, 9)", b);
-    Pump();
-    ASSERT_TRUE(*wb.done) << "an illegal key waited on a fence it could never write past";
-    EXPECT_NE(wb.out->response.find("high-water mark"), std::string::npos) << wb.out->response;
-}
-
 TEST_F(LockDeadlockTest, ADuplicateIsRefusedAtOnceAndAnAbsentKeyWaitsOnAFenceOnABtree) {
     // The judgement's btree arm (BD-R5,
     // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`): a key
@@ -1216,32 +1156,6 @@ TEST_F(LockDeadlockTest, ADuplicateIsRefusedAtOnceAndAnAbsentKeyWaitsOnAFenceOnA
 // `OutOfRange` below the mark. BD withdrew that answer - an undecided insert
 // is waited on, a committed row under an undecided writer is a duplicate at
 // once (BD-R5, BD-Q9) - and `NamedKeyWaitTest` below pins both.
-
-TEST_F(LockDeadlockTest, ASortedFillWaitsOnAFenceOverTheBlockItCarves) {
-    // The other insert path, which routes past `InsertOneRow` entirely and
-    // whose park had no cell of its own until here - the review's C5. Every
-    // row omits its key, so the fill carves one contiguous block and
-    // borrows it as a range.
-    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
-
-    Session a;
-    Session b;
-    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
-    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id > 4 AND v = 99", &a).response,
-              "UPDATED 0");
-
-    // The block is carved from the mark, which sits inside A's window, and
-    // the window runs to the end of the id space - so a re-run that carves
-    // a fresh block is still covered.
-    Started wb = Start("INSERT INTO t VALUES (1), (2)", b);
-    Pump();
-    ASSERT_FALSE(*wb.done) << "the fill wrote through A's fence: " << wb.out->response;
-
-    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
-    Pump();
-    ASSERT_TRUE(*wb.done) << "the fill never resumed after the fence was released";
-    EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
-}
 
 // ---- BB-S2's guards: a spilled row still waits on a fence ----------------
 //
@@ -2408,7 +2322,8 @@ TEST_F(MidWalkWaitTest, ADeleteParksInTheMiddleOfItsWalkToo) {
 }
 
 TEST_F(MidWalkWaitTest, AClusteredBtreeParksAndResumesByKey) {
-    // **The arm SUS-1 makes load-bearing.** A btree cannot resume from a
+    // **The one resume there is** (BZ: every user relation is a btree). A
+    // btree cannot resume from a
     // remembered leaf, because a split moves the upper half of a leaf to a
     // new sibling and would carry already-written rows into a page the walk
     // has yet to visit. It resumes by descending to whichever leaf now

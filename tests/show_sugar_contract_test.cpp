@@ -271,8 +271,6 @@ constexpr Spelling kSpellings[] = {
     {"SHOW FKEYS", "SELECT * FROM sys.fkeys"},
     {"SHOW ASSERTIONS", "SELECT * FROM sys.assertions"},
     {"SHOW TRANSITIONS", "SELECT * FROM sys.transitions"},
-    {"SHOW RELAYOUT", "SELECT * FROM sys.relayout"},
-    {"SHOW RELAYOUT t", "SELECT * FROM sys.relayout WHERE name = 't'"},
     {"SHOW CABIN_OPTIMIZER", "SELECT * FROM sys.cabin_optimizer"},
     {"SHOW PAGE 4",
      "SELECT page_id, page_type, page_lsn, level, min_key, nr_slots, lower, upper, free_space, "
@@ -364,12 +362,8 @@ TEST_F(ShowSugarTest, AQualifiedNameDescribesTheRelationItNames) {
     EXPECT_EQ(described, Text("DESCRIBE q"));
     EXPECT_EQ(described, Text("SELECT * FROM sys.columns WHERE rel_name = 'ns.q'"));
     EXPECT_NE(described.find("\\n"), std::string::npos) << "no rows: " << described;
-    const std::string relayout = Text("SHOW RELAYOUT ns.q");
-    EXPECT_EQ(relayout, Text("SHOW RELAYOUT q"));
-    EXPECT_NE(relayout.find("\\n"), std::string::npos) << "no rows: " << relayout;
     // A wrong qualifier is still refused, not answered with no rows.
     EXPECT_EQ(Text("DESCRIBE public.q").rfind("ERR", 0), 0u);
-    EXPECT_EQ(Text("SHOW RELAYOUT public.q").rfind("ERR", 0), 0u);
 }
 
 TEST_F(ShowSugarTest, ARefusalWithNoArgumentNamesTheStatementsEnd) {

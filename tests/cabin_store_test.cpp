@@ -223,9 +223,8 @@ TEST(CabinStoreTest, APerCabinValueCapRefusesNewValuesAndKeepsTheOldOnes) {
 }
 
 TEST(CabinStoreTest, RecommittingAnObservedValueReplacesItsSet) {
-    // The heal path: a heap relation whose hint failed re-records the value
-    // from a completed authoritative walk. Sound for the same reason the
-    // first recording is.
+    // A value re-recorded from a completed authoritative walk replaces its
+    // set. Sound for the same reason the first recording is.
     CabinStore store;
     const CabinKey key = KeyFor(1, Str("aaa"));
     ASSERT_TRUE(store.Commit(key, {EntryFor(1), EntryFor(2)}));

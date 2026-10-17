@@ -13,7 +13,6 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/btree/btree_page.hpp"
-#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/page_header.hpp"
@@ -179,16 +178,13 @@ private:
         pending_undo_.clear();
         pending_spills_.clear();
 
-        if (access.clustered_type == catalog::ClusteredType::kBtree) {
-            SweepBtreeInternals(access, name);
-        }
+        SweepBtreeInternals(access, name);
         SweepTuples(access, name);
         SweepVarHeap(access, name);
         ResolveUndo(name);
     }
 
-    // Walks the tuple-bearing pages (heap chain, or btree leaves — one
-    // PageView reads both) checking invariants 2/3/5/7/13 and collecting
+    // Walks the btree's leaves checking invariants 2/3/5/7/13 and collecting
     // the cross-page facts.
     void SweepTuples(const catalog::TableAccess& access, const std::string& name) {
         PageId current_page = kInvalidPageId;
@@ -297,12 +293,8 @@ private:
             return storage::VisitControl::kContinue;
         };
 
-        Status walked =
-            access.clustered_type == catalog::ClusteredType::kBtree
-                ? btree::BtreeVisit(store_, access.desc_page_id,
-                                             storage::PageAccess::kRead, visitor)
-                : heap::ChainVisit(store_, access.desc_page_id,
-                                            storage::PageAccess::kRead, visitor);
+        const Status walked =
+            btree::BtreeVisit(store_, access.desc_page_id, storage::PageAccess::kRead, visitor);
         if (!walked.ok()) {
             Add(CheckKind::kChainOrder, access.desc_page_id,
                 "relation '" + name + "': walk failed: " + walked.message());

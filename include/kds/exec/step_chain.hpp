@@ -236,8 +236,7 @@ struct CabinProbe {
     // from the frame per outer row. The outer row is fixed for the whole
     // of this step's execution, so the value is stable exactly as long as
     // a probe or a recording needs it. This is the shape v1 deliberately
-    // did not emit, and the one structure a heap relation's join column
-    // can carry at all - IX3 refuses it an index.
+    // did not emit.
     std::optional<ColumnRef> key_from;
 
     // Whether an operator declared this Cabin - `CREATE CABIN`, or a

@@ -197,10 +197,9 @@ chain's column — a join key, a correlated `EXISTS` — probes the Cabin
 **per outer row**, with the value read from the frame instead of a
 compile-time literal (`CabinProbe::key_from`). Everything downstream of
 the key construction is §4's machinery unchanged: an observed value
-serves its set, a miss walks and (policy permitting) records, the
-hint-failure path re-records. This is IX17's shape one trust class over
-(`index.md` §8a), and it is the only **banked** acceleration a **heap**
-relation's join column can have — IX3 refuses it an index. The
+serves its set, a miss walks and (policy permitting) records, a failed
+hint resolves through the clustered tree. This is IX17's shape one trust
+class over (`index.md` §8a). The
 statement-local inner build (`docs/spec/join-inner-build.md`) does not
 compete for the claim: a Cabin is declared, authoritative and survives
 the statement; the build is undeclared, unauthoritative and dies with it.
@@ -493,8 +492,8 @@ session holding a pre-record view stops being visible to this guard, the
 break returns, and **no test fails**. Anyone touching that allocation owes
 this rule a second look.
 
-**What it costs, stated rather than discovered.** Two things, and the first
-is wider than it sounds:
+**What it costs, stated rather than discovered**, which is wider than it
+sounds:
 
 - `in_flight_at_mint` is a property of the *instance* since AT-S7, not of
   the relation and no longer of one core, so **one** session idling on an
@@ -506,11 +505,6 @@ is wider than it sounds:
   buys that back is the announce itself, which took the *walk* out of the
   window entirely — before it, every write during a walk was lost and the
   window was as long as the scan.
-- the heal path (`FallBackAndReRecord`) un-observes *before* it re-records,
-  so a stale-hint probe taken inside a transaction drops the set and
-  declines to rebuild it. On a heap relation that erodes a Cabin rather
-  than leaving it alone, which is the one place "declining is free" is not
-  the whole truth.
 
 Both are the honest price of an authoritative structure whose promise
 outlives the statement that filled it, and the conservative side is the

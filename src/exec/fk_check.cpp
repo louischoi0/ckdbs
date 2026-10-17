@@ -10,7 +10,6 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/tuple_verify.hpp"
 #include "kds/storage/btree/btree.hpp"
-#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/visit.hpp"
 #include "kds/txn/visibility.hpp"
@@ -94,65 +93,32 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
         if (Status s = budget->ChargeRow(); !s.ok()) return s;
     }
 
-    if (parent.clustered_type == catalog::ClusteredType::kBtree) {
-        // The descent is authoritative in both directions on a clustered
-        // relation: a hit is where the row lives, and a miss means there is
-        // no such row - the same property that lets a point SELECT skip the
-        // scan, and the reason the declaration refuses a heap parent.
-        auto found = btree::BtreeLookup(store, parent.desc_page_id, parent_tuple_key);
-        if (!found.ok()) {
-            if (found.status().code() == StatusCode::kNotFound) return FkVerdict::kViolation;
-            return found.status();
-        }
-        // Through the held leaf (btree.hpp `Location`): with no residual
-        // here, a renumbered slot would decide the verdict on another row.
-        heap::PageView leaf(found.value().leaf.bytes());
-        auto tuple = leaf.ReadTuple(found.value().slot);
-        if (!tuple.ok()) {
-            // A retired slot the index still points at - an insert this
-            // transaction or another one rolled back. No row is there.
-            if (tuple.status().code() == StatusCode::kNotFound) return FkVerdict::kViolation;
-            return tuple.status();
-        }
-        const FkVerdict verdict = VerdictOf(txn::CheckVisibility(check_view, tuple.value()));
-        // The holder's id, for the caller that means to wait rather than
-        // refuse (AO-S3). Read from the header the verdict was decided
-        // from, so the two cannot disagree.
-        if (verdict == FkVerdict::kBusy && busy_trx != nullptr) {
-            *busy_trx = tuple.value().trx_id;
-        }
-        return verdict;
+    // The descent is authoritative in both directions on a clustered
+    // relation: a hit is where the row lives, and a miss means there is
+    // no such row - the same property that lets a point SELECT skip the
+    // scan.
+    auto found = btree::BtreeLookup(store, parent.desc_page_id, parent_tuple_key);
+    if (!found.ok()) {
+        if (found.status().code() == StatusCode::kNotFound) return FkVerdict::kViolation;
+        return found.status();
     }
-
-    // Heap: no index to descend, so the chain walk is the authoritative
-    // path. Unreachable through the DDL surface (a heap parent is refused at
-    // declaration), and correct if it ever is reached.
-    FkVerdict verdict = FkVerdict::kViolation;
-    Status inner = Status::OK();
-    auto visitor = [&](PageId, heap::PageView& page,
-                       std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-        auto tuple = page.ReadTuple(slot);
-        if (!tuple.ok()) {
-            if (tuple.status().code() == StatusCode::kNotFound) {
-                return storage::VisitControl::kContinue;
-            }
-            inner = tuple.status();
-            return tuple.status();
-        }
-        auto id = KeystoneIdOfPayload(tuple.value().payload);
-        if (!id.ok()) {
-            inner = id.status();
-            return id.status();
-        }
-        if (id.value() != parent_tuple_key) return storage::VisitControl::kContinue;
-        verdict = VerdictOf(txn::CheckVisibility(check_view, tuple.value()));
-        return storage::VisitControl::kStop;
-    };
-
-    Status walked =
-        heap::ChainVisit(store, parent.desc_page_id, storage::PageAccess::kRead, visitor);
-    if (!inner.ok()) return inner;
-    if (!walked.ok()) return walked;
+    // Through the held leaf (btree.hpp `Location`): with no residual
+    // here, a renumbered slot would decide the verdict on another row.
+    heap::PageView leaf(found.value().leaf.bytes());
+    auto tuple = leaf.ReadTuple(found.value().slot);
+    if (!tuple.ok()) {
+        // A retired slot the index still points at - an insert this
+        // transaction or another one rolled back. No row is there.
+        if (tuple.status().code() == StatusCode::kNotFound) return FkVerdict::kViolation;
+        return tuple.status();
+    }
+    const FkVerdict verdict = VerdictOf(txn::CheckVisibility(check_view, tuple.value()));
+    // The holder's id, for the caller that means to wait rather than
+    // refuse (AO-S3). Read from the header the verdict was decided
+    // from, so the two cannot disagree.
+    if (verdict == FkVerdict::kBusy && busy_trx != nullptr) {
+        *busy_trx = tuple.value().trx_id;
+    }
     return verdict;
 }
 
@@ -188,7 +154,6 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
             // trusted on sight. A live match found here is authoritative and
             // returns without walking; so is an exhausted loop that checked
             // every entry (below). `usable` is whether it did.
-            const bool is_btree = child.clustered_type == catalog::ClusteredType::kBtree;
             std::unordered_set<std::uint64_t> seen;
             std::vector<parser::AstValue> scratch;
             bool usable = true;
@@ -217,15 +182,6 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                     }
                 }
                 if (at_page == kInvalidPageId) {
-                    if (!is_btree) {
-                        // No descent to heal the hint with. Abandon the
-                        // set for this check - `ServeFromCabin`'s answer
-                        // for the same reason - and take the walk: a set
-                        // given up is not exhausted and clears nothing.
-                        options.cabins->Unobserve(*key);
-                        usable = false;
-                        break;
-                    }
                     auto found = btree::BtreeLookup(store, child.desc_page_id, entry.tuple_key);
                     if (!found.ok()) {
                         // Dangling: the tuple key names no row now - a skip, not an
@@ -386,12 +342,8 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
         return storage::VisitControl::kStop;
     };
 
-    Status walked = Status::OK();
-    if (child.clustered_type == catalog::ClusteredType::kBtree) {
-        walked = btree::BtreeVisit(store, child.desc_page_id, storage::PageAccess::kRead, visitor);
-    } else {
-        walked = heap::ChainVisit(store, child.desc_page_id, storage::PageAccess::kRead, visitor);
-    }
+    const Status walked =
+        btree::BtreeVisit(store, child.desc_page_id, storage::PageAccess::kRead, visitor);
     if (!inner.ok()) return inner;
     if (!walked.ok()) return walked;
 

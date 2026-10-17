@@ -77,8 +77,8 @@ A check reads the row being written and `TableAccess::transitions`.
   expression;
 - every `DELETE`.
 
-The sorted heap fill is ineligible for a governed relation, so the per-row
-path serves its rows. A write path added later checks, or it refuses the
+No bulk path places rows outside the per-row one (`bulkinsert.md` §8). A
+write path added later checks, or it refuses the
 write on a governed relation. It never skips the check `[quiet-wrong]`.
 
 **T-R3 — a check refuses before anything of its row is written.**

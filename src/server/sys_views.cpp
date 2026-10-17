@@ -20,7 +20,6 @@
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/stats/optimizer_signals.hpp"
-#include "kds/stats/relayout_planner.hpp"
 #include "kds/stats/statement_stats.hpp"
 
 // The builders of every `sys` view (`include/kds/server/sys_views.hpp`).
@@ -67,7 +66,6 @@ constexpr SysViewSpec kViews[] = {
     {"cabins"},
     {"assertions"},
     {"transitions"},
-    {"relayout", ViewKeyMode::kChecked, "name", kStr},
     {"cabin_optimizer"},
     {"lock_waits"},
     {"statement_stats"},
@@ -182,16 +180,21 @@ void Define(exec::CatalogView& view,
     }
 }
 
-std::string ClusteredName(catalog::ClusteredType type) {
-    return type == catalog::ClusteredType::kBtree ? "BTREE" : "HEAP";
+// How the relation is stored: `HEAP` for a btree whose tuple key is hidden
+// (BZ-R1), `BTREE` for one with a declared tuple key, `CHAIN` for a system
+// relation's catalog chain, which has no access entry to ask.
+std::string StorageName(const catalog::TableAccess* access) {
+    if (access == nullptr) return "CHAIN";
+    return access->schema.heap() ? "HEAP" : "BTREE";
 }
 
 // A column's name, or its position when the schema cannot say - a dropped
 // column's included, whose name left the SQL surface (BW-R6) while a
-// `sys.access_stats` mask or a Cabin controller entry may still carry it.
+// `sys.access_stats` mask or a Cabin controller entry may still carry it,
+// and a heap's hidden tuple key, which never had one there (BZ-R3).
 std::string ColumnLabel(const StatusOr<const catalog::TableAccess*>& access, std::size_t col) {
     if (access.ok() && col < access.value()->schema.columns.size() &&
-        !access.value()->schema.columns[col].dropped()) {
+        access.value()->schema.columns[col].visible()) {
         return std::string(catalog::NameView(access.value()->schema.columns[col].name));
     }
     return std::to_string(col);
@@ -227,7 +230,6 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "cabins") return CabinsView();
     if (n == "assertions") return AssertionsView();
     if (n == "transitions") return TransitionsView();
-    if (n == "relayout") return RelayoutView(key, byte, session.default_namespace());
     if (n == "cabin_optimizer") return CabinOptimizerView(byte);
     if (n == "lock_waits") return LockWaitsView();
     if (n == "statement_stats") return StatementStatsView();
@@ -276,20 +278,23 @@ StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* v
         if (!row.ok()) return row.status();
         auto root = CurrentRootOf(row.value());
         if (!root.ok()) return root.status();
-        // A slot is free until a column takes it; a dropped column keeps its
-        // slot (BW-R6, BW-R12). Only a relation with slots is asked.
-        std::uint32_t free_slots = 0;
-        if (row.value().spare_slots > 0) {
-            auto access = catalog_.InitTableAccess(object.oid);
-            if (!access.ok()) return access.status();
-            free_slots = access.value()->layout.vacant_slot_bit_end -
-                         access.value()->layout.vacant_slot_bit_begin;
+        const catalog::TableAccess* access = nullptr;
+        if (row.value().clustered_type == catalog::ClusteredType::kBtree) {
+            auto opened = catalog_.InitTableAccess(object.oid);
+            if (!opened.ok()) return opened.status();
+            access = opened.value();
         }
+        // A slot is free until a column takes it; a dropped column keeps its
+        // slot (BW-R6, BW-R12).
+        const std::uint32_t free_slots =
+            access == nullptr ? 0
+                              : access->layout.vacant_slot_bit_end -
+                                    access->layout.vacant_slot_bit_begin;
         view.rows.push_back({Int(row.value().oid), Int(row.value().namespace_oid),
                              labels.value().Spelling(row.value().namespace_oid),
                              Str(catalog::NameView(row.value().name)),
                              Int(row.value().desc_page_id), Int(root.value()),
-                             Str(ClusteredName(row.value().clustered_type)),
+                             Str(StorageName(access)),
                              Int(row.value().next_id), Int(row.value().spare_slots),
                              Int(free_slots)});
     }
@@ -387,8 +392,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
         const parser::AstValue ns = labels.value().Spelling(object.namespace_oid);
         for (std::size_t i = 0; i < schema.value().columns.size(); ++i) {
             const catalog::SysColumnRow& column = schema.value().columns[i];
-            // `sys.columns` and `DESCRIBE` list live columns (BW-R6, BW-R12).
-            if (column.dropped()) continue;
+            // `sys.columns` and `DESCRIBE` list live columns (BW-R6, BW-R12),
+            // and no heap's hidden tuple key (BZ-R3).
+            if (!column.visible()) continue;
             // The declared type, not `len`, which for a decimal is the packed
             // (precision, scale); `ColumnTypeText` is its one reader.
             auto type_row = catalog_.ResolveTypeByVal(column.type_val);
@@ -781,97 +787,6 @@ StatusOr<exec::CatalogView> CommandDispatcher::TransitionsView() {
                              labels.value().Namespace(def.target_oid), labels.value().Name(def.target_oid),
                              Int(def.column_no),
                              Str(ColumnLabel(access, def.column_no)), Str(def.source_text)});
-    }
-    return view;
-}
-
-StatusOr<exec::CatalogView> CommandDispatcher::RelayoutView(const parser::AstValue* name,
-                                                            std::uint32_t byte,
-                                                            catalog::Oid default_namespace) {
-    if (relayout_mode_ == PhysicalOptimizerMode::kOff) {
-        return Status::InvalidArgument(
-            "sys.relayout has no plans to report: the physical optimizer is off "
-            "(physical_optimizer=off) (byte " + std::to_string(byte) + ")");
-    }
-    exec::CatalogView view;
-    // One row per plan, the relation's columns repeated on each; a relation
-    // with no plan is one row whose `plan` is `none` and whose `blocked_on`
-    // says why. The survey columns are NULL where no survey ran - a bare read
-    // plans every relation without walking any (`PlanAllRelations`); naming
-    // one walks it (`PlanRelation`), as `SHOW RELAYOUT <t>` did.
-    Define(view, {{"namespace", kStr},
-                  {"name", kStr},
-                  {"clustered", kStr},
-                  {"shapes", kInt},
-                  {"walk_weight_q8", kInt},
-                  {"survey_pages", kInt},
-                  {"survey_live", kInt},
-                  {"survey_delete_marked", kInt},
-                  {"survey_tuples_per_page", kInt},
-                  {"plan", kStr},
-                  {"blocked_on", kStr},
-                  {"surveyed", kInt},
-                  {"predicted_pages_saved", kInt},
-                  {"predicted_benefit", kInt},
-                  {"measured_pages_saved", kInt}});
-
-    std::vector<stats::RelationReport> reports;
-    if (name == nullptr) {
-        auto all = stats::PlanAllRelations(catalog_, clock_, decay_half_life_ns_);
-        if (!all.ok()) return all.status();
-        reports = std::move(all.value());
-    } else {
-        const auto [qualifier, bare] = SplitQualifiedArg(name->str_val);
-        // A catalog relation is never resolved by a statement, but this view
-        // answers for one by name - `sys.patterns` - with the reason the
-        // mover cannot touch it.
-        auto oid = qualifier == catalog::kNamespaceSysName
-                       ? catalog_.FindTableOidByName(catalog::kNamespaceSys, bare)
-                       : catalog_.ResolveRelation(qualifier, bare, default_namespace,
-                                                  name->byte_offset);
-        if (!oid.ok()) return oid.status();
-        exec::Budget budget(budget_.limit());
-        auto one = stats::PlanRelation(catalog_, page_store_, oid.value(), budget, clock_,
-                                       decay_half_life_ns_);
-        if (!one.ok()) return one.status();
-        reports.push_back(std::move(one.value()));
-    }
-
-    auto labels = RelationLabels::Read(catalog_, nullptr);
-    if (!labels.ok()) return labels.status();
-    for (const stats::RelationReport& report : reports) {
-        std::vector<parser::AstValue> head{
-            labels.value().Namespace(report.rel_oid), Str(report.name),
-            Str(report.clustered_type == catalog::ClusteredType::kBtree ? "btree" : "heap"),
-            Int(report.shapes.size()), Int(stats::WalkWeightOf(report.shapes))};
-        if (report.survey.has_value()) {
-            head.push_back(Int(report.survey->chain_pages));
-            head.push_back(Int(report.survey->live_tuples));
-            head.push_back(Int(report.survey->delete_marked));
-            head.push_back(Int(report.survey->tuples_per_page));
-        } else {
-            head.insert(head.end(), 4, Null());
-        }
-        if (report.plans.empty()) {
-            std::vector<parser::AstValue> row = head;
-            row.push_back(Str("none"));
-            row.push_back(Str(report.system_relation
-                                  ? "catalog-relation-outside-mover-jurisdiction"
-                                  : "btree-outside-v1-mover-scope"));
-            row.insert(row.end(), 4, Null());
-            view.rows.push_back(std::move(row));
-            continue;
-        }
-        for (const stats::RelayoutPlan& plan : report.plans) {
-            std::vector<parser::AstValue> row = head;
-            row.push_back(Str(stats::RelayoutPlanKindName(plan.kind)));
-            row.push_back(Str(stats::RelayoutGateName(plan.blocked_on)));
-            row.push_back(Bool(plan.survey_backed));
-            row.push_back(Int(plan.predicted_pages_saved));
-            row.push_back(Int(plan.predicted_benefit));
-            row.push_back(Int(plan.measured_pages_saved));
-            view.rows.push_back(std::move(row));
-        }
     }
     return view;
 }

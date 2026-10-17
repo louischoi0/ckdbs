@@ -15,7 +15,7 @@
 
 ## 1. Background & Rationale
 
-Relayout is the product, and every Waystone entry is a recorded `(page_id, slot, epoch)`, so tuple mobility is first-order: a variable-length row that grows on UPDATE can be forced to move (Postgres's broken HOT chains, InnoDB's row migration), and in KDS would also burn trail entries through epoch churn. Fixed length removes that at the root: **an UPDATE can never migrate a tuple**, and with the immutable `min_key` a tuple's address is stable until the physical optimizer moves it on purpose. Secondary gains: relayout is cell-`memcpy` with exact fill-factor math, slot addressing is arithmetic, and the row codec reads static offsets.
+Every Waystone entry and every Cabin hint is a recorded `(page_id, slot, epoch)`, so tuple mobility is first-order: a variable-length row that grows on UPDATE can be forced to move (Postgres's broken HOT chains, InnoDB's row migration), and in KDS would also burn trail entries through epoch churn. Fixed length removes that at the root: **an UPDATE can never migrate a tuple**, and with the immutable `min_key` a tuple's address is stable until a leaf division or compaction moves it. Secondary gains: a division is cell-`memcpy` with exact fill-factor math, slot addressing is arithmetic, and the row codec reads static offsets.
 
 The cost, accepted knowingly: variable-length management is **relocated, not eliminated** — into the var-heap (§5), which V2 makes immovable — and fixed cells pad short values. On target OLTP schemas (short, uniform strings) a sane inline width keeps the common case inline.
 
@@ -67,10 +67,9 @@ The out-of-line value store. Its design goal is to be **boring**: the mobility p
 
 ## 6. Interactions with Confirmed Design
 
-- **min_key heap:** strengthened — tuple addresses change only under deliberate relayout.
+- **min_key pages:** strengthened — tuple addresses change only under a deliberate leaf division or compaction.
 - **MVCC (`trx_id` + `undo_ptr`):** unchanged; the undo record's old-cell image is fixed-size like everything else, and under V2 it is just the old tag+bytes-or-pointer.
 - **Trails/Waystone:** pure beneficiary — fewer epoch bumps, higher validated-hit rates; no format impact.
-- **Physical optimizer:** moves get cheaper (cell memcpy) and `kVarHeap` is explicitly outside its jurisdiction.
 - **Parser/DDL:** `varchar(N)` and `char(N)` are the only width syntax (`docs/spec/types.md` §2b); there is no `ALTER … TYPE` (V5). `TEXT` stays as-is.
 - **Wire protocol:** invisible, and must remain so: `TEXT` on the wire is length-prefixed bytes regardless of inline/spilled storage.
 - **Row codec/executor:** static-offset reads; only `kSpilled` branches to a var-heap fetch (one extra page touch, by design confined to oversize values).

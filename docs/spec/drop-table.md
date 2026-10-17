@@ -24,8 +24,7 @@ BF-R2).
   included, while its own index job (`index.md` §12, BY) has not yet
   removed the slot; the relation's job drops that index job first, so one
   job owns each tree (BY-R3);
-- the var-heap chain;
-- a pre-SUS-1 heap chain.
+- the var-heap chain.
 
 Every page is checked for the class its parent names and for its owner -
 the relation's oid, or the slot's index oid. A page that fails is neither

@@ -64,8 +64,9 @@ protected:
         ASSERT_EQ(out.response.substr(0, 7), "CREATED") << out.response;
     }
 
+    // A heap (BZ-R1): one declared column, its tuple key hidden and issued.
     void CreateHeap(CommandDispatcher& d, const char* name = "a") {
-        auto out = d.Dispatch(std::string("CREATE TABLE ") + name + " (id int64, qty int64) HEAP");
+        auto out = d.Dispatch(std::string("CREATE TABLE ") + name + " (qty int64) HEAP");
         ASSERT_EQ(out.response.substr(0, 7), "CREATED") << out.response;
     }
 
@@ -122,124 +123,9 @@ TEST_F(SuppliedKeySqlTest, TheShippedStorageDefaultIsBtreeSinceSUS1) {
 
     EXPECT_EQ(testing_view::RelationField(d, "tables", "t", "clustered_type"), "BTREE");
 
-    // And it takes a named key like any other relation, ascending - which
-    // is the whole of what a heap accepts.
+    // And it takes a named key like any other relation.
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (100, 1)").response.substr(0, 8), "INSERTED");
     EXPECT_EQ(d.Dispatch("INSERT INTO t VALUES (900, 2)").response.substr(0, 8), "INSERTED");
-}
-
-// ---- The heap, which is the new half -------------------------------------
-//
-// `HEAP EXPLICIT` was refused at CREATE until 2026-08-25. It is now an
-// ordinary relation, and what it cannot do is refused per id instead: the
-// chain's tail append, its page-wise ordering and its tail-page-only
-// duplicate check are all the ascent (§3.1b), so the mark is the rule.
-
-TEST_F(SuppliedKeySqlTest, AHeapRelationTakesNamedKeysThatAscend) {
-    auto d = Dispatcher();
-    CreateHeap(d, "h");
-
-    for (int id : {10, 25, 400, 900, 1000}) {
-        auto out = d.Dispatch("INSERT INTO h VALUES (" + std::to_string(id) + ", " +
-                              std::to_string(id) + ")");
-        ASSERT_EQ(out.response.substr(0, 8), "INSERTED") << "id " << id << ": " << out.response;
-    }
-
-    for (int id : {10, 25, 400, 900, 1000}) {
-        const std::string want = std::to_string(id) + "," + std::to_string(id);
-        EXPECT_NE(d.Dispatch("SELECT * FROM h WHERE id = " + std::to_string(id)).response.find(want),
-                  std::string::npos)
-            << "lost id " << id;
-    }
-
-    // Enough rows to grow the chain past one page, still named by the
-    // caller: the growth path sets each new page's min_key from the id that
-    // opened it, which is only sound while the ids ascend.
-    for (int id = 2000; id < 2400; ++id) {
-        ASSERT_EQ(d.Dispatch("INSERT INTO h VALUES (" + std::to_string(id) + ", 1)")
-                      .response.substr(0, 8),
-                  "INSERTED")
-            << "id " << id;
-    }
-    EXPECT_NE(d.Dispatch("SELECT * FROM h WHERE id = 2399").response.find("2399,1"),
-              std::string::npos);
-}
-
-TEST_F(SuppliedKeySqlTest, AHeapRelationRefusesAKeyBelowItsMarkPresentOrAbsent) {
-    // **The pointer to BTREE is withdrawn** (BB-Q8 (b), BB-R3). This refusal
-    // used to end "use BTREE", because a btree took the key and flipped
-    // itself to `kUnordered`. A btree now refuses the same key, so a reply
-    // that sent the caller there would name a storage that answers the same
-    // way. What the heap refuses, and its code, did not move (BB-R12).
-    auto d = Dispatcher();
-    CreateHeap(d, "h");
-
-    ASSERT_EQ(d.Dispatch("INSERT INTO h VALUES (600, 1)").response.substr(0, 8), "INSERTED");
-
-    // The refusal that keeps §3.1b true. Refused under the tail's hold,
-    // before anything is placed (BB-R7) - a tail page whose min_key is 600
-    // would have no legal place for 550, and the tail-page-only duplicate
-    // check would stop meaning anything the moment a later page opened
-    // below it.
-    auto backwards = d.Dispatch("INSERT INTO h VALUES (550, 2)");
-    EXPECT_EQ(backwards.response.substr(0, 3), "ERR") << backwards.response;
-    EXPECT_NE(backwards.response.find("high-water mark"), std::string::npos)
-        << backwards.response;
-    EXPECT_EQ(backwards.response.find("use BTREE"), std::string::npos)
-        << "a btree refuses the same key; the refusal may not send the caller there: "
-        << backwards.response;
-
-    // A present key gets the same answer. The heap's duplicate check reads
-    // the tail alone and cannot prove presence below it, so it answers
-    // OutOfRange for both, where a btree names a present key a duplicate.
-    auto again = d.Dispatch("INSERT INTO h VALUES (600, 3)");
-    EXPECT_EQ(again.response.substr(0, 3), "ERR") << again.response;
-    EXPECT_NE(again.response.find("high-water mark"), std::string::npos) << again.response;
-    EXPECT_EQ(again.response.find("duplicate tuple key"), std::string::npos)
-        << "a heap answers OutOfRange for a present key too (BB-R12): " << again.response;
-
-    // The relation is unharmed and the mark did not move: 600 keeps its
-    // value, 550 never landed, and the next omitted key is still 601.
-    EXPECT_NE(d.Dispatch("SELECT * FROM h WHERE id = 600").response.find("600,1"),
-              std::string::npos);
-    EXPECT_EQ(d.Dispatch("SELECT * FROM h WHERE id = 550").response.find("550,"),
-              std::string::npos);
-    EXPECT_NE(d.Dispatch("INSERT INTO h VALUES (3)").response.find("id=601"), std::string::npos);
-}
-
-TEST_F(SuppliedKeySqlTest, AKeyBelowAHeapsTailIsRefusedAsBelowTheMark) {
-    // The chain refuses a key below its tail's min_key itself, under the
-    // tail's hold, before the mark is read (BB-R7) - and words it as the mark
-    // it is below: the caller named a key, nothing went backwards (BB-R12).
-    // A one-page chain's head opens at 0, so only a chain past its first
-    // page reaches this: two `varchar(4000)` rows fill a page, so the third
-    // issued id, 3, opens the tail.
-    auto d = Dispatcher();
-    auto created = d.Dispatch("CREATE TABLE h (id int64, s varchar(4000)) HEAP");
-    ASSERT_EQ(created.response.substr(0, 7), "CREATED") << created.response;
-    for (const char* v : {"'a'", "'b'", "'c'"}) {
-        auto out = d.Dispatch(std::string("INSERT INTO h VALUES (") + v + ")");
-        ASSERT_EQ(out.response.substr(0, 8), "INSERTED") << out.response;
-    }
-
-    auto below = d.Dispatch("INSERT INTO h VALUES (2, 'x')");
-    EXPECT_EQ(below.response.substr(0, 3), "ERR") << below.response;
-    EXPECT_NE(below.response.find("high-water mark"), std::string::npos) << below.response;
-    EXPECT_EQ(below.response.find("gone backwards"), std::string::npos)
-        << "a named key below the tail is the caller's error, not a sequence fault: "
-        << below.response;
-    EXPECT_NE(d.Dispatch("SELECT * FROM h WHERE id = 2").response.find("2,b"), std::string::npos);
-}
-
-TEST_F(SuppliedKeySqlTest, AHeapRelationMixesNamedAndIssuedKeys) {
-    auto d = Dispatcher();
-    CreateHeap(d, "h");
-
-    EXPECT_NE(d.Dispatch("INSERT INTO h VALUES (1)").response.find("id=1"), std::string::npos);
-    ASSERT_EQ(d.Dispatch("INSERT INTO h VALUES (100, 2)").response.substr(0, 8), "INSERTED");
-    // The issued id resumes above the named one, which is what keeps the
-    // chain ascending across a mixed load.
-    EXPECT_NE(d.Dispatch("INSERT INTO h VALUES (3)").response.find("id=101"), std::string::npos);
 }
 
 // ---- The claim itself ----------------------------------------------------
@@ -425,11 +311,10 @@ TEST_F(SuppliedKeySqlTest, OrderByWithLimitTakesTheLowestKeysNotTheFirstSlots) {
 
 TEST_F(SuppliedKeySqlTest, OrderByTheTupleKeyCostsNothing) {
     auto d = Dispatcher();
-    CreateHeap(d);
+    CreateBtree(d, "a");
 
-    // The one path there is since BB: an id at or above the mark is appended
-    // above every id on the page, so slot order *is* key order and the walk
-    // is left untouched - the compiler discards the sort.
+    // A leaf's slot order *is* its key order (BD-R1), so the walk is left
+    // untouched - the compiler discards the sort.
     for (int k = 1; k <= 50; ++k) {
         ASSERT_EQ(d.Dispatch("INSERT INTO a VALUES (" + std::to_string(k) + ")")
                       .response.substr(0, 8),
@@ -739,16 +624,6 @@ TEST_F(SuppliedKeySqlTest, OmittingTheKeyIsAcceptedAndIssuesAboveTheMark) {
     EXPECT_NE(out.response.find("id=701"), std::string::npos)
         << "an issued id must clear every id the caller has named: " << out.response;
     EXPECT_NE(d.Dispatch("SELECT * FROM t WHERE id = 701").response.find("7"), std::string::npos);
-}
-
-TEST_F(SuppliedKeySqlTest, AHeapRelationStillIssuesItsOwnKeysWhenAsked) {
-    auto d = Dispatcher();
-    CreateHeap(d);
-
-    auto first = d.Dispatch("INSERT INTO a VALUES (11)");
-    EXPECT_NE(first.response.find("id=1"), std::string::npos) << first.response;
-    auto second = d.Dispatch("INSERT INTO a VALUES (22)");
-    EXPECT_NE(second.response.find("id=2"), std::string::npos) << second.response;
 }
 
 TEST_F(SuppliedKeySqlTest, HeapExplicitIsCreatedRatherThanRefused) {

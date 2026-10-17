@@ -33,9 +33,9 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   the case for the scan ring's own order, which is not written. Owned by
   `docs/spec/eviction.md` (EV6, §3.1).
 
-- **The executor does not scan through EV6's ring, by decision.** Verified
-  at `2f08b71c`: `OpenScanRing`'s only callers are `relayout_planner.cpp`
-  and `cabin_optimizer_exec.cpp`. A `SELECT`'s outermost walk faults cold
+- **The executor does not scan through EV6's ring, by decision.** Re-read
+  at `0205444b`: `OpenScanRing`'s only caller is `cabin_optimizer_exec.cpp`
+  (the relayout planner, its other caller, is deleted since BZ). A `SELECT`'s outermost walk faults cold
   instead (BE-R5, `eviction.md` §3.1), which keeps a scan larger than the
   pool from displacing the working set without the ring's costs
   (`workorder-be-bounded-pool.md` §1.6). What the ring would still add - a
@@ -220,29 +220,17 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `client-manual.md`'s ring-counter row state the gap. Owner:
   `docs/spec/wal.md` §16.
 
-- **No v3 measurement prices a heap relation.** AL-S8's scenario drivers
-  declared `HEAP`, refused since SUS-1; closed 2026-09-08
-  (`raft-marks-2026-09-08-as-q6.md`) by making them `BTREE` and re-measuring
-  `f6ed10c`. Measurement is BTREE-only until the operator says otherwise,
-  and other tools still emit an explicit `HEAP` and are refused
-  (`tools/benchmark.py`, `bulk_insert_benchmark.py`,
-  `aggregate_benchmark.py`, among others; re-read at `f3da0413`). Owner:
-  `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md` AS-S3.
+- **Two drivers' text still describes the old heap.** Verified at
+  `18e7b511` by grep: the drivers that declared `(id int64, ...) HEAP` and meant `id`
+  as the tuple key (`aggregate_benchmark.py`, `kwp_load_benchmark.py`,
+  `bulk_insert_benchmark.py`, `scenario1_backtest.py`) declare `BTREE` since
+  BZ, the storage BZ's heap has with the key still declared. The prose of
+  `cabin_scope_ab_benchmark.py` (its `HEAP` relations were created with no
+  storage word, so BTREE, since SUS-1) and of `scenario1_backtest.py`'s
+  summary line still calls a relation a heap with no index; no measurement
+  reads that text. Owner: `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`.
 
 ## WAL
-
-- **A heap placement whose record is never written is not taken back.**
-  Verified at `07e822a6` (BD-S3), by reading; BD-S1's
-  `SortedLeafCrashTest.ARowPlacedAndNeverLoggedLeavesNoHoleForTheNextRecordsRedo`
-  reproduced the shape on a btree leaf at `ec3acda5`. When index
-  maintenance, the assertion reservation, the undo append or the spills'
-  noting fails after a placement and before its record, BD-S2 removes a
-  btree row from its still-held leaf; a heap row stays on its page with no
-  record. A later logged insert on the same page then names a slot redo has
-  never seen, and the mount is refused (the btree cell's refusal read
-  *"redo names slot 4 on a page holding 3"*). BD left the heap's protocol untouched (BD-Q4 (a)), and
-  no volume this engine mounts holds a heap user relation, so only the
-  parser's test seam reaches it. Owner: `heap-and-tuple.md` §3.1b.
 
 - **A refused catalog report on a new page spends one reserved page.** The
   page is left allocated, empty and unlinked. The catalog range is pages
@@ -819,8 +807,7 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
   - a write;
   - a tuple key descent, run inline by design;
   - an index walk (`RunIndexStep`);
-  - a join's inner walk under one outer page;
-  - a heap relation's lookup that falls back to a chain walk.
+  - a join's inner walk under one outer page.
 
   Each holds its core until it ends or `exec::Budget` stops it. 64 is
   BA-Q11's value, not re-measured in BA-S15.
@@ -1171,9 +1158,14 @@ Verified on `cn4-transition-refresh` (BV's close). Owned by
   for `CREATE`, an `UPDATE` along an edge, and `DROP`. A seeded workload
   interleaving state moves with transactions, rollbacks and faults is not
   generated.
-- **The sorted heap fill's skip has no cell.** The fill is ineligible for a
-  governed relation (`SortedFillEligible`), but no heap relation can be
-  created since SUS-1 to exercise it.
+- **The sim harness generates no heap relation.** Verified at
+  `0205444b` (`sim/workload.cpp`): every relation the workload creates is a
+  btree with a declared tuple key, because the oracle reconciles rows by
+  tuple key and a heap's is hidden (`heap-and-tuple.md` §3.1b). A heap's
+  storage is the btree's, which the corpus exercises; its surface - the
+  hidden column skipped by `*`, `RETURNING *`, `DESCRIBE`, positional
+  `INSERT` - and its crash recovery are covered at unit level only
+  (`tests/heap_hidden_key_test.cpp`), never by a seeded crash workload.
 - **`CREATE`/`DROP TRANSITION` inside an explicit transaction commit at the
   statement**, as `CREATE`/`DROP ASSERTION` do. A `ROLLBACK` does not undo
   them.

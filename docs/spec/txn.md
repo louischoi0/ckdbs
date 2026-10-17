@@ -77,8 +77,7 @@ with AT-S6, one ruled in:**
    the ceiling exists for; it is rolled back like any other. A DDL
    **statement** is never cut short, by the in-flight rule above, and an
    autocommit DDL has no transaction the sweep can reach.
-2. **Background read views** (the Cabin build, the checkpoint, the
-   relayout survey) — they hold undo like any view, so the ceiling would
+2. **Background read views** (the Cabin build, the checkpoint) — they hold undo like any view, so the ceiling would
    apply, but the response is not abort: the task **re-mints its view and
    resumes** at its next resumable point. A background task that cannot
    resume is a task defect, not a ceiling exemption. `[PROPOSED]` — the
@@ -376,7 +375,7 @@ recovery's undo phase uses the record.
 
 `UndoLog::Walk` follows `prior_undo_ptr` newest→oldest, bounded by
 `kMaxUndoChainLength = 2^16`. Exceeding the bound is `Corruption`, not a hang —
-the same guard `kMaxChainPages` provides for the heap chain.
+the same guard `kMaxChainPages` provides for a catalog chain.
 
 ## 4. Snapshots and visibility
 
@@ -692,7 +691,8 @@ after (`bench/v3.2.0/results-ca-r1-visibility-*.md`).
 
 `heap::ChainVisit` remains a purely physical walk. Visibility belongs to its
 callback: that keeps `storage/` free of a dependency on `txn/`, and keeps
-`ChainVisit` usable by the catalog, which must not filter.
+`ChainVisit` usable by the catalog, which must not filter; no user relation is
+a chain (`heap-and-tuple.md` §3.1b).
 
 ## 5. Write conflicts — first-updater-wins
 
@@ -798,11 +798,9 @@ level: **can the re-run answer differently once this holder decides?**
   uniqueness is proved by a physical descent onto the one page that may
   hold it, and an issued key comes from the relation's own sequence. So the
   wait ends in a row written or in `AlreadyExists` for a key the holder
-  committed - on a btree a named key waits on an undecided insert of the
+  committed - a named key waits on an undecided insert of the
   same key and is placed if it rolls back (BD-R5, BD-Q9 (a)) - and
-  `AlreadyExists` is not retryable, which is the honest answer. On a heap
-  the wait can also end in `OutOfRange` for a key the mark passed during
-  it (BB-R3, kept for the heap by BD-Q4 (a)).
+  `AlreadyExists` is not retryable, which is the honest answer.
 - **Yes, for the foreign-key forward check.** Its `check_view` is minted
   at the check rather than at `BEGIN` — a constraint reads latest state
   (`foreign-keys.md` §4, which is where that rule lives; §4.4 below is
@@ -863,8 +861,7 @@ Every step of a statement runs under the session's borrow.
   poll of `IsInFlight`; an `INSERT` asks for that `IX` ahead
   of its assertion admission (`InsertParsed`, AT-0 item 13), so a build
   cannot slip between a writer's check and its row. AO-R12 meant the
-  position for a *mover*; none exists (`physical-optimizer.md` is
-  shadow-only).
+  position for a *mover*; none exists (`physical-optimizer.md` §6).
   **That `X` is refused by a writer's `IX` too**, so the drop waits for an
   open writer of the relation as well - transaction-length, since a write's
   borrow is the transaction's. A drop **inside a transaction that holds
@@ -889,8 +886,7 @@ Every step of a statement runs under the session's borrow.
   `[min_key, next.min_key)`: the upper bound is a page the walk has not
   read, and a forward walk's future is the whole tail of the key space
   anyway, so the narrower interval would under-declare exactly the keys a
-  resumed walk is about to visit. Btree only - a heap chain is not walked
-  in key order, so it declares the relation and no slice.
+  resumed walk is about to visit.
 - **The holder is not a transaction.** An autocommit `SELECT` has no
   transaction, so a read borrow holds under an id from a space of its own
   (bit 63, which no 48-bit trx id reaches, `read_borrow.hpp`'s
@@ -932,9 +928,7 @@ Every step of a statement runs under the session's borrow.
 > page latch held" (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`).
 > A partition latch *is* taken under a page latch: `UPDATE`'s and
 > `DELETE`'s per-row tuple borrows run inside the walk's write hold of the
-> page, and a heap insert borrows its issued id under the exclusive hold of
-> the chain's tail (BB-R2, kept for the heap by BD-Q4 (a)); a btree insert
-> borrows before its descent, holding no page (BD-R6). What holds
+> page; an insert borrows before its descent, holding no page (BD-R6). What holds
 > is that nothing parks there: a refused borrow comes back as a refusal
 > and the park is `DispatchAsync`'s, once every hold is released. In
 > BB-R4's order - **a user relation page, a `sys.tables` chain page, a
@@ -991,7 +985,7 @@ recovery-driven rollback reuses this code path:
 
 | Trail entry | Compensation | Record |
 |---|---|---|
-| insert | `RetireSlot` - the slot keyless; on a btree the key is free again (BD-R4, W12), while on a heap the mark the key moved stays past it and the key stays refused `OutOfRange` (BB-R3, kept by BD-Q4 (a)) | `SLOT_RETIRE` |
+| insert | `RetireSlot` - the slot keyless; the key is free again (BD-R4, W12) | `SLOT_RETIRE` |
 | overwrite | `OverwriteTuple(slot, image, prior_trx_id, prior_undo_ptr)` | `HEAP_OVERWRITE` |
 | delete-mark | `ClearDeleteMark(slot, prior_trx_id, prior_undo_ptr)` | `HEAP_DELETE_UNMARK` |
 | var-heap append | `varheap::PageRelease(slot)` — the value dies with the version that wrote it | `VARHEAP_RELEASE` |

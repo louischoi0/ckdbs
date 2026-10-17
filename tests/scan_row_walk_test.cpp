@@ -52,8 +52,7 @@ protected:
             row.notnull = true;
             schema.columns.push_back(row);
         }
-        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, "t", schema,
-                                                  catalog::ClusteredType::kBtree);
+        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, "t", schema);
         ASSERT_TRUE(created.ok()) << created.status().message();
         for (std::uint32_t i = 1; i <= rows; ++i) Insert(i);
     }

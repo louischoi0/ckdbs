@@ -72,7 +72,6 @@ add_library(kds
     src/stats/trail_recorder.cpp
     src/stats/access_stats.cpp
     src/stats/cabin_store.cpp
-    src/stats/relayout_planner.cpp
     src/stats/optimizer_signals.cpp
     src/stats/cabin_optimizer.cpp
     src/catalog/catalog_cache.cpp

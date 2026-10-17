@@ -58,11 +58,13 @@ Workload::Workload(Rng rng, Profile profile)
       profile_(profile),
       drop_rng_(rng_.Fork("drop")),
       purge_rng_(rng_.Fork("purge")) {
-    // 1-3 tables, each independently heap or btree. Decided up front so
-    // the table set is stable however many ops are drawn.
+    // 1-3 tables, decided up front so the table set is stable however many
+    // ops are drawn. All btree: a heap's tuple key is hidden (BZ-R1), and the
+    // oracle reconciles by tuple key; the heap's surface is
+    // `heap_hidden_key_test.cpp`'s, its storage this btree's.
     const std::size_t count = 1 + rng_.Below(3);
     for (std::size_t i = 0; i < count; ++i) {
-        tables_.push_back(Table{"t" + std::to_string(i), rng_.Chance(50), 0});
+        tables_.push_back(Table{"t" + std::to_string(i), 0});
     }
 }
 
@@ -119,7 +121,7 @@ std::vector<std::size_t> Workload::LiveIndices() const {
 
 // A fresh name in a dropped one's place, created by the next `Next()`.
 void Workload::AddReplacement() {
-    tables_.push_back(Table{"t" + std::to_string(tables_.size()), drop_rng_.Chance(50), 0});
+    tables_.push_back(Table{"t" + std::to_string(tables_.size()), 0});
 }
 
 Op Workload::Drop() {
@@ -155,7 +157,7 @@ std::uint64_t Workload::FreshKey(Table& table) {
 }
 
 Op Workload::Insert(Table& table) {
-    if (table.btree && rng_.Chance(30)) return InsertNamed(table);
+    if (rng_.Chance(30)) return InsertNamed(table);
     Op op;
     op.kind = Op::Kind::kInsert;
     op.table = table.name;
@@ -297,7 +299,7 @@ Op Workload::DataOp() {
         // only (BH-Q9).
         Table& table = PickTableMutable();
         Op del = Delete(table);
-        if (in_txn_ || !table.btree || !purge_rng_.Chance(60)) return del;
+        if (in_txn_ || !purge_rng_.Chance(60)) return del;
         // The DELETE never runs, so its key is no deleted key to name again.
         if (del.by_tuple_key && !table.deleted.empty() && table.deleted.back() == del.key) {
             table.deleted.pop_back();
@@ -340,9 +342,7 @@ Op Workload::Next() {
         Op op;
         op.kind = Op::Kind::kCreateTable;
         op.table = table.name;
-        op.btree = table.btree;
-        op.sql = "CREATE TABLE " + table.name + " (id int64, v int64, name varchar)" +
-                 (table.btree ? " BTREE" : " HEAP");
+        op.sql = "CREATE TABLE " + table.name + " (id int64, v int64, name varchar)";
         return op;
     }
 

@@ -9,7 +9,6 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
-#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/log_page_image.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
@@ -181,14 +180,10 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
     BoundCabinBuild build(aggregate, stmt.enforced_max(), assertion_id);
     if (Status s = build.chain.EnsureRoot(store, wal); !s.ok()) return s;
 
-    // A btree leaf is a heap page, so the walk below is one loop for both
-    // clustered forms - only the first leaf differs.
-    PageId leaf = access.desc_page_id;
-    if (access.clustered_type == catalog::ClusteredType::kBtree) {
-        auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);
-        if (!first.ok()) return first.status();
-        leaf = first.value();
-    }
+    // The leaf chain, from the leftmost leaf.
+    auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);
+    if (!first.ok()) return first.status();
+    PageId leaf = first.value();
 
     std::vector<parser::AstValue> group_values(group_cols.size());
     const PageId walk_origin = leaf;

@@ -206,7 +206,7 @@ Status WriteCase(const std::string& path, const SimConfig& config, const SimPlan
         const Op& op = entry.op;
         out << "op\t" << OpKindName(op.kind) << '\t' << op.table << '\t' << op.key << '\t'
             << op.lo << '\t' << op.hi << '\t' << op.v << '\t' << op.pred_v << '\t'
-            << (op.btree ? 1 : 0) << '\t' << (op.by_tuple_key ? 1 : 0) << '\t'
+            << (op.by_tuple_key ? 1 : 0) << '\t'
             << (op.set_name ? 1 : 0) << '\t' << op.name << '\t' << op.sql << "\n";
     }
     if (!out) return Status::IoError("the case file " + path + " was not written whole");
@@ -297,7 +297,7 @@ StatusOr<LoadedCase> ReadCase(const std::string& path) {
             return Status::InvalidArgument("case file line " + std::to_string(line_no) +
                                            ": unknown tag '" + tag + "'");
         }
-        constexpr std::size_t kOpFields = 13;
+        constexpr std::size_t kOpFields = 12;
         if (f.size() < kOpFields) {
             return Status::InvalidArgument("case file line " + std::to_string(line_no) +
                                            ": an op line has " + std::to_string(f.size()) +
@@ -319,11 +319,10 @@ StatusOr<LoadedCase> ReadCase(const std::string& path) {
             return Status::InvalidArgument("case file line " + std::to_string(line_no) +
                                            ": a numeric field is not a number");
         }
-        op.btree = f[8] == "1";
-        op.by_tuple_key = f[9] == "1";
-        op.set_name = f[10] == "1";
-        op.name = f[11];
-        op.sql = f[12];
+        op.by_tuple_key = f[8] == "1";
+        op.set_name = f[9] == "1";
+        op.name = f[10];
+        op.sql = f[11];
         loaded.plan.entries.push_back(SimPlan::Entry{std::move(op), std::move(pending)});
         pending.clear();
     }

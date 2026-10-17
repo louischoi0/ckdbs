@@ -18,7 +18,6 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/tuple_verify.hpp"
 #include "kds/storage/btree/btree.hpp"
-#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/keystone.hpp"
@@ -161,30 +160,21 @@ Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
 // A stopping sub-chain's walk is cut short by its own sink, so the map it
 // filled covers a *prefix* of the relation. Making that partiality safe
 // needs one thing the executor did not have: a position a later walk can
-// resume from. That is this mark - on a heap, a page and how many of that
-// page's rows the walk covered in the page's own emission order.
-//
-// **The ordinal** (a heap's) counts the rows the walk handed its visitor on
-// that page, in the order it emits them - slot order. A heap page appends
-// and never shifts, so an ordinal taken by one walk names the same row to
-// the next.
-//
-// **On a btree the mark is a key** (BD-R3 E4,
-// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`): `last_tuple_key`,
-// the last row the walk covered, and a resume skips every row at or below
-// it. The statement writes nothing between its walks, but another core may:
-// a leaf places a row where its key sorts, so an insert on the marked leaf
-// shifts the rows after it, and an ordinal would then skip a row it never
-// covered or cover one twice. Keys only move right, so every key above
-// `last_tuple_key` is on the marked leaf or to its right, and the resume still
-// starts there. A heap page never shifts and keeps the ordinal.
+// resume from. That is this mark (BD-R3 E4,
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`): the leaf the
+// walk stopped on and `last_tuple_key`, the last row it covered, and a
+// resume skips every row at or below it. The statement writes nothing
+// between its walks, but another core may: a leaf places a row where its
+// key sorts, so an insert on the marked leaf shifts the rows after it, and
+// an ordinal would then skip a row it never covered or cover one twice.
+// Keys only move right, so every key above `last_tuple_key` is on the marked
+// leaf or to its right, and the resume still starts there.
 //
 // `page == kInvalidPageId` is "from the head", which is where a first walk
 // starts and what an unset mark means.
 struct WalkMark {
     PageId page = kInvalidPageId;
-    std::uint32_t visited = 0;
-    std::uint64_t last_tuple_key = 0;  // a btree's mark; 0 is below every id (kFirstRowId)
+    std::uint64_t last_tuple_key = 0;  // 0 is below every id (kFirstRowId)
 };
 
 // What a resumable walk reads and writes: where to start, how far it got,
@@ -667,12 +657,9 @@ private:
         co_return co_await RunWalkStep(steps, index, step, access);
     }
 
-    // A tuple key descent. Its answer is authoritative on a btree relation - a
-    // miss means the row does not exist - and a heap relation has no tuple key
-    // index, so it falls through to the same walk a Scan would do, with
-    // the key kept as a residual. That fall-through is safe *because* the
-    // compiler also left the key in `residual`: filtering on the residual
-    // list alone gives the same rows.
+    // A tuple key descent. Its answer is authoritative - a miss means the row
+    // does not exist. The compiler also left the key in `residual`, so the
+    // row the descent finds is filtered like any other.
     sched::Coro RunPointStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
         auto key = KeyFromOperand(*step.key, frame_);
@@ -682,65 +669,52 @@ private:
             co_return key.status();
         }
 
-        if (access.clustered_type == catalog::ClusteredType::kBtree) {
-            // The memo, checked before the descent. It holds a *location*,
-            // not a row, so a hit re-reads and re-filters exactly what a
-            // fresh descent would have handed to the same code - which is
-            // what makes "results identical with the memo on and off" a
-            // property of the structure rather than of the test data.
-            if (memo_valid_ && memo_step_ == step.step_id && memo_key_ == key.value()) {
-                NoteFetch();
-                ++stats_.For(step.step_id).pages_fetched;
-                // Through the one verifier, as a trail or a Cabin hint is:
-                // the memo outlives the descent's hold, and a divide
-                // renumbers the slot and bumps the epoch (btree.hpp
-                // `Location`).
-                VerifiedTuple verified =
-                    VerifyTupleAt(store_, memo_page_, memo_slot_, key.value(), memo_epoch_,
-                                  access.oid);
-                if (verified.ok()) {
-                    ++stats_.For(step.step_id).probe_memo_hits;
-                    co_return AcceptTupleAt(steps, index, step, access, memo_page_,
-                                         *verified.page, memo_slot_);
-                }
-                // Moved or gone. Fall through to the descent rather than
-                // fail: the memo is an accelerator, never an oracle.
-                memo_valid_ = false;
-            }
-
-            if (Status s = co_await TryReplay(steps, index, step, access, key.value()); !s.ok()) {
-                co_return s;
-            }
-            if (replayed_) co_return Status::OK();
-
+        // The memo, checked before the descent. It holds a *location*,
+        // not a row, so a hit re-reads and re-filters exactly what a
+        // fresh descent would have handed to the same code - which is
+        // what makes "results identical with the memo on and off" a
+        // property of the structure rather than of the test data.
+        if (memo_valid_ && memo_step_ == step.step_id && memo_key_ == key.value()) {
             NoteFetch();
             ++stats_.For(step.step_id).pages_fetched;
-            auto found = btree::BtreeLookup(store_, access.desc_page_id, key.value());
-            if (found.ok()) {
-                memo_valid_ = true;
-                memo_step_ = step.step_id;
-                memo_key_ = key.value();
-                memo_page_ = found.value().page_id;
-                memo_slot_ = found.value().slot;
-                heap::PageView leaf(found.value().leaf.bytes());  // btree.hpp `Location`
-                memo_epoch_ = CurrentRelayoutEpoch(leaf);
-                co_return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
-                                     found.value().slot);
+            // Through the one verifier, as a trail or a Cabin hint is:
+            // the memo outlives the descent's hold, and a divide
+            // renumbers the slot and bumps the epoch (btree.hpp
+            // `Location`).
+            VerifiedTuple verified =
+                VerifyTupleAt(store_, memo_page_, memo_slot_, key.value(), memo_epoch_,
+                              access.oid);
+            if (verified.ok()) {
+                ++stats_.For(step.step_id).probe_memo_hits;
+                co_return AcceptTupleAt(steps, index, step, access, memo_page_,
+                                     *verified.page, memo_slot_);
             }
-            if (found.status().code() == StatusCode::kNotFound) co_return Status::OK();
-            co_return found.status();
+            // Moved or gone. Fall through to the descent rather than
+            // fail: the memo is an accelerator, never an oracle.
+            memo_valid_ = false;
         }
 
-        // Heap: no index to descend. The walk below is the authoritative
-        // path, and the residual carries the key.
-        //
-        // **This is the case spec section 7 calls large**: a trail turns a
-        // full chain scan into one read, because a heap relation has no tuple key
-        // index for a descent to use in the first place.
-        if (Status s = co_await TryReplay(steps, index, step, access, key.value()); !s.ok()) co_return s;
+        if (Status s = co_await TryReplay(steps, index, step, access, key.value()); !s.ok()) {
+            co_return s;
+        }
         if (replayed_) co_return Status::OK();
 
-        co_return co_await RunWalkStep(steps, index, step, access);
+        NoteFetch();
+        ++stats_.For(step.step_id).pages_fetched;
+        auto found = btree::BtreeLookup(store_, access.desc_page_id, key.value());
+        if (found.ok()) {
+            memo_valid_ = true;
+            memo_step_ = step.step_id;
+            memo_key_ = key.value();
+            memo_page_ = found.value().page_id;
+            memo_slot_ = found.value().slot;
+            heap::PageView leaf(found.value().leaf.bytes());  // btree.hpp `Location`
+            memo_epoch_ = CurrentRelayoutEpoch(leaf);
+            co_return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
+                                 found.value().slot);
+        }
+        if (found.status().code() == StatusCode::kNotFound) co_return Status::OK();
+        co_return found.status();
     }
 
     // ---- Replay (workplan P11/P13) ---------------------------------------
@@ -1346,9 +1320,7 @@ private:
         // **A btree entry is verified, and a miss resolved by its tuple key** (BD-R3
         // E3, the second bullet above): `VerifyTupleAt` reads the slot's tuple key
         // against the entry's; a miss descends for the tuple key, as the Cabin
-        // serve does. A heap page never shifts, so its miss has no tuple key to
-        // fall back on and is refused (BF-R10, below).
-        const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
+        // serve does.
         PageId last_page = kInvalidPageId;
         for (const stats::CabinEntry& entry : bucket) {
             if (stopped_) break;
@@ -1357,46 +1329,27 @@ private:
                 ++step_stats.pages_fetched;
                 last_page = entry.page_id;
             }
-            if (is_btree) {
-                VerifiedTuple verified = VerifyTupleAt(store_, entry.page_id, entry.slot, entry.tuple_key,
-                                                       entry.page_epoch, access.oid);
-                if (verified.ok()) {
-                    if (Status s = AcceptTupleAt(steps, index, step, access, entry.page_id,
-                                                 *verified.page, entry.slot);
-                        !s.ok()) {
-                        co_return s;
-                    }
-                    continue;
-                }
-                verified = {};
-                auto found = btree::BtreeLookup(store_, access.desc_page_id, entry.tuple_key);
-                if (!found.ok()) {
-                    // Absent: the row the walk bucketed is gone from the
-                    // relation, which the walk would not emit either.
-                    if (found.status().code() == StatusCode::kNotFound) continue;
-                    co_return found.status();
-                }
-                heap::PageView leaf(found.value().leaf.bytes());
-                if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id,
-                                             leaf, found.value().slot);
+            VerifiedTuple verified = VerifyTupleAt(store_, entry.page_id, entry.slot, entry.tuple_key,
+                                                   entry.page_epoch, access.oid);
+            if (verified.ok()) {
+                if (Status s = AcceptTupleAt(steps, index, step, access, entry.page_id,
+                                             *verified.page, entry.slot);
                     !s.ok()) {
                     co_return s;
                 }
                 continue;
             }
-            // Through the verifier as the btree arm is (BF-R10): the location
-            // is this statement's own, from the walk that built the bucket, so
-            // a miss is not a stale hint to fall back from but a page that
-            // changed class or owner under the statement - refused.
-            VerifiedTuple verified = VerifyTupleAt(store_, entry.page_id, entry.slot, entry.tuple_key,
-                                                   entry.page_epoch, access.oid);
-            if (!verified.ok()) {
-                co_return Status::Corruption("inner build: page " + std::to_string(entry.page_id) +
-                                             " slot " + std::to_string(entry.slot) +
-                                             " no longer holds the row its walk bucketed");
+            verified = {};
+            auto found = btree::BtreeLookup(store_, access.desc_page_id, entry.tuple_key);
+            if (!found.ok()) {
+                // Absent: the row the walk bucketed is gone from the
+                // relation, which the walk would not emit either.
+                if (found.status().code() == StatusCode::kNotFound) continue;
+                co_return found.status();
             }
-            if (Status s = AcceptTupleAt(steps, index, step, access, entry.page_id,
-                                         *verified.page, entry.slot);
+            heap::PageView leaf(found.value().leaf.bytes());
+            if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id,
+                                         leaf, found.value().slot);
                 !s.ok()) {
                 co_return s;
             }
@@ -1597,9 +1550,8 @@ private:
         std::vector<std::uint64_t> tuple_keys;
         tuple_keys.swap(index_scratch_);
 
-        // Phase 2. Every tuple key resolves through the clustered tree - the index
-        // is refused on a heap relation precisely so this descent exists
-        // (spec IX3).
+        // Phase 2. Every tuple key resolves through the clustered tree (spec
+        // IX3).
         for (const std::uint64_t tuple_key : tuple_keys) {
             if (stopped_) break;
             NoteFetch();
@@ -1691,19 +1643,15 @@ private:
     //
     // **Two phases, and the split is not an optimization.** Phase 1 resolves
     // every entry to a verified location without emitting anything; phase 2
-    // emits. That ordering is what makes the heap fallback safe: on a heap
-    // relation a failed hint cannot be resolved per entry - there is no tuple key
-    // descent - so the step abandons the Cabin and walks instead, and it may
-    // only do that if it has not already emitted rows the walk would emit
-    // again. Resolving first means the abandon decision is always taken
-    // before the first row goes out.
+    // emits, so the set is served in one order (below) and no row goes out
+    // before every entry is resolved - a failed hint by the tuple key's
+    // descent.
     //
     // **One set, or a cover's several** (AQ-R8): phase 1 resolves them all
     // into one list, deduped across sets, and phase 2 sorts and emits it, so
     // a cover's union is served in the walk's order like any one set.
     sched::Coro ServeFromCabin(const std::vector<Step>& steps, std::size_t index, const Step& step,
                           const catalog::TableAccess& access, std::span<const ServedSet> sets) {
-        const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
         StepStats& step_stats = stats_.For(step.step_id);
 
         serve_scratch_.clear();
@@ -1738,23 +1686,6 @@ private:
                     }
                     ++step_stats.cabin_hint_misses;
                     cabins_->NoteHint(key.cabin_id, /*ok=*/false);
-                }
-
-                if (!is_btree) {
-                    // No descent to resolve the tuple key with. Abandon the Cabin for
-                    // this step and take the authoritative path, re-recording
-                    // the value's set from it - one bulk heal rather than a
-                    // chain scan per entry. Nothing has been emitted yet, so
-                    // this cannot duplicate a row. **A cover records nothing**,
-                    // whatever its width: its step has no one probed value, and a
-                    // re-record would bank the day against an empty value - an
-                    // empty set served as authoritative. The failing key is
-                    // un-observed and the step walks.
-                    if (!step.cabin->cover.has_value()) {
-                        co_return co_await FallBackAndReRecord(steps, index, step, access, key);
-                    }
-                    cabins_->Unobserve(key);
-                    co_return co_await RunWalkStep(steps, index, step, access);
                 }
 
                 NoteFetch();
@@ -1805,11 +1736,10 @@ private:
         // so served in entry order a set could reorder a reply against
         // I12's within-step contract.
         //
-        // **That order is tuple key order**: every page's slot order is its key
-        // order - a btree leaf's by placement (BD-R1), a heap page's by its
-        // tail taking ids in issue order (BB-R7) - so the walk emits ids
-        // ascending, across pages by `min_key`, and sorting by tuple key is exact
-        // even after a leaf division has given a later page a lower id.
+        // **That order is tuple key order**: a leaf's slot order is its key
+        // order by placement (BD-R1), so the walk emits ids ascending, across
+        // leaves by `min_key`, and sorting by tuple key is exact even after a
+        // leaf division has given a later page a lower id.
         std::sort(located.begin(), located.end(),
                   [](const Located& a, const Located& b) { return a.tuple_key < b.tuple_key; });
 
@@ -1839,10 +1769,6 @@ private:
                 continue;
             }
             ++step_stats.cabin_hint_misses;
-            // A heap relation moves no tuple, so a miss there is a row
-            // purged between the phases - a dead entry, which §5 says to
-            // drop on sight.
-            if (!is_btree) continue;
             NoteFetch();
             ++step_stats.pages_fetched;
             auto found = btree::BtreeLookup(store_, access.desc_page_id, at.tuple_key);
@@ -1863,19 +1789,6 @@ private:
         co_return Status::OK();
     }
 
-    // The heap hint-failure path: un-observe, walk, and re-record.
-    //
-    // Un-observing first is what keeps this honest. The walk below is the
-    // authoritative path, so the rows are right either way - but the set
-    // that produced a bad hint has just been shown to disagree with storage,
-    // and §1's corollary makes dropping it always legal.
-    sched::Coro FallBackAndReRecord(const std::vector<Step>& steps, std::size_t index,
-                               const Step& step, const catalog::TableAccess& access,
-                               const stats::CabinKey& key) {
-        cabins_->Unobserve(key);
-        co_return co_await WalkAndRecord(steps, index, step, access, key);
-    }
-
     // `prefix` is JB6's resumable form and is null for every other walk:
     // the walk then starts at the head, counts nothing, and is the walk it
     // has always been. When set, it says where to resume, and the walk
@@ -1886,14 +1799,11 @@ private:
 
         // ---- The resumable prefix (spec §6, workplan JB6) ----------------
         //
-        // A mark is a page and a count of that page's rows already covered.
-        // The mark starts where the last walk left it, so a walk that
+        // A mark is a leaf and the last tuple key covered. The mark starts where the last walk left it, so a walk that
         // visits nothing leaves it untouched.
         const bool prefixed = prefix != nullptr;
         const PageId resume_page = prefixed ? prefix->resume.page : kInvalidPageId;
-        const std::uint32_t resume_visited = prefixed ? prefix->resume.visited : 0;
         const std::uint64_t resume_tuple_key = prefixed ? prefix->resume.last_tuple_key : 0;
-        const bool keyed_mark = access.clustered_type == catalog::ClusteredType::kBtree;
         if (prefixed) prefix->mark = prefix->resume;
         // The build this walk extends, when it is this step's own: read
         // after each accepted row, because the cap trips inside one - and
@@ -1901,7 +1811,6 @@ private:
         // mark may not advance past it.
         const bool extending =
             prefixed && building_ != nullptr && building_->step_id == step.step_id;
-        std::uint32_t visited_on_page = 0;
         bool mark_frozen = false;
         // Whether the walk ended on a stop rather than on the relation's
         // end - the two are one return value from the page primitives
@@ -1910,15 +1819,13 @@ private:
 
         // ---- Range pruning (kRange) --------------------------------------
         //
-        // Both storage forms are ordered **page-wise** by `min_key`: every
-        // id in a page is below the next page's min_key (heap_chain.hpp's
-        // ordering property, and the btree leaf chain by construction). So
-        // the first page whose min_key exceeds the high bound proves that
-        // nothing after it can qualify, and the walk can stop.
+        // The leaf chain is ordered **page-wise** by `min_key`: every id in
+        // a leaf is below the next leaf's min_key. So the first leaf whose
+        // min_key exceeds the high bound proves that nothing after it can
+        // qualify, and the walk can stop.
         //
-        // **This prunes the tail, not the head.** Leading pages are skipped
-        // by the head seek below, on a btree only; a heap walk starts at
-        // its head.
+        // **This prunes the tail, not the head.** Leading leaves are
+        // skipped by the head seek below.
         //
         // Rows below `low` are dropped by the residual, which still carries
         // both bounds (step_chain.hpp) - so this is an accelerator that
@@ -1992,7 +1899,6 @@ private:
             if (page_id != walk_last_page) {
                 ++stats_.For(step.step_id).pages_fetched;
                 walk_last_page = page_id;
-                visited_on_page = 0;
                 walk_page_min_key = page.min_key();
             }
 
@@ -2007,38 +1913,34 @@ private:
 
             // One row of this page, in the page's own emission order, with
             // JB6's skip and mark applied. **Every accepted tuple of a walk
-            // goes through here**, so the ordinal a resume skips cannot
-            // drift from the ordinal a mark recorded - that drift would
-            // silently drop rows or emit them twice, and no test of a
-            // completed walk would see it.
+            // goes through here**, so the key a resume skips to cannot drift
+            // from the key a mark recorded - that drift would silently drop
+            // rows or emit them twice, and no test of a completed walk would
+            // see it.
             const auto accept = [&](std::uint16_t at) -> Status {
                 // One branch, loop-invariant, for every walk in the engine
-                // that is not a prefix: the ordinal is not even counted.
+                // that is not a prefix: no key is even read.
                 // The walk is the hottest path there is, and JB5's gate
                 // priced a two-nanosecond per-row guard as visible.
                 if (!prefixed) {
                     return AcceptTupleAt(steps, index, step, *live_access, page_id, page, at,
                                          nr_slots);
                 }
-                const std::uint32_t ordinal = visited_on_page++;
-                // A btree row's key, for the key mark. A retired slot has
-                // none and is no row: it is handed on unmarked, and
-                // `AcceptTupleAt` declines it.
+                // The row's key, for the mark. A retired slot has none and
+                // is no row: it is handed on unmarked, and `AcceptTupleAt`
+                // declines it.
                 std::uint64_t tuple_key = 0;
-                if (keyed_mark) {
-                    auto payload = page.PayloadAt(at, nr_slots);
-                    if (payload.ok()) {
-                        auto id = KeystoneIdOfPayload(payload.value());
-                        if (!id.ok()) return id.status();
-                        tuple_key = id.value();
-                    }
+                auto payload = page.PayloadAt(at, nr_slots);
+                if (payload.ok()) {
+                    auto id = KeystoneIdOfPayload(payload.value());
+                    if (!id.ok()) return id.status();
+                    tuple_key = id.value();
                 }
                 // Covered by an earlier walk of this step: the map holds
                 // whatever it qualified for, and re-examining it is the
                 // double visit spec §6's economics forbids.
-                const bool covered =
-                    keyed_mark ? resume_page != kInvalidPageId && tuple_key != 0 && tuple_key <= resume_tuple_key
-                               : page_id == resume_page && ordinal < resume_visited;
+                const bool covered = resume_page != kInvalidPageId && tuple_key != 0 &&
+                                     tuple_key <= resume_tuple_key;
                 if (covered) return Status::OK();
                 Status s =
                     AcceptTupleAt(steps, index, step, *live_access, page_id, page, at, nr_slots);
@@ -2052,11 +1954,7 @@ private:
                     mark_frozen = true;
                     return s;
                 }
-                if (!keyed_mark) {
-                    prefix->mark = WalkMark{page_id, visited_on_page, 0};
-                } else if (tuple_key != 0) {
-                    prefix->mark = WalkMark{page_id, 0, tuple_key};
-                }
+                if (tuple_key != 0) prefix->mark = WalkMark{page_id, tuple_key};
                 return s;
             };
 
@@ -2090,30 +1988,15 @@ private:
             return leaf.next_page_id();
         };
 
-        // A heap chain's page is still visited through its primitive, which
-        // takes `const std::function&`: relations created before SUS-1. Its
-        // slot count is read per slot there, as before.
-        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
-                                                            std::uint16_t)>
-            visit_fn = [&](PageId page_id, heap::PageView& page,
-                           std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            return visit_slot(page_id, page, slot, page.slot_count());
-        };
-
         // ---- The head seek (kRange on a clustered relation) --------------
         //
         // Tail pruning above ends the walk; this is what stops it starting
         // at the beginning. A tuple key range on a btree relation descends to the
         // leaf holding the low bound and walks siblings from there, so a
         // range near the end of the relation costs the range rather than
-        // everything before it.
-        //
-        // **A heap relation still starts at the head**, and that is not an
-        // oversight: it has no index to descend, so finding the low bound
-        // *is* the walk. The residual carries both bounds either way, which
-        // is what makes the seek an accelerator that cannot change the
-        // answer - the same property tail pruning rests on.
-        const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
+        // everything before it. The residual carries both bounds, which is
+        // what makes the seek an accelerator that cannot change the answer -
+        // the same property tail pruning rests on.
         PageId cur = kInvalidPageId;
         if (resume_page != kInvalidPageId) {
             // Resuming (JB6): the mark names the page and the skip above
@@ -2122,7 +2005,7 @@ private:
             // and re-deriving a start would be a second answer to a
             // question already answered.
             cur = resume_page;
-        } else if (is_btree) {
+        } else {
             if (pruning) {
                 auto first = btree::BtreeSeekLeaf(store_, access.desc_page_id, step.range->low);
                 // A descent that failed is a reason to walk, not to fail:
@@ -2139,8 +2022,6 @@ private:
                 if (!first.ok()) co_return first.status();
                 cur = first.value();
             }
-        } else {
-            cur = access.desc_page_id;
         }
 
         // ---- The page loop, owned by the coroutine (P4d-3) ---------------
@@ -2185,8 +2066,7 @@ private:
             // Per page, not once per walk: the VM makes these fetches
             // itself now, so R1's guard gets to see each one.
             NoteFetch();
-            auto next = is_btree ? visit_leaf(cur, walk_access)
-                                 : heap::ChainVisitOnePage(store_, cur, walk_access, visit_fn);
+            auto next = visit_leaf(cur, walk_access);
             if (!inner.ok()) co_return inner;
             if (!next.ok()) co_return next.status();
             if (next.value() == kInvalidPageId) {
@@ -2216,17 +2096,11 @@ private:
             // ahead is what a move would have to wait for. R14's narrower
             // interval would under-declare exactly the keys a resumed walk
             // is about to visit.
-            //
-            // Btree only. A heap chain is not key-ordered - invariant 4
-            // leaves a page's tuples unordered - so `min_key` of the page a
-            // heap walk is on is not a bound on what it has yet to read; there
-            // the relation reported above is the whole declaration. Since SUS-1
-            // every relation created is a btree.
             // `parent_ == nullptr`: a sub-chain's walk is `index == 0` in
             // its own runner and would otherwise re-take a slice per outer
             // row, over-declaring a position the relation `IS` above
             // already covers. The M2 rule: a nested walk declares no slice.
-            if (position_ != nullptr && outermost && is_btree) {
+            if (position_ != nullptr && outermost) {
                 position_->Position(live_access->oid, walk_page_min_key, kIdSpaceEnd);
             }
 
@@ -2688,9 +2562,7 @@ private:
         // a lookup and never a search, so a kScan step's rows could only
         // ever be prefetched - and nothing prefetches. Recording them would
         // be paying a write per scanned row for a read nobody makes. The
-        // test is the step's *kind*, not how the row was found: a kLookup
-        // on a heap relation falls through to a chain walk, and that is the
-        // case spec section 7 says pays off most.
+        // test is the step's *kind*, not how the row was found.
         if (trail_ != nullptr && IsTrailReplayable(step.kind)) {
             TouchedTuple touched;
             touched.rel_oid = access.oid;

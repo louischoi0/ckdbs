@@ -1,38 +1,25 @@
-# Physical Optimizer — Two Parts: Relayout (Part I) and the Cabin Controller (Part II)
+# Physical Optimizer — the Shared Foundations (Part I) and the Cabin Controller (Part II)
 
-> **SUS-1 (2026-09-05): heap relations are suspended, and this subsystem is
-> heap-gated — so for every relation created since the suspension, the planner below proposes nothing at all
-> (`src/stats/relayout_planner.cpp:89`, `:238` build plans only for `kHeap`).
-> Nothing here is deprecated or wrong; it is **unreachable for new
-> relations** until the suspension lifts, and it still serves every
-> relation created before it. The order, its rulings and its resume
-> condition are `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`;
-> AS-Q5 is where the operator's word on this banner goes.**
-
-**One umbrella, two halves.** Part I (this file through §10) is
-**statistics-driven relayout** — shadow-only, decisions `R1`-`R12`: the
-decay score, the page epoch, the planner and `SHOW RELAYOUT` exist; no
-mover does. Part II (from the divider after §10) is **autonomous advisory
-Cabin management** — the `CABIN AUTO` promotion pipeline, decisions
-`PO1`-`PO10`, built. Part II consumes Part I's R1 decay score and neither
-part touches the other's structures.
+**One umbrella, two halves.** Part I (this file through §10) is what the
+engine's physical optimization rests on: the lazy-decay score (R1) and the
+page epoch (R4). No relayout planner or mover exists, and a config file
+setting `physical_optimizer` is refused at startup by name (§8). Part II (from the divider after §10) is **autonomous
+advisory Cabin management** — the `CABIN AUTO` promotion pipeline,
+decisions `PO1`-`PO10`, built — and consumes Part I's R1.
 
 Markers: `[CONFIRMED]` is settled; `[PROPOSED]` marks a default that
 shipped as written and is amendable by measurement; `[OPEN]` must not be
 assumed.
-Related documents: `heap-and-tuple.md` §7 (the normative relayout section
-this file expands), `rule-fixed-length-tuple.md` (tuple mobility),
-`eviction.md` (EV1's temperature hook), `pattern-tracking-levels.md`
-(decay-ranked trail eviction), `waystone-concpets.md` §2 rule 2 (epoch validation),
-`cabin.md` (relocation invariance), `index.md` (IX3),
-`txn.md` §4.1 (reader registration; the horizon's two consumers),
-`parser-v2.md` I7/V11.
+Related documents: `heap-and-tuple.md` §3.1a and §7, `eviction.md` (EV1's
+temperature hook), `pattern-tracking-levels.md` (decay-ranked trail
+eviction), `waystone-concpets.md` §2 rule 2 (epoch validation), `cabin.md`
+(relocation invariance), `drop-table.md` DT1 (gate 3).
 
 **On the numbering.** `eviction.md` EV1 and `pattern-tracking-levels.md`
 cite "the physical-optimizer lazy-decay score (R1)", and **R1 is the
-lazy-decay score** here so those citations resolve. `parser-v2.md` I15
-also names an "R1" (the no-fetch-under-span rule): cite the file with the
-number.
+lazy-decay score** here so those citations resolve; R4 and §3, §6 and §7
+keep their numbers for the same reason. `parser-v2.md` I15 also names an
+"R1" (the no-fetch-under-span rule): cite the file with the number.
 
 ---
 
@@ -40,27 +27,9 @@ number.
 
 Engine-driven physical optimization is one of the two things this project
 exists for (`heap-and-tuple.md` §1). Its input half is built —
-`sys.access_stats`, the `kFilterScan` split, the index-kind split — and
-this spec is what consumes it.
-
-**Relayout is shadow-only, and that is the finding, not a hedge.** Every
-candidate move is blocked by a named gate (§6): compaction needs a
-consumer of the reader horizon that no user-relation purge is, hot clustering
-breaks the ordered-between property `kRange` pruning reads, and retiring a
-page for reuse breaks trail validation across relations. So the optimizer
-applies its own promotion-gate philosophy (`overview.md` §4) to itself:
-**observe, classify, plan, report — enact nothing.**
-
-What ships:
-
-1. **The lazy-decay score (R1)** — the one time-decay implementation
-   three subsystems share.
-2. **The page epoch (R4)** — the field, its discipline, and real reads at
-   Waystone's and the Cabin's validation sites.
-3. **The planner and `SHOW RELAYOUT` (R9, R10)** — the physical health
-   report: what would be done, what it would buy, and which gate blocks it.
-
-No mover exists; nothing moves a tuple, and nothing bumps a page epoch.
+`sys.access_stats`, the `kFilterScan` split, the index-kind split
+(`heap-and-tuple.md` §7) — and its acting half is the Cabin controller
+(Part II). Nothing moves a tuple for statistics' sake (§6).
 
 ---
 
@@ -68,18 +37,9 @@ No mover exists; nothing moves a tuple, and nothing bumps a page epoch.
 
 | ID | Decision |
 |----|----------|
-| R1 | **The lazy-decay score.** Exponential half-life decay computed lazily from a stored `{score, last_bump}` pair: a touch decays-then-increments, a read decays only, and there is no background decay pass — idle data costs nothing and is never visited. One implementation (`include/kds/stats/decay.hpp`), `sched::Clock`-injected; with no clock the score degrades to a raw count, the same best-effort stance `sys.access_stats.last_seen` already takes. Half-life is the `decay_half_life` config key, per instance, default 600 s `[PROPOSED]`. Declared consumers: hot/cold classification here, trail-retention ordering (`pattern-tracking-levels.md`), and EV1's experimental temperature hook. Scores are memory-resident and never persisted `[PROPOSED]`. **Two reads:** the Q24.8 `ValueAt` — which underflows to zero after ~16 half-lives, so it ranks live data only — and `Log2ValueAt`, the same state read in the log domain, where decay is a subtraction and ordering survives indefinitely. Any consumer that must order *idle* things (an eviction victim, a retirement) uses the log read (§II.4). |
-| R2 | **Inputs are the existing collectors only**: `sys.access_stats` (the shape axis), Waystone sightings (the value axis), and what a page itself says when walked. The optimizer adds no third collector; an input it lacks becomes a collection change in the layer that owns collection, spec'd there first. |
-| R3 | **Two halves with a hard seam.** The **planner** is pure — it reads statistics and the catalog and produces `RelayoutPlan`s with predicted benefit — and the **mover** enacts plans. Shadow mode is the planner without the mover. The `physical_optimizer` config key takes `off | shadow` (default `shadow`); `on` is **refused at startup naming the gates**, so a config written for a future the engine does not have fails loudly instead of silently under-delivering. |
-| R4 | **The page epoch**: `PageHeaderFields::reserved0` (offset 16, u64) is `relayout_epoch`. Every existing page carries 0 there, so **no format bump**: a zero reads as epoch 0. Durable by construction (it is header bytes), which trails need because trail pages are durable. Bumped **only by a mover** when tuples move; INSERT/UPDATE/DELETE never bump, because the fixed-length rule makes them address-stable — that stability is the whole reason replay is safe. Wraparound is unreachable at u64 width rather than handled. **Pairing rule: no consumer may accept a location on epoch equality alone** — the epoch is a fast whole-page invalidation layered over the Keystone-id check (K1), never a substitute for it. |
-| R5 | **The legal-move table (§4)** is normative for any mover. It derives from invariants 2, 3, 4, 8, 14, from `kRange` pruning's ordered-between dependency, and from rollback's in-memory undo trail naming addresses. |
-| R6 | **Mover execution context**: a maintenance-group task, run-to-completion, with no in-flight statement **on any core** holding a position on the relation and no open transaction whose undo trail names addresses in it. **How a mover excludes other cores' statements is not decided here** (the relation `X` of `txn.md` §5 is the lock family's candidate, not a ruling). |
-| R7 | **Mover logging**: a full-page image of every page it mutates plus `PAGE_INIT` for pages it creates `[PROPOSED]`. A `HEAP_RELAYOUT` record type is reserved, not assigned. An unlogged relayout is forbidden: the WAL-before-data gate is store-enforced, and a log that names slots a relayout silently moved is a log that lies. |
-| R8 | **The maintenance surface is deliberately empty.** Cabins and secondary indexes are relocation-invariant (value = tuple key indirection, `cabin.md`, `index.md` B2); the var-heap is untouched (invariant 14); trails are invalidated by the epoch bump and self-heal on next execution. A **heap relation has no tuple key index**, so a heap-relation mover maintains *nothing but the epoch*. `heap-and-tuple.md` §7's "keep the B+ tree consistent" applies only to btree-clustered relations, whose relayout is the tree's own restructure and outside this spec; this spec amends that parenthetical. |
-| R9 | **The benefit model**: predicted benefit = pages-not-touched per execution × decayed shape frequency, reported per plan in pages and per shape. The planner's output carries a measured-after field beside the prediction so the two are comparable in one format. |
-| R10 | **The planner is pull-only**: computed when `SHOW RELAYOUT` asks, no background task, no cadence. Zero idle cost, no timing-wheel dependency. |
-| R11 | **Scope**: R1 + R4 + the planner and report. No mover. Every enactment is blocked by a named gate (§6) and the report says which. |
-| R12 | **Per-relation gate**: none exists — `parser-v2.md` V11's `WITH (PHYSICAL_OPTIMIZER = ON\|OFF)` flag is unbuilt. The planner reports every relation regardless: a report is free of risk, and an operator who opted a relation out would still want to see what that declines. |
+| R1 | **The lazy-decay score.** Exponential half-life decay computed lazily from a stored `{score, last_bump}` pair: a touch decays-then-increments, a read decays only, and there is no background decay pass — idle data costs nothing and is never visited. One implementation (`include/kds/stats/decay.hpp`), `sched::Clock`-injected; with no clock the score degrades to a raw count, the same best-effort stance `sys.access_stats.last_seen` already takes. Half-life is the `decay_half_life` config key, per instance, default 600 s `[PROPOSED]`. Declared consumers: the Cabin controller (Part II), trail-retention ordering (`pattern-tracking-levels.md`), and EV1's experimental temperature hook. Scores are memory-resident and never persisted `[PROPOSED]`. **Two reads:** the Q24.8 `ValueAt` — which underflows to zero after ~16 half-lives, so it ranks live data only — and `Log2ValueAt`, the same state read in the log domain, where decay is a subtraction and ordering survives indefinitely. Any consumer that must order *idle* things (an eviction victim, a retirement) uses the log read (§II.4). |
+| R4 | **The page epoch**: `PageHeaderFields::reserved0` (offset 16, u64) is `relayout_epoch`. Every existing page carries 0 there, so **no format bump**: a zero reads as epoch 0. Durable by construction (it is header bytes), which trails need because trail pages are durable. Bumped only when tuples move - today by a btree leaf division and an in-place leaf compaction (`heap-and-tuple.md` §4.1); INSERT/UPDATE/DELETE never bump, because the fixed-length rule makes them address-stable — that stability is the whole reason replay is safe. Wraparound is unreachable at u64 width rather than handled. **Pairing rule: no consumer may accept a location on epoch equality alone** — the epoch is a fast whole-page invalidation layered over the Keystone-id check (K1), never a substitute for it. |
+| R2 | **Inputs are the existing collectors only**: the Cabin controller (Part II) reads `sys.access_stats` (the shape axis) and the Cabin store's counters through `stats/optimizer_signals.hpp`. An input it lacks becomes a collection change in the layer that owns collection, spec'd there first. |
 
 ---
 
@@ -109,99 +69,18 @@ Rules:
 
 ---
 
-## 4. The legal-move table (R5) — normative for any mover
+## 6. Why nothing moves a tuple
 
-Any relayout of a heap relation operates under exactly these rules.
+No relayout mover exists, and every user relation is a clustered B+ tree
+(`heap-and-tuple.md` §5), so a move would be a tree restructure. Three
+facts about today's engine stand in front of one:
 
-**May:**
-
-- Move a live tuple's bytes **verbatim** — Keystone word, MVCC header
-  (`trx_id`, `undo_ptr`, `data_len`, flags), cells — to a slot on another
-  heap page of the same relation. A move is not a version: no undo record,
-  no visibility change, and readers that arrive through the undo chain are
-  untouched because undo is reached *from* the tuple, never the reverse.
-- Create new pages, choosing each page's `min_key` at format time, and
-  retire whole source pages. Re-partitioning is **new-pages-then-retire,
-  never an in-place boundary edit** — `min_key` is immutable (invariant 2).
-- Move delete-marked tuples along with live ones. Dropping one is
-  compaction, and compaction is gated (§6, gate 1).
-
-**Must:**
-
-- Keep invariant 3 at every intermediate state, not just at the end: no
-  tuple sits in a page whose `min_key` exceeds its id, even transiently.
-- Keep the chain **ordered-between**: `min_key` nondecreasing along
-  `next_page_id`, every page's ids at or above its own `min_key`. `kRange`'s
-  tail pruning (`VisitControl::kStop` at the first page past the high bound)
-  reads this property; a mover that breaks it turns pruning into row loss.
-- Bump `relayout_epoch` on every source and destination page, under the same
-  exclusive access as the move, before any statement path can observe the
-  new layout.
-- Log per R7, run per R6.
-- Refuse to run while any open transaction holds an in-memory undo trail
-  naming addresses in the relation — rollback replays recorded
-  `(page_id, slot)` writes, and a move underneath it would land the
-  compensation on the wrong tuple.
-
-**Must not:**
-
-- Touch a `kVarHeap` page (invariant 14), any catalog page, any undo page,
-  any trail, Cabin, or index structure. R8 is the point: the mover's entire
-  maintenance surface is the epoch.
-- Target a btree-clustered relation `[PROPOSED]`: a btree leaf is a heap
-  page, so "relayout" there is a tree restructure with descent consistency
-  to preserve — a different feature.
-- Return a retired page to the free map (§6, gate 3). Retired pages are
-  **quarantined** — held out of every allocator. A quarantine leaks; the
-  leak is the honest price and is bounded by how much relayout runs. A
-  dropped relation's pages are the one class the engine frees
-  (`drop-table.md` DT1), and a mover's retired pages are not that class.
-
----
-
-## 5. The planner and `SHOW RELAYOUT` (R9, R10)
-
-`SHOW RELAYOUT` (all relations) reads `sys.access_stats` and the catalog
-only. `SHOW RELAYOUT <relation>` may additionally walk that relation
-read-only — ordinary visitor, stoppable, budget-charged — to measure what
-statistics cannot: delete-mark density and per-page live fill. The walk is
-priced by the caller having asked; the all-relations form never walks.
-
-Per relation the report carries:
-
-- the shape summary: each `(kind, columns)` row with raw `use_count` and its
-  R1-decayed weight;
-- chain length in pages, and (per-relation form) delete-marked tuples and
-  the pages they would free;
-- one line per **candidate plan kind**, each with predicted benefit (R9) and
-  its verdict: `blocked_on=<gate>`, always.
-
-Three plan kinds, none enactable:
-
-| Plan kind | What it would do | Blocked on |
-|---|---|---|
-| `compact` | Rewrite the chain dropping delete-marked tuples past the reader horizon; reclaim emptied pages | Gate 1 |
-| `cluster` | Co-locate a hot set on fewer pages | Gate 2 |
-| `defrag` | Rewrite a chain onto contiguous page ids for sequential I/O | Gate 3 |
-
-The report is the deliverable: it turns "should a gate open" from taste
-into a number, per relation, on a live workload.
-
----
-
-## 6. The gates — why nothing is enacted
-
-Every relayout move is blocked, and `SHOW RELAYOUT` names the gate. The
-three gates, as facts about today's engine:
-
-1. **Reader horizon.** Readers are registered per core and
-   `ReadHorizon()` bounds a purge (`txn.md` §4.1), but its only consumers
-   are the undo purge and the catalog's delete-mark purge: no purge of a
-   user relation's delete-marked tuples exists, and no mover, so no such
-   tuple is ever proven unneeded and reclaimed; nothing compacts.
+1. **Reader horizon.** `ReadHorizon()` bounds a purge (`txn.md` §4.1); a
+   delete-marked user row is retired only by `PURGE`
+   (`heap-and-tuple.md` §4.1c), and nothing compacts a relation for space.
 2. **Ordered-between compatibility.** Clustering an arbitrary hot id set
-   onto one page can satisfy invariant 3 while breaking the between-pages
-   ordering `kRange` pruning reads; nothing clusters.
+   onto one page would break the between-pages key order that the descent
+   and `kRange` pruning read.
 3. **Cross-relation page reuse.** Trail validation checks `rel_oid` and the
    Keystone id at the recorded `(page_id, slot)`, ids are issued per
    relation, and `PAGE_INIT` writes epoch 0 — so a page freed from relation
@@ -214,13 +93,8 @@ three gates, as facts about today's engine:
    - the one verifier checks the page's class and `owner_oid` against the
      location's relation, so a reused page is a miss (BF-R10).
 
-   **Still shut for a mover**, whose relation is live and whose retired
-   pages are quarantined (§4), never reused. Every mountable volume's user
-   pages carry `owner_oid` (superblock 21 refuses older volumes), so the
-   old "a page written before §2a reads owner 0" case describes no
-   mountable volume.
-
-The decisions that would open a gate are not recorded here.
+   Every mountable volume's user pages carry `owner_oid`, so no mountable
+   volume holds a page that reads owner 0.
 
 ---
 
@@ -236,24 +110,22 @@ The decisions that would open a gate are not recorded here.
 - **Cabin**: `CabinEntry::page_epoch` is recorded from the header and
   compared in `exec/tuple_verify.hpp` — the one shared verifier, so Waystone
   and Cabin get the real check at one site.
-- With no mover every comparison is between two zeros — **the check is real
-  and its inputs are constant**, which is the state the contract tests pin:
-  a test that hand-bumps a page's epoch must see replay miss, heal, and
-  answer byte-identically.
+- No relayout mover exists, so a page's epoch moves only when a btree leaf
+  divides or is compacted in place (`heap-and-tuple.md` §4.1, §4.1c). The
+  contract tests pin the check: a test that hand-bumps a page's epoch must
+  see replay miss, heal, and answer byte-identically.
 
 ---
 
 ## 8. Config and surface
 
-| Key / verb | Values | Default | Meaning |
+| Key | Values | Default | Meaning |
 |---|---|---|---|
-| `physical_optimizer` | `off` / `shadow` | `shadow` | `off` makes `SHOW RELAYOUT` answer a one-line disabled notice; `on` is refused at startup naming §6's gates |
 | `decay_half_life` | seconds, > 0 | 600 `[PROPOSED]` | R1's half-life, instance-wide |
-| `SHOW RELAYOUT [<relation>]` | — | — | §5's report; the bare form never walks a relation |
+| `physical_optimizer` | — | — | Retired since BZ: a file naming it is refused at startup by name (`Expeditor::Config::ApplyFile`'s retired keys) |
 
-Nothing is reserved: `relayout` is an ordinary identifier, statement
-fingerprints do not move, and `kFingerprintVersion` stays where it is — the
-golden corpus is the evidence, as always.
+Nothing is reserved: `relayout` is an ordinary identifier, and
+`SHOW RELAYOUT` is refused as an unknown `SHOW` target.
 
 ---
 
@@ -261,29 +133,25 @@ golden corpus is the evidence, as always.
 
 - Decay unit tests under `ManualClock`: exact halving, touch-vs-read,
   no-clock degradation to a raw count.
-- Epoch round-trip: field read/write, `PAGE_INIT` zeroing, and the
-  no-format-bump claim (a pre-change page image mounts and reads epoch 0).
+- Epoch round-trip: field read/write and `PAGE_INIT` zeroing.
 - The hand-bumped-epoch contract test, in both suites: Waystone replay and a
   Cabin resolve against a page whose epoch was bumped by the test must fall
   through per entry and answer byte-identically to the authoritative path.
-- Planner: golden report over a seeded workload; the all-relations form
-  provably performs no relation walk (page-fetch counter flat).
-- The advisory family's standing rule, trivially satisfied and still
-  asserted: `SHOW RELAYOUT` changes no query result.
 
 ---
 
-## 10. Out of scope / later
+## 10. Out of scope
 
-Not in this engine: a mover, btree-clustered relation relayout,
-temperature-unified eviction, score persistence, per-consumer half-lives,
-and per-pattern hot-set clustering. The decisions are not recorded here.
+Not in this engine: a relayout planner or mover, temperature-unified
+eviction, score persistence, per-consumer half-lives, and per-pattern
+hot-set clustering. The decisions are not recorded here.
 
-**Affinity is not an input here yet** (AR0-5 D18). D18 keeps a relation's
-affinity as a statistic and this optimizer as its one consumer, at weight
-0 (AR0 D10) until AS-E. Nothing stores it (`sys.tables.owner_core` is a
-reserved word, written 0, never read), and the declaration a consumer would read is the namespace a relation was
-created in (`namespace.md` NS10), already on its `sys.tables` row.
+**Affinity is not an input here** (AR0-5 D18). D18 keeps a relation's
+affinity as a statistic with a weight-0 consumer (AR0 D10) until AS-E.
+Nothing stores it (`sys.tables.owner_core` is a reserved word, written 0,
+never read), and the declaration a consumer would read is the namespace a
+relation was created in (`namespace.md` NS10), already on its `sys.tables`
+row.
 
 ---
 
@@ -298,9 +166,7 @@ component's runtime name is distinct too — class `CabinOptimizer`, config
 keys `cabin_optimizer*` (§II.6), view `SHOW CABIN_OPTIMIZER` (a `SHOW`
 rather than a `sys.*` relation, for `SHOW ASSERTIONS`' reason: the
 dispatcher holds the controller, the executor and the collector, and a
-`sys.*` SELECT path holds none of them) — because Part I's
-`physical_optimizer` key already means the shadow report, and one key
-wearing two meanings is how switches lie.
+`sys.*` SELECT path holds none of them).
 
 **Status: built (experimental).** The signal plumbing and snapshot
 (`stats/optimizer_signals.hpp`), the pure decision core
@@ -319,9 +185,8 @@ end).
 
 The cabin optimizer is the first realization of the self-managing-storage
 vision: the engine observing its own workload and deciding its own physical
-structures. It excludes heap tuple relocation — that path entangles heap
-integrity, MVCC, and WAL, and offers no safe failure mode (it is exactly
-Part I's gated territory). It operates exclusively on **Observational
+structures. It excludes tuple relocation — that path entangles page
+integrity, MVCC, and WAL, and offers no safe failure mode (§6). It operates exclusively on **Observational
 (advisory) Cabins**, which have the decisive property that a wrong decision
 costs performance only, never correctness: stale hints heal on read,
 dangling entries are discarded, and a dropped Cabin merely returns the
@@ -502,8 +367,7 @@ Cabins and manually-declared Cabins are invisible to it.
 
 ## II.7 Non-goals
 
-The cabin optimizer does not relocate or cluster heap tuples (Part I's
-gated territory); does not manage Bound Cabins (assertion-owned,
+The cabin optimizer does not relocate or cluster tuples (§6); does not manage Bound Cabins (assertion-owned,
 permanently outside its jurisdiction); takes no buffer-pool-miss signal,
 runs no per-core controller (PO4: one for the instance), and uses no
 learned decision model (a learned

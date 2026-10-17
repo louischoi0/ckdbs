@@ -64,48 +64,5 @@ TEST(HalfDoneMutationTest, ASpillWhoseUndoRecordFailsIsStillLoggedAndTheVolumeMo
     EXPECT_NE(read.find(spilled), std::string::npos) << read;
 }
 
-// A heap insert that fails after its placement and before its record: the
-// row is taken back under the tail's hold, and a chain the insert grew keeps
-// its new page, logged. Killed by the take-back skipping a heap (the row
-// survives the abort and the next insert's slot refuses the mount) and by
-// it skipping the growth's records (the next insert lands in a page redo
-// never built).
-void TakeBackOnAHeap(const std::string& columns, const std::string& values) {
-    auto created = SimInstance::Create();
-    ASSERT_TRUE(created.ok()) << created.status().message();
-    SimInstance& db = *created.value();
-    const std::string insert = "INSERT INTO t VALUES (" + values + ")";
-
-    ASSERT_EQ(db.Execute("CREATE TABLE t (" + columns + ") HEAP").substr(0, 7), "CREATED");
-    for (int i = 0; i < 2; ++i) ASSERT_EQ(db.Execute(insert).rfind("ERR", 0), std::string::npos);
-    ASSERT_TRUE(db.RunCheckpoint().ok());
-
-    db.dispatcher().SetAfterPlacementForTest(
-        [] { return Status::IoError("injected failure after placement"); });
-    const std::string refused = db.Execute(insert);
-    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
-    db.dispatcher().SetAfterPlacementForTest(nullptr);
-
-    for (int i = 0; i < 2; ++i) {
-        const std::string reply = db.Execute(insert);
-        ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
-    }
-    EXPECT_EQ(CountRows(db, "t"), 4) << "the refused row survived";
-
-    db.Crash();  // nothing written back since the checkpoint: redo rebuilds the tail
-    const Status rebooted = db.Reboot();
-    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
-    EXPECT_EQ(CountRows(db, "t"), 4);
-}
-
-TEST(HalfDoneMutationTest, AHeapInsertFailedAfterPlacementIsTakenBack) {
-    TakeBackOnAHeap("id int64, v int64", "7");
-}
-
-TEST(HalfDoneMutationTest, AHeapInsertThatGrewTheChainIsTakenBackAndTheGrowthLogged) {
-    // One ~6 KB row per page, so every insert grows the chain.
-    TakeBackOnAHeap("id int64, a char(2000), b char(2000), c char(2000)", "'x', 'y', 'z'");
-}
-
 }  // namespace
 }  // namespace kds::sim

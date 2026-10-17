@@ -17,12 +17,17 @@ Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow&
         return Status::InvalidArgument("column '" + column +
                                        "' cannot hold a Keystone id, so it cannot reference one");
     }
+    if (parent.schema.heap()) {
+        // BZ-R7: the child's column holds the parent's tuple key (F1), and a
+        // heap's tuple key is hidden - no statement reads or names it, so no
+        // client could write a value this constraint would accept.
+        return Status::Unsupported(
+            "the parent relation is a heap: its tuple key is hidden, so no child value could "
+            "name a parent row - reference a relation with a declared tuple key");
+    }
     if (parent.clustered_type != ClusteredType::kBtree) {
-        // Named as the parent's property rather than as "unsupported", so
-        // the operator reads the one thing that would fix it.
-        return Status::NotImplemented(
-            "the parent relation is a heap relation and has no tuple key index, so every check "
-            "of this foreign key would scan it - declare the parent CLUSTERED BTREE");
+        // A system relation's catalog chain has no descent to check against.
+        return Status::InvalidArgument("the parent relation is a system relation");
     }
     return Status::OK();
 }

@@ -44,15 +44,12 @@ namespace kds::catalog {
 //                    identity a statement about another row; or a column
 //                    whose declared type cannot hold a Keystone id,
 //                    which is a reference that can never be written.
-//   Unsupported      a **heap** parent. F1 puts the reference on the
-//                    parent's tuple key, and a heap relation has no tuple key index: a
-//                    point lookup on one is a chain scan
-//                    (CommandDispatcher::LocateByTupleKey returns kScan), so
-//                    every child INSERT would scan the parent - the whole
-//                    relation when the parent is missing, which is the case
-//                    the check exists to catch. Refusing keeps the
-//                    constraint's cost a descent; relaxing it later is
-//                    additive and needs no format change.
+//   Unsupported      a **heap** parent (BZ-R7 of
+//                    `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`):
+//                    F1 puts the reference on the parent's tuple key, which
+//                    a heap hides, so no child value could name a parent row.
+//   InvalidArgument  a system relation, whose catalog chain has no tuple
+//                    key descent.
 Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow& child_column,
                                   std::uint16_t child_column_pos);
 

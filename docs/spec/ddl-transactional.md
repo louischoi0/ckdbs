@@ -435,8 +435,7 @@ relation.
 
 **What it fences.** Every writer of the relation holds its `IX` from its
 first intention until its transaction decides - an `INSERT` asks at
-`InsertParsed`, ahead of its assertion admission and the sorted fill's
-gate; an `UPDATE` or `DELETE` at its declared borrow or, where its
+`InsertParsed`, ahead of its assertion admission; an `UPDATE` or `DELETE` at its declared borrow or, where its
 predicate declares no key window, at its first qualifying row. So a DDL's
 grant is a moment no writer is mid-statement, and a writer that arrives
 while the DDL is undecided parks on the slot and re-runs after the decide.

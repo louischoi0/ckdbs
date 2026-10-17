@@ -308,26 +308,6 @@ TEST(DropTableReclaimTest, FiveCreateFillDropRoundsGrowTheVolumeByLessThanOneRou
         << allocated.back() << "; one round's relation holds " << round_pages;
 }
 
-TEST(DropTableReclaimTest, ADroppedHeapRelationsChainIsFreed) {
-    // BF-Q8 (a)'s one heap cell, and no crash matrix: only a test seam
-    // creates a heap relation since SUS-1 (`heap_suspension_env.cpp`). The
-    // anchor names the chain's head; the walk takes the chain by its links
-    // and frees it tail-first.
-    TempDir dir;
-    const Dropped dropped = CreateFillDrop(dir.path, "h", 2000, " HEAP");
-    ASSERT_GE(dropped.pages.size(), 4u);
-    auto opened = Mount(dir.path, /*cores=*/1);
-    ASSERT_TRUE(opened.ok()) << opened.status().message();
-    Expeditor& db = *opened.value();
-    CurrentCoreGuard as(0);
-    Settle(db);
-    EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
-    EXPECT_EQ(db.reclaim_counters().skipped.load(), 0u);
-    for (const PageId id : dropped.pages) {
-        EXPECT_FALSE(db.store().IsAllocated(id)) << "page " << id << " of the dropped heap";
-    }
-}
-
 TEST(DropTableReclaimTest, ANewRelationLandsOnIdsADroppedRelationHeld) {
     // Red at `df741e3c`: the cursor starts at 128 after a clean restart and
     // finds no cleared bit, so a new relation goes past every dropped page.

@@ -69,14 +69,13 @@ private:
     std::optional<CommandDispatcher> dispatcher_;
 };
 
-// The dataset every configuration runs over. Two relations, one heap and
-// one btree, so both the descent path and the chain-scan path are covered -
-// they are the two things replay replaces and they fail differently.
+// The dataset every configuration runs over. A btree whose `id` is its tuple
+// key, so the descent path replay replaces is covered, and a heap (BZ-R1)
+// whose `id` is an ordinary column holding the same numbers, so the same
+// statement text over it is a search replay must never serve.
 void Load(Instance& db) {
     ASSERT_EQ(db.Run("CREATE TABLE b (id int64, v int64, label varchar) BTREE").substr(0, 7),
               "CREATED");
-    // **HEAP, pinned since SUS-1**: the comment above is this line's
-    // contract, and on the flipped default `h` would be a second btree.
     ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64, label varchar) HEAP").substr(0, 7),
               "CREATED");
     ASSERT_EQ(db.Run("CREATE TABLE j (id int64, w int64) BTREE").substr(0, 7), "CREATED");
@@ -90,7 +89,9 @@ void Load(Instance& db) {
         const std::string label = "'row" + std::to_string(i) + "'";
         ASSERT_EQ(db.Run("INSERT INTO b VALUES (" + v + ", " + label + ")").substr(0, 8),
                   "INSERTED");
-        ASSERT_EQ(db.Run("INSERT INTO h VALUES (" + v + ", " + label + ")").substr(0, 8),
+        ASSERT_EQ(db.Run("INSERT INTO h VALUES (" + std::to_string(i) + ", " + v + ", " + label +
+                         ")")
+                      .substr(0, 8),
                   "INSERTED");
         ASSERT_EQ(db.Run("INSERT INTO j VALUES (" + std::to_string(i * 100) + ")").substr(0, 8),
                   "INSERTED");

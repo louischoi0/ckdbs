@@ -141,8 +141,7 @@ TEST_F(ColumnNameCaseTest, TheCatalogDoorRefusesATwinWithoutTheDispatcher) {
         catalog::SetName(row.name, name);
         schema.columns.push_back(row);
     }
-    auto oid = boot_->catalog.CreateTable(catalog::kNamespacePublic, "twins", schema,
-                                          catalog::ClusteredType::kBtree);
+    auto oid = boot_->catalog.CreateTable(catalog::kNamespacePublic, "twins", schema);
     ASSERT_FALSE(oid.ok());
     EXPECT_EQ(oid.status().code(), StatusCode::kInvalidArgument);
     EXPECT_NE(oid.status().message().find("column 'V' repeats column 'v'"), std::string::npos)

@@ -81,11 +81,6 @@ namespace kds::catalog {
 // here; the admission asks again for any other caller.
 Status CheckNamedRowIdSpellable(std::uint64_t id);
 
-// The one spelling of "a named key below the relation's mark" - a heap's
-// refusal (BB-R3, BB-R12's `OutOfRange`, kept for the heap by BD-Q4) -
-// shared by the admission and by the insert path's judgement before a wait.
-Status RefuseRowIdBelowMark(Oid table_oid, std::uint64_t id, std::uint64_t mark);
-
 // Where a catalog row landed (workplan-ddl-transactional.md DT3a). A DDL
 // running inside a transaction hands these to
 // `TransactionManager::NoteInsert` so a rollback can retire the slots:
@@ -426,7 +421,6 @@ public:
     // rollback (DT3a). Filled even when the create fails partway: rows
     // already on the page are rows a rollback must still retire.
     StatusOr<Oid> CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
-                               ClusteredType clustered_type,
                                std::uint64_t trx_id = kBootstrapXid,
                                std::vector<CatalogRowRef>* written = nullptr);
 
@@ -679,13 +673,6 @@ public:
     // when no tombstone carries `oid`.
     Status ClearPendingRoots(Oid oid);
 
-    // T3's contiguous id range (docs/inflight/in-progress/workplan-t3.md T3-3): one catalog
-    // write bumps next_id by `count` and returns the first id - issuance
-    // inside the range is monotone by construction. Refused whole when it
-    // would cross kMaxKeystoneId; an aborted statement burns the whole
-    // range (K3: a burned id is free). Never cached, like every sequence.
-    StatusOr<std::uint64_t> AllocateRowIdRange(Oid table_oid, std::uint64_t count);
-
     // Returns an owned copy, served from the cache when the relation has
     // been opened before. NotFound for a relation with no sys.columns rows
     // (the bootstrap catalog tables) - an absence, and so never cached.
@@ -750,20 +737,13 @@ public:
     //
     // **Spellability, always** (`CheckNamedRowIdSpellable`, below).
     //
-    // **Then the mark, by the relation's storage.** A heap (BB-R3, kept by
-    // BD-Q4 (a)) refuses an id below `next_id` `OutOfRange`
-    // (`RefuseRowIdBelowMark`): its tail cannot take a key below its highest,
-    // so the mark is the ascent written as one number. A btree places a key
-    // where it sorts (BD-R2, BD-R7,
-    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), so for
-    // it the admission is advance-or-nothing and never refuses. Either way an
-    // id at or above the mark moves it to `id + 1`.
-    //
-    // **A heap calls it under the hold of its tail**, held as the tail
-    // (`storage::AdmitUnderHold`, BB-R7): the mark moves while no other core
-    // can issue or admit an id for the relation, because each needs that page
-    // first; the latch order is that page, then this one (BB-R4, `page.md`
-    // §6). A btree calls it before its descent, under no page (BD-R6).
+    // **Then the mark, which never refuses.** A leaf places a key where it
+    // sorts (BD-R2, BD-R7,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), so the
+    // admission is advance-or-nothing: an id at or above the mark moves it to
+    // `id + 1`, one below leaves it (W2 of
+    // `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`). Called before
+    // the descent, under no page (BD-R6).
     //
     // ---- Why the high-water mark moves ------------------------------------
     //
@@ -785,16 +765,6 @@ public:
     // advanced nothing - so the hook's reason is gone, and with it the
     // partition latch taken under page 7 (BA-R8's last bullet).
     Status AdmitExplicitRowId(Oid table_oid, std::uint64_t id);
-
-    // The relation's mark, `sys.tables.next_id`, read under shared holds
-    // (`ForFirstRow`'s read walk). **A judgement, not a reservation**: the
-    // mark only rises, so a key below what this returns is below the mark
-    // for good, while one at or above it may be passed before it is
-    // admitted. The insert path asks it for one thing on a heap - whether a
-    // named key refused a borrow can ever be admitted, so an illegal key is
-    // refused rather than left waiting on a fence (AO-S6c-c's rule). A btree
-    // asks the leaf instead (BD-R5).
-    StatusOr<std::uint64_t> RowIdMark(Oid table_oid);
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 
