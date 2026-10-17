@@ -1,0 +1,46 @@
+1792237626 WARN [btree] insert into the relation rooted at page 149 failed: btree descent for key 135 from page 149 gave up after 5 attempts: each leaf it reached had already given the key away. Either the chain is being split faster than a descent can cross it, or this core is descending from a root that has since grown a level
+1792237626 WARN [query] "INSERT INTO charges_x VALUES (23, 2, 92700, 20454)" -> ERR TXN_CONFLICT retryable=1 btree descent for key 135 from page 149 gave up after 5 attempts: each leaf it reached had already given the key away. Either the chain is being split faster than a descent can cross it, or this core is descending from a root that has since grown a level in 63us
+1792237627 WARN [btree] insert into the relation rooted at page 147 failed: btree descent for key 107 from page 147 gave up after 5 attempts: each leaf it reached had already given the key away. Either the chain is being split faster than a descent can cross it, or this core is descending from a root that has since grown a level
+1792237627 WARN [query] "INSERT INTO freights_x VALUES (92, 23, 8073, 305000, 2318, 20454, 0)" -> ERR TXN_CONFLICT retryable=1 btree descent for key 107 from page 147 gave up after 5 attempts: each leaf it reached had already given the key away. Either the chain is being split faster than a descent can cross it, or this core is descending from a root that has since grown a level in 46us
+1792237627 WARN [query] "UPDATE operations_x SET booked_cbm = 41000, revenue = 258593 WHERE id = 48" -> ERR TXN_CONFLICT retryable=1 row id=48 was written by transaction 61513 in 31us
+1792237627 WARN [query] "UPDATE operations_x SET booked_cbm = 1025000, revenue = 8098038 WHERE id = 51" -> ERR TXN_CONFLICT retryable=1 row id=51 was written by transaction 41041 in 14us
+1792237627 WARN [query] "UPDATE operations_x SET booked_cbm = 144000, revenue = 866237 WHERE id = 48" -> ERR TXN_CONFLICT retryable=1 row id=48 was written by transaction 53343 in 20us
+1792237627 WARN [query] "UPDATE operations_x SET booked_cbm = 265000, revenue = 2431895 WHERE id = 48" -> ERR TXN_CONFLICT retryable=1 row id=48 was written by transaction 61532 in 17us
+1792237627 WARN [query] "UPDATE operations_x SET booked_cbm = 306000, revenue = 2137564 WHERE id = 265" -> ERR TXN_CONFLICT retryable=1 row id=265 was written by transaction 61538 in 23us
+1792237627 WARN [query] "UPDATE organizations_x SET outstanding = 4849931 WHERE id = 2" -> ERR TXN_CONFLICT retryable=1 row id=2 was written by transaction 49277 in 10us
+1792237627 WARN [query] "UPDATE organizations_x SET outstanding = 5427939 WHERE id = 290" -> ERR TXN_CONFLICT retryable=1 row id=290 was written by transaction 41079 in 19us
+1792237627 WARN [query] "UPDATE organizations_x SET outstanding = 5680215 WHERE id = 153" -> ERR TXN_CONFLICT retryable=1 row id=153 was written by transaction 41132 in 58us
+1792237627 WARN [query] "UPDATE operations_x SET booked_cbm = 1401000, revenue = 9991761 WHERE id = 213" -> ERR TXN_CONFLICT retryable=1 row id=213 was written by transaction 57393 in 73us
+1792237627 WARN [query] "UPDATE operations_x SET booked_cbm = 979000, revenue = 8021641 WHERE id = 204" -> ERR TXN_CONFLICT retryable=1 row id=204 was written by transaction 68369 in 22us
+1792237627 WARN [query] "UPDATE operations_x SET booked_cbm = 1503000, revenue = 9961041 WHERE id = 295" -> ERR TXN_CONFLICT retryable=1 row id=295 was written by transaction 41167 in 30us
+1792237627 WARN [query] "UPDATE organizations_x SET outstanding = 16827697 WHERE id = 174" -> ERR TXN_CONFLICT retryable=1 row id=174 was written by transaction 49365 in 89us
+1792237627 WARN [query] "UPDATE operations_x SET booked_cbm = 1213000, revenue = 9214902 WHERE id = 100" -> ERR TXN_CONFLICT retryable=1 row id=100 was written by transaction 49368 in 19us
+1792237627 WARN [query] "UPDATE organizations_x SET outstanding = 6452301 WHERE id = 275" -> ERR TXN_CONFLICT retryable=1 row id=275 was written by transaction 61654 in 23us
+1792237628 WARN [query] "UPDATE organizations_x SET outstanding = 6425536 WHERE id = 66" -> ERR TXN_CONFLICT retryable=1 row id=66 was written by transaction 61681 in 15us
+1792237628 WARN [query] "UPDATE operations_x SET booked_cbm = 1373000, revenue = 10520365 WHERE id = 119" -> ERR TXN_CONFLICT retryable=1 row id=119 was written by transaction 53503 in 19us
+1792237628 WARN [query] "UPDATE organizations_x SET outstanding = 9434087 WHERE id = 109" -> ERR TXN_CONFLICT retryable=1 row id=109 was written by transaction 69711 in 15us
+1792237628 WARN [query] "UPDATE organizations_x SET outstanding = 10025067 WHERE id = 3" -> ERR TXN_CONFLICT retryable=1 row id=3 was written by transaction 53549 in 14us
+1792237628 WARN [query] "UPDATE operations_x SET booked_cbm = 2379000, revenue = 20048147 WHERE id = 241" -> ERR TXN_CONFLICT retryable=1 row id=241 was written by transaction 57558 in 22us
+1792237628 WARN [query] "UPDATE operations_x SET booked_cbm = 2387000, revenue = 18739324 WHERE id = 18" -> ERR TXN_CONFLICT retryable=1 row id=18 was written by transaction 68538 in 19us
+1792237628 WARN [query] "UPDATE organizations_x SET outstanding = 24075979 WHERE id = 279" -> ERR TXN_CONFLICT retryable=1 row id=279 was written by transaction 73833 in 23us
+1792237628 WARN [query] "UPDATE operations_x SET booked_cbm = 1394000, revenue = 10716479 WHERE id = 131" -> ERR TXN_CONFLICT retryable=1 row id=131 was written by transaction 77896 in 20us
+1792237628 WARN [query] "UPDATE operations_x SET booked_cbm = 3045000, revenue = 20762421 WHERE id = 30" -> ERR TXN_CONFLICT retryable=1 row id=30 was written by transaction 53612 in 18us
+1792237628 WARN [query] "UPDATE operations_x SET booked_cbm = 2309000, revenue = 16760763 WHERE id = 113" -> ERR TXN_CONFLICT retryable=1 row id=113 was written by transaction 61803 in 20us
+1792237628 WARN [query] "UPDATE operations_x SET booked_cbm = 1003000, revenue = 8789909 WHERE id = 162" -> ERR TXN_CONFLICT retryable=1 row id=162 was written by transaction 73862 in 21us
+1792237629 WARN [query] "UPDATE organizations_x SET outstanding = 27913921 WHERE id = 174" -> ERR TXN_CONFLICT retryable=1 row id=174 was written by transaction 69855 in 15us
+1792237629 WARN [query] "UPDATE operations_x SET booked_cbm = 1259000, revenue = 10078106 WHERE id = 10" -> ERR TXN_CONFLICT retryable=1 row id=10 was written by transaction 82027 in 20us
+1792237629 WARN [query] "UPDATE operations_x SET booked_cbm = 2940000, revenue = 21868750 WHERE id = 261" -> ERR TXN_CONFLICT retryable=1 row id=261 was written by transaction 86222 in 20us
+1792237629 WARN [query] "UPDATE operations_x SET booked_cbm = 5565000, revenue = 43359884 WHERE id = 286" -> ERR TXN_CONFLICT retryable=1 row id=286 was written by transaction 90299 in 36us
+1792237629 WARN [query] "UPDATE operations_x SET booked_cbm = 2791000, revenue = 22103692 WHERE id = 61" -> ERR TXN_CONFLICT retryable=1 row id=61 was written by transaction 62030 in 25us
+1792237629 WARN [query] "UPDATE operations_x SET booked_cbm = 3356000, revenue = 27551737 WHERE id = 204" -> ERR TXN_CONFLICT retryable=1 row id=204 was written by transaction 62036 in 21us
+1792237630 WARN [query] "UPDATE operations_x SET booked_cbm = 2257000, revenue = 17140439 WHERE id = 299" -> ERR TXN_CONFLICT retryable=1 row id=299 was written by transaction 62146 in 15us
+1792237630 WARN [query] "UPDATE operations_x SET booked_cbm = 5451000, revenue = 37838898 WHERE id = 3" -> ERR TXN_CONFLICT retryable=1 row id=3 was written by transaction 74225 in 17us
+1792237630 WARN [query] "UPDATE organizations_x SET outstanding = 26408107 WHERE id = 249" -> ERR TXN_CONFLICT retryable=1 row id=249 was written by transaction 74231 in 37us
+1792237630 WARN [query] "UPDATE operations_x SET booked_cbm = 5000000, revenue = 35377456 WHERE id = 149" -> ERR TXN_CONFLICT retryable=1 row id=149 was written by transaction 78294 in 21us
+1792237630 WARN [query] "UPDATE operations_x SET booked_cbm = 3220000, revenue = 28626282 WHERE id = 65" -> ERR TXN_CONFLICT retryable=1 row id=65 was written by transaction 78318 in 21us
+1792237630 WARN [query] "UPDATE organizations_x SET outstanding = 36626787 WHERE id = 148" -> ERR TXN_CONFLICT retryable=1 row id=148 was written by transaction 86477 in 18us
+1792237630 WARN [query] "UPDATE operations_x SET booked_cbm = 2936000, revenue = 20849783 WHERE id = 34" -> ERR TXN_CONFLICT retryable=1 row id=34 was written by transaction 69012 in 18us
+1792237631 WARN [query] "UPDATE organizations_x SET outstanding = 32335301 WHERE id = 24" -> ERR TXN_CONFLICT retryable=1 row id=24 was written by transaction 90676 in 14us
+1792237631 WARN [query] "UPDATE operations_x SET booked_cbm = 3108000, revenue = 23040276 WHERE id = 259" -> ERR TXN_CONFLICT retryable=1 row id=259 was written by transaction 69103 in 15us
+1792237631 WARN [query] "UPDATE operations_x SET booked_cbm = 3718000, revenue = 25859081 WHERE id = 292" -> ERR TXN_CONFLICT retryable=1 row id=292 was written by transaction 78620 in 15us
+1792237632 WARN [query] "UPDATE operations_x SET booked_cbm = 6296000, revenue = 50043031 WHERE id = 150" -> ERR TXN_CONFLICT retryable=1 row id=150 was written by transaction 78872 in 22us

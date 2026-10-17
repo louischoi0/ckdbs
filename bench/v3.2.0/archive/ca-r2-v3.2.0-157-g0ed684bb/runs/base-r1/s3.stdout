@@ -1,0 +1,61 @@
+
+ckdbs benchmark - 34 columns, 10000 rows resident, 1 connection
+server 127.0.0.1:15703  table users_x, books_x, reservations_x, loans_x
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          4         0    2009.2   1465.6   1465.6   1484.5   3448.9   3448.9    3448.9     0
+load                     19000         0    1503.4   1001.5   1218.0   1283.1   2754.0   5819.6   23284.8     0
+create-index                 8         0    9252.1   3594.8   4223.4   7490.5  14962.1  14962.1   14962.1     0
+pk-user                    200         0      98.8     91.2     93.4     94.9    116.4    141.8     227.8     0
+loans-by-user              200         0     117.3     72.8     99.3    120.9    148.8    164.4     179.0     0
+loans-by-book              200         0     120.5     76.4    113.4    120.1    142.8    152.8     165.9     0
+resv-by-user               200         0     110.3     88.3    103.8    108.7    131.0    134.6     147.0     0
+books-by-author            200         0     118.0     90.6    111.3    116.2    137.3    151.9     154.8     0
+books-by-genre             200         0     524.1    470.5    507.5    521.3    556.7    596.8     674.3     0
+loans-by-daterange         200         0    1602.0    512.2   1576.4   1626.4   1713.9   1766.6    2140.7     0
+overdue                    200         0    1017.2    117.8   1007.1   1051.2   1169.7   1191.1    1202.7     0
+join-loan-user             200         0     133.0     84.3    123.7    132.8    161.9    174.1     274.9     0
+join-no-literal            200         0     336.7    322.6    329.6    334.1    354.2    361.5     391.6     0
+exists-correlated          200         0     189.1    180.1    183.3    185.1    207.5    213.1     217.2     0
+count-by-user              200         0     101.6     92.9     97.6     99.4    118.1    126.3     132.9     0
+
+  ddl: CREATE TABLE x4
+  load: INSERT x all four relations
+  create-index: --index-mode all
+  pk-user: WHERE id = ? - Lookup, the control
+  loans-by-user: WHERE user_id = ? - ~5 matches
+  loans-by-book: WHERE book_id = ? - ~5 matches
+  resv-by-user: WHERE user_id = ? on reservations
+  books-by-author: WHERE author_id = ? - middle selectivity
+  books-by-genre: WHERE genre = ? - 1/16 of the relation
+  loans-by-daterange: WHERE loaned_day BETWEEN ? AND ? - 30 days
+  overdue: WHERE status = ? AND due_day BETWEEN ? AND ?
+  join-loan-user: loans JOIN users ON user_id = id
+  join-no-literal: JOIN ON user_id, u.id BETWEEN 1 AND 16 - no literal to propagate
+  exists-correlated: EXISTS(loans.user_id = users.id), 20 outer rows - under --cabin the mean mixes the observation charge
+  count-by-user: SELECT COUNT(*) ... WHERE user_id = ?
+
+  index mode all (after load), cabin off, server indexes on
+  sizes: users=2000, books=2000, reservations=5000, loans=10000
+  ANALYZE (the access kind each shape compiled to):
+      loans-by-user: IndexProbe
+      loans-by-book: IndexProbe
+      resv-by-user: IndexProbe
+      books-by-author: IndexProbe
+      books-by-genre: IndexProbe
+      loans-by-daterange: Scan
+      overdue: IndexRange
+      join-no-literal: Range, IndexProbe
+      exists-correlated: Range, IndexProbe
+  SHOW INDEXES:
+      index_oid,name,rel_oid,namespace,rel_name,keys,covering,root_page,key_width,entry_width,height,entries,unique
+      1,loans_user_x,4029,public,loans_x,user_id,NULL,404,9,17,2,10000,0
+      2,loans_book_x,4029,public,loans_x,book_id,NULL,437,9,17,2,10000,0
+      3,resv_user_x,4021,public,reservations_x,user_id,NULL,470,9,17,2,5000,0
+      4,books_author_x,4010,public,books_x,author_id,NULL,487,9,17,2,2000,0
+      5,books_genre_x,4010,public,books_x,genre,NULL,496,5,13,2,2000,0
+      6,loans_status_due_x,4029,public,loans_x,status,due_day,NULL,501,10,18,2,10000,0
+      7,books_branch_genre_x,4010,public,books_x,branch_id,genre,NULL,534,10,18,2,2000,0
+      8,loans_user_cov_x,4029,public,loans_x,user_id,book_id,due_day,status,543,9,33,2,10000,0
+  wrote /home/cdkbs/ckdbs/.claude/worktrees/bz-background-advisory-optimizer/bench/v3.2.0/archive/bz-r2-v3.2.0-157-g0ed684bb/runs/base-r1/s3.json

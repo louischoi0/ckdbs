@@ -1,0 +1,10 @@
+[["idle (epoll/sleep/yield)", "epoll_wait|PollReady|sched_yield|__futex_abstimed|nanosleep|Scheduler::RunOnce|RunReadyTasks"],
+ ["advisory: waystone / access stats / optimizer signals", "Waystone|TrailReplay|TrailRecorder|TryReplay|RecordAccess|StatementStats|OptimizerSignals|FindPattern|SysPatternRow|StatementKindOf|RecordOptimizerSignals|HasReplayableStep|GetSysPatternRow|FindTableAccess"],
+ ["cabin (witness / key / serve / build)", "Cabin|MakeValueKey|MakeCabinKey"],
+ ["WAL / durability syscalls", "fdatasync|fsync|pwrite|wal::|EncodeUndo|WriteRecordHeader|CheckRecord|__GI___libc_write"],
+ ["locks / latches", "mutex|LockTable|lll_|futex_wake|Latch"],
+ ["mvcc visibility (LookupCommit)", "LookupCommit|Visib"],
+ ["per-row exec counters (ExecStats::For)", "ExecStats::For"],
+ ["socket / wire encode", "__libc_send|libc_read|FlushOutbox|wire::|EncodeValue|WireResultSink|EncodeProjectedRow"],
+ ["parse / fingerprint / compile", "parser::|Lexer|Fingerprint|Compile|tolower|Hashtable"],
+ ["row accept / scan kernel / decode / btree", "AcceptTupleAt|ScanKernelRejects|RunWalkStep|DecodeOneValueInto|DecodeColumnsInto|DecodeCell|CheckCellSpan|ApplyCompare|btree::|PageView|PinResident|memcmp|memcpy|storage::"]]

@@ -243,7 +243,7 @@ TEST(TaggedCellTest, EveryLegalWidthRoundTripsAtItsOwnBoundary) {
 }
 
 // **`InlineCellBytes` answers exactly the cells `DecodeCell` answers
-// `kInline`, with the same bytes** (BZ C4): the scan kernel and the column
+// `kInline`, with the same bytes** (CA C4): the scan kernel and the column
 // decode take it first, so a looser one would hand them a corrupt cell
 // the codec refuses. Every tag byte, the lengths either side of capacity,
 // and the widths either side of the legal range.

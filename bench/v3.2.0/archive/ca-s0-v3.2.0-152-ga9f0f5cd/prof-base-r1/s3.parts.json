@@ -1,0 +1,17 @@
+{
+ "samples": 1083,
+ "parts": {
+  "idle (epoll/sleep/yield)": 301,
+  "other": 210,
+  "WAL / durability syscalls": 267,
+  "socket / wire encode": 145,
+  "row accept / scan kernel / decode / btree": 84,
+  "locks / latches": 19,
+  "parse / fingerprint / compile": 48,
+  "advisory: waystone / access stats / optimizer signals": 2,
+  "mvcc visibility (LookupCommit)": 6,
+  "per-row exec counters (ExecStats::For)": 1
+ },
+ "self": [],
+ "inclusive": []
+}

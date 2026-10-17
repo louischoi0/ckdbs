@@ -1299,6 +1299,34 @@ rows of BU-S4 to S8). Each is a refusal or a cost, never a wrong answer.
   foreign-key parent's - the reverse of the row path, a cycle the deadlock
   detector breaks; `DmlFormsTest` has no lock table, so its wait has no cell.
 
+## The advisory optimizer, in the background (CA)
+
+Verified on `worktree-bz-background-advisory-optimizer` at `954abc20`
+(`instructions/v3.2.0/workorder-ca-background-advisory-optimizer.md` §7).
+
+- **The advisory work still runs on the statement.** Trail recording, replay's
+  directory walk and `sys.access_stats`' exclusive page are written by the
+  statement that executed, as §1.1 of the order reads them. CA did not move
+  them: CA-S0 measured them at 0.2-0.6 % of sampled server CPU on scenarios 1-4,
+  and switching all three keys off moved no throughput outside noise
+  (`bench/v3.2.0/results-ca-s0-premise-*.md`). The order's note, drain, steward and
+  published route table (CA-R2..R4) are not built. Neither is the base-fetch hint
+  (CA-S3).
+- **Scenario 2's booking rate is the hot row's lock held across the group
+  fsync.** Each booking updates one of a few hot `operations` rows, and keeps
+  the row's `X` until its commit is durable. So eight bookers serialize on
+  `fsync` latency, and a read path made 6 % cheaper moved the committed TPS by
+  nothing (`bench/v3.2.0/results-ca-r1-visibility-*.md`). Releasing a lock before
+  the commit is durable, with the dependency tracking that makes it sound, is a
+  commit-protocol decision nobody has taken.
+- **A pinned floor still costs a latched lookup per writer, per statement.** A
+  memo removes the per-row cost (`txn.md` §4.4). Lowering the idle burn's
+  threshold so the floor would follow was measured and reverted: it added
+  nothing on scenarios 1-4 (candidate C2, `results-ca-r1-*`).
+- **Scenario 2's `--verify` reports 8-12 % failed I1 checks in every arm,
+  the base included**, and 13-28 of 400 at `v3.1.0-30`. Nobody has determined
+  whether this is the driver's read skew or an invariant slip in the engine.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,

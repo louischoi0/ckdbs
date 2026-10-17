@@ -198,7 +198,7 @@ TEST(InstanceVisibilityTest, AReaderHoldsTheFloorBelowItsSnapshot) {
     EXPECT_EQ(vis.Floor(), 9000u);
 }
 
-// **The step VM's memo answers what the live view answers** (BZ C1,
+// **The step VM's memo answers what the live view answers** (CA C1,
 // `txn/visibility.hpp`'s `VisibilityMemo`), asked first and then again
 // after every event that could move a live answer: a commit after the mint,
 // an abort, a reclamation pass under a registered reader, and one after the

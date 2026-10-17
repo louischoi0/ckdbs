@@ -349,12 +349,13 @@ inline constexpr std::uint8_t kCabinPolicyDisabled = 1;
 // pipeline of §7: `cold → trail (advisory, free) → Cabin (authoritative,
 // earns its write hook)`.
 //
-// **Not implemented.** No code creates a Cabin on this policy, and the value
-// exists so that the decision has a name and a stored representation before
-// the pipeline that consumes it. A column declared auto today behaves
-// exactly as an undeclared one: no Cabin until someone writes
-// `CREATE CABIN`. The threshold itself is `[OPEN]` and belongs to the
-// retention/policy spec alongside tracking levels.
+// **What creates one is the cabin optimizer, and only while it is on**
+// (`docs/spec/physical-optimizer.md` Part II, `SET CABIN_OPTIMIZER`, off by
+// default). Its `ApplyCreate` makes an auto-origin Cabin on a column that
+// is not `NO CABIN` (`exec/cabin_optimizer_exec.cpp`; `Catalog::CreateCabin`
+// refuses only a disabled column), so an auto column and an undeclared one
+// are alike to it. With the optimizer off, neither has a Cabin until someone
+// writes `CREATE CABIN`. The promotion pipeline of §7 is not what decides.
 inline constexpr std::uint8_t kCabinPolicyAuto = 2;
 
 // **Enabled.** A Cabin is created on this column at `CREATE TABLE`, and its
@@ -374,8 +375,8 @@ inline constexpr std::uint8_t kCabinPolicyEnabled = 3;
 // `kCabinPolicyUnset` is treated as `kCabinPolicyAuto` by every reader, and
 // the mapping is here so no caller invents its own. The two are stored
 // distinctly because they are different statements - "nothing was said" and
-// "the engine may decide" - and the day auto-creation exists, an operator
-// will want to know which of the two a column carries.
+// "the engine may decide" - and an operator reading a column the cabin
+// optimizer gave a Cabin will want to know which of the two it carried.
 constexpr std::uint8_t EffectiveCabinPolicy(std::uint8_t stored) noexcept {
     return stored == kCabinPolicyUnset ? kCabinPolicyAuto : stored;
 }

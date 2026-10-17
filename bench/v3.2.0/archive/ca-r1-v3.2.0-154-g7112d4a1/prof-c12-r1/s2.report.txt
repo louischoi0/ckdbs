@@ -1,0 +1,42 @@
+samples 6138
+
+-- self --
+ 17.30%   1062  kds::exec::::ChainRunner::AcceptTupleAt
+  9.73%    597  kds::exec::ScanKernelRejects
+  7.84%    481  epoll_wait
+  7.53%    462  kds::exec::::ChainRunner::RunWalkStep::{lambda#1}::operator const
+  7.23%    444  __libc_send
+  2.13%    131  kds::exec::ExecStats::For
+  1.69%    104  __GI___libc_read
+  1.56%     96  __libc_pwrite64
+  1.37%     84  __GI_fdatasync
+  1.08%     66  kds::parser::FingerprintAccumulator::Feed
+  1.04%     64  kds::btree::SearchLeaf
+  1.01%     62  std::_Hashtable::find [clone .isra.0]
+
+-- inclusive --
+ 17.38%   1067  kds::exec::::ChainRunner::AcceptTupleAt
+ 14.94%    917  [unmapped]
+ 13.33%    818  kds::exec::::ChainRunner::RunWalkStep [clone .actor]
+  9.73%    597  kds::exec::ScanKernelRejects
+  8.06%    495  kds::sched::EpollIoBackend::PollReady
+  7.84%    481  epoll_wait
+  7.56%    464  kds::exec::::ChainRunner::RunWalkStep::{lambda#1}::operator const
+  7.25%    445  kds::server::TcpServer::FlushOutbox
+  7.23%    444  __libc_send
+  2.13%    131  kds::exec::ExecStats::For
+  1.89%    116  kds::server::CommandDispatcher::DispatchInner
+  1.86%    114  kds::sched::SystemClock::Now const
+
+-- parts --
+ 10.25%    629  idle (epoll/sleep/yield)
+  0.80%     49  advisory: waystone / access stats / optimizer signals
+  0.07%      4  cabin (witness / key / serve / build)
+  5.28%    324  WAL / durability syscalls
+  4.38%    269  locks / latches
+  0.59%     36  mvcc visibility (LookupCommit)
+  2.13%    131  per-row exec counters (ExecStats::For)
+  9.94%    610  socket / wire encode
+  7.18%    441  parse / fingerprint / compile
+ 41.20%   2529  row accept / scan kernel / decode / btree
+ 18.18%   1116  other

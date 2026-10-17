@@ -1,0 +1,78 @@
+samples 1522
+
+-- self --
+ 19.65%    299  kds::exec::::ChainRunner::AcceptTupleAt
+ 11.17%    170  __libc_send
+  9.40%    143  kds::exec::::ChainRunner::RunWalkStep::{lambda#1}::operator const
+  8.80%    134  kds::exec::ScanKernelRejects
+  8.02%    122  epoll_wait
+  6.64%    101  kds::storage::DecodeCell
+  5.72%     87  __memcmp_evex_movbe
+  3.29%     50  kds::storage::::CheckCellSpan
+  2.23%     34  bool kds::exec::::ApplyCompare [clone .isra.0]
+  1.51%     23  kds::txn::LockTable::AcquireInner
+  1.38%     21  __GI___libc_read
+  0.79%     12  __GI_tolower
+  0.72%     11  std::_Hashtable::find [clone .isra.0]
+  0.66%     10  kds::txn::LockTable::PartitionOf const
+  0.53%      8  kds::parser::FingerprintAccumulator::Feed
+  0.53%      8  kds::server::KwpSession::OnBind
+  0.53%      8  __GI_fdatasync
+  0.46%      7  _int_free
+  0.46%      7  kds::exec::DecodeOneValueInto
+  0.39%      6  kds::wire::EncodeValue
+  0.33%      5  [vdso]+0x99a
+  0.33%      5  kds::sched::Scheduler::RunReadyTasks
+  0.33%      5  __libc_pwrite64
+  0.26%      4  kds::parser::Lexer::Next
+  0.26%      4  kds::server::CommandDispatcher::InsertOneRow
+  0.26%      4  std::__cxx11::basic_string::_M_dispose
+  0.26%      4  kds::wire::PayloadReader::Str[abi:cxx11]
+  0.26%      4  kds::parser::InsertStmt::InsertStmt
+  0.26%      4  std::vector::~vector
+  0.26%      4  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+
+-- inclusive --
+ 19.65%    299  kds::exec::::ChainRunner::AcceptTupleAt
+ 18.66%    284  kds::exec::::ChainRunner::RunWalkStep [clone .actor]
+ 12.29%    187  [unmapped]
+ 11.17%    170  __libc_send
+ 11.10%    169  kds::server::TcpServer::FlushOutbox
+  9.40%    143  kds::exec::::ChainRunner::RunWalkStep::{lambda#1}::operator const
+  8.80%    134  kds::exec::ScanKernelRejects
+  8.08%    123  kds::sched::EpollIoBackend::PollReady
+  8.02%    122  epoll_wait
+  6.64%    101  kds::storage::DecodeCell
+  5.72%     87  __memcmp_evex_movbe
+  3.29%     50  kds::storage::::CheckCellSpan
+  2.23%     34  bool kds::exec::::ApplyCompare [clone .isra.0]
+  2.17%     33  kds::txn::LockTable::TryAcquire
+  1.77%     27  kds::txn::LockTable::AcquireInner
+  1.58%     24  kds::server::CommandDispatcher::InsertInner
+  1.38%     21  __GI___libc_read
+  1.38%     21  kds::server::TcpServer::OnClientReadable
+  1.25%     19  kds::server::CommandDispatcher::InsertParsed
+  1.05%     16  kds::server::CommandDispatcher::InsertOneRow
+  0.99%     15  operator new
+  0.85%     13  kds::server::CommandDispatcher::DispatchInner
+  0.79%     12  __GI_tolower
+  0.72%     11  std::chrono::_V2::steady_clock::now
+  0.72%     11  kds::sched::SystemClock::Now const
+  0.72%     11  std::_Hashtable::find [clone .isra.0]
+  0.66%     10  kds::sched::CoroTask::Poll
+  0.66%     10  kds::txn::LockTable::PartitionOf const
+  0.59%      9  __GI___libc_malloc
+  0.59%      9  kds::server::KwpSession::OnBind
+
+-- parts --
+  8.67%    132  idle (epoll/sleep/yield)
+  0.53%      8  advisory: waystone / access stats / optimizer signals
+  0.00%      0  cabin (witness / key / serve / build)
+  1.45%     22  WAL / durability syscalls
+  3.09%     47  locks / latches
+  0.20%      3  mvcc visibility (LookupCommit)
+  0.00%      0  per-row exec counters (ExecStats::For)
+ 13.67%    208  socket / wire encode
+  4.60%     70  parse / fingerprint / compile
+ 58.48%    890  row accept / scan kernel / decode / btree
+  9.33%    142  other

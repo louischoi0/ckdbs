@@ -674,6 +674,22 @@ comparison, a writer below the floor one atomic load, and a writer above it
 one latched window lookup. `Classify()` is not `constexpr` for that last
 reason; it fetches no page, which is the property the span rule needs.
 
+**A chain runner asks the window once per writer, not once per row**
+(CA, `instructions/v3.2.0/workorder-ca-background-advisory-optimizer.md`
+§7). `AcceptTupleAt` classifies through a `txn::VisibilityMemo`, four
+writers' answers held per runner for its one `snapshot_`. That is sound
+because a view's answer for a writer never changes in the direction a
+memo could get wrong: a commit after the mint lands above the snapshot,
+an aborted writer has no entry, and the floor passes an entry above a
+registered snapshot only once no view needs it. For an unregistered view
+the live answer can move from false to true, and the frozen first answer
+is then the one the snapshot is entitled to. Both `Classify` forms share
+one body (`ClassifyFor`), so the memoized walk and the live
+`HandleUpdate`/`HandleDelete` call cannot drift apart. Before the memo, a
+walk over rows of writers above a pinned floor took the instance's one
+window latch per row: 6.9 % of scenario 1's sampled server CPU, 0.2 %
+after (`bench/v3.2.0/results-ca-r1-visibility-*.md`).
+
 `heap::ChainVisit` remains a purely physical walk. Visibility belongs to its
 callback: that keeps `storage/` free of a dependency on `txn/`, and keeps
 `ChainVisit` usable by the catalog, which must not filter.

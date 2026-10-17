@@ -1,0 +1,78 @@
+samples 1069
+
+-- self --
+  9.26%     99  __libc_send
+  7.30%     78  epoll_wait
+  6.27%     67  kds::btree::SearchLeaf
+  5.52%     59  kds::exec::::ChainRunner::AcceptTupleAt
+  3.93%     42  kds::exec::ScanKernelRejects
+  2.43%     26  kds::heap::PageView::PayloadAt const
+  2.34%     25  kds::exec::::ChainRunner::RunWalkStep::{lambda#1}::operator const
+  2.15%     23  kds::wire::EncodeValue
+  2.15%     23  ___pthread_mutex_trylock
+  2.06%     22  std::_Function_handler::_M_invoke
+  1.78%     19  __GI___libc_read
+  1.68%     18  std::_Hashtable::find [clone .isra.0]
+  1.40%     15  kds::KeystoneIdOfPayload
+  1.31%     14  kds::exec::DecodeColumnsInto
+  1.31%     14  kds::btree::InternalView::ChildFor const
+  1.22%     13  kds::Latch::LockReportingWait [clone .isra.0]
+  1.22%     13  kds::storage::DevicePageStore::PinResidentAndRelease
+  1.12%     12  malloc_consolidate
+  1.12%     12  kds::exec::::ChainRunner::RunIndexStep [clone .actor]
+  1.12%     12  kds::index::IndexLeafView::Entry const
+  1.03%     11  __memcpy_avx512_unaligned_erms
+  1.03%     11  kds::exec::DecodeOneValueInto
+  0.94%     10  __GI___libc_malloc
+  0.94%     10  __memcmp_evex_movbe
+  0.94%     10  _int_malloc
+  0.94%     10  kds::btree::::DescendTo
+  0.94%     10  kds::server::WireResultSink::EncodeProjectedRow
+  0.84%      9  void std::__sort [clone .isra.0]
+  0.84%      9  kds::storage::DevicePageStore::FetchAndPin
+  0.84%      9  kds::index::IndexVisitFrom
+
+-- inclusive --
+ 24.79%    265  [unmapped]
+  9.26%     99  __libc_send
+  9.26%     99  kds::server::TcpServer::FlushOutbox
+  7.39%     79  kds::sched::EpollIoBackend::PollReady
+  7.30%     78  epoll_wait
+  6.27%     67  kds::btree::SearchLeaf
+  5.52%     59  kds::exec::::ChainRunner::AcceptTupleAt
+  4.96%     53  kds::index::IndexVisitFrom
+  4.30%     46  operator new
+  3.93%     42  kds::exec::::ChainRunner::RunWalkStep [clone .actor]
+  3.93%     42  kds::exec::ScanKernelRejects
+  3.18%     34  __GI___libc_malloc
+  2.43%     26  kds::heap::PageView::PayloadAt const
+  2.34%     25  kds::exec::::ChainRunner::RunWalkStep::{lambda#1}::operator const
+  2.34%     25  std::_Function_handler::_M_invoke
+  2.25%     24  kds::Latch::LockReportingWait [clone .isra.0]
+  2.15%     23  kds::wire::EncodeValue
+  2.15%     23  ___pthread_mutex_trylock
+  2.15%     23  _int_malloc
+  1.96%     21  kds::server::TcpServer::OnClientReadable
+  1.78%     19  __GI___libc_read
+  1.78%     19  std::pair std::_Hashtable::_M_insert_unique [clone .isra.0]
+  1.68%     18  std::_Hashtable::find [clone .isra.0]
+  1.50%     16  kds::exec::::RunToCompletionAtWalkBoundary
+  1.40%     15  kds::exec::::ChainRunner::EmitRow
+  1.40%     15  kds::KeystoneIdOfPayload
+  1.40%     15  kds::storage::DevicePageStore::PinResidentAndRelease
+  1.31%     14  kds::sched::CoroTask::Poll
+  1.31%     14  kds::exec::DecodeColumnsInto
+  1.31%     14  kds::btree::InternalView::ChildFor const
+
+-- parts --
+  8.51%     91  idle (epoll/sleep/yield)
+  0.37%      4  advisory: waystone / access stats / optimizer signals
+  0.00%      0  cabin (witness / key / serve / build)
+  0.09%      1  WAL / durability syscalls
+  6.08%     65  locks / latches
+  0.65%      7  mvcc visibility (LookupCommit)
+  0.00%      0  per-row exec counters (ExecStats::For)
+ 16.74%    179  socket / wire encode
+ 10.20%    109  parse / fingerprint / compile
+ 32.65%    349  row accept / scan kernel / decode / btree
+ 24.70%    264  other

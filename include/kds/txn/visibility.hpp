@@ -92,8 +92,8 @@ inline Visibility Classify(const ReadView& view, const heap::PageView::Tuple& tu
     return Classify(view, tuple.trx_id, tuple.deleted, tuple.undo_ptr);
 }
 
-// **`ReadView::Visible`, remembered for one view** (BZ,
-// `instructions/v3.2.0/workorder-bz-background-advisory-optimizer.md` §7).
+// **`ReadView::Visible`, remembered for one view** (CA,
+// `instructions/v3.2.0/workorder-ca-background-advisory-optimizer.md` §7).
 // A writer at or above the floor costs the view a lookup under the
 // instance's one window latch, and a walk meets the same few writers row
 // after row - a bulk load's rows share one `trx_id` per batch - so the

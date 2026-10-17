@@ -4358,11 +4358,10 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // declared it. The second is `Catalog::CreateCabin`, which refuses a
         // *disabled* column whoever asks.
         //
-        // `kCabinPolicyAuto` does nothing here, by design: no code creates a
-        // Cabin on that policy, because the promotion pipeline that would judge
-        // it does not exist (§7). The value is stored so the decision has a name
-        // before the machinery that consumes it - not so that it quietly behaves
-        // like `enabled`.
+        // `kCabinPolicyAuto` does nothing here, by design: CREATE TABLE never
+        // decides for the engine. The engine's decision is the cabin
+        // optimizer's, made later and only while it is on (`rows.hpp`) - so
+        // auto never quietly behaves like `enabled`.
         //
         // A failure here does not fail the CREATE TABLE. The relation exists and
         // is correct; what is missing is an accelerator, so it is a warning.

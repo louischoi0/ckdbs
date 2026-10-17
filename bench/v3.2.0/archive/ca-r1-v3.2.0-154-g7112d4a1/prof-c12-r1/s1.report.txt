@@ -1,0 +1,42 @@
+samples 1753
+
+-- self --
+ 11.98%    210  kds::exec::::ChainRunner::AcceptTupleAt
+ 11.07%    194  epoll_wait
+ 10.95%    192  __libc_send
+  7.24%    127  kds::exec::ScanKernelRejects
+  6.79%    119  kds::exec::::ChainRunner::RunWalkStep::{lambda#1}::operator const
+  5.19%     91  kds::wire::EncodeValue
+  2.40%     42  kds::exec::DecodeOneValueInto
+  2.00%     35  kds::server::WireResultSink::EncodeProjectedRow
+  1.77%     31  __memcpy_avx512_unaligned_erms
+  1.71%     30  kds::exec::ExecStats::For
+  1.65%     29  kds::exec::DecodeColumnsInto
+  1.54%     27  __GI___libc_read
+
+-- inclusive --
+ 26.01%    456  [unmapped]
+ 12.09%    212  kds::exec::::ChainRunner::RunWalkStep [clone .actor]
+ 12.04%    211  kds::exec::::ChainRunner::AcceptTupleAt
+ 11.58%    203  kds::sched::EpollIoBackend::PollReady
+ 11.07%    194  epoll_wait
+ 10.95%    192  __libc_send
+ 10.95%    192  kds::server::TcpServer::FlushOutbox
+  7.24%    127  kds::exec::ScanKernelRejects
+  6.79%    119  kds::exec::::ChainRunner::RunWalkStep::{lambda#1}::operator const
+  5.19%     91  kds::wire::EncodeValue
+  2.40%     42  kds::exec::DecodeOneValueInto
+  2.28%     40  kds::server::WireResultSink::EncodeProjectedRow
+
+-- parts --
+ 12.61%    221  idle (epoll/sleep/yield)
+  0.46%      8  advisory: waystone / access stats / optimizer signals
+  0.63%     11  cabin (witness / key / serve / build)
+  2.74%     48  WAL / durability syscalls
+  2.74%     48  locks / latches
+  0.23%      4  mvcc visibility (LookupCommit)
+  1.71%     30  per-row exec counters (ExecStats::For)
+ 21.85%    383  socket / wire encode
+  4.91%     86  parse / fingerprint / compile
+ 35.08%    615  row accept / scan kernel / decode / btree
+ 17.06%    299  other

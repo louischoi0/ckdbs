@@ -1,0 +1,25 @@
+12:52:06 status-age=9s 2026-10-17T12:51:57Z rep 1 base load=2.31
+12:53:06 status-age=69s 2026-10-17T12:51:57Z rep 1 base load=1.54
+12:54:06 status-age=11s 2026-10-17T12:53:55Z rep 1 c13 load=1.14
+12:55:06 status-age=71s 2026-10-17T12:53:55Z rep 1 c13 load=1.54
+12:56:06 status-age=13s 2026-10-17T12:55:53Z rep 1 c134 load=1.00
+12:57:06 status-age=73s 2026-10-17T12:55:53Z rep 1 c134 load=1.54
+12:58:06 status-age=15s 2026-10-17T12:57:51Z rep 2 c13 load=1.09
+12:59:06 status-age=75s 2026-10-17T12:57:51Z rep 2 c13 load=1.29
+13:00:06 status-age=15s 2026-10-17T12:59:51Z rep 2 c134 load=1.07
+13:01:06 status-age=75s 2026-10-17T12:59:51Z rep 2 c134 load=1.45
+13:02:06 status-age=4s 2026-10-17T13:02:02Z rep 2 base load=0.83
+13:03:06 status-age=64s 2026-10-17T13:02:02Z rep 2 base load=1.25
+13:04:06 status-age=3s 2026-10-17T13:04:03Z rep 3 c134 load=0.88
+13:05:06 status-age=63s 2026-10-17T13:04:03Z rep 3 c134 load=1.69
+13:06:06 status-age=4s 2026-10-17T13:06:02Z rep 3 base load=0.98
+13:07:06 status-age=64s 2026-10-17T13:06:02Z rep 3 base load=1.25
+13:08:06 status-age=3s 2026-10-17T13:08:03Z rep 3 c13 load=1.16
+13:09:06 status-age=63s 2026-10-17T13:08:03Z rep 3 c13 load=1.67
+13:10:06 status-age=5s 2026-10-17T13:10:01Z rep 4 base load=1.02
+13:11:06 status-age=65s 2026-10-17T13:10:01Z rep 4 base load=1.36
+13:12:06 status-age=5s 2026-10-17T13:12:01Z rep 4 c13 load=0.92
+13:13:06 status-age=65s 2026-10-17T13:12:01Z rep 4 c13 load=1.18
+13:14:06 status-age=6s 2026-10-17T13:14:00Z rep 4 c134 load=0.69
+13:15:06 status-age=66s 2026-10-17T13:14:00Z rep 4 c134 load=1.26
+13:16:06 done

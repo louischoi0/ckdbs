@@ -183,9 +183,9 @@ struct CellValue {
 StatusOr<CellValue> DecodeCell(std::span<const std::byte> cell);
 
 // **An inline cell's value bytes, with DecodeCell()'s checks and no Status**
-// (BZ C4): the scan reads one cell per row, and building and dropping a
+// (CA C4): the scan reads one cell per row, and building and dropping a
 // `StatusOr` around an out-of-line call was 10 % of a varchar-filtered
-// walk's server CPU (`bench/v3.2.0/results-bz-r2-*.md`). Answers only the
+// walk's server CPU (`bench/v3.2.0/results-ca-r2-*.md`). Answers only the
 // cell DecodeCell() would answer `kInline` - the width, the tag and the
 // length each checked as it checks them - and nothing for every other cell,
 // which the caller hands to DecodeCell() for its tag or its refusal.
