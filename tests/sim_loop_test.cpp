@@ -59,22 +59,6 @@ TEST(SimWorkload, DifferentSeedsYieldDifferentOperationLogs) {
     EXPECT_NE(OpLog(42, 2000), OpLog(43, 2000));
 }
 
-// The corpus must keep both clustered types inside the tested surface; a
-// reseeding that loses one would silently halve what the loop covers.
-TEST(SimWorkload, TheCommittedCorpusCoversBothClusteredTypes) {
-    bool saw_heap = false, saw_btree = false;
-    for (const std::uint64_t seed : CommittedSeeds()) {
-        Workload workload(Rng(seed).Fork("iteration/0").Fork("workload"), Profile::kUniform);
-        for (int i = 0; i < 4; ++i) {
-            const Op op = workload.Next();
-            if (op.kind != Op::Kind::kCreateTable) break;
-            (op.btree ? saw_btree : saw_heap) = true;
-        }
-    }
-    EXPECT_TRUE(saw_heap);
-    EXPECT_TRUE(saw_btree);
-}
-
 // ---- SIM03/SIM04: the loop over the committed corpus ----------------------
 
 TEST(SimLoop, TenThousandOpCleanRunAgreesWithTheOracleOnEveryRead) {
@@ -270,10 +254,11 @@ protected:
         instance_ = std::move(instance.value());
     }
 
-    // A short varchar stays inline; ~200 bytes spills. The two tables give
-    // the heap and btree walks one relation each.
+    // A short varchar stays inline; ~200 bytes spills. Two relations, a heap
+    // (hidden tuple key, BZ-R1) and a btree with a declared one, each a
+    // clustered tree the sweep walks the same way.
     void MakeTables() {
-        ASSERT_EQ(instance_->Execute("CREATE TABLE h (id int64, v int64, name varchar) HEAP")
+        ASSERT_EQ(instance_->Execute("CREATE TABLE h (v int64, name varchar) HEAP")
                       .substr(0, 7),
                   "CREATED");
         ASSERT_EQ(instance_->Execute("CREATE TABLE b (id int64, v int64, name varchar) BTREE")
@@ -360,13 +345,14 @@ TEST_F(SimIntegrityCorruption, AnIdBelowItsPageMinKeyIsAChainOrderFinding) {
     MakeTables();
     InsertedAt first = Insert("h", 0, "pad");
     InsertedAt victim{};
-    // Grow the chain until a tuple lands on a second page; its min_key is
-    // the id that caused the growth, so id 1 is below it by construction.
+    // Grow the tree until a tuple lands on a second leaf; an ascending key
+    // opens a new rightmost leaf at its own id (BD-S2), so id 1 is below it
+    // by construction.
     for (int i = 1; i < 300 && victim.page == 0; ++i) {
         const InsertedAt at = Insert("h", i, "pad");
         if (at.page != first.page) victim = at;
     }
-    ASSERT_NE(victim.page, 0u) << "chain never grew";
+    ASSERT_NE(victim.page, 0u) << "the tree never grew";
     const std::uint64_t low_id = 1;  // valid Keystone encoding, wrong page
     std::memcpy(TupleBase(victim) + heap::kTupleHeaderOnDiskSize, &low_id, sizeof low_id);
     ExpectOnly(Check(), CheckKind::kChainOrder);
@@ -769,7 +755,7 @@ TEST(SimFaults, TheQuiescenceProbeFiresOnAnInstanceThatStoppedAnswering) {
     SimInstance& db = *made.value();
 
     Oracle oracle;
-    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar) HEAP").substr(0, 7),
+    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar)").substr(0, 7),
               "CREATED");
     oracle.CreateTable("t");
     for (int i = 0; i < 5; ++i) {
@@ -1135,7 +1121,7 @@ TEST(SimFindings, ACabinSetBankedInsideARolledBackTransactionServesEveryLiveRow)
     ASSERT_TRUE(made.ok());
     SimInstance& db = *made.value();
 
-    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar) HEAP").substr(0, 7),
+    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar)").substr(0, 7),
               "CREATED");
     ASSERT_EQ(db.Execute("CREATE CABIN ON t(v)").substr(0, 7), "CREATED");
     ASSERT_EQ(db.Execute("INSERT INTO t VALUES (0, 'a')").substr(0, 8), "INSERTED");
@@ -1163,7 +1149,7 @@ TEST(SimFindings, ACabinSetBankedAfterACommittedDeleteIsCorrect) {
     ASSERT_TRUE(made.ok());
     SimInstance& db = *made.value();
 
-    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar) HEAP").substr(0, 7),
+    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar)").substr(0, 7),
               "CREATED");
     ASSERT_EQ(db.Execute("CREATE CABIN ON t(v)").substr(0, 7), "CREATED");
     ASSERT_EQ(db.Execute("INSERT INTO t VALUES (0, 'a')").substr(0, 8), "INSERTED");
@@ -1195,7 +1181,7 @@ TEST(SimFindings, ACabinSetIsNotBankedWhileAnotherTransactionIsInFlight) {
         return db.dispatcher().Dispatch(sql, &other).response;
     };
 
-    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar) HEAP").substr(0, 7),
+    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar)").substr(0, 7),
               "CREATED");
     ASSERT_EQ(db.Execute("CREATE CABIN ON t(v)").substr(0, 7), "CREATED");
     ASSERT_EQ(db.Execute("INSERT INTO t VALUES (0, 'a')").substr(0, 8), "INSERTED");

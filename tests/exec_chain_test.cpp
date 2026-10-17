@@ -26,12 +26,6 @@
 //
 // The tests that matter here are **equivalences**, not single results:
 //
-//   across storage   a heap relation and a btree relation must return the
-//                    same rows in the same order. The row codec, PageView
-//                    and the walk are shared by design (a btree leaf *is*
-//                    a heap page), and this is what proves the sharing is
-//                    real rather than nominal.
-//
 //   across strategy  a Probe and a Scan must agree row-for-row. That is
 //                    what makes invariant 9's fall-through safe: a
 //                    Waystone miss falls back to a walk, and if the two
@@ -69,8 +63,7 @@ protected:
             row.notnull = true;
             schema.columns.push_back(row);
         }
-        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema,
-                                                  ct.clustered);
+        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema);
         ASSERT_TRUE(created.ok()) << created.status().message();
     }
 
@@ -578,32 +571,6 @@ TEST_F(ExecChainTest, AWalkReportsWhereItIsAtEveryPageBoundary) {
     ASSERT_EQ(small.at.size(), 1u) << "a one-page walk declares its position exactly once";
     EXPECT_EQ(small.at.front().lo, 0u);
     EXPECT_EQ(small.at.front().hi, kIdSpaceEnd);
-}
-
-TEST_F(ExecChainTest, AHeapWalkDeclaresTheRelationAndNoSlice) {
-    // The other half of the same ruling, and the reason it is not an
-    // omission: a heap chain is not walked in key order - invariant 4
-    // leaves a page's tuples unordered - so
-    // `min_key` of the page a heap walk is on bounds nothing about what it
-    // has left to read. Declaring a slice from it would name an interval
-    // the walk is not in.
-    Create("CREATE TABLE h (id int64, v int64) HEAP");
-    for (int i = 0; i < 600; ++i) Insert("h", {Int(i)});
-
-    RecordingPosition seen;
-    const StepChain chain = CompileSql("SELECT id FROM h");
-    Status ran = Execute(
-        boot_->catalog, store_, chain,
-        [&](const ChainFrame&) -> StatusOr<storage::VisitControl> {
-            return storage::VisitControl::kContinue;
-        },
-        /*stats=*/nullptr, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
-        /*snapshot=*/nullptr, /*indexes=*/true, &seen);
-    ASSERT_TRUE(ran.ok()) << ran.message();
-
-    ASSERT_EQ(seen.at.size(), 1u) << "a heap walk reports once, before its first page";
-    EXPECT_EQ(seen.at.front().lo, 0u);
-    EXPECT_EQ(seen.at.front().hi, kIdSpaceEnd);
 }
 
 // ---- BD-S4: JB6's mark is a key on a btree (BD-R3 E4) ---------------------

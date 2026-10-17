@@ -528,8 +528,7 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
         stmt.rows.push_back(std::move(values));
     }
 
-    // BI2, through KL04's seam: this IS the T1 path, T3's sorted fill
-    // included when the relation is inside the gate.
+    // BI2, through KL04's seam: this IS the T1 path.
     auto out = dispatcher_->ExecuteInsert(stmt, conn.session);
     if (out.response.rfind("ERR", 0) == 0) {
         // The refusal keeps its code - a named key's `AlreadyExists` is what

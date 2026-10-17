@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,9 +16,7 @@
 //
 // The kind is an accelerator, and the only thing that makes an accelerator
 // safe is that it is invisible. So every test below is a comparison against
-// the answer the same predicate gives with no range at all - on **both**
-// storage forms, because a heap chain and a btree leaf chain prune the same
-// way for different reasons and a change to either could break one alone.
+// the answer the same predicate gives with no range at all.
 
 namespace kds::exec {
 namespace {
@@ -31,12 +30,10 @@ protected:
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_);
 
         // Enough rows to span several pages, so `min_key` pruning has
-        // something to prune. Both forms hold the same values.
-        ASSERT_EQ(Run("CREATE TABLE h (id int64, v int64) HEAP").substr(0, 7), "CREATED");
+        // something to prune.
         ASSERT_EQ(Run("CREATE TABLE b (id int64, v int64) BTREE").substr(0, 7), "CREATED");
         for (int i = 1; i <= kRows; ++i) {
             const std::string v = std::to_string(i * 10);
-            ASSERT_EQ(Run("INSERT INTO h VALUES (" + v + ")").substr(0, 8), "INSERTED");
             ASSERT_EQ(Run("INSERT INTO b VALUES (" + v + ")").substr(0, 8), "INSERTED");
         }
     }
@@ -82,7 +79,7 @@ protected:
 // ---- The equivalence, which is the whole point ---------------------------
 
 TEST_F(RangeScanTest, ARangeReturnsExactlyWhatTheSamePredicateScannedGives) {
-    for (const std::string& rel : {std::string("h"), std::string("b")}) {
+    for (const std::string& rel : {std::string("b")}) {
         // `BETWEEN` compiles to kRange and prunes.
         const Outcome ranged =
             RunWithStats("SELECT id, v FROM " + rel + " WHERE id BETWEEN 50 AND 60");
@@ -100,17 +97,8 @@ TEST_F(RangeScanTest, ARangeReturnsExactlyWhatTheSamePredicateScannedGives) {
     }
 }
 
-TEST_F(RangeScanTest, HeapAndBtreeAgreeRowForRow) {
-    // The equivalence already pinned for Probe vs Scan, extended to the new
-    // kind: the storage form must not be visible in the answer.
-    const Outcome heap = RunWithStats("SELECT id, v FROM h WHERE id BETWEEN 100 AND 130");
-    const Outcome btree = RunWithStats("SELECT id, v FROM b WHERE id BETWEEN 100 AND 130");
-    EXPECT_EQ(heap.rows, btree.rows);
-    EXPECT_EQ(heap.rows.size(), 31u);
-}
-
 TEST_F(RangeScanTest, ARangeWithNoQualifyingRowsIsEmptyNotWrong) {
-    for (const std::string& rel : {std::string("h"), std::string("b")}) {
+    for (const std::string& rel : {std::string("b")}) {
         EXPECT_TRUE(RunWithStats("SELECT id FROM " + rel + " WHERE id BETWEEN 9000 AND 9100")
                         .rows.empty())
             << rel;
@@ -134,7 +122,7 @@ TEST_F(RangeScanTest, TheBoundsAreInclusiveAtBothEnds) {
 TEST_F(RangeScanTest, ARangeNearTheStartStopsBeforeReadingTheWholeRelation) {
     // What the kind is *for*. Without pruning this examines all kRows rows;
     // with it, the walk stops at the first page past the high bound.
-    for (const std::string& rel : {std::string("h"), std::string("b")}) {
+    for (const std::string& rel : {std::string("b")}) {
         const Outcome out =
             RunWithStats("SELECT id FROM " + rel + " WHERE id BETWEEN 1 AND 5");
         ASSERT_EQ(out.rows.size(), 5u) << rel;
@@ -146,7 +134,7 @@ TEST_F(RangeScanTest, ARangeNearTheStartStopsBeforeReadingTheWholeRelation) {
     }
 }
 
-TEST_F(RangeScanTest, ARangeAtTheEndSeeksOnABtreeAndStillWalksOnAHeap) {
+TEST_F(RangeScanTest, ARangeAtTheEndSeeksToItsLowBound) {
     // A range at the far end of the relation, which is the case tail
     // pruning cannot help with: there is no tail to prune. What decides the
     // cost is whether the walk can *start* at the low bound.
@@ -160,27 +148,23 @@ TEST_F(RangeScanTest, ARangeAtTheEndSeeksOnABtreeAndStillWalksOnAHeap) {
         << "a clustered range must not read the rows before it";
     EXPECT_EQ(b.stats.Total().range_pages_pruned, 0u)
         << "nothing to prune at the end - the saving is the seek, not the stop";
-
-    // **Heap: no index to descend, so finding the low bound *is* the walk.**
-    // The honest other half, pinned so the seek is not mistaken for a
-    // property of ranges generally.
-    const Outcome h = RunWithStats("SELECT id FROM h" + where);
-    EXPECT_EQ(h.rows.size(), 3u);
-    EXPECT_EQ(h.stats.Total().rows_examined, static_cast<std::uint64_t>(kRows));
 }
 
 // The seek may only change *where the walk starts*, never which rows come
 // back - the same contract tail pruning has, and the reason the residual
-// still carries both bounds. Every range over the clustered relation must
-// answer exactly what the heap one answers.
+// still carries both bounds. Every range must answer exactly the ids it
+// covers, which are 1..kRows.
 TEST_F(RangeScanTest, TheSeekReturnsTheSameRowsAsTheWalk) {
     for (int low = 1; low <= kRows; low += 37) {
         for (int width : {0, 1, 9, 100}) {
             const std::string where = " WHERE id BETWEEN " + std::to_string(low) + " AND " +
                                       std::to_string(low + width);
             const Outcome b = RunWithStats("SELECT id FROM b" + where);
-            const Outcome h = RunWithStats("SELECT id FROM h" + where);
-            ASSERT_EQ(b.rows, h.rows) << "btree and heap disagree on" << where;
+            std::vector<std::string> want;
+            for (int id = low; id <= std::min(low + width, kRows); ++id) {
+                want.push_back(std::to_string(id));
+            }
+            ASSERT_EQ(b.rows, want) << "the seek answered a different set on" << where;
         }
     }
 }

@@ -21,12 +21,8 @@ TEST(ParserTest, CreateTableDefaultsToBtree) {
     EXPECT_EQ(ct->columns[0].type_name, "uint64");
     EXPECT_EQ(ct->columns[1].name, "name");
     EXPECT_EQ(ct->columns[1].type_name, "varchar");
-    // **BTREE since SUS-1.** The default was `kHeap` until heap relations
-    // were suspended; the ambiguity `clustered_given` exists to resolve moved
-    // with it rather than going away - `kBtree` is now both "the writer asked
-    // for a btree" and "the writer said nothing".
-    EXPECT_EQ(ct->clustered, catalog::ClusteredType::kBtree);
-    EXPECT_FALSE(ct->clustered_given);
+    // No storage word: a relation whose first column is its tuple key.
+    EXPECT_FALSE(ct->heap);
 }
 
 TEST(ParserTest, CreateTableExplicitBtree) {
@@ -34,7 +30,19 @@ TEST(ParserTest, CreateTableExplicitBtree) {
     ASSERT_TRUE(stmt.ok()) << stmt.status().message();
     auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
     ASSERT_NE(ct, nullptr);
-    EXPECT_EQ(ct->clustered, catalog::ClusteredType::kBtree);
+    EXPECT_FALSE(ct->heap);
+}
+
+// BZ-R1: `HEAP` asks for the engine's hidden tuple key, and SUS-1's refusal
+// is gone - the first declared column is an ordinary one, of any type.
+TEST(ParserTest, CreateTableHeapAsksForAHiddenTupleKey) {
+    auto stmt = Parse("CREATE TABLE t (name varchar, n int64) HEAP");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
+    ASSERT_NE(ct, nullptr);
+    EXPECT_TRUE(ct->heap);
+    ASSERT_EQ(ct->columns.size(), 2u);
+    EXPECT_EQ(ct->columns[0].name, "name");
 }
 
 // ---- The key-mode word (PK03, docs/spec/heap-and-tuple.md §4.1) ---------------
@@ -46,7 +54,7 @@ TEST(ParserTest, CreateTableDefaultsToAssigned) {
     ASSERT_TRUE(stmt.ok()) << stmt.status().message();
     auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
     ASSERT_NE(ct, nullptr);
-    EXPECT_EQ(ct->clustered, catalog::ClusteredType::kBtree);  // SUS-1
+    EXPECT_FALSE(ct->heap);
 }
 
 TEST(ParserTest, CreateTableStillTakesEXPLICITInEitherOrderAndItDoesNothing) {
@@ -61,7 +69,7 @@ TEST(ParserTest, CreateTableStillTakesEXPLICITInEitherOrderAndItDoesNothing) {
         ASSERT_TRUE(stmt.ok()) << sql << ": " << stmt.status().message();
         auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
         ASSERT_NE(ct, nullptr) << sql;
-        EXPECT_EQ(ct->clustered, catalog::ClusteredType::kBtree) << sql;
+        EXPECT_FALSE(ct->heap) << sql;
     }
 
     // Bare EXPLICIT does not move storage either - the old grammar's
@@ -70,8 +78,7 @@ TEST(ParserTest, CreateTableStillTakesEXPLICITInEitherOrderAndItDoesNothing) {
     ASSERT_TRUE(bare.ok()) << bare.status().message();
     auto* bare_ct = std::get_if<CreateTableStmt>(&bare.value());
     ASSERT_NE(bare_ct, nullptr);
-    EXPECT_EQ(bare_ct->clustered, catalog::ClusteredType::kBtree);
-    EXPECT_FALSE(bare_ct->clustered_given);
+    EXPECT_FALSE(bare_ct->heap);
 }
 
 TEST(ParserTest, CreateTableRefusesASSIGNEDWithItsByte) {

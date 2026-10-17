@@ -210,33 +210,16 @@ TEST_F(InsertWalTest, NoWalManagerMeansNoRecordsAndTheInsertStillWorks) {
     EXPECT_EQ(RecordTypes().size(), before);
 }
 
-// ---- Chain growth logs both pages it touched ----------------------------
+// ---- A leaf division logs every page it touched --------------------------
 
 // A row wide enough that a page fills in a countable number of inserts.
 //
 // Under the fixed-length rule (invariant 13) a row's width comes from its
 // *schema*, never from the values in it: every varchar occupies one tagged
 // cell of kds.inline_cell_width bytes whatever it holds. So a wide row is a
-// row with many columns. These tests used to insert one 500-byte varchar,
-// which is now refused - a value that long belongs in the var-heap, which
-// is specified but not built (docs/rules/rule-fixed-length-tuple.md section 5).
-//
-// 20 cells of the default 64 bytes plus the Keystone word is a 1288-byte
-// row, so roughly six fit a page and growth happens well inside the loops
-// below.
+// row with many columns. 20 cells of the default 64 bytes plus the Keystone
+// word is a 1288-byte row, so roughly six fit a page.
 constexpr int kWideColumns = 20;
-
-std::string WideCreateTable() {
-    std::string sql = "CREATE TABLE t (id int64";
-    for (int i = 0; i < kWideColumns; ++i) sql += ", v" + std::to_string(i) + " varchar";
-    return sql + ") HEAP";  // SUS-1: this pair is about heap chain growth and page-init
-}
-
-std::string WideInsert() {
-    std::string sql = "INSERT INTO t VALUES (";
-    for (int i = 0; i < kWideColumns; ++i) sql += (i == 0 ? "'x'" : ", 'x'");
-    return sql + ")";
-}
 
 TEST_F(InsertWalTest, ALeafDivisionLogsOneSplitRecordCarryingBothLeavesAndNoInsert) {
     // **Restored at BD-S3** (`instructions/v3.0.0/workorder-bd-sorted-leaf-
@@ -299,57 +282,6 @@ TEST_F(InsertWalTest, ALeafDivisionLogsOneSplitRecordCarryingBothLeavesAndNoInse
     auto images = wal::DecodeBtreeSplit(split->payload);
     ASSERT_TRUE(images.ok()) << images.status().message();
     EXPECT_GE(images.value().size(), 2u) << "both halves of a division have to be logged whole";
-}
-
-TEST_F(InsertWalTest, ChainGrowthLogsTheNewPageAndTheLinkThatReachesIt) {
-    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
-    // A wide row so the page fills in a countable number of inserts rather
-    // than thousands - see WideCreateTable().
-    ASSERT_EQ(d.Dispatch(WideCreateTable()).response.substr(0, 7), "CREATED");
-
-    PageId grew_into = kInvalidPageId;
-    for (int i = 0; i < 40 && grew_into == kInvalidPageId; ++i) {
-        const std::string reply = d.Dispatch(WideInsert()).response;
-        ASSERT_EQ(reply.substr(0, 8), "INSERTED") << reply;
-
-        std::vector<wal::RecordType> types = RecordTypes();
-        if (CountOf(types, wal::RecordType::kPageInit) > 0) {
-            // The growth insert logged four records, not two: the old
-            // tail's image (carrying the link) and the new page's init,
-            // between BEGIN and the tuple itself.
-            EXPECT_EQ(CountOf(types, wal::RecordType::kFullPageImage), 1u);
-            EXPECT_EQ(CountOf(types, wal::RecordType::kPageInit), 1u);
-            grew_into = 1;  // marker: growth observed
-        }
-    }
-    ASSERT_NE(grew_into, kInvalidPageId) << "the chain never grew; the page never filled";
-}
-
-TEST_F(InsertWalTest, ThePageInitRecordCarriesTheNewPagesMinKey) {
-    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
-    ASSERT_EQ(d.Dispatch(WideCreateTable()).response.substr(0, 7), "CREATED");
-
-    for (int i = 0; i < 40; ++i) {
-        ASSERT_EQ(d.Dispatch(WideInsert()).response.substr(0, 8), "INSERTED");
-    }
-
-    std::vector<std::vector<std::byte>> storage;
-    const wal::DecodedRecord* init = nullptr;
-    std::vector<wal::DecodedRecord> records = DeviceRecords(storage);
-    for (const wal::DecodedRecord& record : records) {
-        if (record.type() == wal::RecordType::kPageInit) init = &record;
-    }
-    ASSERT_NE(init, nullptr) << "the chain never grew";
-
-    auto decoded = wal::DecodePageInit(init->payload);
-    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
-    EXPECT_EQ(decoded.value().page_type, static_cast<std::uint8_t>(PageType::kHeap));
-
-    // min_key is the id of the tuple that caused the growth, and it must
-    // match what the page itself ended up holding (invariant 2).
-    auto page = store_->Get(init->header.page_id);
-    ASSERT_TRUE(page.ok()) << page.status().message();
-    EXPECT_EQ(decoded.value().min_key, heap::PageView(page.value().bytes()).min_key());
 }
 
 // ---- A spilled value is logged, and logged first -------------------------

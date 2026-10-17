@@ -19,9 +19,9 @@
 // back through `KeystoneIdOfPayload` alone.
 //
 // The id is the relation's tuple key. Per row, the `INSERT` names it or
-// the catalog issues it from the relation's `next_id` mark (rows.hpp); on
-// a btree its uniqueness is the descent's and on a heap the mark's
-// (heap-and-tuple.md section 4.1, invariant 11).
+// the catalog issues it from the relation's `next_id` mark (rows.hpp); its
+// uniqueness is the clustered tree's descent's (heap-and-tuple.md section
+// 4.1, invariant 11).
 //
 // Concurrency: callers holding a live tuple in a buffer-pool frame must
 // update the Keystone word with a single atomic uint64_t CAS (rules.md

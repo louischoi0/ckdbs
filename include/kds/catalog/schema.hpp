@@ -34,9 +34,15 @@ struct Schema {
     // schema alone (RowLayout below).
     std::uint16_t spare_slots = 0;
 
+    // A heap (BZ-R1 of `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`):
+    // column 0 is the engine's hidden tuple key, and the declared columns
+    // start at position 1.
+    bool heap() const noexcept { return !columns.empty() && columns.front().hidden(); }
+
     // The live column whose name equals `name` ignoring case
     // (`ColumnNamesCollide`), or nullptr when there is none; a dropped
-    // column has no name a statement can reach (BW-R6). The one resolver of
+    // column has no name a statement can reach (BW-R6), nor has a heap's
+    // hidden tuple key (BZ-R3). The one resolver of
     // a column name a statement writes - a read, a SET target, an INSERT
     // column list, DROP and RENAME COLUMN's old name, and the column CREATE
     // INDEX, CABIN, ASSERTION or TRANSITION names, a stored assertion canon
@@ -48,6 +54,14 @@ struct Schema {
     StatusOr<const SysColumnRow*> FindColumn(std::string_view name,
                                              std::uint32_t byte_offset) const;
 };
+
+// A heap's tuple key column (BZ-R1 of
+// `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`): position 0,
+// `int64 NOT NULL`, flagged hidden, named `kHiddenTupleKeyName` - `$` and an
+// identifier lex as a parameter, which every statement refuses, so no
+// statement spells it and no declared column can collide with it.
+inline constexpr std::string_view kHiddenTupleKeyName = "$tuple_key";
+SysColumnRow HiddenTupleKeyColumn();
 
 // The one rule deciding whether two column names are the same name:
 // equal ignoring ASCII case. A relation's live column names are unique
@@ -302,19 +316,6 @@ struct TableAccess {
     Schema schema;
     PageId desc_page_id;
     ClusteredType clustered_type;
-
-    // Where a heap relation's chain last placed a tuple - heap::ChainInsert
-    // reads it as the tail-search start and writes the landing page back,
-    // which is what keeps an insert O(1) pages instead of a head-to-tail
-    // walk per row (the BLK08 finding). **Advisory
-    // and self-healing**: the chain grows only at the tail and a page
-    // never leaves it, so a stale value is behind, never wrong, and a
-    // damaged one costs one retried walk. Mutable on a cached, const-
-    // borrowed entry deliberately - the cache is core-local and statements
-    // run to completion, the same license the in-place root updates rely
-    // on - and it dies with the entry on BumpVersion, so it never
-    // survives DDL. kInvalidPageId for a btree relation, which descends.
-    mutable PageId heap_tail_hint = kInvalidPageId;
 
     // Root of this relation's var-heap chain, or kInvalidPageId when the
     // schema has nothing that could spill. Cacheable for the reason

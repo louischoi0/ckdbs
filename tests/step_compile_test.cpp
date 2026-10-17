@@ -64,8 +64,7 @@ protected:
             row.notnull = true;
             schema.columns.push_back(row);
         }
-        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema,
-                                                  ct.clustered);
+        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema);
         ASSERT_TRUE(created.ok()) << created.status().message();
     }
 
@@ -764,8 +763,7 @@ TEST_F(StepCompileTest, ACabinStepsKeyColumnIsAlwaysInItsFilterMask) {
 
 TEST_F(StepCompileTest, AJoinOnACabinedColumnCompilesToACorrelatedCabinProbe) {
     // cabin.md §4a: the cabined join column with no literal anywhere -
-    // the shape that walked the inner relation once per outer row, and the
-    // only accelerable shape a heap relation's join column has. Both ON
+    // the shape that walked the inner relation once per outer row. Both ON
     // orientations must give the same probe, per the tuple key arm's argument.
     auto trade_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trade", nullptr);
     ASSERT_TRUE(trade_oid.ok());

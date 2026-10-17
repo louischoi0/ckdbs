@@ -173,7 +173,13 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // BY-R5): the log may carry ANCHOR_SLOT_REMOVE (kind 33), which a version-28
 // binary's redo does not know and could not replay. Refused with no
 // migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 29;
+//
+// 30 (BZ-S1, `instructions/v3.2.0/workorder-bz-heap-hidden-key.md` BZ-R6):
+// a heap is a btree whose column 0 carries `kColumnHidden`, which a
+// version-29 binary would show and count; and a version-29 volume may hold
+// a pre-SUS-1 chain relation, whose code BZ deletes. Refused with no
+// migration, the standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 30;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

@@ -83,7 +83,13 @@ namespace {
 // `sys.columns` rows join the stream after `sys.transitions'`, and every later
 // record's LSN moves with them. The script declares no Cabin, so no record's
 // format changes.
-constexpr std::uint32_t kGoldenLogCrc = 0x34900fceu;
+// **Re-pinned at BZ-S1** (on `worktree-by-heap-redefine`,
+// `instructions/v3.2.0/workorder-bz-heap-hidden-key.md` BZ-R1): `golden_heap`
+// is a heap, which is now a btree whose column 0 is a hidden tuple key - its
+// `sys.columns` gains that row, its root is a leaf, and its rows log
+// `BTREE_INSERT` where they logged `HEAP_INSERT` behind a chain. Every later
+// LSN moves. No record kind's framing changes.
+constexpr std::uint32_t kGoldenLogCrc = 0xaea80a5fu;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

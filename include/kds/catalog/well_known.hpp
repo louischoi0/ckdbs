@@ -526,8 +526,13 @@ inline constexpr std::uint32_t kTypeValDecimalWide = 13;
 static_assert(kTypeValDecimal == 7 && kTypeValDecimalWide == 13,
               "catalog::TypeModOf spells these values literally; keep them in step");
 
+// How a relation's rows are stored, on its `sys.tables` row. Every user
+// relation is `kBtree` (BZ-R1 of
+// `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`); `kCatalogChain` is
+// the system relations' own, a chain of heap pages the catalog walks
+// (`heap_chain.hpp`), and the on-disk 0 a pre-BZ user heap also carried.
 enum class ClusteredType : std::uint8_t {
-    kHeap = 0,
+    kCatalogChain = 0,
     kBtree = 1,
 };
 

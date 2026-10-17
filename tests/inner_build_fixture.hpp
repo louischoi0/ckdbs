@@ -78,7 +78,7 @@ protected:
             schema.columns.push_back(row);
         }
         auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name,
-                                                  schema, ct.clustered);
+                                                  schema);
         ASSERT_TRUE(created.ok()) << created.status().message();
     }
 

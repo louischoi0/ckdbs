@@ -61,9 +61,8 @@ enum class FetchHeat : std::uint8_t {
 // heat and the foreground working set stays where it was.
 //
 // The seam is a virtual fetcher rather than a store method because the
-// callers that need it - the relayout planner's survey and the cabin
-// optimizer's builds (PO4 makes ring routing mandatory there), which are
-// the two the tree has - hold a `PageStore&` and must not know which
+// caller that needs it - the cabin optimizer's builds (PO4 makes ring
+// routing mandatory there), the one the tree has - holds a `PageStore&` and must not know which
 // concrete store is under them (aggregate scans and the CREATE ASSERTION
 // builder open none). The base-class ring is
 // deliberately plain: a store that never evicts has no pool to protect, so

@@ -259,8 +259,7 @@ TEST_F(AlterTableTest, ARelationInAUserNamespaceIsNotASystemRelation) {
     // A namespace that exists: `CreateTable` checks since AT-S17b.
     auto ns = boot_->catalog.CreateNamespace("af_test");
     ASSERT_TRUE(ns.ok()) << ns.status().message();
-    auto oid = boot_->catalog.CreateTable(ns.value(), "orders_line", schema,
-                                          catalog::ClusteredType::kHeap);
+    auto oid = boot_->catalog.CreateTable(ns.value(), "orders_line", schema);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // **The column form runs first, and the order is what makes the two

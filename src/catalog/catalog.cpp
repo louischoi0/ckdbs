@@ -167,7 +167,7 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
     //
     // `access` is the walk's hold: exclusive for a writer, shared for a
     // reader that must neither queue behind nor block the writers of the
-    // pages it passes (`Catalog::RowIdMark`).
+    // pages it passes.
     PageId current = root;
     for (std::uint32_t steps = 0; steps < kCatalogOverflowLimit; ++steps) {
         auto bytes = store.Fetch(current, access);
@@ -733,7 +733,7 @@ Status Catalog::Bootstrap() {
         // through SysXxxRow::Encode(), never the schema-driven row codec,
         // so nothing of theirs can ever spill.
         if (Status s = InsertRelationRow(t.oid, kNamespaceSys, t.name, t.page_id,
-                                          ClusteredType::kHeap, kInvalidPageId);
+                                          ClusteredType::kCatalogChain, kInvalidPageId);
             !s.ok()) {
             return s;
         }
@@ -859,7 +859,7 @@ Status Catalog::BootstrapDeclarations(Oid rel_oid, std::string_view name, PageId
         return s;
     }
     if (Status s = InsertRelationRow(rel_oid, kNamespaceSys, name, root_page,
-                                      ClusteredType::kHeap, varheap_root.value());
+                                      ClusteredType::kCatalogChain, varheap_root.value());
         !s.ok()) {
         return s;
     }
@@ -976,8 +976,7 @@ Status Catalog::ClearPendingRoots(Oid oid) {
             if (row.type_oid != kTypeDroppedTable || row.oid != oid) return false;
             row.pending_roots = 0;
             const auto encoded = row.Encode();
-            // Outside any transaction, with the row's own stamp kept: the
-            // `AllocateRowIdRange` shape (BF-R2).
+            // Outside any transaction, with the row's own stamp kept (BF-R2).
             if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded,
                                            wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
                 !s.ok()) {
@@ -1326,7 +1325,6 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
 }
 
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
-                                    ClusteredType clustered_type,
                                     std::uint64_t trx_id, std::vector<CatalogRowRef>* written) {
     // Refused at definition time rather than at the first INSERT: a table
     // whose first column cannot hold the Keystone id is one no row can
@@ -1337,8 +1335,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // relation was required to be btree-clustered and this is where the
     // pairing was refused; the mode is gone, both storage types take a
     // caller-supplied tuple key, and what a relation cannot take is refused per
-    // *id* by the insert path rather than per relation - on a heap a key
-    // below its mark (BB-R3, kept by BD-Q4), on a btree a duplicate or an
+    // *id* by the insert path rather than per relation - a duplicate or an
     // exhausted key (BD-R5).
     if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
 
@@ -1382,34 +1379,16 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         root_id = created.value().first;
         const std::span<std::byte, kPageSize> root_bytes = created.value().second.bytes();
 
-        // Both clustered types root at `desc_page_id` and both start as one
-        // page - a heap page for kHeap, a B+ tree leaf for kBtree (btree.hpp).
-        // A btree relation grows its first internal level only when that leaf
-        // splits, so a small table costs exactly what it did before, and the
-        // choice is invisible to every layer above until the relation is big
-        // enough for it to matter.
-        Status formatted = Status::OK();
-        switch (clustered_type) {
-            case ClusteredType::kHeap: {
-                auto root_page = heap::PageView::CreateEmpty(root_bytes, 0, new_oid);
-                if (!root_page.ok()) formatted = root_page.status();
-                break;
-            }
-            case ClusteredType::kBtree:
-                formatted = btree::FormatRoot(root_bytes, new_oid);
-                break;
-        }
+        // Every user relation is a clustered B+ tree (BZ-R1), rooted at
+        // `desc_page_id` as one leaf. It grows its first internal level only
+        // when that leaf splits, so a small table costs one page.
+        const Status formatted = btree::FormatRoot(root_bytes, new_oid);
         if (!formatted.ok()) return formatted;
         // RV3: the relation's root must exist in the log or a crash that
         // loses the unflushed page makes the first HEAP_INSERT irreplayable -
-        // redo refuses a record naming a page nothing creates. Both clustered
-        // types start as one leaf-shaped page, which is exactly what a
-        // PAGE_INIT rebuilds.
-        if (Status s = LogCatPageInit(wal_, trx_id, root_id,
-                                      clustered_type == ClusteredType::kBtree
-                                          ? PageType::kBtreeLeaf
-                                          : PageType::kHeap,
-                                      new_oid);
+        // redo refuses a record naming a page nothing creates. The root is
+        // one leaf, which is exactly what a PAGE_INIT rebuilds.
+        if (Status s = LogCatPageInit(wal_, trx_id, root_id, PageType::kBtreeLeaf, new_oid);
             !s.ok()) {
             return s;
         }
@@ -1502,7 +1481,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     }
     ref.oid = new_oid;
     note(ref);
-    if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
+    if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, ClusteredType::kBtree,
                                       varheap_root, anchor_id, trx_id,
                                       &ref, schema.spare_slots);
         !s.ok()) {
@@ -1514,9 +1493,11 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     for (const auto& col : schema.columns) {
         auto col_oid = GenerateUserOid();
         if (!col_oid.ok()) return col_oid.status();
+        // `flags` carries a heap's hidden tuple key (BZ-R2); every declared
+        // column's is 0.
         Status s = InsertColumnRow(col_oid.value(), new_oid, col.pos, NameView(col.name),
                                     col.type_val, col.len, col.notnull, col.cabin_policy,
-                                    trx_id, &ref);
+                                    trx_id, &ref, col.flags);
         if (!s.ok()) return s;
         ref.oid = col_oid.value();
         note(ref);
@@ -2765,47 +2746,6 @@ StatusOr<SysTypeRow> Catalog::ResolveTypeByVal(std::uint32_t type_val) {
     return Status::NotFound("no sys.types row for this type_val");
 }
 
-StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t count) {
-    if (count == 0) return Status::InvalidArgument("a row-id range of zero has no first id");
-    std::uint64_t first = 0;
-    auto acted = ForFirstRow<SysTableRow>(
-        store_, kCatalogPageTables,
-        [&](SysTableRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
-            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-            if (row.oid != table_oid) return false;
-            // No key-mode refusal: a carve is legal on every relation now,
-            // because every relation's omitted-tuple key inserts draw from this same
-            // mark. What a carve costs is stated at the call site and in
-            // section 4.1 - the ids inside it are spent from the mark's point
-            // of view before they are placed. The carve is the heap's
-            // sorted fill (bulkinsert.md T3-2), and a *supplied* id cannot
-            // land inside a live one: a heap refuses one below its mark
-            // (BB-R3, kept by BD-Q4), and the carve has already moved the
-            // mark past its own block.
-            //
-            // Exhaustion checked against the range's *last* id: a range
-            // that would cross the ceiling is refused whole, never split.
-            if (row.next_id > kMaxKeystoneId - (count - 1)) {
-                return Status::OutOfRange("relation has exhausted the Keystone id space");
-            }
-            first = row.next_id;
-            // Bumped and persisted before anything is placed, exactly as
-            // the single-id allocator: an abort burns the range, which K3
-            // calls free and BI9's class already accepted
-            // (docs/inflight/in-progress/workplan-t3.md T3-3).
-            row.next_id = first + count;
-            const auto encoded = row.Encode();
-            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
-                !s.ok()) {
-                return s;
-            }
-            return true;
-        });
-    if (!acted.ok()) return acted.status();
-    if (!acted.value()) return Status::NotFound("no sys.tables row for this relation");
-    return first;
-}
-
 StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
     std::uint64_t issued = 0;
     auto acted = ForFirstRow<SysTableRow>(
@@ -2818,14 +2758,11 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         // calls, whatever the relation. The id it hands out is safe from a
         // caller-supplied one for the same reason it always was - the mark
         // only ever moves forward, and AdmitExplicitRowId moves it past every
-        // supplied id at or above it. A heap refuses a supplied id *below* the
-        // mark (BB-R3), so there the two sources never meet; a btree places
-        // one (BD-R7), and the two meet only on an issued id a named key took
-        // before it was placed - serialised by its row unit, the issue
-        // re-drawn if it lost
-        // (`CommandDispatcher::InsertOneRow`). For a heap row this runs under
-        // the hold of the chain's tail (BB-R7); for a btree row under none
-        // (BD-R6).
+        // supplied id at or above it. A supplied id below the mark is placed
+        // (BD-R7), and the two sources meet only on an issued id a named key
+        // took before it was placed - serialised by its row unit, the issue
+        // re-drawn if it lost (`CommandDispatcher::InsertOneRow`). It runs
+        // under no page (BD-R6).
         const std::uint64_t id = row.next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the
@@ -2874,30 +2811,6 @@ Status CheckNamedRowIdSpellable(std::uint64_t id) {
     return Status::OK();
 }
 
-Status RefuseRowIdBelowMark(Oid table_oid, std::uint64_t id, std::uint64_t mark) {
-    return Status::OutOfRange(
-        "tuple key " + std::to_string(id) + " is below relation " + std::to_string(table_oid) +
-        "'s high-water mark " + std::to_string(mark) +
-        "; a named key must sort above every key the relation has placed or issued, which is "
-        "what keeps every page's slot order its key order");
-}
-
-StatusOr<std::uint64_t> Catalog::RowIdMark(Oid table_oid) {
-    std::uint64_t mark = 0;
-    auto found = ForFirstRow<SysTableRow>(
-        store_, kCatalogPageTables,
-        [&](SysTableRow& row, heap::PageView&, PageId, std::uint16_t,
-            const heap::PageView::Tuple&) -> StatusOr<bool> {
-            if (row.oid != table_oid) return false;
-            mark = row.next_id;
-            return true;
-        },
-        /*acted_page=*/nullptr, storage::PageAccess::kRead);
-    if (!found.ok()) return found.status();
-    if (!found.value()) return Status::NotFound("no sys.tables row for this oid");
-    return mark;
-}
-
 Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
     // Spellability first, before the catalog page is touched at all: an id
     // outside the Keystone field cannot be stored by any path, so there is
@@ -2912,18 +2825,11 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.oid != table_oid) return false;
 
-            // **Below the mark**: a heap refuses it (BB-R3, kept by
-            // BD-Q4): the mark is its ascent as one number, and below it no
-            // page keeps its slot order its key order. A btree places it
-            // where it sorts (BD-R7), so the mark gates nothing there.
-            if (id < row.next_id) {
-                // **A btree places it anyway** (BD-R6, BD-R7,
-                // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`):
-                // its leaf places the key where it sorts, so the mark gates
-                // nothing there and is left where it is - advance or nothing.
-                if (row.clustered_type == ClusteredType::kBtree) return true;
-                return RefuseRowIdBelowMark(table_oid, id, row.next_id);
-            }
+            // **Below the mark it is placed anyway** (BD-R6, BD-R7,
+            // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`;
+            // W2 of BZ): a leaf places the key where it sorts, so the mark
+            // gates nothing and is left where it is - advance or nothing.
+            if (id < row.next_id) return true;
 
             // At or above: the mark moves past it, persisted before the
             // caller places anything. Same ordering as AllocateRowId and the
@@ -3708,15 +3614,14 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
     auto access = InitTableAccess(def.table_oid);
     if (!access.ok()) return access.status();
     const Schema& schema = access.value()->schema;
-    // A heap relation has no tuple key index, so resolving an entry's tuple key would be a
-    // chain scan and an index over it would turn one full scan into N
-    // partial ones. The same rule and the same argument as
-    // foreign-keys.md F1's refusal of a heap parent.
+    // A secondary index resolves an entry through the clustered tree's
+    // descent (docs/spec/index.md IX3), which a system relation's catalog
+    // chain has none of. Every user relation is a btree (BZ-R1).
     if (access.value()->clustered_type != ClusteredType::kBtree) {
         return Status::InvalidArgument(
             "catalog: relation oid " + std::to_string(def.table_oid) +
-            " is heap-clustered; a secondary index resolves an entry through the tuple key, "
-            "which a heap relation has no index for (docs/spec/index.md IX3)");
+            " is a system relation; a secondary index resolves an entry through the tuple key "
+            "descent (docs/spec/index.md IX3)");
     }
 
     const auto check_column = [&](std::uint16_t pos, const char* role) -> Status {

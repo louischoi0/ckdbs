@@ -67,8 +67,7 @@ protected:
             row.notnull = true;
             schema.columns.push_back(row);
         }
-        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema,
-                                                  ct.clustered);
+        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema);
         ASSERT_TRUE(created.ok()) << created.status().message();
     }
 
@@ -417,29 +416,11 @@ TEST_F(ExecBudgetTest, AMemoHitReturnsTheSameRowAFreshDescentWould) {
     }
 }
 
-TEST_F(ExecBudgetTest, TheMemoDoesNotFireOnAHeapRelation) {
-    // A heap relation has no tuple key index, so a Probe step falls through to a
-    // chain walk (step_vm.cpp's RunPointStep) and there is no descent to
-    // memoize. Worth pinning: a memo that "hit" here would be caching
-    // something the code never looked up.
-    Create("CREATE TABLE hp (id int64, label varchar) HEAP");
-    Create("CREATE TABLE hc (id int64, p_id int64, tag varchar) HEAP");
-    for (int i = 0; i < 3; ++i) Insert("hp", {Str("l" + std::to_string(i))});
-    for (int r = 0; r < 4; ++r) Insert("hc", {Int(1), Str("t")});
-
-    ExecStats stats;
-    auto rows = TryRun("SELECT hc.tag, hp.label FROM hc JOIN hp ON hc.p_id = hp.id",
-                       Budget(), &stats);
-    ASSERT_TRUE(rows.ok()) << rows.status().message();
-    EXPECT_EQ(rows.value().size(), 4u);
-    EXPECT_EQ(stats.Total().probe_memo_hits, 0u);
-}
-
 // ---- The meters -----------------------------------------------------------
 
 TEST_F(ExecBudgetTest, TheCorrelatedScanCounterNamesTheExpensiveShape) {
-    Create("CREATE TABLE o2 (id int64, tag int64) HEAP");
-    Create("CREATE TABLE i2 (id int64, tag int64) HEAP");
+    Create("CREATE TABLE o2 (id int64, tag int64)");
+    Create("CREATE TABLE i2 (id int64, tag int64)");
     for (int i = 0; i < 5; ++i) {
         Insert("o2", {Int(i)});
         Insert("i2", {Int(i)});
@@ -464,19 +445,6 @@ TEST_F(ExecBudgetTest, TheCorrelatedScanCounterNamesTheExpensiveShape) {
                        Budget(), &probing)
                     .ok());
     EXPECT_EQ(probing.Total().correlated_scans, 0u);
-
-    // The same shape over the HEAP inner is a different execution: a heap
-    // tuple key probe has no descent and falls through to the walk, so it *is*
-    // the quadratic shape - and the walk-level counting (2026-08-19,
-    // step_vm.hpp) says so, where the old compile-time kind test called it
-    // a Probe and reported zero for a statement that walked the relation
-    // once per outer row.
-    ExecStats heap_probing;
-    ASSERT_TRUE(TryRun("SELECT o2.id FROM o2 WHERE EXISTS "
-                       "(SELECT i2.id FROM i2 WHERE i2.id = o2.tag)",
-                       Budget(), &heap_probing)
-                    .ok());
-    EXPECT_EQ(heap_probing.Total().correlated_scans, 5u);
 }
 
 }  // namespace

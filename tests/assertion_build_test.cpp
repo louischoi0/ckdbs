@@ -119,7 +119,7 @@ TEST_F(AssertionBuildTest, ViolatingDataFailsTheCreateNamingTheFirstGroup) {
               "CREATED");
 }
 
-TEST_F(AssertionBuildTest, AHeapRelationBuildsThroughItsChain) {
+TEST_F(AssertionBuildTest, ARelationWithRepeatedGroupsBuildsOneEntryPerGroup) {
     ASSERT_EQ(Run("CREATE TABLE ledger (id int64, book int64)").substr(0, 7), "CREATED");
     ASSERT_EQ(Run("INSERT INTO ledger VALUES (1)").substr(0, 8), "INSERTED");
     ASSERT_EQ(Run("INSERT INTO ledger VALUES (1)").substr(0, 8), "INSERTED");

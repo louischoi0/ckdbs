@@ -253,6 +253,15 @@ at the close, inside the one-hour budget.
 
 Each stage: `critics-developer` review, full suite.
 
+**S1 and S2 are built as one stage** (revised during BZ-S1, adopted on
+the operator's standing go-ahead of 2026-10-17): `HEAP` now names the
+hidden-key btree, so every cell and the sim workload that created a chain
+through `HEAP` either moves to its new meaning or loses its subject in the
+same commit - a green S1 alone would have meant rewriting those cells onto
+a chain only S2 then deletes. The debug text port's `INSERTED ... id=`
+reply stays on a heap: it reports where a row was placed (id, page, slot),
+as for every relation, and is no column.
+
 ---
 
 ## 6. Review of this order

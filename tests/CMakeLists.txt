@@ -3,7 +3,6 @@ find_package(Threads REQUIRED)
 
 add_executable(kds_tests
     alloc_counter.cpp
-    heap_suspension_env.cpp
     am_s2_pin_protocol_test.cpp
     waker_table_test.cpp
     sim_waker_table_test.cpp
@@ -46,6 +45,7 @@ add_executable(kds_tests
     txn_manager_test.cpp
     txn_session_test.cpp
     heap_chain_test.cpp
+    heap_hidden_key_test.cpp
     btree_test.cpp
     btree_lookup_statement_test.cpp
     fk_parent_hold_test.cpp
@@ -117,8 +117,6 @@ add_executable(kds_tests
     lock_wait_log_test.cpp
     statement_stats_test.cpp
     decay_test.cpp
-    relayout_planner_test.cpp
-    show_relayout_test.cpp
     optimizer_signals_test.cpp
     cabin_optimizer_test.cpp
     cabin_optimizer_replay_test.cpp
@@ -283,24 +281,4 @@ target_compile_definitions(kds_tests PRIVATE KDS_SOURCE_DIR="${CMAKE_SOURCE_DIR}
 
 include(GoogleTest)
 
-# SUS-1's `heap-suspended` label (AS-R4,
-# instructions/v3.0.0/workorder-as-sus1-heap-suspended.md). Two discovery
-# calls over the **one** binary rather than a second target: `TEST_FILTER`
-# landed in CMake 3.22 and this project requires 3.20, so the pair is guarded
-# on the version and collapses to the plain call below it on an older cmake.
-#
-# **Applied to nothing today, and that is deliberate.** The convention is a
-# `HeapSuspended` infix in the fixture or cell name; no cell carries one yet.
-# The order puts heap-only cells on this label, excluded from the gate and
-# run nightly — but this tree has no nightly runner (AS-Q4), and the parser
-# seam (tests/heap_suspension_env.cpp) keeps every heap cell passing in the
-# gate. Labelling them now would move them out of the only thing that runs
-# them, so the mechanism ships and the set stays empty until AS-Q4 is
-# answered. Labelling a cell is then a rename, not a build change.
-if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
-    gtest_discover_tests(kds_tests TEST_FILTER "-*HeapSuspended*")
-    gtest_discover_tests(kds_tests TEST_FILTER "*HeapSuspended*"
-                         PROPERTIES LABELS heap-suspended)
-else()
-    gtest_discover_tests(kds_tests)
-endif()
+gtest_discover_tests(kds_tests)

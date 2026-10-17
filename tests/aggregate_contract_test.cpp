@@ -95,8 +95,7 @@ protected:
             row.notnull = true;
             schema.columns.push_back(row);
         }
-        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema,
-                                                  ct.clustered);
+        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema);
         ASSERT_TRUE(created.ok()) << created.status().message();
     }
 
@@ -537,10 +536,9 @@ TEST_F(AggregateDispatchTest, AGlobalFoldOverANonEmptyRelation) {
     EXPECT_EQ(lines[1], "6,210,10,60");
 }
 
-TEST_F(AggregateDispatchTest, GroupByOverAHeapAndABtreeRelationAgree) {
-    // The two storages are walked by different code and must fold to the
-    // same answer in the same order - which they do because both walk the
-    // same `next_page_id` links left to right.
+TEST_F(AggregateDispatchTest, GroupByOverTwoRelationsOfTheSameRowsAgrees) {
+    // Two relations holding the same rows fold to the same answer in the
+    // same order: both walk their leaves' `next_page_id` links left to right.
     Load();
     const std::string heap = Run("SELECT tier, COUNT(*), SUM(qty) FROM h GROUP BY tier");
     const std::string btree = Run("SELECT tier, COUNT(*), SUM(qty) FROM b GROUP BY tier");

@@ -317,31 +317,18 @@ TEST(ExpeditorConfigTest, AggregateCapsParseAndCarryTheProposedDefaults) {
     EXPECT_EQ(config.aggregate_max_distinct, 256u);
 }
 
-// ---- Physical optimizer (docs/spec/physical-optimizer.md R1/R3) --------
+// ---- The decay half-life (docs/spec/physical-optimizer.md Part II) -------
 
-TEST(ExpeditorConfigTest, PhysicalOptimizerParsesOffAndShadowDefaultingToShadow) {
+// BZ-R5: the relayout planner `physical_optimizer` switched is deleted, so
+// the key is retired and refused by name, never ignored.
+TEST(ExpeditorConfigTest, PhysicalOptimizerIsRetiredAndRefusedByName) {
     Expeditor::Config config;
-    EXPECT_EQ(config.physical_optimizer, PhysicalOptimizerMode::kShadow);
-
-    ASSERT_TRUE(config.ApplyFile(WithPool("physical_optimizer = off\n")).ok());
-    EXPECT_EQ(config.physical_optimizer, PhysicalOptimizerMode::kOff);
-    ASSERT_TRUE(config.ApplyFile(WithPool("physical_optimizer = SHADOW\n")).ok());
-    EXPECT_EQ(config.physical_optimizer, PhysicalOptimizerMode::kShadow);
-}
-
-TEST(ExpeditorConfigTest, PhysicalOptimizerOnIsRefusedNamingAllThreeGates) {
-    // R3: a config written for the future fails loudly today. The message
-    // must name what is missing, not what word to try next - all three of
-    // §6's gates.
-    Expeditor::Config config;
-    Status on = config.ApplyFile(WithPool("physical_optimizer = on\n"));
-    ASSERT_EQ(on.code(), StatusCode::kInvalidArgument);
-    EXPECT_NE(on.message().find("reader horizon"), std::string::npos) << on.message();
-    EXPECT_NE(on.message().find("ordered-between"), std::string::npos) << on.message();
-    EXPECT_NE(on.message().find("page reuse"), std::string::npos) << on.message();
-
-    Status typo = config.ApplyFile(WithPool("physical_optimizer = onn\n"));
-    EXPECT_EQ(typo.code(), StatusCode::kInvalidArgument);
+    for (const char* line : {"physical_optimizer = shadow\n", "physical_optimizer = off\n"}) {
+        Status refused = config.ApplyFile(WithPool(line));
+        ASSERT_EQ(refused.code(), StatusCode::kInvalidArgument) << line;
+        EXPECT_NE(refused.message().find("physical_optimizer is retired"), std::string::npos)
+            << refused.message();
+    }
 }
 
 TEST(ExpeditorConfigTest, DecayHalfLifeParsesSecondsAndCarriesTheProposedDefault) {

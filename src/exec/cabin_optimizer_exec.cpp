@@ -7,7 +7,6 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/tuple_verify.hpp"
 #include "kds/storage/btree/btree.hpp"
-#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/txn/visibility.hpp"
@@ -137,14 +136,11 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
     // `co_await` in this file.
     auto ring = store_.OpenScanRing();
 
-    // A btree leaf is a heap page, so one loop serves both clustered forms
-    // - only the first leaf differs (the assertion builder's shape).
-    PageId leaf = access.desc_page_id;
-    if (access.clustered_type == catalog::ClusteredType::kBtree) {
-        auto first = btree::BtreeLeftmostLeaf(store_, access.desc_page_id);
-        if (!first.ok()) return first.status();
-        leaf = first.value();
-    }
+    // The leaf chain, from the leftmost leaf (the assertion builder's
+    // shape).
+    auto first = btree::BtreeLeftmostLeaf(store_, access.desc_page_id);
+    if (!first.ok()) return first.status();
+    PageId leaf = first.value();
     const PageId walk_origin = leaf;
 
     struct StagedRow {
@@ -347,8 +343,6 @@ Status CabinOptimizerExecutor::ApplyExtend(const stats::ActionItem& action,
 Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
     auto access = catalog_.InitTableAccess(action.rel_oid);
     if (!access.ok()) return Status::OK();
-    const bool is_btree =
-        access.value()->clustered_type == catalog::ClusteredType::kBtree;
 
     for (const stats::CabinKey& key : cabins_.ObservedValuesOf(action.cabin_id)) {
         const stats::CabinSet set = cabins_.Find(key);
@@ -370,7 +364,6 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
         // superset.
         std::vector<stats::CabinEntry> rebuilt;
         rebuilt.reserve(set.size());
-        bool unobserve = false;
         for (std::size_t i = 0; i < set.size(); ++i) {
             stats::CabinEntry entry = set.At(i);
             if (!entry.hint_valid()) {
@@ -383,12 +376,6 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
             if (verified.ok()) {
                 rebuilt.push_back(entry);
                 continue;
-            }
-            if (!is_btree) {
-                // No descent to heal with: the whole value un-observes,
-                // §5's heap answer, and this key's loop is over.
-                unobserve = true;
-                break;
             }
             auto found = btree::BtreeLookup(store_, access.value()->desc_page_id, entry.tuple_key);
             if (!found.ok()) {
@@ -406,10 +393,6 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
             entry.page_epoch = CurrentRelayoutEpoch(heap::PageView(found.value().leaf.bytes()));
             entry.flags |= stats::kCabinHintValid;
             rebuilt.push_back(entry);
-        }
-        if (unobserve) {
-            cabins_.Unobserve(key);
-            continue;
         }
         // Nothing changed is the common case, and writing back then would
         // spend an allocation and a latch to restate what is already

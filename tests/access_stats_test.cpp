@@ -36,9 +36,8 @@ protected:
 
         ASSERT_EQ(Run("CREATE TABLE b (id int64, flag int64, name varchar) BTREE").substr(0, 7),
                   "CREATED");
-        // **HEAP, pinned since SUS-1**: `b` above is the btree half and this
-        // is the heap one; the flipped default would make them the same pair.
-        ASSERT_EQ(Run("CREATE TABLE h (id int64, flag int64, name varchar) HEAP").substr(0, 7),
+        // A second relation, for the cells that tell two apart.
+        ASSERT_EQ(Run("CREATE TABLE h (id int64, flag int64, name varchar) BTREE").substr(0, 7),
                   "CREATED");
         for (int i = 1; i <= 6; ++i) {
             const std::string v = std::to_string(i % 3);

@@ -5,8 +5,8 @@
 // every client uses, so the parser, the compiler and the step VM are all
 // inside the tested surface — from a seeded grammar:
 //
-//     CREATE TABLE (heap and btree clustered_type; int columns plus one
-//     varchar, sized to land on both sides of inline_cell_width)
+//     CREATE TABLE (int columns plus one varchar, sized to land on both
+//     sides of inline_cell_width)
 //     INSERT, tuple key point SELECT, tuple key BETWEEN range, non-tuple-key FilterScan, SYNC
 //     UPDATE and DELETE, each by tuple key and by a non-key predicate   (v2)
 //     BEGIN / COMMIT / ROLLBACK, isolation level drawn per transaction (v2)
@@ -97,7 +97,6 @@ struct Op {
     std::uint64_t hi = 0;        // kSelectRange, kPurge
     std::int64_t v = 0;          // kInsert(Named), kFilterScan; kUpdate's new v
     std::string name;            // kInsert(Named); kUpdate's new name
-    bool btree = false;          // kCreateTable
 
     // kUpdate / kDelete: the predicate is `id = key` when by_tuple_key, else
     // `v = pred_v`. kUpdate assigns `name` when set_name, else `v`.
@@ -122,7 +121,6 @@ public:
 private:
     struct Table {
         std::string name;
-        bool btree;
         std::uint64_t inserted = 0;  // the id-guessing counter, not truth
         // Keys a named INSERT reuses (BD-R9): ones a DELETE by tuple key named,
         // and ones a rolled-back transaction named - a deleted key is a

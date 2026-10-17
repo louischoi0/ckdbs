@@ -15,7 +15,7 @@
 //    precedes that end. No WAL record is added.
 // 2. **The walk (BF-R3).** From the anchor: the clustered tree by descent
 //    plus its leaf chain, every tree an anchor slot names by descent plus
-//    its leaf chain, a pre-SUS-1 heap chain by its links, and the var-heap
+//    its leaf chain, and the var-heap
 //    chain. Every page is checked for the class its parent says it is and
 //    for its owner - the relation's oid, or the slot's index oid. A page
 //    that fails is counted (`reclaim_skipped`) and neither freed nor
@@ -158,7 +158,7 @@ public:
 
 private:
     // What the parent says a page is: the class to check, and the owner.
-    enum class Expect : std::uint8_t { kAnchor, kBtree, kIndex, kHeapChain, kVarHeapChain };
+    enum class Expect : std::uint8_t { kAnchor, kBtree, kIndex, kVarHeapChain };
 
     struct Visit {
         PageId page = kInvalidPageId;

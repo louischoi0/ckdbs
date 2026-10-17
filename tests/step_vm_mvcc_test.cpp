@@ -64,8 +64,7 @@ protected:
             row.notnull = true;
             schema.columns.push_back(row);
         }
-        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema,
-                                                  ct.clustered);
+        auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema);
         ASSERT_TRUE(created.ok()) << created.status().message();
     }
 
@@ -373,7 +372,7 @@ TEST_P(StepVmMvccStorageTest, ThePointPathAndTheScanAgreeUnderEveryView) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(Storage, StepVmMvccStorageTest, ::testing::Values("HEAP", "BTREE"),
+INSTANTIATE_TEST_SUITE_P(Storage, StepVmMvccStorageTest, ::testing::Values("BTREE"),
                          [](const ::testing::TestParamInfo<const char*>& info) {
                              return std::string(info.param);
                          });

@@ -81,18 +81,17 @@ private:
     std::optional<CommandDispatcher> dispatcher_;
 };
 
-// Two relations, one btree and one heap. Both are covered because the two
-// fail differently on a bad hint: a btree resolves the tuple key and heals, a heap
-// has no descent at all and must abandon the Cabin for the walk.
+// Two relations, a btree with a declared tuple key and a heap whose tuple key
+// is hidden (BZ-R1). Both resolve a bad hint by the tuple key's descent and
+// heal; the heap's statements address its rows through an ordinary column.
 //
 // `sym` repeats across rows on purpose - a Cabin on a column where every
 // value is unique would exercise nothing about entry sets.
 void Load(Instance& db) {
     ASSERT_EQ(db.Run("CREATE TABLE b (id int64, sym varchar, qty int64) BTREE").substr(0, 7),
               "CREATED");
-    // **HEAP, pinned since SUS-1**: "a heap has no descent at all and must
-    // abandon the Cabin for the walk" is the arm this relation carries, and
-    // the flipped default would leave it uncovered.
+    // A heap (BZ-R1): its `id` is an ordinary column holding what `b`'s
+    // tuple key holds, so the same statements run over both.
     ASSERT_EQ(db.Run("CREATE TABLE h (id int64, sym varchar, qty int64) HEAP").substr(0, 7),
               "CREATED");
     const char* kSyms[] = {"aaa", "bbb", "aaa", "ccc", "bbb", "aaa", "ddd", "bbb"};
@@ -100,8 +99,18 @@ void Load(Instance& db) {
         const std::string row =
             std::string("('") + kSyms[i] + "', " + std::to_string((i + 1) * 10) + ")";
         ASSERT_EQ(db.Run("INSERT INTO b VALUES " + row).substr(0, 8), "INSERTED");
-        ASSERT_EQ(db.Run("INSERT INTO h VALUES " + row).substr(0, 8), "INSERTED");
+        ASSERT_EQ(db.Run("INSERT INTO h VALUES (" + std::to_string(i + 1) + ", " + row.substr(1))
+                      .substr(0, 8),
+                  "INSERTED");
     }
+}
+
+// The Cabin on `sym`, wherever the relation holds it: position 1 on `b`, 2
+// on the heap `h`, behind its hidden tuple key.
+std::uint64_t SymCabinId(const catalog::TableAccess& access) {
+    auto sym = access.schema.FindColumn("sym", /*byte_offset=*/0);
+    if (!sym.ok() || sym.value() == nullptr) return 0;
+    return access.CabinOn(static_cast<std::uint16_t>(sym.value()->pos)).id;
 }
 
 void DeclareCabins(Instance& db) {
@@ -134,9 +143,9 @@ const std::vector<std::string>& Queries() {
         // no literal, so the inner step is a per-outer-row CabinProbe on
         // the cabined configurations and a walk on the reference. The
         // rounds exercise the whole ladder per distinct key: miss, record,
-        // serve. The heap self-join is the shape this form exists for
-        // (IX3 refuses a heap relation an index), and it also exercises
-        // the hint-failure re-record path when a round's writes move rows.
+        // serve. The self-join is the shape this form exists for, and it
+        // also exercises the hint-failure heal when a round's writes move
+        // rows.
         "SELECT x.id, y.id FROM b AS x JOIN b AS y ON y.sym = x.sym "
         "WHERE x.id = 2",
         "SELECT x.id, y.qty FROM b AS x JOIN b AS y ON y.sym = x.sym "
@@ -264,9 +273,9 @@ TEST(CabinContractTest, WritesAfterObservationChangeNoReply) {
 
     const std::vector<std::string> kWrites = {
         "INSERT INTO b VALUES ('aaa', 999)",   // a new row for an observed value
-        "INSERT INTO h VALUES ('aaa', 999)",
+        "INSERT INTO h VALUES (9, 'aaa', 999)",
         "INSERT INTO b VALUES ('zzz', 111)",   // a value observed as *empty*
-        "INSERT INTO h VALUES ('zzz', 111)",
+        "INSERT INTO h VALUES (10, 'zzz', 111)",
         "UPDATE b SET sym = 'ccc' WHERE id = 1",  // observed value -> another
         "UPDATE h SET sym = 'ccc' WHERE id = 1",
         "UPDATE b SET sym = 'aaa' WHERE id = 1",  // and back: the v->v'->v duplicate
@@ -294,8 +303,8 @@ TEST(CabinContractTest, WritesAfterObservationChangeNoReply) {
 TEST(CabinContractTest, CorruptedLocationHintsChangeNoReply) {
     // **C6, proven load-bearing.** Every hint in every entry set is pointed
     // at a page and slot holding a *different* tuple. On a btree relation the
-    // reader must notice, resolve the tuple key, and heal; on a heap relation it
-    // must abandon the Cabin and walk. Either way the rows must not move.
+    // reader must notice, resolve the tuple key, and heal - the heap's hidden
+    // key included. Either way the rows must not move.
     //
     // Without the id check in `VerifyTupleAt`, this test returns real rows
     // from the wrong places and every other test in this file still passes.
@@ -316,7 +325,7 @@ TEST(CabinContractTest, CorruptedLocationHintsChangeNoReply) {
     for (const catalog::Oid oid : {b_oid.value(), h_oid.value()}) {
         auto access = db.catalog().InitTableAccess(oid);
         ASSERT_TRUE(access.ok());
-        const std::uint64_t cabin_id = access.value()->CabinOn(1).id;
+        const std::uint64_t cabin_id = SymCabinId(*access.value());
         ASSERT_NE(cabin_id, 0u);
         for (const char* sym : {"aaa", "bbb", "ccc", "ddd", "zzz"}) {
             parser::AstValue value;
@@ -353,8 +362,8 @@ TEST(CabinContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
     // recorded at epoch 0; the page side moves here, as a relayout mover
     // will move it. A btree relation must notice per entry, resolve the tuple key,
     // and stamp the healed hint with the *bumped* epoch - a heal that wrote
-    // 0 back would miss and re-heal forever. A heap relation must abandon
-    // the Cabin and re-record from the walk. Either way no reply moves.
+    // 0 back would miss and re-heal forever, on the heap's hidden key as on
+    // a declared one. Either way no reply moves.
     Instance db(/*cabins=*/true);
     Load(db);
     DeclareCabins(db);
@@ -367,8 +376,7 @@ TEST(CabinContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
     ExpectSame(replies, Reference(5), "bumped page epoch");
 
     // The heal is stamped, not inferred: every surviving hint now carries
-    // the bumped epoch, on the btree relation (healed in place) and the
-    // heap one (re-recorded from the walk) alike.
+    // the bumped epoch, on both relations, each healed in place.
     auto b_oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "b");
     ASSERT_TRUE(b_oid.ok());
     auto h_oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "h");
@@ -377,7 +385,7 @@ TEST(CabinContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
     for (const catalog::Oid oid : {b_oid.value(), h_oid.value()}) {
         auto access = db.catalog().InitTableAccess(oid);
         ASSERT_TRUE(access.ok());
-        const std::uint64_t cabin_id = access.value()->CabinOn(1).id;
+        const std::uint64_t cabin_id = SymCabinId(*access.value());
         ASSERT_NE(cabin_id, 0u);
         for (const char* sym : {"aaa", "bbb", "ccc", "ddd"}) {
             parser::AstValue value;
@@ -412,7 +420,7 @@ TEST(CabinContractTest, DanglingTupleKeysChangeNoReply) {
     ASSERT_TRUE(b_oid.ok());
     auto access = db.catalog().InitTableAccess(b_oid.value());
     ASSERT_TRUE(access.ok());
-    const std::uint64_t cabin_id = access.value()->CabinOn(1).id;
+    const std::uint64_t cabin_id = SymCabinId(*access.value());
 
     std::size_t planted = 0;
     for (const char* sym : {"aaa", "bbb", "zzz"}) {
@@ -511,7 +519,7 @@ TEST(CabinContractTest, AnUpdateThatDoesNotTouchTheKeyColumnAppendsNothing) {
     ASSERT_TRUE(oid.ok());
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
-    const std::uint64_t cabin_id = access.value()->CabinOn(1).id;
+    const std::uint64_t cabin_id = SymCabinId(*access.value());
 
     parser::AstValue aaa;
     aaa.type = parser::ValueType::kStr;
@@ -564,7 +572,7 @@ TEST(CabinContractTest, AQuotaStoppedWalkCommitsNoObservation) {
     parser::AstValue aaa;
     aaa.type = parser::ValueType::kStr;
     aaa.str_val = "aaa";
-    auto key = stats::MakeCabinKey(access.value()->CabinOn(1).id, aaa);
+    auto key = stats::MakeCabinKey(SymCabinId(*access.value()), aaa);
     ASSERT_TRUE(key.has_value());
     EXPECT_FALSE(db.cabins().Find(*key).valid()) << "a stopped walk was committed";
 
@@ -610,7 +618,7 @@ TEST(CabinContractTest, RecordingIgnoresTheStatementsOtherConjuncts) {
     EXPECT_EQ(db.Run(broad), ref.Run(broad)) << "the narrowed query's set was served as complete";
     EXPECT_EQ(db.Run(broad), ref.Run(broad));
 
-    // And the same on a heap relation, where serving falls back differently.
+    // And the same on the heap relation.
     const std::string heap_narrow = "SELECT * FROM h WHERE sym = 'bbb' AND qty = 20";
     const std::string heap_broad = "SELECT * FROM h WHERE sym = 'bbb'";
     ASSERT_EQ(db.Run(heap_narrow), ref.Run(heap_narrow));
@@ -774,8 +782,8 @@ TEST(CabinContractTest, AWriteHookAppendServesInTupleKeyOrder) {
     //
     // Reachable by plain single-relation SQL, which is why it lived
     // undetected: the query set above never exposed a whole multi-row set
-    // for a value a write had moved into. Both clustering types, because
-    // the CB12 join queries that found this catch the heap half only.
+    // for a value a write had moved into. Both relations, because the CB12
+    // join queries that found this caught the heap half only.
     Instance db(/*cabins=*/true);
     Instance ref(/*cabins=*/false);
     Load(db);
@@ -791,8 +799,7 @@ TEST(CabinContractTest, AWriteHookAppendServesInTupleKeyOrder) {
     ASSERT_EQ(db.Run(write), ref.Run(write));
     EXPECT_EQ(db.Run(sql), ref.Run(sql)) << "btree: a served set emitted out of tuple key order";
 
-    // The heap twin. Same append; the serve path differs (no descent to
-    // heal a hint with), the ordering rule does not.
+    // The heap twin: the same append and the same ordering rule.
     const std::string heap_sql = "SELECT id FROM h WHERE sym = 'ccc'";
     ASSERT_EQ(db.Run(heap_sql), ref.Run(heap_sql));
     const std::string heap_write = "UPDATE h SET sym = 'ccc' WHERE id = 1";
@@ -839,7 +846,7 @@ TEST(CabinContractTest, ANamedKeyBelowTheMarkIsWitnessedAndADuplicateIsNot) {
     parser::AstValue aaa;
     aaa.type = parser::ValueType::kStr;
     aaa.str_val = "aaa";
-    auto key = stats::MakeCabinKey(access.value()->CabinOn(/*col_pos=*/1).id, aaa);
+    auto key = stats::MakeCabinKey(SymCabinId(*access.value()), aaa);
     ASSERT_TRUE(key.has_value());
     ASSERT_TRUE(db.cabins().Find(*key).valid());
     const std::size_t before = db.cabins().Find(*key).size();
@@ -901,7 +908,7 @@ TEST(CabinContractTest, ACorrelatedExistsConvergesToObservedSets) {
     ASSERT_TRUE(oid.ok());
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
-    const std::uint64_t cabin_id = access.value()->CabinOn(/*col_pos=*/1).id;
+    const std::uint64_t cabin_id = SymCabinId(*access.value());
     ASSERT_NE(cabin_id, 0u);
     for (const char* sym : {"aaa", "bbb", "ccc", "ddd"}) {
         parser::AstValue v;
@@ -1040,7 +1047,7 @@ TEST(CabinContractTest, ANeverRepeatingKeyObservesNothing) {
     ASSERT_TRUE(oid.ok());
     auto access = db.catalog().InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
-    const std::uint64_t cabin_id = access.value()->CabinOn(/*col_pos=*/1).id;
+    const std::uint64_t cabin_id = SymCabinId(*access.value());
     parser::AstValue v;
     v.type = parser::ValueType::kStr;
     v.str_val = "ccc";
@@ -1088,7 +1095,9 @@ void LoadDated(Instance& db) {
     for (int i = 0; i < 6; ++i) {
         const std::string row = std::string("(") + kStamps[i] + ", " + std::to_string(i) + ")";
         ASSERT_EQ(db.Run("INSERT INTO eb VALUES " + row).substr(0, 8), "INSERTED");
-        ASSERT_EQ(db.Run("INSERT INTO eh VALUES " + row).substr(0, 8), "INSERTED");
+        ASSERT_EQ(db.Run("INSERT INTO eh VALUES (" + std::to_string(i + 1) + ", " + row.substr(1))
+                      .substr(0, 8),
+                  "INSERTED");
     }
 }
 
@@ -1128,9 +1137,9 @@ TEST(CabinContractTest, ExpressionCabinsChangeNoReplyServingOrWitnessing) {
 
     const std::vector<std::string> kWrites = {
         "INSERT INTO eb VALUES ('2026-10-01 06:00:00', 7)",  // into an observed day
-        "INSERT INTO eh VALUES ('2026-10-01 06:00:00', 7)",
+        "INSERT INTO eh VALUES (7, '2026-10-01 06:00:00', 7)",
         "INSERT INTO eb VALUES ('2000-01-01 06:00:00', 8)",  // a day observed as empty
-        "INSERT INTO eh VALUES ('2000-01-01 06:00:00', 8)",
+        "INSERT INTO eh VALUES (8, '2000-01-01 06:00:00', 8)",
         "UPDATE eb SET ts = '2026-10-02 05:00:00' WHERE id = 1",  // one day to another
         "UPDATE eh SET ts = '2026-10-02 05:00:00' WHERE id = 1",
         "UPDATE eb SET ts = '2026-10-01 05:00:00' WHERE id = 1",  // and back
@@ -1160,11 +1169,11 @@ TEST(CabinContractTest, ExpressionCabinsChangeNoReplyServingOrWitnessing) {
     }
 }
 
-// A cover on a **heap** relation whose hint fails walks and records nothing -
-// for a one-day cover too. Re-recorded, its day would be banked against the
-// cover's empty probe value: an empty set, served as authoritative for every
-// later `DATE(ts) = d`.
-TEST(CabinContractTest, AHeapCoversFailedHintBanksNothing) {
+// A cover on a heap whose hints all fail answers as no Cabin would: each
+// entry resolves by the hidden key's descent, and nothing is banked against
+// the cover's empty probe value - which, served as authoritative, would be
+// an empty set for every later `DATE(ts) = d`.
+TEST(CabinContractTest, AHeapCoversFailedHintsChangeNoReply) {
     Instance db(/*cabins=*/true);
     Instance ref(/*cabins=*/false);
     LoadDated(db);

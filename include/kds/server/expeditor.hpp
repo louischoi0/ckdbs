@@ -283,21 +283,13 @@ public:
 
         // ---- Physical optimizer (docs/spec/physical-optimizer.md) -------
 
-        // R3's mode: `off` or `shadow` (default). Shadow costs nothing at
-        // rest - the planner is pull-only, computed when `SHOW RELAYOUT`
-        // asks - which is why on-by-default is safe where a background
-        // optimizer would not be. `on` is **refused at startup naming §6's
-        // gates**: a config written for the future fails loudly today
-        // instead of silently under-delivering.
-        PhysicalOptimizerMode physical_optimizer = PhysicalOptimizerMode::kShadow;
-
         // R1's half-life: how long an untouched decay score takes to lose
         // half its weight (`decay_half_life`, in **seconds** in the file
         // because that is the unit an operator reasons about, held in ns
         // because that is the clock's). 600 s is the spec's `[PROPOSED]`
         // default, pinned here and nowhere else; nothing may depend on the
         // number, only on the rule — one half-life halves, exactly.
-        // Consumed by the relayout planner and the Cabin controller.
+        // Consumed by the Cabin controller and its signal collector.
         sched::MonoTimeNs decay_half_life_ns = 600'000'000'000ULL;  // 600 s
 
         // ---- Cabin optimizer, §II.6 (workplan PHY05) --------------------
@@ -926,7 +918,7 @@ private:
     void StopStartedCores();
 
     // The optimizer surface every core's dispatcher is handed (AT-S8,
-    // `OptimizerSurface`): the relayout mode, the collector, the switch, and
+    // `OptimizerSurface`): the collector, the switch, and
     // the controller view where a Cabin store exists. The view latch is
     // armed above one core only.
     OptimizerSurface Optimizer();

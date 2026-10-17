@@ -74,43 +74,27 @@
 // Given a WalManager, every write path - INSERT, UPDATE, DELETE, PURGE and
 // the catalog rows under DDL - appends the records that describe it, and a
 // commit is not answered until durable to its class (wal.md sections 1 and
-// 5.2). An INSERT logs, in order: its chain growth on a heap (PAGE_INIT of
-// the new tail, FULL_PAGE_IMAGE of the old tail whose `next_page_id` link
-// changed - no record type describes a link edit alone, and record.hpp's
-// enum is frozen), its spills, its index entries, then the row - a
-// HEAP_INSERT, a BTREE_INSERT, or the one BTREE_SPLIT carrying every page a
-// leaf split wrote (BD-R12).
+// 5.2). An INSERT logs, in order: its spills, its index entries, then the
+// row - a BTREE_INSERT, or the one BTREE_SPLIT carrying every page a leaf
+// split wrote (BD-R12).
 //
-// ---- Clustered type: one dispatcher, two storages ----------------------
+// ---- Every user relation is a clustered B+ tree ----------------------------
 //
-// A relation is either a chain of heap pages (`ClusteredType::kHeap`,
-// heap_chain.hpp) or a clustered B+ tree (`kBtree`, btree.hpp), and every
-// statement handler below branches on `TableAccess::clustered_type` in
-// exactly one place each - `InsertOneRow`'s placement, `VisitRelation`,
-// `LocateByTupleKey`, and `LogInsert`'s record (a leaf's row is a `BTREE_INSERT`
-// or rides a `BTREE_SPLIT`, BD-R12).
-// Everything else in this file is storage-agnostic, which is possible
-// because a btree **leaf is a heap page**: the row codec, `PageView`
-// reads/overwrites and the `SHOW PAGE` dump all work on either without
-// knowing which they hold.
-//
-// The observable differences are narrow and worth stating:
-//
-//   - `SELECT`/`UPDATE ... WHERE id = <n>` on a btree relation descends
-//     the tree, which is **authoritative** - a miss means the row does not
-//     exist, and no scan follows. The same statement on a heap relation
-//     scans the chain, because a heap relation has no tuple key index at all.
-//   - `INSERT` may split a leaf and grow the tree a level, in which case
-//     the relation's `desc_page_id` is repointed at the new root before
-//     the client is answered.
-//   - A full scan of either is a left-to-right walk of the same
-//     `next_page_id` links, so `SELECT *` returns rows in the same order.
+// Since BZ (`instructions/v3.2.0/workorder-bz-heap-hidden-key.md`) a heap is
+// a btree whose tuple key is the engine's hidden column 0, so no handler
+// here branches on storage. A btree **leaf is a heap page**: the row codec,
+// `PageView` reads/overwrites and the `SHOW PAGE` dump work on it as on any
+// slotted page. `SELECT`/`UPDATE ... WHERE id = <n>` descends the tree,
+// which is **authoritative** - a miss means the row does not exist, and no
+// scan follows. `INSERT` may split a leaf and grow the tree a level, in
+// which case the relation's root is repointed before the client is
+// answered.
 //
 // ---- Ordering: an insert's records are appended under its holds (AT-S21) --
 //
 // The storage call writes the tuple and hands back the pages it changed,
 // still held (`InsertPlacement::held`: the leaf and the parents a split
-// secured, a heap chain's tail); index maintenance logs each entry under the
+// secured); index maintenance logs each entry under the
 // index tree's hold; every spill keeps its var-heap page held. `LogInsert`
 // appends and stamps under those holds, then drops them - before an own
 // transaction's commit, whose durability wait must not run under a latch
@@ -138,15 +122,6 @@ class StatementEpochs;   // statement_epoch.hpp
 // here, and the definition drags in the WAL and catalog headers that every
 // consumer of this file would then pay for.
 struct MountRecovery;
-
-// The `physical_optimizer` config key's two legal states
-// (docs/spec/physical-optimizer.md R3). There is deliberately no `kOn`:
-// the config layer refuses `on` at startup naming §6's gates, so a mode a
-// mover would need cannot exist before the mover does.
-enum class PhysicalOptimizerMode : std::uint8_t {
-    kOff = 0,
-    kShadow = 1,
-};
 
 
 // A `SELECT` whose walk runs on after its head returns (BA-S15); defined
@@ -380,15 +355,13 @@ struct StatementLimits {
 };
 
 // **The physical optimizer's surface, as one value** (AT-S8, on the
-// operator's word). The pieces are the instance's - one relayout mode, one
+// operator's word). The pieces are the instance's - one
 // signal collector (latched above one core), one switch, one controller and
 // executor - and every core's dispatcher is handed the same value.
 // `view_latch` is what core 0's cadence holds across a tick; a view read
 // from another core takes it too. A null switch leaves the dispatcher's
 // own; every other member is taken as given.
 struct OptimizerSurface {
-    PhysicalOptimizerMode relayout_mode = PhysicalOptimizerMode::kShadow;
-    sched::MonoTimeNs decay_half_life_ns = 600'000'000'000ULL;
     stats::OptimizerSignals* signals = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
     const stats::CabinOptimizer* controller = nullptr;
@@ -558,8 +531,9 @@ public:
     //                            src/parser, types resolved through
     //                            Catalog::ResolveTypeByName(). The storage
     //                            word: BTREE (default) is a clustered B+
-    //                            tree on the Keystone tuple key; HEAP is refused
-    //                            `Unsupported` since SUS-1. EXPLICIT is
+    //                            tree on the first column, the Keystone
+    //                            tuple key; HEAP is one on a hidden tuple
+    //                            key the engine adds (BZ-R1). EXPLICIT is
     //                            accepted and does nothing; ASSIGNED is
     //                            refused. Either order, each at most once.
     //                            See src/exec/row_codec.hpp for the
@@ -662,12 +636,9 @@ public:
     // per id `InsertOneRow` fixes for a row - on a btree's omitted tuple key once
     // per draw, so a draw that collides with a named key and is burned
     // (BD-S3's re-draw) fires it again with the next id - once its id is
-    // borrowed and its row encoded. On a heap it sits under the exclusive
-    // hold of the chain's tail (BB-R1, BB-R7), so another core's insert into
-    // the relation blocks on that latch until the cell lets go. On a btree it
-    // sits before the descent and, for a named key, before its admission
-    // (BD-R6), so the other core does not block. The sorted fill calls it once, with its
-    // block's first id, after its carve. Unset in production.
+    // borrowed and its row encoded. It sits before the descent and, for a
+    // named key, before its admission (BD-R6), so another core's insert does
+    // not block on it. Unset in production.
     void SetAfterRowIdFixedForTest(std::function<void(std::uint64_t)> hook) {
         after_row_id_fixed_for_test_ = std::move(hook);
     }
@@ -950,10 +921,9 @@ private:
     // wait. A named-key insert borrows before it is admitted, and asks
     // through this whether the key can ever be placed - so a key that never
     // can is refused, not left waiting on a fence it could never write past
-    // (AO-S6c-c's rule): on a btree a duplicate whose writer decided or a
-    // committed row under an undecided writer (BD-R5), on a heap a key below
-    // the mark (BB-R3). Asked only on a refusal, so a granted borrow pays
-    // nothing for it.
+    // (AO-S6c-c's rule): a duplicate whose writer decided or a committed row
+    // under an undecided writer (BD-R5). Asked only on a refusal, so a
+    // granted borrow pays nothing for it.
     std::optional<Status> BorrowOrWait(const WriteScope& scope, const txn::LockKey& unit,
                                        RepeatableReadWait rerun,
                                        txn::LockMode mode = txn::LockMode::kExclusive,
@@ -1567,21 +1537,8 @@ private:
                                        WriteScope& scope, const exec::FkParentVerdicts& fk_held,
                                        InsertRowResult& out);
 
-    // T3, the sorted heap fill (bulkinsert.md T3-2;
-    // docs/inflight/in-progress/workplan-t3.md at 1769487). The gate:
-    // heap-clustered, nothing that maintains per-row (no index, no Cabin, no
-    // assertion), no spillable schema; FK allowed, its checks run per row
-    // before anything burns. Heap-gated, so since SUS-1 it is reached only by
-    // a relation created before the suspension. Outside the gate the row
-    // loop runs with byte-identical replies and relation state - the
-    // equivalence test is the contract.
-    bool SortedFillEligible(const catalog::TableAccess& ta, catalog::Oid oid) const;
-    DispatchOutcome SortedFillInner(const parser::InsertStmt& stmt,
-                                    catalog::Oid oid, const catalog::TableAccess& ta,
-                                    WriteScope& scope);
-
     // The already-parsed half of InsertInner: everything after the parse -
-    // cap, manager guard, resolution, affinity, the T3 gate, the row loop.
+    // cap, manager guard, resolution, affinity, the row loop.
     // Split out for the KWP load session (docs/inflight/in-progress/workplan-kwp-load.md KW5),
     // whose rows arrive binary and never had text - BI2's "same write
     // path" made literal, since this IS the path a T1 statement takes.
@@ -1858,19 +1815,8 @@ public:
     }
 
 
-    // The physical optimizer's shadow surface (docs/spec/physical-optimizer.md
-    // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
-    // with the same default posture: a dispatcher never told behaves as the
-    // documented configuration - shadow on, the spec's `[PROPOSED]` 600 s
-    // half-life. `on` never reaches here: the config layer refuses it at
-    // startup naming §6's gates.
-    void set_relayout(PhysicalOptimizerMode mode, sched::MonoTimeNs half_life_ns) noexcept {
-        relayout_mode_ = mode;
-        decay_half_life_ns_ = half_life_ns;
-    }
-
     // The cabin optimizer's signal collector (workplan PHY01), a setter
-    // for the two above's reason. Null - every existing construction site,
+    // for `set_aggregate_limits`'s reason. Null - every existing construction site,
     // and any configuration without the collector - records nothing and
     // costs one predicate per successful SELECT.
     void set_optimizer_signals(stats::OptimizerSignals* signals) noexcept {
@@ -1891,7 +1837,6 @@ public:
     // Every piece of the optimizer surface at once, as an instance hands it
     // to each core (AT-S8, `OptimizerSurface`).
     void set_optimizer_surface(const OptimizerSurface& surface) noexcept {
-        set_relayout(surface.relayout_mode, surface.decay_half_life_ns);
         set_optimizer_signals(surface.signals);
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
@@ -2158,8 +2103,6 @@ private:
     StatusOr<exec::CatalogView> CabinsView();
     StatusOr<exec::CatalogView> AssertionsView();
     StatusOr<exec::CatalogView> TransitionsView();
-    StatusOr<exec::CatalogView> RelayoutView(const parser::AstValue* name, std::uint32_t byte,
-                                             catalog::Oid default_namespace);
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> StatementStatsView();
@@ -2188,16 +2131,7 @@ private:
                                                             std::uint16_t)>& fn,
         WalkCursor* cursor);
 
-    // `VisitRelation`'s heap arm, hoisted out of `heap::ChainVisit` (AO-S3b)
-    // so the gap between two pages - no pin, no span - is a place the
-    // statement above it may park (AO-R2).
-    Status WalkHeapChain(
-        PageId head, storage::PageAccess page_access,
-        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
-                                                            std::uint16_t)>& fn,
-        WalkCursor* cursor);
-
-    // The same for a clustered btree, and **not the same shape**: a resume
+    // The btree walk behind `VisitRelation`, and its resume shape: a resume
     // descends by key rather than returning to a remembered leaf, which is
     // what makes it safe against a split that happened while the statement
     // was parked (`WalkCursor`, `session.hpp`).
@@ -2225,9 +2159,9 @@ private:
     // Logs an insert **under the holds its placement handed out** (AT-S21,
     // `wal.md` §8-1), released here once the row's record is stamped - and
     // before an own transaction's commit, whose durability wait must not run
-    // under a latch. The record set is the file header's: a heap's chain
-    // growth, the spills, the index entries, then the row (HEAP_INSERT,
-    // BTREE_INSERT, or one BTREE_SPLIT carrying it; BD-R3 E2, BD-R12) -
+    // under a latch. The record set is the file header's: the spills, the
+    // index entries, then the row (BTREE_INSERT, or one BTREE_SPLIT carrying
+    // it; BD-R3 E2, BD-R12) -
     // spills before the row so replay never reaches a pointer that resolves
     // to nothing (rule-fixed-length-tuple.md §5). With no WAL it logs
     // nothing and a split's grown root is still published.
@@ -2241,18 +2175,12 @@ private:
     //
     // A failure is reported to the client and the tuple stays in the frame:
     // a lost write on a crash, not a wrong answer now.
-    Status LogInsert(storage::InsertPlacement& placed, bool btree,
+    Status LogInsert(storage::InsertPlacement& placed,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
                      std::uint64_t owner_oid, PageId anchor_page_id,
                      const std::vector<exec::AppendedSpill>& spills,
                      const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
-
-    // Every page a heap insert restructured, in the order redo applies them:
-    // a new tuple page as a PAGE_INIT, left unstamped for the record that
-    // fills it to stamp, and a repointed link as a full page image.
-    Status LogChainGrowth(const storage::InsertPlacement& placed, std::uint64_t txn_id,
-                          std::uint64_t owner_oid);
 
     // A clustered split's one BTREE_SPLIT record and, when it grew the tree
     // a level, the root's publication **inside that record**: the anchor's
@@ -2281,14 +2209,13 @@ private:
     // The three cases are distinct because the *authority* of the answer
     // differs:
     //
-    //   kScan    no shortcut. Scan; the scan is the authoritative path and
-    //            produces the same answer. Every heap relation lands here,
-    //            having no tuple key index to descend.
+    //   kScan    no shortcut: the descent failed (a corrupt page). Scan; the
+    //            scan reaches the leaves by their sibling links and is
+    //            authoritative.
     //   kAt      look at this (page, slot) - a btree descent, which is
     //            authoritative - through `at.leaf`, held **exclusive**:
     //            every caller writes the slot (btree.hpp `Location`).
-    //   kAbsent  **no such row**, on authority. Only a btree descent can
-    //            say this, so a heap relation never produces it.
+    //   kAbsent  **no such row**, on authority.
     struct TupleKeyLookup {
         enum class Kind { kScan, kAt, kAbsent };
         Kind kind = Kind::kScan;
@@ -2671,13 +2598,6 @@ private:
     // BI3's per-statement row cap, from the `max_insert_rows` config key.
     // A refusal, never a truncation.
     std::uint64_t max_insert_rows_ = parser::kDefaultMaxInsertRows;
-
-    // The physical optimizer's mode and R1 half-life (workplan PX06).
-    // Shadow costs nothing at rest - the planner is pull-only, computed
-    // when `SHOW RELAYOUT` asks - so shadow is the default here as it is
-    // in the config.
-    PhysicalOptimizerMode relayout_mode_ = PhysicalOptimizerMode::kShadow;
-    sched::MonoTimeNs decay_half_life_ns_ = 600'000'000'000ULL;
 
     // PHY01's collector. The per-statement counters that feed its S2 are
     // `SelectScratch::stats`, pooled for the aggregator's reason: `For()`

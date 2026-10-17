@@ -859,7 +859,7 @@ TEST(InsertLogCrashRigTest, AnotherCoresFlushOfANewCatalogPageWaitsForItsRecord)
         });
         for (int i = 0; i < 64 && other == nullptr; ++i) {
             auto created = cat.CreateTable(catalog::kNamespacePublic, "spill" + std::to_string(i),
-                                           schema, catalog::ClusteredType::kBtree);
+                                           schema);
             ASSERT_TRUE(created.ok()) << created.status().message();
         }
         cat.SetDdlUndoHook(nullptr);

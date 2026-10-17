@@ -15,8 +15,7 @@
 //                   user relation resolves to a TableAccess.
 //   kChainOrder     invariants 2 and 3: every tuple's id >= its page's
 //                   min_key, and each page's ids sit entirely below the
-//                   successor page's min_key (heap chains and btree leaf
-//                   walks alike).
+//                   successor page's min_key along the leaf chain.
 //   kBtreeStructure separators: an internal entry's sep_key equals its
 //                   child page's min_key, entries ascend, levels descend.
 //   kKeystone       invariant 5: reserved bits zero (the decode masks the id,

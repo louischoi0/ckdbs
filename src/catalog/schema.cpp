@@ -25,12 +25,12 @@ Status AmbiguousColumnName(const Schema& schema, std::string_view written,
                                    " ignoring case (byte " + std::to_string(byte_offset) + ")");
 }
 
-// Every live column of `schema` whose name equals `name` ignoring case, in
-// `pos` order.
+// Every visible column of `schema` whose name equals `name` ignoring case,
+// in `pos` order.
 std::vector<std::uint16_t> MatchColumns(const Schema& schema, std::string_view name) {
     std::vector<std::uint16_t> out;
     for (std::size_t i = 0; i < schema.columns.size(); ++i) {
-        if (!schema.columns[i].dropped() &&
+        if (schema.columns[i].visible() &&
             ColumnNamesCollide(NameView(schema.columns[i].name), name)) {
             out.push_back(static_cast<std::uint16_t>(i));
         }
@@ -46,6 +46,18 @@ StatusOr<const SysColumnRow*> Schema::FindColumn(std::string_view name,
     if (matches.empty()) return static_cast<const SysColumnRow*>(nullptr);
     if (matches.size() > 1) return AmbiguousColumnName(*this, name, matches, byte_offset);
     return &columns[matches.front()];
+}
+
+SysColumnRow HiddenTupleKeyColumn() {
+    SysColumnRow row{};
+    row.pos = 0;
+    SetName(row.name, kHiddenTupleKeyName);
+    row.type_val = kTypeValInt64;
+    row.len = 8;
+    row.notnull = true;
+    row.cabin_policy = kCabinPolicyUnset;
+    row.flags = SysColumnRow::kColumnHidden;
+    return row;
 }
 
 // ASCII only, and not `std::tolower`, whose answer is the locale's: whether

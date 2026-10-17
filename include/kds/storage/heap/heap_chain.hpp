@@ -11,11 +11,11 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/storage/visit.hpp"
 
-// A relation's heap as a linked chain of pages, walked through the
+// A system relation as a linked chain of heap pages, walked through the
 // `next_page_id` link every heap page already reserves (heap_page.hpp's
-// tail reservation). No new heap relation is created since SUS-1
-// (`heap-and-tuple.md` §3.1b); existing ones, and the `sys.assertions`
-// chain, still place through here.
+// tail reservation). The bootstrap catalog and the declaration relations
+// (`sys.assertions`, `sys.transitions`) are chains; no user relation is
+// since BZ, every one a clustered B+ tree (`heap-and-tuple.md` §3.1b).
 //
 // ---- What this does, and what it deliberately does not ------------------
 //
@@ -29,10 +29,8 @@
 //   - `min_key` is immutable after page creation (invariant 2).
 //   - No tuple with `id < min_key(page)` ever lands in that page
 //     (invariant 3) - enforced here, at the one place tuples enter.
-//   - Every id placed is at or above the relation's mark at its placement,
-//     and the mark moves past it under the tail's hold - an issued id is the
-//     mark, a named key below it is refused `OutOfRange` (invariant 11,
-//     BB-R7, BB-R12) - so placement order is id order.
+//   - Every id placed is above every id the chain holds - its caller issues
+//     ascending ids - so placement order is id order.
 //
 // ---- The ordering property that falls out ------------------------------
 //
@@ -60,13 +58,11 @@
 // revisited - the chain only grows at the tail, and no heap page is ever
 // compacted, so a delete-heavy relation grows monotonically.
 //
-// Concurrency (BB-R7): a user row's insert holds the chain's last page
-// exclusive *as* the last page - the walk takes each page exclusive while
-// it reads the link, one page at a time, and stops only where the link is
-// still invalid under that hold. The caller's IssueUnderHold /
-// AdmitUnderHold / CarveUnderHold run under it and must not park (BB-R5).
-// A growth holds the old tail and the page it creates, old before new, and
-// links the new page only once filled.
+// Concurrency (BB-R7): an insert holds the chain's last page exclusive
+// *as* the last page - the walk takes each page exclusive while it reads
+// the link, one page at a time, and stops only where the link is still
+// invalid under that hold. A growth holds the old tail and the page it
+// creates, old before new, and links the new page only once filled.
 
 namespace kds::heap {
 
@@ -149,71 +145,6 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
                                         std::uint64_t owner_oid,
                                         PageId* tail_hint = nullptr);
 
-// **The two doors a heap row comes through** (BB-R1, BB-R7, kept for the
-// heap by BD-Q4;
-// `insert_placement.hpp`'s `IssueUnderHold`). `ChainInsert` above is the
-// storage contract, which the `sys.assertions` chain still places through;
-// these are what the statement layer calls, so a row's id is fixed under the
-// exclusive hold of the tail it lands on and the chain's ids ascend across
-// pages and within each at every core count.
-//
-// `ChainInsertIssued` - an omitted tuple key: holds the tail, then asks `issue` for
-// the row. Fails as `ChainInsert` does, and with whatever `issue` refused,
-// in which case nothing is placed and the tail is released.
-StatusOr<ChainInsertResult> ChainInsertIssued(storage::PageStore& store, PageId head,
-                                              const storage::IssueUnderHold& issue,
-                                              std::uint64_t trx_id, std::uint64_t owner_oid,
-                                              PageId* tail_hint = nullptr);
-
-// `ChainInsertNamed` - a named key: holds the tail; `OutOfRange` if `id` is
-// below the tail's `min_key` (below a placed id, so below the mark, with no
-// read of page 7); then `admit`; then the placement. A heap answers a key
-// below the mark `OutOfRange` whether or not it is present (BB-R12): its
-// duplicate check reads the tail alone.
-StatusOr<ChainInsertResult> ChainInsertNamed(storage::PageStore& store, PageId head,
-                                             std::uint64_t id, std::span<const std::byte> payload,
-                                             const storage::AdmitUnderHold& admit,
-                                             std::uint64_t trx_id, std::uint64_t owner_oid,
-                                             PageId* tail_hint = nullptr);
-
-// One row's landing place, and the per-page facts a batch fill produces
-// for the caller's logging (a batch-filled page is described by its image,
-// so the caller needs the touched-page list; bulkinsert.md T3-4).
-struct BatchPlacement {
-    PageId page_id;
-    std::uint16_t slot;
-};
-struct BatchTouchedPage {
-    PageId page_id;
-    bool is_new;               // created by this fill (min_key set once, exactly)
-    PageId linked_from;        // predecessor whose link was edited, or kInvalid
-};
-struct ChainAppendBatchResult {
-    std::vector<BatchPlacement> rows;      // one per payload, in order
-    std::vector<BatchTouchedPage> pages;   // in chain order
-};
-
-// T3's sorted fill (bulkinsert.md §8), the door for its user rows (BB-R7):
-// holds the tail as the tail, then asks `carve` - once, under that hold -
-// for the rows, whose ids it carved from the relation's mark
-// (AllocateRowIdRange) and which must run contiguously from the first
-// payload's, `Corruption` otherwise. So the block is carved above every id
-// placed before it, and placed before any id issued after it, with one page
-// fetch per *page* instead of per row. The tail fills first under
-// ChainInsert's invariant-3 boundary check; each fresh page is created with
-// min_key = the id that opens it, held from its creation through its fill
-// and linked only once it holds its rows, and its predecessor's hold ends at
-// that link - so no walker reaches a linked page that is not yet filled. The
-// intra-batch duplicate check is vacuous by construction (contiguous ids) and
-// is not performed. On any failure the chain may already hold earlier rows
-// of the batch - the caller's transaction scope owns unwinding them, exactly
-// as it owns a mid-loop failure of the row path.
-using CarveUnderHold = FunctionRef<StatusOr<std::span<const std::vector<std::byte>>>()>;
-StatusOr<ChainAppendBatchResult> ChainAppendCarved(storage::PageStore& store, PageId head,
-                                                   const CarveUnderHold& carve,
-                                                   std::uint64_t trx_id, std::uint64_t owner_oid,
-                                                   PageId* tail_hint = nullptr);
-
 // Calls `fn` once per live slot of every page in the chain, in chain order
 // (which is id order page-wise, per the ordering property above). The
 // PageView handed to `fn` is mutable so a scan can overwrite in place -
@@ -242,26 +173,6 @@ StatusOr<ChainAppendBatchResult> ChainAppendCarved(storage::PageStore& store, Pa
 // dirty protocol.
 Status ChainVisit(
     storage::PageStore& store, PageId head, storage::PageAccess access,
-    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
-    storage::ScanFetcher* fetcher = nullptr);
-
-// One page of the walk ChainVisit makes: calls `fn` per slot of exactly
-// `page_id`, under the same visitor contract, and returns the page the
-// walk continues at - kInvalidPageId when `fn` stopped the walk or the
-// chain ends here (the two need no telling apart: either way the walk is
-// over, successfully).
-//
-// It exists so a caller can own the page loop (exec's RunWalkStep): the page's pin is held only inside this
-// call, so the gap between two calls - no pin, no span - is a legal
-// suspension point, which a whole-chain walk driving a visitor can never
-// offer. **That promise holds for the no-fetcher forms only**: a
-// ScanFetcher's frame lives until its next Fetch (page_store.hpp), so
-// with one the suspension point is the fetcher's, not this call's - a
-// caller that suspends between pages must not pass one. The caller owns
-// the cycle guard the loop here applied (storage::CheckPageWalkBudget);
-// ChainVisit remains the whole-chain form and applies its own.
-StatusOr<PageId> ChainVisitOnePage(
-    storage::PageStore& store, PageId page_id, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
     storage::ScanFetcher* fetcher = nullptr);
 
