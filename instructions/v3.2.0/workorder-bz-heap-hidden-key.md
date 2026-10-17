@@ -305,3 +305,17 @@ them; the strawman questions and the separate deletion stages cut.
   rule, manual page and CLAUDE.md row that stated the old heap, SUS-1, the
   sorted fill, relayout Part I or `physical_optimizer`; the benchmark
   drivers that meant `id` as a key declare `BTREE`.
+  Review (`critics-developer` at `31094d71`): three statements false against
+  `18e7b511` corrected (a heap's `ON CONFLICT (col)` is `NotImplemented`,
+  `sys.cabin_exprs` is a catalog chain, the decay score's consumer), the
+  deleted-section stubs and their history cut (`504bf193`); rejected -
+  removing the manual's "`SHOW RELAYOUT` removed" section, which tells an
+  operator why a statement they used is refused.
+- **BZ close** - `bench/v3.2.0/results-bz-close-v3.2.0-153-g18e7b511.md`,
+  A `e1333a77` against B `18e7b511`, Release: the btree INSERT and point
+  SELECT unchanged to about 1 % (inside the A/A' control); a heap below its
+  btree twin by 1.4-1.7 us per INSERT and 7-17 % per `SELECT *` (the twin
+  returns one more field, a confound not removed). Cut: more than one core,
+  `strict`/`group` durability, a cold pool, indexes, heap UPDATE/DELETE.
+  **The run took about 92 minutes against the one-hour budget**; nothing
+  lifted the budget.
