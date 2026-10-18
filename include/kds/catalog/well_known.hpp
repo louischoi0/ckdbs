@@ -312,11 +312,12 @@ static_assert(WellKnownOidsAreDistinct(),
               "life of a database, so add the new one past the highest rather than into a "
               "gap, and list it above");
 
-// Fixed page ids for the bootstrap catalog heap pages. Reserved: a
+// Fixed page ids for the bootstrap catalog relations' roots. Reserved: a
 // PageStore's CreateAt is called with these exact values during
 // Catalog::Bootstrap(), never handed out by a general-purpose allocator.
-// All sit below kds::server::kFirstUserPageId (128), which is where the
-// reserved range ends.
+// All sit below kds::server::kFirstUserPageId (128), the first id
+// `CreateNew` hands out; every page a chain grows onto past its root is a
+// `CreateNew` page (`kCatalogRoots` says why).
 inline constexpr PageId kCatalogPageTypes = 4;
 inline constexpr PageId kCatalogPageColumns = 5;
 inline constexpr PageId kCatalogPageObjects = 6;
@@ -329,15 +330,15 @@ inline constexpr PageId kCatalogPagePatterns = 9;
 // relation for the reason the retired oids are never reused.
 //
 // The rule `kCatalogPageAssertions` carries: a catalog relation's root
-// page stays in the reserved range because bootstrap must find it without
-// a catalog read, while its *var-heap* root is allocated by CreateNew()
+// page is fixed, below `kFirstUserPageId`, because bootstrap must find it
+// without a catalog read, while its *var-heap* root is allocated by CreateNew()
 // and recorded in sys.tables, where it is DDL-immutable and therefore
 // cacheable (rows.hpp's note on varheap_page_id). That split is intended,
 // not incidental - operator ratification 2026-08-31, crosscore.md
 // CC12/CR1. One frame table serves every core, so no core needs a right to
 // read a page another loaded.
 inline constexpr PageId kCatalogPagePatternDefs = 10;
-// sys.access_stats is pinned here, inside the reserved range. Every core
+// sys.access_stats' root is fixed here, like every catalog root. Every core
 // writes it under its root page latch (AT-S7); the per-core copy CC12/CR3
 // left open was declined (`core_runtime.hpp`).
 inline constexpr PageId kCatalogPageAccessStats = 11;
@@ -353,8 +354,8 @@ inline constexpr PageId kCatalogPageFkeys = 13;
 //
 // A peer reads this var-heap the way it reads anything else: the frame
 // table is the instance's, so a page's id decides nothing about who may
-// fault it. CR3 (a grown catalog page managed outside the reserved range,
-// on the ordinary relation rules) is what governs.
+// fault it. CR3 (a grown catalog page taken from the general supply, on
+// the ordinary relation rules) is what governs.
 inline constexpr PageId kCatalogPageAssertions = 14;
 
 // Root heap page of sys.cabin_exprs (superblock 26, AQ-S1). Page 15 was

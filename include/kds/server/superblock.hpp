@@ -37,13 +37,15 @@
 namespace kds::server {
 
 // Page ids below this are reserved for fixed-position system structures
-// (the superblock's own page, the free map, catalog pages). It is where
-// DevicePageStore starts handing out ids, not something the superblock
-// itself tracks.
+// (the superblock's own page, the free map, the catalog's fixed roots). It
+// is where DevicePageStore starts handing out ids, not something the
+// superblock itself tracks. Every page a catalog chain grows onto past its
+// root is handed out here like a user page (superblock 31); ids 17..127
+// are unused, left for a future bootstrap root.
 inline constexpr PageId kFirstUserPageId = 128;
 
 // Fixed page id the SuperBlock itself lives at. Reserved, same convention
-// as the catalog's fixed pages (kds::catalog::kCatalogPage*, ids 4-15):
+// as the catalog's fixed roots (kds::catalog::kCatalogPage*, ids 4-16):
 // registered via PageStore::CreateAt() with this exact value, never
 // handed out by a general-purpose allocator.
 inline constexpr PageId kSuperBlockPageId = 0;
@@ -82,7 +84,8 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 //   it stays, written 0 and read by nothing.
 // 14 -> 15 (2026-08-24): SysTableRow grew `anchor_page_id` (PW2-1).
 // 15 -> 16 (2026-08-27): bootstrap gained `sys.ranges` on page 15;
-//   `kCatalogOverflowFirst` moved to 16. Retired at 17 -> 18.
+//   `kCatalogOverflowFirst` moved to 16. Retired at 17 -> 18; the overflow
+//   range itself was deleted at 30 -> 31.
 // No bump on 2026-09-02 (AL-R3): `log_topology` consumed `reserved1`, the
 //   u32 at offset 12 that every earlier image wrote as zero.
 // 16 -> 17 (2026-09-05, AM-S4, on D14): a version-16 volume's `page_lsn`s
@@ -140,9 +143,10 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // 24 (BV-S1, `instructions/v3.2.0/workorder-bv-transition-constraints.md`
 // BV-Q1 (a)): bootstrap gained `sys.transitions` on fixed page 16, the
 // first overflow-range id a version-23 file could already hold;
-// `kCatalogOverflowFirst` moved to 17. A version-23 volume has no such
-// relation, so a Transition could be neither declared nor read on it;
-// refused with no migration, the standing order of 2026-10-07.
+// `kCatalogOverflowFirst` moved to 17 (deleted with the range at 31). A
+// version-23 volume has no such relation, so a Transition could be neither
+// declared nor read on it; refused with no migration, the standing order
+// of 2026-10-07.
 //
 // 25 (BW-S1, `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`
 // BW-R9): `sys.columns` rows gained a flags byte (a dropped column, a column

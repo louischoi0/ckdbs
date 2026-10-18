@@ -155,7 +155,7 @@ Cadence is the RTO knob: more frequent ⇒ shorter recovery + more FPI volume.
 
 ## 11a. What logs today
 
-**Every data mutation and every catalog mutation**, as the ordinary record types: `kHeapInsert` (a catalog chain page) or `kBtreeInsert` (a B+ tree leaf, every user relation's)/`kHeapOverwrite`/`kHeapDeleteMark`/`kSlotRetire` per row, one `kBtreeSplit` per B+ tree split, `PAGE_INIT` for a catalog overflow page, a relation's root and its var-heap root, a `FULL_PAGE_IMAGE` for a chain-link edit and for each page of a backfilled index tree. There is no catalog-specific record type.
+**Every data mutation and every catalog mutation**, as the ordinary record types: `kHeapInsert` (a catalog chain page) or `kBtreeInsert` (a B+ tree leaf, every user relation's)/`kHeapOverwrite`/`kHeapDeleteMark`/`kSlotRetire` per row, one `kBtreeSplit` per B+ tree split, `PAGE_INIT` for a page a catalog chain grows onto (carrying its catalog relation's oid as owner), a relation's root and its var-heap root, a `FULL_PAGE_IMAGE` for a chain-link edit and for each page of a backfilled index tree. There is no catalog-specific record type.
 
 Verified against the emission sites:
 

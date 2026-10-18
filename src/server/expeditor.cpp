@@ -785,10 +785,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (!store.ok()) return store.status();
     // **EV3's floor** (AM-S2). Everything
     // below `kFirstUserPageId` is a fixed system structure - the superblock,
-    // the two bitmaps, the catalog's pages - and EV3 says that class is
-    // never an eviction candidate at any pressure. The floor is a property
-    // of the volume's layout, not of a core's arrangement, and this is its
-    // one install site.
+    // the two bitmaps, the catalog's fixed roots - and EV3 says that class
+    // is never an eviction candidate at any pressure. A page a catalog chain
+    // grows onto is above the floor and evictable (`crosscore.md` CC12
+    // CR3). The floor is a property of the volume's layout, not of a core's
+    // arrangement, and this is its one install site.
     store.value()->SetResidentLimit(kFirstUserPageId);
     // BE-Q6's floor, asked once now - its system-page half is known before
     // the mount, so a pool too small to bootstrap or recover is refused with

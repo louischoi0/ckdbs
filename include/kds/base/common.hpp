@@ -60,9 +60,9 @@ enum class PageType : std::uint8_t {
     // class claims it: the waystone directory's interior pages, whose 2048
     // child ids tile the page exactly (stats/waystone_dir.hpp).
     //
-    // It has to be durable rather than a side table: DevicePageStore never
-    // evicts, so a page is read back from the device exactly once - on
-    // first touch after open - and that is precisely when a checksum
+    // It has to be durable rather than a side table: a page is read back
+    // from the device on every fault - its first touch after open, and
+    // each time after an eviction - and that is precisely when a checksum
     // verify would reject a page that never carried one.
     kHeaderlessMap = 8,
 

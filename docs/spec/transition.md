@@ -149,8 +149,9 @@ out. `DROP TRANSITION` lifts the refusal.
 ## 6. Storage
 
 `sys.transitions` is oid 146, with column oids 147..152 and a fixed root
-on page 16. The catalog overflow range starts at 17, and the superblock
-version is 24.
+on page 16, the highest of the catalog's fixed roots (`kCatalogRoots`);
+past it the chain grows from the general supply (`crosscore.md` CC12
+CR3).
 
 - **One of the two declaration relations.** `sys.assertions` is the other:
   same shape, same reader (`exec/declaration_relation.hpp`). A row holds

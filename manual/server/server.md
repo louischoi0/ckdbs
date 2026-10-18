@@ -75,12 +75,13 @@ mounts has **one WAL stream for the instance**, whatever `cores` says, and
 `SHOW META`'s `wal_topology` field says so. A volume whose superblock
 records more than one stream **does not mount**: there is no migration,
 and the refusal names it. Recreate the database. The same holds
-for every volume older than superblock version 30 (2026-10-17): 20 keeps a
+for every volume older than superblock version 31 (2026-10-18): 20 keeps a
 B+ tree leaf in key order by placement, 21 records a dropped relation's
 roots in its tombstone, 22 carries the 48-bit Keystone id, 27 marks a
 unique index, 28 orders a secondary index by its whole entry, 29 logs
-the removal of a dropped index's anchor slot, and 30 stores a heap as a
-B+ tree with a hidden tuple key.
+the removal of a dropped index's anchor slot, 30 stores a heap as a
+B+ tree with a hidden tuple key, and 31 grows the catalog onto ordinary
+pages, which lifts the old limit of about 800 tables.
 
 The listener is **loopback only** (`127.0.0.1`) unless `listen_address`
 says otherwise, plain TCP, no TLS, no

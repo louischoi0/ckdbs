@@ -95,9 +95,11 @@ the engine does not.
 
 ## CT5 — What stays special about the catalog's pages, and what does not
 
-Two things, neither an authority (AR0-5 §2, AT-R11): their frames are
-pinned, and page 0's address with the fixed catalog page numbers is
-bootstrap layout. Every core writes them, so every core's cache can be
+Two things, neither an authority (AR0-5 §2, AT-R11): the fixed roots'
+frames are pinned - they sit below the resident floor (`eviction.md` EV3),
+and a page a chain grows onto past its root is an ordinary evictable frame
+- and page 0's address with the fixed root page numbers is bootstrap
+layout. Every core writes them, so every core's cache can be
 behind the word, and `BumpWord`'s adopt-only-if-current rule (CT2) is live
 on every core.
 
@@ -117,16 +119,42 @@ same read-modify-write of the same row, made by every core with no
 per-core cache (`heap-and-tuple.md` §4.1a). `rules.md` §3
 declares the pages, not the rows.
 
-**Placing a *new* catalog page is every core's too, since AT-S5b.** The
-pages CT5 opens with are the fixed ones; a catalog relation's chain grows
-past them into the reserved overflow range (`kCatalogOverflowFirst` ..
-`kCatalogOverflowLimit`, `include/kds/catalog/well_known.hpp`; the rule that
-a catalog page may be managed past the fixed ones is `crosscore.md` CC12
-CR3), and `AllocateCatalogPage`
-walks that range id by id, taking the first that is free; the probe loop
-treats only `AlreadyExists` as "try the next id". What admits exactly one caller per id is the claim itself -
-`ClaimNamedIdLocked` under the structure latch and the map latch, which
-answers every loser `AlreadyExists` - and that is a property of the claim
+**Placing a *new* catalog page is every core's too, since AT-S5b**, and
+**it comes from the general supply since superblock 31** (the catalog
+page ceiling; the operator's ruling of 2026-10-18, "$!recommended"). The
+pages CT5 opens with are the fixed roots (`kCatalogRoots`,
+`include/kds/catalog/well_known.hpp`); a catalog relation's chain grows
+past its root through `store.CreateNew()`, taken by `InsertRow` under the
+exclusive hold of the full tail - and of the root, where CT7 holds it -
+exactly as `heap::ChainInsert` grows a user relation (`crosscore.md` CC12
+CR3). What admits exactly one caller per id is the allocator under the
+structure latch and the map latch: the free list first, then the cursor,
+which starts at `kFirstUserPageId` and only rises, so a grown catalog page
+is never below 128, and a freed user id taken here is a new creation
+(invariant 2). The new page comes back pinned and exclusive and stays held
+until its row's record stamps it (AY-S7), is stamped with the catalog
+relation's oid (`page.md` §2a) and is logged with a `PAGE_INIT` carrying
+that owner, so redo rebuilds it like any page. `CreateNew` may grow the
+file under those holds, as a user leaf's growth already does; nothing in
+the allocator waits on a page latch. **The reserved overflow range 17..127
+is deleted**, and with it the ceiling it set: 111 pages for every catalog
+relation together, about 800 tables of eight columns. Ids 17..127 stay
+unused, left for a future bootstrap root (`crosscore.md` CC9).
+
+**A walk of a catalog chain is bounded by the walk budget**
+(`storage::CheckPageWalkBudget`, `kMaxPageWalkLength` = 2^20 steps), the
+bound every next-page loop owes, and not by a count of catalog pages: what
+it stops is a cyclic link, and a long chain is not a fault. `ForFirstRow`
+and `InsertRow` refuse a spent budget `Corruption` naming the chain's root.
+
+A row no empty page can hold leaves its new page allocated, unlinked and
+unreachable rather than freed - a free needs BF-R4's replay gate - a
+stated leak of one page (`drop-table.md` DT1, `known-gaps.md`), the trade
+`heap::ChainInsert` makes.
+
+Placing a page at a *chosen* id stays every core's too: bootstrap's roots
+and redo's heal call `CreateAt`, and `ClaimNamedIdLocked` under the same
+two latches answers every loser `AlreadyExists` - a property of the claim
 and not of the asking core (`page.md` §5). Pinned by
 `free_map_race_test.cpp`'s `OnlyOneCallerEverPlacesAPageAtAChosenId`
 (eight cores, one user-range id) and `device_page_store_test.cpp`'s

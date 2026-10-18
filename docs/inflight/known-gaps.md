@@ -232,11 +232,15 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## WAL
 
-- **A refused catalog report on a new page spends one reserved page.** The
-  page is left allocated, empty and unlinked. The catalog range is pages
-  16..127, below the system floor `FreePage` refuses, and no reclaim walk
-  reaches an unlinked page (`page.md` §5, `drop-table.md` DT1). This
-  predates AZ-S1: the page used to hold the row. **No owner.**
+- **A refused catalog report on a new page, or a catalog row no empty page
+  holds, spends one page.** Re-read on `worktree-fix-catalog-page-ceiling`
+  at `0e539d46`, 2026-10-18. `InsertRow` leaves the page allocated, empty
+  and unlinked: a free needs BF-R4's replay gate, and no reclaim walk
+  reaches an unlinked page (`page.md` §5, `drop-table.md` DT1), the trade
+  `heap::ChainInsert` makes. Since superblock 31 the page is a `CreateNew`
+  page from the general supply, not one of a finite reserved range, so the
+  leak costs file space and no catalog capacity. This predates AZ-S1: the
+  page used to hold the row. **No owner.**
 
 - **`MountAnchorOf` still loops over 64 anchor slots where only slot 0 can
   be non-zero.** Named by AM-S4(d)'s review; re-read at `f3da0413`,
@@ -1318,6 +1322,78 @@ Verified on `worktree-bz-background-advisory-optimizer` at `954abc20`
 - **Scenario 2's `--verify` reports 8-12 % failed I1 checks in every arm,
   the base included**, and 13-28 of 400 at `v3.1.0-30`. Nobody has determined
   whether this is the driver's read skew or an invariant slip in the engine.
+
+## Catalog chains past the old ceiling
+
+Verified on `worktree-fix-catalog-page-ceiling` at `0e539d46`, 2026-10-18.
+Since superblock 31 every page a catalog chain grows onto comes from the
+general supply and the reserved range 17..127 is deleted (`catalog.md` CT5,
+`crosscore.md` CC12 CR3). The operator ruled "$!recommended" on 2026-10-18,
+taking CLA's recommendation on each of the change's nine decisions; D4 and
+D9 were to record these costs and fix nothing, and the rest are costs the
+change's stages found and left.
+
+- **A cold `sys.tables` walk can spend an `INSERT`'s no-refuse window.**
+  (D4.) A grown catalog page is an ordinary evictable frame (`eviction.md`
+  EV3). An `INSERT` opens its `NoRefuseWindow` (`command_dispatcher.cpp`
+  :5804) before `AdmitExplicitRowId` (:5842) or `AllocateRowId` (:5864)
+  walks `sys.tables` from its root to the relation's row, so every cold page
+  of that walk faults inside the window and spends one frame of its
+  64-frame share (`page_store.hpp`'s `kWindowFrames`), which is never
+  returned (`DevicePageStore::ReserveFrame`). A walk past 64 cold pages, on
+  a pool that is full with nothing reclaimable, reaches `FailStop` instead
+  of a `ResourceExhausted` refusal. That needs a `sys.tables` chain of more
+  than 64 pages, about 3,200 relations, cold, with a full pool. Not
+  reproduced. Moving the first row-id call ahead of `NoRefuseWindow::Open`,
+  or memoising each relation's `sys.tables` row address (which also removes
+  the O(chain) walk per `INSERT`), would close it; the second was CLA's
+  proposed follow-up. **No owner.**
+- **Registering a pattern scans the whole of `sys.patterns` under page 9's
+  exclusive hold.** (D9.) `Catalog::RegisterPattern` holds the root
+  exclusive across the call, reads every row (`GetSysPatternRow` is a
+  `ScanAll` of the chain) to find the shape absent, then `InsertRow` walks
+  the chain again to place it. So each new shape costs O(pages) with every
+  other core's registration waiting behind it, and the chain only grows:
+  no pattern row is ever retired (retention, P15, is unbuilt), and a
+  fingerprint version bump leaves the old rows in place. The old 128-step
+  bound capped the chain by refusing past it; nothing caps it now. The
+  gated cell, `AMountClearsEveryWaystoneRootOfALongPatternChain`, registers
+  1,500 patterns; `CatalogPageCeilingTest.AMountClearsEveryWaystoneRootOfAPatternChainPastTheOldBound`,
+  17,000 patterns past 128 pages and run only with `KDS_TEST_LARGE_CATALOG`
+  set, takes about 270 s, almost all of it this scan. **No owner.**
+- **Every mount dirties every `sys.patterns` page.** The advisory discard
+  (`server::DiscardAdvisoryState`, run at every mount) clears every
+  Waystone root in one pass, `Catalog::ClearEveryPatternWaystoneRoot`,
+  whose walk fetches each page exclusive (`kWrite`), and an exclusive
+  fetch marks the frame dirty (`device_page_store.hpp`, "Get() marks the
+  frame dirty"), so the mount's completion checkpoint writes the whole
+  chain back whether a row changed or not. A shared walk plus an upgrade
+  would cost a second fetch per page that holds a directory; nobody has
+  measured either. **No owner.**
+- **The delete-mark purge walks the whole catalog with no yield.**
+  `Catalog::RetireDeleteMarks` visits every page of every catalog chain
+  exclusive (`kWrite`) in one call on core 0's 50 ms tick
+  (`CommandDispatcher::SweepSettledDeleteMarks`, gated on the mark count
+  and the settlement's progress), so its cost is the whole catalog's size,
+  which the old 128-step bound used to cap. Performance only: what it
+  retires is correct. **No owner.**
+- **A cycle among `sys.access_stats` growth pages that all carry its oid is
+  re-formatted for the whole walk budget before it is cut.**
+  `Catalog::DiscardAccessStats` cuts at once a link back to page 11 (its
+  owner, bootstrap's 0, is not the relation's) and at any foreign,
+  non-heap, unallocated or unreadable page, but a cycle such as 17 -> 18 ->
+  17 between pages it owns is walked, re-formatting a page per step, until
+  `kMaxPageWalkLength` (2^20 steps) is spent: bounded, but seconds of a
+  mount. Reachable only through damage that passes the checksum, since
+  nothing frees or relinks a `sys.access_stats` page. A visited set would
+  cut it at the first repeat. **No owner.**
+- **The sim's restore with `skip_recovery` runs no advisory discard.**
+  `SimInstance::CreateFromBackup` leaves the discard to `Boot`, which runs
+  it only when it runs recovery, so a restored image booted with
+  `skip_recovery` keeps its Waystone roots and `sys.access_stats` rows.
+  Before the change `CreateFromBackup` discarded after `Boot` whatever the
+  option said. A restore that skips recovery ships in no configuration;
+  only the harness can build one. **No owner.**
 
 ## Decisions the revision has not taken
 

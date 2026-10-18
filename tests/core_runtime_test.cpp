@@ -195,10 +195,12 @@ protected:
         return c;
     }
 
-    // What Expeditor does before telling peers to re-read: the catalog
-    // pages are unlogged, so nothing else puts them on the device.
-    // A catalog chain's pages past its root have no fixed ids, so the whole
-    // pool is flushed rather than a list that could name them.
+    // Puts the catalog's pages on the device. This fixture's core-0 catalog
+    // is given no log (no `SetWal`), so nothing else would; the engine's
+    // catalog writes are logged (RV3) and it flushes nothing at a DDL
+    // (`catalog.md` CT4). A catalog chain's pages past its root have no
+    // fixed ids, so the whole pool is flushed rather than a list that could
+    // name them.
     void FlushCatalog() {
         ASSERT_TRUE(core0_store_->Flush().ok());
     }

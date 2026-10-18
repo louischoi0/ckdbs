@@ -18,8 +18,10 @@ public:
     // increments from). Fixed-id callers (CreateAt) are unaffected by it,
     // but pick a value above any ids you plan to CreateAt (e.g.
     // kds::server::kFirstUserPageId, 128, matches the catalog's fixed
-    // pages living below that) - CreateNew does not skip over collisions,
-    // it just reports AlreadyExists like CreateAt would.
+    // roots living below that) - CreateNew does not skip over collisions,
+    // it just reports AlreadyExists like CreateAt would. A catalog chain
+    // grows through CreateNew, so with the default of 1 a chain's growth
+    // soon reaches a fixed root's id and is refused AlreadyExists.
     explicit InMemoryPageStore(PageId first_new_page_id = 1) noexcept;
 
     // Public on purpose where the base is protected: this store never

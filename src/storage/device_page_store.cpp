@@ -1197,9 +1197,9 @@ StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(Page
         if (!device_spare) return Status::AlreadyExists("page id already in use");
     } else {
         ++allocated_pages_;
-        // A freed id named directly - redo re-creating it, or a catalog
-        // probe - leaves the free list with this claim, so no pop hands it
-        // out a second time (BF-R6).
+        // A freed id named directly - redo re-creating it - leaves the free
+        // list with this claim, so no pop hands it out a second time
+        // (BF-R6).
         if (free_list_.erase(page_id) != 0) NoteFreeListSize();
     }
     MapRegion* mutable_pages = MutableRegion(FreeMapRegionOf(page_id));
@@ -2703,9 +2703,10 @@ StatusOr<std::uint32_t> DevicePageStore::latch_word_for_test(PageId page_id) con
 }
 
 bool DevicePageStore::IsPinnedClass(PageId page_id) const noexcept {
-    // Half one: the reserved low ids. Needed because the fixed catalog pages
+    // Half one: the reserved low ids. Needed because the fixed catalog roots
     // are formatted kHeap like any user relation, so the kind cannot tell
-    // them apart (workplan-eviction.md EVT01 at 1769487).
+    // them apart (workplan-eviction.md EVT01 at 1769487). A page a catalog
+    // chain grows onto is above the floor and evictable (EV3).
     if (page_id < first_evictable_page_id_) return true;
 
     // Half two: the page kind, which is what EV3 actually specifies and what

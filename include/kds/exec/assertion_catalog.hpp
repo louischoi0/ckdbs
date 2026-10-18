@@ -110,13 +110,11 @@ StatusOr<std::vector<AssertionDef>> ListAssertions(catalog::Catalog& catalog,
 // The same rows with **`name` and `source_text` left empty**: the fixed
 // columns only - id, target oid, cabin root.
 //
-// It exists for one caller and one property. `sys.assertions`' heap pages
-// are all below `kFirstUserPageId`, which `well_known.hpp` calls a
-// correctness requirement precisely so that a peer core can read the
-// catalog; its **var-heap is not**, because a spilled value takes its page
-// from the general supply. So a peer that resolves the spills may be
-// refused the fetch (`may not fault page N`) and lose the whole scan, while
-// this form cannot be: it reads exactly the pages the walk already holds.
+// It exists for one caller and one property: it reads exactly the pages
+// the chain walk already holds and resolves no spill, so a var-heap page
+// the full scan fails on - a spilled `name` or `source_text` takes its
+// page from the general supply, outside the chain - cannot cost it the
+// scan.
 //
 // What that buys is the fail-closed answer at a peer's mount (PW1c-6c): a
 // core that cannot read *what* an assertion says can still learn *that* one

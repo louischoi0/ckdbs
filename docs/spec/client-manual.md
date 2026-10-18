@@ -309,11 +309,6 @@ hold on the debug port too (Appendix A gives the text spellings).
   and carried its snapshot there).
 - **Money is `int64` minor units, or `decimal(p, s)`.** `float` columns are refused
   at `CREATE TABLE`.
-- **The instance holds roughly 7,600 user columns**: catalog relations
-  chain into a reserved range of low page ids
-  (`docs/rules/keystoneid-k0-findings.md`). `DROP TABLE` retires a
-  relation's column rows (`docs/spec/drop-table.md`), so a long-lived file
-  that creates and never drops will eventually refuse a `CREATE TABLE`.
 
 ## 4. Using `tools/ckdbs_cli.py`
 

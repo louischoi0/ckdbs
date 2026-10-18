@@ -229,7 +229,7 @@
 namespace kds::storage {
 
 // Fixed home of the free-map page, in the reserved sub-128 system range
-// alongside the superblock (0) and the catalog's fixed pages (4-15).
+// alongside the superblock (0) and the catalog's fixed roots (4-16).
 inline constexpr PageId kFreeMapPageId = 1;
 
 // The headerless bitmap (PageType::kHeaderlessMap), immediately after it
@@ -565,7 +565,9 @@ public:
     // (`loading_`) or a `CreateAt` (`claiming_`) of the id is in flight.
     // **Refused `Corruption`** below `first_new_page_id` (the system range
     // `Open` was given), for a map id, a headerless id, and a resident
-    // `kCabinBound` frame; `NotFound` for an id already free.
+    // `kCabinBound` frame; `NotFound` for an id already free. A page a
+    // catalog chain grew onto is above the system range and is not refused
+    // here: the callers' owner and type checks keep it (`page.md` §5).
     //
     // **What this makes true, replacing "free-map bits are never cleared"**:
     // no clear bit has a resident frame - the erase and the clear are one
@@ -611,13 +613,16 @@ public:
     // Whether `page_id` belongs to a **pinned class** (`eviction.md` EV3):
     // never a sweep candidate at any pressure. Implemented as
     // *id-range-or-kind*, not EV3's "resolved from page kind" alone: the
-    // fixed catalog pages are formatted `PageType::kHeap` like any user
-    // relation's, so only their reserved id range (`catalog/well_known.hpp`)
-    // tells them apart. The kind half answers for `PageType::kCabinBound`,
-    // whose pages carry the aggregate an admission check reads, and is
-    // asked only of a resident frame - a non-resident page is no sweep
-    // candidate, and a header read would turn a skip test into an I/O. A
-    // free-map region's page ids answer true by arithmetic (FM8).
+    // fixed catalog roots are formatted `PageType::kHeap` like any user
+    // relation's, so only their fixed ids below the floor
+    // (`catalog/well_known.hpp`) tell them apart. A page a catalog chain
+    // grows onto past its root is above the floor and is an ordinary
+    // candidate (EV3, `crosscore.md` CC12 CR3). The kind half answers for
+    // `PageType::kCabinBound`, whose pages carry the aggregate an admission
+    // check reads, and is asked only of a resident frame - a non-resident
+    // page is no sweep candidate, and a header read would turn a skip test
+    // into an I/O. A free-map region's page ids answer true by arithmetic
+    // (FM8).
     bool IsPinnedClass(PageId page_id) const noexcept;
 
     // Raises the pinned id range's upper bound. **Additive only**: a

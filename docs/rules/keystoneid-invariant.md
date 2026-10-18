@@ -309,5 +309,5 @@ conditions without specifying it.
 - Any *density* guarantee: K3 forbids relying on gap-freeness. Ordering
   is promised within one relation's history only (K3); §1 lists what
   rests on it.
-- The object-oid counter and the catalog's page ceiling — both the
+- The object-oid counter and how the catalog's chains grow — both the
   catalog's (`keystoneid-k0-findings.md` §5, §6).
