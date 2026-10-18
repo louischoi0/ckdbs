@@ -2114,12 +2114,12 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // ---- 1a. The join order (CB-S2, workorder-cb-join-planner.md §3.2) ---
     //
     // A top-level block of two or more relations with no subquery predicate
-    // is compiled in the orders below and the cheapest compiled chain runs
-    // (`ChainCost`, join_order.hpp: data-free, so one catalog gives one
-    // plan). Everything after binding reads slots, so a chain compiled over
-    // a permuted binding is that order's chain, unchanged otherwise. Ties go
-    // to the written order, which is compiled first and whose refusal is
-    // the statement's.
+    // is compiled in the orders below, priced by `EstimateChain`
+    // (join_order.hpp), and the cheapest runs if it beats the written order
+    // by the margin (CC-Q8). Everything after binding reads slots, so a
+    // chain compiled over a permuted binding is that order's chain,
+    // unchanged otherwise. The written order is compiled first and its
+    // refusal is the statement's.
     if (plan == nullptr || refs.size() < 2 || stmt.star() || HasSubqueryPredicate(stmt)) {
         return CompileBound(catalog, stmt, scope, refs, next_step_id, depth, view, inner_build,
                             declare);
@@ -2161,15 +2161,35 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     if (std::all_of(best.value().steps.begin(), best.value().steps.end(), is_descent)) {
         return best;
     }
-    const std::size_t build_cap = plan->join_build_max_rows;
-    double best_cost = ChainCost(best.value(), build_cap);
-    const auto consider = [&](const std::vector<std::size_t>& candidate) {
+    // The written order's relations, for the identifier bounds (CC-Q11).
+    std::vector<const catalog::TableAccess*> written_access;
+    for (const BoundRelation& relation : scope.relations) written_access.push_back(relation.access);
+    CostInputs inputs;
+    inputs.limits = *plan;
+    inputs.written_sorted = best.value().sorted();
+    inputs.base_step_id = base_step_id;
+    inputs.written_access = written_access;
+    const double written_cost = EstimateChain(best.value(), inputs).cost;
+
+    // CC-Q8: the minimum over every order - the first among equals in
+    // permutation order - taken only if it beats the **written** order's
+    // cost by the margin, so the threshold starts there. Measured against
+    // the written order rather than the best so far, the winner does not
+    // depend on enumeration order.
+    std::optional<StepChain> cheapest;
+    double cheapest_cost = written_cost * (1.0 - kCostTieMargin);
+    const auto cost_of = [&](const std::vector<std::size_t>& candidate)
+        -> std::optional<std::pair<double, StepChain>> {
         auto chain = compile_order(candidate);
-        if (!chain.ok()) return;  // a refusal is the written order's to give
-        const double cost = ChainCost(chain.value(), build_cap);
-        if (cost < best_cost * (1.0 - kCostTieMargin)) {
-            best_cost = cost;
-            best = std::move(chain);
+        if (!chain.ok()) return std::nullopt;  // a refusal is the written order's to give
+        const double cost = EstimateChain(chain.value(), inputs).cost;
+        return std::make_pair(cost, std::move(chain.value()));
+    };
+    const auto consider = [&](const std::vector<std::size_t>& candidate) {
+        auto costed = cost_of(candidate);
+        if (costed.has_value() && costed->first < cheapest_cost) {
+            cheapest_cost = costed->first;
+            cheapest = std::move(costed->second);
         }
     };
     if (refs.size() <= kMaxExhaustiveJoinRelations) {
@@ -2188,12 +2208,11 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 for (std::size_t o = 0; o < rest.size(); ++o) {
                     if (o != r) candidate.push_back(rest[o]);
                 }
-                auto chain = compile_order(candidate);
-                if (!chain.ok()) continue;
-                const double cost = ChainCost(chain.value(), build_cap);
-                if (!pick_cost.has_value() || cost < *pick_cost * (1.0 - kCostTieMargin)) {
+                auto costed = cost_of(candidate);
+                if (!costed.has_value()) continue;
+                if (!pick_cost.has_value() || costed->first < *pick_cost) {
                     pick = r;
-                    pick_cost = cost;
+                    pick_cost = costed->first;
                 }
             }
             placed.push_back(rest[pick]);
@@ -2201,6 +2220,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         }
         consider(placed);
     }
+    if (cheapest.has_value()) return std::move(*cheapest);
     return best;
 }
 
@@ -2675,7 +2695,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         chain.sort_keys.size() == 1 && !chain.sort_keys[0].descending &&
         chain.sort_keys[0].ref.rel_slot == 0 && IsTupleKey(chain.sort_keys[0].ref);
     const bool driving_emits_tuple_key_order =
-        !chain.steps.empty() && chain.steps[0].kind != AccessKind::kCabinProbe;
+        !chain.steps.empty() && EmitsTupleKeyOrder(chain.steps[0].kind);
     if (one_ascending_tuple_key && driving_emits_tuple_key_order) {
         chain.sort_keys.clear();
     }

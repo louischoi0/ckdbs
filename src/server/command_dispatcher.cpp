@@ -7433,7 +7433,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // relation once (`ReadBorrow::Position`).
     ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
     auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
-        const exec::PlanOptions plan{budget_.join_build_max_rows()};
+        const exec::PlanOptions plan{budget_.join_build_max_rows(), sort_max_rows_};
         return exec::Compile(catalog_, stmt, v, &borrow, context,
                              plan_join_order_ ? &plan : nullptr);
     });

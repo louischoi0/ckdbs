@@ -339,7 +339,7 @@ GATE: interleaved A/B in build-release. Point read and tuple-key point join serv
 | CC-Q7 | Steward cadence and seed budget. | (a) 1 s tick; at most 16 page reads per tick; each known relation re-seeded at most every 10 s or when its root page id moved.<br>(b) A 50 ms tick with continuous sampling (Design 1). | **(a)** - (b) is up to about 1,300 page reads per second through the one pool, synchronously on core 0. Plans can move at most once per tick anyway. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
 | CC-Q8 | Hysteresis and the switch rule. | (a) Half-octave Schmitt bands (±0.75) on inputs. The plan is the minimum over all orders, adopted only if it beats the WRITTEN cost by 10% when any statistic entered (1e-9 otherwise).<br>(b) An incumbent order with a challenger margin (Design 2).<br>(c) Keep CB's best-so-far 1e-9. | **(a)** - At step_compiler.cpp:2170, best-so-far with any real margin makes the winner depend on next_permutation order. (a) is a pure function of the snapshot, testable PO10-style. (b) puts history into per-core state. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
 | CC-Q9 | When may an estimate price a build the cap could decline? | (a) Only when own×4 ≤ join_build_max_rows and no decline fact exists; a decline publishes at once.<br>(b) own ≤ cap, as CB. | **(a)** - A declined build is a per-row walk, about 1e10 model units, while an over-estimate only forgoes a build. The asymmetric margin matches PO3. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
-| CC-Q10 | Should ChainCost price ORDER BY and LIMIT? | (a) Yes. A sort costs out·log2(out); an order adding a sort the written order lacked is +inf above sort_max_rows/2; LIMIT without a sort scales the per-row part.<br>(b) No, as CB. | **(a)** - Without it, a data-driven order loses the elision (step_compiler.cpp:2674-2681) and can move a statement onto a sort_max_rows refusal that the planner itself caused. (a) is data-free and lands in S1. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
+| CC-Q10 | Should ChainCost price ORDER BY and LIMIT? | (a) Yes. A sort costs out·log2(out); an order adding a sort the written order lacked is +inf above sort_max_rows/2; LIMIT without a sort scales the per-row part.<br>(b) No, as CB. | **(a)** - Without it, a data-driven order loses the elision (step_compiler.cpp:2674-2681) and can move a statement onto a sort_max_rows refusal that the planner itself caused. (a) is data-free and lands in S1. | **(a) revised at CC-S1's review**: an added sort is never taken unless LIMIT bounds it within `sort_max_rows` (a top-N cannot refuse); the cap/2 estimate rule is dropped, since no estimate knows a reply's size. Adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
 | CC-Q11 | Which identifier bounds, and in which direction? | (a) ≤1 row only when every key column of a unique index (IndexRef nkeys, schema.hpp:478-481) or the tuple key is equality-bound. Transition and FK-parent NDV upper bounds may only raise an equality's selectivity to 1/bound.<br>(b) Leading-column unique and 1/|states| as a lower selectivity (Designs 1 and 3). | **(a)** - UNIQUE(a,b) does not make a unique, and an NDV upper bound gives average selectivity ≥ 1/bound, not ≤. (b) under-estimates in the direction that chooses builds the executor declines. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
 | CC-Q12 | Memo key and literal sensitivity. | (a) Exact (fetch_id, n, oids) plus generation, catalog stamp, join_build_max_rows, sort_max_rows and kRange span bands, with ChainCost reading the band centre so the memo is an exact cache; the value is a permutation.<br>(b) Add arg_hash.<br>(c) (fetch_id) and the schema word only. | **(a)** - The span is the only literal the model reads (join_order.cpp:102-107). arg_hash hashes text and would never reuse an entry. (c) is unsound across namespaces and DROP/CREATE, and blind to session limits (command_dispatcher.hpp:353-354). | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
 | CC-Q13 | What is the off-switch? | (a) `join_order = written` means no search, no statistics, no memo and no fold; `planned` with an empty snapshot is S1's data-free planner.<br>(b) A new planner_statistics key. | **(a)** - CLAUDE.md forbids a second name for a quantity an existing setting expresses. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
@@ -391,4 +391,33 @@ The close results go to bench/v3.2.0/results-cc-close-<describe>.md. It states t
 
 ## 11. Stage log
 
-(empty)
+- **CC-S0** measured at `5745d82e` on `65dc45c5`
+  (`bench/v3.2.0/results-cc-s0-premise-v3.2.0-178-g65dc45c5.md`): the
+  other join order saves 21.6-60.7 % of server CPU on seven of eight cells
+  (s1 compare-all at 200 to 10,000 results, s2 customer-statement at 200 to
+  10,000 cargos); at s2's driver defaults (200,000 cargos) 0.7 %, a cell
+  real sizes tell apart from the 10,000-cargo one and the constant prior
+  cannot. CB's search costs about 21 us on the 3-relation s1 backtest read
+  (+1.7 % at 60,480 rows, +32 % at 200). The prior's formula is 0.75-0.98x
+  on 30 relations of height 2-3 and 4-6.8x off on small height-1 ones, so
+  the exact root slot count at height 1 is required (§1). The seed step's
+  time is not executed (no steward at that commit). Gate met.
+- **CC-S1**: the data-free corrections. The stage review (three lenses,
+  every finding put to two skeptics; 20 survived, 1 refuted) found the
+  added-sort guard resting on an estimate that cannot know a reply's size:
+  **CC-Q10 revised** - an order that adds a sort the written order elides is
+  never taken unless LIMIT bounds it to a top-N heap within `sort_max_rows`
+  (a bounded sort is priced at `out log2(limit+offset)`); adopted on the
+  standing go-ahead. Also applied: the Transition bound for a join key too,
+  `exec::StateCount` replacing a re-implemented state set, `PlanOptions`
+  moved beside the cost model and carried whole, the margin seeded into the
+  minimum, `EmitsTupleKeyOrder` named with no `default` and an enumeration
+  test, the end-to-end elision test on data whose arrival order disagrees,
+  the shared `tests/unordered_reply.hpp` in the Cabin and index suites, a
+  planned-order cap test, the manual's keyset advice (a key unique in the
+  reply, `[quiet-wrong]` label), and every stale `ChainCost` / written-order
+  line in parser-v2, plan_printer.hpp, ast.hpp and step_compiler.hpp.
+  **Rejected**: the multiset rule in the Waystone suite - its five
+  configurations do not change a plan input, so its byte comparison stays
+  the stronger test; dropping the inert join half of the unique bound - kept
+  with a comment, S3 makes it live.

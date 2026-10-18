@@ -178,6 +178,30 @@ constexpr bool IsTrailReplayable(AccessKind kind) noexcept {
 // recorded, which no per-tuple validation can detect. So a trail may
 // prefetch for an index step and may never replace one.
 
+// Whether a driving step of `kind` emits its rows in tuple key order - the
+// premise of eliding `ORDER BY <driving tuple key> ASC`
+// (step_compiler.cpp's elision). A walk or range does, page by page; an
+// index step sorts its tuple keys back into that order (IX8a); a lookup or
+// probe emits one row. A Cabin probe is excluded by name (BB). **No
+// `default`**: a kind added to the enum fails to compile here until it is
+// judged, which is the guard a planner that moves any relation onto slot 0
+// needs (CC §7).
+constexpr bool EmitsTupleKeyOrder(AccessKind kind) noexcept {
+    switch (kind) {
+        case AccessKind::kLookup:
+        case AccessKind::kProbe:
+        case AccessKind::kRange:
+        case AccessKind::kIndexProbe:
+        case AccessKind::kIndexRange:
+        case AccessKind::kFilterScan:
+        case AccessKind::kScan:
+            return true;
+        case AccessKind::kCabinProbe:
+            return false;
+    }
+    return false;
+}
+
 // The inclusive tuple key bounds a kRange step walks between.
 //
 // A **hint on top of the residual**, never a replacement for it: the

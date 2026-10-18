@@ -46,6 +46,11 @@ namespace kds::exec {
 std::optional<std::string> StateKey(const catalog::SysColumnRow& column,
                                     const parser::AstValue& value);
 
+// How many states `t` names - its column's distinct values can be no more
+// (CN-4 T4: the set is closed). The join planner's equality bound reads it
+// (CC-Q11). At least 1: `ON INSERT` is required.
+std::size_t StateCount(const catalog::TransitionRef& t);
+
 // The column types a Transition may govern (CN-4 T5): the signed integers,
 // `char(N)` and `varchar(N)`.
 bool IsTransitionColumnType(std::uint32_t type_val) noexcept;

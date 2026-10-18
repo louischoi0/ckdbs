@@ -32,7 +32,7 @@ So the normative rule, which every consumer is bound by:
 
 > **A waystone may replace a lookup. It may never replace a search.**
 
-A pattern *step* whose authoritative work is a keyed lookup — a tuple key equality, or a chain step probing the next relation by tuple key (`docs/spec/parser-v2.md` I12: the statement is the chain) — may be served from the trail, because completeness for that step follows from tuple key uniqueness, not from the trail. A step that must *search* — a non-tuple-key predicate, a range, a scan — runs authoritatively no matter what the trail says; the trail may only prefetch for it.
+A pattern *step* whose authoritative work is a keyed lookup — a tuple key equality, or a chain step probing the next relation by tuple key (`docs/spec/parser-v2.md` I12: the chain is the plan) — may be served from the trail, because completeness for that step follows from tuple key uniqueness, not from the trail. A step that must *search* — a non-tuple-key predicate, a range, a scan — runs authoritatively no matter what the trail says; the trail may only prefetch for it.
 
 Replay contract, normative, per entry:
 
@@ -99,7 +99,7 @@ It is a hash directory, not a radix index over a dense key, so **collisions are 
 
 Waystone pages are **headered** — `PageType::kWaystone`, carrying the common page header like every other page class. Nothing here is addressed by shift and mask (a trail is read sequentially), so the payload need not tile the page exactly, and the pages keep checksums and a `page_lsn`.
 
-Page body: a waystone header, then entries in **execution order**.
+Page body: a waystone header, then entries in **execution order**; an entry's `step_id` is its relation's written position (CB-Q3), so a trail recorded under one join order is read by `(step_id, tuple key)` under another.
 
 Waystone header:
 
@@ -174,6 +174,6 @@ All deterministic (injected clock, simulated scheduling; `docs/rules/rules.md` �
 2. **Codec & directory:** header and entry round-trips; offset/size asserts; walk correctness including lazy allocation and depth growth; `arg_hash` collision resolves to a miss via the header check, never to a foreign trail.
 3. **The advisory contract — the test that must never be allowed to fail.** For a fixed query set, results are **byte-identical** across five configurations: recording on, recording off, replay off, all waystones deleted mid-run, and a deliberately corrupted trail whose entries name valid pages and slots holding *different* tuples. The last case proves the §2 rule-1 identity check is load-bearing.
 4. **Lookup-not-search:** a pattern with a non-tuple-key predicate must produce identical results and must be shown (instrumented) to still perform its search. A trail that shortcuts a search is a correctness bug, not an optimization, and this is the test that catches it.
-5. **Cross-relation replay:** a `kJoinSelect` trail spanning three relations replays in `step_id` order and produces the same rows in the same order as the authoritative path.
+5. **Cross-relation replay:** a `kJoinSelect` trail spanning three relations replays by `step_id` and produces the same rows as the authoritative path - in the same order for one plan; across plans the rows match as a multiset, since without `ORDER BY` the order is the planner's (`parser-v2.md` I12).
 6. **MVCC:** a trail recorded under one read view, replayed under another, returns exactly what the authoritative path returns — including a row deleted since recording (invisible) and a row inserted since (present via the authoritative search step, absent from the trail).
 7. **Epoch validation:** a page whose epoch is bumped renders its entries untrusted; re-recording restores them.

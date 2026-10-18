@@ -1302,6 +1302,9 @@ some `n` rows of the reply. Write `ORDER BY` for a defined slice.
   count. What the `LIMIT` does bound is memory — only `offset + limit`
   rows are held. For deep pagination over an ordered column, prefer keyset
   form.
+- A planned join may sort an `ORDER BY` that the written order would have
+  served for free (the driving relation's tuple key, ascending): it does so
+  only under a `LIMIT` within `sort_max_rows`, a top-N that cannot fail.
 - A sort holding more than `sort_max_rows` rows **fails the statement**
   naming the key. It never returns a partial ordering, and it never
   spills to disk. Adding a `LIMIT` is usually the answer: it caps what is
@@ -1323,7 +1326,14 @@ some `n` rows of the reply. Write `ORDER BY` for a defined slice.
   about relations, not about `sys.*`.
 - `OFFSET` costs what it skips — qualifying rows are examined and
   discarded, O(offset), since no head seek exists. For deep pagination
-  prefer keyset form: `WHERE id > <last seen> LIMIT n`. It walks from the
+  prefer keyset form: `WHERE id > <last seen> ORDER BY id LIMIT n`. **Write
+  the `ORDER BY`, and page on a key unique in the reply.** Over a join the
+  engine chooses the order rows arrive in, and that choice can change
+  between two pages; and a 1:N join repeats the driving key, so a page
+  ending inside one key's group would skip the rest of it on the next
+  page. Order by the driving key and the joined relation's tuple key, and
+  page with `a.id > x OR (a.id = x AND b.id > y)`. *[quiet-wrong] if
+  ignored: rows are skipped or repeated with no error.* It walks from the
   head of the relation until it passes `<last seen>`; bounding the window
   above too (`WHERE id > <last seen> AND id <= <last seen + span>`) seeks to it
   when nothing else serves the statement (see the access-path note under WHERE).

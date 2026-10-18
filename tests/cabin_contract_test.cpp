@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <gtest/gtest.h>
 
+#include "unordered_reply.hpp"
+
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -181,31 +183,12 @@ std::vector<std::string> Reference(int rounds = 4) {
     return RunAll(db, rounds);
 }
 
-// A reply with its rows sorted when its statement has no ORDER BY: the join
-// planner may run a join in another order once a Cabin changes a step's
-// kind, and arrival order is no contract then (CB-Q1 (a)) - so the rows,
-// not their order, are what a Cabin must not change.
-std::string Canonical(const std::string& reply, const std::string& sql) {
-    if (sql.find("ORDER BY") != std::string::npos) return reply;
-    const std::string sep = "\\n";
-    std::vector<std::string> lines;
-    std::size_t at = 0;
-    for (std::size_t next; (next = reply.find(sep, at)) != std::string::npos; at = next + 2) {
-        lines.push_back(reply.substr(at, next - at));
-    }
-    lines.push_back(reply.substr(at));
-    std::sort(lines.begin() + 1, lines.end());  // the header stays first
-    std::string out = lines.front();
-    for (std::size_t i = 1; i < lines.size(); ++i) out += sep + lines[i];
-    return out;
-}
-
 void ExpectSame(const std::vector<std::string>& got, const std::vector<std::string>& want,
                 const char* what) {
     ASSERT_EQ(got.size(), want.size()) << what;
     for (std::size_t i = 0; i < want.size(); ++i) {
         const std::string& sql = Queries()[i % Queries().size()];
-        EXPECT_EQ(Canonical(got[i], sql), Canonical(want[i], sql))
+        EXPECT_EQ(testing_reply::Unordered(got[i], sql), testing_reply::Unordered(want[i], sql))
             << what << " diverged at reply " << i << " (" << sql << ")";
     }
 }

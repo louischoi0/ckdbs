@@ -33,8 +33,9 @@ default with what is shared declared, deterministic testability).
 ## 2. Execution Model
 
 The session core runs the statement end to end: it parses, compiles the
-step chain (the written-order contract of `docs/spec/parser-v2.md` — *the
-statement is the chain*, never silently reordered) from its catalog cache,
+step chain (`docs/spec/parser-v2.md` I12 - *the chain is the plan*: the
+written order, or the join planner's for a planned block, the same on every
+core for one catalog) from its catalog cache,
 and executes every step of it itself, reading every page through the
 instance's one frame table (CC7, CC11). There is **one path**.
 

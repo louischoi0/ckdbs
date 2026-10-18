@@ -6,6 +6,9 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/join_order.hpp"
+#include "kds/exec/step_compiler.hpp"
+#include "kds/parser/parser.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
@@ -52,6 +55,34 @@ protected:
     }
 
     std::string Plan(const std::string& sql) { return Run("ANALYZE " + sql); }
+
+    // The statement compiled in its written order, or planned under
+    // `plan`, against the dispatcher's catalog.
+    exec::StepChain Compile(const std::string& sql, const exec::PlanOptions* plan = nullptr) {
+        auto parsed = parser::Parse(sql);
+        EXPECT_TRUE(parsed.ok()) << parsed.status().message();
+        auto chain = exec::Compile(boot_->catalog, std::get<parser::SelectStmt>(parsed.value()),
+                                   nullptr, nullptr, nullptr, plan);
+        EXPECT_TRUE(chain.ok()) << sql << ": " << chain.status().message();
+        return chain.ok() ? std::move(chain.value()) : exec::StepChain{};
+    }
+
+    // The cost model's estimate of the written chain, with every bound the
+    // planner would read.
+    exec::ChainEstimate Estimate(const std::string& sql) {
+        const exec::StepChain chain = Compile(sql);
+        std::vector<const catalog::TableAccess*> access;
+        for (const exec::Step& step : chain.steps) {
+            auto a = boot_->catalog.InitTableAccess(step.rel_oid);
+            EXPECT_TRUE(a.ok());
+            access.push_back(a.ok() ? a.value() : nullptr);
+        }
+        exec::CostInputs in;
+        in.written_sorted = chain.sorted();
+        in.base_step_id = chain.steps.empty() ? 0 : chain.steps[0].step_id;
+        in.written_access = access;
+        return exec::EstimateChain(chain, in);
+    }
 
     // u(id, code): ids 1..4. l(id, uid, v): uid 1..4 and 9, two rows each,
     // v = 10 * uid + row. No index, so a join on l.uid is a walked join.
@@ -244,6 +275,135 @@ TEST_F(JoinPlannerTest, ABlockWithASubqueryKeepsItsWrittenOrder) {
         "EXISTS (SELECT l2.id FROM l AS l2 WHERE l2.uid = u.id)";
     EXPECT_EQ(Rows(sql), std::vector<std::string>{"103"});
     EXPECT_EQ(Plan(sql).find("reordered"), std::string::npos);
+}
+
+// ---- CC-S1: the data-free corrections -------------------------------------
+
+TEST_F(JoinPlannerTest, AUniqueIndexBoundsARowOnlyWhenEveryKeyColumnIsBound) {
+    // CC-Q11: UNIQUE(a, b) says nothing about `a` alone.
+    Ok("CREATE TABLE p (id int64, a int64, b int64) BTREE");
+    Ok("CREATE UNIQUE INDEX p_ab ON p (a, b)");
+    EXPECT_EQ(Estimate("SELECT p.id FROM p WHERE p.a = 1 AND p.b = 2").rows, 1.0);
+    EXPECT_GT(Estimate("SELECT p.id FROM p WHERE p.a = 1").rows, 1.0);
+}
+
+TEST_F(JoinPlannerTest, ATransitionsStatesRaiseAnEqualitysSelectivityNeverLowerIt) {
+    // Two states: an equality keeps at least half the rows - the bound
+    // raises the constant 1 %, and a column with no Transition keeps it.
+    Ok("CREATE TABLE o (id int64, st varchar) BTREE");
+    Ok("CREATE TABLE q (id int64, st varchar) BTREE");
+    Ok("CREATE TRANSITION flow ON o(st) ON INSERT ('new') ON UPDATE ('new' => 'done')");
+    const double with_states = Estimate("SELECT o.id FROM o WHERE o.st = 'new'").rows;
+    const double without = Estimate("SELECT q.id FROM q WHERE q.st = 'new'").rows;
+    EXPECT_DOUBLE_EQ(with_states, exec::kAssumedRelationRows / 2.0);
+    EXPECT_DOUBLE_EQ(without, exec::kAssumedRelationRows * exec::kEqualitySelectivity);
+}
+
+TEST_F(JoinPlannerTest, TwoRangesInOneHalfOctaveCostTheSame) {
+    // CC-Q12: the span is read as its band's centre, so a plan is a function
+    // of the band and not of the literal.
+    Fill();
+    const double a = Estimate("SELECT u.code FROM u WHERE u.id BETWEEN 1 AND 100").cost;
+    const double b = Estimate("SELECT u.code FROM u WHERE u.id BETWEEN 1 AND 105").cost;
+    const double c = Estimate("SELECT u.code FROM u WHERE u.id BETWEEN 1 AND 1000").cost;
+    EXPECT_DOUBLE_EQ(a, b);
+    EXPECT_LT(a, c);
+}
+
+TEST_F(JoinPlannerTest, ALimitWithoutASortPricesOnlyThePrefixItReads) {
+    Fill();
+    const exec::ChainEstimate all = Estimate("SELECT l.v FROM l");
+    const exec::ChainEstimate ten = Estimate("SELECT l.v FROM l LIMIT 10");
+    EXPECT_EQ(all.rows, ten.rows) << "LIMIT moves the cost, not the estimate";
+    EXPECT_LT(ten.cost, all.cost / 1000.0);
+}
+
+TEST_F(JoinPlannerTest, AReorderedChainKeepsTheSortItsDriverNoLongerElides) {
+    // [quiet-wrong] guard (CC §7): `ORDER BY u.id` is elided while u drives.
+    // Planned under LIMIT, l drives - so the chain must sort, and l's rows
+    // are inserted against u.id's order, so a lost sort would show in the
+    // reply.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");
+    for (int i = 1; i <= 4; ++i) Ok("INSERT INTO u VALUES (" + std::to_string(100 + i) + ")");
+    for (int uid : {4, 3, 2, 1}) Ok("INSERT INTO l VALUES (" + std::to_string(uid) + ", 7)");
+    const std::string sql = "SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 7 "
+                            "ORDER BY u.id LIMIT 3";
+    const std::string plan = Plan(sql);
+    ASSERT_NE(plan.find("reordered=1"), std::string::npos) << plan;
+    exec::PlanOptions options;
+    const exec::StepChain chain = Compile(sql, &options);
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[0].step_id, 1u) << "l drives";
+    EXPECT_TRUE(chain.sorted()) << "the elision belonged to u, which no longer drives";
+    EXPECT_EQ(Run(sql), "u.code\\n101\\n102\\n103");
+}
+
+TEST_F(JoinPlannerTest, AnOrderThatAddsAnUnboundedSortIsNeverTaken) {
+    // CC-Q10: the written order elides `ORDER BY u.id`; the order the model
+    // prefers would sort a reply whose size no estimate knows, and could
+    // meet `sort_max_rows` where the written order streams. Under a LIMIT
+    // within the cap the sort is a top-N heap that cannot refuse, and the
+    // order is taken; under one past the cap it is not.
+    Fill();
+    const std::string base = "SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31 ORDER BY u.id";
+    exec::PlanOptions options;
+    EXPECT_EQ(Compile(base, &options).steps[0].step_id, 0u) << "u still drives";
+    EXPECT_FALSE(Compile(base, &options).sorted());
+    EXPECT_EQ(Compile(base + " LIMIT 5", &options).steps[0].step_id, 1u) << "a bounded sort";
+    options.sort_max_rows = 4;
+    EXPECT_EQ(Compile(base + " LIMIT 5", &options).steps[0].step_id, 0u)
+        << "a LIMIT past the cap is no bound";
+}
+
+TEST_F(JoinPlannerTest, ATransitionBoundsAJoinKeysSelectivityToo) {
+    // CC-Q11: a join on a column with two states keeps at least half the
+    // rows per outer row, not the constant model's one.
+    Ok("CREATE TABLE o (id int64, st varchar) BTREE");
+    Ok("CREATE TABLE q (id int64, st varchar) BTREE");
+    Ok("CREATE TRANSITION flow ON o(st) ON INSERT ('new') ON UPDATE ('new' => 'done')");
+    const double governed = Estimate("SELECT q.id FROM q JOIN o ON o.st = q.st").rows;
+    const double free = Estimate("SELECT o.id FROM o JOIN q ON q.st = o.st").rows;
+    EXPECT_DOUBLE_EQ(governed, exec::kAssumedRelationRows * exec::kAssumedRelationRows / 2.0);
+    EXPECT_DOUBLE_EQ(free, exec::kAssumedRelationRows);
+}
+
+TEST_F(JoinPlannerTest, EveryBuildCapAnswersTheSameRowsPlanned) {
+    // The cap is a planner input since CB-S2 (a build past it is priced as
+    // the walk), so the inner-build contract's "every cap, the same rows"
+    // must hold planned too - as a multiset, since the order may differ.
+    Fill();
+    const std::vector<std::string> sqls{
+        "SELECT u.code, l.v FROM u JOIN l ON l.uid = u.id",
+        "SELECT u.code, l.v FROM l JOIN u ON l.uid = u.id WHERE l.v > 15",
+        "SELECT u.code, l.v FROM u JOIN l ON l.uid = u.id WHERE u.id BETWEEN 2 AND 4",
+    };
+    for (const std::string& sql : sqls) {
+        dispatcher_->set_join_build_max_rows(exec::kDefaultJoinBuildMaxRows);
+        const std::vector<std::string> want = Rows(sql);
+        for (std::size_t cap : {std::size_t{0}, std::size_t{2}, std::size_t{4}}) {
+            dispatcher_->set_join_build_max_rows(cap);
+            EXPECT_EQ(Rows(sql), want) << "cap " << cap << ": " << sql;
+        }
+    }
+}
+
+TEST_F(JoinPlannerTest, EveryAccessKindIsJudgedForTheOrderByElision) {
+    // CC §7: a planner that puts any relation on slot 0 relies on this
+    // predicate; `EmitsTupleKeyOrder` has no default, so a new kind fails to
+    // compile there, and fails here until its verdict is written down.
+    using exec::AccessKind;
+    const std::vector<std::pair<AccessKind, bool>> verdicts{
+        {AccessKind::kLookup, true},     {AccessKind::kProbe, true},
+        {AccessKind::kRange, true},      {AccessKind::kCabinProbe, false},
+        {AccessKind::kIndexProbe, true}, {AccessKind::kIndexRange, true},
+        {AccessKind::kFilterScan, true}, {AccessKind::kScan, true},
+    };
+    ASSERT_EQ(verdicts.size(), static_cast<std::size_t>(AccessKind::kScan) + 1)
+        << "a kind was added: judge it here";
+    for (const auto& [kind, emits] : verdicts) {
+        EXPECT_EQ(exec::EmitsTupleKeyOrder(kind), emits) << static_cast<int>(kind);
+    }
 }
 
 }  // namespace

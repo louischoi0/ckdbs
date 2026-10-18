@@ -62,6 +62,8 @@ Status Violation(const catalog::TableAccess& access, const catalog::TransitionRe
 
 }  // namespace
 
+std::size_t StateCount(const catalog::TransitionRef& t) { return StateSet(t).size(); }
+
 bool IsTransitionColumnType(std::uint32_t type_val) noexcept {
     return IsIntegerType(type_val) || type_val == catalog::kTypeValChar ||
            type_val == catalog::kTypeValVarchar;

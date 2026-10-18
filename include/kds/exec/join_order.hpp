@@ -1,18 +1,24 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <span>
 
+#include "kds/catalog/schema.hpp"
+#include "kds/exec/budget.hpp"
+#include "kds/exec/sort.hpp"
 #include "kds/exec/step_chain.hpp"
 
 // The join order's cost model (instructions/v3.2.0/workorder-cb-join-planner.md
-// §3.2, CB-Q2 (a)).
+// §3.2; instructions/v3.2.0/workorder-cc-plan-statistics.md §3).
 //
-// **Data-free.** A cost is a pure function of a compiled chain: its kinds,
-// its residual's literals and its build annotations - never a row count, a
-// page count or a statistic - so one statement over one catalog compiles to
-// one plan, the property `f(shape, catalog)` names (docs/spec/index.md §9).
-// The constants below are the model, not measurements: each says what it
-// stands for, and none is a setting.
+// A cost is a function of a compiled chain - its kinds, its residual's
+// literals (a range's span read as its half-octave band), its build
+// annotations, its sort and LIMIT - of the catalog's identifier bounds (a
+// unique index, a Transition's states) and of the statement's limits. It
+// reads no row count, page count or statistic, so one statement over one
+// catalog compiles to one plan. The constants below are the model, not
+// measurements: each says what it stands for, and none is a setting.
 //
 // The unit is one row visited by a walk.
 
@@ -45,10 +51,42 @@ inline constexpr double kJoinSelectivity = 1.0 / kAssumedRelationRows;
 inline constexpr double kBuildInsertCost = 2.0;
 inline constexpr double kBuildProbeCost = 1.0;
 
-// The estimated cost of running `chain`'s top-level steps in their order.
-// Sub-chains are not costed: a reordered block carries none. A build the
-// model expects to bucket more than `build_cap` rows is costed as the
-// per-row walk the executor falls back to.
-double ChainCost(const StepChain& chain, std::size_t build_cap);
+// The statement limits the planner prices against, handed to `Compile` by a
+// client's SELECT under `join_order = planned` (CB-S2, CC-S1).
+struct PlanOptions {
+    // `join_build_max_rows`: a build the model expects to bucket more rows
+    // is priced as the per-row walk the executor falls back to; 0, no build.
+    std::size_t join_build_max_rows = kDefaultJoinBuildMaxRows;
+    // `sort_max_rows`: whether a sort an order adds is bounded by LIMIT
+    // (CC-Q10).
+    std::size_t sort_max_rows = kDefaultSortMaxRows;
+};
+
+// What the model reads besides the chain itself (CC-S1).
+struct CostInputs {
+    PlanOptions limits;
+    // Whether the written order's chain sorts. An order that adds a sort the
+    // written order elides is never taken unless LIMIT bounds the sort to a
+    // top-N heap, which cannot refuse (CC-Q10): a reply's size is a fact no
+    // estimate here knows, so an unbounded added sort could meet
+    // `sort_max_rows` where the written order streams.
+    bool written_sorted = false;
+    // The block's relations in **written** order, and the block's first step
+    // id: step k's relation is `written_access[steps[k].step_id -
+    // base_step_id]` (CB-Q3). Read for identifier bounds alone - a unique
+    // index and a Transition's states (CC-Q11). Empty, no bound is read.
+    std::uint32_t base_step_id = 0;
+    std::span<const catalog::TableAccess* const> written_access;
+};
+
+struct ChainEstimate {
+    double cost = 0;  // in walked rows; +inf for an order the planner must not take
+    double rows = 0;  // the reply's rows before LIMIT, at least 1
+};
+
+// The estimated cost of running `chain`'s top-level steps in their order,
+// with its sort or its LIMIT (CC-Q10). Sub-chains are not costed: a planned
+// block carries none.
+ChainEstimate EstimateChain(const StepChain& chain, const CostInputs& in);
 
 }  // namespace kds::exec
