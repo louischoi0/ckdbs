@@ -446,6 +446,100 @@ TEST_F(StepCompileTest, ADerivedEqualityPromotesAWrittenRangeToALookup) {
     EXPECT_TRUE(chain.steps[0].residual[2].derived);
 }
 
+// ---- Range bounds through a join key (CB-S1) ------------------------------
+
+TEST_F(StepCompileTest, ARangeOnTheJoinKeyBoundsTheOtherSide) {
+    // `acct.id BETWEEN 1 AND 16` with `trade.acct_id = acct.id` implies both
+    // bounds on `trade.acct_id`: appended to step 1, marked derived, after
+    // the written ON conjunct.
+    const StepChain chain = MustCompile(
+        "SELECT trade.sym FROM acct JOIN trade ON trade.acct_id = acct.id "
+        "WHERE acct.id BETWEEN 1 AND 16");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kRange);
+    const std::vector<StepPredicate>& r = chain.steps[1].residual;
+    ASSERT_EQ(r.size(), 3u);
+    EXPECT_FALSE(r[0].derived);
+    for (std::size_t i : {1u, 2u}) {
+        EXPECT_TRUE(r[i].derived);
+        EXPECT_EQ(r[i].lhs.col_pos, 1);
+        EXPECT_EQ(r[i].rhs.kind, OperandKind::kLiteral);
+    }
+    EXPECT_EQ(r[1].op, parser::CompareOp::kGte);
+    EXPECT_EQ(r[1].rhs.literal.int_val, 1);
+    EXPECT_EQ(r[2].op, parser::CompareOp::kLte);
+    EXPECT_EQ(r[2].rhs.literal.int_val, 16);
+}
+
+TEST_F(StepCompileTest, ADerivedRangeOntoTheTupleKeyMakesTheStepARange) {
+    // The bound written on the non-key side keys the tuple key side.
+    const StepChain chain = MustCompile(
+        "SELECT acct.name FROM acct JOIN trade ON acct.id = trade.acct_id "
+        "WHERE trade.acct_id >= 3 AND trade.acct_id < 9");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kRange);
+    ASSERT_TRUE(chain.steps[0].range.has_value());
+    EXPECT_EQ(chain.steps[0].range->low, 3u);
+    EXPECT_EQ(chain.steps[0].range->high, 8u);  // the strict end, inclusive
+}
+
+TEST_F(StepCompileTest, AWrittenBoundOrAnEqualityLiteralBlocksTheDerivedRange) {
+    // A member's own written bound in a direction keeps that direction
+    // underived; the other direction still crosses.
+    {
+        const StepChain chain = MustCompile(
+            "SELECT trade.sym FROM acct JOIN trade ON trade.acct_id = acct.id "
+            "WHERE acct.id BETWEEN 1 AND 16 AND trade.acct_id > 4");
+        const std::vector<StepPredicate>& r = chain.steps[1].residual;
+        ASSERT_EQ(r.size(), 3u);  // ON, written `> 4`, derived `<= 16`
+        EXPECT_FALSE(r[1].derived);
+        EXPECT_TRUE(r[2].derived);
+        EXPECT_EQ(r[2].op, parser::CompareOp::kLte);
+    }
+    // An equality-to-literal in the class: the equality pass's conjunct is
+    // stronger, and no range is appended beside it.
+    {
+        const StepChain chain = MustCompile(
+            "SELECT trade.sym FROM acct JOIN trade ON trade.acct_id = acct.id "
+            "WHERE acct.id BETWEEN 1 AND 16 AND acct.id = 5");
+        const std::vector<StepPredicate>& r = chain.steps[1].residual;
+        ASSERT_EQ(r.size(), 2u);  // ON, derived `= 5`
+        EXPECT_EQ(r[1].op, parser::CompareOp::kEq);
+    }
+}
+
+TEST_F(StepCompileTest, ARangeCrossesOnlyAnIdenticalDescriptor) {
+    Create("CREATE TABLE narrow (id int64, small int32)");
+    const StepChain chain = MustCompile(
+        "SELECT trade.sym FROM narrow JOIN trade ON trade.acct_id = narrow.small "
+        "WHERE narrow.small BETWEEN 1 AND 9");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[1].residual.size(), 1u);
+}
+
+TEST_F(StepCompileTest, ARangeNeverCrossesANonEqualityJoinOrABoolTree) {
+    // `<` between the columns is no equivalence; an `OR` is no top-level
+    // conjunct (BU-R5).
+    {
+        // `trade.id` shares `acct.id`'s class and takes both bounds;
+        // `trade.acct_id`, only `<` it, takes none.
+        const StepChain chain = MustCompile(
+            "SELECT trade.sym FROM acct JOIN trade ON trade.id = acct.id "
+            "WHERE trade.acct_id < acct.id AND acct.id BETWEEN 1 AND 16");
+        const std::vector<StepPredicate>& r = chain.steps[1].residual;
+        ASSERT_EQ(r.size(), 4u);  // ON, written `<`, derived `trade.id` >= and <=
+        for (const StepPredicate& p : r) {
+            if (p.derived) EXPECT_EQ(p.lhs.col_pos, 0) << "only trade.id is in the class";
+        }
+    }
+    {
+        const StepChain chain = MustCompile(
+            "SELECT trade.sym FROM acct JOIN trade ON trade.acct_id = acct.id "
+            "WHERE (acct.id < 5 OR acct.id > 9)");
+        EXPECT_EQ(chain.steps[1].residual.size(), 1u);
+    }
+}
+
 // `AParamOnTheJoinKeyPropagatesAndIsMarkedDerived` stood here: it compiled a
 // `CREATE PATTERN` body so a `$p` could reach a join key, and checked that
 // equality propagation carried it and marked the derived conjunct. Both

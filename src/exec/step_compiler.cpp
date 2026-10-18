@@ -757,6 +757,14 @@ bool IsOwnColumn(const ColumnRef& ref, std::uint16_t slot) {
     return ref.up == 0 && ref.rel_slot == slot;
 }
 
+// The descriptor guard every deferred-value form shares (equality
+// propagation states the argument): the value crossing was produced under
+// one column's descriptor, and only an identical (type_val, len) makes it
+// byte-valid under the other's.
+bool SameDescriptor(const catalog::SysColumnRow& a, const catalog::SysColumnRow& b) {
+    return a.type_val == b.type_val && a.len == b.len;
+}
+
 // ---- Equality propagation (docs/spec/parser-v2.md §5) -------------------------
 //
 // From `A = B` - two columns of this chain - and `B = <literal>`, append
@@ -813,41 +821,55 @@ void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predica
         classes[b].clear();
     }
 
-    // A written equality-to-literal on this exact column, in the written
-    // prefix alone - derived conjuncts never beget further ones.
-    const auto has_own_literal = [&predicates, written](const ColumnRef& ref) {
-        for (std::size_t i = 0; i < written; ++i) {
-            const StepPredicate& p = predicates[i];
-            if (p.op == parser::CompareOp::kEq && p.rhs.kind == OperandKind::kLiteral &&
-                p.lhs == ref) {
-                return true;
-            }
-        }
-        return false;
+    // One derivation rule for the three kinds a literal conjunct can be:
+    // an equality (§5), a lower bound and an upper bound (CB-S1,
+    // workorder-cb-join-planner.md §3.1). For each member of a class and
+    // each kind it carries no conjunct of yet - written, or derived by an
+    // earlier kind - the first written conjunct of that kind on another
+    // member crosses, under an identical descriptor. Equality runs first,
+    // so a member that gains one takes no bound: the equality is the
+    // stronger conjunct.
+    using Kind = bool (*)(parser::CompareOp);
+    const Kind is_equality = [](parser::CompareOp op) { return op == parser::CompareOp::kEq; };
+    const Kind is_lower = [](parser::CompareOp op) {
+        return op == parser::CompareOp::kGt || op == parser::CompareOp::kGte;
     };
-
-    for (const std::vector<ColumnRef>& cls : classes) {
-        for (const ColumnRef& member : cls) {
-            if (has_own_literal(member)) continue;
-            const catalog::SysColumnRow& dst = ColumnAt(scope, member);
-            for (std::size_t i = 0; i < written; ++i) {
-                const StepPredicate& p = predicates[i];
-                if (p.op != parser::CompareOp::kEq) continue;
-                if (p.rhs.kind != OperandKind::kLiteral) continue;
-                const bool in_class = std::any_of(cls.begin(), cls.end(),
-                                                  [&p](const ColumnRef& m) { return m == p.lhs; });
-                if (!in_class) continue;
-                const catalog::SysColumnRow& src = ColumnAt(scope, p.lhs);
-                if (dst.type_val != src.type_val || dst.len != src.len) continue;
-                StepPredicate derived;
-                derived.lhs = member;
-                derived.op = parser::CompareOp::kEq;
-                derived.rhs = p.rhs;
-                derived.derived = true;
-                // Constructed whole before the push_back invalidates `p`,
-                // and the break keeps anything dangling from being read.
-                predicates.push_back(std::move(derived));
-                break;
+    const Kind is_upper = [](parser::CompareOp op) {
+        return op == parser::CompareOp::kLt || op == parser::CompareOp::kLte;
+    };
+    const auto literal_on = [&predicates](const ColumnRef& ref, Kind kind, std::size_t end) {
+        return std::any_of(predicates.begin(), predicates.begin() + static_cast<std::ptrdiff_t>(end),
+                           [&](const StepPredicate& p) {
+                               return p.rhs.kind == OperandKind::kLiteral && p.lhs == ref &&
+                                      kind(p.op);
+                           });
+    };
+    for (const Kind kind : {is_equality, is_lower, is_upper}) {
+        for (const std::vector<ColumnRef>& cls : classes) {
+            for (const ColumnRef& member : cls) {
+                // Written conjuncts and those derived so far, so a member
+                // given an equality above takes no bound here.
+                if (literal_on(member, kind, predicates.size())) continue;
+                if (kind != is_equality && literal_on(member, is_equality, predicates.size())) {
+                    continue;
+                }
+                const catalog::SysColumnRow& dst = ColumnAt(scope, member);
+                for (std::size_t i = 0; i < written; ++i) {
+                    const StepPredicate& p = predicates[i];
+                    if (p.rhs.kind != OperandKind::kLiteral || !kind(p.op)) continue;
+                    if (std::find(cls.begin(), cls.end(), p.lhs) == cls.end()) continue;
+                    if (!SameDescriptor(dst, ColumnAt(scope, p.lhs))) continue;
+                    StepPredicate derived;
+                    derived.lhs = member;
+                    derived.op = p.op;
+                    derived.rhs = p.rhs;
+                    derived.derived = true;
+                    // Constructed whole before the push_back invalidates
+                    // `p`, and the break keeps anything dangling from being
+                    // read.
+                    predicates.push_back(std::move(derived));
+                    break;
+                }
             }
         }
     }
@@ -978,11 +1000,57 @@ struct ColumnBounds {
     const parser::AstValue* high = nullptr;
 };
 
+// The correlated-equality shape both structure arms select on: a kEq
+// column-column conjunct with one side owned by this step and the other
+// available before it runs - an earlier slot, or an enclosing chain's row
+// (`up > 0`), which is bound before this chain opens. Both orientations
+// are examined, as the tuple-key-probe arm does and for its reason; a
+// same-relation equality excludes itself through the availability test.
+// One home for the rule, so the index and cabin arms cannot drift.
+struct CorrelatedEquality {
+    ColumnRef own;
+    ColumnRef other;
+};
+std::optional<CorrelatedEquality> CorrelatedEqualityOf(const StepPredicate& pred,
+                                                       std::uint16_t slot) {
+    if (pred.op != parser::CompareOp::kEq) return std::nullopt;
+    if (pred.rhs.kind != OperandKind::kColumn) return std::nullopt;
+    CorrelatedEquality out;
+    if (IsOwnColumn(pred.lhs, slot)) {
+        out.own = pred.lhs;
+        out.other = pred.rhs.column;
+    } else if (IsOwnColumn(pred.rhs.column, slot)) {
+        out.own = pred.rhs.column;
+        out.other = pred.lhs;
+    } else {
+        return std::nullopt;
+    }
+    if (out.other.up == 0 && AvailableAt(out.other) >= slot) return std::nullopt;
+    return out;
+}
+
+// Whether a conjunct may choose this step's access. A derived range bound
+// (CB-S1) on a column the step already keys per outer row - the own side
+// of a correlated equality - may not: the range is a superset of every
+// outer row's equality match, so letting it pick an index range or a
+// predicate Cabin would walk the whole range per outer row where the
+// correlated arm descends to the matches (workorder-cb-join-planner.md
+// §3.1: plans may only be strengthened). It still filters, and still
+// narrows a build.
+bool SteersAccess(const Step& step, std::uint16_t slot, const StepPredicate& pred) {
+    if (!pred.derived || pred.op == parser::CompareOp::kEq) return true;
+    return std::none_of(step.residual.begin(), step.residual.end(), [&](const StepPredicate& p) {
+        const auto eq = CorrelatedEqualityOf(p, slot);
+        return eq.has_value() && eq->own == pred.lhs;
+    });
+}
+
 ColumnBounds BoundsOnColumn(const Step& step, std::uint16_t slot, std::uint16_t col_pos) {
     ColumnBounds out;
     for (const StepPredicate& pred : step.residual) {
         if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != col_pos) continue;
         if (pred.rhs.kind != OperandKind::kLiteral) continue;
+        if (!SteersAccess(step, slot, pred)) continue;
         // Unconstructible since declared patterns were withdrawn, and kept
         // for EqualityOnColumn's reason below.
         if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
@@ -1101,43 +1169,6 @@ std::optional<IndexProbe> IndexProbeOf(const catalog::TableAccess& access, const
         best_score = score;
     }
     return best;
-}
-
-// The correlated-equality shape both structure arms select on: a kEq
-// column-column conjunct with one side owned by this step and the other
-// available before it runs - an earlier slot, or an enclosing chain's row
-// (`up > 0`), which is bound before this chain opens. Both orientations
-// are examined, as the tuple-key-probe arm does and for its reason; a
-// same-relation equality excludes itself through the availability test.
-// One home for the rule, so the index and cabin arms cannot drift.
-struct CorrelatedEquality {
-    ColumnRef own;
-    ColumnRef other;
-};
-std::optional<CorrelatedEquality> CorrelatedEqualityOf(const StepPredicate& pred,
-                                                       std::uint16_t slot) {
-    if (pred.op != parser::CompareOp::kEq) return std::nullopt;
-    if (pred.rhs.kind != OperandKind::kColumn) return std::nullopt;
-    CorrelatedEquality out;
-    if (IsOwnColumn(pred.lhs, slot)) {
-        out.own = pred.lhs;
-        out.other = pred.rhs.column;
-    } else if (IsOwnColumn(pred.rhs.column, slot)) {
-        out.own = pred.rhs.column;
-        out.other = pred.lhs;
-    } else {
-        return std::nullopt;
-    }
-    if (out.other.up == 0 && AvailableAt(out.other) >= slot) return std::nullopt;
-    return out;
-}
-
-// The descriptor guard every deferred-value form shares (equality
-// propagation states the argument): the value crossing was produced under
-// one column's descriptor, and only an identical (type_val, len) makes it
-// byte-valid under the other's.
-bool SameDescriptor(const catalog::SysColumnRow& a, const catalog::SysColumnRow& b) {
-    return a.type_val == b.type_val && a.len == b.len;
 }
 
 // The correlated index probe (docs/spec/index.md §8a), or nullopt: an index
@@ -1322,6 +1353,7 @@ std::optional<CabinProbe> PredicateCabinProbeOf(const catalog::TableAccess& acce
     for (const StepPredicate& pred : step.residual) {
         if (!IsOwnColumn(pred.lhs, slot)) continue;
         if (TakesLiteral(pred.op) && pred.rhs.kind != OperandKind::kLiteral) continue;
+        if (!SteersAccess(step, slot, pred)) continue;
         CabinConjunct c;
         c.term.args.push_back(pred.lhs.col_pos);
         c.op = pred.op;
@@ -1372,7 +1404,8 @@ std::optional<CabinProbe> CoverCabinProbeOf(const catalog::TableAccess& access, 
         for (const StepPredicate& pred : step.residual) {
             if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != term.args.front()) continue;
             if (pred.rhs.kind != OperandKind::kLiteral ||
-                pred.rhs.literal.type != parser::ValueType::kInt) {
+                pred.rhs.literal.type != parser::ValueType::kInt ||
+                !SteersAccess(step, slot, pred)) {
                 continue;
             }
             const std::int64_t v = pred.rhs.literal.int_val;
