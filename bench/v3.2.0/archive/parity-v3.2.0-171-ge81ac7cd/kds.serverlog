@@ -1,0 +1,3 @@
+1792310077 WARN [query] "DROP TABLE pb_bars" -> ERR no relation named 'pb_bars' (byte 11) in 32us
+1792310077 WARN [query] "DROP TABLE pb_symbols" -> ERR no relation named 'pb_symbols' (byte 11) in 7us
+1792310077 WARN [query] "DROP TABLE pb_exchanges" -> ERR no relation named 'pb_exchanges' (byte 11) in 5us

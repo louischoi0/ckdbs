@@ -256,9 +256,10 @@ class PgConnection:
     def _skip_data_row(body, columns):
         """Walks a DataRow's column lengths and returns its payload bytes.
 
-        Values are not decoded: the benchmark counts rows, and building a
-        Python object per column would charge PostgreSQL for client-side work
-        the ckdbs driver does not do either.
+        Values are not decoded: the benchmark counts rows. Its KDS
+        counterpart is `kwp.Connection.query`; `ckdbs_cli.send_command`,
+        which the scenario drivers time, renders every field to text and is
+        not one (`tools/parity_bench.py`).
         """
         (count,) = _INT16.unpack(body[:2])
         if columns and count != columns:
