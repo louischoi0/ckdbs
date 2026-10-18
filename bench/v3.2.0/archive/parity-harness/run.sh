@@ -23,7 +23,11 @@ df -T "$RUN/data" > "$OUT/device.txt"
 { date -u +%FT%TZ; cat /proc/loadavg; pgrep -a -f "cc1plus|cmake --build|ctest" | grep -v pgrep || echo "no build"; } > "$OUT/precheck.txt"
 nohup "$RUN/kds_server" --config "$OUT/kds.conf" > "$RUN/data/stdout.log" 2>&1 &
 PID=$!
+git -C "$HERE" describe --tags > "$OUT/describe.txt"
 for i in $(seq 1 150); do (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null && break; sleep 0.2; done
+if ! kill -0 $PID 2>/dev/null || ! (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
+    echo "kds_server did not open port $PORT" > "$OUT/stderr.log"; echo 1 > "$OUT/rc"; touch "$OUT/done"; exit 1
+fi
 PYTHONPATH=$TOOLS python3 "$TOOLS/parity_bench.py" --kds-port $PORT --kds-pid $PID --pg-port 15434 \
     --json "$OUT/cells.json" --status "$OUT/status" "$@" > "$OUT/table.md" 2> "$OUT/stderr.log"
 echo $? > "$OUT/rc"

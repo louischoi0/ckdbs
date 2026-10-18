@@ -198,9 +198,9 @@ def frame(ftype, payload=b"", flags=0):
 
 
 # `Connection.query`'s BIND / EXECUTE / CLOSE / SYNC, over a portal named "q".
-_QUERY_TAIL = (frame(C_BIND, struct.pack("<H", 1) + b"q" + struct.pack("<HH", 0, 0))
-               + frame(C_EXECUTE, struct.pack("<H", 1) + b"q" + struct.pack("<I", 0))
-               + frame(C_CLOSE, struct.pack("<BH", 2, 1) + b"q")
+_QUERY_TAIL = (frame(C_BIND, _Writer().s("q").s("").u16(0).take())
+               + frame(C_EXECUTE, _Writer().s("q").u32(0).take())
+               + frame(C_CLOSE, _Writer().u8(2).s("q").take())
                + frame(C_SYNC))
 
 
@@ -503,6 +503,8 @@ class Connection:
                 error = self._error(payload)
             elif ftype == S_READY:
                 return tag, rows, payload_bytes, error
+            elif ftype not in (S_PARSE_OK, S_BIND_OK, S_NOTICE):
+                raise ConnectionError("unexpected server frame type %d" % ftype)
 
     def prepare(self, name, sql):
         """Parses `sql` once under the statement name `name` (§5's named
