@@ -1,0 +1,4 @@
+ckdbs on /home/cdkbs/bench-runs/cc-prior/run/BO.db: 9262 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-prior/run/BO.log at level WARN
+listening on 127.0.0.1:25804
+stopped; 9366 pages persisted

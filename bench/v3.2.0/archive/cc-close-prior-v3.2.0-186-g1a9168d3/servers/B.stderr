@@ -1,0 +1,24 @@
+ckdbs on /home/cdkbs/bench-runs/cc-prior/run/B.db: 9262 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-prior/run/B.log at level WARN
+listening on 127.0.0.1:25803
+stopped; 9264 pages persisted
+ckdbs on /home/cdkbs/bench-runs/cc-prior/run/B.db: 9264 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-prior/run/B.log at level WARN
+listening on 127.0.0.1:25803
+stopped; 9264 pages persisted
+ckdbs on /home/cdkbs/bench-runs/cc-prior/run/B.db: 9262 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-prior/run/B.log at level WARN
+listening on 127.0.0.1:25803
+stopped; 9363 pages persisted
+ckdbs on /home/cdkbs/bench-runs/cc-prior/run/B.db: 9262 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-prior/run/B.log at level WARN
+listening on 127.0.0.1:25803
+stopped; 9264 pages persisted
+ckdbs on /home/cdkbs/bench-runs/cc-prior/run/B.db: 9264 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-prior/run/B.log at level WARN
+listening on 127.0.0.1:25803
+stopped; 9264 pages persisted
+ckdbs on /home/cdkbs/bench-runs/cc-prior/run/B.db: 9262 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-prior/run/B.log at level WARN
+listening on 127.0.0.1:25803
+stopped; 9352 pages persisted
