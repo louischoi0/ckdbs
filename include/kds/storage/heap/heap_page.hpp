@@ -208,7 +208,8 @@ public:
     // writes header.min_key again. Fails only if `min_key` does not fit
     // the Keystone column's id space, kMaxKeystoneId (docs/spec/heap-and-tuple.md invariant 7).
     // `owner_oid` (page.md §2a) is stamped with the same immutability:
-    // the owning relation for a user page, 0 for system callers (catalog).
+    // the owning relation for a user page or a catalog chain's growth page,
+    // 0 for an unattributed system page (the fixed catalog roots).
     static StatusOr<PageView> CreateEmpty(std::span<std::byte, kPageSize> page,
                                            std::uint64_t min_key,
                                            std::uint64_t owner_oid = 0);

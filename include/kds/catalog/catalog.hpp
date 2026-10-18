@@ -960,9 +960,10 @@ public:
     // pages it drops are leaked: no reclaim walk reaches a catalog
     // relation's discarded chain (`drop-table.md` DT1's stated leaks).
     StatusOr<bool> ResetAccessStatsIfDamaged();
-    // Empties `sys.access_stats` unconditionally: its head re-formatted in
-    // place, its chain leaked (CR6's discard). A restore's (BR-S8), and the
-    // damaged case's above.
+    // Empties `sys.access_stats` unconditionally: every page of its chain
+    // re-formatted in place and kept, the chain cut before the first link
+    // that does not reach one of its pages (CR6's discard). A restore's
+    // (BR-S8), and the damaged case's above.
     Status DiscardAccessStats();
 
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();

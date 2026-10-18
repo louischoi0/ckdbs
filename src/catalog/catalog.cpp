@@ -168,8 +168,15 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
     // `access` is the walk's hold: exclusive for a writer, shared for a
     // reader that must neither queue behind nor block the writers of the
     // pages it passes.
+    //
+    // Bounded by the budget every next-page loop owes
+    // (`storage::CheckPageWalkBudget`), not by a count of catalog pages:
+    // what it stops is a cyclic link, and a long chain is not a fault.
     PageId current = root;
-    for (std::uint32_t steps = 0; steps < kCatalogOverflowLimit; ++steps) {
+    for (std::uint32_t steps = 0;; ++steps) {
+        if (Status s = storage::CheckPageWalkBudget(steps, root, "catalog chain"); !s.ok()) {
+            return s;
+        }
         auto bytes = store.Fetch(current, access);
         if (!bytes.ok()) return bytes.status();
 
@@ -196,8 +203,6 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
         if (next == kInvalidPageId) return false;
         current = next;
     }
-    return Status::Corruption("catalog: chain from page " + std::to_string(root) +
-                              " is longer than the reserved range can be");
 }
 
 // The page a growing catalog chain takes next.
@@ -300,11 +305,12 @@ Status RetireLogged(wal::WalManager* wal, storage::PageStore& store, heap::PageV
 
 // A page a DDL created, deliberately unstamped like the DML path's
 // new-tuple-page PAGE_INIT: the first record that lands in it stamps it,
-// and an empty formatted page is exactly what redo rebuilds. The defaults
-// are the catalog overflow page's (min_key 0, kHeap, unattributed); a
-// relation's own root pages pass their type and owning oid.
+// and an empty formatted page is exactly what redo rebuilds. min_key is
+// always 0; every caller names the type and the owning oid - a catalog
+// chain's growth page its relation's (kHeap), a relation's own root pages
+// theirs.
 Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id,
-                      PageType type = PageType::kHeap, Oid owner_oid = 0) {
+                      PageType type, Oid owner_oid) {
     // LogCatRow's envelope rule (B1), stated there; min_key 0 - catalog
     // rows carry no key space, and a relation root passes owner + type.
     if (trx_id == kBootstrapXid) trx_id = wal::kNoTxnId;
@@ -487,8 +493,12 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
                   std::uint64_t trx_id, CatalogRowRef* where = nullptr) {
     const auto encoded = row.Encode();
 
+    // ForFirstRow's bound, for its reason.
     PageId current = root;
-    for (std::uint32_t steps = 0; steps < kCatalogOverflowLimit; ++steps) {
+    for (std::uint32_t steps = 0;; ++steps) {
+        if (Status s = storage::CheckPageWalkBudget(steps, root, "catalog chain"); !s.ok()) {
+            return s;
+        }
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();
 
@@ -522,12 +532,18 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
 
         // min_key 0, like every catalog page: these rows carry no key to
         // prune by, and a nonzero min_key would be a claim about ids that
-        // do not exist here.
-        auto fresh = heap::PageView::CreateEmpty(new_page.bytes(), 0);
+        // do not exist here. Owned by the relation the chain is
+        // (`kCatalogRootOwners`), as `heap::ChainInsert` stamps a user
+        // relation's growth, and the record carries the same owner, so
+        // redo rebuilds the page this run wrote.
+        const Oid owner = CatalogRelationAtRoot(root);
+        auto fresh = heap::PageView::CreateEmpty(new_page.bytes(), 0, owner);
         if (!fresh.ok()) return fresh.status();
         // Logged before the insert below, whose record then stamps the
         // page - the DML path's new-tuple-page discipline exactly.
-        if (Status s = LogCatPageInit(wal, trx_id, new_id); !s.ok()) return s;
+        if (Status s = LogCatPageInit(wal, trx_id, new_id, PageType::kHeap, owner); !s.ok()) {
+            return s;
+        }
 
         auto placed = fresh.value().InsertTuple(encoded, trx_id);
         if (!placed.ok()) {
@@ -560,8 +576,6 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
         if (Status s = LogCatPageImage(wal, store, trx_id, current); !s.ok()) return s;
         return Status::OK();
     }
-    return Status::Corruption("catalog: chain from page " + std::to_string(root) +
-                              " is longer than the reserved range can be");
 }
 
 }  // namespace
@@ -3535,45 +3549,62 @@ StatusOr<bool> Catalog::ResetAccessStatsIfDamaged() {
 }
 
 Status Catalog::DiscardAccessStats() {
-    // Every page of the chain re-formatted in place, its link kept, so the
-    // rows are gone and the pages stay the chain's for `InsertRow` to fill
-    // again - a discard that left the growth pages behind would spend
-    // catalog page ids, of which there are 116 for every catalog relation,
-    // at every restore (BR-S8's review). The head stays at its fixed id, so
-    // the `sys.objects` and `sys.tables` rows naming page 11 stay true.
+    // Every page of the chain re-formatted in place, its link and its owner
+    // kept, so the rows are gone and the pages stay the chain's for
+    // `InsertRow` to fill again - a discard that left the growth pages
+    // behind would spend a page per growth at every restore (BR-S8's
+    // review). The head stays at its fixed id, so the `sys.objects` and
+    // `sys.tables` rows naming page 11 stay true.
     //
-    // **Bounded, because the damaged path comes through here**: a link that
-    // leaves the catalog overflow range, a page that is not a heap page, a
-    // page that fails its checksum, or more steps than the range has pages
-    // (a cycle) ends the chain at the page before it - never a page of
-    // another relation re-formatted, never a mount that does not return.
-    // Any other failure is returned.
-    constexpr std::size_t kMaxChainPages = kCatalogOverflowLimit - kCatalogOverflowFirst + 1;
+    // **A page is the chain's by what it says, not by where its id falls**:
+    // the head is page 11, and every page after it is a heap page owned by
+    // `sys.access_stats` - `InsertRow` stamps each growth page with the
+    // relation's oid (`kCatalogRootOwners`). Page 11 met again past the
+    // head is a cycle, and its own owner, bootstrap's 0, says so.
+    //
+    // **Bounded, because the damaged path comes through here**: a link to a
+    // page that is not allocated (a growth whose free-map bit no crash kept:
+    // the relation is unlogged, CR6, so nothing redoes the bit), a page that
+    // fails its checksum, a page that is not a heap page or is another
+    // relation's, or more steps than any walk may take (a cycle) ends the
+    // chain at the page before it - never a page of another relation
+    // re-formatted, never a mount refused or one that does not return. A
+    // head that fails so is refused, since there is no page before it to
+    // cut at, and any other failure is returned.
     PageId at = kCatalogPageAccessStats;
     PageId previous = kInvalidPageId;
-    for (std::size_t step = 0; at != kInvalidPageId; ++step) {
-        const bool in_range = at == kCatalogPageAccessStats ||
-                              (at >= kCatalogOverflowFirst && at < kCatalogOverflowLimit);
-        auto page = in_range && step < kMaxChainPages ? store_.Get(at)
-                                                       : StatusOr<storage::PageRef>(
-                                                             Status::Corruption("out of chain"));
-        const bool is_heap =
-            page.ok() && storage::RawPageType(page.value().bytes()) ==
-                             static_cast<std::uint8_t>(PageType::kHeap);
-        if (!page.ok() || !is_heap) {
-            if (page.ok() || page.status().code() == StatusCode::kCorruption) {
-                if (previous == kInvalidPageId) {
-                    return Status::Corruption("catalog: sys.access_stats' head page is unreadable");
-                }
-                auto before = store_.Get(previous);
-                if (!before.ok()) return before.status();
-                heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
-                return Status::OK();
+    for (std::uint32_t step = 0; at != kInvalidPageId; ++step) {
+        auto page = storage::CheckPageWalkBudget(step, kCatalogPageAccessStats,
+                                                 "sys.access_stats chain")
+                            .ok()
+                        ? store_.Get(at)
+                        : StatusOr<storage::PageRef>(Status::Corruption("out of chain"));
+        const bool cut_here = [&] {
+            if (!page.ok()) {
+                return page.status().code() == StatusCode::kCorruption ||
+                       page.status().code() == StatusCode::kNotFound;
             }
-            return page.status();
+            const auto bytes = page.value().bytes();
+            if (storage::RawPageType(bytes) != static_cast<std::uint8_t>(PageType::kHeap)) {
+                return true;
+            }
+            return previous != kInvalidPageId && storage::GetOwnerOid(bytes) != kSysAccessStatsTable;
+        }();
+        if (cut_here) {
+            if (previous == kInvalidPageId) {
+                return Status::Corruption("catalog: sys.access_stats' head page is unreadable");
+            }
+            auto before = store_.Get(previous);
+            if (!before.ok()) return before.status();
+            heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
+            return Status::OK();
         }
-        const PageId next = heap::PageView(page.value().bytes()).next_page_id();
-        auto fresh = heap::PageView::CreateEmpty(page.value().bytes(), 0);
+        if (!page.ok()) return page.status();
+        const auto bytes = page.value().bytes();
+        const PageId next = heap::PageView(bytes).next_page_id();
+        // The head keeps bootstrap's owner, a growth page the relation's.
+        const std::uint64_t owner = storage::GetOwnerOid(bytes);
+        auto fresh = heap::PageView::CreateEmpty(bytes, 0, owner);
         if (!fresh.ok()) return fresh.status();
         fresh.value().set_next_page_id(next);
         previous = at;

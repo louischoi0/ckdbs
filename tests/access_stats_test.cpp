@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <optional>
 #include <string>
 
@@ -11,6 +12,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/page_header.hpp"
 #include "view_text.hpp"
 
 // `sys.access_stats` (docs/spec/heap-and-tuple.md §7): how often each access
@@ -327,6 +329,36 @@ protected:
         ASSERT_TRUE(catalog_->RecordAccess(1, 6, 1, 11).ok());
     }
 
+    PageId NextOf(PageId page_id) {
+        auto bytes = store_.GetForRead(page_id);
+        EXPECT_TRUE(bytes.ok()) << bytes.status().message();
+        return bytes.ok() ? heap::PageView(bytes.value().bytes()).next_page_id() : kInvalidPageId;
+    }
+
+    std::uint64_t OwnerOf(PageId page_id) {
+        auto bytes = store_.GetForRead(page_id);
+        EXPECT_TRUE(bytes.ok()) << bytes.status().message();
+        return bytes.ok() ? storage::GetOwnerOid(bytes.value().bytes()) : 0;
+    }
+
+    void SetNext(PageId page_id, PageId next) {
+        auto bytes = store_.Get(page_id);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        heap::PageView(bytes.value().bytes()).set_next_page_id(next);
+    }
+
+    // Records distinct shapes until the relation takes a second page, and
+    // returns it: a row is 33 bytes, so a page holds a little over a hundred.
+    PageId GrowAccessStats() {
+        for (catalog::Oid rel = 100; rel < 1000; ++rel) {
+            EXPECT_TRUE(catalog_->RecordAccess(1, rel, 1, 12).ok());
+            const PageId next = NextOf(catalog::kCatalogPageAccessStats);
+            if (next != kInvalidPageId) return next;
+        }
+        ADD_FAILURE() << "sys.access_stats never grew past its head page";
+        return kInvalidPageId;
+    }
+
     storage::InMemoryPageStore store_{128};
     std::optional<catalog::Catalog> catalog_;
 };
@@ -370,6 +402,129 @@ TEST_F(AccessStatsDurabilityTest, ABrokenChainIsDiscardedAndTheRelationWorksAgai
     EXPECT_TRUE(rows.value().empty());
     ASSERT_TRUE(catalog_->RecordAccess(1, 7, 1, 12).ok());
     EXPECT_EQ(catalog_->ListAccessStats().value().size(), 1u);
+}
+
+// ---- The discard's walk: a page is the chain's by what it says ----------
+//
+// `DiscardAccessStats` runs at every mount (the restore's, and the damaged
+// case's above), so whatever it meets at a link it either keeps, cuts at,
+// or turns into a mount refusal. The cells below pin which: the chain's own
+// pages are kept, and anything else - a page that is not there, a page that
+// is not a page, another relation's page, the head again - is cut at,
+// never re-formatted and never refused.
+
+TEST_F(AccessStatsDurabilityTest, AGrowthPageIsStampedAndTheDiscardKeepsIt) {
+    const PageId grown = GrowAccessStats();
+    ASSERT_NE(grown, kInvalidPageId);
+    EXPECT_EQ(OwnerOf(grown), catalog::kSysAccessStatsTable)
+        << "the growth page does not say it is sys.access_stats'; the discard would cut it";
+    EXPECT_EQ(OwnerOf(catalog::kCatalogPageAccessStats), 0u) << "the head lost bootstrap's owner";
+
+    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
+    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), grown)
+        << "a discard that drops the growth page spends a page at every mount";
+    EXPECT_EQ(OwnerOf(grown), catalog::kSysAccessStatsTable)
+        << "the re-format lost the owner; the next mount's discard would cut its own chain";
+    EXPECT_EQ(OwnerOf(catalog::kCatalogPageAccessStats), 0u);
+    auto rows = catalog_->ListAccessStats();
+    ASSERT_TRUE(rows.ok()) << rows.status().message();
+    EXPECT_TRUE(rows.value().empty());
+}
+
+TEST_F(AccessStatsDurabilityTest, ALinkToAPageThatIsNotThereIsCutNotRefused) {
+    // A growth whose free-map bit no crash kept, or a restore that forgot
+    // it: the relation is unlogged (CR6), so nothing redoes the page, and
+    // the head's link names an id the store does not have. The discard
+    // used to return the store's NotFound, which refused the mount.
+    const PageId gone = server::kFirstUserPageId - 1;  // an id nothing allocated
+    ASSERT_EQ(store_.GetForRead(gone).status().code(), StatusCode::kNotFound)
+        << "the fixture's id is allocated; the cell would test nothing";
+    SetNext(catalog::kCatalogPageAccessStats, gone);
+
+    auto reset = catalog_->ResetAccessStatsIfDamaged();
+    ASSERT_TRUE(reset.ok()) << reset.status().message();
+    EXPECT_TRUE(reset.value());
+    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
+
+    // The restore's door, which calls the discard directly.
+    SetNext(catalog::kCatalogPageAccessStats, gone);
+    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
+    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
+    ASSERT_TRUE(catalog_->RecordAccess(1, 7, 1, 12).ok());
+    EXPECT_EQ(catalog_->ListAccessStats().value().size(), 1u);
+}
+
+TEST_F(AccessStatsDurabilityTest, AnAllZeroGrowthPageIsCutAt) {
+    // What a restore's copy holds for a page the backup never wrote: the id
+    // is allocated, its bytes are zero, and its type says it is no page.
+    const PageId grown = GrowAccessStats();
+    ASSERT_NE(grown, kInvalidPageId);
+    {
+        auto bytes = store_.Get(grown);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        std::fill(bytes.value().bytes().begin(), bytes.value().bytes().end(), std::byte{0});
+    }
+    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
+    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
+    ASSERT_TRUE(catalog_->RecordAccess(1, 7, 1, 12).ok());
+    EXPECT_EQ(catalog_->ListAccessStats().value().size(), 1u);
+}
+
+TEST_F(AccessStatsDurabilityTest, ALinkIntoAnotherRelationsPageIsCutAndThatPageIsKept) {
+    // A heap page, readable, inside whatever range catalog pages come from -
+    // and sys.columns'. Only its owner says it is not this chain's, and a
+    // discard that re-formatted it would erase every column row on it.
+    catalog::Schema schema;
+    for (std::uint32_t pos = 0; pos < 20; ++pos) {
+        catalog::SysColumnRow col{};
+        col.pos = pos;
+        catalog::SetName(col.name, "c" + std::to_string(pos));
+        col.type_val = catalog::kTypeValInt64;
+        col.len = 8;
+        col.notnull = true;
+        schema.columns.push_back(col);
+    }
+    catalog::Oid last = 0;
+    for (int i = 0; i < 12 && NextOf(catalog::kCatalogPageColumns) == kInvalidPageId; ++i) {
+        auto oid = catalog_->CreateTable(catalog::kNamespacePublic, "wide" + std::to_string(i),
+                                         schema);
+        ASSERT_TRUE(oid.ok()) << oid.status().message();
+        last = oid.value();
+    }
+    const PageId columns_page = NextOf(catalog::kCatalogPageColumns);
+    ASSERT_NE(columns_page, kInvalidPageId) << "sys.columns never grew; the cell tests nothing";
+    ASSERT_EQ(OwnerOf(columns_page), catalog::kSysColumnsTable);
+    std::uint16_t slots_before = 0;
+    {
+        auto bytes = store_.GetForRead(columns_page);
+        ASSERT_TRUE(bytes.ok());
+        slots_before = heap::PageView(bytes.value().bytes()).slot_count();
+    }
+
+    SetNext(catalog::kCatalogPageAccessStats, columns_page);
+    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
+    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
+
+    auto bytes = store_.GetForRead(columns_page);
+    ASSERT_TRUE(bytes.ok());
+    EXPECT_EQ(heap::PageView(bytes.value().bytes()).slot_count(), slots_before)
+        << "the discard re-formatted a page of sys.columns";
+    auto read_back = catalog_->BuildSchemaFromColumns(last);
+    ASSERT_TRUE(read_back.ok()) << read_back.status().message();
+    EXPECT_EQ(read_back.value().columns.size(), 20u);
+}
+
+TEST_F(AccessStatsDurabilityTest, ALinkBackToTheHeadIsCutAtOnce) {
+    // A cycle through the head: page 11 met past the head carries
+    // bootstrap's owner, not the relation's, so the walk stops there rather
+    // than circling until the walk budget is spent.
+    const PageId grown = GrowAccessStats();
+    ASSERT_NE(grown, kInvalidPageId);
+    SetNext(grown, catalog::kCatalogPageAccessStats);
+
+    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
+    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), grown);
+    EXPECT_EQ(NextOf(grown), kInvalidPageId);
 }
 
 }  // namespace

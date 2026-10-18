@@ -903,6 +903,50 @@ TEST_F(InsertWalTest, ARolledBackDropLogsItsCatalogCompensation) {
                                            /*overwrite_undone=*/true);
 }
 
+// ---- 5. A catalog chain's growth page is logged with its owner ----------
+
+TEST_F(InsertWalTest, ACatalogGrowthPageIsLoggedWithItsRelationsOwner) {
+    // The page a catalog chain grows onto carries its relation's oid
+    // (page.md §2a), and redo rebuilds a page from its PAGE_INIT alone: a
+    // record naming another owner than the page would replay a page the
+    // run never wrote, and the `sys.access_stats` discard, which tells its
+    // pages by their owner, would read the replayed one as a stranger's.
+    boot_->catalog.SetWal(wal_.get());
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
+    std::string columns = "id int64";
+    for (int c = 1; c < 20; ++c) columns += ", c" + std::to_string(c) + " int64";
+    auto grown = [&] {
+        auto root = store_->GetForRead(catalog::kCatalogPageColumns);
+        EXPECT_TRUE(root.ok());
+        return root.ok() ? heap::PageView(root.value().bytes()).next_page_id() : kInvalidPageId;
+    };
+    for (int i = 0; i < 12 && grown() == kInvalidPageId; ++i) {
+        ASSERT_EQ(d.Dispatch("CREATE TABLE w" + std::to_string(i) + " (" + columns + ")")
+                      .response.substr(0, 7),
+                  "CREATED");
+    }
+    const PageId grown_page = grown();
+    ASSERT_NE(grown_page, kInvalidPageId) << "sys.columns never grew; the cell tests nothing";
+    ASSERT_TRUE(wal_->Flush().ok());
+
+    std::vector<std::vector<std::byte>> segments;
+    std::size_t inits = 0;
+    for (const wal::DecodedRecord& record : DeviceRecords(segments)) {
+        if (record.type() != wal::RecordType::kPageInit || record.header.page_id != grown_page) {
+            continue;
+        }
+        ++inits;
+        auto init = wal::DecodePageInit(record.payload);
+        ASSERT_TRUE(init.ok()) << init.status().message();
+        EXPECT_EQ(init.value().page_type, static_cast<std::uint8_t>(PageType::kHeap));
+        EXPECT_EQ(init.value().owner_oid, catalog::kSysColumnsTable);
+    }
+    EXPECT_EQ(inits, 1u) << "the growth page's PAGE_INIT is missing or doubled";
+    auto page = store_->GetForRead(grown_page);
+    ASSERT_TRUE(page.ok()) << page.status().message();
+    EXPECT_EQ(storage::GetOwnerOid(page.value().bytes()), catalog::kSysColumnsTable);
+}
+
 // ---- The group-commit batch, in SHOW META -------------------------------
 //
 // AF-T5 §3b found that a placement's write cost turns on how many committing

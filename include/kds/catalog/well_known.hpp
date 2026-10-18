@@ -391,6 +391,56 @@ inline constexpr PageId kAllCatalogPages[] = {
     kCatalogPageAssertions,  kCatalogPageCabinExprs, kCatalogPageTransitions,
 };
 
+// The catalog relation each root heads, in `kAllCatalogPages`' order.
+//
+// **The owner a page the chain grows onto is stamped with** (page.md §2a),
+// as `heap::ChainInsert` stamps a user relation's: the page says whose it
+// is, so a walk that must not stray into another relation's page - the
+// `sys.access_stats` discard - can test a link by what it reaches rather
+// than by where its id falls. The roots themselves keep the owner
+// bootstrap gave them: 0 for the fixed core, the relation's oid for the
+// three row-codec relations.
+struct CatalogRoot {
+    PageId page;
+    Oid oid;
+};
+
+inline constexpr CatalogRoot kCatalogRootOwners[] = {
+    {kCatalogPageTypes, kSysTypesTable},
+    {kCatalogPageColumns, kSysColumnsTable},
+    {kCatalogPageObjects, kSysObjectsTable},
+    {kCatalogPageTables, kSysTablesTable},
+    {kCatalogPageIndexes, kSysIndexesTable},
+    {kCatalogPagePatterns, kSysPatternsTable},
+    {kCatalogPageAccessStats, kSysAccessStatsTable},
+    {kCatalogPageCabins, kSysCabinsTable},
+    {kCatalogPageFkeys, kSysFkeysTable},
+    {kCatalogPageAssertions, kSysAssertionsTable},
+    {kCatalogPageCabinExprs, kSysCabinExprsTable},
+    {kCatalogPageTransitions, kSysTransitionsTable},
+};
+
+// The relation whose chain starts at `root`; 0, unattributed, for a page
+// that heads none.
+constexpr Oid CatalogRelationAtRoot(PageId root) {
+    for (const CatalogRoot& entry : kCatalogRootOwners) {
+        if (entry.page == root) return entry.oid;
+    }
+    return 0;
+}
+
+// The two lists side by side, entry for entry, so a root added to one and
+// not the other is a build failure rather than a growth page stamped 0.
+constexpr bool CatalogRootOwnersMatchTheRoots() {
+    if (std::size(kCatalogRootOwners) != std::size(kAllCatalogPages)) return false;
+    for (std::size_t i = 0; i < std::size(kAllCatalogPages); ++i) {
+        if (kCatalogRootOwners[i].page != kAllCatalogPages[i]) return false;
+    }
+    return true;
+}
+static_assert(CatalogRootOwnersMatchTheRoots(),
+              "kCatalogRootOwners must name every catalog root, in kAllCatalogPages' order");
+
 // ---- Where a catalog chain grows into ------------------------------------
 //
 // A catalog relation that outgrows its root page takes its next page from

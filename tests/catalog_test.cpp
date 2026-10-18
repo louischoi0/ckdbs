@@ -1511,6 +1511,37 @@ TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
     EXPECT_GT(pages, 1) << "240 column rows should not fit on one page";
 }
 
+// A growth page says whose it is (page.md §2a), as a user relation's does
+// through `heap::ChainInsert`: the page a catalog chain grows onto carries
+// the catalog relation's oid, and the root keeps bootstrap's 0. The
+// `sys.access_stats` discard tells its own pages from another relation's by
+// exactly this (access_stats_test.cpp).
+TEST(CatalogChain, AGrowthPageCarriesItsCatalogRelationsOid) {
+    storage::InMemoryPageStore store{server::kFirstUserPageId};
+    Catalog catalog(store, storage::kDefaultInlineCellWidth);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    for (int i = 0; i < 12; ++i) {
+        ASSERT_TRUE(catalog.CreateTable(kNamespacePublic, "wide" + std::to_string(i),
+                                        WideSchema(20))
+                        .ok());
+    }
+
+    PageId at = kCatalogPageColumns;
+    int pages = 0;
+    while (at != kInvalidPageId) {
+        ++pages;
+        auto bytes = store.GetForRead(at);
+        ASSERT_TRUE(bytes.ok());
+        EXPECT_EQ(storage::GetOwnerOid(bytes.value().bytes()),
+                  at == kCatalogPageColumns ? 0u : kSysColumnsTable)
+            << "page " << at;
+        at = heap::PageView(bytes.value().bytes()).next_page_id();
+        ASSERT_LE(pages, 64) << "the chain does not terminate";
+    }
+    EXPECT_GT(pages, 1) << "240 column rows should not fit on one page";
+}
+
 // The mutators walk too. `AllocateRowId` finds a sys.tables row and writes
 // it back; a row on a later page used to be invisible to it, which would
 // have made the relation un-insertable rather than merely un-listable.
