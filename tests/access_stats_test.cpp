@@ -394,12 +394,21 @@ TEST_F(AccessStatsDurabilityTest, ABrokenChainIsDiscardedAndTheRelationWorksAgai
     ASSERT_TRUE(reset.ok()) << reset.status().message();
     EXPECT_TRUE(reset.value());
 
+    // The link is cut, not refused: the discard used to return the store's
+    // NotFound, which refused the mount.
+    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
+
     // Empty, readable, and writable again - which is the whole claim:
     // invariant 8 prices a lost trail as performance, so an empty statistic
     // is a slower optimizer and never a wrong answer.
     auto rows = catalog_->ListAccessStats();
     ASSERT_TRUE(rows.ok()) << rows.status().message();
     EXPECT_TRUE(rows.value().empty());
+
+    // The restore's door, which calls the discard directly, cuts the same.
+    SetNext(catalog::kCatalogPageAccessStats, 9999);
+    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
+    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
     ASSERT_TRUE(catalog_->RecordAccess(1, 7, 1, 12).ok());
     EXPECT_EQ(catalog_->ListAccessStats().value().size(), 1u);
 }
@@ -429,29 +438,6 @@ TEST_F(AccessStatsDurabilityTest, AGrowthPageIsStampedAndTheDiscardKeepsIt) {
     auto rows = catalog_->ListAccessStats();
     ASSERT_TRUE(rows.ok()) << rows.status().message();
     EXPECT_TRUE(rows.value().empty());
-}
-
-TEST_F(AccessStatsDurabilityTest, ALinkToAPageThatIsNotThereIsCutNotRefused) {
-    // A growth whose free-map bit no crash kept, or a restore that forgot
-    // it: the relation is unlogged (CR6), so nothing redoes the page, and
-    // the head's link names an id the store does not have. The discard
-    // used to return the store's NotFound, which refused the mount.
-    const PageId gone = server::kFirstUserPageId - 1;  // an id nothing allocated
-    ASSERT_EQ(store_.GetForRead(gone).status().code(), StatusCode::kNotFound)
-        << "the fixture's id is allocated; the cell would test nothing";
-    SetNext(catalog::kCatalogPageAccessStats, gone);
-
-    auto reset = catalog_->ResetAccessStatsIfDamaged();
-    ASSERT_TRUE(reset.ok()) << reset.status().message();
-    EXPECT_TRUE(reset.value());
-    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
-
-    // The restore's door, which calls the discard directly.
-    SetNext(catalog::kCatalogPageAccessStats, gone);
-    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
-    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
-    ASSERT_TRUE(catalog_->RecordAccess(1, 7, 1, 12).ok());
-    EXPECT_EQ(catalog_->ListAccessStats().value().size(), 1u);
 }
 
 TEST_F(AccessStatsDurabilityTest, AnAllZeroGrowthPageIsCutAt) {
@@ -518,13 +504,27 @@ TEST_F(AccessStatsDurabilityTest, ALinkBackToTheHeadIsCutAtOnce) {
     // A cycle through the head: page 11 met past the head carries
     // bootstrap's owner, not the relation's, so the walk stops there rather
     // than circling until the walk budget is spent.
-    const PageId grown = GrowAccessStats();
-    ASSERT_NE(grown, kInvalidPageId);
-    SetNext(grown, catalog::kCatalogPageAccessStats);
+    //
+    // **Three pages, not two**: a walk that circled instead would be cut by
+    // the budget at step 2^20, and 2^20 mod 3 == 1 puts that cut at the
+    // head's link - where a two-page cycle's parity would have put it on
+    // the second page, exactly where the owner check cuts.
+    const PageId first = GrowAccessStats();
+    ASSERT_NE(first, kInvalidPageId);
+    PageId second = kInvalidPageId;
+    for (catalog::Oid rel = 1000; rel < 2000 && second == kInvalidPageId; ++rel) {
+        ASSERT_TRUE(catalog_->RecordAccess(1, rel, 1, 12).ok());
+        second = NextOf(first);
+    }
+    ASSERT_NE(second, kInvalidPageId) << "sys.access_stats never grew a third page";
+    ASSERT_EQ(NextOf(second), kInvalidPageId);
+    SetNext(second, catalog::kCatalogPageAccessStats);
 
     ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
-    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), grown);
-    EXPECT_EQ(NextOf(grown), kInvalidPageId);
+    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), first)
+        << "the cut fell on the head's link: the walk circled to its budget";
+    EXPECT_EQ(NextOf(first), second);
+    EXPECT_EQ(NextOf(second), kInvalidPageId);
 }
 
 }  // namespace

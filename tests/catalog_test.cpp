@@ -1495,6 +1495,12 @@ TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
     // the root inside the reserved range. That was what kept a peer able to
     // fault it at all until AW-S1b; what it still buys is that "every
     // catalog page" can be named as a bounded range (well_known.hpp).
+    //
+    // A growth page says whose it is (page.md §2a), as a user relation's
+    // does through `heap::ChainInsert`: it carries the catalog relation's
+    // oid, and the root keeps bootstrap's 0. The `sys.access_stats` discard
+    // tells its own pages from another relation's by exactly this
+    // (access_stats_test.cpp).
     PageId at = kCatalogPageColumns;
     int pages = 0;
     while (at != kInvalidPageId) {
@@ -1503,34 +1509,6 @@ TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
             EXPECT_GE(at, kCatalogOverflowFirst) << "page " << at << " is below the range";
             EXPECT_LT(at, kCatalogOverflowLimit) << "page " << at << " is a user page";
         }
-        auto bytes = store.GetForRead(at);
-        ASSERT_TRUE(bytes.ok());
-        at = heap::PageView(bytes.value().bytes()).next_page_id();
-        ASSERT_LE(pages, 64) << "the chain does not terminate";
-    }
-    EXPECT_GT(pages, 1) << "240 column rows should not fit on one page";
-}
-
-// A growth page says whose it is (page.md §2a), as a user relation's does
-// through `heap::ChainInsert`: the page a catalog chain grows onto carries
-// the catalog relation's oid, and the root keeps bootstrap's 0. The
-// `sys.access_stats` discard tells its own pages from another relation's by
-// exactly this (access_stats_test.cpp).
-TEST(CatalogChain, AGrowthPageCarriesItsCatalogRelationsOid) {
-    storage::InMemoryPageStore store{server::kFirstUserPageId};
-    Catalog catalog(store, storage::kDefaultInlineCellWidth);
-    ASSERT_TRUE(catalog.Bootstrap().ok());
-
-    for (int i = 0; i < 12; ++i) {
-        ASSERT_TRUE(catalog.CreateTable(kNamespacePublic, "wide" + std::to_string(i),
-                                        WideSchema(20))
-                        .ok());
-    }
-
-    PageId at = kCatalogPageColumns;
-    int pages = 0;
-    while (at != kInvalidPageId) {
-        ++pages;
         auto bytes = store.GetForRead(at);
         ASSERT_TRUE(bytes.ok());
         EXPECT_EQ(storage::GetOwnerOid(bytes.value().bytes()),

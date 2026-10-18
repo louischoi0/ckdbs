@@ -3525,13 +3525,11 @@ StatusOr<bool> Catalog::ResetAccessStatsIfDamaged() {
     // a relation with no rows is simply unweighed by the shadow planner
     // (`physical-optimizer.md` §5's decay score).
     //
-    // The walk is the detector: a torn page fails its checksum on fault and
-    // a broken chain fails the walk, and either answers the same way. The
-    // discard keeps the chain's readable pages (`DiscardAccessStats`).
     // **The walk is the detector, and it is the ordinary one**: a torn page
     // fails its checksum on fault and a broken link fails the traversal, so
     // `ChainVisit` answering non-OK *is* the damage report. Writing a second
     // walk here would be a second opinion about what a readable chain is.
+    // The discard keeps the chain's readable pages (`DiscardAccessStats`).
     const Status walked = heap::ChainVisit(
         store_, kCatalogPageAccessStats, storage::PageAccess::kRead,
         [](PageId, heap::PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
@@ -3574,32 +3572,19 @@ Status Catalog::DiscardAccessStats() {
     PageId at = kCatalogPageAccessStats;
     PageId previous = kInvalidPageId;
     for (std::uint32_t step = 0; at != kInvalidPageId; ++step) {
-        auto page = storage::CheckPageWalkBudget(step, kCatalogPageAccessStats,
-                                                 "sys.access_stats chain")
-                            .ok()
-                        ? store_.Get(at)
-                        : StatusOr<storage::PageRef>(Status::Corruption("out of chain"));
-        const bool cut_here = [&] {
-            if (!page.ok()) {
-                return page.status().code() == StatusCode::kCorruption ||
-                       page.status().code() == StatusCode::kNotFound;
-            }
-            const auto bytes = page.value().bytes();
-            if (storage::RawPageType(bytes) != static_cast<std::uint8_t>(PageType::kHeap)) {
-                return true;
-            }
-            return previous != kInvalidPageId && storage::GetOwnerOid(bytes) != kSysAccessStatsTable;
-        }();
-        if (cut_here) {
-            if (previous == kInvalidPageId) {
-                return Status::Corruption("catalog: sys.access_stats' head page is unreadable");
-            }
-            auto before = store_.Get(previous);
-            if (!before.ok()) return before.status();
-            heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
-            return Status::OK();
+        if (step >= storage::kMaxPageWalkLength) break;  // a cycle
+        auto page = store_.Get(at);
+        if (!page.ok() && page.status().code() != StatusCode::kCorruption &&
+            page.status().code() != StatusCode::kNotFound) {
+            return page.status();
         }
-        if (!page.ok()) return page.status();
+        const bool ours =
+            page.ok() &&
+            storage::RawPageType(page.value().bytes()) ==
+                static_cast<std::uint8_t>(PageType::kHeap) &&
+            (previous == kInvalidPageId ||
+             storage::GetOwnerOid(page.value().bytes()) == kSysAccessStatsTable);
+        if (!ours) break;
         const auto bytes = page.value().bytes();
         const PageId next = heap::PageView(bytes).next_page_id();
         // The head keeps bootstrap's owner, a growth page the relation's.
@@ -3610,6 +3595,14 @@ Status Catalog::DiscardAccessStats() {
         previous = at;
         at = next;
     }
+    if (at == kInvalidPageId) return Status::OK();
+    // The walk stopped at a page that is not the chain's: cut before it.
+    if (previous == kInvalidPageId) {
+        return Status::Corruption("catalog: sys.access_stats' head page is unreadable");
+    }
+    auto before = store_.Get(previous);
+    if (!before.ok()) return before.status();
+    heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
     return Status::OK();
 }
 
