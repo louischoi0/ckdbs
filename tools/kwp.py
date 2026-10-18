@@ -187,10 +187,21 @@ class _Reader:
         return out
 
 
+_U16 = struct.Struct("<H")
+_I32 = struct.Struct("<i")
+
+
 def frame(ftype, payload=b"", flags=0):
     """`{length u32, type u8, flags u8, reserved u16, payload}`, where
     `length` counts everything after itself."""
     return struct.pack("<IBBH", 4 + len(payload), ftype, flags, 0) + payload
+
+
+# `Connection.query`'s BIND / EXECUTE / CLOSE / SYNC, over a portal named "q".
+_QUERY_TAIL = (frame(C_BIND, struct.pack("<H", 1) + b"q" + struct.pack("<HH", 0, 0))
+               + frame(C_EXECUTE, struct.pack("<H", 1) + b"q" + struct.pack("<I", 0))
+               + frame(C_CLOSE, struct.pack("<BH", 2, 1) + b"q")
+               + frame(C_SYNC))
 
 
 # ---- Value rendering -------------------------------------------------------
@@ -453,6 +464,45 @@ class Connection:
         if error is not None:
             raise error
         return fields, rows, tag, affected
+
+    def query(self, sql):
+        """Runs one statement and returns `(tag, rows, payload_bytes, error)`,
+        the shape `pg_wire.PgConnection.query` returns: rows are counted and
+        their field lengths walked, but no field becomes a Python object.
+
+        The benchmark path. `execute` builds a list per row and a bytes
+        object per field, and `send_command` renders every field to text; a
+        timer around either charges KDS for client work the PostgreSQL
+        twin's `query` does not do, which at 9 int64 fields is about 3.8 µs
+        per returned row and 25 µs per statement on this Python. The frames
+        after PARSE are one constant: the portal is closed in the same batch
+        (or by the server, if the statement fails, §5), so its name is free
+        again by the next call.
+        """
+        self.sock.sendall(frame(C_PARSE, _Writer().s("").text(sql).take())
+                          + _QUERY_TAIL)
+        tag, rows, payload_bytes, error = "", 0, 0, None
+        fields = 0
+        while True:
+            ftype, _, payload = self._recv_frame()
+            if ftype == S_ROW_BATCH:
+                (count,) = _U16.unpack_from(payload, 0)
+                rows += count
+                at = 2
+                for _ in range(count * fields):
+                    (n,) = _I32.unpack_from(payload, at)
+                    at += 4
+                    if n > 0:
+                        at += n
+                        payload_bytes += n
+            elif ftype == S_ROW_DESC:
+                (fields,) = _U16.unpack_from(payload, 0)
+            elif ftype == S_COMPLETE:
+                tag = _Reader(payload).text()
+            elif ftype == S_ERROR:
+                error = self._error(payload)
+            elif ftype == S_READY:
+                return tag, rows, payload_bytes, error
 
     def prepare(self, name, sql):
         """Parses `sql` once under the statement name `name` (§5's named
