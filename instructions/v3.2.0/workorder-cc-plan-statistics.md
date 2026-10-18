@@ -514,3 +514,32 @@ The close results go to bench/v3.2.0/results-cc-close-<describe>.md. It states t
   the "two compiles a hit" claim (the hit path calls `compile_order` once
   by construction; the close measures the time), and a refused remembered
   order (no schema change that keeps every stamp can refuse an order).
+- **CC-close**, measured at `c547ef14` against `65dc45c5`
+  (`bench/v3.2.0/results-cc-close-v3.2.0-184-gc547ef14.md`, commit
+  `b78799fa`): **overhead within the floor** - pooled over 36 paired rounds
+  (20 for the writes) the point read +0.81 %, the tuple-key point join
+  +0.43 %, a single-row INSERT -0.10 % and UPDATE +0.50 %, against a control
+  server of A's binary at +0.86 / +0.82 / +0.65 / -0.09 %. **The S0 flips
+  realised** on six of eight cells: compare-all -33 to -40 % CPU at 1,000 to
+  10,000 results (-13 % at 200, short of 15 %: the planned path's 19-25 us
+  is 17 % of a 144 us statement), customer-statement -29 to -62 % at 200 to
+  10,000 cargos; at 200,000 cargos the planner flips on an estimate the
+  walk does not realise (+7 to +10 % on the harness's servers, -4.6 to +4.1
+  % on clean ones; known-gaps). **The memo** saves 15-17 % on a repeated
+  3-relation cross-join at 200-1,000 rows, 5 % at 10,000, nothing at
+  60,480; a unique literal per run costs +1-3 % over A's search. **The
+  steward**'s longest step was 54-69 us, 17 publishes, no part drop, every
+  seed page resident. **Stable**: no generation move and one order per
+  statement over 60 s. **The prior** was 0.38x on one height-3 tree, past
+  S0's 2x gate, so CC-Q6 was revisited: the stratified prior (CC-Q6 (c),
+  `1a9168d3`, reviewed, suite 4126/4126) re-measured at `1a9168d3`
+  (`bench/v3.2.0/results-cc-close-prior-v3.2.0-186-g1a9168d3.md`, commit
+  `17ab91cf`): 0.72-1.16x on all 28 relations (1.08 on that tree), longest
+  step 105 us, 8-20 extra pool misses from cold leaves, and the four gain
+  cells' flips unchanged (B against the c547ef14 binary inside the 2 %
+  floor). **Cut**: sessions off core 0 (`cores = 1`), `durability =
+  strict`, the PostgreSQL floor, the overhead cells at 200 and 1,000 rows,
+  and in the re-measure every cell but the prior, the steward and four gain
+  cells. The re-measure did not reproduce the close's -44.7 % clean-server
+  figure at 10,000 cargos (-28.8 % on both binaries); its cause stays
+  undiagnosed, as the known-gaps entry says.

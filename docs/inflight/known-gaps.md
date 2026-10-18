@@ -1365,7 +1365,10 @@ Verified on `worktree-bz-background-advisory-optimizer` at `954abc20`
   (`bench/v3.2.0/results-cc-close-v3.2.0-184-gc547ef14.md`), cause not
   diagnosed. Not the planner's: both binaries show it with the order
   forced. It makes the 200,000-cargo flip measure +7-10 % on such servers
-  where it measures -4.6 to +4.1 % on clean ones - the estimate's saving
+  where it measures -4.6 to +4.1 % on clean ones, and the close's clean
+  -44.7 % at 10,000 cargos was not reproduced by the re-measure at
+  `1a9168d3` (-28.8 % on both binaries,
+  `bench/v3.2.0/results-cc-close-prior-v3.2.0-186-g1a9168d3.md`) - the estimate's saving
   (`switch=0.68`) is not realised at that size, since a walk rejecting rows
   on their bytes is cheaper per row than the model's walk. Owned by
   `docs/spec/eviction.md` until diagnosed.
