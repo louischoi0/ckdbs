@@ -1,0 +1,104 @@
+{
+ "point-join-3rel": {
+  "stmt": "SELECT b.id, b.close, s.ticker, e.code FROM pb_bars AS b JOIN pb_symbols AS s ON b.symbol_id = s.id JOIN pb_exchanges AS e ON s.exchange_id = e.id WHERE b.id = 29873",
+  "A": [
+   "analyze rows=1 class=JoinSelect steps=3 examined=3 pages=3 opens=3 pattern_id=0x403c178e362be946 fetch_id=0x19691f6e0d154b25",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe pb_exchanges AS e key=0:1.2",
+   "  filter 0:1.2 = 0:2.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1, e.code=0:2.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 2 Probe pb_exchanges AS e opens=1 examined=1 matched=1 sel=100% pages=1"
+  ],
+  "B": [
+   "analyze rows=1 class=JoinSelect steps=3 examined=3 pages=3 opens=3 pattern_id=0x403c178e362be946 fetch_id=0x19691f6e0d154b25",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe pb_exchanges AS e key=0:1.2",
+   "  filter 0:1.2 = 0:2.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1, e.code=0:2.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 2 Probe pb_exchanges AS e opens=1 examined=1 matched=1 sel=100% pages=1"
+  ],
+  "A2": [
+   "analyze rows=1 class=JoinSelect steps=3 examined=3 pages=3 opens=3 pattern_id=0x403c178e362be946 fetch_id=0x19691f6e0d154b25",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe pb_exchanges AS e key=0:1.2",
+   "  filter 0:1.2 = 0:2.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1, e.code=0:2.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 2 Probe pb_exchanges AS e opens=1 examined=1 matched=1 sel=100% pages=1"
+  ],
+  "C": [
+   "analyze rows=1 class=JoinSelect steps=3 examined=3 pages=3 opens=3 pattern_id=0x403c178e362be946 fetch_id=0x19691f6e0d154b25",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe pb_exchanges AS e key=0:1.2",
+   "  filter 0:1.2 = 0:2.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1, e.code=0:2.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 2 Probe pb_exchanges AS e opens=1 examined=1 matched=1 sel=100% pages=1"
+  ],
+  "rows": 1,
+  "multiset_equal_A_B": true,
+  "multiset_equal_A_A2": true,
+  "multiset_equal_A_C": true
+ },
+ "pk-point-read": {
+  "stmt": "SELECT * FROM pb_bars WHERE id = 29873",
+  "A": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1"
+  ],
+  "B": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1"
+  ],
+  "A2": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1"
+  ],
+  "C": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1"
+  ],
+  "rows": 1,
+  "multiset_equal_A_B": true,
+  "multiset_equal_A_A2": true,
+  "multiset_equal_A_C": true
+ }
+}
