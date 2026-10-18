@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <functional>
 
 #include "kds/catalog/catalog.hpp"
 #include "kds/storage/anchor_page.hpp"
@@ -50,15 +49,21 @@ Status SpentBudget() { return Status::ResourceExhausted("the steward's seed budg
 // header's rule).
 struct NodeFacts {
     bool leaf = false;
-    std::uint16_t level = 0;        // an internal node's
-    std::uint16_t fanout = 0;       // an internal node's children
-    PageId pick = kInvalidPageId;   // the child `choose` named
-    std::size_t live = 0;           // a leaf's live slots
+    std::uint16_t level = 0;   // an internal node's
+    std::uint16_t fanout = 0;  // an internal node's children
+    // The children asked for, by position: up to `kPriorDescents` of them.
+    std::array<PageId, PlanStats::kPriorDescents> children{};
+    std::size_t nchildren = 0;
+    std::size_t live = 0;  // a leaf's live slots
 };
 
+// Reads one page. For an internal node `want` children are named: with
+// `want` 1, the one `salt` picks (child 0 for salt 0); with more, every
+// child where the node has no more than `want`, else the rightmost and
+// `want - 1` spread evenly over the rest - the rightmost apart because an
+// append-built tree's rightmost subtree is the one not full.
 StatusOr<NodeFacts> ReadNode(storage::PageStore& store, PageId id, catalog::Oid oid,
-                             std::size_t& budget,
-                             const std::function<std::uint16_t(std::uint16_t)>& choose) {
+                             std::size_t& budget, std::size_t want, std::uint64_t salt) {
     if (budget == 0) return SpentBudget();
     --budget;
     auto page = store.GetForRead(id);
@@ -85,14 +90,30 @@ StatusOr<NodeFacts> ReadNode(storage::PageStore& store, PageId id, catalog::Oid 
     const btree::InternalView node(page.value().bytes());
     facts.level = node.level();
     facts.fanout = static_cast<std::uint16_t>(node.entry_count() + 1);
-    const std::uint16_t pick = choose(facts.fanout);
-    if (pick == 0) {
-        facts.pick = node.leftmost_child();
-    } else {
-        auto entry = node.Entry(static_cast<std::uint16_t>(pick - 1));
+    const auto child = [&node](std::size_t position) -> StatusOr<PageId> {
+        if (position == 0) return node.leftmost_child();
+        auto entry = node.Entry(static_cast<std::uint16_t>(position - 1));
         if (!entry.ok()) return entry.status();
-        facts.pick = entry.value().child;
+        return entry.value().child;
+    };
+    std::array<std::size_t, PlanStats::kPriorDescents> positions{};
+    std::size_t count = 0;
+    want = std::min(want, positions.size());
+    if (want <= 1) {
+        positions[count++] = salt == 0 ? 0 : static_cast<std::size_t>(Mix(salt) % facts.fanout);
+    } else if (facts.fanout <= want) {
+        for (std::size_t p = 0; p < facts.fanout; ++p) positions[count++] = p;
+    } else {
+        const std::size_t rest = facts.fanout - 1;  // children before the rightmost
+        for (std::size_t k = 0; k + 1 < want; ++k) positions[count++] = k * rest / (want - 1);
+        positions[count++] = rest;
     }
+    for (std::size_t k = 0; k < count; ++k) {
+        auto id_at = child(positions[k]);
+        if (!id_at.ok()) return id_at.status();
+        facts.children[k] = id_at.value();
+    }
+    facts.nchildren = count;
     return facts;
 }
 
@@ -134,50 +155,85 @@ StatusOr<double> ReadRelationPrior(storage::PageStore& store, const catalog::Tab
         root = storage::AnchorClusteredRoot(anchor.value().bytes());
     }  // the anchor is let go before the root is asked for
 
-    const auto leftmost = [](std::uint16_t) { return std::uint16_t{0}; };
-    auto top = ReadNode(store, root, access.oid, budget, leftmost);
+    auto top = ReadNode(store, root, access.oid, budget, PlanStats::kPriorDescents, 0);
     if (!top.ok()) return top.status();
     // Height 1: the root's live slots, exact up to undecided versions.
     if (top.value().leaf) return static_cast<double>(top.value().live);
 
-    double leaves = top.value().fanout;  // height 2: the root's children, exact
-    if (top.value().level >= 2) {
-        // Height 3 or more: descents over the internal levels alone, each
-        // the product of the fan-outs it passes; the estimate is their mean.
-        // Each descent re-reads the root to make its own first pick.
-        double sum = 0;
-        std::size_t done = 0;
-        for (std::size_t d = 0; d < PlanStats::kPriorDescents; ++d) {
-            double product = 1;
-            PageId at = root;
-            bool complete = true;
-            for (std::uint16_t level = top.value().level; level >= 1; --level) {
-                const auto choose = [&](std::uint16_t fanout) {
-                    return static_cast<std::uint16_t>(
-                        Mix(Mix(access.oid) ^ (d * 131u + level)) % fanout);
-                };
-                auto node = ReadNode(store, at, access.oid, budget, choose);
-                if (!node.ok()) {
-                    if (node.status().code() == StatusCode::kResourceExhausted) return node.status();
-                    complete = false;
-                    break;
-                }
-                if (node.value().leaf || node.value().level != level) {
-                    complete = false;  // the tree moved under the read
-                    break;
-                }
-                product *= node.value().fanout;
-                at = node.value().pick;
+    // Height 2 or more, stratified by the root's children (CC-Q6 (c)): a
+    // descent under each child the root named - every child when there are
+    // no more than `kPriorDescents`, else the rightmost and the rest spread -
+    // multiplying the fan-outs below it, then reading the leaf it reaches for
+    // its live slots. Exact in leaves up to height 3 with few root children;
+    // an append-built tree's under-full rightmost subtree is measured, not
+    // averaged in. A budget spent mid-way keeps what finished.
+    const NodeFacts& root_facts = top.value();
+    const bool sampled_rest = root_facts.fanout > root_facts.nchildren;
+    double rest_sum = 0;
+    std::size_t rest_done = 0;
+    std::optional<double> rightmost;
+    double live_sum = 0;
+    std::size_t sampled = 0;
+    bool spent = false;
+    for (std::size_t c = 0; c < root_facts.nchildren && !spent; ++c) {
+        PageId at = root_facts.children[c];
+        double product = 1;  // the leaves under this child
+        bool complete = true;
+        for (std::uint16_t level = static_cast<std::uint16_t>(root_facts.level - 1); level >= 1;
+             --level) {
+            auto node = ReadNode(store, at, access.oid, budget, 1,
+                                 Mix(access.oid) ^ (c * 131u + level));
+            if (!node.ok()) {
+                spent = node.status().code() == StatusCode::kResourceExhausted;
+                complete = false;
+                break;
             }
-            if (!complete) continue;
-            sum += product;
-            ++done;
+            if (node.value().leaf || node.value().level != level) {
+                complete = false;  // the tree moved under the read
+                break;
+            }
+            product *= node.value().fanout;
+            at = node.value().children[0];
         }
-        if (done == 0) return Status::NotFound("no descent of the prior completed");
-        leaves = sum / static_cast<double>(done);
+        if (!complete) continue;
+        const bool is_rightmost = sampled_rest && c + 1 == root_facts.nchildren;
+        if (is_rightmost) {
+            rightmost = product;
+        } else {
+            rest_sum += product;
+            ++rest_done;
+        }
+        auto leaf = ReadNode(store, at, access.oid, budget, 1, 0);
+        if (!leaf.ok()) {
+            spent = leaf.status().code() == StatusCode::kResourceExhausted;
+            continue;
+        }
+        if (!leaf.value().leaf) continue;  // the tree moved under the read
+        live_sum += static_cast<double>(leaf.value().live);
+        ++sampled;
     }
-    return leaves * static_cast<double>(LeafRowCapacity(access.layout.row_size)) *
-           PlanStats::kAssumedLeafFill;
+    // No leaf read: a later step retries with a whole budget rather than
+    // publish the constant fill; a tree whose leaves no read could reach
+    // keeps it.
+    if (sampled == 0 && spent) return SpentBudget();
+    if (rest_done == 0 && !rightmost.has_value()) {
+        return Status::NotFound("no descent of the prior completed");
+    }
+    const double rest_mean = rest_done > 0 ? rest_sum / static_cast<double>(rest_done)
+                                           : rightmost.value_or(0);
+    double leaves = 0;
+    if (sampled_rest) {
+        // The rightmost as measured, the others as their sample's mean.
+        leaves = rightmost.value_or(rest_mean) +
+                 static_cast<double>(root_facts.fanout - 1) * rest_mean;
+    } else {
+        leaves = static_cast<double>(root_facts.fanout) * rest_mean;
+    }
+    const double per_leaf =
+        sampled > 0 ? live_sum / static_cast<double>(sampled)
+                    : static_cast<double>(LeafRowCapacity(access.layout.row_size)) *
+                          PlanStats::kAssumedLeafFill;
+    return leaves * per_leaf;
 }
 
 // ---- The snapshot ----------------------------------------------------------

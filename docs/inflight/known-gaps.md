@@ -1351,10 +1351,24 @@ Verified on `worktree-bz-background-advisory-optimizer` at `954abc20`
   build's quarter-cap guard bound how far a wrong estimate moves a plan,
   not whether it does. Owned by `plan-stats.md`.
 
-- **The prior's leaf fill is a constant (0.75)**, so a tree of half-full
-  leaves (mid-splits) is over-estimated by up to 1.5x; above height 2 the
-  random-path estimate has no test of its own (it needs about 130,000
-  rows). Owned by `plan-stats.md` PS1.
+- **The prior samples at most four root children and their leaves**, so a
+  wide root's subtrees and a tree whose leaf fill varies a great deal
+  (mid-splits beside full appended leaves) are estimated from a small
+  sample; above height 2 the stratified estimate has no unit test of its
+  own (it needs about 130,000 rows). Verified at the stratified prior's
+  commit on `worktree-cc-stats-planner`; CC's close re-measures it against
+  true counts. Owned by `plan-stats.md` PS1.
+
+- **A relation created and loaded after mount runs some join plans 12-30 %
+  slower than one restored from a copy of the same data**, on the opening
+  binary as well: found at CC's close on scenario 2's customer-statement
+  (`bench/v3.2.0/results-cc-close-v3.2.0-184-gc547ef14.md`), cause not
+  diagnosed. Not the planner's: both binaries show it with the order
+  forced. It makes the 200,000-cargo flip measure +7-10 % on such servers
+  where it measures -4.6 to +4.1 % on clean ones - the estimate's saving
+  (`switch=0.68`) is not realised at that size, since a walk rejecting rows
+  on their bytes is cheaper per row than the model's walk. Owned by
+  `docs/spec/eviction.md` until diagnosed.
 
 - **A block of more than four relations is ordered greedily from priors
   alone**: it keys no posterior, so no observed cardinality reaches it.

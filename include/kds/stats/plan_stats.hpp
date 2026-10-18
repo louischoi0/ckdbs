@@ -98,10 +98,12 @@ public:
     // planner prices no build where one declined, so no run re-tests it;
     // past this the fact lapses and the build is priced, and tried, again.
     static constexpr std::uint64_t kDeclineTtlNs = 60'000'000'000;
-    // A leaf's fill the prior assumes (CC-Q6): an append-split leaf is
-    // full and a mid-split one about half, so the error is bounded at 1.5x.
+    // A leaf's fill the prior assumes where no leaf could be sampled
+    // (CC-Q6 (c)): an append-split leaf is full and a mid-split one about
+    // half.
     static constexpr double kAssumedLeafFill = 0.75;
-    // Descents of the random-path estimate above height 2 (PS1).
+    // The root children a prior descends under at most, and so the leaves
+    // it samples (PS1).
     static constexpr std::size_t kPriorDescents = 4;
 
     explicit PlanStats(std::uint32_t cores);

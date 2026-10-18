@@ -30,15 +30,26 @@ rows, read by a steward step from the clustered tree's own pages:
 
 - height 1 (the root is the leaf): the root's live slots, exact up to
   undecided versions;
-- height 2: the root's children, exact, times a leaf's row capacity for the
-  relation's fixed row size (`LeafRowCapacity`) times `kAssumedLeafFill`;
-- height 3 or more: a deterministic random-path estimate over the internal
-  levels only - `kPriorDescents` descents from the root, each multiplying
-  the fan-outs it passes, stopping at level 1 - times the same capacity and
-  fill.
+- height 2 or more, **stratified by the root's children** (CC-Q6 (c), at
+  CC's close): one descent under each child the root names - every child
+  when it has at most `kPriorDescents`, else the rightmost and the rest
+  spread evenly - multiplying the fan-outs below it, then reading the leaf
+  it reaches for its live slots. The leaves are the children's products
+  summed (the rightmost as measured and the rest as their sample's mean
+  when the root names a sample); the rows are the leaves times the mean
+  sampled leaf's live slots. Exact in leaves up to height 3 with few root
+  children. The rightmost subtree stands apart because an append-built
+  tree's is the one not full: four random descents, CC-S2's estimator, read
+  a measured height-3 tree at 0.38x by averaging it in.
 
-It reads no leaf above height 1 and no key domain. A page whose type or
-`owner_oid` does not match discards that relation's seed for the step.
+A budget spent before any leaf is read refuses the seed - the steward
+retries the relation next step with a whole budget - rather than publish a
+leaf priced at its row capacity (`LeafRowCapacity`) times
+`kAssumedLeafFill`; that constant prices only a tree whose leaves no read
+could reach. A budget spent after a leaf keeps what finished. It reads no key
+domain. A page whose type or
+`owner_oid` does not match discards the seed when it is the anchor or the
+root, and the one descent it lies on below them.
 
 **PS2 - Join-subset posterior** `card(T)`, keyed by `(fetch_id, n, the
 block's relation oids in written order, T)`, `T` a set of written positions:
@@ -101,8 +112,11 @@ next is asked for - for `btree.hpp`'s descent rule: a split holds pages
 bottom-up, and a reader holding a parent while asking for its child could
 close a latch cycle with it. A descent re-reads the root for its own pick. A
 cold page is a synchronous read on core 0's reactor, which is why the budget
-is small and internal pages - which every probe keeps resident - are what it
-reads. The catalog lookup that names a relation's pages is outside the page
+is small. Internal pages are what every probe keeps resident; the leaves a
+seed samples - one a descent - may be cold. A seed costs 2 pages plus one a
+level below the root a descent, so a 16-page step seeds one or two
+relations of height 2 or more, and a block's priors can take a few steps to
+arrive. The catalog lookup that names a relation's pages is outside the page
 budget (a memo hit for a relation a statement just used).
 
 ## 5. Bands and publication

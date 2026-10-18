@@ -136,10 +136,31 @@ TEST_F(PlanStatsTest, ThePriorIsExactAtHeightOneAndCloseAtHeightTwo) {
         if (rows < 10) {
             EXPECT_EQ(prior.value(), rows) << name;
         } else {
-            EXPECT_GT(prior.value(), rows / 2) << name;
-            EXPECT_LT(prior.value(), rows * 2) << name;
+            // Sampled leaves' live slots (CC-Q6 (b)): an append-built tree's
+            // leaves are full but its last, so the estimate is close.
+            EXPECT_GT(prior.value(), rows / 1.5) << name;
+            EXPECT_LT(prior.value(), rows * 1.5) << name;
         }
     }
+}
+
+TEST_F(PlanStatsTest, ASpentBudgetKeepsWhatFinishedAndNeverPublishesAnUnsampledFill) {
+    // PS1: a budget that runs out after a leaf was read keeps the estimate
+    // it has; one that runs out before any leaf is read refuses, so the
+    // steward retries the relation with a whole budget.
+    Ok("CREATE TABLE big (id int64, v int64) BTREE");
+    for (int i = 0; i < 3000; ++i) Ok("INSERT INTO big VALUES (" + std::to_string(i) + ")");
+    auto access = boot_->catalog.InitTableAccess(OidOf("big"));
+    ASSERT_TRUE(access.ok());
+    std::size_t one_leaf = 3;  // the anchor, the root, one leaf
+    auto partial = stats::ReadRelationPrior(store_, *access.value(), one_leaf);
+    ASSERT_TRUE(partial.ok()) << partial.status().message();
+    EXPECT_GT(partial.value(), 3000 / 1.5);
+    EXPECT_LT(partial.value(), 3000 * 1.5);
+    std::size_t no_leaf = 2;  // the anchor and the root
+    auto none = stats::ReadRelationPrior(store_, *access.value(), no_leaf);
+    ASSERT_FALSE(none.ok());
+    EXPECT_EQ(none.status().code(), StatusCode::kResourceExhausted);
 }
 
 TEST_F(PlanStatsTest, APageAnotherRelationOwnsDiscardsTheSeed) {
