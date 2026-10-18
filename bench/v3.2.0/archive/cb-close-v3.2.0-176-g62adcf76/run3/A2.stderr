@@ -1,0 +1,4 @@
+ckdbs on /tmp/claude-1000/-home-cdkbs-ckdbs/00ec4c4c-8445-418e-92d3-c235d2b282e7/scratchpad/cbclose/run3/A2.db: 17 pages, superblock version 30
+logging to /tmp/claude-1000/-home-cdkbs-ckdbs/00ec4c4c-8445-418e-92d3-c235d2b282e7/scratchpad/cbclose/run3/A2.log at level WARN
+listening on 127.0.0.1:25503
+stopped; 2437 pages persisted

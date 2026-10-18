@@ -67,6 +67,7 @@ add_library(kds
     src/stats/waystone_page.cpp
     src/stats/waystone_dir.cpp
     src/stats/trail_store.cpp
+    src/stats/plan_stats.cpp
     src/stats/lock_wait_log.cpp
     src/stats/statement_stats.cpp
     src/stats/trail_recorder.cpp
@@ -118,6 +119,8 @@ add_library(kds
     src/exec/plan_printer.cpp
     src/exec/functions.cpp
     src/exec/step_compiler.cpp
+    src/exec/join_order.cpp
+    src/exec/plan_memo.cpp
     src/exec/set_expr.cpp
     src/exec/query_layer.cpp
     src/exec/aggregate.cpp

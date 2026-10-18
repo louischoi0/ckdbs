@@ -158,9 +158,12 @@ same-page tuples into one fetch under the no-pin R1 regime.
 ## 4. Read path
 
 Compilation stays deterministic: whether `(rel, col)` has a Cabin is
-catalog state, so the plan remains `f(shape, catalog)` — a non-tuple-key
-equality step on a cabined column compiles to a **cabin probe with scan
-fallback**; nothing about the *data* influences the plan.
+catalog state, so a step's kind remains `f(shape, catalog)` given the
+relations before it — a non-tuple-key equality step on a cabined column
+compiles to a **cabin probe with scan fallback**; nothing about the *data*
+chooses a step's kind or its Cabin. The order of a planned join around a
+Cabin step may read the join planner's relation statistics
+(`plan-stats.md`), never a Cabin's runtime state.
 
 At execution, for key value `v`:
 

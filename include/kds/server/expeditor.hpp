@@ -416,6 +416,10 @@ public:
         // Whether a walk consults its scan kernel (BM-Q5 (a); exec/budget.hpp).
         bool scan_kernel = true;
 
+        // `join_order`: `planned` lets the join planner choose a block's
+        // order, `written` keeps the order the statement wrote (CB-S2).
+        bool plan_join_order = true;
+
         // **How long a statement may wait before the engine calls it a
         // fault** (AO-R8, the retired in-doubt ceiling's quantity,
         // re-scoped at AT-S6). Milliseconds in the file,
@@ -503,7 +507,8 @@ public:
             return StatementLimits{indexes, max_insert_rows,
                                    exec::AggregateLimits{aggregate_max_groups,
                                                          aggregate_max_distinct},
-                                   sort_max_rows, join_build_max_rows, scan_kernel};
+                                   sort_max_rows, join_build_max_rows, scan_kernel,
+                                   plan_join_order};
         }
 
         // Every key a config file may set (config_file.hpp). Kept next to
@@ -720,6 +725,9 @@ private:
     // store. Declared **before** both of its feeders - each holds a
     // pointer to it, so it must be destroyed after them.
     std::optional<stats::OptimizerSignals> optimizer_signals_;
+    // The join planner's statistics, one store for the instance
+    // (docs/spec/plan-stats.md); its steward runs on core 0's tick.
+    std::optional<stats::PlanStats> plan_stats_;
 
     std::optional<stats::CabinStore> cabin_store_;
 

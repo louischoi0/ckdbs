@@ -159,6 +159,7 @@ TEST(SortedLeafRigTest, AnInnerBuildAndAResumedPrefixAnswerTheSameUnderAnotherCo
     ASSERT_NE(rig, nullptr);
     CommandDispatcher& d0 = rig->core(0).dispatcher();
     CommandDispatcher& d1 = rig->core(1).dispatcher();
+    d0.set_plan_join_order(false);  // the walked join as written (CB-S2)
     CurrentCoreGuard as(0);
     Ok(d0, "CREATE TABLE au (id int64, name varchar)");
     Ok(d0, "CREATE TABLE tr (id int64, au_id int64, qty int64)");

@@ -1,0 +1,1 @@
+{"c1-compare-all-r200": 3000, "c1-compare-all-r1k": 810, "c1-compare-all-r2872": 299, "c1-compare-all-r10k": 89, "c2-customer-statement-n200": 3000, "c2-customer-statement-n1k": 2224, "c2-customer-statement-ca10k": 280, "c2-customer-statement-df200k": 154, "c3-cross-join-x200": 3000, "c3-cross-join-x1k": 3000, "c3-cross-join-x10k": 3000, "c3-cross-join-x60k": 725}

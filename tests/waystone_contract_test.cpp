@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include "learn_plan_stats.hpp"
+#include "unordered_reply.hpp"
+
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -59,6 +62,11 @@ public:
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+    void KeepWrittenOrder() { dispatcher_->set_plan_join_order(false); }
+    // The join planner's statistics, learned from `sqls` (CC-S3).
+    void Learn(const std::vector<std::string>& sqls) {
+        testing_plan::LearnPlanStats(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);
+    }
 
     catalog::Catalog& catalog() { return boot_->catalog; }
     storage::InMemoryPageStore& store() { return store_; }
@@ -68,6 +76,7 @@ private:
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<stats::TrailRecorder> recorder_;
     std::optional<CommandDispatcher> dispatcher_;
+    stats::PlanStats plan_stats_{1};
 };
 
 // The dataset every configuration runs over. A btree whose `id` is its tuple
@@ -300,6 +309,50 @@ TEST(WaystoneContractTest, TheScanKernelSwitchChangesNoReply) {
     Load(on_db);
     Load(off_db);
     ExpectSame(RunAll(on_db, 3), RunAll(off_db, 3), "scan kernel on against off");
+}
+
+// CB-Q3 (a): a reordered chain records its probe step under the relation's
+// written position, and replay finds it there. `b`'s indexed literal drives,
+// so `j` - written first - is probed second, and its trail entries carry
+// step id 0. Every round answers the walk's rows, recorded and replayed
+// alike, and the trail was really written.
+TEST(WaystoneContractTest, AReorderedChainRecordsAndReplaysUnderWrittenIds) {
+    const std::string sql = "SELECT b.label, j.w FROM j JOIN b ON j.id = b.id WHERE b.v = 30";
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    const std::string plan = db.Run("ANALYZE " + sql);
+    ASSERT_NE(plan.find("reordered=1"), std::string::npos) << plan;
+    ASSERT_NE(plan.find("step 0 Probe j"), std::string::npos) << plan;
+    for (int round = 0; round < 4; ++round) {
+        EXPECT_EQ(db.Run(sql), "b.label,j.w\\nrow3,300") << "round " << round;
+    }
+    auto fingerprint = parser::FingerprintOf(sql);
+    ASSERT_TRUE(fingerprint.has_value());
+    auto patterns = db.catalog().ListPatterns();
+    ASSERT_TRUE(patterns.ok()) << patterns.status().message();
+    EXPECT_TRUE(std::any_of(patterns.value().begin(), patterns.value().end(),
+                            [&](const catalog::SysPatternRow& row) {
+                                return row.fetch_id == fingerprint->fetch_id;
+                            }))
+        << "the reordered chain recorded no trail";
+}
+
+// CC-S3: recording and replay under the join planner's learned statistics.
+// The plans may differ from the data-free reference's, so rows compare as a
+// multiset where a statement has no ORDER BY; a trail recorded under one
+// order replays under another by written step ids (CB-Q3).
+TEST(WaystoneContractTest, RecordingAndReplayingUnderLearnedStatisticsChangesNoRow) {
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    db.Learn(Queries());
+    const std::vector<std::string> got = RunAll(db, 3);
+    const std::vector<std::string> want = Reference();
+    ASSERT_EQ(got.size(), want.size());
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        const std::string& sql = Queries()[i % Queries().size()];
+        EXPECT_EQ(testing_reply::Unordered(got[i], sql), testing_reply::Unordered(want[i], sql))
+            << "reply " << i << " (" << sql << ")";
+    }
 }
 
 TEST(WaystoneContractTest, RecordingWithoutReplayingChangesNoReply) {
@@ -547,6 +600,7 @@ TEST(WaystoneContractTest, ABuiltJoinFeedsNoTrail) {
     // it runs. This is the test that fails if someone drops the
     // `IsTrailReplayable(step.kind)` gate at the recording site.
     Instance db(/*record=*/true, /*replay=*/true);
+    db.KeepWrittenOrder();  // the walked join as written (CB-S2)
     Load(db);
 
     const std::string built = "SELECT a.label, d.label FROM b AS a JOIN h AS d ON d.v = a.v";

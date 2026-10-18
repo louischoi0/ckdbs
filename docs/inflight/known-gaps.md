@@ -1396,6 +1396,69 @@ change's stages found and left.
   option said. A restore that skips recovery ships in no configuration;
   only the harness can build one. **No owner.**
 
+## The join planner (CB)
+
+- **An aggregated join's `SUM` can overflow in one join order and not in
+  another.** Read at CB-S2's review on `worktree-cb-join-planner`: the int64
+  accumulator checks every partial sum (`src/exec/aggregate.cpp`, the
+  `SUM` fold), so for one set of rows `MAX, 1, -1` refuses `OutOfRange`
+  where `MAX, -1, 1` does not. Since CB-S2 the join planner chooses the
+  order rows reach the fold, and a catalog change (`CREATE INDEX`, a Cabin)
+  can change it, so the same statement over the same rows can move between
+  an answer and a refusal. Never a wrong answer. Owned by
+  `docs/spec/aggregate.md`.
+
+- **A reordered plan's `ANALYZE` numbers steps one way and columns
+  another.** A step line prints the step's id, its relation's written
+  position (CB-Q3), while a `ColumnRef` prints `up:slot.col` with `slot` the
+  execution position (`src/exec/plan_printer.cpp`). Correct, and easy to
+  misread on a `reordered=1` plan. Owned by `docs/spec/parser-v2.md` I12.
+
+- **The planner prices a relation at `kAssumedRelationRows` until its prior
+  is published.** Since CC-S3 a relation's prior replaces the constant
+  (`docs/spec/plan-stats.md`), but a mount or a restore starts empty: until
+  the steward's first publish - a second after a planned statement first
+  meets the relation - the plan is data-free. Owned by `plan-stats.md`.
+
+- **A join subset no run measured is estimated from priors and constant
+  selectivities.** `card(T)` exists only for the prefixes of orders that
+  ran; another order's prefix is priced from the relations' priors, the
+  literal constants and `1 / rows` per join key, which can be wrong by
+  orders of magnitude for a skewed join. The 10 % switch margin and the
+  build's quarter-cap guard bound how far a wrong estimate moves a plan,
+  not whether it does. Owned by `plan-stats.md`.
+
+- **The prior samples at most four root children and their leaves**, so a
+  wide root's subtrees and a tree whose leaf fill varies a great deal
+  (mid-splits beside full appended leaves) are estimated from a small
+  sample; above height 2 the stratified estimate has no unit test of its
+  own (it needs about 130,000 rows). Verified at the stratified prior's
+  commit on `worktree-cc-stats-planner`; CC's close re-measures it against
+  true counts. Owned by `plan-stats.md` PS1.
+
+- **A relation created and loaded after mount runs some join plans 12-30 %
+  slower than one restored from a copy of the same data**, on the opening
+  binary as well: found at CC's close on scenario 2's customer-statement
+  (`bench/v3.2.0/results-cc-close-v3.2.0-184-gc547ef14.md`), cause not
+  diagnosed. Not the planner's: both binaries show it with the order
+  forced. It makes the 200,000-cargo flip measure +7-10 % on such servers
+  where it measures -4.6 to +4.1 % on clean ones, and the close's clean
+  -44.7 % at 10,000 cargos was not reproduced by the re-measure at
+  `1a9168d3` (-28.8 % on both binaries,
+  `bench/v3.2.0/results-cc-close-prior-v3.2.0-186-g1a9168d3.md`) - the estimate's saving
+  (`switch=0.68`) is not realised at that size, since a walk rejecting rows
+  on their bytes is cheaper per row than the model's walk. Owned by
+  `docs/spec/eviction.md` until diagnosed.
+
+- **A block of more than four relations is ordered greedily from priors
+  alone**: it keys no posterior, so no observed cardinality reaches it.
+  Owned by `parser-v2.md` I12.
+
+- **Which kind serves a step is still chosen by rank, not by statistics.**
+  An index is taken ahead of a walk however unselective its key
+  (`index.md` IX9's crossover); CC-Q1 (a) put statistics into the order
+  only. Owned by `index.md` §9.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,

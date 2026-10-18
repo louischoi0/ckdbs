@@ -23,6 +23,9 @@
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/plan_memo.hpp"
+#include "kds/exec/step_compiler.hpp"
+#include "kds/stats/plan_stats.hpp"
 #include "kds/exec/fk_check.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/set_expr.hpp"
@@ -352,6 +355,8 @@ struct StatementLimits {
     std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
     std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
     bool scan_kernel = true;
+    // `join_order = planned` (true) or `written` (CB-S2).
+    bool plan_join_order = true;
 };
 
 // **The physical optimizer's surface, as one value** (AT-S8, on the
@@ -363,6 +368,9 @@ struct StatementLimits {
 // own; every other member is taken as given.
 struct OptimizerSurface {
     stats::OptimizerSignals* signals = nullptr;
+    // The join planner's statistics (docs/spec/plan-stats.md), the
+    // instance's one store.
+    stats::PlanStats* plan_stats = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
     const stats::CabinOptimizer* controller = nullptr;
     const exec::CabinOptimizerExecutor* executor = nullptr;
@@ -1681,6 +1689,14 @@ public:
     void set_join_build_max_rows(std::size_t rows) noexcept {
         budget_.set_join_build_max_rows(rows);
     }
+    // `join_order` (CB-S2): false keeps every join in its written order.
+    void set_plan_join_order(bool planned) noexcept { plan_join_order_ = planned; }
+    // The join planner's statistics store, or null - every hand-built
+    // dispatcher, which then plans data-free and folds nothing.
+    void set_plan_stats(stats::PlanStats* plan_stats) noexcept {
+        plan_stats_ = plan_stats;
+        plan_source_ = stats::PlanStatsSource(plan_stats);
+    }
 
     // All of them at once, as an instance hands them to each core (AT-S8,
     // `StatementLimits`).
@@ -1691,6 +1707,7 @@ public:
         set_sort_max_rows(limits.sort_max_rows);
         set_join_build_max_rows(limits.join_build_max_rows);
         budget_.set_scan_kernel(limits.scan_kernel);
+        set_plan_join_order(limits.plan_join_order);
     }
 
 
@@ -1838,6 +1855,7 @@ public:
     // to each core (AT-S8, `OptimizerSurface`).
     void set_optimizer_surface(const OptimizerSurface& surface) noexcept {
         set_optimizer_signals(surface.signals);
+        set_plan_stats(surface.plan_stats);
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
         cabin_optimizer_view_latch_ = surface.view_latch;
@@ -1936,6 +1954,9 @@ private:
     // place so a fourth cannot be added to two of the three sites. Every
     // caller reaches here only after the execution succeeded; there is
     // deliberately no failure-path form (see RecordTrail).
+    // Folds a planned block's complete run into the planner's statistics
+    // (docs/spec/plan-stats.md PS2, PS3).
+    void RecordPlanStats(const exec::StepChain& chain, const exec::ExecStats& stats);
     void RecordExecution(const std::optional<StatementIdentity>& identity,
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);
@@ -2386,6 +2407,13 @@ private:
     // value and handed to each execution, which takes its own copy - so
     // one statement's spend never carries into the next.
     exec::Budget budget_;
+    // `join_order = planned` (CB-S2).
+    bool plan_join_order_ = true;
+    // `set_plan_stats`': the instance's store, and this core's view of it.
+    stats::PlanStats* plan_stats_ = nullptr;
+    stats::PlanStatsSource plan_source_;
+    // This core's join order memo (CC-S4).
+    exec::PlanMemo plan_memo_;
 
     // AG11's caps, handed to every fold this dispatcher runs, from the
     // `aggregate_max_groups` / `aggregate_max_distinct` config keys (spec

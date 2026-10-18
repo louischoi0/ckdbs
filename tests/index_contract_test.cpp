@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include "unordered_reply.hpp"
+#include "kds/stats/plan_stats.hpp"
+#include "learn_plan_stats.hpp"
+
 #include <cstring>
 #include <optional>
 #include <string>
@@ -79,6 +83,13 @@ public:
     catalog::Catalog& catalog() { return boot_->catalog; }
     storage::InMemoryPageStore& store() { return store_; }
 
+    // The join planner's statistics, learned from `sqls` (CC-S3): each run
+    // once, then two steward steps - the first seeds the priors the runs
+    // wanted and folds their counts, the second publishes what is left.
+    void Learn(const std::vector<std::string>& sqls) {
+        testing_plan::LearnPlanStats(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);
+    }
+
 private:
     storage::InMemoryPageStore store_{kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
@@ -86,6 +97,7 @@ private:
     std::optional<txn::UndoLog> undo_;
     std::optional<txn::TransactionManager> mgr_;
     std::optional<CommandDispatcher> dispatcher_;
+    stats::PlanStats plan_stats_{1};
 };
 
 // The schema every configuration runs over. `sym` is a string so the
@@ -216,8 +228,10 @@ const std::vector<std::string>& Queries() {
         // other kind.
         "SELECT a.id, c.id FROM b AS a JOIN b AS c ON c.owner = a.id "
         "WHERE a.id BETWEEN 1 AND 4",
+        // ORDER BY since CC-S1: without it LIMIT takes some three rows, and
+        // which three is the planner's (parser-v2.md I11).
         "SELECT a.id FROM b AS a JOIN b AS c ON c.owner = a.id "
-        "WHERE a.id BETWEEN 1 AND 4 LIMIT 3",
+        "WHERE a.id BETWEEN 1 AND 4 ORDER BY a.id LIMIT 3",
         "SELECT id FROM b AS o WHERE EXISTS "
         "(SELECT i.id FROM b AS i WHERE i.owner = o.id)",
     };
@@ -249,12 +263,42 @@ TEST(IndexContractTest, EveryConfigurationReturnsTheSameBytes) {
     LoadPlain(plain);
     LoadRebuilt(rebuilt);
 
+    // Rows compared unordered where the statement has no ORDER BY: `plain`
+    // has no index, so the join planner may run its joins in another order
+    // (CC-S1).
+    using testing_reply::Unordered;
     for (const std::string& sql : Queries()) {
-        const std::string expected = plain.Run(sql);
-        EXPECT_EQ(maintained.Run(sql), expected) << "write-hook-filled index: " << sql;
-        EXPECT_EQ(backfilled.Run(sql), expected) << "backfilled index: " << sql;
-        EXPECT_EQ(ignored.Run(sql), expected) << "indexes = off: " << sql;
-        EXPECT_EQ(rebuilt.Run(sql), expected) << "rebuilt index: " << sql;
+        const std::string expected = Unordered(plain.Run(sql), sql);
+        EXPECT_EQ(Unordered(maintained.Run(sql), sql), expected) << "write-hook-filled index: " << sql;
+        EXPECT_EQ(Unordered(backfilled.Run(sql), sql), expected) << "backfilled index: " << sql;
+        EXPECT_EQ(Unordered(ignored.Run(sql), sql), expected) << "indexes = off: " << sql;
+        EXPECT_EQ(Unordered(rebuilt.Run(sql), sql), expected) << "rebuilt index: " << sql;
+    }
+}
+
+// CC-S3: the same five configurations once each has learned the join
+// planner's statistics from the query set - so the comparison runs the
+// planner that ships, not only its cold, data-free path.
+TEST(IndexContractTest, EveryConfigurationReturnsTheSameRowsUnderLearnedStatistics) {
+    Instance maintained(/*indexes=*/true);
+    Instance backfilled(/*indexes=*/true);
+    Instance ignored(/*indexes=*/false);
+    Instance plain(/*indexes=*/true);
+    Instance rebuilt(/*indexes=*/true);
+    LoadMaintained(maintained);
+    LoadBackfilled(backfilled);
+    LoadMaintained(ignored);
+    LoadPlain(plain);
+    LoadRebuilt(rebuilt);
+    for (Instance* db : {&maintained, &backfilled, &ignored, &plain, &rebuilt}) db->Learn(Queries());
+
+    using testing_reply::Unordered;
+    for (const std::string& sql : Queries()) {
+        const std::string expected = Unordered(plain.Run(sql), sql);
+        EXPECT_EQ(Unordered(maintained.Run(sql), sql), expected) << "write-hook-filled index: " << sql;
+        EXPECT_EQ(Unordered(backfilled.Run(sql), sql), expected) << "backfilled index: " << sql;
+        EXPECT_EQ(Unordered(ignored.Run(sql), sql), expected) << "indexes = off: " << sql;
+        EXPECT_EQ(Unordered(rebuilt.Run(sql), sql), expected) << "rebuilt index: " << sql;
     }
 }
 

@@ -41,11 +41,20 @@ Keystone id at the slot against the bucketed tuple key - and resolves a miss by 
 tuple key lookup (`step_vm.cpp`'s build probe); every user relation is a
 btree, a heap included (`heap-and-tuple.md` §3.1b).
 
-## 3. Why this does not break the written-order contract
+**The side it builds is chosen since CB-S2** (`instructions/v3.2.0/workorder-cb-join-planner.md`
+§3.3): the build hashes the inner step of the chain as before, and the join
+planner chooses which relation is the inner step - the one whose build its
+cost model prices cheapest, and a build it expects past `join_build_max_rows`
+is priced as the per-row walk it falls back to. §3 below is the argument for
+the build inside one chain; the chain's order is no longer written order
+(`parser-v2.md` I12).
 
-`docs/spec/parser-v2.md` §5 (I12) is the constraint: written order is the
-plan, the chain runs front to back, decorrelation rewrites are forbidden
-by name. Three facts keep the build inside that contract:
+## 3. Why this does not break the chain's contract
+
+`docs/spec/parser-v2.md` §5 (I12) is the constraint: the chain is the plan -
+the written order, or the join planner's for a planned block - it runs front
+to back, and decorrelation rewrites are forbidden by name. Three facts keep
+the build inside that contract:
 
 1. **The outer relation still drives.** The build changes how an inner
    *match set* is located, never which relation iterates or what joins
@@ -92,8 +101,13 @@ is the honest rendering of "it got N rows in and threw them away".
 
 The build is the **last arm of the structure ladder**, tried only when
 the tuple key arms, both index arms, and both Cabin arms declined — i.e. for
-exactly the walked-join shape. No statistics, no cardinality estimate:
-the lazy form is what removes the need for one. At k = 1 the statement
+exactly the walked-join shape. No statistics, no cardinality estimate
+choose the annotation: the lazy form is what removes the need for one.
+Since CC-S3 the order that puts a relation on the inner side - and so
+decides whether a build pays - is priced from the join planner's estimates
+(`plan-stats.md`), a build priced only under a quarter of
+`join_build_max_rows` and never where one declined; the lazy build stays
+the runtime guard. At k = 1 the statement
 pays one walk plus the build's per-row constant, and a stopping
 sub-chain pays it only on the prefix it walks anyway (§6). The
 crossover a planner needs statistics to find is dissolved rather than

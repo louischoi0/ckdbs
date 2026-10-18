@@ -7,6 +7,8 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/budget.hpp"
+#include "kds/exec/join_order.hpp"
 #include "kds/exec/set_expr.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/txn/read_view.hpp"
@@ -17,13 +19,15 @@
 // step with a named contract, so a parser change is checkable as "emits
 // identical chains".
 //
-// Pure in the sense that matters: same statement plus same catalog gives
-// the same chain, bit for bit, every time. No clock, no randomness, no
-// container iteration order, no address-dependent decision. The chain
-// layout is therefore a function of the AST alone - and its steps of the
-// AST without its select list, which only the projection mask reads, hence
-// of `fetch_id` (AP-S2) - which is what makes a trail recorded under one
-// execution replayable under the next, and under another select list.
+// Pure in the sense that matters: same statement plus same catalog plus
+// same limits and the same published statistics generation gives the same
+// chain, bit for bit, every time. No clock, no
+// randomness, no container iteration order, no address-dependent decision.
+// A written-order chain is a function of the AST alone - and its steps of
+// the AST without its select list, which only the projection mask reads,
+// hence of `fetch_id` (AP-S2); a planned block's order also reads the
+// catalog and `plan` (parser-v2.md I12). A trail recorded under one order is
+// replayable under another: a step's id is its written position.
 //
 // Name resolution lives here rather than in the parser (spec I5). The parser produces `ColumnName{qualifier, name}`; this turns
 // it into `ColumnRef{up, rel_slot, col_pos}` and nothing downstream ever
@@ -66,12 +70,18 @@ namespace kds::exec {
 // `context`, when given, is the statement's `NOW()` instead of a fresh
 // reading: a scalar subquery of an UPDATE reads its UPDATE's (BJ-S7), so
 // the statement has one `NOW()`.
+//
+// `plan`, when given, asks the join planner to choose the top-level block's
+// join order (CB-S2, instructions/v3.2.0/workorder-cb-join-planner.md §3.2);
+// null keeps the written order. Only a client's SELECT asks
+// (`join_order = planned`); a compile that only checks a statement does not.
 class PositionSink;
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                             const txn::ReadView* view = nullptr,
                             PositionSink* declare = nullptr,
-                            const StatementContext* context = nullptr);
+                            const StatementContext* context = nullptr,
+                            const PlanOptions* plan = nullptr);
 
 // Compiles a single-relation WHERE clause - what UPDATE and, later,
 // DELETE have instead of a chain.

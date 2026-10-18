@@ -13,13 +13,11 @@
 //
 // ---- Why this is only a printer -----------------------------------------
 //
-// There is no plan *selection* in this engine to explain. Written order is
-// execution order and is a documented client contract (docs/spec/parser-v2.md
-// §1: "the statement is the chain", never silently reordered), so a plan
-// is not a choice the optimizer made - it is the statement, restated with
-// the one thing the compiler did decide made visible: each step's
-// `AccessKind`. This file therefore describes; it never justifies, and
-// there is no cost estimate to print because nothing computes one.
+// The chain is the plan (docs/spec/parser-v2.md I12): the written order, or
+// the join planner's for a planned block, marked `reordered=1`. A plan is
+// the statement restated with what the compiler decided made visible - the
+// order and each step's `AccessKind`. This file describes; it does not
+// justify, and prints no cost estimate.
 //
 // ---- Names ---------------------------------------------------------------
 //

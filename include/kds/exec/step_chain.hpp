@@ -11,19 +11,18 @@
 #include "kds/catalog/oid.hpp"
 #include "kds/exec/functions.hpp"
 #include "kds/parser/ast.hpp"
+#include "kds/stats/plan_key.hpp"
 
 // The compiled form of a SELECT-class statement: an ordered list of steps,
 // each reading one relation with one access kind (docs/spec/parser-v2.md §1).
 //
 // ---- Why a chain, and why written order --------------------------------
 //
-// Written order is execution order. That is a **client contract**, not an
-// implementation detail: the statement is the chain, nothing reorders it,
-// and no decorrelation rewrite exists. A client that wants a different
-// join order writes a different statement. This costs the optimizations a
-// cost-based planner would find, and buys the thing this engine is for -
-// a repeated query pattern executes the same way every time, which is what
-// makes a recorded Waystone trail replayable at all.
+// The chain's order is execution order. Since CB-S2 the join planner chooses
+// it for an inner-join block (`join_order.hpp`, parser-v2.md I12) from the
+// statement's shape and the catalog alone, so a repeated query pattern still
+// executes the same way every time - which is what makes a recorded
+// Waystone trail replayable at all. No decorrelation rewrite exists.
 //
 // ---- The step-kind table IS the trust model ----------------------------
 //
@@ -179,6 +178,30 @@ constexpr bool IsTrailReplayable(AccessKind kind) noexcept {
 // a trail's stored set has no witness for a row inserted since it was
 // recorded, which no per-tuple validation can detect. So a trail may
 // prefetch for an index step and may never replace one.
+
+// Whether a driving step of `kind` emits its rows in tuple key order - the
+// premise of eliding `ORDER BY <driving tuple key> ASC`
+// (step_compiler.cpp's elision). A walk or range does, page by page; an
+// index step sorts its tuple keys back into that order (IX8a); a lookup or
+// probe emits one row. A Cabin probe is excluded by name (BB). **No
+// `default`**: a kind added to the enum fails to compile here until it is
+// judged, which is the guard a planner that moves any relation onto slot 0
+// needs (CC §7).
+constexpr bool EmitsTupleKeyOrder(AccessKind kind) noexcept {
+    switch (kind) {
+        case AccessKind::kLookup:
+        case AccessKind::kProbe:
+        case AccessKind::kRange:
+        case AccessKind::kIndexProbe:
+        case AccessKind::kIndexRange:
+        case AccessKind::kFilterScan:
+        case AccessKind::kScan:
+            return true;
+        case AccessKind::kCabinProbe:
+            return false;
+    }
+    return false;
+}
 
 // The inclusive tuple key bounds a kRange step walks between.
 //
@@ -796,6 +819,22 @@ struct SortKey {
     bool descending = false;
 };
 
+// What the join planner says of a searched block (CC-S3): the rows it
+// estimated each executed slot passes on, the statistics generation the
+// estimates read (0: none published), and the chosen order's cost against
+// the written order's (1 when the written order runs).
+struct PlanNote {
+    std::vector<double> estimated_rows;
+    std::uint64_t generation = 0;
+    double cost_ratio = 1.0;
+    // Whether the order came from the core's memo rather than a search (CC-S4).
+    bool from_memo = false;
+};
+
+// The relations a block the join planner searches may hold and still have
+// its relations named for priors (`StepChain::planned_relations`).
+inline constexpr std::size_t kMaxPlannedRelations = 16;
+
 struct StepChain {
     StatementClass klass = StatementClass::kUnclassified;
 
@@ -813,8 +852,9 @@ struct StepChain {
     // without opening the outer relation at all.
     std::vector<SubChain> hoisted;
 
-    // In written order. steps[0] is the FROM relation, steps[i] the i-th
-    // JOIN. Never sorted, never reordered.
+    // In execution order: the join planner's (CB-S2), or the written order
+    // - steps[0] the FROM relation, steps[i] the i-th JOIN - where it kept
+    // it. A step's `step_id` is its relation's written position either way.
     std::vector<Step> steps;
 
     // The select list, resolved. Empty means `SELECT *`, which the
@@ -892,6 +932,18 @@ struct StepChain {
     std::vector<SortKey> sort_keys;
 
     bool sorted() const noexcept { return !sort_keys.empty(); }
+
+    // Set on a block the join planner searched (CC-S2): its key, which the
+    // dispatcher folds the run's counts under (docs/spec/plan-stats.md PS2).
+    // Read by the dispatcher only, like `limit` and `aggregate`; never by an
+    // execute path, and not part of a chain's identity (AG1).
+    std::optional<stats::PlanKey> planned;
+    // Every searched block's relations in written order, keyed or not - the
+    // steward seeds a prior for each the snapshot lacks (plan-stats.md PS2).
+    std::vector<catalog::Oid> planned_relations;
+    // What ANALYZE prints of a searched block's choice (CC-S3); set with
+    // `planned_relations`, read by the plan printer alone.
+    std::optional<PlanNote> plan_note;
 };
 
 // **The one walk of a step tree.** Every step under a chain, sub-chain or

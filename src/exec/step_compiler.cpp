@@ -15,6 +15,8 @@
 #include "kds/storage/keystone.hpp"  // kIdSpaceEnd - a bind's whole-relation declaration
 #include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/index_key.hpp"
+#include "kds/exec/join_order.hpp"
+#include "kds/exec/plan_memo.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_vm.hpp"  // PositionSink - the declaration sink AT-R1 threads
 
@@ -757,6 +759,14 @@ bool IsOwnColumn(const ColumnRef& ref, std::uint16_t slot) {
     return ref.up == 0 && ref.rel_slot == slot;
 }
 
+// The descriptor guard every deferred-value form shares (equality
+// propagation states the argument): the value crossing was produced under
+// one column's descriptor, and only an identical (type_val, len) makes it
+// byte-valid under the other's.
+bool SameDescriptor(const catalog::SysColumnRow& a, const catalog::SysColumnRow& b) {
+    return a.type_val == b.type_val && a.len == b.len;
+}
+
 // ---- Equality propagation (docs/spec/parser-v2.md §5) -------------------------
 //
 // From `A = B` - two columns of this chain - and `B = <literal>`, append
@@ -813,41 +823,55 @@ void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predica
         classes[b].clear();
     }
 
-    // A written equality-to-literal on this exact column, in the written
-    // prefix alone - derived conjuncts never beget further ones.
-    const auto has_own_literal = [&predicates, written](const ColumnRef& ref) {
-        for (std::size_t i = 0; i < written; ++i) {
-            const StepPredicate& p = predicates[i];
-            if (p.op == parser::CompareOp::kEq && p.rhs.kind == OperandKind::kLiteral &&
-                p.lhs == ref) {
-                return true;
-            }
-        }
-        return false;
+    // One derivation rule for the three kinds a literal conjunct can be:
+    // an equality (§5), a lower bound and an upper bound (CB-S1,
+    // workorder-cb-join-planner.md §3.1). For each member of a class and
+    // each kind it carries no conjunct of yet - written, or derived by an
+    // earlier kind - the first written conjunct of that kind on another
+    // member crosses, under an identical descriptor. Equality runs first,
+    // so a member that gains one takes no bound: the equality is the
+    // stronger conjunct.
+    using Kind = bool (*)(parser::CompareOp);
+    const Kind is_equality = [](parser::CompareOp op) { return op == parser::CompareOp::kEq; };
+    const Kind is_lower = [](parser::CompareOp op) {
+        return op == parser::CompareOp::kGt || op == parser::CompareOp::kGte;
     };
-
-    for (const std::vector<ColumnRef>& cls : classes) {
-        for (const ColumnRef& member : cls) {
-            if (has_own_literal(member)) continue;
-            const catalog::SysColumnRow& dst = ColumnAt(scope, member);
-            for (std::size_t i = 0; i < written; ++i) {
-                const StepPredicate& p = predicates[i];
-                if (p.op != parser::CompareOp::kEq) continue;
-                if (p.rhs.kind != OperandKind::kLiteral) continue;
-                const bool in_class = std::any_of(cls.begin(), cls.end(),
-                                                  [&p](const ColumnRef& m) { return m == p.lhs; });
-                if (!in_class) continue;
-                const catalog::SysColumnRow& src = ColumnAt(scope, p.lhs);
-                if (dst.type_val != src.type_val || dst.len != src.len) continue;
-                StepPredicate derived;
-                derived.lhs = member;
-                derived.op = parser::CompareOp::kEq;
-                derived.rhs = p.rhs;
-                derived.derived = true;
-                // Constructed whole before the push_back invalidates `p`,
-                // and the break keeps anything dangling from being read.
-                predicates.push_back(std::move(derived));
-                break;
+    const Kind is_upper = [](parser::CompareOp op) {
+        return op == parser::CompareOp::kLt || op == parser::CompareOp::kLte;
+    };
+    const auto literal_on = [&predicates](const ColumnRef& ref, Kind kind, std::size_t end) {
+        return std::any_of(predicates.begin(), predicates.begin() + static_cast<std::ptrdiff_t>(end),
+                           [&](const StepPredicate& p) {
+                               return p.rhs.kind == OperandKind::kLiteral && p.lhs == ref &&
+                                      kind(p.op);
+                           });
+    };
+    for (const Kind kind : {is_equality, is_lower, is_upper}) {
+        for (const std::vector<ColumnRef>& cls : classes) {
+            for (const ColumnRef& member : cls) {
+                // Written conjuncts and those derived so far, so a member
+                // given an equality above takes no bound here.
+                if (literal_on(member, kind, predicates.size())) continue;
+                if (kind != is_equality && literal_on(member, is_equality, predicates.size())) {
+                    continue;
+                }
+                const catalog::SysColumnRow& dst = ColumnAt(scope, member);
+                for (std::size_t i = 0; i < written; ++i) {
+                    const StepPredicate& p = predicates[i];
+                    if (p.rhs.kind != OperandKind::kLiteral || !kind(p.op)) continue;
+                    if (std::find(cls.begin(), cls.end(), p.lhs) == cls.end()) continue;
+                    if (!SameDescriptor(dst, ColumnAt(scope, p.lhs))) continue;
+                    StepPredicate derived;
+                    derived.lhs = member;
+                    derived.op = p.op;
+                    derived.rhs = p.rhs;
+                    derived.derived = true;
+                    // Constructed whole before the push_back invalidates
+                    // `p`, and the break keeps anything dangling from being
+                    // read.
+                    predicates.push_back(std::move(derived));
+                    break;
+                }
             }
         }
     }
@@ -964,11 +988,12 @@ bool HasUnindexedEqualityFilter(const catalog::TableAccess& access, const Step& 
 
 // ---- Index selection (docs/spec/index.md §9) ----------------------------
 //
-// **`f(shape, catalog)`, and nothing else.** No statistics, no cardinality
-// estimate, no property of the data - because a recorded pattern must not
-// compile differently as the rows change, or `pattern_id` stops naming a
-// plan. Same argument `CabinProbeOf` gives for taking the *first* cabined
-// equality rather than the most selective one.
+// **`f(shape, catalog)` given the step's predecessors, and nothing else.**
+// No statistics, no cardinality estimate, no property of the data chooses
+// an index - the join planner's statistics move only a block's order
+// (CC-S3), which can change the predecessors. Same argument `CabinProbeOf`
+// gives for taking the *first* cabined equality rather than the most
+// selective one.
 
 // The inclusive literal bounds the residual pins `col_pos` between, if any.
 // `BETWEEN` lowers to `>=` and `<=`, which is the only form the grammar can
@@ -978,11 +1003,57 @@ struct ColumnBounds {
     const parser::AstValue* high = nullptr;
 };
 
+// The correlated-equality shape both structure arms select on: a kEq
+// column-column conjunct with one side owned by this step and the other
+// available before it runs - an earlier slot, or an enclosing chain's row
+// (`up > 0`), which is bound before this chain opens. Both orientations
+// are examined, as the tuple-key-probe arm does and for its reason; a
+// same-relation equality excludes itself through the availability test.
+// One home for the rule, so the index and cabin arms cannot drift.
+struct CorrelatedEquality {
+    ColumnRef own;
+    ColumnRef other;
+};
+std::optional<CorrelatedEquality> CorrelatedEqualityOf(const StepPredicate& pred,
+                                                       std::uint16_t slot) {
+    if (pred.op != parser::CompareOp::kEq) return std::nullopt;
+    if (pred.rhs.kind != OperandKind::kColumn) return std::nullopt;
+    CorrelatedEquality out;
+    if (IsOwnColumn(pred.lhs, slot)) {
+        out.own = pred.lhs;
+        out.other = pred.rhs.column;
+    } else if (IsOwnColumn(pred.rhs.column, slot)) {
+        out.own = pred.rhs.column;
+        out.other = pred.lhs;
+    } else {
+        return std::nullopt;
+    }
+    if (out.other.up == 0 && AvailableAt(out.other) >= slot) return std::nullopt;
+    return out;
+}
+
+// Whether a conjunct may choose this step's access. A derived range bound
+// (CB-S1) on a column the step already keys per outer row - the own side
+// of a correlated equality - may not: the range is a superset of every
+// outer row's equality match, so letting it pick an index range or a
+// predicate Cabin would walk the whole range per outer row where the
+// correlated arm descends to the matches (workorder-cb-join-planner.md
+// §3.1: plans may only be strengthened). It still filters, and still
+// narrows a build.
+bool SteersAccess(const Step& step, std::uint16_t slot, const StepPredicate& pred) {
+    if (!pred.derived || pred.op == parser::CompareOp::kEq) return true;
+    return std::none_of(step.residual.begin(), step.residual.end(), [&](const StepPredicate& p) {
+        const auto eq = CorrelatedEqualityOf(p, slot);
+        return eq.has_value() && eq->own == pred.lhs;
+    });
+}
+
 ColumnBounds BoundsOnColumn(const Step& step, std::uint16_t slot, std::uint16_t col_pos) {
     ColumnBounds out;
     for (const StepPredicate& pred : step.residual) {
         if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != col_pos) continue;
         if (pred.rhs.kind != OperandKind::kLiteral) continue;
+        if (!SteersAccess(step, slot, pred)) continue;
         // Unconstructible since declared patterns were withdrawn, and kept
         // for EqualityOnColumn's reason below.
         if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
@@ -1101,43 +1172,6 @@ std::optional<IndexProbe> IndexProbeOf(const catalog::TableAccess& access, const
         best_score = score;
     }
     return best;
-}
-
-// The correlated-equality shape both structure arms select on: a kEq
-// column-column conjunct with one side owned by this step and the other
-// available before it runs - an earlier slot, or an enclosing chain's row
-// (`up > 0`), which is bound before this chain opens. Both orientations
-// are examined, as the tuple-key-probe arm does and for its reason; a
-// same-relation equality excludes itself through the availability test.
-// One home for the rule, so the index and cabin arms cannot drift.
-struct CorrelatedEquality {
-    ColumnRef own;
-    ColumnRef other;
-};
-std::optional<CorrelatedEquality> CorrelatedEqualityOf(const StepPredicate& pred,
-                                                       std::uint16_t slot) {
-    if (pred.op != parser::CompareOp::kEq) return std::nullopt;
-    if (pred.rhs.kind != OperandKind::kColumn) return std::nullopt;
-    CorrelatedEquality out;
-    if (IsOwnColumn(pred.lhs, slot)) {
-        out.own = pred.lhs;
-        out.other = pred.rhs.column;
-    } else if (IsOwnColumn(pred.rhs.column, slot)) {
-        out.own = pred.rhs.column;
-        out.other = pred.lhs;
-    } else {
-        return std::nullopt;
-    }
-    if (out.other.up == 0 && AvailableAt(out.other) >= slot) return std::nullopt;
-    return out;
-}
-
-// The descriptor guard every deferred-value form shares (equality
-// propagation states the argument): the value crossing was produced under
-// one column's descriptor, and only an identical (type_val, len) makes it
-// byte-valid under the other's.
-bool SameDescriptor(const catalog::SysColumnRow& a, const catalog::SysColumnRow& b) {
-    return a.type_val == b.type_val && a.len == b.len;
 }
 
 // The correlated index probe (docs/spec/index.md §8a), or nullopt: an index
@@ -1322,6 +1356,7 @@ std::optional<CabinProbe> PredicateCabinProbeOf(const catalog::TableAccess& acce
     for (const StepPredicate& pred : step.residual) {
         if (!IsOwnColumn(pred.lhs, slot)) continue;
         if (TakesLiteral(pred.op) && pred.rhs.kind != OperandKind::kLiteral) continue;
+        if (!SteersAccess(step, slot, pred)) continue;
         CabinConjunct c;
         c.term.args.push_back(pred.lhs.col_pos);
         c.op = pred.op;
@@ -1372,7 +1407,8 @@ std::optional<CabinProbe> CoverCabinProbeOf(const catalog::TableAccess& access, 
         for (const StepPredicate& pred : step.residual) {
             if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != term.args.front()) continue;
             if (pred.rhs.kind != OperandKind::kLiteral ||
-                pred.rhs.literal.type != parser::ValueType::kInt) {
+                pred.rhs.literal.type != parser::ValueType::kInt ||
+                !SteersAccess(step, slot, pred)) {
                 continue;
             }
             const std::int64_t v = pred.rhs.literal.int_val;
@@ -1764,7 +1800,8 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
                                  bool inner_build, PositionSink* declare,
-                                 const StatementContext* context = nullptr);
+                                 const StatementContext* context = nullptr,
+                                 const PlanOptions* plan = nullptr);
 
 // A predicate-position subquery lowered to its sub-chain (V15), for a flat
 // conjunct and a boolean conjunct's leaf alike: compiled against a scope
@@ -1829,10 +1866,10 @@ StatusOr<SubChain> LowerSubquery(catalog::Catalog& catalog, const Scope& scope,
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                             const txn::ReadView* view, PositionSink* declare,
-                            const StatementContext* context) {
+                            const StatementContext* context, const PlanOptions* plan) {
     std::uint32_t next_step_id = 0;
     auto chain = CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
-                              view, /*inner_build=*/true, declare, context);
+                              view, /*inner_build=*/true, declare, context, plan);
     if (!chain.ok()) return chain;
     StepChain& out = chain.value();
     out.determinism = DeterminismOf(out);
@@ -1998,11 +2035,46 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 
 namespace {
 
+// A greedy order above this many relations; every permutation at or below
+// it (4! = 24 compiles of a statement, against one).
+constexpr std::size_t kMaxExhaustiveJoinRelations = stats::kMaxPosteriorRelations;
+
+// A cheaper order must win by more than this fraction, so float noise
+// between two equal costs never moves a statement off its written order.
+constexpr double kCostTieMargin = 1e-9;
+// The margin once a published statistic prices the block (CC-Q8): a band is
+// +-30 % wide, and an order that wins by less is inside its noise.
+constexpr double kStatsSwitchMargin = 0.10;
+
+bool HasSubquery(const parser::BoolExpr& node) {
+    if (node.op == parser::BoolExpr::Op::kLeaf) return node.leaf.has_subquery();
+    return std::any_of(node.children.begin(), node.children.end(),
+                       [](const parser::BoolExpr& child) { return HasSubquery(child); });
+}
+
+// Whether a WHERE carries a subquery anywhere - a flat conjunct or a leaf
+// of a boolean one. A block that does is not reordered (CB-Q4 (a)): its
+// sub-chains are placed against slots and lowered with side effects.
+bool HasSubqueryPredicate(const parser::SelectStmt& stmt) {
+    return std::any_of(stmt.where.begin(), stmt.where.end(), [](const parser::Condition& cond) {
+        return cond.has_subquery() ||
+               (cond.kind == parser::PredicateKind::kBoolTree && cond.tree != nullptr &&
+                HasSubquery(*cond.tree));
+    });
+}
+
+StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
+                                 const Scope& scope,
+                                 const std::vector<const parser::RelationRef*>& refs,
+                                 std::uint32_t& next_step_id, std::uint32_t depth,
+                                 const txn::ReadView* view, bool inner_build,
+                                 PositionSink* declare);
+
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
                                  bool inner_build, PositionSink* declare,
-                                 const StatementContext* context) {
+                                 const StatementContext* context, const PlanOptions* plan) {
     // The execute-time half of spec I15 R3: recursion is bounded at both
     // ends. The parser caps nesting too, but a chain can also be built by
     // something other than a parse, and a bound that only one producer
@@ -2044,6 +2116,218 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         scope.relations.push_back(BoundRelation{rel->binding(), access.value()});
     }
 
+    // ---- 1a. The join order (CB-S2, workorder-cb-join-planner.md §3.2) ---
+    //
+    // A top-level block of two or more relations with no subquery predicate
+    // is compiled in the orders below, priced by `EstimateChain`
+    // (join_order.hpp), and the cheapest runs if it beats the written order
+    // by the margin (CC-Q8). Everything after binding reads slots, so a
+    // chain compiled over a permuted binding is that order's chain,
+    // unchanged otherwise. The written order is compiled first and its
+    // refusal is the statement's.
+    if (plan == nullptr || refs.size() < 2 || stmt.star() || HasSubqueryPredicate(stmt)) {
+        return CompileBound(catalog, stmt, scope, refs, next_step_id, depth, view, inner_build,
+                            declare);
+    }
+    const std::uint32_t base_step_id = next_step_id;
+    const auto compile_order = [&](const std::vector<std::size_t>& order) -> StatusOr<StepChain> {
+        Scope permuted = scope;  // whole, so no field is dropped
+        permuted.relations.clear();
+        std::vector<const parser::RelationRef*> permuted_refs;
+        for (const std::size_t written : order) {
+            permuted.relations.push_back(scope.relations[written]);
+            permuted_refs.push_back(refs[written]);
+        }
+        std::uint32_t ids = base_step_id;
+        auto chain = CompileBound(catalog, stmt, permuted, permuted_refs, ids, depth, view,
+                                  inner_build, declare);
+        if (!chain.ok()) return chain;
+        // CB-Q3 (a): a step's id is its relation's written position, so a
+        // trail entry names the same relation whatever order recorded it.
+        for (std::size_t k = 0; k < order.size(); ++k) {
+            chain.value().steps[k].step_id = base_step_id + static_cast<std::uint32_t>(order[k]);
+        }
+        return chain;
+    };
+
+    std::vector<std::size_t> order(refs.size());
+    for (std::size_t k = 0; k < order.size(); ++k) order[k] = k;
+    auto best = compile_order(order);
+    if (!best.ok()) return best;
+    next_step_id = base_step_id + static_cast<std::uint32_t>(refs.size());
+    // A written chain of tuple key descents alone - a lookup, then probes -
+    // reads one row per step, and every order pays at least its driver's
+    // descent: no search can repay its compiles. Measured at CB's close: the
+    // six orders of a three-relation point join cost 15 us a statement
+    // (bench/v3.2.0/results-cb-close-v3.2.0-174-g0640941f.md).
+    const auto is_descent = [](const Step& step) {
+        return step.kind == AccessKind::kLookup || step.kind == AccessKind::kProbe;
+    };
+    if (std::all_of(best.value().steps.begin(), best.value().steps.end(), is_descent)) {
+        return best;
+    }
+    // The key the run's counts fold under and the posteriors are found by
+    // (CC-S2): a searched block of at most `kMaxPosteriorRelations`
+    // relations with a fetch id.
+    std::optional<stats::PlanKey> key;
+    if (plan->fetch_id != 0 && refs.size() <= stats::kMaxPosteriorRelations) {
+        key.emplace();
+        key->fetch_id = plan->fetch_id;
+        key->n = static_cast<std::uint8_t>(refs.size());
+        for (std::size_t w = 0; w < refs.size(); ++w) key->oids[w] = scope.relations[w].access->oid;
+    }
+    // The published statistics, pinned here and only here - after the
+    // descent skip, so a point read never touches them - and held for the
+    // compile (CC-S3).
+    const std::shared_ptr<const stats::PlanStatsSnapshot> snapshot =
+        plan->statistics != nullptr ? plan->statistics->Pin() : nullptr;
+
+    // The written order's relations, for the identifier bounds (CC-Q11),
+    // and their rows: a published prior, or the constant (CC-S3). Resolved
+    // once here, not per order.
+    std::vector<const catalog::TableAccess*> written_access;
+    std::vector<double> written_rows;
+    CostInputs inputs;
+    for (const BoundRelation& relation : scope.relations) {
+        written_access.push_back(relation.access);
+        std::optional<double> prior;
+        if (snapshot != nullptr) prior = snapshot->RelationRows(relation.access->oid);
+        if (prior.has_value()) inputs.informed = true;
+        written_rows.push_back(prior.has_value() ? std::max(*prior, 1.0) : kAssumedRelationRows);
+    }
+    inputs.limits = *plan;
+    inputs.written_sorted = best.value().sorted();
+    inputs.base_step_id = base_step_id;
+    inputs.written_access = written_access;
+    inputs.written_rows = written_rows;
+    if (snapshot != nullptr && key.has_value()) inputs.posterior = snapshot->Find(*key);
+    if (inputs.posterior != nullptr) inputs.informed = true;
+    // Once a published fact prices the block an order must beat the
+    // written one by `kStatsSwitchMargin`, so a band's movement within its
+    // noise does not move a plan (CC-Q8).
+    const double margin = inputs.informed ? kStatsSwitchMargin : kCostTieMargin;
+    const double written_cost = EstimateChain(best.value(), inputs).cost;
+
+    // CC-S4: the order this block chose before under the same inputs, where
+    // the core remembers one - compiled again through the full ladder, so a
+    // hit costs two compiles where the search costs up to 24. Never under a
+    // minted view: a DDL is in flight and the catalog's stamps are moving.
+    // A statement whose literals the fingerprint saw whole: a `?` bound at
+    // BIND is outside `arg_hash`, so its block is searched every time.
+    PlanMemo* memo = plan->memo != nullptr && key.has_value() && view == nullptr &&
+                             plan->literals_known
+                         ? plan->memo
+                         : nullptr;
+    PlanMemoKey memo_key;
+    if (memo != nullptr) {
+        memo_key.block = *key;
+        memo_key.arg_hash = plan->arg_hash;
+        memo_key.generation = snapshot != nullptr ? snapshot->generation() : 0;
+        memo_key.catalog_word = catalog.cache_built_at();
+        memo_key.catalog_version = catalog.catalog_version();
+        memo_key.join_build_max_rows = plan->join_build_max_rows;
+        memo_key.sort_max_rows = plan->sort_max_rows;
+    }
+    std::optional<StepChain> cheapest;
+    bool from_memo = false;
+    if (memo != nullptr) {
+        if (const auto remembered = memo->Find(memo_key); remembered.has_value()) {
+            std::vector<std::size_t> perm((*remembered).begin(), (*remembered).begin() + refs.size());
+            if (perm == order) {  // `order` is still the written order here
+                from_memo = true;
+            } else if (auto chain = compile_order(perm); chain.ok()) {
+                cheapest = std::move(chain.value());
+                from_memo = true;
+            }
+            // A remembered order that no longer compiles is searched again,
+            // and the search's answer replaces it.
+        }
+    }
+    if (!from_memo) {
+        // CC-Q8: the minimum over every order - the first among equals in
+        // permutation order - taken only if it beats the **written** order's
+        // cost by the margin, so the threshold starts there. Measured against
+        // the written order rather than the best so far, the winner does not
+        // depend on enumeration order.
+        double cheapest_cost = written_cost * (1.0 - margin);
+        const auto cost_of = [&](const std::vector<std::size_t>& candidate)
+            -> std::optional<std::pair<double, StepChain>> {
+            auto chain = compile_order(candidate);
+            if (!chain.ok()) return std::nullopt;  // a refusal is the written order's to give
+            const double cost = EstimateChain(chain.value(), inputs).cost;
+            return std::make_pair(cost, std::move(chain.value()));
+        };
+        const auto consider = [&](const std::vector<std::size_t>& candidate) {
+            auto costed = cost_of(candidate);
+            if (costed.has_value() && costed->first < cheapest_cost) {
+                cheapest_cost = costed->first;
+                cheapest = std::move(costed->second);
+            }
+        };
+        if (refs.size() <= kMaxExhaustiveJoinRelations) {
+            while (std::next_permutation(order.begin(), order.end())) consider(order);
+        } else {
+            // Greedy: at each position the relation whose placement there - the
+            // rest following in written order - costs least.
+            std::vector<std::size_t> placed;
+            std::vector<std::size_t> rest = order;
+            while (!rest.empty()) {
+                std::size_t pick = 0;
+                std::optional<double> pick_cost;
+                for (std::size_t r = 0; r < rest.size(); ++r) {
+                    std::vector<std::size_t> candidate = placed;
+                    candidate.push_back(rest[r]);
+                    for (std::size_t o = 0; o < rest.size(); ++o) {
+                        if (o != r) candidate.push_back(rest[o]);
+                    }
+                    auto costed = cost_of(candidate);
+                    if (!costed.has_value()) continue;
+                    if (!pick_cost.has_value() || costed->first < *pick_cost) {
+                        pick = r;
+                        pick_cost = costed->first;
+                    }
+                }
+                placed.push_back(rest[pick]);
+                rest.erase(rest.begin() + static_cast<std::ptrdiff_t>(pick));
+            }
+            consider(placed);
+        }
+    }
+    const bool reordered = cheapest.has_value();
+    StepChain chosen = reordered ? std::move(*cheapest) : std::move(best.value());
+    if (memo != nullptr && !from_memo) {
+        std::array<std::uint8_t, stats::kMaxPosteriorRelations> remembered{};
+        for (std::size_t k = 0; k < chosen.steps.size(); ++k) {
+            remembered[k] = static_cast<std::uint8_t>(chosen.steps[k].step_id - base_step_id);
+        }
+        memo->Store(memo_key, remembered);
+    }
+    if (refs.size() <= kMaxPlannedRelations) {
+        for (const BoundRelation& relation : scope.relations) {
+            chosen.planned_relations.push_back(relation.access->oid);
+        }
+    }
+    chosen.planned = key;
+    // What ANALYZE says of the choice: each slot's estimated rows, the
+    // generation they read and the chosen cost against the written order's.
+    PlanNote note;
+    note.generation = snapshot != nullptr ? snapshot->generation() : 0;
+    note.from_memo = from_memo;
+    inputs.step_rows = &note.estimated_rows;
+    const double chosen_cost = EstimateChain(chosen, inputs).cost;
+    note.cost_ratio = reordered && written_cost > 0 ? chosen_cost / written_cost : 1.0;
+    chosen.plan_note = std::move(note);
+    return chosen;
+}
+
+// Everything after binding: the chain of `scope`'s relations in the order
+// they stand there (CB-S2 permutes them before calling this).
+StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
+                                 const Scope& scope,
+                                 const std::vector<const parser::RelationRef*>& refs,
+                                 std::uint32_t& next_step_id, std::uint32_t depth,
+                                 const txn::ReadView* view, bool inner_build,
+                                 PositionSink* declare) {
     StepChain chain;
     chain.steps.resize(scope.relations.size());
     for (std::size_t i = 0; i < scope.relations.size(); ++i) {
@@ -2507,7 +2791,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         chain.sort_keys.size() == 1 && !chain.sort_keys[0].descending &&
         chain.sort_keys[0].ref.rel_slot == 0 && IsTupleKey(chain.sort_keys[0].ref);
     const bool driving_emits_tuple_key_order =
-        !chain.steps.empty() && chain.steps[0].kind != AccessKind::kCabinProbe;
+        !chain.steps.empty() && EmitsTupleKeyOrder(chain.steps[0].kind);
     if (one_ascending_tuple_key && driving_emits_tuple_key_order) {
         chain.sort_keys.clear();
     }

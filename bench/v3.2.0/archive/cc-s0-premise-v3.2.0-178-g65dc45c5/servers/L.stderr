@@ -1,0 +1,4 @@
+ckdbs on /home/cdkbs/bench-runs/cc-s0/load/pristine.db: 17 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-s0/load/L.log at level WARN
+listening on 127.0.0.1:25600
+stopped; 9262 pages persisted

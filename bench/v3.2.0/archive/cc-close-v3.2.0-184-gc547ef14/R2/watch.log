@@ -1,0 +1,9 @@
+2026-10-18T14:44:17Z status_age=2s harness=alive load=1.38 :: setup
+2026-10-18T14:45:17Z status_age=0s harness=alive load=1.26 :: overhead round 4/5 ov-insert B elapsed 47s
+2026-10-18T14:46:17Z status_age=0s harness=alive load=1.50 :: gain round 1/5 c1-compare-all-r200 B elapsed 1s
+2026-10-18T14:47:17Z status_age=0s harness=alive load=1.18 :: gain round 3/5 c1-compare-all-r10k B elapsed 61s
+2026-10-18T14:48:17Z status_age=0s harness=alive load=1.21 :: gain round 5/5 c2-customer-statement-ca10k A elapsed 121s
+2026-10-18T14:49:17Z status_age=1s harness=alive load=1.43 :: memo round 3/5 x1k A2-same elapsed 53s
+2026-10-18T14:50:17Z status_age=0s harness=alive load=1.95 :: memo round 5/5 x60k B-vary elapsed 114s
+2026-10-18T14:51:17Z status_age=0s harness=alive load=1.69 :: stability 44s ops 13500
+2026-10-18T14:52:17Z finished

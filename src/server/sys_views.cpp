@@ -1,5 +1,6 @@
 #include "kds/server/sys_views.hpp"
 
+#include <cmath>
 #include <algorithm>
 #include <cctype>
 #include <initializer_list>
@@ -626,7 +627,18 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
                   {"budget_warning", kInt},
                   {"budget_exhausted", kInt},
                   {"height", kInt},
-                  {"leaves", kInt}});
+                  {"leaves", kInt},
+                  {"est_rows", kInt},
+                  {"generation", kInt}});
+    // The join planner's published prior and the snapshot it is from
+    // (plan-stats.md §6): NULL where none is published. Read here for the
+    // operator; the planner never reads this view.
+    const std::shared_ptr<const stats::PlanStatsSnapshot> plan_snapshot = plan_source_.Pin();
+    const auto est_rows = [&plan_snapshot](catalog::Oid oid) {
+        if (plan_snapshot == nullptr) return Null();
+        const std::optional<double> rows = plan_snapshot->RelationRows(oid);
+        return rows.has_value() ? Int(static_cast<std::int64_t>(std::llround(*rows))) : Null();
+    };
     auto tables = catalog_.ListTables();
     if (!tables.ok()) return tables.status();
     auto labels = RelationLabels::Read(catalog_, nullptr);
@@ -655,7 +667,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
                              Str(catalog::NameView(obj.name)),
                              Int(row.value().next_id), Int(budget.issued), Int(budget.remaining),
                              Int(used_ppm), Bool(budget.warn), Bool(budget.exhausted),
-                             std::move(height), std::move(leaves)});
+                             std::move(height), std::move(leaves), est_rows(obj.oid),
+                             plan_snapshot != nullptr ? Int(plan_snapshot->generation())
+                                                      : Null()});
     }
     return view;
 }

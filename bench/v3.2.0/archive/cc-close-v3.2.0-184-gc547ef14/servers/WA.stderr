@@ -1,0 +1,4 @@
+ckdbs on /home/cdkbs/bench-runs/cc-close/run/WA.db: 9262 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-close/run/WA.log at level WARN
+listening on 127.0.0.1:25711
+stopped; 9626 pages persisted

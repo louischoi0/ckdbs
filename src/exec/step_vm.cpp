@@ -286,6 +286,9 @@ public:
         return Status::Cancelled("cancelled by request");
     }
 
+    // Whether the walk this runner drives stopped before its end.
+    bool stopped() const noexcept { return stopped_; }
+
     sched::Coro Run(const std::vector<Step>& steps) {
         if (depth_ > kMaxExecDepth) {
             co_return Status::Unsupported("chain nesting deeper than " +
@@ -3019,6 +3022,7 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
     // for the whole execution, which is a property worth having by
     // construction rather than by reviewing every call site.
     counters.For(MaxStepId(chain));
+    counters.stopped = false;  // a reused scratch carries the last run's
 
     // One mutable budget for this statement: the caller's limits and
     // knobs, the spend counter at zero. `Fresh()` owns what survives the
@@ -3043,7 +3047,9 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
     if (!opens.ok()) co_return opens.status();
     if (!opens.value()) co_return Status::OK();  // no rows, nothing opened
 
-    co_return co_await runner.Run(chain.steps);
+    Status ran = co_await runner.Run(chain.steps);
+    counters.stopped = runner.stopped();
+    co_return ran;
 }
 
 }  // namespace

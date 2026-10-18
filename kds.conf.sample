@@ -500,6 +500,16 @@ indexes = on
 # compare replies byte for byte across it. On by default.
 scan_kernel = on
 
+# ---- The join order (instructions/v3.2.0/workorder-cb-join-planner.md) -------
+#
+# `planned` lets the engine choose the order a SELECT's inner joins run in,
+# from the statement's shape and the catalog alone - no statistic - so one
+# statement over one catalog runs one plan. `written` runs them in the order
+# the statement wrote them. Without ORDER BY the order rows arrive in is not
+# a contract either way. The relation a walked join builds its map over is
+# the one the order puts on the inner side.
+join_order = planned
+
 # How much one Cabin may hold: distinct observed values, and entries per
 # value. `[PROPOSED]` - docs/spec/cabin.md section 8 leaves the budget open,
 # so these are configurable rather than compiled in, and nothing depends on

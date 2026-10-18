@@ -125,6 +125,8 @@ std::string RunThroughDispatcher(bool knob_off, bool with_null_row) {
         /*recorder=*/nullptr, /*replay_enabled=*/false, /*access_statistics=*/true,
         /*cabins=*/nullptr);
     if (knob_off) dispatcher.set_join_build_max_rows(0);
+    // The build is compared against its walk, so both run one order (CB-S2).
+    dispatcher.set_plan_join_order(false);
 
     EXPECT_EQ(dispatcher.Dispatch("CREATE TABLE au (id int64, name varchar)")
                   .response.substr(0, 7),

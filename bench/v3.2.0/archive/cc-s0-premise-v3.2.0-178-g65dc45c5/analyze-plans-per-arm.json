@@ -1,0 +1,766 @@
+{
+ "c1-compare-all-r200": {
+  "stmt": {
+   "A": "SELECT r.model_id, r.period_no, r.pnl_bp, r.equity_bp, r.trades, m.name, m.family FROM model_results_r200 AS r JOIN models_r200 AS m ON r.model_id = m.id",
+   "B": "SELECT r.model_id, r.period_no, r.pnl_bp, r.equity_bp, r.trades, m.name, m.family FROM models_r200 AS m JOIN model_results_r200 AS r ON r.model_id = m.id"
+  },
+  "P:A": [
+   "analyze rows=200 class=JoinSelect steps=2 examined=400 pages=202 opens=201 pattern_id=0x32687f21c42954f9 fetch_id=0xa7fa6533d818f7ed",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r200 AS r",
+   "step 1 Probe models_r200 AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r200 AS r opens=1 examined=200 matched=200 sel=100% pages=2",
+   "step 1 Probe models_r200 AS m opens=200 examined=200 matched=200 sel=100% pages=200"
+  ],
+  "P:B": [
+   "analyze rows=200 class=JoinSelect steps=2 examined=400 pages=202 opens=201 pattern_id=0x15015ebc2aea104d fetch_id=0xbcb27aadfb18f091",
+   "class=JoinSelect steps=2 hoisted=0 reordered=1",
+   "step 1 Scan model_results_r200 AS r",
+   "step 0 Probe models_r200 AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 1 Scan model_results_r200 AS r opens=1 examined=200 matched=200 sel=100% pages=2",
+   "step 0 Probe models_r200 AS m opens=200 examined=200 matched=200 sel=100% pages=200"
+  ],
+  "W:A": [
+   "analyze rows=200 class=JoinSelect steps=2 examined=400 pages=202 opens=201 pattern_id=0x32687f21c42954f9 fetch_id=0xa7fa6533d818f7ed",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r200 AS r",
+   "step 1 Probe models_r200 AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r200 AS r opens=1 examined=200 matched=200 sel=100% pages=2",
+   "step 1 Probe models_r200 AS m opens=200 examined=200 matched=200 sel=100% pages=200"
+  ],
+  "W:B": [
+   "analyze rows=200 class=JoinSelect steps=2 examined=383 pages=17 opens=9 pattern_id=0x15015ebc2aea104d fetch_id=0xbcb27aadfb18f091",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan models_r200 AS m",
+   "step 1 Scan model_results_r200 AS r build on=col1 key=0:0.0",
+   "  filter 0:1.1 = 0:0.0",
+   "project r.model_id=0:1.1, r.period_no=0:1.2, r.pnl_bp=0:1.4, r.equity_bp=0:1.5, r.trades=0:1.7, m.name=0:0.1, m.family=0:0.2",
+   "step 0 Scan models_r200 AS m opens=1 examined=8 matched=8 sel=100% pages=1",
+   "step 1 Scan model_results_r200 AS r opens=8 examined=375 matched=200 sel=53% pages=16 inner_built=1 build_rows=200 build_probes=7"
+  ],
+  "W2:A": [
+   "analyze rows=200 class=JoinSelect steps=2 examined=400 pages=202 opens=201 pattern_id=0x32687f21c42954f9 fetch_id=0xa7fa6533d818f7ed",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r200 AS r",
+   "step 1 Probe models_r200 AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r200 AS r opens=1 examined=200 matched=200 sel=100% pages=2",
+   "step 1 Probe models_r200 AS m opens=200 examined=200 matched=200 sel=100% pages=200"
+  ],
+  "W2:B": [
+   "analyze rows=200 class=JoinSelect steps=2 examined=383 pages=17 opens=9 pattern_id=0x15015ebc2aea104d fetch_id=0xbcb27aadfb18f091",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan models_r200 AS m",
+   "step 1 Scan model_results_r200 AS r build on=col1 key=0:0.0",
+   "  filter 0:1.1 = 0:0.0",
+   "project r.model_id=0:1.1, r.period_no=0:1.2, r.pnl_bp=0:1.4, r.equity_bp=0:1.5, r.trades=0:1.7, m.name=0:0.1, m.family=0:0.2",
+   "step 0 Scan models_r200 AS m opens=1 examined=8 matched=8 sel=100% pages=1",
+   "step 1 Scan model_results_r200 AS r opens=8 examined=375 matched=200 sel=53% pages=16 inner_built=1 build_rows=200 build_probes=7"
+  ],
+  "rows": 200,
+  "multiset_equal_all_arms": true
+ },
+ "c1-compare-all-r1k": {
+  "stmt": {
+   "A": "SELECT r.model_id, r.period_no, r.pnl_bp, r.equity_bp, r.trades, m.name, m.family FROM model_results_r1k AS r JOIN models_r1k AS m ON r.model_id = m.id",
+   "B": "SELECT r.model_id, r.period_no, r.pnl_bp, r.equity_bp, r.trades, m.name, m.family FROM models_r1k AS m JOIN model_results_r1k AS r ON r.model_id = m.id"
+  },
+  "P:A": [
+   "analyze rows=1000 class=JoinSelect steps=2 examined=2000 pages=1010 opens=1001 pattern_id=0x9208c0a751ae8229 fetch_id=0x745bfb97411a563d",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r1k AS r",
+   "step 1 Probe models_r1k AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r1k AS r opens=1 examined=1000 matched=1000 sel=100% pages=10",
+   "step 1 Probe models_r1k AS m opens=1000 examined=1000 matched=1000 sel=100% pages=1000"
+  ],
+  "P:B": [
+   "analyze rows=1000 class=JoinSelect steps=2 examined=2000 pages=1010 opens=1001 pattern_id=0x55f10768f0d0b71f fetch_id=0xca20914d56ae5c73",
+   "class=JoinSelect steps=2 hoisted=0 reordered=1",
+   "step 1 Scan model_results_r1k AS r",
+   "step 0 Probe models_r1k AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 1 Scan model_results_r1k AS r opens=1 examined=1000 matched=1000 sel=100% pages=10",
+   "step 0 Probe models_r1k AS m opens=1000 examined=1000 matched=1000 sel=100% pages=1000"
+  ],
+  "W:A": [
+   "analyze rows=1000 class=JoinSelect steps=2 examined=2000 pages=1010 opens=1001 pattern_id=0x9208c0a751ae8229 fetch_id=0x745bfb97411a563d",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r1k AS r",
+   "step 1 Probe models_r1k AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r1k AS r opens=1 examined=1000 matched=1000 sel=100% pages=10",
+   "step 1 Probe models_r1k AS m opens=1000 examined=1000 matched=1000 sel=100% pages=1000"
+  ],
+  "W:B": [
+   "analyze rows=1000 class=JoinSelect steps=2 examined=1883 pages=75 opens=9 pattern_id=0x55f10768f0d0b71f fetch_id=0xca20914d56ae5c73",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan models_r1k AS m",
+   "step 1 Scan model_results_r1k AS r build on=col1 key=0:0.0",
+   "  filter 0:1.1 = 0:0.0",
+   "project r.model_id=0:1.1, r.period_no=0:1.2, r.pnl_bp=0:1.4, r.equity_bp=0:1.5, r.trades=0:1.7, m.name=0:0.1, m.family=0:0.2",
+   "step 0 Scan models_r1k AS m opens=1 examined=8 matched=8 sel=100% pages=1",
+   "step 1 Scan model_results_r1k AS r opens=8 examined=1875 matched=1000 sel=53% pages=74 inner_built=1 build_rows=1000 build_probes=7"
+  ],
+  "W2:A": [
+   "analyze rows=1000 class=JoinSelect steps=2 examined=2000 pages=1010 opens=1001 pattern_id=0x9208c0a751ae8229 fetch_id=0x745bfb97411a563d",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r1k AS r",
+   "step 1 Probe models_r1k AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r1k AS r opens=1 examined=1000 matched=1000 sel=100% pages=10",
+   "step 1 Probe models_r1k AS m opens=1000 examined=1000 matched=1000 sel=100% pages=1000"
+  ],
+  "W2:B": [
+   "analyze rows=1000 class=JoinSelect steps=2 examined=1883 pages=75 opens=9 pattern_id=0x55f10768f0d0b71f fetch_id=0xca20914d56ae5c73",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan models_r1k AS m",
+   "step 1 Scan model_results_r1k AS r build on=col1 key=0:0.0",
+   "  filter 0:1.1 = 0:0.0",
+   "project r.model_id=0:1.1, r.period_no=0:1.2, r.pnl_bp=0:1.4, r.equity_bp=0:1.5, r.trades=0:1.7, m.name=0:0.1, m.family=0:0.2",
+   "step 0 Scan models_r1k AS m opens=1 examined=8 matched=8 sel=100% pages=1",
+   "step 1 Scan model_results_r1k AS r opens=8 examined=1875 matched=1000 sel=53% pages=74 inner_built=1 build_rows=1000 build_probes=7"
+  ],
+  "rows": 1000,
+  "multiset_equal_all_arms": true
+ },
+ "c1-compare-all-r2872": {
+  "stmt": {
+   "A": "SELECT r.model_id, r.period_no, r.pnl_bp, r.equity_bp, r.trades, m.name, m.family FROM model_results_r2872 AS r JOIN models_r2872 AS m ON r.model_id = m.id",
+   "B": "SELECT r.model_id, r.period_no, r.pnl_bp, r.equity_bp, r.trades, m.name, m.family FROM models_r2872 AS m JOIN model_results_r2872 AS r ON r.model_id = m.id"
+  },
+  "P:A": [
+   "analyze rows=2872 class=JoinSelect steps=2 examined=5744 pages=2898 opens=2873 pattern_id=0x4cfadd05c8ca572b fetch_id=0xbe21e2a965b2ad7",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r2872 AS r",
+   "step 1 Probe models_r2872 AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r2872 AS r opens=1 examined=2872 matched=2872 sel=100% pages=26",
+   "step 1 Probe models_r2872 AS m opens=2872 examined=2872 matched=2872 sel=100% pages=2872"
+  ],
+  "P:B": [
+   "analyze rows=2872 class=JoinSelect steps=2 examined=5744 pages=2898 opens=2873 pattern_id=0x1bd9b2ab9b8b1523 fetch_id=0x701ce701d792a1ff",
+   "class=JoinSelect steps=2 hoisted=0 reordered=1",
+   "step 1 Scan model_results_r2872 AS r",
+   "step 0 Probe models_r2872 AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 1 Scan model_results_r2872 AS r opens=1 examined=2872 matched=2872 sel=100% pages=26",
+   "step 0 Probe models_r2872 AS m opens=2872 examined=2872 matched=2872 sel=100% pages=2872"
+  ],
+  "W:A": [
+   "analyze rows=2872 class=JoinSelect steps=2 examined=5744 pages=2898 opens=2873 pattern_id=0x4cfadd05c8ca572b fetch_id=0xbe21e2a965b2ad7",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r2872 AS r",
+   "step 1 Probe models_r2872 AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r2872 AS r opens=1 examined=2872 matched=2872 sel=100% pages=26",
+   "step 1 Probe models_r2872 AS m opens=2872 examined=2872 matched=2872 sel=100% pages=2872"
+  ],
+  "W:B": [
+   "analyze rows=2872 class=JoinSelect steps=2 examined=5393 pages=209 opens=9 pattern_id=0x1bd9b2ab9b8b1523 fetch_id=0x701ce701d792a1ff",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan models_r2872 AS m",
+   "step 1 Scan model_results_r2872 AS r build on=col1 key=0:0.0",
+   "  filter 0:1.1 = 0:0.0",
+   "project r.model_id=0:1.1, r.period_no=0:1.2, r.pnl_bp=0:1.4, r.equity_bp=0:1.5, r.trades=0:1.7, m.name=0:0.1, m.family=0:0.2",
+   "step 0 Scan models_r2872 AS m opens=1 examined=8 matched=8 sel=100% pages=1",
+   "step 1 Scan model_results_r2872 AS r opens=8 examined=5385 matched=2872 sel=53% pages=208 inner_built=1 build_rows=2872 build_probes=7"
+  ],
+  "W2:A": [
+   "analyze rows=2872 class=JoinSelect steps=2 examined=5744 pages=2898 opens=2873 pattern_id=0x4cfadd05c8ca572b fetch_id=0xbe21e2a965b2ad7",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r2872 AS r",
+   "step 1 Probe models_r2872 AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r2872 AS r opens=1 examined=2872 matched=2872 sel=100% pages=26",
+   "step 1 Probe models_r2872 AS m opens=2872 examined=2872 matched=2872 sel=100% pages=2872"
+  ],
+  "W2:B": [
+   "analyze rows=2872 class=JoinSelect steps=2 examined=5393 pages=209 opens=9 pattern_id=0x1bd9b2ab9b8b1523 fetch_id=0x701ce701d792a1ff",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan models_r2872 AS m",
+   "step 1 Scan model_results_r2872 AS r build on=col1 key=0:0.0",
+   "  filter 0:1.1 = 0:0.0",
+   "project r.model_id=0:1.1, r.period_no=0:1.2, r.pnl_bp=0:1.4, r.equity_bp=0:1.5, r.trades=0:1.7, m.name=0:0.1, m.family=0:0.2",
+   "step 0 Scan models_r2872 AS m opens=1 examined=8 matched=8 sel=100% pages=1",
+   "step 1 Scan model_results_r2872 AS r opens=8 examined=5385 matched=2872 sel=53% pages=208 inner_built=1 build_rows=2872 build_probes=7"
+  ],
+  "rows": 2872,
+  "multiset_equal_all_arms": true
+ },
+ "c1-compare-all-r10k": {
+  "stmt": {
+   "A": "SELECT r.model_id, r.period_no, r.pnl_bp, r.equity_bp, r.trades, m.name, m.family FROM model_results_r10k AS r JOIN models_r10k AS m ON r.model_id = m.id",
+   "B": "SELECT r.model_id, r.period_no, r.pnl_bp, r.equity_bp, r.trades, m.name, m.family FROM models_r10k AS m JOIN model_results_r10k AS r ON r.model_id = m.id"
+  },
+  "P:A": [
+   "analyze rows=10000 class=JoinSelect steps=2 examined=20000 pages=10091 opens=10001 pattern_id=0xf5067293aae3c119 fetch_id=0xe27b7c964756833d",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r10k AS r",
+   "step 1 Probe models_r10k AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r10k AS r opens=1 examined=10000 matched=10000 sel=100% pages=91",
+   "step 1 Probe models_r10k AS m opens=10000 examined=10000 matched=10000 sel=100% pages=10000"
+  ],
+  "P:B": [
+   "analyze rows=10000 class=JoinSelect steps=2 examined=20000 pages=10091 opens=10001 pattern_id=0x50b4b3a492e9253d fetch_id=0x8f30e77f36508c11",
+   "class=JoinSelect steps=2 hoisted=0 reordered=1",
+   "step 1 Scan model_results_r10k AS r",
+   "step 0 Probe models_r10k AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 1 Scan model_results_r10k AS r opens=1 examined=10000 matched=10000 sel=100% pages=91",
+   "step 0 Probe models_r10k AS m opens=10000 examined=10000 matched=10000 sel=100% pages=10000"
+  ],
+  "W:A": [
+   "analyze rows=10000 class=JoinSelect steps=2 examined=20000 pages=10091 opens=10001 pattern_id=0xf5067293aae3c119 fetch_id=0xe27b7c964756833d",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r10k AS r",
+   "step 1 Probe models_r10k AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r10k AS r opens=1 examined=10000 matched=10000 sel=100% pages=91",
+   "step 1 Probe models_r10k AS m opens=10000 examined=10000 matched=10000 sel=100% pages=10000"
+  ],
+  "W:B": [
+   "analyze rows=10000 class=JoinSelect steps=2 examined=18758 pages=729 opens=9 pattern_id=0x50b4b3a492e9253d fetch_id=0x8f30e77f36508c11",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan models_r10k AS m",
+   "step 1 Scan model_results_r10k AS r build on=col1 key=0:0.0",
+   "  filter 0:1.1 = 0:0.0",
+   "project r.model_id=0:1.1, r.period_no=0:1.2, r.pnl_bp=0:1.4, r.equity_bp=0:1.5, r.trades=0:1.7, m.name=0:0.1, m.family=0:0.2",
+   "step 0 Scan models_r10k AS m opens=1 examined=8 matched=8 sel=100% pages=1",
+   "step 1 Scan model_results_r10k AS r opens=8 examined=18750 matched=10000 sel=53% pages=728 inner_built=1 build_rows=10000 build_probes=7"
+  ],
+  "W2:A": [
+   "analyze rows=10000 class=JoinSelect steps=2 examined=20000 pages=10091 opens=10001 pattern_id=0xf5067293aae3c119 fetch_id=0xe27b7c964756833d",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan model_results_r10k AS r",
+   "step 1 Probe models_r10k AS m key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project r.model_id=0:0.1, r.period_no=0:0.2, r.pnl_bp=0:0.4, r.equity_bp=0:0.5, r.trades=0:0.7, m.name=0:1.1, m.family=0:1.2",
+   "step 0 Scan model_results_r10k AS r opens=1 examined=10000 matched=10000 sel=100% pages=91",
+   "step 1 Probe models_r10k AS m opens=10000 examined=10000 matched=10000 sel=100% pages=10000"
+  ],
+  "W2:B": [
+   "analyze rows=10000 class=JoinSelect steps=2 examined=18758 pages=729 opens=9 pattern_id=0x50b4b3a492e9253d fetch_id=0x8f30e77f36508c11",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan models_r10k AS m",
+   "step 1 Scan model_results_r10k AS r build on=col1 key=0:0.0",
+   "  filter 0:1.1 = 0:0.0",
+   "project r.model_id=0:1.1, r.period_no=0:1.2, r.pnl_bp=0:1.4, r.equity_bp=0:1.5, r.trades=0:1.7, m.name=0:0.1, m.family=0:0.2",
+   "step 0 Scan models_r10k AS m opens=1 examined=8 matched=8 sel=100% pages=1",
+   "step 1 Scan model_results_r10k AS r opens=8 examined=18750 matched=10000 sel=53% pages=728 inner_built=1 build_rows=10000 build_probes=7"
+  ],
+  "rows": 10000,
+  "multiset_equal_all_arms": true
+ },
+ "c2-customer-statement-n200": {
+  "stmt": {
+   "A": "SELECT c.org_id, SUM(f.cbm) FROM freights_n200 AS f JOIN cargos_n200 AS c ON f.cargo_id = c.id WHERE c.org_id = 15 GROUP BY c.org_id",
+   "B": "SELECT c.org_id, SUM(f.cbm) FROM cargos_n200 AS c JOIN freights_n200 AS f ON f.cargo_id = c.id WHERE c.org_id = 15 GROUP BY c.org_id"
+  },
+  "P:A": [
+   "analyze rows=3 class=JoinSelect steps=2 examined=360 pages=182 opens=181 groups=1 pattern_id=0x47ae22c521172ffe fetch_id=0x6029ce824f609b1e",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_n200 AS f",
+   "step 1 Probe cargos_n200 AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 15",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_n200 AS f opens=1 examined=180 matched=180 sel=100% pages=2",
+   "step 1 Probe cargos_n200 AS c opens=180 examined=180 matched=3 sel=1% pages=180"
+  ],
+  "P:B": [
+   "analyze rows=3 class=JoinSelect steps=2 examined=360 pages=182 opens=181 groups=1 pattern_id=0x205d4dbccf089c26 fetch_id=0xda13280639aca46",
+   "class=JoinSelect steps=2 hoisted=0 reordered=1",
+   "step 1 Scan freights_n200 AS f",
+   "step 0 Probe cargos_n200 AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 15",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 1 Scan freights_n200 AS f opens=1 examined=180 matched=180 sel=100% pages=2",
+   "step 0 Probe cargos_n200 AS c opens=180 examined=180 matched=3 sel=1% pages=180"
+  ],
+  "W:A": [
+   "analyze rows=3 class=JoinSelect steps=2 examined=360 pages=182 opens=181 groups=1 pattern_id=0x47ae22c521172ffe fetch_id=0x6029ce824f609b1e",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_n200 AS f",
+   "step 1 Probe cargos_n200 AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 15",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_n200 AS f opens=1 examined=180 matched=180 sel=100% pages=2",
+   "step 1 Probe cargos_n200 AS c opens=180 examined=180 matched=3 sel=1% pages=180"
+  ],
+  "W:B": [
+   "analyze rows=3 class=JoinSelect steps=2 examined=382 pages=6 opens=5 groups=1 pattern_id=0x205d4dbccf089c26 fetch_id=0xda13280639aca46",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 FilterScan cargos_n200 AS c",
+   "  filter 0:0.1 = 15",
+   "step 1 Scan freights_n200 AS f build on=col3 key=0:0.0",
+   "  filter 0:1.3 = 0:0.0",
+   "aggregate keys=0:0.1 items=c.org_id=key0:0.1, sum(f.cbm)=0:1.4",
+   "step 0 FilterScan cargos_n200 AS c opens=1 examined=200 matched=4 sel=2% pages=2",
+   "step 1 Scan freights_n200 AS f opens=4 examined=182 matched=3 sel=1% pages=4 inner_built=1 build_rows=180 build_probes=3"
+  ],
+  "W2:A": [
+   "analyze rows=3 class=JoinSelect steps=2 examined=360 pages=182 opens=181 groups=1 pattern_id=0x47ae22c521172ffe fetch_id=0x6029ce824f609b1e",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_n200 AS f",
+   "step 1 Probe cargos_n200 AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 15",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_n200 AS f opens=1 examined=180 matched=180 sel=100% pages=2",
+   "step 1 Probe cargos_n200 AS c opens=180 examined=180 matched=3 sel=1% pages=180"
+  ],
+  "W2:B": [
+   "analyze rows=3 class=JoinSelect steps=2 examined=382 pages=6 opens=5 groups=1 pattern_id=0x205d4dbccf089c26 fetch_id=0xda13280639aca46",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 FilterScan cargos_n200 AS c",
+   "  filter 0:0.1 = 15",
+   "step 1 Scan freights_n200 AS f build on=col3 key=0:0.0",
+   "  filter 0:1.3 = 0:0.0",
+   "aggregate keys=0:0.1 items=c.org_id=key0:0.1, sum(f.cbm)=0:1.4",
+   "step 0 FilterScan cargos_n200 AS c opens=1 examined=200 matched=4 sel=2% pages=2",
+   "step 1 Scan freights_n200 AS f opens=4 examined=182 matched=3 sel=1% pages=4 inner_built=1 build_rows=180 build_probes=3"
+  ],
+  "rows": 1,
+  "multiset_equal_all_arms": true
+ },
+ "c2-customer-statement-n1k": {
+  "stmt": {
+   "A": "SELECT c.org_id, SUM(f.cbm) FROM freights_n1k AS f JOIN cargos_n1k AS c ON f.cargo_id = c.id WHERE c.org_id = 30 GROUP BY c.org_id",
+   "B": "SELECT c.org_id, SUM(f.cbm) FROM cargos_n1k AS c JOIN freights_n1k AS f ON f.cargo_id = c.id WHERE c.org_id = 30 GROUP BY c.org_id"
+  },
+  "P:A": [
+   "analyze rows=15 class=JoinSelect steps=2 examined=1758 pages=888 opens=880 groups=1 pattern_id=0xdeb3121d00bcc4d0 fetch_id=0x283ce43ceca791f0",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_n1k AS f",
+   "step 1 Probe cargos_n1k AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 30",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_n1k AS f opens=1 examined=879 matched=879 sel=100% pages=9",
+   "step 1 Probe cargos_n1k AS c opens=879 examined=879 matched=15 sel=1% pages=879"
+  ],
+  "P:B": [
+   "analyze rows=15 class=JoinSelect steps=2 examined=1758 pages=888 opens=880 groups=1 pattern_id=0xf78026907de46a58 fetch_id=0x78d626a328558678",
+   "class=JoinSelect steps=2 hoisted=0 reordered=1",
+   "step 1 Scan freights_n1k AS f",
+   "step 0 Probe cargos_n1k AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 30",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 1 Scan freights_n1k AS f opens=1 examined=879 matched=879 sel=100% pages=9",
+   "step 0 Probe cargos_n1k AS c opens=879 examined=879 matched=15 sel=1% pages=879"
+  ],
+  "W:A": [
+   "analyze rows=15 class=JoinSelect steps=2 examined=1758 pages=888 opens=880 groups=1 pattern_id=0xdeb3121d00bcc4d0 fetch_id=0x283ce43ceca791f0",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_n1k AS f",
+   "step 1 Probe cargos_n1k AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 30",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_n1k AS f opens=1 examined=879 matched=879 sel=100% pages=9",
+   "step 1 Probe cargos_n1k AS c opens=879 examined=879 matched=15 sel=1% pages=879"
+  ],
+  "W:B": [
+   "analyze rows=15 class=JoinSelect steps=2 examined=1893 pages=33 opens=16 groups=1 pattern_id=0xf78026907de46a58 fetch_id=0x78d626a328558678",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 FilterScan cargos_n1k AS c",
+   "  filter 0:0.1 = 30",
+   "step 1 Scan freights_n1k AS f build on=col3 key=0:0.0",
+   "  filter 0:1.3 = 0:0.0",
+   "aggregate keys=0:0.1 items=c.org_id=key0:0.1, sum(f.cbm)=0:1.4",
+   "step 0 FilterScan cargos_n1k AS c opens=1 examined=1000 matched=15 sel=1% pages=10",
+   "step 1 Scan freights_n1k AS f opens=15 examined=893 matched=15 sel=1% pages=23 inner_built=1 build_rows=879 build_probes=14"
+  ],
+  "W2:A": [
+   "analyze rows=15 class=JoinSelect steps=2 examined=1758 pages=888 opens=880 groups=1 pattern_id=0xdeb3121d00bcc4d0 fetch_id=0x283ce43ceca791f0",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_n1k AS f",
+   "step 1 Probe cargos_n1k AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 30",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_n1k AS f opens=1 examined=879 matched=879 sel=100% pages=9",
+   "step 1 Probe cargos_n1k AS c opens=879 examined=879 matched=15 sel=1% pages=879"
+  ],
+  "W2:B": [
+   "analyze rows=15 class=JoinSelect steps=2 examined=1893 pages=33 opens=16 groups=1 pattern_id=0xf78026907de46a58 fetch_id=0x78d626a328558678",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 FilterScan cargos_n1k AS c",
+   "  filter 0:0.1 = 30",
+   "step 1 Scan freights_n1k AS f build on=col3 key=0:0.0",
+   "  filter 0:1.3 = 0:0.0",
+   "aggregate keys=0:0.1 items=c.org_id=key0:0.1, sum(f.cbm)=0:1.4",
+   "step 0 FilterScan cargos_n1k AS c opens=1 examined=1000 matched=15 sel=1% pages=10",
+   "step 1 Scan freights_n1k AS f opens=15 examined=893 matched=15 sel=1% pages=23 inner_built=1 build_rows=879 build_probes=14"
+  ],
+  "rows": 1,
+  "multiset_equal_all_arms": true
+ },
+ "c2-customer-statement-ca10k": {
+  "stmt": {
+   "A": "SELECT c.org_id, SUM(f.cbm) FROM freights_ca AS f JOIN cargos_ca AS c ON f.cargo_id = c.id WHERE c.org_id = 234 GROUP BY c.org_id",
+   "B": "SELECT c.org_id, SUM(f.cbm) FROM cargos_ca AS c JOIN freights_ca AS f ON f.cargo_id = c.id WHERE c.org_id = 234 GROUP BY c.org_id"
+  },
+  "P:A": [
+   "analyze rows=30 class=JoinSelect steps=2 examined=16468 pages=8313 opens=8235 groups=1 pattern_id=0x112d85ed476e5de6 fetch_id=0x16c53ebbdc0d06",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_ca AS f",
+   "step 1 Probe cargos_ca AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 234",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_ca AS f opens=1 examined=8234 matched=8234 sel=100% pages=79",
+   "step 1 Probe cargos_ca AS c opens=8234 examined=8234 matched=30 sel=0% pages=8234"
+  ],
+  "P:B": [
+   "analyze rows=30 class=JoinSelect steps=2 examined=16468 pages=8313 opens=8235 groups=1 pattern_id=0xad93451bdf7229a6 fetch_id=0xd260e74709d46146",
+   "class=JoinSelect steps=2 hoisted=0 reordered=1",
+   "step 1 Scan freights_ca AS f",
+   "step 0 Probe cargos_ca AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 234",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 1 Scan freights_ca AS f opens=1 examined=8234 matched=8234 sel=100% pages=79",
+   "step 0 Probe cargos_ca AS c opens=8234 examined=8234 matched=30 sel=0% pages=8234"
+  ],
+  "W:A": [
+   "analyze rows=30 class=JoinSelect steps=2 examined=16468 pages=8313 opens=8235 groups=1 pattern_id=0x112d85ed476e5de6 fetch_id=0x16c53ebbdc0d06",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_ca AS f",
+   "step 1 Probe cargos_ca AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 234",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_ca AS f opens=1 examined=8234 matched=8234 sel=100% pages=79",
+   "step 1 Probe cargos_ca AS c opens=8234 examined=8234 matched=30 sel=0% pages=8234"
+  ],
+  "W:B": [
+   "analyze rows=30 class=JoinSelect steps=2 examined=18264 pages=209 opens=46 groups=1 pattern_id=0xad93451bdf7229a6 fetch_id=0xd260e74709d46146",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 FilterScan cargos_ca AS c",
+   "  filter 0:0.1 = 234",
+   "step 1 Scan freights_ca AS f build on=col3 key=0:0.0",
+   "  filter 0:1.3 = 0:0.0",
+   "aggregate keys=0:0.1 items=c.org_id=key0:0.1, sum(f.cbm)=0:1.4",
+   "step 0 FilterScan cargos_ca AS c opens=1 examined=10000 matched=45 sel=0% pages=100",
+   "step 1 Scan freights_ca AS f opens=45 examined=8264 matched=30 sel=0% pages=109 inner_built=1 build_rows=8234 build_probes=44"
+  ],
+  "W2:A": [
+   "analyze rows=30 class=JoinSelect steps=2 examined=16468 pages=8313 opens=8235 groups=1 pattern_id=0x112d85ed476e5de6 fetch_id=0x16c53ebbdc0d06",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_ca AS f",
+   "step 1 Probe cargos_ca AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 234",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_ca AS f opens=1 examined=8234 matched=8234 sel=100% pages=79",
+   "step 1 Probe cargos_ca AS c opens=8234 examined=8234 matched=30 sel=0% pages=8234"
+  ],
+  "W2:B": [
+   "analyze rows=30 class=JoinSelect steps=2 examined=18264 pages=209 opens=46 groups=1 pattern_id=0xad93451bdf7229a6 fetch_id=0xd260e74709d46146",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 FilterScan cargos_ca AS c",
+   "  filter 0:0.1 = 234",
+   "step 1 Scan freights_ca AS f build on=col3 key=0:0.0",
+   "  filter 0:1.3 = 0:0.0",
+   "aggregate keys=0:0.1 items=c.org_id=key0:0.1, sum(f.cbm)=0:1.4",
+   "step 0 FilterScan cargos_ca AS c opens=1 examined=10000 matched=45 sel=0% pages=100",
+   "step 1 Scan freights_ca AS f opens=45 examined=8264 matched=30 sel=0% pages=109 inner_built=1 build_rows=8234 build_probes=44"
+  ],
+  "rows": 1,
+  "multiset_equal_all_arms": true
+ },
+ "c2-customer-statement-df200k": {
+  "stmt": {
+   "A": "SELECT c.org_id, SUM(f.cbm) FROM freights_df AS f JOIN cargos_df AS c ON f.cargo_id = c.id WHERE c.org_id = 934 GROUP BY c.org_id",
+   "B": "SELECT c.org_id, SUM(f.cbm) FROM cargos_df AS c JOIN freights_df AS f ON f.cargo_id = c.id WHERE c.org_id = 934 GROUP BY c.org_id"
+  },
+  "P:A": [
+   "analyze rows=8 class=JoinSelect steps=2 examined=21590 pages=10898 opens=10796 groups=1 pattern_id=0x767459dc0fb7711e fetch_id=0x2f1ed2de0850a5be",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_df AS f",
+   "step 1 Probe cargos_df AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 934",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_df AS f opens=1 examined=10795 matched=10795 sel=100% pages=103",
+   "step 1 Probe cargos_df AS c opens=10795 examined=10795 matched=8 sel=0% pages=10795"
+  ],
+  "P:B": [
+   "analyze rows=8 class=JoinSelect steps=2 examined=21590 pages=10898 opens=10796 groups=1 pattern_id=0x181dc12f847a5e76 fetch_id=0x7630f4d777a50996",
+   "class=JoinSelect steps=2 hoisted=0 reordered=1",
+   "step 1 Scan freights_df AS f",
+   "step 0 Probe cargos_df AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 934",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 1 Scan freights_df AS f opens=1 examined=10795 matched=10795 sel=100% pages=103",
+   "step 0 Probe cargos_df AS c opens=10795 examined=10795 matched=8 sel=0% pages=10795"
+  ],
+  "W:A": [
+   "analyze rows=8 class=JoinSelect steps=2 examined=21590 pages=10898 opens=10796 groups=1 pattern_id=0x767459dc0fb7711e fetch_id=0x2f1ed2de0850a5be",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_df AS f",
+   "step 1 Probe cargos_df AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 934",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_df AS f opens=1 examined=10795 matched=10795 sel=100% pages=103",
+   "step 1 Probe cargos_df AS c opens=10795 examined=10795 matched=8 sel=0% pages=10795"
+  ],
+  "W:B": [
+   "analyze rows=8 class=JoinSelect steps=2 examined=210803 pages=2111 opens=103 groups=1 pattern_id=0x181dc12f847a5e76 fetch_id=0x7630f4d777a50996",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 FilterScan cargos_df AS c",
+   "  filter 0:0.1 = 934",
+   "step 1 Scan freights_df AS f build on=col3 key=0:0.0",
+   "  filter 0:1.3 = 0:0.0",
+   "aggregate keys=0:0.1 items=c.org_id=key0:0.1, sum(f.cbm)=0:1.4",
+   "step 0 FilterScan cargos_df AS c opens=1 examined=200000 matched=102 sel=0% pages=2000",
+   "step 1 Scan freights_df AS f opens=102 examined=10803 matched=8 sel=0% pages=111 inner_built=1 build_rows=10795 build_probes=101"
+  ],
+  "W2:A": [
+   "analyze rows=8 class=JoinSelect steps=2 examined=21590 pages=10898 opens=10796 groups=1 pattern_id=0x767459dc0fb7711e fetch_id=0x2f1ed2de0850a5be",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Scan freights_df AS f",
+   "step 1 Probe cargos_df AS c key=0:0.3",
+   "  filter 0:0.3 = 0:1.0",
+   "  filter 0:1.1 = 934",
+   "aggregate keys=0:1.1 items=c.org_id=key0:1.1, sum(f.cbm)=0:0.4",
+   "step 0 Scan freights_df AS f opens=1 examined=10795 matched=10795 sel=100% pages=103",
+   "step 1 Probe cargos_df AS c opens=10795 examined=10795 matched=8 sel=0% pages=10795"
+  ],
+  "W2:B": [
+   "analyze rows=8 class=JoinSelect steps=2 examined=210803 pages=2111 opens=103 groups=1 pattern_id=0x181dc12f847a5e76 fetch_id=0x7630f4d777a50996",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 FilterScan cargos_df AS c",
+   "  filter 0:0.1 = 934",
+   "step 1 Scan freights_df AS f build on=col3 key=0:0.0",
+   "  filter 0:1.3 = 0:0.0",
+   "aggregate keys=0:0.1 items=c.org_id=key0:0.1, sum(f.cbm)=0:1.4",
+   "step 0 FilterScan cargos_df AS c opens=1 examined=200000 matched=102 sel=0% pages=2000",
+   "step 1 Scan freights_df AS f opens=102 examined=10803 matched=8 sel=0% pages=111 inner_built=1 build_rows=10795 build_probes=101"
+  ],
+  "rows": 1,
+  "multiset_equal_all_arms": true
+ },
+ "c3-cross-join-x200": {
+  "stmt": {
+   "A": "SELECT t.symbol_id, t.ret_bp, t.mom5_bp, t.mom20_bp, t.mom60_bp, t.mom120_bp, t.vol10_bp, t.vol20_bp, t.vol60_bp, b.close, s.ticker FROM daily_stats_x200 AS t JOIN daily_bars_x200 AS b ON t.bar_id = b.id JOIN symbols_x200 AS s ON t.symbol_id = s.id WHERE t.session_no = 14"
+  },
+  "P:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=216 pages=19 opens=17 pattern_id=0x3102416abc901d78 fetch_id=0x125dfd1bb04cf301",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x200 AS t",
+   "  filter 0:0.3 = 14",
+   "step 1 Probe daily_bars_x200 AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x200 AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x200 AS t opens=1 examined=200 matched=8 sel=4% pages=3",
+   "step 1 Probe daily_bars_x200 AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x200 AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "W:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=216 pages=19 opens=17 pattern_id=0x3102416abc901d78 fetch_id=0x125dfd1bb04cf301",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x200 AS t",
+   "  filter 0:0.3 = 14",
+   "step 1 Probe daily_bars_x200 AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x200 AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x200 AS t opens=1 examined=200 matched=8 sel=4% pages=3",
+   "step 1 Probe daily_bars_x200 AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x200 AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "W2:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=216 pages=19 opens=17 pattern_id=0x3102416abc901d78 fetch_id=0x125dfd1bb04cf301",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x200 AS t",
+   "  filter 0:0.3 = 14",
+   "step 1 Probe daily_bars_x200 AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x200 AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x200 AS t opens=1 examined=200 matched=8 sel=4% pages=3",
+   "step 1 Probe daily_bars_x200 AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x200 AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "rows": 8,
+  "multiset_equal_all_arms": true
+ },
+ "c3-cross-join-x1k": {
+  "stmt": {
+   "A": "SELECT t.symbol_id, t.ret_bp, t.mom5_bp, t.mom20_bp, t.mom60_bp, t.mom120_bp, t.vol10_bp, t.vol20_bp, t.vol60_bp, b.close, s.ticker FROM daily_stats_x1k AS t JOIN daily_bars_x1k AS b ON t.bar_id = b.id JOIN symbols_x1k AS s ON t.symbol_id = s.id WHERE t.session_no = 58"
+  },
+  "P:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=1016 pages=31 opens=17 pattern_id=0x79595a55fd0cb1d1 fetch_id=0xa2ddd68a4fab0e2e",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x1k AS t",
+   "  filter 0:0.3 = 58",
+   "step 1 Probe daily_bars_x1k AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x1k AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x1k AS t opens=1 examined=1000 matched=8 sel=0% pages=15",
+   "step 1 Probe daily_bars_x1k AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x1k AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "W:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=1016 pages=31 opens=17 pattern_id=0x79595a55fd0cb1d1 fetch_id=0xa2ddd68a4fab0e2e",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x1k AS t",
+   "  filter 0:0.3 = 58",
+   "step 1 Probe daily_bars_x1k AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x1k AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x1k AS t opens=1 examined=1000 matched=8 sel=0% pages=15",
+   "step 1 Probe daily_bars_x1k AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x1k AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "W2:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=1016 pages=31 opens=17 pattern_id=0x79595a55fd0cb1d1 fetch_id=0xa2ddd68a4fab0e2e",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x1k AS t",
+   "  filter 0:0.3 = 58",
+   "step 1 Probe daily_bars_x1k AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x1k AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x1k AS t opens=1 examined=1000 matched=8 sel=0% pages=15",
+   "step 1 Probe daily_bars_x1k AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x1k AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "rows": 8,
+  "multiset_equal_all_arms": true
+ },
+ "c3-cross-join-x10k": {
+  "stmt": {
+   "A": "SELECT t.symbol_id, t.ret_bp, t.mom5_bp, t.mom20_bp, t.mom60_bp, t.mom120_bp, t.vol10_bp, t.vol20_bp, t.vol60_bp, b.close, s.ticker FROM daily_stats_x10k AS t JOIN daily_bars_x10k AS b ON t.bar_id = b.id JOIN symbols_x10k AS s ON t.symbol_id = s.id WHERE t.session_no = 933"
+  },
+  "P:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=10016 pages=161 opens=17 pattern_id=0x56d53dbf32e6b548 fetch_id=0xa2951958d585ed31",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x10k AS t",
+   "  filter 0:0.3 = 933",
+   "step 1 Probe daily_bars_x10k AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x10k AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x10k AS t opens=1 examined=10000 matched=8 sel=0% pages=145",
+   "step 1 Probe daily_bars_x10k AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x10k AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "W:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=10016 pages=161 opens=17 pattern_id=0x56d53dbf32e6b548 fetch_id=0xa2951958d585ed31",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x10k AS t",
+   "  filter 0:0.3 = 933",
+   "step 1 Probe daily_bars_x10k AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x10k AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x10k AS t opens=1 examined=10000 matched=8 sel=0% pages=145",
+   "step 1 Probe daily_bars_x10k AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x10k AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "W2:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=10016 pages=161 opens=17 pattern_id=0x56d53dbf32e6b548 fetch_id=0xa2951958d585ed31",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x10k AS t",
+   "  filter 0:0.3 = 933",
+   "step 1 Probe daily_bars_x10k AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x10k AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x10k AS t opens=1 examined=10000 matched=8 sel=0% pages=145",
+   "step 1 Probe daily_bars_x10k AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x10k AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "rows": 8,
+  "multiset_equal_all_arms": true
+ },
+ "c3-cross-join-x60k": {
+  "stmt": {
+   "A": "SELECT t.symbol_id, t.ret_bp, t.mom5_bp, t.mom20_bp, t.mom60_bp, t.mom120_bp, t.vol10_bp, t.vol20_bp, t.vol60_bp, b.close, s.ticker FROM daily_stats_x60k AS t JOIN daily_bars_x60k AS b ON t.bar_id = b.id JOIN symbols_x60k AS s ON t.symbol_id = s.id WHERE t.session_no = 3734"
+  },
+  "P:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=60496 pages=893 opens=17 pattern_id=0xdb4990601617ec91 fetch_id=0x20791ff83b54fe48",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x60k AS t",
+   "  filter 0:0.3 = 3734",
+   "step 1 Probe daily_bars_x60k AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x60k AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x60k AS t opens=1 examined=60480 matched=8 sel=0% pages=877",
+   "step 1 Probe daily_bars_x60k AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x60k AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "W:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=60496 pages=893 opens=17 pattern_id=0xdb4990601617ec91 fetch_id=0x20791ff83b54fe48",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x60k AS t",
+   "  filter 0:0.3 = 3734",
+   "step 1 Probe daily_bars_x60k AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x60k AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x60k AS t opens=1 examined=60480 matched=8 sel=0% pages=877",
+   "step 1 Probe daily_bars_x60k AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x60k AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "W2:A": [
+   "analyze rows=8 class=JoinSelect steps=3 examined=60496 pages=893 opens=17 pattern_id=0xdb4990601617ec91 fetch_id=0x20791ff83b54fe48",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 FilterScan daily_stats_x60k AS t",
+   "  filter 0:0.3 = 3734",
+   "step 1 Probe daily_bars_x60k AS b key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe symbols_x60k AS s key=0:0.2",
+   "  filter 0:0.2 = 0:2.0",
+   "project t.symbol_id=0:0.2, t.ret_bp=0:0.4, t.mom5_bp=0:0.5, t.mom20_bp=0:0.6, t.mom60_bp=0:0.7, t.mom120_bp=0:0.8, t.vol10_bp=0:0.9, t.vol20_bp=0:0.10, t.vol60_bp=0:0.11, b.close=0:1.7, s.ticker=0:2.1",
+   "step 0 FilterScan daily_stats_x60k AS t opens=1 examined=60480 matched=8 sel=0% pages=877",
+   "step 1 Probe daily_bars_x60k AS b opens=8 examined=8 matched=8 sel=100% pages=8",
+   "step 2 Probe symbols_x60k AS s opens=8 examined=8 matched=8 sel=100% pages=8"
+  ],
+  "rows": 8,
+  "multiset_equal_all_arms": true
+ }
+}

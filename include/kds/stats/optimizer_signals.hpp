@@ -67,7 +67,9 @@ inline constexpr std::size_t kMaxTrackedCabins = 4096;
 // targets - the linkage §II.4's Σ_i needs, since B(c) sums fingerprints
 // *served by candidate c* and a bare pattern_id names no column. Derived
 // by the dispatcher from the compiled chain (a kCabinProbe step, or the
-// first kFilterScan's filtered column); `cabin_id` is non-zero when an
+// first kFilterScan's filtered column, each first in written-position order
+// since CC-Q15 - a planned join's executed order never decides which; the
+// order still decides each step's kind); `cabin_id` is non-zero when an
 // existing Cabin already serves the shape. Zero rel_oid means the shape
 // has no cabin candidacy (a tuple key lookup, a bare scan) - still counted, so
 // S1 stays the workload's whole heat map, but no CREATE prices it.

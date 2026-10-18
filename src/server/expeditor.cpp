@@ -79,7 +79,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "indexes",
             "cabin_max_entries_per_value", "cores",  "reactor_cpus",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
-            "join_build_max_rows",   "scan_kernel",  "lock_wait_fault_net_ms",
+            "join_build_max_rows",   "scan_kernel",  "join_order",  "lock_wait_fault_net_ms",
             "max_locks_per_txn",     "tcp_keepalive_s",
             "txn_lifetime_ceiling_ms",
             "decay_half_life",
@@ -439,6 +439,18 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetBool("scan_kernel");
         if (!v.ok()) return v.status();
         scan_kernel = v.value();
+    }
+    if (file.Has("join_order")) {
+        auto v = file.GetString("join_order");
+        if (!v.ok()) return v.status();
+        if (v.value() == "planned") {
+            plan_join_order = true;
+        } else if (v.value() == "written") {
+            plan_join_order = false;
+        } else {
+            return Status::InvalidArgument("join_order must be 'planned' or 'written', not '" +
+                                           v.value() + "'");
+        }
     }
     if (file.Has("join_build_max_rows")) {
         auto v = file.GetUint("join_build_max_rows");
@@ -1274,6 +1286,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->optimizer_signals_->SetLatch(&expeditor->optimizer_signals_latch_);
     }
     expeditor->cabin_optimizer_on_.store(expeditor->config_.cabin_optimizer);
+    expeditor->plan_stats_.emplace(expeditor->config_.cores);
     // PHY04: the decision core and its executor, only where a Cabin can
     // exist at all. The cadence task registers in Serve() beside the
     // checkpointer's.
@@ -1358,6 +1371,7 @@ Status Expeditor::PersistTrxIdCeiling() {
 OptimizerSurface Expeditor::Optimizer() {
     OptimizerSurface surface;
     surface.signals = &*optimizer_signals_;
+    surface.plan_stats = &*plan_stats_;
     surface.cabin_optimizer_on = &cabin_optimizer_on_;
     if (cabin_controller_) {
         surface.controller = &*cabin_controller_;
@@ -2048,6 +2062,18 @@ Status Expeditor::Start() {
         if (reclaim_counters_.pending.load(std::memory_order_relaxed) == 0) return;
         if (Status s = ReclaimStep(); !s.ok() && logger_->enabled(LogLevel::kWarn)) {
             logger_->Warn("reclaim", "reclaim step failed: " + s.message());
+        }
+    });
+
+    // **The join planner's steward** (docs/spec/plan-stats.md PS4): one
+    // bounded step a second on core 0's `system` group - merge the cores'
+    // parts, fold, seed priors within a 16-page budget, publish on a change.
+    constexpr sched::MonoTimeNs kPlanStatsTickNs = 1'000'000'000;  // 1 s
+    scheduler.SubmitEvery(kPlanStatsTickNs, [this] {
+        if (Status s = plan_stats_->StewardStep(database_->catalog, *store_,
+                                                static_cast<std::uint64_t>(clock_.Now()));
+            !s.ok() && logger_->enabled(LogLevel::kWarn)) {
+            logger_->Warn("plan_stats", "steward step failed: " + s.message());
         }
     });
 

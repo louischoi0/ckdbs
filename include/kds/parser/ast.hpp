@@ -688,8 +688,8 @@ struct SelectStmt {
     // this field.
     std::vector<ColumnName> projection;
 
-    // The FROM list in **written order**, which spec §1 makes a client
-    // contract: written order is execution order and nothing reorders it.
+    // The FROM list in **written order**. The chain runs it in that order or
+    // in the join planner's (spec I12); a step's id is its written position.
     // `from` is the first relation and `joins[i]` the (i+1)-th, each with
     // the predicate that attached it.
     RelationRef from;

@@ -457,7 +457,12 @@ What it deliberately does not change:
 ## 9. How the compiler picks one
 
 > **IX9 — index selection is `f(shape, catalog)`. No statistics, no data, no
-> cardinality estimate.**
+> cardinality estimate** - given the relations placed before the step. **Since
+> CC-S3 the order of a planned join block reads the join planner's
+> statistics** (`docs/spec/plan-stats.md`, `parser-v2.md` I12), and the order
+> decides which relations precede a step, so which correlated index (or
+> build, or Cabin arm) a step takes can move with a statistics generation.
+> The index a step takes, given its predecessors, cannot.
 
 Among the relation's indexes, take the one matching the **longest usable key
 prefix** of the step's residual equalities; break a tie by **lowest
@@ -465,7 +470,9 @@ prefix** of the step's residual equalities; break a tie by **lowest
 
 Deterministic and stable is not a preference here: a recorded pattern must
 not compile differently as the data changes, or `pattern_id` stops naming a
-plan. It is the same argument `CabinProbeOf` gives for taking the *first*
+plan. Since CC-S3 a planned block's order is the exception, and what keeps a
+recorded trail sound across it is that a step's id is its relation's written
+position (CB-Q3) and replay re-derives the key (I17); a reorder costs misses. It is the same argument `CabinProbeOf` gives for taking the *first*
 cabined equality rather than the most selective one.
 
 There is a crossover this rule cannot see (against `bench/` at `1769487`: a
@@ -930,7 +937,10 @@ chain is unchanged either way** — the kind is still `kIndexProbe` and `ANALYZE
 still says so. That is the same arrangement `cabins` has, and it keeps the plan
 `f(shape, catalog)`: the switch steers the branch inside a kind, never which
 kind was compiled. It also makes the A/B comparison sharper than a compiler
-switch would — identical plan, identical rows, different work.
+switch would — identical plan, identical rows, different work. The join
+planner's statistics move only a planned block's order, at compile, never
+at run (`plan-stats.md`); they are index-blind, so `indexes` changes none of
+them.
 
 > **There is deliberately no switch for index maintenance.**
 

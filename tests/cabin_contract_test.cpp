@@ -1,4 +1,9 @@
+#include <algorithm>
 #include <gtest/gtest.h>
+
+#include "unordered_reply.hpp"
+#include "kds/stats/plan_stats.hpp"
+#include "learn_plan_stats.hpp"
 
 #include <cstdlib>
 #include <optional>
@@ -75,11 +80,18 @@ public:
     stats::CabinStore& cabins() { return *cabins_; }
     storage::InMemoryPageStore& store() { return store_; }
 
+    // The join planner's statistics, learned from `sqls` (CC-S3), as the
+    // index suite's `Learn` does.
+    void Learn(const std::vector<std::string>& sqls) {
+        testing_plan::LearnPlanStats(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);
+    }
+
 private:
     storage::InMemoryPageStore store_{kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<stats::CabinStore> cabins_;
     std::optional<CommandDispatcher> dispatcher_;
+    stats::PlanStats plan_stats_{1};
 };
 
 // Two relations, a btree with a declared tuple key and a heap whose tuple key
@@ -185,9 +197,9 @@ void ExpectSame(const std::vector<std::string>& got, const std::vector<std::stri
                 const char* what) {
     ASSERT_EQ(got.size(), want.size()) << what;
     for (std::size_t i = 0; i < want.size(); ++i) {
-        const std::size_t query = i % Queries().size();
-        EXPECT_EQ(got[i], want[i])
-            << what << " diverged at reply " << i << " (" << Queries()[query] << ")";
+        const std::string& sql = Queries()[i % Queries().size()];
+        EXPECT_EQ(testing_reply::Unordered(got[i], sql), testing_reply::Unordered(want[i], sql))
+            << what << " diverged at reply " << i << " (" << sql << ")";
     }
 }
 
@@ -241,6 +253,16 @@ TEST(CabinContractTest, ServingFromACabinChangesNoReply) {
     Load(db);
     DeclareCabins(db);
     ExpectSame(RunAll(db, 4), Reference(), "cabins serving");
+}
+
+// CC-S3: the Cabins serve under the join planner's learned statistics too,
+// so the planner that ships is the one the contract holds of.
+TEST(CabinContractTest, ServingFromACabinUnderLearnedStatisticsChangesNoReply) {
+    Instance db(/*cabins=*/true);
+    Load(db);
+    DeclareCabins(db);
+    db.Learn(Queries());
+    ExpectSame(RunAll(db, 4), Reference(), "cabins serving, statistics learned");
 }
 
 TEST(CabinContractTest, DroppingACabinMidRunChangesNoReply) {

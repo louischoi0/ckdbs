@@ -1,0 +1,30 @@
+2026-10-18T14:35:35Z status_age=19s harness=alive load=0.75 :: DONE
+2026-10-18T14:36:35Z status_age=0s harness=alive load=1.73 :: extra round 3/3 c1-compare-all-r10k WA:drv
+2026-10-18T14:37:35Z finished
+2026-10-18T14:37:39Z status_age=12s harness=alive load=1.46 :: EXTRA DONE
+2026-10-18T14:38:39Z status_age=0s harness=alive load=1.57 :: overhead2 round 4/10 ov-update A elapsed 48s
+2026-10-18T14:39:39Z status_age=0s harness=alive load=1.36 :: overhead2 round 8/10 ov-update B elapsed 108s
+2026-10-18T14:40:25Z status_age=11s harness=alive load=1.03 :: RESTART2 DONE
+2026-10-18T14:40:39Z status_age=0s harness=alive load=1.24 :: gain2 warm-full c2-customer-statement-n1k A
+2026-10-18T14:41:25Z status_age=1s harness=alive load=1.05 :: gain2 round 2/5 c2-customer-statement-df200k B elapsed 15s
+2026-10-18T14:41:40Z status_age=1s harness=alive load=1.04 :: gain2 round 3/5 c2-customer-statement-df200k BL elapsed 29s
+2026-10-18T14:42:16Z status_age=11s harness=alive load=0.81 :: GAIN2 DONE
+2026-10-18T14:42:25Z status_age=0s harness=alive load=0.91 :: overhead3 round 1/16 ov-join3-tuplekey A elapsed 3s
+2026-10-18T14:42:40Z status_age=1s harness=alive load=1.14 :: overhead3 round 4/16 ov-point-read A2 elapsed 17s
+2026-10-18T14:43:16Z status_age=0s harness=alive load=1.21 :: overhead3 round 9/16 ov-join3-tuplekey A elapsed 54s
+2026-10-18T14:43:26Z status_age=1s harness=alive load=1.18 :: overhead3 round 11/16 ov-point-read A elapsed 63s
+2026-10-18T14:43:40Z status_age=1s harness=alive load=1.28 :: overhead3 round 13/16 ov-point-read A elapsed 77s
+2026-10-18T14:44:16Z finished
+2026-10-18T14:44:26Z finished
+2026-10-18T14:44:40Z finished
+2026-10-18T14:52:16Z status_age=487s harness=alive load=1.00 :: OVERHEAD3 DONE
+2026-10-18T14:52:16Z ORPHAN (alive=alive age=487): relaunching
+2026-10-18T14:53:21Z status_age=552s harness=alive load=1.00 :: OVERHEAD3 DONE
+2026-10-18T14:53:21Z ORPHAN (alive=alive age=552): relaunching
+2026-10-18T14:54:26Z status_age=617s harness=alive load=1.58 :: OVERHEAD3 DONE
+2026-10-18T14:54:26Z ORPHAN (alive=alive age=617): relaunching
+2026-10-18T14:54:45Z status_age=2s harness=alive load=1.20 :: gain3 launch
+2026-10-18T14:55:45Z status_age=1s harness=alive load=1.42 :: gain3 overhead-history B3 ov-point-read
+2026-10-18T14:56:45Z status_age=0s harness=alive load=1.70 :: gain3 warm c3-vary-x60k B3
+2026-10-18T14:57:45Z finished
+2026-10-18T14:58:13Z status_age=3s harness=alive load=1.26 :: gain4 launch

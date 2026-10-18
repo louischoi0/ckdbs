@@ -40,6 +40,29 @@ TEST_F(InnerBuildExecTest, TheWalkedJoinAnswersIdenticallyBuildsOnceAndProbes) {
     EXPECT_EQ(stats.steps[1].build_probes, 2u) << "bob and carol; alice's walk was the build";
 }
 
+TEST_F(InnerBuildExecTest, ARangeOnTheOuterKeyNarrowsWhatTheBuildBuckets) {
+    // CB-S1: `au.id BETWEEN 1 AND 2` crosses `tr.au_id = au.id` as two
+    // derived bounds on `tr.au_id`, so the build buckets four tr rows, not
+    // five - (9,5) is outside them. The reply is the unbounded statement's,
+    // since carol matches nothing either way.
+    ExecStats stats;
+    const std::vector<std::string> rows =
+        Run("SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id "
+            "WHERE au.id BETWEEN 1 AND 2",
+            &stats);
+    EXPECT_EQ(rows, (std::vector<std::string>{"alice|10", "alice|30", "bob|20", "bob|50"}));
+    EXPECT_EQ(stats.Total().inner_builds, 1u);
+    EXPECT_EQ(stats.Total().build_rows, 4u);
+
+    // One end alone crosses too: `<= 1` buckets alice's two rows.
+    ExecStats one_end;
+    EXPECT_EQ(Run("SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id "
+                  "WHERE au.id <= 1",
+                  &one_end),
+              (std::vector<std::string>{"alice|10", "alice|30"}));
+    EXPECT_EQ(one_end.Total().build_rows, 2u);
+}
+
 TEST_F(InnerBuildExecTest, ANestedAnnotatedStepBuildsUnderALiveOuterBuild) {
     // The `building_` save/restore, proven rather than asserted: two
     // annotated steps, the deeper one arming its build while the outer

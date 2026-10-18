@@ -157,6 +157,20 @@ TEST(ExpeditorConfigTest, EveryKnownKeyIsApplied) {
     EXPECT_EQ(config.LogPath(), "/var/log/kds/server.log");
 }
 
+TEST(ExpeditorConfigTest, TheJoinOrderIsPlannedOrWrittenAndNothingElse) {
+    // CB-S2: `planned` by default, `written` keeps a join as written, and a
+    // third word refuses the file rather than reading as either.
+    Expeditor::Config config;
+    EXPECT_TRUE(config.Limits().plan_join_order);
+    ASSERT_TRUE(config.ApplyFile(WithPool("join_order = written\n")).ok());
+    EXPECT_FALSE(config.Limits().plan_join_order);
+    ASSERT_TRUE(config.ApplyFile(WithPool("join_order = planned\n")).ok());
+    EXPECT_TRUE(config.Limits().plan_join_order);
+    const Status s = config.ApplyFile(WithPool("join_order = cost\n"));
+    EXPECT_FALSE(s.ok());
+    EXPECT_NE(s.message().find("join_order"), std::string::npos) << s.message();
+}
+
 TEST(ExpeditorConfigTest, AnUnknownKeyRefusesTheWholeFile) {
     Expeditor::Config config;
     Status s = config.ApplyFile(WithPool("port = 6000\nchekpoint_interval_ms = 100\n"));

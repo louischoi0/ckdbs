@@ -19,6 +19,7 @@ admits and nobody built. Each refusal below names its code.
 | AG3 | SUM arithmetic | **Checked int64** (int128 for `DECIMAL128`, `types.md` §2a). Signed integer and decimal argument columns; the fold uses overflow-checked addition and an overflow is a **statement error**, never a wrapped number. `SUM` over a `uint64` column is `Unsupported` (half its range does not fit the accumulator); over `DATE`/`TIMESTAMP` it is `InvalidArgument`. Documented product constraints (§3.3) |
 | AG4 | NULL semantics | **SQL standard** (§3.1): aggregates skip NULLs; `COUNT(*)` counts rows; a group with no non-NULL argument yields NULL for `SUM`/`MIN`/`MAX`/`AVG`; NULL grouping keys form one group |
 | AG5 | Strict grouping | A bare column in an aggregated select list **must appear in GROUP BY**, or the statement is refused with the column's byte position. There is no "any row" mode: an answer that depends on scan order is an answer this engine refuses to give |
+| AG6b | Order-dependent refusals | **An int64 `SUM` that overflows on a partial sum is refused in one input order and not in another** (`MAX, 1, -1` against `MAX, -1, 1`). Since CB-S2 a join's input order is the join planner's, and since CC-S3 it can move with a statistics generation as well as with the catalog (CC-Q16): the same statement over the same rows can move between an answer and an `OutOfRange` refusal. Never a wrong answer. A wider accumulator checked at `Finish` is the fix this spec owns |
 | AG6 | Emit order | **First-seen order** — the order the chain's deterministic row stream founded each group. Hash-iteration order would vary by seed and growth history, which the deterministic-test rule forbids |
 | AG7 | HAVING | Parsed for shape — `HAVING <agg or column> <op> <literal> [AND …]`, `IS [NOT] NULL` admitted, an expression, subquery, column or second aggregate on the right side refused at parse — and the statement is then **refused at compile with `NotImplemented`** and the clause's position. A `HAVING` makes a statement aggregated exactly as a `GROUP BY` does |
 | AG8 | Subquery aggregates | **J2 stands**: a subquery containing GROUP BY or an aggregate answers `NotImplemented` with the position of whichever half made the block aggregated — a fold inside a sub-chain puts an aggregation boundary where the execution model has none |
@@ -219,8 +220,13 @@ dispatcher's `SELECT *` path cannot misread an aggregated statement.
 
 Validation at compile (all positioned): AG5's grouping check, duplicate
 group keys, AG3's type checks. The compile stays pure — same statement plus
-same catalog, same spec, bit for bit — so the chain layout remains
-`f(shape, catalog)` and `pattern_id` still names it.
+same catalog plus the same join planner inputs, same spec, bit for bit. A
+planned join's order also reads the planner's statistics (`plan-stats.md`):
+its relation priors are per relation, so a fold and its unaggregated twin
+read the same ones; its join-subset posteriors are keyed by `fetch_id`,
+which `GROUP BY` is part of, so the twins learn theirs apart and can, once
+learned, run their joins in different orders (AG1's chain identity holds
+for one set of planner inputs, and the rows always).
 
 ## 5. The fold
 

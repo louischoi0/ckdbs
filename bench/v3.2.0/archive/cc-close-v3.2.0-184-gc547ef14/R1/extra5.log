@@ -1,0 +1,36 @@
+B0 did not start
+Traceback (most recent call last):
+  File "/home/cdkbs/bench-runs/cc-close/harness/gain3.py", line 46, in <module>
+    main()
+  File "/home/cdkbs/bench-runs/cc-close/harness/gain3.py", line 26, in main
+    for _ in range(ops_ov[c]): srvs[k].q(H.OVERHEAD[c](rng))
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/bench-runs/cc-close/harness/cc_close_run.py", line 140, in q
+    tag, n, _b, err = self.conn.query(sql)
+                      ^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/cc-stats-planner/tools/kwp.py", line 487, in query
+    ftype, _, payload = self._recv_frame()
+                        ^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/cc-stats-planner/tools/kwp.py", line 322, in _recv_frame
+    self._fill()
+  File "/home/cdkbs/ckdbs/.claude/worktrees/cc-stats-planner/tools/kwp.py", line 335, in _fill
+    raise ConnectionError("server closed the connection")
+ConnectionError: server closed the connection
+Traceback (most recent call last):
+  File "/home/cdkbs/bench-runs/cc-close/harness/gain3.py", line 46, in <module>
+    main()
+  File "/home/cdkbs/bench-runs/cc-close/harness/gain3.py", line 26, in main
+    for _ in range(ops_ov[c]): srvs[k].q(H.OVERHEAD[c](rng))
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/bench-runs/cc-close/harness/cc_close_run.py", line 140, in q
+    tag, n, _b, err = self.conn.query(sql)
+                      ^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/cc-stats-planner/tools/kwp.py", line 487, in query
+    ftype, _, payload = self._recv_frame()
+                        ^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/cc-stats-planner/tools/kwp.py", line 322, in _recv_frame
+    self._fill()
+  File "/home/cdkbs/ckdbs/.claude/worktrees/cc-stats-planner/tools/kwp.py", line 335, in _fill
+    raise ConnectionError("server closed the connection")
+ConnectionError: server closed the connection
+rc=0 2026-10-18T14:57:44Z
