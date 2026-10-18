@@ -2,10 +2,16 @@
 
 // The page census BF's reclaim cells share (`drop_table_reclaim_test.cpp`,
 // `in_run_reclaim_test.cpp`): fill a relation, read its oid and root from
-// `sys.tables`, and list the pages stamped with an owner.
+// `sys.tables`, and list the pages stamped with an owner. And the mount
+// fixture the cells that restart a volume share
+// (`drop_table_reclaim_test.cpp`, `catalog_page_ceiling_test.cpp`): a
+// production mount, a clean stop's checkpoint, the reclaim driven by hand,
+// and a crash image.
 
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -14,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/expeditor.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/free_map.hpp"
@@ -69,6 +76,59 @@ inline std::set<PageId> PagesOf(storage::DevicePageStore& store, std::uint64_t o
         if (owner == oid) out.insert(id);
     }
     return out;
+}
+
+// A mount of the volume in `dir`, with no cadence checkpoint: the only
+// checkpoints are the mount's completion checkpoint and the ones a cell
+// asks for, so a cut lands where the cell put it.
+inline StatusOr<std::unique_ptr<server::Expeditor>> Mount(
+    const std::filesystem::path& dir, std::uint32_t cores = 1,
+    wal::DurabilityClass durability = server::Expeditor::Config{}.durability) {
+    server::Expeditor::Config config;
+    config.buffer_pool_frames = 4096;  // required (BE-R3)
+    config.data_file = (dir / "kds.db").string();
+    config.wal_dir = (dir / "wal").string();
+    config.log_file = {};
+    config.cores = cores;
+    config.debug_text_port = 0;
+    config.checkpoint_interval_ns = 0;
+    config.durability = durability;
+    return server::Expeditor::Open(config, /*now_unix_seconds=*/1000);
+}
+
+// What a clean stop does (`CoreRuntime::ShutdownCheckpoint`): the log, then
+// pages, so the checkpoint's dirty table is empty and the anchor's redo
+// start is the checkpoint itself. `Checkpoint()` alone starts redo at the
+// oldest dirty page's recLSN, inside the run, so the next mount would
+// replay the run and raise the allocation floor past every page it names.
+inline void CleanShutdownCheckpoint(server::Expeditor& db) {
+    EXPECT_TRUE(db.wal().Flush().ok());
+    EXPECT_TRUE(db.store().Sync().ok());
+    EXPECT_TRUE(db.Checkpoint().ok());
+}
+
+// **What a mount does with a pending reclaim before a cell looks**: core
+// 0's reclaim tick (BF-R8), driven by hand until no tombstone is owed or one
+// is refused. BF-S1 wrote this as a no-op and the cells red against it.
+inline void Settle(server::Expeditor& db) {
+    for (int step = 0; step < 100000; ++step) {
+        if (db.reclaim_counters().pending.load() == 0 ||
+            db.reclaim_counters().refused.load() != 0) {
+            break;
+        }
+        ASSERT_TRUE(db.ReclaimStep().ok());
+    }
+}
+
+// A crash at this instant: the data file and the log copied as they are.
+// Nothing is synced first, so only what the store and the log have already
+// written is in the copy.
+inline void CrashImage(const std::filesystem::path& from, const std::filesystem::path& to) {
+    namespace fs = std::filesystem;
+    fs::create_directories(to);
+    fs::copy_file(from / "kds.db", to / "kds.db", fs::copy_options::overwrite_existing);
+    fs::copy(from / "wal", to / "wal",
+             fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 }
 
 }  // namespace kds::reclaim_census

@@ -101,6 +101,15 @@ Status SimInstance::Boot() {
             }
             if (Status s = PersistSuperBlock(); !s.ok()) return s;
         }
+        // **The mount's advisory discard, exactly where the expeditor runs
+        // it** (BR-S8, `restore.hpp`): after recovery and before the
+        // completion checkpoint that persists it. A reboot after a crash is
+        // the case it is for - an unlogged `sys.access_stats` growth page
+        // whose allocation bit the crash lost is cut from its chain here, or
+        // the next `CreateNew` hands the id to another relation and the
+        // statistic walks into it - so a harness that skipped it would grade
+        // a mount this project does not ship.
+        if (Status s = server::DiscardAdvisoryState(boot_->catalog); !s.ok()) return s;
 
         // The completion checkpoint (RC08), for the reason the harness runs
         // recovery at all: without it every reboot rescans from the head of the
@@ -421,15 +430,14 @@ StatusOr<std::unique_ptr<SimInstance>> SimInstance::CreateFromBackup(Options opt
         if (Status s = log.DetachBelow(image.first_segment); !s.ok()) return s;
         if (Status s = log.ReclaimDetached(); !s.ok()) return s;
     }
-    // `LayOutRestore`'s preparation and the mount's discard (`restore.hpp`).
+    // `LayOutRestore`'s preparation; the mount's discard is `Boot`'s, as
+    // at every mount (`restore.hpp`).
     if (Status s = server::PrepareRestoredVolume(*instance->page_device_,
                                                  {image.start, image.stop, image.backup_id});
         !s.ok()) {
         return s;
     }
     if (Status s = instance->Boot(); !s.ok()) return s;
-    if (Status s = server::DiscardAdvisoryState(instance->catalog()); !s.ok()) return s;
-    if (Status s = instance->RunCheckpoint(/*at_mount=*/true); !s.ok()) return s;
     return instance;
 }
 

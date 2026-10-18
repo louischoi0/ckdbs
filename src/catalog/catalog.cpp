@@ -3122,44 +3122,30 @@ Status Catalog::ClearEveryPatternWaystoneRoot() {
     // The version filter is the claim's, for its reason: a row of another
     // fingerprint revision is unreachable by any statement and is not one
     // `ClaimPatternWaystoneRoot` writes.
-    Status inner = Status::OK();
-    Status walked = heap::ChainVisit(
-        store_, kCatalogPagePatterns, storage::PageAccess::kWrite,
-        [&](PageId page_id, heap::PageView& page,
-            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            auto tuple = page.ReadTuple(slot);
-            if (!tuple.ok()) {
-                if (tuple.status().code() == StatusCode::kNotFound) {
-                    return storage::VisitControl::kContinue;
-                }
-                inner = tuple.status();
-                return tuple.status();
+    //
+    // `ForFirstRow` with a visitor that never accepts a row, so the walk
+    // runs the whole chain: the same kWrite walk under the same budget as
+    // every catalog mutation.
+    auto walked = ForFirstRow<SysPatternRow>(
+        store_, kCatalogPagePatterns,
+        [&](SysPatternRow& row, heap::PageView& page, PageId page_id, std::uint16_t slot,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version) ||
+                !HasWaystoneDirectory(row)) {
+                return false;
             }
-            auto row = SysPatternRow::Decode(tuple.value().payload);
-            if (!row.ok()) {
-                inner = row.status();
-                return row.status();
-            }
-            SysPatternRow& pattern = row.value();
-            if (!parser::IsCurrentFingerprintVersion(pattern.fingerprint_version) ||
-                !HasWaystoneDirectory(pattern)) {
-                return storage::VisitControl::kContinue;
-            }
-            pattern.waystone_root = kInvalidPageId;
-            pattern.dir_depth = 0;
-            const auto encoded = pattern.Encode();
+            row.waystone_root = kInvalidPageId;
+            row.dir_depth = 0;
+            const auto encoded = row.Encode();
             if (Status s = OverwriteLogged(wal_, store_, page, page_id, slot, encoded,
-                                           wal::kNoTxnId, tuple.value().trx_id,
-                                           tuple.value().undo_ptr);
+                                           wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
                 !s.ok()) {
-                inner = s;
                 return s;
             }
-            cache_.UpdatePatternWaystone(pattern.fetch_id, kInvalidPageId, 0);
-            return storage::VisitControl::kContinue;
+            cache_.UpdatePatternWaystone(row.fetch_id, kInvalidPageId, 0);
+            return false;
         });
-    if (!inner.ok()) return inner;
-    return walked;
+    return walked.status();
 }
 
 Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,

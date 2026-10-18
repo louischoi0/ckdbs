@@ -14,7 +14,9 @@
 //   writeback took from its `PAGE_INIT`.
 // - **Reclaim passes a catalog page by**: a dropped relation's pages are
 //   freed by owner, so a catalog growth page - a catalog oid, in the same
-//   id range - is never freed, and a freed id may become one.
+//   id range - is never freed, and a freed id may become one; a reclaim
+//   re-driven after a crash passes the catalog page its cut run's free
+//   handed to a chain.
 // - **A long `sys.patterns` at mount**: the discard clears every Waystone
 //   root in one walk, whatever the chain's length.
 //
@@ -26,6 +28,7 @@
 // gate's `ctest` excludes no label in this tree (`scripts/test.sh`), so a
 // cell too slow for the gate skips itself instead.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -187,40 +190,16 @@ struct TempDir {
     TempDir& operator=(const TempDir&) = delete;
 };
 
-// Production's mount (`drop_table_reclaim_test.cpp`'s), relaxed so a fill
-// of a thousand DDLs does not wait on a thousand syncs: the clean stop
-// below is what makes the run durable.
+// Production's mount (`reclaim_census.hpp`'s), relaxed so a fill of a
+// thousand DDLs does not wait on a thousand syncs: the clean stop is what
+// makes the run durable.
 StatusOr<std::unique_ptr<Expeditor>> Mount(const fs::path& dir) {
-    Expeditor::Config config;
-    config.buffer_pool_frames = 4096;  // required (BE-R3)
-    config.data_file = (dir / "kds.db").string();
-    config.wal_dir = (dir / "wal").string();
-    config.log_file = {};
-    config.cores = 1;
-    config.debug_text_port = 0;
-    config.checkpoint_interval_ns = 0;
-    config.durability = wal::DurabilityClass::kRelaxed;
-    return Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    return reclaim_census::Mount(dir, /*cores=*/1, wal::DurabilityClass::kRelaxed);
 }
 
-// `CoreRuntime::ShutdownCheckpoint`'s order: pages, then the checkpoint.
-void CleanShutdownCheckpoint(Expeditor& db) {
-    ASSERT_TRUE(db.wal().Flush().ok());
-    ASSERT_TRUE(db.store().Sync().ok());
-    ASSERT_TRUE(db.Checkpoint().ok());
-}
-
-// The mount's pending reclaim, driven by hand (`drop_table_reclaim_test.cpp`).
-void Settle(Expeditor& db) {
-    for (int step = 0; step < 100000; ++step) {
-        if (db.reclaim_counters().pending.load() == 0 ||
-            db.reclaim_counters().refused.load() != 0) {
-            break;
-        }
-        ASSERT_TRUE(db.ReclaimStep().ok());
-    }
-    EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
-}
+using reclaim_census::CleanShutdownCheckpoint;
+using reclaim_census::CrashImage;
+using reclaim_census::Settle;
 
 using Sql = std::function<std::string(const std::string&)>;
 
@@ -365,6 +344,7 @@ TEST(CatalogPageCeilingTest, AReclaimNeverFreesACatalogPageAndAFreedIdMayBecomeO
     CurrentCoreGuard as(0);
     const Sql run = [&](const std::string& sql) { return db.dispatcher().Dispatch(sql).response; };
     Settle(db);
+    EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
     for (const PageId id : dropped_pages) {
         EXPECT_FALSE(db.store().IsAllocated(id)) << "page " << id << " of a dropped relation";
     }
@@ -388,6 +368,89 @@ TEST(CatalogPageCeilingTest, AReclaimNeverFreesACatalogPageAndAFreedIdMayBecomeO
     EXPECT_TRUE(reused) << "no catalog chain grew onto an id a dropped relation held";
     ExpectOwnedChains(db.store());
     ExpectTables(run, {kDropped, kCreated - 1}, {});
+}
+
+TEST(CatalogPageCeilingTest, AReclaimRedrivenAfterACrashPassesACatalogPageOnAnIdItFreed) {
+    // The crash the owner check is all that stands in front of (D6): a
+    // reclaim cut after its first free, the freed id already a catalog
+    // growth page, and the next mount's re-drive walking from the same roots
+    // to it. `FreePage`'s system floor covers no id past 128, so the
+    // walk's tests of what it meets - owner, then type, then level - are
+    // what keep the catalog page.
+    //
+    // `sys.patterns` grows the catalog here because it allocates nothing
+    // else: the freed id is the only one listed and the lowest is handed out
+    // first, so the chain's next page is that id.
+    TempDir dir;
+    std::set<PageId> dropped_pages;
+    {
+        auto opened = Mount(dir.path);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        const Sql run = [&](const std::string& sql) { return db.dispatcher().Dispatch(sql).response; };
+        ASSERT_EQ(run("CREATE TABLE big (id int64, v varchar)").substr(0, 7), "CREATED");
+        reclaim_census::Fill(db.dispatcher(), "big", 1500);
+        dropped_pages = reclaim_census::PagesOf(
+            db.store(), reclaim_census::DescribeField(db.dispatcher(), "big", "oid"));
+        ASSERT_GE(dropped_pages.size(), 3u);
+        ASSERT_EQ(run("DROP TABLE big").rfind("ERR", 0), std::string::npos);
+        CleanShutdownCheckpoint(db);
+    }
+
+    TempDir image;
+    PageId reused = kInvalidPageId;
+    {
+        auto opened = Mount(dir.path);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        db.SetReclaimCutForTest([&](const char* what) {
+            if (reused != kInvalidPageId || std::string(what) != "after a free") return;
+            PageId freed = kInvalidPageId;
+            for (const PageId id : dropped_pages) {
+                if (!db.store().IsAllocated(id)) freed = id;
+            }
+            ASSERT_NE(freed, kInvalidPageId) << "the cut came before any free";
+            for (std::uint64_t fetch_id = 0x6000'0000; reused == kInvalidPageId; ++fetch_id) {
+                ASSERT_LT(fetch_id, 0x6000'0000u + 20000) << "sys.patterns never took id " << freed;
+                ASSERT_TRUE(
+                    db.catalog().RegisterPattern(fetch_id, catalog::kStmtClassUnclassified).ok());
+                auto chain =
+                    testing_catalog::CatalogChainPages(db.store(), catalog::kCatalogPagePatterns);
+                ASSERT_TRUE(chain.ok()) << chain.status().message();
+                for (const PageId id : chain.value()) {
+                    if (id == freed) reused = id;
+                }
+            }
+            ASSERT_TRUE(db.Sync().ok());
+            CrashImage(dir.path, image.path);
+        });
+        Settle(db);
+        db.SetReclaimCutForTest(nullptr);
+        ASSERT_NE(reused, kInvalidPageId);
+    }
+
+    auto mounted = Mount(image.path);
+    ASSERT_TRUE(mounted.ok()) << mounted.status().message();
+    Expeditor& db = *mounted.value();
+    CurrentCoreGuard as(0);
+    ASSERT_EQ(db.reclaim_counters().pending.load(), 1u) << "the reclaim was not cut";
+    Settle(db);
+    EXPECT_EQ(db.reclaim_counters().pending.load(), 0u);
+    EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
+    EXPECT_GT(db.reclaim_counters().skipped.load(), 0u)
+        << "the re-drive never met the catalog page, so the owner check was not exercised";
+    EXPECT_TRUE(db.store().IsAllocated(reused)) << "catalog page " << reused << " was freed";
+    for (const PageId id : dropped_pages) {
+        if (id == reused) continue;
+        EXPECT_FALSE(db.store().IsAllocated(id)) << "page " << id << " of big";
+    }
+    auto chain = testing_catalog::CatalogChainPages(db.store(), catalog::kCatalogPagePatterns);
+    ASSERT_TRUE(chain.ok()) << chain.status().message();
+    EXPECT_NE(std::find(chain.value().begin(), chain.value().end(), reused), chain.value().end())
+        << "page " << reused << " left sys.patterns' chain";
+    ExpectOwnedChains(db.store());
 }
 
 // ---- A long sys.patterns at mount -----------------------------------------

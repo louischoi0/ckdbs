@@ -278,7 +278,7 @@ StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& dev
     store->configured_capacity_ = capacity.frames;
 
     // Region 0 always exists - it holds the superblock, both of its own
-    // bitmaps and the whole catalog - so it is loaded, or created, rather
+    // bitmaps and the catalog's fixed roots - so it is loaded, or created, rather
     // than merely looked for. A device too small to hold page 1, or one
     // whose page 1 reads as never-written, is a fresh database: neither
     // carries any allocation.

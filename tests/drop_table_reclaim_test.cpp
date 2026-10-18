@@ -65,9 +65,13 @@ namespace {
 
 namespace fs = std::filesystem;
 using reclaim_census::AllocatedPages;
+using reclaim_census::CleanShutdownCheckpoint;
+using reclaim_census::CrashImage;
 using reclaim_census::DescribeField;
 using reclaim_census::Fill;
+using reclaim_census::Mount;
 using reclaim_census::PagesOf;
+using reclaim_census::Settle;
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -89,57 +93,9 @@ struct TempDir {
     TempDir& operator=(const TempDir&) = delete;
 };
 
-// A mount of the volume in `dir`, with no cadence checkpoint: the only
-// checkpoints are the mount's completion checkpoint and the ones a cell
-// asks for, so a cut lands where the cell put it.
-StatusOr<std::unique_ptr<Expeditor>> Mount(const fs::path& dir, std::uint32_t cores) {
-    Expeditor::Config config;
-    config.buffer_pool_frames = 4096;  // required (BE-R3)
-    config.data_file = (dir / "kds.db").string();
-    config.wal_dir = (dir / "wal").string();
-    config.log_file = {};
-    config.cores = cores;
-    config.debug_text_port = 0;
-    config.checkpoint_interval_ns = 0;
-    return Expeditor::Open(config, /*now_unix_seconds=*/1000);
-}
-
 void Ok(Expeditor& db, const std::string& sql) {
     const std::string reply = db.dispatcher().Dispatch(sql).response;
     ASSERT_FALSE(StartsWith(reply, "ERR")) << sql << " -> " << reply;
-}
-
-// What a clean stop does (`CoreRuntime::ShutdownCheckpoint`): pages first,
-// so the checkpoint's dirty table is empty and the anchor's redo start is
-// the checkpoint itself. `Checkpoint()` alone starts redo at the oldest
-// dirty page's recLSN, inside the run, so the next mount would replay the
-// run and raise the allocation floor past every page it names.
-void CleanShutdownCheckpoint(Expeditor& db) {
-    EXPECT_TRUE(db.store().Sync().ok());
-    EXPECT_TRUE(db.Checkpoint().ok());
-}
-
-// **What a mount does with a pending reclaim before a cell looks**: core
-// 0's reclaim tick (BF-R8), driven by hand until no tombstone is owed or one
-// is refused. BF-S1 wrote this as a no-op and the cells red against it.
-void Settle(Expeditor& db) {
-    for (int step = 0; step < 100000; ++step) {
-        if (db.reclaim_counters().pending.load() == 0 ||
-            db.reclaim_counters().refused.load() != 0) {
-            break;
-        }
-        ASSERT_TRUE(db.ReclaimStep().ok());
-    }
-}
-
-// A crash at this instant: the data file and the log copied as they are.
-// Nothing is synced first, so only what the store and the log have already
-// written is in the copy.
-void CrashImage(const fs::path& from, const fs::path& to) {
-    fs::create_directories(to);
-    fs::copy_file(from / "kds.db", to / "kds.db", fs::copy_options::overwrite_existing);
-    fs::copy(from / "wal", to / "wal",
-             fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 }
 
 // Clears `id`'s allocation bit in the data file at `file`: the region's map
