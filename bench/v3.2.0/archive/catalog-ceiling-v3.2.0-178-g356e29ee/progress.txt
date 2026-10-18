@@ -1,0 +1,21 @@
+14:01:42 run 1/20 done load=7.45
+14:01:47 run 2/20 done load=6.93
+14:01:52 run 3/20 done load=6.54
+14:01:57 run 4/20 done load=6.17
+14:02:01 run 5/20 done load=5.76
+14:02:06 run 6/20 done load=5.76
+14:02:11 run 7/20 done load=5.38
+14:02:16 run 8/20 done load=5.03
+14:02:20 run 9/20 done load=4.70
+14:02:30 run 10/20 done load=5.44
+14:02:37 run 11/20 done load=5.57
+14:02:43 run 12/20 done load=5.37
+14:02:48 run 13/20 done load=5.50
+14:02:59 run 14/20 done load=6.04
+14:03:09 run 15/20 done load=6.49
+14:03:19 run 16/20 done load=6.81
+14:03:29 run 17/20 done load=7.07
+14:03:38 run 18/20 done load=7.37
+14:03:48 run 19/20 done load=7.87
+14:03:58 run 20/20 done load=8.12
+DONE
