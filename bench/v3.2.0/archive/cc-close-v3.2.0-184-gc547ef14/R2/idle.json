@@ -1,0 +1,1 @@
+{"seconds": 30, "cpu_us": {"A": 138560.686, "A2": 140399.264, "B": 137737.355}, "B_publishes": ["16", "16"], "B_seeds": ["910", "989"], "B_seed_pages": ["2682", "2912"], "B_steward_us_max": "54", "B_sys_polled_us": ["157412", "163155"], "B_sys_consumed_us": ["84", "5827"], "A_sys_consumed_us": ["15348", "21054"]}

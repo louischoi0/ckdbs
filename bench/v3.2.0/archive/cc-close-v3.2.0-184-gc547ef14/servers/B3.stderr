@@ -1,0 +1,12 @@
+ckdbs on /home/cdkbs/bench-runs/cc-close/run/B3.db: 9262 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-close/run/B3.log at level WARN
+listening on 127.0.0.1:25724
+stopped; 9371 pages persisted
+ckdbs on /home/cdkbs/bench-runs/cc-close/run/B3.db: 9262 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-close/run/B3.log at level WARN
+listening on 127.0.0.1:25724
+stopped; 9371 pages persisted
+ckdbs on /home/cdkbs/bench-runs/cc-close/run/B3.db: 9262 pages, superblock version 30
+logging to /home/cdkbs/bench-runs/cc-close/run/B3.log at level WARN
+listening on 127.0.0.1:25724
+stopped; 13903 pages persisted
