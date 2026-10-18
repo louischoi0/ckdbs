@@ -219,6 +219,11 @@ struct StepStats {
 struct ExecStats {
     std::vector<StepStats> steps;
 
+    // Whether the outermost walk stopped before its end - a LIMIT's quota
+    // or a sink's stop. A stopped run's counts describe a prefix, so the
+    // join planner's statistics fold nothing from it (plan-stats.md PS2).
+    bool stopped = false;
+
     // The step's counters, growing the vector as needed. Called on the hot
     // path, so it does not check anything a compiled chain guarantees, and
     // is defined here so it inlines: it runs per counter bump on every row a

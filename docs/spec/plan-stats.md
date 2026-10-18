@@ -1,0 +1,143 @@
+# Plan statistics (spec)
+
+Status: **built since CC-S2** (`instructions/v3.2.0/workorder-cc-plan-statistics.md`):
+collected, seeded and published; no plan reads it until CC-S3. Related: `docs/spec/parser-v2.md` I12
+(the planner and its contract), `include/kds/exec/join_order.hpp` (the cost
+model that reads these facts), `include/kds/stats/statement_stats.hpp` (the
+per-core part protocol adopted here).
+
+---
+
+## 1. What it is
+
+The facts the join planner prices an order with, beyond the statement and
+the catalog: **how many rows a relation holds**, and **how many rows a join
+of a set of a statement's relations produced** the last times it ran. One
+store for the instance, `stats::PlanStats`, **memory-resident** (CC-Q2): a
+restart or a restore empties it, nothing is logged, no catalog relation or
+page holds it, and the planner prices data-free until its first publish.
+
+**Advisory, and only to the order.** A fact here chooses which of a block's
+legal orders runs; it never chooses a step's kind, never skips a step,
+shortens a walk, declares a result empty or replaces a legality test. Every
+order of a block returns the same rows (I12), so a wrong fact costs speed,
+never an answer. Nothing outside the cost model reads it (PS9).
+
+## 2. The facts
+
+**PS1 - Relation prior**, keyed by `rel_oid`: an estimate of the relation's
+rows, read by a steward step from the clustered tree's own pages:
+
+- height 1 (the root is the leaf): the root's live slots, exact up to
+  undecided versions;
+- height 2: the root's children, exact, times a leaf's row capacity for the
+  relation's fixed row size (`LeafRowCapacity`) times `kAssumedLeafFill`;
+- height 3 or more: a deterministic random-path estimate over the internal
+  levels only - `kPriorDescents` descents from the root, each multiplying
+  the fan-outs it passes, stopping at level 1 - times the same capacity and
+  fill.
+
+It reads no leaf above height 1 and no key domain. A page whose type or
+`owner_oid` does not match discards that relation's seed for the step.
+
+**PS2 - Join-subset posterior** `card(T)`, keyed by `(fetch_id, n, the
+block's relation oids in written order, T)`, `T` a set of written positions:
+the rows the join of `T` produced under every conjunct over `T`. It is read
+off a complete run of a planned block: after executed slot `k`, `T` is the
+written positions of slots `0..k`, and `card(T)` is that slot's
+`rows_matched`. A planned block is top-level, so its conjuncts sit on the
+latest step they read, and `card(T)` depends on neither the order within
+`T` nor the access kinds - one order's runs price another. A build's own
+`build_rows` is not folded: it leaves out rows whose join key is NULL, so it
+is not the same fact as `card({w})`. Which masks a run reports depends on
+the order it ran in - a relation alone is reported only when it drives - so
+the *presence* of a fact follows the plan and the configuration that chose
+it; its *value* never does (PS10).
+
+**PS3 - Decline fact**, per key and written position: an annotated build
+that did not publish (`inner_builds == 0`) on a complete run with
+`join_build_max_rows > 0`. Set, never averaged.
+
+A run feeds no posterior unless it completed: a run a LIMIT or a stop cut
+(`ExecStats::stopped`) and a refused run fold nothing. Every searched block -
+a stopped run's, and one of more than `kMaxPosteriorRelations` (4)
+relations, which keys no posterior - asks the steward for the priors the
+snapshot lacks. A block the planner does not search (one relation, a chain
+of tuple key descents, a subquery block, `join_order = written`) feeds
+nothing.
+
+## 3. Collection (CC-Q3)
+
+**One part per core**, a fixed table under its own `LatchKind::kStatsRing`
+latch, written only by its core at a planned statement's end and read only
+by the steward - `statement_stats.hpp`'s protocol. A part holds, per key and
+mask, the sum and count since the last merge, the decline bits, and the
+oids it saw without a prior (the wanted set). A part half full of keys drops a new key's observation and counts it, so
+its probes stay short; the steward empties every part each step. No allocation on the statement's path, no
+cross-core write.
+
+## 4. The steward
+
+**PS4.** Core 0's `system` group, every `kPlanStatsTickNs` (1 s), one bounded step:
+
+1. copy every part's entries out under its latch, one latch at a time, and
+   sum them across the cores - so a posterior moves one step however many
+   cores ran its statement;
+2. fold each posterior: the first observation sets it, later ones move it
+   by `alpha = 1/4`; past `kMaxMasterKeys` keys the least recently seen go,
+   once a step;
+3. seed wanted oids, and re-seed known ones round-robin, at most every
+   `kReseedNs` (10 s) each, within `kSeedPageBudget` (16) page reads a step;
+   a relation that no longer resolves loses its prior;
+4. band every value (§5);
+5. publish a new snapshot only when a band moved or a fact was added.
+
+A seed reads pages through `PageStore::GetForRead` on core 0, like a
+statement, and **holds one page at a time** - a page is let go before the
+next is asked for - for `btree.hpp`'s descent rule: a split holds pages
+bottom-up, and a reader holding a parent while asking for its child could
+close a latch cycle with it. A descent re-reads the root for its own pick. A
+cold page is a synchronous read on core 0's reactor, which is why the budget
+is small and internal pages - which every probe keeps resident - are what it
+reads. The catalog lookup that names a relation's pages is outside the page
+budget (a memo hit for a relation a statement just used).
+
+## 5. Bands and publication
+
+**PS5.** A value `v` is published as its half-octave band `b = round(2 log2 v)`,
+with Schmitt hysteresis: a published band moves only when `|2 log2 v - b| >=
+0.75` - `v` about 30 % from the band's centre, so a value that sits near a
+band's edge holds its band through churn of +-9 % or more. A decline fact
+publishes at once.
+
+The snapshot is immutable, sorted, held by `std::shared_ptr<const ...>`. The
+steward swaps it under a mutex and bumps a 64-bit generation (release). A
+compile pins it through its core's `PlanStatsSource`: one acquire load of
+the generation, and the mutex and a reference copy only when the generation
+moved - at most once a second. A pinned snapshot outlives a sliced walk's
+yields by its reference.
+
+## 6. Exposure
+
+`SHOW META`'s `plan_stats` block: `plan_stats_generation`, `_relations`,
+`_posteriors`, `_part_drops`, `_seeds`, `_seed_pages`, `_publishes` and
+`_steward_us_max`, the steward's longest step. `sys.relation_stats` gains `est_rows` (the published prior,
+its band's centre) and `generation`; the planner never reads the view.
+
+## 7. Rules
+
+- **PS9 - one reader.** No plan input reads a published fact at CC-S2; from
+  CC-S3 only `exec::EstimateChain` does, and it clamps every rows value at
+  1. The fold's wanted check, `SHOW META` and `sys.relation_stats` read the
+  snapshot for themselves, never for a plan.
+- **PS10 - no advisory input.** Waystone trails, `sys.patterns`,
+  `sys.access_stats`, the optimizer signals, the Cabin store and index trees
+  feed nothing here: `rows_matched` is the same whether a trail replayed, a
+  Cabin served or an index probed, so no configuration of those changes a
+  fact's value (invariant 8 in its byte-for-byte reading). Which facts exist
+  follows the order the planner ran (§2).
+- **PS11 - written positions.** Every mask and decline bit names written
+  positions, the step ids CB-Q3 fixes; a planned compile reaches a chain
+  only through the step id rewrite.
+- **PS12 - off.** `join_order = written` compiles no planned block, so
+  nothing is pinned or folded.

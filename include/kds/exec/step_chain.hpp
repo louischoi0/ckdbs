@@ -11,6 +11,7 @@
 #include "kds/catalog/oid.hpp"
 #include "kds/exec/functions.hpp"
 #include "kds/parser/ast.hpp"
+#include "kds/stats/plan_key.hpp"
 
 // The compiled form of a SELECT-class statement: an ordered list of steps,
 // each reading one relation with one access kind (docs/spec/parser-v2.md §1).
@@ -818,6 +819,10 @@ struct SortKey {
     bool descending = false;
 };
 
+// The relations a block the join planner searches may hold and still have
+// its relations named for priors (`StepChain::planned_relations`).
+inline constexpr std::size_t kMaxPlannedRelations = 16;
+
 struct StepChain {
     StatementClass klass = StatementClass::kUnclassified;
 
@@ -915,6 +920,15 @@ struct StepChain {
     std::vector<SortKey> sort_keys;
 
     bool sorted() const noexcept { return !sort_keys.empty(); }
+
+    // Set on a block the join planner searched (CC-S2): its key, which the
+    // dispatcher folds the run's counts under (docs/spec/plan-stats.md PS2).
+    // Read by the dispatcher only, like `limit` and `aggregate`; never by an
+    // execute path, and not part of a chain's identity (AG1).
+    std::optional<stats::PlanKey> planned;
+    // Every searched block's relations in written order, keyed or not - the
+    // steward seeds a prior for each the snapshot lacks (plan-stats.md PS2).
+    std::vector<catalog::Oid> planned_relations;
 };
 
 // **The one walk of a step tree.** Every step under a chain, sub-chain or

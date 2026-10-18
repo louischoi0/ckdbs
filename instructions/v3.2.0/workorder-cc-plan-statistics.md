@@ -421,3 +421,37 @@ The close results go to bench/v3.2.0/results-cc-close-<describe>.md. It states t
   configurations do not change a plan input, so its byte comparison stays
   the stronger test; dropping the inert join half of the unique bound - kept
   with a comment, S3 makes it live.
+- **CC-S2**: collection and publication, no plan consumer
+  (`docs/spec/plan-stats.md`, `stats::PlanStats`). The review (three
+  lenses, two skeptics a finding; 32 survived) found three bugs, all fixed:
+  **the prior read held a parent page while asking for its child** - a
+  latch cycle against a split, which holds bottom-up; it now holds one page
+  at a time and re-reads the root per descent; **the EMA ran once per core
+  part**, so a posterior moved faster the more cores ran it - parts are now
+  summed first and folded once; **`ExecStats::stopped` was not reset** on a
+  reused scratch. Also applied: parts copied out under their latch and
+  folded after it, eviction once a step by `nth_element`, CC-Q15's
+  candidate by two minimum trackers with no allocation, `build_rows` no
+  longer folded as `card({w})` (it leaves out NULL keys), every searched
+  block's relations wanted for priors (`StepChain::planned_relations`, so a
+  block of more than 4 relations seeds too), the Schmitt step simplified and
+  tested directly, `PublishForTest` and `Publish` sharing `Install`, dead
+  state deleted, one constant for the 4-relation bound, the spec's PS4/PS5
+  labels, PS9 and PS10 restated, and physical-optimizer.md PO7b for CC-Q15.
+  **Deviations, recorded**: `StepChain` carries the planned key and the
+  searched relations (§3's plan put a `PlanRecord` on the run) - every
+  success path already holds the chain, and `limit`/`aggregate` set the
+  precedent of dispatcher-only fields; re-seeding is time-based only (every
+  10 s), the root-moved trigger was cut; `rows_band` and a publish-age field
+  were not added (`est_rows` is the band's centre). **Rejected**: a
+  multiset rule for the inner-build suite - its fixture compiles written
+  chains, so the planner never reaches it (the planned cap check is
+  `JoinPlannerTest.EveryBuildCapAnswersTheSameRowsPlanned`); removing the
+  minimum step id in the fold - one pass over at most four steps keeps the
+  fold independent of where a block's ids start. **Cut, with reason**: the
+  Waystone-recording and Cabin invariance cells (PS10 holds because
+  `rows_matched` is counted after every serving path; the index cell pins
+  it), a sim crash cell (the store is memory-resident by construction and
+  no plan reads it yet), a height-3 prior test (needs ~130,000 rows; the
+  close measures `est_rows` against true counts on the scenarios' trees).
+  Overhead not measured; measured at the milestone's close.

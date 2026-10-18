@@ -1667,6 +1667,22 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
         }
     }
 
+    // **The join planner's statistics** (plan-stats.md §6): what the
+    // published snapshot holds and what the steward has done. Absent where
+    // the dispatcher has no store (a hand-built one).
+    if (plan_stats_ != nullptr) {
+        section("plan_stats");
+        const std::shared_ptr<const stats::PlanStatsSnapshot> snapshot = plan_source_.Pin();
+        const stats::PlanStats::Counters c = plan_stats_->counters();
+        os << " plan_stats_generation=" << (snapshot != nullptr ? snapshot->generation() : 0)
+           << " plan_stats_relations=" << (snapshot != nullptr ? snapshot->relations() : 0)
+           << " plan_stats_posteriors=" << (snapshot != nullptr ? snapshot->posteriors() : 0)
+           << " plan_stats_part_drops=" << c.part_drops << " plan_stats_seeds=" << c.seeds
+           << " plan_stats_seed_pages=" << c.seed_pages
+           << " plan_stats_publishes=" << c.publishes
+           << " plan_stats_steward_us_max=" << c.steward_ns_max / 1000;
+    }
+
     // **The Cabin store's instance-wide half** (cabin.md §6a), which `SHOW
     // CABINS`' header printed and no `sys.cabins` row can carry: a walk
     // declines to bank a set while its view could still be contradicted,
@@ -7433,7 +7449,10 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // relation once (`ReadBorrow::Position`).
     ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
     auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
-        const exec::PlanOptions plan{budget_.join_build_max_rows(), sort_max_rows_};
+        exec::PlanOptions plan{budget_.join_build_max_rows(), sort_max_rows_};
+        if (const auto fingerprint = run->parser->fingerprint(); fingerprint.has_value()) {
+            plan.fetch_id = fingerprint->fetch_id;
+        }
         return exec::Compile(catalog_, stmt, v, &borrow, context,
                              plan_join_order_ ? &plan : nullptr);
     });
@@ -7664,6 +7683,52 @@ void CommandDispatcher::RecordExecution(const std::optional<StatementIdentity>& 
     RecordTrail(identity, trail, chain);
     RecordAccessShapes(chain);
     RecordOptimizerSignals(identity, chain, stats);
+    RecordPlanStats(chain, stats);
+}
+
+void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
+                                        const exec::ExecStats& stats) {
+    if (plan_stats_ == nullptr || chain.planned_relations.empty()) return;
+
+    // A relation the snapshot has no prior for is wanted by the steward -
+    // from every searched block, a stopped run's and a large block's too.
+    const std::shared_ptr<const stats::PlanStatsSnapshot> snapshot = plan_source_.Pin();
+    std::array<catalog::Oid, exec::kMaxPlannedRelations> wanted{};
+    std::size_t nwanted = 0;
+    for (const catalog::Oid oid : chain.planned_relations) {
+        if ((snapshot == nullptr || !snapshot->RelationRows(oid).has_value()) &&
+            nwanted < wanted.size()) {
+            wanted[nwanted++] = oid;
+        }
+    }
+    plan_stats_->WantPriors(core_id_, std::span<const catalog::Oid>(wanted.data(), nwanted));
+
+    // A keyed block's complete run only: a stopped run counted a prefix.
+    if (!chain.planned.has_value() || stats.stopped) return;
+    const stats::PlanKey& key = *chain.planned;
+    std::uint32_t base = chain.steps.front().step_id;
+    for (const exec::Step& step : chain.steps) base = std::min(base, step.step_id);
+
+    // card(T) after each executed slot, T the written positions so far, and
+    // an annotated build that ran and did not publish as a decline (PS2,
+    // PS3, PS11). A build's own `build_rows` is not folded: it leaves out
+    // NULL-keyed rows, so it is not the same fact as card({w}).
+    stats::PlanObservation observation;
+    observation.key = key;
+    std::uint16_t mask = 0;
+    for (const exec::Step& step : chain.steps) {
+        const std::uint32_t written = step.step_id - base;
+        if (written >= key.n || step.step_id >= stats.steps.size()) return;
+        const exec::StepStats& counts = stats.steps[step.step_id];
+        mask = static_cast<std::uint16_t>(mask | (1u << written));
+        observation.rows[mask] = counts.rows_matched;
+        observation.present = static_cast<std::uint16_t>(observation.present | (1u << mask));
+        if (step.build.has_value() && counts.relation_opens > 0 && counts.inner_builds == 0 &&
+            budget_.join_build_max_rows() > 0) {
+            observation.declines = static_cast<std::uint8_t>(observation.declines | (1u << written));
+        }
+    }
+    plan_stats_->Fold(core_id_, observation);
 }
 
 void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
@@ -7861,13 +7926,16 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIden
     // column's and the controller prices columns only (AQ-Q5), so its probe
     // names no candidate.
     stats::CandidateRef candidate;
+    // In written-position order (CC-Q15): the step with the lowest id of
+    // each arm, which for a planned block is the written order's first, not
+    // the executed one's. The planner's order still decides each step's
+    // kind, so a reorder can change which arm a relation takes.
+    const exec::Step* cabin_step = nullptr;
+    const exec::Step* filter_step = nullptr;
     for (const exec::Step& step : chain.steps) {
-        if (step.kind == exec::AccessKind::kCabinProbe && step.cabin.has_value()) {
-            if (step.cabin->f != nullptr) continue;
-            candidate.rel_oid = step.rel_oid;
-            candidate.col_pos = step.cabin->col_pos;
-            candidate.cabin_id = step.cabin->cabin_id;
-            break;
+        if (step.kind == exec::AccessKind::kCabinProbe && step.cabin.has_value() &&
+            step.cabin->f == nullptr) {
+            if (cabin_step == nullptr || step.step_id < cabin_step->step_id) cabin_step = &step;
         }
         // **The lowest non-tuple-key column of an equality in the residual**
         // (AQ-R7) - `access_columns`, sorted - a deterministic pick rather
@@ -7875,11 +7943,18 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIden
         // function's arguments since AP-S4: `DATE(ts) = d` priced as a column
         // Cabin on `ts` would build one no such statement probes. Below 64,
         // the columns a Cabin's mask can carry (`TableAccess::cabin_mask`).
-        if (step.kind == exec::AccessKind::kFilterScan && !candidate.valid() &&
-            !step.access_columns.empty() && step.access_columns.front() < 64) {
-            candidate.rel_oid = step.rel_oid;
-            candidate.col_pos = step.access_columns.front();
+        if (step.kind == exec::AccessKind::kFilterScan && !step.access_columns.empty() &&
+            step.access_columns.front() < 64) {
+            if (filter_step == nullptr || step.step_id < filter_step->step_id) filter_step = &step;
         }
+    }
+    if (cabin_step != nullptr) {
+        candidate.rel_oid = cabin_step->rel_oid;
+        candidate.col_pos = cabin_step->cabin->col_pos;
+        candidate.cabin_id = cabin_step->cabin->cabin_id;
+    } else if (filter_step != nullptr) {
+        candidate.rel_oid = filter_step->rel_oid;
+        candidate.col_pos = filter_step->access_columns.front();
     }
     optimizer_signals_->NoteExecution(identity->pattern_id, stats.Total().pages_fetched,
                                       candidate);

@@ -725,6 +725,9 @@ private:
     // store. Declared **before** both of its feeders - each holds a
     // pointer to it, so it must be destroyed after them.
     std::optional<stats::OptimizerSignals> optimizer_signals_;
+    // The join planner's statistics, one store for the instance
+    // (docs/spec/plan-stats.md); its steward runs on core 0's tick.
+    std::optional<stats::PlanStats> plan_stats_;
 
     std::optional<stats::CabinStore> cabin_store_;
 

@@ -2035,7 +2035,7 @@ namespace {
 
 // A greedy order above this many relations; every permutation at or below
 // it (4! = 24 compiles of a statement, against one).
-constexpr std::size_t kMaxExhaustiveJoinRelations = 4;
+constexpr std::size_t kMaxExhaustiveJoinRelations = stats::kMaxPosteriorRelations;
 
 // A cheaper order must win by more than this fraction, so float noise
 // between two equal costs never moves a statement off its written order.
@@ -2220,8 +2220,22 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         }
         consider(placed);
     }
-    if (cheapest.has_value()) return std::move(*cheapest);
-    return best;
+    StepChain chosen = cheapest.has_value() ? std::move(*cheapest) : std::move(best.value());
+    if (refs.size() <= kMaxPlannedRelations) {
+        for (const BoundRelation& relation : scope.relations) {
+            chosen.planned_relations.push_back(relation.access->oid);
+        }
+    }
+    // The key the run's counts fold under (CC-S2): a searched block of at
+    // most `kMaxPosteriorRelations` relations with a fetch id.
+    if (plan->fetch_id != 0 && refs.size() <= stats::kMaxPosteriorRelations) {
+        stats::PlanKey key;
+        key.fetch_id = plan->fetch_id;
+        key.n = static_cast<std::uint8_t>(refs.size());
+        for (std::size_t w = 0; w < refs.size(); ++w) key.oids[w] = scope.relations[w].access->oid;
+        chosen.planned = key;
+    }
+    return chosen;
 }
 
 // Everything after binding: the chain of `scope`'s relations in the order

@@ -60,6 +60,9 @@ struct PlanOptions {
     // `sort_max_rows`: whether a sort an order adds is bounded by LIMIT
     // (CC-Q10).
     std::size_t sort_max_rows = kDefaultSortMaxRows;
+    // The statement's fetch id, 0 when it has none: a planned block's key
+    // (docs/spec/plan-stats.md PS2). With 0 no key is set.
+    std::uint64_t fetch_id = 0;
 };
 
 // What the model reads besides the chain itself (CC-S1).
