@@ -317,8 +317,8 @@ TEST_F(AccessStatsTest, TwoCoresRecordingOneShapeShareItsRow) {
 // ---- CR6 / CB8: unlogged, and discarded when damaged ---------------------
 //
 // Carried over from `access_batch_test.cpp`, whose batch half AT-S7 retired.
-// Nothing about these two changed: the relation is still the sole unlogged
-// catalog relation, and a mount that finds it damaged still discards it.
+// The relation is the sole unlogged catalog relation, and every mount
+// discards it (`DiscardAccessStats`), cutting a damaged chain.
 
 class AccessStatsDurabilityTest : public ::testing::Test {
 protected:
@@ -363,19 +363,6 @@ protected:
     std::optional<catalog::Catalog> catalog_;
 };
 
-TEST_F(AccessStatsDurabilityTest, AnUndamagedRelationIsLeftAlone) {
-    // The direction the discard must never err in: it runs at every mount,
-    // so a false positive would empty a healthy statistic on every restart
-    // and the optimizer would never accumulate anything.
-    auto reset = catalog_->ResetAccessStatsIfDamaged();
-    ASSERT_TRUE(reset.ok()) << reset.status().message();
-    EXPECT_FALSE(reset.value()) << "a healthy relation was discarded";
-
-    auto rows = catalog_->ListAccessStats();
-    ASSERT_TRUE(rows.ok());
-    EXPECT_EQ(rows.value().size(), 2u);
-}
-
 TEST_F(AccessStatsDurabilityTest, ABrokenChainIsDiscardedAndTheRelationWorksAgain) {
     // Damage the chain the way a half-applied grow would: a link to a page
     // that is not there. Nothing redoes this relation (CR6), so without the
@@ -390,12 +377,9 @@ TEST_F(AccessStatsDurabilityTest, ABrokenChainIsDiscardedAndTheRelationWorksAgai
     ASSERT_FALSE(catalog_->ListAccessStats().ok())
         << "the fixture did not actually break the relation";
 
-    auto reset = catalog_->ResetAccessStatsIfDamaged();
-    ASSERT_TRUE(reset.ok()) << reset.status().message();
-    EXPECT_TRUE(reset.value());
-
-    // The link is cut, not refused: the discard used to return the store's
-    // NotFound, which refused the mount.
+    // The link is cut, not refused: a store's NotFound returned from here
+    // would refuse every mount.
+    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
     EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
 
     // Empty, readable, and writable again - which is the whole claim:
@@ -404,23 +388,17 @@ TEST_F(AccessStatsDurabilityTest, ABrokenChainIsDiscardedAndTheRelationWorksAgai
     auto rows = catalog_->ListAccessStats();
     ASSERT_TRUE(rows.ok()) << rows.status().message();
     EXPECT_TRUE(rows.value().empty());
-
-    // The restore's door, which calls the discard directly, cuts the same.
-    SetNext(catalog::kCatalogPageAccessStats, 9999);
-    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
-    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
     ASSERT_TRUE(catalog_->RecordAccess(1, 7, 1, 12).ok());
     EXPECT_EQ(catalog_->ListAccessStats().value().size(), 1u);
 }
 
 // ---- The discard's walk: a page is the chain's by what it says ----------
 //
-// `DiscardAccessStats` runs at every mount (the restore's, and the damaged
-// case's above), so whatever it meets at a link it either keeps, cuts at,
-// or turns into a mount refusal. The cells below pin which: the chain's own
-// pages are kept, and anything else - a page that is not there, a page that
-// is not a page, another relation's page, the head again - is cut at,
-// never re-formatted and never refused.
+// `DiscardAccessStats` runs at every mount, so whatever it meets at a link
+// it either keeps, cuts at, or turns into a mount refusal. The cells below
+// pin which: the chain's own pages are kept, and anything else - a page
+// that is not there, a page that is not a page, another relation's page,
+// the head again - is cut at, never re-formatted and never refused.
 
 TEST_F(AccessStatsDurabilityTest, AGrowthPageIsStampedAndTheDiscardKeepsIt) {
     const PageId grown = GrowAccessStats();

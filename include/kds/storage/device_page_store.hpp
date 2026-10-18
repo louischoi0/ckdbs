@@ -565,9 +565,9 @@ public:
     // (`loading_`) or a `CreateAt` (`claiming_`) of the id is in flight.
     // **Refused `Corruption`** below `first_new_page_id` (the system range
     // `Open` was given), for a map id, a headerless id, and a resident
-    // `kCabinBound` frame; `NotFound` for an id already free. A page a
-    // catalog chain grew onto is above the system range and is not refused
-    // here: the callers' owner and type checks keep it (`page.md` §5).
+    // `kCabinBound` frame; `NotFound` for an id already free. A grown
+    // catalog page is above the system range; the callers' owner and type
+    // checks keep it (`page.md` §5).
     //
     // **What this makes true, replacing "free-map bits are never cleared"**:
     // no clear bit has a resident frame - the erase and the clear are one

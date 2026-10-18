@@ -955,21 +955,18 @@ public:
 
     // Every access shape, in page order. The inspection surface behind
     // `SHOW ACCESS`.
-    // CR6: discard `sys.access_stats` if it is damaged, at mount and only
-    // there. True when it was discarded.
-    //
-    // The relation is unlogged, so nothing redoes or undoes it and no repair
-    // exists; and no mount path reads it, so damage would otherwise surface
-    // as a failing statistic on every statement and a failing `SHOW ACCESS`,
-    // for the life of the file. Discarding is sound on invariant 8's terms -
-    // a deleted trail costs performance and never a result - and the growth
-    // pages it drops are leaked: no reclaim walk reaches a catalog
-    // relation's discarded chain (`drop-table.md` DT1's stated leaks).
-    StatusOr<bool> ResetAccessStatsIfDamaged();
     // Empties `sys.access_stats` unconditionally: every page of its chain
     // re-formatted in place and kept, the chain cut before the first link
-    // that does not reach one of its pages (CR6's discard). A restore's
-    // (BR-S8), and the damaged case's above.
+    // that does not reach one of its pages (CR6's discard). Every mount's
+    // (BR-S8, `server::DiscardAdvisoryState`).
+    //
+    // The relation is unlogged, so nothing redoes or undoes it and no repair
+    // exists; damage would otherwise surface as a failing statistic on every
+    // statement and a failing `SHOW ACCESS`, for the life of the file.
+    // Discarding is sound on invariant 8's terms - a deleted trail costs
+    // performance and never a result - and the pages past a cut are leaked:
+    // no reclaim walk reaches a catalog relation's discarded chain
+    // (`drop-table.md` DT1's stated leaks).
     Status DiscardAccessStats();
 
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();

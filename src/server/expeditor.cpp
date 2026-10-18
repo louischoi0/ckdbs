@@ -1030,18 +1030,6 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (!finalized.ok()) return finalized.status();
     expeditor->recovery_.catalog_marks_finalized = finalized.value();
 
-    // CR6/CB8: discard `sys.access_stats` if it is damaged. **The same
-    // window and for the same reasons as the two maintenance steps around
-    // it**: after recovery, so this mount's own log has had its say, and
-    // before the listener binds, so nothing is reading the relation while
-    // it is judged. Core 0's, at mount, like the step above.
-    //
-    // Unlike them it is a *discard* rather than a repair, because the
-    // relation is unlogged (CR6): there is no record to replay and nothing
-    // to compensate, so the choice is an empty statistic or a permanently
-    // failing one.
-    auto stats_reset = expeditor->database_->catalog.ResetAccessStatsIfDamaged();
-    if (!stats_reset.ok()) return stats_reset.status();
     // **No mount trusts the unlogged state** (BR-S8, `restore.hpp`): Waystone
     // directories and the access statistic, both advisory, made unreachable
     // before anything can follow them. A restore's can name a page the layout
@@ -1053,6 +1041,13 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // (invariant 8 allows it: a restart costs the trails, never a result).
     // Here, after recovery and before the completion checkpoint that
     // persists it.
+    //
+    // CR6/CB8: `sys.access_stats` is discarded rather than repaired because
+    // it is unlogged - there is no record to replay and nothing to
+    // compensate. **The same window as the maintenance steps around it**:
+    // after recovery, so this mount's own log has had its say, and before
+    // the listener binds, so nothing is reading the relation while it is
+    // emptied. Core 0's, at mount, like the step above.
     if (Status s = DiscardAdvisoryState(expeditor->database_->catalog); !s.ok()) return s;
 
     // H7: collect the spills nothing points at. The assertion catalog -

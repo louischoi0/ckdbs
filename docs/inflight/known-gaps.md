@@ -1343,7 +1343,8 @@ change's stages found and left.
   returned (`DevicePageStore::ReserveFrame`). A walk past 64 cold pages, on
   a pool that is full with nothing reclaimable, reaches `FailStop` instead
   of a `ResourceExhausted` refusal. That needs a `sys.tables` chain of more
-  than 64 pages, about 3,200 relations, cold, with a full pool. Not
+  than 64 pages, about 3,900 relations (61 `sys.tables` rows per page),
+  cold, with a full pool. Not
   reproduced. Moving the first row-id call ahead of `NoRefuseWindow::Open`,
   or memoising each relation's `sys.tables` row address (which also removes
   the O(chain) walk per `INSERT`), would close it; the second was CLA's
@@ -1381,8 +1382,8 @@ change's stages found and left.
   re-formatted for the whole walk budget before it is cut.**
   `Catalog::DiscardAccessStats` cuts at once a link back to page 11 (its
   owner, bootstrap's 0, is not the relation's) and at any foreign,
-  non-heap, unallocated or unreadable page, but a cycle such as 17 -> 18 ->
-  17 between pages it owns is walked, re-formatting a page per step, until
+  non-heap, unallocated or unreadable page, but a cycle such as 200 -> 201
+  -> 200 between pages it owns is walked, re-formatting a page per step, until
   `kMaxPageWalkLength` (2^20 steps) is spent: bounded, but seconds of a
   mount. Reachable only through damage that passes the checksum, since
   nothing frees or relinks a `sys.access_stats` page. A visited set would

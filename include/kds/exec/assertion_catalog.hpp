@@ -110,16 +110,11 @@ StatusOr<std::vector<AssertionDef>> ListAssertions(catalog::Catalog& catalog,
 // The same rows with **`name` and `source_text` left empty**: the fixed
 // columns only - id, target oid, cabin root.
 //
-// It exists for one caller and one property: it reads exactly the pages
-// the chain walk already holds and resolves no spill, so a var-heap page
-// the full scan fails on - a spilled `name` or `source_text` takes its
-// page from the general supply, outside the chain - cannot cost it the
-// scan.
-//
-// What that buys is the fail-closed answer at a peer's mount (PW1c-6c): a
-// core that cannot read *what* an assertion says can still learn *that* one
-// exists on a relation it owns, and refuse the relation's writes rather
-// than admit them unchecked.
+// It exists for one caller and one property: it resolves no spill, so a
+// var-heap page that fails its read cannot cost mount recovery's
+// fail-closed scan (PW1c-6c, `server/mount_recovery.cpp`) the knowledge
+// that an assertion exists on a relation, and the relation's writes are
+// refused rather than admitted unchecked.
 StatusOr<std::vector<AssertionDef>> ListAssertionTargets(catalog::Catalog& catalog,
                                                           storage::PageStore& store);
 

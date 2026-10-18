@@ -561,9 +561,8 @@ public:
     // re-driven reclaim reads as done. `Corruption` is an id no relation
     // owns - the system range, a map page, a headerless page or a Bound
     // Cabin page: a walk that reached one has read a page that is not the
-    // relation's. A page a catalog chain grew onto is above the system range
-    // and is not refused: the caller's owner and type checks keep it
-    // (`page.md` §5).
+    // relation's. A grown catalog page is above the system range; the
+    // callers' owner and type checks keep it (`page.md` §5).
     //
     // **The default refuses `NotImplemented`**, so a store that cannot free
     // reports a leak rather than a free that never happened. Not

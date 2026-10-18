@@ -516,8 +516,8 @@ commit record for the durability class to ride on. `SHOW META`:
 **One relation is outside this rule, by ratification** (`docs/rules/rules.md`
 §5). `sys.access_stats` is written **unlogged**: its whole content is a
 statistic, which invariant 8 already prices as performance and never as a
-result, so it is neither redone nor undone and a mount that finds it
-damaged **discards** it (`Catalog::ResetAccessStatsIfDamaged`). Read the
+result, so it is neither redone nor undone and every mount **discards**
+it (`Catalog::DiscardAccessStats`), cutting a damaged chain. Read the
 paragraph above as "every catalog write except that one" — the exception
 is sole, and a second relation would have to be shown to meet the same
 test rather than to resemble this one.

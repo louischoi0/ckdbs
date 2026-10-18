@@ -379,20 +379,20 @@ inline constexpr PageId kCatalogPageTransitions = 16;
 // root.
 //
 // **These are roots, not the whole relation.** A catalog relation is a
-// chain of heap pages linked through `next_page_id`, exactly as a user
-// relation is; the id here is where the chain starts, and every page past
-// it comes from the free map's general supply (`crosscore.md` CC12/CR3),
-// so the only way to name a relation's pages is to walk its chain.
+// chain of heap pages linked through `next_page_id`; the id here is where
+// the chain starts, and every page past it comes from the free map's
+// general supply (`crosscore.md` CC12/CR3), so the only way to name a
+// relation's pages is to walk its chain.
 // `kCatalogPagePatternDefs` is deliberately **not** in this list: nothing
 // creates that page any more, so walking it would name a page this build
 // never writes.
 //
 // **The oid is the owner a page the chain grows onto is stamped with**
-// (page.md §2a), as `heap::ChainInsert` stamps a user relation's: the page
-// says whose it is, so a walk that must not stray into another relation's
-// page - the `sys.access_stats` discard - can test a link by what it
-// reaches, and reclaim, which frees only a page a dropped user relation
-// owns, passes it by. The roots themselves keep the owner bootstrap gave
+// (page.md §2a), as `heap::ChainInsert` stamps a declaration relation's:
+// the page says whose it is, so a walk that must not stray into another
+// relation's page - the `sys.access_stats` discard - can test a link by
+// what it reaches, and reclaim, which frees only a page a dropped user
+// relation owns, passes it by. The roots themselves keep the owner bootstrap gave
 // them: 0 for the fixed core, the relation's oid for the three row-codec
 // relations.
 struct CatalogRoot {

@@ -12,6 +12,9 @@
 //   mount (`Expeditor`, its advisory discard included), and the
 //   simulation's crash, whose redo rebuilds every growth page a lost
 //   writeback took from its `PAGE_INIT`.
+// - **A grown catalog page is an ordinary frame** (D2): not a pinned
+//   class, evicted clean by the sweep and faulted back with its rows, while
+//   the fixed root stays resident.
 // - **Reclaim passes a catalog page by**: a dropped relation's pages are
 //   freed by owner, so a catalog growth page - a catalog oid, in the same
 //   id range - is never freed, and a freed id may become one; a reclaim
@@ -52,7 +55,9 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/server/expeditor.hpp"
 #include "kds/server/superblock.hpp"
+#include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/memory_page_device.hpp"
 #include "kds/storage/page_header.hpp"
 
 namespace kds::server {
@@ -299,6 +304,74 @@ TEST(CatalogPageCeilingTest, ACrashRecoversACatalogPastTheOldRange) {
     ASSERT_EQ(run("SET DURABILITY RELAXED"), "SET durability=relaxed");
     InsertOneRow(run, kProbed, 3);
     ExpectTables(run, kProbed, {"1", "3"});
+}
+
+// ---- A grown catalog page is an ordinary frame ---------------------------
+
+TEST(CatalogPageCeilingTest, AGrownCatalogPageIsEvictedAndFaultedBack) {
+    // D2: only the fixed system range is resident by class. A regression
+    // that pinned the growth again - a raised resident limit, a kind-based
+    // pin - would keep every catalog page in the pool and pass every other
+    // cell here.
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto opened = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{4096},
+                                                 /*first_new_page_id=*/kFirstUserPageId);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    storage::DevicePageStore& store = *opened.value();
+    // The floor production installs (`Expeditor::Open`).
+    store.SetResidentLimit(kFirstUserPageId);
+    catalog::Catalog catalog(store, storage::kDefaultInlineCellWidth);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    // Until `sys.columns` has two pages past its root; the last relation's
+    // rows end on the tail.
+    catalog::Oid last = 0;
+    std::vector<PageId> chain;
+    for (int i = 0; i < 100 && chain.size() < 3; ++i) {
+        auto oid = catalog.CreateTable(catalog::kNamespacePublic, TableName(i), EightColumns());
+        ASSERT_TRUE(oid.ok()) << "relation " << i << ": " << oid.status().message();
+        last = oid.value();
+        auto walked = testing_catalog::CatalogChainPages(store, catalog::kCatalogPageColumns);
+        ASSERT_TRUE(walked.ok()) << walked.status().message();
+        chain = walked.value();
+    }
+    ASSERT_GE(chain.size(), 3u) << "sys.columns never grew; the cell tests nothing";
+    EXPECT_TRUE(store.IsPinnedClass(catalog::kCatalogPageColumns)) << "the fixed root is evictable";
+    for (std::size_t at = 1; at < chain.size(); ++at) {
+        EXPECT_FALSE(store.IsPinnedClass(chain[at])) << "grown page " << chain[at] << " is pinned";
+    }
+
+    // Clean, then swept for more laps than the usage cap: every clean
+    // unpinned frame falls.
+    ASSERT_TRUE(store.Sync().ok());
+    for (int lap = 0; lap < 2 * storage::DevicePageStore::kClockUsageCap + 2; ++lap) {
+        store.EvictColdFrames(store.resident_pages());
+    }
+
+    // The walk faults every grown page back off the device, checksum
+    // checked, and none of the fixed root.
+    device.value()->ClearTrace();
+    auto walked = testing_catalog::CatalogChainPages(store, catalog::kCatalogPageColumns);
+    ASSERT_TRUE(walked.ok()) << walked.status().message();
+    EXPECT_EQ(walked.value(), chain);
+    const auto read_back = [&](PageId id) {
+        for (const storage::MemoryPageDevice::TraceEntry& op : device.value()->trace()) {
+            if (op.kind == storage::MemoryPageDevice::OpKind::kRead && op.first_page_id <= id &&
+                id < op.first_page_id + op.nr_pages) {
+                return true;
+            }
+        }
+        return false;
+    };
+    EXPECT_FALSE(read_back(catalog::kCatalogPageColumns)) << "the fixed root was evicted";
+    for (std::size_t at = 1; at < chain.size(); ++at) {
+        EXPECT_TRUE(read_back(chain[at])) << "grown page " << chain[at] << " was never evicted";
+    }
+    auto schema = catalog.BuildSchemaFromColumns(last);
+    ASSERT_TRUE(schema.ok()) << schema.status().message();
+    ASSERT_EQ(schema.value().columns.size(), static_cast<std::size_t>(kColumns));
+    EXPECT_EQ(catalog::NameView(schema.value().columns.back().name), "c7");
 }
 
 // ---- Reclaim passes a catalog page by -------------------------------------

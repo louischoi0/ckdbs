@@ -503,7 +503,7 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
         }
 
         // From the free map's general supply, as `heap::ChainInsert` grows
-        // a user relation: no catalog page past the fixed roots has a
+        // a declaration relation: no catalog page past the fixed roots has a
         // reserved id (`crosscore.md` CC12/CR3), and a freed user id taken
         // here is a new creation (invariant 2). `CreateNew` returns it
         // pinned and exclusive, held until the row's record stamps it:
@@ -517,7 +517,7 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
         // min_key 0, like every catalog page: these rows carry no key to
         // prune by, and a nonzero min_key would be a claim about ids that
         // do not exist here. Owned by the relation the chain is
-        // (`kCatalogRoots`), as `heap::ChainInsert` stamps a user
+        // (`kCatalogRoots`), as `heap::ChainInsert` stamps a declaration
         // relation's growth, and the record carries the same owner, so
         // redo rebuilds the page this run wrote.
         const Oid owner = CatalogRelationAtRoot(root);
@@ -3210,8 +3210,7 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
         // every other catalog write passes `wal_`. This relation's whole
         // content is a statistic - invariant 8's advisory class, priced as
         // performance and never as a result - so it is neither redone nor
-        // undone, and a mount that finds it damaged discards it
-        // (`ResetAccessStatsIfDamaged`). It is the **sole** exception to
+        // undone, and every mount discards it (`DiscardAccessStats`). It is the **sole** exception to
         // RV3's rule that catalog writes are logged as ordinary record
         // types; a second one has to be shown to meet the same test rather
         // than to resemble this one.
@@ -3537,40 +3536,6 @@ StatusOr<SysFkeyRow> Catalog::FindForeignKeyOnColumn(Oid child_rel_oid,
     return Status::NotFound("no foreign key on this column");
 }
 
-StatusOr<bool> Catalog::ResetAccessStatsIfDamaged() {
-    // CR6's other half, and the thing that *makes* the exception safe.
-    //
-    // An unlogged relation has no redo and no undo, so nothing repairs it -
-    // and `sys.access_stats` has no reader at mount either (its only readers
-    // are `RecordAccess` and `SHOW ACCESS`), so damage would surface as a
-    // failing statistic on every statement and a failing `SHOW ACCESS`,
-    // permanently. The free map's precedent is a *repair* at mount (D9,
-    // RC04); this relation's answer is **discard**, because invariant 8
-    // already prices a deleted trail as performance and never a result, and
-    // a relation with no rows is simply unweighed by the shadow planner
-    // (`physical-optimizer.md` §5's decay score).
-    //
-    // **The walk is the detector, and it is the ordinary one**: a torn page
-    // fails its checksum on fault and a broken link fails the traversal, so
-    // `ChainVisit` answering non-OK *is* the damage report. Writing a second
-    // walk here would be a second opinion about what a readable chain is.
-    // The discard keeps the chain's readable pages (`DiscardAccessStats`).
-    const Status walked = heap::ChainVisit(
-        store_, kCatalogPageAccessStats, storage::PageAccess::kRead,
-        [](PageId, heap::PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
-            return storage::VisitControl::kContinue;
-        });
-    if (walked.ok()) return false;
-    if (Status s = DiscardAccessStats(); !s.ok()) return s;
-    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-        log_->Error("catalog",
-                    "sys.access_stats was damaged and has been discarded: it is unlogged by "
-                    "CR6, so nothing redoes it, and an empty statistic is a slower optimizer "
-                    "rather than a wrong answer");
-    }
-    return true;
-}
-
 Status Catalog::DiscardAccessStats() {
     // Every page of the chain re-formatted in place, its link and its owner
     // kept, so the rows are gone and the pages stay the chain's for
@@ -3593,7 +3558,8 @@ Status Catalog::DiscardAccessStats() {
     // chain at the page before it - never a page of another relation
     // re-formatted, never a mount refused or one that does not return. A
     // head that fails so is refused, since there is no page before it to
-    // cut at, and any other failure is returned.
+    // cut at, and any other failure is returned. A cut is the damage
+    // report, and the one place it is logged.
     PageId at = kCatalogPageAccessStats;
     PageId previous = kInvalidPageId;
     for (std::uint32_t step = 0; at != kInvalidPageId; ++step) {
@@ -3628,6 +3594,13 @@ Status Catalog::DiscardAccessStats() {
     auto before = store_.Get(previous);
     if (!before.ok()) return before.status();
     heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
+    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+        log_->Error("catalog", "sys.access_stats was damaged past page " +
+                                   std::to_string(previous) +
+                                   " and its chain has been cut there: it is unlogged by CR6, "
+                                   "so nothing redoes it, and an empty statistic is a slower "
+                                   "optimizer rather than a wrong answer");
+    }
     return Status::OK();
 }
 
