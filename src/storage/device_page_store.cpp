@@ -1222,8 +1222,9 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateNamedIdUnpinned
     // **Any core may place a page at a chosen id** (AT-S5b, `catalog.md`
     // CT5): what admits exactly one caller per id is the claim itself,
     // `ClaimNamedIdLocked` under the structure and map latches, and every
-    // loser gets `AlreadyExists`, which `AllocateCatalogPage`'s probe loop
-    // walks on from. Pinned by `free_map_race_test.cpp`'s
+    // loser gets `AlreadyExists` - redo's heal and bootstrap's roots are
+    // the callers, and a catalog chain's growth takes `CreateNew` since the
+    // reserved overflow range went. Pinned by `free_map_race_test.cpp`'s
     // `OnlyOneCallerEverPlacesAPageAtAChosenId` (user range) and
     // `device_page_store_test.cpp`'s
     // `APeerPlacesAPageAtAChosenIdInTheSystemRange` (system range).

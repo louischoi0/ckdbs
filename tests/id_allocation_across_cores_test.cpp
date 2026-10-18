@@ -63,7 +63,7 @@ TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneSequence) {
     CommandDispatcher& d0 = rig->core(0).dispatcher();
     ASSERT_EQ(d0.Dispatch("CREATE TABLE ids (id int64, v int64) BTREE").response.substr(0, 3),
               "CRE");
-    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(rig->store().Flush().ok());
 
     // The engine's own re-runs (BA-S14) burn an id each as a client's retry
     // does, and are counted here rather than by the writers, which never

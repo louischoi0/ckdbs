@@ -36,8 +36,9 @@ protected:
     // reader (a fixture member, so it outlives every catalog pointing at it).
     std::atomic<std::uint64_t> word{0};
 
-    // Matches kds::server::kFirstUserPageId (128) so freshly-created user
-    // tables never collide with the fixed catalog pages (4-15).
+    // Matches kds::server::kFirstUserPageId (128) so freshly-created pages -
+    // user tables' and a catalog chain's growth alike - never collide with
+    // the fixed catalog roots (4-16).
     static constexpr PageId server_first_new_page_id_ = 128;
 };
 
@@ -1480,7 +1481,7 @@ TEST(CatalogChain, ColumnsBeyondOnePageAreStoredAndReadBack) {
     }
 }
 
-TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
+TEST(CatalogChain, TheChainIsALinkedListOfOwnedPages) {
     storage::InMemoryPageStore store{server::kFirstUserPageId};
     Catalog catalog(store, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
@@ -1491,10 +1492,10 @@ TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
                         .ok());
     }
 
-    // Follow sys.columns' links: more than one page, and every page after
-    // the root inside the reserved range. That was what kept a peer able to
-    // fault it at all until AW-S1b; what it still buys is that "every
-    // catalog page" can be named as a bounded range (well_known.hpp).
+    // Follow sys.columns' links: more than one page, the chain ends, and
+    // every page after the root is an allocated heap page from the free
+    // map's general supply - no id below the first user page, since the
+    // reserved overflow range went (`crosscore.md` CC12/CR3).
     //
     // A growth page says whose it is (page.md §2a), as a user relation's
     // does through `heap::ChainInsert`: it carries the catalog relation's
@@ -1506,11 +1507,13 @@ TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
     while (at != kInvalidPageId) {
         ++pages;
         if (at != kCatalogPageColumns) {
-            EXPECT_GE(at, kCatalogOverflowFirst) << "page " << at << " is below the range";
-            EXPECT_LT(at, kCatalogOverflowLimit) << "page " << at << " is a user page";
+            EXPECT_GE(at, server::kFirstUserPageId) << "page " << at << " has a reserved id";
         }
         auto bytes = store.GetForRead(at);
-        ASSERT_TRUE(bytes.ok());
+        ASSERT_TRUE(bytes.ok()) << "page " << at << " is not allocated";
+        EXPECT_EQ(storage::RawPageType(bytes.value().bytes()),
+                  static_cast<std::uint8_t>(PageType::kHeap))
+            << "page " << at;
         EXPECT_EQ(storage::GetOwnerOid(bytes.value().bytes()),
                   at == kCatalogPageColumns ? 0u : kSysColumnsTable)
             << "page " << at;

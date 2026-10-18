@@ -11,7 +11,6 @@
 #include <unistd.h>
 
 #include "kds/catalog/catalog.hpp"
-#include "kds/parser/fingerprint.hpp"
 #include "kds/server/backup_manifest.hpp"
 #include "kds/server/wal_archive.hpp"
 #include "kds/storage/file_page_device.hpp"
@@ -312,19 +311,9 @@ Status PrepareRestoredVolume(storage::PageDevice& device, const RestoreWindow& w
 Status DiscardAdvisoryState(catalog::Catalog& catalog) {
     // Every Waystone directory is unreachable from here on: its pages are
     // unlogged, so the copy holds them as of some instant of the window and
-    // their children may be pages `ForgetUnwrittenPages` gave back.
-    auto patterns = catalog.ListPatterns();
-    if (!patterns.ok()) return patterns.status();
-    for (const catalog::SysPatternRow& row : patterns.value()) {
-        // A row of another fingerprint version is unreachable by any
-        // statement and is not one `ClaimPatternWaystoneRoot` writes.
-        if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version) ||
-            !catalog::HasWaystoneDirectory(row)) {
-            continue;
-        }
-        auto cleared = catalog.ClaimPatternWaystoneRoot(row.fetch_id, kInvalidPageId, 0);
-        if (!cleared.ok()) return cleared.status();
-    }
+    // their children may be pages `ForgetUnwrittenPages` gave back. One
+    // walk of `sys.patterns`, whatever its length.
+    if (Status s = catalog.ClearEveryPatternWaystoneRoot(); !s.ok()) return s;
     return catalog.DiscardAccessStats();
 }
 

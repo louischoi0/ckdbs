@@ -85,14 +85,10 @@ from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
 # suspended under SUS-1 and measurement is BTREE only for now. A number
 # from this driver compares only with a number from this driver.
 #
-# 68 columns per run against a **7,616**-column instance ceiling, so ~112
-# runs per data file. Nothing reclaims a catalog row: there is no DROP
-# TABLE.
-#
-# The figure was "~7,800" until 2026-08-29 (H8): `sys.ranges` took a
-# catalog page at superblock v16 (RD1) and the ceiling moved with it, but
-# this comment did not. Derived, not measured - M2's arithmetic over the
-# pages `sys.columns` can reach.
+# 68 columns per run. The instance had a column ceiling (~7,600) while
+# the catalog chains grew into a reserved page range; since superblock 31
+# they grow from the free map's general supply, and no ceiling remains
+# short of the volume's own.
 
 SCHEMA = {
     "organizations": (
@@ -398,12 +394,6 @@ def explain_ddl_failure(base, suffix, reply, cabin, fk):
               f"policy.\n  `{CABIN_RELATION}.{CABIN_COLUMN} {CABIN_TYPE} CABIN` "
               f"needs a build with docs/spec/cabin.md in it; re-run without "
               f"--cabin, or rebuild the server.", reply)
-    if "no room" in reply or "reserved catalog page range" in reply:
-        abort(f"could not create {base}_{suffix}: the catalog is out of column "
-              f"space.\n  Catalog relations chain into a reserved range "
-              f"(~7,800 columns for the whole instance); this scenario needs 68 "
-              f"per run and nothing reclaims them, because there is no DROP "
-              f"TABLE.\n  Restart the server on a fresh data file.", reply)
 
 
 # ---- load ----------------------------------------------------------------

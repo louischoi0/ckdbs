@@ -73,7 +73,7 @@ TEST(SetExprTwoCoreRigTest, TwoCoresIncrementingOneRowLoseNoIncrement) {
     ASSERT_EQ(d0.Dispatch("CREATE TABLE c (id int64, v int64) BTREE").response.substr(0, 3), "CRE");
     ASSERT_EQ(d0.Dispatch("INSERT INTO c VALUES (1, 0)").response.substr(0, 8), "INSERTED");
     ASSERT_EQ(d0.Dispatch("INSERT INTO c VALUES (2, 0)").response.substr(0, 8), "INSERTED");
-    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(rig->store().Flush().ok());
 
     // Both cores bump row 1, so the two writers meet on one row; row 2 shares
     // its leaf and is never written, so a statement that touched a row it

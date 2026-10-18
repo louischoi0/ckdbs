@@ -202,7 +202,7 @@ struct FkRig {
         parent_oid = parent_rel.value();
         auto child = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "c");
         if (!child.ok()) return child.status();
-        if (Status s = rig->store().FlushPages(catalog::kEveryCatalogPage); !s.ok()) return s;
+        if (Status s = rig->store().Flush(); !s.ok()) return s;
         return Status::OK();
     }
 

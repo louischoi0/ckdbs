@@ -57,7 +57,7 @@ TEST(ShippedReadOwnWrite, ATransactionReadsItsOwnUncommittedWriteOnAPeer) {
               "CRE");
     auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "r1");
     ASSERT_TRUE(oid.ok());
-    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(rig->store().Flush().ok());
 
     Txn t;
     rig->core(0).scheduler().Submit(
@@ -125,7 +125,7 @@ TEST(ShippedReadOwnWrite, AJoinInsideATransactionOnAPeerSeesItsOwnWrites) {
     ASSERT_EQ(
         d0.Dispatch("CREATE TABLE fill (id int64, aid int64, qty int64) BTREE").response.substr(0, 3),
         "CRE");
-    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(rig->store().Flush().ok());
     for (const char* name : {"acct", "fill"}) {
         auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, name);
         ASSERT_TRUE(oid.ok()) << name;

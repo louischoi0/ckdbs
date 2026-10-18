@@ -520,11 +520,6 @@ def create_tables(client, suffix, cabin, fk, bars_clustered):
             abort(f"--cabin: this server does not understand the column cabin "
                   f"policy.\n  It needs a build with docs/spec/cabin.md in "
                   f"it; re-run without --cabin, or rebuild the server.", reply)
-        if "no room" in reply or "reserved catalog page range" in reply:
-            abort(f"could not create {base}_{suffix}: the catalog is out of "
-                  f"column space.\n  This scenario spends 49 columns per run "
-                  f"and nothing reclaims them, because there is no DROP "
-                  f"TABLE.\n  Restart the server on a fresh data file.", reply)
         abort(f"could not create {base}_{suffix}", reply)
 
 

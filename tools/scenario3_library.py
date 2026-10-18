@@ -327,11 +327,6 @@ def explain_ddl_failure(base, reply, cabin):
               f"policy.\n  `{CABIN_RELATION}.{CABIN_COLUMN} {CABIN_TYPE} "
               f"CABIN` needs a build with docs/spec/cabin.md in it; re-run "
               f"without --cabin, or rebuild the server.", reply)
-    if "no room" in reply or "reserved catalog page range" in reply:
-        abort(f"could not create {base}: the catalog is out of column space.\n"
-              f"  Catalog relations chain into a reserved range and nothing "
-              f"reclaims a row, because there is no DROP TABLE.\n"
-              f"  Restart the server on a fresh data file.", reply)
 
 
 def index_statements(mode, tables, suffix):

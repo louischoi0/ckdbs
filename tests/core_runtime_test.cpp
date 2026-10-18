@@ -197,8 +197,10 @@ protected:
 
     // What Expeditor does before telling peers to re-read: the catalog
     // pages are unlogged, so nothing else puts them on the device.
+    // A catalog chain's pages past its root have no fixed ids, so the whole
+    // pool is flushed rather than a list that could name them.
     void FlushCatalog() {
-        ASSERT_TRUE(core0_store_->FlushPages(catalog::kAllCatalogPages).ok());
+        ASSERT_TRUE(core0_store_->Flush().ok());
     }
 
     // PW1c-6b-3's rig (defined below, after the schema helpers it needs):
@@ -470,44 +472,55 @@ TEST_F(CoreRuntimeTest, APeerSeesADdlAtItsNextCachedReadWithNothingSent) {
 // There is one copy of the map now and every core sets its bits in it, so
 // the snapshot the refresh reconciled does not exist. The cell that
 // still says something about this path is
-// `APeerResolvesARelationWhoseCatalogRowsSpilledOntoAnOverflowPage`,
+// `APeerResolvesARelationWhoseCatalogRowsSpilledOntoAGrownPage`,
 // which walks the grown chain end to end.
 
-TEST_F(CoreRuntimeTest, APeerResolvesARelationWhoseCatalogRowsSpilledOntoAnOverflowPage) {
+TEST_F(CoreRuntimeTest, APeerResolvesARelationWhoseCatalogRowsSpilledOntoAGrownPage) {
     // **The scenario, not just the mechanism.** The test above pins that an
     // invalidation refreshes the map; this one is the shape that made it
     // matter, and it fails the same way the 58-build reproduction did.
     //
-    // A catalog chain grows onto `kCatalogOverflowFirst` when its root
-    // fills (`AllocateCatalogPage`). `sys.columns` is the fastest to get
-    // there - one row per column of every relation - so a peer that mounted
-    // before the spill, and then resolves a relation whose columns live on
-    // the new page, walks `next_page_id` into an id its snapshot calls
-    // free. Without the refresh that is `page id not found`, permanently.
+    // A catalog chain grows onto a page from the free map's general supply
+    // when its root fills (`InsertRow` -> `CreateNew`), so the page is a
+    // user-range id (>= 128), the range a peer's reads of catalog pages
+    // never touched before the reserved overflow range went. `sys.columns`
+    // is the fastest to get there - one row per column of every relation -
+    // so a peer that mounted before the spill, and then resolves a relation
+    // whose columns live on the new page, walks `next_page_id` into an id
+    // allocated after it mounted. Without the one map that is `page id not
+    // found`, permanently.
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
+    // The spill is read off the root's link, not off a fixed id: a grown
+    // page's id is whatever the free map handed out.
+    auto columns_link = [&]() -> PageId {
+        auto root = core0_store_->GetForRead(catalog::kCatalogPageColumns);
+        if (!root.ok()) return kInvalidPageId;
+        return heap::PageView(root.value().bytes()).next_page_id();
+    };
     // Everything from here is created *after* the peer's snapshot.
-    const PageId first_overflow = catalog::kCatalogOverflowFirst;
-    ASSERT_FALSE(peer.value()->store().IsAllocated(first_overflow))
-        << "the spill has not happened yet";
+    ASSERT_EQ(columns_link(), kInvalidPageId) << "the spill has not happened yet";
 
     std::string spilled;
-    for (int i = 0; i < 64 && !core0_store_->IsAllocated(first_overflow); ++i) {
+    for (int i = 0; i < 64 && columns_link() == kInvalidPageId; ++i) {
         spilled = "spill" + std::to_string(i);
         auto created = core0_->catalog.CreateTable(catalog::kNamespacePublic, spilled,
                                                    TwoColumnSchema());
         ASSERT_TRUE(created.ok()) << created.status().message();
     }
-    ASSERT_TRUE(core0_store_->IsAllocated(first_overflow))
+    const PageId grown = columns_link();
+    ASSERT_NE(grown, kInvalidPageId)
         << "the catalog never spilled; this test needs a chain that grows";
+    EXPECT_GE(grown, server::kFirstUserPageId)
+        << "a catalog chain's growth page comes from the general supply";
 
     // The pages are unlogged, so the flush is what puts them on the
     // device; the peer's memo revalidates by itself (AT-S2).
-    ASSERT_TRUE(core0_store_->FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(core0_store_->Flush().ok());
 
     // The last relation created is the one whose rows are furthest along
-    // the chain, so resolving it is what walks onto the overflow page.
+    // the chain, so resolving it is what walks onto the grown page.
     auto found = peer.value()->catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, spilled);
     ASSERT_TRUE(found.ok()) << found.status().message();
     auto access = peer.value()->catalog().InitTableAccess(found.value());

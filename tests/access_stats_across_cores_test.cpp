@@ -53,7 +53,7 @@ TEST(AccessStatsAcrossCores, APeersStatementIsCountedInTheOneRelation) {
               "CRE");
     auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "r0");
     ASSERT_TRUE(oid.ok());
-    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(rig->store().Flush().ok());
     ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES (7)").response.substr(0, 8), "INSERTED");
     // A read here first, because a shape is recorded from an executed step
     // chain and an INSERT's write path is not one.

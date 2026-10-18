@@ -77,7 +77,7 @@ public:
                 return false;
             }
         }
-        return rig->store().FlushPages(catalog::kEveryCatalogPage).ok();
+        return rig->store().Flush().ok();
     }
 
     void Start(std::vector<std::string> on_core0, std::vector<std::string> on_core1) {

@@ -266,8 +266,10 @@ public:
         if (it->second.empty()) pins_.erase(it);
     }
 
-    // Every user page fetched from now on is the watched relation's; the
-    // catalog's fixed pages sit below `kFirstUserPageId`.
+    // Every page a user relation owns fetched from now on is the watched
+    // relation's. Told by the page's owner (page.md §2a), not by its id: a
+    // catalog chain's growth pages share the user id range but carry a
+    // catalog oid, below `kUserOidStart`.
     void Record(bool on) { recording_ = on; }
     // Fetches of a watched page while another page is pinned exclusive.
     int violations() const noexcept { return violations_; }
@@ -275,7 +277,10 @@ public:
 private:
     void Watch(PageId page_id) {
         if (recording_) {
-            if (page_id >= kFirstUserPageId) watched_.insert(page_id);
+            auto bytes = inner_.GetForReadUnpinned(page_id);
+            if (bytes.ok() && storage::GetOwnerOid(bytes.value()) >= catalog::kUserOidStart) {
+                watched_.insert(page_id);
+            }
             return;
         }
         if (!watched_.contains(page_id)) return;

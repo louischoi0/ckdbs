@@ -8,6 +8,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/sched/scheduler.hpp"
+#include "kds/server/superblock.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -264,7 +265,7 @@ TEST(SubsystemLoggingTest, ChecksumFailureIsLoggedAsCorruption) {
 // ---- Catalog and bootstrap: the structural writes -----------------------
 
 TEST(SubsystemLoggingTest, BootstrapDistinguishesFreshFromExisting) {
-    storage::InMemoryPageStore store;
+    storage::InMemoryPageStore store{server::kFirstUserPageId};
 
     CapturedLog fresh_log(LogLevel::kInfo);
     auto fresh = bootstrap::BootstrapDatabase(store, /*now_unix_seconds=*/1'700'000'000,
@@ -286,7 +287,7 @@ TEST(SubsystemLoggingTest, BootstrapDistinguishesFreshFromExisting) {
 }
 
 TEST(SubsystemLoggingTest, CreateTableIsLoggedWithItsRootPage) {
-    storage::InMemoryPageStore store;
+    storage::InMemoryPageStore store{server::kFirstUserPageId};
     auto database = bootstrap::BootstrapDatabase(store, /*now_unix_seconds=*/1'700'000'000);
     ASSERT_TRUE(database.ok()) << database.status().message();
 
@@ -303,7 +304,7 @@ TEST(SubsystemLoggingTest, CreateTableIsLoggedWithItsRootPage) {
 }
 
 TEST(SubsystemLoggingTest, RowIdIssueIsATraceEvent) {
-    storage::InMemoryPageStore store;
+    storage::InMemoryPageStore store{server::kFirstUserPageId};
     auto database = bootstrap::BootstrapDatabase(store, /*now_unix_seconds=*/1'700'000'000);
     ASSERT_TRUE(database.ok()) << database.status().message();
 

@@ -303,6 +303,29 @@ TEST(SuperBlockTest, AVersion21VolumeDoesNotMount) {
     }
 }
 
+// A version-30 volume's catalog chains may have grown onto the reserved
+// range 17..127, whose pages carry owner 0 - which this build's
+// `sys.access_stats` discard cuts at - and a version-30 binary would refuse
+// a chain this build grows past 128 pages, so neither reads the other's
+// volume. Named rather than left to the loop above, whose `- 1` would stop
+// meaning 30 at the next bump.
+TEST(SuperBlockTest, AVersion30VolumeDoesNotMount) {
+    constexpr std::uint32_t kBeforeTheGeneralSupply = 30;
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &kBeforeTheGeneralSupply,
+                sizeof(kBeforeTheGeneralSupply));
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+    for (const std::uint32_t named : {kBeforeTheGeneralSupply, kSuperBlockVersion}) {
+        EXPECT_NE(decoded.status().message().find(std::to_string(named)), std::string::npos)
+            << decoded.status().message();
+    }
+}
+
 // AY-Q6 (C): a version-18 volume's log may hold an ASSERT_SNAPSHOT with no
 // chunk count, which this build does not read (`raft-marks-2026-09-30.md`
 // §13). Named rather than left to the loop above, whose `- 1` would stop

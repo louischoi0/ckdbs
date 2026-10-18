@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cctype>
 #include <cstddef>
 #include <iterator>
@@ -360,52 +359,47 @@ inline constexpr PageId kCatalogPageAssertions = 14;
 
 // Root heap page of sys.cabin_exprs (superblock 26, AQ-S1). Page 15 was
 // `sys.ranges`' root until the split relation was retired (2026-09-30) and
-// nothing created it since, so the new relation takes it and
-// `kCatalogOverflowFirst` does not move. Its var-heap root is allocated, as
-// sys.assertions' is.
+// nothing created it since, so the new relation takes it. Its var-heap
+// root is allocated, as sys.assertions' is.
 inline constexpr PageId kCatalogPageCabinExprs = 15;
 
-// Root heap page of sys.transitions (superblock 24), the first id past the
-// old overflow start, which moved to 17 with it. Its var-heap root is
-// allocated, as sys.assertions' is.
+// Root heap page of sys.transitions (superblock 24), the highest fixed
+// root. Ids 17..127 are unused, left for a future bootstrap root. Its
+// var-heap root is allocated, as sys.assertions' is.
 inline constexpr PageId kCatalogPageTransitions = 16;
 
-// Every catalog relation's **root** page, in id order.
+// Every catalog relation's **root** page, in id order, with the relation
+// it heads.
 //
-// One list, because two places now need "all of them at once" and a
+// One list, because several places need "all of them at once" and a
 // hand-written second copy is how a page added later gets left out of one
-// of them: `Catalog::Bootstrap()` creates them and `RetireDeleteMarks`
-// walks them.
+// of them: `Catalog::Bootstrap()` creates them, `RetireDeleteMarks` walks
+// them, and `InsertRow` stamps a chain's growth with the oid beside its
+// root.
 //
 // **These are roots, not the whole relation.** A catalog relation is a
 // chain of heap pages linked through `next_page_id`, exactly as a user
-// relation is; the id here is where the chain starts. Callers that need
-// every page use the overflow range below as well.
+// relation is; the id here is where the chain starts, and every page past
+// it comes from the free map's general supply (`crosscore.md` CC12/CR3),
+// so the only way to name a relation's pages is to walk its chain.
 // `kCatalogPagePatternDefs` is deliberately **not** in this list: nothing
-// creates that page any more, so flushing it would name a page this build
+// creates that page any more, so walking it would name a page this build
 // never writes.
-inline constexpr PageId kAllCatalogPages[] = {
-    kCatalogPageTypes,       kCatalogPageColumns,    kCatalogPageObjects,
-    kCatalogPageTables,      kCatalogPageIndexes,    kCatalogPagePatterns,
-    kCatalogPageAccessStats, kCatalogPageCabins,     kCatalogPageFkeys,
-    kCatalogPageAssertions,  kCatalogPageCabinExprs, kCatalogPageTransitions,
-};
-
-// The catalog relation each root heads, in `kAllCatalogPages`' order.
 //
-// **The owner a page the chain grows onto is stamped with** (page.md §2a),
-// as `heap::ChainInsert` stamps a user relation's: the page says whose it
-// is, so a walk that must not stray into another relation's page - the
-// `sys.access_stats` discard - can test a link by what it reaches rather
-// than by where its id falls. The roots themselves keep the owner
-// bootstrap gave them: 0 for the fixed core, the relation's oid for the
-// three row-codec relations.
+// **The oid is the owner a page the chain grows onto is stamped with**
+// (page.md §2a), as `heap::ChainInsert` stamps a user relation's: the page
+// says whose it is, so a walk that must not stray into another relation's
+// page - the `sys.access_stats` discard - can test a link by what it
+// reaches, and reclaim, which frees only a page a dropped user relation
+// owns, passes it by. The roots themselves keep the owner bootstrap gave
+// them: 0 for the fixed core, the relation's oid for the three row-codec
+// relations.
 struct CatalogRoot {
     PageId page;
     Oid oid;
 };
 
-inline constexpr CatalogRoot kCatalogRootOwners[] = {
+inline constexpr CatalogRoot kCatalogRoots[] = {
     {kCatalogPageTypes, kSysTypesTable},
     {kCatalogPageColumns, kSysColumnsTable},
     {kCatalogPageObjects, kSysObjectsTable},
@@ -423,92 +417,30 @@ inline constexpr CatalogRoot kCatalogRootOwners[] = {
 // The relation whose chain starts at `root`; 0, unattributed, for a page
 // that heads none.
 constexpr Oid CatalogRelationAtRoot(PageId root) {
-    for (const CatalogRoot& entry : kCatalogRootOwners) {
+    for (const CatalogRoot& entry : kCatalogRoots) {
         if (entry.page == root) return entry.oid;
     }
     return 0;
 }
 
-// The two lists side by side, entry for entry, so a root added to one and
-// not the other is a build failure rather than a growth page stamped 0.
-constexpr bool CatalogRootOwnersMatchTheRoots() {
-    if (std::size(kCatalogRootOwners) != std::size(kAllCatalogPages)) return false;
-    for (std::size_t i = 0; i < std::size(kAllCatalogPages); ++i) {
-        if (kCatalogRootOwners[i].page != kAllCatalogPages[i]) return false;
-    }
-    return true;
-}
-static_assert(CatalogRootOwnersMatchTheRoots(),
-              "kCatalogRootOwners must name every catalog root, in kAllCatalogPages' order");
-
-// ---- Where a catalog chain grows into ------------------------------------
-//
-// A catalog relation that outgrows its root page takes its next page from
-// **this reserved range**, never from the free map's general supply, and
-// that is a correctness requirement rather than tidiness.
-//
-// One rule depends on a catalog page's id being low: a flush of "every
-// catalog page" has to be able to name them; a bounded
-// range can be named, an arbitrary set of general-supply ids cannot without
-// storing it somewhere durable.
-//
-// The range is what is left of the reserved low pages after the roots, up
-// to the first user page - a page count the ledger below moves, so it is
-// not stated here as a number. A page holds ~68 `sys.columns` rows, and
-// the range times that is the whole instance's column ceiling (~7,500
-// with the range starting at 17) - a ceiling, not "unbounded". It walks up
-// by one with every new bootstrap relation, on that relation's superblock
-// bump (14 -> 15 for sys.assertions, 15 -> 16 for the retired sys.ranges,
-// 16 -> 17 for sys.transitions).
-inline constexpr PageId kCatalogOverflowFirst = 17;
-
-// One past the last id a catalog chain may take. Must equal
-// kds::server::kFirstUserPageId; the static_assert lives in catalog.cpp,
-// which is free to include both headers.
-inline constexpr PageId kCatalogOverflowLimit = 128;
-
-// Distinctness and the overflow bound in one pass over the list that
-// already exists, for `WellKnownOidsAreDistinct()`'s reason: nothing else
-// puts the root ids side by side, and joining `kAllCatalogPages` is the
-// whole job for a new bootstrap relation.
-constexpr bool CatalogRootsAreDistinctAndBelowOverflow() {
-    for (std::size_t i = 0; i < std::size(kAllCatalogPages); ++i) {
-        if (kAllCatalogPages[i] >= kCatalogOverflowFirst) return false;
-        for (std::size_t j = i + 1; j < std::size(kAllCatalogPages); ++j) {
-            if (kAllCatalogPages[i] == kAllCatalogPages[j]) return false;
+// Distinct roots, every one below `first_user_page`, in one pass over the
+// list that already exists, for `WellKnownOidsAreDistinct()`'s reason:
+// nothing else puts the root ids side by side, and joining `kCatalogRoots`
+// is the whole job for a new bootstrap relation. The bound is a parameter
+// because it is `server::kFirstUserPageId`, which this header does not
+// include; the static_assert lives in catalog.cpp, which is free to
+// include both. Only the roots are fixed: bootstrap must find a root
+// without a catalog read, so it is created at its id (`CreateAt`), below
+// the first id `CreateNew` hands out.
+constexpr bool CatalogRootsAreDistinctAndFixed(PageId first_user_page) {
+    for (std::size_t i = 0; i < std::size(kCatalogRoots); ++i) {
+        if (kCatalogRoots[i].page >= first_user_page) return false;
+        for (std::size_t j = i + 1; j < std::size(kCatalogRoots); ++j) {
+            if (kCatalogRoots[i].page == kCatalogRoots[j].page) return false;
         }
     }
     return true;
 }
-static_assert(CatalogRootsAreDistinctAndBelowOverflow(),
-              "every fixed catalog root must be unique and sit below the overflow range; "
-              "add a new root past the highest and move kCatalogOverflowFirst with it");
-
-// Every page a catalog relation can occupy: the roots, then the whole
-// overflow range.
-//
-// The catalog broadcast's flush and eviction callers retired (AT-S2); their
-// history is at cf889b63. What remains is
-// a fixture's flush for a second store opened over the device (the writes
-// themselves are WAL-logged, `ddl-transactional.md` §7), which needs "all
-// of them" and tolerates an id that is not resident (`FlushPages` skips a
-// page it has no frame for). So the range is named in full
-// rather than tracked: an exact set would have to be discovered by walking
-// every chain, and a walk that happens on the invalidation path is a walk
-// that can fail there.
-inline constexpr std::size_t kCatalogPageSpanSize =
-    std::size(kAllCatalogPages) + (kCatalogOverflowLimit - kCatalogOverflowFirst);
-
-inline constexpr std::array<PageId, kCatalogPageSpanSize> MakeCatalogPageSpan() {
-    std::array<PageId, kCatalogPageSpanSize> out{};
-    std::size_t at = 0;
-    for (const PageId id : kAllCatalogPages) out[at++] = id;
-    for (PageId id = kCatalogOverflowFirst; id < kCatalogOverflowLimit; ++id) out[at++] = id;
-    return out;
-}
-
-inline constexpr std::array<PageId, kCatalogPageSpanSize> kEveryCatalogPage =
-    MakeCatalogPageSpan();
 
 // Transaction id stamped on every bootstrap-time tuple - mirrors
 // PostgreSQL's FrozenTransactionId: bootstrap rows are inserted before a

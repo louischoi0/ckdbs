@@ -856,6 +856,12 @@ public:
                                                                       PageId root,
                                                                       std::uint8_t depth);
 
+    // Clears every current-version pattern's Waystone root in one walk of
+    // `sys.patterns`: `ClaimPatternWaystoneRoot(fetch_id, kInvalidPageId,
+    // 0)` for each row that has a directory, without a walk per row. The
+    // mount's discard of unlogged Waystone state (`DiscardAdvisoryState`).
+    Status ClearEveryPatternWaystoneRoot();
+
     // No `SetPatternOrigin()` or `RetirePattern()`: both went with
     // declared patterns on 2026-08-31. Every row is `kOriginAuto`, nothing
     // writes `kPatternPinned`, and the two fields stay on disk (rows.hpp).

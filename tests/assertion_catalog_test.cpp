@@ -107,12 +107,11 @@ TEST_F(AssertionCatalogTest, TheFormatVersionMovedAndTheOverflowRangeMovedWithIt
     // regression, and that is what this now says.
     EXPECT_GE(server::kSuperBlockVersion, 13u);
     EXPECT_EQ(catalog::kCatalogPageAssertions, 14u);
-    // The overflow half is no longer asserted here at all. An exact pin on
-    // `kCatalogOverflowFirst` broke at 15 -> 16 (sys.ranges) for the reason
-    // the comment above predicted, and any runtime bound this test could
-    // state is statically unfalsifiable now that well_known.hpp's
-    // `CatalogRootsAreDistinctAndBelowOverflow()` static_assert holds the
-    // range past every root at compile time.
+    // The overflow half is no longer asserted here at all: the reserved
+    // overflow range is gone (superblock 31), a catalog chain growing from
+    // the free map's general supply, and catalog.cpp's static_assert over
+    // `CatalogRootsAreDistinctAndFixed()` holds every root below the first
+    // user page at compile time.
 }
 
 // ---- Round trip ---------------------------------------------------------

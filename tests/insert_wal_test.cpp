@@ -27,6 +27,7 @@
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
+#include "catalog_chain_pages.hpp"
 #include "view_text.hpp"
 
 // INSERT as a *logged* statement (command_dispatcher.hpp's WAL section,
@@ -845,13 +846,20 @@ TEST_F(InsertWalTest, AnIndexSplitTakesOneBtreeSplitAndNoIndexInsert) {
 // catalog page no earlier record named, so redo never applies one to a page
 // image that never saw the write it undoes. Wired as `Expeditor` wires it -
 // the catalog logs.
-void ExpectCompensationsFollowForwardWrites(const std::vector<wal::DecodedRecord>& records,
+//
+// A catalog page is told from a user page by the chains, not by its id: a
+// chain's growth comes from the general supply (`catalog_chain_pages.hpp`),
+// so an id test would pass while covering none of a grown chain's pages.
+void ExpectCompensationsFollowForwardWrites(storage::PageStore& store,
+                                            const std::vector<wal::DecodedRecord>& records,
                                             wal::Lsn rollback_from, bool overwrite_undone) {
+    auto catalog_pages = testing_catalog::EveryCatalogPage(store);
+    ASSERT_TRUE(catalog_pages.ok()) << catalog_pages.status().message();
     std::set<PageId> named;
     std::size_t compensations = 0, overwrites_in_rollback = 0;
     for (const wal::DecodedRecord& record : records) {
         const PageId page_id = record.header.page_id;
-        if (page_id == kInvalidPageId || page_id >= catalog::kCatalogOverflowLimit) continue;
+        if (catalog_pages.value().count(page_id) == 0) continue;
         const wal::RecordType type = record.type();
         if (type == wal::RecordType::kSlotRetire || type == wal::RecordType::kHeapDeleteUnmark) {
             ++compensations;
@@ -880,7 +888,7 @@ TEST_F(InsertWalTest, ARolledBackDdlLogsItsCatalogCompensation) {
     ASSERT_EQ(d.Dispatch("ROLLBACK").response.substr(0, 8), "ROLLBACK");
     ASSERT_TRUE(wal_->Flush().ok());
     std::vector<std::vector<std::byte>> storage;
-    ExpectCompensationsFollowForwardWrites(DeviceRecords(storage), rollback_from,
+    ExpectCompensationsFollowForwardWrites(*store_, DeviceRecords(storage), rollback_from,
                                            /*overwrite_undone=*/false);
 }
 
@@ -899,7 +907,7 @@ TEST_F(InsertWalTest, ARolledBackDropLogsItsCatalogCompensation) {
     ASSERT_EQ(d.Dispatch("ROLLBACK").response.substr(0, 8), "ROLLBACK");
     ASSERT_TRUE(wal_->Flush().ok());
     std::vector<std::vector<std::byte>> storage;
-    ExpectCompensationsFollowForwardWrites(DeviceRecords(storage), rollback_from,
+    ExpectCompensationsFollowForwardWrites(*store_, DeviceRecords(storage), rollback_from,
                                            /*overwrite_undone=*/true);
 }
 

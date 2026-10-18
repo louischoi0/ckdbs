@@ -451,19 +451,6 @@ def create_tables(exec_, suffix, cabin=False, fk=False):
                       f"policy.\n  `{CABIN_RELATION}.{CABIN_COLUMN} int64 CABIN` needs a "
                       f"build with docs/spec/cabin.md in it; re-run without --cabin, or "
                       f"rebuild the server.", reply)
-            # This used to be the likeliest failure by a wide margin: the
-            # catalog's column page did not chain, so the instance held ~68
-            # column rows in total and a data file survived exactly two runs
-            # of this scenario. The catalog relations chain now, into a
-            # reserved range of ~114 pages, so reaching this means the whole
-            # range is full - thousands of columns, and still no DROP TABLE
-            # to reclaim any of them.
-            if "no room" in reply or "reserved catalog page range" in reply:
-                abort(f"could not create {base}_{suffix}: the catalog is out of column "
-                      f"space.\n  Catalog relations chain into a reserved range of ~114 "
-                      f"pages (~7,800 columns for the whole instance); this scenario "
-                      f"needs 27 per run and nothing reclaims them, because there is no "
-                      f"DROP TABLE.\n  Restart the server on a fresh data file.", reply)
             abort(f"could not create {base}_{suffix}", reply)
 
 

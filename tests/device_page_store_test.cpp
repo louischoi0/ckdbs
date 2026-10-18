@@ -593,15 +593,15 @@ TEST(DevicePageStoreOwnershipTest, APeerPlacesAPageAtAChosenIdInTheSystemRange) 
     // AT-S5b: `CreateAtUnpinned` refused a chosen id below the resident
     // limit to every core but 0. The store's write predicate's arm and
     // `ResidentBytes`' gate went at AT-S5, which is what made this one reachable - a peer's
-    // `CREATE TABLE` runs where the session is, and its catalog chain grows
-    // through `AllocateCatalogPage`'s probe of exactly this range.
+    // `CREATE TABLE` runs where the session is, and its catalog chain grew
+    // by probing this range with `CreateAt` until the reserved overflow
+    // range went (superblock 31; a chain grows through `CreateNew` now).
+    // What still places a page at a chosen id below the resident limit is
+    // bootstrap's roots and redo's heal, on whatever core runs them.
     //
     // The two readings the retirement owes: a peer *places* the page, and a
     // second caller for the same id is refused `AlreadyExists` - the claim,
-    // not the core, is what admits one caller. `kAlreadyExists` is also the
-    // one code the catalog's probe loop walks on from, so the second
-    // reading is what keeps a peer's allocation finding a free id rather
-    // than stopping at the first taken one.
+    // not the core, is what admits one caller.
     //
     // **Single-threaded, and it is the system half that needs a cell at
     // all.** `free_map_race_test.cpp`'s
@@ -619,8 +619,8 @@ TEST(DevicePageStoreOwnershipTest, APeerPlacesAPageAtAChosenIdInTheSystemRange) 
     store->SetResidentLimit(128);
 
     const CurrentCoreGuard as_peer(3);
-    // `kCatalogOverflowFirst` in the catalog's own numbering: the first id
-    // `AllocateCatalogPage` probes, and the one a peer used to die on.
+    // sys.transitions' root, the highest fixed catalog page: the id a peer
+    // used to die on was the overflow range's first, 16 at the time.
     auto placed = store->CreateAt(16);
     ASSERT_TRUE(placed.ok()) << "a peer was refused a chosen id in the system range: "
                              << placed.status().message();
@@ -630,8 +630,7 @@ TEST(DevicePageStoreOwnershipTest, APeerPlacesAPageAtAChosenIdInTheSystemRange) 
     auto again = store->CreateAt(16);
     ASSERT_FALSE(again.ok()) << "the same id was placed twice";
     EXPECT_EQ(again.status().code(), StatusCode::kAlreadyExists)
-        << "a taken id must answer AlreadyExists, which is what the catalog's "
-           "probe loop walks on from: "
+        << "a taken id must answer AlreadyExists: "
         << again.status().message();
 }
 

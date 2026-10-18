@@ -179,7 +179,16 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // version-29 binary would show and count; and a version-29 volume may hold
 // a pre-SUS-1 chain relation, whose code BZ deletes. Refused with no
 // migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 30;
+//
+// 31 (the catalog page ceiling, 2026-10-18): a catalog chain grows onto
+// pages from the free map's general supply, stamped with the catalog
+// relation's oid, instead of the reserved range 17..127, which is deleted.
+// A version-30 binary would refuse such a chain as longer than the range
+// at its 128-step bound and cut `sys.access_stats` at its first page past
+// 127; a version-30 volume may hold overflow pages stamped owner 0, which
+// this build's `sys.access_stats` discard cuts at. Refused with no
+// migration, the standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 31;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

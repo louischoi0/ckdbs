@@ -489,7 +489,7 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
     // undo them (DT3a/DT5). Their forward writes are logged since RV3
     // (`catalog.cpp`'s `InsertRow`, `OverwriteLogged`, `DeleteMarkLogged`),
     // so the compensation is too. It was not until BR: an arm here skipped
-    // the log below `kCatalogOverflowLimit`, on the premise that catalog
+    // the log below the first user page (128), on the premise that catalog
     // writes had no records - and a crash after a rolled-back `DROP TABLE`,
     // over pages written back before the drop, replayed the drop's retype
     // and nothing put it back: the table was gone, in silence. Found by

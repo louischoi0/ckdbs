@@ -28,10 +28,11 @@
 
 namespace kds::catalog {
 
-// The overflow range must end exactly where the user pages begin: the
-// invalidation flush names every catalog page by this range (well_known.hpp).
-static_assert(kCatalogOverflowLimit == server::kFirstUserPageId,
-              "the catalog overflow range must end at the first user page");
+// Every root bootstrap creates at its id sits below the first id the free
+// map hands out, and no two share one (well_known.hpp).
+static_assert(CatalogRootsAreDistinctAndFixed(server::kFirstUserPageId),
+              "every fixed catalog root must be unique and sit below the first user page; "
+              "add a new root past the highest, in the unused ids 17..127");
 
 namespace {
 
@@ -205,14 +206,6 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
     }
 }
 
-// The page a growing catalog chain takes next.
-//
-// **From the reserved low range, never from the free map's general
-// supply** (well_known.hpp says why: the invalidation flush has to be able
-// to name every catalog page). The
-// range is probed rather than tracked, because `CreateAt` already answers
-// "is this id taken" durably through the free map - a second record of it
-// here would be a second thing to keep true across a crash.
 // ---- RV3: catalog writes log the ordinary record types --------------------
 // (docs/workplan-rv3-catalog-recovery.md; wal.md's "Catalog" line.)
 //
@@ -410,19 +403,6 @@ StatusOr<CatalogRowChange> OverwriteForDdl(const Catalog::DdlUndoHook& undo_hook
     return change;
 }
 
-// The new page comes back held, exclusive: its caller writes and logs it
-// under that hold (AY-S7, `wal.md` §8-1).
-StatusOr<storage::PageRef> AllocateCatalogPage(storage::PageStore& store) {
-    for (PageId id = kCatalogOverflowFirst; id < kCatalogOverflowLimit; ++id) {
-        auto created = store.CreateAt(id);
-        if (created.ok() || created.status().code() != StatusCode::kAlreadyExists) return created;
-    }
-    return Status::OutOfSpace(
-        "catalog: the reserved catalog page range (" + std::to_string(kCatalogOverflowFirst) +
-        ".." + std::to_string(kCatalogOverflowLimit - 1) +
-        ") is full; every catalog relation's chain together has outgrown it");
-}
-
 // Reports a row `InsertRow` just placed at (`page_id`, `slot`) - the undo
 // record first, then the row record: the hook's whole contract
 // (catalog.hpp), since redo alone must never be able to resurrect a loser's
@@ -522,18 +502,22 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
             continue;
         }
 
-        // Held until the row's record stamps it: until then its `page_lsn`
-        // is 0, and another core's writeback would put the row on disk
-        // ahead of its record (AY-S7).
-        auto created = AllocateCatalogPage(store);
+        // From the free map's general supply, as `heap::ChainInsert` grows
+        // a user relation: no catalog page past the fixed roots has a
+        // reserved id (`crosscore.md` CC12/CR3), and a freed user id taken
+        // here is a new creation (invariant 2). `CreateNew` returns it
+        // pinned and exclusive, held until the row's record stamps it:
+        // until then its `page_lsn` is 0, and another core's writeback
+        // would put the row on disk ahead of its record (AY-S7).
+        auto created = store.CreateNew();
         if (!created.ok()) return created.status();
-        storage::PageRef new_page = std::move(created.value());
-        const PageId new_id = new_page.page_id();
+        const PageId new_id = created.value().first;
+        storage::PageRef new_page = std::move(created.value().second);
 
         // min_key 0, like every catalog page: these rows carry no key to
         // prune by, and a nonzero min_key would be a claim about ids that
         // do not exist here. Owned by the relation the chain is
-        // (`kCatalogRootOwners`), as `heap::ChainInsert` stamps a user
+        // (`kCatalogRoots`), as `heap::ChainInsert` stamps a user
         // relation's growth, and the record carries the same owner, so
         // redo rebuilds the page this run wrote.
         const Oid owner = CatalogRelationAtRoot(root);
@@ -547,11 +531,12 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
 
         auto placed = fresh.value().InsertTuple(encoded, trx_id);
         if (!placed.ok()) {
-            // A row no empty page can hold. The page stays allocated and
-            // unlinked rather than freed - a reserved catalog id is never
-            // freed (`FreePage` refuses below the first user page) - and
-            // nothing reaches it, which is the same trade heap_chain makes.
-            // A report refused below leaves the page the same way.
+            // A row no empty page can hold. The page is left allocated and
+            // empty rather than freed - a free needs BF-R4's replay gate -
+            // and it is not linked in, so nothing reaches it and no reclaim
+            // walk does either: a stated leak of one page (`drop-table.md`
+            // DT1), the trade `heap::ChainInsert` makes. A report refused
+            // below leaves the page the same way.
             return placed.status();
         }
         if (Status s = ReportPlacedRow(wal, hook, store, new_id, fresh.value(), placed.value(),
@@ -564,12 +549,14 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
         if (where != nullptr) *where = CatalogRowRef{new_id, placed.value()};
         new_page.Release();
 
-        // Linked **after** the row is in it, and through a re-fetch:
-        // CreateAt may have moved frames, and a link published before the
+        // Linked **after** the row is in it: a link published before the
         // page it points at is filled is a link a reader can follow into an
         // empty page - the ordering that protects a concurrent reader on
-        // this core. The edit itself travels as a full page image: no
-        // record type describes a next_page_id edit (LogCatPageImage).
+        // this core. The re-fetch is a re-entrant hit on the tail this loop
+        // still pins through `bytes` (frames are slots that never move), so
+        // it names the same frame. The edit itself travels as a full page
+        // image: no record type describes a next_page_id edit
+        // (LogCatPageImage).
         auto tail_again = store.Get(current);
         if (!tail_again.ok()) return tail_again.status();
         heap::PageView(tail_again.value().bytes()).set_next_page_id(new_id);
@@ -1100,7 +1087,8 @@ void Catalog::InvalidateAfterCompensation() {
 StatusOr<std::uint64_t> Catalog::RetireDeleteMarks(
     const std::function<bool(std::uint64_t deleter)>& settled, std::uint64_t* remaining_out) {
     std::uint64_t retired = 0;
-    for (const PageId root : kAllCatalogPages) {
+    for (const CatalogRoot& relation : kCatalogRoots) {
+        const PageId root = relation.page;
         Status inner = Status::OK();
         // **kWrite**, and one forward pass per page is enough:
         // `RetireSlot` sets the dead flag in place, so it never renumbers
@@ -3123,6 +3111,57 @@ StatusOr<std::pair<PageId, std::uint8_t>> Catalog::ClaimPatternWaystoneRoot(
     return std::make_pair(in_force, depth_in_force);
 }
 
+Status Catalog::ClearEveryPatternWaystoneRoot() {
+    // **One pass over the chain, not one `ClaimPatternWaystoneRoot` per
+    // row.** Each claim walks `sys.patterns` from its root to its row
+    // (`ForFirstRow`), so clearing every row that way costs rows x pages,
+    // and this runs at every mount (`DiscardAdvisoryState`). The write per
+    // row is the claim's clearing arm exactly: in place, logged, and the
+    // cache updated only once the page agrees.
+    //
+    // The version filter is the claim's, for its reason: a row of another
+    // fingerprint revision is unreachable by any statement and is not one
+    // `ClaimPatternWaystoneRoot` writes.
+    Status inner = Status::OK();
+    Status walked = heap::ChainVisit(
+        store_, kCatalogPagePatterns, storage::PageAccess::kWrite,
+        [&](PageId page_id, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;
+                }
+                inner = tuple.status();
+                return tuple.status();
+            }
+            auto row = SysPatternRow::Decode(tuple.value().payload);
+            if (!row.ok()) {
+                inner = row.status();
+                return row.status();
+            }
+            SysPatternRow& pattern = row.value();
+            if (!parser::IsCurrentFingerprintVersion(pattern.fingerprint_version) ||
+                !HasWaystoneDirectory(pattern)) {
+                return storage::VisitControl::kContinue;
+            }
+            pattern.waystone_root = kInvalidPageId;
+            pattern.dir_depth = 0;
+            const auto encoded = pattern.Encode();
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, slot, encoded,
+                                           wal::kNoTxnId, tuple.value().trx_id,
+                                           tuple.value().undo_ptr);
+                !s.ok()) {
+                inner = s;
+                return s;
+            }
+            cache_.UpdatePatternWaystone(pattern.fetch_id, kInvalidPageId, 0);
+            return storage::VisitControl::kContinue;
+        });
+    if (!inner.ok()) return inner;
+    return walked;
+}
+
 Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,
                               std::uint64_t last_seen, std::uint64_t count) {
     if (kind == kAccessKindUnset) {
@@ -3557,7 +3596,7 @@ Status Catalog::DiscardAccessStats() {
     // **A page is the chain's by what it says, not by where its id falls**:
     // the head is page 11, and every page after it is a heap page owned by
     // `sys.access_stats` - `InsertRow` stamps each growth page with the
-    // relation's oid (`kCatalogRootOwners`). Page 11 met again past the
+    // relation's oid (`kCatalogRoots`). Page 11 met again past the
     // head is a cycle, and its own owner, bootstrap's 0, says so.
     //
     // **Bounded, because the damaged path comes through here**: a link to a

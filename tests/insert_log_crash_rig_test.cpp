@@ -812,7 +812,7 @@ TEST(InsertLogCrashRigTest, ASpillingInsertAndASpillingUpdateBothFinish) {
 
 TEST(InsertLogCrashRigTest, AnotherCoresFlushOfANewCatalogPageWaitsForItsRecord) {
     // `Catalog::InsertRow`'s new-page arm places a row on the page
-    // `AllocateCatalogPage` just created, fires the DDL undo hook, and then
+    // `CreateNew` just handed it, fires the DDL undo hook, and then
     // appends the row's `HEAP_INSERT`, whose stamp is the page's first
     // `page_lsn`. Core 1 writes that page back from inside the hook - the
     // gap between the row and its record. With the page held from its
@@ -823,7 +823,9 @@ TEST(InsertLogCrashRigTest, AnotherCoresFlushOfANewCatalogPageWaitsForItsRecord)
     // ahead of the record, and the stamp that follows only re-dirties the
     // frame.
     TempDir snap;
-    const PageId fresh = catalog::kCatalogOverflowFirst;
+    // The new page's id is whatever the free map hands out, so it is read
+    // off the hook: the first row placed on a page past the fixed roots.
+    PageId fresh = kInvalidPageId;
     bool flushed_in_the_gap = false;
     {
         auto rig = OpenFileRig();
@@ -842,14 +844,24 @@ TEST(InsertLogCrashRigTest, AnotherCoresFlushOfANewCatalogPageWaitsForItsRecord)
             schema.columns.push_back(col);
         }
 
-        // Unallocated before the loop, so the hook's first event on it is
-        // the new-page arm's. Were it the tail arm's, which holds its page
-        // across the hook, the cell would pass with or without the fix.
-        ASSERT_FALSE(rig->store().IsAllocated(fresh));
+        // No catalog chain has grown before the loop, so the first row on a
+        // page past the roots is the new-page arm's. Were it the tail arm's,
+        // which holds its page across the hook, the cell would pass with or
+        // without the fix.
+        for (const catalog::CatalogRoot& root : catalog::kCatalogRoots) {
+            auto bytes = rig->store().GetForRead(root.page);
+            ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+            ASSERT_EQ(heap::PageView(bytes.value().bytes()).next_page_id(), kInvalidPageId)
+                << "catalog root " << root.page << " has grown already";
+        }
         std::unique_ptr<OtherCore> other;
         // One-shot by `other`.
         cat.SetDdlUndoHook([&](const catalog::Catalog::DdlUndoEvent& event) {
-            if (other != nullptr || event.page_id != fresh) return Status::OK();
+            if (other != nullptr || event.kind != catalog::Catalog::DdlUndoEvent::Kind::kInsert ||
+                event.page_id < kFirstUserPageId) {
+                return Status::OK();
+            }
+            fresh = event.page_id;
             other = std::make_unique<OtherCore>([&] {
                 const PageId only[] = {fresh};
                 (void)rig->store().WriteBack(only);
@@ -863,8 +875,7 @@ TEST(InsertLogCrashRigTest, AnotherCoresFlushOfANewCatalogPageWaitsForItsRecord)
             ASSERT_TRUE(created.ok()) << created.status().message();
         }
         cat.SetDdlUndoHook(nullptr);
-        ASSERT_NE(other, nullptr) << "the catalog never grew onto page " << fresh
-                                  << "; the cell tested nothing";
+        ASSERT_NE(other, nullptr) << "the catalog never grew; the cell tested nothing";
         other->Join();
         // The file holds what the writeback put there and nothing since.
         ASSERT_TRUE(rig->Snapshot(snap.path).ok());

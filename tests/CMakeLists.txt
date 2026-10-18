@@ -182,6 +182,7 @@ add_executable(kds_tests
     bulk_insert_test.cpp
     drop_table_test.cpp
     drop_table_reclaim_test.cpp
+    catalog_page_ceiling_test.cpp
     backup_restore_test.cpp
     backup_archive_test.cpp
     in_run_reclaim_test.cpp

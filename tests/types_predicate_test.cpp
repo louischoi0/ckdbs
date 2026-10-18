@@ -47,9 +47,8 @@ protected:
         //
         // Note the store above is constructed with `kFirstUserPageId`, not
         // defaulted. `InMemoryPageStore`'s default first page is 1, which
-        // is inside the catalog's fixed pages (0..13) and the reserved
-        // catalog-overflow range (14..127), so allocation hands out ids
-        // already in use and the *third* `CREATE TABLE` fails with "page id
+        // is below the catalog's fixed roots (4..16), so allocation walks
+        // into ids already in use and a `CREATE TABLE` fails with "page id
         // already in use" - at any bootstrap page count, with the whole
         // store free. Every other dispatcher-level fixture passes the
         // constant; this one did not, which is the entire bug.

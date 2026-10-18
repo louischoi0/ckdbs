@@ -226,10 +226,10 @@ TEST(SysPatternRowTest, CatalogConstantsDoNotCollide) {
     EXPECT_LT(kSysPatternsTable, kUserOidStart);
 
     // The page half of this test is gone: it hand-checked five of what are
-    // now twelve roots, and well_known.hpp's
-    // `CatalogRootsAreDistinctAndBelowOverflow()` static_assert covers all
-    // of them - distinctness and the sub-user-range bound - at compile
-    // time, over the one list every root already joins.
+    // now twelve roots, and catalog.cpp's static_assert over
+    // well_known.hpp's `CatalogRootsAreDistinctAndFixed()` covers all of
+    // them - distinctness and the sub-user-range bound - at compile time,
+    // over the one list every root already joins.
 }
 
 // ---- sys.tables ------------------------------------------------------

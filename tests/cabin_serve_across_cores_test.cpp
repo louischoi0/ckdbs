@@ -53,7 +53,7 @@ TEST(CabinServeAcrossCores, AQueryServedFromThisCoresSetSeesARowAnotherCoreWrote
     ASSERT_EQ(d0.Dispatch("CREATE CABIN ON r0(v)").response.substr(0, 3), "CRE");
     auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "r0");
     ASSERT_TRUE(oid.ok());
-    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(rig->store().Flush().ok());
 
     // One row of v=7 written here, then the read that banks core 0's set
     // for the value 7 - from a walk, so the set is complete as of now.
@@ -120,7 +120,7 @@ TEST(CabinServeAcrossCores, ASetBankedByAPeerServesThisCoresQuery) {
     ASSERT_EQ(d0.Dispatch("CREATE CABIN ON r0(v)").response.substr(0, 3), "CRE");
     auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "r0");
     ASSERT_TRUE(oid.ok());
-    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(rig->store().Flush().ok());
     ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES (7)").response.substr(0, 8), "INSERTED");
 
     // Core 1 reads first, and a **declared** Cabin records on the first
@@ -165,7 +165,7 @@ TEST(CabinServeAcrossCores, AnExpressionCabinsDayIsWitnessedByAPeersWrites) {
     ASSERT_EQ(d0.Dispatch("CREATE TABLE r0 (id int64, ts timestamp) BTREE").response.substr(0, 3),
               "CRE");
     ASSERT_EQ(d0.Dispatch("CREATE CABIN ON r0 (DATE(ts))").response.substr(0, 3), "CRE");
-    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(rig->store().Flush().ok());
     ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES ('2026-10-01 01:00:00')").response.substr(0, 8),
               "INSERTED");
     ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES ('2026-10-05 01:00:00')").response.substr(0, 8),

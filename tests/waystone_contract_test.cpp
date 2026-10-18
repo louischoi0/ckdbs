@@ -13,6 +13,7 @@
 #include "kds/stats/trail_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
+#include "catalog_chain_pages.hpp"
 
 // **The advisory contract** (docs/spec/waystone-concpets.md §11-3 and §11-4,
 // workplan P12). The spec calls §11-3 "the test that must never be allowed
@@ -265,11 +266,16 @@ void ExpectSame(const std::vector<std::string>& got, const std::vector<std::stri
 
 // What a relayout mover will do to every page it touches, done by hand
 // because no mover exists (docs/spec/physical-optimizer.md §6). Sweeps the
-// user id range; absent ids just miss.
+// user id range; absent ids just miss, and a catalog chain's growth page,
+// which shares the range, is passed by: a mover reorganizes user relations.
 std::size_t BumpEveryUserPage(Instance& db) {
+    auto catalog_pages = testing_catalog::EveryCatalogPage(db.store());
+    EXPECT_TRUE(catalog_pages.ok()) << catalog_pages.status().message();
+    if (!catalog_pages.ok()) return 0;
     std::size_t bumped = 0;
     const PageId end = static_cast<PageId>(kFirstUserPageId + db.store().page_count());
     for (PageId id = kFirstUserPageId; id < end; ++id) {
+        if (catalog_pages.value().count(id) != 0) continue;
         auto page = db.store().Get(id);
         if (!page.ok()) continue;
         storage::BumpRelayoutEpoch(page.value().bytes());

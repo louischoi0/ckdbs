@@ -494,10 +494,11 @@ TEST_F(MountRecoveryTest, RecoveringTwiceIsANoOp) {
 // ---- RC09: RV3's audit, and what SHOW META says about it -----------------
 
 // A store that can be told to stop serving user pages, which is what a crash
-// that lost a relation's pages leaves behind. Catalog pages live below
-// `kFirstUserPageId` (in_memory_page_store.hpp), so the fault keeps the catalog
-// itself readable - the audit has to be able to *list* relations in order to
-// report that it cannot open them.
+// that lost a relation's pages leaves behind. The fault takes only a page a
+// user relation owns (`owner_oid` >= `kUserOidStart`, page.md §2a): a catalog
+// chain's growth pages share the user id range but carry a catalog oid, so the
+// catalog itself stays readable - the audit has to be able to *list* relations
+// in order to report that it cannot open them.
 class UserPagesGone final : public storage::PageStore {
 public:
     explicit UserPagesGone(storage::InMemoryPageStore& inner) noexcept : inner_(inner) {}
@@ -520,7 +521,11 @@ public:
     }
 
 private:
-    bool Failing(PageId page_id) const noexcept { return armed_ && page_id >= kFirstUserPageId; }
+    bool Failing(PageId page_id) const noexcept {
+        if (!armed_ || page_id < kFirstUserPageId) return false;
+        auto bytes = inner_.GetForReadUnpinned(page_id);
+        return bytes.ok() && storage::GetOwnerOid(bytes.value()) >= catalog::kUserOidStart;
+    }
 
     storage::InMemoryPageStore& inner_;
     bool armed_ = false;

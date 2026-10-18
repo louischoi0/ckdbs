@@ -81,7 +81,7 @@ struct TwoCatalogs {
     std::array<std::unique_ptr<Catalog>, kThreads> cores;
 
     TwoCatalogs() {
-        // Past the fixed catalog pages (4-15), as `kFirstUserPageId` is.
+        // Past the fixed catalog roots (4-16), as `kFirstUserPageId` is.
         store = ArmedStore(device, /*first_new_page_id=*/128);
         for (auto& c : cores) {
             c = std::make_unique<Catalog>(*store);

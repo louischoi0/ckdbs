@@ -200,7 +200,7 @@ TEST(ReadBorrowRigTest, ADropOnCoreZeroWaitsForAPositionedReaderOnAPeer) {
 
     auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "r");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
-    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(rig->store().Flush().ok());
 
     Reader reader;
     Dropper drop;
