@@ -819,6 +819,16 @@ struct SortKey {
     bool descending = false;
 };
 
+// What the join planner says of a searched block (CC-S3): the rows it
+// estimated each executed slot passes on, the statistics generation the
+// estimates read (0: none published), and the chosen order's cost against
+// the written order's (1 when the written order runs).
+struct PlanNote {
+    std::vector<double> estimated_rows;
+    std::uint64_t generation = 0;
+    double cost_ratio = 1.0;
+};
+
 // The relations a block the join planner searches may hold and still have
 // its relations named for priors (`StepChain::planned_relations`).
 inline constexpr std::size_t kMaxPlannedRelations = 16;
@@ -929,6 +939,9 @@ struct StepChain {
     // Every searched block's relations in written order, keyed or not - the
     // steward seeds a prior for each the snapshot lacks (plan-stats.md PS2).
     std::vector<catalog::Oid> planned_relations;
+    // What ANALYZE prints of a searched block's choice (CC-S3); set with
+    // `planned_relations`, read by the plan printer alone.
+    std::optional<PlanNote> plan_note;
 };
 
 // **The one walk of a step tree.** Every step under a chain, sub-chain or

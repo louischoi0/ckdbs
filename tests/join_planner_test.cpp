@@ -406,5 +406,272 @@ TEST_F(JoinPlannerTest, EveryAccessKindIsJudgedForTheOrderByElision) {
     }
 }
 
+// ---- CC-S3: statistics into the order ---------------------------------------
+
+// Scenario 1's compare-all: 8 models, 2,872 results, model_id round robin.
+class StatisticsPlannerTest : public JoinPlannerTest {
+protected:
+    void FillModels() {
+        Ok("CREATE TABLE models (id int64, name int64) BTREE");
+        Ok("CREATE TABLE results (id int64, model_id int64, pnl int64) BTREE");
+        for (int m = 1; m <= 8; ++m) Ok("INSERT INTO models VALUES (" + std::to_string(m) + ")");
+        for (int r = 0; r < 64; ++r) {
+            Ok("INSERT INTO results VALUES (" + std::to_string(1 + r % 8) + ", " +
+               std::to_string(r) + ")");
+        }
+        models_ = OidOf("models");
+        results_ = OidOf("results");
+    }
+
+    catalog::Oid OidOf(const std::string& name) {
+        auto oid = boot_->catalog.ResolveRelation("", name, catalog::kNamespacePublic, 0, nullptr);
+        EXPECT_TRUE(oid.ok()) << name;
+        return oid.ok() ? oid.value() : 0;
+    }
+
+    // A planned compile reading `stats_`.
+    exec::StepChain Planned(const std::string& sql) {
+        exec::PlanOptions options;
+        options.statistics = &source_;
+        return Compile(sql, &options);
+    }
+
+    std::uint64_t FetchIdOf(const std::string& sql) {
+        parser::Parser parser(sql);
+        EXPECT_TRUE(parser.Parse().ok());
+        return parser.fingerprint().has_value() ? parser.fingerprint()->fetch_id : 0;
+    }
+
+    static constexpr const char* kCompareAll =
+        "SELECT results.pnl, models.name FROM results JOIN models ON results.model_id = models.id";
+
+    stats::PlanStats stats_{1};
+    stats::PlanStatsSource source_{&stats_};
+    catalog::Oid models_ = 0;
+    catalog::Oid results_ = 0;
+};
+
+TEST_F(StatisticsPlannerTest, AnEmptySnapshotCompilesTheDataFreeChain) {
+    // The regression gate: with nothing published, every chain is S1's.
+    FillModels();
+    exec::PlanOptions data_free;
+    const exec::StepChain a = Compile(kCompareAll, &data_free);
+    const exec::StepChain b = Planned(kCompareAll);
+    ASSERT_EQ(a.steps.size(), b.steps.size());
+    for (std::size_t k = 0; k < a.steps.size(); ++k) {
+        EXPECT_EQ(a.steps[k].step_id, b.steps[k].step_id);
+        EXPECT_EQ(a.steps[k].kind, b.steps[k].kind);
+        EXPECT_EQ(a.steps[k].build.has_value(), b.steps[k].build.has_value());
+    }
+}
+
+TEST_F(StatisticsPlannerTest, RelationPriorsPutTheSmallRelationFirstAndBuildTheLarge) {
+    // CC-S0's flip: priors of 8 and 2,872 rows make models drive and the
+    // results walked once into a build, where every relation priced at the
+    // constant keeps results driving with a probe per row.
+    FillModels();
+    EXPECT_EQ(Planned(kCompareAll).steps[0].step_id, 0u) << "data-free: results drives";
+    stats_.PublishForTest({{models_, stats::BandOf(8)}, {results_, stats::BandOf(2872)}}, {});
+    const exec::StepChain chain = Planned(kCompareAll);
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[0].step_id, 1u) << "models drives";
+    EXPECT_TRUE(chain.steps[1].build.has_value()) << "results is built";
+    ASSERT_TRUE(chain.plan_note.has_value());
+    EXPECT_EQ(chain.plan_note->generation, stats_.generation());
+    EXPECT_LT(chain.plan_note->cost_ratio, 0.5);
+    // Through the dispatcher, the statistics' plan runs and returns the rows.
+    dispatcher_->set_plan_stats(&stats_);
+    const std::string plan = Plan(kCompareAll);
+    EXPECT_NE(plan.find("reordered=1"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("planned order=planned gen="), std::string::npos) << plan;
+    EXPECT_EQ(Rows(kCompareAll).size(), 64u);
+    dispatcher_->set_plan_stats(nullptr);
+}
+
+TEST_F(StatisticsPlannerTest, ABuildPastAQuarterOfTheCapIsPricedAsTheWalk) {
+    // CC-Q9: with 64 models, results of 10,000 rows build under a quarter of
+    // the 65,536-row cap and the order flips; of 20,000 rows they do not,
+    // and a per-row walk of them costs more than results driving.
+    FillModels();
+    stats_.PublishForTest({{models_, stats::BandOf(64)}, {results_, stats::BandOf(10000)}}, {});
+    EXPECT_EQ(Planned(kCompareAll).steps[0].step_id, 1u) << "a build within the margin";
+    stats_.PublishForTest({{models_, stats::BandOf(64)}, {results_, stats::BandOf(20000)}}, {});
+    EXPECT_EQ(Planned(kCompareAll).steps[0].step_id, 0u) << "past cap / 4: written";
+}
+
+TEST_F(StatisticsPlannerTest, ASnapshotThatKnowsNothingOfABlockPricesItAsNoSnapshotDoes) {
+    // The margins turn on a fact about the block, never on a snapshot
+    // existing: b's estimated build (30,000 rows) lies between a quarter of
+    // the cap and the cap, so a cap that tightened on any snapshot would
+    // move this plan.
+    Ok("CREATE TABLE ja (id int64, x int64) BTREE");
+    Ok("CREATE TABLE jb (id int64, x int64, y int64) BTREE");
+    Ok("CREATE TABLE other (id int64) BTREE");
+    const std::string sql = "SELECT ja.id FROM jb JOIN ja ON ja.x = jb.x WHERE jb.y > 5";
+    const exec::StepChain cold = Planned(sql);
+    stats_.PublishForTest({{OidOf("other"), stats::BandOf(5)}}, {});
+    const exec::StepChain warm = Planned(sql);
+    ASSERT_EQ(cold.steps.size(), warm.steps.size());
+    for (std::size_t k = 0; k < cold.steps.size(); ++k) {
+        EXPECT_EQ(cold.steps[k].step_id, warm.steps[k].step_id);
+        EXPECT_EQ(cold.steps[k].build.has_value(), warm.steps[k].build.has_value());
+    }
+    ASSERT_TRUE(warm.plan_note.has_value());
+    EXPECT_EQ(warm.plan_note->cost_ratio, cold.plan_note->cost_ratio);
+}
+
+TEST_F(StatisticsPlannerTest, AJoinsEstimatedSizeIsTheSameFromEitherSide) {
+    // A non-key join priced from the key side: models -> results and
+    // results -> models estimate one size, 2,872 rows, under the priors.
+    FillModels();
+    stats_.PublishForTest({{models_, stats::BandOf(8)}, {results_, stats::BandOf(2872)}}, {});
+    exec::PlanOptions options;
+    options.statistics = &source_;
+    for (const char* sql : {
+             "SELECT results.pnl FROM results JOIN models ON results.model_id = models.id",
+             "SELECT results.pnl FROM models JOIN results ON results.model_id = models.id",
+         }) {
+        const exec::StepChain chain = Compile(sql, &options);
+        ASSERT_TRUE(chain.plan_note.has_value()) << sql;
+        EXPECT_NEAR(chain.plan_note->estimated_rows.back(), stats::BandCentre(stats::BandOf(2872)),
+                    1.0)
+            << sql;
+    }
+}
+
+TEST_F(StatisticsPlannerTest, ADeclineFactKeepsTheOrderTheBuildWouldNeed) {
+    // CC-Q9: the build at results' written position declined once, so no
+    // order that needs it is priced as a build again. With 64 models a
+    // per-row walk of results costs more than results driving, so the
+    // order the build made cheap is not taken.
+    FillModels();
+    stats::PlanKey key;
+    key.fetch_id = FetchIdOf(kCompareAll);
+    key.n = 2;
+    key.oids = {results_, models_, 0, 0};
+    exec::PlanOptions options;
+    options.statistics = &source_;
+    options.fetch_id = key.fetch_id;
+    const std::vector<std::pair<catalog::Oid, std::int16_t>> priors{
+        {models_, stats::BandOf(64)}, {results_, stats::BandOf(2872)}};
+    stats_.PublishForTest(priors, {});
+    EXPECT_EQ(Compile(kCompareAll, &options).steps[0].step_id, 1u) << "the control: models drives";
+    stats::PlanStatsSnapshot::Posterior declined;
+    declined.declines = 0b01;  // results, written position 0
+    stats_.PublishForTest(priors, {{key, declined}});
+    EXPECT_EQ(Compile(kCompareAll, &options).steps[0].step_id, 0u) << "results drives, as written";
+}
+
+TEST_F(StatisticsPlannerTest, AZeroCardinalityNeverSkipsAStep) {
+    // [quiet-wrong] guard (CC §7): a posterior of no rows is clamped to one
+    // and prices an order; the order still walks, and the reply is whole.
+    FillModels();
+    stats::PlanStatsSnapshot::Posterior empty;
+    for (const unsigned mask : {0b01u, 0b10u, 0b11u}) {
+        empty.present = static_cast<std::uint16_t>(empty.present | (1u << mask));
+        empty.band[mask] = stats::BandOf(0);
+    }
+    stats::PlanKey key;
+    key.fetch_id = FetchIdOf(kCompareAll);
+    key.n = 2;
+    key.oids = {results_, models_, 0, 0};
+    stats_.PublishForTest({{models_, stats::BandOf(0)}, {results_, stats::BandOf(0)}},
+                          {{key, empty}});
+    exec::PlanOptions options;
+    options.statistics = &source_;
+    options.fetch_id = key.fetch_id;
+    const exec::StepChain chain = Compile(kCompareAll, &options);
+    ASSERT_TRUE(chain.plan_note.has_value());
+    for (const double rows : chain.plan_note->estimated_rows) {
+        EXPECT_EQ(rows, 1.0) << "the clamped posterior was read";
+    }
+    dispatcher_->set_plan_stats(&stats_);
+    EXPECT_EQ(Rows(kCompareAll).size(), 64u);
+    dispatcher_->set_plan_stats(nullptr);
+}
+
+TEST_F(StatisticsPlannerTest, ASelfJoinRunsEitherOrderUnderTwoGenerationsWithTheSameRows) {
+    // PS11 and CB-Q3 across generations: one relation at two written
+    // positions, a posterior saying first that position 0 alone is tiny and
+    // then that position 1 is. The driver follows; the step ids stay the
+    // written positions; the rows do not move.
+    FillModels();
+    const std::string sql =
+        "SELECT a.pnl, b.pnl FROM results AS a JOIN results AS b ON a.model_id = b.model_id "
+        "WHERE a.pnl < 9 AND b.pnl < 9";
+    stats::PlanKey key;
+    key.fetch_id = FetchIdOf(sql);
+    key.n = 2;
+    key.oids = {results_, results_, 0, 0};
+    exec::PlanOptions options;
+    options.statistics = &source_;
+    options.fetch_id = key.fetch_id;
+    std::vector<std::uint32_t> drivers;
+    std::vector<std::vector<std::string>> rows;
+    dispatcher_->set_plan_stats(&stats_);
+    for (const unsigned small : {0b01u, 0b10u}) {
+        stats::PlanStatsSnapshot::Posterior p;
+        p.present = static_cast<std::uint16_t>((1u << 0b01) | (1u << 0b10));
+        p.band[0b01] = stats::BandOf(small == 0b01u ? 1 : 50000);
+        p.band[0b10] = stats::BandOf(small == 0b10u ? 1 : 50000);
+        stats_.PublishForTest({{results_, stats::BandOf(50000)}}, {{key, p}});
+        const exec::StepChain chain = Compile(sql, &options);
+        ASSERT_EQ(chain.steps.size(), 2u);
+        drivers.push_back(chain.steps[0].step_id);
+        rows.push_back(Rows(sql));
+    }
+    dispatcher_->set_plan_stats(nullptr);
+    EXPECT_EQ(drivers, (std::vector<std::uint32_t>{0, 1}));
+    EXPECT_EQ(rows[0], rows[1]);
+    EXPECT_FALSE(rows[0].empty());
+}
+
+TEST_F(StatisticsPlannerTest, AnAggregatedStatementCompilesItsTwinsStepsUnderTheSamePriors) {
+    // AG1 under a snapshot: priors are per relation, so a fold and its
+    // unaggregated twin read the same ones and compile the same steps (they
+    // key different posteriors - GROUP BY is part of the fetch).
+    FillModels();
+    stats_.PublishForTest({{models_, stats::BandOf(8)}, {results_, stats::BandOf(2872)}}, {});
+    const exec::StepChain plain = Planned(
+        "SELECT models.name FROM results JOIN models ON results.model_id = models.id");
+    const exec::StepChain folded = Planned(
+        "SELECT models.name, COUNT(*) FROM results JOIN models ON results.model_id = models.id "
+        "GROUP BY models.name");
+    ASSERT_EQ(plain.steps.size(), folded.steps.size());
+    for (std::size_t k = 0; k < plain.steps.size(); ++k) {
+        EXPECT_EQ(plain.steps[k].step_id, folded.steps[k].step_id);
+        EXPECT_EQ(plain.steps[k].kind, folded.steps[k].kind);
+    }
+}
+
+TEST_F(StatisticsPlannerTest, AboveFourRelationsTheGreedyOrderReadsPriorsAndKeepsTheRows) {
+    // Five relations, ordered greedily from priors alone; the rows are the
+    // data-free plan's.
+    FillModels();
+    for (const char* t : {"t3", "t4", "t5"}) {
+        Ok(std::string("CREATE TABLE ") + t + " (id int64, x int64) BTREE");
+        for (int i = 0; i < 9; ++i) {
+            Ok(std::string("INSERT INTO ") + t + " VALUES (" + std::to_string(i) + ")");
+        }
+    }
+    const std::string sql =
+        "SELECT results.pnl, t5.x FROM results JOIN models ON results.model_id = models.id "
+        "JOIN t3 ON t3.id = models.id JOIN t4 ON t4.id = t3.id JOIN t5 ON t5.id = t4.id";
+    const std::vector<std::string> cold = Rows(sql);
+    stats_.PublishForTest({{models_, stats::BandOf(8)},
+                           {results_, stats::BandOf(2872)},
+                           {OidOf("t3"), stats::BandOf(9)},
+                           {OidOf("t4"), stats::BandOf(9)},
+                           {OidOf("t5"), stats::BandOf(9)}},
+                          {});
+    const exec::StepChain chain = Planned(sql);
+    ASSERT_TRUE(chain.plan_note.has_value());
+    EXPECT_EQ(chain.plan_note->generation, stats_.generation());
+    EXPECT_FALSE(chain.planned.has_value()) << "no posterior key above four relations";
+    dispatcher_->set_plan_stats(&stats_);
+    EXPECT_EQ(Rows(sql), cold);
+    dispatcher_->set_plan_stats(nullptr);
+}
+
 }  // namespace
 }  // namespace kds::server

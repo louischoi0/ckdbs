@@ -455,3 +455,34 @@ The close results go to bench/v3.2.0/results-cc-close-<describe>.md. It states t
   no plan reads it yet), a height-3 prior test (needs ~130,000 rows; the
   close measures `est_rows` against true counts on the scenarios' trees).
   Overhead not measured; measured at the milestone's close.
+- **CC-S3**: statistics into the order. A relation's prior replaces the
+  constant rows, a block's `card(T)` replaces the product of selectivities
+  for a measured prefix, `card({w})` floors a relation's rows and prices
+  its build, a decline fact prices that build as the walk, and an order must
+  beat the written one by 10 % once a fact prices the block. The compile
+  pins the snapshot only after the tuple key chain's skip. ANALYZE prints
+  `planned order= gen= switch= est=`. The review (55 agents; 24 survived)
+  found four bugs, all fixed: **a non-key join's selectivity was 1/rows of
+  the inner relation**, so a join's estimated size depended on its order -
+  now 1/rows of the earlier side's relation where its column is that
+  relation's tuple key, else 1/max of the two, symmetric with the key join;
+  **the build's quarter-cap margin turned on any published snapshot** - it
+  and the switch margin now turn on one `informed` bit, a fact about this
+  block; **ANALYZE cast an unbounded double to an integer**; **a key join's
+  matches could exceed a row** once `card({w})` raised `own` above the
+  prior. Also applied: priors resolved once a compile (`written_rows`), the
+  estimate's step rows filled only for the kept chain, the span band read
+  through `stats::BandOf`, decline facts lapsing after 60 s (PS3), estimates
+  labelled by step id, one shared `tests/learn_plan_stats.hpp`, and the
+  stale `f(shape, catalog)` lines in aggregate.md, index.md §12.3,
+  join-inner-build.md §3, step_compiler.cpp/.hpp and the manual. Tests
+  added: the cap/4 boundary, a snapshot ignorant of the block changing
+  nothing, a join's size equal from both sides, the clamped zero
+  posterior read, a self-join under two generations with the same rows,
+  AG1 under shared priors, a five-relation greedy block, and learned-
+  statistics cells in the index, Cabin and Waystone suites that assert a
+  plan read the statistics. **Rejected**: an inner-build suite cell - its
+  fixture compiles written chains, so the planner never reaches it.
+  **Cut, with reason**: the s2 c-first flip and the 10 % margin's own cell
+  (the close measures the scenario shapes; the margin is one comparison).
+  Overhead not measured; measured at the milestone's close.

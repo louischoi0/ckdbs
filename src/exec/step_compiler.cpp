@@ -987,11 +987,12 @@ bool HasUnindexedEqualityFilter(const catalog::TableAccess& access, const Step& 
 
 // ---- Index selection (docs/spec/index.md §9) ----------------------------
 //
-// **`f(shape, catalog)`, and nothing else.** No statistics, no cardinality
-// estimate, no property of the data - because a recorded pattern must not
-// compile differently as the rows change, or `pattern_id` stops naming a
-// plan. Same argument `CabinProbeOf` gives for taking the *first* cabined
-// equality rather than the most selective one.
+// **`f(shape, catalog)` given the step's predecessors, and nothing else.**
+// No statistics, no cardinality estimate, no property of the data chooses
+// an index - the join planner's statistics move only a block's order
+// (CC-S3), which can change the predecessors. Same argument `CabinProbeOf`
+// gives for taking the *first* cabined equality rather than the most
+// selective one.
 
 // The inclusive literal bounds the residual pins `col_pos` between, if any.
 // `BETWEEN` lowers to `>=` and `<=`, which is the only form the grammar can
@@ -2040,6 +2041,9 @@ constexpr std::size_t kMaxExhaustiveJoinRelations = stats::kMaxPosteriorRelation
 // A cheaper order must win by more than this fraction, so float noise
 // between two equal costs never moves a statement off its written order.
 constexpr double kCostTieMargin = 1e-9;
+// The margin once a published statistic prices the block (CC-Q8): a band is
+// +-30 % wide, and an order that wins by less is inside its noise.
+constexpr double kStatsSwitchMargin = 0.10;
 
 bool HasSubquery(const parser::BoolExpr& node) {
     if (node.op == parser::BoolExpr::Op::kLeaf) return node.leaf.has_subquery();
@@ -2161,14 +2165,46 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     if (std::all_of(best.value().steps.begin(), best.value().steps.end(), is_descent)) {
         return best;
     }
-    // The written order's relations, for the identifier bounds (CC-Q11).
+    // The key the run's counts fold under and the posteriors are found by
+    // (CC-S2): a searched block of at most `kMaxPosteriorRelations`
+    // relations with a fetch id.
+    std::optional<stats::PlanKey> key;
+    if (plan->fetch_id != 0 && refs.size() <= stats::kMaxPosteriorRelations) {
+        key.emplace();
+        key->fetch_id = plan->fetch_id;
+        key->n = static_cast<std::uint8_t>(refs.size());
+        for (std::size_t w = 0; w < refs.size(); ++w) key->oids[w] = scope.relations[w].access->oid;
+    }
+    // The published statistics, pinned here and only here - after the
+    // descent skip, so a point read never touches them - and held for the
+    // compile (CC-S3).
+    const std::shared_ptr<const stats::PlanStatsSnapshot> snapshot =
+        plan->statistics != nullptr ? plan->statistics->Pin() : nullptr;
+
+    // The written order's relations, for the identifier bounds (CC-Q11),
+    // and their rows: a published prior, or the constant (CC-S3). Resolved
+    // once here, not per order.
     std::vector<const catalog::TableAccess*> written_access;
-    for (const BoundRelation& relation : scope.relations) written_access.push_back(relation.access);
+    std::vector<double> written_rows;
     CostInputs inputs;
+    for (const BoundRelation& relation : scope.relations) {
+        written_access.push_back(relation.access);
+        std::optional<double> prior;
+        if (snapshot != nullptr) prior = snapshot->RelationRows(relation.access->oid);
+        if (prior.has_value()) inputs.informed = true;
+        written_rows.push_back(prior.has_value() ? std::max(*prior, 1.0) : kAssumedRelationRows);
+    }
     inputs.limits = *plan;
     inputs.written_sorted = best.value().sorted();
     inputs.base_step_id = base_step_id;
     inputs.written_access = written_access;
+    inputs.written_rows = written_rows;
+    if (snapshot != nullptr && key.has_value()) inputs.posterior = snapshot->Find(*key);
+    if (inputs.posterior != nullptr) inputs.informed = true;
+    // Once a published fact prices the block an order must beat the
+    // written one by `kStatsSwitchMargin`, so a band's movement within its
+    // noise does not move a plan (CC-Q8).
+    const double margin = inputs.informed ? kStatsSwitchMargin : kCostTieMargin;
     const double written_cost = EstimateChain(best.value(), inputs).cost;
 
     // CC-Q8: the minimum over every order - the first among equals in
@@ -2177,7 +2213,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // the written order rather than the best so far, the winner does not
     // depend on enumeration order.
     std::optional<StepChain> cheapest;
-    double cheapest_cost = written_cost * (1.0 - kCostTieMargin);
+    double cheapest_cost = written_cost * (1.0 - margin);
     const auto cost_of = [&](const std::vector<std::size_t>& candidate)
         -> std::optional<std::pair<double, StepChain>> {
         auto chain = compile_order(candidate);
@@ -2220,21 +2256,22 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         }
         consider(placed);
     }
-    StepChain chosen = cheapest.has_value() ? std::move(*cheapest) : std::move(best.value());
+    const bool reordered = cheapest.has_value();
+    StepChain chosen = reordered ? std::move(*cheapest) : std::move(best.value());
     if (refs.size() <= kMaxPlannedRelations) {
         for (const BoundRelation& relation : scope.relations) {
             chosen.planned_relations.push_back(relation.access->oid);
         }
     }
-    // The key the run's counts fold under (CC-S2): a searched block of at
-    // most `kMaxPosteriorRelations` relations with a fetch id.
-    if (plan->fetch_id != 0 && refs.size() <= stats::kMaxPosteriorRelations) {
-        stats::PlanKey key;
-        key.fetch_id = plan->fetch_id;
-        key.n = static_cast<std::uint8_t>(refs.size());
-        for (std::size_t w = 0; w < refs.size(); ++w) key.oids[w] = scope.relations[w].access->oid;
-        chosen.planned = key;
-    }
+    chosen.planned = key;
+    // What ANALYZE says of the choice: each slot's estimated rows, the
+    // generation they read and the chosen cost against the written order's.
+    PlanNote note;
+    note.generation = snapshot != nullptr ? snapshot->generation() : 0;
+    inputs.step_rows = &note.estimated_rows;
+    const double chosen_cost = EstimateChain(chosen, inputs).cost;
+    note.cost_ratio = reordered && written_cost > 0 ? chosen_cost / written_cost : 1.0;
+    chosen.plan_note = std::move(note);
     return chosen;
 }
 

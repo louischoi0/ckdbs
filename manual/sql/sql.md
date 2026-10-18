@@ -1069,12 +1069,17 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
 - Joins: `JOIN <table> [AS <alias>] ON <rel.col> = <rel.col>` chains.
   Inner equi-join only, one equality per ON, both sides qualified.
   **The engine chooses the join order** (`join_order = planned`, the
-  default): from the statement's shape and the catalog alone - which steps
-  are tuple key lookups, which columns carry an index or a Cabin, which
-  literals restrict which relation - never from row counts, so one statement
-  over one catalog always runs one plan. `join_order = written` runs the
-  relations in the order written. A statement carrying a subquery predicate
-  runs in written order either way.
+  default): from the statement's shape, the catalog - which steps are tuple
+  key lookups, which columns carry an index or a Cabin, which literals
+  restrict which relation - and the engine's plan statistics: each
+  relation's approximate size, read from its tree, and a running average of
+  the row counts the same statement's joins produced on its past runs. The statistics move in
+  steps (each about +-30 %) published at most once a second, so a statement
+  keeps its plan until its data has moved well past that; after a restart
+  it plans without them until they are learned again. `ANALYZE` prints the
+  estimates and the statistics generation on a `planned` line.
+  `join_order = written` runs the relations in the order written. A
+  statement carrying a subquery predicate runs in written order either way.
 - Every relation's binding must be distinct; `FROM t JOIN t` is refused, and
   `FROM t AS a JOIN t AS b` is how a self-join is spelled.
 - A join keyed on a relation's **tuple key** executes as a tuple key probe

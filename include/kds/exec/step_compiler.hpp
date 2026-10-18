@@ -20,7 +20,8 @@
 // identical chains".
 //
 // Pure in the sense that matters: same statement plus same catalog plus
-// same `plan` gives the same chain, bit for bit, every time. No clock, no
+// same limits and the same published statistics generation gives the same
+// chain, bit for bit, every time. No clock, no
 // randomness, no container iteration order, no address-dependent decision.
 // A written-order chain is a function of the AST alone - and its steps of
 // the AST without its select list, which only the projection mask reads,

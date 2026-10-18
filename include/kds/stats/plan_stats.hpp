@@ -94,6 +94,10 @@ public:
     static constexpr std::size_t kSeedPageBudget = 16;
     static constexpr std::uint64_t kReseedNs = 10'000'000'000;
     static constexpr std::size_t kMaxMasterKeys = 16384;
+    // How long a decline fact stands without a new decline (PS3): the
+    // planner prices no build where one declined, so no run re-tests it;
+    // past this the fact lapses and the build is priced, and tried, again.
+    static constexpr std::uint64_t kDeclineTtlNs = 60'000'000'000;
     // A leaf's fill the prior assumes (CC-Q6): an append-split leaf is
     // full and a mid-split one about half, so the error is bounded at 1.5x.
     static constexpr double kAssumedLeafFill = 0.75;
@@ -155,6 +159,7 @@ private:
         std::array<std::int16_t, kPosteriorMasks> band{};
         std::uint16_t present = 0;
         std::uint8_t declines = 0;
+        std::uint64_t declined_ns = 0;  // the newest decline's step
         std::uint64_t seen_ns = 0;
     };
     struct Prior {

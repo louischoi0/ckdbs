@@ -29,14 +29,6 @@ bool IsRangeEnd(parser::CompareOp op) {
            op == parser::CompareOp::kLt || op == parser::CompareOp::kLte;
 }
 
-// A value moved to the centre of its half-octave band, `2^(round(2 log2 v)/2)`,
-// so a cost that reads it is a function of the band (CC-Q12): two literals
-// in one band price one plan.
-double BandCentre(double v) {
-    if (v <= 1.0) return 1.0;
-    return std::exp2(std::round(2.0 * std::log2(v)) / 2.0);
-}
-
 // What an equality on `col_pos` keeps: `assumed`, raised to `1 / states`
 // where a Transition closes the column's values (CC-Q11). An upper bound on
 // the distinct count only ever raises a selectivity - for a literal and for
@@ -50,6 +42,29 @@ double EqualitySelectivity(const catalog::TableAccess* access, std::uint16_t col
     return std::max(assumed, 1.0 / static_cast<double>(StateCount(*t)));
 }
 
+// The block-wide reads a step's estimate needs: which written position each
+// executed slot holds, and each written position's relation and rows.
+struct Block {
+    const StepChain& chain;
+    const CostInputs& in;
+
+    std::size_t WrittenOf(std::size_t slot) const {
+        return chain.steps[slot].step_id - in.base_step_id;
+    }
+    const catalog::TableAccess* AccessAt(std::size_t written) const {
+        return written < in.written_access.size() ? in.written_access[written] : nullptr;
+    }
+    double RowsAt(std::size_t written) const {
+        return written < in.written_rows.size() ? in.written_rows[written] : kAssumedRelationRows;
+    }
+    // The rows of the relation an earlier column belongs to - the constant
+    // for an enclosing chain's, which a planned block never has.
+    double RowsOfColumn(const ColumnRef& ref) const {
+        if (ref.up > 0 || ref.rel_slot >= chain.steps.size()) return kAssumedRelationRows;
+        return RowsAt(WrittenOf(ref.rel_slot));
+    }
+};
+
 // What one step is estimated to do, per execution and once.
 struct StepEstimate {
     double per_execution = 0;  // cost each time an outer row reaches the step
@@ -57,11 +72,16 @@ struct StepEstimate {
     double matches = 0;        // rows it passes on per execution
 };
 
-StepEstimate Estimate(const Step& step, std::size_t slot, const catalog::TableAccess* access,
-                      const CostInputs& in) {
+StepEstimate Estimate(const Block& block, std::size_t slot) {
+    const Step& step = block.chain.steps[slot];
+    const CostInputs& in = block.in;
+    const std::size_t written = block.WrittenOf(slot);
+    const catalog::TableAccess* access = block.AccessAt(written);
+    double relation_rows = block.RowsAt(written);
+
     // The step's own rows after its literal conjuncts, and how one outer
     // row's join-key equalities narrow them.
-    double own = kAssumedRelationRows;
+    double own = relation_rows;
     bool key_equality = false;  // tuple key = literal
     bool key_join = false;      // tuple key = an earlier column
     // Each other column equal to an earlier one, by what it keeps.
@@ -92,10 +112,13 @@ StepEstimate Estimate(const Step& step, std::size_t slot, const catalog::TableAc
             // either orientation - placement puts a conjunct on the latest
             // step it reads, so the other side is always earlier.
             const ColumnRef* own_side = nullptr;
+            const ColumnRef* other = nullptr;
             if (IsOwn(pred.lhs, slot) && IsEarlier(pred.rhs.column, slot)) {
                 own_side = &pred.lhs;
+                other = &pred.rhs.column;
             } else if (IsOwn(pred.rhs.column, slot) && IsEarlier(pred.lhs, slot)) {
                 own_side = &pred.rhs.column;
+                other = &pred.lhs;
             }
             if (pred.op != parser::CompareOp::kEq || own_side == nullptr) {
                 own *= kOtherSelectivity;
@@ -107,8 +130,18 @@ StepEstimate Estimate(const Step& step, std::size_t slot, const catalog::TableAc
             } else if (own_side->col_pos == 0) {
                 key_join = true;
             } else {
-                join_selectivity.push_back(EqualitySelectivity(access, own_side->col_pos,
-                                                               kJoinSelectivity));
+                // A non-key column against an earlier one keeps a row in the
+                // key side's rows when the earlier column is its relation's
+                // tuple key - the parent's - and otherwise one in the larger
+                // relation's, the textbook 1 / max(distinct) bound with
+                // distinct <= rows. Either way the join's size is the same
+                // from both sides: a key join prices own / rows(own) the
+                // other way round.
+                const double other_rows = block.RowsOfColumn(*other);
+                const double keeps = other->col_pos == 0
+                                         ? 1.0 / other_rows
+                                         : 1.0 / std::max(relation_rows, other_rows);
+                join_selectivity.push_back(EqualitySelectivity(access, own_side->col_pos, keeps));
             }
             continue;
         }
@@ -135,23 +168,34 @@ StepEstimate Estimate(const Step& step, std::size_t slot, const catalog::TableAc
         own *= kOtherSelectivity;
     }
 
-    double span = kAssumedRelationRows;  // what a kRange walks
+    double span = relation_rows;  // what a kRange walks
     if (step.kind == AccessKind::kRange && step.range.has_value()) {
-        span = std::min(kAssumedRelationRows,
-                        BandCentre(static_cast<double>(step.range->high - step.range->low) + 1.0));
-        own *= span / kAssumedRelationRows;
+        // The span's half-octave band (CC-Q12), dense keys assumed: exact
+        // for issued keys before deletes.
+        const double width = static_cast<double>(step.range->high - step.range->low) + 1.0;
+        span = std::min(relation_rows, stats::BandCentre(stats::BandOf(width)));
+        own *= span / relation_rows;
     }
     if (key_equality) own = std::min(own, 1.0);
 
+    // The relation's observed rows under its own conjuncts, where a run had
+    // it drive (card({w}), CC-S3): what a build would bucket, and a floor
+    // under the relation's rows.
+    const bool posterior_slot = in.posterior != nullptr && written < stats::kMaxPosteriorRelations;
+    if (posterior_slot) {
+        const std::size_t alone = std::size_t{1} << written;
+        if ((in.posterior->present & (1u << alone)) != 0) {
+            own = std::max(stats::BandCentre(in.posterior->band[alone]), 1.0);
+            relation_rows = std::max(relation_rows, own);
+        }
+    }
+
     double matches = own;
-    if (key_join) matches = own / kAssumedRelationRows;  // at most one row
+    if (key_join) matches = std::min(own / relation_rows, 1.0);  // at most one row
     for (const double selectivity : join_selectivity) matches *= selectivity;
 
     // A unique index whose every key column is bound holds at most one row
-    // per binding - never on its leading column alone (CC-Q11). A binding by
-    // a join key is inert under the constant model, whose join selectivity
-    // already keeps under a row; it bounds once a relation's rows are read
-    // (CC-S3).
+    // per binding - never on its leading column alone (CC-Q11).
     if (access != nullptr) {
         const auto is_bound = [&bound](std::uint16_t col) {
             return std::find(bound.begin(), bound.end(), col) != bound.end();
@@ -184,18 +228,25 @@ StepEstimate Estimate(const Step& step, std::size_t slot, const catalog::TableAc
             e.per_execution = kDescentCost + matches * (1.0 + kDescentCost);
             break;
         case AccessKind::kFilterScan:
-        case AccessKind::kScan:
+        case AccessKind::kScan: {
             // A build over the cap is declined at its walk, and the step
-            // walks per outer row.
-            if (step.build.has_value() && own <= static_cast<double>(in.limits.join_build_max_rows)) {
+            // walks per outer row. Where statistics price the block a build
+            // is taken only under a quarter of the cap, and never where one
+            // declined (CC-Q9).
+            const double cap = static_cast<double>(in.limits.join_build_max_rows) /
+                               (in.informed ? kBuildCapMargin : 1.0);
+            const bool declined =
+                posterior_slot && (in.posterior->declines & (1u << written)) != 0;
+            if (step.build.has_value() && !declined && own <= cap) {
                 // One walk buckets the rows passing the non-correlated
                 // conjuncts; every execution probes the map.
-                e.once = kAssumedRelationRows + own * kBuildInsertCost;
+                e.once = relation_rows + own * kBuildInsertCost;
                 e.per_execution = kBuildProbeCost + matches;
             } else {
-                e.per_execution = kAssumedRelationRows;
+                e.per_execution = relation_rows;
             }
             break;
+        }
     }
     return e;
 }
@@ -203,18 +254,28 @@ StepEstimate Estimate(const Step& step, std::size_t slot, const catalog::TableAc
 }  // namespace
 
 ChainEstimate EstimateChain(const StepChain& chain, const CostInputs& in) {
+    const Block block{chain, in};
     double once = 0;     // paid once whatever the reply's length
     double per_row = 0;  // paid in proportion to the rows the driver feeds
     double rows = 1;     // rows reaching the next step; the driver runs once
+    std::uint16_t mask = 0;  // the written positions of the slots so far
+    if (in.step_rows != nullptr) in.step_rows->clear();
     for (std::size_t slot = 0; slot < chain.steps.size(); ++slot) {
-        const Step& step = chain.steps[slot];
-        const catalog::TableAccess* access = nullptr;
-        const std::size_t written = step.step_id - in.base_step_id;
-        if (written < in.written_access.size()) access = in.written_access[written];
-        const StepEstimate e = Estimate(step, slot, access, in);
+        const std::size_t written = block.WrittenOf(slot);
+        const StepEstimate e = Estimate(block, slot);
         once += e.once;
         per_row += rows * e.per_execution;
         rows *= e.matches;
+        // The observed rows of the prefix's join, where a run measured it
+        // (card(T), CC-S3): order-independent, so any order's run prices
+        // this one's prefix. At least 1 (PS9).
+        if (in.posterior != nullptr && written < stats::kMaxPosteriorRelations) {
+            mask = static_cast<std::uint16_t>(mask | (1u << written));
+            if ((in.posterior->present & (1u << mask)) != 0) {
+                rows = std::max(stats::BandCentre(in.posterior->band[mask]), 1.0);
+            }
+        }
+        if (in.step_rows != nullptr) in.step_rows->push_back(rows);
     }
 
     ChainEstimate out;

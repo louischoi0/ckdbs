@@ -7449,7 +7449,10 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // relation once (`ReadBorrow::Position`).
     ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
     auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
-        exec::PlanOptions plan{budget_.join_build_max_rows(), sort_max_rows_};
+        exec::PlanOptions plan;
+        plan.join_build_max_rows = budget_.join_build_max_rows();
+        plan.sort_max_rows = sort_max_rows_;
+        plan.statistics = plan_stats_ != nullptr ? &plan_source_ : nullptr;
         if (const auto fingerprint = run->parser->fingerprint(); fingerprint.has_value()) {
             plan.fetch_id = fingerprint->fetch_id;
         }

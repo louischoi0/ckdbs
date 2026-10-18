@@ -1,7 +1,7 @@
 # Plan statistics (spec)
 
-Status: **built since CC-S2** (`instructions/v3.2.0/workorder-cc-plan-statistics.md`):
-collected, seeded and published; no plan reads it until CC-S3. Related: `docs/spec/parser-v2.md` I12
+Status: **built since CC-S2** (`instructions/v3.2.0/workorder-cc-plan-statistics.md`),
+**read by the join planner since CC-S3** (`exec::EstimateChain`). Related: `docs/spec/parser-v2.md` I12
 (the planner and its contract), `include/kds/exec/join_order.hpp` (the cost
 model that reads these facts), `include/kds/stats/statement_stats.hpp` (the
 per-core part protocol adopted here).
@@ -56,7 +56,10 @@ it; its *value* never does (PS10).
 
 **PS3 - Decline fact**, per key and written position: an annotated build
 that did not publish (`inner_builds == 0`) on a complete run with
-`join_build_max_rows > 0`. Set, never averaged.
+`join_build_max_rows > 0`. Set, never averaged, and published at once. The
+planner then prices no build there, so no run re-tests it: a fact no decline
+has repeated for `kDeclineTtlNs` (60 s) lapses, and the build is priced -
+and tried - again.
 
 A run feeds no posterior unless it completed: a run a LIMIT or a stop cut
 (`ExecStats::stopped`) and a refused run fold nothing. Every searched block -
@@ -119,6 +122,13 @@ yields by its reference.
 
 ## 6. Exposure
 
+`ANALYZE` prints a searched block's choice on one line after the class
+line: `planned order=written|planned gen=<g> switch=<r> est=<id>:<rows>,...`
+- whether an order other than the written one was taken, the snapshot
+generation its prices read (0: none published), the chosen cost over the
+written order's, and each executed step's estimated rows labelled by its
+step id (its written position), in executed order.
+
 `SHOW META`'s `plan_stats` block: `plan_stats_generation`, `_relations`,
 `_posteriors`, `_part_drops`, `_seeds`, `_seed_pages`, `_publishes` and
 `_steward_us_max`, the steward's longest step. `sys.relation_stats` gains `est_rows` (the published prior,
@@ -126,10 +136,12 @@ its band's centre) and `generation`; the planner never reads the view.
 
 ## 7. Rules
 
-- **PS9 - one reader.** No plan input reads a published fact at CC-S2; from
-  CC-S3 only `exec::EstimateChain` does, and it clamps every rows value at
-  1. The fold's wanted check, `SHOW META` and `sys.relation_stats` read the
-  snapshot for themselves, never for a plan.
+- **PS9 - one reader.** Only `exec::EstimateChain` reads a published fact
+  for a plan, and it clamps every rows value at 1; a fact chooses among a
+  block's orders and nothing else. The compile pins the snapshot only for
+  a block it searches, after the tuple key chain's skip. The fold's wanted
+  check, `SHOW META` and `sys.relation_stats` read the snapshot for
+  themselves, never for a plan.
 - **PS10 - no advisory input.** Waystone trails, `sys.patterns`,
   `sys.access_stats`, the optimizer signals, the Cabin store and index trees
   feed nothing here: `rows_matched` is the same whether a trail replayed, a

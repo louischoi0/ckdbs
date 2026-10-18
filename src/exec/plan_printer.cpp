@@ -295,6 +295,23 @@ std::string FormatPlan(const StepChain& chain) {
                                               }) != chain.steps.end();
     if (reordered) os << " reordered=1";
     os << '\n';
+    // A searched block's choice (CC-S3): each executed slot's estimated
+    // rows, the statistics generation they read and the chosen cost over
+    // the written order's.
+    // Each estimate is labelled with its step's id - its written position -
+    // in executed order; one past 2^63 prints as that bound.
+    if (chain.plan_note.has_value()) {
+        const PlanNote& note = *chain.plan_note;
+        os << "planned order=" << (reordered ? "planned" : "written") << " gen=" << note.generation
+           << " switch=" << note.cost_ratio << " est=";
+        for (std::size_t i = 0; i < note.estimated_rows.size() && i < chain.steps.size(); ++i) {
+            constexpr double kMaxPrinted = 9.2e18;
+            const double rows = std::min(std::max(note.estimated_rows[i], 0.0), kMaxPrinted);
+            os << (i == 0 ? "" : ",") << chain.steps[i].step_id << ':'
+               << static_cast<std::uint64_t>(rows + 0.5);
+        }
+        os << '\n';
+    }
 
     // Hoisted first, because that is the execution order: an uncorrelated
     // sub-chain runs once *before* the outer chain opens, and a false one

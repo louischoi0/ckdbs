@@ -1337,12 +1337,33 @@ Verified on `worktree-bz-background-advisory-optimizer` at `954abc20`
   execution position (`src/exec/plan_printer.cpp`). Correct, and easy to
   misread on a `reordered=1` plan. Owned by `docs/spec/parser-v2.md` I12.
 
-- **The planner prices every relation as `kAssumedRelationRows` rows.**
-  By the operator's choice (CB-Q2 (a)) no statistic reaches it, so a small
-  relation and a large one cost the same to walk: an order is chosen from
-  kinds, literals and builds alone (`include/kds/exec/join_order.hpp`).
-  Where that is wrong, `join_order = written` is the way back. Owned by
-  `instructions/v3.2.0/workorder-cb-join-planner.md` §3.2.
+- **The planner prices a relation at `kAssumedRelationRows` until its prior
+  is published.** Since CC-S3 a relation's prior replaces the constant
+  (`docs/spec/plan-stats.md`), but a mount or a restore starts empty: until
+  the steward's first publish - a second after a planned statement first
+  meets the relation - the plan is data-free. Owned by `plan-stats.md`.
+
+- **A join subset no run measured is estimated from priors and constant
+  selectivities.** `card(T)` exists only for the prefixes of orders that
+  ran; another order's prefix is priced from the relations' priors, the
+  literal constants and `1 / rows` per join key, which can be wrong by
+  orders of magnitude for a skewed join. The 10 % switch margin and the
+  build's quarter-cap guard bound how far a wrong estimate moves a plan,
+  not whether it does. Owned by `plan-stats.md`.
+
+- **The prior's leaf fill is a constant (0.75)**, so a tree of half-full
+  leaves (mid-splits) is over-estimated by up to 1.5x; above height 2 the
+  random-path estimate has no test of its own (it needs about 130,000
+  rows). Owned by `plan-stats.md` PS1.
+
+- **A block of more than four relations is ordered greedily from priors
+  alone**: it keys no posterior, so no observed cardinality reaches it.
+  Owned by `parser-v2.md` I12.
+
+- **Which kind serves a step is still chosen by rank, not by statistics.**
+  An index is taken ahead of a walk however unselective its key
+  (`index.md` IX9's crossover); CC-Q1 (a) put statistics into the order
+  only. Owned by `index.md` §9.
 
 ## Decisions the revision has not taken
 

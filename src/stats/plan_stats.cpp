@@ -331,9 +331,17 @@ void PlanStats::Merge(std::uint64_t now_ns) {
             if (Reband(master.band[m], banded, master.value[m])) dirty_ = true;
             master.present |= bit;
         }
-        if ((entry.declines & ~master.declines) != 0) {
+        if (entry.declines != 0) {
+            if ((entry.declines & ~master.declines) != 0) dirty_ = true;  // published at once
             master.declines |= entry.declines;
-            dirty_ = true;  // a decline publishes at once
+            master.declined_ns = now_ns;
+        }
+    }
+    // A decline no run has repeated within the TTL lapses (PS3).
+    for (auto& [key, master] : master_) {
+        if (master.declines != 0 && now_ns - master.declined_ns >= kDeclineTtlNs) {
+            master.declines = 0;
+            dirty_ = true;
         }
     }
 }

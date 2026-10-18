@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include "learn_plan_stats.hpp"
+#include "unordered_reply.hpp"
+
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -59,6 +62,10 @@ public:
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
     void KeepWrittenOrder() { dispatcher_->set_plan_join_order(false); }
+    // The join planner's statistics, learned from `sqls` (CC-S3).
+    void Learn(const std::vector<std::string>& sqls) {
+        testing_plan::LearnPlanStats(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);
+    }
 
     catalog::Catalog& catalog() { return boot_->catalog; }
     storage::InMemoryPageStore& store() { return store_; }
@@ -68,6 +75,7 @@ private:
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<stats::TrailRecorder> recorder_;
     std::optional<CommandDispatcher> dispatcher_;
+    stats::PlanStats plan_stats_{1};
 };
 
 // The dataset every configuration runs over. A btree whose `id` is its tuple
@@ -321,6 +329,24 @@ TEST(WaystoneContractTest, AReorderedChainRecordsAndReplaysUnderWrittenIds) {
                                 return row.fetch_id == fingerprint->fetch_id;
                             }))
         << "the reordered chain recorded no trail";
+}
+
+// CC-S3: recording and replay under the join planner's learned statistics.
+// The plans may differ from the data-free reference's, so rows compare as a
+// multiset where a statement has no ORDER BY; a trail recorded under one
+// order replays under another by written step ids (CB-Q3).
+TEST(WaystoneContractTest, RecordingAndReplayingUnderLearnedStatisticsChangesNoRow) {
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    db.Learn(Queries());
+    const std::vector<std::string> got = RunAll(db, 3);
+    const std::vector<std::string> want = Reference();
+    ASSERT_EQ(got.size(), want.size());
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        const std::string& sql = Queries()[i % Queries().size()];
+        EXPECT_EQ(testing_reply::Unordered(got[i], sql), testing_reply::Unordered(want[i], sql))
+            << "reply " << i << " (" << sql << ")";
+    }
 }
 
 TEST(WaystoneContractTest, RecordingWithoutReplayingChangesNoReply) {
