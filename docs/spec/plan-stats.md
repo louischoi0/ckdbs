@@ -123,7 +123,7 @@ yields by its reference.
 ## 6. Exposure
 
 `ANALYZE` prints a searched block's choice on one line after the class
-line: `planned order=written|planned gen=<g> switch=<r> est=<id>:<rows>,...`
+line: `planned order=written|planned|memo gen=<g> switch=<r> est=<id>:<rows>,...`
 - whether an order other than the written one was taken, the snapshot
 generation its prices read (0: none published), the chosen cost over the
 written order's, and each executed step's estimated rows labelled by its
@@ -133,6 +133,29 @@ step id (its written position), in executed order.
 `_posteriors`, `_part_drops`, `_seeds`, `_seed_pages`, `_publishes` and
 `_steward_us_max`, the steward's longest step. `sys.relation_stats` gains `est_rows` (the published prior,
 its band's centre) and `generation`; the planner never reads the view.
+
+## 6a. The order memo (CC-S4)
+
+**PS6.** Each core remembers the order a searched block of at most four
+relations chose (`exec::PlanMemo`, one per dispatcher, no latch), keyed by
+everything the search read besides the catalog facts it compiles from: the
+block's key (fetch id, written relation oids), **the statement's literals**
+(`arg_hash` - a literal can change a step's kind, a range's span or a
+LIMIT's bound in an order the written chain does not show), the statistics
+generation, the catalog's two stamps (`cache_built_at`, `catalog_version`),
+and the statement's `join_build_max_rows` and `sort_max_rows`. A statement
+with a `?` bound later is not memoized. A hit compiles the written order
+and then the remembered one through the full ladder - two compiles, where
+the search makes up to 24 - so it reuses no chain, literal or page id; a
+remembered order that no longer compiles is searched again, and the
+search's answer replaces it. Under a minted view (a DDL in flight) the memo
+is not read. It is an exact cache of the search's answer for its key,
+up to a collision of its two hashes (fetch id, literals), which serves
+another statement's order - the same rows, as every order gives. A
+statement whose literals vary between runs misses every time and pays the
+search. `ANALYZE` prints `order=memo` for a hit, with `reordered=1` where
+the remembered order moved; `SHOW META`'s `plan_memo` block counts this
+core's `plan_memo_hits` and `plan_memo_misses`.
 
 ## 7. Rules
 

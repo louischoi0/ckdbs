@@ -302,7 +302,8 @@ std::string FormatPlan(const StepChain& chain) {
     // in executed order; one past 2^63 prints as that bound.
     if (chain.plan_note.has_value()) {
         const PlanNote& note = *chain.plan_note;
-        os << "planned order=" << (reordered ? "planned" : "written") << " gen=" << note.generation
+        os << "planned order=" << (note.from_memo ? "memo" : reordered ? "planned" : "written")
+           << " gen=" << note.generation
            << " switch=" << note.cost_ratio << " est=";
         for (std::size_t i = 0; i < note.estimated_rows.size() && i < chain.steps.size(); ++i) {
             constexpr double kMaxPrinted = 9.2e18;

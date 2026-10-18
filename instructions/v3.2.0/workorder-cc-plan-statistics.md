@@ -341,7 +341,7 @@ GATE: interleaved A/B in build-release. Point read and tuple-key point join serv
 | CC-Q9 | When may an estimate price a build the cap could decline? | (a) Only when own×4 ≤ join_build_max_rows and no decline fact exists; a decline publishes at once.<br>(b) own ≤ cap, as CB. | **(a)** - A declined build is a per-row walk, about 1e10 model units, while an over-estimate only forgoes a build. The asymmetric margin matches PO3. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
 | CC-Q10 | Should ChainCost price ORDER BY and LIMIT? | (a) Yes. A sort costs out·log2(out); an order adding a sort the written order lacked is +inf above sort_max_rows/2; LIMIT without a sort scales the per-row part.<br>(b) No, as CB. | **(a)** - Without it, a data-driven order loses the elision (step_compiler.cpp:2674-2681) and can move a statement onto a sort_max_rows refusal that the planner itself caused. (a) is data-free and lands in S1. | **(a) revised at CC-S1's review**: an added sort is never taken unless LIMIT bounds it within `sort_max_rows` (a top-N cannot refuse); the cap/2 estimate rule is dropped, since no estimate knows a reply's size. Adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
 | CC-Q11 | Which identifier bounds, and in which direction? | (a) ≤1 row only when every key column of a unique index (IndexRef nkeys, schema.hpp:478-481) or the tuple key is equality-bound. Transition and FK-parent NDV upper bounds may only raise an equality's selectivity to 1/bound.<br>(b) Leading-column unique and 1/|states| as a lower selectivity (Designs 1 and 3). | **(a)** - UNIQUE(a,b) does not make a unique, and an NDV upper bound gives average selectivity ≥ 1/bound, not ≤. (b) under-estimates in the direction that chooses builds the executor declines. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
-| CC-Q12 | Memo key and literal sensitivity. | (a) Exact (fetch_id, n, oids) plus generation, catalog stamp, join_build_max_rows, sort_max_rows and kRange span bands, with ChainCost reading the band centre so the memo is an exact cache; the value is a permutation.<br>(b) Add arg_hash.<br>(c) (fetch_id) and the schema word only. | **(a)** - The span is the only literal the model reads (join_order.cpp:102-107). arg_hash hashes text and would never reuse an entry. (c) is unsound across namespaces and DROP/CREATE, and blind to session limits (command_dispatcher.hpp:353-354). | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
+| CC-Q12 | Memo key and literal sensitivity. | (a) Exact (fetch_id, n, oids) plus generation, catalog stamp, join_build_max_rows, sort_max_rows and kRange span bands, with ChainCost reading the band centre so the memo is an exact cache; the value is a permutation.<br>(b) Add arg_hash.<br>(c) (fetch_id) and the schema word only. | **(a)** - The span is the only literal the model reads (join_order.cpp:102-107). arg_hash hashes text and would never reuse an entry. (c) is unsound across namespaces and DROP/CREATE, and blind to session limits (command_dispatcher.hpp:353-354). | **(b) revised at CC-S4's review**: the key holds the statement's literals (`arg_hash`) besides the block's key, the generation, the catalog's stamps and the limits; the written chain's kinds and span bands could not stand for literals the written order hides. Adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
 | CC-Q13 | What is the off-switch? | (a) `join_order = written` means no search, no statistics, no memo and no fold; `planned` with an empty snapshot is S1's data-free planner.<br>(b) A new planner_statistics key. | **(a)** - CLAUDE.md forbids a second name for a quantity an existing setting expresses. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
 | CC-Q14 | What do the contract suites compare once plans read statistics? | (a) Multiset comparison without ORDER BY in all four suites; an ORDER BY on the LIMIT-without-ORDER-BY cell; every configuration run under an empty and under one pinned populated snapshot.<br>(b) Freeze the suites on CB's costs. | **(a)** - The suites build CommandDispatcher with no Expeditor, so without a pinned snapshot they would never test the shipped planner. Inputs are index-, Cabin- and Waystone-blind, so the configuration claims stay true. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
 | CC-Q15 | The OptimizerSignals CandidateRef is the first kFilterScan in executed order (command_dispatcher.cpp:7848-7886). Now that the order moves with data, what should it be? | (a) Derive it in written-position order (the lowest step_id), so a reorder never moves the controller's candidacy.<br>(b) Leave it. | **(a)** - It cuts the planner-to-controller feedback loop at its one coupling point for the cost of a different iteration order. The controller's other inputs are unchanged. It needs a line in physical-optimizer.md. | **(a)**, adopted on the operator's standing go-ahead of 2026-10-18 (go-ahead-achieving-milestone) |
@@ -486,3 +486,31 @@ The close results go to bench/v3.2.0/results-cc-close-<describe>.md. It states t
   **Cut, with reason**: the s2 c-first flip and the 10 % margin's own cell
   (the close measures the scenario shapes; the margin is one comparison).
   Overhead not measured; measured at the milestone's close.
+- **CC-S4**: the order memo (`exec::PlanMemo`, plan-stats.md PS6): per
+  core, 512 sets of two ways, keyed by the block's key, the generation, the
+  catalog's two stamps, the statement's limits and the written chain's step
+  kinds and span bands; a hit compiles the written order and the
+  remembered one; not read under a minted view. The review (41 agents; 19
+  survived) found **the key inexact**: it held the written chain's kinds and
+  span bands, but the search costs every order, and a relation the written
+  order probes shows its literal range, its tuple key literal's validity or
+  a LIMIT only in another order - two literals of one fetch id shared a key
+  and the first served the second. **CC-Q12 revised to (b)**: the key holds
+  the statement's literals (`arg_hash`), which covers every literal the cost
+  reads, LIMIT and OFFSET included; a statement with a `?` bound later is
+  not memoized; the kinds and span bands left the key. The price, stated in
+  PS6: a statement whose literals vary between runs misses every time.
+  Adopted on the operator's standing go-ahead of 2026-10-18. Also applied:
+  `Forget` deleted (a remembered order that no longer compiles is searched
+  again and replaced), the entry's `used` flag folded into `used_at`, every
+  key field hashed into the set, the counters printed as the answering
+  core's in a `plan_memo` block outside the store's gate, PS6 and the
+  `order=memo` grammar written down. Tests: a hit equals the search, a
+  generation or a DDL searches again, a recreated relation and another
+  namespace's relation reach new keys, two literals on the probed relation
+  and two LIMITs are two keys while a repeated literal hits, a
+  three-relation hit equals a cleared memo's search, the dispatcher's memo
+  serves a repeated statement. **Cut, with reason**: a compile counter for
+  the "two compiles a hit" claim (the hit path calls `compile_order` once
+  by construction; the close measures the time), and a refused remembered
+  order (no schema change that keeps every stamp can refuse an order).

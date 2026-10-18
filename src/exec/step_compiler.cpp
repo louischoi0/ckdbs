@@ -16,6 +16,7 @@
 #include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/join_order.hpp"
+#include "kds/exec/plan_memo.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_vm.hpp"  // PositionSink - the declaration sink AT-R1 threads
 
@@ -2207,57 +2208,100 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     const double margin = inputs.informed ? kStatsSwitchMargin : kCostTieMargin;
     const double written_cost = EstimateChain(best.value(), inputs).cost;
 
-    // CC-Q8: the minimum over every order - the first among equals in
-    // permutation order - taken only if it beats the **written** order's
-    // cost by the margin, so the threshold starts there. Measured against
-    // the written order rather than the best so far, the winner does not
-    // depend on enumeration order.
+    // CC-S4: the order this block chose before under the same inputs, where
+    // the core remembers one - compiled again through the full ladder, so a
+    // hit costs two compiles where the search costs up to 24. Never under a
+    // minted view: a DDL is in flight and the catalog's stamps are moving.
+    // A statement whose literals the fingerprint saw whole: a `?` bound at
+    // BIND is outside `arg_hash`, so its block is searched every time.
+    PlanMemo* memo = plan->memo != nullptr && key.has_value() && view == nullptr &&
+                             plan->literals_known
+                         ? plan->memo
+                         : nullptr;
+    PlanMemoKey memo_key;
+    if (memo != nullptr) {
+        memo_key.block = *key;
+        memo_key.arg_hash = plan->arg_hash;
+        memo_key.generation = snapshot != nullptr ? snapshot->generation() : 0;
+        memo_key.catalog_word = catalog.cache_built_at();
+        memo_key.catalog_version = catalog.catalog_version();
+        memo_key.join_build_max_rows = plan->join_build_max_rows;
+        memo_key.sort_max_rows = plan->sort_max_rows;
+    }
     std::optional<StepChain> cheapest;
-    double cheapest_cost = written_cost * (1.0 - margin);
-    const auto cost_of = [&](const std::vector<std::size_t>& candidate)
-        -> std::optional<std::pair<double, StepChain>> {
-        auto chain = compile_order(candidate);
-        if (!chain.ok()) return std::nullopt;  // a refusal is the written order's to give
-        const double cost = EstimateChain(chain.value(), inputs).cost;
-        return std::make_pair(cost, std::move(chain.value()));
-    };
-    const auto consider = [&](const std::vector<std::size_t>& candidate) {
-        auto costed = cost_of(candidate);
-        if (costed.has_value() && costed->first < cheapest_cost) {
-            cheapest_cost = costed->first;
-            cheapest = std::move(costed->second);
-        }
-    };
-    if (refs.size() <= kMaxExhaustiveJoinRelations) {
-        while (std::next_permutation(order.begin(), order.end())) consider(order);
-    } else {
-        // Greedy: at each position the relation whose placement there - the
-        // rest following in written order - costs least.
-        std::vector<std::size_t> placed;
-        std::vector<std::size_t> rest = order;
-        while (!rest.empty()) {
-            std::size_t pick = 0;
-            std::optional<double> pick_cost;
-            for (std::size_t r = 0; r < rest.size(); ++r) {
-                std::vector<std::size_t> candidate = placed;
-                candidate.push_back(rest[r]);
-                for (std::size_t o = 0; o < rest.size(); ++o) {
-                    if (o != r) candidate.push_back(rest[o]);
-                }
-                auto costed = cost_of(candidate);
-                if (!costed.has_value()) continue;
-                if (!pick_cost.has_value() || costed->first < *pick_cost) {
-                    pick = r;
-                    pick_cost = costed->first;
-                }
+    bool from_memo = false;
+    if (memo != nullptr) {
+        if (const auto remembered = memo->Find(memo_key); remembered.has_value()) {
+            std::vector<std::size_t> perm((*remembered).begin(), (*remembered).begin() + refs.size());
+            if (perm == order) {  // `order` is still the written order here
+                from_memo = true;
+            } else if (auto chain = compile_order(perm); chain.ok()) {
+                cheapest = std::move(chain.value());
+                from_memo = true;
             }
-            placed.push_back(rest[pick]);
-            rest.erase(rest.begin() + static_cast<std::ptrdiff_t>(pick));
+            // A remembered order that no longer compiles is searched again,
+            // and the search's answer replaces it.
         }
-        consider(placed);
+    }
+    if (!from_memo) {
+        // CC-Q8: the minimum over every order - the first among equals in
+        // permutation order - taken only if it beats the **written** order's
+        // cost by the margin, so the threshold starts there. Measured against
+        // the written order rather than the best so far, the winner does not
+        // depend on enumeration order.
+        double cheapest_cost = written_cost * (1.0 - margin);
+        const auto cost_of = [&](const std::vector<std::size_t>& candidate)
+            -> std::optional<std::pair<double, StepChain>> {
+            auto chain = compile_order(candidate);
+            if (!chain.ok()) return std::nullopt;  // a refusal is the written order's to give
+            const double cost = EstimateChain(chain.value(), inputs).cost;
+            return std::make_pair(cost, std::move(chain.value()));
+        };
+        const auto consider = [&](const std::vector<std::size_t>& candidate) {
+            auto costed = cost_of(candidate);
+            if (costed.has_value() && costed->first < cheapest_cost) {
+                cheapest_cost = costed->first;
+                cheapest = std::move(costed->second);
+            }
+        };
+        if (refs.size() <= kMaxExhaustiveJoinRelations) {
+            while (std::next_permutation(order.begin(), order.end())) consider(order);
+        } else {
+            // Greedy: at each position the relation whose placement there - the
+            // rest following in written order - costs least.
+            std::vector<std::size_t> placed;
+            std::vector<std::size_t> rest = order;
+            while (!rest.empty()) {
+                std::size_t pick = 0;
+                std::optional<double> pick_cost;
+                for (std::size_t r = 0; r < rest.size(); ++r) {
+                    std::vector<std::size_t> candidate = placed;
+                    candidate.push_back(rest[r]);
+                    for (std::size_t o = 0; o < rest.size(); ++o) {
+                        if (o != r) candidate.push_back(rest[o]);
+                    }
+                    auto costed = cost_of(candidate);
+                    if (!costed.has_value()) continue;
+                    if (!pick_cost.has_value() || costed->first < *pick_cost) {
+                        pick = r;
+                        pick_cost = costed->first;
+                    }
+                }
+                placed.push_back(rest[pick]);
+                rest.erase(rest.begin() + static_cast<std::ptrdiff_t>(pick));
+            }
+            consider(placed);
+        }
     }
     const bool reordered = cheapest.has_value();
     StepChain chosen = reordered ? std::move(*cheapest) : std::move(best.value());
+    if (memo != nullptr && !from_memo) {
+        std::array<std::uint8_t, stats::kMaxPosteriorRelations> remembered{};
+        for (std::size_t k = 0; k < chosen.steps.size(); ++k) {
+            remembered[k] = static_cast<std::uint8_t>(chosen.steps[k].step_id - base_step_id);
+        }
+        memo->Store(memo_key, remembered);
+    }
     if (refs.size() <= kMaxPlannedRelations) {
         for (const BoundRelation& relation : scope.relations) {
             chosen.planned_relations.push_back(relation.access->oid);
@@ -2268,6 +2312,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // generation they read and the chosen cost against the written order's.
     PlanNote note;
     note.generation = snapshot != nullptr ? snapshot->generation() : 0;
+    note.from_memo = from_memo;
     inputs.step_rows = &note.estimated_rows;
     const double chosen_cost = EstimateChain(chosen, inputs).cost;
     note.cost_ratio = reordered && written_cost > 0 ? chosen_cost / written_cost : 1.0;

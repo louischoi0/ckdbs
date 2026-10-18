@@ -673,5 +673,172 @@ TEST_F(StatisticsPlannerTest, AboveFourRelationsTheGreedyOrderReadsPriorsAndKeep
     dispatcher_->set_plan_stats(nullptr);
 }
 
+// ---- CC-S4: the order memo ---------------------------------------------------
+
+class PlanMemoTest : public StatisticsPlannerTest {
+protected:
+    // A planned compile through the memo, keyed by the statement's fetch.
+    exec::StepChain Memoized(const std::string& sql, exec::PlanMemo* memo = nullptr) {
+        parser::Parser parser(sql);
+        EXPECT_TRUE(parser.Parse().ok());
+        const auto fingerprint = parser.fingerprint();
+        exec::PlanOptions options;
+        options.statistics = &source_;
+        options.memo = memo != nullptr ? memo : &memo_;
+        options.fetch_id = fingerprint.has_value() ? fingerprint->fetch_id : 0;
+        options.arg_hash = fingerprint.has_value() ? fingerprint->arg_hash : 0;
+        options.literals_known = fingerprint.has_value() && fingerprint->param_count == 0;
+        return Compile(sql, &options);
+    }
+
+    // Two chains equal step by step in every field a plan is made of.
+    static void ExpectSameChain(const exec::StepChain& a, const exec::StepChain& b) {
+        ASSERT_EQ(a.steps.size(), b.steps.size());
+        for (std::size_t k = 0; k < a.steps.size(); ++k) {
+            EXPECT_EQ(a.steps[k].step_id, b.steps[k].step_id) << k;
+            EXPECT_EQ(a.steps[k].kind, b.steps[k].kind) << k;
+            EXPECT_EQ(a.steps[k].build.has_value(), b.steps[k].build.has_value()) << k;
+            EXPECT_EQ(a.steps[k].range.has_value(), b.steps[k].range.has_value()) << k;
+            EXPECT_EQ(a.steps[k].residual.size(), b.steps[k].residual.size()) << k;
+        }
+        EXPECT_EQ(a.sorted(), b.sorted());
+    }
+
+    static std::vector<std::uint32_t> Order(const exec::StepChain& chain) {
+        std::vector<std::uint32_t> ids;
+        for (const exec::Step& step : chain.steps) ids.push_back(step.step_id);
+        return ids;
+    }
+
+    exec::PlanMemo memo_;
+};
+
+TEST_F(PlanMemoTest, AHitCompilesTheOrderTheSearchChose) {
+    // Purity: the remembered order is the searched one, under one set of
+    // inputs, whichever order that is.
+    FillModels();
+    stats_.PublishForTest({{models_, stats::BandOf(8)}, {results_, stats::BandOf(2872)}}, {});
+    const exec::StepChain searched = Memoized(kCompareAll);
+    EXPECT_EQ(memo_.misses(), 1u);
+    const exec::StepChain remembered = Memoized(kCompareAll);
+    EXPECT_EQ(memo_.hits(), 1u);
+    EXPECT_EQ(Order(remembered), Order(searched));
+    EXPECT_EQ(Order(remembered), (std::vector<std::uint32_t>{1, 0}));
+    ASSERT_TRUE(remembered.plan_note.has_value());
+    EXPECT_TRUE(remembered.plan_note->from_memo);
+    EXPECT_EQ(remembered.steps[1].build.has_value(), searched.steps[1].build.has_value());
+}
+
+TEST_F(PlanMemoTest, ANewGenerationOrACatalogChangeSearchesAgain) {
+    FillModels();
+    Memoized(kCompareAll);
+    Memoized(kCompareAll);
+    ASSERT_EQ(memo_.hits(), 1u);
+    // The statistics move: a new key, so a search, and its own order.
+    stats_.PublishForTest({{models_, stats::BandOf(8)}, {results_, stats::BandOf(2872)}}, {});
+    EXPECT_EQ(Order(Memoized(kCompareAll)), (std::vector<std::uint32_t>{1, 0}));
+    EXPECT_EQ(memo_.hits(), 1u) << "the generation moved";
+    // A DDL moves the catalog's stamp.
+    Ok("CREATE INDEX results_model ON results (model_id)");
+    Memoized(kCompareAll);
+    EXPECT_EQ(memo_.hits(), 1u) << "the catalog moved";
+}
+
+TEST_F(PlanMemoTest, ARecreatedRelationIsNeverServedTheOldEntry) {
+    // Oids are never reissued, and the key holds them exactly: a DROP and a
+    // CREATE of one name under one fetch id reach a new entry.
+    FillModels();
+    Memoized(kCompareAll);
+    Ok("DROP TABLE results");
+    Ok("CREATE TABLE results (id int64, model_id int64, pnl int64) BTREE");
+    Memoized(kCompareAll);
+    EXPECT_EQ(memo_.hits(), 0u);
+}
+
+TEST_F(PlanMemoTest, AnotherLiteralSearchesAgainAndTheSameLiteralHits) {
+    // The literals are in the key: a range on a relation the written order
+    // probes - so the written chain never shows it - can flip the order in
+    // another, and so can a LIMIT. Each literal searches; a repeat hits.
+    FillModels();
+    const std::string narrow =
+        "SELECT results.pnl FROM results JOIN models ON results.model_id = models.id "
+        "WHERE models.id BETWEEN 1 AND 3";
+    const std::string wide =
+        "SELECT results.pnl FROM results JOIN models ON results.model_id = models.id "
+        "WHERE models.id BETWEEN 1 AND 100000";
+    exec::PlanMemo fresh;
+    const exec::StepChain narrow_searched = Memoized(narrow, &fresh);
+    const exec::StepChain wide_searched = Memoized(wide, &fresh);
+    EXPECT_EQ(fresh.hits(), 0u);
+    ExpectSameChain(Memoized(narrow), narrow_searched);
+    ExpectSameChain(Memoized(wide), wide_searched);
+    EXPECT_EQ(memo_.hits(), 0u) << "two literals, two keys";
+    ExpectSameChain(Memoized(narrow), narrow_searched);
+    EXPECT_EQ(memo_.hits(), 1u);
+    Memoized(kCompareAll + std::string(" LIMIT 10"));
+    Memoized(kCompareAll + std::string(" LIMIT 20000000"));
+    EXPECT_EQ(memo_.hits(), 1u) << "another LIMIT, another key";
+}
+
+TEST_F(PlanMemoTest, AThreeRelationHitIsTheSearchsChain) {
+    // Purity over a larger block: a hit and a search with a cleared memo
+    // compile the same chain.
+    FillModels();
+    Ok("CREATE TABLE fam (id int64, label int64) BTREE");
+    for (int i = 0; i < 3; ++i) Ok("INSERT INTO fam VALUES (" + std::to_string(i) + ")");
+    stats_.PublishForTest({{models_, stats::BandOf(8)},
+                           {results_, stats::BandOf(2872)},
+                           {OidOf("fam"), stats::BandOf(3)}},
+                          {});
+    const std::string sql =
+        "SELECT results.pnl, fam.label FROM results JOIN models ON results.model_id = models.id "
+        "JOIN fam ON fam.id = models.name";
+    Memoized(sql);
+    const exec::StepChain hit = Memoized(sql);
+    EXPECT_EQ(memo_.hits(), 1u);
+    exec::PlanMemo cleared;
+    ExpectSameChain(hit, Memoized(sql, &cleared));
+}
+
+TEST_F(PlanMemoTest, AnotherNamespacesRelationOfOneNameIsAnotherKey) {
+    // `USE ns` resolves one statement text to other relations: their oids
+    // are in the key, so the entry the public relations made is not served.
+    FillModels();
+    Memoized(kCompareAll);
+    Ok("CREATE NAMESPACE other");
+    Ok("CREATE TABLE other.models (id int64, name int64) BTREE");
+    Ok("CREATE TABLE other.results (id int64, model_id int64, pnl int64) BTREE");
+    exec::PlanOptions options;
+    parser::Parser parser(kCompareAll);
+    ASSERT_TRUE(parser.Parse().ok());
+    auto parsed = parser::Parse(kCompareAll);
+    ASSERT_TRUE(parsed.ok());
+    exec::StatementContext context = exec::StatementContextNow();
+    auto other = boot_->catalog.FindNamespaceOidByName("other");
+    ASSERT_TRUE(other.ok()) << other.status().message();
+    context.default_namespace = other.value();
+    options.statistics = &source_;
+    options.memo = &memo_;
+    options.fetch_id = parser.fingerprint()->fetch_id;
+    options.arg_hash = parser.fingerprint()->arg_hash;
+    options.literals_known = true;
+    auto chain = exec::Compile(boot_->catalog, std::get<parser::SelectStmt>(parsed.value()), nullptr,
+                               nullptr, &context, &options);
+    ASSERT_TRUE(chain.ok()) << chain.status().message();
+    EXPECT_EQ(memo_.hits(), 0u);
+    EXPECT_NE(chain.value().steps[0].rel_oid, results_);
+}
+
+TEST_F(PlanMemoTest, TheDispatchersMemoServesARepeatedStatement) {
+    FillModels();
+    dispatcher_->set_plan_stats(&stats_);
+    stats_.PublishForTest({{models_, stats::BandOf(8)}, {results_, stats::BandOf(2872)}}, {});
+    Rows(kCompareAll);
+    const std::string plan = Plan(kCompareAll);
+    EXPECT_NE(plan.find("planned order=memo"), std::string::npos) << plan;
+    EXPECT_EQ(Rows(kCompareAll).size(), 64u);
+    dispatcher_->set_plan_stats(nullptr);
+}
+
 }  // namespace
 }  // namespace kds::server

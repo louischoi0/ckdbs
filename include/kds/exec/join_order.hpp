@@ -55,6 +55,9 @@ struct PlanOptions {
     // compile pins it only for a block it searches, so a point read and a
     // tuple key chain never touch it.
     stats::PlanStatsSource* statistics = nullptr;
+    // The core's order memo (CC-S4, plan_memo.hpp), or null: every searched
+    // block searches.
+    class PlanMemo* memo = nullptr;
     // `join_build_max_rows`: a build the model expects to bucket more rows
     // is priced as the per-row walk the executor falls back to; 0, no build.
     std::size_t join_build_max_rows = kDefaultJoinBuildMaxRows;
@@ -64,6 +67,11 @@ struct PlanOptions {
     // The statement's fetch id, 0 when it has none: a planned block's key
     // (docs/spec/plan-stats.md PS2). With 0 no key is set.
     std::uint64_t fetch_id = 0;
+    // The statement's literals, hashed (`Fingerprint::arg_hash`), and
+    // whether the hash covers them all - no `?` bound later. The memo keys
+    // on them (CC-S4); without them it is not read.
+    std::uint64_t arg_hash = 0;
+    bool literals_known = false;
 };
 
 // What the model reads besides the chain itself (CC-S1).

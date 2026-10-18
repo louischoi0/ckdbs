@@ -1682,6 +1682,10 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
            << " plan_stats_publishes=" << c.publishes
            << " plan_stats_steward_us_max=" << c.steward_ns_max / 1000;
     }
+    // This core's order memo (plan-stats.md PS6): the answering core's
+    // counts, not the instance's.
+    section("plan_memo");
+    os << " plan_memo_hits=" << plan_memo_.hits() << " plan_memo_misses=" << plan_memo_.misses();
 
     // **The Cabin store's instance-wide half** (cabin.md §6a), which `SHOW
     // CABINS`' header printed and no `sys.cabins` row can carry: a walk
@@ -7453,8 +7457,11 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
         plan.join_build_max_rows = budget_.join_build_max_rows();
         plan.sort_max_rows = sort_max_rows_;
         plan.statistics = plan_stats_ != nullptr ? &plan_source_ : nullptr;
+        plan.memo = &plan_memo_;
         if (const auto fingerprint = run->parser->fingerprint(); fingerprint.has_value()) {
             plan.fetch_id = fingerprint->fetch_id;
+            plan.arg_hash = fingerprint->arg_hash;
+            plan.literals_known = fingerprint->param_count == 0;
         }
         return exec::Compile(catalog_, stmt, v, &borrow, context,
                              plan_join_order_ ? &plan : nullptr);

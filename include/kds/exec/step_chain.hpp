@@ -827,6 +827,8 @@ struct PlanNote {
     std::vector<double> estimated_rows;
     std::uint64_t generation = 0;
     double cost_ratio = 1.0;
+    // Whether the order came from the core's memo rather than a search (CC-S4).
+    bool from_memo = false;
 };
 
 // The relations a block the join planner searches may hold and still have

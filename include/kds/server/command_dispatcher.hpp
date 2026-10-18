@@ -23,6 +23,7 @@
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/plan_memo.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/stats/plan_stats.hpp"
 #include "kds/exec/fk_check.hpp"
@@ -2411,6 +2412,8 @@ private:
     // `set_plan_stats`': the instance's store, and this core's view of it.
     stats::PlanStats* plan_stats_ = nullptr;
     stats::PlanStatsSource plan_source_;
+    // This core's join order memo (CC-S4).
+    exec::PlanMemo plan_memo_;
 
     // AG11's caps, handed to every fold this dispatcher runs, from the
     // `aggregate_max_groups` / `aggregate_max_distinct` config keys (spec
