@@ -278,6 +278,22 @@ TEST_F(KwpSessionTest, ASelectStarDescribesTheWholeSchema) {
         << "field 0 of every user relation is the Keystone id";
 }
 
+TEST_F(KwpSessionTest, AReorderedJoinStillFlagsTheFromRelationsKey) {
+    // CB-S2: `w`'s literal makes it the driver, so `u` runs second - and the
+    // flag stays on the FROM relation's tuple key, whatever order ran.
+    Handshake();
+    const std::string sql =
+        "SELECT u.id, w.id FROM t AS u JOIN t AS w ON u.id = w.v WHERE w.name = 'x'";
+    // (join_planner_test.cpp pins that this statement is reordered.)
+    auto frames = RunStatement(sql);
+    ASSERT_GE(frames.size(), 2u);
+    auto desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    ASSERT_EQ(desc.value().size(), 2u);
+    EXPECT_NE(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+    EXPECT_EQ(desc.value()[1].flags & wire::kFieldFlagKeystone, 0);
+}
+
 TEST_F(KwpSessionTest, ANullableDrivingRelationsKeyIsNotFlaggedTheTupleKey) {
     // The flag promises a value that is never NULL; a RIGHT join's left
     // relation is null-extended (BU-S6, the query layer).

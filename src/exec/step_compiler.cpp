@@ -15,6 +15,7 @@
 #include "kds/storage/keystone.hpp"  // kIdSpaceEnd - a bind's whole-relation declaration
 #include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/index_key.hpp"
+#include "kds/exec/join_order.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_vm.hpp"  // PositionSink - the declaration sink AT-R1 threads
 
@@ -1797,7 +1798,8 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
                                  bool inner_build, PositionSink* declare,
-                                 const StatementContext* context = nullptr);
+                                 const StatementContext* context = nullptr,
+                                 const PlanOptions* plan = nullptr);
 
 // A predicate-position subquery lowered to its sub-chain (V15), for a flat
 // conjunct and a boolean conjunct's leaf alike: compiled against a scope
@@ -1862,10 +1864,10 @@ StatusOr<SubChain> LowerSubquery(catalog::Catalog& catalog, const Scope& scope,
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                             const txn::ReadView* view, PositionSink* declare,
-                            const StatementContext* context) {
+                            const StatementContext* context, const PlanOptions* plan) {
     std::uint32_t next_step_id = 0;
     auto chain = CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
-                              view, /*inner_build=*/true, declare, context);
+                              view, /*inner_build=*/true, declare, context, plan);
     if (!chain.ok()) return chain;
     StepChain& out = chain.value();
     out.determinism = DeterminismOf(out);
@@ -2031,11 +2033,43 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 
 namespace {
 
+// A greedy order above this many relations; every permutation at or below
+// it (4! = 24 compiles of a statement, against one).
+constexpr std::size_t kMaxExhaustiveJoinRelations = 4;
+
+// A cheaper order must win by more than this fraction, so float noise
+// between two equal costs never moves a statement off its written order.
+constexpr double kCostTieMargin = 1e-9;
+
+bool HasSubquery(const parser::BoolExpr& node) {
+    if (node.op == parser::BoolExpr::Op::kLeaf) return node.leaf.has_subquery();
+    return std::any_of(node.children.begin(), node.children.end(),
+                       [](const parser::BoolExpr& child) { return HasSubquery(child); });
+}
+
+// Whether a WHERE carries a subquery anywhere - a flat conjunct or a leaf
+// of a boolean one. A block that does is not reordered (CB-Q4 (a)): its
+// sub-chains are placed against slots and lowered with side effects.
+bool HasSubqueryPredicate(const parser::SelectStmt& stmt) {
+    return std::any_of(stmt.where.begin(), stmt.where.end(), [](const parser::Condition& cond) {
+        return cond.has_subquery() ||
+               (cond.kind == parser::PredicateKind::kBoolTree && cond.tree != nullptr &&
+                HasSubquery(*cond.tree));
+    });
+}
+
+StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
+                                 const Scope& scope,
+                                 const std::vector<const parser::RelationRef*>& refs,
+                                 std::uint32_t& next_step_id, std::uint32_t depth,
+                                 const txn::ReadView* view, bool inner_build,
+                                 PositionSink* declare);
+
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
                                  bool inner_build, PositionSink* declare,
-                                 const StatementContext* context) {
+                                 const StatementContext* context, const PlanOptions* plan) {
     // The execute-time half of spec I15 R3: recursion is bounded at both
     // ends. The parser caps nesting too, but a chain can also be built by
     // something other than a parse, and a bound that only one producer
@@ -2077,6 +2111,96 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         scope.relations.push_back(BoundRelation{rel->binding(), access.value()});
     }
 
+    // ---- 1a. The join order (CB-S2, workorder-cb-join-planner.md §3.2) ---
+    //
+    // A top-level block of two or more relations with no subquery predicate
+    // is compiled in the orders below and the cheapest compiled chain runs
+    // (`ChainCost`, join_order.hpp: data-free, so one catalog gives one
+    // plan). Everything after binding reads slots, so a chain compiled over
+    // a permuted binding is that order's chain, unchanged otherwise. Ties go
+    // to the written order, which is compiled first and whose refusal is
+    // the statement's.
+    if (plan == nullptr || refs.size() < 2 || stmt.star() || HasSubqueryPredicate(stmt)) {
+        return CompileBound(catalog, stmt, scope, refs, next_step_id, depth, view, inner_build,
+                            declare);
+    }
+    const std::uint32_t base_step_id = next_step_id;
+    const auto compile_order = [&](const std::vector<std::size_t>& order) -> StatusOr<StepChain> {
+        Scope permuted = scope;  // whole, so no field is dropped
+        permuted.relations.clear();
+        std::vector<const parser::RelationRef*> permuted_refs;
+        for (const std::size_t written : order) {
+            permuted.relations.push_back(scope.relations[written]);
+            permuted_refs.push_back(refs[written]);
+        }
+        std::uint32_t ids = base_step_id;
+        auto chain = CompileBound(catalog, stmt, permuted, permuted_refs, ids, depth, view,
+                                  inner_build, declare);
+        if (!chain.ok()) return chain;
+        // CB-Q3 (a): a step's id is its relation's written position, so a
+        // trail entry names the same relation whatever order recorded it.
+        for (std::size_t k = 0; k < order.size(); ++k) {
+            chain.value().steps[k].step_id = base_step_id + static_cast<std::uint32_t>(order[k]);
+        }
+        return chain;
+    };
+
+    std::vector<std::size_t> order(refs.size());
+    for (std::size_t k = 0; k < order.size(); ++k) order[k] = k;
+    auto best = compile_order(order);
+    if (!best.ok()) return best;
+    const std::size_t build_cap = plan->join_build_max_rows;
+    double best_cost = ChainCost(best.value(), build_cap);
+    const auto consider = [&](const std::vector<std::size_t>& candidate) {
+        auto chain = compile_order(candidate);
+        if (!chain.ok()) return;  // a refusal is the written order's to give
+        const double cost = ChainCost(chain.value(), build_cap);
+        if (cost < best_cost * (1.0 - kCostTieMargin)) {
+            best_cost = cost;
+            best = std::move(chain);
+        }
+    };
+    if (refs.size() <= kMaxExhaustiveJoinRelations) {
+        while (std::next_permutation(order.begin(), order.end())) consider(order);
+    } else {
+        // Greedy: at each position the relation whose placement there - the
+        // rest following in written order - costs least.
+        std::vector<std::size_t> placed;
+        std::vector<std::size_t> rest = order;
+        while (!rest.empty()) {
+            std::size_t pick = 0;
+            std::optional<double> pick_cost;
+            for (std::size_t r = 0; r < rest.size(); ++r) {
+                std::vector<std::size_t> candidate = placed;
+                candidate.push_back(rest[r]);
+                for (std::size_t o = 0; o < rest.size(); ++o) {
+                    if (o != r) candidate.push_back(rest[o]);
+                }
+                auto chain = compile_order(candidate);
+                if (!chain.ok()) continue;
+                const double cost = ChainCost(chain.value(), build_cap);
+                if (!pick_cost.has_value() || cost < *pick_cost * (1.0 - kCostTieMargin)) {
+                    pick = r;
+                    pick_cost = cost;
+                }
+            }
+            placed.push_back(rest[pick]);
+            rest.erase(rest.begin() + static_cast<std::ptrdiff_t>(pick));
+        }
+        consider(placed);
+    }
+    next_step_id = base_step_id + static_cast<std::uint32_t>(refs.size());
+    return best;
+}
+
+// Everything after binding: the chain of `scope`'s relations in the order
+// they stand there (CB-S2 permutes them before calling this).
+StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
+                                 const Scope& scope,
+                                 const std::vector<const parser::RelationRef*>& refs,
+                                 std::uint32_t& next_step_id, std::uint32_t depth,
+                                 const txn::ReadView* view, bool inner_build,
+                                 PositionSink* declare) {
     StepChain chain;
     chain.steps.resize(scope.relations.size());
     for (std::size_t i = 0; i < scope.relations.size(); ++i) {

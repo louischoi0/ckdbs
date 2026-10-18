@@ -118,6 +118,7 @@ add_library(kds
     src/exec/plan_printer.cpp
     src/exec/functions.cpp
     src/exec/step_compiler.cpp
+    src/exec/join_order.cpp
     src/exec/set_expr.cpp
     src/exec/query_layer.cpp
     src/exec/aggregate.cpp

@@ -58,6 +58,7 @@ public:
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+    void KeepWrittenOrder() { dispatcher_->set_plan_join_order(false); }
 
     catalog::Catalog& catalog() { return boot_->catalog; }
     storage::InMemoryPageStore& store() { return store_; }
@@ -294,6 +295,32 @@ TEST(WaystoneContractTest, TheScanKernelSwitchChangesNoReply) {
     Load(on_db);
     Load(off_db);
     ExpectSame(RunAll(on_db, 3), RunAll(off_db, 3), "scan kernel on against off");
+}
+
+// CB-Q3 (a): a reordered chain records its probe step under the relation's
+// written position, and replay finds it there. `b`'s indexed literal drives,
+// so `j` - written first - is probed second, and its trail entries carry
+// step id 0. Every round answers the walk's rows, recorded and replayed
+// alike, and the trail was really written.
+TEST(WaystoneContractTest, AReorderedChainRecordsAndReplaysUnderWrittenIds) {
+    const std::string sql = "SELECT b.label, j.w FROM j JOIN b ON j.id = b.id WHERE b.v = 30";
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    const std::string plan = db.Run("ANALYZE " + sql);
+    ASSERT_NE(plan.find("reordered=1"), std::string::npos) << plan;
+    ASSERT_NE(plan.find("step 0 Probe j"), std::string::npos) << plan;
+    for (int round = 0; round < 4; ++round) {
+        EXPECT_EQ(db.Run(sql), "b.label,j.w\\nrow3,300") << "round " << round;
+    }
+    auto fingerprint = parser::FingerprintOf(sql);
+    ASSERT_TRUE(fingerprint.has_value());
+    auto patterns = db.catalog().ListPatterns();
+    ASSERT_TRUE(patterns.ok()) << patterns.status().message();
+    EXPECT_TRUE(std::any_of(patterns.value().begin(), patterns.value().end(),
+                            [&](const catalog::SysPatternRow& row) {
+                                return row.fetch_id == fingerprint->fetch_id;
+                            }))
+        << "the reordered chain recorded no trail";
 }
 
 TEST(WaystoneContractTest, RecordingWithoutReplayingChangesNoReply) {
@@ -541,6 +568,7 @@ TEST(WaystoneContractTest, ABuiltJoinFeedsNoTrail) {
     // it runs. This is the test that fails if someone drops the
     // `IsTrailReplayable(step.kind)` gate at the recording site.
     Instance db(/*record=*/true, /*replay=*/true);
+    db.KeepWrittenOrder();  // the walked join as written (CB-S2)
     Load(db);
 
     const std::string built = "SELECT a.label, d.label FROM b AS a JOIN h AS d ON d.v = a.v";

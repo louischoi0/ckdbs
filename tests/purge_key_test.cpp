@@ -86,6 +86,7 @@ protected:
                    /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
                    exec::Budget(), &*recorder_, /*replay_enabled=*/true,
                    /*access_statistics=*/true, &cabins_, &*mgr_);
+        d_->set_plan_join_order(false);  // the chains as written (CB-S2)
     }
 
     std::string Run(const std::string& sql) { return d_->Dispatch(sql).response; }

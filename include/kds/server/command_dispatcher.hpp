@@ -23,6 +23,7 @@
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/step_compiler.hpp"
 #include "kds/exec/fk_check.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/set_expr.hpp"
@@ -352,6 +353,8 @@ struct StatementLimits {
     std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
     std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
     bool scan_kernel = true;
+    // `join_order = planned` (true) or `written` (CB-S2).
+    bool plan_join_order = true;
 };
 
 // **The physical optimizer's surface, as one value** (AT-S8, on the
@@ -1681,6 +1684,8 @@ public:
     void set_join_build_max_rows(std::size_t rows) noexcept {
         budget_.set_join_build_max_rows(rows);
     }
+    // `join_order` (CB-S2): false keeps every join in its written order.
+    void set_plan_join_order(bool planned) noexcept { plan_join_order_ = planned; }
 
     // All of them at once, as an instance hands them to each core (AT-S8,
     // `StatementLimits`).
@@ -1691,6 +1696,7 @@ public:
         set_sort_max_rows(limits.sort_max_rows);
         set_join_build_max_rows(limits.join_build_max_rows);
         budget_.set_scan_kernel(limits.scan_kernel);
+        set_plan_join_order(limits.plan_join_order);
     }
 
 
@@ -2386,6 +2392,8 @@ private:
     // value and handed to each execution, which takes its own copy - so
     // one statement's spend never carries into the next.
     exec::Budget budget_;
+    // `join_order = planned` (CB-S2).
+    bool plan_join_order_ = true;
 
     // AG11's caps, handed to every fold this dispatcher runs, from the
     // `aggregate_max_groups` / `aggregate_max_distinct` config keys (spec

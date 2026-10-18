@@ -4844,7 +4844,7 @@ std::vector<std::uint32_t> AggregateOutputTypeMods(const exec::AggregateSpec& sp
 std::vector<wire::FieldDescription> DescribeFields(
     std::span<const std::string> names, std::span<const std::uint32_t> type_vals,
     std::span<const std::uint32_t> type_mods,
-    std::span<const exec::ColumnRef> projection = {}) {
+    std::span<const exec::ColumnRef> projection = {}, std::uint16_t from_slot = 0) {
     std::vector<wire::FieldDescription> fields;
     fields.reserve(names.size());
     for (std::size_t i = 0; i < names.size(); ++i) {
@@ -4868,7 +4868,11 @@ std::vector<wire::FieldDescription> DescribeFields(
         // element 0 is exactly `{0, 0, 0}`, so the two routes to one
         // `SELECT *` describe it alike. A star read that passed no
         // projection would flag nothing.
-        if (i < projection.size() && projection[i].up == 0 && projection[i].rel_slot == 0 &&
+        //
+        // **The FROM relation's**, at `from_slot`: the join planner may run
+        // it at another slot (CB-S2), and a description that followed the
+        // plan would change with the catalog.
+        if (i < projection.size() && projection[i].up == 0 && projection[i].rel_slot == from_slot &&
             projection[i].col_pos == 0) {
             f.flags |= wire::kFieldFlagKeystone;
         }
@@ -7429,7 +7433,9 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // relation once (`ReadBorrow::Position`).
     ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
     auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
-        return exec::Compile(catalog_, stmt, v, &borrow, context);
+        const exec::PlanOptions plan{budget_.join_build_max_rows()};
+        return exec::Compile(catalog_, stmt, v, &borrow, context,
+                             plan_join_order_ ? &plan : nullptr);
     });
     if (!chain.ok()) {
         // BU-Q9: a form the native compile declines goes to the query layer,
@@ -7616,8 +7622,14 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
         star_access != nullptr ? std::span<const std::uint32_t>(star.type_mods)
                                : std::span<const std::uint32_t>(compiled.projection_type_mods);
 
-    if (Status described =
-            sink.Describe(DescribeFields(compiled.column_names, types, type_mods, projection));
+    // The FROM relation's slot: its step id is the lowest, its written
+    // position, wherever the join planner runs it (CB-Q3).
+    const auto from_step = std::min_element(
+        compiled.steps.begin(), compiled.steps.end(),
+        [](const exec::Step& a, const exec::Step& b) { return a.step_id < b.step_id; });
+    const auto from_slot = static_cast<std::uint16_t>(from_step - compiled.steps.begin());
+    if (Status described = sink.Describe(
+            DescribeFields(compiled.column_names, types, type_mods, projection, from_slot));
         !described.ok()) {
         return {"ERR " + described.message(), false, 0, described};
     }

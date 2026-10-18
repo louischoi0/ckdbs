@@ -2,6 +2,7 @@
 
 #include "kds/catalog/rows.hpp"
 
+#include <algorithm>
 #include <sstream>
 
 #include "kds/exec/cabin_expr.hpp"
@@ -285,7 +286,15 @@ const char* StatementClassName(StatementClass klass) noexcept {
 std::string FormatPlan(const StepChain& chain) {
     std::ostringstream os;
     os << "class=" << StatementClassName(chain.klass) << " steps=" << chain.steps.size()
-       << " hoisted=" << chain.hoisted.size() << '\n';
+       << " hoisted=" << chain.hoisted.size();
+    // A step's id is its relation's written position (CB-Q3), so ids out of
+    // ascending order are the join planner's reorder, named on this line.
+    const bool reordered = std::adjacent_find(chain.steps.begin(), chain.steps.end(),
+                                              [](const Step& a, const Step& b) {
+                                                  return a.step_id > b.step_id;
+                                              }) != chain.steps.end();
+    if (reordered) os << " reordered=1";
+    os << '\n';
 
     // Hoisted first, because that is the execution order: an uncorrelated
     // sub-chain runs once *before* the outer chain opens, and a false one

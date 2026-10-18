@@ -1068,8 +1068,13 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   only schema; `public.t` is not accepted.
 - Joins: `JOIN <table> [AS <alias>] ON <rel.col> = <rel.col>` chains.
   Inner equi-join only, one equality per ON, both sides qualified.
-  **Written order is execution order** — the FROM list is a client contract
-  and nothing reorders it. The statement is the plan.
+  **The engine chooses the join order** (`join_order = planned`, the
+  default): from the statement's shape and the catalog alone - which steps
+  are tuple key lookups, which columns carry an index or a Cabin, which
+  literals restrict which relation - never from row counts, so one statement
+  over one catalog always runs one plan. `join_order = written` runs the
+  relations in the order written. A statement carrying a subquery predicate
+  runs in written order either way.
 - Every relation's binding must be distinct; `FROM t JOIN t` is refused, and
   `FROM t AS a JOIN t AS b` is how a self-join is spelled.
 - A join keyed on a relation's **tuple key** executes as a tuple key probe
@@ -1256,11 +1261,10 @@ SELECT <list> FROM ... [WHERE ...]
 ```
 
 Each clause is independently optional, in that order (`OFFSET 5 LIMIT 10`
-is trailing garbage — dialect compatibility is a non-goal). `LIMIT`
-without `ORDER BY` is well-defined here in a way general SQL cannot
-promise: emission order is already a client contract — written order
-across steps, tuple key order within one — so `LIMIT n OFFSET m` means rows
-`[m, m+n)` of the reply the unlimited statement gives.
+is trailing garbage — dialect compatibility is a non-goal). **Without
+`ORDER BY` the order rows arrive in is not a contract**, as in general SQL:
+the join order is the engine's, so `LIMIT n` without `ORDER BY` returns
+some `n` rows of the reply. Write `ORDER BY` for a defined slice.
 
 - The counts are non-negative integer literals; a value past uint64
   refuses rather than wraps; `LIMIT 0` is legal and answers no rows.
@@ -1540,12 +1544,13 @@ they were before the split.
   stay reserved and refused by the native grammar; since BU-S6 the query
   layer answers them (above), as it does a cross, comma or `USING` join and
   an `ON` beyond one column equality.
-- **The join rule.** On the native path KDS supports inner equi-join chains, executed in
-  written order, probing by tuple key where the ON allows it. There is no
-  merge join and no plan search **— the query is the plan.** Written order
-  is a client contract; decorrelation rewrites are forbidden, not merely
-  unimplemented. A stable plan is what lets `pattern_id` name a plan and
-  Waystone trust it.
+- **The join rule.** On the native path KDS supports inner equi-join chains,
+  in the order the join planner chooses (`join_order`, above), probing by
+  tuple key where the ON allows it and building a statement-local map of the
+  inner side where it does not. There is no merge join. The planner reads no
+  statistic, so a statement's plan changes only when the catalog does - which
+  is what lets `pattern_id` name a plan and Waystone trust it. Decorrelation
+  rewrites are forbidden, not merely unimplemented.
 
   Since 2026-08-20 one join *does* hash, and the distinction is worth
   stating precisely because the sentence above used to deny it outright.

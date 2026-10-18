@@ -416,6 +416,10 @@ public:
         // Whether a walk consults its scan kernel (BM-Q5 (a); exec/budget.hpp).
         bool scan_kernel = true;
 
+        // `join_order`: `planned` lets the join planner choose a block's
+        // order, `written` keeps the order the statement wrote (CB-S2).
+        bool plan_join_order = true;
+
         // **How long a statement may wait before the engine calls it a
         // fault** (AO-R8, the retired in-doubt ceiling's quantity,
         // re-scoped at AT-S6). Milliseconds in the file,
@@ -503,7 +507,8 @@ public:
             return StatementLimits{indexes, max_insert_rows,
                                    exec::AggregateLimits{aggregate_max_groups,
                                                          aggregate_max_distinct},
-                                   sort_max_rows, join_build_max_rows, scan_kernel};
+                                   sort_max_rows, join_build_max_rows, scan_kernel,
+                                   plan_join_order};
         }
 
         // Every key a config file may set (config_file.hpp). Kept next to

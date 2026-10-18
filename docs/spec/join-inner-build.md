@@ -41,6 +41,14 @@ Keystone id at the slot against the bucketed tuple key - and resolves a miss by 
 tuple key lookup (`step_vm.cpp`'s build probe); every user relation is a
 btree, a heap included (`heap-and-tuple.md` §3.1b).
 
+**The side it builds is chosen since CB-S2** (`instructions/v3.2.0/workorder-cb-join-planner.md`
+§3.3): the build hashes the inner step of the chain as before, and the join
+planner chooses which relation is the inner step - the one whose build its
+cost model prices cheapest, and a build it expects past `join_build_max_rows`
+is priced as the per-row walk it falls back to. §3 below is the argument for
+the build inside one chain; the chain's order is no longer written order
+(`parser-v2.md` I12).
+
 ## 3. Why this does not break the written-order contract
 
 `docs/spec/parser-v2.md` §5 (I12) is the constraint: written order is the

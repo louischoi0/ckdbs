@@ -7,6 +7,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/budget.hpp"
 #include "kds/exec/set_expr.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/txn/read_view.hpp"
@@ -66,12 +67,25 @@ namespace kds::exec {
 // `context`, when given, is the statement's `NOW()` instead of a fresh
 // reading: a scalar subquery of an UPDATE reads its UPDATE's (BJ-S7), so
 // the statement has one `NOW()`.
+//
+// `plan`, when given, asks the join planner to choose the top-level block's
+// join order (CB-S2, instructions/v3.2.0/workorder-cb-join-planner.md §3.2);
+// null keeps the written order. Only a client's SELECT asks
+// (`join_order = planned`); a compile that only checks a statement does not.
 class PositionSink;
+
+struct PlanOptions {
+    // The statement's `join_build_max_rows`: a build the cost model expects
+    // to exceed it is priced as the per-row walk the executor falls back
+    // to; 0, no build.
+    std::size_t join_build_max_rows = kDefaultJoinBuildMaxRows;
+};
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                             const txn::ReadView* view = nullptr,
                             PositionSink* declare = nullptr,
-                            const StatementContext* context = nullptr);
+                            const StatementContext* context = nullptr,
+                            const PlanOptions* plan = nullptr);
 
 // Compiles a single-relation WHERE clause - what UPDATE and, later,
 // DELETE have instead of a chain.

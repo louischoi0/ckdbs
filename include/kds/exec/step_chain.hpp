@@ -17,13 +17,11 @@
 //
 // ---- Why a chain, and why written order --------------------------------
 //
-// Written order is execution order. That is a **client contract**, not an
-// implementation detail: the statement is the chain, nothing reorders it,
-// and no decorrelation rewrite exists. A client that wants a different
-// join order writes a different statement. This costs the optimizations a
-// cost-based planner would find, and buys the thing this engine is for -
-// a repeated query pattern executes the same way every time, which is what
-// makes a recorded Waystone trail replayable at all.
+// The chain's order is execution order. Since CB-S2 the join planner chooses
+// it for an inner-join block (`join_order.hpp`, parser-v2.md I12) from the
+// statement's shape and the catalog alone, so a repeated query pattern still
+// executes the same way every time - which is what makes a recorded
+// Waystone trail replayable at all. No decorrelation rewrite exists.
 //
 // ---- The step-kind table IS the trust model ----------------------------
 //
@@ -813,8 +811,9 @@ struct StepChain {
     // without opening the outer relation at all.
     std::vector<SubChain> hoisted;
 
-    // In written order. steps[0] is the FROM relation, steps[i] the i-th
-    // JOIN. Never sorted, never reordered.
+    // In execution order: the join planner's (CB-S2), or the written order
+    // - steps[0] the FROM relation, steps[i] the i-th JOIN - where it kept
+    // it. A step's `step_id` is its relation's written position either way.
     std::vector<Step> steps;
 
     // The select list, resolved. Empty means `SELECT *`, which the

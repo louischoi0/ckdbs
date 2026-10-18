@@ -1319,6 +1319,31 @@ Verified on `worktree-bz-background-advisory-optimizer` at `954abc20`
   the base included**, and 13-28 of 400 at `v3.1.0-30`. Nobody has determined
   whether this is the driver's read skew or an invariant slip in the engine.
 
+## The join planner (CB)
+
+- **An aggregated join's `SUM` can overflow in one join order and not in
+  another.** Read at CB-S2's review on `worktree-cb-join-planner`: the int64
+  accumulator checks every partial sum (`src/exec/aggregate.cpp`, the
+  `SUM` fold), so for one set of rows `MAX, 1, -1` refuses `OutOfRange`
+  where `MAX, -1, 1` does not. Since CB-S2 the join planner chooses the
+  order rows reach the fold, and a catalog change (`CREATE INDEX`, a Cabin)
+  can change it, so the same statement over the same rows can move between
+  an answer and a refusal. Never a wrong answer. Owned by
+  `docs/spec/aggregate.md`.
+
+- **A reordered plan's `ANALYZE` numbers steps one way and columns
+  another.** A step line prints the step's id, its relation's written
+  position (CB-Q3), while a `ColumnRef` prints `up:slot.col` with `slot` the
+  execution position (`src/exec/plan_printer.cpp`). Correct, and easy to
+  misread on a `reordered=1` plan. Owned by `docs/spec/parser-v2.md` I12.
+
+- **The planner prices every relation as `kAssumedRelationRows` rows.**
+  By the operator's choice (CB-Q2 (a)) no statistic reaches it, so a small
+  relation and a large one cost the same to walk: an order is chosen from
+  kinds, literals and builds alone (`include/kds/exec/join_order.hpp`).
+  Where that is wrong, `join_order = written` is the way back. Owned by
+  `instructions/v3.2.0/workorder-cb-join-planner.md` §3.2.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,

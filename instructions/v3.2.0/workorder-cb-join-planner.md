@@ -118,12 +118,19 @@ is a pure function of the compiled chain and its catalog:
 - **Ties** go to the earlier written order, so a statement whose written
   order is already cheapest compiles exactly as before.
 
-The constants are named `constexpr` in one header with their derivation.
-None is a setting: an operator who wants the written order back has
-nothing to turn off (CB-Q2 (a) admits no statistics). After the choice,
-step ids are rewritten to written positions (CB-Q3). `ANALYZE` prints the
-chosen order as written positions on the class line, so a plan names the
-reorder.
+The constants are named `constexpr` in one header with their derivation;
+a non-tuple-key join keeps one row per outer row of an unfiltered relation,
+the tuple key join's own rate, so a join's estimated size is the same from
+either side. **A build the model expects past `join_build_max_rows` is priced
+as the per-row walk the executor falls back to**, so the planner never
+chooses an order for a build the cap would decline. **`join_order = planned |
+written`** (default `planned`) is the one setting, added at CB-S2: the
+tests that pin a walked join's mechanics run the written chain through it,
+and it is the operator's way back to I12 as it stood. It is not a statistic
+and does not touch CB-Q2 (a). After the choice,
+step ids are rewritten to written positions (CB-Q3). `ANALYZE` prints
+`reordered=1` on the class line when the order moved, and each step line
+names its written id in execution order, so a plan names the reorder.
 
 ### 3.3 The build side (W0's 1)
 
@@ -155,4 +162,17 @@ Overhead is measured at the close, over the whole change (CLAUDE.md step 3).
 
 ## 5. Stage log
 
-(empty)
+- **CB-S1** landed at `bf0637da`: range bounds through a join-key class.
+  The review found a derived range displacing a correlated index probe
+  (three `IndexCompileTest` cells) and fixed it with `SteersAccess`; its
+  per-member rule and one-pass merge adopted. Suite 4074/4074.
+- **CB-S2**: the join order. The review found the KWP Keystone field flag
+  following the executed driver instead of the FROM relation (fixed in
+  `DescribeFields`), a cost double-count on a join column pinned to a
+  literal (fixed), and proposed six cuts: planning opt-in at `Compile`, the
+  cap read off the budget, the scope copied whole and the dead conditional
+  dropped were taken; moving the cost model into `step_compiler.cpp` and
+  costing the greedy prefix alone were not (the compiler is 2,700 lines and
+  the model is one reader of the chain; the greedy path is for five or
+  more relations). Two of its findings are known gaps (`known-gaps.md`,
+  The join planner). `join_order` added (§3.2). Suite 4086/4086.

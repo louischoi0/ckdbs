@@ -113,5 +113,138 @@ TEST_F(JoinPlannerTest, ANullJoinKeyStaysOutWithTheDerivedBound) {
               std::vector<std::string>{"1"});
 }
 
+// ---- CB-S2: the join order ------------------------------------------------
+
+TEST_F(JoinPlannerTest, AWrittenOrderAlreadyCheapestIsKept) {
+    // The outer range is 2 rows of u; the inner side builds once. Written
+    // the other way round, every l row would probe u - so the written
+    // order stays, and the plan names no reorder.
+    Fill();
+    const std::string plan =
+        Plan("SELECT l.v FROM u JOIN l ON l.uid = u.id WHERE u.id BETWEEN 2 AND 3");
+    EXPECT_EQ(plan.find("reordered"), std::string::npos) << plan;
+    EXPECT_LT(plan.find("step 0 Range u"), plan.find("step 1 Scan l")) << plan;
+}
+
+TEST_F(JoinPlannerTest, TheRestrictedSideDrivesWhicheverWayTheJoinIsWritten) {
+    // `l.v = 31` is the one restriction; written with l first it already
+    // drives. Written with u first, u would be walked whole and l built
+    // for every row of it - so l drives and u is probed by its tuple key.
+    Fill();
+    for (const char* sql : {
+             "SELECT u.code FROM l JOIN u ON u.id = l.uid WHERE l.v = 31",
+             "SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31",
+         }) {
+        EXPECT_EQ(Rows(sql), std::vector<std::string>{"103"}) << sql;
+        const std::string plan = Plan(sql);
+        EXPECT_NE(plan.find("FilterScan l"), std::string::npos) << plan;
+        EXPECT_NE(plan.find("Probe u"), std::string::npos) << plan;
+        EXPECT_LT(plan.find("FilterScan l"), plan.find("Probe u")) << plan;
+    }
+    // The second writing is reordered, and its steps keep their written
+    // ids: l is step 1, run first.
+    const std::string plan = Plan("SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31");
+    EXPECT_NE(plan.find("reordered=1"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("step 1 FilterScan l"), std::string::npos) << plan;
+}
+
+TEST_F(JoinPlannerTest, AFilteredSecondRelationDrivesASelfJoin) {
+    // kwp_session_test.cpp's Keystone-flag shape, pinned as reordered here.
+    Ok("CREATE TABLE t (id int64, v int32, name varchar)");
+    const std::string plan =
+        Plan("SELECT u.id, w.id FROM t AS u JOIN t AS w ON u.id = w.v WHERE w.name = 'x'");
+    EXPECT_NE(plan.find("reordered=1"), std::string::npos) << plan;
+}
+
+TEST_F(JoinPlannerTest, JoinOrderWrittenKeepsTheWrittenChain) {
+    Fill();
+    dispatcher_->set_plan_join_order(false);
+    const std::string plan = Plan("SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31");
+    EXPECT_EQ(plan.find("reordered"), std::string::npos) << plan;
+    EXPECT_EQ(Rows("SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31"),
+              std::vector<std::string>{"103"});
+}
+
+TEST_F(JoinPlannerTest, AConstantProbeBecomesTheDriver) {
+    // Scenario 1's model-join: `r.model_id = 3` derives `m.id = 3`, so m
+    // is one lookup and drives, and r is walked once - not r walked and m
+    // probed once per matching r row.
+    Ok("CREATE TABLE m (id int64, name int64) BTREE");
+    Ok("CREATE TABLE r (id int64, model_id int64, pnl int64) BTREE");
+    for (int i = 1; i <= 3; ++i) Ok("INSERT INTO m VALUES (" + std::to_string(i * 10) + ")");
+    for (int i = 0; i < 9; ++i) {
+        Ok("INSERT INTO r VALUES (" + std::to_string(1 + i % 3) + ", " + std::to_string(i) + ")");
+    }
+    const std::string sql =
+        "SELECT r.pnl, m.name FROM r JOIN m ON r.model_id = m.id WHERE r.model_id = 3";
+    EXPECT_EQ(Rows(sql), (std::vector<std::string>{"2,30", "5,30", "8,30"}));
+    const std::string plan = Plan(sql);
+    EXPECT_NE(plan.find("reordered=1"), std::string::npos) << plan;
+    EXPECT_LT(plan.find("Lookup m"), plan.find("FilterScan r")) << plan;
+}
+
+TEST_F(JoinPlannerTest, ATupleKeyAnchoredChainKeepsItsWrittenOrder) {
+    // Scenario 1's point-join: a lookup then two probes is the cheapest
+    // order there is.
+    Ok("CREATE TABLE ex (id int64, name int64) BTREE");
+    Ok("CREATE TABLE sy (id int64, ex_id int64) BTREE");
+    Ok("CREATE TABLE ba (id int64, sy_id int64, px int64) BTREE");
+    Ok("INSERT INTO ex VALUES (7)");
+    Ok("INSERT INTO sy VALUES (1)");
+    Ok("INSERT INTO ba VALUES (1, 55)");
+    const std::string sql =
+        "SELECT ba.px, ex.name FROM ba JOIN sy ON ba.sy_id = sy.id "
+        "JOIN ex ON sy.ex_id = ex.id WHERE ba.id = 1";
+    EXPECT_EQ(Rows(sql), std::vector<std::string>{"55,7"});
+    const std::string plan = Plan(sql);
+    EXPECT_EQ(plan.find("reordered"), std::string::npos) << plan;
+}
+
+TEST_F(JoinPlannerTest, EveryOrderAnswersTheSameRows) {
+    // Three relations, every writing of one join: the planner may pick a
+    // different order for each, and the rows never move.
+    Fill();
+    Ok("CREATE TABLE w (id int64, v int64) BTREE");
+    for (int v : {20, 21, 31, 40}) Ok("INSERT INTO w VALUES (" + std::to_string(v) + ")");
+    const std::vector<std::string> want{"2,20", "2,21", "3,31"};
+    for (const char* sql : {
+             "SELECT u.id, l.v FROM u JOIN l ON l.uid = u.id JOIN w ON w.v = l.v "
+             "WHERE u.id BETWEEN 2 AND 3",
+             "SELECT u.id, l.v FROM w JOIN l ON w.v = l.v JOIN u ON l.uid = u.id "
+             "WHERE u.id BETWEEN 2 AND 3",
+             "SELECT u.id, l.v FROM l JOIN w ON w.v = l.v JOIN u ON l.uid = u.id "
+             "WHERE u.id BETWEEN 2 AND 3",
+         }) {
+        EXPECT_EQ(Rows(sql), want) << sql;
+    }
+}
+
+TEST_F(JoinPlannerTest, AboveFourRelationsTheGreedyOrderAnswersTheSameRows) {
+    Fill();
+    // Five relations: the written chain u - l - a - b - c on tuple keys.
+    for (const char* t : {"a", "b", "c"}) {
+        Ok(std::string("CREATE TABLE ") + t + " (id int64, x int64) BTREE");
+        for (int i = 0; i < 12; ++i) {
+            Ok(std::string("INSERT INTO ") + t + " VALUES (" + std::to_string(i) + ")");
+        }
+    }
+    const std::string sql =
+        "SELECT l.v, c.x FROM c JOIN b ON b.id = c.id JOIN a ON a.id = b.id "
+        "JOIN l ON l.id = a.id JOIN u ON u.id = l.uid WHERE u.id = 2";
+    // l's tuple keys 3 and 4 are uid 2's rows; a, b and c hold x = id - 1.
+    EXPECT_EQ(Rows(sql), (std::vector<std::string>{"20,2", "21,3"}));
+}
+
+TEST_F(JoinPlannerTest, ABlockWithASubqueryKeepsItsWrittenOrder) {
+    // CB-Q4 (a): sub-chains are placed against slots, so their block is
+    // not reordered - even where another order would cost less.
+    Fill();
+    const std::string sql =
+        "SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31 AND "
+        "EXISTS (SELECT l2.id FROM l AS l2 WHERE l2.uid = u.id)";
+    EXPECT_EQ(Rows(sql), std::vector<std::string>{"103"});
+    EXPECT_EQ(Plan(sql).find("reordered"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace kds::server

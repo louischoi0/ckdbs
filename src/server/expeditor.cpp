@@ -79,7 +79,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "indexes",
             "cabin_max_entries_per_value", "cores",  "reactor_cpus",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
-            "join_build_max_rows",   "scan_kernel",  "lock_wait_fault_net_ms",
+            "join_build_max_rows",   "scan_kernel",  "join_order",  "lock_wait_fault_net_ms",
             "max_locks_per_txn",     "tcp_keepalive_s",
             "txn_lifetime_ceiling_ms",
             "decay_half_life",
@@ -439,6 +439,18 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetBool("scan_kernel");
         if (!v.ok()) return v.status();
         scan_kernel = v.value();
+    }
+    if (file.Has("join_order")) {
+        auto v = file.GetString("join_order");
+        if (!v.ok()) return v.status();
+        if (v.value() == "planned") {
+            plan_join_order = true;
+        } else if (v.value() == "written") {
+            plan_join_order = false;
+        } else {
+            return Status::InvalidArgument("join_order must be 'planned' or 'written', not '" +
+                                           v.value() + "'");
+        }
     }
     if (file.Has("join_build_max_rows")) {
         auto v = file.GetUint("join_build_max_rows");
