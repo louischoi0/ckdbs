@@ -1,0 +1,15 @@
+s1 results done 0.18526148796081543
+s1 stats done 2.5761663913726807
+s2 n200 rc 0 0.8 s
+s2 n1k rc 0 3.2 s
+s2 ca rc 0 29.6 s
+s2 df rc 0 263.9 s
+load rc=0
+total 75288
+drwxrwxr-x 3 cdkbs cdkbs     4096 Oct 18 11:56 .
+drwxrwxr-x 4 cdkbs cdkbs     4096 Oct 18 11:56 ..
+-rw-rw-r-- 1 cdkbs cdkbs      205 Oct 18 11:56 L.conf
+-rw-r--r-- 1 cdkbs cdkbs        0 Oct 18 11:56 L.log
+-rw-rw-r-- 1 cdkbs cdkbs      212 Oct 18 12:01 L.stderr
+-rw------- 1 cdkbs cdkbs 77070336 Oct 18 12:01 pristine.db
+drwxrwxr-x 2 cdkbs cdkbs     4096 Oct 18 12:01 pristine.db.wal
