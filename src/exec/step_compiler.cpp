@@ -2149,6 +2149,18 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     for (std::size_t k = 0; k < order.size(); ++k) order[k] = k;
     auto best = compile_order(order);
     if (!best.ok()) return best;
+    next_step_id = base_step_id + static_cast<std::uint32_t>(refs.size());
+    // A written chain of tuple key descents alone - a lookup, then probes -
+    // reads one row per step, and every order pays at least its driver's
+    // descent: no search can repay its compiles. Measured at CB's close: the
+    // six orders of a three-relation point join cost 15 us a statement
+    // (bench/v3.2.0/results-cb-close-v3.2.0-174-g0640941f.md).
+    const auto is_descent = [](const Step& step) {
+        return step.kind == AccessKind::kLookup || step.kind == AccessKind::kProbe;
+    };
+    if (std::all_of(best.value().steps.begin(), best.value().steps.end(), is_descent)) {
+        return best;
+    }
     const std::size_t build_cap = plan->join_build_max_rows;
     double best_cost = ChainCost(best.value(), build_cap);
     const auto consider = [&](const std::vector<std::size_t>& candidate) {
@@ -2189,7 +2201,6 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         }
         consider(placed);
     }
-    next_step_id = base_step_id + static_cast<std::uint32_t>(refs.size());
     return best;
 }
 
