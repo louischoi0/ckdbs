@@ -11,28 +11,34 @@
 
 namespace kds::exec {
 
+Status ColumnSpills(const catalog::TableAccess& access, std::span<const std::byte> payload,
+                    std::size_t col, std::vector<SpillRef>& out) {
+    // **Only a `varchar` column is a tagged cell**, which is
+    // `SchemaCanSpill`'s own rule and the reason it is the spill gate:
+    // `char` is fixed by declaration and every numeric type by its
+    // width, so neither can exceed its cell and neither carries a tag.
+    // Column 0 is the Keystone word, a raw u64. Decoding any of them as
+    // a cell reads a payload byte as a tag.
+    if (col >= access.schema.columns.size()) return Status::OK();
+    if (access.schema.columns[col].type_val != catalog::kTypeValVarchar) return Status::OK();
+    const std::uint32_t offset = access.layout.offsets[col];
+    if (offset >= payload.size()) return Status::OK();
+    auto cell = storage::DecodeCell(payload.subspan(offset));
+    // **A cell this build cannot read is not a licence to collect.** A
+    // corrupt tag here means the row's references are unknown, and an
+    // unknown reference must be treated as present - so the caller
+    // fails rather than acting on a set that is missing one.
+    if (!cell.ok()) return cell.status();
+    if (cell.value().tag != storage::CellTag::kSpilled) return Status::OK();
+    const varheap::VarHeapPtr ptr = varheap::DecodePtr(cell.value().varheap_ptr);
+    out.emplace_back(ptr.page_id, ptr.slot);
+    return Status::OK();
+}
+
 Status RowSpills(const catalog::TableAccess& access, std::span<const std::byte> payload,
                  std::vector<SpillRef>& out) {
     for (std::size_t col = 0; col < access.layout.offsets.size(); ++col) {
-        // **Only a `varchar` column is a tagged cell**, which is
-        // `SchemaCanSpill`'s own rule and the reason it is the spill gate:
-        // `char` is fixed by declaration and every numeric type by its
-        // width, so neither can exceed its cell and neither carries a tag.
-        // Column 0 is the Keystone word, a raw u64. Decoding any of them as
-        // a cell reads a payload byte as a tag.
-        if (col >= access.schema.columns.size()) continue;
-        if (access.schema.columns[col].type_val != catalog::kTypeValVarchar) continue;
-        const std::uint32_t offset = access.layout.offsets[col];
-        if (offset >= payload.size()) continue;
-        auto cell = storage::DecodeCell(payload.subspan(offset));
-        // **A cell this build cannot read is not a licence to collect.** A
-        // corrupt tag here means the row's references are unknown, and an
-        // unknown reference must be treated as present - so the caller
-        // fails rather than acting on a set that is missing one.
-        if (!cell.ok()) return cell.status();
-        if (cell.value().tag != storage::CellTag::kSpilled) continue;
-        const varheap::VarHeapPtr ptr = varheap::DecodePtr(cell.value().varheap_ptr);
-        out.emplace_back(ptr.page_id, ptr.slot);
+        if (Status s = ColumnSpills(access, payload, col, out); !s.ok()) return s;
     }
     return Status::OK();
 }

@@ -3418,12 +3418,28 @@ StatusOr<PurgeStmt> Parser::ParsePurge() {
     // the relation's tuple key column; the grammar is `DELETE`'s, so the parse
     // gives every byte a refusal there needs.
     PurgeStmt stmt;
+    if (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "DROPPED")) {
+        lexer_.Next();
+        if (Status s = ExpectKeyword("COLUMNS"); !s.ok()) return s;
+        stmt.dropped_columns = true;
+    }
     if (Status s = ExpectKeyword("FROM"); !s.ok()) return s;
     if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
         !s.ok()) {
         return s;
     }
     const Token& peek = lexer_.Peek();
+    // CD-S2: the clean covers the relation, so a window has nothing to name.
+    if (stmt.dropped_columns) {
+        if (peek.type == TokenType::kIdent && IEquals(peek.text, "WHERE")) {
+            return Status::NotImplemented(
+                "PURGE DROPPED COLUMNS cleans every row of the relation; a WHERE is not "
+                "implemented (byte " +
+                std::to_string(peek.byte_offset) + ")");
+        }
+        ConsumeOptionalSemicolon();
+        return stmt;
+    }
     stmt.where_byte_offset = peek.byte_offset;
     if (peek.type != TokenType::kIdent || !IEquals(peek.text, "WHERE")) {
         return Status::NotImplemented("PURGE needs a WHERE naming the tuple key; purging every "

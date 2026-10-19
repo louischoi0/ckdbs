@@ -1025,12 +1025,18 @@ struct DeleteStmt {
 // the `WHERE` token's byte, which a conjunct with no position of its own
 // (a bare subquery) is refused at. `PURGE` is a head matched by text and
 // never a reserved word.
+//
+// `PURGE DROPPED COLUMNS FROM <t>` (CD-S2,
+// `instructions/v3.2.0/workorder-cd-dropped-column-cleaning.md` §1) is the
+// same head over the relation's dropped cells: `dropped_columns` set and
+// `where` empty. Both words are contextual, never reserved.
 struct PurgeStmt {
     std::string table_name;
     std::string schema;
     std::uint32_t table_byte_offset = 0;
     std::uint32_t where_byte_offset = 0;
-    std::vector<Condition> where;  // never empty: the parser refuses a bare PURGE
+    std::vector<Condition> where;  // never empty for a key PURGE: the parser refuses a bare one
+    bool dropped_columns = false;
 };
 
 // `ALTER TABLE <t> RENAME TO <new>`, `ALTER TABLE <t> RENAME COLUMN <old>

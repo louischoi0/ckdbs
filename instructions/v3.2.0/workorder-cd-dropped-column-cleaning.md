@@ -448,3 +448,52 @@ wording, a shared `LoadChunk` and one table lookup in the test, a dropped NOT
 NULL column in it, and `null.md`'s clause.
 
 Overhead not measured; measured at the milestone's close.
+
+### CD-S2 - the clean pass (2026-10-19, on `cd-column-slot-cleaning` from `41761260`)
+
+`PURGE DROPPED COLUMNS FROM t` (OI-2 (a)): a `dropped_columns` flag on
+`PurgeStmt`, so no new statement variant; `HandlePurgeDroppedColumns` inside
+`InDdlStatement` (S3's flag writes will share its transaction; with no
+catalog write it moves no word and opens no DDL count), the relation `IS`
+and `IX` as PURGE takes them, the `TableAccess` resolved behind the `IX`.
+`BorrowChain`'s first-intention memo check (`command_dispatcher.cpp:9988`)
+is §2 step 2's "re-run if the word moved", so `W = cache_built_at()` is the
+word the head published and every drop the layout shows is committed at or
+below it. The epoch gate passes with no epochs (the synchronous path, CD-S0
+P4's condition). The walk is batched (512 dirty keys) over one keyed-slot
+walk now shared with `HandlePurge` (`VisitKeyedSlotsFrom`); each dirty key is
+cleaned by `exec::CleanDroppedCells` (`src/exec/clean_dropped.{hpp,cpp}`)
+under one exclusive leaf hold with no suspension point (a plain function),
+logged by `exec::LogHeapWrite` (`LogChainInsert`'s tail folded into it) at
+`kNoTxnId`, its spills released after the hold through `ColumnSpills`
+(factored out of `RowSpills`). `PurgeWait` gained `epoch`, and the wait loop
+an arm for it. Every dropped column is a target (OI-8 (a)).
+
+Tests (`alter_column_test.cpp`, `lock_family_test.cpp`
+`CleanDroppedWaitTest`): every dropped cell kind cleaned once with its
+spills released and its header and delete mark kept, a re-run writing
+nothing; 1,100 rows across two batch boundaries; refusals with their bytes
+and codes; a heap, a Transition-governed relation and an FK child admitted;
+an undecided writer refused then cleaned after a rollback and after a
+commit, the rollback writing the dirty image back; an older RR snapshot
+keeping its row dirty and its spill live; the epoch gate on both paths; a
+crash that keeps the log through a strict commit and loses every page since
+a checkpoint, so redo replays each clean, with exactly one loser (CD-S0 P1
+pinned). Mutants killed: the per-row gate, the zeroing, the epoch gate, and
+the envelope naming the header's writer. **Not covered**: a rollback between
+phase 1 and phase 2 (the single-dispatcher fixture cannot run a statement
+inside the seam; phase 2's re-judge under the hold is what the gate mutant
+pins), and a real BA-S15 yielding SELECT as the stale reader (core 1's slot
+is driven by hand; the gate, not the reader, is what is tested).
+
+critics-developer review: one bug, fixed by the reviewer - a stored payload
+of the wrong length was read rather than refused (invariant 13); now
+`Corruption` under the hold. Applied: the crash cell rebuilt so it replays
+the cleans (as first written, a `SYNC` put the pages on disk and redo
+skipped them), the batch cell, scope guards in the epoch cells, the shared
+walk, the logger fold, the dead null check in the wait arm. Rejected: folding
+the dispatcher's INSERT and UPDATE `HEAP_*` sites (`:4636`, `:9233`) into
+`LogHeapWrite` - outside S2's change and on the paths the close measures;
+the catalog and txn copies sit below `exec`.
+
+Overhead not measured; measured at the milestone's close.

@@ -242,10 +242,16 @@ struct DispatchOutcome {
     // `TxnConflict` at `exec::kPurgeHorizonWaitNs`; the synchronous path
     // answers with that refusal at once, which is `response`. A poll,
     // because no release or horizon advance kicks it (`known-gaps.md`).
+    //
+    // `PURGE DROPPED COLUMNS` (CD-S2) waits the same way for the same two
+    // things, and for a third: `epoch` non-zero is the schema word every
+    // core's running statements must have revalidated at or after - none may
+    // still hold a layout in which a dropped column is live.
     struct PurgeWait {
         std::uint64_t tuple_key = 0;
         std::uint64_t trx_id = 0;  // the writer waited for, or the deleter
         bool horizon = false;      // waiting for every reader, not a decide
+        std::uint64_t epoch = 0;   // waiting for every statement epoch, not a writer
     };
     std::optional<PurgeWait> purge_wait = std::nullopt;
 
@@ -2045,6 +2051,13 @@ private:
     // writer, or a deleter some reader cannot see yet - is returned as
     // `purge_wait` and nothing is written.
     DispatchOutcome HandlePurge(std::string_view line, Session& session);
+    // `PURGE DROPPED COLUMNS FROM t` (CD-S2): one whole attempt under an
+    // owned DDL transaction and the relation's `IX` - the statement-epoch
+    // gate, then the relation walked in batches, each dirty row cleaned in
+    // place by `exec::CleanDroppedCells`. A row whose writer is not resolved
+    // for every reader, or a statement still on an older schema word, is
+    // returned as `purge_wait`; the rows cleaned before it stay clean.
+    DispatchOutcome HandlePurgeDroppedColumns(const parser::PurgeStmt& stmt, Session& session);
     // `resume_from` is where a parked walk of this statement stopped
     // (AO-S3b); an inactive cursor is a first run and starts at the head,
     // which is what every caller but `DispatchAsync`'s resume passes. Not

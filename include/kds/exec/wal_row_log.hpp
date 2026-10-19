@@ -48,4 +48,12 @@ Status LogChainInsert(wal::WalManager* wal, storage::PageStore& store,
 Status LogSlotRetire(wal::WalManager* wal, storage::PageStore& store, std::uint64_t env_txn,
                      PageId page_id, std::uint16_t slot);
 
+// One slot's bytes as a `HEAP_INSERT` or `HEAP_OVERWRITE`, stamped: the
+// header's writer and undo pointer in the payload, which is what redo
+// applies, and `env_txn` in the envelope, which only analysis reads.
+Status LogHeapWrite(wal::WalManager* wal, storage::PageStore& store, wal::RecordType type,
+                    std::uint64_t env_txn, PageId page_id, std::uint16_t slot,
+                    std::span<const std::byte> bytes, std::uint64_t hdr_trx,
+                    std::uint64_t hdr_undo);
+
 }  // namespace kds::exec

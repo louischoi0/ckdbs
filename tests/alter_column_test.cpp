@@ -1,3 +1,4 @@
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -11,6 +12,7 @@
 #include "kds/exec/catalog_spills.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
+#include "kds/server/statement_epoch.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -32,6 +34,49 @@ namespace kds::server {
 namespace {
 
 bool IsErr(const std::string& reply) { return reply.rfind("ERR", 0) == 0; }
+
+// One stored row, read off its leaf: its header, and whether every dropped
+// cell is clean - zero, with the null bit set where the column has one - and
+// the spills its cells name.
+struct StoredRow {
+    std::uint64_t trx_id = 0;
+    bool deleted = false;
+    bool clean = false;
+    std::vector<exec::SpillRef> spills;
+};
+StoredRow ReadStoredRow(storage::PageStore& store, const catalog::TableAccess& t,
+                        std::uint64_t key) {
+    StoredRow row;
+    auto at = btree::BtreeLookup(store, t.desc_page_id, key);
+    EXPECT_TRUE(at.ok()) << key << ": " << at.status().message();
+    if (!at.ok()) return row;
+    heap::PageView leaf(at.value().leaf.bytes());
+    auto tuple = leaf.ReadTuple(at.value().slot);
+    EXPECT_TRUE(tuple.ok()) << tuple.status().message();
+    if (!tuple.ok()) return row;
+    row.trx_id = tuple.value().trx_id;
+    row.deleted = tuple.value().deleted;
+    const std::span<const std::byte> payload = tuple.value().payload;
+    EXPECT_TRUE(exec::RowSpills(t, payload, row.spills).ok());
+    row.clean = true;
+    for (std::size_t i = 1; i < t.schema.columns.size(); ++i) {
+        if (!t.schema.columns[i].dropped()) continue;
+        if (t.layout.null_bits[i] != catalog::kNoNullBit &&
+            !catalog::NullBitIsSet(payload, t.layout, i)) {
+            row.clean = false;
+        }
+        for (std::uint32_t b = t.layout.offsets[i]; b < t.layout.cell_ends[i]; ++b) {
+            if (payload[b] != std::byte{0}) row.clean = false;
+        }
+    }
+    return row;
+}
+
+// Whether a var-heap value is still there to read.
+bool SpillLive(storage::PageStore& store, const exec::SpillRef& spill) {
+    storage::PageRef pin;
+    return varheap::Fetch(store, varheap::VarHeapPtr{spill.first, spill.second}, pin).ok();
+}
 
 class AlterColumnTest : public ::testing::Test {
 protected:
@@ -87,28 +132,19 @@ protected:
         Session session;
         return dispatcher_->ExecuteInsert(stmt, session).response;
     }
-    // Whether `key`'s stored row is clean at every dropped column, read off
-    // its leaf: the cell zero, and the null bit set where the column has one.
     bool DroppedCellsCleanAt(const catalog::TableAccess& t, std::uint64_t key) {
-        auto at = btree::BtreeLookup(store_, t.desc_page_id, key);
-        EXPECT_TRUE(at.ok()) << key << ": " << at.status().message();
-        if (!at.ok()) return false;
-        heap::PageView leaf(at.value().leaf.bytes());
-        auto tuple = leaf.ReadTuple(at.value().slot);
-        EXPECT_TRUE(tuple.ok()) << tuple.status().message();
-        if (!tuple.ok()) return false;
-        const std::span<const std::byte> payload = tuple.value().payload;
-        for (std::size_t i = 1; i < t.schema.columns.size(); ++i) {
-            if (!t.schema.columns[i].dropped()) continue;
-            if (t.layout.null_bits[i] != catalog::kNoNullBit &&
-                !catalog::NullBitIsSet(payload, t.layout, i)) {
-                return false;
-            }
-            for (std::uint32_t b = t.layout.offsets[i]; b < t.layout.cell_ends[i]; ++b) {
-                if (payload[b] != std::byte{0}) return false;
-            }
+        return ReadStoredRow(store_, t, key).clean;
+    }
+    // `t (id, s varchar NULL, n int32)`, rows 1..3 each with a spilled `s`,
+    // and `s` dropped: three dirty rows for a clean pass.
+    const catalog::TableAccess* ThreeDirtyRows() {
+        Ok("CREATE TABLE t (id int64, s varchar NULL, n int32)");
+        for (int i = 1; i <= 3; ++i) {
+            Ok("INSERT INTO t VALUES (" + std::to_string(i) + ", '" + std::string(100, 'x') +
+               "', " + std::to_string(i) + ")");
         }
-        return true;
+        Ok("ALTER TABLE t DROP COLUMN s");
+        return Access("t");
     }
 
     storage::InMemoryPageStore store_{kFirstUserPageId};
@@ -348,6 +384,235 @@ TEST_F(AlterColumnTest, AnOpenDropFencesAnotherWriterBeforeItCountsValues) {
     EXPECT_EQ(Run("SELECT * FROM t"), "id,a,b\\n7,10,one");
 }
 
+// ---- CD-S2: PURGE DROPPED COLUMNS cleans dropped cells in place ------------
+//
+// `instructions/v3.2.0/workorder-cd-dropped-column-cleaning.md` §2-§3. The
+// waits on the asynchronous path are `lock_family_test.cpp`'s
+// `CleanDroppedWaitTest`; here the synchronous path answers a wait with its
+// refusal at once.
+
+// Every dropped cell - a spilled varchar, a nullable int, a NOT NULL int with
+// no bit, a slot varchar - of every row, a delete-marked one included, is
+// zeroed with its bit set; the header's writer and delete mark stay; every
+// spill a dropped cell named is released, once. A re-run writes nothing.
+TEST_F(AlterColumnTest, ACleanZeroesEveryDroppedCellOnceAndReleasesItsSpills) {
+    Ok("CREATE TABLE t (id int64, s varchar NULL, a int32 NULL, k int64, n int32) SPARE 1");
+    Ok("ALTER TABLE t ADD COLUMN x varchar(16) NULL");
+    const std::string spilled(100, 'x');
+    for (int i = 1; i <= 3; ++i) {
+        Ok("INSERT INTO t VALUES (" + std::to_string(i) + ", '" + spilled + "', 7, 8, " +
+           std::to_string(i) + ", 'longer-than-thirteen')");
+    }
+    Ok("DELETE FROM t WHERE id = 3");
+    for (const char* c : {"s", "a", "k", "x"}) Ok(std::string("ALTER TABLE t DROP COLUMN ") + c);
+    const catalog::TableAccess* t = Access("t");
+    ASSERT_NE(t, nullptr);
+
+    std::vector<StoredRow> before;
+    for (std::uint64_t key = 1; key <= 3; ++key) {
+        before.push_back(ReadStoredRow(store_, *t, key));
+        ASSERT_FALSE(before.back().clean) << key;
+        ASSERT_EQ(before.back().spills.size(), 2u) << key;
+    }
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 4 column(s) clean, 3 row(s) cleaned, 6 spill(s) "
+              "released");
+    for (std::uint64_t key = 1; key <= 3; ++key) {
+        const StoredRow after = ReadStoredRow(store_, *t, key);
+        EXPECT_TRUE(after.clean) << key;
+        EXPECT_TRUE(after.spills.empty()) << key;
+        EXPECT_EQ(after.trx_id, before[key - 1].trx_id) << key;
+        EXPECT_EQ(after.deleted, key == 3) << key;
+        for (const exec::SpillRef& spill : before[key - 1].spills) {
+            EXPECT_FALSE(SpillLive(store_, spill)) << key;
+        }
+    }
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 4 column(s) clean, 0 row(s) cleaned, 0 spill(s) "
+              "released");
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n\\n1,1\\n2,2");
+}
+
+// More rows than two batches (512 each): the walk resumes at the first dirty
+// key past each batch and reaches every row.
+TEST_F(AlterColumnTest, ACleanCrossesItsBatchesAndReachesEveryRow) {
+    Ok("CREATE TABLE t (id int64, a int32 NULL, n int32)");
+    constexpr int kRows = 1100;
+    for (int base = 0; base < kRows; base += 100) {
+        std::string values;
+        for (int i = base + 1; i <= base + 100; ++i) {
+            values += (values.empty() ? "(" : ", (") + std::to_string(i) + ", 7, 1)";
+        }
+        Ok("INSERT INTO t VALUES " + values);
+    }
+    Ok("ALTER TABLE t DROP COLUMN a");
+    const catalog::TableAccess* t = Access("t");
+    ASSERT_NE(t, nullptr);
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 1 column(s) clean, 1100 row(s) cleaned, 0 spill(s) "
+              "released");
+    for (std::uint64_t key = 1; key <= kRows; ++key) {
+        ASSERT_TRUE(DroppedCellsCleanAt(*t, key)) << key;
+    }
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) "
+              "released");
+}
+
+TEST_F(AlterColumnTest, ACleanIsRefusedWithItsByte) {
+    Ok("CREATE TABLE u (id int64, n int32)");
+    Refused("PURGE DROPPED COLUMNS FROM u", "nothing to clean (byte 27)");
+    Refused("PURGE DROPPED COLUMNS FROM nope", "byte 27");
+    ASSERT_NE(ThreeDirtyRows(), nullptr);
+    Refused("PURGE DROPPED COLUMNS FROM t WHERE id = 1", "a WHERE is not implemented (byte 29)");
+    Refused("PURGE DROPPED FROM t", "expected 'COLUMNS', got 'FROM' at byte 14");
+    Session s;
+    ASSERT_FALSE(IsErr(Run(s, "BEGIN")));
+    const std::string inside = Run(s, "PURGE DROPPED COLUMNS FROM t");
+    EXPECT_TRUE(IsErr(inside)) << inside;
+    EXPECT_EQ(StatusFromErrorReply(inside).code(), StatusCode::kNotImplemented) << inside;
+    EXPECT_NE(inside.find("(byte 0)"), std::string::npos) << inside;
+    ASSERT_FALSE(IsErr(Run(s, "ROLLBACK")));
+    EXPECT_EQ(StatusFromErrorReply(Run("PURGE DROPPED COLUMNS FROM u")).code(),
+              StatusCode::kNotImplemented);
+}
+
+// PURGE's key refusals - a heap's hidden key, a Transition's history - do not
+// apply: the clean retires no key (§1 item 1). An FK child is cleaned too.
+TEST_F(AlterColumnTest, AHeapAGovernedRelationAndAnFkChildAreCleaned) {
+    const std::string spilled(100, 'y');
+    Ok("CREATE TABLE h (v int32, w varchar NULL) HEAP");
+    Ok("INSERT INTO h VALUES (1, '" + spilled + "')");
+    Ok("ALTER TABLE h DROP COLUMN w");
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM h"),
+              "PURGED DROPPED COLUMNS h: 1 column(s) clean, 1 row(s) cleaned, 1 spill(s) "
+              "released");
+
+    Ok("CREATE TABLE g (id int64, st varchar, c varchar NULL)");
+    Ok("CREATE TRANSITION flow ON g(st) ON INSERT ('new') ON UPDATE ('new' => 'done')");
+    Ok("INSERT INTO g VALUES (1, 'new', '" + spilled + "')");
+    Ok("ALTER TABLE g DROP COLUMN c");
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM g"),
+              "PURGED DROPPED COLUMNS g: 1 column(s) clean, 1 row(s) cleaned, 1 spill(s) "
+              "released");
+
+    Ok("CREATE TABLE p (id int64, v int32)");
+    Ok("INSERT INTO p VALUES (1, 1)");
+    Ok("CREATE TABLE c (id int64, pid int64 REFERENCES p, z varchar NULL)");
+    Ok("INSERT INTO c VALUES (1, 1, '" + spilled + "')");
+    Ok("ALTER TABLE c DROP COLUMN z");
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM c"),
+              "PURGED DROPPED COLUMNS c: 1 column(s) clean, 1 row(s) cleaned, 1 spill(s) "
+              "released");
+    EXPECT_EQ(Run("SELECT * FROM c"), "id,pid\\n1,1");
+}
+
+// The per-row gate, `[quiet-wrong]` (§3 point 1): an undecided writer copied
+// the dirty row into its undo, and its rollback writes that image back, so
+// its head is not cleaned until it decides. The rows around it are, and stay
+// clean; a re-run after either decide finishes the relation.
+TEST_F(AlterColumnTest, AnUndecidedWritersRowIsCleanedOnlyAfterItsDecide) {
+    const catalog::TableAccess* t = ThreeDirtyRows();
+    ASSERT_NE(t, nullptr);
+    Session rolls_back;
+    Session commits;
+    ASSERT_FALSE(IsErr(Run(rolls_back, "BEGIN")));
+    ASSERT_FALSE(IsErr(Run(rolls_back, "UPDATE t SET n = n + 10 WHERE id = 1")));
+    ASSERT_FALSE(IsErr(Run(commits, "BEGIN")));
+    ASSERT_FALSE(IsErr(Run(commits, "UPDATE t SET n = n + 10 WHERE id = 2")));
+    const std::vector<exec::SpillRef> one = ReadStoredRow(store_, *t, 1).spills;
+    const std::vector<exec::SpillRef> two = ReadStoredRow(store_, *t, 2).spills;
+    ASSERT_EQ(one.size(), 1u);
+    ASSERT_EQ(two.size(), 1u);
+
+    const std::string refused = Run("PURGE DROPPED COLUMNS FROM t");
+    EXPECT_EQ(StatusFromErrorReply(refused).code(), StatusCode::kTxnConflict) << refused;
+    EXPECT_NE(refused.find("tuple key 1"), std::string::npos) << refused;
+    EXPECT_NE(refused.find("has not decided"), std::string::npos) << refused;
+    EXPECT_NE(refused.find("2 row(s) are blocked, 1 were cleaned"), std::string::npos) << refused;
+    EXPECT_FALSE(DroppedCellsCleanAt(*t, 1));
+    EXPECT_FALSE(DroppedCellsCleanAt(*t, 2));
+    EXPECT_TRUE(DroppedCellsCleanAt(*t, 3));
+    EXPECT_TRUE(SpillLive(store_, one.front()));
+    EXPECT_TRUE(SpillLive(store_, two.front()));
+
+    ASSERT_FALSE(IsErr(Run(rolls_back, "ROLLBACK")));
+    ASSERT_FALSE(IsErr(Run(commits, "COMMIT")));
+    EXPECT_FALSE(DroppedCellsCleanAt(*t, 1));  // the rollback wrote the dirty image back
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 1 column(s) clean, 2 row(s) cleaned, 2 spill(s) "
+              "released");
+    for (std::uint64_t key = 1; key <= 3; ++key) EXPECT_TRUE(DroppedCellsCleanAt(*t, key)) << key;
+    EXPECT_FALSE(SpillLive(store_, one.front()));
+    EXPECT_FALSE(SpillLive(store_, two.front()));
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n\\n1,1\\n2,12\\n3,3");
+}
+
+// The reader arm of the gate: a repeatable-read snapshot older than a row's
+// writer may walk that row's undo chain, so the row and its spill stay until
+// the snapshot ends; the reader still reads its version.
+TEST_F(AlterColumnTest, AnOlderSnapshotKeepsItsRowDirtyAndItsSpillLive) {
+    const catalog::TableAccess* t = ThreeDirtyRows();
+    ASSERT_NE(t, nullptr);
+    Session r;
+    ASSERT_FALSE(IsErr(Run(r, "BEGIN ISOLATION LEVEL REPEATABLE READ")));
+    ASSERT_EQ(Run(r, "SELECT n FROM t WHERE id = 1"), "n\\n1");
+    Ok("UPDATE t SET n = 21 WHERE id = 1");
+    const std::vector<exec::SpillRef> held = ReadStoredRow(store_, *t, 1).spills;
+    ASSERT_EQ(held.size(), 1u);
+
+    const std::string refused = Run("PURGE DROPPED COLUMNS FROM t");
+    EXPECT_EQ(StatusFromErrorReply(refused).code(), StatusCode::kTxnConflict) << refused;
+    EXPECT_NE(refused.find("tuple key 1"), std::string::npos) << refused;
+    EXPECT_NE(refused.find("snapshot"), std::string::npos) << refused;
+    EXPECT_FALSE(DroppedCellsCleanAt(*t, 1));
+    EXPECT_TRUE(SpillLive(store_, held.front()));
+    EXPECT_TRUE(DroppedCellsCleanAt(*t, 2));
+    EXPECT_EQ(Run(r, "SELECT n FROM t WHERE id = 1"), "n\\n1");
+
+    ASSERT_FALSE(IsErr(Run(r, "COMMIT")));
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 1 column(s) clean, 1 row(s) cleaned, 1 spill(s) "
+              "released");
+    EXPECT_FALSE(SpillLive(store_, held.front()));
+}
+
+// The statement epoch, `[quiet-wrong]` (§3 point 3): a statement on another
+// core that revalidated below the drop may still decode the dropped column as
+// live, so nothing is cleaned until its slot moves on. Core 1's slot is
+// driven by hand.
+TEST_F(AlterColumnTest, AStatementOnAnOlderSchemaWordHoldsTheClean) {
+    std::atomic<std::uint64_t> word{1};
+    StatementEpochs epochs(/*cores=*/2);
+    boot_->catalog.SetSchemaWord(&word);
+    dispatcher_->SetStatementEpochs(&epochs);
+    struct Unwire {
+        CommandDispatcher* dispatcher;
+        catalog::Catalog* catalog;
+        ~Unwire() {
+            dispatcher->SetStatementEpochs(nullptr);
+            catalog->SetSchemaWord(nullptr);
+        }
+    } unwire{&*dispatcher_, &boot_->catalog};
+    Ok("CREATE TABLE t (id int64, s varchar NULL, n int32)");
+    Ok("INSERT INTO t VALUES (1, '" + std::string(100, 'x') + "', 1)");
+    epochs.Enter(1);
+    epochs.Publish(1, word.load());  // bound before the drop
+    Ok("ALTER TABLE t DROP COLUMN s");
+
+    const std::string refused = Run("PURGE DROPPED COLUMNS FROM t");
+    EXPECT_EQ(StatusFromErrorReply(refused).code(), StatusCode::kTxnConflict) << refused;
+    EXPECT_NE(refused.find("older statement"), std::string::npos) << refused;
+    const catalog::TableAccess* t = Access("t");
+    ASSERT_NE(t, nullptr);
+    EXPECT_FALSE(DroppedCellsCleanAt(*t, 1));
+
+    epochs.Leave(1);
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 1 column(s) clean, 1 row(s) cleaned, 1 spill(s) "
+              "released");
+}
+
 // ---- Storage still walks a dropped column -----------------------------------
 
 // `RowSpills` is purge's and the sweep's reader: a dropped varchar's spill is
@@ -543,6 +808,65 @@ TEST(AlterColumnRecoveryTest, ACommittedAddSurvivesACrashAndAnOpenOneIsUndone) {
 
     EXPECT_EQ(db.Execute("SELECT * FROM t"), "id,v,a\\n1,1,NULL\\n2,2,20");
     EXPECT_EQ(db.Execute("ALTER TABLE t ADD COLUMN b int64 NULL"), "ADDED COLUMN t.b");
+}
+
+// ---- CD-S2: a clean is durable, and is no transaction's (P1) ---------------
+
+// CD-S0 P1, pinned: each clean is a HEAP_OVERWRITE on a B+ tree leaf at
+// `kNoTxnId` carrying the header's writer. The inserts are checkpointed, so
+// their commits lie below the scan and a record naming one of them would make
+// it a loser; the crash keeps the log and loses every page written since, so
+// redo must replay each clean. With the pass half done - one row held by an
+// open writer - every clean replays with its header unchanged, the open
+// writer is the only loser and its row alone is undone, and a re-run
+// finishes the relation.
+TEST(AlterColumnRecoveryTest, ACleanSurvivesACrashAndMakesNoLoser) {
+    auto created = sim::SimInstance::Create();
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    sim::SimInstance& db = *created.value();
+    ASSERT_FALSE(IsErr(db.Execute("CREATE TABLE t (id int64, s varchar NULL, n int32)")));
+    for (int i = 1; i <= 3; ++i) {
+        ASSERT_FALSE(IsErr(db.Execute("INSERT INTO t VALUES (" + std::to_string(i) + ", '" +
+                                      std::string(100, 'x') + "', " + std::to_string(i) + ")")));
+    }
+    ASSERT_FALSE(IsErr(db.Execute("ALTER TABLE t DROP COLUMN s")));
+    ASSERT_FALSE(IsErr(db.Execute("SYNC")));
+    ASSERT_TRUE(db.RunCheckpoint().ok());
+    const auto table = [&db]() -> const catalog::TableAccess* {
+        auto oid = db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
+        EXPECT_TRUE(oid.ok());
+        auto access = db.catalog().InitTableAccess(oid.value());
+        EXPECT_TRUE(access.ok());
+        return access.ok() ? access.value() : nullptr;
+    };
+    std::vector<std::uint64_t> writers;
+    for (std::uint64_t key = 1; key <= 3; ++key) {
+        writers.push_back(ReadStoredRow(db.store(), *table(), key).trx_id);
+    }
+
+    Session w;
+    ASSERT_FALSE(IsErr(db.dispatcher().Dispatch("BEGIN", &w).response));
+    ASSERT_FALSE(IsErr(db.dispatcher().Dispatch("UPDATE t SET n = 20 WHERE id = 2", &w).response));
+    const std::string refused = db.Execute("PURGE DROPPED COLUMNS FROM t");
+    ASSERT_NE(refused.find("2 were cleaned"), std::string::npos) << refused;
+    // A strict commit syncs the log through every clean, and no page.
+    ASSERT_FALSE(IsErr(db.Execute("CREATE TABLE fence (id int64)")));
+    ASSERT_FALSE(IsErr(db.Execute("SET DURABILITY strict")));
+    ASSERT_FALSE(IsErr(db.Execute("INSERT INTO fence VALUES (1)")));
+    db.Crash();
+    const Status rebooted = db.Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+
+    EXPECT_EQ(db.recovery().losers, 1u) << "a clean's record named a writer";
+    for (std::uint64_t key = 1; key <= 3; ++key) {
+        const StoredRow row = ReadStoredRow(db.store(), *table(), key);
+        EXPECT_EQ(row.clean, key != 2) << key;
+        EXPECT_EQ(row.trx_id, writers[key - 1]) << key;
+    }
+    EXPECT_EQ(db.Execute("SELECT * FROM t"), "id,n\\n1,1\\n2,2\\n3,3");
+    EXPECT_EQ(db.Execute("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 1 column(s) clean, 1 row(s) cleaned, 1 spill(s) "
+              "released");
 }
 
 }  // namespace

@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cstdlib>
 #include <memory>
 #include <optional>
@@ -14,6 +15,7 @@
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/statement_epoch.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/txn/lock_table.hpp"
@@ -3217,6 +3219,114 @@ TEST_F(LockWaitsViewTest, ADropHeldByAPositionedReaderIsARelationRowWithNoTransa
     EXPECT_EQ(waits.Column("waiter_trx"), std::vector<std::string>{"NULL"});
     EXPECT_EQ(waits.Column("holder_trx"), std::vector<std::string>{"NULL"});
     EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"granted"});
+}
+
+// ---- CD-S2: PURGE DROPPED COLUMNS waits as PURGE does, and for an epoch ----
+//
+// `instructions/v3.2.0/workorder-cd-dropped-column-cleaning.md` §2 steps 3
+// and 6: a row whose writer is undecided or unseen by an older reader, and a
+// statement still on a schema word below the clean's, are each waited on in
+// the PurgeWait loop, polled, and refused `TxnConflict` at
+// `kPurgeHorizonWaitNs`. Each re-run is a whole attempt.
+class CleanDroppedWaitTest : public LockDeadlockTest {
+protected:
+    static constexpr std::uint64_t kPastTheBoundNs = exec::kPurgeHorizonWaitNs + 1;
+
+    void SetUp() override {
+        LockDeadlockTest::SetUp();
+        dispatcher_->set_lock_wait_fault_net_ns(10 * kPastTheBoundNs);
+        ASSERT_EQ(Local("CREATE TABLE tc (id int64, s varchar NULL, v int64)").rfind("CREATED", 0),
+                  0u);
+        const std::string spilled(100, 'x');
+        ASSERT_EQ(Local("INSERT INTO tc VALUES (5, '" + spilled + "', 1)").rfind("INSERTED", 0), 0u);
+        ASSERT_EQ(Local("INSERT INTO tc VALUES (9, '" + spilled + "', 1)").rfind("INSERTED", 0), 0u);
+        ASSERT_EQ(Local("ALTER TABLE tc DROP COLUMN s"), "DROPPED COLUMN tc.s");
+    }
+};
+
+TEST_F(CleanDroppedWaitTest, AnUndecidedWriterIsWaitedForAndItsRowCleanedAfterItsCommit) {
+    Session w;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tc SET v = 2 WHERE id = 5", &w).response, "UPDATED 1");
+
+    Session b;
+    Started clean = Start("PURGE DROPPED COLUMNS FROM tc", b);
+    Pump();
+    ASSERT_FALSE(*clean.done) << "the clean answered over an undecided writer: "
+                              << clean.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &w).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*clean.done) << "the clean never resumed after the writer's commit";
+    EXPECT_EQ(clean.out->response,
+              "PURGED DROPPED COLUMNS tc: 1 column(s) clean, 1 row(s) cleaned, 1 spill(s) "
+              "released");
+    EXPECT_EQ(Local("PURGE DROPPED COLUMNS FROM tc"),
+              "PURGED DROPPED COLUMNS tc: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) "
+              "released");
+}
+
+TEST_F(CleanDroppedWaitTest, AnOlderReaderAtTheBoundIsRefusedRetryably) {
+    Session reader;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN ISOLATION LEVEL REPEATABLE READ", &reader)
+                  .response.rfind("BEGIN", 0),
+              0u);
+    ASSERT_NE(dispatcher_->Dispatch("SELECT * FROM tc WHERE id = 5", &reader).response.find("5,1"),
+              std::string::npos);
+    ASSERT_EQ(Local("UPDATE tc SET v = 3 WHERE id = 5"), "UPDATED 1");
+
+    Session b;
+    Started clean = Start("PURGE DROPPED COLUMNS FROM tc", b);
+    Pump();
+    ASSERT_FALSE(*clean.done) << clean.out->response;
+    clock_.Advance(kPastTheBoundNs);
+    Pump();
+    ASSERT_TRUE(*clean.done) << "the wait outlived kPurgeHorizonWait";
+    EXPECT_EQ(clean.out->status.code(), StatusCode::kTxnConflict) << clean.out->response;
+    EXPECT_TRUE(clean.out->status.retryable()) << clean.out->response;
+    EXPECT_NE(clean.out->response.find("tuple key 5"), std::string::npos) << clean.out->response;
+    EXPECT_NE(dispatcher_->Dispatch("SELECT * FROM tc WHERE id = 5", &reader).response.find("5,1"),
+              std::string::npos)
+        << "the older reader lost its version";
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &reader).response.rfind("COMMIT", 0), 0u);
+    EXPECT_EQ(RunAsync("PURGE DROPPED COLUMNS FROM tc", b).response,
+              "PURGED DROPPED COLUMNS tc: 1 column(s) clean, 1 row(s) cleaned, 1 spill(s) "
+              "released");
+}
+
+// The epoch arm of the loop: core 1's slot, driven by hand, holds a word
+// below the drop's; the clean waits with its own slot idle and re-runs once
+// core 1 leaves.
+TEST_F(CleanDroppedWaitTest, AStatementOnAnOlderSchemaWordIsWaitedFor) {
+    std::atomic<std::uint64_t> word{1};
+    StatementEpochs epochs(/*cores=*/2);
+    boot_->catalog.SetSchemaWord(&word);
+    dispatcher_->SetStatementEpochs(&epochs);
+    struct Unwire {
+        CommandDispatcher* dispatcher;
+        catalog::Catalog* catalog;
+        ~Unwire() {
+            dispatcher->SetStatementEpochs(nullptr);
+            catalog->SetSchemaWord(nullptr);
+        }
+    } unwire{&*dispatcher_, &boot_->catalog};
+    ASSERT_EQ(Local("CREATE TABLE te (id int64, s varchar NULL, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO te VALUES (1, 'kept', 1)").rfind("INSERTED", 0), 0u);
+    epochs.Enter(1);
+    epochs.Publish(1, word.load());
+    ASSERT_EQ(Local("ALTER TABLE te DROP COLUMN s"), "DROPPED COLUMN te.s");
+
+    Session b;
+    Started clean = Start("PURGE DROPPED COLUMNS FROM te", b);
+    Pump();
+    ASSERT_FALSE(*clean.done) << "the clean answered over an older statement: "
+                              << clean.out->response;
+    epochs.Leave(1);
+    Pump();
+    ASSERT_TRUE(*clean.done) << "the clean never resumed after core 1 moved on";
+    EXPECT_EQ(clean.out->response,
+              "PURGED DROPPED COLUMNS te: 1 column(s) clean, 1 row(s) cleaned, 0 spill(s) "
+              "released");
 }
 
 }  // namespace

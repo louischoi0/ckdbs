@@ -104,14 +104,8 @@ Status LogChainInsert(wal::WalManager* wal, storage::PageStore& store,
     // to nothing).
     if (Status s = LogSpills(wal, store, spills, wal::kNoTxnId, owner_oid); !s.ok()) return s;
 
-    std::vector<std::byte> payload(wal::kHeapWriteFixedSize + tuple.size());
-    const wal::HeapWritePayload fields{hdr_trx, /*undo_ptr=*/0, placed.slot,
-                                       static_cast<std::uint16_t>(tuple.size())};
-    if (auto n = wal::EncodeHeapWrite(payload, fields, tuple); !n.ok()) return n.status();
-    auto rec = wal->Append(
-        wal::RecordSpec{wal::RecordType::kHeapInsert, wal::kNoTxnId, placed.page_id}, payload);
-    if (!rec.ok()) return rec.status();
-    return store.StampPageLsn(placed.page_id, rec.value());
+    return LogHeapWrite(wal, store, wal::RecordType::kHeapInsert, wal::kNoTxnId, placed.page_id,
+                        placed.slot, tuple, hdr_trx, /*hdr_undo=*/0);
 }
 
 Status LogSlotRetire(wal::WalManager* wal, storage::PageStore& store, std::uint64_t env_txn,
@@ -121,6 +115,20 @@ Status LogSlotRetire(wal::WalManager* wal, storage::PageStore& store, std::uint6
     const wal::SlotRetirePayload fields{slot};
     if (auto n = wal::EncodeSlotRetire(buf, fields); !n.ok()) return n.status();
     auto rec = wal->Append(wal::RecordSpec{wal::RecordType::kSlotRetire, env_txn, page_id}, buf);
+    if (!rec.ok()) return rec.status();
+    return store.StampPageLsn(page_id, rec.value());
+}
+
+Status LogHeapWrite(wal::WalManager* wal, storage::PageStore& store, wal::RecordType type,
+                    std::uint64_t env_txn, PageId page_id, std::uint16_t slot,
+                    std::span<const std::byte> bytes, std::uint64_t hdr_trx,
+                    std::uint64_t hdr_undo) {
+    if (wal == nullptr) return Status::OK();
+    std::vector<std::byte> payload(wal::kHeapWriteFixedSize + bytes.size());
+    const wal::HeapWritePayload fields{hdr_trx, hdr_undo, slot,
+                                       static_cast<std::uint16_t>(bytes.size())};
+    if (auto n = wal::EncodeHeapWrite(payload, fields, bytes); !n.ok()) return n.status();
+    auto rec = wal->Append(wal::RecordSpec{type, env_txn, page_id}, payload);
     if (!rec.ok()) return rec.status();
     return store.StampPageLsn(page_id, rec.value());
 }

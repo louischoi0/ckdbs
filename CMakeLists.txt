@@ -113,6 +113,7 @@ add_library(kds
     src/exec/row_codec.cpp
     src/exec/catalog_spills.cpp
     src/exec/purge_key.cpp
+    src/exec/clean_dropped.cpp
     src/exec/varheap_sweep.cpp
     src/exec/index_key.cpp
     src/exec/fk_check.cpp

@@ -49,6 +49,7 @@
 #include "kds/exec/index_ddl.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/pagination.hpp"
+#include "kds/exec/clean_dropped.hpp"
 #include "kds/exec/purge_key.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
@@ -802,9 +803,13 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         const sched::MonoTimeNs deadline_ns = NowNs() + exec::kPurgeHorizonWaitNs;
         while (out->purge_wait.has_value() && NowNs() < deadline_ns) {
             const DispatchOutcome::PurgeWait wait = *out->purge_wait;
+            // The waiter's own epoch slot is idle here: its statement
+            // returned, and the re-run below publishes afresh (CD-S0 P4).
             const std::function<bool()> cleared = [this, wait, deadline_ns] {
-                const bool settled = wait.horizon ? txn_->ResolvedForEveryReader(wait.trx_id)
-                                                  : !txn_->IsInFlight(wait.trx_id);
+                const bool settled =
+                    wait.epoch != 0 ? epochs_->AllAtLeast(wait.epoch)
+                    : wait.horizon ? txn_->ResolvedForEveryReader(wait.trx_id)
+                                   : !txn_->IsInFlight(wait.trx_id);
                 return settled || NowNs() >= deadline_ns;
             };
             co_await sched::WaitUntil{&cleared};
@@ -10610,6 +10615,32 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
         std::to_string(at) + ")");
 }
 
+// Every keyed slot of `ta`'s leaves from tuple key `from` up, live and
+// delete-marked, in key order, with its key: the read walk both PURGEs judge
+// by. A retired slot carries no key and is passed over.
+Status VisitKeyedSlotsFrom(
+    storage::PageStore& store, const catalog::TableAccess& ta, std::uint64_t from,
+    FunctionRef<StatusOr<storage::VisitControl>(std::uint64_t, const heap::PageView::Tuple&)>
+        visit) {
+    auto first = btree::BtreeSeekLeaf(store, ta.desc_page_id, from);
+    if (!first.ok()) return first.status();
+    return btree::BtreeVisitFrom(
+        store, first.value(), storage::PageAccess::kRead,
+        [&](PageId, heap::PageView& page, std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;  // a retired slot: absent
+                }
+                return tuple.status();
+            }
+            auto tuple_key = KeystoneIdOfPayload(tuple.value().payload);
+            if (!tuple_key.ok()) return tuple_key.status();
+            if (tuple_key.value() < from) return storage::VisitControl::kContinue;
+            return visit(tuple_key.value(), tuple.value());
+        });
+}
+
 }  // namespace
 
 DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& session) {
@@ -10627,6 +10658,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
         return {"ERR expected a PURGE statement", false};
     }
     const auto& stmt = std::get<parser::PurgeStmt>(parsed.value());
+    if (stmt.dropped_columns) return HandlePurgeDroppedColumns(stmt, session);
     const std::string at_name = " (byte " + std::to_string(stmt.table_byte_offset) + ")";
 
     // A system relation never resolves (`Catalog::ResolveRelation` refuses
@@ -10723,34 +10755,23 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     std::optional<DispatchOutcome::PurgeWait> pending;
     bool one_key_live = false;
     const bool one_key = hi - lo == 1;
-    auto first = btree::BtreeSeekLeaf(page_store_, ta.desc_page_id, lo);
-    if (!first.ok()) return ended(refuse(first.status()));
-    Status walked = btree::BtreeVisitFrom(
-        page_store_, first.value(), storage::PageAccess::kRead,
-        [&](PageId, heap::PageView& page, std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            auto tuple = page.ReadTuple(slot);
-            if (!tuple.ok()) {
-                if (tuple.status().code() == StatusCode::kNotFound) {
-                    return storage::VisitControl::kContinue;  // a retired slot: absent
-                }
-                return tuple.status();
-            }
-            auto tuple_key = KeystoneIdOfPayload(tuple.value().payload);
-            if (!tuple_key.ok()) return tuple_key.status();
-            if (tuple_key.value() < lo) return storage::VisitControl::kContinue;
-            if (tuple_key.value() >= hi) return storage::VisitControl::kStop;
-            const std::uint64_t trx = tuple.value().trx_id;
+    Status walked = VisitKeyedSlotsFrom(
+        page_store_, ta, lo,
+        [&](std::uint64_t tuple_key,
+            const heap::PageView::Tuple& tuple) -> StatusOr<storage::VisitControl> {
+            if (tuple_key >= hi) return storage::VisitControl::kStop;
+            const std::uint64_t trx = tuple.trx_id;
             const bool in_flight = txn_ != nullptr && txn_->IsInFlight(trx);
-            if (tuple.value().deleted) {
+            if (tuple.deleted) {
                 if (in_flight) {
-                    pending = DispatchOutcome::PurgeWait{tuple_key.value(), trx, /*horizon=*/false};
+                    pending = DispatchOutcome::PurgeWait{tuple_key, trx, /*horizon=*/false};
                     return storage::VisitControl::kStop;
                 }
                 if (txn_ != nullptr && !txn_->ResolvedForEveryReader(trx)) {
-                    pending = DispatchOutcome::PurgeWait{tuple_key.value(), trx, /*horizon=*/true};
+                    pending = DispatchOutcome::PurgeWait{tuple_key, trx, /*horizon=*/true};
                     return storage::VisitControl::kStop;
                 }
-                targets.push_back({tuple_key.value(), trx});
+                targets.push_back({tuple_key, trx});
                 return storage::VisitControl::kContinue;
             }
             // PU3, BH-Q2: a live key refuses a window of one key - once its
@@ -10758,7 +10779,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
             // back - and a wider window passes over it.
             if (one_key) {
                 if (in_flight) {
-                    pending = DispatchOutcome::PurgeWait{tuple_key.value(), trx, /*horizon=*/false};
+                    pending = DispatchOutcome::PurgeWait{tuple_key, trx, /*horizon=*/false};
                 } else {
                     one_key_live = true;
                 }
@@ -10804,6 +10825,152 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
         }
     }
     return ended({"PURGED " + std::to_string(purged), false, purged}, purged);
+}
+
+DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::PurgeStmt& stmt,
+                                                              Session& session) {
+    const auto refuse = [](const Status& s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
+    const std::string at_name = " (byte " + std::to_string(stmt.table_byte_offset) + ")";
+
+    auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
+        return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                        session.default_namespace(), stmt.table_byte_offset, v);
+    });
+    if (!oid.ok()) return refuse(oid.status());
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // IS, AT-R1
+
+    // **A DDL transaction, though S2 writes no catalog row**: CD-S3's flag is
+    // written in it, under the same `IX` (CD-OI-9). The cleans are no
+    // transaction's - `kNoTxnId` - so a refusal or an abort keeps every row
+    // already cleaned, and a re-run reads it clean and moves on.
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        // The relation's `IX`, PURGE's (BH-R4): writers and readers proceed,
+        // a column DDL waits. Its first grant is where a memo that moved
+        // since this statement's head re-runs the statement
+        // (`BorrowChain`, AT-S5e), so the layout read below, the word `W`
+        // and the dropped flags it shows are one schema, every drop in it
+        // committed.
+        if (std::optional<Status> held = BorrowOrWait(
+                scope, txn::LockKey::Relation(oid.value()), RepeatableReadWait::kCapable)) {
+            return refuse(*held);
+        }
+        auto access = catalog_.InitTableAccess(oid.value());
+        if (!access.ok()) return refuse(access.status());
+        const catalog::TableAccess& ta = *access.value();
+        const std::vector<std::uint16_t> targets = exec::DroppedColumns(ta);
+        if (targets.empty()) {
+            return refuse(Status::NotImplemented("'" + stmt.table_name +
+                                                 "' has no dropped column, so PURGE DROPPED "
+                                                 "COLUMNS has nothing to clean" +
+                                                 at_name));
+        }
+
+        // **The statement epoch** (CD §3 point 3, `[quiet-wrong]`): a
+        // statement whose `IS` a drop's `X` refused may read on with the
+        // layout it bound, in which the column is live (`txn.md` §5), and
+        // would read a zeroed cell as NULL or follow a released spill. `W`
+        // is the word this statement's head published - nothing below the
+        // `IX` revalidates - and at or above every drop the layout shows, so
+        // every statement at or above it bound the column as dropped. With
+        // no epochs there is no other core to wait for (the synchronous
+        // path).
+        const std::uint64_t word = catalog_.cache_built_at();
+        if (epochs_ != nullptr && !epochs_->AllAtLeast(word)) {
+            DispatchOutcome out = refuse(Status::TxnConflict(
+                "PURGE DROPPED COLUMNS cannot clean '" + stmt.table_name +
+                "' yet: an older statement may still read its dropped columns as live; nothing "
+                "was cleaned, and running it again once that statement ends will"));
+            out.purge_wait = DispatchOutcome::PurgeWait{0, 0, false, word};
+            return out;
+        }
+
+        // ---- Batches: a read walk judges, then each dirty row is cleaned --
+        //
+        // The walk holds each leaf shared and writes nothing; the clean
+        // re-reads every row under its own exclusive hold, so what the walk
+        // saw is a hint. A batch bounds what is remembered between the two.
+        constexpr std::size_t kCleanBatch = 512;
+        std::uint64_t cleaned = 0;
+        std::uint64_t released = 0;
+        std::uint64_t blocked = 0;
+        std::optional<DispatchOutcome::PurgeWait> pending;
+        const auto partly = [&](const Status& s) {
+            return s.WithMessage(s.message() + "; this PURGE cleaned " + std::to_string(cleaned) +
+                                 " row(s) before it, and running it again finishes the relation");
+        };
+        const auto resolved = [this](std::uint64_t trx) {
+            return txn_ == nullptr || txn_->ResolvedForEveryReader(trx);
+        };
+        std::vector<std::uint64_t> dirty;
+        std::uint64_t from = catalog::kFirstRowId;
+        for (;;) {
+            dirty.clear();
+            std::optional<std::uint64_t> resume;
+            Status walked = VisitKeyedSlotsFrom(
+                page_store_, ta, from,
+                [&](std::uint64_t tuple_key,
+                    const heap::PageView::Tuple& tuple) -> StatusOr<storage::VisitControl> {
+                    if (exec::DroppedCellsClean(ta, targets, tuple.payload)) {
+                        return storage::VisitControl::kContinue;
+                    }
+                    if (dirty.size() == kCleanBatch) {
+                        resume = tuple_key;
+                        return storage::VisitControl::kStop;
+                    }
+                    dirty.push_back(tuple_key);
+                    return storage::VisitControl::kContinue;
+                });
+            if (!walked.ok()) return refuse(partly(walked));
+
+            if (purge_seam_for_test_) purge_seam_for_test_();
+            {
+                const storage::DrainOnPressure drain(page_store_);  // PURGE's phase 2
+                for (const std::uint64_t key : dirty) {
+                    auto one = exec::CleanDroppedCells(page_store_, wal_, ta, targets, key,
+                                                       resolved);
+                    if (!one.ok()) return refuse(partly(one.status()));
+                    switch (one.value().outcome) {
+                        case exec::CleanOutcome::kCleaned:
+                            ++cleaned;
+                            released += one.value().spills_released;
+                            break;
+                        case exec::CleanOutcome::kUnresolved: {
+                            ++blocked;
+                            if (pending.has_value()) break;
+                            const std::uint64_t trx = one.value().trx_id;
+                            const bool in_flight = txn_ != nullptr && txn_->IsInFlight(trx);
+                            pending = DispatchOutcome::PurgeWait{key, trx, !in_flight};
+                            break;
+                        }
+                        case exec::CleanOutcome::kAlreadyClean:
+                        case exec::CleanOutcome::kAbsent: break;
+                    }
+                }
+            }
+            if (!resume.has_value()) break;
+            from = *resume;
+        }
+
+        if (pending.has_value()) {
+            const std::string why =
+                pending->horizon
+                    ? "a snapshot older than its writer's commit is still open"
+                    : "its writer, transaction " + std::to_string(pending->trx_id) +
+                          ", has not decided";
+            DispatchOutcome out = refuse(Status::TxnConflict(
+                "PURGE DROPPED COLUMNS cannot clean tuple key " +
+                std::to_string(pending->tuple_key) + " of '" + stmt.table_name + "' yet: " + why +
+                "; " + std::to_string(blocked) + " row(s) are blocked, " +
+                std::to_string(cleaned) + " were cleaned, and running it again finishes it"));
+            out.purge_wait = pending;
+            return out;
+        }
+        return {"PURGED DROPPED COLUMNS " + stmt.table_name + ": " +
+                    std::to_string(targets.size()) + " column(s) clean, " +
+                    std::to_string(cleaned) + " row(s) cleaned, " + std::to_string(released) +
+                    " spill(s) released",
+                false, cleaned};
+    });
 }
 
 DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope& scope,

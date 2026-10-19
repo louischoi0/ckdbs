@@ -54,6 +54,12 @@ inline constexpr catalog::Oid kVarHeapCatalogRelations[] = {
 Status RowSpills(const catalog::TableAccess& access, std::span<const std::byte> payload,
                  std::vector<SpillRef>& out);
 
+// The var-heap slot one column's cell points at, if any, appended to `out`:
+// `RowSpills`' body, for a caller that releases one column's values alone
+// (CD-S2's clean of the dropped cells).
+Status ColumnSpills(const catalog::TableAccess& access, std::span<const std::byte> payload,
+                    std::size_t col, std::vector<SpillRef>& out);
+
 // Every var-heap slot the relation's **live** rows point at.
 //
 // Delete-marked rows count as live references, deliberately: nothing retires
