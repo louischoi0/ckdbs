@@ -11,3 +11,12 @@ The operator's words of 2026-10-19, recorded by CLA. Each is recorded
 | **Mark** | **CC closed** (`workorder-cc-plan-statistics.md`): every stage landed - S1 `34b67da3`, S2 `f3ced1ad`, S3 `62e34b41`, S4 `c547ef14`, the close's prior `1a9168d3` - and the close measured (`bench/v3.2.0/results-cc-close-v3.2.0-184-gc547ef14.md`, `results-cc-close-prior-v3.2.0-186-g1a9168d3.md`). The open findings it leaves are `known-gaps.md`'s join planner entries |
 | **Does not settle** | a tag, a version |
 | **Recorded at** | this file; the order's header; `index.md`'s CC row and this file's row |
+
+## 2. CD written: cleaning BW's dropped columns
+
+| | |
+|---|---|
+| **Word** | *"Close that milestone and plan the BW cleaning work milestone."* - after CLA's account of BW |
+| **Mark** | Nothing to close: BW was closed on the operator's word of 2026-10-14 and again with BW-S6 (`3b5daa80`). **CD written** (`../v3.3.0/workorder-cd-dropped-column-cleaning.md`), planning BW's D-e; **not opened** |
+| **Does not settle** | CD-OI-1..14 (the order's §8) - every one awaits the operator's mark; opening CD; push |
+| **Recorded at** | this file; the order's header; `../v3.3.0/index.md` |
