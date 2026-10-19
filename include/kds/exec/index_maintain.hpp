@@ -99,7 +99,8 @@ struct IndexWrite {
     storage::UnlatchedPin* anchor_pin = nullptr;
     // The leaf and the parents the divide secured, still held
     // (`IndexInsertResult::held`), alive for the same call: a split's images
-    // are read through them rather than through a second pin.
+    // are read through them rather than through a second pin. A copy kept
+    // past it is empty.
     std::span<const storage::PageRef> held;
 };
 

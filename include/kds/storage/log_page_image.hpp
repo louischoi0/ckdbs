@@ -51,20 +51,20 @@ inline Status LogFullPageImage(wal::WalManager* wal, PageStore& store, std::uint
 // caller holds every page another writer could reach - the leaf and the
 // parents it secured, `held` - so the images are the split as it finished.
 //
-// **No page is pinned twice.** A held page is imaged through the caller's
-// hold; a page the split created, which nothing reaches but through a held
-// one, is fetched, copied and unpinned before the next, so imaging adds at
-// most one pin to the split's own and a deep split stays within the pool's
-// per-pinner ceiling (`kPinCeiling`). Fetching every page again pinned the
-// whole split a second time and passed the ceiling at an index's first
-// growth to a third level.
+// **No page is pinned twice.** A held page, and the anchor below, is imaged
+// through the caller's hold; a page the split created, which nothing reaches
+// but through a held one, is fetched, copied and unpinned before the next, so
+// imaging adds at most one pin to the split's own and a deep split stays
+// within the pool's per-pinner ceiling (`kPinCeiling`). Unpinned, a created
+// page can be written back and evicted before its stamp; its disk copy is
+// then this record's image, which redo replays over a lower `page_lsn`, so
+// its stamp's `NotFound` is not a failure.
 //
 // **A split that grew a root passes the relation's anchor page too**, its
 // root slot already moved and still held by the caller
 // (`Catalog::StageAnchorRoot`): the root a mount reads is then replayed with
 // the split or not at all, and never names a root the log did not keep or
-// misses one it did. Imaged through that hold, as the held pages are. Used by
-// the clustered tree and a secondary index alike.
+// misses one it did. Used by the clustered tree and a secondary index alike.
 //
 // **The record fits the stream whole** (BD-R12's size rule): a split writes
 // at most `kMaxStructuralChanges` pages (`index::kMaxIndexChanges` for an
@@ -84,9 +84,7 @@ inline Status LogBtreeSplit(wal::WalManager* wal, PageStore& store, std::uint64_
     created.reserve(pages.size());
     images.reserve(pages.size() + 1);
     for (const PageId page_id : pages) {
-        const auto hold = std::find_if(held.begin(), held.end(), [&](const PageRef& ref) {
-            return ref.page_id() == page_id;
-        });
+        const auto hold = std::ranges::find(held, page_id, &PageRef::page_id);
         if (hold != held.end()) {
             images.push_back({page_id, hold->bytes()});
             continue;
@@ -104,7 +102,10 @@ inline Status LogBtreeSplit(wal::WalManager* wal, PageStore& store, std::uint64_
         wal->Append(wal::RecordSpec{wal::RecordType::kBtreeSplit, txn_id, pages.front()}, payload);
     if (!rec.ok()) return rec.status();
     for (const wal::BtreeSplitImage& image : images) {
-        if (Status s = store.StampPageLsn(image.page_id, rec.value()); !s.ok()) return s;
+        Status s = store.StampPageLsn(image.page_id, rec.value());
+        const bool copied = std::ranges::any_of(
+            created, [&](const std::vector<std::byte>& c) { return c.data() == image.image.data(); });
+        if (!s.ok() && !(copied && s.code() == StatusCode::kNotFound)) return s;
     }
     return Status::OK();
 }

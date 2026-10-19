@@ -13,7 +13,7 @@ was made on `fix-catalog-page-ceiling` at `8ae05f6a`. First recorded by reading 
 An index-tree split holds the leaf, the `k` parents it secured and the one
 node each level creates: `2 + k` pins, or `3 + k` when the root grows and
 its anchor is pinned (`src/storage/index/index_tree.cpp`, `SecureParents`
-and "Peak pins"). Logging the split adds at most one more pin
+and "Peak pins"). Logging the split adds none above that
 (`storage::LogBtreeSplit`). Unlike the clustered tree's, an index node's
 separator count follows its entry width, and a separator is a whole leaf
 entry, covered bytes included (`docs/spec/index.md` IX4b). So `k` is bounded

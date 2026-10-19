@@ -4513,20 +4513,19 @@ exec::IndexWriteLog CommandDispatcher::IndexWriteLogFor(const WriteScope& scope,
     // published here with its own ANCHOR_UPDATE, as it was before the root
     // rode in the split's record, and the copy kept carries none.
     return [this, &pending](const exec::IndexWrite& write) -> Status {
-        if (write.new_root == kInvalidPageId) {
-            pending.push_back(write);
-            pending.back().anchor_pin = nullptr;  // the pin dies with the insert's result
-            return Status::OK();
+        if (write.new_root != kInvalidPageId) {
+            if (Status s = catalog_.PublishRoot(write.rel_oid, write.index_oid,
+                                                write.new_root, write.anchor_page_id);
+                !s.ok()) {
+                return s.WithContext("republishing the root of index " +
+                                     std::to_string(write.index_oid));
+            }
         }
-        if (Status s = catalog_.PublishRoot(write.rel_oid, write.index_oid, write.new_root,
-                                            write.anchor_page_id);
-            !s.ok()) {
-            return s.WithContext("republishing the root of index " +
-                                 std::to_string(write.index_oid));
-        }
-        pending.push_back(write);
-        pending.back().new_root = kInvalidPageId;
-        pending.back().anchor_pin = nullptr;  // the pin dies with the insert's result
+        exec::IndexWrite& kept = pending.emplace_back(write);
+        kept.new_root = kInvalidPageId;
+        // The pin and the holds die with the insert's result.
+        kept.anchor_pin = nullptr;
+        kept.held = {};
         return Status::OK();
     };
 }
