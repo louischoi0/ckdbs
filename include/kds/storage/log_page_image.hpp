@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -47,15 +48,23 @@ inline Status LogFullPageImage(wal::WalManager* wal, PageStore& store, std::uint
 // replay whole or not at all - its CRC ends the log before a torn one -
 // where a run of FULL_PAGE_IMAGEs could end between the parent and the
 // link (BD-S1's `SortedLeafCrashTest.ALogCutInsideAnAppendSplit...`). The
-// caller holds every page, so the images are the split as it finished.
+// caller holds every page another writer could reach - the leaf and the
+// parents it secured, `held` - so the images are the split as it finished.
+//
+// **No page is pinned twice.** A held page, and the anchor below, is imaged
+// through the caller's hold; a page the split created, which nothing reaches
+// but through a held one, is fetched, copied and unpinned before the next, so
+// imaging adds at most one pin to the split's own and a deep split stays
+// within the pool's per-pinner ceiling (`kPinCeiling`). Unpinned, a created
+// page can be written back and evicted before its stamp; its disk copy is
+// then this record's image, which redo replays over a lower `page_lsn`, so
+// its stamp's `NotFound` is not a failure.
 //
 // **A split that grew a root passes the relation's anchor page too**, its
 // root slot already moved and still held by the caller
 // (`Catalog::StageAnchorRoot`): the root a mount reads is then replayed with
 // the split or not at all, and never names a root the log did not keep or
-// misses one it did. Imaged through the caller's hold rather than fetched
-// again, so a deep split stays within the pool's per-pinner ceiling
-// (`kPinCeiling`). Used by the clustered tree and a secondary index alike.
+// misses one it did. Used by the clustered tree and a secondary index alike.
 //
 // **The record fits the stream whole** (BD-R12's size rule): a split writes
 // at most `kMaxStructuralChanges` pages (`index::kMaxIndexChanges` for an
@@ -65,19 +74,26 @@ inline Status LogFullPageImage(wal::WalManager* wal, PageStore& store, std::uint
 // the pages changed.
 static_assert(kMaxStructuralChanges + 1 <= wal::kMaxBtreeSplitPages);
 inline Status LogBtreeSplit(wal::WalManager* wal, PageStore& store, std::uint64_t txn_id,
-                            std::span<const PageId> pages, const PageRef* anchor = nullptr) {
+                            std::span<const PageId> pages, std::span<const PageRef> held,
+                            const PageRef* anchor = nullptr) {
     if (wal == nullptr) return Status::OK();
     if (pages.empty()) return Status::InvalidArgument("a BTREE_SPLIT names at least one page");
 
-    std::vector<PageRef> held;
+    std::vector<std::vector<std::byte>> created;
     std::vector<wal::BtreeSplitImage> images;
-    held.reserve(pages.size());
+    created.reserve(pages.size());
     images.reserve(pages.size() + 1);
     for (const PageId page_id : pages) {
-        auto bytes = store.Get(page_id);
-        if (!bytes.ok()) return bytes.status();
-        held.push_back(std::move(bytes.value()));
-        images.push_back({page_id, held.back().bytes()});
+        const auto hold = std::ranges::find(held, page_id, &PageRef::page_id);
+        if (hold != held.end()) {
+            images.push_back({page_id, hold->bytes()});
+            continue;
+        }
+        auto page = store.GetForRead(page_id);
+        if (!page.ok()) return page.status();
+        const auto bytes = page.value().bytes();
+        created.emplace_back(bytes.begin(), bytes.end());
+        images.push_back({page_id, created.back()});
     }
     if (anchor != nullptr) images.push_back({anchor->page_id(), anchor->bytes()});
     std::vector<std::byte> payload(wal::BtreeSplitSize(images.size()));
@@ -85,9 +101,11 @@ inline Status LogBtreeSplit(wal::WalManager* wal, PageStore& store, std::uint64_
     auto rec =
         wal->Append(wal::RecordSpec{wal::RecordType::kBtreeSplit, txn_id, pages.front()}, payload);
     if (!rec.ok()) return rec.status();
-    held.clear();
     for (const wal::BtreeSplitImage& image : images) {
-        if (Status s = store.StampPageLsn(image.page_id, rec.value()); !s.ok()) return s;
+        Status s = store.StampPageLsn(image.page_id, rec.value());
+        const bool copied = std::ranges::any_of(
+            created, [&](const std::vector<std::byte>& c) { return c.data() == image.image.data(); });
+        if (!s.ok() && !(copied && s.code() == StatusCode::kNotFound)) return s;
     }
     return Status::OK();
 }

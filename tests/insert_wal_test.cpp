@@ -1033,5 +1033,29 @@ TEST_F(InsertWalTest, ShowMetaReportsTheRingBackpressure) {
     EXPECT_EQ(testing_view::MetaField(meta, "wal_ring_full_refusals"), "0") << meta;
 }
 
+// **A logged index split pins each page once** (`storage::LogBtreeSplit`):
+// it images the leaf and the parents the divide still holds through those
+// holds, and copies each page the divide created under a pin of its own,
+// dropped before the next. It fetched every page again, which doubled the
+// split's pins and passed `kPinCeiling` at an index's first growth to a third
+// level, aborting a Debug build within these 80 rows.
+TEST_F(InsertWalTest, ALoggedIndexSplitStaysUnderThePinCeiling) {
+    CommandDispatcher d = TransactionalDispatcher(wal::DurabilityClass::kRelaxed);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, k int64, c varchar(1000)) BTREE")
+                  .response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE INDEX by_k ON t (k) COVERING (c)").response.substr(0, 14),
+              "CREATED INDEX ");
+    for (int i = 1; i <= 80; ++i) {
+        const std::string row = std::to_string(i);
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (" + row + ", " + row + ", 'x')")
+                      .response.substr(0, 8),
+                  "INSERTED")
+            << "row " << i;
+    }
+    EXPECT_LE(store_->pin_high_water(), storage::DevicePageStore::kPinCeiling);
+    EXPECT_EQ(d.Dispatch("SELECT k FROM t WHERE k = 80").response, "k\\n80");
+}
+
 }  // namespace
 }  // namespace kds::server

@@ -209,6 +209,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
         write.index_oid = ix.index_oid;
         write.anchor_page_id = access.anchor_page_id;
         write.anchor_pin = &placed.value().anchor;
+        write.held = placed.value().held;
         if (Status s = (*log)(write); !s.ok()) return s;
         // The log publishes a root it carries, so there is none to report.
         return kInvalidPageId;

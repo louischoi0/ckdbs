@@ -97,6 +97,11 @@ struct IndexWrite {
     // The divide's pin on that anchor (`IndexInsertResult::anchor`), alive
     // for the log call this write is handed to; a copy kept past it is null.
     storage::UnlatchedPin* anchor_pin = nullptr;
+    // The leaf and the parents the divide secured, still held
+    // (`IndexInsertResult::held`), alive for the same call: a split's images
+    // are read through them rather than through a second pin. A copy kept
+    // past it is empty.
+    std::span<const storage::PageRef> held;
 };
 
 // What maintenance hands each write to, **while the tree still holds the
