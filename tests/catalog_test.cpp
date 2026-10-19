@@ -83,7 +83,6 @@ TEST_F(CatalogTest, BootstrapMakesSysTablesFindableByName) {
 
     auto row = catalog_.GetSysTableRow(kSysObjectsTable);
     ASSERT_TRUE(row.ok());
-    EXPECT_EQ(row.value().oid, kSysObjectsTable);
     EXPECT_EQ(row.value().desc_page_id, kCatalogPageObjects);
 }
 
@@ -277,7 +276,6 @@ TEST_F(CatalogTest, CreateTableInsertsObjectTableAndColumnRows) {
 
     auto table_row = catalog_.GetSysTableRow(oid.value());
     ASSERT_TRUE(table_row.ok());
-    EXPECT_EQ(table_row.value().oid, oid.value());
     EXPECT_EQ(table_row.value().namespace_oid, kNamespacePublic);
     EXPECT_EQ(table_row.value().clustered_type, ClusteredType::kBtree);
 

@@ -211,14 +211,6 @@ does not pass through it, and what keeps those from admitting a name is
 what the check asks, below, not the latch. `RegisterPattern` (page 9) and
 `RecordAccess` (page 11) were the shape, for their admissions, at AT-S7.
 
-**A relation's name has one copy, its `sys.objects` row.** `sys.tables`
-carries none: the 64 bytes at `SysTableRow::kRetiredNameOffset` held a copy
-that `CREATE TABLE` wrote and `RENAME TO` never rewrote, so `sys.tables` and
-`SHOW TABLES` went on showing the old name. Those bytes are now written 0 and
-never read, so the row's size is unchanged and the superblock is not bumped,
-and the stale name an older volume keeps there is never read. Every view
-takes a relation's name from its `sys.objects` row.
-
 | write | relation (root page) | held across |
 |---|---|---|
 | `CreateTable` | `sys.objects` (6) | the binding check and the `sys.objects` insert. The same check is asked unheld at the top, so a taken name costs no oid and no page; a create that loses under the hold has burned an oid and its pages, as a failure anywhere after them does. A relation's name is asked in the namespace it is created in (`namespace.md` NS6) |
@@ -228,6 +220,12 @@ takes a relation's name from its `sys.objects` row.
 | `CreateIndex` | `sys.indexes` (8) | the check and the insert; `CheckIndexDef` asks it unheld, earlier, so a taken name is refused before a build |
 | `InsertAssertion` | `sys.assertions` (14) | the check and the insert; `CreateAssertion` asks unheld before its build, for the same reason |
 | `CreateCabin` | `sys.cabins` (12) | not a name but the same shape — one cabin per column — and reached by two operators, or an operator and the controller; the id is issued before the hold |
+
+**A relation's name has one copy, its `sys.objects` row**, and every view
+reads it there. `sys.tables` carries none: the 64 bytes at
+`SysTableRow::kRetiredNameOffset` are written 0 and never read, so the row
+size and the superblock stand, and whatever an older volume holds there is
+ignored.
 
 **What is checked, in one walk per relation** (`Catalog::CheckNameFree`,
 `Catalog::CheckIndexNameFree`), so no caller can ask half of it:

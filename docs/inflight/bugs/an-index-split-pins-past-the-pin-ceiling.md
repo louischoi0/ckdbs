@@ -15,9 +15,10 @@ Two causes add up, and only the second needs a wide entry.
 `include/kds/storage/log_page_image.hpp`, `LogBtreeSplit`, calls
 `store.Get(page_id)` for each page it images, while the split's own holds,
 which `IndexInsert` hands out, and the staged anchor
-(`CommandDispatcher::LogTreeSplit`) are still live. Its comment says the
-opposite: "Imaged through the caller's hold rather than fetched again, so a
-deep split stays within the pool's per-pinner ceiling". Logging a split
+(`CommandDispatcher::LogTreeSplit`) are still live. Only the anchor is
+imaged through the caller's hold (the function's anchor paragraph, which
+gives the ceiling as the reason); the split pages are fetched again although
+the caller holds each one. Logging a split
 therefore roughly doubles the split's pins, so the first split that grows a
 secondary index to a third level, with only one parent secured, already goes
 past 8. The gdb stack at the abort is `DevicePageStore::CountPin` <-
@@ -83,8 +84,8 @@ held at once. Restart after the abort was not tested.
 
 ## The fix
 
-Not scheduled, and no work order carries it. Cause 1 is a defect against
-`LogBtreeSplit`'s own comment: imaging through the caller's holds would
-remove the second pins. Cause 2 is the operator's to choose: re-derive the
+Not scheduled, and no work order carries it. Cause 1: imaging the split
+pages through the caller's holds, as the anchor already is, would remove the
+second pins. Cause 2 is the operator's to choose: re-derive the
 ceiling from the widest legal index entry, or bound `k`. Fixing cause 2
 alone would leave the abort on the SQL path.
