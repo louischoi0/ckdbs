@@ -17,6 +17,15 @@ The operator's words of 2026-10-19, recorded by CLA. Each is recorded
 | | |
 |---|---|
 | **Word** | *"Close that milestone and plan the BW cleaning work milestone."* - after CLA's account of BW |
-| **Mark** | Nothing to close: BW was closed on the operator's word of 2026-10-14 and again with BW-S6 (`3b5daa80`). **CD written** (`../v3.3.0/workorder-cd-dropped-column-cleaning.md`), planning BW's D-e; **not opened** |
-| **Does not settle** | CD-OI-1..14 (the order's §8) - every one awaits the operator's mark; opening CD; push |
-| **Recorded at** | this file; the order's header; `../v3.3.0/index.md` |
+| **Mark** | Nothing to close: BW was closed on the operator's word of 2026-10-14 and again with BW-S6 (`3b5daa80`). **CD written** (`workorder-cd-dropped-column-cleaning.md`), planning BW's D-e |
+| **Does not settle** | CD-OI-1..14, opening CD (§3 below); push |
+| **Recorded at** | this file; the order's header; `index.md`'s CD row |
+
+## 3. CD-OI-1..14 marked (a); CD opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | *"OI-1..14 $!a"* with `/go-ahead-achieving-milestone` - *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | **CD-OI-1..14 (a), the operator's own marks**; OI-14 (a) keeps the order under `instructions/v3.2.0/`, against CLA's revised (b). **CD opened.** Items that surface mid-stage are adopted on the standing go-ahead of 2026-10-19 (go-ahead-achieving-milestone), not marked by the operator item by item |
+| **Does not settle** | push, merge to `main`, tag, version |
+| **Recorded at** | this file; the order's header and §8; `index.md`'s CD row |
