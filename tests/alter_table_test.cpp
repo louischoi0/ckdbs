@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -69,6 +71,25 @@ TEST_F(AlterTableTest, RenameTableEndToEnd) {
     EXPECT_EQ(Run("SELECT v FROM u"), "v\\none\\ntwo");
     EXPECT_EQ(Run("SELECT v FROM t").rfind("ERR", 0), 0u);
     EXPECT_EQ(Run("INSERT INTO u VALUES ('three')").substr(0, 8), "INSERTED");
+}
+
+// `sys.tables` and `SHOW TABLES` read the relation's name off its
+// `sys.objects` row, the only copy: they once read a second copy that a
+// rename never rewrote, so both went on showing the old name, and two rows
+// under one name once it was taken again.
+TEST_F(AlterTableTest, RenameTableRenamesItInTheCatalogViews) {
+    Ok("CREATE TABLE t (id int64)");
+    ASSERT_EQ(Run("ALTER TABLE t RENAME TO u"), "RENAMED TABLE t TO u");
+    Ok("CREATE TABLE t (id int64)");
+
+    for (const char* sql : {"SELECT oid, name FROM sys.tables WHERE oid >= 4000",
+                            "SELECT oid, name FROM sys.objects WHERE oid >= 4000",
+                            "SHOW TABLES"}) {
+        std::vector<std::string> names = testing_view::ReadViewText(Run(sql)).Column("name");
+        std::erase_if(names, [](const std::string& n) { return n != "t" && n != "u"; });
+        std::sort(names.begin(), names.end());
+        EXPECT_EQ(names, (std::vector<std::string>{"t", "u"})) << sql;
+    }
 }
 
 TEST_F(AlterTableTest, RenameColumnEndToEnd) {
