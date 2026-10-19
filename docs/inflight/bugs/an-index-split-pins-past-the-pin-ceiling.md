@@ -1,10 +1,10 @@
 # An index split pins past `kPinCeiling`
 
-**Reproduced** on `fix-index-split-pin-ceiling`, off `73607dd7`, 2026-10-19,
-in a Debug `kds_server` at `cores = 1`. That run had the uncommitted fix for
-`LogBtreeSplit` re-pinning every split page, which is now landed and no
-longer part of this defect. The tree-level reproduction was made on
-`fix-catalog-page-ceiling` at `8ae05f6a`. First recorded by reading at
+**Reproduced** on `fix-index-split-pin-ceiling` at `247bd192`, 2026-10-19,
+in a Debug `kds_server` at `cores = 1`. That commit stops `LogBtreeSplit`
+re-pinning every split page, a second cause that aborted much narrower
+indexes and is no longer part of this defect. The tree-level reproduction
+was made on `fix-catalog-page-ceiling` at `8ae05f6a`. First recorded by reading at
 `3ee37d3a`, where the code comment had kept it open since AT-S16's review
 (finding F1).
 
