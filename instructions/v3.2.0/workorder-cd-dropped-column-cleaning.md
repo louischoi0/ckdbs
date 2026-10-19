@@ -117,7 +117,7 @@ All on `worktree-cd-column-slot-cleaning` at `f3ec25ea`.
 - On an attempt whose phase 1 finds every target clean and whose epoch gate passed, the same DDL transaction does three things:
   (a) drops each column Cabin whose `column_no` is a target pos, through the catalog's Cabin drop and the controller's state. These are the auto-create race leftovers (known-gaps.md:1213-1217). Which function DROP CABIN calls is not verified here; S3 names it.
   (b) ORs 0x08 into each target row with OverwriteForDdl, under the sys.columns root-page hold (CT7, the DropColumn shape at catalog.cpp:1972-2024). A target that is no longer dropped or no longer at its pos is skipped.
-  (c) The commit moves the schema word (BumpVersion at resolve, catalog.cpp:1084).
+  (c) The commit moves the schema word (MoveSchemaWordIfCatalogWriter at the decide, src/txn/manager.cpp:329, before the X is released at :336; CD-S0 P4).
 
 **S4, reuse.**
 - In Catalog::AddColumn (catalog.cpp:1911-1972), when `held >= spare_slots` and the lowest-pos row has `dropped() && in_slot() && (flags & kColumnSlotClean)`, overwrite that row in place under the hold the function already takes. The new image keeps oid, rel_id and pos, and sets: the new name, type_val, len and cabin_policy; notnull = false; flags = kColumnInSlot; generation + 1. The write goes through OverwriteForDdl, so ROLLBACK and mount undo restore the dropped, clean row with an unchanged Keystone word.
@@ -248,7 +248,7 @@ On `cd-column-slot-cleaning` at `f3ec25ea`.
 ## 7. `[quiet-wrong]` risks
 
 - [quiet-wrong] The flag is written while a reachable version is still dirty, so a reused column reads the dropped value or a present 0. Defences: the per-row ResolvedForEveryReader gate; the flag only on an attempt whose walk finds every target clean; S1 so new inserts are clean; the writer enumeration in S0 premise P3. S2 and S3 tests hold an RR snapshot open across DROP, the pass and the ADD, force the interleavings with a barrier and repeated rounds, and kill the mutants that remove the gate or flag early (memory mutation-testing-concurrency).
-- [quiet-wrong] A reader that bound the pre-DROP layout (its IS refused during the DROP's X) decodes a zeroed cell as NULL, or follows a released spill. Defence: the AllAtLeast(W) epoch gate, with W taken behind the IX at or above the DROP's resolve bump (catalog.cpp:1084). S0 premise P4 confirms the bump precedes the X release and that the PurgeWait co_await runs with the statement's own slot idle. Without the gate nothing else catches this.
+- [quiet-wrong] A reader that bound the pre-DROP layout (its IS refused during the DROP's X) decodes a zeroed cell as NULL, or follows a released spill. Defence: the AllAtLeast(W) epoch gate, with W taken behind the IX at or above the DROP's decide bump (catalog.cpp:2032 at the write, manager.cpp:329 / :618 at the decide, each before the X is released; CD-S0 P4). S0 premise P4 confirms the bump precedes the X release and that the PurgeWait co_await runs with the statement's own slot idle. Without the gate nothing else catches this.
 - [quiet-wrong] A writer path that copies a before-image outside one exclusive hold reinstates dirty bytes after a clean. UPDATE and DELETE are verified on f3ec25ea (command_dispatcher.cpp:8884-8887, 9128-9159, 11050-11063); every other OverwriteTuple and EncodeRow caller is S0 premise P3. A hit stops CD for Design 1's row-X variant.
 - [quiet-wrong] A HEAP_OVERWRITE whose envelope names the header's writer makes that writer a phantom loser at mount, and recovery undo then rewrites a committed row (analysis.cpp:84; the B1 envelope note behind OverwriteLogged, catalog.cpp:276-279). The envelope must be kNoTxnId; a btree-leaf crash test is S0 premise P1.
 - [quiet-wrong] A spill released early or twice. RowSpills ignores null bits (catalog_spills.cpp:16-33), so the cell bytes must be zeroed, not only the bit set. The release happens only under the per-row gate, after the logged clean, de-duplicated. Premise P2: if a spill pointer is ever shared across rows or cells (INSERT ... SELECT, SET a = b, KWP load, ON CONFLICT), a release frees a live value, and CD stops for a ruling.
@@ -275,13 +275,13 @@ On `cd-column-slot-cleaning` at `f3ec25ea`.
 | CD-OI-11 | Does the pass yield its core? | (a) No, as every write today; recorded in known-gaps, with the stall measured at close.<br>(b) Yield between leaf windows, holding the IX and its epoch word, with no page hold across a yield. | **(a)** - A yielding write is a new exception to a stated rule (only a SELECT's outermost walk yields), which is the operator's call. The pass holds nothing across windows, so (b) can be added later without a redesign. | **(a)**, the operator's mark (W1) |
 | CD-OI-12 | When both a vacant slot and a clean dropped slot exist, which does ADD take? | (a) The vacant slot first (today's path), and a clean slot only when none is vacant.<br>(b) The lowest clean slot first. | **(a)** - Positions stay bounded by declared + spare_slots either way, since each vacant slot is taken once and a reuse adds no position, so Design 1's 63-mask argument does not separate the two. (a) leaves today's ADD bit-identical whenever a slot is free. | **(a)**, the operator's mark (W1) |
 | CD-OI-13 | What happens to sys.access_stats rows whose column_mask names a reused pos? | (a) Delete them at the reuse.<br>(b) Leave them; SHOW ACCESS then attributes the dropped column's history to the new one. | **(a)** - They are diagnostic and unlogged, and deleting them is the truthful choice. Clearing a bit in place could make two shape rows collide. | **(a)**, the operator's mark (W1) |
-| CD-OI-14 | Where does the CD work order go, and is the letter free? | (a) Fetch origin/main, confirm CD is unused, and write instructions/v3.2.0/workorder-cd-dropped-column-cleaning.md beside CA-CC with an index.md row.<br>(b) Open instructions/v3.3.0/ for it. | **(a) - the operator's mark**: the order sits in `instructions/v3.2.0/` beside CA-CC. CLA had revised to (b), a v3.3.0 directory, after the v3.3.0 tag; the operator kept (a). | awaiting |
+| CD-OI-14 | Where does the CD work order go, and is the letter free? | (a) Fetch origin/main, confirm CD is unused, and write instructions/v3.2.0/workorder-cd-dropped-column-cleaning.md beside CA-CC with an index.md row.<br>(b) Open instructions/v3.3.0/ for it. | **(a) - the operator's mark**: the order sits in `instructions/v3.2.0/` beside CA-CC. CLA had revised to (b), a v3.3.0 directory, after the v3.3.0 tag; the operator kept (a). | **(a)**, the operator's mark (W1) |
 
 ## 9. Stages
 
 | Stage | What | Gate |
 |---|---|---|
-| CD-S0 | Premises. Tests and reads only; no engine behaviour change.<br>- P1: a HEAP_OVERWRITE on a btree leaf, with envelope kNoTxnId and the header's writer and undo_ptr kept (the OverwriteLogged shape, catalog.cpp:276-284), replays at mount with no loser and no undo applied (analysis.cpp:52-55, :84; redo.cpp:105-120).<br>- P2: whether a var-heap pointer is ever shared across rows, or across two cells of one version: INSERT ... SELECT, UPDATE SET a = b, KWP load, ON CONFLICT.<br>- P3: every caller of OverwriteTuple, EncodeRow and EncodeAssigned on a user relation reads its before-image and writes under one exclusive hold, or compensates only an undecided writer (the list in mvcc_wal_crash point 2).<br>- P4: DROP COLUMN's schema-word bump happens before its relation X is released (catalog.cpp:1084), and the PurgeWait co_await (command_dispatcher.cpp:796-815) runs with the statement's epoch slot idle.<br>- P5: whether CREATE ASSERTION is admitted on a relation with a dropped column, and whether ADD COLUMN is admitted on an asserted relation.<br>- P6: the pos >= 64 Cabin witness question.<br>Also: fetch origin/main and confirm the letter CD is free; write the work order with OI rulings. | Each premise is answered with path:line, at a named commit. A red P1, P2 or P3 stops CD for a ruling before S1. P6, if real, gets a bugs/ entry outside CD. Inside the 20-minute stage budget. critics-developer review of the work order. |
+| CD-S0 | Premises. Tests and reads only; no engine behaviour change.<br>- P1: a HEAP_OVERWRITE on a btree leaf, with envelope kNoTxnId and the header's writer and undo_ptr kept (the OverwriteLogged shape, catalog.cpp:276-284), replays at mount with no loser and no undo applied (analysis.cpp:52-55, :84; redo.cpp:105-120).<br>- P2: whether a var-heap pointer is ever shared across rows, or across two cells of one version: INSERT ... SELECT, UPDATE SET a = b, KWP load, ON CONFLICT.<br>- P3: every caller of OverwriteTuple, EncodeRow and EncodeAssigned on a user relation reads its before-image and writes under one exclusive hold, or compensates only an undecided writer (the list in mvcc_wal_crash point 2).<br>- P4: DROP COLUMN's schema-word bump happens before its relation X is released (catalog.cpp:2032; manager.cpp:329 / :618 - corrected at S0 from :1084), and the PurgeWait co_await (command_dispatcher.cpp:796-815) runs with the statement's epoch slot idle.<br>- P5: whether CREATE ASSERTION is admitted on a relation with a dropped column, and whether ADD COLUMN is admitted on an asserted relation.<br>- P6: the pos >= 64 Cabin witness question.<br>Also: fetch origin/main and confirm the letter CD is free; write the work order with OI rulings. | Each premise is answered with path:line, at a named commit. A red P1, P2 or P3 stops CD for a ruling before S1. P6, if real, gets a bugs/ entry outside CD. Inside the 20-minute stage budget. critics-developer review of the work order. |
 | CD-S1 | Codec. EncodeRow's dropped skip (row_codec.cpp:967-971) sets the dropped column's null bit when it has one. Comments are updated: row_codec.cpp:967-968, schema.hpp:178-185, and alter.md AL11 'EncodeRow writes it zero'. No format change: a v31 volume's dropped cells are never read. | Tests:<br>- an INSERT after a DROP has the dropped slot's bit set and its cell zero, on every insert path (literal VALUES, prepared, INSERT ... SELECT, ON CONFLICT, KWP load);<br>- UPDATE carries the bit;<br>- decode is unchanged;<br>- the sim integrity check accepts the bit.<br>Full suite plus the four contract suites green. critics-developer review. Overhead not measured at this stage; it is measured at the milestone's close. |
 | CD-S2 | The clean pass, with no flag yet.<br>- Parser: the OI-2 spelling.<br>- Handler: inside InDdlStatement, IX via BorrowOrWait, targets and W from the TableAccess resolved behind the IX (re-run if the word moved), the epoch gate, the phase-1 read walk, the phase-2 per-key BtreeLookup(kWrite) clean through src/exec/clean_dropped.{hpp,cpp} modelled on PurgeKey, de-duplicated spill release, and the retry through the PurgeWait loop.<br>- The PurgeWait struct gains an epoch variant. | Tests:<br>- an idempotent re-run (writes nothing the second time);<br>- an undecided writer is retried, then cleaned after its decide;<br>- a rollback during the pass leaves no dirty head once the pass completes;<br>- an RR snapshot predating a row's writer blocks that row's clean and its spill release (barrier, repeated rounds);<br>- a stale-layout reader holds the epoch gate (a yielding SELECT bound before the DROP);<br>- a crash mid-pass recovers, with no loser and the cleaned rows clean, and a re-run finishes;<br>- heap, Transition-governed and FK-child relations are admitted;<br>- refusals carry byte positions;<br>- mutants that drop the gate, the epoch wait or the zeroing are killed over repeated rounds.<br>Full suite green. critics-developer review. |
 | CD-S3 | Format and flag.<br>- kColumnSlotClean 0x08 and SysColumnRow `generation` u32 (95 -> 99, rows.hpp:255-284, rows.cpp:87-125), with Decode validation.<br>- kSuperBlockVersion 31 -> 32, refusing 31.<br>- On an attempt whose walk finds every target clean: sweep the column Cabins on target positions, then OR 0x08 into each target row with OverwriteForDdl under the CT7 hold, in the statement's DDL transaction.<br>- spare_free counts clean slots (sys_views.cpp:288-293). | Tests:<br>- the flag is set only by a complete attempt, and a refused attempt sets none;<br>- ROLLBACK and mount undo of the flag and the sweep;<br>- a v31 volume is refused at mount;<br>- a dangling auto-Cabin on a dropped pos is swept;<br>- the spare_free arithmetic.<br>Full suite green. critics-developer review. |
@@ -315,4 +315,112 @@ Caveats carried forward:
 
 ## 11. Stage log
 
-(empty - not opened)
+### CD-S0 - premises (2026-10-19, on `cd-column-slot-cleaning` at `789e77e1`)
+
+Source identical to `f3ec25ea`; reads only, nothing built or run. P1 was read
+by CLA; P2-P6 were each answered by a reader and checked by two skeptics. **No
+premise is red, so CD proceeds to S1.** Every verdict is "holds with
+conditions". The conditions below bind the stages named in them.
+
+- **P1 - holds by reading; S2 pins it with a crash test.** Analysis skips a
+  `kNoTxnId` envelope (`src/wal/analysis.cpp:52-55`, `:84`), redo writes the
+  payload's trx_id and undo_ptr (`src/wal/redo.cpp:105-120`), and a
+  HEAP_OVERWRITE on a btree leaf is UPDATE's record today.
+- **P2 - holds.** Only `EncodeOneValue`'s varchar arm creates a spill pointer,
+  always through a fresh `ChainAppend` (`src/exec/row_codec.cpp:245-261`). No
+  path copies a pointer between rows or cells: INSERT re-encodes on every
+  issue round, INSERT ... SELECT carries values, not cells, and UPDATE encodes
+  assigned cells fresh. Conditions:
+  - S2 zeroes a dropped cell's bytes, not only its bit: `RowSpills` keys on
+    the tag and ignores null bits (`src/exec/catalog_spills.cpp:27-33`).
+  - A spill named only by a superseded version leaks; that is the accepted
+    class (`docs/spec/heap-and-tuple.md:87`).
+  - Index entries copy covered spill pointers but never follow them
+    (`index_maintain.cpp:155-158`, `step_vm.cpp:1620-1630`). They stay safe
+    only while DROP refuses a covered column and no index-only scan exists.
+- **P3 - holds.** No writer copies a row, releases the leaf, and writes the
+  copy back over a head CD could have cleaned. The path list in §3 point 2 is
+  incomplete; the full list on `789e77e1`:
+  - UPDATE, scan and point arms (`src/server/command_dispatcher.cpp:8833`,
+    `:9095`, `:9128-9159`), under one exclusive leaf hold with no co_await;
+  - DELETE's re-read and DeleteMark (`:11050-11065`);
+  - leaf compaction and split (`src/storage/btree/btree.cpp:670`, `:758`),
+    which move bytes under the hold they read them in;
+  - `PurgeKey` (`src/exec/purge_key.cpp:34`);
+  - rollback and recovery-undo compensations, including ClearDeleteMark
+    (`src/txn/manager.cpp:519`, `:539`; `src/txn/recovery_undo.cpp:233`,
+    `:254`), which write stale before-images only for a writer that is not
+    `ResolvedForEveryReader`;
+  - redo.
+  `catalog.cpp:282` and `declaration_relation.cpp:214` are not user relations
+  and leave the list. Conditions:
+  - S2's phase 2 (re-read, zero, `OverwriteLogged`, release) holds no
+    co_await. "No park under a pin" is a convention: the page latch is
+    re-entrant per core and unused at one core (`docs/spec/page.md:128`).
+    S2 adds a cell with a writer and the cleaner on one core.
+  - The gate stays `ResolvedForEveryReader`. A weaker gate ("not in flight",
+    a horizon alone) lets a compensation restore a before-image naming a
+    released spill.
+- **P4 - holds; the citation is corrected.** DROP COLUMN moves the schema
+  word at its write (`src/catalog/catalog.cpp:2032`, after the overwrite at
+  `:2015-2020`) and again at its decide (`src/txn/manager.cpp:329` on
+  commit, `:618` on abort), each before `locks_->Release` (`:336`, `:622`).
+  `catalog.cpp:1084`, which §2 S3(c), §7 and the S0 row cited, is
+  `InvalidateAfterCompensation`, reached after the X is released
+  (`command_dispatcher.cpp:6502`, after `EndWrite` at `:6349`); those
+  citations are corrected in place. The PurgeWait co_await
+  (`command_dispatcher.cpp:810`) runs after `DispatchAndStage` has returned,
+  so the waiter's own slot is idle. Conditions:
+  - S2: W is the word the statement's head published (`cache_built_at()` at
+    `StatementEpochScope`, `command_dispatcher.cpp:910`), never one taken
+    from a mid-statement `Revalidate`. §2 step 2's re-run when the word moves
+    between the head and the IX is load-bearing and is stated as a rule.
+  - S2: with no epochs (`epochs_ == nullptr`, the synchronous `Dispatch`
+    path of the sim and the fixtures, `command_dispatcher.cpp:1097`), the
+    gate passes: there is no concurrent core. A copy of
+    `page_reclaim.cpp:134-141`'s `epochs == nullptr ||` would refuse every
+    attempt there.
+  - S3: the Cabin optimizer tick holds a TableAccess across a whole-relation
+    decode under no epoch slot and no relation lock
+    (`src/exec/cabin_optimizer_exec.cpp:42`, `:223`, `:282`, `:296`, `:319`).
+    The hole predates CD: since BW, a row inserted after a DROP decodes as
+    Corruption under a stale tick's layout for any variable-width dropped
+    column (`row_codec.cpp:573-581`). CD-S1 narrows it to NOT NULL var
+    columns; CD-S2 extends it to pre-DROP rows. It fails ApplyCreate and
+    ApplyExtend builds spuriously, for live columns too; no answer is wrong,
+    because only `decoded[col_pos]` is used and an in-place drop keeps every
+    offset. S3 fixes it in the tick, or records it in known-gaps.md as an
+    inherited gap. S3 also fixes the stale comment at
+    `command_dispatcher.cpp:6557-6560` and `docs/spec/catalog.md` CT2, which
+    names only `InvalidateAfterCompensation`.
+- **P5 - holds.** CREATE ASSERTION is admitted on a relation with a dropped
+  column (names only resolve over visible columns,
+  `src/catalog/schema.cpp:30-40`), ADD COLUMN on an asserted relation is
+  admitted (`docs/spec/alter.md:84-87`), and no assertion persists a
+  position. Index, FK and Transition arms hold. Conditions:
+  - A column-shape CREATE CABIN takes no relation lock from **either**
+    origin: the operator's (`command_dispatcher.cpp:2396`) and the
+    controller's (`cabin_optimizer_exec.cpp:259-261`); `known-gaps.md:1230-1233`.
+    So a column Cabin can land on a dropped position from both. S3's sweep is
+    keyed by (rel oid, column_no) and covers both; S3's test covers both.
+  - An unlocked column CREATE CABIN can name the column of an open ADD, and
+    survives the ADD's rollback. Today the next ADD takes that position and
+    inherits the Cabin silently (pre-CD). So S4 asks `PositionDependant` on
+    **every** ADD, not only the reusing branch, and S3's sweep also runs over
+    targets already flagged clean, so the refusal's remedy ("re-run the clean
+    statement") removes it. S4 adds that test.
+  - Keep the Transition arm in `PositionDependant`: a Transition compiles its
+    stored `column_no` (`src/exec/transition.cpp:197-213`).
+  - The CABIN AUTO controller's memory-resident entries keyed by (rel oid,
+    pos) survive a drop and a reuse (`include/kds/stats/cabin_optimizer.hpp:248-255`);
+    a parked BUILDING entry blocks the reused column's auto Cabin until a
+    restart. Performance only; S3 clears the entry by (rel oid, pos).
+  - S4 adds: CREATE ASSERTION after DROP, clean, reusing ADD, restart; the
+    canon revives and enforces.
+- **P6 - real, outside CD.** A column Cabin at position >= 64 is served but
+  never witnessed, and the FK reverse check serves it with no mask gate, so a
+  parent DELETE can orphan a committed child. `[quiet-wrong]`. Filed as
+  `docs/inflight/bugs/a-column-cabin-above-position-63-is-never-witnessed.md`
+  with three unruled fix options. CD's same-position reuse does not widen it.
+
+Overhead not measured; measured at the milestone's close.
