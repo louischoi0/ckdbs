@@ -4463,8 +4463,9 @@ Status CommandDispatcher::LogIndexWrite(const exec::IndexWrite& write, std::uint
     // routes to its new half - and a root the split grew rides in it
     // (`LogTreeSplit`).
     if (!write.restructured.empty()) {
-        return LogTreeSplit(write.restructured, txn_id, write.rel_oid, write.index_oid,
-                            write.new_root, write.anchor_page_id, write.anchor_pin);
+        return LogTreeSplit(write.restructured, write.held, txn_id, write.rel_oid,
+                            write.index_oid, write.new_root, write.anchor_page_id,
+                            write.anchor_pin);
     }
 
     std::vector<std::byte> buf(wal::kIndexInsertFixedSize + write.entry.size());
@@ -4672,11 +4673,13 @@ Status CommandDispatcher::LogSplit(storage::InsertPlacement& placed, std::uint64
     for (const storage::StructuralChange& change : placed.changes()) {
         pages.push_back(change.page_id);
     }
-    return LogTreeSplit(pages, txn_id, oid, /*index_oid=*/0, placed.new_root, anchor_page_id,
-                        &placed.anchor);
+    return LogTreeSplit(pages, placed.held, txn_id, oid, /*index_oid=*/0, placed.new_root,
+                        anchor_page_id, &placed.anchor);
 }
 
-Status CommandDispatcher::LogTreeSplit(std::span<const PageId> pages, std::uint64_t txn_id,
+Status CommandDispatcher::LogTreeSplit(std::span<const PageId> pages,
+                                       std::span<const storage::PageRef> held,
+                                       std::uint64_t txn_id,
                                        catalog::Oid rel_oid, std::uint64_t index_oid,
                                        PageId new_root, PageId anchor_page_id,
                                        storage::UnlatchedPin* anchor_pin) {
@@ -4699,7 +4702,7 @@ Status CommandDispatcher::LogTreeSplit(std::span<const PageId> pages, std::uint6
     // A refused staging still logs the split: its pages are written either
     // way, and a split no record describes refuses the next mount
     // (`wal.md` §6). Only the root goes unpublished, and the error says so.
-    if (Status s = storage::LogBtreeSplit(wal_, page_store_, txn_id, pages,
+    if (Status s = storage::LogBtreeSplit(wal_, page_store_, txn_id, pages, held,
                                           anchor.has_value() ? &*anchor : nullptr);
         !s.ok()) {
         return s;
