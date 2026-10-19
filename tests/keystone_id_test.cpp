@@ -519,14 +519,16 @@ TEST_F(KeystoneIdCrashTest, ObjectOidsAreUniqueAcrossABoot) {
 
         // The consequence that used to be worse than a merged statistic:
         // resolving the oid took the first sys.tables row carrying it, so 'c'
-        // resolved to 'a'. Now each resolves to itself.
+        // resolved to 'a'. Now each resolves to itself: its own row, its own
+        // root.
         auto row = cat.GetSysTableRow(c_oid.value());
         ASSERT_TRUE(row.ok()) << row.status().message();
-        EXPECT_EQ(std::string(catalog::NameView(row.value().name)), "c");
+        EXPECT_EQ(row.value().oid, c_oid.value());
 
         auto a_row = cat.GetSysTableRow(a_oid);
         ASSERT_TRUE(a_row.ok()) << a_row.status().message();
-        EXPECT_EQ(std::string(catalog::NameView(a_row.value().name)), "a");
+        EXPECT_EQ(a_row.value().oid, a_oid);
+        EXPECT_NE(a_row.value().desc_page_id, row.value().desc_page_id);
 
         ASSERT_TRUE(store.Sync().ok());
     });

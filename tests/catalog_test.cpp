@@ -83,7 +83,7 @@ TEST_F(CatalogTest, BootstrapMakesSysTablesFindableByName) {
 
     auto row = catalog_.GetSysTableRow(kSysObjectsTable);
     ASSERT_TRUE(row.ok());
-    EXPECT_EQ(NameView(row.value().name), "objects");
+    EXPECT_EQ(row.value().oid, kSysObjectsTable);
     EXPECT_EQ(row.value().desc_page_id, kCatalogPageObjects);
 }
 
@@ -277,7 +277,7 @@ TEST_F(CatalogTest, CreateTableInsertsObjectTableAndColumnRows) {
 
     auto table_row = catalog_.GetSysTableRow(oid.value());
     ASSERT_TRUE(table_row.ok());
-    EXPECT_EQ(NameView(table_row.value().name), "accounts");
+    EXPECT_EQ(table_row.value().oid, oid.value());
     EXPECT_EQ(table_row.value().namespace_oid, kNamespacePublic);
     EXPECT_EQ(table_row.value().clustered_type, ClusteredType::kBtree);
 
@@ -406,7 +406,6 @@ TEST_F(CatalogTest, PublishRootPreservesRowIdentity) {
     // PW2-3: the row is CREATE-fixed - the move landed in the anchor, and
     // a fresh fill resolves it from there.
     EXPECT_EQ(after.value().desc_page_id, old_desc);
-    EXPECT_EQ(NameView(after.value().name), "movable");
     {
         auto anchor = store_.GetForRead(after.value().anchor_page_id);
         ASSERT_TRUE(anchor.ok());

@@ -733,7 +733,7 @@ Status Catalog::Bootstrap() {
         // kInvalidPageId: the bootstrap catalog tables encode their rows
         // through SysXxxRow::Encode(), never the schema-driven row codec,
         // so nothing of theirs can ever spill.
-        if (Status s = InsertRelationRow(t.oid, kNamespaceSys, t.name, t.page_id,
+        if (Status s = InsertRelationRow(t.oid, kNamespaceSys, t.page_id,
                                           ClusteredType::kCatalogChain, kInvalidPageId);
             !s.ok()) {
             return s;
@@ -859,7 +859,7 @@ Status Catalog::BootstrapDeclarations(Oid rel_oid, std::string_view name, PageId
     if (Status s = InsertObjectRow(rel_oid, kNamespaceSys, kTypeTable, name); !s.ok()) {
         return s;
     }
-    if (Status s = InsertRelationRow(rel_oid, kNamespaceSys, name, root_page,
+    if (Status s = InsertRelationRow(rel_oid, kNamespaceSys, root_page,
                                       ClusteredType::kCatalogChain, varheap_root.value());
         !s.ok()) {
         return s;
@@ -1268,15 +1268,13 @@ StatusOr<storage::PageRef> Catalog::StageAnchorRoot(PageId anchor_page, Oid expe
     return std::move(anchor.value());
 }
 
-Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
-                                   PageId desc_page_id, ClusteredType clustered_type,
-                                   PageId varheap_page_id,
+Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, PageId desc_page_id,
+                                   ClusteredType clustered_type, PageId varheap_page_id,
                                    PageId anchor_page_id, std::uint64_t trx_id,
                                    CatalogRowRef* where, std::uint16_t spare_slots) {
     SysTableRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
-    SetName(row.name, name);
     row.desc_page_id = desc_page_id;
     row.clustered_type = clustered_type;
     row.next_id = kFirstRowId;
@@ -1483,7 +1481,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     }
     ref.oid = new_oid;
     note(ref);
-    if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, ClusteredType::kBtree,
+    if (Status s = InsertRelationRow(new_oid, namespace_oid, root_id, ClusteredType::kBtree,
                                       varheap_root, anchor_id, trx_id,
                                       &ref, schema.spare_slots);
         !s.ok()) {

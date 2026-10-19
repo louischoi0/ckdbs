@@ -244,7 +244,6 @@ SysTableRow SampleTableRow() {
     SysTableRow row{};
     row.oid = 0x0102030405060708ull;
     row.namespace_oid = 0x1112131415161718ull;
-    SetName(row.name, "orders");
     row.desc_page_id = 0xA1A2A3A4u;
     row.clustered_type = ClusteredType::kBtree;
     row.next_id = 0x2122232425262728ull;
@@ -345,7 +344,6 @@ TEST(SysTableRowTest, RoundTripsEveryField) {
 
     EXPECT_EQ(out.value().oid, in.oid);
     EXPECT_EQ(out.value().namespace_oid, in.namespace_oid);
-    EXPECT_EQ(NameView(out.value().name), "orders");
     EXPECT_EQ(out.value().desc_page_id, in.desc_page_id);
     EXPECT_EQ(out.value().clustered_type, in.clustered_type);
     EXPECT_EQ(out.value().next_id, in.next_id);
@@ -384,6 +382,21 @@ TEST(SysTableRowTest, TheRetiredOwnerCoreWordIsWrittenZeroAndNeverRead) {
     EXPECT_EQ(out.value().varheap_page_id, in.varheap_page_id);
     EXPECT_EQ(out.value().retired_key_order, in.retired_key_order);
     EXPECT_EQ(out.value().Encode(), in.Encode()) << "the old word leaked into the decoded row";
+}
+
+TEST(SysTableRowTest, TheRetiredNameIsWrittenZeroAndNeverRead) {
+    // The relation's name is its sys.objects row's alone; the 64 bytes that
+    // held a copy here stay, written 0, and the stale name a volume written
+    // before still holds in them changes nothing the decoder returns.
+    const SysTableRow in = SampleTableRow();
+    auto bytes = in.Encode();
+    for (std::size_t i = 0; i < kCatalogNameMax; ++i) {
+        EXPECT_EQ(bytes[SysTableRow::kRetiredNameOffset + i], std::byte{0}) << "byte " << i;
+        bytes[SysTableRow::kRetiredNameOffset + i] = std::byte{'o'};
+    }
+    auto out = SysTableRow::Decode(bytes);
+    ASSERT_TRUE(out.ok()) << out.status().message();
+    EXPECT_EQ(out.value().Encode(), in.Encode()) << "the old name leaked into the decoded row";
 }
 
 TEST(SysTableRowTest, OnDiskLayoutIsPinned) {

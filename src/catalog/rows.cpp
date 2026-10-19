@@ -49,7 +49,6 @@ std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     std::byte* base = buf.data();
     std::memcpy(base + kOidOffset, &oid, sizeof(oid));
     std::memcpy(base + kNamespaceOidOffset, &namespace_oid, sizeof(namespace_oid));
-    std::memcpy(base + kNameOffset, name.data(), kCatalogNameMax);
     std::memcpy(base + kDescPageIdOffset, &desc_page_id, sizeof(desc_page_id));
     auto ct = static_cast<std::uint8_t>(clustered_type);
     std::memcpy(base + kClusteredTypeOffset, &ct, sizeof(ct));
@@ -68,7 +67,6 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     const std::byte* base = bytes.data();
     std::memcpy(&row.oid, base + kOidOffset, sizeof(row.oid));
     std::memcpy(&row.namespace_oid, base + kNamespaceOidOffset, sizeof(row.namespace_oid));
-    std::memcpy(row.name.data(), base + kNameOffset, kCatalogNameMax);
     std::memcpy(&row.desc_page_id, base + kDescPageIdOffset, sizeof(row.desc_page_id));
     std::uint8_t ct;
     std::memcpy(&ct, base + kClusteredTypeOffset, sizeof(ct));
