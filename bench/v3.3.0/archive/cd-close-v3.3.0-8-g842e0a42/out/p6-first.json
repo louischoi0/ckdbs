@@ -1,0 +1,54 @@
+{
+ "args": {
+  "bin": "/home/cdkbs/bench-runs/cd-close/bin/kds_server-B",
+  "workdir": "/home/cdkbs/bench-runs/cd-close/wd-p6",
+  "port": 33043,
+  "out": "/home/cdkbs/bench-runs/cd-close/out/p6.json",
+  "progress": "/home/cdkbs/bench-runs/cd-close/progress.txt",
+  "sizes": "200,1000,10000,100000,1000000",
+  "stream_rows": 1000000,
+  "window_s": 3.0,
+  "reps": 1,
+  "add_trials": 60,
+  "cells": "6",
+  "pin_server": "2",
+  "pin_driver": "4",
+  "quiet_load": 2.0,
+  "quiet_wait": 30.0,
+  "cell_quiet_pct": 10.0,
+  "cell_quiet_wait": 30.0,
+  "cell_clean_pct": 20.0,
+  "cell_foreign_pct": 15.0,
+  "cell_retries": 1
+ },
+ "cell4": [],
+ "cell5": [],
+ "cell6": [
+  {
+   "cell": 6,
+   "trials": 60,
+   "vacant": {
+    "n": 60,
+    "p0": 66.58118218183517,
+    "p25": 89.79486301541328,
+    "p50": 106.97194375097752,
+    "p95": 147.16293662786484,
+    "p99": 901.140971109271,
+    "max": 901.140971109271,
+    "mean": 120.10355712845922
+   },
+   "reusing": {
+    "n": 60,
+    "p0": 70.70694118738174,
+    "p25": 95.48384696245193,
+    "p50": 108.98499749600887,
+    "p95": 152.12991274893284,
+    "p99": 908.0411400645971,
+    "max": 908.0411400645971,
+    "mean": 127.11890352269013
+   },
+   "vacant_server_cpu_us_median": 75.522,
+   "reusing_server_cpu_us_median": 78.757
+  }
+ ]
+}

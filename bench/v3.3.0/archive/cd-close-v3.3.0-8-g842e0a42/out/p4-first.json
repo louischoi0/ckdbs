@@ -1,0 +1,658 @@
+{
+ "args": {
+  "bin": "/home/cdkbs/bench-runs/cd-close/bin/kds_server-B",
+  "workdir": "/home/cdkbs/bench-runs/cd-close/wd-p4",
+  "port": 33041,
+  "out": "/home/cdkbs/bench-runs/cd-close/out/p4.json",
+  "progress": "/home/cdkbs/bench-runs/cd-close/progress.txt",
+  "sizes": "200,1000,10000,100000,1000000",
+  "stream_rows": 1000000,
+  "window_s": 3.0,
+  "reps": 2,
+  "add_trials": 40,
+  "cells": "4",
+  "pin_server": "2",
+  "pin_driver": "4",
+  "quiet_load": 2.0,
+  "quiet_wait": 30.0,
+  "cell_quiet_pct": 10.0,
+  "cell_quiet_wait": 30.0,
+  "cell_clean_pct": 20.0,
+  "cell_foreign_pct": 15.0,
+  "cell_retries": 1
+ },
+ "cell4": [
+  {
+   "cell": 4,
+   "rows": 200,
+   "rep": 0,
+   "load_s": 0.0016620159149169922,
+   "dirty": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 200 row(s) cleaned, 200 spill(s) released",
+    "wall_s": 0.00025987299159169197,
+    "server_cpu_s": 0.0,
+    "wal_bytes": 30800,
+    "host": {
+     "loadavg": "0.62 2.00 3.88 1/425 4102890",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 1.29,
+     "foreign_server_cpu_pct": -39.6,
+     "foreign_driver_cpu_pct": -55.7,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "clean": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released",
+    "wall_s": 0.0001322000753134489,
+    "server_cpu_s": 0.0,
+    "wal_bytes": 64,
+    "host": {
+     "loadavg": "0.62 2.00 3.88 1/415 4102903",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 2.62,
+     "foreign_server_cpu_pct": -34.2,
+     "foreign_driver_cpu_pct": -65.4,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "reusing_add_us": 111.30794882774353,
+   "add_tag": "ADDED COLUMN p.again",
+   "rows_null_in_new_col": 200
+  },
+  {
+   "cell": 4,
+   "rows": 200,
+   "rep": 1,
+   "load_s": 0.0030105113983154297,
+   "dirty": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 200 row(s) cleaned, 200 spill(s) released",
+    "wall_s": 0.00031299307011067867,
+    "server_cpu_s": 0.000299885,
+    "wal_bytes": 30800,
+    "host": {
+     "loadavg": "0.57 1.96 3.86 1/411 4102917",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 5.86,
+     "foreign_server_cpu_pct": -40.9,
+     "foreign_driver_cpu_pct": -51.3,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "clean": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released",
+    "wall_s": 0.00014146300964057446,
+    "server_cpu_s": 0.0,
+    "wal_bytes": 64,
+    "host": {
+     "loadavg": "0.52 1.93 3.84 1/411 4102925",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 4.01,
+     "foreign_server_cpu_pct": -35.2,
+     "foreign_driver_cpu_pct": -56.1,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "reusing_add_us": 106.39079846441746,
+   "add_tag": "ADDED COLUMN p.again",
+   "rows_null_in_new_col": 200
+  },
+  {
+   "cell": 4,
+   "rows": 1000,
+   "rep": 0,
+   "load_s": 0.007285594940185547,
+   "dirty": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000 row(s) cleaned, 1000 spill(s) released",
+    "wall_s": 0.00070363306440413,
+    "server_cpu_s": 0.0,
+    "wal_bytes": 152400,
+    "host": {
+     "loadavg": "0.48 1.90 3.81 2/417 4102937",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 0.87,
+     "foreign_server_cpu_pct": -52.8,
+     "foreign_driver_cpu_pct": -41.9,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "clean": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released",
+    "wall_s": 0.00015534507110714912,
+    "server_cpu_s": 0.0,
+    "wal_bytes": 64,
+    "host": {
+     "loadavg": "0.44 1.87 3.79 1/410 4102938",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 2.29,
+     "foreign_server_cpu_pct": -34.1,
+     "foreign_driver_cpu_pct": -69.3,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "reusing_add_us": 112.43997141718864,
+   "add_tag": "ADDED COLUMN p.again",
+   "rows_null_in_new_col": 1000
+  },
+  {
+   "cell": 4,
+   "rows": 1000,
+   "rep": 1,
+   "load_s": 0.005321979522705078,
+   "dirty": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000 row(s) cleaned, 1000 spill(s) released",
+    "wall_s": 0.0007176641374826431,
+    "server_cpu_s": 0.0,
+    "wal_bytes": 152400,
+    "host": {
+     "loadavg": "0.41 1.84 3.77 1/424 4102956",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 0.95,
+     "foreign_server_cpu_pct": -52.7,
+     "foreign_driver_cpu_pct": -42.4,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "clean": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released",
+    "wall_s": 0.00017477385699748993,
+    "server_cpu_s": 0.0,
+    "wal_bytes": 64,
+    "host": {
+     "loadavg": "0.41 1.84 3.77 1/424 4102965",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 5.79,
+     "foreign_server_cpu_pct": -33.7,
+     "foreign_driver_cpu_pct": -53.0,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "reusing_add_us": 107.22200386226177,
+   "add_tag": "ADDED COLUMN p.again",
+   "rows_null_in_new_col": 1000
+  },
+  {
+   "cell": 4,
+   "rows": 10000,
+   "rep": 0,
+   "load_s": 0.0446467399597168,
+   "dirty": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released",
+    "wall_s": 0.005908023100346327,
+    "server_cpu_s": 0.005901983,
+    "wal_bytes": 1520400,
+    "host": {
+     "loadavg": "0.53 1.84 3.76 1/417 4102969",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 100.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 0.22,
+     "foreign_server_cpu_pct": 16.1,
+     "foreign_driver_cpu_pct": -19.2,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": false
+    }
+   },
+   "clean": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released",
+    "wall_s": 0.0004047511611133814,
+    "server_cpu_s": 0.0,
+    "wal_bytes": 64,
+    "host": {
+     "loadavg": "0.49 1.81 3.74 1/403 4102971",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 3.93,
+     "foreign_server_cpu_pct": -43.0,
+     "foreign_driver_cpu_pct": -49.3,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "reusing_add_us": 105.32909072935581,
+   "add_tag": "ADDED COLUMN p.again",
+   "rows_null_in_new_col": 10000
+  },
+  {
+   "cell": 4,
+   "rows": 10000,
+   "rep": 1,
+   "load_s": 0.04463601112365723,
+   "dirty": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released",
+    "wall_s": 0.005880471086129546,
+    "server_cpu_s": 0.005874943,
+    "wal_bytes": 1520400,
+    "host": {
+     "loadavg": "0.45 1.78 3.72 1/409 4102989",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 0.31,
+     "foreign_server_cpu_pct": -85.6,
+     "foreign_driver_cpu_pct": -19.3,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "clean": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released",
+    "wall_s": 0.0004184518475085497,
+    "server_cpu_s": 0.0,
+    "wal_bytes": 64,
+    "host": {
+     "loadavg": "0.58 1.78 3.71 1/414 4102997",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 0.54,
+     "foreign_server_cpu_pct": -44.9,
+     "foreign_driver_cpu_pct": -65.0,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "reusing_add_us": 117.68797412514687,
+   "add_tag": "ADDED COLUMN p.again",
+   "rows_null_in_new_col": 10000
+  },
+  {
+   "cell": 4,
+   "rows": 100000,
+   "rep": 0,
+   "load_s": 0.8021247386932373,
+   "dirty": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released",
+    "wall_s": 0.0628938190639019,
+    "server_cpu_s": 0.062886575,
+    "wal_bytes": 15200400,
+    "host": {
+     "loadavg": "0.53 1.75 3.69 1/409 4103010",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 100.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 0.33,
+     "foreign_server_cpu_pct": 1.7,
+     "foreign_driver_cpu_pct": -1.9,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "clean": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released",
+    "wall_s": 0.002960760844871402,
+    "server_cpu_s": 0.001996711,
+    "wal_bytes": 64,
+    "host": {
+     "loadavg": "0.65 1.76 3.68 1/416 4103025",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 100.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 4.15,
+     "foreign_server_cpu_pct": 24.5,
+     "foreign_driver_cpu_pct": -18.8,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": false
+    }
+   },
+   "reusing_add_us": 124.27708134055138,
+   "add_tag": "ADDED COLUMN p.again",
+   "rows_null_in_new_col": 100000
+  },
+  {
+   "cell": 4,
+   "rows": 100000,
+   "rep": 1,
+   "load_s": 0.7930359840393066,
+   "dirty": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released",
+    "wall_s": 0.0622253199107945,
+    "server_cpu_s": 0.062228299,
+    "wal_bytes": 15200400,
+    "host": {
+     "loadavg": "0.60 1.73 3.66 1/415 4103047",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 100.0,
+      "3": 14.3,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 7.2,
+     "wait_pct": 0.69,
+     "foreign_server_cpu_pct": 2.0,
+     "foreign_driver_cpu_pct": -2.2,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "clean": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released",
+    "wall_s": 0.0029422231018543243,
+    "server_cpu_s": 0.002447239,
+    "wal_bytes": 64,
+    "host": {
+     "loadavg": "0.55 1.70 3.64 1/400 4103052",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 2.6,
+     "foreign_server_cpu_pct": -75.1,
+     "foreign_driver_cpu_pct": -28.1,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "reusing_add_us": 111.5680206567049,
+   "add_tag": "ADDED COLUMN p.again",
+   "rows_null_in_new_col": 100000
+  },
+  {
+   "cell": 4,
+   "rows": 1000000,
+   "rep": 0,
+   "load_s": 9.445930242538452,
+   "dirty": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released",
+    "wall_s": 1.3002318779472262,
+    "server_cpu_s": 0.655080123,
+    "wal_bytes": 152169856,
+    "host": {
+     "loadavg": "0.84 1.71 3.62 2/412 4103091",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 1.5,
+      "1": 0.0,
+      "2": 50.8,
+      "3": 0.8,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.8
+     },
+     "sibling_busy_pct": 0.4,
+     "wait_pct": 8.96,
+     "foreign_server_cpu_pct": 0.4,
+     "foreign_driver_cpu_pct": -0.1,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "clean": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released",
+    "wall_s": 0.027389403898268938,
+    "server_cpu_s": 0.027455378,
+    "wal_bytes": 64,
+    "host": {
+     "loadavg": "0.71 1.65 3.58 1/426 4103113",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 66.7,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 0.85,
+     "foreign_server_cpu_pct": -28.9,
+     "foreign_driver_cpu_pct": -3.9,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "reusing_add_us": 134.49392281472683,
+   "add_tag": "ADDED COLUMN p.again",
+   "rows_null_in_new_col": 1000000
+  },
+  {
+   "cell": 4,
+   "rows": 1000000,
+   "rep": 1,
+   "load_s": 9.54158616065979,
+   "dirty": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released",
+    "wall_s": 1.3965338480193168,
+    "server_cpu_s": 0.649412456,
+    "wal_bytes": 152169856,
+    "host": {
+     "loadavg": "1.13 1.70 3.56 1/412 4103133",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.7,
+      "1": 0.0,
+      "2": 47.1,
+      "3": 0.0,
+      "4": 0.7,
+      "5": 0.0,
+      "6": 2.1,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 8.05,
+     "foreign_server_cpu_pct": 0.6,
+     "foreign_driver_cpu_pct": 0.6,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "clean": {
+    "tag": "PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released",
+    "wall_s": 0.027507473016157746,
+    "server_cpu_s": 0.027555817,
+    "wal_bytes": 64,
+    "host": {
+     "loadavg": "1.04 1.67 3.54 2/413 4103150",
+     "competing": [],
+     "cpu_busy_pct": {
+      "0": 0.0,
+      "1": 0.0,
+      "2": 100.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0
+     },
+     "sibling_busy_pct": 0.0,
+     "wait_pct": 0.13,
+     "foreign_server_cpu_pct": 4.5,
+     "foreign_driver_cpu_pct": -3.4,
+     "attempts": 1,
+     "quiet_waited_s": 2.0,
+     "clean": true
+    }
+   },
+   "reusing_add_us": 122.27497063577175,
+   "add_tag": "ADDED COLUMN p.again",
+   "rows_null_in_new_col": 1000000
+  }
+ ],
+ "cell5": [],
+ "cell6": []
+}

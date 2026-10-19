@@ -680,3 +680,38 @@ Full Debug suite before the review: 4168/4168; after it, 4168/4168, and
 `scripts/sim.sh` again 280 runs, 0 failures.
 
 Overhead not measured; measured at the milestone's close.
+
+### The close measurement (2026-10-19, `v3.3.0` `f3ec25ea` against `v3.3.0-8-g842e0a42`)
+
+`bench/v3.3.0/results-cd-close-v3.3.0-8-g842e0a42.md`, by `ck-tester` in
+Release builds, interleaved A / A' / B, 09:56-10:38 UTC (inside the hour,
+builds included). **No cell outside the A' - A spread**:
+- single-row `INSERT` on a relation with two dropped, uncleaned slot
+  columns: -0.17 / -0.32 us (literal / prepared), so CD-S1's bit OR is below
+  what the host resolves;
+- the every-row `UPDATE` of 1,000 rows: -11.6 / -15.0 us, on a noisy host
+  day (largest A' - A 125 / 274 us), so "no regression resolved", not
+  faster;
+- point `SELECT` and the scan row: inside by 1 % or less.
+
+The pass (B only):
+- 0.6 us and 152 bytes of log per dirty row: 62 ms at 100,000 rows and
+  1.30 s at 1,000,000;
+- about 0.63 s of the 1,000,000-row pass is two WAL segment rolls' sync
+  under the stream latch (`wal.md` §6), and the scheduler reports a 0.91 s
+  non-yielding run;
+- a concurrent point-`UPDATE` stream keeps p50 47-48 us and p99 74-76 us,
+  and one of its statements waits out the whole pass (1.8 s) - CD-OI-11 (a)'s
+  stall, measured;
+- a re-run on a clean relation reads at 27 ns a row.
+
+A reusing ADD costs 9 us more than a vacant-slot ADD (no A' control).
+
+Cut, and said in the file: the `UPDATE` at 200 and 10,000 rows, `wide-h`, a
+multi-row `INSERT`, the PostgreSQL floor. The scans of 200 and 1,000 rows
+had 2 runs each. A 0.4-0.7 s stall in the no-pass control is not CD's and is
+flagged in the file.
+
+**Status: every stage landed (S0 `6f4d8ff4`, S1 `41761260`, S2 `6ef1a7a4`,
+S3 `bbea35d2`, S4 `0badb7d6`, S5 `842e0a42`), the close measured. Closing
+CD, a merge to `main`, a push and any tag wait for the operator's word.**

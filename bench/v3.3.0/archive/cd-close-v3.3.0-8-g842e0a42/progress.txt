@@ -1,0 +1,238 @@
+09:57:38 task began 09:56; builds started
+09:59:24 build A done rc=0
+09:59:25 build B done rc=0
+10:02:07 measurement launch (load 0.75 3.64 4.83, cc1plus 0)
+10:02:07 phase start u1
+10:04:04 phase end u1 rc=0
+10:04:04 phase start u2
+10:06:01 phase end u2 rc=0
+10:06:01 phase start p4
+10:06:01 cell4 size=200 rep=0 load
+10:06:02 cell4 size=200 loaded in 0.0s; idle wait
+10:06:06 cell4 size=200 dirty pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 200 row(s) cleaned, 200 spill(s) released
+10:06:10 cell4 size=200 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:06:10 cell4 size=200 rep=1 load
+10:06:10 cell4 size=200 loaded in 0.0s; idle wait
+10:06:14 cell4 size=200 dirty pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 200 row(s) cleaned, 200 spill(s) released
+10:06:18 cell4 size=200 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:06:18 cell4 size=1000 rep=0 load
+10:06:19 cell4 size=1000 loaded in 0.0s; idle wait
+10:06:23 cell4 size=1000 dirty pass 0.001s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000 row(s) cleaned, 1000 spill(s) released
+10:06:27 cell4 size=1000 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:06:27 cell4 size=1000 rep=1 load
+10:06:27 cell4 size=1000 loaded in 0.0s; idle wait
+10:06:31 cell4 size=1000 dirty pass 0.001s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000 row(s) cleaned, 1000 spill(s) released
+10:06:35 cell4 size=1000 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:06:35 cell4 size=10000 rep=0 load
+10:06:36 cell4 size=10000 loaded in 0.0s; idle wait
+10:06:40 cell4 size=10000 dirty pass 0.006s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:06:44 cell4 size=10000 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:06:44 cell4 size=10000 rep=1 load
+10:06:45 cell4 size=10000 loaded in 0.0s; idle wait
+10:06:49 cell4 size=10000 dirty pass 0.006s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:06:53 cell4 size=10000 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:06:53 cell4 size=100000 rep=0 load
+10:06:54 cell4 size=100000 loaded in 0.8s; idle wait
+10:06:58 cell4 size=100000 dirty pass 0.063s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:07:03 cell4 size=100000 clean pass 0.003s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:07:03 cell4 size=100000 rep=1 load
+10:07:05 cell4 size=100000 loaded in 0.8s; idle wait
+10:07:09 cell4 size=100000 dirty pass 0.062s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:07:14 cell4 size=100000 clean pass 0.003s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:07:14 cell4 size=1000000 rep=0 load
+10:07:24 cell4 size=1000000 loaded in 9.4s; idle wait
+10:07:30 cell4 size=1000000 dirty pass 1.300s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:07:36 cell4 size=1000000 clean pass 0.027s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:07:36 cell4 size=1000000 rep=1 load
+10:07:46 cell4 size=1000000 loaded in 9.5s; idle wait
+10:07:53 cell4 size=1000000 dirty pass 1.397s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:07:59 cell4 size=1000000 clean pass 0.028s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:07:59 cd_pass done
+10:07:59 phase end p4 rc=0
+10:07:59 phase start p5
+10:07:59 cell5 rows=1000000 rep=0 load
+10:08:15 cell5 pass starts (stream has 57821 samples)
+10:08:17 cell5 pass ended 1.978s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:08:21 cell5 rows=1000000 rep=1 load
+10:08:37 cell5 pass starts (stream has 57738 samples)
+10:08:39 cell5 pass ended 2.093s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:08:43 cell5 rows=1000000 rep=2 load
+10:08:59 cell5 pass starts (stream has 57587 samples)
+10:09:02 cell5 pass ended 2.626s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:09:06 cd_pass done
+10:09:06 phase end p5 rc=0
+10:09:06 phase start p6
+10:09:06 cell6 start
+10:09:10 cd_pass done
+10:09:10 phase end p6 rc=0
+10:09:10 phase start s1
+10:09:58 phase end s1 rc=0
+10:09:58 phase start z
+10:10:41 phase end z rc=0
+10:10:41 ALL DONE
+10:10:42 part 2 launch (load 0.82 1.48 3.18, cc1plus 0)
+10:10:42 phase start p4b
+10:10:42 cell4 size=200 rep=0 load
+10:10:42 cell4 size=200 loaded in 0.0s; idle wait
+10:10:46 cell4 size=200 dirty pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 200 row(s) cleaned, 200 spill(s) released
+10:10:50 cell4 size=200 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:10:50 cell4 size=200 rep=1 load
+10:10:51 cell4 size=200 loaded in 0.0s; idle wait
+10:10:55 cell4 size=200 dirty pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 200 row(s) cleaned, 200 spill(s) released
+10:10:59 cell4 size=200 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:10:59 cell4 size=1000 rep=0 load
+10:10:59 cell4 size=1000 loaded in 0.0s; idle wait
+10:11:03 cell4 size=1000 dirty pass 0.001s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000 row(s) cleaned, 1000 spill(s) released
+10:11:07 cell4 size=1000 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:11:07 cell4 size=1000 rep=1 load
+10:11:08 cell4 size=1000 loaded in 0.0s; idle wait
+10:11:12 cell4 size=1000 dirty pass 0.001s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000 row(s) cleaned, 1000 spill(s) released
+10:11:16 cell4 size=1000 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:11:16 cell4 size=10000 rep=0 load
+10:11:16 cell4 size=10000 loaded in 0.0s; idle wait
+10:11:20 cell4 size=10000 dirty pass 0.006s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:11:24 cell4 size=10000 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:11:24 cell4 size=10000 rep=1 load
+10:11:25 cell4 size=10000 loaded in 0.0s; idle wait
+10:11:29 cell4 size=10000 dirty pass 0.006s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:11:33 cell4 size=10000 clean pass 0.000s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:11:33 cell4 size=100000 rep=0 load
+10:11:34 cell4 size=100000 loaded in 0.8s; idle wait
+10:11:38 cell4 size=100000 dirty pass 0.064s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:11:43 cell4 size=100000 clean pass 0.003s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:11:43 cell4 size=100000 rep=1 load
+10:11:44 cell4 size=100000 loaded in 0.8s; idle wait
+10:11:48 cell4 size=100000 dirty pass 0.061s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:11:53 cell4 size=100000 clean pass 0.003s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:11:53 cell4 size=1000000 rep=0 load
+10:12:03 cell4 size=1000000 loaded in 9.2s; idle wait
+10:12:09 cell4 size=1000000 dirty pass 1.302s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:12:15 cell4 size=1000000 clean pass 0.027s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:12:15 cell4 size=1000000 rep=1 load
+10:12:25 cell4 size=1000000 loaded in 9.1s; idle wait
+10:12:32 cell4 size=1000000 dirty pass 1.301s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:12:37 cell4 size=1000000 clean pass 0.028s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:12:37 cd_pass done
+10:12:37 phase end p4b rc=0
+10:12:37 phase start p5b
+10:12:37 cell5 rows=1000000 rep=0 load
+10:12:53 cell5 pass starts (stream has 59257 samples) control=False
+10:12:55 cell5 pass ended 1.801s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:12:59 cell5 rows=1000000 rep=1 load
+10:13:14 cell5 pass starts (stream has 58186 samples) control=False
+10:13:16 cell5 pass ended 1.849s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:13:20 cell5 rows=1000000 rep=2 load
+10:13:36 cell5 pass starts (stream has 59083 samples) control=False
+10:13:37 cell5 pass ended 1.782s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:13:41 cd_pass done
+10:13:41 phase end p5b rc=0
+10:13:41 phase start p5c
+10:13:41 cell5 rows=1000000 rep=0 load
+10:13:57 cell5 pass starts (stream has 57328 samples) control=True
+10:13:59 cell5 pass ended 2.002s CONTROL: no pass
+10:14:05 cell5 rows=1000000 rep=1 load
+10:14:20 cell5 pass starts (stream has 58904 samples) control=True
+10:14:22 cell5 pass ended 2.001s CONTROL: no pass
+10:14:28 cell5 rows=1000000 rep=2 load
+10:14:44 cell5 pass starts (stream has 54586 samples) control=True
+10:14:46 cell5 pass ended 2.015s CONTROL: no pass
+10:14:51 cd_pass done
+10:14:51 phase end p5c rc=0
+10:14:51 ALL DONE 2
+10:14:53 part 3 launch (load 1.84 1.51 2.76, cc1plus 0)
+10:14:53 phase start s2
+10:15:58 phase end s2 rc=0
+10:15:58 ALL DONE 3
+10:17:35 part 4 launch (load 0.40 0.99 2.36, cc1plus 0)
+10:17:35 phase start u3
+10:20:09 phase end u3 rc=0
+10:20:09 phase start u4
+10:22:45 phase end u4 rc=0
+10:22:45 ALL DONE 4
+10:22:46 part 5 launch (load 1.15 1.07 1.99, cc1plus 0)
+10:22:46 phase start p6b
+10:22:46 cell6 start
+10:22:52 cd_pass done
+10:22:52 phase end p6b rc=0
+10:22:52 ALL DONE 5
+10:26:53 part 6 launch (load 0.10 0.55 1.56, cc1plus 0)
+10:26:53 phase start p4s
+10:26:53 cell4 size=10000 rep=0 load
+10:26:55 cell4 size=10000 loaded in 0.1s; idle wait
+10:26:59 cell4 size=10000 dirty pass 0.010s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:27:03 cell4 size=10000 clean pass 0.002s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:27:03 cell4 size=10000 rep=1 load
+10:27:04 cell4 size=10000 loaded in 0.1s; idle wait
+10:27:08 cell4 size=10000 dirty pass 0.012s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:27:12 cell4 size=10000 clean pass 0.002s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:27:12 cell4 size=100000 rep=0 load
+10:27:16 cell4 size=100000 loaded in 2.4s; idle wait
+10:27:20 cell4 size=100000 dirty pass 0.372s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:27:25 cell4 size=100000 clean pass 0.005s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:27:25 cell4 size=100000 rep=1 load
+10:27:28 cell4 size=100000 loaded in 2.3s; idle wait
+10:27:32 cell4 size=100000 dirty pass 0.253s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:27:37 cell4 size=100000 clean pass 0.005s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:27:37 cell4 size=1000000 rep=0 load
+10:28:08 phase end p4s rc=1
+10:28:08 phase start p4g
+10:28:08 cell4 size=10000 rep=0 load
+10:28:08 phase end p4g rc=1
+10:28:08 ALL DONE 6
+10:30:30 p4s/p4g attempt 1 aborted by ENOSPC (disk full, wd-* of earlier phases removed); relaunching
+10:30:30 part 6 launch (load 0.66 0.67 1.40, cc1plus 0)
+10:30:30 phase start p4s
+10:30:30 cell4 size=10000 rep=0 load
+10:30:31 cell4 size=10000 loaded in 0.1s; idle wait
+10:30:35 cell4 size=10000 dirty pass 0.011s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:30:39 cell4 size=10000 clean pass 0.003s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:30:39 cell4 size=10000 rep=1 load
+10:30:39 cell4 size=10000 loaded in 0.1s; idle wait
+10:30:43 cell4 size=10000 dirty pass 0.014s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:30:47 cell4 size=10000 clean pass 0.003s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:30:47 cell4 size=100000 rep=0 load
+10:30:49 cell4 size=100000 loaded in 1.5s; idle wait
+10:30:54 cell4 size=100000 dirty pass 0.075s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:30:58 cell4 size=100000 clean pass 0.006s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:30:58 cell4 size=100000 rep=1 load
+10:31:00 cell4 size=100000 loaded in 1.6s; idle wait
+10:31:04 cell4 size=100000 dirty pass 0.075s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:31:08 cell4 size=100000 clean pass 0.007s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:31:08 cell4 size=1000000 rep=0 load
+10:31:29 cell4 size=1000000 loaded in 21.2s; idle wait
+10:31:36 cell4 size=1000000 dirty pass 2.032s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:31:40 cell4 size=1000000 clean pass 0.031s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:31:40 cell4 size=1000000 rep=1 load
+10:32:01 cell4 size=1000000 loaded in 20.7s; idle wait
+10:32:07 cell4 size=1000000 dirty pass 2.034s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:32:12 cell4 size=1000000 clean pass 0.129s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:32:12 cd_pass done
+10:32:12 phase end p4s rc=0
+10:32:12 phase start p4g
+10:32:12 cell4 size=10000 rep=0 load
+10:32:13 cell4 size=10000 loaded in 0.1s; idle wait
+10:32:17 cell4 size=10000 dirty pass 0.011s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:32:23 cell4 size=10000 clean pass 0.002s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:32:23 cell4 size=10000 rep=1 load
+10:32:24 cell4 size=10000 loaded in 0.1s; idle wait
+10:32:28 cell4 size=10000 dirty pass 0.012s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:32:32 cell4 size=10000 clean pass 0.059s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:32:32 cell4 size=100000 rep=0 load
+10:32:35 cell4 size=100000 loaded in 2.5s; idle wait
+10:32:39 cell4 size=100000 dirty pass 0.075s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:32:43 cell4 size=100000 clean pass 0.004s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:32:43 cell4 size=100000 rep=1 load
+10:32:45 cell4 size=100000 loaded in 1.5s; idle wait
+10:32:49 cell4 size=100000 dirty pass 0.074s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:32:53 cell4 size=100000 clean pass 0.005s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:32:53 cell4 size=1000000 rep=0 load
+10:33:11 cell4 size=1000000 loaded in 17.3s; idle wait
+10:33:17 cell4 size=1000000 dirty pass 2.230s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:33:24 cell4 size=1000000 clean pass 0.029s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:33:25 cell4 size=1000000 rep=1 load
+10:33:40 cell4 size=1000000 loaded in 15.1s; idle wait
+10:33:47 cell4 size=1000000 dirty pass 2.027s PURGED DROPPED COLUMNS p: 1 column(s) clean, 1000000 row(s) cleaned, 1000000 spill(s) released
+10:33:51 cell4 size=1000000 clean pass 0.030s PURGED DROPPED COLUMNS p: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) released
+10:33:51 cd_pass done
+10:33:51 phase end p4g rc=0
+10:33:51 ALL DONE 6

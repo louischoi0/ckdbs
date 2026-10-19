@@ -1,0 +1,29 @@
+10:02:07 watch phase=none driver=no last: 
+10:03:07 watch phase=u1 driver=yes last: {"shape": "insert", "path": "literal", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 38.96, "p25_us": 44.53, "p50_us": 45.05, "p90_us": 54.39,
+10:04:07 watch phase=u2 driver=yes last: 
+10:05:07 watch phase=u2 driver=yes last: {"shape": "update-range", "path": "prepared", "bin": "B", "ops": 120, "bad": 0, "p0_us": 704.45, "p25_us": 733.86, "p50_us": 745.73, "p90_us
+10:06:07 watch phase=p4 driver=yes last: 
+10:07:07 watch phase=p4 driver=yes last: 
+10:08:07 watch phase=p5 driver=yes last: 
+10:09:07 watch phase=p6 driver=yes last: 
+10:10:07 watch phase=z driver=yes last: 
+10:10:42 watch2 phase=z driver=no last: 10:10:42 phase start p4b
+10:11:42 watch2 phase=p4b driver=yes last: 10:11:38 cell4 size=100000 dirty pass 0.064s PURGED DROPPED COLUMNS p: 1 column(s) clean, 100000 row(s) cleaned, 100000 spill(s) released
+10:12:42 watch2 phase=p5b driver=yes last: 10:12:37 cell5 rows=1000000 rep=0 load
+10:13:42 watch2 phase=p5c driver=yes last: 10:13:41 cell5 rows=1000000 rep=0 load
+10:14:42 watch2 phase=p5c driver=yes last: 10:14:28 cell5 rows=1000000 rep=2 load
+10:14:53 watch3 phase=p5c driver=no last: 10:14:53 phase start s2
+10:15:53 watch3 phase=s2 driver=yes last: 10:14:53 phase start s2
+10:17:35 watch4 phase=s2 driver=no last: 10:17:35 phase start u3
+10:18:35 watch4 phase=u3 driver=yes last: 10:17:35 phase start u3
+10:19:35 watch4 phase=u3 driver=yes last: 10:17:35 phase start u3
+10:20:35 watch4 phase=u4 driver=yes last: 10:20:09 phase start u4
+10:21:35 watch4 phase=u4 driver=yes last: 10:20:09 phase start u4
+10:22:35 watch4 phase=u4 driver=yes last: 10:20:09 phase start u4
+10:22:46 watch5 phase=u4 driver=no last: 10:22:46 phase start p6b
+10:26:53 watch6 phase=p6b driver=no last: 10:26:53 phase start p4s
+10:27:53 watch6 phase=p4s driver=yes last: 10:27:37 cell4 size=1000000 rep=0 load
+10:30:30 watch6 phase=p4g driver=no last: 10:30:30 phase start p4s
+10:31:30 watch6 phase=p4s driver=yes last: 10:31:29 cell4 size=1000000 loaded in 21.2s; idle wait
+10:32:30 watch6 phase=p4g driver=yes last: 10:32:28 cell4 size=10000 dirty pass 0.012s PURGED DROPPED COLUMNS p: 1 column(s) clean, 10000 row(s) cleaned, 10000 spill(s) released
+10:33:30 watch6 phase=p4g driver=yes last: 10:33:25 cell4 size=1000000 rep=1 load
