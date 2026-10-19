@@ -12,6 +12,8 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
 #include "kds/stats/cabin_store.hpp"
+#include "kds/storage/btree/btree.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/tagged_cell.hpp"
 #include "kds/storage/varheap.hpp"
@@ -65,6 +67,48 @@ protected:
         const std::string out = Run(sql);
         EXPECT_TRUE(IsErr(out)) << sql << " -> " << out;
         EXPECT_NE(out.find(needle), std::string::npos) << sql << " -> " << out;
+    }
+    const catalog::TableAccess* Access(const std::string& table) {
+        const auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, table);
+        EXPECT_TRUE(oid.ok()) << oid.status().message();
+        if (!oid.ok()) return nullptr;
+        auto access = boot_->catalog.InitTableAccess(oid.value());
+        EXPECT_TRUE(access.ok()) << access.status().message();
+        return access.ok() ? access.value() : nullptr;
+    }
+    // One KWP load chunk of one row, through the load's own seam: the shape
+    // it described at LOAD BEGIN, re-resolved by name.
+    std::string LoadChunk(const parser::DescribedShape& described,
+                          std::vector<parser::AstValue> row) {
+        parser::InsertStmt stmt;
+        stmt.table_name = "t";
+        stmt.described = described;
+        stmt.rows.push_back(std::move(row));
+        Session session;
+        return dispatcher_->ExecuteInsert(stmt, session).response;
+    }
+    // Whether `key`'s stored row is clean at every dropped column, read off
+    // its leaf: the cell zero, and the null bit set where the column has one.
+    bool DroppedCellsCleanAt(const catalog::TableAccess& t, std::uint64_t key) {
+        auto at = btree::BtreeLookup(store_, t.desc_page_id, key);
+        EXPECT_TRUE(at.ok()) << key << ": " << at.status().message();
+        if (!at.ok()) return false;
+        heap::PageView leaf(at.value().leaf.bytes());
+        auto tuple = leaf.ReadTuple(at.value().slot);
+        EXPECT_TRUE(tuple.ok()) << tuple.status().message();
+        if (!tuple.ok()) return false;
+        const std::span<const std::byte> payload = tuple.value().payload;
+        for (std::size_t i = 1; i < t.schema.columns.size(); ++i) {
+            if (!t.schema.columns[i].dropped()) continue;
+            if (t.layout.null_bits[i] != catalog::kNoNullBit &&
+                !catalog::NullBitIsSet(payload, t.layout, i)) {
+                return false;
+            }
+            for (std::uint32_t b = t.layout.offsets[i]; b < t.layout.cell_ends[i]; ++b) {
+                if (payload[b] != std::byte{0}) return false;
+            }
+        }
+        return true;
     }
 
     storage::InMemoryPageStore store_{kFirstUserPageId};
@@ -140,17 +184,12 @@ TEST_F(AlterColumnTest, ALoadChunkAgainstAChangedShapeIsRefused) {
     const parser::DescribedShape described{oid.value(), 3, access.value()->layout.live_columns};
 
     const auto chunk = [&](std::int64_t a, std::int64_t b) {
-        parser::InsertStmt stmt;
-        stmt.table_name = "t";
-        stmt.described = described;
         std::vector<parser::AstValue> row(3);  // a NULL key: issue one
         row[1].type = parser::ValueType::kInt;
         row[1].int_val = a;
         row[2].type = parser::ValueType::kInt;
         row[2].int_val = b;
-        stmt.rows.push_back(std::move(row));
-        Session session;
-        return dispatcher_->ExecuteInsert(stmt, session).response;
+        return LoadChunk(described, std::move(row));
     };
     EXPECT_FALSE(IsErr(chunk(1, 2)));
 
@@ -171,6 +210,47 @@ TEST_F(AlterColumnTest, ADroppedNotNullVarcharIsNeverDecoded) {
     Ok("INSERT INTO t VALUES (NULL, 2)");
     EXPECT_EQ(Run("SELECT * FROM t"), "id,n\\n1,1\\n2,2");
     EXPECT_EQ(Run("SELECT COUNT(*) FROM t WHERE n > 0"), "count(*)\\n2");
+}
+
+// CD-S1: every row written after a drop is born clean - each dropped cell
+// zero and, where the column has a null bit, the bit set - on every path that
+// places a row (a prepared statement binds by text, so it is the literal
+// path). An UPDATE copies the before-image, so it carries the bit; a row from
+// before the drop keeps the bit clear until a clean pass, and reads alike.
+TEST_F(AlterColumnTest, ARowWrittenAfterADropIsBornClean) {
+    Ok("CREATE TABLE t (id int64, a int32 NULL, s varchar NULL, k int64, n int32) SPARE 1");
+    Ok("ALTER TABLE t ADD COLUMN x varchar(16) NULL");
+    Ok("INSERT INTO t VALUES (1, 9, 'before-the-drop-and-long-enough-to-spill', 8, 1, 'xx')");
+    Ok("ALTER TABLE t DROP COLUMN a");
+    Ok("ALTER TABLE t DROP COLUMN s");
+    Ok("ALTER TABLE t DROP COLUMN k");  // NOT NULL: no bit, a zero cell
+    Ok("ALTER TABLE t DROP COLUMN x");
+    const catalog::TableAccess* t = Access("t");
+    ASSERT_NE(t, nullptr);
+
+    Ok("INSERT INTO t VALUES (NULL, 2)");
+    Ok("INSERT INTO t VALUES (NULL, 3), (NULL, 4)");
+    Ok("INSERT INTO t (n) VALUES (5)");
+    Ok("INSERT INTO t VALUES (6, 6) ON CONFLICT DO NOTHING");
+    Ok("INSERT INTO t SELECT id + 10, n FROM t WHERE n = 2");
+    std::vector<parser::AstValue> row(2);  // the KWP load's chunk, its key named
+    row[0].type = parser::ValueType::kInt;
+    row[0].int_val = 7;
+    row[1].type = parser::ValueType::kInt;
+    row[1].int_val = 7;
+    EXPECT_FALSE(IsErr(LoadChunk(parser::DescribedShape{t->oid,
+                                                        static_cast<std::uint32_t>(
+                                                            t->schema.columns.size()),
+                                                        t->layout.live_columns},
+                                 std::move(row))));
+    Ok("UPDATE t SET n = n + 100 WHERE id = 2");
+
+    EXPECT_FALSE(DroppedCellsCleanAt(*t, 1));  // written before the drop; its bytes stay
+    for (const std::uint64_t key : {2, 3, 4, 5, 6, 7, 12}) {
+        EXPECT_TRUE(DroppedCellsCleanAt(*t, key)) << key;
+    }
+    EXPECT_EQ(Run("SELECT * FROM t"),
+              "id,n\\n1,1\\n2,102\\n3,3\\n4,4\\n5,5\\n6,6\\n7,7\\n12,2");
 }
 
 TEST_F(AlterColumnTest, ADroppedNameIsFreeAndUnreachable) {

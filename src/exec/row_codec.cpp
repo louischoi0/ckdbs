@@ -966,9 +966,14 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
     // local, never the layout, per column.
     const bool has_dropped = layout.has_dropped();
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
-        // A dropped column's cell stays zero with its bit clear (BW-R6): the
+        // A dropped column's cell stays zero, and its bit is set where it
+        // has one (CD-S1): the row is born clean, so a later reuse of the
+        // slot reads NULL in it (BW-R3's guarantee for a vacant slot). The
         // caller's placeholder there is not a value.
-        if (has_dropped && schema.columns[i].dropped()) continue;
+        if (has_dropped && schema.columns[i].dropped()) {
+            if (layout.null_bits[i] != catalog::kNoNullBit) catalog::SetNullBit(out, layout, i);
+            continue;
+        }
         if (Status s = EncodeColumn(schema, layout, i, values[i - 1], out, varheap); !s.ok()) {
             return s;
         }

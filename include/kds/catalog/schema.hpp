@@ -186,7 +186,9 @@ struct RowLayout {
     // slot, so the vacant ones are always the suffix. `EncodeRow` sets these
     // bits in every row it builds, so a column a later `ADD` places in one
     // reads NULL in every row that predates it. **`[quiet-wrong]`**: without
-    // them a vacant slot's zero bytes would read as a present 0.
+    // them a vacant slot's zero bytes would read as a present 0. A dropped
+    // column's slot is not in this range; `EncodeRow` sets its bit by the
+    // column (CD-S1).
     std::uint16_t vacant_slot_bit_begin = 0;
     std::uint16_t vacant_slot_bit_end = 0;
 
@@ -197,8 +199,9 @@ struct RowLayout {
     // Whether any column is dropped - the codec's gate, as
     // `null_bitmap_bytes` is the bitmap's: a relation with no dropped column
     // asks no column whether it is. A dropped column's cell is written zero
-    // and never interpreted - its bytes may be a NOT NULL varchar's zero
-    // `kNull` tag, which a decode would otherwise refuse.
+    // with its null bit set where it has one (CD-S1), and never interpreted -
+    // its bytes may be a NOT NULL varchar's zero `kNull` tag, which a decode
+    // would otherwise refuse.
     bool has_dropped() const noexcept { return live_columns != offsets.size(); }
 
     // The slots a column holds, a dropped one's included (BW-R2).

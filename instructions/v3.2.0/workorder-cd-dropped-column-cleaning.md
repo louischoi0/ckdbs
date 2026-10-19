@@ -423,4 +423,28 @@ conditions". The conditions below bind the stages named in them.
   `docs/inflight/bugs/a-column-cabin-above-position-63-is-never-witnessed.md`
   with three unruled fix options. CD's same-position reuse does not widen it.
 
+### CD-S1 - the codec (2026-10-19, on `cd-column-slot-cleaning` from `6f4d8ff4`)
+
+`EncodeRow` sets a dropped column's null bit where it has one; the cell
+stays zero. Comments in `schema.hpp`, `alter.md` AL11 and `null.md` §2.1
+follow. `AlterColumnTest.ARowWrittenAfterADropIsBornClean` reads the stored
+bytes after every insert path - VALUES, multi-row, a column list, ON
+CONFLICT DO NOTHING, INSERT ... SELECT and a KWP load chunk (a prepared
+statement binds by text, `kwp_session.cpp:561`, so it is the literal path) -
+over a dropped nullable int, spilled varchar, slot varchar and a NOT NULL
+int with no bit; UPDATE carries the bit, a pre-drop row keeps its bytes, and
+SELECT is unchanged. A mutant without the bit fails it; a mutant without the
+`kNoNullBit` guard crashes an existing cell. "The sim integrity check
+accepts the bit" holds by reading, **not executed**: `sim/integrity.cpp`
+reads no null bit and the sim has no ALTER op until S5.
+
+Full Debug suite (`ctest -j8`): 4141 of 4142 passed;
+`SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement` failed once
+under load and passed 5 of 5 alone - it creates no dropped column, and the
+change is behind `has_dropped`. The review's test and doc cuts came after it;
+the AlterColumn, purge and parser filters (258 tests) passed on them.
+critics-developer review: no correctness finding; applied the `alter.md`
+wording, a shared `LoadChunk` and one table lookup in the test, a dropped NOT
+NULL column in it, and `null.md`'s clause.
+
 Overhead not measured; measured at the milestone's close.

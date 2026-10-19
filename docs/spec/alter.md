@@ -220,8 +220,12 @@ column keeps its position, so every stored position (an index's columns, a
 foreign key's, a Cabin's, a Transition's) stays valid, and its bytes stay
 in every tuple.
 - Storage walks it: the layout, `RowSpills` (purge still releases its
-  spills) and the `UPDATE` copy. `EncodeRow` writes it zero, and the
-  decoders read it as NULL and never interpret its cell.
+  spills) and the `UPDATE` copy. `EncodeRow` writes it zero with its null
+  bit set where it has one (every slot column has one) since CD-S1, so a
+  row written after the drop is born clean. A row written before the drop
+  keeps its cell and bit, and one written after it by an older binary
+  holds the bit clear; either reads NULL and its cell is never
+  interpreted.
 - The SQL surface does not see it: name resolution, `SELECT *`,
   `DESCRIBE`, `sys.columns`, the wire and KWP load descriptors, and
   positional `VALUES`, which count live columns (`RowLayout::live_columns`)

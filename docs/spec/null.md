@@ -49,7 +49,8 @@ no nullable column pays nothing.
 - **And one bit per reserved column slot** (`alter.md` AL11, BW): slot `j`'s
   bit is the declared nullable columns' count plus `j`, whether a column
   holds the slot or not, so the bitmap's size is fixed at `CREATE`. A
-  dropped column keeps its bit. A **vacant** slot's bit is set in every row
+  dropped column keeps its bit, and `EncodeRow` sets it in every row it
+  writes after the drop (CD-S1). A **vacant** slot's bit is set in every row
   `EncodeRow` writes - the slot is NULL - which is what makes a column a
   later `ADD COLUMN` places there read NULL in every older row; one polarity
   for every bit, set meaning NULL.
