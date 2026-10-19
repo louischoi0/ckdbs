@@ -904,5 +904,52 @@ TEST(IndexTreeTest, ARunOfOnePairDividesInternalNodesAndGrowsLevelsCleanly) {
     ExpectEverySeparatorBoundsItsSubtree(f);
 }
 
+// **A divide grants itself the pins its parents past the first take**
+// (`storage::PinAllowance`, `SecureParents`). At the widest legal entry a
+// node holds two separators, so a key-order fill secures more parents with
+// every level and a growth holds `3 + k` pins - past `kPinCeiling` once `k`
+// passes five, which aborted a debug build before row 192. Each grant is
+// held with the holds it covers and revoked with them.
+TEST(IndexTreeTest, ADeepDivideAtTheWidestEntryStaysWithinItsPinAllowance) {
+    constexpr std::uint16_t kWideKey = 8;
+    constexpr std::uint16_t kWidest = 4048;  // internal entry 8 + 8 + 4048 + 4 = 4068
+    const IndexLayout layout = Layout(kWideKey, kWidest);
+    ASSERT_TRUE(CheckIndexLayout(layout).ok());
+    ASSERT_EQ(MaxInternalEntries(layout), 2u);
+
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/64, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto opened = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{8192},
+                                                 /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    storage::DevicePageStore& store = *opened.value();
+    PageId root = kInvalidPageId;
+    PageId anchor = kInvalidPageId;
+    {
+        auto created = store.CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        root = created.value().first;
+        ASSERT_TRUE(FormatRoot(created.value().second.bytes(), layout, /*owner_oid=*/0).ok());
+        auto made = store.CreateNew();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        anchor = made.value().first;
+        storage::FormatPage(made.value().second.bytes(), PageType::kAnchor);
+    }
+
+    const std::vector<std::byte> covered(kWidest, std::byte{0x78});
+    std::size_t most_allowed = 0;
+    for (std::uint32_t k = 1; k <= 1024; ++k) {
+        auto placed = IndexInsert(store, root, layout, Key(k, kWideKey), k, covered,
+                                  /*owner_oid=*/0, anchor);
+        ASSERT_TRUE(placed.ok()) << "row " << k << ": " << placed.status().message();
+        if (placed.value().new_root != kInvalidPageId) root = placed.value().new_root;
+        most_allowed = std::max(most_allowed, store.pin_allowance());
+    }
+    EXPECT_GT(most_allowed, 0u) << "no divide secured a second parent";
+    EXPECT_GT(store.pin_high_water(), storage::DevicePageStore::kPinCeiling);
+    EXPECT_EQ(store.pin_allowance(), 0u) << "a grant outlived its holds";
+    EXPECT_EQ(store.live_pins(), 0u);
+}
+
 }  // namespace
 }  // namespace kds::index

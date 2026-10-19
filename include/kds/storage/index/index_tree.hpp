@@ -134,6 +134,9 @@ struct IndexInsertResult {
     // still held (AT-S21): an `INDEX_INSERT` names a slot, and another
     // core's insert into the leaf between the write and its record shifts
     // it. The caller logs from the page under this hold, then drops it.
+    // Declared after `allowance`, the pins it grants for those parents past
+    // the first, so the holds drop before the grant does.
+    storage::PinAllowance allowance;
     std::vector<storage::PageRef> held;
     // A divide that grew a root: its anchor's `UnlatchedPin`.
     storage::UnlatchedPin anchor;

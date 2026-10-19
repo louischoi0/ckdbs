@@ -742,6 +742,13 @@ public:
     std::size_t live_pins() const noexcept override { return live_pins_; }
     std::size_t pin_high_water() const noexcept { return pin_high_water_; }
 
+    // `PinAllowance`'s grants, summed over every operation holding one and
+    // added to the ceiling the debug assert checks. Under the structure
+    // latch, as `live_pins_` is, so no pin is checked against half a grant.
+    void AllowPins(std::size_t pins) noexcept override;
+    void RevokePins(std::size_t pins) noexcept override;
+    std::size_t pin_allowance() const noexcept { return pin_allowance_; }
+
     // One clock pass, reclaiming at most `budget` frames. Returns how many
     // it actually reclaimed - so a caller can tell "nothing to do" from
     // "nothing allowed", which are very different states under pressure.
@@ -798,7 +805,9 @@ public:
     // `SecureParents` holds (AT-S16) and a level's created node
     // (btree.cpp's `PromoteSeparator`) - 3 in the ordinary case, and `k` is
     // at most 6 on a 678-way tree. **An index's `k` has no such bound**
-    // (index_tree.cpp's walk up): open, AT-S16's review F1. Since AT-S21 an
+    // (index_tree.cpp's walk up), so an index divide grants itself one pin
+    // of `PinAllowance` for every parent past the first, and the ceiling
+    // below is the ordinary case's, a divide securing one. Since AT-S21 an
     // insert keeps its leaf and parents held until its record is stamped,
     // so an index's split path stacks on the clustered one's; an outer
     // chain walk adds 1, and index maintenance under a statement adds 2.
@@ -1609,6 +1618,8 @@ private:
     // flight; unscaled it is the per-operation number and the assert below
     // fires on correct traffic the moment two threads pin together.
     std::size_t pin_ceiling_ = kPinCeiling;
+    // What open `PinAllowance`s add to it, under the structure latch.
+    std::size_t pin_allowance_ = 0;
     std::size_t pin_high_water_ = 0;
 
     // ---- The slot array (BE-R1) -----------------------------------------

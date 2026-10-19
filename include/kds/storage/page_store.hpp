@@ -208,6 +208,30 @@ private:
     PageId page_id_ = kInvalidPageId;
 };
 
+// Pins an operation may hold above the per-operation ceiling
+// (`DevicePageStore::kPinCeiling`), granted one at a time before each is
+// taken and revoked together when the handle drops. An index divide grants
+// one for every parent it secures past the first, whose count no constant
+// bounds (`index_tree.cpp`'s `SecureParents`), and hands the handle out with
+// the holds it covers. Move-only; an empty one grants nothing.
+class PinAllowance {
+public:
+    PinAllowance() noexcept = default;
+    PinAllowance(PinAllowance&& other) noexcept
+        : store_(std::exchange(other.store_, nullptr)), pins_(std::exchange(other.pins_, 0)) {}
+    inline PinAllowance& operator=(PinAllowance&& other) noexcept;
+    PinAllowance(const PinAllowance&) = delete;
+    PinAllowance& operator=(const PinAllowance&) = delete;
+    ~PinAllowance() { Release(); }
+    // One more pin, on `store`; every grant on one handle names one store.
+    inline void Grow(PageStore& store) noexcept;
+    inline void Release() noexcept;
+
+private:
+    PageStore* store_ = nullptr;
+    std::size_t pins_ = 0;
+};
+
 class PageStore {
 public:
     virtual ~PageStore() = default;
@@ -372,6 +396,11 @@ public:
     // store whose PinFrame is the no-op above counts nothing and answers
     // 0, which is honest - it has no reclaim for a pin to hold off.
     virtual std::size_t live_pins() const noexcept { return 0; }
+
+    // `PinAllowance`'s seam: raises and lowers the ceiling a debug build
+    // checks `live_pins()` against. A store that checks no ceiling ignores it.
+    virtual void AllowPins(std::size_t pins) noexcept { (void)pins; }
+    virtual void RevokePins(std::size_t pins) noexcept { (void)pins; }
 
     // ---- FM10: what the allocation map costs -------------------------
     //
@@ -726,6 +755,25 @@ inline UnlatchedPin& UnlatchedPin::operator=(UnlatchedPin&& other) noexcept {
 
 inline void UnlatchedPin::Release() noexcept {
     if (store_ != nullptr) std::exchange(store_, nullptr)->UnpinUnlatchedFrame(page_id_);
+}
+
+inline PinAllowance& PinAllowance::operator=(PinAllowance&& other) noexcept {
+    if (this != &other) {
+        Release();
+        store_ = std::exchange(other.store_, nullptr);
+        pins_ = std::exchange(other.pins_, 0);
+    }
+    return *this;
+}
+
+inline void PinAllowance::Grow(PageStore& store) noexcept {
+    store_ = &store;
+    ++pins_;
+    store.AllowPins(1);
+}
+
+inline void PinAllowance::Release() noexcept {
+    if (store_ != nullptr) std::exchange(store_, nullptr)->RevokePins(std::exchange(pins_, 0));
 }
 
 inline PageClaims::~PageClaims() {

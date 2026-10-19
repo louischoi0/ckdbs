@@ -2464,6 +2464,17 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
     AcquirePageLatch(page_id, *frame, mode);
 }
 
+void DevicePageStore::AllowPins(std::size_t pins) noexcept {
+    LatchGuard structure(structure_latch());
+    pin_allowance_ += pins;
+}
+
+void DevicePageStore::RevokePins(std::size_t pins) noexcept {
+    LatchGuard structure(structure_latch());
+    assert(pin_allowance_ >= pins && "a pin allowance revoked twice");
+    pin_allowance_ -= pins;
+}
+
 // The pin accounting, with the structure latch already held by the caller.
 // Shared by `PinFrame` and by `FetchPinned`'s armed hit path, which is the
 // same act reached two ways: one call each keeps the gauge, the high-water
@@ -2478,12 +2489,12 @@ void DevicePageStore::CountPin(Frame& frame) noexcept {
     // more pins than the audit derived is either a new Shape-B site
     // missing its bound or a leak, and both should fail the test that
     // reaches them.
-    if (live_pins_ > pin_ceiling_) {
+    if (live_pins_ > pin_ceiling_ + pin_allowance_) {
         std::fprintf(stderr,
                      "DevicePageStore: %zu live pins exceeds the ceiling %zu "
                      "(kPinCeiling %zu x the concurrent pinners SetLatchArmed was told "
-                     "about; docs/spec/page.md §3)\n",
-                     live_pins_, pin_ceiling_, kPinCeiling);
+                     "about, plus %zu allowed; docs/spec/page.md §3)\n",
+                     live_pins_, pin_ceiling_ + pin_allowance_, kPinCeiling, pin_allowance_);
         std::abort();
     }
 #endif
