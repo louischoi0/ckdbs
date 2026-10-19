@@ -15,9 +15,10 @@ Written 2026-10-19 on `worktree-cd-column-slot-cleaning` from `f3ec25ea`
   go-ahead (`raft-marks-2026-10-19.md` §3). OI-14 (a) places this order in
   `instructions/v3.2.0/` beside CA-CC, against CLA's revised (b).
 
-**Status: opened 2026-10-19.** Items that surface mid-stage are adopted on
-the operator's standing go-ahead of 2026-10-19 (go-ahead-achieving-milestone)
-and recorded as such.
+**Status: closed 2026-10-19** on the operator's word, *"push no verify and
+close the milestone"* (`raft-marks-2026-10-19.md` §4). Items that surfaced
+mid-stage were adopted on the operator's standing go-ahead of 2026-10-19
+(go-ahead-achieving-milestone) and are recorded as such in §11.
 
 **How the plan was reached.** A four-lens survey of the tree at `f3ec25ea`
 (the BW layout and catalog state; every path that rewrites rows; every
@@ -713,5 +714,7 @@ had 2 runs each. A 0.4-0.7 s stall in the no-pass control is not CD's and is
 flagged in the file.
 
 **Status: every stage landed (S0 `6f4d8ff4`, S1 `41761260`, S2 `6ef1a7a4`,
-S3 `bbea35d2`, S4 `0badb7d6`, S5 `842e0a42`), the close measured. Closing
-CD, a merge to `main`, a push and any tag wait for the operator's word.**
+S3 `bbea35d2`, S4 `0badb7d6`, S5 `842e0a42`), the close measured. CD closed
+on the operator's word (`raft-marks-2026-10-19.md` §4) and pushed to `main`
+with the hook skipped, the suite having run 4170/4170 at the merge
+`7a70d539`. No tag.**

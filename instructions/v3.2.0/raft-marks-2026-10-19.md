@@ -29,3 +29,12 @@ The operator's words of 2026-10-19, recorded by CLA. Each is recorded
 | **Mark** | **CD-OI-1..14 (a), the operator's own marks**; OI-14 (a) keeps the order under `instructions/v3.2.0/`, against CLA's revised (b). **CD opened.** Items that surface mid-stage are adopted on the standing go-ahead of 2026-10-19 (go-ahead-achieving-milestone), not marked by the operator item by item |
 | **Does not settle** | push, merge to `main`, tag, version |
 | **Recorded at** | this file; the order's header and §8; `index.md`'s CD row |
+
+## 4. CD closed; pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify and close the milestone"* - after CLA's report that CD was built and its close measured |
+| **Mark** | **CD closed** (`workorder-cd-dropped-column-cleaning.md`): S0 `6f4d8ff4`, S1 `41761260`, S2 `6ef1a7a4`, S3 `bbea35d2`, S4 `0badb7d6`, S5 `842e0a42`; the close measured no cost outside the spread (`bench/v3.3.0/results-cd-close-v3.3.0-8-g842e0a42.md`, `8f62e6b4`); origin/main merged at `7a70d539`, where the full Debug suite ran 4170/4170. **Pushed to `main` with `--no-verify`**: the suite had run on every build input pushed; this record is docs only. The decisions adopted on the standing go-ahead are in the order's §11 |
+| **Does not settle** | a tag, a version; the P6 bug (`docs/inflight/bugs/a-column-cabin-above-position-63-is-never-witnessed.md`), whose fix options stay unruled |
+| **Recorded at** | this file; the order's header and §11; `index.md`'s CD row and this file's row; the CLAUDE.md ALTER TABLE row |
