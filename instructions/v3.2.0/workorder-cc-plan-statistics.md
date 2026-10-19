@@ -1,5 +1,8 @@
 # Work order CC — statistics and identifiers in the join planner
 
+**CLOSED 2026-10-19 on the operator's word** (`raft-marks-2026-10-19.md` §1),
+pushed to `main` at `8fbad5f7`; §11 is the stage log.
+
 Written and opened 2026-10-18 on `worktree-cc-stats-planner` from `65dc45c5`
 (`v3.2.0-178-g65dc45c5`, CB merged and pushed), on the operator's words,
 recorded in English (`raft-marks-2026-10-18.md` §2):
