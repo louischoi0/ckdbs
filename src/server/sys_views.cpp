@@ -297,7 +297,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* v
         }
         view.rows.push_back({Int(row.value().oid), Int(row.value().namespace_oid),
                              labels.value().Spelling(row.value().namespace_oid),
-                             Str(catalog::NameView(row.value().name)),
+                             Str(catalog::NameView(object.name)),
                              Int(row.value().desc_page_id), Int(root.value()),
                              Str(StorageName(access)),
                              Int(row.value().next_id), Int(row.value().spare_slots),

@@ -225,6 +225,12 @@ what the check asks, below, not the latch. `RegisterPattern` (page 9) and
 | `InsertAssertion` | `sys.assertions` (14) | the check and the insert; `CreateAssertion` asks unheld before its build, for the same reason |
 | `CreateCabin` | `sys.cabins` (12) | not a name but the same shape — one cabin per column — and reached by two operators, or an operator and the controller; the id is issued before the hold |
 
+**A relation's name has one copy, its `sys.objects` row**, and every view
+reads it there. `sys.tables` carries none: the 64 bytes at
+`SysTableRow::kRetiredNameOffset` are written 0 and never read, so the row
+size and the superblock stand, and whatever an older volume holds there is
+ignored.
+
 **What is checked, in one walk per relation** (`Catalog::CheckNameFree`,
 `Catalog::CheckIndexNameFree`), so no caller can ask half of it:
 

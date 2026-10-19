@@ -1165,9 +1165,8 @@ public:
     Status CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_oid,
                                    std::uint64_t index_oid);
 
-    Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
-                              PageId desc_page_id, ClusteredType clustered_type,
-                              PageId varheap_page_id,
+    Status InsertRelationRow(Oid oid, Oid namespace_oid, PageId desc_page_id,
+                              ClusteredType clustered_type, PageId varheap_page_id,
                               PageId anchor_page_id = kInvalidPageId,
                               std::uint64_t trx_id = kBootstrapXid,
                               CatalogRowRef* where = nullptr,
