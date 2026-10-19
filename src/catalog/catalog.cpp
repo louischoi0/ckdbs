@@ -2000,37 +2000,69 @@ Status Catalog::DropColumn(Oid table_oid, std::uint16_t pos, std::string_view na
                                    "' while the drop resolved it");
     }
 
-    CatalogRowChange change;
-    auto acted = ForFirstRow<SysColumnRow>(
-        store_, kCatalogPageColumns,
-        [&](SysColumnRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
-            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-            if (row.rel_id != table_oid || row.dropped() || tuple.deleted ||
-                row.pos != pos) {
-                return false;
-            }
-            // Identity is the Keystone word at position 0 (invariant 11).
-            if (row.pos == 0) {
-                return Status::InvalidArgument("column '" + std::string(name) +
-                                                "' is the tuple key and cannot be dropped "
-                                                "(invariant 11)");
-            }
-            const auto before = row.Encode();
-            row.flags |= SysColumnRow::kColumnDropped;
-            auto overwritten = OverwriteForDdl(ddl_undo_hook_, wal_, store_, page, page_id, i,
-                                               tuple, kSysColumnsTable, row.oid, before,
-                                               row.Encode(), trx_id);
-            if (!overwritten.ok()) return overwritten.status();
-            change = std::move(overwritten.value());
-            return true;
-        });
+    // Identity is the Keystone word at position 0 (invariant 11).
+    if (pos == 0) {
+        return Status::InvalidArgument("column '" + std::string(name) +
+                                       "' is the tuple key and cannot be dropped "
+                                       "(invariant 11)");
+    }
+    auto acted = RewriteColumnRow(
+        table_oid, pos, [](const SysColumnRow& row) { return !row.dropped(); },
+        [](SysColumnRow& row) { row.flags |= SysColumnRow::kColumnDropped; }, trx_id, changed);
     if (!acted.ok()) return acted.status();
     if (!acted.value()) {
         return Status::NotFound("the relation has no column named '" + std::string(name) + "'");
     }
-    if (trx_id != kBootstrapXid && changed != nullptr) changed->push_back(std::move(change));
     BumpVersion("drop column");
     return Status::OK();
+}
+
+StatusOr<bool> Catalog::RewriteColumnRow(Oid table_oid, std::uint16_t pos,
+                                         FunctionRef<bool(const SysColumnRow&)> accept,
+                                         FunctionRef<void(SysColumnRow&)> mutate,
+                                         std::uint64_t trx_id,
+                                         std::vector<CatalogRowChange>* changed) {
+    return ForFirstRow<SysColumnRow>(
+        store_, kCatalogPageColumns,
+        [&](SysColumnRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.rel_id != table_oid || tuple.deleted || row.pos != pos || !accept(row)) {
+                return false;
+            }
+            const auto before = row.Encode();
+            mutate(row);
+            auto overwritten = OverwriteForDdl(ddl_undo_hook_, wal_, store_, page, page_id, i,
+                                               tuple, kSysColumnsTable, row.oid, before,
+                                               row.Encode(), trx_id);
+            if (!overwritten.ok()) return overwritten.status();
+            if (trx_id != kBootstrapXid && changed != nullptr) {
+                changed->push_back(std::move(overwritten.value()));
+            }
+            return true;
+        });
+}
+
+StatusOr<std::size_t> Catalog::MarkColumnsSlotClean(Oid table_oid,
+                                                    std::span<const std::uint16_t> positions,
+                                                    std::uint64_t trx_id,
+                                                    std::vector<CatalogRowChange>* changed) {
+    // DropColumn's hold (CT7): an ADD or DROP of this relation takes the
+    // relation `X`, which the caller's `IX` excludes, and a RENAME COLUMN
+    // refuses a dropped row; the hold orders this against both all the same.
+    auto columns = store_.Get(kCatalogPageColumns);
+    if (!columns.ok()) return columns.status();
+    std::size_t flagged = 0;
+    for (const std::uint16_t pos : positions) {
+        auto acted = RewriteColumnRow(
+            table_oid, pos,
+            [](const SysColumnRow& row) { return row.dropped() && !row.slot_clean(); },
+            [](SysColumnRow& row) { row.flags |= SysColumnRow::kColumnSlotClean; }, trx_id,
+            changed);
+        if (!acted.ok()) return acted.status();
+        if (acted.value()) ++flagged;
+    }
+    if (flagged != 0) BumpVersion("columns cleaned");
+    return flagged;
 }
 
 // ---- Namespaces (AF-T1) ---------------------------------------------------

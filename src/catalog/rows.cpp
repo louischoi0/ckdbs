@@ -97,6 +97,7 @@ std::array<std::byte, SysColumnRow::kOnDiskSize> SysColumnRow::Encode() const {
     std::memcpy(base + kNotNullOffset, &nn, sizeof(nn));
     std::memcpy(base + kCabinPolicyOffset, &cabin_policy, sizeof(cabin_policy));
     std::memcpy(base + kFlagsOffset, &flags, sizeof(flags));
+    std::memcpy(base + kGenerationOffset, &generation, sizeof(generation));
     return buf;
 }
 
@@ -116,6 +117,13 @@ StatusOr<SysColumnRow> SysColumnRow::Decode(std::span<const std::byte> bytes) {
     row.notnull = (nn != 0);
     std::memcpy(&row.cabin_policy, base + kCabinPolicyOffset, sizeof(row.cabin_policy));
     std::memcpy(&row.flags, base + kFlagsOffset, sizeof(row.flags));
+    std::memcpy(&row.generation, base + kGenerationOffset, sizeof(row.generation));
+    // Clean is a fact about a dropped column's cell; a live column's cell
+    // holds its value.
+    if (row.slot_clean() && !row.dropped()) {
+        return Status::Corruption("sys.columns row oid " + std::to_string(row.oid) +
+                                  " is flagged clean but not dropped");
+    }
     // Pure, like its neighbours. `cabin_policy == kCabinPolicyUnset` is a
     // legitimate stored value ("nothing was said"), and turning it into the
     // effective policy is the reader's job through EffectiveCabinPolicy() -

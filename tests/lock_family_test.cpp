@@ -1683,6 +1683,29 @@ protected:
     wal::DurabilityClass Durability() const override { return wal::DurabilityClass::kStrict; }
 };
 
+// CD-S3: the clean flag is a catalog write in the statement's transaction,
+// so a commit that fails rolls it back - the rows stay clean (their records
+// are no transaction's), the column is not flagged, and nothing is held.
+TEST_F(FailedCommitTest, ACleanWhoseCommitFailsLeavesTheColumnUnflagged) {
+    ASSERT_EQ(Local("CREATE TABLE tc (id int64, s int32 NULL, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO tc VALUES (5, 1, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("ALTER TABLE tc DROP COLUMN s"), "DROPPED COLUMN tc.s");
+    const std::size_t held_before = locks_->EntryCount();
+
+    log_device_->FailNextSync(Status::IoError("injected"));
+    const DispatchOutcome out = dispatcher_->Dispatch("PURGE DROPPED COLUMNS FROM tc");
+    ASSERT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("injected"), std::string::npos) << out.response;
+
+    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "tc");
+    ASSERT_TRUE(oid.ok());
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    EXPECT_TRUE(access.value()->schema.columns[1].dropped());
+    EXPECT_FALSE(access.value()->schema.columns[1].slot_clean());
+    EXPECT_EQ(locks_->EntryCount(), held_before);
+}
+
 TEST_F(FailedCommitTest, AnAutocommitWriteWhoseCommitFailsReleasesEverythingItHeld) {
     ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
     const std::size_t held_before = locks_->EntryCount();

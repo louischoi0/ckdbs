@@ -497,3 +497,64 @@ the dispatcher's INSERT and UPDATE `HEAP_*` sites (`:4636`, `:9233`) into
 the catalog and txn copies sit below `exec`.
 
 Overhead not measured; measured at the milestone's close.
+
+### CD-S3 - format and flag (2026-10-19, on `cd-column-slot-cleaning` from `6ef1a7a4`)
+
+`SysColumnRow::kColumnSlotClean` (0x08) and a `generation` word at the
+unaligned on-disk offset 95 (99 bytes; pinned by offset value, as
+`SysTableRow`'s late fields are); `Decode` refuses clean without dropped as
+`Corruption`. Superblock 31 -> 32, refused with no migration
+(`SuperBlockTest.AVersion31VolumeDoesNotMount`). The golden log re-pinned
+(every column row image is four bytes longer; the determinism cell passed
+first). `Catalog::MarkColumnsSlotClean` ORs the flag through one
+`RewriteColumnRow` that `DropColumn` now shares, `OverwriteForDdl` under the
+CT7 hold. A complete attempt - epoch gate passed, no dirty row left - sweeps
+every column Cabin on a target position (one `ListCabins`), then, unless
+every target is flagged already, flags them in its DDL transaction.
+
+The Cabin tick (CD-S0 P4): a seeded build whose decode or spill resolve
+fails while `!MemoIsCurrent()` is this tick's stale layout and is deferred
+to the next tick (`aborted`), not counted a failure; a failure under a
+current memo is still one. This covers the gap inherited from BW (a row
+inserted after a DROP) as well as the one CD widens. Not tested: a stale tick
+needs a second core committing a DROP inside the tick.
+
+The stale comment in `NoteCatalogRowChanges` and `catalog.md` CT2 (the word
+moves at the decide, before the `X` is released) are corrected;
+`heap-and-tuple.md` §3.1b and `manual/server/server.md` name 32.
+
+Tests: the row round trip and the clean-without-dropped refusal; a refused
+attempt flags nothing and a complete one flags every dropped column, slot
+or declared, and a re-run flags nothing more; a Cabin of either origin
+landed between a DROP's restrict and its write (the drop seam) is swept and
+named in the reply; a commit that fails (`FailedCommitTest`, an injected
+sync failure) leaves the column unflagged and nothing held. A mutant that
+flags past an unresolved row is killed.
+
+**Departures, adopted on the operator's standing go-ahead of 2026-10-19
+(go-ahead-achieving-milestone):**
+- The sweep is transactionless, as DROP CABIN is, not part of the flag's
+  transaction (§2 S3 said "the same DDL transaction"): a Cabin on a dropped
+  position is never served, so dropping it is right whatever the flag's
+  transaction does. "ROLLBACK and mount undo of the sweep" therefore has
+  nothing to test.
+- **Mount undo of the flag is not tested**; the runtime rollback is. The flag
+  is an `OverwriteForDdl` of a `sys.columns` row, the write DROP COLUMN's
+  mount-undo cell already covers (`ACommittedDropSurvivesACrashAndAnOpenOneIsUndone`).
+- The CABIN AUTO controller's memory-resident entry keyed by (relation,
+  position) is not cleared (CD-S0 P5 had said S3 would): the dispatcher holds
+  the controller `const`, an operator's DROP CABIN of an auto Cabin leaves
+  the same stale entry, and `ApplyDrop` tolerates `NotFound`. Performance
+  only; S5 records it in `known-gaps.md`.
+- `spare_free` moves to S4, beside the ADD that takes a clean slot, so the
+  view never reports a slot ADD refuses.
+
+critics-developer review: no correctness finding. Applied: the soundness
+comment's premise (a clean head's older versions are clean because only the
+gated pass turns a dirty image clean - not "every head's writer resolved"),
+the over-claiming sweep comment, `spare_free` to S4, the two stale "31"
+documents, `RewriteColumnRow`, one Cabin scan, and no DDL transaction for a
+re-run with every target flagged. Not applied: the five test locals kept
+only for an `ASSERT_NE` (cosmetic).
+
+Overhead not measured; measured at the milestone's close.

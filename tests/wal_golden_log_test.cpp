@@ -89,7 +89,12 @@ namespace {
 // `sys.columns` gains that row, its root is a leaf, and its rows log
 // `BTREE_INSERT` where they logged `HEAP_INSERT` behind a chain. Every later
 // LSN moves. No record kind's framing changes.
-constexpr std::uint32_t kGoldenLogCrc = 0xaea80a5fu;
+// **Re-pinned at CD-S3** (on `worktree-cd-column-slot-cleaning`,
+// `instructions/v3.2.0/workorder-cd-dropped-column-cleaning.md` CD-OI-5 (a)):
+// a `sys.columns` row carries a `generation` word, so every column row image
+// the stream logs is four bytes longer and every later LSN moves. No record
+// kind's framing changes.
+constexpr std::uint32_t kGoldenLogCrc = 0xd9d0cf63u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

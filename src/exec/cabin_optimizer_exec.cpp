@@ -218,11 +218,26 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
         // Phase 2: decode and collect. Spill fetches are legal here - the
         // page span is finished with - and they go through the ordinary
         // path, never the ring.
+        // **A failure under a moved memo is this tick's stale layout, not a
+        // fault** (CD-S0 P4): the tick holds no epoch slot and no relation
+        // lock, so a DROP COLUMN committed since its `Revalidate` leaves it
+        // decoding a dropped cell as live - a zeroed NOT NULL varchar is a
+        // `kNull` tag the decode refuses, a cleaned spill is released. Only
+        // `decoded[col_pos]` is used, whose offset no in-place drop moves,
+        // so nothing it built is wrong; the build is deferred to a tick that
+        // revalidates.
+        const auto stale = [&](const Status& s) -> StatusOr<std::size_t> {
+            if (catalog_.MemoIsCurrent()) return s;
+            *aborted = true;
+            return std::size_t{0};
+        };
         for (const StagedRow& row : staged) {
             std::vector<PendingSpill> spills;
             auto decoded = DecodeRow(access.schema, access.layout, row.payload, &spills);
-            if (!decoded.ok()) return decoded.status();
-            if (Status s = ResolveSpills(store_, spills, decoded.value()); !s.ok()) return s;
+            if (!decoded.ok()) return stale(decoded.status());
+            if (Status s = ResolveSpills(store_, spills, decoded.value()); !s.ok()) {
+                return stale(s);
+            }
 
             auto key = stats::MakeCabinKey(cabin_id, decoded.value()[col_pos]);
             if (!key.has_value()) continue;  // NULL: never observable

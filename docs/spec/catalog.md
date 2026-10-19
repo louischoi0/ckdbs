@@ -47,10 +47,14 @@ and its delete-mark purge.)
 **Bumped at the catalog write**, by `Catalog::BumpVersion()`, the single
 DDL choke point, which is before the DDL's relation `X` is released at its
 decide (AR0-5 D21 as marked). Both endings of a catalog-writing
-transaction bump again through `InvalidateAfterCompensation()` — a
-rollback because the rows were compensated behind the cache's back, a
-commit because a delete-mark starts counting then (`ddl-transactional.md`
-§5b). The writes that keep their own cached entry across a bump are the
+transaction move the word again at the decide, still before the `X` is
+released (`TransactionManager::MoveSchemaWordIfCatalogWriter`, on commit
+and on abort), and bump once more after the release through
+`InvalidateAfterCompensation()` — a rollback because the rows were
+compensated behind the cache's back, a commit because a delete-mark starts
+counting then (`ddl-transactional.md` §5b). A statement whose word is at or
+above a DDL's decide move therefore bound the DDL's result; that is what
+`PURGE DROPPED COLUMNS`' epoch gate rests on (`alter.md` AL11). The writes that keep their own cached entry across a bump are the
 in-place root moves (`AdoptRoot`), because
 the `INSERT` doing one holds the relation's `TableAccess*`; each bumps the
 word, and other cores re-read the root from the anchor.

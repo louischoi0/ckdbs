@@ -3,10 +3,12 @@
 #include <atomic>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
 #include "kds/base/contention.hpp"
+#include "kds/base/function_ref.hpp"
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog_cache.hpp"
@@ -585,6 +587,17 @@ public:
     // first, under the relation `X`.
     Status DropColumn(Oid table_oid, std::uint16_t pos, std::string_view name,
                       std::uint64_t trx_id, std::vector<CatalogRowChange>* changed);
+
+    // `PURGE DROPPED COLUMNS` (CD-S3): `kColumnSlotClean` ORed into the
+    // `sys.columns` row of each position in `positions` that is still a
+    // dropped column of `table_oid` and not yet flagged, each one in-place
+    // `OverwriteForDdl` under `trx_id`, under one hold of `sys.columns`'
+    // root page (CT7) - so a rollback, here or at mount, clears it again.
+    // Returns how many rows it flagged.
+    StatusOr<std::size_t> MarkColumnsSlotClean(Oid table_oid,
+                                               std::span<const std::uint16_t> positions,
+                                               std::uint64_t trx_id,
+                                               std::vector<CatalogRowChange>* changed);
 
     // `ALTER TABLE ... ADD COLUMN` (BW-R4, BW-R5): `column` - its name, type,
     // `len` and nothing else read - becomes a nullable column at the next
@@ -1256,6 +1269,17 @@ public:
     std::size_t cache_retired_generations() const noexcept { return cache_.retired_generations(); }
 
 private:
+    // One `sys.columns` row of `table_oid` at `pos` that `accept` admits,
+    // changed by `mutate` and written back in place by `OverwriteForDdl`
+    // under `trx_id`, its change appended to `changed` when a transaction
+    // owns it. The caller holds `sys.columns`' root page (CT7). False when
+    // no row is admitted.
+    StatusOr<bool> RewriteColumnRow(Oid table_oid, std::uint16_t pos,
+                                    FunctionRef<bool(const SysColumnRow&)> accept,
+                                    FunctionRef<void(SysColumnRow&)> mutate,
+                                    std::uint64_t trx_id,
+                                    std::vector<CatalogRowChange>* changed);
+
     // ---- The delete-mark count, and the one seam it is reached through -
     //
     // Two shapes: `mark_counter_` when an instance named one

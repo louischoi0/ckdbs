@@ -192,7 +192,15 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // 127; a version-30 volume may hold overflow pages stamped owner 0, which
 // this build's `sys.access_stats` discard cuts at. Refused with no
 // migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 31;
+//
+// 32 (CD-S3, `instructions/v3.2.0/workorder-cd-dropped-column-cleaning.md`
+// CD-OI-5, CD-OI-6): `sys.columns` rows gained a `generation` word (95 ->
+// 99 bytes) and may carry `kColumnSlotClean`, the promise that a dropped
+// slot's cell is zero with its bit set in every reachable version. A
+// version-31 binary writes dropped cells with the bit clear, so on a cleaned
+// volume a later reuse would read them as a present value. Refused with no
+// migration, the standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 32;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

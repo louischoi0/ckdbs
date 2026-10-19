@@ -427,6 +427,27 @@ TEST(SysColumnRowTest, TheFlagsByteRoundTripsAfterTheCabinPolicy) {
     EXPECT_EQ(out.value().cabin_policy, 3);
 }
 
+// CD-S3: the clean flag beside the drop, and the generation word after the
+// flags byte at its own unaligned offset; clean without dropped is refused.
+TEST(SysColumnRowTest, TheCleanFlagAndTheGenerationRoundTripAndCleanNeedsDropped) {
+    SysColumnRow in{};
+    in.flags = SysColumnRow::kColumnDropped | SysColumnRow::kColumnInSlot |
+               SysColumnRow::kColumnSlotClean;
+    in.generation = 0x01020304;
+    const auto bytes = in.Encode();
+    EXPECT_EQ(std::to_integer<int>(bytes[SysColumnRow::kFlagsOffset]), 0x0B);
+    EXPECT_EQ(std::to_integer<int>(bytes[SysColumnRow::kGenerationOffset]), 0x04);
+    auto out = SysColumnRow::Decode(bytes);
+    ASSERT_TRUE(out.ok()) << out.status().message();
+    EXPECT_TRUE(out.value().slot_clean());
+    EXPECT_EQ(out.value().generation, 0x01020304u);
+
+    in.flags = SysColumnRow::kColumnInSlot | SysColumnRow::kColumnSlotClean;
+    auto refused = SysColumnRow::Decode(in.Encode());
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kCorruption);
+}
+
 TEST(SysTableRowTest, DecodeRefusesAnythingButTheExactSize) {
     const auto bytes = SampleTableRow().Encode();
     std::vector<std::byte> short_row(bytes.begin(), bytes.end() - 1);

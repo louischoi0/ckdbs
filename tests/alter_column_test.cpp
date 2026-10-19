@@ -281,9 +281,9 @@ TEST_F(AlterColumnTest, ARowWrittenAfterADropIsBornClean) {
                                  std::move(row))));
     Ok("UPDATE t SET n = n + 100 WHERE id = 2");
 
-    EXPECT_FALSE(DroppedCellsCleanAt(*t, 1));  // written before the drop; its bytes stay
+    EXPECT_FALSE(DroppedCellsCleanAt(*Access("t"), 1));  // written before the drop; its bytes stay
     for (const std::uint64_t key : {2, 3, 4, 5, 6, 7, 12}) {
-        EXPECT_TRUE(DroppedCellsCleanAt(*t, key)) << key;
+        EXPECT_TRUE(DroppedCellsCleanAt(*Access("t"), key)) << key;
     }
     EXPECT_EQ(Run("SELECT * FROM t"),
               "id,n\\n1,1\\n2,102\\n3,3\\n4,4\\n5,5\\n6,6\\n7,7\\n12,2");
@@ -410,7 +410,7 @@ TEST_F(AlterColumnTest, ACleanZeroesEveryDroppedCellOnceAndReleasesItsSpills) {
 
     std::vector<StoredRow> before;
     for (std::uint64_t key = 1; key <= 3; ++key) {
-        before.push_back(ReadStoredRow(store_, *t, key));
+        before.push_back(ReadStoredRow(store_, *Access("t"), key));
         ASSERT_FALSE(before.back().clean) << key;
         ASSERT_EQ(before.back().spills.size(), 2u) << key;
     }
@@ -418,7 +418,7 @@ TEST_F(AlterColumnTest, ACleanZeroesEveryDroppedCellOnceAndReleasesItsSpills) {
               "PURGED DROPPED COLUMNS t: 4 column(s) clean, 3 row(s) cleaned, 6 spill(s) "
               "released");
     for (std::uint64_t key = 1; key <= 3; ++key) {
-        const StoredRow after = ReadStoredRow(store_, *t, key);
+        const StoredRow after = ReadStoredRow(store_, *Access("t"), key);
         EXPECT_TRUE(after.clean) << key;
         EXPECT_TRUE(after.spills.empty()) << key;
         EXPECT_EQ(after.trx_id, before[key - 1].trx_id) << key;
@@ -452,11 +452,86 @@ TEST_F(AlterColumnTest, ACleanCrossesItsBatchesAndReachesEveryRow) {
               "PURGED DROPPED COLUMNS t: 1 column(s) clean, 1100 row(s) cleaned, 0 spill(s) "
               "released");
     for (std::uint64_t key = 1; key <= kRows; ++key) {
-        ASSERT_TRUE(DroppedCellsCleanAt(*t, key)) << key;
+        ASSERT_TRUE(DroppedCellsCleanAt(*Access("t"), key)) << key;
     }
     EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
               "PURGED DROPPED COLUMNS t: 1 column(s) clean, 0 row(s) cleaned, 0 spill(s) "
               "released");
+}
+
+// ---- CD-S3: the flag, set only by a complete attempt ------------------------
+
+// A refused attempt flags nothing; the attempt that finds every row clean
+// flags every dropped column, slot or declared.
+TEST_F(AlterColumnTest, OnlyACompleteAttemptFlagsEveryDroppedColumn) {
+    Ok("CREATE TABLE t (id int64, d varchar NULL, n int32) SPARE 2");
+    Ok("ALTER TABLE t ADD COLUMN x varchar(16) NULL");
+    Ok("ALTER TABLE t ADD COLUMN y int64 NULL");
+    Ok("INSERT INTO t VALUES (1, 'declared', 1, 'slot', 5)");
+    Ok("ALTER TABLE t DROP COLUMN d");
+    Ok("ALTER TABLE t DROP COLUMN x");
+    EXPECT_EQ(Run("SELECT name, spare_free FROM sys.tables WHERE name = 't'"),
+              "name,spare_free\\nt,0");
+    const auto flags = [&] {
+        const catalog::TableAccess* t = Access("t");
+        std::string out;
+        for (const catalog::SysColumnRow& c : t->schema.columns) out += c.slot_clean() ? '1' : '0';
+        return out;
+    };
+
+    Session w;
+    ASSERT_FALSE(IsErr(Run(w, "BEGIN")));
+    ASSERT_FALSE(IsErr(Run(w, "UPDATE t SET n = 2 WHERE id = 1")));
+    EXPECT_TRUE(IsErr(Run("PURGE DROPPED COLUMNS FROM t")));
+    EXPECT_EQ(flags(), "00000");
+    ASSERT_FALSE(IsErr(Run(w, "COMMIT")));
+
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 2 column(s) clean, 1 row(s) cleaned, 0 spill(s) "
+              "released");
+    EXPECT_EQ(flags(), "01010");
+    // Visible nowhere else: the dropped columns stay dropped.
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n,y\\n1,2,5");
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 2 column(s) clean, 0 row(s) cleaned, 0 spill(s) "
+              "released");
+    EXPECT_EQ(flags(), "01010");
+}
+
+// CD-OI-10 (a), `[quiet-wrong]` for a later reuse: a column Cabin lands on a
+// position between DROP COLUMN's restrict and its write - a column CREATE
+// CABIN takes no relation lock - from either origin. No statement can name
+// the column to drop it; the clean sweeps both.
+TEST_F(AlterColumnTest, ACabinLeftOnADroppedColumnIsSwept) {
+    Ok("CREATE TABLE t (id int64, a int32 NULL, b int32 NULL, n int32)");
+    Ok("INSERT INTO t VALUES (1, 2, 3, 4)");
+    const catalog::TableAccess* t = Access("t");
+    ASSERT_NE(t, nullptr);
+    const catalog::Oid oid = t->oid;
+    std::uint64_t cabins[2] = {0, 0};
+    const auto land = [&](std::uint16_t pos, std::uint8_t origin, std::uint64_t* id) {
+        dispatcher_->SetBeforeDropColumnWriteForTest([&, pos, origin, id] {
+            auto created = boot_->catalog.CreateCabin(oid, pos, origin);
+            ASSERT_TRUE(created.ok()) << created.status().message();
+            *id = created.value();
+        });
+    };
+    land(1, catalog::kCabinOriginUser, &cabins[0]);
+    Ok("ALTER TABLE t DROP COLUMN a");
+    land(2, catalog::kCabinOriginAuto, &cabins[1]);
+    Ok("ALTER TABLE t DROP COLUMN b");
+    dispatcher_->SetBeforeDropColumnWriteForTest(nullptr);
+    ASSERT_TRUE(boot_->catalog.FindCabinOnColumn(oid, 1).ok());
+    ASSERT_TRUE(boot_->catalog.FindCabinOnColumn(oid, 2).ok());
+
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 2 column(s) clean, 1 row(s) cleaned, 0 spill(s) "
+              "released, cabin " +
+                  std::to_string(cabins[0]) + " dropped, cabin " + std::to_string(cabins[1]) +
+                  " dropped");
+    EXPECT_EQ(boot_->catalog.FindCabinOnColumn(oid, 1).status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(boot_->catalog.FindCabinOnColumn(oid, 2).status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(Run("SELECT * FROM t WHERE n = 4"), "id,n\\n1,4");
 }
 
 TEST_F(AlterColumnTest, ACleanIsRefusedWithItsByte) {
@@ -520,8 +595,8 @@ TEST_F(AlterColumnTest, AnUndecidedWritersRowIsCleanedOnlyAfterItsDecide) {
     ASSERT_FALSE(IsErr(Run(rolls_back, "UPDATE t SET n = n + 10 WHERE id = 1")));
     ASSERT_FALSE(IsErr(Run(commits, "BEGIN")));
     ASSERT_FALSE(IsErr(Run(commits, "UPDATE t SET n = n + 10 WHERE id = 2")));
-    const std::vector<exec::SpillRef> one = ReadStoredRow(store_, *t, 1).spills;
-    const std::vector<exec::SpillRef> two = ReadStoredRow(store_, *t, 2).spills;
+    const std::vector<exec::SpillRef> one = ReadStoredRow(store_, *Access("t"), 1).spills;
+    const std::vector<exec::SpillRef> two = ReadStoredRow(store_, *Access("t"), 2).spills;
     ASSERT_EQ(one.size(), 1u);
     ASSERT_EQ(two.size(), 1u);
 
@@ -530,19 +605,19 @@ TEST_F(AlterColumnTest, AnUndecidedWritersRowIsCleanedOnlyAfterItsDecide) {
     EXPECT_NE(refused.find("tuple key 1"), std::string::npos) << refused;
     EXPECT_NE(refused.find("has not decided"), std::string::npos) << refused;
     EXPECT_NE(refused.find("2 row(s) are blocked, 1 were cleaned"), std::string::npos) << refused;
-    EXPECT_FALSE(DroppedCellsCleanAt(*t, 1));
-    EXPECT_FALSE(DroppedCellsCleanAt(*t, 2));
-    EXPECT_TRUE(DroppedCellsCleanAt(*t, 3));
+    EXPECT_FALSE(DroppedCellsCleanAt(*Access("t"), 1));
+    EXPECT_FALSE(DroppedCellsCleanAt(*Access("t"), 2));
+    EXPECT_TRUE(DroppedCellsCleanAt(*Access("t"), 3));
     EXPECT_TRUE(SpillLive(store_, one.front()));
     EXPECT_TRUE(SpillLive(store_, two.front()));
 
     ASSERT_FALSE(IsErr(Run(rolls_back, "ROLLBACK")));
     ASSERT_FALSE(IsErr(Run(commits, "COMMIT")));
-    EXPECT_FALSE(DroppedCellsCleanAt(*t, 1));  // the rollback wrote the dirty image back
+    EXPECT_FALSE(DroppedCellsCleanAt(*Access("t"), 1));  // the rollback wrote the dirty image back
     EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
               "PURGED DROPPED COLUMNS t: 1 column(s) clean, 2 row(s) cleaned, 2 spill(s) "
               "released");
-    for (std::uint64_t key = 1; key <= 3; ++key) EXPECT_TRUE(DroppedCellsCleanAt(*t, key)) << key;
+    for (std::uint64_t key = 1; key <= 3; ++key) EXPECT_TRUE(DroppedCellsCleanAt(*Access("t"), key)) << key;
     EXPECT_FALSE(SpillLive(store_, one.front()));
     EXPECT_FALSE(SpillLive(store_, two.front()));
     EXPECT_EQ(Run("SELECT * FROM t"), "id,n\\n1,1\\n2,12\\n3,3");
@@ -558,16 +633,16 @@ TEST_F(AlterColumnTest, AnOlderSnapshotKeepsItsRowDirtyAndItsSpillLive) {
     ASSERT_FALSE(IsErr(Run(r, "BEGIN ISOLATION LEVEL REPEATABLE READ")));
     ASSERT_EQ(Run(r, "SELECT n FROM t WHERE id = 1"), "n\\n1");
     Ok("UPDATE t SET n = 21 WHERE id = 1");
-    const std::vector<exec::SpillRef> held = ReadStoredRow(store_, *t, 1).spills;
+    const std::vector<exec::SpillRef> held = ReadStoredRow(store_, *Access("t"), 1).spills;
     ASSERT_EQ(held.size(), 1u);
 
     const std::string refused = Run("PURGE DROPPED COLUMNS FROM t");
     EXPECT_EQ(StatusFromErrorReply(refused).code(), StatusCode::kTxnConflict) << refused;
     EXPECT_NE(refused.find("tuple key 1"), std::string::npos) << refused;
     EXPECT_NE(refused.find("snapshot"), std::string::npos) << refused;
-    EXPECT_FALSE(DroppedCellsCleanAt(*t, 1));
+    EXPECT_FALSE(DroppedCellsCleanAt(*Access("t"), 1));
     EXPECT_TRUE(SpillLive(store_, held.front()));
-    EXPECT_TRUE(DroppedCellsCleanAt(*t, 2));
+    EXPECT_TRUE(DroppedCellsCleanAt(*Access("t"), 2));
     EXPECT_EQ(Run(r, "SELECT n FROM t WHERE id = 1"), "n\\n1");
 
     ASSERT_FALSE(IsErr(Run(r, "COMMIT")));
@@ -605,7 +680,7 @@ TEST_F(AlterColumnTest, AStatementOnAnOlderSchemaWordHoldsTheClean) {
     EXPECT_NE(refused.find("older statement"), std::string::npos) << refused;
     const catalog::TableAccess* t = Access("t");
     ASSERT_NE(t, nullptr);
-    EXPECT_FALSE(DroppedCellsCleanAt(*t, 1));
+    EXPECT_FALSE(DroppedCellsCleanAt(*Access("t"), 1));
 
     epochs.Leave(1);
     EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),

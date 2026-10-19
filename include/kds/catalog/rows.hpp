@@ -239,6 +239,12 @@ struct SysColumnRow {
     // dropped.
     std::uint8_t flags = 0;
 
+    // How many times an `ADD COLUMN` has taken this row's slot (CD-OI-5 (a),
+    // `instructions/v3.2.0/workorder-cd-dropped-column-cleaning.md`): a
+    // reuse keeps the row's oid and position, so only this tells the column
+    // that holds the slot now from the one dropped out of it. 0 at creation.
+    std::uint32_t generation = 0;
+
     // A dropped column: its row stays at its `pos`, so every stored position
     // stays valid, and its bytes stay in every tuple. Storage walks it; no
     // name, `SELECT *`, `DESCRIBE` or positional `VALUES` reaches it.
@@ -252,10 +258,16 @@ struct SysColumnRow {
     bool hidden() const noexcept { return (flags & kColumnHidden) != 0; }
     // What a user sees of the relation: no dropped and no hidden column.
     bool visible() const noexcept { return (flags & (kColumnDropped | kColumnHidden)) == 0; }
+    // A dropped column whose cell `PURGE DROPPED COLUMNS` found clean in
+    // every version any reader can reach, and whose spills it released
+    // (CD-S3): zero, its null bit set where it has one. Never without
+    // `kColumnDropped`.
+    bool slot_clean() const noexcept { return (flags & kColumnSlotClean) != 0; }
 
     static constexpr std::uint8_t kColumnDropped = 0x01;
     static constexpr std::uint8_t kColumnInSlot = 0x02;
     static constexpr std::uint8_t kColumnHidden = 0x04;
+    static constexpr std::uint8_t kColumnSlotClean = 0x08;
 
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kRelIdOffset = 8;
@@ -266,7 +278,10 @@ struct SysColumnRow {
     static constexpr std::size_t kNotNullOffset = kLenOffset + sizeof(std::uint32_t);
     static constexpr std::size_t kCabinPolicyOffset = kNotNullOffset + sizeof(std::uint8_t);
     static constexpr std::size_t kFlagsOffset = kCabinPolicyOffset + sizeof(std::uint8_t);
-    static constexpr std::size_t kOnDiskSize = kFlagsOffset + sizeof(std::uint8_t);
+    // Unaligned on disk, as `SysTableRow`'s late fields are: written and read
+    // by explicit offset, so the struct's own padding never reaches a page.
+    static constexpr std::size_t kGenerationOffset = kFlagsOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kOnDiskSize = kGenerationOffset + sizeof(std::uint32_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysColumnRow> Decode(std::span<const std::byte> bytes);
@@ -281,7 +296,8 @@ static_assert(offsetof(SysColumnRow, len) == SysColumnRow::kLenOffset);
 static_assert(offsetof(SysColumnRow, notnull) == SysColumnRow::kNotNullOffset);
 static_assert(offsetof(SysColumnRow, cabin_policy) == SysColumnRow::kCabinPolicyOffset);
 static_assert(offsetof(SysColumnRow, flags) == SysColumnRow::kFlagsOffset);
-static_assert(SysColumnRow::kOnDiskSize == 95, "a change here is a format event (superblock)");
+static_assert(SysColumnRow::kGenerationOffset == 95);
+static_assert(SysColumnRow::kOnDiskSize == 99, "a change here is a format event (superblock)");
 
 // ---- decimal(p, s) packed into `len` (docs/spec/types.md TY9) ----------
 //

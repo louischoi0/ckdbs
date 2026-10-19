@@ -6556,12 +6556,10 @@ void CommandDispatcher::OpenDdl(std::uint64_t txn_id) {
 void CommandDispatcher::NoteCatalogRowChanges(
     DdlScope& scope, const std::vector<catalog::CatalogRowChange>& changed) {
     // The rollback trail for a DDL route that *changes* rows rather than
-    // inserting them - `DROP TABLE` and `DROP NAMESPACE` (which only ever
-    // retypes today).
-    //
-    // Nothing to do outside an explicit transaction: autocommit's DDL has
-    // no rollback to serve, which is why the changes are not even collected
-    // there.
+    // inserting them - `DROP TABLE`, `DROP NAMESPACE`, `DROP COLUMN` and
+    // `PURGE DROPPED COLUMNS`' flag. An autocommit DDL runs under the
+    // transaction `BeginWrite` opened (D2), so it has one to serve; only a
+    // write under no transaction - `kBootstrapXid` - has none.
     if (scope.txn == nullptr) return;
     for (const catalog::CatalogRowChange& c : changed) {
         if (c.deleted) {
@@ -10965,11 +10963,66 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
             out.purge_wait = pending;
             return out;
         }
-        return {"PURGED DROPPED COLUMNS " + stmt.table_name + ": " +
-                    std::to_string(targets.size()) + " column(s) clean, " +
-                    std::to_string(cleaned) + " row(s) cleaned, " + std::to_string(released) +
-                    " spill(s) released",
-                false, cleaned};
+
+        // ---- CD-S3: every reachable version clean - sweep, then flag ------
+        //
+        // Reached only by an attempt whose epoch gate passed and whose walk
+        // met no dirty row it could not clean. A dirty head was cleaned only
+        // under its writer's resolution, so no reader reaches below it; and a
+        // clean head's older versions are clean, because no writer but this
+        // gated pass turns a dirty image clean - an UPDATE copies the dropped
+        // cells and a rollback restores what its writer copied (CD-S0 P3).
+        // `ta` is not read past the flag check below: a drop or the flag
+        // moves the memo it lives in.
+        const bool all_flagged =
+            std::all_of(targets.begin(), targets.end(), [&](std::uint16_t pos) {
+                return ta.schema.columns[pos].slot_clean();
+            });
+        //
+        // (a) A column Cabin on a target position (CD-OI-10 (a)): a column
+        // CREATE CABIN takes no relation lock, so the controller's or an
+        // operator's can land between a DROP's restrict and its write, or on
+        // a reusing ADD that then rolls back to the dropped row (CD-S0 P5).
+        // No statement can name the column to drop it, and a reuse would
+        // inherit it. Asked of every target, flagged already or not, so a
+        // re-run removes one. Transactionless, as DROP CABIN is: a Cabin on a
+        // dropped position is never served, so dropping it is always right.
+        auto cabins = catalog_.ListCabins();
+        if (!cabins.ok()) return refuse(partly(cabins.status()));
+        std::vector<std::uint64_t> swept;
+        for (const catalog::SysCabinRow& cabin : cabins.value()) {
+            if (cabin.rel_oid != oid.value() || cabin.shape != catalog::kCabinShapeColumn ||
+                std::find(targets.begin(), targets.end(), cabin.column_no) == targets.end()) {
+                continue;
+            }
+            if (Status s = catalog_.DropCabin(cabin.cabin_id); !s.ok()) return refuse(partly(s));
+            if (cabins_ != nullptr) cabins_->Forget(cabin.cabin_id);
+            swept.push_back(cabin.cabin_id);
+        }
+        if (!swept.empty() && all_flagged) {
+            // No commit record follows to carry the sweep (DROP CABIN's case).
+            if (Status s = AwaitDdlDurability(); !s.ok()) return refuse(partly(s));
+        }
+        // (b) The flag, in this statement's DDL transaction under its `IX`
+        // (CD-OI-9 (a)), so a rollback - here or at mount - clears it. A
+        // re-run with every target flagged opens no DDL and moves no word.
+        if (!all_flagged) {
+            DdlScope ddl = DdlScopeFor(scope);
+            std::vector<catalog::CatalogRowChange> changed;
+            auto flagged =
+                catalog_.MarkColumnsSlotClean(oid.value(), targets, ddl.trx_id, &changed);
+            NoteCatalogRowChanges(ddl, changed);
+            if (!flagged.ok()) return refuse(partly(flagged.status()));
+        }
+
+        std::string reply = "PURGED DROPPED COLUMNS " + stmt.table_name + ": " +
+                            std::to_string(targets.size()) + " column(s) clean, " +
+                            std::to_string(cleaned) + " row(s) cleaned, " +
+                            std::to_string(released) + " spill(s) released";
+        for (const std::uint64_t cabin_id : swept) {
+            reply += ", cabin " + std::to_string(cabin_id) + " dropped";
+        }
+        return {reply, false, cleaned};
     });
 }
 

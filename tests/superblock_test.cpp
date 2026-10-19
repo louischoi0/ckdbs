@@ -326,6 +326,27 @@ TEST(SuperBlockTest, AVersion30VolumeDoesNotMount) {
     }
 }
 
+// A version-31 binary writes a dropped column's cell with its bit clear, so
+// a slot this build flagged clean would read as a present value after a
+// reuse, and its `sys.columns` rows are four bytes short. Named rather than
+// left to the loop above, whose `- 1` would stop meaning 31 at the next bump.
+TEST(SuperBlockTest, AVersion31VolumeDoesNotMount) {
+    constexpr std::uint32_t kBeforeTheCleanFlag = 31;
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &kBeforeTheCleanFlag,
+                sizeof(kBeforeTheCleanFlag));
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+    for (const std::uint32_t named : {kBeforeTheCleanFlag, kSuperBlockVersion}) {
+        EXPECT_NE(decoded.status().message().find(std::to_string(named)), std::string::npos)
+            << decoded.status().message();
+    }
+}
+
 // AY-Q6 (C): a version-18 volume's log may hold an ASSERT_SNAPSHOT with no
 // chunk count, which this build does not read (`raft-marks-2026-09-30.md`
 // §13). Named rather than left to the loop above, whose `- 1` would stop
