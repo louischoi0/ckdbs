@@ -1200,21 +1200,34 @@ Verified on `worktree-bw-instant-add-drop-column` over `bc42a011`
   `worktree-bw-instant-add-drop-column` at `e1e17abc`; not fixed there, as
   the codec has no `AstValue` and threading the byte is outside BW.
 
-- **A dropped column's slot and bytes are never reclaimed.** A drop flags the
-  column's `sys.columns` row and leaves its bytes in every row, a dropped
-  varchar's spills included until purge reclaims the row; a dropped slot is
-  never taken again. Cleaning - resetting the flags and rewriting rows to a
-  smaller size - is D-e (a)'s separate milestone, not built.
+- **Rows are never resized after a `DROP COLUMN`** (CD-OI-1 (a), verified on
+  `cd-column-slot-cleaning` at `0badb7d6`). `PURGE DROPPED COLUMNS` zeroes a
+  dropped column's cells, releases their spills and frees a slot an `ADD`
+  had placed, but the bytes stay inside the row size: a dropped declared
+  column's are never reusable, and a `SPARE 0` relation gains no `ADD`
+  capacity. Resizing (a `REBUILD` into a new tree) needs the invariant-13
+  ruling and is not built.
+- **`PURGE DROPPED COLUMNS` does not yield its core** (CD-OI-11 (a)): an
+  O(rows) walk on one core; its stall is CD's close measurement's cell 4. It holds no
+  page across leaf windows, so a yield could be added without a redesign.
+- **The CABIN AUTO controller's memory-resident entry is keyed by
+  (relation, position)** and survives a drop and a reuse: a candidate
+  parked in BUILDING after a refused create on a dropped position stays
+  parked for the column that reuses the position until a restart (CD-S3's
+  departure). Performance only; an operator's `DROP CABIN` of an auto Cabin
+  leaves the same stale entry.
 - **Readers see an open `ADD`/`DROP COLUMN`** (BW-Q8 (a)): the catalog row
   is rewritten in place under the DDL's transaction, so another session's
   read can see the undecided column set - a column missing from `SELECT *`,
   a name refused, an added column reading NULL - before the decide. Writers
   are fenced by the relation `X`; no value a reader shows is wrong.
-- **An automatic `CreateCabin` takes no relation lock**, so the Cabin
-  controller can land a Cabin on a column between `DROP COLUMN`'s restrict
-  check and its write. The Cabin is never served - no statement can name
-  the column - and `DROP CABIN` is refused only by the name it cannot
-  resolve; harmless, and not fenced.
+- **A column `CREATE CABIN` takes no relation lock**, the controller's or
+  an operator's, so a Cabin can land on a column between `DROP COLUMN`'s
+  restrict check and its write, or on an open `ADD`'s column and outlive
+  its rollback. It is never served - no statement can name the column -
+  and `DROP CABIN` cannot reach it by name; `PURGE DROPPED COLUMNS` drops
+  one on a dropped position and an `ADD` one on the position it takes (CD,
+  verified at `0badb7d6`), so no column inherits it.
 
 ## Expression and predicate Cabins (AQ)
 

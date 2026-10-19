@@ -627,3 +627,56 @@ review: 4167/4167; after it, 4168/4168 on S4 with S5's sim edits beside it
 in the tree (not in this commit).
 
 Overhead not measured; measured at the milestone's close.
+
+### CD-S5 - simulation and documents (2026-10-19, on `cd-column-slot-cleaning` from `0badb7d6`)
+
+The sim gained an `alter-column` op on its own RNG stream, outside
+transactions: ADD COLUMN `x varchar(16) NULL`, a spilled value into every
+row's `x`, DROP COLUMN `x`, PURGE DROPPED COLUMNS. Every table reserves one
+slot, so the cycle reaches the clean and the reusing ADD. Inserts name
+their columns and reads name `id, v, name` (`kReadColumns`), so `x` moves no
+oracle expectation. Each step accepts its success or the one refusal its
+state can earn, by code and words; any other answer fails the run. After
+every successful ADD, `x` must read NULL in every row (CD-S4's
+`[quiet-wrong]`, checked live). Integrity checks that every dropped column
+flagged clean holds a zero cell with its bit set in every head, after each
+reboot.
+
+`scripts/sim.sh` (the committed seeds and four fresh ones, every mode, the
+toggle pair): 280 runs, 0 failures, on the Debug binary at this stage's
+tree. A crash-mode seed (7, 3 iterations) ran 13 column steps, 4 of them
+cleans, with integrity clean. **Not shown**: a crash *inside* a clean pass or
+a reusing ADD. The sim crashes after an op, or at a fault fail-stop, and
+nothing pins one inside these statements. The live NULL check covers
+reuse; integrity covers a flag that stands at the reboot.
+
+Documents: `alter.md` AL11 (the clean, the epoch gate, the reuse, the
+digest), `txn.md` §5 ("no DDL moves data a reader can bind"), the manual's
+ADD/DROP COLUMN bullets and a PURGE DROPPED COLUMNS section,
+`known-gaps.md` (rows never resized, the pass does not yield, the
+controller's entry, a column CREATE CABIN's lock), BW's work order (BW-R6
+amended, BW-R11 marked stale since BZ, D-e pointing at CD), and the CLAUDE.md
+ALTER TABLE row.
+
+critics-developer review. The reviewer corrected five false document
+sentences in place:
+- the two CLAUDE.md rows and `crosscore.md` CC8 still said superblock 31;
+- `alter.md` and the manual named a key in the epoch refusal, which names
+  none;
+- `alter.md` implied a clean between a load's chunks refuses it - the
+  digest leaves the clean bit out.
+
+Applied:
+- the reused column's NULL check (the order's second integrity item, which
+  was missing);
+- one accepted refusal per step (a blanket `InvalidArgument` would have
+  hidden a `PositionDependant` refusal);
+- the coverage counter's comment no longer over-claims;
+- `kReadColumns`;
+- the manual example's precondition;
+- the integrity header naming the check.
+
+Full Debug suite before the review: 4168/4168; after it, 4168/4168, and
+`scripts/sim.sh` again 280 runs, 0 failures.
+
+Overhead not measured; measured at the milestone's close.

@@ -71,6 +71,10 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
     if (purges != 0) {
         out += " purges=" + std::to_string(purges) + " purged_keys=" + std::to_string(purged_keys);
     }
+    if (column_steps != 0) {
+        out += " column_steps=" + std::to_string(column_steps) +
+               " columns_cleaned=" + std::to_string(columns_cleaned);
+    }
     if (checkpoints != 0) {
         out += " checkpoints=" + std::to_string(checkpoints) + " recycles=" +
                std::to_string(recycles) + " segments_recycled=" + std::to_string(segments_recycled) +
@@ -643,6 +647,51 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             }
             it.oracle.MarkSynced();
             break;
+        case Op::Kind::kAlterColumn: {
+            // Each step's success, or the one refusal the stream's state can
+            // earn it: the slot held by a live x (ADD), no x to fill or drop,
+            // nothing dropped to clean. Any other answer - a Corruption, a
+            // dependant naming the position - fails the run.
+            // The code as the reply carries it (a `NotFound` renders bare,
+            // read back as `InvalidArgument`) and the words only that
+            // refusal says.
+            struct Step {
+                const char* done;
+                StatusCode refusal;
+                const char* says;
+            };
+            static constexpr Step kSteps[] = {
+                {"ADDED COLUMN", StatusCode::kNotImplemented, "column slots are taken"},
+                {"UPDATED", StatusCode::kInvalidArgument, "'x'"},
+                {"DROPPED COLUMN", StatusCode::kInvalidArgument, "has no column named 'x'"},
+                {"PURGED DROPPED COLUMNS", StatusCode::kNotImplemented, "has no dropped column"},
+            };
+            const Step& step = kSteps[op.key < 4 ? op.key : kStepClean];
+            const bool done = reply.rfind(step.done, 0) == 0;
+            if (!done && !(IsErr(reply) &&
+                           server::StatusFromErrorReply(reply).code() == step.refusal &&
+                           reply.find(step.says) != std::string::npos)) {
+                Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: " + reply);
+                return false;
+            }
+            if (!done) break;
+            ++it.verdict.column_steps;
+            if (op.key == kStepClean) ++it.verdict.columns_cleaned;
+            // `[quiet-wrong]` (CD-S4): x lands in a vacant slot or a cleaned
+            // dropped one, so no row predating it may read a value there.
+            if (op.key == kStepAdd) {
+                const std::string sql =
+                    "SELECT COUNT(*) FROM " + op.table + " WHERE x IS NOT NULL";
+                const std::string count = it.instance.Execute(sql);
+                if (count != "count(*)\\n0") {
+                    Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: the new " +
+                                 "column reads a value in an older row: [" + sql + "] -> " +
+                                 count);
+                    return false;
+                }
+            }
+            break;
+        }
         case Op::Kind::kDropTable:
             if (reply.rfind("DROPPED TABLE", 0) != 0) {
                 Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: " + reply);
@@ -711,7 +760,7 @@ void Reconcile(Iteration& it) {
         const auto synced_it = oracle.synced().find(table);
         const bool table_synced = synced_it != oracle.synced().end();
 
-        const std::string reply = it.instance.Execute("SELECT * FROM " + table);
+        const std::string reply = it.instance.Execute(std::string("SELECT ") + kReadColumns + " FROM " + table);
         if (IsErr(reply)) {
             if (mode != SimMode::kClean && !table_synced) {
                 // Created after the last SYNC and CREATE TABLE is unlogged
@@ -816,7 +865,7 @@ void Reconcile(Iteration& it) {
 void ReconcileDrops(Iteration& it) {
     const SimMode mode = it.config.mode;
     for (const auto& [table, drop] : it.oracle.dropped()) {
-        const std::string reply = it.instance.Execute("SELECT * FROM " + table);
+        const std::string reply = it.instance.Execute(std::string("SELECT ") + kReadColumns + " FROM " + table);
         if (IsErr(reply)) continue;
         if (!drop.indeterminate && (mode == SimMode::kClean || drop.synced)) {
             Fail(it, "after restart, the dropped relation '" + table + "' is back");
@@ -1205,7 +1254,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     // The mirror of BR-R1's defect: a relation dropped and committed before
     // the stop must not come back.
     for (const std::string& table : dropped_at_stop) {
-        if (!IsErr(restored.value()->Execute("SELECT * FROM " + table))) {
+        if (!IsErr(restored.value()->Execute(std::string("SELECT ") + kReadColumns + " FROM " + table))) {
             Fail(restore_it, "restored backup: relation '" + table +
                                  "', dropped before the stop, is back");
         }
@@ -1232,6 +1281,8 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     named_duplicate += other.named_duplicate;
     named_exhausted += other.named_exhausted;
     purges += other.purges;
+    column_steps += other.column_steps;
+    columns_cleaned += other.columns_cleaned;
     purged_keys += other.purged_keys;
     checkpoints += other.checkpoints;
     abandoned_checkpoints += other.abandoned_checkpoints;
@@ -1298,7 +1349,7 @@ SimVerdict RunSimulation(const SimConfig& config) {
 
 bool ScanAgreesWithOracle(SimInstance& instance, const Oracle& oracle, std::string& why) {
     for (const auto& [table, rows] : oracle.tables()) {
-        const std::string reply = instance.Execute("SELECT * FROM " + table);
+        const std::string reply = instance.Execute(std::string("SELECT ") + kReadColumns + " FROM " + table);
         if (IsErr(reply)) {
             why = "relation '" + table + "' answers an error: " + reply;
             return false;

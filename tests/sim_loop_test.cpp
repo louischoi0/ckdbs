@@ -81,6 +81,8 @@ TEST(SimLoop, CleanRunsHoldOnEveryCommittedSeed) {
         const SimVerdict verdict = RunSimulation(config);
         EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
         EXPECT_EQ(verdict.gated_missing_rows, 0u) << verdict.Summary(config);
+        // CD: the column cycle reached a clean on every committed seed.
+        EXPECT_GT(verdict.columns_cleaned, 0u) << verdict.Summary(config);
     }
 }
 

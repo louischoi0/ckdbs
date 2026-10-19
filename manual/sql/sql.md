@@ -394,14 +394,17 @@ enforce, indexes and Cabins still serve, all with no re-declaration.
   - `REFERENCES` and a cabin clause are refused (declare a foreign key at
     `CREATE TABLE`; `CREATE CABIN` after the `ADD`). Because the column is
     nullable, it cannot be indexed or carry a Transition.
-  - A relation with no free slot - none reserved, or all taken - refuses
-    `ADD` `NOT_IMPLEMENTED`: adding the column would rewrite every row.
+  - With no vacant slot, `ADD` takes the slot of a dropped column that
+    `PURGE DROPPED COLUMNS` has cleaned, and every older row reads the new
+    column as NULL. With neither - none reserved, or all taken - it is
+    refused `NOT_IMPLEMENTED`: adding the column would rewrite every row.
+    The refusal says when a cleaning would free a slot.
 - **`DROP COLUMN`** flags the column. Its name is free for an `ADD` or a
   `RENAME` once the drop commits (at once for an `ADD` in the dropping
   transaction), and it leaves `SELECT *`, `DESCRIBE`, `sys.columns`
   and positional `VALUES`, which count the remaining columns. Its bytes stay
-  in every row and its slot is never reused: nothing is reclaimed (no
-  cleaning is built).
+  in every row until `PURGE DROPPED COLUMNS` cleans them (§3), and its slot
+  is free for an `ADD` only after that. The row size never shrinks.
   - Refused for the tuple key, and for a column an index keys or covers,
     a foreign key names, a Transition governs or a Cabin is on, each named.
     Any column of a relation that carries an assertion is refused too,
@@ -974,6 +977,35 @@ and executes. It arrived with the transaction work (T01-T14). Semantics:
   departure entry that keeps assertion group headers truthful.
 
 ---
+
+### PURGE DROPPED COLUMNS (built 2026-10-19, CD)
+
+```sql
+ALTER TABLE t DROP COLUMN note;
+PURGE DROPPED COLUMNS FROM t;   -- PURGED DROPPED COLUMNS t: 1 column(s) clean, 3 row(s) cleaned, 2 spill(s) released
+ALTER TABLE t ADD COLUMN tag int64 NULL;   -- if an ADD placed note and no slot is vacant:
+                                           -- takes note's slot; every row reads tag as NULL
+```
+
+`PURGE DROPPED COLUMNS FROM <table>` erases what the relation's dropped
+columns still hold - each row's bytes zeroed and marked NULL, a long value's
+var-heap space released - and marks those columns clean. A clean column
+that `ADD COLUMN` placed in a slot frees that slot for the next `ADD`.
+
+- **Online.** Reads and writes of the relation go on; `ALTER TABLE`, index
+  and assertion DDL on it wait. Running it again cleans nothing twice.
+- **It waits for older work.** A row is cleaned only once every open
+  snapshot sees its last writer, and only after every statement that began
+  before the most recent DDL - the `DROP COLUMN` or any later one - has
+  ended. It polls for up to 1 s, then is refused `TXN_CONFLICT retryable=1`,
+  naming the row and how many it cleaned when a row held it - those stay
+  clean, and running it again finishes the rest.
+- **Autocommit only, admin only.** Inside `BEGIN` it is refused
+  `NOT_IMPLEMENTED`; so is a relation with no dropped column, and a `WHERE`.
+  Heap, Transition-governed and foreign-key child relations are admitted.
+- **What it does not do.** Rows never shrink, so a `CREATE TABLE`'d
+  column's dropped bytes stay in the row size, and a table created without
+  `SPARE` gains no room for `ADD`.
 
 ### PURGE (built 2026-10-08, BH)
 
@@ -1600,7 +1632,8 @@ they were before the split.
 - **No file shrinking, and no data-moving `ALTER`.** A dropped relation's
   pages are reclaimed and reused (DT1), but the file never shrinks and no
   `VACUUM` moves live rows. `ALTER TABLE` renames and adds or drops a
-  column in place; it never rewrites a row (AL1, BW). The
+  column in place; it never rewrites a row (AL1, BW), and `PURGE DROPPED
+  COLUMNS` rewrites only a dropped column's bytes, never a row's size. The
   RESTRICT predicates (assertions, referencing fkeys) now have their
   callers in both.
 - **No `SELECT *` across a join**, no duplicate FROM bindings, no

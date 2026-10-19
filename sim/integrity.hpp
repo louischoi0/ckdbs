@@ -21,7 +21,9 @@
 //   kKeystone       invariant 5: reserved bits zero (the decode masks the id,
 //                   so "id <= kMaxKeystoneId" is not a check that can fire).
 //   kRowSize        invariant 13: payload length equals the relation's
-//                   RowLayout row_size, exactly.
+//                   RowLayout row_size, exactly; and a dropped column
+//                   flagged clean (CD-S3) holds a zero cell with its null
+//                   bit set in every row.
 //   kTrxId          a stored trx_id at or above the superblock's persisted
 //                   next_trx_id names a transaction that was never issued.
 //   kUndoPtr        every nonzero undo_ptr decodes plausibly and points at

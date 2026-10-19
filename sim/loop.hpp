@@ -197,6 +197,11 @@ struct SimVerdict {
     // shows a purged key's later named INSERT can be placed at all.
     std::size_t purges = 0;
     std::size_t purged_keys = 0;
+    // Column cycle steps that took effect (CD), and the cleans among them:
+    // what shows the stream reached a clean. Integrity checks a flagged slot
+    // only if one still stands when it runs.
+    std::size_t column_steps = 0;
+    std::size_t columns_cleaned = 0;
 
     // Documented-gap bookkeeping — reported, not failed (see above).
     std::size_t gated_missing_rows = 0;

@@ -204,6 +204,9 @@ Each of BW-R1..R13 is CLA's proposal; its standing is §4's.
   `EncodeRow` writes it as zero with its bit clear. Its name is free for an
   `ADD` or a `RENAME`. A dropped slot is never reused, since its bytes are
   still in rows (D-e).
+  **Amended by CD** (`workorder-cd-dropped-column-cleaning.md`): `EncodeRow`
+  sets a dropped column's bit (CD-S1), and a dropped slot is reused - at its
+  own position - once `PURGE DROPPED COLUMNS` has flagged it clean (CD-S4).
 - **BW-R7 — isolation and atomicity: `CREATE INDEX`'s shape.** Both
   statements run in `InDdlStatement` and take the relation `X` with
   `BorrowRelationForDdl` before their first catalog write. They wait for
@@ -239,7 +242,8 @@ Each of BW-R1..R13 is CLA's proposal; its standing is §4's.
   `TableAccess::varheap_page_id` keeps its fixed-at-`CREATE` property
   (§1 item 8).
 - **BW-R11 — heap relations.** `SPARE` with `HEAP` is unreachable (SUS-1
-  refuses `HEAP`). An existing heap relation has 0 slots (D-f (a)): `ADD`
+  refuses `HEAP`) - **stale since BZ**: a heap is a btree with a hidden key
+  and takes `SPARE` (`tests/heap_hidden_key_test.cpp`). An existing heap relation has 0 slots (D-f (a)): `ADD`
   is refused and `DROP` is the flag.
 - **BW-R12 — observability.** The `sys.tables` view gains `spare_slots`
   (declared `N`) and `spare_free` (slots no column holds; a dropped
@@ -697,7 +701,8 @@ still closed.
 `INSERT` and point `SELECT` inside the spread). The full suite last ran green
 at `33519b28` (3865/3865); the merge `3b5daa80` and this record landed with
 the suite not run on them (W8's `--no-verify`). BW reopened for BW-S6 (W7);
-S1-S5 stand as closed. **BW was closed** - on the operator's word of 2026-10-14 (W6, `raft-marks-2026-10-14.md` §10), at `d6cb3826` (`v3.2.0-28-gd6cb3826`, on `main`). BW-S1..S4 landed (`f2a72474`, `69a31361`, `bc42a011`, `d0134573`); BW-Q1..Q11 adopted on the standing go-ahead (W3). The close measurement ran when the operator directed it (W4, W5): `bench/v3.2.0/results-bw-close-v3.2.0-22-g541ce440.md` found the every-row `UPDATE` +30 us / 1,000 rows outside the spread; the profile attributed none of it to a BW-changed line (`bench/v3.2.0/archive/bw-update-profile/`); `e8727478` hoisted the dropped-column gate out of the codec loops, and `bench/v3.2.0/results-bw-update-fix-v3.2.0-24-ge8727478.md` measured it below `541ce440` in 7 of 7 runs on both paths, while whether it equals the pre-BW tree is unresolved on a loaded host (`known-gaps.md`). Left open: BW-Q11's `[quiet-wrong]` gap for a positional `INSERT` only - BW-S6's column list closes it for a listed one (W7; built, §7); cleaning (D-e). BW-S6's review and the stage's close are what remain of the reopened BW.
+S1-S5 stand as closed. **BW was closed** - on the operator's word of 2026-10-14 (W6, `raft-marks-2026-10-14.md` §10), at `d6cb3826` (`v3.2.0-28-gd6cb3826`, on `main`). BW-S1..S4 landed (`f2a72474`, `69a31361`, `bc42a011`, `d0134573`); BW-Q1..Q11 adopted on the standing go-ahead (W3). The close measurement ran when the operator directed it (W4, W5): `bench/v3.2.0/results-bw-close-v3.2.0-22-g541ce440.md` found the every-row `UPDATE` +30 us / 1,000 rows outside the spread; the profile attributed none of it to a BW-changed line (`bench/v3.2.0/archive/bw-update-profile/`); `e8727478` hoisted the dropped-column gate out of the codec loops, and `bench/v3.2.0/results-bw-update-fix-v3.2.0-24-ge8727478.md` measured it below `541ce440` in 7 of 7 runs on both paths, while whether it equals the pre-BW tree is unresolved on a loaded host (`known-gaps.md`). Left open: BW-Q11's `[quiet-wrong]` gap for a positional `INSERT` only - BW-S6's column list closes it for a listed one (W7; built, §7); cleaning (D-e) - taken up by CD
+(`workorder-cd-dropped-column-cleaning.md`). BW-S6's review and the stage's close are what remain of the reopened BW.
 
 ---
 

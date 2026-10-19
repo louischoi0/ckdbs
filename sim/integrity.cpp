@@ -290,6 +290,7 @@ private:
             }
 
             CollectCells(access, name, page_id, id, payload);
+            CheckCleanedCells(access, name, page_id, id, payload);
             return storage::VisitControl::kContinue;
         };
 
@@ -298,6 +299,32 @@ private:
         if (!walked.ok()) {
             Add(CheckKind::kChainOrder, access.desc_page_id,
                 "relation '" + name + "': walk failed: " + walked.message());
+        }
+    }
+
+    // A dropped column flagged clean (CD-S3) holds, in every row, a zero
+    // cell with its null bit set where it has one: what a later reuse of the
+    // slot reads as NULL. `[quiet-wrong]` if not - the reused column would
+    // read the dropped value. Every head is checked; no older version is
+    // reachable once the flag is written.
+    void CheckCleanedCells(const catalog::TableAccess& access, const std::string& name,
+                           PageId page_id, std::uint64_t id, std::span<const std::byte> payload) {
+        const catalog::Schema& schema = access.schema;
+        for (std::size_t i = 1; i < schema.columns.size(); ++i) {
+            if (!schema.columns[i].slot_clean()) continue;
+            const bool bit_ok = access.layout.null_bits[i] == catalog::kNoNullBit ||
+                                catalog::NullBitIsSet(payload, access.layout, i);
+            const auto cell = payload.subspan(access.layout.offsets[i],
+                                              access.layout.cell_ends[i] - access.layout.offsets[i]);
+            const bool zero = std::all_of(cell.begin(), cell.end(),
+                                          [](std::byte b) { return b == std::byte{0}; });
+            if (!bit_ok || !zero) {
+                Add(CheckKind::kRowSize, page_id,
+                    "relation '" + name + "' id " + std::to_string(id) + " column '" +
+                        std::string(catalog::NameView(schema.columns[i].name)) +
+                        "': flagged clean, but its cell is " +
+                        (zero ? "zero with its null bit clear" : "not zero"));
+            }
         }
     }
 

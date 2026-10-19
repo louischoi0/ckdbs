@@ -249,7 +249,7 @@ public:
     const std::map<std::string, TableRows>& synced() const { return synced_; }
 
     // Expected result rows, rendered exactly as the wire renders them for
-    // `SELECT *` over (id, v, name): "<id>,<v>,<name>", ascending id.
+    // `SELECT id, v, name`: "<id>,<v>,<name>", ascending id.
     static std::string Render(std::uint64_t id, const OracleRow& row) {
         return std::to_string(id) + "," + std::to_string(row.v) + "," + row.name;
     }

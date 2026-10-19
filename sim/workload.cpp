@@ -37,6 +37,7 @@ const char* OpKindName(Op::Kind kind) {
         case Op::Kind::kInsertNamed: return "insert-named";
         case Op::Kind::kDropTable: return "drop-table";
         case Op::Kind::kPurge: return "purge";
+        case Op::Kind::kAlterColumn: return "alter-column";
     }
     return "unknown";
 }
@@ -47,7 +48,7 @@ std::optional<Op::Kind> ParseOpKind(std::string_view name) {
           Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kUpdate,
           Op::Kind::kDelete, Op::Kind::kBegin, Op::Kind::kCommit, Op::Kind::kRollback,
           Op::Kind::kCreateCabin, Op::Kind::kInsertNamed, Op::Kind::kDropTable,
-          Op::Kind::kPurge}) {
+          Op::Kind::kPurge, Op::Kind::kAlterColumn}) {
         if (name == OpKindName(kind)) return kind;
     }
     return std::nullopt;
@@ -57,7 +58,8 @@ Workload::Workload(Rng rng, Profile profile)
     : rng_(std::move(rng)),
       profile_(profile),
       drop_rng_(rng_.Fork("drop")),
-      purge_rng_(rng_.Fork("purge")) {
+      purge_rng_(rng_.Fork("purge")),
+      column_rng_(rng_.Fork("column")) {
     // 1-3 tables, decided up front so the table set is stable however many
     // ops are drawn. All btree: a heap's tuple key is hidden (BZ-R1), and the
     // oracle reconciles by tuple key; the heap's surface is
@@ -163,7 +165,8 @@ Op Workload::Insert(Table& table) {
     op.table = table.name;
     op.v = NextValue();
     op.name = NextName();
-    op.sql = "INSERT INTO " + table.name + " VALUES (" + std::to_string(op.v) + ", '" +
+    // Named columns, so a column cycle (`AlterColumn`) never shifts them.
+    op.sql = "INSERT INTO " + table.name + " (v, name) VALUES (" + std::to_string(op.v) + ", '" +
              op.name + "')";
     ++(table.high_base != 0 ? table.high_inserted : table.inserted);
     return op;
@@ -209,8 +212,8 @@ Op Workload::InsertNamed(Table& table) {
     op.key = key;
     op.v = NextValue();
     op.name = NextName();
-    op.sql = "INSERT INTO " + table.name + " VALUES (" + std::to_string(key) + ", " +
-             std::to_string(op.v) + ", '" + op.name + "')";
+    op.sql = "INSERT INTO " + table.name + " (id, v, name) VALUES (" + std::to_string(key) +
+             ", " + std::to_string(op.v) + ", '" + op.name + "')";
     return op;
 }
 
@@ -312,7 +315,7 @@ Op Workload::DataOp() {
         op.kind = Op::Kind::kSelectTupleKey;
         op.table = table.name;
         op.key = GuessKey(table);
-        op.sql = "SELECT * FROM " + table.name + " WHERE id = " + std::to_string(op.key);
+        op.sql = std::string("SELECT ") + kReadColumns + " FROM " + table.name + " WHERE id = " + std::to_string(op.key);
         return op;
     }
     if (roll < 88) {
@@ -322,7 +325,7 @@ Op Workload::DataOp() {
         op.table = table.name;
         op.lo = GuessKey(table);
         op.hi = op.lo + rng_.Below(20);
-        op.sql = "SELECT * FROM " + table.name + " WHERE id BETWEEN " + std::to_string(op.lo) +
+        op.sql = std::string("SELECT ") + kReadColumns + " FROM " + table.name + " WHERE id BETWEEN " + std::to_string(op.lo) +
                  " AND " + std::to_string(op.hi);
         return op;
     }
@@ -331,7 +334,26 @@ Op Workload::DataOp() {
     op.kind = Op::Kind::kFilterScan;
     op.table = table.name;
     op.v = NextValue();
-    op.sql = "SELECT * FROM " + table.name + " WHERE v = " + std::to_string(op.v);
+    op.sql = std::string("SELECT ") + kReadColumns + " FROM " + table.name + " WHERE v = " + std::to_string(op.v);
+    return op;
+}
+
+Op Workload::AlterColumn() {
+    const std::vector<std::size_t> live = LiveIndices();
+    const Table& table = tables_[live[column_rng_.Below(live.size())]];
+    Op op;
+    op.kind = Op::Kind::kAlterColumn;
+    op.table = table.name;
+    op.key = column_rng_.Below(4);
+    switch (op.key) {
+        case kStepAdd: op.sql = "ALTER TABLE " + table.name + " ADD COLUMN x varchar(16) NULL"; break;
+        case kStepFill:
+            op.sql = "UPDATE " + table.name + " SET x = 'a-value-longer-than-thirteen-" +
+                     std::to_string(column_rng_.Below(1000)) + "'";
+            break;
+        case kStepDrop: op.sql = "ALTER TABLE " + table.name + " DROP COLUMN x"; break;
+        default: op.sql = "PURGE DROPPED COLUMNS FROM " + table.name; break;
+    }
     return op;
 }
 
@@ -342,7 +364,8 @@ Op Workload::Next() {
         Op op;
         op.kind = Op::Kind::kCreateTable;
         op.table = table.name;
-        op.sql = "CREATE TABLE " + table.name + " (id int64, v int64, name varchar)";
+        // One slot, for the column cycle (`AlterColumn`).
+        op.sql = "CREATE TABLE " + table.name + " (id int64, v int64, name varchar) SPARE 1";
         return op;
     }
 
@@ -384,6 +407,7 @@ Op Workload::Next() {
 
     if (drops_left_ != 0 && LiveIndices().size() >= 2 && drop_rng_.Chance(2)) return Drop();
 
+    if (column_rng_.Chance(4)) return AlterColumn();
 
     // 85 data ops, 4 syncs, 3 Cabin declarations and 8 transaction starts
     // per hundred rolls. Three of the data ops were `CREATE PATTERN` until

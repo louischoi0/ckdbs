@@ -844,8 +844,11 @@ Every step of a statement runs under the session's borrow.
   runs (the statement epoch, `drop-table.md` DT1) and its oid is never
   reissued (DT2),
   every catalog row is an MVCC version the reader's view filters, and no
-  DDL moves data (`alter.md`), so a plan compiled while a DDL's `X` stood
-  reads a snapshot-consistent past. **What the bind-time ask therefore
+  DDL moves data a reader can bind (`alter.md`) - `PURGE DROPPED COLUMNS`
+  rewrites only a dropped column's bytes, and only once no statement whose
+  schema word predates the drop still runs (the statement epoch, AL11) -
+  so a plan compiled while a DDL's `X` stood reads a snapshot-consistent
+  past. **What the bind-time ask therefore
   gives is one-directional**: a reader that was *granted* the `IS` is not
   overtaken - no DDL takes the `X` until the statement ends - and a reader
   *refused* it is right for the three reasons above, not for the lock's

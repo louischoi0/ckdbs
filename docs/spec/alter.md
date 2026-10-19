@@ -3,7 +3,10 @@
 Decisions AL1-AL11. `ALTER TABLE` changes catalog facts and no tuple bytes;
 a form outside that class is refused at the earliest layer that knows the
 byte. AL11 (`ADD`/`DROP COLUMN`) is BW's
-(`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`). `DROP TABLE` is its own feature (`docs/spec/drop-table.md`) and shares
+(`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`); cleaning a
+dropped column and reusing its slot are CD's
+(`instructions/v3.2.0/workorder-cd-dropped-column-cleaning.md`), and the one data rewrite
+here is that clean, of bytes no statement can read. `DROP TABLE` is its own feature (`docs/spec/drop-table.md`) and shares
 AL4's RESTRICT predicate.
 
 ## 1. AL1 — The class: mutations that change catalog facts and no tuple bytes
@@ -175,7 +178,7 @@ one every bug in this class hides behind.
 ## 10. Out of scope, named so nothing drifts in
 
 `DROP TABLE` (`docs/spec/drop-table.md`), any row-rewriting ALTER (AL1),
-cleaning a dropped column's bytes or slot (AL11), `DEFAULT` and a `NOT
+resizing rows after a drop (AL11), `DEFAULT` and a `NOT
 NULL` added column, rollback of a rename (AL6), pattern migration (AL3),
 and renaming `sys.*` (AL7).
 
@@ -208,8 +211,11 @@ position, in the lowest free slot, its `sys.columns` row flagged
   and `varchar(16)`, which holds any length and spills past 13 bytes; a
   wider cell is `NotImplemented` naming the slot, never narrowed.
 - `REFERENCES` and a cabin clause are `NotImplemented` (CREATE TABLE's).
-- No free slot - none reserved, or all held - is `NotImplemented`. A
-  dropped column keeps its slot.
+- With no vacant slot it takes the lowest-position dropped slot column
+  flagged clean (below), at that position and so in that slot (CD-S4); with
+  neither - none reserved, or all held - it is `NotImplemented`, naming
+  `PURGE DROPPED COLUMNS` when dropped columns hold slots. A dropped
+  declared column has no slot to give.
 - A name equal ignoring case to a live column's is `AlreadyExists`, naming
   that column as declared (`catalog.md` CT7's column rule); a dropped
   column's name is free in any case. A name longer than 63 bytes is
@@ -232,7 +238,8 @@ in every tuple.
   and are expanded to physical width behind the writer's `IX`.
 - Its name is free for an `ADD` or a `RENAME` once the drop's transaction
   is no longer in flight - and at once for an `ADD` inside that
-  transaction, which alone can pass the `X`; its slot is never reused.
+  transaction, which alone can pass the `X`; its slot is reused only once
+  `PURGE DROPPED COLUMNS` has flagged it clean.
 - Refused: the tuple key, and a column an index keys or covers, a foreign key
   names, a Transition governs or a Cabin is on - each named - and every
   column of a relation an assertion is declared on (AL4's predicate).
@@ -289,5 +296,52 @@ in place, so another session's read can see an undecided column set - a
 column missing from `SELECT *`, a name refused, an added column reading
 NULL - before the decide; no value it shows is wrong.
 
-**What is not built.** Cleaning (reclaiming a dropped column's bytes and
-slot, resizing rows) - `known-gaps.md`.
+**`PURGE DROPPED COLUMNS FROM <t>`** (CD, `instructions/v3.2.0/workorder-cd-dropped-column-cleaning.md`)
+cleans every dropped column of the relation in place and flags it.
+- Autocommit, admin, under the relation's `IX`, in a DDL transaction of its
+  own: readers and writers go on; a column DDL waits. A heap, a
+  Transition-governed relation and an FK child are admitted - it frees no
+  key. A relation with no dropped column, a `WHERE`, and an explicit
+  transaction are `NotImplemented`, each at its byte.
+- **The statement epoch** `[quiet-wrong]`: a statement whose `IS` a drop's
+  `X` refused may read on with the layout it bound, in which the column is
+  live, so nothing is cleaned until every core's running statements
+  revalidated at or after the word this one's head published (W): the
+  drop moved the word before it released its `X` (`catalog.md` CT2).
+- **Per row, under the leaf's exclusive hold**: a row clean already is left;
+  a row whose header writer is not resolved for every reader is left and
+  waited for; otherwise every dropped cell is zeroed, its null bit set where
+  it has one, and the row rewritten in place as `HEAP_OVERWRITE` at
+  `kNoTxnId` keeping the header's writer and undo pointer - no version, no
+  undo, no lock - and after the hold the spills those cells named are
+  released. A resolved head has no reachable older version, and no writer
+  but this pass turns a dirty image clean (an `UPDATE` copies the dropped
+  cells, a rollback restores what its writer copied).
+- **The waits** - the epoch, an undecided writer, an older snapshot - poll
+  in PURGE's loop for up to 1 s, then refuse `TXN_CONFLICT` - a row wait
+  naming the key, the rows still blocked and the rows cleaned, the epoch's
+  saying nothing was cleaned; the cleaned rows stay clean
+  and a re-run finishes. It does not yield its core (CD-OI-11 (a)).
+- **On an attempt that leaves no dirty row** it drops every column Cabin on
+  a dropped position (a column `CREATE CABIN` takes no relation lock, so one
+  can land there and no statement can name it), and flags each dropped
+  column `kColumnSlotClean` in its transaction (superblock 32). Since CD-S1
+  `EncodeRow` writes every new row clean.
+- **Reply**: `PURGED DROPPED COLUMNS <t>: <k> column(s) clean, <n> row(s)
+  cleaned, <s> spill(s) released`, then `, cabin <id> dropped` per swept
+  Cabin.
+
+**Reuse** (CD-S4). The `ADD` that takes a clean slot rewrites the dropped
+column's `sys.columns` row in place - its oid, which is its Keystone word,
+and its position kept, the new definition, `generation` + 1 - so the new
+column has the dropped one's offset and bit, every older row reads NULL,
+and a rollback restores the dropped clean row. Every `ADD` asks what names
+the position it takes: a column Cabin there names no column and is dropped,
+anything else refuses. A KWP load compares a digest of the relation's
+column rows - position, oid, generation, flags less the clean bit, type,
+width, name - at
+every chunk, since the counts return to their old values across a drop, a
+clean and a reuse.
+
+**What is not built.** Resizing rows after a drop, so a declared column's
+dropped bytes and a `SPARE 0` relation's are never reusable - `known-gaps.md`.

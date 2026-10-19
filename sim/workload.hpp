@@ -87,6 +87,13 @@ struct Op {
         // autocommit only. `lo == hi` is the one-key form, which refuses a
         // live key; a wider window passes over one.
         kPurge,
+        // A column cycle step (CD, `instructions/v3.2.0/workorder-cd-dropped-
+        // column-cleaning.md` §2 S5) on the one slot every table reserves,
+        // outside a transaction: ADD COLUMN x, a spilled value into x, DROP
+        // COLUMN x, or PURGE DROPPED COLUMNS. The oracle reads `id, v, name`
+        // only, so x moves no expectation; the reply is accepted or refused
+        // for the state the stream left, never anything else.
+        kAlterColumn,
     };
     Kind kind;
     std::string table;
@@ -109,6 +116,13 @@ struct Op {
 // reverse. An unknown spelling yields nullopt rather than a guess.
 const char* OpKindName(Op::Kind kind);
 std::optional<Op::Kind> ParseOpKind(std::string_view name);
+
+// The columns every read names, in the order the oracle renders them. Not
+// `*`: a column cycle (`Op::Kind::kAlterColumn`) adds and drops `x`.
+inline constexpr const char* kReadColumns = "id, v, name";
+
+// The column cycle's four steps, by `Op::key` for a `kAlterColumn`.
+enum ColumnStep : std::uint64_t { kStepAdd = 0, kStepFill = 1, kStepDrop = 2, kStepClean = 3 };
 
 class Workload {
 public:
@@ -167,6 +181,9 @@ private:
     // PURGE of a btree relation's deleted keys, outside a transaction, in a
     // DELETE's place. Drawn from its own stream (`purge_rng_`).
     Op Purge(Table& table);
+    // One column cycle step (`Op::Kind::kAlterColumn`), outside a
+    // transaction. Drawn from its own stream (`column_rng_`).
+    Op AlterColumn();
     std::vector<std::size_t> LiveIndices() const;
     void AddReplacement();
 
@@ -189,6 +206,7 @@ private:
     // and the ones the open transaction made, which a rollback undoes.
     Rng drop_rng_;
     Rng purge_rng_;
+    Rng column_rng_;
     std::size_t drops_left_ = 2;
     std::vector<std::size_t> txn_drops_;
 };
