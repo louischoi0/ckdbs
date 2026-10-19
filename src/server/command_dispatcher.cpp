@@ -2591,6 +2591,44 @@ StatusOr<std::optional<std::string>> CommandDispatcher::DropColumnRestriction(
     // no statement can see or write - an index entry, a reference, a state
     // check, an observed set - and each is refused rather than dropped with
     // it (AL4's argument: a constraint is not allowed to die quietly).
+    auto named = PositionDependant(oid, pos);
+    if (!named.ok() || named.value().has_value()) return named;
+    // AL4's predicate, by relation: an assertion's canon is its source
+    // text, and a coarser refusal is never wrong.
+    auto assertions = exec::AssertionsOnRelation(catalog_, page_store_, oid);
+    if (!assertions.ok()) return assertions.status();
+    if (!assertions.value().empty()) {
+        return std::optional<std::string>("assertion '" + assertions.value().front().name +
+                                          "' is declared on this relation; DROP ASSERTION "
+                                          "first");
+    }
+    return std::optional<std::string>();
+}
+
+StatusOr<std::vector<std::uint64_t>> CommandDispatcher::SweepColumnCabins(
+    catalog::Oid oid, std::span<const std::uint16_t> positions) {
+    auto cabins = catalog_.ListCabins();
+    if (!cabins.ok()) return cabins.status();
+    std::vector<std::uint64_t> swept;
+    for (const catalog::SysCabinRow& cabin : cabins.value()) {
+        if (cabin.rel_oid != oid || cabin.shape != catalog::kCabinShapeColumn ||
+            std::find(positions.begin(), positions.end(), cabin.column_no) == positions.end()) {
+            continue;
+        }
+        if (Status s = catalog_.DropCabin(cabin.cabin_id); !s.ok()) return s;
+        if (cabins_ != nullptr) cabins_->Forget(cabin.cabin_id);
+        swept.push_back(cabin.cabin_id);
+    }
+    // Transactionless, as DROP CABIN is, so durable on its own: the caller's
+    // transaction may roll back or never write a commit record.
+    if (!swept.empty()) {
+        if (Status s = AwaitDdlDurability(); !s.ok()) return s;
+    }
+    return swept;
+}
+
+StatusOr<std::optional<std::string>> CommandDispatcher::PositionDependant(catalog::Oid oid,
+                                                                          std::uint16_t pos) {
     auto indexes = catalog_.ListIndexes();
     if (!indexes.ok()) return indexes.status();
     for (const catalog::SysIndexRow& ix : indexes.value()) {
@@ -2638,15 +2676,6 @@ StatusOr<std::optional<std::string>> CommandDispatcher::DropColumnRestriction(
     if (!read.ok()) return read.status();
     if (read.value()) {
         return std::optional<std::string>("a Cabin's key reads it; DROP CABIN first");
-    }
-    // AL4's predicate, by relation: an assertion's canon is its source
-    // text, and a coarser refusal is never wrong.
-    auto assertions = exec::AssertionsOnRelation(catalog_, page_store_, oid);
-    if (!assertions.ok()) return assertions.status();
-    if (!assertions.value().empty()) {
-        return std::optional<std::string>("assertion '" + assertions.value().front().name +
-                                          "' is declared on this relation; DROP ASSERTION "
-                                          "first");
     }
     return std::optional<std::string>();
 }
@@ -2722,20 +2751,53 @@ DispatchOutcome CommandDispatcher::HandleAddColumn(const parser::AlterStmt& stmt
         if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
 
 
+        const auto refused = [&](const Status& status) {
+            const Status s = status.WithContext("byte " + std::to_string(stmt.column_byte_offset));
+            return DispatchOutcome{ErrorReply(s), false, 0, s};
+        };
+        // ---- CD-S4: the position first, then what still names it ---------
+        //
+        // Under the `X`, so the position is the one the write below takes
+        // (the catalog asks again under its hold). A column Cabin there names
+        // no column - the position is vacant or a dropped column's - so no
+        // statement made it for the column about to land: the leftover of a
+        // column CREATE CABIN that took no relation lock (CD-S0 P5), which
+        // the new column would otherwise inherit and nothing could drop. It
+        // is dropped, transactionless as DROP CABIN is. Anything else naming
+        // the position refuses the ADD; none is reachable today.
+        auto pos = catalog_.AddColumnPosition(oid.value());
+        if (!pos.ok()) return refused(pos.status());
+        const std::uint16_t at[] = {pos.value()};
+        auto swept = SweepColumnCabins(oid.value(), at);
+        if (!swept.ok()) return refused(swept.status());
+        auto dependant = PositionDependant(oid.value(), pos.value());
+        if (!dependant.ok()) return refused(dependant.status());
+        if (dependant.value().has_value()) {
+            return refused(Status::InvalidArgument("position " + std::to_string(pos.value()) +
+                                                   " is still named: " + *dependant.value()));
+        }
+
         DdlScope ddl = DdlScopeFor(scope);
         catalog::CatalogRowRef created;
-        const Status added = catalog_.AddColumn(oid.value(), row, ddl.trx_id, &created);
+        std::vector<catalog::CatalogRowChange> reused;
+        const Status added =
+            catalog_.AddColumn(oid.value(), row, pos.value(), ddl.trx_id, &created, &reused);
         // Before the status, CREATE INDEX's reason: a failed add that wrote
         // its row still left it there.
         NoteRowWritten(ddl, created);
-        if (!added.ok()) {
-            const Status s = added.WithContext("byte " + std::to_string(stmt.column_byte_offset));
-            return {ErrorReply(s), false, 0, s};
-        }
+        NoteCatalogRowChanges(ddl, reused);
+        if (!added.ok()) return refused(added);
+        // CD-OI-13 (a): a reused position's access shapes are the dropped
+        // column's history. A statistic, so a failure here is dropped.
+        (void)catalog_.ForgetAccessStats(oid.value(), pos.value());
         if (logging(LogLevel::kInfo)) {
             log_->Info("ddl", "added column " + stmt.table_name + "." + col.name);
         }
-        return {"ADDED COLUMN " + stmt.table_name + "." + col.name, false};
+        std::string reply = "ADDED COLUMN " + stmt.table_name + "." + col.name;
+        for (const std::uint64_t cabin_id : swept.value()) {
+            reply += ", cabin " + std::to_string(cabin_id) + " dropped";
+        }
+        return {reply, false};
     });
 }
 
@@ -5382,8 +5444,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     // other columns. Asked behind the `IX`, where no column DDL can move it.
     if (written.described.oid != 0 &&
         (written.described.oid != ta->oid ||
-         written.described.physical_columns != ta->schema.columns.size() ||
-         written.described.live_columns != ta->layout.live_columns)) {
+         written.described.column_set != catalog::ColumnSetDigest(ta->schema))) {
         const Status s = Status::InvalidArgument(
             "relation '" + written.table_name +
             "' is not the relation this load described at its BEGIN: it was dropped or its "
@@ -10987,22 +11048,8 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
         // inherit it. Asked of every target, flagged already or not, so a
         // re-run removes one. Transactionless, as DROP CABIN is: a Cabin on a
         // dropped position is never served, so dropping it is always right.
-        auto cabins = catalog_.ListCabins();
-        if (!cabins.ok()) return refuse(partly(cabins.status()));
-        std::vector<std::uint64_t> swept;
-        for (const catalog::SysCabinRow& cabin : cabins.value()) {
-            if (cabin.rel_oid != oid.value() || cabin.shape != catalog::kCabinShapeColumn ||
-                std::find(targets.begin(), targets.end(), cabin.column_no) == targets.end()) {
-                continue;
-            }
-            if (Status s = catalog_.DropCabin(cabin.cabin_id); !s.ok()) return refuse(partly(s));
-            if (cabins_ != nullptr) cabins_->Forget(cabin.cabin_id);
-            swept.push_back(cabin.cabin_id);
-        }
-        if (!swept.empty() && all_flagged) {
-            // No commit record follows to carry the sweep (DROP CABIN's case).
-            if (Status s = AwaitDdlDurability(); !s.ok()) return refuse(partly(s));
-        }
+        auto swept = SweepColumnCabins(oid.value(), targets);
+        if (!swept.ok()) return refuse(partly(swept.status()));
         // (b) The flag, in this statement's DDL transaction under its `IX`
         // (CD-OI-9 (a)), so a rollback - here or at mount - clears it. A
         // re-run with every target flagged opens no DDL and moves no word.
@@ -11019,7 +11066,7 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
                             std::to_string(targets.size()) + " column(s) clean, " +
                             std::to_string(cleaned) + " row(s) cleaned, " +
                             std::to_string(released) + " spill(s) released";
-        for (const std::uint64_t cabin_id : swept) {
+        for (const std::uint64_t cabin_id : swept.value()) {
             reply += ", cabin " + std::to_string(cabin_id) + " dropped";
         }
         return {reply, false, cleaned};

@@ -1,3 +1,4 @@
+#include "column_cycle.hpp"
 #include "inner_build_fixture.hpp"
 
 #include "kds/server/command_dispatcher.hpp"
@@ -115,7 +116,8 @@ TEST_F(InnerBuildContractTest, TheExactFitCapStillPublishes) {
 // template - the same path an expeditor-parsed kds.conf key takes - and
 // the template rides into every Execute. The VM-level tests above cannot
 // see this plumbing; this one drives it end to end.
-std::string RunThroughDispatcher(bool knob_off, bool with_null_row) {
+std::string RunThroughDispatcher(bool knob_off, bool with_null_row,
+                                 testing_cycle::Added added = testing_cycle::Added::kNone) {
     storage::InMemoryPageStore store{server::kFirstUserPageId};
     auto boot = bootstrap::BootstrapDatabase(store, 1000);
     EXPECT_TRUE(boot.ok()) << boot.status().message();
@@ -131,7 +133,9 @@ std::string RunThroughDispatcher(bool knob_off, bool with_null_row) {
     EXPECT_EQ(dispatcher.Dispatch("CREATE TABLE au (id int64, name varchar)")
                   .response.substr(0, 7),
               "CREATED");
-    EXPECT_EQ(dispatcher.Dispatch("CREATE TABLE tr (id int64, au_id int64 NULL, qty int64)")
+    EXPECT_EQ(dispatcher
+                  .Dispatch(std::string("CREATE TABLE tr (id int64, au_id int64 NULL, qty int64)") +
+                            testing_cycle::Spare(added))
                   .response.substr(0, 7),
               "CREATED");
     // Single-row inserts: the bare dispatcher here has no transaction
@@ -145,6 +149,9 @@ std::string RunThroughDispatcher(bool knob_off, bool with_null_row) {
         EXPECT_EQ(dispatcher.Dispatch("INSERT INTO tr VALUES (NULL, 40)").response.substr(0, 8),
                   "INSERTED");
     }
+    testing_cycle::AddColumn(
+        [&dispatcher](const std::string& sql) { return dispatcher.Dispatch(sql).response; }, "tr",
+        added);
     return dispatcher.Dispatch("SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id")
         .response;
 }
@@ -153,6 +160,17 @@ TEST_F(InnerBuildContractTest, TheDispatcherKnobReachesTheExecutor) {
     const std::string built = RunThroughDispatcher(/*knob_off=*/false, /*with_null_row=*/false);
     const std::string walked = RunThroughDispatcher(/*knob_off=*/true, /*with_null_row=*/false);
     EXPECT_EQ(built, walked);
+    EXPECT_NE(built.find("alice"), std::string::npos) << built;
+}
+
+// CD-S4: the build side's last column took a cleaned dropped slot; built
+// and walked agree, and both answer what the relation answered before it.
+TEST_F(InnerBuildContractTest, AReusedColumnSlotAnswersTheSameBuiltOrWalked) {
+    const auto reused = testing_cycle::Added::kReused;
+    const std::string built = RunThroughDispatcher(/*knob_off=*/false, /*with_null_row=*/true, reused);
+    const std::string walked = RunThroughDispatcher(/*knob_off=*/true, /*with_null_row=*/true, reused);
+    EXPECT_EQ(built, walked);
+    EXPECT_EQ(built, RunThroughDispatcher(/*knob_off=*/true, /*with_null_row=*/true));
     EXPECT_NE(built.find("alice"), std::string::npos) << built;
 }
 

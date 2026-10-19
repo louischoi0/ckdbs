@@ -599,15 +599,29 @@ public:
                                                std::uint64_t trx_id,
                                                std::vector<CatalogRowChange>* changed);
 
+    // The position an `ALTER TABLE ... ADD COLUMN` on `table_oid` takes now:
+    // the next position, in the lowest vacant slot, while one is free (BW-R4);
+    // else the lowest-position dropped slot column flagged clean, at its own
+    // position and so in its own slot (CD-S4, CD-OI-12 (a)). Neither is
+    // `NotImplemented`, naming the remedy when dropped slots exist. Stable
+    // under the relation `X`, which every ADD and DROP takes and the clean's
+    // `IX` waits for.
+    StatusOr<std::uint16_t> AddColumnPosition(Oid table_oid);
+
     // `ALTER TABLE ... ADD COLUMN` (BW-R4, BW-R5): `column` - its name, type,
-    // `len` and nothing else read - becomes a nullable column at the next
-    // position, in the relation's lowest free slot, its `sys.columns` row
-    // inserted under `trx_id` and reported through `where`. The name check,
-    // the slot count and the insert are one hold of `sys.columns`' root page
-    // (CT7). A taken live name is `AlreadyExists`; a relation with no free
-    // slot, and a cell wider than a slot, are `NotImplemented` (D-c, BW-R4).
-    Status AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64_t trx_id,
-                     CatalogRowRef* where);
+    // `len` and nothing else read - becomes a nullable column at `pos`, which
+    // the caller took from `AddColumnPosition` and asked its dependants of;
+    // a position that is no longer the one is `TxnConflict`. A vacant slot's
+    // row is inserted under `trx_id` and reported through `inserted`; a clean
+    // dropped slot's row is rewritten in place (CD-OI-4 (a)) - its oid, and so
+    // its Keystone word, kept, `generation` + 1 - and reported through
+    // `reused`, so a rollback restores the dropped row. The name check, the
+    // position and the write are one hold of `sys.columns`' root page (CT7).
+    // A taken live name is `AlreadyExists`; a cell wider than a slot is
+    // `NotImplemented` (D-c, BW-R4).
+    Status AddColumn(Oid table_oid, const SysColumnRow& column, std::uint16_t pos,
+                     std::uint64_t trx_id, CatalogRowRef* inserted,
+                     std::vector<CatalogRowChange>* reused);
 
     // DROP TABLE's catalog half (docs/spec/drop-table.md DT1-DT3, workplan
     // DT02). The sys.objects row is **retyped to kTypeDroppedTable, never
@@ -983,6 +997,11 @@ public:
     Status DiscardAccessStats();
 
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
+
+    // Retires every `sys.access_stats` row of `rel_id` whose column mask
+    // names `col_pos` (CD-OI-13 (a)): a reused position's history is the
+    // dropped column's, not the new one's. Unlogged, as every write here is.
+    Status ForgetAccessStats(Oid rel_id, std::uint16_t col_pos);
 
     // ---- sys.cabins (docs/spec/cabin.md §10) -----------------------------
 

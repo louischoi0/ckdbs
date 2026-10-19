@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "column_cycle.hpp"
 #include "learn_plan_stats.hpp"
 #include "unordered_reply.hpp"
 
@@ -83,10 +84,13 @@ private:
 // key, so the descent path replay replaces is covered, and a heap (BZ-R1)
 // whose `id` is an ordinary column holding the same numbers, so the same
 // statement text over it is a search replay must never serve.
-void Load(Instance& db) {
-    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, v int64, label varchar) BTREE").substr(0, 7),
+void Load(Instance& db, testing_cycle::Added added = testing_cycle::Added::kNone) {
+    const std::string spare = testing_cycle::Spare(added);
+    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, v int64, label varchar)" + spare + " BTREE")
+                  .substr(0, 7),
               "CREATED");
-    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64, label varchar) HEAP").substr(0, 7),
+    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64, label varchar)" + spare + " HEAP")
+                  .substr(0, 7),
               "CREATED");
     ASSERT_EQ(db.Run("CREATE TABLE j (id int64, w int64) BTREE").substr(0, 7), "CREATED");
     // Declared before the rows, so the write hook fills it rather than the
@@ -106,6 +110,10 @@ void Load(Instance& db) {
         ASSERT_EQ(db.Run("INSERT INTO j VALUES (" + std::to_string(i * 100) + ")").substr(0, 8),
                   "INSERTED");
     }
+    // CD-S4: the rows' last column through a vacant slot or a cleaned one.
+    const auto run = [&db](const std::string& sql) { return db.Run(sql); };
+    testing_cycle::AddColumn(run, "b", added);
+    testing_cycle::AddColumn(run, "h", added);
 }
 
 // The query set. Deliberately mixed: keyed steps that replay, searches that
@@ -299,6 +307,17 @@ TEST(WaystoneContractTest, RecordingAndReplayingChangesNoReply) {
     Instance db(/*record=*/true, /*replay=*/true);
     Load(db);
     ExpectSame(RunAll(db, 3), Reference(), "recording+replay");
+}
+
+// CD-S4: recording and replaying over relations whose last column took a
+// cleaned dropped slot answer what a column through a vacant slot answers
+// with no trail at all - `SELECT *` included, which prints the column.
+TEST(WaystoneContractTest, RecordingAndReplayingOverAReusedColumnSlotChangesNoReply) {
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db, testing_cycle::Added::kReused);
+    Instance reference(/*record=*/false, /*replay=*/false);
+    Load(reference, testing_cycle::Added::kVacant);
+    ExpectSame(RunAll(db, 3), RunAll(reference, 3), "recording+replay over a reused slot");
 }
 
 // BM-S3: recording and replaying with the scan kernel off answer what the

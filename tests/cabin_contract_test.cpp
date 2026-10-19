@@ -3,6 +3,7 @@
 
 #include "unordered_reply.hpp"
 #include "kds/stats/plan_stats.hpp"
+#include "column_cycle.hpp"
 #include "learn_plan_stats.hpp"
 
 #include <cstdlib>
@@ -100,12 +101,15 @@ private:
 //
 // `sym` repeats across rows on purpose - a Cabin on a column where every
 // value is unique would exercise nothing about entry sets.
-void Load(Instance& db) {
-    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, sym varchar, qty int64) BTREE").substr(0, 7),
+void Load(Instance& db, testing_cycle::Added added = testing_cycle::Added::kNone) {
+    const std::string spare = testing_cycle::Spare(added);
+    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, sym varchar, qty int64)" + spare + " BTREE")
+                  .substr(0, 7),
               "CREATED");
     // A heap (BZ-R1): its `id` is an ordinary column holding what `b`'s
     // tuple key holds, so the same statements run over both.
-    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, sym varchar, qty int64) HEAP").substr(0, 7),
+    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, sym varchar, qty int64)" + spare + " HEAP")
+                  .substr(0, 7),
               "CREATED");
     const char* kSyms[] = {"aaa", "bbb", "aaa", "ccc", "bbb", "aaa", "ddd", "bbb"};
     for (int i = 0; i < 8; ++i) {
@@ -116,6 +120,10 @@ void Load(Instance& db) {
                       .substr(0, 8),
                   "INSERTED");
     }
+    // CD-S4: the rows' last column through a vacant slot or a cleaned one.
+    const auto run = [&db](const std::string& sql) { return db.Run(sql); };
+    testing_cycle::AddColumn(run, "b", added);
+    testing_cycle::AddColumn(run, "h", added);
 }
 
 // The Cabin on `sym`, wherever the relation holds it: position 1 on `b`, 2
@@ -253,6 +261,17 @@ TEST(CabinContractTest, ServingFromACabinChangesNoReply) {
     Load(db);
     DeclareCabins(db);
     ExpectSame(RunAll(db, 4), Reference(), "cabins serving");
+}
+
+// CD-S4: Cabins declared over relations whose last column took a cleaned
+// dropped slot serve what a column through a vacant slot answers uncabined.
+TEST(CabinContractTest, ServingOverAReusedColumnSlotChangesNoReply) {
+    Instance db(/*cabins=*/true);
+    Load(db, testing_cycle::Added::kReused);
+    DeclareCabins(db);
+    Instance reference(/*cabins=*/false);
+    Load(reference, testing_cycle::Added::kVacant);
+    ExpectSame(RunAll(db, 4), RunAll(reference, 4), "cabins serving over a reused slot");
 }
 
 // CC-S3: the Cabins serve under the join planner's learned statistics too,

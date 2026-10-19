@@ -488,11 +488,11 @@ struct IndexColumnRef {
 // of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
 // load's rows are positional against it, so a relation that is not that
 // relation in that shape when a chunk takes its `IX` refuses the chunk.
-// `oid == 0` - every SQL statement - asks nothing.
+// `column_set` is `catalog::ColumnSetDigest`. `oid == 0` - every SQL
+// statement - asks nothing.
 struct DescribedShape {
     std::uint64_t oid = 0;
-    std::uint32_t physical_columns = 0;
-    std::uint32_t live_columns = 0;
+    std::uint64_t column_set = 0;
 };
 
 // `INSERT INTO <t> [(<col>, …)] VALUES (…) [, (…)]*` (docs/spec/bulkinsert.md

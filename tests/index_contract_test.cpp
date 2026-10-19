@@ -2,6 +2,7 @@
 
 #include "unordered_reply.hpp"
 #include "kds/stats/plan_stats.hpp"
+#include "column_cycle.hpp"
 #include "learn_plan_stats.hpp"
 
 #include <cstring>
@@ -103,9 +104,10 @@ private:
 // The schema every configuration runs over. `sym` is a string so the
 // truncated key path is exercised by the shared set too, and `qty` gives the
 // composite index a second column.
-void Schema(Instance& db) {
-    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, owner int64, qty int64, sym varchar, "
-                     "code int64) BTREE")
+void Schema(Instance& db, testing_cycle::Added added = testing_cycle::Added::kNone) {
+    ASSERT_EQ(db.Run(std::string("CREATE TABLE b (id int64, owner int64, qty int64, sym varchar, "
+                                 "code int64)") +
+                     testing_cycle::Spare(added) + " BTREE")
                   .substr(0, 7),
               "CREATED");
 }
@@ -250,18 +252,31 @@ void LoadRebuilt(Instance& db) {
     }
 }
 
+// 6 (CD-S4): maintained, then a column cycled through the relation's one
+// slot - added, written, dropped, cleaned, the slot taken again. Every query
+// names its columns, so the baseline is `plain`.
+void LoadReused(Instance& db) {
+    Schema(db, testing_cycle::Added::kReused);
+    Indexes(db);
+    Rows(db);
+    testing_cycle::AddColumn([&db](const std::string& sql) { return db.Run(sql); }, "b",
+                             testing_cycle::Added::kReused);
+}
+
 TEST(IndexContractTest, EveryConfigurationReturnsTheSameBytes) {
     Instance maintained(/*indexes=*/true);
     Instance backfilled(/*indexes=*/true);
     Instance ignored(/*indexes=*/false);
     Instance plain(/*indexes=*/true);
     Instance rebuilt(/*indexes=*/true);
+    Instance reused(/*indexes=*/true);
 
     LoadMaintained(maintained);
     LoadBackfilled(backfilled);
     LoadMaintained(ignored);
     LoadPlain(plain);
     LoadRebuilt(rebuilt);
+    LoadReused(reused);
 
     // Rows compared unordered where the statement has no ORDER BY: `plain`
     // has no index, so the join planner may run its joins in another order
@@ -273,6 +288,7 @@ TEST(IndexContractTest, EveryConfigurationReturnsTheSameBytes) {
         EXPECT_EQ(Unordered(backfilled.Run(sql), sql), expected) << "backfilled index: " << sql;
         EXPECT_EQ(Unordered(ignored.Run(sql), sql), expected) << "indexes = off: " << sql;
         EXPECT_EQ(Unordered(rebuilt.Run(sql), sql), expected) << "rebuilt index: " << sql;
+        EXPECT_EQ(Unordered(reused.Run(sql), sql), expected) << "reused column slot: " << sql;
     }
 }
 

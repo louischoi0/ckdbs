@@ -286,11 +286,15 @@ StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* v
             access = opened.value();
         }
         // A slot is free until a column takes it; a dropped column keeps its
-        // slot (BW-R6, BW-R12).
-        const std::uint32_t free_slots =
-            access == nullptr ? 0
-                              : access->layout.vacant_slot_bit_end -
-                                    access->layout.vacant_slot_bit_begin;
+        // slot (BW-R6, BW-R12) until `PURGE DROPPED COLUMNS` flags it clean,
+        // after which an `ADD` takes it (CD-S4).
+        std::uint32_t free_slots = 0;
+        if (access != nullptr) {
+            free_slots = access->layout.vacant_slot_bit_end - access->layout.vacant_slot_bit_begin;
+            for (const catalog::SysColumnRow& column : access->schema.columns) {
+                if (column.in_slot() && column.slot_clean()) ++free_slots;
+            }
+        }
         view.rows.push_back({Int(row.value().oid), Int(row.value().namespace_oid),
                              labels.value().Spelling(row.value().namespace_oid),
                              Str(catalog::NameView(row.value().name)),

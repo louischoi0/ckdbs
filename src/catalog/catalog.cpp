@@ -1894,13 +1894,58 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     return Status::OK();
 }
 
-Status Catalog::AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64_t trx_id,
-                          CatalogRowRef* where) {
+namespace {
+
+// `AddColumnPosition`'s rule over a schema read under the CT7 hold.
+StatusOr<std::uint16_t> ChooseAddPosition(const Schema& schema, std::uint16_t spare_slots) {
+    std::uint16_t held = 0;
+    std::uint16_t dropped_slots = 0;
+    std::optional<std::uint16_t> clean;
+    for (const SysColumnRow& existing : schema.columns) {
+        if (!existing.in_slot()) continue;
+        ++held;
+        if (!existing.dropped()) continue;
+        ++dropped_slots;
+        if (existing.slot_clean() && !clean.has_value()) {
+            clean = static_cast<std::uint16_t>(existing.pos);
+        }
+    }
+    if (held < spare_slots) return static_cast<std::uint16_t>(schema.columns.size());
+    if (clean.has_value()) return *clean;
+    if (spare_slots == 0) {
+        return Status::NotImplemented(
+            "the relation reserved no column slots (CREATE TABLE ... SPARE n); adding a column "
+            "to it would rewrite every row (invariant 13)");
+    }
+    std::string why = "all " + std::to_string(spare_slots) +
+                      " of the relation's column slots are taken - a dropped column keeps its "
+                      "slot - and adding a column would rewrite every row (invariant 13)";
+    if (dropped_slots != 0) {
+        why += "; " + std::to_string(dropped_slots) +
+               " slot(s) are held by dropped columns, and PURGE DROPPED COLUMNS frees them";
+    }
+    return Status::NotImplemented(why);
+}
+
+}  // namespace
+
+StatusOr<std::uint16_t> Catalog::AddColumnPosition(Oid table_oid) {
+    // No hold: `AddColumn` asks again under its own.
+    auto table_row = GetSysTableRow(table_oid);
+    if (!table_row.ok()) return table_row.status();
+    auto schema = ScanSchemaFromColumns(table_oid);
+    if (!schema.ok()) return schema.status();
+    return ChooseAddPosition(schema.value(), table_row.value().spare_slots);
+}
+
+Status Catalog::AddColumn(Oid table_oid, const SysColumnRow& column, std::uint16_t pos,
+                          std::uint64_t trx_id, CatalogRowRef* inserted,
+                          std::vector<CatalogRowChange>* reused) {
     // The slot count is fixed at CREATE, so it is read before the hold.
     auto table_row = GetSysTableRow(table_oid);
     if (!table_row.ok()) return table_row.status();
-    // One hold of `sys.columns`' root page across the name check, the slot
-    // count and the insert (CT7), so two adds cannot take one name or one
+    // One hold of `sys.columns`' root page across the name check, the
+    // position and the write (CT7), so two adds cannot take one name or one
     // slot.
     auto columns_page = store_.Get(kCatalogPageColumns);
     if (!columns_page.ok()) return columns_page.status();
@@ -1908,9 +1953,7 @@ Status Catalog::AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64
     auto schema = ScanSchemaFromColumns(table_oid);
     if (!schema.ok()) return schema.status();
     schema.value().spare_slots = table_row.value().spare_slots;
-    std::uint16_t held = 0;
     for (const SysColumnRow& existing : schema.value().columns) {
-        if (existing.in_slot()) ++held;
         if (!existing.dropped() &&
             ColumnNamesCollide(NameView(existing.name), NameView(column.name))) {
             return Status::AlreadyExists("the relation already has a column named '" +
@@ -1918,19 +1961,19 @@ Status Catalog::AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64
                                          "' (names are unique ignoring case)");
         }
     }
-    if (held >= table_row.value().spare_slots) {
-        return Status::NotImplemented(
-            table_row.value().spare_slots == 0
-                ? std::string("the relation reserved no column slots (CREATE TABLE ... SPARE n); "
-                              "adding a column to it would rewrite every row (invariant 13)")
-                : "all " + std::to_string(table_row.value().spare_slots) +
-                      " of the relation's column slots are taken - a dropped column keeps its "
-                      "slot - and adding a column would rewrite every row (invariant 13)");
+    auto chosen = ChooseAddPosition(schema.value(), table_row.value().spare_slots);
+    if (!chosen.ok()) return chosen.status();
+    if (chosen.value() != pos) {
+        return Status::TxnConflict("the position an ADD COLUMN takes moved from " +
+                                   std::to_string(pos) + " to " +
+                                   std::to_string(chosen.value()) +
+                                   " while its dependants were asked");
     }
+    const bool reuse = pos < schema.value().columns.size();
 
     SysColumnRow row = column;
     row.rel_id = table_oid;
-    row.pos = static_cast<std::uint32_t>(schema.value().columns.size());
+    row.pos = pos;
     row.notnull = false;
     row.flags = SysColumnRow::kColumnInSlot;
     auto width = RowLayout::ColumnWidth(row, inline_cell_width_);
@@ -1943,22 +1986,48 @@ Status Catalog::AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64
             "length and spills one past 13 bytes");
     }
     // The layout the relation will have, built before anything is written:
-    // the row size it computes is the one every row already has.
-    schema.value().columns.push_back(row);
+    // the row size it computes is the one every row already has, and a
+    // reused slot keeps its offset and its bit (row_layout.cpp's j-th rule).
+    if (reuse) {
+        row.oid = schema.value().columns[pos].oid;
+        row.generation = schema.value().columns[pos].generation + 1;
+        schema.value().columns[pos] = row;
+    } else {
+        schema.value().columns.push_back(row);
+    }
     if (Status s = CheckDeclarableColumnTypes(schema.value()); !s.ok()) return s;
     if (auto layout = RowLayout::Build(schema.value(), inline_cell_width_); !layout.ok()) {
         return layout.status();
+    }
+
+    if (reuse) {
+        // In place, the oid kept (CD-OI-4 (a)): the row's Keystone word is its
+        // oid, which a rollback's identity check reads back.
+        auto acted = RewriteColumnRow(
+            table_oid, pos,
+            [](const SysColumnRow& old) { return old.dropped() && old.slot_clean(); },
+            [&row](SysColumnRow& old) { old = row; }, trx_id, reused);
+        if (!acted.ok()) return acted.status();
+        if (!acted.value()) {
+            // `ChooseAddPosition` read it under this hold.
+            return Status::Corruption("sys.columns: the clean dropped column at position " +
+                                      std::to_string(pos) + " of relation oid " +
+                                      std::to_string(table_oid) +
+                                      " was chosen and then not found under one hold");
+        }
+        BumpVersion("add column");
+        return Status::OK();
     }
 
     auto col_oid = GenerateUserOid();
     if (!col_oid.ok()) return col_oid.status();
     if (Status s = InsertColumnRow(col_oid.value(), table_oid, row.pos, NameView(row.name),
                                    row.type_val, row.len, row.notnull, row.cabin_policy, trx_id,
-                                   where, row.flags);
+                                   inserted, row.flags);
         !s.ok()) {
         return s;
     }
-    if (where != nullptr) where->oid = col_oid.value();
+    if (inserted != nullptr) inserted->oid = col_oid.value();
     return Status::OK();
 }
 
@@ -3178,6 +3247,31 @@ Status Catalog::ClearEveryPatternWaystoneRoot() {
             return false;
         });
     return walked.status();
+}
+
+Status Catalog::ForgetAccessStats(Oid rel_id, std::uint16_t col_pos) {
+    if (col_pos >= 64) return Status::OK();  // a mask names positions below 64 only
+    const std::uint64_t bit = std::uint64_t{1} << col_pos;
+    // RecordAccess's hold, so no admission races the retire.
+    auto held = store_.Get(kCatalogPageAccessStats);
+    if (!held.ok()) return held.status();
+    for (;;) {
+        auto acted = ForFirstRow<SysAccessStatRow>(
+            store_, kCatalogPageAccessStats,
+            [&](SysAccessStatRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+                const heap::PageView::Tuple&) -> StatusOr<bool> {
+                if (row.rel_id != rel_id || (row.column_mask & bit) == 0) return false;
+                // Unlogged, by CR6 (RecordAccess states it).
+                if (Status s = RetireLogged(/*wal=*/nullptr, store_, page, page_id, i,
+                                            kBootstrapXid);
+                    !s.ok()) {
+                    return s;
+                }
+                return true;
+            });
+        if (!acted.ok()) return acted.status();
+        if (!acted.value()) return Status::OK();
+    }
 }
 
 Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,

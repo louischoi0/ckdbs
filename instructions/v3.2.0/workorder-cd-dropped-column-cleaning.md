@@ -558,3 +558,72 @@ re-run with every target flagged. Not applied: the five test locals kept
 only for an `ASSERT_NE` (cosmetic).
 
 Overhead not measured; measured at the milestone's close.
+
+### CD-S4 - reuse (2026-10-19, on `cd-column-slot-cleaning` from `bbea35d2`)
+
+`Catalog::AddColumnPosition` picks the position an ADD takes - the next one
+while a vacant slot is free, else the lowest dropped slot column flagged
+clean (OI-12 (a)); with neither, `NotImplemented`, naming PURGE DROPPED
+COLUMNS when dropped slots hold the slots. `Catalog::AddColumn` takes that
+position, asks again under the CT7 hold (a move is `TxnConflict`), and for a
+reuse rewrites the dropped row in place through `RewriteColumnRow`: oid and
+position kept, the new definition, `kColumnInSlot`, `generation` + 1
+(OI-4 (a)); `HandleAddColumn` notes it as a row change, so a rollback
+restores the dropped clean row. `RowLayout`'s j-th-slot rule gives the new
+column the dropped one's offset and bit. `PositionDependant` is
+`DropColumnRestriction` less its assertion arm, asked by every ADD of the
+position it takes. `catalog::ColumnSetDigest` replaces the KWP load's two
+counts (`DescribedShape{oid, column_set}`). `Catalog::ForgetAccessStats`
+retires a reused position's shapes (OI-13 (a)), unlogged. `spare_free` counts
+a clean dropped slot (moved here from S3). One `SweepColumnCabins` serves the
+clean and the ADD.
+
+Tests: a reusing ADD refused until the clean, with the remedy in the
+refusal, then reading NULL in every older row - through a snapshot opened
+before it too - with no position added and `spare_free` moving 0 -> 1 -> 0;
+a rolled-back reuse restoring the dropped clean row, its oid and generation,
+and the next reuse moving the generation once; a middle slot reused while
+the next slot's live column keeps its offset and bit, read by a reader
+filling inside the open ADD; a KWP load described before the DROP refused
+after the reuse with both counts equal; a Cabin left by a rolled-back ADD
+dropped by the next ADD and named in its reply; five DROP-clean-ADD cycles
+adding no position and forgetting the access shapes; an assertion declared
+after a DROP enforcing across the reuse and a restart. The waystone, index,
+cabin and inner-build contract suites each gained a reused-slot
+configuration (`tests/column_cycle.hpp`): waystone and cabin compare it with
+a column added through a vacant slot, `SELECT *` included; index and
+inner-build with their plain baselines. A mutant without the generation bump
+is killed (four cells, the load's among them).
+
+**Departures, adopted on the operator's standing go-ahead of 2026-10-19
+(go-ahead-achieving-milestone):**
+- A column Cabin on the position an ADD takes is **dropped, not a refusal**
+  (§2 S4 said any dependant refuses): the position is vacant or a dropped
+  column's, so no statement made the Cabin for the column about to land, and
+  CD-S0 P5's rolled-back-ADD leftover sits on a vacant position the clean
+  never targets - a refusal there would have no remedy. Any other dependant
+  still refuses; none is reachable today, so that arm is **not tested**.
+- `ColumnSetDigest` mixes the column's type, width and name beside OI-5
+  (a)'s (pos, oid, generation, flags), the clean bit left out: a rollback
+  moves the generation back, so a second reuse after a rolled-back one can
+  repeat it, and the extra fields leave only a same-named, same-typed column
+  - the same column to the load - admitted. A RENAME COLUMN now also refuses
+  a load's next chunk, which says so ("columns were changed by ALTER
+  TABLE").
+- An ADD now answers its position before its name, so a duplicate name on a
+  relation with no free slot is `NotImplemented` where it was
+  `AlreadyExists`.
+- Mount undo of an open reusing ADD is **not tested**: the reuse is an
+  `OverwriteForDdl` of a `sys.columns` row, the path DROP COLUMN's mount-undo
+  cell covers.
+
+critics-developer review: no correctness bug. Applied: the digest's extra
+fields (above), `SweepColumnCabins` - making every sweep durable on its own
+(the ADD's could be lost by a crash after a rolled-back explicit
+transaction) - `AddColumnPosition` without a hold, the unreachable
+"vanished" case as `Corruption`, the duplicated digest comment, and the
+middle-slot and open-ADD reader cells. Full Debug suite on S4 before the
+review: 4167/4167; after it, 4168/4168 on S4 with S5's sim edits beside it
+in the tree (not in this commit).
+
+Overhead not measured; measured at the milestone's close.

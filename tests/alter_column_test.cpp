@@ -217,7 +217,8 @@ TEST_F(AlterColumnTest, ALoadChunkAgainstAChangedShapeIsRefused) {
     ASSERT_TRUE(oid.ok());
     auto access = boot_->catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
-    const parser::DescribedShape described{oid.value(), 3, access.value()->layout.live_columns};
+    const parser::DescribedShape described{oid.value(),
+                                           catalog::ColumnSetDigest(access.value()->schema)};
 
     const auto chunk = [&](std::int64_t a, std::int64_t b) {
         std::vector<parser::AstValue> row(3);  // a NULL key: issue one
@@ -274,11 +275,8 @@ TEST_F(AlterColumnTest, ARowWrittenAfterADropIsBornClean) {
     row[0].int_val = 7;
     row[1].type = parser::ValueType::kInt;
     row[1].int_val = 7;
-    EXPECT_FALSE(IsErr(LoadChunk(parser::DescribedShape{t->oid,
-                                                        static_cast<std::uint32_t>(
-                                                            t->schema.columns.size()),
-                                                        t->layout.live_columns},
-                                 std::move(row))));
+    EXPECT_FALSE(IsErr(LoadChunk(
+        parser::DescribedShape{t->oid, catalog::ColumnSetDigest(t->schema)}, std::move(row))));
     Ok("UPDATE t SET n = n + 100 WHERE id = 2");
 
     EXPECT_FALSE(DroppedCellsCleanAt(*Access("t"), 1));  // written before the drop; its bytes stay
@@ -532,6 +530,209 @@ TEST_F(AlterColumnTest, ACabinLeftOnADroppedColumnIsSwept) {
     EXPECT_EQ(boot_->catalog.FindCabinOnColumn(oid, 1).status().code(), StatusCode::kNotFound);
     EXPECT_EQ(boot_->catalog.FindCabinOnColumn(oid, 2).status().code(), StatusCode::kNotFound);
     EXPECT_EQ(Run("SELECT * FROM t WHERE n = 4"), "id,n\\n1,4");
+}
+
+// ---- CD-S4: an ADD takes a clean dropped slot ------------------------------
+
+// `t (id, n) SPARE 1` whose one slot an added `x` took, two rows - `x`
+// spilled in one, NULL in the other - and `x` dropped: the slot is held.
+// With no vacant slot, ADD is refused until the clean frees the dropped one,
+// and the refusal says so; then the new column takes the slot at the dropped
+// column's position, reads NULL in every older row - through a snapshot
+// opened before the ADD too - and is written and read like any other.
+TEST_F(AlterColumnTest, AReusingAddReadsNullInEveryOlderRow) {
+    Ok("CREATE TABLE t (id int64, n int32) SPARE 1");
+    Ok("ALTER TABLE t ADD COLUMN x varchar(16) NULL");
+    Ok("INSERT INTO t VALUES (1, 1, 'longer-than-thirteen-bytes')");
+    Ok("INSERT INTO t VALUES (2, 2, NULL)");
+    Ok("ALTER TABLE t DROP COLUMN x");
+    EXPECT_EQ(Run("SELECT name, spare_free FROM sys.tables WHERE name = 't'"),
+              "name,spare_free\\nt,0");
+    Refused("ALTER TABLE t ADD COLUMN y int64 NULL",
+            "1 slot(s) are held by dropped columns, and PURGE DROPPED COLUMNS frees them");
+
+    Ok("PURGE DROPPED COLUMNS FROM t");
+    EXPECT_EQ(Run("SELECT name, spare_free FROM sys.tables WHERE name = 't'"),
+              "name,spare_free\\nt,1");
+    Session reader;
+    ASSERT_FALSE(IsErr(Run(reader, "BEGIN ISOLATION LEVEL REPEATABLE READ")));
+    ASSERT_EQ(Run(reader, "SELECT * FROM t"), "id,n\\n1,1\\n2,2");
+    EXPECT_EQ(Run("ALTER TABLE t ADD COLUMN y int64 NULL"), "ADDED COLUMN t.y");
+    EXPECT_EQ(Run(reader, "SELECT * FROM t"), "id,n,y\\n1,1,NULL\\n2,2,NULL");
+    ASSERT_FALSE(IsErr(Run(reader, "COMMIT")));
+
+    const catalog::TableAccess* t = Access("t");
+    ASSERT_NE(t, nullptr);
+    ASSERT_EQ(t->schema.columns.size(), 3u);  // no position added
+    EXPECT_EQ(catalog::NameView(t->schema.columns[2].name), "y");
+    EXPECT_EQ(t->schema.columns[2].generation, 1u);
+    EXPECT_TRUE(t->schema.columns[2].in_slot());
+    EXPECT_FALSE(t->schema.columns[2].dropped());
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n,y\\n1,1,NULL\\n2,2,NULL");
+    EXPECT_EQ(Run("SELECT name, spare_free FROM sys.tables WHERE name = 't'"),
+              "name,spare_free\\nt,0");
+
+    Ok("INSERT INTO t VALUES (NULL, 3, 30)");
+    Ok("UPDATE t SET y = 5 WHERE id = 1");
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n,y\\n1,1,5\\n2,2,NULL\\n3,3,30");
+    EXPECT_EQ(Run("SELECT id FROM t WHERE y IS NULL"), "id\\n2");
+    Refused("INSERT INTO t VALUES (9)", "changed by ALTER TABLE");
+}
+
+// CD-OI-4 (a): the reuse rewrites the dropped row in place, its oid - its
+// Keystone word - kept, so a rollback restores the dropped, clean row and
+// the slot is free again; the next ADD moves the generation once.
+TEST_F(AlterColumnTest, ARolledBackReusingAddRestoresTheDroppedCleanRow) {
+    Ok("CREATE TABLE t (id int64, n int32) SPARE 1");
+    Ok("ALTER TABLE t ADD COLUMN x int64 NULL");
+    Ok("INSERT INTO t VALUES (1, 1, 7)");
+    Ok("ALTER TABLE t DROP COLUMN x");
+    Ok("PURGE DROPPED COLUMNS FROM t");
+    const std::uint64_t dropped_oid = Access("t")->schema.columns[2].oid;
+
+    Session s;
+    ASSERT_FALSE(IsErr(Run(s, "BEGIN")));
+    ASSERT_EQ(Run(s, "ALTER TABLE t ADD COLUMN y int64 NULL"), "ADDED COLUMN t.y");
+    ASSERT_FALSE(IsErr(Run(s, "INSERT INTO t VALUES (NULL, 2, 20)")));
+    ASSERT_FALSE(IsErr(Run(s, "ROLLBACK")));
+
+    const catalog::SysColumnRow& back = Access("t")->schema.columns[2];
+    EXPECT_EQ(back.oid, dropped_oid);
+    EXPECT_TRUE(back.dropped());
+    EXPECT_TRUE(back.slot_clean());
+    EXPECT_EQ(back.generation, 0u);
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n\\n1,1");
+
+    EXPECT_EQ(Run("ALTER TABLE t ADD COLUMN z int64 NULL"), "ADDED COLUMN t.z");
+    const catalog::SysColumnRow& z = Access("t")->schema.columns[2];
+    EXPECT_EQ(z.oid, dropped_oid);
+    EXPECT_EQ(z.generation, 1u);
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n,z\\n1,1,NULL");
+}
+
+// A middle slot reused while the slot after it holds a live column: the new
+// column takes the dropped one's offset and bit, the live column's bytes and
+// bit never move, and a reader filling its schema inside the open ADD binds
+// that same layout and reads NULL.
+TEST_F(AlterColumnTest, AReusedMiddleSlotLeavesTheNextSlotsColumnWhereItWas) {
+    Ok("CREATE TABLE t (id int64, n int32) SPARE 2");
+    Ok("ALTER TABLE t ADD COLUMN a varchar(16) NULL");
+    Ok("ALTER TABLE t ADD COLUMN b int64 NULL");
+    Ok("INSERT INTO t VALUES (1, 1, 'a-value-that-spills-out', 11)");
+    Ok("INSERT INTO t VALUES (2, 2, NULL, 22)");
+    const catalog::TableAccess* before = Access("t");
+    const std::uint32_t a_offset = before->layout.offsets[2];
+    const std::uint16_t a_bit = before->layout.null_bits[2];
+    const std::uint32_t b_offset = before->layout.offsets[3];
+    const std::uint16_t b_bit = before->layout.null_bits[3];
+    Ok("ALTER TABLE t DROP COLUMN a");
+    Ok("PURGE DROPPED COLUMNS FROM t");
+
+    Session s;
+    ASSERT_FALSE(IsErr(Run(s, "BEGIN")));
+    ASSERT_EQ(Run(s, "ALTER TABLE t ADD COLUMN c int64 NULL"), "ADDED COLUMN t.c");
+    const catalog::TableAccess* open = Access("t");  // the unfiltered fill a reader makes
+    EXPECT_EQ(catalog::NameView(open->schema.columns[2].name), "c");
+    EXPECT_EQ(open->layout.offsets[2], a_offset);
+    EXPECT_EQ(open->layout.null_bits[2], a_bit);
+    EXPECT_EQ(open->layout.offsets[3], b_offset);
+    EXPECT_EQ(open->layout.null_bits[3], b_bit);
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n,c,b\\n1,1,NULL,11\\n2,2,NULL,22");
+    ASSERT_FALSE(IsErr(Run(s, "COMMIT")));
+
+    Ok("UPDATE t SET c = 5 WHERE id = 2");
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n,c,b\\n1,1,NULL,11\\n2,2,5,22");
+}
+
+// CD-OI-5 (a), `[quiet-wrong]`: after a DROP, a clean and a reusing ADD of
+// the same type the column counts are what the load described, so only the
+// digest tells the slot's new column from the dropped one.
+TEST_F(AlterColumnTest, ALoadDescribedBeforeADropIsRefusedAfterTheReuse) {
+    Ok("CREATE TABLE t (id int64, n int64) SPARE 1");
+    Ok("ALTER TABLE t ADD COLUMN x int64 NULL");
+    const catalog::TableAccess* before = Access("t");
+    ASSERT_NE(before, nullptr);
+    const parser::DescribedShape described{before->oid,
+                                           catalog::ColumnSetDigest(before->schema)};
+    const std::size_t physical = before->schema.columns.size();
+    const std::uint32_t live = before->layout.live_columns;
+    const auto chunk = [&](std::int64_t n, std::int64_t x) {
+        std::vector<parser::AstValue> row(3);
+        row[1].type = parser::ValueType::kInt;
+        row[1].int_val = n;
+        row[2].type = parser::ValueType::kInt;
+        row[2].int_val = x;
+        return LoadChunk(described, std::move(row));
+    };
+    EXPECT_FALSE(IsErr(chunk(1, 10)));
+
+    Ok("ALTER TABLE t DROP COLUMN x");
+    Ok("PURGE DROPPED COLUMNS FROM t");
+    Ok("ALTER TABLE t ADD COLUMN y int64 NULL");
+    const catalog::TableAccess* after = Access("t");
+    ASSERT_EQ(after->schema.columns.size(), physical);
+    ASSERT_EQ(after->layout.live_columns, live);
+    const std::string refused = chunk(2, 20);
+    EXPECT_TRUE(IsErr(refused)) << refused;
+    EXPECT_NE(refused.find("begin a new load"), std::string::npos) << refused;
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n,y\\n1,1,NULL");
+}
+
+// CD-S0 P5: a column CREATE CABIN takes no relation lock, so one can name an
+// open ADD's column and outlive its rollback, on a position no column holds.
+// The next ADD there drops it rather than inherit it, and says so.
+TEST_F(AlterColumnTest, ACabinLeftByARolledBackAddIsDroppedByTheNextAdd) {
+    Ok("CREATE TABLE t (id int64, n int32) SPARE 1");
+    const catalog::Oid oid = Access("t")->oid;
+    Session s;
+    ASSERT_FALSE(IsErr(Run(s, "BEGIN")));
+    ASSERT_EQ(Run(s, "ALTER TABLE t ADD COLUMN x int64 NULL"), "ADDED COLUMN t.x");
+    auto cabin = boot_->catalog.CreateCabin(oid, 2, catalog::kCabinOriginUser);
+    ASSERT_TRUE(cabin.ok()) << cabin.status().message();
+    ASSERT_FALSE(IsErr(Run(s, "ROLLBACK")));
+    ASSERT_TRUE(boot_->catalog.FindCabinOnColumn(oid, 2).ok());
+
+    EXPECT_EQ(Run("ALTER TABLE t ADD COLUMN y int64 NULL"),
+              "ADDED COLUMN t.y, cabin " + std::to_string(cabin.value()) + " dropped");
+    EXPECT_EQ(boot_->catalog.FindCabinOnColumn(oid, 2).status().code(), StatusCode::kNotFound);
+}
+
+// Positions stay at most declared + spare: each cycle's ADD takes the slot
+// the last one's DROP left, and a reused position's access shapes go.
+TEST_F(AlterColumnTest, CyclesOfDropCleanAndAddAddNoPosition) {
+    Ok("CREATE TABLE t (id int64, n int32) SPARE 1");
+    const catalog::Oid oid = Access("t")->oid;
+    for (int cycle = 0; cycle < 5; ++cycle) {
+        const std::string c = "c" + std::to_string(cycle);
+        Ok("ALTER TABLE t ADD COLUMN " + c + " varchar(16) NULL");
+        Ok("INSERT INTO t (n, " + c + ") VALUES (" + std::to_string(cycle) +
+           ", 'value-of-cycle-" + std::to_string(cycle) + "')");
+        EXPECT_EQ(Run("SELECT n FROM t WHERE " + c + " = 'value-of-cycle-" +
+                      std::to_string(cycle) + "'"),
+                  "n\\n" + std::to_string(cycle))
+            << cycle;
+        auto shapes = boot_->catalog.ListAccessStats();
+        ASSERT_TRUE(shapes.ok());
+        EXPECT_TRUE(std::any_of(shapes.value().begin(), shapes.value().end(),
+                                [&](const catalog::SysAccessStatRow& r) {
+                                    return r.rel_id == oid && (r.column_mask & (1u << 2)) != 0;
+                                }))
+            << cycle;
+        Ok("ALTER TABLE t DROP COLUMN " + c);
+        Ok("PURGE DROPPED COLUMNS FROM t");
+        EXPECT_EQ(Access("t")->schema.columns.size(), 3u) << cycle;
+        // The next ADD forgets the dropped column's shapes at its position.
+        if (cycle + 1 < 5) continue;
+        Ok("ALTER TABLE t ADD COLUMN last int64 NULL");
+        shapes = boot_->catalog.ListAccessStats();
+        ASSERT_TRUE(shapes.ok());
+        EXPECT_FALSE(std::any_of(shapes.value().begin(), shapes.value().end(),
+                                 [&](const catalog::SysAccessStatRow& r) {
+                                     return r.rel_id == oid && (r.column_mask & (1u << 2)) != 0;
+                                 }));
+    }
+    EXPECT_EQ(Access("t")->schema.columns[2].generation, 5u);
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM t WHERE last IS NULL"), "count(*)\\n5");
 }
 
 TEST_F(AlterColumnTest, ACleanIsRefusedWithItsByte) {
@@ -883,6 +1084,33 @@ TEST(AlterColumnRecoveryTest, ACommittedAddSurvivesACrashAndAnOpenOneIsUndone) {
 
     EXPECT_EQ(db.Execute("SELECT * FROM t"), "id,v,a\\n1,1,NULL\\n2,2,20");
     EXPECT_EQ(db.Execute("ALTER TABLE t ADD COLUMN b int64 NULL"), "ADDED COLUMN t.b");
+}
+
+// ---- CD-S4: an assertion declared after a drop survives the reuse ---------
+
+// CD-S0 P5: an assertion persists no position and re-resolves its names, so
+// one declared after a DROP, across a clean and a reusing ADD and a restart,
+// revives and enforces over the columns it named.
+TEST(AlterColumnRecoveryTest, AnAssertionDeclaredAfterADropEnforcesAcrossTheReuse) {
+    auto created = sim::SimInstance::Create();
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    sim::SimInstance& db = *created.value();
+    ASSERT_FALSE(IsErr(db.Execute("CREATE TABLE q (id int64, v int64) SPARE 1")));
+    ASSERT_FALSE(IsErr(db.Execute("ALTER TABLE q ADD COLUMN x int64 NULL")));
+    ASSERT_FALSE(IsErr(db.Execute("INSERT INTO q VALUES (1, 1, 9)")));
+    ASSERT_FALSE(IsErr(db.Execute("ALTER TABLE q DROP COLUMN x")));
+    ASSERT_FALSE(IsErr(db.Execute("CREATE ASSERTION cap ON q GROUP BY (v) CHECK COUNT(*) <= 2")));
+    ASSERT_FALSE(IsErr(db.Execute("PURGE DROPPED COLUMNS FROM q")));
+    ASSERT_EQ(db.Execute("ALTER TABLE q ADD COLUMN y int64 NULL"), "ADDED COLUMN q.y");
+    ASSERT_FALSE(IsErr(db.Execute("SYNC")));
+    db.Crash();
+    const Status rebooted = db.Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+
+    EXPECT_FALSE(IsErr(db.Execute("INSERT INTO q VALUES (NULL, 1, 5)")));
+    EXPECT_TRUE(IsErr(db.Execute("INSERT INTO q VALUES (NULL, 1, 6)")))
+        << "the assertion did not revive over v";
+    EXPECT_EQ(db.Execute("SELECT * FROM q"), "id,v,y\\n1,1,NULL\\n2,1,5");
 }
 
 // ---- CD-S2: a clean is durable, and is no transaction's (P1) ---------------

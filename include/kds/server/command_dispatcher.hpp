@@ -1314,6 +1314,19 @@ private:
     // or nullopt. Asked under the relation `X`.
     StatusOr<std::optional<std::string>> DropColumnRestriction(catalog::Oid oid,
                                                                std::uint16_t pos);
+    // What names `pos` of `oid` by position - an index key or covered
+    // column, a foreign key's child column, a Transition, a column Cabin, an
+    // expression Cabin's key: `DropColumnRestriction` less its assertion arm,
+    // which resolves names and so cannot name a position. Asked by every
+    // ADD COLUMN of the position it takes (CD-S4).
+    StatusOr<std::optional<std::string>> PositionDependant(catalog::Oid oid, std::uint16_t pos);
+    // Drops every column Cabin of `oid` on one of `positions` - each a
+    // position no live column holds, so no statement can name it to drop it
+    // (CD-S0 P5) - transactionless and durable, and returns their ids. The
+    // clean's sweep of its dropped columns and an ADD's of the position it
+    // takes (CD-S3, CD-S4).
+    StatusOr<std::vector<std::uint64_t>> SweepColumnCabins(
+        catalog::Oid oid, std::span<const std::uint16_t> positions);
 
     // `DROP TABLE <name>` (docs/spec/drop-table.md, workplan DT03). The
     // DT3 RESTRICT gate lives here - a referencing foreign key and an

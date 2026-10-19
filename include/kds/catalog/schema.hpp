@@ -246,6 +246,34 @@ inline std::size_t NullByteOf(const RowLayout& layout, std::uint16_t bit) noexce
     return layout.row_size - layout.null_bitmap_bytes + bit / 8;
 }
 
+// **Which columns hold which positions** (CD-OI-5 (a)): FNV-1a over each
+// `sys.columns` row's (pos, oid, generation, flags), the clean flag left
+// out - a clean moves no value - and its type, width and name. A KWP load
+// compares it at every chunk. A reusing ADD keeps the row's oid and moves
+// its generation, which separates the column that holds a slot now from the
+// one dropped out of it; a rollback moves the generation back, so a second
+// reuse after a rolled-back one can repeat it, and only a same-named
+// same-typed column - the same column to the load - is then admitted.
+inline std::uint64_t ColumnSetDigest(const Schema& schema) noexcept {
+    std::uint64_t h = 14695981039346656037ull;  // FNV-1a 64 offset basis
+    const auto mix = [&h](std::uint64_t v) {
+        for (int i = 0; i < 8; ++i) {
+            h ^= (v >> (8 * i)) & 0xFF;
+            h *= 1099511628211ull;  // FNV-1a 64 prime
+        }
+    };
+    for (const SysColumnRow& c : schema.columns) {
+        mix(c.pos);
+        mix(c.oid);
+        mix(c.generation);
+        mix(c.flags & ~SysColumnRow::kColumnSlotClean);
+        mix(c.type_val);
+        mix(c.len);
+        for (const char ch : NameView(c.name)) mix(static_cast<unsigned char>(ch));
+    }
+    return h;
+}
+
 inline bool NullBitIsSet(std::span<const std::byte> payload, const RowLayout& layout,
                          std::size_t col) noexcept {
     const std::uint16_t bit = layout.null_bits[col];

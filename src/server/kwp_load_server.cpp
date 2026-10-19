@@ -416,9 +416,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // between here and a chunk's `IX` would land values in other columns,
     // so the chunk is refused unless the relation is still this one in this
     // shape (BW-Q10).
-    load.shape = parser::DescribedShape{oid.value(),
-                                        static_cast<std::uint32_t>(schema.columns.size()),
-                                        access.value()->layout.live_columns};
+    load.shape = parser::DescribedShape{oid.value(), catalog::ColumnSetDigest(schema)};
     load.fields = wire::DescribeSchema(schema);
 
     // The implicit transaction (KW5, BI11): the same BEGIN the text
