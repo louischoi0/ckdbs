@@ -3590,6 +3590,10 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
                                        std::to_string(child_column_no));
     }
 
+    if (child_rel_oid == parent_rel_oid) {
+        return RefuseSelfReference(NameView(child.value()->schema.columns[child_column_no].name))
+            .WithContext("catalog");
+    }
     // The declaration's own checks, shared with the CREATE TABLE pre-check
     // (foreign_key.hpp) so the two doors cannot answer differently.
     if (Status s = CheckForeignKeyDeclaration(*parent.value(),

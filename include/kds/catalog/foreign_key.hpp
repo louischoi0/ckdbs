@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+
 #include "kds/base/status.hpp"
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/schema.hpp"
@@ -26,12 +28,14 @@
 // Sharing them here is what keeps the pre-check and the door from drifting
 // into two different definitions of a legal foreign key.
 //
-// ---- The split is by what each half needs to exist ----------------------
+// ---- The split is by what each door has in hand ------------------------
 //
-// The first function's questions are answerable from the parent relation
-// and the child *column* alone, which is exactly what CREATE TABLE has in
-// hand before the child relation exists. The second needs both relations,
-// so it can only run once the child does.
+// `CheckForeignKeyDeclaration`'s questions are answerable from the parent
+// relation and the child *column* alone, which is what CREATE TABLE has
+// before the child relation exists. A self-reference needs the child's
+// identity, which CREATE TABLE has only as the name it is creating and the
+// door as an oid, so each door detects it its own way and both refuse it
+// through `RefuseSelfReference`, in one wording.
 
 namespace kds::catalog {
 
@@ -52,6 +56,14 @@ namespace kds::catalog {
 //                    key descent.
 Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow& child_column,
                                   std::uint16_t child_column_pos);
+
+// A foreign key on the relation it references, `NotImplemented`
+// (`docs/spec/foreign-keys.md` §1): nothing on the write path checks one.
+// The forward check resolves every parent before any row is written, so a
+// parent the same statement inserts would read absent, and a multi-row
+// DELETE's reverse check would admit or refuse by the order its walk meets
+// a parent and its child.
+Status RefuseSelfReference(std::string_view child_column);
 
 
 }  // namespace kds::catalog

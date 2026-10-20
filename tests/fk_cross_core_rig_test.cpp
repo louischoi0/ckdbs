@@ -295,8 +295,7 @@ TEST(FkCrossCoreRigTest, AChildWaitingOnAParentThatRollsBackAcrossCoresIsAViolat
 // cell's red at the commit that wrote it is in
 // `workorder-ay-following-letter.md` §6, AY-S4. D9(a) as marked: the
 // child's forward check takes `IS` on the parent relation, then `S` on the
-// parent row, **then** descends (AY-Q2), and holds both to its decide; the
-// self-referencing arm takes the same pair per row (AY-Q3); and a parent
+// parent row, **then** descends (AY-Q2), and holds both to its decide; and a parent
 // `DELETE` meeting a child row whose writer holds no `S` on it - a child
 // `DELETE`, or an `UPDATE` moving the fk column - waits for that writer
 // mid-walk rather than being refused (AY-Q8). AR2 E3 retires when the
@@ -447,63 +446,6 @@ TEST(FkCrossCoreRigTest, ARangeDeleteOfParentsParksOnAChildsOpenReference) {
     // Statement-atomic: 8 is unreferenced, and the refusal over 7 keeps it.
     EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
     EXPECT_EQ(f.r.rig->core(0).dispatcher().Dispatch("SELECT id FROM p").response, "id\\n7\\n8");
-}
-
-// E3 (iv), AY-Q3. The self-referencing arm is not hoisted and checks per
-// row; it takes the same `IS` + `S` there. No `CREATE TABLE` can declare a
-// self-reference (`ASelfReferencingForeignKeyCannotBeDeclared`), so the key
-// is written through `Catalog::CreateForeignKey` directly.
-TEST(FkCrossCoreRigTest, ASelfReferencingChildsOpenReferenceParksTheParentsDelete) {
-    catalog::Oid s_oid = 0;
-    ScriptRig f({"DELETE FROM s WHERE id = 1"}, {"BEGIN", "INSERT INTO s VALUES (2, 1)", "COMMIT"},
-               {"CREATE TABLE s (id int64, pid int64 NULL) BTREE", "INSERT INTO s VALUES (1, NULL)"},
-               [&](TwoCoreRig& rig) {
-                   auto oid = rig.core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "s");
-                   if (!oid.ok()) return false;
-                   s_oid = oid.value();
-                   auto fk = rig.core(0).catalog().CreateForeignKey(s_oid, 1, s_oid);
-                   EXPECT_TRUE(fk.ok()) << fk.status().message();
-                   return fk.ok();
-               });
-    ASSERT_TRUE(f.ok);
-
-    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
-    ASSERT_EQ(f.core1.Reply(1).rfind("INSERTED", 0), 0u) << f.core1.Reply(1);
-
-    EXPECT_TRUE(f.ParkedOn(0, f.core0, 1, s_oid, 1))
-        << "the parent DELETE did not park on the parent row: " << f.core0.Reply(0);
-
-    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
-    ASSERT_TRUE(f.RunTo(0, f.core0, 1));
-    EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
-}
-
-// AY-Q3's other half (`raft-marks-2026-09-30.md` §3): a self-referencing
-// child whose parent row is being written by an undecided transaction
-// waits for it, as a hoisted parent does, rather than being refused - and
-// passes when it commits.
-TEST(FkCrossCoreRigTest, ASelfReferencingChildWaitsOutItsParentsWriterAndPasses) {
-    catalog::Oid s_oid = 0;
-    ScriptRig f({"BEGIN", "INSERT INTO s VALUES (1, NULL)", "COMMIT"},
-                {"INSERT INTO s VALUES (2, 1)"},
-                {"CREATE TABLE s (id int64, pid int64 NULL) BTREE"}, [&](TwoCoreRig& rig) {
-                    auto oid = rig.core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "s");
-                    if (!oid.ok()) return false;
-                    s_oid = oid.value();
-                    auto fk = rig.core(0).catalog().CreateForeignKey(s_oid, 1, s_oid);
-                    EXPECT_TRUE(fk.ok()) << fk.status().message();
-                    return fk.ok();
-                });
-    ASSERT_TRUE(f.ok);
-    ASSERT_TRUE(f.RunTo(0, f.core0, 2)) << f.core0.Reply(1);
-    ASSERT_EQ(f.core0.Reply(1).rfind("INSERTED", 0), 0u) << f.core0.Reply(1);
-
-    EXPECT_TRUE(f.ParkedOn(1, f.core1, 1, s_oid, 1))
-        << "the self-referencing child did not wait on its parent's writer: " << f.core1.Reply(0);
-
-    ASSERT_TRUE(f.RunTo(0, f.core0, 3)) << f.core0.Reply(2);
-    ASSERT_TRUE(f.RunTo(1, f.core1, 1));
-    EXPECT_EQ(f.core1.Reply(0).rfind("INSERTED", 0), 0u) << f.core1.Reply(0);
 }
 
 // E3 (v), and AY-Q1's cost. Two transactions each write a child of 7 and

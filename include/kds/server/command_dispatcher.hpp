@@ -1444,11 +1444,6 @@ private:
     // better error for that. A violation gives back the `S` of every parent
     // the statement resolved as absent, whoever took it (AZ-S5, AZ-R5 as
     // amended 2026-10-02; `foreign-keys.md` §2c).
-    //
-    // One arm descends here: a **self-referencing** foreign key, which
-    // `ResolveForeignKeyParents` deliberately does not hoist. It holds the
-    // parent row first, as the hoist does, and a refused hold is recorded
-    // as a wait on `scope` (AY-Q3).
     Status CheckForeignKeyOnWrite(const catalog::TableAccess& child,
                                   const catalog::ForeignKeyRef& fk, const parser::AstValue& value,
                                   const exec::FkParentVerdicts& held, const WriteScope& scope);
@@ -1460,7 +1455,8 @@ private:
     // Called **before any row work** - at the dispatch fork for a statement
     // whose rows are all known there, and once per row otherwise. Nothing it
     // does may depend on a row having been written, which is what makes it
-    // legal to run early and what the self-referencing carve-out protects.
+    // legal to run early - and why no foreign key references its own
+    // relation (`catalog::RefuseSelfReference`).
     // **Each parent is held before it is descended** (D9(a), AY-S5): `IS`
     // on its relation and `S` on its row, into `scope`'s transaction until
     // it decides, and a refused `S` is a wait. The descent reads a view
