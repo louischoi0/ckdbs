@@ -1,0 +1,11 @@
+1792468105 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 65000, revenue = 909972 WHERE id = 314" -> ERR TXN_CONFLICT retryable=1 row id=314 was written by transaction 9636 in 12us
+1792468105 WARN [query] "UPDATE organizations_s2c1s SET outstanding = 2282243 WHERE id = 520" -> ERR TXN_CONFLICT retryable=1 row id=520 was written by transaction 9661 in 8us
+1792468107 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1637000, revenue = 11992005 WHERE id = 339" -> ERR TXN_CONFLICT retryable=1 row id=339 was written by transaction 10742 in 8us
+1792468107 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1002000, revenue = 6353794 WHERE id = 314" -> ERR TXN_CONFLICT retryable=1 row id=314 was written by transaction 10862 in 7us
+1792468107 WARN [query] "UPDATE organizations_s2c1s SET outstanding = 4709094 WHERE id = 313" -> ERR TXN_CONFLICT retryable=1 row id=313 was written by transaction 10922 in 11us
+1792468109 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 892000, revenue = 5821565 WHERE id = 441" -> ERR TXN_CONFLICT retryable=1 row id=441 was written by transaction 11697 in 12us
+1792468109 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 814000, revenue = 4307469 WHERE id = 395" -> ERR TXN_CONFLICT retryable=1 row id=395 was written by transaction 11700 in 8us
+1792468109 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1085000, revenue = 7868780 WHERE id = 312" -> ERR TXN_CONFLICT retryable=1 row id=312 was written by transaction 11977 in 18us
+1792468109 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1919000, revenue = 13773748 WHERE id = 573" -> ERR TXN_CONFLICT retryable=1 row id=573 was written by transaction 12171 in 9us
+1792468110 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 2123000, revenue = 13993302 WHERE id = 330" -> ERR TXN_CONFLICT retryable=1 row id=330 was written by transaction 12296 in 10us
+1792468110 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1695000, revenue = 13118666 WHERE id = 324" -> ERR TXN_CONFLICT retryable=1 row id=324 was written by transaction 12630 in 9us

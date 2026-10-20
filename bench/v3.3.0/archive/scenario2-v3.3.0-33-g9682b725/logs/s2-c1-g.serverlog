@@ -1,0 +1,12 @@
+1792468034 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 2453145 WHERE id = 371" -> ERR TXN_CONFLICT retryable=1 row id=371 was written by transaction 10118 in 22us
+1792468034 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 8311932 WHERE id = 331" -> ERR TXN_CONFLICT retryable=1 row id=331 was written by transaction 10265 in 9us
+1792468034 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 3626066 WHERE id = 357" -> ERR TXN_CONFLICT retryable=1 row id=357 was written by transaction 10368 in 16us
+1792468034 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 4121927 WHERE id = 417" -> ERR TXN_CONFLICT retryable=1 row id=417 was written by transaction 10474 in 11us
+1792468035 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 980000, revenue = 7203263 WHERE id = 411" -> ERR TXN_CONFLICT retryable=1 row id=411 was written by transaction 11060 in 13us
+1792468035 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 621000, revenue = 5751636 WHERE id = 460" -> ERR TXN_CONFLICT retryable=1 row id=460 was written by transaction 11074 in 10us
+1792468036 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 18964211 WHERE id = 429" -> ERR TXN_CONFLICT retryable=1 row id=429 was written by transaction 11540 in 13us
+1792468036 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 1190000, revenue = 10978300 WHERE id = 577" -> ERR TXN_CONFLICT retryable=1 row id=577 was written by transaction 11679 in 9us
+1792468036 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 2279000, revenue = 18687839 WHERE id = 450" -> ERR TXN_CONFLICT retryable=1 row id=450 was written by transaction 11699 in 7us
+1792468037 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 1576000, revenue = 14455410 WHERE id = 448" -> ERR TXN_CONFLICT retryable=1 row id=448 was written by transaction 12167 in 8us
+1792468037 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 2465000, revenue = 17400273 WHERE id = 518" -> ERR TXN_CONFLICT retryable=1 row id=518 was written by transaction 12389 in 10us
+1792468037 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 17151181 WHERE id = 438" -> ERR TXN_CONFLICT retryable=1 row id=438 was written by transaction 12813 in 7us

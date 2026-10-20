@@ -1,0 +1,12 @@
+created 8 relations with suffix _satb32c8g:
+  organizations_satb32c8g
+  ships_satb32c8g
+  operations_satb32c8g
+  cargos_satb32c8g
+  fees_satb32c8g
+  recipes_satb32c8g
+  freights_satb32c8g
+  charges_satb32c8g
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/bench-scenarios-1-4/tools/scenario2_freight.py --suffix satb32c8g [--load-only]

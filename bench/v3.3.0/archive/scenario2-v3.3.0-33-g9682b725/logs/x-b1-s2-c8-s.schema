@@ -1,0 +1,12 @@
+created 8 relations with suffix _xb1c8s:
+  organizations_xb1c8s
+  ships_xb1c8s
+  operations_xb1c8s
+  cargos_xb1c8s
+  fees_xb1c8s
+  recipes_xb1c8s
+  freights_xb1c8s
+  charges_xb1c8s
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/bench-scenarios-1-4/tools/scenario2_freight.py --suffix xb1c8s [--load-only]

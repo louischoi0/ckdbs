@@ -1,0 +1,61 @@
+
+ckdbs benchmark - 34 columns, 200 rows resident, 1 connection
+server 127.0.0.1:15620  table users_r2_s3_c8_n200_all, books_r2_s3_c8_n200_all, reservations_r2_s3_c8_n200_all, loans_r2_s3_c8_n200_all
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          4         0    1521.2   1289.8   1289.8   1379.5   1897.7   1897.7    1897.7     0
+load                       380         0    1348.7   1048.3   1202.7   1264.0   1677.9   3826.1    6045.9     0
+create-index                 8         0    1473.4   1214.1   1247.9   1366.5   2005.6   2005.6    2005.6     0
+pk-user                    200         0      75.1     62.7     66.5     71.1     97.1    113.7     213.3     0
+loans-by-user              200         0      94.7     64.7     83.9     94.3    120.5    128.3     138.0     0
+loans-by-book              200         0      89.4     67.3     82.0     87.4    111.8    118.9     121.4     0
+resv-by-user               200         0      77.9     61.7     71.1     75.0     99.4    110.1     128.0     0
+books-by-author            200         0      83.7     67.5     74.3     82.8    106.1    116.8     123.4     0
+books-by-genre             200         0      80.2     66.5     73.3     77.6     99.9    112.9     135.8     0
+loans-by-daterange         200         0     102.2     78.1     91.1     98.3    131.2    141.8     154.4     0
+overdue                    200         0      93.2     66.7     84.9     91.1    117.3    126.9     139.6     0
+join-loan-user             200         0     108.3     78.5     98.0    105.7    134.1    148.4     185.7     0
+join-no-literal            200         0     311.2    284.3    301.2    309.1    341.2    358.4     383.0     0
+exists-correlated          200         0     154.6    140.9    145.8    150.6    175.6    184.4     204.7     0
+count-by-user              200         0      69.8     59.9     65.0     66.8     85.8    100.1     120.3     0
+
+  ddl: CREATE TABLE x4
+  load: INSERT x all four relations
+  create-index: --index-mode all
+  pk-user: WHERE id = ? - Lookup, the control
+  loans-by-user: WHERE user_id = ? - ~5 matches
+  loans-by-book: WHERE book_id = ? - ~5 matches
+  resv-by-user: WHERE user_id = ? on reservations
+  books-by-author: WHERE author_id = ? - middle selectivity
+  books-by-genre: WHERE genre = ? - 1/16 of the relation
+  loans-by-daterange: WHERE loaned_day BETWEEN ? AND ? - 30 days
+  overdue: WHERE status = ? AND due_day BETWEEN ? AND ?
+  join-loan-user: loans JOIN users ON user_id = id
+  join-no-literal: JOIN ON user_id, u.id BETWEEN 1 AND 16 - no literal to propagate
+  exists-correlated: EXISTS(loans.user_id = users.id), 20 outer rows - under --cabin the mean mixes the observation charge
+  count-by-user: SELECT COUNT(*) ... WHERE user_id = ?
+
+  index mode all (after load), cabin off, server indexes on
+  sizes: users=40, books=40, reservations=100, loans=200
+  ANALYZE (the access kind each shape compiled to):
+      loans-by-user: IndexProbe
+      loans-by-book: IndexProbe
+      resv-by-user: IndexProbe
+      books-by-author: IndexProbe
+      books-by-genre: IndexProbe
+      loans-by-daterange: Scan
+      overdue: IndexRange
+      join-no-literal: Range, IndexProbe
+      exists-correlated: Range, IndexProbe
+  SHOW INDEXES:
+      index_oid,name,rel_oid,namespace,rel_name,keys,covering,root_page,key_width,entry_width,height,entries,unique
+      1,loans_user_r2_s3_c8_n200_all,4029,public,loans_r2_s3_c8_n200_all,user_id,NULL,148,9,17,1,200,0
+      2,loans_book_r2_s3_c8_n200_all,4029,public,loans_r2_s3_c8_n200_all,book_id,NULL,149,9,17,1,200,0
+      3,resv_user_r2_s3_c8_n200_all,4021,public,reservations_r2_s3_c8_n200_all,user_id,NULL,150,9,17,1,100,0
+      4,books_author_r2_s3_c8_n200_all,4010,public,books_r2_s3_c8_n200_all,author_id,NULL,151,9,17,1,40,0
+      5,books_genre_r2_s3_c8_n200_all,4010,public,books_r2_s3_c8_n200_all,genre,NULL,152,5,13,1,40,0
+      6,loans_status_due_r2_s3_c8_n200_all,4029,public,loans_r2_s3_c8_n200_all,status,due_day,NULL,153,10,18,1,200,0
+      7,books_branch_genre_r2_s3_c8_n200_all,4010,public,books_r2_s3_c8_n200_all,branch_id,genre,NULL,154,10,18,1,40,0
+      8,loans_user_cov_r2_s3_c8_n200_all,4029,public,loans_r2_s3_c8_n200_all,user_id,book_id,due_day,status,155,9,33,1,200,0
+  wrote /home/cdkbs/bench-runs/v3.3.0-33-g9682b725/json/r2-s3-c8-n200-all.json

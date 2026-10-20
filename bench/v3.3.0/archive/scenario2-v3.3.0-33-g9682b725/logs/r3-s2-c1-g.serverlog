@@ -1,0 +1,11 @@
+1792468231 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 783000, revenue = 6547673 WHERE id = 314" -> ERR TXN_CONFLICT retryable=1 row id=314 was written by transaction 9747 in 13us
+1792468231 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 694000, revenue = 3808480 WHERE id = 582" -> ERR TXN_CONFLICT retryable=1 row id=582 was written by transaction 9777 in 12us
+1792468231 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 404000, revenue = 3608311 WHERE id = 494" -> ERR TXN_CONFLICT retryable=1 row id=494 was written by transaction 9985 in 10us
+1792468231 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 5523656 WHERE id = 490" -> ERR TXN_CONFLICT retryable=1 row id=490 was written by transaction 9989 in 14us
+1792468232 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 448000, revenue = 2351032 WHERE id = 564" -> ERR TXN_CONFLICT retryable=1 row id=564 was written by transaction 10374 in 10us
+1792468232 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 4279463 WHERE id = 590" -> ERR TXN_CONFLICT retryable=1 row id=590 was written by transaction 10446 in 6us
+1792468232 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 2008000, revenue = 11921572 WHERE id = 434" -> ERR TXN_CONFLICT retryable=1 row id=434 was written by transaction 10828 in 7us
+1792468232 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 1255000, revenue = 8227440 WHERE id = 346" -> ERR TXN_CONFLICT retryable=1 row id=346 was written by transaction 10850 in 10us
+1792468233 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 10107950 WHERE id = 510" -> ERR TXN_CONFLICT retryable=1 row id=510 was written by transaction 11149 in 9us
+1792468234 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 1957000, revenue = 12262694 WHERE id = 501" -> ERR TXN_CONFLICT retryable=1 row id=501 was written by transaction 11807 in 11us
+1792468235 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 2301000, revenue = 14456269 WHERE id = 433" -> ERR TXN_CONFLICT retryable=1 row id=433 was written by transaction 12534 in 18us
