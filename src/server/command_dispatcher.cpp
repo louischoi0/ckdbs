@@ -3821,8 +3821,7 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     if (value.type != parser::ValueType::kInt) return Status::OK();
 
     const std::optional<std::uint64_t> id = KeystoneIdOf(value);
-    // 0 for no id: no `S` is ever held on tuple key 0, so the release below meets
-    // nothing of it.
+    // 0 for no id, which is a violation and is looked up nowhere.
     const std::uint64_t parent_tuple_key = id.value_or(0);
 
     // The held verdict, resolved by `ResolveForeignKeyParents` before any
@@ -4339,10 +4338,12 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                               return catalog_.FindNamespaceOidByName(col.references_schema, v);
                           });
                 if (references_ns.ok() && references_ns.value() == create_ns.value()) {
-                    const Status s = catalog::RefuseSelfReference(col.name);
-                    return {ErrorReply(s) + " (byte " +
-                                std::to_string(col.references_byte_offset) + ")",
-                            false, 0, s};
+                    // The byte inside the status, which is what KWP sends.
+                    const Status refused = catalog::RefuseSelfReference(col.name);
+                    const Status s = refused.WithMessage(
+                        refused.message() + " (byte " +
+                        std::to_string(col.references_byte_offset) + ")");
+                    return {ErrorReply(s), false, 0, s};
                 }
             }
 

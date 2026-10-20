@@ -497,8 +497,15 @@ TEST_F(ForeignKeyCheckTest, ASelfReferencingForeignKeyIsRefusedAsNotBuilt) {
     for (const std::string sql :
          {"CREATE TABLE nodes (id int64, parent int64 REFERENCES nodes, label int64) BTREE",
           "CREATE TABLE nodes (id int64, parent int64 REFERENCES public.nodes) BTREE"}) {
-        const std::string out = Run(sql);
+        const DispatchOutcome outcome = dispatcher_->Dispatch(sql);
+        const std::string& out = outcome.response;
         EXPECT_EQ(out.rfind("ERR NOT_IMPLEMENTED", 0), 0u) << sql << " -> " << out;
+        // The status carries the byte too: it is what KWP sends.
+        EXPECT_EQ(outcome.status.code(), StatusCode::kNotImplemented);
+        EXPECT_NE(outcome.status.message().find(
+                      "(byte " + std::to_string(sql.find("REFERENCES")) + ")"),
+                  std::string::npos)
+            << outcome.status.message();
         EXPECT_NE(out.find("self-referencing"), std::string::npos) << out;
         EXPECT_NE(out.find("(byte " + std::to_string(sql.find("REFERENCES")) + ")"),
                   std::string::npos)
