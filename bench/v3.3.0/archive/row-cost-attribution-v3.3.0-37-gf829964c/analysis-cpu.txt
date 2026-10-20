@@ -1,0 +1,44 @@
+## per cell (median of reps; spread = (max-min)/median)
+engine mode size n | wall us/stmt (spr) | server cpu us/stmt (spr) | client cpu us/stmt (spr)
+kds drain 1 65934 | 48.2 (1%) | 31.4 (2%) | 16.6 (1%)
+kds drain 10 60000 | 52.3 (1%) | 35.7 (0%) | 16.6 (1%)
+kds drain 100 31578 | 92.4 (1%) | 74.7 (2%) | 17.3 (0%)
+kds drain 1000 5504 | 511.5 (2%) | 490.6 (3%) | 37.9 (2%)
+kds drain 10000 594 | 4333.9 (1%) | 4309.8 (2%) | 207.9 (1%)
+kds drain 60480 99 | 28632.6 (1%) | 28585.9 (0%) | 1216.7 (1%)
+pg drain 1 65934 | 83.1 (1%) | 67.8 (1%) | 15.1 (1%)
+pg drain 10 60000 | 89.2 (0%) | 72.2 (0%) | 16.8 (1%)
+pg drain 100 31578 | 145.7 (0%) | 127.0 (0%) | 37.3 (1%)
+pg drain 1000 5504 | 661.9 (3%) | 641.4 (3%) | 282.4 (2%)
+pg drain 10000 594 | 5790.4 (1%) | 5774.4 (1%) | 2674.2 (1%)
+pg drain 60480 99 | 32859.3 (1%) | 32828.3 (1%) | 16261.4 (4%)
+
+## slopes (us per returned row) by least squares on the per-size medians; intercept = fixed us/stmt
+sizes 1..10000     kds drain  wall_us_per_stmt         slope    0.428 us/row  intercept      56.6 us
+sizes 1..10000     kds drain  server_cpu_us_per_stmt   slope    0.427 us/row  intercept      38.8 us
+sizes 1..10000     kds drain  client_cpu_us_per_stmt   slope    0.019 us/row  intercept      16.7 us
+sizes 1..10000     pg drain  wall_us_per_stmt         slope    0.570 us/row  intercept      86.4 us
+sizes 1..10000     pg drain  server_cpu_us_per_stmt   slope    0.571 us/row  intercept      68.5 us
+sizes 1..10000     pg drain  client_cpu_us_per_stmt   slope    0.266 us/row  intercept      14.0 us
+sizes 100..60480   kds drain  wall_us_per_stmt         slope    0.474 us/row  intercept     -91.7 us
+sizes 100..60480   kds drain  server_cpu_us_per_stmt   slope    0.474 us/row  intercept    -110.9 us
+sizes 100..60480   kds drain  client_cpu_us_per_stmt   slope    0.020 us/row  intercept      14.5 us
+sizes 100..60480   pg drain  wall_us_per_stmt         slope    0.541 us/row  intercept     188.4 us
+sizes 100..60480   pg drain  server_cpu_us_per_stmt   slope    0.540 us/row  intercept     170.6 us
+sizes 100..60480   pg drain  client_cpu_us_per_stmt   slope    0.269 us/row  intercept       4.5 us
+
+## wire bytes per reply (drain mode) and per row
+kds bytes/row slope 140.02 fixed bytes 334.6  per size: {1: 476, 10: 1736, 100: 14336, 1000: 140356, 10000: 1400546, 60480: 8468826}
+pg bytes/row slope 97.44 fixed bytes -3887.3  per size: {1: 434, 10: 1230, 100: 9428, 1000: 93874, 10000: 955884, 60480: 5891937}
+
+## latency percentiles us per statement (pooled over reps)
+drain 1 kds n 197802 p0=35 p25=46 p50=47 p95=58 p99=67
+drain 1 pg n 197802 p0=70 p25=81 p50=81 p95=97 p99=104
+drain 100 kds n 94734 p0=80 p25=89 p50=92 p95=106 p99=116
+drain 100 pg n 94734 p0=132 p25=142 p50=143 p95=159 p99=166
+drain 1000 kds n 16512 p0=490 p25=503 p50=509 p95=536 p99=556
+drain 1000 pg n 16512 p0=627 p25=646 p50=654 p95=679 p99=804
+drain 10000 kds n 1782 p0=4179 p25=4265 p50=4284 p95=4395 p99=4796
+drain 10000 pg n 1782 p0=5696 p25=5728 p50=5769 p95=5878 p99=6000
+drain 60480 kds n 297 p0=28046 p25=28334 p50=28459 p95=29159 p99=31485
+drain 60480 pg n 297 p0=32551 p25=32705 p50=32838 p95=33452 p99=33801

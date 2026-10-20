@@ -1,0 +1,68 @@
+=== kds split size=1000 n=30
+         2563291 function calls in 0.540 seconds
+
+   Ordered by: internal time
+   List reduced from 34 to 8 due to restriction <8>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   722370    0.178    0.000    0.224    0.000 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/kwp.py:153(_take)
+       90    0.133    0.001    0.516    0.006 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/kwp.py:554(_row_batch)
+   360000    0.094    0.000    0.237    0.000 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/kwp.py:169(i32)
+   723420    0.047    0.000    0.047    0.000 {built-in method builtins.len}
+   390360    0.034    0.000    0.034    0.000 {method 'append' of 'list' objects}
+   362220    0.033    0.000    0.033    0.000 {built-in method _struct.unpack}
+       90    0.016    0.000    0.016    0.000 {method 'recv' of '_socket.socket' objects}
+       90    0.001    0.000    0.017    0.000 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/kwp.py:332(_fill)
+
+
+=== kds values size=1000 n=30
+         2923291 function calls in 0.593 seconds
+
+   Ordered by: internal time
+   List reduced from 35 to 8 due to restriction <8>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   722370    0.175    0.000    0.222    0.000 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/kwp.py:153(_take)
+       90    0.132    0.001    0.514    0.006 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/kwp.py:554(_row_batch)
+   360000    0.094    0.000    0.237    0.000 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/kwp.py:169(i32)
+   723420    0.047    0.000    0.047    0.000 {built-in method builtins.len}
+   362220    0.034    0.000    0.034    0.000 {built-in method _struct.unpack}
+   390360    0.033    0.000    0.033    0.000 {method 'append' of 'list' objects}
+   360000    0.028    0.000    0.028    0.000 {built-in method from_bytes}
+       30    0.028    0.001    0.593    0.020 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/bench/v3.3.0/archive/row-cost-attribution-v3.3.0-37-gf829964c/rowcost.py:104(run)
+
+
+=== pg split size=1000 n=30
+         1022641 function calls in 0.256 seconds
+
+   Ordered by: internal time
+   List reduced from 19 to 8 due to restriction <8>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+    30000    0.123    0.000    0.188    0.000 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/pg_wire.py:358(_decode_data_row)
+   420120    0.040    0.000    0.040    0.000 {method 'unpack' of '_struct.Struct' objects}
+   390000    0.031    0.000    0.031    0.000 {method 'append' of 'list' objects}
+    30090    0.023    0.000    0.046    0.000 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/pg_wire.py:97(_read_message)
+       30    0.017    0.001    0.256    0.009 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/pg_wire.py:276(fetch)
+    60180    0.009    0.000    0.016    0.000 {method 'read' of '_io.BufferedReader' objects}
+      360    0.006    0.000    0.006    0.000 {method 'recv_into' of '_socket.socket' objects}
+    90240    0.006    0.000    0.006    0.000 {built-in method builtins.len}
+
+
+=== pg values size=1000 n=30
+         1022641 function calls in 0.302 seconds
+
+   Ordered by: internal time
+   List reduced from 19 to 8 due to restriction <8>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+    30000    0.127    0.000    0.192    0.000 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/pg_wire.py:358(_decode_data_row)
+       30    0.041    0.001    0.302    0.010 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/bench/v3.3.0/archive/row-cost-attribution-v3.3.0-37-gf829964c/rowcost.py:126(run)
+   420120    0.040    0.000    0.040    0.000 {method 'unpack' of '_struct.Struct' objects}
+   390000    0.031    0.000    0.031    0.000 {method 'append' of 'list' objects}
+    30090    0.024    0.000    0.046    0.000 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/pg_wire.py:97(_read_message)
+       30    0.017    0.001    0.260    0.009 /home/cdkbs/ckdbs/.claude/worktrees/row-cost-attribution/tools/pg_wire.py:276(fetch)
+    60180    0.010    0.000    0.016    0.000 {method 'read' of '_io.BufferedReader' objects}
+      360    0.006    0.000    0.006    0.000 {method 'recv_into' of '_socket.socket' objects}
+
+
