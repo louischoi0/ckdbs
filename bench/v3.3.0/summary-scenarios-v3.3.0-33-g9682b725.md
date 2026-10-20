@@ -1,7 +1,7 @@
 # Scenarios 1 to 4 at `v3.3.0-33-g9682b725`: summary
 
 **One line.** The engine at `v3.3.0-33-g9682b725` is, within the run's spreads, the engine of v3.1.0 on most shapes this suite measures; the largest movers are two: the unserved equality **walk** (scenario 4's `off` arm is
-1.18x to 1.20x faster on a 10,000-row board and tape) and the **inner-built two-relation join** (scenario 3's `join-no-literal` at 10,000 loans runs 1.98x). Smaller movers (eight-core one-connection reads, eight contended bookers) are listed below; reads, writes, the Cabin multiples and the controller lifecycle are inside the
+1.18x to 1.20x faster on a 10,000-row board and tape) and the **inner-built two-relation join** (scenario 3's `join-no-literal` at 10,000 loans runs 1.98x). Smaller movers (eight-core one-connection reads, scenario 1's one-core scan shapes, eight contended bookers) are listed below; the other reads, the writes, the Cabin-served rates and the controller lifecycle are inside the
 run's own spreads. **Scenario 1's driver now runs unmodified** (BZ made its `HEAP` tables hidden-key btrees; no BTREE copy was needed).
 **The join planner (CB/CC) reorders two of scenario 1's joins and moves neither beyond noise, and it changes nothing in scenario 3's joins**: A/B against `join_order = written` on the same binary.
 One durable client is PostgreSQL's equal (0.99x), because both engines wait on the same fsync. PostgreSQL 18.6 was **re-measured fresh in this window**, so every ratio below is same-window.
@@ -10,7 +10,7 @@ This file indexes the four results files and carries no number they do not. Meas
 `7532bd14...`, section 1 of each file). **The operator lifted the time budget for this run** ("lift the budget, re-measure PG too"): every cell of the v3.1.0 plan ran, with its repeat counts, nothing was cut,
 and the size sweep (scenario 1) and booker sweep (scenario 2) that v3.1.0 left unfinished or unwritten were run and written up.
 
-**Comparators.** KDS: v3.1.0 at `cd7c7c4e` (`v3.1.0-30-gcd7c7c4e`, measured 2026-10-13 to 14), 240 commits and 101 first-parent merges away, so every KDS delta is **cross-version** and attributable to no
+**Comparators.** KDS: v3.1.0 at `cd7c7c4e` (`v3.1.0-30-gcd7c7c4e`, measured 2026-10-13 to 14), 240 commits away (101 first-parent, 23 of them merges), so every KDS delta is **cross-version** and attributable to no
 single change; re-derived from that run's archived JSON. Scenario 1's v3.1.0 cells ran a BTREE-only copy of the driver. PostgreSQL 18.6: **fresh**, `/home/cdkbs/pg-bench-ba` port 15434 at its defaults, three runs
 per cell wherever a twin exists, run after the KDS cells and never concurrent with one. PostgreSQL is the floor, not the reference.
 
@@ -46,14 +46,16 @@ Files: `results-scenario1-backtest-v3.3.0-33-g9682b725.md`, `results-scenario2-f
 ## The movers, and what they are
 
 - **The unserved equality walk is cheaper (scenario 4 `off`).** 1.18x on `board`, 1.20x on `tape10k`, every day of both runs, against a `pk` control that reads 0.85x to 1.07x; the per-row cost of an unserved equality falls from
-  34.6 to 26.5 ns and the server CPU of an `off` run's boards from 2.80 s to 2.22 s. Scenario 3's integer-column equality walk shows **no** such gain (`loans-by-user` 2,779 qps in both versions), so the gain is not general; the filtered
-  column here is a `varchar`, among other differences. Likely cause: not separated by this run, 240 commits.
-- **`join-no-literal` at 10,000 loans is 1.98x (scenario 3).** The plan shows `inner_built=1` (a statement-local hash build of `loans`: one 10,074-row scan for a 16-row outer instead of 16 scans). The join planner is not the cause: with
-  `join_order = written` the same cell is 5 % *faster*, and its plan carries the same build. Whether v3.1.0 already built cannot be read from its JSON (step kinds only). Likely cause: the inner build's reach (`join-inner-build.md`) or the scan beneath it.
-- **`cores = 8` one-connection reads gained 28 % to 31 % (scenario 1).** At v3.1.0 a one-connection read on an eight-core instance ran 22 % slower than on one core; now 6 % slower. The one-core engine did not move (+7 %, inside its 7 % spread).
+  34.6 to 26.5 ns and the server CPU of an `off` run's boards from 2.80 s to 2.22 s. Scenario 3's integer-column equality walk shows **no** such gain (`loans-by-user` 2,779 qps in both versions) and scenario 1's (`day-slice`, `int32`) a smaller one
+  (+7.3 % `group`, +8.9 % `strict` at `cores = 1`), so the gain is uneven; the filtered column here is a `varchar`, among other differences. Likely cause: not separated by this run, 240 commits.
+- **`join-no-literal` at 10,000 loans is 1.98x (scenario 3).** The plan shows `inner_built=1` (a statement-local hash build of `loans`, held to 79 rows by range bounds CB-S1 derives across the join key). The planner's
+  order choice (CB-S2) is not the cause: with `join_order = written` the same cell is 5 % *faster*, and its plan carries the same build and the same derived bounds, so the A/B does not exclude CB-S1. Whether v3.1.0 built cannot be read
+  from its JSON (step kinds only); its 1,175 µs mean is far below the ~3.9 ms that 16 full scans would cost, so it most likely did not scan per outer row. Candidate causes, none separated: CB-S1's derived bounds, the inner build's reach (`join-inner-build.md`), the scan beneath it.
+- **Three `cores = 8` one-connection read shapes gained 28 % to 31 % (scenario 1:** `day-slice`, `cross-join`, `point-join`; the other four moved -1.4 % to +5.7 %). At v3.1.0 `day-slice` on an eight-core instance ran 22 % slower than on one core; now 6 % slower.
+  The one-core scan shapes gained too: +7.3 % `day-slice` under `group` (at the edge of its 6.9 % spread) and +8.9 % under `strict` (spreads 1.0 % and 1.8 %).
 - **Eight contended bookers: +3.3 % `group`, +5.6 % `strict`** (scenario 2), above their spreads (0.5 %, 3.4 %), with 54 / 42 / 39 `strict` conflicts per run against 90 / 63 / 45. Small, real, and carried by the commit (its mean fell 5 % to 9 % at eight cores and 18 % with one booker), not by the statements: every statement p50 in scenario 2's comparison table is 1.01x to 1.11x of v3.1.0's, and scenario 4's `pk` control is +4.7 % (73.4 against 70.1 µs). A 3 % to 7 % per-statement slowdown is visible and is **not separated between engine and host** by this run.
-- **One durable booker: +9 % to +11 % against v3.1.0, and equal to PostgreSQL.** That is the **device**: the commit mean fell from 1,646 to 1,344 µs while no statement moved, and PostgreSQL's commit in this window is 1,343 µs. A delta
-  on a fsync-bound row is the sync's, not the engine's.
+- **One durable booker: +9 % to +11 % against v3.1.0, and equal to PostgreSQL.** It is carried by the commit: its mean fell from 1,646 to 1,344 µs (its p50 only 7 %, so mostly the tail) while no statement got faster, and PostgreSQL's commit
+  in this window is 1,343 µs. **Device or engine is not separated**: PostgreSQL was not measured in v3.1.0's window (that run reused 2026-09-30's), and scenario 1's durable autocommit insert did not get faster (744 against 773 rows/s).
 - **The join planner** (CB/CC): `compare-all` and `compare-one` are reordered (`reordered=1`) and read 14x fewer pages and 6 % to 11 % fewer examined rows, and run 1 % to 6 % faster, inside the noise; the three-relation join and scenario 3's joins keep the written order.
   The planner's price is not measurable in this suite and neither is its payoff.
 
@@ -61,10 +63,11 @@ Files: `results-scenario1-backtest-v3.3.0-33-g9682b725.md`, `results-scenario2-f
 
 - **Ahead**: an unindexed non-pk equality walk (scenario 1 `day-slice` 1.43x, scenario 3 `loans-by-user` 1.15x, scenario 4 `board` 1.19x);
   the pk-anchored join (1.79x) and the three-relation join (1.46x); the correlated `EXISTS` (2.08x at 10,000 loans); a Cabin-served equality (scenario 4 `board` 2.1x, `tape10k` 2.5x of a PostgreSQL seq scan);
-  the write statements of a booking (p50 0.73x to 0.84x of PostgreSQL's); loads (0.96x to 1.62x).
+  the write statements of a booking (p50 0.73x to 0.84x of PostgreSQL's); scenario 1's load phases (1.11x to 1.62x, `load-models` 0.96x).
 - **Even**: one durable client (0.99x), bound by the device's fsync on both engines; the round trip of a pk read at 10,000 loans (`pk-user` 0.98x).
 - **Behind**: every shape that returns many rows (scenario 1 `bar-range` 0.49x, `symbol-history` 0.43x, `model-join` 0.56x; scenario 3 `books-by-genre`, `loans-by-daterange`, `overdue` 0.61x to 0.77x), whole-relation folds
-  (scenario 1 `agg-*` 0.65x to 0.69x, scenario 4 `close` 0.57x), and the fixed round trip at small sizes (scenario 3 at 200 loans 0.62x to 0.99x on ten of twelve shapes; scenario 4 `tape200` 0.73x). The
+  (scenario 1 `agg-*` 0.65x to 0.69x on three of its four whole-relation folds, `agg-by-symbol` 0.91x; scenario 4 `close` 0.57x), and small scans (scenario 4 `tape200` 0.73x, where the `pk` round trip differs by only 4 µs, so the
+  gap is not the round trip; scenario 3's 200-loan `cores = 1` cells are too noisy to read). The
   per-row result cost is about 2x PostgreSQL's (7.5 to 9.3 µs against 3.6 to 4.1 µs per returned row, at every size from 252 to 60,480 bars).
 
 ## What this run does not show

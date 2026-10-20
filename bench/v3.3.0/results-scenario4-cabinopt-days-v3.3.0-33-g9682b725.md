@@ -24,7 +24,7 @@ its archived JSON. PostgreSQL 18.6: `tools/pg_scenario4_cabinopt_days.py`, **fre
 | Build type | Release |
 | Host | 8 logical CPUs, AMD EPYC 9V74 (1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure, a shared development VM; `/` was 95 % full (14 GB free) |
 | Time budget | **Budget lifted by the operator for this run** (order of 2026-10-20: "lift the budget, re-measure PG too"). Every cell of the v3.1.0 rebaseline's plan ran, with its repeat counts, and PostgreSQL was re-measured fresh in the same window. Nothing was cut |
-| Prior run of this shape | `bench/v3.1.0/results-scenario4-cabinopt-days-v3.1.0-30-gcd7c7c4e.md` (KDS binary `cd7c7c4e`, sha256 `4752f562...`, measured 2026-10-13 23:38 UTC to 2026-10-14 01:39 UTC). The two commits are 240 commits and 101 first-parent merges apart (`git rev-list --count cd7c7c4e..HEAD`), with 178 files changed under `src/`, `include/` and `CMakeLists.txt` (milestones BV to CD among them), so **every KDS delta below is cross-version and attributable to no single change**. The host and its device state are also a week-old comparison: v3.1.0's cells ran on the same VM, 6.5 days earlier |
+| Prior run of this shape | `bench/v3.1.0/results-scenario4-cabinopt-days-v3.1.0-30-gcd7c7c4e.md` (KDS binary `cd7c7c4e`, sha256 `4752f562...`, measured 2026-10-13 23:38 UTC to 2026-10-14 01:39 UTC). The two commits are 240 commits apart (`git rev-list --count cd7c7c4e..HEAD`), 101 of them first-parent and 23 of those merges, with 178 files changed under `src/`, `include/` and `CMakeLists.txt` (milestones BV to CD among them), so **every KDS delta below is cross-version and attributable to no single change**. The host and its device state are also a week-old comparison: v3.1.0's cells ran on the same VM, about 6.2 days earlier |
 | Server config | `log_level = warn`, `buffer_pool_frames = 65536` (required since BE), `cores` and `durability` per cell, all else default. Ports 15604 to 15607, 15610, 15620, 15651 to 15653, never 15432 (held by an unrelated `kds_server`) |
 | Quiet host | before each cell a gate waited for no `cc1plus` / `cmake --build` / `ctest` / `kds_tests` process and at most 8 % busy CPU over 3 s (`lib.sh` in the archive); `/proc/loadavg` and the process list are in each cell's precheck. **A 1-second monitor ran through the whole run** (`monitor.log`: 1,500+ samples of foreign processes above 10 % CPU) and every cell was checked against it after it ended (`cellvalid.py`): a build/test process or a foreign process at 50 % CPU or more inside the window discards and re-runs the cell. **No cell was discarded**: the monitor saw only a `claude` process at 11 to 23 % of one CPU in 23 samples of the 1,518, all outside the 50 % line. One batch of PostgreSQL cells failed on a connection error and is listed under contamination below |
 | PostgreSQL | PostgreSQL 18.6 (`/home/cdkbs/pg-bench-ba`, port 15434), defaults (`shared_buffers = 128MB`, `synchronous_commit = on`, `fsync = on`, `max_wal_size = 1GB`), not started or stopped by this run. **Re-measured fresh in this window** (the twin runs follow the KDS cells, never concurrent with them) |
@@ -106,7 +106,7 @@ Derived qps (1,000,000 / mean µs), run A, now over v3.1.0 (cross-version), and 
 | close | 3 | 1.04x | 1.05x | 1.04x | 1.01x | 1.04x | 1.05x |
 
 The `pk` control reads 0.85x to 1.07x, so ratios inside that are not findings. The `off` arm on `board` (1.17x to 1.20x) and `tape10k` (1.19x to 1.22x) is above it in all six days of both runs; the `on` and `declared` arms there are
-0.97x to 1.12x, mostly inside it. `open` in run B (1.10x to 1.27x) is the device's sync moving between runs, section 9.
+0.97x to 1.12x, mostly inside it. `open` in run B (1.10x to 1.27x) is the durable commit moving between runs (section 9); device or engine, this run does not separate.
 
 ## 4. Percentiles
 
@@ -203,7 +203,7 @@ A probe is one round trip on one connection, so the decomposition is fixed cost 
 | Fixed round trip (client, socket, parse, one pk descent) | **73.4 µs** (68.2 to 79.3) | 70.1 µs | 69.4 µs | `pk` mean across arms, days and runs |
 | Rows walked by an unserved equality | **26.5 ns per row** plus about 103 µs | 34.6 ns | 40.5 ns | `off` tape p50 at 200 and 10,000 rows, day 1: (p50 at 10,000 - p50 at 200) / 9,800 |
 | A Cabin-served equality | **about 102 µs** at any size once built (day 2) | about 98 to 100 µs | - | `on` and `declared` tape p50 on day 2; flat in n |
-| Write statement with its commit (`open`) | **1,188 µs** p50 per autocommit insert | 1,021 to 1,280 µs | 1,161 µs | `open` p50 over arms and days: the durable commit is nearly all of it |
+| Write statement with its commit (`open`) | **1,188 µs** p50 per autocommit insert | 1,021 to 1,349 µs | 1,161 µs | `open` p50 over arms and days: the durable commit is nearly all of it |
 | Lock or conflict wait | none: one connection | none | none | - |
 
 The board's latency tail by arm (run A day by day; run B and v3.1.0 for the p95), microseconds:
@@ -306,7 +306,8 @@ PG runs: 3
 | close | 442.7 µs / 1,185 qps (0.2 %) | 678 qps | 683 qps | 673 qps | 0.57x | 0.58x | 0.57x |
 
 The comparison with a Cabin is not a like-for-like with PostgreSQL's *indexed* case, which this twin does not run (no `symbol` index on PostgreSQL); that is a gap of this scenario, so "KDS on / PG" says what a Cabin buys over a PostgreSQL seq scan, not over a PostgreSQL index.
-`tape200` is 0.73x to 0.75x on every arm: at 200 rows the statement is a round trip and PostgreSQL's is 26 µs cheaper (69 against 73 µs for the `pk` control the same gap, 0.92x). `close` (three full-relation folds) is 0.57x on every arm, the whole-relation fold cost
+`tape200` is 0.73x to 0.75x on every arm: PostgreSQL's 200-row probe is about 26 µs cheaper (76 against 100 to 102 µs p50), while the `pk` round trip differs by only 4 µs (69 against 73 µs mean, 0.92x),
+so the gap is not the round trip; whether it is the scan statement's setup or the 200-row walk, this run does not separate. `close` (three full-relation folds) is 0.57x on every arm, the whole-relation fold cost
 that scenario 1 measures as 0.65x to 0.69x on three of its four `agg-*` folds.
 
 ## 9. Noise floor, contamination and host
@@ -328,7 +329,7 @@ The floor is the `pk` control: on-over-off 0.97x to 1.07x, per-arm absolute 12,6
 
 1. **The unserved walk got cheaper and nothing else about the Cabin story changed.** `off` is 1.18x and 1.20x v3.1.0 on the 10,000-row shapes, and the per-row cost of an unserved equality fell from 34.6 to 26.5 ns, against
    PostgreSQL's 40.5 ns. The served arms did not move (a Cabin-served probe is a round trip, about 102 µs), so the Cabin's multiple over a walk moved from 1.99x/2.77x (v3.1.0, medians over the six days) to 1.78x/2.31x on `board`/`tape10k` where it moved at all because the *denominator* improved.
-   Scenario 3's integer-column equality walk does not show the same gain (`loans-by-user` 1.00x at 10,000 loans); the two differ in the filtered column's type (`varchar` symbol here, `int64` there) among other things, and this run does not separate them.
+   Scenario 3's integer-column equality walk does not show the same gain (`loans-by-user` 1.00x at 10,000 loans); scenario 1's integer-column walk (`day-slice` on `int32 session_no`) shows a smaller one (+7.3 % `c1-g`, +8.9 % `c1-s`). The walks differ in the filtered column's type (`varchar` symbol here, integers there) among other things, and this run does not separate them.
 2. **Below about 1,000 rows a Cabin is no tool** (`tape200` 0.98x to 1.08x; `tape1k` near the floor); at 10,000 rows it doubles the probe. The controller found the same four Cabins in the same 13.6 s that it did at v3.1.0, and created none for the pk control.
 3. **The declared arm's tail is the open question this scenario keeps asking**: p95 779 to 794 µs against a 467 to 486 µs walk. It repeated across both runs, three days and two versions; it is a property of the declared Cabin's miss path, and nothing in this run explains it.
 4. **DROP exists only at a 2-half-life cooldown.** The default dwell (128 half-lives) never fires inside a three-day run, so a 3-day business cycle at the defaults will not reclaim a Cabin whose hot set has moved; that is the controller's documented default, now with a second data point.

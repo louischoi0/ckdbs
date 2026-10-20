@@ -3,10 +3,11 @@
 **One line.** Twelve read shapes over four relations at 200, 1,000 and 10,000 loans, with and without server indexes, at `cores = 1` and `cores = 8`, three runs each: at 10,000 loans the engine is
 where it was at v3.1.0 on 11 of 12 shapes (geometric means 1.07x unindexed and 0.98x indexed; the four smaller columns, 0.84x to 0.96x, sit inside spreads of 20 % to 40 % and are not read), and on one it is
 **1.98x faster: the unindexed two-relation join `join-no-literal` at 10,000 loans, 1,683 qps against 851 qps** (spread 2.7 % now, 2.4 % at v3.1.0), with the plan
-reporting `inner_built=1` (a statement-local hash build of `loans`, 79 rows built from one 10,074-row scan instead of one scan per outer row). That is **not the join planner**: the same
-cell with `join_order = written` is 1,719 qps, 5 % faster than the planned arm (section 6). Against PostgreSQL 18.6, **re-measured in the same window**, the unindexed 10,000-loan columns are
-1.06x (geometric mean over 12 shapes) and the indexed ones 0.98x; the unindexed equality (`loans-by-user`) is 1.15x of PostgreSQL's seqscan. At 200 loans KDS is behind
-(0.79x unindexed): there the statement is a round trip and PostgreSQL's is cheaper, and this run's small cells are noisy (section 10).
+reporting `inner_built=1` (a statement-local hash build of `loans`, 79 rows built from one 10,074-row scan instead of one scan per outer row). That is **not the join planner's order choice** (CB-S2): the same
+cell with `join_order = written` is 1,719 qps, 5 % faster than the planned arm (section 6). Both arms carry CB-S1's derived range bounds on `loans`, so the A/B does not
+exclude CB-S1 as the cause. Against PostgreSQL 18.6, **re-measured in the same window**, the unindexed 10,000-loan columns are
+1.06x (geometric mean over 12 shapes) and the indexed ones 0.98x; the unindexed equality (`loans-by-user`) is 1.15x of PostgreSQL's seqscan. At 200 loans the
+`cores = 1` cells are too noisy to read (section 10): 0.79x unindexed and 1.16x indexed.
 
 Driver: `tools/scenario3_library.py`, unmodified, `--index-mode none|all --server-indexes on --seed 1` (`--assert-index-reads` on the indexed cells), the v3.1.0 run's arguments. Measured by `ck-tester`.
 Comparator (cross-version): `bench/v3.1.0/results-scenario3-library-v3.1.0-30-gcd7c7c4e.md`, re-derived from its archived JSON (three runs per cell). PostgreSQL 18.6:
@@ -25,7 +26,7 @@ Comparator (cross-version): `bench/v3.1.0/results-scenario3-library-v3.1.0-30-gc
 | Build type | Release |
 | Host | 8 logical CPUs, AMD EPYC 9V74 (1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure, a shared development VM; `/` was 95 % full (14 GB free) |
 | Time budget | **Budget lifted by the operator for this run** (order of 2026-10-20: "lift the budget, re-measure PG too"). Every cell of the v3.1.0 rebaseline's plan ran, with its repeat counts, and PostgreSQL was re-measured fresh in the same window. Nothing was cut |
-| Prior run of this shape | `bench/v3.1.0/results-scenario3-library-v3.1.0-30-gcd7c7c4e.md` (KDS binary `cd7c7c4e`, sha256 `4752f562...`, measured 2026-10-13 23:38 UTC to 2026-10-14 01:39 UTC). The two commits are 240 commits and 101 first-parent merges apart (`git rev-list --count cd7c7c4e..HEAD`), with 178 files changed under `src/`, `include/` and `CMakeLists.txt` (milestones BV to CD among them), so **every KDS delta below is cross-version and attributable to no single change**. The host and its device state are also a week-old comparison: v3.1.0's cells ran on the same VM, 6.5 days earlier |
+| Prior run of this shape | `bench/v3.1.0/results-scenario3-library-v3.1.0-30-gcd7c7c4e.md` (KDS binary `cd7c7c4e`, sha256 `4752f562...`, measured 2026-10-13 23:38 UTC to 2026-10-14 01:39 UTC). The two commits are 240 commits apart (`git rev-list --count cd7c7c4e..HEAD`), 101 of them first-parent and 23 of those merges, with 178 files changed under `src/`, `include/` and `CMakeLists.txt` (milestones BV to CD among them), so **every KDS delta below is cross-version and attributable to no single change**. The host and its device state are also a week-old comparison: v3.1.0's cells ran on the same VM, about 6.2 days earlier |
 | Server config | `log_level = warn`, `buffer_pool_frames = 65536` (required since BE), `cores` and `durability` per cell, all else default. Ports 15604 to 15607, 15610, 15620, 15651 to 15653, never 15432 (held by an unrelated `kds_server`) |
 | Quiet host | before each cell a gate waited for no `cc1plus` / `cmake --build` / `ctest` / `kds_tests` process and at most 8 % busy CPU over 3 s (`lib.sh` in the archive); `/proc/loadavg` and the process list are in each cell's precheck. **A 1-second monitor ran through the whole run** (`monitor.log`: 1,500+ samples of foreign processes above 10 % CPU) and every cell was checked against it after it ended (`cellvalid.py`): a build/test process or a foreign process at 50 % CPU or more inside the window discards and re-runs the cell. **No cell was discarded**: the monitor saw only a `claude` process at 11 to 23 % of one CPU in 23 samples of the 1,518, all outside the 50 % line. One batch of PostgreSQL cells failed on a connection error and is listed under contamination below |
 | PostgreSQL | PostgreSQL 18.6 (`/home/cdkbs/pg-bench-ba`, port 15434), defaults (`shared_buffers = 128MB`, `synchronous_commit = on`, `fsync = on`, `max_wal_size = 1GB`), not started or stopped by this run. **Re-measured fresh in this window** (the twin runs follow the KDS cells, never concurrent with them) |
@@ -47,7 +48,7 @@ Cut: nothing. Throughput below is derived qps (1,000,000 / mean µs), the median
 
 ## 3. Throughput
 
-**What counts as a finding.** Each KDS cell was run three times; the spread (max minus min over the median, shown beside every median) is this run's own noise floor. A delta between two medians that is smaller than the larger of the two spreads is not a finding, and the cross-version columns are held to the same rule with v3.1.0's spread. Cells whose spread is above 20 % (the `point-join` and `bar-lookup` rows, which flip between a fast and a slow mode) are reported but carry no delta claim.
+**What counts as a finding.** Each KDS cell was run three times; the spread (max minus min over the median, shown beside every median) is this run's own noise floor. A delta between two medians that is smaller than the larger of the two spreads is not a finding, and the cross-version columns are held to the same rule with v3.1.0's spread. Cells whose spread is above 20 % (most of the 200- and 1,000-loan `cores = 1` cells, where one run in three falls into a slow mode, section 10) are reported but carry no delta claim.
 
 `cores = 1` and `cores = 8`:
 
@@ -163,8 +164,8 @@ spreads of the unindexed cells are 1 % to 10 % and the ratios are readable.
 | exists-correlated | 1.00x | 1.01x | 0.89x | 1.03x | 1.01x | 0.98x |
 | count-by-user | 0.97x | 0.97x | 0.95x | 0.94x | 1.01x | 0.96x |
 
-At 10,000 loans, unindexed, `cores = 1`: nine of the twelve shapes are within 0.95x to 1.07x; `join-no-literal` is **1.98x** (851 qps to 1,683 qps, spreads 2.7 % and 2.4 %) and `cores = 8` shows the same
-step (1,554 qps). `exists-correlated` is 1.01x and `join-loan-user` 1.07x.
+At 10,000 loans, unindexed, `cores = 1`: eleven of the twelve shapes are within 0.95x to 1.07x (`exists-correlated` 1.01x, `join-loan-user` 1.07x); `join-no-literal` is **1.98x** (851 qps to 1,683 qps, spreads 2.7 % and 2.4 %) and `cores = 8` shows the same
+step (1,554 qps).
 Geometric mean over the 12 shapes, per column, `cores = 1` (new over old): 0.96x, 0.95x, 0.95x, 0.84x, 1.07x, 0.98x for n=200 none, n=200 all, n=1,000 none, n=1,000 all, n=10,000 none, n=10,000 all.
 
 ## 5. What the index buys now
@@ -213,9 +214,11 @@ Scenario 3, `cores = 1`, `group`, 10,000 loans: planned against `join_order = wr
 | n=10,000 all (1 runs) | join-no-literal | 3,043 qps | n/a | 3,291 qps | n/a | 0.92x |
 | n=10,000 all (1 runs) | exists-correlated | 5,841 qps | n/a | 6,821 qps | n/a | 0.86x |
 
-**Both arms have the same plan** (`inner_built=1` in each; the `written` arm shows no `planned order=` line because it compiles no planned block), and the planned arm is 1 % to 5 % *slower* on the three join shapes unindexed (three runs; spreads 1 % to 8 %) and 6 % to 14 % slower indexed (one run, so no claim). The planner chose what the written order already was. So the 1.98x that this scenario shows against v3.1.0 is not CB/CC's order choice. It is the statement-local inner build
-(`join-inner-build.md`) or the walk beneath it; the v3.1.0 JSON records only the step kinds (`Range`, `Scan`), not `inner_built`, so this run cannot say whether v3.1.0 built or not, and the two
-runs are 240 commits apart. The A/B isolates what it can: the planner is not the cause.
+**Both arms have the same plan** (`inner_built=1` in each; the `written` arm shows no `planned order=` line because it compiles no planned block), and the planned arm is 1 % to 5 % *slower* on the three join shapes unindexed (three runs; spreads 1 % to 8 %) and 6 % to 14 % slower indexed (one run, so no claim). The planner chose what the written order already was. So the 1.98x that this scenario shows against v3.1.0 is not CB-S2's order choice. Both arms also carry the
+range bounds CB-S1 derives across the join-key equality (`filter 0:1.1 >= 1 derived`, `<= 16 derived` on `loans`), which hold the build to 79 rows, so the A/B does
+**not** exclude CB-S1. The v3.1.0 JSON records only the step kinds (`Range`, `Scan`), not `inner_built`, so this run cannot say whether v3.1.0 built. One bound it does give: 16 full
+scans of `loans` at the walk cost of section 8 (about 24 ns per row) would be about 3.9 ms a statement, and v3.1.0's cell ran 851 qps (1,175 µs), so v3.1.0 was most likely
+not scanning once per outer row either. Candidate causes, none separated: CB-S1's derived bounds, the inner build's reach (`join-inner-build.md`), or the walk beneath it, 240 commits apart.
 
 ## 7. Percentiles
 
@@ -409,7 +412,7 @@ PostgreSQL 18.6 median qps:
 | n=10,000 all | 0.98x | 0.55x | 2.31x |
 
 **Reading.** At 10,000 loans the engine is in the PostgreSQL league: the unindexed equalities are 1.08x to 1.23x, the correlated `EXISTS` 2.08x unindexed, `join-no-literal` 1.12x unindexed and 2.31x
-indexed. It is behind where rows must be returned or a range filter walks the whole relation (`books-by-genre` 0.69x, `loans-by-daterange` 0.61x, `overdue` 0.77x unindexed). At 200 loans it is behind on 10 of 12 shapes unindexed (0.62x to 0.99x) and ahead on `exists-correlated` and `count-by-user`; the behind is the round-trip gap (PostgreSQL's `pk-user` is 64.6 µs at 200 loans, KDS's 90.1 µs), amplified by this run's slow-mode spreads.
+indexed. It is behind where rows must be returned or a range filter walks the whole relation (`books-by-genre` 0.69x, `loans-by-daterange` 0.61x, `overdue` 0.77x unindexed). At 200 loans it is behind on 10 of 12 shapes unindexed (0.62x to 0.99x) and ahead on `exists-correlated` and `count-by-user`; the round trip alone does not explain it (PostgreSQL's `pk-user` is 64.6 µs at 200 loans; KDS's 90.1 µs is run 1 of the slow-mode `n=200 none` cell, and its steady figure is 68 µs in `n=200 all`), and the `cores = 1` cells there are not read (section 10).
 
 ## 10. Noise floor, contamination and host
 
@@ -491,7 +494,7 @@ Per-cell host stamps:
 ## 11. What the run says about the engine
 
 1. **Nothing in the 11 read shapes moved beyond noise since v3.1.0**: the large unindexed cells (readable) are within 0.95x to 1.07x and the indexed ones within 0.91x to 1.02x. The engine's read path is where v3.1.0 left it in this scenario.
-2. **The one real mover is a join without a literal, and the join planner is not the reason**: `join-no-literal` is 1.98x v3.1.0, and the same cell with `join_order = written` is as fast. The statement-local inner build is in both arms. The planned arm
+2. **The one real mover is a join without a literal, and the planner's order choice is not the reason**: `join-no-literal` is 1.98x v3.1.0, and the same cell with `join_order = written` is as fast. The statement-local inner build and CB-S1's derived range bounds are in both arms, so neither is excluded (section 6). The planned arm
    is *not* faster than written on any of the three join shapes. This is the first data point on CB/CC in this scenario: the planner is conservative (it keeps the written order unless it wins by the margin) and costs nothing measurable here.
 3. **KDS walks a row cheaper than PostgreSQL (about 24 ns against 34 ns) and returns a row dearer** (the `books-by-genre` figure above). The crossover is why the equality shapes are ahead at 10,000 loans and the
    range and wide-result shapes are behind.

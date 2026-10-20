@@ -18,7 +18,7 @@ archived JSON. PostgreSQL 18.6: `tools/pg_scenario2_freight.py` with `synchronou
 
 | Field | Value |
 |---|---|
-| Date and time | 2026-10-20; the four core cells x 3 runs 03:46:07 to 03:50:59 UTC (interleaved with the isolation probe, the booker sweep and the single-booker cells in the order of section 2); isolation probe, booker sweep `x-b*` 03:51:03 to 03:55:14 UTC; single-booker cells 03:55:18 to 03:58:05 UTC; saturation cells 04:20:52 to 04:22:20 UTC; PostgreSQL 04:22:24 to 04:30:28 UTC |
+| Date and time | 2026-10-20; the four core cells x 3 runs 03:46:07 to 03:50:59 UTC (interleaved with each other, `c8-s`, `c1-s`, `c1-g`, `c8-g` per round, before any other cell of this scenario); isolation probe, booker sweep `x-b*` 03:51:03 to 03:55:14 UTC; single-booker cells 03:55:18 to 03:58:05 UTC; saturation cells 04:20:52 to 04:22:20 UTC; PostgreSQL 04:22:24 to 04:30:28 UTC |
 | Worktree / branch | `bench-scenarios-1-4` / `bench-scenarios-1-4` (the main checkout is not used) |
 | HEAD | `9682b725`, `git describe --tags` = `v3.3.0-33-g9682b725` ("Merge fix-fk-self-reference-refused: a self-referencing foreign key is refused NotImplemented at both doors"), committed 2026-10-20 03:33:40 UTC; equal to `origin/main` when the run began |
 | Tree cleanliness | Clean (`git status` empty) at the start and at the end of the measurement; nothing under `src/`, `include/`, `tools/` or `CMakeLists.txt` was edited, and the drivers are the unmodified `tools/` scripts. `build-release/` is ignored by git. The results files under `bench/v3.3.0/` are uncommitted additions until the commit that carries them |
@@ -27,7 +27,7 @@ archived JSON. PostgreSQL 18.6: `tools/pg_scenario2_freight.py` with `synchronou
 | Build type | Release |
 | Host | 8 logical CPUs, AMD EPYC 9V74 (1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure, a shared development VM; `/` was 95 % full (14 GB free) |
 | Time budget | **Budget lifted by the operator for this run** (order of 2026-10-20: "lift the budget, re-measure PG too"). Every cell of the v3.1.0 rebaseline's plan ran, with its repeat counts, and PostgreSQL was re-measured fresh in the same window. Nothing was cut |
-| Prior run of this shape | `bench/v3.1.0/results-scenario2-freight-v3.1.0-30-gcd7c7c4e.md` (KDS binary `cd7c7c4e`, sha256 `4752f562...`, measured 2026-10-13 23:38 UTC to 2026-10-14 01:39 UTC). The two commits are 240 commits and 101 first-parent merges apart (`git rev-list --count cd7c7c4e..HEAD`), with 178 files changed under `src/`, `include/` and `CMakeLists.txt` (milestones BV to CD among them), so **every KDS delta below is cross-version and attributable to no single change**. The host and its device state are also a week-old comparison: v3.1.0's cells ran on the same VM, 6.5 days earlier |
+| Prior run of this shape | `bench/v3.1.0/results-scenario2-freight-v3.1.0-30-gcd7c7c4e.md` (KDS binary `cd7c7c4e`, sha256 `4752f562...`, measured 2026-10-13 23:38 UTC to 2026-10-14 01:39 UTC). The two commits are 240 commits apart (`git rev-list --count cd7c7c4e..HEAD`), 101 of them first-parent and 23 of those merges, with 178 files changed under `src/`, `include/` and `CMakeLists.txt` (milestones BV to CD among them), so **every KDS delta below is cross-version and attributable to no single change**. The host and its device state are also a week-old comparison: v3.1.0's cells ran on the same VM, about 6.2 days earlier |
 | Server config | `log_level = warn`, `buffer_pool_frames = 65536` (required since BE), `cores` and `durability` per cell, all else default. Ports 15604 to 15607, 15610, 15620, 15651 to 15653, never 15432 (held by an unrelated `kds_server`) |
 | Quiet host | before each cell a gate waited for no `cc1plus` / `cmake --build` / `ctest` / `kds_tests` process and at most 8 % busy CPU over 3 s (`lib.sh` in the archive); `/proc/loadavg` and the process list are in each cell's precheck. **A 1-second monitor ran through the whole run** (`monitor.log`: 1,500+ samples of foreign processes above 10 % CPU) and every cell was checked against it after it ended (`cellvalid.py`): a build/test process or a foreign process at 50 % CPU or more inside the window discards and re-runs the cell. **No cell was discarded**: the monitor saw only a `claude` process at 11 to 23 % of one CPU in 23 samples of the 1,518, all outside the 50 % line. One batch of PostgreSQL cells failed on a connection error and is listed under contamination below |
 | PostgreSQL | PostgreSQL 18.6 (`/home/cdkbs/pg-bench-ba`, port 15434), defaults (`shared_buffers = 128MB`, `synchronous_commit = on`, `fsync = on`, `max_wal_size = 1GB`), not started or stopped by this run. **Re-measured fresh in this window** (the twin runs follow the KDS cells, never concurrent with them) |
@@ -210,8 +210,10 @@ re-descent refusal `gave up after 5 attempts`, which a statement that wrote noth
 The `--verify 100` pass checks four invariants (booked volume against the sum of freights, ship capacity, outstanding credit against recomputed charges, charge rows against
 rules) 400 times while the bookers run. Under the **default isolation** with more than one booker it fails 10 to 35 of 400 in every cell, `cores = 1` included
 where no conflict is ever reported; with **one booker it fails 0 of 400 in all six cells**; under **`--isolation repeatable-read` it passes 400 of 400** at both core counts. The
-checks read several statements' worth of state across the other bookers' commits, and read committed lets a commit land between two of them: the failures are consistent with the isolation
-level showing, not with lost writes, because the same workload passes every check once it reads from one snapshot. This is as it was at v3.1.0 (13 to 34 of 400) and no evidence here says otherwise.
+driver writes `SET booked_cbm = <literal>` from a value it read earlier in the same transaction, which its source names "exactly the lost-update shape": under
+read committed two bookers that read one voyage before either commits both write `read + their cbm`, and the second overwrites the first. The failures are
+that client-side lost update, not engine corruption: under repeatable-read the engine refuses the second writer (`TXN_CONFLICT`), the driver retries, and every check
+passes. This is the reading the v3.1.0 file made of its own failures (13 to 34 of 400), and no evidence here says otherwise.
 
 | cell | isolation | tps | verify failures / checks | conflicted | v3.1.0 tps (cross-version) |
 |---|---|---|---|---|---|
@@ -246,7 +248,7 @@ Bookers 1, 2, 4, 8, 16 (the v3.1.0 plan) and 32 (the saturation cells), `cores =
 
 **Throughput climbs with bookers on both durability rungs and the gap between them opens**: `group` 394 tps to
 3,768 tps (9.6x for 32x the clients) and `strict` 402 tps to 3,071 tps (7.6x), with `group` over `strict` going 0.98x at one booker, 1.24x
-at two, 1.20x at four, 1.17x at eight, 1.28x at 16 and 1.23x at 32. The one-booker rows are the fsync-bound pair: their cross-version deltas (+9.0 % and +23.9 %; v3.1.0's `strict` single run is the slow one) are the device's, as section 8 shows for the matched `cores = 1` cells. **A single booker is not slower under `strict`**: it waits for its own sync either way. From two bookers on `strict` pays for the
+at two, 1.20x at four, 1.17x at eight, 1.28x at 16 and 1.23x at 32. The one-booker rows are the fsync-bound pair: their cross-version deltas (+9.0 % and +23.9 %; v3.1.0's `strict` single run is the slow one) are carried by the commit, as section 8 shows for the matched `cores = 1` cells; whether by the device or the engine, this run does not separate. **A single booker is not slower under `strict`**: it waits for its own sync either way. From two bookers on `strict` pays for the
 staged commit that parks and publishes after its sync, plus the retried conflicts (54 at 8 bookers, 141 at 16, 351 at 32; zero up to two bookers and 11 at four).
 
 What bounds it. The 1-second whole-host sampler around the saturation cells:
@@ -301,10 +303,12 @@ against run 1, `cores = 8`, `strict` and the single-booker cell:
 
 The statements did not get faster, and per statement they are slightly slower: every statement p50 in this table (the 20 rows other than `booking` and `commit`) is 1.01x to 1.11x of v3.1.0's (median about 1.04x), the same sign in all 20, and the `pk` control of scenario 4 reads 73.4 µs
 against 70.1 µs (+4.7 %). Whether that 3 % to 7 % is the engine (240 commits) or the host (the same VM, a week later) is **not separated by this run**. The booking still comes out level or faster because the **commit** fell:
-the single-booker row's movement (+10.9 %) is the commit, whose mean fell from 1,645.9 to 1,343.9 µs and p0 from 1,101.9 to 1,014.5 µs. At `cores = 8` the commit
-mean also fell (2,271 against 2,498 µs `group`, 2,389 against 2,503 µs `strict`), which is where the +3.3 % and +5.6 % come from.
-PostgreSQL's commit mean in this window is 1,343.4 µs, equal to KDS's, so the device's sync was about 18 % cheaper this week
-than at v3.1.0, and it carried both engines. A single-booker delta against v3.1.0 is the device, not the engine (the same reading the v3.1.0 file made of its own 62 % commit share).
+the single-booker row's movement (+10.9 %) is the commit, whose mean fell from 1,645.9 to 1,343.9 µs (-18 %) while its p50 fell 7 % (1,349.8 to 1,252.3 µs)
+and its p0 from 1,101.9 to 1,014.5 µs, so most of the fall is the tail. At `cores = 8` the commit
+mean also fell (2,271 against 2,498 µs `group`, 2,389 against 2,503 µs `strict`), which is where the +3.3 % and +5.6 % come from; at `s2-c1-g` it did not (1,889.0 against 1,883.6 µs).
+PostgreSQL's commit mean in this window is 1,343.4 µs, equal to KDS's. **Whether the fall is the device or the engine is not separated by this run**: PostgreSQL was not
+measured in v3.1.0's window (that file reused PostgreSQL from 2026-09-30, commit mean 1,543.0 µs), and scenario 1's durable autocommit insert did not get faster in the same
+comparison (744 against 773 rows/s).
 
 ## 9. Against PostgreSQL 18.6 (fresh, same window)
 
@@ -315,7 +319,7 @@ cell is `--bookers 1`; the eight-booker cells have no PostgreSQL counterpart. Th
 |---|---|---|---|---|---|---|
 | KDS `b1-s2-c1-g` (this run) | 412.7 tps | 422.1 tps | 414.8 tps | 414.8 tps | 2.3 % | 0.99x |
 | KDS `b1-s2-c1-s` (this run) | 416.4 tps | 417.1 tps | 428.8 tps | 417.1 tps | 3.0 % | 0.99x |
-| PostgreSQL 18.6, `synchronous_commit = on`, fresh | 419.5 tps | 427.1 tps | 414.4 tps | 419.5 tps | 3.0 % | 1.00x |
+| PostgreSQL 18.6, `synchronous_commit = on`, fresh | 419.5 tps | 427.1 tps | 414.4 tps | 419.5 tps | 3.1 % | 1.00x |
 
 Statement level, run 1 of each (the write statements are the engine's strength, the recipe scan its weakness):
 
@@ -338,7 +342,7 @@ cancel in the booking, and the commit is the same fsync.
 
 ## 10. Noise floor, contamination and host
 
-The 3-run spreads of section 3 are the noise floor: 0.5 % to 4.1 % at the matrix cells and 2.3 % to 3.0 % at the single-booker cells; the PostgreSQL cells' is 3.0 %. The booker sweep's
+The 3-run spreads of section 3 are the noise floor: 0.5 % to 4.1 % at the matrix cells and 2.3 % to 3.0 % at the single-booker cells; the PostgreSQL cells' is 3.1 %. The booker sweep's
 single runs have no spread of their own; their floor is the 8-booker pair's 0.5 % (`group`) to 3.4 % (`strict`), and the repeat is the 16-booker pair, run twice (`x-b16` and `sat-b16`): 3,095.1 against 3,057.5 tps under `group` (1.2 %) and 2,417.2 against 2,382.1 tps under `strict` (1.5 %). A single-run delta in the sweep below about 3 % is therefore not read; the cross-version deltas of 12.2 % (16 `group`) and 5.3 % (16 `strict`) are single against single.
 
 **Contamination.** No KDS cell was discarded (140 validity evaluations, none contaminated; `contaminated/` in the run archive holds only the failed PostgreSQL scenario-3 attempt, which is not scenario 2's).
@@ -389,7 +393,7 @@ Per-cell host stamps:
    `strict`. The statements around it (reads at 66 to 87 µs, writes at 45 to 62 µs p50) are not what a booking waits for. A faster engine cannot show in this scenario without a faster device or a cheaper group commit.
 2. **Eight cores do their job on commit-bound work**: `cores = 8` over `cores = 1` is 3.02x under `group` and 2.85x under `strict` for 8 bookers, and `group` over `strict` is 1.17x, the staged
    `strict` commit costing little over `group` once clients overlap (BA-S7).
-3. **The isolation level, not the engine, is what the invariant check measures** (section 6): 400 of 400 under repeatable-read at no throughput cost.
+3. **The invariant check measures the driver's read-modify-write under read committed, not engine corruption** (section 6): the lost update it produces is refused under repeatable-read, which passes 400 of 400 at no throughput cost.
 4. **This run did not find the engine's limit under booking load** (section 7): 3,768 tps at 32 bookers with the host at most 67 % busy. Finding it needs a longer cell and a client that is not one Python process; that is the
    next measurement, not a conclusion.
 

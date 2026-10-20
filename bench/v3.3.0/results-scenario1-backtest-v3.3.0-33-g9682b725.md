@@ -4,10 +4,11 @@
 `model_results`, `write_probe`) are btrees with a hidden tuple key since BZ, so the SUS-1 refusal that stopped it at v3.1.0 is gone and
 the BTREE copy that run needed is not used. On 60,480 bars an unindexed one-session equality (`day-slice`) runs
 591.3 qps and a Cabin on its filter column lifts it 11.1x to
-6,557.7 qps; the backtest's three-relation join runs 575.8 qps cold-or-warm and
+6,557.7 qps; the backtest's three-relation join runs 575.8 qps warm (563.7 qps cold) and
 5,570.3 qps with the Cabin; a durable autocommit insert is 744 rows/s and a 1,000-row batch
-21,023 rows/s. Against the v3.1.0 BTREE-copy numbers (cross-version) the single-connection read shapes moved by less than
-their own spreads, except `cores = 8`, whose one-connection reads gained 28 to 31 % because they no longer pay the 22 % penalty they paid there
+21,023 rows/s. Against the v3.1.0 BTREE-copy numbers (cross-version) the one-core scan and join shapes gained 5 % to 9 % (above both spreads
+under `strict`; under `group` from inside them, `cross-join`, to just above them, `day-slice` and `model-join`), and three `cores = 8` shapes (`day-slice`, `cross-join`, `point-join`) gained 28 to 31 %:
+the eight-core penalty `day-slice` paid at v3.1.0 (22 %) is 6 % now; the other four `cores = 8` shapes moved -1.4 % to +5.7 %
 (section 9). Against PostgreSQL 18.6, **re-measured in the same window**, KDS is ahead on the non-index equality scan
 (1.43x), the join (1.46x) and the pk-anchored join
 (1.79x), and behind on every shape that returns many rows or folds a whole relation
@@ -34,7 +35,7 @@ phases compare a hidden-key btree against an explicit one, which is the same str
 | Build type | Release |
 | Host | 8 logical CPUs, AMD EPYC 9V74 (1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure, a shared development VM; `/` was 95 % full (14 GB free) |
 | Time budget | **Budget lifted by the operator for this run** (order of 2026-10-20: "lift the budget, re-measure PG too"). Every cell of the v3.1.0 rebaseline's plan ran, with its repeat counts, and PostgreSQL was re-measured fresh in the same window. Nothing was cut |
-| Prior run of this shape | `bench/v3.1.0/results-scenario1-backtest-v3.1.0-30-gcd7c7c4e.md` (KDS binary `cd7c7c4e`, sha256 `4752f562...`, measured 2026-10-13 23:38 UTC to 2026-10-14 01:39 UTC). The two commits are 240 commits and 101 first-parent merges apart (`git rev-list --count cd7c7c4e..HEAD`), with 178 files changed under `src/`, `include/` and `CMakeLists.txt` (milestones BV to CD among them), so **every KDS delta below is cross-version and attributable to no single change**. The host and its device state are also a week-old comparison: v3.1.0's cells ran on the same VM, 6.5 days earlier |
+| Prior run of this shape | `bench/v3.1.0/results-scenario1-backtest-v3.1.0-30-gcd7c7c4e.md` (KDS binary `cd7c7c4e`, sha256 `4752f562...`, measured 2026-10-13 23:38 UTC to 2026-10-14 01:39 UTC). The two commits are 240 commits apart (`git rev-list --count cd7c7c4e..HEAD`), 101 of them first-parent and 23 of those merges, with 178 files changed under `src/`, `include/` and `CMakeLists.txt` (milestones BV to CD among them), so **every KDS delta below is cross-version and attributable to no single change**. The host and its device state are also a week-old comparison: v3.1.0's cells ran on the same VM, about 6.2 days earlier |
 | Server config | `log_level = warn`, `buffer_pool_frames = 65536` (required since BE), `cores` and `durability` per cell, all else default. Ports 15604 to 15607, 15610, 15620, 15651 to 15653, never 15432 (held by an unrelated `kds_server`) |
 | Quiet host | before each cell a gate waited for no `cc1plus` / `cmake --build` / `ctest` / `kds_tests` process and at most 8 % busy CPU over 3 s (`lib.sh` in the archive); `/proc/loadavg` and the process list are in each cell's precheck. **A 1-second monitor ran through the whole run** (`monitor.log`: 1,500+ samples of foreign processes above 10 % CPU) and every cell was checked against it after it ended (`cellvalid.py`): a build/test process or a foreign process at 50 % CPU or more inside the window discards and re-runs the cell. **No cell was discarded**: the monitor saw only a `claude` process at 11 to 23 % of one CPU in 23 samples of the 1,518, all outside the 50 % line. One batch of PostgreSQL cells failed on a connection error and is listed under contamination below |
 | PostgreSQL | PostgreSQL 18.6 (`/home/cdkbs/pg-bench-ba`, port 15434), defaults (`shared_buffers = 128MB`, `synchronous_commit = on`, `fsync = on`, `max_wal_size = 1GB`), not started or stopped by this run. **Re-measured fresh in this window** (the twin runs follow the KDS cells, never concurrent with them) |
@@ -308,8 +309,8 @@ Scenario 1, `cores = 1`, `group`: planned (default) against `join_order = writte
 
 `compare-one` is the only phase that reads above its spreads (2.7 % and 3.6 %), by 6 % (1.06x), and the `model-join` sweep row
 moves 2 % with spreads of 4 %. The join is a 359-row result out of 2,872 examined rows; its time is the walk of `model_results` (26 pages) and the
-round trip, not the join order. The `point-join` rows (0.68x to 0.70x for the planned arm) are the 45 % bimodal row of section 3 in a different mood
-in each arm (spreads 45 % and 32 %), not a finding. **Why `model-join` stays at 0.56x of PostgreSQL**: both engines examine the 2,872 rows of
+round trip, not the join order. The `point-join` rows (0.68x to 0.70x for the planned arm) are the bimodal row of section 3 (spreads up to 31 % there) in a different mood
+in each arm (spreads 45 % to 48 % planned, 31 % to 33 % written), not a finding. **Why `model-join` stays at 0.56x of PostgreSQL**: both engines examine the 2,872 rows of
 `model_results` for one `model_id`; PostgreSQL's 1,092 qps against KDS's 615 qps is the per-row result cost of section 5 (359 rows returned),
 not a plan difference: the KDS plan is the one the planner picked, and the alternative order is the same speed within 6 %.
 
@@ -434,7 +435,7 @@ Ratios across the sweep sizes, KDS `c1-g` warm over PostgreSQL warm (and indexed
 **The league reading.** KDS is in the same league on pk reads (0.77x to 1.32x of PG, within the round-trip gap), ahead on the unindexed equality scan at 60,480 bars
 and on both joins that start from a pk or a scan with probes (1.3x to 2.0x at every size), and **behind by half on result-heavy shapes at every size**
 (`bar-range` 0.51x to 0.52x at 252, 1,008 and 10,080 bars, `symbol-history` 0.42x to 0.48x): that ratio does not change with the row count, which marks it as a per-row,
-not a fixed, cost. At 252 bars `day-slice` is 0.80x: with one page the walk is the round trip and PG's round trip is 20 % cheaper.
+not a fixed, cost. At 252 bars `day-slice` is 0.80x; the pk round trip is not the reason (`bar-lookup` at 252 bars is 1.32x, KDS faster), and this run does not separate what is.
 
 ## 9. Delta against the previous run of this shape (cross-version)
 
@@ -443,24 +444,25 @@ Read against each side's spread:
 
 | measure | now | v3.1.0 | delta | read |
 |---|---|---|---|---|
-| `c1-g` `day-slice` warm | 591.3 qps | 550.9 qps | +7.3 % | inside the larger spread (7 %); not a finding |
-| `c1-g` `cross-join` warm | 575.8 qps | 549.2 qps | +4.8 % | inside the spread (10.5 % at v3.1.0) |
-| `c1-g` `model-join` warm | 614.8 qps | 569.5 qps | +8.0 % | at the edge of the spreads (6.5 % now, 3.9 % then); the reordered plan of section 6 accounts for 2 % of it at most |
+| `c1-g` `day-slice` warm | 591.3 qps | 550.9 qps | +7.3 % | just above the larger spread (6.9 % now, 6.5 % then): a finding by section 3's rule, at its edge |
+| `c1-s` `day-slice` warm | 599.1 qps | 550.1 qps | +8.9 % | **a finding**: spreads 1.0 % and 1.8 % |
+| `c1-g` `cross-join` warm | 575.8 qps | 549.2 qps | +4.8 % | inside the spread (9.5 % at v3.1.0) |
+| `c1-g` `model-join` warm | 614.8 qps | 569.5 qps | +8.0 % | above both spreads (6.5 % now, 3.8 % then), so a finding by section 3's rule; the reordered plan of section 6 accounts for 2 % of it at most |
 | `c8-g` `day-slice` warm | 554.4 qps | 430.0 qps | +28.9 % | **a finding**: spreads 2.3 % and 0.5 % |
 | `c8-g` `cross-join` warm | 548.1 qps | 427.6 qps | +28.2 % | **a finding**: spreads 1.2 % and 0.6 % |
 | Cabin lifts (`day-slice` / `cross-join`, `c1-g`) | 11.1x / 9.7x | 11.9x / 10.5x | - | the Cabin arms moved -0.2 % and -3.8 % (inside spread) |
 | autocommit insert | 744 rows/s | 773 rows/s | -3.7 % | inside the spread (26 % then) |
 
 At v3.1.0 a one-connection read on an eight-core instance ran 22 % slower than on a one-core instance (430 against 551 qps for `day-slice`); in this run the same pair is
-554 against 591 qps (6 % slower). The cross-version gain is therefore the eight-core penalty shrinking, not the one-core engine getting faster
-(+7.3 % at `cores = 1`, inside the spread). This run does not say which commit removed it. Every rate of the phases the run shares with v3.1.0 (section 3, last table)
+554 against 591 qps (6 % slower). Most of the +28.9 % is therefore the eight-core penalty shrinking; the rest is a one-core gain of 7 % to 9 % on the
+scan shapes (+7.3 % `c1-g`, at the edge of its spreads; +8.9 % `c1-s`, spreads 1.0 % and 1.8 %). This run does not say which commits did either. Every rate of the phases the run shares with v3.1.0 (section 3, last table)
 moved between -6.1 % and +8.7 % except the phases of 1 to 8 operations (`sync`, `load-exchanges`, `load-symbols`, `load-models`), whose spreads are 12 % to 58 %.
 
 ## 10. Noise floor, contamination and host
 
 The noise floor is the 3-run spread of one cell: 6.9 % for `day-slice`, 1.8 % for `cross-join`, 6.5 % for `model-join`,
 13.0 % for `bar-lookup`. Two shapes are bimodal in a run (the sweep's 100 statements alternate between a fast and a slow mode): `point-join`
-(spread 2 % to 45 % depending on the cell) and `bar-lookup` under `strict` (28.5 %). Medians of three damp it and the table shows the spread beside it; no delta is
+(spread 1 % to 48 % depending on the cell, section 3 and section 6) and `bar-lookup` under `strict` (28.5 %). Medians of three damp it and the table shows the spread beside it; no delta is
 claimed on them.
 
 **Contamination.** No KDS cell was discarded: the validity check (`cellvalid.py`, 140 evaluations over the whole run, one per cell including the other
@@ -523,7 +525,7 @@ Per-cell host stamps (load average before the cell, gate wait, and what the 1-se
    decoder; whether the factor of two lives in the engine or in the two decoders is **not separated by this run**.
 4. **A Cabin's value is the walk it replaces**: 1.1x at 252 bars, 11.1x at 60,480; flat in n. The controller-free declared Cabin is the right tool for a filter column
    on a relation beyond a few pages and no tool at all below it.
-5. **The eight-core instance is no longer slower than the one-core instance for one connection** (section 9), and it is 1.82x PostgreSQL on eight connections where PostgreSQL
+5. **The eight-core instance is 6 % slower than the one-core instance for one connection, down from 22 %** (`day-slice`, section 9), and it is 1.82x PostgreSQL on eight connections where PostgreSQL
    plateaus at 875 qps.
 
 ## 12. Archive
