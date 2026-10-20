@@ -116,7 +116,11 @@ write path is built for one. The forward check resolves every parent before
 any row is written (§2a), so a parent the same statement inserts would read
 absent, and a multi-row `DELETE`'s reverse check runs per row under a view
 holding the statement's own deletes, so it would admit or refuse by the
-order its walk meets a parent and its child.
+order its walk meets a parent and its child. **When self-reference is
+built, a multi-row `DELETE`'s reverse check reads the relation as the
+statement began** (operator's ruling of 2026-10-18): a parent with a child
+live at the statement's start is refused whether or not the same statement
+deleted that child first, so the walk's order decides nothing.
 
 **Nothing back-checks existing rows**: a foreign key is declared only at
 `CREATE TABLE`, on an empty relation; there is no `ADD CONSTRAINT`.
