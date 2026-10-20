@@ -1,0 +1,47 @@
+=== range-1: SELECT * FROM daily_stats WHERE id BETWEEN 1 AND 1
+  analyze rows=1 class=RangeSelect steps=1 examined=69 pages=2 opens=1 pattern_id=0xbd71a9c7722fa2a1 fetch_id=0x9332237e2895b3c4
+  class=RangeSelect steps=1 hoisted=0
+  step 0 Range daily_stats range=[1, 1]
+    filter 0:0.0 >= 1
+    filter 0:0.0 <= 1
+  project * (12 column(s) of step 0)
+  step 0 Range daily_stats opens=1 examined=69 matched=1 sel=1% pages=2 range_stopped_early=1
+=== range-100: SELECT * FROM daily_stats WHERE id BETWEEN 1 AND 100
+  analyze rows=100 class=RangeSelect steps=1 examined=138 pages=3 opens=1 pattern_id=0xbd71a9c7722fa2a1 fetch_id=0x9332237e2895b3c4
+  class=RangeSelect steps=1 hoisted=0
+  step 0 Range daily_stats range=[1, 100]
+    filter 0:0.0 >= 1
+    filter 0:0.0 <= 100
+  project * (12 column(s) of step 0)
+  step 0 Range daily_stats opens=1 examined=138 matched=100 sel=72% pages=3 range_stopped_early=1
+=== range-1000: SELECT * FROM daily_stats WHERE id BETWEEN 1 AND 1000
+  analyze rows=1000 class=RangeSelect steps=1 examined=1035 pages=16 opens=1 pattern_id=0xbd71a9c7722fa2a1 fetch_id=0x9332237e2895b3c4
+  class=RangeSelect steps=1 hoisted=0
+  step 0 Range daily_stats range=[1, 1000]
+    filter 0:0.0 >= 1
+    filter 0:0.0 <= 1000
+  project * (12 column(s) of step 0)
+  step 0 Range daily_stats opens=1 examined=1035 matched=1000 sel=96% pages=16 range_stopped_early=1
+=== range-10000: SELECT * FROM daily_stats WHERE id BETWEEN 1 AND 10000
+  analyze rows=10000 class=RangeSelect steps=1 examined=10005 pages=146 opens=1 pattern_id=0xbd71a9c7722fa2a1 fetch_id=0x9332237e2895b3c4
+  class=RangeSelect steps=1 hoisted=0
+  step 0 Range daily_stats range=[1, 10000]
+    filter 0:0.0 >= 1
+    filter 0:0.0 <= 10000
+  project * (12 column(s) of step 0)
+  step 0 Range daily_stats opens=1 examined=10005 matched=10000 sel=99% pages=146 range_stopped_early=1
+=== range-60480: SELECT * FROM daily_stats WHERE id BETWEEN 1 AND 60480
+  analyze rows=60480 class=RangeSelect steps=1 examined=60480 pages=877 opens=1 pattern_id=0xbd71a9c7722fa2a1 fetch_id=0x9332237e2895b3c4
+  class=RangeSelect steps=1 hoisted=0
+  step 0 Range daily_stats range=[1, 60480]
+    filter 0:0.0 >= 1
+    filter 0:0.0 <= 60480
+  project * (12 column(s) of step 0)
+  step 0 Range daily_stats opens=1 examined=60480 matched=60480 sel=100% pages=877
+=== filter-sym3: SELECT * FROM daily_stats WHERE symbol_id = 3
+  analyze rows=7560 class=JoinSelect steps=1 examined=60480 pages=877 opens=1 pattern_id=0x9426315c0ef8fc02 fetch_id=0x14701e994745f63d
+  class=JoinSelect steps=1 hoisted=0
+  step 0 FilterScan daily_stats
+    filter 0:0.2 = 3
+  project * (12 column(s) of step 0)
+  step 0 FilterScan daily_stats opens=1 examined=60480 matched=7560 sel=12% pages=877

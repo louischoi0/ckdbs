@@ -346,9 +346,18 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
 // **The boundary is where a cancel is observed** (docs/spec/protocol.md §10):
 // `cancel`, when set, is the session's flag, taken there - before the yield
 // and again after it - and a taken flag ends the walk `Cancelled`.
+//
+// **The boundary is where a streamed reply leaves** (CE,
+// `instructions/v3.2.0/workorder-ce-streaming-reply.md`): `at_boundary`, when
+// set, runs there before the yield - the rows emitted so far go to the
+// client with no page held - and `resume_when`, when set, replaces the yield
+// with a wait on it, which is how a client that is not reading parks the
+// walk (CE-Q5 (a)). The caller owns both and keeps them alive for the walk.
 struct SlicePolicy {
     std::uint32_t pages_per_slice = 64;
     std::atomic<bool>* cancel = nullptr;
+    std::function<void()> at_boundary;
+    const std::function<bool()>* resume_when = nullptr;
 };
 
 // The statement's chain as a coroutine its caller awaits - `Execute`'s body,

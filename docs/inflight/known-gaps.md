@@ -1505,6 +1505,48 @@ Verified on `bo-relation-stats-checkpoints` at `86d1fe1a` (BO-S7). Owned by
   `docs/spec/wal.md` §11. Checking the generation first at each park closes
   it.
 
+## Streamed replies (CE)
+
+Verified on `ce-streaming-reply` at `9e568b44` (CE-S1..S4). Owned by
+`docs/spec/protocol.md` §7; the order is
+`instructions/v3.2.0/workorder-ce-streaming-reply.md`.
+
+- **A parked walk is bounded only by its socket.** A client that stops
+  reading holds the walk's read view (the purge horizon), its borrow (every
+  DDL taking the relation `X` waits, refused `TxnConflict` at the 1 s fault
+  net) and its core's reader-lease slot for as long as its socket lives -
+  about twice `tcp_keepalive_s`, and without bound with keepalive off and a
+  live client. Two consequences a yield of one turn never had:
+  - **the transaction lifetime ceiling does not reach it** (CE-A7):
+    `ExpireOverdueTransactions` skips a connection with a statement running
+    (`tcp_server.cpp`), so an explicit transaction outlives the 60 s
+    ceiling with it;
+  - **256 parked walks fill their core's reader-lease slots**
+    (`txn::kMaxRegisteredReaders`, `sched.md` §3), and a further walk's
+    head on that core is refused `OutOfSpace` until one ends.
+- **Only a walk longer than one slice streams.** Rows leave at the walk's
+  slice boundaries (64 pages) and only once a 64 KiB batch has sealed, so a
+  reply whose walk ends inside its first slice - the scenarios' shapes of
+  1,000 rows or fewer (`bar-range`, `model-join`, `books-by-genre`; of the
+  measured many-row shapes only `symbol-history` and the filtered walk
+  cross a boundary) - is sent at completion as before. CE-S0 bounds what
+  streaming can hide at 5-12 % of the wall time of a statement of 10,000
+  rows or more on the scenario client
+  (`bench/v3.3.0/results-ce-s0-premise-v3.3.0-50-g1f57f37b.md`).
+- **A cancel of a parked walk is read on its core's next poll**, bounded by
+  the idle block (`max_idle_block_ms`); nothing kicks the core. No cell
+  covers `C_CANCEL` against a parked walk; the hangup cell covers the
+  closing path, which the same predicate reads.
+- **The two park cells assume the host's send buffer** (`tcp_wmem`'s
+  maximum, 4 MiB here) is well under their 12.8 MB reply; on a host tuned
+  above it the walk ends without parking and the cells fail.
+- **What `ce_streaming_reply_test.cpp` does not cover**: the keepalive user
+  timeout ending a park and the horizon held while parked (both CE-S4
+  asked for; the hangup cell covers the closing path and the borrow's
+  release); a join, an index or Cabin fallback walk, or `LIMIT` streaming;
+  and CE-S1's byte-identical reply for every shape that does not stream -
+  only the capped portal has a cell.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,

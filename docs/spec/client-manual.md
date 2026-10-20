@@ -256,9 +256,19 @@ client author has to know to write one.
   contract; a client that does not send `C_SYNC` after an error will find
   its next statement swallowed. **Pipelined, the answers arrive together**:
   `S_PARSE_OK` and `S_BIND_OK` for frames sent ahead of a `C_EXECUTE` come
-  with the statement's own answer, at its completion (`protocol.md` §5,
-  BN-R7 of `workorder-bn-opt-read-update-path.md`); a client that waits for
+  with the statement's own answer, at its completion, or with its first rows
+  when it streams (`protocol.md` §5, BN-R7 of
+  `workorder-bn-opt-read-update-path.md`); a client that waits for
   `S_PARSE_OK` before executing gets it at once.
+- **Rows can arrive before the statement ends**: with `max_rows = 0`, an
+  unsorted, unaggregated `SELECT` whose outermost relation is walked sends
+  its rows every 64 pages it walks (`protocol.md` §7 names the shapes,
+  CE), so a client may process `S_ROW_BATCH`es as they come - but **a
+  statement that ends in `S_ERROR` has no result**, whatever rows came
+  before it, and a client discards them. A client that stops reading
+  parks the statement, which keeps its read view and its borrow - and an
+  explicit transaction past its lifetime ceiling - until the client reads
+  again or the connection closes.
 - **Errors** are `S_ERROR {code, retryable, severity, message, detail?,
   position?}`, `code` being `category << 16 | detail`. `severity` says
   whether the connection survives: an ordinary refusal leaves it standing,

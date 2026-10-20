@@ -1,0 +1,51 @@
+== p1-A-sweep start 2026-10-20T10:59:59Z ==
+== p1-A-sweep end 2026-10-20T11:04:00Z ==
+== p1-A-s1 start 2026-10-20T11:04:00Z ==
+== p1-A-s1 end 2026-10-20T11:05:06Z rc=0 ==
+== p1-A-s3 start 2026-10-20T11:05:09Z ==
+== p1-A-s3 end 2026-10-20T11:06:02Z rc=0 ==
+== p1-B-sweep start 2026-10-20T11:06:05Z ==
+== p1-B-sweep end 2026-10-20T11:07:45Z ==
+== p1-B-s1 start 2026-10-20T11:07:45Z ==
+== p1-B-s1 end 2026-10-20T11:08:51Z rc=0 ==
+== p1-B-s3 start 2026-10-20T11:08:54Z ==
+== p1-B-s3 end 2026-10-20T11:09:47Z rc=0 ==
+== p2-B-sweep start 2026-10-20T11:09:50Z ==
+== p2-B-sweep end 2026-10-20T11:11:30Z ==
+== p2-B-s1 start 2026-10-20T11:11:30Z ==
+== p2-B-s1 end 2026-10-20T11:12:36Z rc=0 ==
+== p2-B-s3 start 2026-10-20T11:12:39Z ==
+== p2-B-s3 end 2026-10-20T11:13:32Z rc=0 ==
+== p2-A-sweep start 2026-10-20T11:13:36Z ==
+== p2-A-sweep end 2026-10-20T11:15:16Z ==
+== p2-A-s1 start 2026-10-20T11:15:16Z ==
+== p2-A-s1 end 2026-10-20T11:16:22Z rc=0 ==
+== p2-A-s3 start 2026-10-20T11:16:25Z ==
+== p2-A-s3 end 2026-10-20T11:17:19Z rc=0 ==
+== p3-A-sweep start 2026-10-20T11:17:22Z ==
+== p3-A-sweep end 2026-10-20T11:19:02Z ==
+== p3-A-s1 start 2026-10-20T11:19:02Z ==
+== p3-A-s1 end 2026-10-20T11:20:08Z rc=0 ==
+== p3-A-s3 start 2026-10-20T11:20:11Z ==
+== p3-A-s3 end 2026-10-20T11:21:04Z rc=0 ==
+== p3-B-sweep start 2026-10-20T11:21:07Z ==
+== p3-B-sweep end 2026-10-20T11:22:47Z ==
+== p3-B-s1 start 2026-10-20T11:22:48Z ==
+== p3-B-s1 end 2026-10-20T11:23:53Z rc=0 ==
+== p3-B-s3 start 2026-10-20T11:23:56Z ==
+== p3-B-s3 end 2026-10-20T11:24:49Z rc=0 ==
+== census start 2026-10-20T11:24:53Z ==
+== census end 2026-10-20T11:27:21Z rc=0 ==
+== p1-A-drain start 2026-10-20T11:29:22Z ==
+== p1-A-drain end 2026-10-20T11:30:22Z ==
+== p1-B-drain start 2026-10-20T11:30:22Z ==
+== p1-B-drain end 2026-10-20T11:31:23Z ==
+== p2-B-drain start 2026-10-20T11:31:23Z ==
+== p2-B-drain end 2026-10-20T11:32:24Z ==
+== p2-A-drain start 2026-10-20T11:32:24Z ==
+== p2-A-drain end 2026-10-20T11:33:24Z ==
+== p3-A-drain start 2026-10-20T11:33:24Z ==
+== p3-A-drain end 2026-10-20T11:34:24Z ==
+== p3-B-drain start 2026-10-20T11:34:24Z ==
+== p3-B-drain pass 1 contaminated/failed ==
+== p3-B-drain end 2026-10-20T11:36:28Z ==

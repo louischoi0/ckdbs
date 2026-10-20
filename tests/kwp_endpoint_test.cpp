@@ -22,6 +22,7 @@
 #include "kds/wire/kwp.hpp"
 #include "kds/wire/kwp_types.hpp"
 #include "kds/wire/row_codec.hpp"
+#include "kwp_test_client.hpp"
 
 // **KWP/1 over a real socket** (protocol-wp.md P13). `tcp_server_test.cpp`
 // is the same listener's newline surface; this is the framed one, and the
@@ -84,75 +85,7 @@ protected:
     std::optional<CommandDispatcher> dispatcher_;
 };
 
-int Connect(std::uint16_t port) {
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    addr.sin_port = htons(port);
-    for (int attempt = 0; attempt < 50; ++attempt) {
-        if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) return fd;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    ::close(fd);
-    return -1;
-}
-
-void SendFrame(int fd, ClientFrameType type, std::span<const std::byte> payload) {
-    const auto frame = wire::EncodeFrame(static_cast<std::uint8_t>(type), 0, payload);
-    ASSERT_EQ(::write(fd, frame.data(), frame.size()), static_cast<ssize_t>(frame.size()));
-}
-
-// Reads until `decoder` yields a frame, or the peer hangs up.
-std::optional<wire::DecodedFrame> ReadFrame(int fd, wire::FrameDecoder& decoder) {
-    while (true) {
-        if (auto frame = decoder.PopFrame()) return frame;
-        std::byte buf[4096];
-        const ssize_t n = ::read(fd, buf, sizeof(buf));
-        if (n <= 0) return std::nullopt;
-        if (!decoder.Feed(std::span<const std::byte>(buf, static_cast<std::size_t>(n))).ok()) {
-            return std::nullopt;
-        }
-    }
-}
-
-bool Handshake(int fd, wire::FrameDecoder& decoder) {
-    wire::ClientHello hello;
-    hello.client_name = "endpoint-test";
-    SendFrame(fd, ClientFrameType::kHello, wire::EncodeClientHello(hello));
-    auto s_hello = ReadFrame(fd, decoder);
-    if (!s_hello.has_value() ||
-        s_hello->type != static_cast<std::uint8_t>(ServerFrameType::kHello)) {
-        return false;
-    }
-    auto ready = ReadFrame(fd, decoder);
-    return ready.has_value() &&
-           ready->type == static_cast<std::uint8_t>(ServerFrameType::kReady);
-}
-
-std::vector<std::byte> ParsePayload(std::string_view name, std::string_view sql) {
-    wire::PayloadWriter w;
-    w.Str(name);
-    w.Text(sql);
-    return w.Take();
-}
-
-std::vector<std::byte> BindPayload(std::string_view portal, std::string_view stmt) {
-    wire::PayloadWriter w;
-    w.Str(portal);
-    w.Str(stmt);
-    auto out = w.Take();
-    (void)wire::EncodeBindParams({}, out);
-    return out;
-}
-
-std::vector<std::byte> ExecutePayload(std::string_view portal, std::uint32_t max_rows) {
-    wire::PayloadWriter w;
-    w.Str(portal);
-    w.U32(max_rows);
-    return w.Take();
-}
+using namespace kwp_test;
 
 // Sends STOP as an ordinary statement, which ends the reactor exactly as
 // the newline protocol's STOP line does - one stop path, two framings.

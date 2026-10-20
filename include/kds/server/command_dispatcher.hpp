@@ -690,6 +690,15 @@ public:
         after_assertion_publish_run_for_test_ = std::move(hook);
     }
 
+    // **A test seam on a plain `SELECT`'s walk** (CE-S1): runs on the
+    // reactor after each row the walk emits, with the count emitted so far
+    // in this run. A non-OK status ends the walk with it, as a row's own
+    // refusal would - after rows have reached the sink, which is what the
+    // re-run and streaming cells need. Unset in production.
+    void SetSelectRowEmittedForTest(std::function<Status(std::uint64_t)> hook) {
+        select_row_emitted_for_test_ = std::move(hook);
+    }
+
 private:
     // AZ-S3: the registry refuses at admission a group no log record of this
     // dispatcher's stream can carry. Every core's stream is the instance's
@@ -703,6 +712,7 @@ private:
     std::function<Status()> after_placement_for_test_;
     std::function<void(std::uint64_t)> after_row_id_issued_for_test_;
     std::function<void()> after_assertion_publish_run_for_test_;
+    std::function<Status(std::uint64_t)> select_row_emitted_for_test_;
 
     // ---- Transaction control (docs/spec/txn.md sections 1, 6) ----------------
     DispatchOutcome HandleBegin(std::string_view args, Session& session);
@@ -2414,8 +2424,11 @@ private:
     // BA-S14's re-run test, shared by both entry points: a structural
     // refusal of a statement `EndWrite` kept the note for, inside the
     // statement's one deadline (`deadline_ns`, set at the first refusal).
-    // Counts the re-run it admits.
-    bool StructuralRerunDue(const DispatchOutcome& out, sched::MonoTimeNs& deadline_ns);
+    // Counts the re-run it admits, and rewinds the session's result sink for
+    // it (CE-A1); declines one whose rows a client may already have read
+    // (CE-R4).
+    bool StructuralRerunDue(const DispatchOutcome& out, Session* session,
+                            sched::MonoTimeNs& deadline_ns);
     // The `DispatchAsync` call whose synchronous window is running, and the
     // last one issued (`MayParkScope`, `DeferredCommit::statement`).
     std::uint64_t parking_statement_ = 0;

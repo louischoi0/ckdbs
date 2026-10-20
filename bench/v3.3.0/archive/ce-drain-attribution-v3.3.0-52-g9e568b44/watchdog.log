@@ -1,0 +1,7 @@
+2026-10-20T11:56:05Z master=alive status_age=2s 2026-10-20T11:56:03Z r1-C quiet check 2/4: busy=1%
+2026-10-20T11:57:05Z master=alive status_age=0s 2026-10-20T11:57:05Z r2-C pass 1
+2026-10-20T11:58:05Z master=alive status_age=8s 2026-10-20T11:57:57Z r3-C pass 1
+2026-10-20T11:59:05Z master=alive status_age=1s 2026-10-20T11:59:04Z r4-C start
+2026-10-20T12:00:05Z master=alive status_age=2s 2026-10-20T12:00:03Z r4-A quiet check 3/4: busy=0%
+2026-10-20T12:01:05Z master=alive status_age=3s 2026-10-20T12:01:02Z r5-A pass 1
+2026-10-20T12:02:05Z master=DEAD status_age=23s 2026-10-20T12:01:42Z DONE

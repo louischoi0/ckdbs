@@ -1,0 +1,27 @@
+2026-10-20T09:47:24Z master=none alive=n status_age=0s status=
+2026-10-20T09:47:24Z ORPHAN: master gone, restarting
+2026-10-20T09:48:24Z master=224660 alive=y status_age=7s status=2026-10-20T09:48:17Z rowcost waiting for a quiet host: busy=100% procs=28
+2026-10-20T09:49:24Z master=224660 alive=y status_age=7s status=2026-10-20T09:49:17Z rowcost waiting for a quiet host: busy=99% procs=28
+2026-10-20T09:50:24Z master=224660 alive=y status_age=6s status=2026-10-20T09:50:18Z rowcost waiting for a quiet host: busy=8% procs=2
+2026-10-20T09:51:24Z master=224660 alive=y status_age=2s status=1792489882.7894542 rep=2 shape=range-1 mode=drain
+2026-10-20T09:52:24Z master=224660 alive=y status_age=1s status=1792489943.510571 rep=3 shape=range-1000 mode=split
+2026-10-20T09:53:24Z master=224660 alive=y status_age=4s status=2026-10-20T09:53:20Z rowcost-pass1 waiting for a quiet host: busy=17% procs=6
+2026-10-20T09:54:24Z master=224660 alive=y status_age=3s status=2026-10-20T09:54:21Z rowcost-pass1 waiting for a quiet host: busy=4% procs=6
+2026-10-20T09:55:24Z master=224660 alive=y status_age=2s status=2026-10-20T09:55:22Z rowcost-pass1 waiting for a quiet host: busy=49% procs=6
+2026-10-20T09:56:24Z master=224660 alive=y status_age=2s status=2026-10-20T09:56:22Z rowcost-pass1 waiting for a quiet host: busy=17% procs=6
+2026-10-20T09:57:24Z master=224660 alive=y status_age=1s status=2026-10-20T09:57:23Z rowcost-pass1 waiting for a quiet host: busy=7% procs=6
+2026-10-20T09:58:24Z master=224660 alive=y status_age=1s status=2026-10-20T09:58:23Z rowcost-pass1 waiting for a quiet host: busy=51% procs=6
+2026-10-20T09:59:24Z master=224660 alive=y status_age=1s status=1792490363.0610921 rep=1 shape=range-10000 mode=send
+2026-10-20T10:00:24Z master=224660 alive=n status_age=43s status=1792490381.017027 rep=1 shape=filter-sym3 mode=split
+2026-10-20T10:00:24Z ORPHAN: master gone, restarting
+2026-10-20T10:01:24Z master=238809 alive=y status_age=3s status=1792490481.4151695 rep=2 shape=range-100 mode=split
+2026-10-20T10:02:24Z master=238809 alive=y status_age=6s status=1792490538.7448437 rep=2 shape=filter-sym3 mode=split
+2026-10-20T10:03:24Z master=238809 alive=y status_age=1s status=1792490603.6573887 rep=3 shape=range-10000 mode=drain
+2026-10-20T10:04:24Z master=238809 alive=y status_age=4s status=2026-10-20T10:04:20Z s1-c1-g quiet check 2/6: busy=0%
+2026-10-20T10:05:24Z master=238809 alive=y status_age=2s status=2026-10-20T10:05:22Z s3-c1-n10000-none start
+2026-10-20T10:06:24Z master=238809 alive=y status_age=2s status=2026-10-20T10:06:22Z r2-s1-c1-g quiet check 1/6: busy=0%
+2026-10-20T10:07:24Z master=238809 alive=y status_age=42s status=2026-10-20T10:06:42Z r2-s1-c1-g quiet check 5/6: busy=1%
+2026-10-20T10:08:24Z master=238809 alive=y status_age=31s status=2026-10-20T10:07:53Z r2-s3-c1-n10000-none quiet check 5/6: busy=1%
+2026-10-20T10:09:24Z master=238809 alive=y status_age=34s status=2026-10-20T10:08:50Z r3-s1-c1-g quiet check 5/6: busy=0%
+2026-10-20T10:10:24Z master=238809 alive=y status_age=23s status=2026-10-20T10:10:01Z r3-s3-c1-n10000-none quiet check 5/6: busy=0%
+2026-10-20T10:11:24Z all.done seen, watchdog exits
