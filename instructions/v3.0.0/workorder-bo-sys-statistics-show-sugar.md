@@ -41,7 +41,7 @@ to its close in this session, BO-Q2 and Q4..Q13 adopted as CLA proposed -
 several revised against `cd7c7c4e` first - and recorded in §5's mark
 column as adopted, never as the operator's marks.
 
-**State, 2026-10-20: S6 and S7 built; S8, the close, in progress.** Built and reviewed:
+**State, 2026-10-20: every stage built, the close measured; closing awaits the operator's word.** Built and reviewed:
 BO-S0, S1, S2, S3, S5 (on `main` from the merge of `bo-show-sugar` on 2026-10-14, after
 `v3.2.0`), S6 and S7 (on `worktree-bo-relation-stats-checkpoints`, 2026-10-20); not run:
 S4 (BO-Q5 (b)). **Resumed 2026-10-20 on the operator's standing go-ahead**
@@ -843,3 +843,56 @@ length), a resumed-run assertion beside it, one in
 `resumed`, `sys.meta`). Suite at `86d1fe1a`'s tree: 4180/4180, Debug,
 `ctest -j2` (a `-j4` run lost four crash cells to `No space left on
 device`). Overhead not measured; measured at the milestone's close.
+
+### BO-S8 — the close, 2026-10-20
+
+On `worktree-bo-relation-stats-checkpoints`: the documents at `7ba9180b`
+and their review's fixes at `c462ba08`, the review's two source findings
+in the commit after. `docs/spec/sys-views.md` owns SV1-SV5, what a view
+admits and refuses, each view's filter class and key, the registry and the
+`SHOW` spellings, the four statistics views and `sys.meta`;
+`ddl-transactional.md` §5a names the schema-object views among the filtered
+reads and the engine-state views - those reporting a declaration's
+enforcement included, BO-Q16 (a) - among the diagnostics;
+`manual/sql/sql.md` §6 is rewritten (`catalog_recovered=1`, every target,
+the four `SELECT`-only reports); `protocol.md` §10 and `client-manual.md`
+name `ANALYZE`'s plan and `BACKUP STATUS`'s line as the only text-line
+replies; CLAUDE.md's Observability row is flipped; `known-gaps.md` gains the
+BO section.
+
+**Review** (`critics-developer`, on `7ba9180b`, documents against the code):
+ten claims corrected by the reviewer - `STOP`'s surfaces, which views have
+no `SHOW` spelling, `SHOW BUDGET`'s columns, `BETWEEN` admitted, the query
+layer's forms refused over a view, six byte-less refusals and not three, the
+`RunTask` gap's null report, SV1's rewrite built as an AST with nothing
+parsed, the two text-line replies (`protocol.md`, `client-manual.md`,
+CLAUDE.md, the manual) - and the precision of four more. Applied after it:
+**`USE` and `REINDEX` added to `StatementKindOf`'s verbs** - BO-S5 left
+them out, so both read `OTHER` (a cell beside the verb cell); a stale
+`DeliverTextLines` comment; three `known-gaps.md` entries cut that the spec
+states as the contract, with a plan sentence and a history clause;
+CLAUDE.md's Wire row's "`STOP` is reachable only there" narrowed to the
+line command; **BO-Q16**, raised by the review, adopted (a). Filed in
+`known-gaps.md`: `SHOW PAGE` labels every non-btree page `HEAP`. Not fixed,
+stated: the six byte-less refusals over a view, all predating BO-S6.
+
+**Measurement** (`ck-tester`, BO-Q14 (b),
+`bench/v3.3.0/results-bo-close-v3.3.0-23-g86d1fe1a.md`): `86d1fe1a`
+against the same commit with `RecordStatement` and `RelationStats::Record`
+returning at once, A' as the control, `cores = 1`, `relaxed`, 42 runs of
+each point cell and 24 of the every-row `UPDATE`. **No cell is outside the
+A' - A spread**; B is above A in every point cell, in 29 to 37 of 42 runs,
+and against the mean of A and A' - which cancels the harness's own +0.13 to
++0.31 us lean of A' over A - the recording costs **0.35 to 0.52 us of server
+CPU per point statement (+1.2 % to +2.2 %)**, `SELECT` and writes alike, the
+size §6 predicted. The every-row `UPDATE` is not resolvable (largest gaps
+121 / 171 us). Not priced: concurrency (the latch under contention),
+`strict`/`group`, more than one core. One invocation was discarded for a
+Debug build this session ran across it, and one for a server that did not
+listen; both were re-run. **No switch is proposed** (BO-Q8): the cost is
+inside the spread by the benchmark's rule. The closing commit differs from
+the measured one by the two verbs and a comment - a miss on the kind list
+compares two more words.
+
+Suite at the closing tree (the verbs included): 4180/4180, Debug, `ctest -j2`. Overhead
+measured as above.

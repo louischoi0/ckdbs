@@ -139,7 +139,9 @@ write never fails, delays or reorders what it describes**: a row past a
 bound or an allocation that fails is dropped and counted in `sys.meta`
 (SV3). No row is read by the engine, so none can change a result - a lost
 or wrong row costs a reader's insight, never an answer. **No switch**
-(BO-Q8): recording is always on.
+(BO-Q8): recording is always on. At BO's close it cost 0.35-0.52 us of
+server CPU per point statement, inside the measurement's spread
+(`bench/v3.3.0/results-bo-close-v3.3.0-23-g86d1fe1a.md`).
 
 ### 6.1 `sys.statement_stats` (`stats/statement_stats.hpp`)
 

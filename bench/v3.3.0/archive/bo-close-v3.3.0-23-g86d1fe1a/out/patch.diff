@@ -1,0 +1,23 @@
+diff -ru /home/cdkbs/bench-runs/bo-close/src-B/src/server/command_dispatcher.cpp /home/cdkbs/bench-runs/bo-close/src-A/src/server/command_dispatcher.cpp
+--- /home/cdkbs/bench-runs/bo-close/src-B/src/server/command_dispatcher.cpp	2026-10-20 01:51:38.000000000 +0000
++++ /home/cdkbs/bench-runs/bo-close/src-A/src/server/command_dispatcher.cpp	2026-10-20 01:52:26.969307003 +0000
+@@ -1110,6 +1110,7 @@
+ 
+ void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOutcome& out,
+                                         sched::MonoTimeNs began_ns) const {
++    if (out.fetch_id != ~std::uint64_t{0}) return;  // BO-Q14 (b): arm A
+     // Once per statement, at its end, the statement whole: a re-run, a wait
+     // and the group commit are inside it (§3.1). A refusal is a call too.
+     const sched::MonoTimeNs now_ns = NowNs();
+diff -ru /home/cdkbs/bench-runs/bo-close/src-B/src/stats/relation_stats.cpp /home/cdkbs/bench-runs/bo-close/src-A/src/stats/relation_stats.cpp
+--- /home/cdkbs/bench-runs/bo-close/src-B/src/stats/relation_stats.cpp	2026-10-20 01:51:38.000000000 +0000
++++ /home/cdkbs/bench-runs/bo-close/src-A/src/stats/relation_stats.cpp	2026-10-20 01:52:26.970339798 +0000
+@@ -11,7 +11,7 @@
+ 
+ void RelationStats::Record(std::uint32_t core, catalog::Oid oid, RelationWrite kind,
+                            std::uint64_t rows) noexcept {
+-    if (rows == 0) return;
++    if (rows != ~std::uint64_t{0}) return;  // BO-Q14 (b): arm A
+     Part& part = parts()[core % kStatsParts];
+     const LatchGuard held(&part.latch);
+     auto found = part.relations.find(oid);
