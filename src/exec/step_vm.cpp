@@ -2123,7 +2123,12 @@ private:
                 ++slice_pages_ >= slice_->pages_per_slice) {
                 slice_pages_ = 0;
                 if (Status s = TakeCancel(); !s.ok()) co_return s;
-                co_await sched::Yield{};
+                if (slice_->at_boundary) slice_->at_boundary();
+                if (slice_->resume_when != nullptr && !(*slice_->resume_when)()) {
+                    co_await sched::WaitUntil{slice_->resume_when};
+                } else {
+                    co_await sched::Yield{};
+                }
                 // The note is the thread's, and other statements ran here
                 // meanwhile: what this walk ends with must be its own
                 // (BA-S14's re-run reads it).

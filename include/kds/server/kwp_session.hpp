@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -148,8 +149,31 @@ public:
 
     void Reset();
 
+    // ---- Streaming (CE, `instructions/v3.2.0/workorder-ce-streaming-reply.md`)
+    //
+    // What the connection gives the sink so a running walk's rows can leave
+    // before it ends. Owned by the connection, which outlives the statement,
+    // and installed per statement where it is submitted (CE-A3): `ship`
+    // sends the sealed batches and drops them from the sink (CE-A4), and
+    // `resume_when` holds while the connection can take more (CE-A5).
+    struct Stream {
+        std::function<void()> ship;
+        std::function<bool()> resume_when;
+    };
+    void set_stream(Stream* stream) noexcept { stream_ = stream; }
+    // Takes the sealed batches, which the caller sends; the open one stays.
+    std::vector<Batch> TakeSealed();
+
+    void Rewind() override;
+    bool Streamed() const noexcept override { return streamed_; }
+    void AtSliceBoundary() override;
+    const std::function<bool()>* ResumeWhen() const noexcept override;
+
 private:
     void Seal();
+    // A capped portal is fed one batch per client frame and never streams
+    // (CE-Q6 (a)).
+    bool Streams() const noexcept { return stream_ != nullptr && batch_row_cap_ == 0; }
 
     bool described_ = false;
     std::vector<wire::FieldDescription> fields_;
@@ -158,6 +182,8 @@ private:
     std::uint16_t open_rows_ = 0;
     std::uint64_t rows_ = 0;
     std::uint32_t batch_row_cap_ = 0;
+    Stream* stream_ = nullptr;
+    bool streamed_ = false;
 };
 
 // What `OnFrame` asks of its caller.
@@ -223,6 +249,16 @@ public:
     // The other half of a `FrameAction{dispatch}`.
     void OnStatementComplete(const DispatchOutcome& outcome, std::vector<std::byte>& out);
 
+    // ---- Streaming (CE) -------------------------------------------------
+    //
+    // `ArmStream` gives the running portal's sink the connection's stream,
+    // or takes it back with null; a transaction frame has no portal and arms
+    // nothing. `StreamRunning` appends to `out` what the running portal can
+    // send before its statement ends: `S_ROW_DESC` once, then every sealed
+    // batch, which leaves the sink.
+    void ArmStream(WireResultSink::Stream* stream);
+    void StreamRunning(std::vector<std::byte>& out);
+
     // Expires portals idle past `kPortalIdleTimeoutNs`. A no-op with no
     // clock. Called by the endpoint on its timer tick; nothing is emitted -
     // a timed-out portal is discovered by the client when it names it.
@@ -260,6 +296,10 @@ private:
         // `C_CONTINUE` must be refused rather than answered, or it would
         // re-send the batch and a second `S_COMPLETE`.
         bool complete_sent = false;
+        // Its `S_ROW_DESC` has gone out ahead of the statement's end, with
+        // the first streamed batch (CE); the completion does not send it
+        // again.
+        bool desc_sent = false;
         // What its `C_EXECUTE` asked for, remembered so a `C_CONTINUE`
         // knows whether this portal meters (a cap) or drains (0). Handed to
         // the sink before the statement ran; kept here because `Deliver`
@@ -295,6 +335,8 @@ private:
     // metered it - then `S_PORTAL_SUSPENDED` (naming `name`) or
     // `S_COMPLETE`.
     void Deliver(const std::string& name, Portal& portal, std::vector<std::byte>& out);
+    // `S_ROW_DESC`, unless the portal has sent it already (CE).
+    void SendRowDescOnce(Portal& portal, std::vector<std::byte>& out);
     // `S_COMPLETE`, and the portal is spent.
     void Complete(Portal& portal, std::vector<std::byte>& out);
     // The completion of a diagnostic statement: a reply the engine has
