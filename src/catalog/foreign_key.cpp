@@ -1,6 +1,7 @@
 #include "kds/catalog/foreign_key.hpp"
 
 #include <string>
+#include <string_view>
 
 namespace kds::catalog {
 
@@ -30,6 +31,13 @@ Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow&
         return Status::InvalidArgument("the parent relation is a system relation");
     }
     return Status::OK();
+}
+
+Status RefuseSelfReference(std::string_view child_column) {
+    return Status::NotImplemented(
+        "column '" + std::string(child_column) +
+        "' references the relation it is declared on: a self-referencing foreign key is not "
+        "built (docs/spec/foreign-keys.md §1)");
 }
 
 }  // namespace kds::catalog

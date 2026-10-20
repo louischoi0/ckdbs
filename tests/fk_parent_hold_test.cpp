@@ -295,11 +295,6 @@ TEST_F(FkParentHoldTest, AChildMovedOffTheParentInABankedSetIsNotAClear) {
 // relation's `IS` stays, since the statement's other parent keys stand
 // under it, and so does a row `X` the transaction holds.
 //
-// **The self-referencing arm gives back its `S` the same way, and no cell
-// reaches it**: a self-referencing foreign key cannot be declared
-// (`ForeignKeyCheckTest.ASelfReferencingForeignKeyCannotBeDeclared` pins
-// that, and fails if it changes).
-//
 // **Mutations**: no release, killed by the release, held-before and
 // intention cells; the `IS` released with the `S`, killed by the intention
 // cell; the row's `X` released too, killed by the own-delete cell.

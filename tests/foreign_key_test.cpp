@@ -485,32 +485,36 @@ TEST_F(ForeignKeyCheckTest, AnUpdateMatchingNoRowsDoesNotReportTheHoistedVerdict
     EXPECT_EQ(matched.substr(0, 16), "ERR FK_VIOLATION") << matched;
 }
 
-// **The self-referencing foreign key is unreachable through the DDL
-// surface**, and the extraction pass carves it out anyway.
-//
-// Why it matters to AH-T1: a self-referencing parent can be written by the
-// *same statement* that checks it - `INSERT INTO nodes VALUES (1, NULL),
-// (2, 1)` - so a verdict resolved before any row work would answer "no such
-// parent" where the per-row check, running after row 1 landed, answers
-// pass. That is the one shape the hoist would change, and
-// `ResolveForeignKeyParents` skips it for that reason.
-//
-// This cell asserts the *unreachability*, because that is the fact today:
-// `REFERENCES nodes` inside `CREATE TABLE nodes` cannot resolve, the parent
-// not existing yet, and nothing else declares a foreign key. If that ever
-// changes, this cell fails and points at a carve-out already waiting rather
-// than at a wrong answer nobody was looking for.
-//
-// The carve-out cost AH nothing: parent and child being one relation meant
-// one `owner_core`, so a self-referencing foreign key could never be
-// foreign. Since AT-S5f no parent is foreign and no descent crosses.
-TEST_F(ForeignKeyCheckTest, ASelfReferencingForeignKeyCannotBeDeclared) {
-    const std::string out =
-        Run("CREATE TABLE nodes (id int64, parent int64 REFERENCES nodes, label int64) BTREE");
-    EXPECT_EQ(out.rfind("ERR", 0), 0u)
-        << "a self-referencing foreign key became declarable; "
-           "ResolveForeignKeyParents' carve-out is now live code and wants a cell that "
-           "exercises it: " << out;
+// **A self-referencing foreign key is refused at both doors**
+// (`catalog::RefuseSelfReference`, `foreign-keys.md` §1): `NotImplemented`,
+// through SQL at the `REFERENCES` clause's byte, as its other refusals are. The forward check resolves
+// every parent before any row is written, so a parent the same statement
+// inserts would read absent, and a multi-row DELETE's reverse check would
+// decide by the order its walk met a parent and its child. The refusal was
+// once the lookup's - "no relation named 'nodes'", the relation not existing
+// yet - which named no reason.
+TEST_F(ForeignKeyCheckTest, ASelfReferencingForeignKeyIsRefusedAsNotBuilt) {
+    for (const std::string sql :
+         {"CREATE TABLE nodes (id int64, parent int64 REFERENCES nodes, label int64) BTREE",
+          "CREATE TABLE nodes (id int64, parent int64 REFERENCES public.nodes) BTREE"}) {
+        const std::string out = Run(sql);
+        EXPECT_EQ(out.rfind("ERR NOT_IMPLEMENTED", 0), 0u) << sql << " -> " << out;
+        EXPECT_NE(out.find("self-referencing"), std::string::npos) << out;
+        EXPECT_NE(out.find("(byte " + std::to_string(sql.find("REFERENCES")) + ")"),
+                  std::string::npos)
+            << out;
+    }
+    EXPECT_EQ(Run("SELECT name FROM sys.tables WHERE name = 'nodes'"), "name");
+
+    // The catalog's door refuses it as well, in the same words.
+    ASSERT_EQ(Run("CREATE TABLE tree (id int64, parent int64 NULL) BTREE").substr(0, 7),
+              "CREATED");
+    auto oid = boot_->catalog.FindTableOidByName(catalog::kNamespacePublic, "tree");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto fk = boot_->catalog.CreateForeignKey(oid.value(), 1, oid.value());
+    ASSERT_FALSE(fk.ok());
+    EXPECT_EQ(fk.status().code(), StatusCode::kNotImplemented) << fk.status().message();
+    EXPECT_NE(fk.status().message().find("self-referencing"), std::string::npos);
 }
 
 // **The refusal still names the row that caused it.** The resolution is

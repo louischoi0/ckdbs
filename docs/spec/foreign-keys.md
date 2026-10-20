@@ -92,7 +92,7 @@ CREATE-time validation, in `catalog::CheckForeignKeyDeclaration`
 both relations exist; the child column is not column 0 and its type can
 carry a Keystone id; **the parent is a btree relation** (below); a
 duplicate FK on the same (child, column) is rejected; any pair of
-relations is admitted (F5). They are free functions rather than `Catalog` methods
+two relations is admitted (F5). They are free functions rather than `Catalog` methods
 because **two doors ask the same questions**: `CREATE TABLE` checks before
 the relation is created, so a refusable declaration writes nothing
 (unlike a Cabin, a constraint may not degrade to a warning), and
@@ -107,6 +107,16 @@ parent's Keystone id, and a heap's tuple key is hidden
 could write a child value the constraint would accept. **A heap child is
 admitted**: its foreign-key column is a declared column like any other.
 A system relation as parent is refused `InvalidArgument`.
+
+**A self-referencing key is refused, `NotImplemented`**
+(`catalog::RefuseSelfReference`): at `CREATE TABLE`, a `REFERENCES` naming
+the relation being created, in its namespace, at the clause's byte; at
+`Catalog::CreateForeignKey`, a child that is its parent. Nothing on the
+write path is built for one. The forward check resolves every parent before
+any row is written (§2a), so a parent the same statement inserts would read
+absent, and a multi-row `DELETE`'s reverse check runs per row under a view
+holding the statement's own deletes, so it would admit or refuse by the
+order its walk meets a parent and its child.
 
 **Nothing back-checks existing rows**: a foreign key is declared only at
 `CREATE TABLE`, on an empty relation; there is no `ADD CONSTRAINT`.
@@ -199,9 +209,7 @@ row forbids.
 A scalar subquery is run once before the walk and is a constant from then on.
 
 **Nothing inside an open `WriteScope` waits** (AH-R1): the per-row check answers from the resolved
-verdicts and local state alone. The self-referencing arm's hold (below) is
-asked there and, refused, is *recorded* - the insert's own row borrow is
-recorded the same way - and the statement ends to wait outside the scope.
+verdicts and local state alone.
 
 **The parent row is held before it is read, and held to the decide**
 (D9(a), AY-S5). For each distinct parent the check takes `IS` on the parent
@@ -227,15 +235,6 @@ writer of that row on whichever core either runs (§3a).
 - **Counted against `max_locks_per_txn`**, one `S` per distinct parent a
   transaction references, and refused `ResourceExhausted` past it: no
   escalation (AO-R10).
-- **The self-referencing arm** is not hoisted (a parent the same statement
-  writes would read "no such parent" at the fork) and checks per row. It
-  takes the same pair per row - `IS`, which the write's `IX` already covers,
-  then `S`, then the descent - held to the decide, and a busy parent is
-  waited for rather than refused, the wait recorded as the insert's own
-  row borrow records its (AY-Q3). A parent the statement wrote itself is
-  its own `X`, which never refuses its own `S`. **The arm is unreachable**:
-  a self-referencing key cannot be declared
-  (`ForeignKeyCheckTest.ASelfReferencingForeignKeyCannotBeDeclared`).
 - **Without a lock table** - a dispatcher built without one - nothing is
   held, and a busy parent is `NoteBlockingWriter`'s `IsInFlight` poll
   (AO-S3's wait, unchanged). With a table a busy verdict under a granted
@@ -301,9 +300,8 @@ D9(a) is built as ratified, and its costs are the engine's:
   transaction under its own `X`, which the release leaves alone. So an `S` taken by an earlier
   statement (a zero-row `UPDATE`'s) goes too, and so does one this
   statement's run took before it parked and ran again. **The relation's `IS`
-  stays**, since the statement's present parent rows stand under it. The
-  self-referencing arm releases the same way, and is unreachable while no
-  self-referencing key can be declared. **Every absent parent the statement
+  stays**, since the statement's present parent rows stand under it.
+  **Every absent parent the statement
   resolved goes with it** (`raft-marks-2026-10-02.md` §5): the hoist
   resolves every row's parents before any row is written, so a statement
   naming two absent parents holds both and fails at the first; the second's

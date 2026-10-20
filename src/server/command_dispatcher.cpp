@@ -3738,19 +3738,6 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         const std::optional<std::uint64_t> id = KeystoneIdOf(value);
         if (!id.has_value()) continue;
 
-        // ---- The one thing this pass does not hoist -------------------
-        //
-        // **A self-referencing foreign key stays a per-row check.** Hoisting
-        // it would change answers: in `INSERT INTO t VALUES (1, NULL),
-        // (2, 1)` on a `t` that references itself, row 2's parent is row 1,
-        // which is written *by this statement* - so a verdict taken before
-        // any row work says "no such parent" where today's per-row check,
-        // running after row 1 landed, says pass.
-        //
-        // Carving it out costs nothing AH wants, and it rests on the
-        // ordering above alone.
-        if (fk.rel_oid == child.oid) continue;
-
         const std::uint64_t tuple_key = *id;
         if (into.Find(fk.rel_oid, tuple_key) != nullptr) continue;  // AH-R2's dedup
 
@@ -3848,30 +3835,6 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     } else if (const exec::FkVerdict* found = held.Find(fk.rel_oid, parent_tuple_key);
                found != nullptr) {
         resolved = *found;
-    } else if (fk.rel_oid == child.oid) {
-        // The self-referencing arm, the one case the extraction pass
-        // deliberately skips (see there).
-        //
-        // **It takes the hoist's pair, per row** (AY-Q3,
-        // `raft-marks-2026-09-30.md` §3): `IS` on the relation - which the
-        // write already covers with its `IX` - then `S` on the parent row,
-        // then the descent, held to the decide. A busy parent is waited
-        // for rather than refused: a refused `S` records its wait exactly as
-        // the insert's own tuple borrow records its (`BorrowOrWait`), and
-        // the statement ends there to park. A parent this statement wrote
-        // itself is its own `X`, which never conflicts with its own `S`.
-        if (std::optional<Status> row_held =
-                BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, parent_tuple_key),
-                             RepeatableReadWait::kCapable, txn::LockMode::kShared)) {
-            return ParentRowHeld(child, fk.rel_oid, parent_tuple_key, *row_held);
-        }
-        auto parent = catalog_.InitTableAccess(fk.rel_oid);
-        if (!parent.ok()) return parent.status();
-        auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), parent_tuple_key,
-                                                CheckView(scope), &budget_);
-        if (!verdict.ok()) return verdict.status();
-        RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
-        resolved = verdict.value();
     } else {
         // AH-R3: a statement whose parent set could not be enumerated is
         // refused rather than run against a partial one. Refused and never
@@ -3903,12 +3866,11 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
             return Status::OK();
         case exec::FkVerdict::kBusy:
             // **Reached only by a writer the lock table does not know**
-            // since AY-S5: both arms take the parent row's `S` before they
-            // descend, and a writer holding its `X` refuses that ask, which
+            // since AY-S5: the extraction pass takes the parent row's `S`
+            // before it descends, and a writer holding its `X` refuses that ask, which
             // is a wait. What is left is a dispatcher with no table, where
-            // the extraction pass recorded `NoteBlockingWriter`'s poll and
-            // the self-referencing arm records nothing. Retryable: the
-            // holder decides and the retry gets a real answer.
+            // the extraction pass recorded `NoteBlockingWriter`'s poll.
+            // Retryable: the holder decides and the retry gets a real answer.
             return Status::TxnConflict("row id=" + std::to_string(value.int_val) + " of '" +
                                        RelationNameOf(fk.rel_oid) +
                                        "' is being written by another transaction that has "
@@ -3928,17 +3890,13 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     // stand under it, and without it a relation `X` could be granted over
     // them.
     // One pass over the ledger, whatever the count (`LockTable::ReleaseIf`).
-    // The failing key is named on its own for the self-referencing arm,
-    // whose verdict is not in `held`; any other is in `held` already.
     if (locks_ != nullptr && scope.txn != nullptr) {
-        const txn::LockKey failing = txn::LockKey::Tuple(fk.rel_oid, parent_tuple_key);
         locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
                           [&](const txn::LockHoldings::Held& h) {
                               if (h.mode != txn::LockMode::kShared ||
                                   h.key.unit != txn::LockUnit::kTuple) {
                                   return false;
                               }
-                              if (h.key == failing) return true;
                               const exec::FkVerdict* verdict = held.Find(h.key.rel_oid, h.key.lo);
                               return verdict != nullptr &&
                                      *verdict == exec::FkVerdict::kViolation;
@@ -4369,6 +4327,24 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         for (std::size_t i = 0; i < stmt.columns.size(); ++i) {
             const parser::ColumnDef& col = stmt.columns[i];
             if (col.references_table.empty()) continue;
+
+            // A reference to the relation this statement creates is refused
+            // by name (`catalog::RefuseSelfReference`), ahead of the lookup,
+            // which would answer that no such relation exists.
+            if (col.references_table == stmt.table_name) {
+                auto references_ns =
+                    col.references_schema.empty()
+                        ? StatusOr<catalog::Oid>(session.default_namespace())
+                        : ResolveNames(session, [&](const txn::ReadView* v) {
+                              return catalog_.FindNamespaceOidByName(col.references_schema, v);
+                          });
+                if (references_ns.ok() && references_ns.value() == create_ns.value()) {
+                    const Status s = catalog::RefuseSelfReference(col.name);
+                    return {ErrorReply(s) + " (byte " +
+                                std::to_string(col.references_byte_offset) + ")",
+                            false, 0, s};
+                }
+            }
 
             // Under the session's view (DT3c): a child may reference a parent
             // its own transaction created, and may not reference one another
