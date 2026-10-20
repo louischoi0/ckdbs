@@ -1,0 +1,11 @@
+1792479383 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 190000, revenue = 1016634 WHERE id = 529" -> ERR TXN_CONFLICT retryable=1 row id=529 was written by transaction 9765 in 9us
+1792479383 WARN [query] "UPDATE organizations_s2c1s SET outstanding = 3531617 WHERE id = 528" -> ERR TXN_CONFLICT retryable=1 row id=528 was written by transaction 9973 in 9us
+1792479383 WARN [query] "UPDATE organizations_s2c1s SET outstanding = 3229655 WHERE id = 427" -> ERR TXN_CONFLICT retryable=1 row id=427 was written by transaction 10066 in 8us
+1792479383 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 492000, revenue = 2875644 WHERE id = 512" -> ERR TXN_CONFLICT retryable=1 row id=512 was written by transaction 10156 in 7us
+1792479383 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 569000, revenue = 4855861 WHERE id = 512" -> ERR TXN_CONFLICT retryable=1 row id=512 was written by transaction 10155 in 12us
+1792479384 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 356000, revenue = 2010510 WHERE id = 451" -> ERR TXN_CONFLICT retryable=1 row id=451 was written by transaction 10489 in 38us
+1792479384 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 692000, revenue = 6394557 WHERE id = 320" -> ERR TXN_CONFLICT retryable=1 row id=320 was written by transaction 10692 in 16us
+1792479384 WARN [query] "UPDATE organizations_s2c1s SET outstanding = 10596160 WHERE id = 357" -> ERR TXN_CONFLICT retryable=1 row id=357 was written by transaction 10920 in 17us
+1792479385 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1651000, revenue = 13061265 WHERE id = 442" -> ERR TXN_CONFLICT retryable=1 row id=442 was written by transaction 11356 in 8us
+1792479386 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 918000, revenue = 6483006 WHERE id = 483" -> ERR TXN_CONFLICT retryable=1 row id=483 was written by transaction 12104 in 11us
+1792479387 WARN [query] "UPDATE organizations_s2c1s SET outstanding = 16067996 WHERE id = 334" -> ERR TXN_CONFLICT retryable=1 row id=334 was written by transaction 12509 in 8us

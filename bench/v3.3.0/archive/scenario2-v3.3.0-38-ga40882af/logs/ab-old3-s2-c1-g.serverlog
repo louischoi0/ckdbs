@@ -1,0 +1,7 @@
+1792484512 WARN [query] "UPDATE operations_abvold3c1g SET booked_cbm = 80000, revenue = 1416376 WHERE id = 478" -> ERR TXN_CONFLICT retryable=1 row id=478 was written by transaction 9592 in 11us
+1792484513 WARN [query] "UPDATE operations_abvold3c1g SET booked_cbm = 185000, revenue = 2073680 WHERE id = 468" -> ERR TXN_CONFLICT retryable=1 row id=468 was written by transaction 9653 in 8us
+1792484513 WARN [query] "UPDATE organizations_abvold3c1g SET outstanding = 2898950 WHERE id = 413" -> ERR TXN_CONFLICT retryable=1 row id=413 was written by transaction 9666 in 6us
+1792484513 WARN [query] "UPDATE operations_abvold3c1g SET booked_cbm = 491000, revenue = 3280742 WHERE id = 512" -> ERR TXN_CONFLICT retryable=1 row id=512 was written by transaction 10129 in 8us
+1792484513 WARN [query] "UPDATE operations_abvold3c1g SET booked_cbm = 696000, revenue = 5816658 WHERE id = 577" -> ERR TXN_CONFLICT retryable=1 row id=577 was written by transaction 10309 in 11us
+1792484514 WARN [query] "UPDATE organizations_abvold3c1g SET outstanding = 4826448 WHERE id = 336" -> ERR TXN_CONFLICT retryable=1 row id=336 was written by transaction 10366 in 10us
+1792484514 WARN [query] "UPDATE operations_abvold3c1g SET booked_cbm = 304000, revenue = 1887364 WHERE id = 508" -> ERR TXN_CONFLICT retryable=1 row id=508 was written by transaction 10477 in 11us

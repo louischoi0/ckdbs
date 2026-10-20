@@ -1,0 +1,189 @@
+import sys
+sys.path.insert(0, "/home/cdkbs/bench-runs/v3.3.0-38-ga40882af/analysis")
+from g import *
+import s1, s2, s3, s4, abx, rcsec
+from stamp import *
+
+# ---- A/B helpers
+S1AB = abx.pairs("ab-{v}{i}-s1-c1-g")
+S3O = [now(f"ab-old{i}-s3-c1-n10000-none") for i in (1, 2, 3)]
+S3N = [now(f"ab-new{i}-s3-c1-n10000-none") for i in (1, 2, 3)]
+S2G = abx.pairs("ab-{v}{i}-s2-c1-g")
+S2B = abx.pairs("ab-{v}{i}-b1-s2-c1-g")
+
+
+def ab1(sh):
+    return med([s1.sweep(d)[sh]["warm"]["qps"] for d in S1AB[1]]) / med([s1.sweep(d)[sh]["warm"]["qps"] for d in S1AB[0]])
+
+
+def ab3(sh):
+    return med([s3.q(d, sh) for d in S3N]) / med([s3.q(d, sh) for d in S3O])
+
+
+def ab4(g, arm):
+    return s4.__dict__["P"] and med([s4.qd(s4.P(now(f"ab-new{i}-s4"), 1, g, arm)) for i in (1, 2, 3)]) / med([s4.qd(s4.P(now(f"ab-old{i}-s4"), 1, g, arm)) for i in (1, 2, 3)])
+
+
+def x(v):
+    return "-" if v is None else f"{v:.3f}x"
+
+
+rows = []
+K1, M1, P1 = N("s1-c1-g"), Mo(1, "s1-c1-g"), Mo(1, "pg-s1")
+for sh, lab in (("day-slice", "`day-slice`"), ("cross-join", "`cross-join`"), ("point-join", "`point-join`"), ("bar-range", "`bar-range`"), ("symbol-history", "`symbol-history`"), ("model-join", "`model-join`")):
+    a, b, c = med(s1.sv(K1, sh, "warm")), med(s1.sv(M1, sh, "warm")), med(s1.sv(P1, sh, "warm"))
+    rows.append((f"1 backtest, {lab} (warm, `cores = 1`)", f1(a, " qps"), f1(b, " qps"), delta(a, b), f1(c, " qps"), ratio(a, c), ratio(b, c), x(ab1(sh))))
+for tag, lab in (("s2-c8-g", "2 freight, 8 bookers, `cores = 8`, `group`"), ("s2-c8-s", "2 freight, 8 bookers, `cores = 8`, `strict`")):
+    a, b = med([s2.tps(d) for d in N(tag)]), med([s2.tps(d) for d in Mo(2, tag)])
+    rows.append((lab, f1(a, " tps"), f1(b, " tps"), delta(a, b), "no counterpart (one booker)", "-", "-", "-"))
+PG2 = med([s2.tps(d) for d in Mo(2, "pg-s2-b1")])
+for tag, lab, abx_ in (("b1-s2-c1-g", "2 freight, 1 booker, durable, `group`", x(med([s2.tps(d) for d in S2B[1]]) / med([s2.tps(d) for d in S2B[0]]))),
+                       ("b1-s2-c1-s", "2 freight, 1 booker, durable, `strict`", "-")):
+    a, b = med([s2.tps(d) for d in N(tag)]), med([s2.tps(d) for d in Mo(2, tag)])
+    rows.append((lab, f1(a, " tps"), f1(b, " tps"), delta(a, b), f1(PG2, " tps"), ratio(a, PG2), ratio(b, PG2), abx_))
+for sh, mode, lab in (("loans-by-user", "none", "`loans-by-user` (10,000 loans, unindexed)"), ("join-no-literal", "none", "`join-no-literal` (10,000 loans, unindexed)"),
+                      ("exists-correlated", "none", "`exists-correlated` (10,000 loans, unindexed)"), ("books-by-genre", "none", "`books-by-genre` (10,000 loans, unindexed)"),
+                      ("loans-by-daterange", "none", "`loans-by-daterange` (10,000 loans, unindexed)"), ("overdue", "none", "`overdue` (10,000 loans, unindexed)"),
+                      ("loans-by-user", "all", "`loans-by-user` (10,000 loans, indexed)")):
+    a, b, c = s3.med(s3.cellq("k", 1, 10000, mode, sh)), s3.med(s3.cellq("k", 1, 10000, mode, sh, "morn")), s3.med(s3.cellq("pg", 0, 10000, mode, sh))
+    rows.append((f"3 library, {lab}, `cores = 1`", f0(a, " qps"), f0(b, " qps"), delta(a, b), f0(c, " qps"), ratio(a, c), ratio(b, c), x(ab3(sh)) if mode == "none" else "-"))
+for mode in ("none", "all"):
+    ra = s3.geomean([s3.med(s3.cellq("k", 1, 10000, mode, sh)) / s3.med(s3.cellq("pg", 0, 10000, mode, sh)) for sh in s3.SH])
+    rb = s3.geomean([s3.med(s3.cellq("k", 1, 10000, mode, sh, "morn")) / s3.med(s3.cellq("pg", 0, 10000, mode, sh)) for sh in s3.SH])
+    rows.append((f"3 library, geometric mean over 12 shapes (10,000 loans, {'unindexed' if mode == 'none' else 'indexed'})", "-", "-", "-", "-", f"{ra:.2f}x", f"{rb:.2f}x",
+                 x(s3.geomean([ab3(sh) for sh in s3.SH])) if mode == "none" else "-"))
+PG4 = Mo(4, "pg-s4")
+for g, arm, lab in (("board", "off", "`board` day 1, arm `off`"), ("board", "on", "`board` day 1, arm `on`"), ("board", "declared", "`board` day 1, arm `declared`"),
+                    ("tape10k", "off", "`tape10k` day 1, arm `off`"), ("tape10k", "on", "`tape10k` day 1, arm `on`"), ("close", "off", "`close` day 1, arm `off`")):
+    a, b = s4.qd(s4.P(now("s4"), 1, g, arm)), s4.qd(s4.P(mor(4, "s4"), 1, g, arm))
+    c = med([s4.qd(ph(d, f"d1-{g}[pg]")) for d in PG4])
+    rows.append((f"4 cabinopt, {lab} (run A)", f0(a, " qps"), f0(b, " qps"), delta(a, b), f0(c, " qps") + " (no index)", ratio(a, c), ratio(b, c), x(ab4(g, arm))))
+
+HEAD = ("| measure | KDS now | KDS morning (same binary, old client) | delta | PostgreSQL 18.6 (morning's run, reused) | KDS/PG now | KDS/PG morning | A/B: new over old client (same window) |\n"
+        "|---|---|---|---|---|---|---|---|\n")
+headline = HEAD + "".join("| " + " | ".join(r) + " |\n" for r in rows)
+
+# row-heavy shapes lists
+rc = rcsec.comps()
+n_, o_ = rc["new"], rc["old"]
+
+kall = {}
+import json
+tl = open(f"{RUN}/timeline").read().splitlines()
+first = min(l for l in tl if l.startswith("== s1-c1-g start"))
+dur = "06:46:48 to 09:12 UTC"
+
+txt = f"""# Scenarios 1 to 4 at `{DESC}`: summary
+
+**One line.** On the same engine binary as this morning's run (`7532bd14...`, `9682b725`), a faster Python client decoder (`tools/kwp.py`, `tools/ckdbs_cli.py` at `a40882af`) moves exactly the shapes that return many rows, by a factor of 1.4x to 1.9x, and nothing else:
+scenario 1's `bar-range`, `symbol-history` and `model-join` go from 0.49x, 0.43x and 0.56x of PostgreSQL 18.6 to 0.90x, 0.85x and 0.94x, scenario 3's `books-by-genre`, `loans-by-daterange` and `overdue` from 0.69x, 0.61x and 0.77x to 0.96x, 0.86x and 0.99x,
+and scenario 4's `board` and `close` gain 10 % to 22 % and 17 % to 19 %. **The per-row cost of a returned row halves (6.9 and 9.5 µs to 3.6 and 4.8 µs on scenario 1) and what is left of the gap to PostgreSQL is 0.34 to 0.76 µs per row,
+{100 * n_['idle_send'] / 0.76:.0f} % of it ({n_['idle_send']:.2f} µs) engine-side and not CPU: KDS sends a reply only at statement completion, so the server's work is not overlapped with the client's.** The engine did not change and the writes, the commit, the walks and the Cabin controller did not move.
+Where a comparison to this morning disagrees with the interleaved old/new client A/B, the A/B is the reading: the one-core scan shapes of scenarios 1 and 3 read 11 % to 16 % below the morning *with the old client too*, a host effect that is not the client's.
+
+This file indexes the four results files and carries no number they do not. Measured by `ck-tester` from 2026-10-20 06:46 UTC to {dur.split(' to ')[1]} (the matrix 06:46 to 08:08 UTC, the join-order probe 08:08 to 08:18, scenario 2's A/B 08:18 to 08:23,
+the row-cost attribution 08:23 to 09:12) on **one binary, the morning's, `sha256 7532bd14...`**. {BUDGET[0].upper() + BUDGET[1:]}.
+
+**Comparators.** KDS: this engine's own run of this morning, `v3.3.0-33-g9682b725` (2026-10-20 03:37 to 05:12 UTC), the **same binary** with the previous client, so every KDS delta here is a client change plus 3 h of host drift;
+the A/B arms in the same window separate the two. PostgreSQL 18.6: the morning's fresh run (`/home/cdkbs/pg-bench-ba` port 15434, 04:22 to 04:33 UTC), **not re-run**, so a KDS/PG ratio carries the drift between its window and this one (it is nil
+on the many-row shapes, where the client moved the number by a factor of two, and up to 11 % to 16 % on the one-core scan shapes). PostgreSQL is the floor, not the reference.
+
+## Stamp (common to the four results files)
+
+Each results file keeps its own date and time, driver and cell windows and points here for the rest. Everything the morning's summary stamps and this table does not repeat is unchanged (build type, host, device, server config, ports, quiet-host gate, monitor, PostgreSQL setup).
+
+| Field | Value |
+|---|---|
+| Worktree / branch | `kwp-decoder-fast-path` / `kwp-decoder-fast-path` (the main checkout is not used) |
+| HEAD | `a40882af`, `git describe --tags` = `{DESC}` ("kwp: decode a row batch in one offset loop and resolve each column's renderer once"). It changes `tools/kwp.py` and `tools/ckdbs_cli.py` and nothing else (`git diff 9682b725 a40882af -- src include CMakeLists.txt` is empty), on a branch that carries the morning's results files |
+| Tree cleanliness | Clean (`git status` empty) at the start of the measurement; the drivers are the unmodified `tools/` scripts; the results files under `bench/v3.3.0/` are additions committed after the measurement |
+| Binary provenance | **not rebuilt.** `/home/cdkbs/bench-runs/{DESC}/kds_server` is a copy of the morning's `/home/cdkbs/bench-runs/{MD}/kds_server`; **sha256 `7532bd14afb2acd4f9e48cac00732f899cb8e59b26fa1d9b982047fc89272f2a`**, equal to the morning's, checked before the first cell and after the last; that binary was built at `9682b725` as Release, source mtime 2026-10-20 03:36:57.38 UTC, 3 min 17 s after its commit. Every server started from the copy; no build ran during the measurement |
+| Client | the matrix cells: this worktree's `tools/` (`a40882af`). The A/B arm `old`: `a40882af^`'s (`f829964c`) `tools/`, extracted with `git archive` into `bench-runs/{DESC}/oldtools/`, first on `PYTHONPATH`; the tree was not modified |
+| Device | data files under `/home/cdkbs/bench-runs/{DESC}/data/`, `/dev/root`, `ext4` (`df -T`; `/` 95 % full, 13 GB free); never tmpfs. A fresh data file per cell (per server in scenario 4), deleted when the cell finished. The PostgreSQL cluster (`/home/cdkbs/pg-bench-ba`, on the same device) was neither started nor stopped nor queried |
+| Build type | Release |
+| Host | 8 logical CPUs, AMD EPYC 9V74 (1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure, a shared development VM. Two unrelated `kds_server` processes (ports 15432 and a sandbox) and the PostgreSQL twin were running throughout (the twin received no query) |
+| Time budget | **Budget lifted by the operator for this measurement; PostgreSQL reused from the same-day run at v3.3.0-33-g9682b725.** Every KDS cell of the morning's plan ran with its repeat counts: scenario 1 (3 x 3 matrix cells, 3 x 3 size-sweep cells), scenario 2 (the booker sweep and the saturation cells included), scenario 3 (36 cells), scenario 4 (two runs), the join-order probe, plus six A/B pairs per scenario 1, 3 and 4 and scenario 2's two A/B cells |
+| Server config | `log_level = warn`, `buffer_pool_frames = 65536` (required since BE), `cores` and `durability` per cell, all else default. Ports 15604 to 15607, 15610, 15620, 15651 to 15653, 15690, never 15432 |
+| Quiet host | before each cell a gate waited for no `cc1plus` / `cmake --build` / `ctest` / `kds_tests` process and at most 8 % busy CPU over 3 s (`lib.sh` in the archive; every gate wait was 0 s, 152 cells). **A 1-second monitor ran through the whole run** (`monitor.log`, 2,592 samples to 08:23, then `rowcost/monitor*.log`) and every cell was checked against it after it ended (`cellvalid.py`): a build/test process or a foreign process at 50 % CPU or more inside the window discards and re-runs the cell. The outcome is under Contamination |
+| 60 s watchdog | `watchdog.sh`, `watchdog2.sh`, `watchdog3.sh` and the row-cost watchdogs poll a status or progress file's age and a recorded PID (never a process pattern); each found its master gone at the hand-over to the next stage and launched it, and none found a stall. No run was orphaned |
+| PostgreSQL | 18.6, defaults (`shared_buffers = 128MB`, `synchronous_commit = on`, `fsync = on`, `max_wal_size = 1GB`), **not run**; the numbers are the morning's, `bench/v3.3.0/archive/scenarioN-{MD}/json/pg-*.json` |
+
+## What counts as a finding
+
+Stated once, for all four results files, and unchanged from the morning's summary. A cell is run three times (the booker sweep and the saturation cells once). **Spread = (max - min) / median over the runs of one cell.** A difference between two medians
+that is smaller than the larger of the two spreads is not a finding. A cell whose spread is above 20 % is reported and carries no delta claim. A ratio against a control that cannot be affected (a one-row read, scenario 4's `pk` group) sets the floor of
+a comparison that has no repeat: scenario 4's is about 1.10x. **The A/B pairs are the exception to "3 h of drift": old and new alternate within minutes, three pairs, and the rule applies to their own spreads.**
+
+## Headlines
+
+Warm qps (scenario 1), tps (2), derived qps (3, 4), median of three runs (scenario 4: run A, day 1). Delta = now over the morning; ratio = KDS over PostgreSQL (above 1.00x = KDS faster); the last column is the interleaved A/B of the same measure, where one exists
+(scenario 2's eight-booker `cores = 8` cells have no A/B; its A/B ran at `cores = 1`):
+
+{headline}
+Files: `results-scenario1-backtest-{DESC}.md`, `results-scenario2-freight-{DESC}.md`, `results-scenario3-library-{DESC}.md`, `results-scenario4-cabinopt-days-{DESC}.md`.
+
+## The movers, and what they are
+
+- **Every shape that returns many rows is 1.4x to 1.9x faster, and the A/B says the client is all of it.** Interleaved old/new on scenario 1: `bar-range` {ab1('bar-range'):.2f}x, `symbol-history` {ab1('symbol-history'):.2f}x, `model-join` {ab1('model-join'):.2f}x; scenario 3 unindexed 10,000 loans:
+  `books-by-genre` {ab3('books-by-genre'):.2f}x, `loans-by-daterange` {ab3('loans-by-daterange'):.2f}x, `overdue` {ab3('overdue'):.2f}x, `join-no-literal` {ab3('join-no-literal'):.2f}x; scenario 4 `board` {ab4('board', 'off'):.2f}x / {ab4('board', 'on'):.2f}x / {ab4('board', 'declared'):.2f}x (`off` / `on` / `declared`)
+  and `close` 1.17x to 1.21x. The cause is the client's: a returned row costs the Python decoder {o_['decode']:.2f} µs of CPU and the new one {n_['decode']:.2f} (`kwp._row_batch`) and the render to text {o_['render']:.2f} and {n_['render']:.2f} µs (`ckdbs_cli.send_command`).
+- **What did not move.** One-row and few-row reads (the pk shapes, the folds, the Cabin-served statements of scenario 4 except the 8-row ones), the writes, the commit (scenario 2: the A/B reads {S2G[1] and med([s2.tps(d) for d in S2G[1]]) / med([s2.tps(d) for d in S2G[0]]):.3f}x and {med([s2.tps(d) for d in S2B[1]]) / med([s2.tps(d) for d in S2B[0]]):.3f}x, inside
+  their spreads), the unserved equality walk of scenario 4 (26.1 ns per row against 26.5 ns; server CPU 2.20 s against 2.22 s) and the Cabin controller's lifecycle (identical snapshot for snapshot).
+- **A host effect on the one-core scans of the large integer relations, not the client's.** Scenario 1's `day-slice` and `cross-join` are -14 % against the morning and scenario 3's integer-column equalities are -12 % to -16 %; the old client reads the same shapes {100 * (1 - med([s1.sweep(d)['day-slice']['warm']['qps'] for d in S1AB[0]]) / med(s1.sv(M1, 'day-slice', 'warm'))):.0f} % below the morning in the same window,
+  the new one 2 % above the old. Scenario 2's cells read +1 % to +10 % against the morning with the old client reading the same gain in this window. The sign of the host's effect depends on the workload; none of it is separated into frequency, a neighbouring tenant or placement.
+  **A comparison across hours that does not interleave its arms cannot read a 10 % difference on a scan shape in this environment.**
+- **The join planner's payoff is the same 6 % to 7 %** as in the morning on the two reordered joins (scenario 1 `compare-one` 1.07x planned over written, spreads 1.9 % and 1.8 %), unmoved by a shorter statement. Scenario 3's three joins keep the written order and are within spread.
+
+## Where KDS stands against PostgreSQL now, and what is left of the gap
+
+PostgreSQL's numbers are the morning's, so the ratios below carry that window's difference.
+
+- **Ahead**: the pk-anchored join (1.50x to 1.98x), the three-relation join (1.26x), the correlated `EXISTS` (2.09x at 10,000 loans), a Cabin-served equality (scenario 4 run A day 1: `board` {ratio(s4.qd(s4.P(now('s4'), 1, 'board', 'on')), med([s4.qd(ph(d, 'd1-board[pg]')) for d in PG4]))}, `tape10k` {ratio(s4.qd(s4.P(now('s4'), 1, 'tape10k', 'on')), med([s4.qd(ph(d, 'd1-tape10k[pg]')) for d in PG4]))} of a PostgreSQL seq scan),
+  the write statements of a booking (p50 0.75x to 0.88x of PostgreSQL's), the big load phases of scenario 1 (1.47x to 1.65x), scenario 3's unindexed 10,000-loan equalities (1.00x to 1.10x, from 1.08x to 1.25x: the drift above).
+- **Even**: one durable client (1.01x and 1.04x), bound by the device's fsync on both engines; the pk read round trip (0.98x to 1.00x at 10,000 loans).
+- **Behind**: the many-row shapes by 6 % to 17 % where they were behind by 2x (scenario 1 `bar-range` 0.90x, `symbol-history` 0.85x, `model-join` 0.94x; scenario 3 `loans-by-daterange` 0.86x, `books-by-genre` 0.96x); whole-relation folds (scenario 1 `agg-global` and `agg-distinct` 0.68x, which return one row and
+  are not the decoder's; scenario 4 `close` 0.65x in run A and 0.67x as the median of the two runs, from 0.57x); small scans (scenario 4 `tape200` 0.82x to 0.83x, from 0.73x).
+
+**What part of the per-row gap remains, and what it is.** The corrected attribution (`bench/v3.3.0/results-row-cost-attribution-v3.3.0-37-gf829964c.md`, branch `row-cost-attribution`): about 84 % of the gap was the Python decoder, about 16 % (0.42 µs per row) engine-side, because
+`WireResultSink::Emit` and `KwpSession::Deliver` (BN-R7) send the whole reply at statement completion and the server's work is never overlapped with the client's. This run re-measured KDS's side of that with the fix in (`rowcost/`, KDS only, PostgreSQL's figures the attribution's):
+
+{rcsec.table()}
+- **On a 12-column key-range read decoded to Python ints, KDS's wall slope is {n_['wall_values']:.2f} µs per row against PostgreSQL's 3.57 µs ({n_['wall_values'] / 3.57:.2f}x, a cross-window figure)**; the decode is no longer where KDS is behind (2.20 against 2.59 µs of client CPU).
+- **On the scenario drivers' own path (decode, render every cell to text, join) it is {n_['wall_send']:.2f} µs per row** ({o_['wall_send']:.2f} with the old client), matching the scenario's `symbol-history` figure (4.84 µs per row at 7,560 rows) against PostgreSQL's 4.08 µs. Of that
+  0.76 µs gap, **{n_['idle_send']:.2f} µs ({100 * n_['idle_send'] / 0.76:.0f} %) is the engine-side non-overlap** (the client idles while the server builds the reply; KDS's server CPU of {n_['server']:.2f} µs per row is never hidden behind the client's work) and
+  **{0.76 - n_['idle_send']:.2f} µs ({100 * (0.76 - n_['idle_send']) / 0.76:.0f} %) is client work**, the render of binary cells to the newline protocol's text shape ({n_['render']:.2f} µs of CPU per row) that PostgreSQL's text rows do not need. The split is by subtraction against PostgreSQL's
+  attribution figures and was not measured on PostgreSQL's scenario path. For `bar-range` (nine columns, 0.34 µs per row) the engine-side term was not measured.
+- Removing the non-overlap is an engine change (stream row batches as they are sealed rather than at completion, against BN-R7's one-write reply); the render step is a client-side choice. Neither is attempted here (rule: no engine edits to make a benchmark pass).
+
+## What this run does not show
+
+- **No limit was found for scenario 2.** The booker sweep reaches {s2.tps(now('sat-b32-s2-c8-g')):,.0f} tps at 32 bookers (`group`) with the host at most 65 % busy, driven from one Python process; the cells are 3,000 bookings. A saturation measurement needs more bookings and a second client process.
+- **The host effect is not explained.** It is shown by the A/B (old client {med([s1.sweep(d)['day-slice']['warm']['qps'] for d in S1AB[0]]):.0f} qps on `day-slice` now, {med(s1.sv(M1, 'day-slice', 'warm')):.0f} qps this morning, same binary) and not separated into cause.
+- **PostgreSQL was not re-measured.** A KDS/PG ratio on a one-core scan shape therefore has the drift in it; the row-cost comparison of the attribution table mixes a 06:19 PostgreSQL window with an 08:23 to 09:12 KDS window.
+- **Scenario 3's 200-loan and 1,000-loan columns at `cores = 1` carry fewer spreads above 20 % than the morning's** (12 of 48 cells against 29 of 48) and more at `cores = 8` (10 of 48 against 6 of 48); no comparison on a cell above the line is read.
+- **Scenario 4's PostgreSQL twin has no index**, runs day 1 only and is unpaced, as in the morning.
+- The row-cost attribution's PostgreSQL leg is the attribution file's; its text-format caveat (PostgreSQL ships text, KDS binary) stands.
+
+## Contamination
+
+Five cells were discarded and re-run, none of them in the numbers reported:
+
+| cell | window | what the monitor saw | action |
+|---|---|---|---|
+| `s2-c1-s` (attempt 1) | 06:54:33 to 06:54:52 | `claude --resume` (another agent session) at 52.5 % CPU in one sample of 11 | re-run; attempt kept in `contaminated/` |
+| `pl-s3-written-none-r3` (attempts 1 and 2) | 08:14 to 08:15 | `python3` at 50 %+ CPU: the ck-tester's own table-generation scripts, run while the join-order probe was running | re-run twice more; both attempts kept; no analysis script was run during a cell afterwards |
+| row-cost `values` 10,000 rows, repeat 2, new client | about 08:28:31 | `claude` at 89 % and a `node` bridge process at 62 % | the cell was moved to `rowcost/contaminated/` and re-run |
+| row-cost `split` 1,000 rows, repeat 3, old client | about 08:44:02 | `claude` at 123 % (the ck-tester's own harness) | same |
+| row-cost `send` 10,000 rows, repeat 1, new client | about 08:50:08 | kernel writeback workers (`kworker`, `cgwb_release`) at 99 %, 80 % and 53 %, probably the writeback after the previous server's data directory was deleted (not verified) | same |
+
+The windows of the row-cost cells are reconstructed from the sweep's own order and durations (`rc_valid.py`), not timestamped, and the first seconds of the first row-cost sweep ran before its monitor was started. Of the 2,592 samples in `monitor.log`, 25 list a foreign process above 10 % CPU;
+three of them (the `s2-c1-s` cell and the two `pl-s3-written-none-r3` attempts) were at 50 % or more inside a cell window, and the rest are minor (10 % to 50 %, mostly the ck-tester's own harness). The unrelated `kds_server` on port 15432 and the PostgreSQL twin on 15434 were not touched.
+
+## Archive
+
+- `bench/v3.3.0/archive/scenarioN-{DESC}/`: each scenario's per-cell JSON, driver stdout, server configs, and for scenarios 1 and 3 the join-order probe's ANALYZE replies (`plans/`); the A/B cells are among them (`ab-old*`, `ab-new*`).
+- `bench/v3.3.0/archive/run-{DESC}/`: what the four scenarios share: the run scripts (`lib.sh`, `run_all.sh`, `run_plan.sh`, `run_post.sh`, watchdogs, monitors), the timeline, the monitor and watchdog logs, the validity log, the binary hashes, the contaminated attempts,
+  the table generators under `analysis/`, and `rowcost/` (the KDS-only row-cost sweep: `kdsrow.py`, its `rowcost.py` import from the attribution branch, the cells, the monitor logs, the contaminated cells). `kdsrow.py` gained its `send` mode after the first two sweeps; both versions produce identical `values` and `split` cells.
+  The old client's sources are `git show a40882af^:tools/kwp.py` and `:tools/ckdbs_cli.py`.
+"""
+write("summary-scenarios", txt)

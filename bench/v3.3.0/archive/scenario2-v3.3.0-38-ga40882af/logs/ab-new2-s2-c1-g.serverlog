@@ -1,0 +1,9 @@
+1792484460 WARN [query] "UPDATE operations_abvnew2c1g SET booked_cbm = 256000, revenue = 1419700 WHERE id = 514" -> ERR TXN_CONFLICT retryable=1 row id=514 was written by transaction 9525 in 8us
+1792484462 WARN [query] "UPDATE organizations_abvnew2c1g SET outstanding = 8372277 WHERE id = 532" -> ERR TXN_CONFLICT retryable=1 row id=532 was written by transaction 10919 in 8us
+1792484463 WARN [query] "UPDATE organizations_abvnew2c1g SET outstanding = 8753475 WHERE id = 488" -> ERR TXN_CONFLICT retryable=1 row id=488 was written by transaction 11582 in 16us
+1792484463 WARN [query] "UPDATE operations_abvnew2c1g SET booked_cbm = 2322000, revenue = 16147621 WHERE id = 504" -> ERR TXN_CONFLICT retryable=1 row id=504 was written by transaction 11712 in 17us
+1792484463 WARN [query] "UPDATE organizations_abvnew2c1g SET outstanding = 7646604 WHERE id = 519" -> ERR TXN_CONFLICT retryable=1 row id=519 was written by transaction 11851 in 15us
+1792484464 WARN [query] "UPDATE operations_abvnew2c1g SET booked_cbm = 1022000, revenue = 6896570 WHERE id = 309" -> ERR TXN_CONFLICT retryable=1 row id=309 was written by transaction 12334 in 12us
+1792484464 WARN [query] "UPDATE organizations_abvnew2c1g SET outstanding = 11740730 WHERE id = 464" -> ERR TXN_CONFLICT retryable=1 row id=464 was written by transaction 12447 in 11us
+1792484464 WARN [query] "UPDATE operations_abvnew2c1g SET booked_cbm = 2163000, revenue = 15590405 WHERE id = 433" -> ERR TXN_CONFLICT retryable=1 row id=433 was written by transaction 12515 in 13us
+1792484464 WARN [query] "UPDATE organizations_abvnew2c1g SET outstanding = 10748932 WHERE id = 580" -> ERR TXN_CONFLICT retryable=1 row id=580 was written by transaction 12539 in 6us

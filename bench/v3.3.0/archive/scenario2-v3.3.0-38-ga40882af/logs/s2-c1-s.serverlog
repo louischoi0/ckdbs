@@ -1,0 +1,9 @@
+1792479286 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 349000, revenue = 2136294 WHERE id = 361" -> ERR TXN_CONFLICT retryable=1 row id=361 was written by transaction 9727 in 12us
+1792479288 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 774000, revenue = 4628108 WHERE id = 593" -> ERR TXN_CONFLICT retryable=1 row id=593 was written by transaction 10702 in 9us
+1792479288 WARN [query] "UPDATE organizations_s2c1s SET outstanding = 16104538 WHERE id = 466" -> ERR TXN_CONFLICT retryable=1 row id=466 was written by transaction 10918 in 10us
+1792479288 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 975000, revenue = 5341625 WHERE id = 427" -> ERR TXN_CONFLICT retryable=1 row id=427 was written by transaction 11165 in 9us
+1792479289 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1643000, revenue = 15006969 WHERE id = 554" -> ERR TXN_CONFLICT retryable=1 row id=554 was written by transaction 11757 in 15us
+1792479289 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1165000, revenue = 9135028 WHERE id = 356" -> ERR TXN_CONFLICT retryable=1 row id=356 was written by transaction 11862 in 8us
+1792479289 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1395000, revenue = 9610584 WHERE id = 352" -> ERR TXN_CONFLICT retryable=1 row id=352 was written by transaction 11951 in 7us
+1792479290 WARN [query] "UPDATE organizations_s2c1s SET outstanding = 18734158 WHERE id = 550" -> ERR TXN_CONFLICT retryable=1 row id=550 was written by transaction 12276 in 14us
+1792479290 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 2276000, revenue = 15211348 WHERE id = 433" -> ERR TXN_CONFLICT retryable=1 row id=433 was written by transaction 12430 in 14us
