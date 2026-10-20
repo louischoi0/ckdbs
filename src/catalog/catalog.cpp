@@ -2737,9 +2737,11 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
         if (cabin.shape != kCabinShapeColumn) continue;
         if (cabin.column_no == 0 || cabin.column_no >= access.cabin_ids.size()) continue;
         access.cabin_ids[cabin.column_no] = TableAccess::CabinRef{cabin.cabin_id, cabin.origin};
-        if (cabin.column_no < 64) {
-            access.cabin_mask |= (std::uint64_t{1} << cabin.column_no);
-        }
+    }
+    // Read off `cabin_ids` rather than pushed in the loop, so the list is
+    // ascending and names each position once whatever the page order.
+    for (std::uint16_t col = 1; col < access.cabin_ids.size(); ++col) {
+        if (access.cabin_ids[col].id != 0) access.cabin_columns.push_back(col);
     }
 
     // The relation's foreign keys at **both** ends, in one sys.fkeys scan
@@ -3248,8 +3250,8 @@ Status Catalog::ClearEveryPatternWaystoneRoot() {
 }
 
 Status Catalog::ForgetAccessStats(Oid rel_id, std::uint16_t col_pos) {
-    if (col_pos >= 64) return Status::OK();  // a mask names positions below 64 only
-    const std::uint64_t bit = std::uint64_t{1} << col_pos;
+    const std::uint64_t bit = ColumnBit(col_pos);
+    if (bit == 0) return Status::OK();  // a mask names positions below 64 only
     // RecordAccess's hold, so no admission races the retire.
     auto held = store_.Get(kCatalogPageAccessStats);
     if (!held.ok()) return held.status();
@@ -3466,7 +3468,7 @@ Status Catalog::InsertCabinRow(const SysCabinRow& row, std::uint64_t trx_id,
     }
     if (!inserted.ok()) return inserted;
     // **Bumped, unlike RegisterPattern().** A pattern appearing stales
-    // nothing cached; a Cabin appearing stales `TableAccess::cabin_mask` and
+    // nothing cached; a Cabin appearing stales `TableAccess::cabin_columns` and
     // `expr_cabins` on every held entry for this relation, which are facts
     // the compiler reads. That is what makes this DDL and not a
     // statement-path write.

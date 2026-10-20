@@ -1054,7 +1054,7 @@ public:
 
     // The Cabin on `(rel_oid, col_pos)`. NotFound is the ordinary answer -
     // most columns have no Cabin - and is never cached, which is exactly
-    // why the *compiler* asks `TableAccess::cabin_mask` instead of calling
+    // why the *compiler* asks `TableAccess::cabin_columns` instead of calling
     // this per step (catalog_cache.hpp's absence rule).
     StatusOr<SysCabinRow> FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos);
 

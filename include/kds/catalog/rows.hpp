@@ -763,6 +763,12 @@ static_assert(offsetof(SysAccessStatRow, column_mask) == SysAccessStatRow::kColu
 static_assert(offsetof(SysAccessStatRow, use_count) == SysAccessStatRow::kUseCountOffset);
 static_assert(offsetof(SysAccessStatRow, last_seen) == SysAccessStatRow::kLastSeenOffset);
 static_assert(offsetof(SysAccessStatRow, kind) == SysAccessStatRow::kKindOffset);
+
+// One column's bit in `SysAccessStatRow::column_mask`, 0 past 63 by the
+// field's folding rule: the one shift, so no site shifts by a position >= 64.
+constexpr std::uint64_t ColumnBit(std::uint16_t col) noexcept {
+    return col < 64 ? std::uint64_t{1} << col : 0;
+}
 static_assert(SysAccessStatRow::kOnDiskSize == 33);
 
 // The stored `kind` a zeroed or never-written row decodes to, and therefore

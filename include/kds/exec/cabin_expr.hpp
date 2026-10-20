@@ -17,7 +17,7 @@
 // docs/spec/cabin.md §3).
 //
 // AR1-4 makes a Cabin a key function `F: tuple -> K`. The **column** shape is
-// `F = t.x` and keeps its own path (`TableAccess::cabin_mask`); this file is
+// `F = t.x` and keeps its own path (`TableAccess::cabin_columns`); this file is
 // the other two:
 //
 //   - **expression**: `F = f(x, ...)`, an immutable function of columns. The

@@ -342,7 +342,7 @@ public:
         //
         // On by default because it does **nothing** until a `CREATE CABIN`:
         // no Cabin exists on a fresh database, so the cost of the switch
-        // being on is one `cabin_mask == 0` test per write and per compiled
+        // being on is one empty `cabin_columns` test per write and per compiled
         // equality. Off is the configuration the contract suite compares
         // against - "identical replies with cabins on and off" is the
         // property the whole feature has to keep, and an operator has to be

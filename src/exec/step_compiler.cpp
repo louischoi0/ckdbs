@@ -1237,7 +1237,7 @@ std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
 // column's equality *is* the filter scan, and the Cabin is the reason it
 // need not be one.
 //
-// **Catalog state only.** `TableAccess::cabin_mask` is a DDL fact carried on
+// **Catalog state only.** `TableAccess::CabinOn` reads a DDL fact carried on
 // the relation's cache entry (schema.hpp), so this asks no question about
 // the data and the plan stays `f(shape, catalog)`. Whether the *value* has
 // been observed is runtime state and belongs to the executor's branch, not
@@ -1251,7 +1251,6 @@ std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
 // what a recorded pattern must not do.
 std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const Step& step,
                                        std::uint16_t slot) {
-    if (access.cabin_mask == 0) return std::nullopt;
     for (const StepPredicate& pred : step.residual) {
         if (pred.op != parser::CompareOp::kEq) continue;
         if (pred.rhs.kind != OperandKind::kLiteral) continue;
@@ -1452,7 +1451,6 @@ std::optional<CabinProbe> CoverCabinProbeOf(const catalog::TableAccess& access, 
 std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
                                                  const catalog::TableAccess& access,
                                                  const Step& step, std::uint16_t slot) {
-    if (access.cabin_mask == 0) return std::nullopt;
     for (const StepPredicate& pred : step.residual) {
         auto eq = CorrelatedEqualityOf(pred, slot);
         // The tuple key exclusion is this arm's own: an index's leading column can

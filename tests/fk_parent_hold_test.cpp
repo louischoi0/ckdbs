@@ -283,6 +283,60 @@ TEST_F(FkParentHoldTest, AChildMovedOffTheParentInABankedSetIsNotAClear) {
         << "the DELETE answered '" << deleted << "' and left c(1, pid = 7) without its parent";
 }
 
+// ---- A column Cabin is witnessed at any position ---------------------------
+//
+// Both readers serve whatever `CabinOn` names - the compiled probe and the
+// reverse check - so a write that witnessed only positions below 64 left a
+// set banked for `pid`, at position 69 of `w`, missing every later child: the
+// `SELECT` missed it and the parent's `DELETE`, its set drained, cleared 7
+// over a committed child.
+//
+// **Mutation**: the witness loop skips `col >= 64` - the first cell's
+// `SELECT` answers `id\n1`, and both cells' `DELETE` answers `DELETED 1`.
+std::string CreateWideChild() {
+    std::string wide = "CREATE TABLE w (id int64";
+    for (int i = 1; i <= 68; ++i) wide += ", x" + std::to_string(i) + " int64 NULL";
+    return wide + ", pid int64 REFERENCES p) BTREE";
+}
+
+TEST_F(FkParentHoldTest, AChildCabinAbovePosition63WitnessesEveryInsert) {
+    ASSERT_EQ(Run(CreateWideChild()).rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO p VALUES (7, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("CREATE CABIN ON w(x1)").rfind("CRE", 0), 0u);
+    ASSERT_EQ(Run("CREATE CABIN ON w(pid)").rfind("CRE", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO w (id, pid) VALUES (1, 7)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("SELECT id FROM w WHERE pid = 7"), "id\\n1");  // banks 7's set
+
+    ASSERT_EQ(Run("INSERT INTO w (id, pid) VALUES (2, 7)").rfind("INSERTED", 0), 0u);
+    EXPECT_EQ(Run("SELECT id FROM w WHERE pid = 7"), "id\\n1\\n2");
+
+    ASSERT_EQ(Run("DELETE FROM w WHERE id = 1"), "DELETED 1");  // a dead entry
+    const std::string deleted = Run("DELETE FROM p WHERE id = 7");
+    EXPECT_NE(deleted.find("FK_VIOLATION"), std::string::npos)
+        << "the DELETE answered '" << deleted << "' over w(2, pid = 7)";
+}
+
+// The high Cabin alone: once `x1`'s is dropped, no Cabin sits below 64, and
+// an UPDATE moving a child onto 7 must still decode its row whole and be
+// witnessed. A relation's Cabins were asked as a mask, so it was neither.
+TEST_F(FkParentHoldTest, AChildCabinAbovePosition63AloneWitnessesAnUpdate) {
+    ASSERT_EQ(Run(CreateWideChild()).rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO p VALUES (7, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO p VALUES (8, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("CREATE CABIN ON w(x1)").rfind("CRE", 0), 0u);
+    ASSERT_EQ(Run("CREATE CABIN ON w(pid)").rfind("CRE", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO w (id, pid) VALUES (1, 7)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO w (id, pid) VALUES (2, 8)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("SELECT id FROM w WHERE pid = 7"), "id\\n1");  // banks 7's set
+    ASSERT_EQ(Run("DROP CABIN ON w(x1)").rfind("DROPPED CABIN", 0), 0u);
+
+    ASSERT_EQ(Run("UPDATE w SET pid = 7 WHERE id = 2"), "UPDATED 1");
+    ASSERT_EQ(Run("DELETE FROM w WHERE id = 1"), "DELETED 1");  // a dead entry
+    const std::string deleted = Run("DELETE FROM p WHERE id = 7");
+    EXPECT_NE(deleted.find("FK_VIOLATION"), std::string::npos)
+        << "the DELETE answered '" << deleted << "' over w(2, pid = 7)";
+}
+
 
 // ---- A failed check gives back the parent's `S`, whoever took it ----------
 //

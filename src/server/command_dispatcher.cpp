@@ -3954,7 +3954,7 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
         // what they were.
         RecordFkAccess(outcome.value().served_from_cabin ? exec::AccessKind::kCabinProbe
                                                          : exec::AccessKind::kFilterScan,
-                       fk.rel_oid, std::uint64_t{1} << fk.column_no);
+                       fk.rel_oid, catalog::ColumnBit(fk.column_no));
 
         const std::string column =
             fk.column_no < child.value()->schema.columns.size()
@@ -7855,8 +7855,7 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         cabins_->NoteWrite(key, entry);
     };
 
-    for (std::uint16_t col = 1; col < 64; ++col) {
-        if ((access.cabin_mask & (std::uint64_t{1} << col)) == 0) continue;
+    for (const std::uint16_t col : access.cabin_columns) {
         if (col < first_col_pos) continue;
         const std::size_t at = static_cast<std::size_t>(col - first_col_pos);
         if (at >= values.size()) continue;
@@ -8023,10 +8022,8 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIden
         // (AQ-R7) - `access_columns`, sorted - a deterministic pick rather
         // than a claim of primacy. Not `filter_columns`, which holds a
         // function's arguments since AP-S4: `DATE(ts) = d` priced as a column
-        // Cabin on `ts` would build one no such statement probes. Below 64,
-        // the columns a Cabin's mask can carry (`TableAccess::cabin_mask`).
-        if (step.kind == exec::AccessKind::kFilterScan && !step.access_columns.empty() &&
-            step.access_columns.front() < 64) {
+        // Cabin on `ts` would build one no such statement probes.
+        if (step.kind == exec::AccessKind::kFilterScan && !step.access_columns.empty()) {
             if (filter_step == nullptr || step.step_id < filter_step->step_id) filter_step = &step;
         }
     }
