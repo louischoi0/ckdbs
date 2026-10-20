@@ -21,7 +21,7 @@ dispatcher's own commands):
 | DML | `INSERT`, `UPDATE`, `DELETE` |
 | Query | `SELECT` (joins, subqueries, `GROUP BY`, aggregates), `ANALYZE <select>` |
 | Transactions | `BEGIN`/`START`, `COMMIT`, `ROLLBACK`/`ABORT`, `SET ISOLATION LEVEL` |
-| Introspection | `SHOW META/TABLES/NAMESPACES/PAGE/PATTERNS/ACCESS/BUDGET/CABINS/INDEXES/FKEYS/ASSERTIONS/TRANSITIONS/CABIN_OPTIMIZER`, `DESCRIBE` |
+| Introspection | `SELECT ... FROM sys.<view>`; `SHOW META/TABLES/NAMESPACES/PAGE/PATTERNS/ACCESS/BUDGET/CABINS/INDEXES/FKEYS/ASSERTIONS/TRANSITIONS/CABIN_OPTIMIZER` and `DESCRIBE` as its shorter spellings |
 | Session | `PING`, `SYNC`, `STOP` |
 
 `DROP TABLE` and `ALTER TABLE` exist and are **catalog-only** (see their
@@ -1490,42 +1490,71 @@ transaction today.** Specified, not built.
 
 ## 6. Introspection (verified — the complete list)
 
-Dispatcher commands, not parser statements:
+**Everything the engine reports about itself is a `sys` view, read with
+`SELECT`** (`docs/spec/sys-views.md`). A `SHOW` and `DESCRIBE` are only
+shorter spellings: each is rewritten into one `SELECT` over one view and
+answers exactly what that `SELECT` answers - the same rows, columns and
+values, and the same refusal at the same byte. A view answers as an
+ordinary table: typed columns over KWP, a header line and rows on the
+newline protocol.
 
-| Command | Answers |
+| Spelling | The `SELECT` it stands for |
 |---|---|
-| `SHOW META` | instance metadata (superblock, format version, config), the WAL's own counters - including `wal_mean_group_batch`, how many commits this core's fsyncs are amortised over, where `1.000` means every commit paid its own device sync - plus what the last mount's recovery did — records scanned, transactions committed and rolled back, per-phase timings, and `catalog_recovered=0`, which is a standing statement that DDL is unlogged rather than a number that will change; on core 0, the log's recycling (`wal_first_segment`, `wal_segments_removed`, `wal_remove_failures`); on every core, the segment roll's totals (`wal_append_lsn`, `wal_rolls`, `wal_roll_*`), the same values everywhere; and `wal_stopped=1` on any core once a failed log write has stopped every write until a restart (`docs/spec/client-manual.md` has the field list) |
-| `SHOW TABLES` | the relation list |
-| `SHOW NAMESPACES` | the namespace list, `sys` and `public` first. Names are the **SQL spellings**, which is what a statement writes |
-| `SHOW PAGE <id> [VALUES]` | one page's header and slots; `VALUES` hex-dumps tuple payloads |
-| `SHOW PATTERNS` | `sys.patterns` — registered patterns, ids, Waystone state |
-| `SHOW ACCESS` | `sys.access_stats` — one row per access shape `(kind, rel, columns)` |
-| `SHOW BUDGET` | per-relation Keystone id consumption, `warning=`/`exhausted=` counts |
-| `SHOW CABINS` | Cabins and their per-column policies |
-| `SHOW INDEXES` | secondary indexes, key and covered columns |
-| `SHOW FKEYS` | declared foreign keys |
-| `SHOW ASSERTIONS` | assertions with `enforcing=` and live counters (checks/violations/reserved/aborted) |
-| `SHOW TRANSITIONS` | Transitions: id, name, relation, governed column's position, and the declaration verbatim |
-| `DESCRIBE <table>` (`DESC`) | columns, types, `clustered_type=`, `next_id`, `ids_issued`/`ids_remaining`/`budget_used`. A tuple key column reports `autoincrement=if-omitted`, every other column `no` |
+| `SHOW META` | `SELECT * FROM sys.meta` - one row per field, `(section, field, value)`, every value text: superblock and configuration, the WAL's counters, what the last mount's recovery did (with `catalog_recovered=1`: DDL is logged and recovered), the contention census, and the statistics stores' counts. The fields are the session's core's (`docs/spec/client-manual.md` lists the WAL, recycling, roll and contention blocks) |
+| `SHOW TABLES` | `SELECT * FROM sys.tables` |
+| `SHOW NAMESPACES` | `SELECT * FROM sys.namespaces`, `sys` and `public` first, in their SQL spellings |
+| `SHOW PAGE <id>` / `SHOW PAGE <id> VALUES` | `sys.page_slots WHERE page_id = <id>`: a header row, then one row per slot; `VALUES` adds `value`, each payload in hex |
+| `SHOW PATTERNS` | `SELECT * FROM sys.patterns` |
+| `SHOW ACCESS` | `SELECT * FROM sys.access_stats`, one row per access shape |
+| `SHOW BUDGET` | the budget columns of `sys.relation_stats`: `next_id`, `ids_issued`, `ids_remaining`, `budget_used_ppm`, `budget_warning`, `budget_exhausted` |
+| `SHOW CABINS` | `SELECT * FROM sys.cabins` |
+| `SHOW INDEXES` | `SELECT * FROM sys.indexes`, with a `unique` column (1 or 0) |
+| `SHOW FKEYS` | `SELECT * FROM sys.fkeys` |
+| `SHOW ASSERTIONS` | `SELECT * FROM sys.assertions`, with `enforcing` and the live counters |
+| `SHOW TRANSITIONS` | `SELECT * FROM sys.transitions`, the declaration verbatim |
+| `SHOW CABIN_OPTIMIZER` | `SELECT * FROM sys.cabin_optimizer`; refused where the instance runs no controller |
+| `DESCRIBE <t>` (`DESC`) | `SELECT * FROM sys.columns WHERE rel_name = '<t>'`; an unknown name is refused, never answered with no rows |
 | `PING` | `PONG` |
 | `SYNC` | forces log + store durability: `OK synced` |
-| `STOP` | closes the connection: `OK bye` |
+| `STOP` | closes the connection: `OK bye` (the debug port only) |
 
-An unknown target answers `ERR unknown SHOW target`. The `sys.*` views
-(`sys.tables`, `sys.types`, ...) are also readable through ordinary
-`SELECT ... FROM sys.<name>` — projection, `WHERE`, `LIMIT` and `OFFSET`
-all apply — but they are not aggregatable (AG12), not joinable, and not
-sortable: `ORDER BY` over a view is refused with a byte position, because
-a view has no schema for the sort to resolve its keys against. A column
-may be written qualified (`FROM sys.tables AS t ... WHERE t.oid = 100`),
-and a qualifier naming no relation in the statement is refused in the
-`WHERE` exactly as it is in the projection. A view's integers compare
-**unsigned**, because every one of them is stored as a `uint64` and
-`sys.patterns.fetch_id` really does use the full 64-bit range. A view's
-`WHERE` follows the relation's literal rule (types.md §3.1a): every integer
-column is a `uint64` and every other a `varchar`, so `name = 5`, `oid =
-'x'`, a negative literal and one past 2^64 - 1 are each refused with the
-literal's byte, before any row is read.
+**Four views have no `SHOW` spelling** - read them with `SELECT`:
+
+- `sys.statement_stats`: what each statement shape costs - `calls`,
+  `refused`, `total_us`, `max_us`, `first_seen`, `last_seen` and the first
+  statement seen, one row per `(fetch_id, kind)`.
+- `sys.relation_stats`' activity columns: `inserts`, `updates`, `deletes`,
+  `purged` - the rows each relation's write statements reported since the
+  instance started (a statement counts when it answers, so rows a
+  transaction later rolls back stay counted).
+- `sys.lock_waits`: one row per lock wait, with what waited on what, for
+  how long, and how it ended (`granted`, `deadlock`, `fault_net`,
+  `cancelled`).
+- `sys.checkpoints`: one row per checkpoint run - `duration_us`, `steps`,
+  `pages_flushed`, the waits on the log and on the data file, `resumed`, and
+  `outcome` (`completed`, `failed`).
+
+These four are kept in memory: a restart or a restore empties them. Each is
+bounded per core, and the rows it gives up are counted in `sys.meta`
+(`statement_stats_dropped`, `relation_stats_dropped`, `lock_waits_*`,
+`checkpoints_*`).
+
+`SELECT ... FROM sys.<view>` admits a projection, `*`, a qualified column,
+`WHERE column op literal`, `ORDER BY` and `LIMIT`/`OFFSET`. A view is not
+aggregatable (AG12) and not joinable, and a subquery predicate, `OR`/`NOT`/
+`IN`/`LIKE`, a function call and a column-to-column comparison over one are
+refused. Each column is typed (`uint64`, `varchar` or `timestamp`), and a
+`WHERE` literal must fit it: `name = 5`, `oid = 'x'`, a negative integer
+and one past 2^64 - 1 are refused with the literal's byte, before any row is
+read. Integers compare unsigned. NULL is a value a row does not have - an
+unreadable index's height, a counter where nothing runs - never a 0.
+
+**The schema-object views read under your transaction's view**:
+`sys.tables`, `sys.objects`, `sys.columns`, `sys.namespaces`,
+`sys.indexes` and `sys.fkeys` (so `SHOW TABLES`, `SHOW NAMESPACES`,
+`SHOW INDEXES`, `SHOW FKEYS` and `DESCRIBE`) do not show a relation another
+transaction created and has not committed. The others report engine state
+and show what the instance holds.
 
 **A view that names a relation names its namespace beside it**, because a
 relation's name is unique only within its namespace: `namespace` next to the
@@ -1535,10 +1564,13 @@ relation's name in `sys.tables`, `sys.objects`, `sys.columns` (so
 `sys.cabin_optimizer`, `child_namespace` / `parent_namespace` in
 `sys.fkeys`, and `references_namespace` beside `sys.columns.references`.
 Each is the SQL spelling (`sys`, `public`, or the name a `CREATE NAMESPACE`
-gave), and NULL where the relation's name is. `SHOW BUDGET` prints it too.
-A view read by a relation name (`sys.columns`' `rel_name`) takes a bare name's namespace from a `namespace = '<name>'`
-condition when there is one, else from the session: `WHERE namespace =
-'ledger' AND rel_name = 't'` is `ledger.t`.
+gave), and NULL where the relation's name is. A view read by a relation
+name (`sys.columns`' `rel_name`) takes a bare name's namespace from a
+`namespace = '<name>'` condition when there is one, else from the session:
+`WHERE namespace = 'ledger' AND rel_name = 't'` is `ledger.t`.
+
+An unknown `SHOW` target is refused at its byte. `SHOW TRACES`,
+`SHOW TRACE` and `TRACE ON` no longer exist.
 
 There is also a legacy non-SQL form: `CREATE TABLE <name>` with **no column
 list** routes to a pre-SQL handler (the dispatcher routes on the presence
