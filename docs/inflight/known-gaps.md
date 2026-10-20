@@ -1477,22 +1477,17 @@ change's stages found and left.
 Verified on `bo-relation-stats-checkpoints` at `86d1fe1a` (BO-S7). Owned by
 `docs/spec/sys-views.md`.
 
-- **Three refusals over a view name no byte**: aggregation (AG12), a
-  subquery predicate and a column-to-column comparison answer a bare `ERR`
-  (`HandleCatalogView`, `command_dispatcher.cpp`), against the rule that
-  every refusal carries the offending token's byte. The boolean-conjunct and
-  function-call refusals beside them do carry it.
-- **`sys.meta` is the session's core's** (BO-Q4): another core's per-core
-  fields are not readable from one session. Making them so needs a census,
-  field by field, of what is safe to read across cores.
-- **A statistics count is taken when its statement answers, not when its
-  transaction decides**: `sys.relation_stats` keeps the rows of a
-  transaction later rolled back, and of an autocommit statement whose
-  deferred `strict` commit a fail-stopped log then aborts.
-- **`sys.relation_stats`' bound counts dropped relations** (BO-Q15 (b)):
-  4096 relations written on one core in one process's life saturate that
-  core's part, after which its writes of a relation new to it are dropped
-  and counted (`relation_stats_dropped`), and the view under-counts.
+- **Six refusals over a view name no byte**: aggregation (AG12), a
+  subquery predicate and a column-to-column comparison (`HandleCatalogView`),
+  a join and `ANALYZE` over a view, and an unknown `sys.<name>`
+  (`SelectBody`, both `command_dispatcher.cpp`) answer a bare `ERR`, against
+  the rule that every refusal carries the offending token's byte. The
+  boolean-conjunct and function-call refusals beside them do carry it.
+- **`SHOW PAGE` names every page that is not a btree page `HEAP`**
+  (`PageSlotsView`, `src/server/sys_views.cpp`): an anchor, var-heap, map
+  or undo page is labelled `HEAP` and its contents read as heap slots. A
+  diagnostic's mislabel, not an answer; the page type byte is the
+  authority, and the view's `page_type` should spell it.
 - **A view's read delays the writer of each part it copies** by the copy: a
   reader takes each core's statistics latch in turn. Bounded by the part
   (4096 shapes, 4096 relations, 4096 waits, 1024 runs), unmeasured as a
@@ -1504,7 +1499,8 @@ Verified on `bo-relation-stats-checkpoints` at `86d1fe1a` (BO-S7). Owned by
 - **A checkpoint task's park reads its status before its generation**
   (`Checkpointer::RunTask`, `src/wal/checkpointer.cpp`; found by BO-S7's
   review, pre-existing): an abandoned frame polled again with a failed park
-  would end a newer task's run. Unreachable today - `Abandon` runs only at
+  would end a newer task's run, or, with none running, dereference the null
+  report `Abandon` left. Unreachable today - `Abandon` runs only at
   shutdown, after the reactors stop - and so not a defect entry; owned by
   `docs/spec/wal.md` §11. Checking the generation first at each park closes
   it.

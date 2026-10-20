@@ -237,8 +237,7 @@ membership is a decision:
   `SHOW INDEXES` and `SHOW FKEYS`, each one `SELECT` over its view
   (`sys-views.md` §3, BO-Q2). These decide what a statement may touch, or
   report which schema objects exist, so they answer under the session's
-  view. `SHOW FKEYS` gained the filter with BO: a foreign key is listed
-  where its child relation is visible.
+  view; a foreign key is listed where its child relation is visible.
   **`CREATE ASSERTION` is filtered under a settled view instead** (§5f,
   `assertion.md` §8.1): it reads settled state, so a relation an open
   transaction created - the session's own too - is not its target, and
@@ -254,10 +253,12 @@ membership is a decision:
   session).
 - **Unfiltered by design — diagnostics.** Every engine-state view
   (`sys-views.md` §3) - `sys.access_stats`, `sys.relation_stats` (so
-  `SHOW BUDGET`), `sys.assertions`, `sys.cabins`, `sys.patterns`, the
-  statistics views and `sys.meta` among them - and the name-rendering
-  helper. These
-  answer *"what does this instance hold"*, which is an operator's
+  `SHOW BUDGET`), `sys.patterns`, the statistics views and `sys.meta`
+  among them - and the name-rendering helper. **The views that report a
+  declaration's enforcement are diagnostics too** - `sys.assertions`,
+  `sys.cabins`, `sys.transitions`, whose rows say whether and how a
+  declaration is enforced, as `SHOW ASSERTIONS` and `SHOW CABINS` were
+  before them (BO-Q16 (a)). These answer *"what does this instance hold"*, which is an operator's
   question, not a statement's. Also unfiltered, and unaffected either
   way: `ALTER`'s system-relation guard, which tests an already-resolved
   oid against bootstrap rows that every view sees.

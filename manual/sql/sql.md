@@ -1491,7 +1491,8 @@ transaction today.** Specified, not built.
 ## 6. Introspection (verified — the complete list)
 
 **Everything the engine reports about itself is a `sys` view, read with
-`SELECT`** (`docs/spec/sys-views.md`). A `SHOW` and `DESCRIBE` are only
+`SELECT`** (`docs/spec/sys-views.md`) - all but `ANALYZE`'s plan and
+`BACKUP STATUS`'s line. A `SHOW` and `DESCRIBE` are only
 shorter spellings: each is rewritten into one `SELECT` over one view and
 answers exactly what that `SELECT` answers - the same rows, columns and
 values, and the same refusal at the same byte. A view answers as an
@@ -1500,13 +1501,13 @@ newline protocol.
 
 | Spelling | The `SELECT` it stands for |
 |---|---|
-| `SHOW META` | `SELECT * FROM sys.meta` - one row per field, `(section, field, value)`, every value text: superblock and configuration, the WAL's counters, what the last mount's recovery did (with `catalog_recovered=1`: DDL is logged and recovered), the contention census, and the statistics stores' counts. The fields are the session's core's (`docs/spec/client-manual.md` lists the WAL, recycling, roll and contention blocks) |
+| `SHOW META` | `SELECT * FROM sys.meta` - one row per field, `(section, field, value)`, every value text: superblock and configuration, the WAL's counters, what the last mount's recovery did (with `catalog_recovered=1`: DDL is logged and recovered), the contention census, and the statistics stores' counts. The fields are the session's core's (`docs/spec/client-manual.md` describes the recycling, segment-roll and contention blocks) |
 | `SHOW TABLES` | `SELECT * FROM sys.tables` |
 | `SHOW NAMESPACES` | `SELECT * FROM sys.namespaces`, `sys` and `public` first, in their SQL spellings |
-| `SHOW PAGE <id>` / `SHOW PAGE <id> VALUES` | `sys.page_slots WHERE page_id = <id>`: a header row, then one row per slot; `VALUES` adds `value`, each payload in hex |
+| `SHOW PAGE <id>` / `SHOW PAGE <id> VALUES` | `sys.page_slots WHERE page_id = <id>`: a header row, then one row per slot (an internal node: its leftmost child, then one row per entry); `VALUES` adds `value`, each payload in hex |
 | `SHOW PATTERNS` | `SELECT * FROM sys.patterns` |
 | `SHOW ACCESS` | `SELECT * FROM sys.access_stats`, one row per access shape |
-| `SHOW BUDGET` | the budget columns of `sys.relation_stats`: `next_id`, `ids_issued`, `ids_remaining`, `budget_used_ppm`, `budget_warning`, `budget_exhausted` |
+| `SHOW BUDGET` | `sys.relation_stats`' `oid`, `namespace`, `name` and its budget columns: `next_id`, `ids_issued`, `ids_remaining`, `budget_used_ppm`, `budget_warning`, `budget_exhausted` |
 | `SHOW CABINS` | `SELECT * FROM sys.cabins` |
 | `SHOW INDEXES` | `SELECT * FROM sys.indexes`, with a `unique` column (1 or 0) |
 | `SHOW FKEYS` | `SELECT * FROM sys.fkeys` |
@@ -1516,9 +1517,10 @@ newline protocol.
 | `DESCRIBE <t>` (`DESC`) | `SELECT * FROM sys.columns WHERE rel_name = '<t>'`; an unknown name is refused, never answered with no rows |
 | `PING` | `PONG` |
 | `SYNC` | forces log + store durability: `OK synced` |
-| `STOP` | closes the connection: `OK bye` (the debug port only) |
+| `STOP` | answers `OK bye` and shuts the whole server down; admin's, and over KWP an ordinary statement (`docs/spec/client-manual.md`) |
 
-**Four views have no `SHOW` spelling** - read them with `SELECT`:
+**Four statistics reports have no `SHOW` spelling** - read them with
+`SELECT` (nor do `sys.types` and `sys.objects`):
 
 - `sys.statement_stats`: what each statement shape costs - `calls`,
   `refused`, `total_us`, `max_us`, `first_seen`, `last_seen` and the first
@@ -1540,7 +1542,8 @@ bounded per core, and the rows it gives up are counted in `sys.meta`
 `checkpoints_*`).
 
 `SELECT ... FROM sys.<view>` admits a projection, `*`, a qualified column,
-`WHERE column op literal`, `ORDER BY` and `LIMIT`/`OFFSET`. A view is not
+`WHERE column op literal` and `column BETWEEN literal AND literal`,
+`ORDER BY` and `LIMIT`/`OFFSET`. A view is not
 aggregatable (AG12) and not joinable, and a subquery predicate, `OR`/`NOT`/
 `IN`/`LIKE`, a function call and a column-to-column comparison over one are
 refused. Each column is typed (`uint64`, `varchar` or `timestamp`), and a

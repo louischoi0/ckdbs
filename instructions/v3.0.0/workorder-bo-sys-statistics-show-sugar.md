@@ -46,7 +46,7 @@ BO-S0, S1, S2, S3, S5 (on `main` from the merge of `bo-show-sugar` on 2026-10-14
 `v3.2.0`), S6 and S7 (on `worktree-bo-relation-stats-checkpoints`, 2026-10-20); not run:
 S4 (BO-Q5 (b)). **Resumed 2026-10-20 on the operator's standing go-ahead**
 (`instructions/v3.2.0/raft-marks-2026-10-20.md` §1, `go-ahead-achieving-milestone`):
-BO-Q14 and BO-Q15, which surfaced in S6 and S8, are adopted as CLA proposed and recorded
+BO-Q14, BO-Q15 and BO-Q16, which surfaced in S6 and S8, are adopted as CLA proposed and recorded
 in §5 as adopted, never as the operator's marks. The stages' rows are §7.
 
 **Claim tags:**
@@ -532,6 +532,7 @@ operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone)**
 | **BO-Q13** | page and delete-marked counts | (a) not in BO; (b) logged; (c) a walk | (a) | **(a)**, adopted |
 | **BO-Q14** | The close measurement's base (§6), now that BO-S1..S5 merged to `main` on 2026-10-14 and ten milestones (BU..CD) landed between `cd7c7c4e` and the close | (a) `cd7c7c4e` against the close, as §6 wrote it; (b) the close against the same commit with BO's statement-path recording compiled out (`StatementStats::Record`, `RelationStats::Record`), interleaved with an A' control | (b): (a) prices about 230 commits of other milestones, and §6's own subject is §3.1's per-statement fixed cost, which (b) isolates; the views and `SHOW` are not on a statement's path | **(b)**, adopted 2026-10-20 |
 | **BO-Q15** | `sys.relation_stats`' bound counts dropped relations (BO-S6's review) | (a) the view's read prunes oids the catalog no longer lists, under each part's latch; (b) keep them, state the saturation, and let `relation_stats_dropped` say when counts are short | (b): the bound is 4096 relations written on one core in one process's life; (a) breaks the store's one-writer-per-part rule and would erase the counts of a relation an open DDL hides from the unviewed list | **(b)**, adopted 2026-10-20 |
+| **BO-Q16** `[quiet-wrong]` | `sys.assertions`, `sys.cabins` and `sys.transitions` list declared objects, yet BO-Q2 (a) classed them engine state (BO-S8's document review) | (a) keep them unfiltered and state in `ddl-transactional.md` §5a that a view reporting a declaration's enforcement is a diagnostic; (b) filter them under the session's view | (a): §5a already listed `SHOW ASSERTIONS` and `SHOW CABINS` among the diagnostics before BO, and their rows report enforcement state - whether and how a declaration is enforced - which an operator needs whatever the session can see; (b) would hide an open transaction's assertion from the diagnostic that says it is not yet enforcing. Premise re-read at `7ba9180b`: `ReadSysView` reads the three with no session view, and §5a's pre-BO list names the first two | **(a)**, adopted 2026-10-20 |
 
 ---
 

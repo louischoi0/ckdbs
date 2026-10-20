@@ -12,7 +12,8 @@ member in `src/server/sys_views.cpp`; the `SHOW` rewrite is
 
 - **SV1 - one `SELECT`, one view.** Every `SHOW <target> [<argument>]`, and
   `DESCRIBE`/`DESC <t>`, names exactly one view `sys.<v>` and is rewritten
-  at parse into one `SELECT` over it - its AST, not its text, so a refusal
+  by the dispatcher into one `SELECT` over it - its AST, built from the
+  line with no parse, not its text, so a refusal
   on the argument names the byte the client wrote: a fixed column list (or
   `*`) and, where the target takes an argument, a fixed `WHERE` on the
   view's key. It runs through `HandleCatalogView`, the function a `SELECT
@@ -40,7 +41,8 @@ A view is materialized by its builder and then filtered, so it admits less
 than a relation:
 
 - **Admitted:** a projection, `*`, a qualified column (`FROM sys.tables AS
-  t ... WHERE t.oid = 100`), `WHERE` conjuncts `column op literal`,
+  t ... WHERE t.oid = 100`), `WHERE` conjuncts `column op literal` and
+  `column BETWEEN literal AND literal`,
   `ORDER BY` under each column's declared type, `LIMIT` and `OFFSET`, and a
   view in a `SET` value's subquery.
 - **Typed.** A column is `uint64`, `varchar` or `timestamp` (UTC
@@ -55,7 +57,11 @@ than a relation:
 - **Refused:** aggregation (AG12: a view's rows come from no step chain), a
   join, a subquery predicate, a boolean conjunct (`OR`, `NOT`, an `IN`
   list, `LIKE`, `NotImplemented`), a function call (`NotImplemented`), a
-  column-to-column comparison, and `ANALYZE` over a view.
+  column-to-column comparison, and `ANALYZE` over a view. A form only the
+  query layer reads (`parser-v2.md` I19: a value expression, an alias,
+  `DISTINCT`, a set operation) is refused `NotImplemented` at the view's
+  byte. The aggregation, join, `ANALYZE`, subquery-predicate and
+  column-to-column refusals carry no byte (`known-gaps.md`).
 
 ## 3. Filter class (BO-Q2) `[quiet-wrong]`
 
@@ -88,7 +94,7 @@ returns only what it names, so that conjunct is not compared again.
 
 | view | filter | key | what a row is |
 |---|---|---|---|
-| `tables` | schema | - | a relation: oid, namespace, name, pages, `clustered_type` (`HEAP`, `BTREE`, `CHAIN`), `next_id`, spare slots |
+| `tables` | schema | - | a relation: oid, namespace, name, descriptor and root page ids, `clustered_type` (`HEAP`, `BTREE`, `CHAIN`), `next_id`, spare slots and how many are free |
 | `columns` | schema | `rel_name`, checked | a live, visible column of a relation (no dropped column, no heap's hidden key) |
 | `objects` | schema | - | a table object of `sys.objects` |
 | `types` | engine | - | a registered type |
@@ -105,7 +111,7 @@ returns only what it names, so that conjunct is not compared again.
 | `lock_waits` | engine | - | one lock wait (§6.3) |
 | `statement_stats` | engine | - | one statement shape (§6.1) |
 | `checkpoints` | engine | - | one checkpoint run (§6.4) |
-| `page_slots` | engine | `page_id`, required | one page's header row, then one row per slot or internal entry |
+| `page_slots` | engine | `page_id`, required | one page's header row, then one row per slot - or, on an internal node, its leftmost child, then one row per entry |
 | `meta` | engine | - | one `sys.meta` field: `(section, field, value)`, the session's core's (§7) |
 
 | spelling | answers with |
@@ -117,7 +123,8 @@ returns only what it names, so that conjunct is not compared again.
 | `DESCRIBE <t>`, `DESC <t>` | `SELECT * FROM sys.columns WHERE rel_name = <t>` |
 
 `lock_waits`, `statement_stats`, `checkpoints` and `relation_stats`'
-activity have no `SHOW` spelling (BO-Q10). `SHOW TRACES`, `SHOW TRACE` and
+activity have no `SHOW` spelling (BO-Q10), and neither do `types`,
+`objects` or an unkeyed `columns`. `SHOW TRACES`, `SHOW TRACE` and
 `TRACE ON` are retired with the trace sink nothing ever installed (BO-Q9);
 an unknown target is refused at its byte.
 
@@ -132,15 +139,15 @@ write never fails, delays or reorders what it describes**: a row past a
 bound or an allocation that fails is dropped and counted in `sys.meta`
 (SV3). No row is read by the engine, so none can change a result - a lost
 or wrong row costs a reader's insight, never an answer. **No switch**
-(BO-Q8): recording is always on, and its cost is measured at BO's close.
+(BO-Q8): recording is always on.
 
 ### 6.1 `sys.statement_stats` (`stats/statement_stats.hpp`)
 
 One row per `(fetch_id, kind)` for the instance, the cores' parts merged at
 read: `calls`, `refused`, `total_us`, `max_us`, `first_seen`, `last_seen`
 and `shape_text`, the first statement seen, cut to 256 bytes at a character
-boundary. `kind` is the first whitespace-separated token when it is a verb
-the dispatcher routes, else `OTHER`; only `SELECT`, `INSERT` and `UPDATE`
+boundary. `kind` is the first whitespace-separated token, upper-cased, when
+it is a verb the dispatcher routes, else `OTHER`; only `SELECT`, `INSERT` and `UPDATE`
 carry a fingerprint, so every other kind is one row at `fetch_id = 0`.
 Recorded once per statement at its end, timed whole - a park, a re-run and
 the group commit are one call; a refused statement is a call. A statement
@@ -200,9 +207,11 @@ A ring of 1024 per core; `checkpoints_recorded`, `_overwritten`,
 
 **Tall** (BO-Q4): `(section, field, value)`, every value text, so a field
 added or removed needs no schema change. The fields are the session's
-core's, as `SHOW META`'s always were; the instance-wide stores (the
-contention census, the four statistics stores' counts, the backup and
-archive blocks) read the same on every core. A field whose writer emits no
+core's, as `SHOW META`'s always were; the instance-wide ones read the same
+on every core - among them the contention census, the four statistics
+stores' counts, the backup and archive blocks, the log's durable and append
+positions and roll totals, and the `load` block, which carries every
+core's load. A field whose writer emits no
 `=` is refused `Corruption`, never shown without a value. The field list
 lives with the code that writes each section (`CommandDispatcher::MetaSections`).
 
