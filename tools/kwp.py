@@ -260,30 +260,35 @@ def decimal_scale_of(type_mod):
     return type_mod & 0xFF
 
 
-def render_value(field, raw):
-    """One field as `exec::FormatValue` would render it. `raw` is None for
-    SQL NULL - the `-1` length the format reserves for it."""
-    if raw is None:
-        return "NULL"
+def renderer_for(field):
+    """The function `render_value` applies to one field's non-NULL bytes,
+    resolved once. A result set's columns keep their type for every row, so
+    a caller rendering many rows pays the type dispatch per column, not per
+    cell (bench/v3.3.0/results-row-cost-attribution-v3.3.0-37-gf829964c.md)."""
+    from_bytes = int.from_bytes
     oid = field["type_oid"]
     if oid in (T_INT8, T_INT16, T_INT32, T_INT64):
-        return str(int.from_bytes(raw, "little", signed=True))
-    if oid == T_UINT64:
-        return str(int.from_bytes(raw, "little", signed=False))
-    if oid == T_BOOL:
-        return str(int.from_bytes(raw, "little", signed=False))
+        return lambda raw: str(from_bytes(raw, "little", signed=True))
+    if oid in (T_UINT64, T_BOOL):
+        return lambda raw: str(from_bytes(raw, "little", signed=False))
     if oid == T_DATE:
-        return format_date(int.from_bytes(raw, "little", signed=True))
+        return lambda raw: format_date(from_bytes(raw, "little", signed=True))
     if oid == T_TIMESTAMP:
-        return format_timestamp(int.from_bytes(raw, "little", signed=True))
+        return lambda raw: format_timestamp(from_bytes(raw, "little", signed=True))
     if oid in (T_DECIMAL, T_DECIMAL_WIDE):
-        return format_decimal(int.from_bytes(raw, "little", signed=True),
-                              decimal_scale_of(field["type_mod"]))
+        scale = decimal_scale_of(field["type_mod"])
+        return lambda raw: format_decimal(from_bytes(raw, "little", signed=True), scale)
     # varchar, char, and anything this build does not know: the bytes as
     # they came, which for an unknown type is the honest answer - the
     # length prefix is always present, so a client can carry a value it
     # cannot interpret.
-    return raw.decode("utf-8", errors="replace")
+    return lambda raw: raw.decode("utf-8", errors="replace")
+
+
+def render_value(field, raw):
+    """One field as `exec::FormatValue` would render it. `raw` is None for
+    SQL NULL - the `-1` length the format reserves for it."""
+    return "NULL" if raw is None else renderer_for(field)(raw)
 
 
 # ---- The connection --------------------------------------------------------
@@ -553,15 +558,34 @@ class Connection:
 
     @staticmethod
     def _row_batch(payload, field_count):
-        r = _Reader(payload)
-        count = r.u16()
-        rows = []
-        for _ in range(count):
-            row = []
-            for _ in range(field_count):
-                n = r.i32()
-                row.append(None if n == -1 else r._take(n))
-            rows.append(row)
+        # One loop over offsets rather than `_Reader` calls, which were most
+        # of the client's cost per returned row
+        # (bench/v3.3.0/results-row-cost-attribution-v3.3.0-37-gf829964c.md).
+        # A short slice does not raise, so the bound is checked once at the
+        # end; a short length prefix raises in `unpack_from`. A length below
+        # -1 is refused, as the server's `DecodeRowBatch` refuses it.
+        unpack = _I32.unpack_from
+        try:
+            (count,) = _U16.unpack_from(payload, 0)
+            at = 2
+            rows = []
+            for _ in range(count):
+                row = []
+                for _ in range(field_count):
+                    (n,) = unpack(payload, at)
+                    at += 4
+                    if n == -1:
+                        row.append(None)
+                    elif n < 0:
+                        raise KwpError(0, False, 2, "negative field length", None, None)
+                    else:
+                        row.append(payload[at:at + n])
+                        at += n
+                rows.append(row)
+        except struct.error:
+            at = len(payload) + 1
+        if at > len(payload):
+            raise KwpError(0, False, 2, "truncated payload", None, None)
         return rows
 
     # -- transactions -------------------------------------------------------
