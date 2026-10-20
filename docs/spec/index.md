@@ -798,8 +798,8 @@ refuses is left allocated, and a failure after the tree is logged leaves
 the tree too.
 
 `TableAccess` carries `index_mask` plus a `std::vector<IndexRef>`, built at
-`InitTableAccess()` on the same pattern as `cabin_mask` / `cabin_ids` — the
-compiler needs the bit, the executor needs the root page and the widths. The
+`InitTableAccess()` beside `cabin_columns` / `cabin_ids` — the compiler needs
+the bit, the executor needs the root page and the widths. The
 list is **sorted by `index_oid`**, so §9's lowest-oid tie-break is a property
 of the list rather than of how rows happened to land on the catalog page. The
 mask names **leading** key columns only, for the reason `FindIndexOnColumn`

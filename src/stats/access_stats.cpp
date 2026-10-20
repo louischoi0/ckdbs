@@ -9,7 +9,7 @@ std::uint64_t ColumnMaskOf(const exec::Step& step) noexcept {
         // that column, merging with any other access differing only in it -
         // coarser, not wrong (catalog/rows.hpp states the same thing at the
         // field).
-        if (col < 64) mask |= (std::uint64_t{1} << col);
+        mask |= catalog::ColumnBit(col);
     }
     return mask;
 }

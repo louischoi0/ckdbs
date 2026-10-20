@@ -153,7 +153,7 @@ TEST_F(CabinExprTest, AColumnCabinIsUnchanged) {
 
     auto access = boot_->catalog.InitTableAccess(rows.value()[0].rel_oid);
     ASSERT_TRUE(access.ok());
-    EXPECT_EQ(access.value()->cabin_mask, std::uint64_t{1} << 5);
+    EXPECT_EQ(access.value()->cabin_columns, std::vector<std::uint16_t>{5});
     EXPECT_TRUE(access.value()->expr_cabins.empty());
 }
 

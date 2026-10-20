@@ -65,11 +65,11 @@ StatusOr<Resolved> Resolve(catalog::Catalog& catalog, const parser::CabinStmt& s
 // warning is dropped and the statement proceeds.
 bool AnyFilterRecordedOn(catalog::Catalog& catalog, catalog::Oid rel_oid,
                          std::uint16_t col_pos) {
-    if (col_pos >= 64) return true;  // outside the mask; say nothing rather than warn wrongly
+    const std::uint64_t bit = catalog::ColumnBit(col_pos);
+    if (bit == 0) return true;  // outside the mask; say nothing rather than warn wrongly
     auto shapes = catalog.ListAccessStats();
     if (!shapes.ok()) return true;
 
-    const std::uint64_t bit = std::uint64_t{1} << col_pos;
     for (const catalog::SysAccessStatRow& row : shapes.value()) {
         if (row.rel_id != rel_oid) continue;
         if ((row.column_mask & bit) != 0) return true;

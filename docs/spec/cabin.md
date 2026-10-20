@@ -344,7 +344,10 @@ The write hook is what "observed ⇒ complete" costs. The superset
 invariant (§1) makes every mandatory action an **append**; removal is
 never performed on the hot path — eager removal is not merely
 unnecessary but *incorrect*, because an older snapshot may still be
-entitled to match the entry through the undo chain. Per Cabin:
+entitled to match the entry through the undo chain. Per Cabin, a column
+Cabin at any position - the hook walks `TableAccess::cabin_columns`, every
+cabined position, because both readers (the compiled probe and the
+foreign-key reverse check) serve any position `CabinOn` names:
 
 | operation | action | why it preserves authority |
 |---|---|---|
