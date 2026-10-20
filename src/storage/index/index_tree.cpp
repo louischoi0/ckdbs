@@ -212,6 +212,7 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
 // node below is held, and every change to the range routed to it is a
 // divide of it.
 struct Parents {
+    storage::PinAllowance allowance;  // before `held`, so the holds drop first
     // held[i] is the parent of the node one level below it - held[0] the
     // leaf's - taken exclusive and checked to route the key to that node.
     std::array<storage::PageRef, storage::kMaxBtreeDepth> held;
@@ -272,6 +273,7 @@ StatusOr<Parents> SecureParents(storage::PageStore& store, const Descent& descen
     Parents out;
     std::array<PageId, storage::kMaxBtreeDepth> path = descent.path;
     for (std::uint16_t below = descent.depth; below > 0; --below) {
+        if (out.count > 0) out.allowance.Grow(store);
         auto parent = FetchParent(store, layout, path, below, sort_key);
         if (!parent.ok()) return parent.status();
         const bool full = IndexInternalView(parent.value().bytes()).IsFull(layout);
@@ -420,6 +422,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // What the caller logs under (AT-S21): the leaf and every parent the
     // divide writes, handed out still held once it is done.
     auto hand_out = [&] {
+        out.allowance = std::move(parents.value().allowance);
         out.held.push_back(std::move(descent.value().leaf));
         for (std::uint16_t i = 0; i < parents.value().count; ++i) {
             out.held.push_back(std::move(parents.value().held[i]));
@@ -482,10 +485,10 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // level creates - `2 + k`, and `3 + k` for a growth, whose anchor is
     // pinned. **Unbounded by a constant**, unlike the clustered tree's: an
     // index node holds as few separators as its entry is wide allows (eight
-    // at a 1,000-byte entry, covered bytes included), so `k` can pass the five that
-    // DevicePageStore::kPinCeiling leaves room for, and a debug build at
-    // `cores = 1` aborts there. Open, AT-S16's review F1: the ceiling is the
-    // operator's to re-derive.
+    // at a 1,000-byte entry, covered bytes included), so `k` is bounded only
+    // by the depth. `DevicePageStore::kPinCeiling` is the ordinary case's,
+    // `k = 1`, and `SecureParents` grants a pin of `PinAllowance` for each
+    // parent past it, handed out with the holds.
     PageId child = new_leaf_id;
     std::uint16_t old_root_level = 0;  // the root is a leaf unless proven otherwise
 

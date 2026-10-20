@@ -1057,5 +1057,27 @@ TEST_F(InsertWalTest, ALoggedIndexSplitStaysUnderThePinCeiling) {
     EXPECT_EQ(d.Dispatch("SELECT k FROM t WHERE k = 80").response, "k\\n80");
 }
 
+// The same through SQL at the widest covered width a `varchar` cell takes:
+// two separators a node, so the divides climb and each grants itself a pin
+// for every parent past the first (`storage::PinAllowance`). A debug build
+// aborted at row 33 before the grant.
+TEST_F(InsertWalTest, AWideCoveredIndexDividesWithinItsPinAllowance) {
+    CommandDispatcher d = TransactionalDispatcher(wal::DurabilityClass::kRelaxed);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, k int64, c varchar(4000)) BTREE")
+                  .response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE INDEX by_k ON t (k) COVERING (c)").response.substr(0, 14),
+              "CREATED INDEX ");
+    for (int i = 1; i <= 100; ++i) {
+        const std::string row = std::to_string(i);
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (" + row + ", " + row + ", 'x')")
+                      .response.substr(0, 8),
+                  "INSERTED")
+            << "row " << i;
+    }
+    EXPECT_EQ(store_->pin_allowance(), 0u);
+    EXPECT_EQ(d.Dispatch("SELECT k FROM t WHERE k = 100").response, "k\\n100");
+}
+
 }  // namespace
 }  // namespace kds::server

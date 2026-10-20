@@ -130,6 +130,9 @@ struct IndexInsertResult {
     std::array<IndexChange, kMaxIndexChanges> structural{};
     std::uint8_t n_structural = 0;
 
+    // The pins granted for the parents below past the first; before
+    // `held`, so the holds drop first.
+    storage::PinAllowance allowance;
     // The leaf the entry landed in and the parents `SecureParents` took,
     // still held (AT-S21): an `INDEX_INSERT` names a slot, and another
     // core's insert into the leaf between the write and its record shifts
