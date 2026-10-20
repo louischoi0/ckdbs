@@ -1,0 +1,12 @@
+created 8 relations with suffix _abvold3b1:
+  organizations_abvold3b1
+  ships_abvold3b1
+  operations_abvold3b1
+  cargos_abvold3b1
+  fees_abvold3b1
+  recipes_abvold3b1
+  freights_abvold3b1
+  charges_abvold3b1
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/cdkbs/bench-runs/v3.3.0-38-ga40882af/oldtools/tools/scenario2_freight.py --suffix abvold3b1 [--load-only]

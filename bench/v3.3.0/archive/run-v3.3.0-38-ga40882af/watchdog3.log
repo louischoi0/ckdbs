@@ -1,0 +1,8 @@
+2026-10-20T08:18:05Z master=191969 alive=n status_age=8s status=2026-10-20T08:17:57Z PLAN DONE
+2026-10-20T08:18:05Z ORPHAN: master gone, restarting
+2026-10-20T08:19:05Z master=196845 alive=y status_age=6s status=2026-10-20T08:18:59Z ab-new1-s2-c1-g start
+2026-10-20T08:20:05Z master=196845 alive=y status_age=14s status=2026-10-20T08:19:51Z ab-old2-s2-c1-g start
+2026-10-20T08:21:05Z master=196845 alive=y status_age=21s status=2026-10-20T08:20:44Z ab-new2-s2-c1-g start
+2026-10-20T08:22:05Z master=196845 alive=y status_age=3s status=2026-10-20T08:22:02Z ab-old3-b1-s2-c1-g start
+2026-10-20T08:23:05Z master=196845 alive=y status_age=10s status=2026-10-20T08:22:55Z ab-new3-b1-s2-c1-g start
+2026-10-20T08:24:05Z post.done seen, watchdog exits

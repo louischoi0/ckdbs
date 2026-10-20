@@ -1,0 +1,3 @@
+2026-10-20T09:11:53Z master=none alive=n progress_age=1466s rep=3 size=60480 mode=send
+2026-10-20T09:11:53Z ORPHAN: restarting
+2026-10-20T09:12:53Z master=215135 alive=y progress_age=35s rep=3 size=60480 mode=send

@@ -1,0 +1,77 @@
+created 8 relations with suffix _satb16c8s:
+  organizations_satb16c8s
+  ships_satb16c8s
+  operations_satb16c8s
+  cargos_satb16c8s
+  fees_satb16c8s
+  recipes_satb16c8s
+  freights_satb16c8s
+  charges_satb16c8s
+
+read probe - which of the reads S2-02..S2-04 need does this server take?
+
+  pk lookup           ok
+  capacity aggregate  ok
+  recipe filterscan   ok
+  voyage manifest     ok
+  voyage rollup       ok
+  customer statement  ok
+
+
+ckdbs benchmark - 68 columns, 24668 rows resident, 1 connection
+server 127.0.0.1:15607  table scenario2_satb16c8s
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0    1263.5   1137.0   1142.9   1194.7   1613.2   1613.2    1613.2     0
+load-organizations         300         0    1233.7    992.7   1100.5   1181.3   1570.6   2775.7    6276.0     0
+load-ships                  30         0    1093.7   1004.0   1038.5   1065.9   1274.2   1632.1    1632.1     0
+load-operations            300         0    1217.9    990.4   1137.3   1192.3   1420.5   2033.6    4742.5     0
+load-fees                   12         0    1144.3   1010.7   1054.9   1138.6   1312.1   1312.1    1312.1     0
+load-recipes                93         0    1150.8   1001.8   1088.3   1132.3   1390.6   1508.5    1508.5     0
+load-cargos               4000         0    1291.2    991.3   1160.6   1214.4   1523.7   2597.7   27155.5     0
+booking                   3378     2,860    5380.9    443.4   4610.6   5385.1   8271.4  11219.8   34508.9     0
+cargo-lookup              3539     2,996     215.8     76.4    146.1    181.9    398.8    629.6    3535.0     0
+credit-lookup             3539     2,996     214.7     65.1    127.2    179.1    427.7    712.5    5839.4     0
+capacity-read             3539     2,996     205.5     55.9    121.1    168.0    441.4    683.0    3712.6     0
+recipe-read               3539     2,996     306.9    122.7    218.9    265.9    572.1    779.0    3686.8     0
+freight-insert            3169     2,683     198.1     53.5     98.5    151.6    459.0    623.6    3331.2     0
+charge-insert            17829    15,093     133.8     37.4     78.7    106.7    286.7    447.8    3754.5     0
+operation-update          3169     2,683     170.6     41.0     87.0    109.7    300.0   1984.6    6491.3    77
+org-update                3092     2,618     162.8     38.6     81.7    104.2    293.9   1830.6    6150.5    84
+commit                    3008     2,546    2423.1   1211.4   1926.1   2320.4   3551.8   6328.5    9757.0     0
+manifest-scan               40        34     256.1     69.8    114.5    249.1    548.8    691.1     691.1     0
+voyage-rollup               40        34     237.1     64.5    108.5    217.4    465.1    524.7     524.7     0
+customer-statement          20        17    1646.4    107.8    113.4    163.6   3435.3   3453.7    3453.7     0
+
+  ddl: 8 relations
+  booking: BEGIN/COMMIT, capacity=cached, 16 bookers, contended
+  operation-update: 77 error replies, first: ERR TXN_CONFLICT retryable=1 row id=478 was written by transaction 69704
+  org-update: 84 error replies, first: ERR TXN_CONFLICT retryable=1 row id=430 was written by transaction 90330
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.
+bookings
+  committed                 3008      2546.4 TPS
+  rejected-capacity          304        9.0% of attempts
+  rejected-credit             66        2.0% of attempts
+  conflicted                 161        161 retries
+    on operations              77       47.8% of conflicts
+    on organizations           84       52.2% of conflicts
+    retries/booking         0.05
+
+  mode                 BEGIN/COMMIT, capacity=cached, max_fees=uncapped
+  bookers              16, contended (shared voyages and customers)
+  per booker           #0:188  #1:188  #2:188  #3:188  #4:188  #5:188  #6:188  #7:188  #8:188  #9:188  #10:188  #11:188  #12:188  #13:188  #14:188  #15:188
+  cargo pool left      926
+
+  manifest reporter    2 passes, 100 reads, 177 freight rows scanned
+                       latency is in the table above, beside the bookings it contended with
+
+verify (§4)          400 checks, 36 failure(s)
+  first: I1 operation 567: booked_cbm=4916000, SUM(freights.cbm)=5166000
+
+  wrote /home/cdkbs/bench-runs/v3.3.0-38-ga40882af/json/sat-b16-s2-c8-s.json

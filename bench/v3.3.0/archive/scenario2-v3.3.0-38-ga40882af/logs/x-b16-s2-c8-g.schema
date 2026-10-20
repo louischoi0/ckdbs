@@ -1,0 +1,12 @@
+created 8 relations with suffix _xb16c8g:
+  organizations_xb16c8g
+  ships_xb16c8g
+  operations_xb16c8g
+  cargos_xb16c8g
+  fees_xb16c8g
+  recipes_xb16c8g
+  freights_xb16c8g
+  charges_xb16c8g
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/kwp-decoder-fast-path/tools/scenario2_freight.py --suffix xb16c8g [--load-only]

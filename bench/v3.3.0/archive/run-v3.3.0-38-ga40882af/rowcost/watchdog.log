@@ -1,0 +1,25 @@
+2026-10-20T08:23:42Z master=none alive=n progress_age=0s 
+2026-10-20T08:23:42Z ORPHAN: restarting
+2026-10-20T08:24:42Z master=199475 alive=y progress_age=1s rep=1 size=100 mode=values
+2026-10-20T08:25:42Z master=199475 alive=y progress_age=8s rep=1 size=10000 mode=split
+2026-10-20T08:26:42Z master=199475 alive=y progress_age=2s rep=2 size=1 mode=drain
+2026-10-20T08:27:42Z master=199475 alive=y progress_age=8s rep=2 size=1000 mode=drain
+2026-10-20T08:28:42Z master=199475 alive=y progress_age=18s rep=2 size=10000 mode=split
+2026-10-20T08:29:42Z master=199475 alive=y progress_age=1s rep=3 size=1 mode=values
+2026-10-20T08:30:42Z master=199475 alive=y progress_age=3s rep=3 size=1000 mode=split
+2026-10-20T08:31:42Z master=199475 alive=y progress_age=6s rep=3 size=60480 mode=drain
+2026-10-20T08:32:42Z master=199475 alive=y progress_age=1s rep=1 size=10 mode=drain
+2026-10-20T08:33:42Z master=199475 alive=y progress_age=22s rep=1 size=100 mode=split
+2026-10-20T08:34:42Z master=199475 alive=y progress_age=26s rep=1 size=1000 mode=split
+2026-10-20T08:35:42Z master=199475 alive=y progress_age=16s rep=1 size=10000 mode=split
+2026-10-20T08:36:42Z master=199475 alive=y progress_age=35s rep=1 size=60480 mode=drain
+2026-10-20T08:37:42Z master=199475 alive=y progress_age=3s rep=2 size=1 mode=values
+2026-10-20T08:38:42Z master=199475 alive=y progress_age=21s rep=2 size=100 mode=split
+2026-10-20T08:39:42Z master=199475 alive=y progress_age=25s rep=2 size=1000 mode=split
+2026-10-20T08:40:42Z master=199475 alive=y progress_age=14s rep=2 size=10000 mode=split
+2026-10-20T08:41:42Z master=199475 alive=y progress_age=34s rep=2 size=60480 mode=drain
+2026-10-20T08:42:42Z master=199475 alive=y progress_age=2s rep=3 size=1 mode=values
+2026-10-20T08:43:42Z master=199475 alive=y progress_age=20s rep=3 size=100 mode=split
+2026-10-20T08:44:42Z master=199475 alive=y progress_age=24s rep=3 size=1000 mode=split
+2026-10-20T08:45:42Z master=199475 alive=y progress_age=13s rep=3 size=10000 mode=split
+2026-10-20T08:46:42Z master=199475 alive=y progress_age=33s rep=3 size=60480 mode=drain

@@ -1,0 +1,13 @@
+2026-10-20T08:07:47Z master=153905 alive=n status_age=16s status=2026-10-20T08:07:31Z ALL DONE
+2026-10-20T08:07:47Z ORPHAN: master gone, restarting
+2026-10-20T08:08:47Z master=191969 alive=y status_age=28s status=2026-10-20T08:08:19Z pl-s1-planned-r1 start
+2026-10-20T08:09:47Z master=191969 alive=y status_age=9s status=2026-10-20T08:09:38Z pl-s1-written-r1 start
+2026-10-20T08:10:47Z master=191969 alive=y status_age=23s status=2026-10-20T08:10:24Z pl-s3-planned-none-r2 start
+2026-10-20T08:11:47Z master=191969 alive=y status_age=4s status=2026-10-20T08:11:43Z pl-s3-written-none-r2 start
+2026-10-20T08:12:47Z master=191969 alive=y status_age=32s status=2026-10-20T08:12:15Z pl-s1-written-r2 start
+2026-10-20T08:13:47Z master=191969 alive=y status_age=14s status=2026-10-20T08:13:33Z pl-s1-planned-r3 start
+2026-10-20T08:14:47Z master=191969 alive=y status_age=28s status=2026-10-20T08:14:19Z pl-s3-written-none-r3 start
+2026-10-20T08:15:47Z master=191969 alive=y status_age=13s status=2026-10-20T08:15:34Z pl-s3-written-none-r3 start
+2026-10-20T08:16:47Z master=191969 alive=y status_age=40s status=2026-10-20T08:16:07Z pl-s1-written-r3 start
+2026-10-20T08:17:47Z master=191969 alive=y status_age=22s status=2026-10-20T08:17:25Z pl-s3-written-all-r1 start
+2026-10-20T08:18:47Z plan.done seen, watchdog exits

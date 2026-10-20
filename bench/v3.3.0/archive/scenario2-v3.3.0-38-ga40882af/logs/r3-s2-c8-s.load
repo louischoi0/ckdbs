@@ -1,0 +1,33 @@
+created 8 relations with suffix _s2c8s:
+  organizations_s2c8s
+  ships_s2c8s
+  operations_s2c8s
+  cargos_s2c8s
+  fees_s2c8s
+  recipes_s2c8s
+  freights_s2c8s
+  charges_s2c8s
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/kwp-decoder-fast-path/tools/scenario2_freight.py --suffix s2c8s
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15607  table scenario2_s2c8s
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0    1410.9   1197.2   1203.2   1348.3   1975.5   1975.5    1975.5     0
+load-organizations         300         0    1363.1   1042.6   1167.1   1213.8   1508.9   2666.5   26225.3     0
+load-ships                  30         0    1271.8   1143.1   1198.9   1261.2   1427.6   1434.9    1434.9     0
+load-operations            300         0    1258.1    972.2   1169.9   1222.6   1404.1   2231.2    9107.0     0
+load-fees                   12         0    1228.2   1146.6   1186.8   1205.0   1335.5   1335.5    1335.5     0
+load-recipes                93         0    1178.9   1044.7   1111.8   1144.5   1405.0   2325.2    2325.2     0
+load-cargos               4000         0    1267.5    981.9   1163.5   1213.6   1427.3   2596.9   22363.5     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.

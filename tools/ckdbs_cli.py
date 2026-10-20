@@ -215,10 +215,13 @@ class ServerConnection:
             # A diagnostic answer, carried as one row per line. Re-joined
             # with the two-character escape the lines were split on, so the
             # string is the one the newline protocol produced.
-            return "\\n".join(kwp.render_value(fields[0], row[0]) for row in rows)
+            render = kwp.renderer_for(fields[0])
+            return "\\n".join("NULL" if row[0] is None else render(row[0]) for row in rows)
         header = ",".join(f["name"] for f in fields)
+        renderers = [kwp.renderer_for(f) for f in fields]
         body = "".join(
-            "\\n" + ",".join(kwp.render_value(fields[i], row[i]) for i in range(len(fields)))
+            "\\n" + ",".join(["NULL" if raw is None else render(raw)
+                              for render, raw in zip(renderers, row)])
             for row in rows)
         return header + body
 

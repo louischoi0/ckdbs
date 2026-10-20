@@ -1,0 +1,12 @@
+created 8 relations with suffix _abvnew2c1g:
+  organizations_abvnew2c1g
+  ships_abvnew2c1g
+  operations_abvnew2c1g
+  cargos_abvnew2c1g
+  fees_abvnew2c1g
+  recipes_abvnew2c1g
+  freights_abvnew2c1g
+  charges_abvnew2c1g
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/kwp-decoder-fast-path/tools/scenario2_freight.py --suffix abvnew2c1g [--load-only]

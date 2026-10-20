@@ -1,0 +1,33 @@
+created 8 relations with suffix _abvnew2c1g:
+  organizations_abvnew2c1g
+  ships_abvnew2c1g
+  operations_abvnew2c1g
+  cargos_abvnew2c1g
+  fees_abvnew2c1g
+  recipes_abvnew2c1g
+  freights_abvnew2c1g
+  charges_abvnew2c1g
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/kwp-decoder-fast-path/tools/scenario2_freight.py --suffix abvnew2c1g
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15604  table scenario2_abvnew2c1g
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0    1311.4   1197.3   1227.5   1256.0   1702.7   1702.7    1702.7     0
+load-organizations         300         0    1202.3   1000.5   1141.1   1188.6   1399.2   1598.2    1749.6     0
+load-ships                  30         0    1167.5   1104.8   1143.5   1164.2   1225.4   1248.7    1248.7     0
+load-operations            300         0    1161.1   1001.4   1093.6   1145.2   1264.7   1767.0    2336.8     0
+load-fees                   12         0    1275.3   1149.7   1168.1   1188.4   1944.1   1944.1    1944.1     0
+load-recipes                93         0    1131.7   1004.7   1064.9   1110.4   1254.9   2196.5    2196.5     0
+load-cargos               4000         0    1226.8    974.5   1112.2   1180.0   1393.8   2437.5   17098.5     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.
