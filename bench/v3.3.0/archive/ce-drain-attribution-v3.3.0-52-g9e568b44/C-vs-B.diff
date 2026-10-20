@@ -1,0 +1,4 @@
+5147,5149d5146
+<         if (d_.select_row_emitted_for_test_) {
+<             if (Status s = d_.select_row_emitted_for_test_(++rows_emitted_); !s.ok()) return s;
+<         }
