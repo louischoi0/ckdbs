@@ -1,12 +1,11 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <vector>
 
-#include "kds/base/latch.hpp"
 #include "kds/catalog/oid.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/stats/per_core_ring.hpp"
 #include "kds/txn/lock_table.hpp"
 
 // **`sys.lock_waits`' rows: every lock wait that parked, one row each**
@@ -16,19 +15,12 @@
 //
 // ---- Where the rows live, and the latch protocol ---------------------------
 //
-// One part per core, each a ring of `kRingCapacity` rows under a latch of
-// its own (`LatchKind::kStatsRing`). The core whose statement waited is the
-// only writer of its part, so its latch is uncontended but for a reader; a
-// reader on any core takes each part's latch in turn and copies its rows
-// (§3's "Where the rows live"), so no core reads another's words
-// unguarded and no cross-core write is added to a wait. A part allocates its
-// ring on its core's first wait: a core that never waits costs nothing.
-//
-// **A write never fails, delays or reorders the wait it describes.** A full
-// ring overwrites its oldest row and counts it; a ring that cannot be
-// allocated drops the row and counts that. Both counts are `sys.meta` fields
-// (SV3). Nothing a row says changes a result: a wrong or lost row costs a
-// reader's insight, never an answer.
+// A ring of `kRingCapacity` rows per core, `PerCoreRing`'s protocol
+// (`stats/per_core_ring.hpp`): the core whose statement waited is the only
+// writer of its part, a reader copies each part under its latch, and a write
+// never fails, delays or reorders the wait it describes. Nothing a row says
+// changes a result: a wrong or lost row costs a reader's insight, never an
+// answer.
 //
 // ---- What is a wait here ---------------------------------------------------
 //
@@ -70,35 +62,22 @@ static_assert(sizeof(LockWaitRecord) == 64, "a ring of 4096 is 256 KiB per waiti
 class LockWaitLog {
 public:
     static constexpr std::size_t kRingCapacity = 4096;  // BO-Q7 (a), per core
-    static constexpr std::uint32_t kParts = 64;         // `kMaxCores` (superblock.hpp)
+    using Ring = PerCoreRing<LockWaitRecord, kRingCapacity>;
 
     // Appends `row` to `row.core`'s part, stamping its `seq`.
-    static void Record(LockWaitRecord row) noexcept;
+    static void Record(LockWaitRecord row) noexcept { ring().Record(row.core, row); }
 
-    // Every part's rows, each copied under its part's latch: by core, then
-    // oldest first.
-    static std::vector<LockWaitRecord> Snapshot();
+    // Every part's rows: by core, then oldest first.
+    static std::vector<LockWaitRecord> Snapshot() { return ring().Snapshot(); }
 
-    struct Totals {
-        std::uint64_t recorded = 0;     // rows written, overwritten ones included
-        std::uint64_t overwritten = 0;  // rows a full ring dropped for a newer one
-        std::uint64_t dropped = 0;      // rows no ring could take
-    };
-    static Totals Read() noexcept;
+    using Totals = Ring::Totals;
+    static Totals Read() noexcept { return ring().Read(); }
 
     // Empties every part; a test's alone.
-    static void ResetForTest() noexcept;
+    static void ResetForTest() noexcept { ring().Reset(); }
 
 private:
-    struct Part {
-        Latch latch{LatchKind::kStatsRing};
-        std::vector<LockWaitRecord> ring;  // grows to `kRingCapacity`, then wraps
-        std::size_t next = 0;              // the slot the next row takes once full
-        std::uint64_t recorded = 0;
-        std::uint64_t overwritten = 0;
-        std::uint64_t dropped = 0;
-    };
-    static std::array<Part, kParts>& parts() noexcept;
+    static Ring& ring() noexcept;
 };
 
 // **One wait's row, written when the wait ends however it ends** - and as

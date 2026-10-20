@@ -1,0 +1,29 @@
+2026-10-20 01:52:25 UTC task began; exporting 86d1fe1a
+2026-10-20 01:52:26 UTC build A,B start
+2026-10-20 01:54:15 UTC build A,B done rc=0 rc=0
+2026-10-20 01:54:25 UTC binaries copied+hashed, build trees and exports deleted
+2026-10-20 01:54:41 UTC phase start w1 order B,A2,A (load 4.84 4.01 4.20, cc1plus 0, free 6470092 KB)
+2026-10-20 01:58:31 UTC phase end w1 rc=0 (data dir 2476 MB, free 3933216 KB)
+2026-10-20 01:58:32 UTC phase start w2 order A,A2,B (load 0.73 2.28 3.45, cc1plus 0, free 6468052 KB)
+2026-10-20 02:01:37 UTC phase end w2 rc=0 (data dir 2476 MB, free 3932332 KB)
+2026-10-20 02:01:38 UTC phase start w3 order A2,B,A (load 1.08 1.67 2.99, cc1plus 0, free 6467180 KB)
+2026-10-20 02:04:45 UTC phase end w3 rc=0 (data dir 2476 MB, free 3931460 KB)
+2026-10-20 02:04:45 UTC phase start w4 order B,A,A2 (load 0.85 1.30 2.60, cc1plus 0, free 6466296 KB)
+2026-10-20 02:07:50 UTC phase end w4 rc=0 (data dir 2476 MB, free 3931260 KB)
+2026-10-20 02:07:50 UTC DONE
+2026-10-20 02:08:08 UTC part 1 (w1-w4) DONE; part 2 (w5-w8, point shapes only) launching
+2026-10-20 02:08:08 UTC phase start w5 order A,A2,B (load 0.75 1.09 2.25, cc1plus 0, free 6466048 KB)
+2026-10-20 02:13:46 UTC phase end w5 rc=0 (data dir 1324 MB, free 5110488 KB)
+2026-10-20 02:13:46 UTC phase start w6 order B,A,A2 (load 0.86 2.27 2.61, cc1plus 0, free 6465604 KB)
+2026-10-20 02:16:17 UTC phase end w6 rc=0 (data dir 1324 MB, free 5110340 KB)
+2026-10-20 02:16:17 UTC phase start w7 order A2,B,A (load 0.40 1.53 2.28, cc1plus 0, free 6465456 KB)
+2026-10-20 02:17:33 UTC phase end w7 rc=1 (data dir 793 MB, free 5653624 KB)
+2026-10-20 02:17:33 UTC STOPPED w7 rc=1
+2026-10-20 02:18:03 UTC w5 discarded (parent's debug build overlapped run 0; whole phase dropped), w7 died at run 3 (server B did not listen on 34082; partial moved to discarded/); re-running both as w5, w7 on new ports
+2026-10-20 02:18:03 UTC phase start w5 order A,A2,B (load 0.39 1.20 2.07, cc1plus 0, free 6465176 KB)
+2026-10-20 02:20:33 UTC phase end w5 rc=0 (data dir 1324 MB, free 5109896 KB)
+2026-10-20 02:20:34 UTC phase start w7 order A2,B,A (load 0.21 0.81 1.79, cc1plus 0, free 6465012 KB)
+2026-10-20 02:23:05 UTC phase end w7 rc=0 (data dir 1324 MB, free 5109708 KB)
+2026-10-20 02:23:05 UTC DONE
+2026-10-20 02:24:33 UTC results file written
+2026-10-20 02:24:36 UTC DONE

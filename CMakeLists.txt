@@ -68,7 +68,9 @@ add_library(kds
     src/stats/waystone_dir.cpp
     src/stats/trail_store.cpp
     src/stats/plan_stats.cpp
+    src/stats/checkpoint_log.cpp
     src/stats/lock_wait_log.cpp
+    src/stats/relation_stats.cpp
     src/stats/statement_stats.cpp
     src/stats/trail_recorder.cpp
     src/stats/access_stats.cpp

@@ -11,6 +11,7 @@
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/scheduler.hpp"
+#include "kds/stats/checkpoint_log.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/storage/page_header.hpp"
@@ -155,6 +156,36 @@ TEST_F(CheckpointCensusTest, AScriptedDeviceDelayLandsInItsOwnPhase) {
     EXPECT_EQ(CheckpointCensus::Of(kCore).last_wall_ns.load(), 7'000 * writes + 1'000'000) << "the clock moved only in the device";
 }
 
+// ---- `sys.checkpoints`' row (BO-S7) ----------------------------------------
+
+TEST_F(CheckpointCensusTest, EveryRunIsOneRowOfTheCheckpointLog) {
+    stats::CheckpointLog::ResetForTest();
+    DirtyPages(3);
+    slow_->write_ns = 7'000;
+    slow_->sync_ns = 1'000'000;
+    wal::Checkpointer checkpointer(*wal_, *target_, txns_, anchor_);
+    ASSERT_TRUE(checkpointer.RunGated(nullptr, kCore).ok());
+
+    const std::vector<stats::CheckpointRecord> rows = stats::CheckpointLog::Snapshot();
+    ASSERT_EQ(rows.size(), 1u);
+    const stats::CheckpointRecord& r = rows[0];
+    const CheckpointCensus::Slot& slot = CheckpointCensus::Of(kCore);
+    EXPECT_EQ(r.seq, 1u);
+    EXPECT_EQ(r.core, kCore);
+    EXPECT_TRUE(r.completed);
+    EXPECT_FALSE(r.resumed);
+    EXPECT_EQ(r.steps, slot.last_steps.load());
+    EXPECT_EQ(r.pages_flushed, slot.last_pages.load());
+    EXPECT_EQ(r.dirty_at_start, 6u);
+    EXPECT_EQ(r.duration_us, slot.last_wall_ns.load() / 1000);
+    // The step's data-file sync, inline in a synchronous run, is its wait on
+    // the data file; this clock does not move for the log.
+    EXPECT_EQ(r.data_wait_us, 1'000u);
+    EXPECT_EQ(r.log_wait_us, 0u);
+    EXPECT_GT(r.started_us, 0) << "a wall instant, not the injected clock's";
+    EXPECT_EQ(stats::CheckpointLog::Read().recorded, 1u);
+}
+
 TEST_F(CheckpointCensusTest, NoSinkOutlivesTheRun) {
     // A writeback after the run - SYNC, eviction - must find no sink on the
     // thread, or it would be charged to a run that has ended.
@@ -175,6 +206,7 @@ private:
 };
 
 TEST_F(CheckpointCensusTest, ThePublishsWritebackIsOnePhaseAndItsInnerTimersRecordNothing) {
+    stats::CheckpointLog::ResetForTest();
     DirtyPages(2);
     slow_->write_ns = 3'000;
     slow_->sync_ns = 50'000;
@@ -192,6 +224,12 @@ TEST_F(CheckpointCensusTest, ThePublishsWritebackIsOnePhaseAndItsInnerTimersReco
     ASSERT_TRUE(checkpointer.RunGated(nullptr, kCore).ok());  // resumes the started run
 
     EXPECT_TRUE(CheckpointCensus::Of(kCore).last_completed.load());
+    // A resumed run is its own row, its snapshot the started run's (BO-S7);
+    // the `Start` outside a run is none.
+    const std::vector<stats::CheckpointRecord> rows = stats::CheckpointLog::Snapshot();
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_TRUE(rows[0].resumed);
+    EXPECT_EQ(rows[0].dirty_at_start, 0u);
     EXPECT_GT(PhaseSum(kCore, CheckpointPhase::kPublishWriteback), 0u)
         << "the late page went out in the publish";
     EXPECT_EQ(PhaseSum(kCore, CheckpointPhase::kPublishSync), 50'000u);

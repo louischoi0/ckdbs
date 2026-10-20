@@ -1472,6 +1472,39 @@ change's stages found and left.
   (`index.md` IX9's crossover); CC-Q1 (a) put statistics into the order
   only. Owned by `index.md` §9.
 
+## The `sys` views and the statistics stores (BO)
+
+Verified on `bo-relation-stats-checkpoints` at `86d1fe1a` (BO-S7). Owned by
+`docs/spec/sys-views.md`.
+
+- **Six refusals over a view name no byte**: aggregation (AG12), a
+  subquery predicate and a column-to-column comparison (`HandleCatalogView`),
+  a join and `ANALYZE` over a view, and an unknown `sys.<name>`
+  (`SelectBody`, both `command_dispatcher.cpp`) answer a bare `ERR`, against
+  the rule that every refusal carries the offending token's byte. The
+  boolean-conjunct and function-call refusals beside them do carry it.
+- **`SHOW PAGE` names every page that is not a btree page `HEAP`**
+  (`PageSlotsView`, `src/server/sys_views.cpp`): an anchor, var-heap, map
+  or undo page is labelled `HEAP` and its contents read as heap slots. A
+  diagnostic's mislabel, not an answer; the page type byte is the
+  authority, and the view's `page_type` should spell it.
+- **A view's read delays the writer of each part it copies** by the copy: a
+  reader takes each core's statistics latch in turn. Bounded by the part
+  (4096 shapes, 4096 relations, 4096 waits, 1024 runs), unmeasured as a
+  tail on the writing core.
+- **An in-process restart keeps the statistics stores**: they are
+  process-wide, so the sim harness's restart (`sim/`) and a test's second
+  instance in one process see the rows the first wrote. A real restart
+  empties them.
+- **A checkpoint task's park reads its status before its generation**
+  (`Checkpointer::RunTask`, `src/wal/checkpointer.cpp`; found by BO-S7's
+  review, pre-existing): an abandoned frame polled again with a failed park
+  would end a newer task's run, or, with none running, dereference the null
+  report `Abandon` left. Unreachable today - `Abandon` runs only at
+  shutdown, after the reactors stop - and so not a defect entry; owned by
+  `docs/spec/wal.md` §11. Checking the generation first at each park closes
+  it.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,

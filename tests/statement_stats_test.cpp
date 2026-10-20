@@ -26,6 +26,9 @@ TEST_F(StatementStatsTest, AKindIsAStatementVerbOrOther) {
     EXPECT_EQ(StatementKindOf("SHOW(1)"), "OTHER");
     EXPECT_EQ(StatementKindOf("COMMIT;"), "OTHER");
     EXPECT_EQ(StatementKindOf("commit"), "COMMIT");
+    // Every verb the dispatcher routes is a kind of its own.
+    EXPECT_EQ(StatementKindOf("USE ledger"), "USE");
+    EXPECT_EQ(StatementKindOf("reindex index t_v"), "REINDEX");
 }
 
 TEST_F(StatementStatsTest, OneShapeOnTwoCoresIsOneRowMerged) {

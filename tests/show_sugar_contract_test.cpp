@@ -11,6 +11,8 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/kwp_session.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
+#include "kds/stats/checkpoint_log.hpp"
+#include "kds/stats/relation_stats.hpp"
 #include "kds/stats/statement_stats.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -440,6 +442,93 @@ TEST_F(ShowSugarTest, AnUpdateWithASubqueryIsKeyedByItsOwnShape) {
     EXPECT_EQ(shown.Column("fetch_id"),
               std::vector<std::string>{std::to_string(parser::FingerprintOf(update)->fetch_id)})
         << reply;
+}
+
+// ---- BO-S6: `sys.relation_stats`' activity columns --------------------------
+
+TEST_F(ShowSugarTest, ARelationsWritesAreCountedByKindAsTheyReportedThem) {
+    stats::RelationStats::ResetForTest();
+    ASSERT_EQ(Text("CREATE TABLE quiet (id int64, v int32)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (100, 1, 'a')").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (101, 2, 'b'), (102, 3, 'c')")
+                  .rfind("INSERTED", 0),
+              0u);
+    // A refused statement wrote nothing and counts nothing.
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (100, 9, 'z')").rfind("ERR", 0), 0u);
+    ASSERT_EQ(Text("UPDATE t SET v = v + 1 WHERE id >= 101"), "UPDATED 2");
+    ASSERT_EQ(Text("UPDATE t SET v = 0 WHERE id = 999"), "UPDATED 0");
+    ASSERT_EQ(Text("DELETE FROM t WHERE id = 102"), "DELETED 1");
+    ASSERT_EQ(Text("PURGE FROM t WHERE id = 102"), "PURGED 1");
+
+    const std::string reply =
+        Text("SELECT name, inserts, updates, deletes, purged FROM sys.relation_stats");
+    const auto shown = testing_view::ReadViewText(reply);
+    EXPECT_EQ(shown.Find("name", "t", "inserts"), "3") << reply;
+    EXPECT_EQ(shown.Find("name", "t", "updates"), "2") << reply;
+    EXPECT_EQ(shown.Find("name", "t", "deletes"), "1") << reply;
+    EXPECT_EQ(shown.Find("name", "t", "purged"), "1") << reply;
+    // A relation nothing wrote reads 0, not NULL: below the bound none of its
+    // writes is unknown, and `relation_stats_dropped` says when one is.
+    EXPECT_EQ(shown.Find("name", "quiet", "inserts"), "0") << reply;
+    EXPECT_EQ(testing_view::MetaField(Text("SHOW META"), "relation_stats_dropped"), "0");
+}
+
+TEST_F(ShowSugarTest, AWriteIsCountedWhenItAnswersWhateverItsTransactionDecides) {
+    stats::RelationStats::ResetForTest();
+    // RETURNING replaces the reply; the write's rows still count.
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (200, 1, 'a') RETURNING id")
+                  .rfind("ERR", 0),
+              std::string::npos);
+    ASSERT_EQ(Text("UPDATE t SET v = 2 WHERE id = 200 RETURNING v").rfind("ERR", 0),
+              std::string::npos);
+    // Rows an explicit transaction rolls back stay counted, as the statement
+    // reported them (`stats/relation_stats.hpp`).
+    ASSERT_EQ(Text("BEGIN").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (201, 1, 'b')").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Text("ROLLBACK").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(testing_view::RelationField(*dispatcher_, "relation_stats", "t", "inserts"), "2");
+    EXPECT_EQ(testing_view::RelationField(*dispatcher_, "relation_stats", "t", "updates"), "1");
+}
+
+// ---- BO-S7: `sys.checkpoints` ---------------------------------------------
+
+TEST_F(ShowSugarTest, ACheckpointRunIsOneRowOfSysCheckpoints) {
+    stats::CheckpointLog::ResetForTest();
+    CheckpointRunReport run;
+    run.start_ns = 1'000'000;
+    run.end_ns = 4'000'000;  // 3 ms
+    run.steps = 2;
+    run.pages = 9;
+    run.dirty_at_start = 9;
+    run.completed = true;
+    run.log_park_ns = 500'000;
+    run.data_park_ns = 250'000;
+    run.sum_ns[static_cast<std::size_t>(CheckpointPhase::kPublishSync)] = 750'000;
+    stats::CheckpointLog::Record(/*core=*/1, run, /*ended_wall_us=*/1'700'000'003'000'000);
+    CheckpointRunReport failed;
+    failed.resumed = true;
+    stats::CheckpointLog::Record(/*core=*/1, failed, /*ended_wall_us=*/1'700'000'004'000'000);
+
+    const std::string reply =
+        Text("SELECT seq, core, duration_us, steps, pages_flushed, log_wait_us, data_wait_us, "
+             "resumed, outcome FROM sys.checkpoints WHERE started >= '2023-11-14 22:13:22' "
+             "ORDER BY seq");
+    const auto shown = testing_view::ReadViewText(reply);
+    ASSERT_EQ(shown.rows.size(), 2u) << reply;
+    EXPECT_EQ(shown.Find("seq", "1", "core"), "1") << reply;
+    EXPECT_EQ(shown.Find("seq", "1", "duration_us"), "3000") << reply;
+    EXPECT_EQ(shown.Find("seq", "1", "pages_flushed"), "9") << reply;
+    EXPECT_EQ(shown.Find("seq", "1", "log_wait_us"), "500") << reply;
+    EXPECT_EQ(shown.Find("seq", "1", "data_wait_us"), "1000") << "a park and a sync phase: " << reply;
+    EXPECT_EQ(shown.Find("seq", "1", "outcome"), "completed") << reply;
+    EXPECT_EQ(shown.Find("seq", "2", "resumed"), "1") << reply;
+    EXPECT_EQ(shown.Find("seq", "2", "outcome"), "failed") << reply;
+    // `started` is the end less the run's 3 ms: the first run began before
+    // 22:13:23, where it ended.
+    const auto early = testing_view::ReadViewText(
+        Text("SELECT seq FROM sys.checkpoints WHERE started < '2023-11-14 22:13:23'"));
+    EXPECT_EQ(early.Column("seq"), std::vector<std::string>{"1"});
+    EXPECT_EQ(testing_view::MetaField(Text("SHOW META"), "checkpoints_recorded"), "2");
 }
 
 TEST_F(ShowSugarTest, TheTraceSurfaceIsRetired) {

@@ -241,7 +241,8 @@ client author has to know to write one.
   the field's own length, not by its `type_oid`.
 - **A statement with no result set** answers `S_COMPLETE` alone, its `tag`
   being the sentence the engine rendered. Where that sentence carries
-  *lines* — `SHOW`, `DESCRIBE`, `ANALYZE`, `TRACE` — it arrives as a
+  *lines* — `ANALYZE`'s plan, the one such reply since `SHOW` and
+  `DESCRIBE` became views (`sys-views.md` SV5) — it arrives as a
   one-column `varchar` result set, one row per line, flagged
   `kFieldFlagDiagnosticLine` in the description.
 - **No text result mode exists.** A `DATE` is an epoch day, a `TIMESTAMP`

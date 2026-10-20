@@ -1,10 +1,12 @@
 #include "kds/wal/checkpointer.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <utility>
 
 #include "kds/base/contention.hpp"
+#include "kds/stats/checkpoint_log.hpp"
 #include "kds/wal/analysis.hpp"
 
 namespace kds::wal {
@@ -659,10 +661,17 @@ void Checkpointer::EndRun(std::uint32_t core_id, const Status& ran) {
     r.completed = ran.ok();
     CheckpointCensus::Publish(core_id, r);
     CheckpointCensus::RunEdge(core_id);
+    // `sys.checkpoints`' row (BO-S7): the report handed over, nothing else
+    // written. The wall clock dates it; the injected clock timed it.
+    stats::CheckpointLog::Record(
+        core_id, r,
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
     // BA-R0's checkpoint count and longest run, on the periodic path - fed
     // from this record, so a run has one timing source (BI-Q1 (a)).
     Contention::Add(Tally::kCheckpointRuns);
-    Contention::Max(Longest::kCheckpointNs, r.end_ns - r.start_ns);
+    Contention::Max(Longest::kCheckpointNs, r.wall_ns());
     LogRun(core_id, r);
 }
 
@@ -676,7 +685,7 @@ void Checkpointer::LogRun(std::uint32_t core_id, const CheckpointRunReport& r) c
                        " resumed=" + (r.resumed ? "1" : "0") +
                        " start_ns=" + std::to_string(r.start_ns) +
                        " end_ns=" + std::to_string(r.end_ns) +
-                       " wall_us=" + std::to_string((r.end_ns - r.start_ns) / 1000) +
+                       " wall_us=" + std::to_string(r.wall_ns() / 1000) +
                        " steps=" + std::to_string(r.steps) + " pages=" + std::to_string(r.pages) +
                        " dirty_at_start=" + std::to_string(r.dirty_at_start) +
                        " step_max_us=" + std::to_string(r.step_max_ns / 1000) +

@@ -41,9 +41,13 @@ to its close in this session, BO-Q2 and Q4..Q13 adopted as CLA proposed -
 several revised against `cd7c7c4e` first - and recorded in §5's mark
 column as adopted, never as the operator's marks.
 
-**State, 2026-10-14: in progress.** Built and reviewed: BO-S0, S1, S2, S3, S5; not run:
-S4 (BO-Q5 (b)); open: S6, S7, S8. On `main` from the merge of `bo-show-sugar` that day,
-after `v3.2.0` (BV's close), with no tag of its own. The stages' rows are §7.
+**CLOSED 2026-10-20 on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §2), pushed with the hook skipped. **State: every stage built, the close measured.** Built and reviewed:
+BO-S0, S1, S2, S3, S5 (on `main` from the merge of `bo-show-sugar` on 2026-10-14, after
+`v3.2.0`), S6 and S7 (on `worktree-bo-relation-stats-checkpoints`, 2026-10-20); not run:
+S4 (BO-Q5 (b)). **Resumed 2026-10-20 on the operator's standing go-ahead**
+(`instructions/v3.2.0/raft-marks-2026-10-20.md` §1, `go-ahead-achieving-milestone`):
+BO-Q14, BO-Q15 and BO-Q16, which surfaced in S6 and S8, are adopted as CLA proposed and recorded
+in §5 as adopted, never as the operator's marks. The stages' rows are §7.
 
 **Claim tags:**
 - `[source-read]` with `path:line` at `ab2c46d0` in §1.1-§1.6 and at
@@ -394,7 +398,11 @@ cross-core write is added to a statement's path.
   `ids_remaining`, `budget_used`, `budget_warning`, `budget_exhausted`,
   through the same `BudgetOf` as `SHOW BUDGET` today (48-bit, BK).
 - **Statistic columns:** `inserts`, `updates`, `deletes`, `purged` (rows,
-  since the instance started). Leaf splits, var-heap spills, page counts
+  since the instance started). As built (BO-S6): a statement's count is
+  the rows it reported, taken when it answers - a rolled-back transaction's
+  rows stay counted - and a `PURGE`'s keys whatever its decide does (PU6);
+  a KWP load chunk's rows are inserts. Bounded at 4096 relations per core,
+  dropped ones included (BO-Q15). Leaf splits, var-heap spills, page counts
   and delete-marked slots are not in BO (BO-Q13): each is a hook in the
   storage layer for a number no reader has asked for.
 - **Writer:** the dispatcher, from the rows a write statement reports.
@@ -415,7 +423,10 @@ cross-core write is added to a statement's path.
 - **Row:** a projection of BI's `CheckpointRunReport`, one per run, kept
   when the run ends: `seq`, `core`, `started`, `duration_us`, `steps`,
   `pages_flushed`, `dirty_at_start`, `log_wait_us`, `data_wait_us`, and
-  `outcome`: `completed`, `resumed`, `failed`.
+  `outcome`: `completed`, `resumed`, `failed`. **As built (BO-S7), `resumed`
+  is a column of its own and `outcome` is `completed` or `failed`**: a run
+  that took up a failed run's snapshot can itself fail, and one outcome
+  cannot say both.
 - **Writer:** the checkpointer hands its finished report to its core's
   ring and writes nothing else - no catalog page, per BI-S2's rule.
 - **Bound:** a ring of 1024 per core.
@@ -519,15 +530,20 @@ operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone)**
 | **BO-Q11** | `DESCRIBE` | (a) in scope; (b) out | (a) | **(a)**, adopted |
 | **BO-Q12** | `SHOW PAGE` | (a) `sys.page_slots` with a required key; (b) a named exception | (a), with the required key of §3.5, which `RELAYOUT <t>` needs anyway | **(a)**, adopted |
 | **BO-Q13** | page and delete-marked counts | (a) not in BO; (b) logged; (c) a walk | (a) | **(a)**, adopted |
+| **BO-Q14** | The close measurement's base (§6), now that BO-S1..S5 merged to `main` on 2026-10-14 and ten milestones (BU..CD) landed between `cd7c7c4e` and the close | (a) `cd7c7c4e` against the close, as §6 wrote it; (b) the close against the same commit with BO's statement-path recording compiled out (`StatementStats::Record`, `RelationStats::Record`), interleaved with an A' control | (b): (a) prices about 230 commits of other milestones, and §6's own subject is §3.1's per-statement fixed cost, which (b) isolates; the views and `SHOW` are not on a statement's path | **(b)**, adopted 2026-10-20 |
+| **BO-Q15** | `sys.relation_stats`' bound counts dropped relations (BO-S6's review) | (a) the view's read prunes oids the catalog no longer lists, under each part's latch; (b) keep them, state the saturation, and let `relation_stats_dropped` say when counts are short | (b): the bound is 4096 relations written on one core in one process's life; (a) breaks the store's one-writer-per-part rule and would erase the counts of a relation an open DDL hides from the unviewed list | **(b)**, adopted 2026-10-20 |
+| **BO-Q16** `[quiet-wrong]` | `sys.assertions`, `sys.cabins` and `sys.transitions` list declared objects, yet BO-Q2 (a) classed them engine state (BO-S8's document review) | (a) keep them unfiltered and state in `ddl-transactional.md` §5a that a view reporting a declaration's enforcement is a diagnostic; (b) filter them under the session's view | (a): §5a already listed `SHOW ASSERTIONS` and `SHOW CABINS` among the diagnostics before BO, and their rows report enforcement state - whether and how a declaration is enforced - which an operator needs whatever the session can see; (b) would hide an open transaction's assertion from the diagnostic that says it is not yet enforcing. Premise re-read at `7ba9180b`: `ReadSysView` reads the three with no session view, and §5a's pre-BO list names the first two | **(a)**, adopted 2026-10-20 |
 
 ---
 
 ## 6. Measurement
 
 The overhead is measured once, at BO-S8: interleaved A/B in
-`build-release`, server CPU per statement, `cd7c7c4e` (where BO opened)
-against the commit that closes it, inside the hour the standing budget
-allows. Single-row point reads and writes first: §3.1's two clock reads
+`build-release`, server CPU per statement, inside the hour the standing
+budget allows. **Its base is BO-Q14 (b)**: the closing commit against the
+same commit with BO's statement-path recording compiled out - not
+`cd7c7c4e`, which BO opened from, because BO-S1..S5 merged to `main` among
+ten other milestones and an A/B from there prices them too. Single-row point reads and writes first: §3.1's two clock reads
 and one latched table update per statement are a fixed cost that shows
 most on the cheapest statement (BN measured access statistics at 0.7 % of
 a point statement, BN-S6). A stage lands with "overhead not measured;
@@ -737,3 +753,146 @@ keeps the store, which "emptied by a restart" means of a process.
 
 Suite: 3777/3777 (`ctest -LE heap-suspended`, Debug). Overhead not
 measured; measured at the milestone's close.
+
+### BO-S6 — 2026-10-20
+
+On `worktree-bo-relation-stats-checkpoints` (from `origin/main` at
+`7f204bbf`, `v3.3.0-22-g7f204bbf`), in `86d1fe1a` with BO-S7.
+`sys.relation_stats` gains `inserts`, `updates`, `deletes` and `purged`, as
+§3.2 designs them, from `stats::RelationStats`: a part per core of up to
+4096 relations, summed at read, a relation past the bound dropped and
+counted (`relation_stats_dropped`). `DispatchOutcome::written_oid` carries
+the relation beside `rows_affected`, set at the write replies (`WroteRows`);
+one handler tail, `FinishWrite`, ends `INSERT`, a KWP load chunk
+(`ExecuteInsert`), `UPDATE` and `DELETE` and counts them once the statement
+has answered. **Decided in the building, stated:** a count is taken when the
+statement answers, not when its transaction decides - a rolled-back
+transaction's rows stay counted, and so do an autocommit statement's whose
+deferred `strict` commit a fail-stopped log aborts; a load chunk's rows are
+inserts, although a chunk is no statement of `sys.statement_stats`'; a
+`PURGE` counts its retired keys whatever its decide does (PU6), the failed
+key's arm included; a statement parked mid-walk counts once, at its resumed
+end, with the rows before the park (`rows_done`); a relation nothing wrote
+reads 0, not NULL. **BO-Q15**, surfaced by the review, adopted (b).
+
+**Review** (`critics-developer`, on the uncommitted stage at `7f204bbf`): no
+engine defect - every write path (`INSERT ... SELECT`, `ON CONFLICT DO
+NOTHING`, `UPDATE ... FROM` and `DELETE ... USING` as sub-chains, a park and
+resume, a structural re-run, `RETURNING`) counted once. Applied: the header's
+"succeeded" corrected to the deferred-commit case (the reviewer's own edit);
+one `FinishWrite` tail for four copies, and the copies of the count taken
+before `WithReturning` deleted (on success it changes only the reply);
+`PURGE` records once, after its loop; the two collection-pass returns that
+always carry 0 rows back to plain returns; one `kStatsParts` for three
+`kParts`; an aligned continuation. **Rejected:** a `PerCoreMap` template
+shared with `StatementStats` - the two differ in key, in the value's
+construction (a shape's text is cut and allocated) and in the merge, and
+what they share is three short loops, which a template with two callbacks
+would replace with more indirection than it removes; pruning dropped oids at
+read (BO-Q15 (a), the reason in §5). **Not added:** a cell for a parked and
+resumed `UPDATE`'s count, and for an explicit transaction's statement that
+fails part-way - the code path is the reviewer's reading, not a cell.
+
+Cells: `tests/relation_stats_test.cpp` (the sum, a 0-row write, the bound),
+two in `show_sugar_contract_test.cpp` (every kind, a refusal, `RETURNING`,
+a rolled-back transaction) and one in `kwp_load_server_test.cpp` (a load's
+rows); a mutant with the four record sites disabled failed all three
+dispatcher cells. Suite: the pre-review stage ran 4174/4178 under
+`ctest -j8`, the four (`DropTableReclaimCrashTest`, two `PageChecksumTest`,
+`InRunReclaimTest`) failing `No space left on device` on a 98 %-full volume
+and passing alone; the reviewed stage ran with BO-S7 (below). Overhead not
+measured; measured at the milestone's close.
+
+### BO-S7 — 2026-10-20
+
+In `86d1fe1a` with BO-S6. `sys.checkpoints` as §3.4 designs it, from
+`stats::CheckpointLog`: `Checkpointer::EndRun` hands its finished
+`CheckpointRunReport` over beside `CheckpointCensus::Publish` and writes
+nothing else (BI-S2), into a ring of 1024 per core; `sys.meta`'s
+`checkpoints` section carries recorded, overwritten and dropped. **The ring
+is `PerCoreRing`** (`stats/per_core_ring.hpp`), the template BO-S3's review
+deferred to this stage, and `LockWaitLog` now delegates to it. **Decided in
+the building, stated:** `resumed` is a column and `outcome` is `completed`
+or `failed` (§3.4 amended) - a resumed run can fail; `started` is the wall
+instant at the end less the run's length on the injected clock;
+`log_wait_us` is the task's log park time plus the inline log-gate and
+end-record phases, `data_wait_us` the data park plus the step and publish
+sync phases - a park lies between synchronous calls and a phase timer inside
+one, so neither counts twice; a log gate inside the publish's writeback and
+a claim wait are in neither column (stated in the header); an abandoned task
+writes no row.
+
+**Review** (`critics-developer`, on the uncommitted stage): no engine
+defect - one row per run on both paths, no double count, the `PerCoreRing`
+refactor line for line `LockWaitLog`'s, BO-S6's applied edits keeping
+behaviour (`PURGE`'s failed-key decide now runs after the drain scope, as the
+line's own comment says it should). Applied: the resumed-run cell reset the
+process-wide log and pins one row (the reviewer's edit); one
+`static_assert(kStatsParts == kMaxCores)` for two, and the three `kParts`
+aliases deleted; one `CheckpointRunReport::wall_ns()` for four spellings of
+a run's length; the `log_wait_us` clause above; a cell that pins `started`
+as the end less the duration. **Rejected:** inlining `ring()` into the
+headers - the forwarders keep every call site unchanged. **Not fixed, filed
+in `known-gaps.md`**: `RunTask` reads a park's status before its generation,
+pre-existing and unreachable while `Abandon` runs only after the reactors
+stop.
+
+Cells: one in `checkpoint_census_test.cpp` (a run is one row, its waits and
+length), a resumed-run assertion beside it, one in
+`show_sugar_contract_test.cpp` (the view's columns, `started`, `outcome`,
+`resumed`, `sys.meta`). Suite at `86d1fe1a`'s tree: 4180/4180, Debug,
+`ctest -j2` (a `-j4` run lost four crash cells to `No space left on
+device`). Overhead not measured; measured at the milestone's close.
+
+### BO-S8 — the close, 2026-10-20
+
+On `worktree-bo-relation-stats-checkpoints`: the documents at `7ba9180b`
+and their review's fixes at `c462ba08`, the review's two source findings
+in the commit after. `docs/spec/sys-views.md` owns SV1-SV5, what a view
+admits and refuses, each view's filter class and key, the registry and the
+`SHOW` spellings, the four statistics views and `sys.meta`;
+`ddl-transactional.md` §5a names the schema-object views among the filtered
+reads and the engine-state views - those reporting a declaration's
+enforcement included, BO-Q16 (a) - among the diagnostics;
+`manual/sql/sql.md` §6 is rewritten (`catalog_recovered=1`, every target,
+the four `SELECT`-only reports); `protocol.md` §10 and `client-manual.md`
+name `ANALYZE`'s plan and `BACKUP STATUS`'s line as the only text-line
+replies; CLAUDE.md's Observability row is flipped; `known-gaps.md` gains the
+BO section.
+
+**Review** (`critics-developer`, on `7ba9180b`, documents against the code):
+ten claims corrected by the reviewer - `STOP`'s surfaces, which views have
+no `SHOW` spelling, `SHOW BUDGET`'s columns, `BETWEEN` admitted, the query
+layer's forms refused over a view, six byte-less refusals and not three, the
+`RunTask` gap's null report, SV1's rewrite built as an AST with nothing
+parsed, the two text-line replies (`protocol.md`, `client-manual.md`,
+CLAUDE.md, the manual) - and the precision of four more. Applied after it:
+**`USE` and `REINDEX` added to `StatementKindOf`'s verbs** - BO-S5 left
+them out, so both read `OTHER` (a cell beside the verb cell); a stale
+`DeliverTextLines` comment; three `known-gaps.md` entries cut that the spec
+states as the contract, with a plan sentence and a history clause;
+CLAUDE.md's Wire row's "`STOP` is reachable only there" narrowed to the
+line command; **BO-Q16**, raised by the review, adopted (a). Filed in
+`known-gaps.md`: `SHOW PAGE` labels every non-btree page `HEAP`. Not fixed,
+stated: the six byte-less refusals over a view, all predating BO-S6.
+
+**Measurement** (`ck-tester`, BO-Q14 (b),
+`bench/v3.3.0/results-bo-close-v3.3.0-23-g86d1fe1a.md`): `86d1fe1a`
+against the same commit with `RecordStatement` and `RelationStats::Record`
+returning at once, A' as the control, `cores = 1`, `relaxed`, 42 runs of
+each point cell and 24 of the every-row `UPDATE`. **No cell is outside the
+A' - A spread**; B is above A in every point cell, in 29 to 37 of 42 runs,
+and against the mean of A and A' - which cancels the harness's own +0.13 to
++0.31 us lean of A' over A - the recording costs **0.35 to 0.52 us of server
+CPU per point statement (+1.2 % to +2.2 %)**, `SELECT` and writes alike, the
+size §6 predicted. The every-row `UPDATE` is not resolvable (largest gaps
+121 / 171 us). Not priced: concurrency (the latch under contention),
+`strict`/`group`, more than one core. One invocation was discarded for a
+Debug build this session ran across it, and one for a server that did not
+listen; both were re-run. **No switch is proposed** (BO-Q8): the cost is
+inside the spread by the benchmark's rule. The closing commit differs from
+the measured one by the two verbs and a comment - a miss on the kind list
+compares two more words.
+
+Suite at the closing tree (the verbs included): 4180/4180, Debug, `ctest -j2`. Overhead
+measured as above.

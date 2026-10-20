@@ -17,11 +17,11 @@
 //
 // ---- The key a view may declare (BO-Q12) ----------------------------------
 //
-// Two views cannot be materialized whole: `sys.page_slots` would read every
-// page of the volume, and `sys.relayout` walks the relation it is asked
-// about. And two `SHOW` spellings refuse a name that does not exist, which
-// a filter over a materialized view would answer with zero rows - a refusal
-// turned into an empty answer. So a view may declare one key column:
+// A view cannot always be materialized whole: `sys.page_slots` would read
+// every page of the volume. And `DESCRIBE` refuses a name that does not
+// exist, which a filter over a materialized view would answer with zero
+// rows - a refusal turned into an empty answer. So a view may declare one
+// key column:
 //
 //   kRequired  a `SELECT` without the conjunct `key = <literal>` is
 //              refused, and the builder reads only the row(s) it names;

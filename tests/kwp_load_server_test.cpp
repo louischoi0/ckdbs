@@ -16,6 +16,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/server/tcp_server.hpp"
+#include "kds/stats/relation_stats.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/wire/row_codec.hpp"
@@ -240,6 +241,7 @@ protected:
 };
 
 TEST_F(KwpLoadServerTest, ALoadLandsRowsThroughTheOneWritePath) {
+    stats::RelationStats::ResetForTest();
     constexpr std::uint16_t kTextPort = 25711;
     constexpr std::uint16_t kKwpPort = 25712;
     ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE t (id int64, a int64, b int64)")
@@ -307,6 +309,10 @@ TEST_F(KwpLoadServerTest, ALoadLandsRowsThroughTheOneWritePath) {
         ASSERT_GE(text_fd, 0);
         EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT COUNT(*) FROM t"), "count(*)\\n5");
         EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT b FROM t WHERE id = 4"), "b\\n4");
+        // A load chunk's rows are the relation's inserts (BO-S6).
+        EXPECT_EQ(SendAndReceiveLine(text_fd,
+                                     "SELECT inserts FROM sys.relation_stats WHERE name = 't'"),
+                  "inserts\\n5");
         ::close(text_fd);
     });
 

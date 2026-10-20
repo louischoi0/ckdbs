@@ -230,9 +230,14 @@ membership is a decision:
 
 - **Filtered — a statement's own resolution.** `SELECT` (through
   `exec::Compile`, its sub-chains, and `CompileWhere`), `INSERT`,
-  `UPDATE`, `DELETE`, `DESCRIBE`, `SHOW TABLES`, `SHOW INDEXES`, `ALTER`,
-  `DROP TABLE`, and a foreign key's parent lookup. These decide what a
-  statement may touch, so they answer under the session's view.
+  `UPDATE`, `DELETE`, `ALTER`, `DROP TABLE`, a foreign key's parent
+  lookup, and **the schema-object views** - `sys.tables`, `sys.objects`,
+  `sys.columns` (so `DESCRIBE`), `sys.namespaces`, `sys.indexes` and
+  `sys.fkeys`, and with them `SHOW TABLES`, `SHOW NAMESPACES`,
+  `SHOW INDEXES` and `SHOW FKEYS`, each one `SELECT` over its view
+  (`sys-views.md` §3, BO-Q2). These decide what a statement may touch, or
+  report which schema objects exist, so they answer under the session's
+  view; a foreign key is listed where its child relation is visible.
   **`CREATE ASSERTION` is filtered under a settled view instead** (§5f,
   `assertion.md` §8.1): it reads settled state, so a relation an open
   transaction created - the session's own too - is not its target, and
@@ -246,9 +251,14 @@ membership is a decision:
   transaction may roll back) and that names a relation the asker cannot
   see (`EXISTS oid=…`, which is not an `ERR` and does not poison the
   session).
-- **Unfiltered by design — diagnostics.** `SHOW ACCESS`, `SHOW BUDGET`,
-  `SHOW ASSERTIONS`, `SHOW CABINS`, and the name-rendering helper. These
-  answer *"what does this instance hold"*, which is an operator's
+- **Unfiltered by design — diagnostics.** Every engine-state view
+  (`sys-views.md` §3) - `sys.access_stats`, `sys.relation_stats` (so
+  `SHOW BUDGET`), `sys.patterns`, the statistics views and `sys.meta`
+  among them - and the name-rendering helper. **The views that report a
+  declaration's enforcement are diagnostics too** - `sys.assertions`,
+  `sys.cabins`, `sys.transitions`, whose rows say whether and how a
+  declaration is enforced, as `SHOW ASSERTIONS` and `SHOW CABINS` were
+  before them (BO-Q16 (a)). These answer *"what does this instance hold"*, which is an operator's
   question, not a statement's. Also unfiltered, and unaffected either
   way: `ALTER`'s system-relation guard, which tests an already-resolved
   oid against bootstrap rows that every view sees.
