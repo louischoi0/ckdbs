@@ -2,9 +2,9 @@
 
 **One line.** On the same engine binary as this morning's run (`7532bd14...`, `9682b725`), a faster Python client decoder (`tools/kwp.py`, `tools/ckdbs_cli.py` at `a40882af`) moves exactly the shapes that return many rows, by a factor of 1.4x to 1.9x, and nothing else:
 scenario 1's `bar-range`, `symbol-history` and `model-join` go from 0.49x, 0.43x and 0.56x of PostgreSQL 18.6 to 0.90x, 0.85x and 0.94x, scenario 3's `books-by-genre`, `loans-by-daterange` and `overdue` from 0.69x, 0.61x and 0.77x to 0.96x, 0.86x and 0.99x,
-and scenario 4's `board` and `close` gain 10 % to 22 % and 17 % to 19 %. **The per-row cost of a returned row halves (6.9 and 9.5 µs to 3.6 and 4.8 µs on scenario 1) and what is left of the gap to PostgreSQL is 0.34 to 0.76 µs per row,
-56 % of it (0.43 µs) engine-side and not CPU: KDS sends a reply only at statement completion, so the server's work is not overlapped with the client's.** The engine did not change and the writes, the commit, the walks and the Cabin controller did not move.
-Where a comparison to this morning disagrees with the interleaved old/new client A/B, the A/B is the reading: the one-core scan shapes of scenarios 1 and 3 read 11 % to 16 % below the morning *with the old client too*, a host effect that is not the client's.
+and scenario 4's `board` and `close` gain 10 % to 22 % and 17 % to 19 %. **The per-row cost of a returned row halves (6.9 and 9.5 µs to 3.6 and 4.8 µs on scenario 1) and what is left of the gap to PostgreSQL is 0.34 to 0.76 µs per row;
+on `symbol-history` (0.76 µs) at least 0.43 µs and up to about 0.64 µs of it (56 % to 84 %, derived by subtraction, not measured) is engine-side and not CPU: KDS sends a reply only at statement completion, so the server's work is not overlapped with the client's.** The engine did not change and the writes, the commit, the walks and the Cabin controller did not move.
+Where a comparison to this morning disagrees with the interleaved old/new client A/B, the A/B is the reading: the one-core scan shapes of scenarios 1 and 3 read 11 % to 17 % below the morning *with the old client too*, a host effect that is not the client's.
 
 This file indexes the four results files and carries no number they do not. Measured by `ck-tester` from 2026-10-20 06:46 UTC to 09:12 UTC (the matrix 06:46 to 08:08 UTC, the join-order probe 08:08 to 08:18, scenario 2's A/B 08:18 to 08:23,
 the row-cost attribution 08:23 to 09:12) on **one binary, the morning's, `sha256 7532bd14...`**. Budget lifted by the operator for this measurement; PostgreSQL reused from the same-day run at v3.3.0-33-g9682b725.
@@ -46,9 +46,9 @@ Warm qps (scenario 1), tps (2), derived qps (3, 4), median of three runs (scenar
 
 | measure | KDS now | KDS morning (same binary, old client) | delta | PostgreSQL 18.6 (morning's run, reused) | KDS/PG now | KDS/PG morning | A/B: new over old client (same window) |
 |---|---|---|---|---|---|---|---|
-| 1 backtest, `day-slice` (warm, `cores = 1`) | 508.7 qps | 591.3 qps | -14.0 % | 413.5 qps | 1.23x | 1.43x | 1.023x |
-| 1 backtest, `cross-join` (warm, `cores = 1`) | 496.9 qps | 575.8 qps | -13.7 % | 393.1 qps | 1.26x | 1.46x | 1.019x |
-| 1 backtest, `point-join` (warm, `cores = 1`) | 10,589.7 qps | 12,674.6 qps | -16.4 % | 7,071.3 qps | 1.50x | 1.79x | 0.978x |
+| 1 backtest, `day-slice` (warm, `cores = 1`) | 508.7 qps | 591.3 qps | -14.0 % | 413.5 qps | 1.23x (drift) | 1.43x | 1.023x |
+| 1 backtest, `cross-join` (warm, `cores = 1`) | 496.9 qps | 575.8 qps | -13.7 % | 393.1 qps | 1.26x (drift) | 1.46x | 1.019x |
+| 1 backtest, `point-join` (warm, `cores = 1`) | 10,589.7 qps | 12,674.6 qps | -16.4 % | 7,071.3 qps | 1.50x (bimodal, spread 37.8 %, no claim) | 1.79x | 0.978x (old spread 30.5 %, no claim) |
 | 1 backtest, `bar-range` (warm, `cores = 1`) | 1,260.3 qps | 684.4 qps | +84.1 % | 1,399.8 qps | 0.90x | 0.49x | 1.831x |
 | 1 backtest, `symbol-history` (warm, `cores = 1`) | 27.3 qps | 13.8 qps | +97.8 % | 32.3 qps | 0.85x | 0.43x | 1.923x |
 | 1 backtest, `model-join` (warm, `cores = 1`) | 1,030.2 qps | 614.8 qps | +67.6 % | 1,092.2 qps | 0.94x | 0.56x | 1.753x |
@@ -56,8 +56,8 @@ Warm qps (scenario 1), tps (2), derived qps (3, 4), median of three runs (scenar
 | 2 freight, 8 bookers, `cores = 8`, `strict` | 1,716.7 tps | 1,674.2 tps | +2.5 % | no counterpart (one booker) | - | - | - |
 | 2 freight, 1 booker, durable, `group` | 425.4 tps | 414.8 tps | +2.6 % | 419.5 tps | 1.01x | 0.99x | 1.032x |
 | 2 freight, 1 booker, durable, `strict` | 434.3 tps | 417.1 tps | +4.1 % | 419.5 tps | 1.04x | 0.99x | - |
-| 3 library, `loans-by-user` (10,000 loans, unindexed), `cores = 1` | 2,449 qps | 2,779 qps | -11.9 % | 2,421 qps | 1.01x | 1.15x | 1.020x |
-| 3 library, `join-no-literal` (10,000 loans, unindexed), `cores = 1` | 1,666 qps | 1,683 qps | -1.0 % | 1,504 qps | 1.11x | 1.12x | 1.133x |
+| 3 library, `loans-by-user` (10,000 loans, unindexed), `cores = 1` | 2,449 qps | 2,779 qps | -11.9 % | 2,421 qps | 1.01x (drift) | 1.15x | 1.020x |
+| 3 library, `join-no-literal` (10,000 loans, unindexed), `cores = 1` | 1,666 qps | 1,683 qps | -1.0 % | 1,504 qps | 1.11x (drift) | 1.12x | 1.133x |
 | 3 library, `exists-correlated` (10,000 loans, unindexed), `cores = 1` | 1,608 qps | 1,596 qps | +0.7 % | 768 qps | 2.09x | 2.08x | 1.000x |
 | 3 library, `books-by-genre` (10,000 loans, unindexed), `cores = 1` | 2,925 qps | 2,092 qps | +39.8 % | 3,041 qps | 0.96x | 0.69x | 1.500x |
 | 3 library, `loans-by-daterange` (10,000 loans, unindexed), `cores = 1` | 913 qps | 652 qps | +40.0 % | 1,063 qps | 0.86x | 0.61x | 1.510x |
@@ -72,17 +72,19 @@ Warm qps (scenario 1), tps (2), derived qps (3, 4), median of three runs (scenar
 | 4 cabinopt, `tape10k` day 1, arm `on` (run A) | 5,800 qps | 5,376 qps | +7.9 % | 2,100 qps (no index) | 2.76x | 2.56x | 1.081x |
 | 4 cabinopt, `close` day 1, arm `off` (run A) | 776 qps | 671 qps | +15.6 % | 1,185 qps (no index) | 0.65x | 0.57x | 1.167x |
 
+`(drift)` marks a KDS/PG ratio on a shape the host moved: its delta against the morning is well below its A/B (`join-no-literal`: -1.0 % against 1.133x, so about -12 % is the host's), so the ratio is low by about that much against a PostgreSQL measured before the drift. `point-join`'s 1.50x is the median of a bimodal cell (slow mode in 4 of 9 matrix runs) and carries no claim; the old client reads it at 12,544 qps in this window, the morning's level.
+
 Files: `results-scenario1-backtest-v3.3.0-38-ga40882af.md`, `results-scenario2-freight-v3.3.0-38-ga40882af.md`, `results-scenario3-library-v3.3.0-38-ga40882af.md`, `results-scenario4-cabinopt-days-v3.3.0-38-ga40882af.md`.
 
 ## The movers, and what they are
 
 - **Every shape that returns many rows is 1.4x to 1.9x faster, and the A/B says the client is all of it.** Interleaved old/new on scenario 1: `bar-range` 1.83x, `symbol-history` 1.92x, `model-join` 1.75x; scenario 3 unindexed 10,000 loans:
   `books-by-genre` 1.50x, `loans-by-daterange` 1.51x, `overdue` 1.41x, `join-no-literal` 1.13x; scenario 4 `board` 1.07x / 1.21x / 1.17x (`off` / `on` / `declared`)
-  and `close` 1.17x to 1.21x. The cause is the client's: a returned row costs the Python decoder 5.28 µs of CPU and the new one 2.20 (`kwp._row_batch`) and the render to text 3.51 and 2.05 µs (`ckdbs_cli.send_command`).
+  and `close` 1.17x to 1.21x (scenario 4's one-row `pk` control reads 0.89x in its `off` arm of the same A/B, so a scenario 4 A/B below about 1.11x, `board` `off` and `tape10k` included, is not separated from noise). The cause is the client's: a returned row costs the Python decoder 5.28 µs of CPU and the new one 2.20 (`kwp._row_batch`) and the render to text 3.51 and 2.05 µs (`ckdbs_cli.send_command`).
 - **What did not move.** One-row and few-row reads (the pk shapes, the folds, the Cabin-served statements of scenario 4 except the 8-row ones), the writes, the commit (scenario 2: the A/B reads 1.006x and 1.032x, inside
   their spreads), the unserved equality walk of scenario 4 (26.1 ns per row against 26.5 ns; server CPU 2.20 s against 2.22 s) and the Cabin controller's lifecycle (identical snapshot for snapshot).
-- **A host effect on the one-core scans of the large integer relations, not the client's.** Scenario 1's `day-slice` and `cross-join` are -14 % against the morning and scenario 3's integer-column equalities are -12 % to -16 %; the old client reads the same shapes 17 % below the morning in the same window,
-  the new one 2 % above the old. Scenario 2's cells read +1 % to +10 % against the morning with the old client reading the same gain in this window. The sign of the host's effect depends on the workload; none of it is separated into frequency, a neighbouring tenant or placement.
+- **A host effect on the one-core scans of the large integer relations, not the client's.** Scenario 1's `day-slice` and `cross-join` are -14 % against the morning and scenario 3's integer-column equalities are -12 % to -16 %; the old client reads the same shapes 16 % to 17 % (scenario 1) and 11 % to 12 % (scenario 3) below the morning in the same window,
+  the new one 0 % to 2 % above the old. Scenario 2's cells read +1 % to +10 % against the morning with the old client reading the same gain in this window. The sign of the host's effect depends on the workload; none of it is separated into frequency, a neighbouring tenant or placement.
   **A comparison across hours that does not interleave its arms cannot read a 10 % difference on a scan shape in this environment.**
 - **The join planner's payoff is the same 6 % to 7 %** as in the morning on the two reordered joins (scenario 1 `compare-one` 1.07x planned over written, spreads 1.9 % and 1.8 %), unmoved by a shorter statement. Scenario 3's three joins keep the written order and are within spread.
 
@@ -90,10 +92,10 @@ Files: `results-scenario1-backtest-v3.3.0-38-ga40882af.md`, `results-scenario2-f
 
 PostgreSQL's numbers are the morning's, so the ratios below carry that window's difference.
 
-- **Ahead**: the pk-anchored join (1.50x to 1.98x), the three-relation join (1.26x), the correlated `EXISTS` (2.09x at 10,000 loans), a Cabin-served equality (scenario 4 run A day 1: `board` 2.47x, `tape10k` 2.76x of a PostgreSQL seq scan),
+- **Ahead**: the pk-anchored join (1.76x to 1.98x at 252 to 10,080 bars; 1.50x at 60,480 bars is the bimodal cell, no claim), the three-relation join (1.26x, drift in it), the correlated `EXISTS` (2.09x at 10,000 loans), a Cabin-served equality (scenario 4 run A day 1: `board` 2.47x, `tape10k` 2.76x of a PostgreSQL seq scan),
   the write statements of a booking (p50 0.75x to 0.88x of PostgreSQL's), the big load phases of scenario 1 (1.47x to 1.65x), scenario 3's unindexed 10,000-loan equalities (1.00x to 1.10x, from 1.08x to 1.25x: the drift above).
 - **Even**: one durable client (1.01x and 1.04x), bound by the device's fsync on both engines; the pk read round trip (0.98x to 1.00x at 10,000 loans).
-- **Behind**: the many-row shapes by 6 % to 17 % where they were behind by 2x (scenario 1 `bar-range` 0.90x, `symbol-history` 0.85x, `model-join` 0.94x; scenario 3 `loans-by-daterange` 0.86x, `books-by-genre` 0.96x); whole-relation folds (scenario 1 `agg-global` and `agg-distinct` 0.68x, which return one row and
+- **Behind**: the many-row shapes at 0.85x to 0.96x where they were at 0.43x to 0.69x (scenario 1 `bar-range` 0.90x, `symbol-history` 0.85x, `model-join` 0.94x; scenario 3 `loans-by-daterange` 0.86x, `books-by-genre` 0.96x); whole-relation folds (scenario 1 `agg-global` and `agg-distinct` 0.68x, which return one row and
   are not the decoder's; scenario 4 `close` 0.65x in run A and 0.67x as the median of the two runs, from 0.57x); small scans (scenario 4 `tape200` 0.82x to 0.83x, from 0.73x).
 
 **What part of the per-row gap remains, and what it is.** The corrected attribution (`bench/v3.3.0/results-row-cost-attribution-v3.3.0-37-gf829964c.md`, branch `row-cost-attribution`): about 84 % of the gap was the Python decoder, about 16 % (0.42 µs per row) engine-side, because
@@ -115,10 +117,11 @@ PostgreSQL's numbers are the morning's, so the ratios below carry that window's 
 | - client idle, `send` (wall - client CPU) | 0.45 µs | 0.43 µs | - | 0.96x | - |
 
 - **On a 12-column key-range read decoded to Python ints, KDS's wall slope is 3.21 µs per row against PostgreSQL's 3.57 µs (0.90x, a cross-window figure)**; the decode is no longer where KDS is behind (2.20 against 2.59 µs of client CPU).
-- **On the scenario drivers' own path (decode, render every cell to text, join) it is 4.70 µs per row** (9.25 with the old client), matching the scenario's `symbol-history` figure (4.84 µs per row at 7,560 rows) against PostgreSQL's 4.08 µs. Of that
-  0.76 µs gap, **0.43 µs (56 %) is the engine-side non-overlap** (the client idles while the server builds the reply; KDS's server CPU of 0.42 µs per row is never hidden behind the client's work) and
-  **0.33 µs (44 %) is client work**, the render of binary cells to the newline protocol's text shape (2.05 µs of CPU per row) that PostgreSQL's text rows do not need. The split is by subtraction against PostgreSQL's
-  attribution figures and was not measured on PostgreSQL's scenario path. For `bar-range` (nine columns, 0.34 µs per row) the engine-side term was not measured.
+- **On the scenario drivers' own path (decode, render every cell to text, join) it is 4.70 µs per row** (9.25 with the old client), close to the scenario's `symbol-history` figure (4.84 µs per row at 7,560 rows) against PostgreSQL's 4.08 µs. The two are not the same statement: `symbol-history` is a FilterScan that walks
+  all 60,480 `daily_stats` rows to return 7,560 (8 examined per returned, about 26 ns each by scenario 1's section 5, so about 0.21 µs per returned row of walk), the row-cost cells a key range that walks only what it returns.
+  Of the 0.76 µs gap, **the engine-side non-overlap is at least 0.43 µs (56 %)**, the key-range read's client idle (the client idles while the server builds the reply; KDS's server CPU of 0.42 µs per row is never hidden behind the client's work),
+  **and up to about 0.64 µs (84 %)** once the FilterScan's walk, which also finishes before the first byte leaves, is counted. The remaining 0.12 to 0.33 µs is **not attributed**: it would hold the render step's (2.05 µs of CPU per row) excess over
+  PostgreSQL's client path, which was not measured. The whole split is derived by subtraction across two statements and two windows (KDS's key-range cells here, PostgreSQL's attribution figures and its scenario cell), not measured. For `bar-range` (nine columns, a key range, 0.34 µs per row) the engine-side term was not measured.
 - Removing the non-overlap is an engine change (stream row batches as they are sealed rather than at completion, against BN-R7's one-write reply); the render step is a client-side choice. Neither is attempted here (rule: no engine edits to make a benchmark pass).
 
 ## What this run does not show

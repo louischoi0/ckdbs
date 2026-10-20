@@ -99,9 +99,6 @@ Findings are read by the rule of `summary-scenarios-v3.3.0-38-ga40882af.md` ("Wh
 | exists-correlated | 1,608 qps | 8.0 % | 1,596 qps | 2.8 % | +0.7 % | inside spread | 7,468 qps | 0.7 % | 6,863 qps | 5.1 % | +8.8 % | **finding** |
 | count-by-user | 2,665 qps | 8.7 % | 3,031 qps | 3.7 % | -12.1 % | **finding** | 14,859 qps | 3.2 % | 14,641 qps | 3.7 % | +1.5 % | inside spread |
 
-
-`cores = 8`:
-
 `cores = 8`, derived qps (1,000,000 / mean µs), median of three runs; delta = now over the morning.
 
 **n = 200 loans**
@@ -344,15 +341,15 @@ The three many-row shapes at 10,000 loans unindexed, run 1 now against run 1 of 
 
 | phase | run | ops | p0 | p25 | p50 | p95 | p99 |
 |---|---|---|---|---|---|---|---|
-| books-by-genre | now | 200 | 332.8 µs | 354.9 µs | 362.9 µs | 388.6 µs | 393.8 µs |
-| books-by-genre | morning (old client) | 200 | 427.8 µs | 459.6 µs | 475.9 µs | 511.1 µs | 543.9 µs |
-| books-by-genre | PostgreSQL 18.6 (morning's run) | 200 | 284.6 µs | 322.2 µs | 332.2 µs | 362.5 µs | 385.3 µs |
-| loans-by-daterange | now | 200 | 495.4 µs | 1,079.1 µs | 1,108.4 µs | 1,152.8 µs | 1,175.0 µs |
-| loans-by-daterange | morning (old client) | 200 | 440.8 µs | 1,511.8 µs | 1,551.4 µs | 1,667.6 µs | 1,742.5 µs |
-| loans-by-daterange | PostgreSQL 18.6 (morning's run) | 200 | 514.4 µs | 917.4 µs | 933.3 µs | 974.2 µs | 1,281.9 µs |
-| overdue | now | 200 | 427.9 µs | 884.2 µs | 908.4 µs | 970.0 µs | 980.8 µs |
-| overdue | morning (old client) | 200 | 378.9 µs | 1,131.6 µs | 1,173.5 µs | 1,296.1 µs | 1,419.8 µs |
-| overdue | PostgreSQL 18.6 (morning's run) | 200 | 475.2 µs | 893.2 µs | 907.5 µs | 1,109.0 µs | 1,124.8 µs |
+| books-by-genre | now | 200 ops | 332.8 µs | 354.9 µs | 362.9 µs | 388.6 µs | 393.8 µs |
+| books-by-genre | morning (old client) | 200 ops | 427.8 µs | 459.6 µs | 475.9 µs | 511.1 µs | 543.9 µs |
+| books-by-genre | PostgreSQL 18.6 (morning's run) | 200 ops | 284.6 µs | 322.2 µs | 332.2 µs | 362.5 µs | 385.3 µs |
+| loans-by-daterange | now | 200 ops | 495.4 µs | 1,079.1 µs | 1,108.4 µs | 1,152.8 µs | 1,175.0 µs |
+| loans-by-daterange | morning (old client) | 200 ops | 440.8 µs | 1,511.8 µs | 1,551.4 µs | 1,667.6 µs | 1,742.5 µs |
+| loans-by-daterange | PostgreSQL 18.6 (morning's run) | 200 ops | 514.4 µs | 917.4 µs | 933.3 µs | 974.2 µs | 1,281.9 µs |
+| overdue | now | 200 ops | 427.9 µs | 884.2 µs | 908.4 µs | 970.0 µs | 980.8 µs |
+| overdue | morning (old client) | 200 ops | 378.9 µs | 1,131.6 µs | 1,173.5 µs | 1,296.1 µs | 1,419.8 µs |
+| overdue | PostgreSQL 18.6 (morning's run) | 200 ops | 475.2 µs | 893.2 µs | 907.5 µs | 1,109.0 µs | 1,124.8 µs |
 
 The whole distribution moved, not the median alone: `books-by-genre` p0 0.78x, p50 0.76x, p99 0.72x of the morning's; `loans-by-daterange` p50 0.71x
 and `overdue` p50 0.77x (the scan beneath them is the same engine work, so the saving is the rows' share of a statement). Every one of the three is tight: p99 is within 9 % of p50.
@@ -427,18 +424,18 @@ Three pairs on the same host, `s3-c1-n10000-none` each (a fresh server and data 
 
 | shape | old: 1 / 2 / 3 | old median | spread | new: 1 / 2 / 3 | new median | spread | new over old | read |
 |---|---|---|---|---|---|---|---|---|
-| pk-user | 14,793 / 14,815 / 14,948 | 14,815 qps | 1.0 % | 14,749 / 14,793 / 14,881 | 14,793 qps | 0.9 % | 1.00x (-0.1 %) | inside spread |
-| loans-by-user | 2,439 / 2,496 / 2,475 | 2,475 qps | 2.3 % | 2,510 / 2,527 / 2,525 | 2,525 qps | 0.7 % | 1.02x (+2.0 %) | inside spread |
-| loans-by-book | 2,341 / 2,534 / 2,503 | 2,503 qps | 7.7 % | 2,539 / 2,445 / 2,537 | 2,537 qps | 3.7 % | 1.01x (+1.4 %) | inside spread |
-| resv-by-user | 3,810 / 4,371 / 4,350 | 4,350 qps | 12.9 % | 4,344 / 3,871 / 4,431 | 4,344 qps | 12.9 % | 1.00x (-0.1 %) | inside spread |
-| books-by-author | 5,543 / 6,812 / 6,676 | 6,676 qps | 19.0 % | 6,935 / 6,978 / 6,998 | 6,978 qps | 0.9 % | 1.05x (+4.5 %) | inside spread |
-| books-by-genre | 1,908 / 2,048 / 2,035 | 2,035 qps | 6.9 % | 3,051 / 3,080 / 3,053 | 3,053 qps | 1.0 % | 1.50x (+50.0 %) | **finding** |
-| loans-by-daterange | 615 / 621 / 629 | 621 qps | 2.3 % | 938 / 954 / 934 | 938 qps | 2.2 % | 1.51x (+51.0 %) | **finding** |
-| overdue | 813 / 833 / 820 | 820 qps | 2.5 % | 1,152 / 1,172 / 1,121 | 1,152 qps | 4.5 % | 1.41x (+40.6 %) | **finding** |
-| join-loan-user | 2,233 / 2,473 / 2,425 | 2,425 qps | 9.9 % | 2,499 / 2,473 / 2,294 | 2,473 qps | 8.3 % | 1.02x (+2.0 %) | inside spread |
-| join-no-literal | 1,539 / 1,558 / 1,578 | 1,558 qps | 2.5 % | 1,766 / 1,783 / 1,657 | 1,766 qps | 7.1 % | 1.13x (+13.3 %) | **finding** |
-| exists-correlated | 1,635 / 1,643 / 1,644 | 1,643 qps | 0.5 % | 1,642 / 1,671 / 1,548 | 1,642 qps | 7.5 % | 1.00x (-0.0 %) | inside spread |
-| count-by-user | 2,638 / 2,658 / 2,656 | 2,656 qps | 0.8 % | 2,637 / 2,655 / 2,461 | 2,637 qps | 7.4 % | 0.99x (-0.7 %) | inside spread |
+| pk-user | 14,793 / 14,815 / 14,948 qps | 14,815 qps | 1.0 % | 14,749 / 14,793 / 14,881 qps | 14,793 qps | 0.9 % | 1.00x (-0.1 %) | inside spread |
+| loans-by-user | 2,439 / 2,496 / 2,475 qps | 2,475 qps | 2.3 % | 2,510 / 2,527 / 2,525 qps | 2,525 qps | 0.7 % | 1.02x (+2.0 %) | inside spread |
+| loans-by-book | 2,341 / 2,534 / 2,503 qps | 2,503 qps | 7.7 % | 2,539 / 2,445 / 2,537 qps | 2,537 qps | 3.7 % | 1.01x (+1.4 %) | inside spread |
+| resv-by-user | 3,810 / 4,371 / 4,350 qps | 4,350 qps | 12.9 % | 4,344 / 3,871 / 4,431 qps | 4,344 qps | 12.9 % | 1.00x (-0.1 %) | inside spread |
+| books-by-author | 5,543 / 6,812 / 6,676 qps | 6,676 qps | 19.0 % | 6,935 / 6,978 / 6,998 qps | 6,978 qps | 0.9 % | 1.05x (+4.5 %) | inside spread |
+| books-by-genre | 1,908 / 2,048 / 2,035 qps | 2,035 qps | 6.9 % | 3,051 / 3,080 / 3,053 qps | 3,053 qps | 1.0 % | 1.50x (+50.0 %) | **finding** |
+| loans-by-daterange | 615 / 621 / 629 qps | 621 qps | 2.3 % | 938 / 954 / 934 qps | 938 qps | 2.2 % | 1.51x (+51.0 %) | **finding** |
+| overdue | 813 / 833 / 820 qps | 820 qps | 2.5 % | 1,152 / 1,172 / 1,121 qps | 1,152 qps | 4.5 % | 1.41x (+40.6 %) | **finding** |
+| join-loan-user | 2,233 / 2,473 / 2,425 qps | 2,425 qps | 9.9 % | 2,499 / 2,473 / 2,294 qps | 2,473 qps | 8.3 % | 1.02x (+2.0 %) | inside spread |
+| join-no-literal | 1,539 / 1,558 / 1,578 qps | 1,558 qps | 2.5 % | 1,766 / 1,783 / 1,657 qps | 1,766 qps | 7.1 % | 1.13x (+13.3 %) | **finding** |
+| exists-correlated | 1,635 / 1,643 / 1,644 qps | 1,643 qps | 0.5 % | 1,642 / 1,671 / 1,548 qps | 1,642 qps | 7.5 % | 1.00x (-0.0 %) | inside spread |
+| count-by-user | 2,638 / 2,658 / 2,656 qps | 2,656 qps | 0.8 % | 2,637 / 2,655 / 2,461 qps | 2,637 qps | 7.4 % | 0.99x (-0.7 %) | inside spread |
 
 
 **The decoder moves exactly the shapes that return rows.** `books-by-genre` 1.50x, `loans-by-daterange` 1.51x, `overdue` 1.41x,
@@ -449,8 +446,6 @@ reads `loans-by-user` 2,475 qps, `loans-by-book` 2,503 qps, `resv-by-user` 4,350
 ## 9. Against PostgreSQL 18.6 (the morning's run, reused)
 
 PostgreSQL is the floor: it answers "is the engine in the right league" and nothing finer. Its twin was not re-run; ratios are KDS `cores = 1` median qps (this run) over the morning's PostgreSQL median qps (above 1.00x = KDS faster), the morning's KDS ratio after the slash:
-
-KDS `cores = 1` now over PostgreSQL (morning's run, reused), and the morning's KDS over the same PostgreSQL:
 
 | shape | n=200 none: now / morning | n=200 all: now / morning | n=1,000 none: now / morning | n=1,000 all: now / morning | n=10,000 none: now / morning | n=10,000 all: now / morning |
 |---|---|---|---|---|---|---|

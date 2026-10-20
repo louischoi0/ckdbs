@@ -257,45 +257,45 @@ Three pairs per cell on the same host, old, new, old, new, old, new, a fresh ser
 
 | cell (tps) | old client: pair 1 / 2 / 3 | old median | old spread | new client: pair 1 / 2 / 3 | new median | new spread | new over old | read |
 |---|---|---|---|---|---|---|---|---|
-| tps | 649 / 676 / 682 | 676 tps | 5.0 % | 693 / 668 / 680 | 680 tps | 3.6 % | 1.006x | inside the spread |
+| tps | 649 / 676 / 682 tps | 676 tps | 5.0 % | 693 / 668 / 680 tps | 680 tps | 3.6 % | 1.006x | inside the spread |
 
 | cell (tps) | old client: pair 1 / 2 / 3 | old median | old spread | new client: pair 1 / 2 / 3 | new median | new spread | new over old | read |
 |---|---|---|---|---|---|---|---|---|
-| tps | 407 / 430 / 430 | 430 tps | 5.3 % | 440 / 443 / 448 | 443 tps | 1.8 % | 1.032x | inside the spread |
+| tps | 407 / 430 / 430 tps | 430 tps | 5.3 % | 440 / 443 / 448 tps | 443 tps | 1.8 % | 1.032x | inside the spread |
 
 Statement p50 of each cell (every statement of the driver; the three pairs side by side). First the eight-booker `s2-c1-g` cell, then the one-booker cell:
 
 | statement | old: p50 pair 1 / 2 / 3 | old median | new: p50 pair 1 / 2 / 3 | new median | new / old |
 |---|---|---|---|---|---|
-| booking | 11,090.5 / 10,846.3 / 10,652.7 | 10,846.3 µs | 10,543.5 / 10,773.3 / 10,686.4 | 10,686.4 µs | 0.985x |
-| commit | 1,508.5 / 1,489.6 / 1,461.0 | 1,489.6 µs | 1,465.0 / 1,512.9 / 1,496.5 | 1,496.5 µs | 1.005x |
-| cargo-lookup | 347.0 / 343.7 / 347.3 | 347.0 µs | 374.1 / 373.5 / 363.3 | 373.5 µs | 1.076x |
-| credit-lookup | 310.6 / 316.2 / 313.3 | 313.3 µs | 311.9 / 309.8 / 309.4 | 309.8 µs | 0.989x |
-| capacity-read | 301.3 / 304.9 / 298.0 | 301.3 µs | 313.6 / 309.0 / 299.2 | 309.0 µs | 1.026x |
-| recipe-read | 432.7 / 440.3 / 440.9 | 440.3 µs | 393.0 / 375.5 / 365.7 | 375.5 µs | 0.853x |
-| freight-insert | 1,180.7 / 1,145.1 / 1,126.5 | 1,145.1 µs | 1,110.0 / 1,151.3 / 1,149.6 | 1,149.6 µs | 1.004x |
-| charge-insert | 210.2 / 208.9 / 209.8 | 209.8 µs | 207.0 / 208.4 / 210.6 | 208.4 µs | 0.993x |
-| operation-update | 180.4 / 179.9 / 179.4 | 179.9 µs | 180.3 / 180.0 / 180.8 | 180.3 µs | 1.002x |
-| org-update | 180.7 / 176.0 / 177.4 | 177.4 µs | 179.8 / 178.5 / 179.7 | 179.7 µs | 1.013x |
-| manifest-scan | 361.9 / 492.9 / 520.2 | 492.9 µs | 393.3 / 345.5 / 427.8 | 393.3 µs | 0.798x |
-| voyage-rollup | 384.0 / 350.3 / 341.1 | 350.3 µs | 363.6 / 399.2 / 351.0 | 363.6 µs | 1.038x |
-| customer-statement | 1,153.3 / 1,248.4 / 1,041.2 | 1,153.3 µs | 1,258.2 / 895.9 / 897.4 | 897.4 µs | 0.778x |
+| booking | 11,090.5 / 10,846.3 / 10,652.7 µs | 10,846.3 µs | 10,543.5 / 10,773.3 / 10,686.4 µs | 10,686.4 µs | 0.985x |
+| commit | 1,508.5 / 1,489.6 / 1,461.0 µs | 1,489.6 µs | 1,465.0 / 1,512.9 / 1,496.5 µs | 1,496.5 µs | 1.005x |
+| cargo-lookup | 347.0 / 343.7 / 347.3 µs | 347.0 µs | 374.1 / 373.5 / 363.3 µs | 373.5 µs | 1.076x |
+| credit-lookup | 310.6 / 316.2 / 313.3 µs | 313.3 µs | 311.9 / 309.8 / 309.4 µs | 309.8 µs | 0.989x |
+| capacity-read | 301.3 / 304.9 / 298.0 µs | 301.3 µs | 313.6 / 309.0 / 299.2 µs | 309.0 µs | 1.026x |
+| recipe-read | 432.7 / 440.3 / 440.9 µs | 440.3 µs | 393.0 / 375.5 / 365.7 µs | 375.5 µs | 0.853x |
+| freight-insert | 1,180.7 / 1,145.1 / 1,126.5 µs | 1,145.1 µs | 1,110.0 / 1,151.3 / 1,149.6 µs | 1,149.6 µs | 1.004x |
+| charge-insert | 210.2 / 208.9 / 209.8 µs | 209.8 µs | 207.0 / 208.4 / 210.6 µs | 208.4 µs | 0.993x |
+| operation-update | 180.4 / 179.9 / 179.4 µs | 179.9 µs | 180.3 / 180.0 / 180.8 µs | 180.3 µs | 1.002x |
+| org-update | 180.7 / 176.0 / 177.4 µs | 177.4 µs | 179.8 / 178.5 / 179.7 µs | 179.7 µs | 1.013x |
+| manifest-scan | 361.9 / 492.9 / 520.2 µs | 492.9 µs | 393.3 / 345.5 / 427.8 µs | 393.3 µs | 0.798x |
+| voyage-rollup | 384.0 / 350.3 / 341.1 µs | 350.3 µs | 363.6 / 399.2 / 351.0 µs | 363.6 µs | 1.038x |
+| customer-statement | 1,153.3 / 1,248.4 / 1,041.2 µs | 1,153.3 µs | 1,258.2 / 895.9 / 897.4 µs | 897.4 µs | 0.778x |
 
 | statement | old: p50 pair 1 / 2 / 3 | old median | new: p50 pair 1 / 2 / 3 | new median | new / old |
 |---|---|---|---|---|---|
-| booking | 2,282.0 / 2,132.2 / 2,118.7 | 2,132.2 µs | 2,082.3 / 2,063.4 / 2,063.3 | 2,063.4 µs | 0.968x |
-| commit | 1,191.0 / 1,189.2 / 1,203.3 | 1,191.0 µs | 1,200.0 / 1,197.6 / 1,196.2 | 1,197.6 µs | 1.006x |
-| cargo-lookup | 109.1 / 87.2 / 86.3 | 87.2 µs | 86.0 / 85.4 / 85.6 | 85.6 µs | 0.982x |
-| credit-lookup | 97.1 / 69.6 / 68.3 | 69.6 µs | 68.9 / 68.4 / 69.0 | 68.9 µs | 0.990x |
-| capacity-read | 93.9 / 65.4 / 64.5 | 65.4 µs | 65.0 / 64.5 / 65.1 | 65.0 µs | 0.994x |
-| recipe-read | 196.6 / 180.1 / 175.3 | 180.1 µs | 132.3 / 131.4 / 132.2 | 132.2 µs | 0.734x |
-| freight-insert | 80.4 / 62.9 / 61.4 | 62.9 µs | 61.6 / 60.9 / 60.8 | 60.9 µs | 0.968x |
-| charge-insert | 61.5 / 46.5 / 45.3 | 46.5 µs | 45.9 / 45.4 / 45.1 | 45.4 µs | 0.976x |
-| operation-update | 74.5 / 55.9 / 55.3 | 55.9 µs | 56.1 / 55.3 / 55.1 | 55.3 µs | 0.989x |
-| org-update | 71.4 / 51.9 / 51.1 | 51.9 µs | 52.4 / 51.3 / 51.4 | 51.4 µs | 0.990x |
-| manifest-scan | 188.7 / 161.2 / 163.9 | 163.9 µs | 194.9 / 192.0 / 160.2 | 192.0 µs | 1.171x |
-| voyage-rollup | 160.7 / 130.5 / 127.6 | 130.5 µs | 163.8 / 166.6 / 133.6 | 163.8 µs | 1.255x |
-| customer-statement | 705.6 / 687.0 / 677.7 | 687.0 µs | 696.1 / 697.5 / 682.4 | 696.1 µs | 1.013x |
+| booking | 2,282.0 / 2,132.2 / 2,118.7 µs | 2,132.2 µs | 2,082.3 / 2,063.4 / 2,063.3 µs | 2,063.4 µs | 0.968x |
+| commit | 1,191.0 / 1,189.2 / 1,203.3 µs | 1,191.0 µs | 1,200.0 / 1,197.6 / 1,196.2 µs | 1,197.6 µs | 1.006x |
+| cargo-lookup | 109.1 / 87.2 / 86.3 µs | 87.2 µs | 86.0 / 85.4 / 85.6 µs | 85.6 µs | 0.982x |
+| credit-lookup | 97.1 / 69.6 / 68.3 µs | 69.6 µs | 68.9 / 68.4 / 69.0 µs | 68.9 µs | 0.990x |
+| capacity-read | 93.9 / 65.4 / 64.5 µs | 65.4 µs | 65.0 / 64.5 / 65.1 µs | 65.0 µs | 0.994x |
+| recipe-read | 196.6 / 180.1 / 175.3 µs | 180.1 µs | 132.3 / 131.4 / 132.2 µs | 132.2 µs | 0.734x |
+| freight-insert | 80.4 / 62.9 / 61.4 µs | 62.9 µs | 61.6 / 60.9 / 60.8 µs | 60.9 µs | 0.968x |
+| charge-insert | 61.5 / 46.5 / 45.3 µs | 46.5 µs | 45.9 / 45.4 / 45.1 µs | 45.4 µs | 0.976x |
+| operation-update | 74.5 / 55.9 / 55.3 µs | 55.9 µs | 56.1 / 55.3 / 55.1 µs | 55.3 µs | 0.989x |
+| org-update | 71.4 / 51.9 / 51.1 µs | 51.9 µs | 52.4 / 51.3 / 51.4 µs | 51.4 µs | 0.990x |
+| manifest-scan | 188.7 / 161.2 / 163.9 µs | 163.9 µs | 194.9 / 192.0 / 160.2 µs | 192.0 µs | 1.171x |
+| voyage-rollup | 160.7 / 130.5 / 127.6 µs | 130.5 µs | 163.8 / 166.6 / 133.6 µs | 163.8 µs | 1.255x |
+| customer-statement | 705.6 / 687.0 / 677.7 µs | 687.0 µs | 696.1 / 697.5 / 682.4 µs | 696.1 µs | 1.013x |
 
 **The decoder moves one statement and no throughput.** `recipe-read` falls to 0.73x of its p50 at one booker ; every statement that returns one row or none is within 0.97x to 1.08x, and the three reporter statements (`manifest-scan`, `voyage-rollup`, `customer-statement`, 50 to 120 operations per cell) scatter by up to 25 % between pairs and carry no claim. A booking is 2.1 ms at one booker and `recipe-read` is 7.0 % of it, so a 27 % saving on it is about 1.9 % of the booking, below the 3.6 % to 5.3 % spreads of the
 cells: the A/B reads +0.6 % and +3.2 % and both are inside the spread. **The +1 % to +10 % against the morning is therefore not the client**: the old client reads 676 tps on `s2-c1-g` and 430 tps on the one-booker cell

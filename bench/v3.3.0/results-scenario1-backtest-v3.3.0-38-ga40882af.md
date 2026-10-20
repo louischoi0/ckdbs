@@ -101,29 +101,29 @@ Every phase of the driver, median over the three `c1-g` runs. The PostgreSQL col
 
 | phase | ops | now qps | spread | morning qps | spread | delta | read | PG qps | KDS/PG now | KDS/PG morning |
 |---|---|---|---|---|---|---|---|---|---|---|
-| load-exchanges | 2 | 819.4 | 17.2 % | 847.4 | 22.3 % | -3.3 % | spread > 20 %, no claim | 700.0 | 1.17x | 1.21x |
-| load-symbols | 8 | 850.0 | 4.2 % | 899.1 | 58.0 % | -5.5 % | spread > 20 %, no claim | 806.7 | 1.05x | 1.11x |
-| load-sessions | 7,560 | 21,905.7 | 2.0 % | 21,542.0 | 16.6 % | +1.7 % | inside the spread | 13,292.7 | 1.65x | 1.62x |
-| load-bars | 60,480 | 19,626.3 | 1.8 % | 19,575.2 | 3.4 % | +0.3 % | inside the spread | 13,336.9 | 1.47x | 1.47x |
-| load-stats | 60,480 | 19,196.6 | 1.5 % | 19,921.2 | 3.4 % | -3.6 % | **finding** | 12,948.5 | 1.48x | 1.54x |
-| load-models | 8 | 742.4 | 23.7 % | 765.9 | 12.2 % | -3.1 % | spread > 20 %, no claim | 797.3 | 0.93x | 0.96x |
-| backtest-read | 360 | 464.2 | 17.3 % | 531.7 | 1.0 % | -12.7 % | inside the spread | 367.8 | 1.26x | 1.45x |
-| result-insert | 2,872 | 749.7 | 1.2 % | 742.1 | 1.7 % | +1.0 % | inside the spread | 779.8 | 0.96x | 0.95x |
-| backtest-replay | 360 | 491.8 | 17.3 % | 575.4 | 3.8 % | -14.5 % | inside the spread | 387.8 | 1.27x | 1.48x |
-| compare-all | 1 | 101.0 | 1.0 % | 57.8 | 6.7 % | +74.7 % | **finding** | 120.0 | 0.84x | 0.48x |
-| compare-one | 32 | 1,026.9 | 1.2 % | 603.6 | 4.8 % | +70.1 % | **finding** | 1,091.5 | 0.94x | 0.55x |
-| read-bar-lookup | 200 | 11,892.5 | 28.3 % | 12,551.5 | 22.2 % | -5.3 % | spread > 20 %, no claim | 14,120.8 | 0.84x | 0.89x |
-| read-bar-range | 200 | 1,278.0 | 2.2 % | 669.5 | 6.8 % | +90.9 % | **finding** | 1,383.6 | 0.92x | 0.48x |
-| read-symbol-history | 10 | 27.1 | 3.3 % | 14.2 | 5.6 % | +90.8 % | **finding** | 32.7 | 0.83x | 0.43x |
-| read-day-slice | 200 | 507.3 | 18.6 % | 589.5 | 3.4 % | -13.9 % | inside the spread | 415.1 | 1.22x | 1.42x |
-| read-join-point | 200 | 12,546.8 | 31.7 % | 12,339.9 | 31.4 % | +1.7 % | spread > 20 %, no claim | 6,924.8 | 1.81x | 1.78x |
-| read-join-exists | 10 | 166.7 | 4.6 % | 167.8 | 1.7 % | -0.7 % | inside the spread | 123.9 | 1.35x | 1.35x |
-| agg-global | 10 | 165.2 | 1.8 % | 166.4 | 0.5 % | -0.7 % | inside the spread | 244.4 | 0.68x | 0.68x |
-| agg-by-symbol | 10 | 133.1 | 1.7 % | 132.4 | 1.6 % | +0.5 % | inside the spread | 145.5 | 0.91x | 0.91x |
-| agg-by-session | 10 | 45.9 | 3.1 % | 32.7 | 3.7 % | +40.4 % | **finding** | 50.1 | 0.92x | 0.65x |
-| agg-day-slice | 200 | 514.0 | 18.6 % | 615.8 | 2.0 % | -16.5 % | inside the spread | 413.4 | 1.24x | 1.49x |
-| agg-distinct | 10 | 167.2 | 3.7 % | 169.8 | 7.4 % | -1.5 % | inside the spread | 244.6 | 0.68x | 0.69x |
-| sync | 1 | 229.1 | 74.2 % | 219.8 | 30.4 % | +4.2 % | spread > 20 %, no claim | - | - | - |
+| load-exchanges | 2 ops | 819.4 qps | 17.2 % | 847.4 qps | 22.3 % | -3.3 % | spread > 20 %, no claim | 700.0 qps | 1.17x | 1.21x |
+| load-symbols | 8 ops | 850.0 qps | 4.2 % | 899.1 qps | 58.0 % | -5.5 % | spread > 20 %, no claim | 806.7 qps | 1.05x | 1.11x |
+| load-sessions | 7,560 ops | 21,905.7 qps | 2.0 % | 21,542.0 qps | 16.6 % | +1.7 % | inside the spread | 13,292.7 qps | 1.65x | 1.62x |
+| load-bars | 60,480 ops | 19,626.3 qps | 1.8 % | 19,575.2 qps | 3.4 % | +0.3 % | inside the spread | 13,336.9 qps | 1.47x | 1.47x |
+| load-stats | 60,480 ops | 19,196.6 qps | 1.5 % | 19,921.2 qps | 3.4 % | -3.6 % | **finding** | 12,948.5 qps | 1.48x | 1.54x |
+| load-models | 8 ops | 742.4 qps | 23.7 % | 765.9 qps | 12.2 % | -3.1 % | spread > 20 %, no claim | 797.3 qps | 0.93x | 0.96x |
+| backtest-read | 360 ops | 464.2 qps | 17.3 % | 531.7 qps | 1.0 % | -12.7 % | inside the spread | 367.8 qps | 1.26x | 1.45x |
+| result-insert | 2,872 ops | 749.7 qps | 1.2 % | 742.1 qps | 1.7 % | +1.0 % | inside the spread | 779.8 qps | 0.96x | 0.95x |
+| backtest-replay | 360 ops | 491.8 qps | 17.3 % | 575.4 qps | 3.8 % | -14.5 % | inside the spread | 387.8 qps | 1.27x | 1.48x |
+| compare-all | 1 ops | 101.0 qps | 1.0 % | 57.8 qps | 6.7 % | +74.7 % | **finding** | 120.0 qps | 0.84x | 0.48x |
+| compare-one | 32 ops | 1,026.9 qps | 1.2 % | 603.6 qps | 4.8 % | +70.1 % | **finding** | 1,091.5 qps | 0.94x | 0.55x |
+| read-bar-lookup | 200 ops | 11,892.5 qps | 28.3 % | 12,551.5 qps | 22.2 % | -5.3 % | spread > 20 %, no claim | 14,120.8 qps | 0.84x | 0.89x |
+| read-bar-range | 200 ops | 1,278.0 qps | 2.2 % | 669.5 qps | 6.8 % | +90.9 % | **finding** | 1,383.6 qps | 0.92x | 0.48x |
+| read-symbol-history | 10 ops | 27.1 qps | 3.3 % | 14.2 qps | 5.6 % | +90.8 % | **finding** | 32.7 qps | 0.83x | 0.43x |
+| read-day-slice | 200 ops | 507.3 qps | 18.6 % | 589.5 qps | 3.4 % | -13.9 % | inside the spread | 415.1 qps | 1.22x | 1.42x |
+| read-join-point | 200 ops | 12,546.8 qps | 31.7 % | 12,339.9 qps | 31.4 % | +1.7 % | spread > 20 %, no claim | 6,924.8 qps | 1.81x | 1.78x |
+| read-join-exists | 10 ops | 166.7 qps | 4.6 % | 167.8 qps | 1.7 % | -0.7 % | inside the spread | 123.9 qps | 1.35x | 1.35x |
+| agg-global | 10 ops | 165.2 qps | 1.8 % | 166.4 qps | 0.5 % | -0.7 % | inside the spread | 244.4 qps | 0.68x | 0.68x |
+| agg-by-symbol | 10 ops | 133.1 qps | 1.7 % | 132.4 qps | 1.6 % | +0.5 % | inside the spread | 145.5 qps | 0.91x | 0.91x |
+| agg-by-session | 10 ops | 45.9 qps | 3.1 % | 32.7 qps | 3.7 % | +40.4 % | **finding** | 50.1 qps | 0.92x | 0.65x |
+| agg-day-slice | 200 ops | 514.0 qps | 18.6 % | 615.8 qps | 2.0 % | -16.5 % | inside the spread | 413.4 qps | 1.24x | 1.49x |
+| agg-distinct | 10 ops | 167.2 qps | 3.7 % | 169.8 qps | 7.4 % | -1.5 % | inside the spread | 244.6 qps | 0.68x | 0.69x |
+| sync | 1 ops | 229.1 qps | 74.2 % | 219.8 qps | 30.4 % | +4.2 % | spread > 20 %, no claim | - | - | - |
 
 **Writes: the durability wait is the cost of a row.** Rows per `BEGIN`/`COMMIT`; median of three runs with the spread in brackets (writes return no rows; the delta is the host's, not the client's):
 
@@ -152,24 +152,24 @@ Run 1 of each cell, every phase of the driver (microseconds; the five percentile
 
 | phase | run | ops | p0 | p25 | p50 | p95 | p99 |
 |---|---|---|---|---|---|---|---|
-| read-bar-range | now | 200 | 762.4 µs | 776.4 µs | 781.3 µs | 798.6 µs | 811.7 µs |
-| read-bar-range | morning (old client) | 200 | 1,424.0 µs | 1,446.8 µs | 1,490.0 µs | 1,535.1 µs | 2,188.0 µs |
-| read-bar-range | PostgreSQL 18.6 (morning's run) | 200 | 703.4 µs | 716.1 µs | 720.9 µs | 739.5 µs | 750.0 µs |
-| read-symbol-history | now | 10 | 35,286.7 µs | 35,580.7 µs | 35,903.0 µs | 38,877.2 µs | 38,877.2 µs |
-| read-symbol-history | morning (old client) | 10 | 68,707.1 µs | 69,294.9 µs | 69,709.7 µs | 72,947.6 µs | 72,947.6 µs |
-| read-symbol-history | PostgreSQL 18.6 (morning's run) | 10 | 28,871.4 µs | 29,578.2 µs | 30,217.6 µs | 34,674.5 µs | 34,674.5 µs |
-| compare-one | now | 32 | 940.6 µs | 963.6 µs | 968.0 µs | 1,032.6 µs | 1,034.3 µs |
-| compare-one | morning (old client) | 32 | 1,610.4 µs | 1,620.7 µs | 1,632.9 µs | 1,777.7 µs | 1,929.0 µs |
-| compare-one | PostgreSQL 18.6 (morning's run) | 32 | 887.1 µs | 902.3 µs | 911.7 µs | 1,039.8 µs | 1,140.3 µs |
-| compare-all | now | 1 | 9,839.0 µs | 9,839.0 µs | 9,839.0 µs | 9,839.0 µs | 9,839.0 µs |
-| compare-all | morning (old client) | 1 | 17,104.1 µs | 17,104.1 µs | 17,104.1 µs | 17,104.1 µs | 17,104.1 µs |
-| compare-all | PostgreSQL 18.6 (morning's run) | 1 | 8,367.3 µs | 8,367.3 µs | 8,367.3 µs | 8,367.3 µs | 8,367.3 µs |
-| agg-by-session | now | 10 | 20,592.0 µs | 20,704.0 µs | 20,727.2 µs | 24,170.0 µs | 24,170.0 µs |
-| agg-by-session | morning (old client) | 10 | 29,904.7 µs | 29,956.7 µs | 30,079.2 µs | 33,071.5 µs | 33,071.5 µs |
-| agg-by-session | PostgreSQL 18.6 (morning's run) | 10 | 19,407.5 µs | 19,507.5 µs | 19,629.1 µs | 22,410.1 µs | 22,410.1 µs |
-| backtest-read | now | 360 | 1,763.7 µs | 1,811.0 µs | 1,822.5 µs | 1,923.7 µs | 2,020.5 µs |
-| backtest-read | morning (old client) | 360 | 1,811.1 µs | 1,851.2 µs | 1,878.0 µs | 2,033.9 µs | 2,544.9 µs |
-| backtest-read | PostgreSQL 18.6 (morning's run) | 360 | 2,628.0 µs | 2,683.6 µs | 2,705.1 µs | 2,843.3 µs | 2,956.3 µs |
+| read-bar-range | now | 200 ops | 762.4 µs | 776.4 µs | 781.3 µs | 798.6 µs | 811.7 µs |
+| read-bar-range | morning (old client) | 200 ops | 1,424.0 µs | 1,446.8 µs | 1,490.0 µs | 1,535.1 µs | 2,188.0 µs |
+| read-bar-range | PostgreSQL 18.6 (morning's run) | 200 ops | 703.4 µs | 716.1 µs | 720.9 µs | 739.5 µs | 750.0 µs |
+| read-symbol-history | now | 10 ops | 35,286.7 µs | 35,580.7 µs | 35,903.0 µs | 38,877.2 µs | 38,877.2 µs |
+| read-symbol-history | morning (old client) | 10 ops | 68,707.1 µs | 69,294.9 µs | 69,709.7 µs | 72,947.6 µs | 72,947.6 µs |
+| read-symbol-history | PostgreSQL 18.6 (morning's run) | 10 ops | 28,871.4 µs | 29,578.2 µs | 30,217.6 µs | 34,674.5 µs | 34,674.5 µs |
+| compare-one | now | 32 ops | 940.6 µs | 963.6 µs | 968.0 µs | 1,032.6 µs | 1,034.3 µs |
+| compare-one | morning (old client) | 32 ops | 1,610.4 µs | 1,620.7 µs | 1,632.9 µs | 1,777.7 µs | 1,929.0 µs |
+| compare-one | PostgreSQL 18.6 (morning's run) | 32 ops | 887.1 µs | 902.3 µs | 911.7 µs | 1,039.8 µs | 1,140.3 µs |
+| compare-all | now | 1 ops | 9,839.0 µs | 9,839.0 µs | 9,839.0 µs | 9,839.0 µs | 9,839.0 µs |
+| compare-all | morning (old client) | 1 ops | 17,104.1 µs | 17,104.1 µs | 17,104.1 µs | 17,104.1 µs | 17,104.1 µs |
+| compare-all | PostgreSQL 18.6 (morning's run) | 1 ops | 8,367.3 µs | 8,367.3 µs | 8,367.3 µs | 8,367.3 µs | 8,367.3 µs |
+| agg-by-session | now | 10 ops | 20,592.0 µs | 20,704.0 µs | 20,727.2 µs | 24,170.0 µs | 24,170.0 µs |
+| agg-by-session | morning (old client) | 10 ops | 29,904.7 µs | 29,956.7 µs | 30,079.2 µs | 33,071.5 µs | 33,071.5 µs |
+| agg-by-session | PostgreSQL 18.6 (morning's run) | 10 ops | 19,407.5 µs | 19,507.5 µs | 19,629.1 µs | 22,410.1 µs | 22,410.1 µs |
+| backtest-read | now | 360 ops | 1,763.7 µs | 1,811.0 µs | 1,822.5 µs | 1,923.7 µs | 2,020.5 µs |
+| backtest-read | morning (old client) | 360 ops | 1,811.1 µs | 1,851.2 µs | 1,878.0 µs | 2,033.9 µs | 2,544.9 µs |
+| backtest-read | PostgreSQL 18.6 (morning's run) | 360 ops | 2,628.0 µs | 2,683.6 µs | 2,705.1 µs | 2,843.3 µs | 2,956.3 µs |
 
 The distributions moved as a whole, not by a tail: `read-bar-range` p0 762 µs against 1,424 µs in the morning and 703 µs for PostgreSQL, p50 781 against 1,490
 (PostgreSQL 721) and p99 812 against 2,188 (PostgreSQL 750); `read-symbol-history` p50 35.9 ms against 69.7 ms (PostgreSQL 30.2 ms).
@@ -276,14 +276,14 @@ The size sweep separates the per-row term from the fixed term: the returned-row 
 
 | bars | shape | rows returned | fixed round trip (bar-lookup mean) now / PG | KDS now µs/row | KDS morning µs/row | PG µs/row | KDS now / PG | KDS morning / PG |
 |---|---|---|---|---|---|---|---|---|
-| 252 | bar-range | 200 | 74.4 µs / 99.8 µs | 3.54 µs | 6.96 µs | 3.29 µs | 1.07x | 2.12x |
-| 252 | symbol-history | 252 | 74.4 µs / 99.8 µs | 4.51 µs | 8.90 µs | 3.88 µs | 1.16x | 2.29x |
-| 1,008 | bar-range | 200 | 75.9 µs / 87.2 µs | 3.54 µs | 7.14 µs | 3.47 µs | 1.02x | 2.06x |
-| 1,008 | symbol-history | 252 | 75.9 µs / 87.2 µs | 4.57 µs | 9.14 µs | 4.16 µs | 1.10x | 2.20x |
-| 10,080 | bar-range | 200 | 77.0 µs / 70.4 µs | 3.61 µs | 6.91 µs | 3.34 µs | 1.08x | 2.07x |
-| 10,080 | symbol-history | 1,260 | 77.0 µs / 70.4 µs | 4.77 µs | 9.29 µs | 4.02 µs | 1.19x | 2.31x |
-| 60,480 | bar-range | 200 | 79.1 µs / 68.0 µs | 3.57 µs | 6.86 µs | 3.23 µs | 1.11x | 2.12x |
-| 60,480 | symbol-history | 7,560 | 79.1 µs / 68.0 µs | 4.84 µs | 9.54 µs | 4.08 µs | 1.18x | 2.34x |
+| 252 | bar-range | 200 rows | 74.4 µs / 99.8 µs | 3.54 µs | 6.96 µs | 3.29 µs | 1.07x | 2.12x |
+| 252 | symbol-history | 252 rows | 74.4 µs / 99.8 µs | 4.51 µs | 8.90 µs | 3.88 µs | 1.16x | 2.29x |
+| 1,008 | bar-range | 200 rows | 75.9 µs / 87.2 µs | 3.54 µs | 7.14 µs | 3.47 µs | 1.02x | 2.06x |
+| 1,008 | symbol-history | 252 rows | 75.9 µs / 87.2 µs | 4.57 µs | 9.14 µs | 4.16 µs | 1.10x | 2.20x |
+| 10,080 | bar-range | 200 rows | 77.0 µs / 70.4 µs | 3.61 µs | 6.91 µs | 3.34 µs | 1.08x | 2.07x |
+| 10,080 | symbol-history | 1,260 rows | 77.0 µs / 70.4 µs | 4.77 µs | 9.29 µs | 4.02 µs | 1.19x | 2.31x |
+| 60,480 | bar-range | 200 rows | 79.1 µs / 68.0 µs | 3.57 µs | 6.86 µs | 3.23 µs | 1.11x | 2.12x |
+| 60,480 | symbol-history | 7,560 rows | 79.1 µs / 68.0 µs | 4.84 µs | 9.54 µs | 4.08 µs | 1.18x | 2.34x |
 
 **The per-row cost of a returned row is flat across a 240x range of relation size and across two row counts, and it is now within 2 % to 19 % of PostgreSQL's.** KDS spends 3.54 to 3.61 µs per row on a 200-row range at every size
 (PostgreSQL 3.23 to 3.47 µs) and 4.51 to 4.84 µs on a symbol history (PostgreSQL 3.88 to 4.16 µs); the morning's figures were 6.9 to 7.1 and 8.9 to 9.5 µs. The cost lived in the Python decoder
@@ -382,7 +382,7 @@ PostgreSQL is the floor: it says whether the engine is in the right league and n
 | 1000 | 20,868 rows/s | 16,505 rows/s | 1.26x |
 
 **The league reading.** The shapes that returned many rows were at half of PostgreSQL's speed and are at 0.83x to 0.94x of it (`bar-range` 0.90x, `symbol-history` 0.85x,
-`model-join` 0.94x, `compare-all` 0.84x, `compare-one` 0.94x, `agg-by-session` 0.92x). KDS is still ahead on the pk-anchored join (1.50x to 1.98x), the unindexed equality scan
+`model-join` 0.94x, `compare-all` 0.84x, `compare-one` 0.94x, `agg-by-session` 0.92x). KDS is still ahead on the pk-anchored join (1.76x to 1.98x at 252 to 10,080 bars; the 1.50x at 60,480 bars is the bimodal cell of section 3 and carries no claim), the unindexed equality scan
 (`day-slice` 1.23x at 60,480 bars, a figure the host drift lowers; 1.00x to 1.11x at 1,008 and 10,080 bars) and the three big load phases (`load-sessions`, `load-bars`, `load-stats`: 1.47x to 1.65x), and behind on whole-relation folds (`agg-global` 0.68x,
 `agg-distinct` 0.68x), which return one row and are not the decoder's. Row cost is no longer the thing that sets KDS apart from PostgreSQL on this scenario; the folds and `bar-lookup` are.
 
@@ -393,45 +393,45 @@ Three pairs, old, new, old, new, old, new, on the same host, one `s1-c1-g` cell 
 
 | shape (warm qps) | old client: pair 1 / 2 / 3 | old median | old spread | new client: pair 1 / 2 / 3 | new median | new spread | new over old | read |
 |---|---|---|---|---|---|---|---|---|
-| bar-lookup | 12,635 / 12,546 / 12,337 | 12,546 qps | 2.4 % | 12,741 / 13,382 / 13,251 | 13,251 qps | 4.8 % | 1.056x | **finding** |
-| bar-range | 685 / 684 / 691 | 685 qps | 0.9 % | 1,239 / 1,267 / 1,254 | 1,254 qps | 2.2 % | 1.831x | **finding** |
-| day-slice | 491 / 493 / 501 | 493 qps | 2.0 % | 502 / 508 / 504 | 504 qps | 1.0 % | 1.023x | **finding** |
-| symbol-history | 14.2 / 14.0 / 14.2 | 14.2 qps | 1.4 % | 27.3 / 27.4 / 27.3 | 27.3 qps | 0.4 % | 1.923x | **finding** |
-| cross-join | 484 / 490 / 480 | 484 qps | 2.0 % | 493 / 498 / 493 | 493 qps | 1.0 % | 1.019x | inside the spread |
-| point-join | 12,581 / 12,544 / 8,751 | 12,544 qps | 30.5 % | 12,155 / 12,802 / 12,264 | 12,264 qps | 5.3 % | 0.978x | no claim (spread > 20 %) |
-| model-join | 598 / 603 / 594 | 598 qps | 1.5 % | 1,033 / 1,048 / 1,052 | 1,048 qps | 1.9 % | 1.753x | **finding** |
-| day-slice (cabin) | 6,502 / 6,498 / 6,490 | 6,498 qps | 0.2 % | 8,219 / 8,282 / 8,157 | 8,219 qps | 1.5 % | 1.265x | **finding** |
-| symbol-history (cabin) | 13.9 / 13.7 / 13.9 | 13.9 qps | 1.4 % | 26.1 / 26.4 / 26.1 | 26.1 qps | 1.1 % | 1.878x | **finding** |
-| cross-join (cabin) | 5,521 / 5,564 / 4,565 | 5,521 qps | 18.1 % | 6,632 / 6,885 / 6,675 | 6,675 qps | 3.8 % | 1.209x | **finding** |
-| model-join (cabin) | 605 / 596 / 598 | 598 qps | 1.4 % | 1,076 / 1,072 / 1,077 | 1,076 qps | 0.5 % | 1.800x | **finding** |
+| bar-lookup | 12,635 / 12,546 / 12,337 qps | 12,546 qps | 2.4 % | 12,741 / 13,382 / 13,251 qps | 13,251 qps | 4.8 % | 1.056x | **finding** |
+| bar-range | 685 / 684 / 691 qps | 685 qps | 0.9 % | 1,239 / 1,267 / 1,254 qps | 1,254 qps | 2.2 % | 1.831x | **finding** |
+| day-slice | 491 / 493 / 501 qps | 493 qps | 2.0 % | 502 / 508 / 504 qps | 504 qps | 1.0 % | 1.023x | **finding** |
+| symbol-history | 14.2 / 14.0 / 14.2 qps | 14.2 qps | 1.4 % | 27.3 / 27.4 / 27.3 qps | 27.3 qps | 0.4 % | 1.923x | **finding** |
+| cross-join | 484 / 490 / 480 qps | 484 qps | 2.0 % | 493 / 498 / 493 qps | 493 qps | 1.0 % | 1.019x | inside the spread |
+| point-join | 12,581 / 12,544 / 8,751 qps | 12,544 qps | 30.5 % | 12,155 / 12,802 / 12,264 qps | 12,264 qps | 5.3 % | 0.978x | no claim (spread > 20 %) |
+| model-join | 598 / 603 / 594 qps | 598 qps | 1.5 % | 1,033 / 1,048 / 1,052 qps | 1,048 qps | 1.9 % | 1.753x | **finding** |
+| day-slice (cabin) | 6,502 / 6,498 / 6,490 qps | 6,498 qps | 0.2 % | 8,219 / 8,282 / 8,157 qps | 8,219 qps | 1.5 % | 1.265x | **finding** |
+| symbol-history (cabin) | 13.9 / 13.7 / 13.9 qps | 13.9 qps | 1.4 % | 26.1 / 26.4 / 26.1 qps | 26.1 qps | 1.1 % | 1.878x | **finding** |
+| cross-join (cabin) | 5,521 / 5,564 / 4,565 qps | 5,521 qps | 18.1 % | 6,632 / 6,885 / 6,675 qps | 6,675 qps | 3.8 % | 1.209x | **finding** |
+| model-join (cabin) | 605 / 596 / 598 qps | 598 qps | 1.4 % | 1,076 / 1,072 / 1,077 qps | 1,076 qps | 0.5 % | 1.800x | **finding** |
 
 And every phase of the driver:
 
 | phase (qps) | old client: pair 1 / 2 / 3 | old median | old spread | new client: pair 1 / 2 / 3 | new median | new spread | new over old | read |
 |---|---|---|---|---|---|---|---|---|
-| load-exchanges | 865 / 879 / 804 | 865 qps | 8.7 % | 816 / 873 / 845 | 845 qps | 6.8 % | 0.977x | inside the spread |
-| load-symbols | 928 / 835 / 845 | 845 qps | 11.0 % | 832 / 906 / 905 | 905 qps | 8.1 % | 1.071x | inside the spread |
-| load-sessions | 21,692 / 21,799 / 21,946 | 21,799 qps | 1.2 % | 19,138 / 22,312 / 21,919 | 21,919 qps | 14.5 % | 1.005x | inside the spread |
-| load-bars | 20,364 / 18,335 / 19,720 | 19,720 qps | 10.3 % | 17,849 / 20,422 / 18,377 | 18,377 qps | 14.0 % | 0.932x | inside the spread |
-| load-stats | 20,662 / 19,142 / 19,705 | 19,705 qps | 7.7 % | 18,266 / 19,516 / 18,724 | 18,724 qps | 6.7 % | 0.950x | inside the spread |
-| load-models | 334 / 729 / 786 | 729 qps | 61.9 % | 735 / 694 / 826 | 735 qps | 18.0 % | 1.008x | no claim (spread > 20 %) |
-| backtest-read | 454 / 454 / 461 | 454 qps | 1.5 % | 458 / 465 / 464 | 464 qps | 1.6 % | 1.021x | **finding** |
-| result-insert | 776 / 726 / 778 | 776 qps | 6.6 % | 728 / 783 / 770 | 770 qps | 7.1 % | 0.992x | inside the spread |
-| backtest-replay | 482 / 480 / 486 | 482 qps | 1.2 % | 491 / 483 / 492 | 491 qps | 1.9 % | 1.017x | inside the spread |
-| compare-all | 57.8 / 56.8 / 57.8 | 57.8 qps | 1.7 % | 103.5 / 101.9 / 103.5 | 103.5 qps | 1.5 % | 1.791x | **finding** |
-| compare-one | 602 / 599 / 609 | 602 qps | 1.7 % | 1,036 / 1,028 / 1,024 | 1,028 qps | 1.1 % | 1.707x | **finding** |
-| read-bar-lookup | 12,654 / 12,681 / 12,567 | 12,654 qps | 0.9 % | 10,198 / 12,938 / 12,816 | 12,816 qps | 21.4 % | 1.013x | no claim (spread > 20 %) |
-| read-bar-range | 686 / 685 / 673 | 685 qps | 1.9 % | 1,226 / 1,255 / 1,272 | 1,255 qps | 3.7 % | 1.832x | **finding** |
-| read-symbol-history | 14.1 / 14.1 / 14.1 | 14.1 qps | 0.0 % | 26.8 / 27.2 / 27.0 | 27.0 qps | 1.5 % | 1.915x | **finding** |
-| read-day-slice | 491 / 495 / 497 | 495 qps | 1.3 % | 505 / 505 / 507 | 505 qps | 0.3 % | 1.021x | **finding** |
-| read-join-point | 12,265 / 12,750 / 12,508 | 12,508 qps | 3.9 % | 12,556 / 12,978 / 12,636 | 12,636 qps | 3.3 % | 1.010x | inside the spread |
-| read-join-exists | 166 / 169 / 172 | 169 qps | 3.0 % | 171 / 171 / 171 | 171 qps | 0.2 % | 1.008x | inside the spread |
-| agg-global | 164 / 165 / 168 | 165 qps | 2.5 % | 168 / 169 / 169 | 169 qps | 0.5 % | 1.023x | inside the spread |
-| agg-by-symbol | 130 / 130 / 130 | 130 qps | 0.2 % | 133 / 132 / 132 | 132 qps | 0.7 % | 1.018x | **finding** |
-| agg-by-session | 32.2 / 32.2 / 32.1 | 32.2 qps | 0.3 % | 46.4 / 46.7 / 46.5 | 46.5 qps | 0.6 % | 1.444x | **finding** |
-| agg-day-slice | 506 / 508 / 506 | 506 qps | 0.4 % | 515 / 506 / 518 | 515 qps | 2.3 % | 1.017x | inside the spread |
-| agg-distinct | 168 / 168 / 168 | 168 qps | 0.1 % | 170 / 170 / 172 | 170 qps | 1.0 % | 1.012x | **finding** |
-| sync | 123 / 366 / 183 | 183 qps | 132.7 % | 196 / 208 / 172 | 196 qps | 18.4 % | 1.070x | no claim (spread > 20 %) |
+| load-exchanges | 865 / 879 / 804 qps | 865 qps | 8.7 % | 816 / 873 / 845 qps | 845 qps | 6.8 % | 0.977x | inside the spread |
+| load-symbols | 928 / 835 / 845 qps | 845 qps | 11.0 % | 832 / 906 / 905 qps | 905 qps | 8.1 % | 1.071x | inside the spread |
+| load-sessions | 21,692 / 21,799 / 21,946 qps | 21,799 qps | 1.2 % | 19,138 / 22,312 / 21,919 qps | 21,919 qps | 14.5 % | 1.005x | inside the spread |
+| load-bars | 20,364 / 18,335 / 19,720 qps | 19,720 qps | 10.3 % | 17,849 / 20,422 / 18,377 qps | 18,377 qps | 14.0 % | 0.932x | inside the spread |
+| load-stats | 20,662 / 19,142 / 19,705 qps | 19,705 qps | 7.7 % | 18,266 / 19,516 / 18,724 qps | 18,724 qps | 6.7 % | 0.950x | inside the spread |
+| load-models | 334 / 729 / 786 qps | 729 qps | 61.9 % | 735 / 694 / 826 qps | 735 qps | 18.0 % | 1.008x | no claim (spread > 20 %) |
+| backtest-read | 454 / 454 / 461 qps | 454 qps | 1.5 % | 458 / 465 / 464 qps | 464 qps | 1.6 % | 1.021x | **finding** |
+| result-insert | 776 / 726 / 778 qps | 776 qps | 6.6 % | 728 / 783 / 770 qps | 770 qps | 7.1 % | 0.992x | inside the spread |
+| backtest-replay | 482 / 480 / 486 qps | 482 qps | 1.2 % | 491 / 483 / 492 qps | 491 qps | 1.9 % | 1.017x | inside the spread |
+| compare-all | 57.8 / 56.8 / 57.8 qps | 57.8 qps | 1.7 % | 103.5 / 101.9 / 103.5 qps | 103.5 qps | 1.5 % | 1.791x | **finding** |
+| compare-one | 602 / 599 / 609 qps | 602 qps | 1.7 % | 1,036 / 1,028 / 1,024 qps | 1,028 qps | 1.1 % | 1.707x | **finding** |
+| read-bar-lookup | 12,654 / 12,681 / 12,567 qps | 12,654 qps | 0.9 % | 10,198 / 12,938 / 12,816 qps | 12,816 qps | 21.4 % | 1.013x | no claim (spread > 20 %) |
+| read-bar-range | 686 / 685 / 673 qps | 685 qps | 1.9 % | 1,226 / 1,255 / 1,272 qps | 1,255 qps | 3.7 % | 1.832x | **finding** |
+| read-symbol-history | 14.1 / 14.1 / 14.1 qps | 14.1 qps | 0.0 % | 26.8 / 27.2 / 27.0 qps | 27.0 qps | 1.5 % | 1.915x | **finding** |
+| read-day-slice | 491 / 495 / 497 qps | 495 qps | 1.3 % | 505 / 505 / 507 qps | 505 qps | 0.3 % | 1.021x | **finding** |
+| read-join-point | 12,265 / 12,750 / 12,508 qps | 12,508 qps | 3.9 % | 12,556 / 12,978 / 12,636 qps | 12,636 qps | 3.3 % | 1.010x | inside the spread |
+| read-join-exists | 166 / 169 / 172 qps | 169 qps | 3.0 % | 171 / 171 / 171 qps | 171 qps | 0.2 % | 1.008x | inside the spread |
+| agg-global | 164 / 165 / 168 qps | 165 qps | 2.5 % | 168 / 169 / 169 qps | 169 qps | 0.5 % | 1.023x | inside the spread |
+| agg-by-symbol | 130 / 130 / 130 qps | 130 qps | 0.2 % | 133 / 132 / 132 qps | 132 qps | 0.7 % | 1.018x | **finding** |
+| agg-by-session | 32.2 / 32.2 / 32.1 qps | 32.2 qps | 0.3 % | 46.4 / 46.7 / 46.5 qps | 46.5 qps | 0.6 % | 1.444x | **finding** |
+| agg-day-slice | 506 / 508 / 506 qps | 506 qps | 0.4 % | 515 / 506 / 518 qps | 515 qps | 2.3 % | 1.017x | inside the spread |
+| agg-distinct | 168 / 168 / 168 qps | 168 qps | 0.1 % | 170 / 170 / 172 qps | 170 qps | 1.0 % | 1.012x | **finding** |
+| sync | 123 / 366 / 183 qps | 183 qps | 132.7 % | 196 / 208 / 172 qps | 196 qps | 18.4 % | 1.070x | no claim (spread > 20 %) |
 
 **The decoder explains the whole movement of the row-returning shapes and none of the movement of the others.** In one window, with the engine identical, `bar-range` 1.83x,
 `symbol-history` 1.92x, `model-join` 1.75x, `compare-all` 1.79x, `compare-one` 1.71x, `agg-by-session`
@@ -446,17 +446,17 @@ frequency, a neighbouring tenant or where the server thread landed; it says the 
 
 ## 10. What moved, why, and what is left of the gap to PostgreSQL
 
-1. **The decoder was the per-row gap.** Same binary, same data, same statements: the only difference between the arms of section 9 is the client's row-batch decode and the renderer lookup, and a returned row costs 3.4 to 4.8 µs
-   instead of 7 to 9.3 µs. This answers the question the morning's file left open ("whether the factor of two lives in the engine or in the two Python wire decoders is not separated"): it lived in the decoder, and
+1. **The decoder was the per-row gap.** Same binary, same data, same statements: the only difference between the arms of section 9 is the client's row-batch decode and the renderer lookup, and a returned row costs 3.5 to 4.8 µs
+   instead of 6.9 to 9.5 µs (section 5's size sweep). This answers the question the morning's file left open ("whether the factor of two lives in the engine or in the two Python wire decoders is not separated"): it lived in the decoder, and
    `bench/v3.3.0/results-row-cost-attribution-v3.3.0-37-gf829964c.md`'s verdict (84 % of the per-row wall gap is the decoder) is borne out in end-to-end scenario numbers.
 2. **What remains is 0.85x to 0.94x of PostgreSQL on the many-row shapes**, a per-row difference of 0.3 to 0.8 µs (section 5). The row-cost attribution
    (`bench/v3.3.0/results-row-cost-attribution-v3.3.0-37-gf829964c.md`, whose corrected verdict is 84 % decoder and 16 % engine-side) found the engine-side 0.42 µs per row is not CPU but the *absence of overlap*: KDS builds the whole reply and sends it
    at statement completion (`WireResultSink::Emit`, `KwpSession::Deliver`, BN-R7), so the server's 0.43 µs of CPU per row is added to the client's time instead of overlapped with it, as PostgreSQL's streaming backend allows.
-   **Where the rest of the gap sits (a KDS-only re-run of the attribution's cells, `rowcost/` in the run archive; PostgreSQL is the attribution file's, not re-measured).** On the 12-column read the new client's wall slope is 3.21 µs per row against 6.31 µs for the old client in the same window (the attribution measured 6.19), and against PostgreSQL's 3.57 µs: a like-for-like decode to Python ints is no longer where KDS is behind. The scenario drivers do not stop at ints: `ServerConnection.send_command` renders every cell to text and joins it, and that path costs 4.70 µs per row on the new client (9.25 on the old), which is the scenario's own figure (`symbol-history` 4.84 µs per row at 7,560 rows). It breaks into the client's decode (2.20 µs of CPU), the render and join (2.05 µs of CPU) and 0.43 µs of client idle, the server's 0.42 µs of CPU per row that is not overlapped because the reply leaves at statement completion. PostgreSQL's matching scenario figure is 4.08 µs per row. Of the 0.76 µs per row that remains between the two on `symbol-history` (4.84 against 4.08), **0.43 µs, 56 %, is the engine-side non-overlap and the remaining 0.33 µs, 44 %, is client work (the render step the newline-shaped reply needs and PostgreSQL's text rows do not)**; the split is by subtraction from this window's idle and PostgreSQL's attribution figures and was not measured on PostgreSQL's scenario path. For `bar-range` (nine columns, 3.57 against 3.23 µs per row, a gap of 0.34 µs) the engine-side term was not measured at nine columns. Before the fix the gap on that symbol history was 5.46 µs per row; the fix removed 4.54 µs of client work per row on the scenario path (83 % of that gap), and the 0.45 µs of non-overlap was and is part of what remains.
+   **Where the rest of the gap sits (a KDS-only re-run of the attribution's cells, `rowcost/` in the run archive; PostgreSQL is the attribution file's, not re-measured).** On the 12-column read the new client's wall slope is 3.21 µs per row against 6.31 µs for the old client in the same window (the attribution measured 6.19), and against PostgreSQL's 3.57 µs: a like-for-like decode to Python ints is no longer where KDS is behind. The scenario drivers do not stop at ints: `ServerConnection.send_command` renders every cell to text and joins it, and that path costs 4.70 µs per row on the new client (9.25 on the old), close to the scenario's own figure (`symbol-history` 4.84 µs per row at 7,560 rows). It breaks into the client's decode (2.20 µs of CPU), the render and join (2.05 µs of CPU) and 0.43 µs of client idle, the server's 0.42 µs of CPU per row that is not overlapped because the reply leaves at statement completion. PostgreSQL's matching scenario figure is 4.08 µs per row. The two KDS figures are not one statement: `symbol-history` is a FilterScan that walks all 60,480 rows to return 7,560, 8 examined rows per returned row at about 26 ns each (section 5), so about 0.21 µs per returned row of walk that the key-range cells do not have and that also finishes before the first byte leaves. Of the 0.76 µs per row that remains between KDS and PostgreSQL on `symbol-history` (4.84 against 4.08), **the engine-side non-overlap is at least 0.43 µs (56 %) and up to about 0.64 µs (84 %) with the walk counted; the remaining 0.12 to 0.33 µs is not attributed** (it would hold the render step's excess over PostgreSQL's client path, which was not measured). The split is derived by subtraction across two statements and two windows (this window's key-range idle, PostgreSQL's attribution figures and its scenario cell), not measured. For `bar-range` (nine columns, a key range, 3.57 against 3.23 µs per row, a gap of 0.34 µs) the engine-side term was not measured at nine columns. Before the fix the gap on that symbol history was 5.46 µs per row (9.54 against 4.08); the fix removed 4.70 µs per row of it on the scenario path (86 %), and the non-overlap was and is part of the 0.76 µs that remains.
 
 3. **No limit was found for the many-row shapes**; none was sought: they are serial single-connection reads, bounded by the client's per-row work and now by the engine's non-overlapped reply, not by a resource.
-4. **Insights about the engine.** The engine's own cost of a returned row is 0.42 to 0.45 µs of server CPU (new client and old, this window), flat; everything else a scenario driver pays per row is Python. The decoder fix halves the
-   driver's per-row cost and leaves the engine's term exactly where it was (0.42 µs of wall that is not overlapped), which is why that term is now 9 % of a returned row (0.42 of 4.74 µs) instead of 4.9 % of the old client's 9.25 µs.
+4. **Insights about the engine.** The engine's own cost of a returned row on a key range is 0.42 µs of server CPU (new client and old, this window), flat; everything else a scenario driver pays per row is Python. The decoder fix halves the
+   driver's per-row cost and leaves the engine's term exactly where it was (0.42 µs of wall that is not overlapped), which is why that term is now 9 % of a returned row (0.42 of 4.70 µs) instead of 4.5 % of the old client's 9.25 µs.
    Where a result bears on a stated design expectation: `docs/spec/protocol.md`'s 64 KiB batch target and the single-write reply (BN-R7) are chosen for syscall count; this scenario puts the price on them, a reply that cannot overlap
    server and client, at 0.42 µs per row of a 12-column read, and that price is the largest term the engine still owns on a many-row read. The join planner's payoff, which a 6 µs-per-row decoder hid, is re-read in section 6.
 
@@ -484,18 +484,18 @@ Per statement, median of three repeats (spread in brackets):
 
 | rows returned | mode | KDS old client: wall / stmt (spread) | KDS new client: wall / stmt (spread) | new / old | KDS new client CPU / stmt | server CPU / stmt (new) |
 |---|---|---|---|---|---|---|
-| 1 | values | 80.1 µs (0 %) | 76.8 µs (2 %) | 0.96x | 44.1 µs | 32.2 µs |
-| 1 | send | 83.5 µs (1 %) | 83.8 µs (0 %) | 1.00x | 51.9 µs | 31.2 µs |
-| 10 | values | 137.1 µs (1 %) | 105.1 µs (1 %) | 0.77x | 68.0 µs | 36.7 µs |
-| 10 | send | 169.7 µs (1 %) | 127.0 µs (0 %) | 0.75x | 90.6 µs | 36.2 µs |
-| 100 | values | 693.2 µs (1 %) | 388.4 µs (1 %) | 0.56x | 308.7 µs | 79.5 µs |
-| 100 | send | 985.8 µs (2 %) | 540.9 µs (1 %) | 0.55x | 461.8 µs | 79.5 µs |
-| 1,000 | values | 6,227.9 µs (1 %) | 3,214.5 µs (0 %) | 0.52x | 2,765.4 µs | 468.8 µs |
-| 1,000 | send | 9,107.8 µs (0 %) | 4,683.6 µs (0 %) | 0.51x | 4,242.2 µs | 479.7 µs |
-| 10,000 | values | 63,182.6 µs (1 %) | 32,150.1 µs (1 %) | 0.51x | 27,926.6 µs | 4,562.3 µs |
-| 10,000 | send | 92,494.6 µs (2 %) | 47,083.8 µs (1 %) | 0.51x | 42,766.9 µs | 4,730.6 µs |
-| 60,480 | values | 407,250.2 µs (0 %) | 222,400.4 µs (0 %) | 0.55x | 195,466.5 µs | 29,494.9 µs |
-| 60,480 | send | 590,145.6 µs (0 %) | 318,365.9 µs (0 %) | 0.54x | 291,411.1 µs | 30,101.0 µs |
+| 1 row | values | 80.1 µs (0 %) | 76.8 µs (2 %) | 0.96x | 44.1 µs | 32.2 µs |
+| 1 row | send | 83.5 µs (1 %) | 83.8 µs (0 %) | 1.00x | 51.9 µs | 31.2 µs |
+| 10 rows | values | 137.1 µs (1 %) | 105.1 µs (1 %) | 0.77x | 68.0 µs | 36.7 µs |
+| 10 rows | send | 169.7 µs (1 %) | 127.0 µs (0 %) | 0.75x | 90.6 µs | 36.2 µs |
+| 100 rows | values | 693.2 µs (1 %) | 388.4 µs (1 %) | 0.56x | 308.7 µs | 79.5 µs |
+| 100 rows | send | 985.8 µs (2 %) | 540.9 µs (1 %) | 0.55x | 461.8 µs | 79.5 µs |
+| 1,000 rows | values | 6,227.9 µs (1 %) | 3,214.5 µs (0 %) | 0.52x | 2,765.4 µs | 468.8 µs |
+| 1,000 rows | send | 9,107.8 µs (0 %) | 4,683.6 µs (0 %) | 0.51x | 4,242.2 µs | 479.7 µs |
+| 10,000 rows | values | 63,182.6 µs (1 %) | 32,150.1 µs (1 %) | 0.51x | 27,926.6 µs | 4,562.3 µs |
+| 10,000 rows | send | 92,494.6 µs (2 %) | 47,083.8 µs (1 %) | 0.51x | 42,766.9 µs | 4,730.6 µs |
+| 60,480 rows | values | 407,250.2 µs (0 %) | 222,400.4 µs (0 %) | 0.55x | 195,466.5 µs | 29,494.9 µs |
+| 60,480 rows | send | 590,145.6 µs (0 %) | 318,365.9 µs (0 %) | 0.54x | 291,411.1 µs | 30,101.0 µs |
 
 Latency distribution of one statement, pooled over the three repeats (n = statements):
 

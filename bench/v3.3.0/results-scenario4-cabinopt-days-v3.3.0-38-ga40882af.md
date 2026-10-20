@@ -72,9 +72,7 @@ p50 and derived qps (from the mean) per group, day and arm for **run A**; the la
 **What is resolved and what is not.** The `pk` control touches no Cabin and returns one row; its on-over-off ratio ranges 0.98x to 1.09x across days and runs,
 so **a ratio below about 1.10x is not a finding**, as in the morning. That puts `tape200` at the floor (the Cabin does not help a 200-row walk: 0.98x to 1.09x), `tape1k` over it by a little and `tape10k` and `board` clear of it.
 
-**Against the morning (now over morning, derived qps (1,000,000 / mean µs) per arm, run A and run B):**
-
-Derived qps now over the morning (same binary, old client), per arm, run A and run B:
+**Against the morning.** Derived qps (1,000,000 / mean µs) now over the morning (same binary, old client), per arm, run A and run B:
 
 | group | day | off A | on A | declared A | off B | on B | declared B |
 |---|---|---|---|---|---|---|---|
@@ -311,32 +309,32 @@ Three runs of the driver (each three servers, one run A) per client, old, new, o
 
 | group (day 1) | arm | old: 1 / 2 / 3 | old median | spread | new: 1 / 2 / 3 | new median | spread | new over old | read |
 |---|---|---|---|---|---|---|---|---|---|
-| board | off | 2,353 / 2,303 / 2,364 | 2,353 qps | 2.6 % | 2,530 / 2,561 / 2,514 | 2,530 qps | 1.9 % | 1.07x (+7.5 %) | **finding** |
-| board | on | 4,149 / 4,237 / 4,172 | 4,172 qps | 2.1 % | 5,076 / 5,063 / 4,998 | 5,063 qps | 1.6 % | 1.21x (+21.4 %) | **finding** |
-| board | declared | 3,613 / 3,564 / 3,559 | 3,564 qps | 1.5 % | 4,175 / 4,132 / 4,225 | 4,175 qps | 2.2 % | 1.17x (+17.2 %) | **finding** |
-| tape200 | off | 9,461 / 8,921 / 9,488 | 9,461 qps | 6.0 % | 9,634 / 10,132 / 9,398 | 9,634 qps | 7.6 % | 1.02x (+1.8 %) | inside spread |
-| tape200 | on | 8,673 / 9,166 / 9,346 | 9,166 qps | 7.3 % | 10,905 / 10,776 / 10,582 | 10,776 qps | 3.0 % | 1.18x (+17.6 %) | **finding** |
-| tape200 | declared | 9,643 / 9,166 / 8,945 | 9,166 qps | 7.6 % | 10,846 / 10,823 / 11,261 | 10,846 qps | 4.0 % | 1.18x (+18.3 %) | **finding** |
-| tape1k | off | 7,962 / 7,553 / 7,680 | 7,680 qps | 5.3 % | 8,197 / 8,425 / 7,930 | 8,197 qps | 6.0 % | 1.07x (+6.7 %) | **finding** |
-| tape1k | on | 8,584 / 8,636 / 8,811 | 8,636 qps | 2.6 % | 10,288 / 10,194 / 9,718 | 10,194 qps | 5.6 % | 1.18x (+18.0 %) | **finding** |
-| tape1k | declared | 8,993 / 8,613 / 8,518 | 8,613 qps | 5.5 % | 10,471 / 9,785 / 10,406 | 10,406 qps | 6.6 % | 1.21x (+20.8 %) | **finding** |
-| tape10k | off | 2,731 / 2,676 / 2,731 | 2,731 qps | 2.0 % | 2,795 / 2,796 / 2,702 | 2,795 qps | 3.4 % | 1.02x (+2.3 %) | inside spread |
-| tape10k | on | 5,155 / 5,408 / 5,459 | 5,408 qps | 5.6 % | 6,042 / 5,848 / 5,811 | 5,848 qps | 4.0 % | 1.08x (+8.1 %) | **finding** |
-| tape10k | declared | 4,585 / 4,462 / 4,472 | 4,472 qps | 2.7 % | 4,943 / 4,658 / 4,897 | 4,897 qps | 5.8 % | 1.10x (+9.5 %) | **finding** |
-| pk | off | 14,025 / 13,624 / 14,728 | 14,025 qps | 7.9 % | 12,484 / 12,594 / 12,469 | 12,484 qps | 1.0 % | 0.89x (-11.0 %) | **finding** |
-| pk | on | 13,369 / 13,514 / 14,085 | 13,514 qps | 5.3 % | 14,144 / 13,736 / 13,089 | 13,736 qps | 7.7 % | 1.02x (+1.6 %) | inside spread |
-| pk | declared | 14,684 / 13,643 / 13,495 | 13,643 qps | 8.7 % | 14,684 / 13,333 / 14,577 | 14,577 qps | 9.3 % | 1.07x (+6.9 %) | inside spread |
-| open | off | 817 / 823 / 778 | 817 qps | 5.5 % | 735 / 805 / 865 | 805 qps | 16.1 % | 0.99x (-1.5 %) | inside spread |
-| open | on | 801 / 804 / 848 | 804 qps | 5.9 % | 805 / 813 / 848 | 813 qps | 5.4 % | 1.01x (+1.0 %) | inside spread |
-| open | declared | 796 / 810 / 831 | 810 qps | 4.2 % | 837 / 783 / 795 | 795 qps | 6.9 % | 0.98x (-1.8 %) | inside spread |
-| close | off | 679 / 685 / 667 | 679 qps | 2.7 % | 792 / 788 / 822 | 792 qps | 4.2 % | 1.17x (+16.7 %) | **finding** |
-| close | on | 669 / 683 / 659 | 669 qps | 3.6 % | 812 / 796 / 809 | 809 qps | 2.0 % | 1.21x (+20.9 %) | **finding** |
-| close | declared | 676 / 684 / 671 | 676 qps | 1.9 % | 812 / 795 / 792 | 795 qps | 2.5 % | 1.18x (+17.6 %) | **finding** |
+| board | off | 2,353 / 2,303 / 2,364 qps | 2,353 qps | 2.6 % | 2,530 / 2,561 / 2,514 qps | 2,530 qps | 1.9 % | 1.07x (+7.5 %) | **finding** |
+| board | on | 4,149 / 4,237 / 4,172 qps | 4,172 qps | 2.1 % | 5,076 / 5,063 / 4,998 qps | 5,063 qps | 1.6 % | 1.21x (+21.4 %) | **finding** |
+| board | declared | 3,613 / 3,564 / 3,559 qps | 3,564 qps | 1.5 % | 4,175 / 4,132 / 4,225 qps | 4,175 qps | 2.2 % | 1.17x (+17.2 %) | **finding** |
+| tape200 | off | 9,461 / 8,921 / 9,488 qps | 9,461 qps | 6.0 % | 9,634 / 10,132 / 9,398 qps | 9,634 qps | 7.6 % | 1.02x (+1.8 %) | inside spread |
+| tape200 | on | 8,673 / 9,166 / 9,346 qps | 9,166 qps | 7.3 % | 10,905 / 10,776 / 10,582 qps | 10,776 qps | 3.0 % | 1.18x (+17.6 %) | **finding** |
+| tape200 | declared | 9,643 / 9,166 / 8,945 qps | 9,166 qps | 7.6 % | 10,846 / 10,823 / 11,261 qps | 10,846 qps | 4.0 % | 1.18x (+18.3 %) | **finding** |
+| tape1k | off | 7,962 / 7,553 / 7,680 qps | 7,680 qps | 5.3 % | 8,197 / 8,425 / 7,930 qps | 8,197 qps | 6.0 % | 1.07x (+6.7 %) | **finding** |
+| tape1k | on | 8,584 / 8,636 / 8,811 qps | 8,636 qps | 2.6 % | 10,288 / 10,194 / 9,718 qps | 10,194 qps | 5.6 % | 1.18x (+18.0 %) | **finding** |
+| tape1k | declared | 8,993 / 8,613 / 8,518 qps | 8,613 qps | 5.5 % | 10,471 / 9,785 / 10,406 qps | 10,406 qps | 6.6 % | 1.21x (+20.8 %) | **finding** |
+| tape10k | off | 2,731 / 2,676 / 2,731 qps | 2,731 qps | 2.0 % | 2,795 / 2,796 / 2,702 qps | 2,795 qps | 3.4 % | 1.02x (+2.3 %) | inside spread |
+| tape10k | on | 5,155 / 5,408 / 5,459 qps | 5,408 qps | 5.6 % | 6,042 / 5,848 / 5,811 qps | 5,848 qps | 4.0 % | 1.08x (+8.1 %) | **finding** |
+| tape10k | declared | 4,585 / 4,462 / 4,472 qps | 4,472 qps | 2.7 % | 4,943 / 4,658 / 4,897 qps | 4,897 qps | 5.8 % | 1.10x (+9.5 %) | **finding** |
+| pk | off | 14,025 / 13,624 / 14,728 qps | 14,025 qps | 7.9 % | 12,484 / 12,594 / 12,469 qps | 12,484 qps | 1.0 % | 0.89x (-11.0 %) | **finding** |
+| pk | on | 13,369 / 13,514 / 14,085 qps | 13,514 qps | 5.3 % | 14,144 / 13,736 / 13,089 qps | 13,736 qps | 7.7 % | 1.02x (+1.6 %) | inside spread |
+| pk | declared | 14,684 / 13,643 / 13,495 qps | 13,643 qps | 8.7 % | 14,684 / 13,333 / 14,577 qps | 14,577 qps | 9.3 % | 1.07x (+6.9 %) | inside spread |
+| open | off | 817 / 823 / 778 qps | 817 qps | 5.5 % | 735 / 805 / 865 qps | 805 qps | 16.1 % | 0.99x (-1.5 %) | inside spread |
+| open | on | 801 / 804 / 848 qps | 804 qps | 5.9 % | 805 / 813 / 848 qps | 813 qps | 5.4 % | 1.01x (+1.0 %) | inside spread |
+| open | declared | 796 / 810 / 831 qps | 810 qps | 4.2 % | 837 / 783 / 795 qps | 795 qps | 6.9 % | 0.98x (-1.8 %) | inside spread |
+| close | off | 679 / 685 / 667 qps | 679 qps | 2.7 % | 792 / 788 / 822 qps | 792 qps | 4.2 % | 1.17x (+16.7 %) | **finding** |
+| close | on | 669 / 683 / 659 qps | 669 qps | 3.6 % | 812 / 796 / 809 qps | 809 qps | 2.0 % | 1.21x (+20.9 %) | **finding** |
+| close | declared | 676 / 684 / 671 qps | 676 qps | 1.9 % | 812 / 795 / 792 qps | 795 qps | 2.5 % | 1.18x (+17.6 %) | **finding** |
 
 **The client moves what it can move, arm by arm.** `board` 1.07x (`off`), 1.21x (`on`), 1.17x (`declared`); `tape200`/`tape1k` served arms 1.18x to 1.21x; `close` 1.17x to 1.21x; `tape10k` `off` 1.02x
 (the walk dominates). `open` is flat (0.98x to 1.01x). **The `pk` control is not flat in the `off` arm: 0.89x** (14,025 against 12,484 qps, spreads 7.9 % and 1.0 %),
-while its `on` and `declared` arms read +1.6 % and +6.9 % inside their spreads. A -11 % in a one-row statement that the change cannot reach is this scenario's noise floor, so the `board` `off` figure of +7.5 % (spreads 2.6 % and 1.9 %), smaller than the control's own excursion, is read as
-"in the direction the other arms show", not as a separate result. The matrix runs (section 3) have no such excursion in their `pk` rows (`off` 1.00x, six days).
+while its `on` and `declared` arms read +1.6 % and +6.9 % inside their spreads. A -11 % in a one-row statement that the change cannot reach is this scenario's noise floor, so the `board` `off` figure of +7.5 % (spreads 2.6 % and 1.9 %), and likewise `tape1k` `off` (+6.7 %), `tape10k` `on` (+8.1 %) and `declared` (+9.5 %), each smaller than the control's own excursion, are read as
+"in the direction the other arms show", not as separate results. The matrix runs (section 3) show excursions of the same size in their `pk` rows against the morning (`off` 0.98x to 1.11x over six days, `declared` 0.89x on run A day 1).
 
 ## 9. Against PostgreSQL 18.6 (the morning's run, reused)
 
