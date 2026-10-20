@@ -1,0 +1,6 @@
+range-1 expected 1 got 1 OK
+range-100 expected 100 got 100 OK
+range-1000 expected 1000 got 1000 OK
+range-10000 expected 10000 got 10000 OK
+range-60480 expected 60480 got 60480 OK
+filter-sym3 expected 7560 got 7560 OK

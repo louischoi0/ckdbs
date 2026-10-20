@@ -1,0 +1,10 @@
+2026-10-20T11:29:22Z master=none alive=n status_age=121s status=2026-10-20T11:27:21Z ALL DONE
+2026-10-20T11:29:22Z ORPHAN: master gone, restarting
+2026-10-20T11:30:22Z master=298980 alive=y status_age=28s status=2026-10-20T11:29:54Z p1-A-drain pass 1
+2026-10-20T11:31:22Z master=298980 alive=y status_age=28s status=2026-10-20T11:30:54Z p1-B-drain pass 1
+2026-10-20T11:32:22Z master=298980 alive=y status_age=27s status=2026-10-20T11:31:55Z p2-B-drain pass 1
+2026-10-20T11:33:22Z master=298980 alive=y status_age=26s status=2026-10-20T11:32:56Z p2-A-drain pass 1
+2026-10-20T11:34:22Z master=298980 alive=y status_age=26s status=2026-10-20T11:33:56Z p3-A-drain pass 1
+2026-10-20T11:35:22Z master=298980 alive=y status_age=26s status=2026-10-20T11:34:56Z p3-B-drain pass 1
+2026-10-20T11:36:22Z master=298980 alive=y status_age=5s status=2026-10-20T11:36:17Z p3-B-drain-pass1 quiet check 5/6: busy=1%
+2026-10-20T11:37:22Z drain.done seen, watchdog exits
