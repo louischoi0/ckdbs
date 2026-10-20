@@ -1,5 +1,7 @@
 # Work order BR — backup and restore: a volume-snapshot path and a base-backup-plus-archive path, carried to semi-production
 
+**CLOSED 2026-10-20 on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §3).
+
 **Written 2026-10-12** in the main checkout on `main` at `dbff867b`
 (`v2.7.0-907-gdbff867b`), on the operator's words W0-W2
 (`raft-marks-2026-10-12.md` §14), and pushed to `main` as a document-only

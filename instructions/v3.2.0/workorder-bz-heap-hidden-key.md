@@ -1,5 +1,7 @@
 # Work order BZ — the heap redefined: a btree relation with no tuple key column
 
+**CLOSED 2026-10-20 on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §3).
+
 Written 2026-10-17 on `worktree-by-heap-redefine` from `e1333a77`
 (`v3.2.0-150-ge1333a77`), on the operator's words, recorded in English:
 

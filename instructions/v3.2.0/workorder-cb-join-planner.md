@@ -1,5 +1,7 @@
 # Work order CB — a join planner: the join order, the build side, and range bounds through a join key
 
+**CLOSED 2026-10-20 on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §3).
+
 Written and opened 2026-10-18 on `worktree-cb-join-planner` from `7e256216`
 (`v3.2.0-172-g7e256216`), on the operator's words, recorded in English
 (`raft-marks-2026-10-18.md` §1):
