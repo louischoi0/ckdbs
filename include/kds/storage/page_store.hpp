@@ -388,11 +388,10 @@ public:
     virtual void UnpinUnlatchedFrame(PageId page_id) noexcept { (void)page_id; }
     virtual void MarkFrameDirty(PageId page_id) noexcept { (void)page_id; }
 
-    // Outstanding pins across the store, for the suspend audit
-    // (exec::InstallSuspendAudit): "a coroutine may not suspend holding a
-    // pin" is mechanically `live_pins() == 0` at the suspension point. A
+    // Outstanding pins across the store, on every thread that pins it. A
     // store whose PinFrame is the no-op above counts nothing and answers
-    // 0, which is honest - it has no reclaim for a pin to hold off.
+    // 0, which is honest - it has no reclaim for a pin to hold off. Not the
+    // suspend audit's question (`PinsHeldOnThisThread()`).
     virtual std::size_t live_pins() const noexcept { return 0; }
 
     // `PinAllowance`'s seam. A store that checks no ceiling ignores it.
@@ -849,6 +848,12 @@ private:
 // Whether this thread is inside a no-refuse window on any store - what the
 // executor's suspend audit asks, since no window may hold a suspension point.
 bool NoRefuseWindowOpenOnThisThread() noexcept;
+
+// Pins this thread holds, across every store - the suspend audit's pin
+// half. Per thread, unlike `live_pins()`, so a pin another core holds on the
+// one pool is never counted as this thread's. A store whose PinFrame is a
+// no-op counts nothing here either.
+std::size_t PinsHeldOnThisThread() noexcept;
 
 // Drain mode for the life of the guard (`PageStore`'s note).
 class DrainOnPressure {

@@ -185,9 +185,10 @@
 //     reclaim under whatever page the write holds, and by the delete-mark
 //     purge under a catalog page; nothing holding it asks for a page
 //     latch, and no path holds a PageRef at commit.
-//   - **Never across a park**: the suspend audit's `live_pins() != 0`
-//     covers it in debug builds, recording rather than failing, because
-//     the pin and the latch share a handle; nothing covers it in release.
+//   - **Never across a park**: the suspend audit's
+//     `PinsHeldOnThisThread() != 0` covers it in debug builds, recording
+//     rather than failing, because the pin and the latch share a handle;
+//     nothing covers it in release.
 //   - **Page against page: the tree's own shapes are the order.** Two
 //     page latches are held at once on every split (the old leaf and its
 //     new sibling), every catalog chain growth (the old tail and the new

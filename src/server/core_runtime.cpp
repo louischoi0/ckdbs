@@ -460,21 +460,15 @@ void CoreRuntime::Run() {
 
     // Per core, on the thread that will run the statements - the audit's
     // counters are core-local (exec/step_vm.cpp), so installing it once on
-    // the startup thread would leave every worker unguarded. The core's
-    // own store rides along for the pin half of the rule (P4d-3).
-    // **The pin half of the audit is this core's only where the store is**
-    // (AM-S2 step 3): on a borrowed pool `live_pins()` is the instance's sum,
-    // so a peer would record a park-with-pin that never happened. The
-    // coroutine half is unaffected.
-    exec::InstallSuspendAudit(owned_store_ != nullptr ? store_ : nullptr);
+    // the startup thread would leave every worker unguarded. Its pin half
+    // counts this thread's pins, so a core borrowing core 0's pool is
+    // audited whole too.
+    exec::InstallSuspendAudit();
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor running");
     }
     scheduler_->Run();
-    // The audit's store pointer must not outlive the store: this thread
-    // may outlive the runtime, and a coroutine polled on it afterwards
-    // would hand the (debug-only) audit a freed store.
     exec::UninstallSuspendAudit();
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor stopped");

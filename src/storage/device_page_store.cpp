@@ -666,12 +666,14 @@ struct FillMode {
 };
 thread_local FillMode t_fill;
 // Pins this thread holds, across every store: drain mode writes back only
-// when it is zero (`ReserveFrame`). `CountPin` and `UncountPin` move it, and
-// a pin is taken and dropped on the thread that holds the handle.
+// when it is zero (`ReserveFrame`), and the suspend audit trips when it is
+// not (`PinsHeldOnThisThread`). `CountPin` and `UncountPin` move it, and a
+// pin is taken and dropped on the thread that holds the handle.
 thread_local std::size_t t_pins_here = 0;
 }  // namespace
 
 bool NoRefuseWindowOpenOnThisThread() noexcept { return t_fill.window_depth > 0; }
+std::size_t PinsHeldOnThisThread() noexcept { return t_pins_here; }
 
 StatusOr<std::uint32_t> DevicePageStore::ReserveFrame() {
     AssertOrderBeforeFrames("ReserveFrame");
