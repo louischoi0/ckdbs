@@ -18,18 +18,9 @@ Comparator (cross-version): `bench/v3.1.0/results-scenario3-library-v3.1.0-30-gc
 | Field | Value |
 |---|---|
 | Date and time | 2026-10-20; KDS cells 03:58:09 to 04:08:43 UTC (72 cells: 2 core counts x 3 sizes x 2 index modes x 3 runs); PostgreSQL cells 04:23:14 to 04:32:06 UTC (18 cells); join-order probe 04:34:04 to 04:44:03 UTC (8 cells) |
-| Worktree / branch | `bench-scenarios-1-4` / `bench-scenarios-1-4` (the main checkout is not used) |
-| HEAD | `9682b725`, `git describe --tags` = `v3.3.0-33-g9682b725` ("Merge fix-fk-self-reference-refused: a self-referencing foreign key is refused NotImplemented at both doors"), committed 2026-10-20 03:33:40 UTC; equal to `origin/main` when the run began |
-| Tree cleanliness | Clean (`git status` empty) at the start and at the end of the measurement; nothing under `src/`, `include/`, `tools/` or `CMakeLists.txt` was edited, and the drivers are the unmodified `tools/` scripts. `build-release/` is ignored by git. The results files under `bench/v3.3.0/` are uncommitted additions until the commit that carries them |
-| Binary provenance | `build-release/kds_server`, built in this worktree at HEAD with `cmake -DCMAKE_BUILD_TYPE=Release` (`CMakeCache.txt`: `Release`), target `kds_server`, `-j4`, finished 2026-10-20 03:36:57 UTC, 3 min 17 s **after** the HEAD commit, so the binary is not older than the engine. Copied to `/home/cdkbs/bench-runs/v3.3.0-33-g9682b725/kds_server` before the first cell; **copy sha256 `7532bd14afb2acd4f9e48cac00732f899cb8e59b26fa1d9b982047fc89272f2a`** (equal to the source binary's, checked again after the run); source binary mtime 2026-10-20 03:36:57.38 UTC. Every server started from the copy; no build ran during any reported cell (the only build of the session finished before the first cell) |
 | Device | data files under `/home/cdkbs/bench-runs/v3.3.0-33-g9682b725/data/`, `/dev/root`, `ext4` (`df -T`); never tmpfs. A fresh data file per cell (per server in scenario 4), deleted when the cell finished. The PostgreSQL cluster (`/home/cdkbs/pg-bench-ba`) is on the same device |
-| Build type | Release |
-| Host | 8 logical CPUs, AMD EPYC 9V74 (1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure, a shared development VM; `/` was 95 % full (14 GB free) |
-| Time budget | **Budget lifted by the operator for this run** (order of 2026-10-20: "lift the budget, re-measure PG too"). Every cell of the v3.1.0 rebaseline's plan ran, with its repeat counts, and PostgreSQL was re-measured fresh in the same window. Nothing was cut |
-| Prior run of this shape | `bench/v3.1.0/results-scenario3-library-v3.1.0-30-gcd7c7c4e.md` (KDS binary `cd7c7c4e`, sha256 `4752f562...`, measured 2026-10-13 23:38 UTC to 2026-10-14 01:39 UTC). The two commits are 240 commits apart (`git rev-list --count cd7c7c4e..HEAD`), 101 of them first-parent and 23 of those merges, with 178 files changed under `src/`, `include/` and `CMakeLists.txt` (milestones BV to CD among them), so **every KDS delta below is cross-version and attributable to no single change**. The host and its device state are also a week-old comparison: v3.1.0's cells ran on the same VM, about 6.2 days earlier |
-| Server config | `log_level = warn`, `buffer_pool_frames = 65536` (required since BE), `cores` and `durability` per cell, all else default. Ports 15604 to 15607, 15610, 15620, 15651 to 15653, never 15432 (held by an unrelated `kds_server`) |
-| Quiet host | before each cell a gate waited for no `cc1plus` / `cmake --build` / `ctest` / `kds_tests` process and at most 8 % busy CPU over 3 s (`lib.sh` in the archive); `/proc/loadavg` and the process list are in each cell's precheck. **A 1-second monitor ran through the whole run** (`monitor.log`: 1,500+ samples of foreign processes above 10 % CPU) and every cell was checked against it after it ended (`cellvalid.py`): a build/test process or a foreign process at 50 % CPU or more inside the window discards and re-runs the cell. **No cell was discarded**: the monitor saw only a `claude` process at 11 to 23 % of one CPU in 23 samples of the 1,518, all outside the 50 % line. One batch of PostgreSQL cells failed on a connection error and is listed under contamination below |
-| PostgreSQL | PostgreSQL 18.6 (`/home/cdkbs/pg-bench-ba`, port 15434), defaults (`shared_buffers = 128MB`, `synchronous_commit = on`, `fsync = on`, `max_wal_size = 1GB`), not started or stopped by this run. **Re-measured fresh in this window** (the twin runs follow the KDS cells, never concurrent with them) |
+| Binary | `kds_server` copy in `/home/cdkbs/bench-runs/v3.3.0-33-g9682b725/`, **sha256 `7532bd14afb2acd4f9e48cac00732f899cb8e59b26fa1d9b982047fc89272f2a`** (equal to the source binary's), source mtime 2026-10-20 03:36:57.38 UTC, built at `9682b725` as Release; provenance in the summary's Stamp |
+| Everything else | commit `9682b725` (`v3.3.0-33-g9682b725`), tree clean, Release build, host, server config, quiet-host gate, PostgreSQL setup and the v3.1.0 comparator are stamped once in the summary (`summary-scenarios-v3.3.0-33-g9682b725.md`, "Stamp"). **Budget lifted by the operator for this run**; nothing was cut |
 | Driver | **unmodified** `tools/scenario3_library.py`; exit 0 in every cell; `verify_problems` empty in 36 of 36 KDS cells |
 
 ## 2. What was run
@@ -38,7 +29,7 @@ Comparator (cross-version): `bench/v3.1.0/results-scenario3-library-v3.1.0-30-gc
 |---|---|
 | cores | 1, 8 (`group` durability; reads only, so durability does not enter) |
 | index mode | `none` (the driver creates no index) and `all` (it creates the indexes each shape can use, after the load); `--server-indexes on` |
-| rows (rule 9) | `--loans 200`, `1000`, `10000`; users, books and reservations scale with it (`sizes` in each JSON: at 200 loans 40 / 40 / 100 relation rows, at 10,000 loans 2,000 / 2,000 / 5,000) |
+| rows | `--loans 200`, `1000`, `10000`; users, books and reservations scale with it (`sizes` in each JSON: at 200 loans 40 / 40 / 100 relation rows, at 10,000 loans 2,000 / 2,000 / 5,000) |
 | runs | 3 per cell (`r2-`, `r3-` prefixes); a fresh server and data file per cell |
 | shapes | 12, 200 operations each, serial on one connection, so the **qps is derived**: 1,000,000 / mean µs |
 | PostgreSQL | `pg_scenario3_library.py` at the same `--loans` and `--index-mode`, `--seed 1`, 3 runs per cell, no `cores` axis |
@@ -48,9 +39,7 @@ Cut: nothing. Throughput below is derived qps (1,000,000 / mean µs), the median
 
 ## 3. Throughput
 
-**What counts as a finding.** Each KDS cell was run three times; the spread (max minus min over the median, shown beside every median) is this run's own noise floor. A delta between two medians that is smaller than the larger of the two spreads is not a finding, and the cross-version columns are held to the same rule with v3.1.0's spread. Cells whose spread is above 20 % (most of the 200- and 1,000-loan `cores = 1` cells, where one run in three falls into a slow mode, section 10) are reported but carry no delta claim.
-
-`cores = 1` and `cores = 8`:
+Findings are read by the rule stated once in the summary (`summary-scenarios-v3.3.0-33-g9682b725.md`, "What counts as a finding"); a cell whose spread is above 20 % is reported and carries no delta claim. At 200 and 1,000 loans most cells carry 20 % to 43 % spreads (one run in three falls into a slow mode, section 10).
 
 `cores = 1`:
 
@@ -196,8 +185,8 @@ ANALYZE of the three join shapes at 10,000 loans, unindexed and indexed (`pl-s3-
 
 | shape | unindexed plan | `reordered` | examined | indexed plan |
 |---|---|---|---|---|
-| `join-no-literal` | `Range users` [1, 16] -> `Scan loans`, **`build on=col1`**, `inner_built=1`, `build_rows=79`, `build_probes=15` (order = written, est 0:16 1:91, gen 1) | no | 10,106 (pages 159) | `Range users` -> `IndexProbe loans` |
-| `exists-correlated` | `Range users` [1, 20] with a correlated `EXISTS` sub-chain `Scan loans` (`build on=col1`, `inner_built=0`, `build_rows=4,603`, `corr_scans=3`) | n/a (one outer relation) | 4,652 (pages 61) | `Range users` -> `IndexProbe loans` |
+| `join-no-literal` | `Range users` [1, 16] -> `Scan loans`, **`build on=col1`**, `inner_built=1`, `build_rows=79`, `build_probes=15` (order = written, est 0:16 1:91, gen 1) | no | 10,106 rows (159 pages) | `Range users` -> `IndexProbe loans` |
+| `exists-correlated` | `Range users` [1, 20] with a correlated `EXISTS` sub-chain `Scan loans` (`build on=col1`, `inner_built=0`, `build_rows=4,603`, `corr_scans=3`) | n/a (one outer relation) | 4,652 rows (61 pages) | `Range users` -> `IndexProbe loans` |
 | `join-loan-user` | not ANALYZEd by the driver (its plan is not recorded) | - | - | - |
 
 The planner priced both orders of `join-no-literal`, kept the written one (`switch=1`), and the build on the inner `Scan` is what removed the per-outer-row scan: 10,074 rows examined for a 16-row outer
@@ -368,8 +357,6 @@ returned it is the opposite way (`books-by-genre`, 125 rows: 38.8 ns per extra r
 PostgreSQL is the floor: it answers "is the engine in the right league" and nothing finer. The twin ran after the KDS cells, three runs per cell, at its defaults (`shared_buffers = 128MB`, `synchronous_commit = on`); no
 `cores` axis. Ratio of KDS `cores = 1` median qps to PostgreSQL's median qps (above 1.00x = KDS faster), then PostgreSQL's own medians:
 
-Ratio of KDS `cores = 1` median qps over PostgreSQL 18.6 median qps (fresh, same window):
-
 | shape | n=200 none | n=200 all | n=1,000 none | n=1,000 all | n=10,000 none | n=10,000 all |
 |---|---|---|---|---|---|---|
 | pk-user | 0.72x | 0.93x | 0.99x | 0.70x | 0.98x | 1.00x |
@@ -421,85 +408,80 @@ statements of 70 to 130 µs, 14 to 26 ms, and one slow run in three (a stall of 
 cell where the control moves is a cell where the host moved, and **no comparison in the small columns, cross-version or against PostgreSQL, is read as a finding**. This is the same behaviour section 10 of the v3.1.0 file describes (its
 "slow mode").
 
-**Contamination.** No KDS cell was discarded. The PostgreSQL batch of this scenario failed on its first attempt, six cells in 3 to 4 seconds each, on `role "ec2-user" does not exist` (the twin's `--user` default); the master and the watchdog were
+Contamination: none in the KDS cells; the PostgreSQL re-run is described in the summary ("Contamination").
 stopped by recorded PID, the six attempts are in `contaminated/pg-s3-no-user-attempt/` of the run archive, the command line got `--user cdkbs` and the cells were re-run in the same window. All 18 PostgreSQL cells in this file are the re-run.
 
 Per-cell host stamps:
 
 | cell | start (UTC) | end (UTC) | load average before (1 / 5 / 15 min) | gate wait | build or test process | foreign samples >= 10 % CPU | exit |
 |---|---|---|---|---|---|---|---|
-| `s3-c1-n200-none` | 03:58:12 | 03:58:13 | 0.88 / 0.98 / 1.48 | 0 s | none | 0 of 3 samples | 0 |
-| `s3-c1-n200-all` | 03:58:20 | 03:58:22 | 0.75 / 0.95 / 1.46 | 0 s | none | 0 of 3 samples | 0 |
-| `s3-c1-n1000-none` | 03:58:29 | 03:58:33 | 0.71 / 0.94 / 1.45 | 0 s | none | 0 of 4 samples | 0 |
-| `s3-c1-n1000-all` | 03:58:40 | 03:58:44 | 0.60 / 0.91 / 1.44 | 0 s | none | 0 of 4 samples | 0 |
-| `s3-c1-n10000-none` | 03:58:51 | 03:59:17 | 0.66 / 0.91 / 1.43 | 0 s | none | 1 of 14 samples | 0 |
-| `s3-c1-n10000-all` | 03:59:24 | 03:59:51 | 0.71 / 0.90 / 1.41 | 0 s | none | 3 of 15 samples | 0 |
-| `s3-c8-n200-none` | 03:59:58 | 04:00:00 | 1.31 / 1.05 / 1.44 | 0 s | none | 0 of 3 samples | 0 |
-| `s3-c8-n200-all` | 04:00:07 | 04:00:08 | 1.25 / 1.05 / 1.44 | 0 s | none | 0 of 2 samples | 0 |
-| `s3-c8-n1000-none` | 04:00:15 | 04:00:19 | 1.06 / 1.01 / 1.42 | 0 s | none | 0 of 4 samples | 0 |
-| `s3-c8-n1000-all` | 04:00:26 | 04:00:30 | 0.97 / 1.00 / 1.41 | 0 s | none | 0 of 4 samples | 0 |
-| `s3-c8-n10000-none` | 04:00:37 | 04:01:04 | 0.98 / 1.00 / 1.41 | 0 s | none | 0 of 14 samples | 0 |
-| `s3-c8-n10000-all` | 04:01:11 | 04:01:38 | 1.06 / 1.03 / 1.40 | 0 s | none | 0 of 15 samples | 0 |
-| `r2-s3-c1-n200-none` | 04:01:45 | 04:01:47 | 1.02 / 1.02 / 1.39 | 0 s | none | 0 of 3 samples | 0 |
-| `r2-s3-c1-n200-all` | 04:01:54 | 04:01:56 | 0.86 / 0.99 / 1.37 | 0 s | none | 0 of 3 samples | 0 |
-| `r2-s3-c1-n1000-none` | 04:02:03 | 04:02:06 | 0.79 / 0.97 / 1.36 | 0 s | none | 0 of 3 samples | 0 |
-| `r2-s3-c1-n1000-all` | 04:02:13 | 04:02:17 | 0.82 / 0.97 / 1.36 | 0 s | none | 0 of 4 samples | 0 |
-| `r2-s3-c1-n10000-none` | 04:02:24 | 04:02:51 | 0.77 / 0.95 / 1.35 | 0 s | none | 0 of 14 samples | 0 |
-| `r2-s3-c1-n10000-all` | 04:02:58 | 04:03:24 | 1.04 / 1.01 / 1.35 | 0 s | none | 0 of 14 samples | 0 |
-| `r2-s3-c8-n200-none` | 04:03:31 | 04:03:32 | 0.93 / 0.99 / 1.34 | 0 s | none | 0 of 3 samples | 0 |
-| `r2-s3-c8-n200-all` | 04:03:39 | 04:03:41 | 0.79 / 0.95 / 1.32 | 0 s | none | 0 of 3 samples | 0 |
-| `r2-s3-c8-n1000-none` | 04:03:48 | 04:03:52 | 0.72 / 0.94 / 1.31 | 0 s | none | 0 of 4 samples | 0 |
-| `r2-s3-c8-n1000-all` | 04:03:59 | 04:04:03 | 0.63 / 0.91 / 1.30 | 0 s | none | 0 of 4 samples | 0 |
-| `r2-s3-c8-n10000-none` | 04:04:10 | 04:04:37 | 0.53 / 0.88 / 1.28 | 0 s | none | 0 of 14 samples | 0 |
-| `r2-s3-c8-n10000-all` | 04:04:44 | 04:05:10 | 0.81 / 0.91 / 1.28 | 0 s | none | 0 of 14 samples | 0 |
-| `r3-s3-c1-n200-none` | 04:05:17 | 04:05:19 | 0.81 / 0.90 / 1.26 | 0 s | none | 0 of 3 samples | 0 |
-| `r3-s3-c1-n200-all` | 04:05:26 | 04:05:28 | 0.76 / 0.89 / 1.25 | 0 s | none | 0 of 3 samples | 0 |
-| `r3-s3-c1-n1000-none` | 04:05:35 | 04:05:39 | 0.64 / 0.86 / 1.24 | 0 s | none | 0 of 4 samples | 0 |
-| `r3-s3-c1-n1000-all` | 04:05:46 | 04:05:50 | 0.54 / 0.83 / 1.22 | 0 s | none | 0 of 4 samples | 0 |
-| `r3-s3-c1-n10000-none` | 04:05:57 | 04:06:23 | 0.69 / 0.85 / 1.23 | 0 s | none | 0 of 14 samples | 0 |
-| `r3-s3-c1-n10000-all` | 04:06:30 | 04:06:56 | 0.75 / 0.85 / 1.21 | 0 s | none | 0 of 13 samples | 0 |
-| `r3-s3-c8-n200-none` | 04:07:03 | 04:07:05 | 0.98 / 0.90 / 1.21 | 0 s | none | 0 of 4 samples | 0 |
-| `r3-s3-c8-n200-all` | 04:07:12 | 04:07:13 | 0.83 / 0.87 / 1.20 | 0 s | none | 0 of 3 samples | 0 |
-| `r3-s3-c8-n1000-none` | 04:07:21 | 04:07:24 | 0.78 / 0.86 / 1.19 | 0 s | none | 0 of 4 samples | 0 |
-| `r3-s3-c8-n1000-all` | 04:07:31 | 04:07:35 | 0.73 / 0.85 / 1.18 | 0 s | none | 0 of 4 samples | 0 |
-| `r3-s3-c8-n10000-none` | 04:07:42 | 04:08:09 | 0.69 / 0.84 / 1.18 | 0 s | none | 0 of 14 samples | 0 |
-| `r3-s3-c8-n10000-all` | 04:08:16 | 04:08:43 | 0.85 / 0.87 / 1.17 | 0 s | none | 0 of 15 samples | 0 |
-| `pg-s3-n200-none` | 04:23:17 | 04:23:17 | 0.64 / 0.64 / 0.80 | 0 s | none | 0 of 2 samples | 0 |
-| `pg-s3-n200-all` | 04:23:24 | 04:23:25 | 0.54 / 0.61 / 0.79 | 0 s | none | 0 of 3 samples | 0 |
-| `pg-s3-n1000-none` | 04:23:32 | 04:23:35 | 0.50 / 0.60 / 0.79 | 0 s | none | 0 of 4 samples | 0 |
-| `pg-s3-n1000-all` | 04:23:42 | 04:23:45 | 0.49 / 0.60 / 0.78 | 0 s | none | 0 of 3 samples | 0 |
-| `pg-s3-n10000-none` | 04:23:52 | 04:24:18 | 0.57 / 0.61 / 0.79 | 0 s | none | 1 of 14 samples | 0 |
-| `pg-s3-n10000-all` | 04:24:25 | 04:24:50 | 0.71 / 0.66 / 0.79 | 0 s | none | 0 of 14 samples | 0 |
-| `r2-pg-s3-n200-none` | 04:26:57 | 04:26:58 | 0.86 / 0.75 / 0.82 | 0 s | none | 0 of 3 samples | 0 |
-| `r2-pg-s3-n200-all` | 04:27:05 | 04:27:05 | 0.72 / 0.73 / 0.81 | 0 s | none | 0 of 2 samples | 0 |
-| `r2-pg-s3-n1000-none` | 04:27:13 | 04:27:15 | 0.67 / 0.71 / 0.80 | 0 s | none | 0 of 3 samples | 0 |
-| `r2-pg-s3-n1000-all` | 04:27:22 | 04:27:25 | 0.64 / 0.71 / 0.80 | 0 s | none | 0 of 3 samples | 0 |
-| `r2-pg-s3-n10000-none` | 04:27:33 | 04:27:58 | 0.61 / 0.70 / 0.80 | 0 s | none | 0 of 13 samples | 0 |
-| `r2-pg-s3-n10000-all` | 04:28:05 | 04:28:30 | 0.80 / 0.75 / 0.81 | 0 s | none | 0 of 13 samples | 0 |
-| `r3-pg-s3-n200-none` | 04:30:35 | 04:30:36 | 0.85 / 0.83 / 0.83 | 0 s | none | 0 of 3 samples | 0 |
-| `r3-pg-s3-n200-all` | 04:30:43 | 04:30:44 | 0.78 / 0.81 / 0.83 | 0 s | none | 0 of 3 samples | 0 |
-| `r3-pg-s3-n1000-none` | 04:30:51 | 04:30:54 | 0.81 / 0.82 / 0.83 | 0 s | none | 0 of 3 samples | 0 |
-| `r3-pg-s3-n1000-all` | 04:31:01 | 04:31:04 | 1.13 / 0.89 / 0.85 | 0 s | none | 0 of 4 samples | 0 |
-| `r3-pg-s3-n10000-none` | 04:31:11 | 04:31:35 | 0.96 / 0.86 / 0.84 | 0 s | none | 0 of 13 samples | 0 |
-| `r3-pg-s3-n10000-all` | 04:31:42 | 04:32:06 | 1.47 / 1.00 / 0.89 | 0 s | none | 1 of 13 samples | 0 |
-| `pl-s3-planned-none-r1` | 04:34:07 | 04:34:33 | 0.66 / 0.88 / 0.87 | 0 s | none | 0 of 14 samples | 0 |
-| `pl-s3-planned-none-r2` | 04:37:07 | 04:37:33 | 0.91 / 0.94 / 0.91 | 0 s | none | 0 of 14 samples | 0 |
-| `pl-s3-planned-none-r3` | 04:40:07 | 04:40:32 | 1.13 / 1.02 / 0.94 | 0 s | none | 0 of 14 samples | 0 |
-| `pl-s3-planned-all-r1` | 04:43:06 | 04:43:31 | 1.11 / 1.07 / 0.99 | 0 s | none | 0 of 13 samples | 0 |
-| `pl-s3-written-none-r1` | 04:35:37 | 04:36:03 | 1.21 / 0.98 / 0.91 | 0 s | none | 0 of 14 samples | 0 |
-| `pl-s3-written-none-r2` | 04:38:37 | 04:39:02 | 0.98 / 0.98 / 0.92 | 0 s | none | 0 of 13 samples | 0 |
-| `pl-s3-written-none-r3` | 04:41:36 | 04:42:02 | 1.14 / 1.04 / 0.96 | 0 s | none | 0 of 14 samples | 0 |
-| `pl-s3-written-all-r1` | 04:43:38 | 04:44:03 | 1.04 / 1.06 / 0.99 | 0 s | none | 0 of 14 samples | 0 |
+| `s3-c1-n200-none` | 03:58:12 | 03:58:13 | 0.88 / 0.98 / 1.48 | 0 s | none | 0 of 3 samples | exit 0 |
+| `s3-c1-n200-all` | 03:58:20 | 03:58:22 | 0.75 / 0.95 / 1.46 | 0 s | none | 0 of 3 samples | exit 0 |
+| `s3-c1-n1000-none` | 03:58:29 | 03:58:33 | 0.71 / 0.94 / 1.45 | 0 s | none | 0 of 4 samples | exit 0 |
+| `s3-c1-n1000-all` | 03:58:40 | 03:58:44 | 0.60 / 0.91 / 1.44 | 0 s | none | 0 of 4 samples | exit 0 |
+| `s3-c1-n10000-none` | 03:58:51 | 03:59:17 | 0.66 / 0.91 / 1.43 | 0 s | none | 1 of 14 samples | exit 0 |
+| `s3-c1-n10000-all` | 03:59:24 | 03:59:51 | 0.71 / 0.90 / 1.41 | 0 s | none | 3 of 15 samples | exit 0 |
+| `s3-c8-n200-none` | 03:59:58 | 04:00:00 | 1.31 / 1.05 / 1.44 | 0 s | none | 0 of 3 samples | exit 0 |
+| `s3-c8-n200-all` | 04:00:07 | 04:00:08 | 1.25 / 1.05 / 1.44 | 0 s | none | 0 of 2 samples | exit 0 |
+| `s3-c8-n1000-none` | 04:00:15 | 04:00:19 | 1.06 / 1.01 / 1.42 | 0 s | none | 0 of 4 samples | exit 0 |
+| `s3-c8-n1000-all` | 04:00:26 | 04:00:30 | 0.97 / 1.00 / 1.41 | 0 s | none | 0 of 4 samples | exit 0 |
+| `s3-c8-n10000-none` | 04:00:37 | 04:01:04 | 0.98 / 1.00 / 1.41 | 0 s | none | 0 of 14 samples | exit 0 |
+| `s3-c8-n10000-all` | 04:01:11 | 04:01:38 | 1.06 / 1.03 / 1.40 | 0 s | none | 0 of 15 samples | exit 0 |
+| `r2-s3-c1-n200-none` | 04:01:45 | 04:01:47 | 1.02 / 1.02 / 1.39 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r2-s3-c1-n200-all` | 04:01:54 | 04:01:56 | 0.86 / 0.99 / 1.37 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r2-s3-c1-n1000-none` | 04:02:03 | 04:02:06 | 0.79 / 0.97 / 1.36 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r2-s3-c1-n1000-all` | 04:02:13 | 04:02:17 | 0.82 / 0.97 / 1.36 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r2-s3-c1-n10000-none` | 04:02:24 | 04:02:51 | 0.77 / 0.95 / 1.35 | 0 s | none | 0 of 14 samples | exit 0 |
+| `r2-s3-c1-n10000-all` | 04:02:58 | 04:03:24 | 1.04 / 1.01 / 1.35 | 0 s | none | 0 of 14 samples | exit 0 |
+| `r2-s3-c8-n200-none` | 04:03:31 | 04:03:32 | 0.93 / 0.99 / 1.34 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r2-s3-c8-n200-all` | 04:03:39 | 04:03:41 | 0.79 / 0.95 / 1.32 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r2-s3-c8-n1000-none` | 04:03:48 | 04:03:52 | 0.72 / 0.94 / 1.31 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r2-s3-c8-n1000-all` | 04:03:59 | 04:04:03 | 0.63 / 0.91 / 1.30 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r2-s3-c8-n10000-none` | 04:04:10 | 04:04:37 | 0.53 / 0.88 / 1.28 | 0 s | none | 0 of 14 samples | exit 0 |
+| `r2-s3-c8-n10000-all` | 04:04:44 | 04:05:10 | 0.81 / 0.91 / 1.28 | 0 s | none | 0 of 14 samples | exit 0 |
+| `r3-s3-c1-n200-none` | 04:05:17 | 04:05:19 | 0.81 / 0.90 / 1.26 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r3-s3-c1-n200-all` | 04:05:26 | 04:05:28 | 0.76 / 0.89 / 1.25 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r3-s3-c1-n1000-none` | 04:05:35 | 04:05:39 | 0.64 / 0.86 / 1.24 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r3-s3-c1-n1000-all` | 04:05:46 | 04:05:50 | 0.54 / 0.83 / 1.22 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r3-s3-c1-n10000-none` | 04:05:57 | 04:06:23 | 0.69 / 0.85 / 1.23 | 0 s | none | 0 of 14 samples | exit 0 |
+| `r3-s3-c1-n10000-all` | 04:06:30 | 04:06:56 | 0.75 / 0.85 / 1.21 | 0 s | none | 0 of 13 samples | exit 0 |
+| `r3-s3-c8-n200-none` | 04:07:03 | 04:07:05 | 0.98 / 0.90 / 1.21 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r3-s3-c8-n200-all` | 04:07:12 | 04:07:13 | 0.83 / 0.87 / 1.20 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r3-s3-c8-n1000-none` | 04:07:21 | 04:07:24 | 0.78 / 0.86 / 1.19 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r3-s3-c8-n1000-all` | 04:07:31 | 04:07:35 | 0.73 / 0.85 / 1.18 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r3-s3-c8-n10000-none` | 04:07:42 | 04:08:09 | 0.69 / 0.84 / 1.18 | 0 s | none | 0 of 14 samples | exit 0 |
+| `r3-s3-c8-n10000-all` | 04:08:16 | 04:08:43 | 0.85 / 0.87 / 1.17 | 0 s | none | 0 of 15 samples | exit 0 |
+| `pg-s3-n200-none` | 04:23:17 | 04:23:17 | 0.64 / 0.64 / 0.80 | 0 s | none | 0 of 2 samples | exit 0 |
+| `pg-s3-n200-all` | 04:23:24 | 04:23:25 | 0.54 / 0.61 / 0.79 | 0 s | none | 0 of 3 samples | exit 0 |
+| `pg-s3-n1000-none` | 04:23:32 | 04:23:35 | 0.50 / 0.60 / 0.79 | 0 s | none | 0 of 4 samples | exit 0 |
+| `pg-s3-n1000-all` | 04:23:42 | 04:23:45 | 0.49 / 0.60 / 0.78 | 0 s | none | 0 of 3 samples | exit 0 |
+| `pg-s3-n10000-none` | 04:23:52 | 04:24:18 | 0.57 / 0.61 / 0.79 | 0 s | none | 1 of 14 samples | exit 0 |
+| `pg-s3-n10000-all` | 04:24:25 | 04:24:50 | 0.71 / 0.66 / 0.79 | 0 s | none | 0 of 14 samples | exit 0 |
+| `r2-pg-s3-n200-none` | 04:26:57 | 04:26:58 | 0.86 / 0.75 / 0.82 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r2-pg-s3-n200-all` | 04:27:05 | 04:27:05 | 0.72 / 0.73 / 0.81 | 0 s | none | 0 of 2 samples | exit 0 |
+| `r2-pg-s3-n1000-none` | 04:27:13 | 04:27:15 | 0.67 / 0.71 / 0.80 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r2-pg-s3-n1000-all` | 04:27:22 | 04:27:25 | 0.64 / 0.71 / 0.80 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r2-pg-s3-n10000-none` | 04:27:33 | 04:27:58 | 0.61 / 0.70 / 0.80 | 0 s | none | 0 of 13 samples | exit 0 |
+| `r2-pg-s3-n10000-all` | 04:28:05 | 04:28:30 | 0.80 / 0.75 / 0.81 | 0 s | none | 0 of 13 samples | exit 0 |
+| `r3-pg-s3-n200-none` | 04:30:35 | 04:30:36 | 0.85 / 0.83 / 0.83 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r3-pg-s3-n200-all` | 04:30:43 | 04:30:44 | 0.78 / 0.81 / 0.83 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r3-pg-s3-n1000-none` | 04:30:51 | 04:30:54 | 0.81 / 0.82 / 0.83 | 0 s | none | 0 of 3 samples | exit 0 |
+| `r3-pg-s3-n1000-all` | 04:31:01 | 04:31:04 | 1.13 / 0.89 / 0.85 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r3-pg-s3-n10000-none` | 04:31:11 | 04:31:35 | 0.96 / 0.86 / 0.84 | 0 s | none | 0 of 13 samples | exit 0 |
+| `r3-pg-s3-n10000-all` | 04:31:42 | 04:32:06 | 1.47 / 1.00 / 0.89 | 0 s | none | 1 of 13 samples | exit 0 |
+| `pl-s3-planned-none-r1` | 04:34:07 | 04:34:33 | 0.66 / 0.88 / 0.87 | 0 s | none | 0 of 14 samples | exit 0 |
+| `pl-s3-planned-none-r2` | 04:37:07 | 04:37:33 | 0.91 / 0.94 / 0.91 | 0 s | none | 0 of 14 samples | exit 0 |
+| `pl-s3-planned-none-r3` | 04:40:07 | 04:40:32 | 1.13 / 1.02 / 0.94 | 0 s | none | 0 of 14 samples | exit 0 |
+| `pl-s3-planned-all-r1` | 04:43:06 | 04:43:31 | 1.11 / 1.07 / 0.99 | 0 s | none | 0 of 13 samples | exit 0 |
+| `pl-s3-written-none-r1` | 04:35:37 | 04:36:03 | 1.21 / 0.98 / 0.91 | 0 s | none | 0 of 14 samples | exit 0 |
+| `pl-s3-written-none-r2` | 04:38:37 | 04:39:02 | 0.98 / 0.98 / 0.92 | 0 s | none | 0 of 13 samples | exit 0 |
+| `pl-s3-written-none-r3` | 04:41:36 | 04:42:02 | 1.14 / 1.04 / 0.96 | 0 s | none | 0 of 14 samples | exit 0 |
+| `pl-s3-written-all-r1` | 04:43:38 | 04:44:03 | 1.04 / 1.06 / 0.99 | 0 s | none | 0 of 14 samples | exit 0 |
 
 ## 11. What the run says about the engine
 
-1. **Nothing in the 11 read shapes moved beyond noise since v3.1.0**: the large unindexed cells (readable) are within 0.95x to 1.07x and the indexed ones within 0.91x to 1.02x. The engine's read path is where v3.1.0 left it in this scenario.
-2. **The one real mover is a join without a literal, and the planner's order choice is not the reason**: `join-no-literal` is 1.98x v3.1.0, and the same cell with `join_order = written` is as fast. The statement-local inner build and CB-S1's derived range bounds are in both arms, so neither is excluded (section 6). The planned arm
-   is *not* faster than written on any of the three join shapes. This is the first data point on CB/CC in this scenario: the planner is conservative (it keeps the written order unless it wins by the margin) and costs nothing measurable here.
-3. **KDS walks a row cheaper than PostgreSQL (about 24 ns against 34 ns) and returns a row dearer** (the `books-by-genre` figure above). The crossover is why the equality shapes are ahead at 10,000 loans and the
-   range and wide-result shapes are behind.
-4. **An index pays about 4x for an equality at 10,000 loans and nothing at 200** on both engines. A Cabin or index on a relation of a few pages is no tool.
-5. **This scenario's small cells cannot support a finding**; a longer `--ops` would, and is the next change to the measurement, not to the engine.
+1. **KDS walks a row cheaper than PostgreSQL (about 24 ns against 34 ns) and returns a row dearer** (the `books-by-genre` figure in section 8). The crossover is why the equality shapes are ahead at 10,000 loans and the range and wide-result shapes are behind.
+2. **The planner is conservative and costs nothing measurable here**: it keeps the written order unless it wins by the margin, and the planned arm is never faster than the written one on the three join shapes (section 6). This is the first data point on CB/CC in this scenario.
 
 ## 12. Archive
 

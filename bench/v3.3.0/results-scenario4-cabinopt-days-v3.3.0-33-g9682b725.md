@@ -16,18 +16,9 @@ its archived JSON. PostgreSQL 18.6: `tools/pg_scenario4_cabinopt_days.py`, **fre
 | Field | Value |
 |---|---|
 | Date and time | 2026-10-20; run A 04:08:47 to 04:13:37 UTC, run B 04:13:41 to 04:18:30 UTC; PostgreSQL 04:24:54 to 04:32:17 UTC |
-| Worktree / branch | `bench-scenarios-1-4` / `bench-scenarios-1-4` (the main checkout is not used) |
-| HEAD | `9682b725`, `git describe --tags` = `v3.3.0-33-g9682b725` ("Merge fix-fk-self-reference-refused: a self-referencing foreign key is refused NotImplemented at both doors"), committed 2026-10-20 03:33:40 UTC; equal to `origin/main` when the run began |
-| Tree cleanliness | Clean (`git status` empty) at the start and at the end of the measurement; nothing under `src/`, `include/`, `tools/` or `CMakeLists.txt` was edited, and the drivers are the unmodified `tools/` scripts. `build-release/` is ignored by git. The results files under `bench/v3.3.0/` are uncommitted additions until the commit that carries them |
-| Binary provenance | `build-release/kds_server`, built in this worktree at HEAD with `cmake -DCMAKE_BUILD_TYPE=Release` (`CMakeCache.txt`: `Release`), target `kds_server`, `-j4`, finished 2026-10-20 03:36:57 UTC, 3 min 17 s **after** the HEAD commit, so the binary is not older than the engine. Copied to `/home/cdkbs/bench-runs/v3.3.0-33-g9682b725/kds_server` before the first cell; **copy sha256 `7532bd14afb2acd4f9e48cac00732f899cb8e59b26fa1d9b982047fc89272f2a`** (equal to the source binary's, checked again after the run); source binary mtime 2026-10-20 03:36:57.38 UTC. Every server started from the copy; no build ran during any reported cell (the only build of the session finished before the first cell) |
 | Device | data files under `/home/cdkbs/bench-runs/v3.3.0-33-g9682b725/data/`, `/dev/root`, `ext4` (`df -T`); never tmpfs. A fresh data file per cell (per server in scenario 4), deleted when the cell finished. The PostgreSQL cluster (`/home/cdkbs/pg-bench-ba`) is on the same device |
-| Build type | Release |
-| Host | 8 logical CPUs, AMD EPYC 9V74 (1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure, a shared development VM; `/` was 95 % full (14 GB free) |
-| Time budget | **Budget lifted by the operator for this run** (order of 2026-10-20: "lift the budget, re-measure PG too"). Every cell of the v3.1.0 rebaseline's plan ran, with its repeat counts, and PostgreSQL was re-measured fresh in the same window. Nothing was cut |
-| Prior run of this shape | `bench/v3.1.0/results-scenario4-cabinopt-days-v3.1.0-30-gcd7c7c4e.md` (KDS binary `cd7c7c4e`, sha256 `4752f562...`, measured 2026-10-13 23:38 UTC to 2026-10-14 01:39 UTC). The two commits are 240 commits apart (`git rev-list --count cd7c7c4e..HEAD`), 101 of them first-parent and 23 of those merges, with 178 files changed under `src/`, `include/` and `CMakeLists.txt` (milestones BV to CD among them), so **every KDS delta below is cross-version and attributable to no single change**. The host and its device state are also a week-old comparison: v3.1.0's cells ran on the same VM, about 6.2 days earlier |
-| Server config | `log_level = warn`, `buffer_pool_frames = 65536` (required since BE), `cores` and `durability` per cell, all else default. Ports 15604 to 15607, 15610, 15620, 15651 to 15653, never 15432 (held by an unrelated `kds_server`) |
-| Quiet host | before each cell a gate waited for no `cc1plus` / `cmake --build` / `ctest` / `kds_tests` process and at most 8 % busy CPU over 3 s (`lib.sh` in the archive); `/proc/loadavg` and the process list are in each cell's precheck. **A 1-second monitor ran through the whole run** (`monitor.log`: 1,500+ samples of foreign processes above 10 % CPU) and every cell was checked against it after it ended (`cellvalid.py`): a build/test process or a foreign process at 50 % CPU or more inside the window discards and re-runs the cell. **No cell was discarded**: the monitor saw only a `claude` process at 11 to 23 % of one CPU in 23 samples of the 1,518, all outside the 50 % line. One batch of PostgreSQL cells failed on a connection error and is listed under contamination below |
-| PostgreSQL | PostgreSQL 18.6 (`/home/cdkbs/pg-bench-ba`, port 15434), defaults (`shared_buffers = 128MB`, `synchronous_commit = on`, `fsync = on`, `max_wal_size = 1GB`), not started or stopped by this run. **Re-measured fresh in this window** (the twin runs follow the KDS cells, never concurrent with them) |
+| Binary | `kds_server` copy in `/home/cdkbs/bench-runs/v3.3.0-33-g9682b725/`, **sha256 `7532bd14afb2acd4f9e48cac00732f899cb8e59b26fa1d9b982047fc89272f2a`** (equal to the source binary's), source mtime 2026-10-20 03:36:57.38 UTC, built at `9682b725` as Release; provenance in the summary's Stamp |
+| Everything else | commit `9682b725` (`v3.3.0-33-g9682b725`), tree clean, Release build, host, server config, quiet-host gate, PostgreSQL setup and the v3.1.0 comparator are stamped once in the summary (`summary-scenarios-v3.3.0-33-g9682b725.md`, "Stamp"). **Budget lifted by the operator for this run**; nothing was cut |
 | Driver | **unmodified** `tools/scenario4_cabinopt_days.py`, `--port-off/-on/-declared` with the three servers' PIDs for the CPU readings, `--suffix a`; exit 0 in both runs, `client_errors` 0 and 0, `slot_overruns` 0 and 0; the driver's byte-for-byte comparison of 18 statements per day across the three arms passed on all 6 days |
 | Server config | the common config plus `decay_half_life = 5`, `cabin_optimizer_snapshot_interval_ms = 500` on all three servers, and in run B `cabin_optimizer_cooldown_half_lives = 2`; `cores = 1`, `durability = group`; ports 15651 to 15653 |
 
@@ -39,7 +30,7 @@ Two complete runs of the driver, three days of three arms each. Per day: an open
     python3 tools/scenario4_cabinopt_days.py --port-off 15651 --port-on 15652 --port-declared 15653 \
         --pid-off <p> --pid-on <p> --pid-declared <p> --suffix a --json <run>.json
 
-**Row-set axis (rule 9).** The tape relations are 200, 1,000 and 10,000 rows (`tape_200`, `tape_1k`, `tape_10k`); the boards are 10,000 rows each (`board_a`, `board_b`). Every phase is a row of the matrix, the size is
+**Row-set axis.** The tape relations are 200, 1,000 and 10,000 rows (`tape_200`, `tape_1k`, `tape_10k`); the boards are 10,000 rows each (`board_a`, `board_b`). Every phase is a row of the matrix, the size is
 a row label. The probes are serial on one connection, so qps is derived as 1,000,000 / mean µs (the table cells give the p50 in µs beside the derived qps). The hot set rotates: day 1 hot on `board_a`, day 2 on `board_b`,
 day 3 on `board_a` with a different symbol set; the tapes are hot every day with disjoint values.
 
@@ -51,59 +42,57 @@ p50 and derived qps (from the mean) per group, day and arm for **run A**; the la
 
 | group | day | off A (p50 / qps) | on A (p50 / qps) | declared A (p50 / qps) | on over off, mean (A / B) | declared over off, mean (A / B) |
 |---|---|---|---|---|---|---|
-| board | 1 | 426.8 µs / 2,344 qps | 182.4 µs / 4,189 qps | 175.7 µs / 3,621 qps | 1.79x / 1.77x | 1.54x / 1.55x |
-| board | 2 | 429.0 µs / 2,349 qps | 186.3 µs / 4,129 qps | 179.2 µs / 3,685 qps | 1.76x / 1.78x | 1.57x / 1.58x |
-| board | 3 | 440.1 µs / 2,279 qps | 178.1 µs / 4,742 qps | 178.4 µs / 4,195 qps | 2.08x / 1.74x | 1.84x / 1.86x |
-| tape200 | 1 | 102.0 µs / 9,276 qps | 102.4 µs / 9,217 qps | 100.3 µs / 9,461 qps | 0.99x / 1.03x | 1.02x / 1.04x |
-| tape200 | 2 | 101.4 µs / 9,497 qps | 102.1 µs / 9,294 qps | 100.0 µs / 9,285 qps | 0.98x / 1.03x | 0.98x / 1.02x |
-| tape200 | 3 | 106.2 µs / 8,811 qps | 102.2 µs / 9,302 qps | 100.7 µs / 9,225 qps | 1.06x / 1.00x | 1.05x / 1.08x |
-| tape1k | 1 | 123.2 µs / 7,722 qps | 107.1 µs / 8,741 qps | 101.8 µs / 8,787 qps | 1.13x / 1.17x | 1.14x / 1.18x |
-| tape1k | 2 | 123.1 µs / 7,868 qps | 101.4 µs / 9,124 qps | 102.2 µs / 8,881 qps | 1.16x / 1.20x | 1.13x / 1.18x |
-| tape1k | 3 | 131.4 µs / 7,241 qps | 101.9 µs / 9,132 qps | 102.3 µs / 9,091 qps | 1.26x / 1.14x | 1.26x / 1.25x |
-| tape10k | 1 | 364.5 µs / 2,679 qps | 109.4 µs / 5,376 qps | 105.1 µs / 4,521 qps | 2.01x / 1.94x | 1.69x / 1.69x |
-| tape10k | 2 | 360.9 µs / 2,740 qps | 104.5 µs / 6,557 qps | 102.3 µs / 5,359 qps | 2.39x / 2.38x | 1.96x / 1.93x |
-| tape10k | 3 | 367.2 µs / 2,693 qps | 104.6 µs / 6,523 qps | 106.8 µs / 4,854 qps | 2.42x / 2.25x | 1.80x / 1.89x |
-| pk | 1 | 67.1 µs / 13,210 qps | 65.4 µs / 13,477 qps | 63.6 µs / 14,225 qps | 1.02x / 1.07x | 1.08x / 1.10x |
-| pk | 2 | 64.7 µs / 14,065 qps | 64.9 µs / 14,045 qps | 64.1 µs / 13,812 qps | 1.00x / 1.05x | 0.98x / 1.09x |
-| pk | 3 | 67.0 µs / 13,263 qps | 65.0 µs / 14,065 qps | 64.9 µs / 13,793 qps | 1.06x / 0.97x | 1.04x / 1.07x |
-| open | 1 | 1,210.4 µs / 795 qps | 1,164.4 µs / 839 qps | 1,139.5 µs / 827 qps | 1.06x / 1.09x | 1.04x / 1.06x |
-| open | 2 | 1,179.5 µs / 786 qps | 1,185.0 µs / 794 qps | 1,199.9 µs / 813 qps | 1.01x / 1.04x | 1.03x / 1.03x |
-| open | 3 | 1,158.0 µs / 837 qps | 1,234.8 µs / 778 qps | 1,162.1 µs / 830 qps | 0.93x / 1.05x | 0.99x / 0.97x |
-| close | 1 | 755.9 µs / 671 qps | 776.5 µs / 687 qps | 797.7 µs / 681 qps | 1.02x / 0.99x | 1.02x / 0.97x |
-| close | 2 | 716.0 µs / 692 qps | 787.9 µs / 680 qps | 786.5 µs / 601 qps | 0.98x / 0.99x | 0.87x / 0.88x |
-| close | 3 | 701.0 µs / 697 qps | 799.8 µs / 678 qps | 815.1 µs / 670 qps | 0.97x / 1.00x | 0.96x / 1.00x |
+| board | day 1 | 426.8 µs / 2,344 qps | 182.4 µs / 4,189 qps | 175.7 µs / 3,621 qps | 1.79x / 1.77x | 1.54x / 1.55x |
+| board | day 2 | 429.0 µs / 2,349 qps | 186.3 µs / 4,129 qps | 179.2 µs / 3,685 qps | 1.76x / 1.78x | 1.57x / 1.58x |
+| board | day 3 | 440.1 µs / 2,279 qps | 178.1 µs / 4,742 qps | 178.4 µs / 4,195 qps | 2.08x / 1.74x | 1.84x / 1.86x |
+| tape200 | day 1 | 102.0 µs / 9,276 qps | 102.4 µs / 9,217 qps | 100.3 µs / 9,461 qps | 0.99x / 1.03x | 1.02x / 1.04x |
+| tape200 | day 2 | 101.4 µs / 9,497 qps | 102.1 µs / 9,294 qps | 100.0 µs / 9,285 qps | 0.98x / 1.03x | 0.98x / 1.02x |
+| tape200 | day 3 | 106.2 µs / 8,811 qps | 102.2 µs / 9,302 qps | 100.7 µs / 9,225 qps | 1.06x / 1.00x | 1.05x / 1.08x |
+| tape1k | day 1 | 123.2 µs / 7,722 qps | 107.1 µs / 8,741 qps | 101.8 µs / 8,787 qps | 1.13x / 1.17x | 1.14x / 1.18x |
+| tape1k | day 2 | 123.1 µs / 7,868 qps | 101.4 µs / 9,124 qps | 102.2 µs / 8,881 qps | 1.16x / 1.20x | 1.13x / 1.18x |
+| tape1k | day 3 | 131.4 µs / 7,241 qps | 101.9 µs / 9,132 qps | 102.3 µs / 9,091 qps | 1.26x / 1.14x | 1.26x / 1.25x |
+| tape10k | day 1 | 364.5 µs / 2,679 qps | 109.4 µs / 5,376 qps | 105.1 µs / 4,521 qps | 2.01x / 1.94x | 1.69x / 1.69x |
+| tape10k | day 2 | 360.9 µs / 2,740 qps | 104.5 µs / 6,557 qps | 102.3 µs / 5,359 qps | 2.39x / 2.38x | 1.96x / 1.93x |
+| tape10k | day 3 | 367.2 µs / 2,693 qps | 104.6 µs / 6,523 qps | 106.8 µs / 4,854 qps | 2.42x / 2.25x | 1.80x / 1.89x |
+| pk | day 1 | 67.1 µs / 13,210 qps | 65.4 µs / 13,477 qps | 63.6 µs / 14,225 qps | 1.02x / 1.07x | 1.08x / 1.10x |
+| pk | day 2 | 64.7 µs / 14,065 qps | 64.9 µs / 14,045 qps | 64.1 µs / 13,812 qps | 1.00x / 1.05x | 0.98x / 1.09x |
+| pk | day 3 | 67.0 µs / 13,263 qps | 65.0 µs / 14,065 qps | 64.9 µs / 13,793 qps | 1.06x / 0.97x | 1.04x / 1.07x |
+| open | day 1 | 1,210.4 µs / 795 qps | 1,164.4 µs / 839 qps | 1,139.5 µs / 827 qps | 1.06x / 1.09x | 1.04x / 1.06x |
+| open | day 2 | 1,179.5 µs / 786 qps | 1,185.0 µs / 794 qps | 1,199.9 µs / 813 qps | 1.01x / 1.04x | 1.03x / 1.03x |
+| open | day 3 | 1,158.0 µs / 837 qps | 1,234.8 µs / 778 qps | 1,162.1 µs / 830 qps | 0.93x / 1.05x | 0.99x / 0.97x |
+| close | day 1 | 755.9 µs / 671 qps | 776.5 µs / 687 qps | 797.7 µs / 681 qps | 1.02x / 0.99x | 1.02x / 0.97x |
+| close | day 2 | 716.0 µs / 692 qps | 787.9 µs / 680 qps | 786.5 µs / 601 qps | 0.98x / 0.99x | 0.87x / 0.88x |
+| close | day 3 | 701.0 µs / 697 qps | 799.8 µs / 678 qps | 815.1 µs / 670 qps | 0.97x / 1.00x | 0.96x / 1.00x |
 
 **What is resolved and what is not.** The `pk` control touches no Cabin, and its on-over-off ratio ranges 0.97x to 1.07x (declared 0.98x to 1.10x) across days and runs: **a ratio below about 1.10x is not a finding**. That puts `tape200`
 (0.98x to 1.08x) at the floor, `tape1k` (1.13x to 1.26x) over it by a little, and `tape10k` (1.69x to 2.42x), `board` (1.54x to 2.08x) clear of it; `open` and `close` (0.87x to 1.09x) are not measurably different between arms. The
-`tape200` result is the row-count lesson (rule 9): at 200 rows the walk is 102 µs against 100 µs for the Cabin, and the fixed round trip is all there is.
+`tape200` result is the row-count lesson: at 200 rows the walk is 102 µs against 100 µs for the Cabin, and the fixed round trip is all there is.
 
-**Cross-version (now over v3.1.0, derived qps per arm, run A and run B):**
-
-Derived qps (1,000,000 / mean µs), run A, now over v3.1.0 (cross-version), and run B:
+**Cross-version (now over v3.1.0, derived qps (1,000,000 / mean µs) per arm, run A and run B):**
 
 | group | day | off A | on A | declared A | off B | on B | declared B |
 |---|---|---|---|---|---|---|---|
-| board | 1 | 1.19x | 1.09x | 1.03x | 1.18x | 1.08x | 1.05x |
-| board | 2 | 1.20x | 1.05x | 1.03x | 1.17x | 1.06x | 1.01x |
-| board | 3 | 1.18x | 1.02x | 1.00x | 1.20x | 1.02x | 1.00x |
-| tape200 | 1 | 1.02x | 1.03x | 0.97x | 0.95x | 1.01x | 0.97x |
-| tape200 | 2 | 1.07x | 0.96x | 0.97x | 0.95x | 0.96x | 0.92x |
-| tape200 | 3 | 0.96x | 0.95x | 0.99x | 0.97x | 0.89x | 0.96x |
-| tape1k | 1 | 1.06x | 1.04x | 0.97x | 1.03x | 1.05x | 1.00x |
-| tape1k | 2 | 1.10x | 0.97x | 0.96x | 1.02x | 0.97x | 0.92x |
-| tape1k | 3 | 0.98x | 0.97x | 0.98x | 1.03x | 0.88x | 0.95x |
-| tape10k | 1 | 1.20x | 1.12x | 1.03x | 1.22x | 1.10x | 1.06x |
-| tape10k | 2 | 1.22x | 1.03x | 1.02x | 1.20x | 1.04x | 0.98x |
-| tape10k | 3 | 1.19x | 1.05x | 1.01x | 1.20x | 0.97x | 1.07x |
-| pk | 1 | 0.99x | 1.01x | 0.95x | 0.94x | 1.06x | 1.02x |
-| pk | 2 | 1.07x | 0.93x | 0.96x | 0.85x | 0.93x | 0.91x |
-| pk | 3 | 0.91x | 0.96x | 0.98x | 0.95x | 0.89x | 0.94x |
-| open | 1 | 0.97x | 1.05x | 0.99x | 1.13x | 1.27x | 1.15x |
-| open | 2 | 0.96x | 0.96x | 0.97x | 1.20x | 1.17x | 1.10x |
-| open | 3 | 1.21x | 1.10x | 1.29x | 1.10x | 1.15x | 1.27x |
-| close | 1 | 1.02x | 1.04x | 1.04x | 1.03x | 1.04x | 1.02x |
-| close | 2 | 1.04x | 1.03x | 1.02x | 1.03x | 1.02x | 1.06x |
-| close | 3 | 1.04x | 1.05x | 1.04x | 1.01x | 1.04x | 1.05x |
+| board | day 1 | 1.19x | 1.09x | 1.03x | 1.18x | 1.08x | 1.05x |
+| board | day 2 | 1.20x | 1.05x | 1.03x | 1.17x | 1.06x | 1.01x |
+| board | day 3 | 1.18x | 1.02x | 1.00x | 1.20x | 1.02x | 1.00x |
+| tape200 | day 1 | 1.02x | 1.03x | 0.97x | 0.95x | 1.01x | 0.97x |
+| tape200 | day 2 | 1.07x | 0.96x | 0.97x | 0.95x | 0.96x | 0.92x |
+| tape200 | day 3 | 0.96x | 0.95x | 0.99x | 0.97x | 0.89x | 0.96x |
+| tape1k | day 1 | 1.06x | 1.04x | 0.97x | 1.03x | 1.05x | 1.00x |
+| tape1k | day 2 | 1.10x | 0.97x | 0.96x | 1.02x | 0.97x | 0.92x |
+| tape1k | day 3 | 0.98x | 0.97x | 0.98x | 1.03x | 0.88x | 0.95x |
+| tape10k | day 1 | 1.20x | 1.12x | 1.03x | 1.22x | 1.10x | 1.06x |
+| tape10k | day 2 | 1.22x | 1.03x | 1.02x | 1.20x | 1.04x | 0.98x |
+| tape10k | day 3 | 1.19x | 1.05x | 1.01x | 1.20x | 0.97x | 1.07x |
+| pk | day 1 | 0.99x | 1.01x | 0.95x | 0.94x | 1.06x | 1.02x |
+| pk | day 2 | 1.07x | 0.93x | 0.96x | 0.85x | 0.93x | 0.91x |
+| pk | day 3 | 0.91x | 0.96x | 0.98x | 0.95x | 0.89x | 0.94x |
+| open | day 1 | 0.97x | 1.05x | 0.99x | 1.13x | 1.27x | 1.15x |
+| open | day 2 | 0.96x | 0.96x | 0.97x | 1.20x | 1.17x | 1.10x |
+| open | day 3 | 1.21x | 1.10x | 1.29x | 1.10x | 1.15x | 1.27x |
+| close | day 1 | 1.02x | 1.04x | 1.04x | 1.03x | 1.04x | 1.02x |
+| close | day 2 | 1.04x | 1.03x | 1.02x | 1.03x | 1.02x | 1.06x |
+| close | day 3 | 1.04x | 1.05x | 1.04x | 1.01x | 1.04x | 1.05x |
 
 The `pk` control reads 0.85x to 1.07x, so ratios inside that are not findings. The `off` arm on `board` (1.17x to 1.20x) and `tape10k` (1.19x to 1.22x) is above it in all six days of both runs; the `on` and `declared` arms there are
 0.97x to 1.12x, mostly inside it. `open` in run B (1.10x to 1.27x) is the durable commit moving between runs (section 9); device or engine, this run does not separate.
@@ -210,15 +199,15 @@ The board's latency tail by arm (run A day by day; run B and v3.1.0 for the p95)
 
 | day | arm | run A mean | run A p50 | run A p95 | run A p99 | run B p95 | v3.1.0 run A p95 |
 |---|---|---|---|---|---|---|---|
-| 1 | off | 426.6 µs | 426.8 µs | 474.6 µs | 617.0 µs | 476.4 µs | 556.1 µs |
-| 1 | on | 238.7 µs | 182.4 µs | 440.2 µs | 758.6 µs | 431.1 µs | 509.6 µs |
-| 1 | declared | 276.2 µs | 175.7 µs | 779.4 µs | 827.6 µs | 773.1 µs | 840.2 µs |
-| 2 | off | 425.8 µs | 429.0 µs | 467.0 µs | 503.5 µs | 478.8 µs | 560.0 µs |
-| 2 | on | 242.2 µs | 186.3 µs | 444.9 µs | 774.0 µs | 443.3 µs | 519.3 µs |
-| 2 | declared | 271.4 µs | 179.2 µs | 784.8 µs | 857.6 µs | 787.2 µs | 847.9 µs |
-| 3 | off | 438.7 µs | 440.1 µs | 486.3 µs | 555.4 µs | 481.1 µs | 563.6 µs |
-| 3 | on | 210.9 µs | 178.1 µs | 395.9 µs | 795.7 µs | 460.9 µs | 474.1 µs |
-| 3 | declared | 238.4 µs | 178.4 µs | 793.7 µs | 855.7 µs | 789.1 µs | 852.8 µs |
+| day 1 | off | 426.6 µs | 426.8 µs | 474.6 µs | 617.0 µs | 476.4 µs | 556.1 µs |
+| day 1 | on | 238.7 µs | 182.4 µs | 440.2 µs | 758.6 µs | 431.1 µs | 509.6 µs |
+| day 1 | declared | 276.2 µs | 175.7 µs | 779.4 µs | 827.6 µs | 773.1 µs | 840.2 µs |
+| day 2 | off | 425.8 µs | 429.0 µs | 467.0 µs | 503.5 µs | 478.8 µs | 560.0 µs |
+| day 2 | on | 242.2 µs | 186.3 µs | 444.9 µs | 774.0 µs | 443.3 µs | 519.3 µs |
+| day 2 | declared | 271.4 µs | 179.2 µs | 784.8 µs | 857.6 µs | 787.2 µs | 847.9 µs |
+| day 3 | off | 438.7 µs | 440.1 µs | 486.3 µs | 555.4 µs | 481.1 µs | 563.6 µs |
+| day 3 | on | 210.9 µs | 178.1 µs | 395.9 µs | 795.7 µs | 460.9 µs | 474.1 µs |
+| day 3 | declared | 238.4 µs | 178.4 µs | 793.7 µs | 855.7 µs | 789.1 µs | 852.8 µs |
 
 **The declared arm has the heavier tail**, as at v3.1.0: its board p95 is 779 to 794 µs against the `on` arm's 396 to 445 µs and the walk's 467 to 486 µs, in every day and both runs. A probe the declared Cabin cannot answer costs about 1.6x a plain
 walk and the controller's does not. This is why the `on` arm's mean (239 µs, day 1 run A) is lower than the `declared` arm's (276 µs) although the `declared` p50 is lower (176 against 182 µs). This run does not say why the declared arm's miss path is costlier.
@@ -239,18 +228,18 @@ run A:
 
 | t (s) | day | tag | managed | creates | extends | drops | entries |
 |---|---|---|---|---|---|---|---|
-| 13.6 s | 1 | trading-block-3 | 4 Cabins | 4 creates | 28 extends | 0 drops | board_a_a:ACTIVE/3p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/1p; tape_10k_a:ACTIVE/1p |
-| 36.1 s | 1 | trading-block-9 | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
-| 47.4 s | 1 | trading-block-12 | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
-| 54.0 s | 1 | overnight | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
-| 104.6 s | 2 | trading-block-3 | 5 Cabins | 5 creates | 134 extends | 0 drops | board_a_a:ACTIVE/9p; board_b_a:ACTIVE/3p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
-| 127.1 s | 2 | trading-block-9 | 5 Cabins | 5 creates | 142 extends | 0 drops | board_a_a:DECAYING/9p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
-| 138.4 s | 2 | trading-block-12 | 5 Cabins | 5 creates | 142 extends | 0 drops | board_a_a:DECAYING/9p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
-| 145.0 s | 2 | overnight | 5 Cabins | 5 creates | 142 extends | 0 drops | board_a_a:DECAYING/9p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
-| 195.6 s | 3 | trading-block-3 | 5 Cabins | 5 creates | 164 extends | 0 drops | board_a_a:ACTIVE/18p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/5p |
-| 218.1 s | 3 | trading-block-9 | 5 Cabins | 5 creates | 172 extends | 0 drops | board_a_a:ACTIVE/18p; board_b_a:DECAYING/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
-| 229.3 s | 3 | trading-block-12 | 5 Cabins | 5 creates | 172 extends | 0 drops | board_a_a:ACTIVE/18p; board_b_a:DECAYING/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
-| 235.9 s | 3 | overnight | 5 Cabins | 5 creates | 172 extends | 0 drops | board_a_a:ACTIVE/18p; board_b_a:DECAYING/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
+| 13.6 s | day 1 | trading-block-3 | 4 Cabins | 4 creates | 28 extends | 0 drops | board_a_a:ACTIVE/3p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/1p; tape_10k_a:ACTIVE/1p |
+| 36.1 s | day 1 | trading-block-9 | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
+| 47.4 s | day 1 | trading-block-12 | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
+| 54.0 s | day 1 | overnight | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
+| 104.6 s | day 2 | trading-block-3 | 5 Cabins | 5 creates | 134 extends | 0 drops | board_a_a:ACTIVE/9p; board_b_a:ACTIVE/3p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
+| 127.1 s | day 2 | trading-block-9 | 5 Cabins | 5 creates | 142 extends | 0 drops | board_a_a:DECAYING/9p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
+| 138.4 s | day 2 | trading-block-12 | 5 Cabins | 5 creates | 142 extends | 0 drops | board_a_a:DECAYING/9p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
+| 145.0 s | day 2 | overnight | 5 Cabins | 5 creates | 142 extends | 0 drops | board_a_a:DECAYING/9p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
+| 195.6 s | day 3 | trading-block-3 | 5 Cabins | 5 creates | 164 extends | 0 drops | board_a_a:ACTIVE/18p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/5p |
+| 218.1 s | day 3 | trading-block-9 | 5 Cabins | 5 creates | 172 extends | 0 drops | board_a_a:ACTIVE/18p; board_b_a:DECAYING/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
+| 229.3 s | day 3 | trading-block-12 | 5 Cabins | 5 creates | 172 extends | 0 drops | board_a_a:ACTIVE/18p; board_b_a:DECAYING/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
+| 235.9 s | day 3 | overnight | 5 Cabins | 5 creates | 172 extends | 0 drops | board_a_a:ACTIVE/18p; board_b_a:DECAYING/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
 
 final header: `managed=5 pages_committed=32 page_budget=1024 ticks=546 creates=5 extends=172 heals=0 drops=0 deferred=0 failures=0`
 verify per day: PASS, PASS, PASS
@@ -259,18 +248,18 @@ run B:
 
 | t (s) | day | tag | managed | creates | extends | drops | entries |
 |---|---|---|---|---|---|---|---|
-| 13.7 s | 1 | trading-block-3 | 4 Cabins | 4 creates | 31 extends | 0 drops | board_a_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/1p; tape_10k_a:ACTIVE/1p |
-| 36.2 s | 1 | trading-block-9 | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
-| 47.5 s | 1 | trading-block-12 | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
-| 54.1 s | 1 | overnight | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
-| 104.8 s | 2 | trading-block-3 | 5 Cabins | 5 creates | 133 extends | 0 drops | board_a_a:ACTIVE/9p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
-| 127.3 s | 2 | trading-block-9 | 5 Cabins | 5 creates | 140 extends | 0 drops | board_a_a:DECAYING/9p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
-| 138.5 s | 2 | trading-block-12 | 4 Cabins | 5 creates | 140 extends | 1 drops | board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
-| 145.1 s | 2 | overnight | 4 Cabins | 5 creates | 140 extends | 1 drops | board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
-| 195.7 s | 3 | trading-block-3 | 5 Cabins | 6 creates | 164 extends | 1 drops | board_a_a:ACTIVE/5p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
-| 218.2 s | 3 | trading-block-9 | 5 Cabins | 6 creates | 186 extends | 1 drops | board_a_a:ACTIVE/14p; board_b_a:DECAYING/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
-| 229.5 s | 3 | trading-block-12 | 4 Cabins | 6 creates | 193 extends | 2 drops | board_a_a:ACTIVE/14p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
-| 236.1 s | 3 | overnight | 4 Cabins | 6 creates | 193 extends | 2 drops | board_a_a:ACTIVE/14p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
+| 13.7 s | day 1 | trading-block-3 | 4 Cabins | 4 creates | 31 extends | 0 drops | board_a_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/1p; tape_10k_a:ACTIVE/1p |
+| 36.2 s | day 1 | trading-block-9 | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
+| 47.5 s | day 1 | trading-block-12 | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
+| 54.1 s | day 1 | overnight | 4 Cabins | 4 creates | 104 extends | 0 drops | board_a_a:ACTIVE/9p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/2p; tape_10k_a:ACTIVE/2p |
+| 104.8 s | day 2 | trading-block-3 | 5 Cabins | 5 creates | 133 extends | 0 drops | board_a_a:ACTIVE/9p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
+| 127.3 s | day 2 | trading-block-9 | 5 Cabins | 5 creates | 140 extends | 0 drops | board_a_a:DECAYING/9p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
+| 138.5 s | day 2 | trading-block-12 | 4 Cabins | 5 creates | 140 extends | 1 drops | board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
+| 145.1 s | day 2 | overnight | 4 Cabins | 5 creates | 140 extends | 1 drops | board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/3p |
+| 195.7 s | day 3 | trading-block-3 | 5 Cabins | 6 creates | 164 extends | 1 drops | board_a_a:ACTIVE/5p; board_b_a:ACTIVE/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
+| 218.2 s | day 3 | trading-block-9 | 5 Cabins | 6 creates | 186 extends | 1 drops | board_a_a:ACTIVE/14p; board_b_a:DECAYING/4p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
+| 229.5 s | day 3 | trading-block-12 | 4 Cabins | 6 creates | 193 extends | 2 drops | board_a_a:ACTIVE/14p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
+| 236.1 s | day 3 | overnight | 4 Cabins | 6 creates | 193 extends | 2 drops | board_a_a:ACTIVE/14p; tape_200_a:ACTIVE/1p; tape_1k_a:ACTIVE/3p; tape_10k_a:ACTIVE/6p |
 
 final header: `managed=4 pages_committed=24 page_budget=1024 ticks=546 creates=6 extends=193 heals=0 drops=2 deferred=0 failures=0`
 verify per day: PASS, PASS, PASS
@@ -293,8 +282,6 @@ The driver ran its 18-statement comparison across the three arms each day: **PAS
 PostgreSQL is the floor. The PG twin runs **day 1 only, unpaced, one server, no index**, by its own design: at defaults a PostgreSQL probe seq-scans on day 1 as on day 300 (the `explain` blocks in its JSON say `Seq Scan`). Three runs, KDS side: run A and run B day 1, derived qps,
 the median of the two, ratio above 1.00x = KDS faster:
 
-PG runs: 3
-
 | group | PG18 day 1 (no index): p50 / median qps (spread) | KDS off | KDS on | KDS declared | off / PG | on / PG | declared / PG |
 |---|---|---|---|---|---|---|---|
 | open | 1,160.8 µs / 831 qps (10.9 %) | 777 qps | 833 qps | 814 qps | 0.93x | 1.00x | 0.98x |
@@ -315,24 +302,21 @@ that scenario 1 measures as 0.65x to 0.69x on three of its four `agg-*` folds.
 The floor is the `pk` control: on-over-off 0.97x to 1.07x, per-arm absolute 12,610 to 14,663 qps across arms, days and runs; PostgreSQL's three runs spread 0.2 % to 10.9 % (`open` 10.9 %, the durable group). The two runs of KDS give the repeat:
 `open` p50 is 1,188 µs overall and run B's differs from run A's by up to 9 % (the device's sync); every probe group and arm differs between runs by up to 10.3 % (the largest is a `pk` control cell; day 3 `on` is excluded, where run B re-nominated its Cabin) (derived qps, e.g. `off` on day 1: 2,344 qps and 2,341 qps).
 
-**Contamination.** No cell was discarded. Per-cell host stamps (run A and B hold three servers each; the precheck of the `-off` server stands for the cell, the monitor covered the whole window):
+Per-cell host stamps (run A and B hold three servers each; the precheck of the `-off` server stands for the cell, the monitor covered the whole window):
 
 | cell | start (UTC) | end (UTC) | load average before (1 / 5 / 15 min) | gate wait | build or test process | foreign samples >= 10 % CPU | exit |
 |---|---|---|---|---|---|---|---|
-| `s4` | 04:08:50 | 04:13:37 | 1.41 / 1.02 / 1.21 | 0 s | none | 1 of 132 samples | 0 |
-| `cd2-s4` | 04:13:44 | 04:18:30 | 0.16 / 0.54 / 0.95 | 0 s | none | 0 of 131 samples | 0 |
-| `pg-s4` | 04:24:57 | 04:25:01 | 0.81 / 0.69 / 0.80 | 0 s | none | 0 of 4 samples | 0 |
-| `r2-pg-s4` | 04:28:37 | 04:28:41 | 0.94 / 0.79 / 0.82 | 0 s | none | 0 of 4 samples | 0 |
-| `r3-pg-s4` | 04:32:13 | 04:32:17 | 1.20 / 0.98 / 0.89 | 0 s | none | 0 of 4 samples | 0 |
+| `s4` | 04:08:50 | 04:13:37 | 1.41 / 1.02 / 1.21 | 0 s | none | 1 of 132 samples | exit 0 |
+| `cd2-s4` | 04:13:44 | 04:18:30 | 0.16 / 0.54 / 0.95 | 0 s | none | 0 of 131 samples | exit 0 |
+| `pg-s4` | 04:24:57 | 04:25:01 | 0.81 / 0.69 / 0.80 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r2-pg-s4` | 04:28:37 | 04:28:41 | 0.94 / 0.79 / 0.82 | 0 s | none | 0 of 4 samples | exit 0 |
+| `r3-pg-s4` | 04:32:13 | 04:32:17 | 1.20 / 0.98 / 0.89 | 0 s | none | 0 of 4 samples | exit 0 |
 
 ## 10. What the run says about the engine
 
-1. **The unserved walk got cheaper and nothing else about the Cabin story changed.** `off` is 1.18x and 1.20x v3.1.0 on the 10,000-row shapes, and the per-row cost of an unserved equality fell from 34.6 to 26.5 ns, against
-   PostgreSQL's 40.5 ns. The served arms did not move (a Cabin-served probe is a round trip, about 102 µs), so the Cabin's multiple over a walk moved from 1.99x/2.77x (v3.1.0, medians over the six days) to 1.78x/2.31x on `board`/`tape10k` where it moved at all because the *denominator* improved.
-   Scenario 3's integer-column equality walk does not show the same gain (`loans-by-user` 1.00x at 10,000 loans); scenario 1's integer-column walk (`day-slice` on `int32 session_no`) shows a smaller one (+7.3 % `c1-g`, +8.9 % `c1-s`). The walks differ in the filtered column's type (`varchar` symbol here, integers there) among other things, and this run does not separate them.
-2. **Below about 1,000 rows a Cabin is no tool** (`tape200` 0.98x to 1.08x; `tape1k` near the floor); at 10,000 rows it doubles the probe. The controller found the same four Cabins in the same 13.6 s that it did at v3.1.0, and created none for the pk control.
-3. **The declared arm's tail is the open question this scenario keeps asking**: p95 779 to 794 µs against a 467 to 486 µs walk. It repeated across both runs, three days and two versions; it is a property of the declared Cabin's miss path, and nothing in this run explains it.
-4. **DROP exists only at a 2-half-life cooldown.** The default dwell (128 half-lives) never fires inside a three-day run, so a 3-day business cycle at the defaults will not reclaim a Cabin whose hot set has moved; that is the controller's documented default, now with a second data point.
+1. **The Cabin's multiple over a walk moved because the walk improved, not the Cabin.** `off` is 1.18x and 1.20x v3.1.0 on the 10,000-row shapes, the per-row cost of an unserved equality fell from 34.6 to 26.5 ns (PostgreSQL's 40.5 ns), and the served arms did not move (a Cabin-served probe is a round trip, about 102 µs), so the multiple went from 1.99x/2.77x (v3.1.0, medians over the six days) to 1.78x/2.31x on `board`/`tape10k`.
+   Scenario 3's integer-column equality walk does not show the same gain (`loans-by-user` 1.00x at 10,000 loans); scenario 1's (`day-slice` on `int32 session_no`) shows a smaller one (+7.3 % `c1-g`, +8.9 % `c1-s`). The walks differ in the filtered column's type (`varchar` symbol here, integers there) among other things, and this run does not separate them.
+2. **The declared arm's tail is the open question this scenario keeps asking**: p95 779 to 794 µs against a 467 to 486 µs walk, in both runs, on three days, at two versions; it is a property of the declared Cabin's miss path and nothing in this run explains it.
 
 ## 11. Archive
 
