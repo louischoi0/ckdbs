@@ -1,5 +1,7 @@
 # Work order BV — Transition: a column's allowed state changes as a row-local constraint
 
+**CLOSED 2026-10-20 on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §3).
+
 Written 2026-10-14 on `worktree-cn4-transition-refresh` from `b0bc959c`
 (`v3.1.0-31-gb0bc959c`). It follows the operator's words of 2026-10-14,
 recorded in English:

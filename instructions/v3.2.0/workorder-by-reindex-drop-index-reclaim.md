@@ -1,5 +1,7 @@
 # Work order BY — `REINDEX`, and a dropped index's pages reclaimed
 
+**CLOSED 2026-10-20 on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §3).
+
 Written 2026-10-16 on `worktree-reindex-drop-index-reclaim` from `5f610082`
 (`v3.2.0-115-g5f610082`), on the operator's words, recorded in English:
 
