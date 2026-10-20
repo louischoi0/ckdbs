@@ -2023,7 +2023,7 @@ private:
     // Cabin can be authoritative where a Waystone trail cannot: absence has
     // a witness, and this is the witness. One directory probe per cabined
     // column per write - in-memory, O(1), and skipped entirely by the
-    // `cabin_mask == 0` test for a relation with no Cabin.
+    // empty `cabin_columns` test for a relation with no Cabin.
     //
     // Every mandatory action is an **append**. Nothing is ever removed here:
     // an older snapshot may still be entitled to match a row through the
@@ -2051,7 +2051,7 @@ private:
     // early return, and the UPDATE loop's once-per-statement skip of it -
     // one test, so the skip cannot drift from what the call would do.
     bool CabinsWitness(const catalog::TableAccess& access) const noexcept {
-        return cabins_ != nullptr && (access.cabin_mask != 0 || !access.expr_cabins.empty());
+        return cabins_ != nullptr && (!access.cabin_columns.empty() || !access.expr_cabins.empty());
     }
     void NoteCabinWrite(const catalog::TableAccess& access,
                         std::span<const parser::AstValue> values, std::uint16_t first_col_pos,

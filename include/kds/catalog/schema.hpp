@@ -80,7 +80,7 @@ Status CheckColumnNamesUnique(const Schema& schema);
 inline constexpr std::uint32_t kColumnSlotWidth = 16;
 
 // `CREATE TABLE ... SPARE n`'s ceiling (BW-R1): 64 keeps every slot of a
-// relation of up to 64 declared columns inside `cabin_mask`/`index_mask`.
+// relation of up to 64 declared columns inside `index_mask`.
 inline constexpr std::uint16_t kMaxSpareSlots = 64;
 
 // True for the integer types a Keystone id can be declared as. Float,
@@ -377,27 +377,27 @@ struct TableAccess {
     // facts - `CREATE CABIN` and `DROP CABIN` bump the catalog version -
     // so they pass this struct's admission test, and they are here rather
     // than probed per step because the compiler asks "is this column
-    // cabined" once per equality per compile and the answer is one bit.
+    // cabined" once per equality per compile.
     //
     // It is deliberately a **positive** fact. Asking the catalog per step
     // would mean caching an *absence* for the common case, which
-    // catalog_cache.hpp forbids outright; a mask says which columns do
+    // catalog_cache.hpp forbids outright; the list says which columns do
     // have one and says nothing about the rest.
     //
-    // `cabin_mask` holds a bit per `col_pos`. Bit 0 is always clear: the
-    // tuple key's Cabin is the clustered tree itself (spec section 2), so
-    // CreateCabin() refuses column 0. A relation wider than 64 columns
-    // folds its high columns into no bit - which loses the *acceleration*
-    // for those columns and can never lose a row, since an unnoticed
-    // Cabin simply means the step compiles to the scan it would have
-    // compiled to anyway. Stated here rather than left to be discovered.
-    std::uint64_t cabin_mask = 0;
+    // `cabin_columns` holds the `col_pos` of every column Cabin, ascending,
+    // at any position. Never 0: the tuple key's Cabin is the clustered tree
+    // itself (spec section 2), so CreateCabin() refuses column 0. **Every
+    // position, not a bit per position**: the write hook witnesses exactly
+    // this list, and both readers - the compiled probe and the foreign-key
+    // reverse check - serve whatever `CabinOn` names, so a Cabin left out of
+    // it would be served while never witnessed.
+    std::vector<std::uint16_t> cabin_columns;
 
     // One per schema column, positionally aligned with `schema.columns`;
     // `id == 0` - never a real cabin_id - for a column with no Cabin.
-    // Parallel to the mask rather than folded into it because the compiler
-    // needs only the bit, while the executor needs the id (to find the
-    // entry sets) and the origin (to know whether the Cabin was *declared*,
+    // Parallel to `cabin_columns` rather than folded into it because the
+    // write hook walks the cabined positions, while a reader needs the id
+    // (to find the entry sets) and the origin (to know whether the Cabin was *declared*,
     // which is what decides n=1 versus n=2 - the same rule a declared
     // pattern already gets from `PatternAccess::origin`).
     struct CabinRef {
@@ -407,7 +407,7 @@ struct TableAccess {
     std::vector<CabinRef> cabin_ids;
 
     // The Cabin on `col_pos`, or a zeroed ref. One accessor, so no caller
-    // re-derives the relationship between the mask and the vector.
+    // re-derives the relationship between the list and the vector.
     CabinRef CabinOn(std::uint16_t col_pos) const noexcept {
         return col_pos < cabin_ids.size() ? cabin_ids[col_pos] : CabinRef{};
     }
@@ -535,9 +535,10 @@ struct TableAccess {
     // is exactly what a recorded `pattern_id` must not do.
     std::vector<IndexRef> indexes;
 
-    // A bit per **leading** key column, on the same argument `cabin_mask`
-    // makes: the compiler asks "could an equality on this column enter an
-    // index" once per equality per compile, and the answer is one bit.
+    // A bit per **leading** key column, on the argument `cabin_columns`
+    // makes for a positive fact: the compiler asks "could an equality on this
+    // column enter an index" once per equality per compile, and the answer
+    // is one bit.
     //
     // Leading only, and the distinction is the one `Catalog::
     // FindIndexOnColumn` makes for the same reason: an index on `(a, b)`

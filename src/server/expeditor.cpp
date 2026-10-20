@@ -1519,13 +1519,9 @@ Expeditor::~Expeditor() {
         store_->data_sync().Stop();
         store_->data_sync().SetFailureHandler({});
     }
-    // **And the suspend audit `Start` installed on the calling thread.**
-    // `InstallSuspendAudit` is thread-local and points at this instance's
-    // store, so an instance started and dropped without the tail would
-    // leave the thread's audit naming a freed store (2026-09-07).
-    // Idempotent after the tail's own withdrawal. The last install on a
-    // thread wins, so two live instances started on one thread would leave
-    // the later one unaudited - a shape no caller has.
+    // **And the suspend audit `Start` installed on the calling thread**,
+    // so an instance started and dropped without the tail does not leave
+    // it behind. Idempotent after the tail's own withdrawal.
     exec::UninstallSuspendAudit();
 }
 
@@ -1760,7 +1756,7 @@ Status Expeditor::Start() {
     // coroutine that suspends while holding a page span - or, since P4d-3,
     // a page pin - is detected rather than merely forbidden in prose
     // (exec/step_vm.hpp, sched/coro.hpp).
-    exec::InstallSuspendAudit(store_.get());
+    exec::InstallSuspendAudit();
 
     // ---- The fan-out (workplan-crosscore.md P2) -------------------------
     //
@@ -2189,8 +2185,6 @@ Status Expeditor::RunUntilStopped() {
     auto& workers = live.workers;
 
     scheduler.Run();
-    // Same teardown rule as CoreRuntime::Run: the audit reads store_, and
-    // the pointer must go before the store does.
     exec::UninstallSuspendAudit();
     logger_->Info("expeditor", "stopping");
 
