@@ -41,7 +41,7 @@ to its close in this session, BO-Q2 and Q4..Q13 adopted as CLA proposed -
 several revised against `cd7c7c4e` first - and recorded in §5's mark
 column as adopted, never as the operator's marks.
 
-**State, 2026-10-20: every stage built, the close measured; closing awaits the operator's word.** Built and reviewed:
+**CLOSED 2026-10-20 on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §2), pushed with the hook skipped. **State: every stage built, the close measured.** Built and reviewed:
 BO-S0, S1, S2, S3, S5 (on `main` from the merge of `bo-show-sugar` on 2026-10-14, after
 `v3.2.0`), S6 and S7 (on `worktree-bo-relation-stats-checkpoints`, 2026-10-20); not run:
 S4 (BO-Q5 (b)). **Resumed 2026-10-20 on the operator's standing go-ahead**
