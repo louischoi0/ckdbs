@@ -1,5 +1,7 @@
 # Work order AN — The instance read view
 
+**CLOSED 2026-10-20 on paper, on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §7).
+
 Written 2026-09-03 by CLA on `worktree-v3.0.0-read-view`, **source-read at
 `004f949`**, and rewritten the same day twice: once on the AN-S0 source
 read, once on the operator's mark of AN-R7(B), which puts the view on the
