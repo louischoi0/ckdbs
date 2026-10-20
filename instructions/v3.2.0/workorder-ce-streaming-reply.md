@@ -37,7 +37,7 @@ success, whatever left the server).
 
 - With the Python client decoder fixed (`a40882af`), KDS returns a row at
   4.84 us where PostgreSQL 18.6 takes 4.08 us (`symbol-history`, 7,560
-  rows); the many-row shapes stand at 0.85x-0.96x of PostgreSQL.
+  rows); the many-row shapes stand at 0.85x-0.94x of PostgreSQL.
 - **Wall time minus client CPU is 0.41-0.43 us per row for KDS - equal to
   its server CPU per row - and 0.01 us for PostgreSQL.** The client waits
   for every microsecond of KDS's server work and for almost none of
@@ -63,10 +63,12 @@ success, whatever left the server).
   `S_ROW_DESC` only then, and `Deliver` (`:864`) sends every batch (all of
   them for an uncapped portal, one per `C_EXECUTE`/`C_CONTINUE` for a
   capped one), then `S_PORTAL_SUSPENDED` or `S_COMPLETE`.
-- **The socket is written at completion** (BN-R7): `TcpServer` holds the
-  outbox while `conn.in_flight` (`src/server/tcp_server.cpp:577`) and
-  `OnStatementComplete` (`:912`) flushes it in one write, `S_PARSE_OK` and
-  `S_BIND_OK` of a pipelined statement included.
+- **The socket is written at completion** (BN-R7): `TcpServer`'s read
+  path skips its flush while `conn.in_flight`
+  (`src/server/tcp_server.cpp:577`) and `OnStatementComplete` (`:912`)
+  flushes the outbox in one write, `S_PARSE_OK` and `S_BIND_OK` of a
+  pipelined statement included. A writable event still flushes a pending
+  tail while a statement runs (`OnClientEvent`, `:486-491`).
 - **A plain `SELECT`'s walk already suspends.** `SelectRun`
   (`src/server/command_dispatcher.cpp:5019`) owns everything the walk reads
   and `Execute` (`:5097`) awaits `exec::ExecuteAsync`, which yields every
@@ -75,16 +77,29 @@ success, whatever left the server).
   and **no page pin**. That yield is the one place a reply could leave
   mid-statement without a new suspension point. Rows reach the sink inside
   the walk's visitor (`:5113-5138`); a sorted statement's rows reach it
-  only in `Finish`'s drain (`:5184-5192`), after the walk.
+  only in `Finish`'s drain (`:5184-5192`), after the walk. **Only a
+  leaf-chain walk as the outermost step yields** (`RunWalkStep`,
+  `src/exec/step_vm.cpp:2122`, the executor's one `Yield`): an outer
+  tuple-key lookup or probe runs inline in the head
+  (`command_dispatcher.cpp:7752-7754`), and an outer index probe or range
+  or Cabin probe is handed on but reaches no slice boundary; an aggregate
+  runs its walk synchronously in the head (`RunAggregated`, `:7224`).
 - **A failure discards the rows.** On an error `OnStatementComplete` erases
-  the portal and answers `S_ERROR` alone (`:715-741`), so today a client
+  the portal and answers `S_ERROR` alone (`:718-742`), so today a client
   never sees a row of a statement that failed.
 - **A structural refusal re-runs the statement** (BA-S14):
-  `StructuralRerunDue` (`command_dispatcher.cpp:883`) runs a statement that
-  wrote nothing again from the top after a yield when the clustered tree
-  refused a stale descent `TxnConflict`. A `SELECT` writes nothing, so a
-  walk refused part way is re-run, and today its rows from the first
-  attempt are discarded with the sink's reset.
+  `StructuralRerunDue` (`command_dispatcher.cpp:883`, the loop at `:781`)
+  runs a statement that wrote nothing again from the top after a yield
+  when the clustered tree refused a stale descent `TxnConflict`. A
+  `SELECT` writes nothing, so a walk refused part way is re-run - a join's
+  inner tuple-key probe (`step_vm.cpp:707`, `BtreeLookup`'s refusal at
+  `src/storage/btree/btree.cpp:1219`) can be refused after the outer walk
+  emitted rows, and the slice boundary's clear (`step_vm.cpp:2130`) does
+  not cover a refusal after it. **Nothing resets the sink for the re-run**:
+  `WireResultSink::Reset` (`kwp_session.cpp:298`) has no caller in `src/`,
+  so the re-run's rows are appended after the first attempt's in the
+  portal's batches and both are delivered - a duplicated answer today,
+  without CE `[quiet-wrong]`.
 - **Cancel** is observed at the slice boundary and ends the statement
   `CANCELLED` (`protocol.md` §10); a connection closed mid-statement sets
   the same flag, and `CloseClient` defers the teardown while `in_flight`.
@@ -137,9 +152,11 @@ its view and borrow, and the reply waits in memory. CLA proposes: the
 outbox carries at most `stream_outbox_bytes` (proposed 1 MiB, an engine
 constant) of unsent batches; past it the walk does not take its next
 slice, parked on the socket's writability under the deadline the
-connection already has (TCP keepalive's user timeout, 60 s, `protocol.md`
-§10). While parked it holds its read view (bounding the purge horizon),
-its borrow (a `DROP TABLE` waits on it) and its epoch. *(a)* park, as
+connection already has (TCP keepalive's user timeout, about twice
+`tcp_keepalive_s` - 120 s at the default 60 s - and none when
+`tcp_keepalive_s = 0`; `protocol.md` §10, `tcp_server.cpp:58-63`).
+While parked it holds its read view (bounding the purge horizon), its
+borrow (a `DROP TABLE` waits on it) and its epoch. *(a)* park, as
 proposed; *(b)* never park - keep buffering in memory past the cap as
 today, so a slow client costs memory, not horizon; *(c)* park up to a
 bound, then fall back to (b).
