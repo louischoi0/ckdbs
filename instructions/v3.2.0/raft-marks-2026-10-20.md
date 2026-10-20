@@ -56,3 +56,12 @@ what the word settles and what it does not.
 | **Mark** | **CE closed** (`workorder-ce-streaming-reply.md`): S0 `042cb59a`, S1..S4 `9e568b44`, S5 `c3ce8d55`, `89320fff`, `380f6a1d`, `cf655187`, `5f4d64fe`; the close measured (`bench/v3.3.0/results-ce-close-v3.3.0-52-g9e568b44.md`: first batch -54 % to -93 % past one slice, idle removed 0.95-0.99 of CE-S0's ceiling, point statements flat) and its one cost not reproduced (`results-ce-drain-attribution-v3.3.0-52-g9e568b44.md`); `origin/main` merged at `e09f3b9d`, where the full Debug suite ran 4189/4189. **Pushed to `main` with `--no-verify`** on this word |
 | **Does not settle** | a tag, a version; the gaps `known-gaps.md`'s "Streamed replies (CE)" names |
 | **Recorded at** | this file; the order's header; `instructions/v3.2.0/index.md`'s rows for the order and this file |
+
+## 7. AL, AN, AU and AV closed on paper
+
+| | |
+|---|---|
+| **Word** | *"close AL, AN, AU, AV on paper"* - after CLA's listing of the open milestones, in which the four AR0-chain orders stood with no close mark recorded while what they built is in force |
+| **Mark** | **Closed on paper, on the operator's word**: the record catches up with the tree, and no close stage or close measurement is run for any of them (checked at `244b031c`). **AL** (`instructions/v3.0.0/workorder-al-m0-single-wal.md`), AR0 M0: AL-S0..S9 built 2026-09-02/03, AL-S8 measured at `f6ed10c`, its review row left "in flight" with no follow-up row; the instance has one log stream and a pre-M0 volume does not mount (`wal.md`). **AN** (`workorder-an-read-view.md`): AN-S0..S4 built (AN-S2 the cutover, `18fed497`), AN-S5 half measured and half blocked as its stage log states; every reader is a commit-LSN snapshot (`txn.md` §4). **AU** (`workorder-au-ring-retirement.md`): AU-S1, S1b, S1c, S2 and S3 built; S4 rode AM-S2 and AO-S5 and S5 ran inside AT, neither as an AU stage, and S6 was built as AT-S10d (`6c643d40`); AT closed at AT-S20 (`8627f0d0`). **AV** (`workorder-av-two-core-rig.md`): the rig built at `62ab2e05` (AV-S0..S2); AV-S3's hosting is recorded cell by cell - cells 4, 6 and 7 since AU-S2 (`a8fa35e3`), cell 5 since AO-S4b (`54e7854d`), cell 8 restated as absent. Each order's unrun remainder stays unrun, and none is reported as a pass |
+| **Does not settle** | a tag, a version; AN-S5's blocked half; the gaps `known-gaps.md` states for the log, the read view and the wake path |
+| **Recorded at** | this file; each order's header; the four rows of `instructions/v3.0.0/index.md` and this file's row in `instructions/v3.2.0/index.md` |

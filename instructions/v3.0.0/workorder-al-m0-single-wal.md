@@ -2,6 +2,8 @@
 | AL-S8 review | **In flight 2026-09-03** — a `critics-developer` pass over the three results files, recomputing every derived figure against the archived raw data and checking the two claims that would outrank the rest if wrong: that the scenario-2 `--verify` failures are a pre-existing driver race rather than an engine lost update, and that the placement finding holds against `core_placement.hpp`. Its findings land in a follow-up row |
 # Work order AL — AR0 M0: the single WAL stream
 
+**CLOSED 2026-10-20 on paper, on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §7).
+
 Drafted 2026-09-02 by CLA on `worktree-v3.0.0-arch-revision` at `d15b5ac`
 (`v2.7.0-134-gd15b5ac`). Enacts AR0 §8 step 3 under the operator's
 go-ahead of the same day (AL-1). Governed by

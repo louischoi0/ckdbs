@@ -1,5 +1,7 @@
 # Work order AV — the deterministic two-core rig
 
+**CLOSED 2026-10-20 on paper, on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §7).
+
 Drafted 2026-09-07 by CLA against `origin/main` at `c9609c0`, as
 `workorder-aw-m1-close.md`'s AW-S6. Letter **AV** per AR0-6 D26, which
 rules the rig order is *not* `AS` — SUS-1 holds that letter — and proposes
