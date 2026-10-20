@@ -101,20 +101,8 @@ PostgreSQL's numbers are the morning's, so the ratios below carry that window's 
 **What part of the per-row gap remains, and what it is.** The corrected attribution (`bench/v3.3.0/results-row-cost-attribution-v3.3.0-37-gf829964c.md`, branch `row-cost-attribution`): about 84 % of the gap was the Python decoder, about 16 % (0.42 µs per row) engine-side, because
 `WireResultSink::Emit` and `KwpSession::Deliver` (BN-R7) send the whole reply at statement completion and the server's work is never overlapped with the client's. This run re-measured KDS's side of that with the fix in (`rowcost/`, KDS only, PostgreSQL's figures the attribution's):
 
-| component (µs per returned row, 12-column `daily_stats`, slope over 1 to 10,000 rows) | KDS, old client (this window) | KDS, new client | PostgreSQL 18.6 (attribution file, not re-measured) | new / old | new / PG |
-|---|---|---|---|---|---|
-| Wall slope, `values` (cells as Python ints) | 6.31 µs | 3.21 µs | 3.57 µs | 0.51x | 0.90x |
-| Server CPU (`drain`, fixed 3 s windows) | 0.42 µs | 0.42 µs | 0.57 µs | 1.00x | 0.74x |
-| Client CPU, total (`values`) | 5.89 µs | 2.79 µs | 3.55 µs | 0.47x | 0.79x |
-| - receive (`drain` client CPU) | 0.02 µs | 0.02 µs | 0.27 µs | 1.00x | 0.07x |
-| - split cells into `bytes` (`split` minus `drain`) | 5.28 µs | 2.20 µs | 2.59 µs | 0.42x | 0.85x |
-| - convert to int (`values` minus `split`) | 0.59 µs | 0.57 µs | 0.69 µs | 0.96x | 0.82x |
-| Client idle = wall - client CPU (`values`) | 0.43 µs | 0.42 µs | 0.01 µs | 0.98x | - |
-| Wall slope, `drain` (decode removed) | 0.42 µs | 0.42 µs | 0.57 µs | 1.00x | 0.74x |
-| **Wall slope, `send` (the scenario drivers' path: decode, render every cell to text, join)** | 9.25 µs | 4.70 µs | - | 0.51x | - |
-| - client CPU, `send` | 8.80 µs | 4.27 µs | - | 0.49x | - |
-| - of which render and join (`send` client CPU minus `split` client CPU) | 3.51 µs | 2.05 µs | - | 0.59x | - |
-| - client idle, `send` (wall - client CPU) | 0.45 µs | 0.43 µs | - | 0.96x | - |
+The component table (wall, server CPU, client CPU, decode, render and idle per returned row, old and new client) is in `results-scenario1-backtest-v3.3.0-38-ga40882af.md`, section 10, "Row-cost attribution, KDS only"; its conclusions:
+
 
 - **On a 12-column key-range read decoded to Python ints, KDS's wall slope is 3.21 µs per row against PostgreSQL's 3.57 µs (0.90x, a cross-window figure)**; the decode is no longer where KDS is behind (2.20 against 2.59 µs of client CPU).
 - **On the scenario drivers' own path (decode, render every cell to text, join) it is 4.70 µs per row** (9.25 with the old client), close to the scenario's `symbol-history` figure (4.84 µs per row at 7,560 rows) against PostgreSQL's 4.08 µs. The two are not the same statement: `symbol-history` is a FilterScan that walks

@@ -17,15 +17,9 @@ Driver: `tools/scenario4_cabinopt_days.py`, unmodified, two complete runs: **run
 | Field | Value |
 |---|---|
 | Date and time | 2026-10-20; run A 07:16:16 to 07:21:05 UTC, run B 07:21:09 to 07:26:00 UTC; A/B pairs (six runs of the driver, interleaved with the scenario 1 and 3 A/B cells) 07:31:11 to 08:07:27 UTC |
-| Worktree / branch | `kwp-decoder-fast-path` / `kwp-decoder-fast-path` (the main checkout is not used) |
-| HEAD | `a40882af`, `git describe --tags` = `v3.3.0-38-ga40882af` ("kwp: decode a row batch in one offset loop and resolve each column's renderer once"); it changes `tools/kwp.py` and `tools/ckdbs_cli.py` and nothing else; the engine source is that of `9682b725` |
-| Engine measured | the morning's binary copy, byte for byte: `/home/cdkbs/bench-runs/v3.3.0-38-ga40882af/kds_server` was copied from `/home/cdkbs/bench-runs/v3.3.0-33-g9682b725/kds_server`, **sha256 `7532bd14afb2acd4f9e48cac00732f899cb8e59b26fa1d9b982047fc89272f2a`** (checked equal before the first cell and after the last), source binary mtime 2026-10-20 03:36:57.38 UTC; nothing was rebuilt |
-| Client | this worktree's `tools/` (`kwp.py`, `ckdbs_cli.py` as of `a40882af`) drove every cell of the matrix. The A/B arm `old` ran `a40882af^`'s (`f829964c`) `tools/` from a separate directory, `bench-runs/v3.3.0-38-ga40882af/oldtools/tools/`, put first on `PYTHONPATH`; the tree was not modified |
-| Comparator | this engine's own morning run, `v3.3.0-33-g9682b725` (`bench/v3.3.0/results-scenario*-v3.3.0-33-g9682b725.md`): **same binary, old client**, 3 h earlier. PostgreSQL 18.6 is **reused** from that run; it was not re-run |
-| Time budget | **Budget lifted by the operator for this measurement; PostgreSQL reused from the same-day run at v3.3.0-33-g9682b725.** Every KDS cell of the morning's plan ran with its repeat counts |
+| Worktree, commit, engine binary, client, comparator, budget and everything else common to the run | stamped once in `summary-scenarios-v3.3.0-38-ga40882af.md`, section Stamp |
 | Server config | the common config plus `decay_half_life = 5`, `cabin_optimizer_snapshot_interval_ms = 500` on all three servers, and in run B `cabin_optimizer_cooldown_half_lives = 2`; `cores = 1`, `durability = group`; ports 15651 to 15653 |
 | Driver | **unmodified** `tools/scenario4_cabinopt_days.py`, `--port-off/-on/-declared` with the three servers' PIDs for the CPU readings, `--suffix a`; exit 0 in every run, `client_errors` 0 and `slot_overruns` 0 over 8 runs; the driver's byte-for-byte comparison of 18 statements per day across the three arms passed in 8 of 8 runs (3 days each) |
-| Unchanged from the morning | Everything else (build type, host, device, server config, quiet-host gate, monitor, PostgreSQL setup) is unchanged from the morning and is stamped once in `summary-scenarios-v3.3.0-38-ga40882af.md`, section Stamp. |
 
 ## 2. What was run
 

@@ -16,14 +16,8 @@ Comparator (this engine's own last run, same binary, old client): `bench/v3.3.0/
 | Field | Value |
 |---|---|
 | Date and time | 2026-10-20; the four core cells x 3 runs 06:53:41 to 06:58:53 UTC; isolation probe and booker sweep `x-b*` 06:58:57 to 07:03:02 UTC; single-booker cells 07:03:06 to 07:05:48 UTC; saturation cells 07:28:09 to 07:29:36 UTC; A/B pairs (twelve cells) 08:18:05 to 08:23:18 UTC |
-| Worktree / branch | `kwp-decoder-fast-path` / `kwp-decoder-fast-path` (the main checkout is not used) |
-| HEAD | `a40882af`, `git describe --tags` = `v3.3.0-38-ga40882af` ("kwp: decode a row batch in one offset loop and resolve each column's renderer once"); it changes `tools/kwp.py` and `tools/ckdbs_cli.py` and nothing else; the engine source is that of `9682b725` |
-| Engine measured | the morning's binary copy, byte for byte: `/home/cdkbs/bench-runs/v3.3.0-38-ga40882af/kds_server` was copied from `/home/cdkbs/bench-runs/v3.3.0-33-g9682b725/kds_server`, **sha256 `7532bd14afb2acd4f9e48cac00732f899cb8e59b26fa1d9b982047fc89272f2a`** (checked equal before the first cell and after the last), source binary mtime 2026-10-20 03:36:57.38 UTC; nothing was rebuilt |
-| Client | this worktree's `tools/` (`kwp.py`, `ckdbs_cli.py` as of `a40882af`) drove every cell of the matrix. The A/B arm `old` ran `a40882af^`'s (`f829964c`) `tools/` from a separate directory, `bench-runs/v3.3.0-38-ga40882af/oldtools/tools/`, put first on `PYTHONPATH`; the tree was not modified |
-| Comparator | this engine's own morning run, `v3.3.0-33-g9682b725` (`bench/v3.3.0/results-scenario*-v3.3.0-33-g9682b725.md`): **same binary, old client**, 3 h earlier. PostgreSQL 18.6 is **reused** from that run; it was not re-run |
-| Time budget | **Budget lifted by the operator for this measurement; PostgreSQL reused from the same-day run at v3.3.0-33-g9682b725.** Every KDS cell of the morning's plan ran with its repeat counts |
+| Worktree, commit, engine binary, client, comparator, budget and everything else common to the run | stamped once in `summary-scenarios-v3.3.0-38-ga40882af.md`, section Stamp |
 | Driver | **unmodified** `tools/scenario2_freight.py`, `--organizations 300 --ships 30 --operations 300 --cargos 4000 --bookers 8 --bookings 3000 --verify 100 --seed 1 --sync`; exit 0 in every cell |
-| Unchanged from the morning | Everything else (build type, host, device, server config, quiet-host gate, monitor, PostgreSQL setup) is unchanged from the morning and is stamped once in `summary-scenarios-v3.3.0-38-ga40882af.md`, section Stamp. |
 
 ## 2. What was run
 
