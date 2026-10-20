@@ -208,12 +208,10 @@ private:
     PageId page_id_ = kInvalidPageId;
 };
 
-// Pins an operation may hold above the per-operation ceiling
-// (`DevicePageStore::kPinCeiling`), granted one at a time before each is
-// taken and revoked together when the handle drops. An index divide grants
-// one for every parent it secures past the first, whose count no constant
-// bounds (`index_tree.cpp`'s `SecureParents`), and hands the handle out with
-// the holds it covers. Move-only; an empty one grants nothing.
+// Pins an operation may hold above `DevicePageStore::kPinCeiling`, granted
+// one at a time before each is taken and revoked together when the handle
+// drops - an index divide's (index_tree.cpp, "Peak pins"; page.md §3).
+// Move-only; an empty one grants nothing.
 class PinAllowance {
 public:
     PinAllowance() noexcept = default;
@@ -397,8 +395,7 @@ public:
     // 0, which is honest - it has no reclaim for a pin to hold off.
     virtual std::size_t live_pins() const noexcept { return 0; }
 
-    // `PinAllowance`'s seam: raises and lowers the ceiling a debug build
-    // checks `live_pins()` against. A store that checks no ceiling ignores it.
+    // `PinAllowance`'s seam. A store that checks no ceiling ignores it.
     virtual void AllowPins(std::size_t pins) noexcept { (void)pins; }
     virtual void RevokePins(std::size_t pins) noexcept { (void)pins; }
 
@@ -767,6 +764,7 @@ inline PinAllowance& PinAllowance::operator=(PinAllowance&& other) noexcept {
 }
 
 inline void PinAllowance::Grow(PageStore& store) noexcept {
+    assert((store_ == nullptr || store_ == &store) && "one allowance grants on one store");
     store_ = &store;
     ++pins_;
     store.AllowPins(1);

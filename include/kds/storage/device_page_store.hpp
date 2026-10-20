@@ -742,9 +742,8 @@ public:
     std::size_t live_pins() const noexcept override { return live_pins_; }
     std::size_t pin_high_water() const noexcept { return pin_high_water_; }
 
-    // `PinAllowance`'s grants, summed over every operation holding one and
-    // added to the ceiling the debug assert checks. Under the structure
-    // latch, as `live_pins_` is, so no pin is checked against half a grant.
+    // Open `PinAllowance`s' grants, added to the ceiling; under the
+    // structure latch, as `live_pins_` is.
     void AllowPins(std::size_t pins) noexcept override;
     void RevokePins(std::size_t pins) noexcept override;
     std::size_t pin_allowance() const noexcept { return pin_allowance_; }
@@ -804,16 +803,17 @@ public:
     // for a split that climbs `k` levels - its leaf, the `k` parents
     // `SecureParents` holds (AT-S16) and a level's created node
     // (btree.cpp's `PromoteSeparator`) - 3 in the ordinary case, and `k` is
-    // at most 6 on a 678-way tree. **An index's `k` has no such bound**
-    // (index_tree.cpp's walk up), so an index divide grants itself one pin
-    // of `PinAllowance` for every parent past the first, and the ceiling
-    // below is the ordinary case's, a divide securing one. Since AT-S21 an
-    // insert keeps its leaf and parents held until its record is stamped,
-    // so an index's split path stacks on the clustered one's; an outer
-    // chain walk adds 1, and index maintenance under a statement adds 2.
-    // 8 bounds the ordinary case, and a clustered split under an outer walk
-    // up to `k = 5`. The debug assert in PinFrame() aborts naming the count
-    // when a workload exceeds it.
+    // at most 6 on a 678-way tree. **An index's `k` has no such bound**,
+    // so an index divide's parents past the first are a `PinAllowance`'s
+    // (index_tree.cpp, "Peak pins"). Since AT-S21 an insert keeps its leaf
+    // and parents held until its record is stamped, so an index's split
+    // path stacks on the clustered one's; an outer chain walk adds 1, and
+    // index maintenance under a statement adds 2. 8 bounds the ordinary
+    // case, and a clustered split under an outer walk up to `k = 5` when no
+    // index divide stacks on it; a clustered split with `k = 2` growing a
+    // level under an index growth on the same row reaches 9, which takes
+    // about 678^2 clustered leaves. The debug assert in PinFrame() aborts
+    // naming the count when a workload exceeds it.
     //
     // **A scan ring adds 1, not `kds.scan_ring_frames`** (AM-R13): it pins
     // only the page its last Fetch returned. The suite would not catch a

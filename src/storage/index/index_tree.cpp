@@ -212,9 +212,7 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
 // node below is held, and every change to the range routed to it is a
 // divide of it.
 struct Parents {
-    // One pin past the ceiling for every parent after the first, granted
-    // before it is taken (`storage::PinAllowance`).
-    storage::PinAllowance allowance;
+    storage::PinAllowance allowance;  // before `held`, so the holds drop first
     // held[i] is the parent of the node one level below it - held[0] the
     // leaf's - taken exclusive and checked to route the key to that node.
     std::array<storage::PageRef, storage::kMaxBtreeDepth> held;
