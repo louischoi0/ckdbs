@@ -38,3 +38,12 @@ what the word settles and what it does not.
 | **Mark** | **CE written** (`workorder-ce-streaming-reply.md`), read as BN-R7, the rule it amends: rows of a plain `SELECT` leave at the walk's slice boundaries while it runs. **Not opened**: CE-Q0..Q6 are CLA's proposals, unmarked |
 | **Does not settle** | any of CE's questions; the opening |
 | **Recorded at** | this file; the order's header; `instructions/v3.2.0/index.md`'s rows for the order and this file |
+
+## 5. CE opened
+
+| | |
+|---|---|
+| **Word** | *"CE-Q0..Q6 $!a, go ahead"* - after CLA's listing of CE's questions |
+| **Mark** | **CE opened** (`workorder-ce-streaming-reply.md`): CE-Q0..Q6 each marked (a) by the operator. The opening review's findings (`2c43d900`) adopted on this go-ahead as CE-A1..A8 (the order's §6), among them **CE-A1**, a live `[quiet-wrong]` defect: a BA-S14 re-run of a `SELECT` answers the first attempt's rows again over KWP; fixed in CE-S1 |
+| **Does not settle** | push, merge to `main`, tag, version |
+| **Recorded at** | this file; the order's header and §6; `instructions/v3.2.0/index.md`'s rows for the order and this file |

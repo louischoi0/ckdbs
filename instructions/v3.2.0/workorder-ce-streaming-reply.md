@@ -8,8 +8,13 @@ Written 2026-10-20 on `ce-streaming-reply` from `b98271a9`
   milestone."* (written "RN7", read as BN-R7, the rule CE amends). It
   follows the row-cost attribution of the same day.
 
-**Not opened.** W0 asks for a plan. No stage starts until CE-Q0 is marked,
-and every proposal in §3 is CLA's, unmarked.
+- **W1** (2026-10-20): *"CE-Q0..Q6 $!a, go ahead"* - every question
+  marked (a) by the operator, and CE opened (`raft-marks-2026-10-20.md`
+  §5).
+
+**Opened 2026-10-20 on W1.** CE-Q0..Q6 are the operator's marks, each (a).
+The opening review's findings (`2c43d900`) are taken up on W1's go-ahead
+and recorded in §6 as adopted, never as the operator's marks.
 
 **Claim tags**: `[source-read]` with `path:line` at `b98271a9`;
 `[measured]` with its results file; `[design]` for reasoning about code not
@@ -206,3 +211,54 @@ Streaming a sorted, aggregated, query-layer or `RETURNING` reply (CE-Q1
 credit or window scheme beyond the socket; the Python client (fixed at
 `a40882af`); the remaining text-rendering cost of `send_command`, which is
 the client's.
+
+## 6. Marks and the opening review, adopted
+
+**The operator's marks (W1)**: CE-Q0 (a) opened; CE-Q1 (a) a plain unsorted
+`SELECT` run by `SelectRun` streams, nothing else; CE-Q2 (a) at slice
+boundaries only; CE-Q3 (a) rows followed by `S_ERROR` are no result, no
+capability gate; CE-Q5 (a) a slow client parks the walk; CE-Q6 (a) a
+capped portal does not stream.
+
+**The opening review (`2c43d900`), adopted on W1's go-ahead:**
+
+- **CE-A1 - the duplicate rows of a re-run, fixed in CE** `[quiet-wrong]`.
+  A BA-S14 re-run of a `SELECT` appends its rows to the portal's sink, which
+  still holds the first attempt's (`WireResultSink::Reset` is called
+  nowhere; the re-run loops are `command_dispatcher.cpp:781` and `:1154`):
+  a join whose inner tuple-key probe is refused after the outer walk emitted
+  rows answers them twice, with no error, over KWP. A live defect without
+  CE. CE-S1 carries its red cell and the fix: before a re-run the installed
+  sink returns to its state after `Describe`, through a `ResultSink` method
+  both loops call. Fixed in the session that found it, so no bug entry.
+- **CE-A2 - the `STREAMING` capability bit.** Bit 0 exists and means
+  "portals are built" (`kwp.hpp:159`, `protocol.md` §3). CE-Q3 (a) gates
+  nothing on a capability, so the bit keeps its meaning and no bit is added.
+- **CE-A3 - the hook is installed where every statement is submitted**
+  (`TcpServer::SubmitStatement`), not where a frame installs the sink: a
+  connection moved at a transaction's head (BL-S3) is submitted by the
+  destination's `AdoptMoved` without passing the frame path, and a hook
+  captured there would name the source core's server.
+- **CE-A4 - a streamed batch is handed out and dropped.** No per-batch sent
+  mark: a sealed batch leaves the sink when it is streamed, so streaming
+  bounds the server's memory rather than doubling it; one `streamed` flag
+  serves CE-R4, and `row_count()` is its own counter.
+- **CE-A5 - the kernel's send buffer is the cap.** CE-R5's
+  `stream_outbox_bytes` is struck: at a slice boundary the walk flushes, and
+  parks only while the outbox is still non-empty after `EAGAIN`, resuming
+  when it drains or the connection is closing. No new constant.
+- **CE-A6 - a parked walk wakes on a closed connection.** A hangup or a
+  socket error closes the connection (`closing`, the cancel flag), and the
+  park's predicate reads `closing`, so the walk resumes and ends `CANCELLED`
+  at its cancel check.
+- **CE-A7 - what a park escapes.** `ExpireOverdueTransactions` skips a
+  connection with a statement in flight (`tcp_server.cpp:882`), so a client
+  that stops reading inside an explicit transaction holds it past the 60 s
+  lifetime ceiling for as long as its socket lives: about twice
+  `tcp_keepalive_s` (120 s at the default), and without bound with
+  keepalive off. Stated in `protocol.md` §7 and `known-gaps.md` at the
+  close.
+- **CE-A8 - only an outermost leaf-chain walk reaches a slice boundary.**
+  An outer lookup or probe runs inline, an outer index or Cabin step and an
+  aggregate never yield; those keep the buffered reply, which CE-R1 (a)
+  already gives them in effect.
