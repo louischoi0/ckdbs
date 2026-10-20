@@ -1,8 +1,10 @@
 #include "kds/exec/step_vm.hpp"
 
 #include <functional>
+#include <future>
 #include <optional>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -410,30 +412,63 @@ TEST(ExecSuspendAuditTest, TheExecutorReportsAPageSpanAsUnsafeToSuspendUnder) {
 TEST(ExecSuspendAuditTest, TheExecutorReportsALivePinAsUnsafeToSuspendUnder) {
     // The pin half of the same rule (workplan-crosscore.md P4d-3): with
     // the PageRef migration landed, "suspending while holding a page" is
-    // mechanically live_pins() != 0 against the installing core's store.
+    // mechanically a pin this thread holds at the suspension point.
     auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
     ASSERT_TRUE(device.ok()) << device.status().message();
     auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/16);
     ASSERT_TRUE(store.ok()) << store.status().message();
 
-    exec::InstallSuspendAudit(store.value().get());
+    exec::InstallSuspendAudit();
     ASSERT_NE(sched::suspend_audit(), nullptr);
     EXPECT_TRUE(sched::suspend_audit()().empty());
 
     {
         auto created = store.value()->CreateNew();
         ASSERT_TRUE(created.ok()) << created.status().message();
-        ASSERT_NE(store.value()->live_pins(), 0u);
+        ASSERT_NE(storage::PinsHeldOnThisThread(), 0u);
         EXPECT_NE(sched::suspend_audit()().find("pin"), std::string_view::npos)
             << "a held PageRef must make the suspension point unsafe";
     }
     // Ref released: the boundary between pages holds nothing, and the
     // audit must go quiet again - the legal suspension point.
-    EXPECT_EQ(store.value()->live_pins(), 0u);
+    EXPECT_EQ(storage::PinsHeldOnThisThread(), 0u);
     EXPECT_TRUE(sched::suspend_audit()().empty());
 
-    // Uninstall before the store dies: the audit's pointer is
-    // thread-local and would otherwise dangle into the next test.
+    exec::UninstallSuspendAudit();
+}
+
+// Another thread's pin on the same store is not this thread's: a peer core
+// pinning the shared pool while this core parks between pages is the
+// ordinary shape, not a park-with-pin.
+//
+// **Mutation**: the pin half asking the store's `live_pins()` - the total
+// over every thread - trips here on the other thread's pin.
+TEST(ExecSuspendAuditTest, AnotherThreadsPinIsNotUnsafeToSuspendUnder) {
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/16);
+    ASSERT_TRUE(store.ok()) << store.status().message();
+
+    exec::InstallSuspendAudit();
+    std::promise<bool> held;
+    std::promise<void> release;
+    std::thread peer([&] {
+        auto created = store.value()->CreateNew();
+        held.set_value(created.ok());
+        release.get_future().wait();
+    });
+    const bool pinned = held.get_future().get();
+    // The store's total sees the peer's pin; this thread's count does not.
+    const std::size_t store_total = store.value()->live_pins();
+    EXPECT_EQ(storage::PinsHeldOnThisThread(), 0u);
+    const std::string_view verdict = sched::suspend_audit()();
+    release.set_value();
+    peer.join();  // before any ASSERT can return past a joinable thread
+    ASSERT_TRUE(pinned) << "the peer could not pin a page; the cell tested nothing";
+    EXPECT_NE(store_total, 0u) << "the peer's pin was not counted; the cell tested nothing";
+    EXPECT_TRUE(verdict.empty()) << "the audit counted the peer's pin as this thread's: " << verdict;
+    EXPECT_EQ(store.value()->live_pins(), 0u);
+
     exec::UninstallSuspendAudit();
 }
 

@@ -392,26 +392,19 @@ void ResetPageSpanGuard() noexcept;
 int LivePageSpans() noexcept;
 
 // Installs the executor's suspension audit into `sched` (coro.hpp's
-// SuspendAuditFn), so a coroutine that suspends while holding a page span
-// is detected rather than merely forbidden in prose.
-//
-// `store`, when given, extends the audit with the pin half of the same
-// rule (workplan-crosscore.md P4d-3): "suspending while holding a page" is
-// `store->live_pins() != 0` at the suspension point. `live_pins()` is the
-// store's total across every thread pinning it, so only a core that owns
-// its store passes it (core_runtime.cpp); a core borrowing core 0's pool
-// passes null and keeps the span check alone.
+// SuspendAuditFn), so a coroutine that suspends while holding a page span,
+// a page pin (workplan-crosscore.md P4d-3) or a no-refuse window is
+// detected rather than merely forbidden in prose. The pin half is
+// `storage::PinsHeldOnThisThread() != 0` at the suspension point - this
+// thread's pins, on any store, so every core installs the whole audit,
+// whether it owns its pool or borrows core 0's.
 //
 // Call once per core, on the core's own thread, before running
 // statements. It is idempotent and core-local, like the guard counters
-// and the store pointer it reads.
-void InstallSuspendAudit(const storage::PageStore* store = nullptr) noexcept;
+// it reads.
+void InstallSuspendAudit() noexcept;
 
-// Clears the audit and its store pointer. Owed at core teardown: the
-// audit is thread-local but the store it reads is not immortal, and a
-// coroutine polled on this thread after the runtime died would otherwise
-// dereference a freed store (debug builds only, but a crash in the
-// detector is still a crash).
+// Withdraws the audit from this thread.
 void UninstallSuspendAudit() noexcept;
 
 }  // namespace kds::exec

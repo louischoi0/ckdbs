@@ -2909,14 +2909,7 @@ void ResetPageSpanGuard() noexcept { g_guard_tripped = false; }
 
 int LivePageSpans() noexcept { return g_live_spans; }
 
-// The installing core's store, for the audit's pin check, or null.
-// Thread-local for the reason g_live_spans is: the audit is installed per
-// core, on the core's own thread. `live_pins()` counts every thread pinning
-// the store, so only a core that owns its store installs one
-// (core_runtime.cpp); a borrowing core installs null.
-thread_local const storage::PageStore* g_audit_store = nullptr;
-
-void InstallSuspendAudit(const storage::PageStore* store) noexcept {
+void InstallSuspendAudit() noexcept {
     // The executor's answer to "is it safe to be suspended right now?".
     //
     // R1 already forbids a page *fetch* under a live span, because nothing
@@ -2931,14 +2924,16 @@ void InstallSuspendAudit(const storage::PageStore* store) noexcept {
     // suspension point - between statements, between pages of a walk -
     // holds no pin, so the check is an equality with zero, not a budget.
     //
+    // The suspending thread's pins, never a store's total: a peer core's
+    // ordinary pin on the shared pool is not this coroutine's.
+    //
     // Installed here rather than checked here: `sched/` sits below this
     // layer and must not know what a page is (coro.hpp's SuspendAuditFn).
-    g_audit_store = store;
     sched::SetSuspendAudit([]() -> std::string_view {
         if (g_live_spans > 0) {
             return "a coroutine suspended while holding a page span (parser-v2.md I15 R1)";
         }
-        if (g_audit_store != nullptr && g_audit_store->live_pins() != 0) {
+        if (storage::PinsHeldOnThisThread() != 0) {
             return "a coroutine suspended while holding a page pin "
                    "(workplan-crosscore.md P4d-3)";
         }
@@ -2952,7 +2947,6 @@ void InstallSuspendAudit(const storage::PageStore* store) noexcept {
 }
 
 void UninstallSuspendAudit() noexcept {
-    g_audit_store = nullptr;
     sched::SetSuspendAudit(nullptr);
 }
 
