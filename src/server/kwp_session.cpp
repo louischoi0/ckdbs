@@ -802,8 +802,9 @@ FrameAction KwpSession::OnContinue(std::span<const std::byte> payload,
     return FrameAction{};
 }
 
-// A reply the engine has never typed - `SHOW META`, `DESCRIBE`, `ANALYZE`,
-// `SHOW PAGE` - as a one-column TEXT result set, one row per line.
+// A reply the engine has never typed - `ANALYZE`'s plan, `BACKUP STATUS` -
+// as a one-column TEXT result set, one row per line. Every `SHOW` and
+// `DESCRIBE` is a typed `sys` view since BO (`docs/spec/sys-views.md` SV5).
 //
 // §10 calls these "ordinary statements returning ordinary result sets", and
 // one column of text is the ordinary result set such an answer can honestly
