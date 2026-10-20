@@ -47,3 +47,12 @@ what the word settles and what it does not.
 | **Mark** | **CE opened** (`workorder-ce-streaming-reply.md`): CE-Q0..Q6 each marked (a) by the operator. The opening review's findings (`2c43d900`) adopted on this go-ahead as CE-A1..A8 (the order's §6), among them **CE-A1**, a live `[quiet-wrong]` defect: a BA-S14 re-run of a `SELECT` answers the first attempt's rows again over KWP; fixed in CE-S1 |
 | **Does not settle** | push, merge to `main`, tag, version |
 | **Recorded at** | this file; the order's header and §6; `instructions/v3.2.0/index.md`'s rows for the order and this file |
+
+## 6. CE closed; pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify and close the milestone"* - after CLA's report that every stage of CE was built, reviewed and its close measured |
+| **Mark** | **CE closed** (`workorder-ce-streaming-reply.md`): S0 `042cb59a`, S1..S4 `9e568b44`, S5 `c3ce8d55`, `89320fff`, `380f6a1d`, `cf655187`, `5f4d64fe`; the close measured (`bench/v3.3.0/results-ce-close-v3.3.0-52-g9e568b44.md`: first batch -54 % to -93 % past one slice, idle removed 0.95-0.99 of CE-S0's ceiling, point statements flat) and its one cost not reproduced (`results-ce-drain-attribution-v3.3.0-52-g9e568b44.md`); `origin/main` merged at `e09f3b9d`, where the full Debug suite ran 4189/4189. **Pushed to `main` with `--no-verify`** on this word |
+| **Does not settle** | a tag, a version; the gaps `known-gaps.md`'s "Streamed replies (CE)" names |
+| **Recorded at** | this file; the order's header; `instructions/v3.2.0/index.md`'s rows for the order and this file |

@@ -12,6 +12,8 @@ Written 2026-10-20 on `ce-streaming-reply` from `b98271a9`
   marked (a) by the operator, and CE opened (`raft-marks-2026-10-20.md`
   §5).
 
+**CLOSED 2026-10-20 on the operator's word** (`raft-marks-2026-10-20.md` §6), pushed with the hook skipped.
+
 **Opened 2026-10-20 on W1.** CE-Q0..Q6 are the operator's marks, each (a).
 The opening review's findings (`2c43d900`) are taken up on W1's go-ahead
 and recorded in §6 as adopted, never as the operator's marks.
