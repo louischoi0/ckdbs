@@ -29,3 +29,12 @@ what the word settles and what it does not.
 | **Mark** | **Closed on the operator's word**, each as built and measured, its code on `main` (checked at `4dfed311`): **BR** (`instructions/v3.0.0/workorder-br-backup-restore.md`), built to its close 2026-10-12, measured in `bench/v3.0.0/results-br-close-backup-restore-v2.7.0-913-ga8110b05.md` and `results-br-close-overhead-v2.7.0-913-ga8110b05.md`; **BV** (`workorder-bv-transition-constraints.md`), BV-S4's close 2026-10-14; **BY** (`workorder-by-reindex-drop-index-reclaim.md`), BY-S4's close 2026-10-16, `bench/v3.2.0/results-by-close-v3.2.0-119-g9da66f0e.md`; **BZ** (`workorder-bz-heap-hidden-key.md`), S1-S3 and the close measured, `bench/v3.2.0/results-bz-close-v3.2.0-153-g18e7b511.md` (about 92 minutes, over the one-hour budget); **CB** (`workorder-cb-join-planner.md`), S1 `bf0637da` and S2 `0640941f`, the close measured at `62adcf76`. BR's close lifts the gate that held BS-S2..S8 (`instructions/v3.0.0/workorder-bs-test-hardening.md`) |
 | **Does not settle** | a tag, a version; each order's open gaps as `known-gaps.md` states them; BS's next stage |
 | **Recorded at** | this file; each order's header; the five index rows (`instructions/v3.0.0/index.md` for BR, `instructions/v3.2.0/index.md` for the other four and for this file) |
+
+## 4. CE written
+
+| | |
+|---|---|
+| **Word** | *"RN7 client transport while executing plan new milestone"* - after the scenario re-measurement with the fixed client decoder, which put 56 % to 84 % of the remaining many-row gap to PostgreSQL in the reply leaving only at the statement's completion (BN-R7) |
+| **Mark** | **CE written** (`workorder-ce-streaming-reply.md`), read as BN-R7, the rule it amends: rows of a plain `SELECT` leave at the walk's slice boundaries while it runs. **Not opened**: CE-Q0..Q6 are CLA's proposals, unmarked |
+| **Does not settle** | any of CE's questions; the opening |
+| **Recorded at** | this file; the order's header; `instructions/v3.2.0/index.md`'s rows for the order and this file |
