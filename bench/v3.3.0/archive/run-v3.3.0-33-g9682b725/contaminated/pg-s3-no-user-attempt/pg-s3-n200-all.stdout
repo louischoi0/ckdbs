@@ -1,0 +1,2 @@
+pg_scenario3 aborted: could not connect to 127.0.0.1:15434/bench: 28000 role "ec2-user" does not exist
+  start one with: ./tools/pg_setup.sh init

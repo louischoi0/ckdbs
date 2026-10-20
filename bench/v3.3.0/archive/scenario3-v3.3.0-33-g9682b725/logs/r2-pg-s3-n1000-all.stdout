@@ -1,0 +1,48 @@
+
+postgresql benchmark - 34 columns, 1000 rows resident, 1 connection
+server 127.0.0.1:15434  table users_r2_pg_s3_n1000_all, books_r2_pg_s3_n1000_all, reservations_r2_pg_s3_n1000_all, loans_r2_pg_s3_n1000_all
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          4         0    4321.3   2320.4   2320.4   2797.4   7856.1   7856.1    7856.1     0
+load                      1900         0    1318.1   1011.2   1170.7   1247.4   1598.0   2090.3   15743.8     0
+create-index                12         0    1952.1   1499.1   1669.9   1968.8   2667.9   2667.9    2667.9     0
+pk-user                    200         0      69.7     65.0     66.1     66.8     82.7     86.2     276.3     0
+loans-by-user              200         0      86.7     71.1     81.0     84.9    100.7    113.0     226.6     0
+loans-by-book              200         0      83.4     72.1     78.5     81.8    100.1    105.2     109.8     0
+resv-by-user               200         0      73.6     61.7     68.4     72.4     87.2    100.2     161.0     0
+books-by-author            200         0      85.6     70.9     75.5     79.1    122.5    151.0     195.0     0
+books-by-genre             200         0      99.1     81.9     90.5     93.8    131.4    145.4     161.8     0
+loans-by-daterange         200         0     172.2    110.6    163.3    170.5    193.3    201.0     307.1     0
+overdue                    200         0     137.5     88.0    126.2    133.0    174.0    192.6     206.5     0
+join-loan-user             200         0     116.6    102.8    111.2    114.5    132.2    138.0     226.3     0
+join-no-literal            200         0     319.0    304.3    309.4    316.8    337.2    341.5     474.0     0
+exists-correlated          200         0     208.8    199.4    202.0    204.7    226.5    243.1     260.5     0
+count-by-user              200         0      84.6     78.5     81.4     82.3     99.2    103.2     163.9     0
+
+  ddl: CREATE TABLE x4
+  load: INSERT x all four relations
+  create-index: --index-mode all
+  pk-user: WHERE id = ? - index scan on the pk, the control
+  loans-by-user: WHERE user_id = ? - ~5 matches
+  loans-by-book: WHERE book_id = ? - ~5 matches
+  resv-by-user: WHERE user_id = ? on reservations
+  books-by-author: WHERE author_id = ? - middle selectivity
+  books-by-genre: WHERE genre = ? - 1/16 of the relation
+  loans-by-daterange: WHERE loaned_day BETWEEN ? AND ? - 30 days
+  overdue: WHERE status = ? AND due_day BETWEEN ? AND ?
+  join-loan-user: loans JOIN users ON user_id = id
+  join-no-literal: JOIN ON l.user_id = u.id, u.id BETWEEN 1 AND 16 - no literal to propagate
+  exists-correlated: EXISTS(loans WHERE user_id = users.id), 20 outer rows
+  count-by-user: SELECT COUNT(*) ... WHERE user_id = ?
+
+  index mode all (after load), analyze on
+  sizes: users=200, books=200, reservations=500, loans=1000
+  no Cabin equivalent exists here - a --cabin ckdbs run has no twin column in the comparison
+  EXPLAIN:
+      loans-by-user: Bitmap Heap Scan on loans_r2_pg_s3_n1000_all  (cost=4.31..12.79 rows=5 width=8) /   Recheck Cond: (user_id = 1) /   ->  Bitmap Index Scan on loans_user_cov_r2_p
+      books-by-genre: Seq Scan on books_r2_pg_s3_n1000_all  (cost=0.00..5.50 rows=16 width=13) /   Filter: (genre = 3)
+      overdue: Bitmap Heap Scan on loans_r2_pg_s3_n1000_all  (cost=6.00..18.36 rows=135 width=8) /   Recheck Cond: ((status = 2) AND (due_day >= 19700) AND (due_day <= 20000))
+      join-no-literal: Hash Join  (cost=6.20..28.88 rows=80 width=17) /   Hash Cond: (l.user_id = u.id) /   ->  Seq Scan on loans_r2_pg_s3_n1000_all l  (cost=0.00..20.00 rows=1000 wid
+      exists-correlated: Nested Loop Semi Join  (cost=0.28..31.00 rows=20 width=8) /   ->  Seq Scan on users_r2_pg_s3_n1000_all  (cost=0.00..6.00 rows=20 width=8) /         Filter: ((id
+  wrote /home/cdkbs/bench-runs/v3.3.0-33-g9682b725/json/r2-pg-s3-n1000-all.json

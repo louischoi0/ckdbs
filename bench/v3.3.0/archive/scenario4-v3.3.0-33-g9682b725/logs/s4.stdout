@@ -1,0 +1,155 @@
+/home/cdkbs/ckdbs/.claude/worktrees/bench-scenarios-1-4/tools/scenario4_cabinopt_days.py:571: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  "started_utc": datetime.datetime.utcfromtimestamp(run_t0)
+
+ckdbs benchmark - id int64, symbol varchar, qty int64, price int64 columns, boards 2x10000, tapes 200/1000/10000 rows resident, BTREE-clustered, 1 connection
+server 127.0.0.1:15651/15652/15653  table board_*/tape_*_a
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+load[off]                31200    21,998      45.5     35.9     42.9     43.4     59.5     68.6     234.1     0
+load[on]                 31200    19,916      50.2     36.9     43.5     44.6     65.4     81.7     145.8     0
+load[declared]           31200    21,276      47.0     37.5     42.9     43.6     62.3     74.3     221.5     0
+d1-open[off]               240       795    1258.4    975.0   1155.1   1210.4   1538.3   2431.7    4653.1     0
+d1-open[on]                240       839    1192.0    966.3   1066.6   1164.4   1505.2   1624.0    2507.4     0
+d1-open[declared]          240       828    1208.5    979.9   1078.9   1139.5   1555.5   2702.2    5979.6     0
+d1-board[off]             2400     2,344     426.6    350.2    409.0    426.8    474.6    617.0     918.1     0
+d1-tape200[off]            396     9,279     107.8     96.6     99.6    102.0    134.2    150.5     170.9     0
+d1-tape1k[off]             396     7,720     129.5    118.2    120.5    123.2    156.4    177.9     196.2     0
+d1-tape10k[off]            396     2,679     373.3    342.9    353.1    364.5    432.8    537.6     546.4     0
+d1-pk[off]                 240    13,214      75.7     60.6     63.4     67.1    105.7    124.5     262.1     0
+d1-board[on]              2400     4,189     238.7    100.2    167.0    182.4    440.2    758.6     930.8     0
+d1-tape200[on]             396     9,213     108.5     96.3     98.8    102.4    136.5    151.9     195.2     0
+d1-tape1k[on]              396     8,744     114.4     96.1     99.3    107.1    157.5    179.1     201.1     0
+d1-tape10k[on]             396     5,377     186.0     96.2     99.7    109.4    417.3    772.7     798.8     0
+d1-pk[on]                  240    13,486      74.2     61.5     63.5     65.4     99.5    120.8     280.3     0
+d1-board[declared]        2400     3,621     276.2     97.4    163.8    175.7    779.4    827.6    1065.9     0
+d1-tape200[declared]       396     9,463     105.7     94.0     97.1    100.3    130.5    160.2     185.9     0
+d1-tape1k[declared]        396     8,787     113.8     94.3     97.4    101.8    172.2    193.3     206.6     0
+d1-tape10k[declared]       396     4,521     221.2     94.0     97.8    105.1    782.1    867.7     945.1     0
+d1-pk[declared]            240    14,228      70.3     60.3     61.8     63.6     93.2    114.7     239.7     0
+d1-close[off]               12       671    1490.1    649.5    692.2    755.9   3999.6   3999.6    3999.6     0
+d1-close[on]                12       687    1454.8    669.0    718.3    776.5   3736.6   3736.6    3736.6     0
+d1-close[declared]          12       681    1467.9    675.7    715.9    797.7   3811.8   3811.8    3811.8     0
+d2-open[off]               240       786    1272.3    985.0   1112.8   1179.5   1551.3   3245.4    6726.1     0
+d2-open[on]                240       794    1258.8    988.5   1113.4   1185.0   1493.1   1831.8   12582.5     0
+d2-open[declared]          240       813    1230.1    999.5   1109.9   1199.9   1504.4   1837.2    2976.0     0
+d2-board[off]             2400     2,348     425.8    349.9    411.4    429.0    467.0    503.5     781.1     0
+d2-tape200[off]            396     9,493     105.3     96.4     99.2    101.4    124.9    142.4     152.5     0
+d2-tape1k[off]             396     7,865     127.1    118.3    120.8    123.1    146.2    158.2     172.0     0
+d2-tape10k[off]            396     2,740     364.9    343.3    352.5    360.9    402.3    445.6     500.9     0
+d2-pk[off]                 240    14,060      71.1     60.8     62.6     64.7     95.7    119.5     130.9     0
+d2-board[on]              2400     4,130     242.2    100.7    168.3    186.3    444.9    774.0    1150.6     0
+d2-tape200[on]             396     9,296     107.6     96.4     99.1    102.1    135.3    152.3     164.2     0
+d2-tape1k[on]              396     9,121     109.6     96.3     98.7    101.4    142.8    172.6     185.9     0
+d2-tape10k[on]             396     6,559     152.5     96.5     99.1    104.5    412.5    761.6     834.1     0
+d2-pk[on]                  240    14,046      71.2     61.4     63.5     64.9     97.6    115.8     127.2     0
+d2-board[declared]        2400     3,684     271.4     98.2    164.3    179.2    784.8    857.6     981.5     0
+d2-tape200[declared]       396     9,287     107.7     94.7     97.1    100.0    138.4    155.5     164.8     0
+d2-tape1k[declared]        396     8,882     112.6     94.5     97.3    102.2    170.9    209.2     238.8     0
+d2-tape10k[declared]       396     5,359     186.6     94.5     97.9    102.3    781.5    868.0    1018.1     0
+d2-pk[declared]            240    13,821      72.4     60.2     62.0     64.1    100.8    116.2     154.7     0
+d2-close[off]               12       692    1445.8    662.0    689.7    716.0   3625.3   3625.3    3625.3     0
+d2-close[on]                12       680    1469.9    673.8    704.8    787.9   3765.4   3765.4    3765.4     0
+d2-close[declared]          12       601    1663.6    691.0    726.8    786.5   6102.6   6102.6    6102.6     0
+d3-open[off]               240       837    1195.1    963.3   1106.1   1158.0   1515.1   1761.5    1819.8     0
+d3-open[on]                240       778    1284.8    975.5   1166.0   1234.8   1499.8   2481.6    8122.3     0
+d3-open[declared]          240       830    1205.0    956.7   1062.5   1162.1   1505.2   2350.2    5748.6     0
+d3-board[off]             2400     2,279     438.7    359.1    423.3    440.1    486.3    555.4     800.7     0
+d3-tape200[off]            396     8,812     113.5     96.8     99.9    106.2    142.8    161.4     168.4     0
+d3-tape1k[off]             396     7,239     138.1    118.3    121.9    131.4    171.7    179.7     215.8     0
+d3-tape10k[off]            396     2,692     371.4    344.3    353.2    367.2    406.1    459.6     475.1     0
+d3-pk[off]                 240    13,256      75.4     60.4     63.1     67.0    101.9    128.1     162.5     0
+d3-board[on]              2400     4,742     210.9     98.1    169.3    178.1    395.9    795.7    1672.2     0
+d3-tape200[on]             396     9,298     107.5     96.6     99.1    102.2    132.8    150.4     166.7     0
+d3-tape1k[on]              396     9,134     109.5     95.7     99.1    101.9    143.9    184.4     205.4     0
+d3-tape10k[on]             396     6,522     153.3     96.0     99.5    104.6    408.6    738.4     762.8     0
+d3-pk[on]                  240    14,067      71.1     61.6     63.2     65.0     97.1    117.5     123.3     0
+d3-board[declared]        2400     4,195     238.4     97.2    167.5    178.4    793.7    855.7    1024.2     0
+d3-tape200[declared]       396     9,225     108.4     94.2     97.2    100.7    137.4    153.1     168.9     0
+d3-tape1k[declared]        396     9,090     110.0     94.8     97.8    102.3    138.7    194.1     229.0     0
+d3-tape10k[declared]       396     4,855     206.0     94.2     97.9    106.8    785.4   1069.9    1168.2     0
+d3-pk[declared]            240    13,792      72.5     60.4     62.2     64.9    100.1    120.9     123.4     0
+d3-close[off]               12       697    1435.5    663.1    681.6    701.0   3620.1   3620.1    3620.1     0
+d3-close[on]                12       678    1474.0    694.9    712.6    799.8   3704.4   3704.4    3704.4     0
+d3-close[declared]          12       670    1491.9    672.6    707.2    815.1   3816.3   3816.3    3816.3     0
+
+  load[off]: setup, txn batches of 500
+  load[on]: setup, txn batches of 500
+  load[declared]: setup, txn batches of 500
+  d1-open[off]: 240 inserts, board_a_a
+  d1-open[on]: 240 inserts, board_a_a
+  d1-open[declared]: 240 inserts, board_a_a
+  d1-board[off]: hot equality on board_a_a, 8 hot syms
+  d1-tape200[off]: 200 rows, rotating hot values
+  d1-tape1k[off]: 1000 rows, rotating hot values
+  d1-tape10k[off]: 10000 rows, rotating hot values
+  d1-pk[off]: control: touches no Cabin
+  d1-board[on]: hot equality on board_a_a, 8 hot syms
+  d1-tape200[on]: 200 rows, rotating hot values
+  d1-tape1k[on]: 1000 rows, rotating hot values
+  d1-tape10k[on]: 10000 rows, rotating hot values
+  d1-pk[on]: control: touches no Cabin
+  d1-board[declared]: hot equality on board_a_a, 8 hot syms
+  d1-tape200[declared]: 200 rows, rotating hot values
+  d1-tape1k[declared]: 1000 rows, rotating hot values
+  d1-tape10k[declared]: 10000 rows, rotating hot values
+  d1-pk[declared]: control: touches no Cabin
+  d1-close[off]: COUNT/SUM/GROUP BY full scans
+  d1-close[on]: COUNT/SUM/GROUP BY full scans
+  d1-close[declared]: COUNT/SUM/GROUP BY full scans
+  d2-open[off]: 240 inserts, board_b_a
+  d2-open[on]: 240 inserts, board_b_a
+  d2-open[declared]: 240 inserts, board_b_a
+  d2-board[off]: hot equality on board_b_a, 8 hot syms
+  d2-tape200[off]: 200 rows, rotating hot values
+  d2-tape1k[off]: 1000 rows, rotating hot values
+  d2-tape10k[off]: 10000 rows, rotating hot values
+  d2-pk[off]: control: touches no Cabin
+  d2-board[on]: hot equality on board_b_a, 8 hot syms
+  d2-tape200[on]: 200 rows, rotating hot values
+  d2-tape1k[on]: 1000 rows, rotating hot values
+  d2-tape10k[on]: 10000 rows, rotating hot values
+  d2-pk[on]: control: touches no Cabin
+  d2-board[declared]: hot equality on board_b_a, 8 hot syms
+  d2-tape200[declared]: 200 rows, rotating hot values
+  d2-tape1k[declared]: 1000 rows, rotating hot values
+  d2-tape10k[declared]: 10000 rows, rotating hot values
+  d2-pk[declared]: control: touches no Cabin
+  d2-close[off]: COUNT/SUM/GROUP BY full scans
+  d2-close[on]: COUNT/SUM/GROUP BY full scans
+  d2-close[declared]: COUNT/SUM/GROUP BY full scans
+  d3-open[off]: 240 inserts, board_a_a
+  d3-open[on]: 240 inserts, board_a_a
+  d3-open[declared]: 240 inserts, board_a_a
+  d3-board[off]: hot equality on board_a_a, 8 hot syms
+  d3-tape200[off]: 200 rows, rotating hot values
+  d3-tape1k[off]: 1000 rows, rotating hot values
+  d3-tape10k[off]: 10000 rows, rotating hot values
+  d3-pk[off]: control: touches no Cabin
+  d3-board[on]: hot equality on board_a_a, 8 hot syms
+  d3-tape200[on]: 200 rows, rotating hot values
+  d3-tape1k[on]: 1000 rows, rotating hot values
+  d3-tape10k[on]: 10000 rows, rotating hot values
+  d3-pk[on]: control: touches no Cabin
+  d3-board[declared]: hot equality on board_a_a, 8 hot syms
+  d3-tape200[declared]: 200 rows, rotating hot values
+  d3-tape1k[declared]: 1000 rows, rotating hot values
+  d3-tape10k[declared]: 10000 rows, rotating hot values
+  d3-pk[declared]: control: touches no Cabin
+  d3-close[off]: COUNT/SUM/GROUP BY full scans
+  d3-close[on]: COUNT/SUM/GROUP BY full scans
+  d3-close[declared]: COUNT/SUM/GROUP BY full scans
+
+per-arm busy-time TPS (timed ops / summed latencies):
+  day 1 [declared ]  ops=  4080  busy=   1.16s  tps=    3512
+  day 2 [declared ]  ops=  4080  busy=   1.15s  tps=    3563
+  day 3 [declared ]  ops=  4080  busy=   1.06s  tps=    3832
+  day 1 [off      ]  ops=  4080  busy=   1.60s  tps=    2544
+  day 2 [off      ]  ops=  4080  busy=   1.60s  tps=    2553
+  day 3 [off      ]  ops=  4080  busy=   1.62s  tps=    2516
+  day 1 [on       ]  ops=  4080  busy=   1.06s  tps=    3863
+  day 2 [on       ]  ops=  4080  busy=   1.06s  tps=    3833
+  day 3 [on       ]  ops=  4080  busy=   1.00s  tps=    4097
+
+verify (byte-identical replies across arms, per day): PASS PASS PASS
+json -> /home/cdkbs/bench-runs/v3.3.0-33-g9682b725/json/s4.json
