@@ -20,7 +20,9 @@
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/index/index_tree.hpp"
+#include "kds/stats/checkpoint_log.hpp"
 #include "kds/stats/optimizer_signals.hpp"
+#include "kds/stats/relation_stats.hpp"
 #include "kds/stats/statement_stats.hpp"
 
 // The builders of every `sys` view (`include/kds/server/sys_views.hpp`).
@@ -51,6 +53,10 @@ constexpr std::uint32_t kStr = catalog::kTypeValVarchar;
 // as a timestamp, so `WHERE started > '...'` reads as written.
 constexpr std::uint32_t kTimestamp = catalog::kTypeValTimestamp;
 
+// Every memory-resident statistics store keeps a part per core
+// (`stats/per_core_ring.hpp`), so a view reads every core's rows.
+static_assert(stats::kStatsParts == kMaxCores, "a part for every core an instance runs");
+
 // The registry, in the order `SysViewNames()` reports them. The first five
 // are the catalog views that predate BO.
 constexpr SysViewSpec kViews[] = {
@@ -70,6 +76,7 @@ constexpr SysViewSpec kViews[] = {
     {"cabin_optimizer"},
     {"lock_waits"},
     {"statement_stats"},
+    {"checkpoints"},
     {"page_slots", ViewKeyMode::kRequired, "page_id", kInt},
     {"meta"},
 };
@@ -234,6 +241,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "cabin_optimizer") return CabinOptimizerView(byte);
     if (n == "lock_waits") return LockWaitsView();
     if (n == "statement_stats") return StatementStatsView();
+    if (n == "checkpoints") return CheckpointsView();
     if (n == "page_slots") return PageSlotsView(*key);
     if (n == "meta") return MetaView();
 
@@ -620,7 +628,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::AccessStatsView() {
 StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
     exec::CatalogView view;
     // The budget columns are exact, derived at read through `BudgetOf`; the
-    // shape columns walk the clustered tree, as `DESCRIBE` did.
+    // shape columns walk the clustered tree, as `DESCRIBE` did. The activity
+    // columns (BO-S6) are the rows the relation's write statements reported
+    // since the instance started, every core's summed
+    // (`stats/relation_stats.hpp` says what counts).
     Define(view, {{"oid", kInt},
                   {"namespace", kStr},
                   {"name", kStr},
@@ -633,7 +644,11 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
                   {"height", kInt},
                   {"leaves", kInt},
                   {"est_rows", kInt},
-                  {"generation", kInt}});
+                  {"generation", kInt},
+                  {"inserts", kInt},
+                  {"updates", kInt},
+                  {"deletes", kInt},
+                  {"purged", kInt}});
     // The join planner's published prior and the snapshot it is from
     // (plan-stats.md §6): NULL where none is published. Read here for the
     // operator; the planner never reads this view.
@@ -643,6 +658,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
         const std::optional<double> rows = plan_snapshot->RelationRows(oid);
         return rows.has_value() ? Int(static_cast<std::int64_t>(std::llround(*rows))) : Null();
     };
+    const std::unordered_map<catalog::Oid, stats::RelationActivity> activity =
+        stats::RelationStats::Snapshot();
     auto tables = catalog_.ListTables();
     if (!tables.ok()) return tables.status();
     auto labels = RelationLabels::Read(catalog_, nullptr);
@@ -667,13 +684,17 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
         // double's product can land a unit either side of the floor.
         const auto used_ppm = static_cast<std::uint64_t>(
             static_cast<unsigned __int128>(budget.issued) * 1'000'000 / budget.capacity);
+        const auto counted = activity.find(obj.oid);
+        const stats::RelationActivity a =
+            counted == activity.end() ? stats::RelationActivity{} : counted->second;
         view.rows.push_back({Int(obj.oid), labels.value().Spelling(obj.namespace_oid),
                              Str(catalog::NameView(obj.name)),
                              Int(row.value().next_id), Int(budget.issued), Int(budget.remaining),
                              Int(used_ppm), Bool(budget.warn), Bool(budget.exhausted),
                              std::move(height), std::move(leaves), est_rows(obj.oid),
                              plan_snapshot != nullptr ? Int(plan_snapshot->generation())
-                                                      : Null()});
+                                                      : Null(),
+                             Int(a.inserts), Int(a.updates), Int(a.deletes), Int(a.purged)});
     }
     return view;
 }
@@ -881,8 +902,6 @@ StatusOr<exec::CatalogView> CommandDispatcher::LockWaitsView() {
     // relation. `granted` is a flipped slot, not a grant. A waiter or holder
     // that is no transaction (an autocommit statement holding nothing, a
     // read borrow) is NULL.
-    static_assert(stats::LockWaitLog::kParts == kMaxCores,
-                  "a part for every core an instance runs");
     Define(view, {{"seq", kInt},
                   {"core", kInt},
                   {"started", kTimestamp},
@@ -923,6 +942,34 @@ StatusOr<exec::CatalogView> CommandDispatcher::StatementStatsView() {
         view.rows.push_back({Int(s.fetch_id), Str(s.kind), Int(s.calls), Int(s.refused),
                              Int(s.total_us), Int(s.max_us), Timestamp(s.first_seen_us),
                              Timestamp(s.last_seen_us), Str(s.shape_text)});
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::CheckpointsView() {
+    exec::CatalogView view;
+    // Every core's recent checkpoint runs, one row each (BO-S7, §3.4), read
+    // from the instance's store whatever core asks - an engine-state view, so
+    // it filters nothing. `outcome` is `completed` or `failed`; a run that took
+    // up a failed run's snapshot is `resumed`, whatever its outcome, and took
+    // no snapshot of its own (`dirty_at_start` 0). The waits are on the log
+    // and on the data file's sync (`stats/checkpoint_log.hpp`).
+    Define(view, {{"seq", kInt},
+                  {"core", kInt},
+                  {"started", kTimestamp},
+                  {"duration_us", kInt},
+                  {"steps", kInt},
+                  {"pages_flushed", kInt},
+                  {"dirty_at_start", kInt},
+                  {"log_wait_us", kInt},
+                  {"data_wait_us", kInt},
+                  {"resumed", kInt},
+                  {"outcome", kStr}});
+    for (const stats::CheckpointRecord& r : stats::CheckpointLog::Snapshot()) {
+        view.rows.push_back({Int(r.seq), Int(r.core), Timestamp(r.started_us),
+                             Int(r.duration_us), Int(r.steps), Int(r.pages_flushed),
+                             Int(r.dirty_at_start), Int(r.log_wait_us), Int(r.data_wait_us),
+                             Bool(r.resumed), Str(r.completed ? "completed" : "failed")});
     }
     return view;
 }

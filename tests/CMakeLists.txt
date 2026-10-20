@@ -117,6 +117,7 @@ add_executable(kds_tests
     range_scan_test.cpp
     access_stats_test.cpp
     lock_wait_log_test.cpp
+    relation_stats_test.cpp
     statement_stats_test.cpp
     decay_test.cpp
     optimizer_signals_test.cpp

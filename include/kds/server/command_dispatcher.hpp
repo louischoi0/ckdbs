@@ -41,6 +41,7 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
 #include "kds/stats/lock_wait_log.hpp"
+#include "kds/stats/relation_stats.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/coro.hpp"
 
@@ -307,6 +308,10 @@ struct DispatchOutcome {
     // `SELECT`, `INSERT` and `UPDATE` do). Carried for `poison_withheld`'s
     // reason: another statement of this core can run before this one ends.
     std::uint64_t fetch_id = 0;
+
+    // **The relation `rows_affected` counts rows of** (BO-S6), for
+    // `sys.relation_stats`: set beside a write's count, 0 everywhere else.
+    catalog::Oid written_oid = 0;
 
     // **The reply carries rows besides its tag** (RETURNING, BU-Q17): the
     // rows went out through the session's sink, and `response` is still the
@@ -748,6 +753,12 @@ private:
     // transaction a failure **poisons the session** rather than unwinding -
     // rows already written stay, and the client must ROLLBACK (section 6).
     Status EndWrite(Session& session, WriteScope& scope, const Status& result);
+
+    // A write handler's tail: `EndWrite` under the reply's verdict, then the
+    // rows the write reported counted into `sys.relation_stats` as `kind`
+    // (BO-S6) - `out.written_oid`'s, once the statement has answered.
+    DispatchOutcome FinishWrite(Session& session, WriteScope& scope, DispatchOutcome out,
+                                stats::RelationWrite kind);
 
     // **The one way an owned scope ends without committing** (AO-S6d,
     // AO-0 item 15). Three arms of `EndWrite` reach it: the statement
@@ -2153,6 +2164,7 @@ private:
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> StatementStatsView();
+    StatusOr<exec::CatalogView> CheckpointsView();
     StatusOr<exec::CatalogView> PageSlotsView(const parser::AstValue& page_id);
     StatusOr<exec::CatalogView> MetaView();
     // The clustered root a relation's anchor names, or its descriptor page.

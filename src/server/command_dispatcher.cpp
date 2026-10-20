@@ -22,6 +22,8 @@
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/trail_store.hpp"
 #include "kds/stats/statement_stats.hpp"
+#include "kds/stats/relation_stats.hpp"
+#include "kds/stats/checkpoint_log.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -2085,6 +2087,19 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // a full part could not take, which the view therefore never shows.
     section("statement_stats");
     os << " statement_stats_dropped=" << stats::StatementStats::Dropped();
+    // **`sys.relation_stats`' activity store** (BO-S6), the instance's: new
+    // relations a full part could not take, whose counts the view lacks.
+    section("relation_stats");
+    os << " relation_stats_dropped=" << stats::RelationStats::Dropped();
+    // **`sys.checkpoints`' store** (BO-S7), the instance's, as `lock_waits`'
+    // above: what the view no longer holds, and why.
+    section("checkpoints");
+    {
+        const stats::CheckpointLog::Ring::Totals runs = stats::CheckpointLog::Read();
+        os << " checkpoints_recorded=" << runs.recorded
+           << " checkpoints_overwritten=" << runs.overwritten
+           << " checkpoints_dropped=" << runs.dropped;
+    }
     // **BA's census block** (BA-R0, BA-S2; `base/contention.hpp`): the
     // instance's, summed over every core when read - unlike the WAL block
     // above, which is this core's. Every latch kind is printed, `other`
@@ -4799,9 +4814,13 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
     WriteScope scope = opened.value();
 
-    DispatchOutcome out = WithReturning(line, session, scope, InsertInner(line, scope));
+    return FinishWrite(session, scope,
+                       WithReturning(line, session, scope, InsertInner(line, scope)),
+                       stats::RelationWrite::kInsert);
+}
 
-
+DispatchOutcome CommandDispatcher::FinishWrite(Session& session, WriteScope& scope,
+                                               DispatchOutcome out, stats::RelationWrite kind) {
     // The reply is the verdict, which is the same rule Dispatch() itself
     // applies one level up. A statement that answered ERR did not happen as
     // far as the client is concerned, so an autocommit scope unwinds it.
@@ -4810,6 +4829,8 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
         return {ErrorReply(s), false, 0, s};
     }
+    // `sys.relation_stats`' count (BO-S6), once the statement has answered.
+    if (!failed) stats::RelationStats::Record(core_id_, out.written_oid, kind, out.rows_affected);
     return out;
 }
 
@@ -5271,14 +5292,9 @@ DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
     if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
     WriteScope scope = opened.value();
 
-    DispatchOutcome out = InsertParsed(stmt, scope);
-
-    const bool failed = out.response.rfind("ERR ", 0) == 0;
-    Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
-    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
-        return {ErrorReply(s), false, 0, s};
-    }
-    return out;
+    // A load chunk's rows are a relation's inserts (BO-S6), though the
+    // chunk is no statement of `sys.statement_stats`'.
+    return FinishWrite(session, scope, InsertParsed(stmt, scope), stats::RelationWrite::kInsert);
 }
 
 // **`INSERT ... SELECT`'s rows** (BU-S8): the source run by the query
@@ -5351,6 +5367,18 @@ StatusOr<parser::InsertStmt> CommandDispatcher::InsertSelectRows(const catalog::
     out.rows = std::move(rs.value().rows);
     return out;
 }
+
+namespace {
+
+// A write's reply with the rows it reports and the relation they are of
+// (`DispatchOutcome::written_oid`, BO-S6).
+DispatchOutcome WroteRows(std::string reply, std::uint64_t rows, catalog::Oid oid) {
+    DispatchOutcome out{std::move(reply), false, rows};
+    out.written_oid = oid;
+    return out;
+}
+
+}  // namespace
 
 DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& written,
                                                 WriteScope& scope) {
@@ -5585,16 +5613,17 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         // wants back, and with per-row allocation it is contiguous exactly
         // when nothing else allocated concurrently - so both ends are
         // reported and no contiguity is promised.
-        return {"INSERTED oid=" + std::to_string(oid.value()) +
-                    " rows=" + std::to_string(stmt.rows.size()) +
-                    " first_id=" + std::to_string(first.id) +
-                    " last_id=" + std::to_string(last.id),
-                false, stmt.rows.size()};
+        return WroteRows("INSERTED oid=" + std::to_string(oid.value()) +
+                             " rows=" + std::to_string(stmt.rows.size()) +
+                             " first_id=" + std::to_string(first.id) +
+                             " last_id=" + std::to_string(last.id),
+                         stmt.rows.size(), oid.value());
     }
     // The single-row reply, byte-identical to what it always was.
-    return {"INSERTED oid=" + std::to_string(oid.value()) + " id=" + std::to_string(last.id) +
-                " page=" + std::to_string(last.page_id) + " slot=" + std::to_string(last.slot),
-            false, 1};
+    return WroteRows("INSERTED oid=" + std::to_string(oid.value()) + " id=" +
+                         std::to_string(last.id) + " page=" + std::to_string(last.page_id) +
+                         " slot=" + std::to_string(last.slot),
+                     1, oid.value());
 }
 
 namespace {
@@ -8101,15 +8130,8 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
                                                       std::move(subquery_answers)});
         return out;
     }
-    out = WithReturning(line, session, scope, std::move(out));
-
-
-    const bool failed = out.response.rfind("ERR ", 0) == 0;
-    Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
-    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
-        return {ErrorReply(s), false, 0, s};
-    }
-    return out;
+    return FinishWrite(session, scope, WithReturning(line, session, scope, std::move(out)),
+                       stats::RelationWrite::kUpdate);
 }
 
 namespace {
@@ -9380,7 +9402,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                          std::to_string(found.at.page_id) + ":" +
                                          std::to_string(found.at.slot));
             }
-            return {"UPDATED " + std::to_string(updated), false, updated};
+            return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
         }
     }
 
@@ -9477,7 +9499,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                 std::to_string(pages_touched) + " page(s) of table oid " +
                                 std::to_string(oid.value()));
     }
-    return {"UPDATED " + std::to_string(updated), false, updated};
+    return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
 }
 
 // ---- Transaction control (docs/spec/txn.md sections 1, 6) ---------------------
@@ -10616,15 +10638,8 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
                                                       /*is_delete=*/true, context});
         return out;
     }
-    out = WithReturning(line, session, scope, std::move(out));
-
-
-    const bool failed = out.response.rfind("ERR ", 0) == 0;
-    Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
-    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
-        return {ErrorReply(s), false, 0, s};
-    }
-    return out;
+    return FinishWrite(session, scope, WithReturning(line, session, scope, std::move(out)),
+                       stats::RelationWrite::kDelete);
 }
 
 namespace {
@@ -10877,14 +10892,22 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     // holds no latch between its keys. A refusal now keeps every key already
     // purged - each is whole - and says so (PU6, BH-Q5).
     std::uint64_t purged = 0;
+    Status keyed = Status::OK();
     {
         const storage::DrainOnPressure drain(page_store_);  // the keys, not the decide
         for (const Target& t : targets) {
             auto one = exec::PurgeKey(page_store_, wal_, ta, t.tuple_key, t.deleter);
-            if (!one.ok()) return ended(refuse(partly(one.status(), purged)));
+            if (!one.ok()) {
+                keyed = one.status();
+                break;
+            }
             if (one.value() == exec::PurgeOutcome::kPurged) ++purged;
         }
     }
+    // `sys.relation_stats`' count (BO-S6), whatever the decide does: a
+    // purged key is no transaction's (PU6).
+    stats::RelationStats::Record(core_id_, ta.oid, stats::RelationWrite::kPurge, purged);
+    if (!keyed.ok()) return ended(refuse(partly(keyed, purged)));
     return ended({"PURGED " + std::to_string(purged), false, purged}, purged);
 }
 
@@ -11380,7 +11403,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             if (parked_on_row) {
                 return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
             }
-            return {"DELETED " + std::to_string(deleted), false, deleted};
+            return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
         }
     }
 
@@ -11430,7 +11453,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         return parked;
     }
 
-    return {"DELETED " + std::to_string(deleted), false, deleted};
+    return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
 }
 
 }  // namespace kds::server

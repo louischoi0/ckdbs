@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "kds/base/latch.hpp"
+#include "kds/stats/per_core_ring.hpp"
 
 // **`sys.statement_stats`' rows: what a statement shape costs**
 // (`instructions/v3.0.0/workorder-bo-sys-statistics-show-sugar.md` §3.1,
@@ -58,7 +59,6 @@ class StatementStats {
 public:
     static constexpr std::size_t kShapesPerCore = 4096;  // BO-Q7 (a)
     static constexpr std::size_t kShapeTextBytes = 256;
-    static constexpr std::uint32_t kParts = 64;          // `kMaxCores` (superblock.hpp)
 
     // One statement, at its end; its kind is `StatementKindOf(line)`.
     // `fetch_id` is 0 where the kind carries no fingerprint; `elapsed_us` is
@@ -91,7 +91,7 @@ private:
         std::unordered_map<Key, StatementShape, KeyHash> shapes;
         std::uint64_t dropped = 0;
     };
-    static std::array<Part, kParts>& parts() noexcept;
+    static std::array<Part, kStatsParts>& parts() noexcept;
 };
 
 }  // namespace kds::stats

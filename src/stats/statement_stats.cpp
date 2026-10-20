@@ -50,8 +50,8 @@ std::size_t StatementStats::KeyHash::operator()(const Key& k) const noexcept {
            (std::hash<const void*>{}(k.kind.data()) << 1);
 }
 
-std::array<StatementStats::Part, StatementStats::kParts>& StatementStats::parts() noexcept {
-    static std::array<Part, kParts> p;
+std::array<StatementStats::Part, kStatsParts>& StatementStats::parts() noexcept {
+    static std::array<Part, kStatsParts> p;
     return p;
 }
 
@@ -60,7 +60,7 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
     // Derived here, so every key's kind is `StatementKindOf`'s static
     // storage - the pointer `KeyHash` hashes by.
     const std::string_view kind = StatementKindOf(line);
-    Part& part = parts()[core % kParts];
+    Part& part = parts()[core % kStatsParts];
     const LatchGuard held(&part.latch);
     const Key key{fetch_id, kind};
     auto found = part.shapes.find(key);

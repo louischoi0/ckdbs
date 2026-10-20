@@ -83,6 +83,9 @@ struct CheckpointRunReport {
     // other work meanwhile - on the log and on the data file's sync.
     std::uint64_t log_park_ns = 0;
     std::uint64_t data_park_ns = 0;
+
+    // The run's length on the injected clock, 0 for a report never ended.
+    std::uint64_t wall_ns() const noexcept { return end_ns > start_ns ? end_ns - start_ns : 0; }
 };
 
 namespace detail {
@@ -176,8 +179,7 @@ public:
 
     static void Publish(std::uint32_t core, const CheckpointRunReport& r) noexcept {
         Slot& s = Of(core);
-        s.last_wall_ns.store(r.end_ns > r.start_ns ? r.end_ns - r.start_ns : 0,
-                             std::memory_order_relaxed);
+        s.last_wall_ns.store(r.wall_ns(), std::memory_order_relaxed);
         s.last_step_max_ns.store(r.step_max_ns, std::memory_order_relaxed);
         s.last_step_page_write_max_ns.store(r.step_page_write_max_ns, std::memory_order_relaxed);
         s.last_steps.store(r.steps, std::memory_order_relaxed);
