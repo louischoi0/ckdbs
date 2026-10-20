@@ -262,3 +262,39 @@ capped portal does not stream.
   An outer lookup or probe runs inline, an outer index or Cabin step and an
   aggregate never yield; those keep the buffered reply, which CE-R1 (a)
   already gives them in effect.
+
+## 7. Stage log
+
+- **CE-S0** (`042cb59a`, `bench/v3.3.0/results-ce-s0-premise-v3.3.0-50-g1f57f37b.md`):
+  the premise measured. The non-overlap is total - idle over server CPU
+  0.88-1.01 in every cell - at 0.42 us per returned row on a key range and
+  0.63 us on a filtered walk; nothing reaches the client before the
+  statement ends. Streaming at slice boundaries can hide at most 5-12 % of
+  the scenario client's wall at 10,000 rows and more, and nothing for a
+  reply inside one slice (`bar-range`, `model-join`, `books-by-genre`).
+- **CE-S1..S4** (`9e568b44`): built together - the sink, the session, the
+  slice-boundary write, the park - with CE-A1's fix and CE-R4. Eight cells
+  in `tests/ce_streaming_reply_test.cpp`; each feature's mutant killed by its
+  own cell (no stream armed: five; no rewind: the re-run cell; no streamed
+  check: the no-re-run cell; the park without a write interest: the
+  held-frames cell). The code review found one hang - a pipelined `SELECT`
+  sealing nothing parked on BN-R7's held frames with no write interest -
+  fixed with its cell, and a cancel of a parked walk now resumes it. Full
+  Debug suite 4186/4186.
+- **CE-S5** (`c3ce8d55` documents; `89320fff` the close,
+  `bench/v3.3.0/results-ce-close-v3.3.0-52-g9e568b44.md`): `protocol.md` §5
+  and §7, the client manual, `sched.md` §3 and `known-gaps.md` "Streamed
+  replies (CE)", corrected by the document review. The close, interleaved
+  A/B in one window: time to first batch -54 % at 10,000 rows, -93 % at
+  60,480 and -91 % on the filtered walk; throughput +6 % to +14 % on the
+  scenario client (`send`) and +12 % to +26 % on `split`; idle removed
+  0.95-0.99 of CE-S0's ceiling; replies inside one slice and point
+  statements unchanged within their spreads. The close's one cost - a
+  client that decodes nothing (`drain`) finishing 1 % to 4 % later at
+  100-10,000 rows - **did not reproduce** in five rotated A/B/C rounds
+  (`bench/v3.3.0/results-ce-drain-attribution-v3.3.0-52-g9e568b44.md`):
+  B equals A, and the base binary itself had run 4.9 % faster in the
+  close's window than in the re-run's. The per-row test seam costs about
+  5-8 ns a row, inside the spread. The close's results review (`380f6a1d`)
+  corrected its interpretations; the stale template copy in its archive is
+  deleted.
