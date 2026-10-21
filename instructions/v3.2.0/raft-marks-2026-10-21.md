@@ -38,3 +38,12 @@ what the word settles and what it does not.
 | **Mark** | **Branch O** (CF-Q0 (a)): a per-pattern opt-in that is not a second model of a pattern (the order's §2.3). Per §5, CF-S1 for O is written as an amendment to the order first (CF-Q7), then built. **Pushed to `main` with `--no-verify`** on this word: the work branch at `6c62aee6` differed from `origin/main` in `bench/` and `instructions/` only, and no suite ran on it |
 | **Does not settle** | CF-Q7's answers (the amendment's questions); CF-Q6; whether the default turns off as part of O; a tag, a version |
 | **Recorded at** | this file; the order's header and §7; the order's row in `instructions/v3.2.0/index.md` |
+
+## 5. CG written, as an exploratory concept check; pushed, documents only
+
+| | |
+|---|---|
+| **Word** | W0: *"From the point of view of production-level DB software, is it fatal that a pk-update (delete-purge-insert) cannot be expressed as one transaction?"* - CLA answered that K1's never-rebound tuple key is within common practice, that a delete and re-insert of one key inside one transaction is the pattern that bites, and that `ON CONFLICT DO UPDATE` would express most of it without touching K1. W1: *"Record ON CONFLICT DO UPDATE in docs/pending."* W2: *"Not as a pending issue - add it as an exploratory concept validation milestone and push it, documents only."* |
+| **Mark** | **CG written** (`workorder-cg-on-conflict-do-update.md`) on `worktree-pending-on-conflict-do-update` from `722006ec` (`v3.3.0-104-g722006ec`), **exploratory**: CG-S0 checks whether an upsert fits as one more arm of the existing write paths (CG-R1..R4) and ends in build, narrow or drop. The `docs/pending/` entry W1 asked for was written on the work branch and is withdrawn by W2 before it reached `main`; the order carries its content. **Pushed on W2**, documents only, with the pre-push hook skipped |
+| **Does not settle** | CG's opening; CG-Q0..Q7, each with CLA's proposal beside it and none marked; a tag, a version |
+| **Recorded at** | this file; the order's header; this file's and the order's rows in `instructions/v3.2.0/index.md` |
