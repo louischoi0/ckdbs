@@ -448,6 +448,10 @@ three steps:
 It is documents only, so no suite ran. CF-O-Q1..Q14 wait for the
 operator's marks, and no code moves before them.
 
+**W5** (*"push no verify and go ahead"*, `raft-marks-2026-10-21.md` §8):
+the amendment was pushed, and CF-O-Q1..Q14 were adopted, each (a), on the
+go-ahead. **CF-S1b started.**
+
 ---
 
 ## 8. Branch O - the amendment (CF-S1)
@@ -723,6 +727,10 @@ the case the order covers, so no operator item is opened.
 - "`OK` is durable through an owned transaction's commit": unsourced. The named park replaces it.
 
 ### 8.4 Questions
+
+**Adopted on W5** (*"push no verify and go ahead"*, 2026-10-21,
+`raft-marks-2026-10-21.md` §8): CF-O-Q1..Q14 each (a), as CLA proposed,
+on the go-ahead and not marked by the operator item by item.
 
 **CF-O-Q1 - where an opt-in names its pattern from** (CF-Q7, first half).
 - (a) By example. `ON` compiles a `SELECT`, takes its `fetch_id` and discards the text. `OFF` takes an example, which it only fingerprints, or a decimal or hex `fetch_id`.
