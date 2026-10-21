@@ -727,7 +727,19 @@ by a poll rather than a kick (`docs/inflight/known-gaps.md`, Locks). A
 transaction holding rows may wait because a wait-for graph in
 the instance's lock table refuses the waiter whose registration would close
 a cycle, naming deadlock (AO-S4a on one core, AO-S4b across cores), and a wait
-that reaches the fault net is logged as the defect it is (AO-R8). For writer `T`
+that reaches the fault net is logged as the defect it is (AO-R8). **Behind a
+relation-`X` build the net measures the holder's silence, not the wait's
+length**: `CREATE INDEX`, `REINDEX INDEX` and `CREATE ASSERTION` register
+their transaction in the lock table's `HolderProgress`
+(`txn/holder_progress.hpp`) from the grant until the `X` is released, and
+advance it per leaf and per row; a relation waiter whose net expires
+restarts the statement's one bound when its holder advanced since it last
+looked. A build longer than the net therefore keeps its waiters until its
+decide, as `assertion.md` §8.1a and `index.md` §10 promise them, and a
+build that stops advancing - or any holder that registered nothing - ends
+them at the net as before. The build's tail after its last row (the
+catalog write and the decide) reports nothing and must fit inside one net.
+For writer `T`
 with read view `V` over the *current* header `trx_id` (`cur`):
 
 | `cur` | Verdict |

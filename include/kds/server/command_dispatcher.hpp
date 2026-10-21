@@ -1419,6 +1419,10 @@ private:
     struct DdlBuildLock {
         txn::TransactionManager* manager = nullptr;
         txn::Transaction* txn = nullptr;
+        // The build's report to its waiters' fault net, from the grant.
+        // A member, so it is withdrawn after the destructor's release: a
+        // waiter never finds the holder silent while it still holds.
+        std::optional<txn::HolderProgress::Scope> progress;
         DdlBuildLock() = default;
         DdlBuildLock(const DdlBuildLock&) = delete;
         DdlBuildLock& operator=(const DdlBuildLock&) = delete;
