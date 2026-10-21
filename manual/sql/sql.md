@@ -842,7 +842,13 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
 
 - Grammar: `UPDATE <table> SET <col> = <value expression> [, ...] [WHERE ...]`,
   and `SET (<col>, ...) = (<value>, ...)`.
-- The WHERE is the same production SELECT uses, subqueries included.
+- The WHERE is SELECT's native WHERE, subqueries included: a column compared
+  with a value, `BETWEEN`, `IS [NOT] NULL`, `IN`/`LIKE`, a function comparison,
+  `AND`/`OR`/`NOT`, a predicate subquery. **An expression operand is not
+  there**: `WHERE n + 1 = 3` and `WHERE 1 = 0` are refused `NOT_IMPLEMENTED`
+  with the byte, though a SELECT answers both - its query layer reads an
+  expression, and no layer stands behind an UPDATE's WHERE. Write the
+  comparison against the column (`WHERE n = 2`).
 - **A SET value is an expression** (BJ). `UPDATE accounts SET balance =
   balance + 25.00 WHERE id = 42` is one statement and one lost-update-free
   step, where a client used to `SELECT`, add and `UPDATE`. What a value may
@@ -879,9 +885,9 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
     it NULL and counts the row); a NULL into a `NOT NULL` column is refused
     at the row.
   - **What is not there**: `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `IS TRUE`,
-    boolean literals, a correlated or catalog-view subquery, an expression
-    in `INSERT ... VALUES` or a select list, and an expression that reads a
-    column assigned to a foreign-key column (a constant one is checked).
+    boolean literals, a correlated or catalog-view subquery, and an
+    expression that reads a column assigned to a foreign-key column (a
+    constant one is checked).
 - **The tuple key cannot be assigned**, and the
   refusal is `Unsupported` with the column's byte — understood and
   declined, not a feature awaiting work (K2). This holds whether the key was
@@ -969,8 +975,9 @@ and executes. It arrived with the transaction work (T01-T14). Semantics:
   bytes stay for readers whose snapshot predates the deleter. `PURGE`
   (below) is the one statement that removes a deleted row and frees its
   key.
-- No column list, nothing to assign; the WHERE nests subqueries exactly as
-  SELECT's does. An empty WHERE marks every row.
+- No column list, nothing to assign; the WHERE is UPDATE's (above), which
+  nests subqueries exactly as SELECT's does and takes no expression operand.
+  An empty WHERE marks every row.
 - DELETE deliberately does not touch Cabins or secondary indexes (removal is
   forbidden — an older snapshot may still match), and has no assertion
   check (upper bounds only make DELETE check-free), though it does write the
@@ -1722,7 +1729,8 @@ in §7 below now carries and which both used to reach a client as a bare
 | `PURGE` with no `WHERE`, or a conjunct other than a tuple key comparison with an integer literal | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE needs a WHERE naming the tuple key; … (byte <n>)`, or `… PURGE admits only comparisons of the tuple key with an integer literal (=, <, <=, >, >=, BETWEEN); this conjunct is not one (byte <n>)` |
 | `PURGE` naming one live key, or a negative tuple key literal | `InvalidArgument` — `ERR tuple key <k> is live; PURGE frees only a key whose row was deleted (byte <n>)`, or `ERR tuple key literal <k> is negative, and no key is below 1 (byte <n>)` |
 | `PURGE` meeting an older snapshot, or an undecided writer, for 1 s | `TxnConflict`, retryable — `ERR TXN_CONFLICT retryable=1 PURGE cannot free tuple key <k> yet: …; nothing was purged, and running it again once that ends will` |
-| Anything after a complete statement (e.g. `OFFSET 5 LIMIT 10`'s reversed tail) | `ERR unexpected token '<t>' after end of statement` |
+| Anything after a complete statement (e.g. `OFFSET 5 LIMIT 10`'s reversed tail) | `ERR unexpected token '<t>' after end of statement (byte <n>)` |
+| An expression operand in an UPDATE's or DELETE's WHERE (`WHERE n + 1 = 3`, `WHERE 1 = 0`) | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 an expression in an UPDATE's or DELETE's WHERE is not supported - only a SELECT's WHERE reads one; this WHERE compares a column with a value (<the native refusal> (byte <n>))` |
 | Bare `decimal` | `ERR column '<c>' needs a precision and a scale - decimal(p, s) - at byte <n>; there is no default scale, ...` |
 | `float` column | `Unsupported` from the row-layout build: no decided on-disk encoding, and the type is refused rather than deferred |
 | Scalar subquery returns >1 row | runtime `CardinalityViolation`, non-retryable — never a first-row pick |

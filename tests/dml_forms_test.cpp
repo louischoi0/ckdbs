@@ -112,6 +112,21 @@ TEST_F(DmlFormsTest, AValuesExpressionIsRefusedForWhatItCannotBe) {
     ExpectRows("SELECT COUNT(*) FROM w", {"count(*)", "6"});
 }
 
+// ---- An UPDATE's or DELETE's WHERE ---------------------------------------------
+
+// The WHERE is the native grammar's (parser-v2.md I20): what only a SELECT's
+// query layer reads is declined `NotImplemented` with its byte, nothing is
+// written, and the same WHERE in a SELECT still answers.
+TEST_F(DmlFormsTest, AnExpressionInADmlWhereIsNotImplementedAndWritesNothing) {
+    ExpectRows("SELECT id FROM w WHERE tier + 1 = 3", {"id", "2", "6"});
+    ExpectRefused("UPDATE w SET tier = 9 WHERE tier + 1 = 3", "NOT_IMPLEMENTED");
+    ExpectRefused("UPDATE w SET tier = 9 WHERE tier + 1 = 3", "(byte 33)");
+    ExpectRefused("DELETE FROM w WHERE 1 = 0", "NOT_IMPLEMENTED");
+    ExpectRefused("DELETE FROM w USING ord WHERE w.id = ord.cust_id + 0", "NOT_IMPLEMENTED");
+    ExpectRows("SELECT id, tier FROM w WHERE tier = 9", {"id,tier"});
+    ExpectRows("SELECT COUNT(*) FROM w", {"count(*)", "6"});
+}
+
 // ---- INSERT ... SELECT --------------------------------------------------------
 
 TEST_F(DmlFormsTest, InsertSelectPlacesTheRowsItsSourceReturns) {
