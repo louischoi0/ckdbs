@@ -6,7 +6,7 @@
 #include "kds/txn/undo_page.hpp"
 #include "sim/instance.hpp"
 
-// `docs/inflight/bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-
+// `git show d83bd502:docs/inflight/bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-
 // half-done.md`: a mutation that wrote a page and then failed must leave a
 // volume recovery can mount and an answer rollback can stand behind.
 

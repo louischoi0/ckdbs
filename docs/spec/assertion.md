@@ -698,7 +698,7 @@ repeatable-read transaction's view would keep naming a relation dropped and
 re-created since its `BEGIN`, refusing every retry.
 **A publish that is then refused evicts the directory** before its
 `ASSERT_DROP` (a row whose own log fails stays on its page:
-`docs/inflight/bugs/an-assertion-row-whose-log-fails-stays-on-its-page.md`); a refused base adopts nothing and logs the `ASSERT_DROP`
+`docs/inflight/bugs/an-assertion-row-whose-log-fails-stays-on-its-page.md`, closed: `git show d83bd502^:<path>`); a refused base adopts nothing and logs the `ASSERT_DROP`
 too. What remains is an
 `ASSERT_SNAPSHOT` for an assertion whose publish failed — a base for a
 cabin no catalog row names, which no mount folds, since a mount folds only

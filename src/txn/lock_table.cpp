@@ -620,7 +620,7 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t tuple_key, std::u
                 // A fence is held in `S` or `X`; an intention mode on a
                 // range key is not one and fences nothing. Given a real
                 // fence, the compatibility table is what decides - the
-                // same table `ConflictingDescendant` reads from the other
+                // same table `ConflictingOverlap` reads from the other
                 // side, so the two answers cannot drift apart.
                 if (h.mode != LockMode::kShared && h.mode != LockMode::kExclusive) continue;
                 if (!Compatible(h.mode, want)) {

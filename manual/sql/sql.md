@@ -1822,7 +1822,7 @@ in §7 below now carries and which both used to reach a client as a bare
 
 | Situation | Exact surface |
 |---|---|
-| Write conflict (first-updater-wins), write to another core's relation, FK check meets in-flight writer, CREATE ASSERTION on unsettled relation, a name (table, namespace, index) held by another transaction's uncommitted DROP | `ERR TXN_CONFLICT retryable=1 row id=<n> was written by transaction <n>` (message varies; the token and `retryable=1` do not) |
+| Write conflict (first-updater-wins), FK check meets in-flight writer, CREATE ASSERTION on unsettled relation, a name (table, namespace, index) held by another transaction's uncommitted DROP | `ERR TXN_CONFLICT retryable=1 row id=<n> was written by transaction <n>` (message varies; the token and `retryable=1` do not) |
 | FK violation (missing parent on INSERT/UPDATE; live child on parent DELETE) | `ERR FK_VIOLATION retryable=0 <message>` |
 | Assertion ceiling exceeded | `ERR ASSERTION_VIOLATION retryable=0 <message naming the group and the enforced ceiling>` (`CHECK COUNT(*) < 5` refuses at 5 saying "would exceed bound 4") |
 | A Transition broken: an INSERT outside `ON INSERT`, an UPDATE along no declared edge, a DELETE outside `ON DELETE FROM` | `ERR TRANSITION_VIOLATION retryable=0 transition '<name>' on column '<c>': <what>, row id <n> (byte <b>)` |
@@ -1877,6 +1877,6 @@ Exactly eleven words are reserved (verified, `kKeywords` in `lexer.cpp`):
 `FULL`, `OUTER`. Everything else — including `SELECT`, `WHERE`, `GROUP`,
 `COUNT`, `CABIN`, `CHECK`, `INDEX`, `REFERENCES` — is an ordinary
 identifier matched by text where the grammar expects it, so a column may be
-named `values`, `count` or `check`. Consequence: `WAYSTONE ON` works even
-though `ON` is reserved, since the word is matched by text there, and a keyword hashes exactly
+named `values`, `count` or `check`. Consequence: `WAYSTONE ON` works although
+`ON` is reserved, because the word is matched by text there; and a keyword hashes exactly
 as an identifier does, so reserving a word never moves a fingerprint.

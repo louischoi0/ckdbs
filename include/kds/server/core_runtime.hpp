@@ -374,7 +374,7 @@ public:
 
     // **The shutdown checkpoint** (PW3b) - the third of core 0's three
     // checkpoint points, which a peer once lacked: a graceful restart
-    // replayed up to one `checkpoint_interval` of every peer's work.
+    // replayed up to one `checkpoint_interval_ms` of every peer's work.
     // Flushes this core's pages, then runs `Checkpoint()`.
     //
     // The page flush comes first for the reason core 0's final Sync()

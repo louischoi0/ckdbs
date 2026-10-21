@@ -148,103 +148,59 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   with fewer rows and a longer bound. **Owner: none**; the bound is not
   widened.
 
-- **An expeditor's `Start()` failed once under `-j8` and did not
-  reproduce.** On `ay-s2-containment-wake` at `33b9433`, one full Debug
-  suite failed `ExpeditorTest.AtOneCoreTheDispatcherHoldsTheInstancesLockTable`
-  at `ASSERT_TRUE(db.Start().ok())` after 1.8 s, with the status not
-  printed, because the assertion carries no message. The cell then passed 5/5
-  alone. `ExpeditorTest.*` passed in eight parallel copies × 5 repeats, and
-  the next full suite was green. The fixture's ports come from
-  `TwoFreeLoopbackPorts()`, which probes and releases before the instance
-  binds, so a parallel test can take one in between; that reading is not
-  confirmed. **Owner: none.** Since AZ-S4 (`worktree-az-s4-instrument-failures`
-  from `cd433ea`) every one of the file's fourteen `Start()` assertions - ten
-  on `db`, four on `opened.value()` - prints the status through `Started`,
-  so the next failure names its cause - for a port clash, `bind() failed`
-  with the errno, though not which of the two ports. The failed cell runs
-  one core, where no listener uses `SO_REUSEPORT`, so a clash there fails
-  `Start()`; above one core it would bind. Neither the port probe nor any
-  bound was changed, since no cause has been observed.
+- **An expeditor's `Start()` failed once under `-j8` and did not reproduce.**
+  Seen once, on `ay-s2-containment-wake` at `33b9433`, in
+  `ExpeditorTest.AtOneCoreTheDispatcherHoldsTheInstancesLockTable`; green
+  since. The suspected cause is unconfirmed: `TwoFreeLoopbackPorts()` probes
+  and releases before the instance binds, and at one core no listener uses
+  `SO_REUSEPORT`, so a clash fails `Start()`. Since AZ-S4 the file's
+  `Start()` assertions print the status through `Started`, this cell's
+  included (`tests/expeditor_test.cpp:533`); one in another cell,
+  `TheTickRetiresADropsMarksWithNoFurtherDdl` (`:403`), is a bare `.ok()`. Re-verified at
+  `7dd9b789` by reading. Owner: none.
 
 - **AX-S2b's release-kick cell failed once under `-j8` and did not
-  reproduce.** On `worktree-ay-s0-order` at `14cfdfa` (sources as
-  `58198cb`), one full Debug suite failed
+  reproduce.** Seen once, on `worktree-ay-s0-order` at `14cfdfa`, in
   `RowWaitWakeRigTest.AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick`
-  with its assertion message not captured; the cell then passed 20/20
-  alone, 40/40 across eight parallel copies, 40/40 under a concurrent full
-  suite, and two more full suites were green. Its bounds are wall-clock
-  (`Within(2000ms)` for core 1's first idle block, `Within(1000ms)` after
-  the kick), which a loaded host can exceed. **Owner: none.** Since AZ-S4
-  (`worktree-az-s4-instrument-failures` from `cd433ea`) the file's timed
-  waits print what they saw, read only through what is safe from the test
-  thread:
-  - every first idle-block wait, and the holder's `COMMIT`, print whether
-    the statement finished and, only if it did, its response;
-  - the wait after the kick prints, from a baseline taken before the sim
-    releases it, the kicks still held in the sim, the kicks the real table
-    skipped on a clear sleep flag, the wakes core 1 received and its idle
-    blocks - which tells a kick that never reached core 1 from a reactor
-    that woke and a statement that was slow.
-  What a first idle-block timeout cannot say is whether the reactor was busy
-  or the statement never parked; no counter safe to read across threads
-  separates the two. The bounds were not widened. Keep the next failure with
-  `--output-on-failure` before it is attributed.
+  (`tests/row_wait_wake_rig_test.cpp`), message not captured. Its bounds are
+  wall-clock (`Within(2000ms)`, `Within(1000ms)`), which a loaded host can
+  exceed. Since AZ-S4 its timed waits print what is safe to read across
+  threads; that cannot separate a busy reactor from a statement that never
+  parked. Bounds not widened; keep the next failure with
+  `--output-on-failure`. Re-verified at `7dd9b789` by reading. Owner: none.
 
 - **A rollback's schema-word move has no cell that kills its removal since
-  AX-S2.** Verified on `ax-s3-inflight-prose` from `b54a769` (AX-S3):
-  `MoveSchemaWordIfCatalogWriter` removed from `TransactionManager::Abort`
-  survives `DdlFenceRigTest.ADropIndexRolledBackOnCoreZeroKeepsTheRowAPeerWroteWhileItWasOpen`
-  5/5 and the full Debug suite, 3015/3015 (one pre-existing disabled cell). The cell
-  was written for a peer whose memo left out an index an open `DROP INDEX`
-  had marked - DT9's predicate was core-local - so after the rollback only
-  a re-resolution put the index back into its writes. Since AX-S2 the peer
-  resolves the index while the drop is open, and the cell passes without
-  the move. **The move was nearly inert already**: the rolling-back core
-  moves the word again at `EndDdlScope` (`InvalidateAfterCompensation`),
-  synchronously after `Abort`, so this move only orders the bump before the
-  release - the window the cell's rounds raced. By reading, not by a cell:
-  the one shape it still orders is a rolled-back `CREATE INDEX` whose
-  index a peer's memo holds (§5b's asymmetry), where a re-run inside that
-  window maintains the orphaned tree once; a rolled-back `DROP TABLE`
-  bumps the word at its own write. No shape found loses an entry, so the
-  move stays. Owner: none named; `txn.md` §4.1 and `ddl-transactional.md`
-  §5e. Carried by AX's close
-  (`instructions/v3.0.0/workorder-ax-inflight-publication.md` §7 item 4).
+  AX-S2.** Removing `MoveSchemaWordIfCatalogWriter` from
+  `TransactionManager::Abort` leaves
+  `DdlFenceRigTest.ADropIndexRolledBackOnCoreZeroKeepsTheRowAPeerWroteWhileItWasOpen`
+  and the full Debug suite green (verified at `b54a769`, AX-S3), because a
+  peer resolves the index while the drop is open. The move is nearly inert
+  (`EndDdlScopeById` moves the word again through `InvalidateAfterCompensation`);
+  by reading, the one shape it orders is a rolled-back `CREATE INDEX` whose
+  index a peer's memo holds (`ddl-transactional.md` §5b). Re-read at
+  `7dd9b789`: the call is still in `Abort`. Owner: `txn.md` §4.1 and
+  `ddl-transactional.md` §5e.
 
 - **The assertion scan's floor is a fixed defect with no regression test
-  under it.** Verified at AM-S0(a) by reverting the fix (every cell in
-  `tests/expeditor_test.cpp` stayed green); re-read at `f3da0413`,
-  2026-10-13. The defect (AL-7c, `workorder-al-m0-single-wal.md`) started
-  the assertion resume at the anchor fold's `checkpoint_lsn`, which can sit
-  past a core's own `ASSERT_SNAPSHOT`, so the instance came up counting
-  those assertions unenforceable and refusing their relations' writes for
-  the mount (`assertion.md` §6.1). The fix passes the fold's
-  `redo_start_lsn` (`Expeditor::Open` and `CoreRuntime::Open`'s fixture
-  arm, both calling `ResumeAssertionsAfterRecovery`).
-  - **Why no instance cell reaches it**: each core's `ShutdownCheckpoint`
-    syncs the store first (`core_runtime.cpp`), so its redo start equals its
-    `CHECKPOINT_BEGIN` and the fold's winner is at or before every
-    snapshot. Removing that sync "because the tail already syncs" would make
-    the defect reachable silently.
-  - **What reaches it**: a fold won by a cadence checkpoint (old recLSN,
-    recent `checkpoint_lsn`) beside another core's older last
-    `ASSERT_SNAPSHOT` - a core whose shutdown checkpoint never published.
-  - **The cheap harness** is a unit cell over
-    `SuperBlockCheckpointAnchor::Publish` and the floor choice: two
-    synthetic records `{redo=1000, ckpt=1000}` and `{redo=100, ckpt=5000}`,
-    asserting the floor handed to `ResumeAssertionsAfterRecovery` is `100`.
-    Since BC the fold never decreases (`superblock_checkpoint_anchor.hpp`),
-    which the cell's record order must respect.
-
-  Owner: `docs/spec/wal.md` §16.
+  under it.** The defect (AL-7c) started the assertion resume at the anchor
+  fold's `checkpoint_lsn`, which can sit past a core's own `ASSERT_SNAPSHOT`
+  (`assertion.md` §6.1). Both callers now pass the fold's `redo_start_lsn`
+  (`Expeditor::Open`, `CoreRuntime::Open`); reverting that leaves
+  `tests/expeditor_test.cpp` green. No instance cell reaches it, because
+  each core's `ShutdownCheckpoint` syncs the store first, so removing that
+  sync would make the defect reachable silently. The cheap harness is a unit
+  cell over the anchor fold and the floor choice with records
+  `{redo=1000, ckpt=1000}` and `{redo=100, ckpt=5000}` expecting floor `100`
+  (the fold never decreases, so record order matters). Re-verified at
+  `7dd9b789` by reading. Owner: `docs/spec/wal.md` §16.
 
 - **`wal_ring_full_refusals` is proved zero where it must be and unproved
-  where it fires.** Verified at `f6ed10c`; re-read at `f3da0413`,
-  2026-10-13. Reaching it needs an append to lose the drained ring space to
-  another core `kRingDrainAttempts` (4) times running (`src/wal/manager.cpp`),
-  which one thread cannot stage. `tests/wal_manager_test.cpp` and
-  `client-manual.md`'s ring-counter row state the gap. Owner:
-  `docs/spec/wal.md` §16.
+  where it fires.** A nonzero value needs an append to lose the drained ring
+  space to another core `kRingDrainAttempts` (4) times running
+  (`src/wal/manager.cpp`), which one thread cannot stage. The only statement
+  of the gap is the comment in `tests/wal_manager_test.cpp`; it says
+  `client-manual.md` repeats it, which `7dd9b789` does not (no ring-counter
+  row there). Owner: `docs/spec/wal.md` §16.
 
 - **Two drivers' text still describes the old heap.** Verified at
   `18e7b511` by grep: the drivers that declared `(id int64, ...) HEAP` and meant `id`
@@ -318,46 +274,19 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 - **A segment roll does I/O inside the instance's append latch, and at
   `relaxed` under a bulk writer its hold is hundreds of milliseconds.**
-  Re-verified at `1fb71d1a` by reading, 2026-10-12; priced by BQ at
-  `4cf30270` (`instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7,
-  `bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md`,
-  `bench/v3.0.0/results-bq-s2-rung1-v2.7.0-909-g4cf30270.md`).
-  - `WalStream::Append` (`src/wal/stream.cpp:359`) rolls under the stream
-    latch when the record does not fit: `Roll` (`:235-243`) reaches
-    `StartSegment` (`:140-150`), which syncs the segment it leaves through
-    `SyncDevice` - waiting out any sync in flight, the writer thread's
-    included - and creates the next. Deliberate, and stated as built in
-    `include/kds/wal/stream.hpp`'s protocol header and `wal.md` §6 step 1,
-    whose self-contradiction BQ-S5 resolved.
-  - **Measured**: at `relaxed` under one bulk writer (~75 MiB/s of log) a
-    roll holds the latch p50 ~330 ms, p99 ~790 ms, max 1.2 s, 95 % of
-    it the gate wait - the writer's tail `fdatasync`, slow on a device also
-    taking the log, the checkpoint's writeback and the preparer's zero
-    fill. Rolls every ~0.85 s put 35-46 % of a window under a hold; cores
-    without the bulk writer see a schedule p99 of ~290-660 ms against
-    ~0.23-0.47 ms isolated (medians), and core 0's drain carries ~100 % of its
-    stream-latch wait. At `group` the hold is ~6 ms p50 / ~20 ms p99.
-  - **What BQ tried, cheapest first** (BQ-R2): H2's larger segment makes
-    rolls rarer and longer, not cheaper (~5 ms more hold per MiB, the
-    total held time flat; at 1,024 MiB BQ's probe saw the restart 1.1-1.4 s
-    longer and one `INSERT` stalled up to 12.8 s on the preparer's build). Rungs 2 and 3 (H5, H3) are recorded unable
-    from BQ-S1's bounds (BQ-Q6 (a)): with every non-tail sync removed the
-    hold p99 stays 652-780 ms, and with every roll-aligned stall removed C1
-    reader p99 stays 2.6-145 ms. BQ closed on §0.4's row 4: nothing below
-    rung 4 met the bar, and the latch is kept with this cost named.
-  - **Open leads for a successor order**: (i) H4 option 3 (no zero
-    prewrite where `posix_fallocate` reserved, the body's `fsync` kept) cut
-    the hold's p50 to ~16 ms, but its tail stays (p99 ~1.1 s, bimodal) and
-    its group guard (C2's `group` commit p99) is unevaluated, so it is a
-    measurement build, not a fix; (ii) rung 4, H6 - releasing the latch for
-    steps c-g - is `[quiet-wrong]` and unlicensed (BQ-Q5 (b)): it needs the
-    operator's own word.
-  - **Beside it, not BQ's**: at `relaxed` the log was almost never recycled
-    during a bulk load, because a re-dirtied page kept its first recLSN;
-    fixed on `fix-redirtied-page-rec-lsn` at `0e88060a` (`wal.md` §11-2),
-    not re-measured.
-
-  Owner: `docs/spec/wal.md` §6, `wal/stream.hpp`'s latch protocol.
+  `WalStream::Append` rolls under the stream latch; `Roll` reaches
+  `StartSegment` (`src/wal/stream.cpp`), which syncs the segment it leaves
+  through `SyncDevice` and creates the next. Deliberate (`wal.md` §6 step 1,
+  `include/kds/wal/stream.hpp`). Priced by BQ at `4cf30270`: p50 ~330 ms,
+  p99 ~790 ms, max 1.2 s at `relaxed` under one bulk writer; ~6 ms p50 at
+  `group` (numbers in `wal.md` §6 step 5). BQ closed with the latch kept
+  (BQ-Q6 (a)); the open leads are H4 option 3 (no zero prewrite, tail
+  unchanged) and rung 4, H6 - releasing the latch for the roll's I/O,
+  `[quiet-wrong]` and unlicensed without the operator's word
+  (`instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7). The
+  re-dirtied-page recLSN fix that kept the log from recycling is at
+  `0e88060a`, not re-measured. Re-verified at `7dd9b789` by reading. Owner:
+  `docs/spec/wal.md` §6.
 
 ## Multi-core state
 
@@ -390,70 +319,54 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   Owner: `docs/spec/txn.md` §1.
 
 - **A core that stops is not an idle core, and it pins the instance's
-  commit-order floor for good.** Verified at AN-S2 on
-  `an-s2-read-view-cutover`; re-read at `f3da0413`, 2026-10-13. The floor
+  commit-order floor for good.** The floor
   (`include/kds/txn/instance_visibility.hpp`) is bounded by the minimum
-  issue cursor over attached cores, and an *idle* core is unpinned by
-  burning its block on its own tick (`PinsFloor`, `txn/manager.cpp`). A
-  core that wedges or shuts down takes no tick and nothing republishes its
-  slot, so the floor stays and the window grows one entry per commit for
-  the life of the process. Not reachable today: the expeditor stops every
-  core together. Owner: `instructions/v3.0.0/workorder-an-read-view.md`
-  AN-R14. (The per-core read view closed at AN-S2; pinned by
-  `VisibilityWiringTest.ACommitOnAHigherBlockIsVisibleToALowerCoresNextView`.)
+  issue cursor over attached cores; an idle core is unpinned by burning its
+  block on its own tick (`PinsFloor`, `txn/manager.cpp`). A core that wedges
+  or shuts down takes no tick, so the floor stays and the window grows one
+  entry per commit for the life of the process. Not reachable today: the
+  expeditor stops every core together. Re-verified at `7dd9b789` by reading.
+  Owner: `instructions/v3.0.0/workorder-an-read-view.md` AN-R14.
 
 - **Two cores recording one pattern can strand a trail in a directory
-  slot.** Verified at AT-S7 (2026-09-23) on `at-s7-one-cabin-store`.
-  `LookupOrCreateWaystonePage` (`src/stats/waystone_dir.cpp`) reads a
-  child slot under one page hold, **releases it**, allocates, then
-  re-acquires to link. Two cores whose instances collide on one
-  `DirIndexAt` can both read `kEmptyDirSlot`, both allocate, and the
-  second link overwrites the first - stranding a trail the first has
-  already written, and leaking a page. Newly reachable because AT-S7
-  turns recording on for every core. **Still reachable since CF-S1b, for
-  an opted pattern**: every core records an opted pattern, and the root is
-  made by `WAYSTONE ON` or the mount but the child slots below it are still
-  linked by the recorder (re-verified on `cf-waystone-premise` at
-  `46c632aa`).
-
-  Invariant 8 prices it exactly: a lost trail is a lost replay and never
-  a result. Not closed because the obvious fix - hold the parent across
-  `CreateNew` - introduces a page latch held across a durability wait on
-  a path `device_page_store.hpp` permits it on only for a fault. Owner:
+  slot.** `LookupOrCreateWaystonePage` (`src/stats/waystone_dir.cpp`) reads
+  a child slot under one page hold, releases it, allocates, then re-acquires
+  to link, so two cores colliding on one `DirIndexAt` can both read
+  `kEmptyDirSlot`, both allocate, and the second link overwrites the first:
+  a stranded trail and a leaked page. Invariant 8 prices it: a lost trail is
+  a lost replay, never a result. Not closed because holding the parent
+  across `CreateNew` would put a page latch across a durability wait.
+  **Still reachable since CF-S1b, for an opted pattern**: every core records
+  an opted pattern, and while `WAYSTONE ON` or the mount makes the root, the
+  recorder still links the child slots below it. Re-verified at `7dd9b789`
+  by reading and on `cf-waystone-premise` at `46c632aa`. Owner:
   `docs/spec/waystone-concpets.md`.
 
-- **Nothing deepens a Waystone directory, and a deepening would be a
-  third root writer.** Restated on `cf-waystone-premise` at `46c632aa`
-  (it was the claim's, verified at AT-S7 on `at-s7-one-cabin-store`).
-  `ClaimPatternWaystoneRoot` is deleted (CF-S1b): the root and depth have
-  two writers, `Catalog::SetPatternWaystone` (`WAYSTONE ON`, which roots
-  only a row with no directory, under page 9's hold) and
-  `Catalog::RenewPatternDirectories` (the mount), and neither replaces a
-  root a run is recording into. `GrowPatternDirectory` still has no caller
-  outside its own cells, so every directory is depth 1 and a colliding
-  instance displaces. Handing either writer a deepened root would leave the
-  row at the old root and depth while the new level exists - a miss for
-  every key, not an error - so a deepening needs a replace under page 9's
-  hold and a move of the schema word. Not live. `waystone_dir.hpp` carries
-  the trap; owner: `docs/spec/waystone-concpets.md` §5.
+- **Nothing deepens a Waystone directory, and a deepening would be a third
+  root writer.** `ClaimPatternWaystoneRoot` is deleted (CF-S1b). The root and
+  its depth have two writers: `Catalog::SetPatternWaystone` (`WAYSTONE ON`,
+  which roots only a row with no directory, under page 9's hold) and
+  `Catalog::RenewPatternDirectories` (the mount). Neither replaces a root a
+  run is recording into. `GrowPatternDirectory` has no caller outside
+  `tests/waystone_dir_test.cpp`, so every directory is depth 1 and a
+  colliding instance displaces. Handing either writer a deepened root would
+  leave the row at the old root and depth: a miss for every key, not an
+  error. So a deepening needs a replace under page 9's hold and a move of the
+  schema word. Not live; `waystone_dir.hpp` carries the trap. Restated on
+  `cf-waystone-premise` at `46c632aa`. Owner:
+  `docs/spec/waystone-concpets.md` §5.
 
-- **A Cabin builds rarely on a busy instance, and that is the price of
-  one store.** Verified at AT-S7 (2026-09-23) on `at-s7-one-cabin-store`.
-  §6a's banking gate refuses while **anything** is unresolved anywhere —
-  `ReadView::in_flight_at_mint` became the instance's fact, and the
-  announce asks `InstanceVisibility::AnyUnresolved` again — so one
-  autocommit write in flight on any core declines every build on every
-  core. It was one core's transactions declining one core's builds, which
-  §6a already called wider than it sounds; the store's topology made it
-  the instance's.
-
-  Correct, and conservative in the only legal direction: an unobserved
-  value is answered by the authoritative scan. What it costs is that a
-  Cabin may never fill on a write-heavy instance, which `SHOW CABINS`
-  reports as `unbankable_views=` and nothing else distinguishes from "the
-  column is never probed". Sharpening it means a per-value record of which
-  unresolved transactions could contradict a build, which is a structure
-  §6a does not have. Owner: `docs/spec/cabin.md` §6a.
+- **A Cabin builds rarely on a busy instance, and that is the price of one
+  store.** §6a's banking gate refuses while anything is unresolved anywhere
+  (`TransactionManager` sets `in_flight_at_mint` from
+  `InstanceVisibility::AnyUnresolved`), so one autocommit write in flight on
+  any core declines every build on every core. Correct, and conservative in
+  the only legal direction (an unobserved value is answered by the
+  authoritative scan), but a Cabin may never fill on a write-heavy instance;
+  `SHOW CABINS` reports `unbankable_views=` and nothing else tells that from
+  "never probed". Sharpening it needs a per-value record of which unresolved
+  transactions could contradict a build, a structure §6a does not have.
+  Re-verified at `7dd9b789` by reading. Owner: `docs/spec/cabin.md` §6a.
 
 ## Foreign keys
 
@@ -470,23 +383,15 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   and **the operator's** to mark. **Owner: none.**
 - **The borrow ledger's `Holds` is a linear scan, and D9(a) asks it more.**
   Every parent `S` and the `IS` above it go through `BorrowChain`, whose
-  intention test scans the transaction's holdings, beside the row `X`s the
-  writes already took - so a transaction's asks are quadratic in its
-  borrows. Found by the same review. **Measured at AY's close** at
-  `v2.7.0-530-g0552d55`, one core only
-  (`results-ay-s11-overhead-v2.7.0-530-g0552d55.md`, cell 3, at `fc2d3437^`):
-  about 0.2 ns x K a row for K distinct parents in one transaction -
-  unresolved up to K = 1,024, marginal at 4,096, +3.43 µs a row (~6 %) at
-  16,384 - **and ~2.1 µs of that 3.43 is paid at the decide, not by the
-  inserts**, whose own excess is not resolvable. So what was measured is
-  not this scan: its hit here, the relation intention, sits among
-  `held_`'s first entries. By source read, not profiled, it is
-  `LockTable::Release`: per borrow, `ReleaseHeld` erases from the front of
-  its partition's vector and `WakeWaiters` then scans that partition for
-  the key just erased - O(n²/64) a decide, which predates AY and which
-  D9(a)'s doubled borrows took from 14 ms to 49 ms at K = 16,384. A hashed
-  holdings set would not remove
-  it; a keyed partition would. Neither is built.
+  intention test scans the transaction's holdings, so a transaction's asks
+  are quadratic in its borrows. Measured at AY's close (`v2.7.0-530-g0552d55`,
+  one core): ~0.2 ns x K a row for K distinct parents, +3.43 us a row
+  (~6 %) at K = 16,384, of which ~2.1 us is paid at the decide. By source
+  read, not profiled, that part is `LockTable::Release` (`ReleaseHeld` erases
+  from the front of a partition vector, `WakeWaiters` rescans it: O(n^2/64)
+  a decide). A keyed partition would remove it; a hashed holdings set would
+  not. Neither is built; the numbers are not re-measured and their results
+  file is not in the working tree. Source structure re-read at `7dd9b789`.
 
 **The check-to-write window closed at AY-S5** (D9(a), `foreign-keys.md`
 §2a, §3a), pinned on one thread by
@@ -516,63 +421,57 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   chain at once. Owner: `assertion.md` §7.
 
 - **An unexplained ~0.4 s stall inside foreground time, on the post-AT
-  engine only.** Measured by AT-S13 on `at-s13-prices` at
-  `v2.7.0-391-gf6f2073` (2026-09-26, `results-at-s13-prices-v2.7.0-391-gf6f2073.md`
-  cell 2, at `fc2d3437^`): in three of the measured commit's seven runs one
-  `update-disjoint` arm took ~0.37-0.41 s longer than its siblings (max
-  latency 371-413 ms), inside `sched_foreground_polled_us`, and in one run on
-  every core at once; `df8cc5f`'s three runs show none. An instance-wide
-  hold would produce it, and so would a WAL append held behind device
-  writeback under the log's latch. Three against zero is too few to call
-  it AT's and too many to call it noise; not investigated. Owner: whoever
-  measures next, starting from `wal.md` §3 and `page.md` §6's writeback
-  claim.
+  engine only.** AT-S13 (`v2.7.0-391-gf6f2073`, 2026-09-26): in three of
+  seven runs of the measured commit one `update-disjoint` arm took
+  ~0.37-0.41 s longer than its siblings, inside `sched_foreground_polled_us`
+  and once on every core at once; the three `df8cc5f` runs show none. An
+  instance-wide hold or a WAL append behind device writeback under the log's
+  latch would produce it. Not investigated, not re-measured. Owner: whoever
+  measures next, from `wal.md` §3 and `page.md` §6.
 
 - **A `SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build.**
-  Verified at `4bf80fa`, 2026-09-23. AT-S8 put the controller behind a view
-  latch that core 0's cadence holds across a tick, and a tick may create a
-  Cabin and walk its relation for the seeded build; the latch is a
-  `std::mutex`, so a peer's `SHOW` sleeps that peer's reactor - and every
-  session on it - for the build. Liveness, not correctness. The fix is for
-  the tick to publish a copy of the view at its end and the `SHOW` to read
-  the copy. Owner: `docs/spec/physical-optimizer.md` Part II.
+  Core 0's cadence tick (`src/server/expeditor.cpp`) holds the controller's
+  view latch, a `std::mutex` (`include/kds/base/latch.hpp`), across a tick
+  that may create a Cabin and walk its relation; a peer's `SHOW` takes the
+  same latch (`src/server/sys_views.cpp`) and sleeps that reactor, and every
+  session on it, for the build. Liveness, not correctness. The fix is for
+  the tick to publish a copy of the view and the `SHOW` to read the copy.
+  Re-verified at `7dd9b789` by reading. Owner:
+  `docs/spec/physical-optimizer.md` Part II.
 
 - **A multi-core test instance binds its probed port with SO_REUSEPORT.**
-  Verified at `aaf0f47`. `ExpeditorTest`'s fixtures probe a free loopback
-  port and then bind it; above one core every listener sets SO_REUSEPORT
-  since AT-S8, so two concurrent ctest processes that probe the same port
-  both bind it and exchange connections silently, where before the second
-  bind failed loudly. Unobserved, and a flake rather than an engine defect.
-  Owner: the test fixture.
+  `ExpeditorTest`'s fixtures probe a free loopback port and then bind it;
+  above one core every listener sets `SO_REUSEPORT`, so two concurrent ctest
+  processes that probe the same port both bind it and exchange connections
+  silently (`tests/expeditor_test.cpp`'s `FreePorts` comment states it).
+  Unobserved; a flake, not an engine defect. Re-verified at `7dd9b789` by
+  reading. Owner: the test fixture.
 
 - **An eight-core append workload reaches the clustered tree's bounded
-  re-descent refusal, and the cause is not established.** Measured by the
-  scenario rebaseline on `bench-rerun-scenarios` at `v2.7.0-531-g9a0525d`
-  (2026-09-30, `results-scenario0-stockmarket-…` §6 and
-  `results-scenario2-freight-…`, both at `36449d28`): a write descent
-  restarted `storage::kMaxDescentRestarts` (4) times and was refused
-  `TXN_CONFLICT retryable=1 ... gave up after 5 attempts` (`btree.cpp`) -
-  scenario0 `cores = 8` `strict` on one `trades` insert in 3 of 3 runs
-  (key 113, root page 138 each time), scenario2 `cores = 8` `group` three
-  times; all on fresh relations under eight appending sessions. The message
-  names two causes, split churn or a descent from a memoised root that has
-  since grown a level; the same key and page in every repeat fit the stale
-  root, unproven. **Since BA-S14 (`6aa76ec7`, after the measurement)** a
-  statement that wrote nothing before the refusal is re-run inside the
-  engine after a yield, crossing the task boundary where `Revalidate()`
-  drops the memo, so that case no longer reaches the client; not
-  re-measured. The engine still does not tell the causes apart: since AT-S16
-  a grown-over root carries a mark `SecureParents` reads and `DescendTo`
-  does not, and from a stale root every attempt fails the same way
-  (`insert_placement.hpp`). No cell isolates which cause fires. Owner:
+  re-descent refusal, and the cause is not established.** The scenario
+  rebaseline (`bench-rerun-scenarios`, `v2.7.0-531-g9a0525d`, 2026-09-30)
+  saw a write descent restart `storage::kMaxDescentRestarts` (4) times and
+  refuse `TXN_CONFLICT retryable=1 ... gave up after 5 attempts`
+  (`src/storage/btree/btree.cpp`): scenario0 `cores = 8` `strict` on one
+  `trades` insert in 3 of 3 runs (key 113, root page 138 each time) and
+  scenario2 `cores = 8` `group` three times, all on fresh relations under
+  eight appending sessions. The message names split churn or a descent from
+  a memoised root that has since grown a level; the repeated key and page
+  fit the stale root, unproven. Since BA-S14 (`6aa76ec7`) a statement that
+  wrote nothing before the refusal is re-run inside the engine, so that case
+  no longer reaches the client; not re-measured. No cell isolates which
+  cause fires (a grown-over root carries a mark `SecureParents` reads and
+  `DescendTo` does not). The cited results files are not in the working
+  tree. Constant and message re-verified at `7dd9b789`. Owner:
   `docs/spec/heap-and-tuple.md` §5.
 
-- **No cell drives a stale writeback against a re-faulted frame.** Verified
-  at `aaf0f47`. AT-S8 step 1b draws every frame's dirty generation from the
-  store's own counter, so a frame evicted and faulted back never repeats the
-  value a concurrent writeback recorded at its copy; the interleaving needs
-  two writebacks and an eviction inside one device write, and no cell forces
-  it. Owner: `docs/spec/page.md` §6.
+- **No cell drives a stale writeback against a re-faulted frame.** AT-S8
+  step 1b draws every frame's dirty generation from the store's own counter
+  (`++dirty_gens_`, `src/storage/device_page_store.cpp`), so a frame evicted
+  and faulted back never repeats the value a concurrent writeback recorded at
+  its copy; the interleaving needs two writebacks and an eviction inside one
+  device write, and no cell forces it. Re-verified at `7dd9b789` by reading.
+  Owner: `docs/spec/page.md` §6.
 
 ## Keystone ids
 
@@ -670,26 +569,24 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Locks
 
-- **A write refused by a lock unit waits on that unit's slot, and a wake
-  is not a grant.** A refusal on the ask's own unit waits on its slot since
-  AX-S2b, one in another unit since AY-S2 (the containment wake), and a
-  first encounter with a holder between its decide and its release since
-  AY-S3 (B6; `row_wait_wake_rig_test.cpp`). Background: AT-S13's review
-  (`at-s13-prices` at `896af54`, 2026-09-26) found cross-core holders read
-  as decided and writers refused `TXN_CONFLICT retryable=1` where AO-S3
-  promised a wait; AX-S1 made the in-flight test the instance's. What stays
-  open, retryable and never a wrong answer:
+- **A write refused by a lock unit waits on that unit's slot, and a wake is
+  not a grant.** A refusal on the ask's own unit waits on its slot since
+  AX-S2b, one in another unit since AY-S2, and a first encounter with a
+  holder between its decide and its release since AY-S3
+  (`tests/row_wait_wake_rig_test.cpp`). What stays open, retryable and never
+  a wrong answer:
   - **A wake is not a grant.** `TryAcquire` does not queue, so a third
     writer can take the unit between the flip and the re-run; under
     sustained contention the waiter ends at the 1 s fault net naming the
-    last holder (AX's item 3, no action proposed).
+    last holder.
   - **What still polls** has no slot behind it: no lock table, a holder only
     the header names, an assertion's group, and a `PURGE` waiting on a
     deleter's decide or the read horizon (`heap-and-tuple.md` §4.1c).
   - A holder that never decides costs a cross-core writer the 1 s fault net
     and its defect warning, as a same-core writer pays.
 
-  Spec: `docs/spec/txn.md` §5.
+  Re-verified at `7dd9b789` by reading (`TryAcquire` non-queueing, the rig
+  cells exist). Spec: `docs/spec/txn.md` §5.
 
 - **The relation `IS` is declared at the bind for every relation a
   statement names** (closed at AT-S1, 2026-09-09; `step_compiler.cpp`). What
@@ -697,17 +594,6 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `TryAcquire`, so a reader arriving while a DDL holds `X` reads on, sound by
   catalog MVCC and the statement epoch rather than by the lock
   (`include/kds/server/read_borrow.hpp`, `txn.md` §5, `drop-table.md` DT1).
-
-- **`CompileWhere` resolves an UPDATE's or DELETE's subquery relations
-  under no view.** Verified 2026-09-09 on `m3-at` at `4b06051` by AT-S1's
-  review; re-read at `f3da0413`, 2026-10-13. `UpdateInner` and
-  `DeleteInner` resolve their own relation under the session's view (DT3c)
-  but call `exec::CompileWhere` with `view = nullptr`
-  (`command_dispatcher.cpp`), so `UPDATE t SET v = 1 WHERE id IN (SELECT id
-  FROM u)` resolves a `u` another transaction created and has not
-  committed. The fix is one argument at each site and turns a shape that
-  works today into a refusal, so it is recorded rather than applied. Owner:
-  `docs/spec/ddl-transactional.md` DT3c.
 
 - **A resolution `ResolveNames` discards keeps its `IS`.** Read 2026-10-14
   at `7ad21023` by the reviews of the instance-wide open-DDL gate; still so
@@ -829,14 +715,13 @@ pages and the cases it does not reach.
   pool or the device. Verified on
   `reindex-drop-index-reclaim` at `9da66f0e`.
 
-- **A backfill can be refused, or index a stranger, through a recycled
-  undo record.** Between `ResolvedForEveryReader`'s check and the read,
-  another core's purge can recycle the record, and a new record holding
-  another relation's row with the same tuple key passes the backfill's
-  identity check: its append is refused `Corruption` or leaves a surplus
-  entry readers re-check (IX2). Never a wrong answer; no cell forces the
-  window (`index.md` §10.1). Verified on `reindex-drop-index-reclaim` at
-  `83204ebc` with the backfill fix merged.
+- **A backfill can be refused, or index a stranger, through a recycled undo
+  record.** Between `ResolvedForEveryReader`'s check and the read, another
+  core's purge can recycle the record, and a new record holding another
+  relation's row with the same tuple key passes the backfill's identity
+  check: its append is refused `Corruption` or leaves a surplus entry
+  readers re-check (IX2). Never a wrong answer; no cell forces the window.
+  Re-verified at `7dd9b789` (`index.md` §10.1 states the same).
 
 ## Statement scheduling
 
@@ -1326,13 +1211,14 @@ Verified on `worktree-bx-unique-index` at BX-S2
   chunk's first, meeting an undecided writer of its key is refused
   `TxnConflict`** rather than waited for (BX-Q3 (a)): `ExecuteInsert`
   cannot park mid-statement.
-- **`ON CONFLICT DO NOTHING` skips a tuple-key conflict only** (BU-Q18,
-  met by BX at the merge of `origin/main` after `d152a715`): a row whose
-  unique-index key is held is refused `AlreadyExists`, where PostgreSQL's
-  target-less form skips it; and `ON CONFLICT (<col>)` naming a
-  uniquely indexed column is refused `NotImplemented` with BU's reason,
-  "the tuple key is the one conflict there is", which BX made untrue. A
-  refusal, never a wrong row. Owner: none - a decision, not a defect.
+- **`ON CONFLICT DO NOTHING` skips a tuple-key conflict only** (BU-Q18): a
+  row whose unique-index key is held is refused `AlreadyExists`, where
+  PostgreSQL's target-less form skips it; and `ON CONFLICT (<col>)` naming
+  anything but the tuple key is refused `NotImplemented` ("the tuple key is
+  the one conflict there is"), which BX made untrue for a uniquely indexed
+  column. A refusal, never a wrong row. Re-verified at `7dd9b789`
+  (`src/server/command_dispatcher.cpp`, `tests/dml_forms_test.cpp`). Owner:
+  none - a decision, not a defect.
 
 ## The query layer and the DML forms (BU)
 

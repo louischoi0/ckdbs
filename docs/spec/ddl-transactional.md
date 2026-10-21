@@ -230,7 +230,8 @@ membership is a decision:
 
 - **Filtered — a statement's own resolution.** `SELECT` (through
   `exec::Compile`, its sub-chains, and `CompileWhere`), `INSERT`,
-  `UPDATE`, `DELETE`, `ALTER`, `DROP TABLE`, a foreign key's parent
+  `UPDATE`, `DELETE` (the subquery relations of their WHERE resolve under
+  the session's view too, through `ResolveNames`), `ALTER`, `DROP TABLE`, a foreign key's parent
   lookup, and **the schema-object views** - `sys.tables`, `sys.objects`,
   `sys.columns` (so `DESCRIBE`), `sys.namespaces`, `sys.indexes` and
   `sys.fkeys`, and with them `SHOW TABLES`, `SHOW NAMESPACES`,

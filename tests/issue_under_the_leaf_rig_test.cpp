@@ -78,7 +78,7 @@ struct Seam {
 struct Raced {
     std::uint64_t first_id = 0;
     std::string second_reply;
-    int seam_calls = 0;  // the seam runs once per row, or once per sorted fill
+    int seam_calls = 0;  // the seam runs once per row
     // Whether core 1 finished inside its bounded look, while core 0 was
     // stopped: a btree places without a hold over the issue (BD-R6), so it
     // does; a heap's tail is held across its issue (BB-R7), so it does not.

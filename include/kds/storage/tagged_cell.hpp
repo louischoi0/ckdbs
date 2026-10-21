@@ -19,8 +19,8 @@
 // how many bytes it occupies - it gets exactly `W = kds.inline_cell_width`
 // bytes whatever it holds. The point is tuple *mobility*: with fixed cells
 // an UPDATE can never migrate a tuple, so combined with the immutable
-// min_key a tuple's address is stable for life until relayout moves it on
-// purpose. That is what stops an UPDATE from burning Waystone trail
+// min_key a tuple's address is stable for life (no mover exists since BZ
+// removed relayout). That is what stops an UPDATE from burning Waystone trail
 // entries through epoch churn.
 //
 // ---- Why a tag byte rather than sentinels -------------------------------

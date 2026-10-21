@@ -77,7 +77,7 @@ A check reads the row being written and `TableAccess::transitions`.
   expression;
 - every `DELETE`.
 
-No bulk path places rows outside the per-row one (`bulkinsert.md` §8). A
+No bulk path places rows outside the per-row one (`bulkinsert.md` §4). A
 write path added later checks, or it refuses the
 write on a governed relation. It never skips the check `[quiet-wrong]`.
 

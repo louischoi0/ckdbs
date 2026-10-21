@@ -1269,7 +1269,7 @@ public:
     //
     // `CreateIndex` is this plus the write, so there is still exactly one
     // implementation of each refusal. It is public because the DDL layer
-    // **backfills before it publishes** (docs/spec/index.md §10a) - and a
+    // **backfills before it publishes** (docs/spec/index.md §10.1) - and a
     // declaration that could never work should be refused by name before it
     // walks a relation, not after, and certainly not as a page-type error
     // from inside the build.

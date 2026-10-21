@@ -236,7 +236,7 @@ TEST(StrictMarkerSnapshotRigTest, ASynchronousDispatchWaitsForTheBoundToo) {
 // level table carries this case as a disclosed exception to.
 //
 // **Disabled, and red when enabled** - on every run at `6b0d8412`, which is
-// the reproduction `docs/inflight/bugs/a-strict-commits-marker-caps-every-
+// the reproduction `git show d83bd502:docs/inflight/bugs/a-strict-commits-marker-caps-every-
 // cores-snapshot-across-its-sync.md` records. The fix that turns them green
 // - the statement boundary waiting for the instance's published commit
 // ceiling, as it waits for the session's own - was built and measured

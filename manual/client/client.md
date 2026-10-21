@@ -74,7 +74,7 @@ contain a raw newline byte.
 
 ## 3. Reply shapes
 
-The full per-command table is `docs/spec/client-manual.md` §3; the shapes a
+The full per-command table is `docs/spec/client-manual.md` §2 (wire protocol) and Appendix A (debug surface); the shapes a
 client parses:
 
 | Statement | Success reply |

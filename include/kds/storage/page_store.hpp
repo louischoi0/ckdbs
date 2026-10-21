@@ -155,7 +155,7 @@ enum class PinMode : std::uint8_t { kShared, kExclusive, kUnlatched };
 // A split writes a page and then creates the next one, and a creation can
 // fail for the device - a file that cannot grow, a free-map region that
 // cannot be read - as well as for the pool; failing after the first write
-// leaves the structure torn (`docs/inflight/bugs/a-fetch-refused-after-a-
+// leaves the structure torn (`git show d83bd502:docs/inflight/bugs/a-fetch-refused-after-a-
 // page-write-leaves-the-mutation-half-done.md`). A claim does everything a
 // creation can fail at - the frame slot, the id, the device's room for it -
 // so `CreateNew` here only publishes a claimed page. Claims not used go
@@ -459,7 +459,7 @@ public:
     // A pool at its cap with nothing reclaimable refuses a fault or a
     // creation `ResourceExhausted`. That is safe only where the mutation
     // has written nothing yet: a refusal after a page write leaves the
-    // write with nothing that undoes it (`docs/inflight/bugs/a-fetch-refused-
+    // write with nothing that undoes it (`git show d83bd502:docs/inflight/bugs/a-fetch-refused-
     // after-a-page-write-leaves-the-mutation-half-done.md`). So each
     // mutation that writes and then fetches opens a **no-refuse window**
     // before its first write. Opening it takes a share of the pool for the

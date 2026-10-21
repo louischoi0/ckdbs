@@ -16,7 +16,7 @@
 // pattern. That is the seam spec section 1 asks for - "Waystone lives
 // outside the executor" - and it is what keeps the *dependency arrow*
 // pointing one way: `stats/` already depends on `exec/`
-// (stats/access_stats.hpp and stats/relayout_planner.hpp both include
+// (stats/access_stats.hpp includes
 // exec/step_chain.hpp), so an executor that included a Waystone header
 // would close a cycle.
 //

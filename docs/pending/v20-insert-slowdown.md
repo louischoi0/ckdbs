@@ -7,6 +7,9 @@ Read at: `0446b3b0` (`[source-read]` line numbers are at this commit unless
 another is named). Measured binaries: `v2.7.0-640-gb76261bb` (superblock 19),
 `v2.7.0-659-ge4b107af` (superblock 19 - BE's branch before BD merged, not
 v20), `v2.7.0-688-g19843fee` (superblock 20, the binary xrock ran).
+Re-checked at `7dd9b789`: the symbols named in section 2.4 and 2.5 still
+exist, but the `path:line` numbers have moved (e.g. `LogBtreeSplit` is called
+at `src/server/command_dispatcher.cpp:5022`); they stay as read at `0446b3b0`.
 Related: `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`
 (BD-R10 - nothing BD lands is measured; BD-R12 - a split is one record);
 `docs/spec/wal.md`; `bench/README.md`;

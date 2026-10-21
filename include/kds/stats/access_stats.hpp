@@ -8,9 +8,9 @@
 // Recording what a statement's steps actually did, per access *shape*
 // (`docs/spec/heap-and-tuple.md` §7).
 //
-// This is the collecting half. The optimizing half - relayout - is
-// shadow-only (`physical-optimizer.md`: every move is gated), so this
-// produces the input a physical optimizer needs and stops there.
+// This is the collecting half. The relayout mover and its shadow planner
+// were removed with BZ (`docs/spec/physical-optimizer.md`), so this produces
+// the input Part II's Cabin controller and Waystone read and stops there.
 //
 // ---- One call, no per-kind branch ---------------------------------------
 //
