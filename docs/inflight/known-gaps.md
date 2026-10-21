@@ -738,6 +738,14 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 
   Each holds its core until it ends or `exec::Budget` stops it. 64 is
   BA-Q11's value, not re-measured in BA-S15.
+- **A yielding build still stalls its core at a WAL segment roll.** A
+  roll holds the append latch across its sync (the WAL entry above), and a
+  build that logs per row - `CREATE ASSERTION`'s `ASSERT_BUILD`, about 129 B
+  a row - crosses segments inside a slice: at 1,000,000 rows on `cores = 1`
+  its two rolls held a same-core point read 529 and 540 ms, where every
+  other probe was answered within a slice (`CREATE INDEX` logs its tree
+  only at the end; `bench/v3.4.0/results-a1-close-v3.4.0-11-gf53e62db.md`
+  §7). The slice bounds everything but the roll.
 - **A live build's waiters can still meet the fault net.** A relation-`X`
   build's waiters on other cores are not refused at the fault net while
   it advances (`txn.md` §5, `holder_progress.hpp`).
