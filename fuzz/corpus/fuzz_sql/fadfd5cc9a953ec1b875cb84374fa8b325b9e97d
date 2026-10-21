@@ -1,0 +1,1 @@
+CREATE TRANSITION st ON t(s) ON INSERT ('a', 'b') ON UPDATE ('a' => 'b')

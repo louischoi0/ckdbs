@@ -1,0 +1,1 @@
+UPDATE t SET a = COALESCE(a, b, 0)

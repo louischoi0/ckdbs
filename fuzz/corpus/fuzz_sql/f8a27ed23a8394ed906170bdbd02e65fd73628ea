@@ -1,0 +1,1 @@
+UPDATE t SET a = (SELECT MAX(x) FROM u WHERE y > 1) * 2

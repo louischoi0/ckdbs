@@ -1,0 +1,1 @@
+UPDATE t SET v = (SELECT w FROM c WHERE id = 2) WHERE id = 3

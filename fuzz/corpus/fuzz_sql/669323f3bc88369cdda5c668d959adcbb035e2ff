@@ -1,0 +1,1 @@
+CREATE ASSERTION lim ON purchases GROUP BY (user_id, product_id) CHECK COUNT(*) <= 5

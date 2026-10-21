@@ -28,6 +28,22 @@ elseif(NOT KDS_SANITIZE STREQUAL "")
     message(FATAL_ERROR "KDS_SANITIZE='${KDS_SANITIZE}': expected address, thread or empty")
 endif()
 
+# BS-S2's coverage configuration: clang's source-based coverage, read by
+# llvm-cov (BS-Q2 (a)); scripts/bs/coverage.sh builds and reports it.
+option(KDS_COVERAGE "Instrument for llvm-cov source-based coverage (clang only)" OFF)
+if(KDS_COVERAGE)
+    add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+    add_link_options(-fprofile-instr-generate)
+endif()
+
+# BS-S5's fuzz targets (fuzz/): libFuzzer, clang only, the engine built with
+# its coverage hooks so the fuzzer sees inside it; scripts/bs/fuzz.sh builds
+# and runs them.
+option(KDS_FUZZ "Build the libFuzzer targets under fuzz/ (clang only)" OFF)
+if(KDS_FUZZ)
+    add_compile_options(-fsanitize=fuzzer-no-link)
+endif()
+
 add_library(kds
     src/base/log.cpp
     src/base/fail_stop.cpp
@@ -253,4 +269,8 @@ option(KDS_BUILD_TESTS "Build ckdbs unit tests" ON)
 if(KDS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(KDS_FUZZ)
+    add_subdirectory(fuzz)
 endif()

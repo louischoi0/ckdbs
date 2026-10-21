@@ -1,0 +1,1 @@
+INSERT INTO ns.t (a) VALUES (1)

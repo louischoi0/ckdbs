@@ -1,0 +1,2 @@
+-- leading comment
+SELECT * FROM t

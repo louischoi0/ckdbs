@@ -1,0 +1,1 @@
+CREATE PATTERN p($f int64) SELECT * FROM t

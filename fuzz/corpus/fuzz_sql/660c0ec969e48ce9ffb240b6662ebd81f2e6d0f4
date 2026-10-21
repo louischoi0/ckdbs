@@ -1,0 +1,1 @@
+UPDATE t SET c = 12.34 WHERE id = 1

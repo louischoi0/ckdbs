@@ -1,0 +1,1 @@
+CREATE PATTERN p($a int64, $b varchar) OF SELECT id, name FROM t WHERE id = $a AND name = $b

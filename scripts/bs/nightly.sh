@@ -21,8 +21,11 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BS_REPORTS="${BS_REPORTS:-$ROOT/build-bs-reports}"
 # The sanitizer configurations first: `io-sweep` runs noassert's ckdbs-sim and
 # `bs-cells` asan's kds_bs_tests, both built by the steps before them.
-STEPS="${BS_STEPS:-asan tsan noassert io-sweep bs-cells}"
+STEPS="${BS_STEPS:-asan tsan noassert io-sweep bs-cells coverage fuzz}"
+# Fresh sim seeds a configuration runs beside the committed ones: the
+# release build many, the sanitizer builds - 4 to 5 times slower - a few.
 SIM_FRESH="${BS_SIM_FRESH:-16}"
+SIM_FRESH_SANITIZED="${BS_SIM_FRESH_SANITIZED:-2}"
 mkdir -p "$BS_REPORTS"
 
 DAY=$(date -u +%Y-%m-%d)
@@ -100,14 +103,15 @@ step_sim() {
         summary+=("$cfg-sim=SKIP")
         return
     }
-    local t0=$SECONDS
-    BS_SIM_FRESH="$SIM_FRESH" SIM_ARTIFACTS="$WORK/$cfg-sim-artifacts.txt" \
+    local t0=$SECONDS fresh=$SIM_FRESH
+    [ "$cfg" = noassert ] || fresh=$SIM_FRESH_SANITIZED
+    BS_SIM_FRESH="$fresh" SIM_ARTIFACTS="$WORK/$cfg-sim-artifacts.txt" \
         "$ROOT/scripts/bs/config.sh" "$cfg" sim > "$log" 2>&1
     rc=$?
     local line dt=$(( (SECONDS - t0) / 60 ))
     line=$(grep -E '^sim: [0-9]+ run' "$log" | tail -1)
     if [ "$rc" -eq 0 ]; then
-        verdicts+=("| $cfg sim | PASS | ${line:-?}, $SIM_FRESH fresh seeds (${dt} min) |")
+        verdicts+=("| $cfg sim | PASS | ${line:-?}, $fresh fresh seeds (${dt} min) |")
         summary+=("$cfg-sim=PASS")
     else
         verdicts+=("| $cfg sim | FAIL | ${line:-sim exit $rc} (${dt} min), \`$log\` |")
@@ -160,6 +164,14 @@ for s in $STEPS; do
             # BS-S3: the Nth operation of each device kind, every committed seed.
             step_run io-sweep python3 -I "$ROOT/scripts/bs/io_sweep.py" \
                 "$ROOT/build-bs-noassert/ckdbs-sim" --ops "${BS_SWEEP_OPS:-1500}"
+            ;;
+        coverage)
+            # BS-S2: below the recorded floor fails the night (BS-Q4 (b)).
+            step_run coverage "$ROOT/scripts/bs/coverage.sh"
+            ;;
+        fuzz)
+            # BS-S5: each target for its budget, from its committed corpus.
+            step_run fuzz "$ROOT/scripts/bs/fuzz.sh" "${BS_FUZZ_SECONDS:-600}"
             ;;
         bs-cells)
             # The cells labelled bs-nightly (BS-S3's allocation sweep and

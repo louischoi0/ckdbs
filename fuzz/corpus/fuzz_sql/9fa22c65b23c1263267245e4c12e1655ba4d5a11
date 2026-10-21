@@ -1,0 +1,1 @@
+DELETE FROM c USING t WHERE c.pid = t.id AND t.v > 20

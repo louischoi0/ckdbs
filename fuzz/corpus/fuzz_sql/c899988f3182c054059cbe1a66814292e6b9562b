@@ -1,0 +1,1 @@
+SELECT t.id, u.note FROM t JOIN u ON t.id = u.t_id

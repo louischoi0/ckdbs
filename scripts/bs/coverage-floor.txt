@@ -1,0 +1,14 @@
+# BS-S2's coverage floor (scripts/bs/coverage.sh): <src dir> <line %> <branch %>.
+# A ratchet: --record raises a value and never lowers one.
+src/base 82.7 81.4
+src/bootstrap 81.3 72.5
+src/catalog 91.9 77.8
+src/exec 90.9 81.6
+src/parser 92.5 87.2
+src/sched 91.0 85.2
+src/server 88.0 75.9
+src/stats 92.3 78.1
+src/storage 87.9 75.7
+src/txn 92.8 83.5
+src/wal 85.7 77.4
+src/wire 89.6 86.5

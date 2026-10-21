@@ -1,0 +1,1 @@
+SELECT * FROM t JOIN t ON t.id = t.id

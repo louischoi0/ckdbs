@@ -1,0 +1,1 @@
+UPDATE t SET a = abs(b) + sign(c)

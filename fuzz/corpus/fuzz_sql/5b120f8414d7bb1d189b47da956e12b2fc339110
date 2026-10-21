@@ -1,0 +1,1 @@
+UPDATE t SET a = a IN (1, 2)

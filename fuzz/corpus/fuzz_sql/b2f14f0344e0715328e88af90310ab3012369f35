@@ -1,0 +1,1 @@
+UPDATE t SET (a, b) = (SELECT x, y FROM u)

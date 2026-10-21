@@ -1,0 +1,1 @@
+SELECT c, a, b FROM t

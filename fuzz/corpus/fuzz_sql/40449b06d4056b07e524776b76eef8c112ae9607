@@ -1,0 +1,1 @@
+UPDATE t SET a = mod(b, 3)

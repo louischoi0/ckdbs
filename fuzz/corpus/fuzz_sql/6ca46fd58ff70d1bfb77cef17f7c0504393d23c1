@@ -1,0 +1,1 @@
+SELECT * FROM t INNER JOIN u ON t.id = u.id

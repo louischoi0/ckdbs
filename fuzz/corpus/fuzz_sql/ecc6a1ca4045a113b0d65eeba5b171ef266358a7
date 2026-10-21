@@ -1,0 +1,1 @@
+SELECT * FROM t WHERE id = 1 AND EXISTS (SELECT * FROM u) AND name = 'x'

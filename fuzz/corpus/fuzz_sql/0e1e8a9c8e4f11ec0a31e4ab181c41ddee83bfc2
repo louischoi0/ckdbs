@@ -1,0 +1,1 @@
+UPDATE t SET (a, b) = (a + 1, b * 2) WHERE id = 3

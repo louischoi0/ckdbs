@@ -1,0 +1,1 @@
+UPDATE t SET c = $x WHERE id = 1

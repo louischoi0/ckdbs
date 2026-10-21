@@ -1,0 +1,1 @@
+SELECT a.id, b.id FROM t AS a JOIN t AS b ON a.id = b.id
