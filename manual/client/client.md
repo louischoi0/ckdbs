@@ -119,7 +119,11 @@ could resolve. The
 correct response, always: `ROLLBACK`, then retry the whole transaction.
 After a conflict inside an explicit transaction the session is **failed**
 and answers only `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING` until rolled
-back. The same token (retryable) is used for constraint checks that met
+back - except a statement-owned DDL lock's refusal: a `TXN_CONFLICT`
+refusing `CREATE ASSERTION`, `CREATE TRANSITION` or an `ALTER TABLE`
+rename its relation fails nothing, and when the session's own transaction
+holds that relation, the response is to end the transaction, then re-issue
+the statement. The same token (retryable) is used for constraint checks that met
 an in-flight writer.
 
 Not retryable — retrying will fail identically:

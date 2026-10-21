@@ -90,15 +90,42 @@ write on a governed relation. It never skips the check `[quiet-wrong]`.
 | `DELETE` | After the conflict check, before the foreign-key reverse check, which may wait. |
 
 **T-R4 — the fence is the relation `X` and the memo `[quiet-wrong]`.**
-`CREATE` and `DROP TRANSITION` run in four steps:
+`CREATE TRANSITION` runs in these steps:
 
 1. Take the relation `X`, as a transaction of the statement's own, as
    `CREATE ASSERTION`'s build does.
-2. Write or retire the row.
-3. Move the schema word (`Catalog::NoteDeclarationsChanged`).
-4. Release.
+2. Make the catalog memo current (`Catalog::Revalidate`) and resolve the
+   table name again under a settled view; a name that now names another
+   relation is refused `TxnConflict`.
+3. The head (`exec::TransitionBuild::ForCreate`): the column, CN-4 T6's
+   one-per-column check, the name and the compiled graph.
+4. Walk the relation's leaves in slices of
+   `exec::SlicePolicy::pages_per_slice` (64), checking every live row's
+   state (A1 stage 2, `sched.md` §3). Where the statement can park and
+   holds the `X` (`DispatchAsync`), the walk runs on after the head returns
+   and yields its core between slices (`server::TransitionBuildRun`), the
+   `X` held across every yield; otherwise it runs whole. Each slice reads
+   under a check view minted for it - latest settled state - since no view
+   is held across a park; under the `X` a later view can only see decided
+   what an earlier one saw in flight.
+5. Ask the name again - one taken while the build yielded is refused
+   `AlreadyExists` - then write the row.
+6. Move the schema word (`Catalog::NoteDeclarationsChanged`).
+7. Sync (`AwaitDdlDurability`).
+8. Release.
 
-A writer that resolved the relation before step 3 meets the moved word at
+`DROP TRANSITION` takes the `X`, makes the memo current, asks the name
+again (a Transition moved to another relation meanwhile is refused
+`TxnConflict`), retires the row, moves the word, syncs and releases; it
+walks nothing and never yields.
+
+The run owns the holder (`DdlBuildLock`), so a build handed on keeps the
+`X` until its tail has written, moved the word and synced; a run destroyed
+before its tail - its frame destroyed at a suspension - releases it as the
+statement's end would, having written nothing. A cancel is taken before
+the first slice and at each slice boundary (`protocol.md` §10).
+
+A writer that resolved the relation before step 6 meets the moved word at
 its first relation intention (`MemoIsCurrent`). It is refused to run
 again, and never writes under the memo that lacked the change. The cell is
 `TransitionMemoFenceTest`, and the mutant that removes the memo check fails
@@ -187,4 +214,8 @@ CR3).
   - a state no walk from an initial state reaches;
   - a second Transition on the column, or a taken name;
   - an existing row outside the state set (`TRANSITION_VIOLATION`);
-  - a relation with an in-flight write (`TXN_CONFLICT`, retryable).
+  - a relation with an in-flight write (`TXN_CONFLICT`, retryable);
+  - a cancel taken at a slice boundary of the build (`CANCELLED`, T-R4).
+    Nothing is written, and an open explicit transaction is left failed
+    (the operator's ruling of 2026-10-21, `ddl-transactional.md` §5f); a
+    declaration's other refusals poison nothing.

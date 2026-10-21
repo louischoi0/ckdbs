@@ -16,10 +16,12 @@ A statement holds a relation `IS` on every relation it binds, taken by
 the compiler between the name and the schema (AT-S1). **`DROP TABLE` takes
 the relation `X`** (`drop-table.md` DT7), and while a statement's `IS` is
 granted the drop waits for the statement to end. `CREATE INDEX`, `DROP INDEX` and a `CREATE ASSERTION`'s build take
-it too, since AT-S5e (`ddl-transactional.md` §5e, §5f), and a child's
+it too, since AT-S5e (`ddl-transactional.md` §5e, §5f), both renames
+since the operator's ruling of 2026-10-21, under a holder of the
+statement's own (`alter.md` AL4a), and a child's
 `CREATE TABLE` takes its parent's `IS` for each foreign key it declares
-(BF-Q11 (a)). That is the lock's reach, and `txn.md` §5 owns it: a rename
-is catalog-only and takes no relation lock, and the foreign-key check
+(BF-Q11 (a)). That is the lock's reach, and `txn.md` §5 owns it: the
+foreign-key check
 family declares only D9(a)'s parent `IS` and `S` (`foreign-keys.md`).
 Under those, as under a refused `IS`, what makes a statement's answer
 right is catalog MVCC, the absence of data-moving DDL and - for a dropped
@@ -59,12 +61,22 @@ in-place root moves (`AdoptRoot`), because
 the `INSERT` doing one holds the relation's `TableAccess*`; each bumps the
 word, and other cores re-read the root from the anchor.
 
-**Asked at a task boundary, and never inside one.** `Catalog::Revalidate()`
+**Asked at a task boundary, and inside one only before it holds a
+`TableAccess`.** `Catalog::Revalidate()`
 is one acquire load; on a mismatch the cache is dropped and the value
 adopted. It runs between tasks, at two sites:
 `CommandDispatcher::DispatchAndStage`'s head (its `StatementEpochScope`,
 which publishes the statement epoch around the read, BF-R9) and the Cabin
-optimizer's tick (`CabinOptimizerExecutor::Tick`).
+optimizer's tick (`CabinOptimizerExecutor::Tick`). **Inside a statement it
+runs at three, each right after a relation `X`'s grant - or, for a
+rename, where the session's transaction already holds it** -
+`HandleTransition`, `HandleAssertion` and `HandleAlter`'s renames (the BV
+S2 review's B2; `alter.md` AL4a): a DDL another core published and
+released between the statement's boundary and an uncontended grant would
+otherwise be missing from what the statement reads under the `X`. Each is
+safe because nothing of the statement holds a `TableAccess` before its
+grant - what it resolved is an oid - so the drop strands no borrow, and
+from the grant on no DDL changes the relation until the statement ends.
 **It is never called from a cached read**, because a drop frees every
 `const TableAccess*` and `Schema&` a running statement holds
 (`catalog_cache.hpp`'s entries are reference-stable *until the next
@@ -234,9 +246,9 @@ the one inserter of a `sys.patterns` row (`waystone-concpets.md` §4a).
 | `CreateTable` | `sys.objects` (6) | the binding check and the `sys.objects` insert. The same check is asked unheld at the top, so a taken name costs no oid and no page; a create that loses under the hold has burned an oid and its pages, as a failure anywhere after them does. A relation's name is asked in the namespace it is created in (`namespace.md` NS6) |
 | `CreateNamespace` | `sys.objects` (6) | the check and the insert; the oid is issued before the hold |
 | `RenameTable` | `sys.objects` (6) | the check and the in-place rewrite; the new name is asked in the relation's own namespace |
-| `RenameColumn` | `sys.columns` (5) | the sibling check and the rewrite — `ALTER` holds no relation lock |
+| `RenameColumn` | `sys.columns` (5) | the sibling check and the rewrite — the relation `X` both renames take (`alter.md` AL4a) already orders two of one relation; the hold stays as defense in depth, and is the whole of it for a dispatcher with no lock table |
 | `CreateIndex` | `sys.indexes` (8) | the check and the insert; `CheckIndexDef` asks it unheld, earlier, so a taken name is refused before a build |
-| `InsertAssertion` | `sys.assertions` (14) | the check and the insert; `CreateAssertion` asks unheld before its build, for the same reason |
+| `InsertAssertion` | `sys.assertions` (14) | the check and the insert; `AssertionBuild::ForCreate` asks unheld before its build and `Finish` again before its adoption, for the same reason |
 | `CreateCabin` | `sys.cabins` (12) | not a name but the same shape — one cabin per column — and reached by two operators, or an operator and the controller; the id is issued before the hold |
 
 **A relation's name has one copy, its `sys.objects` row**, and every view
@@ -292,9 +304,11 @@ one live column it matches (`parser-v2.md`'s resolution rules;
 by its position. `DropColumn` resolves nothing: it takes the position the
 dispatcher resolved the name to and asked its RESTRICT of, and refuses
 `TxnConflict` a position no longer carrying the name ignoring case. A
-RENAME COLUMN takes no relation lock, so a second resolution by name under
-the hold could reach a column renamed onto the name in between - one the
-RESTRICT was never asked of `[quiet-wrong]`. `RenameColumn`'s collision scan skips the column
+RENAME COLUMN takes the relation `X` since AL4a (`alter.md`), as `DROP
+COLUMN` does before its ask, so none lands between the ask and the write;
+the position is kept as defense in depth - a second resolution by name
+under the hold, with no lock table, could reach a column renamed onto the
+name in between - one the RESTRICT was never asked of `[quiet-wrong]`. `RenameColumn`'s collision scan skips the column
 being renamed, so `a` may become `A` (`RENAME COLUMN A TO Id` on `a` is a
 rename too), while a rename onto the name the column already has, byte for
 byte, is `AlreadyExists`. A relation created before the rule may still hold

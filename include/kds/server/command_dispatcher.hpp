@@ -132,9 +132,10 @@ struct MountRecovery;
 // in `command_dispatcher.cpp`.
 class SelectRun;
 
-// A `CREATE INDEX` / `REINDEX INDEX` whose backfill runs on after its head
-// returns (A1 stage 2); defined in `command_dispatcher.cpp`.
-class IndexBuildRun;
+// A relation-X build - `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION`,
+// `CREATE TRANSITION` - whose walk runs on after its head returns (A1 stage
+// 2); defined in `command_dispatcher.cpp`.
+class BuildRun;
 
 struct DispatchOutcome {
     std::string response;
@@ -300,16 +301,16 @@ struct DispatchOutcome {
     // null once `DispatchAsync` returns.
     std::shared_ptr<SelectRun> select_run = nullptr;
 
-    // **An index build, not yet walked** (A1 stage 2, `sched.md` §3). Set
-    // only under `DispatchAsync`, on a `CREATE INDEX` or `REINDEX INDEX`
-    // reply whose head took the relation `X`, answered every refusal and
-    // allocated the root: the backfill runs on after the head returns,
-    // yielding its core every `SlicePolicy::pages_per_slice` leaves, and its
-    // tail logs the tree, writes the row and decides the statement's scope.
-    // It owns the scope, the build and the progress registration, holds this
-    // core's statement epoch and pins the catalog memo. Null on every other
-    // reply, and always null once `DispatchAsync` returns.
-    std::shared_ptr<IndexBuildRun> build_run = nullptr;
+    // **A relation-`X` build, not yet walked** (A1 stage 2, `sched.md` §3).
+    // Set only under `DispatchAsync`, on a `CREATE INDEX`, `REINDEX INDEX`,
+    // `CREATE ASSERTION` or `CREATE TRANSITION` reply whose head took the
+    // relation `X` and answered every refusal: the walk runs on after the
+    // head returns, yielding its core every `SlicePolicy::pages_per_slice`
+    // leaves, and its tail publishes and decides. It owns the `X`'s holder,
+    // the build and the progress registration, holds this core's statement
+    // epoch and pins the catalog memo. Null on every other reply, and always
+    // null once `DispatchAsync` returns.
+    std::shared_ptr<BuildRun> build_run = nullptr;
 
     // **The poison `EndWrite` withheld for a structural re-run** (BA-S14),
     // carried with the statement rather than read back off the dispatcher:
@@ -1432,11 +1433,13 @@ private:
     DispatchOutcome HandleTransition(std::string_view line, Session& session);
 
     // **The relation `X` a declaration's build holds** (AT-S5e, AT-0 item
-    // 13), shared by `HandleAssertion` and `HandleTransition`: a
+    // 13), shared by `HandleAssertion` and `HandleTransition` - and by
+    // `HandleAlter`'s two renames (`alter.md` AL4a): a
     // transaction of the statement's own that writes nothing and is rolled
-    // back when the lock goes out of scope, so a failed build poisons
-    // nothing - a transaction rather than a minted id because a waiter names
-    // its holder. No manager or lock table: no lock, which is the pre-MVCC
+    // back when the lock goes out of scope, so a refused build poisons
+    // nothing (a cancelled one fails an open transaction, as any cancelled
+    // statement does) - a transaction rather than a minted id because a
+    // waiter names its holder. No manager or lock table: no lock, which is the pre-MVCC
     // engine every socket-free test runs on. Returns the refusal, if any.
     struct DdlBuildLock {
         txn::TransactionManager* manager = nullptr;
@@ -1450,7 +1453,15 @@ private:
         DdlBuildLock(const DdlBuildLock&) = delete;
         DdlBuildLock& operator=(const DdlBuildLock&) = delete;
         ~DdlBuildLock();
+        // The release, then the registration withdrawn; idempotent. A build
+        // handed on ends it in its tail (A1 stage 2), the rest at their
+        // scope's end.
+        void End();
     };
+    // Latest settled state, the view a declaration's build and its name
+    // resolve under: `MintCheckView` with no writer, or everything with no
+    // manager (the pre-MVCC engine every socket-free test runs on).
+    txn::ReadView SettledView() const;
     std::optional<Status> TakeDdlBuildLock(Session& session, catalog::Oid relation,
                                            std::string_view relation_name, std::string_view verb,
                                            DdlBuildLock& out);
@@ -1706,22 +1717,23 @@ private:
     // and writes the reply over `out` (BA-S15). `DispatchAsync` only.
     sched::Coro CompleteSelect(std::string_view line, DispatchOutcome* out);
 
-    // Runs the backfill and the tail a `DispatchAndStage` reply left in
+    // Runs the walk and the tail a `DispatchAndStage` reply left in
     // `out->build_run` and writes the reply over `out` (A1 stage 2).
     // `DispatchAsync` only.
-    sched::Coro CompleteIndexBuild(std::string_view line, DispatchOutcome* out);
+    sched::Coro CompleteBuild(std::string_view line, DispatchOutcome* out);
 
     // `DispatchAndStage`'s statement frame around `body(session)`: the
     // per-statement members cleared, the statement epoch published, this
     // core declared, and what the body left in the members carried onto its
-    // outcome. Also the frame an index build's tail runs in, after its
-    // head's has closed (`IndexBuildRun`).
+    // outcome. Also the frame a relation-X build's tail (`BuildRun`) runs
+    // in, after its
+    // head's has closed (`BuildRun`).
     template <typename Body>
     DispatchOutcome StageStatement(Session* session, Body&& body);
 
     // `DispatchInner`'s per-statement stamps - the boundary not yet taken,
-    // the commit's durability class - which an index build's tail takes
-    // again, since other statements of this core ran since its head.
+    // the commit's durability class - which a relation-X build's tail
+    // (`BuildRun`) takes again, since other statements of this core ran since its head.
     void StampStatement(Session& session);
 
     // The statement log line `DispatchAndStage` writes, split out so a
@@ -2573,8 +2585,12 @@ private:
     };
     std::vector<std::unique_ptr<SelectScratch>> select_scratch_pool_;
     friend class SelectRun;
-    friend class IndexBuildRun;
     friend class SuspensionHold;
+    friend class BuildRun;
+    friend class IndexBuildRun;
+    friend class DeclarationBuildRun;
+    template <typename Build>
+    friend class DeclarationBuildRunOf;
 
     // Whether a successful SELECT records its access shapes
     // (`access_statistics`). Defaults **on**: unlike Waystone this collects

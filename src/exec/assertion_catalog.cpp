@@ -141,12 +141,8 @@ Status EmitAssertDrop(wal::WalManager* wal, std::uint64_t assertion_id, PageId c
 
 namespace {
 
-// The schema positions every path needs, resolved against **one core's**
-// view of the relation. Factored out because `PrepareAssertionDef` and
-// `BuildAssertionCabin` both need them and, on the cross-core path, run on
-// different cores against different catalog views - so this is one
-// implementation resolving twice, never one resolution shared across a
-// wire.
+// The schema positions a CREATE needs, resolved against the relation's
+// current schema at `AssertionBuild`'s head, under the relation `X`.
 struct AssertionColumns {
     std::vector<std::uint16_t> group_cols;
     std::uint16_t sum_col = 0;  // read for a SUM assertion only
@@ -213,34 +209,46 @@ StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
     return oid.value();
 }
 
-namespace {
-
 // ---- `CREATE ASSERTION` in its three steps -----------------------------
 //
-// Validate, build, publish (`assertion.md` §8.1), split at the index build's
-// seams (`exec::PrepareIndexDef` / the tree build, PW1c-6b-1);
-// `CreateAssertion` runs the two halves back to back. The owner-core build
-// that split them retired (AT-S5d); its history is at cf889b63.
+// Validate, build, publish (`assertion.md` §8.1), `exec::IndexBuild`'s shape:
+// `AssertionBuild`'s head, its slices and its `Finish`. The owner-core build
+// that first split them retired (AT-S5d); its history is at cf889b63.
 
-// The relation, and the id the build's `ASSERT_BUILD` records will carry.
-struct AssertionPrepared {
-    catalog::Oid target_oid = 0;
-    std::uint64_t assertion_id = 0;
-};
+AssertionBuild::AssertionBuild(catalog::Catalog& catalog, storage::PageStore& store,
+                               parser::AssertionStmt stmt, catalog::Oid target_oid,
+                               wal::WalManager* wal, txn::HolderProgress::Scope* progress,
+                               std::uint64_t assertion_id)
+    : catalog_(catalog),
+      store_(store),
+      stmt_(std::move(stmt)),
+      target_oid_(target_oid),
+      wal_(wal),
+      progress_(progress),
+      assertion_id_(assertion_id) {}
 
-// The root the publish names, the two numbers the reply reports, and the
-// live directory the registry will adopt.
-struct AssertionCabinBuild {
-    PageId cabin_root = kInvalidPageId;
-    std::size_t rows_incorporated = 0;
-    std::size_t group_count = 0;
-    LiveAssertion live;
-};
+AssertionBuild::~AssertionBuild() {
+    // A build never finished - its statement's frame destroyed at a
+    // suspension - is discarded as a failed one is: the marker makes the
+    // stream self-describing, and its pages and id leak the same way. No
+    // statement is left to answer, so a marker the log refuses is dropped.
+    if (!finished_) (void)EmitAssertDrop(wal_, assertion_id_, kInvalidPageId);
+}
 
-StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
-                                                storage::PageStore& store,
-                                                const parser::AssertionStmt& stmt,
-                                                catalog::Oid target_oid) {
+Status AssertionBuild::Discard(const Status& why, PageId cabin_root) {
+    finished_ = true;
+    // The discard marker, then the error - the marker's own refusal first.
+    // Pages and id leak: no reclaim walk reaches a chain no catalog row
+    // names (`drop-table.md` DT1's stated leaks).
+    if (Status s = EmitAssertDrop(wal_, assertion_id_, cabin_root); !s.ok()) return s;
+    return why;
+}
+
+StatusOr<std::unique_ptr<AssertionBuild>> AssertionBuild::ForCreate(
+    catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
+    catalog::Oid target_oid, wal::WalManager* wal, txn::HolderProgress::Scope* progress) {
+    // **One oid for every step**: the caller resolved the target and took
+    // the relation `X` on it, and a second lookup here could name another.
     auto access = catalog.InitTableAccess(target_oid);
     if (!access.ok()) return access.status();
     auto columns = ResolveAssertionColumns(*access.value(), stmt);
@@ -269,99 +277,92 @@ StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
     auto id = catalog.AllocateRowId(catalog::kSysAssertionsTable);
     if (!id.ok()) return id.status();
 
-    AssertionPrepared prepared;
-    prepared.target_oid = target_oid;
-    prepared.assertion_id = id.value();
-    return prepared;
+    std::unique_ptr<AssertionBuild> build(
+        new AssertionBuild(catalog, store, stmt, target_oid, wal, progress, id.value()));
+    build->access_ = access.value();
+    build->group_cols_ = std::move(columns.value().group_cols);
+    build->sum_col_ = columns.value().sum_col;
+    const BoundAggregate aggregate =
+        stmt.func == parser::AggFunc::kSum ? BoundAggregate::kSum : BoundAggregate::kCount;
+    build->build_.emplace(aggregate, stmt.enforced_max(), id.value());
+    // The root before the first leaf: the publish names one even for an
+    // empty relation. A failure from here on is a failed build.
+    if (Status s = build->build_->chain.EnsureRoot(store, wal); !s.ok()) {
+        return build->Discard(s, kInvalidPageId);
+    }
+    if (Status s = build->cursor_.Start(store, access.value()->desc_page_id); !s.ok()) {
+        return build->Discard(s, kInvalidPageId);
+    }
+    return build;
 }
 
-StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
-                                                  storage::PageStore& store,
-                                                  const parser::AssertionStmt& stmt,
-                                                  catalog::Oid target_oid,
-                                                  std::uint64_t assertion_id,
-                                                  const txn::ReadView& check_view,
-                                                  wal::WalManager* wal,
-                                                  txn::HolderProgress::Scope* progress) {
-    auto access = catalog.InitTableAccess(target_oid);
-    if (!access.ok()) return access.status();
-    auto columns = ResolveAssertionColumns(*access.value(), stmt);
-    if (!columns.ok()) return columns.status();
+Status AssertionBuild::Step(std::uint32_t leaves, const txn::ReadView& check_view) {
+    return cursor_.Step(leaves, [&](PageId leaf) {
+        return IncorporateLeaf(store_, *access_, stmt_, group_cols_, sum_col_, check_view, wal_,
+                               progress_, *build_, leaf);
+    });
+}
 
-    // ---- Built before it is published (§8.1, index_ddl.cpp's shape) ------
-    auto build = BuildBoundCabin(store, *access.value(), stmt, assertion_id,
-                                 columns.value().group_cols, columns.value().sum_col,
-                                 check_view, wal, progress);
-    if (!build.ok()) {
-        // The discard marker, then the caller's error. Pages and id leak -
-        // the backfill's precedent: no reclaim walk reaches a chain no
-        // catalog row names (`drop-table.md` DT1's stated leaks).
-        if (Status s = EmitAssertDrop(wal, assertion_id, kInvalidPageId); !s.ok()) return s;
-        return build.status();
+StatusOr<AssertionDdlResult> AssertionBuild::Finish(
+    const Status& ran, AssertionEnforcer& enforcer,
+    const std::function<void()>& after_publish_run_for_test) {
+    finished_ = true;
+    if (!ran.ok()) return Discard(ran, kInvalidPageId);
+
+    // **The name asked again before anything is adopted**: one taken while
+    // the build yielded is refused with the head's message, rather than by
+    // `InsertAssertion`'s guard after the adoption. Across cores the guard
+    // under the root page's hold still decides (AT-S17).
+    auto existing = FindAssertionByName(catalog_, store_, stmt_.name);
+    if (!existing.ok()) return Discard(existing.status(), kInvalidPageId);
+    if (existing.value().has_value()) {
+        return Discard(Status::AlreadyExists("assertion \"" + stmt_.name + "\" already exists"),
+                       kInvalidPageId);
     }
 
-    AssertionCabinBuild out;
-    out.cabin_root = build.value().cabin_root;
-    out.rows_incorporated = build.value().rows_incorporated;
-    out.group_count = build.value().cabin.group_count();
+    BoundCabinBuild& build = *build_;
+    const PageId cabin_root = build.chain.root();
+    AssertionDdlResult result;
+    result.assertion_id = assertion_id_;
+    result.target_oid = target_oid_;
+    result.cabin_root = cabin_root;
+    result.rows_incorporated = build.rows_incorporated;
+    result.group_count = build.cabin.group_count();
 
     // The live half, resolved here where the statement, the schema and the
     // build are all in hand: the write hook must never re-scan a catalog or
     // re-parse a declaration per statement.
-    LiveAssertion& live = out.live;
-    live.assertion_id = assertion_id;
-    live.target_oid = target_oid;
-    live.name = stmt.name;
-    live.aggregate = stmt.func == parser::AggFunc::kSum ? BoundAggregate::kSum
-                                                        : BoundAggregate::kCount;
-    live.group_cols = columns.value().group_cols;
-    live.sum_col = columns.value().sum_col;
-    live.sum_col_name = stmt.sum_column.name;
+    LiveAssertion live;
+    live.assertion_id = assertion_id_;
+    live.target_oid = target_oid_;
+    live.name = stmt_.name;
+    live.aggregate = stmt_.func == parser::AggFunc::kSum ? BoundAggregate::kSum
+                                                         : BoundAggregate::kCount;
+    live.group_cols = group_cols_;
+    live.sum_col = sum_col_;
+    live.sum_col_name = stmt_.sum_column.name;
     for (std::size_t i = 0; i < live.group_cols.size(); ++i) {
-        live.group_col_names.push_back(stmt.group_columns[i].name);
-        live.group_columns.push_back(access.value()->schema.columns[live.group_cols[i]]);
+        live.group_col_names.push_back(stmt_.group_columns[i].name);
+        live.group_columns.push_back(access_->schema.columns[live.group_cols[i]]);
     }
-    live.chain = build.value().chain;
-    live.cabin = std::move(build.value().cabin);
-    return out;
-}
-
-}  // namespace
-
-StatusOr<AssertionDdlResult> CreateAssertion(
-    catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
-    catalog::Oid target_oid, const txn::ReadView& check_view, wal::WalManager* wal,
-    AssertionEnforcer& enforcer, txn::HolderProgress::Scope* progress,
-    const std::function<void()>& after_publish_run_for_test) {
-    // **The order is validate -> build -> publish** (§8.1): the three entry
-    // points, back to back.
-    // **One oid for all three**: the caller resolved the target and took the
-    // relation `X` on it, and a second lookup here could name another.
-    auto prepared = PrepareAssertionDef(catalog, store, stmt, target_oid);
-    if (!prepared.ok()) return prepared.status();
-
-    auto build = BuildAssertionCabin(catalog, store, stmt, target_oid,
-                                     prepared.value().assertion_id, check_view, wal, progress);
-    if (!build.ok()) return build.status();
+    live.chain = build.chain;
+    live.cabin = std::move(build.cabin);
 
     // ---- The new cabin's base, adopted with it (AS6a; AZ-S2) --------------
     //
     // Without a base of its own, an assertion created after the last
     // checkpoint has none in any range. Logged and adopted under one hold
     // (`AdoptLogged`; `assertion.md` §8.1 says why, and why before the row).
-    const std::uint64_t assertion_id = prepared.value().assertion_id;
-    const PageId cabin_root = build.value().cabin_root;
     if (Status s = enforcer.AdoptLogged(
-            std::move(build.value().live),
-            [wal](const std::vector<wal::AssertionCabinSnapshot>& run) -> Status {
-                if (wal == nullptr) return Status::OK();
-                return wal::LogAssertionSnapshot(*wal, run.front());
+            std::move(live),
+            [this](const std::vector<wal::AssertionCabinSnapshot>& run) -> Status {
+                if (wal_ == nullptr) return Status::OK();
+                return wal::LogAssertionSnapshot(*wal_, run.front());
             });
         !s.ok()) {
-        if (Status drop = EmitAssertDrop(wal, assertion_id, cabin_root); !drop.ok()) {
-            return drop;
-        }
-        return s.WithContext("publishing assertion \"" + stmt.name + "\"'s group snapshot");
+        return Discard(
+            s.WithContext("publishing assertion \"" + stmt_.name + "\"'s group snapshot"),
+            cabin_root);
     }
     if (after_publish_run_for_test) after_publish_run_for_test();
 
@@ -373,25 +374,14 @@ StatusOr<AssertionDdlResult> CreateAssertion(
     // derived from a `sys.assertions` row - no CatalogCache entry, and no
     // compiled plan consults assertions (the write paths call the enforcer
     // directly - assertion_check.hpp).
-    if (Status s = InsertAssertion(catalog, store, wal, assertion_id,
-                                   prepared.value().target_oid, stmt.name, stmt.source_text,
-                                   cabin_root);
+    if (Status s = InsertAssertion(catalog_, store_, wal_, assertion_id_, target_oid_,
+                                   stmt_.name, stmt_.source_text, cabin_root);
         !s.ok()) {
         // Out of the registry first, so no checkpoint snapshots it after
         // its discard marker; then the marker.
-        enforcer.Evict(assertion_id);
-        if (Status drop = EmitAssertDrop(wal, assertion_id, cabin_root); !drop.ok()) {
-            return drop;
-        }
-        return s;
+        enforcer.Evict(assertion_id_);
+        return Discard(s, cabin_root);
     }
-
-    AssertionDdlResult result;
-    result.assertion_id = assertion_id;
-    result.target_oid = prepared.value().target_oid;
-    result.cabin_root = cabin_root;
-    result.rows_incorporated = build.value().rows_incorporated;
-    result.group_count = build.value().group_count;
     return result;
 }
 
@@ -448,7 +438,7 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
         }
         sum_col = pos.value();
 
-        // **The type check `CreateAssertion` makes, made here too**, because this
+        // **The type check `AssertionBuild` makes, made here too**, because this
         // function's header promises it and did not perform it: a `uint64` column
         // does not fit the int64 accumulator a group header keeps (§10), and a
         // non-int64 one is outside v1 at all (§3.1). Inert while `ALTER TABLE`
@@ -508,7 +498,7 @@ StatusOr<std::uint64_t> DropAssertion(catalog::Catalog& catalog, storage::PageSt
     // catalog row is already gone.
     if (Status s = EmitAssertDrop(wal, id, found.value()->cabin_root); !s.ok()) return s;
     if (Status s = DeleteAssertion(catalog, store, wal, stmt.name); !s.ok()) return s;
-    // No BumpVersion(), CreateAssertion's reasoning: nothing cached is
+    // No BumpVersion(), `AssertionBuild::Finish`'s reasoning: nothing cached is
     // derived from these rows.
     return id;
 }

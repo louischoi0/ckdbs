@@ -101,6 +101,52 @@ checks column renames against assertion text too — conservatively, by
 relation, not by parsing the text to see whether the column matters. A
 coarser refusal is never wrong.
 
+## 4a. AL4a — A rename takes the relation `X`
+
+Both renames take the relation's `X` (the operator's ruling of 2026-10-21),
+under a transaction of the statement's own - `CREATE ASSERTION`'s holder
+(`assertion.md` §8.1, `ddl-transactional.md` §5f): it writes nothing and is
+rolled back when the statement ends, so the rename stays transactionless
+(AL6), and the `X` is held until then, across `AwaitDdlDurability`. The
+grant is a moment no writer, positioned reader or declaration build of the
+relation is mid-statement: a rename waits for every open transaction that
+wrote the relation, and a writer arriving during it waits for the rename.
+AL4's check and the column lookup run under the `X`, against a memo made
+current at the grant (`Catalog::Revalidate`), and - when the rename took a
+holder of its own - the name is resolved again there: one that moved to
+another oid while the rename waited is refused `TxnConflict`, one that is
+gone `NotFound`.
+
+**The wait is the lock family's**: under `DispatchAsync` the rename parks
+on the relation's slot and re-runs whole, and a holder that stays silent
+for the 1 s fault net - one that reports no progress, or stopped advancing
+(`txn.md` §5) - refuses it `TxnConflict`, retryable; a build that keeps
+advancing is waited out. On the synchronous path it is refused at once. It
+waits for the relation's open writers, every open child writer or creator
+holding the parent's `IS` (D9(a) for a child writer, BF-Q11 (a) for a
+child's `CREATE TABLE`; `foreign-keys.md` §2c), a positioned reader for its statement's
+length, `PURGE DROPPED COLUMNS`, a KWP load, and an index, assertion or
+transition build. The rename reports no progress, so a writer waiting for
+it has the plain 1 s net.
+
+**Why.** A `CREATE ASSERTION` building on the relation has no
+`sys.assertions` row for AL4 to read until it publishes. A rename landing
+inside the build would leave the published canon naming a vanished column,
+and a chain of renames could make it name another column at the next mount -
+a constraint silently different from the one declared.
+
+**Inside an explicit transaction that holds the relation's `X`** - an open
+DDL of its own that took it (`ADD` or `DROP COLUMN`, `CREATE` or `DROP
+INDEX`) - the rename takes no second holder: the fence is already the
+session's. **One that holds a weaker mode** - it wrote the relation (`IX`),
+or wrote or created a child relation referencing it (the parent's `IS`,
+D9(a) or BF-Q11 (a)) - is refused `TxnConflict` at once, retryable once
+that transaction has ended: a statement cannot wait for its own session's
+transaction. The refusal poisons nothing: `HandleAlter` is not inside
+`InDdlStatement`. A positioned reader's `IS` is a read borrow, not the
+transaction's, so a rename waits for that reader's statement rather than
+being refused.
+
 ## 5. AL5 — Coherency: one bump, no exceptions
 
 A rename ends with `Catalog::BumpVersion()` — the one invalidation choke
@@ -125,7 +171,8 @@ records are synced before the acknowledgement
 §7), because a transactionless DDL statement has no commit record for the
 durability class to ride on. It is **not** undone by `ROLLBACK`: `ALTER
 TABLE` is outside the transactional-DDL set (`ddl-transactional.md` §5).
-It is admitted inside an explicit transaction, and the rename stands
+It is admitted inside an explicit transaction - unless that transaction
+holds the relation in a mode weaker than `X` (AL4a) - and the rename stands
 whichever way that transaction ends.
 
 ## 7. AL7 — Grammar and refusal bytes

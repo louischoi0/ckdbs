@@ -501,9 +501,10 @@ StatusOr<std::unique_ptr<IndexBuild>> IndexBuild::ForReindex(
     const catalog::SysIndexRow& row = old.value();
 
     // **The definition is the row's own positions, never names** (B2): a
-    // `RENAME COLUMN` takes no relation `X`, so a definition re-spelled by
-    // column names could resolve to other columns than the index was built
-    // on. Widths and flags are the row's too - stored constants a column's
+    // definition re-spelled by column names could resolve to other columns
+    // than the index was built on, should a rename land between - none can
+    // since `RENAME COLUMN` takes the relation `X` (`alter.md` AL4a), and
+    // the positions keep it so as defense in depth. Widths and flags are the row's too - stored constants a column's
     // type cannot move under (types are not alterable, `alter.md` AL11).
     catalog::Catalog::IndexDef def;
     def.table_oid = row.table_oid;
@@ -587,24 +588,13 @@ Status IndexBuild::Begin() {
         building_.covered_cols[i] = def_.covered_cols[i];
     }
 
-    auto first = btree::BtreeLeftmostLeaf(store_, access_->desc_page_id);
-    if (!first.ok()) return first.status();
-    leaf_ = first.value();
-    walk_origin_ = leaf_;
-    return Status::OK();
+    return cursor_.Start(store_, access_->desc_page_id);
 }
 
 Status IndexBuild::Step(std::uint32_t leaves) {
-    for (std::uint32_t n = 0; n < leaves && leaf_ != kInvalidPageId; ++n, ++leaves_) {
-        if (Status s = storage::CheckPageWalkBudget(leaves_, walk_origin_, "relation leaf chain");
-            !s.ok()) {
-            return s;
-        }
-        auto next = BackfillLeaf(store_, *access_, building_, txns_, progress_, leaf_);
-        if (!next.ok()) return next.status();
-        leaf_ = next.value();
-    }
-    return Status::OK();
+    return cursor_.Step(leaves, [this](PageId leaf) {
+        return BackfillLeaf(store_, *access_, building_, txns_, progress_, leaf);
+    });
 }
 
 Status IndexBuild::Refusal(const Status& s) const {

@@ -76,8 +76,8 @@ namespace kds::server {
 // `SelectRun`'s, defined beside it below: `DispatchAndStage` stamps the head's
 // start on a walk it hands on, so the walk's log line times the statement.
 void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept;
-// `IndexBuildRun`'s, on the same terms.
-void SetIndexBuildRunStart(IndexBuildRun& run, sched::MonoTimeNs started_ns) noexcept;
+// `BuildRun`'s, on the same terms.
+void SetBuildRunStart(BuildRun& run, sched::MonoTimeNs started_ns) noexcept;
 
 namespace {
 
@@ -572,11 +572,11 @@ sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Sessio
     // anything after a dispatch reads the outcome: every dispatch
     // `DispatchAsync` makes is followed by this function.
     if (out->select_run != nullptr) co_await CompleteSelect(line, out);
-    // ---- A1 stage 2: an index build's backfill, sliced, then its tail ---
+    // ---- A1 stage 2: a relation-X build's walk, sliced, then its tail ---
     //
     // Here for the walk's reason: a head that handed a build on carries no
     // wait, and nothing after a dispatch reads the outcome before this.
-    if (out->build_run != nullptr) co_await CompleteIndexBuild(line, out);
+    if (out->build_run != nullptr) co_await CompleteBuild(line, out);
     co_return Status::OK();
 }
 
@@ -964,14 +964,14 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
         StageStatement(session, [&](Session& active) { return DispatchInner(line, active); });
 
     // A `SELECT` whose walk has not run yet is logged when it ends
-    // (`CompleteSelect`), with this head's start; an index build whose
-    // backfill has not, likewise (`CompleteIndexBuild`).
+    // (`CompleteSelect`), with this head's start; a build whose walk has
+    // not, likewise (`CompleteBuild`).
     if (outcome.select_run != nullptr) {
         SetSelectRunStart(*outcome.select_run, started_ns);
         return outcome;
     }
     if (outcome.build_run != nullptr) {
-        SetIndexBuildRunStart(*outcome.build_run, started_ns);
+        SetBuildRunStart(*outcome.build_run, started_ns);
         return outcome;
     }
     LogStatement(line, outcome, started_ns);
@@ -2322,52 +2322,156 @@ private:
     bool held_ = false;
 };
 
-// ---- A1 stage 2: an index build whose backfill outlives its head -----------
+// ---- A1 stage 2: a relation-X build whose walk outlives its head -----------
 //
-// **Everything a `CREATE INDEX` or `REINDEX INDEX` build holds from its head
-// to its decide, owned in one place**, so the backfill can run after
-// `HandleIndex` returns and yield its core between slices (`sched.md` §3),
-// as `SelectRun` lets a `SELECT`'s walk. The head fills it under the
-// relation `X`; where the statement cannot park it runs here whole, and
-// where it can (`DispatchAsync`) it is handed on in
-// `DispatchOutcome::build_run`.
+// **Everything a build holds from its head to its decide, owned in one
+// place**, so its walk of the relation can run after the head returns and
+// yield its core between slices (`sched.md` §3), as `SelectRun` lets a
+// `SELECT`'s walk: `CREATE INDEX` and `REINDEX INDEX` (`IndexBuildRun`),
+// `CREATE ASSERTION` and `CREATE TRANSITION` (`DeclarationBuildRun`). The
+// head fills one under the relation `X`; where the statement cannot park, or
+// holds no `X`, it runs here whole, and where it can (`DispatchAsync`) it is
+// handed on in `DispatchOutcome::build_run`.
 //
-// What it holds across a suspension, and why each is safe to hold: the
-// statement's write scope, whose transaction holds the relation `X` - no
-// writer and no positioned reader of the relation runs until the decide, so
-// the leaf the walk resumes at is as it was left; the build
-// (`exec::IndexBuild`: the unpublished tree's root and the next leaf, no
-// page); the progress registration a slice advances (`holder_progress.hpp`);
-// and this core's statement epoch and a pin on the catalog memo, for the
-// relation's `TableAccess` the build reads, as `SelectRun` holds them.
-// **Not the catalog's undo hook**: it is the dispatcher's, so
-// `InDdlStatement` uninstalls it before the first yield and the tail
-// installs it again.
+// What it holds across a suspension, and why each is safe to hold: the `X` -
+// no writer and no positioned reader of the relation runs until the decide,
+// so the leaf the walk resumes at is as it was left; the build (the next leaf
+// and what it has built, no page); the progress registration a slice
+// advances (`holder_progress.hpp`); and this core's statement epoch and a pin
+// on the catalog memo, for the relation's `TableAccess` the build reads.
 //
-// **A cancel is taken at each slice boundary** (`protocol.md` §10): the
-// build fails `CANCELLED` as a refused build fails - its tree freed, an
-// autocommit scope aborted, an explicit transaction failed.
-class IndexBuildRun : public std::enable_shared_from_this<IndexBuildRun> {
+// **A cancel is taken at each slice boundary**, and once before the first
+// (`protocol.md` §10): the build fails `CANCELLED` as a refused build fails,
+// and an open transaction is left failed.
+class BuildRun : public std::enable_shared_from_this<BuildRun> {
 public:
-    IndexBuildRun(CommandDispatcher& d, Session& session) : d_(d), session_(session) {
+    virtual ~BuildRun() = default;
+    BuildRun(const BuildRun&) = delete;
+    BuildRun& operator=(const BuildRun&) = delete;
+
+    // The head's last step, once the build exists. Handed on - taking its
+    // `SuspensionHold` - only where the statement may park and its relation
+    // `X` is held (`fenced`): without the `X` nothing keeps the leaf it would
+    // resume at in place, so a dispatcher with no lock table runs it whole
+    // here, as a synchronous caller does.
+    DispatchOutcome HandOn(bool fenced);
+
+    // The walk, yielding every `slice.pages_per_slice` leaves, then the tail
+    // and the decide in a statement frame of their own; the reply is written
+    // over `*out`.
+    sched::Coro Execute(DispatchOutcome* out);
+
+    sched::MonoTimeNs started_ns = 0;
+
+protected:
+    BuildRun(CommandDispatcher& d, Session& session) : d_(d), session_(session) {
         slice_.cancel = session.cancel_flag().get();
     }
-    ~IndexBuildRun();
-    IndexBuildRun(const IndexBuildRun&) = delete;
-    IndexBuildRun& operator=(const IndexBuildRun&) = delete;
 
-    // The head's last step, once the build exists. Where the statement
-    // cannot park the walk and the tail run here and `InDdlStatement`
-    // decides; otherwise the run is handed on, taking its `SuspensionHold`.
-    // `relation` is the one the head took the `X` on.
+    // Walks up to `leaves` more relation leaves; a refusal ends the build.
+    virtual Status Step(std::uint32_t leaves) = 0;
+    virtual bool walked() const = 0;
+    // What the build left, as the statement's reply. Decides nothing.
+    virtual DispatchOutcome Tail(const Status& ran) = 0;
+    // `Tail` with whatever decides the statement, in the frame `Execute`
+    // runs it in.
+    virtual DispatchOutcome FramedTail(Session& active, const Status& ran) = 0;
+
+    // The registration a slice advances; null without a lock table.
+    virtual txn::HolderProgress::Scope* progress_scope() = 0;
+
+    // Whether the run was handed on.
+    bool handed() const noexcept { return hold_.has_value(); }
+
+    CommandDispatcher& d_;
+    // The statement's session, which outlives it: a connection is torn
+    // down only once its statement has ended (`TcpServer::CloseClient`).
+    Session& session_;
+    exec::SlicePolicy slice_;
+    bool decided_ = false;
+
+private:
+    // A base member, so it is given back after every derived one: the build
+    // reads the relation's `TableAccess` through the pin.
+    std::optional<SuspensionHold> hold_;
+};
+
+void SetBuildRunStart(BuildRun& run, sched::MonoTimeNs started_ns) noexcept {
+    run.started_ns = started_ns;
+}
+
+DispatchOutcome BuildRun::HandOn(bool fenced) {
+    if (!d_.may_park_ || !fenced) return Tail(Step(std::numeric_limits<std::uint32_t>::max()));
+    hold_.emplace(d_);
+    DispatchOutcome handed;
+    handed.build_run = shared_from_this();
+    return handed;
+}
+
+sched::Coro BuildRun::Execute(DispatchOutcome* out) {
+    // A cancel already pending - sent while the head waited for its `X` -
+    // is taken before the first slice.
+    Status ran = slice_.TakeCancel();
+    while (ran.ok() && !walked()) {
+        {
+            // The slice writes pages as this dispatcher's core, as
+            // `DispatchAndStage` runs - and only the slice: across the yield
+            // another statement of this core runs, or on a fixture's thread
+            // another core's.
+            const CurrentCoreGuard as_this_core(d_.core_id_);
+            ran = Step(slice_.pages_per_slice);
+        }
+        if (!ran.ok() || walked()) break;
+        // ---- The slice boundary: no pin, no span (the suspend audit) ----
+        if (ran = slice_.TakeCancel(); !ran.ok()) break;
+        co_await sched::Yield{};
+        // **Reported at the resume**: the waiters' net measures the holder's
+        // silence, and a build waiting its turn on its core is not stuck -
+        // the count moves each time the core comes back to it, however long
+        // the statements between took (`known-gaps.md`, Statement
+        // scheduling, says what can still outlast the net).
+        if (txn::HolderProgress::Scope* p = progress_scope(); p != nullptr) p->Advance();
+        ran = slice_.TakeCancel();
+    }
+    // **The tail is a statement of its own to the dispatcher**: the head's
+    // frame closed when it handed the build on, and other statements of this
+    // core have run since. It parks nowhere and is never re-run - a refusal
+    // here is answered - and a commit it stages is the group wait
+    // `DispatchAsync` takes next. `StageStatement` stamps it with this
+    // `DispatchAsync` call's number, which `MayParkScope` sets.
+    const CommandDispatcher::MayParkScope parking(d_, /*allowed=*/false, out->statement);
+    *out = d_.StageStatement(&session_, [&](Session& active) {
+        d_.StampStatement(active);
+        // The head took the statement's boundary; a second would re-mint an
+        // explicit transaction's view mid-statement.
+        d_.statement_boundary_taken_ = true;
+        DispatchOutcome reply = FramedTail(active, ran);
+        // A cancelled statement leaves an open transaction failed
+        // (`protocol.md` §10), whatever the build's own refusals leave - a
+        // declaration's own refusals poison nothing (the operator's ruling of
+        // 2026-10-21).
+        if (ran.code() == StatusCode::kCancelled) active.Poison();
+        decided_ = true;
+        return reply;
+    });
+    co_return Status::OK();
+}
+
+// ---- `CREATE INDEX` and `REINDEX INDEX` --------------------------------------
+//
+// Under the statement's write scope, whose transaction holds the `X`. **Not
+// the catalog's undo hook**: it is the dispatcher's, so `InDdlStatement`
+// uninstalls it before the first yield and the tail installs it again.
+class IndexBuildRun final : public BuildRun {
+public:
+    IndexBuildRun(CommandDispatcher& d, Session& session) : BuildRun(d, session) {}
+    ~IndexBuildRun() override;
+
+    // The head's last step, once the build exists. `relation` is the one the
+    // head took the `X` on.
     DispatchOutcome Start(const CommandDispatcher::WriteScope& scope,
                           CommandDispatcher::DdlScope ddl, catalog::Oid relation,
                           std::unique_ptr<exec::IndexBuild> build);
-
-    // The walk, yielding every `slice.pages_per_slice` leaves, then the tail
-    // and the decide in a statement frame of their own; the reply is
-    // written over `*out`.
-    sched::Coro Execute(DispatchOutcome* out);
 
     // The build's report to its waiters' fault net, registered by the head
     // before its `X` ask, so no waiter parks on this holder before it.
@@ -2375,31 +2479,21 @@ public:
     // released the `X`: a waiter never finds the holder silent while it
     // still holds.
     std::optional<txn::HolderProgress::Scope> progress;
-    sched::MonoTimeNs started_ns = 0;
 
 private:
-    // The tree logged and its row written, or the build's refusal, as the
-    // statement's reply. Decides nothing.
-    DispatchOutcome Tail(const Status& ran);
+    Status Step(std::uint32_t leaves) override { return build_->Step(leaves); }
+    bool walked() const override { return build_->walked(); }
+    DispatchOutcome Tail(const Status& ran) override;
+    DispatchOutcome FramedTail(Session& active, const Status& ran) override;
+    txn::HolderProgress::Scope* progress_scope() override {
+        return progress.has_value() ? &*progress : nullptr;
+    }
 
-    CommandDispatcher& d_;
-    // The statement's session, which outlives it: a connection is torn
-    // down only once its statement has ended (`TcpServer::CloseClient`).
-    Session& session_;
-    exec::SlicePolicy slice_;
-    // Set only once handed on.
-    std::optional<SuspensionHold> hold_;
     CommandDispatcher::WriteScope scope_;
     CommandDispatcher::DdlScope ddl_;
     catalog::Oid relation_ = 0;
-    // Destroyed before the hold above: it reads the relation's `TableAccess`.
     std::unique_ptr<exec::IndexBuild> build_;
-    bool decided_ = false;
 };
-
-void SetIndexBuildRunStart(IndexBuildRun& run, sched::MonoTimeNs started_ns) noexcept {
-    run.started_ns = started_ns;
-}
 
 IndexBuildRun::~IndexBuildRun() {
     // **Handed on and never decided**: the frame destroyed at a suspension,
@@ -2409,7 +2503,7 @@ IndexBuildRun::~IndexBuildRun() {
     // `EndWrite`, which reads the members of whatever statement ran last. An
     // explicit transaction's scope is its session's, ended by its ROLLBACK or
     // its close.
-    if (hold_.has_value() && !decided_) {
+    if (handed() && !decided_) {
         const CurrentCoreGuard as_this_core(d_.core_id_);
         build_.reset();
         if (scope_.owned && scope_.txn != nullptr) {
@@ -2427,52 +2521,16 @@ DispatchOutcome IndexBuildRun::Start(const CommandDispatcher::WriteScope& scope,
     ddl_ = std::move(ddl);
     relation_ = relation;
     build_ = std::move(build);
-    if (!d_.may_park_) return Tail(build_->Step(std::numeric_limits<std::uint32_t>::max()));
-    hold_.emplace(d_);
-    DispatchOutcome handed;
-    handed.build_run = shared_from_this();
-    return handed;
+    // The `X` is the scope's where a lock table and a transaction exist
+    // (`HandleIndex`'s borrow).
+    return HandOn(d_.locks_ != nullptr && scope_.txn != nullptr);
 }
 
-sched::Coro IndexBuildRun::Execute(DispatchOutcome* out) {
-    Status ran = Status::OK();
-    for (;;) {
-        {
-            // The slice writes pages as this dispatcher's core, as
-            // `DispatchAndStage` runs - and only the slice: across the yield
-            // another statement of this core runs, or on a fixture's thread
-            // another core's.
-            const CurrentCoreGuard as_this_core(d_.core_id_);
-            ran = build_->Step(slice_.pages_per_slice);
-        }
-        if (!ran.ok() || build_->walked()) break;
-        // ---- The slice boundary: no pin, no span (the suspend audit) ----
-        if (ran = slice_.TakeCancel(); !ran.ok()) break;
-        co_await sched::Yield{};
-        if (ran = slice_.TakeCancel(); !ran.ok()) break;
-    }
-    // **The tail is a statement of its own to the dispatcher**: the head's
-    // frame closed when it handed the build on, and other statements of this
-    // core have run since. It parks nowhere and is never re-run - a refusal
-    // here is answered - and a commit it stages is the group wait
-    // `DispatchAsync` takes next. `StageStatement` stamps it with this
-    // `DispatchAsync` call's number, which `MayParkScope` sets.
-    const std::uint64_t statement = out->statement;
-    {
-        const CommandDispatcher::MayParkScope parking(d_, /*allowed=*/false, statement);
-        *out = d_.StageStatement(&session_, [&](Session& active) {
-            d_.StampStatement(active);
-            // The head took the statement's boundary; a second would
-            // re-mint an explicit transaction's view mid-statement.
-            d_.statement_boundary_taken_ = true;
-            if (scope_.txn != nullptr) d_.InstallDdlUndoHook(scope_.txn);
-            DispatchOutcome reply = Tail(ran);
-            d_.FinishDdlStatement(active, scope_, reply);
-            decided_ = true;
-            return reply;
-        });
-    }
-    co_return Status::OK();
+DispatchOutcome IndexBuildRun::FramedTail(Session& active, const Status& ran) {
+    if (scope_.txn != nullptr) d_.InstallDdlUndoHook(scope_.txn);
+    DispatchOutcome reply = Tail(ran);
+    d_.FinishDdlStatement(active, scope_, reply);
+    return reply;
 }
 
 DispatchOutcome IndexBuildRun::Tail(const Status& ran) {
@@ -2506,10 +2564,141 @@ DispatchOutcome IndexBuildRun::Tail(const Status& ran) {
             false};
 }
 
-sched::Coro CommandDispatcher::CompleteIndexBuild(std::string_view line, DispatchOutcome* out) {
+// ---- `CREATE ASSERTION` and `CREATE TRANSITION` -------------------------------
+//
+// Under a transaction of the statement's own (`DdlBuildLock`, AT-0 item 13):
+// it writes nothing and is rolled back when the statement ends, so a refused
+// build poisons nothing - a cancelled one leaves an open transaction failed,
+// as every cancelled statement does (`BuildRun::Execute`). The lock is the
+// run's from its head, so a build handed on keeps the `X` until its tail has
+// published and synced, and the release is the tail's last act (T-R4's
+// order, `transition.md`).
+//
+// **Each slice reads under views minted for it**: the slice's check view -
+// `MintCheckView` is never held across a park, and under the `X` a later view
+// can only see decided what an earlier one saw in flight - and the holder's
+// own, re-minted at the slice's start, so the snapshot bound its core
+// announces advances between slices rather than staying at the head's for
+// the whole build.
+class DeclarationBuildRun : public BuildRun {
+public:
+    // The relation `X`, taken by the head into the run (`TakeDdlBuildLock`).
+    CommandDispatcher::DdlBuildLock lock;
+
+protected:
+    using BuildRun::BuildRun;
+    ~DeclarationBuildRun() override {
+        // Handed on and never decided: after the leaf's build is gone (a
+        // derived member, destroyed first), the `X` is released as the
+        // statement's end would release it - as this core.
+        if (handed() && !decided_) {
+            const CurrentCoreGuard as_this_core(d_.core_id_);
+            lock.End();
+        }
+    }
+
+    // A fresh check view for the slice, the holder's view re-minted first.
+    txn::ReadView SliceView() {
+        if (lock.txn != nullptr) (void)d_.txn_->StartStatement(*lock.txn);
+        return d_.SettledView();
+    }
+
+private:
+    DispatchOutcome FramedTail(Session&, const Status& ran) override {
+        DispatchOutcome reply = Tail(ran);
+        lock.End();
+        return reply;
+    }
+    txn::HolderProgress::Scope* progress_scope() override {
+        return lock.progress.has_value() ? &*lock.progress : nullptr;
+    }
+};
+
+// One declaration's run: `exec::AssertionBuild` or `exec::TransitionBuild`,
+// which differ only in their publish (`Publish`).
+template <typename Build>
+class DeclarationBuildRunOf final : public DeclarationBuildRun {
+public:
+    DeclarationBuildRunOf(CommandDispatcher& d, Session& session)
+        : DeclarationBuildRun(d, session) {}
+    ~DeclarationBuildRunOf() override {
+        // A build destroyed before its publish discards what it built (an
+        // assertion's marker), as this core.
+        if (handed() && !decided_) {
+            const CurrentCoreGuard as_this_core(d_.core_id_);
+            build.reset();
+        }
+    }
+
+    std::unique_ptr<Build> build;
+
+private:
+    Status Step(std::uint32_t leaves) override { return build->Step(leaves, SliceView()); }
+    bool walked() const override { return build->walked(); }
+    // The publish's reply, or the build's refusal; then the sync the
+    // transactionless declaration owes before its acknowledgement.
+    DispatchOutcome Tail(const Status& ran) override {
+        DispatchOutcome reply = Publish(ran);
+        if (!reply.status.ok()) return reply;
+        // After the publish, deliberately: a sync failure then answers ERR
+        // with the declaration already in force - over-enforcing until the
+        // operator retries, where the other order left a durably created
+        // constraint unenforced on the running instance.
+        if (Status s = d_.AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
+        return reply;
+    }
+    DispatchOutcome Publish(const Status& ran);
+};
+
+using AssertionBuildRun = DeclarationBuildRunOf<exec::AssertionBuild>;
+using TransitionBuildRun = DeclarationBuildRunOf<exec::TransitionBuild>;
+
+template <>
+DispatchOutcome AssertionBuildRun::Publish(const Status& ran) {
+    const parser::AssertionStmt& stmt = build->stmt();
+    // Through ErrorReply, not a bare "ERR ": the build can refuse with the
+    // two coded spellings - ASSERTION_VIOLATION for data already past the
+    // bound, TXN_CONFLICT for an unsettled relation - and both are
+    // compatibility surfaces a client switches on.
+    auto created = build->Finish(ran, *d_.enforcer_, d_.after_assertion_publish_run_for_test_);
+    if (!created.ok()) return {ErrorReply(created.status()), false, 0, created.status()};
+    const exec::AssertionDdlResult& result = created.value();
+    // A freshly created assertion **is** enforcing (AST07): a create that
+    // returns was adopted inside `AssertionBuild::Finish` (AZ-S2). SHOW
+    // derives its answer from the registry, because after a restart the row
+    // can outlive enforcement - a mount that finds no whole snapshot run
+    // brings the assertion up unenforcing (AY-S8, `assertion.md` §8.1).
+    std::ostringstream os;
+    os << "CREATED ASSERTION name=" << stmt.name << " assertion_id=" << result.assertion_id
+       << " on=" << stmt.table_name << " cabin_root=" << result.cabin_root
+       << " rows=" << result.rows_incorporated << " groups=" << result.group_count
+       << " enforcing=" << (kWritePathEnforcesAssertions ? 1 : 0);
+    if (d_.logging(LogLevel::kInfo)) {
+        d_.log_->Info("ddl", "created assertion '" + stmt.name + "' on '" + stmt.table_name +
+                                 "' (built, enforcing)");
+    }
+    return {os.str(), false};
+}
+
+template <>
+DispatchOutcome TransitionBuildRun::Publish(const Status& ran) {
+    const parser::TransitionStmt& stmt = build->stmt();
+    auto created = build->Finish(ran);
+    if (!created.ok()) return {ErrorReply(created.status()), false, 0, created.status()};
+    if (d_.logging(LogLevel::kInfo)) {
+        d_.log_->Info("ddl", "created transition '" + stmt.name + "' on '" + stmt.table_name + "'");
+    }
+    return {"CREATED TRANSITION name=" + stmt.name +
+                " transition_id=" + std::to_string(created.value().transition_id) +
+                " on=" + stmt.table_name + " column=" + stmt.column +
+                " rows=" + std::to_string(created.value().rows_checked),
+            false};
+}
+
+sched::Coro CommandDispatcher::CompleteBuild(std::string_view line, DispatchOutcome* out) {
     // Owned by this frame for the build's life, as `CompleteSelect` owns
     // its walk's run.
-    const std::shared_ptr<IndexBuildRun> run = std::move(out->build_run);
+    const std::shared_ptr<BuildRun> run = std::move(out->build_run);
     co_await run->Execute(out);
     LogStatement(line, *out, run->started_ns);
     co_return Status::OK();
@@ -2796,6 +2985,54 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
 
     auto oid = ResolveAlterTarget(stmt, session);
     if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
+
+    // ---- AL4a: the relation `X`, for both renames -------------------------
+    //
+    // **Held by a transaction of the statement's own** (`DdlBuildLock`,
+    // `CREATE ASSERTION`'s shape): a rename is transactionless (AL6), so its
+    // holder writes nothing and is rolled back when the statement ends. The
+    // grant is a moment no writer, positioned reader or declaration build of
+    // the relation is mid-statement: before it, a `CREATE ASSERTION` building
+    // on this relation - which has no `sys.assertions` row for AL4 to read
+    // until it publishes - could store a canon naming a column renamed under
+    // it, and a chain of renames could make that canon name another column
+    // at the next mount (the operator's ruling of 2026-10-21). The rename
+    // acts on the oid it locked; a relation dropped while it waited refuses
+    // as a missing one does. **A session whose own transaction holds the
+    // relation's `X` already has the fence** - an open DDL of its own that
+    // took it (`ADD`/`DROP COLUMN`, `CREATE`/`DROP INDEX`) - and takes no
+    // second holder; one that holds a weaker mode cannot wait for itself and
+    // is refused.
+    DdlBuildLock rename_lock;
+    const txn::Transaction* own = session.transaction();
+    const bool own_x = own != nullptr && own->borrows().HoldsAt(txn::LockKey::Relation(oid.value()),
+                                                                txn::LockMode::kExclusive);
+    if (std::optional<Status> refused =
+            own_x ? std::nullopt
+                  : TakeDdlBuildLock(session, oid.value(), stmt.table_name,
+                                     rename_column ? "RENAME COLUMN" : "RENAME TO", rename_lock);
+        refused.has_value()) {
+        return {ErrorReply(*refused), false, 0, *refused};
+    }
+    // The memo made current under the `X`, as `HandleTransition` makes it
+    // (the BV S2 review's B2): the boundary settled it before the grant, and
+    // a declaration published on another core in between would be missing
+    // from what AL4 and the column check below read.
+    catalog_.Revalidate();
+    // **The name asked again under the `X`**, `CREATE ASSERTION`'s re-check:
+    // a rename or a drop-and-recreate that another core finished between
+    // this statement's resolution and its grant leaves the name on another
+    // oid, or on none, and the grant is on the old one.
+    if (rename_lock.txn != nullptr) {
+        auto settled = ResolveAlterTarget(stmt, session);
+        if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
+        if (settled.value() != oid.value()) {
+            const Status moved = Status::TxnConflict("relation '" + stmt.table_name +
+                                                     "' changed while the rename waited for it "
+                                                     "- retry");
+            return {ErrorReply(moved), false, 0, moved};
+        }
+    }
 
     // AL4: assertions RESTRICT both forms. The stored canon is the
     // declaration's verbatim text (AS10), and the recovery-side registry
@@ -3399,10 +3636,21 @@ DispatchOutcome CommandDispatcher::HandleNamespace(std::string_view line, Sessio
     });
 }
 
-CommandDispatcher::DdlBuildLock::~DdlBuildLock() {
-    if (txn == nullptr) return;
-    (void)manager->Abort(*txn);
-    manager->Release(*txn);  // `Abort` keeps it in `live_` by design
+void CommandDispatcher::DdlBuildLock::End() {
+    if (txn != nullptr) {
+        (void)manager->Abort(*txn);
+        manager->Release(*txn);  // `Abort` keeps it in `live_` by design
+        txn = nullptr;
+    }
+    // After the release: a waiter never finds the holder silent while it
+    // still holds.
+    progress.reset();
+}
+
+CommandDispatcher::DdlBuildLock::~DdlBuildLock() { End(); }
+
+txn::ReadView CommandDispatcher::SettledView() const {
+    return txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
 }
 
 std::optional<Status> CommandDispatcher::TakeDdlBuildLock(Session& session, catalog::Oid relation,
@@ -3417,9 +3665,9 @@ std::optional<Status> CommandDispatcher::TakeDdlBuildLock(Session& session, cata
     const txn::Transaction* own = session.transaction();
     if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(relation))) {
         return Status::TxnConflict("relation '" + std::string(relation_name) +
-                                   "' is held by this session's own transaction; " +
+                                   "' is held by this session's own transaction, which " +
                                    std::string(verb) +
-                                   " reads settled state - retry when it has ended");
+                                   " cannot wait for - retry when it has ended");
     }
     auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
     if (!begun.ok()) return begun.status();
@@ -3464,7 +3712,8 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // the directory is adopted. **The holder is a transaction of the
     // statement's own** (the operator's mark on item 13): it writes nothing
     // and is rolled back when the statement ends, so the relation is
-    // released there and a failed `CREATE ASSERTION` poisons nothing - a
+    // released there and a refused `CREATE ASSERTION` poisons nothing (a
+    // cancelled one fails an open transaction, `BuildRun::Execute`) - a
     // transaction rather than a minted id because a waiter names its holder.
     // **Resolved under a settled view, and a name it does not resolve is
     // refused here**, once: the oid it names is the one locked and the one
@@ -3475,24 +3724,32 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // since, so the re-check below would refuse every retry. A dispatcher
     // with no manager reads everything, which is the pre-MVCC engine and what
     // every socket-free test runs on.
-    const auto settled_view = [this] {
-        return txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
-    };
-    const txn::ReadView view = settled_view();
+    const txn::ReadView view = SettledView();
     auto target = exec::AssertionTargetOid(catalog_, stmt, session.default_namespace(), &view);
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
-    DdlBuildLock build_lock;
+    // The run owns the lock from the ask on, so a build handed on keeps the
+    // `X` until its tail has published (A1 stage 2, `DeclarationBuildRun`).
+    const auto run = std::make_shared<AssertionBuildRun>(*this, session);
+    DdlBuildLock& build_lock = run->lock;
     if (std::optional<Status> refused =
             TakeDdlBuildLock(session, target.value(), stmt.table_name, "CREATE ASSERTION",
                              build_lock);
         refused.has_value()) {
         return {ErrorReply(*refused), false, 0, *refused};
     }
+    // **The memo made current under the `X`**, as `HandleTransition` and the
+    // renames make it (the BV S2 review's B2): a `RENAME COLUMN` another core
+    // finished between this statement's boundary and an uncontended grant -
+    // no re-run between - would leave the build resolving its columns
+    // against the schema before it, and publish a canon naming a column that
+    // no longer exists (`alter.md` AL4a). Nothing of this statement holds a
+    // `TableAccess` yet.
+    catalog_.Revalidate();
 
-    // The visibility the build's scan reads under: settled state, minted
-    // after the grant exactly as a FK check's view is.
-    const txn::ReadView check_view = settled_view();
+    // Settled state, minted after the grant exactly as a FK check's view
+    // is; the build's slices mint their own (`DeclarationBuildRun`).
+    const txn::ReadView check_view = SettledView();
 
     // **The lock was waited for under the view the name resolved by**, and a
     // drop-and-recreate that committed meanwhile leaves that name on another
@@ -3511,41 +3768,12 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         }
     }
 
-    // Through ErrorReply, not a bare "ERR ": the build can refuse with the
-    // two coded spellings - ASSERTION_VIOLATION for data already past the
-    // bound, TXN_CONFLICT for an unsettled relation - and both are
-    // compatibility surfaces a client switches on.
-    auto created = exec::CreateAssertion(
-        catalog_, page_store_, stmt, target.value(), check_view, wal_, *enforcer_,
-        build_lock.progress.has_value() ? &*build_lock.progress : nullptr,
-        after_assertion_publish_run_for_test_);
-    if (!created.ok()) {
-        return {ErrorReply(created.status()), false, 0, created.status()};
-    }
-    const exec::AssertionDdlResult& result = created.value();
-    // After the adoption, deliberately: a
-    // sync failure then answers ERR with the live registry still enforcing
-    // what the log already holds - over-enforcing until the operator
-    // retries, where the other order left a durably created constraint
-    // unenforced on the running instance.
-    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
-
-    // A freshly created assertion **is** enforcing (AST07): a create that
-    // returns was adopted inside `CreateAssertion` (AZ-S2). SHOW derives
-    // its answer from the registry, because after a restart the row can
-    // outlive enforcement - a mount that finds no whole snapshot run
-    // brings the assertion up unenforcing (AY-S8, `assertion.md` §8.1).
-    std::ostringstream os;
-    os << "CREATED ASSERTION name=" << stmt.name
-       << " assertion_id=" << result.assertion_id << " on=" << stmt.table_name
-       << " cabin_root=" << result.cabin_root << " rows=" << result.rows_incorporated
-       << " groups=" << result.group_count
-       << " enforcing=" << (kWritePathEnforcesAssertions ? 1 : 0);
-    if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "created assertion '" + stmt.name + "' on '" + stmt.table_name +
-                              "' (built, enforcing)");
-    }
-    return {os.str(), false};
+    auto build = exec::AssertionBuild::ForCreate(
+        catalog_, page_store_, stmt, target.value(), wal_,
+        build_lock.progress.has_value() ? &*build_lock.progress : nullptr);
+    if (!build.ok()) return {ErrorReply(build.status()), false, 0, build.status()};
+    run->build = std::move(build.value());
+    return run->HandOn(build_lock.txn != nullptr);
 }
 
 DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Session& session) {
@@ -3568,10 +3796,7 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
     // before re-runs at its first intention (`MemoIsCurrent`) and meets the
     // change. Resolved under a settled view: a DROP names the relation its
     // row names; a CREATE resolves its table name.
-    const auto settled_view = [this] {
-        return txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
-    };
-    const txn::ReadView view = settled_view();
+    const txn::ReadView view = SettledView();
     StatusOr<catalog::Oid> target = Status::NotFound("");
     if (stmt.drop) {
         auto def = exec::FindTransitionByName(catalog_, page_store_, stmt.name);
@@ -3588,14 +3813,19 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
     }
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
-    DdlBuildLock build_lock;
+    // A CREATE's run owns its lock from the ask on, so a build handed on
+    // keeps the `X` until its tail has published (A1 stage 2,
+    // `DeclarationBuildRun`); a DROP builds nothing and holds its own.
+    DdlBuildLock drop_lock;
+    const auto run = stmt.drop ? nullptr : std::make_shared<TransitionBuildRun>(*this, session);
+    DdlBuildLock& build_lock = run != nullptr ? run->lock : drop_lock;
     if (std::optional<Status> refused =
             TakeDdlBuildLock(session, target.value(), RelationNameOf(target.value()), verb,
                              build_lock);
         refused.has_value()) {
         return {ErrorReply(*refused), false, 0, *refused};
     }
-    const txn::ReadView check_view = settled_view();
+    const txn::ReadView check_view = SettledView();
     // **The memo is made current under the `X`** (the S2 review's B2): the
     // statement's boundary settled it before the grant, and another core's
     // `CREATE TRANSITION` or `RENAME COLUMN` on this relation may have
@@ -3603,7 +3833,7 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
     // T6) and the column's resolution would then read an entry without it.
     // Nothing of this statement holds a `TableAccess` yet, so dropping the
     // memo here strands nothing; from the grant on, no DDL can change the
-    // relation until this statement ends.
+    // relation until this statement ends (a rename takes the `X` too, AL4a).
     catalog_.Revalidate();
 
     if (stmt.drop) {
@@ -3642,19 +3872,12 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
             return {ErrorReply(moved), false, 0, moved};
         }
     }
-    auto created = exec::CreateTransition(
-        catalog_, page_store_, stmt, target.value(), check_view, wal_,
+    auto build = exec::TransitionBuild::ForCreate(
+        catalog_, page_store_, stmt, target.value(), wal_,
         build_lock.progress.has_value() ? &*build_lock.progress : nullptr);
-    if (!created.ok()) return {ErrorReply(created.status()), false, 0, created.status()};
-    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
-    if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "created transition '" + stmt.name + "' on '" + stmt.table_name + "'");
-    }
-    return {"CREATED TRANSITION name=" + stmt.name +
-                " transition_id=" + std::to_string(created.value().transition_id) +
-                " on=" + stmt.table_name + " column=" + stmt.column +
-                " rows=" + std::to_string(created.value().rows_checked),
-            false};
+    if (!build.ok()) return {ErrorReply(build.status()), false, 0, build.status()};
+    run->build = std::move(build.value());
+    return run->HandOn(build_lock.txn != nullptr);
 }
 
 // ---- H6 step 3: the three inspection commands ---------------------------

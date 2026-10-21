@@ -335,8 +335,11 @@ TEST_F(ColumnNameCaseTest, AnExactTwinIsRefusedByEveryResolution) {
     EXPECT_NE(renamed.message().find("ambiguous"), std::string::npos) << renamed.message();
 }
 
-// DROP COLUMN asks its RESTRICT of one column and writes that column: a
-// RENAME COLUMN takes no relation lock, so one landing between the ask and
+// DROP COLUMN asks its RESTRICT of one column and writes that column. A
+// RENAME COLUMN takes the relation `X` since `alter.md` AL4a, so none lands
+// between them through the dispatcher; this test injects one on the catalog
+// directly, below the lock. The door's position check is kept as defense in
+// depth, and without it a rename landing between the ask and
 // the catalog door's write could move the dropped name onto an indexed
 // column, which the door - resolving the name again - then dropped, the
 // index left on a dropped slot ([quiet-wrong], BW-R8). The door takes the

@@ -295,7 +295,11 @@ hold on the debug port too (Appendix A gives the text spellings).
   back and retried. **Every other code is not retryable**, and
   the bit is the compatibility surface: read the bit, not the message.
   After a conflict the session is in a failed transaction and answers only
-  `C_TXN_ABORT` and `C_SYNC` until it is rolled back.
+  `C_TXN_ABORT` and `C_SYNC` until it is rolled back - except a
+  statement-owned DDL lock's refusal: a `TXN_CONFLICT` refusing `CREATE
+  ASSERTION`, `CREATE TRANSITION` or an `ALTER TABLE` rename its relation
+  fails nothing, and when the session's own transaction holds that
+  relation, end the transaction, then re-issue the statement.
 - **`UNKNOWN_OUTCOME` means the statement may have run, and must not be
   retried.** The code stays in the pinned registry, and **nothing in this
   engine produces it**. A client should still handle
@@ -541,4 +545,5 @@ rendered.
   The `retryable=` token will not change spelling. The semantics are §2's;
   every other `ERR` is not retryable. After a conflict the connection is
   in a failed transaction and answers only `ROLLBACK`/`ABORT`/`SYNC`/
-  `STOP`/`PING` until it is rolled back.
+  `STOP`/`PING` until it is rolled back, except after §2's statement-owned
+  DDL lock refusal, which fails nothing.

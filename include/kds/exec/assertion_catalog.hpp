@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -9,10 +10,13 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/assertion_build.hpp"
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/bound_cabin.hpp"
+#include "kds/exec/leaf_cursor.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/txn/holder_progress.hpp"
 #include "kds/txn/read_view.hpp"
 
 namespace kds::wal {
@@ -191,7 +195,7 @@ struct AssertionDdlResult {
 // group columns are not stored as positions, they are "recovered by re-parsing
 // it", which is what this does. Everything else - the aggregate, the enforced
 // ceiling, the SUM column - comes from the same parse, resolved against the
-// relation's current schema exactly as `CreateAssertion` resolves it.
+// relation's current schema exactly as `AssertionBuild` resolves it.
 //
 // **The directory is left empty.** This builds the shell a Bound Cabin needs -
 // the aggregate, the bound, the chain writer over the stored root - and nothing
@@ -200,7 +204,7 @@ struct AssertionDdlResult {
 // result of this alone would be enforcing against zero, which admits every
 // write.
 //
-// Fails the way `CreateAssertion` fails for the same declaration: a source text
+// Fails the way `AssertionBuild` fails for the same declaration: a source text
 // that no longer parses, a group column the relation no longer has (an `ALTER`
 // that renamed one), a SUM column that is not int64. Each is a reason this
 // assertion cannot enforce, and a caller reports it per assertion rather than
@@ -210,7 +214,11 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
                                        const AssertionDef& def);
 
 // `CREATE ASSERTION`: §3.1's remaining create-time checks - the ones only
-// the catalog can answer - then the AST06 build, then the publish.
+// the catalog can answer - then the AST06 build, then the publish, **in
+// slices** (A1 stage 2, `sched.md` §3): a head (`ForCreate`), the build a
+// slice of relation leaves at a time (`Step`), and the publish (`Finish`).
+// The caller yields its core between two `Step`s under the relation `X` it
+// holds from before the head to after the publish.
 //
 // The parser already refused everything decidable from the text alone (the
 // operator set, the bound, a degenerate predicate, every reserved form), so
@@ -224,29 +232,75 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
 // before the `sys.assertions` row exists, so an assertion is published
 // complete or not at all, and the publish - the row carrying `cabin_root`,
 // with no catalog version bump (nothing cached derives from the row) - is
-// the single commit point §8.1a requires. A failed build leaves an unreachable page chain, a burned row
-// id, an `ASSERT_DROP` discard marker in the log when one is attached, and
-// **no catalog row** - `index_ddl.cpp`'s precedent.
+// the single commit point §8.1a requires. A failed build leaves an
+// unreachable page chain, a burned row id, an `ASSERT_DROP` discard marker in
+// the log when one is attached, and **no catalog row** - so does a build
+// destroyed before `Finish` (a core torn down between slices).
 //
-// `check_view` is the visibility the scan reads under (latest settled
-// state; `ReadView::Everything()` from a caller with no transaction
-// manager). `wal` may be null (a fixture): the build is then unlogged.
-//
-// **The build is adopted into `enforcer` before the row is written**, with
-// its publish run (`AdoptLogged`, AZ-S2), and evicted if the row is refused.
-//
-// `after_publish_run_for_test`, when set, runs once, after the adoption and
-// immediately before the `sys.assertions` row - the window a checkpoint on
-// another core falls into.
-StatusOr<AssertionDdlResult> CreateAssertion(
-    catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
-    catalog::Oid target_oid, const txn::ReadView& check_view, wal::WalManager* wal,
-    AssertionEnforcer& enforcer, txn::HolderProgress::Scope* progress,
-    const std::function<void()>& after_publish_run_for_test = {});
+// `wal` may be null (a fixture): the build is then unlogged.
+class AssertionBuild {
+public:
+    // The head: the statement's columns resolved against `target_oid` - the
+    // relation the caller took the `X` on - the cheap refusals (a taken
+    // name, an over-long declaration), the id the build's `ASSERT_BUILD`
+    // records carry, and the chain's root.
+    static StatusOr<std::unique_ptr<AssertionBuild>> ForCreate(
+        catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
+        catalog::Oid target_oid, wal::WalManager* wal, txn::HolderProgress::Scope* progress);
+
+    ~AssertionBuild();
+    AssertionBuild(const AssertionBuild&) = delete;
+    AssertionBuild& operator=(const AssertionBuild&) = delete;
+
+    // Incorporates up to `leaves` more relation leaves, reading under
+    // `check_view` (latest settled state, minted by the caller for the
+    // slice; `ReadView::Everything()` from a caller with no transaction
+    // manager). A refusal ends the build: the caller hands it to `Finish`.
+    Status Step(std::uint32_t leaves, const txn::ReadView& check_view);
+
+    bool walked() const noexcept { return cursor_.walked(); }
+
+    const parser::AssertionStmt& stmt() const noexcept { return stmt_; }
+
+    // The publish, or the discard. `ran` is how the walk ended - a `Step`'s
+    // refusal, the caller's cancel, or OK once `walked()`. Anything but OK
+    // logs the discard marker and is returned. OK asks the name again - one
+    // taken while the build yielded is refused here, before anything is
+    // adopted - then **adopts the build into `enforcer` before the row is
+    // written**, with its publish run (`AdoptLogged`, AZ-S2), and evicts it if
+    // the row is refused. `after_publish_run_for_test`, when set, runs once,
+    // after the adoption and immediately before the `sys.assertions` row -
+    // the window a checkpoint on another core falls into. Called once.
+    StatusOr<AssertionDdlResult> Finish(const Status& ran, AssertionEnforcer& enforcer,
+                                        const std::function<void()>& after_publish_run_for_test);
+
+private:
+    AssertionBuild(catalog::Catalog& catalog, storage::PageStore& store,
+                   parser::AssertionStmt stmt, catalog::Oid target_oid, wal::WalManager* wal,
+                   txn::HolderProgress::Scope* progress, std::uint64_t assertion_id);
+
+    // Ends the build as a failed one: the discard marker naming
+    // `cabin_root` (a diagnostic), then `why` - or the marker's own refusal.
+    Status Discard(const Status& why, PageId cabin_root);
+
+    catalog::Catalog& catalog_;
+    storage::PageStore& store_;
+    const parser::AssertionStmt stmt_;
+    const catalog::Oid target_oid_;
+    wal::WalManager* const wal_;
+    txn::HolderProgress::Scope* const progress_;
+    const std::uint64_t assertion_id_;
+    const catalog::TableAccess* access_ = nullptr;
+    std::vector<std::uint16_t> group_cols_;
+    std::uint16_t sum_col_ = 0;
+    std::optional<BoundCabinBuild> build_;
+    LeafCursor cursor_;
+    bool finished_ = false;
+};
 
 // The statement's target relation, or the §3.1 refusal with its byte. `view`
 // is the catalog visibility the name resolves under (null: every relation).
-// **`CreateAssertion` never resolves the name**: the dispatcher does, once,
+// **`AssertionBuild` never resolves the name**: the dispatcher does, once,
 // under a view that cannot see another transaction's relation, takes the
 // relation `X` on that oid and passes it in - so what is fenced is what is
 // built.

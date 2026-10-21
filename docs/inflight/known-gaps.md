@@ -625,6 +625,17 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   needs that cell to reach the check another way. Owner:
   `docs/spec/ddl-transactional.md` §4.
 
+- **A KWP load chunk refused by a relation `X` rolls back the whole
+  load.** Accepted by the operator on 2026-10-21. A chunk runs
+  `ExecuteInsert` outside `DispatchAsync`, so it cannot park: a relation
+  `IX` refused by an index, assertion or transition build's `X` - on an
+  index build's own core too, between its slices, since A1 stage 2 - or by
+  a rename's (`alter.md` AL4a) is refused `TxnConflict`, and
+  `HandleLoadChunk`'s `fail_load` rolls back the load's one transaction,
+  chunks already acknowledged included (`kwp_load_server.cpp`). Once a
+  chunk has written, the load holds the `IX` until it decides, so a DDL
+  arriving later waits for the load instead. Owner: `docs/spec/txn.md` §5.
+
 ## Page reclamation
 
 What BF (`instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md`)
@@ -728,10 +739,12 @@ pages and the cases it does not reach.
 Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 `docs/spec/protocol.md` §10.
 
-- **Only a `SELECT`'s outermost walk and an index build yield.** The walk
-  yields every `exec::SlicePolicy::pages_per_slice` (64) pages, a `CREATE
-  INDEX` or `REINDEX INDEX` backfill every 64 relation leaves. Nothing
-  else running gives its core back:
+- **Only a `SELECT`'s outermost walk and a relation-`X` build yield.**
+  The walk yields every `exec::SlicePolicy::pages_per_slice` (64) pages, a
+  `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION` or `CREATE
+  TRANSITION` build every 64 relation leaves (`CREATE ASSERTION` and
+  `CREATE TRANSITION` since A1 stage 2b, `IndexBuildSliceRigTest`).
+  Nothing else running gives its core back:
   - a write;
   - a tuple key descent, run inline by design;
   - an index walk (`RunIndexStep`);
@@ -739,21 +752,33 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 
   Each holds its core until it ends or `exec::Budget` stops it. 64 is
   BA-Q11's value, not re-measured in BA-S15.
-- **An assertion or transition build holds its core for its whole
-  length** (verified at `37a60b10`). `CREATE ASSERTION` and `CREATE
-  TRANSITION` walk the relation synchronously (`BuildBoundCabin`,
-  `CheckExistingRows`), with no yield and no `exec::Budget`, so every other
-  session on the build's core waits for it to end, and a cancel waits for
-  the next frame. `CREATE INDEX` and `REINDEX INDEX` yield since A1 stage 2
-  (`IndexBuildSliceRigTest`). Its waiters on other cores are not refused at
-  the fault net while it advances (`txn.md` §5, `holder_progress.hpp`).
-  Not covered: `CREATE ASSERTION`'s and `CREATE
-  TRANSITION`'s waiters have no rig cell of their own - they share
-  `DdlBuildLock`'s registration, and
+- **A yielding build still stalls its core at a WAL segment roll.** A
+  roll holds the append latch across its sync (the WAL entry above), and a
+  build that logs per row - `CREATE ASSERTION`'s `ASSERT_BUILD`, about 129 B
+  a row - crosses segments inside a slice: at 1,000,000 rows on `cores = 1`
+  its two rolls held a same-core point read 529 and 540 ms, where every
+  other probe was answered within a slice (`CREATE INDEX` logs its tree
+  only at the end; `bench/v3.4.0/results-a1-close-v3.4.0-11-gf53e62db.md`
+  §7). The slice bounds everything but the roll.
+- **A live build's waiters can still meet the fault net.** A relation-`X`
+  build's waiters on other cores are not refused at the fault net while
+  it advances (`txn.md` §5, `holder_progress.hpp`).
+  A build advances only while its core runs it, so a co-located statement
+  that does not yield, or many sliced statements queued on that core, can
+  leave it silent past the net, and its waiters on other cores are then
+  refused `TXN_CONFLICT` though the build is live. A rename registers and
+  never advances, so its waiters always have the plain net.
+  Not covered: `CREATE ASSERTION`'s and `CREATE TRANSITION`'s waiters
+  have no fault-net cell of their own - they share `DdlBuildLock`'s
+  registration, `IndexBuildSliceRigTest`'s stage 2b cells drive a peer
+  writer that waits for the publish but not past the net, and
   `DdlFenceRigTest.AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOnCoreZero`
-  drives `CREATE INDEX` only.
-- **A cancel is observed only where a walk or an index build yields, or
-  at the next frame.** A write that `C_CANCEL` or a closing connection asks to stop
+  drives `CREATE INDEX` only. Nor is an assertion adopted after a real
+  yield with a checkpoint between its slices: `AssertionPublishRigTest`'s
+  relations fit one slice, so its publish seam runs in a tail that never
+  yielded.
+- **A cancel is observed only where a walk or a relation-`X` build
+  yields, or at the next frame.** A write that `C_CANCEL` or a closing connection asks to stop
   runs to its end, and the cancel then refuses the session's next frame.
   So a dropped connection can still find its write applied.
 - **A core holds at most 256 suspended walks.** Each holds one of its

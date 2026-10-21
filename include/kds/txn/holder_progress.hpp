@@ -11,9 +11,10 @@
 // The lock family's fault net ends a wait the holder never ends - a missed
 // cycle or a stuck holder (AO-R8) - and its 1 s bound rests on D12's
 // premise that the longest honest wait is a local statement's own work. A
-// relation-`X` build (`CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION`)
-// is a local statement whose work is O(relation), so a writer queued behind
-// a build longer than the net was refused as though the build were stuck.
+// relation-`X` build (`CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION`,
+// `CREATE TRANSITION`) is a local statement whose work is O(relation), so a
+// writer queued behind a build longer than the net was refused as though
+// the build were stuck.
 // The net therefore asks whether the holder **advanced**: a holder that
 // registered here and moved its count since the waiter last looked is not
 // stuck, and the waiter's bound restarts. A holder that did not register -
@@ -21,8 +22,9 @@
 //
 // **Protocol.** One instance, owned by the `LockTable`, read by every core.
 // A slot's `holder` is claimed by a CAS from 0 and cleared by the scope that
-// claimed it; its `count` is written by that scope's thread alone (a release
-// increment no other writer races) and read by waiters as a seqlock reads:
+// claimed it; its `count` is written by that scope's thread alone - the
+// build's core, which runs every slice of it (A1 stage 2) - as a release
+// increment no other writer races, and read by waiters as a seqlock reads:
 // `holder`, `count`, an acquire fence, `holder` again. A reader that finds
 // the same `holder` both times read that holder's count, since ids are
 // never reused (`trx_id.hpp`); a count from the slot's next owner would
@@ -34,7 +36,11 @@
 // **A full registry registers nothing** and the build runs unregistered,
 // waited for under the plain net - the old behaviour, never a wrong answer.
 // `kSlots` is far above the builds an instance runs at once: each holds one
-// relation's `X` and runs on its session's core.
+// relation's `X` and runs on its session's core. **Several builds on one
+// core may each hold a slot at once**, since a build yields its core
+// between slices (A1 stage 2, `sched.md` §3) and another session's build on
+// that core runs in the gap, on another relation; a build advances its
+// count only while its core runs it, and is silent in the gap.
 namespace kds::txn {
 
 class HolderProgress {

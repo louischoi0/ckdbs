@@ -473,6 +473,15 @@ public:
         }
         return false;
     }
+    // Whether `key` is held at `mode` - a rename asks it of its own
+    // transaction's relation `X`, which already fences what it needs
+    // (`alter.md` AL4a).
+    bool HoldsAt(const LockKey& key, LockMode mode) const noexcept {
+        for (const Held& h : held_) {
+            if (h.key == key && h.mode == mode) return true;
+        }
+        return false;
+    }
 
     // The unit this transaction is queued on, if any. **At most one**: a
     // transaction is one thread of control and can be blocked on exactly

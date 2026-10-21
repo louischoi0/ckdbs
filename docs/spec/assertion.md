@@ -317,7 +317,8 @@ On a multi-core instance:
 - **`CREATE ASSERTION` is built where its session is** and adopts into the
   instance's registry, before its row and with its base logged under the
   same hold (§8.1, AZ-S2). **The build holds the relation `X`** (§8.1, AT-S5e),
-  so no writer on any core runs beside it.
+  across its yields between slices too, so no writer on any core runs
+  beside it.
 - **Core 0's mount resumes the registry, for every relation**, before any
   other core is built; any other core handed it resumes nothing. **Only core 0's
   checkpoints snapshot it** (§7): two cores' runs of the same assertions in
@@ -648,15 +649,25 @@ assertion on a relation.
 
 ### 8.1 CREATE
 
-The build runs **synchronously inside the CREATE statement**
-(`exec::BuildBoundCabin`, which never yields), not in a background
-scheduling group, as the index backfill does. On one
-cooperative core this means no write can interleave with the build, so
-§8.1a's membership protocol is met trivially. **On more than one core the
-build holds the relation `X`** (AT-S5e, the operator's mark on
-`workorder-at-m3-uniformity.md` AT-0 item 13): every writer of the relation
-holds its `IX` from before its admission until it decides, so the build
-starts when none is mid-statement and every writer arriving during it parks
+The build runs **inside the CREATE statement**, not in a background
+scheduling group, and **yields its core between slices of relation leaves**
+(A1 stage 2, `sched.md` §3), as the index backfill does:
+`exec::AssertionBuild::Step` incorporates up to
+`exec::SlicePolicy::pages_per_slice` (64) leaves at a time
+(`exec::IncorporateLeaf`, walked by `exec::LeafCursor`). Where the
+statement can park and holds the relation `X` (`DispatchAsync`), the walk
+runs on after the head returns, handed on in `DispatchOutcome::build_run`
+(`server::AssertionBuildRun`). A dispatcher with no lock table takes no `X`
+and runs the walk whole inside the statement, as a statement that cannot
+park does; it never yields, so on one cooperative core no write can
+interleave with it, and §8.1a's membership protocol is met trivially. **On
+more than one core the build holds the relation `X`** (AT-S5e, the
+operator's mark on `workorder-at-m3-uniformity.md` AT-0 item 13), from
+before its head to the end of its tail - after the publish and
+`AwaitDdlDurability` - and across every yield between: every writer of the
+relation holds its `IX` from before its admission until it decides, so the
+build starts when none is mid-statement and every writer arriving during
+it, on its own core in a gap between two slices or on another, parks
 until the directory is adopted, then re-runs against it - however long the
 build runs, since the build reports its progress to the waiters' fault net
 (`txn.md` §5, `txn/holder_progress.hpp`). **On a relation
@@ -666,17 +677,29 @@ relation's `IS` until it decides, so a steady stream of child writers can
 refuse the `CREATE` `TxnConflict` at the lock family's 1 s fault net, as
 AO-0 item 25 accepts for `DROP TABLE`. The holder is a
 transaction of the statement's own, rolled back at its end
-(`ddl-transactional.md` §5f). Without the `X` a write on another core
-could land a row the scan had passed before the adoption, in neither the
-cabin nor the scan; §8.1a's membership protocol, which would reconcile such
-a write, is not built, and the `X` is why it need not be. A row written by a transaction still in
+(`ddl-transactional.md` §5f), and owned by the run (`DdlBuildLock`), so a
+build handed on keeps it until its tail releases it. Without the `X` a
+write on another core, or on the build's own core while it yields, could
+land a row the scan had passed before the adoption, in neither the cabin
+nor the scan; §8.1a's membership protocol, which would reconcile such a
+write, is not built, and the `X` is why it need not be. **Each slice reads
+under a check view minted for it** - latest settled state
+(`CommandDispatcher::SettledView`) - since no view is held across a park;
+under the `X` a later view can only see decided what an earlier one saw in
+flight. A row written by a transaction still in
 flight when the build reads it refuses the CREATE with `TxnConflict`,
 retryably — counting it and losing the abort would overstate the group
-forever, and skipping it and seeing the commit would understate it.
+forever, and skipping it and seeing the commit would understate it. **A
+cancel is taken before the first slice and at each slice boundary**
+(`protocol.md` §10): the build ends `CANCELLED` and is discarded as a
+refused one is, and an open explicit transaction is left failed (the
+operator's ruling of 2026-10-21, `ddl-transactional.md` §5f). A build run
+whole takes no cancel; the session's next frame does.
 
-The steps below are three entry points - `PrepareAssertionDef`
-(validation and the id), the build, the publish - and all three run where
-the session is (§6.1). **The build is adopted into the registry before the publish,
+The steps below are three parts of `exec::AssertionBuild` - `ForCreate`
+(validation, the cheap refusals, the id and the chain's root), `Step` (the
+build, a slice at a time) and `Finish` (the publish) - and all three run
+where the session is (§6.1). **The build is adopted into the registry before the publish,
 and AS6a's base is logged under the same hold of the directory latch**
 (AZ-S2, `AssertionEnforcer::AdoptLogged`). A core-0 checkpoint snapshots
 exactly the registry, so a create adopted after its row left a window in
@@ -695,21 +718,37 @@ name that resolves to another oid once the `X` is granted (dropped and
 re-created meanwhile) is refused `TxnConflict`. Settled rather than the
 session's view because the statement reads settled state, and because a
 repeatable-read transaction's view would keep naming a relation dropped and
-re-created since its `BEGIN`, refusing every retry.
+re-created since its `BEGIN`, refusing every retry. **The catalog memo is
+made current right after the grant** (`Catalog::Revalidate`, in
+`HandleAssertion`), before the name is resolved again and the head
+resolves its columns: a `RENAME COLUMN` another core finished between the
+statement's boundary and an uncontended grant would otherwise leave the
+build resolving its columns against the schema before it, and publish a
+canon naming a column that no longer exists (`alter.md` AL4a). **The
+assertion's name is asked again at the publish**, before anything is
+adopted: one taken while the build yielded is refused `AlreadyExists` with
+the head's message (`InsertAssertion`'s guard under the root page's hold
+still decides across cores, AT-S17).
 **A publish that is then refused evicts the directory** before its
 `ASSERT_DROP` (a row whose own log fails stays on its page:
 `docs/inflight/bugs/an-assertion-row-whose-log-fails-stays-on-its-page.md`, closed: `git show d83bd502^:<path>`); a refused base adopts nothing and logs the `ASSERT_DROP`
-too. What remains is an
+too. **A build destroyed before its publish** - its statement's frame
+destroyed at a suspension, a core torn down with the statement queued -
+logs the `ASSERT_DROP` from its destructor, as this core, and releases the
+`X`; its pages and id leak as a failed build's do. What remains is an
 `ASSERT_SNAPSHOT` for an assertion whose publish failed — a base for a
 cabin no catalog row names, which no mount folds, since a mount folds only
 what `ListAssertions` returns.
 
 1. Create-time validation (§3.1).
 2. Full scan of the target relation where the session is, inside the
-   statement.
+   statement, a slice of leaves at a time with a yield between (whole
+   where the statement cannot park or holds no `X`).
 3. Build Bound Cabin entries and group aggregates; emit `ASSERT_BUILD` WAL.
 4. If any group violates the bound ⇒ CREATE fails with `AssertionViolation`
-   naming the first violating group; the partial build is discarded.
+   naming the first violating group; the partial build is discarded with
+   its `ASSERT_DROP`. A cancel at a slice boundary discards it the same way,
+   with `CANCELLED`.
 5. At success the Bound Cabin exactly reflects all admitted rows, and
    enforcement begins atomically at cutover (§8.1a).
 
@@ -730,10 +769,13 @@ scan has passed (BD-R7,
 
 Membership removes the external assumption rather than repairing it.
 Correctness reduces to **check-then-apply atomicity** — classify the row,
-then apply its delta, with nothing in between. One cooperative core's event
-loop provided it, because both happened inside one uninterruptible step;
-across cores the build's relation `X` makes the question not arise (§8.1),
-and the protocol is not built.
+then apply its delta, with nothing in between. A build that never yields
+provides it on one cooperative core, because both happen inside one
+uninterruptible step. A build that yields between slices does not, and
+neither does a second core; for both the build's relation `X`, held from
+before its first leaf to after its publish and across every yield, makes
+the question not arise (§8.1): no writer of the relation runs in a gap, on
+the build's core or another. The protocol is not built.
 
 *What follows from it.*
 

@@ -1,0 +1,98 @@
+14:02:57 START
+14:03:44 build start /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-fix-ddl-build-fault-net/2fe39e3f-40fc-42ed-910b-fde09fa4cb64/scratchpad/a1-base
+14:04:44 build done rc=0 /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-fix-ddl-build-fault-net/2fe39e3f-40fc-42ed-910b-fde09fa4cb64/scratchpad/a1-base
+14:04:44 build start /home/cdkbs/ckdbs/.claude/worktrees/ddl-build-yield
+14:05:44 build done rc=0 /home/cdkbs/ckdbs/.claude/worktrees/ddl-build-yield
+14:05:59 builds done, copies in ~/a1-run
+14:06:59 cell stmt-A-1 start
+14:07:02 cell stmt-A-1 done rc=0
+14:07:02 cell stmt-B-1 start
+14:07:06 cell stmt-B-1 done rc=0
+14:07:06 cell stmt-B-2 start
+14:07:09 cell stmt-B-2 done rc=0
+14:07:09 cell stmt-A-2 start
+14:07:13 cell stmt-A-2 done rc=0
+14:07:13 cell stmt-A-3 start
+14:07:16 cell stmt-A-3 done rc=0
+14:07:16 cell stmt-B-3 start
+14:07:19 cell stmt-B-3 done rc=0
+14:07:19 cell stmt-B-4 start
+14:07:23 cell stmt-B-4 done rc=0
+14:07:23 cell stmt-A-4 start
+14:07:26 cell stmt-A-4 done rc=0
+14:07:26 cell stmt-A-5 start
+14:07:30 cell stmt-A-5 done rc=0
+14:07:30 cell stmt-B-5 start
+14:07:33 cell stmt-B-5 done rc=0
+14:07:33 phase stmt finished
+14:07:33 cell build-A-1 start
+14:08:34 cell build-A-1 done rc=0
+14:08:34 cell build-B-1 start
+14:09:35 cell build-B-1 done rc=0
+14:09:35 cell build-B-2 start
+14:10:37 cell build-B-2 done rc=0
+14:10:37 cell build-A-2 start
+14:11:38 cell build-A-2 done rc=0
+14:11:38 cell build-A-3 start
+14:12:39 cell build-A-3 done rc=0
+14:12:39 cell build-B-3 start
+14:13:40 cell build-B-3 done rc=0
+14:13:40 phase build finished
+14:13:40 ALLCELLS
+14:14:39 cell stmt-A-1 start
+14:14:43 cell stmt-A-1 done rc=0
+14:14:43 cell stmt-B-1 start
+14:14:48 cell stmt-B-1 done rc=0
+14:14:48 cell stmt-B-2 start
+14:14:52 cell stmt-B-2 done rc=0
+14:14:52 cell stmt-A-2 start
+14:14:56 cell stmt-A-2 done rc=0
+14:14:56 cell stmt-A-3 start
+14:15:00 cell stmt-A-3 done rc=0
+14:15:00 cell stmt-B-3 start
+14:15:04 cell stmt-B-3 done rc=0
+14:15:04 cell stmt-B-4 start
+14:15:08 cell stmt-B-4 done rc=0
+14:15:08 cell stmt-A-4 start
+14:15:13 cell stmt-A-4 done rc=0
+14:15:13 cell stmt-A-5 start
+14:15:17 cell stmt-A-5 done rc=0
+14:15:17 cell stmt-B-5 start
+14:15:21 cell stmt-B-5 done rc=0
+14:15:21 cell stmt-B-6 start
+14:15:25 cell stmt-B-6 done rc=0
+14:15:25 cell stmt-A-6 start
+14:15:29 cell stmt-A-6 done rc=0
+14:15:29 cell stmt-A-7 start
+14:15:33 cell stmt-A-7 done rc=0
+14:15:33 cell stmt-B-7 start
+14:15:37 cell stmt-B-7 done rc=0
+14:15:37 cell stmt-B-8 start
+14:15:41 cell stmt-B-8 done rc=0
+14:15:41 cell stmt-A-8 start
+14:15:46 cell stmt-A-8 done rc=0
+14:15:46 cell stmt-A-9 start
+14:15:50 cell stmt-A-9 done rc=0
+14:15:50 cell stmt-B-9 start
+14:15:54 cell stmt-B-9 done rc=0
+14:15:54 cell stmt-B-10 start
+14:15:58 cell stmt-B-10 done rc=0
+14:15:58 cell stmt-A-10 start
+14:16:02 cell stmt-A-10 done rc=0
+14:16:02 phase stmt finished
+14:16:02 cell build-A-1 start
+14:17:03 cell build-A-1 done rc=0
+14:17:03 cell build-B-1 start
+14:18:04 cell build-B-1 done rc=0
+14:18:04 cell build-B-2 start
+14:19:05 cell build-B-2 done rc=0
+14:19:05 cell build-A-2 start
+14:20:05 cell build-A-2 done rc=0
+14:20:05 cell build-A-3 start
+14:21:05 cell build-A-3 done rc=0
+14:21:05 cell build-B-3 start
+14:22:05 cell build-B-3 done rc=0
+14:22:05 phase build finished
+14:22:05 ALLCELLS2
+14:22:40 extra: B build, checkpoint_interval_ms=0 probe
+14:24:55 extras done

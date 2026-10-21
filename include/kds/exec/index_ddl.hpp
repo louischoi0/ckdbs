@@ -9,6 +9,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/leaf_cursor.hpp"
 #include "kds/txn/read_view.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
@@ -143,7 +144,7 @@ public:
     Status Step(std::uint32_t leaves);
 
     // Whether the walk has reached the end of the leaf chain.
-    bool walked() const noexcept { return leaf_ == kInvalidPageId; }
+    bool walked() const noexcept { return cursor_.walked(); }
 
     // The statement the build answers for: the names and the byte its
     // reply and refusals carry.
@@ -183,9 +184,7 @@ private:
     // Its `root_page_id` names the root the tree has grown to even when the
     // backfill fails, which is what a failed build frees from (BX-Q6 (b)).
     catalog::TableAccess::IndexRef building_;
-    PageId leaf_ = kInvalidPageId;
-    PageId walk_origin_ = kInvalidPageId;
-    std::uint32_t leaves_ = 0;
+    LeafCursor cursor_;
     catalog::Oid replaced_oid_ = 0;
     bool finished_ = false;
 };

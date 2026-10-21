@@ -1,12 +1,15 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/leaf_cursor.hpp"
 #include "kds/exec/transition_catalog.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
@@ -107,16 +110,58 @@ struct TransitionDdlResult {
 };
 
 // `CREATE TRANSITION`: CN-4 §4's create-time refusals, then the build scan
-// under `check_view` (every live row's state must be in the state set; a
-// row an in-flight transaction wrote refuses `TxnConflict`), then the row,
-// then the schema word. The caller holds the relation `X` (BV-R4).
-StatusOr<TransitionDdlResult> CreateTransition(catalog::Catalog& catalog,
-                                               storage::PageStore& store,
-                                               const parser::TransitionStmt& stmt,
-                                               catalog::Oid target_oid,
-                                               const txn::ReadView& check_view,
-                                               wal::WalManager* wal,
-                                               txn::HolderProgress::Scope* progress);
+// (every live row's state must be in the state set; a row an in-flight
+// transaction wrote refuses `TxnConflict`), then the row, then the schema
+// word - **in slices** (A1 stage 2, `sched.md` §3): the caller yields its core
+// between two `Step`s under the relation `X` it holds (BV-R4) from before
+// the head to after the row.
+class TransitionBuild {
+public:
+    // The head: the column resolved against `target_oid` - the relation the
+    // caller took the `X` on - CN-4 T6's one-per-column check, the name, and
+    // the compiled graph.
+    static StatusOr<std::unique_ptr<TransitionBuild>> ForCreate(
+        catalog::Catalog& catalog, storage::PageStore& store, const parser::TransitionStmt& stmt,
+        catalog::Oid target_oid, wal::WalManager* wal, txn::HolderProgress::Scope* progress);
+
+    TransitionBuild(const TransitionBuild&) = delete;
+    TransitionBuild& operator=(const TransitionBuild&) = delete;
+
+    // Checks up to `leaves` more relation leaves under `check_view`, minted
+    // by the caller for the slice. A refusal ends the build: the caller hands
+    // it to `Finish`.
+    Status Step(std::uint32_t leaves, const txn::ReadView& check_view);
+
+    bool walked() const noexcept { return cursor_.walked(); }
+
+    const parser::TransitionStmt& stmt() const noexcept { return stmt_; }
+
+    // `ran` is how the walk ended. Anything but OK is returned; OK asks the
+    // name again, then writes the row and moves the schema word. Nothing is
+    // written before it, so a build that never reaches it leaves nothing.
+    StatusOr<TransitionDdlResult> Finish(const Status& ran);
+
+private:
+    TransitionBuild(catalog::Catalog& catalog, storage::PageStore& store,
+                    parser::TransitionStmt stmt, catalog::Oid target_oid, wal::WalManager* wal,
+                    txn::HolderProgress::Scope* progress);
+
+    // `AlreadyExists` with the name's byte if a Transition carries it.
+    Status NameFree() const;
+
+    catalog::Catalog& catalog_;
+    storage::PageStore& store_;
+    const parser::TransitionStmt stmt_;
+    const catalog::Oid target_oid_;
+    wal::WalManager* const wal_;
+    txn::HolderProgress::Scope* const progress_;
+    const catalog::TableAccess* access_ = nullptr;
+    std::uint16_t column_no_ = 0;
+    catalog::TransitionRef compiled_;
+    std::vector<std::string> states_;
+    LeafCursor cursor_;
+    std::size_t checked_ = 0;
+};
 
 // `DROP TRANSITION`: the row retired, then the schema word. Returns what
 // was dropped. The caller holds the relation `X`.

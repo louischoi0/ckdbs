@@ -734,7 +734,15 @@ length**: `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION` and
 `HolderProgress` (`txn/holder_progress.hpp`) before they ask for the `X`,
 and advance it per leaf and per row of their walk; a relation waiter whose
 net expires restarts the statement's one bound when its holder advanced
-since it last looked. The registration is the statement's: in autocommit
+since it last looked. **A yielding build advances only while its core
+runs it** (A1 stage 2, `sched.md` §3): all four give their core back
+every `exec::SlicePolicy::pages_per_slice` relation leaves where the
+statement can park, and between two slices the holder is silent while the
+other statements of its core run. It advances again at each resume
+(`BuildRun::Execute`), so only a gap longer than the net - a co-located
+statement that does not yield, or a long run queue - counts against its
+waiters as silence does. Several builds on one core may each hold a
+registration at once, one per relation. The registration is the statement's: in autocommit
 it is withdrawn after the decide releases the `X`, and a `CREATE INDEX`
 inside an explicit transaction withdraws it at the statement's end, so the
 open transaction after it is a silent holder like any other. A build longer
@@ -742,7 +750,12 @@ than the net therefore keeps its waiters until its decide, as
 `assertion.md` §8.1a and `index.md` §10 promise them, and a build that
 stops advancing - or any holder that registered nothing - ends them at the
 net as before. The build's tail after its last row (the catalog write and
-the decide) reports nothing and must fit inside one net.
+the decide) reports nothing and must fit inside one net. **`ALTER TABLE
+... RENAME TO` and `RENAME COLUMN` register and never advance** (`alter.md`
+AL4a): they take the build's holder (`DdlBuildLock`) and walk nothing, so
+their waiters' net is the plain 1 s one, and a rename's whole hold - AL4's
+check, the catalog write and `AwaitDdlDurability` before the reply - must
+fit inside one net.
 For writer `T`
 with read view `V` over the *current* header `trx_id` (`cur`):
 
@@ -872,8 +885,11 @@ Every step of a statement runs under the session's borrow.
   also what keeps a reader out of the wait-for graph: a reader never waits,
   so it is always a sink, and a chain that reaches one ends there.
 - **Its consumers are DDL's relation `X`** — `DROP TABLE` (`drop-table.md`
-  DT7) in M2, and since AT-S5e `CREATE INDEX`, `DROP INDEX` and a `CREATE
-  ASSERTION`'s build (`ddl-transactional.md` §5e, §5f). A writer's relation
+  DT7) in M2, since AT-S5e `CREATE INDEX`, `DROP INDEX` and a `CREATE
+  ASSERTION`'s build (`ddl-transactional.md` §5e, §5f), and since the
+  operator's ruling of 2026-10-21 `ALTER TABLE`'s two renames (`alter.md`
+  AL4a), which wait for a positioned reader for its statement's length and
+  for an open writer of the relation for its transaction's. A writer's relation
   `IX` refused by one of them parks on the table's own slot rather than on
   the holder's decide (`BorrowChain`), because the release flips it and
   kicks the waiter's core wherever the holder runs, and nothing kicks a

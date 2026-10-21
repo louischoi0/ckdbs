@@ -227,9 +227,11 @@ TEST(CatalogNameRaceTest, TwoCoresRenamingTwoTablesOntoOneNameLeaveOneRow) {
 }
 
 TEST(CatalogNameRaceTest, TwoCoresRenamingTwoColumnsOntoOneNameLeaveOneColumn) {
-    // `RENAME COLUMN`: a sibling collision within one relation, which
-    // `HandleAlter` holds no relation lock over. Two columns of one name
-    // are one relation whose second column resolution can never reach.
+    // `RENAME COLUMN`: a sibling collision within one relation, driven on
+    // the catalog directly - below `HandleAlter`'s relation `X` (`alter.md`
+    // AL4a), so the root-page hold is all that orders the two. Two columns
+    // of one name are one relation whose second column resolution can never
+    // reach.
     //
     // **Mutation**: drop the hold in `RenameColumn` - killed 10 in 10.
     TwoCatalogs cats;
