@@ -1360,7 +1360,7 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     // Unscaled integers, compared directly - which is only valid because
     // **the scales are equal**, and they are equal because the compiler
     // made them so: a string literal is parsed to the column's scale at
-    // compile (`CoerceLiteralTo`), and a column-column residual whose two
+    // compile (`CoerceLiteralToColumn`), and a column-column residual whose two
     // scales differ is refused there rather than reaching this line.
     //
     // So a disagreement here is not a case to handle, it is a compiler bug

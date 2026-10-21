@@ -731,7 +731,7 @@ the head's message (`InsertAssertion`'s guard under the root page's hold
 still decides across cores, AT-S17).
 **A publish that is then refused evicts the directory** before its
 `ASSERT_DROP` (a row whose own log fails stays on its page:
-`docs/inflight/bugs/an-assertion-row-whose-log-fails-stays-on-its-page.md`); a refused base adopts nothing and logs the `ASSERT_DROP`
+`docs/inflight/bugs/an-assertion-row-whose-log-fails-stays-on-its-page.md`, closed: `git show d83bd502^:<path>`); a refused base adopts nothing and logs the `ASSERT_DROP`
 too. **A build destroyed before its publish** - its statement's frame
 destroyed at a suspension, a core torn down with the statement queued -
 logs the `ASSERT_DROP` from its destructor, as this core, and releases the

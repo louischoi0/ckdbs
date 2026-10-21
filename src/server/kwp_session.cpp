@@ -1015,7 +1015,7 @@ FrameAction KwpSession::OnTxn(ClientFrameType type, std::span<const std::byte> p
     }
 
     // Transaction control has no portal and no rows: it dispatches through
-    // the same path with no sink, and `OnTxnComplete` is `Deliver`'s
+    // the same path with no sink, and `OnStatementComplete`'s transaction arm is `Deliver`'s
     // completion arm specialised to `S_TXN_OK`.
     running_portal_.clear();
     running_txn_ = true;

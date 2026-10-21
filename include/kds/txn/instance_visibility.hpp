@@ -132,7 +132,7 @@ class WakeRegistry;
 // another session before this statement began stays invisible to it for up
 // to one sync - the remainder BA-Q3 (c) names, snapshots that carry their
 // in-flight set, which is its own order
-// (`docs/inflight/bugs/a-strict-commits-marker-caps-every-cores-snapshot-across-its-sync.md`).
+// (`git show d83bd502:docs/inflight/bugs/a-strict-commits-marker-caps-every-cores-snapshot-across-its-sync.md`).
 //
 // ---- Reclamation, and the two windows it must not outrun -----------------
 //

@@ -22,6 +22,10 @@ reading the code (the critics-developer review of the waker-table
 unregister fix). No cell reproduces it: the window is one kick wide and
 only opens when a peer is torn down with a parked durable waiter.
 
+Re-verified by source read at `7dd9b789`: `WalWriter::KickDurableWaiters`
+still runs after `done_.notify_all()` (`src/wal/writer.cpp:142-143`) and
+`Expeditor::StopStartedCores` is `src/server/expeditor.cpp:2148`.
+
 **Where it came from.** It existed before the unregister fix. Before it,
 the entry dangled for the rest of teardown, and every later kick read freed
 memory (the heap-use-after-free BS-S7's history cells found under ASan).

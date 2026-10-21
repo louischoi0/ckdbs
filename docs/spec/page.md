@@ -162,7 +162,7 @@ Frames are slots in chunks of 1,024, each chunk's page bytes one allocation that
 ## 10. Checksums
 
 - CRC32C (hardware-accelerated where available — SSE4.2 `crc32` on x86-64; the software fallback is a correctness twin used by the deterministic sim, `include/kds/storage/crc32c.hpp`); field per §2; scope: all headered pages; computed at flush (§8), verified on every load from disk — never on buffer hits.
-- Verification failure ⇒ `Status(DataCorruption)`; during recovery, a checksum-failed page with an available `FULL_PAGE_IMAGE` is restored from it (wal.md §10) — checksum *detects*, FPI *heals*.
+- Verification failure ⇒ `Status::Corruption`; during recovery, a checksum-failed page with an available `FULL_PAGE_IMAGE` is restored from it (wal.md §10) — checksum *detects*, FPI *heals*.
 - **A never-written page is not a checksum failure.** A page the free map calls allocated that the device cannot address or holds as all zeros reads `NotFound` ("allocated but was never written"), not `Corruption` — the same reading `DevicePageStore::Open` gives an all-zero free map. The state is ordinary because a page's bit is set when it is claimed and its bytes reach the device only at a write-back, so a crash between the two leaves it, and the distinction is what recovery needs: redo *creates* a page from `NotFound` under a `PAGE_INIT`, where a `Corruption` it could only poison and wait for an FPI. `CreateAt` accepts such an id after proving the device holds nothing. A torn page with a zero header and a nonzero body is not all zero and still fails verification. **A freed page keeps its dead image on the device** (§5), so a reused id is never the all-zero signature: every logged creation's first record is a `PAGE_INIT`, a whole-page image or a `BTREE_SPLIT` image, which redo applies over whatever is there, and the one unlogged headerless class never takes a freed id without zeroing it first (BF-S1's Census A). One case is refused rather than healed: a page that was flushed and later zeroed whole by device damage, whose first in-range record is ordinary and whose `FULL_PAGE_IMAGE` follows, is refused at redo — reachable only by damage between a checkpoint and a crash.
 - Headerless pages are exempt by class (§1).
 
@@ -218,7 +218,7 @@ The decisions this section once listed are not recorded here. Each section above
 2. **PageRef:** pin balance by construction; span validity bounded by ref lifetime under eviction pressure; ref-across-suspension metering.
 3. **Eviction & residency:** pinned never evicted; resident classes never candidates; clean-preferred order; the full suite runs under a tiny frame budget (`KDS_TEST_FRAME_BUDGET` in debug builds) so every run exercises the sweep.
 4. **WAL gate:** scripted `WalDurability` stub proves `Flush` waits for `durable_lsn ≥ page_lsn` under randomized deterministic schedules; `MarkClean` unreachable outside flush completion.
-5. **Checksum:** flush-computed, load-verified, hit path untouched (instrumented); injected corruption ⇒ `DataCorruption`; FPI restoration with wal.md's crash matrix; hardware/software CRC32C equivalence.
+5. **Checksum:** flush-computed, load-verified, hit path untouched (instrumented); injected corruption ⇒ `Corruption`; FPI restoration with wal.md's crash matrix; hardware/software CRC32C equivalence.
 6. **Write path:** flush batches are id-sorted and coalesced (assert on the I/O trace).
 7. **Growth:** extension idempotent on replay; 16 TiB ceiling asserted.
 8. **Single file:** arithmetic mapping property tests; sparse growth.

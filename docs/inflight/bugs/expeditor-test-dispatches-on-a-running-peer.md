@@ -17,6 +17,10 @@ branch, under clang 18 TSan - the `tsan` configuration of
 (`instructions/v3.0.0/workorder-bs-test-hardening.md`); the Debug suite
 does not see it.
 
+Re-verified by source read at `7dd9b789`: the peer `Dispatch("SHOW META")` and
+`Dispatch("SHOW TABLES")` calls still stand at `tests/expeditor_test.cpp:350`
+and `:368`.
+
 **Smallest reproduction.**
 `scripts/bs/config.sh tsan build`, then
 `build-bs-tsan/tests/kds_tests --gtest_filter='ExpeditorTest.TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage'`

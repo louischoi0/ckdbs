@@ -231,7 +231,7 @@ TEST_F(IndexMaintainTest, ARelationWithNoIndexIsUnaffected) {
     EXPECT_TRUE(testing_view::ReadViewText(Run("SELECT name FROM sys.indexes")).rows.empty());
 }
 
-// ---- The backfill (docs/spec/index.md §10a, workplan IX09) --------------
+// ---- The backfill (docs/spec/index.md §10.1, workplan IX09) --------------
 
 // **Written first**, as the workplan asks: omitting the undo-chain walk
 // makes an old-snapshot read return fewer rows with no error - the failure

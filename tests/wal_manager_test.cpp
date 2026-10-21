@@ -418,8 +418,7 @@ TEST_F(WalManagerTest, ARecordLargerThanTheRingIsNotARingFullRefusal) {
 // progress. That interleaving cannot be forced from one thread, and a
 // multi-threaded cell that sometimes trips is worse than none. The
 // counter is therefore proved to stay at zero where it must and is
-// unproved where it fires; `docs/spec/client-manual.md` says the same to
-// the operator.
+// unproved where it fires; `docs/inflight/known-gaps.md` records it.
 
 // ---- Abort ---------------------------------------------------------------
 

@@ -167,7 +167,7 @@ enum class Capability : std::uint64_t {
 // mirrors `docs/spec/wal.md` §1's D1/D2/D3 - **confirmed 2026-08-31**, when
 // that document and `wal::DurabilityClass` both existed to be checked
 // against: `kStrict`/`kGroup`/`kRelaxed` are 1/2/3 in both, so the wire
-// value is the engine value and `DurabilityClassOf` below is a range check
+// value is the engine value and the engine class is a range check
 // rather than a translation table.
 //
 // Zero is the wire's own value and has no engine counterpart: it means

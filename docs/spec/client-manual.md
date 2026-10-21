@@ -101,7 +101,13 @@ defaults → config file (`--config <path>`) → command-line flags.** See
 | Key | Flag | Default | Meaning |
 |---|---|---|---|
 | `data_file` | positional arg | `kds.db` | Data file path; created if absent. |
-| `port` | `--port` | `15432` | TCP port, loopback only. |
+| `port` | `--port` | `15432` | TCP port the default (KWP/1) listener binds, on every core. |
+| `listen_address` | — | `127.0.0.1` | The IPv4 address the default port binds. `0.0.0.0` is every interface; a name is refused. `debug_text_port` and `kwp_port` stay loopback whatever this says. With `auth = off`, a non-loopback address serves anyone who can reach it. |
+| `kwp_port` | — | `0` | The KWP load endpoint's port; `0` opens no socket. Loopback only. |
+| `tcp_keepalive_s` | — | `60` | Idle seconds before keepalive probes a connection; a dead peer is reaped after about twice this value. `0` turns it off; above 32767 is refused. |
+| `max_locks_per_txn` | — | `65536` | The lock family's per-transaction entry budget (`docs/spec/txn.md` §5). |
+| `lock_wait_fault_net_ms` | — | `1000` | The longest a lock wait runs before it is refused `TxnConflict`; `0` refuses immediately. |
+| `txn_lifetime_ceiling_ms` | — | `60000` | An explicit transaction older than this is rolled back at its listener's sweep; `0` is refused, there is no off-switch (`docs/spec/txn.md` §1). |
 | `tls` | — | `off` | Direct TLS 1.3 on the port above (`docs/spec/protocol.md` §1): every connection opens with a handshake, no plaintext fallback, no STARTTLS-style upgrade. Requires both file keys below; a server built with `-DKDS_WITH_TLS=OFF` refuses `on` naming the flag. |
 | `tls_cert_file` | — | — | PEM certificate presented to every client, leaf first with any chain appended. Read once at startup. |
 | `tls_key_file` | — | — | PEM private key for the certificate, unencrypted. Read once at startup. |

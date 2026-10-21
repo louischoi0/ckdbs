@@ -207,7 +207,7 @@ int CountRows(SimInstance& db) {
 }
 
 TEST(BoundedPoolTest, AnInsertRefusedForAFullPoolLeavesNoRowBehind) {
-    // BE-Q11 end to end, the census's worst site (`docs/inflight/bugs/a-fetch-
+    // BE-Q11 end to end, the census's worst site (`git show d83bd502:docs/inflight/bugs/a-fetch-
     // refused-after-a-page-write-leaves-the-mutation-half-done.md`): inside one
     // transaction, wide rows fill a small pool with dirty pages that nothing
     // checkpoints, until a row's window cannot be promised. That row is
