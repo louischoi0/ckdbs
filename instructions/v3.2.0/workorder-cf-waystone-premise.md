@@ -19,6 +19,8 @@ Written 2026-10-21 on `cf-waystone-premise` from `23ea3e61`
   exploratory milestone."*
 - **W2** (2026-10-21): *"Open with CF-Q0..Q7 $!a and proceed with S0"*
   (`raft-marks-2026-10-21.md` §3).
+- **W3** (2026-10-21): *"Proceed with $!O and push no verify"* - the
+  branch, after CF-S0's report (`raft-marks-2026-10-21.md` §4).
 
 **Written 2026-10-21; opened 2026-10-21 on W2.** CF-Q0..Q5 are the
 operator's marks, each (a) - CF-Q1 (a) against CLA's proposal (b) - and
@@ -422,3 +424,7 @@ asking for them.
   on synthetic relations. There was no size sweep, no cold pool and no
   `cores > 1`.
 - **What happens next.** The branch is the operator's (CF-Q0 (a)).
+
+**Branch O marked on W3** (`raft-marks-2026-10-21.md` §4). Branches R
+and D are not taken; S0's numbers above are what sank them. CF-S1 opens
+with Branch O's amendment to this order (§5, CF-Q7).
