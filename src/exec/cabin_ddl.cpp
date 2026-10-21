@@ -180,22 +180,22 @@ StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, storage::PageSto
     auto resolved = Resolve(catalog, stmt, default_namespace, view);
     if (!resolved.ok()) return resolved.status();
 
-    // The tuple key refusal and the duplicate refusal both live in the catalog, and
-    // are deliberately not restated here: two answers to "why not" is how one
-    // of them ends up wrong.
-    auto cabin_id = catalog.CreateCabin(resolved.value().rel_oid, resolved.value().col_pos,
-                                         catalog::kCabinOriginUser);
-    if (!cabin_id.ok()) return cabin_id.status();
-
     CabinDdlResult out;
-    out.cabin_id = cabin_id.value();
     out.rel_oid = resolved.value().rel_oid;
     out.col_pos = resolved.value().col_pos;
     // The column's declared name, not the spelling the statement used: a
     // name matches ignoring case, and the reply names the Cabin as `SHOW
-    // CABINS` will.
+    // CABINS` will. Copied **before** the write: the write bumps the catalog
+    // version, which clears the cache `access` points into.
     out.key = std::string(
         catalog::NameView(resolved.value().access->schema.columns[out.col_pos].name));
+
+    // The tuple key refusal and the duplicate refusal both live in the catalog, and
+    // are deliberately not restated here: two answers to "why not" is how one
+    // of them ends up wrong.
+    auto cabin_id = catalog.CreateCabin(out.rel_oid, out.col_pos, catalog::kCabinOriginUser);
+    if (!cabin_id.ok()) return cabin_id.status();
+    out.cabin_id = cabin_id.value();
 
     // Warnings are collected *after* the write, because none of them is a
     // reason not to write - and computing them first would make a statement's

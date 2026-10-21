@@ -2847,8 +2847,12 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
                                               "'" + at);
             return {ErrorReply(s), false, 0, s};
         }
+        // A copy, not `column->pos`: `column` points into the catalog cache,
+        // which any catalog write before the drop's clears (the test seam's
+        // `CreateCabin` is one).
+        const auto pos = static_cast<std::uint16_t>(column->pos);
         // Identity is the Keystone word at position 0 (invariant 11).
-        if (column->pos == 0) {
+        if (pos == 0) {
             const Status s = Status::InvalidArgument("column '" + stmt.old_column +
                                                       "' is the tuple key and cannot be "
                                                       "dropped (invariant 11)" + at);
@@ -2862,8 +2866,7 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
                 "be dropped; a heap keeps at least one" + at);
             return {ErrorReply(s), false, 0, s};
         }
-        auto restricted =
-            DropColumnRestriction(oid.value(), static_cast<std::uint16_t>(column->pos));
+        auto restricted = DropColumnRestriction(oid.value(), pos);
         if (!restricted.ok()) {
             return {ErrorReply(restricted.status()), false, 0, restricted.status()};
         }
@@ -2880,8 +2883,7 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
         // no relation lock, so a second resolution by name could reach
         // another column (the door refuses a renamed one).
         const Status dropped =
-            catalog_.DropColumn(oid.value(), static_cast<std::uint16_t>(column->pos),
-                                stmt.old_column, ddl.trx_id, &changed);
+            catalog_.DropColumn(oid.value(), pos, stmt.old_column, ddl.trx_id, &changed);
         NoteCatalogRowChanges(ddl, changed);
         if (!dropped.ok()) {
             const Status s = dropped.WithContext("byte " + std::to_string(stmt.old_column_byte_offset));
@@ -7553,7 +7555,11 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
         plan.sort_max_rows = sort_max_rows_;
         plan.statistics = plan_stats_ != nullptr ? &plan_source_ : nullptr;
         plan.memo = &plan_memo_;
-        if (const auto fingerprint = run->parser->fingerprint(); fingerprint.has_value()) {
+        // A query layer walk (`WalkForLayer`) carries a statement and no
+        // parser, so it has no fingerprint to key the memo by.
+        if (const auto fingerprint =
+                run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
+            fingerprint.has_value()) {
             plan.fetch_id = fingerprint->fetch_id;
             plan.arg_hash = fingerprint->arg_hash;
             plan.literals_known = fingerprint->param_count == 0;
