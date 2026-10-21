@@ -501,9 +501,10 @@ StatusOr<std::unique_ptr<IndexBuild>> IndexBuild::ForReindex(
     const catalog::SysIndexRow& row = old.value();
 
     // **The definition is the row's own positions, never names** (B2): a
-    // `RENAME COLUMN` takes no relation `X`, so a definition re-spelled by
-    // column names could resolve to other columns than the index was built
-    // on. Widths and flags are the row's too - stored constants a column's
+    // definition re-spelled by column names could resolve to other columns
+    // than the index was built on, should a rename land between - none can
+    // since `RENAME COLUMN` takes the relation `X` (`alter.md` AL4a), and
+    // the positions keep it so as defense in depth. Widths and flags are the row's too - stored constants a column's
     // type cannot move under (types are not alterable, `alter.md` AL11).
     catalog::Catalog::IndexDef def;
     def.table_oid = row.table_oid;

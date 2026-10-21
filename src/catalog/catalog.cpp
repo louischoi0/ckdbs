@@ -1797,9 +1797,12 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     if (Status s = CheckRenameName("column", new_name); !s.ok()) return s;
 
     // Sibling collision and old-name existence in one read, and the rewrite,
-    // **under one hold of `sys.columns`' root page** (AT-S17): `HandleAlter`
-    // holds no relation lock, so without it two cores renaming two columns
-    // of one relation onto one name both pass the read.
+    // **under one hold of `sys.columns`' root page** (AT-S17). `HandleAlter`
+    // takes the relation `X` since `alter.md` AL4a, which already orders two
+    // renames of one relation; the hold stays as defense in depth, and is the
+    // whole of it for a dispatcher with no lock table or a direct caller -
+    // without it two cores renaming two columns of one relation onto one
+    // name both pass the read.
     auto columns = store_.Get(kCatalogPageColumns);
     if (!columns.ok()) return columns.status();
     // A dropped column's name is free (BW-R6) **once its drop is decided**
@@ -2038,11 +2041,14 @@ Status Catalog::DropColumn(Oid table_oid, std::uint16_t pos, std::string_view na
 
     // The column is the one the caller resolved (`Schema::FindColumn`) and
     // asked its RESTRICT of, named by position - never resolved again here
-    // by name: RENAME COLUMN takes no relation lock, so between the
-    // caller's ask and this hold another core can move `name` onto another
-    // column, and a second resolution would drop a column nobody asked the
-    // RESTRICT of. The position must still be live and still carry `name`
-    // (ignoring case); a column renamed in that window refuses the drop.
+    // by name. RENAME COLUMN takes the relation `X` since `alter.md` AL4a,
+    // as the caller does before its ask, so no rename lands between them;
+    // the position is kept as defense in depth - with no lock table, another
+    // core could move `name` onto another column between the caller's ask
+    // and this hold, and a second resolution would drop a column nobody
+    // asked the RESTRICT of. The position must still be live and still carry
+    // `name` (ignoring case); a column renamed in that window refuses the
+    // drop.
     std::string now_named;
     bool live = false;
     auto checked = ForFirstRow<SysColumnRow>(

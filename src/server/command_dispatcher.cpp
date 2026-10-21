@@ -2776,6 +2776,54 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     auto oid = ResolveAlterTarget(stmt, session);
     if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
 
+    // ---- AL4a: the relation `X`, for both renames -------------------------
+    //
+    // **Held by a transaction of the statement's own** (`DdlBuildLock`,
+    // `CREATE ASSERTION`'s shape): a rename is transactionless (AL6), so its
+    // holder writes nothing and is rolled back when the statement ends. The
+    // grant is a moment no writer, positioned reader or declaration build of
+    // the relation is mid-statement: before it, a `CREATE ASSERTION` building
+    // on this relation - which has no `sys.assertions` row for AL4 to read
+    // until it publishes - could store a canon naming a column renamed under
+    // it, and a chain of renames could make that canon name another column
+    // at the next mount (the operator's ruling of 2026-10-21). The rename
+    // acts on the oid it locked; a relation dropped while it waited refuses
+    // as a missing one does. **A session whose own transaction holds the
+    // relation's `X` already has the fence** - an open DDL of its own that
+    // took it (`ADD`/`DROP COLUMN`, `CREATE`/`DROP INDEX`) - and takes no
+    // second holder; one that holds a weaker mode cannot wait for itself and
+    // is refused.
+    DdlBuildLock rename_lock;
+    const txn::Transaction* own = session.transaction();
+    const bool own_x = own != nullptr && own->borrows().HoldsAt(txn::LockKey::Relation(oid.value()),
+                                                                txn::LockMode::kExclusive);
+    if (std::optional<Status> refused =
+            own_x ? std::nullopt
+                  : TakeDdlBuildLock(session, oid.value(), stmt.table_name,
+                                     rename_column ? "RENAME COLUMN" : "RENAME TO", rename_lock);
+        refused.has_value()) {
+        return {ErrorReply(*refused), false, 0, *refused};
+    }
+    // The memo made current under the `X`, as `HandleTransition` makes it
+    // (the BV S2 review's B2): the boundary settled it before the grant, and
+    // a declaration published on another core in between would be missing
+    // from what AL4 and the column check below read.
+    catalog_.Revalidate();
+    // **The name asked again under the `X`**, `CREATE ASSERTION`'s re-check:
+    // a rename or a drop-and-recreate that another core finished between
+    // this statement's resolution and its grant leaves the name on another
+    // oid, or on none, and the grant is on the old one.
+    if (rename_lock.txn != nullptr) {
+        auto settled = ResolveAlterTarget(stmt, session);
+        if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
+        if (settled.value() != oid.value()) {
+            const Status moved = Status::TxnConflict("relation '" + stmt.table_name +
+                                                     "' changed while the rename waited for it "
+                                                     "- retry");
+            return {ErrorReply(moved), false, 0, moved};
+        }
+    }
+
     // AL4: assertions RESTRICT both forms. The stored canon is the
     // declaration's verbatim text (AS10), and the recovery-side registry
     // rebuild will re-parse it - a rename would leave an *enforcing*
@@ -3396,9 +3444,9 @@ std::optional<Status> CommandDispatcher::TakeDdlBuildLock(Session& session, cata
     const txn::Transaction* own = session.transaction();
     if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(relation))) {
         return Status::TxnConflict("relation '" + std::string(relation_name) +
-                                   "' is held by this session's own transaction; " +
+                                   "' is held by this session's own transaction, which " +
                                    std::string(verb) +
-                                   " reads settled state - retry when it has ended");
+                                   " cannot wait for - retry when it has ended");
     }
     auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
     if (!begun.ok()) return begun.status();
@@ -3468,6 +3516,14 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         refused.has_value()) {
         return {ErrorReply(*refused), false, 0, *refused};
     }
+    // **The memo made current under the `X`**, as `HandleTransition` and the
+    // renames make it (the BV S2 review's B2): a `RENAME COLUMN` another core
+    // finished between this statement's boundary and an uncontended grant -
+    // no re-run between - would leave the build resolving its columns
+    // against the schema before it, and publish a canon naming a column that
+    // no longer exists (`alter.md` AL4a). Nothing of this statement holds a
+    // `TableAccess` yet.
+    catalog_.Revalidate();
 
     // The visibility the build's scan reads under: settled state, minted
     // after the grant exactly as a FK check's view is.
@@ -3582,7 +3638,7 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
     // T6) and the column's resolution would then read an entry without it.
     // Nothing of this statement holds a `TableAccess` yet, so dropping the
     // memo here strands nothing; from the grant on, no DDL can change the
-    // relation until this statement ends.
+    // relation until this statement ends (a rename takes the `X` too, AL4a).
     catalog_.Revalidate();
 
     if (stmt.drop) {

@@ -430,6 +430,22 @@ enforce, indexes and Cabins still serve, all with no re-declaration.
   `AlreadyExists`.
 - A rename is logged and durable but **not transactional**: `ROLLBACK` does
   not undo it.
+- **A rename takes the relation exclusively** for its statement (since
+  2026-10-21), so it cannot land inside a `CREATE ASSERTION` building on the
+  relation. It waits for the relation's open writers, open writers or
+  creators of a relation that references it, a positioned reader's
+  statement, `PURGE DROPPED COLUMNS`, a KWP load, and an index, assertion
+  or Transition build (refused `TXN_CONFLICT` after 1 s in which the holder
+  makes no progress; a build that keeps advancing is waited out), and is
+  refused `TXN_CONFLICT` if the name moved to another relation while it
+  waited.
+  Inside an explicit transaction that has written the relation, or written
+  or created a relation referencing it, it is refused `TXN_CONFLICT` at
+  once - a statement cannot wait for its own transaction. None of these
+  refusals fails the transaction; after the own-transaction refusal, end
+  the transaction, then re-issue the rename. After the transaction's own
+  `ADD` or `DROP COLUMN`, or `CREATE` or `DROP INDEX`, on the relation, a
+  rename is admitted.
 
 ### CREATE INDEX / DROP INDEX (built, IX01-IX16)
 
@@ -1452,7 +1468,10 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
 - A failed statement inside an explicit transaction **poisons the session**:
   only `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING` are admitted (a whitelist)
   until the client rolls back. An autocommit statement is its own
-  transaction and unwinds fully.
+  transaction and unwinds fully. **The exception is a statement-owned DDL
+  lock**: a `TXN_CONFLICT` refusing `CREATE ASSERTION`, `CREATE TRANSITION`
+  or an `ALTER TABLE` rename its relation fails nothing; when the session's
+  own transaction holds that relation, end the transaction, then re-issue.
 - Closing a connection with a transaction open rolls it back.
 - **`CREATE TABLE`, `DROP TABLE` and `CREATE INDEX` are transactional**
   (2026-08-16): inside an explicit transaction they are rolled back by
@@ -1697,7 +1716,7 @@ in §7 below now carries and which both used to reach a client as a bare
 
 | Situation | Exact surface |
 |---|---|
-| Write conflict (first-updater-wins), write to another core's relation, FK check meets in-flight writer, CREATE ASSERTION on unsettled relation, a name (table, namespace, index) held by another transaction's uncommitted DROP | `ERR TXN_CONFLICT retryable=1 row id=<n> was written by transaction <n>` (message varies; the token and `retryable=1` do not) |
+| Write conflict (first-updater-wins), write to another core's relation, FK check meets in-flight writer, CREATE ASSERTION on unsettled relation, a name (table, namespace, index) held by another transaction's uncommitted DROP, an `ALTER TABLE` rename whose relation another holder kept, silent, for 1 s or the session's own transaction holds (not exclusively) | `ERR TXN_CONFLICT retryable=1 row id=<n> was written by transaction <n>` (message varies; the token and `retryable=1` do not) |
 | FK violation (missing parent on INSERT/UPDATE; live child on parent DELETE) | `ERR FK_VIOLATION retryable=0 <message>` |
 | Assertion ceiling exceeded | `ERR ASSERTION_VIOLATION retryable=0 <message naming the group and the enforced ceiling>` (`CHECK COUNT(*) < 5` refuses at 5 saying "would exceed bound 4") |
 | A Transition broken: an INSERT outside `ON INSERT`, an UPDATE along no declared edge, a DELETE outside `ON DELETE FROM` | `ERR TRANSITION_VIOLATION retryable=0 transition '<name>' on column '<c>': <what>, row id <n> (byte <b>)` |

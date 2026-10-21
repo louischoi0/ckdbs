@@ -742,7 +742,12 @@ than the net therefore keeps its waiters until its decide, as
 `assertion.md` §8.1a and `index.md` §10 promise them, and a build that
 stops advancing - or any holder that registered nothing - ends them at the
 net as before. The build's tail after its last row (the catalog write and
-the decide) reports nothing and must fit inside one net.
+the decide) reports nothing and must fit inside one net. **`ALTER TABLE
+... RENAME TO` and `RENAME COLUMN` register and never advance** (`alter.md`
+AL4a): they take the build's holder (`DdlBuildLock`) and walk nothing, so
+their waiters' net is the plain 1 s one, and a rename's whole hold - AL4's
+check, the catalog write and `AwaitDdlDurability` before the reply - must
+fit inside one net.
 For writer `T`
 with read view `V` over the *current* header `trx_id` (`cur`):
 
@@ -872,8 +877,11 @@ Every step of a statement runs under the session's borrow.
   also what keeps a reader out of the wait-for graph: a reader never waits,
   so it is always a sink, and a chain that reaches one ends there.
 - **Its consumers are DDL's relation `X`** — `DROP TABLE` (`drop-table.md`
-  DT7) in M2, and since AT-S5e `CREATE INDEX`, `DROP INDEX` and a `CREATE
-  ASSERTION`'s build (`ddl-transactional.md` §5e, §5f). A writer's relation
+  DT7) in M2, since AT-S5e `CREATE INDEX`, `DROP INDEX` and a `CREATE
+  ASSERTION`'s build (`ddl-transactional.md` §5e, §5f), and since the
+  operator's ruling of 2026-10-21 `ALTER TABLE`'s two renames (`alter.md`
+  AL4a), which wait for a positioned reader for its statement's length and
+  for an open writer of the relation for its transaction's. A writer's relation
   `IX` refused by one of them parks on the table's own slot rather than on
   the holder's decide (`BorrowChain`), because the release flips it and
   kicks the waiter's core wherever the holder runs, and nothing kicks a

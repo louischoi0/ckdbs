@@ -24,6 +24,9 @@
 //   - **A writer parks on a relation `X` before its admission**, which is
 //     item 13's other half: an `INSERT` takes the relation's `IX` ahead of
 //     the assertion check, so a build cannot slip between the two.
+//
+// And `alter.md` AL4a's: a rename takes the relation `X` too, so it waits
+// for an open writer and for a declaration build on another core.
 
 #include "two_core_rig.hpp"
 
@@ -530,6 +533,230 @@ TEST(DdlFenceRigTest, AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOn
     EXPECT_TRUE(past_the_net) << "the build ended inside one net, so the cell proved nothing";
     EXPECT_NE(d1.Dispatch("SELECT * FROM built_ix WHERE v = -1").response.find(",-1"),
               std::string::npos);
+}
+
+// **AL4a.** A rename takes the relation `X`, so a writer's `IX` held in an
+// open transaction on core 1 holds it back on core 0 until the writer
+// commits; then it lands. Both forms.
+//
+// **Mutation**, measured: `HandleAlter` taking no relation `X` - killed 1 in
+// 1, each form.
+void ExpectARenameOnCoreZeroWaitsForAPeersOpenWriter(const std::string& rename_sql,
+                                                    const std::string& reply,
+                                                    const std::string& read_after) {
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    const catalog::Oid oid = PeerRelation(*rig, "renamed_held");
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+
+    Session writer;
+    ASSERT_EQ(d1.Dispatch("BEGIN", &writer).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(
+        d1.Dispatch("INSERT INTO renamed_held VALUES (7)", &writer).response.rfind("INSERTED", 0),
+        0u);
+
+    Statement rename;
+    rename.sql = rename_sql;
+    Statement commit;
+    commit.sql = "COMMIT";
+    commit.session = &writer;
+    Submit(*rig, 0, rename);
+    rig->Start();
+    rename.go.store(true, std::memory_order_release);
+
+    const txn::LockKey rel = txn::LockKey::Relation(oid);
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return rig->locks().WaiterCount(rel) == 1; }))
+        << "the rename never parked on the writer's relation: " << rename.out.response;
+    EXPECT_FALSE(rename.done.load(std::memory_order_acquire)) << rename.out.response;
+
+    Submit(*rig, 1, commit);
+    commit.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return commit.done.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(
+        KickUntil(*rig, 0, [&] { return rename.done.load(std::memory_order_acquire); }, 5000ms))
+        << "the rename never resumed after the writer committed";
+    EXPECT_EQ(rename.out.response.rfind(reply, 0), 0u) << rename.out.response;
+    rig->Stop();
+    EXPECT_EQ(rig->locks().WaiterCount(rel), 0u);
+    const std::string read = d1.Dispatch(read_after).response;
+    EXPECT_NE(read.find("7"), std::string::npos) << "the writer's row, under the new name: " << read;
+}
+
+TEST(DdlFenceRigTest, ARenameColumnOnCoreZeroWaitsForAPeersOpenWriterAndThenLands) {
+    ExpectARenameOnCoreZeroWaitsForAPeersOpenWriter(
+        "ALTER TABLE renamed_held RENAME COLUMN v TO w", "RENAMED COLUMN",
+        "SELECT w FROM renamed_held");
+}
+
+TEST(DdlFenceRigTest, ARenameToOnCoreZeroWaitsForAPeersOpenWriterAndThenLands) {
+    ExpectARenameOnCoreZeroWaitsForAPeersOpenWriter("ALTER TABLE renamed_held RENAME TO moved",
+                                                    "RENAMED TABLE", "SELECT v FROM moved");
+}
+
+TEST(DdlFenceRigTest, ARenameOnAPeerWaitsForACreateAssertionOnCoreZeroAndIsRestrictedByIt) {
+    // **AL4a's reason.** A `CREATE ASSERTION` building on core 0 has no
+    // `sys.assertions` row for AL4 to read until it publishes. A rename of
+    // its relation on core 1 used to land inside the build, and the
+    // assertion then stored a canon naming a column that no longer existed.
+    // It waits for the build's `X` now, and once the assertion is published
+    // AL4 restricts it.
+    //
+    // **Mutation**, measured: `HandleAlter` taking no relation `X` - killed
+    // 1 in 1.
+    TwoCoreRig::Options options;
+    options.max_idle_block_ms = 1;
+    auto opened = TwoCoreRig::Open(options);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    const catalog::Oid oid = PeerRelation(*rig, "renamed_cap");
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    for (int batch = 0; batch < 20; ++batch) {
+        std::string values;
+        for (int i = 0; i < 500; ++i) {
+            values += (i == 0 ? "(" : ", (") + std::to_string(batch * 500 + i) + ")";
+        }
+        ASSERT_EQ(
+            d1.Dispatch("INSERT INTO renamed_cap VALUES " + values).response.rfind("INSERTED", 0),
+            0u);
+    }
+
+    Statement build;
+    build.sql = "CREATE ASSERTION one ON renamed_cap GROUP BY (v) CHECK COUNT(*) <= 1";
+    Statement rename;
+    rename.sql = "ALTER TABLE renamed_cap RENAME COLUMN v TO w";
+    Submit(*rig, 0, build);
+    Submit(*rig, 1, rename);
+    rig->Start();
+    build.go.store(true, std::memory_order_release);
+    // The rename starts once the build holds its `X`: the inserts committed,
+    // so the only entry the table has is the build's.
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] {
+        return rig->locks().EntryCount() > 0 || build.done.load(std::memory_order_acquire);
+    }));
+    const bool built_before_rename = build.done.load(std::memory_order_acquire);
+    rename.go.store(true, std::memory_order_release);
+    // **Not vacuous**: the rename met the build's `X` and parked on it.
+    const txn::LockKey rel = txn::LockKey::Relation(oid);
+    const bool parked = KickUntil(*rig, 1, [&] {
+        return rig->locks().WaiterCount(rel) == 1 ||
+               rename.done.load(std::memory_order_acquire);
+    }) && !rename.done.load(std::memory_order_acquire);
+
+    ASSERT_TRUE(
+        KickUntil(*rig, 0, [&] { return build.done.load(std::memory_order_acquire); }, 20000ms))
+        << "the build never finished";
+    ASSERT_TRUE(
+        KickUntil(*rig, 1, [&] { return rename.done.load(std::memory_order_acquire); }, 5000ms))
+        << "the rename never ran";
+    rig->Stop();
+    ASSERT_FALSE(built_before_rename) << "the build ended before the rename began: vacuous";
+    EXPECT_TRUE(parked) << "the rename never parked on the build's X: " << rename.out.response;
+    ASSERT_EQ(build.out.response.rfind("CREATED ASSERTION", 0), 0u) << build.out.response;
+    EXPECT_NE(rename.out.response.find("assertion 'one'"), std::string::npos)
+        << "the rename landed inside the build: " << rename.out.response;
+    EXPECT_EQ(d1.Dispatch("SELECT v FROM renamed_cap WHERE v = 7").response.rfind("ERR", 0),
+              std::string::npos)
+        << "the column the assertion's canon names is gone";
+}
+
+TEST(DdlFenceRigTest, ARenameInsideATransactionHoldingTheRelationIsRefusedAndPoisonsNothing) {
+    // A rename cannot wait for its own session's transaction: one that wrote
+    // the relation holds its `IX` until it decides. The refusal is
+    // retryable and leaves the transaction as it was.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    PeerRelation(*rig, "renamed_own");
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+
+    Session s;
+    ASSERT_EQ(d0.Dispatch("BEGIN", &s).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(d0.Dispatch("INSERT INTO renamed_own VALUES (7)", &s).response.rfind("INSERTED", 0),
+              0u);
+    const DispatchOutcome refused =
+        d0.Dispatch("ALTER TABLE renamed_own RENAME COLUMN v TO w", &s);
+    EXPECT_EQ(refused.status.code(), StatusCode::kTxnConflict) << refused.response;
+    EXPECT_NE(refused.response.find("own transaction"), std::string::npos) << refused.response;
+    EXPECT_EQ(d0.Dispatch("ALTER TABLE renamed_own RENAME TO moved", &s).status.code(),
+              StatusCode::kTxnConflict);
+    EXPECT_FALSE(s.failed()) << "the refusal poisoned the transaction";
+    ASSERT_EQ(d0.Dispatch("COMMIT", &s).response.rfind("COMMIT", 0), 0u);
+    // Once the transaction has ended, the same rename lands.
+    EXPECT_EQ(d0.Dispatch("ALTER TABLE renamed_own RENAME COLUMN v TO w", &s).response.rfind(
+                  "RENAMED COLUMN", 0),
+              0u);
+}
+
+TEST(DdlFenceRigTest, ACreateAssertionResolvesItsColumnsUnderItsXNotUnderAStaleMemo) {
+    // `alter.md` AL4a from the assertion's side. Core 0's memo holds the
+    // relation's `TableAccess`; after its statement boundary settled it, a
+    // `RENAME COLUMN` on core 1 takes the `X`, renames and releases, and
+    // core 0's `X` is then granted with no wait - no re-run. The build must
+    // resolve `v` against the schema the rename left, and refuse; under the
+    // stale memo it published a canon naming a column that no longer exists.
+    //
+    // **Mutation**, measured: `HandleAssertion` not revalidating after the
+    // grant - killed 1 in 1.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    PeerRelation(*rig, "stale_cap");
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_EQ(d1.Dispatch("INSERT INTO stale_cap VALUES (7)").response.rfind("INSERTED", 0), 0u);
+    // Core 0's memo binds the relation before the rename.
+    ASSERT_EQ(d0.Dispatch("SELECT v FROM stale_cap").response.rfind("ERR", 0), std::string::npos);
+
+    bool ran = false;
+    std::string renamed;
+    d0.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterPublish, [&] {
+        if (ran) return;
+        ran = true;
+        renamed = d1.Dispatch("ALTER TABLE stale_cap RENAME COLUMN v TO w").response;
+    });
+    const DispatchOutcome created =
+        d0.Dispatch("CREATE ASSERTION one ON stale_cap GROUP BY (v) CHECK COUNT(*) <= 1");
+    d0.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterPublish, nullptr);
+    ASSERT_TRUE(ran);
+    ASSERT_EQ(renamed.rfind("RENAMED COLUMN", 0), 0u) << renamed;
+    EXPECT_EQ(created.response.rfind("ERR", 0), 0u)
+        << "the assertion was built over a column renamed under it: " << created.response;
+    EXPECT_EQ(d0.Dispatch("SELECT name FROM sys.assertions").response.find("one"),
+              std::string::npos);
+}
+
+TEST(DdlFenceRigTest, ARenameToWhoseNameMovedBeforeItsGrantIsRefused) {
+    // A `RENAME TO` on core 1 moves the relation off the name core 0's rename
+    // resolved; core 0's grant is uncontended, so nothing re-runs. The name
+    // is asked again under the `X`, and core 0 refuses rather than renaming
+    // the relation core 1 already renamed.
+    //
+    // **Mutation**, measured: `HandleAlter` not re-resolving after the grant
+    // - killed 1 in 1.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    PeerRelation(*rig, "moving");
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_EQ(d0.Dispatch("SELECT v FROM moving").response.rfind("ERR", 0), std::string::npos);
+
+    bool ran = false;
+    std::string first;
+    d0.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterPublish, [&] {
+        if (ran) return;
+        ran = true;
+        first = d1.Dispatch("ALTER TABLE moving RENAME TO moved_b").response;
+    });
+    const DispatchOutcome second = d0.Dispatch("ALTER TABLE moving RENAME TO moved_a");
+    d0.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterPublish, nullptr);
+    ASSERT_TRUE(ran);
+    ASSERT_EQ(first.rfind("RENAMED TABLE", 0), 0u) << first;
+    EXPECT_EQ(second.response.rfind("ERR", 0), 0u)
+        << "renamed a relation no longer named 'moving': " << second.response;
+    EXPECT_EQ(d0.Dispatch("SELECT v FROM moved_b").response.rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(d0.Dispatch("SELECT v FROM moved_a").response.rfind("ERR", 0), 0u);
 }
 
 }  // namespace

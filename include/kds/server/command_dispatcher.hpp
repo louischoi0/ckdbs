@@ -1431,7 +1431,8 @@ private:
     DispatchOutcome HandleTransition(std::string_view line, Session& session);
 
     // **The relation `X` a declaration's build holds** (AT-S5e, AT-0 item
-    // 13), shared by `HandleAssertion` and `HandleTransition`: a
+    // 13), shared by `HandleAssertion` and `HandleTransition` - and by
+    // `HandleAlter`'s two renames (`alter.md` AL4a): a
     // transaction of the statement's own that writes nothing and is rolled
     // back when the lock goes out of scope, so a failed build poisons
     // nothing - a transaction rather than a minted id because a waiter names

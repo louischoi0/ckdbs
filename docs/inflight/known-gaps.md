@@ -733,6 +733,17 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   needs that cell to reach the check another way. Owner:
   `docs/spec/ddl-transactional.md` §4.
 
+- **A KWP load chunk refused by a relation `X` rolls back the whole
+  load.** Accepted by the operator on 2026-10-21. A chunk runs
+  `ExecuteInsert` outside `DispatchAsync`, so it cannot park: a relation
+  `IX` refused by an index, assertion or transition build's `X` - on an
+  index build's own core too, between its slices, since A1 stage 2 - or by
+  a rename's (`alter.md` AL4a) is refused `TxnConflict`, and
+  `HandleLoadChunk`'s `fail_load` rolls back the load's one transaction,
+  chunks already acknowledged included (`kwp_load_server.cpp`). Once a
+  chunk has written, the load holds the `IX` until it decides, so a DDL
+  arriving later waits for the load instead. Owner: `docs/spec/txn.md` §5.
+
 ## Page reclamation
 
 What BF (`instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md`)
@@ -850,6 +861,11 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
   the next frame. `CREATE INDEX` and `REINDEX INDEX` yield since A1 stage 2
   (`IndexBuildSliceRigTest`). Its waiters on other cores are not refused at
   the fault net while it advances (`txn.md` §5, `holder_progress.hpp`).
+  A build advances only while its core runs it, so a co-located statement
+  that does not yield, or many sliced statements queued on that core, can
+  leave it silent past the net, and its waiters on other cores are then
+  refused `TXN_CONFLICT` though the build is live. A rename registers and
+  never advances, so its waiters always have the plain net.
   Not covered: `CREATE ASSERTION`'s and `CREATE
   TRANSITION`'s waiters have no rig cell of their own - they share
   `DdlBuildLock`'s registration, and

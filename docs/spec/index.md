@@ -789,8 +789,10 @@ still reach (§10.1, IX10a) - so a rebuild drops the entries of rows that
 left the relation (rolled back, purged) and of versions no reader reaches,
 an `UPDATE`'s superseded values among them. The rebuilt definition is the old
 row's own column positions, widths and unique flag, never names re-resolved
-(a `RENAME COLUMN` takes no `X`), and an index the name no longer finds on
-the relation the `X` was taken for is `TxnConflict`. Through
+(a `RENAME COLUMN` takes the `X` too since `alter.md` AL4a, so none lands
+under the rebuild; the positions stay as defense in depth), and an index
+the name no longer finds on the relation the `X` was taken for is
+`TxnConflict`. Through
 `CREATE INDEX`'s build, the old row, slot and tree are untouched by a
 refusal (BY-R7). **A rebuild needs a free anchor slot**: the old slot is
 held until the reclaimer frees the old tree, so on a relation whose anchor
