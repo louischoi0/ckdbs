@@ -152,6 +152,16 @@ public:
     // `CrashWithLogPrefix` cut is meaningful in.
     std::uint64_t UnsyncedLogBytes() const noexcept;
 
+    // **BS-S4's realistic power cut**: the log cut as `CrashWithLogPrefix`
+    // cuts it, and the page device persisting an arbitrary subset of its
+    // unsynced writes, one maybe torn (`MemoryPageDevice::CrashPersisting`).
+    // Every write-back waits for the log past its page's LSN to be durable
+    // (`EnsureDurable`), so any subset is one a recovery owes the whole
+    // contract over; a torn page it may only refuse, there being no image to
+    // heal it from (BS-Q5 (a)).
+    storage::MemoryPageDevice::PowerCut CrashWithPowerCut(std::uint64_t keep_log_bytes,
+                                                          std::uint64_t page_seed, bool tear);
+
     // Log sync + store sync through the dispatcher's own SYNC — the same
     // path a client's SYNC takes — then a checkpoint, then tear the stack down
     // without a crash. What the devices hold afterwards is the clean-shutdown
@@ -246,6 +256,10 @@ private:
 
     // Reverse construction order, no I/O.
     void TearDown();
+
+    // The log's half of every crash - whole, or cut at `keep_bytes` - and
+    // the count of the ones that brought detached segments back.
+    void CrashLog(std::optional<std::uint64_t> keep_bytes);
 
     // The recycler `RunCheckpoint`'s anchor is handed (BC-R5's inline arm:
     // the harness runs no writer thread). **Three advances in four detach

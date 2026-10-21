@@ -1,0 +1,1 @@
+SELECT t.id FROM t JOIN u ON t.id = u.id WHERE u.status = 'open'

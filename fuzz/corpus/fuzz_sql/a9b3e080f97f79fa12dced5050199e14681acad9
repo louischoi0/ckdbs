@@ -1,0 +1,1 @@
+SELECT id FROM t WHERE DATE(ts) = '2026-10-01'

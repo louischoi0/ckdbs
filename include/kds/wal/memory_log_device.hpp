@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "kds/base/injected_failure.hpp"
 #include "kds/wal/log_device.hpp"
 
 // The simulated LogDevice: the same contract as FileLogDevice, backed by
@@ -90,9 +91,10 @@ public:
     // ---- Fault injection -------------------------------------------------
 
     // The next matching operation reports `status` and has no effect. Each
-    // is one-shot; setting one twice replaces the pending injection.
-    void FailNextWrite(Status status);
-    void FailNextSync(Status status);
+    // is one-shot; setting one twice replaces the pending injection. With
+    // `skip`, that many matching operations pass first (BS-S3's N-th sweep).
+    void FailNextWrite(Status status, std::uint64_t skip = 0);
+    void FailNextSync(Status status, std::uint64_t skip = 0);
 
     // The next write transfers only its first `prefix_bytes` bytes and then
     // stops, as an interrupted physical write would, and still reports OK -
@@ -103,6 +105,11 @@ public:
     // Disarms every pending injection; MemoryPageDevice::ClearInjections'
     // contract verbatim.
     void ClearInjections() noexcept;
+
+    // **No power from now** (BS-S4): every operation fails with no effect,
+    // until a `Crash` restores it - `MemoryPageDevice::LosePowerAtWrite`'s
+    // partner, for the one cut both devices share.
+    void LosePower() noexcept;
 
     // Discards every write and every segment creation since the last
     // Sync(), modelling power loss - and brings back every segment detached
@@ -172,9 +179,10 @@ private:
     std::uint64_t durable_first_ = 0;
     std::uint64_t durable_end_ = 0;
 
-    std::optional<Status> fail_next_write_;
-    std::optional<Status> fail_next_sync_;
+    InjectedFailure fail_next_write_;
+    InjectedFailure fail_next_sync_;
     std::optional<std::size_t> tear_next_write_;
+    bool power_lost_ = false;
 
     Stats stats_;
     std::vector<TraceEntry> trace_;

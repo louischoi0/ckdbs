@@ -34,11 +34,11 @@
 // alarm — it broke the mount three seeds out of five with an LSN past the
 // append point, which is the hole, not a defect. The realistic case is
 // already pinned where it belongs, at the stream (`tests/wal_stream_test.cpp`,
-// "the torn record is the end of the stream"). So: **torn injection waits
-// for `Crash(prefix)`**, and when it lands the log half asserts (recovery's
-// CRC is what it is for) while the page half is [GATED: FPI] — the cadence
-// `docs/inflight/known-gaps.md` records as unbuilt for every page class, which
-// leaves a torn *page* unhealable and the mount refusing it.
+// "the torn record is the end of the stream"). So torn injection is a crash's
+// and never a fault's: **BS-S4** cuts the log inside its unsynced run
+// (`SimConfig::power_cut`), and the `power-loss-at-page-write` Nth fault
+// leaves a page torn at a sector boundary, which with no full-page-image
+// cadence (`docs/inflight/known-gaps.md`) the restart may only refuse.
 
 #include <cstddef>
 #include <cstdint>
@@ -78,6 +78,10 @@ enum class FaultKind : std::uint8_t {
     kPageFailGrow = 3,
     kLogFailWrite = 4,
     kLogFailSync = 5,
+    // The power lost at a page write (BS-S4, BS-A9): an Nth fault only,
+    // never drawn into a schedule. From that write on both devices refuse
+    // everything, and the crash persists what `CrashPersisting` says.
+    kPowerLossAtPageWrite = 6,
 };
 
 const char* FaultKindName(FaultKind kind);
@@ -118,6 +122,29 @@ private:
 // to write, not when the client asks.
 void ArmFault(const ScheduledFault& fault, storage::MemoryPageDevice& pages,
               wal::MemoryLogDevice& log);
+
+// **One fault at a chosen device operation** (BS-S3's I/O sweep,
+// `instructions/v3.0.0/workorder-bs-test-hardening.md`): the `n`th operation
+// of `kind` the devices see from the iteration's first op on fails, once,
+// and nothing else is injected. The sweep raises `n` until the fault no
+// longer fires; F5's obligation is asserted at every point, as for a
+// scheduled fault. Spelled `kind:n`.
+//
+// **`kind:n@mount` counts from the reboot's start instead** (BS-A7): the
+// mount's own I/O - recovery reads every page it redoes, which a workload
+// barely does - and its obligation is the restart's: a mount the fault fails
+// leaves a volume the next mount, fault-free, recovers to the oracle; one it
+// does not fail is held to the run's whole contract.
+struct NthFault {
+    FaultKind kind = FaultKind::kPageFailRead;
+    std::uint64_t n = 1;  // 1 is the first
+    bool at_mount = false;
+
+    std::string Describe() const;
+};
+std::optional<NthFault> ParseNthFault(std::string_view text);
+void ArmNthFault(const NthFault& fault, storage::MemoryPageDevice& pages,
+                 wal::MemoryLogDevice& log);
 
 // Injections the two devices have actually consumed. The loop reports it
 // beside the armed count: a schedule whose faults never fire is a schedule

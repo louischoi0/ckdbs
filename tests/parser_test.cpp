@@ -123,16 +123,23 @@ TEST(ParserTest, CreateTableLeavesAnUnknownTrailingWordToTheGarbageCheck) {
     // The loop must stop at a word it does not know rather than consuming
     // it, so the pre-existing refusal is what an unknown word still gets -
     // before this task and after it.
-    auto bare = Parse("CREATE TABLE t (id int64) FOO");
+    const std::string bare_sql = "CREATE TABLE t (id int64) FOO";
+    auto bare = Parse(bare_sql);
     ASSERT_FALSE(bare.ok());
     EXPECT_EQ(bare.status().code(), StatusCode::kInvalidArgument);
 
-    auto after_both = Parse("CREATE TABLE t (id int64) BTREE EXPLICIT FOO");
+    const std::string both_sql = "CREATE TABLE t (id int64) BTREE EXPLICIT FOO";
+    auto after_both = Parse(both_sql);
     ASSERT_FALSE(after_both.ok());
     EXPECT_EQ(after_both.status().code(), StatusCode::kInvalidArgument);
-    // Word for word the same refusal: the two known words are consumed and
-    // the unknown one lands where it always did.
-    EXPECT_EQ(after_both.status().message(), bare.status().message());
+    // Word for word the same refusal but for its byte: the two known words
+    // are consumed and the unknown one lands where it always did.
+    const auto garbage = [](const std::string& sql) {
+        return "unexpected token 'FOO' after end of statement (byte " +
+               std::to_string(sql.find("FOO")) + ")";
+    };
+    EXPECT_EQ(bare.status().message(), garbage(bare_sql));
+    EXPECT_EQ(after_both.status().message(), garbage(both_sql));
 }
 
 TEST(ParserTest, CreateTableRequiresAtLeastOneColumn) {
@@ -355,6 +362,61 @@ TEST(ParserTest, EachAssignmentRecordsItsColumnsByteOffset) {
     ASSERT_EQ(upd->assignments.size(), 2u);
     EXPECT_EQ(upd->assignments[0].byte_offset, sql.find("a = 1"));
     EXPECT_EQ(upd->assignments[1].byte_offset, sql.find("bb = 2"));
+}
+
+// An UPDATE's or DELETE's WHERE is the native grammar's alone (parser-v2.md
+// I10), with no query layer behind it: a form only the query grammar reads
+// is declined `NotImplemented`, naming the byte the native parse stopped at
+// (anti-kdbs QA at 4f175ba9: these were byte-less `InvalidArgument`s).
+TEST(ParserTest, AnExpressionInADmlWhereIsNotImplementedAtItsByte) {
+    struct Case {
+        std::string sql;
+        std::string_view at;  // the token the native parse stopped at
+    };
+    const Case cases[] = {
+        {"UPDATE t SET n = 10 WHERE n + 1 = 3", "+ 1"},
+        {"DELETE FROM t WHERE n + 1 = 3", "+ 1"},
+        {"UPDATE t SET n = 10 WHERE 1 = 0", "0"},
+        {"DELETE FROM t WHERE 1 = 0;", "0;"},
+        {"UPDATE t SET n = 10 WHERE n = 1 + 1 RETURNING id", "+ 1"},
+        {"UPDATE t SET n = 10 FROM u WHERE t.n + 1 = u.m", "+ 1"},
+        {"DELETE FROM t WHERE id IN (SELECT id FROM t WHERE n * 2 = 4)", "* 2"},
+        // A subquery's aggregate is its own, not the WHERE's.
+        {"DELETE FROM t WHERE n + 0 = (SELECT MAX(n) FROM t)", "+ 0"},
+    };
+    for (const Case& c : cases) {
+        auto stmt = Parse(c.sql);
+        ASSERT_FALSE(stmt.ok()) << c.sql;
+        EXPECT_EQ(stmt.status().code(), StatusCode::kNotImplemented) << c.sql;
+        EXPECT_NE(stmt.status().message().find("byte " + std::to_string(c.sql.rfind(c.at))),
+                  std::string::npos)
+            << c.sql << " -> " << stmt.status().message();
+    }
+}
+
+// What neither grammar reads stays the native `InvalidArgument`, and a
+// native `NotImplemented` keeps its own words.
+TEST(ParserTest, AWrongDmlWhereKeepsItsNativeRefusal) {
+    for (const char* sql : {"UPDATE t SET n = 1 WHERE n = = 3", "DELETE FROM t WHERE n +",
+                            "UPDATE t SET n = 1 WHERE id = ?", "DELETE FROM t WHERE n = 1 FOO",
+                            // An aggregate in a WHERE is wrong, not declined.
+                            "DELETE FROM t WHERE SUM(n) = 1",
+                            "UPDATE t SET n = 1 WHERE n = 1 OR COUNT(*) > 0"}) {
+        auto stmt = Parse(sql);
+        ASSERT_FALSE(stmt.ok()) << sql;
+        EXPECT_EQ(stmt.status().code(), StatusCode::kInvalidArgument) << sql;
+        EXPECT_NE(stmt.status().message().find("byte "), std::string::npos)
+            << sql << " -> " << stmt.status().message();
+    }
+    // The refusal is about the WHERE: an error before it is never re-read.
+    auto set = Parse("UPDATE t SET n = WHERE n + 1 = 3");
+    ASSERT_FALSE(set.ok());
+    EXPECT_EQ(set.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(Parse("UPDATE t SET n = 1 WHERE UPPER('a') = 'A'").status().code(),
+              StatusCode::kNotImplemented);
+    EXPECT_EQ(Parse("UPDATE t SET n = 1 WHERE UPPER('a') = 'A'").status().message().find(
+                  "an expression in"),
+              std::string::npos);
 }
 
 TEST(ParserTest, TrailingSemicolonIsOptional) {

@@ -1,0 +1,1 @@
+UPDATE t SET d = CAST(a AS decimal(10, 2))

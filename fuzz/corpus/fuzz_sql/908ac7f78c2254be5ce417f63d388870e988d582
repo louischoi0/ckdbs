@@ -1,0 +1,1 @@
+SELECT t.id, c.w FROM t CROSS JOIN c

@@ -56,13 +56,16 @@ MinimizeOutcome MinimizeFailure(const SimConfig& config, std::size_t max_replays
 
 // The `.sim` case file: the config header, then one line per op with its
 // armed faults, replayable with no seed and no generator.
+// `iteration` is the one the plan was shrunk in: the iteration's own forks
+// of the seed (BS-S4's power cut among them) are drawn from it.
 Status WriteCase(const std::string& path, const SimConfig& config, const SimPlan& plan,
-                 const std::string& signature);
+                 const std::string& signature, std::size_t iteration = 0);
 
 struct LoadedCase {
     SimConfig config;
     SimPlan plan;
     std::string signature;
+    std::size_t iteration = 0;  // `RunPlan`'s; 0 for a file that names none
 };
 
 StatusOr<LoadedCase> ReadCase(const std::string& path);

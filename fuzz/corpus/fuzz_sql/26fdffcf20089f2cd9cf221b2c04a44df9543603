@@ -1,0 +1,1 @@
+SELECT t.id FROM t JOIN u ON t.id = u.id JOIN v ON u.id = v.id

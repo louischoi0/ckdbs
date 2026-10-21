@@ -1109,7 +1109,7 @@ StatusOr<CompareOp> Parser::ParseCompareOp() {
         default:
             return Status::InvalidArgument(
                 "expected comparison operator (=, !=, <, <=, >, >=), got '" +
-                std::string(Describe(tok)) + "'");
+                std::string(Describe(tok)) + "'" + At(tok.byte_offset));
     }
 }
 
@@ -3360,6 +3360,7 @@ StatusOr<DeleteStmt> Parser::ParseDelete() {
     // Depth 0 and the same production UPDATE uses: a DELETE's WHERE is an
     // outermost query block, and a predicate-position subquery in it nests
     // exactly as a SELECT's does.
+    if (IsWord(lexer_.Peek(), "WHERE")) dml_where_byte_ = lexer_.Peek().byte_offset;
     auto where = ParseOptionalWhere(/*depth=*/0);
     if (!where.ok()) return where.status();
     stmt.where = std::move(where.value());
@@ -3574,6 +3575,7 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
     // *value* position (`SET a = (SELECT ...)`), which BJ-S7 built as an
     // uncorrelated scalar subquery. A predicate-position subquery here nests exactly as a
     // SELECT's does.
+    if (IsWord(lexer_.Peek(), "WHERE")) dml_where_byte_ = lexer_.Peek().byte_offset;
     auto where = ParseOptionalWhere(/*depth=*/0);
     if (!where.ok()) return where.status();
     stmt.where = std::move(where.value());
@@ -3584,6 +3586,46 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
 
     ConsumeOptionalSemicolon();
     return stmt;
+}
+
+namespace {
+// An aggregate under `e`, outside a subquery.
+bool HoldsAggregate(const Expr& e) {
+    if (e.kind == Expr::Kind::kAggregate) return true;
+    if (e.lhs != nullptr && HoldsAggregate(*e.lhs)) return true;
+    if (e.kind == Expr::Kind::kSubquery) return false;  // its aggregates are its own
+    if (e.rhs != nullptr && HoldsAggregate(*e.rhs)) return true;
+    for (const auto& a : e.args) {
+        if (HoldsAggregate(*a)) return true;
+    }
+    return false;
+}
+}  // namespace
+
+// An UPDATE's or DELETE's WHERE is the native grammar's alone (parser-v2.md
+// I10): no query layer stands behind it as one does behind a SELECT (I19).
+// A WHERE the native grammar refuses and the query grammar reads - an
+// expression operand, a literal on both sides - is a form understood and
+// declined, so the refusal is `NotImplemented`, carrying the native one for
+// its byte. Asked only on the refusal path, of a second parse from `WHERE`.
+// An aggregate outside a subquery is wrong in any WHERE - a SELECT's query
+// layer refuses it `InvalidArgument` - so it keeps the native refusal.
+Status Parser::DeclineDmlWhereExpression(Status native) const {
+    if (!dml_where_byte_.has_value() || native.code() != StatusCode::kInvalidArgument) {
+        return native;
+    }
+    Parser probe(sql_.substr(*dml_where_byte_));
+    probe.query_mode_ = true;
+    probe.lexer_.Next();  // WHERE
+    auto where = probe.ParseExprOr();
+    if (!where.ok() || HoldsAggregate(*where.value())) return native;
+    Returning returning;
+    if (!probe.ParseReturning(returning).ok()) return native;
+    probe.ConsumeOptionalSemicolon();
+    if (probe.lexer_.Peek().type != TokenType::kEof) return native;
+    return Status::NotImplemented(
+        "an expression in an UPDATE's or DELETE's WHERE is not supported - only a SELECT's "
+        "WHERE reads one; this WHERE compares a column with a value (" + native.message() + ")");
 }
 
 StatusOr<Statement> Parser::Parse() {
@@ -3704,11 +3746,11 @@ StatusOr<Statement> Parser::Parse() {
         stmt = std::move(s.value());
     } else if (IEquals(tok.text, "UPDATE")) {
         auto s = ParseUpdate();
-        if (!s.ok()) return s.status();
+        if (!s.ok()) return DeclineDmlWhereExpression(s.status());
         stmt = std::move(s.value());
     } else if (IEquals(tok.text, "DELETE")) {
         auto s = ParseDelete();
-        if (!s.ok()) return s.status();
+        if (!s.ok()) return DeclineDmlWhereExpression(s.status());
         stmt = std::move(s.value());
     } else if (IEquals(tok.text, "PURGE")) {
         auto s = ParsePurge();
@@ -3749,8 +3791,9 @@ StatusOr<Statement> Parser::Parse() {
     // was already consumed by the statement parser itself).
     const Token& tail = lexer_.Peek();
     if (tail.type != TokenType::kEof) {
-        return Status::InvalidArgument("unexpected token '" + std::string(tail.text) +
-                                        "' after end of statement");
+        return DeclineDmlWhereExpression(Status::InvalidArgument(
+            "unexpected token '" + std::string(tail.text) + "' after end of statement" +
+            At(tail.byte_offset)));
     }
 
     return stmt;

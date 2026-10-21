@@ -1,0 +1,1 @@
+CREATE ASSERTION credit ON orders GROUP BY (user_id) CHECK SUM(amount) < 1000

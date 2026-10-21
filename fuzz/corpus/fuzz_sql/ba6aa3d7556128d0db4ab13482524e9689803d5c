@@ -1,0 +1,1 @@
+SELECT * FROM t WHERE id IN (SELECT a.id FROM u AS a JOIN v AS b ON a.id = b.id)

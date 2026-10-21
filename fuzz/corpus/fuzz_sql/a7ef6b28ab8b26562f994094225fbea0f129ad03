@@ -1,0 +1,1 @@
+INSERT INTO t (id, a) VALUES (NULL, 1)

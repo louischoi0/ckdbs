@@ -141,7 +141,7 @@ TEST(StrictParkRigTest, ACoreServesItsOtherSessionsWhileAStrictCommitAwaitsItsSy
     // would undo a committed transaction.
     std::vector<wal::CheckpointActiveTxn> active{{1, 1}};
     std::atomic<bool> snapped{false};
-    f.rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+    f.rig->Post(1, sched::MakeCoroTask(
         sched::SchedulingGroup::kForeground,
         TakeActiveSnapshot(f.rig->core(1).transactions(), &active, &snapped)));
     ASSERT_TRUE(KickUntil(*f.rig, 1, [&] { return snapped.load(std::memory_order_acquire); }));
@@ -195,6 +195,8 @@ TEST(StrictParkRigTest, AnExplicitStrictCommitParksAndPublishesAtItsSync) {
     f.rig->log_gate().Release();
     ASSERT_TRUE(Within(2000ms, [&] { return strict.done.load() == 3; }));
     EXPECT_TRUE(StartsWith(Response(strict, 2), "COMMIT")) << Response(strict, 2);
+    // On this thread alone once both reactors are joined (the rig's rule).
+    f.rig->Stop();
     EXPECT_EQ(f.rig->core(0).dispatcher().Dispatch("SELECT id FROM t WHERE id = 11").response,
               "id\\n11");
 }

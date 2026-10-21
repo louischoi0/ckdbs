@@ -1,6 +1,7 @@
 #include "kds/storage/data_syncer.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -228,11 +229,14 @@ TEST_F(CheckpointDataSyncTest, TheRunParksWhileItsDataSyncIsHeld) {
 
 TEST_F(CheckpointDataSyncTest, AFailedDataSyncFailsTheRunPublishesNothingAndSticks) {
     store_->data_sync().Start();
+    // The syncer's thread calls the handler after it publishes the failure,
+    // so the run can be seen failed first: the count is what is waited for
+    // (TSan, BS-S1), and it publishes `handed`.
     Status handed;
-    int handler_calls = 0;
+    std::atomic<int> handler_calls{0};
     store_->data_sync().SetFailureHandler([&](const Status& s) {
         handed = s;
-        ++handler_calls;
+        handler_calls.fetch_add(1, std::memory_order_release);
     });
     wal::InMemoryCheckpointAnchor anchor;
     wal::Checkpointer c(*wal_, *target_, txns_, anchor, wal::CheckpointerConfig{.pages_per_step = 4});
@@ -243,9 +247,12 @@ TEST_F(CheckpointDataSyncTest, AFailedDataSyncFailsTheRunPublishesNothingAndStic
     held_->Release(/*fail=*/true);
     ASSERT_TRUE(TurnUntil(reactor_, [&] { return !c.run_in_flight(); }));
 
+    ASSERT_TRUE(
+        TurnUntil(reactor_, [&] { return handler_calls.load(std::memory_order_acquire) > 0; }));
+
     EXPECT_EQ(anchor.publishes(), 0u);
     EXPECT_FALSE(CheckpointCensus::Of(0).last_completed.load());
-    EXPECT_EQ(handler_calls, 1);
+    EXPECT_EQ(handler_calls.load(std::memory_order_acquire), 1);
     EXPECT_FALSE(handed.ok());
     // Sticky (BI-Q3 (a)): the device is healthy again and still nothing
     // reports OK, and nothing more is written back.
@@ -257,7 +264,8 @@ TEST_F(CheckpointDataSyncTest, AFailedDataSyncFailsTheRunPublishesNothingAndStic
     const PageId again[] = {dirty.value().first};
     dirty.value().second = {};
     EXPECT_FALSE(store_->WriteBackPages(again, nullptr).ok());
-    EXPECT_EQ(handler_calls, 1) << "the handler is the first failure's alone";
+    EXPECT_EQ(handler_calls.load(std::memory_order_acquire), 1)
+        << "the handler is the first failure's alone";
 }
 
 TEST_F(CheckpointDataSyncTest, TheAnchorsPageReachesTheDeviceAfterASyncOfEveryOtherPage) {

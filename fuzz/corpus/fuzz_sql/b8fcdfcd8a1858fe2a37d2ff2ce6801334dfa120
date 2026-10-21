@@ -1,0 +1,1 @@
+create assertion a on t group by (x) check count(*) <= 1;

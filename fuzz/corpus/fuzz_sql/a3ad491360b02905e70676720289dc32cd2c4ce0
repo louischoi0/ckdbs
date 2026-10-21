@@ -1,0 +1,1 @@
+UPDATE t SET s = upper(trim(s)) || lpad(s, 8, '0')

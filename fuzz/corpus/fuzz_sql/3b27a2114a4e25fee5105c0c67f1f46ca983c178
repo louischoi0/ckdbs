@@ -1,0 +1,1 @@
+UPDATE t SET a = length(s) + position('x' IN s)

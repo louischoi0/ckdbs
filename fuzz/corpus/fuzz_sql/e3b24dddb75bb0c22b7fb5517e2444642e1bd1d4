@@ -1,0 +1,1 @@
+INSERT INTO t (id, v) SELECT id + 10, w FROM c

@@ -1,0 +1,1 @@
+SELECT id FROM t WHERE v IN (10, 30) OR NOT (s LIKE 'a%')

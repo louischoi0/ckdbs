@@ -1,0 +1,1 @@
+UPDATE t SET v = c.w FROM c WHERE c.pid = t.id

@@ -166,7 +166,7 @@ bool Field(const std::string& field, std::string_view key, std::string& value) {
 }  // namespace
 
 Status WriteCase(const std::string& path, const SimConfig& config, const SimPlan& plan,
-                 const std::string& signature) {
+                 const std::string& signature, std::size_t iteration) {
     std::ofstream out(path);
     if (!out) return Status::IoError("cannot write the case file " + path);
 
@@ -197,7 +197,20 @@ Status WriteCase(const std::string& path, const SimConfig& config, const SimPlan
         << "\tassert-recovery=" << (config.assert_recovery ? 1 : 0)
         // Run-level too (BC-S4): the checkpoints land by op index, so a case
         // replayed at another cadence is another run.
-        << "\tcheckpoint-every=" << config.checkpoint_every << "\n";
+        << "\tcheckpoint-every=" << config.checkpoint_every
+        // BS-S3's one fault: a case shrunk under it replays without it as a
+        // different run, the file saying it fails and not failing.
+        << (config.nth_fault.has_value() ? "\tfail-nth=" + config.nth_fault->Describe()
+                                         : std::string())
+        // BS-S4's cut: a case shrunk under one replays under it, and a file
+        // written before it had none. The cut is drawn from the iteration's
+        // fork of the seed, so the iteration travels with it.
+        << (config.shapes ? "\tshapes=1" : "")
+        << (config.power_cut != PowerCut::kNone
+                ? std::string("\tpower-cut=") + PowerCutName(config.power_cut)
+                : std::string())
+        << (iteration != 0 ? "\titeration=" + std::to_string(iteration) : std::string())
+        << "\n";
 
     for (const SimPlan::Entry& entry : plan.entries) {
         for (const FaultKind kind : entry.faults) {
@@ -264,6 +277,25 @@ StatusOr<LoadedCase> ReadCase(const std::string& path) {
                             "case file: checkpoint-every is not a number");
                     }
                     loaded.config.checkpoint_every = static_cast<std::size_t>(every);
+                } else if (Field(f[i], "iteration=", v)) {
+                    std::uint64_t iteration = 0;
+                    if (!ParseUnsigned(v, iteration)) {
+                        return Status::InvalidArgument("case file: iteration is not a number");
+                    }
+                    loaded.iteration = static_cast<std::size_t>(iteration);
+                } else if (Field(f[i], "shapes=", v)) {
+                    loaded.config.shapes = v == "1";
+                } else if (Field(f[i], "power-cut=", v)) {
+                    const auto cut = ParsePowerCut(v);
+                    if (!cut.has_value()) {
+                        return Status::InvalidArgument("case file: power-cut is not none|log");
+                    }
+                    loaded.config.power_cut = *cut;
+                } else if (Field(f[i], "fail-nth=", v)) {
+                    loaded.config.nth_fault = ParseNthFault(v);
+                    if (!loaded.config.nth_fault.has_value()) {
+                        return Status::InvalidArgument("case file: fail-nth is not KIND:N");
+                    }
                 } else if (Field(f[i], "toggles=", v)) {
                     if (v.size() != 3) {
                         return Status::InvalidArgument("case file: toggles is not three digits");

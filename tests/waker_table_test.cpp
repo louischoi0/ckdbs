@@ -33,9 +33,8 @@ TEST(WakerTableTest, AKickEndsAPeersIdleBlockWithNoTransportAttached) {
     // Long enough that timing out rather than waking is a failure, not a
     // slow pass.
     config.max_idle_block_ms = 5000;
-    Scheduler scheduler(clock, backend.value(), config);
-
     WakerTable table(/*core_count=*/2);
+    Scheduler scheduler(clock, backend.value(), config);
     ASSERT_TRUE(scheduler.AttachWakerTable(&table, /*core_id=*/0).ok());
 
     std::atomic<bool> stop{false};
@@ -86,8 +85,8 @@ TEST(WakerTableTest, AKickToABusyReactorWritesNothing) {
     auto backend = EpollIoBackend::Create();
     ASSERT_TRUE(backend.ok()) << backend.status().message();
     SystemClock clock;
-    Scheduler scheduler(clock, backend.value());
     WakerTable table(/*core_count=*/1);
+    Scheduler scheduler(clock, backend.value());
     ASSERT_TRUE(scheduler.AttachWakerTable(&table, /*core_id=*/0).ok());
 
     for (int i = 0; i < 100; ++i) table.Kick(0);
@@ -106,6 +105,24 @@ TEST(WakerTableTest, AnUnregisteredCoreIsNeverKickedAndIsNotAnError) {
     table.Kick(7);
     EXPECT_EQ(table.kicks(), 0u);
     EXPECT_EQ(table.kicks_skipped(), 0u) << "an unregistered core is not a skipped kick";
+}
+
+TEST(WakerTableTest, AReactorGoneIsUnregisteredSoALaterKickTouchesNothing) {
+    // Another core's destructor runs after this one's: its transaction
+    // manager releases an open transaction's locks and kicks the cores the
+    // waiters were on. The scheduler's own entry has to have gone with it,
+    // or the kick reads a freed flag (BS-S7's history cells under ASan).
+    auto backend = EpollIoBackend::Create();
+    ASSERT_TRUE(backend.ok()) << backend.status().message();
+    SystemClock clock;
+    WakerTable table(/*core_count=*/1);
+    {
+        Scheduler scheduler(clock, backend.value(), SchedulerConfig{});
+        ASSERT_TRUE(scheduler.AttachWakerTable(&table, /*core_id=*/0).ok());
+    }
+    table.Kick(0);
+    EXPECT_EQ(table.kicks(), 0u);
+    EXPECT_EQ(table.kicks_skipped(), 0u) << "the kick read an entry whose reactor is gone";
 }
 
 }  // namespace

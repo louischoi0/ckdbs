@@ -11,6 +11,9 @@
 //     UPDATE and DELETE, each by tuple key and by a non-key predicate   (v2)
 //     BEGIN / COMMIT / ROLLBACK, isolation level drawn per transaction (v2)
 //     CREATE CABIN                                                (v2)
+//     joins, GROUP BY, ORDER BY ... LIMIT, IN subqueries,
+//     CREATE INDEX                                                (BS-S6)
+//     a foreign key pair and an asserted relation, in autocommit  (BS-S6)
 //
 // The generator is engine-independent on purpose: it never reads a reply.
 // Point-lookup keys are guessed from its own insert counter (ids are
@@ -94,6 +97,23 @@ struct Op {
         // only, so x moves no expectation; the reply is accepted or refused
         // for the state the stream left, never anything else.
         kAlterColumn,
+        // **The query shapes F8 found missing** (BS-S6,
+        // `instructions/v3.0.0/workorder-bs-test-hardening.md`), each read
+        // answered by the oracle from whole relations: a join of `table`
+        // and `name` (the second relation's name) on `v`, `table`'s ids in
+        // `[lo, hi]`; `table` grouped by `v`; `table` ordered by `v DESC,
+        // id` to `key` rows; `table`'s rows whose `v` is in `name`'s.
+        kSelectJoin,
+        kSelectAggregate,
+        kSelectOrdered,
+        kSelectSubquery,
+        // A secondary index on `table(v)`, once a relation, outside a
+        // transaction: every later read of `v` may go through it, and no
+        // answer may change for it.
+        kCreateIndex,
+        // The asserted relation's bound (`kAsserted`), declared once, after
+        // the tables.
+        kCreateAssertion,
     };
     Kind kind;
     std::string table;
@@ -117,6 +137,17 @@ struct Op {
 const char* OpKindName(Op::Kind kind);
 std::optional<Op::Kind> ParseOpKind(std::string_view name);
 
+// **The constrained relations** (BS-S6, BS-A12): a foreign key - `kFkChild`'s
+// `v` references `kFkParent` - and an assertion on `kAsserted`, at most
+// `kAssertBound` rows a value of `v`. Their writes come from a stream of
+// their own, in autocommit only, so a refusal is the statement's alone and
+// the oracle can say exactly when one is owed (sim/loop.cpp's
+// `ConstraintRefusal`); no drop, column cycle or purge names them.
+inline constexpr const char* kFkParent = "p0";
+inline constexpr const char* kFkChild = "c0";
+inline constexpr const char* kAsserted = "a0";
+inline constexpr std::size_t kAssertBound = 3;
+
 // The columns every read names, in the order the oracle renders them. Not
 // `*`: a column cycle (`Op::Kind::kAlterColumn`) adds and drops `x`.
 inline constexpr const char* kReadColumns = "id, v, name";
@@ -126,7 +157,9 @@ enum ColumnStep : std::uint64_t { kStepAdd = 0, kStepFill = 1, kStepDrop = 2, kS
 
 class Workload {
 public:
-    Workload(Rng rng, Profile profile);
+    // `shapes`: BS-S6's query shapes and constrained relations, which
+    // `ckdbs-sim` draws by default and the hook's cells do not (BS-A13).
+    Workload(Rng rng, Profile profile, bool shapes = false);
 
     // The next operation. The first calls yield the CREATE TABLEs; after
     // that the mix is seed-driven.
@@ -184,6 +217,14 @@ private:
     // One column cycle step (`Op::Kind::kAlterColumn`), outside a
     // transaction. Drawn from its own stream (`column_rng_`).
     Op AlterColumn();
+    // One of the query shapes (BS-S6), an index only where `ddl` allows.
+    // Drawn from its own stream (`query_rng_`).
+    Op Query(bool ddl);
+    // The constrained relations' DDL, once, after the tables; then their
+    // writes and reads, in autocommit (BS-A12). Their own stream
+    // (`constraint_rng_`).
+    Op ConstrainedDdl();
+    Op ConstrainedOp();
     std::vector<std::size_t> LiveIndices() const;
     void AddReplacement();
 
@@ -207,6 +248,15 @@ private:
     Rng drop_rng_;
     Rng purge_rng_;
     Rng column_rng_;
+    bool shapes_ = false;
+    Rng query_rng_;
+    Rng constraint_rng_;
+    // p0, c0, a0: their own id-guessing counters (`Table::inserted`).
+    std::vector<Table> constrained_;
+    std::size_t constrained_ddl_ = 0;
+    bool child_cabin_ = false;
+    // Relations given their one index (`kCreateIndex`).
+    std::set<std::string> indexed_;
     std::size_t drops_left_ = 2;
     std::vector<std::size_t> txn_drops_;
 };

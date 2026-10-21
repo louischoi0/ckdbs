@@ -69,8 +69,8 @@ sched::Coro RunWhenGo(CommandDispatcher& d, Statement& x) {
 }
 
 void Submit(TwoCoreRig& rig, std::uint32_t core, Statement& x) {
-    rig.core(core).scheduler().Submit(sched::MakeCoroTask(
-        sched::SchedulingGroup::kForeground, RunWhenGo(rig.core(core).dispatcher(), x)));
+    rig.Post(core, sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
+                                       RunWhenGo(rig.core(core).dispatcher(), x)));
 }
 
 // A relation the peer writes. No core owns it since AT-S9; "a peer" in the

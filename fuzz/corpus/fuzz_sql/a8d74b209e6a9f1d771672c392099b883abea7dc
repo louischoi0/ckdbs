@@ -1,0 +1,1 @@
+SELECT * FROM t WHERE id = (SELECT COUNT(*) FROM u)

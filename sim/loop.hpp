@@ -117,6 +117,10 @@ const char* SimModeName(SimMode mode);
 // open-code it, in two places that could drift apart.
 std::optional<SimMode> ParseSimMode(std::string_view name);
 
+enum class PowerCut : std::uint8_t { kNone = 0, kLog = 1 };
+const char* PowerCutName(PowerCut cut);
+std::optional<PowerCut> ParsePowerCut(std::string_view name);
+
 struct SimConfig {
     std::uint64_t seed = 0;
     std::size_t ops = 2000;
@@ -133,6 +137,16 @@ struct SimConfig {
     // branch per op; `fault_rate` is faults per 1000 ops.
     FaultProfile faults = FaultProfile::kNone;
     std::uint32_t fault_rate = 20;
+    // One fault at the Nth operation of a kind instead of a schedule
+    // (BS-S3, `sim/faults.hpp`'s `NthFault`). In the workload, the loop's
+    // fault contract is on as it is under `faults`; at the mount, the
+    // workload runs fault-free and is held to the whole contract.
+    std::optional<NthFault> nth_fault;
+
+    // The loop's widened contract: a schedule, or one fault in the workload.
+    bool faults_on() const {
+        return faults != FaultProfile::kNone || (nth_fault.has_value() && !nth_fault->at_mount);
+    }
 
     // The advisory features (SIM06). Unset draws them per iteration from
     // the seed, which is the production shape of this harness; a value
@@ -144,6 +158,20 @@ struct SimConfig {
     // can be shown to fail, which since recovery landed is the only way to
     // show it at all — no seed loses an acknowledged row any more.
     bool skip_recovery = false;
+
+    // **The power cut a crash ends in** (BS-S4): `kNone` drops every
+    // unsynced byte of both devices, as the hook's cells always have; `kLog`
+    // cuts the log inside its unsynced run at a seed-drawn byte, and is what
+    // `ckdbs-sim` defaults to (BS-A8). The page half is not a cut between
+    // statements - a store syncs as it writes back, so none would meet an
+    // unsynced page - but the `power-loss-at-page-write` Nth fault (BS-A9).
+    PowerCut power_cut = PowerCut::kNone;
+
+    // **BS-S6's shapes** in the workload - joins, groups, orders, subqueries,
+    // indexes, the foreign key and assertion relations (`Workload`'s
+    // `shapes`). Off for the hook's cells, which keep the stream they were
+    // written against (§6.1); `ckdbs-sim` turns it on (BS-A13).
+    bool shapes = false;
 
     // **A checkpoint every this many ops** (BC-S4), the server's cadence
     // tick, so the log is recycled mid-run and the crash is recovered from a
@@ -230,6 +258,27 @@ struct SimVerdict {
     // ops there and was crashed and restarted, as an operator would, so the
     // recovery after a failed log write or sync is what it checked.
     std::size_t fail_stops = 0;
+    // Mounts an Nth fault failed (BS-A7), each followed by a fault-free mount
+    // that recovered.
+    std::size_t mounts_refused = 0;
+    // BS-S6's shapes: reads answered from whole relations, and indexes made.
+    std::size_t derived_reads = 0;
+    std::size_t indexes_created = 0;
+    // The constrained relations' writes (BS-A12): refused as the oracle said,
+    // and admitted as it said.
+    std::size_t constraint_refusals = 0;
+    std::size_t constraint_admissions = 0;
+    // Power cuts (BS-S4): crashes that cut the log inside its unsynced run;
+    // power losses at a page write, the unsynced pages they met and kept,
+    // the ones that tore a page, and torn pages the restart refused - at the
+    // mount, the reclaim or the integrity sweep - rather than served.
+    std::size_t log_cuts = 0;
+    std::size_t page_cuts = 0;
+    std::size_t unsynced_pages = 0;  // pending page writes the cuts met
+    std::size_t kept_pages = 0;      // of them, persisted whole
+    std::size_t in_flight_pages = 0; // of them, a power loss's in-flight run
+    std::size_t tears = 0;
+    std::size_t tears_refused = 0;
 
     std::string Summary(const SimConfig& config) const;
 
