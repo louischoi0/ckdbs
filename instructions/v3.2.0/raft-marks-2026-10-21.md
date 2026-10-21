@@ -47,3 +47,12 @@ what the word settles and what it does not.
 | **Mark** | **CG written** (`workorder-cg-on-conflict-do-update.md`) on `worktree-pending-on-conflict-do-update` from `722006ec` (`v3.3.0-104-g722006ec`), **exploratory**: CG-S0 checks whether an upsert fits as one more arm of the existing write paths (CG-R1..R4) and ends in build, narrow or drop. The `docs/pending/` entry W1 asked for was written on the work branch and is withdrawn by W2 before it reached `main`; the order carries its content. **Pushed on W2**, documents only, with the pre-push hook skipped |
 | **Does not settle** | CG's opening; CG-Q0..Q7, each with CLA's proposal beside it and none marked; a tag, a version |
 | **Recorded at** | this file; the order's header; this file's and the order's rows in `instructions/v3.2.0/index.md` |
+
+## 6. Version 3.4.0 tagged
+
+| | |
+|---|---|
+| **Word** | W4 (CF's session): *"and tag 3.4.0"* - directly after CF's W3 (§4) |
+| **Mark** | **`v3.4.0`**, an annotated tag on `main` at `9fdf3351`, then the head of `origin/main`. Its message states what has been built since `v3.3.0` (CD, BO, CE, A1 stage 2a, BS S1-S8, the defect fixes), what was measured, and the gaps that bound it. The tagged build inputs are identical to `5f1d1307`, where the full Debug suite ran 4238/4238, so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.0` (`5404a95b`, pushed with `--no-verify`) |
+| **Does not settle** | a later version; CF-O-Q1..Q14 |
+| **Recorded at** | this file; the tag message; CLAUDE.md's Version Management |
