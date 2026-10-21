@@ -393,6 +393,78 @@ TEST_F(AssertionRecoverTest, RecordsWithNoSnapshotAreCountedAndTheAssertionStays
     EXPECT_EQ(rebuilt.group_count(), 0u) << "nothing may be folded onto a base that does not exist";
 }
 
+// A create's build entries all precede its own base, and a crash before the
+// cabin page is written back loses them from it. Their records restore them -
+// page half only, the base already counts them - so the base's walk links
+// them and a later write's entry lands at its own index. Skipped, that entry
+// was "past the append point" and the pass failed for every assertion.
+TEST_F(AssertionRecoverTest, ABuildsEntriesLostWithTheirPageAreWrittenBackBeforeTheBase) {
+    BoundCabin live(BoundAggregate::kCount, /*bound=*/10);
+    for (std::uint64_t tuple_key : {1, 2}) {
+        const std::uint16_t index = Write(live, Key("x"), 1, tuple_key);
+        LogEntry(index, Key("x"), live.Find(Key("x"))->group_id);
+    }
+    for (const std::vector<std::byte>& chunk : SnapshotChunks(live)) AppendChunk(chunk);
+    const std::uint16_t after = Write(live, Key("y"), 1, /*tuple_key=*/3);
+    LogEntry(after, Key("y"), live.Find(Key("y"))->group_id);
+
+    // The crash: the page as its birth left it on the device.
+    {
+        auto page = store_.Get(kCabinPage);
+        ASSERT_TRUE(page.ok());
+        ASSERT_TRUE(BoundCabinPage::Format(page.value().bytes()).ok());
+    }
+
+    BoundCabin rebuilt(BoundAggregate::kCount, /*bound=*/10);
+    auto report = Recover(/*from_lsn=*/0, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_TRUE(report.value().assertions[0].recovered);
+    EXPECT_EQ(report.value().records_without_a_base, 2u);
+    EXPECT_EQ(report.value().assertions[0].entries_attached, 2u);
+    EXPECT_EQ(report.value().assertions[0].records_folded, 1u);
+    EXPECT_EQ(rebuilt.Find(Key("x"))->count, 2) << "the base's count, not the base's plus the build's";
+    EXPECT_EQ(rebuilt.Find(Key("y"))->count, 1);
+
+    auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
+        auto page = store_.Get(page_id);
+        if (!page.ok()) return page.status();
+        auto view = BoundCabinPage::Open(page.value().bytes());
+        if (!view.ok()) return view.status();
+        return view.value().Read(index);
+    };
+    EXPECT_TRUE(rebuilt.VerifyAgainstEntries(read).ok());
+}
+
+// `DropAssertion` logs its record before it retires the row, so a retire that
+// fails leaves the record in the stream and the assertion enforcing. The
+// catalog still lists it, and its records after the drop - either side of the
+// base - are folded: skipped, the directory comes back under-counted and
+// admits what the assertion forbids.
+TEST_F(AssertionRecoverTest, ADropRecordOfAnAssertionTheCatalogListsIsNotFolded) {
+    BoundCabin live(BoundAggregate::kCount, /*bound=*/10);
+    const auto log_drop = [this] {
+        std::array<std::byte, wal::kAssertDropPayloadSize> payload{};
+        ASSERT_TRUE(wal::EncodeAssertDrop(payload, wal::AssertDropPayload{kAssertionId}).ok());
+        ASSERT_TRUE(
+            wal_->Append({wal::RecordType::kAssertDrop, wal::kNoTxnId, kCabinPage}, payload).ok());
+    };
+    const std::uint16_t first = Write(live, Key("x"), 1, /*tuple_key=*/1);
+    LogEntry(first, Key("x"), live.Find(Key("x"))->group_id);
+    log_drop();
+    for (const std::vector<std::byte>& chunk : SnapshotChunks(live)) AppendChunk(chunk);
+    log_drop();
+    const std::uint16_t after = Write(live, Key("x"), 1, /*tuple_key=*/2);
+    LogEntry(after, Key("x"), live.Find(Key("x"))->group_id);
+
+    BoundCabin rebuilt(BoundAggregate::kCount, /*bound=*/10);
+    auto report = Recover(/*from_lsn=*/0, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_TRUE(report.value().assertions[0].recovered);
+    EXPECT_EQ(report.value().assertions[0].records_folded, 1u);
+    ASSERT_NE(rebuilt.Find(Key("x")), nullptr);
+    EXPECT_EQ(rebuilt.Find(Key("x"))->count, 2);
+}
+
 TEST_F(AssertionRecoverTest, AnEmptyCabinStillGetsASnapshotSoItsAbsenceMeansSomething) {
     // A cabin with no groups is recovered *and* empty, which must not read the
     // same as a cabin whose snapshot is missing - the first can enforce, the

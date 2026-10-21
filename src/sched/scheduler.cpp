@@ -25,6 +25,10 @@ Scheduler::Scheduler(const Clock& clock, IoBackend& io_backend, SchedulerConfig 
     }
 }
 
+Scheduler::~Scheduler() {
+    if (registered_in_ != nullptr) registered_in_->Unregister(core_id_, &*waker_);
+}
+
 void Scheduler::Submit(TaskPtr task) {
     int idx = SchedulingGroupIndex(task->group());
     ready_queues_[static_cast<std::size_t>(idx)].push_back(std::move(task));
@@ -83,6 +87,7 @@ Status Scheduler::AttachWakerTable(WakeRegistry* table, std::uint32_t core_id) {
     // worker exists, which is where every other per-core wiring in this
     // engine is done.
     table->Register(core_id_, &sleeping_, &*waker_);
+    registered_in_ = table;
     return Status::OK();
 }
 

@@ -24,17 +24,19 @@
 // silently becomes a correctness setting is the wrong coupling to ship
 // (`assertion.md` §7).
 //
-// The anchor already names the last checkpoint, so this scans from
-// `checkpoint_lsn` - a **narrower** range than redo's, and one where the first
-// `ASSERT_SNAPSHOT` per assertion is by construction that assertion's base.
-// That is what makes this a single forward pass with nothing buffered: a second
-// scan or a record buffer would both be ways of finding out something the anchor
-// already said.
+// The scan starts at the anchor's `redo_start_lsn`, redo's own range, so
+// records can precede an assertion's base (step 1), and the first whole
+// `ASSERT_SNAPSHOT` run per assertion is its base. One forward pass with
+// nothing buffered: a second scan or a record buffer would both be ways of
+// finding out something the anchor already said.
 //
 // ---- The order, per cabin ------------------------------------------------
 //
-//   1. **Redo has already run**, so every entry page is on the store. This pass
-//      never writes a page.
+//   1. **Redo has already run**, so every entry page exists - but redo leaves
+//      every `ASSERT_*` record to this pass, so the pass writes their entries:
+//      a record before the base has its page half applied and its directory
+//      half skipped (`ReplayHalves::kPageOnly`). A build's entries are all
+//      before its create's base.
 //   2. `ASSERT_SNAPSHOT` restores the group headers - `{group_id, key, count,
 //      sum}`, the aggregates as of the checkpoint, with empty entry lists.
 //   3. The cabin's **own pages** are walked and each entry attached to the
@@ -42,12 +44,14 @@
 //      persist, and its cost is the assertion's entry count rather than the
 //      relation's row count - which is what "no rebuild scan" means in §7.
 //   4. `ASSERT_*` records after the snapshot are folded through
-//      `ReplayAssertionRecord`, unchanged - it was written correct for whatever
-//      range a caller feeds it, and this is the range.
+//      `ReplayAssertionRecord`, both halves - it was written correct for
+//      whatever range a caller feeds it, and this is the range. An
+//      `ASSERT_DROP` is not folded: the caller's list is the catalog after
+//      undo, so an id on it was not dropped.
 //
 // ---- What it refuses ----------------------------------------------------
 //
-// An assertion whose records appear with **no snapshot** before them is not
+// An assertion with **no whole snapshot run** in range is not
 // recovered and is reported, not guessed at: without a base, folding from
 // mid-stream would produce aggregates that are too small, and an admission
 // check built on those admits writes that violate the assertion. Reported per
@@ -82,9 +86,8 @@ struct AssertionRecoveryResult {
 struct AssertionRecoveryReport {
     std::vector<AssertionRecoveryResult> assertions;
 
-    // Records that named an assertion no snapshot had introduced. Counted
-    // rather than folded - see the header. A nonzero value with an otherwise
-    // successful mount is the honest "this assertion cannot enforce yet".
+    // Records that named an assertion no snapshot had introduced yet: their
+    // page half applied, their directory half not folded - see the header.
     std::uint64_t records_without_a_base = 0;
 };
 
