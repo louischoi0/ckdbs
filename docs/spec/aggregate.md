@@ -24,7 +24,7 @@ admits and nobody built. Each refusal below names its code.
 | AG7 | HAVING | Parsed for shape — `HAVING <agg or column> <op> <literal> [AND …]`, `IS [NOT] NULL` admitted, an expression, subquery, column or second aggregate on the right side refused at parse — and the statement is then **refused at compile with `NotImplemented`** and the clause's position. A `HAVING` makes a statement aggregated exactly as a `GROUP BY` does |
 | AG8 | Subquery aggregates | **J2 stands**: a subquery containing GROUP BY or an aggregate answers `NotImplemented` with the position of whichever half made the block aggregated — a fold inside a sub-chain puts an aggregation boundary where the execution model has none |
 | AG9 | Grouping targets | **Column references only** (`col`, `rel.col`). The grammar has no expressions, and GROUP BY does not grow one; a `(` after a GROUP BY name is `NotImplemented` |
-| AG10 | Waystone / Cabin / patterns | **Unchanged, and free.** AG1 makes the chain identical, so recording, replay, Cabin probes, access statistics and pattern registration hold for an aggregated statement exactly as for the same statement without the fold. `IsTrailReplayable` and `HasReplayableStep` do not move |
+| AG10 | Waystone / Cabin / patterns | **Unchanged, and free.** AG1 makes the chain identical, so recording, replay, Cabin probes, access statistics and the Waystone opt-in hold for an aggregated statement exactly as for the same statement without the fold. `IsTrailReplayable` and `HasReplayableStep` do not move |
 | AG11 | Memory bound | **A cap that refuses, never truncates or spills** — the same discipline Cabin's caps and J2's no-slow-path rule already state. Config keys `aggregate_max_groups` (default 65,536) and `aggregate_max_distinct` (total DISTINCT entries per statement, default 1,048,576); exceeding either fails the statement with a truthful error naming the key |
 | AG12 | Catalog views | Aggregation over `sys.*` is refused: a view's rows come from the catalog's readers, not a chain, so there is nothing for AG1's fold to wrap |
 | AG13 | DISTINCT | Merged into AG2, semantics in §3.2 |
@@ -273,8 +273,8 @@ like `durability`.
 - **Cabin**: a `kCabinProbe` step under a fold serves exactly as under a
   stream; the residual re-check the fold's rows passed through is the same
   one §4 of `cabin.md` requires.
-- **Patterns**: an aggregated statement fingerprints and registers as any
-  other does.
+- **Patterns**: an aggregated statement fingerprints as any other does,
+  and can be opted in with `WAYSTONE ON` as any other can.
 - **Class / access stats**: AG14 — unchanged; `RecordChainAccess` sees the
   same chain.
 - **Cross-core**: nothing crosses. An aggregated statement runs, whole,

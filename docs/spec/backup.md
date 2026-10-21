@@ -63,9 +63,13 @@ so an interrupted layout never mounts from the copied anchor. Then every
 user page the copied maps call allocated whose bytes are all zero is given
 back (`ForgetUnwrittenPages`): a logged one is recreated by its record, an
 unlogged one was never written. At the restore's mount - as at every mount
-(`waystone-concpets.md`) - every Waystone root is cleared and
-`sys.access_stats` emptied in place (`DiscardAdvisoryState`), so nothing
-unlogged can reach a page given back (invariant 8, CR6).
+(`waystone-concpets.md` §4c) - every Waystone root is cleared, each opted
+pattern is given a fresh empty directory, and `sys.access_stats` is emptied
+in place (`DiscardAdvisoryState`), so nothing unlogged can reach a page
+given back (invariant 8, CR6). **The opt-in survives a restore and the
+trails do not**: bit 0 of a `sys.patterns` row is logged and replayed like
+any catalog write, while every trail is unlogged and discarded
+(`BackupControlTest.ARestoreKeepsAWaystoneOptInAndNotItsTrail`).
 
 **B7 - The stop is where the backup's log ends.** BACKUP_END is appended and
 its segment sealed in one hold of the stream latch (`WalStream::AppendAndSeal`),
@@ -116,7 +120,10 @@ history (BR-R10).
 
 **B13 - Fail-closed** (BR-Q2 (a)): while archiving fails and the WAL
 filesystem has fewer than 4 segments free, `INSERT`, `UPDATE`, `DELETE`,
-`CREATE`, `DROP`, `ALTER` and `PURGE` are refused by name.
+`CREATE`, `DROP`, `ALTER`, `PURGE`, `REINDEX` and `WAYSTONE` are refused
+by name, `ResourceExhausted` at byte 0. `WAYSTONE` is on the list because
+`ON` and `OFF` write a `sys.patterns` row (CF-S1b); no `SELECT` writes the
+log, so reads go on.
 
 ## 4. Point-in-time recovery
 

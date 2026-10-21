@@ -256,17 +256,24 @@ public:
         // TABLE` naming no key-mode word meant, and there is no longer a
         // mode to decide (docs/spec/heap-and-tuple.md §4.1).
 
-        // Whether a successful SELECT records a Waystone trail
-        // (`waystone_recording`, default on).
+        // Whether a successful SELECT of an **opted** shape records a
+        // Waystone trail (`waystone_recording`, default on). Since CF-S1b
+        // nothing records until an operator opts a shape in with `WAYSTONE
+        // ON`, so this is the instance's ceiling over the opted shapes, not
+        // a switch over every repeated SELECT; the boot log line and
+        // `sys.meta`'s `waystone` section print it beside the opted count.
+        // Off, an opt-in is accepted and gets no directory, and the mount
+        // makes one once it is on.
         //
         // Off is a valid production setting, not a debug switch: recording
-        // costs a page write per newly-hot instance. It is also the switch
-        // that makes "results are identical either way" a thing an operator
-        // can check on their own data.
+        // costs a page write per newly-hot opted instance. It is also the
+        // switch that makes "results are identical either way" a thing an
+        // operator can check on their own data.
         bool waystone_recording = true;
 
-        // Whether a SELECT may be served from a trail a previous execution
-        // recorded (`waystone_replay`, default on). This is the half that
+        // Whether an opted SELECT may be served from a trail a previous
+        // execution recorded (`waystone_replay`, default on; the same
+        // ceiling over the opted shapes). This is the half that
         // *repays* recording - and the first Waystone code that can be
         // asked to produce a row, which is why the advisory-contract suite
         // compares it against every other configuration byte for byte.

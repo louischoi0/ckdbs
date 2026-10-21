@@ -946,7 +946,8 @@ public:
     // execution. It went with BL-S4's ruling 1 (2026-10-12, rows.hpp): it
     // was a logged catalog write on the read path, so a repeated point
     // `SELECT` waited on the one WAL behind any bulk writer. The two fields
-    // stay on disk, written 0 at registration and advanced by nothing.
+    // stay on disk, written 0 at `WAYSTONE ON`'s insert and advanced by
+    // nothing.
 
     // Every sys.patterns row, in page order.
     //

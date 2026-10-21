@@ -723,7 +723,7 @@ Refused, each naming the reason:
 ## 12. Catalog, format and WAL
 
 > **IX12 — `SysIndexRow` is 116 bytes.** It arrived with superblock 12; the
-> superblock now refuses every version but the current one (30), so every mountable volume
+> superblock now refuses every version but the current one (33), so every mountable volume
 > carries it. Its `flags` byte carries `kIndexFlagUnique` since 27 (IX11).
 
 The row (`include/kds/catalog/rows.hpp`):

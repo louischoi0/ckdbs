@@ -150,8 +150,9 @@ the same name elsewhere changes what they govern.
 
 **Advisory structures are untouched** (NS2): a statement's fingerprint is
 its text, so `SELECT * FROM t` under two `USE`s is one pattern over two
-relations. That shares a `sys.patterns` row and costs a miss, never an
-answer: every trail entry carries its `rel_oid` and replay skips one that is
+relations. That shares a `sys.patterns` row - and so one `WAYSTONE ON`
+opts the text in under every namespace (`waystone-concpets.md` §4d) - and
+costs a miss, never an answer: every trail entry carries its `rel_oid` and replay skips one that is
 not the step's (`exec/trail_replay.cpp`).
 
 ## NS6 — Uniqueness: `(namespace, name)`

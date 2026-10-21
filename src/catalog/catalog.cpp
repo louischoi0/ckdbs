@@ -1720,8 +1720,9 @@ Status Catalog::CheckNamespaceEmpty(Oid namespace_oid, std::uint64_t own_trx_id)
 
 // ALTER TABLE's catalog half (docs/spec/alter.md, workplan ALT02). Both
 // renames are one fixed-width Name rewrite - MutatePatternRow's shape -
-// followed by BumpVersion(): a name is read by resolution itself, so the
-// in-place-cache exception the pattern setters use does not apply.
+// followed by BumpVersion(): a name is read by resolution itself. (The
+// pattern setters once updated the cache in place instead; since CF-S1b
+// `SetPatternWaystone` bumps, and the mount's renewal drops the cache.)
 namespace {
 
 Status CheckRenameName(std::string_view what, std::string_view name) {

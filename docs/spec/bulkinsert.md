@@ -113,10 +113,11 @@ row.
 
 The insert template hashes the relation and the shape, never the row count:
 `INSERT INTO t VALUES (1, 'a')` and a 500-row insert into `t` are the same
-pattern. Two reasons. Fragmenting `sys.patterns` by row count would turn one
-workload fact into hundreds of rows of noise; and inserts have no trail
-replay to begin with — the fingerprint's only consumer here is workload
-statistics, which want the aggregate. The existing 1-row fingerprint bytes
+pattern. An `INSERT` never reaches `sys.patterns`, which holds only the
+`SELECT` shapes `WAYSTONE ON` opted (`waystone-concpets.md` §4a), and
+inserts have no trail replay to begin with: the fingerprint's only consumer
+here is workload statistics, which want one shape per relation rather than
+one per row count. The existing 1-row fingerprint bytes
 do not change; `tests/bulk_insert_test.cpp` pins it.
 
 **A column-listed statement** (BW-S6, BW-Q12.10 of
@@ -186,8 +187,8 @@ stops. Backpressure propagates end to end with no special machinery.
 
 Skipped: the lexer, the parser, per-statement dispatch, text→value
 decoding, per-row round trips, fingerprinting (nothing parsed, nothing to
-fingerprint — a bulk load is not workload evidence and must not pollute
-`sys.patterns`).
+fingerprint — a bulk load is not workload evidence, and an `INSERT`
+never reaches `sys.patterns` in any case).
 
 Not skipped — BI2 verbatim: each chunk is decoded into a multi-row
 `InsertStmt` and executed through T1's already-parsed half

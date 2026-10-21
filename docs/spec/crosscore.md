@@ -23,7 +23,7 @@ default with what is shared declared, deterministic testability).
 | CC5 | Cancellation & errors | **Nothing cross-core to cancel**: a statement's errors are its own core's, framed by its session (§7) |
 | CC6 | Scheduling | **Nothing crosses to be scheduled**: a kick carries no group, and the woken core's own parked task runs in its own group |
 | CC7 | Page placement | **No page belongs to a core** (AR0-5 D17). `sys.tables.owner_core`'s four bytes are a reserved word - written 0, never read - and nothing names a core on disk, so the core count is not pinned: a mount at another `cores` records it. Every core reads and writes every page under the page latch (CC11, `page.md` §6) |
-| CC8 | Relation structure | **A relation is one structure headed by `sys.tables.desc_page_id`** - one clustered btree for a user relation, one catalog chain for a system relation - and nothing divides it by tuple key (`instructions/v3.0.0/raft-marks-2026-09-30.md` §9). A volume at any superblock version but the current one (32, `server/superblock.hpp`) is refused at mount |
+| CC8 | Relation structure | **A relation is one structure headed by `sys.tables.desc_page_id`** - one clustered btree for a user relation, one catalog chain for a system relation - and nothing divides it by tuple key (`instructions/v3.0.0/raft-marks-2026-09-30.md` §9). A volume at any superblock version but the current one (33, `server/superblock.hpp`) is refused at mount |
 | CC9 | Reserved catalog ids | Root page 10 and oid 133 are unused and not reissued (page 15, `sys.ranges`' root once, is `sys.cabin_exprs`' since AQ). **Ids 17..127 are unused**, left for a future bootstrap root: no catalog chain grows into them since superblock 31, and `kFirstUserPageId` stays 128 (D8 of the catalog page ceiling, under the operator's ruling of 2026-10-18, "$!recommended") |
 | CC10 | Refused keys | `range_size_ids`, `placement` and `peer_listeners` are refused by name at boot, as is `physical_optimizer` (retired since BZ, `physical-optimizer.md` §8) (`src/server/expeditor.cpp`) |
 | CC11 | Shared-structure access | **Every core reads and writes with the same authority** (AR0-5 §0). **Which transactions are running** is every core's to read since AX-S1: each core publishes its own into an in-flight table no other core writes, so `IsInFlight` is the instance's answer (`txn.md` §4.1, `rules.md` §3). What serialises the superblock, the free map and the catalog pages is named where each is written: the **page latch** across cores for the bytes of any page (`page.md` §6), and within one core the rule that no task parks under a page span, which is what makes a catalog row's read-modify-write atomic (`catalog.md` CT5, `AdmitExplicitRowId`'s hook); the free map's own `map_latch_` for allocation (AM-S3, `page.md` §5); the **schema version word** for every core's memo of the catalog (`catalog.md` CT2); and page 0's persisted transaction-id ceiling, which every core's `TrxIdSequence::Carve` reads and raises in one step under the superblock latch (`txn.md` §4.2). A relation's row-id mark is a catalog row like any other, bumped in place under its page latch by whichever core issues (`heap-and-tuple.md` §4.1a). DDL runs where the session is, under the DDL's own relation `X` (`txn.md` §5) where it has one; a name-creating DDL - `CREATE TABLE`, `RENAME TO`, `CREATE NAMESPACE`, `RENAME COLUMN`, an index's or an assertion's name - checks and writes the name under one hold of its catalog relation's root page since AT-S17 (`catalog.md` CT7). A page faulted on one core is served from the frame another loaded (`eviction.md`). |
@@ -40,8 +40,10 @@ and executes every step of it itself, reading every page through the
 instance's one frame table (CC7, CC11). There is **one path**.
 
 Trail and statistics recording is the executing core's: a core writes
-`sys.access_stats` and `sys.patterns` itself, under those relations' root
-page latches (CC13).
+`sys.access_stats` itself, under its root page latch (CC13), and records
+an opted pattern's trail itself. No `SELECT` writes `sys.patterns` since
+CF-S1b; `WAYSTONE ON`/`OFF` writes it where its session is, under page 9's
+hold (`waystone-concpets.md` §4a).
 
 ## 3. Messages
 

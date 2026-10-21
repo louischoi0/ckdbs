@@ -192,8 +192,9 @@ namespace kds::parser {
 // version-2 rows `fetch_id`s, and a reader that took a version-1 row by
 // its hash would be comparing a fetch_id with a pattern_id. The bump makes
 // those rows another version's, so `GetSysPatternRow` hides them and
-// `SHOW PATTERNS` labels them stale, rather than leaving them current and
-// mislabelled.
+// `SHOW PATTERNS` lists them with their old `fingerprint_version` and
+// `waystone` 0 - an opt-in made under another version lapses (CF-S1b) -
+// rather than leaving them current and mislabelled.
 //
 // Never 0. A `sys.patterns` row read out of a zeroed or never-written page
 // decodes to version 0, and that must not be mistaken for a current row -

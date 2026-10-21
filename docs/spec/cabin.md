@@ -535,9 +535,10 @@ covers half a rule leaves the rule broken.
 Distinct trust classes, cooperative operation; none replaces another:
 
 - **Patterns nominate.** Which columns are worth observing is not
-  guessed from raw traffic: an auto-registered pattern's shape names the
-  filtered columns, and the observed shape is the only source — there is
-  no user-declared pattern.
+  guessed from raw traffic: a statement's fingerprinted shape names the
+  filtered columns - counted by the optimizer whether or not the shape is
+  opted in to Waystone (`waystone-concpets.md` §4b) - and the observed shape
+  is the only source; there is no user-declared pattern.
 - **Waystone does not feed promotion.** A trail header's `use_count` is
   written 0 and advanced by nothing, and §8.1's controller reads its own
   three signals (`physical-optimizer.md` PO2); the recording scan measures

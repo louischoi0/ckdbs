@@ -551,6 +551,35 @@ the fold below).
   (`ctest -j8 -LE bs-nightly`).
 - **Overhead:** not measured; it is measured at the milestone's close.
 
+**CF-S1d: documents - written.** One writer, two read-only verifiers
+(one checking truth against the code, one checking completeness of the
+stale text), then one applier.
+
+- **Specs:** `waystone-concpets.md` is rewritten around the opt-in, with
+  new §4a-§4e. Also brought to Branch O:
+  - `pattern-tracking-levels.md`;
+  - `create-pattern-user-defined-patterns-v1.md` §1, §2 and §4.1;
+  - `protocol.md`, `sys-views.md`, `backup.md`, `heap-and-tuple.md`,
+    `parser-v2.md` J5, `catalog.md`;
+  - `wal.md:39`, now matching `page.md` §1;
+  - `alter.md`: a rename now ends an opt-in;
+  - `cabin.md`, `aggregate.md`, `crosscore.md`, `namespace.md`,
+    `bulkinsert.md` and `index.md`;
+  - `rules.md` and `keystoneid-k0-findings.md`.
+- **Manual and config:** `manual/sql/sql.md` gains a `WAYSTONE` section.
+  `manual/server/server.md`, `manual/server/backup-restore.md`,
+  `kds.conf.sample` and `README.md` are updated.
+- **Known gaps:** `known-gaps.md` is updated per §8.6, with a new section
+  for the Waystone opt-in. Each entry is verified at `46c632aa`.
+- **Stale text:** CF-O-Q14's list is cleared, and the bench drivers' text
+  under `tools/` is corrected.
+- **Divergence carried into the documents:** §8.3's `TxnConflict`
+  bind-borrow row is left out, because the code cannot produce it (S1b
+  divergence 1).
+- **Verification:** 17 findings, all applied.
+- **Suite:** not re-run. Only comments changed in C++, as `git diff -U0`
+  shows; the build inputs are those of `46c632aa`.
+
 ---
 
 ## 8. Branch O - the amendment (CF-S1)

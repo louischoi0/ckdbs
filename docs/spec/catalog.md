@@ -224,8 +224,10 @@ answering whichever it met first. Every *new* row of a catalog relation enters i
 so a writer holding the root is the only one adding a row; an in-place
 rewrite (a rename, a retype, a rollback's compensation by page and slot)
 does not pass through it, and what keeps those from admitting a name is
-what the check asks, below, not the latch. `RegisterPattern` (page 9) and
-`RecordAccess` (page 11) were the shape, for their admissions, at AT-S7.
+what the check asks, below, not the latch. `RecordAccess` (page 11) and
+the pattern registration of the time (page 9) were the shape, for their
+admissions, at AT-S7; since CF-S1b page 9's hold is `SetPatternWaystone`'s,
+the one inserter of a `sys.patterns` row (`waystone-concpets.md` §4a).
 
 | write | relation (root page) | held across |
 |---|---|---|
@@ -314,8 +316,8 @@ var-heap chain — never another catalog relation's page; `InsertAssertion`'s
 `OpenAssertions` under page 14 is a cache hit, filled before the hold
 (`InsertAssertion`, `assertion_catalog.cpp`). That is why the oids and ids above are
 issued before their holds: `GenerateUserOid`'s first use seeds from
-`sys.columns`, and `AllocateRowId` writes `sys.tables`. `RegisterPattern`,
-outside this table, issues under page 9 and so takes page 7 under it;
+`sys.columns`, and `AllocateRowId` writes `sys.tables`. `SetPatternWaystone`
+(`WAYSTONE ON`, CF-S1b), outside this table, issues under page 9 and so takes page 7 under it;
 nothing takes page 9 under page 7 (`rules.md` §3's catalog row).
 
 **A `sys.tables` chain page is inner to every user relation page**

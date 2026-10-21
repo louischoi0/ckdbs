@@ -500,17 +500,18 @@ public:
     //                            store back to stable storage.
     //   SHOW META             -> superblock stats, one line
     //   SHOW TABLES           -> space-separated table names
-    //   SHOW PATTERNS         -> "patterns=<n>", then one "\n"-escaped
-    //                            section per sys.patterns row, identified
-    //                            by its hex fetch_id and carrying
-    //                            `origin=` and `pinned=`, both of which
-    //                            read `auto` / `no` on every row since
-    //                            declared patterns were withdrawn, and
-    //                            `uses=` / `last_seen=`, which read 0
-    //                            since BL-S4's ruling 1 deleted their
-    //                            writer (rows.hpp). Rows from older
-    //                            fingerprint revisions are listed too,
-    //                            marked `stale=v<n>`.
+    //   SHOW PATTERNS         -> `SELECT * FROM sys.patterns` (the show
+    //                            sugar): one row per shape ever opted in
+    //                            with `WAYSTONE ON`, its `fetch_id` in
+    //                            decimal, and a `waystone` column (1 or 0)
+    //                            that replaced `origin` and `pinned` at
+    //                            CF-S1b - 1 only for a current-version row
+    //                            with the opt-in bit. `use_count` and
+    //                            `last_seen` read 0 since BL-S4's ruling 1
+    //                            deleted their writer (rows.hpp). Rows from
+    //                            older fingerprint revisions are listed
+    //                            too, `waystone` 0, their
+    //                            `fingerprint_version` saying why.
     //   SHOW ACCESS           -> "access_shapes=<n>", then one "\n"-escaped
     //                            section per recorded access shape:
     //                            "kind=<Lookup|Probe|Range|FilterScan|Scan>

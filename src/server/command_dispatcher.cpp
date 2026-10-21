@@ -7667,7 +7667,8 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     }
 
     // The statement's own pattern_id, and the fetch_id its trail is keyed
-    // by - the hex `SHOW PATTERNS` lists a row under (AP-S2). The second is
+    // by (AP-S2) - in hex here, while `SHOW PATTERNS` lists a row's
+    // `fetch_id` in decimal, and `WAYSTONE OFF` takes either. The second is
     // what makes "which recorded trail does this statement use" answerable
     // by comparing two numbers, with no trail recorder needed for the
     // comparison to mean something; the first is the shape the cabin

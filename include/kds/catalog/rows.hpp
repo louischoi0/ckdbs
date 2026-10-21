@@ -389,7 +389,8 @@ inline constexpr std::uint8_t kCabinPolicyAuto = 2;
 //
 // The n=1 half rests on the argument `CREATE PATTERN` settled first, and
 // keeps it now that the pattern half is gone (withdrawn 2026-08-31;
-// `TrailRecorder` has one threshold, n=2, for every pattern): a declaration
+// `TrailRecorder` has one threshold, n=2, for every opted pattern since
+// CF-S1b's `WAYSTONE ON`): a declaration
 // *is* the evidence that waiting exists to gather. An operator who wrote
 // `CABIN` on the column has already said it is probed by value, and making
 // them prove it with traffic asks a question that was answered.
@@ -829,9 +830,11 @@ struct SysCabinRow {
     // Cabin, whose inputs are named by its `sys.cabin_exprs` text.
     std::uint16_t column_no;
 
-    // kCabinOriginAuto / kCabinOriginUser. Mirrors sys.patterns' origin
-    // axis, and for the same reason: an operator-declared Cabin and one a
-    // future promotion pipeline created have different lifecycle rights.
+    // kCabinOriginAuto / kCabinOriginUser: an operator-declared Cabin and
+    // one a future promotion pipeline created have different lifecycle
+    // rights. It mirrored sys.patterns' origin axis until CF-S1b made that
+    // byte reserved (`WAYSTONE ON` is the only creator of a pattern row);
+    // this one keeps both values.
     std::uint8_t origin;
 
     // kCabinStatusActive / kCabinStatusBuilding / kCabinStatusDemoted.

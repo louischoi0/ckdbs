@@ -19,9 +19,10 @@ reads the server's own CPU, which no client choice touches:
     `max_parallel_workers_per_gather = 0` so no worker's CPU goes uncounted
     (and KDS runs at `cores = 1`).
 
-The two engines run at their defaults otherwise: **KDS's Waystone is on**,
-so a repeated statement may replay a recorded trail where PostgreSQL scans
-again. That is the engine as shipped, not a scan-against-scan comparison.
+The two engines run at their defaults otherwise. **KDS records no Waystone
+trail by default**: since CF-S1b nothing records or replays until a shape is
+opted in with `WAYSTONE ON`, and this driver opts none in, so this is a
+scan-against-scan comparison; a not-opted SELECT pays one memory load.
 
 Shapes (`--shapes` picks a subset), all over `pb_bars` (8 symbols x 7,560
 sessions = 60,480 rows by default), `pb_symbols` and `pb_exchanges`; no
