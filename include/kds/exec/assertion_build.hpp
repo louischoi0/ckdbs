@@ -31,16 +31,12 @@
 // ---- The cutover, and why the membership protocol is trivially met --------
 //
 // §8.1a's decided protocol: a row counts as incorporated iff its tuple key is in
-// the Bound Cabin, never inferred from scan position. This build runs
-// **synchronously inside the CREATE statement on one cooperative core** -
-// the same fact `index_ddl.cpp` states as "nothing can observe the
-// half-built tree in between" - so no write can interleave and the
-// membership question never has a contested answer. The spec's "background
-// scheduling group, cooperative yielding" needs the suspendable statement
-// path that `docs/spec/crosscore.md` P4 still lacks (nothing in the engine
-// yields mid-statement); when the build learns to yield, the membership
-// protocol is the correctness story it resumes under, which is why it is
-// decided now and recorded here.
+// the Bound Cabin, never inferred from scan position. The build runs under
+// the relation `X` its statement holds (AT-S5e) from before its first leaf to
+// its publish, and **yields its core between slices of leaves** (A1 stage 2,
+// `sched.md` §3; `AssertionBuild`): no writer of the relation can run in a
+// gap, on this core or another, so no write interleaves and the membership
+// question never has a contested answer.
 //
 // ---- Visibility: latest settled state, refuse the unsettled ---------------
 //
@@ -134,26 +130,28 @@ private:
     std::size_t pages_ = 0;
 };
 
-// What a completed build hands back: the root the publish step names, the
-// directory the caller's registry will own, the chain writer AST07's write
-// hook keeps appending through, and the two numbers the reply reports.
+// What a build accumulates: the chain writer AST07's write hook keeps
+// appending through (its root is the one the publish names), the directory
+// the caller's registry will own, and the row count the reply reports.
 struct BoundCabinBuild {
     BoundCabinBuild(BoundAggregate aggregate, std::int64_t enforced_max,
                     std::uint64_t assertion_id)
         : chain(assertion_id), cabin(aggregate, enforced_max) {}
 
-    PageId cabin_root = kInvalidPageId;
     std::size_t rows_incorporated = 0;
-    std::size_t pages_allocated = 0;
     BoundCabinChainWriter chain;
     BoundCabin cabin;
 };
 
-// Scans `access`'s relation and materializes the Bound Cabin for `stmt`.
+// Incorporates one leaf of `access`'s relation into `build`, the Bound Cabin
+// for `stmt`, and returns the leaf after it - the step `AssertionBuild`
+// walks the relation by (`LeafCursor`). `build`'s root exists
+// (`EnsureRoot`).
 //
 // `group_cols` and `sum_col` are the schema positions the caller already
-// resolved (`CreateAssertion` validates them; re-resolving here would be a
-// third copy of the same loop). `sum_col` is read only for a SUM assertion.
+// resolved; `sum_col` is read only for a SUM assertion. `check_view` is
+// minted by the caller for the slice: under the relation `X`, a view minted
+// later can only see a writer an earlier one saw in flight as decided.
 //
 // Fails with `AssertionViolation` naming the first group the scan takes
 // past the bound - deterministic in scan order, because the check runs as
@@ -162,14 +160,11 @@ struct BoundCabinBuild {
 // (kCabinBound), every entry `ASSERT_BUILD`, and a chain link edit takes a
 // full page image of the old tail - the heap chain's rule, because no
 // record type describes a link edit.
-StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
-                                          const catalog::TableAccess& access,
-                                          const parser::AssertionStmt& stmt,
-                                          std::uint64_t assertion_id,
-                                          std::span<const std::uint16_t> group_cols,
-                                          std::uint16_t sum_col,
-                                          const txn::ReadView& check_view,
-                                          wal::WalManager* wal,
-                                          txn::HolderProgress::Scope* progress);
+StatusOr<PageId> IncorporateLeaf(storage::PageStore& store, const catalog::TableAccess& access,
+                                 const parser::AssertionStmt& stmt,
+                                 std::span<const std::uint16_t> group_cols, std::uint16_t sum_col,
+                                 const txn::ReadView& check_view, wal::WalManager* wal,
+                                 txn::HolderProgress::Scope* progress, BoundCabinBuild& build,
+                                 PageId leaf);
 
 }  // namespace kds::exec

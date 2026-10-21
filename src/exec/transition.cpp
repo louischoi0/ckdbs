@@ -290,94 +290,86 @@ StatusOr<catalog::Oid> TransitionTargetOid(catalog::Catalog& catalog,
 
 namespace {
 
-// The build scan: every live row's state must be in the state set (CN-4
-// §4). History is never verified - a row already in a late state is
-// accepted; the graph speaks only for values committed while it stands.
-StatusOr<std::size_t> CheckExistingRows(storage::PageStore& store,
-                                        const catalog::TableAccess& access,
-                                        const catalog::TransitionRef& t,
-                                        const parser::TransitionStmt& stmt,
-                                        const txn::ReadView& check_view,
-                                        txn::HolderProgress::Scope* progress) {
-    const std::vector<std::string> states = StateSet(t);
+// One leaf of the build scan: every live row's state must be in the state
+// set (CN-4 §4). History is never verified - a row already in a late state
+// is accepted; the graph speaks only for values committed while it stands.
+// Returns the leaf after it.
+StatusOr<PageId> CheckLeaf(storage::PageStore& store, const catalog::TableAccess& access,
+                           const catalog::TransitionRef& t, const std::vector<std::string>& states,
+                           const parser::TransitionStmt& stmt, const txn::ReadView& check_view,
+                           txn::HolderProgress::Scope* progress, std::size_t& checked,
+                           PageId leaf) {
     const catalog::SysColumnRow& column = access.schema.columns[t.column_no];
-
-    auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);
-    if (!first.ok()) return first.status();
-    PageId leaf = first.value();
-    std::size_t checked = 0;
-    const PageId origin = leaf;
-    for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
-        if (Status s = storage::CheckPageWalkBudget(leaves, origin, "relation leaf chain");
-            !s.ok()) {
-            return s;
-        }
-        // Per leaf, and per row below: what keeps this build's waiters
-        // inside the fault net, however wide a leaf's rows make it.
-        if (progress != nullptr) progress->Advance();
-        // Copied out under the page's span, decoded after it (I15's R1): a
-        // spilled state value fetches its var-heap page only once the leaf
-        // is let go.
-        std::vector<std::vector<std::byte>> staged;
-        PageId next = kInvalidPageId;
-        {
-            auto bytes = store.GetForRead(leaf);
-            if (!bytes.ok()) return bytes.status();
-            heap::PageView page(bytes.value().bytes());
-            for (std::uint16_t i = 0; i < page.slot_count(); ++i) {
-                auto tuple = page.ReadTuple(i);
-                if (tuple.status().code() == StatusCode::kNotFound) continue;  // retired
-                if (!tuple.ok()) return tuple.status();
-                switch (txn::CheckVisibility(check_view, tuple.value().trx_id,
-                                             tuple.value().deleted)) {
-                    case txn::CheckVerdict::kBusy:
-                        // A row an open transaction wrote: it may commit in
-                        // a state the scan never saw. Refused, retryably,
-                        // the assertion build's shape.
-                        return Status::TxnConflict(
-                            "relation '" + stmt.table_name +
-                            "' has a row written by an in-flight transaction; CREATE "
-                            "TRANSITION reads settled state - retry when it has ended");
-                    case txn::CheckVerdict::kAbsent:
-                        continue;
-                    case txn::CheckVerdict::kLive:
-                        break;
-                }
-                staged.emplace_back(tuple.value().payload.begin(), tuple.value().payload.end());
+    // Per leaf, and per row below: what keeps this build's waiters inside
+    // the fault net, however wide a leaf's rows make it.
+    if (progress != nullptr) progress->Advance();
+    // Copied out under the page's span, decoded after it (I15's R1): a
+    // spilled state value fetches its var-heap page only once the leaf
+    // is let go.
+    std::vector<std::vector<std::byte>> staged;
+    PageId next = kInvalidPageId;
+    {
+        auto bytes = store.GetForRead(leaf);
+        if (!bytes.ok()) return bytes.status();
+        heap::PageView page(bytes.value().bytes());
+        for (std::uint16_t i = 0; i < page.slot_count(); ++i) {
+            auto tuple = page.ReadTuple(i);
+            if (tuple.status().code() == StatusCode::kNotFound) continue;  // retired
+            if (!tuple.ok()) return tuple.status();
+            switch (txn::CheckVisibility(check_view, tuple.value().trx_id,
+                                         tuple.value().deleted)) {
+                case txn::CheckVerdict::kBusy:
+                    // A row an open transaction wrote: it may commit in
+                    // a state the scan never saw. Refused, retryably,
+                    // the assertion build's shape.
+                    return Status::TxnConflict(
+                        "relation '" + stmt.table_name +
+                        "' has a row written by an in-flight transaction; CREATE "
+                        "TRANSITION reads settled state - retry when it has ended");
+                case txn::CheckVerdict::kAbsent:
+                    continue;
+                case txn::CheckVerdict::kLive:
+                    break;
             }
-            next = page.next_page_id();
+            staged.emplace_back(tuple.value().payload.begin(), tuple.value().payload.end());
         }
-        for (const std::vector<std::byte>& payload : staged) {
-            if (progress != nullptr) progress->Advance();
-            std::vector<PendingSpill> spills;
-            auto decoded = DecodeRow(access.schema, access.layout, payload, &spills);
-            if (!decoded.ok()) return decoded.status();
-            if (Status s = ResolveSpills(store, spills, decoded.value()); !s.ok()) return s;
-            auto key = StateKey(column, decoded.value()[t.column_no]);
-            if (!key.has_value() || !Contains(states, *key)) {
-                return Violation(access, t, static_cast<std::uint64_t>(decoded.value()[0].int_val),
-                                 "an existing row is in state " +
-                                     (key.has_value() ? Shown(column, *key)
-                                                      : std::string("<unreadable>")) +
-                                     ", which the declaration does not name",
-                                 nullptr);
-            }
-            ++checked;
-        }
-        leaf = next;
+        next = page.next_page_id();
     }
-    return checked;
+    for (const std::vector<std::byte>& payload : staged) {
+        if (progress != nullptr) progress->Advance();
+        std::vector<PendingSpill> spills;
+        auto decoded = DecodeRow(access.schema, access.layout, payload, &spills);
+        if (!decoded.ok()) return decoded.status();
+        if (Status s = ResolveSpills(store, spills, decoded.value()); !s.ok()) return s;
+        auto key = StateKey(column, decoded.value()[t.column_no]);
+        if (!key.has_value() || !Contains(states, *key)) {
+            return Violation(access, t, static_cast<std::uint64_t>(decoded.value()[0].int_val),
+                             "an existing row is in state " +
+                                 (key.has_value() ? Shown(column, *key)
+                                                  : std::string("<unreadable>")) +
+                                 ", which the declaration does not name",
+                             nullptr);
+        }
+        ++checked;
+    }
+    return next;
 }
 
 }  // namespace
 
-StatusOr<TransitionDdlResult> CreateTransition(catalog::Catalog& catalog,
-                                               storage::PageStore& store,
-                                               const parser::TransitionStmt& stmt,
-                                               catalog::Oid target_oid,
-                                               const txn::ReadView& check_view,
-                                               wal::WalManager* wal,
-                                               txn::HolderProgress::Scope* progress) {
+TransitionBuild::TransitionBuild(catalog::Catalog& catalog, storage::PageStore& store,
+                                 parser::TransitionStmt stmt, catalog::Oid target_oid,
+                                 wal::WalManager* wal, txn::HolderProgress::Scope* progress)
+    : catalog_(catalog),
+      store_(store),
+      stmt_(std::move(stmt)),
+      target_oid_(target_oid),
+      wal_(wal),
+      progress_(progress) {}
+
+StatusOr<std::unique_ptr<TransitionBuild>> TransitionBuild::ForCreate(
+    catalog::Catalog& catalog, storage::PageStore& store, const parser::TransitionStmt& stmt,
+    catalog::Oid target_oid, wal::WalManager* wal, txn::HolderProgress::Scope* progress) {
     auto access = catalog.InitTableAccess(target_oid);
     if (!access.ok()) return access.status();
     const catalog::TableAccess& rel = *access.value();
@@ -398,32 +390,55 @@ StatusOr<TransitionDdlResult> CreateTransition(catalog::Catalog& catalog,
                                      held->name + "' (byte " +
                                      std::to_string(stmt.column_byte_offset) + ")");
     }
-    if (auto taken = FindTransitionByName(catalog, store, stmt.name); !taken.ok()) {
-        return taken.status();
-    } else if (taken.value().has_value()) {
-        return Status::AlreadyExists("transition \"" + stmt.name + "\" already exists (byte " +
-                                     std::to_string(stmt.byte_offset) + ")");
-    }
+    std::unique_ptr<TransitionBuild> build(
+        new TransitionBuild(catalog, store, stmt, target_oid, wal, progress));
+    if (Status s = build->NameFree(); !s.ok()) return s;
 
     auto compiled = CompileTransition(rel, stmt, 0, col);
     if (!compiled.ok()) return compiled.status();
+    build->access_ = &rel;
+    build->column_no_ = col;
+    build->compiled_ = std::move(compiled.value());
+    build->states_ = StateSet(build->compiled_);
+    if (Status s = build->cursor_.Start(store, rel.desc_page_id); !s.ok()) return s;
+    return build;
+}
 
-    auto checked = CheckExistingRows(store, rel, compiled.value(), stmt, check_view, progress);
-    if (!checked.ok()) return checked.status();
+Status TransitionBuild::NameFree() const {
+    auto taken = FindTransitionByName(catalog_, store_, stmt_.name);
+    if (!taken.ok()) return taken.status();
+    if (taken.value().has_value()) {
+        return Status::AlreadyExists("transition \"" + stmt_.name + "\" already exists (byte " +
+                                     std::to_string(stmt_.byte_offset) + ")");
+    }
+    return Status::OK();
+}
 
-    auto id = catalog.AllocateRowId(catalog::kSysTransitionsTable);
+Status TransitionBuild::Step(std::uint32_t leaves, const txn::ReadView& check_view) {
+    return cursor_.Step(leaves, [&](PageId leaf) {
+        return CheckLeaf(store_, *access_, compiled_, states_, stmt_, check_view, progress_,
+                         checked_, leaf);
+    });
+}
+
+StatusOr<TransitionDdlResult> TransitionBuild::Finish(const Status& ran) {
+    if (!ran.ok()) return ran;
+    // **The name asked again**: one another relation's create took while the
+    // build yielded is refused with the head's message and byte.
+    if (Status s = NameFree(); !s.ok()) return s;
+    auto id = catalog_.AllocateRowId(catalog::kSysTransitionsTable);
     if (!id.ok()) return id.status();
     TransitionDef def;
     def.id = id.value();
-    def.target_oid = target_oid;
-    def.column_no = col;
-    def.name = stmt.name;
-    def.source_text = stmt.source_text;
-    if (Status s = InsertTransition(catalog, store, wal, def); !s.ok()) return s;
-    // `rel` is not read past this line: the bump drops the entry it points
-    // into.
-    catalog.NoteDeclarationsChanged("sys.transitions create");
-    return TransitionDdlResult{def.id, checked.value()};
+    def.target_oid = target_oid_;
+    def.column_no = column_no_;
+    def.name = stmt_.name;
+    def.source_text = stmt_.source_text;
+    if (Status s = InsertTransition(catalog_, store_, wal_, def); !s.ok()) return s;
+    // `access_` is not read past this line: the bump drops the entry it
+    // points into.
+    catalog_.NoteDeclarationsChanged("sys.transitions create");
+    return TransitionDdlResult{def.id, checked_};
 }
 
 StatusOr<TransitionDef> DropTransition(catalog::Catalog& catalog, storage::PageStore& store,

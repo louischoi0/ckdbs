@@ -74,7 +74,7 @@ inline constexpr int kThreads = 2;
 inline constexpr std::size_t kUnboundedRecord = std::size_t{1} << 30;
 
 // `GROUP BY (v) CHECK COUNT(*) <= bound` on `(id, v)`, built by hand with a
-// chain rooted in `store` - what `CreateAssertion`'s build hands `Adopt`,
+// chain rooted in `store` - what `AssertionBuild::Finish` hands `Adopt`,
 // minus the scan.
 LiveAssertion CountCap(storage::PageStore& store, std::uint64_t id, std::int64_t bound) {
     LiveAssertion a;

@@ -2078,9 +2078,10 @@ StatusOr<NamespaceStmt> Parser::ParseNamespace(bool drop) {
 //   * Nothing at all for the catalog's questions. Whether the relation
 //     exists, whether a group column exists, whether the `SUM` column is
 //     int64, whether the name is taken: all of that needs the catalog and is
-//     `Catalog::CreateAssertion`'s, which is the door every non-parser caller
-//     comes through. This layer knows *where* each name was written and
-//     hands the offsets on so those errors can carry a position too.
+//     `exec::AssertionBuild::ForCreate`'s, which is the door every
+//     non-parser caller comes through. This layer knows *where* each name
+//     was written and hands the offsets on so those errors can carry a
+//     position too.
 StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
     AssertionStmt stmt;
     stmt.drop = drop;

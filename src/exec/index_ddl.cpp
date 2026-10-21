@@ -588,24 +588,13 @@ Status IndexBuild::Begin() {
         building_.covered_cols[i] = def_.covered_cols[i];
     }
 
-    auto first = btree::BtreeLeftmostLeaf(store_, access_->desc_page_id);
-    if (!first.ok()) return first.status();
-    leaf_ = first.value();
-    walk_origin_ = leaf_;
-    return Status::OK();
+    return cursor_.Start(store_, access_->desc_page_id);
 }
 
 Status IndexBuild::Step(std::uint32_t leaves) {
-    for (std::uint32_t n = 0; n < leaves && leaf_ != kInvalidPageId; ++n, ++leaves_) {
-        if (Status s = storage::CheckPageWalkBudget(leaves_, walk_origin_, "relation leaf chain");
-            !s.ok()) {
-            return s;
-        }
-        auto next = BackfillLeaf(store_, *access_, building_, txns_, progress_, leaf_);
-        if (!next.ok()) return next.status();
-        leaf_ = next.value();
-    }
-    return Status::OK();
+    return cursor_.Step(leaves, [this](PageId leaf) {
+        return BackfillLeaf(store_, *access_, building_, txns_, progress_, leaf);
+    });
 }
 
 Status IndexBuild::Refusal(const Status& s) const {

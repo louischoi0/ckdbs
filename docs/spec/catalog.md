@@ -234,7 +234,7 @@ what the check asks, below, not the latch. `RegisterPattern` (page 9) and
 | `RenameTable` | `sys.objects` (6) | the check and the in-place rewrite; the new name is asked in the relation's own namespace |
 | `RenameColumn` | `sys.columns` (5) | the sibling check and the rewrite — the relation `X` both renames take (`alter.md` AL4a) already orders two of one relation; the hold stays as defense in depth, and is the whole of it for a dispatcher with no lock table |
 | `CreateIndex` | `sys.indexes` (8) | the check and the insert; `CheckIndexDef` asks it unheld, earlier, so a taken name is refused before a build |
-| `InsertAssertion` | `sys.assertions` (14) | the check and the insert; `CreateAssertion` asks unheld before its build, for the same reason |
+| `InsertAssertion` | `sys.assertions` (14) | the check and the insert; `AssertionBuild::ForCreate` asks unheld before its build and `Finish` again before its adoption, for the same reason |
 | `CreateCabin` | `sys.cabins` (12) | not a name but the same shape — one cabin per column — and reached by two operators, or an operator and the controller; the id is issued before the hold |
 
 **A relation's name has one copy, its `sys.objects` row**, and every view

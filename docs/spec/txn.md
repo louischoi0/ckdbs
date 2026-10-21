@@ -734,7 +734,15 @@ length**: `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION` and
 `HolderProgress` (`txn/holder_progress.hpp`) before they ask for the `X`,
 and advance it per leaf and per row of their walk; a relation waiter whose
 net expires restarts the statement's one bound when its holder advanced
-since it last looked. The registration is the statement's: in autocommit
+since it last looked. **A yielding build advances only while its core
+runs it** (A1 stage 2, `sched.md` §3): all four give their core back
+every `exec::SlicePolicy::pages_per_slice` relation leaves where the
+statement can park, and between two slices the holder is silent while the
+other statements of its core run. It advances again at each resume
+(`BuildRun::Execute`), so only a gap longer than the net - a co-located
+statement that does not yield, or a long run queue - counts against its
+waiters as silence does. Several builds on one core may each hold a
+registration at once, one per relation. The registration is the statement's: in autocommit
 it is withdrawn after the decide releases the `X`, and a `CREATE INDEX`
 inside an explicit transaction withdraws it at the statement's end, so the
 open transaction after it is a silent holder like any other. A build longer

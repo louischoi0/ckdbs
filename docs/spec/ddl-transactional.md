@@ -505,7 +505,21 @@ arrives parks until the directory is adopted and then re-runs against it,
 so no write lands where the scan has passed uncounted. **Its holder is a transaction of the statement's own**,
 not the session's: it writes nothing and is rolled back when the statement
 ends, so the relation is released at the statement's end rather than at the
-session's `COMMIT`, and a failed `CREATE ASSERTION` still poisons nothing.
+session's `COMMIT`, and a `CREATE ASSERTION` the build itself refuses still
+poisons nothing. **The run owns the holder** (`DdlBuildLock`, owned by
+`server::AssertionBuildRun` and `server::TransitionBuildRun` from the ask
+on): since A1 stage 2 the build yields its core between slices of relation
+leaves (`sched.md` §3), and a build handed on keeps the `X` across every
+yield until its tail has published and synced, then releases it
+(`DdlBuildLock::End`); a run destroyed before its tail releases it as the
+statement's end would. **A cancelled `CREATE ASSERTION` or `CREATE
+TRANSITION` fails an open explicit transaction** (the operator's ruling of
+2026-10-21): the build takes the session's cancel before its first slice
+and at each slice boundary, ends `CANCELLED` with nothing published, and
+leaves the transaction failed until `ROLLBACK`, as a cancelled statement
+does (`protocol.md` §10). This changes the earlier contract that a failed
+`CREATE ASSERTION` poisons nothing; the build's own refusals - a violation,
+an in-flight row, a taken name - still poison nothing.
 The one holder it cannot wait for is the session's own transaction, having
 written the relation (or holding it at any mode) - that is refused
 `TxnConflict` at once by the holder's own-transaction test, before the
