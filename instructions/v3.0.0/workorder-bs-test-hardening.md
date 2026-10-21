@@ -2,13 +2,16 @@
 
 **Written 2026-10-13** on `wo-test-hardening` at `ec0c07ef`, on the
 operator's words W0-W1. **Opened 2026-10-13 for S0 and S1 only** (BS-Q0
-(b), §6); S2-S8 wait for BR's close. **Every question in §5 marked by the
-operator on 2026-10-13, each on CLA's proposal** (§6). **Every test BS
-adds stays out of the push gate** (the operator's ruling of 2026-10-13,
-§6.1). The rules BS-R1..R4 remain proposals. **S0 done 2026-10-13**
-(`bs-s0-census.md`, measured at `691beee3`): clang is not on the host,
-gcc 13's TSan needs `setarch -R`, and `tests/alloc_counter.cpp` aborts the
-suite under ASan until its `nothrow` forms are replaced - S1 starts there.
+(b), §6); S2-S8 waited for BR's close, which came on 2026-10-20
+(`instructions/v3.2.0/raft-marks-2026-10-20.md` §3). **Every question in §5
+marked by the operator on 2026-10-13, each on CLA's proposal** (§6). **Every
+test BS adds stays out of the push gate** (the operator's ruling of
+2026-10-13, §6.1). **S0 done 2026-10-13** (`bs-s0-census.md`, measured at
+`691beee3`). **Resumed 2026-10-21 on the operator's standing go-ahead**
+(`instructions/v3.2.0/raft-marks-2026-10-21.md` §1) in the worktree
+`bs-test-hardening`: the rules BS-R1..R4 and every item that surfaced since
+are adopted as CLA proposed, not marked by the operator (§7, BS-A1 onward).
+The stage log is §8.
 
 The operator's words, translated:
 
@@ -255,9 +258,9 @@ What it obliges:
   configuration or checker BS adds is a target or script the hook never
   builds or runs. The label's name is S1's to choose and is stated where it
   is registered in `tests/CMakeLists.txt`. Two mechanics follow from the
-  tree as it is: `scripts/test.sh` excludes with one `-LE`, so the new label
-  joins `heap-suspended` in one regular expression rather than a second
-  flag; and `scripts/build.sh` builds every default target, so a sweep or
+  tree as it is: `scripts/test.sh` excludes with one `-LE`, which since BZ
+  deleted `heap-suspended` (AS-R4's label) names `bs-nightly` alone (S1);
+  and `scripts/build.sh` builds every default target, so a sweep or
   fuzz target is `EXCLUDE_FROM_ALL` or behind an option that defaults off.
 - **S3's "strided sample in the suite" is withdrawn**: the sample runs in
   the nightly with the full sweep, never in the gate.
@@ -272,3 +275,24 @@ What it obliges:
   alloc-dealloc mismatch) changes no gate membership; and a regression cell
   for an engine bug a BS method finds is written on the fix's own branch
   (BS-R2), where the fix's reviewer decides its gate membership.
+
+## 7. Items adopted on the standing go-ahead of 2026-10-21
+
+BS resumed on the operator's go-ahead (`instructions/v3.2.0/raft-marks-2026-10-21.md`
+§1). Each item below is **CLA's proposal, adopted on the operator's standing
+go-ahead of 2026-10-21 (go-ahead-achieving-milestone)**, not marked by the
+operator item by item.
+
+| # | Item | Options | Adopted, and why |
+|---|---|---|---|
+| BS-A1 | The rules BS-R1..R4, unmarked since 2026-10-13 | (a) adopt as written; (b) adopt with BS-R2's bug-entry clause read against `CLAUDE.md` | **(b)**: `CLAUDE.md` says a defect fixed in the session that found it gets no `docs/inflight/bugs/` entry, and it outranks an order's proposal. A defect a BS method finds and this session fixes is recorded in §8's stage log and in its fix commit, on a branch of its own; one left unfixed gets the entry BS-R2 names |
+| BS-A2 | BS-Q2 (a) names clang, which census T1 found absent and needing `sudo` | (a) stop for the install; (b) clang 18 from Ubuntu's own packages, fetched with `apt-get download` and unpacked with `dpkg -x` under `/home/cdkbs/opt/llvm18`, no `sudo` | **(b)**: it meets BS-Q2 (a) as marked - one compiler for sanitizers, libFuzzer and llvm-cov - and `scripts/bs/install-llvm18.sh` makes it again on any host with the same packages. No system package is installed |
+| BS-A3 | Where the nightly runs before BS reaches `main` | (a) install it after the push; (b) follow the work branch in the local repository until the push, then `main` | **(b)**: §4's bar counts seven consecutive nights, and nights on the branch are nights the methods ran; following a local branch publishes nothing. The report names the ref it ran |
+| BS-A4 | TSan and the test binary's replaced `operator new` (`tests/alloc_counter.cpp`) | (a) replace every form, aligned ones included; (b) link TSan's runtime shared | **(b)**: clang links TSan's static C++ runtime whole (`--whole-archive`), so any replacement is a duplicate definition, whatever forms it covers; a shared runtime is interposed over instead (`scripts/bs/config.sh`) |
+
+## 8. Stage log
+
+| Stage | State |
+|---|---|
+| BS-S0 | **Done 2026-10-13** (`bs-s0-census.md`), measured at `691beee3` |
+| BS-S1 | **Built 2026-10-21** on `bs-test-hardening`. **The configurations** (`scripts/bs/config.sh <config> build suite sim`): `asan` (Debug, ASan + UBSan, `-fno-sanitize-recover=undefined`), `tsan` (Debug, its runtime linked shared, BS-A4) and `noassert` (Release), each in `build-bs-<config>/`, through the CMake cache entry `KDS_SANITIZE` (empty by default, so the hook's build is unchanged); clang 18 is the user-space install of `scripts/bs/install-llvm18.sh` (BS-A2), whose TSan, unlike census T2's gcc 13, starts on this kernel without `setarch -R`. **The runner**: `scripts/bs/nightly.sh` runs each configuration's build, the hook's range of the suite and `scripts/sim.sh` with 16 fresh seeds, and writes `<day>.md`, `latest.md` and one line in `index.md` (§4's seven nights are counted there); a release `kds_server` running skips the night and says so; the two known-noisy cells are named under their own heading and never retried. `scripts/bs/install-nightly.sh` installs it as a cron entry at 19:30 UTC following a ref of a repository: the work branch in the local repository until BS lands (BS-A3), then `main`. **The gate's mechanics** (§6.1): `scripts/test.sh` excludes the label `bs-nightly`, named in `tests/CMakeLists.txt`. **Census T3 fixed**: `tests/alloc_counter.cpp` replaces the `nothrow` forms too. **What the first runs found** - ASan + UBSan failed 163 of 4,189 cells at `e0dd4d04`, and TSan 14 of 4,190 at `8ef3cd98`: **four engine defects**, each fixed on a branch of its own (BS-R2, BS-A1) - `CREATE CABIN` reading a column name through a `TableAccess` the write's version bump had freed (110 cells), `DROP COLUMN` dereferencing a cached `SysColumnRow*` after a catalog write (2), `SelectBody` reading the fingerprint of the empty parser a query-layer walk carries (UBSan, 48), all three on `fix-asan-s1-findings` at `8ef3cd98`; and `DevicePageStore`'s chunk vector reallocated under an unlatched `SlotPage` (TSan, 4), made a fixed array sized at `Open` on `fix-tsan-s1-findings` at `3099051b`; **test defects** - `tests/visibility_test.cpp` handing `memcpy` a null (UBSan, 3), rig cells submitting to or dispatching on a running reactor against `two_core_rig.hpp`'s own rule (TSan, 8; `TwoCoreRig::Post` added, or the rig stopped before the test thread reads), `checkpoint_data_sync_test.cpp` reading a count the syncer's thread writes after it publishes (TSan, 1); and `ExpeditorTest.TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage` dispatching on a running peer with no seam to avoid it, **filed** (`docs/inflight/bugs/expeditor-test-dispatches-on-a-running-peer.md`). **At `0e9ea02e` with S1's files**: `asan` 4190/4190 (904 s at `-j8`), `tsan` 4189/4190 - the filed cell - (944 s), `noassert` 4190/4190 (426 s), builds excluded; the Debug suite, the hook's own range, 4189/4190 at `-j8` under a host load of ~16, its one failure `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement` timing out at 60 s and passing 5 runs in 5 alone (1.4-6.9 s), now named among the runner's known-noisy cells. **F1's two gaps**: the teardown mutant (`Scheduler::DiscardTasks`'s call removed) dies under `asan` 5 runs in 5 (`known-gaps.md`, updated); BP's fence (`workorder-bp-per-core-residue.md` H1-H3) still cannot be killed, because its rig cells drive both cores from the test thread - TSan exists now, the cell that would give it two threads does not. Overhead not measured; measured at the milestone's close |

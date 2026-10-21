@@ -11,6 +11,23 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
+# BS-S1's sanitizer configurations (instructions/v3.0.0/workorder-bs-test-hardening.md):
+# `address` is ASan + UBSan, `thread` is TSan, each in a build directory of
+# its own and built with clang (BS-Q2 (a)) by scripts/bs/. Empty, the
+# default, is the build the push hook runs, which never sets it (§6.1).
+set(KDS_SANITIZE "" CACHE STRING "Sanitizers: address (ASan + UBSan), thread (TSan), or empty")
+if(KDS_SANITIZE STREQUAL "address")
+    # A UBSan report fails its cell rather than scrolling past it.
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined
+                        -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+elseif(KDS_SANITIZE STREQUAL "thread")
+    add_compile_options(-fsanitize=thread)
+    add_link_options(-fsanitize=thread)
+elseif(NOT KDS_SANITIZE STREQUAL "")
+    message(FATAL_ERROR "KDS_SANITIZE='${KDS_SANITIZE}': expected address, thread or empty")
+endif()
+
 add_library(kds
     src/base/log.cpp
     src/base/fail_stop.cpp

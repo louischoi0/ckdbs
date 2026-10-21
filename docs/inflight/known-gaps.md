@@ -831,10 +831,13 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
     unregistration at close and at `Detach`, and capability negotiation
     are covered by reading only. The cells drive `KwpSession` and the
     registry directly.
-  - **The teardown cell kills its mutant only under AddressSanitizer.**
+  - **The teardown cell kills its mutant only under AddressSanitizer**, so
+    only outside the push gate.
     `WalkSliceRigTest.ACoreTornDownWithAWalkBetweenSlicesReleasesItFirst`
-    passes in Debug with `Scheduler::DiscardTasks` removed. The tree has
-    no sanitizer build.
+    passes in Debug with `Scheduler::DiscardTasks`'s call removed; under
+    BS-S1's `asan` configuration, which the nightly runs (`scripts/bs/`),
+    the mutant dies of a heap-use-after-free 5 runs in 5 (verified on
+    `bs-test-hardening` at `0e9ea02e`).
 
 ## Placement per transaction (BL)
 

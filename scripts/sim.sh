@@ -20,8 +20,8 @@
 #       --out case.sim && build-release/ckdbs-sim --replay case.sim
 #
 # `scripts/test.sh` stays the unit gate; this is the sweep beside it. The
-# sanitizer matrix and the wall-clock smoke threshold are SIM13's and are
-# deliberately not here.
+# sanitizer builds run it too, as `scripts/bs/config.sh <config> sim`
+# (BS-S1); the wall-clock smoke threshold is SIM13's and is not here.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 

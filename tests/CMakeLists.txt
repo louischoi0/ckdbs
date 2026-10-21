@@ -287,3 +287,8 @@ target_compile_definitions(kds_tests PRIVATE KDS_SOURCE_DIR="${CMAKE_SOURCE_DIR}
 include(GoogleTest)
 
 gtest_discover_tests(kds_tests)
+
+# BS's cells (instructions/v3.0.0/workorder-bs-test-hardening.md §6.1) carry
+# the ctest label `bs-nightly`: scripts/test.sh excludes it, so the push hook
+# never runs one, and scripts/bs/nightly.sh runs them. A BS cell goes in a
+# binary registered with `PROPERTIES LABELS bs-nightly`, never in kds_tests.
