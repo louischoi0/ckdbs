@@ -656,5 +656,56 @@ TEST(WaystoneContractTest, ABuiltJoinFeedsNoTrail) {
     EXPECT_TRUE(keyed_present) << "nothing recorded at all, so the absence above proves nothing";
 }
 
+// An outer replay hit over an inner replay miss. Moving the outer row's join
+// column keeps its own trail entry valid and leaves the inner one recorded
+// for the old key: the outer step replays, the next step - run inside that
+// replay - misses and descends, and the outer step must still count its row
+// as served. A replay flag shared by the chain was cleared by the inner miss,
+// so the outer step descended too and the joined row came back twice.
+//
+// **Mutation**: the outcome kept in one member the chain shares - the replay
+// configuration answers `(1, 30)` twice.
+TEST(WaystoneContractTest, AnInnerReplayMissUnderAnOuterHitEmitsTheRowOnce) {
+    const std::vector<std::string> statements = {
+        "CREATE TABLE p (id int64, code int64) BTREE",
+        "CREATE TABLE ch (id int64, r1 int64, qty int64) BTREE",
+        "INSERT INTO p VALUES (1, 10)",
+        "INSERT INTO p VALUES (2, 20)",
+        "INSERT INTO p VALUES (3, 30)",
+        "INSERT INTO ch VALUES (1, 1, 0)",
+        "SELECT ch.id, p.code FROM ch JOIN p ON ch.r1 = p.id WHERE ch.id = 1",
+        "UPDATE ch SET r1 = 2 WHERE id = 1",
+        "SELECT ch.id, p.code FROM ch JOIN p ON ch.r1 = p.id WHERE ch.id = 1",
+        "UPDATE ch SET r1 = 3 WHERE id = 1",
+        "SELECT ch.id, p.code FROM ch JOIN p ON ch.r1 = p.id WHERE ch.id = 1",
+    };
+    Instance replaying(/*record=*/true, /*replay=*/true);
+    Instance baseline(/*record=*/false, /*replay=*/false);
+    std::string last;
+    for (const std::string& sql : statements) {
+        last = replaying.Run(sql);
+        EXPECT_EQ(last, baseline.Run(sql)) << sql;
+    }
+    EXPECT_EQ(last, "ch.id,p.code\\n1,30");
+
+    // The shape itself, under ANALYZE: one more move, so this run's outer
+    // step replays and its inner step misses. The rows count does not show
+    // the duplicate; the inner step's opens do - twice, had the outer step
+    // descended after its replay.
+    replaying.Run("INSERT INTO p VALUES (4, 40)");
+    replaying.Run("UPDATE ch SET r1 = 4 WHERE id = 1");
+    const std::string analyzed = replaying.Run("ANALYZE " + statements.back());
+    const auto line_of = [&analyzed](const std::string& head) {
+        const std::size_t at = analyzed.find(head);
+        return at == std::string::npos ? std::string()
+                                       : analyzed.substr(at, analyzed.find("\\n", at) - at) + " ";
+    };
+    const std::string outer = line_of("step 0 Lookup ch opens=");
+    const std::string inner = line_of("step 1 Probe p opens=");
+    EXPECT_NE(outer.find(" replays=1 "), std::string::npos) << analyzed;
+    EXPECT_NE(inner.find(" opens=1 "), std::string::npos) << analyzed;
+    EXPECT_EQ(inner.find(" replays="), std::string::npos) << analyzed;
+}
+
 }  // namespace
 }  // namespace kds::server
