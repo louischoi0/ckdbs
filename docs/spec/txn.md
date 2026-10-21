@@ -482,7 +482,7 @@ nothing. **What it does not close**: a
 commit another session was acknowledged before this statement began stays
 invisible to it for up to one sync, against the level table's "sees
 everything committed before it began" - the remainder
-`docs/inflight/bugs/a-strict-commits-marker-caps-every-cores-snapshot-across-its-sync.md`
+`docs/inflight/bugs/a-strict-commits-marker-caps-every-cores-snapshot-across-its-sync.md` (closed, retrieve with `git show d83bd502^:<path>`)
 keeps, which BA-Q3 (c) would close with snapshots that carry their
 in-flight set.
 
@@ -652,7 +652,7 @@ Every SELECT-class read goes through a compiled step chain, so the choke
 point is **`ChainRunner::AcceptTupleAt()`** (`src/exec/step_vm.cpp`) — one
 call site, reached by the chain walk, the btree descent, the probe memo,
 Waystone replay and the Cabin resolve alike. That makes
-`waystone-concpets.md` §3.1 rule 2 — "MVCC visibility is applied exactly as
+`waystone-concpets.md` §2 (the replay contract), step 3 — "MVCC visibility is applied exactly as
 it would be on the authoritative path" — true **by construction** rather than
 by discipline.
 

@@ -137,10 +137,10 @@ private:
 
 // ---- Authentication methods (`C_HELLO.auth_method`, §3) ------------------
 //
-// A `u8` on the wire and an enum here. `kNone` is what a v0 client sends
-// and what an unauthenticated server admits; `kScramSha256` runs the
+// A `u8` on the wire and an enum here. `kAuthNone` is what a v0 client sends
+// and what an unauthenticated server admits; `kAuthScramSha256` runs the
 // exchange `server/auth.hpp` describes, carried in `C_AUTH`/`S_AUTH`
-// frames. `kMtls` is reserved and refused: the transport already
+// frames. `kAuthMtls` is reserved and refused: the transport already
 // authenticates in that design, so the method needs a decision about what
 // the *session's* identity then is, and §14 has not taken one.
 inline constexpr std::uint8_t kAuthNone = 0;

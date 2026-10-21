@@ -495,7 +495,7 @@ std::size_t CabinStore::Discard(std::uint64_t cabin_id) {
     }
     // Every one of this Cabin's sets has gone, so the two live figures are
     // zero exactly - not decremented set by set, which would be the same
-    // arithmetic done in a way that can drift. `RemoveSet`'s saturation
+    // arithmetic done in a way that can drift. `RemoveSetLocked`'s saturation
     // exists for counters that have drifted; this one cannot.
     if (auto info = part.info.find(cabin_id); info != part.info.end()) {
         info->second.values = 0;

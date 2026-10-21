@@ -398,7 +398,7 @@ public:
     // §4's watermark loop, on the writeback tick (BE-R2). When the pool's
     // free count - the capacity less the slots in use and the open windows'
     // promises - is below `low` (capacity / 16, `eviction.md`'s
-    // `free_watermark`), it reclaims in bounded batches until the count
+    // low watermark), it reclaims in bounded batches until the count
     // reaches `high` (capacity / 8), at most one deficit per call. The latch
     // is released between batches, and the dirty queue is drained between
     // them, so queued dirt becomes reclaimable on the hand's next visit. It

@@ -72,7 +72,7 @@ carrying `next_id` unlogged — reaching disk only at a checkpoint — a crash
 between the two would leave the durable log naming three tuples whose ids
 the reverted allocator hands out again, and the moment recovery redoes
 those `HEAP_INSERT`s one id belongs to two tuples: the snapshot hazard of
-`keystoneid-invariant.md` §1.1, arriving by the one door the invariant does
+`keystoneid-invariant.md` §1 (benefit 1), arriving by the one door the invariant does
 not watch.
 
 `ACrashReissuesIdsThatTheDurableLogStillClaims` pins that shape against a

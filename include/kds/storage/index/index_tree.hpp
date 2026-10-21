@@ -91,10 +91,11 @@ namespace kds::index {
 // described (spec §12.1).
 struct IndexChange {
     PageId page_id = kInvalidPageId;
-    // A brand-new page, which `INDEX_PAGE_INIT` describes completely.
-    // Everything else - a node whose entries were divided, a leaf whose
-    // sibling link moved - is false and needs a `FULL_PAGE_IMAGE`, because
-    // no record type describes an entry-array division on its own.
+    // A brand-new page. There is no `INDEX_PAGE_INIT` record (`index.md`
+    // §12.1): a divide leaves a new sibling holding half the entries, so
+    // only a page image describes it, and the split logs every page it
+    // created or rewrote as one `BTREE_SPLIT`. Everything else - a node whose
+    // entries were divided, a leaf whose sibling link moved - is false.
     bool is_new_page = false;
 };
 

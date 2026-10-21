@@ -18,6 +18,10 @@ issue order, which neither a file nor `MemoryPageDevice::CrashPersisting` is.
 map page allocated and all zero, and a Waystone page (135) failing its
 checksum.
 
+Re-verified by source read at `7dd9b789`: `FlushMaps`
+(`src/storage/device_page_store.cpp:418`) still writes the headerless map
+then the free map with no sync between.
+
 **Smallest reproduction.** The minimized case beside this file:
 `build-bs-noassert/ckdbs-sim --replay docs/inflight/bugs/map-writes-unordered-across-a-power-cut.sim`
 (found as `--seed 13 --ops 1500 --iterations 40 --mode sync-crash

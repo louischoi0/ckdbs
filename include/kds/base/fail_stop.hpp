@@ -9,7 +9,7 @@
 // record yet. Stopping at the allocation itself, with every latch still held,
 // leaves nothing for that writeback to find - **on a path that logs under
 // its holds** (`docs/spec/wal.md`, AT-S21). The paths named in
-// `docs/inflight/bugs/records-appended-after-their-page-is-released.md` do
+// `git show d83bd502:docs/inflight/bugs/records-appended-after-their-page-is-released.md` do
 // not, and a stop on one has only the window a crash there already has.
 
 namespace kds::base {

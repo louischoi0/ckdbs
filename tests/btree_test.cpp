@@ -1155,7 +1155,7 @@ TEST(BtreeTest, AGrowThatDiesPromotingItsSeparatorLeavesTheLeafChainAlone) {
 
 // A divide that needs two pages - its new leaf and the root it grows - where
 // only the first fits the device and the device refuses to grow for the
-// second (`docs/inflight/bugs/a-fetch-refused-after-a-page-write-leaves-the-
+// second (`git show d83bd502:docs/inflight/bugs/a-fetch-refused-after-a-page-write-leaves-the-
 // mutation-half-done.md`). Both are claimed before the leaf is touched, so
 // the refusal leaves the tree as it was. Killed by claiming nothing: the
 // leaf divides and links its new half, the root is never created, and the

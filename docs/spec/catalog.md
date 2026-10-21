@@ -298,9 +298,9 @@ retires its row outside any transaction (`ddl-transactional.md` §5).
 **What nests under a hold** (`rules.md` §3): the relation's own chain
 growth, the allocator for it, the WAL, a transactional write's undo page
 (a sink that asks no catalog page), and for `sys.assertions` its own
-var-heap chain — never another catalog relation's page; `InsertAssertion`'s
-`OpenAssertions` under page 14 is a cache hit, filled before the hold
-(`InsertAssertion`, `assertion_catalog.cpp`). That is why the oids and ids above are
+var-heap chain — never another catalog relation's page; `InsertDeclaration`'s
+`OpenDeclarations` under page 14 is a cache hit, filled before the hold
+(`InsertDeclaration`, `declaration_relation.cpp`). That is why the oids and ids above are
 issued before their holds: `GenerateUserOid`'s first use seeds from
 `sys.columns`, and `AllocateRowId` writes `sys.tables`. `RegisterPattern`,
 outside this table, issues under page 9 and so takes page 7 under it;
