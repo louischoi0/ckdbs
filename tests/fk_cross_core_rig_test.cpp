@@ -569,6 +569,9 @@ TEST(FkCrossCoreRigTest, ADrainedCabinSetClearsTheParentAndAChildOnAnotherCoreIs
                           4000ms))
         << r.one.out.response;
     ASSERT_EQ(r.one.out.response.rfind("INSERTED", 0), 0u) << r.one.out.response;
+    // Both reactors joined, so core 0's statements below run on this thread
+    // alone, as before `Start()` (the rig's threading rule).
+    r.rig->Stop();
 
     // Found in the set: refused, and from the Cabin.
     const std::uint64_t probes_before = AccessUses(d0, "CabinProbe", "c");

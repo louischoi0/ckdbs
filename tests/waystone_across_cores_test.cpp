@@ -83,7 +83,7 @@ TEST(WaystoneAcrossCores, APeersRepeatedStatementRegistersItsPattern) {
         // shares core 0's row - so the `LIMIT` makes the fetch
         // differ and leaves the step a keyed lookup that records.
         peer.statement = "SELECT v FROM r0 WHERE id = 1 LIMIT 1";
-        rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+        rig->Post(1, sched::MakeCoroTask(
             sched::SchedulingGroup::kForeground, RunOne(rig->core(1).dispatcher(), peer)));
         ASSERT_TRUE(KickUntil(*rig, 1, [&] { return peer.done.load(std::memory_order_acquire); },
                               8000ms))

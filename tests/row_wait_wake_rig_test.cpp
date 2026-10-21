@@ -208,6 +208,9 @@ TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore
         sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, update)));
     rig->core(0).scheduler().Submit(
         sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d0, commit)));
+    // Before `Start()`: a catalog is its core's reactor's once it runs.
+    auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
     rig->Start();
 
     sched::Scheduler& peer = rig->core(1).scheduler();
@@ -216,8 +219,6 @@ TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore
     ASSERT_FALSE(update.done.load(std::memory_order_acquire))
         << "core 1's UPDATE did not wait: " << update.out.response;
     // Registered on the row's own entry, the unit that refused the range.
-    auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
     EXPECT_EQ(rig->locks().WaiterCount(txn::LockKey::Tuple(oid.value(), 1)), 1u)
         << "the range's refusal left no registration on the row that refused it";
     const std::size_t kicks_to_peer_before = KicksTo(*rig, 1).size();
