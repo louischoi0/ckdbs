@@ -67,8 +67,8 @@ protected:
     }
 
     storage::InMemoryPageStore store_{kFirstUserPageId};
-    // The AT-S2 cell's schema word: a member, so it outlives the catalog.
-    std::atomic<std::uint64_t> word_{0};
+    // The AT-S2 cell's instance words: a member, so they outlive the catalog.
+    catalog::InstanceWords words_;
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<txn::TrxIdSequence> ids_;
     std::optional<txn::UndoLog> undo_;
@@ -86,23 +86,23 @@ TEST_F(TxnSessionTest, ARollbackAndACommitOfADdlBothBumpTheSchemaWord) {
     // `InvalidateAfterCompensation` - a rollback because the rows were
     // compensated behind the cache's back, a commit because a delete-mark
     // starts counting then (DT9). Four moves for two statements' endings.
-    boot_->catalog.SetSchemaWord(&word_);
+    boot_->catalog.SetInstanceWords(&words_);
     Session s;
     ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
-    const std::uint64_t before = word_.load();
+    const std::uint64_t before = words_.schema_word.load();
     ASSERT_EQ(Run(s, "CREATE TABLE rb (id int64, v int64)").substr(0, 7), "CREATED");
-    const std::uint64_t written = word_.load();
+    const std::uint64_t written = words_.schema_word.load();
     EXPECT_GT(written, before) << "the write did not bump";
     ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
-    EXPECT_GT(word_.load(), written) << "the rollback did not bump";
+    EXPECT_GT(words_.schema_word.load(), written) << "the rollback did not bump";
 
     ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
-    const std::uint64_t before2 = word_.load();
+    const std::uint64_t before2 = words_.schema_word.load();
     ASSERT_EQ(Run(s, "CREATE TABLE cm (id int64, v int64)").substr(0, 7), "CREATED");
-    const std::uint64_t written2 = word_.load();
+    const std::uint64_t written2 = words_.schema_word.load();
     EXPECT_GT(written2, before2);
     ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
-    EXPECT_GT(word_.load(), written2) << "the commit did not bump";
+    EXPECT_GT(words_.schema_word.load(), written2) << "the commit did not bump";
 }
 
 TEST_F(TxnSessionTest, BeginCommitAndRollbackMoveTheSessionThroughItsStates) {

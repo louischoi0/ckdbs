@@ -11,6 +11,7 @@
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/catalog/instance_words.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
@@ -236,30 +237,19 @@ public:
         // core-0 runtimes), and none above it.
         txn::LockTable* locks = nullptr;
 
-        // **The instance's schema version word** (AT-S2), borrowed the same
-        // way: `Expeditor` owns the atomic and every core's catalog reads
-        // it at each task boundary. Null leaves the catalog revalidating
-        // nothing, which is a fixture's shape.
-        std::atomic<std::uint64_t>* schema_word = nullptr;
+        // **The instance's four words** (`catalog.md` CT6, one struct since
+        // CF-S1c), borrowed the same way: `Expeditor` owns them, and this
+        // core's catalog takes the struct (`Catalog::SetInstanceWords`) and
+        // its transaction manager the schema word. Null leaves the catalog
+        // on its local copies (`Catalog::SetInstanceWords`), which is a
+        // fixture's shape and never a server's.
+        catalog::InstanceWords* instance_words = nullptr;
 
         // **The instance's Cabin store** (AT-S7), borrowed on the same
         // terms: `Expeditor` owns one and every core observes into it and
         // serves from it. Null builds this runtime its own, which is a
         // fixture's shape and the only place a per-core store remains.
         stats::CabinStore* cabins_store = nullptr;
-        // **The instance's object-oid sequence** (AT-S5b), borrowed the same
-        // way; null leaves this core's catalog on its own counter, which is
-        // a fixture's shape and never a server's.
-        std::atomic<catalog::Oid>* oid_sequence = nullptr;
-        // **The instance's delete-mark counter** (AT-S5b), borrowed the same
-        // way; the purge runs on one core and this is what lets that core
-        // see a peer's marks.
-        std::atomic<std::uint64_t>* mark_counter = nullptr;
-        // **The instance's opted count** (CF-S1c), borrowed the same way:
-        // a peer's `SELECT` gate reads it, and an opt-in on any core moves
-        // it. Null leaves this core's catalog on a local count, which is a
-        // fixture's shape and never a server's.
-        std::atomic<std::uint64_t>* opted_count = nullptr;
         // **The instance's assertion registry** (AT-S5d), borrowed the same
         // way: every core's writes check and reserve into the one directory
         // each assertion has, and core 0's mount has already resumed it, so

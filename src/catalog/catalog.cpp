@@ -996,7 +996,7 @@ Status Catalog::ClearPendingRoots(Oid oid) {
 }
 
 StatusOr<Oid> Catalog::GenerateUserOid() {
-    if (oid_sequence_ != nullptr) {
+    if (words_ != nullptr) {
         // **The instance's sequence** (AT-S5b), seeded by whichever catalog
         // asks first. Zero is the unseeded value and no oid can be zero
         // (`kUserOidStart`), so the CAS below distinguishes the two without
@@ -1004,18 +1004,18 @@ StatusOr<Oid> Catalog::GenerateUserOid() {
         // loser's fails and falls through to the `fetch_add`, which reads
         // the winner's value - the scan it did on the way is wasted and
         // nothing else.
-        if (oid_sequence_->load(std::memory_order_acquire) == 0) {
+        if (words_->oid_sequence.load(std::memory_order_acquire) == 0) {
             auto highest = HighestIssuedUserOid();
             if (!highest.ok()) {
                 return highest.status().WithContext(
                     "cannot issue an object oid without reading back the ones already issued");
             }
             Oid expected = 0;
-            oid_sequence_->compare_exchange_strong(expected, highest.value() + 1,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire);
+            words_->oid_sequence.compare_exchange_strong(expected, highest.value() + 1,
+                                                         std::memory_order_acq_rel,
+                                                         std::memory_order_acquire);
         }
-        return oid_sequence_->fetch_add(1, std::memory_order_acq_rel);
+        return words_->oid_sequence.fetch_add(1, std::memory_order_acq_rel);
     }
     // Recovered once, on first use, then incremented in memory. Lazy rather
     // than done at construction because a `Catalog` is constructed on two
@@ -1055,9 +1055,9 @@ void Catalog::BumpVersion(std::string_view what, Tally cause) {
 }
 
 void Catalog::BumpWord(Tally cause) {
-    if (schema_word_ == nullptr) return;
+    if (words_ == nullptr) return;
     Contention::Add(cause);
-    const std::uint64_t prev = schema_word_->fetch_add(1, std::memory_order_acq_rel);
+    const std::uint64_t prev = words_->schema_word.fetch_add(1, std::memory_order_acq_rel);
     // Adopt the bump only if this cache was current. A writer whose cache
     // `BumpVersion()` just dropped, or a root move keeping its entry in
     // place (`AdoptRoot`), has
@@ -1071,8 +1071,8 @@ void Catalog::BumpWord(Tally cause) {
 }
 
 void Catalog::Revalidate(const std::function<void()>& after_read) {
-    if (schema_word_ == nullptr) return;
-    const std::uint64_t now = schema_word_->load(std::memory_order_acquire);
+    if (words_ == nullptr) return;
+    const std::uint64_t now = words_->schema_word.load(std::memory_order_acquire);
     if (after_read) after_read();
     if (now == cache_built_at_) return;
     Contention::Add(Tally::kCatalogMemoDrops);
@@ -3077,7 +3077,7 @@ StatusOr<const PatternAccess*> Catalog::FindOptedPattern(std::uint64_t fetch_id)
 }
 
 void Catalog::MoveOptedCount(bool up) noexcept {
-    if (opted_count_ == nullptr) {
+    if (words_ == nullptr) {
         if (up) {
             ++local_opted_;
         } else if (local_opted_ > 0) {
@@ -3086,21 +3086,21 @@ void Catalog::MoveOptedCount(bool up) noexcept {
         return;
     }
     if (up) {
-        opted_count_->fetch_add(1, std::memory_order_acq_rel);
+        words_->opted_count.fetch_add(1, std::memory_order_acq_rel);
         return;
     }
     // Saturating, so a CAS rather than a `fetch_sub`: every mover writes
     // under page 9's hold, but the boot's store is not one of them.
-    std::uint64_t now = opted_count_->load(std::memory_order_acquire);
+    std::uint64_t now = words_->opted_count.load(std::memory_order_acquire);
     while (now > 0 &&
-           !opted_count_->compare_exchange_weak(now, now - 1, std::memory_order_acq_rel,
-                                                std::memory_order_acquire)) {
+           !words_->opted_count.compare_exchange_weak(now, now - 1, std::memory_order_acq_rel,
+                                                      std::memory_order_acquire)) {
     }
 }
 
 void Catalog::StoreOptedCount(std::uint64_t value) noexcept {
-    if (opted_count_ != nullptr) {
-        opted_count_->store(value, std::memory_order_release);
+    if (words_ != nullptr) {
+        words_->opted_count.store(value, std::memory_order_release);
     } else {
         local_opted_ = value;
     }

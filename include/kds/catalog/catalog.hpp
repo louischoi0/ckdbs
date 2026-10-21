@@ -12,6 +12,7 @@
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog_cache.hpp"
+#include "kds/catalog/instance_words.hpp"
 
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/schema.hpp"
@@ -75,7 +76,7 @@ class WalManager;
 // save the mount's `RenewPatternDirectories`, which drops this catalog's
 // cache instead, before the listener binds. The opted patterns are the one
 // cached absence, complete per generation: `catalog_cache.hpp` states the
-// rule that keeps them so, and `SetOptedCount`'s comment the atomic
+// rule that keeps them so, and `opted_patterns`' comment the atomic
 // protocol of the instance's opted count that gates them (CF-S1c).
 
 namespace kds::catalog {
@@ -225,42 +226,38 @@ public:
     // caller is a catalog write of this class's own.
     void NoteDeclarationsChanged(std::string_view what) { BumpVersion(what); }
 
-    // **The schema version word** (AT-S2, `docs/spec/catalog.md`; AR0-5
-    // §2.1, D21). One `std::atomic` for the instance, owned by `Expeditor`
-    // and handed to every core's catalog; `BumpVersion()` - the single DDL
-    // choke point - advances it, and `Revalidate()` below drops this
-    // cache when it has moved: a peer is not told, it asks. **Bumped by
-    // every invalidation that can stale another core's memo** (AT-R2):
-    // this core's `catalog_version_` is not - a peer's drop never advanced
-    // it - which is why the word is a second thing and not that counter
-    // shared (`catalog.md` CT1 owns that rule). `AllocateRowId()` does not
-    // bump it: an id is not a cached fact. `SetPatternWaystone()` does, after
-    // its hold is released: an opt-in is the fact a peer's pattern entry
-    // caches. Null is a catalog with no instance around it (a fixture,
-    // bootstrap), which revalidates nothing.
+    // **The instance's four words** (`catalog.md` CT6; `instance_words.hpp`
+    // carries each word's atomic protocol): one struct, owned by `Expeditor`
+    // and handed to every core's catalog by this one setter since CF-S1c.
+    // Null is a catalog with no instance around it (a fixture, bootstrap,
+    // the sim), which keeps a local copy of each word: its own oid counter,
+    // its own mark and opted counts, and no schema word, so it revalidates
+    // nothing. What each word is to this class:
     //
-    // **Correctness never rests on the word** (AT-R3): it saves a re-parse.
-    // The relation `IS` a statement holds from its bind is what a DDL's `X`
-    // waits for; `read_borrow.hpp` states the defence and its direction.
-    void SetSchemaWord(std::atomic<std::uint64_t>* word) noexcept { schema_word_ = word; }
-
-    // **The instance's object-oid sequence** (AT-S5b). A counter per
-    // catalog would let two catalogs issue the same oid, since every core
-    // runs `CREATE TABLE` (AT-S5). One atomic for the instance, owned by `Expeditor` beside the schema
-    // word and handed down the same way: whichever catalog first needs an
-    // oid seeds it by CAS from `HighestIssuedUserOid()`, and every issue
-    // after that is a `fetch_add`. Null keeps the per-catalog counter,
-    // which is what a bare fixture catalog and the sim hold.
-    void SetOidSequence(std::atomic<Oid>* sequence) noexcept { oid_sequence_ = sequence; }
-
-    // **The instance's delete-mark counter** (AT-S5b), the third of the
-    // three words `Expeditor` owns and hands to every core's catalog. It
-    // gates the purge; why the gate has to be the instance's is at
-    // `PurgeSettledDeleteMarks` below, where it is read. Null keeps the
-    // local counter, which is what a bare catalog holds.
-    void SetMarkCounter(std::atomic<std::uint64_t>* counter) noexcept {
-        mark_counter_ = counter;
-    }
+    //   - **The schema version word** (AT-S2; AR0-5 §2.1, D21).
+    //     `BumpVersion()` - the single DDL choke point - advances it, and
+    //     `Revalidate()` below drops this cache when it has moved: a peer is
+    //     not told, it asks. **Bumped by every invalidation that can stale
+    //     another core's memo** (AT-R2): this core's `catalog_version_` is
+    //     not - a peer's drop never advanced it - which is why the word is a
+    //     second thing and not that counter shared (`catalog.md` CT1 owns
+    //     that rule). `AllocateRowId()` does not bump it: an id is not a
+    //     cached fact. `SetPatternWaystone()` does, after its hold is
+    //     released: an opt-in is the fact a peer's pattern entry caches.
+    //     **Correctness never rests on the word** (AT-R3): it saves a
+    //     re-parse. The relation `IS` a statement holds from its bind is
+    //     what a DDL's `X` waits for; `read_borrow.hpp` states the defence
+    //     and its direction.
+    //   - **The object-oid sequence** (AT-S5b). A counter per catalog would
+    //     let two catalogs issue the same oid, since every core runs
+    //     `CREATE TABLE` (AT-S5): whichever catalog first needs an oid seeds
+    //     it by CAS from `HighestIssuedUserOid()`, and every issue after
+    //     that is a `fetch_add` (`GenerateUserOid`).
+    //   - **The delete-mark count** (AT-S5b). It gates the purge; why the
+    //     gate has to be the instance's is at `PurgeSettledDeleteMarks`
+    //     below, where it is read.
+    //   - **The opted count** (CF-S1c), at `opted_patterns` below.
+    void SetInstanceWords(InstanceWords* words) noexcept { words_ = words; }
 
     // **Asked at a task boundary and nowhere inside one**: a drop frees
     // every `const TableAccess*` a running statement holds. `catalog.md`
@@ -289,7 +286,7 @@ public:
         std::uint64_t generation_;
     };
     std::uint64_t schema_word_now() const noexcept {
-        return schema_word_ == nullptr ? 0 : schema_word_->load(std::memory_order_acquire);
+        return words_ == nullptr ? 0 : words_->schema_word.load(std::memory_order_acquire);
     }
 
     // Whether the memo `Revalidate` last settled is still the word's: false
@@ -300,8 +297,8 @@ public:
     // unmoved at that moment proves the statement resolved the relation's
     // indexes and assertions as they now stand.
     bool MemoIsCurrent() const noexcept {
-        return schema_word_ == nullptr ||
-               schema_word_->load(std::memory_order_acquire) == cache_built_at_;
+        return words_ == nullptr ||
+               words_->schema_word.load(std::memory_order_acquire) == cache_built_at_;
     }
 
     // Drops every cached fact without bumping anything. Its callers are
@@ -361,17 +358,17 @@ public:
     // `system` tick (`CommandDispatcher::SweepSettledDeleteMarks`, BP-H11),
     // on **one** core - a placement, so that two cores do not walk the same
     // chains at once, not an authority (AT-S5). Which is why the gate it reads is the
-    // instance's (`SetMarkCounter`, AT-S5b): the sweeping core has to see
+    // instance's (`SetInstanceWords`, AT-S5b): the sweeping core has to see
     // a mark another core wrote, or a peer's `DROP` would wait for the
     // next mount. The soundness proof lives once, in
     // `ddl-transactional.md` §5d.
     StatusOr<std::uint64_t> PurgeSettledDeleteMarks();
     // Marks written this run and not yet retired - the instance's count
-    // where one is wired (`SetMarkCounter`), the local one for a bare
+    // where one is wired (`SetInstanceWords`), the local one for a bare
     // catalog. Public for the purge trigger's first test (BP-H11).
     std::uint64_t MarkCount() const noexcept {
-        return mark_counter_ != nullptr ? mark_counter_->load(std::memory_order_acquire)
-                                        : pending_marks_;
+        return words_ != nullptr ? words_->mark_count.load(std::memory_order_acquire)
+                                 : pending_marks_;
     }
 
     // Registers the fixed namespace/type sys-objects in the in-memory
@@ -803,10 +800,8 @@ public:
 
     // **The instance's opted count** (CF-S1c, §8.3 "The gate and its hot-path
     // cost"): how many current-version `sys.patterns` rows carry
-    // `kPatternWaystone`. One atomic for the instance, owned by `Expeditor`
-    // beside the schema word and handed to every core's catalog the same
-    // way; null keeps a local count, which is what a bare fixture catalog
-    // and the sim hold (`catalog.md` CT6's shape).
+    // `kPatternWaystone`. The fourth of the instance's words
+    // (`SetInstanceWords`); a bare catalog keeps a local count.
     //
     // **Moved only after a successful write, under page 9's hold**, and only
     // on a 0->1 or 1->0 change of the bit on a **current-version** row:
@@ -814,16 +809,14 @@ public:
     // 0. **Set from the chain at every boot**, after redo where redo runs:
     // `RenewPatternDirectories`' walk sets it, and a boot that runs no
     // renewal runs `RecountOptedPatterns`. A stale count costs performance
-    // only (invariant 8): it gates a lookup, never what a reader sees.
-    // Read with an acquire load, moved with acq_rel read-modify-writes, set
-    // with a release store; it publishes nothing beside itself - what a
-    // peer's map holds is the schema word's to order, not this word's.
-    void SetOptedCount(std::atomic<std::uint64_t>* count) noexcept { opted_count_ = count; }
+    // only (invariant 8): it gates a lookup, never what a reader sees. Its
+    // memory orders are at the field (`instance_words.hpp`).
+    //
     // One load, with no fill: the `SELECT` path's whole cost while nothing
     // on the instance is opted.
     std::uint64_t opted_patterns() const noexcept {
-        return opted_count_ != nullptr ? opted_count_->load(std::memory_order_acquire)
-                                       : local_opted_;
+        return words_ != nullptr ? words_->opted_count.load(std::memory_order_acquire)
+                                 : local_opted_;
     }
     bool NoOptedPatterns() const noexcept { return opted_patterns() == 0; }
 
@@ -1355,15 +1348,14 @@ private:
 
     // ---- The delete-mark count, and the one seam it is reached through -
     //
-    // Two shapes: `mark_counter_` when an instance named one
-    // (`SetMarkCounter`), the local `pending_marks_` for a bare catalog.
+    // Two shapes: the instance's `mark_count` when one was wired
+    // (`SetInstanceWords`), the local `pending_marks_` for a bare catalog.
     // Nothing outside these two and the public `MarkCount` touches either,
-    // which is what keeps the two from diverging. The word is `acq_rel`
-    // because a mark's *row* is a page write another core reads and the
-    // count is what tells that core to look.
+    // which is what keeps the two from diverging. The word's memory orders,
+    // and why, are at the field (`instance_words.hpp`).
     void NoteMark() noexcept {
-        if (mark_counter_ != nullptr) {
-            mark_counter_->fetch_add(1, std::memory_order_acq_rel);
+        if (words_ != nullptr) {
+            words_->mark_count.fetch_add(1, std::memory_order_acq_rel);
         } else {
             ++pending_marks_;
         }
@@ -1377,8 +1369,8 @@ private:
     // `catalog.md` CT6 carries which direction of error is allowed and
     // why.
     void ResettleMarks(std::uint64_t before, std::uint64_t remaining) noexcept {
-        if (mark_counter_ != nullptr) {
-            mark_counter_->fetch_add(remaining - before, std::memory_order_acq_rel);
+        if (words_ != nullptr) {
+            words_->mark_count.fetch_add(remaining - before, std::memory_order_acq_rel);
         } else {
             pending_marks_ = remaining;
         }
@@ -1538,18 +1530,16 @@ private:
     // so the counter may overshoot, costing at most one sweep that finds
     // less than it expected and never a missed mark.
     //
-    // **This member is the fallback**: `mark_counter_` is where the count
-    // lives when an instance named one (`SetMarkCounter`), and the three
-    // accessors above are the only things that touch either.
+    // **This member is the fallback**: `words_->mark_count` is where the
+    // count lives when an instance named its words (`SetInstanceWords`), and
+    // the three accessors above are the only things that touch either.
     std::uint64_t pending_marks_ = 0;
-    std::atomic<std::uint64_t>* mark_counter_ = nullptr;
 
     // **The opted count's fallback** (CF-S1c), `pending_marks_`'s shape:
-    // `opted_count_` is where the count lives when an instance named one
-    // (`SetOptedCount`). Moved by the two below and set at a boot; nothing
-    // else writes either.
+    // `words_->opted_count` is where the count lives when an instance named
+    // its words (`SetInstanceWords`). Moved by the two below and set at a
+    // boot; nothing else writes either.
     std::uint64_t local_opted_ = 0;
-    std::atomic<std::uint64_t>* opted_count_ = nullptr;
     // A 0->1 (`up`) or 1->0 change of the bit on a current-version row,
     // after its write and under page 9's hold. The decrement saturates at 0:
     // a count set at a boot from a chain a raw write moved since must not
@@ -1559,11 +1549,10 @@ private:
     // Unset until the first GenerateUserOid() recovers it from the catalog.
     // An optional rather than a sentinel value, because every integer in
     // this type's range is a legal oid and a sentinel would be one more
-    // thing that has to stay outside the range it guards.
+    // thing that has to stay outside the range it guards. Unused, and
+    // empty, while `words_` is set: the instance's `oid_sequence` issues
+    // instead.
     std::optional<Oid> next_user_oid_;
-    // Null unless `SetOidSequence` named the instance's; `next_user_oid_` is
-    // then unused and stays empty.
-    std::atomic<Oid>* oid_sequence_ = nullptr;
 
     // The highest oid `sys.objects` and `sys.columns` carry, or
     // kUserOidStart - 1 if they carry none above it. Reads the pages; called
@@ -1574,12 +1563,15 @@ private:
     CatalogCache cache_;
     std::uint64_t catalog_version_ = 0;
 
-    // The word and the value this cache was built at (`SetSchemaWord`,
-    // `Revalidate()`). `BumpWord()` runs at every DDL write; its adopt-only-
+    // The value of the instance's schema word this cache was built at
+    // (`Revalidate()`). `BumpWord()` runs at every DDL write; its adopt-only-
     // if-current rule is stated where it is decided, in `catalog.cpp`.
     void BumpWord(Tally cause);
-    std::atomic<std::uint64_t>* schema_word_ = nullptr;
     std::uint64_t cache_built_at_ = 0;
+
+    // The instance's four words (`SetInstanceWords`, CT6), or null for a
+    // bare catalog, which then runs on the local copies above.
+    InstanceWords* words_ = nullptr;
 };
 
 }  // namespace kds::catalog

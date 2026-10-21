@@ -840,10 +840,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // along, but re-setting it keeps that fact local instead of depending
     // on a copy elsewhere staying a copy.
     expeditor->database_->catalog.SetLogger(&*expeditor->logger_);
-    expeditor->database_->catalog.SetSchemaWord(&expeditor->schema_version_);  // AT-S2
-    expeditor->database_->catalog.SetOidSequence(&expeditor->oid_sequence_);  // AT-S5b
-    expeditor->database_->catalog.SetMarkCounter(&expeditor->delete_mark_count_);  // AT-S5b
-    expeditor->database_->catalog.SetOptedCount(&expeditor->waystone_opted_);  // CF-S1c
+    // The instance's four words (CT6; AT-S2, AT-S5b, CF-S1c).
+    expeditor->database_->catalog.SetInstanceWords(&expeditor->instance_words_);
 
     // The WAL stack, before the dispatcher: INSERT logs through it, so the
     // dispatcher cannot be built until it exists.
@@ -1157,7 +1155,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                     /*core=*/0, expeditor->locks_.get());
     // The schema word a catalog-writing decide moves before its borrows go
     // (AT-S5e) - the instance's, every core's catalog asks it.
-    expeditor->txn_manager_->SetSchemaWord(&expeditor->schema_version_);
+    expeditor->txn_manager_->SetSchemaWord(&expeditor->instance_words_.schema_word);
 
     expeditor->dispatcher_.emplace(
         expeditor->database_->superblock, expeditor->database_->catalog, *expeditor->store_,
@@ -1900,15 +1898,13 @@ Status Expeditor::Start() {
             // table is what lets this peer's decide wake a waiter on core 0
             // and core 0's wake one here.
             core_config.locks = locks_.get();
-            core_config.schema_word = &schema_version_;
+            // The instance's four words (CT6), on the same terms.
+            core_config.instance_words = &instance_words_;
             // **The instance's Cabin store** (AT-S7): every peer observes
             // into core 0's and serves from it, which is what makes a set
             // a superset of every tuple key carrying its value when every core
             // writes and reads one relation.
             core_config.cabins_store = cabin_store_ ? &*cabin_store_ : nullptr;
-            core_config.oid_sequence = &oid_sequence_;
-            core_config.mark_counter = &delete_mark_count_;
-            core_config.opted_count = &waystone_opted_;
             core_config.assertions = &*assertions_;
             // The instance's anchor and its run (AT-S8): this peer's
             // checkpointer publishes into core 0's `SuperBlockCheckpointAnchor`

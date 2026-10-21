@@ -224,10 +224,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // (AT-S2), so the memo here is this core's cache of shared rows.
     runtime->catalog_.emplace(*runtime->store_, config.inline_cell_width);
     runtime->catalog_->SetLogger(log);
-    runtime->catalog_->SetSchemaWord(config.schema_word);  // AT-S2
-    runtime->catalog_->SetOidSequence(config.oid_sequence);  // AT-S5b
-    runtime->catalog_->SetMarkCounter(config.mark_counter);  // AT-S5b
-    runtime->catalog_->SetOptedCount(config.opted_count);    // CF-S1c
+    runtime->catalog_->SetInstanceWords(config.instance_words);  // CT6
     // Every core's catalog writes are logged (RV3), on every core since
     // AT-S5.
     runtime->catalog_->SetWal(runtime->wal_.get());
@@ -257,7 +254,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                                   runtime->locks_);
     // The schema word a catalog-writing decide moves before its borrows go
     // (AT-S5e): the same word this core's catalog asks at its boundaries.
-    runtime->txn_manager_->SetSchemaWord(config.schema_word);
+    runtime->txn_manager_->SetSchemaWord(
+        config.instance_words != nullptr ? &config.instance_words->schema_word : nullptr);
 
     // **The instance's Cabin store where one was handed** (AT-S7); this
     // core's own only where nobody did, which is a fixture.

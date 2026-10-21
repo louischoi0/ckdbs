@@ -354,9 +354,9 @@ protected:
         auto boot = bootstrap::BootstrapDatabase(store_, /*now_unix_seconds=*/6000);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
-        boot_->catalog.SetSchemaWord(&word_);
+        boot_->catalog.SetInstanceWords(&words_);
         peer_catalog_.emplace(store_);
-        peer_catalog_->SetSchemaWord(&word_);
+        peer_catalog_->SetInstanceWords(&words_);
         ids_.emplace(boot_->superblock);
         undo_.emplace(store_, /*wal=*/nullptr);
         auto table = txn::LockTable::Create(/*core_count=*/1, /*max_locks_per_txn=*/1024);
@@ -379,7 +379,7 @@ protected:
                   "INSERTED");
     }
 
-    std::atomic<std::uint64_t> word_{0};
+    catalog::InstanceWords words_;
     storage::InMemoryPageStore store_{kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<catalog::Catalog> peer_catalog_;

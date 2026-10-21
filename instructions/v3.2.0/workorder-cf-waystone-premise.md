@@ -515,6 +515,42 @@ one implementer, three `critics-developer` reviewers, then one fixer.
   `KDS_TEST_LARGE_CATALOG=1`, passed in 212 s on the implementer's tree.
 - **Overhead:** not measured; it is measured at the milestone's close.
 
+**CF-S1c: the count, the map and the gate - built** (`b0e6db12`, then
+the fold below).
+
+- **The opted count.** It is one atomic for the instance. It moves only
+  after a successful write that changes the bit on a current-version row,
+  and it saturates at 0. It is set at every boot, either by the renewal or
+  by a recount on the sim's `skip_recovery` boot.
+- **The opted map.** `FindOptedPattern` answers from a per-core map that is
+  complete for each cache generation. The map fills only while the count
+  is non-zero, and a miss scans nothing. `Catalog::FindPattern` is deleted,
+  and `IsCurrentOptIn` is the one predicate.
+- **The `SelectBody` gate.** `HasReplayableStep` runs first, then the
+  lookup, so a scan-only statement never fills the map. Replay reuses the
+  entry. The collector runs only when the statement is both recording and
+  opted. The identity guard keeps ANALYZE's line. A lookup that cannot read
+  is counted in `write_failures`.
+- **The contract suite** compares opted against not-opted under every
+  ceiling, with the trail deleted, the trail corrupted and the bit flipped
+  mid-run. Every recordable opted query asserts `replays`.
+- **Review: 17 findings, none of them bugs.** 16 were applied. The opted
+  count made a fourth instance word, which crosses CT6's threshold; that is
+  CF-O-Q15, settled (a) by the spec. Eight mutants were each killed.
+- **Divergences:**
+  - `FindPattern` is deleted rather than kept beside `FindOptedPattern`.
+  - "A failed write" is tested at every write site, including a
+    fail-stopped log.
+- **The fold.** The four instance words (schema word, oid sequence, mark
+  count, opted count) are now one `catalog::InstanceWords`, wired by one
+  setter, `Catalog::SetInstanceWords`, and one `CoreRuntime::Config` field.
+  The old setters and fields are deleted. `catalog.md` CT6 and `rules.md`
+  are amended. The engine's behaviour is unchanged. Review: 6 findings, all
+  applied.
+- **Suite:** the full Debug suite passed 4263/4263 on the folded tree
+  (`ctest -j8 -LE bs-nightly`).
+- **Overhead:** not measured; it is measured at the milestone's close.
+
 ---
 
 ## 8. Branch O - the amendment (CF-S1)
@@ -940,7 +976,7 @@ CF-S1c's review. `docs/spec/catalog.md` CT6 keeps three words as three
 pointers "by threshold, not principle" and says "a fourth word tips it
 (AT-0 item 11)"; item 11's row reads "three at three words, one at four".
 CF-S1c wired the opted count as a fourth pointer
-(`Expeditor::waystone_opted_`, `Catalog::SetOptedCount`,
+(as `Expeditor::waystone_opted_`, `Catalog::SetOptedCount` and
 `CoreRuntime::Config::opted_count`), so the code has crossed the
 threshold the spec states.
 - (a) Fold the four words into one instance-words struct, set once per catalog and carried by one `CoreRuntime::Config` field, re-opening AT-S2's schema-word seam and the fixtures that wire the words (`two_core_rig.hpp`, `core_runtime_test.cpp`, `catalog_name_race_test.cpp`, `transition_test.cpp`, `lock_family_test.cpp` and the rest).

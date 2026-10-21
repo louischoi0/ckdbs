@@ -3413,22 +3413,23 @@ TEST_F(CleanDroppedWaitTest, AnOlderReaderAtTheBoundIsRefusedRetryably) {
 // below the drop's; the clean waits with its own slot idle and re-runs once
 // core 1 leaves.
 TEST_F(CleanDroppedWaitTest, AStatementOnAnOlderSchemaWordIsWaitedFor) {
-    std::atomic<std::uint64_t> word{1};
+    catalog::InstanceWords words;
+    words.schema_word.store(1);
     StatementEpochs epochs(/*cores=*/2);
-    boot_->catalog.SetSchemaWord(&word);
+    boot_->catalog.SetInstanceWords(&words);
     dispatcher_->SetStatementEpochs(&epochs);
     struct Unwire {
         CommandDispatcher* dispatcher;
         catalog::Catalog* catalog;
         ~Unwire() {
             dispatcher->SetStatementEpochs(nullptr);
-            catalog->SetSchemaWord(nullptr);
+            catalog->SetInstanceWords(nullptr);
         }
     } unwire{&*dispatcher_, &boot_->catalog};
     ASSERT_EQ(Local("CREATE TABLE te (id int64, s varchar NULL, v int64)").rfind("CREATED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO te VALUES (1, 'kept', 1)").rfind("INSERTED", 0), 0u);
     epochs.Enter(1);
-    epochs.Publish(1, word.load());
+    epochs.Publish(1, words.schema_word.load());
     ASSERT_EQ(Local("ALTER TABLE te DROP COLUMN s"), "DROPPED COLUMN te.s");
 
     Session b;

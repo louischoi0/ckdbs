@@ -39,8 +39,9 @@ void Ok(CommandDispatcher& d, Session& s, const std::string& sql) {
 }
 
 // The premise and the change: a peer's drop, with nothing at all on core 0,
-// is swept by core 0's tick. **Mutation** (D7, AT-S5b): drop the rig's
-// `config.mark_counter` and core 0 sees no pending mark.
+// is swept by core 0's tick. **Mutation** (D7, AT-S5b):
+// `if (false && words_ != nullptr)` in `Catalog::NoteMark`, and the peer's
+// mark lands in its local `pending_marks_`, so core 0 sees no pending mark.
 TEST(PurgeTriggerRigTest, APeersDropIsSweptByCoreZerosTickWithNoDdlOnCoreZero) {
     std::unique_ptr<TwoCoreRig> rig = OpenRig();
     ASSERT_NE(rig, nullptr);

@@ -33,9 +33,10 @@ class CatalogTest : public ::testing::Test {
 protected:
     storage::InMemoryPageStore store_{server_first_new_page_id_};
     Catalog catalog_{store_};
-    // The schema word the AT-S2 cells share between this catalog and a
-    // reader (a fixture member, so it outlives every catalog pointing at it).
-    std::atomic<std::uint64_t> word{0};
+    // The instance words the AT-S2 cells share between this catalog and a
+    // reader (a fixture member; trivially destructible, so a catalog
+    // destroyed after it reads none of it).
+    InstanceWords words;
 
     // Matches kds::server::kFirstUserPageId (128) so freshly-created pages -
     // user tables' and a catalog chain's growth alike - never collide with
@@ -786,14 +787,14 @@ TEST_F(CatalogTest, EveryDdlBumpsTheSchemaWordAndTheWriterKeepsItsOwnCache) {
     // the DDL's relation `X` is released, D21's order - and the writer's own
     // cache, dropped by `BumpVersion()` itself, is not dropped a second
     // time by its own bump: `cache_built_at_` moves with the word.
-    catalog_.SetSchemaWord(&word);
+    catalog_.SetInstanceWords(&words);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    const std::uint64_t after_bootstrap = word.load();
+    const std::uint64_t after_bootstrap = words.schema_word.load();
     EXPECT_GT(after_bootstrap, 0u) << "bootstrap writes catalog rows and bumps";
 
     auto oid = catalog_.CreateTable(kNamespacePublic, "w", MinimalTupleKeySchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
-    EXPECT_GT(word.load(), after_bootstrap);
+    EXPECT_GT(words.schema_word.load(), after_bootstrap);
 
     // The writer's cache holds across its own bumps: two resolves, one fill.
     const auto stats_before = catalog_.cache_stats();
@@ -810,14 +811,14 @@ TEST_F(CatalogTest, AReaderDropsOnlyAtItsBoundaryNeverInsideARead) {
     // reader that filled `a`, saw the word move, and then read `b` - as a
     // join's second bind does - still holds `a`; its next `Revalidate()` is
     // what drops.
-    catalog_.SetSchemaWord(&word);
+    catalog_.SetInstanceWords(&words);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto a = catalog_.CreateTable(kNamespacePublic, "a", MinimalTupleKeySchema());
     auto b = catalog_.CreateTable(kNamespacePublic, "b", MinimalTupleKeySchema());
     ASSERT_TRUE(a.ok() && b.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
-    reader.SetSchemaWord(&word);
+    reader.SetInstanceWords(&words);
     reader.Revalidate();
     auto held = reader.InitTableAccess(a.value());
     ASSERT_TRUE(held.ok());
@@ -842,13 +843,13 @@ TEST_F(CatalogTest, ABumpFromACacheThatIsBehindDoesNotSwallowTheOneItMissed) {
     // admits one - and must **not** adopt the new value, or the bump it
     // never revalidated against is swallowed and the stale memo stands for
     // good. The next boundary must still drop.
-    catalog_.SetSchemaWord(&word);
+    catalog_.SetInstanceWords(&words);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto oid = catalog_.CreateTable(kNamespacePublic, "s", MinimalTupleKeySchema());
     ASSERT_TRUE(oid.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
-    reader.SetSchemaWord(&word);
+    reader.SetInstanceWords(&words);
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
     const std::uint64_t drops = reader.cache_stats().invalidations;
@@ -870,13 +871,13 @@ TEST_F(CatalogTest, AReaderDropsItsCacheWhenTheWordMovesAndOnlyThen) {
     // is. It fills its memo, the word moves, and its next cached read
     // drops the memo and refills - with nothing sent. While the word is
     // still, the memo is served.
-    catalog_.SetSchemaWord(&word);
+    catalog_.SetInstanceWords(&words);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto oid = catalog_.CreateTable(kNamespacePublic, "r", MinimalTupleKeySchema());
     ASSERT_TRUE(oid.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
-    reader.SetSchemaWord(&word);
+    reader.SetInstanceWords(&words);
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
     const auto filled = reader.cache_stats();
@@ -898,13 +899,13 @@ TEST_F(CatalogTest, InvalidateAfterCompensationBumpsTheWordAndDropCacheDoesNot) 
     // catalog-writing transaction make (`TxnSessionTest` runs the endings
     // themselves); it bumps. `DropCache()` is the mount's post-redo drop;
     // it bumps nothing, since nothing on this instance's numbering changed.
-    catalog_.SetSchemaWord(&word);
+    catalog_.SetInstanceWords(&words);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    const std::uint64_t before = word.load();
+    const std::uint64_t before = words.schema_word.load();
     catalog_.InvalidateAfterCompensation();
-    EXPECT_EQ(word.load(), before + 1);
+    EXPECT_EQ(words.schema_word.load(), before + 1);
     catalog_.DropCache();
-    EXPECT_EQ(word.load(), before + 1);
+    EXPECT_EQ(words.schema_word.load(), before + 1);
 }
 
 // The version counter parser.md I5 / PR20 stamp bound statements with. Its
@@ -1435,14 +1436,14 @@ TEST_F(PatternCatalogTest, AnOffAtCountZeroLeavesItZero) {
     EXPECT_TRUE(catalog_.NoOptedPatterns());
 
     // And the instance's word saturates the same way.
-    std::atomic<std::uint64_t> count{0};
-    catalog_.SetOptedCount(&count);
+    InstanceWords words;
+    catalog_.SetInstanceWords(&words);
     WriteRawPatternRow(8, kVersion, kPatternWaystone);
     EXPECT_TRUE(Off(8));
-    EXPECT_EQ(count.load(), 0u);
+    EXPECT_EQ(words.opted_count.load(), 0u);
     ASSERT_TRUE(On(8));
-    EXPECT_EQ(count.load(), 1u) << "the instance's word was not the one moved";
-    catalog_.SetOptedCount(nullptr);
+    EXPECT_EQ(words.opted_count.load(), 1u) << "the instance's word was not the one moved";
+    catalog_.SetInstanceWords(nullptr);
 }
 
 // **The opted map's soundness rule** (`catalog_cache.hpp`), pinned: the map
@@ -1482,13 +1483,10 @@ TEST_F(PatternCatalogTest, TheOptedMapIsCompletePerGenerationAndMissesWithNoScan
 // opted count as every core does: an opt-in on one reaches the other at its
 // next statement head (`Revalidate`), and an opt-out the same way.
 TEST_F(PatternCatalogTest, APeerSeesAnOptInAndAnOptOutAtItsNextRevalidation) {
-    std::atomic<std::uint64_t> word{0};
-    std::atomic<std::uint64_t> count{0};
-    catalog_.SetSchemaWord(&word);
-    catalog_.SetOptedCount(&count);
+    InstanceWords words;
+    catalog_.SetInstanceWords(&words);
     Catalog peer(store_);
-    peer.SetSchemaWord(&word);
-    peer.SetOptedCount(&count);
+    peer.SetInstanceWords(&words);
 
     ASSERT_TRUE(On(10));
     ASSERT_TRUE(On(11));
@@ -1502,10 +1500,9 @@ TEST_F(PatternCatalogTest, APeerSeesAnOptInAndAnOptOutAtItsNextRevalidation) {
     ASSERT_TRUE(Off(10));
     peer.Revalidate();
     EXPECT_FALSE(peer.FindOptedPattern(10).ok()) << "the peer kept an opted-out row";
-    EXPECT_EQ(count.load(), 2u);
+    EXPECT_EQ(words.opted_count.load(), 2u);
 
-    catalog_.SetSchemaWord(nullptr);
-    catalog_.SetOptedCount(nullptr);
+    catalog_.SetInstanceWords(nullptr);
 }
 
 // **With the count at zero a word move causes no fill** (§8.5 CF-S1c): every
@@ -1513,16 +1510,13 @@ TEST_F(PatternCatalogTest, APeerSeesAnOptInAndAnOptOutAtItsNextRevalidation) {
 // every peer's generation, and on an instance with nothing opted the next
 // ask must cost the load and no scan.
 TEST_F(PatternCatalogTest, WithTheCountAtZeroAWordMoveCausesNoFill) {
-    std::atomic<std::uint64_t> word{0};
-    std::atomic<std::uint64_t> count{0};
-    catalog_.SetSchemaWord(&word);
-    catalog_.SetOptedCount(&count);
+    InstanceWords words;
+    catalog_.SetInstanceWords(&words);
     Catalog peer(store_);
-    peer.SetSchemaWord(&word);
-    peer.SetOptedCount(&count);
+    peer.SetInstanceWords(&words);
 
     for (int i = 0; i < 3; ++i) {
-        word.fetch_add(1);
+        words.schema_word.fetch_add(1);
         peer.Revalidate();
         EXPECT_FALSE(peer.FindOptedPattern(1).ok());
     }
@@ -1533,8 +1527,7 @@ TEST_F(PatternCatalogTest, WithTheCountAtZeroAWordMoveCausesNoFill) {
     EXPECT_TRUE(peer.FindOptedPattern(1).ok());
     EXPECT_EQ(peer.cache_stats().pattern_fills, 1u);
 
-    catalog_.SetSchemaWord(nullptr);
-    catalog_.SetOptedCount(nullptr);
+    catalog_.SetInstanceWords(nullptr);
 }
 
 // ---- What an opt-in must not disturb ---------------------------------------

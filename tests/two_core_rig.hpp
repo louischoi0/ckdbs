@@ -448,15 +448,12 @@ private:
             config.shared_writer = wal_->writer();
             config.visibility = &*visibility_;
             config.locks = locks_.get();
-            config.schema_word = &schema_word_;
+            config.instance_words = &words_;  // CT6: one set for both cores
             // **The instance's Cabin store** (AT-S7), as `Expeditor` hands
             // it: both cores observe into one and serve from one, which is
             // production's shape and the thing a rig that built two would
             // stop being able to see.
             config.cabins_store = &cabins_;
-            config.oid_sequence = &oid_sequence_;
-            config.mark_counter = &pending_marks_;
-            config.opted_count = &opted_count_;
             config.assertions = &assertions_;
             // The peer's checkpointer publishes into an anchor, as
             // `Expeditor`'s peers do (AT-S8); a rig never remounts, so an
@@ -506,10 +503,7 @@ private:
     std::optional<sched::SimWakerTable> sim_;
     stats::CabinStore cabins_;
     std::unique_ptr<txn::LockTable> locks_;
-    std::atomic<std::uint64_t> schema_word_{0};  // AT-S2: one for both cores
-    std::atomic<catalog::Oid> oid_sequence_{0};  // AT-S5b: one for both cores
-    std::atomic<std::uint64_t> pending_marks_{0};  // AT-S5b: one for both cores
-    std::atomic<std::uint64_t> opted_count_{0};    // CF-S1c: one for both cores
+    catalog::InstanceWords words_;                 // CT6: one set for both cores
     wal::InMemoryCheckpointAnchor peer_anchor_;    // AT-S8: page 0's stand-in
     std::optional<SuperBlockCheckpointAnchor> fold_anchor_;  // BC-S1: page 0's own
     wal::CheckpointGate checkpoint_gate_;          // AT-S8: one for both cores

@@ -758,37 +758,25 @@ private:
     // deadlock detector's graph spans every core.
     std::unique_ptr<txn::LockTable> locks_;
 
-    // **The instance's schema version word** (AT-S2; AR0-5 §2.1, D21).
-    // Memory-resident and never persisted: every cache is empty at mount.
-    // Core 0's catalog and every peer's read and bump it through
-    // `Catalog::SetSchemaWord`; no DDL is broadcast to a core. Declared
-    // beside the lock table for the same
-    // lifetime reason: every catalog that holds a pointer to it is below.
-    std::atomic<std::uint64_t> schema_version_{0};
-    // **The instance's object-oid sequence** (AT-S5b; `Catalog::SetOidSequence`).
-    // Zero until the first catalog that needs an oid seeds it from the pages.
+    // **The instance's four words** (`catalog.md` CT6; one struct since
+    // CF-S1c, `catalog/instance_words.hpp`): the schema version word
+    // (AT-S2; AR0-5 §2.1, D21), the object-oid sequence and the delete-mark
+    // count (AT-S5b), and the Waystone opted count (CF-S1c). Memory-resident
+    // and never persisted: the schema word and the mark count start at zero
+    // with every cache empty, the oid sequence is seeded from the pages by
+    // the first catalog that needs an oid, and the opted count is set from
+    // the chain by the mount's renewal. Core 0's catalog takes them through
+    // `Catalog::SetInstanceWords` in `Open`, every peer's through
+    // `CoreRuntime::Config::instance_words`, and core 0's transaction
+    // manager borrows the schema word; no DDL is broadcast to a core.
     //
-    // **The declaration order is not what makes these safe.** `database_`
-    // is declared *above* all four words, so core 0's `Catalog` outlives
-    // them; what makes that harmless is that all four are trivially
-    // destructible and `~Catalog` reads none of them. A word whose
-    // destructor did anything would have to move above `database_`.
-    std::atomic<catalog::Oid> oid_sequence_{0};
-    // **The instance's delete-mark counter** (AT-S5b; `Catalog::SetMarkCounter`),
-    // the third word every core's catalog reads from here. Named for the
-    // count and not for `Catalog::pending_marks_`, which is the *local*
-    // fallback this replaces - one name for the two would read as the same
-    // quantity. Separate pointers rather than one struct, by `catalog.md`
-    // CT6's threshold, which the opted count below crosses.
-    std::atomic<std::uint64_t> delete_mark_count_{0};
-    // **The instance's opted count** (CF-S1c; `Catalog::SetOptedCount`), the
-    // fourth word every core's catalog reads from here: how many current
-    // `sys.patterns` rows are opted in, so a `SELECT` on an instance with
-    // none pays one load. Set from the chain by the mount's renewal.
-    // **A fourth pointer against CT6**, which says a fourth word folds the
-    // words into one struct (AT-0 item 11): a divergence held open for the
-    // operator's ruling as CF-O-Q15, not a decision taken here.
-    std::atomic<std::uint64_t> waystone_opted_{0};
+    // **The declaration order is not what makes this safe.** `database_`
+    // is declared *above* the words, so core 0's `Catalog` outlives them;
+    // what makes that harmless is that the struct is trivially destructible
+    // (`instance_words.hpp` asserts it) and `~Catalog` reads none of it. A
+    // word whose destructor did anything would have to move above
+    // `database_`.
+    catalog::InstanceWords instance_words_;
 
     // **The instance's assertion registry** (AT-S5d, AT-R15): the one
     // directory per assertion every core's writes check and reserve into,
