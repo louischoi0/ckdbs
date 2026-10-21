@@ -386,3 +386,39 @@ asking for them.
 ## 7. Stage log
 
 **Opened 2026-10-21 on W2**; CF-S0 started on the same word.
+
+**CF-S0: the premise, measured**
+(`bench/v3.3.0/results-cf-s0-premise-v3.3.0-97-g3d628df4.md`; harness
+`bench/v3.3.0/archive/cf-harness/`).
+
+- **How it ran.** Three arms (CF-Q2 (a)) in rotating order, 6 reps each,
+  `cores = 1`, `build-release`, at engine source `a1809988`.
+  - Every cell's reply digest was identical across the 18 runs.
+  - Arm A's `replays=` was non-zero on every recordable cell and zero in
+    B and C. This is the first v3 measurement to show that a replay ran.
+- **Point reads and tuple-key chains** (`pk`, `chain3`, `chain4`):
+  - Replay's gain is nil, -0.2 % to -1.1 %, inside the spread.
+  - The default (A) against both off (C) costs 2.7-3.9 % of server CPU
+    per statement, outside the spread on `chain3` and `pk`.
+  - The recording is that cost: about 1.2-1.5 us per statement.
+- **A scan-driven chain with 200 tuple-key probes** (`scanprobe`,
+  scenario 1's cross-section shape, reproduced synthetically):
+  - Replay pays: +5.7 % throughput and -7.2 % server CPU against B.
+  - The net against C is +5.0 % and -6.4 %, outside the spread.
+  - Recording costs it nothing measurable.
+- **The rotated position control** moved 0.1-0.6 %, inside its spread.
+- **Against CF-Q1 (a): not met.**
+  - Its two conditions hold on `scanprobe` alone, and on no `pk`,
+    `chain3` or `chain4` cell. Whether `scanprobe` is "a tuple-key
+    chain cell" is a reading: §1.1 names it a scan that probes by tuple
+    key, a different shape from a tuple-key join chain.
+  - Its "no cell regresses" clause fails: arm A regresses against C on
+    `chain3` and `pk`, outside the spread.
+  - So the bar does not support the present default and does not pick a
+    branch. Replay's gain on `scanprobe` meets §2.3's condition for
+    Branch O, if the operator counts that shape; Branch D keeps the gain
+    only instance-wide, with the point-read cost back.
+- **Cuts.** Scenario 1's driver was not run; its shapes were reproduced
+  on synthetic relations. There was no size sweep, no cold pool and no
+  `cores > 1`.
+- **What happens next.** The branch is the operator's (CF-Q0 (a)).
