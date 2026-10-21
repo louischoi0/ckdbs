@@ -73,6 +73,20 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Testing
 
+- **The sim's constraint stream cannot kill a mutant that ignores held
+  assertion contributions.** On `bs-test-hardening` at `76a2c08c`,
+  `scripts/bs/mutants.sh`'s `holds-ignored` (every held contribution
+  skipped in `assertion_check.cpp`'s admission) survived 9 of 9
+  `ckdbs-sim` runs. The sim writes `p0`, `c0` and `a0` from one session
+  in autocommit (BS-A12), so two admissions are never in flight at once.
+  Two cells kill it, 3 of 3 rounds:
+  `AssertionRaceTest.AHoldCountsInEveryAdmissionAndInNoSnapshotAndIsRoomAgainOnceGivenBack`,
+  which holds on one thread, and
+  `AssertionRaceTest.TwoCoresAdmittingIntoOneGroupAdmitExactlyOneAndRefuseTheOtherAtAdmission`,
+  on two cores. The other three mutants, which admit every row, loosen
+  the bound by one, and never refuse a parent `DELETE`, die in both the
+  sim and the cells. **Owner: none.**
+
 - **A split page created after the split's first write is guarded by one
   unit cell, not the sim.** Found 2026-10-16 on
   `worktree-fix-h9-chain-ascent` off `8cacbb3d`, closing H9. Two shapes
