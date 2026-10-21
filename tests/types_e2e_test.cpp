@@ -360,6 +360,11 @@ TEST(TypesEndToEnd, ATrailOverADecimalResidualReplaysIdentically) {
         "SELECT id, amt FROM trade WHERE id = 2 AND amt = '0.01'",
     };
 
+    // Opted in on the recording side (CF-S1b): nothing records otherwise.
+    for (const char* q : queries) {
+        ASSERT_EQ(on.Run(std::string("WAYSTONE ON ") + q).rfind("OK WAYSTONE ON", 0), 0u) << q;
+    }
+
     // Three passes: the first counts, the second records, the third is the
     // one served from the trail (recording is n=2 for observed traffic).
     for (int pass = 0; pass < 3; ++pass) {
@@ -367,6 +372,8 @@ TEST(TypesEndToEnd, ATrailOverADecimalResidualReplaysIdentically) {
             EXPECT_EQ(on.Run(q), off.Run(q)) << "pass " << pass << ": " << q;
         }
     }
+    EXPECT_NE(on.Run(std::string("ANALYZE ") + queries[0]).find("replays="), std::string::npos)
+        << "nothing replayed, so the comparison above proves nothing";
 }
 
 // ---- Refusals reach the wire with their positions ------------------------

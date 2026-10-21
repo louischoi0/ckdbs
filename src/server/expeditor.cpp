@@ -1060,7 +1060,28 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // after recovery, so this mount's own log has had its say, and before
     // the listener binds, so nothing is reading the relation while it is
     // emptied. Core 0's, at mount, like the step above.
-    if (Status s = DiscardAdvisoryState(expeditor->database_->catalog); !s.ok()) return s;
+    //
+    // **An opted pattern's directory is renewed here** (CF-S1b): a fresh,
+    // empty root for each row `WAYSTONE ON` set, under the
+    // `waystone_recording` ceiling, before the listener binds.
+    std::uint64_t waystone_opted = 0;
+    if (Status s = DiscardAdvisoryState(expeditor->database_->catalog,
+                                        expeditor->config_.waystone_recording, &waystone_opted);
+        !s.ok()) {
+        return s;
+    }
+    // **Nothing records until an operator opts a pattern in** (CF-S1b), so
+    // a config reading `waystone_recording = on` means less than it used to;
+    // the mount says what the ceilings are and how many patterns sit under
+    // them, under the keys' own names.
+    if (expeditor->logger_->enabled(LogLevel::kInfo)) {
+        expeditor->logger_->Info(
+            "waystone", std::string("waystone_recording=") +
+                            (expeditor->config_.waystone_recording ? "on" : "off") +
+                            " waystone_replay=" +
+                            (expeditor->config_.waystone_replay ? "on" : "off") +
+                            " waystone_opted=" + std::to_string(waystone_opted));
+    }
 
     // H7: collect the spills nothing points at. The assertion catalog -
     // `exec::LogChainInsert`'s one remaining caller - logs its spills under

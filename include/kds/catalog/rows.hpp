@@ -535,9 +535,11 @@ static_assert(offsetof(SysIndexRow, covered_cols) == SysIndexRow::kCoveredColsOf
 
 // ---- sys.patterns ----------------------------------------------------
 //
-// One row per observed fetch shape (docs/spec/waystone-concpets.md section 4).
-// **The table is the trail directory's and nothing else's**: the trail
-// recorder is its one writer, and a row exists only to hold a root. So it
+// One row per fetch shape ever opted in to Waystone
+// (docs/spec/waystone-concpets.md section 4; CF-S1b). **The table is the
+// trail directory's and nothing else's**: `WAYSTONE ON` is its one inserter,
+// a row holds the opt-in bit and the directory's root, and `WAYSTONE OFF`
+// clears both and keeps the row. So it
 // is keyed by `fetch_id` - the statement's pattern_id with the select list
 // left out - and two statements differing only in what they project share
 // one row (AP-S2, AP-Q2 (b)). The bytes at `kFetchIdOffset` held a
@@ -553,11 +555,11 @@ static_assert(offsetof(SysIndexRow, covered_cols) == SysIndexRow::kCoveredColsOf
 // because they change at different rates: the pattern's *identity*
 // (`fetch_id` + `fingerprint_version`), the *location* of its waystones
 // (`waystone_root` + `dir_depth`), and its *heat* (`use_count`,
-// `last_seen`). Only the first is stable; the second changes when the
-// directory deepens. The third is reserved: written 0 at registration and
+// `last_seen`). Only the first is stable; the second changes at an opt-in,
+// an opt-out and every mount. The third is reserved: written 0 at insert and
 // advanced by nothing since BL-S4's ruling 1 deleted the logged bump a
 // recorded execution made (`instructions/v3.0.0/raft-marks-2026-10-12.md`
-// §11) - read as zero, like `origin`/`flags`.
+// §11) - read as zero, like `origin`.
 //
 // Field order below is by descending alignment so that the on-disk offsets
 // and the struct's own offsets coincide, which is what lets every field
@@ -624,22 +626,17 @@ struct SysPatternRow {
     // relinked, and every walk in that window lands on the wrong leaf.
     std::uint8_t dir_depth;
 
-    // Policy bits. Today only kPatternPinned, which says what retention may
-    // do to this pattern's waystones
-    // (docs/spec/create-pattern-user-defined-patterns-v1.md section 4.1,
-    // withdrawn). **Nothing writes it**, and nothing reads it either -
-    // retention is unbuilt - so every row carries 0.
+    // Policy bits. Today only kPatternWaystone, the opt-in `WAYSTONE ON`
+    // sets and `WAYSTONE OFF` clears (CF-S1b): whether this shape records
+    // and replays at all. Every other bit is written 0.
     std::uint16_t flags;
 
-    // Who created this row: kOriginAuto or kOriginUser. **Every row is
-    // kOriginAuto**, since withdrawing declared patterns took away the only
-    // writer of the other value.
-    //
-    // **Separate from `flags` on purpose.** Origin is provenance and
-    // pinning is policy, and they moved independently: an operator could
-    // pin an auto-registered pattern without re-declaring it, and a
-    // declared pattern could be created unpinned. Folding pinning into
-    // origin would have made both of those unspellable.
+    // **Reserved since CF-S1b, written 0 and read by nothing.** It said who
+    // created the row - auto-registration or the withdrawn `CREATE PATTERN`
+    // - and since CF-S1b `WAYSTONE ON` is the only writer of a row, so it
+    // has no second value to carry. Kept rather than dropped because the row
+    // is an on-disk format: removing the byte would move no offset (it is
+    // the last field) but would change the row's size for nothing.
     //
     // The field order below is not cosmetic. `flags` (u16) sits before
     // `origin` (u8) because `dir_depth` ends the row at 37: a u16 next pads
@@ -678,27 +675,16 @@ static_assert(offsetof(SysPatternRow, flags) == SysPatternRow::kFlagsOffset);
 static_assert(offsetof(SysPatternRow, origin) == SysPatternRow::kOriginOffset);
 static_assert(SysPatternRow::kOnDiskSize == 41);
 
-// Who wrote a sys.patterns row. Persisted, so the numbers are frozen -
-// which is the whole reason both are still here after user-declared
-// patterns were withdrawn on 2026-08-31. `origin` is a `u8` at offset 37
-// because `dir_depth` ends the row there and a `u16` would pad, so dropping
-// it would move the on-disk layout for a field nothing pays for; and the
-// concept is not this feature's alone - `SysCabinRow` mirrors it below with
-// kCabinOriginAuto/kCabinOriginUser.
+// `flags` bit 0: **the shape is opted in to Waystone** (CF-S1b,
+// `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3). Set by
+// `WAYSTONE ON`, cleared by `WAYSTONE OFF`, and read by the trail recorder,
+// which records only for a row carrying it. Re-scoped from `kPatternPinned`,
+// which had no writer since 2026-08-31; superblock 33 is what keeps a
+// version-32 binary from reading it as that.
 //
-// **Only kOriginAuto is ever written.** It was never the trust model: a
-// replayed entry is validated identically whatever its origin.
-inline constexpr std::uint8_t kOriginAuto = 0;
-inline constexpr std::uint8_t kOriginUser = 1;
-
-// `flags` bit 0: retention may not evict this pattern's waystones. **No
-// writer since 2026-08-31** - `CREATE PATTERN` was the only one - and no
-// reader either, because retention is unbuilt.
-//
-// A policy promise, not a correctness requirement - invariant 8 still holds
-// for a pinned pattern, so a manual purge remains legal and costs
-// performance rather than answers.
-inline constexpr std::uint16_t kPatternPinned = 0x1;
+// A policy bit, not a correctness requirement - invariant 8 holds whatever
+// it says, so losing it costs performance rather than answers.
+inline constexpr std::uint16_t kPatternWaystone = 0x1;
 
 // ---- sys.access_stats -------------------------------------------------
 //
@@ -816,8 +802,8 @@ inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 // struct's coincide and every field carries an offsetof assert.
 struct SysCabinRow {
     // From AllocateRowId(kSysCabinsTable) - the persistent sequence in
-    // sys.cabins' own sys.tables row, for the reason RegisterPattern()
-    // records: GenerateUserOid() numbers *objects*, not this relation's rows, and
+    // sys.cabins' own sys.tables row, as a sys.patterns row's oid is:
+    // GenerateUserOid() numbers *objects*, not this relation's rows, and
     // this row is persisted.
     std::uint64_t cabin_id;
 

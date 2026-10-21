@@ -121,37 +121,23 @@ public:
     // PutTableAccess() and for the same reason.
     const PatternAccess* PutPattern(PatternAccess access);
 
-    // Points a cached pattern at a new directory, in place.
-    //
-    // An *update* rather than an invalidation, which is the one place this
-    // cache departs from "drop everything at one choke point" - so the
-    // reason is worth stating. The fact being changed belongs to exactly
-    // one pattern and is read by nothing else, so dropping every cached
-    // relation to publish it would be collateral damage; and it is
-    // precisely that collateral damage, in the deleted per-relation
-    // Waystone, that dangled the `const TableAccess*` a running INSERT was
-    // holding. Updating in place keeps the entry's address, so a caller
-    // holding the pointer sees the new root and keeps a valid pointer.
-    //
-    // A no-op when the pattern is not cached: there is nothing stale to
-    // fix, and filling the entry here would cache a fact the caller may
-    // never ask for.
-    void UpdatePatternWaystone(std::uint64_t fetch_id, PageId root,
-                               std::uint8_t depth) noexcept;
+    // A pattern's directory and opt-in are never updated in place (CF-S1b):
+    // `WAYSTONE ON`/`OFF` moves the schema word after its write, and the
+    // mount's renewal drops the cache, so every entry is refilled from the
+    // page. Both run with no statement holding an entry.
 
     // Points a cached relation's index at a new root page, in place.
     //
-    // **The second in-place update, and the one that had to exist.** An index
+    // **An in-place update, and one that had to exist.** An index
     // root moves when a split grows the tree, which happens inside an
     // ordinary INSERT - so a global drop here would dangle the
     // `const TableAccess*` the running statement is holding, and a
     // multi-row UPDATE would be holding it across every later row. That is
     // precisely the collateral damage the deleted per-relation Waystone
-    // caused, and the reason the update above exists.
+    // caused.
     //
-    // The fact qualifies by the same test they do: a root belongs to one
-    // index and is read by nothing else, so dropping every cached relation
-    // to publish it would be damage for nothing.
+    // A root belongs to one index and is read by nothing else, so dropping
+    // every cached relation to publish it would be damage for nothing.
     //
     // A no-op when the relation is not cached: there is nothing stale to
     // fix, and filling the entry here would cache a fact the caller may
@@ -258,9 +244,8 @@ private:
     // string_view needs no composite key built per statement.
     std::unordered_map<Oid, NameMap> name_to_oid_;
 
-    // Node-based for the same reference-stability reason as table_access_,
-    // and additionally because UpdatePatternWaystone() mutates an entry a
-    // caller may be holding.
+    // Node-based for the same reference-stability reason as table_access_:
+    // the trail recorder holds an entry across its write.
     std::unordered_map<std::uint64_t, PatternAccess> patterns_;
 
     // A vector with a linear scan, not a map: sys.types has ten rows and

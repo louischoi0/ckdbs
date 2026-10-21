@@ -17,6 +17,15 @@
 // statement has **succeeded**. Everything else - the sighting count, the
 // catalog row, the directory, the page - is behind it.
 //
+// ---- Only for an opted pattern (CF-S1b) ----------------------------------
+//
+// A trail is written only for a shape whose `sys.patterns` row carries
+// `kPatternWaystone`, which `WAYSTONE ON` sets. **This class writes no
+// catalog row and no root**: it reads the row the opt-in wrote and the
+// directory `WAYSTONE ON` or the mount made for it, so no `SELECT` appends
+// to the log. A shape with no row, or with a row and no bit, is sighted and
+// nothing more.
+//
 // ---- Recording is not free, so it is not unconditional ------------------
 //
 // `n = 2`, for every pattern (spec section 9, decided 2026-08-01): the
@@ -25,9 +34,9 @@
 // client ever sends; waiting longer misses short-lived hot instances. Two
 // is the smallest n that excludes the one-shot case.
 //
-// One threshold is the whole policy (user-declared patterns, recorded at
-// `n = 1`, were withdrawn on 2026-08-31), which is what lets the recorder
-// answer a first sighting without reading the catalog at all.
+// One threshold is the whole policy, for every opted pattern (CF-O-Q8 (a)),
+// which is what lets the recorder answer a first sighting without reading
+// the catalog at all.
 //
 // ---- What this deliberately does not do ---------------------------------
 //
@@ -37,8 +46,9 @@
 //
 // **It never fails a statement.** Every path returns void. A trail that
 // cannot be written is a trail that does not exist, which is the state
-// every instance starts in - so a full disk, a corrupt directory or a
-// registration race costs a replay and never an answer (invariant 8). The
+// every instance starts in - so a full disk, a corrupt directory or an
+// opted row with no directory costs a replay and never an answer
+// (invariant 8). The
 // failures are counted (`Stats`) so "recording silently does nothing" is
 // visible rather than assumed.
 //
@@ -66,15 +76,17 @@ public:
     // otherwise.
     static constexpr std::size_t kMaxSightings = 4096;
 
-    // Executions an instance must reach before its trail is written.
-    static constexpr std::uint8_t kAutoRecordThreshold = 2;
+    // Executions an instance must reach before its trail is written, for
+    // every opted pattern (CF-O-Q8 (a)).
+    static constexpr std::uint8_t kRecordThreshold = 2;
 
     struct Stats {
         std::uint64_t sightings = 0;        // instances observed
         std::uint64_t trails_written = 0;   // trails actually recorded
-        std::uint64_t patterns_registered = 0;  // auto-registrations performed
         std::uint64_t skipped_overflow = 0; // collector overflowed; nothing written
-        std::uint64_t write_failures = 0;   // a write that could not be made
+        std::uint64_t write_failures = 0;   // a write that could not be made, an
+                                            // opted row with no directory, or a
+                                            // pattern row that could not be read
         std::uint64_t sighting_table_clears = 0;
     };
 
@@ -92,12 +104,8 @@ public:
     // describes a state no reader should be pointed at (workplan P10).
     //
     // `key` is the instance the statement executed as; `trail` is what the
-    // executor collected. `stmt_class` is the compiled chain's class as the
-    // catalog stores it (`exec::StoredStatementClass`), needed only if this
-    // shape has to be registered - an already-registered pattern keeps the
-    // class it was registered with. Never fails: see the class comment.
-    void OnPatternResult(const InstanceKey& key, const exec::TrailCollector& trail,
-                         std::uint8_t stmt_class);
+    // executor collected. Never fails: see the class comment.
+    void OnPatternResult(const InstanceKey& key, const exec::TrailCollector& trail);
 
     const Stats& stats() const noexcept { return stats_; }
 
@@ -111,14 +119,16 @@ private:
     // table wholesale if it is full.
     std::uint8_t Observe(const InstanceKey& key);
 
-    // The pattern's row, registering it if this is the first time the shape
-    // has been seen. Returns nullopt when the row could not be obtained,
-    // which is a reason not to record and never an error to report upward.
-    const catalog::PatternAccess* EnsurePattern(std::uint64_t fetch_id,
-                                                std::uint8_t stmt_class);
+    // The pattern's row **if it is opted in**, or null: no row, a row of
+    // another fingerprint version, a row whose bit `WAYSTONE OFF` cleared,
+    // or a row that could not be read. Null is a reason not to record and
+    // never an error to report upward; the unreadable row alone is counted
+    // in `write_failures`.
+    const catalog::PatternAccess* EnsurePattern(std::uint64_t fetch_id);
 
-    // The pattern's directory pair, creating the directory on first use.
-    // An auto-registered pattern starts with `dir_depth == 0`.
+    // The opted row's directory pair. NotFound when the row has none -
+    // `WAYSTONE ON` under `waystone_recording = off`, a mount whose create
+    // failed - which nothing here repairs: the next mount or opt-in roots it.
     StatusOr<std::pair<PageId, std::uint8_t>> EnsureDirectory(
         const catalog::PatternAccess& pattern);
 

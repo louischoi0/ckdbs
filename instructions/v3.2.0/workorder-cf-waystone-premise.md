@@ -452,6 +452,69 @@ operator's marks, and no code moves before them.
 the amendment was pushed, and CF-O-Q1..Q14 were adopted, each (a), on the
 go-ahead. **CF-S1b started.**
 
+**CF-S1b: storage, the statement, the mount and superblock 33 - built**
+on `cf-waystone-premise`, branched from `26d973de`. It ran as a workflow:
+one implementer, three `critics-developer` reviewers, then one fixer.
+
+- **What it built** (§8.5 CF-S1b, as scoped):
+  - `kPatternWaystone`, and the `origin` byte made reserved;
+  - `Catalog::SetPatternWaystone`, which makes the directory page before
+    taking page 9's hold;
+  - OFF's walk over rows of every version;
+  - the `WAYSTONE` prefix verb and its refusal table;
+  - the view's `waystone` column;
+  - `RenewPatternDirectories`: two passes, then a drop of the cache;
+  - the boot log line and the `waystone` section of `MetaSections`;
+  - `kSuperBlockVersion = 33`;
+  - the deletion of auto-registration and the claim;
+  - the recorder reduced to a lookup of opted rows;
+  - the test reach, with `tests/waystone_opt_in_test.cpp` new;
+  - CLAUDE.md's rows, flipped at this landing.
+- **Where the tree made the code diverge from §8** (the implementer's
+  report):
+  1. A refused bind borrow never fails its statement (`read_borrow.hpp`),
+     so the `TxnConflict` row is unreachable. A cell pins the behaviour
+     instead.
+  2. The park waits on `appended_lsn() - 1`, because `IsDurable` is strict.
+  3. A `?` is refused before parsing, since the native grammar refuses it.
+     OFF fingerprints the text and parses a copy with each `?` read as
+     `0`.
+  4. `waystone_opted` is computed by a walk for each `SHOW META`, and the
+     boot line uses the renewal's own count. The atomic count is S1c's.
+  5. ON creates a page whenever recording is on and the row has no root.
+  6. `FindPattern` caches every row, opted or not, and the recorder checks
+     the bit itself.
+  7. The 1,500- and 17,000-row mount cells mount with recording off. The
+     reclaim re-drive cell runs both ways.
+  8. The built-join cell is now backed by a cell that opts a shape in.
+  9. The cache-before-discard cell runs at the catalog and dispatcher
+     level, because a mount offers no hook between its drop and the
+     discard.
+- **Review: 19 findings** (5 bugs, 1 spec divergence, 10 test gaps, 3
+  cleanups). 18 were applied and one was applied in part:
+  - **Bugs fixed:**
+    - a directory page leaked unlogged when page 9 could not be pinned;
+    - `ERR` was sent after the state had changed, so a failed sync request
+      now says the state is in effect but not durable;
+    - OFF failing part-way now bumps the word;
+    - a `FindPattern` read error is counted, not treated as "not opted".
+  - **The part rejected:** the interim `FindPattern` miss on a SELECT that
+    is not opted (a `ScanAll` of page 9's chain on every such statement
+    while a key is on) is S1c's to remove, as §8.5 states. Its comment now
+    states the cost.
+  - **Mutation check:** five mutants were applied, rebuilt and run, and
+    each was caught:
+    - the durable park;
+    - ON always creating a page;
+    - the shape filter;
+    - the recording-site `IsTrailReplayable`;
+    - the renewal's failure arm.
+- **Suite:** the full Debug suite (`ctest -j8 -LE bs-nightly`) passed
+  4250/4250 on the final tree. Two cells are disabled by design and two
+  are skipped. The 17,000-row cell, run alone with
+  `KDS_TEST_LARGE_CATALOG=1`, passed in 212 s on the implementer's tree.
+- **Overhead:** not measured; it is measured at the milestone's close.
+
 ---
 
 ## 8. Branch O - the amendment (CF-S1)

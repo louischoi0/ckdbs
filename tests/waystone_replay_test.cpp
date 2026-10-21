@@ -62,9 +62,16 @@ protected:
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
 
-    // Runs `sql` until its instance has a trail (n=2 for an observed
-    // pattern), then returns the reply of one more run.
+    // **Nothing records until a shape is opted in** (CF-S1b).
+    void OptIn(const std::string& sql) {
+        const std::string reply = Run("WAYSTONE ON " + sql);
+        ASSERT_EQ(reply.rfind("OK WAYSTONE ON", 0), 0u) << sql << " -> " << reply;
+    }
+
+    // Opts `sql` in and runs it until its instance has a trail (n=2), then
+    // returns the reply of one more run.
     std::string RunUntilRecorded(const std::string& sql) {
+        OptIn(sql);
         Run(sql);
         Run(sql);
         return Run(sql);
@@ -117,6 +124,7 @@ protected:
 
 TEST_F(WaystoneReplayTest, AReplayedStepReturnsExactlyWhatTheDescentReturned) {
     const std::string sql = "SELECT * FROM t WHERE id = 3";
+    OptIn(sql);
 
     const std::string first = Run(sql);   // descends; counts only
     const std::string second = Run(sql);  // descends; records
@@ -266,6 +274,7 @@ TEST_F(WaystoneReplayTest, AJoinReplaysEveryKeyedStepAndReturnsTheSameRows) {
     // replayable and the trail spans two relations.
     const std::string sql =
         "SELECT a.v, b.w FROM t AS a JOIN u AS b ON a.id = b.id WHERE a.id = 3";
+    OptIn(sql);
 
     const std::string descended = Run(sql);
     Run(sql);
@@ -299,6 +308,7 @@ TEST_F(WaystoneReplayTest, AnotherSelectListOverTheSameFetchReplaysTheTrail) {
     for (const char* rel : {"t", "h"}) {
         const std::string recorded = std::string("SELECT id FROM ") + rel + " WHERE id = 3";
         const std::string other = std::string("SELECT v, id FROM ") + rel + " WHERE id = 3";
+        OptIn(recorded);  // the fetch's opt-in, whichever select list names it
         Run(recorded);
         Run(recorded);  // the second sighting records
 
@@ -317,6 +327,7 @@ TEST_F(WaystoneReplayTest, AnAggregatedAndAPlainStatementShareATrailInBothOrders
     };
     for (const auto& [first, second] : orders) {
         const std::string expected = Run(second);  // before any trail of this fetch
+        OptIn(first);
         Run(first);
         Run(first);
         const std::string analyzed = Run(std::string("ANALYZE ") + second);
@@ -341,8 +352,8 @@ TEST_F(WaystoneReplayTest, AnalyzePrintsThePatternIdAndTheFetchIdItsTrailIsKeyed
 // A row a pre-AP-S2 build wrote is a version-1 row keyed by a pattern_id.
 // Planted here under the statement's own fetch_id - the worst case, a v1
 // key equal to a v2 one - it must still never be found: the version filter
-// hides it, the statement registers a row of its own, and SHOW PATTERNS
-// lists the old one as stale.
+// hides it, `WAYSTONE ON` inserts a row of its own, and SHOW PATTERNS lists
+// the old one as stale.
 TEST_F(WaystoneReplayTest, AVersionOneRowIsNeverFoundAndTheStatementRecordsAgain) {
     const std::string sql = "SELECT * FROM t WHERE id = 5";
     const std::uint64_t fetch_id = KeyOf(sql).fetch_id;
@@ -360,8 +371,9 @@ TEST_F(WaystoneReplayTest, AVersionOneRowIsNeverFoundAndTheStatementRecordsAgain
     }
     EXPECT_FALSE(boot_->catalog.FindPattern(fetch_id).ok());
 
+    OptIn(sql);
     const std::string first = Run(sql);
-    Run(sql);  // records under a version-2 row
+    Run(sql);  // records under the current-version row
     auto found = boot_->catalog.FindPattern(fetch_id);
     ASSERT_TRUE(found.ok());
     EXPECT_NE(found.value()->oid, 999'999u) << "the version-1 row was taken as current";
@@ -377,6 +389,60 @@ TEST_F(WaystoneReplayTest, AVersionOneRowIsNeverFoundAndTheStatementRecordsAgain
     const auto view = testing_view::ReadViewText(shown);
     EXPECT_EQ(view.Find("oid", "999999", "fingerprint_version"), "1") << shown;
     EXPECT_EQ(view.Find("oid", "999999", "fetch_id"), std::to_string(fetch_id)) << shown;
+}
+
+// **The planted collision, opted** (CF-S1b, §8.5): a lapsed opted row under
+// the statement's own `fetch_id`, the state a fingerprint bump leaves when
+// the shape's hash did not move, then a re-issued ON beside it. `OFF
+// <fetch_id>` clears both - a first-match OFF would clear the lapsed row,
+// answer OK, and leave the current one recording - the view reads false for
+// both, and the opted count is back where it was.
+TEST_F(WaystoneReplayTest, OffByNumberClearsALapsedRowAndTheReissuedOneSharingItsFetchId) {
+    const std::string sql = "SELECT * FROM t WHERE id = 4";
+    const std::uint64_t fetch_id = KeyOf(sql).fetch_id;
+    const std::uint64_t opted_before = boot_->catalog.CountOptedPatterns().value();
+    {
+        auto bytes = store_.Get(catalog::kCatalogPagePatterns);
+        ASSERT_TRUE(bytes.ok());
+        heap::PageView page(bytes.value().bytes());
+        catalog::SysPatternRow row{};
+        row.oid = 888'888;
+        row.fetch_id = fetch_id;
+        row.fingerprint_version = 1;
+        row.waystone_root = kInvalidPageId;
+        row.flags = catalog::kPatternWaystone;
+        auto encoded = row.Encode();
+        ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
+    }
+    OptIn(sql);
+    EXPECT_EQ(boot_->catalog.CountOptedPatterns().value(), opted_before + 1);
+    Run(sql);
+    Run(sql);
+    ASSERT_NE(Run("ANALYZE " + sql).find("replays=1"), std::string::npos);
+
+    const std::string off = Run("WAYSTONE OFF " + std::to_string(fetch_id));
+    EXPECT_EQ(off, "OK WAYSTONE OFF fetch_id=" + std::to_string(fetch_id)) << off;
+    auto rows = boot_->catalog.ListPatterns();
+    ASSERT_TRUE(rows.ok());
+    int seen = 0;
+    for (const catalog::SysPatternRow& row : rows.value()) {
+        if (row.fetch_id != fetch_id) continue;
+        ++seen;
+        EXPECT_EQ(row.flags & catalog::kPatternWaystone, 0) << "version " << row.fingerprint_version;
+        EXPECT_FALSE(catalog::HasWaystoneDirectory(row)) << "version " << row.fingerprint_version;
+    }
+    EXPECT_EQ(seen, 2);
+    const auto view = testing_view::ReadViewText(Run("SHOW PATTERNS"));
+    EXPECT_EQ(view.Find("oid", "888888", "waystone"), "0");
+    EXPECT_EQ(view.Find("fetch_id", std::to_string(fetch_id), "waystone"), "0");
+    EXPECT_EQ(boot_->catalog.CountOptedPatterns().value(), opted_before);
+    EXPECT_EQ(Run("WAYSTONE OFF " + std::to_string(fetch_id)),
+              "OK WAYSTONE OFF fetch_id=" + std::to_string(fetch_id) + " unchanged");
+
+    // And nothing records or replays for it any more.
+    Run(sql);
+    Run(sql);
+    EXPECT_EQ(Run("ANALYZE " + sql).find("replays="), std::string::npos);
 }
 
 // ---- What must never be replayed -----------------------------------------

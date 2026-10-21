@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/catalog/well_known.hpp"
 #include "kds/exec/trail_collector.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/server/command_dispatcher.hpp"
@@ -63,6 +64,12 @@ public:
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+    // `WAYSTONE ON` (CF-S1b): nothing records until a shape is opted in.
+    // Answers whether it was accepted; a shape with no tuple key equality
+    // is refused, and stays a shape that never records.
+    bool OptIn(const std::string& sql) {
+        return Run("WAYSTONE ON " + sql).rfind("OK WAYSTONE ON", 0) == 0;
+    }
     void KeepWrittenOrder() { dispatcher_->set_plan_join_order(false); }
     // The join planner's statistics, learned from `sqls` (CC-S3).
     void Learn(const std::vector<std::string>& sqls) {
@@ -79,6 +86,8 @@ private:
     std::optional<CommandDispatcher> dispatcher_;
     stats::PlanStats plan_stats_{1};
 };
+
+const std::vector<std::string>& Queries();
 
 // The dataset every configuration runs over. A btree whose `id` is its tuple
 // key, so the descent path replay replaces is covered, and a heap (BZ-R1)
@@ -114,6 +123,13 @@ void Load(Instance& db, testing_cycle::Added added = testing_cycle::Added::kNone
     const auto run = [&db](const std::string& sql) { return db.Run(sql); };
     testing_cycle::AddColumn(run, "b", added);
     testing_cycle::AddColumn(run, "h", added);
+    // **Every query the set can opt in, opted** (CF-S1b), in every
+    // configuration: a recording arm with nothing opted would record
+    // nothing and compare vacuously. A configuration with no recorder holds
+    // the bits and no directory, which changes no reply either. The scans,
+    // the heap's `id` (an ordinary column) and the built join are refused -
+    // no tuple key equality - and never record.
+    for (const std::string& sql : Queries()) db.OptIn(sql);
 }
 
 // The query set. Deliberately mixed: keyed steps that replay, searches that
@@ -339,21 +355,19 @@ TEST(WaystoneContractTest, AReorderedChainRecordsAndReplaysUnderWrittenIds) {
     const std::string sql = "SELECT b.label, j.w FROM j JOIN b ON j.id = b.id WHERE b.v = 30";
     Instance db(/*record=*/true, /*replay=*/true);
     Load(db);
+    // Its probe admits a descent whatever the plan, so it is opted in.
+    ASSERT_TRUE(db.OptIn(sql));
     const std::string plan = db.Run("ANALYZE " + sql);
     ASSERT_NE(plan.find("reordered=1"), std::string::npos) << plan;
     ASSERT_NE(plan.find("step 0 Probe j"), std::string::npos) << plan;
     for (int round = 0; round < 4; ++round) {
         EXPECT_EQ(db.Run(sql), "b.label,j.w\\nrow3,300") << "round " << round;
     }
-    auto fingerprint = parser::FingerprintOf(sql);
-    ASSERT_TRUE(fingerprint.has_value());
-    auto patterns = db.catalog().ListPatterns();
-    ASSERT_TRUE(patterns.ok()) << patterns.status().message();
-    EXPECT_TRUE(std::any_of(patterns.value().begin(), patterns.value().end(),
-                            [&](const catalog::SysPatternRow& row) {
-                                return row.fetch_id == fingerprint->fetch_id;
-                            }))
-        << "the reordered chain recorded no trail";
+    // A pattern row exists from the opt-in alone, so the evidence that the
+    // trail was written is that it replays.
+    const std::string replayed = db.Run("ANALYZE " + sql);
+    EXPECT_NE(replayed.find("replays="), std::string::npos)
+        << "the reordered chain recorded no trail: " << replayed;
 }
 
 // CC-S3: recording and replay under the join planner's learned statistics.
@@ -612,17 +626,18 @@ TEST(WaystoneContractTest, ABuiltJoinFeedsNoTrail) {
     // `RunPointStep` - so every reply in this file would stay
     // byte-identical while the rule was broken.
     //
-    // The observable that does move: a statement whose execution
-    // recorded nothing gets **no pattern row at all** (`RecordTrail`
-    // returns early on an empty collector), so the walked join's
-    // fingerprint must be absent from `sys.patterns` however many times
-    // it runs. This is the test that fails if someone drops the
-    // `IsTrailReplayable(step.kind)` gate at the recording site.
+    // Since CF-S1b a shape records only once opted in, and a walked join
+    // with no tuple key equality cannot be: `WAYSTONE ON` refuses it, so
+    // no row is written and nothing records for it. The gate at the
+    // recording site is then a second guard behind the opt-in's, which
+    // this cell no longer reaches alone; the refusal and the absence are
+    // what it pins.
     Instance db(/*record=*/true, /*replay=*/true);
     db.KeepWrittenOrder();  // the walked join as written (CB-S2)
     Load(db);
 
     const std::string built = "SELECT a.label, d.label FROM b AS a JOIN h AS d ON d.v = a.v";
+    EXPECT_FALSE(db.OptIn(built)) << "a walked join with no tuple key equality was opted in";
     for (int i = 0; i < 4; ++i) db.Run(built);
 
     // The build really engaged - otherwise this asserts nothing about a
@@ -640,20 +655,54 @@ TEST(WaystoneContractTest, ABuiltJoinFeedsNoTrail) {
     }
 
     // The control, for `AKeyedStepDoesReplaySoTheContrastIsReal`'s
-    // reason: a keyed statement in the same database *does* get one, so
-    // the absence above is the build's doing and not a recorder that
+    // reason: a keyed statement in the same database, opted in by `Load`,
+    // *does* record and replay, so the absence above is not a recorder that
     // never ran.
     const std::string keyed = "SELECT * FROM b WHERE id = 3";
     for (int i = 0; i < 3; ++i) db.Run(keyed);
-    auto keyed_fp = parser::FingerprintOf(keyed);
-    ASSERT_TRUE(keyed_fp.has_value());
-    auto after = db.catalog().ListPatterns();
-    ASSERT_TRUE(after.ok()) << after.status().message();
-    bool keyed_present = false;
-    for (const catalog::SysPatternRow& row : after.value()) {
-        if (row.fetch_id == keyed_fp->fetch_id) keyed_present = true;
+    const std::string replayed = db.Run("ANALYZE " + keyed);
+    EXPECT_NE(replayed.find("replays="), std::string::npos)
+        << "nothing recorded at all, so the absence above proves nothing: " << replayed;
+}
+
+// The recording site's own gate, reached past the opt-in: a built join
+// under a tuple key lookup admits a descent, so `WAYSTONE ON` takes it and
+// the statement records - and only the lookup's rows may be in its trail.
+// A trail entry for the built step's rows would be written and never read
+// (consultation is inside `RunPointStep` only), so every reply would stay
+// byte-identical while the rule was broken; the trail's contents are what
+// fails if someone drops `IsTrailReplayable(step.kind)` at the recording
+// site.
+TEST(WaystoneContractTest, AnOptedShapeWithABuiltJoinRecordsItsLookupStepOnly) {
+    Instance db(/*record=*/true, /*replay=*/true);
+    db.KeepWrittenOrder();  // the walked join as written (CB-S2)
+    Load(db);
+
+    const std::string sql =
+        "SELECT a.label, d.label FROM b AS a JOIN h AS d ON d.v = a.v WHERE a.id = 3";
+    ASSERT_TRUE(db.OptIn(sql)) << "the premise moved: a key lookup under a build was refused";
+    for (int i = 0; i < 3; ++i) db.Run(sql);
+    const std::string analyzed = db.Run("ANALYZE " + sql);
+    ASSERT_NE(analyzed.find("inner_built=1"), std::string::npos)
+        << "the build did not engage, so this asserts nothing about a build: " << analyzed;
+
+    auto b_oid = db.catalog().FindTableOidByName(catalog::kNamespacePublic, "b");
+    ASSERT_TRUE(b_oid.ok()) << b_oid.status().message();
+    auto fp = parser::FingerprintOf(sql);
+    ASSERT_TRUE(fp.has_value());
+    auto pattern = db.catalog().FindPattern(fp->fetch_id);
+    ASSERT_TRUE(pattern.ok()) << pattern.status().message();
+    ASSERT_TRUE(pattern.value()->has_waystone_directory());
+    auto trail = stats::ReadTrail(db.store(), pattern.value()->waystone_root,
+                                  pattern.value()->dir_depth,
+                                  stats::InstanceKey{fp->fetch_id, fp->arg_hash});
+    ASSERT_TRUE(trail.ok()) << trail.status().message();
+    ASSERT_FALSE(trail.value().empty())
+        << "the lookup recorded nothing, so the absence of the build's rows proves nothing";
+    for (const stats::WaystoneEntry& entry : trail.value()) {
+        EXPECT_EQ(entry.rel_oid, b_oid.value()) << "the built step's row fed the trail";
+        EXPECT_EQ(entry.step_id, 0u) << "the built step's row fed the trail";
     }
-    EXPECT_TRUE(keyed_present) << "nothing recorded at all, so the absence above proves nothing";
 }
 
 // An outer replay hit over an inner replay miss. Moving the outer row's join
@@ -685,6 +734,9 @@ TEST(WaystoneContractTest, AnInnerReplayMissUnderAnOuterHitEmitsTheRowOnce) {
     for (const std::string& sql : statements) {
         last = replaying.Run(sql);
         EXPECT_EQ(last, baseline.Run(sql)) << sql;
+        // Opted in once its relations exist (CF-S1b); on the replaying side
+        // only, whose reply names its ceilings.
+        if (sql.rfind("INSERT INTO ch", 0) == 0) ASSERT_TRUE(replaying.OptIn(statements.back()));
     }
     EXPECT_EQ(last, "ch.id,p.code\\n1,30");
 

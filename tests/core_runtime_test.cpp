@@ -1487,14 +1487,16 @@ TEST_F(CoreRuntimeTest, APeerMayWriteTheStatisticsRelationsAndHasWrittenNothing)
     // **Renamed at AT-S12** from P6's `APeerIsWiredWithRecordingOff`, false
     // since AT-S7: a peer records trails and access shapes (`Config::waystone_recording` and
     // `access_statistics` both default on). P6 had it off because
-    // sys.patterns and sys.access_stats are catalog pages written on the
-    // statement path and a peer could not write them. What the cell still
-    // pins: the store admits the peer's write, and a peer that has run no
-    // statement has written nothing.
+    // sys.patterns and sys.access_stats were catalog pages written on the
+    // statement path and a peer could not write them. Since CF-S1b only
+    // sys.access_stats is written on the statement path; a peer writes
+    // sys.patterns through `WAYSTONE ON`/`OFF` alone. What the cell still
+    // pins: the store admits the peer's write to either page, and a peer
+    // that has run no statement has written nothing.
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    // The write a recording peer makes. The boundary and the asker are
+    // The write a peer may make. The boundary and the asker are
     // both stated for the reason `EveryCoreMayWriteTheCatalogPages` gives.
     peer.value()->store().SetResidentLimit(kFirstUserPageId);
     {

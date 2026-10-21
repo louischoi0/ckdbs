@@ -14,6 +14,29 @@ bool HasReplayableStep(const StepChain& chain) noexcept {
     return !ForEachStep(chain, [](const Step& step) { return !IsTrailReplayable(step.kind); });
 }
 
+bool ShapeAdmitsDescent(const StepChain& chain) noexcept {
+    // A tuple key is a relation's column 0 (invariant 11), named at its own
+    // nesting level. The value side is the compiler's candidate test with
+    // the plan taken out: any literal, or any column not of the key's own
+    // relation - an earlier step's under one join order, a later one's under
+    // another - or an enclosing row's.
+    const auto is_key = [](const ColumnRef& ref) { return ref.up == 0 && ref.col_pos == 0; };
+    const auto binds = [](const ColumnRef& key, const ColumnRef& other) {
+        return other.up > 0 || other.rel_slot != key.rel_slot;
+    };
+    return !ForEachStep(chain, [&](const Step& step) {
+        for (const StepPredicate& pred : step.residual) {
+            if (pred.op != parser::CompareOp::kEq) continue;
+            const bool literal = pred.rhs.kind == OperandKind::kLiteral;
+            if (is_key(pred.lhs) && (literal || binds(pred.lhs, pred.rhs.column))) return false;
+            if (!literal && is_key(pred.rhs.column) && binds(pred.rhs.column, pred.lhs)) {
+                return false;
+            }
+        }
+        return true;
+    });
+}
+
 std::uint8_t StoredAccessKind(AccessKind kind) noexcept {
     switch (kind) {
         case AccessKind::kLookup: return 1;

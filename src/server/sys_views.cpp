@@ -16,6 +16,7 @@
 #include "kds/exec/catalog_view.hpp"
 #include "kds/exec/transition_catalog.hpp"
 #include "kds/exec/step_chain.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -462,12 +463,17 @@ StatusOr<exec::CatalogView> CommandDispatcher::PatternsView() {
     // frozen at 0 since BL-S4 deleted `TouchPattern`. A pattern with no
     // directory has a NULL root and depth, never the invalid page id read
     // as a page.
+    //
+    // `waystone` is the opt-in (CF-S1b), and true only for a current-version
+    // row carrying it: a row of another version lapsed at the fingerprint
+    // bump and records nothing, so it reads false and its
+    // `fingerprint_version` says why. It replaced `origin` and `pinned`,
+    // whose stored fields are reserved and `kPatternWaystone` respectively.
     Define(view, {{"oid", kInt},
                   {"fetch_id", kInt},
                   {"fingerprint_version", kInt},
                   {"stmt_class", kInt},
-                  {"origin", kStr},
-                  {"pinned", kInt},
+                  {"waystone", kInt},
                   {"use_count", kInt},
                   {"last_seen", kInt},
                   {"waystone_root", kInt},
@@ -478,10 +484,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::PatternsView() {
         // `dir_depth` is the one authority on a directory (rows.hpp): a
         // zeroed row's root reads as page 0, not as the invalid id.
         const bool directory = catalog::HasWaystoneDirectory(p);
+        const bool opted = (p.flags & catalog::kPatternWaystone) != 0 &&
+                           parser::IsCurrentFingerprintVersion(p.fingerprint_version);
         view.rows.push_back({Int(p.oid), Int(p.fetch_id), Int(p.fingerprint_version),
-                             Int(p.stmt_class),
-                             Str(p.origin == catalog::kOriginUser ? "user" : "auto"),
-                             Bool((p.flags & catalog::kPatternPinned) != 0), Int(p.use_count),
+                             Int(p.stmt_class), Bool(opted), Int(p.use_count),
                              Int(p.last_seen), directory ? Int(p.waystone_root) : Null(),
                              directory ? Int(p.dir_depth) : Null()});
     }

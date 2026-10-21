@@ -228,9 +228,10 @@ public:
     // every invalidation that can stale another core's memo** (AT-R2):
     // this core's `catalog_version_` is not - a peer's drop never advanced
     // it - which is why the word is a second thing and not that counter
-    // shared (`catalog.md` CT1 owns that rule). Neither `AllocateRowId()`
-    // nor `RegisterPattern()` bumps it: an id or a pattern is not a cached
-    // fact. Null is a catalog with no instance around it (a fixture,
+    // shared (`catalog.md` CT1 owns that rule). `AllocateRowId()` does not
+    // bump it: an id is not a cached fact. `SetPatternWaystone()` does, after
+    // its hold is released: an opt-in is the fact a peer's pattern entry
+    // caches. Null is a catalog with no instance around it (a fixture,
     // bootstrap), which revalidates nothing.
     //
     // **Correctness never rests on the word** (AT-R3): it saves a re-parse.
@@ -799,99 +800,112 @@ public:
     // lookup. The pointer is reference-stable and stays valid until the
     // next Invalidate() - same contract as InitTableAccess().
     //
-    // Fails with NotFound when the pattern has never been registered **and
-    // when the only row for it came from another fingerprint revision**.
-    // Those two are deliberately one outcome: a row recorded under
-    // different fingerprinting rules names a shape that is not the one it
-    // claims, so the only safe reading of it is that this pattern has not
-    // been seen. The caller registers it afresh and the stale row becomes
-    // garbage (retention, P15, is unbuilt). A version mismatch is never
-    // an error - nothing about it should fail a statement.
+    // Fails with NotFound when no row names the pattern **and when the only
+    // row for it came from another fingerprint revision**. Those two are
+    // deliberately one outcome: a row recorded under different
+    // fingerprinting rules names a shape that is not the one it claims, so
+    // the only safe reading of it is that this pattern was never opted in.
+    // A re-issued `WAYSTONE ON` inserts a current row beside the stale one
+    // (retention, P15, is unbuilt). A version mismatch is never an error -
+    // nothing about it should fail a statement.
+    //
+    // A found row is not an opted one: `flags & kPatternWaystone` is what
+    // says so, and the trail recorder asks it (CF-S1b).
     StatusOr<const PatternAccess*> FindPattern(std::uint64_t fetch_id);
 
-    // Records a newly observed pattern and returns its cached access, so a
-    // caller that just registered does not look it back up.
-    //
-    // **The version is stamped here, not passed in.** No caller has any
-    // business recording a pattern under a revision other than the one
-    // that computed its `fetch_id`, so a version parameter could only
-    // ever be passed wrong - and passing it wrong writes a row no build
-    // will resolve. Removing the parameter is what makes "the cache holds
-    // current-version entries only" true by construction.
-    //
-    // Registration bumps **no** catalog version. Nothing cached can go
-    // stale from a pattern appearing:
-    // absences are never cached (catalog_cache.hpp), so no entry claims
-    // this pattern is missing, and no other cached fact mentions it. The
-    // consequence matters on the statement path - registering a pattern
-    // mid-statement cannot dangle the `const TableAccess*` that statement
-    // is holding, which is the hazard `waystone-concpets.md` section 4
-    // flagged for this task.
-    //
-    // The pattern's `oid` comes from AllocateRowId(kSysPatternsTable) - the
-    // persistent sequence in sys.patterns' own sys.tables row. That is a
-    // repurposing worth naming: catalog rows carry no Keystone word, so
-    // this is the sequence used as an oid source rather than as a tuple id.
-    // GenerateUserOid() is not used: its recovery reads back only
-    // `sys.objects` and `sys.columns`, so an oid written only here would be
-    // reissued after a restart (its contract, above).
-    //
-    // Fails with AlreadyExists if `fetch_id` is already registered at
-    // the current version. A row left by an older revision does not count
-    // as registered, so a version bump leaves every shape re-learnable
-    // rather than permanently blocked.
-    //
-    // The row is written kOriginAuto, unpinned, and with **no waystone
-    // directory** - the directory arrives through the one writer of that
-    // pair, ClaimPatternWaystoneRoot(), when the first trail is recorded.
-    // (`origin`/`flags` went from the signature with `CREATE PATTERN`,
-    // 2026-08-31.)
-    StatusOr<const PatternAccess*> RegisterPattern(std::uint64_t fetch_id,
-                                                    std::uint8_t stmt_class);
+    // What `SetPatternWaystone` did, and the LSN its answer is durable at.
+    struct PatternWaystoneWrite {
+        // False is `unchanged`: nothing was written, because the state asked
+        // for already stood.
+        bool written = false;
+        // The record this answer rests on, for the caller to park on
+        // (`IsDurable(durable_at)`), or 0 when there is no log. Read after the
+        // write when one was made - the append point less one, which bounds
+        // this write's record and perhaps later ones, a later bound and never
+        // an earlier one - and **under page 9's hold** when none was, which
+        // bounds the record of whichever earlier statement set the state this
+        // answer reports: every writer of the bit writes under that hold.
+        std::uint64_t durable_at = 0;
+    };
 
-    // Points a pattern at its waystone directory, writing root and depth as
-    // one unit, and **answers the pair in force** - which is not always the
-    // one passed in.
+    // **`WAYSTONE ON` and `WAYSTONE OFF`'s one writer** (CF-S1b,
+    // `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3): bit 0 of
+    // a pattern row's `flags` (`kPatternWaystone`), the opt-in that decides
+    // whether `fetch_id`'s shape records and replays at all.
     //
-    // The two are one fact and there is deliberately no setter for either
-    // alone: a root without its depth is unwalkable, and a depth that
-    // disagrees with the root sends every walk to the wrong leaf. Validated
-    // before the page is touched - depth 0 requires kInvalidPageId, and any
-    // other depth requires a real root and a depth within
-    // kMaxPatternDirDepth - so every reader downstream may trust the pair
-    // without re-checking it.
+    // **Page 9 held exclusive across the decision and the write**, as
+    // `RecordAccess` holds its own root: the existence check and the insert
+    // under it are one act across cores, so two concurrent ONs serialize and
+    // no shape owns two current rows. Released before the schema word moves
+    // (`BumpVersion`, after a write only), and before any wait - the caller
+    // parks on `durable_at` with no latch held.
     //
-    // **A claim rather than a store since AT-S7**, and the return value is
-    // why it is named one: every core records trails, so two can find a
-    // pattern with no directory and each build one. A row that already
-    // carries a root keeps it and the caller is told which pair won, so
-    // both cores write into one directory instead of the second stranding
-    // every trail already in the first. Clearing (`kInvalidPageId`, depth
-    // 0) is not a claim and always takes - it is how a directory is
-    // retired. The losing caller's page is leaked, which is what every
-    // unreferenced page in this engine is.
+    // `on`:
+    //   - no current-version row: a new one, `flags = kPatternWaystone`,
+    //     `stmt_class` as given, rooted at `root` (depth 1) or at none (depth
+    //     0) when `root` is `kInvalidPageId`. Logged at `kBootstrapXid`.
+    //   - a current-version row: the bit set, and `root` written if the row
+    //     has no directory - one logged overwrite at `kNoTxnId`. Unchanged
+    //     when the bit stood and there is no root to write.
+    //   A row of another fingerprint version is not this pattern's, so it
+    //   neither counts as the row nor is written (a re-issued ON after a
+    //   bump inserts beside it). A new row's `oid` comes from
+    //   AllocateRowId(kSysPatternsTable) - the persistent sequence in
+    //   sys.patterns' own sys.tables row, used as an oid source: catalog rows
+    //   carry no Keystone word, and GenerateUserOid()'s recovery reads back
+    //   only `sys.objects` and `sys.columns`, so an oid written only here
+    //   would be reissued after a restart.
     //
-    // Updates the cached PatternAccess in place rather than invalidating
-    // (catalog_cache.hpp explains why that is the exception it is), so a
-    // caller holding a `const PatternAccess*` keeps a valid pointer and
-    // sees the directory in force.
+    // `!on` (`root` must be `kInvalidPageId`): **every** row carrying
+    // `fetch_id`, of any version, has its bit and its directory cleared, in
+    // one whole-chain walk - a `fetch_id` is not salted by
+    // `kFingerprintVersion`, so after a bump a lapsed opted row and the
+    // current one commonly share it, and a first-match OFF would clear the
+    // lapsed row and never reach the current one. Unchanged when no row it
+    // met had the bit. The rows stay, and the directories become
+    // unreachable, as at a mount.
     //
-    // Fails with NotFound if no sys.patterns row carries `fetch_id`, and
-    // with InvalidArgument for an incoherent pair. Page lifetime of the old
-    // directory is the caller's business: this writes the row.
-    StatusOr<std::pair<PageId, std::uint8_t>> ClaimPatternWaystoneRoot(std::uint64_t fetch_id,
-                                                                      PageId root,
-                                                                      std::uint8_t depth);
+    // **`root` is created by the caller before this is called, never under
+    // the hold**: `CreateDirPage` can block on the data-sync thread
+    // (`device_page_store.cpp`'s headerless create), and a page latch is
+    // never held across a durability wait. A page passed in and not used - a
+    // concurrent ON rooted the row first, the row was found opted with a
+    // root, the write failed - is logged as leaked, which is what every
+    // unreferenced page here is.
+    StatusOr<PatternWaystoneWrite> SetPatternWaystone(std::uint64_t fetch_id,
+                                                      std::uint8_t stmt_class, bool on,
+                                                      PageId root);
 
-    // Clears every current-version pattern's Waystone root in one walk of
-    // `sys.patterns`: `ClaimPatternWaystoneRoot(fetch_id, kInvalidPageId,
-    // 0)` for each row that has a directory, without a walk per row. The
-    // mount's discard of unlogged Waystone state (`DiscardAdvisoryState`).
-    Status ClearEveryPatternWaystoneRoot();
+    // **The mount's renewal of every opted pattern's directory** (CF-S1b,
+    // §8.3 Mount): the discard of unlogged Waystone state
+    // (`DiscardAdvisoryState`), core 0's, after recovery and before the
+    // listener binds. Answers how many current-version rows are opted.
+    //
+    // Two passes, **so no page is created under a catalog page latch**:
+    // a read-only walk collects the current-version opted rows; then, with
+    // no latch held and only where `waystone_recording` is on, one fresh
+    // directory each; then one `kWrite` walk writes each collected row's
+    // fresh root at depth 1 and clears every other root, **whatever its
+    // fingerprint version**, so a lapsed row keeps no stale root. With
+    // recording off every root is cleared and none is created. A creation
+    // that fails clears the row's root, keeps its bit, is logged, and the
+    // mount still opens. A row that changed between the passes keeps its
+    // write and its unused page is logged as leaked.
+    //
+    // Opted rows of another fingerprint version are logged as lapsed, only
+    // where no current-version row of their `fetch_id` is opted (a re-issued
+    // ON is not reported again at every mount).
+    //
+    // **Ends by dropping this catalog's cache** `[quiet-wrong]`: a pattern
+    // entry filled before the walk would keep the previous run's root, whose
+    // children can be ids the cursor has since handed to logged pages, so a
+    // trail written through it would overwrite them with no record.
+    StatusOr<std::uint64_t> RenewPatternDirectories(bool waystone_recording);
 
-    // No `SetPatternOrigin()` or `RetirePattern()`: both went with
-    // declared patterns on 2026-08-31. Every row is `kOriginAuto`, nothing
-    // writes `kPatternPinned`, and the two fields stay on disk (rows.hpp).
+    // How many current-version `sys.patterns` rows have `kPatternWaystone`
+    // set: what `sys.meta`'s `waystone_opted=` prints. One read-only walk of
+    // the chain, which on a v33 volume holds only the rows ever opted.
+    StatusOr<std::uint64_t> CountOptedPatterns();
 
     // A `TouchPattern()` stood here - the trail recorder's catalog half,
     // which bumped `use_count` and stamped `last_seen` on every recorded
@@ -1018,7 +1032,7 @@ public:
     // NotFound for an unknown relation; AlreadyExists for a second Cabin on
     // the same column.
     //
-    // **Bumps the catalog version**, unlike RegisterPattern(): the mask on
+    // **Bumps the catalog version**: the mask on
     // TableAccess is derived from these rows, so a Cabin appearing stales
     // every cached relation entry. That makes this a DDL-shaped call and it
     // must not be made from a statement path holding a `const TableAccess*`.
@@ -1368,8 +1382,8 @@ private:
     // `kTypeNamespace`) - the check every write that gives a `sys.objects`
     // row a name makes (`catalog.md` CT7). **Binding only under page 6
     // held exclusive** across the check and the caller's insert or rewrite
-    // (AT-S17, the AT-close order's Q2), as `RegisterPattern`'s is on page
-    // 9; asked unheld, it is an early refusal and nothing more.
+    // (AT-S17, the AT-close order's Q2), as `SetPatternWaystone`'s is on
+    // page 9; asked unheld, it is an early refusal and nothing more.
     //
     // Two questions, in one walk so no caller can ask one:
     //
@@ -1433,15 +1447,15 @@ private:
     // lives in the cache.
     StatusOr<const std::vector<SysTypeRow>*> EnsureTypes();
 
-    // The in-place rewrite behind ClaimPatternWaystoneRoot(): finds the
-    // current-version sys.patterns row for `fetch_id`, hands it to
-    // `mutate`, and writes it back over the same slot.
+    // The in-place rewrite behind `WAYSTONE ON` on an existing row: finds
+    // the current-version sys.patterns row for `fetch_id`, hands it to
+    // `mutate`, and writes it back over the same slot when `mutate` answers
+    // true. Answers whether it wrote; NotFound when no current-version row
+    // carries `fetch_id`.
     //
-    // Does not touch the cache - the caller publishes its own field set,
-    // because a blanket "re-read the row into the cache" would republish
-    // fields the caller did not write and had no lock on.
-    Status MutatePatternRow(std::uint64_t fetch_id,
-                            const std::function<void(SysPatternRow&)>& mutate);
+    // Does not touch the cache - the caller's `BumpVersion` drops it.
+    StatusOr<bool> MutatePatternRow(std::uint64_t fetch_id,
+                                    const std::function<bool(SysPatternRow&)>& mutate);
 
     // The single invalidation point: bumps the version and drops every
     // DDL-invalidatable cache entry. `what` names the mutation for the

@@ -9,8 +9,8 @@ bool TrailRecorder::WouldRecord(std::uint8_t sightings) const noexcept {
     // An instance waits for its second sighting. The first execution only
     // counts - which is what keeps a one-shot query from paying for a page
     // write it will never read back (waystone-concpets.md section 9). One
-    // threshold for every pattern since declared patterns went (2026-08-31).
-    return sightings >= kAutoRecordThreshold;
+    // threshold for every opted pattern (CF-O-Q8 (a)).
+    return sightings >= kRecordThreshold;
 }
 
 std::uint8_t TrailRecorder::Observe(const InstanceKey& key) {
@@ -33,64 +33,38 @@ std::uint8_t TrailRecorder::Observe(const InstanceKey& key) {
     return count;
 }
 
-const catalog::PatternAccess* TrailRecorder::EnsurePattern(std::uint64_t fetch_id,
-                                                           std::uint8_t stmt_class) {
-    if (auto found = catalog_.FindPattern(fetch_id); found.ok()) return found.value();
-
-    // Not registered - so this shape has now been seen enough times to be
-    // worth a catalog row.
-    //
-    // **Registered here, not on first sight.** A shape whose instances are
-    // each executed once never reaches this line, so a database full of
-    // one-shot queries accumulates no pattern rows at all. That reading of
-    // n=2 costs nothing (an unregistered pattern has no trail to lose) and
-    // keeps sys.patterns a record of what actually repeats.
-    //
-    // Safe on the statement path because registration bumps no catalog
-    // version (waystone-concpets.md section 4): absences are never cached,
-    // so no cached entry claims this pattern is missing, and the
-    // `const TableAccess*` the running statement is holding cannot dangle.
-    auto registered = catalog_.RegisterPattern(fetch_id, stmt_class);
-    if (!registered.ok()) return nullptr;
-    ++stats_.patterns_registered;
-    return registered.value();
+const catalog::PatternAccess* TrailRecorder::EnsurePattern(std::uint64_t fetch_id) {
+    // **A lookup, never a registration** (CF-S1b). A shape is recorded only
+    // once an operator opted it in, and `WAYSTONE ON` is the one writer of
+    // the row, so a `SELECT` writes no catalog page and appends nothing to
+    // the log. Served from the catalog cache after the first ask; the opt-in
+    // moves the schema word, so a cached answer is at most one statement
+    // old.
+    auto found = catalog_.FindPattern(fetch_id);
+    if (!found.ok()) {
+        // NotFound is "never opted", which is silent. Any other answer is a
+        // row that could not be read, and an opted pattern behind it would
+        // record nothing unseen, so it is counted.
+        if (found.status().code() != StatusCode::kNotFound) ++stats_.write_failures;
+        return nullptr;
+    }
+    if ((found.value()->flags & catalog::kPatternWaystone) == 0) return nullptr;
+    return found.value();
 }
 
 StatusOr<std::pair<PageId, std::uint8_t>> TrailRecorder::EnsureDirectory(
     const catalog::PatternAccess& pattern) {
-    if (pattern.has_waystone_directory()) {
-        return std::make_pair(pattern.waystone_root, pattern.dir_depth);
+    // The directory `WAYSTONE ON` or the mount's renewal made. **None is
+    // ever made here**: a run-time claim would put a logged catalog write
+    // on the `SELECT` path, and two cores claiming one row raced and leaked
+    // the loser's page. An opted row with no root waits for the next mount.
+    if (!pattern.has_waystone_directory()) {
+        return Status::NotFound("waystone: the opted pattern has no directory this run");
     }
-
-    // An auto-registered pattern is created with no directory
-    // (`dir_depth == 0`), so the first trail is what pays for one. A
-    // declared pattern already has one, pre-sized from
-    // `expected_instances`, and never reaches here.
-    //
-    // Depth 1 addresses 2048 instances before it has to grow, and growing
-    // is a cache flush (waystone_dir.hpp) - so starting shallow and letting
-    // a pattern that earns it deepen later is the cheap direction to be
-    // wrong in.
-    auto root = CreateDirPage(store_);
-    if (!root.ok()) return root.status();
-
-    // The one writer of the root/depth pair, which validates them
-    // together: a root without its depth is unwalkable, and a depth that
-    // disagrees sends every walk to the wrong leaf.
-    //
-    // **And answers the pair in force, which is not always this one**
-    // (AT-S7). Every core records trails, so two can reach this line for
-    // one pattern; the row keeps the first directory and this walks the
-    // winner's rather than repointing the row at its own, which would
-    // strand every trail already written into the first. The loser's page
-    // is leaked, and a leaked page is what every unreferenced page here is.
-    auto claimed = catalog_.ClaimPatternWaystoneRoot(pattern.fetch_id, root.value(), 1);
-    if (!claimed.ok()) return claimed.status();
-    return claimed.value();
+    return std::make_pair(pattern.waystone_root, pattern.dir_depth);
 }
 
-void TrailRecorder::OnPatternResult(const InstanceKey& key, const exec::TrailCollector& trail,
-                                    std::uint8_t stmt_class) {
+void TrailRecorder::OnPatternResult(const InstanceKey& key, const exec::TrailCollector& trail) {
     // Nothing to record. A statement whose steps are all searches
     // (invariant 9) collects nothing and is not a candidate for a trail -
     // counted as a sighting all the same, since the instance did execute.
@@ -120,11 +94,11 @@ void TrailRecorder::OnPatternResult(const InstanceKey& key, const exec::TrailCol
     // about to repeat.
     if (!WouldRecord(seen)) return;
 
-    const catalog::PatternAccess* pattern = EnsurePattern(key.fetch_id, stmt_class);
-    if (pattern == nullptr) {
-        ++stats_.write_failures;
-        return;
-    }
+    // Not opted: sighted, and nothing more. Not a failure - it is what
+    // every shape is until an operator says otherwise. A row that could not
+    // be read is counted inside EnsurePattern().
+    const catalog::PatternAccess* pattern = EnsurePattern(key.fetch_id);
+    if (pattern == nullptr) return;
 
     auto directory = EnsureDirectory(*pattern);
     if (!directory.ok()) {

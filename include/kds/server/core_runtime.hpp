@@ -158,10 +158,11 @@ public:
         bool access_statistics = true;
 
         // **Waystone's two switches, on the same terms** (AT-S7,
-        // `waystone_recording` and `waystone_replay`). Every core writes
-        // `sys.patterns` under the page latch (AT-S5), and `Catalog::ClaimPatternWaystoneRoot`
-        // is what keeps two cores that build one pattern's directory from
-        // keeping two. Off leaves this core exactly as it was.
+        // `waystone_recording` and `waystone_replay`): the instance's
+        // ceilings over the patterns `WAYSTONE ON` opted in (CF-S1b). No
+        // core builds a directory at run time - the opt-in and the mount do
+        // - so every core records into the one root a row names. Off leaves
+        // this core exactly as it was.
         bool waystone_recording = true;
         bool waystone_replay = true;
 

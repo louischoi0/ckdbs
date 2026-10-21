@@ -108,14 +108,6 @@ const PatternAccess* CatalogCache::PutPattern(PatternAccess access) {
     return &it->second;
 }
 
-void CatalogCache::UpdatePatternWaystone(std::uint64_t fetch_id, PageId root,
-                                         std::uint8_t depth) noexcept {
-    auto it = patterns_.find(fetch_id);
-    if (it == patterns_.end()) return;
-    it->second.waystone_root = root;
-    it->second.dir_depth = depth;
-}
-
 void CatalogCache::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId root) noexcept {
     auto it = table_access_.find(rel_oid);
     if (it == table_access_.end()) return;

@@ -2045,7 +2045,7 @@ private:
     // row-returning path and ANALYZE so the two cannot come to disagree
     // about when a trail is written.
     void RecordTrail(const std::optional<StatementIdentity>& identity,
-                     exec::TrailCollector* trail, const exec::StepChain& chain);
+                     exec::TrailCollector* trail);
 
     // Counts one execution of every step's access shape. Shared by the
     // row-returning path and ANALYZE, for the reason RecordTrail is: two
@@ -2125,6 +2125,11 @@ private:
     // writer, or a deleter some reader cannot see yet - is returned as
     // `purge_wait` and nothing is written.
     DispatchOutcome HandlePurge(std::string_view line, Session& session);
+    // `WAYSTONE ON <select>`, `WAYSTONE OFF <select>` and `WAYSTONE OFF
+    // <fetch_id>` (CF-S1b): opts a shape in to trail recording and replay, by
+    // example, or out of it. Autocommit only; answers once the state it
+    // reports is as durable as the session's rung promises a commit.
+    DispatchOutcome HandleWaystone(std::string_view line, Session& session);
     // `PURGE DROPPED COLUMNS FROM t` (CD-S2): one whole attempt under an
     // owned DDL transaction and the relation's `IX` - the statement-epoch
     // gate, then the relation walked in batches, each dirty row cleaned in

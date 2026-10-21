@@ -15,7 +15,7 @@ constexpr std::string_view kKinds[] = {
     "SELECT", "WITH",     "INSERT",   "UPDATE", "DELETE", "PURGE",  "CREATE",
     "DROP",   "ALTER",    "SHOW",     "DESCRIBE", "DESC", "ANALYZE", "BEGIN",
     "START",  "COMMIT",   "ROLLBACK", "ABORT",  "SAVEPOINT", "RELEASE", "SET",
-    "PING",   "SYNC",     "BACKUP",   "STOP",   "USE",    "REINDEX",
+    "PING",   "SYNC",     "BACKUP",   "STOP",   "USE",    "REINDEX", "WAYSTONE",
 };
 constexpr std::string_view kOther = "OTHER";
 

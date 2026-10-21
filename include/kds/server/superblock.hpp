@@ -200,7 +200,16 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // version-31 binary writes dropped cells with the bit clear, so on a cleaned
 // volume a later reuse would read them as a present value. Refused with no
 // migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 32;
+//
+// 33 (CF-S1b, `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3):
+// `sys.patterns` bit 0 of `flags` is `kPatternWaystone`, the opt-in `WAYSTONE
+// ON` sets, where it was `kPatternPinned`, and `origin` is a reserved byte;
+// every row on a version-33 volume was written by `WAYSTONE ON`, since
+// auto-registration is deleted. A version-32 volume's rows are
+// auto-registered shapes no operator opted, and a version-32 binary would
+// auto-register into this one. Row bytes, offsets and record kinds do not
+// change. Refused with no migration, the standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 33;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

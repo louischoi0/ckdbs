@@ -606,11 +606,15 @@ TEST_F(AggregateDispatchTest, AnAggregatedProbeChainReplaysWithIdenticalOutput) 
     Load();
     const std::string sql =
         "SELECT COUNT(*), SUM(c.w) FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4";
+    // CF-S1b: nothing records until the shape is opted in.
+    ASSERT_EQ(Run("WAYSTONE ON " + sql).rfind("OK WAYSTONE ON", 0), 0u);
     const std::string first = Run(sql);
     const std::string second = Run(sql);
     const std::string third = Run(sql);
     EXPECT_EQ(first, second);
     EXPECT_EQ(second, third) << "replay must not change a reply";
+    EXPECT_NE(Run("ANALYZE " + sql).find("replays="), std::string::npos)
+        << "nothing replayed, so the comparison above proves nothing";
 
     const std::vector<std::string> lines = Lines(third);
     ASSERT_EQ(lines.size(), 2u);
@@ -627,6 +631,7 @@ TEST_F(AggregateDispatchTest, RecordingAndReplayAreOffTheFoldsPathEntirely) {
                             exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false);
     const std::string sql =
         "SELECT COUNT(*), SUM(c.w) FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4";
+    ASSERT_EQ(Run("WAYSTONE ON " + sql).rfind("OK WAYSTONE ON", 0), 0u);  // CF-S1b
     for (int i = 0; i < 3; ++i) Run(sql);  // let a trail exist on the loud one
     EXPECT_EQ(Run(sql), quiet.Dispatch(sql).response);
 }

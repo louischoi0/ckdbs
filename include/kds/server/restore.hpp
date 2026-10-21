@@ -48,9 +48,13 @@ Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out = nu
 // their zeros are an empty directory.
 //
 // `DiscardAdvisoryState` - at every mount, after recovery: every pattern's
-// Waystone root is cleared and `sys.access_stats` emptied, so no unlogged
-// structure can reach a page the first half gave back, nor - after a crash -
-// a child whose allocation bit never reached the device.
+// Waystone root is replaced - by a fresh empty directory for a pattern opted
+// in while `waystone_recording` is on, by none otherwise
+// (`Catalog::RenewPatternDirectories`, CF-S1b) - and `sys.access_stats`
+// emptied, so no unlogged structure can reach a page the first half gave
+// back, nor - after a crash - a child whose allocation bit never reached the
+// device. `waystone_opted`, when given, receives how many patterns are
+// opted in, for the mount's log line.
 Status ForgetUnwrittenPages(storage::PageDevice& device, DataFileCheck* out = nullptr);
 
 
@@ -62,7 +66,8 @@ class Catalog;
 
 namespace kds::server {
 
-Status DiscardAdvisoryState(catalog::Catalog& catalog);
+Status DiscardAdvisoryState(catalog::Catalog& catalog, bool waystone_recording,
+                            std::uint64_t* waystone_opted = nullptr);
 
 // A backup's window: where its replay starts and the stop it must reach.
 struct RestoreWindow {

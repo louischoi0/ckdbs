@@ -398,8 +398,7 @@ struct TableAccess {
     // Parallel to `cabin_columns` rather than folded into it because the
     // write hook walks the cabined positions, while a reader needs the id
     // (to find the entry sets) and the origin (to know whether the Cabin was *declared*,
-    // which is what decides n=1 versus n=2 - the same rule a declared
-    // pattern already gets from `PatternAccess::origin`).
+    // which is what decides n=1 versus n=2).
     struct CabinRef {
         std::uint64_t id = 0;
         std::uint8_t origin = kCabinOriginUnset;
@@ -579,15 +578,14 @@ struct TableAccess {
 // through Catalog::GetSysPatternRow().
 //
 // What is here divides in three. The identity - `oid`, `fetch_id`,
-// `fingerprint_version`, `stmt_class` - is written once at registration
-// and never changes. The location - `waystone_root`, `dir_depth` - changes
-// only when the directory deepens, through the single writer
-// Catalog::ClaimPatternWaystoneRoot(), which updates this entry in place so
-// the cache stays coherent without a global invalidation. The lifecycle
-// policy - `origin`, `flags` - has **no** writer since declared patterns
-// were withdrawn on 2026-08-31: every registration passes kOriginAuto and
-// nothing sets kPatternPinned. All three still pass this header's test:
-// nothing here moves without an explicit DDL-shaped call.
+// `fingerprint_version`, `stmt_class` - is written once, by the first
+// `WAYSTONE ON`, and never changes. The location - `waystone_root`,
+// `dir_depth` - and the policy - `flags` - move only through
+// Catalog::SetPatternWaystone() and the mount's
+// Catalog::RenewPatternDirectories(): the first moves the schema word and
+// the second drops the cache, so no entry outlives a change to either
+// (CF-S1b). All three pass this header's test: nothing here moves without
+// an explicit DDL-shaped call.
 struct PatternAccess {
     Oid oid = 0;
     std::uint64_t fetch_id = 0;
@@ -596,16 +594,9 @@ struct PatternAccess {
     std::uint8_t stmt_class = 0;
     std::uint8_t dir_depth = 0;
 
-    // Who created the row (kOriginAuto / kOriginUser) and its policy bits
-    // (kPatternPinned), both in rows.hpp. Cached because the trail recorder
-    // reads origin on the statement path, and re-reading the catalog page
-    // per execution to answer that would cost more than the recording does.
-    //
-    // Both read constant today - kOriginAuto and 0 - because withdrawing
-    // declared patterns took away their only writer. They are cached rather
-    // than dropped for the reason rows.hpp keeps them on disk: the fields
-    // are the row's, not this feature's.
-    std::uint8_t origin = kOriginAuto;
+    // The row's policy bits (rows.hpp): `kPatternWaystone` is the opt-in
+    // the trail recorder asks on the statement path, which a catalog page
+    // read per execution would cost more than the recording does.
     std::uint16_t flags = 0;
 
     // Same rule as SysPatternRow's: depth is the authority, never the

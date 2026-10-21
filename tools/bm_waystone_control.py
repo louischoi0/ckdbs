@@ -2,8 +2,11 @@
 """BM-S1 control: does Waystone's recording distort the small-relation cells?
 (`bench/v3.0.0/results-bm-s1-scan-row-*.md`, section 1)
 
-A pattern instance (a fetch with one argument value) that executes twice gets a
-Waystone page (kds.conf.sample, "waystone_recording"). The census's point
+A pattern instance (a fetch with one argument value) of an opted-in shape
+(`WAYSTONE ON`, CF-S1b) that executes twice gets a Waystone page
+(kds.conf.sample, "waystone_recording"); the "on" arm opts each relation's
+point shape in before it runs, since with nothing opted it would record
+nothing and measure nothing. The census's point
 statement `SELECT * FROM <rel> WHERE id = ?` runs 3,000 times per path (6,000 in
 all) over a relation of 200 or 1,000 rows, so most of its argument values
 repeat and the arm allocates a trail page per value; the 200- and 1,000-row
@@ -75,6 +78,14 @@ def main():
                 bm.must(srv.conn, "CREATE TABLE z (id int64, v int64) BTREE", "CREATE")
                 for rel in ("s200", "s1k", "s"):
                     bm.load_rel(srv.conn, rel)
+                if recording:
+                    # CF-S1b: nothing records until a shape is opted in, so
+                    # the "on" arm opts in each relation's point shape - the
+                    # one `fetch_id` its literal and prepared paths share.
+                    # The scans cannot be: no tuple key equality.
+                    for rel in ("s200", "s1k", "s"):
+                        bm.must(srv.conn, "WAYSTONE ON SELECT * FROM %s WHERE id = 1" % rel,
+                                "OK WAYSTONE ON")
                 bm.flood_commits(srv.conn, 2200)
                 bm.wait_idle(srv)
                 for q in range(1, 401):  # the same untimed prelude as the census

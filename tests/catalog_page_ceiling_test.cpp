@@ -198,8 +198,15 @@ struct TempDir {
 // Production's mount (`reclaim_census.hpp`'s), relaxed so a fill of a
 // thousand DDLs does not wait on a thousand syncs: the clean stop is what
 // makes the run durable.
-StatusOr<std::unique_ptr<Expeditor>> Mount(const fs::path& dir) {
-    return reclaim_census::Mount(dir, /*cores=*/1, wal::DurabilityClass::kRelaxed);
+StatusOr<std::unique_ptr<Expeditor>> Mount(const fs::path& dir, bool waystone_recording = true) {
+    return reclaim_census::Mount(dir, /*cores=*/1, wal::DurabilityClass::kRelaxed,
+                                 waystone_recording);
+}
+
+// A `sys.patterns` row, which only an opt-in writes since CF-S1b.
+Status OptIn(catalog::Catalog& catalog, std::uint64_t fetch_id, PageId root = kInvalidPageId) {
+    return catalog.SetPatternWaystone(fetch_id, catalog::kStmtClassUnclassified, /*on=*/true, root)
+        .status();
 }
 
 using reclaim_census::CleanShutdownCheckpoint;
@@ -471,7 +478,9 @@ TEST(CatalogPageCeilingTest, AReclaimRedrivenAfterACrashPassesACatalogPageOnAnId
         CleanShutdownCheckpoint(db);
     }
 
-    TempDir image;
+    // Two copies of one crash image: one mounted with recording off, one
+    // with it on (below).
+    TempDir image, image_recording;
     PageId reused = kInvalidPageId;
     {
         auto opened = Mount(dir.path);
@@ -487,8 +496,7 @@ TEST(CatalogPageCeilingTest, AReclaimRedrivenAfterACrashPassesACatalogPageOnAnId
             ASSERT_NE(freed, kInvalidPageId) << "the cut came before any free";
             for (std::uint64_t fetch_id = 0x6000'0000; reused == kInvalidPageId; ++fetch_id) {
                 ASSERT_LT(fetch_id, 0x6000'0000u + 20000) << "sys.patterns never took id " << freed;
-                ASSERT_TRUE(
-                    db.catalog().RegisterPattern(fetch_id, catalog::kStmtClassUnclassified).ok());
+                ASSERT_TRUE(OptIn(db.catalog(), fetch_id).ok());
                 auto chain =
                     testing_catalog::CatalogChainPages(db.store(), catalog::kCatalogPagePatterns);
                 ASSERT_TRUE(chain.ok()) << chain.status().message();
@@ -498,39 +506,69 @@ TEST(CatalogPageCeilingTest, AReclaimRedrivenAfterACrashPassesACatalogPageOnAnId
             }
             ASSERT_TRUE(db.Sync().ok());
             CrashImage(dir.path, image.path);
+            CrashImage(dir.path, image_recording.path);
         });
         Settle(db);
         db.SetReclaimCutForTest(nullptr);
         ASSERT_NE(reused, kInvalidPageId);
     }
 
-    auto mounted = Mount(image.path);
-    ASSERT_TRUE(mounted.ok()) << mounted.status().message();
-    Expeditor& db = *mounted.value();
-    CurrentCoreGuard as(0);
-    ASSERT_EQ(db.reclaim_counters().pending.load(), 1u) << "the reclaim was not cut";
-    Settle(db);
-    EXPECT_EQ(db.reclaim_counters().pending.load(), 0u);
-    EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
-    EXPECT_GT(db.reclaim_counters().skipped.load(), 0u)
-        << "the re-drive never met the catalog page, so the owner check was not exercised";
-    EXPECT_TRUE(db.store().IsAllocated(reused)) << "catalog page " << reused << " was freed";
-    for (const PageId id : dropped_pages) {
-        if (id == reused) continue;
-        EXPECT_FALSE(db.store().IsAllocated(id)) << "page " << id << " of big";
+    // The re-drive on each image. With recording off the mount creates no
+    // page, so every id the cut reclaim left is the re-drive's to free. With
+    // it on - the default - the renewal runs after recovery and before the
+    // re-drive (CF-S1b), giving each opted row a fresh headerless directory,
+    // which can take an id the cut reclaim freed: the re-drive must then
+    // walk past it on its owner bytes and free none of the renewed roots.
+    for (const bool recording : {false, true}) {
+        SCOPED_TRACE(recording ? "waystone_recording on" : "waystone_recording off");
+        auto mounted =
+            Mount(recording ? image_recording.path : image.path, /*waystone_recording=*/recording);
+        ASSERT_TRUE(mounted.ok()) << mounted.status().message();
+        Expeditor& db = *mounted.value();
+        CurrentCoreGuard as(0);
+        std::set<PageId> renewed;
+        if (recording) {
+            auto rows = db.catalog().ListPatterns();
+            ASSERT_TRUE(rows.ok()) << rows.status().message();
+            for (const catalog::SysPatternRow& row : rows.value()) {
+                if ((row.flags & catalog::kPatternWaystone) == 0) continue;
+                ASSERT_TRUE(catalog::HasWaystoneDirectory(row)) << "fetch_id " << row.fetch_id;
+                renewed.insert(row.waystone_root);
+            }
+            ASSERT_FALSE(renewed.empty()) << "the premise moved: nothing was renewed";
+        }
+        ASSERT_EQ(db.reclaim_counters().pending.load(), 1u) << "the reclaim was not cut";
+        Settle(db);
+        EXPECT_EQ(db.reclaim_counters().pending.load(), 0u);
+        EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
+        EXPECT_GT(db.reclaim_counters().skipped.load(), 0u)
+            << "the re-drive never met the catalog page, so the owner check was not exercised";
+        EXPECT_TRUE(db.store().IsAllocated(reused)) << "catalog page " << reused << " was freed";
+        for (const PageId id : renewed) {
+            EXPECT_TRUE(db.store().IsAllocated(id)) << "renewed directory " << id << " was freed";
+        }
+        for (const PageId id : dropped_pages) {
+            if (id == reused || renewed.count(id) != 0) continue;
+            EXPECT_FALSE(db.store().IsAllocated(id)) << "page " << id << " of big";
+        }
+        auto chain = testing_catalog::CatalogChainPages(db.store(), catalog::kCatalogPagePatterns);
+        ASSERT_TRUE(chain.ok()) << chain.status().message();
+        EXPECT_NE(std::find(chain.value().begin(), chain.value().end(), reused),
+                  chain.value().end())
+            << "page " << reused << " left sys.patterns' chain";
+        ExpectOwnedChains(db.store());
     }
-    auto chain = testing_catalog::CatalogChainPages(db.store(), catalog::kCatalogPagePatterns);
-    ASSERT_TRUE(chain.ok()) << chain.status().message();
-    EXPECT_NE(std::find(chain.value().begin(), chain.value().end(), reused), chain.value().end())
-        << "page " << reused << " left sys.patterns' chain";
-    ExpectOwnedChains(db.store());
 }
 
 // ---- A long sys.patterns at mount -----------------------------------------
 
-// `patterns` registered, every tenth given a Waystone directory, then a
-// clean restart: the mount's discard clears every root in one walk, and
-// the mount succeeds whatever the chain's length.
+// `patterns` opted in, every tenth given a Waystone directory, then a
+// clean restart with `waystone_recording` off: the mount's renewal clears
+// every root and creates none, keeps every opt-in, and the mount succeeds
+// whatever the chain's length. Recording off, because a renewal with it on
+// creates a directory per opted row, which at 17,000 rows is a cost this
+// cell does not measure; the renewal's create is
+// `RenewingEveryWaystoneRootDropsTheCachedPatterns`'s.
 void ExpectTheMountClearsEveryPattern(int patterns, std::size_t min_pages) {
     constexpr std::uint64_t kFirstFetchId = 0x5000'0000;
     TempDir dir;
@@ -541,19 +579,17 @@ void ExpectTheMountClearsEveryPattern(int patterns, std::size_t min_pages) {
         CurrentCoreGuard as(0);
         for (int k = 0; k < patterns; ++k) {
             const std::uint64_t fetch_id = kFirstFetchId + static_cast<std::uint64_t>(k);
-            auto registered = db.catalog().RegisterPattern(fetch_id, catalog::kStmtClassUnclassified);
-            ASSERT_TRUE(registered.ok()) << k << ": " << registered.status().message();
-            if (k % 10 != 0) continue;
-            // Never read before the discard clears it, so any id serves.
-            auto claimed = db.catalog().ClaimPatternWaystoneRoot(fetch_id, kFirstUserPageId, 1);
-            ASSERT_TRUE(claimed.ok()) << k << ": " << claimed.status().message();
+            // Never read before the renewal clears it, so any id serves.
+            const Status opted =
+                OptIn(db.catalog(), fetch_id, k % 10 == 0 ? kFirstUserPageId : kInvalidPageId);
+            ASSERT_TRUE(opted.ok()) << k << ": " << opted.message();
         }
         auto chain = testing_catalog::CatalogChainPages(db.store(), catalog::kCatalogPagePatterns);
         ASSERT_TRUE(chain.ok()) << chain.status().message();
         ASSERT_GT(chain.value().size(), min_pages);
         CleanShutdownCheckpoint(db);
     }
-    auto opened = Mount(dir.path);
+    auto opened = Mount(dir.path, /*waystone_recording=*/false);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     Expeditor& db = *opened.value();
     CurrentCoreGuard as(0);
@@ -565,6 +601,7 @@ void ExpectTheMountClearsEveryPattern(int patterns, std::size_t min_pages) {
         ++ours;
         EXPECT_FALSE(catalog::HasWaystoneDirectory(row)) << "fetch_id " << row.fetch_id;
         EXPECT_EQ(row.waystone_root, kInvalidPageId) << "fetch_id " << row.fetch_id;
+        EXPECT_NE(row.flags & catalog::kPatternWaystone, 0) << "fetch_id " << row.fetch_id;
         auto cached = db.catalog().FindPattern(row.fetch_id);
         ASSERT_TRUE(cached.ok()) << cached.status().message();
         EXPECT_EQ(cached.value()->waystone_root, kInvalidPageId) << "fetch_id " << row.fetch_id;
@@ -573,18 +610,22 @@ void ExpectTheMountClearsEveryPattern(int patterns, std::size_t min_pages) {
     ExpectOwnedChains(db.store());
 }
 
-// The one walk writes what `ClaimPatternWaystoneRoot`'s clearing arm
-// writes, the cache included: a cached pattern no longer names the root.
-TEST(CatalogPageCeilingTest, ClearingEveryWaystoneRootUpdatesTheCachedPatterns) {
+// The renewal's two walks over a chain of several pages, the cache
+// included `[quiet-wrong]`: a pattern cached before the renewal answers the
+// renewed root after it, never the previous run's, whose children could be
+// ids the cursor has handed to logged pages (CF-S1b, §8.3 Mount).
+TEST(CatalogPageCeilingTest, RenewingEveryWaystoneRootDropsTheCachedPatterns) {
     storage::InMemoryPageStore store{kFirstUserPageId};
     catalog::Catalog catalog(store, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
+    // Opted with no directory, so the stale roots below are the only ones.
     for (std::uint64_t fetch_id = 1; fetch_id <= 300; ++fetch_id) {
-        ASSERT_TRUE(catalog.RegisterPattern(fetch_id, catalog::kStmtClassUnclassified).ok());
+        ASSERT_TRUE(OptIn(catalog, fetch_id).ok());
     }
-    // One on the root page, one on the chain's last page.
+    // One on the root page, one on the chain's last page, each rooted at an
+    // id that stands for the previous run's directory, and cached.
     for (const std::uint64_t fetch_id : {std::uint64_t{1}, std::uint64_t{300}}) {
-        ASSERT_TRUE(catalog.ClaimPatternWaystoneRoot(fetch_id, kFirstUserPageId, 1).ok());
+        ASSERT_TRUE(OptIn(catalog, fetch_id, kFirstUserPageId).ok());
         auto cached = catalog.FindPattern(fetch_id);
         ASSERT_TRUE(cached.ok()) << cached.status().message();
         ASSERT_EQ(cached.value()->waystone_root, kFirstUserPageId);
@@ -593,15 +634,31 @@ TEST(CatalogPageCeilingTest, ClearingEveryWaystoneRootUpdatesTheCachedPatterns) 
     ASSERT_TRUE(chain.ok()) << chain.status().message();
     ASSERT_GT(chain.value().size(), 1u);
 
-    ASSERT_TRUE(catalog.ClearEveryPatternWaystoneRoot().ok());
+    auto renewed = catalog.RenewPatternDirectories(/*waystone_recording=*/true);
+    ASSERT_TRUE(renewed.ok()) << renewed.status().message();
+    EXPECT_EQ(renewed.value(), 300u);
+    std::set<PageId> roots;
+    for (std::uint64_t fetch_id = 1; fetch_id <= 300; ++fetch_id) {
+        auto cached = catalog.FindPattern(fetch_id);
+        ASSERT_TRUE(cached.ok()) << cached.status().message();
+        EXPECT_NE(cached.value()->waystone_root, kFirstUserPageId) << fetch_id;
+        EXPECT_EQ(cached.value()->dir_depth, 1u) << fetch_id;
+        auto row = catalog.GetSysPatternRow(fetch_id);
+        ASSERT_TRUE(row.ok()) << row.status().message();
+        EXPECT_EQ(row.value().waystone_root, cached.value()->waystone_root) << fetch_id;
+        roots.insert(row.value().waystone_root);
+    }
+    EXPECT_EQ(roots.size(), 300u) << "two opted rows share one fresh directory";
+
+    // Recording off: every root cleared and none created, the bits kept.
+    auto cleared = catalog.RenewPatternDirectories(/*waystone_recording=*/false);
+    ASSERT_TRUE(cleared.ok()) << cleared.status().message();
+    EXPECT_EQ(cleared.value(), 300u);
     for (const std::uint64_t fetch_id : {std::uint64_t{1}, std::uint64_t{300}}) {
         auto cached = catalog.FindPattern(fetch_id);
         ASSERT_TRUE(cached.ok()) << cached.status().message();
-        EXPECT_EQ(cached.value()->waystone_root, kInvalidPageId) << fetch_id;
-        EXPECT_EQ(cached.value()->dir_depth, 0u) << fetch_id;
-        auto row = catalog.GetSysPatternRow(fetch_id);
-        ASSERT_TRUE(row.ok()) << row.status().message();
-        EXPECT_FALSE(catalog::HasWaystoneDirectory(row.value())) << fetch_id;
+        EXPECT_FALSE(cached.value()->has_waystone_directory()) << fetch_id;
+        EXPECT_NE(cached.value()->flags & catalog::kPatternWaystone, 0) << fetch_id;
     }
 }
 

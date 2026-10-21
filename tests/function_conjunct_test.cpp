@@ -262,6 +262,7 @@ TEST_F(FunctionConjunctTest, AWriteFiltersOnAFunctionConjunct) {
 
 TEST_F(FunctionConjunctTest, AnImmutableCallBesideAKeyRecordsAndReplays) {
     const std::string sql = "SELECT id FROM t WHERE id = 3 AND DATE(ts) = '2026-10-02'";
+    Ok("WAYSTONE ON " + sql);  // CF-S1b: nothing records until opted in
     const std::string first = Run(sql);
     Run(sql);
     const std::string analyzed = Run("ANALYZE " + sql);
@@ -273,6 +274,7 @@ TEST_F(FunctionConjunctTest, AnImmutableCallBesideAKeyRecordsAndReplays) {
 // sound, because the replayed row is re-filtered by this statement's NOW().
 TEST_F(FunctionConjunctTest, AStableCallIsD0UntilAqFoldsIt) {
     const std::string sql = "SELECT id FROM t WHERE id = 3 AND ts < NOW()";
+    Ok("WAYSTONE ON " + sql);  // CF-S1b
     Run(sql);
     Run(sql);
     const std::string analyzed = Run("ANALYZE " + sql);
@@ -282,6 +284,12 @@ TEST_F(FunctionConjunctTest, AStableCallIsD0UntilAqFoldsIt) {
 TEST_F(FunctionConjunctTest, AD2StatementIsNeverSightedRegisteredOrRecorded) {
     exec::ScopedTestFunction undeclared(kUndeclared);
     const std::string sql = "SELECT id FROM t WHERE id = 3 AND undeclared(v) = 31";
+    // CF-S1b: and cannot be opted in, refused at the row-volatile call.
+    const DispatchOutcome refused = dispatcher_->Dispatch("WAYSTONE ON " + sql);
+    EXPECT_EQ(refused.status.code(), StatusCode::kUnsupported) << refused.response;
+    EXPECT_NE(refused.response.find("(byte " + std::to_string(12 + sql.find("undeclared")) + ")"),
+              std::string::npos)
+        << refused.response;
     const std::uint64_t sightings = recorder_->stats().sightings;
     const std::string first = Run(sql);
     Run(sql);

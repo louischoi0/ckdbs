@@ -128,19 +128,23 @@ TEST_F(DropTableTest, DependentsDropWithTheRelation) {
 }
 
 TEST_F(DropTableTest, APatternGhostIsHarmless) {
-    // The pattern is registered by traffic, on the second sighting - the
-    // only way to get one since declared patterns were withdrawn on
-    // 2026-08-31 - which needs a recorder, so this builds a second
-    // dispatcher over the same store rather than giving the fixture one.
+    // The pattern is opted in by `WAYSTONE ON` (CF-S1b) and recorded by
+    // traffic, on the second sighting, which needs a recorder, so this
+    // builds a second dispatcher over the same store rather than giving the
+    // fixture one.
     Ok("CREATE TABLE t (id int64, v varchar)");
     Ok("INSERT INTO t VALUES ('one')");
     stats::TrailRecorder recorder(boot_->catalog, store_);
     CommandDispatcher recording(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
                                 /*clock=*/nullptr, /*wal=*/nullptr,
                                 wal::DurabilityClass::kGroup, exec::Budget(), &recorder);
+    ASSERT_EQ(recording.Dispatch("WAYSTONE ON SELECT v FROM t WHERE id = 1")
+                  .response.rfind("OK WAYSTONE ON", 0),
+              0u);
     recording.Dispatch("SELECT v FROM t WHERE id = 1");
     recording.Dispatch("SELECT v FROM t WHERE id = 1");
     ASSERT_EQ(testing_view::ReadViewText(Run("SHOW PATTERNS")).rows.size(), 1u);
+    ASSERT_EQ(recorder.stats().trails_written, 1u);
 
     EXPECT_EQ(Run("DROP TABLE t").rfind("ERR", 0), std::string::npos);
     EXPECT_NE(Run("SHOW PATTERNS").rfind("ERR", 0), 0u);

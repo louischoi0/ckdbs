@@ -109,7 +109,12 @@ Status SimInstance::Boot() {
         // the next `CreateNew` hands the id to another relation and the
         // statistic walks into it - so a harness that skipped it would grade
         // a mount this project does not ship.
-        if (Status s = server::DiscardAdvisoryState(boot_->catalog); !s.ok()) return s;
+        // Under the harness's own recording switch, as the expeditor passes
+        // `waystone_recording`, so an opted pattern is renewed only where a
+        // recorder will write into it (CF-S1b).
+        if (Status s = server::DiscardAdvisoryState(boot_->catalog, options_.waystone); !s.ok()) {
+            return s;
+        }
 
         // The completion checkpoint (RC08), for the reason the harness runs
         // recovery at all: without it every reboot rescans from the head of the
