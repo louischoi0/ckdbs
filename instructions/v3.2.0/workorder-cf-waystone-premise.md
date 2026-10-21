@@ -17,9 +17,13 @@ Written 2026-10-21 on `cf-waystone-premise` from `23ea3e61`
   pattern.
 - **W1**: *"For now, write a milestone in this order and push it, as an
   exploratory milestone."*
+- **W2** (2026-10-21): *"Open with CF-Q0..Q7 $!a and proceed with S0"*
+  (`raft-marks-2026-10-21.md` §3).
 
-**Written 2026-10-21; not opened.** CF-Q0..Q7 (§4) wait for the
-operator's marks. **Exploratory since W1** (§3): CF-S0 decides which of
+**Written 2026-10-21; opened 2026-10-21 on W2.** CF-Q0..Q5 are the
+operator's marks, each (a) - CF-Q1 (a) against CLA's proposal (b) - and
+CF-Q6 and CF-Q7 carry no lettered option, so W2 leaves them as they
+stand (§4). **Exploratory since W1** (§3): CF-S0 decides which of
 three branches runs, and a branch that is not taken is recorded, not
 built.
 
@@ -258,7 +262,12 @@ every trail at each mount (§1.3).
 
 ---
 
-## 4. Questions - open
+## 4. Questions - marked on W2
+
+**Marks (W2, 2026-10-21)**: CF-Q0 (a), CF-Q1 (a), CF-Q2 (a), CF-Q3 (a),
+CF-Q4 (a), CF-Q5 (a), each the operator's. CF-Q6 has no lettered option
+and stays the operator's open question; CF-Q7 has none either and is
+asked only if S0 points at Branch O. The questions as written follow.
 
 **CF-Q0 - who picks the branch after S0.**
 - (a) The operator marks it after S0's report.
@@ -376,4 +385,4 @@ asking for them.
 
 ## 7. Stage log
 
-Empty: CF is written and not opened.
+**Opened 2026-10-21 on W2**; CF-S0 started on the same word.
