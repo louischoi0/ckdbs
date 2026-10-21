@@ -106,6 +106,11 @@ public:
     // contract verbatim.
     void ClearInjections() noexcept;
 
+    // **No power from now** (BS-S4): every operation fails with no effect,
+    // until a `Crash` restores it - `MemoryPageDevice::LosePowerAtWrite`'s
+    // partner, for the one cut both devices share.
+    void LosePower() noexcept;
+
     // Discards every write and every segment creation since the last
     // Sync(), modelling power loss - and brings back every segment detached
     // since the last ReclaimDetached(), whose removal never became durable.
@@ -177,6 +182,7 @@ private:
     InjectedFailure fail_next_write_;
     InjectedFailure fail_next_sync_;
     std::optional<std::size_t> tear_next_write_;
+    bool power_lost_ = false;
 
     Stats stats_;
     std::vector<TraceEntry> trace_;

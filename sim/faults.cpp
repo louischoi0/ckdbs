@@ -22,6 +22,7 @@ const char* FaultKindName(FaultKind kind) {
         case FaultKind::kPageFailGrow: return "page-fail-grow";
         case FaultKind::kLogFailWrite: return "log-fail-write";
         case FaultKind::kLogFailSync: return "log-fail-sync";
+        case FaultKind::kPowerLossAtPageWrite: return "power-loss-at-page-write";
     }
     return "unknown";
 }
@@ -37,7 +38,8 @@ std::optional<FaultProfile> ParseFaultProfile(std::string_view name) {
 std::optional<FaultKind> ParseFaultKind(std::string_view name) {
     for (const FaultKind kind :
          {FaultKind::kPageFailRead, FaultKind::kPageFailWrite, FaultKind::kPageFailSync,
-          FaultKind::kPageFailGrow, FaultKind::kLogFailWrite, FaultKind::kLogFailSync}) {
+          FaultKind::kPageFailGrow, FaultKind::kLogFailWrite, FaultKind::kLogFailSync,
+          FaultKind::kPowerLossAtPageWrite}) {
         if (name == FaultKindName(kind)) return kind;
     }
     return std::nullopt;
@@ -166,6 +168,9 @@ void ArmNthFault(const NthFault& fault, storage::MemoryPageDevice& pages,
         case FaultKind::kPageFailGrow: pages.FailNextGrow(injected, skip); break;
         case FaultKind::kLogFailWrite: log.FailNextWrite(injected, skip); break;
         case FaultKind::kLogFailSync: log.FailNextSync(injected, skip); break;
+        case FaultKind::kPowerLossAtPageWrite:
+            pages.LosePowerAtWrite(skip, [&log] { log.LosePower(); });
+            break;
     }
 }
 

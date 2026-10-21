@@ -34,11 +34,11 @@
 // alarm — it broke the mount three seeds out of five with an LSN past the
 // append point, which is the hole, not a defect. The realistic case is
 // already pinned where it belongs, at the stream (`tests/wal_stream_test.cpp`,
-// "the torn record is the end of the stream"). So: **torn injection waits
-// for `Crash(prefix)`**, and when it lands the log half asserts (recovery's
-// CRC is what it is for) while the page half is [GATED: FPI] — the cadence
-// `docs/inflight/known-gaps.md` records as unbuilt for every page class, which
-// leaves a torn *page* unhealable and the mount refusing it.
+// "the torn record is the end of the stream"). So torn injection is a crash's
+// and never a fault's: **BS-S4** cuts the log inside its unsynced run
+// (`SimConfig::power_cut`), and the `power-loss-at-page-write` Nth fault
+// leaves a page torn at a sector boundary, which with no full-page-image
+// cadence (`docs/inflight/known-gaps.md`) the restart may only refuse.
 
 #include <cstddef>
 #include <cstdint>
@@ -78,6 +78,10 @@ enum class FaultKind : std::uint8_t {
     kPageFailGrow = 3,
     kLogFailWrite = 4,
     kLogFailSync = 5,
+    // The power lost at a page write (BS-S4, BS-A9): an Nth fault only,
+    // never drawn into a schedule. From that write on both devices refuse
+    // everything, and the crash persists what `CrashPersisting` says.
+    kPowerLossAtPageWrite = 6,
 };
 
 const char* FaultKindName(FaultKind kind);

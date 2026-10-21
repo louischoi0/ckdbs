@@ -27,7 +27,7 @@ import sys
 import time
 
 KINDS = ["page-fail-read", "page-fail-write", "page-fail-sync", "page-fail-grow",
-         "log-fail-write", "log-fail-sync"]
+         "log-fail-write", "log-fail-sync", "power-loss-at-page-write"]
 SEEDS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "tests", "testdata",
                           "sim_seeds.txt")
 
@@ -59,16 +59,21 @@ def main():
     ap.add_argument("--modes", default="clean,crash")
     # The workload's I/O, and the mount's (BS-A7): recovery is where pages are read.
     ap.add_argument("--phases", default="workload,mount")
+    ap.add_argument("--kinds", default=",".join(KINDS))
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--max-n", type=int, default=5000)
     args = ap.parse_args()
+    # A misspelt kind is a usage error at every N, which would sweep to --max-n.
+    unknown = set(args.kinds.split(",")) - set(KINDS)
+    if unknown:
+        ap.error(f"unknown --kinds {sorted(unknown)}; known: {','.join(KINDS)}")
 
     started = time.time()
     points = 0
     fired_points = 0
     failures = []
     series = itertools.product(committed_seeds(), args.modes.split(","), args.phases.split(","),
-                               KINDS)
+                               args.kinds.split(","))
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         for seed, mode, phase, kind in series:
             n, last_fired = 1, 0

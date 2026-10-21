@@ -117,6 +117,10 @@ const char* SimModeName(SimMode mode);
 // open-code it, in two places that could drift apart.
 std::optional<SimMode> ParseSimMode(std::string_view name);
 
+enum class PowerCut : std::uint8_t { kNone = 0, kLog = 1 };
+const char* PowerCutName(PowerCut cut);
+std::optional<PowerCut> ParsePowerCut(std::string_view name);
+
 struct SimConfig {
     std::uint64_t seed = 0;
     std::size_t ops = 2000;
@@ -154,6 +158,14 @@ struct SimConfig {
     // can be shown to fail, which since recovery landed is the only way to
     // show it at all — no seed loses an acknowledged row any more.
     bool skip_recovery = false;
+
+    // **The power cut a crash ends in** (BS-S4): `kNone` drops every
+    // unsynced byte of both devices, as the hook's cells always have; `kLog`
+    // cuts the log inside its unsynced run at a seed-drawn byte, and is what
+    // `ckdbs-sim` defaults to (BS-A8). The page half is not a cut between
+    // statements - a store syncs as it writes back, so none would meet an
+    // unsynced page - but the `power-loss-at-page-write` Nth fault (BS-A9).
+    PowerCut power_cut = PowerCut::kNone;
 
     // **A checkpoint every this many ops** (BC-S4), the server's cadence
     // tick, so the log is recycled mid-run and the crash is recovered from a
@@ -243,6 +255,17 @@ struct SimVerdict {
     // Mounts an Nth fault failed (BS-A7), each followed by a fault-free mount
     // that recovered.
     std::size_t mounts_refused = 0;
+    // Power cuts (BS-S4): crashes that cut the log inside its unsynced run;
+    // power losses at a page write, the unsynced pages they met and kept,
+    // the ones that tore a page, and torn pages the restart refused - at the
+    // mount, the reclaim or the integrity sweep - rather than served.
+    std::size_t log_cuts = 0;
+    std::size_t page_cuts = 0;
+    std::size_t unsynced_pages = 0;  // pending page writes the cuts met
+    std::size_t kept_pages = 0;      // of them, persisted whole
+    std::size_t in_flight_pages = 0; // of them, a power loss's in-flight run
+    std::size_t tears = 0;
+    std::size_t tears_refused = 0;
 
     std::string Summary(const SimConfig& config) const;
 

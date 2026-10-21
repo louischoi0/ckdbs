@@ -15,6 +15,21 @@
 
 namespace kds::sim {
 
+const char* PowerCutName(PowerCut cut) {
+    switch (cut) {
+        case PowerCut::kNone: return "none";
+        case PowerCut::kLog: return "log";
+    }
+    return "unknown";
+}
+
+std::optional<PowerCut> ParsePowerCut(std::string_view name) {
+    for (const PowerCut cut : {PowerCut::kNone, PowerCut::kLog}) {
+        if (name == PowerCutName(cut)) return cut;
+    }
+    return std::nullopt;
+}
+
 const char* SimModeName(SimMode mode) {
     switch (mode) {
         case SimMode::kClean: return "clean";
@@ -83,6 +98,13 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
                " abandoned_checkpoints=" + std::to_string(abandoned_checkpoints);
     }
     if (mounts_refused != 0) out += " mounts_refused=" + std::to_string(mounts_refused);
+    if (log_cuts != 0) out += " log_cuts=" + std::to_string(log_cuts);
+    if (page_cuts != 0) {
+        out += " page_cuts=" + std::to_string(page_cuts) + " unsynced_pages=" +
+               std::to_string(unsynced_pages) + " kept_pages=" + std::to_string(kept_pages) +
+               " in_flight_pages=" + std::to_string(in_flight_pages) +
+               " tears=" + std::to_string(tears) + " tears_refused=" + std::to_string(tears_refused);
+    }
     if (fail_stops != 0) {
         out += " fail_stops=" + std::to_string(fail_stops);
     }
@@ -147,6 +169,9 @@ struct Iteration {
     // COMMIT.
     std::map<std::uint64_t, std::vector<std::pair<PageId, std::uint64_t>>> ledger;
     std::vector<std::uint64_t> txn_drop_oids;
+
+    // The page a `kPages` power cut tore, which the restart may refuse.
+    std::optional<PageId> torn_page;
 
     bool faults_on() const { return config.faults_on(); }
 };
@@ -1000,6 +1025,47 @@ SimInstance::Options InstanceOptions(const SimConfig& config, const FeatureToggl
     return options;
 }
 
+// The crash a mode ends in, cut as `SimConfig::power_cut` says (BS-S4). The
+// cut and the subset come from the iteration's own fork of the seed, so the
+// plan is the plan it was.
+void CutPower(Iteration& it, std::string_view at = {}) {
+    const SimConfig& config = it.config;
+    const bool power_lost = it.instance.page_device().power_lost();
+    if (config.power_cut == PowerCut::kNone && !power_lost) {
+        it.instance.Crash();
+        return;
+    }
+    // The Nth fault in the label: each point of a sweep draws its own cut.
+    Rng cut = Rng(config.seed).Fork(
+        "power-cut/" + std::to_string(it.index) +
+        (config.nth_fault.has_value() ? "/" + config.nth_fault->Describe() : std::string()) +
+        std::string(at));
+    const std::uint64_t keep = cut.Below(it.instance.UnsyncedLogBytes() + 1);
+    ++it.verdict.log_cuts;
+    if (!power_lost) {
+        it.instance.CrashWithLogPrefix(keep);
+        return;
+    }
+    // The power went at a page write (BS-A9): what the platter kept of the
+    // unsynced writes, the in-flight one among them, a quarter of the time
+    // torn.
+    const std::uint64_t page_seed = cut.Next();
+    const bool tear = cut.Chance(25);
+    const auto cut_pages = it.instance.CrashWithPowerCut(keep, page_seed, tear);
+    it.torn_page = cut_pages.torn;
+    ++it.verdict.page_cuts;
+    it.verdict.unsynced_pages += cut_pages.unsynced;
+    it.verdict.kept_pages += cut_pages.kept;
+    it.verdict.in_flight_pages += cut_pages.in_flight;
+    it.trace.Note("power cut: " + std::to_string(cut_pages.unsynced) + " unsynced, " +
+                  std::to_string(cut_pages.in_flight) + " in flight, " +
+                  std::to_string(cut_pages.kept) + " kept");
+    if (it.torn_page.has_value()) {
+        ++it.verdict.tears;
+        it.trace.Note("power cut tore page " + std::to_string(*it.torn_page));
+    }
+}
+
 bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iteration,
                   SimVerdict& verdict) {
     auto instance_or = SimInstance::Create(InstanceOptions(config, plan.toggles));
@@ -1140,6 +1206,13 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
         // Asked after the checkpoint, whose own records can be what stopped
         // it - after a plan's last op, a stop missed here reached the clean
         // shutdown and failed it.
+        // The power is gone (BS-A9): nothing more reaches either device, so
+        // the run goes to the crash as a fail-stop does.
+        if (it.instance.page_device().power_lost()) {
+            it.trace.Note("power lost by op " + std::to_string(i));
+            fail_stopped = true;
+            break;
+        }
         if (it.instance.log_stopped()) {
             it.trace.Note("log fail-stopped after op " + std::to_string(i));
             ++verdict.fail_stops;
@@ -1147,13 +1220,19 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
             break;
         }
     }
+    // The rollback closing a fault run still faces its armed power loss, and
+    // can be the write it strikes at: a probe would then read dead devices.
+    if (!fail_stopped && it.faults_on()) {
+        CloseOpenTransaction(it);
+        fail_stopped = it.instance.page_device().power_lost();
+    }
     if (fail_stopped) {
         // No quiescence probe and no clean shutdown: a stopped instance is
         // unhealthy by design and cannot shut down. The crash is what the
         // operator's restart starts from, with every injection disarmed as
         // the probe would have: the faults were the run's, not the restart's.
         DisarmInjections(it);
-        it.instance.Crash();
+        CutPower(it);
     } else {
         if (it.faults_on()) {
             // An iteration whose every CREATE TABLE died verified *nothing* —
@@ -1166,7 +1245,6 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                          "checked nothing");
                 return false;
             }
-            CloseOpenTransaction(it);
             if (!ProbeQuiesced(it)) return false;
         }
 
@@ -1190,11 +1268,11 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                     Fail(it, "pre-crash SYNC: " + reply);
                     return false;
                 }
-                it.instance.Crash();
+                CutPower(it);
                 break;
             }
             case SimMode::kCrash:
-                it.instance.Crash();
+                CutPower(it);
                 break;
         }
     }
@@ -1222,22 +1300,39 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
         verdict.faults_fired =
             InjectionsFired(it.instance.page_device(), it.instance.log_device());
         DisarmInjections(it);
-        if (!rebooted.ok()) {
+        // A mount the power left is no mount, whatever it answered.
+        if (!rebooted.ok() || it.instance.page_device().power_lost()) {
             // The restart after a refused mount: a power cut, then a mount
             // with nothing armed, which must recover what the first would have.
             it.trace.Note("the mount refused under the fault: " + rebooted.message());
             ++verdict.mounts_refused;
-            it.instance.Crash();
+            // A power lost during the mount cuts recovery's own writes too.
+            CutPower(it, "/mount");
             rebooted = it.instance.Reboot();
         }
     }
+    // **A torn page is refused, never served** (BS-S4, BS-Q5 (a)): with no
+    // full-page image to heal it from, the restart may refuse it - the mount
+    // naming `Corruption`, the reclaim's read, or the integrity sweep's cold
+    // read of that page and no other - and the iteration then has nothing
+    // left to reconcile. A torn page no read reaches, or one recovery
+    // rebuilt whole, leaves the run's whole contract standing.
+    const auto refused_torn = [&](const Status& s) {
+        if (!it.torn_page.has_value() || s.code() != StatusCode::kCorruption) return false;
+        ++verdict.tears_refused;
+        it.trace.Note("the restart refused torn page " + std::to_string(*it.torn_page) + ": " +
+                      s.message());
+        return true;
+    };
     if (!rebooted.ok()) {
+        if (refused_torn(rebooted)) return true;
         Fail(it, "reboot failed: " + rebooted.message());
         return false;
     }
     // What the mount owes, freed before anything reads the volume - the
     // run's tick would have, given time.
     if (Status s = it.instance.SettleReclaim(); !s.ok()) {
+        if (refused_torn(s)) return true;
         Fail(it, "the mount's reclaim did not finish: " + s.message());
         return false;
     }
@@ -1245,6 +1340,11 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     const IntegrityReport report =
         CheckInstance(it.instance.store(), it.instance.page_device(), it.instance.catalog());
     if (!report.ok()) {
+        const bool torn_only =
+            it.torn_page.has_value() &&
+            std::all_of(report.findings.begin(), report.findings.end(),
+                        [&](const Finding& f) { return f.page_id == *it.torn_page; });
+        if (torn_only && refused_torn(Status::Corruption(report.Summary()))) return true;
         Fail(it, report.Summary());
         return false;
     }
@@ -1321,6 +1421,13 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     backups_restored += other.backups_restored;
     fail_stops += other.fail_stops;
     mounts_refused += other.mounts_refused;
+    log_cuts += other.log_cuts;
+    page_cuts += other.page_cuts;
+    unsynced_pages += other.unsynced_pages;
+    kept_pages += other.kept_pages;
+    in_flight_pages += other.in_flight_pages;
+    tears += other.tears;
+    tears_refused += other.tears_refused;
     unlogged_ddl_lost_tables += other.unlogged_ddl_lost_tables;
     if (ok && !other.ok) {
         ok = false;

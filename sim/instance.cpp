@@ -249,12 +249,20 @@ void SimInstance::Crash() {
     // cannot write (no component has a flushing destructor — that property
     // is what makes this two-liner a crash rather than a shutdown).
     page_device_->Crash();
+    CrashLog(std::nullopt);
+    TearDown();
+}
+
+void SimInstance::CrashLog(std::optional<std::uint64_t> keep_bytes) {
     const std::uint64_t first_before = log_device_->first_segment();
-    log_device_->Crash();
+    if (keep_bytes.has_value()) {
+        log_device_->Crash(*keep_bytes);
+    } else {
+        log_device_->Crash();
+    }
     // A crash between a detach and its reclaim brings the detached segments
     // back (BC-S4): counted, so a run can say it reached that window.
     if (log_device_->first_segment() < first_before) ++crashes_reviving_segments_;
-    TearDown();
 }
 
 void SimInstance::CrashWithLogPrefix(std::uint64_t keep_bytes) {
@@ -264,15 +272,21 @@ void SimInstance::CrashWithLogPrefix(std::uint64_t keep_bytes) {
     // statement wrote — an `UNDO_WRITE` durable while the `HEAP_INSERT` it
     // can undo is not, which is recovery's H1 case.
     //
-    // The **page** device still takes the whole crash, and that is a scope
-    // statement rather than an omission: a torn *page* is unhealable until
-    // the full-page-image cadence exists ([GATED: FPI], `known-gaps.md`),
-    // so cutting the page device's overlay would produce a mount refusal
-    // that says nothing about recovery's logic. `sim/faults.hpp` records
-    // the same split.
+    // The **page** device takes the whole crash here: between statements a
+    // store has no unsynced page (BS-A9), and the page half of a power cut
+    // is `CrashWithPowerCut`'s.
     page_device_->Crash();
-    log_device_->Crash(keep_bytes);
+    CrashLog(keep_bytes);
     TearDown();
+}
+
+storage::MemoryPageDevice::PowerCut SimInstance::CrashWithPowerCut(std::uint64_t keep_log_bytes,
+                                                                    std::uint64_t page_seed,
+                                                                    bool tear) {
+    const storage::MemoryPageDevice::PowerCut cut = page_device_->CrashPersisting(page_seed, tear);
+    CrashLog(keep_log_bytes);
+    TearDown();
+    return cut;
 }
 
 std::uint64_t SimInstance::UnsyncedLogBytes() const noexcept {

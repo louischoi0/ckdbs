@@ -15,6 +15,7 @@ StatusOr<std::unique_ptr<MemoryLogDevice>> MemoryLogDevice::Create(std::uint64_t
 
 Status MemoryLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const std::byte> header) {
     std::lock_guard<std::mutex> guard(mutex_);
+    if (power_lost_) return Status::IoError("MemoryLogDevice: the power is lost");
     if (segment_no != base_.size()) {
         return Status::InvalidArgument("MemoryLogDevice: segments are created in order (expected " +
                                        std::to_string(base_.size()) + ", got " +
@@ -41,6 +42,7 @@ Status MemoryLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const 
 Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                                 std::span<const std::byte> in) {
     std::lock_guard<std::mutex> guard(mutex_);
+    if (power_lost_) return Status::IoError("MemoryLogDevice: the power is lost");
     if (Status s =
             CheckSegmentRange(segment_no, offset, in.size(), first_, base_.size(), segment_size_);
         !s.ok()) {
@@ -73,6 +75,7 @@ Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
 Status MemoryLogDevice::ReadAt(std::uint64_t segment_no, std::uint64_t offset,
                                std::span<std::byte> out) {
     std::lock_guard<std::mutex> guard(mutex_);
+    if (power_lost_) return Status::IoError("MemoryLogDevice: the power is lost");
     if (Status s =
             CheckSegmentRange(segment_no, offset, out.size(), first_, base_.size(), segment_size_);
         !s.ok()) {
@@ -100,6 +103,7 @@ Status MemoryLogDevice::ReadAt(std::uint64_t segment_no, std::uint64_t offset,
 
 Status MemoryLogDevice::Sync() {
     std::lock_guard<std::mutex> guard(mutex_);
+    if (power_lost_) return Status::IoError("MemoryLogDevice: the power is lost");
     trace_.push_back({OpKind::kSync, 0, 0, 0});
 
     if (auto failure = fail_next_sync_.Take(); failure.has_value()) {
@@ -122,6 +126,7 @@ Status MemoryLogDevice::Sync() {
 
 Status MemoryLogDevice::DetachBelow(std::uint64_t segment_no) {
     std::lock_guard<std::mutex> guard(mutex_);
+    if (power_lost_) return Status::IoError("MemoryLogDevice: the power is lost");
     if (Status s = CheckDetachBound(segment_no, first_, base_.size()); !s.ok()) {
         return s;
     }
@@ -137,6 +142,7 @@ Status MemoryLogDevice::DetachBelow(std::uint64_t segment_no) {
 
 Status MemoryLogDevice::ReclaimDetached() {
     std::lock_guard<std::mutex> guard(mutex_);
+    if (power_lost_) return Status::IoError("MemoryLogDevice: the power is lost");
     trace_.push_back({OpKind::kReclaim, first_, 0, 0});
     for (std::uint64_t seg = durable_first_; seg < first_; ++seg) {
         base_[seg].clear();
@@ -164,6 +170,11 @@ void MemoryLogDevice::TearNextWrite(std::size_t prefix_bytes) {
     tear_next_write_ = prefix_bytes;
 }
 
+void MemoryLogDevice::LosePower() noexcept {
+    std::lock_guard<std::mutex> guard(mutex_);
+    power_lost_ = true;
+}
+
 void MemoryLogDevice::ClearInjections() noexcept {
     std::lock_guard<std::mutex> guard(mutex_);
     fail_next_write_.Clear();
@@ -173,6 +184,7 @@ void MemoryLogDevice::ClearInjections() noexcept {
 
 void MemoryLogDevice::Crash() {
     std::lock_guard<std::mutex> guard(mutex_);
+    power_lost_ = false;
     // Everything un-synced dies: the overlay whole, and the segments
     // created since the last sync with it. A detach that was never reclaimed
     // never happened.
@@ -216,6 +228,7 @@ void MemoryLogDevice::Crash(std::uint64_t keep_bytes) {
     // written against it, and this primitive keeps that scope: the cut is a
     // suffix truncation, never a scatter.
     std::lock_guard<std::mutex> guard(mutex_);
+    power_lost_ = false;
     std::uint64_t kept = 0;
     for (std::size_t seg = 0; seg < pending_.size(); ++seg) {
         Segment& segment = pending_[seg];

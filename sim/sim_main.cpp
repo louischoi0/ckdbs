@@ -6,7 +6,8 @@
 //   ckdbs-sim --seed N [--ops N] [--iterations N]
 //             [--mode clean|sync-crash|crash]
 //             [--profile uniform|zipfian|colliding]
-//             [--faults none|io|grow] [--fault-rate N] [--fail-nth KIND:N]
+//             [--faults none|io|grow] [--fault-rate N] [--fail-nth KIND:N[@mount]]
+//             [--power-cut none|log]   (default log: BS-S4's log half, BS-A8)
 //             [--toggles off|on|cabins|waystone] [--pair]
 //             [--minimize [--out FILE]]
 //   ckdbs-sim --replay FILE
@@ -29,7 +30,8 @@ int Usage(const char* argv0) {
                  "usage: %s --seed N [--ops N] [--iterations N]\n"
                  "          [--mode clean|sync-crash|crash]\n"
                  "          [--profile uniform|zipfian|colliding]\n"
-                 "          [--faults none|io|grow] [--fault-rate N] [--fail-nth KIND:N]\n"
+                 "          [--faults none|io|grow] [--fault-rate N] [--fail-nth KIND:N[@mount]]\n"
+                 "          [--power-cut none|log]\n"
                  "          [--toggles off|on|cabins|waystone] [--pair]\n"
                  "          [--minimize [--out FILE] [--max-replays N]] | [--replay FILE]\n"
                  "          [--skip-recovery] [--checkpoint-every N] [--backup]\n",
@@ -41,6 +43,9 @@ int Usage(const char* argv0) {
 
 int main(int argc, char** argv) {
     kds::sim::SimConfig config;
+    // The log cut inside its unsynced run in every run (BS-S4's log half,
+    // BS-A8); the hook's cells keep SimConfig's `kNone`.
+    config.power_cut = kds::sim::PowerCut::kLog;
     bool have_seed = false;
     bool pair = false;
     bool minimize = false;
@@ -73,6 +78,11 @@ int main(int argc, char** argv) {
             const auto profile = kds::sim::ParseProfile(value);
             if (!profile.has_value()) return Usage(argv[0]);
             config.profile = *profile;
+            ++i;
+        } else if (arg == "--power-cut" && value) {
+            const auto cut = kds::sim::ParsePowerCut(value);  // BS-S4
+            if (!cut.has_value()) return Usage(argv[0]);
+            config.power_cut = *cut;
             ++i;
         } else if (arg == "--faults" && value) {
             const auto faults = kds::sim::ParseFaultProfile(value);
@@ -152,7 +162,7 @@ int main(int argc, char** argv) {
             return 2;
         }
         const kds::sim::SimVerdict verdict =
-            kds::sim::RunPlan(loaded.value().config, loaded.value().plan);
+            kds::sim::RunPlan(loaded.value().config, loaded.value().plan, loaded.value().iteration);
         std::printf("%s\n", verdict.Summary(loaded.value().config).c_str());
         return verdict.ok ? 0 : 1;
     }
@@ -164,7 +174,8 @@ int main(int argc, char** argv) {
         std::printf("%s\n", outcome.Summary().c_str());
         if (!outcome.found_failure) return 0;
         if (kds::Status s =
-                kds::sim::WriteCase(out_path, config, outcome.plan, outcome.signature);
+                kds::sim::WriteCase(out_path, config, outcome.plan, outcome.signature,
+                                    outcome.iteration);
             !s.ok()) {
             std::fprintf(stderr, "%s\n", s.message().c_str());
             return 2;

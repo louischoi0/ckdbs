@@ -1568,3 +1568,23 @@ Verified on `ce-streaming-reply` at `9e568b44` (CE-S1..S4). Owned by
   `fdatasync`); the v3 number - AL-S8's `fdatasync`-share cell - was not
   run. Owner: `instructions/v3.0.0/ar0-architecture-revision.md` §6 and
   AR0-V1.
+
+## Power cuts (BS-S4)
+
+Verified on `bs-test-hardening` from `5d58f3ca`
+(`instructions/v3.0.0/workorder-bs-test-hardening.md` BS-S4, BS-A8, BS-A9).
+
+- **A torn page is refused, not healed** (`wal.md` §16-4 asks for both). No
+  page class has a full-page-image cadence, so a page a power cut tore at a
+  sector boundary is unhealable: the restart refuses it - the mount, the
+  reclaim or the integrity sweep naming `Corruption` - and whatever it held is
+  lost to the instance until a restore. A headerless page - a Waystone
+  directory page - carries no checksum, so a tear there is served, and only
+  invariant 9's fall-through stands between it and an answer. The sim asserts the refusal and only
+  it (BS-Q5 (a)): over seeds 1-5 and page writes 1-40, 34 of 65 tears were
+  refused, the rest left nothing a read reached or a page recovery rebuilt.
+- **The simulated cuts are narrower than a disk's.** The log is cut as a
+  suffix of its unsynced run, never scattered; the page device keeps one
+  pending image a page, so a page written twice since its sync persists as
+  its latest image or not at all; and a page past the durable capacity is
+  lost with the growth. A disk can do each of these differently.
