@@ -68,12 +68,19 @@ public:
 // True for the five record types this fold handles.
 bool IsAssertionRecord(wal::RecordType type) noexcept;
 
+// Which halves of a record `ReplayAssertionRecord` applies. `kPageOnly` is
+// for a record before its assertion's base (AS6a): the snapshot already
+// counts it, but its entry is on the page only if the page was written back
+// after it, and no later write may land past the append point it set.
+enum class ReplayHalves : std::uint8_t { kPageAndDirectory, kPageOnly };
+
 // Applies one record. InvalidArgument for a record type this fold does not
 // own; Corruption for a payload that lies (an entry that is not
 // kEntryBytes wide, a RESERVE whose entry is not flagged reserved, a BUILD
 // whose entry is, an index past the page's append point); otherwise
 // whatever the page store or the directory answered.
 Status ReplayAssertionRecord(const wal::DecodedRecord& record, storage::PageStore& store,
-                             AssertionReplayContext& context);
+                             AssertionReplayContext& context,
+                             ReplayHalves halves = ReplayHalves::kPageAndDirectory);
 
 }  // namespace kds::exec
