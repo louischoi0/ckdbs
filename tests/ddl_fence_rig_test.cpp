@@ -39,6 +39,7 @@
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
+#include "kds/stats/lock_wait_log.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "view_text.hpp"
 
@@ -459,11 +460,12 @@ TEST(DdlFenceRigTest, AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOn
     // on core 1 arriving during it waits for the decide (`assertion.md`
     // §8.1a, `index.md`). Before the build reported progress, a backfill
     // longer than the net refused that writer as though the build were
-    // stuck. The net is cut to 10 ms and core 1 re-polls every 1 ms, so the
-    // writer meets its net many times during the build (about 200 ms over
-    // 10,000 rows in Debug). The net must still exceed the build's tail -
-    // the catalog write and the commit after its last row - which reports
-    // nothing.
+    // stuck. The net is cut to 50 ms and core 1 re-polls every 1 ms, so the
+    // writer meets its net several times during the build (about 200 ms
+    // over 10,000 rows in Debug). The net must still exceed the build's tail
+    // - the catalog write and the commit after its last row, which report
+    // nothing - and any stretch the host deschedules core 0 under a
+    // parallel suite.
     //
     // **Mutation**, measured: the waiter refusing at the net whatever the
     // holder's progress - killed 1 in 1.
@@ -474,7 +476,7 @@ TEST(DdlFenceRigTest, AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOn
     std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
     PeerRelation(*rig, "built_ix");
     CommandDispatcher& d1 = rig->core(1).dispatcher();
-    constexpr sched::MonoTimeNs kNetNs = 10'000'000;
+    constexpr sched::MonoTimeNs kNetNs = 50'000'000;
     d1.set_lock_wait_fault_net_ns(kNetNs);
     for (int batch = 0; batch < 20; ++batch) {
         std::string values;
@@ -484,6 +486,10 @@ TEST(DdlFenceRigTest, AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOn
         ASSERT_EQ(d1.Dispatch("INSERT INTO built_ix VALUES " + values).response.rfind("INSERTED", 0),
                   0u);
     }
+
+    // The log is the process's: a single-process run of the binary carries
+    // earlier cells' rows, `fault_net` ones included (lock_family_test's).
+    stats::LockWaitLog::ResetForTest();
 
     Statement build;
     build.sql = "CREATE INDEX bix ON built_ix (v)";
@@ -514,7 +520,6 @@ TEST(DdlFenceRigTest, AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOn
     // **Not vacuous**: the writer waited past its net and was granted.
     const testing_view::ViewText waits = testing_view::ReadViewText(
         d1.Dispatch("SELECT outcome, waited_us FROM sys.lock_waits").response);
-    // The log is the process's, so a repeated run finds earlier rows too.
     const std::vector<std::string> outcomes = waits.Column("outcome");
     const std::vector<std::string> waited = waits.Column("waited_us");
     bool past_the_net = false;

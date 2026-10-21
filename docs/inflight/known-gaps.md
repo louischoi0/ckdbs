@@ -816,14 +816,16 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
   Each holds its core until it ends or `exec::Budget` stops it. 64 is
   BA-Q11's value, not re-measured in BA-S15.
 - **A relation-`X` build holds its core for its whole length** (verified
-  at `4f175ba9`). `CREATE INDEX`, `REINDEX INDEX` and `CREATE ASSERTION`
-  walk the relation synchronously (`exec::Backfill`, `BuildBoundCabin`),
-  with no yield and no `exec::Budget`, so every other session on the
+  at `bf831a94`). `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION` and
+  `CREATE TRANSITION` walk the relation synchronously (`exec::Backfill`,
+  `BuildBoundCabin`, `CheckExistingRows`), with no yield and no
+  `exec::Budget`, so every other session on the
   build's core waits for it to end. Its waiters on other cores are no
   longer refused at the fault net while it advances (`txn.md` §5,
   `holder_progress.hpp`); the same-core stall is the second stage of that
-  fix, not yet built. Not covered: `CREATE ASSERTION`'s waiter has no rig
-  cell of its own - it shares `DdlBuildLock`'s registration, and
+  fix, not yet built. Not covered: `CREATE ASSERTION`'s and `CREATE
+  TRANSITION`'s waiters have no rig cell of their own - they share
+  `DdlBuildLock`'s registration, and
   `DdlFenceRigTest.AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOnCoreZero`
   drives `CREATE INDEX` only.
 - **A cancel is observed only where a walk yields, or at the next

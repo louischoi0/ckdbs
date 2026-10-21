@@ -21,11 +21,14 @@
 //
 // **Protocol.** One instance, owned by the `LockTable`, read by every core.
 // A slot's `holder` is claimed by a CAS from 0 and cleared by the scope that
-// claimed it; its `count` is written by that scope's thread alone (a relaxed
-// increment no other writer races) and read by waiters relaxed: a waiter
-// compares two counts and never orders anything against one. A reader that
-// finds `holder` again after reading `count` read that holder's count,
-// since ids are never reused (`trx_id.hpp`). No latch: a park predicate runs
+// claimed it; its `count` is written by that scope's thread alone (a release
+// increment no other writer races) and read by waiters as a seqlock reads:
+// `holder`, `count`, an acquire fence, `holder` again. A reader that finds
+// the same `holder` both times read that holder's count, since ids are
+// never reused (`trx_id.hpp`); a count from the slot's next owner would
+// have been written after that owner's claim, which the fence orders before
+// the second look. A waiter compares two counts and orders nothing else
+// against one. No latch: a park predicate runs
 // once per reactor iteration and must take none (`LockWaitReady`'s rule).
 //
 // **A full registry registers nothing** and the build runs unregistered,
@@ -69,7 +72,7 @@ public:
         void Advance() noexcept {
             if (slot_ == nullptr) return;
             slot_->count.store(slot_->count.load(std::memory_order_relaxed) + 1,
-                               std::memory_order_relaxed);
+                               std::memory_order_release);
         }
 
     private:
@@ -82,7 +85,9 @@ public:
         for (const Slot& s : slots_) {
             if (s.holder.load(std::memory_order_acquire) != holder) continue;
             const std::uint64_t count = s.count.load(std::memory_order_relaxed);
-            if (s.holder.load(std::memory_order_acquire) != holder) return std::nullopt;
+            // Keeps the count's load before the re-check (a seqlock read).
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (s.holder.load(std::memory_order_relaxed) != holder) return std::nullopt;
             return count;
         }
         return std::nullopt;

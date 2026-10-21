@@ -549,8 +549,8 @@ the relation's own writers (D9(a), AY-Q4; `foreign-keys.md` §2c): a child
 writer holds the parent relation's `IS` and a parent row's `S` until it
 decides, so a steady stream of child writers can refuse the DDL
 `TxnConflict` at the lock family's 1 s fault net, as AO-0 item 25 accepts
-for `DROP TABLE`. **The other direction is not refused**: a writer or
-reader arriving during a `CREATE INDEX` or `REINDEX INDEX` waits for its
+for `DROP TABLE`. **The other direction is not refused**: a writer
+arriving during an autocommit `CREATE INDEX` or a `REINDEX INDEX` waits for its
 decide however long the backfill runs, because the build reports its
 progress to the waiter's fault net (`txn.md` §5, `txn/holder_progress.hpp`)
 and the net ends the wait only after a net's length in which the build did

@@ -622,7 +622,6 @@ public:
     // a relation-`X` build registers its transaction here, and a waiter whose
     // net expires asks it before refusing.
     HolderProgress& progress() noexcept { return progress_; }
-    const HolderProgress& progress() const noexcept { return progress_; }
 
     // Wakes every waiter queued on `key` without releasing anything.
     // `Release` is its only engine caller; it is public because "a wake is

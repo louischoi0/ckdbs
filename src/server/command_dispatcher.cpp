@@ -2269,7 +2269,8 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     }
 
     // The build's report to its waiters' fault net (`holder_progress.hpp`),
-    // registered at the grant below. Outside the scope, so it is withdrawn
+    // registered before the ask below, so no waiter parks on this holder
+    // before it. Outside the scope, so it is withdrawn
     // after an autocommit decide has released the `X`: a waiter never finds
     // the holder silent while it still holds.
     std::optional<txn::HolderProgress::Scope> progress;
@@ -2314,12 +2315,12 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             }
         }
         if (relation.has_value()) {
+            if (locks_ != nullptr && scope.txn != nullptr) {
+                progress.emplace(&locks_->progress(), scope.txn->id());
+            }
             if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, *relation);
                 held.has_value()) {
                 return {ErrorReply(*held), false, 0, *held};
-            }
-            if (locks_ != nullptr && scope.txn != nullptr) {
-                progress.emplace(&locks_->progress(), scope.txn->id());
             }
         }
         txn::HolderProgress::Scope* const build_progress =
@@ -3182,9 +3183,8 @@ std::optional<Status> CommandDispatcher::TakeDdlBuildLock(Session& session, cata
     if (!begun.ok()) return begun.status();
     out.manager = txn_;
     out.txn = begun.value();
-    std::optional<Status> refused = BorrowRelationForDdl(out.txn, relation, /*poisons=*/false);
-    if (!refused.has_value()) out.progress.emplace(&locks_->progress(), out.txn->id());
-    return refused;
+    out.progress.emplace(&locks_->progress(), out.txn->id());
+    return BorrowRelationForDdl(out.txn, relation, /*poisons=*/false);
 }
 
 DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Session& session) {
@@ -3400,8 +3400,9 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
             return {ErrorReply(moved), false, 0, moved};
         }
     }
-    auto created =
-        exec::CreateTransition(catalog_, page_store_, stmt, target.value(), check_view, wal_);
+    auto created = exec::CreateTransition(
+        catalog_, page_store_, stmt, target.value(), check_view, wal_,
+        build_lock.progress.has_value() ? &*build_lock.progress : nullptr);
     if (!created.ok()) return {ErrorReply(created.status()), false, 0, created.status()};
     if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
     if (logging(LogLevel::kInfo)) {
