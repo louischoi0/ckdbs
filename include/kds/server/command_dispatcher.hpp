@@ -132,6 +132,10 @@ struct MountRecovery;
 // in `command_dispatcher.cpp`.
 class SelectRun;
 
+// A `CREATE INDEX` / `REINDEX INDEX` whose backfill runs on after its head
+// returns (A1 stage 2); defined in `command_dispatcher.cpp`.
+class IndexBuildRun;
+
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
@@ -295,6 +299,17 @@ struct DispatchOutcome {
     // back when it is destroyed. Null on every other reply, and always
     // null once `DispatchAsync` returns.
     std::shared_ptr<SelectRun> select_run = nullptr;
+
+    // **An index build, not yet walked** (A1 stage 2, `sched.md` §3). Set
+    // only under `DispatchAsync`, on a `CREATE INDEX` or `REINDEX INDEX`
+    // reply whose head took the relation `X`, answered every refusal and
+    // allocated the root: the backfill runs on after the head returns,
+    // yielding its core every `SlicePolicy::pages_per_slice` leaves, and its
+    // tail logs the tree, writes the row and decides the statement's scope.
+    // It owns the scope, the build and the progress registration, holds this
+    // core's statement epoch and pins the catalog memo. Null on every other
+    // reply, and always null once `DispatchAsync` returns.
+    std::shared_ptr<IndexBuildRun> build_run = nullptr;
 
     // **The poison `EndWrite` withheld for a structural re-run** (BA-S14),
     // carried with the statement rather than read back off the dispatcher:
@@ -1155,8 +1170,14 @@ private:
     // one BeginWrite opened (D2: autocommit DDL is a real transaction) -
     // and installing the catalog's undo hook happens here, so a handler
     // cannot write catalog rows a crash loser could not roll back. The
-    // hook is uninstalled by FinishDdlStatement, every exit.
+    // hook is uninstalled by FinishDdlStatement, every exit - and by
+    // `InDdlStatement` before an index build it hands on first yields.
     DdlScope DdlScopeFor(WriteScope& scope);
+    // `DdlScopeFor`'s hook alone, for `txn`: an index build's tail
+    // installs it again, since its head's was uninstalled before the first
+    // yield - the hook is the dispatcher's, and another session's statement
+    // runs on this core while the build is away.
+    void InstallDdlUndoHook(txn::Transaction* txn);
     // The one shape a DDL route may have: BeginWrite, the body, then
     // FinishDdlStatement on every exit - structural, so no route can
     // install the undo hook and leave it armed (review S4).
@@ -1683,6 +1704,24 @@ private:
     // Runs the walk a `DispatchAndStage` reply left in `out->select_run`
     // and writes the reply over `out` (BA-S15). `DispatchAsync` only.
     sched::Coro CompleteSelect(std::string_view line, DispatchOutcome* out);
+
+    // Runs the backfill and the tail a `DispatchAndStage` reply left in
+    // `out->build_run` and writes the reply over `out` (A1 stage 2).
+    // `DispatchAsync` only.
+    sched::Coro CompleteIndexBuild(std::string_view line, DispatchOutcome* out);
+
+    // `DispatchAndStage`'s statement frame around `body(session)`: the
+    // per-statement members cleared, the statement epoch published, this
+    // core declared, and what the body left in the members carried onto its
+    // outcome. Also the frame an index build's tail runs in, after its
+    // head's has closed (`IndexBuildRun`).
+    template <typename Body>
+    DispatchOutcome StageStatement(Session* session, Body&& body);
+
+    // `DispatchInner`'s per-statement stamps - the boundary not yet taken,
+    // the commit's durability class - which an index build's tail takes
+    // again, since other statements of this core ran since its head.
+    void StampStatement(Session& session);
 
     // The statement log line `DispatchAndStage` writes, split out so a
     // `SELECT` whose walk ends after its head is logged when it ends.
@@ -2528,6 +2567,8 @@ private:
     };
     std::vector<std::unique_ptr<SelectScratch>> select_scratch_pool_;
     friend class SelectRun;
+    friend class IndexBuildRun;
+    friend class SuspensionHold;
 
     // Whether a successful SELECT records its access shapes
     // (`access_statistics`). Defaults **on**: unlike Waystone this collects

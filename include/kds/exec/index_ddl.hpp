@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -28,9 +29,10 @@ class TransactionManager;
 //
 // ---- Three halves ----------------------------------------------------------
 //
-// `CreateIndex` is `PrepareIndexDef`, then `BuildIndexTree`, then
-// `Catalog::CreateIndex`, and is their one caller (the owner-built split
-// that made them three retired at AT-S5e; history at cf889b63).
+// `IndexBuild` is `PrepareIndexDef` and the root, then the backfill a slice
+// at a time, then the logged tree and `Catalog::CreateIndex` (the owner-built
+// split retired at AT-S5e, history at cf889b63; the slices are A1 stage 2's,
+// `sched.md` §3).
 //
 // ---- The error / warning line --------------------------------------------
 //
@@ -86,28 +88,107 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
                                                      const txn::ReadView* view,
                                                      std::uint64_t trx_id);
 
-// The page half: the root allocated from `store` and formatted, the tree
-// backfilled over everything `access` already holds (spec §10a - every
-// version, so a reader on an older snapshot finds its row through it), and
-// the whole tree logged as full page images under `trx_id` (RV3), so a
-// committed row survives a crash with a tree it can probe. Returns the root
-// the build ended at, which a split may have moved off the page allocated
-// first.
+// **`CREATE INDEX` and `REINDEX INDEX`'s build, in slices** (A1 stage 2,
+// `sched.md` §3): a head that answers every refusal and allocates the root,
+// a backfill its caller drives `leaves` relation leaves at a time - yielding
+// its core in between - and a tail that logs the tree and writes the row.
 //
-// Publishes nothing. The caller writes the `sys.indexes` row naming this
-// root, or leaves an unreachable tree and no row: a failure here is the
-// safe direction, where a row over a partial tree would be a wrong answer
-// with a right answer's shape. Nothing can observe the half-built tree in
-// between: no catalog row names it, and the caller holds the relation `X`
-// (AT-S5e). `wal` null = unlogged (tests).
+// **What it holds between two `Step`s**: the relation's `TableAccess` (the
+// caller pins the catalog memo), the root the tree has grown to, and the
+// next leaf to read - no page and no span. Resuming at a leaf id is safe
+// because the caller holds the relation `X` (AT-S5e) from before the head to
+// its decide: no writer can split, grow or retire a leaf of the relation
+// meanwhile, and no reader can reach the unpublished tree.
 //
-// The backfill indexes every version a live or future reader can reach: it
-// follows a row's undo chain down to the first version `txns` resolves for
-// every reader, never past it. `txns` null walks every chain to its end.
-StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableAccess& access,
-                                const catalog::Catalog::IndexDef& def, std::uint64_t trx_id,
-                                wal::WalManager* wal, const txn::TransactionManager* txns,
-                                txn::HolderProgress::Scope* progress);
+// The backfill indexes every version a live or future reader can reach
+// (spec §10a): it follows a row's undo chain down to the first version
+// `txns` resolves for every reader, never past it. `txns` null walks every
+// chain to its end.
+//
+// Publishes nothing before `Finish`. A build that fails or is destroyed
+// before `Finish` frees its unlogged tree (BX-S6); a failure after the tree
+// is logged leaves it owed in its anchor slot, seeded if the catalog refused
+// before writing it, and the next mount reclaims it (BY-R1, BY-R2).
+class IndexBuild {
+public:
+    // `CREATE INDEX`'s head: `PrepareIndexDef`, then the root.
+    static StatusOr<std::unique_ptr<IndexBuild>> ForCreate(
+        catalog::Catalog& catalog, storage::PageStore& store, const parser::IndexStmt& stmt,
+        catalog::Oid default_namespace, const txn::ReadView* view, std::uint64_t trx_id,
+        const txn::TransactionManager* txns, txn::HolderProgress::Scope* progress);
+
+    // **`REINDEX INDEX <name>`'s head** (BY-R6,
+    // `instructions/v3.2.0/workorder-by-reindex-drop-index-reclaim.md`): the
+    // index named by `stmt` dropped as `DROP INDEX` drops it (`dropped`), and
+    // a definition for `CREATE INDEX`'s build from the row's own key and
+    // covered column positions, widths and unique flag, the same name, under a
+    // new `index_oid` (BY-Q2 (a)) - in the caller's transaction, under the `X`
+    // it holds on `relation`, refused as `DropIndex` refuses off it. The
+    // backfill writes an entry for every version a reader can still reach
+    // (IX10a), so a rebuild drops the surplus entries (IX2) of rows that left
+    // the relation and of versions no reader reaches. `Finish`'s
+    // `replaced_oid` is the dropped index's.
+    static StatusOr<std::unique_ptr<IndexBuild>> ForReindex(
+        catalog::Catalog& catalog, storage::PageStore& store, const parser::IndexStmt& stmt,
+        std::optional<catalog::Oid> relation, const txn::ReadView* view, std::uint64_t trx_id,
+        catalog::CatalogRowChange* dropped, const txn::TransactionManager* txns,
+        txn::HolderProgress::Scope* progress);
+
+    ~IndexBuild();
+    IndexBuild(const IndexBuild&) = delete;
+    IndexBuild& operator=(const IndexBuild&) = delete;
+
+    // Walks up to `leaves` more of the relation's leaves. A refusal ends
+    // the build: the caller hands it to `Finish`.
+    Status Step(std::uint32_t leaves);
+
+    // Whether the walk has reached the end of the leaf chain.
+    bool walked() const noexcept { return leaf_ == kInvalidPageId; }
+
+    // The statement the build answers for: the names and the byte its
+    // reply and refusals carry.
+    const parser::IndexStmt& stmt() const noexcept { return stmt_; }
+
+    // The tail. `ran` is how the walk ended - a `Step`'s refusal, the
+    // caller's cancel, or OK once `walked()`. OK logs the whole tree as full
+    // page images under the build's transaction (RV3) - **before** the
+    // `sys.indexes` row that publishes it, so a committed row survives a
+    // crash with a tree it can probe - and writes the row; anything else
+    // frees the tree and is returned with the statement's context. The row
+    // is stamped with the build's transaction and its address reported in
+    // `written`, so a rollback can retire it (DT5). `wal` null = unlogged
+    // (tests). Called once.
+    StatusOr<IndexDdlResult> Finish(const Status& ran, catalog::CatalogRowRef* written,
+                                    wal::WalManager* wal);
+
+private:
+    IndexBuild(catalog::Catalog& catalog, storage::PageStore& store, parser::IndexStmt stmt,
+               catalog::Catalog::IndexDef def, std::uint64_t trx_id,
+               const txn::TransactionManager* txns, txn::HolderProgress::Scope* progress);
+
+    // The root, and the leaf the walk starts at.
+    Status Begin();
+
+    // A refusal from the build, as the statement answers it.
+    Status Refusal(const Status& s) const;
+
+    catalog::Catalog& catalog_;
+    storage::PageStore& store_;
+    const parser::IndexStmt stmt_;
+    catalog::Catalog::IndexDef def_;
+    const std::uint64_t trx_id_;
+    const txn::TransactionManager* const txns_;
+    txn::HolderProgress::Scope* const progress_;
+    const catalog::TableAccess* access_ = nullptr;
+    // Its `root_page_id` names the root the tree has grown to even when the
+    // backfill fails, which is what a failed build frees from (BX-Q6 (b)).
+    catalog::TableAccess::IndexRef building_;
+    PageId leaf_ = kInvalidPageId;
+    PageId walk_origin_ = kInvalidPageId;
+    std::uint32_t leaves_ = 0;
+    catalog::Oid replaced_oid_ = 0;
+    bool finished_ = false;
+};
 
 // What a successful CREATE INDEX has to say besides its row (the
 // `IndexDdlResult::warnings` lines). Today one line: the key column
@@ -116,22 +197,6 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
 std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
                                                const catalog::Catalog::IndexDef& def,
                                                std::string_view key_column);
-
-// The three halves back to back.
-//
-// `trx_id` / `written` make the DDL transactional
-// (workplan-ddl-transactional.md DT5): the catalog row is stamped with
-// the creating transaction and its address reported, so a rollback can
-// retire it. Defaulted to the autocommit path. A build that fails frees its
-// unlogged tree (BX-S6); a failure after the tree is logged leaves it owed in
-// its anchor slot, seeded if the catalog refused before writing it, and the
-// next mount reclaims it (BY-R1, BY-R2).
-StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
-                                     const parser::IndexStmt& stmt,
-                                     catalog::Oid default_namespace, std::uint64_t trx_id,
-                                     catalog::CatalogRowRef* written, const txn::ReadView* view,
-                                     wal::WalManager* wal, const txn::TransactionManager* txns,
-                                     txn::HolderProgress::Scope* progress);
 
 // Removes the index named by `stmt` and returns its `index_oid`.
 //
@@ -154,25 +219,5 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
                                   std::optional<catalog::Oid> relation,
                                   const txn::ReadView* view, std::uint64_t trx_id,
                                   catalog::CatalogRowChange* change);
-
-// **`REINDEX INDEX <name>`** (BY-R6,
-// `instructions/v3.2.0/workorder-by-reindex-drop-index-reclaim.md`): the
-// index named by `stmt` is dropped as `DROP INDEX` drops it, and built again
-// through `CREATE INDEX`'s build - the row's own key and covered column
-// positions, widths and unique flag, the same name, under a new `index_oid`
-// (BY-Q2 (a)) - in one transaction, under the `X` the caller holds on
-// `relation`, refused as `DropIndex` refuses off it. The backfill writes an
-// entry for every version a reader can still reach (IX10a, `txns`), so a
-// rebuild drops the surplus entries (IX2) of rows that left the relation and
-// of versions no reader reaches. The result's
-// `replaced_oid` is the dropped index's.
-StatusOr<IndexDdlResult> ReindexIndex(catalog::Catalog& catalog, storage::PageStore& store,
-                                      const parser::IndexStmt& stmt,
-                                      std::optional<catalog::Oid> relation,
-                                      const txn::ReadView* view, std::uint64_t trx_id,
-                                      catalog::CatalogRowChange* dropped,
-                                      catalog::CatalogRowRef* written, wal::WalManager* wal,
-                                      const txn::TransactionManager* txns,
-                                      txn::HolderProgress::Scope* progress);
 
 }  // namespace kds::exec

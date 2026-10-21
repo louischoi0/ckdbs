@@ -554,7 +554,11 @@ arriving during an autocommit `CREATE INDEX` or a `REINDEX INDEX` waits for its
 decide however long the backfill runs, because the build reports its
 progress to the waiter's fault net (`txn.md` §5, `txn/holder_progress.hpp`)
 and the net ends the wait only after a net's length in which the build did
-not advance.
+not advance. **The backfill yields its core** every 64 relation leaves
+(`sched.md` §3), so the build's own core keeps serving its other sessions -
+a writer of the relation among them waits on the `X` like any other - and
+a cancel ends the build at the next boundary with nothing published
+(`protocol.md` §10).
 
 An index's **name is unique instance-wide**, so `DROP INDEX` names only it.
 That is where an index and a Cabin differ and why: `(relation, column)`

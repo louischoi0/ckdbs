@@ -278,13 +278,7 @@ public:
     void SetSlice(const SlicePolicy* slice) noexcept { slice_ = slice; }
 
     // The session's cancel, taken at the slice boundary (§10).
-    Status TakeCancel() const {
-        if (slice_->cancel == nullptr ||
-            !slice_->cancel->exchange(false, std::memory_order_acq_rel)) {
-            return Status::OK();
-        }
-        return Status::Cancelled("cancelled by request");
-    }
+    Status TakeCancel() const { return slice_->TakeCancel(); }
 
     // Whether the walk this runner drives stopped before its end.
     bool stopped() const noexcept { return stopped_; }
