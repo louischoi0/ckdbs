@@ -85,7 +85,7 @@ protected:
 
     // The pattern's directory pair, for tests that rewrite a trail by hand.
     std::pair<PageId, std::uint8_t> DirectoryOf(const std::string& sql) {
-        auto pattern = boot_->catalog.FindPattern(KeyOf(sql).fetch_id);
+        auto pattern = boot_->catalog.FindOptedPattern(KeyOf(sql).fetch_id);
         EXPECT_TRUE(pattern.ok());
         return {pattern.value()->waystone_root, pattern.value()->dir_depth};
     }
@@ -369,12 +369,12 @@ TEST_F(WaystoneReplayTest, AVersionOneRowIsNeverFoundAndTheStatementRecordsAgain
         auto encoded = row.Encode();
         ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
     }
-    EXPECT_FALSE(boot_->catalog.FindPattern(fetch_id).ok());
+    EXPECT_FALSE(boot_->catalog.GetSysPatternRow(fetch_id).ok());
 
     OptIn(sql);
     const std::string first = Run(sql);
     Run(sql);  // records under the current-version row
-    auto found = boot_->catalog.FindPattern(fetch_id);
+    auto found = boot_->catalog.FindOptedPattern(fetch_id);
     ASSERT_TRUE(found.ok());
     EXPECT_NE(found.value()->oid, 999'999u) << "the version-1 row was taken as current";
     EXPECT_EQ(found.value()->fingerprint_version, parser::kFingerprintVersion);
@@ -400,7 +400,7 @@ TEST_F(WaystoneReplayTest, AVersionOneRowIsNeverFoundAndTheStatementRecordsAgain
 TEST_F(WaystoneReplayTest, OffByNumberClearsALapsedRowAndTheReissuedOneSharingItsFetchId) {
     const std::string sql = "SELECT * FROM t WHERE id = 4";
     const std::uint64_t fetch_id = KeyOf(sql).fetch_id;
-    const std::uint64_t opted_before = boot_->catalog.CountOptedPatterns().value();
+    const std::uint64_t opted_before = boot_->catalog.opted_patterns();
     {
         auto bytes = store_.Get(catalog::kCatalogPagePatterns);
         ASSERT_TRUE(bytes.ok());
@@ -415,7 +415,7 @@ TEST_F(WaystoneReplayTest, OffByNumberClearsALapsedRowAndTheReissuedOneSharingIt
         ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
     }
     OptIn(sql);
-    EXPECT_EQ(boot_->catalog.CountOptedPatterns().value(), opted_before + 1);
+    EXPECT_EQ(boot_->catalog.opted_patterns(), opted_before + 1);
     Run(sql);
     Run(sql);
     ASSERT_NE(Run("ANALYZE " + sql).find("replays=1"), std::string::npos);
@@ -435,7 +435,7 @@ TEST_F(WaystoneReplayTest, OffByNumberClearsALapsedRowAndTheReissuedOneSharingIt
     const auto view = testing_view::ReadViewText(Run("SHOW PATTERNS"));
     EXPECT_EQ(view.Find("oid", "888888", "waystone"), "0");
     EXPECT_EQ(view.Find("fetch_id", std::to_string(fetch_id), "waystone"), "0");
-    EXPECT_EQ(boot_->catalog.CountOptedPatterns().value(), opted_before);
+    EXPECT_EQ(boot_->catalog.opted_patterns(), opted_before);
     EXPECT_EQ(Run("WAYSTONE OFF " + std::to_string(fetch_id)),
               "OK WAYSTONE OFF fetch_id=" + std::to_string(fetch_id) + " unchanged");
 
@@ -462,7 +462,7 @@ TEST_F(WaystoneReplayTest, AScanStepIsNeverServedFromATrail) {
     ASSERT_TRUE(chain.ok());
 
     // Nothing was recorded for it, so there is nothing to replay from...
-    auto pattern = boot_->catalog.FindPattern(KeyOf(sql).fetch_id);
+    auto pattern = boot_->catalog.GetSysPatternRow(KeyOf(sql).fetch_id);
     EXPECT_FALSE(pattern.ok()) << "a scan-only statement registers no pattern at all";
 
     // ...and even handed a fabricated trail naming its step, the executor

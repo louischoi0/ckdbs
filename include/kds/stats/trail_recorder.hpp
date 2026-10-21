@@ -109,6 +109,12 @@ public:
 
     const Stats& stats() const noexcept { return stats_; }
 
+    // The statement gate's lookup of the opted pattern failed to read
+    // `sys.patterns` (CF-S1c): the statement runs unrecorded, and the
+    // failure is counted in `write_failures` with the recorder's own, so a
+    // fill that keeps failing is visible rather than silent.
+    void CountUnreadablePattern() noexcept { ++stats_.write_failures; }
+
     // Whether an instance would record *right now*, without observing it.
     // Exposed for tests and for a future EXPLAIN-style surface; the policy
     // lives in one place and this is it.

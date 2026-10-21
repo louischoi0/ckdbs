@@ -594,9 +594,10 @@ struct PatternAccess {
     std::uint8_t stmt_class = 0;
     std::uint8_t dir_depth = 0;
 
-    // The row's policy bits (rows.hpp): `kPatternWaystone` is the opt-in
-    // the trail recorder asks on the statement path, which a catalog page
-    // read per execution would cost more than the recording does.
+    // The row's policy bits (rows.hpp), carried for inspection. Since
+    // CF-S1c no engine path reads them: an entry exists only in the opted
+    // map, which holds current-version rows with `kPatternWaystone` set, so
+    // membership is the opt-in and the bit is always set here.
     std::uint16_t flags = 0;
 
     // Same rule as SysPatternRow's: depth is the authority, never the

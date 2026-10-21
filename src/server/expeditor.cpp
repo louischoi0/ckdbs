@@ -843,6 +843,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->database_->catalog.SetSchemaWord(&expeditor->schema_version_);  // AT-S2
     expeditor->database_->catalog.SetOidSequence(&expeditor->oid_sequence_);  // AT-S5b
     expeditor->database_->catalog.SetMarkCounter(&expeditor->delete_mark_count_);  // AT-S5b
+    expeditor->database_->catalog.SetOptedCount(&expeditor->waystone_opted_);  // CF-S1c
 
     // The WAL stack, before the dispatcher: INSERT logs through it, so the
     // dispatcher cannot be built until it exists.
@@ -1064,9 +1065,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // **An opted pattern's directory is renewed here** (CF-S1b): a fresh,
     // empty root for each row `WAYSTONE ON` set, under the
     // `waystone_recording` ceiling, before the listener binds.
-    std::uint64_t waystone_opted = 0;
     if (Status s = DiscardAdvisoryState(expeditor->database_->catalog,
-                                        expeditor->config_.waystone_recording, &waystone_opted);
+                                        expeditor->config_.waystone_recording);
         !s.ok()) {
         return s;
     }
@@ -1080,7 +1080,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                             (expeditor->config_.waystone_recording ? "on" : "off") +
                             " waystone_replay=" +
                             (expeditor->config_.waystone_replay ? "on" : "off") +
-                            " waystone_opted=" + std::to_string(waystone_opted));
+                            " waystone_opted=" +
+                            std::to_string(expeditor->database_->catalog.opted_patterns()));
     }
 
     // H7: collect the spills nothing points at. The assertion catalog -
@@ -1907,6 +1908,7 @@ Status Expeditor::Start() {
             core_config.cabins_store = cabin_store_ ? &*cabin_store_ : nullptr;
             core_config.oid_sequence = &oid_sequence_;
             core_config.mark_counter = &delete_mark_count_;
+            core_config.opted_count = &waystone_opted_;
             core_config.assertions = &*assertions_;
             // The instance's anchor and its run (AT-S8): this peer's
             // checkpointer publishes into core 0's `SuperBlockCheckpointAnchor`

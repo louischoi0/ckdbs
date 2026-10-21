@@ -3050,19 +3050,60 @@ StatusOr<SysPatternRow> Catalog::GetSysPatternRow(std::uint64_t fetch_id) {
     return Status::NotFound("no current sys.patterns row for this fetch_id");
 }
 
-StatusOr<const PatternAccess*> Catalog::FindPattern(std::uint64_t fetch_id) {
+StatusOr<const PatternAccess*> Catalog::FindOptedPattern(std::uint64_t fetch_id) {
+    // Nothing opted on the instance: nothing fills, and the answer costs
+    // the one load (CF-S1c).
+    if (NoOptedPatterns()) return Status::NotFound("no pattern is opted in");
+    if (!cache_.opted_patterns_filled()) {
+        // **The whole opted set, once per generation**: a fill of one entry
+        // would leave the map unable to answer a miss without a scan. The
+        // version filter is applied here, so a row from another revision
+        // never reaches the map - by construction rather than by a check
+        // every reader has to remember.
+        auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
+        if (!rows.ok()) return rows.status();
+        std::vector<PatternAccess> opted;
+        for (const SysPatternRow& row : rows.value()) {
+            if (IsCurrentOptIn(row)) opted.push_back(AccessOf(row));
+        }
+        cache_.FillOptedPatterns(std::move(opted));
+    }
+    // A miss is an answer, not a reason to read the page: the map is
+    // complete for this generation (catalog_cache.hpp's soundness rule).
     if (const PatternAccess* cached = cache_.FindPattern(fetch_id); cached != nullptr) {
         return cached;
     }
+    return Status::NotFound("the pattern is not opted in");
+}
 
-    // Version filtering lives in GetSysPatternRow(), so a row from another
-    // revision arrives here as NotFound and never reaches the cache. That
-    // ordering is the point: the cache holds current-version entries only,
-    // by construction rather than by a check every reader has to remember.
-    auto row = GetSysPatternRow(fetch_id);
-    if (!row.ok()) return row.status();
+void Catalog::MoveOptedCount(bool up) noexcept {
+    if (opted_count_ == nullptr) {
+        if (up) {
+            ++local_opted_;
+        } else if (local_opted_ > 0) {
+            --local_opted_;
+        }
+        return;
+    }
+    if (up) {
+        opted_count_->fetch_add(1, std::memory_order_acq_rel);
+        return;
+    }
+    // Saturating, so a CAS rather than a `fetch_sub`: every mover writes
+    // under page 9's hold, but the boot's store is not one of them.
+    std::uint64_t now = opted_count_->load(std::memory_order_acquire);
+    while (now > 0 &&
+           !opted_count_->compare_exchange_weak(now, now - 1, std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
+    }
+}
 
-    return cache_.PutPattern(AccessOf(row.value()));
+void Catalog::StoreOptedCount(std::uint64_t value) noexcept {
+    if (opted_count_ != nullptr) {
+        opted_count_->store(value, std::memory_order_release);
+    } else {
+        local_opted_ = value;
+    }
 }
 
 StatusOr<bool> Catalog::MutatePatternRow(std::uint64_t fetch_id,
@@ -3126,6 +3167,10 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
             // is reported as leaked below like every other unused page.
             wrote = held.status();
         } else if (on) {
+            // A 0->1 change of the bit, which the opted count follows once
+            // the write has succeeded (`MutatePatternRow` writes current
+            // rows only).
+            bool opts = false;
             auto mutated = MutatePatternRow(fetch_id, [&](SysPatternRow& row) {
                 const bool opted = (row.flags & kPatternWaystone) != 0;
                 const bool roots = root != kInvalidPageId && !HasWaystoneDirectory(row);
@@ -3136,10 +3181,12 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
                     row.dir_depth = 1;
                 }
                 root_used = roots;
+                opts = !opted;
                 return true;
             });
             if (mutated.ok()) {
                 out.written = mutated.value();
+                if (out.written && opts) MoveOptedCount(/*up=*/true);
             } else if (mutated.status().code() != StatusCode::kNotFound) {
                 // A failed overwrite wrote nothing, so the page it carried
                 // is reachable from nothing.
@@ -3174,6 +3221,7 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
                     wrote = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPagePatterns, row,
                                       kBootstrapXid);
                     out.written = wrote.ok();
+                    if (out.written) MoveOptedCount(/*up=*/true);
                     root_used = wrote.ok() && root != kInvalidPageId;
                 }
             }
@@ -3192,6 +3240,9 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
                     const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
                     if (row.fetch_id != fetch_id) return false;
                     const bool opted = (row.flags & kPatternWaystone) != 0;
+                    // The count holds current-version rows only: a lapsed
+                    // row's bit was never in it.
+                    const bool counted = IsCurrentOptIn(row);
                     if (!opted && !HasWaystoneDirectory(row)) return false;
                     cleared_opt_in = cleared_opt_in || opted;
                     row.flags = static_cast<std::uint16_t>(row.flags & ~kPatternWaystone);
@@ -3204,6 +3255,7 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
                         return s;
                     }
                     out.written = true;
+                    if (counted) MoveOptedCount(/*up=*/false);
                     return false;
                 });
             wrote = walked.status();
@@ -3254,8 +3306,7 @@ StatusOr<std::uint64_t> Catalog::RenewPatternDirectories(bool waystone_recording
     std::unordered_set<std::uint64_t> opted_fetch_ids;  // current-version rows only
     std::vector<Oid> renew;                             // the rows to root, in page order
     for (const SysPatternRow& row : rows.value()) {
-        if ((row.flags & kPatternWaystone) == 0) continue;
-        if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) continue;
+        if (!IsCurrentOptIn(row)) continue;
         opted_fetch_ids.insert(row.fetch_id);
         renew.push_back(row.oid);
     }
@@ -3308,8 +3359,7 @@ StatusOr<std::uint64_t> Catalog::RenewPatternDirectories(bool waystone_recording
         store_, kCatalogPagePatterns,
         [&](SysPatternRow& row, heap::PageView& page, PageId page_id, std::uint16_t slot,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-            const bool is_opted = (row.flags & kPatternWaystone) != 0 &&
-                                  parser::IsCurrentFingerprintVersion(row.fingerprint_version);
+            const bool is_opted = IsCurrentOptIn(row);
             if (is_opted) ++opted;
             const auto made = is_opted ? fresh.find(row.oid) : fresh.end();
             if (made == fresh.end() && !HasWaystoneDirectory(row)) return false;
@@ -3345,6 +3395,9 @@ StatusOr<std::uint64_t> Catalog::RenewPatternDirectories(bool waystone_recording
     // through it would overwrite them with no record.
     cache_.Invalidate();
     if (!walked.ok()) return walked.status();
+    // The boot's count (CF-S1c), from the walk that just read every row:
+    // after the drop, so no generation filled under the old count survives.
+    StoreOptedCount(opted);
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         for (const auto& [version, count] : lapsed) {
@@ -3356,16 +3409,14 @@ StatusOr<std::uint64_t> Catalog::RenewPatternDirectories(bool waystone_recording
     return opted;
 }
 
-StatusOr<std::uint64_t> Catalog::CountOptedPatterns() {
+StatusOr<std::uint64_t> Catalog::RecountOptedPatterns() {
     auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
     if (!rows.ok()) return rows.status();
     std::uint64_t opted = 0;
     for (const SysPatternRow& row : rows.value()) {
-        if ((row.flags & kPatternWaystone) != 0 &&
-            parser::IsCurrentFingerprintVersion(row.fingerprint_version)) {
-            ++opted;
-        }
+        if (IsCurrentOptIn(row)) ++opted;
     }
+    StoreOptedCount(opted);
     return opted;
 }
 

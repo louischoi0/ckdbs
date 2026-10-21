@@ -53,8 +53,8 @@ Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out = nu
 // (`Catalog::RenewPatternDirectories`, CF-S1b) - and `sys.access_stats`
 // emptied, so no unlogged structure can reach a page the first half gave
 // back, nor - after a crash - a child whose allocation bit never reached the
-// device. `waystone_opted`, when given, receives how many patterns are
-// opted in, for the mount's log line.
+// device. The renewal's walk sets the instance's opted count (CF-S1c), which
+// the mount's log line reads.
 Status ForgetUnwrittenPages(storage::PageDevice& device, DataFileCheck* out = nullptr);
 
 
@@ -66,8 +66,7 @@ class Catalog;
 
 namespace kds::server {
 
-Status DiscardAdvisoryState(catalog::Catalog& catalog, bool waystone_recording,
-                            std::uint64_t* waystone_opted = nullptr);
+Status DiscardAdvisoryState(catalog::Catalog& catalog, bool waystone_recording);
 
 // A backup's window: where its replay starts and the stop it must reach.
 struct RestoreWindow {

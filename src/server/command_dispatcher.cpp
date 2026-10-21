@@ -1736,14 +1736,13 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // **Waystone's ceilings and what sits under them** (CF-S1b): nothing
     // records until an operator opts a pattern in, so `waystone_recording =
     // on` in a config means less than it used to, and this says so under the
-    // keys' own names. `waystone_opted` is one read of `sys.patterns`, which
-    // holds only rows ever opted; absent if the read fails.
+    // keys' own names. `waystone_opted` is the instance's opted count
+    // (CF-S1c), one load: set from the chain at the boot and moved by every
+    // `WAYSTONE ON`/`OFF` that changed a current row's bit.
     section("waystone");
     os << " waystone_recording=" << (recorder_ != nullptr ? "on" : "off")
-       << " waystone_replay=" << (replay_enabled_ ? "on" : "off");
-    if (auto opted = catalog_.CountOptedPatterns(); opted.ok()) {
-        os << " waystone_opted=" << opted.value();
-    }
+       << " waystone_replay=" << (replay_enabled_ ? "on" : "off")
+       << " waystone_opted=" << catalog_.opted_patterns();
 
     // **The join planner's statistics** (plan-stats.md §6): what the
     // published snapshot holds and what the steward has done. Absent where
@@ -7881,13 +7880,8 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // Free now: the lexer accumulated it while the parser walked the tokens
     // (lexer.hpp), so identifying the statement costs nothing beyond the
     // parse that had to happen anyway.
-    //
-    // **The guard is the chain's own shape.** A chain with no lookup/probe
-    // step can neither record nor replay - invariant 9 forbids a trail
-    // replacing a search - so a scan-only statement skips the catalog
-    // lookup and the trail read entirely.
-    const bool waystone_usable =
-        (recorder_ != nullptr || replay_enabled_) && exec::HasReplayableStep(compiled);
+    const std::optional<parser::Fingerprint> fingerprint =
+        run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
 
     // **A D2 statement neither records a trail nor reads one** (AR1 §3,
     // D2): a row-volatile function makes its instance key name no stable
@@ -7896,60 +7890,85 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // its values into the key (AP-Q5).
     const bool trailable = compiled.determinism != exec::DeterminismClass::kD2;
 
+    // **The gate: only an opted pattern pays for Waystone** (CF-S1c,
+    // `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3). With
+    // nothing opted on the instance a `SELECT` pays one atomic load; with
+    // something opted and not this shape, one hash miss in this core's
+    // opted map, which is complete per generation and never scanned on a
+    // miss (`catalog_cache.hpp`) - the generation's first lookup on this
+    // core pays the one fill, a `sys.patterns` scan, and every later one
+    // reads no page. Neither clears the replay index nor arms the
+    // collector. A lookup that fails to read is a pattern that is not
+    // opted, which costs a replay and never an answer (invariant 8), and is
+    // counted in the recorder's `write_failures` where one records.
+    //
+    // **The chain's own shape first.** A chain with no lookup/probe step
+    // can neither record nor replay - invariant 9 forbids a trail replacing
+    // a search - and an opted shape can compile to one (a negative tuple
+    // key literal, a plan that turned a probe into a scan), so a scan-only
+    // run asks no map and never triggers the fill.
+    const catalog::PatternAccess* opted = nullptr;
+    if ((recorder_ != nullptr || replay_enabled_) && trailable && fingerprint.has_value() &&
+        !catalog_.NoOptedPatterns() && exec::HasReplayableStep(compiled)) {
+        if (auto found = catalog_.FindOptedPattern(fingerprint->fetch_id); found.ok()) {
+            opted = found.value();
+        } else if (found.status().code() != StatusCode::kNotFound && recorder_ != nullptr) {
+            recorder_->CountUnreadablePattern();
+        }
+    }
+    const bool waystone_usable = opted != nullptr;
+
     std::optional<StatementIdentity>& identity = run->identity;
-    // The optimizer's S1 widens this beyond Waystone's shape guard, and the
+    // The optimizer's S1 widens this beyond Waystone's gate, and the
     // difference is the point: a *scan-only* statement is exactly the shape
     // whose decayed frequency the cabin optimizer's CREATE decision prices
     // (physical-optimizer.md §II.4's f_i), and it is the one shape
-    // invariant 9 keeps Waystone away from. The trail and replay reads
-    // below still guard on their own switches, so deriving the identity
-    // here costs nothing they did not already pay.
-    if (run->parser.has_value() && (waystone_usable || optimizer_signals_ != nullptr)) {
-        if (auto fingerprint = run->parser->fingerprint(); fingerprint.has_value()) {
-            identity = StatementIdentity{
-                stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
-                fingerprint->pattern_id};
-        }
+    // invariant 9 keeps Waystone away from. ANALYZE prints the ids whatever
+    // was opted - a dispatcher built with no optimizer surface included -
+    // so the operator can name a shape before opting it in.
+    if (fingerprint.has_value() &&
+        (waystone_usable || optimizer_signals_ != nullptr || analyze)) {
+        identity = StatementIdentity{stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
+                                     fingerprint->pattern_id};
     }
 
     // The trail a previous execution of this instance recorded. Read once,
-    // indexed once, consulted per keyed step.
+    // indexed once, consulted per keyed step - from the entry the gate
+    // found, so there is no second lookup.
     //
     // The index is pooled scratch, reused rather than rebuilt: it is the
     // only allocation on the replay path, and one malloc per SELECT for
     // what is usually one or two entries is the same cost the collector
-    // already had to be hoisted to avoid.
-    exec::TrailReplay& replay_scratch = run->scratch().replay;
-    replay_scratch.Clear();
+    // already had to be hoisted to avoid. Cleared only where it is rebuilt:
+    // `replay_ptr` is what the walk reads, and it stays null otherwise.
     const exec::TrailReplay* replay_ptr = nullptr;
-    if (replay_enabled_ && trailable && identity.has_value()) {
-        // Served from the catalog cache once a row is found. **A shape with
-        // no row caches nothing**, so until CF-S1c's opted-count gate every
-        // not-opted shape pays a `sys.patterns` chain read here - an interim
-        // cost the work order states (§8.5, CF-S1b), over a chain holding
-        // only the rows ever opted. `has_waystone_directory()` is the
-        // authority on whether there is anything to walk (rows.hpp).
-        if (auto pattern = catalog_.FindPattern(identity->trail.fetch_id);
-            pattern.ok() && pattern.value()->has_waystone_directory()) {
-            auto entries = stats::ReadTrail(page_store_, pattern.value()->waystone_root,
-                                            pattern.value()->dir_depth, identity->trail);
-            // A trail that cannot be read is a trail that does not exist:
-            // the statement descends, exactly as it did before there were
-            // trails at all (invariant 8).
-            if (entries.ok() && !entries.value().empty()) {
-                replay_scratch.Build(compiled, entries.value());
-                if (!replay_scratch.empty()) replay_ptr = &replay_scratch;
-            }
+    if (replay_enabled_ && waystone_usable && opted->has_waystone_directory()) {
+        // `has_waystone_directory()` is the authority on whether there is
+        // anything to walk (rows.hpp): an opted row under
+        // `waystone_recording = off`, or one whose mount create failed, has
+        // none, and that is a plain miss.
+        auto entries =
+            stats::ReadTrail(page_store_, opted->waystone_root, opted->dir_depth, identity->trail);
+        // A trail that cannot be read is a trail that does not exist: the
+        // statement descends, exactly as it did before there were trails at
+        // all (invariant 8).
+        if (entries.ok() && !entries.value().empty()) {
+            exec::TrailReplay& replay_scratch = run->scratch().replay;
+            replay_scratch.Clear();
+            replay_scratch.Build(compiled, entries.value());
+            if (!replay_scratch.empty()) replay_ptr = &replay_scratch;
         }
     }
 
-    // The trail this execution leaves, if anything is recording.
+    // The trail this execution leaves, if this pattern records.
     //
     // **Reused, not constructed per statement**: a collector reserves room
     // for a whole trail (253 x 32 bytes), an 8 KB malloc per SELECT
     // otherwise. Pooled scratch since BA-S15; Clear() keeps the reservation.
+    // Armed only for an opted shape, so a `SELECT` nobody opted collects
+    // nothing and is never sighted (`TrailRecorder::Observe`).
     exec::TrailCollector* trail = nullptr;
-    if (recorder_ != nullptr && trailable && identity.has_value()) {
+    if (recorder_ != nullptr && waystone_usable) {
         run->scratch().trail.Clear();
         trail = &run->scratch().trail;
     }

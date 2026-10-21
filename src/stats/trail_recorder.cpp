@@ -37,18 +37,20 @@ const catalog::PatternAccess* TrailRecorder::EnsurePattern(std::uint64_t fetch_i
     // **A lookup, never a registration** (CF-S1b). A shape is recorded only
     // once an operator opted it in, and `WAYSTONE ON` is the one writer of
     // the row, so a `SELECT` writes no catalog page and appends nothing to
-    // the log. Served from the catalog cache after the first ask; the opt-in
-    // moves the schema word, so a cached answer is at most one statement
-    // old.
-    auto found = catalog_.FindPattern(fetch_id);
+    // the log. The statement gate's own lookup (CF-S1c): this core's opted
+    // map, complete per generation, so a shape that is not opted is a hash
+    // miss and never a scan; the opt-in moves the schema word, so a cached
+    // answer is at most one statement old.
+    auto found = catalog_.FindOptedPattern(fetch_id);
     if (!found.ok()) {
-        // NotFound is "never opted", which is silent. Any other answer is a
-        // row that could not be read, and an opted pattern behind it would
-        // record nothing unseen, so it is counted.
+        // NotFound is "not opted", which is silent. Any other answer is a
+        // `sys.patterns` read that failed, and an opted pattern behind it
+        // would record nothing unseen, so it is counted - here only when
+        // the map was dropped between the gate and the record, since the
+        // gate counts the failures of its own lookup (`CountUnreadablePattern`).
         if (found.status().code() != StatusCode::kNotFound) ++stats_.write_failures;
         return nullptr;
     }
-    if ((found.value()->flags & catalog::kPatternWaystone) == 0) return nullptr;
     return found.value();
 }
 

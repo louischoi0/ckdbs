@@ -10,6 +10,7 @@
 #include "kds/base/status.hpp"
 #include "kds/catalog/oid.hpp"
 #include "kds/catalog/well_known.hpp"
+#include "kds/parser/fingerprint.hpp"
 
 // Fixed-layout catalog rows. Each is inserted and read as a single heap
 // tuple payload (kds::heap::PageView::InsertTuple()/ReadTuple()), so no
@@ -993,6 +994,17 @@ static_assert(kMaxPatternDirDepth * 11 >= 64, "the depth bound must cover a 64-b
 // A zeroed row answers false, which is the whole point.
 constexpr bool HasWaystoneDirectory(const SysPatternRow& row) noexcept {
     return row.dir_depth >= 1;
+}
+
+// Whether this row is an opt-in the instance counts (CF-S1c): the bit set,
+// on a row of the current fingerprint version. The one test for it - the
+// opted count, the opted map, the mount's renewal and the view's
+// `waystone` column each ask it, so none of them can drift from the
+// others, and a drift would leave the count or the map out of step with
+// the view with no error.
+constexpr bool IsCurrentOptIn(const SysPatternRow& row) noexcept {
+    return (row.flags & kPatternWaystone) != 0 &&
+           parser::IsCurrentFingerprintVersion(row.fingerprint_version);
 }
 
 }  // namespace kds::catalog

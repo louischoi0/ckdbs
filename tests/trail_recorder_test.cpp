@@ -61,7 +61,7 @@ protected:
     // The trail recorded for `sql`'s instance, or empty when there is none.
     std::vector<WaystoneEntry> TrailFor(const std::string& sql) {
         const InstanceKey key = KeyOf(sql);
-        auto pattern = boot_->catalog.FindPattern(key.fetch_id);
+        auto pattern = boot_->catalog.FindOptedPattern(key.fetch_id);
         if (!pattern.ok() || !pattern.value()->has_waystone_directory()) return {};
         auto read = ReadTrail(store_, pattern.value()->waystone_root,
                               pattern.value()->dir_depth, key);
@@ -92,21 +92,29 @@ TEST_F(TrailRecorderTest, AnObservedInstanceRecordsOnItsSecondExecution) {
     EXPECT_EQ(recorder_->stats().trails_written, 1u);
 }
 
-// CF-S1b: a shape no operator opted in is sighted and nothing more - no
-// `sys.patterns` row appears on the `SELECT` path, and no trail is written
-// however often it repeats.
+// CF-S1b: a shape no operator opted in records nothing - no `sys.patterns`
+// row appears on the `SELECT` path, and no trail is written however often it
+// repeats. CF-S1c: it is not even sighted - the statement gate arms no
+// collector for it, so the recorder never hears of it.
 TEST_F(TrailRecorderTest, AShapeNotOptedInRegistersNothingAndRecordsNothing) {
     const std::string sql = "SELECT * FROM t WHERE id = 3";
     for (int i = 0; i < 4; ++i) Run(sql);
-    EXPECT_FALSE(boot_->catalog.FindPattern(KeyOf(sql).fetch_id).ok())
+    // And under ANALYZE, which gives the statement an identity as a
+    // server's optimizer surface does: the collector's gate is the opt-in,
+    // not the identity.
+    for (int i = 0; i < 2; ++i) Run("ANALYZE " + sql);
+    EXPECT_FALSE(boot_->catalog.GetSysPatternRow(KeyOf(sql).fetch_id).ok())
         << "a SELECT registered a sys.patterns row";
     EXPECT_TRUE(TrailFor(sql).empty());
     EXPECT_EQ(recorder_->stats().trails_written, 0u);
     EXPECT_EQ(recorder_->stats().write_failures, 0u) << "not opted is not a failure";
-    EXPECT_GT(recorder_->stats().sightings, 0u) << "the shape was not even sighted";
+    EXPECT_EQ(recorder_->stats().sightings, 0u) << "a shape nobody opted in was sighted";
 
-    // And an opt-out stops it: the row stays, its bit and root go.
+    // And an opt-out stops it: the row stays, its bit and root go. Two runs
+    // after the opt-in, since the four above were never sighted.
     OptIn(sql);
+    Run(sql);
+    EXPECT_TRUE(TrailFor(sql).empty()) << "an unsighted shape recorded on its first opted run";
     Run(sql);
     ASSERT_EQ(TrailFor(sql).size(), 1u);
     ASSERT_EQ(Run("WAYSTONE OFF " + sql).rfind("OK WAYSTONE OFF", 0), 0u);

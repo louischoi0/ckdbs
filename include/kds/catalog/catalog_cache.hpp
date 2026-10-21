@@ -26,7 +26,7 @@
 //     name -> oid                    (sys.objects)
 //     oid  -> TableAccess            (sys.tables + sys.columns)
 //     the table list                 (sys.objects)
-//     fetch_id -> PatternAccess    (sys.patterns)
+//     the opted patterns, fetch_id -> PatternAccess (sys.patterns), whole
 //   cached, never dropped:
 //     sys.types              written only by Catalog::Bootstrap()
 //   never cached, always read from the page:
@@ -59,9 +59,12 @@
 //     empties the cache at the next statement head (above). A bound would be a policy invented for a population of
 //     tens (compare device_page_store.hpp, which says the same about
 //     frames for a different reason).
-//   - No negative caching. A lookup for a name that does not exist is an
-//     error path, not a hot one, and caching absence buys a second
-//     invalidation rule to get wrong.
+//   - No negative caching, with one exception. A lookup for a name that
+//     does not exist is an error path, not a hot one, and caching absence
+//     buys a second invalidation rule to get wrong. The exception is the
+//     opted patterns (CF-S1c): every `SELECT` of a shape nobody opted asks,
+//     so that map is a *completeness* claim, like the table list, and its
+//     rule is stated where it is declared below.
 //   - No TTL, so no clock dependency (rules.md #4). Staleness here is a
 //     function of DDL, never of time.
 //   - No per-relation invalidation. Clearing costs one re-scan of a page
@@ -75,12 +78,17 @@ class CatalogCache {
 public:
     // Counters ship with the feature rather than after it (wal.md section 13's
     // convention). `fills` counts entries added, which is also the number of
-    // page scans the cache could not avoid.
+    // page scans the cache could not avoid - for every map but the opted
+    // patterns, whose scans are `pattern_fills` and whose every answer,
+    // absence included, is a hit (CF-S1c).
     struct Stats {
         std::uint64_t hits = 0;           // lookups served from memory
         std::uint64_t misses = 0;         // lookups that had to scan a page
         std::uint64_t fills = 0;          // entries inserted after a miss
         std::uint64_t invalidations = 0;  // DDL-driven Invalidate() calls
+        // Whole fills of the opted patterns: one `sys.patterns` scan each,
+        // at most one per generation (CF-S1c).
+        std::uint64_t pattern_fills = 0;
     };
 
     // ---- name -> oid (sys.objects) ---------------------------------------
@@ -106,7 +114,7 @@ public:
     // entry already present wins over `access`, for the same reason.
     const TableAccess* PutTableAccess(TableAccess access);
 
-    // ---- fetch_id -> PatternAccess (sys.patterns) ----------------------
+    // ---- the opted patterns, fetch_id -> PatternAccess (sys.patterns) ----
     //
     // Keyed by the fingerprint rather than by oid, because that is what
     // every caller arrives holding (rows.hpp's note on SysPatternRow).
@@ -114,17 +122,37 @@ public:
     // answer is written into PatternAccess itself (schema.hpp): heat moves
     // without DDL, so it is not in the struct and cannot be cached by
     // accident.
+    //
+    // **Complete per generation, or absent** (CF-S1c,
+    // `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3): the map
+    // is filled whole, from one scan, with **every current-version row that
+    // has `kPatternWaystone` set** and no other row, at the first ask after
+    // a drop while the instance's opted count is non-zero; nothing is ever
+    // added to it one entry at a time. So once filled, a fetch_id the map
+    // does not hold is answered "not opted" from memory, with no scan - the
+    // one cached absence in this class.
+    //
+    // **The soundness rule** that makes that answer true: every write that
+    // changes the bit or an opted row's root either moves the schema word
+    // (`WAYSTONE ON`/`OFF`, `Catalog::SetPatternWaystone`'s `BumpVersion`,
+    // after the write), or is followed by a drop of the writing catalog's
+    // cache before that catalog serves a statement (the mount's renewal,
+    // `Catalog::RenewPatternDirectories`, before the listener binds). Every
+    // other core drops its generation at its next statement head
+    // (`Catalog::Revalidate`), so a map is stale for at most one statement
+    // after the write, which costs performance only (invariant 8): Waystone
+    // chooses where to look, never what is visible. A new writer of the bit
+    // or a root that does neither breaks the rule silently - a peer would
+    // go on missing an opt-in, or record through a root the write cleared.
+    // `PatternCatalogTest.TheOptedMapIsCompletePerGenerationAndMissesWithNoScan`
+    // pins it.
 
+    // nullptr while unfilled, and for a fetch_id the filled map lacks.
     const PatternAccess* FindPattern(std::uint64_t fetch_id) noexcept;
-
-    // Reference-stable and already-present-wins, exactly like
-    // PutTableAccess() and for the same reason.
-    const PatternAccess* PutPattern(PatternAccess access);
-
-    // A pattern's directory and opt-in are never updated in place (CF-S1b):
-    // `WAYSTONE ON`/`OFF` moves the schema word after its write, and the
-    // mount's renewal drops the cache, so every entry is refilled from the
-    // page. Both run with no statement holding an entry.
+    bool opted_patterns_filled() const noexcept { return patterns_filled_; }
+    // The whole map at once; a no-op on a filled one, so an entry handed out
+    // earlier keeps its address (node-based, like PutTableAccess()).
+    void FillOptedPatterns(std::vector<PatternAccess> opted);
 
     // Points a cached relation's index at a new root page, in place.
     //
@@ -245,8 +273,10 @@ private:
     std::unordered_map<Oid, NameMap> name_to_oid_;
 
     // Node-based for the same reference-stability reason as table_access_:
-    // the trail recorder holds an entry across its write.
+    // the trail recorder holds an entry across its write. Opted rows only,
+    // and complete once `patterns_filled_` is set (CF-S1c).
     std::unordered_map<std::uint64_t, PatternAccess> patterns_;
+    bool patterns_filled_ = false;
 
     // A vector with a linear scan, not a map: sys.types has ten rows and
     // both lookups (by name, by type_val) are single-field compares, the

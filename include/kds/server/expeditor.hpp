@@ -769,8 +769,8 @@ private:
     // Zero until the first catalog that needs an oid seeds it from the pages.
     //
     // **The declaration order is not what makes these safe.** `database_`
-    // is declared *above* all three words, so core 0's `Catalog` outlives
-    // them; what makes that harmless is that all three are trivially
+    // is declared *above* all four words, so core 0's `Catalog` outlives
+    // them; what makes that harmless is that all four are trivially
     // destructible and `~Catalog` reads none of them. A word whose
     // destructor did anything would have to move above `database_`.
     std::atomic<catalog::Oid> oid_sequence_{0};
@@ -778,11 +778,17 @@ private:
     // the third word every core's catalog reads from here. Named for the
     // count and not for `Catalog::pending_marks_`, which is the *local*
     // fallback this replaces - one name for the two would read as the same
-    // quantity. Three separate pointers rather than one struct: at three
-    // words the struct does not pay for re-opening AT-S2's landed wiring,
-    // which `catalog.md` CT6 states as the threshold it is, and AT-0
-    // item 11 is where the fourth word decides it.
+    // quantity. Separate pointers rather than one struct, by `catalog.md`
+    // CT6's threshold, which the opted count below crosses.
     std::atomic<std::uint64_t> delete_mark_count_{0};
+    // **The instance's opted count** (CF-S1c; `Catalog::SetOptedCount`), the
+    // fourth word every core's catalog reads from here: how many current
+    // `sys.patterns` rows are opted in, so a `SELECT` on an instance with
+    // none pays one load. Set from the chain by the mount's renewal.
+    // **A fourth pointer against CT6**, which says a fourth word folds the
+    // words into one struct (AT-0 item 11): a divergence held open for the
+    // operator's ruling as CF-O-Q15, not a decision taken here.
+    std::atomic<std::uint64_t> waystone_opted_{0};
 
     // **The instance's assertion registry** (AT-S5d, AT-R15): the one
     // directory per assertion every core's writes check and reserve into,

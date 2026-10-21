@@ -90,6 +90,7 @@ protected:
         core0_->catalog.SetSchemaWord(&schema_word_);
         core0_->catalog.SetOidSequence(&oid_sequence_);
         core0_->catalog.SetMarkCounter(&pending_marks_);
+        core0_->catalog.SetOptedCount(&opted_count_);
 
         ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -170,6 +171,7 @@ protected:
         c.schema_word = &schema_word_;
         c.oid_sequence = &oid_sequence_;
         c.mark_counter = &pending_marks_;
+        c.opted_count = &opted_count_;
         // What `Expeditor` hands a peer on a single-stream volume, and what
         // `CoreRuntime::Open` refuses to proceed without (AM-S0); the one
         // cell that watches that refusal clears them itself.
@@ -248,6 +250,7 @@ protected:
     std::atomic<std::uint64_t> schema_word_{0};
     std::atomic<catalog::Oid> oid_sequence_{0};  // AT-S5b
     std::atomic<std::uint64_t> pending_marks_{0};  // AT-S5b
+    std::atomic<std::uint64_t> opted_count_{0};  // CF-S1c
     Latch superblock_latch_;  // AT-S10b: the one ceiling every core carves from
 };
 
@@ -1733,6 +1736,7 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     // not know it had to.
     rig.catalog2->SetOidSequence(&oid_sequence_);
     rig.catalog2->SetMarkCounter(&pending_marks_);
+    rig.catalog2->SetOptedCount(&opted_count_);
     auto oid = rig.catalog2->CreateTable(catalog::kNamespacePublic, table, TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     rig.oid = oid.value();

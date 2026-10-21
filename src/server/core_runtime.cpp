@@ -227,6 +227,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     runtime->catalog_->SetSchemaWord(config.schema_word);  // AT-S2
     runtime->catalog_->SetOidSequence(config.oid_sequence);  // AT-S5b
     runtime->catalog_->SetMarkCounter(config.mark_counter);  // AT-S5b
+    runtime->catalog_->SetOptedCount(config.opted_count);    // CF-S1c
     // Every core's catalog writes are logged (RV3), on every core since
     // AT-S5.
     runtime->catalog_->SetWal(runtime->wal_.get());

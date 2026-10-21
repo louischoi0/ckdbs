@@ -129,7 +129,7 @@ TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion
 
     // But it is still invisible to a lookup, which is where the version
     // rule lives.
-    EXPECT_FALSE(boot_->catalog.FindPattern(0x5151).ok());
+    EXPECT_FALSE(boot_->catalog.GetSysPatternRow(0x5151).ok());
 }
 
 TEST_F(CommandDispatcherTest, ShowPatternsResponseIsOneLine) {

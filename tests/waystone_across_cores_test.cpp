@@ -1,12 +1,14 @@
 // **A peer records a Waystone trail** (AT-S7), **for a pattern opted in on
-// another core, from its first statement after the opt-in** (CF-S1b).
+// another core, from its first statement after the opt-in** (CF-S1b, and
+// through the opted count and the opted map since CF-S1c).
 //
 // `waystone_recording` was honoured as "off" on every core a `CoreRuntime`
 // opened until AT-S7; every core writes catalog pages since AT-S5, so the
 // instance's switch means the same thing on every core. Since CF-S1b no core
-// registers a pattern: `WAYSTONE ON` writes the row and its directory and
-// moves the schema word, and a peer's next statement drops its catalog memo
-// at its head (`Catalog::Revalidate`) and reads the bit from the page.
+// registers a pattern: `WAYSTONE ON` writes the row and its directory, moves
+// the instance's opted count and the schema word, and a peer's next statement
+// drops its catalog memo at its head (`Catalog::Revalidate`), reads the count
+// non-zero and refills its opted map from the page.
 //
 // **The mutations**: restore the `/*recorder=*/nullptr` that stood in
 // `CoreRuntime::Open`'s dispatcher construction until AT-S7, for the peer
@@ -67,19 +69,24 @@ TEST(WaystoneAcrossCores, APeerRecordsAndStopsWithinOneStatementOfAnotherCoresOp
 
     rig->Start();
     // Not opted: the peer runs the shape past the threshold and records
-    // nothing, so its sighting count is already over it below.
+    // nothing - nor is it sighted (CF-S1c), so the count starts at the
+    // opt-in below.
     for (int round = 0; round < 3; ++round) ASSERT_EQ(on(1, sql), "v\\n7");
     EXPECT_EQ(on(1, "ANALYZE " + sql).find("replays="), std::string::npos)
         << "a shape nobody opted in replayed";
 
-    // Opted in on core 0. The peer's very next execution records - it has
-    // seen the instance already - and the one after replays.
+    // Opted in on core 0. The peer's very next execution is its first
+    // sighting, the one after records, and the third replays - so a replay
+    // on the third proves the first statement after the opt-in already saw
+    // it; a peer a statement late would sight on the second, record on the
+    // third and replay nothing.
     const std::string opted = on(0, "WAYSTONE ON " + sql);
     ASSERT_EQ(opted.rfind("OK WAYSTONE ON", 0), 0u) << opted;
     ASSERT_EQ(on(1, sql), "v\\n7");
+    ASSERT_EQ(on(1, sql), "v\\n7");
     const std::string replayed = on(1, "ANALYZE " + sql);
     EXPECT_NE(replayed.find("replays=1"), std::string::npos)
-        << "the peer did not record within one statement of the opt-in: " << replayed;
+        << "the peer did not see the opt-in within one statement: " << replayed;
 
     // Opted out on core 0: the peer's memo held the row with its root, and
     // its next statement must not replay through it.

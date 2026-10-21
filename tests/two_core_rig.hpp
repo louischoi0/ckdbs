@@ -456,6 +456,7 @@ private:
             config.cabins_store = &cabins_;
             config.oid_sequence = &oid_sequence_;
             config.mark_counter = &pending_marks_;
+            config.opted_count = &opted_count_;
             config.assertions = &assertions_;
             // The peer's checkpointer publishes into an anchor, as
             // `Expeditor`'s peers do (AT-S8); a rig never remounts, so an
@@ -508,6 +509,7 @@ private:
     std::atomic<std::uint64_t> schema_word_{0};  // AT-S2: one for both cores
     std::atomic<catalog::Oid> oid_sequence_{0};  // AT-S5b: one for both cores
     std::atomic<std::uint64_t> pending_marks_{0};  // AT-S5b: one for both cores
+    std::atomic<std::uint64_t> opted_count_{0};    // CF-S1c: one for both cores
     wal::InMemoryCheckpointAnchor peer_anchor_;    // AT-S8: page 0's stand-in
     std::optional<SuperBlockCheckpointAnchor> fold_anchor_;  // BC-S1: page 0's own
     wal::CheckpointGate checkpoint_gate_;          // AT-S8: one for both cores

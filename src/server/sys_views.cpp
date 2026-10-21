@@ -484,8 +484,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::PatternsView() {
         // `dir_depth` is the one authority on a directory (rows.hpp): a
         // zeroed row's root reads as page 0, not as the invalid id.
         const bool directory = catalog::HasWaystoneDirectory(p);
-        const bool opted = (p.flags & catalog::kPatternWaystone) != 0 &&
-                           parser::IsCurrentFingerprintVersion(p.fingerprint_version);
+        const bool opted = catalog::IsCurrentOptIn(p);
         view.rows.push_back({Int(p.oid), Int(p.fetch_id), Int(p.fingerprint_version),
                              Int(p.stmt_class), Bool(opted), Int(p.use_count),
                              Int(p.last_seen), directory ? Int(p.waystone_root) : Null(),

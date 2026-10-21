@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/catalog/rows.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/functions.hpp"
 #include "kds/exec/step_compiler.hpp"
@@ -13,6 +14,8 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
+#include "kds/stats/waystone_dir.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
 // AP-S4: the function catalog and the function conjunct
@@ -297,11 +300,41 @@ TEST_F(FunctionConjunctTest, AD2StatementIsNeverSightedRegisteredOrRecorded) {
     EXPECT_EQ(recorder_->stats().sightings, sightings) << "a D2 statement was sighted";
     auto fp = parser::FingerprintOf(sql);
     ASSERT_TRUE(fp.has_value());
-    EXPECT_FALSE(boot_->catalog.FindPattern(fp->fetch_id).ok()) << "a D2 statement registered";
+    EXPECT_FALSE(boot_->catalog.GetSysPatternRow(fp->fetch_id).ok())
+        << "a D2 statement registered";
     const std::string analyzed = Run("ANALYZE " + sql);
     EXPECT_EQ(analyzed.find("replays="), std::string::npos) << analyzed;
     EXPECT_EQ(Run(sql), first);
     EXPECT_EQ(first, Run("SELECT id FROM t WHERE id = 3"));
+
+    // CF-S1c: the gate's `trailable` term is the one run-time D2 check, so it
+    // is asked with an opted row standing under the D2 shape's own fetch_id -
+    // a row no `WAYSTONE ON` could write, planted raw with a directory - and
+    // the instance's count moved to admit it. Still never sighted, never
+    // recorded and never replayed.
+    auto dir = stats::CreateDirPage(store_);
+    ASSERT_TRUE(dir.ok()) << dir.status().message();
+    {
+        auto bytes = store_.Get(catalog::kCatalogPagePatterns);
+        ASSERT_TRUE(bytes.ok());
+        heap::PageView page(bytes.value().bytes());
+        catalog::SysPatternRow row{};
+        row.oid = 700'001;
+        row.fetch_id = fp->fetch_id;
+        row.fingerprint_version = parser::kFingerprintVersion;
+        row.waystone_root = dir.value();
+        row.dir_depth = 1;
+        row.flags = catalog::kPatternWaystone;
+        auto encoded = row.Encode();
+        ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
+    }
+    auto counted = boot_->catalog.RecountOptedPatterns();
+    ASSERT_TRUE(counted.ok());
+    ASSERT_EQ(counted.value(), 1u) << "the premise moved: the planted row is not counted";
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(Run(sql), first);
+    EXPECT_EQ(recorder_->stats().sightings, sightings) << "an opted D2 statement was sighted";
+    EXPECT_EQ(recorder_->stats().trails_written, 0u) << "an opted D2 statement recorded";
+    EXPECT_EQ(Run("ANALYZE " + sql).find("replays="), std::string::npos);
 }
 
 TEST_F(FunctionConjunctTest, AnEntryDeclaringNoPurityIsVolatileRow) {

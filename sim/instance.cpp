@@ -121,6 +121,11 @@ Status SimInstance::Boot() {
         // stream, because nothing here runs the periodic checkpointer - so the
         // harness would be measuring a mount cost no server pays and missing
         // the one property RC08 adds.
+    } else if (auto counted = boot_->catalog.RecountOptedPatterns(); !counted.ok()) {
+        // **No renewal ran, so nothing set the opted count** (CF-S1c): the
+        // discard above is what sets it, and a boot that skips it counts the
+        // chain itself, or every opted row would go unasked for the run.
+        return counted.status();
     }
 
     // The persist callback, exactly as the expeditor wires it: the harness

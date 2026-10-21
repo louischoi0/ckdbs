@@ -1150,7 +1150,7 @@ TEST_F(PatternCatalogTest, BootstrapCreatesTheRelation) {
 
 TEST_F(PatternCatalogTest, OnInsertsAnOptedRowThatFindRoundTrips) {
     ASSERT_TRUE(On(0xABCDEF));
-    auto found = catalog_.FindPattern(0xABCDEF);
+    auto found = catalog_.FindOptedPattern(0xABCDEF);
     ASSERT_TRUE(found.ok()) << found.status().message();
     EXPECT_EQ(found.value()->fetch_id, 0xABCDEFu);
     EXPECT_EQ(found.value()->fingerprint_version, kVersion);
@@ -1163,9 +1163,22 @@ TEST_F(PatternCatalogTest, OnInsertsAnOptedRowThatFindRoundTrips) {
 }
 
 TEST_F(PatternCatalogTest, AnUnknownPatternIsNotFound) {
-    auto found = catalog_.FindPattern(12345);
+    // With nothing opted, and with something else opted: NotFound both ways.
+    EXPECT_EQ(catalog_.FindOptedPattern(12345).status().code(), StatusCode::kNotFound);
+    ASSERT_TRUE(On(1));
+    auto found = catalog_.FindOptedPattern(12345);
     EXPECT_FALSE(found.ok());
     EXPECT_EQ(found.status().code(), StatusCode::kNotFound);
+}
+
+// An opted-out row is still on the page, and no longer in the opted map.
+TEST_F(PatternCatalogTest, AnOptedOutRowIsNotFound) {
+    ASSERT_TRUE(On(2));
+    ASSERT_TRUE(On(3));
+    ASSERT_TRUE(catalog_.FindOptedPattern(3).ok());
+    ASSERT_TRUE(Off(3));
+    EXPECT_EQ(catalog_.FindOptedPattern(3).status().code(), StatusCode::kNotFound);
+    EXPECT_TRUE(catalog_.GetSysPatternRow(3).ok()) << "OFF deleted the row";
 }
 
 TEST_F(PatternCatalogTest, OnTwiceIsUnchangedAndInsertsOneRow) {
@@ -1233,19 +1246,22 @@ TEST_F(PatternCatalogTest, AnOptInMovesTheCatalogVersionAndUnchangedDoesNot) {
 // ---- The version gate (the catalog half of P02) ---------------------------
 
 TEST_F(PatternCatalogTest, AForeignVersionResolvesAsAbsentNotAsAnError) {
-    WriteRawPatternRow(99, kForeignVersion);
+    // Opted at its own version, and something current opted beside it, so
+    // the map fills and the filter is what keeps the row out of it.
+    WriteRawPatternRow(99, kForeignVersion, kPatternWaystone);
+    ASSERT_TRUE(On(98));
 
     // The row is on the page, and the lookup still reports the pattern as
     // never seen: its fetch_id was computed under rules this build does
     // not implement, so it names a shape that is not the one it claims.
     // NotFound, not a failure - nothing about a stale row should fail a
     // statement.
-    auto found = catalog_.FindPattern(99);
+    auto found = catalog_.FindOptedPattern(99);
     EXPECT_FALSE(found.ok());
     EXPECT_EQ(found.status().code(), StatusCode::kNotFound);
 
     // And the same filter applies to the row accessor, which is where it
-    // lives. A caller reaching past FindPattern() for heat must not see a
+    // lives. A caller reaching past FindOptedPattern() for heat must not see a
     // stale row either.
     EXPECT_EQ(catalog_.GetSysPatternRow(99).status().code(), StatusCode::kNotFound);
 }
@@ -1257,7 +1273,7 @@ TEST_F(PatternCatalogTest, APatternStaleAtOneVersionCanBeOptedInAtTheCurrentOne)
     // ON inserts a current row beside the lapsed one rather than writing
     // through it.
     ASSERT_TRUE(On(55));
-    auto found = catalog_.FindPattern(55);
+    auto found = catalog_.FindOptedPattern(55);
     ASSERT_TRUE(found.ok());
     EXPECT_EQ(found.value()->fingerprint_version, kVersion);
     EXPECT_EQ(RowsOf(55).size(), 2u);
@@ -1271,7 +1287,7 @@ TEST_F(PatternCatalogTest, AStaleRowDoesNotShadowTheCurrentOne) {
     WriteRawPatternRow(77, kForeignVersion);
     ASSERT_TRUE(On(77));
 
-    auto found = catalog_.FindPattern(77);
+    auto found = catalog_.FindOptedPattern(77);
     ASSERT_TRUE(found.ok());
     EXPECT_EQ(found.value()->fingerprint_version, kVersion);
 
@@ -1301,7 +1317,7 @@ TEST_F(PatternCatalogTest, OffClearsALapsedRowAndTheCurrentRowOfOneFetchId) {
 // A lapsed row alone: OFF by number reaches it although no lookup does.
 TEST_F(PatternCatalogTest, OffReachesALapsedRowNoLookupReturns) {
     WriteRawPatternRow(66, kForeignVersion, kPatternWaystone);
-    ASSERT_FALSE(catalog_.FindPattern(66).ok());
+    ASSERT_FALSE(catalog_.FindOptedPattern(66).ok());
     EXPECT_TRUE(Off(66));
     const auto rows = RowsOf(66);
     ASSERT_EQ(rows.size(), 1u);
@@ -1371,17 +1387,154 @@ TEST_F(PatternCatalogTest, TheRenewalWithRecordingOffCreatesNoDirectory) {
         EXPECT_FALSE(HasWaystoneDirectory(row.value())) << fetch_id;
         EXPECT_NE(row.value().flags & kPatternWaystone, 0) << fetch_id;
     }
-    EXPECT_EQ(catalog_.CountOptedPatterns().value(), 2u);
+    EXPECT_EQ(catalog_.opted_patterns(), 2u);
 }
 
-TEST_F(PatternCatalogTest, CountOptedPatternsCountsCurrentOptedRowsOnly) {
-    EXPECT_EQ(catalog_.CountOptedPatterns().value(), 0u);
+// ---- The opted count (CF-S1c) -----------------------------------------------
+
+// Moved by a 0->1 or 1->0 change of a current row's bit, after the write,
+// and by nothing else: not by an unchanged ON or OFF, not by a root alone,
+// not by a lapsed row's bit; the recount agrees with it.
+TEST_F(PatternCatalogTest, TheOptedCountFollowsCurrentRowsBitChangesOnly) {
+    EXPECT_EQ(catalog_.opted_patterns(), 0u);
+    EXPECT_TRUE(catalog_.NoOptedPatterns());
     ASSERT_TRUE(On(1));
+    EXPECT_EQ(catalog_.opted_patterns(), 1u);
+    EXPECT_FALSE(On(1));
+    EXPECT_EQ(catalog_.opted_patterns(), 1u) << "an unchanged ON moved it";
+    EXPECT_TRUE(On(1, 4096));
+    EXPECT_EQ(catalog_.opted_patterns(), 1u) << "a root alone moved it";
     ASSERT_TRUE(On(2));
     ASSERT_TRUE(On(3));
     ASSERT_TRUE(Off(3));
+    EXPECT_EQ(catalog_.opted_patterns(), 2u);
+    EXPECT_FALSE(Off(3));
+    EXPECT_EQ(catalog_.opted_patterns(), 2u) << "an unchanged OFF moved it";
+
+    // A lapsed opted row: never counted, and clearing it moves nothing.
     WriteRawPatternRow(4, kForeignVersion, kPatternWaystone);
-    EXPECT_EQ(catalog_.CountOptedPatterns().value(), 2u);
+    EXPECT_EQ(catalog_.opted_patterns(), 2u);
+    EXPECT_TRUE(Off(4));
+    EXPECT_EQ(catalog_.opted_patterns(), 2u) << "OFF of a lapsed row moved it";
+    EXPECT_FALSE(catalog_.NoOptedPatterns());
+
+    auto counted = catalog_.RecountOptedPatterns();
+    ASSERT_TRUE(counted.ok()) << counted.status().message();
+    EXPECT_EQ(counted.value(), 2u);
+    EXPECT_EQ(catalog_.opted_patterns(), 2u);
+}
+
+// The decrement saturates: an OFF meeting a count of 0 - a count the boot
+// set before a raw write moved the chain, here - leaves it 0, never a wrap
+// to "everything is opted".
+TEST_F(PatternCatalogTest, AnOffAtCountZeroLeavesItZero) {
+    WriteRawPatternRow(7, kVersion, kPatternWaystone);
+    ASSERT_EQ(catalog_.opted_patterns(), 0u);
+    EXPECT_TRUE(Off(7));
+    EXPECT_EQ(catalog_.opted_patterns(), 0u);
+    EXPECT_TRUE(catalog_.NoOptedPatterns());
+
+    // And the instance's word saturates the same way.
+    std::atomic<std::uint64_t> count{0};
+    catalog_.SetOptedCount(&count);
+    WriteRawPatternRow(8, kVersion, kPatternWaystone);
+    EXPECT_TRUE(Off(8));
+    EXPECT_EQ(count.load(), 0u);
+    ASSERT_TRUE(On(8));
+    EXPECT_EQ(count.load(), 1u) << "the instance's word was not the one moved";
+    catalog_.SetOptedCount(nullptr);
+}
+
+// **The opted map's soundness rule** (`catalog_cache.hpp`), pinned: the map
+// is filled whole, once per generation, and only while the count is
+// non-zero; once filled, a miss is answered from memory with no scan. A
+// write of the bit that neither moved the schema word nor dropped the cache
+// - the raw row below - is therefore invisible to the map until the next
+// generation, which is exactly why every writer must do one or the other.
+TEST_F(PatternCatalogTest, TheOptedMapIsCompletePerGenerationAndMissesWithNoScan) {
+    const auto fills = [this] { return catalog_.cache_stats().pattern_fills; };
+    // Count 0: nothing fills, however often it is asked.
+    for (int i = 0; i < 3; ++i) EXPECT_FALSE(catalog_.FindOptedPattern(1).ok());
+    EXPECT_EQ(fills(), 0u) << "a lookup filled the map with nothing opted";
+
+    ASSERT_TRUE(On(1));
+    ASSERT_TRUE(On(2));
+    const std::uint64_t before = fills();
+    ASSERT_TRUE(catalog_.FindOptedPattern(1).ok());
+    EXPECT_EQ(fills(), before + 1) << "the first ask of a generation did not fill";
+    EXPECT_EQ(catalog_.FindOptedPattern(404).status().code(), StatusCode::kNotFound);
+    EXPECT_TRUE(catalog_.FindOptedPattern(2).ok()) << "the fill was not the whole opted set";
+    EXPECT_EQ(fills(), before + 1) << "a miss, or a second hit, scanned";
+
+    // A bit written behind the writer's back: no word, no drop, so the
+    // filled generation answers "not opted" from memory.
+    WriteRawPatternRow(3, kVersion, kPatternWaystone);
+    EXPECT_EQ(catalog_.FindOptedPattern(3).status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(fills(), before + 1);
+    // The real writer moves the word, and the next ask refills - the raw
+    // row included.
+    ASSERT_TRUE(On(4));
+    EXPECT_TRUE(catalog_.FindOptedPattern(3).ok());
+    EXPECT_EQ(fills(), before + 2);
+}
+
+// A peer catalog over the same store, sharing the schema word and the
+// opted count as every core does: an opt-in on one reaches the other at its
+// next statement head (`Revalidate`), and an opt-out the same way.
+TEST_F(PatternCatalogTest, APeerSeesAnOptInAndAnOptOutAtItsNextRevalidation) {
+    std::atomic<std::uint64_t> word{0};
+    std::atomic<std::uint64_t> count{0};
+    catalog_.SetSchemaWord(&word);
+    catalog_.SetOptedCount(&count);
+    Catalog peer(store_);
+    peer.SetSchemaWord(&word);
+    peer.SetOptedCount(&count);
+
+    ASSERT_TRUE(On(10));
+    ASSERT_TRUE(On(11));
+    peer.Revalidate();
+    ASSERT_TRUE(peer.FindOptedPattern(10).ok());  // the peer's generation, filled
+    ASSERT_FALSE(peer.FindOptedPattern(12).ok());
+
+    ASSERT_TRUE(On(12));
+    peer.Revalidate();
+    EXPECT_TRUE(peer.FindOptedPattern(12).ok()) << "the peer missed an opt-in past the word";
+    ASSERT_TRUE(Off(10));
+    peer.Revalidate();
+    EXPECT_FALSE(peer.FindOptedPattern(10).ok()) << "the peer kept an opted-out row";
+    EXPECT_EQ(count.load(), 2u);
+
+    catalog_.SetSchemaWord(nullptr);
+    catalog_.SetOptedCount(nullptr);
+}
+
+// **With the count at zero a word move causes no fill** (§8.5 CF-S1c): every
+// DDL, root growth and catalog-writing resolve moves the word and drops
+// every peer's generation, and on an instance with nothing opted the next
+// ask must cost the load and no scan.
+TEST_F(PatternCatalogTest, WithTheCountAtZeroAWordMoveCausesNoFill) {
+    std::atomic<std::uint64_t> word{0};
+    std::atomic<std::uint64_t> count{0};
+    catalog_.SetSchemaWord(&word);
+    catalog_.SetOptedCount(&count);
+    Catalog peer(store_);
+    peer.SetSchemaWord(&word);
+    peer.SetOptedCount(&count);
+
+    for (int i = 0; i < 3; ++i) {
+        word.fetch_add(1);
+        peer.Revalidate();
+        EXPECT_FALSE(peer.FindOptedPattern(1).ok());
+    }
+    EXPECT_EQ(peer.cache_stats().pattern_fills, 0u) << "a word move filled with nothing opted";
+    // The control: the same peer fills once something is opted.
+    ASSERT_TRUE(On(1));
+    peer.Revalidate();
+    EXPECT_TRUE(peer.FindOptedPattern(1).ok());
+    EXPECT_EQ(peer.cache_stats().pattern_fills, 1u);
+
+    catalog_.SetSchemaWord(nullptr);
+    catalog_.SetOptedCount(nullptr);
 }
 
 // ---- What an opt-in must not disturb ---------------------------------------

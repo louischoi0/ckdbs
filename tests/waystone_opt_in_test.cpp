@@ -44,6 +44,7 @@
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "reclaim_census.hpp"
+#include "sim/instance.hpp"
 #include "view_text.hpp"
 
 namespace kds::server {
@@ -70,6 +71,16 @@ std::string Hex(std::uint64_t v) {
     return buf;
 }
 
+// How many rows a `SHOW PATTERNS` reply reads opted (CF-S1c's count, as the
+// view states it).
+std::size_t ViewOpted(const std::string& patterns_reply) {
+    std::size_t opted = 0;
+    for (const std::string& v : testing_view::ReadViewText(patterns_reply).Column("waystone")) {
+        if (v == "1") ++opted;
+    }
+    return opted;
+}
+
 // A store that watches its waystone directories being made: whether any
 // `sys.patterns` page is pinned at that moment, an action to run there - a
 // concurrent `WAYSTONE ON` landing between the opt-in's unheld read and
@@ -86,9 +97,23 @@ public:
         return inner_.CreateNewUnpinned();
     }
     StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
+        // A write fetch of one page refused once `passes` of them were
+        // served - so a WAYSTONE statement's hold can be let through and the
+        // write it makes under the hold refused - while every read of the
+        // page is served.
+        if (refuse_write_of_ != kInvalidPageId && page_id == refuse_write_of_) {
+            if (write_passes_ == 0) {
+                ++write_refusals_;
+                return Status::IoError("injected: the page cannot be written");
+            }
+            --write_passes_;
+        }
         return inner_.GetUnpinned(page_id);
     }
     StatusOr<std::span<std::byte, kPageSize>> GetForReadUnpinned(PageId page_id) override {
+        if (refuse_pattern_reads_ && page_id == catalog::kCatalogPagePatterns) {
+            return Status::IoError("injected: sys.patterns cannot be read");
+        }
         return inner_.GetForReadUnpinned(page_id);
     }
     void PinFrame(PageId page_id, storage::PinMode) noexcept override {
@@ -115,6 +140,15 @@ public:
 
     void OnCreate(std::function<void()> action) { on_create_ = std::move(action); }
     void Refuse(bool refuse) { refuse_ = refuse; }
+    // Refuses every write fetch of `page_id` after the next `passes`;
+    // `kInvalidPageId` disarms it.
+    void RefuseWritesOf(PageId page_id, int passes = 0) {
+        refuse_write_of_ = page_id;
+        write_passes_ = passes;
+        write_refusals_ = 0;
+    }
+    int write_refusals() const { return write_refusals_; }
+    void RefusePatternReads(bool refuse) { refuse_pattern_reads_ = refuse; }
     int directories_made() const { return directories_made_; }
     int made_under_a_pattern_pin() const { return made_under_a_pattern_pin_; }
 
@@ -124,6 +158,10 @@ private:
     int directories_made_ = 0;
     int made_under_a_pattern_pin_ = 0;
     bool refuse_ = false;
+    PageId refuse_write_of_ = kInvalidPageId;
+    int write_passes_ = 0;
+    int write_refusals_ = 0;
+    bool refuse_pattern_reads_ = false;
     std::function<void()> on_create_;
 };
 
@@ -197,6 +235,55 @@ protected:
     bool Opted(std::uint64_t fetch_id) {
         const auto row = RowOf(fetch_id);
         return row.has_value() && (row->flags & catalog::kPatternWaystone) != 0;
+    }
+    // A lapsed opted row - another fingerprint version's - planted on page 9.
+    void PlantLapsed(std::uint64_t fetch_id) {
+        auto bytes = store_.Get(catalog::kCatalogPagePatterns);
+        ASSERT_TRUE(bytes.ok());
+        heap::PageView page(bytes.value().bytes());
+        catalog::SysPatternRow row{};
+        row.oid = 700'000 + fetch_id;
+        row.fetch_id = fetch_id;
+        row.fingerprint_version = parser::kFingerprintVersion + 1;
+        row.waystone_root = kInvalidPageId;
+        row.flags = catalog::kPatternWaystone;
+        auto encoded = row.Encode();
+        ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
+    }
+    // A lapsed opted row of `fetch_id` on a page of its own, chained after
+    // the last page of `sys.patterns`, so a walk meets it after every row
+    // page 9 holds. Answers the page's id.
+    PageId ChainLapsedPage(std::uint64_t fetch_id) {
+        PageId last = catalog::kCatalogPagePatterns;
+        for (;;) {
+            auto bytes = store_.Get(last);
+            EXPECT_TRUE(bytes.ok());
+            if (!bytes.ok()) return kInvalidPageId;
+            const PageId next = heap::PageView(bytes.value().bytes()).next_page_id();
+            if (next == kInvalidPageId) break;
+            last = next;
+        }
+        auto created = store_.CreateNew();
+        EXPECT_TRUE(created.ok());
+        if (!created.ok()) return kInvalidPageId;
+        const PageId tail = created.value().first;
+        auto fresh = heap::PageView::CreateEmpty(created.value().second.bytes(), 0,
+                                                 catalog::kSysPatternsTable);
+        EXPECT_TRUE(fresh.ok());
+        if (!fresh.ok()) return kInvalidPageId;
+        catalog::SysPatternRow row{};
+        row.oid = 800'000 + fetch_id;
+        row.fetch_id = fetch_id;
+        row.fingerprint_version = parser::kFingerprintVersion + 1;
+        row.waystone_root = kInvalidPageId;
+        row.flags = catalog::kPatternWaystone;
+        auto encoded = row.Encode();
+        EXPECT_TRUE(fresh.value().InsertTuple(encoded, catalog::kBootstrapXid).ok());
+        auto link = store_.Get(last);
+        EXPECT_TRUE(link.ok());
+        if (!link.ok()) return kInvalidPageId;
+        heap::PageView(link.value().bytes()).set_next_page_id(tail);
+        return tail;
     }
 
     storage::InMemoryPageStore inner_{kFirstUserPageId};
@@ -280,19 +367,7 @@ TEST_F(WaystoneOptInTest, OffByExampleNeedsNoRelationAndTakesAPlaceholder) {
 // A lapsed opted row - another fingerprint version's - is reached by number.
 TEST_F(WaystoneOptInTest, OffByNumberReachesALapsedRow) {
     constexpr std::uint64_t kLapsed = 0x5151;
-    {
-        auto bytes = store_.Get(catalog::kCatalogPagePatterns);
-        ASSERT_TRUE(bytes.ok());
-        heap::PageView page(bytes.value().bytes());
-        catalog::SysPatternRow row{};
-        row.oid = 777'777;
-        row.fetch_id = kLapsed;
-        row.fingerprint_version = parser::kFingerprintVersion + 1;
-        row.waystone_root = kInvalidPageId;
-        row.flags = catalog::kPatternWaystone;
-        auto encoded = row.Encode();
-        ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
-    }
+    PlantLapsed(kLapsed);
     EXPECT_EQ(Run("WAYSTONE OFF " + std::to_string(kLapsed)),
               "OK WAYSTONE OFF fetch_id=" + std::to_string(kLapsed));
     auto rows = boot_->catalog.ListPatterns();
@@ -548,6 +623,137 @@ TEST_F(WaystoneOptInTest, SysMetaCarriesTheCeilingsAndTheOptedCount) {
     EXPECT_EQ(testing_view::MetaField(Run("SHOW META"), "waystone_opted"), "0");
 }
 
+// ---- The gate and the opted count (CF-S1c) --------------------------------
+
+// **A not-opted `SELECT` pays nothing of Waystone's**: with nothing opted it
+// fills no pattern map and is never sighted; with another shape opted it is
+// one hash miss in the filled map - no fill, no scan, no sighting.
+TEST_F(WaystoneOptInTest, ANotOptedSelectFillsNoPatternMapAndIsNeverSighted) {
+    // ANALYZE gives the statement an identity, as a server's optimizer
+    // surface gives every `SELECT` one: the collector's gate is the opt-in,
+    // not the identity.
+    const auto run_not_opted = [&] {
+        for (int i = 0; i < 3; ++i) EXPECT_EQ(Run(kPoint), "id,v\\n3,30");
+        for (int i = 0; i < 2; ++i) Run("ANALYZE " + kPoint);
+    };
+    run_not_opted();
+    EXPECT_EQ(boot_->catalog.cache_stats().pattern_fills, 0u) << "nothing opted, and a fill ran";
+    EXPECT_EQ(recorder_->stats().sightings, 0u) << "a shape nobody opted was sighted";
+
+    const std::string other = "SELECT w FROM u WHERE id = 3";
+    ASSERT_EQ(Run("WAYSTONE ON " + other).rfind("OK WAYSTONE ON", 0), 0u);
+    Run(other);
+    Run(other);
+    const std::uint64_t fills = boot_->catalog.cache_stats().pattern_fills;
+    const std::uint64_t sightings = recorder_->stats().sightings;
+    ASSERT_EQ(fills, 1u) << "the opted shape's first ask did not fill, or filled twice";
+    ASSERT_EQ(sightings, 2u) << "the opted shape was not sighted";
+
+    run_not_opted();
+    EXPECT_EQ(boot_->catalog.cache_stats().pattern_fills, fills) << "a not-opted miss scanned";
+    EXPECT_EQ(recorder_->stats().sightings, sightings) << "a not-opted shape was sighted";
+    EXPECT_EQ(recorder_->stats().write_failures, 0u);
+    // And the control still replays.
+    EXPECT_NE(Run("ANALYZE " + other).find("replays=1"), std::string::npos);
+
+    // A scan-only statement asks no map - invariant 9 keeps Waystone off
+    // it - so even as a generation's first statement it fills nothing.
+    const std::uint64_t settled = boot_->catalog.cache_stats().pattern_fills;
+    Ok("CREATE TABLE w (id int64) BTREE");  // the word moves: a new generation
+    Ok("SELECT * FROM u");
+    EXPECT_EQ(boot_->catalog.cache_stats().pattern_fills, settled) << "a scan-only SELECT filled";
+    Run(other);
+    EXPECT_EQ(boot_->catalog.cache_stats().pattern_fills, settled + 1) << "the premise moved";
+}
+
+// **A failed lookup is counted, not silent** (CF-S1c): a `sys.patterns`
+// read the gate's fill cannot make leaves the statement unrecorded and its
+// answer unchanged, and shows in the recorder's `write_failures`.
+TEST_F(WaystoneOptInTest, AFillThatCannotReadIsCountedAndChangesNoReply) {
+    const std::string other = "SELECT w FROM u WHERE id = 3";
+    ASSERT_EQ(Run("WAYSTONE ON " + other).rfind("OK WAYSTONE ON", 0), 0u);
+    const std::string reply = Run(other);
+    Ok("CREATE TABLE w (id int64) BTREE");  // a new generation: the next ask fills
+    store_.RefusePatternReads(true);
+    EXPECT_EQ(Run(other), reply);
+    EXPECT_EQ(Run(other), reply);
+    store_.RefusePatternReads(false);
+    EXPECT_EQ(recorder_->stats().write_failures, 2u) << "a failed fill went uncounted";
+}
+
+// **The count is the view's**, through every way a WAYSTONE statement can
+// end: an ON, a second ON, an OFF, an OFF of a lapsed row (no move - the
+// view reads it false), an ON whose insert failed under page 9's hold (no
+// move), and an OFF whose walk failed after clearing one row (one move, and
+// the word moves). `sys.meta` and the catalog read the same word, and the
+// mount's renewal sets it from the chain. An overwrite whose record fails
+// is `WaystoneDurabilityTest`'s, which has a log to fail.
+TEST_F(WaystoneOptInTest, TheOptedCountMatchesTheViewThroughEveryWrite) {
+    const auto expect_matches = [&](const std::string& when, std::size_t want) {
+        const std::size_t view = ViewOpted(Run("SHOW PATTERNS"));
+        EXPECT_EQ(view, want) << when;
+        EXPECT_EQ(boot_->catalog.opted_patterns(), view) << when;
+        EXPECT_EQ(testing_view::MetaField(Run("SHOW META"), "waystone_opted"),
+                  std::to_string(view))
+            << when;
+    };
+    const std::string other = "SELECT w FROM u WHERE id = 3";
+    expect_matches("at the start", 0);
+    ASSERT_EQ(Run("WAYSTONE ON " + kPoint).rfind("OK WAYSTONE ON", 0), 0u);
+    expect_matches("after ON", 1);
+    ASSERT_NE(Run("WAYSTONE ON " + kPoint).find(" unchanged"), std::string::npos);
+    expect_matches("after an unchanged ON", 1);
+    ASSERT_EQ(Run("WAYSTONE ON " + other).rfind("OK WAYSTONE ON", 0), 0u);
+    expect_matches("after a second shape's ON", 2);
+    ASSERT_EQ(Run("WAYSTONE OFF " + kPoint).rfind("OK WAYSTONE OFF", 0), 0u);
+    expect_matches("after OFF", 1);
+
+    constexpr std::uint64_t kLapsed = 0x6161;
+    PlantLapsed(kLapsed);
+    expect_matches("with a lapsed row planted", 1);
+    ASSERT_EQ(Run("WAYSTONE OFF " + std::to_string(kLapsed)),
+              "OK WAYSTONE OFF fetch_id=" + std::to_string(kLapsed));
+    expect_matches("after OFF <fetch_id> of a lapsed row", 1);
+
+    // **A write that fails after the decision moves nothing**: page 9's
+    // hold is let through and the write made under it refused. An ON of a
+    // shape's first row makes three write fetches of page 9 - the hold, the
+    // walk for a current row, the insert - and the third is refused.
+    const std::string third = "SELECT * FROM t WHERE id = 3 LIMIT 1";
+    store_.RefuseWritesOf(catalog::kCatalogPagePatterns, /*passes=*/2);
+    const DispatchOutcome insert = Out("WAYSTONE ON " + third);
+    const int insert_refusals = store_.write_refusals();
+    store_.RefuseWritesOf(kInvalidPageId);
+    EXPECT_FALSE(insert.status.ok()) << "the premise moved: " << insert.response;
+    EXPECT_EQ(insert_refusals, 1) << "the premise moved: the refusal missed the insert: "
+                                  << insert.response;
+    expect_matches("after an ON whose insert failed", 1);
+    EXPECT_FALSE(RowOf(FetchIdOf(third)).has_value());
+
+    // **OFF's walk failing after it cleared an earlier row**: a lapsed opted
+    // row of `other`'s fetch_id on a page chained after page 9, whose write
+    // fetch is refused. The current row on page 9 was cleared and counted
+    // down, the lapsed one was never reached, and the word moves for the
+    // write that stands, or every cache would keep the bit it cleared.
+    const PageId tail = ChainLapsedPage(FetchIdOf(other));
+    ASSERT_NE(tail, kInvalidPageId);
+    const std::uint64_t version = boot_->catalog.catalog_version();
+    store_.RefuseWritesOf(tail);
+    const DispatchOutcome partial = Out("WAYSTONE OFF " + other);
+    const int partial_refusals = store_.write_refusals();
+    store_.RefuseWritesOf(kInvalidPageId);
+    EXPECT_FALSE(partial.status.ok()) << "the premise moved: " << partial.response;
+    EXPECT_EQ(partial_refusals, 1) << "the premise moved: the walk never reached the tail";
+    EXPECT_GT(boot_->catalog.catalog_version(), version) << "a partial OFF moved no word";
+    expect_matches("after an OFF that failed past its first row", 0);
+    EXPECT_FALSE(Opted(FetchIdOf(other)));
+    EXPECT_FALSE(Opted(FetchIdOf(kPoint)));
+
+    ASSERT_EQ(Run("WAYSTONE ON " + kPoint).rfind("OK WAYSTONE ON", 0), 0u);
+    ASSERT_TRUE(DiscardAdvisoryState(boot_->catalog, /*waystone_recording=*/true).ok());
+    expect_matches("after the mount's renewal", 1);
+}
+
 // ---- The mount's discard, and the cache in front of it -----------------------
 
 // `[quiet-wrong]` without the renewal's cache drop: a pattern entry filled
@@ -559,13 +765,13 @@ TEST_F(WaystoneOptInTest, APatternCachedBeforeTheDiscardAnswersTheRenewedRoot) {
     Run(kPoint);
     Run(kPoint);
     ASSERT_NE(Run("ANALYZE " + kPoint).find("replays=1"), std::string::npos);
-    auto cached = boot_->catalog.FindPattern(FetchIdOf(kPoint));
+    auto cached = boot_->catalog.FindOptedPattern(FetchIdOf(kPoint));
     ASSERT_TRUE(cached.ok());
     const PageId old_root = cached.value()->waystone_root;
 
     ASSERT_TRUE(DiscardAdvisoryState(boot_->catalog, /*waystone_recording=*/true).ok());
 
-    auto after = boot_->catalog.FindPattern(FetchIdOf(kPoint));
+    auto after = boot_->catalog.FindOptedPattern(FetchIdOf(kPoint));
     ASSERT_TRUE(after.ok());
     EXPECT_NE(after.value()->waystone_root, old_root) << "the cache kept the previous root";
     EXPECT_EQ(after.value()->waystone_root, RowOf(FetchIdOf(kPoint))->waystone_root);
@@ -591,7 +797,7 @@ TEST_F(WaystoneOptInTest, ARenewalWhoseCreateFailsClearsTheRootAndKeepsTheBit) {
     ASSERT_TRUE(row.has_value());
     EXPECT_NE(row->flags & catalog::kPatternWaystone, 0) << "the bit went with the directory";
     EXPECT_FALSE(catalog::HasWaystoneDirectory(*row)) << "the previous run's root was kept";
-    auto cached = boot_->catalog.FindPattern(fetch_id);
+    auto cached = boot_->catalog.FindOptedPattern(fetch_id);
     ASSERT_TRUE(cached.ok()) << cached.status().message();
     EXPECT_FALSE(cached.value()->has_waystone_directory()) << "the cache kept the root";
     bool logged = false;
@@ -694,6 +900,38 @@ TEST_F(WaystoneDurabilityTest, AnUnchangedAnswerAtGroupParksUntilTheStateItRepor
     EXPECT_TRUE(wal_->IsDurable(wal_->appended_lsn() - 1)) << "group's OK came back early";
 }
 
+// **The opted count moves only after the row's write succeeded** (CF-S1c):
+// with the log fail-stopped, an ON over an existing row and an OFF each
+// decide, change the page and fail at their record - the decision made,
+// the write not - and neither moves the count. The page keeps a change no
+// record covers, which is fail-stop's state: nothing is written back and
+// the restart recounts from the chain.
+TEST_F(WaystoneDurabilityTest, AWriteWhoseRecordFailsMovesNoOptedCount) {
+    const std::string sql = "SELECT * FROM t WHERE id = 1";
+    const std::string other = "SELECT v FROM t WHERE id = 1 LIMIT 1";
+    ASSERT_EQ(Relaxed("WAYSTONE ON " + sql).rfind("OK WAYSTONE ON", 0), 0u);
+    ASSERT_EQ(Relaxed("WAYSTONE OFF " + sql).rfind("OK WAYSTONE OFF", 0), 0u);
+    ASSERT_EQ(Relaxed("WAYSTONE ON " + other).rfind("OK WAYSTONE ON", 0), 0u);
+    ASSERT_EQ(boot_->catalog.opted_patterns(), 1u);
+
+    // Something staged, and its drain refused: the stream stops, and every
+    // later append is refused.
+    const std::vector<std::byte> filler(16, std::byte{0x5a});
+    ASSERT_TRUE(wal_->Append({wal::RecordType::kHeapInsert, wal::kNoTxnId, kInvalidPageId, 0},
+                             filler)
+                    .ok());
+    log_device_->FailNextWrite(Status::IoError("injected: the log cannot be written"));
+    ASSERT_FALSE(wal_->Flush().ok());
+    ASSERT_TRUE(wal_->stopped()) << "the premise moved: the log did not stop";
+
+    const std::string on = Relaxed("WAYSTONE ON " + sql);
+    EXPECT_EQ(on.rfind("ERR", 0), 0u) << "the premise moved: " << on;
+    EXPECT_EQ(boot_->catalog.opted_patterns(), 1u) << "an ON whose record failed moved the count";
+    const std::string off = Relaxed("WAYSTONE OFF " + other);
+    EXPECT_EQ(off.rfind("ERR", 0), 0u) << "the premise moved: " << off;
+    EXPECT_EQ(boot_->catalog.opted_patterns(), 1u) << "an OFF whose record failed moved the count";
+}
+
 // ---- Across a mount ------------------------------------------------------------
 
 struct TempDir {
@@ -732,7 +970,7 @@ AfterMount Inspect(Expeditor& db, const std::string& sql) {
     if (!row.ok()) return out;
     out.opted = (row.value().flags & catalog::kPatternWaystone) != 0;
     if (catalog::HasWaystoneDirectory(row.value())) out.root = row.value().waystone_root;
-    auto cached = db.catalog().FindPattern(FetchIdOf(sql));
+    auto cached = db.catalog().FindOptedPattern(FetchIdOf(sql));
     if (cached.ok() && cached.value()->has_waystone_directory()) {
         out.cached_root = cached.value()->waystone_root;
     }
@@ -842,6 +1080,8 @@ TEST(WaystoneMountTest, AMountWithRecordingOffMakesNoDirectoryAndKeepsTheBit) {
         EXPECT_EQ(testing_view::MetaField(meta, "waystone_recording"), "off") << meta;
         EXPECT_EQ(testing_view::MetaField(meta, "waystone_replay"), "on") << meta;
         EXPECT_EQ(testing_view::MetaField(meta, "waystone_opted"), "1") << meta;
+        EXPECT_EQ(ViewOpted(Reply(*mounted.value(), "SHOW PATTERNS")), 1u)
+            << "the mount's count is not the view's";
         reclaim_census::CleanShutdownCheckpoint(*mounted.value());
     }
     {
@@ -862,6 +1102,35 @@ TEST(WaystoneMountTest, AMountWithRecordingOffMakesNoDirectoryAndKeepsTheBit) {
     ASSERT_TRUE(mounted.ok()) << mounted.status().message();
     CurrentCoreGuard as(0);
     EXPECT_NE(Inspect(*mounted.value(), kMounted).root, kInvalidPageId);
+}
+
+// **A boot that runs no renewal counts the chain itself** (CF-S1c): the sim's
+// `skip_recovery` boot skips `DiscardAdvisoryState`, and with it the walk
+// that sets the opted count, so without its own counting walk the count
+// would stay 0 over the opted row and no `SELECT` would ever ask for it.
+TEST(WaystoneSimBootTest, ASkipRecoveryBootCountsTheOptedRowsItFinds) {
+    auto opened = sim::SimInstance::Create({.skip_recovery = true, .waystone = true});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    sim::SimInstance& db = *opened.value();
+    const std::string sql = "SELECT v FROM ws WHERE id = 1";
+    for (const std::string& line : {std::string("CREATE TABLE ws (id int64, v int64) BTREE"),
+                                    std::string("INSERT INTO ws VALUES (5)"),
+                                    "WAYSTONE ON " + sql}) {
+        const std::string reply = db.Execute(line);
+        ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << line << " -> " << reply;
+    }
+    ASSERT_EQ(db.catalog().opted_patterns(), 1u);
+    ASSERT_TRUE(db.CleanShutdown().ok());
+    ASSERT_TRUE(db.Reboot().ok());
+
+    EXPECT_EQ(db.catalog().opted_patterns(), 1u) << "the skip_recovery boot left the count unset";
+    EXPECT_EQ(ViewOpted(db.Execute("SHOW PATTERNS")), 1u);
+    EXPECT_EQ(testing_view::MetaField(db.Execute("SHOW META"), "waystone_opted"), "1");
+    // And the opted row is asked for: no renewal ran, so it kept the root
+    // its ON made (a skip_recovery boot discards nothing), and it records.
+    db.Execute(sql);
+    db.Execute(sql);
+    EXPECT_NE(db.Execute("ANALYZE " + sql).find("replays=1"), std::string::npos);
 }
 
 }  // namespace

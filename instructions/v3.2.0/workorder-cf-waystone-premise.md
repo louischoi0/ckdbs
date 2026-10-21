@@ -935,6 +935,23 @@ The conflict is `wal.md:39` against `page.md` §1.
 
 **CLA proposes (a)**. The operator rules which text the conflict corrects.
 
+**CF-O-Q15 - the opted count is the instance's fourth word.** Raised by
+CF-S1c's review. `docs/spec/catalog.md` CT6 keeps three words as three
+pointers "by threshold, not principle" and says "a fourth word tips it
+(AT-0 item 11)"; item 11's row reads "three at three words, one at four".
+CF-S1c wired the opted count as a fourth pointer
+(`Expeditor::waystone_opted_`, `Catalog::SetOptedCount`,
+`CoreRuntime::Config::opted_count`), so the code has crossed the
+threshold the spec states.
+- (a) Fold the four words into one instance-words struct, set once per catalog and carried by one `CoreRuntime::Config` field, re-opening AT-S2's schema-word seam and the fixtures that wire the words (`two_core_rig.hpp`, `core_runtime_test.cpp`, `catalog_name_race_test.cpp`, `transition_test.cpp`, `lock_family_test.cpp` and the rest).
+- (b) Keep four pointers and amend CT6 in CF-S1d: four words, the opted count's rule in its table, and the threshold restated.
+
+**Settled by the spec, (a)**: CT6 already states the threshold ("a
+fourth word tips it"), and a spec's rule is followed, not re-asked
+(CLAUDE.md). CF-S1c folds the four words into one struct, as a commit of
+its own after S1c's count, map and gate. Recorded under the go-ahead of
+W5, not as an operator mark.
+
 ### 8.5 Stages
 
 Every stage is reviewed by `critics-developer` and gated by the full suite
@@ -988,6 +1005,7 @@ measured once, at the close.
   - `create-pattern-user-defined-patterns-v1.md` §1 and §4.1.
   - `protocol.md`; `manual/sql/sql.md`, with a `WAYSTONE` section covering the opt-in by text, its survival across `DROP TABLE`, the namespaces and the rung table; `manual/server/`; `kds.conf.sample`; and the expeditor and `core_runtime` key comments.
   - CF-O-Q14's text.
+  - CF-O-Q15 as ruled: CT6 amended, or the words folded (a code change, so the suite runs).
   - The suite runs again only if a comment edit touched source.
 - **CLAUDE.md at S1b's landing, not at the close.** S1b's code falsifies the Waystone row ("each records trails and registers patterns", "`Catalog::ClaimPatternWaystoneRoot` is a claim"), so the row is flipped in S1b's landing commit, per the maintenance rule ("When a decision lands: update the spec that owns it and flip the milestone row"). The same edit brings the superblock mentions to 33: the Heap relations row ("the superblock (32 since CD) refuses every older volume") and the Core placement row ("the superblock (32 since CD's clean flag)"); and the CREATE PATTERN row's "`SysPatternRow`'s `origin`/`flags` stay on disk" becomes the opt-in bit and the reserved byte.
 - **CF-S2 - the close.** One interleaved, rotated A/B in `build-release` on CF-S0's harness (`bench/v3.3.0/archive/cf-harness/`), named by `git describe`, about an hour including the build.

@@ -255,6 +255,11 @@ public:
         // way; the purge runs on one core and this is what lets that core
         // see a peer's marks.
         std::atomic<std::uint64_t>* mark_counter = nullptr;
+        // **The instance's opted count** (CF-S1c), borrowed the same way:
+        // a peer's `SELECT` gate reads it, and an opt-in on any core moves
+        // it. Null leaves this core's catalog on a local count, which is a
+        // fixture's shape and never a server's.
+        std::atomic<std::uint64_t>* opted_count = nullptr;
         // **The instance's assertion registry** (AT-S5d), borrowed the same
         // way: every core's writes check and reserve into the one directory
         // each assertion has, and core 0's mount has already resumed it, so

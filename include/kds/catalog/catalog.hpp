@@ -71,7 +71,12 @@ class WalManager;
 // which owns the rule for what may be cached. The two things to know
 // before touching this file: `next_id` is never cached, so AllocateRowId()
 // and GetSysTableRow() always read the page; and every mutation of a
-// cached fact goes through BumpVersion(), the single invalidation point.
+// cached fact goes through BumpVersion(), the single invalidation point -
+// save the mount's `RenewPatternDirectories`, which drops this catalog's
+// cache instead, before the listener binds. The opted patterns are the one
+// cached absence, complete per generation: `catalog_cache.hpp` states the
+// rule that keeps them so, and `SetOptedCount`'s comment the atomic
+// protocol of the instance's opted count that gates them (CF-S1c).
 
 namespace kds::catalog {
 
@@ -796,22 +801,49 @@ public:
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 
-    // The pattern `fetch_id` names, served from the cache after the first
-    // lookup. The pointer is reference-stable and stays valid until the
-    // next Invalidate() - same contract as InitTableAccess().
+    // **The instance's opted count** (CF-S1c, §8.3 "The gate and its hot-path
+    // cost"): how many current-version `sys.patterns` rows carry
+    // `kPatternWaystone`. One atomic for the instance, owned by `Expeditor`
+    // beside the schema word and handed to every core's catalog the same
+    // way; null keeps a local count, which is what a bare fixture catalog
+    // and the sim hold (`catalog.md` CT6's shape).
     //
-    // Fails with NotFound when no row names the pattern **and when the only
-    // row for it came from another fingerprint revision**. Those two are
-    // deliberately one outcome: a row recorded under different
-    // fingerprinting rules names a shape that is not the one it claims, so
-    // the only safe reading of it is that this pattern was never opted in.
-    // A re-issued `WAYSTONE ON` inserts a current row beside the stale one
-    // (retention, P15, is unbuilt). A version mismatch is never an error -
-    // nothing about it should fail a statement.
+    // **Moved only after a successful write, under page 9's hold**, and only
+    // on a 0->1 or 1->0 change of the bit on a **current-version** row:
+    // OFF clearing a lapsed row's bit leaves it, and a decrement saturates at
+    // 0. **Set from the chain at every boot**, after redo where redo runs:
+    // `RenewPatternDirectories`' walk sets it, and a boot that runs no
+    // renewal runs `RecountOptedPatterns`. A stale count costs performance
+    // only (invariant 8): it gates a lookup, never what a reader sees.
+    // Read with an acquire load, moved with acq_rel read-modify-writes, set
+    // with a release store; it publishes nothing beside itself - what a
+    // peer's map holds is the schema word's to order, not this word's.
+    void SetOptedCount(std::atomic<std::uint64_t>* count) noexcept { opted_count_ = count; }
+    // One load, with no fill: the `SELECT` path's whole cost while nothing
+    // on the instance is opted.
+    std::uint64_t opted_patterns() const noexcept {
+        return opted_count_ != nullptr ? opted_count_->load(std::memory_order_acquire)
+                                       : local_opted_;
+    }
+    bool NoOptedPatterns() const noexcept { return opted_patterns() == 0; }
+
+    // The opted pattern `fetch_id` names, or NotFound (CF-S1c). Served from
+    // this core's **opted map, complete per cache generation**: while the
+    // count is non-zero, the first ask after a cache drop fills it with
+    // every current-version row that has `kPatternWaystone` set, in one
+    // `ScanAll` of `sys.patterns`, and every later ask in the generation is
+    // one hash probe - **a miss is NotFound with no scan**. While the count
+    // is zero nothing fills and every ask is NotFound. The soundness rule
+    // that lets a miss be answered from memory is `catalog_cache.hpp`'s.
     //
-    // A found row is not an opted one: `flags & kPatternWaystone` is what
-    // says so, and the trail recorder asks it (CF-S1b).
-    StatusOr<const PatternAccess*> FindPattern(std::uint64_t fetch_id);
+    // The pointer is reference-stable and stays valid until the next
+    // Invalidate() - same contract as InitTableAccess(). A row of another
+    // fingerprint revision is never in the map: it names a shape that is
+    // not the one it claims, so the only safe reading of it is that the
+    // pattern was never opted in (a re-issued `WAYSTONE ON` inserts a
+    // current row beside it). Any answer but NotFound is a read that
+    // failed.
+    StatusOr<const PatternAccess*> FindOptedPattern(std::uint64_t fetch_id);
 
     // What `SetPatternWaystone` did, and the LSN its answer is durable at.
     struct PatternWaystoneWrite {
@@ -865,6 +897,11 @@ public:
     // met had the bit. The rows stay, and the directories become
     // unreachable, as at a mount.
     //
+    // **The opted count moves here and nowhere else at run time** (CF-S1c):
+    // under the hold, after each write that succeeded, by one per current-
+    // version row whose bit it changed - never for a lapsed row, never for a
+    // root alone, never for a write that failed.
+    //
     // **`root` is created by the caller before this is called, never under
     // the hold**: `CreateDirPage` can block on the data-sync thread
     // (`device_page_store.cpp`'s headerless create), and a page latch is
@@ -896,16 +933,20 @@ public:
     // where no current-version row of their `fetch_id` is opted (a re-issued
     // ON is not reported again at every mount).
     //
-    // **Ends by dropping this catalog's cache** `[quiet-wrong]`: a pattern
-    // entry filled before the walk would keep the previous run's root, whose
-    // children can be ids the cursor has since handed to logged pages, so a
-    // trail written through it would overwrite them with no record.
+    // **Ends by setting the opted count** from the second walk (CF-S1c) **and
+    // dropping this catalog's cache** `[quiet-wrong]`: a pattern entry filled
+    // before the walk would keep the previous run's root, whose children can
+    // be ids the cursor has since handed to logged pages, so a trail written
+    // through it would overwrite them with no record.
     StatusOr<std::uint64_t> RenewPatternDirectories(bool waystone_recording);
 
-    // How many current-version `sys.patterns` rows have `kPatternWaystone`
-    // set: what `sys.meta`'s `waystone_opted=` prints. One read-only walk of
-    // the chain, which on a v33 volume holds only the rows ever opted.
-    StatusOr<std::uint64_t> CountOptedPatterns();
+    // **The counting walk of a boot that runs no renewal** (CF-S1c): the
+    // sim's `skip_recovery` boot skips `DiscardAdvisoryState`, and with it
+    // the walk that sets the opted count, which would otherwise stay 0 over
+    // opted rows for the whole run. One read-only walk of the chain, which
+    // on a v33 volume holds only the rows ever opted; sets the count and
+    // answers it.
+    StatusOr<std::uint64_t> RecountOptedPatterns();
 
     // A `TouchPattern()` stood here - the trail recorder's catalog half,
     // which bumped `use_count` and stamped `last_seen` on every recorded
@@ -942,8 +983,8 @@ public:
     // PatternAccess deliberately omits - `use_count` and `last_seen`, heat
     // that moves without DDL and so is not a cacheable fact (schema.hpp;
     // reserved since BL-S4's ruling 1, rows.hpp). A caller that wants heat
-    // calls this; a caller that wants identity or location calls
-    // FindPattern().
+    // calls this; a caller that wants an opted pattern's identity or location
+    // calls FindOptedPattern().
     //
     // **Rows from another fingerprint revision are invisible here**, and
     // this is the single place that filter lives. A version bump leaves
@@ -1503,6 +1544,18 @@ private:
     std::uint64_t pending_marks_ = 0;
     std::atomic<std::uint64_t>* mark_counter_ = nullptr;
 
+    // **The opted count's fallback** (CF-S1c), `pending_marks_`'s shape:
+    // `opted_count_` is where the count lives when an instance named one
+    // (`SetOptedCount`). Moved by the two below and set at a boot; nothing
+    // else writes either.
+    std::uint64_t local_opted_ = 0;
+    std::atomic<std::uint64_t>* opted_count_ = nullptr;
+    // A 0->1 (`up`) or 1->0 change of the bit on a current-version row,
+    // after its write and under page 9's hold. The decrement saturates at 0:
+    // a count set at a boot from a chain a raw write moved since must not
+    // wrap to "everything is opted".
+    void MoveOptedCount(bool up) noexcept;
+    void StoreOptedCount(std::uint64_t value) noexcept;
     // Unset until the first GenerateUserOid() recovers it from the catalog.
     // An optional rather than a sentinel value, because every integer in
     // this type's range is a legal oid and a sentinel would be one more

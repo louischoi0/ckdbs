@@ -44,6 +44,15 @@
 // Case 5 is the one that proves §2 rule 1's identity check is load-bearing
 // rather than decorative: without it the engine returns real rows from the
 // wrong places, and every other case in this file would still pass.
+//
+// **Opted against not opted** (CF-S1c, `workorder-cf-waystone-premise.md`
+// §8.5): since CF-S1b only an opted shape records or replays, so the
+// sharpest reference is the same instance under the same ceilings with
+// nothing opted - every reply byte for byte, under each ceiling, with its
+// trails deleted mid-run, with a corrupted trail, and with the bit flipped
+// mid-run. **Every recordable opted cell asserts that it replayed**
+// (`EveryRecordableOptedQueryReplays`), so a fixture that opted nothing, or
+// a gate that let nothing through, cannot pass any of these vacuously.
 
 namespace kds::server {
 namespace {
@@ -93,7 +102,8 @@ const std::vector<std::string>& Queries();
 // key, so the descent path replay replaces is covered, and a heap (BZ-R1)
 // whose `id` is an ordinary column holding the same numbers, so the same
 // statement text over it is a search replay must never serve.
-void Load(Instance& db, testing_cycle::Added added = testing_cycle::Added::kNone) {
+void Load(Instance& db, testing_cycle::Added added = testing_cycle::Added::kNone,
+          bool opt = true) {
     const std::string spare = testing_cycle::Spare(added);
     ASSERT_EQ(db.Run("CREATE TABLE b (id int64, v int64, label varchar)" + spare + " BTREE")
                   .substr(0, 7),
@@ -128,8 +138,11 @@ void Load(Instance& db, testing_cycle::Added added = testing_cycle::Added::kNone
     // nothing and compare vacuously. A configuration with no recorder holds
     // the bits and no directory, which changes no reply either. The scans,
     // the heap's `id` (an ordinary column) and the built join are refused -
-    // no tuple key equality - and never record.
-    for (const std::string& sql : Queries()) db.OptIn(sql);
+    // no tuple key equality - and never record. `opt = false` is the
+    // not-opted reference (CF-S1c).
+    if (opt) {
+        for (const std::string& sql : Queries()) db.OptIn(sql);
+    }
 }
 
 // The query set. Deliberately mixed: keyed steps that replay, searches that
@@ -287,6 +300,22 @@ std::vector<std::string> Reference() {
     return RunAll(db, 3);
 }
 
+// The not-opted reference (CF-S1c): the same ceilings, nothing opted, so the
+// gate lets no statement near a trail.
+std::vector<std::string> NotOpted(bool record, bool replay, int rounds) {
+    Instance db(record, replay);
+    Load(db, testing_cycle::Added::kNone, /*opt=*/false);
+    return RunAll(db, rounds);
+}
+
+// Whether `sql`'s shape is opted on `db`: its current row carries the bit.
+bool IsOpted(Instance& db, const std::string& sql) {
+    auto fp = parser::FingerprintOf(sql);
+    if (!fp.has_value()) return false;
+    auto row = db.catalog().GetSysPatternRow(fp->fetch_id);
+    return row.ok() && (row.value().flags & catalog::kPatternWaystone) != 0;
+}
+
 void ExpectSame(const std::vector<std::string>& got, const std::vector<std::string>& want,
                 const char* what) {
     ASSERT_EQ(got.size(), want.size()) << what;
@@ -416,9 +445,13 @@ TEST(WaystoneContractTest, DeletingEveryWaystoneMidRunChangesNoReply) {
     Load(db);
     std::vector<std::string> replies = RunAll(db, 2);
 
+    // A trail stands before it is destroyed: since CF-S1b a row exists as
+    // soon as `Load` opts the set in, so the rows alone prove nothing.
+    ASSERT_NE(db.Run("ANALYZE SELECT * FROM b WHERE id = 3").find("replays="), std::string::npos)
+        << "nothing replays before the deletion; the test proves nothing";
     auto patterns = db.catalog().ListPatterns();
     ASSERT_TRUE(patterns.ok());
-    ASSERT_FALSE(patterns.value().empty()) << "nothing was recorded; the test proves nothing";
+    std::size_t deleted = 0;
     for (const catalog::SysPatternRow& row : patterns.value()) {
         if (!catalog::HasWaystoneDirectory(row)) continue;
         // The directory root and everything under it. Zeroing the root is
@@ -426,14 +459,16 @@ TEST(WaystoneContractTest, DeletingEveryWaystoneMidRunChangesNoReply) {
         auto page = db.store().Get(row.waystone_root);
         ASSERT_TRUE(page.ok());
         std::fill(page.value().bytes().begin(), page.value().bytes().end(), std::byte{0xFF});
+        ++deleted;
     }
+    ASSERT_GT(deleted, 0u) << "no directory was deleted; the test proves nothing";
 
     const std::vector<std::string> after = RunAll(db, 2);
     replies.insert(replies.end(), after.begin(), after.end());
 
-    Instance reference(/*record=*/false, /*replay=*/false);
-    Load(reference);
-    ExpectSame(replies, RunAll(reference, 4), "waystones deleted mid-run");
+    // Against the same ceilings with nothing opted (CF-S1c).
+    ExpectSame(replies, NotOpted(/*record=*/true, /*replay=*/true, 4),
+               "opted, waystones deleted mid-run, against not opted");
 }
 
 TEST(WaystoneContractTest, ACorruptedTrailChangesNoReply) {
@@ -493,7 +528,90 @@ TEST(WaystoneContractTest, ACorruptedTrailChangesNoReply) {
     }
     ASSERT_GT(poisoned, 0u) << "no trail was corrupted; the test proves nothing";
 
-    ExpectSame(RunAll(db, 3), Reference(), "corrupted trail");
+    // Against the same ceilings with nothing opted (CF-S1c).
+    ExpectSame(RunAll(db, 3), NotOpted(/*record=*/true, /*replay=*/true, 3),
+               "opted with a corrupted trail, against not opted");
+}
+
+// **The bit flipped mid-run** (CF-S1c): trails recorded, every shape opted
+// out - its root cleared, the trail unreachable - then opted in again, which
+// gives it a fresh, empty directory that the next executions record into
+// and replay from. No reply moves at either flip.
+TEST(WaystoneContractTest, FlippingTheBitMidRunChangesNoReply) {
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    std::vector<std::string> replies = RunAll(db, 2);
+    ASSERT_NE(db.Run("ANALYZE SELECT * FROM b WHERE id = 3").find("replays="), std::string::npos)
+        << "nothing replayed before the flip; the test proves nothing";
+
+    std::size_t flipped = 0;
+    for (const std::string& sql : Queries()) {
+        if (db.Run("WAYSTONE OFF " + sql).find(" unchanged") == std::string::npos) ++flipped;
+    }
+    ASSERT_GT(flipped, 0u) << "nothing was opted out; the test proves nothing";
+    std::vector<std::string> off = RunAll(db, 1);
+    replies.insert(replies.end(), off.begin(), off.end());
+    EXPECT_EQ(db.Run("ANALYZE SELECT * FROM b WHERE id = 3").find("replays="), std::string::npos)
+        << "an opted-out shape replayed";
+
+    for (const std::string& sql : Queries()) db.OptIn(sql);
+    std::vector<std::string> on = RunAll(db, 2);
+    replies.insert(replies.end(), on.begin(), on.end());
+    EXPECT_NE(db.Run("ANALYZE SELECT * FROM b WHERE id = 3").find("replays="), std::string::npos)
+        << "the re-opted shape did not replay";
+
+    ExpectSame(replies, NotOpted(/*record=*/true, /*replay=*/true, 5),
+               "opted with the bit flipped mid-run, against not opted");
+}
+
+// **Opted against not opted, under every ceiling** (CF-S1c): the two
+// boot-only keys are the instance's ceiling over opted patterns, and no
+// combination of them lets an opt-in move a reply.
+TEST(WaystoneContractTest, OptedAgainstNotOptedChangesNoReplyUnderEveryCeiling) {
+    for (const auto& [record, replay] : {std::pair{true, true}, std::pair{true, false},
+                                         std::pair{false, true}, std::pair{false, false}}) {
+        SCOPED_TRACE("waystone_recording=" + std::string(record ? "on" : "off") +
+                     " waystone_replay=" + (replay ? "on" : "off"));
+        Instance db(record, replay);
+        Load(db);
+        ExpectSame(RunAll(db, 3), NotOpted(record, replay, 3), "opted against not opted");
+        // The one ceiling pair under which an opt-in can replay does, so
+        // that arm is not vacuous; under the others nothing may.
+        const bool replays = db.Run("ANALYZE SELECT * FROM b WHERE id = 3").find("replays=") !=
+                             std::string::npos;
+        EXPECT_EQ(replays, record && replay);
+    }
+}
+
+// **No opted cell passes vacuously** (CF-S1c): every query the set opted
+// replays once it has run twice, except the few listed here, each for a
+// reason of its own that a trail could never change. A gate that let nothing
+// through, or a fixture that opted nothing, fails every other line.
+TEST(WaystoneContractTest, EveryRecordableOptedQueryReplays) {
+    // Opted, and with nothing to record: the key each names matches no row,
+    // so the collector stays empty and there is no trail to replay.
+    static const std::unordered_set<std::string> kRecordsNothing = {
+        "SELECT * FROM b WHERE id = 99",
+        "SELECT COUNT(*) FROM b WHERE id = 99",
+        "SELECT * FROM b WHERE id = 99 LIMIT 1",
+    };
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    RunAll(db, 2);
+    std::size_t opted = 0;
+    for (const std::string& sql : Queries()) {
+        if (!IsOpted(db, sql)) continue;
+        ++opted;
+        const std::string analyzed = db.Run("ANALYZE " + sql);
+        if (kRecordsNothing.count(sql) != 0) continue;
+        EXPECT_NE(analyzed.find("replays="), std::string::npos)
+            << "an opted, recordable cell did not replay: " << sql << "\n" << analyzed;
+    }
+    EXPECT_GT(opted, kRecordsNothing.size()) << "the set opted almost nothing";
+    for (const std::string& sql : kRecordsNothing) {
+        EXPECT_TRUE(IsOpted(db, sql)) << "listed as opted and recording nothing, but not opted: "
+                                      << sql;
+    }
 }
 
 // ---- §11-4: lookup-not-search --------------------------------------------
@@ -690,7 +808,7 @@ TEST(WaystoneContractTest, AnOptedShapeWithABuiltJoinRecordsItsLookupStepOnly) {
     ASSERT_TRUE(b_oid.ok()) << b_oid.status().message();
     auto fp = parser::FingerprintOf(sql);
     ASSERT_TRUE(fp.has_value());
-    auto pattern = db.catalog().FindPattern(fp->fetch_id);
+    auto pattern = db.catalog().FindOptedPattern(fp->fetch_id);
     ASSERT_TRUE(pattern.ok()) << pattern.status().message();
     ASSERT_TRUE(pattern.value()->has_waystone_directory());
     auto trail = stats::ReadTrail(db.store(), pattern.value()->waystone_root,
