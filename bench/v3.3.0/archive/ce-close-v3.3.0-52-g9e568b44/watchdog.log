@@ -1,0 +1,30 @@
+2026-10-20T10:59:59Z master=none alive=n status_age=0s status=
+2026-10-20T10:59:59Z ORPHAN: master gone, restarting
+2026-10-20T11:00:59Z master=278039 alive=y status_age=7s status=2026-10-20T11:00:52Z p1-A-sweep waiting for a quiet host: busy=8% procs=4
+2026-10-20T11:01:59Z master=278039 alive=y status_age=6s status=2026-10-20T11:01:53Z p1-A-sweep waiting for a quiet host: busy=25% procs=4
+2026-10-20T11:02:59Z master=278039 alive=y status_age=7s status=2026-10-20T11:02:52Z p1-A-sweep sweep pass 1
+2026-10-20T11:03:59Z master=278039 alive=y status_age=6s status=2026-10-20T11:03:53Z p1-A-sweep ttfb pass 1
+2026-10-20T11:04:59Z master=278039 alive=y status_age=36s status=2026-10-20T11:04:23Z p1-A-s1 quiet check 5/6: busy=0%
+2026-10-20T11:05:59Z master=278039 alive=y status_age=27s status=2026-10-20T11:05:32Z p1-A-s3 quiet check 5/6: busy=0%
+2026-10-20T11:06:59Z master=278039 alive=y status_age=21s status=2026-10-20T11:06:38Z p1-B-sweep sweep pass 1
+2026-10-20T11:07:59Z master=278039 alive=y status_age=1s status=2026-10-20T11:07:58Z p1-B-s1 quiet check 3/6: busy=0%
+2026-10-20T11:08:59Z master=278039 alive=y status_age=2s status=2026-10-20T11:08:57Z p1-B-s3 quiet check 1/6: busy=2%
+2026-10-20T11:09:59Z master=278039 alive=y status_age=1s status=2026-10-20T11:09:58Z p2-B-sweep quiet check 2/6: busy=1%
+2026-10-20T11:10:59Z master=278039 alive=y status_age=36s status=2026-10-20T11:10:23Z p2-B-sweep sweep pass 1
+2026-10-20T11:11:59Z master=278039 alive=y status_age=5s status=2026-10-20T11:11:54Z p2-B-s1 quiet check 5/6: busy=0%
+2026-10-20T11:12:59Z master=278039 alive=y status_age=2s status=2026-10-20T11:12:57Z p2-B-s3 quiet check 4/6: busy=0%
+2026-10-20T11:13:59Z master=278039 alive=y status_age=0s status=2026-10-20T11:13:59Z p2-A-sweep quiet check 5/6: busy=0%
+2026-10-20T11:14:59Z master=278039 alive=y status_age=51s status=2026-10-20T11:14:08Z p2-A-sweep sweep pass 1
+2026-10-20T11:15:59Z master=278039 alive=y status_age=20s status=2026-10-20T11:15:39Z p2-A-s1 quiet check 5/6: busy=0%
+2026-10-20T11:16:59Z master=278039 alive=y status_age=11s status=2026-10-20T11:16:48Z p2-A-s3 quiet check 5/6: busy=0%
+2026-10-20T11:17:59Z master=278039 alive=y status_age=5s status=2026-10-20T11:17:54Z p3-A-sweep sweep pass 1
+2026-10-20T11:18:59Z master=278039 alive=y status_age=4s status=2026-10-20T11:18:55Z p3-A-sweep ttfb pass 1
+2026-10-20T11:19:59Z master=278039 alive=y status_age=34s status=2026-10-20T11:19:25Z p3-A-s1 quiet check 5/6: busy=0%
+2026-10-20T11:20:59Z master=278039 alive=y status_age=25s status=2026-10-20T11:20:34Z p3-A-s3 quiet check 5/6: busy=0%
+2026-10-20T11:21:59Z master=278039 alive=y status_age=19s status=2026-10-20T11:21:40Z p3-B-sweep sweep pass 1
+2026-10-20T11:22:59Z master=278039 alive=y status_age=3s status=2026-10-20T11:22:56Z p3-B-s1 quiet check 2/6: busy=1%
+2026-10-20T11:23:59Z master=278039 alive=y status_age=3s status=2026-10-20T11:23:56Z p3-B-s3 start attempt 1
+2026-10-20T11:24:59Z master=278039 alive=y status_age=6s status=2026-10-20T11:24:53Z census start
+2026-10-20T11:25:59Z master=278039 alive=y status_age=66s status=2026-10-20T11:24:53Z census start
+2026-10-20T11:26:59Z master=278039 alive=y status_age=126s status=2026-10-20T11:24:53Z census start
+2026-10-20T11:27:59Z all.done seen, watchdog exits

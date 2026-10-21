@@ -596,8 +596,8 @@ bool TcpServer::FlushFrames(int client_fd, Connection& conn) {
                                  conn.frames_out.size());
     // **Nothing touches `conn` after a false.** `AppendReplyBytes` closes
     // the connection on a channel failure, and `CloseClient` erases the map
-    // entry whenever no statement is in flight - which is every caller of
-    // this function.
+    // entry whenever no statement is in flight - every caller but
+    // `ShipRunning`, which returns at a false all the same.
     if (!AppendReplyBytes(client_fd, conn, bytes)) return false;
     conn.frames_out.clear();
     return true;
@@ -699,10 +699,53 @@ bool TcpServer::DrainFrames(int client_fd, Connection& conn) {
 
 void TcpServer::SubmitStatement(int client_fd, Connection& conn) {
     conn.in_flight = true;
+    if (conn.kwp.has_value()) {
+        // **Armed here, for every statement** (CE-A3): this is the one
+        // place both a frame's dispatch and a moved connection's adoption
+        // pass, so the stream always names the core that runs it. Both
+        // closures look the connection up by fd: it is a map entry, and
+        // `CloseClient` defers its erasure while a statement runs.
+        conn.stream.ship = [this, client_fd] { ShipRunning(client_fd); };
+        // **The kernel's send buffer is the cap** (CE-A5): the walk goes on
+        // while the outbox is empty - everything it shipped was taken by
+        // `send()` - and parks while bytes wait for a writable event. A
+        // closing connection always resumes it, to its cancel (CE-A6).
+        // **Only a write interest is a wait**: bytes BN-R7 holds back - a
+        // pipelined `S_PARSE_OK`/`S_BIND_OK` - sit in the outbox with none
+        // armed, and a boundary with no sealed batch ships nothing to arm
+        // one, so parking on them would wait for an event never coming.
+        // **A cancel resumes it too**: `C_CANCEL` arrives on another
+        // connection and kicks nothing, so a parked walk reads the flag
+        // here - read, not taken - and takes it at the boundary's check.
+        conn.stream.resume_when = [this, client_fd] {
+            auto it = clients_.find(client_fd);
+            if (it == clients_.end()) return true;
+            const Connection& c = it->second;
+            return c.closing || c.outbox.empty() || !c.want_writable ||
+                   c.session.cancel_flag()->load(std::memory_order_acquire);
+        };
+        conn.kwp->ArmStream(&conn.stream);
+    }
     scheduler_->Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kForeground,
         dispatcher_->DispatchAsync(conn.current_line, &conn.session, &conn.pending),
         [this, client_fd](const Status&) { OnStatementComplete(client_fd); }));
+}
+
+void TcpServer::ShipRunning(int client_fd) {
+    auto it = clients_.find(client_fd);
+    if (it == clients_.end()) return;
+    Connection& conn = it->second;
+    if (conn.closing) return;  // nobody to read it; the walk ends at its cancel
+    // **BN-R7's one write, amended** (CE-R2): what waited for the statement
+    // - a pipelined `S_PARSE_OK`/`S_BIND_OK` - leaves with its first rows,
+    // in order, and the completion writes the rest as before. A failed
+    // write closes the connection the way any reply's does: marked, the
+    // walk cancelled, torn down at the statement's end.
+    conn.kwp->StreamRunning(conn.frames_out);
+    if (!FlushFrames(client_fd, conn)) return;
+    if (!FlushOutbox(client_fd, conn)) return;
+    SyncWriteInterest(client_fd, conn);
 }
 
 // ---- BL-S2: the move -------------------------------------------------------

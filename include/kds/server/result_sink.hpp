@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -73,6 +74,29 @@ public:
     // keeps the bytes must copy them.
     virtual Status Emit(std::string_view row) = 0;
 
+    // **Forgets every row emitted so far** - before a statement is run again
+    // from the top (BA-S14's re-run, CE-A1 of
+    // `instructions/v3.2.0/workorder-ce-streaming-reply.md`). A sink that
+    // outlives one run - the KWP portal's - would otherwise answer the first
+    // attempt's rows and the re-run's, `[quiet-wrong]`. A sink built per run
+    // has nothing to forget.
+    virtual void Rewind() {}
+
+    // **Whether any row has left the server** (CE-R4). A statement whose
+    // rows a client has already read cannot be run again without answering
+    // them twice, so the re-run asks this first.
+    virtual bool Streamed() const noexcept { return false; }
+
+    // ---- Streaming (CE) -------------------------------------------------
+    //
+    // A plain `SELECT`'s walk calls `AtSliceBoundary` at each slice
+    // boundary (`exec::SlicePolicy`), where it holds no page, so a sink with
+    // somewhere to send rows sends what it has sealed. `ResumeWhen` is
+    // non-null exactly for such a sink - the walk arms the boundary only
+    // then - and is what the walk waits on instead of a bare yield: a
+    // client that is not reading parks the walk (CE-Q5 (a)).
+    virtual void AtSliceBoundary() {}
+    virtual const std::function<bool()>* ResumeWhen() const noexcept { return nullptr; }
 };
 
 // The newline protocol's form: a header line of comma-joined column names,

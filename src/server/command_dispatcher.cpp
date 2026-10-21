@@ -778,7 +778,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // never does). A statement that wrote rows first keeps today's refusal
     // (`txn.md` §9: no statement-level rollback) - `EndWrite` clears the
     // note for it. No B-link move-right (BA-Q10).
-    while (StructuralRerunDue(*out, statement_deadline_ns)) {
+    while (StructuralRerunDue(*out, session, statement_deadline_ns)) {
         co_await sched::Yield{};
         {
             const MayParkScope parking(*this, /*allowed=*/true, statement);
@@ -880,15 +880,25 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     co_return Status::OK();
 }
 
-bool CommandDispatcher::StructuralRerunDue(const DispatchOutcome& out,
+bool CommandDispatcher::StructuralRerunDue(const DispatchOutcome& out, Session* session,
                                            sched::MonoTimeNs& deadline_ns) {
     if (out.status.code() != StatusCode::kTxnConflict || !storage::StructuralRefusalNoted() ||
         txn_ == nullptr || clock_ == nullptr) {
         return false;
     }
+    // **Not once a row has left** (CE-R4, `[quiet-wrong]`): a client that
+    // read the first attempt's rows would read the re-run's too. The
+    // refusal is answered, `retryable`, as it was before BA-S14.
+    ResultSink* const sink = (session != nullptr ? *session : autocommit_session_).result_sink();
+    if (sink != nullptr && sink->Streamed()) return false;
     if (deadline_ns == 0) deadline_ns = NowNs() + lock_wait_fault_net_ns_;
     if (NowNs() >= deadline_ns) return false;
     Contention::Add(Tally::kStructuralReruns);
+    // **The re-run starts with no rows** (CE-A1, `[quiet-wrong]`). A walk
+    // refused after it emitted - a join whose inner probe met a stale
+    // descent - left them in a sink that outlives the run (the KWP
+    // portal's), and the re-run would append its own after them.
+    if (sink != nullptr) sink->Rewind();
     return true;
 }
 
@@ -1151,7 +1161,7 @@ DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Sessi
         const RerunScope rerunning(*this);
         outcome = DispatchAndStage(line, session);
         sched::MonoTimeNs deadline_ns = 0;
-        while (StructuralRerunDue(outcome, deadline_ns)) {
+        while (StructuralRerunDue(outcome, session, deadline_ns)) {
             std::this_thread::yield();
             outcome = DispatchAndStage(line, session);
         }
@@ -5088,6 +5098,7 @@ private:
     std::string row_scratch_;
     Status encode_error_ = Status::OK();
     exec::SlicePolicy slice_;
+    std::uint64_t rows_emitted_ = 0;  // counted only for the test seam
 };
 
 void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept {
@@ -5133,9 +5144,21 @@ sched::Coro SelectRun::Execute(DispatchOutcome* out) {
         render(frame, row_scratch_);
         if (!encode_error_.ok()) return encode_error_;
         if (Status s = sink->Emit(row_scratch_); !s.ok()) return s;
+        if (d_.select_row_emitted_for_test_) {
+            if (Status s = d_.select_row_emitted_for_test_(++rows_emitted_); !s.ok()) return s;
+        }
         return verdict == exec::QuotaVerdict::kEmitThenStop ? storage::VisitControl::kStop
                                                             : storage::VisitControl::kContinue;
     };
+    // **An unsorted walk streams** (CE-R1, CE-R2): its rows reach the sink
+    // inside the walk, so whatever the sink has sealed can leave at each
+    // slice boundary. A sorted one emits only in `Finish`'s drain, after the
+    // walk, and keeps the buffered reply. A sink with nowhere to send -
+    // the newline protocol's, a capped portal's - leaves the boundary bare.
+    if (!scratch.sorter.active() && sink->ResumeWhen() != nullptr) {
+        slice_.at_boundary = [this] { sink->AtSliceBoundary(); };
+        slice_.resume_when = sink->ResumeWhen();
+    }
     const Status ran = co_await exec::ExecuteAsync(
         d_.catalog_, d_.page_store_, *chain, visit, &scratch.stats, d_.budget_, trail, replay,
         d_.cabins_, &snapshot->snap, d_.indexes_enabled_, &*borrow, slice_);

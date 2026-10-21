@@ -363,6 +363,14 @@ private:
         // finishes in `OnStatementComplete`, which has to append to the
         // same buffer the frame handler started.
         std::vector<std::byte> frames_out;
+
+        // **The running statement's way out before it ends** (CE): what a
+        // plain `SELECT`'s portal sink calls at each slice boundary. Here,
+        // not in the session, because it names this server and this fd, and
+        // armed afresh by `SubmitStatement` for every statement - a
+        // connection moved between cores (BL-S2) is submitted by its new
+        // core, which re-arms it with its own (CE-A3).
+        WireResultSink::Stream stream;
     };
 
     using Clients = std::unordered_map<int, Connection>;
@@ -452,6 +460,9 @@ private:
     // Starts the statement `conn` holds (`current_line`, the sink) on this
     // core.
     void SubmitStatement(int client_fd, Connection& conn);
+    // A streaming statement's slice boundary (CE): the running portal's
+    // sealed batches, and anything queued ahead of them, written now.
+    void ShipRunning(int client_fd);
     // Moves this core's `CoreLoad::sessions` by `delta` (core_load.hpp).
     void CountSession(int delta) noexcept;
 

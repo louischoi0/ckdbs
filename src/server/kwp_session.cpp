@@ -303,6 +303,30 @@ void WireResultSink::Reset() {
     open_rows_ = 0;
     rows_ = 0;
     batch_row_cap_ = 0;
+    stream_ = nullptr;
+    streamed_ = false;
+}
+
+std::vector<WireResultSink::Batch> WireResultSink::TakeSealed() {
+    if (!batches_.empty()) streamed_ = true;
+    return std::exchange(batches_, {});
+}
+
+void WireResultSink::Rewind() {
+    // The shape and the quota stay: the re-run describes the same result
+    // and was asked for under the same `C_EXECUTE`. Only the rows go.
+    batches_.clear();
+    open_.clear();
+    open_rows_ = 0;
+    rows_ = 0;
+}
+
+void WireResultSink::AtSliceBoundary() {
+    if (Streams() && !batches_.empty()) stream_->ship();
+}
+
+const std::function<bool()>* WireResultSink::ResumeWhen() const noexcept {
+    return Streams() ? &stream_->resume_when : nullptr;
 }
 
 // ---- KwpSession ----------------------------------------------------------
@@ -705,6 +729,7 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
         running_portal_.clear();
         return;
     }
+    portal->sink.set_stream(nullptr);
     portal->sink.Finish();
 
     // **The status the dispatcher carried**, falling back to recovering one
@@ -742,9 +767,7 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
     }
 
     if (portal->sink.described()) {
-        std::vector<std::byte> desc;
-        wire::EncodeRowDescription(portal->sink.fields(), desc);
-        Send(out, ServerFrameType::kRowDesc, 0, desc);
+        SendRowDescOnce(*portal, out);
         // A write's RETURNING rows complete under the write's own tag
         // (BU-Q17).
         portal->complete_tag = outcome.returning ? outcome.response : "SELECT";
@@ -763,6 +786,35 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
     }
     Deliver(running_portal_, *portal, out);
     running_portal_.clear();
+}
+
+void KwpSession::ArmStream(WireResultSink::Stream* stream) {
+    if (running_txn_) return;
+    if (Portal* portal = FindPortal(running_portal_); portal != nullptr) {
+        portal->sink.set_stream(stream);
+    }
+}
+
+void KwpSession::SendRowDescOnce(Portal& portal, std::vector<std::byte>& out) {
+    if (portal.desc_sent) return;
+    std::vector<std::byte> desc;
+    wire::EncodeRowDescription(portal.sink.fields(), desc);
+    Send(out, ServerFrameType::kRowDesc, 0, desc);
+    portal.desc_sent = true;
+}
+
+void KwpSession::StreamRunning(std::vector<std::byte>& out) {
+    Portal* portal = FindPortal(running_portal_);
+    if (portal == nullptr || !portal->sink.described()) return;
+    // **`S_ROW_DESC` ahead of the first batch**, as at completion: the
+    // head described the result before the walk began, so the shape is
+    // final by the first slice boundary. `AtSliceBoundary` ships only a
+    // sink holding a sealed batch.
+    SendRowDescOnce(*portal, out);
+    for (const WireResultSink::Batch& batch : portal->sink.TakeSealed()) {
+        Send(out, ServerFrameType::kRowBatch, 0, batch.payload);
+    }
+    portal->idle_since = Now();
 }
 
 FrameAction KwpSession::OnContinue(std::span<const std::byte> payload,

@@ -1,5 +1,7 @@
 # Work order AU — Ring retirement: the wake first, the transport last
 
+**CLOSED 2026-10-20 on paper, on the operator's word** (`instructions/v3.2.0/raft-marks-2026-10-20.md` §7).
+
 Written 2026-09-05 by CLA against `4bd73d7`, under AR0-6. Every `path:line`
 is source-read at that commit unless tagged `[design]`. Nothing is
 `[measured]`, and nothing in this order runs a benchmark.
