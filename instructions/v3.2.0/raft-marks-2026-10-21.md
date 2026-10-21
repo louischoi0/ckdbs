@@ -83,3 +83,12 @@ what the word settles and what it does not.
 | **Mark** | **CF closed** (`workorder-cf-waystone-premise.md`): Branch O built - S1b `4b46acd5`, S1c `b0e6db12`, the fold `46c632aa`, S1d `46ca0729`, S2 `8eb4a898` (`bench/v3.4.0/results-cf-s2-close-v3.4.0-9-g46c632aa.md`); CF-O-Q15 settled by `catalog.md` CT6's threshold. The full Debug suite ran 4263/4263 at `27f80aa6`, the last commit that changed a build input; the commits after it are documents only. **Pushed to `main` with `--no-verify`** on this word |
 | **Does not settle** | CF-Q6 (CLAUDE.md's "What This Project Is" item 2), which stays the operator's; the refill and mount-cost measurements the close cut; a tag, a version |
 | **Recorded at** | this file; the order's header and §7; the order's row in `instructions/v3.2.0/index.md` |
+
+## 10. CF-Q6 settled (b): the project's stated purpose; pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W7 (CF's session): *"$!b push no verify"* - after CLA laid out CF-Q6. The options were (a) correct the two mechanisms in place, (b) restate the purpose as declared, engine-enforced correctness with advisory acceleration second, and (c) drop the two-mechanism paragraph. CLA proposed (b) |
+| **Mark** | **CF-Q6 (b).** CLAUDE.md's "What This Project Is" now reads: fast and correct OLTP, where correctness is declared and the engine enforces it - (1) declared invariants enforced on every write (assertions, transitions, foreign keys, unique indexes, Keystone identity); (2) acceleration that can be dropped without changing a result (Cabin value sets, authoritative for the values they observed; Waystone trails for opted shapes, advisory). The wording of (2) was corrected at landing from "advisory acceleration": `cabin.md` C1 makes a Cabin authoritative for its observed values. It replaces engine-driven physical page optimization (no tuple mover since BZ) and Waystone as a default (opt-in since CF). `README.md` and `overview.md` are brought to it and to the built engine. **Pushed to `main` with `--no-verify`**, documents only |
+| **Does not settle** | `physical-optimizer.md`'s title and scope; a tag, a version |
+| **Recorded at** | this file; CLAUDE.md; the CF order's header and §7; `instructions/v3.2.0/index.md` |

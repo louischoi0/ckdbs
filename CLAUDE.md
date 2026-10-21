@@ -18,13 +18,22 @@ last commit holding the uncompacted docs is `7f0193b`.
 ## What This Project Is
 
 KDS is a **userspace OLTP-specialized database storage engine written in
-C++**, targeting financial systems. Its purpose is fast and *correct* OLTP
-through two engine-native mechanisms:
+C++**, targeting financial systems. Its purpose is fast and *correct* OLTP,
+where correctness is declared and the engine enforces it:
 
-1. **Engine-driven physical page optimization** — runtime statistics
-   reorganize where tuples physically live, not just how queries plan.
-2. **Waystone** — a record of where a previous execution of a query pattern
-   found its rows, so a repeated pattern can look instead of searching.
+1. **Declared invariants, enforced on every write** — assertions,
+   transitions, foreign keys (D9(a)), unique indexes, and a tuple identity
+   that is never rebound (Keystone).
+2. **Acceleration that can be dropped without changing a result** — Cabin
+   value sets, authoritative for the values they observed and droppable
+   per value or wholesale (`cabin.md` C1); and Waystone trails for the
+   shapes an operator opts in, which are advisory (invariants 8 and 9).
+
+Settled by the operator on 2026-10-21 (CF-Q6 (b),
+`instructions/v3.2.0/raft-marks-2026-10-21.md` §10). It replaced the two
+mechanisms this paragraph named before: engine-driven physical page
+optimization, whose tuple mover was deleted in BZ, and Waystone as a default,
+which CF made opt-in.
 
 Feature scope is deliberately narrow; do not add general-purpose DBMS
 features unasked. **KDS is userspace software** — no kernel-module code,

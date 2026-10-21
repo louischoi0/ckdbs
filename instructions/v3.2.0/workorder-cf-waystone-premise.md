@@ -24,7 +24,10 @@ Written 2026-10-21 on `cf-waystone-premise` from `23ea3e61`
 
 **CLOSED 2026-10-21 on the operator's word** (W6, `raft-marks-2026-10-21.md`
 §9): Branch O built and measured (§7), pushed with the hook skipped after
-the full suite ran 4263/4263 at `27f80aa6`. CF-Q6 stays open.
+the full suite ran 4263/4263 at `27f80aa6`. **CF-Q6 settled (b) after the
+close** (W7, `raft-marks-2026-10-21.md` §10): CLAUDE.md's stated purpose is
+declared, engine-enforced correctness first and droppable acceleration
+second.
 
 **Written 2026-10-21; opened 2026-10-21 on W2.** CF-Q0..Q5 are the
 operator's marks, each (a) - CF-Q1 (a) against CLA's proposal (b) - and

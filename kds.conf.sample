@@ -415,9 +415,8 @@ decay_half_life = 600
 # Cabins under a cost-benefit rule. **Off by default, experimental**. `SET CABIN_OPTIMIZER ON|OFF` flips it at
 # runtime, non-destructively in both directions.
 #
-# The decision task that consumes these does not exist yet (workplan
-# PHY04, gated on the eviction track's scan ring); until it does the keys
-# parse, validate, and steer nothing - stated plainly.
+# The controller is built (experimental): while it is on, these keys steer
+# its decisions; while it is off they parse, validate and steer nothing.
 cabin_optimizer = off
 
 # The controller's tuning, every number `[PROPOSED]` (spec section II.6).
@@ -518,8 +517,9 @@ scan_kernel = on
 # ---- The join order (instructions/v3.2.0/workorder-cb-join-planner.md) -------
 #
 # `planned` lets the engine choose the order a SELECT's inner joins run in,
-# from the statement's shape and the catalog alone - no statistic - so one
-# statement over one catalog runs one plan. `written` runs them in the order
+# from the statement's shape, the catalog and the join planner's statistics
+# (docs/spec/plan-stats.md), so one statement over one catalog and one
+# statistics generation runs one plan. `written` runs them in the order
 # the statement wrote them. Without ORDER BY the order rows arrive in is not
 # a contract either way. The relation a walked join builds its map over is
 # the one the order puts on the inner side.

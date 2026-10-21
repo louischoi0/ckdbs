@@ -271,16 +271,18 @@ CREATE TABLE [<namespace>.]<name>
 
 ```sql
 sym varchar CABIN          -- a Cabin is created now (n=1)
-sym varchar CABIN AUTO     -- the engine may decide later (named and stored; nothing consumes it yet)
+sym varchar CABIN AUTO     -- the engine may decide: the Cabin controller, when cabin_optimizer is on
 sym varchar NO CABIN       -- never, by any route
 sym varchar                -- unset, which reads as auto
 ```
 
 Unset and `AUTO` are stored as different values so the catalog keeps the
 difference between "nothing was said" and "the engine may decide".
-A column declared `AUTO` currently behaves exactly as an undeclared one — the
-promotion pipeline that would consume the policy is specified
-(`physical-optimizer.md` Part II) but not wired to DDL.
+A column declared `AUTO` behaves exactly as an undeclared one: both are
+eligible for the Cabin controller (`physical-optimizer.md` Part II), which
+creates Cabins from runtime access statistics and drops the ones it created
+while `cabin_optimizer` is on (off by default, experimental). `NO CABIN` keeps
+a column out of every route, the controller's included.
 
 **Foreign keys** (built and enforced, FK-M1..FK-M5):
 

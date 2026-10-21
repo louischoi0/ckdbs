@@ -26,7 +26,7 @@
 
 ---
 
-**KDBS** is a userspace database engine written in C++20 for online transaction processing: keyed reads and writes, short transactions, joins along key chains, and durability the caller chooses. It keeps its feature surface narrow and spends what that saves on two things most engines leave to the application — **the rules the data must obey** and **the physical shape the data should have**.
+**KDBS** is a userspace database engine written in C++20 for online transaction processing: keyed reads and writes, short transactions, joins along key chains, and durability the caller chooses. It keeps its feature surface narrow and spends what that saves on two things: **the rules the data must obey**, declared in the schema and enforced by the engine on every write, and **acceleration that can never change a result** — structures the engine consults for speed, any of which can be deleted without a query returning a different row.
 
 ## Why KDBS
 
@@ -56,23 +56,22 @@ UPDATE orders SET status = 'FINALIZED' WHERE status = 'NEW';
 | **Issue-once identity** — a row's tuple key is never reused for another committed row, unless an explicit `PURGE` frees it | guard against a stale id pointing at the wrong row |
 | **Referential integrity and unique indexes** | confirm a parent exists, or that a value is not taken |
 | **Chosen durability** — `strict`, `group` or `relaxed` per transaction, with the loss window stated | guess what an acknowledgment meant |
-| **A predictable plan** — a statement runs in the order it was written, with no cost-based reordering | tune around a planner that changes its mind |
 
-Errors are built to be acted on: every refusal names the byte position of the offending token and says whether the statement was simply wrong (`InvalidArgument`), understood but not built (`NotImplemented`), or outside what the architecture admits (`Unsupported`).
+Errors are built to be acted on: a refusal caused by a token names that token's byte position, and every refusal says whether the statement was simply wrong (`InvalidArgument`), understood but not built (`NotImplemented`), or outside what the architecture admits (`Unsupported`).
 
 ## Key ideas
 
 | | |
 |---|---|
-| **The query is the plan** | Each statement compiles at parse time into a *step chain* executed in written order — no plan search, no plan flips with cardinality. |
+| **Step chains and a join planner** | A statement the native grammar reads compiles at parse time into a *step chain* — lookups, probes, ranges, scans, sub-chains — with no general plan search; the rest of the supported SQL is answered by a query layer over native single-relation walks. The one choice the engine makes is the order of an inner-join block's relations, priced from the catalog and from row counts it learns as statements run; `ANALYZE` shows when it moved, and `join_order = written` keeps the written order. Without `ORDER BY`, the order rows arrive in is not a contract. |
 | **Keystone** | Every row carries a 48-bit tuple key — its identity for the life of the relation, never updated — so any structure can name a row by value instead of by address. Relations are clustered B+ trees on that key. |
 | **Waystone** | For a query shape an operator opts in (`WAYSTONE ON <select>`), the engine records where the last execution found its rows and looks there first. A wrong or missing trail costs time, never a result; a shape nobody opted never records or writes, and pays one memory load per `SELECT` while nothing is opted. |
-| **Cabin** | A per-column lookup structure covering only the values queries actually asked for — exact for those values, with no index-style write cost for the rest. A secondary index is a Cabin that has observed everything. |
-| **Physical optimizer** | Runtime access statistics decide which Cabins exist: when switched on, the engine creates and drops them itself on columns declared `CABIN AUTO`. |
+| **Cabin** | A lookup structure on a column or an expression such as `DATE(ts)`, covering only the values queries actually asked for — complete for each value it observed (a superset the reader filters), with no index-style write cost for the rest. Dropping a value's set returns its queries to the tree walk, so no result changes. A secondary index is a Cabin that has observed everything. |
+| **Cabin controller** | On columns declared `CABIN AUTO` or left undeclared (an undeclared column reads as `AUTO`), an opt-in controller (`cabin_optimizer`, off by default, experimental) can create Cabins from access statistics and drop the ones it created. It never moves a row. |
 | **Fixed-length tuples** | An `UPDATE` rewrites a row in place; long values spill to an immutable side store. |
-| **Thread-per-core** | One cooperative reactor per core over a shared buffer pool and one write-ahead log. Recovery runs at mount, and the whole engine runs under deterministic crash simulation in tests. |
+| **Thread-per-core** | One cooperative reactor per core over a shared buffer pool and one write-ahead log. Recovery runs at mount. The storage, WAL, recovery and statement paths run under a deterministic crash-simulation harness: one instance on in-memory devices, driven through the command dispatcher. |
 
-Everything the engine learns is advisory by construction: delete all of it and every query returns the same rows, only slower.
+Everything the engine learns — Waystone trails, Cabin entries, plan statistics — can be deleted without changing a result: delete any of it and every query returns the same rows. Waystone trails only choose where to look; a Cabin is authoritative for the values it observed, and dropping a set returns those queries to the tree; plan statistics steer the join order alone.
 
 ## Quick start
 
@@ -113,7 +112,7 @@ Configuration, operation and backup are in the [server manual](manual/server/ser
 | Writing SQL | [SQL reference](manual/sql/sql.md) |
 | Running and configuring the server | [Server manual](manual/server/server.md), [Backup and restore](manual/server/backup-restore.md) |
 | Writing a client (KWP/1 wire protocol) | [Client manual](manual/client/client.md) |
-| The self-managing optimizer | [Physical optimizer manual](manual/physical-optimizer/physical-optimizer.md) |
+| The Cabin controller | [Physical optimizer manual](manual/physical-optimizer/physical-optimizer.md) |
 | How the engine works inside | [Design specifications](docs/spec/), starting with [`heap-and-tuple.md`](docs/spec/heap-and-tuple.md) |
 | What is missing, and what a restart loses | [Known gaps](docs/inflight/known-gaps.md) |
 | Ideas not yet built | [Concept notes](docs/conceptnotes/) |
@@ -124,7 +123,7 @@ Not a data warehouse, not a general-purpose SQL database and not a dialect-compa
 
 ## Status
 
-Under active development. Read the [known gaps](docs/inflight/known-gaps.md) before relying on any behaviour; the [manual](manual/README.md) is verified against the code. The engine's binaries, settings and source still carry the `kds` prefix (`kds_server`, `kds.conf`).
+Under active development. Read the [known gaps](docs/inflight/known-gaps.md) before relying on any behaviour; the [manual](manual/README.md) is maintained against the code, and the known gaps list what it does not yet cover. The engine's binaries, settings and source still carry the `kds` prefix (`kds_server`, `kds.conf`).
 
 **Terminology.** The 48-bit row identity is called the **tuple key**, never the *primary key*: it is a row's identity, not a business key.
 
