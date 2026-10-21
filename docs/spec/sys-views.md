@@ -98,7 +98,7 @@ returns only what it names, so that conjunct is not compared again.
 | `columns` | schema | `rel_name`, checked | a live, visible column of a relation (no dropped column, no heap's hidden key) |
 | `objects` | schema | - | a table object of `sys.objects` |
 | `types` | engine | - | a registered type |
-| `patterns` | engine | - | a `sys.patterns` row; `use_count`/`last_seen` frozen at 0 since BL-S4 |
+| `patterns` | engine | - | a `sys.patterns` row - a shape ever opted in to Waystone (`waystone-concpets.md` §4): `oid`, `fetch_id` (decimal), `fingerprint_version`, `stmt_class`, `waystone`, `use_count`, `last_seen`, `waystone_root`, `dir_depth`. `waystone` (1 or 0) replaced `origin` and `pinned` at CF-S1b, and is 1 only for a current-version row with the opt-in bit set, so a lapsed row reads 0 and its `fingerprint_version` says why; `use_count`/`last_seen` frozen at 0 since BL-S4; root and depth NULL where the row has no directory |
 | `namespaces` | schema | - | a namespace, `sys` and `public` first |
 | `indexes` | schema | - | a secondary index, its keys, covered columns, height and entries |
 | `fkeys` | schema | - | a declared foreign key, listed where its child is visible |
@@ -216,6 +216,13 @@ positions and roll totals, and the `load` block, which carries every
 core's load. A field whose writer emits no
 `=` is refused `Corruption`, never shown without a value. The field list
 lives with the code that writes each section (`CommandDispatcher::MetaSections`).
+
+**The `waystone` section** (CF-S1b, CF-S1c) carries `waystone_recording`
+and `waystone_replay`, the instance's boot ceilings under their keys' own
+names (`on`/`off`), and `waystone_opted`, the instance's opted count (one
+load, `waystone-concpets.md` §4b). Nothing records until an operator opts
+a shape in, so a config reading `waystone_recording = on` means less than it
+did, and this section, the boot log line and `WAYSTONE ON`'s reply say so.
 
 ## 8. What is not here
 

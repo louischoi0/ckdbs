@@ -104,7 +104,7 @@ before it is archived.** `SHOW META`: `wal_archive_next_segment`,
 A failure is retried with backoff (1 s doubling to 30 s). If the archive
 keeps failing **and** the WAL filesystem has less than 4 segments (256 MiB)
 free, every statement that writes the log - `INSERT`, `UPDATE`, `DELETE`,
-`CREATE`, `DROP`, `ALTER`, `PURGE` - is refused with `ERR` naming the
+`CREATE`, `DROP`, `ALTER`, `PURGE`, `REINDEX`, `WAYSTONE` - is refused with `ERR` naming the
 archive's failure, until archiving recovers. Reads go on. Fix the archive
 destination; nothing else is needed.
 
@@ -196,6 +196,7 @@ note it before an operation you may want to undo, and restore to it.
 | `BACKUP STOP: <dir> holds <name>` | the directory is not new | a new directory |
 | `backup: <dir> has no backup_manifest` | not a backup, or STOP never finished | take a new backup |
 | `backup: manifest format N is not this build's` | another build's backup | restore with the build that wrote it |
+| `restore: backup N was written by ... (superblock S, ...); this build reads superblock T only` | a backup of an older volume format - every backup taken before superblock 33 (the Waystone opt-in) included | restore with the build that wrote it; there is no migration |
 | `backup N: wal/wal-0-K.log is ... the manifest says ...` | a file was changed or damaged | use another backup; the restore wrote nothing |
 | `backup N: segment K (lsn ...) is not in the backup` | a segment is missing | use another backup |
 | `data file: N of M written page(s) fail their checksum (page ...)` | a torn page (a snapshot that did not freeze the filesystem) or damage | take the backup again; for path D use a freezing snapshot |

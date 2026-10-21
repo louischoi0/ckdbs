@@ -991,6 +991,21 @@ bool ForEachStep(const Step& step, Fn fn) {
 // fingerprint, the most expensive thing on that path.
 bool HasReplayableStep(const StepChain& chain) noexcept;
 
+// Whether `chain`'s **shape** admits a `kLookup` or `kProbe` step under some
+// plan, whatever this compile chose: some equality conjunct, in any step or
+// sub-chain, binds a relation's tuple key to a literal, to another
+// relation's column or to an enclosing row's column - the only facts the
+// compiler assigns either kind from (`step_compiler.cpp`'s access-kind
+// pass). A literal counts whatever its value: a negative one leaves the
+// equality a scan in this plan, but its `fetch_id` is the one a positive
+// literal shares. Join order is chosen per plan, so which side of a join
+// equality probes is not a fact of the shape; that one side can is.
+//
+// False is a fact no index, Cabin or statistics change can move, which is
+// what lets `WAYSTONE ON` refuse such a shape `Unsupported` (invariant 9;
+// `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3).
+bool ShapeAdmitsDescent(const StepChain& chain) noexcept;
+
 // The value `SysAccessStatRow::kind` stores for an access kind.
 //
 // **Not a cast**, for `StoredStatementClass`'s reason: `kLookup` is 0 and so is a zeroed catalog row, so a straight cast

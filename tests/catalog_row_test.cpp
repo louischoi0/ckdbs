@@ -120,15 +120,15 @@ TEST(SysPatternRowTest, OnDiskLayoutIsPinned) {
     // lose. Little-endian, packed, 41 bytes since CREATE PATTERN appended
     // `flags` and `origin` (the superblock version moved with it, which is
     // what stops an older file from mounting and then misreading this row).
-    // **Still 41 after that feature was withdrawn on 2026-08-31**: the two
-    // fields stay because `origin` sits at offset 37 where `dir_depth` ends
-    // it, so removing it would move the layout this test exists to hold
-    // still. Only kOriginAuto is written now; the codec round-trips both.
+    // **Still 41 after that feature was withdrawn on 2026-08-31**, and after
+    // CF-S1b re-scoped bit 0 of `flags` as the Waystone opt-in and `origin`
+    // as a reserved byte, written 0: the codec still round-trips whatever
+    // the byte holds, so a layout change is caught here.
     SysPatternRow row{};
     row.fetch_id = 0x1122334455667788ull;
     row.dir_depth = 0x2A;
     row.flags = 0xBEEF;
-    row.origin = kOriginUser;
+    row.origin = 0x5A;
     const auto bytes = row.Encode();
 
     ASSERT_EQ(bytes.size(), 41u);
@@ -141,28 +141,25 @@ TEST(SysPatternRowTest, OnDiskLayoutIsPinned) {
     // every offsetof assert in rows.hpp holding.
     EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kFlagsOffset]), 0xEF);
     EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kFlagsOffset + 1]), 0xBE);
-    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kOriginOffset]), kOriginUser);
+    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kOriginOffset]), 0x5A);
 }
 
-TEST(SysPatternRowTest, OriginAndPinningRoundTripIndependently) {
-    // They are separate fields on purpose: an operator may pin an
-    // auto-registered pattern without re-declaring it, and a declared
-    // pattern may be created unpinned. Both of those are unspellable if
-    // pinning is folded into origin, so both are pinned here.
+// CF-S1b: bit 0 of `flags` is the opt-in, and the reserved `origin` byte
+// beside it does not move with it.
+TEST(SysPatternRowTest, TheWaystoneBitRoundTripsBesideTheReservedByte) {
     SysPatternRow row = SampleRow();
-    row.origin = kOriginAuto;
-    row.flags = kPatternPinned;
-    auto pinned_auto = SysPatternRow::Decode(row.Encode());
-    ASSERT_TRUE(pinned_auto.ok());
-    EXPECT_EQ(pinned_auto.value().origin, kOriginAuto);
-    EXPECT_EQ(pinned_auto.value().flags & kPatternPinned, kPatternPinned);
+    row.origin = 0;
+    row.flags = kPatternWaystone;
+    auto opted = SysPatternRow::Decode(row.Encode());
+    ASSERT_TRUE(opted.ok());
+    EXPECT_EQ(opted.value().origin, 0);
+    EXPECT_EQ(opted.value().flags & kPatternWaystone, kPatternWaystone);
 
-    row.origin = kOriginUser;
     row.flags = 0;
-    auto unpinned_user = SysPatternRow::Decode(row.Encode());
-    ASSERT_TRUE(unpinned_user.ok());
-    EXPECT_EQ(unpinned_user.value().origin, kOriginUser);
-    EXPECT_EQ(unpinned_user.value().flags & kPatternPinned, 0);
+    auto cleared = SysPatternRow::Decode(row.Encode());
+    ASSERT_TRUE(cleared.ok());
+    EXPECT_EQ(cleared.value().origin, 0);
+    EXPECT_EQ(cleared.value().flags & kPatternWaystone, 0);
 }
 
 TEST(SysPatternRowTest, DecodeRefusesAnythingButTheExactSize) {

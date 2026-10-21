@@ -63,7 +63,7 @@ def sched_ns(pid):
 def host_state():
     with open("/proc/loadavg") as f:
         load = f.read().strip()
-    busy = subprocess.run(["pgrep", "-a", "-f", "cc1plus|cmake --build|ctest "],
+    busy = subprocess.run(["pgrep", "-a", "-f", "cc1plus|cmake --build|ctest |kds_tests"],
                           capture_output=True, text=True).stdout.strip()
     return {"loadavg": load, "competing": busy.splitlines() if busy else []}
 
@@ -83,7 +83,7 @@ class Server:
         shutil.rmtree(self.data + ".wal", ignore_errors=True)
         conf = os.path.join(a.out, f"{tag}.conf")
         with open(conf, "w") as f:
-            f.write(f"data_file = {self.data}\nport = {a.port}\ncores = 1\n"
+            f.write(f"data_file = {self.data}\nport = {a.port}\ncores = {getattr(a, 'cores', 1)}\n"
                     f"durability = relaxed\nbuffer_pool_frames = 65536\n"
                     f"log_file = {tag}.log\nlog_dir = {a.out}\nlog_level = warn\n"
                     f"waystone_recording = {rec}\nwaystone_replay = {rep_on}\n")

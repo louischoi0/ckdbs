@@ -840,9 +840,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // along, but re-setting it keeps that fact local instead of depending
     // on a copy elsewhere staying a copy.
     expeditor->database_->catalog.SetLogger(&*expeditor->logger_);
-    expeditor->database_->catalog.SetSchemaWord(&expeditor->schema_version_);  // AT-S2
-    expeditor->database_->catalog.SetOidSequence(&expeditor->oid_sequence_);  // AT-S5b
-    expeditor->database_->catalog.SetMarkCounter(&expeditor->delete_mark_count_);  // AT-S5b
+    // The instance's four words (CT6; AT-S2, AT-S5b, CF-S1c).
+    expeditor->database_->catalog.SetInstanceWords(&expeditor->instance_words_);
 
     // The WAL stack, before the dispatcher: INSERT logs through it, so the
     // dispatcher cannot be built until it exists.
@@ -1060,7 +1059,28 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // after recovery, so this mount's own log has had its say, and before
     // the listener binds, so nothing is reading the relation while it is
     // emptied. Core 0's, at mount, like the step above.
-    if (Status s = DiscardAdvisoryState(expeditor->database_->catalog); !s.ok()) return s;
+    //
+    // **An opted pattern's directory is renewed here** (CF-S1b): a fresh,
+    // empty root for each row `WAYSTONE ON` set, under the
+    // `waystone_recording` ceiling, before the listener binds.
+    if (Status s = DiscardAdvisoryState(expeditor->database_->catalog,
+                                        expeditor->config_.waystone_recording);
+        !s.ok()) {
+        return s;
+    }
+    // **Nothing records until an operator opts a pattern in** (CF-S1b), so
+    // a config reading `waystone_recording = on` means less than it used to;
+    // the mount says what the ceilings are and how many patterns sit under
+    // them, under the keys' own names.
+    if (expeditor->logger_->enabled(LogLevel::kInfo)) {
+        expeditor->logger_->Info(
+            "waystone", std::string("waystone_recording=") +
+                            (expeditor->config_.waystone_recording ? "on" : "off") +
+                            " waystone_replay=" +
+                            (expeditor->config_.waystone_replay ? "on" : "off") +
+                            " waystone_opted=" +
+                            std::to_string(expeditor->database_->catalog.opted_patterns()));
+    }
 
     // H7: collect the spills nothing points at. The assertion catalog -
     // `exec::LogChainInsert`'s one remaining caller - logs its spills under
@@ -1135,7 +1155,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                     /*core=*/0, expeditor->locks_.get());
     // The schema word a catalog-writing decide moves before its borrows go
     // (AT-S5e) - the instance's, every core's catalog asks it.
-    expeditor->txn_manager_->SetSchemaWord(&expeditor->schema_version_);
+    expeditor->txn_manager_->SetSchemaWord(&expeditor->instance_words_.schema_word);
 
     expeditor->dispatcher_.emplace(
         expeditor->database_->superblock, expeditor->database_->catalog, *expeditor->store_,
@@ -1878,14 +1898,13 @@ Status Expeditor::Start() {
             // table is what lets this peer's decide wake a waiter on core 0
             // and core 0's wake one here.
             core_config.locks = locks_.get();
-            core_config.schema_word = &schema_version_;
+            // The instance's four words (CT6), on the same terms.
+            core_config.instance_words = &instance_words_;
             // **The instance's Cabin store** (AT-S7): every peer observes
             // into core 0's and serves from it, which is what makes a set
             // a superset of every tuple key carrying its value when every core
             // writes and reads one relation.
             core_config.cabins_store = cabin_store_ ? &*cabin_store_ : nullptr;
-            core_config.oid_sequence = &oid_sequence_;
-            core_config.mark_counter = &delete_mark_count_;
             core_config.assertions = &*assertions_;
             // The instance's anchor and its run (AT-S8): this peer's
             // checkpointer publishes into core 0's `SuperBlockCheckpointAnchor`

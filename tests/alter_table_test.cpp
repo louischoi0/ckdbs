@@ -203,11 +203,11 @@ TEST_F(AlterTableTest, CollisionsAndAbsencesRefuse) {
 // everything pattern-shaped is advisory, so a rename may orphan it freely
 // where an assertion (AL4) may not be.
 //
-// The pattern is registered the only way one can be since declared patterns
-// were withdrawn (2026-08-31): by traffic, on the second sighting. That
-// needs a recorder, so this test builds a second dispatcher over the same
-// store rather than giving the whole fixture one - recording on every test
-// in this file would be a change to what they measure.
+// The pattern is opted in by `WAYSTONE ON` (CF-S1b) and recorded by
+// traffic, on the second sighting. That needs a recorder, so this test
+// builds a second dispatcher over the same store rather than giving the
+// whole fixture one - recording on every test in this file would be a
+// change to what they measure.
 TEST_F(AlterTableTest, AnOrphanedPatternDiesQuietlyWithTheOldName) {
     Ok("CREATE TABLE t (id int64, v varchar)");
     Ok("INSERT INTO t VALUES ('one')");
@@ -216,10 +216,14 @@ TEST_F(AlterTableTest, AnOrphanedPatternDiesQuietlyWithTheOldName) {
     CommandDispatcher recording(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
                                 /*clock=*/nullptr, /*wal=*/nullptr,
                                 wal::DurabilityClass::kGroup, exec::Budget(), &recorder);
+    ASSERT_EQ(recording.Dispatch("WAYSTONE ON SELECT v FROM t WHERE id = 1")
+                  .response.rfind("OK WAYSTONE ON", 0),
+              0u);
     recording.Dispatch("SELECT v FROM t WHERE id = 1");
     recording.Dispatch("SELECT v FROM t WHERE id = 1");
     ASSERT_EQ(testing_view::ReadViewText(Run("SHOW PATTERNS")).rows.size(), 1u)
-        << "the shape has to be registered before the rename can orphan it";
+        << "the shape has to be opted in before the rename can orphan it";
+    ASSERT_EQ(recorder.stats().trails_written, 1u) << "no trail for the rename to orphan";
 
     EXPECT_EQ(Run("ALTER TABLE t RENAME TO u"), "RENAMED TABLE t TO u");
 

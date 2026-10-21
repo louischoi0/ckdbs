@@ -7,10 +7,13 @@
 #include <array>
 #include <cctype>
 #include <limits>
+#include <map>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "kds/server/superblock.hpp"
+#include "kds/stats/waystone_dir.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -993,7 +996,7 @@ Status Catalog::ClearPendingRoots(Oid oid) {
 }
 
 StatusOr<Oid> Catalog::GenerateUserOid() {
-    if (oid_sequence_ != nullptr) {
+    if (words_ != nullptr) {
         // **The instance's sequence** (AT-S5b), seeded by whichever catalog
         // asks first. Zero is the unseeded value and no oid can be zero
         // (`kUserOidStart`), so the CAS below distinguishes the two without
@@ -1001,18 +1004,18 @@ StatusOr<Oid> Catalog::GenerateUserOid() {
         // loser's fails and falls through to the `fetch_add`, which reads
         // the winner's value - the scan it did on the way is wasted and
         // nothing else.
-        if (oid_sequence_->load(std::memory_order_acquire) == 0) {
+        if (words_->oid_sequence.load(std::memory_order_acquire) == 0) {
             auto highest = HighestIssuedUserOid();
             if (!highest.ok()) {
                 return highest.status().WithContext(
                     "cannot issue an object oid without reading back the ones already issued");
             }
             Oid expected = 0;
-            oid_sequence_->compare_exchange_strong(expected, highest.value() + 1,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire);
+            words_->oid_sequence.compare_exchange_strong(expected, highest.value() + 1,
+                                                         std::memory_order_acq_rel,
+                                                         std::memory_order_acquire);
         }
-        return oid_sequence_->fetch_add(1, std::memory_order_acq_rel);
+        return words_->oid_sequence.fetch_add(1, std::memory_order_acq_rel);
     }
     // Recovered once, on first use, then incremented in memory. Lazy rather
     // than done at construction because a `Catalog` is constructed on two
@@ -1052,9 +1055,9 @@ void Catalog::BumpVersion(std::string_view what, Tally cause) {
 }
 
 void Catalog::BumpWord(Tally cause) {
-    if (schema_word_ == nullptr) return;
+    if (words_ == nullptr) return;
     Contention::Add(cause);
-    const std::uint64_t prev = schema_word_->fetch_add(1, std::memory_order_acq_rel);
+    const std::uint64_t prev = words_->schema_word.fetch_add(1, std::memory_order_acq_rel);
     // Adopt the bump only if this cache was current. A writer whose cache
     // `BumpVersion()` just dropped, or a root move keeping its entry in
     // place (`AdoptRoot`), has
@@ -1068,8 +1071,8 @@ void Catalog::BumpWord(Tally cause) {
 }
 
 void Catalog::Revalidate(const std::function<void()>& after_read) {
-    if (schema_word_ == nullptr) return;
-    const std::uint64_t now = schema_word_->load(std::memory_order_acquire);
+    if (words_ == nullptr) return;
+    const std::uint64_t now = words_->schema_word.load(std::memory_order_acquire);
     if (after_read) after_read();
     if (now == cache_built_at_) return;
     Contention::Add(Tally::kCatalogMemoDrops);
@@ -1717,8 +1720,9 @@ Status Catalog::CheckNamespaceEmpty(Oid namespace_oid, std::uint64_t own_trx_id)
 
 // ALTER TABLE's catalog half (docs/spec/alter.md, workplan ALT02). Both
 // renames are one fixed-width Name rewrite - MutatePatternRow's shape -
-// followed by BumpVersion(): a name is read by resolution itself, so the
-// in-place-cache exception the pattern setters use does not apply.
+// followed by BumpVersion(): a name is read by resolution itself. (The
+// pattern setters once updated the cache in place instead; since CF-S1b
+// `SetPatternWaystone` bumps, and the mount's renewal drops the cache.)
 namespace {
 
 Status CheckRenameName(std::string_view what, std::string_view name) {
@@ -3023,31 +3027,8 @@ PatternAccess AccessOf(const SysPatternRow& row) noexcept {
     access.waystone_root = row.waystone_root;
     access.stmt_class = row.stmt_class;
     access.dir_depth = row.dir_depth;
-    access.origin = row.origin;
     access.flags = row.flags;
     return access;
-}
-
-// Whether a stored root/depth pair may be written. Checked before the page
-// is touched, because a half-written pair is the one outcome that leaves a
-// pattern's waystones unreachable.
-Status CheckWaystonePair(PageId root, std::uint8_t depth) {
-    if (depth == 0) {
-        if (root != kInvalidPageId) {
-            return Status::InvalidArgument(
-                "catalog: a pattern with no waystone directory must carry no root");
-        }
-        return Status::OK();
-    }
-    if (root == kInvalidPageId) {
-        return Status::InvalidArgument("catalog: a waystone directory needs a root page");
-    }
-    if (depth > kMaxPatternDirDepth) {
-        return Status::InvalidArgument("catalog: waystone directory depth " +
-                                       std::to_string(depth) + " exceeds " +
-                                       std::to_string(kMaxPatternDirDepth));
-    }
-    return Status::OK();
 }
 
 }  // namespace
@@ -3076,82 +3057,65 @@ StatusOr<SysPatternRow> Catalog::GetSysPatternRow(std::uint64_t fetch_id) {
     return Status::NotFound("no current sys.patterns row for this fetch_id");
 }
 
-StatusOr<const PatternAccess*> Catalog::FindPattern(std::uint64_t fetch_id) {
+StatusOr<const PatternAccess*> Catalog::FindOptedPattern(std::uint64_t fetch_id) {
+    // Nothing opted on the instance: nothing fills, and the answer costs
+    // the one load (CF-S1c).
+    if (NoOptedPatterns()) return Status::NotFound("no pattern is opted in");
+    if (!cache_.opted_patterns_filled()) {
+        // **The whole opted set, once per generation**: a fill of one entry
+        // would leave the map unable to answer a miss without a scan. The
+        // version filter is applied here, so a row from another revision
+        // never reaches the map - by construction rather than by a check
+        // every reader has to remember.
+        auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
+        if (!rows.ok()) return rows.status();
+        std::vector<PatternAccess> opted;
+        for (const SysPatternRow& row : rows.value()) {
+            if (IsCurrentOptIn(row)) opted.push_back(AccessOf(row));
+        }
+        cache_.FillOptedPatterns(std::move(opted));
+    }
+    // A miss is an answer, not a reason to read the page: the map is
+    // complete for this generation (catalog_cache.hpp's soundness rule).
     if (const PatternAccess* cached = cache_.FindPattern(fetch_id); cached != nullptr) {
         return cached;
     }
-
-    // Version filtering lives in GetSysPatternRow(), so a row from another
-    // revision arrives here as NotFound and never reaches the cache. That
-    // ordering is the point: the cache holds current-version entries only,
-    // by construction rather than by a check every reader has to remember.
-    auto row = GetSysPatternRow(fetch_id);
-    if (!row.ok()) return row.status();
-
-    return cache_.PutPattern(AccessOf(row.value()));
+    return Status::NotFound("the pattern is not opted in");
 }
 
-StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t fetch_id,
-                                                         std::uint8_t stmt_class) {
-    // Read the page, not the cache: absences are never cached, so a cache
-    // miss says nothing about whether the row exists. A row left behind by
-    // an older revision does not count as existing - GetSysPatternRow()
-    // does not return one - so a version bump leaves every shape
-    // re-learnable rather than permanently blocked. The stale row stays
-    // where it is - nothing reclaims it (retention, P15, is unbuilt) - and
-    // rewriting it here would be an overwrite of a live tuple for no gain.
-    // **The relation's root page, held exclusive across the whole call**
-    // (AT-S7), for `RecordAccess`'s reason and against the same hazard:
-    // every core registers patterns now, and the check below and the
-    // insert under it are a read-then-write that two cores would both
-    // pass. The loser's row is a duplicate `GetSysPatternRow` never
-    // returns - it answers at the first match - so one shape would own two
-    // rows, one of which holds a `waystone_root` nothing walks.
-    auto held = store_.Get(kCatalogPagePatterns);
-    if (!held.ok()) return held.status();
-
-    if (GetSysPatternRow(fetch_id).ok()) {
-        return Status::AlreadyExists("catalog: this pattern is already registered");
+void Catalog::MoveOptedCount(bool up) noexcept {
+    if (words_ == nullptr) {
+        if (up) {
+            ++local_opted_;
+        } else if (local_opted_ > 0) {
+            --local_opted_;
+        }
+        return;
     }
-
-    auto oid = AllocateRowId(kSysPatternsTable);
-    if (!oid.ok()) return oid.status();
-
-    SysPatternRow row{};
-    row.oid = oid.value();
-    row.fetch_id = fetch_id;
-    row.last_seen = 0;
-    row.fingerprint_version = parser::kFingerprintVersion;
-    row.waystone_root = kInvalidPageId;
-    row.use_count = 0;
-    row.stmt_class = stmt_class;
-    // No directory until one is built: a pattern waits for its first trail,
-    // so the root/depth pair is only ever set by its one writer,
-    // ClaimPatternWaystoneRoot().
-    row.dir_depth = 0;
-    // Every pattern is observed, and none is pinned. These were arguments
-    // until 2026-08-31, when declared patterns were withdrawn and left
-    // registration with one caller and one value for each; the fields stay
-    // on disk (rows.hpp says why) and are written explicitly rather than
-    // left to a zeroed struct, so the row says what it means.
-    row.origin = kOriginAuto;
-    row.flags = 0;
-
-    if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPagePatterns, row, kBootstrapXid); !s.ok()) {
-        return s;
+    if (up) {
+        words_->opted_count.fetch_add(1, std::memory_order_acq_rel);
+        return;
     }
-    // No BumpVersion(): nothing cached can go stale from a pattern
-    // appearing (catalog.hpp states the argument, and the statement path
-    // depends on it).
-    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("catalog", "registered pattern " + std::to_string(fetch_id) + " as oid " +
-                                   std::to_string(row.oid));
+    // Saturating, so a CAS rather than a `fetch_sub`: every mover writes
+    // under page 9's hold, but the boot's store is not one of them.
+    std::uint64_t now = words_->opted_count.load(std::memory_order_acquire);
+    while (now > 0 &&
+           !words_->opted_count.compare_exchange_weak(now, now - 1, std::memory_order_acq_rel,
+                                                      std::memory_order_acquire)) {
     }
-    return cache_.PutPattern(AccessOf(row));
 }
 
-Status Catalog::MutatePatternRow(std::uint64_t fetch_id,
-                                  const std::function<void(SysPatternRow&)>& mutate) {
+void Catalog::StoreOptedCount(std::uint64_t value) noexcept {
+    if (words_ != nullptr) {
+        words_->opted_count.store(value, std::memory_order_release);
+    } else {
+        local_opted_ = value;
+    }
+}
+
+StatusOr<bool> Catalog::MutatePatternRow(std::uint64_t fetch_id,
+                                         const std::function<bool(SysPatternRow&)>& mutate) {
+    bool wrote = false;
     auto acted = ForFirstRow<SysPatternRow>(
         store_, kCatalogPagePatterns,
         [&](SysPatternRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
@@ -3163,7 +3127,7 @@ Status Catalog::MutatePatternRow(std::uint64_t fetch_id,
         // written through.
         if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) return false;
 
-        mutate(row);
+        if (!mutate(row)) return true;
         auto encoded = row.Encode();
         // In place, never delete+insert: the row size is unchanged, and a
         // pattern that briefly does not exist is a pattern a concurrent
@@ -3171,88 +3135,296 @@ Status Catalog::MutatePatternRow(std::uint64_t fetch_id,
         if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
             return s;
         }
+        wrote = true;
         return true;
     });
     if (!acted.ok()) return acted.status();
     if (!acted.value()) return Status::NotFound("no sys.patterns row for this fetch_id");
-    return Status::OK();
+    return wrote;
 }
 
-StatusOr<std::pair<PageId, std::uint8_t>> Catalog::ClaimPatternWaystoneRoot(
-    std::uint64_t fetch_id, PageId root, std::uint8_t depth) {
-    if (Status s = CheckWaystonePair(root, depth); !s.ok()) return s;
-
-    // **A claim, not a store** (AT-S7). Every core records trails now, so
-    // two of them can find a pattern with no directory and each build one;
-    // the first to reach this row wins and the second adopts its pair
-    // rather than repointing the row at a second directory, which would
-    // strand every trail already written into the first. The write is made
-    // under the row's page hold inside `MutatePatternRow`, so the test and
-    // the store are one act.
-    //
-    // Clearing (`root == kInvalidPageId`) is not a claim and always takes:
-    // it is how a directory is retired.
-    PageId in_force = root;
-    std::uint8_t depth_in_force = depth;
-    Status s = MutatePatternRow(fetch_id, [&](SysPatternRow& row) {
-        const bool clearing = root == kInvalidPageId;
-        if (!clearing && row.waystone_root != kInvalidPageId) {
-            in_force = row.waystone_root;
-            depth_in_force = row.dir_depth;
-            return;
-        }
-        row.waystone_root = root;
-        row.dir_depth = depth;
-    });
-    if (!s.ok()) return s;
-
-    // Updated in place rather than invalidated, and only on success: a
-    // failed overwrite moved nothing, and publishing the new pair into the
-    // cache would make it disagree with the page.
-    cache_.UpdatePatternWaystone(fetch_id, in_force, depth_in_force);
-    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("catalog", "pattern " + std::to_string(fetch_id) +
-                                   " waystone root=" + std::to_string(in_force) +
-                                   " depth=" + std::to_string(depth_in_force));
+StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_t fetch_id,
+                                                                   std::uint8_t stmt_class,
+                                                                   bool on, PageId root) {
+    if (!on && root != kInvalidPageId) {
+        return Status::InvalidArgument("catalog: WAYSTONE OFF takes no directory root");
     }
-    return std::make_pair(in_force, depth_in_force);
+    // The append point less one: everything below the append point has been
+    // appended, and `IsDurable` is strict (`wal/durability.hpp`), so this is
+    // the LSN whose durability covers every record written so far.
+    const auto append_bound = [this]() -> std::uint64_t {
+        return wal_ != nullptr && wal_->appended_lsn() > 0 ? wal_->appended_lsn() - 1 : 0;
+    };
+    PatternWaystoneWrite out;
+    // Whether an opt-in was undone - OFF's answer, which is about the bit,
+    // not about whether a stray root was cleared beside it.
+    bool cleared_opt_in = false;
+    bool root_used = false;
+    Status wrote = Status::OK();
+    {
+        // **The relation's root page, held exclusive across the decision and
+        // the write** (AT-S7's hold, `RecordAccess`'s reason): every core
+        // runs `WAYSTONE ON`, and the existence check and the insert under it
+        // are a read-then-write two cores would both pass. The loser's row
+        // would be a second current row for one shape, which
+        // `GetSysPatternRow` never returns - it answers at the first match.
+        auto held = store_.Get(kCatalogPagePatterns);
+        if (!held.ok()) {
+            // Not returned from here: the caller's page is unused, and it
+            // is reported as leaked below like every other unused page.
+            wrote = held.status();
+        } else if (on) {
+            // A 0->1 change of the bit, which the opted count follows once
+            // the write has succeeded (`MutatePatternRow` writes current
+            // rows only).
+            bool opts = false;
+            auto mutated = MutatePatternRow(fetch_id, [&](SysPatternRow& row) {
+                const bool opted = (row.flags & kPatternWaystone) != 0;
+                const bool roots = root != kInvalidPageId && !HasWaystoneDirectory(row);
+                if (opted && !roots) return false;
+                row.flags = static_cast<std::uint16_t>(row.flags | kPatternWaystone);
+                if (roots) {
+                    row.waystone_root = root;
+                    row.dir_depth = 1;
+                }
+                root_used = roots;
+                opts = !opted;
+                return true;
+            });
+            if (mutated.ok()) {
+                out.written = mutated.value();
+                if (out.written && opts) MoveOptedCount(/*up=*/true);
+            } else if (mutated.status().code() != StatusCode::kNotFound) {
+                // A failed overwrite wrote nothing, so the page it carried
+                // is reachable from nothing.
+                root_used = false;
+                wrote = mutated.status();
+            } else {
+                // No current row: the shape's first opt-in, or its first
+                // since a fingerprint bump left the old row lapsed beside it.
+                auto oid = AllocateRowId(kSysPatternsTable);
+                if (!oid.ok()) {
+                    wrote = oid.status();
+                } else {
+                    SysPatternRow row{};
+                    row.oid = oid.value();
+                    row.fetch_id = fetch_id;
+                    row.last_seen = 0;
+                    // **The version is stamped here, not passed in**: no
+                    // caller has any business opting a pattern in under a
+                    // revision other than the one that computed its
+                    // `fetch_id`, so the row is current by construction.
+                    row.fingerprint_version = parser::kFingerprintVersion;
+                    row.use_count = 0;
+                    row.stmt_class = stmt_class;
+                    // A directory only where the caller made one: with
+                    // `waystone_recording` off nothing records into it, and
+                    // the mount roots the row once recording is on.
+                    row.waystone_root = root;
+                    row.dir_depth = root != kInvalidPageId ? 1 : 0;
+                    row.flags = kPatternWaystone;
+                    // Reserved since CF-S1b, written 0 (rows.hpp).
+                    row.origin = 0;
+                    wrote = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPagePatterns, row,
+                                      kBootstrapXid);
+                    out.written = wrote.ok();
+                    if (out.written) MoveOptedCount(/*up=*/true);
+                    root_used = wrote.ok() && root != kInvalidPageId;
+                }
+            }
+        } else {
+            // **Every row of the `fetch_id`, of any version, in one walk**,
+            // not `MutatePatternRow`'s first current match: after a
+            // fingerprint bump a lapsed opted row and the current row a
+            // re-issued ON inserted commonly share the id, and stopping at
+            // the first would clear one, answer OK, and leave the other
+            // recording. The visitor never accepts, so the walk runs the
+            // whole chain under the same kWrite walk and budget as every
+            // catalog mutation.
+            auto walked = ForFirstRow<SysPatternRow>(
+                store_, kCatalogPagePatterns,
+                [&](SysPatternRow& row, heap::PageView& page, PageId page_id, std::uint16_t slot,
+                    const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+                    if (row.fetch_id != fetch_id) return false;
+                    const bool opted = (row.flags & kPatternWaystone) != 0;
+                    // The count holds current-version rows only: a lapsed
+                    // row's bit was never in it.
+                    const bool counted = IsCurrentOptIn(row);
+                    if (!opted && !HasWaystoneDirectory(row)) return false;
+                    cleared_opt_in = cleared_opt_in || opted;
+                    row.flags = static_cast<std::uint16_t>(row.flags & ~kPatternWaystone);
+                    row.waystone_root = kInvalidPageId;
+                    row.dir_depth = 0;
+                    const auto encoded = row.Encode();
+                    if (Status s = OverwriteLogged(wal_, store_, page, page_id, slot, encoded,
+                                                   wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
+                        !s.ok()) {
+                        return s;
+                    }
+                    out.written = true;
+                    if (counted) MoveOptedCount(/*up=*/false);
+                    return false;
+                });
+            wrote = walked.status();
+        }
+        // `unchanged` wrote nothing, so its bound is read **here, under the
+        // hold**: every writer of the bit writes under it, so the append
+        // point now is past whichever record set the state this answers.
+        if (wrote.ok() && !out.written) out.durable_at = append_bound();
+    }
+    if (root != kInvalidPageId && !root_used && log_ != nullptr &&
+        log_->enabled(LogLevel::kWarn)) {
+        log_->Warn("waystone", "directory page " + std::to_string(root) +
+                                   " leaked by WAYSTONE ON");
+    }
+    if (!wrote.ok()) {
+        // OFF's walk can fail after it overwrote earlier rows of the
+        // `fetch_id`; those writes stand, so the word moves for them as for
+        // a whole write, or every core's cache would keep the bit and root
+        // they cleared. The refusal then reports the row it stopped at.
+        if (out.written) BumpVersion("waystone opt-in");
+        return wrote;
+    }
+    if (!out.written) return out;
+
+    // After the hold is released and after the write, never before (D21's
+    // order): a peer that revalidated against the new word while this
+    // catalog still held its old entry would read an opt-in its writer
+    // disagrees with. Every core's next statement drops its pattern entries
+    // and refills from the page, so the bit reaches a peer within one
+    // statement.
+    BumpVersion("waystone opt-in");
+    // After the write: it bounds this write's records, and possibly later
+    // ones - a later bound, never an earlier one.
+    out.durable_at = append_bound();
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("waystone", std::string(on ? "opted in" : "opted out") + " fetch_id " +
+                                   std::to_string(fetch_id));
+    }
+    // OFF that met only a stray root wrote, but undid no opt-in: `unchanged`.
+    if (!on && !cleared_opt_in) out.written = false;
+    return out;
 }
 
-Status Catalog::ClearEveryPatternWaystoneRoot() {
-    // **One pass over the chain, not one `ClaimPatternWaystoneRoot` per
-    // row.** Each claim walks `sys.patterns` from its root to its row
-    // (`ForFirstRow`), so clearing every row that way costs rows x pages,
-    // and this runs at every mount (`DiscardAdvisoryState`). The write per
-    // row is the claim's clearing arm exactly: in place, logged, and the
-    // cache updated only once the page agrees.
+StatusOr<std::uint64_t> Catalog::RenewPatternDirectories(bool waystone_recording) {
+    // ---- Pass 1: what is opted, read under no write hold ------------------
+    auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
+    if (!rows.ok()) return rows.status();
+    std::unordered_set<std::uint64_t> opted_fetch_ids;  // current-version rows only
+    std::vector<Oid> renew;                             // the rows to root, in page order
+    for (const SysPatternRow& row : rows.value()) {
+        if (!IsCurrentOptIn(row)) continue;
+        opted_fetch_ids.insert(row.fetch_id);
+        renew.push_back(row.oid);
+    }
+    // A lapse is reported only while it is unreplaced: once the operator
+    // re-issued ON, the current row is opted and the old one is history.
+    std::map<std::uint32_t, std::uint64_t> lapsed;  // fingerprint version -> rows
+    for (const SysPatternRow& row : rows.value()) {
+        if ((row.flags & kPatternWaystone) == 0) continue;
+        if (parser::IsCurrentFingerprintVersion(row.fingerprint_version)) continue;
+        if (opted_fetch_ids.count(row.fetch_id) != 0) continue;
+        ++lapsed[row.fingerprint_version];
+    }
+
+    // ---- The directories, with no catalog page latch held -----------------
     //
-    // The version filter is the claim's, for its reason: a row of another
-    // fingerprint revision is unreachable by any statement and is not one
-    // `ClaimPatternWaystoneRoot` writes.
+    // `CreateDirPage` is a headerless create, which can zero an id the
+    // device still holds and wait on the data-sync thread's sync
+    // (`device_page_store.cpp`); a catalog page latch is never held across
+    // that, so the pages are made here, between the two walks.
+    std::unordered_map<Oid, PageId> fresh;
+    if (waystone_recording) {
+        for (const Oid oid : renew) {
+            auto made = stats::CreateDirPage(store_);
+            if (!made.ok()) {
+                // The row keeps its bit and goes without a directory until
+                // the next mount or an OFF and ON; nothing records for it
+                // meanwhile, which costs performance only (invariant 8).
+                if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
+                    log_->Warn("waystone", "pattern oid " + std::to_string(oid) +
+                                               " has no directory this run: " +
+                                               made.status().message());
+                }
+                continue;
+            }
+            fresh.emplace(oid, made.value());
+        }
+    }
+
+    // ---- Pass 2: the one kWrite walk --------------------------------------
     //
-    // `ForFirstRow` with a visitor that never accepts a row, so the walk
-    // runs the whole chain: the same kWrite walk under the same budget as
-    // every catalog mutation.
+    // **One pass over the chain, not one lookup per row**: each would walk
+    // `sys.patterns` from its root, so rows x pages, at every mount. A fresh
+    // root names no stale child, so the discard's reason still holds; every
+    // other root is cleared, whatever its fingerprint version, so a lapsed
+    // row keeps none. The visitor never accepts, so the walk runs the whole
+    // chain.
+    std::uint64_t opted = 0;
+    std::unordered_set<Oid> used;
     auto walked = ForFirstRow<SysPatternRow>(
         store_, kCatalogPagePatterns,
         [&](SysPatternRow& row, heap::PageView& page, PageId page_id, std::uint16_t slot,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-            if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version) ||
-                !HasWaystoneDirectory(row)) {
-                return false;
+            const bool is_opted = IsCurrentOptIn(row);
+            if (is_opted) ++opted;
+            const auto made = is_opted ? fresh.find(row.oid) : fresh.end();
+            if (made == fresh.end() && !HasWaystoneDirectory(row)) return false;
+            if (made != fresh.end()) {
+                row.waystone_root = made->second;
+                row.dir_depth = 1;
+                used.insert(row.oid);
+            } else {
+                row.waystone_root = kInvalidPageId;
+                row.dir_depth = 0;
             }
-            row.waystone_root = kInvalidPageId;
-            row.dir_depth = 0;
             const auto encoded = row.Encode();
             if (Status s = OverwriteLogged(wal_, store_, page, page_id, slot, encoded,
                                            wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
                 !s.ok()) {
                 return s;
             }
-            cache_.UpdatePatternWaystone(row.fetch_id, kInvalidPageId, 0);
             return false;
         });
-    return walked.status();
+    // A row that changed between the passes - none can, before the listener
+    // binds, but the walk does not rely on it - kept its write, and the page
+    // made for it is reachable from nothing.
+    for (const auto& [oid, page_id] : fresh) {
+        if (used.count(oid) != 0) continue;
+        if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
+            log_->Warn("waystone", "directory page " + std::to_string(page_id) +
+                                       " leaked by the mount's renewal");
+        }
+    }
+    // **Dropped, not updated in place** `[quiet-wrong]`: an entry filled
+    // before the walk holds the previous run's root, whose children can be
+    // ids the cursor has handed to logged pages since, so a trail written
+    // through it would overwrite them with no record.
+    cache_.Invalidate();
+    if (!walked.ok()) return walked.status();
+    // The boot's count (CF-S1c), from the walk that just read every row:
+    // after the drop, so no generation filled under the old count survives.
+    StoreOptedCount(opted);
+
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        for (const auto& [version, count] : lapsed) {
+            log_->Info("waystone", std::to_string(count) +
+                                       " opt-ins lapsed at fingerprint version " +
+                                       std::to_string(version));
+        }
+    }
+    return opted;
+}
+
+StatusOr<std::uint64_t> Catalog::RecountOptedPatterns() {
+    auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
+    if (!rows.ok()) return rows.status();
+    std::uint64_t opted = 0;
+    for (const SysPatternRow& row : rows.value()) {
+        if (IsCurrentOptIn(row)) ++opted;
+    }
+    StoreOptedCount(opted);
+    return opted;
 }
 
 Status Catalog::ForgetAccessStats(Oid rel_id, std::uint16_t col_pos) {
@@ -3368,10 +3540,9 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
     row.use_count = count;
     row.last_seen = last_seen;
     row.kind = kind;
-    // No BumpVersion(): nothing cached is derived from these rows, and the
-    // argument is the one sys.patterns' registration already makes - a
-    // statistic appearing cannot stale a cached relation, and this runs on
-    // the statement path where a cache drop would dangle a held pointer.
+    // No BumpVersion(): nothing cached is derived from these rows - a
+    // statistic appearing cannot stale a cached relation - and this runs on
+    // the statement path, where a cache drop would dangle a held pointer.
     // Unlogged and un-undone, by CR6 - the same exception the update path
     // above takes, and for the same reason. The undo hook goes with the WAL
     // pointer: a row nothing redoes has nothing to compensate.
@@ -3473,8 +3644,7 @@ Status Catalog::InsertCabinRow(const SysCabinRow& row, std::uint64_t trx_id,
         where->rel_oid = kSysCabinsTable;
     }
     if (!inserted.ok()) return inserted;
-    // **Bumped, unlike RegisterPattern().** A pattern appearing stales
-    // nothing cached; a Cabin appearing stales `TableAccess::cabin_columns` and
+    // **Bumped**: a Cabin appearing stales `TableAccess::cabin_columns` and
     // `expr_cabins` on every held entry for this relation, which are facts
     // the compiler reads. That is what makes this DDL and not a
     // statement-path write.

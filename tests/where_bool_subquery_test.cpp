@@ -33,6 +33,13 @@ protected:
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
+        // **The recording arm is vacuous since CF-S1b**, named here rather
+        // than left silent: the recorder is built as a server's default is,
+        // but nothing records until a shape is opted in (`WAYSTONE ON`),
+        // and no cell in this file opts one in but
+        // `AStatementRunTwiceAnswersTheSameWithItsTrail`, which opts its
+        // statement in and asserts `replays=`. No other assertion here reads
+        // a trail or `replays=`, so none depends on one.
         recorder_.emplace(boot_->catalog, store_);
         cabins_.emplace();
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
@@ -107,8 +114,14 @@ TEST_F(WhereBoolSubqueryTest, AFalseUncorrelatedExistsUnderOrEmptiesNothing) {
 TEST_F(WhereBoolSubqueryTest, AStatementRunTwiceAnswersTheSameWithItsTrail) {
     const std::string sql =
         "SELECT id FROM t WHERE id = 3 AND (EXISTS (SELECT id FROM e WHERE x = 99) OR sym = 'a')";
+    // Opted in (CF-S1b), so the later runs replay the lookup and re-apply
+    // the boolean residual over it - what this cell compares.
+    ASSERT_EQ(Run("WAYSTONE ON " + sql).rfind("OK WAYSTONE ON", 0), 0u);
     EXPECT_EQ(Run(sql), "id\\n3");
     for (int i = 0; i < 4; ++i) EXPECT_EQ(Run(sql), "id\\n3");
+    const std::string analyzed = Run("ANALYZE " + sql);
+    EXPECT_NE(analyzed.find("replays="), std::string::npos)
+        << "nothing replayed, so the comparison above is vacuous: " << analyzed;
 }
 
 // ---- Three-valued logic (BU-R4) -------------------------------------------

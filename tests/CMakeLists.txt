@@ -130,6 +130,7 @@ add_executable(kds_tests
     trail_store_test.cpp
     trail_recorder_test.cpp
     waystone_replay_test.cpp
+    waystone_opt_in_test.cpp
     function_conjunct_test.cpp
     where_bool_test.cpp
     where_value_list_test.cpp

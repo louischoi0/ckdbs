@@ -308,12 +308,15 @@ Status PrepareRestoredVolume(storage::PageDevice& device, const RestoreWindow& w
     return ForgetUnwrittenPages(device);
 }
 
-Status DiscardAdvisoryState(catalog::Catalog& catalog) {
-    // Every Waystone directory is unreachable from here on: its pages are
-    // unlogged, so the copy holds them as of some instant of the window and
-    // their children may be pages `ForgetUnwrittenPages` gave back. One
-    // walk of `sys.patterns`, whatever its length.
-    if (Status s = catalog.ClearEveryPatternWaystoneRoot(); !s.ok()) return s;
+Status DiscardAdvisoryState(catalog::Catalog& catalog, bool waystone_recording) {
+    // Every previous Waystone directory is unreachable from here on: its
+    // pages are unlogged, so the copy holds them as of some instant of the
+    // window and their children may be pages `ForgetUnwrittenPages` gave
+    // back. An opted pattern gets a fresh, empty one, which names no stale
+    // child (CF-S1b). Two walks of `sys.patterns`, whatever its length; the
+    // second sets the instance's opted count (CF-S1c).
+    auto opted = catalog.RenewPatternDirectories(waystone_recording);
+    if (!opted.ok()) return opted.status();
     return catalog.DiscardAccessStats();
 }
 

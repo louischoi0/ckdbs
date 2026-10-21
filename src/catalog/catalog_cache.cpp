@@ -92,28 +92,21 @@ const std::vector<SysObjectRow>* CatalogCache::PutTableList(std::vector<SysObjec
 }
 
 const PatternAccess* CatalogCache::FindPattern(std::uint64_t fetch_id) noexcept {
-    auto it = patterns_.find(fetch_id);
-    if (it == patterns_.end()) {
-        ++stats_.misses;
-        return nullptr;
-    }
+    // Served from memory either way: asked only of a filled map, which is
+    // complete, so an absence scanned nothing and is not one of `misses`.
     ++stats_.hits;
-    return &it->second;
-}
-
-const PatternAccess* CatalogCache::PutPattern(PatternAccess access) {
-    const std::uint64_t key = access.fetch_id;
-    auto [it, inserted] = patterns_.try_emplace(key, std::move(access));
-    if (inserted) ++stats_.fills;
-    return &it->second;
-}
-
-void CatalogCache::UpdatePatternWaystone(std::uint64_t fetch_id, PageId root,
-                                         std::uint8_t depth) noexcept {
     auto it = patterns_.find(fetch_id);
-    if (it == patterns_.end()) return;
-    it->second.waystone_root = root;
-    it->second.dir_depth = depth;
+    return it == patterns_.end() ? nullptr : &it->second;
+}
+
+void CatalogCache::FillOptedPatterns(std::vector<PatternAccess> opted) {
+    if (patterns_filled_) return;
+    for (PatternAccess& access : opted) {
+        const std::uint64_t key = access.fetch_id;
+        patterns_.try_emplace(key, std::move(access));
+    }
+    patterns_filled_ = true;
+    ++stats_.pattern_fills;
 }
 
 void CatalogCache::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId root) noexcept {
@@ -169,6 +162,7 @@ void CatalogCache::Invalidate() noexcept {
     name_to_oid_.clear();
     table_list_.reset();
     patterns_.clear();
+    patterns_filled_ = false;
     ++stats_.invalidations;
 }
 

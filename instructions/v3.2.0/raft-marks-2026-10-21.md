@@ -74,3 +74,12 @@ what the word settles and what it does not.
 | **Mark** | **CF-O-Q1..Q14 adopted as CLA proposed, each (a), on this go-ahead**: not marked by the operator item by item, and recorded as adopted. CF-O-Q3's word (`WAYSTONE`) is taken as CLA proposed it. **The amendment was pushed to `main` with `--no-verify`** (documents only, no suite run on it). **CF-S1b started** on the same word |
 | **Does not settle** | CF-Q6; a push of code; a tag, a version |
 | **Recorded at** | this file; the order's §7 and §8.4; the order's row in `instructions/v3.2.0/index.md` |
+
+## 9. CF closed; pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W6 (CF's session): *"push no verify and close the milestone"* - after CLA's report that CF-S1b, S1c (with the instance-words fold), S1d and S2 were built and measured |
+| **Mark** | **CF closed** (`workorder-cf-waystone-premise.md`): Branch O built - S1b `4b46acd5`, S1c `b0e6db12`, the fold `46c632aa`, S1d `46ca0729`, S2 `8eb4a898` (`bench/v3.4.0/results-cf-s2-close-v3.4.0-9-g46c632aa.md`); CF-O-Q15 settled by `catalog.md` CT6's threshold. The full Debug suite ran 4263/4263 at `27f80aa6`, the last commit that changed a build input; the commits after it are documents only. **Pushed to `main` with `--no-verify`** on this word |
+| **Does not settle** | CF-Q6 (CLAUDE.md's "What This Project Is" item 2), which stays the operator's; the refill and mount-cost measurements the close cut; a tag, a version |
+| **Recorded at** | this file; the order's header and §7; the order's row in `instructions/v3.2.0/index.md` |

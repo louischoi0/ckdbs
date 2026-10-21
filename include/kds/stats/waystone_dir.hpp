@@ -160,17 +160,19 @@ StatusOr<PageId> LookupOrCreateWaystonePage(storage::PageStore& store, PageId ro
 
 // Deepens a directory by one level: allocates a new root whose slot 0
 // points at `root`, and returns it. The caller raises its stored depth by
-// one at the same time - the two are one fact, which is why
-// Catalog::ClaimPatternWaystoneRoot() writes them together.
+// one at the same time - the two are one fact, which is why every writer
+// of a pattern row writes them together.
 //
-// **Nothing calls this, and the day something does it owes a second
-// writer** (AT-S7). `ClaimPatternWaystoneRoot` became a *claim*: it
-// refuses to replace a root that is already set, so handing it a deepened
-// root would leave the row pointing at the old one at the old depth while
-// this function has already built the new level - a lookup then walks the
-// wrong number of levels, which is a miss for every key rather than an
-// error. Deepening needs a replace, and a replace needs its own
-// compare-and-set against the pair the caller deepened from.
+// **Nothing calls this, and the day something does it owes a third
+// writer** (CF-S1b). The pair's two writers are `WAYSTONE ON`
+// (`Catalog::SetPatternWaystone`, which roots only a row with no
+// directory, under page 9's hold) and the mount's renewal
+// (`Catalog::RenewPatternDirectories`); neither replaces a root a run is
+// recording into. Handing either a deepened root would leave the row at
+// the old one and the old depth while this function has already built the
+// new level - a lookup then walks the wrong number of levels, which is a
+// miss for every key rather than an error. Deepening needs a replace under
+// the same hold and a move of the schema word.
 //
 // Read the growth note in this file's header before calling: the prior
 // contents survive only for the 1-in-2048 of keys whose new top digit is

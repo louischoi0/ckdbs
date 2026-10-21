@@ -874,22 +874,23 @@ TEST_F(AlterColumnTest, AnOlderSnapshotKeepsItsRowDirtyAndItsSpillLive) {
 // live, so nothing is cleaned until its slot moves on. Core 1's slot is
 // driven by hand.
 TEST_F(AlterColumnTest, AStatementOnAnOlderSchemaWordHoldsTheClean) {
-    std::atomic<std::uint64_t> word{1};
+    catalog::InstanceWords words;
+    words.schema_word.store(1);
     StatementEpochs epochs(/*cores=*/2);
-    boot_->catalog.SetSchemaWord(&word);
+    boot_->catalog.SetInstanceWords(&words);
     dispatcher_->SetStatementEpochs(&epochs);
     struct Unwire {
         CommandDispatcher* dispatcher;
         catalog::Catalog* catalog;
         ~Unwire() {
             dispatcher->SetStatementEpochs(nullptr);
-            catalog->SetSchemaWord(nullptr);
+            catalog->SetInstanceWords(nullptr);
         }
     } unwire{&*dispatcher_, &boot_->catalog};
     Ok("CREATE TABLE t (id int64, s varchar NULL, n int32)");
     Ok("INSERT INTO t VALUES (1, '" + std::string(100, 'x') + "', 1)");
     epochs.Enter(1);
-    epochs.Publish(1, word.load());  // bound before the drop
+    epochs.Publish(1, words.schema_word.load());  // bound before the drop
     Ok("ALTER TABLE t DROP COLUMN s");
 
     const std::string refused = Run("PURGE DROPPED COLUMNS FROM t");

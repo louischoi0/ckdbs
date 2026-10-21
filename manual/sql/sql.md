@@ -20,6 +20,7 @@ dispatcher's own commands):
 | DDL | `CREATE TABLE`, `CREATE NAMESPACE` / `DROP NAMESPACE`, `CREATE INDEX` / `DROP INDEX` / `REINDEX INDEX`, `CREATE ASSERTION` / `DROP ASSERTION`, `CREATE CABIN` / `DROP CABIN` |
 | DML | `INSERT`, `UPDATE`, `DELETE` |
 | Query | `SELECT` (joins, subqueries, `GROUP BY`, aggregates), `ANALYZE <select>` |
+| Waystone | `WAYSTONE ON <select>`, `WAYSTONE OFF <select>`, `WAYSTONE OFF <fetch_id>` |
 | Transactions | `BEGIN`/`START`, `COMMIT`, `ROLLBACK`/`ABORT`, `SET ISOLATION LEVEL` |
 | Introspection | `SELECT ... FROM sys.<view>`; `SHOW META/TABLES/NAMESPACES/PAGE/PATTERNS/ACCESS/BUDGET/CABINS/INDEXES/FKEYS/ASSERTIONS/TRANSITIONS/CABIN_OPTIMIZER` and `DESCRIBE` as its shorter spellings |
 | Session | `PING`, `SYNC`, `STOP` |
@@ -28,7 +29,8 @@ dispatcher's own commands):
 sections): a drop tombstones the oid and its pages are reclaimed after it
 commits, a rename edits a label, and `ADD`/`DROP COLUMN` change a column's
 catalog row and no stored row. The catalog is append-only apart
-from those, `DROP CABIN`, `DROP INDEX`, `REINDEX INDEX` and `DROP ASSERTION`.
+from those, `DROP CABIN`, `DROP INDEX`, `REINDEX INDEX`, `DROP ASSERTION`
+and `WAYSTONE ON`/`OFF`, which sets or clears a bit on a `sys.patterns` row.
 
 ---
 
@@ -424,7 +426,8 @@ enforce, indexes and Cabins still serve, all with no re-declaration.
   is not refused.
 - **Patterns are allowed to die**: statements against the old name stop
   matching stored patterns and trails, which costs replay speed, never a
-  row; new-name traffic re-registers on the ordinary path.
+  row. A rename ends the opt-in for the old name's shapes; issue
+  `WAYSTONE ON` with the new name to opt them in again.
 - The tuple key column renames like any other (identity is the Keystone word,
   not the spelling); a `sys.*` relation refuses; a taken name is
   `AlreadyExists`.
@@ -674,16 +677,21 @@ DROP CABIN ON trades (DATE(ts));
 
 These statements existed and were removed on 2026-08-31. **A pattern is a
 case the engine identifies by fingerprint and tracks by statistics**; there
-is no way to declare one, and nothing replaces the grammar. `SHOW PATTERNS`
-lists what traffic registered, each row identified by its hex `fetch_id`:
-the statement's shape with its select list left out, so `SELECT a ...` and
-`SELECT COUNT(*) ...` over the same `FROM ... WHERE` share one row and one
-trail. `ANALYZE` prints a statement's `pattern_id` (its whole shape) and its
-`fetch_id`, the second being the one to look for in `SHOW PATTERNS`. A row
-marked `stale=v1` was recorded by a build before this keying, is listed
-under the `pattern_id=` it was keyed by, and is never used. A row's
-`uses=` and `last_seen=` read 0: executing a pattern writes its trail and
-nothing to its row, so a repeated read makes no logged write.
+is no way to declare one by name. What replaced the declaration's one
+useful effect - asking the engine to remember a shape - is
+`WAYSTONE ON <select>` (§4, "WAYSTONE ON / WAYSTONE OFF"), which sets a
+bit on the shape's own row and stores no name and no text. `SHOW PATTERNS`
+lists the shapes ever opted in that way, each row identified by its
+`fetch_id` in decimal: the statement's shape with its select list left
+out, so `SELECT a ...` and `SELECT COUNT(*) ...` over the same
+`FROM ... WHERE` share one row and one trail. `ANALYZE` prints a
+statement's `pattern_id` (its whole shape) and its `fetch_id` in hex, the
+second being the one to look for in `SHOW PATTERNS` and the one
+`WAYSTONE OFF` takes. A row whose `fingerprint_version` is not the
+server's was opted under an older build; its `waystone` column reads 0 and
+it is never used. A row's `use_count` and `last_seen` read 0: executing a
+pattern writes its trail and nothing to its row, so a repeated read makes
+no logged write.
 
 `CREATE PATTERN ...` now answers the ordinary refusal for an unknown
 `CREATE` target, and `$name` parameters are refused wherever they are
@@ -1420,6 +1428,123 @@ their order, `examined=` and `sel=` are the same either way; the server's
 `scan_kernel = off` turns the early test off, for comparison
 (`docs/spec/parser-v2.md` §7).
 
+### WAYSTONE ON / WAYSTONE OFF (built 2026-10-21, CF-S1b)
+
+**Waystone records and replays only for the query shapes you opt in.** For
+an opted shape, the engine remembers where the last execution of each
+instance (the shape with its literal values) found its rows by tuple key,
+and the next execution reads those locations instead of descending the
+tree. A wrong or missing trail costs time, never a result. A shape nobody
+opted never records or writes. While nothing on the instance is opted it
+pays one memory load per `SELECT`; once any shape is opted, a `SELECT` with
+a tuple key lookup or probe also pays a hash miss, and a share of a
+`sys.patterns` rescan after each catalog change.
+
+```sql
+WAYSTONE ON  SELECT o.id, l.qty FROM orders o JOIN lines l ON l.id = o.line_id WHERE o.region = 'EU'
+WAYSTONE OFF SELECT o.id, l.qty FROM orders o JOIN lines l ON l.id = o.line_id WHERE o.region = 'EU'
+WAYSTONE OFF 12345678901234567890
+WAYSTONE OFF 0xab54a98ceb1f0ad2
+```
+
+- **By example.** `ON` takes a `SELECT`, parses and compiles it under your
+  session's namespace, and **does not run it**. It records the statement's
+  `fetch_id` - its shape with the select list left out and every literal
+  replaced by a marker - and discards the text. So the example's literal
+  values do not matter: `WHERE o.region = 'EU'` opts in every region, and
+  `SELECT a ...` and `SELECT COUNT(*) ...` over the same `FROM ... WHERE`
+  are one opt-in.
+- **`OFF` takes the example or the number.** `OFF <select>` only parses and
+  fingerprints the text (it compiles nothing, so it works after the tables
+  are dropped, and it accepts a `?`); `OFF <fetch_id>` takes the number in
+  decimal (as `SHOW PATTERNS` prints it) or as `0x` and 1 to 16 hex digits
+  (as `ANALYZE` prints it). `OFF` clears the shape's row of every
+  fingerprint version and keeps the row.
+- **Admin only, autocommit only.** It is the admin role's. Inside `BEGIN`
+  it is refused before anything is read, and the transaction is not
+  affected.
+- **Replies.** `OK WAYSTONE ON fetch_id=<n> waystone_recording=<on|off>
+  waystone_replay=<on|off>` - the server's two Waystone keys, because an
+  opt-in under an `off` key is accepted and does nothing until the key is
+  on - and `OK WAYSTONE OFF fetch_id=<n>`. Either ends ` unchanged` when
+  nothing was written: `ON` of a shape already opted, or `OFF` of a shape
+  that was not.
+- **Durable by the session's durability class** (`SET DURABILITY`, else the
+  server's `durability`). Under `strict` and `group` the reply waits until
+  the opt-in is on disk, `unchanged` included. Under `relaxed` it answers at
+  once and the opt-in is durable within the relaxed interval, as a relaxed
+  commit is; a crash inside it can lose the opt-in, which costs speed only.
+  A refusal from the log after the change was made does not undo it: the
+  change stands on every core until the next restart, and may be lost at
+  it. A failure to start the sync is refused with text saying so; a sync
+  that fails afterwards is refused as a failed commit is, with the log's
+  own error, and the change is still in effect for the run.
+- **The opt-in is by text, not by table.** A `fetch_id` names no namespace
+  and no table: one `ON` covers the same text under every `USE`, over
+  whichever relation the name resolves to there. It **survives `DROP TABLE`**
+  and a re-create under the same name, and stays until you turn it off.
+  Answers are unaffected either way (a trail recorded on one relation is
+  never used for another); the cost is recording work on a shape you may not
+  have meant.
+- **Once durable, it survives a restart, a crash and a restore; the trails
+  do not.** Every
+  start discards every trail, so after a restart an opted instance records
+  again on its second execution and replays from its third.
+- **After a `kFingerprintVersion` change** (a new server build that changes
+  how statements fingerprint), opt-ins made under the old version lapse:
+  `SHOW PATTERNS` shows the row with `waystone` 0 and its old
+  `fingerprint_version`, and at `log_level = info` the server logs `INFO
+  [waystone] <n> opt-ins lapsed at fingerprint version <v>` at start. Issue
+  `WAYSTONE ON` again.
+
+**Refusals.** Each names the offending token's byte; nothing is written.
+
+| Statement | Answer |
+|---|---|
+| a session below the admin role | `ERR permission: WAYSTONE needs admin; ...` |
+| the WAL archive is failing and the WAL disk is low (`manual/server/backup-restore.md` §4) | `ResourceExhausted`, byte 0 |
+| inside a transaction that already failed | that transaction's own refusal |
+| inside `BEGIN` | `NotImplemented`, byte 0 |
+| `WAYSTONE`, `WAYSTONE MAYBE ...`, or `ON`/`OFF` with nothing after | `InvalidArgument` at the word, or the end |
+| `WAYSTONE ON 1234` | `InvalidArgument` at the number: `ON` takes an example only |
+| `WAYSTONE OFF 0xZZ`, or a number past 64 bits | `InvalidArgument` at the number |
+| `INSERT`, `UPDATE`, `DELETE` | `NotImplemented` at the word: only a `SELECT` records |
+| `WITH ...` (`ON` and `OFF`) | `NotImplemented` at the word: Waystone records only a native step chain |
+| `WAYSTONE ON` over a `SELECT` only the query layer answers (`SELECT` §"The query layer") | `NotImplemented`: Waystone records only a native step chain. `WAYSTONE OFF` over one gets the parser's own refusal, or, where the native grammar parses it, clears it by fingerprint |
+| any other statement, `ANALYZE` included | `InvalidArgument` at the word |
+| `WAYSTONE ON ... WHERE id = ?` | `NotImplemented` at the `?`: write the example with a literal |
+| an example that does not parse or compile | the parser's or compiler's own refusal, at its byte |
+| `WAYSTONE ON` over a statement calling a row-volatile function (none ships today; `DATE` and `NOW()` are not) | `Unsupported` at the call: such a statement never records |
+| `WAYSTONE ON` over a `SELECT` with **no tuple key equality** - no `=` that compares a relation's tuple key with a literal, another relation's column or an outer row | `Unsupported` at `SELECT`: a trail replaces only a tuple key lookup or probe, never a search, so this shape can never use one |
+| no buffer pool frame for the shape's directory | `ResourceExhausted`, byte 0 |
+
+A shape that admits a tuple key lookup is accepted even when its current
+plan has none (for example `WHERE id = -1`, which compiles to a scan): it
+simply records nothing on the executions that scan.
+
+**Finding candidates.** `ANALYZE <select>` prints `pattern_id=0x...
+fetch_id=0x...` for any statement, opted or not; the second is what `OFF`
+takes and what `SHOW PATTERNS` lists (in decimal). Once a shape is opted,
+`ANALYZE` of a repeated instance prints `replays=<n>` on the steps a trail
+served. The engine's own measurement (`bench/v3.3.0/results-cf-s0-premise-v3.3.0-97-g3d628df4.md`,
+at `v3.3.0-97-g3d628df4`, one core) found:
+- **replay pays on a scan-driven chain with many tuple-key probes** - a
+  filtered scan whose every row probes another relation by tuple key (200
+  probes per statement: +5.7 % throughput, 7.2 % less server CPU);
+- **it pays nothing on point reads and short tuple-key joins**, where
+  recording cost 2.7-3.9 % of server CPU per statement.
+
+So opt in the statements whose `ANALYZE` shows a scan step followed by many
+probe rows, and leave point reads alone.
+
+**`SHOW PATTERNS`** (`SELECT * FROM sys.patterns`) lists every shape ever
+opted, one row each: `oid`, `fetch_id` (decimal), `fingerprint_version`,
+`stmt_class`, **`waystone`** (1 while opted, 0 after `OFF` or a lapse),
+`use_count` and `last_seen` (always 0), and `waystone_root`/`dir_depth`
+(the shape's trail directory; NULL when it has none, as under
+`waystone_recording = off`). `SHOW META`'s `waystone` section prints the
+two keys and `waystone_opted`, how many shapes are opted now.
+
 ---
 
 ## 5. Transactions
@@ -1527,11 +1652,11 @@ newline protocol.
 
 | Spelling | The `SELECT` it stands for |
 |---|---|
-| `SHOW META` | `SELECT * FROM sys.meta` - one row per field, `(section, field, value)`, every value text: superblock and configuration, the WAL's counters, what the last mount's recovery did (with `catalog_recovered=1`: DDL is logged and recovered), the contention census, and the statistics stores' counts. The fields are the session's core's (`docs/spec/client-manual.md` describes the recycling, segment-roll and contention blocks) |
+| `SHOW META` | `SELECT * FROM sys.meta` - one row per field, `(section, field, value)`, every value text: superblock and configuration, the WAL's counters, what the last mount's recovery did (with `catalog_recovered=1`: DDL is logged and recovered), the contention census, the statistics stores' counts, and the `waystone` section (`waystone_recording`, `waystone_replay`, `waystone_opted`). The fields are the session's core's (`docs/spec/client-manual.md` describes the recycling, segment-roll and contention blocks) |
 | `SHOW TABLES` | `SELECT * FROM sys.tables` |
 | `SHOW NAMESPACES` | `SELECT * FROM sys.namespaces`, `sys` and `public` first, in their SQL spellings |
 | `SHOW PAGE <id>` / `SHOW PAGE <id> VALUES` | `sys.page_slots WHERE page_id = <id>`: a header row, then one row per slot (an internal node: its leftmost child, then one row per entry); `VALUES` adds `value`, each payload in hex |
-| `SHOW PATTERNS` | `SELECT * FROM sys.patterns` |
+| `SHOW PATTERNS` | `SELECT * FROM sys.patterns`: one row per shape ever opted in with `WAYSTONE ON`, with a `waystone` column (1 while opted, 0 after `OFF` or a fingerprint-version lapse) |
 | `SHOW ACCESS` | `SELECT * FROM sys.access_stats`, one row per access shape |
 | `SHOW BUDGET` | `sys.relation_stats`' `oid`, `namespace`, `name` and its budget columns: `next_id`, `ids_issued`, `ids_remaining`, `budget_used_ppm`, `budget_warning`, `budget_exhausted` |
 | `SHOW CABINS` | `SELECT * FROM sys.cabins` |
@@ -1771,5 +1896,6 @@ Exactly eleven words are reserved (verified, `kKeywords` in `lexer.cpp`):
 `FULL`, `OUTER`. Everything else — including `SELECT`, `WHERE`, `GROUP`,
 `COUNT`, `CABIN`, `CHECK`, `INDEX`, `REFERENCES` — is an ordinary
 identifier matched by text where the grammar expects it, so a column may be
-named `values`, `count` or `check`. Consequence: a keyword hashes exactly
+named `values`, `count` or `check`. Consequence: `WAYSTONE ON` works although
+`ON` is reserved, because the word is matched by text there; and a keyword hashes exactly
 as an identifier does, so reserving a word never moves a fingerprint.

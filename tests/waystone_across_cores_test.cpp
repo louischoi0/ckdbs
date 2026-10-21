@@ -1,18 +1,20 @@
-// **A peer records a Waystone trail** (AT-S7).
+// **A peer records a Waystone trail** (AT-S7), **for a pattern opted in on
+// another core, from its first statement after the opt-in** (CF-S1b, and
+// through the opted count and the opted map since CF-S1c).
 //
 // `waystone_recording` was honoured as "off" on every core a `CoreRuntime`
-// opened, and `core_runtime.hpp`'s asymmetry 3 said why: `sys.patterns` is
-// a catalog page, the catalog was read-only on a peer, and the registration
-// could not be shipped because `RegisterPattern` returns a `PatternAccess*`
-// the recorder uses immediately. Every core writes catalog pages since
-// AT-S5, so the instance's switch means the same thing on every core.
+// opened until AT-S7; every core writes catalog pages since AT-S5, so the
+// instance's switch means the same thing on every core. Since CF-S1b no core
+// registers a pattern: `WAYSTONE ON` writes the row and its directory, moves
+// the instance's opted count and the schema word, and a peer's next statement
+// drops its catalog memo at its head (`Catalog::Revalidate`), reads the count
+// non-zero and refills its opted map from the page.
 //
-// **The mutation**: restore the `/*recorder=*/nullptr` that stood in
-// `CoreRuntime::Open`'s dispatcher construction until this stage, for the
-// peer alone - `is_peer ? nullptr : ...` - and the count is unmoved,
-// `1 vs 1`. Scoped to the peer because both cores are `CoreRuntime`s here
-// and the unscoped form fails the cell at its premise instead of its
-// claim.
+// **The mutations**: restore the `/*recorder=*/nullptr` that stood in
+// `CoreRuntime::Open`'s dispatcher construction until AT-S7, for the peer
+// alone - `is_peer ? nullptr : ...` - and nothing replays on the peer; drop
+// `SetPatternWaystone`'s `BumpVersion`, and the peer's memo keeps the
+// opted-out row's root and replays after the OFF.
 
 #include "two_core_rig.hpp"
 
@@ -40,7 +42,7 @@ sched::Coro RunOne(CommandDispatcher& d, OneShot& o) {
     co_return Status::OK();
 }
 
-TEST(WaystoneAcrossCores, APeersRepeatedStatementRegistersItsPattern) {
+TEST(WaystoneAcrossCores, APeerRecordsAndStopsWithinOneStatementOfAnotherCoresOptIn) {
     TwoCoreRig::Options options;
     options.wal_drain_interval_ns = 1'000'000;
     auto opened = TwoCoreRig::Open(options);
@@ -50,50 +52,48 @@ TEST(WaystoneAcrossCores, APeersRepeatedStatementRegistersItsPattern) {
     CommandDispatcher& d0 = rig->core(0).dispatcher();
     ASSERT_EQ(d0.Dispatch("CREATE TABLE r0 (id int64, v int64) BTREE").response.substr(0, 3),
               "CRE");
-    auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "r0");
-    ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(rig->store().Flush().ok());
     ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES (7)").response.substr(0, 8), "INSERTED");
 
-    const auto pattern_count = [&] {
-        auto rows = rig->core(0).catalog().ListPatterns();
-        EXPECT_TRUE(rows.ok());
-        return rows.ok() ? rows.value().size() : std::size_t{0};
+    const std::string sql = "SELECT v FROM r0 WHERE id = 1";
+    const auto on = [&](std::uint32_t core, const std::string& statement) {
+        OneShot shot;
+        shot.statement = statement;
+        rig->Post(core, sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
+                                            RunOne(rig->core(core).dispatcher(), shot)));
+        EXPECT_TRUE(KickUntil(*rig, core,
+                              [&] { return shot.done.load(std::memory_order_acquire); }, 8000ms))
+            << statement << " -> " << shot.out.response;
+        return shot.out.response;
     };
-    // Core 0's own shape first, twice, so `before` proves this fixture
-    // records at all - without it a peer that recorded nothing and a
-    // fixture that records nothing look the same.
-    d0.Dispatch("SELECT id FROM r0 WHERE id = 1");
-    d0.Dispatch("SELECT id FROM r0 WHERE id = 1");
-    const std::size_t before = pattern_count();
-    ASSERT_EQ(before, 1u) << "core 0 registered nothing, so the comparison below says nothing";
 
-    // `kAutoRecordThreshold` is 2, so an instance seen once is a one-shot
-    // query and pays no catalog page. The registration that follows
-    // allocates a `sys.patterns` row id, which a peer bumps in place since
-    // AT-S10b; until then it was the row-id lease's demand-then-grant, and
-    // this loop ran eight rounds to outlast the grant. The rounds are kept
-    // and only the first two are needed.
     rig->Start();
-    for (int round = 0; round < 8; ++round) {
-        OneShot peer;
-        // A **different** fetch from core 0's: one pattern row per fetch,
-        // so the peer re-running core 0's would move no row count. A
-        // different select list alone is not enough since AP-S2 - it
-        // shares core 0's row - so the `LIMIT` makes the fetch
-        // differ and leaves the step a keyed lookup that records.
-        peer.statement = "SELECT v FROM r0 WHERE id = 1 LIMIT 1";
-        rig->Post(1, sched::MakeCoroTask(
-            sched::SchedulingGroup::kForeground, RunOne(rig->core(1).dispatcher(), peer)));
-        ASSERT_TRUE(KickUntil(*rig, 1, [&] { return peer.done.load(std::memory_order_acquire); },
-                              8000ms))
-            << peer.out.response;
-        // The row's `v`, and the separator in a debug-text response is the
-        // two characters `\n`.
-        ASSERT_EQ(peer.out.response, "v\\n7") << peer.out.response;
-    }
+    // Not opted: the peer runs the shape past the threshold and records
+    // nothing - nor is it sighted (CF-S1c), so the count starts at the
+    // opt-in below.
+    for (int round = 0; round < 3; ++round) ASSERT_EQ(on(1, sql), "v\\n7");
+    EXPECT_EQ(on(1, "ANALYZE " + sql).find("replays="), std::string::npos)
+        << "a shape nobody opted in replayed";
 
-    EXPECT_GT(pattern_count(), before) << "the peer's repeated shape left no sys.patterns row";
+    // Opted in on core 0. The peer's very next execution is its first
+    // sighting, the one after records, and the third replays - so a replay
+    // on the third proves the first statement after the opt-in already saw
+    // it; a peer a statement late would sight on the second, record on the
+    // third and replay nothing.
+    const std::string opted = on(0, "WAYSTONE ON " + sql);
+    ASSERT_EQ(opted.rfind("OK WAYSTONE ON", 0), 0u) << opted;
+    ASSERT_EQ(on(1, sql), "v\\n7");
+    ASSERT_EQ(on(1, sql), "v\\n7");
+    const std::string replayed = on(1, "ANALYZE " + sql);
+    EXPECT_NE(replayed.find("replays=1"), std::string::npos)
+        << "the peer did not see the opt-in within one statement: " << replayed;
+
+    // Opted out on core 0: the peer's memo held the row with its root, and
+    // its next statement must not replay through it.
+    ASSERT_EQ(on(0, "WAYSTONE OFF " + sql).rfind("OK WAYSTONE OFF", 0), 0u);
+    const std::string after = on(1, "ANALYZE " + sql);
+    EXPECT_EQ(after.find("replays="), std::string::npos)
+        << "the peer replayed after another core's opt-out: " << after;
     rig->Stop();
 }
 

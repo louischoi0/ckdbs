@@ -261,9 +261,12 @@ TEST_F(PurgeKeyTest, CensusBAWaystoneReplayLandsWhereAFreshDescentWould) {
     }
     // **A tuple key lookup, because only a lookup replays**: a trail never serves a
     // search (invariant 9, `IsTrailReplayable`), so a `WHERE v = ...` cell
-    // would read no trail at all. The first run counts, the second records,
-    // the third replays - and `replays=` is the evidence it did.
+    // would read no trail at all. Opted in first (CF-S1b); the first run
+    // counts, the second records, the third replays - and `replays=` is the
+    // evidence it did.
     const std::string keyed = "SELECT * FROM t WHERE id = 5";
+    const std::string opted = Run("WAYSTONE ON " + keyed);
+    ASSERT_EQ(opted.rfind("OK WAYSTONE ON", 0), 0u) << opted;
     for (int i = 0; i < 3; ++i) ASSERT_EQ(Ids(Run(keyed)), (std::vector<std::uint64_t>{5}));
     const std::string before = Run("ANALYZE " + keyed);
     ASSERT_NE(before.find("replays="), std::string::npos) << "no trail to replay: " << before;

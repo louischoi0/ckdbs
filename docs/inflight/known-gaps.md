@@ -336,17 +336,25 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   a stranded trail and a leaked page. Invariant 8 prices it: a lost trail is
   a lost replay, never a result. Not closed because holding the parent
   across `CreateNew` would put a page latch across a durability wait.
-  Re-verified at `7dd9b789` by reading. Owner:
+  **Still reachable since CF-S1b, for an opted pattern**: every core records
+  an opted pattern, and while `WAYSTONE ON` or the mount makes the root, the
+  recorder still links the child slots below it. Re-verified at `7dd9b789`
+  by reading and on `cf-waystone-premise` at `46c632aa`. Owner:
   `docs/spec/waystone-concpets.md`.
 
-- **`ClaimPatternWaystoneRoot` has no path for deepening a directory.** The
-  claim refuses to replace a set root, so a `GrowPatternDirectory` result
-  handed to it would leave the row at the old root and depth: a miss for
-  every key, not an error. Not live: `GrowPatternDirectory` has no caller
-  outside `tests/waystone_dir_test.cpp`, so every directory is depth 1.
-  Closing it needs a compare-and-set contract the claim lacks;
-  `waystone_dir.hpp` carries the trap. Re-verified at `7dd9b789` by reading.
-  Owner: `include/kds/catalog/catalog.hpp`.
+- **Nothing deepens a Waystone directory, and a deepening would be a third
+  root writer.** `ClaimPatternWaystoneRoot` is deleted (CF-S1b). The root and
+  its depth have two writers: `Catalog::SetPatternWaystone` (`WAYSTONE ON`,
+  which roots only a row with no directory, under page 9's hold) and
+  `Catalog::RenewPatternDirectories` (the mount). Neither replaces a root a
+  run is recording into. `GrowPatternDirectory` has no caller outside
+  `tests/waystone_dir_test.cpp`, so every directory is depth 1 and a
+  colliding instance displaces. Handing either writer a deepened root would
+  leave the row at the old root and depth: a miss for every key, not an
+  error. So a deepening needs a replace under page 9's hold and a move of the
+  schema word. Not live; `waystone_dir.hpp` carries the trap. Restated on
+  `cf-waystone-premise` at `46c632aa`. Owner:
+  `docs/spec/waystone-concpets.md` §5.
 
 - **A Cabin builds rarely on a busy instance, and that is the price of one
   store.** §6a's banking gate refuses while anything is unresolved anywhere
@@ -653,15 +661,21 @@ pages and the cases it does not reach.
   - a previous run's undo pages (UP4, `txn.md` §4.1);
   - a dropped assertion's Bound Cabin chain;
   - Waystone pages.
-- **Every restart leaves the previous run's Waystone pages allocated.**
-  Every mount clears each pattern's directory root and empties
-  `sys.access_stats` (`server::DiscardAdvisoryState`, `waystone-concpets.md`),
-  because after a crash a directory page can name a child whose allocation
-  bit never reached the device. The directory and trail pages under a
-  cleared root stay allocated, reached by nothing and freed by nothing, so
-  the volume grows by every run's Waystone pages, restart after restart,
-  clean or not, and a later run builds its trails on new pages. Verified on
-  `fix-sync-publish-and-waystone-crash` at `ec440c2d`.
+- **Every restart, and every `WAYSTONE OFF`, leaves Waystone pages
+  allocated.** Narrowed by CF-S1b; verified on `cf-waystone-premise` at
+  `46c632aa` (first verified on `fix-sync-publish-and-waystone-crash` at
+  `ec440c2d`). Every mount clears every directory root, gives each opted
+  pattern a fresh one, and empties `sys.access_stats`
+  (`server::DiscardAdvisoryState`, `waystone-concpets.md` §4c), because
+  after a crash a directory page can name a child whose allocation bit never
+  reached the device. Only opted patterns have directories now, but the leak
+  is not bounded per mount: each mount strands every opted row's previous
+  directory (a root and up to 2048 trail pages), and each `OFF` strands that
+  row's, so the volume grows with mounts and with toggles, clean or not. A
+  page `WAYSTONE ON` made and did not use (a concurrent `ON` rooted the row
+  first, the row was found opted with a root, or the write failed) is
+  logged `leaked by WAYSTONE ON`, and a page the renewal's second pass did
+  not use `leaked by the mount's renewal`; neither is freed.
 - **At `cores > 1`, a reclaim waits for every core's first checkpoint.**
   The durable redo start does not move until every core has published, so
   with `checkpoint_interval_ms = 0` nothing a mount found is freed until a
@@ -915,9 +929,16 @@ stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
   client that prepares is the only one a cached parse would help; no driver
   in the tree prepares. A text parameter containing a single quote stays
   unbindable at `C_BIND` for the same reason.
-- **Waystone records a trail for a point `SELECT` by tuple key**: recording and the
-  replay attempt are 7-9 % of its server CPU (BN-S1's census), for a lookup
-  the descent already answers directly. No BN proposal named it.
+- **Waystone records a trail for a point `SELECT` by tuple key only if an
+  operator opted the shape in.** Closed for every shape not opted by CF-S1b
+  and CF-S1c (verified on `cf-waystone-premise` at `46c632aa`): a `SELECT`
+  nobody opted pays one atomic load while nothing is opted, or one hash miss
+  while something is, and is never sighted (`waystone-concpets.md` §4b).
+  BN-S1's census put recording and the replay attempt at 7-9 % of a point
+  read's server CPU, and CF-S0 at 2.7-3.9 %
+  (`bench/v3.3.0/results-cf-s0-premise-v3.3.0-97-g3d628df4.md`); an opted
+  point read still pays it. The gate's own saving is unmeasured until
+  CF-S2's close.
 - **The request path's floor is the kernel's**: a `C_PING` round trip costs
   12 µs of server CPU and 26 µs at p50 on a quiet host at BN's close, 64 % of
   the CPU in its one `send()` and 33 % in the read and the reactor's wake
@@ -1267,7 +1288,9 @@ Verified on `worktree-bz-background-advisory-optimizer` at `954abc20`
 
 - **The advisory work still runs on the statement.** Trail recording, replay's
   directory walk and `sys.access_stats`' exclusive page are written by the
-  statement that executed, as §1.1 of the order reads them. CA did not move
+  statement that executed, as §1.1 of the order reads them. Narrowed by
+  CF-S1b (on `cf-waystone-premise` at `46c632aa`): the Waystone half runs
+  only for a shape an operator opted in. CA did not move
   them: CA-S0 measured them at 0.2-0.6 % of sampled server CPU on scenarios 1-4,
   and switching all three keys off moved no throughput outside noise
   (`bench/v3.2.0/results-ca-s0-premise-*.md`). The order's note, drain, steward and
@@ -1287,6 +1310,65 @@ Verified on `worktree-bz-background-advisory-optimizer` at `954abc20`
 - **Scenario 2's `--verify` reports 8-12 % failed I1 checks in every arm,
   the base included**, and 13-28 of 400 at `v3.1.0-30`. Nobody has determined
   whether this is the driver's read skew or an invariant slip in the engine.
+
+## The Waystone opt-in (CF)
+
+Verified on `cf-waystone-premise` at `46c632aa`
+(`instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.6; owner
+`docs/spec/waystone-concpets.md` §4a-§4e). What Branch O closed is restated
+in the entries above (the point-read recording cost, the registration scan,
+the claim's deepening trap, the leak per mount); these are what it leaves.
+
+- **Warm-up after every mount.** Trails are unlogged and discarded at every
+  mount (CF-O-Q2 (a)), so after any restart, clean or not, an opted instance
+  records again on its second execution on one core and replays only from
+  its third. The opt-in survives; its trails do not.
+- **An opt-in lapses at a `kFingerprintVersion` bump.** An opted row of the
+  old version records nothing, keeps no root and reads `waystone = 0`; the
+  mount logs `INFO [waystone] <n> opt-ins lapsed at fingerprint version <v>` while
+  no current row of its `fetch_id` is opted. Nothing carries the bit
+  forward, since that would need stored text (CF-O-Q12 (a)): the operator
+  re-issues `WAYSTONE ON`.
+- **The refill: a whole-chain scan of `sys.patterns` per core per schema
+  word move, while anything is opted.** Every core drops its opted map at a
+  word move and refills it at its next opted-candidate `SELECT`. The word
+  moves on DDL, on a clustered or index root growth (which DML causes, on
+  every core but the growing one), on a `CABIN AUTO` create or drop, on a
+  catalog-writing resolve and on an opt-in, so it is not "per DDL". Bounded
+  by the rows ever opted; not measured.
+- **An opt-in is by text.** `fetch_id` carries no namespace and no oid, so
+  one `WAYSTONE ON` applies under every `USE` whose text matches and
+  **survives `DROP TABLE`** and a re-create under the same name: no
+  `sys.patterns` writer runs on a drop. Replay stays correct through the
+  `rel_oid` check (`exec/trail_replay.cpp`), but the recording cost comes
+  back on a shape nobody opted for the new relation, and each mount renews a
+  directory for an example that no longer resolves. It must be turned off
+  explicitly (`OFF <select>` needs no relation). `manual/sql/sql.md` says so.
+- **The opted path's own costs are left as built** (CF-O-Q13 (a)): every
+  re-record takes the directory page exclusive, which dirties it
+  (`src/stats/waystone_dir.cpp`, `LookupOrCreateWaystonePage`'s `Get`), and
+  every replayed statement builds `TrailReplay::Build`'s per-statement step
+  map (`src/exec/trail_replay.cpp`). CF-S0 measured no cost there to
+  remove. CF-S2's close prices the opted path whole: `scanprobe` opted is
+  level with the engine before O, which recorded it anyway (-0.3 % server
+  CPU, inside the spread; `bench/v3.4.0/results-cf-s2-close-v3.4.0-9-g46c632aa.md`).
+- **The mount's per-opted-row directory create is unmeasured.** Each opted
+  row costs the mount, before the listener binds, one device read of the new
+  page's id and, on an id the device still holds, a zero write and a sync on
+  the data-sync thread, plus one logged overwrite. The cursor restarts at
+  128 at a clean mount, so the zero-write arm is the common one after a run
+  that reclaimed pages.
+- **Measured at CF-S2's close, at `cores = 1`** (`v3.4.0-9-g46c632aa`,
+  `bench/v3.4.0/results-cf-s2-close-v3.4.0-9-g46c632aa.md`): the steady
+  state. With nothing opted, the lookup cells land on CF-S0's arm C (both
+  keys off). An opted `scanprobe` keeps its gain, and another shape's opt-in
+  costs the rest nothing measurable. **Still unmeasured:**
+  - the refill under a moving word, and the mount's added cost. The harness
+    has no cell for either: the refill needs root growth during a read cell,
+    and the mount cost needs many opted rows.
+  - a cold pool and a size sweep.
+  - `cores > 1` beyond the one `scanprobe` cell the close ran (the results
+    file).
 
 ## Catalog chains past the old ceiling
 
@@ -1314,24 +1396,30 @@ change's stages found and left.
   or memoising each relation's `sys.tables` row address (which also removes
   the O(chain) walk per `INSERT`), would close it; the second was CLA's
   proposed follow-up. **No owner.**
-- **Registering a pattern scans the whole of `sys.patterns` under page 9's
-  exclusive hold.** (D9.) `Catalog::RegisterPattern` holds the root
-  exclusive across the call, reads every row (`GetSysPatternRow` is a
-  `ScanAll` of the chain) to find the shape absent, then `InsertRow` walks
-  the chain again to place it. So each new shape costs O(pages) with every
-  other core's registration waiting behind it, and the chain only grows:
-  no pattern row is ever retired (retention, P15, is unbuilt), and a
-  fingerprint version bump leaves the old rows in place. The old 128-step
-  bound capped the chain by refusing past it; nothing caps it now. The
-  gated cell, `AMountClearsEveryWaystoneRootOfALongPatternChain`, registers
-  1,500 patterns; `CatalogPageCeilingTest.AMountClearsEveryWaystoneRootOfAPatternChainPastTheOldBound`,
-  17,000 patterns past 128 pages and run only with `KDS_TEST_LARGE_CATALOG`
-  set, takes about 270 s, almost all of it this scan. **No owner.**
-- **Every mount dirties every `sys.patterns` page.** The advisory discard
-  (`server::DiscardAdvisoryState`, run at every mount) clears every
-  Waystone root in one pass, `Catalog::ClearEveryPatternWaystoneRoot`,
-  whose walk fetches each page exclusive (`kWrite`), and an exclusive
-  fetch marks the frame dirty (`device_page_store.hpp`, "Get() marks the
+- **`WAYSTONE ON` scans the whole of `sys.patterns` under page 9's
+  exclusive hold.** Restated on `cf-waystone-premise` at `46c632aa`; the
+  statement-path registration scan this entry named (D9.) is gone with
+  `Catalog::RegisterPattern` (CF-S1b), so no `SELECT` scans or writes the
+  chain. `Catalog::SetPatternWaystone` holds the root exclusive across the
+  call: `ON` walks the chain for a current row and, finding none, inserts
+  through a second walk; `OFF` walks it whole, since it clears every row of
+  the `fetch_id` of any version. Each costs O(pages) with every other core's
+  `WAYSTONE` waiting behind it, and the chain only grows: `OFF` keeps its
+  row, no row is ever retired, and a fingerprint version bump leaves the old
+  rows in place. On a superblock-33 volume the chain holds only the shapes
+  ever opted, so its length is what operators opted, not what traffic
+  repeated. The gated cells, `AMountClearsEveryWaystoneRootOfALongPatternChain`
+  (1,500 opted rows) and, with `KDS_TEST_LARGE_CATALOG` set,
+  `CatalogPageCeilingTest.AMountClearsEveryWaystoneRootOfAPatternChainPastTheOldBound`
+  (17,000 past 128 pages, 212 s at CF-S1b), build their chains through it.
+  **No owner.**
+- **Every mount dirties every `sys.patterns` page.** Narrowed by CF-S1b
+  (on `cf-waystone-premise` at `46c632aa`): on a superblock-33 volume the
+  chain holds only the rows ever opted. The advisory discard
+  (`server::DiscardAdvisoryState`, run at every mount) renews every opted
+  row's root and clears every other in one `kWrite` pass,
+  `Catalog::RenewPatternDirectories`' second, whose walk fetches each page
+  exclusive, and an exclusive fetch marks the frame dirty (`device_page_store.hpp`, "Get() marks the
   frame dirty"), so the mount's completion checkpoint writes the whole
   chain back whether a row changed or not. A shared walk plus an upgrade
   would cost a second fetch per page that holds a directory; nobody has
@@ -1356,7 +1444,10 @@ change's stages found and left.
 - **The sim's restore with `skip_recovery` runs no advisory discard.**
   `SimInstance::CreateFromBackup` leaves the discard to `Boot`, which runs
   it only when it runs recovery, so a restored image booted with
-  `skip_recovery` keeps its Waystone roots and `sys.access_stats` rows.
+  `skip_recovery` keeps its Waystone roots and `sys.access_stats` rows,
+  and since CF-S1b skips the directory renewal too; it sets the opted count
+  by `RecountOptedPatterns` instead (on `cf-waystone-premise` at
+  `46c632aa`).
   Before the change `CreateFromBackup` discarded after `Boot` whatever the
   option said. A restore that skips recovery ships in no configuration;
   only the harness can build one. **No owner.**

@@ -582,8 +582,9 @@ def read_phases(client, tables, users, books, args, rng):
 
     Arguments are drawn fresh per operation from the loaded id lists rather
     than from a fixed hot key, because a single repeated argument would be
-    served by the probe memo and by a Waystone trail and would measure
-    neither the scan nor the index."""
+    served by the probe memo and would measure neither the scan nor the
+    index. No Waystone trail is in play: nothing records without
+    `WAYSTONE ON`, and this driver opts no shape in."""
     ops = args.ops
     phases = []
 

@@ -2,16 +2,21 @@
 
 Status: a design of four levels, **not built**, and with no statement to
 select one: `CREATE PATTERN`, which carried the `tracking =` option, is
-withdrawn (`create-pattern-user-defined-patterns-v1.md`). Every pattern
-behaves as level 3 — recording starts on the second execution — through
-`TrailRecorder`'s one threshold; there is no level field, and no retention
-exists to order. `SysPatternRow` carries `flags`/`kPatternPinned` and
-`origin`, neither of which anything writes.
+withdrawn (`create-pattern-user-defined-patterns-v1.md`). **Two states are
+built since CF-S1b, as the level field's two-state encoding**: bit 0 of
+`SysPatternRow.flags`, `kPatternWaystone`, which `WAYSTONE ON` sets and
+`WAYSTONE OFF` clears (`waystone-concpets.md` §4a). **0 is untracked** - the
+shape records and replays nothing, and is never sighted - and **1 is level
+3** - recording starts on the second execution of an instance, through
+`TrailRecorder`'s one threshold, `kRecordThreshold = 2`. A level field
+would widen this encoding in place, in `flags`, rather than sit beside it.
+No retention exists to order, and levels 1, 2 and 4 have no encoding.
+`origin` is a reserved byte, written 0 and read by nothing.
 
 The design: a *tracking level* per pattern decides how hard the engine
-works to keep its instances' trails, replacing a `pinned` boolean and
-giving retention its eviction order — level 4 first, then 3, then 2, within
-a level by the lazy-decay score (`physical-optimizer.md` R1); level 1 is
+works to keep its instances' trails, replacing the `pinned` boolean the
+bit was re-scoped from and giving retention its eviction order — level 4
+first, then 3, then 2, within a level by the lazy-decay score (`physical-optimizer.md` R1); level 1 is
 never a candidate. Invariant 9 holds at every level: levels change how much
 performance the cache promises, never what a query returns.
 

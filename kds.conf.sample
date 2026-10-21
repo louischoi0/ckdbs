@@ -322,27 +322,42 @@ kwp_port = 0
 
 # ---- Waystone --------------------------------------------------------------
 
-# Whether a successful SELECT records where it found its rows, so a repeated
-# query pattern can later look instead of search (docs/spec/waystone-concpets.md).
+# **Nothing records until an operator opts a query shape in** with
+# `WAYSTONE ON <select>` (manual/sql/sql.md; docs/spec/waystone-concpets.md
+# section 4a). Since superblock 33 these two keys are the instance's
+# ceilings over the opted shapes, boot-only: `on` means an opted shape may
+# record (and replay), not that every repeated SELECT does. A shape nobody
+# opted never records or writes; it pays one memory load per SELECT while
+# nothing is opted, and once anything is, a SELECT with a tuple key lookup
+# or probe also pays a hash miss and a share of a sys.patterns rescan after
+# each catalog change. The boot
+# log line `[waystone] waystone_recording=... waystone_replay=...
+# waystone_opted=<n>` and SHOW META's `waystone` section say what is in
+# effect; `waystone_opted=0` means nothing records whatever these say.
 #
-# What it costs: one waystone page per pattern *instance* that executes
-# twice. (`CREATE PATTERN` lowered that to one execution for a declared
-# pattern until it was withdrawn on 2026-08-31; there is one threshold
-# now.) Trails are unlogged,
-# so a crash loses whatever the last checkpoint did not carry, which costs
-# future replays and never results.
+# waystone_recording: whether an opted shape records where it found its
+# rows, so a repeated instance can later look instead of search.
+#
+# What it costs: one waystone page per opted pattern *instance* that
+# executes twice, plus one directory page per opted shape at every start.
+# Trails are unlogged and discarded at every start (the opt-in itself is
+# logged and survives), which costs future replays and never results. With
+# this off, `WAYSTONE ON` is still accepted and records nothing; the next
+# start with it on gives the shape its directory.
 #
 # What it buys: whatever `waystone_replay` below can then use. With replay
 # off this is pure write side and buys nothing, which is a reasonable way to
-# measure the recording cost on its own.
+# measure the recording cost on its own. Measured at v3.3.0-97-g3d628df4
+# (bench/v3.3.0/results-cf-s0-premise-v3.3.0-97-g3d628df4.md): replay pays on
+# a scan-driven chain with many tuple-key probes, and nothing on point reads.
 #
 # Turning it on and off must never change a single reply. That equality is a
 # regression test, and it is also something you can check against your own
 # data.
 waystone_recording = on
 
-# Whether a SELECT may be served from a trail a previous execution recorded:
-# a validated location read directly, instead of a B+ tree descent.
+# Whether an opted SELECT may be served from a trail a previous execution
+# recorded: a validated location read directly, instead of a B+ tree descent.
 #
 # This is the half that repays recording, and the only Waystone setting that
 # can be asked to produce a row. It still cannot change one: a trail supplies

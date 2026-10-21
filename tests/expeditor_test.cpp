@@ -23,6 +23,7 @@
 #include "kds/catalog/oid.hpp"
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/well_known.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/file_page_device.hpp"
@@ -459,31 +460,50 @@ TEST_F(ExpeditorTest, ACheckpointsPagesAndDataSyncsAreCounted) {
 // allocation bit is not, the cursor would hand that id to a logged page, and
 // the next Waystone write would overwrite it with no record. A mount cannot
 // tell the two stops apart (invariant 8 allows the discard).
-TEST_F(ExpeditorTest, EveryMountDiscardsTheWaystoneItFinds) {
+// Every mount discards the trails it finds and **renews** an opted
+// pattern's directory (CF-S1b): a fresh, empty root, so the trail recorded
+// last run is gone and the opt-in is not.
+TEST_F(ExpeditorTest, EveryMountRenewsTheWaystoneDirectoryItFinds) {
     Expeditor::Config config = ConfigAt(1);
-    const auto directories = [](Expeditor& db) {
-        auto patterns = db.catalog().ListPatterns();
-        EXPECT_TRUE(patterns.ok());
-        return patterns.ok() ? std::count_if(patterns.value().begin(), patterns.value().end(),
-                                             catalog::HasWaystoneDirectory)
-                             : std::ptrdiff_t{0};
+    const std::string sql = "SELECT * FROM ws WHERE id = 1";
+    const auto root_of = [&](Expeditor& db) {
+        auto fp = parser::FingerprintOf(sql);
+        EXPECT_TRUE(fp.has_value());
+        auto row = db.catalog().GetSysPatternRow(fp->fetch_id);
+        EXPECT_TRUE(row.ok()) << row.status().message();
+        EXPECT_TRUE(row.ok() && (row.value().flags & catalog::kPatternWaystone) != 0)
+            << "the opt-in did not survive";
+        return row.ok() && catalog::HasWaystoneDirectory(row.value()) ? row.value().waystone_root
+                                                                      : kInvalidPageId;
     };
+    PageId first_root = kInvalidPageId;
     {
         auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
         ASSERT_TRUE(opened.ok()) << opened.status().message();
         Expeditor& db = *opened.value();
-        for (const char* sql : {"CREATE TABLE ws (id int64, v int64)", "INSERT INTO ws VALUES (5)",
-                                "SELECT * FROM ws WHERE id = 1", "SELECT * FROM ws WHERE id = 1"}) {
-            const std::string reply = db.dispatcher().Dispatch(sql).response;
-            ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << sql << ": " << reply;
+        for (const std::string& line :
+             {std::string("CREATE TABLE ws (id int64, v int64)"),
+              std::string("INSERT INTO ws VALUES (5)"), "WAYSTONE ON " + sql, sql, sql}) {
+            const std::string reply = db.dispatcher().Dispatch(line).response;
+            ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << line << ": " << reply;
         }
-        ASSERT_GT(directories(db), 0) << "nothing was recorded; the cell proves nothing";
+        const std::string analyzed = db.dispatcher().Dispatch("ANALYZE " + sql).response;
+        ASSERT_NE(analyzed.find("replays=1"), std::string::npos)
+            << "nothing was recorded; the cell proves nothing: " << analyzed;
+        first_root = root_of(db);
+        ASSERT_NE(first_root, kInvalidPageId);
         ASSERT_TRUE(db.Checkpoint().ok());
     }
 
     auto reopened = Expeditor::Open(config, /*now_unix_seconds=*/2000);
     ASSERT_TRUE(reopened.ok()) << reopened.status().message();
-    EXPECT_EQ(directories(*reopened.value()), 0);
+    Expeditor& db = *reopened.value();
+    const PageId renewed = root_of(db);
+    EXPECT_NE(renewed, kInvalidPageId) << "the opted row was given no directory";
+    EXPECT_NE(renewed, first_root) << "the mount kept the previous run's directory";
+    const std::string analyzed = db.dispatcher().Dispatch("ANALYZE " + sql).response;
+    EXPECT_EQ(analyzed.find("replays="), std::string::npos)
+        << "a trail survived the mount: " << analyzed;
 }
 
 TEST_F(ExpeditorTest, APoolBelowTheVolumesFloorIsRefusedAtMountNamingBothNumbers) {

@@ -87,9 +87,7 @@ protected:
                                                  /*log=*/nullptr);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         core0_.emplace(std::move(boot.value()));
-        core0_->catalog.SetSchemaWord(&schema_word_);
-        core0_->catalog.SetOidSequence(&oid_sequence_);
-        core0_->catalog.SetMarkCounter(&pending_marks_);
+        core0_->catalog.SetInstanceWords(&words_);
 
         ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -167,9 +165,7 @@ protected:
         // Required wherever a cell opens a store of the runtime's own
         // (BE-R3); ignored where one is shared.
         c.buffer_pool_frames = 4096;
-        c.schema_word = &schema_word_;
-        c.oid_sequence = &oid_sequence_;
-        c.mark_counter = &pending_marks_;
+        c.instance_words = &words_;
         // What `Expeditor` hands a peer on a single-stream volume, and what
         // `CoreRuntime::Open` refuses to proceed without (AM-S0); the one
         // cell that watches that refusal clears them itself.
@@ -242,12 +238,12 @@ protected:
     // The instance read view every core of this fixture shares (AN-S3;
     // `ConfigFor` says why one and not one per side).
     txn::InstanceVisibility visibility_;
-    // **The instance's schema version word** (AT-S2), one for the fixture:
-    // core 0's catalog bumps it and every peer's revalidates against it,
-    // which is what replaced the broadcast the rigs here used to send.
-    std::atomic<std::uint64_t> schema_word_{0};
-    std::atomic<catalog::Oid> oid_sequence_{0};  // AT-S5b
-    std::atomic<std::uint64_t> pending_marks_{0};  // AT-S5b
+    // **The instance's four words** (CT6), one set for the fixture: core
+    // 0's catalog bumps the schema word and every peer's revalidates
+    // against it, which is what replaced the broadcast the rigs here used
+    // to send; the oid sequence, the mark count and the opted count are
+    // shared on the same terms.
+    catalog::InstanceWords words_;
     Latch superblock_latch_;  // AT-S10b: the one ceiling every core carves from
 };
 
@@ -1487,14 +1483,16 @@ TEST_F(CoreRuntimeTest, APeerMayWriteTheStatisticsRelationsAndHasWrittenNothing)
     // **Renamed at AT-S12** from P6's `APeerIsWiredWithRecordingOff`, false
     // since AT-S7: a peer records trails and access shapes (`Config::waystone_recording` and
     // `access_statistics` both default on). P6 had it off because
-    // sys.patterns and sys.access_stats are catalog pages written on the
-    // statement path and a peer could not write them. What the cell still
-    // pins: the store admits the peer's write, and a peer that has run no
-    // statement has written nothing.
+    // sys.patterns and sys.access_stats were catalog pages written on the
+    // statement path and a peer could not write them. Since CF-S1b only
+    // sys.access_stats is written on the statement path; a peer writes
+    // sys.patterns through `WAYSTONE ON`/`OFF` alone. What the cell still
+    // pins: the store admits the peer's write to either page, and a peer
+    // that has run no statement has written nothing.
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    // The write a recording peer makes. The boundary and the asker are
+    // The write a peer may make. The boundary and the asker are
     // both stated for the reason `EveryCoreMayWriteTheCatalogPages` gives.
     peer.value()->store().SetResidentLimit(kFirstUserPageId);
     {
@@ -1722,15 +1720,10 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     // bumps it, and the peer revalidates off the shared frame. The flush
     // that stood here carried the row to the *device*, for an owner that
     // re-read from there; one pool serves every core now.
-    rig.catalog2->SetSchemaWord(&schema_word_);
-    // All three instance words, not the schema one alone: this rig's second
-    // catalog writes the same store, so a private oid counter here is the
-    // duplicate-oid trap AT-S5b closed everywhere else. Unreachable as the
-    // rig stands - one table, created before the wired catalogs issue
-    // anything - and wired because the next cell that adds a table would
-    // not know it had to.
-    rig.catalog2->SetOidSequence(&oid_sequence_);
-    rig.catalog2->SetMarkCounter(&pending_marks_);
+    // Every instance word, not the schema one alone: this rig's second
+    // catalog writes the same store, so a private oid counter here would be
+    // the duplicate-oid trap AT-S5b closed everywhere else.
+    rig.catalog2->SetInstanceWords(&words_);
     auto oid = rig.catalog2->CreateTable(catalog::kNamespacePublic, table, TwoColumnSchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     rig.oid = oid.value();

@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "kds/base/log.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/server/superblock.hpp"
@@ -32,9 +33,10 @@ class CatalogTest : public ::testing::Test {
 protected:
     storage::InMemoryPageStore store_{server_first_new_page_id_};
     Catalog catalog_{store_};
-    // The schema word the AT-S2 cells share between this catalog and a
-    // reader (a fixture member, so it outlives every catalog pointing at it).
-    std::atomic<std::uint64_t> word{0};
+    // The instance words the AT-S2 cells share between this catalog and a
+    // reader (a fixture member; trivially destructible, so a catalog
+    // destroyed after it reads none of it).
+    InstanceWords words;
 
     // Matches kds::server::kFirstUserPageId (128) so freshly-created pages -
     // user tables' and a catalog chain's growth alike - never collide with
@@ -785,14 +787,14 @@ TEST_F(CatalogTest, EveryDdlBumpsTheSchemaWordAndTheWriterKeepsItsOwnCache) {
     // the DDL's relation `X` is released, D21's order - and the writer's own
     // cache, dropped by `BumpVersion()` itself, is not dropped a second
     // time by its own bump: `cache_built_at_` moves with the word.
-    catalog_.SetSchemaWord(&word);
+    catalog_.SetInstanceWords(&words);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    const std::uint64_t after_bootstrap = word.load();
+    const std::uint64_t after_bootstrap = words.schema_word.load();
     EXPECT_GT(after_bootstrap, 0u) << "bootstrap writes catalog rows and bumps";
 
     auto oid = catalog_.CreateTable(kNamespacePublic, "w", MinimalTupleKeySchema());
     ASSERT_TRUE(oid.ok()) << oid.status().message();
-    EXPECT_GT(word.load(), after_bootstrap);
+    EXPECT_GT(words.schema_word.load(), after_bootstrap);
 
     // The writer's cache holds across its own bumps: two resolves, one fill.
     const auto stats_before = catalog_.cache_stats();
@@ -809,14 +811,14 @@ TEST_F(CatalogTest, AReaderDropsOnlyAtItsBoundaryNeverInsideARead) {
     // reader that filled `a`, saw the word move, and then read `b` - as a
     // join's second bind does - still holds `a`; its next `Revalidate()` is
     // what drops.
-    catalog_.SetSchemaWord(&word);
+    catalog_.SetInstanceWords(&words);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto a = catalog_.CreateTable(kNamespacePublic, "a", MinimalTupleKeySchema());
     auto b = catalog_.CreateTable(kNamespacePublic, "b", MinimalTupleKeySchema());
     ASSERT_TRUE(a.ok() && b.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
-    reader.SetSchemaWord(&word);
+    reader.SetInstanceWords(&words);
     reader.Revalidate();
     auto held = reader.InitTableAccess(a.value());
     ASSERT_TRUE(held.ok());
@@ -841,13 +843,13 @@ TEST_F(CatalogTest, ABumpFromACacheThatIsBehindDoesNotSwallowTheOneItMissed) {
     // admits one - and must **not** adopt the new value, or the bump it
     // never revalidated against is swallowed and the stale memo stands for
     // good. The next boundary must still drop.
-    catalog_.SetSchemaWord(&word);
+    catalog_.SetInstanceWords(&words);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto oid = catalog_.CreateTable(kNamespacePublic, "s", MinimalTupleKeySchema());
     ASSERT_TRUE(oid.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
-    reader.SetSchemaWord(&word);
+    reader.SetInstanceWords(&words);
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
     const std::uint64_t drops = reader.cache_stats().invalidations;
@@ -869,13 +871,13 @@ TEST_F(CatalogTest, AReaderDropsItsCacheWhenTheWordMovesAndOnlyThen) {
     // is. It fills its memo, the word moves, and its next cached read
     // drops the memo and refills - with nothing sent. While the word is
     // still, the memo is served.
-    catalog_.SetSchemaWord(&word);
+    catalog_.SetInstanceWords(&words);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto oid = catalog_.CreateTable(kNamespacePublic, "r", MinimalTupleKeySchema());
     ASSERT_TRUE(oid.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
-    reader.SetSchemaWord(&word);
+    reader.SetInstanceWords(&words);
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
     const auto filled = reader.cache_stats();
@@ -897,13 +899,13 @@ TEST_F(CatalogTest, InvalidateAfterCompensationBumpsTheWordAndDropCacheDoesNot) 
     // catalog-writing transaction make (`TxnSessionTest` runs the endings
     // themselves); it bumps. `DropCache()` is the mount's post-redo drop;
     // it bumps nothing, since nothing on this instance's numbering changed.
-    catalog_.SetSchemaWord(&word);
+    catalog_.SetInstanceWords(&words);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    const std::uint64_t before = word.load();
+    const std::uint64_t before = words.schema_word.load();
     catalog_.InvalidateAfterCompensation();
-    EXPECT_EQ(word.load(), before + 1);
+    EXPECT_EQ(words.schema_word.load(), before + 1);
     catalog_.DropCache();
-    EXPECT_EQ(word.load(), before + 1);
+    EXPECT_EQ(words.schema_word.load(), before + 1);
 }
 
 // The version counter parser.md I5 / PR20 stamp bound statements with. Its
@@ -1054,16 +1056,41 @@ TEST(CatalogCacheWriteAmplificationTest, CachedReadsDoNotDirtyCatalogPages) {
 
 // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) -------------------
 
+// A logger over memory, for the renewal's lapse line.
+class CapturedLog {
+public:
+    CapturedLog() : logger_(&sink_, clock_, LogLevel::kTrace) {}
+    Logger* get() noexcept { return &logger_; }
+    // Whether a line carries "[<component>]" and every one of `needles`.
+    bool Has(const std::string& component, const std::vector<std::string>& needles) const {
+        for (const std::string& line : sink_.lines) {
+            if (line.find("[" + component + "]") == std::string::npos) continue;
+            if (std::all_of(needles.begin(), needles.end(), [&](const std::string& n) {
+                    return line.find(n) != std::string::npos;
+                })) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+private:
+    MemoryLogSink sink_;
+    ManualWallClock clock_{1'700'000'000};
+    Logger logger_;
+};
+
 class PatternCatalogTest : public ::testing::Test {
 protected:
     void SetUp() override { ASSERT_TRUE(catalog_.Bootstrap().ok()); }
 
     // Writes a sys.patterns row straight onto the catalog page, bypassing
-    // RegisterPattern(). This is how a stale row actually comes to exist -
-    // an older build wrote it and then the fingerprint version was bumped -
-    // and there is deliberately no API that can produce one, since
-    // RegisterPattern() stamps the current version itself.
-    void WriteRawPatternRow(std::uint64_t fetch_id, std::uint32_t version) {
+    // SetPatternWaystone(). This is how a stale row actually comes to exist
+    // - an older build wrote it and then the fingerprint version was bumped
+    // - and there is deliberately no API that can produce one, since
+    // SetPatternWaystone() stamps the current version itself.
+    void WriteRawPatternRow(std::uint64_t fetch_id, std::uint32_t version,
+                            std::uint16_t flags = 0, PageId root = kInvalidPageId) {
         auto bytes = store_.Get(kCatalogPagePatterns);
         ASSERT_TRUE(bytes.ok());
         kds::heap::PageView page(bytes.value().bytes());
@@ -1072,9 +1099,35 @@ protected:
         row.oid = 900000 + fetch_id;
         row.fetch_id = fetch_id;
         row.fingerprint_version = version;
-        row.waystone_root = kInvalidPageId;
+        row.waystone_root = root;
+        row.dir_depth = root != kInvalidPageId ? 1 : 0;
+        row.flags = flags;
         auto encoded = row.Encode();
         ASSERT_TRUE(page.InsertTuple(encoded, kBootstrapXid).ok());
+    }
+
+    // `WAYSTONE ON`/`OFF`'s write, answering whether it wrote.
+    bool On(std::uint64_t fetch_id, PageId root = kInvalidPageId) {
+        auto wrote = catalog_.SetPatternWaystone(fetch_id, kStmtClassUnclassified, true, root);
+        EXPECT_TRUE(wrote.ok()) << wrote.status().message();
+        return wrote.ok() && wrote.value().written;
+    }
+    bool Off(std::uint64_t fetch_id) {
+        auto wrote = catalog_.SetPatternWaystone(fetch_id, 0, false, kInvalidPageId);
+        EXPECT_TRUE(wrote.ok()) << wrote.status().message();
+        return wrote.ok() && wrote.value().written;
+    }
+
+    // Every row carrying `fetch_id`, of any version, in page order.
+    std::vector<SysPatternRow> RowsOf(std::uint64_t fetch_id) {
+        std::vector<SysPatternRow> out;
+        auto rows = catalog_.ListPatterns();
+        EXPECT_TRUE(rows.ok());
+        if (!rows.ok()) return out;
+        for (const SysPatternRow& row : rows.value()) {
+            if (row.fetch_id == fetch_id) out.push_back(row);
+        }
+        return out;
     }
 
     storage::InMemoryPageStore store_{128};
@@ -1094,82 +1147,137 @@ TEST_F(PatternCatalogTest, BootstrapCreatesTheRelation) {
     EXPECT_EQ(row.value().desc_page_id, kCatalogPagePatterns);
 }
 
-TEST_F(PatternCatalogTest, RegisterThenFindRoundTrips) {
-    auto registered = catalog_.RegisterPattern(0xABCDEF, kStmtClassUnclassified);
-    ASSERT_TRUE(registered.ok()) << registered.status().message();
-    EXPECT_EQ(registered.value()->fetch_id, 0xABCDEFu);
-    EXPECT_EQ(registered.value()->fingerprint_version, kVersion);
-    EXPECT_FALSE(registered.value()->has_waystone_directory());
+// ---- WAYSTONE ON / OFF's one writer (CF-S1b) ---------------------------------
 
-    auto found = catalog_.FindPattern(0xABCDEF);
+TEST_F(PatternCatalogTest, OnInsertsAnOptedRowThatFindRoundTrips) {
+    ASSERT_TRUE(On(0xABCDEF));
+    auto found = catalog_.FindOptedPattern(0xABCDEF);
     ASSERT_TRUE(found.ok()) << found.status().message();
-    EXPECT_EQ(found.value()->oid, registered.value()->oid);
+    EXPECT_EQ(found.value()->fetch_id, 0xABCDEFu);
+    EXPECT_EQ(found.value()->fingerprint_version, kVersion);
+    EXPECT_NE(found.value()->flags & kPatternWaystone, 0);
+    EXPECT_FALSE(found.value()->has_waystone_directory()) << "no root was passed";
 
-    // Reference-stable, like InitTableAccess(): the caller may hold it.
-    EXPECT_EQ(found.value(), registered.value());
+    auto row = catalog_.GetSysPatternRow(0xABCDEF);
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().origin, 0) << "the reserved byte is written 0";
 }
 
 TEST_F(PatternCatalogTest, AnUnknownPatternIsNotFound) {
-    auto found = catalog_.FindPattern(12345);
+    // With nothing opted, and with something else opted: NotFound both ways.
+    EXPECT_EQ(catalog_.FindOptedPattern(12345).status().code(), StatusCode::kNotFound);
+    ASSERT_TRUE(On(1));
+    auto found = catalog_.FindOptedPattern(12345);
     EXPECT_FALSE(found.ok());
     EXPECT_EQ(found.status().code(), StatusCode::kNotFound);
 }
 
-TEST_F(PatternCatalogTest, RegisteringTwiceIsRefused) {
-    ASSERT_TRUE(catalog_.RegisterPattern(7, kStmtClassUnclassified).ok());
-    auto again = catalog_.RegisterPattern(7, kStmtClassUnclassified);
-    EXPECT_FALSE(again.ok());
-    EXPECT_EQ(again.status().code(), StatusCode::kAlreadyExists);
+// An opted-out row is still on the page, and no longer in the opted map.
+TEST_F(PatternCatalogTest, AnOptedOutRowIsNotFound) {
+    ASSERT_TRUE(On(2));
+    ASSERT_TRUE(On(3));
+    ASSERT_TRUE(catalog_.FindOptedPattern(3).ok());
+    ASSERT_TRUE(Off(3));
+    EXPECT_EQ(catalog_.FindOptedPattern(3).status().code(), StatusCode::kNotFound);
+    EXPECT_TRUE(catalog_.GetSysPatternRow(3).ok()) << "OFF deleted the row";
+}
+
+TEST_F(PatternCatalogTest, OnTwiceIsUnchangedAndInsertsOneRow) {
+    ASSERT_TRUE(On(7));
+    EXPECT_FALSE(On(7)) << "a second ON wrote";
+    EXPECT_EQ(RowsOf(7).size(), 1u);
+}
+
+TEST_F(PatternCatalogTest, OnWritesTheRootItCarriesOnlyWhereTheRowHasNone) {
+    ASSERT_TRUE(On(5));
+    // Opted with no root, then a root: written, at depth 1.
+    EXPECT_TRUE(On(5, 4096));
+    auto row = catalog_.GetSysPatternRow(5);
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().waystone_root, 4096u);
+    EXPECT_EQ(row.value().dir_depth, 1);
+    // A row already rooted keeps its root; the page carried is unused.
+    EXPECT_FALSE(On(5, 8192));
+    EXPECT_EQ(catalog_.GetSysPatternRow(5).value().waystone_root, 4096u);
+}
+
+TEST_F(PatternCatalogTest, OffClearsTheBitAndTheRootAndKeepsTheRow) {
+    ASSERT_TRUE(On(9, 4096));
+    EXPECT_TRUE(Off(9));
+    const auto rows = RowsOf(9);
+    ASSERT_EQ(rows.size(), 1u) << "OFF deleted the row";
+    EXPECT_EQ(rows[0].flags & kPatternWaystone, 0);
+    EXPECT_FALSE(HasWaystoneDirectory(rows[0]));
+    EXPECT_FALSE(Off(9)) << "a second OFF wrote";
+    EXPECT_FALSE(Off(404)) << "OFF of a pattern no row names wrote";
+    // And ON again re-opts the kept row rather than inserting a second.
+    EXPECT_TRUE(On(9));
+    EXPECT_EQ(RowsOf(9).size(), 1u);
 }
 
 TEST_F(PatternCatalogTest, PatternOidsComeFromThePersistentSequence) {
-    auto a = catalog_.RegisterPattern(1, kStmtClassUnclassified);
-    auto b = catalog_.RegisterPattern(2, kStmtClassUnclassified);
+    ASSERT_TRUE(On(1));
+    ASSERT_TRUE(On(2));
+    auto a = catalog_.GetSysPatternRow(1);
+    auto b = catalog_.GetSysPatternRow(2);
     ASSERT_TRUE(a.ok());
     ASSERT_TRUE(b.ok());
 
     // Distinct and monotonic, and - unlike GenerateUserOid() - persisted,
     // so a restart does not reissue them onto rows that already exist.
-    EXPECT_NE(a.value()->oid, b.value()->oid);
-    EXPECT_LT(a.value()->oid, b.value()->oid);
-
+    EXPECT_LT(a.value().oid, b.value().oid);
     auto table_row = catalog_.GetSysTableRow(kSysPatternsTable);
     ASSERT_TRUE(table_row.ok());
-    EXPECT_GT(table_row.value().next_id, b.value()->oid);
+    EXPECT_GT(table_row.value().next_id, b.value().oid);
+}
+
+// The opt-in is the fact a peer's pattern entry caches, so it moves the
+// schema word - after the write, and only when something was written.
+TEST_F(PatternCatalogTest, AnOptInMovesTheCatalogVersionAndUnchangedDoesNot) {
+    const std::uint64_t before = catalog_.catalog_version();
+    ASSERT_TRUE(On(31));
+    const std::uint64_t after_on = catalog_.catalog_version();
+    EXPECT_GT(after_on, before);
+    EXPECT_FALSE(On(31));
+    EXPECT_EQ(catalog_.catalog_version(), after_on) << "an unchanged ON moved the version";
+    ASSERT_TRUE(Off(31));
+    EXPECT_GT(catalog_.catalog_version(), after_on);
 }
 
 // ---- The version gate (the catalog half of P02) ---------------------------
 
 TEST_F(PatternCatalogTest, AForeignVersionResolvesAsAbsentNotAsAnError) {
-    WriteRawPatternRow(99, kForeignVersion);
+    // Opted at its own version, and something current opted beside it, so
+    // the map fills and the filter is what keeps the row out of it.
+    WriteRawPatternRow(99, kForeignVersion, kPatternWaystone);
+    ASSERT_TRUE(On(98));
 
     // The row is on the page, and the lookup still reports the pattern as
     // never seen: its fetch_id was computed under rules this build does
     // not implement, so it names a shape that is not the one it claims.
     // NotFound, not a failure - nothing about a stale row should fail a
     // statement.
-    auto found = catalog_.FindPattern(99);
+    auto found = catalog_.FindOptedPattern(99);
     EXPECT_FALSE(found.ok());
     EXPECT_EQ(found.status().code(), StatusCode::kNotFound);
 
     // And the same filter applies to the row accessor, which is where it
-    // lives. A caller reaching past FindPattern() for heat must not see a
+    // lives. A caller reaching past FindOptedPattern() for heat must not see a
     // stale row either.
     EXPECT_EQ(catalog_.GetSysPatternRow(99).status().code(), StatusCode::kNotFound);
 }
 
-TEST_F(PatternCatalogTest, APatternStaleAtOneVersionCanBeReRegisteredAtTheCurrentOne) {
-    WriteRawPatternRow(55, kForeignVersion);
+TEST_F(PatternCatalogTest, APatternStaleAtOneVersionCanBeOptedInAtTheCurrentOne) {
+    WriteRawPatternRow(55, kForeignVersion, kPatternWaystone);
 
-    // Not AlreadyExists: as far as this build is concerned the pattern has
-    // never been seen, and refusing to record it would leave the shape
-    // permanently unlearnable after a version bump.
-    auto fresh = catalog_.RegisterPattern(55, kStmtClassUnclassified);
-    ASSERT_TRUE(fresh.ok()) << fresh.status().message();
-
-    auto found = catalog_.FindPattern(55);
+    // As far as this build is concerned the pattern has never been opted:
+    // ON inserts a current row beside the lapsed one rather than writing
+    // through it.
+    ASSERT_TRUE(On(55));
+    auto found = catalog_.FindOptedPattern(55);
     ASSERT_TRUE(found.ok());
     EXPECT_EQ(found.value()->fingerprint_version, kVersion);
+    EXPECT_EQ(RowsOf(55).size(), 2u);
 }
 
 TEST_F(PatternCatalogTest, AStaleRowDoesNotShadowTheCurrentOne) {
@@ -1178,9 +1286,9 @@ TEST_F(PatternCatalogTest, AStaleRowDoesNotShadowTheCurrentOne) {
     // took the first match by fetch_id would return the stale one, which
     // is the defect this ordering exists to catch.
     WriteRawPatternRow(77, kForeignVersion);
-    ASSERT_TRUE(catalog_.RegisterPattern(77, kStmtClassUnclassified).ok());
+    ASSERT_TRUE(On(77));
 
-    auto found = catalog_.FindPattern(77);
+    auto found = catalog_.FindOptedPattern(77);
     ASSERT_TRUE(found.ok());
     EXPECT_EQ(found.value()->fingerprint_version, kVersion);
 
@@ -1189,111 +1297,243 @@ TEST_F(PatternCatalogTest, AStaleRowDoesNotShadowTheCurrentOne) {
     EXPECT_EQ(row.value().fingerprint_version, kVersion);
 }
 
-TEST_F(PatternCatalogTest, ARegisteredRowAlwaysCarriesTheCurrentVersion) {
-    // The version is stamped by RegisterPattern(), not supplied - so there
-    // is no call that can write a row this build will not resolve.
-    auto registered = catalog_.RegisterPattern(4, kStmtClassUnclassified);
-    ASSERT_TRUE(registered.ok());
-    EXPECT_TRUE(parser::IsCurrentFingerprintVersion(registered.value()->fingerprint_version));
+// **OFF clears every row of its `fetch_id`, of any version** (§8.3 Storage,
+// OFF): a `fetch_id` is not salted by `kFingerprintVersion`, so after a bump
+// a lapsed opted row and a re-issued ON's current row share it. Stale first
+// on the page, so a first-match OFF would clear the lapsed row and leave
+// the current one recording.
+TEST_F(PatternCatalogTest, OffClearsALapsedRowAndTheCurrentRowOfOneFetchId) {
+    WriteRawPatternRow(88, kForeignVersion, kPatternWaystone, 4096);
+    ASSERT_TRUE(On(88, 8192));
+    ASSERT_EQ(RowsOf(88).size(), 2u);
+
+    EXPECT_TRUE(Off(88));
+    for (const SysPatternRow& row : RowsOf(88)) {
+        EXPECT_EQ(row.flags & kPatternWaystone, 0) << "version " << row.fingerprint_version;
+        EXPECT_FALSE(HasWaystoneDirectory(row)) << "version " << row.fingerprint_version;
+    }
+    EXPECT_FALSE(Off(88)) << "nothing was left opted";
 }
 
-// ---- The root/depth pair --------------------------------------------------
+// A lapsed row alone: OFF by number reaches it although no lookup does.
+TEST_F(PatternCatalogTest, OffReachesALapsedRowNoLookupReturns) {
+    WriteRawPatternRow(66, kForeignVersion, kPatternWaystone);
+    ASSERT_FALSE(catalog_.FindOptedPattern(66).ok());
+    EXPECT_TRUE(Off(66));
+    const auto rows = RowsOf(66);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].flags & kPatternWaystone, 0);
+}
 
-TEST_F(PatternCatalogTest, RootAndDepthAreValidatedAsAPair) {
-    ASSERT_TRUE(catalog_.RegisterPattern(10, kStmtClassUnclassified).ok());
-
-    // A root with no depth is unwalkable; a depth with no root has nothing
-    // to walk. Both are refused before the page is touched.
-    EXPECT_EQ(catalog_.ClaimPatternWaystoneRoot(10, 4096, 0).status().code(),
+TEST_F(PatternCatalogTest, OffTakesNoRoot) {
+    EXPECT_EQ(catalog_.SetPatternWaystone(1, 0, false, 4096).status().code(),
               StatusCode::kInvalidArgument);
-    EXPECT_EQ(catalog_.ClaimPatternWaystoneRoot(10, kInvalidPageId, 1).status().code(),
-              StatusCode::kInvalidArgument);
-    EXPECT_EQ(catalog_.ClaimPatternWaystoneRoot(10, 4096, kMaxPatternDirDepth + 1).status().code(),
-              StatusCode::kInvalidArgument);
-
-    // The two coherent shapes: a directory, and none.
-    EXPECT_TRUE(catalog_.ClaimPatternWaystoneRoot(10, 4096, 1).ok());
-    EXPECT_TRUE(catalog_.ClaimPatternWaystoneRoot(10, kInvalidPageId, 0).ok());
 }
 
-// **A claim, not a store** (AT-S7): every core records trails, so two can
-// find a pattern with no directory and each build one. The row keeps the
-// first and tells the second which pair won, so both write into one
-// directory instead of the second stranding every trail in the first.
-TEST_F(PatternCatalogTest, ASecondDirectoryIsRefusedAndTheFirstIsAnswered) {
-    ASSERT_TRUE(catalog_.RegisterPattern(12, kStmtClassUnclassified).ok());
-    auto first = catalog_.ClaimPatternWaystoneRoot(12, 4096, 1);
-    ASSERT_TRUE(first.ok());
-    EXPECT_EQ(first.value().first, 4096u);
+// ---- The mount's renewal (§8.3 Mount) ---------------------------------------
 
-    auto second = catalog_.ClaimPatternWaystoneRoot(12, 8192, 2);
-    ASSERT_TRUE(second.ok()) << "a loser is told the winner, never refused";
-    EXPECT_EQ(second.value().first, 4096u) << "the second directory replaced the first";
-    EXPECT_EQ(second.value().second, 1);
+TEST_F(PatternCatalogTest, TheRenewalRootsOptedRowsAndClearsEveryOtherRoot) {
+    ASSERT_TRUE(On(1, 4096));   // opted, rooted at the previous run's page
+    ASSERT_TRUE(On(2));         // opted, never rooted
+    ASSERT_TRUE(On(3, 4096));
+    ASSERT_TRUE(Off(3));        // opted out
+    WriteRawPatternRow(4, kForeignVersion, kPatternWaystone, 4096);  // lapsed, rooted
+    WriteRawPatternRow(5, kForeignVersion, 0, 4096);                 // other version, rooted
 
-    auto row = catalog_.GetSysPatternRow(12);
-    ASSERT_TRUE(row.ok());
-    EXPECT_EQ(row.value().waystone_root, 4096u);
+    CapturedLog log;
+    catalog_.SetLogger(log.get());
+    auto renewed = catalog_.RenewPatternDirectories(/*waystone_recording=*/true);
+    ASSERT_TRUE(renewed.ok()) << renewed.status().message();
+    EXPECT_EQ(renewed.value(), 2u) << "the opted current rows";
 
-    // Clearing is not a claim and always takes - it is how a directory is
-    // retired.
-    ASSERT_TRUE(catalog_.ClaimPatternWaystoneRoot(12, kInvalidPageId, 0).ok());
-    EXPECT_TRUE(catalog_.ClaimPatternWaystoneRoot(12, 8192, 2).ok());
-    EXPECT_EQ(catalog_.GetSysPatternRow(12).value().waystone_root, 8192u);
+    for (const std::uint64_t fetch_id : {1u, 2u}) {
+        auto row = catalog_.GetSysPatternRow(fetch_id);
+        ASSERT_TRUE(row.ok());
+        EXPECT_TRUE(HasWaystoneDirectory(row.value())) << fetch_id;
+        EXPECT_EQ(row.value().dir_depth, 1) << fetch_id;
+        EXPECT_NE(row.value().waystone_root, 4096u) << fetch_id << " kept its stale root";
+        EXPECT_NE(row.value().flags & kPatternWaystone, 0) << fetch_id;
+    }
+    for (const std::uint64_t fetch_id : {3u, 4u, 5u}) {
+        for (const SysPatternRow& row : RowsOf(fetch_id)) {
+            EXPECT_FALSE(HasWaystoneDirectory(row)) << fetch_id << " kept a root";
+        }
+    }
+    // Fetch id 4's lapse is reported, at its version; 5 was never opted.
+    EXPECT_TRUE(log.Has("waystone", {"1 opt-ins lapsed at fingerprint version " +
+                                     std::to_string(kForeignVersion)}));
 }
 
-TEST_F(PatternCatalogTest, SettingTheRootUpdatesTheCachedEntryInPlace) {
-    auto registered = catalog_.RegisterPattern(11, kStmtClassUnclassified);
-    ASSERT_TRUE(registered.ok());
-    const PatternAccess* held = registered.value();
-    ASSERT_FALSE(held->has_waystone_directory());
-
-    ASSERT_TRUE(catalog_.ClaimPatternWaystoneRoot(11, 4096, 2).ok());
-
-    // The pointer the caller was holding is still valid *and* now reports
-    // the new directory - which is the whole reason this is an in-place
-    // update rather than an invalidation.
-    EXPECT_TRUE(held->has_waystone_directory());
-    EXPECT_EQ(held->waystone_root, 4096u);
-    EXPECT_EQ(held->dir_depth, 2);
-
-    // And it survives a cache drop, because the page was written too.
-    auto row = catalog_.GetSysPatternRow(11);
-    ASSERT_TRUE(row.ok());
-    EXPECT_EQ(row.value().waystone_root, 4096u);
-    EXPECT_EQ(row.value().dir_depth, 2);
+// A lapse the operator already re-issued is not reported at every mount.
+TEST_F(PatternCatalogTest, ARenewalReportsALapseOnlyWhileItIsUnreplaced) {
+    WriteRawPatternRow(44, kForeignVersion, kPatternWaystone);
+    ASSERT_TRUE(On(44));
+    CapturedLog log;
+    catalog_.SetLogger(log.get());
+    ASSERT_TRUE(catalog_.RenewPatternDirectories(true).ok());
+    EXPECT_FALSE(log.Has("waystone", {"lapsed"}));
 }
 
-TEST_F(PatternCatalogTest, SettingTheRootOfAnUnknownPatternIsNotFound) {
-    EXPECT_EQ(catalog_.ClaimPatternWaystoneRoot(404, 4096, 1).status().code(),
-              StatusCode::kNotFound);
+// `waystone_recording` off: nothing would record into a directory, so the
+// renewal clears every root and creates none, and the bits stay.
+TEST_F(PatternCatalogTest, TheRenewalWithRecordingOffCreatesNoDirectory) {
+    ASSERT_TRUE(On(1, 4096));
+    ASSERT_TRUE(On(2));
+    auto renewed = catalog_.RenewPatternDirectories(/*waystone_recording=*/false);
+    ASSERT_TRUE(renewed.ok()) << renewed.status().message();
+    EXPECT_EQ(renewed.value(), 2u);
+    for (const std::uint64_t fetch_id : {1u, 2u}) {
+        auto row = catalog_.GetSysPatternRow(fetch_id);
+        ASSERT_TRUE(row.ok());
+        EXPECT_FALSE(HasWaystoneDirectory(row.value())) << fetch_id;
+        EXPECT_NE(row.value().flags & kPatternWaystone, 0) << fetch_id;
+    }
+    EXPECT_EQ(catalog_.opted_patterns(), 2u);
 }
 
-// ---- What registration must not disturb -----------------------------------
+// ---- The opted count (CF-S1c) -----------------------------------------------
 
-TEST_F(PatternCatalogTest, RegisteringAPatternDoesNotInvalidateTableAccess) {
-    auto oid = catalog_.CreateTable(kNamespacePublic, "t", MinimalTupleKeySchema());
-    ASSERT_TRUE(oid.ok());
-    auto access = catalog_.InitTableAccess(oid.value());
-    ASSERT_TRUE(access.ok());
-    const TableAccess* held = access.value();
-    const std::uint64_t version_before = catalog_.catalog_version();
+// Moved by a 0->1 or 1->0 change of a current row's bit, after the write,
+// and by nothing else: not by an unchanged ON or OFF, not by a root alone,
+// not by a lapsed row's bit; the recount agrees with it.
+TEST_F(PatternCatalogTest, TheOptedCountFollowsCurrentRowsBitChangesOnly) {
+    EXPECT_EQ(catalog_.opted_patterns(), 0u);
+    EXPECT_TRUE(catalog_.NoOptedPatterns());
+    ASSERT_TRUE(On(1));
+    EXPECT_EQ(catalog_.opted_patterns(), 1u);
+    EXPECT_FALSE(On(1));
+    EXPECT_EQ(catalog_.opted_patterns(), 1u) << "an unchanged ON moved it";
+    EXPECT_TRUE(On(1, 4096));
+    EXPECT_EQ(catalog_.opted_patterns(), 1u) << "a root alone moved it";
+    ASSERT_TRUE(On(2));
+    ASSERT_TRUE(On(3));
+    ASSERT_TRUE(Off(3));
+    EXPECT_EQ(catalog_.opted_patterns(), 2u);
+    EXPECT_FALSE(Off(3));
+    EXPECT_EQ(catalog_.opted_patterns(), 2u) << "an unchanged OFF moved it";
 
-    ASSERT_TRUE(catalog_.RegisterPattern(0xF00D, kStmtClassUnclassified).ok());
+    // A lapsed opted row: never counted, and clearing it moves nothing.
+    WriteRawPatternRow(4, kForeignVersion, kPatternWaystone);
+    EXPECT_EQ(catalog_.opted_patterns(), 2u);
+    EXPECT_TRUE(Off(4));
+    EXPECT_EQ(catalog_.opted_patterns(), 2u) << "OFF of a lapsed row moved it";
+    EXPECT_FALSE(catalog_.NoOptedPatterns());
 
-    // The hazard this avoids is the one the deleted per-relation Waystone
-    // walked into: a catalog write mid-statement that cleared the cache out
-    // from under the `const TableAccess*` the statement was holding.
-    // Nothing cached can go stale from a pattern appearing, so nothing is
-    // dropped and no version moves.
-    EXPECT_EQ(catalog_.catalog_version(), version_before);
-    auto again = catalog_.InitTableAccess(oid.value());
-    ASSERT_TRUE(again.ok());
-    EXPECT_EQ(again.value(), held);
+    auto counted = catalog_.RecountOptedPatterns();
+    ASSERT_TRUE(counted.ok()) << counted.status().message();
+    EXPECT_EQ(counted.value(), 2u);
+    EXPECT_EQ(catalog_.opted_patterns(), 2u);
 }
+
+// The decrement saturates: an OFF meeting a count of 0 - a count the boot
+// set before a raw write moved the chain, here - leaves it 0, never a wrap
+// to "everything is opted".
+TEST_F(PatternCatalogTest, AnOffAtCountZeroLeavesItZero) {
+    WriteRawPatternRow(7, kVersion, kPatternWaystone);
+    ASSERT_EQ(catalog_.opted_patterns(), 0u);
+    EXPECT_TRUE(Off(7));
+    EXPECT_EQ(catalog_.opted_patterns(), 0u);
+    EXPECT_TRUE(catalog_.NoOptedPatterns());
+
+    // And the instance's word saturates the same way.
+    InstanceWords words;
+    catalog_.SetInstanceWords(&words);
+    WriteRawPatternRow(8, kVersion, kPatternWaystone);
+    EXPECT_TRUE(Off(8));
+    EXPECT_EQ(words.opted_count.load(), 0u);
+    ASSERT_TRUE(On(8));
+    EXPECT_EQ(words.opted_count.load(), 1u) << "the instance's word was not the one moved";
+    catalog_.SetInstanceWords(nullptr);
+}
+
+// **The opted map's soundness rule** (`catalog_cache.hpp`), pinned: the map
+// is filled whole, once per generation, and only while the count is
+// non-zero; once filled, a miss is answered from memory with no scan. A
+// write of the bit that neither moved the schema word nor dropped the cache
+// - the raw row below - is therefore invisible to the map until the next
+// generation, which is exactly why every writer must do one or the other.
+TEST_F(PatternCatalogTest, TheOptedMapIsCompletePerGenerationAndMissesWithNoScan) {
+    const auto fills = [this] { return catalog_.cache_stats().pattern_fills; };
+    // Count 0: nothing fills, however often it is asked.
+    for (int i = 0; i < 3; ++i) EXPECT_FALSE(catalog_.FindOptedPattern(1).ok());
+    EXPECT_EQ(fills(), 0u) << "a lookup filled the map with nothing opted";
+
+    ASSERT_TRUE(On(1));
+    ASSERT_TRUE(On(2));
+    const std::uint64_t before = fills();
+    ASSERT_TRUE(catalog_.FindOptedPattern(1).ok());
+    EXPECT_EQ(fills(), before + 1) << "the first ask of a generation did not fill";
+    EXPECT_EQ(catalog_.FindOptedPattern(404).status().code(), StatusCode::kNotFound);
+    EXPECT_TRUE(catalog_.FindOptedPattern(2).ok()) << "the fill was not the whole opted set";
+    EXPECT_EQ(fills(), before + 1) << "a miss, or a second hit, scanned";
+
+    // A bit written behind the writer's back: no word, no drop, so the
+    // filled generation answers "not opted" from memory.
+    WriteRawPatternRow(3, kVersion, kPatternWaystone);
+    EXPECT_EQ(catalog_.FindOptedPattern(3).status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(fills(), before + 1);
+    // The real writer moves the word, and the next ask refills - the raw
+    // row included.
+    ASSERT_TRUE(On(4));
+    EXPECT_TRUE(catalog_.FindOptedPattern(3).ok());
+    EXPECT_EQ(fills(), before + 2);
+}
+
+// A peer catalog over the same store, sharing the schema word and the
+// opted count as every core does: an opt-in on one reaches the other at its
+// next statement head (`Revalidate`), and an opt-out the same way.
+TEST_F(PatternCatalogTest, APeerSeesAnOptInAndAnOptOutAtItsNextRevalidation) {
+    InstanceWords words;
+    catalog_.SetInstanceWords(&words);
+    Catalog peer(store_);
+    peer.SetInstanceWords(&words);
+
+    ASSERT_TRUE(On(10));
+    ASSERT_TRUE(On(11));
+    peer.Revalidate();
+    ASSERT_TRUE(peer.FindOptedPattern(10).ok());  // the peer's generation, filled
+    ASSERT_FALSE(peer.FindOptedPattern(12).ok());
+
+    ASSERT_TRUE(On(12));
+    peer.Revalidate();
+    EXPECT_TRUE(peer.FindOptedPattern(12).ok()) << "the peer missed an opt-in past the word";
+    ASSERT_TRUE(Off(10));
+    peer.Revalidate();
+    EXPECT_FALSE(peer.FindOptedPattern(10).ok()) << "the peer kept an opted-out row";
+    EXPECT_EQ(words.opted_count.load(), 2u);
+
+    catalog_.SetInstanceWords(nullptr);
+}
+
+// **With the count at zero a word move causes no fill** (§8.5 CF-S1c): every
+// DDL, root growth and catalog-writing resolve moves the word and drops
+// every peer's generation, and on an instance with nothing opted the next
+// ask must cost the load and no scan.
+TEST_F(PatternCatalogTest, WithTheCountAtZeroAWordMoveCausesNoFill) {
+    InstanceWords words;
+    catalog_.SetInstanceWords(&words);
+    Catalog peer(store_);
+    peer.SetInstanceWords(&words);
+
+    for (int i = 0; i < 3; ++i) {
+        words.schema_word.fetch_add(1);
+        peer.Revalidate();
+        EXPECT_FALSE(peer.FindOptedPattern(1).ok());
+    }
+    EXPECT_EQ(peer.cache_stats().pattern_fills, 0u) << "a word move filled with nothing opted";
+    // The control: the same peer fills once something is opted.
+    ASSERT_TRUE(On(1));
+    peer.Revalidate();
+    EXPECT_TRUE(peer.FindOptedPattern(1).ok());
+    EXPECT_EQ(peer.cache_stats().pattern_fills, 1u);
+
+    catalog_.SetInstanceWords(nullptr);
+}
+
+// ---- What an opt-in must not disturb ---------------------------------------
 
 TEST_F(PatternCatalogTest, HeatIsReadFromThePageNotTheCache) {
-    ASSERT_TRUE(catalog_.RegisterPattern(21, kStmtClassUnclassified).ok());
+    ASSERT_TRUE(On(21));
 
     // PatternAccess deliberately has no use_count/last_seen to read: heat
     // moves without DDL, so it is not a cacheable fact (schema.hpp). The

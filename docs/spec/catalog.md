@@ -36,7 +36,7 @@ The **schema version word** saves a re-parse and nothing else. One
 `std::atomic<uint64_t>` for the instance, owned by `Expeditor`,
 memory-resident and never persisted — every cache is empty at mount, so no
 value survives one. Every core's `Catalog` holds a pointer to it
-(`Catalog::SetSchemaWord`). **It is not `Catalog::catalog_version()`**,
+(`Catalog::SetInstanceWords`, CT6). **It is not `Catalog::catalog_version()`**,
 which is one core's counter (`catalog.hpp`) that another core's drop does
 not advance — so nothing shared may be validated against it — and the two
 are not merged:
@@ -177,23 +177,35 @@ and not of the asking core (`page.md` §5). Pinned by
 `APeerPlacesAPageAtAChosenIdInTheSystemRange` (the system range,
 single-threaded).
 
-## CT6 — The three words the instance keeps
+## CT6 — The four words the instance keeps
 
-`Expeditor` owns three atomics and hands each to every core's catalog;
-each keeps its own rule in the table below. What they share is the shape `CoreRuntime::Config` already carries for the
-lock table and the instance read view - `Expeditor` builds it, every core
-borrows a pointer, and a null pointer leaves a bare catalog on its own
-local copy, which is what a fixture and the sim hold.
+`Expeditor` owns four atomics in one struct, `catalog::InstanceWords`
+(`include/kds/catalog/instance_words.hpp`), and hands it to every core's
+catalog by one setter, `Catalog::SetInstanceWords`: core 0's in
+`Expeditor::Open`, a peer's through the one `CoreRuntime::Config` field
+`instance_words`. Each word keeps its own rule in the table below - its
+writers and its memory orders, stated at its field - and the struct is a
+carrier only: no word orders another. What they share is the shape
+`CoreRuntime::Config` already carries for the lock table and the instance
+read view - `Expeditor` builds it, every core borrows a pointer, and a null
+pointer leaves a bare catalog on its own local copy of each word (its own
+oid counter, mark count and opted count, and no schema word, so it
+revalidates nothing), which is what a fixture and the sim hold. A core's
+transaction manager borrows the schema word alone, for a catalog-writing
+decide (AT-S5e).
 
-**Three pointers rather than one struct, by threshold, not principle**
-(AT-S5b): a struct would save two setters and two `Config` fields but
-re-open AT-S2's schema-word wiring; a fourth word tips it (AT-0 item 11).
+**One struct since CF-S1c, by threshold, not principle** (AT-0 item 11:
+"three at three words, one at four"). At three words AT-S5b kept three
+pointers, since a struct would have saved two setters and two `Config`
+fields but re-opened AT-S2's schema-word wiring; the opted count made the
+fourth and tipped it (the CF work order's CF-O-Q15, settled (a)).
 
 | word | what it is | rule |
 |---|---|---|
-| **schema version** | the memo's generation counter | CT1, CT2 (AT-S2a) |
-| **object-oid sequence** | the next oid `CREATE TABLE` and `CREATE NAMESPACE` issue | `catalog.hpp`'s contract at `GenerateUserOid`: every oid lands in `sys.objects` or `sys.columns`, which is what makes the seed recoverable (AT-S5b) |
-| **delete-mark count** | the purge's gate | §5d of `ddl-transactional.md` (AT-S5b) |
+| **schema version** (`schema_word`) | the memo's generation counter | CT1, CT2 (AT-S2a) |
+| **object-oid sequence** (`oid_sequence`) | the next oid `CREATE TABLE` and `CREATE NAMESPACE` issue | `catalog.hpp`'s contract at `GenerateUserOid`: every oid lands in `sys.objects` or `sys.columns`, which is what makes the seed recoverable (AT-S5b) |
+| **delete-mark count** (`mark_count`) | the purge's gate | §5d of `ddl-transactional.md` (AT-S5b) |
+| **opted count** (`opted_count`) | how many current-version `sys.patterns` rows carry `kPatternWaystone`; the `SELECT` path's gate, so an instance with nothing opted pays one load | moved only after a successful write under page 9's hold, on a 0->1 or 1->0 change of the bit on a current-version row, the decrement saturating at 0; set from the chain at every boot (the mount's renewal, else `RecountOptedPatterns`); acquire reads, acq_rel moves, a release store at the boot; it publishes nothing beside itself, the opted map being the schema word's to order. A stale count costs performance only (invariant 8) (CF-S1c; `waystone-concpets.md`) |
 
 **The oid sequence is seeded once, by whichever catalog asks first**, with a
 CAS from zero to `HighestIssuedUserOid() + 1`; zero is the unseeded value
@@ -224,8 +236,10 @@ answering whichever it met first. Every *new* row of a catalog relation enters i
 so a writer holding the root is the only one adding a row; an in-place
 rewrite (a rename, a retype, a rollback's compensation by page and slot)
 does not pass through it, and what keeps those from admitting a name is
-what the check asks, below, not the latch. `RegisterPattern` (page 9) and
-`RecordAccess` (page 11) were the shape, for their admissions, at AT-S7.
+what the check asks, below, not the latch. `RecordAccess` (page 11) and
+the pattern registration of the time (page 9) were the shape, for their
+admissions, at AT-S7; since CF-S1b page 9's hold is `SetPatternWaystone`'s,
+the one inserter of a `sys.patterns` row (`waystone-concpets.md` §4a).
 
 | write | relation (root page) | held across |
 |---|---|---|
@@ -316,8 +330,8 @@ var-heap chain — never another catalog relation's page; `InsertDeclaration`'s
 `OpenDeclarations` under page 14 is a cache hit, filled before the hold
 (`InsertDeclaration`, `declaration_relation.cpp`). That is why the oids and ids above are
 issued before their holds: `GenerateUserOid`'s first use seeds from
-`sys.columns`, and `AllocateRowId` writes `sys.tables`. `RegisterPattern`,
-outside this table, issues under page 9 and so takes page 7 under it;
+`sys.columns`, and `AllocateRowId` writes `sys.tables`. `SetPatternWaystone`
+(`WAYSTONE ON`, CF-S1b), outside this table, issues under page 9 and so takes page 7 under it;
 nothing takes page 9 under page 7 (`rules.md` §3's catalog row).
 
 **A `sys.tables` chain page is inner to every user relation page**

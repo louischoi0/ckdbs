@@ -1,5 +1,6 @@
 #include "kds/server/command_dispatcher.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -47,8 +48,11 @@ TEST_F(CommandDispatcherTest, ShowPatternsOnAFreshDatabaseReportsNone) {
     EXPECT_TRUE(shown.rows.empty());
 }
 
-TEST_F(CommandDispatcherTest, ShowPatternsListsARegisteredPattern) {
-    ASSERT_TRUE(boot_->catalog.RegisterPattern(0xABCD, catalog::kStmtClassUnclassified).ok());
+TEST_F(CommandDispatcherTest, ShowPatternsListsAnOptedPattern) {
+    ASSERT_TRUE(boot_->catalog
+                    .SetPatternWaystone(0xABCD, catalog::kStmtClassUnclassified, /*on=*/true,
+                                        kInvalidPageId)
+                    .ok());
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     const std::string reply = d.Dispatch("SHOW PATTERNS").response;
@@ -62,23 +66,39 @@ TEST_F(CommandDispatcherTest, ShowPatternsListsARegisteredPattern) {
     EXPECT_EQ(shown.Find("fetch_id", id, "fingerprint_version"),
               std::to_string(parser::kFingerprintVersion))
         << reply;
+    // CF-S1b: one `waystone` column where `origin` and `pinned` stood.
+    EXPECT_EQ(shown.Find("fetch_id", id, "waystone"), "1") << reply;
+    for (const std::string& gone : {"origin", "pinned"}) {
+        EXPECT_EQ(std::find(shown.columns.begin(), shown.columns.end(), gone),
+                  shown.columns.end())
+            << gone << " is still a column: " << reply;
+    }
+
+    // An opt-out keeps the row and reads false.
+    ASSERT_TRUE(boot_->catalog
+                    .SetPatternWaystone(0xABCD, 0, /*on=*/false, kInvalidPageId)
+                    .ok());
+    const std::string after = d.Dispatch("SHOW PATTERNS").response;
+    EXPECT_EQ(testing_view::ReadViewText(after).Find("fetch_id", id, "waystone"), "0") << after;
 }
 
 TEST_F(CommandDispatcherTest, ShowPatternsReportsAWaystoneDirectory) {
-    ASSERT_TRUE(boot_->catalog.RegisterPattern(7, catalog::kStmtClassUnclassified).ok());
-    ASSERT_TRUE(boot_->catalog.ClaimPatternWaystoneRoot(7, 4096, 2).ok());
+    ASSERT_TRUE(boot_->catalog
+                    .SetPatternWaystone(7, catalog::kStmtClassUnclassified, /*on=*/true, 4096)
+                    .ok());
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     const std::string reply = d.Dispatch("SHOW PATTERNS").response;
     const auto shown = testing_view::ReadViewText(reply);
     EXPECT_EQ(shown.Find("fetch_id", "7", "waystone_root"), "4096") << reply;
-    EXPECT_EQ(shown.Find("fetch_id", "7", "dir_depth"), "2") << reply;
+    EXPECT_EQ(shown.Find("fetch_id", "7", "dir_depth"), "1") << reply;
 }
 
 TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion) {
     // Written straight onto the page, the way a stale row really appears:
     // an older build recorded it and then the version moved. No API can
-    // produce one, since RegisterPattern() stamps the current version.
+    // produce one, since SetPatternWaystone() stamps the current version.
+    // Opted, so the view's `waystone` has a lapse to report.
     auto bytes = store_.Get(catalog::kCatalogPagePatterns);
     ASSERT_TRUE(bytes.ok());
     heap::PageView page(bytes.value().bytes());
@@ -87,6 +107,7 @@ TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion
     row.fetch_id = 0x5151;
     row.fingerprint_version = parser::kFingerprintVersion + 1;
     row.waystone_root = kInvalidPageId;
+    row.flags = catalog::kPatternWaystone;
     auto encoded = row.Encode();
     ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
 
@@ -100,15 +121,24 @@ TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion
                                                      "fingerprint_version"),
               std::to_string(parser::kFingerprintVersion + 1))
         << reply;
+    // Its bit lapsed at the bump: it records nothing, so it reads false.
+    EXPECT_EQ(testing_view::ReadViewText(reply).Find("fetch_id", std::to_string(0x5151),
+                                                     "waystone"),
+              "0")
+        << reply;
 
     // But it is still invisible to a lookup, which is where the version
     // rule lives.
-    EXPECT_FALSE(boot_->catalog.FindPattern(0x5151).ok());
+    EXPECT_FALSE(boot_->catalog.GetSysPatternRow(0x5151).ok());
 }
 
 TEST_F(CommandDispatcherTest, ShowPatternsResponseIsOneLine) {
-    ASSERT_TRUE(boot_->catalog.RegisterPattern(1, catalog::kStmtClassUnclassified).ok());
-    ASSERT_TRUE(boot_->catalog.RegisterPattern(2, catalog::kStmtClassUnclassified).ok());
+    for (const std::uint64_t fetch_id : {1u, 2u}) {
+        ASSERT_TRUE(boot_->catalog
+                        .SetPatternWaystone(fetch_id, catalog::kStmtClassUnclassified,
+                                            /*on=*/true, kInvalidPageId)
+                        .ok());
+    }
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("SHOW PATTERNS");
@@ -1015,7 +1045,9 @@ TEST_F(CommandDispatcherTest, ACatalogViewComparesItsIntegersUnsigned) {
     for (const char* where : wheres) {
         const auto fp = parser::FingerprintOf(std::string("SELECT a FROM r WHERE ") + where);
         ASSERT_TRUE(fp.has_value()) << where;
-        if (boot_->catalog.RegisterPattern(fp->fetch_id, catalog::kStmtClassUnclassified)
+        if (boot_->catalog
+                .SetPatternWaystone(fp->fetch_id, catalog::kStmtClassUnclassified,
+                                    /*on=*/true, kInvalidPageId)
                 .ok()) {
             ++made;
         }

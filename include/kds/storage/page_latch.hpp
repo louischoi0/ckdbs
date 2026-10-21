@@ -25,9 +25,9 @@
 //   - shared acquire: admitted while `X` is clear (count + 1), and admitted
 //     under this core's own exclusive hold (count + 1). The catalog takes
 //     that second shape on purpose: a relation's root held exclusive across
-//     a read of its own chain and the write that follows (`RegisterPattern`
-//     since AT-S7, every name-taking write since AT-S17 - `catalog.md`
-//     CT7). Refusing it would be a hang, not a refusal: the store's
+//     a read of its own chain and the write that follows
+//     (`SetPatternWaystone` since CF-S1b, `RegisterPattern` before it from
+//     AT-S7; every name-taking write since AT-S17 - `catalog.md` CT7). Refusing it would be a hang, not a refusal: the store's
 //     self-deadlock check only fires on an exclusive request, so an X-then-S
 //     it did not admit would spin undiagnosed;
 //   - exclusive acquire: admitted on a free word, and **re-entrant for the

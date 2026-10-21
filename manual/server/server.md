@@ -69,20 +69,32 @@ records is `unknown`.
 
 On startup the server prints the data file, page count, superblock version,
 log destination and the port, then blocks in `Serve()` for the life of the
-process. The data file is created if absent; the WAL segments live in
+process. At `log_level = info` the log also carries, after recovery, one
+Waystone line, `INFO [waystone] waystone_recording=<on|off>
+waystone_replay=<on|off> waystone_opted=<n>`: the two keys and how many
+query shapes are opted in. With `waystone_opted=0` nothing records,
+whatever the keys say (`manual/sql/sql.md`, `WAYSTONE ON`). Each start
+with `waystone_recording = on` also gives every opted shape a fresh, empty
+trail directory (with it off, none is made), and at `log_level = info` logs
+`INFO [waystone] <n> opt-ins lapsed at fingerprint version <v>` when a newer
+build stopped honouring opt-ins made under an older fingerprint. The data file is created if absent; the WAL segments live in
 `<data_file>.wal/` unless `wal_dir` says otherwise. Every volume this build
 mounts has **one WAL stream for the instance**, whatever `cores` says, and
 `SHOW META`'s `wal_topology` field says so. A volume whose superblock
 records more than one stream **does not mount**: there is no migration,
 and the refusal names it. Recreate the database. The same holds
-for every volume older than superblock version 32 (2026-10-19): 20 keeps a
+for every volume older than superblock version 33 (2026-10-21): 20 keeps a
 B+ tree leaf in key order by placement, 21 records a dropped relation's
 roots in its tombstone, 22 carries the 48-bit Keystone id, 27 marks a
 unique index, 28 orders a secondary index by its whole entry, 29 logs
 the removal of a dropped index's anchor slot, 30 stores a heap as a
 B+ tree with a hidden tuple key, 31 grows the catalog onto ordinary
-pages, which lifts the old limit of about 800 tables, and 32 marks a
-dropped column whose bytes `PURGE DROPPED COLUMNS` has cleaned.
+pages, which lifts the old limit of about 800 tables, 32 marks a
+dropped column whose bytes `PURGE DROPPED COLUMNS` has cleaned, and 33
+(2026-10-21) makes a `sys.patterns` row a Waystone opt-in rather than a
+shape traffic registered. **A version-32 volume does not mount under this
+build, and a backup taken from one is refused by its restore**: recreate
+the database, or keep the build that wrote it.
 
 The listener is **loopback only** (`127.0.0.1`) unless `listen_address`
 says otherwise, plain TCP, no TLS, no
@@ -138,7 +150,7 @@ out-of-range values, each naming the file and line.
 | `relaxed_flush_interval_us` | `10000` | How long a `relaxed` commit may sit unsynced. |
 | `checkpoint_interval_ms` | `5000` | Dirty-page flush cadence. `0` disables — durability then rests on `SYNC` and clean shutdown alone. |
 | `max_rows_touched` | `100000000` | Per-statement tuple ceiling; exceeding it is `ResourceExhausted`. An availability knob, not a performance one. `0` = unlimited. |
-| `waystone_recording` / `waystone_replay` | `on` / `on` | The Waystone switches. Turning either off must never change a reply (invariant 8). |
+| `waystone_recording` / `waystone_replay` | `on` / `on` | **Ceilings over the shapes an operator opted in** with `WAYSTONE ON` (`manual/sql/sql.md`), boot-only. Since superblock 33 nothing records until a shape is opted in, so `on` here no longer means every repeated `SELECT` records: it means an opted shape may record (and replay). With `waystone_recording = off` an opt-in is accepted, gets no trail directory and records nothing; the next start with it on gives it one. Turning either off must never change a reply (invariant 8). The boot log and `SHOW META`'s `waystone` section print both with the opted count. |
 | `access_statistics` | `on` | Per-shape access recording for `SHOW ACCESS`. +1-2% on a point lookup. |
 | `decay_half_life` | `600` | Seconds for an untouched decay score to halve. `0` refused. |
 | `cabin_optimizer` | `off` | The Cabin controller (PHY04): `on` lets it CREATE/EXTEND/HEAL/DROP Observational Cabins for `CABIN AUTO` columns. Tuning keys (`cabin_optimizer_page_budget`, `_theta_*_pct`, `_confirm_snapshots`, `_amort_windows` — 64, the build-cost amortization window ratified from `bench/results-cabin-optimizer-days.md` — `_cooldown_half_lives` — 128, the DECAYING dwell, its own parameter since 2026-08-10 and the one that provides overnight survival — and `_snapshot_interval_ms`) documented in `kds.conf.sample`. |
@@ -215,8 +227,10 @@ The cores share **one WAL stream** — core 0 opens the log and every peer
 appends through it — so a peer's `SHOW META` WAL block reads zero syncs by
 construction and the instance's durability cost is read on core 0
 (`docs/spec/wal.md` §3). `waystone_recording` and `access_statistics` mean
-the same thing on every core: a peer writes `sys.patterns` and
-`sys.access_stats` itself, and both relations are the instance's one.
+the same thing on every core: a peer records an opted shape's trail and
+writes `sys.access_stats` itself, and `sys.patterns`, `sys.access_stats`
+and the trails are the instance's one. A `WAYSTONE ON` on one core reaches
+every other core within one statement.
 Recovery runs once, on core 0, before any peer exists.
 `SHOW META`'s `contention_*` fields, and since BQ-S1 `wal_append_lsn` and the
 segment roll's `wal_rolls`/`wal_roll_*`, are the exceptions to "read on core

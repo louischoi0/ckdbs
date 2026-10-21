@@ -11,8 +11,9 @@ naming the other engine, arms alternating which server goes first per block,
 it runs on one server (the `fn` cell is B-only: A has no `DATE()`).
 
 Every relation is BTREE. Every arm sends a *different literal* per statement,
-so what is priced is the parse + fingerprint + dispatch + execute path, with
-Waystone recording and replay as the server's default config has them.
+so what is priced is the parse + fingerprint + dispatch + execute path. No
+shape is opted in with `WAYSTONE ON`, so nothing records or replays and a
+SELECT pays only the opt-in gate's load.
 
 Cell `point` (`--rows N`: 200, 1000, 10000), table `ap_t`
 (id, v, a1..a9: eleven int64 columns, `v = 7 * id`, unique and unindexed):

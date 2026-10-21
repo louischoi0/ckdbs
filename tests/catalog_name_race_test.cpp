@@ -75,9 +75,7 @@ Schema TupleKeyAnd(std::initializer_list<const char*> names) {
 struct TwoCatalogs {
     std::unique_ptr<storage::MemoryPageDevice> device;
     std::unique_ptr<storage::DevicePageStore> store;
-    std::atomic<Oid> oid_sequence{0};
-    std::atomic<std::uint64_t> schema_word{0};
-    std::atomic<std::uint64_t> marks{0};
+    InstanceWords words;
     std::array<std::unique_ptr<Catalog>, kThreads> cores;
 
     TwoCatalogs() {
@@ -85,9 +83,7 @@ struct TwoCatalogs {
         store = ArmedStore(device, /*first_new_page_id=*/128);
         for (auto& c : cores) {
             c = std::make_unique<Catalog>(*store);
-            c->SetOidSequence(&oid_sequence);
-            c->SetSchemaWord(&schema_word);
-            c->SetMarkCounter(&marks);
+            c->SetInstanceWords(&words);
         }
         const Status booted = cores[0]->Bootstrap();
         EXPECT_TRUE(booted.ok()) << booted.message();
@@ -463,15 +459,11 @@ TEST(CatalogNameRaceTest, ADropBetweenACreatesTwoRowsIsRefused) {
     // `9898b15`; the RESTRICT check reading `sys.objects` is what closes it.
     storage::InMemoryPageStore backing(128);
     testing_race::ActOnFetchStore store(backing);
-    std::atomic<Oid> oid_sequence{0};
-    std::atomic<std::uint64_t> schema_word{0};
-    std::atomic<std::uint64_t> marks{0};
+    InstanceWords words;
     std::array<std::unique_ptr<Catalog>, kThreads> cats;
     for (auto& c : cats) {
         c = std::make_unique<Catalog>(store);
-        c->SetOidSequence(&oid_sequence);
-        c->SetSchemaWord(&schema_word);
-        c->SetMarkCounter(&marks);
+        c->SetInstanceWords(&words);
     }
     ASSERT_TRUE(cats[0]->Bootstrap().ok());
     auto ns = cats[0]->CreateNamespace("ledger");

@@ -1213,6 +1213,39 @@ FeatureToggles TogglesFor(const SimConfig& config, const Rng& iteration_rng) {
     return toggles;
 }
 
+// **The Waystone toggle's opt-in** (CF-S1b). Nothing records until a shape
+// is opted in, so an instance with `waystone` on would otherwise record
+// nothing at all: from a seed-chosen op on, each SELECT the stream runs is
+// opted in before its first run there. Before that op the recorder sees only
+// shapes no operator opted, which is a configuration too. The op is drawn
+// from the iteration's own fork of the seed and the plan's length, as the
+// backup window is, so a plan replays exactly.
+//
+// The opt-in's reply is never compared or read: a refusal is the
+// statement's own answer - a shape with no tuple key equality, a relation
+// not created yet - and the shape is not asked again, except a refusal
+// inside a transaction (`WAYSTONE` is autocommit only), asked at the
+// shape's next run.
+class WaystoneOptIn {
+public:
+    WaystoneOptIn(bool waystone, std::uint64_t seed, std::size_t ops, std::size_t iteration) {
+        if (!waystone || ops == 0) return;
+        Rng rng = Rng(seed).Fork("waystone/" + std::to_string(iteration));
+        from_ = static_cast<std::size_t>(rng.Below(ops));
+    }
+
+    void Before(SimInstance& instance, const Op& op, std::size_t op_index) {
+        if (!from_.has_value() || op_index < *from_ || instance.log_stopped()) return;
+        if (op.sql.rfind("SELECT", 0) != 0 || !asked_.insert(op.sql).second) return;
+        const std::string reply = instance.Execute("WAYSTONE ON " + op.sql);
+        if (reply.find("inside a transaction") != std::string::npos) asked_.erase(op.sql);
+    }
+
+private:
+    std::optional<std::size_t> from_;
+    std::set<std::string> asked_;
+};
+
 SimInstance::Options InstanceOptions(const SimConfig& config, const FeatureToggles& toggles) {
     SimInstance::Options options;
     options.skip_recovery = config.skip_recovery;
@@ -1291,6 +1324,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     Oracle oracle;
     Iteration it{*instance_or.value(), oracle, verdict, config, iteration};
     it.trace.Note("toggles " + plan.toggles.Describe());
+    WaystoneOptIn opt_in(plan.toggles.waystone, config.seed, plan.entries.size(), iteration);
 
     std::uint64_t fired_before = 0;
     bool fail_stopped = false;
@@ -1326,6 +1360,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
         if (backup_stop_after && i <= *backup_stop_after && !entry.op.table.empty()) {
             named_before_stop.insert(entry.op.table);
         }
+        opt_in.Before(it.instance, entry.op, i);
         const bool op_ok = ExecuteOp(it, entry.op, i);
         // **The reclaim's tick, between statements** (BF-R8): one bounded
         // step after every op, so a mount's reclaim runs while the stream
@@ -1805,8 +1840,12 @@ SimVerdict RunTogglePairing(const SimConfig& config) {
             return verdict;
         }
 
+        // On the instance with the features on only: the opt-in is what
+        // turns its recorder on for a shape, and the bare instance has none.
+        WaystoneOptIn opt_in(on.waystone, config.seed, plan.entries.size(), iteration);
         for (std::size_t i = 0; i < plan.entries.size(); ++i) {
             const Op& op = plan.entries[i].op;
+            opt_in.Before(*full.value(), op, i);
             const std::string bare_reply = bare.value()->Execute(op.sql);
             const std::string full_reply = full.value()->Execute(op.sql);
             ++verdict.ops_run;

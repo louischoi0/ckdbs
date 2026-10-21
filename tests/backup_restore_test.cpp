@@ -22,6 +22,8 @@
 #include <gtest/gtest.h>
 
 #include "kds/base/current_core.hpp"
+#include "kds/catalog/rows.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/server/backup_manifest.hpp"
 #include "kds/server/expeditor.hpp"
 #include "kds/server/restore.hpp"
@@ -407,6 +409,108 @@ TEST(BackupControlTest, AStoppedBackupCarriesItsWindowAndRestoresToItsStop) {
     CurrentCoreGuard as(0);
     EXPECT_EQ(Ids(*restored.value(), "SELECT id FROM t"), Range(1, 30));
     EXPECT_EQ(restored.value()->recovery().restore_backup_id, id);
+}
+
+// **CF-S1b**: a Waystone opt-in issued inside a backup's window is in the
+// restore - its row is logged - and the trail recorded under it is not: a
+// restore discards unlogged state, and the opted row gets a fresh, empty
+// directory at the restored volume's mount.
+TEST(BackupControlTest, ARestoreKeepsAWaystoneOptInAndNotItsTrail) {
+    TempDir live, backup, target;
+    const fs::path dir = backup.path / "w1";
+    const std::string sql = "SELECT * FROM t WHERE id = 3";
+    std::uint64_t id = 0;
+    wal::Lsn start = 0, stop = 0;
+    PageId recorded = kInvalidPageId;
+    {
+        auto opened = Mount(live.path);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        Ok(db, "CREATE TABLE t (id int64, v int64) BTREE");
+        Insert(db, 1, 5);
+        CleanCheckpoint(db);
+        const std::string started = Reply(db, "BACKUP START 'w1'");
+        ASSERT_TRUE(StartsWith(started, "OK ")) << started;
+        id = U64(started, "backup_id");
+        start = U64(started, "start_lsn");
+        ASSERT_TRUE(StartsWith(Reply(db, "WAYSTONE ON " + sql), "OK WAYSTONE ON"));
+        Ok(db, sql);
+        Ok(db, sql);
+        ASSERT_NE(Reply(db, "ANALYZE " + sql).find("replays=1"), std::string::npos)
+            << "nothing was recorded; the cell proves nothing";
+        auto fp = parser::FingerprintOf(sql);
+        ASSERT_TRUE(fp.has_value());
+        auto row = db.catalog().GetSysPatternRow(fp->fetch_id);
+        ASSERT_TRUE(row.ok());
+        recorded = row.value().waystone_root;
+        ASSERT_TRUE(db.Sync().ok());
+        fs::create_directories(dir);
+        fs::copy_file(live.path / "kds.db", dir / kBackupDataFileName);
+        const std::string stopped = Reply(db, "BACKUP STOP TO '" + dir.string() + "'");
+        ASSERT_TRUE(StartsWith(stopped, "OK ")) << stopped;
+        stop = U64(stopped, "stop_lsn");
+        db.backup().WaitIdle();
+    }
+
+    fs::create_directories(target.path);
+    fs::copy_file(dir / kBackupDataFileName, target.path / "kds.db");
+    fs::copy(dir / kBackupWalDirName, target.path / "wal", fs::copy_options::recursive);
+    ASSERT_TRUE(MarkRestoreOwed((target.path / "kds.db").string(), {start, stop, id}).ok());
+    auto restored = Mount(target.path);
+    ASSERT_TRUE(restored.ok()) << restored.status().message();
+    CurrentCoreGuard as(0);
+    Expeditor& db = *restored.value();
+    auto fp = parser::FingerprintOf(sql);
+    ASSERT_TRUE(fp.has_value());
+    auto row = db.catalog().GetSysPatternRow(fp->fetch_id);
+    ASSERT_TRUE(row.ok()) << "the opt-in was not restored: " << row.status().message();
+    EXPECT_NE(row.value().flags & catalog::kPatternWaystone, 0);
+    EXPECT_TRUE(catalog::HasWaystoneDirectory(row.value()));
+    EXPECT_NE(row.value().waystone_root, recorded) << "the backup's directory was kept";
+    EXPECT_EQ(Reply(db, "ANALYZE " + sql).find("replays="), std::string::npos)
+        << "a trail survived the restore";
+}
+
+// CF-S1b's bump: a backup a version-32 build wrote is refused before
+// anything is laid out, naming both versions.
+TEST(BackupControlTest, AVersion32BackupIsRefused) {
+    TempDir live, backup, target;
+    const fs::path dir = backup.path / "v32";
+    {
+        auto opened = Mount(live.path);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        Ok(db, "CREATE TABLE t (id int64, v int64)");
+        Insert(db, 1, 3);
+        CleanCheckpoint(db);
+        ASSERT_TRUE(StartsWith(Reply(db, "BACKUP START 'v32'"), "OK "));
+        ASSERT_TRUE(db.Sync().ok());
+        fs::create_directories(dir);
+        fs::copy_file(live.path / "kds.db", dir / kBackupDataFileName);
+        ASSERT_TRUE(StartsWith(Reply(db, "BACKUP STOP TO '" + dir.string() + "'"), "OK "));
+        db.backup().WaitIdle();
+    }
+    auto manifest = ReadManifest(dir.string());
+    ASSERT_TRUE(manifest.ok()) << manifest.status().message();
+    ASSERT_EQ(manifest.value().superblock_version, kSuperBlockVersion);
+    BackupManifest older = manifest.value();
+    older.superblock_version = 32;
+    ASSERT_TRUE(WriteManifest(dir.string(), older).ok());
+
+    RestoreRequest request;
+    request.backup_dir = dir.string();
+    request.data_file = (target.path / "kds.db").string();
+    request.wal_dir = (target.path / "wal").string();
+    const Status laid = LayOutRestore(request);
+    ASSERT_FALSE(laid.ok());
+    EXPECT_EQ(laid.code(), StatusCode::kUnsupported) << laid.message();
+    for (const std::uint32_t named : {32u, kSuperBlockVersion}) {
+        EXPECT_NE(laid.message().find("superblock " + std::to_string(named)), std::string::npos)
+            << laid.message();
+    }
+    EXPECT_FALSE(fs::exists(target.path / "kds.db")) << "a refused restore laid out a file";
 }
 
 // A backup's directory is new: STOP refuses one holding another backup's

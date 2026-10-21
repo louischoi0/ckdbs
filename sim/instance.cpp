@@ -109,13 +109,23 @@ Status SimInstance::Boot() {
         // the next `CreateNew` hands the id to another relation and the
         // statistic walks into it - so a harness that skipped it would grade
         // a mount this project does not ship.
-        if (Status s = server::DiscardAdvisoryState(boot_->catalog); !s.ok()) return s;
+        // Under the harness's own recording switch, as the expeditor passes
+        // `waystone_recording`, so an opted pattern is renewed only where a
+        // recorder will write into it (CF-S1b).
+        if (Status s = server::DiscardAdvisoryState(boot_->catalog, options_.waystone); !s.ok()) {
+            return s;
+        }
 
         // The completion checkpoint (RC08), for the reason the harness runs
         // recovery at all: without it every reboot rescans from the head of the
         // stream, because nothing here runs the periodic checkpointer - so the
         // harness would be measuring a mount cost no server pays and missing
         // the one property RC08 adds.
+    } else if (auto counted = boot_->catalog.RecountOptedPatterns(); !counted.ok()) {
+        // **No renewal ran, so nothing set the opted count** (CF-S1c): the
+        // discard above is what sets it, and a boot that skips it counts the
+        // chain itself, or every opted row would go unasked for the run.
+        return counted.status();
     }
 
     // The persist callback, exactly as the expeditor wires it: the harness

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/catalog/rows.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/server/command_dispatcher.hpp"
@@ -44,6 +45,13 @@ protected:
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
 
+    // **Nothing records until a shape is opted in** (CF-S1b): every cell
+    // that expects a trail opts its statement in first.
+    void OptIn(const std::string& sql) {
+        const std::string reply = Run("WAYSTONE ON " + sql);
+        ASSERT_EQ(reply.rfind("OK WAYSTONE ON", 0), 0u) << sql << " -> " << reply;
+    }
+
     static InstanceKey KeyOf(const std::string& sql) {
         auto fp = parser::FingerprintOf(sql);
         EXPECT_TRUE(fp.has_value());
@@ -53,7 +61,7 @@ protected:
     // The trail recorded for `sql`'s instance, or empty when there is none.
     std::vector<WaystoneEntry> TrailFor(const std::string& sql) {
         const InstanceKey key = KeyOf(sql);
-        auto pattern = boot_->catalog.FindPattern(key.fetch_id);
+        auto pattern = boot_->catalog.FindOptedPattern(key.fetch_id);
         if (!pattern.ok() || !pattern.value()->has_waystone_directory()) return {};
         auto read = ReadTrail(store_, pattern.value()->waystone_root,
                               pattern.value()->dir_depth, key);
@@ -71,25 +79,85 @@ protected:
 
 TEST_F(TrailRecorderTest, AnObservedInstanceRecordsOnItsSecondExecution) {
     const std::string sql = "SELECT * FROM t WHERE id = 3";
+    OptIn(sql);
 
     Run(sql);
     // The first execution only counts. Recording it would pay a page write
     // for every one-shot query a client ever sends, which is exactly what
-    // n=2 exists to avoid - and with no pattern row yet, a one-shot
-    // statement leaves no catalog trace at all.
+    // n=2 exists to avoid.
     EXPECT_TRUE(TrailFor(sql).empty());
-    EXPECT_FALSE(boot_->catalog.FindPattern(KeyOf(sql).fetch_id).ok())
-        << "a shape seen once is not yet worth a sys.patterns row";
 
     Run(sql);
     EXPECT_EQ(TrailFor(sql).size(), 1u) << "the second execution records";
     EXPECT_EQ(recorder_->stats().trails_written, 1u);
-    EXPECT_EQ(recorder_->stats().patterns_registered, 1u);
+}
+
+// CF-S1b: a shape no operator opted in records nothing - no `sys.patterns`
+// row appears on the `SELECT` path, and no trail is written however often it
+// repeats. CF-S1c: it is not even sighted - the statement gate arms no
+// collector for it, so the recorder never hears of it.
+TEST_F(TrailRecorderTest, AShapeNotOptedInRegistersNothingAndRecordsNothing) {
+    const std::string sql = "SELECT * FROM t WHERE id = 3";
+    for (int i = 0; i < 4; ++i) Run(sql);
+    // And under ANALYZE, which gives the statement an identity as a
+    // server's optimizer surface does: the collector's gate is the opt-in,
+    // not the identity.
+    for (int i = 0; i < 2; ++i) Run("ANALYZE " + sql);
+    EXPECT_FALSE(boot_->catalog.GetSysPatternRow(KeyOf(sql).fetch_id).ok())
+        << "a SELECT registered a sys.patterns row";
+    EXPECT_TRUE(TrailFor(sql).empty());
+    EXPECT_EQ(recorder_->stats().trails_written, 0u);
+    EXPECT_EQ(recorder_->stats().write_failures, 0u) << "not opted is not a failure";
+    EXPECT_EQ(recorder_->stats().sightings, 0u) << "a shape nobody opted in was sighted";
+
+    // And an opt-out stops it: the row stays, its bit and root go. Two runs
+    // after the opt-in, since the four above were never sighted.
+    OptIn(sql);
+    Run(sql);
+    EXPECT_TRUE(TrailFor(sql).empty()) << "an unsighted shape recorded on its first opted run";
+    Run(sql);
+    ASSERT_EQ(TrailFor(sql).size(), 1u);
+    ASSERT_EQ(Run("WAYSTONE OFF " + sql).rfind("OK WAYSTONE OFF", 0), 0u);
+    const std::uint64_t written = recorder_->stats().trails_written;
+    Run(sql);
+    Run(sql);
+    EXPECT_EQ(recorder_->stats().trails_written, written) << "an opted-out shape recorded";
+    EXPECT_TRUE(TrailFor(sql).empty());
+}
+
+// CF-S1b: no `SELECT` writes the log. An opted row with no directory - an
+// ON under `waystone_recording = off`, a mount whose create failed - is
+// counted a failure and left alone: no page is made for it and no catalog
+// write roots it, which a run-time claim did and which raced across cores.
+TEST_F(TrailRecorderTest, AnOptedRowWithNoDirectoryRecordsNothingAndMakesNothing) {
+    const std::string sql = "SELECT * FROM t WHERE id = 3";
+    const std::uint64_t fetch_id = KeyOf(sql).fetch_id;
+    auto opted = boot_->catalog.SetPatternWaystone(fetch_id, catalog::kStmtClassUnclassified,
+                                                   /*on=*/true, kInvalidPageId);
+    ASSERT_TRUE(opted.ok()) << opted.status().message();
+    // The first sighting only counts, and pays whatever a statement pays
+    // besides recording; the count of pages and the word are read after it.
+    Run(sql);
+    const std::size_t pages = store_.page_count();
+    const std::uint64_t version = boot_->catalog.catalog_version();
+
+    Run(sql);
+    Run(sql);
+    EXPECT_EQ(recorder_->stats().trails_written, 0u);
+    EXPECT_GT(recorder_->stats().write_failures, 0u) << "an opted row with no directory was silent";
+    auto row = boot_->catalog.GetSysPatternRow(fetch_id);
+    ASSERT_TRUE(row.ok()) << row.status().message();
+    EXPECT_FALSE(catalog::HasWaystoneDirectory(row.value())) << "a SELECT rooted the row";
+    EXPECT_EQ(row.value().waystone_root, kInvalidPageId);
+    EXPECT_EQ(store_.page_count(), pages) << "a SELECT made a page";
+    EXPECT_EQ(boot_->catalog.catalog_version(), version) << "a SELECT wrote the catalog";
 }
 
 TEST_F(TrailRecorderTest, TwoInstancesOfOnePatternCountSeparately) {
     // The sighting count is per *instance*, not per pattern: one hot
-    // argument must not make a cold one look hot.
+    // argument must not make a cold one look hot. One opt-in covers both,
+    // since they share a `fetch_id`.
+    OptIn("SELECT * FROM t WHERE id = 3");
     Run("SELECT * FROM t WHERE id = 3");
     Run("SELECT * FROM t WHERE id = 4");
     EXPECT_TRUE(TrailFor("SELECT * FROM t WHERE id = 3").empty());
@@ -102,10 +170,11 @@ TEST_F(TrailRecorderTest, TwoInstancesOfOnePatternCountSeparately) {
 }
 
 TEST_F(TrailRecorderTest, WouldRecordIsTheOnePlaceThePolicyLives) {
-    // One threshold for every pattern. A `CREATE PATTERN` declaration
-    // lowered it to 1 for the shape it named - the declaration *was* the
-    // evidence n=2 waits for - until the operator withdrew declared
-    // patterns on 2026-08-31, which left this the whole of the policy.
+    // One threshold for every opted pattern (CF-O-Q8 (a)). A `CREATE
+    // PATTERN` declaration lowered it to 1 for the shape it named until the
+    // operator withdrew declared patterns on 2026-08-31, which left this the
+    // whole of the policy.
+    EXPECT_EQ(TrailRecorder::kRecordThreshold, 2);
     EXPECT_FALSE(recorder_->WouldRecord(0));
     EXPECT_FALSE(recorder_->WouldRecord(1));
     EXPECT_TRUE(recorder_->WouldRecord(2));
@@ -117,6 +186,7 @@ TEST_F(TrailRecorderTest, OnlyTrailReplayableStepsAreRecorded) {
     // A tuple key equality on a btree relation is a Lookup, and Lookup is
     // replayable - so its row is recorded.
     const std::string point = "SELECT * FROM t WHERE id = 3";
+    OptIn(point);
     Run(point);
     Run(point);
     ASSERT_EQ(TrailFor(point).size(), 1u);
@@ -124,8 +194,10 @@ TEST_F(TrailRecorderTest, OnlyTrailReplayableStepsAreRecorded) {
     // A non-tuple-key predicate is a Scan, and invariant 9 forbids a trail from
     // replacing a search. Its rows could only ever be prefetched, and
     // nothing prefetches - so recording them would be paying a write per
-    // scanned row for a read nobody makes.
+    // scanned row for a read nobody makes. Its shape cannot even be opted
+    // in (CF-S1b).
     const std::string scan = "SELECT * FROM t WHERE v = 30";
+    EXPECT_EQ(Run("WAYSTONE ON " + scan).rfind("ERR", 0), 0u);
     Run(scan);
     Run(scan);
     EXPECT_TRUE(TrailFor(scan).empty())
@@ -134,6 +206,7 @@ TEST_F(TrailRecorderTest, OnlyTrailReplayableStepsAreRecorded) {
 
 TEST_F(TrailRecorderTest, ARecordedEntryNamesWhereTheRowActuallyWas) {
     const std::string sql = "SELECT * FROM t WHERE id = 3";
+    OptIn(sql);
     Run(sql);
     Run(sql);
 
@@ -164,6 +237,7 @@ TEST_F(TrailRecorderTest, AJoinRecordsOneEntryPerReplayableStepInOrder) {
     // that does not exist - which records one entry, not two, and would
     // have this test measuring the empty-probe case instead.
     const std::string sql = "SELECT a.id FROM t AS a JOIN u AS b ON a.id = b.id WHERE a.id = 3";
+    OptIn(sql);
     Run(sql);
     Run(sql);
 
@@ -190,6 +264,7 @@ TEST_F(TrailRecorderTest, AFailedStatementRecordsNothing) {
 
 TEST_F(TrailRecorderTest, AStatementThatCollectsNothingIsNotEvenCounted) {
     const std::string sql = "SELECT * FROM t WHERE id = 99999";
+    OptIn(sql);
     Run(sql);
     Run(sql);
     EXPECT_TRUE(TrailFor(sql).empty());
@@ -225,8 +300,7 @@ TEST_F(TrailRecorderTest, ClearingTheSightingTableOnlyRestartsCounting) {
     trail.Add(t);
 
     for (std::size_t i = 0; i < TrailRecorder::kMaxSightings + 1; ++i) {
-        recorder_->OnPatternResult(InstanceKey{1000 + i, i}, trail,
-                                   catalog::kStmtClassUnclassified);
+        recorder_->OnPatternResult(InstanceKey{1000 + i, i}, trail);
     }
     EXPECT_GE(recorder_->stats().sighting_table_clears, 1u);
     // Nothing recorded: every one of those instances was seen exactly once.
@@ -247,8 +321,8 @@ TEST_F(TrailRecorderTest, AnOverflowedCollectorRecordsNothingRatherThanAPartialT
     ASSERT_TRUE(tiny.overflowed());
 
     const InstanceKey key{4242, 1};
-    recorder_->OnPatternResult(key, tiny, catalog::kStmtClassUnclassified);
-    recorder_->OnPatternResult(key, tiny, catalog::kStmtClassUnclassified);
+    recorder_->OnPatternResult(key, tiny);
+    recorder_->OnPatternResult(key, tiny);
     EXPECT_EQ(recorder_->stats().trails_written, 0u);
     EXPECT_GE(recorder_->stats().skipped_overflow, 1u);
 }
@@ -257,6 +331,7 @@ TEST_F(TrailRecorderTest, AnOverflowedCollectorRecordsNothingRatherThanAPartialT
 
 TEST_F(TrailRecorderTest, RecordingLeavesThePatternRowsHeatAsRegistered) {
     const std::string sql = "SELECT * FROM t WHERE id = 3";
+    OptIn(sql);
     Run(sql);
     Run(sql);
     Run(sql);
@@ -303,6 +378,12 @@ TEST_F(TrailRecorderTest, ResultsAreByteIdenticalWithRecordingOnAndOff) {
             quiet.Dispatch("INSERT INTO t VALUES (" + std::to_string(i * 10) + ")")
                 .response.substr(0, 8),
             "INSERTED");
+    }
+
+    // The recordable shapes opted in on the recording side only (CF-S1b);
+    // the two scans cannot be, and are compared all the same.
+    for (const std::string& sql : queries) {
+        if (sql.find("id =") != std::string::npos) OptIn(sql);
     }
 
     // Three rounds, so the comparison spans the execution that starts

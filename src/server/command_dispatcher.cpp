@@ -21,6 +21,7 @@
 
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/trail_store.hpp"
+#include "kds/stats/waystone_dir.hpp"
 #include "kds/stats/statement_stats.hpp"
 #include "kds/stats/relation_stats.hpp"
 #include "kds/stats/checkpoint_log.hpp"
@@ -1303,9 +1304,11 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     //
     // Reads, transaction control and the admin verbs that end the condition
     // (BACKUP, SYNC, STOP) still run; a statement that writes the log does not.
+    // `WAYSTONE` writes a `sys.patterns` row (CF-S1b); since it went, no
+    // `SELECT` does.
     if (IEquals(cmd, "INSERT") || IEquals(cmd, "UPDATE") || IEquals(cmd, "DELETE") ||
         IEquals(cmd, "CREATE") || IEquals(cmd, "DROP") || IEquals(cmd, "ALTER") ||
-        IEquals(cmd, "PURGE") || IEquals(cmd, "REINDEX")) {
+        IEquals(cmd, "PURGE") || IEquals(cmd, "REINDEX") || IEquals(cmd, "WAYSTONE")) {
         if (auto refused = ArchiveRefusal(); refused.has_value()) return *refused;
     }
 
@@ -1474,6 +1477,13 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return {"ERR ANALYZE needs a statement to analyze", false};
         }
         return HandleSelect(rest, session, /*analyze=*/true);
+    }
+    // **The Waystone opt-in** (CF-S1b, `workorder-cf-waystone-premise.md`
+    // §8.3): a dispatcher prefix beside ANALYZE, so it needs no grammar
+    // production and no reserved word, and moves no fingerprint. Unclassified
+    // in `RequiredRole`, so admin's: it decides what the instance records.
+    if (IEquals(cmd, "WAYSTONE")) {
+        return HandleWaystone(Trim(line), session);
     }
     if (IEquals(cmd, "UPDATE")) {
         return HandleUpdate(Trim(line), session);
@@ -1722,6 +1732,17 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
                << " cabin_optimizer_failures=" << c.build_failures;
         }
     }
+
+    // **Waystone's ceilings and what sits under them** (CF-S1b): nothing
+    // records until an operator opts a pattern in, so `waystone_recording =
+    // on` in a config means less than it used to, and this says so under the
+    // keys' own names. `waystone_opted` is the instance's opted count
+    // (CF-S1c), one load: set from the chain at the boot and moved by every
+    // `WAYSTONE ON`/`OFF` that changed a current row's bit.
+    section("waystone");
+    os << " waystone_recording=" << (recorder_ != nullptr ? "on" : "off")
+       << " waystone_replay=" << (replay_enabled_ ? "on" : "off")
+       << " waystone_opted=" << catalog_.opted_patterns();
 
     // **The join planner's statistics** (plan-stats.md §6): what the
     // published snapshot holds and what the steward has done. Absent where
@@ -7869,7 +7890,8 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     }
 
     // The statement's own pattern_id, and the fetch_id its trail is keyed
-    // by - the hex `SHOW PATTERNS` lists a row under (AP-S2). The second is
+    // by (AP-S2) - in hex here, while `SHOW PATTERNS` lists a row's
+    // `fetch_id` in decimal, and `WAYSTONE OFF` takes either. The second is
     // what makes "which recorded trail does this statement use" answerable
     // by comparing two numbers, with no trail recorder needed for the
     // comparison to mean something; the first is the shape the cabin
@@ -8082,13 +8104,8 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // Free now: the lexer accumulated it while the parser walked the tokens
     // (lexer.hpp), so identifying the statement costs nothing beyond the
     // parse that had to happen anyway.
-    //
-    // **The guard is the chain's own shape.** A chain with no lookup/probe
-    // step can neither record nor replay - invariant 9 forbids a trail
-    // replacing a search - so a scan-only statement skips the catalog
-    // lookup and the trail read entirely.
-    const bool waystone_usable =
-        (recorder_ != nullptr || replay_enabled_) && exec::HasReplayableStep(compiled);
+    const std::optional<parser::Fingerprint> fingerprint =
+        run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
 
     // **A D2 statement neither records a trail nor reads one** (AR1 §3,
     // D2): a row-volatile function makes its instance key name no stable
@@ -8097,57 +8114,85 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // its values into the key (AP-Q5).
     const bool trailable = compiled.determinism != exec::DeterminismClass::kD2;
 
+    // **The gate: only an opted pattern pays for Waystone** (CF-S1c,
+    // `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3). With
+    // nothing opted on the instance a `SELECT` pays one atomic load; with
+    // something opted and not this shape, one hash miss in this core's
+    // opted map, which is complete per generation and never scanned on a
+    // miss (`catalog_cache.hpp`) - the generation's first lookup on this
+    // core pays the one fill, a `sys.patterns` scan, and every later one
+    // reads no page. Neither clears the replay index nor arms the
+    // collector. A lookup that fails to read is a pattern that is not
+    // opted, which costs a replay and never an answer (invariant 8), and is
+    // counted in the recorder's `write_failures` where one records.
+    //
+    // **The chain's own shape first.** A chain with no lookup/probe step
+    // can neither record nor replay - invariant 9 forbids a trail replacing
+    // a search - and an opted shape can compile to one (a negative tuple
+    // key literal, a plan that turned a probe into a scan), so a scan-only
+    // run asks no map and never triggers the fill.
+    const catalog::PatternAccess* opted = nullptr;
+    if ((recorder_ != nullptr || replay_enabled_) && trailable && fingerprint.has_value() &&
+        !catalog_.NoOptedPatterns() && exec::HasReplayableStep(compiled)) {
+        if (auto found = catalog_.FindOptedPattern(fingerprint->fetch_id); found.ok()) {
+            opted = found.value();
+        } else if (found.status().code() != StatusCode::kNotFound && recorder_ != nullptr) {
+            recorder_->CountUnreadablePattern();
+        }
+    }
+    const bool waystone_usable = opted != nullptr;
+
     std::optional<StatementIdentity>& identity = run->identity;
-    // The optimizer's S1 widens this beyond Waystone's shape guard, and the
+    // The optimizer's S1 widens this beyond Waystone's gate, and the
     // difference is the point: a *scan-only* statement is exactly the shape
     // whose decayed frequency the cabin optimizer's CREATE decision prices
     // (physical-optimizer.md §II.4's f_i), and it is the one shape
-    // invariant 9 keeps Waystone away from. The trail and replay reads
-    // below still guard on their own switches, so deriving the identity
-    // here costs nothing they did not already pay.
-    if (run->parser.has_value() && (waystone_usable || optimizer_signals_ != nullptr)) {
-        if (auto fingerprint = run->parser->fingerprint(); fingerprint.has_value()) {
-            identity = StatementIdentity{
-                stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
-                fingerprint->pattern_id};
-        }
+    // invariant 9 keeps Waystone away from. ANALYZE prints the ids whatever
+    // was opted - a dispatcher built with no optimizer surface included -
+    // so the operator can name a shape before opting it in.
+    if (fingerprint.has_value() &&
+        (waystone_usable || optimizer_signals_ != nullptr || analyze)) {
+        identity = StatementIdentity{stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
+                                     fingerprint->pattern_id};
     }
 
     // The trail a previous execution of this instance recorded. Read once,
-    // indexed once, consulted per keyed step.
+    // indexed once, consulted per keyed step - from the entry the gate
+    // found, so there is no second lookup.
     //
     // The index is pooled scratch, reused rather than rebuilt: it is the
     // only allocation on the replay path, and one malloc per SELECT for
     // what is usually one or two entries is the same cost the collector
-    // already had to be hoisted to avoid.
-    exec::TrailReplay& replay_scratch = run->scratch().replay;
-    replay_scratch.Clear();
+    // already had to be hoisted to avoid. Cleared only where it is rebuilt:
+    // `replay_ptr` is what the walk reads, and it stays null otherwise.
     const exec::TrailReplay* replay_ptr = nullptr;
-    if (replay_enabled_ && trailable && identity.has_value()) {
-        // Served from the catalog cache, so a pattern nobody has recorded
-        // costs a hash lookup and stops here. `has_waystone_directory()` is
-        // the authority on whether there is anything to walk (rows.hpp).
-        if (auto pattern = catalog_.FindPattern(identity->trail.fetch_id);
-            pattern.ok() && pattern.value()->has_waystone_directory()) {
-            auto entries = stats::ReadTrail(page_store_, pattern.value()->waystone_root,
-                                            pattern.value()->dir_depth, identity->trail);
-            // A trail that cannot be read is a trail that does not exist:
-            // the statement descends, exactly as it did before there were
-            // trails at all (invariant 8).
-            if (entries.ok() && !entries.value().empty()) {
-                replay_scratch.Build(compiled, entries.value());
-                if (!replay_scratch.empty()) replay_ptr = &replay_scratch;
-            }
+    if (replay_enabled_ && waystone_usable && opted->has_waystone_directory()) {
+        // `has_waystone_directory()` is the authority on whether there is
+        // anything to walk (rows.hpp): an opted row under
+        // `waystone_recording = off`, or one whose mount create failed, has
+        // none, and that is a plain miss.
+        auto entries =
+            stats::ReadTrail(page_store_, opted->waystone_root, opted->dir_depth, identity->trail);
+        // A trail that cannot be read is a trail that does not exist: the
+        // statement descends, exactly as it did before there were trails at
+        // all (invariant 8).
+        if (entries.ok() && !entries.value().empty()) {
+            exec::TrailReplay& replay_scratch = run->scratch().replay;
+            replay_scratch.Clear();
+            replay_scratch.Build(compiled, entries.value());
+            if (!replay_scratch.empty()) replay_ptr = &replay_scratch;
         }
     }
 
-    // The trail this execution leaves, if anything is recording.
+    // The trail this execution leaves, if this pattern records.
     //
     // **Reused, not constructed per statement**: a collector reserves room
     // for a whole trail (253 x 32 bytes), an 8 KB malloc per SELECT
     // otherwise. Pooled scratch since BA-S15; Clear() keeps the reservation.
+    // Armed only for an opted shape, so a `SELECT` nobody opted collects
+    // nothing and is never sighted (`TrailRecorder::Observe`).
     exec::TrailCollector* trail = nullptr;
-    if (recorder_ != nullptr && trailable && identity.has_value()) {
+    if (recorder_ != nullptr && waystone_usable) {
         run->scratch().trail.Clear();
         trail = &run->scratch().trail;
     }
@@ -8260,7 +8305,7 @@ void CommandDispatcher::RecordExecution(const std::optional<StatementIdentity>& 
                                         exec::TrailCollector* trail,
                                         const exec::StepChain& chain,
                                         const exec::ExecStats& stats) {
-    RecordTrail(identity, trail, chain);
+    RecordTrail(identity, trail);
     RecordAccessShapes(chain);
     RecordOptimizerSignals(identity, chain, stats);
     RecordPlanStats(chain, stats);
@@ -8478,15 +8523,14 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
 }
 
 void CommandDispatcher::RecordTrail(const std::optional<StatementIdentity>& identity,
-                                     exec::TrailCollector* trail,
-                                     const exec::StepChain& chain) {
+                                     exec::TrailCollector* trail) {
     // Never on the failure path - both callers reach here only after the
     // execution succeeded - and only when something was actually located: a
     // collector that gathered nothing describes no trail, and writing an
     // empty one would replace a populated trail with nothing.
     if (recorder_ == nullptr || trail == nullptr || trail->empty()) return;
     if (!identity.has_value()) return;
-    recorder_->OnPatternResult(identity->trail, *trail, exec::StoredStatementClass(chain.klass));
+    recorder_->OnPatternResult(identity->trail, *trail);
 }
 
 void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIdentity>& identity,
@@ -11190,6 +11234,318 @@ Status VisitKeyedSlotsFrom(
 }
 
 }  // namespace
+
+namespace {
+
+// The first byte position a refusal's message names (`"byte N"`), if any.
+// A query-layer decline is answered at where the native path declined,
+// which the native refusal already says in its own words.
+std::optional<std::size_t> ByteNamedIn(const Status& s) {
+    const std::string& m = s.message();
+    for (std::size_t at = m.find("byte "); at != std::string::npos; at = m.find("byte ", at + 1)) {
+        std::size_t value = 0;
+        const char* first = m.data() + at + 5;
+        const auto [end, ec] = std::from_chars(first, m.data() + m.size(), value);
+        if (ec == std::errc() && end != first) return value;
+    }
+    return std::nullopt;
+}
+
+// `s`, positioned at `byte` unless it already names one.
+Status AtByte(const Status& s, std::size_t byte) {
+    if (ByteNamedIn(s).has_value()) return s;
+    return s.WithMessage(s.message() + " (byte " + std::to_string(byte) + ")");
+}
+
+// `OFF <fetch_id>`'s number: decimal, or `0x` and 1-16 hex digits - the
+// lexer has no hex literal, and ANALYZE prints a `fetch_id` in hex while
+// the views print it in decimal, so both are read here, by hand.
+std::optional<std::uint64_t> ParseFetchId(std::string_view text) {
+    int base = 10;
+    if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        text.remove_prefix(2);
+        if (text.size() > 16) return std::nullopt;
+        base = 16;
+    }
+    std::uint64_t value = 0;
+    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value, base);
+    if (ec != std::errc() || end != text.data() + text.size() || text.empty()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+}  // namespace
+
+DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session& session) {
+    const auto refuse = [](const Status& s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
+    const auto at = [&line](std::string_view word) {
+        return static_cast<std::size_t>(word.data() - line.data());
+    };
+
+    // CF-O-Q7 (a): autocommit only, refused before anything is read, so the
+    // transaction it meets is not poisoned - `PURGE`'s and `BACKUP`'s shape.
+    // The writes are outside any user transaction (an insert at
+    // `kBootstrapXid`, an overwrite at `kNoTxnId`), and an advisory bit gains
+    // nothing from atomicity with user writes.
+    if (session.in_explicit_txn()) {
+        return refuse(Status::NotImplemented(
+            "WAYSTONE inside a transaction is not implemented; run it in autocommit (byte 0)"));
+    }
+
+    const std::string_view rest = SplitFirstToken(line).second;
+    const auto [mode, example] = SplitFirstToken(rest);
+    const bool on = IEquals(mode, "ON");
+    if (!on && !IEquals(mode, "OFF")) {
+        return refuse(Status::InvalidArgument(
+            (mode.empty() ? std::string("WAYSTONE expects ON or OFF")
+                          : "WAYSTONE expects ON or OFF, not '" + std::string(mode) + "'") +
+            " (byte " + std::to_string(mode.empty() ? line.size() : at(mode)) + ")"));
+    }
+    const std::string verb = on ? "WAYSTONE ON" : "WAYSTONE OFF";
+    if (example.empty()) {
+        return refuse(Status::InvalidArgument(
+            verb + (on ? " expects a SELECT" : " expects a SELECT or a fetch_id") + " (byte " +
+            std::to_string(line.size()) + ")"));
+    }
+    const std::size_t example_at = at(example);
+    const std::string_view lead = SplitFirstToken(example).first;
+
+    std::uint64_t fetch_id = 0;
+    std::uint8_t stmt_class = catalog::kStmtClassUnclassified;
+    PageId root = kInvalidPageId;
+    const char first = example.front();
+    if (std::isdigit(static_cast<unsigned char>(first)) != 0 || first == '-' || first == '+') {
+        // **`ON` names its pattern by example only** (CF-O-Q1 (a)): a number
+        // would accept a shape this check never saw, a spelling that
+        // enforces nothing.
+        if (on) {
+            return refuse(Status::InvalidArgument(
+                "WAYSTONE ON takes a SELECT to opt in, not a fetch_id; WAYSTONE OFF takes "
+                "either (byte " + std::to_string(example_at) + ")"));
+        }
+        const auto parsed = ParseFetchId(example);
+        if (!parsed.has_value()) {
+            return refuse(Status::InvalidArgument(
+                "WAYSTONE OFF's fetch_id is a decimal, or 0x and 1 to 16 hex digits, that fits "
+                "64 bits; '" + std::string(example) + "' is not (byte " +
+                std::to_string(example_at) + ")"));
+        }
+        fetch_id = *parsed;
+    } else {
+        // ---- The example's leading word, before any parse ----------------
+        if (IEquals(lead, "INSERT") || IEquals(lead, "UPDATE") || IEquals(lead, "DELETE")) {
+            return refuse(Status::NotImplemented(
+                verb + " over " + std::string(lead) + " is not implemented: only a SELECT "
+                "records a trail (byte " + std::to_string(example_at) + ")"));
+        }
+        // The statement text every layer below sees is the whole command's,
+        // with the prefix blanked: a byte a parser or compiler names is then
+        // the command's own, and the fingerprint - over tokens, never over
+        // whitespace - is the bare SELECT's, as ANALYZE's is.
+        std::string padded(line);
+        std::fill(padded.begin(), padded.begin() + static_cast<std::ptrdiff_t>(example_at), ' ');
+        const auto layer_reads = [&padded] {
+            parser::Parser layered(padded);
+            return layered.ParseQuery().ok();
+        };
+        if (IEquals(lead, "WITH") || (!IEquals(lead, "SELECT") && layer_reads())) {
+            return refuse(Status::NotImplemented(
+                verb + " over a statement the query layer answers is not implemented: Waystone "
+                "records only a native SELECT's step chain (byte " +
+                std::to_string(example_at) + ")"));
+        }
+        if (!IEquals(lead, "SELECT")) {
+            return refuse(Status::InvalidArgument(
+                verb + " expects a SELECT" + (on ? "" : " or a fetch_id") + ", not '" +
+                std::string(lead) + "' (byte " + std::to_string(example_at) + ")"));
+        }
+
+        // **The `?` placeholders.** The native text grammar takes none - a
+        // `?` arrives through KWP's PARSE and BIND - but the literal and `?`
+        // forms share a `fetch_id` (fingerprint.hpp), so an example may be
+        // written either way. CF-O-Q11 (a): ON refuses one, since its
+        // compile is what makes its refusals truthful for the example, and
+        // OFF, which only fingerprints, takes it - fingerprinting the text
+        // as written and parsing it with each `?` read as a literal of the
+        // same width, so every byte a refusal names is still the command's.
+        std::optional<std::size_t> param_at;
+        std::string parseable = padded;
+        {
+            parser::Lexer lexer(padded);
+            for (parser::Token tok = lexer.Next(); tok.type != parser::TokenType::kEof;
+                 tok = lexer.Next()) {
+                if (tok.type != parser::TokenType::kParam) continue;
+                if (!param_at.has_value()) param_at = tok.byte_offset;
+                parseable[tok.byte_offset] = '0';
+            }
+        }
+        if (on && param_at.has_value()) {
+            return refuse(Status::NotImplemented(
+                "WAYSTONE ON over a '?' placeholder is not implemented: write the example "
+                "with a literal, whose fetch_id the placeholder form shares (byte " +
+                std::to_string(*param_at) + ")"));
+        }
+
+        parser::Parser parser(parseable);
+        auto parsed = parser.Parse();
+        if (!parsed.ok()) {
+            // BU-Q9's fork: what the native grammar refuses, the query layer
+            // may read - and a statement only it answers has no step chain
+            // to record. `OFF` never had such a shape opted, so it answers
+            // with the parser's own refusal.
+            if (on && layer_reads()) {
+                return refuse(Status::NotImplemented(
+                    "WAYSTONE ON over a SELECT the query layer answers is not implemented: "
+                    "Waystone records only a native step chain; the native grammar declined "
+                    "it (byte " +
+                    std::to_string(ByteNamedIn(parsed.status()).value_or(example_at)) + ")"));
+            }
+            return refuse(parsed.status());
+        }
+        const auto fingerprint =
+            param_at.has_value() ? parser::FingerprintOf(padded) : parser.fingerprint();
+        if (!std::holds_alternative<parser::SelectStmt>(parsed.value()) ||
+            !fingerprint.has_value()) {
+            return refuse(Status::InvalidArgument(verb + " expects one SELECT (byte " +
+                                                  std::to_string(example_at) + ")"));
+        }
+        fetch_id = fingerprint->fetch_id;
+
+        // **`OFF <select>` stops here**: it only fingerprints, so none of
+        // ON's shape, D2 or borrow refusals apply, and OFF can always clear
+        // what ON set - after a `DROP TABLE` included.
+        if (on) {
+            // ---- Compile, never execute --------------------------------
+            //
+            // The path `SelectBody` takes, under the session's namespace.
+            // The borrow is declared at the bind (AT-R1), and like every read
+            // borrow a refused one is recorded and fails nothing
+            // (`read_borrow.hpp`): ON compiles beside a DDL's `X` as the same
+            // SELECT runs beside it. A refusal the compile itself answers
+            // `TxnConflict` is positioned at the example.
+            //
+            // **Scoped**: the chain and the borrow go before the write,
+            // which moves the schema word, and no `TableAccess*` may be held
+            // across that (catalog.hpp's `BumpVersion`).
+            const exec::StatementContext context = StatementContextFor(session);
+            auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+            {
+                ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
+                auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
+                    return exec::Compile(catalog_, stmt, v, &borrow, &context, nullptr);
+                });
+                if (!chain.ok()) {
+                    if (chain.status().code() == StatusCode::kNotImplemented && layer_reads()) {
+                        return refuse(Status::NotImplemented(
+                            "WAYSTONE ON over a SELECT the query layer answers is not "
+                            "implemented: Waystone records only a native step chain; the "
+                            "native compile declined it (byte " +
+                            std::to_string(ByteNamedIn(chain.status()).value_or(example_at)) +
+                            ")"));
+                    }
+                    return refuse(AtByte(chain.status(), example_at));
+                }
+                const exec::StepChain& compiled = chain.value();
+
+                // **D2 neither records nor replays** (AR1 §3), so an opt-in
+                // would enforce nothing: refused at the row-volatile call.
+                if (compiled.determinism == exec::DeterminismClass::kD2) {
+                    std::size_t call_at = example_at;
+                    parser::Lexer lexer(padded);
+                    for (parser::Token tok = lexer.Next(); tok.type != parser::TokenType::kEof;
+                         tok = lexer.Next()) {
+                        const exec::FunctionEntry* fn = exec::FindFunction(tok.text);
+                        if ((tok.type == parser::TokenType::kIdent ||
+                             tok.type == parser::TokenType::kKeyword) &&
+                            fn != nullptr && lexer.Peek().type == parser::TokenType::kLParen &&
+                            exec::ClassOf(fn->purity) == exec::DeterminismClass::kD2) {
+                            call_at = tok.byte_offset;
+                            break;
+                        }
+                    }
+                    return refuse(Status::Unsupported(
+                        "WAYSTONE ON over a statement calling a row-volatile function: its "
+                        "instance names no stable set of rows, so it never records or replays "
+                        "(byte " + std::to_string(call_at) + ")"));
+                }
+                // **Drawn at the shape, never at this plan** (`status.hpp`'s
+                // test): a shape with no tuple key equality has no step
+                // Waystone records under any plan, for good (invariant 9);
+                // one that admits a descent and compiles to none now is
+                // accepted, and the run-time `HasReplayableStep` keeps such
+                // a run from recording.
+                if (!exec::ShapeAdmitsDescent(compiled)) {
+                    return refuse(Status::Unsupported(
+                        "WAYSTONE ON over a SELECT with no tuple key equality: no step of it "
+                        "is a tuple key lookup or probe under any plan, and a trail replaces "
+                        "only those, never a search (invariant 9) (byte " +
+                        std::to_string(example_at) + ")"));
+                }
+                stmt_class = exec::StoredStatementClass(compiled.klass);
+            }
+
+            // ---- The directory, before page 9's hold --------------------
+            //
+            // Read with no hold: a row that already has its directory needs
+            // none. With `waystone_recording` off there is no recorder, so
+            // nothing would record into one whatever `waystone_replay`
+            // says; the mount roots the row once recording is on. A race
+            // with a concurrent ON is settled under the hold, and the loser's
+            // page is logged as leaked there.
+            if (recorder_ != nullptr) {
+                auto row = catalog_.GetSysPatternRow(fetch_id);
+                if (!row.ok() && row.status().code() != StatusCode::kNotFound) {
+                    return refuse(AtByte(row.status(), 0));
+                }
+                if (!row.ok() || !catalog::HasWaystoneDirectory(row.value())) {
+                    auto made = stats::CreateDirPage(page_store_);
+                    if (!made.ok()) {
+                        return refuse(made.status().WithMessage(
+                            "WAYSTONE ON: no page for the pattern's directory: " +
+                            made.status().message() + " (byte 0)"));
+                    }
+                    root = made.value();
+                }
+            }
+        }
+    }
+
+    auto wrote = catalog_.SetPatternWaystone(fetch_id, stmt_class, on, root);
+    if (!wrote.ok()) return refuse(AtByte(wrote.status(), 0));
+
+    // **The named park** (§8.3, Durability of OK): the hold is released, and
+    // the answer waits where a `group` commit does, on the record it rests
+    // on - this write's, or for `unchanged` the one that set the state
+    // found. `relaxed` answers at once, as a relaxed commit does; a crash
+    // inside its interval can lose the opt-in, which costs performance only
+    // (invariant 8).
+    const wal::Lsn durable_at = wrote.value().durable_at;
+    if (wal_ != nullptr && durable_at != wal::kNoLsn &&
+        effective_durability_ != wal::DurabilityClass::kRelaxed && !wal_->IsDurable(durable_at)) {
+        // Asked for first, as `Checkpointer::ParkOnLog` does: nothing staged
+        // a commit, so no drain would otherwise sync for this park. **A
+        // refusal here comes after the write**, which nothing undoes: the
+        // state stands on every core for this run, so the reply says so
+        // rather than reading as an opt-in that did not happen.
+        if (Status s = wal_->RequestSyncNow(); !s.ok()) {
+            return refuse(s.WithMessage(
+                verb + " is in effect for this run but its record is not durable, so the "
+                "state may be lost at a restart: " + s.message() + " (byte 0)"));
+        }
+        pending_commit_lsn_ = durable_at;
+    }
+
+    std::string reply = "OK " + verb + " fetch_id=" + std::to_string(fetch_id);
+    if (on) {
+        // The instance's boot ceilings, under their keys' own names: an
+        // opt-in under an off ceiling is accepted and records nothing.
+        reply += std::string(" waystone_recording=") + (recorder_ != nullptr ? "on" : "off") +
+                 " waystone_replay=" + (replay_enabled_ ? "on" : "off");
+    }
+    if (!wrote.value().written) reply += " unchanged";
+    return {reply, false};
+}
 
 DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& session) {
     const auto refuse = [](const Status& s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };

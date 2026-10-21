@@ -12,6 +12,7 @@
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog_cache.hpp"
+#include "kds/catalog/instance_words.hpp"
 
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/schema.hpp"
@@ -71,7 +72,12 @@ class WalManager;
 // which owns the rule for what may be cached. The two things to know
 // before touching this file: `next_id` is never cached, so AllocateRowId()
 // and GetSysTableRow() always read the page; and every mutation of a
-// cached fact goes through BumpVersion(), the single invalidation point.
+// cached fact goes through BumpVersion(), the single invalidation point -
+// save the mount's `RenewPatternDirectories`, which drops this catalog's
+// cache instead, before the listener binds. The opted patterns are the one
+// cached absence, complete per generation: `catalog_cache.hpp` states the
+// rule that keeps them so, and `opted_patterns`' comment the atomic
+// protocol of the instance's opted count that gates them (CF-S1c).
 
 namespace kds::catalog {
 
@@ -220,41 +226,38 @@ public:
     // caller is a catalog write of this class's own.
     void NoteDeclarationsChanged(std::string_view what) { BumpVersion(what); }
 
-    // **The schema version word** (AT-S2, `docs/spec/catalog.md`; AR0-5
-    // §2.1, D21). One `std::atomic` for the instance, owned by `Expeditor`
-    // and handed to every core's catalog; `BumpVersion()` - the single DDL
-    // choke point - advances it, and `Revalidate()` below drops this
-    // cache when it has moved: a peer is not told, it asks. **Bumped by
-    // every invalidation that can stale another core's memo** (AT-R2):
-    // this core's `catalog_version_` is not - a peer's drop never advanced
-    // it - which is why the word is a second thing and not that counter
-    // shared (`catalog.md` CT1 owns that rule). Neither `AllocateRowId()`
-    // nor `RegisterPattern()` bumps it: an id or a pattern is not a cached
-    // fact. Null is a catalog with no instance around it (a fixture,
-    // bootstrap), which revalidates nothing.
+    // **The instance's four words** (`catalog.md` CT6; `instance_words.hpp`
+    // carries each word's atomic protocol): one struct, owned by `Expeditor`
+    // and handed to every core's catalog by this one setter since CF-S1c.
+    // Null is a catalog with no instance around it (a fixture, bootstrap,
+    // the sim), which keeps a local copy of each word: its own oid counter,
+    // its own mark and opted counts, and no schema word, so it revalidates
+    // nothing. What each word is to this class:
     //
-    // **Correctness never rests on the word** (AT-R3): it saves a re-parse.
-    // The relation `IS` a statement holds from its bind is what a DDL's `X`
-    // waits for; `read_borrow.hpp` states the defence and its direction.
-    void SetSchemaWord(std::atomic<std::uint64_t>* word) noexcept { schema_word_ = word; }
-
-    // **The instance's object-oid sequence** (AT-S5b). A counter per
-    // catalog would let two catalogs issue the same oid, since every core
-    // runs `CREATE TABLE` (AT-S5). One atomic for the instance, owned by `Expeditor` beside the schema
-    // word and handed down the same way: whichever catalog first needs an
-    // oid seeds it by CAS from `HighestIssuedUserOid()`, and every issue
-    // after that is a `fetch_add`. Null keeps the per-catalog counter,
-    // which is what a bare fixture catalog and the sim hold.
-    void SetOidSequence(std::atomic<Oid>* sequence) noexcept { oid_sequence_ = sequence; }
-
-    // **The instance's delete-mark counter** (AT-S5b), the third of the
-    // three words `Expeditor` owns and hands to every core's catalog. It
-    // gates the purge; why the gate has to be the instance's is at
-    // `PurgeSettledDeleteMarks` below, where it is read. Null keeps the
-    // local counter, which is what a bare catalog holds.
-    void SetMarkCounter(std::atomic<std::uint64_t>* counter) noexcept {
-        mark_counter_ = counter;
-    }
+    //   - **The schema version word** (AT-S2; AR0-5 §2.1, D21).
+    //     `BumpVersion()` - the single DDL choke point - advances it, and
+    //     `Revalidate()` below drops this cache when it has moved: a peer is
+    //     not told, it asks. **Bumped by every invalidation that can stale
+    //     another core's memo** (AT-R2): this core's `catalog_version_` is
+    //     not - a peer's drop never advanced it - which is why the word is a
+    //     second thing and not that counter shared (`catalog.md` CT1 owns
+    //     that rule). `AllocateRowId()` does not bump it: an id is not a
+    //     cached fact. `SetPatternWaystone()` does, after its hold is
+    //     released: an opt-in is the fact a peer's pattern entry caches.
+    //     **Correctness never rests on the word** (AT-R3): it saves a
+    //     re-parse. The relation `IS` a statement holds from its bind is
+    //     what a DDL's `X` waits for; `read_borrow.hpp` states the defence
+    //     and its direction.
+    //   - **The object-oid sequence** (AT-S5b). A counter per catalog would
+    //     let two catalogs issue the same oid, since every core runs
+    //     `CREATE TABLE` (AT-S5): whichever catalog first needs an oid seeds
+    //     it by CAS from `HighestIssuedUserOid()`, and every issue after
+    //     that is a `fetch_add` (`GenerateUserOid`).
+    //   - **The delete-mark count** (AT-S5b). It gates the purge; why the
+    //     gate has to be the instance's is at `PurgeSettledDeleteMarks`
+    //     below, where it is read.
+    //   - **The opted count** (CF-S1c), at `opted_patterns` below.
+    void SetInstanceWords(InstanceWords* words) noexcept { words_ = words; }
 
     // **Asked at a task boundary and nowhere inside one**: a drop frees
     // every `const TableAccess*` a running statement holds. `catalog.md`
@@ -283,7 +286,7 @@ public:
         std::uint64_t generation_;
     };
     std::uint64_t schema_word_now() const noexcept {
-        return schema_word_ == nullptr ? 0 : schema_word_->load(std::memory_order_acquire);
+        return words_ == nullptr ? 0 : words_->schema_word.load(std::memory_order_acquire);
     }
 
     // Whether the memo `Revalidate` last settled is still the word's: false
@@ -294,8 +297,8 @@ public:
     // unmoved at that moment proves the statement resolved the relation's
     // indexes and assertions as they now stand.
     bool MemoIsCurrent() const noexcept {
-        return schema_word_ == nullptr ||
-               schema_word_->load(std::memory_order_acquire) == cache_built_at_;
+        return words_ == nullptr ||
+               words_->schema_word.load(std::memory_order_acquire) == cache_built_at_;
     }
 
     // Drops every cached fact without bumping anything. Its callers are
@@ -355,17 +358,17 @@ public:
     // `system` tick (`CommandDispatcher::SweepSettledDeleteMarks`, BP-H11),
     // on **one** core - a placement, so that two cores do not walk the same
     // chains at once, not an authority (AT-S5). Which is why the gate it reads is the
-    // instance's (`SetMarkCounter`, AT-S5b): the sweeping core has to see
+    // instance's (`SetInstanceWords`, AT-S5b): the sweeping core has to see
     // a mark another core wrote, or a peer's `DROP` would wait for the
     // next mount. The soundness proof lives once, in
     // `ddl-transactional.md` §5d.
     StatusOr<std::uint64_t> PurgeSettledDeleteMarks();
     // Marks written this run and not yet retired - the instance's count
-    // where one is wired (`SetMarkCounter`), the local one for a bare
+    // where one is wired (`SetInstanceWords`), the local one for a bare
     // catalog. Public for the purge trigger's first test (BP-H11).
     std::uint64_t MarkCount() const noexcept {
-        return mark_counter_ != nullptr ? mark_counter_->load(std::memory_order_acquire)
-                                        : pending_marks_;
+        return words_ != nullptr ? words_->mark_count.load(std::memory_order_acquire)
+                                 : pending_marks_;
     }
 
     // Registers the fixed namespace/type sys-objects in the in-memory
@@ -795,110 +798,156 @@ public:
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 
-    // The pattern `fetch_id` names, served from the cache after the first
-    // lookup. The pointer is reference-stable and stays valid until the
-    // next Invalidate() - same contract as InitTableAccess().
+    // **The instance's opted count** (CF-S1c, §8.3 "The gate and its hot-path
+    // cost"): how many current-version `sys.patterns` rows carry
+    // `kPatternWaystone`. The fourth of the instance's words
+    // (`SetInstanceWords`); a bare catalog keeps a local count.
     //
-    // Fails with NotFound when the pattern has never been registered **and
-    // when the only row for it came from another fingerprint revision**.
-    // Those two are deliberately one outcome: a row recorded under
-    // different fingerprinting rules names a shape that is not the one it
-    // claims, so the only safe reading of it is that this pattern has not
-    // been seen. The caller registers it afresh and the stale row becomes
-    // garbage (retention, P15, is unbuilt). A version mismatch is never
-    // an error - nothing about it should fail a statement.
-    StatusOr<const PatternAccess*> FindPattern(std::uint64_t fetch_id);
+    // **Moved only after a successful write, under page 9's hold**, and only
+    // on a 0->1 or 1->0 change of the bit on a **current-version** row:
+    // OFF clearing a lapsed row's bit leaves it, and a decrement saturates at
+    // 0. **Set from the chain at every boot**, after redo where redo runs:
+    // `RenewPatternDirectories`' walk sets it, and a boot that runs no
+    // renewal runs `RecountOptedPatterns`. A stale count costs performance
+    // only (invariant 8): it gates a lookup, never what a reader sees. Its
+    // memory orders are at the field (`instance_words.hpp`).
+    //
+    // One load, with no fill: the `SELECT` path's whole cost while nothing
+    // on the instance is opted.
+    std::uint64_t opted_patterns() const noexcept {
+        return words_ != nullptr ? words_->opted_count.load(std::memory_order_acquire)
+                                 : local_opted_;
+    }
+    bool NoOptedPatterns() const noexcept { return opted_patterns() == 0; }
 
-    // Records a newly observed pattern and returns its cached access, so a
-    // caller that just registered does not look it back up.
+    // The opted pattern `fetch_id` names, or NotFound (CF-S1c). Served from
+    // this core's **opted map, complete per cache generation**: while the
+    // count is non-zero, the first ask after a cache drop fills it with
+    // every current-version row that has `kPatternWaystone` set, in one
+    // `ScanAll` of `sys.patterns`, and every later ask in the generation is
+    // one hash probe - **a miss is NotFound with no scan**. While the count
+    // is zero nothing fills and every ask is NotFound. The soundness rule
+    // that lets a miss be answered from memory is `catalog_cache.hpp`'s.
     //
-    // **The version is stamped here, not passed in.** No caller has any
-    // business recording a pattern under a revision other than the one
-    // that computed its `fetch_id`, so a version parameter could only
-    // ever be passed wrong - and passing it wrong writes a row no build
-    // will resolve. Removing the parameter is what makes "the cache holds
-    // current-version entries only" true by construction.
-    //
-    // Registration bumps **no** catalog version. Nothing cached can go
-    // stale from a pattern appearing:
-    // absences are never cached (catalog_cache.hpp), so no entry claims
-    // this pattern is missing, and no other cached fact mentions it. The
-    // consequence matters on the statement path - registering a pattern
-    // mid-statement cannot dangle the `const TableAccess*` that statement
-    // is holding, which is the hazard `waystone-concpets.md` section 4
-    // flagged for this task.
-    //
-    // The pattern's `oid` comes from AllocateRowId(kSysPatternsTable) - the
-    // persistent sequence in sys.patterns' own sys.tables row. That is a
-    // repurposing worth naming: catalog rows carry no Keystone word, so
-    // this is the sequence used as an oid source rather than as a tuple id.
-    // GenerateUserOid() is not used: its recovery reads back only
-    // `sys.objects` and `sys.columns`, so an oid written only here would be
-    // reissued after a restart (its contract, above).
-    //
-    // Fails with AlreadyExists if `fetch_id` is already registered at
-    // the current version. A row left by an older revision does not count
-    // as registered, so a version bump leaves every shape re-learnable
-    // rather than permanently blocked.
-    //
-    // The row is written kOriginAuto, unpinned, and with **no waystone
-    // directory** - the directory arrives through the one writer of that
-    // pair, ClaimPatternWaystoneRoot(), when the first trail is recorded.
-    // (`origin`/`flags` went from the signature with `CREATE PATTERN`,
-    // 2026-08-31.)
-    StatusOr<const PatternAccess*> RegisterPattern(std::uint64_t fetch_id,
-                                                    std::uint8_t stmt_class);
+    // The pointer is reference-stable and stays valid until the next
+    // Invalidate() - same contract as InitTableAccess(). A row of another
+    // fingerprint revision is never in the map: it names a shape that is
+    // not the one it claims, so the only safe reading of it is that the
+    // pattern was never opted in (a re-issued `WAYSTONE ON` inserts a
+    // current row beside it). Any answer but NotFound is a read that
+    // failed.
+    StatusOr<const PatternAccess*> FindOptedPattern(std::uint64_t fetch_id);
 
-    // Points a pattern at its waystone directory, writing root and depth as
-    // one unit, and **answers the pair in force** - which is not always the
-    // one passed in.
-    //
-    // The two are one fact and there is deliberately no setter for either
-    // alone: a root without its depth is unwalkable, and a depth that
-    // disagrees with the root sends every walk to the wrong leaf. Validated
-    // before the page is touched - depth 0 requires kInvalidPageId, and any
-    // other depth requires a real root and a depth within
-    // kMaxPatternDirDepth - so every reader downstream may trust the pair
-    // without re-checking it.
-    //
-    // **A claim rather than a store since AT-S7**, and the return value is
-    // why it is named one: every core records trails, so two can find a
-    // pattern with no directory and each build one. A row that already
-    // carries a root keeps it and the caller is told which pair won, so
-    // both cores write into one directory instead of the second stranding
-    // every trail already in the first. Clearing (`kInvalidPageId`, depth
-    // 0) is not a claim and always takes - it is how a directory is
-    // retired. The losing caller's page is leaked, which is what every
-    // unreferenced page in this engine is.
-    //
-    // Updates the cached PatternAccess in place rather than invalidating
-    // (catalog_cache.hpp explains why that is the exception it is), so a
-    // caller holding a `const PatternAccess*` keeps a valid pointer and
-    // sees the directory in force.
-    //
-    // Fails with NotFound if no sys.patterns row carries `fetch_id`, and
-    // with InvalidArgument for an incoherent pair. Page lifetime of the old
-    // directory is the caller's business: this writes the row.
-    StatusOr<std::pair<PageId, std::uint8_t>> ClaimPatternWaystoneRoot(std::uint64_t fetch_id,
-                                                                      PageId root,
-                                                                      std::uint8_t depth);
+    // What `SetPatternWaystone` did, and the LSN its answer is durable at.
+    struct PatternWaystoneWrite {
+        // False is `unchanged`: nothing was written, because the state asked
+        // for already stood.
+        bool written = false;
+        // The record this answer rests on, for the caller to park on
+        // (`IsDurable(durable_at)`), or 0 when there is no log. Read after the
+        // write when one was made - the append point less one, which bounds
+        // this write's record and perhaps later ones, a later bound and never
+        // an earlier one - and **under page 9's hold** when none was, which
+        // bounds the record of whichever earlier statement set the state this
+        // answer reports: every writer of the bit writes under that hold.
+        std::uint64_t durable_at = 0;
+    };
 
-    // Clears every current-version pattern's Waystone root in one walk of
-    // `sys.patterns`: `ClaimPatternWaystoneRoot(fetch_id, kInvalidPageId,
-    // 0)` for each row that has a directory, without a walk per row. The
-    // mount's discard of unlogged Waystone state (`DiscardAdvisoryState`).
-    Status ClearEveryPatternWaystoneRoot();
+    // **`WAYSTONE ON` and `WAYSTONE OFF`'s one writer** (CF-S1b,
+    // `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3): bit 0 of
+    // a pattern row's `flags` (`kPatternWaystone`), the opt-in that decides
+    // whether `fetch_id`'s shape records and replays at all.
+    //
+    // **Page 9 held exclusive across the decision and the write**, as
+    // `RecordAccess` holds its own root: the existence check and the insert
+    // under it are one act across cores, so two concurrent ONs serialize and
+    // no shape owns two current rows. Released before the schema word moves
+    // (`BumpVersion`, after a write only), and before any wait - the caller
+    // parks on `durable_at` with no latch held.
+    //
+    // `on`:
+    //   - no current-version row: a new one, `flags = kPatternWaystone`,
+    //     `stmt_class` as given, rooted at `root` (depth 1) or at none (depth
+    //     0) when `root` is `kInvalidPageId`. Logged at `kBootstrapXid`.
+    //   - a current-version row: the bit set, and `root` written if the row
+    //     has no directory - one logged overwrite at `kNoTxnId`. Unchanged
+    //     when the bit stood and there is no root to write.
+    //   A row of another fingerprint version is not this pattern's, so it
+    //   neither counts as the row nor is written (a re-issued ON after a
+    //   bump inserts beside it). A new row's `oid` comes from
+    //   AllocateRowId(kSysPatternsTable) - the persistent sequence in
+    //   sys.patterns' own sys.tables row, used as an oid source: catalog rows
+    //   carry no Keystone word, and GenerateUserOid()'s recovery reads back
+    //   only `sys.objects` and `sys.columns`, so an oid written only here
+    //   would be reissued after a restart.
+    //
+    // `!on` (`root` must be `kInvalidPageId`): **every** row carrying
+    // `fetch_id`, of any version, has its bit and its directory cleared, in
+    // one whole-chain walk - a `fetch_id` is not salted by
+    // `kFingerprintVersion`, so after a bump a lapsed opted row and the
+    // current one commonly share it, and a first-match OFF would clear the
+    // lapsed row and never reach the current one. Unchanged when no row it
+    // met had the bit. The rows stay, and the directories become
+    // unreachable, as at a mount.
+    //
+    // **The opted count moves here and nowhere else at run time** (CF-S1c):
+    // under the hold, after each write that succeeded, by one per current-
+    // version row whose bit it changed - never for a lapsed row, never for a
+    // root alone, never for a write that failed.
+    //
+    // **`root` is created by the caller before this is called, never under
+    // the hold**: `CreateDirPage` can block on the data-sync thread
+    // (`device_page_store.cpp`'s headerless create), and a page latch is
+    // never held across a durability wait. A page passed in and not used - a
+    // concurrent ON rooted the row first, the row was found opted with a
+    // root, the write failed - is logged as leaked, which is what every
+    // unreferenced page here is.
+    StatusOr<PatternWaystoneWrite> SetPatternWaystone(std::uint64_t fetch_id,
+                                                      std::uint8_t stmt_class, bool on,
+                                                      PageId root);
 
-    // No `SetPatternOrigin()` or `RetirePattern()`: both went with
-    // declared patterns on 2026-08-31. Every row is `kOriginAuto`, nothing
-    // writes `kPatternPinned`, and the two fields stay on disk (rows.hpp).
+    // **The mount's renewal of every opted pattern's directory** (CF-S1b,
+    // §8.3 Mount): the discard of unlogged Waystone state
+    // (`DiscardAdvisoryState`), core 0's, after recovery and before the
+    // listener binds. Answers how many current-version rows are opted.
+    //
+    // Two passes, **so no page is created under a catalog page latch**:
+    // a read-only walk collects the current-version opted rows; then, with
+    // no latch held and only where `waystone_recording` is on, one fresh
+    // directory each; then one `kWrite` walk writes each collected row's
+    // fresh root at depth 1 and clears every other root, **whatever its
+    // fingerprint version**, so a lapsed row keeps no stale root. With
+    // recording off every root is cleared and none is created. A creation
+    // that fails clears the row's root, keeps its bit, is logged, and the
+    // mount still opens. A row that changed between the passes keeps its
+    // write and its unused page is logged as leaked.
+    //
+    // Opted rows of another fingerprint version are logged as lapsed, only
+    // where no current-version row of their `fetch_id` is opted (a re-issued
+    // ON is not reported again at every mount).
+    //
+    // **Ends by setting the opted count** from the second walk (CF-S1c) **and
+    // dropping this catalog's cache** `[quiet-wrong]`: a pattern entry filled
+    // before the walk would keep the previous run's root, whose children can
+    // be ids the cursor has since handed to logged pages, so a trail written
+    // through it would overwrite them with no record.
+    StatusOr<std::uint64_t> RenewPatternDirectories(bool waystone_recording);
+
+    // **The counting walk of a boot that runs no renewal** (CF-S1c): the
+    // sim's `skip_recovery` boot skips `DiscardAdvisoryState`, and with it
+    // the walk that sets the opted count, which would otherwise stay 0 over
+    // opted rows for the whole run. One read-only walk of the chain, which
+    // on a v33 volume holds only the rows ever opted; sets the count and
+    // answers it.
+    StatusOr<std::uint64_t> RecountOptedPatterns();
 
     // A `TouchPattern()` stood here - the trail recorder's catalog half,
     // which bumped `use_count` and stamped `last_seen` on every recorded
     // execution. It went with BL-S4's ruling 1 (2026-10-12, rows.hpp): it
     // was a logged catalog write on the read path, so a repeated point
     // `SELECT` waited on the one WAL behind any bulk writer. The two fields
-    // stay on disk, written 0 at registration and advanced by nothing.
+    // stay on disk, written 0 at `WAYSTONE ON`'s insert and advanced by
+    // nothing.
 
     // Every sys.patterns row, in page order.
     //
@@ -928,8 +977,8 @@ public:
     // PatternAccess deliberately omits - `use_count` and `last_seen`, heat
     // that moves without DDL and so is not a cacheable fact (schema.hpp;
     // reserved since BL-S4's ruling 1, rows.hpp). A caller that wants heat
-    // calls this; a caller that wants identity or location calls
-    // FindPattern().
+    // calls this; a caller that wants an opted pattern's identity or location
+    // calls FindOptedPattern().
     //
     // **Rows from another fingerprint revision are invisible here**, and
     // this is the single place that filter lives. A version bump leaves
@@ -1018,7 +1067,7 @@ public:
     // NotFound for an unknown relation; AlreadyExists for a second Cabin on
     // the same column.
     //
-    // **Bumps the catalog version**, unlike RegisterPattern(): the mask on
+    // **Bumps the catalog version**: the mask on
     // TableAccess is derived from these rows, so a Cabin appearing stales
     // every cached relation entry. That makes this a DDL-shaped call and it
     // must not be made from a statement path holding a `const TableAccess*`.
@@ -1300,15 +1349,14 @@ private:
 
     // ---- The delete-mark count, and the one seam it is reached through -
     //
-    // Two shapes: `mark_counter_` when an instance named one
-    // (`SetMarkCounter`), the local `pending_marks_` for a bare catalog.
+    // Two shapes: the instance's `mark_count` when one was wired
+    // (`SetInstanceWords`), the local `pending_marks_` for a bare catalog.
     // Nothing outside these two and the public `MarkCount` touches either,
-    // which is what keeps the two from diverging. The word is `acq_rel`
-    // because a mark's *row* is a page write another core reads and the
-    // count is what tells that core to look.
+    // which is what keeps the two from diverging. The word's memory orders,
+    // and why, are at the field (`instance_words.hpp`).
     void NoteMark() noexcept {
-        if (mark_counter_ != nullptr) {
-            mark_counter_->fetch_add(1, std::memory_order_acq_rel);
+        if (words_ != nullptr) {
+            words_->mark_count.fetch_add(1, std::memory_order_acq_rel);
         } else {
             ++pending_marks_;
         }
@@ -1322,8 +1370,8 @@ private:
     // `catalog.md` CT6 carries which direction of error is allowed and
     // why.
     void ResettleMarks(std::uint64_t before, std::uint64_t remaining) noexcept {
-        if (mark_counter_ != nullptr) {
-            mark_counter_->fetch_add(remaining - before, std::memory_order_acq_rel);
+        if (words_ != nullptr) {
+            words_->mark_count.fetch_add(remaining - before, std::memory_order_acq_rel);
         } else {
             pending_marks_ = remaining;
         }
@@ -1368,8 +1416,8 @@ private:
     // `kTypeNamespace`) - the check every write that gives a `sys.objects`
     // row a name makes (`catalog.md` CT7). **Binding only under page 6
     // held exclusive** across the check and the caller's insert or rewrite
-    // (AT-S17, the AT-close order's Q2), as `RegisterPattern`'s is on page
-    // 9; asked unheld, it is an early refusal and nothing more.
+    // (AT-S17, the AT-close order's Q2), as `SetPatternWaystone`'s is on
+    // page 9; asked unheld, it is an early refusal and nothing more.
     //
     // Two questions, in one walk so no caller can ask one:
     //
@@ -1433,15 +1481,15 @@ private:
     // lives in the cache.
     StatusOr<const std::vector<SysTypeRow>*> EnsureTypes();
 
-    // The in-place rewrite behind ClaimPatternWaystoneRoot(): finds the
-    // current-version sys.patterns row for `fetch_id`, hands it to
-    // `mutate`, and writes it back over the same slot.
+    // The in-place rewrite behind `WAYSTONE ON` on an existing row: finds
+    // the current-version sys.patterns row for `fetch_id`, hands it to
+    // `mutate`, and writes it back over the same slot when `mutate` answers
+    // true. Answers whether it wrote; NotFound when no current-version row
+    // carries `fetch_id`.
     //
-    // Does not touch the cache - the caller publishes its own field set,
-    // because a blanket "re-read the row into the cache" would republish
-    // fields the caller did not write and had no lock on.
-    Status MutatePatternRow(std::uint64_t fetch_id,
-                            const std::function<void(SysPatternRow&)>& mutate);
+    // Does not touch the cache - the caller's `BumpVersion` drops it.
+    StatusOr<bool> MutatePatternRow(std::uint64_t fetch_id,
+                                    const std::function<bool(SysPatternRow&)>& mutate);
 
     // The single invalidation point: bumps the version and drops every
     // DDL-invalidatable cache entry. `what` names the mutation for the
@@ -1483,20 +1531,29 @@ private:
     // so the counter may overshoot, costing at most one sweep that finds
     // less than it expected and never a missed mark.
     //
-    // **This member is the fallback**: `mark_counter_` is where the count
-    // lives when an instance named one (`SetMarkCounter`), and the three
-    // accessors above are the only things that touch either.
+    // **This member is the fallback**: `words_->mark_count` is where the
+    // count lives when an instance named its words (`SetInstanceWords`), and
+    // the three accessors above are the only things that touch either.
     std::uint64_t pending_marks_ = 0;
-    std::atomic<std::uint64_t>* mark_counter_ = nullptr;
 
+    // **The opted count's fallback** (CF-S1c), `pending_marks_`'s shape:
+    // `words_->opted_count` is where the count lives when an instance named
+    // its words (`SetInstanceWords`). Moved by the two below and set at a
+    // boot; nothing else writes either.
+    std::uint64_t local_opted_ = 0;
+    // A 0->1 (`up`) or 1->0 change of the bit on a current-version row,
+    // after its write and under page 9's hold. The decrement saturates at 0:
+    // a count set at a boot from a chain a raw write moved since must not
+    // wrap to "everything is opted".
+    void MoveOptedCount(bool up) noexcept;
+    void StoreOptedCount(std::uint64_t value) noexcept;
     // Unset until the first GenerateUserOid() recovers it from the catalog.
     // An optional rather than a sentinel value, because every integer in
     // this type's range is a legal oid and a sentinel would be one more
-    // thing that has to stay outside the range it guards.
+    // thing that has to stay outside the range it guards. Unused, and
+    // empty, while `words_` is set: the instance's `oid_sequence` issues
+    // instead.
     std::optional<Oid> next_user_oid_;
-    // Null unless `SetOidSequence` named the instance's; `next_user_oid_` is
-    // then unused and stays empty.
-    std::atomic<Oid>* oid_sequence_ = nullptr;
 
     // The highest oid `sys.objects` and `sys.columns` carry, or
     // kUserOidStart - 1 if they carry none above it. Reads the pages; called
@@ -1507,12 +1564,15 @@ private:
     CatalogCache cache_;
     std::uint64_t catalog_version_ = 0;
 
-    // The word and the value this cache was built at (`SetSchemaWord`,
-    // `Revalidate()`). `BumpWord()` runs at every DDL write; its adopt-only-
+    // The value of the instance's schema word this cache was built at
+    // (`Revalidate()`). `BumpWord()` runs at every DDL write; its adopt-only-
     // if-current rule is stated where it is decided, in `catalog.cpp`.
     void BumpWord(Tally cause);
-    std::atomic<std::uint64_t>* schema_word_ = nullptr;
     std::uint64_t cache_built_at_ = 0;
+
+    // The instance's four words (`SetInstanceWords`, CT6), or null for a
+    // bare catalog, which then runs on the local copies above.
+    InstanceWords* words_ = nullptr;
 };
 
 }  // namespace kds::catalog

@@ -1862,12 +1862,9 @@ def print_plans(client, suffix, models, session_count, bar_count):
     print("  a Probe or Lookup step on a HEAP relation has no index to")
     print("  descend and walks the chain instead: `examined` far above")
     print("  `rows` is that, and is what --bars-clustered heap measures.")
-    print("  read-bar-lookup is the clean read of it. On the *joins* it can")
-    print("  be hidden: these statements have run hundreds of times by now,")
-    print("  so their lookup-class steps may be served from a Waystone trail")
-    print("  (docs/spec/waystone-concpets.md) - a recorded (page, slot) instead")
-    print("  of a search, which is exactly what a trail is for and is why an")
-    print("  ANALYZE taken after a warm run is not a cold plan.")
+    print("  read-bar-lookup is the clean read of it. No Waystone trail hides")
+    print("  it on the joins: nothing records without WAYSTONE ON, and this")
+    print("  driver opts no shape in (docs/spec/waystone-concpets.md).")
 
 
 # ---- verification --------------------------------------------------------

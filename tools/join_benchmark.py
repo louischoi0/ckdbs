@@ -27,14 +27,12 @@ pattern *can* make a query faster here - but **this tool's key
 distribution is the one case where it will not**, and that is worth
 understanding before quoting any number it prints.
 
-join-point picks a random id per query. Over --rows distinct ids and
---point-ops executions, each instance is seen roughly
-`point-ops / rows` times; at the defaults that is under two, so most
-instances never reach the n=2 recording threshold and never get a trail.
-The workload pays Waystone's identification cost on every statement and
-replays almost nothing. That is Waystone behaving correctly - declining
-to record one-shot work - and it is exactly the shape a random-key
-benchmark measures.
+Since CF-S1b nothing records without `WAYSTONE ON`, and this tool opts no
+shape in, so its runs see no trails and a not-opted SELECT pays one memory
+load. Even opted, join-point would gain little: it picks a random id per
+query, so over --rows distinct ids and --point-ops executions each instance
+is seen roughly `point-ops / rows` times; at the defaults that is under
+two, so most instances would never reach the n=2 recording threshold.
 
 **For the favourable case, measure a hot instance**: one id, repeated.
 bench/results-waystone-v2.md does that, and reports 22-33x on relations

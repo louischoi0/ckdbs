@@ -25,6 +25,11 @@ protected:
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
+        // **The recording arm is vacuous since CF-S1b**, named here rather
+        // than left silent: the recorder is built as a server's default is,
+        // but nothing records until a shape is opted in (`WAYSTONE ON`),
+        // and no cell in this file opts one in. No assertion here reads a
+        // trail or `replays=`, so none depends on one.
         recorder_.emplace(boot_->catalog, store_);
         cabins_.emplace();
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,

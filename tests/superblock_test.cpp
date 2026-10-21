@@ -347,6 +347,29 @@ TEST(SuperBlockTest, AVersion31VolumeDoesNotMount) {
     }
 }
 
+// CF-S1b: a version-32 volume's `sys.patterns` rows are auto-registered
+// shapes no operator opted, and its bit 0 meant pinned, so this build reads
+// none of them as opted - and a version-32 binary would auto-register into
+// this build's volume. Named rather than left to the loop above, whose `- 1`
+// would stop meaning 32 at the next bump.
+TEST(SuperBlockTest, AVersion32VolumeDoesNotMount) {
+    constexpr std::uint32_t kBeforeTheOptIn = 32;
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &kBeforeTheOptIn,
+                sizeof(kBeforeTheOptIn));
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+    for (const std::uint32_t named : {kBeforeTheOptIn, kSuperBlockVersion}) {
+        EXPECT_NE(decoded.status().message().find(std::to_string(named)), std::string::npos)
+            << decoded.status().message();
+    }
+    EXPECT_EQ(kSuperBlockVersion, 33u);
+}
+
 // AY-Q6 (C): a version-18 volume's log may hold an ASSERT_SNAPSHOT with no
 // chunk count, which this build does not read (`raft-marks-2026-09-30.md`
 // §13). Named rather than left to the loop above, whose `- 1` would stop

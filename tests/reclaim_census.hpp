@@ -83,8 +83,10 @@ inline std::set<PageId> PagesOf(storage::DevicePageStore& store, std::uint64_t o
 // asks for, so a cut lands where the cell put it.
 inline StatusOr<std::unique_ptr<server::Expeditor>> Mount(
     const std::filesystem::path& dir, std::uint32_t cores = 1,
-    wal::DurabilityClass durability = server::Expeditor::Config{}.durability) {
+    wal::DurabilityClass durability = server::Expeditor::Config{}.durability,
+    bool waystone_recording = server::Expeditor::Config{}.waystone_recording) {
     server::Expeditor::Config config;
+    config.waystone_recording = waystone_recording;
     config.buffer_pool_frames = 4096;  // required (BE-R3)
     config.data_file = (dir / "kds.db").string();
     config.wal_dir = (dir / "wal").string();

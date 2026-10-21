@@ -501,17 +501,18 @@ public:
     //                            store back to stable storage.
     //   SHOW META             -> superblock stats, one line
     //   SHOW TABLES           -> space-separated table names
-    //   SHOW PATTERNS         -> "patterns=<n>", then one "\n"-escaped
-    //                            section per sys.patterns row, identified
-    //                            by its hex fetch_id and carrying
-    //                            `origin=` and `pinned=`, both of which
-    //                            read `auto` / `no` on every row since
-    //                            declared patterns were withdrawn, and
-    //                            `uses=` / `last_seen=`, which read 0
-    //                            since BL-S4's ruling 1 deleted their
-    //                            writer (rows.hpp). Rows from older
-    //                            fingerprint revisions are listed too,
-    //                            marked `stale=v<n>`.
+    //   SHOW PATTERNS         -> `SELECT * FROM sys.patterns` (the show
+    //                            sugar): one row per shape ever opted in
+    //                            with `WAYSTONE ON`, its `fetch_id` in
+    //                            decimal, and a `waystone` column (1 or 0)
+    //                            that replaced `origin` and `pinned` at
+    //                            CF-S1b - 1 only for a current-version row
+    //                            with the opt-in bit. `use_count` and
+    //                            `last_seen` read 0 since BL-S4's ruling 1
+    //                            deleted their writer (rows.hpp). Rows from
+    //                            older fingerprint revisions are listed
+    //                            too, `waystone` 0, their
+    //                            `fingerprint_version` saying why.
     //   SHOW ACCESS           -> "access_shapes=<n>", then one "\n"-escaped
     //                            section per recorded access shape:
     //                            "kind=<Lookup|Probe|Range|FilterScan|Scan>
@@ -2057,7 +2058,7 @@ private:
     // row-returning path and ANALYZE so the two cannot come to disagree
     // about when a trail is written.
     void RecordTrail(const std::optional<StatementIdentity>& identity,
-                     exec::TrailCollector* trail, const exec::StepChain& chain);
+                     exec::TrailCollector* trail);
 
     // Counts one execution of every step's access shape. Shared by the
     // row-returning path and ANALYZE, for the reason RecordTrail is: two
@@ -2137,6 +2138,11 @@ private:
     // writer, or a deleter some reader cannot see yet - is returned as
     // `purge_wait` and nothing is written.
     DispatchOutcome HandlePurge(std::string_view line, Session& session);
+    // `WAYSTONE ON <select>`, `WAYSTONE OFF <select>` and `WAYSTONE OFF
+    // <fetch_id>` (CF-S1b): opts a shape in to trail recording and replay, by
+    // example, or out of it. Autocommit only; answers once the state it
+    // reports is as durable as the session's rung promises a commit.
+    DispatchOutcome HandleWaystone(std::string_view line, Session& session);
     // `PURGE DROPPED COLUMNS FROM t` (CD-S2): one whole attempt under an
     // owned DDL transaction and the relation's `IX` - the statement-epoch
     // gate, then the relation walked in batches, each dirty row cleaned in

@@ -151,7 +151,7 @@ TEST(ReadBorrowRigTest, TwoCoresCreatingRelationsIssueDistinctOids) {
     // and never re-read. So the cell is create-create-create, alternating,
     // and the third is where the two counters meet.
     //
-    // **Mutation**: `if (false && oid_sequence_ != nullptr)` in
+    // **Mutation**: `if (false && words_ != nullptr)` in
     // `GenerateUserOid`, which is the per-catalog counter exactly.
     auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
     ASSERT_TRUE(opened.ok()) << opened.status().message();

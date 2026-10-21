@@ -62,10 +62,12 @@ What a rename does affect is **text**:
 A fingerprint hashes the statement's tokens, names included. After
 `RENAME TO`, traffic written against the new name is a different shape:
 stored patterns and their Waystone trails for old-name statements simply
-stop matching. That costs replay speed and nothing else — invariant 8 is
-the whole reason this is acceptable — and it is self-healing: new-name
-traffic registers new patterns on the ordinary n=2 path. **No pattern
-migration is attempted**: rewriting stored SQL text would make the catalog
+stop matching: the opted row's `fetch_id` no longer matches any traffic,
+and the new-name shape is not opted, so nothing records for it until the
+operator issues `WAYSTONE ON` with the new name (since CF-S1b no `SELECT`
+registers a row; `waystone-concpets.md` §4a). That costs replay speed and
+nothing else — invariant 8 is the whole reason this is acceptable. **No
+pattern migration is attempted**: rewriting stored SQL text would make the catalog
 a second parser, and a wrong rewrite is a wrong canon forever.
 
 **A Cabin is not a pattern, and a rename keeps it** (AQ-Q2, AR1-V3). An
@@ -73,10 +75,10 @@ expression or predicate Cabin's key function is stored and identified by
 column **positions** (`sys.cabin_exprs`, `docs/spec/cabin.md` §10), not
 names, so `RENAME TO` and `RENAME COLUMN` move nothing it reads, and the
 same `F` respelled with the new name is the same Cabin. The two answer
-differently because they cost differently: a pattern lost to a rename is a
-trail rebuilt on the n=2 path for free, while a Cabin is a declared
-structure with a maintained witness whose loss is the operator's to
-decide. `DROP COLUMN` of an input is refused (AL11, BW-R8).
+differently because they cost differently: a pattern lost to a rename is
+an opt-in the operator re-issues with one `WAYSTONE ON`, its trails
+rebuilt by traffic, while a Cabin is a declared structure with a
+maintained witness whose loss is the operator's to decide. `DROP COLUMN` of an input is refused (AL11, BW-R8).
 
 ## 4. AL4 — Assertions RESTRICT a rename
 
@@ -150,9 +152,12 @@ being refused.
 A rename ends with `Catalog::BumpVersion()` — the one invalidation choke
 point — so every cached `name → oid` mapping, `TableAccess`, and bound
 statement stamped with an older `catalog_version` drops or revalidates.
-The in-place-update exception (`ClaimPatternWaystoneRoot`) does not
-apply: its argument is "read by nothing else", and a name is read by
-*resolution itself*. Cross-core, the
+The in-place-update exception the deleted `ClaimPatternWaystoneRoot` took
+("read by nothing else") would not apply in any case, since a name is read
+by *resolution itself*; since CF-S1b every `WAYSTONE ON`/`OFF` write of a
+`sys.patterns` row moves the schema word too, and the mount's renewal of
+those rows, which runs before any other core serves, drops core 0's cache
+instead (`waystone-concpets.md` §4, §4c). Cross-core, the
 schema version word carries the bump and every other core's next boundary
 re-reads (`catalog.md` CT2); this spec adds no new coherency mechanism.
 

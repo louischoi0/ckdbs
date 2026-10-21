@@ -285,13 +285,42 @@ TEST(WalArchiverTest, AFailingArchiveNearAFullDiskRefusesWritesByName) {
     CurrentCoreGuard as(0);
     Ok(db, "CREATE TABLE t (id int64, v int64)");
     Ok(db, "INSERT INTO t VALUES (1, 1)");
+    // An admin whose explicit transaction failed, for the gate order below:
+    // failed before the archive blocks, so the failure is the named key's.
+    Session failed;
+    ASSERT_FALSE(StartsWith(db.dispatcher().Dispatch("BEGIN", &failed).response, "ERR"));
+    ASSERT_TRUE(StartsWith(db.dispatcher().Dispatch("INSERT INTO t VALUES (1, 9)", &failed).response,
+                           "ERR"));
+    ASSERT_TRUE(failed.failed()) << "the premise moved: the refusal did not fail it";
     db.dispatcher().set_archiver(&archiver);
+    // `WAYSTONE` among them (CF-S1b): an opt-in writes a `sys.patterns` row.
     for (const char* write : {"INSERT INTO t VALUES (2, 2)", "UPDATE t SET v = 3 WHERE id = 1",
                               "DELETE FROM t WHERE id = 1", "CREATE TABLE u (id int64)",
+                              "WAYSTONE ON SELECT * FROM t WHERE id = 1", "WAYSTONE OFF 1",
                               "DROP TABLE t"}) {
         const std::string reply = Reply(db, write);
         EXPECT_TRUE(StartsWith(reply, "ERR")) << write << " -> " << reply;
         EXPECT_NE(reply.find("WAL archive is failing"), std::string::npos) << reply;
+        EXPECT_NE(reply.find("(byte 0)"), std::string::npos) << reply;
+    }
+    // **The gate order for `WAYSTONE`** (CF-S1b, §8.5: role, archive,
+    // failed-txn, handler): a session below admin is told its role, not the
+    // archive's state; an admin in a failed transaction is told the
+    // archive's state, not the transaction's.
+    {
+        Session writer;
+        writer.set_role(Role::kReadWrite);
+        const std::string reply =
+            db.dispatcher().Dispatch("WAYSTONE ON SELECT * FROM t WHERE id = 1", &writer).response;
+        EXPECT_TRUE(StartsWith(reply, "ERR permission:")) << reply;
+        EXPECT_EQ(reply.find("WAL archive is failing"), std::string::npos) << reply;
+    }
+    for (const char* line : {"WAYSTONE ON SELECT * FROM t WHERE id = 1", "WAYSTONE OFF 1"}) {
+        const DispatchOutcome out = db.dispatcher().Dispatch(line, &failed);
+        EXPECT_NE(out.response.find("WAL archive is failing"), std::string::npos)
+            << line << " -> " << out.response;
+        EXPECT_EQ(out.status.code(), StatusCode::kResourceExhausted) << out.response;
+        EXPECT_NE(out.response.find("(byte 0)"), std::string::npos) << out.response;
     }
     // The KWP load stream's door, past the dispatcher's statement gate.
     auto parsed = parser::Parse("INSERT INTO t VALUES (3, 3)");
@@ -302,6 +331,7 @@ TEST(WalArchiverTest, AFailingArchiveNearAFullDiskRefusesWritesByName) {
     EXPECT_NE(loaded.find("WAL archive is failing"), std::string::npos) << loaded;
     EXPECT_EQ(Ids(db, "SELECT id FROM t"), Range(1, 1));
     db.dispatcher().set_archiver(nullptr);
+    EXPECT_FALSE(StartsWith(db.dispatcher().Dispatch("ROLLBACK", &failed).response, "ERR"));
     Ok(db, "INSERT INTO t VALUES (2, 2)");
 }
 

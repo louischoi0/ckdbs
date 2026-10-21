@@ -22,6 +22,10 @@ Written 2026-10-21 on `cf-waystone-premise` from `23ea3e61`
 - **W3** (2026-10-21): *"Proceed with $!O and push no verify"* - the
   branch, after CF-S0's report (`raft-marks-2026-10-21.md` §4).
 
+**CLOSED 2026-10-21 on the operator's word** (W6, `raft-marks-2026-10-21.md`
+§9): Branch O built and measured (§7), pushed with the hook skipped after
+the full suite ran 4263/4263 at `27f80aa6`. CF-Q6 stays open.
+
 **Written 2026-10-21; opened 2026-10-21 on W2.** CF-Q0..Q5 are the
 operator's marks, each (a) - CF-Q1 (a) against CLA's proposal (b) - and
 CF-Q6 and CF-Q7 carry no lettered option, so W2 leaves them as they
@@ -452,6 +456,178 @@ operator's marks, and no code moves before them.
 the amendment was pushed, and CF-O-Q1..Q14 were adopted, each (a), on the
 go-ahead. **CF-S1b started.**
 
+**CF-S1b: storage, the statement, the mount and superblock 33 - built**
+on `cf-waystone-premise`, branched from `26d973de`. It ran as a workflow:
+one implementer, three `critics-developer` reviewers, then one fixer.
+
+- **What it built** (§8.5 CF-S1b, as scoped):
+  - `kPatternWaystone`, and the `origin` byte made reserved;
+  - `Catalog::SetPatternWaystone`, which makes the directory page before
+    taking page 9's hold;
+  - OFF's walk over rows of every version;
+  - the `WAYSTONE` prefix verb and its refusal table;
+  - the view's `waystone` column;
+  - `RenewPatternDirectories`: two passes, then a drop of the cache;
+  - the boot log line and the `waystone` section of `MetaSections`;
+  - `kSuperBlockVersion = 33`;
+  - the deletion of auto-registration and the claim;
+  - the recorder reduced to a lookup of opted rows;
+  - the test reach, with `tests/waystone_opt_in_test.cpp` new;
+  - CLAUDE.md's rows, flipped at this landing.
+- **Where the tree made the code diverge from §8** (the implementer's
+  report):
+  1. A refused bind borrow never fails its statement (`read_borrow.hpp`),
+     so the `TxnConflict` row is unreachable. A cell pins the behaviour
+     instead.
+  2. The park waits on `appended_lsn() - 1`, because `IsDurable` is strict.
+  3. A `?` is refused before parsing, since the native grammar refuses it.
+     OFF fingerprints the text and parses a copy with each `?` read as
+     `0`.
+  4. `waystone_opted` is computed by a walk for each `SHOW META`, and the
+     boot line uses the renewal's own count. The atomic count is S1c's.
+  5. ON creates a page whenever recording is on and the row has no root.
+  6. `FindPattern` caches every row, opted or not, and the recorder checks
+     the bit itself.
+  7. The 1,500- and 17,000-row mount cells mount with recording off. The
+     reclaim re-drive cell runs both ways.
+  8. The built-join cell is now backed by a cell that opts a shape in.
+  9. The cache-before-discard cell runs at the catalog and dispatcher
+     level, because a mount offers no hook between its drop and the
+     discard.
+- **Review: 19 findings** (5 bugs, 1 spec divergence, 10 test gaps, 3
+  cleanups). 18 were applied and one was applied in part:
+  - **Bugs fixed:**
+    - a directory page leaked unlogged when page 9 could not be pinned;
+    - `ERR` was sent after the state had changed, so a failed sync request
+      now says the state is in effect but not durable;
+    - OFF failing part-way now bumps the word;
+    - a `FindPattern` read error is counted, not treated as "not opted".
+  - **The part rejected:** the interim `FindPattern` miss on a SELECT that
+    is not opted (a `ScanAll` of page 9's chain on every such statement
+    while a key is on) is S1c's to remove, as §8.5 states. Its comment now
+    states the cost.
+  - **Mutation check:** five mutants were applied, rebuilt and run, and
+    each was caught:
+    - the durable park;
+    - ON always creating a page;
+    - the shape filter;
+    - the recording-site `IsTrailReplayable`;
+    - the renewal's failure arm.
+- **Suite:** the full Debug suite (`ctest -j8 -LE bs-nightly`) passed
+  4250/4250 on the final tree. Two cells are disabled by design and two
+  are skipped. The 17,000-row cell, run alone with
+  `KDS_TEST_LARGE_CATALOG=1`, passed in 212 s on the implementer's tree.
+- **Overhead:** not measured; it is measured at the milestone's close.
+
+**CF-S1c: the count, the map and the gate - built** (`b0e6db12`, then
+the fold below).
+
+- **The opted count.** It is one atomic for the instance. It moves only
+  after a successful write that changes the bit on a current-version row,
+  and it saturates at 0. It is set at every boot, either by the renewal or
+  by a recount on the sim's `skip_recovery` boot.
+- **The opted map.** `FindOptedPattern` answers from a per-core map that is
+  complete for each cache generation. The map fills only while the count
+  is non-zero, and a miss scans nothing. `Catalog::FindPattern` is deleted,
+  and `IsCurrentOptIn` is the one predicate.
+- **The `SelectBody` gate.** `HasReplayableStep` runs first, then the
+  lookup, so a scan-only statement never fills the map. Replay reuses the
+  entry. The collector runs only when the statement is both recording and
+  opted. The identity guard keeps ANALYZE's line. A lookup that cannot read
+  is counted in `write_failures`.
+- **The contract suite** compares opted against not-opted under every
+  ceiling, with the trail deleted, the trail corrupted and the bit flipped
+  mid-run. Every recordable opted query asserts `replays`.
+- **Review: 17 findings, none of them bugs.** 16 were applied. The opted
+  count made a fourth instance word, which crosses CT6's threshold; that is
+  CF-O-Q15, settled (a) by the spec. Eight mutants were each killed.
+- **Divergences:**
+  - `FindPattern` is deleted rather than kept beside `FindOptedPattern`.
+  - "A failed write" is tested at every write site, including a
+    fail-stopped log.
+- **The fold.** The four instance words (schema word, oid sequence, mark
+  count, opted count) are now one `catalog::InstanceWords`, wired by one
+  setter, `Catalog::SetInstanceWords`, and one `CoreRuntime::Config` field.
+  The old setters and fields are deleted. `catalog.md` CT6 and `rules.md`
+  are amended. The engine's behaviour is unchanged. Review: 6 findings, all
+  applied.
+- **Suite:** the full Debug suite passed 4263/4263 on the folded tree
+  (`ctest -j8 -LE bs-nightly`).
+- **Overhead:** not measured; it is measured at the milestone's close.
+
+**CF-S1d: documents - written.** One writer, two read-only verifiers
+(one checking truth against the code, one checking completeness of the
+stale text), then one applier.
+
+- **Specs:** `waystone-concpets.md` is rewritten around the opt-in, with
+  new §4a-§4e. Also brought to Branch O:
+  - `pattern-tracking-levels.md`;
+  - `create-pattern-user-defined-patterns-v1.md` §1, §2 and §4.1;
+  - `protocol.md`, `sys-views.md`, `backup.md`, `heap-and-tuple.md`,
+    `parser-v2.md` J5, `catalog.md`;
+  - `wal.md:39`, now matching `page.md` §1;
+  - `alter.md`: a rename now ends an opt-in;
+  - `cabin.md`, `aggregate.md`, `crosscore.md`, `namespace.md`,
+    `bulkinsert.md` and `index.md`;
+  - `rules.md` and `keystoneid-k0-findings.md`.
+- **Manual and config:** `manual/sql/sql.md` gains a `WAYSTONE` section.
+  `manual/server/server.md`, `manual/server/backup-restore.md`,
+  `kds.conf.sample` and `README.md` are updated.
+- **Known gaps:** `known-gaps.md` is updated per §8.6, with a new section
+  for the Waystone opt-in. Each entry is verified at `46c632aa`.
+- **Stale text:** CF-O-Q14's list is cleared, and the bench drivers' text
+  under `tools/` is corrected.
+- **Divergence carried into the documents:** §8.3's `TxnConflict`
+  bind-borrow row is left out, because the code cannot produce it (S1b
+  divergence 1).
+- **Verification:** 17 findings, all applied.
+- **Suite:** not re-run. Only comments changed in C++, as `git diff -U0`
+  shows; the build inputs are those of `46c632aa`.
+
+**CF-S2: the close, measured**
+(`bench/v3.4.0/results-cf-s2-close-v3.4.0-9-g46c632aa.md`).
+- **How it ran:** base `v3.3.0-104-g722006ec` against the close
+  `v3.4.0-9-g46c632aa`, in `build-release`, with three arms (`base`, `close`
+  nothing opted, `close-opt` with `scanprobe` opted) in rotating order, 6
+  reps, `cores = 1`, on CF-S0's cells.
+- **Rotation r2 was run again.** A compile from another session landed
+  mid-run in the first r2, so the whole rotation was set aside and
+  re-measured.
+- **Results:**
+  - **Nothing opted against base:** the lookup cells drop recording's cost.
+    `chain4` gains 3.3 % throughput and 3.6 % server CPU, and `chain3` 2.6 %
+    server CPU, both outside the spread. `pk` gains 3.2 % throughput,
+    outside the spread, and 5.1 % CPU, inside a 5.1 % spread. All three
+    land within 1.1 % of CF-S0's arm C.
+  - **`scanprobe` opted:** it keeps CF-S0's gain, +4.3 % throughput and
+    -6.0 % server CPU against not opted (+5.0 % and -6.4 % expected), and
+    is level with base.
+  - **Another shape's opt-in** costs the lookup cells nothing measurable.
+  - **`cores = 2`, `scanprobe` alone:** opted against not opted is -7.0 %
+    server CPU (outside the spread) and +3.9 % throughput (inside it).
+- **Checks:** the digests were identical in every run, and `replays=` was
+  exactly where it should be.
+- **Cut:** the refill cell and the mount's added cost. The harness has no
+  cell for either, and building and validating one did not fit the rest of
+  the close's hour on a shared host. Both stay unmeasured in `known-gaps.md`.
+- **Review:** `critics-developer` found the measurement sound, with every
+  number reproduced. It corrected eight figures and wordings, and flagged
+  the original cut rationale as false. The rationale is restated above, and
+  the `cores = 2` cell was run.
+- **Close:** CF closes on the operator's word.
+
+**CF closed on W6** (*"push no verify and close the milestone"*,
+`raft-marks-2026-10-21.md` §9).
+- **The suite:** the full Debug suite passed 4263/4263 at `27f80aa6`, the
+  merge of `origin/main` that last changed a build input. Everything after
+  it is documents only.
+- **The push:** to `main` with `--no-verify`, on this word.
+- **What CF leaves:**
+  - CF-Q6, CLAUDE.md's "What This Project Is" item 2, which is the
+    operator's;
+  - the gaps `known-gaps.md`'s Waystone opt-in section names, among them
+    the refill cell and the mount cost that the close cut.
+
 ---
 
 ## 8. Branch O - the amendment (CF-S1)
@@ -872,6 +1048,23 @@ The conflict is `wal.md:39` against `page.md` §1.
 
 **CLA proposes (a)**. The operator rules which text the conflict corrects.
 
+**CF-O-Q15 - the opted count is the instance's fourth word.** Raised by
+CF-S1c's review. `docs/spec/catalog.md` CT6 keeps three words as three
+pointers "by threshold, not principle" and says "a fourth word tips it
+(AT-0 item 11)"; item 11's row reads "three at three words, one at four".
+CF-S1c wired the opted count as a fourth pointer
+(as `Expeditor::waystone_opted_`, `Catalog::SetOptedCount` and
+`CoreRuntime::Config::opted_count`), so the code has crossed the
+threshold the spec states.
+- (a) Fold the four words into one instance-words struct, set once per catalog and carried by one `CoreRuntime::Config` field, re-opening AT-S2's schema-word seam and the fixtures that wire the words (`two_core_rig.hpp`, `core_runtime_test.cpp`, `catalog_name_race_test.cpp`, `transition_test.cpp`, `lock_family_test.cpp` and the rest).
+- (b) Keep four pointers and amend CT6 in CF-S1d: four words, the opted count's rule in its table, and the threshold restated.
+
+**Settled by the spec, (a)**: CT6 already states the threshold ("a
+fourth word tips it"), and a spec's rule is followed, not re-asked
+(CLAUDE.md). CF-S1c folds the four words into one struct, as a commit of
+its own after S1c's count, map and gate. Recorded under the go-ahead of
+W5, not as an operator mark.
+
 ### 8.5 Stages
 
 Every stage is reviewed by `critics-developer` and gated by the full suite
@@ -925,6 +1118,7 @@ measured once, at the close.
   - `create-pattern-user-defined-patterns-v1.md` §1 and §4.1.
   - `protocol.md`; `manual/sql/sql.md`, with a `WAYSTONE` section covering the opt-in by text, its survival across `DROP TABLE`, the namespaces and the rung table; `manual/server/`; `kds.conf.sample`; and the expeditor and `core_runtime` key comments.
   - CF-O-Q14's text.
+  - CF-O-Q15 as ruled: CT6 amended, or the words folded (a code change, so the suite runs).
   - The suite runs again only if a comment edit touched source.
 - **CLAUDE.md at S1b's landing, not at the close.** S1b's code falsifies the Waystone row ("each records trails and registers patterns", "`Catalog::ClaimPatternWaystoneRoot` is a claim"), so the row is flipped in S1b's landing commit, per the maintenance rule ("When a decision lands: update the spec that owns it and flip the milestone row"). The same edit brings the superblock mentions to 33: the Heap relations row ("the superblock (32 since CD) refuses every older volume") and the Core placement row ("the superblock (32 since CD's clean flag)"); and the CREATE PATTERN row's "`SysPatternRow`'s `origin`/`flags` stay on disk" becomes the opt-in bit and the reserved byte.
 - **CF-S2 - the close.** One interleaved, rotated A/B in `build-release` on CF-S0's harness (`bench/v3.3.0/archive/cf-harness/`), named by `git describe`, about an hour including the build.

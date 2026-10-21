@@ -66,7 +66,7 @@ Errors are built to be acted on: every refusal names the byte position of the of
 |---|---|
 | **The query is the plan** | Each statement compiles at parse time into a *step chain* executed in written order — no plan search, no plan flips with cardinality. |
 | **Keystone** | Every row carries a 48-bit tuple key — its identity for the life of the relation, never updated — so any structure can name a row by value instead of by address. Relations are clustered B+ trees on that key. |
-| **Waystone** | For a query shape that repeats, the engine records where the last execution found its rows and looks there first. A wrong or missing trail costs time, never a result. |
+| **Waystone** | For a query shape an operator opts in (`WAYSTONE ON <select>`), the engine records where the last execution found its rows and looks there first. A wrong or missing trail costs time, never a result; a shape nobody opted never records or writes, and pays one memory load per `SELECT` while nothing is opted. |
 | **Cabin** | A per-column lookup structure covering only the values queries actually asked for — exact for those values, with no index-style write cost for the rest. A secondary index is a Cabin that has observed everything. |
 | **Physical optimizer** | Runtime access statistics decide which Cabins exist: when switched on, the engine creates and drops them itself on columns declared `CABIN AUTO`. |
 | **Fixed-length tuples** | An `UPDATE` rewrites a row in place; long values spill to an immutable side store. |

@@ -168,7 +168,7 @@ TEST_F(KeystoneIdTest, TheAllocatorAlsoIssuesCatalogOidsAndCatalogKeystones) {
     // note's claim is checkable rather than asserted:
     //
     //   - kSysPatternsTable   -> an **oid** for a sys.patterns row
-    //                            (`RegisterPattern`): a body field, not a
+    //                            (`SetPatternWaystone`): a body field, not a
     //                            Keystone word.
     //   - kSysAssertionsTable -> a real Keystone id, for a row-codec row.
     //                            (`kSysPatternDefsTable` was the case this
