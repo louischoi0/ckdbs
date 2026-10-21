@@ -10,6 +10,8 @@
 
 #include "act_on_fetch_store.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/catalog/well_known.hpp"
+#include "kds/exec/catalog_spills.hpp"
 #include "kds/server/role.hpp"
 #include "kds/server/session.hpp"
 #include "kds/stats/cabin_store.hpp"
@@ -17,6 +19,7 @@
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/varheap.hpp"
 #include "kds/txn/manager.hpp"
 
 // **`PURGE` frees a deleted key** (BH,
@@ -350,6 +353,57 @@ TEST_F(PurgeKeyTest, AWindowPurgesEveryDeletedKeyAndPassesOverLiveOnes) {
         EXPECT_TRUE(Placed(Run("INSERT INTO t VALUES (" + std::to_string(id) + ", 2)"))) << id;
     }
     EXPECT_EQ(Run("PURGE FROM t WHERE id BETWEEN 1 AND 2"), "PURGED 1");
+}
+
+// A varchar cell is read for its column's width, not to the row's end: a
+// wide varchar before another column, beside a null bitmap, or before a wide
+// char was refused "tagged cell of N byte(s) is outside the legal width
+// range" for every key. Each row here spills, so the cell is a reference the
+// purge must release, and the surviving row's value still reads whole.
+TEST_F(PurgeKeyTest, AVarcharCellIsReadForItsWidthWhateverFollowsIt) {
+    const std::string wide(5000, 'w');
+    const std::string narrow(100, 'n');
+    const struct {
+        const char* columns;
+        std::string value;  // the row after its key
+        std::string expect;  // the surviving row as SELECT shows it
+    } cases[] = {
+        {"v varchar(4096), n int64", "'" + wide + "', 1", "2," + wide + ",1"},
+        {"d int64 NULL, v varchar(4096)", "NULL, '" + wide + "'", "2,NULL," + wide},
+        {"v varchar(64), c char(4090)", "'" + narrow + "', 'y'", "2," + narrow + ",y"},
+    };
+    int n = 0;
+    for (const auto& c : cases) {
+        SCOPED_TRACE(c.columns);
+        const std::string t = "t" + std::to_string(n++);
+        Ok("CREATE TABLE " + t + " (id int64, " + c.columns + ") BTREE", "CREATED");
+        Ok("INSERT INTO " + t + " VALUES (1, " + c.value + "), (2, " + c.value + ")", "INSERTED");
+
+        // Row 1's spill, read off its leaf before the purge.
+        const auto oid = boot_->catalog.FindTableOidByName(catalog::kNamespacePublic, t);
+        ASSERT_TRUE(oid.ok()) << oid.status().message();
+        auto access = boot_->catalog.InitTableAccess(oid.value());
+        ASSERT_TRUE(access.ok()) << access.status().message();
+        std::vector<exec::SpillRef> spills;
+        {
+            auto at = btree::BtreeLookup(store_, access.value()->desc_page_id, 1);
+            ASSERT_TRUE(at.ok()) << at.status().message();
+            auto tuple = heap::PageView(at.value().leaf.bytes()).ReadTuple(at.value().slot);
+            ASSERT_TRUE(tuple.ok()) << tuple.status().message();
+            ASSERT_TRUE(exec::RowSpills(*access.value(), tuple.value().payload, spills).ok());
+        }
+        ASSERT_EQ(spills.size(), 1u);
+
+        Ok("DELETE FROM " + t + " WHERE id = 1", "DELETED 1");
+        Ok("PURGE FROM " + t + " WHERE id = 1", "PURGED 1");
+        storage::PageRef pin;
+        EXPECT_FALSE(
+            varheap::Fetch(store_, varheap::VarHeapPtr{spills[0].first, spills[0].second}, pin)
+                .ok())
+            << "the purged row's spill is released";
+        EXPECT_TRUE(Placed(Run("INSERT INTO " + t + " VALUES (1, " + c.value + ")")));
+        EXPECT_NE(Run("SELECT * FROM " + t + " WHERE id = 2").find(c.expect), std::string::npos);
+    }
 }
 
 TEST_F(PurgeKeyTest, EveryKeyOfAWhollyPurgedLeafIsPlacedAgain) {

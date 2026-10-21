@@ -431,6 +431,22 @@ TEST_F(AlterColumnTest, ACleanZeroesEveryDroppedCellOnceAndReleasesItsSpills) {
     EXPECT_EQ(Run("SELECT * FROM t"), "id,n\\n1,1\\n2,2");
 }
 
+// A dropped varchar is read for its column's width, not to the row's end: a
+// varchar(4096) before another column was refused "tagged cell ... outside
+// the legal width range" and the clean never finished.
+TEST_F(AlterColumnTest, ACleanReadsAWideDroppedVarcharForItsWidth) {
+    Ok("CREATE TABLE t (id int64, s varchar(4096) NULL, n int64)");
+    Ok("INSERT INTO t VALUES (1, '" + std::string(5000, 'x') + "', 1)");
+    Ok("ALTER TABLE t DROP COLUMN s");
+    const StoredRow before = ReadStoredRow(store_, *Access("t"), 1);
+    ASSERT_EQ(before.spills.size(), 1u);
+    EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
+              "PURGED DROPPED COLUMNS t: 1 column(s) clean, 1 row(s) cleaned, 1 spill(s) "
+              "released");
+    EXPECT_FALSE(SpillLive(store_, before.spills.front()));
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,n\\n1,1");
+}
+
 // More rows than two batches (512 each): the walk resumes at the first dirty
 // key past each batch and reaches every row.
 TEST_F(AlterColumnTest, ACleanCrossesItsBatchesAndReachesEveryRow) {

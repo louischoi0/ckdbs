@@ -1,6 +1,7 @@
 #include "kds/exec/catalog_spills.hpp"
 
 #include <algorithm>
+#include <string>
 
 #include "kds/catalog/well_known.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
@@ -21,9 +22,18 @@ Status ColumnSpills(const catalog::TableAccess& access, std::span<const std::byt
     // a cell reads a payload byte as a tag.
     if (col >= access.schema.columns.size()) return Status::OK();
     if (access.schema.columns[col].type_val != catalog::kTypeValVarchar) return Status::OK();
+    // Invariant 13: a payload of another length is not interpreted, and a
+    // row whose references are unknown collects nothing.
+    if (payload.size() != access.layout.row_size) {
+        return Status::Corruption("a " + std::to_string(payload.size()) +
+                                  "-byte payload in a relation of " +
+                                  std::to_string(access.layout.row_size) + "-byte rows");
+    }
+    // Exactly the column's width (`cell_ends`): `DecodeCell` sizes the cell
+    // by its span, and the rest of the row is not this cell.
     const std::uint32_t offset = access.layout.offsets[col];
-    if (offset >= payload.size()) return Status::OK();
-    auto cell = storage::DecodeCell(payload.subspan(offset));
+    auto cell = storage::DecodeCell(
+        payload.subspan(offset, access.layout.cell_ends[col] - offset));
     // **A cell this build cannot read is not a licence to collect.** A
     // corrupt tag here means the row's references are unknown, and an
     // unknown reference must be treated as present - so the caller
