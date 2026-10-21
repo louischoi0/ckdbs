@@ -282,12 +282,22 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
         if (by_id.count(id) == 0) {
             return Status::OK();  // not ours; the fold's own skip rule agrees
         }
+        if (record.type() == wal::RecordType::kAssertDrop) {
+            // **An id the catalog lists was not dropped**: the list is read
+            // after undo, and `DropAssertion` logs this record before it
+            // retires the row, so a retire that failed left the assertion
+            // enforcing behind it. Folded, the drop would skip every record
+            // after it and adopt an under-counted directory.
+            return Status::OK();
+        }
         if (!context.based(id)) {
             // No snapshot yet for this assertion, so there is no base to fold
-            // onto and folding would under-count. Counted and skipped; the
-            // assertion stays unrecovered and its caller leaves it unenforcing.
+            // onto and folding would under-count: the directory half is
+            // skipped, and with no base after it the assertion stays
+            // unrecovered and its caller leaves it unenforcing. The page half
+            // is not (the header's step 1).
             //
-            // **A BUILD record takes this arm too, on purpose**: the
+            // **A BUILD record's directory half takes this arm too, on purpose**: the
             // publish-time ASSERT_SNAPSHOT (AS6a) already covers a declaration
             // born after the last checkpoint, and treating a first BUILD as a
             // base (a "genesis" rule, tried and removed 2026-08-19) could
@@ -295,7 +305,7 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
             // directory as enforcing. A torn, unacknowledged CREATE is left
             // `enforcing=0`, the honest answer.
             ++report.records_without_a_base;
-            return Status::OK();
+            return ReplayAssertionRecord(record, store, context, ReplayHalves::kPageOnly);
         }
 
         if (Status s = ReplayAssertionRecord(record, store, context); !s.ok()) {

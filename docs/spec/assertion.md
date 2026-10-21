@@ -491,11 +491,18 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > describes it, and across a snapshot and the records that carry it. A
   > hold is in no snapshot: it becomes header when its record is appended.
   >
-  > **Recovery order.** Ordinary redo restores the entry pages → the
-  > snapshot is loaded → the cabin's pages are scanned and bucketed by
-  > `group_id`, rebuilding the linkage → `ASSERT_*` records are folded from
-  > the checkpoint forward. Bounded by the cabin's own pages: not by the
-  > relation, and not by the log.
+  > **Recovery order.** Ordinary redo restores the entry pages' format and
+  > links and leaves every `ASSERT_*` record to the assertion pass → a
+  > record before its assertion's base has its page half applied and nothing
+  > folded → the snapshot is loaded → the cabin's pages are scanned and
+  > bucketed by `group_id`, rebuilding the linkage → `ASSERT_*` records are
+  > folded, page and directory, from the snapshot forward. A `CREATE
+  > ASSERTION`'s build entries all precede its own base, so an entry its page
+  > lost before write-back is restored by the second step or not at all. An
+  > `ASSERT_DROP` is never folded: the assertions recovered are the catalog's
+  > after undo, and the record precedes the row's retire, so an assertion
+  > the catalog still lists was not dropped. Bounded by the cabin's own
+  > pages: not by the relation, and not by the log.
   >
   > **A snapshot is a run, and a run is whole by its own count** (AY-S8).
   > A cabin whose headers outgrow one record's payload is written as

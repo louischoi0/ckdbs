@@ -28,7 +28,7 @@ std::string KeyOf(std::span<const std::byte> bytes) {
 // two types disagree on, and checking it here is what keeps them from being
 // confused on disk (wal/payload.hpp).
 Status ReplayEntry(const wal::DecodedRecord& record, storage::PageStore& store,
-                   AssertionReplayContext& context, bool must_be_reserved) {
+                   AssertionReplayContext& context, bool must_be_reserved, ReplayHalves halves) {
     auto decoded = wal::DecodeAssertEntry(record.payload);
     if (!decoded.ok()) return decoded.status();
     const wal::DecodedAssertEntry& d = decoded.value();
@@ -84,6 +84,7 @@ Status ReplayEntry(const wal::DecodedRecord& record, storage::PageStore& store,
                                   std::to_string(d.fields.index) + " is past the append point " +
                                   std::to_string(view.entry_count()));
     }
+    if (halves == ReplayHalves::kPageOnly) return Status::OK();
 
     // The entry's inline value is the group delta (wal/payload.hpp: a COUNT
     // assertion writes 1), so the directory fold reads it and nothing else -
@@ -126,7 +127,7 @@ Status ReplayCommit(const wal::DecodedRecord& record, storage::PageStore& store,
 }
 
 Status ReplayRollback(const wal::DecodedRecord& record, storage::PageStore& store,
-                      AssertionReplayContext& context) {
+                      AssertionReplayContext& context, ReplayHalves halves) {
     auto decoded = wal::DecodeAssertRollback(record.payload);
     if (!decoded.ok()) return decoded.status();
     const wal::DecodedAssertRollback& d = decoded.value();
@@ -152,6 +153,7 @@ Status ReplayRollback(const wal::DecodedRecord& record, storage::PageStore& stor
     if (Status s = opened.value().MarkOrphaned(d.fields.index); !s.ok()) {
         return s.WithContext("assert replay: marking the entry orphaned");
     }
+    if (halves == ReplayHalves::kPageOnly) return Status::OK();
 
     const std::string key = KeyOf(d.key);
 
@@ -200,16 +202,16 @@ bool IsAssertionRecord(wal::RecordType type) noexcept {
 }
 
 Status ReplayAssertionRecord(const wal::DecodedRecord& record, storage::PageStore& store,
-                             AssertionReplayContext& context) {
+                             AssertionReplayContext& context, ReplayHalves halves) {
     switch (record.type()) {
         case wal::RecordType::kAssertReserve:
-            return ReplayEntry(record, store, context, /*must_be_reserved=*/true);
+            return ReplayEntry(record, store, context, /*must_be_reserved=*/true, halves);
         case wal::RecordType::kAssertBuild:
-            return ReplayEntry(record, store, context, /*must_be_reserved=*/false);
+            return ReplayEntry(record, store, context, /*must_be_reserved=*/false, halves);
         case wal::RecordType::kAssertCommit:
-            return ReplayCommit(record, store, context);
+            return ReplayCommit(record, store, context);  // a page half only
         case wal::RecordType::kAssertRollback:
-            return ReplayRollback(record, store, context);
+            return ReplayRollback(record, store, context, halves);
         case wal::RecordType::kAssertDrop: {
             auto decoded = wal::DecodeAssertDrop(record.payload);
             if (!decoded.ok()) return decoded.status();
