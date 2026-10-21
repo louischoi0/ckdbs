@@ -1627,8 +1627,10 @@ private:
     //
     // Chunks of `kFrameChunk` slots, each with one allocation of page bytes
     // that never moves while the store lives, and the id each slot holds -
-    // what the hand walks. The chunk vector itself may reallocate; a chunk's
-    // arrays do not, so every span survives growth. Allocated with
+    // what the hand walks. The chunk array is sized at `Open` for the
+    // configured capacity and never reallocated: `SlotPage` reads it with no
+    // latch while another thread's growth fills the next chunk (a growing
+    // vector there was a race TSan found, BS-S1). Allocated with
     // `make_unique_for_overwrite`: a slot's bytes cost the process nothing
     // until a page is read or built into it. Slots are kept once allocated -
     // the capacity bounds them, and what is resident within them.
@@ -1636,7 +1638,7 @@ private:
         std::unique_ptr<std::byte[]> pages;  // `kSlotStride` apart
         std::unique_ptr<PageId[]> owners;
     };
-    std::vector<FrameChunk> chunks_;
+    std::unique_ptr<FrameChunk[]> chunks_;
     // Slots that exist: whole chunks, and a last one cut at the configured
     // capacity (`TakeSlotLocked` says why not `capacity_`).
     std::size_t slot_count_ = 0;

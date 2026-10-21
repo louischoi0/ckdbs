@@ -276,6 +276,9 @@ StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& dev
     auto store = std::unique_ptr<DevicePageStore>(new DevicePageStore(device, first_new_page_id));
     store->capacity_ = capacity.frames;
     store->configured_capacity_ = capacity.frames;
+    // Every chunk the configured capacity can need, now (`chunks_` says why).
+    store->chunks_ =
+        std::make_unique<FrameChunk[]>((capacity.frames + kFrameChunk - 1) / kFrameChunk);
 
     // Region 0 always exists - it holds the superblock, both of its own
     // bitmaps and the catalog's fixed roots - so it is loaded, or created, rather
@@ -757,9 +760,11 @@ std::uint32_t DevicePageStore::TakeSlotLocked() {
         // Every allocation first, then the indices: a `bad_alloc` anywhere
         // here leaves no free-list entry naming a chunk that died.
         free_slots_.reserve(free_slots_.size() + n);
-        chunks_.push_back(FrameChunk{std::make_unique_for_overwrite<std::byte[]>(n * kSlotStride),
-                                     std::make_unique<PageId[]>(n)});
-        FrameChunk& chunk = chunks_.back();
+        // Every chunk but the last is whole, so the next one's index is the
+        // slot count's.
+        FrameChunk& chunk = chunks_[slot_count_ / kFrameChunk];
+        chunk = FrameChunk{std::make_unique_for_overwrite<std::byte[]>(n * kSlotStride),
+                           std::make_unique<PageId[]>(n)};
         // Pushed high to low, so the chunk fills from its first slot.
         for (std::size_t i = n; i-- > 0;) {
             chunk.owners[i] = kInvalidPageId;
