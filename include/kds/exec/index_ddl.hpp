@@ -11,6 +11,7 @@
 #include "kds/txn/read_view.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/txn/holder_progress.hpp"
 
 namespace kds::txn {
 class TransactionManager;
@@ -105,7 +106,8 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
 // every reader, never past it. `txns` null walks every chain to its end.
 StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableAccess& access,
                                 const catalog::Catalog::IndexDef& def, std::uint64_t trx_id,
-                                wal::WalManager* wal, const txn::TransactionManager* txns);
+                                wal::WalManager* wal, const txn::TransactionManager* txns,
+                                txn::HolderProgress::Scope* progress);
 
 // What a successful CREATE INDEX has to say besides its row (the
 // `IndexDdlResult::warnings` lines). Today one line: the key column
@@ -128,7 +130,8 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
                                      const parser::IndexStmt& stmt,
                                      catalog::Oid default_namespace, std::uint64_t trx_id,
                                      catalog::CatalogRowRef* written, const txn::ReadView* view,
-                                     wal::WalManager* wal, const txn::TransactionManager* txns);
+                                     wal::WalManager* wal, const txn::TransactionManager* txns,
+                                     txn::HolderProgress::Scope* progress);
 
 // Removes the index named by `stmt` and returns its `index_oid`.
 //
@@ -169,6 +172,7 @@ StatusOr<IndexDdlResult> ReindexIndex(catalog::Catalog& catalog, storage::PageSt
                                       const txn::ReadView* view, std::uint64_t trx_id,
                                       catalog::CatalogRowChange* dropped,
                                       catalog::CatalogRowRef* written, wal::WalManager* wal,
-                                      const txn::TransactionManager* txns);
+                                      const txn::TransactionManager* txns,
+                                      txn::HolderProgress::Scope* progress);
 
 }  // namespace kds::exec

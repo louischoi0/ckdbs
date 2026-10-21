@@ -104,6 +104,18 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `e542bb7d`), a stage that changed tests only; 10 of 10 alone. **Owner:
   none**, no cause observed.
 
+- **`SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`
+  timed out once under `-j8`** (its `KickUntil(..., 60000ms)`,
+  `tests/set_expr_two_core_rig_test.cpp:90`) in a full Debug suite on
+  `worktree-fix-ddl-build-fault-net` at `c8a1e45c`, with another session's
+  suite on the host (loadavg ~14 on 8 CPUs). 5 of 5 alone (about 2 s);
+  under 16 concurrent copies, 32 of 32 at `c8a1e45c` (12-21 s) and 32 of 32
+  at the base `4f175ba9` (20-26 s). The change under test is not on the
+  cell's path: two `UPDATE`s' relation `IX` are compatible, and a row wait
+  goes through `AwaitWriteBlock`, which it did not touch. The wait prints
+  no per-writer progress, so slow cannot be told from stopped. **Owner:
+  none**.
+
 - **`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
   times out under `-j8`.** It failed its `KickUntil(..., 20000ms)`
   (`tests/id_allocation_across_cores_test.cpp`) in full Debug suites on
@@ -815,6 +827,19 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 
   Each holds its core until it ends or `exec::Budget` stops it. 64 is
   BA-Q11's value, not re-measured in BA-S15.
+- **A relation-`X` build holds its core for its whole length** (verified
+  at `bf831a94`). `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION` and
+  `CREATE TRANSITION` walk the relation synchronously (`exec::Backfill`,
+  `BuildBoundCabin`, `CheckExistingRows`), with no yield and no
+  `exec::Budget`, so every other session on the
+  build's core waits for it to end. Its waiters on other cores are no
+  longer refused at the fault net while it advances (`txn.md` §5,
+  `holder_progress.hpp`); the same-core stall is the second stage of that
+  fix, not yet built. Not covered: `CREATE ASSERTION`'s and `CREATE
+  TRANSITION`'s waiters have no rig cell of their own - they share
+  `DdlBuildLock`'s registration, and
+  `DdlFenceRigTest.AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOnCoreZero`
+  drives `CREATE INDEX` only.
 - **A cancel is observed only where a walk yields, or at the next
   frame.** A write that `C_CANCEL` or a closing connection asks to stop
   runs to its end, and the cancel then refuses the session's next frame.

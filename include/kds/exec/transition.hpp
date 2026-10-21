@@ -10,6 +10,7 @@
 #include "kds/exec/transition_catalog.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/txn/holder_progress.hpp"
 #include "kds/txn/read_view.hpp"
 
 namespace kds::wal {
@@ -114,7 +115,8 @@ StatusOr<TransitionDdlResult> CreateTransition(catalog::Catalog& catalog,
                                                const parser::TransitionStmt& stmt,
                                                catalog::Oid target_oid,
                                                const txn::ReadView& check_view,
-                                               wal::WalManager* wal);
+                                               wal::WalManager* wal,
+                                               txn::HolderProgress::Scope* progress);
 
 // `DROP TRANSITION`: the row retired, then the schema word. Returns what
 // was dropped. The caller holds the relation `X`.

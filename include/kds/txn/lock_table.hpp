@@ -13,6 +13,7 @@
 #include "kds/base/latch.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/oid.hpp"
+#include "kds/txn/holder_progress.hpp"
 
 
 // The borrow model's **lock family** (AR2 §2) - AR0 D2's lock manager.
@@ -365,7 +366,10 @@ inline constexpr bool IsReadHolder(std::uint64_t holder) noexcept {
 //
 // **The net is 1 s** (D12): no holder waits on another core for anything,
 // so the longest honest wait is a local statement's own work (the 11 s 2PC
-// deadline retired at AT-S6; history at cf889b63). `lock_wait_fault_net_ms`
+// deadline retired at AT-S6; history at cf889b63). **A relation-`X` build
+// is local work longer than that**, so the net measures a registered
+// holder's silence rather than the wait's length (`holder_progress.hpp`):
+// while the build advances, its waiters' bound restarts. `lock_wait_fault_net_ms`
 // overrides it - `in_doubt_ceiling_ms` re-scoped (AT-0 item 7), whose old
 // spelling is **refused at startup naming its successor**.
 inline constexpr std::uint64_t kLockWaitFaultNetNs = 1ull * 1000 * 1000 * 1000;
@@ -614,6 +618,11 @@ public:
     // cell asserts after every wait in it has ended.
     std::size_t WaitEdgeCount() const;
 
+    // The holders that report progress to the fault net (`holder_progress.hpp`):
+    // a relation-`X` build registers its transaction here, and a waiter whose
+    // net expires asks it before refusing.
+    HolderProgress& progress() noexcept { return progress_; }
+
     // Wakes every waiter queued on `key` without releasing anything.
     // `Release` is its only engine caller; it is public because "a wake is
     // not a grant" cannot be asserted any other way - every `Release`
@@ -816,6 +825,7 @@ private:
     // `ClearWaitFor`, which every decide calls: zero means no latch is
     // taken on the commit path (the `.cpp` says why that read is sound).
     std::atomic<std::size_t> wait_edge_count_{0};
+    HolderProgress progress_;
 
     std::vector<Partition> partitions_;
     std::vector<std::unique_ptr<Latch>> latches_;

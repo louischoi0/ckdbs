@@ -297,7 +297,8 @@ StatusOr<std::size_t> CheckExistingRows(storage::PageStore& store,
                                         const catalog::TableAccess& access,
                                         const catalog::TransitionRef& t,
                                         const parser::TransitionStmt& stmt,
-                                        const txn::ReadView& check_view) {
+                                        const txn::ReadView& check_view,
+                                        txn::HolderProgress::Scope* progress) {
     const std::vector<std::string> states = StateSet(t);
     const catalog::SysColumnRow& column = access.schema.columns[t.column_no];
 
@@ -311,6 +312,9 @@ StatusOr<std::size_t> CheckExistingRows(storage::PageStore& store,
             !s.ok()) {
             return s;
         }
+        // Per leaf, and per row below: what keeps this build's waiters
+        // inside the fault net, however wide a leaf's rows make it.
+        if (progress != nullptr) progress->Advance();
         // Copied out under the page's span, decoded after it (I15's R1): a
         // spilled state value fetches its var-heap page only once the leaf
         // is let go.
@@ -344,6 +348,7 @@ StatusOr<std::size_t> CheckExistingRows(storage::PageStore& store,
             next = page.next_page_id();
         }
         for (const std::vector<std::byte>& payload : staged) {
+            if (progress != nullptr) progress->Advance();
             std::vector<PendingSpill> spills;
             auto decoded = DecodeRow(access.schema, access.layout, payload, &spills);
             if (!decoded.ok()) return decoded.status();
@@ -371,7 +376,8 @@ StatusOr<TransitionDdlResult> CreateTransition(catalog::Catalog& catalog,
                                                const parser::TransitionStmt& stmt,
                                                catalog::Oid target_oid,
                                                const txn::ReadView& check_view,
-                                               wal::WalManager* wal) {
+                                               wal::WalManager* wal,
+                                               txn::HolderProgress::Scope* progress) {
     auto access = catalog.InitTableAccess(target_oid);
     if (!access.ok()) return access.status();
     const catalog::TableAccess& rel = *access.value();
@@ -402,7 +408,7 @@ StatusOr<TransitionDdlResult> CreateTransition(catalog::Catalog& catalog,
     auto compiled = CompileTransition(rel, stmt, 0, col);
     if (!compiled.ok()) return compiled.status();
 
-    auto checked = CheckExistingRows(store, rel, compiled.value(), stmt, check_view);
+    auto checked = CheckExistingRows(store, rel, compiled.value(), stmt, check_view, progress);
     if (!checked.ok()) return checked.status();
 
     auto id = catalog.AllocateRowId(catalog::kSysTransitionsTable);

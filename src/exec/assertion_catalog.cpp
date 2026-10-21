@@ -281,7 +281,8 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
                                                   catalog::Oid target_oid,
                                                   std::uint64_t assertion_id,
                                                   const txn::ReadView& check_view,
-                                                  wal::WalManager* wal) {
+                                                  wal::WalManager* wal,
+                                                  txn::HolderProgress::Scope* progress) {
     auto access = catalog.InitTableAccess(target_oid);
     if (!access.ok()) return access.status();
     auto columns = ResolveAssertionColumns(*access.value(), stmt);
@@ -290,7 +291,7 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
     // ---- Built before it is published (§8.1, index_ddl.cpp's shape) ------
     auto build = BuildBoundCabin(store, *access.value(), stmt, assertion_id,
                                  columns.value().group_cols, columns.value().sum_col,
-                                 check_view, wal);
+                                 check_view, wal, progress);
     if (!build.ok()) {
         // The discard marker, then the caller's error. Pages and id leak -
         // the backfill's precedent: no reclaim walk reaches a chain no
@@ -330,7 +331,8 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
 StatusOr<AssertionDdlResult> CreateAssertion(
     catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
     catalog::Oid target_oid, const txn::ReadView& check_view, wal::WalManager* wal,
-    AssertionEnforcer& enforcer, const std::function<void()>& after_publish_run_for_test) {
+    AssertionEnforcer& enforcer, txn::HolderProgress::Scope* progress,
+    const std::function<void()>& after_publish_run_for_test) {
     // **The order is validate -> build -> publish** (§8.1): the three entry
     // points, back to back.
     // **One oid for all three**: the caller resolved the target and took the
@@ -339,7 +341,7 @@ StatusOr<AssertionDdlResult> CreateAssertion(
     if (!prepared.ok()) return prepared.status();
 
     auto build = BuildAssertionCabin(catalog, store, stmt, target_oid,
-                                     prepared.value().assertion_id, check_view, wal);
+                                     prepared.value().assertion_id, check_view, wal, progress);
     if (!build.ok()) return build.status();
 
     // ---- The new cabin's base, adopted with it (AS6a; AZ-S2) --------------
