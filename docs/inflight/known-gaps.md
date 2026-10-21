@@ -104,6 +104,18 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `e542bb7d`), a stage that changed tests only; 10 of 10 alone. **Owner:
   none**, no cause observed.
 
+- **`SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`
+  timed out once under `-j8`** (its `KickUntil(..., 60000ms)`,
+  `tests/set_expr_two_core_rig_test.cpp:90`) in a full Debug suite on
+  `worktree-fix-ddl-build-fault-net` at `c8a1e45c`, with another session's
+  suite on the host (loadavg ~14 on 8 CPUs). 5 of 5 alone (about 2 s);
+  under 16 concurrent copies, 32 of 32 at `c8a1e45c` (12-21 s) and 32 of 32
+  at the base `4f175ba9` (20-26 s). The change under test is not on the
+  cell's path: two `UPDATE`s' relation `IX` are compatible, and a row wait
+  goes through `AwaitWriteBlock`, which it did not touch. The wait prints
+  no per-writer progress, so slow cannot be told from stopped. **Owner:
+  none**.
+
 - **`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
   times out under `-j8`.** It failed its `KickUntil(..., 20000ms)`
   (`tests/id_allocation_across_cores_test.cpp`) in full Debug suites on
