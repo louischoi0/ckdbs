@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
-"""Folds CF-S0's `<arm>-r<rep>.json` files into the comparison CF-Q1 (a) asks:
+"""Folds CF's `<arm>-r<rep>.json` files into a comparison of every pair of arms.
+
+CF-S0's arms A, B, C give the three CF-Q1 (a) asks:
 
     replay's gain  A against B  (recording on in both)
     the net        A against C  (everything Waystone does, against nothing)
     recording      B against C  (the cost replay has to pay for)
 
+CF-S2's are base, close and close-opt.
+
 Per cell and arm: the median over reps of throughput and server CPU per
 statement, and the spread (max - min) / median. A delta is marked `~` when its
 size is inside the larger of the two arms' spreads. Also checks that every
-arm's reply digest agrees (invariant 8) and that arm A replayed.
+arm's reply digest agrees (invariant 8) and prints each arm's `replays=`.
 
-Usage: compare.py OUT
+Usage: compare.py OUT [ARM ...]   (default arms A B C; CF-S2 passes base close close-opt)
 """
 import glob, json, os, statistics, sys
 
 
 def main():
     out = sys.argv[1]
+    arms = sys.argv[2:] or ["A", "B", "C"]
+    pairs = [(x, y) for i, x in enumerate(arms) for y in arms[i + 1:]]
     runs = [json.load(open(p)) for p in sorted(glob.glob(os.path.join(out, "*-r*.json")))]
     by = {}
     for r in runs:
@@ -39,7 +45,7 @@ def main():
     print("| cell | arm | reps | qps | spread | server CPU us/stmt | spread | p50 us | replays (ANALYZE) |")
     print("|---|---|---|---|---|---|---|---|---|")
     for cell in cells:
-        for arm in "ABC":
+        for arm in arms:
             cs = by[cell].get(arm, [])
             if not cs:
                 continue
@@ -52,23 +58,21 @@ def main():
     print()
     print("Gains are positive when the first arm is better (more qps, less CPU); `~` = inside the larger spread.")
     print()
-    print("| cell | replay gain A/B qps | A/B CPU | net A/C qps | A/C CPU | recording B/C qps | B/C CPU |")
-    print("|---|---|---|---|---|---|---|")
+    print("| cell | " + " | ".join(f"{x}/{y} qps | {x}/{y} CPU" for x, y in pairs) + " |")
+    print("|---|" + "---|---|" * len(pairs))
     for cell in cells:
-        if not all(arm in by[cell] for arm in "ABC"):
+        if not all(arm in by[cell] for arm in arms):
             continue
-        row = [delta(cell, "qps", "A", "B", False), delta(cell, "server_cpu_us", "A", "B", True),
-               delta(cell, "qps", "A", "C", False), delta(cell, "server_cpu_us", "A", "C", True),
-               delta(cell, "qps", "B", "C", False), delta(cell, "server_cpu_us", "B", "C", True)]
+        row = [d for x, y in pairs for d in (delta(cell, "qps", x, y, False),
+                                             delta(cell, "server_cpu_us", x, y, True))]
         print(f"| {cell} | " + " | ".join(row) + " |")
     print()
     for cell in cells:
         digests = {c["digest"] for arm in by[cell] for c in by[cell][arm]}
-        a_rep = [c["analyze_replays"] for c in by[cell].get("A", [])]
-        other = [c["analyze_replays"] for arm in "BC" for c in by[cell].get(arm, [])]
+        reps = "; ".join(f"{arm} replays={sorted({c['analyze_replays'] for c in by[cell].get(arm, [])})}"
+                         for arm in arms)
         print(f"- {cell}: digests {'identical' if len(digests) == 1 else 'DIFFER ' + str(digests)}"
-              f" across {sum(len(v) for v in by[cell].values())} runs; arm A replays={sorted(set(a_rep))},"
-              f" arms B/C replays={sorted(set(other))}")
+              f" across {sum(len(v) for v in by[cell].values())} runs; {reps}")
     print()
     for r in runs:
         pc = r["precheck"]

@@ -580,6 +580,38 @@ stale text), then one applier.
 - **Suite:** not re-run. Only comments changed in C++, as `git diff -U0`
   shows; the build inputs are those of `46c632aa`.
 
+**CF-S2: the close, measured**
+(`bench/v3.4.0/results-cf-s2-close-v3.4.0-9-g46c632aa.md`).
+- **How it ran:** base `v3.3.0-104-g722006ec` against the close
+  `v3.4.0-9-g46c632aa`, in `build-release`, with three arms (`base`, `close`
+  nothing opted, `close-opt` with `scanprobe` opted) in rotating order, 6
+  reps, `cores = 1`, on CF-S0's cells.
+- **Rotation r2 was run again.** A compile from another session landed
+  mid-run in the first r2, so the whole rotation was set aside and
+  re-measured.
+- **Results:**
+  - **Nothing opted against base:** the lookup cells drop recording's cost.
+    `chain4` gains 3.3 % throughput and 3.6 % server CPU, and `chain3` 2.6 %
+    server CPU, both outside the spread. `pk` gains 3.2 % throughput,
+    outside the spread, and 5.1 % CPU, inside a 5.1 % spread. All three
+    land within 1.1 % of CF-S0's arm C.
+  - **`scanprobe` opted:** it keeps CF-S0's gain, +4.3 % throughput and
+    -6.0 % server CPU against not opted (+5.0 % and -6.4 % expected), and
+    is level with base.
+  - **Another shape's opt-in** costs the lookup cells nothing measurable.
+  - **`cores = 2`, `scanprobe` alone:** opted against not opted is -7.0 %
+    server CPU (outside the spread) and +3.9 % throughput (inside it).
+- **Checks:** the digests were identical in every run, and `replays=` was
+  exactly where it should be.
+- **Cut:** the refill cell and the mount's added cost. The harness has no
+  cell for either, and building and validating one did not fit the rest of
+  the close's hour on a shared host. Both stay unmeasured in `known-gaps.md`.
+- **Review:** `critics-developer` found the measurement sound, with every
+  number reproduced. It corrected eight figures and wordings, and flagged
+  the original cut rationale as false. The rationale is restated above, and
+  the `cores = 2` cell was run.
+- **Close:** CF closes on the operator's word.
+
 ---
 
 ## 8. Branch O - the amendment (CF-S1)

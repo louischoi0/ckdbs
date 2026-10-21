@@ -1437,17 +1437,27 @@ the claim's deepening trap, the leak per mount); these are what it leaves.
   re-record takes the directory page exclusive, which dirties it
   (`src/stats/waystone_dir.cpp`, `LookupOrCreateWaystonePage`'s `Get`), and
   every replayed statement builds `TrailReplay::Build`'s per-statement step
-  map (`src/exec/trail_replay.cpp`). CF-S0 measured no cost there to remove;
-  priced at CF-S2's close.
+  map (`src/exec/trail_replay.cpp`). CF-S0 measured no cost there to
+  remove. CF-S2's close prices the opted path whole: `scanprobe` opted is
+  level with the engine before O, which recorded it anyway (-0.3 % server
+  CPU, inside the spread; `bench/v3.4.0/results-cf-s2-close-v3.4.0-9-g46c632aa.md`).
 - **The mount's per-opted-row directory create is unmeasured.** Each opted
   row costs the mount, before the listener binds, one device read of the new
   page's id and, on an id the device still holds, a zero write and a sync on
   the data-sync thread, plus one logged overwrite. The cursor restarts at
   128 at a clean mount, so the zero-write arm is the common one after a run
   that reclaimed pages.
-- **Unmeasured until CF-S2's close:** the opt-in's steady state against
-  CF-S0's arms, `cores > 1`, a cold pool, a size sweep and the refill under
-  a moving word.
+- **Measured at CF-S2's close, at `cores = 1`** (`v3.4.0-9-g46c632aa`,
+  `bench/v3.4.0/results-cf-s2-close-v3.4.0-9-g46c632aa.md`): the steady
+  state. With nothing opted, the lookup cells land on CF-S0's arm C (both
+  keys off). An opted `scanprobe` keeps its gain, and another shape's opt-in
+  costs the rest nothing measurable. **Still unmeasured:**
+  - the refill under a moving word, and the mount's added cost. The harness
+    has no cell for either: the refill needs root growth during a read cell,
+    and the mount cost needs many opted rows.
+  - a cold pool and a size sweep.
+  - `cores > 1` beyond the one `scanprobe` cell the close ran (the results
+    file).
 
 ## Catalog chains past the old ceiling
 

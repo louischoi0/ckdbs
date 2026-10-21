@@ -1,16 +1,18 @@
 #!/bin/sh
-# CF-S0 launcher: the driver detached, plus a detached 60 s watchdog that
+# CF's measurement launcher: the driver detached, plus a detached 60 s watchdog that
 # relaunches it when it dies or its progress file goes stale past 300 s.
 # The driver skips every (arm, rep) whose result file exists, so a relaunch
-# resumes. Usage: sh run.sh BINARY OUT [driver args...]
+# resumes. Usage: sh run.sh DRIVER OUT [driver args...]
+#   CF-S0: sh run.sh cf_s0.py OUT --binary BIN --reps 6 --passes 22
+#   CF-S2: sh run.sh cf_s2.py OUT --base BIN --close BIN
 HERE=$(cd "$(dirname "$0")" && pwd)
-BIN=$1; OUT=$2; shift 2
+DRIVER=$1; OUT=$2; shift 2
 DATA=/home/cdkbs/bench-runs/cf/data
 mkdir -p "$OUT"
 rm -f "$OUT/done" "$OUT/watchdog.done"
 cat > "$OUT/launch.sh" <<EOF
 #!/bin/sh
-python3 "$HERE/cf_s0.py" --binary "$BIN" --out "$OUT" --data "$DATA" $* >> "$OUT/driver.log" 2>&1 &
+python3 "$HERE/$DRIVER" --out "$OUT" --data "$DATA" $* >> "$OUT/driver.log" 2>&1 &
 echo \$! > "$OUT/driver.pid"
 touch "$OUT/progress"
 EOF
@@ -26,7 +28,7 @@ while [ ! -f "$OUT/done" ]; do
   if ! kill -0 "\$PID" 2>/dev/null || [ "\$AGE" -gt 300 ]; then
     echo "\$(date -u '+%H:%M:%S') relaunch (alive=\$(kill -0 \$PID 2>/dev/null && echo 1 || echo 0) age=\$AGE)" >> "$OUT/watchdog.log"
     kill "\$PID" 2>/dev/null
-    for S in \$(pgrep -f "$OUT/[A-C]-r"); do kill "\$S" 2>/dev/null; done
+    for S in \$(pgrep -f "$OUT/[A-C]-r[0-9]"); do kill "\$S" 2>/dev/null; done
     sh "$OUT/launch.sh"
   fi
 done
