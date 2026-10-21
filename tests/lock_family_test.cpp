@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -1040,6 +1041,97 @@ TEST_F(LockDeadlockTest, AReadIsNotRefusedByADropThatHoldsTheRelation) {
     EXPECT_EQ(dispatcher_->read_borrows(), before)
         << "the ask was refused, so no position was declared - and the read ran anyway";
     locks_->Release(4242, ddl);
+}
+
+// ---- A build's waiter: the net measures the holder's silence -----------
+//
+// A relation-`X` build is local work longer than the fault net, so a waiter
+// behind one asks the holder's progress (`holder_progress.hpp`) before
+// refusing. The holder here is a synthetic id standing in for a build's
+// transaction, advancing by hand where the build advances per leaf.
+
+TEST_F(LockDeadlockTest, AWriterBehindAnAdvancingBuildOutlivesTheNetAndRunsAtTheRelease) {
+    const std::uint64_t oid = OidIn(Local("INSERT INTO t VALUES (1, 1)"));
+    ASSERT_NE(oid, 0u);
+    txn::LockHoldings ddl;
+    ASSERT_TRUE(locks_
+                    ->Acquire(4243, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kExclusive, ddl)
+                    .value()
+                    .granted);
+    std::optional<txn::HolderProgress::Scope> build;
+    build.emplace(&locks_->progress(), 4243);
+
+    Session s;
+    Started w = Start("INSERT INTO t VALUES (2, 2)", s);
+    Pump();
+    ASSERT_FALSE(*w.done) << "the writer did not wait for the build: " << w.out->response;
+
+    // Three nets' length, the build advancing within each.
+    for (int net = 0; net < 3; ++net) {
+        build->Advance();
+        clock_.Advance(txn::kLockWaitFaultNetNs + 1);
+        Pump();
+        ASSERT_FALSE(*w.done) << "refused at net " << net
+                              << " while the build advanced: " << w.out->response;
+    }
+
+    // The release comes before the withdrawal, as `DdlBuildLock` orders it.
+    locks_->Release(4243, ddl);
+    build.reset();
+    Pump();
+    ASSERT_TRUE(*w.done);
+    EXPECT_EQ(w.out->response.rfind("INSERTED", 0), 0u) << w.out->response;
+}
+
+TEST_F(LockDeadlockTest, AWriterBehindABuildThatStopsAdvancingEndsAtTheNet) {
+    const std::uint64_t oid = OidIn(Local("INSERT INTO t VALUES (1, 1)"));
+    ASSERT_NE(oid, 0u);
+    txn::LockHoldings ddl;
+    ASSERT_TRUE(locks_
+                    ->Acquire(4244, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kExclusive, ddl)
+                    .value()
+                    .granted);
+    txn::HolderProgress::Scope build(&locks_->progress(), 4244);
+
+    Session s;
+    Started w = Start("INSERT INTO t VALUES (2, 2)", s);
+    Pump();
+    ASSERT_FALSE(*w.done) << w.out->response;
+
+    // One advance buys one more net; a net of silence after it ends the wait.
+    build.Advance();
+    clock_.Advance(txn::kLockWaitFaultNetNs + 1);
+    Pump();
+    ASSERT_FALSE(*w.done) << "refused while the build advanced: " << w.out->response;
+    clock_.Advance(txn::kLockWaitFaultNetNs + 1);
+    Pump();
+    ASSERT_TRUE(*w.done) << "a registered holder that stopped advancing kept its waiter";
+    EXPECT_EQ(w.out->response.rfind("ERR", 0), 0u) << w.out->response;
+    locks_->Release(4244, ddl);
+}
+
+TEST(HolderProgressTest, AScopeIsReadUntilItEndsAndAFullRegistryRegistersNothing) {
+    txn::HolderProgress registry;
+    EXPECT_FALSE(registry.Read(7).has_value());
+    {
+        txn::HolderProgress::Scope scope(&registry, 7);
+        const std::optional<std::uint64_t> before = registry.Read(7);
+        ASSERT_TRUE(before.has_value());
+        scope.Advance();
+        EXPECT_EQ(registry.Read(7), *before + 1);
+    }
+    EXPECT_FALSE(registry.Read(7).has_value()) << "an ended scope still reported progress";
+
+    std::vector<std::unique_ptr<txn::HolderProgress::Scope>> full;
+    for (std::uint64_t id = 100; id < 100 + txn::HolderProgress::kSlots; ++id) {
+        full.push_back(std::make_unique<txn::HolderProgress::Scope>(&registry, id));
+    }
+    txn::HolderProgress::Scope spare(&registry, 99);
+    spare.Advance();  // registered nowhere, so a no-op
+    EXPECT_FALSE(registry.Read(99).has_value());
+    EXPECT_TRUE(registry.Read(100).has_value());
 }
 
 // ---- AO-S6c-b: the lock is what the statement waits for ----------------

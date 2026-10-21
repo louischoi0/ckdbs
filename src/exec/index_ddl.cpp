@@ -139,12 +139,13 @@ StatusOr<std::vector<PageId>> CollectTreePages(storage::PageStore& store, PageId
 // image is stamped so the WAL-before-data gate holds the pages until the
 // images are durable. A null `wal` no-ops (tests, bootstrap).
 Status LogBuiltTree(wal::WalManager* wal, storage::PageStore& store, std::uint64_t trx_id,
-                    PageId root, catalog::Oid owner) {
+                    PageId root, catalog::Oid owner, txn::HolderProgress::Scope* progress) {
     if (wal == nullptr) return Status::OK();
     auto pages = CollectTreePages(store, root, owner);
     if (!pages.ok()) return pages.status();
     for (auto page = pages.value().rbegin(); page != pages.value().rend(); ++page) {
         if (Status s = storage::LogFullPageImage(wal, store, trx_id, *page); !s.ok()) return s;
+        if (progress != nullptr) progress->Advance();
     }
     return Status::OK();
 }
@@ -228,7 +229,8 @@ StatusOr<std::vector<parser::AstValue>> AppendVersion(storage::PageStore& store,
 // from (BX-Q6 (b)).
 StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess& access,
                           catalog::TableAccess::IndexRef& ix,
-                          const txn::TransactionManager* txns) {
+                          const txn::TransactionManager* txns,
+                          txn::HolderProgress::Scope* progress) {
     const auto unreachable_below = [txns](std::uint64_t superseder) {
         return txns != nullptr && txns->ResolvedForEveryReader(superseder);
     };
@@ -250,6 +252,9 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
             !s.ok()) {
             return s;
         }
+        // Per leaf, and per row below: what keeps this build's waiters
+        // inside the fault net, however wide a leaf's rows make it.
+        if (progress != nullptr) progress->Advance();
 
         // ---- Phase 1: copy out, with no page fetch under the span -------
         std::vector<StagedRow> staged;
@@ -283,6 +288,7 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
         // ---- Phase 2: append, with nothing live -------------------------
         for (const StagedRow& row : staged) {
+            if (progress != nullptr) progress->Advance();
             auto latest = AppendVersion(store, access, ix, row.tuple_key, row.payload);
             if (!latest.ok()) return latest.status();
 
@@ -424,7 +430,8 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
 
 StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableAccess& access,
                                 const catalog::Catalog::IndexDef& def, std::uint64_t trx_id,
-                                wal::WalManager* wal, const txn::TransactionManager* txns) {
+                                wal::WalManager* wal, const txn::TransactionManager* txns,
+                                txn::HolderProgress::Scope* progress) {
     // The layout the definition's widths encode: `PrepareIndexDef` stored
     // `entry_width` as `leaf_entry_width()`, so the covered width is what
     // is left after the key and the tuple key. Re-derived rather than carried, and
@@ -476,7 +483,7 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
         building.covered_cols[i] = def.covered_cols[i];
     }
 
-    auto final_root = Backfill(store, access, building, txns);
+    auto final_root = Backfill(store, access, building, txns, progress);
     if (!final_root.ok()) {
         // Nothing has logged the tree yet and nothing names it, so its pages
         // go back now rather than leaking for the volume's life (BX-Q6 (b)).
@@ -490,7 +497,7 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
     // logged nothing per entry. An FPI both creates and fills a page at
     // redo, so no PAGE_INIT is needed; the cost is tree bytes per CREATE
     // INDEX, on a statement that is already O(relation).
-    if (Status s = LogBuiltTree(wal, store, trx_id, final_root.value(), def.index_oid);
+    if (Status s = LogBuiltTree(wal, store, trx_id, final_root.value(), def.index_oid, progress);
         !s.ok()) {
         return s.WithContext("logging the built tree");
     }
@@ -549,10 +556,11 @@ StatusOr<IndexDdlResult> BuildAndWriteIndex(catalog::Catalog& catalog, storage::
                                             const parser::IndexStmt& stmt, std::uint64_t trx_id,
                                             catalog::CatalogRowRef* written,
                                             wal::WalManager* wal,
-                                            const txn::TransactionManager* txns) {
+                                            const txn::TransactionManager* txns,
+                                            txn::HolderProgress::Scope* progress) {
     auto access = catalog.InitTableAccess(def.table_oid);
     if (!access.ok()) return access.status();
-    auto root = BuildIndexTree(store, *access.value(), def, trx_id, wal, txns);
+    auto root = BuildIndexTree(store, *access.value(), def, trx_id, wal, txns, progress);
     if (!root.ok()) {
         // A duplicate the unique build found (BX-R7) is the statement's
         // refusal, so it carries the index name's byte. It is the build's
@@ -597,11 +605,12 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
                                      const parser::IndexStmt& stmt, catalog::Oid default_namespace,
                                      std::uint64_t trx_id, catalog::CatalogRowRef* written,
                                      const txn::ReadView* view, wal::WalManager* wal,
-                                     const txn::TransactionManager* txns) {
+                                     const txn::TransactionManager* txns,
+                                     txn::HolderProgress::Scope* progress) {
     auto prepared = PrepareIndexDef(catalog, stmt, default_namespace, view, trx_id);
     if (!prepared.ok()) return prepared.status();
-    auto out =
-        BuildAndWriteIndex(catalog, store, prepared.value(), stmt, trx_id, written, wal, txns);
+    auto out = BuildAndWriteIndex(catalog, store, prepared.value(), stmt, trx_id, written, wal,
+                                  txns, progress);
     if (!out.ok()) return out;
     // Collected after the write, because none of them is a reason not to
     // write.
@@ -645,7 +654,8 @@ StatusOr<IndexDdlResult> ReindexIndex(catalog::Catalog& catalog, storage::PageSt
                                       const txn::ReadView* view, std::uint64_t trx_id,
                                       catalog::CatalogRowChange* dropped,
                                       catalog::CatalogRowRef* written, wal::WalManager* wal,
-                                      const txn::TransactionManager* txns) {
+                                      const txn::TransactionManager* txns,
+                                      txn::HolderProgress::Scope* progress) {
     auto old = FindNamedIndex(catalog, stmt, relation, view);
     if (!old.ok()) return old.status();
     const catalog::SysIndexRow& row = old.value();
@@ -675,7 +685,8 @@ StatusOr<IndexDdlResult> ReindexIndex(catalog::Catalog& catalog, storage::PageSt
     auto new_oid = catalog.AllocateRowId(catalog::kSysIndexesTable);
     if (!new_oid.ok()) return new_oid.status();
     def.index_oid = new_oid.value();
-    auto out = BuildAndWriteIndex(catalog, store, def, stmt, trx_id, written, wal, txns);
+    auto out =
+        BuildAndWriteIndex(catalog, store, def, stmt, trx_id, written, wal, txns, progress);
     if (out.ok()) out.value().replaced_oid = row.index_oid;
     return out;
 }

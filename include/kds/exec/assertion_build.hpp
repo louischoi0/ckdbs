@@ -9,6 +9,7 @@
 #include "kds/parser/ast.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/txn/holder_progress.hpp"
 #include "kds/txn/read_view.hpp"
 #include "kds/wal/record.hpp"
 
@@ -168,6 +169,7 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
                                           std::span<const std::uint16_t> group_cols,
                                           std::uint16_t sum_col,
                                           const txn::ReadView& check_view,
-                                          wal::WalManager* wal);
+                                          wal::WalManager* wal,
+                                          txn::HolderProgress::Scope* progress);
 
 }  // namespace kds::exec

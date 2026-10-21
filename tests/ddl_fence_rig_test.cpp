@@ -32,12 +32,14 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
+#include "kds/stats/lock_wait_log.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "view_text.hpp"
 
@@ -449,6 +451,85 @@ TEST(DdlFenceRigTest, AReindexOnCoreZeroWaitsForAWriterOnAPeerAndTheNewTreeHolds
         << "the new tree missed the writer's row";
     const std::string shown = d1.Dispatch("SELECT name, entries FROM sys.indexes").response;
     EXPECT_EQ(testing_view::ReadViewText(shown).Find("name", "rx", "entries"), "2") << shown;
+}
+
+TEST(DdlFenceRigTest, AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOnCoreZero) {
+    // **The net measures a build's silence, not its length**
+    // (`holder_progress.hpp`). An autocommit `CREATE INDEX` holds the
+    // relation `X` for its whole backfill, synchronously on core 0; a writer
+    // on core 1 arriving during it waits for the decide (`assertion.md`
+    // §8.1a, `index.md`). Before the build reported progress, a backfill
+    // longer than the net refused that writer as though the build were
+    // stuck. The net is cut to 50 ms and core 1 re-polls every 1 ms, so the
+    // writer meets its net several times during the build (about 200 ms
+    // over 10,000 rows in Debug). The net must still exceed the build's tail
+    // - the catalog write and the commit after its last row, which report
+    // nothing - and any stretch the host deschedules core 0 under a
+    // parallel suite.
+    //
+    // **Mutation**, measured: the waiter refusing at the net whatever the
+    // holder's progress - killed 1 in 1.
+    TwoCoreRig::Options options;
+    options.max_idle_block_ms = 1;
+    auto opened = TwoCoreRig::Open(options);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    PeerRelation(*rig, "built_ix");
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    constexpr sched::MonoTimeNs kNetNs = 50'000'000;
+    d1.set_lock_wait_fault_net_ns(kNetNs);
+    for (int batch = 0; batch < 20; ++batch) {
+        std::string values;
+        for (int i = 0; i < 500; ++i) {
+            values += (i == 0 ? "(" : ", (") + std::to_string(batch * 500 + i) + ")";
+        }
+        ASSERT_EQ(d1.Dispatch("INSERT INTO built_ix VALUES " + values).response.rfind("INSERTED", 0),
+                  0u);
+    }
+
+    // The log is the process's: a single-process run of the binary carries
+    // earlier cells' rows, `fault_net` ones included (lock_family_test's).
+    stats::LockWaitLog::ResetForTest();
+
+    Statement build;
+    build.sql = "CREATE INDEX bix ON built_ix (v)";
+    Statement insert;
+    insert.sql = "INSERT INTO built_ix VALUES (-1)";
+    Submit(*rig, 0, build);
+    Submit(*rig, 1, insert);
+    rig->Start();
+    build.go.store(true, std::memory_order_release);
+    // The writer starts once the build has its `X` and reports progress.
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] {
+        return rig->locks().progress().Registered() > 0 ||
+               build.done.load(std::memory_order_acquire);
+    }));
+    insert.go.store(true, std::memory_order_release);
+
+    ASSERT_TRUE(
+        KickUntil(*rig, 0, [&] { return build.done.load(std::memory_order_acquire); }, 20000ms))
+        << "the build never finished";
+    ASSERT_EQ(build.out.response.rfind("CREATED INDEX", 0), 0u) << build.out.response;
+    ASSERT_TRUE(
+        KickUntil(*rig, 1, [&] { return insert.done.load(std::memory_order_acquire); }, 5000ms))
+        << "the writer never resumed after the build committed";
+    EXPECT_EQ(insert.out.response.rfind("INSERTED", 0), 0u)
+        << "the writer was refused behind a build that was advancing: " << insert.out.response;
+    rig->Stop();
+
+    // **Not vacuous**: the writer waited past its net and was granted.
+    const testing_view::ViewText waits = testing_view::ReadViewText(
+        d1.Dispatch("SELECT outcome, waited_us FROM sys.lock_waits").response);
+    const std::vector<std::string> outcomes = waits.Column("outcome");
+    const std::vector<std::string> waited = waits.Column("waited_us");
+    bool past_the_net = false;
+    for (std::size_t i = 0; i < outcomes.size(); ++i) {
+        EXPECT_NE(outcomes[i], "fault_net") << "a wait behind the build ended at the net";
+        past_the_net |= outcomes[i] == "granted" && std::stoull(waited[i]) > kNetNs / 1000;
+    }
+    EXPECT_TRUE(past_the_net) << "the build ended inside one net, so the cell proved nothing";
+    EXPECT_NE(d1.Dispatch("SELECT * FROM built_ix WHERE v = -1").response.find(",-1"),
+              std::string::npos);
 }
 
 }  // namespace
