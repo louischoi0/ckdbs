@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "kds/base/injected_failure.hpp"
 #include "kds/storage/page_device.hpp"
 
 // The simulated PageDevice: the same contract as FilePageDevice, backed by
@@ -130,11 +131,12 @@ public:
     // ---- Fault injection -------------------------------------------------
 
     // The next matching operation reports `status` and has no effect. Each
-    // is one-shot; setting one twice replaces the pending injection.
-    void FailNextRead(Status status);
-    void FailNextWrite(Status status);
-    void FailNextSync(Status status);
-    void FailNextGrow(Status status);
+    // is one-shot; setting one twice replaces the pending injection. With
+    // `skip`, that many matching operations pass first (BS-S3's N-th sweep).
+    void FailNextRead(Status status, std::uint64_t skip = 0);
+    void FailNextWrite(Status status, std::uint64_t skip = 0);
+    void FailNextSync(Status status, std::uint64_t skip = 0);
+    void FailNextGrow(Status status, std::uint64_t skip = 0);
 
     // The next write transfers only its first `prefix_bytes` bytes and then
     // stops, as an interrupted physical write would. The call still
@@ -214,10 +216,10 @@ private:
     std::unordered_map<PageId, Page> durable_;
     std::unordered_map<PageId, Page> pending_;
 
-    std::optional<Status> fail_next_read_;
-    std::optional<Status> fail_next_write_;
-    std::optional<Status> fail_next_sync_;
-    std::optional<Status> fail_next_grow_;
+    InjectedFailure fail_next_read_;
+    InjectedFailure fail_next_write_;
+    InjectedFailure fail_next_sync_;
+    InjectedFailure fail_next_grow_;
     std::optional<std::size_t> tear_next_write_;
 
     Stats stats_;

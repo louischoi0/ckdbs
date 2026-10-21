@@ -133,6 +133,16 @@ struct SimConfig {
     // branch per op; `fault_rate` is faults per 1000 ops.
     FaultProfile faults = FaultProfile::kNone;
     std::uint32_t fault_rate = 20;
+    // One fault at the Nth operation of a kind instead of a schedule
+    // (BS-S3, `sim/faults.hpp`'s `NthFault`). In the workload, the loop's
+    // fault contract is on as it is under `faults`; at the mount, the
+    // workload runs fault-free and is held to the whole contract.
+    std::optional<NthFault> nth_fault;
+
+    // The loop's widened contract: a schedule, or one fault in the workload.
+    bool faults_on() const {
+        return faults != FaultProfile::kNone || (nth_fault.has_value() && !nth_fault->at_mount);
+    }
 
     // The advisory features (SIM06). Unset draws them per iteration from
     // the seed, which is the production shape of this harness; a value
@@ -230,6 +240,9 @@ struct SimVerdict {
     // ops there and was crashed and restarted, as an operator would, so the
     // recovery after a failed log write or sync is what it checked.
     std::size_t fail_stops = 0;
+    // Mounts an Nth fault failed (BS-A7), each followed by a fault-free mount
+    // that recovered.
+    std::size_t mounts_refused = 0;
 
     std::string Summary(const SimConfig& config) const;
 

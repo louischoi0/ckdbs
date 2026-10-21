@@ -2,7 +2,7 @@
 # BS-S1: one BS configuration, built in a directory of its own and run there
 # (instructions/v3.0.0/workorder-bs-test-hardening.md).
 #
-#   scripts/bs/config.sh <config> <step>...     steps: build, suite, sim
+#   scripts/bs/config.sh <config> <step>...     steps: build, suite, sim, bs-cells
 #
 #   asan      Debug, ASan + UBSan, clang (BS-Q2 (a))   -> build-bs-asan/
 #   tsan      Debug, TSan, clang                        -> build-bs-tsan/
@@ -27,7 +27,7 @@ BUILD="$ROOT/build-bs-$CONFIG"
 EXE_LINK=""
 
 usage() {
-    echo "usage: config.sh asan|tsan|noassert build|suite|sim..." >&2
+    echo "usage: config.sh asan|tsan|noassert build|suite|sim|bs-cells..." >&2
     exit 2
 }
 
@@ -83,6 +83,10 @@ for STEP in "$@"; do
             LE=$(sed -n 's/.*-LE \([^ ]*\).*/\1/p' "$ROOT/scripts/test.sh")
             # --no-tests=error: a broken registration is a failure, not a pass.
             ctest --test-dir "$BUILD" -j"$JOBS" --output-on-failure --no-tests=error ${LE:+-LE "$LE"}
+            ;;
+        bs-cells)
+            # BS's own cells, labelled bs-nightly (§6.1): the hook never runs them.
+            ctest --test-dir "$BUILD" -j"$JOBS" --output-on-failure --no-tests=error -L bs-nightly
             ;;
         sim)
             SIM_BIN="$BUILD/ckdbs-sim" SIM_ARTIFACTS="${SIM_ARTIFACTS:-$BUILD/sim-artifacts.txt}" \

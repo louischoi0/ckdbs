@@ -1,6 +1,7 @@
 #include "sim/faults.hpp"
 
 #include <algorithm>
+#include <charconv>
 
 namespace kds::sim {
 
@@ -127,15 +128,44 @@ std::span<const ScheduledFault> FaultSchedule::At(std::size_t op_index) const {
 
 void ArmFault(const ScheduledFault& fault, storage::MemoryPageDevice& pages,
               wal::MemoryLogDevice& log) {
+    ArmNthFault(NthFault{fault.kind, 1}, pages, log);
+}
+
+std::string NthFault::Describe() const {
+    return std::string(FaultKindName(kind)) + ":" + std::to_string(n) + (at_mount ? "@mount" : "");
+}
+
+std::optional<NthFault> ParseNthFault(std::string_view text) {
+    constexpr std::string_view kAtMount = "@mount";
+    const bool at_mount = text.size() > kAtMount.size() &&
+                          text.substr(text.size() - kAtMount.size()) == kAtMount;
+    if (at_mount) text.remove_suffix(kAtMount.size());
+    const std::size_t colon = text.rfind(':');
+    if (colon == std::string_view::npos) return std::nullopt;
+    const std::optional<FaultKind> kind = ParseFaultKind(text.substr(0, colon));
+    if (!kind.has_value()) return std::nullopt;
+    const std::string_view digits = text.substr(colon + 1);
+    NthFault out{*kind, 0, at_mount};
+    // from_chars, not stoull: a 21-digit N is a refusal, not a terminate.
+    const auto [end, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), out.n);
+    if (ec != std::errc() || end != digits.data() + digits.size() || out.n == 0) {
+        return std::nullopt;
+    }
+    return out;
+}
+
+void ArmNthFault(const NthFault& fault, storage::MemoryPageDevice& pages,
+                 wal::MemoryLogDevice& log) {
     const Status injected =
         Status::IoError(std::string("injected fault: ") + FaultKindName(fault.kind));
+    const std::uint64_t skip = fault.n - 1;
     switch (fault.kind) {
-        case FaultKind::kPageFailRead: pages.FailNextRead(injected); break;
-        case FaultKind::kPageFailWrite: pages.FailNextWrite(injected); break;
-        case FaultKind::kPageFailSync: pages.FailNextSync(injected); break;
-        case FaultKind::kPageFailGrow: pages.FailNextGrow(injected); break;
-        case FaultKind::kLogFailWrite: log.FailNextWrite(injected); break;
-        case FaultKind::kLogFailSync: log.FailNextSync(injected); break;
+        case FaultKind::kPageFailRead: pages.FailNextRead(injected, skip); break;
+        case FaultKind::kPageFailWrite: pages.FailNextWrite(injected, skip); break;
+        case FaultKind::kPageFailSync: pages.FailNextSync(injected, skip); break;
+        case FaultKind::kPageFailGrow: pages.FailNextGrow(injected, skip); break;
+        case FaultKind::kLogFailWrite: log.FailNextWrite(injected, skip); break;
+        case FaultKind::kLogFailSync: log.FailNextSync(injected, skip); break;
     }
 }
 

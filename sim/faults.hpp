@@ -119,6 +119,29 @@ private:
 void ArmFault(const ScheduledFault& fault, storage::MemoryPageDevice& pages,
               wal::MemoryLogDevice& log);
 
+// **One fault at a chosen device operation** (BS-S3's I/O sweep,
+// `instructions/v3.0.0/workorder-bs-test-hardening.md`): the `n`th operation
+// of `kind` the devices see from the iteration's first op on fails, once,
+// and nothing else is injected. The sweep raises `n` until the fault no
+// longer fires; F5's obligation is asserted at every point, as for a
+// scheduled fault. Spelled `kind:n`.
+//
+// **`kind:n@mount` counts from the reboot's start instead** (BS-A7): the
+// mount's own I/O - recovery reads every page it redoes, which a workload
+// barely does - and its obligation is the restart's: a mount the fault fails
+// leaves a volume the next mount, fault-free, recovers to the oracle; one it
+// does not fail is held to the run's whole contract.
+struct NthFault {
+    FaultKind kind = FaultKind::kPageFailRead;
+    std::uint64_t n = 1;  // 1 is the first
+    bool at_mount = false;
+
+    std::string Describe() const;
+};
+std::optional<NthFault> ParseNthFault(std::string_view text);
+void ArmNthFault(const NthFault& fault, storage::MemoryPageDevice& pages,
+                 wal::MemoryLogDevice& log);
+
 // Injections the two devices have actually consumed. The loop reports it
 // beside the armed count: a schedule whose faults never fire is a schedule
 // that proved nothing, and that has to be visible rather than inferred.

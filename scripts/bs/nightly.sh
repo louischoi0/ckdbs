@@ -19,7 +19,9 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BS_REPORTS="${BS_REPORTS:-$ROOT/build-bs-reports}"
-STEPS="${BS_STEPS:-asan tsan noassert}"
+# The sanitizer configurations first: `io-sweep` runs noassert's ckdbs-sim and
+# `bs-cells` asan's kds_bs_tests, both built by the steps before them.
+STEPS="${BS_STEPS:-asan tsan noassert io-sweep bs-cells}"
 SIM_FRESH="${BS_SIM_FRESH:-16}"
 mkdir -p "$BS_REPORTS"
 
@@ -114,6 +116,25 @@ step_sim() {
     fi
 }
 
+step_run() {
+    # step_run <name> <command...>: PASS on exit 0, its log's last line the detail.
+    local name=$1 log="$WORK/$1.log" rc t0=$SECONDS
+    shift
+    "$@" > "$log" 2>&1
+    rc=$?
+    local dt=$(( (SECONDS - t0) / 60 )) tail_line
+    tail_line=$(tail -n 1 "$log")
+    if [ "$rc" -eq 0 ]; then
+        verdicts+=("| $name | PASS | ${tail_line} (${dt} min) |")
+        summary+=("$name=PASS")
+    else
+        verdicts+=("| $name | FAIL | ${tail_line} (${dt} min), \`$log\` |")
+        summary+=("$name=FAIL")
+        { echo "### $name"; echo; grep -E '^FAIL|\(Failed\)|\(Timeout\)' "$log" | sed 's/^/- /'; echo; } \
+            >> "$WORK/details.md"
+    fi
+}
+
 : > "$WORK/details.md"
 for s in $STEPS; do
     # Asked before every step, not once: the night's steps run for hours,
@@ -134,6 +155,16 @@ for s in $STEPS; do
                 verdicts+=("| $s sim | SKIP | the build failed |")
                 summary+=("$s-sim=SKIP")
             fi
+            ;;
+        io-sweep)
+            # BS-S3: the Nth operation of each device kind, every committed seed.
+            step_run io-sweep python3 -I "$ROOT/scripts/bs/io_sweep.py" \
+                "$ROOT/build-bs-noassert/ckdbs-sim" --ops "${BS_SWEEP_OPS:-1500}"
+            ;;
+        bs-cells)
+            # The cells labelled bs-nightly (BS-S3's allocation sweep and
+            # after), under asan.
+            step_run bs-cells "$ROOT/scripts/bs/config.sh" asan bs-cells
             ;;
         *) verdicts+=("| $s | SKIP | unknown step |"); summary+=("$s=SKIP") ;;
     esac

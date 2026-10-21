@@ -101,7 +101,7 @@ Status MemoryPageDevice::ReadPageRun(PageId first_page_id, std::uint32_t nr_page
     // attempted, and a test asserting on the trace wants to see that.
     trace_.push_back(TraceEntry{OpKind::kRead, first_page_id, nr_pages});
     ++stats_.reads;
-    if (auto failure = Take(fail_next_read_); failure.has_value()) {
+    if (auto failure = fail_next_read_.Take(); failure.has_value()) {
         ++stats_.injections_fired;
         return std::move(*failure);
     }
@@ -129,7 +129,7 @@ Status MemoryPageDevice::WritePageRun(PageId first_page_id, std::uint32_t nr_pag
 
     trace_.push_back(TraceEntry{OpKind::kWrite, first_page_id, nr_pages});
     ++stats_.writes;
-    if (auto failure = Take(fail_next_write_); failure.has_value()) {
+    if (auto failure = fail_next_write_.Take(); failure.has_value()) {
         ++stats_.injections_fired;
         return std::move(*failure);
     }
@@ -176,7 +176,7 @@ Status MemoryPageDevice::EnsureCapacity(std::uint32_t nr_pages) {
         return Status::OK();  // never shrinks, and so is idempotent on replay
     }
 
-    if (auto failure = Take(fail_next_grow_); failure.has_value()) {
+    if (auto failure = fail_next_grow_.Take(); failure.has_value()) {
         ++stats_.injections_fired;
         return std::move(*failure);
     }
@@ -192,7 +192,7 @@ Status MemoryPageDevice::Sync() {
     std::lock_guard<std::mutex> guard(mu_);
     trace_.push_back(TraceEntry{OpKind::kSync, 0, 0});
     ++stats_.syncs;
-    if (auto failure = Take(fail_next_sync_); failure.has_value()) {
+    if (auto failure = fail_next_sync_.Take(); failure.has_value()) {
         ++stats_.injections_fired;
         return std::move(*failure);
     }
@@ -206,21 +206,21 @@ Status MemoryPageDevice::Sync() {
     return Status::OK();
 }
 
-void MemoryPageDevice::FailNextRead(Status status) {
+void MemoryPageDevice::FailNextRead(Status status, std::uint64_t skip) {
     std::lock_guard<std::mutex> guard(mu_);
-    fail_next_read_ = std::move(status);
+    fail_next_read_.Arm(std::move(status), skip);
 }
-void MemoryPageDevice::FailNextWrite(Status status) {
+void MemoryPageDevice::FailNextWrite(Status status, std::uint64_t skip) {
     std::lock_guard<std::mutex> guard(mu_);
-    fail_next_write_ = std::move(status);
+    fail_next_write_.Arm(std::move(status), skip);
 }
-void MemoryPageDevice::FailNextSync(Status status) {
+void MemoryPageDevice::FailNextSync(Status status, std::uint64_t skip) {
     std::lock_guard<std::mutex> guard(mu_);
-    fail_next_sync_ = std::move(status);
+    fail_next_sync_.Arm(std::move(status), skip);
 }
-void MemoryPageDevice::FailNextGrow(Status status) {
+void MemoryPageDevice::FailNextGrow(Status status, std::uint64_t skip) {
     std::lock_guard<std::mutex> guard(mu_);
-    fail_next_grow_ = std::move(status);
+    fail_next_grow_.Arm(std::move(status), skip);
 }
 
 void MemoryPageDevice::TearNextWrite(std::size_t prefix_bytes) {
@@ -230,10 +230,10 @@ void MemoryPageDevice::TearNextWrite(std::size_t prefix_bytes) {
 
 void MemoryPageDevice::ClearInjections() noexcept {
     std::lock_guard<std::mutex> guard(mu_);
-    fail_next_read_.reset();
-    fail_next_write_.reset();
-    fail_next_sync_.reset();
-    fail_next_grow_.reset();
+    fail_next_read_.Clear();
+    fail_next_write_.Clear();
+    fail_next_sync_.Clear();
+    fail_next_grow_.Clear();
     tear_next_write_.reset();
 }
 

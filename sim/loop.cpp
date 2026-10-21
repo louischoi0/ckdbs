@@ -51,9 +51,10 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
     out += " reads=" + std::to_string(reads_checked);
     if (writes_checked != 0) out += " writes=" + std::to_string(writes_checked);
     if (transactions != 0) out += " txns=" + std::to_string(transactions);
-    if (config.faults != FaultProfile::kNone) {
+    if (config.faults != FaultProfile::kNone || config.nth_fault.has_value()) {
         out += " faults=";
-        out += FaultProfileName(config.faults);
+        out += config.nth_fault.has_value() ? "nth:" + config.nth_fault->Describe()
+                                            : std::string(FaultProfileName(config.faults));
         out += " armed=" + std::to_string(faults_armed);
         out += " fired=" + std::to_string(faults_fired);
         out += " errored_ops=" + std::to_string(errored_ops);
@@ -81,6 +82,7 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
                " crashes_reviving_segments=" + std::to_string(crashes_reviving_segments) +
                " abandoned_checkpoints=" + std::to_string(abandoned_checkpoints);
     }
+    if (mounts_refused != 0) out += " mounts_refused=" + std::to_string(mounts_refused);
     if (fail_stops != 0) {
         out += " fail_stops=" + std::to_string(fail_stops);
     }
@@ -146,7 +148,7 @@ struct Iteration {
     std::map<std::uint64_t, std::vector<std::pair<PageId, std::uint64_t>>> ledger;
     std::vector<std::uint64_t> txn_drop_oids;
 
-    bool faults_on() const { return config.faults != FaultProfile::kNone; }
+    bool faults_on() const { return config.faults_on(); }
 };
 
 // First failure wins; everything after it is noise from the same cause.
@@ -991,7 +993,10 @@ SimInstance::Options InstanceOptions(const SimConfig& config, const FeatureToggl
     // one: an armed fault waits for the next growth, and at the default
     // 64-page extent a 12,000-op run of seed 20260826003 fired 1 of its 480
     // (on `8cacbb3d`, 2026-10-16).
-    if (config.faults == FaultProfile::kGrow) options.extent_pages = 1;
+    if (config.faults == FaultProfile::kGrow ||
+        (config.nth_fault.has_value() && config.nth_fault->kind == FaultKind::kPageFailGrow)) {
+        options.extent_pages = 1;
+    }
     return options;
 }
 
@@ -1028,6 +1033,11 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     std::set<std::string> named_before_stop;
     std::set<std::string> dropped_at_stop;
 
+    if (config.nth_fault.has_value() && !config.nth_fault->at_mount) {
+        ArmNthFault(*config.nth_fault, it.instance.page_device(), it.instance.log_device());
+        ++verdict.faults_armed;
+        it.trace.Note("armed " + config.nth_fault->Describe());
+    }
     for (std::size_t i = 0; i < plan.entries.size(); ++i) {
         const SimPlan::Entry& entry = plan.entries[i];
         for (const FaultKind kind : entry.faults) {
@@ -1202,8 +1212,27 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                      " recycling detach(es) refused with no fault armed");
         return false;
     }
-    if (Status s = it.instance.Reboot(); !s.ok()) {
-        Fail(it, "reboot failed: " + s.message());
+    if (config.nth_fault.has_value() && config.nth_fault->at_mount) {
+        ArmNthFault(*config.nth_fault, it.instance.page_device(), it.instance.log_device());
+        ++verdict.faults_armed;
+        it.trace.Note("armed " + config.nth_fault->Describe());
+    }
+    Status rebooted = it.instance.Reboot();
+    if (config.nth_fault.has_value() && config.nth_fault->at_mount) {
+        verdict.faults_fired =
+            InjectionsFired(it.instance.page_device(), it.instance.log_device());
+        DisarmInjections(it);
+        if (!rebooted.ok()) {
+            // The restart after a refused mount: a power cut, then a mount
+            // with nothing armed, which must recover what the first would have.
+            it.trace.Note("the mount refused under the fault: " + rebooted.message());
+            ++verdict.mounts_refused;
+            it.instance.Crash();
+            rebooted = it.instance.Reboot();
+        }
+    }
+    if (!rebooted.ok()) {
+        Fail(it, "reboot failed: " + rebooted.message());
         return false;
     }
     // What the mount owes, freed before anything reads the volume - the
@@ -1291,6 +1320,7 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     crashes_reviving_segments += other.crashes_reviving_segments;
     backups_restored += other.backups_restored;
     fail_stops += other.fail_stops;
+    mounts_refused += other.mounts_refused;
     unlogged_ddl_lost_tables += other.unlogged_ddl_lost_tables;
     if (ok && !other.ok) {
         ok = false;

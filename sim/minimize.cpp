@@ -197,7 +197,12 @@ Status WriteCase(const std::string& path, const SimConfig& config, const SimPlan
         << "\tassert-recovery=" << (config.assert_recovery ? 1 : 0)
         // Run-level too (BC-S4): the checkpoints land by op index, so a case
         // replayed at another cadence is another run.
-        << "\tcheckpoint-every=" << config.checkpoint_every << "\n";
+        << "\tcheckpoint-every=" << config.checkpoint_every
+        // BS-S3's one fault: a case shrunk under it replays without it as a
+        // different run, the file saying it fails and not failing.
+        << (config.nth_fault.has_value() ? "\tfail-nth=" + config.nth_fault->Describe()
+                                         : std::string())
+        << "\n";
 
     for (const SimPlan::Entry& entry : plan.entries) {
         for (const FaultKind kind : entry.faults) {
@@ -264,6 +269,11 @@ StatusOr<LoadedCase> ReadCase(const std::string& path) {
                             "case file: checkpoint-every is not a number");
                     }
                     loaded.config.checkpoint_every = static_cast<std::size_t>(every);
+                } else if (Field(f[i], "fail-nth=", v)) {
+                    loaded.config.nth_fault = ParseNthFault(v);
+                    if (!loaded.config.nth_fault.has_value()) {
+                        return Status::InvalidArgument("case file: fail-nth is not KIND:N");
+                    }
                 } else if (Field(f[i], "toggles=", v)) {
                     if (v.size() != 3) {
                         return Status::InvalidArgument("case file: toggles is not three digits");

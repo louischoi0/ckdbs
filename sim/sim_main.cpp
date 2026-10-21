@@ -6,7 +6,7 @@
 //   ckdbs-sim --seed N [--ops N] [--iterations N]
 //             [--mode clean|sync-crash|crash]
 //             [--profile uniform|zipfian|colliding]
-//             [--faults none|io|grow] [--fault-rate N]
+//             [--faults none|io|grow] [--fault-rate N] [--fail-nth KIND:N]
 //             [--toggles off|on|cabins|waystone] [--pair]
 //             [--minimize [--out FILE]]
 //   ckdbs-sim --replay FILE
@@ -29,7 +29,7 @@ int Usage(const char* argv0) {
                  "usage: %s --seed N [--ops N] [--iterations N]\n"
                  "          [--mode clean|sync-crash|crash]\n"
                  "          [--profile uniform|zipfian|colliding]\n"
-                 "          [--faults none|io|grow] [--fault-rate N]\n"
+                 "          [--faults none|io|grow] [--fault-rate N] [--fail-nth KIND:N]\n"
                  "          [--toggles off|on|cabins|waystone] [--pair]\n"
                  "          [--minimize [--out FILE] [--max-replays N]] | [--replay FILE]\n"
                  "          [--skip-recovery] [--checkpoint-every N] [--backup]\n",
@@ -78,6 +78,10 @@ int main(int argc, char** argv) {
             const auto faults = kds::sim::ParseFaultProfile(value);
             if (!faults.has_value()) return Usage(argv[0]);
             config.faults = *faults;
+            ++i;
+        } else if (arg == "--fail-nth" && value) {
+            config.nth_fault = kds::sim::ParseNthFault(value);  // BS-S3's I/O sweep
+            if (!config.nth_fault.has_value()) return Usage(argv[0]);
             ++i;
         } else if (arg == "--fault-rate" && value) {
             config.fault_rate = static_cast<std::uint32_t>(std::strtoul(value, nullptr, 10));
@@ -133,6 +137,12 @@ int main(int argc, char** argv) {
         } else {
             return Usage(argv[0]);
         }
+    }
+    // One fault or a schedule, never both: a scheduled arm of the same kind
+    // replaces the Nth one silently. The pairing arms neither.
+    if (config.nth_fault.has_value() &&
+        (config.faults != kds::sim::FaultProfile::kNone || pair)) {
+        return Usage(argv[0]);
     }
     // A replay needs no seed: the case file *is* the run (SIM07).
     if (!replay_path.empty()) {

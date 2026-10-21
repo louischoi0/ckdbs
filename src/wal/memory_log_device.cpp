@@ -20,11 +20,11 @@ Status MemoryLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const 
                                        std::to_string(base_.size()) + ", got " +
                                        std::to_string(segment_no) + ")");
     }
-    if (!header.empty() && fail_next_write_.has_value()) {
-        Status failure = *fail_next_write_;
-        fail_next_write_.reset();
-        ++stats_.injections_fired;
-        return failure;
+    if (!header.empty()) {
+        if (auto failure = fail_next_write_.Take(); failure.has_value()) {
+            ++stats_.injections_fired;
+            return std::move(*failure);
+        }
     }
     base_.emplace_back();
     pending_.emplace_back();
@@ -49,11 +49,9 @@ Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
 
     trace_.push_back({OpKind::kWrite, segment_no, offset, in.size()});
 
-    if (fail_next_write_.has_value()) {
-        Status failure = *fail_next_write_;
-        fail_next_write_.reset();
+    if (auto failure = fail_next_write_.Take(); failure.has_value()) {
         ++stats_.injections_fired;
-        return failure;
+        return std::move(*failure);
     }
 
     std::size_t transferred = in.size();
@@ -104,11 +102,9 @@ Status MemoryLogDevice::Sync() {
     std::lock_guard<std::mutex> guard(mutex_);
     trace_.push_back({OpKind::kSync, 0, 0, 0});
 
-    if (fail_next_sync_.has_value()) {
-        Status failure = *fail_next_sync_;
-        fail_next_sync_.reset();
+    if (auto failure = fail_next_sync_.Take(); failure.has_value()) {
         ++stats_.injections_fired;
-        return failure;
+        return std::move(*failure);
     }
 
     // Merge the overlay down: cost proportional to bytes written since the
@@ -155,13 +151,13 @@ Status MemoryLogDevice::ReclaimDetached() {
 // device while the writer thread syncs it, so arming a fault is a mutation
 // like any other. No test arms one concurrently today; the lock is what
 // makes that a supported use rather than an accident waiting.
-void MemoryLogDevice::FailNextWrite(Status status) {
+void MemoryLogDevice::FailNextWrite(Status status, std::uint64_t skip) {
     std::lock_guard<std::mutex> guard(mutex_);
-    fail_next_write_ = std::move(status);
+    fail_next_write_.Arm(std::move(status), skip);
 }
-void MemoryLogDevice::FailNextSync(Status status) {
+void MemoryLogDevice::FailNextSync(Status status, std::uint64_t skip) {
     std::lock_guard<std::mutex> guard(mutex_);
-    fail_next_sync_ = std::move(status);
+    fail_next_sync_.Arm(std::move(status), skip);
 }
 void MemoryLogDevice::TearNextWrite(std::size_t prefix_bytes) {
     std::lock_guard<std::mutex> guard(mutex_);
@@ -170,8 +166,8 @@ void MemoryLogDevice::TearNextWrite(std::size_t prefix_bytes) {
 
 void MemoryLogDevice::ClearInjections() noexcept {
     std::lock_guard<std::mutex> guard(mutex_);
-    fail_next_write_.reset();
-    fail_next_sync_.reset();
+    fail_next_write_.Clear();
+    fail_next_sync_.Clear();
     tear_next_write_.reset();
 }
 
