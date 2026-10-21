@@ -22,6 +22,10 @@ Written 2026-10-21 on `cf-waystone-premise` from `23ea3e61`
 - **W3** (2026-10-21): *"Proceed with $!O and push no verify"* - the
   branch, after CF-S0's report (`raft-marks-2026-10-21.md` §4).
 
+**CLOSED 2026-10-21 on the operator's word** (W6, `raft-marks-2026-10-21.md`
+§9): Branch O built and measured (§7), pushed with the hook skipped after
+the full suite ran 4263/4263 at `27f80aa6`. CF-Q6 stays open.
+
 **Written 2026-10-21; opened 2026-10-21 on W2.** CF-Q0..Q5 are the
 operator's marks, each (a) - CF-Q1 (a) against CLA's proposal (b) - and
 CF-Q6 and CF-Q7 carry no lettered option, so W2 leaves them as they
@@ -611,6 +615,18 @@ stale text), then one applier.
   the original cut rationale as false. The rationale is restated above, and
   the `cores = 2` cell was run.
 - **Close:** CF closes on the operator's word.
+
+**CF closed on W6** (*"push no verify and close the milestone"*,
+`raft-marks-2026-10-21.md` §9).
+- **The suite:** the full Debug suite passed 4263/4263 at `27f80aa6`, the
+  merge of `origin/main` that last changed a build input. Everything after
+  it is documents only.
+- **The push:** to `main` with `--no-verify`, on this word.
+- **What CF leaves:**
+  - CF-Q6, CLAUDE.md's "What This Project Is" item 2, which is the
+    operator's;
+  - the gaps `known-gaps.md`'s Waystone opt-in section names, among them
+    the refill cell and the mount cost that the close cut.
 
 ---
 
