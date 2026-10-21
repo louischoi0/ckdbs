@@ -697,10 +697,53 @@ private:
             memo_valid_ = false;
         }
 
-        if (Status s = co_await TryReplay(steps, index, step, access, key.value()); !s.ok()) {
-            co_return s;
+        // ---- Replay (workplan P11/P13) -----------------------------------
+        //
+        // Consults the trail for this step's key and, if it validates, reads
+        // the row from the recorded location instead of descending for it.
+        //
+        // **A hit returns from here, and nothing else reports it.** A replay
+        // hit runs the next step inside `AcceptTupleAt`, so an outcome kept
+        // anywhere the next step reaches is that step's to overwrite: a flag
+        // shared by the chain was cleared by an inner miss before the outer
+        // step read it, and the outer step descended and emitted the row a
+        // second time.
+        //
+        // **Every miss falls through to the authoritative path for this step
+        // alone** (spec section 2 rule 4). A missing trail, a stale entry, a
+        // page that went away and a slot whose occupant changed are all the
+        // same answer here - the descent below - which is deliberate: a
+        // caller that could tell them apart would be tempted to treat one of
+        // them as authoritative.
+        //
+        // Rule 0 is **this lookup** (spec section 2 rule 0, the driving step
+        // included). The index is keyed on (step_id, tuple key) and `key` was
+        // just derived for this step, so an entry is only found by matching
+        // it. There is no separate check to forget.
+        if (const TrailLocation* at =
+                replay_ != nullptr ? replay_->Find(step.step_id, key.value()) : nullptr;
+            at != nullptr) {
+            StepStats& step_stats = stats_.For(step.step_id);
+            NoteFetch();
+            ++step_stats.pages_fetched;
+            // Spec section 2 rules 1-2, through the one verifier both this
+            // and Cabin's location hints go through (exec/tuple_verify.hpp).
+            // Verified against the derived `key`, not an entry tuple key -
+            // the location carries none - which is rule 0's second hold.
+            VerifiedTuple verified = VerifyTupleAt(store_, at->page_id, at->slot, key.value(),
+                                                   at->page_epoch, access.oid);
+            if (verified.ok()) {
+                // Validated. From here it is the authoritative path's own
+                // code on the authoritative path's own bytes - decode,
+                // residual, sub-chains, descend - so rule 3's "apply
+                // visibility exactly as the authoritative path would" is not
+                // implemented here so much as inherited.
+                ++step_stats.trail_replays;
+                co_return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page,
+                                        at->slot);
+            }
+            ++step_stats.trail_misses;
         }
-        if (replayed_) co_return Status::OK();
 
         NoteFetch();
         ++stats_.For(step.step_id).pages_fetched;
@@ -718,61 +761,6 @@ private:
         }
         if (found.status().code() == StatusCode::kNotFound) co_return Status::OK();
         co_return found.status();
-    }
-
-    // ---- Replay (workplan P11/P13) ---------------------------------------
-    //
-    // Consults the trail for this step's key and, if it validates, reads the
-    // row from the recorded location instead of descending for it.
-    //
-    // Sets `replayed_` rather than returning a bool, because the caller has
-    // to distinguish three outcomes and only two of them are a Status: the
-    // row was replayed (stop), nothing was replayed (descend), or something
-    // went wrong downstream of a *successful* replay (propagate). Folding
-    // the first two into a bool and the third into the Status keeps every
-    // caller's shape identical.
-    //
-    // **Every miss falls through to the authoritative path for this step
-    // alone** (spec section 2 rule 4). A missing trail, a stale entry, a
-    // page that went away and a slot whose occupant changed are all the same
-    // answer here - the caller descends - which is deliberate: a caller that
-    // could tell them apart would be tempted to treat one of them as
-    // authoritative.
-    sched::Coro TryReplay(const std::vector<Step>& steps, std::size_t index, const Step& step,
-                     const catalog::TableAccess& access, std::uint64_t key) {
-        replayed_ = false;
-        if (replay_ == nullptr) co_return Status::OK();
-
-        // Rule 0 is **this lookup** (spec section 2 rule 0, the driving step
-        // included). The index is keyed on (step_id, tuple key) and `key` was just
-        // derived for this step, so an entry is only found by matching it.
-        // There is no separate check to forget.
-        const TrailLocation* at = replay_->Find(step.step_id, key);
-        if (at == nullptr) co_return Status::OK();
-
-        StepStats& step_stats = stats_.For(step.step_id);
-
-        NoteFetch();
-        ++step_stats.pages_fetched;
-        // Spec section 2 rules 1-2, through the one verifier both this and
-        // Cabin's location hints go through (exec/tuple_verify.hpp).
-        // Verified against the derived `key`, not an entry tuple key - the
-        // location carries none - which is rule 0's second hold.
-        VerifiedTuple verified =
-            VerifyTupleAt(store_, at->page_id, at->slot, key, at->page_epoch, access.oid);
-        if (!verified.ok()) {
-            ++step_stats.trail_misses;
-            co_return Status::OK();
-        }
-
-        // Validated. From here it is the authoritative path's own code on
-        // the authoritative path's own bytes - decode, residual,
-        // sub-chains, descend - so rule 3's "apply visibility exactly as
-        // the authoritative path would" is not implemented here so much as
-        // inherited.
-        ++step_stats.trail_replays;
-        replayed_ = true;
-        co_return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page, at->slot);
     }
 
     // ---- Cabin (docs/spec/cabin.md §4) -----------------------------------
@@ -2674,10 +2662,6 @@ private:
     // Shared with every sub-chain for the reason the collector is: step ids
     // are global across the statement.
     const TrailReplay* replay_ = nullptr;
-
-    // Whether TryReplay() served the row, so the caller knows not to
-    // descend. Scratch, valid only across that call and its return.
-    bool replayed_ = false;
 
     // ---- The one-entry probe memo (V19) ---------------------------------
     //
