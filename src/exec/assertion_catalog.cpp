@@ -218,7 +218,7 @@ namespace {
 // ---- `CREATE ASSERTION` in its three steps -----------------------------
 //
 // Validate, build, publish (`assertion.md` §8.1), split at the index build's
-// seams (`exec::PrepareIndexDef` / `exec::BuildIndexTree`, PW1c-6b-1);
+// seams (`exec::PrepareIndexDef` / the tree build, PW1c-6b-1);
 // `CreateAssertion` runs the two halves back to back. The owner-core build
 // that split them retired (AT-S5d); its history is at cf889b63.
 

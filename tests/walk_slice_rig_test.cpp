@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/base/current_core.hpp"
 #include "kds/catalog/catalog_cache.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
@@ -237,6 +238,10 @@ TEST_F(WalkSliceRigTest, ACoreTornDownWithAWalkBetweenSlicesReleasesItFirst) {
     Script walk{&long_, {"SELECT id FROM t"}};
     rig_->core(1).scheduler().Submit(
         sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunScript(peer, walk)));
+    // `RunOnce` declares its core on the calling thread and leaves it
+    // declared, as a reactor's own thread wants; this one is the test's, and
+    // a later cell in the same process must not run as core 1.
+    const CurrentCoreGuard as_test_thread(CurrentCore());
     for (int i = 0; i < 4; ++i) (void)rig_->core(1).scheduler().RunOnce();
     ASSERT_EQ(walk.done.load(), 0u) << "the walk finished before the teardown";
     rig_.reset();

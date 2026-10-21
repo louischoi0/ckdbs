@@ -117,7 +117,7 @@ inline constexpr std::uint32_t kMaxUndoChainLength = 1u << 16;
 // move its frames when it hands one out. That copy is also what keeps the
 // nested-access rule (docs/spec/parser-v2.md I15 R1) satisfiable on the read
 // path - see visibility.hpp, which reads one step at a time, and
-// `exec::Backfill`, the walk's one production caller.
+// `exec::IndexBuild`'s backfill, the walk's one production caller.
 struct UndoVersion {
     UndoRecordType type = UndoRecordType::kInvalid;
     std::uint64_t prior_trx_id = 0;

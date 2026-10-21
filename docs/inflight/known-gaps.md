@@ -831,9 +831,10 @@ pages and the cases it does not reach.
 Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 `docs/spec/protocol.md` §10.
 
-- **Only a `SELECT`'s outermost walk yields.** It yields every
-  `exec::SlicePolicy::pages_per_slice` (64) pages. Nothing else running
-  gives its core back:
+- **Only a `SELECT`'s outermost walk and an index build yield.** The walk
+  yields every `exec::SlicePolicy::pages_per_slice` (64) pages, a `CREATE
+  INDEX` or `REINDEX INDEX` backfill every 64 relation leaves. Nothing
+  else running gives its core back:
   - a write;
   - a tuple key descent, run inline by design;
   - an index walk (`RunIndexStep`);
@@ -841,21 +842,21 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 
   Each holds its core until it ends or `exec::Budget` stops it. 64 is
   BA-Q11's value, not re-measured in BA-S15.
-- **A relation-`X` build holds its core for its whole length** (verified
-  at `bf831a94`). `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION` and
-  `CREATE TRANSITION` walk the relation synchronously (`exec::Backfill`,
-  `BuildBoundCabin`, `CheckExistingRows`), with no yield and no
-  `exec::Budget`, so every other session on the
-  build's core waits for it to end. Its waiters on other cores are no
-  longer refused at the fault net while it advances (`txn.md` §5,
-  `holder_progress.hpp`); the same-core stall is the second stage of that
-  fix, not yet built. Not covered: `CREATE ASSERTION`'s and `CREATE
+- **An assertion or transition build holds its core for its whole
+  length** (verified at `37a60b10`). `CREATE ASSERTION` and `CREATE
+  TRANSITION` walk the relation synchronously (`BuildBoundCabin`,
+  `CheckExistingRows`), with no yield and no `exec::Budget`, so every other
+  session on the build's core waits for it to end, and a cancel waits for
+  the next frame. `CREATE INDEX` and `REINDEX INDEX` yield since A1 stage 2
+  (`IndexBuildSliceRigTest`). Its waiters on other cores are not refused at
+  the fault net while it advances (`txn.md` §5, `holder_progress.hpp`).
+  Not covered: `CREATE ASSERTION`'s and `CREATE
   TRANSITION`'s waiters have no rig cell of their own - they share
   `DdlBuildLock`'s registration, and
   `DdlFenceRigTest.AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOnCoreZero`
   drives `CREATE INDEX` only.
-- **A cancel is observed only where a walk yields, or at the next
-  frame.** A write that `C_CANCEL` or a closing connection asks to stop
+- **A cancel is observed only where a walk or an index build yields, or
+  at the next frame.** A write that `C_CANCEL` or a closing connection asks to stop
   runs to its end, and the cancel then refuses the session's next frame.
   So a dropped connection can still find its write applied.
 - **A core holds at most 256 suspended walks.** Each holds one of its
