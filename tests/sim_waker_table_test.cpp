@@ -80,9 +80,9 @@ TEST(SimWakerTableTest, AKickToABusyDestinationIsRecordedAndDeliversNothing) {
     auto backend = EpollIoBackend::Create();
     ASSERT_TRUE(backend.ok()) << backend.status().message();
     SystemClock clock;
-    Scheduler scheduler(clock, backend.value());
     WakerTable real(/*core_count=*/1);
     SimWakerTable sim(real);
+    Scheduler scheduler(clock, backend.value());
     ASSERT_TRUE(scheduler.AttachWakerTable(&sim, /*core_id=*/0).ok());
 
     sim.Kick(0);
