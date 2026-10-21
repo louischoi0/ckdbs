@@ -56,3 +56,21 @@ what the word settles and what it does not.
 | **Mark** | **(b). CH written** (`workorder-ch-tuple-key-update.md`) on `worktree-ch-tuple-key-update` from `9fdf3351` (`v3.4.0`), **exploratory**: CH-S0 checks three classes of target key - C1 never bound (K2 amended only), C2 delete-marked (a new K1 exception), C3 a permutation of live keys - and ends each in build, narrow or drop (CH-R1..R4). CG is unchanged. **Pushed on W1**, documents only, with the pre-push hook skipped |
 | **Does not settle** | CH's opening; CH-Q0..Q7, each with CLA's proposal beside it and none marked; any wording of K1, K2 or invariant 11; a tag, a version |
 | **Recorded at** | this file; the order's header; this file's and the order's rows in `instructions/v3.2.0/index.md` |
+
+## 7. Version 3.4.0 tagged
+
+| | |
+|---|---|
+| **Word** | W4 (CF's session): *"and tag 3.4.0"* - directly after CF's W3 (§4) |
+| **Mark** | **`v3.4.0`**, an annotated tag on `main` at `9fdf3351`, then the head of `origin/main`. Its message states what has been built since `v3.3.0` (CD, BO, CE, A1 stage 2a, BS S1-S8, the defect fixes), what was measured, and the gaps that bound it. The tagged build inputs are identical to `5f1d1307`, where the full Debug suite ran 4238/4238, so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.0` (`5404a95b`, pushed with `--no-verify`) |
+| **Does not settle** | a later version; CF-O-Q1..Q14 |
+| **Recorded at** | this file; the tag message; CLAUDE.md's Version Management |
+
+## 8. CF-O-Q1..Q14 adopted on the go-ahead; pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W5 (CF's session): *"push no verify and go ahead"* - after CLA's report of CF-S1a, Branch O's amendment (the order's §8), which put CF-O-Q1..Q14 with CLA's proposal beside each, every one (a) |
+| **Mark** | **CF-O-Q1..Q14 adopted as CLA proposed, each (a), on this go-ahead**: not marked by the operator item by item, and recorded as adopted. CF-O-Q3's word (`WAYSTONE`) is taken as CLA proposed it. **The amendment was pushed to `main` with `--no-verify`** (documents only, no suite run on it). **CF-S1b started** on the same word |
+| **Does not settle** | CF-Q6; a push of code; a tag, a version |
+| **Recorded at** | this file; the order's §7 and §8.4; the order's row in `instructions/v3.2.0/index.md` |
