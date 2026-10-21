@@ -21,7 +21,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BS_REPORTS="${BS_REPORTS:-$ROOT/build-bs-reports}"
 # The sanitizer configurations first: `io-sweep` runs noassert's ckdbs-sim and
 # `bs-cells` asan's kds_bs_tests, both built by the steps before them.
-STEPS="${BS_STEPS:-asan tsan noassert io-sweep bs-cells coverage fuzz}"
+STEPS="${BS_STEPS:-asan tsan noassert io-sweep bs-cells coverage fuzz difftest}"
 # Fresh sim seeds a configuration runs beside the committed ones: the
 # release build many, the sanitizer builds - 4 to 5 times slower - a few.
 SIM_FRESH="${BS_SIM_FRESH:-16}"
@@ -134,7 +134,7 @@ step_run() {
     else
         verdicts+=("| $name | FAIL | ${tail_line} (${dt} min), \`$log\` |")
         summary+=("$name=FAIL")
-        { echo "### $name"; echo; grep -E '^FAIL|\(Failed\)|\(Timeout\)' "$log" | sed 's/^/- /'; echo; } \
+        { echo "### $name"; echo; grep -E '^FAIL|^MISMATCH|^BOTH|\(Failed\)|\(Timeout\)' "$log" | sed 's/^/- /'; echo; } \
             >> "$WORK/details.md"
     fi
 }
@@ -168,6 +168,20 @@ for s in $STEPS; do
         coverage)
             # BS-S2: below the recorded floor fails the night (BS-Q4 (b)).
             step_run coverage "$ROOT/scripts/bs/coverage.sh"
+            ;;
+        difftest)
+            # BS-S6: against the PostgreSQL 18 twin (BS-Q3 (a)), committed
+            # seeds and the night's own.
+            # Tonight's noassert build is the server; one that failed leaves
+            # an older night's behind.
+            if [ -x "$ROOT/build-bs-noassert/kds_server" ] &&
+                ! printf '%s\n' "${summary[@]}" | grep -q '^noassert=BUILD-FAIL$'; then
+                step_run difftest python3 -I "$ROOT/scripts/bs/difftest.py" \
+                    "$ROOT/build-bs-noassert/kds_server" --seeds "1,2,3,4,$(date -u +%Y%m%d)"
+            else
+                verdicts+=("| difftest | SKIP | no kds_server of tonight's build |")
+                summary+=("difftest=SKIP")
+            fi
             ;;
         fuzz)
             # BS-S5: each target for its budget, from its committed corpus.

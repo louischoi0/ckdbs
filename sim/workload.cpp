@@ -1,5 +1,7 @@
 #include "sim/workload.hpp"
 
+#include <algorithm>
+
 #include "kds/storage/keystone.hpp"
 
 namespace kds::sim {
@@ -38,6 +40,12 @@ const char* OpKindName(Op::Kind kind) {
         case Op::Kind::kDropTable: return "drop-table";
         case Op::Kind::kPurge: return "purge";
         case Op::Kind::kAlterColumn: return "alter-column";
+        case Op::Kind::kSelectJoin: return "select-join";
+        case Op::Kind::kSelectAggregate: return "select-aggregate";
+        case Op::Kind::kSelectOrdered: return "select-ordered";
+        case Op::Kind::kSelectSubquery: return "select-subquery";
+        case Op::Kind::kCreateIndex: return "create-index";
+        case Op::Kind::kCreateAssertion: return "create-assertion";
     }
     return "unknown";
 }
@@ -48,18 +56,27 @@ std::optional<Op::Kind> ParseOpKind(std::string_view name) {
           Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kUpdate,
           Op::Kind::kDelete, Op::Kind::kBegin, Op::Kind::kCommit, Op::Kind::kRollback,
           Op::Kind::kCreateCabin, Op::Kind::kInsertNamed, Op::Kind::kDropTable,
-          Op::Kind::kPurge, Op::Kind::kAlterColumn}) {
+          Op::Kind::kPurge, Op::Kind::kAlterColumn, Op::Kind::kSelectJoin,
+          Op::Kind::kSelectAggregate, Op::Kind::kSelectOrdered, Op::Kind::kSelectSubquery,
+          Op::Kind::kCreateIndex, Op::Kind::kCreateAssertion}) {
         if (name == OpKindName(kind)) return kind;
     }
     return std::nullopt;
 }
 
-Workload::Workload(Rng rng, Profile profile)
+Workload::Workload(Rng rng, Profile profile, bool shapes)
     : rng_(std::move(rng)),
       profile_(profile),
       drop_rng_(rng_.Fork("drop")),
       purge_rng_(rng_.Fork("purge")),
-      column_rng_(rng_.Fork("column")) {
+      column_rng_(rng_.Fork("column")),
+      shapes_(shapes),
+      query_rng_(rng_.Fork("query")),
+      constraint_rng_(rng_.Fork("constraint")) {
+    for (const char* name : {kFkParent, kFkChild, kAsserted}) {
+        constrained_.emplace_back();
+        constrained_.back().name = name;
+    }
     // 1-3 tables, decided up front so the table set is stable however many
     // ops are drawn. All btree: a heap's tuple key is hidden (BZ-R1), and the
     // oracle reconciles by tuple key; the heap's surface is
@@ -368,6 +385,7 @@ Op Workload::Next() {
         op.sql = "CREATE TABLE " + table.name + " (id int64, v int64, name varchar) SPARE 1";
         return op;
     }
+    if (shapes_ && constrained_ddl_ < 4 && !in_txn_) return ConstrainedDdl();
 
     if (in_txn_) {
         if (txn_ops_left_ == 0) {
@@ -402,12 +420,16 @@ Op Workload::Next() {
         }
         --txn_ops_left_;
         if (drops_left_ != 0 && LiveIndices().size() >= 2 && drop_rng_.Chance(3)) return Drop();
+        if (shapes_ && query_rng_.Chance(8)) return Query(/*ddl=*/false);
         return DataOp();
     }
 
     if (drops_left_ != 0 && LiveIndices().size() >= 2 && drop_rng_.Chance(2)) return Drop();
 
     if (column_rng_.Chance(4)) return AlterColumn();
+
+    if (shapes_ && query_rng_.Chance(8)) return Query(/*ddl=*/true);
+    if (shapes_ && constraint_rng_.Chance(12)) return ConstrainedOp();
 
     // 85 data ops, 4 syncs, 3 Cabin declarations and 8 transaction starts
     // per hundred rolls. Three of the data ops were `CREATE PATTERN` until
@@ -443,6 +465,159 @@ Op Workload::Next() {
     Op op;
     op.kind = Op::Kind::kBegin;
     op.sql = rng_.Chance(50) ? "BEGIN" : "BEGIN ISOLATION LEVEL REPEATABLE READ";
+    return op;
+}
+
+Op Workload::Query(bool ddl) {
+    const std::vector<std::size_t> live = LiveIndices();
+    const Table& a = tables_[live[query_rng_.Below(live.size())]];
+    const Table& b = tables_[live[query_rng_.Below(live.size())]];
+    Op op;
+    op.table = a.name;
+    const std::uint64_t roll = query_rng_.Below(ddl ? 5 : 4);
+    if (roll == 4 && indexed_.insert(a.name).second) {
+        op.kind = Op::Kind::kCreateIndex;
+        op.sql = "CREATE INDEX " + a.name + "_v ON " + a.name + " (v)";
+        return op;
+    }
+    switch (roll) {
+        case 0:
+            // A window of ids keeps the join's answer small whatever the
+            // profile: a colliding `v` pairs every row with a fifth of the other.
+            op.kind = Op::Kind::kSelectJoin;
+            op.name = b.name;
+            op.lo = 1 + query_rng_.Below(std::max<std::uint64_t>(a.inserted, 1));
+            op.hi = op.lo + 20;
+            op.sql = "SELECT x.id, y.id FROM " + a.name + " AS x JOIN " + b.name +
+                     " AS y ON x.v = y.v WHERE x.id BETWEEN " + std::to_string(op.lo) + " AND " +
+                     std::to_string(op.hi);
+            return op;
+        case 2:
+            op.kind = Op::Kind::kSelectOrdered;
+            op.key = 1 + query_rng_.Below(10);
+            op.sql = "SELECT id, v FROM " + a.name + " ORDER BY v DESC, id LIMIT " +
+                     std::to_string(op.key);
+            return op;
+        case 3:
+            op.kind = Op::Kind::kSelectSubquery;
+            op.name = b.name;
+            op.sql = "SELECT id FROM " + a.name + " WHERE v IN (SELECT v FROM " + b.name + ")";
+            return op;
+        default:
+            op.kind = Op::Kind::kSelectAggregate;
+            op.sql = "SELECT v, COUNT(*), MIN(id), MAX(id) FROM " + a.name + " GROUP BY v";
+            return op;
+    }
+}
+
+Op Workload::ConstrainedDdl() {
+    Op op;
+    switch (constrained_ddl_++) {
+        case 0:
+            op.kind = Op::Kind::kCreateTable;
+            op.table = kFkParent;
+            op.sql = std::string("CREATE TABLE ") + kFkParent +
+                     " (id int64, v int64, name varchar) SPARE 1";
+            return op;
+        case 2:
+            op.kind = Op::Kind::kCreateTable;
+            op.table = kAsserted;
+            op.sql = std::string("CREATE TABLE ") + kAsserted +
+                     " (id int64, v int64, name varchar) SPARE 1";
+            return op;
+        case 1:
+            op.kind = Op::Kind::kCreateTable;
+            op.table = kFkChild;
+            op.sql = std::string("CREATE TABLE ") + kFkChild + " (id int64, v int64 REFERENCES " +
+                     kFkParent + ", name varchar) SPARE 1";
+            return op;
+        default:
+            op.kind = Op::Kind::kCreateAssertion;
+            op.table = kAsserted;
+            op.sql = std::string("CREATE ASSERTION ") + kAsserted + "_cap ON " + kAsserted +
+                     " GROUP BY (v) CHECK COUNT(*) <= " + std::to_string(kAssertBound);
+            return op;
+    }
+}
+
+Op Workload::ConstrainedOp() {
+    Rng& r = constraint_rng_;
+    Table& parent = constrained_[0];
+    Table& child = constrained_[1];
+    Table& asserted = constrained_[2];
+    const auto guess = [&](const Table& t) { return 1 + r.Below(t.inserted + 2); };
+    // Two draws in two statements: as constructor arguments their order is
+    // unspecified, and gcc and clang would draw different names (rng.hpp's
+    // cross-platform byte-identity).
+    const auto name = [&] {
+        const std::size_t len = 1 + r.Below(6);
+        return std::string(len, static_cast<char>('a' + r.Below(26)));
+    };
+    const auto insert = [&](Table& t, std::int64_t v) {
+        Op op;
+        op.kind = Op::Kind::kInsert;
+        op.table = t.name;
+        op.v = v;
+        op.name = name();
+        op.sql = "INSERT INTO " + t.name + " (v, name) VALUES (" + std::to_string(op.v) + ", '" +
+                 op.name + "')";
+        ++t.inserted;
+        return op;
+    };
+    const auto remove = [&](const Table& t) {
+        Op op;
+        op.kind = Op::Kind::kDelete;
+        op.table = t.name;
+        op.by_tuple_key = true;
+        op.key = guess(t);
+        op.sql = "DELETE FROM " + t.name + " WHERE id = " + std::to_string(op.key);
+        return op;
+    };
+    const std::uint64_t roll = r.Below(100);
+    if (roll < 15) return insert(parent, r.Range(0, 999));
+    // Mostly a parent that exists, sometimes one that does not.
+    if (roll < 40) {
+        return insert(child, r.Chance(80) ? static_cast<std::int64_t>(guess(parent))
+                                          : r.Range(0, 999));
+    }
+    if (roll < 50) return remove(parent);
+    if (roll < 55) return remove(child);
+    if (roll < 75) return insert(asserted, r.Range(0, 4));
+    if (roll < 90) {
+        Op op;
+        op.kind = Op::Kind::kUpdate;
+        op.table = asserted.name;
+        op.v = r.Range(0, 4);
+        op.by_tuple_key = roll < 85;
+        op.sql = "UPDATE " + asserted.name + " SET v = " + std::to_string(op.v);
+        if (op.by_tuple_key) {
+            op.key = guess(asserted);
+            op.sql += " WHERE id = " + std::to_string(op.key);
+        } else {
+            op.pred_v = r.Range(0, 4);
+            op.sql += " WHERE v = " + std::to_string(op.pred_v);
+        }
+        return op;
+    }
+    if (roll < 94) return remove(asserted);
+    if (roll < 98 || child_cabin_) {
+        const Table& t = constrained_[r.Below(constrained_.size())];
+        Op op;
+        op.kind = Op::Kind::kSelectRange;
+        op.table = t.name;
+        op.lo = 1 + r.Below(t.inserted + 1);
+        op.hi = op.lo + 10;
+        op.sql = std::string("SELECT ") + kReadColumns + " FROM " + t.name + " WHERE id BETWEEN " +
+                 std::to_string(op.lo) + " AND " + std::to_string(op.hi);
+        return op;
+    }
+    // A Cabin over the foreign key's column: a parent's delete may then be
+    // answered from the child's set (AY-S6).
+    child_cabin_ = true;
+    Op op;
+    op.kind = Op::Kind::kCreateCabin;
+    op.table = child.name;
+    op.sql = "CREATE CABIN ON " + child.name + "(v)";
     return op;
 }
 

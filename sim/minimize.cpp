@@ -205,6 +205,7 @@ Status WriteCase(const std::string& path, const SimConfig& config, const SimPlan
         // BS-S4's cut: a case shrunk under one replays under it, and a file
         // written before it had none. The cut is drawn from the iteration's
         // fork of the seed, so the iteration travels with it.
+        << (config.shapes ? "\tshapes=1" : "")
         << (config.power_cut != PowerCut::kNone
                 ? std::string("\tpower-cut=") + PowerCutName(config.power_cut)
                 : std::string())
@@ -282,6 +283,8 @@ StatusOr<LoadedCase> ReadCase(const std::string& path) {
                         return Status::InvalidArgument("case file: iteration is not a number");
                     }
                     loaded.iteration = static_cast<std::size_t>(iteration);
+                } else if (Field(f[i], "shapes=", v)) {
+                    loaded.config.shapes = v == "1";
                 } else if (Field(f[i], "power-cut=", v)) {
                     const auto cut = ParsePowerCut(v);
                     if (!cut.has_value()) {

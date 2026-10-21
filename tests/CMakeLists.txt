@@ -295,6 +295,7 @@ gtest_discover_tests(kds_tests)
 add_executable(kds_bs_tests
     alloc_counter.cpp
     bs/alloc_sweep_test.cpp
+    bs/history_test.cpp
 )
 target_include_directories(kds_bs_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kds_bs_tests PRIVATE kds kds_sim GTest::gtest GTest::gtest_main

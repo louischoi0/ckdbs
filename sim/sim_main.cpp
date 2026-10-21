@@ -31,7 +31,7 @@ int Usage(const char* argv0) {
                  "          [--mode clean|sync-crash|crash]\n"
                  "          [--profile uniform|zipfian|colliding]\n"
                  "          [--faults none|io|grow] [--fault-rate N] [--fail-nth KIND:N[@mount]]\n"
-                 "          [--power-cut none|log]\n"
+                 "          [--power-cut none|log] [--shapes on|off]\n"
                  "          [--toggles off|on|cabins|waystone] [--pair]\n"
                  "          [--minimize [--out FILE] [--max-replays N]] | [--replay FILE]\n"
                  "          [--skip-recovery] [--checkpoint-every N] [--backup]\n",
@@ -46,6 +46,8 @@ int main(int argc, char** argv) {
     // The log cut inside its unsynced run in every run (BS-S4's log half,
     // BS-A8); the hook's cells keep SimConfig's `kNone`.
     config.power_cut = kds::sim::PowerCut::kLog;
+    // And BS-S6's query shapes and constrained relations (BS-A13).
+    config.shapes = true;
     bool have_seed = false;
     bool pair = false;
     bool minimize = false;
@@ -78,6 +80,10 @@ int main(int argc, char** argv) {
             const auto profile = kds::sim::ParseProfile(value);
             if (!profile.has_value()) return Usage(argv[0]);
             config.profile = *profile;
+            ++i;
+        } else if (arg == "--shapes" && value) {
+            config.shapes = std::string_view(value) == "on";  // BS-S6
+            if (!config.shapes && std::string_view(value) != "off") return Usage(argv[0]);
             ++i;
         } else if (arg == "--power-cut" && value) {
             const auto cut = kds::sim::ParsePowerCut(value);  // BS-S4

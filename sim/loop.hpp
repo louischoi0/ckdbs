@@ -167,6 +167,12 @@ struct SimConfig {
     // unsynced page - but the `power-loss-at-page-write` Nth fault (BS-A9).
     PowerCut power_cut = PowerCut::kNone;
 
+    // **BS-S6's shapes** in the workload - joins, groups, orders, subqueries,
+    // indexes, the foreign key and assertion relations (`Workload`'s
+    // `shapes`). Off for the hook's cells, which keep the stream they were
+    // written against (§6.1); `ckdbs-sim` turns it on (BS-A13).
+    bool shapes = false;
+
     // **A checkpoint every this many ops** (BC-S4), the server's cadence
     // tick, so the log is recycled mid-run and the crash is recovered from a
     // log whose head is gone. By op index, never drawn from the seed: a
@@ -255,6 +261,13 @@ struct SimVerdict {
     // Mounts an Nth fault failed (BS-A7), each followed by a fault-free mount
     // that recovered.
     std::size_t mounts_refused = 0;
+    // BS-S6's shapes: reads answered from whole relations, and indexes made.
+    std::size_t derived_reads = 0;
+    std::size_t indexes_created = 0;
+    // The constrained relations' writes (BS-A12): refused as the oracle said,
+    // and admitted as it said.
+    std::size_t constraint_refusals = 0;
+    std::size_t constraint_admissions = 0;
     // Power cuts (BS-S4): crashes that cut the log inside its unsynced run;
     // power losses at a page write, the unsynced pages they met and kept,
     // the ones that tore a page, and torn pages the restart refused - at the
