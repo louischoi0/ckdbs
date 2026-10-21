@@ -75,6 +75,9 @@ private:
     StatusOr<UpdateStmt> ParseUpdate();
     StatusOr<DeleteStmt> ParseDelete();
     StatusOr<PurgeStmt> ParsePurge();
+    // `native`, or `NotImplemented` around it when it refused the WHERE of
+    // an UPDATE or DELETE the query grammar reads (parser-v2.md I10).
+    Status DeclineDmlWhereExpression(Status native) const;
 
     // `{CREATE | DROP} CABIN ON <table>(<column>)`, with the leading two
     // words already consumed. One production for both, since they differ
@@ -324,6 +327,8 @@ private:
     // Set by `ParseQuery`: the expression levels read the query grammar's
     // forms (qualified columns, aggregates, `IN`, `LIKE`, subqueries).
     bool query_mode_ = false;
+    // The byte of an UPDATE's or DELETE's `WHERE`, once its parse reaches it.
+    std::optional<std::uint32_t> dml_where_byte_;
     // The query blocks open around the one being parsed, bounded by
     // `kMaxSubqueryDepth`.
     std::uint32_t query_depth_ = 0;
