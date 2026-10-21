@@ -32,7 +32,9 @@
 #include <charconv>
 #include <ctime>
 #include <iomanip>
+#include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -73,6 +75,8 @@ namespace kds::server {
 // `SelectRun`'s, defined beside it below: `DispatchAndStage` stamps the head's
 // start on a walk it hands on, so the walk's log line times the statement.
 void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept;
+// `IndexBuildRun`'s, on the same terms.
+void SetIndexBuildRunStart(IndexBuildRun& run, sched::MonoTimeNs started_ns) noexcept;
 
 namespace {
 
@@ -567,6 +571,11 @@ sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Sessio
     // anything after a dispatch reads the outcome: every dispatch
     // `DispatchAsync` makes is followed by this function.
     if (out->select_run != nullptr) co_await CompleteSelect(line, out);
+    // ---- A1 stage 2: an index build's backfill, sliced, then its tail ---
+    //
+    // Here for the walk's reason: a head that handed a build on carries no
+    // wait, and nothing after a dispatch reads the outcome before this.
+    if (out->build_run != nullptr) co_await CompleteIndexBuild(line, out);
     co_return Status::OK();
 }
 
@@ -946,6 +955,30 @@ CommandDispatcher::StatementEpochScope::~StatementEpochScope() {
 }
 
 DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Session* session) {
+    // Read only when something might report it; a dispatcher with no
+    // logger does no clock reads at all.
+    const sched::MonoTimeNs started_ns = log_ == nullptr ? 0 : NowNs();
+
+    DispatchOutcome outcome =
+        StageStatement(session, [&](Session& active) { return DispatchInner(line, active); });
+
+    // A `SELECT` whose walk has not run yet is logged when it ends
+    // (`CompleteSelect`), with this head's start; an index build whose
+    // backfill has not, likewise (`CompleteIndexBuild`).
+    if (outcome.select_run != nullptr) {
+        SetSelectRunStart(*outcome.select_run, started_ns);
+        return outcome;
+    }
+    if (outcome.build_run != nullptr) {
+        SetIndexBuildRunStart(*outcome.build_run, started_ns);
+        return outcome;
+    }
+    LogStatement(line, outcome, started_ns);
+    return outcome;
+}
+
+template <typename Body>
+DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body) {
     // BA-S14's two per-statement facts, cleared before the statement runs.
     structural_poison_withheld_ = false;
     storage::ClearStructuralRefusal();
@@ -964,10 +997,6 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // statement is one core's work, so this is the seam.
     const CurrentCoreGuard as_this_core(core_id_);
 
-    // Read only when something might report it; a dispatcher with no
-    // logger does no clock reads at all.
-    const sched::MonoTimeNs started_ns = log_ == nullptr ? 0 : NowNs();
-
     // A caller with no session of its own gets this dispatcher's, which is
     // permanently in autocommit unless that caller opens a transaction on
     // it. That is what makes `Dispatch(line)` mean exactly what it meant
@@ -983,7 +1012,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     statement_trail_mark_ = 0;
     statement_fetch_id_ = 0;
 
-    DispatchOutcome outcome = DispatchInner(line, active);
+    DispatchOutcome outcome = body(active);
     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
     // Read back out of the member the write paths set: threading it through
     // InsertInner/UpdateInner/EndWrite and every handler between would be a
@@ -1040,14 +1069,6 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     blocked_tuple_key_ = 0;
     outcome.poison_withheld = structural_poison_withheld_;
     outcome.statement = parking_statement_;
-
-    // A `SELECT` whose walk has not run yet is logged when it ends
-    // (`CompleteSelect`), with this head's start.
-    if (outcome.select_run != nullptr) {
-        SetSelectRunStart(*outcome.select_run, started_ns);
-        return outcome;
-    }
-    LogStatement(line, outcome, started_ns);
     return outcome;
 }
 
@@ -1240,10 +1261,11 @@ Role RequiredRole(std::string_view cmd, std::string_view rest) {
 
 }  // namespace
 
-DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session& session) {
+void CommandDispatcher::StampStatement(Session& session) {
     // A new statement: the next reader to need a view takes the boundary
-    // (see `EnsureStatementBoundary`). One statement runs at a time on a
-    // core (sched.md §3), so a plain member is the right scope.
+    // (see `EnsureStatementBoundary`). A plain member, cleared by every
+    // statement before it runs: another statement of this core runs inside
+    // a suspended one (sched.md §3), which stamps again when it resumes.
     statement_boundary_taken_ = false;
 
     // And the class this statement's commit will be acked under - §9's
@@ -1253,6 +1275,10 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // force when it arrived and takes effect from the next statement, the
     // same "applies to the next one" rule `SET ISOLATION LEVEL` states.
     effective_durability_ = session.EffectiveDurability(durability_);
+}
+
+DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session& session) {
+    StampStatement(session);
 
     auto [cmd, rest] = SplitFirstToken(line);
 
@@ -2246,6 +2272,228 @@ std::string CreatedIndexReply(std::string_view name, std::string_view table,
 
 }  // namespace
 
+// ---- What a statement suspended past its head holds of its core's catalog --
+//
+// **This core's statement epoch at the word the head revalidated against,
+// and a pin on the catalog memo** (BA-S15, A1 stage 2), so neither a later
+// head's revalidation nor a drop's reclaim frees what a suspended statement
+// points into. Taken by the head as it hands the statement on, while it
+// still publishes that word; given back when the run is destroyed.
+class SuspensionHold {
+public:
+    explicit SuspensionHold(CommandDispatcher& d) : d_(d), pin_(d.catalog_) {
+        if (d_.epochs_ != nullptr) {
+            word_ = d_.catalog_.cache_built_at();
+            d_.epochs_->Hold(d_.core_id_, word_);
+            held_ = true;
+        }
+    }
+    ~SuspensionHold() {
+        if (held_) d_.epochs_->Release(d_.core_id_, word_);
+    }
+    SuspensionHold(const SuspensionHold&) = delete;
+    SuspensionHold& operator=(const SuspensionHold&) = delete;
+
+private:
+    CommandDispatcher& d_;
+    catalog::Catalog::MemoPin pin_;
+    std::uint64_t word_ = 0;
+    bool held_ = false;
+};
+
+// ---- A1 stage 2: an index build whose backfill outlives its head -----------
+//
+// **Everything a `CREATE INDEX` or `REINDEX INDEX` build holds from its head
+// to its decide, owned in one place**, so the backfill can run after
+// `HandleIndex` returns and yield its core between slices (`sched.md` §3),
+// as `SelectRun` lets a `SELECT`'s walk. The head fills it under the
+// relation `X`; where the statement cannot park it runs here whole, and
+// where it can (`DispatchAsync`) it is handed on in
+// `DispatchOutcome::build_run`.
+//
+// What it holds across a suspension, and why each is safe to hold: the
+// statement's write scope, whose transaction holds the relation `X` - no
+// writer and no positioned reader of the relation runs until the decide, so
+// the leaf the walk resumes at is as it was left; the build
+// (`exec::IndexBuild`: the unpublished tree's root and the next leaf, no
+// page); the progress registration a slice advances (`holder_progress.hpp`);
+// and this core's statement epoch and a pin on the catalog memo, for the
+// relation's `TableAccess` the build reads, as `SelectRun` holds them.
+// **Not the catalog's undo hook**: it is the dispatcher's, so
+// `InDdlStatement` uninstalls it before the first yield and the tail
+// installs it again.
+//
+// **A cancel is taken at each slice boundary** (`protocol.md` §10): the
+// build fails `CANCELLED` as a refused build fails - its tree freed, an
+// autocommit scope aborted, an explicit transaction failed.
+class IndexBuildRun : public std::enable_shared_from_this<IndexBuildRun> {
+public:
+    IndexBuildRun(CommandDispatcher& d, Session& session) : d_(d), session_(session) {
+        slice_.cancel = session.cancel_flag().get();
+    }
+    ~IndexBuildRun();
+    IndexBuildRun(const IndexBuildRun&) = delete;
+    IndexBuildRun& operator=(const IndexBuildRun&) = delete;
+
+    // The head's last step, once the build exists. Where the statement
+    // cannot park the walk and the tail run here and `InDdlStatement`
+    // decides; otherwise the run is handed on, taking its `SuspensionHold`.
+    // `relation` is the one the head took the `X` on.
+    DispatchOutcome Start(const CommandDispatcher::WriteScope& scope,
+                          CommandDispatcher::DdlScope ddl, catalog::Oid relation,
+                          std::unique_ptr<exec::IndexBuild> build);
+
+    // The walk, yielding every `slice.pages_per_slice` leaves, then the tail
+    // and the decide in a statement frame of their own; the reply is
+    // written over `*out`.
+    sched::Coro Execute(DispatchOutcome* out);
+
+    // The build's report to its waiters' fault net, registered by the head
+    // before its `X` ask, so no waiter parks on this holder before it.
+    // Declared first, so it is withdrawn last - after the decide has
+    // released the `X`: a waiter never finds the holder silent while it
+    // still holds.
+    std::optional<txn::HolderProgress::Scope> progress;
+    sched::MonoTimeNs started_ns = 0;
+
+private:
+    // The tree logged and its row written, or the build's refusal, as the
+    // statement's reply. Decides nothing.
+    DispatchOutcome Tail(const Status& ran);
+
+    CommandDispatcher& d_;
+    // The statement's session, which outlives it: a connection is torn
+    // down only once its statement has ended (`TcpServer::CloseClient`).
+    Session& session_;
+    exec::SlicePolicy slice_;
+    // Set only once handed on.
+    std::optional<SuspensionHold> hold_;
+    CommandDispatcher::WriteScope scope_;
+    CommandDispatcher::DdlScope ddl_;
+    catalog::Oid relation_ = 0;
+    // Destroyed before the hold above: it reads the relation's `TableAccess`.
+    std::unique_ptr<exec::IndexBuild> build_;
+    bool decided_ = false;
+};
+
+void SetIndexBuildRunStart(IndexBuildRun& run, sched::MonoTimeNs started_ns) noexcept {
+    run.started_ns = started_ns;
+}
+
+IndexBuildRun::~IndexBuildRun() {
+    // **Handed on and never decided**: the frame destroyed at a suspension,
+    // a core torn down with the statement queued (`CoreRuntime`'s
+    // `DiscardTasks`). The tree goes back with the build, and an autocommit
+    // scope is aborted as a refused build's is - directly, not through
+    // `EndWrite`, which reads the members of whatever statement ran last. An
+    // explicit transaction's scope is its session's, ended by its ROLLBACK or
+    // its close.
+    if (hold_.has_value() && !decided_) {
+        const CurrentCoreGuard as_this_core(d_.core_id_);
+        build_.reset();
+        if (scope_.owned && scope_.txn != nullptr) {
+            const std::uint64_t id = scope_.txn->id();
+            (void)d_.AbortOwnedScope(scope_, /*reported=*/Status::OK());
+            d_.EndDdlScopeById(id, wal::kNoLsn);
+        }
+    }
+}
+
+DispatchOutcome IndexBuildRun::Start(const CommandDispatcher::WriteScope& scope,
+                                     CommandDispatcher::DdlScope ddl, catalog::Oid relation,
+                                     std::unique_ptr<exec::IndexBuild> build) {
+    scope_ = scope;
+    ddl_ = std::move(ddl);
+    relation_ = relation;
+    build_ = std::move(build);
+    if (!d_.may_park_) return Tail(build_->Step(std::numeric_limits<std::uint32_t>::max()));
+    hold_.emplace(d_);
+    DispatchOutcome handed;
+    handed.build_run = shared_from_this();
+    return handed;
+}
+
+sched::Coro IndexBuildRun::Execute(DispatchOutcome* out) {
+    Status ran = Status::OK();
+    for (;;) {
+        {
+            // The slice writes pages as this dispatcher's core, as
+            // `DispatchAndStage` runs - and only the slice: across the yield
+            // another statement of this core runs, or on a fixture's thread
+            // another core's.
+            const CurrentCoreGuard as_this_core(d_.core_id_);
+            ran = build_->Step(slice_.pages_per_slice);
+        }
+        if (!ran.ok() || build_->walked()) break;
+        // ---- The slice boundary: no pin, no span (the suspend audit) ----
+        if (ran = slice_.TakeCancel(); !ran.ok()) break;
+        co_await sched::Yield{};
+        if (ran = slice_.TakeCancel(); !ran.ok()) break;
+    }
+    // **The tail is a statement of its own to the dispatcher**: the head's
+    // frame closed when it handed the build on, and other statements of this
+    // core have run since. It parks nowhere and is never re-run - a refusal
+    // here is answered - and a commit it stages is the group wait
+    // `DispatchAsync` takes next. `StageStatement` stamps it with this
+    // `DispatchAsync` call's number, which `MayParkScope` sets.
+    const std::uint64_t statement = out->statement;
+    {
+        const CommandDispatcher::MayParkScope parking(d_, /*allowed=*/false, statement);
+        *out = d_.StageStatement(&session_, [&](Session& active) {
+            d_.StampStatement(active);
+            // The head took the statement's boundary; a second would
+            // re-mint an explicit transaction's view mid-statement.
+            d_.statement_boundary_taken_ = true;
+            if (scope_.txn != nullptr) d_.InstallDdlUndoHook(scope_.txn);
+            DispatchOutcome reply = Tail(ran);
+            d_.FinishDdlStatement(active, scope_, reply);
+            decided_ = true;
+            return reply;
+        });
+    }
+    co_return Status::OK();
+}
+
+DispatchOutcome IndexBuildRun::Tail(const Status& ran) {
+    catalog::CatalogRowRef created_row;
+    auto result = build_->Finish(ran, ddl_.txn != nullptr ? &created_row : nullptr, d_.wal_);
+    const parser::IndexStmt& stmt = build_->stmt();
+    // Before the status is read: a create that failed after the catalog
+    // row went down still left it there.
+    d_.NoteRowWritten(ddl_, created_row);
+    if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
+    if (stmt.reindex) {
+        const catalog::Oid old_oid = result.value().replaced_oid;
+        d_.NoteOwedIndex(scope_, relation_, old_oid, /*created=*/false);
+        d_.NoteOwedIndex(scope_, relation_, result.value().index_oid, /*created=*/true);
+        if (d_.logging(LogLevel::kInfo)) {
+            d_.log_->Info("ddl", "rebuilt index '" + stmt.index_name + "'");
+        }
+        std::ostringstream os;
+        os << "REINDEXED INDEX name=" << stmt.index_name
+           << " index_oid=" << result.value().index_oid << " replaced=" << old_oid
+           << " root=" << result.value().root_page_id;
+        return {os.str(), false};
+    }
+    d_.NoteOwedIndex(scope_, relation_, result.value().index_oid, /*created=*/true);
+    if (d_.logging(LogLevel::kInfo)) {
+        d_.log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
+    }
+    return {CreatedIndexReply(stmt.index_name, stmt.table_name, result.value().index_oid,
+                              result.value().root_page_id, result.value().key_width,
+                              result.value().entry_width, result.value().warnings),
+            false};
+}
+
+sched::Coro CommandDispatcher::CompleteIndexBuild(std::string_view line, DispatchOutcome* out) {
+    // Owned by this frame for the build's life, as `CompleteSelect` owns
+    // its walk's run.
+    const std::shared_ptr<IndexBuildRun> run = std::move(out->build_run);
+    co_await run->Execute(out);
+    LogStatement(line, *out, run->started_ns);
+    co_return Status::OK();
+}
+
 DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                                Session& session) {
     // Parsed before the DDL scope exists: a statement that does not parse
@@ -2268,12 +2516,9 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         return {ErrorReply(s), false, 0, s};
     }
 
-    // The build's report to its waiters' fault net (`holder_progress.hpp`),
-    // registered before the ask below, so no waiter parks on this holder
-    // before it. Outside the scope, so it is withdrawn
-    // after an autocommit decide has released the `X`: a waiter never finds
-    // the holder silent while it still holds.
-    std::optional<txn::HolderProgress::Scope> progress;
+    // Outside the scope, so the progress it registers is withdrawn after
+    // the decide (`IndexBuildRun::progress`).
+    const auto run = std::make_shared<IndexBuildRun>(*this, session);
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         // ---- AT-S5e: the relation `X`, for both statements --------------
         //
@@ -2316,7 +2561,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         }
         if (relation.has_value()) {
             if (locks_ != nullptr && scope.txn != nullptr) {
-                progress.emplace(&locks_->progress(), scope.txn->id());
+                run->progress.emplace(&locks_->progress(), scope.txn->id());
             }
             if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, *relation);
                 held.has_value()) {
@@ -2324,7 +2569,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             }
         }
         txn::HolderProgress::Scope* const build_progress =
-            progress.has_value() ? &*progress : nullptr;
+            run->progress.has_value() ? &*run->progress : nullptr;
 
         // The name asked again under the `X`, at latest state with this
         // DDL's own id: another transaction's open create is still not found,
@@ -2345,27 +2590,14 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             // (`exec::DropIndex`'s contract).
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
-            catalog::CatalogRowRef created_row;
             const std::optional<txn::ReadView> name_view = latest_name_view(ddl);
-            auto result = exec::ReindexIndex(
+            auto build = exec::IndexBuild::ForReindex(
                 catalog_, page_store_, stmt, relation,
                 name_view.has_value() ? &*name_view : nullptr, ddl.trx_id,
-                ddl.txn != nullptr ? &change : nullptr,
-                ddl.txn != nullptr ? &created_row : nullptr, wal_, txn_, build_progress);
+                ddl.txn != nullptr ? &change : nullptr, txn_, build_progress);
             NoteIndexRowDropped(ddl, change);
-            NoteRowWritten(ddl, created_row);
-            if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
-            const catalog::Oid old_oid = result.value().replaced_oid;
-            NoteOwedIndex(scope, *relation, old_oid, /*created=*/false);
-            NoteOwedIndex(scope, *relation, result.value().index_oid, /*created=*/true);
-            if (logging(LogLevel::kInfo)) {
-                log_->Info("ddl", "rebuilt index '" + stmt.index_name + "'");
-            }
-            std::ostringstream os;
-            os << "REINDEXED INDEX name=" << stmt.index_name
-               << " index_oid=" << result.value().index_oid << " replaced=" << old_oid
-               << " root=" << result.value().root_page_id;
-            return {os.str(), false};
+            if (!build.ok()) return {ErrorReply(build.status()), false, 0, build.status()};
+            return run->Start(scope, std::move(ddl), *relation, std::move(build.value()));
         }
 
         if (stmt.drop) {
@@ -2410,31 +2642,18 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         // statement's.
         if (!relation.has_value()) return {ErrorReply(miss), false, 0, miss};
         DdlScope create_ddl = DdlScopeFor(scope);
-        catalog::CatalogRowRef created_row;
         // Resolved under the session's view (spec §5's rule: an index is a
         // schema object and CREATE INDEX is a resolution route). An index
         // must not be built against a relation the caller cannot see. The
         // view is taken after the scope opened, which counted this DDL, so
         // it is a minted one wherever a manager runs.
         const std::optional<txn::ReadView> build_view = ViewFor(session);
-        auto result = exec::CreateIndex(catalog_, page_store_, stmt, session.default_namespace(),
-                                        create_ddl.trx_id,
-                                        create_ddl.txn != nullptr ? &created_row : nullptr,
-                                        build_view.has_value() ? &*build_view : nullptr, wal_,
-                                        txn_, build_progress);
-        // Before the status is read: a create that failed after the catalog
-        // row went down still left it there.
-        NoteRowWritten(create_ddl, created_row);
-        if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
-        NoteOwedIndex(scope, *relation, result.value().index_oid, /*created=*/true);
-        if (logging(LogLevel::kInfo)) {
-            log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
-        }
-        return {CreatedIndexReply(stmt.index_name, stmt.table_name, result.value().index_oid,
-                                  result.value().root_page_id, result.value().key_width,
-                                  result.value().entry_width,
-                                  result.value().warnings),
-                false};
+        auto build = exec::IndexBuild::ForCreate(
+            catalog_, page_store_, stmt, session.default_namespace(),
+            build_view.has_value() ? &*build_view : nullptr, create_ddl.trx_id, txn_,
+            build_progress);
+        if (!build.ok()) return {ErrorReply(build.status()), false, 0, build.status()};
+        return run->Start(scope, std::move(create_ddl), *relation, std::move(build.value()));
     });
 }
 
@@ -5065,10 +5284,7 @@ public:
             d_.select_scratch_pool_.pop_back();
         }
     }
-    ~SelectRun() {
-        if (epoch_held_) d_.epochs_->Release(d_.core_id_, epoch_word_);
-        d_.select_scratch_pool_.push_back(std::move(scratch_));
-    }
+    ~SelectRun() { d_.select_scratch_pool_.push_back(std::move(scratch_)); }
     SelectRun(const SelectRun&) = delete;
     SelectRun& operator=(const SelectRun&) = delete;
 
@@ -5076,14 +5292,7 @@ public:
 
     // Taken by the head as it hands the walk on, while it still publishes
     // the word it revalidated against.
-    void HoldAcrossSuspension() {
-        if (d_.epochs_ != nullptr) {
-            epoch_word_ = d_.catalog_.cache_built_at();
-            d_.epochs_->Hold(d_.core_id_, epoch_word_);
-            epoch_held_ = true;
-        }
-        memo_pin_.emplace(d_.catalog_);
-    }
+    void HoldAcrossSuspension() { hold_.emplace(d_); }
 
     // The walk, yielding every `slice.pages_per_slice` pages, then the
     // sorted drain and the recording; the reply is written over `*out`.
@@ -5119,10 +5328,8 @@ private:
     Session& session_;
     // Released after the public members above, which point into the memo
     // and dereference nothing of it as they go.
-    std::optional<catalog::Catalog::MemoPin> memo_pin_;
+    std::optional<SuspensionHold> hold_;
     std::unique_ptr<CommandDispatcher::SelectScratch> scratch_;
-    std::uint64_t epoch_word_ = 0;
-    bool epoch_held_ = false;
     std::string row_scratch_;
     Status encode_error_ = Status::OK();
     exec::SlicePolicy slice_;
@@ -6407,7 +6614,11 @@ CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
     // it: a row on the page while no core counts it open is one another
     // core's unfiltered read binds (`ViewFor`).
     OpenDdl(scope.trx_id);
+    InstallDdlUndoHook(write.txn);
+    return scope;
+}
 
+void CommandDispatcher::InstallDdlUndoHook(txn::Transaction* txn) {
     // RV3-3: the undo record for each catalog write, appended **inside**
     // the catalog's write points so it precedes the row's own record in
     // the log - redo alone must never be able to resurrect a loser's row
@@ -6416,7 +6627,7 @@ CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
     // resolves, so the capture cannot outlive its transaction - and the
     // dispatcher is core-local, so no other session's statement can run
     // between install and uninstall.
-    catalog_.SetDdlUndoHook([this, t = write.txn](
+    catalog_.SetDdlUndoHook([this, t = txn](
                                 const catalog::Catalog::DdlUndoEvent& e) -> Status {
         txn::UndoRecordFields rec{};
         rec.target_page_id = e.page_id;
@@ -6441,7 +6652,6 @@ CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
         auto ptr = txn_->AppendUndo(*t, rec, e.tuple_key, image);
         return ptr.ok() ? Status::OK() : ptr.status();
     });
-    return scope;
 }
 
 // Every DDL route runs inside this and only this, which is what makes "no
@@ -6455,6 +6665,14 @@ DispatchOutcome CommandDispatcher::InDdlStatement(Session& session, Fn&& body) {
     if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
     WriteScope scope = opened.value();
     DispatchOutcome out = body(scope);
+    // **A build handed on is finished by its run** (A1 stage 2), which took
+    // the scope: its tail installs the hook again and runs this function.
+    // The hook goes now, before the first yield lets another statement of
+    // this core write the catalog under it.
+    if (out.build_run != nullptr) {
+        catalog_.SetDdlUndoHook(nullptr);
+        return out;
+    }
     FinishDdlStatement(session, scope, out);
     return out;
 }

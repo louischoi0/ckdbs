@@ -358,6 +358,15 @@ struct SlicePolicy {
     std::atomic<bool>* cancel = nullptr;
     std::function<void()> at_boundary;
     const std::function<bool()>* resume_when = nullptr;
+
+    // The session's cancel, taken at a slice boundary (`protocol.md` §10):
+    // `Cancelled` once, the flag cleared - one cancel, one statement.
+    Status TakeCancel() const {
+        if (cancel == nullptr || !cancel->exchange(false, std::memory_order_acq_rel)) {
+            return Status::OK();
+        }
+        return Status::Cancelled("cancelled by request");
+    }
 };
 
 // The statement's chain as a coroutine its caller awaits - `Execute`'s body,
