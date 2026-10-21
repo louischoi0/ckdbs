@@ -1,0 +1,1 @@
+CREATE TABLE u (id int64, k varchar CABIN AUTO, w int64 NO CABIN) BTREE SPARE 2

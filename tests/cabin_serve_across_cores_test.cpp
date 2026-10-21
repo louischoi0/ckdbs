@@ -77,6 +77,9 @@ TEST(CabinServeAcrossCores, AQueryServedFromThisCoresSetSeesARowAnotherCoreWrote
         << peer.out.response;
     ASSERT_EQ(peer.out.response.rfind("INSERTED", 0), 0u) << peer.out.response;
 
+    // Both reactors joined, so core 0's statements below run on this thread
+    // alone, as before `Start()` (the rig's threading rule).
+    rig->Stop();
     // Core 0 asks again. Two rows carry v=7; a set served from core 0's
     // store holds one.
     // **Both rows, and the set is what served them.** The separator in a
@@ -95,7 +98,6 @@ TEST(CabinServeAcrossCores, AQueryServedFromThisCoresSetSeesARowAnotherCoreWrote
     // above short rather than right.
     const std::string counted = d0.Dispatch("SELECT COUNT(*) FROM r0").response;
     EXPECT_NE(counted.find("2"), std::string::npos) << counted;
-    rig->Stop();
 }
 
 // **The other half of the same rule, and the stage's second
@@ -137,6 +139,9 @@ TEST(CabinServeAcrossCores, ASetBankedByAPeerServesThisCoresQuery) {
     ASSERT_EQ(rig->core(1).cabins()->stats().recordings, 1u)
         << "the peer banked nothing, so what core 0 serves below is its own set";
 
+    // Both reactors joined, so core 0's statements below run on this thread
+    // alone, as before `Start()` (the rig's threading rule).
+    rig->Stop();
     // And core 0 is served from it - a set it never walked for.
     const std::string served = d0.Dispatch("SELECT id FROM r0 WHERE v = 7").response;
     EXPECT_EQ(served, "id\\n1") << served;
@@ -144,7 +149,6 @@ TEST(CabinServeAcrossCores, ASetBankedByAPeerServesThisCoresQuery) {
         << "core 0 walked instead of serving from the peer's set";
     EXPECT_EQ(rig->core(0).cabins()->stats().recordings, 1u)
         << "core 0 banked a second set, so the two stores are not one";
-    rig->Stop();
 }
 
 // **AQ-S2's witness across cores**: an expression Cabin's day banked by core
@@ -186,20 +190,22 @@ TEST(CabinServeAcrossCores, AnExpressionCabinsDayIsWitnessedByAPeersWrites) {
 
     OneShot update;
     update.statement = "UPDATE r0 SET ts = '2026-10-01 03:00:00' WHERE id = 2";
-    rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+    rig->Post(1, sched::MakeCoroTask(
         sched::SchedulingGroup::kForeground, RunOne(rig->core(1).dispatcher(), update)));
     ASSERT_TRUE(KickUntil(*rig, 1, [&] { return update.done.load(std::memory_order_acquire); },
                           8000ms))
         << update.out.response;
     ASSERT_EQ(update.out.response.rfind("UPDATED", 0), 0u) << update.out.response;
 
+    // Both reactors joined, so core 0's statements below run on this thread
+    // alone, as before `Start()` (the rig's threading rule).
+    rig->Stop();
     const std::uint64_t hits_before = rig->core(0).cabins()->stats().hits;
     const std::string again =
         d0.Dispatch("SELECT id FROM r0 WHERE DATE(ts) = '2026-10-01'").response;
     EXPECT_EQ(again, "id\\n1\\n2\\n3") << again;
     EXPECT_EQ(rig->core(0).cabins()->stats().hits, hits_before + 1)
         << "the answer above came from a walk, not from the banked set";
-    rig->Stop();
 }
 
 }  // namespace

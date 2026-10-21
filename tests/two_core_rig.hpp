@@ -43,7 +43,9 @@
 // kick - which is how `Stop()` here ends both reactors. A cell that wants a
 // task parked on a reactor submits it **before** `Start()`; after it, a
 // task reaches a reactor only the way production's do, by shared state and
-// a kick.
+// a kick - `Post()`, whose inbox a pump task on each reactor drains into its
+// own scheduler. A `Submit()` from the cell's thread after `Start()` races
+// the reactor's own queue (TSan, BS-S1).
 
 #include <array>
 #include <atomic>
@@ -51,6 +53,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -62,6 +65,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/sched/coro.hpp"
 #include "kds/sched/sim_waker_table.hpp"
 #include "kds/server/core_runtime.hpp"
 #include "kds/stats/cabin_store.hpp"
@@ -267,13 +271,30 @@ public:
     // The instance's visibility state, both cores' one.
     txn::InstanceVisibility& visibility() noexcept { return *visibility_; }
 
-    // Both reactors on their own threads, production's `Run()`.
+    // Both reactors on their own threads, production's `Run()`. The pumps
+    // go first, once: a restarted rig keeps the ones it has.
     void Start() {
         if (started_) return;
         started_ = true;
         for (std::uint32_t id = 0; id < 2; ++id) {
+            if (!pumped_) {
+                cores_[id]->scheduler().Submit(sched::MakeCoroTask(
+                    sched::SchedulingGroup::kForeground,
+                    Pump(cores_[id]->scheduler(), inboxes_[id])));
+            }
             threads_[id] = std::thread([core = cores_[id].get()] { core->Run(); });
         }
+        pumped_ = true;
+    }
+
+    // A task for core `id`'s reactor from any thread, started or not: into
+    // its inbox, then a kick. The pump submits it on the reactor's thread.
+    void Post(std::uint32_t id, sched::TaskPtr task) {
+        {
+            std::lock_guard<std::mutex> guard(inboxes_[id].mu);
+            inboxes_[id].tasks.push_back(std::move(task));
+        }
+        wakers_->Kick(id);
     }
 
     // Flag, then kick - through the **real** table, so a teardown never
@@ -294,6 +315,28 @@ public:
 
 private:
     explicit TwoCoreRig(Options options) : options_(options) {}
+
+    struct Inbox {
+        std::mutex mu;
+        std::vector<sched::TaskPtr> tasks;
+    };
+
+    // Never finishes: `Stop()` ends the reactor around it.
+    static sched::Coro Pump(sched::Scheduler& scheduler, Inbox& inbox) {
+        std::function<bool()> ready = [&inbox] {
+            std::lock_guard<std::mutex> guard(inbox.mu);
+            return !inbox.tasks.empty();
+        };
+        for (;;) {
+            co_await sched::WaitUntil{&ready};
+            std::vector<sched::TaskPtr> taken;
+            {
+                std::lock_guard<std::mutex> guard(inbox.mu);
+                taken.swap(inbox.tasks);
+            }
+            for (sched::TaskPtr& task : taken) scheduler.Submit(std::move(task));
+        }
+    }
 
     // `Expeditor::PersistTrxIdCeiling`'s shape over the bootstrap image:
     // the encode under the superblock latch, page 0's persist outside it.
@@ -471,9 +514,12 @@ private:
     exec::AssertionEnforcer assertions_{/*shared=*/true};  // AT-S5d: one for both cores
     Latch superblock_latch_{LatchKind::kSuperblock};  // AT-S10b: the one ceiling both cores carve from
     std::array<std::thread, 2> threads_;
+    // Before the runtimes, which hold the pumps that read them.
+    std::array<Inbox, 2> inboxes_;
     // Last, so they die first: every runtime borrows everything above.
     std::array<std::unique_ptr<CoreRuntime>, 2> cores_;
     bool started_ = false;
+    bool pumped_ = false;
 };
 
 // ---- What every cell on the rig needs, beside the rig --------------------

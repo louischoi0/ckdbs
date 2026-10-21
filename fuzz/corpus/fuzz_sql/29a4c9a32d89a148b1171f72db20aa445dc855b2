@@ -1,0 +1,1 @@
+SELECT AVG(x) FROM t

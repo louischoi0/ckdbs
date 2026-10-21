@@ -5,10 +5,12 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <vector>
 
+#include "kds/base/injected_failure.hpp"
 #include "kds/storage/page_device.hpp"
 
 // The simulated PageDevice: the same contract as FilePageDevice, backed by
@@ -130,11 +132,12 @@ public:
     // ---- Fault injection -------------------------------------------------
 
     // The next matching operation reports `status` and has no effect. Each
-    // is one-shot; setting one twice replaces the pending injection.
-    void FailNextRead(Status status);
-    void FailNextWrite(Status status);
-    void FailNextSync(Status status);
-    void FailNextGrow(Status status);
+    // is one-shot; setting one twice replaces the pending injection. With
+    // `skip`, that many matching operations pass first (BS-S3's N-th sweep).
+    void FailNextRead(Status status, std::uint64_t skip = 0);
+    void FailNextWrite(Status status, std::uint64_t skip = 0);
+    void FailNextSync(Status status, std::uint64_t skip = 0);
+    void FailNextGrow(Status status, std::uint64_t skip = 0);
 
     // The next write transfers only its first `prefix_bytes` bytes and then
     // stops, as an interrupted physical write would. The call still
@@ -153,6 +156,32 @@ public:
     // Sync(), modelling power loss. Injections and the trace are left
     // alone; call ClearTrace() too if the trace should start fresh.
     void Crash();
+
+    // **Power lost at a page write** (BS-S4, BS-A9): the (skip+1)th page
+    // write from now is the one in flight when the power goes - it does not
+    // land as asked - and from it on every operation fails with no effect,
+    // as a device with no power does. `on_loss` runs once, at that instant,
+    // so a caller can take the log's power with it. A store writes back and
+    // syncs in one call, so this is the only instant unsynced page writes
+    // exist to be cut among. `Crash()` and `CrashPersisting()` restore power.
+    void LosePowerAtWrite(std::uint64_t skip, std::function<void()> on_loss);
+    bool power_lost() const noexcept;
+
+    // **What the platter kept** (BS-S4): of the page writes since the last
+    // Sync(), the in-flight one of a power loss among them, an arbitrary
+    // subset persists - each kept or lost by a hash of `seed` and its id -
+    // and, with `tear`, one in-flight page lands torn at a sector boundary:
+    // the new image's first 512 x k bytes over the old one. One pending
+    // image is kept per page, so a page written twice since the sync
+    // persists as its latest image or not at all. Capacity reverts as
+    // `Crash()`'s does, and a page past it is lost.
+    struct PowerCut {
+        std::size_t unsynced = 0;      // pending page writes the cut met
+        std::size_t kept = 0;          // of them, persisted whole
+        std::size_t in_flight = 0;     // of them, the power loss's in-flight run
+        std::optional<PageId> torn;    // the one persisted torn, if any
+    };
+    PowerCut CrashPersisting(std::uint64_t seed, bool tear);
 
     // ---- Instrumentation -------------------------------------------------
 
@@ -214,12 +243,18 @@ private:
     std::unordered_map<PageId, Page> durable_;
     std::unordered_map<PageId, Page> pending_;
 
-    std::optional<Status> fail_next_read_;
-    std::optional<Status> fail_next_write_;
-    std::optional<Status> fail_next_sync_;
-    std::optional<Status> fail_next_grow_;
+    InjectedFailure fail_next_read_;
+    InjectedFailure fail_next_write_;
+    InjectedFailure fail_next_sync_;
+    InjectedFailure fail_next_grow_;
     std::optional<std::size_t> tear_next_write_;
 
+    // A power loss armed (`LosePowerAtWrite`), and once it struck, the run
+    // that was in flight, page by page.
+    std::optional<std::uint64_t> power_loss_skip_;
+    std::function<void()> on_power_loss_;
+    bool power_lost_ = false;
+    std::vector<std::pair<PageId, Page>> in_flight_;
     Stats stats_;
     std::vector<TraceEntry> trace_;
 };

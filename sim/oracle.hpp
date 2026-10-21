@@ -261,6 +261,15 @@ public:
     // The committed state of one relation, unchecked ids dropped.
     std::vector<std::string> ExpectAll(const std::string& table) const;
 
+    // A relation as reads see it now - the open transaction's copy inside
+    // one - for the reads the loop answers from whole relations (BS-S6:
+    // joins, groups, orders, subqueries). Null if the oracle has none.
+    const TableRows* Rows(const std::string& table) const {
+        const auto& live = Live();
+        const auto it = live.find(table);
+        return it == live.end() ? nullptr : &it->second;
+    }
+
 private:
     // The view writes land in and reads are answered from: the pending
     // copy while a transaction is open, the committed state otherwise.

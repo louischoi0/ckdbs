@@ -36,7 +36,9 @@ constexpr std::uint64_t kLastCommitted = 200;
 
 std::vector<std::byte> BytesOf(std::string_view s) {
     std::vector<std::byte> out(s.size());
-    std::memcpy(out.data(), s.data(), s.size());
+    // An empty view's data() may be null, which memcpy may not be handed
+    // even for zero bytes (UBSan, BS-S1).
+    if (!s.empty()) std::memcpy(out.data(), s.data(), s.size());
     return out;
 }
 

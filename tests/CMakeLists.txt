@@ -288,3 +288,17 @@ target_compile_definitions(kds_tests PRIVATE KDS_SOURCE_DIR="${CMAKE_SOURCE_DIR}
 include(GoogleTest)
 
 gtest_discover_tests(kds_tests)
+
+# BS's cells (instructions/v3.0.0/workorder-bs-test-hardening.md §6.1) carry
+# the ctest label `bs-nightly`: scripts/test.sh excludes it, so the push hook
+# never runs one, and scripts/bs/nightly.sh runs them. A binary of their own,
+# so a BS cell's operator new replacement or fork never reaches kds_tests.
+add_executable(kds_bs_tests
+    alloc_counter.cpp
+    bs/alloc_sweep_test.cpp
+    bs/history_test.cpp
+)
+target_include_directories(kds_bs_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(kds_bs_tests PRIVATE kds kds_sim GTest::gtest GTest::gtest_main
+                                           Threads::Threads)
+gtest_discover_tests(kds_bs_tests PROPERTIES LABELS bs-nightly)

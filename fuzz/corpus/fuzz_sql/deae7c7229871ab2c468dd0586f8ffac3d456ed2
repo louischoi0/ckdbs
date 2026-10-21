@@ -1,0 +1,1 @@
+UPDATE t SET f = b IS NOT NULL

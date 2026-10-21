@@ -96,6 +96,9 @@ public:
     };
 
     Scheduler(const Clock& clock, IoBackend& io_backend, SchedulerConfig config = {});
+    // Takes this core's entry out of the waker table it registered in
+    // (`WakeRegistry::Unregister` says why).
+    ~Scheduler();
 
     Scheduler(const Scheduler&) = delete;
     Scheduler& operator=(const Scheduler&) = delete;
@@ -333,6 +336,8 @@ private:
     // registering into it: `wakes_sent()` reads its counter, and after
     // AU-S1b that counter is the only one there is.
     const WakeRegistry* wakers_ = nullptr;
+    // The table this reactor registered in, to unregister from.
+    WakeRegistry* registered_in_ = nullptr;
 
     // **The wake path** (waker.hpp), armed at `AttachWakerTable` and absent
     // on every single-core build.

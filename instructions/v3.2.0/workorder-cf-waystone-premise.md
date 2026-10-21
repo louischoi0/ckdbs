@@ -2,7 +2,7 @@
 
 Written 2026-10-21 on `cf-waystone-premise` from `23ea3e61`
 (`v3.3.0-81-g23ea3e61`), on the operator's words, recorded in English
-(`raft-marks-2026-10-21.md` §1):
+(`raft-marks-2026-10-21.md` §2):
 
 - **W0**: *"Then what about turning Waystone off by default and having
   the DBA create it explicitly?"* - after CLA's direction analysis of the

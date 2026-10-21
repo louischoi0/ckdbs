@@ -51,6 +51,18 @@ public:
     virtual void Register(std::uint32_t core, const std::atomic<bool>* sleeping,
                           const Waker* waker) = 0;
 
+    // **The entry back out, as the reactor goes**: after it a kick to
+    // `core` does nothing. Called by the scheduler that registered, from its
+    // destructor, because a destructor that runs later - another core's
+    // transaction manager releasing an open transaction's locks - kicks the
+    // cores its waiters were on (a heap-use-after-free BS-S7's history cells
+    // found). **So a registry outlives every scheduler registered in it.**
+    // Unsynchronised, like `Register`: sound only while no other thread
+    // kicks `core` beside it. `waker` is the one it registered: an entry
+    // another reactor of the core registered since is not this one's to
+    // drop. A registry that keeps no entries has none to drop.
+    virtual void Unregister(std::uint32_t /*core*/, const Waker* /*waker*/) noexcept {}
+
     // **Callable from any thread.** The caller has already published what
     // it wants seen; this ends the destination's idle block if it is in one.
     virtual void Kick(std::uint32_t core) const noexcept = 0;
@@ -71,6 +83,10 @@ public:
                   const Waker* waker) override {
         if (core >= entries_.size()) return;
         entries_[core] = Entry{sleeping, waker};
+    }
+
+    void Unregister(std::uint32_t core, const Waker* waker) noexcept override {
+        if (core < entries_.size() && entries_[core].waker == waker) entries_[core] = Entry{};
     }
 
     // **Callable from any thread**, which is the whole point: the caller is

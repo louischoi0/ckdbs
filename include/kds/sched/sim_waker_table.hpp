@@ -88,6 +88,9 @@ public:
                   const Waker* waker) override {
         real_.Register(core, sleeping, waker);
     }
+    void Unregister(std::uint32_t core, const Waker* waker) noexcept override {
+        real_.Unregister(core, waker);
+    }
 
     // Records `(tick, core)`, draws the delay, and either forwards now
     // (delay 0) or holds the kick until `Advance` reaches its due tick.

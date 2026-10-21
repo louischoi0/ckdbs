@@ -1,0 +1,1 @@
+SELECT x.n FROM (SELECT COUNT(*) AS n FROM c) AS x

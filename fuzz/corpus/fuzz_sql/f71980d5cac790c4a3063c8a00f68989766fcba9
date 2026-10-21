@@ -1,0 +1,1 @@
+CREATE TABLE n2.u (id int64, w int64) HEAP

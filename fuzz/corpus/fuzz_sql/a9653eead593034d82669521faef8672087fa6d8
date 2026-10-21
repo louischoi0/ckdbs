@@ -1,0 +1,1 @@
+UPDATE t SET f = a > 1 AND b <= 2 OR NOT c

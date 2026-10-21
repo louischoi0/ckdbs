@@ -1,0 +1,1 @@
+select t.id from t join u on t.id = u.id

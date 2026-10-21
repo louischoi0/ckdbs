@@ -73,6 +73,20 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Testing
 
+- **The sim's constraint stream cannot kill a mutant that ignores held
+  assertion contributions.** On `bs-test-hardening` at `76a2c08c`,
+  `scripts/bs/mutants.sh`'s `holds-ignored` (every held contribution
+  skipped in `assertion_check.cpp`'s admission) survived 9 of 9
+  `ckdbs-sim` runs. The sim writes `p0`, `c0` and `a0` from one session
+  in autocommit (BS-A12), so two admissions are never in flight at once.
+  Two cells kill it, 3 of 3 rounds:
+  `AssertionRaceTest.AHoldCountsInEveryAdmissionAndInNoSnapshotAndIsRoomAgainOnceGivenBack`,
+  which holds on one thread, and
+  `AssertionRaceTest.TwoCoresAdmittingIntoOneGroupAdmitExactlyOneAndRefuseTheOtherAtAdmission`,
+  on two cores. The other three mutants, which admit every row, loosen
+  the bound by one, and never refuse a parent `DELETE`, die in both the
+  sim and the cells. **Owner: none.**
+
 - **A split page created after the split's first write is guarded by one
   unit cell, not the sim.** Found 2026-10-16 on
   `worktree-fix-h9-chain-ascent` off `8cacbb3d`, closing H9. Two shapes
@@ -856,10 +870,13 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
     unregistration at close and at `Detach`, and capability negotiation
     are covered by reading only. The cells drive `KwpSession` and the
     registry directly.
-  - **The teardown cell kills its mutant only under AddressSanitizer.**
+  - **The teardown cell kills its mutant only under AddressSanitizer**, so
+    only outside the push gate.
     `WalkSliceRigTest.ACoreTornDownWithAWalkBetweenSlicesReleasesItFirst`
-    passes in Debug with `Scheduler::DiscardTasks` removed. The tree has
-    no sanitizer build.
+    passes in Debug with `Scheduler::DiscardTasks`'s call removed; under
+    BS-S1's `asan` configuration, which the nightly runs (`scripts/bs/`),
+    the mutant dies of a heap-use-after-free 5 runs in 5 (verified on
+    `bs-test-hardening` at `0e9ea02e`).
 
 ## Placement per transaction (BL)
 
@@ -1590,3 +1607,23 @@ Verified on `ce-streaming-reply` at `9e568b44` (CE-S1..S4). Owned by
   `fdatasync`); the v3 number - AL-S8's `fdatasync`-share cell - was not
   run. Owner: `instructions/v3.0.0/ar0-architecture-revision.md` §6 and
   AR0-V1.
+
+## Power cuts (BS-S4)
+
+Verified on `bs-test-hardening` from `5d58f3ca`
+(`instructions/v3.0.0/workorder-bs-test-hardening.md` BS-S4, BS-A8, BS-A9).
+
+- **A torn page is refused, not healed** (`wal.md` §16-4 asks for both). No
+  page class has a full-page-image cadence, so a page a power cut tore at a
+  sector boundary is unhealable: the restart refuses it - the mount, the
+  reclaim or the integrity sweep naming `Corruption` - and whatever it held is
+  lost to the instance until a restore. A headerless page - a Waystone
+  directory page - carries no checksum, so a tear there is served, and only
+  invariant 9's fall-through stands between it and an answer. The sim asserts the refusal and only
+  it (BS-Q5 (a)): over seeds 1-5 and page writes 1-40, 34 of 65 tears were
+  refused, the rest left nothing a read reached or a page recovery rebuilt.
+- **The simulated cuts are narrower than a disk's.** The log is cut as a
+  suffix of its unsynced run, never scattered; the page device keeps one
+  pending image a page, so a page written twice since its sync persists as
+  its latest image or not at all; and a page past the durable capacity is
+  lost with the growth. A disk can do each of these differently.

@@ -494,8 +494,8 @@ TEST_F(SchedulerWakeTest, TheBlockAndTheWakesAroundItAreCounted) {
 
     SchedulerConfig config;
     config.max_idle_block_ms = 50;
-    Scheduler scheduler(clock_, backend.value(), config);
     WakerTable wakers(2);
+    Scheduler scheduler(clock_, backend.value(), config);
     ASSERT_TRUE(scheduler.AttachWakerTable(&wakers, /*core_id=*/1).ok());
 
     EXPECT_EQ(scheduler.idle_block_ns(), 0u);
@@ -725,8 +725,8 @@ TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyAKickIsResumedPromptly) {
 
     SchedulerConfig config;
     config.max_idle_block_ms = 1000;
-    Scheduler scheduler(clock_, backend.value(), config);
     WakerTable wakers(2);
+    Scheduler scheduler(clock_, backend.value(), config);
     ASSERT_TRUE(scheduler.AttachWakerTable(&wakers, /*core_id=*/1).ok());
 
     std::atomic<bool> resumed{false};

@@ -15,6 +15,21 @@
 
 namespace kds::sim {
 
+const char* PowerCutName(PowerCut cut) {
+    switch (cut) {
+        case PowerCut::kNone: return "none";
+        case PowerCut::kLog: return "log";
+    }
+    return "unknown";
+}
+
+std::optional<PowerCut> ParsePowerCut(std::string_view name) {
+    for (const PowerCut cut : {PowerCut::kNone, PowerCut::kLog}) {
+        if (name == PowerCutName(cut)) return cut;
+    }
+    return std::nullopt;
+}
+
 const char* SimModeName(SimMode mode) {
     switch (mode) {
         case SimMode::kClean: return "clean";
@@ -51,9 +66,10 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
     out += " reads=" + std::to_string(reads_checked);
     if (writes_checked != 0) out += " writes=" + std::to_string(writes_checked);
     if (transactions != 0) out += " txns=" + std::to_string(transactions);
-    if (config.faults != FaultProfile::kNone) {
+    if (config.faults != FaultProfile::kNone || config.nth_fault.has_value()) {
         out += " faults=";
-        out += FaultProfileName(config.faults);
+        out += config.nth_fault.has_value() ? "nth:" + config.nth_fault->Describe()
+                                            : std::string(FaultProfileName(config.faults));
         out += " armed=" + std::to_string(faults_armed);
         out += " fired=" + std::to_string(faults_fired);
         out += " errored_ops=" + std::to_string(errored_ops);
@@ -80,6 +96,22 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
                std::to_string(recycles) + " segments_recycled=" + std::to_string(segments_recycled) +
                " crashes_reviving_segments=" + std::to_string(crashes_reviving_segments) +
                " abandoned_checkpoints=" + std::to_string(abandoned_checkpoints);
+    }
+    if (mounts_refused != 0) out += " mounts_refused=" + std::to_string(mounts_refused);
+    if (derived_reads != 0 || indexes_created != 0) {
+        out += " derived_reads=" + std::to_string(derived_reads) +
+               " indexes=" + std::to_string(indexes_created);
+    }
+    if (constraint_refusals != 0 || constraint_admissions != 0) {
+        out += " constraint_refusals=" + std::to_string(constraint_refusals) +
+               " constraint_admissions=" + std::to_string(constraint_admissions);
+    }
+    if (log_cuts != 0) out += " log_cuts=" + std::to_string(log_cuts);
+    if (page_cuts != 0) {
+        out += " page_cuts=" + std::to_string(page_cuts) + " unsynced_pages=" +
+               std::to_string(unsynced_pages) + " kept_pages=" + std::to_string(kept_pages) +
+               " in_flight_pages=" + std::to_string(in_flight_pages) +
+               " tears=" + std::to_string(tears) + " tears_refused=" + std::to_string(tears_refused);
     }
     if (fail_stops != 0) {
         out += " fail_stops=" + std::to_string(fail_stops);
@@ -146,7 +178,16 @@ struct Iteration {
     std::map<std::uint64_t, std::vector<std::pair<PageId, std::uint64_t>>> ledger;
     std::vector<std::uint64_t> txn_drop_oids;
 
-    bool faults_on() const { return config.faults != FaultProfile::kNone; }
+    // The page a power loss tore, which the restart may refuse.
+    std::optional<PageId> torn_page;
+
+    // Whether the asserted relation's assertion stands (BS-A12): declared
+    // only by its acknowledged CREATE - one a fault refused may or may not
+    // have landed, and a shrunk case may have no CREATE at all.
+    enum class Declared : std::uint8_t { kAbsent, kPresent, kUnknown };
+    Declared assertion = Declared::kAbsent;
+
+    bool faults_on() const { return config.faults_on(); }
 };
 
 // First failure wins; everything after it is noise from the same cause.
@@ -252,8 +293,154 @@ bool CheckRead(Iteration& it, const Op& op, const std::string& reply,
     return true;
 }
 
+// **A read answered from whole relations** (BS-S6): a join, a grouping, an
+// order and a subquery, each computed from the oracle's rows. Only where both
+// relations are exact - an unknown row could join, group or order anywhere,
+// so a relation holding one skips the read rather than guessing.
+bool CheckDerived(Iteration& it, const Op& op, const std::string& reply, std::size_t op_index) {
+    const bool two = op.kind == Op::Kind::kSelectJoin || op.kind == Op::Kind::kSelectSubquery;
+    const Oracle::TableRows* a = it.oracle.Rows(op.table);
+    const Oracle::TableRows* b = two ? it.oracle.Rows(op.name) : a;
+    if (a == nullptr || b == nullptr || it.oracle.has_unknowns(op.table) ||
+        (two && it.oracle.has_unknowns(op.name))) {
+        if (it.faults_on()) {
+            ++it.verdict.reads_skipped;
+            return true;
+        }
+        Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: the oracle has no " +
+                     "exact relation to answer it from");
+        return false;
+    }
+    std::vector<std::string> expected;
+    bool ordered = false;
+    switch (op.kind) {
+        case Op::Kind::kSelectJoin:
+            for (const auto& [xid, x] : *a) {
+                if (xid < op.lo || xid > op.hi) continue;
+                for (const auto& [yid, y] : *b) {
+                    if (x.v == y.v) expected.push_back(std::to_string(xid) + "," + std::to_string(yid));
+                }
+            }
+            break;
+        case Op::Kind::kSelectAggregate: {
+            struct Group {
+                std::size_t count = 0;
+                std::uint64_t min = 0;
+                std::uint64_t max = 0;
+            };
+            std::map<std::int64_t, Group> groups;
+            for (const auto& [id, row] : *a) {
+                Group& g = groups[row.v];
+                g.min = g.count == 0 ? id : std::min(g.min, id);
+                g.max = std::max(g.max, id);
+                ++g.count;
+            }
+            for (const auto& [v, g] : groups) {
+                expected.push_back(std::to_string(v) + "," + std::to_string(g.count) + "," +
+                                   std::to_string(g.min) + "," + std::to_string(g.max));
+            }
+            break;
+        }
+        case Op::Kind::kSelectOrdered: {
+            std::vector<std::pair<std::int64_t, std::uint64_t>> by;
+            for (const auto& [id, row] : *a) by.emplace_back(row.v, id);
+            std::sort(by.begin(), by.end(), [](const auto& l, const auto& r) {
+                return l.first != r.first ? l.first > r.first : l.second < r.second;
+            });
+            for (std::size_t i = 0; i < by.size() && i < op.key; ++i) {
+                expected.push_back(std::to_string(by[i].second) + "," + std::to_string(by[i].first));
+            }
+            ordered = true;
+            break;
+        }
+        default: {  // kSelectSubquery
+            std::set<std::int64_t> vs;
+            for (const auto& [id, row] : *b) vs.insert(row.v);
+            for (const auto& [id, row] : *a) {
+                if (vs.count(row.v) != 0) expected.push_back(std::to_string(id));
+            }
+            break;
+        }
+    }
+    if (IsErr(reply)) {
+        Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: " + reply);
+        return false;
+    }
+    std::vector<std::string> actual = RowsOf(reply);
+    if (!ordered) {
+        std::sort(actual.begin(), actual.end());
+        std::sort(expected.begin(), expected.end());
+    }
+    if (actual != expected) {
+        Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: expected " +
+                     std::to_string(expected.size()) + " row(s), got " +
+                     std::to_string(actual.size()) + ": " + reply.substr(0, 400));
+        return false;
+    }
+    ++it.verdict.reads_checked;
+    ++it.verdict.derived_reads;
+    return true;
+}
+
 Oracle::Predicate PredicateOf(const Op& op) {
     return Oracle::Predicate{op.by_tuple_key, op.key, op.pred_v};
+}
+
+// **What a constrained write must answer** (BS-S6, BS-A12): the foreign key
+// refuses a child whose `v` names no parent and a parent's delete while a
+// child names it; the assertion refuses a write that would leave more than
+// `kAssertBound` rows at one `v`. `kFree` for every write no constraint
+// governs, `kUnknown` where an unknown row could change the answer.
+enum class Refusal : std::uint8_t { kFree, kAdmit, kRefuse, kUnknown };
+
+Refusal ConstraintRefusal(const Iteration& it, const Op& op) {
+    const Oracle& o = it.oracle;
+    if (op.table == kFkChild && op.kind == Op::Kind::kInsert) {
+        const Oracle::TableRows* parents = o.Rows(kFkParent);
+        if (parents == nullptr || o.has_unknowns(kFkParent)) return Refusal::kUnknown;
+        const bool named = op.v > 0 && parents->count(static_cast<std::uint64_t>(op.v)) != 0;
+        return named ? Refusal::kAdmit : Refusal::kRefuse;
+    }
+    if (op.table == kFkParent && op.kind == Op::Kind::kDelete) {
+        const Oracle::TableRows* parents = o.Rows(kFkParent);
+        const Oracle::TableRows* children = o.Rows(kFkChild);
+        if (parents == nullptr || children == nullptr || o.has_unknowns(kFkParent) ||
+            o.has_unknowns(kFkChild)) {
+            return Refusal::kUnknown;
+        }
+        if (parents->count(op.key) == 0) return Refusal::kAdmit;  // DELETED 0
+        for (const auto& [id, child] : *children) {
+            if (child.v == static_cast<std::int64_t>(op.key)) return Refusal::kRefuse;
+        }
+        return Refusal::kAdmit;
+    }
+    if (op.table == kAsserted && (op.kind == Op::Kind::kInsert ||
+                                  (op.kind == Op::Kind::kUpdate && !op.set_name))) {
+        if (it.assertion == Iteration::Declared::kAbsent) return Refusal::kFree;
+        if (it.assertion == Iteration::Declared::kUnknown) return Refusal::kUnknown;
+        const Oracle::TableRows* asserted = o.Rows(kAsserted);
+        if (asserted == nullptr || o.has_unknowns(kAsserted)) return Refusal::kUnknown;
+        std::size_t at_v = 0;     // rows already at the written value
+        std::size_t arriving = 0;  // rows the write moves there
+        for (const auto& [id, row] : *asserted) {
+            if (row.v == op.v) ++at_v;
+        }
+        if (op.kind == Op::Kind::kInsert) {
+            arriving = 1;
+        } else {
+            for (const auto& [id, row] : *asserted) {
+                const bool matches = op.by_tuple_key ? id == op.key : row.v == op.pred_v;
+                if (matches && row.v != op.v) ++arriving;
+            }
+        }
+        if (arriving == 0) return Refusal::kAdmit;
+        return at_v + arriving > kAssertBound ? Refusal::kRefuse : Refusal::kAdmit;
+    }
+    return Refusal::kFree;
+}
+
+bool IsConstraintRefusal(const std::string& reply) {
+    return reply.rfind("ERR FK_VIOLATION", 0) == 0 || reply.rfind("ERR ASSERTION_VIOLATION", 0) == 0;
 }
 
 
@@ -539,13 +726,49 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
     if (op.kind == Op::Kind::kInsertNamed) return CheckNamedInsert(it, op, reply, op_index);
     if (op.kind == Op::Kind::kPurge) return CheckPurge(it, op, reply, op_index);
 
+    // A constrained write refused, or admitted, against the oracle's word.
+    // A refusal applies nothing; any other answer goes on to the write's own
+    // check below, which an admission of a refused write has no business
+    // reaching.
+    if (const Refusal expect = ConstraintRefusal(it, op); expect != Refusal::kFree) {
+        if (IsConstraintRefusal(reply)) {
+            if (expect == Refusal::kAdmit) {
+                Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: refused a write " +
+                             "the constraint admits: " + reply);
+                return false;
+            }
+            // Counted only where the oracle owed it; an unknown's is taken.
+            if (expect == Refusal::kRefuse) ++it.verdict.constraint_refusals;
+            ++it.verdict.ops_run;
+            // A refusal poisons an open transaction (`assertion.md` §4.4),
+            // so the client rolls back - reached only by a shrunk case that
+            // lost its COMMIT, the stream writing these in autocommit.
+            CloseOpenTransaction(it);
+            return true;
+        }
+        if (expect == Refusal::kRefuse && !IsErr(reply)) {
+            Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: admitted a write the " +
+                         "constraint forbids: " + reply);
+            return false;
+        }
+        if (expect == Refusal::kAdmit && !IsErr(reply)) ++it.verdict.constraint_admissions;
+    }
+
     if (IsErr(reply) && it.faults_on()) {
+        if (op.kind == Op::Kind::kCreateAssertion) it.assertion = Iteration::Declared::kUnknown;
         AbsorbError(it, op, op_index);
         ++it.verdict.ops_run;
         return true;
     }
 
     switch (op.kind) {
+        case Op::Kind::kCreateAssertion:
+            if (reply.rfind("CREATED ASSERTION", 0) != 0) {
+                Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: " + reply);
+                return false;
+            }
+            it.assertion = Iteration::Declared::kPresent;
+            break;
         case Op::Kind::kCreateTable:
             if (reply.rfind("CREATED", 0) != 0) {
                 Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: " + reply);
@@ -629,6 +852,21 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
                            /*ordered=*/false, op_index)) {
                 return false;
             }
+            break;
+        case Op::Kind::kSelectJoin:
+        case Op::Kind::kSelectAggregate:
+        case Op::Kind::kSelectOrdered:
+        case Op::Kind::kSelectSubquery:
+            if (!CheckDerived(it, op, reply, op_index)) return false;
+            break;
+        case Op::Kind::kCreateIndex:
+            // The workload asks once a relation, so a refusal is a finding;
+            // what the index changes is checked by every read after it.
+            if (reply.rfind("CREATED INDEX", 0) != 0) {
+                Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: " + reply);
+                return false;
+            }
+            ++it.verdict.indexes_created;
             break;
         case Op::Kind::kFilterScan:
             if (!CheckRead(it, op, reply, it.oracle.ExpectFilter(op.table, op.v),
@@ -991,8 +1229,52 @@ SimInstance::Options InstanceOptions(const SimConfig& config, const FeatureToggl
     // one: an armed fault waits for the next growth, and at the default
     // 64-page extent a 12,000-op run of seed 20260826003 fired 1 of its 480
     // (on `8cacbb3d`, 2026-10-16).
-    if (config.faults == FaultProfile::kGrow) options.extent_pages = 1;
+    if (config.faults == FaultProfile::kGrow ||
+        (config.nth_fault.has_value() && config.nth_fault->kind == FaultKind::kPageFailGrow)) {
+        options.extent_pages = 1;
+    }
     return options;
+}
+
+// The crash a mode ends in, cut as `SimConfig::power_cut` says (BS-S4). The
+// cut and the subset come from the iteration's own fork of the seed, so the
+// plan is the plan it was.
+void CutPower(Iteration& it, std::string_view at = {}) {
+    const SimConfig& config = it.config;
+    const bool power_lost = it.instance.page_device().power_lost();
+    if (config.power_cut == PowerCut::kNone && !power_lost) {
+        it.instance.Crash();
+        return;
+    }
+    // The Nth fault in the label: each point of a sweep draws its own cut.
+    Rng cut = Rng(config.seed).Fork(
+        "power-cut/" + std::to_string(it.index) +
+        (config.nth_fault.has_value() ? "/" + config.nth_fault->Describe() : std::string()) +
+        std::string(at));
+    const std::uint64_t keep = cut.Below(it.instance.UnsyncedLogBytes() + 1);
+    ++it.verdict.log_cuts;
+    if (!power_lost) {
+        it.instance.CrashWithLogPrefix(keep);
+        return;
+    }
+    // The power went at a page write (BS-A9): what the platter kept of the
+    // unsynced writes, the in-flight one among them, a quarter of the time
+    // torn.
+    const std::uint64_t page_seed = cut.Next();
+    const bool tear = cut.Chance(25);
+    const auto cut_pages = it.instance.CrashWithPowerCut(keep, page_seed, tear);
+    it.torn_page = cut_pages.torn;
+    ++it.verdict.page_cuts;
+    it.verdict.unsynced_pages += cut_pages.unsynced;
+    it.verdict.kept_pages += cut_pages.kept;
+    it.verdict.in_flight_pages += cut_pages.in_flight;
+    it.trace.Note("power cut: " + std::to_string(cut_pages.unsynced) + " unsynced, " +
+                  std::to_string(cut_pages.in_flight) + " in flight, " +
+                  std::to_string(cut_pages.kept) + " kept");
+    if (it.torn_page.has_value()) {
+        ++it.verdict.tears;
+        it.trace.Note("power cut tore page " + std::to_string(*it.torn_page));
+    }
 }
 
 bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iteration,
@@ -1028,6 +1310,11 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     std::set<std::string> named_before_stop;
     std::set<std::string> dropped_at_stop;
 
+    if (config.nth_fault.has_value() && !config.nth_fault->at_mount) {
+        ArmNthFault(*config.nth_fault, it.instance.page_device(), it.instance.log_device());
+        ++verdict.faults_armed;
+        it.trace.Note("armed " + config.nth_fault->Describe());
+    }
     for (std::size_t i = 0; i < plan.entries.size(); ++i) {
         const SimPlan::Entry& entry = plan.entries[i];
         for (const FaultKind kind : entry.faults) {
@@ -1130,6 +1417,13 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
         // Asked after the checkpoint, whose own records can be what stopped
         // it - after a plan's last op, a stop missed here reached the clean
         // shutdown and failed it.
+        // The power is gone (BS-A9): nothing more reaches either device, so
+        // the run goes to the crash as a fail-stop does.
+        if (it.instance.page_device().power_lost()) {
+            it.trace.Note("power lost by op " + std::to_string(i));
+            fail_stopped = true;
+            break;
+        }
         if (it.instance.log_stopped()) {
             it.trace.Note("log fail-stopped after op " + std::to_string(i));
             ++verdict.fail_stops;
@@ -1137,13 +1431,19 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
             break;
         }
     }
+    // The rollback closing a fault run still faces its armed power loss, and
+    // can be the write it strikes at: a probe would then read dead devices.
+    if (!fail_stopped && it.faults_on()) {
+        CloseOpenTransaction(it);
+        fail_stopped = it.instance.page_device().power_lost();
+    }
     if (fail_stopped) {
         // No quiescence probe and no clean shutdown: a stopped instance is
         // unhealthy by design and cannot shut down. The crash is what the
         // operator's restart starts from, with every injection disarmed as
         // the probe would have: the faults were the run's, not the restart's.
         DisarmInjections(it);
-        it.instance.Crash();
+        CutPower(it);
     } else {
         if (it.faults_on()) {
             // An iteration whose every CREATE TABLE died verified *nothing* —
@@ -1156,7 +1456,6 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                          "checked nothing");
                 return false;
             }
-            CloseOpenTransaction(it);
             if (!ProbeQuiesced(it)) return false;
         }
 
@@ -1180,11 +1479,11 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                     Fail(it, "pre-crash SYNC: " + reply);
                     return false;
                 }
-                it.instance.Crash();
+                CutPower(it);
                 break;
             }
             case SimMode::kCrash:
-                it.instance.Crash();
+                CutPower(it);
                 break;
         }
     }
@@ -1202,13 +1501,49 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                      " recycling detach(es) refused with no fault armed");
         return false;
     }
-    if (Status s = it.instance.Reboot(); !s.ok()) {
-        Fail(it, "reboot failed: " + s.message());
+    if (config.nth_fault.has_value() && config.nth_fault->at_mount) {
+        ArmNthFault(*config.nth_fault, it.instance.page_device(), it.instance.log_device());
+        ++verdict.faults_armed;
+        it.trace.Note("armed " + config.nth_fault->Describe());
+    }
+    Status rebooted = it.instance.Reboot();
+    if (config.nth_fault.has_value() && config.nth_fault->at_mount) {
+        verdict.faults_fired =
+            InjectionsFired(it.instance.page_device(), it.instance.log_device());
+        DisarmInjections(it);
+        // A mount the power left is no mount, whatever it answered.
+        if (!rebooted.ok() || it.instance.page_device().power_lost()) {
+            // The restart after a refused mount: a power cut, then a mount
+            // with nothing armed, which must recover what the first would have.
+            it.trace.Note("the mount refused under the fault: " + rebooted.message());
+            ++verdict.mounts_refused;
+            // A power lost during the mount cuts recovery's own writes too.
+            CutPower(it, "/mount");
+            rebooted = it.instance.Reboot();
+        }
+    }
+    // **A torn page is refused, never served** (BS-S4, BS-Q5 (a)): with no
+    // full-page image to heal it from, the restart may refuse it - the mount
+    // naming `Corruption`, the reclaim's read, or the integrity sweep's cold
+    // read of that page and no other - and the iteration then has nothing
+    // left to reconcile. A torn page no read reaches, or one recovery
+    // rebuilt whole, leaves the run's whole contract standing.
+    const auto refused_torn = [&](const Status& s) {
+        if (!it.torn_page.has_value() || s.code() != StatusCode::kCorruption) return false;
+        ++verdict.tears_refused;
+        it.trace.Note("the restart refused torn page " + std::to_string(*it.torn_page) + ": " +
+                      s.message());
+        return true;
+    };
+    if (!rebooted.ok()) {
+        if (refused_torn(rebooted)) return true;
+        Fail(it, "reboot failed: " + rebooted.message());
         return false;
     }
     // What the mount owes, freed before anything reads the volume - the
     // run's tick would have, given time.
     if (Status s = it.instance.SettleReclaim(); !s.ok()) {
+        if (refused_torn(s)) return true;
         Fail(it, "the mount's reclaim did not finish: " + s.message());
         return false;
     }
@@ -1216,6 +1551,11 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     const IntegrityReport report =
         CheckInstance(it.instance.store(), it.instance.page_device(), it.instance.catalog());
     if (!report.ok()) {
+        const bool torn_only =
+            it.torn_page.has_value() &&
+            std::all_of(report.findings.begin(), report.findings.end(),
+                        [&](const Finding& f) { return f.page_id == *it.torn_page; });
+        if (torn_only && refused_torn(Status::Corruption(report.Summary()))) return true;
         Fail(it, report.Summary());
         return false;
     }
@@ -1291,6 +1631,18 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     crashes_reviving_segments += other.crashes_reviving_segments;
     backups_restored += other.backups_restored;
     fail_stops += other.fail_stops;
+    mounts_refused += other.mounts_refused;
+    derived_reads += other.derived_reads;
+    constraint_refusals += other.constraint_refusals;
+    constraint_admissions += other.constraint_admissions;
+    indexes_created += other.indexes_created;
+    log_cuts += other.log_cuts;
+    page_cuts += other.page_cuts;
+    unsynced_pages += other.unsynced_pages;
+    kept_pages += other.kept_pages;
+    in_flight_pages += other.in_flight_pages;
+    tears += other.tears;
+    tears_refused += other.tears_refused;
     unlogged_ddl_lost_tables += other.unlogged_ddl_lost_tables;
     if (ok && !other.ok) {
         ok = false;
@@ -1317,7 +1669,7 @@ SimPlan BuildPlan(const SimConfig& config, std::size_t iteration) {
 
     const FaultSchedule faults(iteration_rng.Fork("faults"), config.ops, config.faults,
                                config.fault_rate);
-    Workload workload(iteration_rng.Fork("workload"), config.profile);
+    Workload workload(iteration_rng.Fork("workload"), config.profile, config.shapes);
 
     plan.entries.reserve(stop_at);
     for (std::size_t i = 0; i < stop_at; ++i) {
@@ -1392,10 +1744,23 @@ bool SameOutcome(const Op& op, const std::string& bare, const std::string& full)
     switch (op.kind) {
         case Op::Kind::kCreateTable:
         case Op::Kind::kCreateCabin:
+        case Op::Kind::kCreateIndex:
+        case Op::Kind::kCreateAssertion:
         case Op::Kind::kDropTable:  // its reply names an oid the features move
             return IsErr(bare) == IsErr(full);
         case Op::Kind::kInsert:
             return ParseInsertedId(bare) == ParseInsertedId(full);
+        // Rows in no promised order (no `ORDER BY`, CB-S2): the same rows.
+        case Op::Kind::kSelectJoin:
+        case Op::Kind::kSelectAggregate:
+        case Op::Kind::kSelectSubquery: {
+            if (IsErr(bare) || IsErr(full)) return bare == full;
+            std::vector<std::string> a = RowsOf(bare);
+            std::vector<std::string> b = RowsOf(full);
+            std::sort(a.begin(), a.end());
+            std::sort(b.begin(), b.end());
+            return a == b;
+        }
         case Op::Kind::kInsertNamed:
             // The refusal's reason, not its text: a duplicate's names the
             // page, which the features' own pages move.

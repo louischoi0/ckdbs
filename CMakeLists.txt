@@ -11,6 +11,39 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
+# BS-S1's sanitizer configurations (instructions/v3.0.0/workorder-bs-test-hardening.md):
+# `address` is ASan + UBSan, `thread` is TSan, each in a build directory of
+# its own and built with clang (BS-Q2 (a)) by scripts/bs/. Empty, the
+# default, is the build the push hook runs, which never sets it (§6.1).
+set(KDS_SANITIZE "" CACHE STRING "Sanitizers: address (ASan + UBSan), thread (TSan), or empty")
+if(KDS_SANITIZE STREQUAL "address")
+    # A UBSan report fails its cell rather than scrolling past it.
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined
+                        -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+elseif(KDS_SANITIZE STREQUAL "thread")
+    add_compile_options(-fsanitize=thread)
+    add_link_options(-fsanitize=thread)
+elseif(NOT KDS_SANITIZE STREQUAL "")
+    message(FATAL_ERROR "KDS_SANITIZE='${KDS_SANITIZE}': expected address, thread or empty")
+endif()
+
+# BS-S2's coverage configuration: clang's source-based coverage, read by
+# llvm-cov (BS-Q2 (a)); scripts/bs/coverage.sh builds and reports it.
+option(KDS_COVERAGE "Instrument for llvm-cov source-based coverage (clang only)" OFF)
+if(KDS_COVERAGE)
+    add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+    add_link_options(-fprofile-instr-generate)
+endif()
+
+# BS-S5's fuzz targets (fuzz/): libFuzzer, clang only, the engine built with
+# its coverage hooks so the fuzzer sees inside it; scripts/bs/fuzz.sh builds
+# and runs them.
+option(KDS_FUZZ "Build the libFuzzer targets under fuzz/ (clang only)" OFF)
+if(KDS_FUZZ)
+    add_compile_options(-fsanitize=fuzzer-no-link)
+endif()
+
 add_library(kds
     src/base/log.cpp
     src/base/fail_stop.cpp
@@ -236,4 +269,8 @@ option(KDS_BUILD_TESTS "Build ckdbs unit tests" ON)
 if(KDS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(KDS_FUZZ)
+    add_subdirectory(fuzz)
 endif()
