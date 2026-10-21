@@ -602,7 +602,6 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     if (*statement_deadline_ns == 0) {
         *statement_deadline_ns = NowNs() + lock_wait_fault_net_ns_;
     }
-    const sched::MonoTimeNs deadline_ns = *statement_deadline_ns;
 
     // **The edge, for the one waiter here that can be half of a cycle.**
     // An autocommit DDL holds nothing while it waits - `InDdlStatement`
@@ -651,8 +650,22 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     if (!txn::LockWaitReady(slot)) {
         row.emplace(clock_, LockWaitRow(wait.key, wait.mode, waiter_id, wait.holder));
     }
-    const std::function<bool()> freed = [this, slot, deadline_ns] {
-        return txn::LockWaitReady(slot) || NowNs() >= deadline_ns;
+    // **A holder that reports progress is not stuck** (`holder_progress.hpp`):
+    // a relation-`X` build's waiter reaching the net asks whether the build
+    // advanced since it last looked, and if so restarts the statement's one
+    // bound rather than refusing. The net then fires only on a net's length
+    // of silence - a holder that registered nothing, or stopped advancing.
+    std::optional<std::uint64_t> holder_seen = locks_->progress().Read(wait.holder);
+    const std::function<bool()> freed = [this, slot, statement_deadline_ns,
+                                         holder = wait.holder, &holder_seen] {
+        if (txn::LockWaitReady(slot)) return true;
+        const sched::MonoTimeNs now = NowNs();
+        if (now < *statement_deadline_ns) return false;
+        const std::optional<std::uint64_t> count = locks_->progress().Read(holder);
+        if (!count.has_value() || count == holder_seen) return true;
+        holder_seen = count;
+        *statement_deadline_ns = now + lock_wait_fault_net_ns_;
+        return false;
     };
     co_await sched::WaitUntil{&freed};
     if (row.has_value()) {
@@ -2255,6 +2268,12 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         return {ErrorReply(s), false, 0, s};
     }
 
+    // The build's report to its waiters' fault net (`holder_progress.hpp`),
+    // registered before the ask below, so no waiter parks on this holder
+    // before it. Outside the scope, so it is withdrawn
+    // after an autocommit decide has released the `X`: a waiter never finds
+    // the holder silent while it still holds.
+    std::optional<txn::HolderProgress::Scope> progress;
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         // ---- AT-S5e: the relation `X`, for both statements --------------
         //
@@ -2296,11 +2315,16 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             }
         }
         if (relation.has_value()) {
+            if (locks_ != nullptr && scope.txn != nullptr) {
+                progress.emplace(&locks_->progress(), scope.txn->id());
+            }
             if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, *relation);
                 held.has_value()) {
                 return {ErrorReply(*held), false, 0, *held};
             }
         }
+        txn::HolderProgress::Scope* const build_progress =
+            progress.has_value() ? &*progress : nullptr;
 
         // The name asked again under the `X`, at latest state with this
         // DDL's own id: another transaction's open create is still not found,
@@ -2327,7 +2351,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                 catalog_, page_store_, stmt, relation,
                 name_view.has_value() ? &*name_view : nullptr, ddl.trx_id,
                 ddl.txn != nullptr ? &change : nullptr,
-                ddl.txn != nullptr ? &created_row : nullptr, wal_, txn_);
+                ddl.txn != nullptr ? &created_row : nullptr, wal_, txn_, build_progress);
             NoteIndexRowDropped(ddl, change);
             NoteRowWritten(ddl, created_row);
             if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
@@ -2397,7 +2421,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                         create_ddl.trx_id,
                                         create_ddl.txn != nullptr ? &created_row : nullptr,
                                         build_view.has_value() ? &*build_view : nullptr, wal_,
-                                        txn_);
+                                        txn_, build_progress);
         // Before the status is read: a create that failed after the catalog
         // row went down still left it there.
         NoteRowWritten(create_ddl, created_row);
@@ -3159,6 +3183,7 @@ std::optional<Status> CommandDispatcher::TakeDdlBuildLock(Session& session, cata
     if (!begun.ok()) return begun.status();
     out.manager = txn_;
     out.txn = begun.value();
+    out.progress.emplace(&locks_->progress(), out.txn->id());
     return BorrowRelationForDdl(out.txn, relation, /*poisons=*/false);
 }
 
@@ -3248,8 +3273,10 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // two coded spellings - ASSERTION_VIOLATION for data already past the
     // bound, TXN_CONFLICT for an unsettled relation - and both are
     // compatibility surfaces a client switches on.
-    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, target.value(), check_view,
-                                         wal_, *enforcer_, after_assertion_publish_run_for_test_);
+    auto created = exec::CreateAssertion(
+        catalog_, page_store_, stmt, target.value(), check_view, wal_, *enforcer_,
+        build_lock.progress.has_value() ? &*build_lock.progress : nullptr,
+        after_assertion_publish_run_for_test_);
     if (!created.ok()) {
         return {ErrorReply(created.status()), false, 0, created.status()};
     }
@@ -3373,8 +3400,9 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
             return {ErrorReply(moved), false, 0, moved};
         }
     }
-    auto created =
-        exec::CreateTransition(catalog_, page_store_, stmt, target.value(), check_view, wal_);
+    auto created = exec::CreateTransition(
+        catalog_, page_store_, stmt, target.value(), check_view, wal_,
+        build_lock.progress.has_value() ? &*build_lock.progress : nullptr);
     if (!created.ok()) return {ErrorReply(created.status()), false, 0, created.status()};
     if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
     if (logging(LogLevel::kInfo)) {

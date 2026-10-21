@@ -174,7 +174,8 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
                                           std::span<const std::uint16_t> group_cols,
                                           std::uint16_t sum_col,
                                           const txn::ReadView& check_view,
-                                          wal::WalManager* wal) {
+                                          wal::WalManager* wal,
+                                          txn::HolderProgress::Scope* progress) {
     const BoundAggregate aggregate =
         stmt.func == parser::AggFunc::kSum ? BoundAggregate::kSum : BoundAggregate::kCount;
     BoundCabinBuild build(aggregate, stmt.enforced_max(), assertion_id);
@@ -192,6 +193,9 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
             !s.ok()) {
             return s;
         }
+        // Per leaf, and per row below: what keeps this build's waiters
+        // inside the fault net, however wide a leaf's rows make it.
+        if (progress != nullptr) progress->Advance();
 
         // ---- Phase 1: copy out, with no page fetch under the span --------
         std::vector<StagedRow> staged;
@@ -238,6 +242,7 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
 
         // ---- Phase 2: decode, append, accumulate, check ------------------
         for (const StagedRow& row : staged) {
+            if (progress != nullptr) progress->Advance();
             std::vector<PendingSpill> spills;
             auto decoded = DecodeRow(access.schema, access.layout, row.payload, &spills);
             if (!decoded.ok()) return decoded.status();

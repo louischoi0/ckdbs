@@ -241,7 +241,7 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
 StatusOr<AssertionDdlResult> CreateAssertion(
     catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
     catalog::Oid target_oid, const txn::ReadView& check_view, wal::WalManager* wal,
-    AssertionEnforcer& enforcer,
+    AssertionEnforcer& enforcer, txn::HolderProgress::Scope* progress,
     const std::function<void()>& after_publish_run_for_test = {});
 
 // The statement's target relation, or the §3.1 refusal with its byte. `view`
