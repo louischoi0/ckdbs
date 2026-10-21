@@ -240,9 +240,9 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
 ## Version Management
 
 The version of record is an **annotated git tag on `main`**. **The current
-version of record is `v3.3.0`**, CB and CC's join planner on `main`,
-operator-named on 2026-10-19 ("push no verify with tag 3.3.0"); read its tag
-message.
+version of record is `v3.4.0`**, taken on `main` at `9fdf3351` (CE's
+streamed reply, BO's sys views, CD's cleaned columns, BS's harness),
+operator-named on 2026-10-21 ("and tag 3.4.0"); read its tag message.
 
 - **The operator names the version; CLA may move only `z`.** A version is
   set by the operator saying it — *"it is version x.y.z"* — and nothing
