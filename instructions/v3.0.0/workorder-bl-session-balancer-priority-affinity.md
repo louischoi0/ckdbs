@@ -1,7 +1,10 @@
 # Work order BL — no session is pinned: a balancer between connection and core, and one session axis, priority
 
-**Paused 2026-10-12 (W12)** with BL-S1..S3 and BL-S4's ruling 1 built and
-BL-S4 stopped; §6's last row says where it stands and how it resumes.
+**CLOSED 2026-10-22 on the operator's word** (W18,
+`instructions/v3.2.0/raft-marks-2026-10-21.md` §17), with every stage
+built and measured and §5.2's bar (v) not met (BL-R7's remainder,
+`docs/inflight/known-gaps.md`); §6's last row is the close. Paused
+2026-10-12 (W12) and resumed 2026-10-21 (W13).
 
 **Amended 2026-10-12**: session affinity struck (W4); priority's values
 set as four context levels (W5, W6), served in v0 by placement and a
@@ -1149,3 +1152,14 @@ whole connection moves, a `debug_text_port` session like any other),
 BL-Q10 and BL-Q11 (CLA's (a), built and written; marks owed), BL-Q12 (no
 inversion counter), BL-Q13 (yielding writes out of BL), BL-Q14 (measured at
 BL-S1) and BL-Q15 (this measurement).
+
+### BL closed 2026-10-22 (W18)
+
+**W18** (`instructions/v3.2.0/raft-marks-2026-10-21.md` §17): *"close bl"*,
+after BL-S5 was pushed at `04aa27e7`. BL closes with BL-S1..S5 built and
+measured and bar (v) not met, its excess recorded as BL-R7's remainder.
+The word marks no open item: BL-Q2, BL-Q7 and BL-Q10..Q15 stay unmarked as
+listed above, BL-Q10 (a) and BL-Q11 (a) as CLA built and wrote them. What
+BL leaves stands in the specs it changed (`sched.md` §3-§5 and §9,
+`crosscore.md` CC1, `protocol.md` §8, `rules.md` §3) and in
+`known-gaps.md`'s BL section, which owns it from here.

@@ -809,10 +809,10 @@ the first bullet re-read on `worktree-bl-touchpattern-delete` at `05cd011f`
 and re-priced at BQ's close (2026-10-12, from `4cf30270`'s measurement);
 the first bullet re-measured and the second added on `bl-ruling2-remeasure` at `418670a3`
 (2026-10-21, `bench/v3.4.0/results-bl-ruling2-remeasure-v3.4.0-22-g418670a3.md`).
-BL was resumed on 2026-10-21, and ruling 2 is marked (a): core 0 is the
-first batch core (the order's §6, "BL resumed 2026-10-21").
-Owned by `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
-until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
+BL closed on 2026-10-22 (the order's §6, "BL closed 2026-10-22"), with
+ruling 2 marked (a): core 0 is the first batch core.
+Owned here since the close; the order (`instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`)
+holds the history, and the mechanisms are `docs/spec/crosscore.md` CC1 and
 `docs/spec/sched.md` §5.
 
 - **A bulk writer stalls point readers through the segment roll; at

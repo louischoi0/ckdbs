@@ -137,3 +137,21 @@ what the word settles and what it does not.
 | **Mark** | **BL-S5 measured** at `v3.4.1-10-gf4bad273` (`bench/v3.4.0/results-bl-close-v3.4.1-10-gf4bad273.md`) and its texts written (the BL order's §6, "BL-S5 measured 2026-10-22") |
 | **Does not settle** | **BL's close**, which is the operator's word; BL-Q2, BL-Q7 and BL-Q10..Q15, unmarked - BL-Q10 (a) and BL-Q11 (a) are what CLA built and wrote under W10's latitude, and their marks are owed; a push; a tag, a version |
 | **Recorded at** | this file; the BL order's §4 (BL-Q10, BL-Q11) and §6; the BL row in `instructions/v3.0.0/index.md`; CLAUDE.md's Cross-core execution row |
+
+## 16. BL-S5 pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W17b (BL's session): *"push no verify"* |
+| **Mark** | **BL-S5 pushed to `main`** at `04aa27e7` with `--no-verify`; no build input had changed since the suite's 4295/4295 at `f4bad273` |
+| **Does not settle** | BL's close; a tag, a version |
+| **Recorded at** | this file |
+
+## 17. BL closed
+
+| | |
+|---|---|
+| **Word** | W18 (BL's session): *"close bl"* |
+| **Mark** | **BL closed** (`instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`, header and §6 "BL closed 2026-10-22"): every stage built and measured, §5.2's bar (v) not met and recorded as BL-R7's remainder |
+| **Does not settle** | BL-Q2, BL-Q7, BL-Q10..Q15, unmarked (BL-Q10 (a) and BL-Q11 (a) as CLA built them); the checkpoint's hold on a reader core during a roll, which is WAL work; a push; a tag, a version |
+| **Recorded at** | this file; the BL order's header and §6; the BL row in `instructions/v3.0.0/index.md`; `docs/inflight/known-gaps.md`'s BL section; CLAUDE.md's Cross-core execution row |
