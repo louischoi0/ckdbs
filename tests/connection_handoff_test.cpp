@@ -3,11 +3,14 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <vector>
 
 #include <gtest/gtest.h>
+
+#include "kds/server/priority.hpp"
 
 // D19's fallback (AT-S10c, `connection_handoff.hpp`): core 0 accepts and
 // places each connection in the destination's inbox, then kicks it. These
@@ -38,6 +41,26 @@ TEST(ConnectionHandoffTest, NextCoreGoesRoundEveryCoreCoreZeroIncluded) {
     std::vector<std::uint32_t> seen;
     for (int i = 0; i < 6; ++i) seen.push_back(handoff.NextCore());
     EXPECT_EQ(seen, (std::vector<std::uint32_t>{0, 1, 2, 0, 1, 2}));
+}
+
+// **While the partition is active the round-robin passes over the batch
+// cores** (BL-R5, BL-S4): an accepted session is `normal`, so it lands on an
+// interactive core - at three cores, every core but core 0.
+//
+// **The mutation**: drop the `partitioned` test and core 0 is handed one.
+TEST(ConnectionHandoffTest, WhileThePartitionIsActiveNoAcceptLandsOnABatchCore) {
+    ConnectionHandoff handoff(3, nullptr);
+    PrioritySeat batch;
+    batch.set(Priority::kBackground);
+    std::vector<std::uint32_t> seen;
+    for (int i = 0; i < 4; ++i) seen.push_back(handoff.NextCore());
+    EXPECT_EQ(seen, (std::vector<std::uint32_t>{1, 2, 1, 2}));
+    batch.set(Priority::kNormal);
+    seen.clear();
+    for (int i = 0; i < 3; ++i) seen.push_back(handoff.NextCore());
+    EXPECT_EQ(seen.size(), 3u);
+    EXPECT_NE(std::find(seen.begin(), seen.end(), 0u), seen.end())
+        << "core 0 was still passed over with no batch session";
 }
 
 TEST(ConnectionHandoffTest, AnOfferIsPendingForItsCoreAloneAndKicksItAfterPublishing) {

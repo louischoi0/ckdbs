@@ -1815,6 +1815,12 @@ TEST_F(CommandDispatcherTest, SetPriorityDeclaresALevelAndRefusesWithItsByte) {
     EXPECT_EQ(unknown.status.code(), StatusCode::kInvalidArgument) << unknown.response;
     EXPECT_NE(unknown.response.find("(byte 13)"), std::string::npos) << unknown.response;
     EXPECT_EQ(admin.priority(), Priority::kTransactional);
+    // Leading spaces count, and a missing level is refused at the line's end.
+    EXPECT_NE(d.Dispatch("  SET PRIORITY urgent", &admin).response.find("(byte 15)"),
+              std::string::npos);
+    const DispatchOutcome missing = d.Dispatch("SET PRIORITY", &admin);
+    EXPECT_EQ(missing.status.code(), StatusCode::kInvalidArgument) << missing.response;
+    EXPECT_NE(missing.response.find("(byte 12)"), std::string::npos) << missing.response;
 }
 
 }  // namespace

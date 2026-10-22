@@ -2,6 +2,9 @@
 
 #include <array>
 #include <string>
+#include <utility>
+
+#include "kds/sched/core_load.hpp"
 
 namespace kds::server {
 
@@ -32,6 +35,28 @@ StatusOr<Priority> ParsePriority(std::string_view name) {
 
 std::string_view PriorityName(Priority p) noexcept {
     return kNames[static_cast<std::size_t>(p)];
+}
+
+PrioritySeat::PrioritySeat(PrioritySeat&& other) noexcept
+    : level_(std::exchange(other.level_, Priority::kNormal)) {}
+
+PrioritySeat& PrioritySeat::operator=(PrioritySeat&& other) noexcept {
+    if (this != &other) {
+        set(Priority::kNormal);
+        level_ = std::exchange(other.level_, Priority::kNormal);
+    }
+    return *this;
+}
+
+void PrioritySeat::set(Priority p) noexcept {
+    if (IsBatchPriority(p) != IsBatchPriority(level_)) {
+        if (IsBatchPriority(p)) {
+            sched::CoreLoad::BatchSessions().fetch_add(1, std::memory_order_relaxed);
+        } else {
+            sched::CoreLoad::BatchSessions().fetch_sub(1, std::memory_order_relaxed);
+        }
+    }
+    level_ = p;
 }
 
 }  // namespace kds::server

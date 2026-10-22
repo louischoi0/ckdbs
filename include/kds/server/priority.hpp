@@ -38,9 +38,32 @@ constexpr bool IsBatchPriority(Priority p) noexcept {
 // re-scoped, not a second quantity. `analytic` yields four times as often,
 // so its walks give way first to the batch sessions it shares a core with;
 // above one core it protects no interactive level, which the partition
-// does. `[provisional]` until BL-S5.
+// does. A `SELECT`'s outermost walk only (`SelectRun`): a DDL build's walk
+// keeps the default 64 whatever its session declared. `[provisional]` until
+// BL-S5.
 constexpr std::uint32_t PagesPerSlice(Priority p) noexcept {
     return p == Priority::kAnalytic ? 16 : 64;
 }
+
+// **A session's level, and its seat in the instance's batch count**: a batch
+// level counts in `sched::CoreLoad::BatchSessions` (`rules.md` §3) for as long
+// as this holds it, and is given back when it ends. Move-only: a moved
+// session takes the seat and leaves `normal` behind, and a copy would count
+// twice.
+class PrioritySeat {
+public:
+    PrioritySeat() noexcept = default;
+    PrioritySeat(const PrioritySeat&) = delete;
+    PrioritySeat& operator=(const PrioritySeat&) = delete;
+    PrioritySeat(PrioritySeat&& other) noexcept;
+    PrioritySeat& operator=(PrioritySeat&& other) noexcept;
+    ~PrioritySeat() { set(Priority::kNormal); }
+
+    Priority level() const noexcept { return level_; }
+    void set(Priority p) noexcept;
+
+private:
+    Priority level_ = Priority::kNormal;
+};
 
 }  // namespace kds::server

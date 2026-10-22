@@ -10367,7 +10367,13 @@ DispatchOutcome CommandDispatcher::HandleSetDurability(std::string_view args, Se
 DispatchOutcome CommandDispatcher::HandleSetPriority(std::string_view line, std::string_view args,
                                                      Session& session) {
     const std::string_view word = Trim(args);
-    const std::string at = " (byte " + std::to_string(word.data() - line.data()) + ")";
+    // A missing level is refused at the line's end: `SplitFirstToken` hands
+    // back a null view then, which is no position in `line`.
+    const std::string at =
+        " (byte " +
+        std::to_string(word.empty() ? line.size()
+                                    : static_cast<std::size_t>(word.data() - line.data())) +
+        ")";
     auto parsed = ParsePriority(word);
     if (!parsed.ok()) {
         const Status s = parsed.status().WithMessage(parsed.status().message() + at);

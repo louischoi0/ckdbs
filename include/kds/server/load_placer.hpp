@@ -42,6 +42,8 @@
 // first, with no margin, no dwell and no per-window guard; inside its side
 // the rules above apply, and a load move never leaves it. With no
 // batch-level session every core is every level's, which is BL-S3's path.
+// A partition move stamps the per-window guard like any move, so no load
+// move leaves that core in the same window - conservative, never wrong.
 //
 // Stateless apart from the session's own move time, so every core may ask it
 // at once (`transaction_placement.hpp`'s concurrency contract).
@@ -88,6 +90,10 @@ public:
         if (cores <= 1) return false;
         const std::uint32_t batch = cores / 4 > 1 ? cores / 4 : 1;
         return k == 0 || k + (batch - 1) >= cores;
+    }
+    // Whether core `k` of `cores` is on `side`.
+    static constexpr bool OnSide(std::uint32_t k, std::uint32_t cores, Side side) noexcept {
+        return side == Side::kAny || IsBatchCore(k, cores) == (side == Side::kBatch);
     }
 
     // The decision, over a snapshot of every core - the seam a cell drives

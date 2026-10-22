@@ -12,7 +12,7 @@ std::uint32_t LoadPlacer::Decide(std::span<const CoreView> cores, std::uint32_t 
     if (core >= cores.size()) return core;
     const auto n = static_cast<std::uint32_t>(cores.size());
     const auto inside = [&](std::uint32_t k) {
-        return side == Side::kAny || IsBatchCore(k, n) == (side == Side::kBatch);
+        return OnSide(k, n, side);
     };
     // Compared as sums, not differences: another core's word may be newer
     // than this core's, and a move time later than this window's end.
@@ -66,7 +66,7 @@ std::uint32_t LoadPlacer::Place(std::uint32_t core, Session& session) {
         Decide(std::span<const CoreView>(view.data(), n), core, now, session.moved_at_ns(),
                mine.moved_out_in.load(std::memory_order_relaxed) == now, side);
     if (there != core) {
-        if (side != Side::kAny && IsBatchCore(core, n) != (side == Side::kBatch)) {
+        if (!OnSide(core, n, side)) {
             sched::CoreLoad::Bump(mine.partition_moves_out);
         }
         mine.moved_out_in.store(now, std::memory_order_relaxed);

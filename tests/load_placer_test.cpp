@@ -137,7 +137,7 @@ TEST(LoadPlacerTest, CoreZeroIsTheFirstBatchCoreAndTheRestAreTheHighest) {
 // declares a level, or after the kernel's hash put it on the other side.
 //
 // **The mutation**: drop the partition filter (`inside`) and neither
-// session moves - every core is equally loaded.
+// session moves - the dwell and the per-window guard hold it.
 TEST(LoadPlacerTest, ASessionOutsideItsSideMovesWithNoMarginAndNoDwell) {
     const std::array<View, 4> even = {At(500'000, 2), At(500'000, 2), At(500'000, 2),
                                       At(500'000, 2)};
@@ -186,8 +186,8 @@ TEST(LoadPlacerTest, APartitionMovePrefersAFreshCoreAndTakesAStaleOne) {
     EXPECT_EQ(LoadPlacer::Decide(words, 0, kNow, kNever, false, Side::kInteractive), 3u)
         << "a stale core was chosen over a fresh one";
     words[3].window_end_ns = stale;
-    const std::uint32_t there = LoadPlacer::Decide(words, 0, kNow, kNever, false, Side::kInteractive);
-    EXPECT_NE(there, 0u) << "an interactive session was left on the batch core";
+    EXPECT_EQ(LoadPlacer::Decide(words, 0, kNow, kNever, false, Side::kInteractive), 1u)
+        << "not the side's least-busy core when every word on it is stale";
 }
 
 // **`Place` reads the partition from the instance's batch count and the
@@ -234,6 +234,17 @@ TEST(LoadPlacerTest, PlaceActivatesThePartitionOnlyWhileABatchSessionLives) {
     EXPECT_EQ(sched::CoreLoad::BatchSessions().load(), before + 1) << "batch to batch counted";
     switcher.set_priority(Priority::kTransactional);
     EXPECT_EQ(sched::CoreLoad::BatchSessions().load(), before);
+
+    // **After the lapse a former batch core is every session's again**: a
+    // `normal` session on a busy core moves by load to an idle core 0.
+    for (std::uint32_t k = 0; k < 4; ++k) {
+        sched::CoreLoad::Of(k).window_end_ns.store(kNow + 4 * sched::CoreLoad::kWindowNs);
+    }
+    sched::CoreLoad::Of(0).busy_ppm.store(0);
+    sched::CoreLoad::Of(1).busy_ppm.store(900'000);
+    sched::CoreLoad::Of(1).active_sessions.store(4);
+    Session spreader;
+    EXPECT_EQ(placer.Place(1, spreader), 0u) << "the lapsed partition still kept core 0 from load";
 
     for (std::uint32_t k = 0; k < 4; ++k) sched::CoreLoad::Reset(k);
     sched::CoreLoad::SetCores(0);

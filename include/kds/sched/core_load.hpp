@@ -111,15 +111,10 @@ public:
     }
 
     // **Live batch-level sessions on the instance** (BL-R2): the partition
-    // is active while this is above zero. **The table's one word with more
-    // than one writer** - every core's sessions declare levels - so it is
-    // changed by read-modify-write, never by `Bump`; read relaxed, since a
-    // stale count places one transaction by the partition it just left or
-    // entered, never on a wrong core. Written at every core count: a
-    // session's level is the session's (`Session::set_priority`), and its
-    // last holder gives it back when it ends. Not reset with a slot, for the
-    // same reason - a session of the previous instance still counts until it
-    // is destroyed.
+    // is active while this is above zero. The table's one word with more
+    // than one writer - changed by read-modify-write, never by `Bump`, at
+    // every core count, and never reset with a slot (`rules.md` §3;
+    // `server/priority.hpp`'s `PrioritySeat` is its only writer).
     static std::atomic<std::uint32_t>& BatchSessions() noexcept {
         static std::atomic<std::uint32_t> n{0};
         return n;

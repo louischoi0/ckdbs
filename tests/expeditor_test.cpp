@@ -1309,6 +1309,27 @@ TEST_F(ExpeditorTest, ALevelRunsItsTransactionsOnItsSideOfThePartition) {
     EXPECT_TRUE(running.Stop().ok());
 }
 
+// **At one core a level changes only the slice** (BL-R9): `SET PRIORITY` is
+// taken, nothing places the session, and no partition is printed.
+TEST_F(ExpeditorTest, AtOneCoreALevelIsTakenAndNoPartitionExists) {
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    KwpClient client(config.port);
+    ASSERT_TRUE(client.Hello());
+    EXPECT_EQ(client.Run("SET PRIORITY analytic").rfind("SET priority=analytic", 0), 0u);
+    EXPECT_EQ(client.Core(), 0);
+    const std::string load = client.Run("SELECT field FROM sys.meta WHERE section = 'load'");
+    ASSERT_EQ(load.rfind("ERR", 0), std::string::npos) << load;
+    EXPECT_EQ(load.find("batch_"), std::string::npos) << "a partition at one core: " << load;
+    EXPECT_EQ(client.Run("SET PRIORITY normal").rfind("SET priority=normal", 0), 0u);
+    EXPECT_TRUE(running.Stop().ok());
+}
+
 // **A prepared statement is session state, and travels with it** (BL §1.2):
 // parsed on one core, bound and executed on the other, with the result it
 // gives where it was parsed.

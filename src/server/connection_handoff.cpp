@@ -2,6 +2,9 @@
 
 #include <unistd.h>
 
+#include "kds/sched/core_load.hpp"
+#include "kds/server/load_placer.hpp"
+
 namespace kds::server {
 
 ConnectionHandoff::ConnectionHandoff(std::uint32_t cores, const sched::WakeRegistry* wakers)
@@ -21,7 +24,15 @@ ConnectionHandoff::~ConnectionHandoff() {
 }
 
 std::uint32_t ConnectionHandoff::NextCore() noexcept {
-    return next_.fetch_add(1, std::memory_order_relaxed) % cores();
+    // An accepted session is `normal` (BL-R5), so while the partition is
+    // active the round-robin passes over the batch cores; the interactive
+    // side is never empty above one core.
+    const std::uint32_t n = cores();
+    const bool partitioned = sched::CoreLoad::BatchSessions().load(std::memory_order_relaxed) != 0;
+    for (;;) {
+        const std::uint32_t k = next_.fetch_add(1, std::memory_order_relaxed) % n;
+        if (!partitioned || !LoadPlacer::IsBatchCore(k, n)) return k;
+    }
 }
 
 void ConnectionHandoff::Offer(std::uint32_t core, int fd, std::unique_ptr<Transit> moved) {
