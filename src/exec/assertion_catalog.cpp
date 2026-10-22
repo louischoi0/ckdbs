@@ -9,6 +9,7 @@
 #include "kds/parser/parser.hpp"
 
 #include <array>
+#include <string_view>
 #include <utility>
 
 #include "kds/exec/assertion_build.hpp"
@@ -102,20 +103,34 @@ namespace {
 
 // Resolution is `Schema::FindColumn`'s, every column name's: ignoring case,
 // two or more matches refused as ambiguous (docs/spec/parser-v2.md) - at
-// CREATE and DROP ASSERTION and when mount re-parses a stored canon, so a
-// canon written while this matched exactly still resolves. (The
-// *assertion's own* name is matched case-insensitively too, which is a
-// different question - that is an object name, like a pattern's.)
+// CREATE ASSERTION and when mount re-parses a stored canon, so a canon
+// written while this matched exactly still resolves. (The *assertion's own*
+// name is matched case-insensitively too, which is a different question -
+// that is an object name, like a pattern's.)
+//
+// **A GROUP BY or SUM column is never the tuple key** (§3.1). An INSERT's
+// admission runs before the row's id is issued, so it has no tuple key value
+// to key a group or sum by; grouping by it is not built, and `NotImplemented`
+// keeps building it open. Asked here, so the create and the mount's revive
+// ask it alike.
 StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
                                        const parser::IndexColumnRef& col,
-                                       const std::string& table_name) {
+                                       const std::string& table_name, std::string_view role) {
     auto found = access.schema.FindColumn(col.name, col.byte_offset);
     if (!found.ok()) return found.status();
-    if (found.value() != nullptr) {
-        return static_cast<std::uint16_t>(found.value() - access.schema.columns.data());
+    if (found.value() == nullptr) {
+        return Status::NotFound("relation '" + table_name + "' has no column '" + col.name +
+                                "' (byte " + std::to_string(col.byte_offset) + ")");
     }
-    return Status::NotFound("relation '" + table_name + "' has no column '" + col.name +
-                            "' (byte " + std::to_string(col.byte_offset) + ")");
+    const auto pos = static_cast<std::uint16_t>(found.value() - access.schema.columns.data());
+    if (pos == 0) {
+        return Status::NotImplemented(
+            "an assertion's " + std::string(role) + " column cannot be the tuple key '" +
+            col.name + "' (byte " + std::to_string(col.byte_offset) +
+            "): an INSERT's admission runs before its tuple key is issued, so grouping or "
+            "summing by the tuple key is not built (docs/spec/assertion.md §3.1)");
+    }
+    return pos;
 }
 
 }  // namespace
@@ -159,13 +174,13 @@ StatusOr<AssertionColumns> ResolveAssertionColumns(const catalog::TableAccess& a
     // column that is not there could never be enforced.
     out.group_cols.reserve(stmt.group_columns.size());
     for (const parser::IndexColumnRef& col : stmt.group_columns) {
-        auto pos = ResolveColumn(access, col, stmt.table_name);
+        auto pos = ResolveColumn(access, col, stmt.table_name, "GROUP BY");
         if (!pos.ok()) return pos.status();
         out.group_cols.push_back(pos.value());
     }
 
     if (stmt.func == parser::AggFunc::kSum) {
-        auto pos = ResolveColumn(access, stmt.sum_column, stmt.table_name);
+        auto pos = ResolveColumn(access, stmt.sum_column, stmt.table_name, "SUM");
         if (!pos.ok()) return pos.status();
         out.sum_col = pos.value();
 
@@ -416,45 +431,17 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
         return access.status().WithContext("reviving assertion \"" + def.name + "\"");
     }
 
-    // Resolved against the schema as it is **now**, not as it was: a column an
-    // ALTER renamed makes the declaration unenforceable, and that has to be a
-    // reported failure rather than a silently different constraint.
-    std::vector<std::uint16_t> group_cols;
-    group_cols.reserve(stmt_value.group_columns.size());
-    for (const parser::IndexColumnRef& col : stmt_value.group_columns) {
-        auto pos = ResolveColumn(*access.value(), col, stmt_value.table_name);
-        if (!pos.ok()) {
-            return pos.status().WithContext("reviving assertion \"" + def.name + "\"");
-        }
-        group_cols.push_back(pos.value());
+    // Resolved against the schema as it is **now**, not as it was, by the
+    // create's own resolver: a column an ALTER renamed makes the declaration
+    // unenforceable, and every question the create asks - the tuple key, the
+    // SUM column's type - is asked again, so a stored declaration the create
+    // would refuse is a reported failure rather than a silently different
+    // constraint.
+    auto columns = ResolveAssertionColumns(*access.value(), stmt_value);
+    if (!columns.ok()) {
+        return columns.status().WithContext("reviving assertion \"" + def.name + "\"");
     }
-
-    std::uint16_t sum_col = 0;
-    if (stmt_value.func == parser::AggFunc::kSum) {
-        auto pos = ResolveColumn(*access.value(), stmt_value.sum_column,
-                                 stmt_value.table_name);
-        if (!pos.ok()) {
-            return pos.status().WithContext("reviving assertion \"" + def.name + "\"");
-        }
-        sum_col = pos.value();
-
-        // **The type check `AssertionBuild` makes, made here too**, because this
-        // function's header promises it and did not perform it: a `uint64` column
-        // does not fit the int64 accumulator a group header keeps (§10), and a
-        // non-int64 one is outside v1 at all (§3.1). Inert while `ALTER TABLE`
-        // cannot change a column's type - but a false claim about *what a
-        // constraint enforces* is the one place this codebase says truthfulness
-        // beats convenience, and a revive that skipped it would resume enforcing
-        // an aggregate the declaration could not have meant.
-        const catalog::SysColumnRow& col = access.value()->schema.columns[sum_col];
-        if (col.type_val != catalog::kTypeValInt64) {
-            return Status::InvalidArgument(
-                "reviving assertion \"" + def.name + "\": its SUM column '" +
-                stmt_value.sum_column.name + "' is type_val=" +
-                std::to_string(col.type_val) +
-                ", and an assertion's SUM column must be int64 (docs/spec/assertion.md §3.1, §10)");
-        }
-    }
+    const std::vector<std::uint16_t>& group_cols = columns.value().group_cols;
 
     LiveAssertion live;
     live.assertion_id = def.id;
@@ -463,7 +450,7 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
     live.aggregate = stmt_value.func == parser::AggFunc::kSum ? BoundAggregate::kSum
                                                                : BoundAggregate::kCount;
     live.group_cols = group_cols;
-    live.sum_col = sum_col;
+    live.sum_col = columns.value().sum_col;
     live.sum_col_name = stmt_value.sum_column.name;
     for (std::size_t i = 0; i < group_cols.size(); ++i) {
         live.group_col_names.push_back(stmt_value.group_columns[i].name);

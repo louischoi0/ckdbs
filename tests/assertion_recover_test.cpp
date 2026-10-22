@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/assertion_check.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/mount_recovery.hpp"
@@ -785,6 +786,69 @@ TEST(AssertionSnapshotDoorTest, AKeyPastItsRecordsLengthFieldIsRefusedAtAdmissio
     EXPECT_TRUE(admit(1000).ok());
 }
 
+// **An assertion naming the tuple key is refused at its write, never read
+// outside the values** (the tuple-key GROUP BY crash). An INSERT's values
+// carry the columns after the tuple key, so schema position 0 is not among
+// them; `ValueAt` read it one value before the span. CREATE ASSERTION and
+// the mount's revive refuse such a declaration, so only a hand-built one
+// reaches the guard - a broken invariant, `Corruption` - which refuses the
+// row, for a BY column and a SUM column alike, and lets a row of an
+// assertion over another column through.
+TEST(AssertionSnapshotDoorTest, AnAssertionOverTheTupleKeyRefusesTheRowAndReadsNothing) {
+    const auto registry_of = [](std::vector<std::uint16_t> group_cols, BoundAggregate aggregate,
+                                std::uint16_t sum_col) {
+        auto registry = std::make_unique<AssertionEnforcer>();
+        LiveAssertion a;
+        a.assertion_id = 5;
+        a.target_oid = 4000;
+        a.name = "cap";
+        a.aggregate = aggregate;
+        a.group_cols = std::move(group_cols);
+        a.sum_col = sum_col;
+        a.sum_col_name = sum_col == 0 ? "id" : "v";
+        for (const std::uint16_t col : a.group_cols) {
+            a.group_col_names.push_back(col == 0 ? "id" : "v");
+            a.group_columns.push_back(GroupColumn(catalog::kTypeValInt64));
+        }
+        a.cabin = BoundCabin(aggregate, /*bound=*/1'000'000);
+        registry->Adopt(std::move(a));
+        return registry;
+    };
+    const auto admit = [](AssertionEnforcer& registry, std::span<const parser::AstValue> row) {
+        AssertionEnforcer::Hold hold;
+        return registry.AdmitInsert(4000, row, /*writer_txn=*/0, hold);
+    };
+
+    // `(id, v int64)`: an INSERT carries `v` alone. And an empty body - a
+    // relation of the tuple key alone - the bug entry's segmentation fault.
+    const std::vector<parser::AstValue> row = IntRow(7);
+    const std::vector<parser::AstValue> empty;
+
+    // GROUP BY (id) CHECK COUNT(*)
+    auto by_key = registry_of({0}, BoundAggregate::kCount, 0);
+    for (const auto values : {std::span<const parser::AstValue>(row),
+                              std::span<const parser::AstValue>(empty)}) {
+        const Status refused = admit(*by_key, values);
+        EXPECT_EQ(refused.code(), StatusCode::kCorruption) << refused.message();
+        EXPECT_NE(refused.message().find("schema position 0"), std::string::npos)
+            << refused.message();
+    }
+    // GROUP BY (v, id) CHECK COUNT(*): the key second.
+    auto by_v_then_key = registry_of({1, 0}, BoundAggregate::kCount, 0);
+    EXPECT_EQ(admit(*by_v_then_key, row).code(), StatusCode::kCorruption);
+    // GROUP BY (v) CHECK SUM(id)
+    auto sum_of_key = registry_of({1}, BoundAggregate::kSum, 0);
+    EXPECT_EQ(admit(*sum_of_key, row).code(), StatusCode::kCorruption);
+
+    // A position past the values is never read either.
+    auto past = registry_of({2}, BoundAggregate::kCount, 0);
+    EXPECT_EQ(admit(*past, row).code(), StatusCode::kCorruption);
+
+    // The guard costs an assertion over a carried column nothing.
+    auto by_v = registry_of({1}, BoundAggregate::kSum, 1);
+    EXPECT_TRUE(admit(*by_v, row).ok());
+}
+
 // **A group keyed from a value as written is found at mount.** Before `KeyFor`
 // coerced, an INSERT keyed a date as its string and a decimal as its text;
 // such a group survives in the log as bytes and no write reaches it again, so
@@ -1507,6 +1571,94 @@ TEST_F(AssertionResumeTest, WithNoBaseInRangeTheAssertionIsNotAdoptedAtAll) {
     EXPECT_EQ(report.assertions_enforcing, 0u);
     EXPECT_EQ(report.assertions_unrecovered, 1u);
     EXPECT_TRUE(fresh.empty());
+}
+
+// **CREATE ASSERTION refuses a GROUP BY or SUM column that is the tuple
+// key**, `NotImplemented` at that column's byte (§3.1): an INSERT's
+// admission reads the columns after the tuple key, before an id is issued,
+// so it has no tuple key value to group or sum by. Before the refusal the
+// create was accepted and the next INSERT read before its values and
+// crashed (the bug entry's reproduction, first case). The same relation's
+// assertion over another column is created and enforces.
+TEST_F(AssertionResumeTest, AGroupByOrSumOverTheTupleKeyIsRefusedAtItsByte) {
+    ASSERT_EQ(Run("CREATE TABLE u (id int64, v int64)").substr(0, 7), "CREATED");
+    const auto refused = [&](const std::string& sql, std::size_t byte) {
+        const std::string out = Run(sql);
+        EXPECT_NE(out.find("NOT_IMPLEMENTED"), std::string::npos) << sql << " -> " << out;
+        EXPECT_NE(out.find("cannot be the tuple key"), std::string::npos)
+            << sql << " -> " << out;
+        EXPECT_NE(out.find("(byte " + std::to_string(byte) + ")"), std::string::npos)
+            << sql << " -> " << out;
+    };
+    //       0         1         2         3         4         5
+    //       0123456789012345678901234567890123456789012345678901234
+    refused("CREATE ASSERTION cap ON u GROUP BY (id) CHECK COUNT(*) <= 1", 36);
+    refused("CREATE ASSERTION cap ON u GROUP BY (v, id) CHECK COUNT(*) <= 1", 39);
+    refused("CREATE ASSERTION cap ON u GROUP BY (v) CHECK SUM(id) <= 1", 49);
+    refused("CREATE ASSERTION cap ON u GROUP BY (ID) CHECK SUM(v) <= 1", 36);
+    auto none = ListAssertions(boot_->catalog, *store_);
+    ASSERT_TRUE(none.ok()) << none.status().message();
+    EXPECT_TRUE(none.value().empty()) << "a refused declaration was recorded";
+
+    // The reproduction's INSERT, with nothing declared: placed.
+    ASSERT_EQ(Run("INSERT INTO u VALUES (5)").substr(0, 8), "INSERTED");
+
+    // A non-key column still groups and enforces, the backfilled row counted.
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON u GROUP BY (v) CHECK COUNT(*) <= 1").substr(0, 7),
+              "CREATED");
+    const std::string violated = Run("INSERT INTO u VALUES (5)");
+    EXPECT_NE(violated.find("cap"), std::string::npos) << violated;
+    EXPECT_EQ(violated.substr(0, 3), "ERR") << violated;
+    EXPECT_EQ(Run("INSERT INTO u VALUES (6)").substr(0, 8), "INSERTED");
+}
+
+// **A stored declaration over the tuple key comes up unenforcing**, its
+// relation's writes refused, rather than enforcing over a value no INSERT
+// carries. One could be on a volume from before the create refused it; it is
+// planted here by rewriting a real assertion's canon in place - same id,
+// same chain, same base - so without the revive's refusal it would be whole
+// and adopted, and the next INSERT would read before its values.
+TEST_F(AssertionResumeTest, AStoredAssertionOverTheTupleKeyComesUpUnenforcing) {
+    ASSERT_EQ(Run("CREATE TABLE u (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON u GROUP BY (v) CHECK COUNT(*) <= 1").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("INSERT INTO u VALUES (5)").substr(0, 8), "INSERTED");
+    ASSERT_TRUE(wal_->Flush().ok());
+
+    auto found = FindAssertionByName(boot_->catalog, *store_, "cap");
+    ASSERT_TRUE(found.ok() && found.value().has_value());
+    const AssertionDef def = *found.value();
+    ASSERT_TRUE(DeleteAssertion(boot_->catalog, *store_, wal_.get(), "cap").ok());
+    const std::string planted = "CREATE ASSERTION cap ON u GROUP BY (id) CHECK COUNT(*) <= 1";
+    ASSERT_TRUE(InsertAssertion(boot_->catalog, *store_, wal_.get(), def.id, def.target_oid,
+                                "cap", planted, def.cabin_root)
+                    .ok());
+
+    AssertionDef stored = def;
+    stored.source_text = planted;
+    const auto revived = ReviveAssertion(boot_->catalog, *store_, stored);
+    ASSERT_FALSE(revived.ok());
+    EXPECT_EQ(revived.status().code(), StatusCode::kNotImplemented) << revived.status().message();
+    EXPECT_NE(revived.status().message().find("reviving assertion \"cap\""), std::string::npos)
+        << revived.status().message();
+    // The SUM column is asked too, not only the GROUP BY list.
+    stored.source_text = "CREATE ASSERTION cap ON u GROUP BY (v) CHECK SUM(id) <= 1";
+    const auto revived_sum = ReviveAssertion(boot_->catalog, *store_, stored);
+    ASSERT_FALSE(revived_sum.ok());
+    EXPECT_EQ(revived_sum.status().code(), StatusCode::kNotImplemented)
+        << revived_sum.status().message();
+
+    AssertionEnforcer fresh;
+    const server::MountRecovery report = server::ResumeAssertionsAfterRecovery(
+        boot_->catalog, *store_, *log_device_, /*stream_core=*/0, /*from_lsn=*/0, fresh,
+        server::MountRecovery{}, /*log=*/nullptr);
+    EXPECT_EQ(report.assertions_enforcing, 0u);
+    EXPECT_EQ(report.assertions_unrecovered, 1u);
+    EXPECT_TRUE(fresh.CannotEnforce(def.target_oid)) << "its relation's writes are admitted";
+
+    AssertionEnforcer::Hold hold;
+    const Status write = fresh.AdmitInsert(def.target_oid, IntRow(6), /*writer_txn=*/0, hold);
+    EXPECT_FALSE(write.ok()) << "a write was admitted by an assertion that cannot enforce";
 }
 
 }  // namespace

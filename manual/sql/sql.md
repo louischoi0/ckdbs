@@ -558,6 +558,11 @@ CREATE ASSERTION <name> ON <table> GROUP BY (<col> [, ...])
   something other than what was written — AS11 as revised 2026-08-08),
   `MIN`/`MAX`/`AVG` bounds, `COUNT(<column>)`, `DISTINCT`,
   `DEFERRABLE` / `NOT DEFERRABLE` / `INITIALLY ...` / `NOT VALID`.
+- A `GROUP BY` column or the `SUM` column that is the relation's tuple key
+  is refused `NOT_IMPLEMENTED` at that column's byte: an `INSERT` is checked
+  before its tuple key is issued. A stored assertion over the tuple key
+  found at a restart comes up `enforcing=0`, and its relation's writes are
+  refused until `DROP ASSERTION`.
 - `!=` and a negative or non-literal bound are `InvalidArgument` (simply
   wrong, not a pending decision). `COUNT(*) <= 0` / `< 1` are refused as
   degenerate — a group exists only because it holds a row.
