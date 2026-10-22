@@ -29,3 +29,12 @@ what the word settles and what it does not.
 | **Mark** | **`v3.4.1`**, an annotated tag on `main` at `1be49229`, then the head of `origin/main`. Its message states what has been built since `v3.4.0` (CF Branch O, CF-Q6 (b), the physical-optimizer split and the `page_epoch` rename, A1 stage 2b, RENAME taking the relation `X`, CH written), what was measured, and the gaps that bound it, among them four open bugs. The full Debug suite ran 4282/4282 at the tagged commit, so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.1` |
 | **Does not settle** | a later version |
 | **Recorded at** | this file; the tag message; CLAUDE.md's Version Management |
+
+## 4. Version 3.4.2 tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.2"* |
+| **Mark** | **`v3.4.2`**, an annotated tag on `main` at `f4bad273`, then the head of `origin/main`. Its message states the assertion-over-the-tuple-key crash fixed (`8591af46`), BL-S4 built, BL ruling 2 re-measured and marked, and the gaps that bound it. The full Debug suite ran 4295/4295 at the tagged commit before the tag, so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.2` |
+| **Does not settle** | a later version |
+| **Recorded at** | this file; the tag message; CLAUDE.md's Version Management |
