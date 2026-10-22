@@ -1,0 +1,1 @@
+bl-mixed-k4-segregated-mixed-relaxed-w0-slicedflt-r0 load 1.37->1.49 errors=0 refusals=0 read p50=130.2 p99=1359.7 p99.9=423866.5 sched p99=478018.8 p99.9=746003.4 max=768353.0 write p50=None p99=None p99.9=None sched p99=None p99.9=None max=None walker p50=3217.9 ins p50=2929.9 rows/s=169587.4 log B/s=76272149.1 moves=0 moves_in_window=0 cores=['0.0', '1.0', '2.0', '3.0']

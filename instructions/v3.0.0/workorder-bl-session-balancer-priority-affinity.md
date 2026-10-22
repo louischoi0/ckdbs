@@ -1019,3 +1019,29 @@ reader service p99 at 1.7-3.0 ms after ruling 1, against 262-283 ms
 before, and schedule p99 at 277-295 ms, which is the roll's. Ruling 3 is
 answered by measurement, not marked; ruling 2 stays unmarked, and BL-S4
 proceeds only on the operator's word.
+
+### BL resumed 2026-10-21 - ruling 2 re-measured, still unmarked
+
+**W13** (`instructions/v3.2.0/raft-marks-2026-10-21.md` §11): *"go bl"*.
+Asked how BL should resume, the operator chose to re-measure first and put
+ruling 2 back with current numbers. Measured on `bl-ruling2-remeasure` at
+`418670a3` (`v3.4.0-22-g418670a3`). Only documents and bench files are
+committed: no file under `src/`, `include/` or `tests/`, and no suite ran.
+The numbers are in
+`bench/v3.4.0/results-bl-ruling2-remeasure-v3.4.0-22-g418670a3.md`, whose
+thesis is that a reader's tail is decided by whether it shares core 0. What
+goes back to the operator, recast:
+
+- **BL-R2 as written is refuted.** It keeps core 0 interactive, and
+  readers held on core 0 are the one arm whose range touches no other.
+- **"Core 0 first" meets the protecting condition** (no interactive
+  session on core 0 while a bulk writer runs). BL-S4's own rule, that no
+  `normal` session is moved onto a batch core, enforces it while a
+  batch-level session is live.
+- **Whether an empty core 0 is better is not shown.** It costs one core in
+  four, and its ranges overlap "core 0 first"'s at p99 and p99.9 over three
+  runs.
+- **Separate from the ruling**: the shipped BL-S3 balancer ends 8 of 9
+  runs with a reader on core 0 (`known-gaps.md`'s BL section).
+
+Ruling 2 stays unmarked. BL-S4 proceeds only on the operator's mark.
