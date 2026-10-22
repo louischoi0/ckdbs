@@ -83,7 +83,7 @@ enum class PageType : std::uint8_t {
     // WAL-logged - an ordinary authoritative page class.
     //
     // Also relayout-exempt by construction: its values are immutable per
-    // version, so the physical optimizer never has a reason to move one.
+    // version, and no mover exists (heap-and-tuple.md §7.1).
     kVarHeap = 10,
 
     // A secondary index (docs/spec/index.md §4): the internal nodes that

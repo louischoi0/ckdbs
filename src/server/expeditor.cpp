@@ -194,7 +194,7 @@ std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfi
         {"range_size_ids",
          "range_size_ids is retired since v3.0.0's M3: insert spreading went with range "
          "ownership, so no range is opened and a relation is one structure; remove the key"},
-        // BZ-R5: relayout Part I, the planner this key switched, is deleted.
+        // BZ-R5: the relayout planner this key switched is deleted.
         {"physical_optimizer",
          "physical_optimizer is retired since BZ: the relayout planner and SHOW RELAYOUT it "
          "switched are deleted; the Cabin controller is 'cabin_optimizer'; remove the key"},
@@ -513,7 +513,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
             return Status::InvalidArgument(
                 file.origin() + ": decay_half_life " + std::to_string(v.value()) +
                 " is outside 1.." + std::to_string(kMaxHalfLifeSeconds) +
-                " (seconds; docs/spec/physical-optimizer.md R1)");
+                " (seconds; docs/spec/decay.md R1)");
         }
         decay_half_life_ns = v.value() * 1'000'000'000ULL;
     }

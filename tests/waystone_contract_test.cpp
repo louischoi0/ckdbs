@@ -326,10 +326,11 @@ void ExpectSame(const std::vector<std::string>& got, const std::vector<std::stri
     }
 }
 
-// What a relayout mover will do to every page it touches, done by hand
-// because no mover exists (docs/spec/physical-optimizer.md §6). Sweeps the
-// user id range; absent ids just miss, and a catalog chain's growth page,
-// which shares the range, is passed by: a mover reorganizes user relations.
+// What a leaf division or compaction does to a page's epoch
+// (docs/spec/heap-and-tuple.md §3.1a R4), done by hand across every user
+// page. Sweeps the user id range; absent ids just miss, and a catalog
+// chain's growth page, which shares the range, is passed by: the bump
+// stands for a user relation's leaf rewrite.
 std::size_t BumpEveryUserPage(Instance& db) {
     auto catalog_pages = testing_catalog::EveryCatalogPage(db.store());
     EXPECT_TRUE(catalog_pages.ok()) << catalog_pages.status().message();
@@ -340,7 +341,7 @@ std::size_t BumpEveryUserPage(Instance& db) {
         if (catalog_pages.value().count(id) != 0) continue;
         auto page = db.store().Get(id);
         if (!page.ok()) continue;
-        storage::BumpRelayoutEpoch(page.value().bytes());
+        storage::BumpPageEpoch(page.value().bytes());
         ++bumped;
     }
     return bumped;
@@ -661,11 +662,11 @@ TEST(WaystoneContractTest, AnUnindexedNonTupleKeyPredicateStillScans) {
 }
 
 TEST(WaystoneContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
-    // **Spec §2 rule 2, proven load-bearing** (docs/spec/physical-optimizer.md
-    // R4, workplan PX04). Until this test the epoch comparison's inputs were
+    // **Spec §2 rule 2, proven load-bearing** (docs/spec/heap-and-tuple.md
+    // §3.1a R4, workplan PX04). Until this test the epoch comparison's inputs were
     // constant - recorded 0 against a page at 0 - so it passed vacuously.
-    // Here the page side moves, which is exactly what a relayout mover will
-    // do: every recorded location on a bumped page must become untrusted at
+    // Here the page side moves, as a leaf division or compaction moves it:
+    // every recorded location on a bumped page must become untrusted at
     // once, every consult must miss and fall through, no reply may move, and
     // the next recording must heal the trail at the new epoch.
     Instance db(/*record=*/true, /*replay=*/true);

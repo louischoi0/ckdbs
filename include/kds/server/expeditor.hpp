@@ -282,13 +282,14 @@ public:
         // Whether a successful SELECT records its access shapes into
         // `sys.access_stats` (`access_statistics`, default on).
         //
-        // Independent of Waystone: this is the physical optimizer's input
-        // (docs/spec/heap-and-tuple.md §7), not a trail. Default on because a
-        // history that starts when someone remembers to enable it is a
-        // history that does not exist when the optimizer arrives.
+        // Independent of Waystone: it feeds `SHOW ACCESS` and CREATE CABIN's
+        // no-filter warning (docs/spec/heap-and-tuple.md §7), not a trail.
+        // Default on because a history that starts when someone remembers to
+        // enable it is a history that does not exist when it is asked for.
         bool access_statistics = true;
 
-        // ---- Physical optimizer (docs/spec/physical-optimizer.md) -------
+        // ---- Decay score and Cabin controller (docs/spec/decay.md,
+        // docs/spec/cabin-controller.md) ------------------------------------
 
         // R1's half-life: how long an untouched decay score takes to lose
         // half its weight (`decay_half_life`, in **seconds** in the file
@@ -299,12 +300,11 @@ public:
         // Consumed by the Cabin controller and its signal collector.
         sched::MonoTimeNs decay_half_life_ns = 600'000'000'000ULL;  // 600 s
 
-        // ---- Cabin optimizer, §II.6 (workplan PHY05) --------------------
+        // ---- Cabin optimizer, docs/spec/cabin-controller.md §II.6 -------
         //
         // The controller's boot settings. `cabin_optimizer` seeds PO8's
-        // switch (off by default - experimental, §II.6's posture, and the
-        // opposite default from Part I's shadow because a controller that
-        // *acts* is not a report); the rest translate into
+        // switch (off by default - experimental, cabin-controller.md
+        // §II.6's posture); the rest translate into
         // `stats::CabinOptimizerConfig` via CabinOptimizerSettings().
         // Thresholds are **percent integers** because the config file
         // parses no decimals: 300 means θ = 3.0. Validation enforces the
@@ -333,8 +333,8 @@ public:
         std::uint64_t cabin_optimizer_snapshot_interval_ms = 10'000;
 
         // The boot settings assembled into the decision core's config.
-        // T_amort stays the R1 half-life (§II.6's own default) with no key
-        // of its own until a measured workload argues for one.
+        // T_amort is `cabin_optimizer_amort_windows` whole R1 half-lives
+        // (cabin-controller.md §II.6).
         stats::CabinOptimizerConfig CabinOptimizerSettings() const;
         // The two caps as the store takes them - one place for the
         // positional pair, so core 0's store and a peer's (AK-S2) cannot

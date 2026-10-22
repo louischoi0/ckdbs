@@ -68,7 +68,7 @@ idempotent (BF-R7). A freed id comes back through the store's free list
 pages: DT3 refuses it while an assertion exists.
 
 **Gate 3 is answered for a dropped relation only**
-(`physical-optimizer.md` §6). A reused page that would validate a stale
+(`heap-and-tuple.md` §7.1). A reused page that would validate a stale
 location is a miss, through the walk's owner check, the replay gate and
 BF-R10's checks on every remembered location. Gate 3 stays shut for a
 mover.

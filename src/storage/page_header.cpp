@@ -44,7 +44,7 @@ PageHeaderFields ReadPageHeader(std::span<const std::byte, kPageSize> page) {
     fields.flags = LoadField<std::uint16_t>(page, kPageFlagsOffset);
     fields.checksum = LoadField<std::uint32_t>(page, kPageChecksumOffset);
     fields.page_lsn = LoadField<std::uint64_t>(page, kPageLsnOffset);
-    fields.relayout_epoch = LoadField<std::uint64_t>(page, kPageRelayoutEpochOffset);
+    fields.page_epoch = LoadField<std::uint64_t>(page, kPageEpochOffset);
     fields.owner_oid = LoadField<std::uint64_t>(page, kPageOwnerOidOffset);
     return fields;
 }
@@ -55,7 +55,7 @@ void WritePageHeader(std::span<std::byte, kPageSize> page, const PageHeaderField
     StoreField<std::uint16_t>(page, kPageFlagsOffset, fields.flags);
     StoreField<std::uint32_t>(page, kPageChecksumOffset, fields.checksum);
     StoreField<std::uint64_t>(page, kPageLsnOffset, fields.page_lsn);
-    StoreField<std::uint64_t>(page, kPageRelayoutEpochOffset, fields.relayout_epoch);
+    StoreField<std::uint64_t>(page, kPageEpochOffset, fields.page_epoch);
     StoreField<std::uint64_t>(page, kPageOwnerOidOffset, fields.owner_oid);
 }
 
@@ -69,7 +69,7 @@ void FormatPage(std::span<std::byte, kPageSize> page, PageType type, std::uint16
     fields.flags = flags;
     fields.checksum = 0;  // stamped at flush, never here
     fields.page_lsn = kNoPageLsn;
-    fields.relayout_epoch = 0;
+    fields.page_epoch = 0;
     fields.owner_oid = owner_oid;
     WritePageHeader(page, fields);
 }
@@ -130,16 +130,16 @@ std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page) {
     return LoadField<std::uint64_t>(page, kPageOwnerOidOffset);
 }
 
-std::uint64_t GetRelayoutEpoch(std::span<const std::byte, kPageSize> page) {
-    return LoadField<std::uint64_t>(page, kPageRelayoutEpochOffset);
+std::uint64_t GetPageEpoch(std::span<const std::byte, kPageSize> page) {
+    return LoadField<std::uint64_t>(page, kPageEpochOffset);
 }
 
-void SetRelayoutEpoch(std::span<std::byte, kPageSize> page, std::uint64_t epoch) {
-    StoreField<std::uint64_t>(page, kPageRelayoutEpochOffset, epoch);
+void SetPageEpoch(std::span<std::byte, kPageSize> page, std::uint64_t epoch) {
+    StoreField<std::uint64_t>(page, kPageEpochOffset, epoch);
 }
 
-void BumpRelayoutEpoch(std::span<std::byte, kPageSize> page) {
-    SetRelayoutEpoch(page, GetRelayoutEpoch(page) + 1);
+void BumpPageEpoch(std::span<std::byte, kPageSize> page) {
+    SetPageEpoch(page, GetPageEpoch(page) + 1);
 }
 
 std::uint32_t ComputePageChecksum(std::span<const std::byte, kPageSize> page) {

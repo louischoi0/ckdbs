@@ -1,26 +1,30 @@
-# KDS Physical Optimizer Manual
+# KDS Cabin Controller Manual
 
-Operating the physical optimizer: what it observes, the config keys, and
-the Cabin controller. Verified against `docs/spec/physical-optimizer.md`,
-`kds.conf.sample` and `include/kds/stats/`. The spec owns every decision
-cited here (R1, R4, PO1-PO10); this manual is the operator's view.
+Operating the Cabin controller: what it observes, the config keys, and
+the view; with the decay score it reads and the page epoch its hints
+carry. Verified against `docs/spec/cabin-controller.md` (PO1-PO10),
+`docs/spec/decay.md` (R1), `docs/spec/heap-and-tuple.md` §3.1a (R4) and
+§7.1, `kds.conf.sample` and `include/kds/stats/`. The specs own every
+decision cited here; this manual is the operator's view.
 
-Engine-driven physical optimization is one of the two things KDS exists
-for. The umbrella has two parts:
+The Cabin controller is acceleration the engine decides for itself and can
+drop without changing a result: it creates and drops Observational Cabins,
+and a Cabin is authoritative for the values it observed, so whether one
+exists changes which path answers, never the answer.
 
-- **Part I — the shared foundations**: the heat score (R1) and the page
-  epoch (R4). **Relayout is gone since BZ (2026-10-17)**: the shadow
-  planner, `SHOW RELAYOUT`, the `sys.relayout` view and the
-  `physical_optimizer` config key are deleted, because they planned only
-  for the chain-stored heap, which no longer exists. A `kds.conf` that
-  still sets `physical_optimizer` is refused at startup by name — remove
-  the line.
-- **Part II — the Cabin controller** (complete, PHY01-PHY08, closed
-  2026-08-10 — measured in `bench/results-cabin-optimizer.md`): the
-  `CABIN AUTO` promotion pipeline, gated by the `cabin_optimizer` config
-  key, **default `off`** — so out of the box a column declared
-  `CABIN AUTO` still behaves as an undeclared one.
-  `SHOW CABIN_OPTIMIZER` is the view (§5a below).
+- **The Cabin controller** (complete, PHY01-PHY08, closed 2026-08-10 —
+  measured in `bench/results-cabin-optimizer.md`): the `CABIN AUTO`
+  promotion pipeline, gated by the `cabin_optimizer` config key,
+  **default `off`** — so out of the box a column declared `CABIN AUTO`
+  still behaves as an undeclared one. `SHOW CABIN_OPTIMIZER` is the view
+  (§5a below).
+- **What it rests on**: the heat score (R1, `decay.md`) and the page epoch
+  (R4, `heap-and-tuple.md` §3.1a). **Relayout is gone since BZ
+  (2026-10-17)**: the shadow planner, `SHOW RELAYOUT`, the `sys.relayout`
+  view and the `physical_optimizer` config key are deleted, because they
+  planned only for the chain-stored heap, which no longer exists. A
+  `kds.conf` that still sets `physical_optimizer` is refused at startup by
+  name — remove the line.
 
 There is **no mover**. Nothing moves a tuple for statistics' sake or
 reclaims a page. Cabin creation *can* be autonomous — only when
@@ -33,9 +37,9 @@ reclaims a page. Cabin creation *can* be autonomous — only when
 | Key | Default | Meaning |
 |---|---|---|
 | `decay_half_life` | `600` | Seconds for an untouched heat score to lose half its weight. One instance-wide value; `0` is refused (instant decay is "no score"). |
-| `access_statistics` | `on` | The input feed: per-shape access recording into `sys.access_stats` (`SHOW ACCESS`). With it off, no new shapes are recorded. |
+| `access_statistics` | `on` | Per-shape access recording into `sys.access_stats` (`SHOW ACCESS`). With it off, no new shapes are recorded. The Cabin controller does not read it; its inputs are its own signal collector and the Cabin store's counters. |
 
-Part II's key exists since PHY04: `cabin_optimizer = off|on` (default
+The controller's key exists since PHY04: `cabin_optimizer = off|on` (default
 `off`), with tuning keys (`cabin_optimizer_page_budget`,
 `cabin_optimizer_theta_create_pct` / `_drop_pct` / `_swap_pct`,
 `cabin_optimizer_amort_windows`, `cabin_optimizer_cooldown_half_lives`)
@@ -86,22 +90,24 @@ decayed value is `score · 2^(-(t-last_bump)/half_life)`, computed lazily at
 touch and read — **no background pass**, so ten thousand cold scores cost
 nothing until asked. Fixed-point (Q24.8), no floating point on any
 statement path; exact at whole half-lives, ≤4.4% overestimate between.
-Consumer: the Cabin controller's S1/S2 signals (Part II).
+Consumer: the Cabin controller's S1-S3 signals (§5).
 
 ## 4. Why nothing moves a tuple
 
-No relayout mover exists; `docs/spec/physical-optimizer.md` §6 states the
+No relayout mover exists; `docs/spec/heap-and-tuple.md` §7.1 states the
 facts that stand in front of one (the reader horizon, the between-pages
 key order a descent and range pruning read, and cross-relation page reuse,
 answered only for a dropped relation's pages).
 
-The page epoch (R4) is built: every page carries `relayout_epoch`, moved
-only when a B+ tree leaf divides or is compacted in place (never by DML);
+The page epoch (R4) is built: every page carries `page_epoch`, moved
+only when a B+ tree leaf divides or is compacted in place - a row placed
+mid-leaf shifts the slots after it without moving the epoch, and the
+Keystone-id check at the slot catches the shift;
 Waystone replay and Cabin hints record and compare it, and no consumer may
 accept a location on epoch equality alone — the Keystone-id check stays
 the identity test.
 
-## 5. Part II — the Cabin controller (status)
+## 5. The Cabin controller (status)
 
 The `CABIN AUTO` promotion pipeline: one background controller for the instance (since AT-S8) that
 would CREATE/EXTEND/HEAL/DROP Observational Cabins under a pure
@@ -160,9 +166,9 @@ controller's snapshot sequence.
 
 ## 6. Operating notes
 
-- `SHOW ACCESS` is the raw input (`sys.access_stats`, shapes keyed by
-  columns, never values). `SHOW CABINS` lists every Cabin declared or
-  created; `SHOW CABIN_OPTIMIZER` shows the ones Part II manages, with
+- `SHOW ACCESS` shows the access shapes the workload ran (`sys.access_stats`,
+  keyed by columns, never values); the controller does not read it. `SHOW CABINS` lists every Cabin declared or
+  created; `SHOW CABIN_OPTIMIZER` shows the ones the controller manages, with
   the scores and decisions behind them.
 - Statistics rows are never removed, and a statistic outlives its
   relation — a vanished relation prints `rel=oid=<n>`.
@@ -170,4 +176,5 @@ controller's snapshot sequence.
   multi-core instance `SHOW ACCESS` reflects every core's traffic.
 - Nothing here can change a query result: the epoch pairing rule keeps
   every location hint verified, and the Cabin controller manages only
-  Observational Cabins, which are advisory.
+  Observational Cabins, and dropping one returns its queries to the tree
+  walk.

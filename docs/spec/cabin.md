@@ -7,7 +7,7 @@ Keystone tuple key contract (super column), B+tree tuple key facade (B1–B3), p
 fingerprint (P-series), waystone trail model, thread-per-core
 cooperative scheduling, MVCC undo-chain model.
 Related docs: `waystone-concpets.md`, `pattern-tracking-levels.md`,
-`physical-optimizer.md` Part II (the cabin optimizer), `assertion.md`
+`cabin-controller.md` (the Cabin controller), `assertion.md`
 (the Bound class, §12).
 
 Decisions fixed by this spec:
@@ -120,7 +120,7 @@ only after a `PURGE` freed it; an entry naming a rolled-back or purged key
 can meet a new row (W12, BD-R4, `heap-and-tuple.md` §4.1c), which the
 read-time key re-check filters. This buys four things:
 
-1. **Relocation invariance** — the physical optimizer moves pages
+1. **Relocation invariance** — a leaf division or compaction moves rows
    without ever touching a Cabin, exactly as decided for secondary
    indexes in B2 (value = tuple key indirection). An authoritative structure
    that required maintenance on relocation would couple two subsystems
@@ -541,7 +541,7 @@ Distinct trust classes, cooperative operation; none replaces another:
   is the only source; there is no user-declared pattern.
 - **Waystone does not feed promotion.** A trail header's `use_count` is
   written 0 and advanced by nothing, and §8.1's controller reads its own
-  three signals (`physical-optimizer.md` PO2); the recording scan measures
+  three signals (`cabin-controller.md` PO2); the recording scan measures
   a value's exact cardinality. Waystone and Cabin are not competitors.
 - **Cabin serves; Waystone still accelerates.** In a chain like
   `…FROM account JOIN trade ON trade.account_id = account.id WHERE
@@ -576,7 +576,7 @@ can: **who is allowed to decide that this column carries a Cabin?**
 | written | policy | meaning |
 |---|---|---|
 | `col type NO CABIN` | disabled | No Cabin on this column, ever, by any route. `CREATE CABIN` is refused; auto-creation will never consider it. |
-| `col type CABIN AUTO` | auto | The engine may create one when its own signals say the column has earned it — the cabin optimizer (`docs/spec/physical-optimizer.md` Part II), see below. |
+| `col type CABIN AUTO` | auto | The engine may create one when its own signals say the column has earned it — the Cabin controller (`docs/spec/cabin-controller.md`), see below. |
 | `col type CABIN` | enabled | A Cabin is created at `CREATE TABLE`, and its values are observed on **first** selection. |
 | `col type` | unset | Read as *auto* by every reader, and stored distinctly so "nothing was said" stays distinguishable from "the engine may decide". |
 
@@ -601,7 +601,7 @@ same sentence `fk_check`'s reverse check reasons by, that a value asked
 once must not buy a standing write-hook cost.
 
 **`auto` is consumed by the cabin optimizer**
-(`docs/spec/physical-optimizer.md` Part II): the instance's one background
+(`docs/spec/cabin-controller.md`): the instance's one background
 controller that CREATEs, EXTENDs, HEALs and DROPs Observational Cabins
 under a fixed-point cost-benefit core — its threshold is the θ_create
 hysteresis margin over measured scan cost and frequency. It creates

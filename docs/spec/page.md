@@ -34,7 +34,7 @@ Fixed 32 bytes at offset 0 of every headered page. Type-specific content begins 
 | 2 | 2 | `flags` | unused: written 0, read by nothing (§2b) |
 | 4 | 4 | `checksum` | CRC32C over the full 8 KiB with this field zeroed (§10) |
 | 8 | 8 | `page_lsn` | LSN of the last WAL record applied (wal.md §9); 0 = never logged |
-| 16 | 8 | `relayout_epoch` | bumped when tuples on the page move (`docs/spec/physical-optimizer.md` R4, `heap-and-tuple.md` §3.1a); 0 = never relayouted |
+| 16 | 8 | `page_epoch` | bumped when tuples on the page move (`heap-and-tuple.md` §3.1a, R4); 0 = never moved |
 | 24 | 8 | `owner_oid` | oid of the owning object, 0 = unattributed (§2a) |
 
 Codec rules as everywhere (rules.md §2/§5): field-wise memcpy helpers, mirror struct + `offsetof` `static_assert`s, fixed-width LE, no bitfields. A shared `page_header` codec module owns this layout; type-specific codecs compose it and must not re-implement it.
@@ -117,7 +117,7 @@ Owns "which page_ids exist / are free" inside the disk-backed store, behind the 
 - **Headered, checksummed, logged** — an ordinary authoritative page class, with a `page_lsn` and a `VARHEAP_APPEND` record (`wal.md` §5.2). Waystone pages and the trail directory are *advisory*, and those rules must not be pattern-matched onto this one: losing a var-heap value loses a committed value, not a hint.
 - **Layout:** the same slotted shape as a heap page — common header, an 8-byte page header (`flags`, `nr_slots`, `lower`, `upper`), a slot directory of `{offset u16, length u16}` growing down, values growing up from the tail `next_page_id` reservation. What it is *not* is a heap page: no MVCC tuple header, no delete-mark, no slot retirement, because a value has no lifetime of its own — it lives and dies with the version pointing at it.
 - **Chain:** one per relation, rooted at `sys.tables.varheap_page_id` and allocated at `CREATE TABLE` for any schema that can spill, grown by tail append. The root never moves, which is what keeps it a cacheable fact (`catalog_cache.hpp`'s rule). No `min_key` and no ordering: values are reached only through the pointers in the tuples that own them, so a walk is never a search.
-- **Relayout-exempt by construction.** Values are immutable per version, so the physical optimizer has no reason to touch a `kVarHeap` page and must not.
+- **Relayout-exempt by construction.** Values are immutable per version, so nothing that moves tuples has a reason to touch a `kVarHeap` page, and none may.
 - **Max value = 8144 bytes**, one page's worth. A larger value would need a multi-page representation, so it is refused with `Unsupported` rather than answered by inventing one.
 - **Release:** a rollback releases its own appends (`VARHEAP_RELEASE`, `heap-and-tuple.md` §3.4). A superseded or deleted version's value is not released; its bytes stay, so churn-heavy string updates consume space.
 

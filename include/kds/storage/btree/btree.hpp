@@ -60,7 +60,7 @@
 //   - **median** - any other divide (`SplitLeafAndInsert`): the keys cut at
 //     their median, the upper half moved to a new leaf.
 //
-// A divide or a compaction moves the old leaf's `relayout_epoch` one past
+// A divide or a compaction moves the old leaf's `page_epoch` one past
 // its value, and a separator sorting
 // inside a full internal node divides that node. docs/spec/heap-and-tuple.md
 // section 4.1 carries why a divide keeps invariants 2 and 3.

@@ -68,7 +68,7 @@ namespace kds::exec {
 // re-validated against the page before anything is read from it.
 struct TrailLocation {
     PageId page_id = kInvalidPageId;
-    // The page's relayout epoch as the entry recorded it, carried so the
+    // The page's page epoch as the entry recorded it, carried so the
     // consult site can hand it to the verifier (spec section 2 rule 2).
     std::uint32_t page_epoch = 0;
     std::uint16_t slot = 0;

@@ -842,7 +842,7 @@ TEST(BtreeTest, ADivisionLeavesBothLeavesInsideInvariantsTwoAndThree) {
     }
 }
 
-TEST(BtreeTest, ADivisionBumpsTheRelayoutEpochOfThePageItRebuilt) {
+TEST(BtreeTest, ADivisionBumpsThePageEpochOfThePageItRebuilt) {
     storage::InMemoryPageStore store(128);
     Tree tree(store);
 
@@ -851,7 +851,7 @@ TEST(BtreeTest, ADivisionBumpsTheRelayoutEpochOfThePageItRebuilt) {
 
     auto before = store.Get(original_leaf);
     ASSERT_TRUE(before.ok());
-    const std::uint64_t epoch_before = heap::PageView(before.value().bytes()).RelayoutEpoch();
+    const std::uint64_t epoch_before = heap::PageView(before.value().bytes()).PageEpoch();
 
     ASSERT_TRUE(tree.Insert(placed.front() + 5, kSmallFiller).ok());
 
@@ -861,7 +861,7 @@ TEST(BtreeTest, ADivisionBumpsTheRelayoutEpochOfThePageItRebuilt) {
     // which is a relayout in everything but name (§3.1a). Without the bump a
     // Waystone trail entry or Cabin hint recorded before the division would
     // still compare equal and send a reader to a slot holding another row.
-    EXPECT_EQ(heap::PageView(after.value().bytes()).RelayoutEpoch(), epoch_before + 1)
+    EXPECT_EQ(heap::PageView(after.value().bytes()).PageEpoch(), epoch_before + 1)
         << "the rebuild must carry the epoch forward, not restart it at 1";
 }
 

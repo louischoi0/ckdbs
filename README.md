@@ -112,7 +112,7 @@ Configuration, operation and backup are in the [server manual](manual/server/ser
 | Writing SQL | [SQL reference](manual/sql/sql.md) |
 | Running and configuring the server | [Server manual](manual/server/server.md), [Backup and restore](manual/server/backup-restore.md) |
 | Writing a client (KWP/1 wire protocol) | [Client manual](manual/client/client.md) |
-| The Cabin controller | [Physical optimizer manual](manual/physical-optimizer/physical-optimizer.md) |
+| The Cabin controller | [Cabin controller manual](manual/cabin-controller/cabin-controller.md) |
 | How the engine works inside | [Design specifications](docs/spec/), starting with [`heap-and-tuple.md`](docs/spec/heap-and-tuple.md) |
 | What is missing, and what a restart loses | [Known gaps](docs/inflight/known-gaps.md) |
 | Ideas not yet built | [Concept notes](docs/conceptnotes/) |

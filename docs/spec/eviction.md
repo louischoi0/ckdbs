@@ -37,7 +37,7 @@ that follows directly from standing engine contracts:
 
 | ID | Decision |
 |----|----------|
-| EV1 | Replacement policy: **CLOCK (second-chance) with a per-frame usage counter**. Access bumps the counter (saturating); the sweep hand decrements and reclaims frames at zero. No LRU lists. A temperature-model variant reusing the physical-optimizer lazy-decay score (`docs/spec/physical-optimizer.md` R1) is an **experimental hook only**, gated behind the same experimental status as the physical optimizer itself. |
+| EV1 | Replacement policy: **CLOCK (second-chance) with a per-frame usage counter**. Access bumps the counter (saturating); the sweep hand decrements and reclaims frames at zero. No LRU lists. No temperature variant is built: the sweep reads no decay score and its victim test has no policy seam (`docs/spec/decay.md` §3). |
 | EV2 | Dirty handling: a **background writeback task** (background scheduling group) keeps a supply of clean frames; eviction prefers clean frames. Forced synchronous writeback is the fallback only. **Flush-before-evict** is mandatory: WAL durable up to the page LSN before the frame is reused. Page checksums (S9) are computed at writeback. |
 | EV3 | Pinning is a **page-class attribute**, not a per-page runtime flag. v1 pinned classes: **fixed catalog pages** and **Bound Cabin pages** (`docs/spec/assertion.md` §5). The fixed catalog pages are the system range below `kFirstUserPageId` - the superblock, region 0's bitmaps and the catalog relations' fixed roots - pinned by id, since they are formatted `kHeap` like any relation's page; **a page a catalog chain grows onto past its root is not pinned** (`catalog.md` CT5, superblock 31): it is a `CreateNew` page at or above 128, an ordinary CLOCK candidate reclaimed only clean, unpinned and unlatched and re-faulted with its checksum checked (D2 of the catalog page ceiling, under the operator's ruling of 2026-10-18, "$!recommended"). Its cost is cold faults under the catalog's holds; one of them spends an `INSERT`'s no-refuse window (`known-gaps.md`). Waystone/trail pages and meta-pool pages are evictable (Waystone is advisory — loss is a performance event, never a correctness event; the meta pool has its own entry-level eviction and is not double-pinned at page level). Debug builds assert on any eviction attempt against a pinned class. PageRef (S2) pins are, as always, absolute: a frame with a live pin is never a sweep candidate. |
 | EV4 | **One pool for the instance** (AR0 M1): one frame table under a structure latch (§1), `kds.buffer_pool_frames` an undivided total rather than a per-core share, and no frame stealing or rebalancing because there is nothing to steal from. The sharing rests on the volume having one WAL stream, since the writeback gate is a property of the log; a volume with more than one is refused at mount, so it is unconditional. No core owns a relation's pages (`crosscore.md` CC7). |
@@ -259,8 +259,8 @@ Bulk sequential readers declare ring mode on their scan handle:
 ## 7. Non-goals (v1, documented)
 
 - Page-kind priority weighting (EV7).
-- Temperature-unified eviction via decay scores (`docs/spec/physical-optimizer.md` R1) — experimental hook only;
-  the hook is a single policy seam in the sweep's victim test, nothing more.
+- Temperature-unified eviction via decay scores (`docs/spec/decay.md` R1): not built; the
+  sweep's victim test has no policy seam.
 - Prefetching — out of scope for this document (belongs to the scan/executor
   layer).
 - Memory-pressure-driven pool resizing at runtime — pool size is boot-fixed

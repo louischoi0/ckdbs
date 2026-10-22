@@ -16,7 +16,7 @@ No retention exists to order, and levels 1, 2 and 4 have no encoding.
 The design: a *tracking level* per pattern decides how hard the engine
 works to keep its instances' trails, replacing the `pinned` boolean the
 bit was re-scoped from and giving retention its eviction order — level 4
-first, then 3, then 2, within a level by the lazy-decay score (`physical-optimizer.md` R1); level 1 is
+first, then 3, then 2, within a level by the lazy-decay score (`decay.md` R1); level 1 is
 never a candidate. Invariant 9 holds at every level: levels change how much
 performance the cache promises, never what a query returns.
 

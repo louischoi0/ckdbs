@@ -896,7 +896,7 @@ Every step of a statement runs under the session's borrow.
   poll of `IsInFlight`; an `INSERT` asks for that `IX` ahead
   of its assertion admission (`InsertParsed`, AT-0 item 13), so a build
   cannot slip between a writer's check and its row. AO-R12 meant the
-  position for a *mover*; none exists (`physical-optimizer.md` §6).
+  position for a *mover*; none exists (`heap-and-tuple.md` §7.1).
   **That `X` is refused by a writer's `IX` too**, so the drop waits for an
   open writer of the relation as well - transaction-length, since a write's
   borrow is the transaction's. A drop **inside a transaction that holds

@@ -29,7 +29,7 @@ NULLs omitted — is rejected on two grounds, both correctness rather than taste
   `docs/rules/rule-fixed-length-tuple.md` §2 (row size is a per-relation
   constant, asserted in the row codec), and with it in-page slot arithmetic,
   `PageView::OverwriteTuple()` always fitting, and the stable `(page_id, slot)`
-  address that Waystone, the Cabin and the physical optimizer rely on.
+  address that Waystone and the Cabin rely on.
 - **It conflates `''` with NULL**, the defect
   `docs/rules/rule-fixed-length-tuple.md` §3 gives as the reason for the tag
   byte.

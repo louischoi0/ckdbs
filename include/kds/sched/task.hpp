@@ -13,7 +13,7 @@ namespace kds::sched {
 
 enum class SchedulingGroup : int {
     kForeground = 0,  // OLTP execution
-    kMaintenance = 1,  // physical relayout, statistics, hint-index upkeep
+    kMaintenance = 1,  // statistics, hint-index upkeep
     kSystem = 2,       // checkpoint/WAL housekeeping
 };
 

@@ -23,7 +23,7 @@ TEST(PageHeaderTest, RoundTripsEveryField) {
     written.flags = 0xBEEF;
     written.checksum = 0xDEADBEEF;
     written.page_lsn = 0x0123456789ABCDEFULL;
-    written.relayout_epoch = 0xFEDCBA9876543210ULL;
+    written.page_epoch = 0xFEDCBA9876543210ULL;
     written.owner_oid = 0x1122334455667788ULL;
 
     WritePageHeader(Mut(page), written);
@@ -34,7 +34,7 @@ TEST(PageHeaderTest, RoundTripsEveryField) {
     EXPECT_EQ(read.flags, written.flags);
     EXPECT_EQ(read.checksum, written.checksum);
     EXPECT_EQ(read.page_lsn, written.page_lsn);
-    EXPECT_EQ(read.relayout_epoch, written.relayout_epoch);
+    EXPECT_EQ(read.page_epoch, written.page_epoch);
     EXPECT_EQ(read.owner_oid, written.owner_oid);
 }
 
@@ -85,7 +85,7 @@ TEST(PageHeaderTest, FormatPageZeroesEverythingAndSetsCurrentVersion) {
     EXPECT_EQ(fields.flags, 0x0007);
     EXPECT_EQ(fields.checksum, 0u);
     EXPECT_EQ(fields.page_lsn, kNoPageLsn);
-    EXPECT_EQ(fields.relayout_epoch, 0u);
+    EXPECT_EQ(fields.page_epoch, 0u);
     EXPECT_EQ(fields.owner_oid, 0u);
     for (std::size_t i = kPageBodyOffset; i < kPageSize; ++i) {
         ASSERT_EQ(page[i], std::byte{0}) << "body byte " << i;
@@ -203,20 +203,20 @@ TEST(PageHeaderTest, UnformattedPageTypeHasNoSupportedVersion) {
     EXPECT_EQ(MaxSupportedFormatVersion(PageType::kInvalid), 0u);
 }
 
-// ---- Relayout epoch (docs/spec/physical-optimizer.md R4, workplan PX03) --
+// ---- Page epoch (docs/spec/heap-and-tuple.md §3.1a R4, workplan PX03)
 
-TEST(PageHeaderTest, RelayoutEpochRoundTripsAndBumpsByOne) {
+TEST(PageHeaderTest, PageEpochRoundTripsAndBumpsByOne) {
     Page page{};
     FormatPage(Mut(page), PageType::kHeap);
-    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 0u);
+    EXPECT_EQ(GetPageEpoch(Const(page)), 0u);
 
-    SetRelayoutEpoch(Mut(page), 41);
-    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 41u);
+    SetPageEpoch(Mut(page), 41);
+    EXPECT_EQ(GetPageEpoch(Const(page)), 41u);
 
-    BumpRelayoutEpoch(Mut(page));
-    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 42u);
-    BumpRelayoutEpoch(Mut(page));
-    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 43u);
+    BumpPageEpoch(Mut(page));
+    EXPECT_EQ(GetPageEpoch(Const(page)), 42u);
+    BumpPageEpoch(Mut(page));
+    EXPECT_EQ(GetPageEpoch(Const(page)), 43u);
 }
 
 // The no-format-bump claim, tested rather than asserted: a page image laid
@@ -240,7 +240,7 @@ TEST(PageHeaderTest, APreEpochPageImageReadsEpochZeroWithoutAFormatBump) {
     EXPECT_TRUE(ValidatePageHeader(Const(page), PageType::kHeap).ok());
     EXPECT_EQ(ReadPageHeader(Const(page)).format_version,
               MaxSupportedFormatVersion(PageType::kHeap));
-    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 0u);
+    EXPECT_EQ(GetPageEpoch(Const(page)), 0u);
 }
 
 // The epoch is inside the checksummed span: a bump that forgot to restamp
@@ -252,14 +252,14 @@ TEST(PageHeaderTest, TheEpochIsInsideTheChecksumSpan) {
     StampPageChecksum(Mut(page));
     ASSERT_TRUE(VerifyPageChecksum(Const(page)).ok());
 
-    BumpRelayoutEpoch(Mut(page));
+    BumpPageEpoch(Mut(page));
     const Status stale = VerifyPageChecksum(Const(page));
     EXPECT_FALSE(stale.ok());
     EXPECT_EQ(stale.code(), StatusCode::kCorruption);
 
     StampPageChecksum(Mut(page));
     EXPECT_TRUE(VerifyPageChecksum(Const(page)).ok());
-    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 1u);
+    EXPECT_EQ(GetPageEpoch(Const(page)), 1u);
 }
 
 }  // namespace

@@ -279,7 +279,7 @@ sym varchar                -- unset, which reads as auto
 Unset and `AUTO` are stored as different values so the catalog keeps the
 difference between "nothing was said" and "the engine may decide".
 A column declared `AUTO` behaves exactly as an undeclared one: both are
-eligible for the Cabin controller (`physical-optimizer.md` Part II), which
+eligible for the Cabin controller (`docs/spec/cabin-controller.md`), which
 creates Cabins from runtime access statistics and drops the ones it created
 while `cabin_optimizer` is on (off by default, experimental). `NO CABIN` keeps
 a column out of every route, the controller's included.

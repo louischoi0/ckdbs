@@ -5,21 +5,20 @@
 
 #include "kds/sched/clock.hpp"
 
-// The lazy-decay score (docs/spec/physical-optimizer.md R1, §3).
+// The lazy-decay score (docs/spec/decay.md R1, §2).
 //
 // One `{score, last_bump}` pair per scored thing; exponential half-life
 // decay computed *lazily* — a touch decays-then-increments, a read decays
 // without storing, and there is no background decay pass. Idle data costs
 // nothing and is never visited; that is the design, not an optimization.
 //
-// **This is the one decay implementation.** Declared consumers: hot/cold
-// classification in the physical-optimizer planner (workplan PX05),
-// trail-retention ordering (docs/spec/pattern-tracking-levels.md), and
-// EV1's experimental temperature hook (docs/spec/eviction.md). A second
-// decay formula anywhere is the same defect a second literal-coercion path
-// was (docs/spec/types.md §3.1). **Nothing consumes this yet** — the
-// planner (PX05) is the first caller, and the header exists ahead of it
-// for the reason the eviction sweep does: so the property is testable now.
+// **This is the one decay implementation.** Its one caller is the Cabin
+// controller's signal collector (`stats/optimizer_signals.hpp`,
+// docs/spec/cabin-controller.md PO2). Trail-retention ordering
+// (docs/spec/pattern-tracking-levels.md) and the temperature variant of
+// docs/spec/eviction.md EV1 name this score; neither is built (decay.md §3).
+// A second decay formula anywhere is the same defect a second
+// literal-coercion path was (docs/spec/types.md §3.1).
 //
 // Time comes from the injected `sched::Clock` (rules.md #4 — no
 // std::chrono in engine logic). **With no clock the score degrades to a
@@ -109,7 +108,7 @@ inline std::uint32_t ValueAt(const DecayState& s, const sched::Clock* clock,
 // than wrapping to cold, for the reason every aggregate in this engine
 // checks: a wrap is a wrong answer wearing a plausible one's clothes.
 //
-// The N-point form exists for the quantity signals (feat-physical-optimizer
+// The N-point form exists for the quantity signals (cabin-controller.md
 // §II.2 S2: pages scanned per execution) — a decayed *sum* kept beside a
 // decayed *count* yields a decayed mean as their ratio, both halves
 // decaying on the same clock so the ratio is stable under idleness.

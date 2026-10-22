@@ -390,17 +390,16 @@ waystone_replay = on
 # Independent of the Waystone switches above.
 access_statistics = on
 
-# ---- Physical optimizer ----------------------------------------------------
+# ---- Decay score and the Cabin controller ---------------------------------
 
-# `physical_optimizer` is retired since BZ (docs/spec/physical-optimizer.md
-# section 8): the relayout planner and SHOW RELAYOUT it switched are deleted,
+# `physical_optimizer` is retired since BZ (docs/spec/heap-and-tuple.md
+# section 7.1): the relayout planner and SHOW RELAYOUT it switched are deleted,
 # and a file that still sets the key is refused at startup by name.
 
 # How long an untouched decay score takes to lose half its weight, in
-# seconds (docs/spec/physical-optimizer.md R1). The lazy-decay score is the
+# seconds (docs/spec/decay.md R1). The lazy-decay score is the
 # one time-weighting the engine has: the cabin optimizer below reads its
-# signals through it, and trail retention and the eviction temperature hook
-# are its declared future consumers.
+# signals through it, and nothing else does.
 #
 # Decay is computed lazily at read and touch - there is no background pass,
 # so this key prices nothing per second; it only decides how fast "hot"
@@ -410,7 +409,7 @@ access_statistics = on
 # configuration this engine offers.
 decay_half_life = 600
 
-# The cabin optimizer - Part II of docs/spec/physical-optimizer.md: the
+# The cabin optimizer - docs/spec/cabin-controller.md: the
 # background controller that CREATEs/EXTENDs/HEALs/DROPs Observational
 # Cabins under a cost-benefit rule. **Off by default, experimental**. `SET CABIN_OPTIMIZER ON|OFF` flips it at
 # runtime, non-destructively in both directions.
@@ -419,7 +418,8 @@ decay_half_life = 600
 # its decisions; while it is off they parse, validate and steer nothing.
 cabin_optimizer = off
 
-# The controller's tuning, every number `[PROPOSED]` (spec section II.6).
+# The controller's tuning, every number `[PROPOSED]`
+# (docs/spec/cabin-controller.md section II.6).
 # Thresholds are percent integers - 300 means a benefit/cost ratio of 3.0 -
 # and the one rule validation enforces is the hysteresis gap the
 # anti-thrash design stands on: theta_drop < 100 < theta_create.

@@ -8146,7 +8146,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // The optimizer's S1 widens this beyond Waystone's gate, and the
     // difference is the point: a *scan-only* statement is exactly the shape
     // whose decayed frequency the cabin optimizer's CREATE decision prices
-    // (physical-optimizer.md §II.4's f_i), and it is the one shape
+    // (cabin-controller.md §II.4's f_i), and it is the one shape
     // invariant 9 keeps Waystone away from. ANALYZE prints the ids whatever
     // was opted - a dispatcher built with no optimizer surface included -
     // so the operator can name a shape before opting it in.
@@ -8358,7 +8358,7 @@ void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
 
 void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
     // Unconditional on a successful SELECT, and independent of Waystone:
-    // this is the physical optimizer's input (docs/spec/heap-and-tuple.md §7),
+    // this is access statistics (docs/spec/heap-and-tuple.md §7),
     // not a trail, and it is collected whether or not anything is recording
     // or replaying one.
     // **The instance's one switch decides it on every core** (AT-S7):
@@ -8390,7 +8390,7 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         // one producer both heal sites use, so a hint minted here and a
         // hint repaired there carry the same stamp by construction.
         if (!write_epoch.has_value()) {
-            write_epoch = exec::CurrentRelayoutEpoch(page_store_, page_id);
+            write_epoch = exec::CurrentPageEpoch(page_store_, page_id);
         }
         entry.page_epoch = *write_epoch;
         entry.slot = slot;

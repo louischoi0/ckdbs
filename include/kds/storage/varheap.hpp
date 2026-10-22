@@ -29,8 +29,8 @@
 //   - Pointers need no epoch, no validation and no forwarding - unlike a
 //     Waystone entry, which is advisory precisely because what it points at
 //     can move.
-//   - The class is relayout-exempt by construction. The physical optimizer
-//     has no reason to touch a kVarHeap page, so it never will.
+//   - The class is relayout-exempt by construction: no mover exists
+//     (heap-and-tuple.md §7.1), and a kVarHeap page is outside any move.
 //   - Reclamation is not new machinery: it rides on purge. Versions of one
 //     tuple share every spilled value an UPDATE did not assign
 //     (`exec::EncodeAssigned`, BN-R3 of

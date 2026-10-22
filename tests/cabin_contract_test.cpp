@@ -211,10 +211,11 @@ void ExpectSame(const std::vector<std::string>& got, const std::vector<std::stri
     }
 }
 
-// What a relayout mover will do to every page it touches, done by hand
-// because no mover exists (docs/spec/physical-optimizer.md §6). Sweeps the
-// user id range; absent ids just miss, and a catalog chain's growth page,
-// which shares the range, is passed by: a mover reorganizes user relations.
+// What a leaf division or compaction does to a page's epoch
+// (docs/spec/heap-and-tuple.md §3.1a R4), done by hand across every user
+// page. Sweeps the user id range; absent ids just miss, and a catalog
+// chain's growth page, which shares the range, is passed by: the bump
+// stands for a user relation's leaf rewrite.
 std::size_t BumpEveryUserPage(Instance& db) {
     auto catalog_pages = testing_catalog::EveryCatalogPage(db.store());
     EXPECT_TRUE(catalog_pages.ok()) << catalog_pages.status().message();
@@ -225,7 +226,7 @@ std::size_t BumpEveryUserPage(Instance& db) {
         if (catalog_pages.value().count(id) != 0) continue;
         auto page = db.store().Get(id);
         if (!page.ok()) continue;
-        storage::BumpRelayoutEpoch(page.value().bytes());
+        storage::BumpPageEpoch(page.value().bytes());
         ++bumped;
     }
     return bumped;
@@ -405,9 +406,9 @@ TEST(CabinContractTest, CorruptedLocationHintsChangeNoReply) {
 
 TEST(CabinContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
     // **The epoch check made real for the Cabin's hints**
-    // (docs/spec/physical-optimizer.md R4, workplan PX04). Every hint was
-    // recorded at epoch 0; the page side moves here, as a relayout mover
-    // will move it. A btree relation must notice per entry, resolve the tuple key,
+    // (docs/spec/heap-and-tuple.md §3.1a R4, workplan PX04). Every hint was
+    // recorded at epoch 0; the page side moves here, as a leaf division or
+    // compaction moves it. A btree relation must notice per entry, resolve the tuple key,
     // and stamp the healed hint with the *bumped* epoch - a heal that wrote
     // 0 back would miss and re-heal forever, on the heap's hidden key as on
     // a declared one. Either way no reply moves.
