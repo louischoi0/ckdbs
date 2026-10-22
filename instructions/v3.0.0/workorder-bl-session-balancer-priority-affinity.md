@@ -635,8 +635,8 @@ proposal is `[design]` unless a cell says otherwise.
 | BL-Q7 | **`debug_text_port` sessions**: (a) movable like any other; (b) stay on core 0 | scope | (a). W0 says no session is pinned; the connection type is the same | |
 | BL-Q8 | **Is the priority setting user-visible in v0?**<br>(a) Yes: a per-session setting after the handshake, its `transactional` level gated by the administrative role.<br>(b) No: the mechanism ships with its default only, observable but not settable, and the surface waits for a workload that asks.<br>(c) Engine-derived: priority from the statement's class (point read vs walk vs load) | user-visible | (a): the session declares one of BL-Q16's four levels; `transactional` alone is gated by the administrative role. (c) is recorded as a later direction, not v0 | **(a)**, adopted whole on W6 (2026-10-12), not marked per item |
 | BL-Q9 | ~~The name~~ | - | - | **Struck by W4** (2026-10-12): with no session affinity there is no collision with the namespace's (the header) |
-| BL-Q10 | **Where the per-session counters are read.**<br>(a) `SHOW META` for the asking session and per-core totals only.<br>(b) A `sys` view of every session, which the operator excluded from BO (`raft-marks-2026-10-11.md` §2) | scope | (a). (b) reverses an operator mark, which only the operator can do | |
-| BL-Q11 | **CN-10.** BL builds §3.4's carrier with a load trigger, not §3.5's admission. (a) BL's close marks U6 as built by BL, with the trigger noted as BL-R4's; (b) U6 stays open until §3.5 exists | process | (a) | |
+| BL-Q10 | **Where the per-session counters are read.**<br>(a) `SHOW META` for the asking session and per-core totals only.<br>(b) A `sys` view of every session, which the operator excluded from BO (`raft-marks-2026-10-11.md` §2) | scope | (a). (b) reverses an operator mark, which only the operator can do | **(a)**, adopted under W10's latitude at BL-S4 (2026-10-22); the per-session counters are not built (`known-gaps.md`) |
+| BL-Q11 | **CN-10.** BL builds §3.4's carrier with a load trigger, not §3.5's admission. (a) BL's close marks U6 as built by BL, with the trigger noted as BL-R4's; (b) U6 stays open until §3.5 exists | process | (a) | **(a)**, adopted under W10's latitude at BL-S5 (2026-10-22); CN-10's U6 says so |
 | BL-Q12 | **Priority inversion.**<br>(a) None in v0; a counter of waits whose holder's level is below the waiter's.<br>(b) Inheritance: a holder's session is polled at its highest waiter's level until the release | design | (a), with (b) taken up only if §5.2 counts inversions on more than 1 % of lock waits in its mixed cell. The counter splits by the pair of levels: a `background` writer holding row `X` against a `transactional` writer is the combination BL-R7 expects | |
 | BL-Q13 | **Yielding writes and index walks** (BL-R7's remainder). (a) Out of BL, named in the close; (b) in BL | scope | (a). It is a suspension-safety argument over locks and borrows, an order of its own | |
 | BL-Q14 | **BL-S1's premise gate.** BL stops for a ruling when any of: (i) under §5.1's skew cells, the balanced arm improves neither aggregate throughput nor per-core p99 spread by more than the run-to-run spread; or (ii) under the mixed cell, the same-core point read's p99 is already within 2× its isolated p99, so priority has nothing to serve; or (iii) one value of the mixed cell's slice sweep brings it there, in which case CLA proposes rung 1 alone (BL-R7). The 1,024-row inserter does not yield, so no slice value moves its share of the p99; (iii) is judged against the reactor-hold split, not the raw p99 | process | As written. (i) gates BL-S2/S3; (ii) and (iii) gate BL-S4. Each gate is independent | Measured in BL-S1 (§6): (i) passes on the spread; (ii) does not stop; (iii) serves a walk alone and not the mixed cell, whose stall is the WAL's - BL-S4 stopped for a ruling |
@@ -1116,3 +1116,45 @@ review's `402317a2`.
   `402317a2` (two disabled and two skipped cells, none BL's).
 - **Overhead not measured**; measured at BL's close (BL-S5). BL-S5 also owes
   the texts (`sched.md`, `crosscore.md`, `protocol.md`, the manual).
+
+### BL-S5 measured 2026-10-22 (W17) - BL's close is the operator's
+
+**W17** (`instructions/v3.2.0/raft-marks-2026-10-21.md` §15): *"go bl-s5"*.
+On `worktree-bl-s4-partition`, measured at `f4bad273`
+(`v3.4.1-10-gf4bad273`), `bench/v3.4.0/results-bl-close-v3.4.1-10-gf4bad273.md`,
+inside the milestone's hour (builds 09:33-09:38, cells 09:45-09:52 UTC, after
+a quiet gate that waited out another session's suite):
+
+- **Bar (i) met.** The statement path (INSERT, tuple-key SELECT, UPDATE,
+  scan at 200 / 1K / 10K rows), ten interleaved servers per arm: B against
+  BL-S4's parent `0af06bbc` and against B with the balancer off, at
+  `cores` 1 and 4 - all 36 p50 deltas overlap; at `cores = 4` a consistent
+  +0.1 % to +1.8 % on single-row statements, the per-head decision. A first
+  5-rep rotation's outlier (B's 10K point read at `cores = 4`, 3 reps at
+  80-94 us) did not reproduce at ten. **What the A/B cannot price**: BL-S1
+  and BL-S2's code, landed on 2026-10-12 and in every arm.
+- **Bar (iii) met** at every run's end: in the mixed cell with levels both
+  batch sessions ended on core 0 and no reader there, 3 runs of 3.
+- **Bar (v) not met.** The `transactional` reader's schedule p99 is
+  1.9-9.6 ms (median 6.5) against 0.47 ms isolated - and 287 ms with the
+  same load declaring nothing. No `normal` session shares a reader's core,
+  so rung 3 is not opened; the excess lines up with roll waits on
+  reader-only cores and is recorded as BL-R7's remainder (`known-gaps.md`).
+- **Bars (ii) and (iv) cut** to BL-S3's convergence measurement: the
+  undeclared path is BL-S3's code.
+- **The partition's price**: an `analytic` walker beside a `background`
+  inserter on core 0 completes about 1,000 walks in 10 s against about
+  20,000 with a core of its own.
+- **Texts**: `sched.md` §3 (the per-level slice), §4 (priority is not a
+  group; the pick is unchanged), §5 (the fallback accept and the placer's
+  partition); `crosscore.md` CC1; `protocol.md` §8 (`SET PRIORITY`);
+  `manual/sql/sql.md` and `manual/client/client.md`; `rules.md` §3 (the
+  batch count, at BL-S4); CN-10's U6 (BL-Q11 (a)); `known-gaps.md`'s
+  BL-R7 remainder; CLAUDE.md's Cross-core execution row.
+- **`tools/bl_mixed.py --levels`** (`ee6d74a0`) declares a role's level.
+
+**Every BL stage is built and measured.** Closing BL is the operator's word.
+Unmarked at the close: BL-Q2, BL-Q7 (both as built: the whole connection
+moves, and a `debug_text_port` session moves like any other), BL-Q12 (no
+inversion counter), BL-Q13 (yielding writes out of BL), BL-Q14 (measured
+at BL-S1), BL-Q15 (this measurement).

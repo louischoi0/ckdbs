@@ -887,6 +887,30 @@ until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
   instance numbers (`batch_sessions`, `batch_cores`,
   `load_c<k>_partition_moves_out`) are printed. Verified on
   `worktree-bl-s4-partition` at `402317a2`.
+- **BL-R7's remainder: a declared partition does not bring a
+  `transactional` reader inside 2x its isolated p99** (§5.2 bar (v),
+  measured at BL's close on `worktree-bl-s4-partition` at `f4bad273`,
+  `bench/v3.4.0/results-bl-close-v3.4.1-10-gf4bad273.md`). With the bulk
+  writer `background` and the walker `analytic`, the reader schedule p99
+  is 1.9-9.6 ms against 0.47 ms isolated (287 ms with nothing declared). No
+  reader shares a core with a batch session or with core 0's drain; the
+  excess lines up with roll waits on reader-only cores (0.16-0.28 s per
+  10 s), whose taker on those cores is not identified. What else v0 does
+  not separate:
+  - a `normal` session's statement that does not yield holds an
+    interactive core from a `transactional` one, and a `background` write
+    batch holds a batch core from an `analytic` read - the pick inside
+    `foreground` is FIFO (rung 3 is unbuilt; BL-Q13 keeps yielding writes
+    out of BL);
+  - at `cores = 1` there is no partition, so a level acts by its walk slice
+    alone;
+  - a session waiting on a lock held by another level's session waits for
+    it (inversion; BL-Q12's counter is unbuilt);
+  - buffer frames, the log's sync order and the lock table ignore the
+    level;
+  - **the batch sessions share the batch cores**: an `analytic` walker
+    beside a `background` inserter on one batch core completes about a
+    twentieth of the walks it does with a core of its own.
 - **What the suite does not cover:** a TLS or SCRAM session moving (the
   channel and gate travel inside the `Connection`, covered by reading only),
   a cancel sent to a session after it moved (the registry entry is keyed by

@@ -92,6 +92,7 @@ client parses:
 | `BEGIN` / `COMMIT` / `ROLLBACK` | `BEGIN trx_id=<n> isolation=<s> durability=<c>` / `COMMIT trx_id=<n>` / `ROLLBACK trx_id=<n>` |
 | `SET ISOLATION LEVEL` | `SET isolation=<s>` |
 | `SET DURABILITY` | `SET durability=<c>` |
+| `SET PRIORITY` | `SET priority=<level>` |
 | `SHOW <X>` | a count line (`tables=<n>`, `indexes=<n>`, ...) then one `\n`-escaped section per row |
 | `DESCRIBE <t>` | summary line (`oid= root_page_id= clustered_type= next_id= ... budget_used=`), then one section per column |
 | `SYNC` | `OK synced` |

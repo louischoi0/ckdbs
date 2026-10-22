@@ -1578,6 +1578,20 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   overrides for one transaction, and the two clauses may be written in
   either order. Three rungs: the server's configured class, then the
   session's, then the transaction's.
+- **`SET PRIORITY {TRANSACTIONAL|NORMAL|ANALYTIC|BACKGROUND}`** (verified
+  in `HandleSetPriority`; reply `SET priority=<level>`) declares the work
+  this session does, `NORMAL` until it declares one, from its next
+  statement - admitted inside a transaction, which stays on its core. Above
+  one core, while any session is `ANALYTIC` or `BACKGROUND`, those two run
+  on the batch cores (`max(1, cores / 4)`: core 0, then the
+  highest-numbered) and the others on the rest, so a bulk load or a report
+  that says so stays off the cores serving short transactions; with none
+  declared, every core serves every session. An `ANALYTIC` scan yields its
+  core every 16 pages instead of 64. `TRANSACTIONAL` needs the `admin`
+  role and is placed like `NORMAL`; a level never limits access (an
+  `ANALYTIC` session may write) and touches no buffer, log or lock order.
+  `sys.meta` prints `batch_sessions`, `batch_cores` and each core's
+  `load_c<k>_partition_moves_out`.
 - Exactly two isolation levels: `READ COMMITTED` (default, read view per
   statement) and `REPEATABLE READ` (read view per transaction).
   `SERIALIZABLE` is refused as out of scope, not open, and `READ UNCOMMITTED`

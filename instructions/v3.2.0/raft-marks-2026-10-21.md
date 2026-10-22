@@ -119,3 +119,21 @@ what the word settles and what it does not.
 | **Mark** | **BL-S4 built** on `worktree-bl-s4-partition` (`66d8e533`, review `402317a2`): `SET PRIORITY`, the partition with core 0 first, the per-level slice, the fallback accept passing over batch cores; BL-Q10 (a) adopted under W10's latitude; the eight-connection cell cut (the BL order's §6, "BL-S4 built 2026-10-22") |
 | **Does not settle** | BL-S5 (the close, its overhead A/B and texts); a push; a tag, a version |
 | **Recorded at** | this file; the BL order's §6; `docs/inflight/known-gaps.md`'s BL section; the BL row in `instructions/v3.0.0/index.md`; CLAUDE.md's Cross-core execution row; `docs/rules/rules.md` §3 |
+
+## 14. BL-S4 pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W16 (BL's session): *"push no verify"* |
+| **Mark** | **BL-S4 pushed to `main`** at `f4bad273` with `--no-verify`; the full suite had run 4295/4295 on that tree |
+| **Does not settle** | BL-S5; BL's close; a tag, a version |
+| **Recorded at** | this file |
+
+## 15. BL-S5 started and measured; BL's close is the operator's
+
+| | |
+|---|---|
+| **Word** | W17 (BL's session): *"go bl-s5"* |
+| **Mark** | **BL-S5 measured** at `v3.4.1-10-gf4bad273` (`bench/v3.4.0/results-bl-close-v3.4.1-10-gf4bad273.md`): bar (i) met, (iii) met at each run's end, (v) not met and reported as BL-R7's remainder, (ii) and (iv) cut to BL-S3's measurement. The texts written (`sched.md` §3-§5, `crosscore.md` CC1, `protocol.md` §8, `manual/sql/sql.md`, `manual/client/client.md`, `rules.md` §3, CN-10's U6, `known-gaps.md`'s remainder). BL-Q11 (a) adopted under W10's latitude, as BL-Q10 (a) was at BL-S4 |
+| **Does not settle** | **BL's close**, which is the operator's word; BL-Q2, BL-Q7, BL-Q12..Q15, unmarked; a push; a tag, a version |
+| **Recorded at** | this file; the BL order's §4 (BL-Q10, BL-Q11) and §6; the BL row in `instructions/v3.0.0/index.md`; CLAUDE.md's Cross-core execution row |
