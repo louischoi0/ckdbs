@@ -134,6 +134,6 @@ what the word settles and what it does not.
 | | |
 |---|---|
 | **Word** | W17 (BL's session): *"go bl-s5"* |
-| **Mark** | **BL-S5 measured** at `v3.4.1-10-gf4bad273` (`bench/v3.4.0/results-bl-close-v3.4.1-10-gf4bad273.md`): bar (i) met, (iii) met at each run's end, (v) not met and reported as BL-R7's remainder, (ii) and (iv) cut to BL-S3's measurement. The texts written (`sched.md` §3-§5, `crosscore.md` CC1, `protocol.md` §8, `manual/sql/sql.md`, `manual/client/client.md`, `rules.md` §3, CN-10's U6, `known-gaps.md`'s remainder). BL-Q11 (a) adopted under W10's latitude, as BL-Q10 (a) was at BL-S4 |
-| **Does not settle** | **BL's close**, which is the operator's word; BL-Q2, BL-Q7, BL-Q12..Q15, unmarked; a push; a tag, a version |
+| **Mark** | **BL-S5 measured** at `v3.4.1-10-gf4bad273` (`bench/v3.4.0/results-bl-close-v3.4.1-10-gf4bad273.md`) and its texts written (the BL order's §6, "BL-S5 measured 2026-10-22") |
+| **Does not settle** | **BL's close**, which is the operator's word; BL-Q2, BL-Q7 and BL-Q10..Q15, unmarked - BL-Q10 (a) and BL-Q11 (a) are what CLA built and wrote under W10's latitude, and their marks are owed; a push; a tag, a version |
 | **Recorded at** | this file; the BL order's §4 (BL-Q10, BL-Q11) and §6; the BL row in `instructions/v3.0.0/index.md`; CLAUDE.md's Cross-core execution row |

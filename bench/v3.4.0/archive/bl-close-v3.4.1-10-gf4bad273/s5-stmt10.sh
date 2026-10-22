@@ -1,6 +1,6 @@
 #!/bin/bash
 # BL-S5 statement-path overhead: A (0af06bbc) vs B (f4bad273) at cores 1 and 4,
-# and B vs N (B, balancer off) at cores 4. 5 reps, arm order rotated per rep.
+# and B vs N (B, balancer off) at cores 4. 10 reps (this copy; s5-stmt.sh ran 5), arm order rotated per rep.
 set -u
 WT=/home/cdkbs/ckdbs/.claude/worktrees/bl-s4-partition
 SP=/tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-bs-test-hardening/f973f5e5-b744-42a3-8ccb-fd3d80d2584f/scratchpad

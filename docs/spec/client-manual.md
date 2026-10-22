@@ -71,7 +71,7 @@ statement (`docs/spec/protocol.md` §10):
 
 | Role | May run |
 |---|---|
-| `readonly` | `SELECT`, `WITH`, `ANALYZE`, `SHOW *`, `DESCRIBE`, `PING`, `BEGIN`/`COMMIT`/`ROLLBACK`, `SET ISOLATION` |
+| `readonly` | `SELECT`, `WITH`, `ANALYZE`, `SHOW *`, `DESCRIBE`, `PING`, `BEGIN`/`COMMIT`/`ROLLBACK`, `SET ISOLATION`, `SET DURABILITY`, `SET PRIORITY` (all but `TRANSACTIONAL`, which is `admin`'s) |
 | `readwrite` | everything above, plus `INSERT`, `UPDATE`, `DELETE` |
 | `admin` | everything, including `CREATE`/`DROP`/`ALTER`, `STOP`, `SYNC`, `SET CABIN_OPTIMIZER` |
 

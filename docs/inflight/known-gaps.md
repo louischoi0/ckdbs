@@ -890,13 +890,11 @@ until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
 - **BL-R7's remainder: a declared partition does not bring a
   `transactional` reader inside 2x its isolated p99** (§5.2 bar (v),
   measured at BL's close on `worktree-bl-s4-partition` at `f4bad273`,
-  `bench/v3.4.0/results-bl-close-v3.4.1-10-gf4bad273.md`). With the bulk
-  writer `background` and the walker `analytic`, the reader schedule p99
-  is 1.9-9.6 ms against 0.47 ms isolated (287 ms with nothing declared). No
-  reader shares a core with a batch session or with core 0's drain; the
-  excess lines up with roll waits on reader-only cores (0.16-0.28 s per
-  10 s), whose taker on those cores is not identified. What else v0 does
-  not separate:
+  `bench/v3.4.0/results-bl-close-v3.4.1-10-gf4bad273.md`): 6.5 ms median
+  against 0.47 ms isolated. Where it was read, the excess is the checkpoint
+  task, rotating over cores, holding a reader core's reactor on the stream
+  latch during a segment roll. Rung 3's probe was cut, so whether a
+  two-tier pick would help is not known. What else v0 does not separate:
   - a `normal` session's statement that does not yield holds an
     interactive core from a `transactional` one, and a `background` write
     batch holds a batch core from an `analytic` read - the pick inside

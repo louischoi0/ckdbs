@@ -8,24 +8,37 @@
   balancer switched off (**N**, an uncommitted measurement build), at
   `cores = 1` and `cores = 4`, ten interleaved servers per arm. Every p50
   delta's rep ranges overlap. At `cores = 1` the deltas are -1.1 % to +0.5 %.
-  At `cores = 4` B is +0.1 % to +1.8 % over A and +0.2 % to +1.7 % over N on
-  the single-row statements - a consistent sign, inside the spread, which
-  prices the per-head decision at well under a microsecond. Scans are -2.1 %
-  to +0.5 %.
+  At `cores = 4` B is -0.2 % to +1.8 % over A and +0.2 % to +1.7 % over N on
+  the single-row statements - inside the spread, and of one size against
+  both arms, though A runs BL-S3's load-slot read and N does not, so this
+  A/B does not attribute it (§2). Scans are -2.1 % to +0.4 %.
 - **Mixed cell with levels (bars (iii) and (v)), `cores = 4`, the balancer
   placing.** Six `transactional` point readers at 400/s in total, an
   `analytic` 10,000-row walker and a `background` 1,024-row inserter:
-  - **Partition fidelity (iii) holds** at every run's end: both batch
-    sessions on core 0 and no reader there, in 3 of 3 runs.
+  - **Partition fidelity (iii): consistent, not sampled per statement.** At
+    every run's end both batch sessions were on core 0 and no reader there
+    (3 of 3), and no core's `load_c<k>_partition_moves_out` moved between
+    the window's two reads - no head inside the window found a session on
+    the wrong side. §5.2 asks for every statement's core, which the driver
+    does not record.
   - **Reader schedule p99: 1.9 / 6.5 / 9.6 ms** (median 6.5 ms), against
     0.47 ms isolated and **287 ms** with the same load declaring nothing.
     **Bar (v), at most 2x the isolated p99, is not met** (14x at the median).
     The p99.9 is 138-239 ms, against 437 ms undeclared.
-  - **The excess is not a `normal` session sharing a reader's core** - there
-    is none in this cell - so under BL-R7 it opens no rung 3 and is reported
-    as BL-R7's remainder. It lines up with roll waits on the reader-only
-    cores 2 and 3: 0.16-0.28 s per 10 s, the waiter the BL ruling-2 file
-    left unidentified.
+  - **Where the excess comes from, where it was seen: the checkpoint.** In
+    `levels` r1 and r2 the control session read core 3, a reader-only core:
+    inside the window its checkpoint ran (`checkpoint_runs` 0 -> 1) and its
+    longest `system` poll was 257 ms and 207 ms, matching core 3's 0.27 s
+    and 0.28 s of roll-blocked wait - the checkpoint task, which rotates
+    over cores, holding a reader core's reactor on the stream latch while a
+    roll holds it. r3's control session read core 1, so r3 has no such
+    reading. The undeclared arm shows the same signature on its reader
+    cores (`none` r2: a 255 ms `system` poll on core 3), beside core 0's
+    drain waits of 2.8-3.4 s.
+  - **Rung 3 is neither opened nor ruled out.** §5.2's rung-3 probe - a
+    second `normal` walker on the readers' cores - was cut (§1), so this
+    cell holds no interactive session that rung 3 would reorder; the excess
+    above is reported as BL-R7's remainder.
   - **The partition's cost is the batch sessions'.** The walker completes
     1,002-1,025 statements, against 20,204-21,205 undeclared, because it
     shares core 0 with the non-yielding inserter. The inserter is
@@ -55,7 +68,7 @@
 | Executed | 2026-10-22 UTC. Builds 09:33:30-09:37:54. Statement rotation (5 reps) 09:45:35-09:46:32, after the quiet gate waited 275 s for another session's test suite; mixed cells 09:46:32-09:49:48; statement rotation (10 reps) 09:50:01-09:51:52 |
 | Versions | **A** `0af06bbc` (`v3.4.1-4-g0af06bbc`, BL-S4's parent), exported with `git archive` and built in a scratch directory. **B** `f4bad273` (`v3.4.1-10-gf4bad273`, BL-S4 merged with `origin/main`; B carries one other session's change, `8591af46`, an assertion-admission fix no cell here reaches). **N** = B plus `nobal.patch` (`LoadPlacer::Place` returns the session's core when `KDS_BL_NO_BALANCE` is set), never committed, source restored after the build |
 | Binaries | Release, built this session after their commits, each run from a copy: `kds_server.0af06bbc` sha256 `60723ba6d4333cff1eeae0b9019febf77e3c1b4854255af222fae05947b0831d`; `kds_server.f4bad273` `3323c0a73f47560055820e69eda2196c6da446c954fd60226811070f376eb3d3`; `kds_server.f4bad273-nobal` `947d63aea93c14b8c0d18129a16eabaeb24b5454abcfbc0ec664e9352d875be3` |
-| Host / device | 8 vCPU AMD EPYC 9V74, Linux 7.0.0-1014-azure; data and WAL on `/dev/root`, ext4, not tmpfs, 91 % full. Statement cells unpinned; mixed cells with servers on CPUs 0,2,4,6 and clients on 1,3,5,7. **The quiet gate** before every cell: no `kds_tests` and no `cc1plus` process, and a 1-minute load under 2 (another session's suite was running when the run began; `progress.txt` records each cell's load) |
+| Host / device | 8 vCPU AMD EPYC 9V74, Linux 7.0.0-1014-azure; data and WAL on `/dev/root`, ext4, not tmpfs, 91 % full. Statement cells unpinned; mixed cells with servers on CPUs 0,2,4,6 and clients on 1,3,5,7. **The quiet gate** before every cell: no `kds_tests` and no `cc1plus` process, and a 1-minute load under 2 (another session's suite was running when the run began; `progress.txt` records each cell's load; the gate reads the 1-minute load only, so the first cells began with 5-minute loads of 6-7 after the other suite) |
 | Server configuration | Statement cells: `cores` 1 or 4, `durability = relaxed`, `buffer_pool_frames = 131072`, `log_level = warn`, one fresh server and data file per cell. Mixed cells: `cores = 4`, `relaxed`, `buffer_pool_frames = 65536`, `log_level = info`, `reactor_cpus = 0,2,4,6` |
 | Statement cell | One connection, autocommit: at 200, 1,000 and 10,000 preloaded rows of a fresh 5-column BTREE relation, 1,000 single-row INSERTs, 1,000 tuple-key SELECTs, 1,000 single-row UPDATEs and 20 unsorted whole scans (the A1 close's cell). Arm order rotated per rep: `cores = 1` A B / B A; `cores = 4` A B N / B N A / N A B |
 | Mixed cell | C1 as in `results-bl-ruling2-remeasure-v3.4.0-22-g418670a3.md` §0, placement `kernel` (the balancer places), `--ctl-core -1` (a control session pinned to core 0 would be moved off it by the partition): arms `isolated` (readers only, `transactional`), `levels` (readers `transactional`, walker `analytic`, inserter `background`) and `none` (nothing declared), 3 runs each, interleaved |
@@ -125,9 +138,12 @@ pair's rep-range overlap, are `tables-stmt10.md`; **all 36 p50 deltas
 overlap**. The widest at `cores = 4` are B over A +1.8 % (200-row insert:
 A's reps 45.5-46.6 with one at 65.8, B's 46.4-48.1 with one at 65.4) and B
 over N +1.7 % (200-row point-select). B's 200-row insert sits about 0.6 us
-above N's in nine of ten reps: this is the size of the per-head decision -
-four load slots read from other cores' cache lines and the side computed -
-and it is inside the run-to-run spread. **The QPS a client sees** (1e6 /
+above N's in nine of ten reps, and above A's in nine of ten too. A reads
+the same four load slots per head as B (BL-S3's `Place`) and N reads none,
+yet A and N sit within 0.6 us of each other with no consistent sign, so
+the slot read is not what B pays; what remains - BL-S4's side term, its
+other additions, or the B binary's layout - this A/B cannot split. It is
+inside the run-to-run spread. **The QPS a client sees** (1e6 /
 the median of rep means) moves by the same fractions.
 
 ## 3. Mixed cell: the partition with levels
@@ -145,7 +161,7 @@ Reader **service** latency (from the send) is in `tables-mixed.md`: p99
 
 ### 3.2 Where every session ended, and the batch sessions' work
 
-| arm | run | cores at end (6 readers, walker, inserter) | readers on core 0 | batch sessions on core 0 | moves | inserter rows/s | walker statements |
+| arm | run | cores at end (6 readers, walker, inserter) | readers on core 0 | batch sessions on core 0 | moves (since server start) | inserter rows/s | walker statements |
 |---|---|---|---|---|---|---|---|
 | levels | r1 | 2, 1, 1, 2, 2, 1, 0, 0 | 0 | 2 | 11 | 176,955 | 1,002 |
 | levels | r2 | 1, 2, 2, 3, 1, 1, 0, 0 | 0 | 2 | 8 | 175,254 | 1,018 |
@@ -156,29 +172,35 @@ Reader **service** latency (from the send) is in `tables-mixed.md`: p99
 
 The one undeclared run with no reader on core 0 (`none` r3) is also the
 one at 1.3 ms - the same signature the ruling-2 file found. The partition
-moves happen in the warm-up (each core's `load_c<k>_partition_moves_out` at
-the window's end: 3-4 on core 0, 0-1 on each other core), and
-`batch_sessions` reads 0 after the clients disconnect, which is the seat
-given back on close.
+moves happen in the warm-up (each core's `load_c<k>_partition_moves_out`
+is 3-4 on core 0 and 0-1 on each other core, the same at both of the
+window's reads), and `batch_sessions` reads 0 after the clients
+disconnect, which is the seat given back on close. **The isolated arm is
+not at the same placement** as the `levels` arm, which bar (v) asks for:
+nothing declares a batch level there, so 1-2 of its readers sit on core 0.
 
 ### 3.3 What is left (BL-R7's remainder)
 
 With levels, no reader shares a core with a batch session or with core 0's
 drain, and still the p99 is 4-21x the isolated one. In every `levels` run
-the WAL's roll-blocked wait lands on reader-only cores: 0.27 s on core 3
-(r1), 0.28 s on core 3 (r2), 0.17 s on core 2 and 0.16 s on core 3 (r3),
-per 10 s, while core 0 - where the inserter rolls - waits 0. A reader core
-takes the stream latch while a roll holds it; which of its tasks does (the
-checkpoint task rotating over cores is one candidate) is not identified
-here. No `normal` session shares those cores, so §5.2 bar (v)'s rule sends
-the excess to BL-R7's remainder, not to rung 3.
+the WAL's roll-blocked wait lands on reader-only cores - 0.27 s on core 3
+(r1), 0.28 s on core 3 (r2), 0.17 s on core 2 and 0.16 s on core 3 (r3) -
+while core 0, where the inserter rolls, waits 0. **Where the control
+session read the reader core, the waiter is the checkpoint**: core 3 in r1
+and r2 ran its checkpoint inside the window and held its reactor in one
+`system` poll for 257 ms and 207 ms. It is the checkpoint task, which
+rotates over cores (`sched.md` §4), taking the stream latch while a roll
+holds it, and every reader on that core waits with it. r3 has no reading of
+a reader core. Taking the checkpoint's log waits off the reactor is WAL
+work, not BL's. **Rung 3 is neither opened nor ruled out**: its probe, a
+second `normal` walker on the readers' cores, was cut (§1).
 
 ## 4. The bars
 
 | bar | result |
 |---|---|
-| (i) overhead A/B within run-to-run noise | **Met.** 36 of 36 p50 deltas overlap at ten reps; at `cores = 4` a consistent +0.1 % to +1.8 % on the single-row statements |
+| (i) overhead A/B within run-to-run noise | **Met by the rule as written** - 36 of 36 p50 deltas overlap at ten reps - **a weak test**: one slow rep widens a range enough to swallow a shift (the 5-rep rotation's +25.1 % was marked "overlaps"). Paired by rep, B's 200-row insert at `cores = 4` is above A and above N in 9 of 10 reps (~0.6 us). At `cores = 4` -0.2 % to +1.8 % over A and +0.2 % to +1.7 % over N on single-row statements. BL-S1/S2's indirection is in every arm and unpriced |
 | (ii) arm D's per-core p99 spread within arm B's | **Not measured at the close** (cut; BL-S3 measured convergence) |
-| (iii) partition fidelity | **Met** at every run's end (3/3): batch sessions on core 0, no reader there. Not sampled per statement |
+| (iii) partition fidelity | **Consistent, not measured as defined**: every run's end (3/3) had the batch sessions on core 0 and no reader there, and no partition move happened inside any window; every statement's core is not sampled |
 | (iv) moves bounded by the dwell | **Not measured at the close** (cut; BL-S3's cells and convergence runs) |
-| (v) `transactional` p99 at most 2x isolated | **Not met**: 6.5 ms median against 0.47 ms (14x); 287 ms undeclared. The excess is roll waits on reader cores, not a `normal` session: BL-R7's remainder, no rung 3 |
+| (v) `transactional` p99 at most 2x isolated | **Not met**: 6.5 ms median against 0.47 ms (14x); 287 ms undeclared. Where read, the excess is the checkpoint holding a reader core on a roll: BL-R7's remainder. Rung 3's probe was cut, so rung 3 is neither opened nor ruled out |
