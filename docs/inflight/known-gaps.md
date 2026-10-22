@@ -809,8 +809,8 @@ the first bullet re-read on `worktree-bl-touchpattern-delete` at `05cd011f`
 and re-priced at BQ's close (2026-10-12, from `4cf30270`'s measurement);
 the first bullet re-measured and the second added on `bl-ruling2-remeasure` at `418670a3`
 (2026-10-21, `bench/v3.4.0/results-bl-ruling2-remeasure-v3.4.0-22-g418670a3.md`).
-BL was resumed on 2026-10-21 to re-measure ruling 2, which is still
-unmarked (the order's §6, "BL resumed 2026-10-21").
+BL was resumed on 2026-10-21, and ruling 2 is marked (a): core 0 is the
+first batch core (the order's §6, "BL resumed 2026-10-21").
 Owned by `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
 until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
 `docs/spec/sched.md` §5.
@@ -844,7 +844,7 @@ until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
   first trace is in BL-S1's results archive, `wal-coupling.md`),
   so no fix to the roll is coming from BQ, and releasing the latch for the
   roll (BQ's rung 4) needs the operator's own word (BQ-Q5 (b)). Ruling 2
-  stays unmarked.
+  is marked (a): core 0 is the first batch core while the partition is active.
 
   **At `418670a3` the stall lands mostly on core 0**: readers held off
   core 0 escape most of it, and readers on core 0 do not (the results file

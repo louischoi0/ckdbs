@@ -101,3 +101,12 @@ what the word settles and what it does not.
 | **Mark** | **BL resumed** (`instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md` §6, "BL resumed 2026-10-21"). C1 re-measured at `v3.4.0-22-g418670a3` (`bench/v3.4.0/results-bl-ruling2-remeasure-v3.4.0-22-g418670a3.md`); ruling 2 is recast in the order's §6 and goes back unmarked |
 | **Does not settle** | BL-S4's ruling 2, which goes back to the operator; BL-S4; BL's close and its overhead A/B; a push |
 | **Recorded at** | this file; the BL order's §6; `docs/inflight/known-gaps.md`'s BL section; the BL row in `instructions/v3.0.0/index.md`; CLAUDE.md's Cross-core execution row |
+
+## 12. BL-S4's ruling 2 marked (a): core 0 is the first batch core; pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W14 (BL's session): *"$!a push no verify"*, after CLA put ruling 2 back recast (§11): (a) "core 0 first", (b) core 0 kept free of interactive sessions, or more runs |
+| **Mark** | **Ruling 2 (a).** While the partition is active, core 0 is the first batch core. BL-R2's partition, BL-S4's cell and BL-Q19 in `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md` are amended to it; BL-S4 is unblocked. **Pushed to `main` with `--no-verify`**, documents and bench only, with no suite run |
+| **Does not settle** | BL-S4's start; BL's close and its overhead A/B; a tag, a version |
+| **Recorded at** | this file; the BL order's BL-R2, BL-S4, BL-Q19 and §6; the BL row in `instructions/v3.0.0/index.md`; `docs/inflight/known-gaps.md`'s BL section; CLAUDE.md's Cross-core execution row |
