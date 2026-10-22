@@ -1,0 +1,180 @@
+09:33:30 start
+09:35:46 A done
+09:37:45 B done
+09:37:54 nobal done; source restored: 1 changes
+60723ba6d4333cff1eeae0b9019febf77e3c1b4854255af222fae05947b0831d  /home/cdkbs/bench-runs/bl/bin/kds_server.0af06bbc
+3323c0a73f47560055820e69eda2196c6da446c954fd60226811070f376eb3d3  /home/cdkbs/bench-runs/bl/bin/kds_server.f4bad273
+947d63aea93c14b8c0d18129a16eabaeb24b5454abcfbc0ec664e9352d875be3  /home/cdkbs/bench-runs/bl/bin/kds_server.f4bad273-nobal
+BUILDS-END
+09:45:35 gate waited 275s
+09:45:35 start stmt-A-k1-r1 load=1.84 7.03 5.49 cc=0
+09:45:37 done stmt-A-k1-r1 rc=0
+09:45:38 start stmt-B-k1-r1 load=1.78 6.93 5.47 cc=0
+09:45:40 done stmt-B-k1-r1 rc=0
+09:45:40 start stmt-A-k4-r1 load=1.78 6.93 5.47 cc=0
+09:45:42 done stmt-A-k4-r1 rc=0
+09:45:42 start stmt-B-k4-r1 load=1.78 6.93 5.47 cc=0
+09:45:44 done stmt-B-k4-r1 rc=0
+09:45:44 start stmt-N-k4-r1 load=1.79 6.84 5.45 cc=0
+09:45:46 done stmt-N-k4-r1 rc=0
+09:45:46 start stmt-B-k1-r2 load=1.79 6.84 5.45 cc=0
+09:45:48 done stmt-B-k1-r2 rc=0
+09:45:49 start stmt-A-k1-r2 load=1.73 6.75 5.43 cc=0
+09:45:51 done stmt-A-k1-r2 rc=0
+09:45:51 start stmt-B-k4-r2 load=1.73 6.75 5.43 cc=0
+09:45:53 done stmt-B-k4-r2 rc=0
+09:45:53 start stmt-N-k4-r2 load=1.67 6.65 5.40 cc=0
+09:45:56 done stmt-N-k4-r2 rc=0
+09:45:56 start stmt-A-k4-r2 load=1.67 6.65 5.40 cc=0
+09:45:58 done stmt-A-k4-r2 rc=0
+09:45:58 start stmt-A-k1-r3 load=1.70 6.57 5.38 cc=0
+09:46:00 done stmt-A-k1-r3 rc=0
+09:46:00 start stmt-B-k1-r3 load=1.70 6.57 5.38 cc=0
+09:46:02 done stmt-B-k1-r3 rc=0
+09:46:02 start stmt-N-k4-r3 load=1.64 6.48 5.36 cc=0
+09:46:05 done stmt-N-k4-r3 rc=0
+09:46:05 start stmt-A-k4-r3 load=1.64 6.48 5.36 cc=0
+09:46:07 done stmt-A-k4-r3 rc=0
+09:46:07 start stmt-B-k4-r3 load=1.64 6.48 5.36 cc=0
+09:46:09 done stmt-B-k4-r3 rc=0
+09:46:09 start stmt-B-k1-r4 load=1.67 6.41 5.34 cc=0
+09:46:11 done stmt-B-k1-r4 rc=0
+09:46:11 start stmt-A-k1-r4 load=1.67 6.41 5.34 cc=0
+09:46:14 done stmt-A-k1-r4 rc=0
+09:46:14 start stmt-A-k4-r4 load=1.62 6.32 5.32 cc=0
+09:46:16 done stmt-A-k4-r4 rc=0
+09:46:16 start stmt-B-k4-r4 load=1.62 6.32 5.32 cc=0
+09:46:18 done stmt-B-k4-r4 rc=0
+09:46:18 start stmt-N-k4-r4 load=1.57 6.23 5.30 cc=0
+09:46:21 done stmt-N-k4-r4 rc=0
+09:46:21 start stmt-A-k1-r5 load=1.57 6.23 5.30 cc=0
+09:46:23 done stmt-A-k1-r5 rc=0
+09:46:23 start stmt-B-k1-r5 load=1.60 6.16 5.28 cc=0
+09:46:25 done stmt-B-k1-r5 rc=0
+09:46:25 start stmt-B-k4-r5 load=1.60 6.16 5.28 cc=0
+09:46:27 done stmt-B-k4-r5 rc=0
+09:46:27 start stmt-N-k4-r5 load=1.63 6.09 5.26 cc=0
+09:46:30 done stmt-N-k4-r5 rc=0
+09:46:30 start stmt-A-k4-r5 load=1.63 6.09 5.26 cc=0
+09:46:32 done stmt-A-k4-r5 rc=0
+09:46:32 STMT-END
+09:46:32 start r1 isolated load=1.63 6.09 5.26
+09:46:55 done r1 isolated rc=0
+09:46:55 start r1 levels load=1.14 5.61 5.12
+09:47:15 done r1 levels rc=0
+09:47:15 start r1 none load=1.33 5.36 5.05
+09:47:34 done r1 none rc=0
+09:47:34 start r2 isolated load=1.61 5.16 4.99
+09:47:57 done r2 isolated rc=0
+09:47:57 start r2 levels load=1.30 4.86 4.89
+09:48:17 done r2 levels rc=0
+09:48:17 start r2 none load=1.31 4.62 4.82
+09:48:36 done r2 none rc=0
+09:48:36 start r3 isolated load=1.81 4.52 4.78
+09:49:09 done r3 isolated rc=0
+09:49:09 start r3 levels load=1.06 4.03 4.60
+09:49:29 done r3 levels rc=0
+09:49:29 start r3 none load=1.44 3.92 4.55
+09:49:48 done r3 none rc=0
+09:49:48 MIXED-END
+09:50:01 start stmt-A-k1-r1 load=1.68 3.75 4.48 cc=0
+09:50:03 done stmt-A-k1-r1 rc=0
+09:50:03 start stmt-B-k1-r1 load=1.62 3.70 4.46 cc=0
+09:50:05 done stmt-B-k1-r1 rc=0
+09:50:05 start stmt-A-k4-r1 load=1.62 3.70 4.46 cc=0
+09:50:07 done stmt-A-k4-r1 rc=0
+09:50:07 start stmt-B-k4-r1 load=1.57 3.66 4.44 cc=0
+09:50:10 done stmt-B-k4-r1 rc=0
+09:50:10 start stmt-N-k4-r1 load=1.57 3.66 4.44 cc=0
+09:50:12 done stmt-N-k4-r1 rc=0
+09:50:12 start stmt-B-k1-r2 load=1.57 3.66 4.44 cc=0
+09:50:14 done stmt-B-k1-r2 rc=0
+09:50:14 start stmt-A-k1-r2 load=1.61 3.63 4.42 cc=0
+09:50:17 done stmt-A-k1-r2 rc=0
+09:50:17 start stmt-B-k4-r2 load=1.61 3.63 4.42 cc=0
+09:50:19 done stmt-B-k4-r2 rc=0
+09:50:19 start stmt-N-k4-r2 load=1.64 3.60 4.41 cc=0
+09:50:21 done stmt-N-k4-r2 rc=0
+09:50:21 start stmt-A-k4-r2 load=1.64 3.60 4.41 cc=0
+09:50:23 done stmt-A-k4-r2 rc=0
+09:50:23 start stmt-A-k1-r3 load=1.67 3.58 4.40 cc=0
+09:50:26 done stmt-A-k1-r3 rc=0
+09:50:26 start stmt-B-k1-r3 load=1.67 3.58 4.40 cc=0
+09:50:28 done stmt-B-k1-r3 rc=0
+09:50:28 start stmt-N-k4-r3 load=1.62 3.53 4.38 cc=0
+09:50:30 done stmt-N-k4-r3 rc=0
+09:50:30 start stmt-A-k4-r3 load=1.62 3.53 4.38 cc=0
+09:50:32 done stmt-A-k4-r3 rc=0
+09:50:32 start stmt-B-k4-r3 load=1.57 3.49 4.36 cc=0
+09:50:34 done stmt-B-k4-r3 rc=0
+09:50:34 start stmt-B-k1-r4 load=1.57 3.49 4.36 cc=0
+09:50:37 done stmt-B-k1-r4 rc=0
+09:50:37 start stmt-A-k1-r4 load=1.57 3.49 4.36 cc=0
+09:50:39 done stmt-A-k1-r4 rc=0
+09:50:39 start stmt-A-k4-r4 load=1.60 3.47 4.35 cc=0
+09:50:41 done stmt-A-k4-r4 rc=0
+09:50:41 start stmt-B-k4-r4 load=1.60 3.47 4.35 cc=0
+09:50:44 done stmt-B-k4-r4 rc=0
+09:50:44 start stmt-N-k4-r4 load=1.55 3.43 4.33 cc=0
+09:50:46 done stmt-N-k4-r4 rc=0
+09:50:46 start stmt-A-k1-r5 load=1.55 3.43 4.33 cc=0
+09:50:48 done stmt-A-k1-r5 rc=0
+09:50:48 start stmt-B-k1-r5 load=1.59 3.40 4.32 cc=0
+09:50:50 done stmt-B-k1-r5 rc=0
+09:50:50 start stmt-B-k4-r5 load=1.59 3.40 4.32 cc=0
+09:50:53 done stmt-B-k4-r5 rc=0
+09:50:53 start stmt-N-k4-r5 load=1.54 3.36 4.30 cc=0
+09:50:55 done stmt-N-k4-r5 rc=0
+09:50:55 start stmt-A-k4-r5 load=1.54 3.36 4.30 cc=0
+09:50:57 done stmt-A-k4-r5 rc=0
+09:50:57 start stmt-B-k1-r6 load=1.54 3.36 4.30 cc=0
+09:50:59 done stmt-B-k1-r6 rc=0
+09:50:59 start stmt-A-k1-r6 load=1.50 3.32 4.28 cc=0
+09:51:02 done stmt-A-k1-r6 rc=0
+09:51:02 start stmt-N-k4-r6 load=1.50 3.32 4.28 cc=0
+09:51:04 done stmt-N-k4-r6 rc=0
+09:51:04 start stmt-A-k4-r6 load=1.46 3.28 4.26 cc=0
+09:51:06 done stmt-A-k4-r6 rc=0
+09:51:06 start stmt-B-k4-r6 load=1.46 3.28 4.26 cc=0
+09:51:08 done stmt-B-k4-r6 rc=0
+09:51:08 start stmt-A-k1-r7 load=1.58 3.28 4.26 cc=0
+09:51:11 done stmt-A-k1-r7 rc=0
+09:51:11 start stmt-B-k1-r7 load=1.58 3.28 4.26 cc=0
+09:51:13 done stmt-B-k1-r7 rc=0
+09:51:13 start stmt-A-k4-r7 load=1.53 3.24 4.24 cc=0
+09:51:15 done stmt-A-k4-r7 rc=0
+09:51:15 start stmt-B-k4-r7 load=1.53 3.24 4.24 cc=0
+09:51:17 done stmt-B-k4-r7 rc=0
+09:51:17 start stmt-N-k4-r7 load=1.53 3.24 4.24 cc=0
+09:51:19 done stmt-N-k4-r7 rc=0
+09:51:19 start stmt-B-k1-r8 load=1.49 3.20 4.22 cc=0
+09:51:22 done stmt-B-k1-r8 rc=0
+09:51:22 start stmt-A-k1-r8 load=1.49 3.20 4.22 cc=0
+09:51:24 done stmt-A-k1-r8 rc=0
+09:51:24 start stmt-B-k4-r8 load=1.53 3.18 4.21 cc=0
+09:51:26 done stmt-B-k4-r8 rc=0
+09:51:26 start stmt-N-k4-r8 load=1.53 3.18 4.21 cc=0
+09:51:28 done stmt-N-k4-r8 rc=0
+09:51:28 start stmt-A-k4-r8 load=1.49 3.15 4.19 cc=0
+09:51:30 done stmt-A-k4-r8 rc=0
+09:51:30 start stmt-A-k1-r9 load=1.49 3.15 4.19 cc=0
+09:51:33 done stmt-A-k1-r9 rc=0
+09:51:33 start stmt-B-k1-r9 load=1.45 3.11 4.17 cc=0
+09:51:35 done stmt-B-k1-r9 rc=0
+09:51:35 start stmt-N-k4-r9 load=1.45 3.11 4.17 cc=0
+09:51:37 done stmt-N-k4-r9 rc=0
+09:51:37 start stmt-A-k4-r9 load=1.45 3.11 4.17 cc=0
+09:51:39 done stmt-A-k4-r9 rc=0
+09:51:39 start stmt-B-k4-r9 load=1.49 3.09 4.16 cc=0
+09:51:41 done stmt-B-k4-r9 rc=0
+09:51:41 start stmt-B-k1-r10 load=1.49 3.09 4.16 cc=0
+09:51:44 done stmt-B-k1-r10 rc=0
+09:51:44 start stmt-A-k1-r10 load=1.45 3.06 4.14 cc=0
+09:51:46 done stmt-A-k1-r10 rc=0
+09:51:46 start stmt-A-k4-r10 load=1.45 3.06 4.14 cc=0
+09:51:48 done stmt-A-k4-r10 rc=0
+09:51:48 start stmt-B-k4-r10 load=1.42 3.02 4.13 cc=0
+09:51:50 done stmt-B-k4-r10 rc=0
+09:51:50 start stmt-N-k4-r10 load=1.42 3.02 4.13 cc=0
+09:51:52 done stmt-N-k4-r10 rc=0
+09:51:52 STMT-END

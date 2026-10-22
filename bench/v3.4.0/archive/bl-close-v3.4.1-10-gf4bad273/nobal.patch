@@ -1,0 +1,21 @@
+diff --git a/src/server/load_placer.cpp b/src/server/load_placer.cpp
+index df519107..35f08b2f 100644
+--- a/src/server/load_placer.cpp
++++ b/src/server/load_placer.cpp
+@@ -1,6 +1,7 @@
+ #include "kds/server/load_placer.hpp"
+ 
+ #include <array>
++#include <cstdlib>
+ 
+ #include "kds/server/session.hpp"
+ 
+@@ -45,6 +46,8 @@ std::uint32_t LoadPlacer::Decide(std::span<const CoreView> cores, std::uint32_t
+ }
+ 
+ std::uint32_t LoadPlacer::Place(std::uint32_t core, Session& session) {
++    static const bool kOff = std::getenv("KDS_BL_NO_BALANCE") != nullptr;  // measurement build only
++    if (kOff) return core;
+     const std::uint32_t n = sched::CoreLoad::Cores();
+     std::array<CoreView, sched::CoreLoad::kSlots> view{};
+     for (std::uint32_t k = 0; k < n; ++k) {
