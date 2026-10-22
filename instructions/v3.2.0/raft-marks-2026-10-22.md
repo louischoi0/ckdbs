@@ -20,3 +20,12 @@ what the word settles and what it does not.
 | **Mark** | **Q1 (a)**: the page header field and every identifier built on it are renamed - `PageHeaderFields::page_epoch`, `kPageEpochOffset`, `GetPageEpoch` / `SetPageEpoch` / `BumpPageEpoch`, `PageView::PageEpoch()`, `exec::CurrentPageEpoch` - and the prose "relayout epoch" reads "page epoch"; the byte at offset 16 is unchanged, so no superblock bump. **Q2 (a)**: the controller's names stay. **Pushed to `main` with `--no-verify`** on this word, after the full suite ran on the renamed tree |
 | **Does not settle** | a tag, a version |
 | **Recorded at** | this file; `instructions/v3.2.0/index.md`'s row for this file |
+
+## 3. Version 3.4.1 tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.1"* |
+| **Mark** | **`v3.4.1`**, an annotated tag on `main` at `1be49229`, then the head of `origin/main`. Its message states what has been built since `v3.4.0` (CF Branch O, CF-Q6 (b), the physical-optimizer split and the `page_epoch` rename, A1 stage 2b, RENAME taking the relation `X`, CH written), what was measured, and the gaps that bound it, among them four open bugs. The full Debug suite ran 4282/4282 at the tagged commit, so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.1` |
+| **Does not settle** | a later version |
+| **Recorded at** | this file; the tag message; CLAUDE.md's Version Management |
