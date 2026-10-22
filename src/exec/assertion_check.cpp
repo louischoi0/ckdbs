@@ -25,9 +25,25 @@ using storage::cabin::kEntryReserved;
 // after the tuple key (first_col_pos 1); UPDATE/DELETE hand the decoded row
 // (first_col_pos 0) - the same convention NoteCabinWrite and MaintainIndexes
 // take, for the same reason.
-const parser::AstValue& ValueAt(std::span<const parser::AstValue> values,
-                                std::size_t first_col_pos, std::uint16_t schema_pos) {
-    return values[schema_pos - first_col_pos];
+//
+// **A position the caller does not carry is refused, never read outside the
+// span.** An INSERT's values hold no tuple key, so position 0 under
+// first_col_pos 1 has no value here; read unguarded it wrapped to an index
+// before the span and keyed the row on bytes that were not its own. CREATE
+// ASSERTION and the mount's revive both refuse a tuple-key GROUP BY or SUM
+// column (`assertion_catalog.cpp`), so no adopted assertion reaches this, and
+// one that does is a broken invariant: the row's write refused, never
+// admitted under a key that is not the row's.
+StatusOr<const parser::AstValue*> ValueAt(const LiveAssertion& a,
+                                          std::span<const parser::AstValue> values,
+                                          std::size_t first_col_pos, std::uint16_t schema_pos) {
+    if (schema_pos >= first_col_pos && schema_pos - first_col_pos < values.size()) {
+        return &values[schema_pos - first_col_pos];
+    }
+    return Status::Corruption("assertion \"" + a.name + "\" reads schema position " +
+                              std::to_string(schema_pos) + ", which a row carrying " +
+                              std::to_string(values.size()) + " values from position " +
+                              std::to_string(first_col_pos) + " does not hold");
 }
 
 // **Coerced first, and this is load-bearing.** An INSERT hands the values as
@@ -44,7 +60,9 @@ StatusOr<std::string> KeyFor(const LiveAssertion& a, std::span<const parser::Ast
                              std::size_t first_col_pos) {
     std::vector<parser::AstValue> group(a.group_cols.size());
     for (std::size_t i = 0; i < a.group_cols.size(); ++i) {
-        group[i] = ValueAt(values, first_col_pos, a.group_cols[i]);
+        const auto value = ValueAt(a, values, first_col_pos, a.group_cols[i]);
+        if (!value.ok()) return value.status();
+        group[i] = *value.value();
         if (Status s = CoerceLiteralToColumn(a.group_columns[i], group[i]); !s.ok()) {
             return s.WithContext("assertion \"" + a.name + "\" group column '" +
                                  a.group_col_names[i] + "'");
@@ -53,14 +71,17 @@ StatusOr<std::string> KeyFor(const LiveAssertion& a, std::span<const parser::Ast
     return EncodeGroupKey(group);
 }
 
-std::int64_t ContributionOf(const LiveAssertion& a, std::span<const parser::AstValue> values,
-                            std::size_t first_col_pos) {
+StatusOr<std::int64_t> ContributionOf(const LiveAssertion& a,
+                                      std::span<const parser::AstValue> values,
+                                      std::size_t first_col_pos) {
     // `sum_col` names a column only for a SUM assertion, so the value is
     // read only then. What it contributes - including that a NULL
     // contributes nothing - is bound_cabin.hpp's one rule, which CREATE
     // ASSERTION's backfill folds by too.
     if (a.aggregate != BoundAggregate::kSum) return 1;  // COUNT(*) counts rows
-    return SumContribution(ValueAt(values, first_col_pos, a.sum_col));
+    const auto value = ValueAt(a, values, first_col_pos, a.sum_col);
+    if (!value.ok()) return value.status();
+    return SumContribution(*value.value());
 }
 
 // The §4.4 refusal, from the one place the format lives.
@@ -70,7 +91,10 @@ Status Refuse(const LiveAssertion& a, std::span<const parser::AstValue> values,
     for (std::size_t i = 0; i < a.group_cols.size(); ++i) {
         parts[i].column = a.group_col_names[i];
         parts[i].type_val = a.group_columns[i].type_val;
-        parts[i].value = ValueAt(values, first_col_pos, a.group_cols[i]);
+        // `KeyFor` read every one of these already.
+        const auto value = ValueAt(a, values, first_col_pos, a.group_cols[i]);
+        if (!value.ok()) return value.status();
+        parts[i].value = *value.value();
     }
     return Status::AssertionViolation(AssertionViolationMessage(
         a.name, parts, a.aggregate, a.sum_col_name, a.cabin.bound()));
@@ -501,14 +525,17 @@ Status AssertionEnforcer::AdmitInsert(catalog::Oid oid,
     // What this call held is given back if a later assertion refuses or
     // fails: a refused row holds nothing.
     const std::size_t before = hold.items_.size();
+    const auto admit_one = [&](LiveAssertion& a) -> StatusOr<std::uint64_t> {
+        const StatusOr<std::string> key = KeyFor(a, values, /*first_col_pos=*/1);
+        if (!key.ok()) return key.status();
+        const StatusOr<std::int64_t> contribution = ContributionOf(a, values, /*first_col_pos=*/1);
+        if (!contribution.ok()) return contribution.status();
+        return AdmitLocked(a, key.value(), contribution.value(), contribution.value(), writer_txn,
+                           values, 1, reserver);
+    };
     for (const std::uint64_t id : on->second) {
         LiveAssertion& a = live_.at(id)->a;
-        const std::int64_t contribution = ContributionOf(a, values, /*first_col_pos=*/1);
-        const StatusOr<std::string> key = KeyFor(a, values, /*first_col_pos=*/1);
-        const StatusOr<std::uint64_t> serial =
-            key.ok() ? AdmitLocked(a, key.value(), contribution, contribution, writer_txn,
-                                   values, 1, reserver)
-                     : StatusOr<std::uint64_t>(key.status());
+        const StatusOr<std::uint64_t> serial = admit_one(a);
         if (!serial.ok()) {
             for (std::size_t i = before; i < hold.items_.size(); ++i) {
                 ReleaseHoldLocked(hold.items_[i].serial);
@@ -621,7 +648,9 @@ Status AssertionEnforcer::ReserveInsert(storage::PageStore& store, wal::WalManag
             }
             StatusOr<std::string> key = KeyFor(a, values, 1);
             if (!key.ok()) return key.status();
-            Work w{live, std::move(key.value()), ContributionOf(a, values, 1), 0};
+            const StatusOr<std::int64_t> contribution = ContributionOf(a, values, 1);
+            if (!contribution.ok()) return contribution.status();
+            Work w{live, std::move(key.value()), contribution.value(), 0};
             // Adopted after this row's admission: admitted here, and held in
             // `hold` so a failure below gives it back too. Not waitable - the
             // row is placed by now.
@@ -694,8 +723,12 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
         if (!new_keyed.ok()) return new_keyed.status();
         const std::string& old_key = old_keyed.value();
         const std::string& new_key = new_keyed.value();
-        const std::int64_t old_contrib = ContributionOf(a, old_row, 0);
-        const std::int64_t new_contrib = ContributionOf(a, new_row, 0);
+        const StatusOr<std::int64_t> old_contributed = ContributionOf(a, old_row, 0);
+        if (!old_contributed.ok()) return old_contributed.status();
+        const StatusOr<std::int64_t> new_contributed = ContributionOf(a, new_row, 0);
+        if (!new_contributed.ok()) return new_contributed.status();
+        const std::int64_t old_contrib = old_contributed.value();
+        const std::int64_t new_contrib = new_contributed.value();
         // §4.2 row 2: the aggregate is invariant - nothing at all.
         if (old_key == new_key && old_contrib == new_contrib) continue;
 
@@ -763,8 +796,10 @@ Status AssertionEnforcer::ReserveDelete(storage::PageStore& store, wal::WalManag
     for (const std::shared_ptr<Live>& live : lives) {
         const StatusOr<std::string> key = KeyFor(live->a, old_row, 0);
         if (!key.ok()) return key.status();
+        const StatusOr<std::int64_t> contribution = ContributionOf(live->a, old_row, 0);
+        if (!contribution.ok()) return contribution.status();
         if (Status s = ReserveOne(store, wal, txn_id, *live, key.value(),
-                                  /*departure=*/true, ContributionOf(live->a, old_row, 0), tuple_key,
+                                  /*departure=*/true, contribution.value(), tuple_key,
                                   row_page, row_slot, /*serial=*/0);
             !s.ok()) {
             return s;

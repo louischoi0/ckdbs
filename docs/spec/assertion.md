@@ -100,6 +100,10 @@ DROP ASSERTION <name> ;
 - the `SUM` column does not exist or is not `int64` (v1 restriction; checked
   arithmetic per AG3 — an overflow during aggregate maintenance is a
   statement error, never silent wraparound);
+- a `GROUP BY` column or the `SUM` column is the tuple key column:
+  `NotImplemented` at that column token's byte - an `INSERT`'s admission
+  runs before its id is issued, so it carries no tuple key value to group or
+  sum by;
 - the comparison operator is outside the v1 set;
 - the bound literal is not a non-negative integer literal (v1: literals only,
   no expressions, consistent with TY3 conservatism);
@@ -329,7 +333,9 @@ On a multi-core instance:
 - **An assertion the registry knows of and cannot enforce refuses the
   relation's writes, on every core.** Refusing is recoverable; admitting an
   unchecked write is not. What reaches "cannot enforce" is a revive that
-  failed, a mount whose scan holds no whole snapshot run for the
+  failed - the revive asks every question §3.1's create asks, so a stored
+  declaration the create would now refuse, such as one over the tuple key,
+  fails it - a mount whose scan holds no whole snapshot run for the
   assertion - none at all, or only runs cut short (§7, AY-S8) - and a
   recovery pass that fails outright (a Corruption, such as a snapshot with
   no chunk count), which reaches it for every assertion, and a core-0
