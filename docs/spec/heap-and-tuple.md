@@ -31,7 +31,12 @@ Every heap page header carries an **epoch counter**, bumped whenever the tuples 
 
 Waystone records a page's epoch when it observes a tuple's location, and a consumer trusts that location only while the recorded epoch still matches the page's. This is how an advisory structure avoids becoming a second authoritative index: an operation that moves tuples bumps one counter instead of synchronously rewriting every entry that pointed into the page.
 
-The epoch lives in the **common page header** as `PageHeaderFields::relayout_epoch` (offset 16, u64, the word that was `reserved0`), durable by construction (`page.md` §2, `docs/spec/physical-optimizer.md` R4). A page whose tuples have never moved carries 0. Wraparound is unreachable at u64 width rather than handled. **Pairing rule:** no consumer may accept a location on epoch equality alone — the epoch is a fast whole-page invalidation layered over the Keystone-id check (K1), never a substitute for it. The executor records it at access and `exec/tuple_verify.hpp` compares it for Waystone replay and Cabin hints alike. No relayout mover exists; the operations that bump it are the btree leaf division and the in-place leaf compaction (§4.1, §4.1c).
+**R4 — the page epoch** (was `physical-optimizer.md` R4 and §7, last at `418670a3`, moved here on 2026-10-22 with its id kept). The epoch lives in the **common page header** as `PageHeaderFields::relayout_epoch` (offset 16, u64, the word that was `reserved0`), durable by construction (`page.md` §2), which trails need because trail pages are durable. Every page written before the field existed carries 0 there, so its arrival was **no format bump**: a zero reads as epoch 0, "never moved". Wraparound is unreachable at u64 width rather than handled. **Pairing rule:** no consumer may accept a location on epoch equality alone — the epoch is a fast whole-page invalidation layered over the Keystone-id check (K1), never a substitute for it.
+
+- **Who moves it.** Only an operation that moves tuples: the btree leaf division and the in-place leaf compaction, each setting the rewritten page's epoch one past its old value (§4.1, §4.1c). An INSERT, UPDATE or DELETE that divides or compacts no leaf never bumps it; a mid-leaf placement shifts the slots after it without a bump, and the Keystone check at the slot turns a shifted entry into a miss (§4.1, BD-R3). No relayout mover exists (§7.1). `PAGE_INIT` and every page-format path leave it 0; it is read and written through `page_header.hpp`'s accessors.
+- **Waystone**: the recorder stores the page's current epoch in the trail entry; replay compares recorded against current, and a mismatch is a per-entry miss with the ordinary fall-through (`waystone-concpets.md` §2 rule 2).
+- **Cabin**: `CabinEntry::page_epoch` is recorded from the header and compared in `exec/tuple_verify.hpp` — the one shared verifier, so Waystone replay and Cabin hints get the real check at one site.
+- **Required tests.** An epoch round-trip (field read/write and `PAGE_INIT` zeroing, `tests/page_header_test.cpp`), and the hand-bumped-epoch contract test in both suites: Waystone replay and a Cabin resolve against a page whose epoch the test bumped must fall through per entry, heal, and answer byte-identically to the authoritative path (`tests/waystone_contract_test.cpp`, `tests/cabin_contract_test.cpp`).
 
 ### 3.1b A heap relation, and the catalog's chains
 
@@ -303,17 +308,27 @@ There is no single canonical in-memory tuple and no hash table enforcing that an
 
 Frame reclamation under this model is `docs/spec/eviction.md`'s: every accessor returns a pinned `PageRef`, and a CLOCK sweep reclaims only unpinned frames of evictable classes.
 
-## 7. Access Statistics and Physical Relayout
+## 7. Access Statistics, and no Relayout
 
-KDS collects access statistics as the input to physical optimization.
+KDS collects access statistics; they are read by `SHOW ACCESS` and by `CREATE CABIN`'s no-filter warning, and the Cabin controller does not read them (`cabin-controller.md` R2).
 
-**Collection is built; no relayout planner or mover is.** `sys.access_stats` records one row per access *shape* — `(kind, rel_id, column_mask)` — with how often it ran and when it last ran, written for every access kind through one call with no per-kind branch (`include/kds/stats/access_stats.hpp`). Distinct shapes are capped at `kMaxAccessShapes` (4096, `include/kds/catalog/rows.hpp`); past it the write fails `ResourceExhausted`. `SHOW ACCESS` reads it. The Cabin controller (`physical-optimizer.md` Part II) is the optimizer that acts.
+**Collection is built; no relayout planner or mover is.** `sys.access_stats` records one row per access *shape* — `(kind, rel_id, column_mask)` — with how often it ran and when it last ran, written for every access kind through one call with no per-kind branch (`include/kds/stats/access_stats.hpp`). Distinct shapes are capped at `kMaxAccessShapes` (4096, `include/kds/catalog/rows.hpp`); past it the write fails `ResourceExhausted`. `SHOW ACCESS` reads it, and `CREATE CABIN` warns when no recorded shape filters the Cabin's column (`exec/cabin_ddl.cpp`); nothing else acts on it.
 
 The shape is keyed by **columns, never values**: `WHERE flag = 1` and `WHERE flag = 2` are one row. That is what bounds the relation by the schema rather than by the data, so it needs no eviction policy and no directory — the unbounded axis, *which arguments repeat*, is Waystone's and stays there (`waystone-concpets.md` §5). The two layers answer different questions and are deliberately not merged.
 
 The kind split is what makes the data worth having: a walk driven by an equality on a non-tuple-key unindexed column is `kFilterScan`, not `kScan` — a statement that asked for a few rows and read all of them, the case an index or a clustering decision would fix. `kIndexProbe` and `kIndexRange` (`docs/spec/index.md` §8) are counted through the same call. Neither scan kind is trail-replayable — invariant 9's line is lookup versus search, and both are searches.
 
-**Nothing moves a tuple for statistics' sake.** No relayout mover exists, and every user relation is a btree, so one would be a tree restructure: it would have to respect the `min_key` insertion rule (§3.1), keep the tree's descent exact (§5) and bump the page epoch (§3.1a) so every recorded location on a page it moved becomes untrusted at once. `physical-optimizer.md` §6 states why none is built. `kVarHeap` pages are outside any such move by construction (§3.4).
+### 7.1 No mover
+
+(Was `physical-optimizer.md` §6, §8's retired key and §10, last at `418670a3`, moved here on 2026-10-22.)
+
+**Nothing moves a tuple for statistics' sake.** No relayout planner or mover exists, and every user relation is a btree, so a mover would be a tree restructure: it would have to respect the `min_key` insertion rule (§3.1), keep the tree's descent exact (§5) and bump the page epoch (§3.1a) so every recorded location on a page it moved becomes untrusted at once. `kVarHeap` pages are outside any such move by construction (§3.4). Three facts about the engine stand in front of one:
+
+1. **Reader horizon.** `ReadHorizon()` bounds a purge (`txn.md` §4.1); a delete-marked user row is retired only by `PURGE` (§4.1c), and nothing compacts a relation for space.
+2. **Ordered-between compatibility.** Clustering an arbitrary hot id set onto one page would break the between-pages key order that the descent and `kRange` pruning read.
+3. **Cross-relation page reuse.** Trail validation checks `rel_oid` and the Keystone id at the recorded `(page_id, slot)`, ids are issued per relation, and `PAGE_INIT` writes epoch 0 — so a page freed from relation A and reallocated to B could validate a stale trail entry. **Answered for a dropped relation's pages** (`drop-table.md` DT1, BF-Q17 (a) of `instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md`): the reclaim frees only pages its owner walk checked; it frees nothing before no replay can name a page; and the one verifier checks the page's class and `owner_oid` against the location's relation, so a reused page is a miss (BF-R10). Every mountable volume's user pages carry `owner_oid`, so no mountable volume holds a page that reads owner 0.
+
+Not in this engine: a relayout planner or mover, and per-pattern hot-set clustering. The relayout surface is deleted since BZ: the shadow planner, `SHOW RELAYOUT` and `sys.relayout` are gone, `SHOW RELAYOUT` is refused as an unknown `SHOW` target, and `relayout` is an ordinary identifier (nothing is reserved). The `physical_optimizer` config key that switched the planner is **retired**: a file naming it is refused at startup by name (`Expeditor::Config::ApplyFile`'s retired keys; `crosscore.md` CC10).
 
 ## 8. Invariants
 

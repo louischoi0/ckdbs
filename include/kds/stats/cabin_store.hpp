@@ -114,8 +114,9 @@ inline constexpr std::uint16_t kCabinHintValid = 0x1;
 // tuple key an insert left before rolling back, can be named again (W12, BD-R4,
 // BH), and that is why every serve re-checks MVCC and the key column (§4):
 // authority is the tuple key plus that re-check, never the
-// location. That buys relocation invariance (the physical optimizer may move
-// pages without ever touching a Cabin), no incarnation protocol, and
+// location. That buys relocation invariance (a leaf division or compaction
+// moves rows without touching a Cabin; no mover exists, heap-and-tuple.md
+// §7.1), no incarnation protocol, and
 // "dangling ⇒ skip now, droppable on sight".
 //
 // The location is waystone-class advice riding on cabin-class truth: it is
@@ -128,7 +129,7 @@ struct CabinEntry {
     PageId page_id = kInvalidPageId;
 
     // The page's relayout epoch at the time the entry was written or last
-    // healed (docs/spec/physical-optimizer.md R4; recorded and compared for
+    // healed (docs/spec/heap-and-tuple.md §3.1a R4; recorded and compared for
     // real since workplan PX04 - the field was here from C6, written 0
     // while the engine had no epoch, precisely so there would be nowhere
     // for the check *not* to happen the day it landed). Compared in
@@ -358,7 +359,7 @@ public:
     void NoteHint(std::uint64_t cabin_id, bool ok);
 
     // Where the optimizer's decayed quality signals live, when a collector
-    // exists (physical-optimizer.md §II.2 S3). Null is the ordinary
+    // exists (cabin-controller.md §II.2 S3). Null is the ordinary
     // no-optimizer configuration and costs one predicate per note. The
     // store forwards and never owns: eviction, snapshotting and caps are
     // the collector's policy, not this class's.

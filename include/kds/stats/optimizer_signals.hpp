@@ -9,7 +9,7 @@
 #include "kds/stats/decay.hpp"
 
 // The cabin optimizer's input signals, S1-S3, and the snapshot they are
-// read through (docs/spec/physical-optimizer.md §II.2/§II.3, workplan
+// read through (docs/spec/cabin-controller.md §II.2/§II.3, workplan
 // PHY01).
 //
 // One collector for the instance (AT-S8), three signals:

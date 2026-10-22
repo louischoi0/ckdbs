@@ -31,8 +31,8 @@ reserved for what the architecture forbids (`include/kds/base/status.hpp`,
   makes a relation's row size a schema constant; changing it means every
   existing tuple *is* `Corruption` by the codec's own rule. Doing it right
   is a relation rewrite — a mover, page allocation, and the reader-horizon
-  question — which is the physical optimizer's gated territory
-  (`physical-optimizer.md` §6), not a catalog edit. Refused, not
+  question — and no mover exists (`heap-and-tuple.md` §7.1); it is not a
+  catalog edit. Refused, not
   deferred-and-half-done.
 - **Widening (`ALTER ... TYPE varchar(n)` / `char(n)` in any spelling).**
   Refused for the same reason: a cell's width is part of the row-size

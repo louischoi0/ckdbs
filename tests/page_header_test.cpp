@@ -203,7 +203,7 @@ TEST(PageHeaderTest, UnformattedPageTypeHasNoSupportedVersion) {
     EXPECT_EQ(MaxSupportedFormatVersion(PageType::kInvalid), 0u);
 }
 
-// ---- Relayout epoch (docs/spec/physical-optimizer.md R4, workplan PX03) --
+// ---- Relayout epoch (docs/spec/heap-and-tuple.md §3.1a R4, workplan PX03)
 
 TEST(PageHeaderTest, RelayoutEpochRoundTripsAndBumpsByOne) {
     Page page{};

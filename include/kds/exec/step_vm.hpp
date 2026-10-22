@@ -103,7 +103,7 @@ struct StepStats {
     // path that a row count does not imply.
     std::uint64_t spill_fetches = 0;
 
-    // Pages this step demonstrably read (physical-optimizer.md §II.2
+    // Pages this step demonstrably read (cabin-controller.md §II.2
     // S2 - the cost-benefit model's currency is page accesses, and this is
     // its collector). Counted exactly where the count is exact: a walk
     // counts each chain page once as the visitor crosses onto it, and every

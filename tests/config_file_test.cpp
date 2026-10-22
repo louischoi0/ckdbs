@@ -331,7 +331,7 @@ TEST(ExpeditorConfigTest, AggregateCapsParseAndCarryTheProposedDefaults) {
     EXPECT_EQ(config.aggregate_max_distinct, 256u);
 }
 
-// ---- The decay half-life (docs/spec/physical-optimizer.md Part II) -------
+// ---- The decay half-life (docs/spec/decay.md R1) -------------------------
 
 // BZ-R5: the relayout planner `physical_optimizer` switched is deleted, so
 // the key is retired and refused by name, never ignored.

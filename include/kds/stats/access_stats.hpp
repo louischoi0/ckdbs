@@ -9,8 +9,9 @@
 // (`docs/spec/heap-and-tuple.md` §7).
 //
 // This is the collecting half. The relayout mover and its shadow planner
-// were removed with BZ (`docs/spec/physical-optimizer.md`), so this produces
-// the input Part II's Cabin controller and Waystone read and stops there.
+// were removed with BZ (`docs/spec/heap-and-tuple.md` §7.1), so this
+// produces what `SHOW ACCESS` and CREATE CABIN's no-filter warning read
+// and stops there.
 //
 // ---- One call, no per-kind branch ---------------------------------------
 //

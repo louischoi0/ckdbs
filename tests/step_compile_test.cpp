@@ -102,8 +102,8 @@ TEST_F(StepCompileTest, EqualityOnANonTupleKeyColumnIsAFilterScanHoweverSelectiv
     // can be addressed by a descent (invariant 11).
     //
     // It is a **kFilterScan** rather than a bare kScan - a walk that exists
-    // to evaluate a filter, which is the shape a physical optimizer wants
-    // to hear about. That is a statistics distinction and nothing more:
+    // to evaluate a filter, which `SHOW ACCESS` reports apart from a
+    // scan. That is a statistics distinction and nothing more:
     // the step still walks the whole relation, and the assertion that
     // matters is the last one. A filter scan is a *search*, and a search is
     // never trail-replayable, so promoting it would be a correctness bug in

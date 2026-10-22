@@ -464,7 +464,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.rows_examined > 0) {
             os << " sel=" << (counters.rows_matched * 100 / counters.rows_examined) << '%';
         }
-        // The physical optimizer's S2 currency (physical-optimizer.md
+        // The Cabin controller's S2 currency (cabin-controller.md
         // §II.2): pages this step read - exact for walks, one per keyed
         // access. Printed whenever the step examined anything, because
         // "how many pages did that cost" is the number the cost-benefit

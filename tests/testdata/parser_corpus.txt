@@ -656,7 +656,7 @@ ok	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) <= 0
 NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5
 NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100
 
-# ---- Physical optimizer surface (docs/spec/physical-optimizer.md, PX06) ----
+# ---- Relayout surface, deleted (docs/spec/heap-and-tuple.md §7.1, PX06) ----
 # SHOW is a dispatcher verb, not SQL - the verdict matches SHOW TABLES above -
 # and `relayout` stays an ordinary identifier: no keyword moved for the report
 # surface, which the two SELECTs pin by fingerprinting like any column/table.

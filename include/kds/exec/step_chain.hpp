@@ -135,9 +135,8 @@ enum class AccessKind : std::uint8_t {
     // completely different as a signal. A `kScan` is a statement that
     // asked for everything; a `kFilterScan` is a statement that asked for
     // a few rows and had to read all of them to find out which - which is
-    // exactly the shape a physical optimizer wants to hear about
-    // (`docs/spec/heap-and-tuple.md` §7), and which an index or a clustering
-    // decision would fix.
+    // exactly the shape `SHOW ACCESS` reports apart
+    // (`docs/spec/heap-and-tuple.md` §7), and which an index would fix.
     //
     // It is **not** a promise that anything is faster. Both walk the whole
     // relation; only the statistics can tell them apart.

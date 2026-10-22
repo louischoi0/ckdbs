@@ -376,7 +376,7 @@ inline constexpr std::uint8_t kCabinPolicyDisabled = 1;
 // earns its write hook)`.
 //
 // **What creates one is the cabin optimizer, and only while it is on**
-// (`docs/spec/physical-optimizer.md` Part II, `SET CABIN_OPTIMIZER`, off by
+// (`docs/spec/cabin-controller.md`, `SET CABIN_OPTIMIZER`, off by
 // default). Its `ApplyCreate` makes an auto-origin Cabin on a column that
 // is not `NO CABIN` (`exec/cabin_optimizer_exec.cpp`; `Catalog::CreateCabin`
 // refuses only a disabled column), so an auto column and an undeclared one
@@ -692,9 +692,8 @@ inline constexpr std::uint16_t kPatternWaystone = 0x1;
 //
 // How often each **access shape** ran, and when it last ran
 // (`docs/spec/heap-and-tuple.md` §7). One row per
-// `(kind, rel_id, column_mask)`: the physical optimizer's input, and the
-// first thing in this engine to collect the "access statistics" §7 has
-// described since it was written.
+// `(kind, rel_id, column_mask)`, read by `SHOW ACCESS` and CREATE CABIN's
+// no-filter warning.
 //
 // **Keyed by columns, never by values.** `WHERE flag = 1` and
 // `WHERE flag = 2` are one row here. That is what makes the relation

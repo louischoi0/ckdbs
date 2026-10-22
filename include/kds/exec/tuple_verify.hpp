@@ -31,7 +31,7 @@
 // could tell "the page went away" from "someone else's row is there" would
 // be tempted to trust the second.
 //
-// ---- The epoch check (docs/spec/physical-optimizer.md R4, PX04) ----------
+// ---- The epoch check (docs/spec/heap-and-tuple.md §3.1a R4, PX04) -------
 //
 // **The page epoch is checked here**, once for both callers (Waystone spec
 // §2 rule 2, the Cabin's `page_epoch`). The recorded epoch

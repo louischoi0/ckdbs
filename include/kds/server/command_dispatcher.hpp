@@ -386,7 +386,7 @@ struct StatementLimits {
     bool plan_join_order = true;
 };
 
-// **The physical optimizer's surface, as one value** (AT-S8, on the
+// **The Cabin controller's surface, as one value** (AT-S8, on the
 // operator's word). The pieces are the instance's - one
 // signal collector (latched above one core), one switch, one controller and
 // executor - and every core's dispatcher is handed the same value.
@@ -517,8 +517,8 @@ public:
     //                            section per recorded access shape:
     //                            "kind=<Lookup|Probe|Range|FilterScan|Scan>
     //                             rel=<s> columns=[<s>,...] uses=<n>
-    //                             last_seen=<n>". The physical optimizer's
-    //                            input (docs/spec/heap-and-tuple.md §7), keyed
+    //                             last_seen=<n>". Access statistics
+    //                            (docs/spec/heap-and-tuple.md §7), keyed
     //                            by *columns* and never by values - so
     //                            `WHERE flag = 1` and `WHERE flag = 2` are
     //                            one shape, which is what keeps the list
@@ -2066,7 +2066,7 @@ private:
     // would make the statistic mean two things.
     void RecordAccessShapes(const exec::StepChain& chain);
 
-    // The cabin optimizer's S1/S2 (physical-optimizer.md §II.2,
+    // The cabin optimizer's S1/S2 (cabin-controller.md §II.2,
     // workplan PHY01): one decayed touch per successful fingerprinted
     // SELECT, carrying the statement's page count. Beside RecordTrail and
     // RecordAccessShapes because it is the same moment - a completed
@@ -2593,10 +2593,9 @@ private:
     friend class DeclarationBuildRunOf;
 
     // Whether a successful SELECT records its access shapes
-    // (`access_statistics`). Defaults **on**: unlike Waystone this collects
-    // input for a decision nobody has made yet, and a physical optimizer
-    // that arrives to an empty history is a physical optimizer that has to
-    // wait for one.
+    // (`access_statistics`). Defaults **on**: a history that starts when
+    // someone enables it does not exist when `SHOW ACCESS` or CREATE
+    // CABIN's no-filter warning asks for it (docs/spec/heap-and-tuple.md §7).
     bool access_stats_enabled_;
     stats::AccessStatsCounters access_counters_;
 

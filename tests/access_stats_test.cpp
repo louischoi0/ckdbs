@@ -160,8 +160,7 @@ TEST_F(AccessStatsTest, TheSameStatementIsADifferentShapeOnceItHasAnIndex) {
     // The distinction §7 says the statistics exist to draw, now visible for
     // the case that fixes it. `h` has no index and `b` does, so one relation
     // reports "searched every row for a few" and the other "descended an
-    // index for them" - which is the first pair a physical optimizer could
-    // act on.
+    // index for them" - the pair `SHOW ACCESS` reports apart.
     ASSERT_EQ(Run("CREATE INDEX b_flag ON b (flag)").substr(0, 7), "CREATED");
 
     Run("SELECT * FROM b WHERE flag = 1");

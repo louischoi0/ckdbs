@@ -437,7 +437,7 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   session on it, for the build. Liveness, not correctness. The fix is for
   the tick to publish a copy of the view and the `SHOW` to read the copy.
   Re-verified at `7dd9b789` by reading. Owner:
-  `docs/spec/physical-optimizer.md` Part II.
+  `docs/spec/cabin-controller.md`.
 
 - **A multi-core test instance binds its probed port with SO_REUSEPORT.**
   `ExpeditorTest`'s fixtures probe a free loopback port and then bind it;

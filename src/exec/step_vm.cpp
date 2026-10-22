@@ -1880,7 +1880,7 @@ private:
 
             // The walk's page count, exact by construction: the chain hands
             // the visitor one page's slots consecutively, so a transition
-            // is a fetch (physical-optimizer.md §II.2 S2).
+            // is a fetch (cabin-controller.md §II.2 S2).
             if (page_id != walk_last_page) {
                 ++stats_.For(step.step_id).pages_fetched;
                 walk_last_page = page_id;
@@ -2187,7 +2187,7 @@ private:
         // The page's relayout epoch at the moment of access, captured under
         // the span because the trail record below runs after its release -
         // recorded so replay's rule 2 has something real to compare
-        // (docs/spec/physical-optimizer.md R4, PX04). One u64 load, on the
+        // (docs/spec/heap-and-tuple.md §3.1a R4, PX04). One u64 load, on the
         // two paths that leave the span with a copied row; a visible row the
         // kernel rejects never reads it, and every reader is past the
         // rejected return (BT-S3).

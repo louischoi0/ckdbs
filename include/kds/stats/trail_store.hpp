@@ -44,7 +44,7 @@
 //
 // **`page_epoch` is recorded** (workplan PX04): the executor observes the
 // page's relayout epoch at access (`storage/page_header.hpp`,
-// `docs/spec/physical-optimizer.md` R4), this layer narrows it to the
+// `docs/spec/heap-and-tuple.md` §3.1a R4), this layer narrows it to the
 // entry format's u32, and replay compares it in `exec/tuple_verify.hpp` -
 // spec section 2's rule 2. With no mover every comparison is between two
 // zeros; the hand-bumped contract test proves it would fire.

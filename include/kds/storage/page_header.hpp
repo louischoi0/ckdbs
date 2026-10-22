@@ -54,7 +54,7 @@ inline constexpr std::size_t kPageLsnOffset = 8;
 // Offset 16 is the word that was `reserved0`, whose comment nominated
 // exactly this use — which is why the field's arrival is not a format
 // event: every page ever written already carries 0 here, and 0 reads as
-// "never relayouted" (docs/spec/physical-optimizer.md R4).
+// "never moved" (docs/spec/heap-and-tuple.md §3.1a R4).
 inline constexpr std::size_t kPageRelayoutEpochOffset = 16;
 // Offset 24 was `reserved1`, consumed by `owner_oid` the same way offset 16
 // was consumed above (page.md §2a): every page ever written already carries
@@ -143,16 +143,18 @@ std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page);
 // a stale nonzero value and a page formatted since carries 0. No branch
 // reads it.
 
-// ---- Relayout epoch (docs/spec/physical-optimizer.md R4) ----------------
+// ---- Relayout epoch (docs/spec/heap-and-tuple.md §3.1a R4) -------------
 //
-// Moved when tuples on the page change slot or page. Its one writer today
+// Moved when a leaf division or compaction rewrites the page. Its one writer
 // is the B+ tree: a leaf division and an in-place leaf compaction set the
 // rewritten page's epoch to one past its old value (`btree.cpp`,
-// `SetRelayoutEpoch`). The physical optimizer's mover, which would also
-// bump it, moves nothing (physical-optimizer.md §6's gates). An ordinary
-// INSERT, UPDATE or DELETE never moves it - the fixed-length rule makes
-// them address-stable. The consumers' comparisons (Waystone replay rule 2,
-// Cabin entry verification, `exec/tuple_verify.hpp`) are live.
+// `SetRelayoutEpoch`). No relayout mover exists (heap-and-tuple.md
+// §7.1). An INSERT, UPDATE or DELETE that divides or compacts no leaf
+// never moves it; a mid-leaf placement shifts the slots after it with no
+// bump, and the Keystone-id check at the slot turns a shifted location
+// into a miss (heap-and-tuple.md §4.1, BD-R3). The consumers' comparisons
+// (Waystone replay rule 2, Cabin entry verification,
+// `exec/tuple_verify.hpp`) are live.
 //
 // The pairing rule, stated where a consumer will read it: **no consumer
 // may accept a location on epoch equality alone.** The epoch is a fast

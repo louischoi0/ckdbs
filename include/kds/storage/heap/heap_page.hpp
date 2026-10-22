@@ -246,12 +246,12 @@ public:
     bool grown_over() const;
     void MarkGrownOver();
 
-    // The common header's relayout epoch (docs/spec/physical-optimizer.md
-    // R4), surfaced here because the callers that need it at tuple-access
+    // The common header's relayout epoch (docs/spec/heap-and-tuple.md
+    // §3.1a R4), surfaced here because the callers that need it at tuple-access
     // time hold a PageView, not the raw span. Read-only on purpose: the
     // epoch is moved on the span under an exclusive hold - by the B+ tree's
-    // leaf division and compaction (`btree.cpp`, storage::SetRelayoutEpoch),
-    // and by the physical optimizer's mover were it to move anything.
+    // leaf division and compaction (`btree.cpp`, storage::SetRelayoutEpoch);
+    // no mover exists (heap-and-tuple.md §7.1).
     std::uint64_t RelayoutEpoch() const noexcept { return storage::GetRelayoutEpoch(page_); }
 
     // A tuple read back out of the page. `payload` is a view into the

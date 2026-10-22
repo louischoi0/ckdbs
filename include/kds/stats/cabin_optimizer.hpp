@@ -6,7 +6,7 @@
 
 #include "kds/stats/optimizer_signals.hpp"
 
-// The cabin optimizer's decision core (docs/spec/physical-optimizer.md
+// The cabin optimizer's decision core (docs/spec/cabin-controller.md
 // §II.4/PO3/PO5, workplan PHY02): `Decide(Snapshot) → ActionSet`.
 //
 // ---- The purity contract (PO3/PO10), stated exactly ----------------------
@@ -39,8 +39,8 @@
 // **P_rel estimated as the largest serving fingerprint's mean page cost**
 // (a full filter-scan reads the relation, so the observed scan cost is the
 // observed build cost) and T_amort expressed in decay half-lives
-// (`amort_windows`, default 1 - build cost and benefit decay on the same
-// clock, exactly as PO2 proposed).
+// (`amort_windows`, default 64 - build cost and benefit decay on the same
+// clock, as PO2 states).
 //
 // Three v1 model choices, stated so they can be revisited rather than
 // discovered: EXTEND's marginal pair is modeled as the coverage-miss share
