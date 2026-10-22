@@ -138,6 +138,10 @@ def setup(args, be):
 
 def client(args):
     be = connect_on(args.port, args.core)
+    if args.level:
+        # BL-S4's level, declared before the window: the next head moves the
+        # session to its side of the partition.
+        must(be, f"SET PRIORITY {args.level}")
     out = {"role": args.role, "index": args.index, "core": meta_all(be.conn).get("core"),
            "lat": [], "late": [], "ok": 0, "errors": 0, "refusals": 0, "first_error": None,
            "slow": [], "slow_dropped": 0, "first_t0": None, "last_t1": None}
@@ -267,7 +271,7 @@ def placement_targets(args, roles):
 
 def run_one(args, run):
     tag = (f"bl-mixed-k{args.cores}-{args.placement}-{args.arm}-{args.durability}-w{args.writers}"
-           f"-slice{args.slice or 'dflt'}-r{run}")
+           f"-slice{args.slice or 'dflt'}{'-levels' if args.levels else ''}-r{run}")
     wait = wait_for_load(args.max_load, args.max_wait)
     before = host_state()
     wd = os.path.join(args.workdir, tag)
@@ -315,6 +319,7 @@ def run_one(args, run):
         def mono_of(t):
             return mono0 + round((t - wall0) * 1e9)
 
+        levels = dict(kv.split("=", 1) for kv in args.levels.split(",") if kv)
         rates = {"reader": args.rate / max(1, args.readers),
                  "writer": args.writer_rate / max(1, args.writers)}
         for i, role in enumerate(roles):
@@ -326,6 +331,8 @@ def run_one(args, run):
                   "--walk-rows", str(args.walk_rows),
                   "--start-at", repr(start_at), "--warmup", str(args.warmup),
                   "--seconds", str(args.seconds)]
+            if role in levels:
+                cl += ["--level", levels[role]]
             if args.client_cpus:
                 cpus = args.client_cpus.split(",")
                 cl = ["taskset", "-c", cpus[i % len(cpus)]] + cl
@@ -388,7 +395,7 @@ def run_one(args, run):
         writers = [o for o in outs if o["role"] == "writer"]
         res = {
             "arm": args.arm, "cores": args.cores, "placement": args.placement,
-            "targets": targets, "roles": roles, "slice": args.slice,
+            "targets": targets, "roles": roles, "slice": args.slice, "levels": args.levels,
             "run": run, "durability": args.durability, "rate": args.rate, "readers": args.readers,
             "writers": args.writers, "writer_rate": args.writer_rate, "batch": args.batch,
             "walk_rows": args.walk_rows, "seconds": args.seconds, "warmup": args.warmup,
@@ -506,6 +513,9 @@ def main():
     p.add_argument("--point-rows", type=int, default=10_000)
     p.add_argument("--walk-rows", type=int, default=10_000)
     p.add_argument("--batch", type=int, default=1024)
+    p.add_argument("--levels", default="",
+                   help="BL-S4: role=level pairs declared by SET PRIORITY, comma-separated "
+                        "(reader=transactional,walker=analytic,inserter=background)")
     p.add_argument("--slice", type=int, default=0, help="pages per walk slice (0: the build's)")
     p.add_argument("--seconds", type=float, default=10.0)
     p.add_argument("--warmup", type=float, default=2.0)
@@ -525,6 +535,7 @@ def main():
     p.add_argument("--max-wait", type=float, default=120)
     p.add_argument("--client", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--role", default="reader", help=argparse.SUPPRESS)
+    p.add_argument("--level", default="", help=argparse.SUPPRESS)
     p.add_argument("--index", type=int, default=0, help=argparse.SUPPRESS)
     p.add_argument("--start-at", type=float, default=0.0, help=argparse.SUPPRESS)
     args = p.parse_args()
