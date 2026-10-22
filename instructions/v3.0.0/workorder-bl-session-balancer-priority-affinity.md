@@ -1057,3 +1057,62 @@ While no batch-level session lives, every core is interactive, core 0
 included, as before. BL-S4 is unblocked on this mark. Rulings 1 and 3 are
 settled (§6 above), and the BL-S3 balancer's core-0 placement stays a known
 gap until BL-S4's partition covers it.
+
+### BL-S4 built 2026-10-22 (W15) - the levels, served by placement
+
+**W15** (`instructions/v3.2.0/raft-marks-2026-10-21.md` §13): *"go bl-s4"*.
+Built on `worktree-bl-s4-partition` from `0af06bbc`, at `66d8e533` and its
+review's `402317a2`.
+
+- **The spelling** (BL-R8): `SET PRIORITY {transactional|normal|analytic|background}`,
+  routed beside `SET DURABILITY` on the dispatcher's tokens, so nothing is
+  reserved; the names match ignoring case. It sits at the readonly floor;
+  `transactional` is refused `ERR permission` with its byte below `admin`,
+  and an unknown name `InvalidArgument` with its byte. It applies from the
+  session's next head and walk, and is admitted inside a transaction (the
+  transaction stays where it is, BL-R1).
+- **The level and its count** (BL-R2): `server/priority.hpp` - the enum,
+  `PagesPerSlice`, and `PrioritySeat`, the session's move-only seat in
+  `sched::CoreLoad::BatchSessions`, the one multi-writer word beside the
+  load slots (`rules.md` §3).
+- **The partition** (BL-R2, BL-R4, ruling 2 (a)): `LoadPlacer::IsBatchCore`,
+  `max(1, cores / 4)` batch cores, core 0 first and then the
+  highest-numbered; `Decide` takes the session's side, moves a session
+  outside it to the side's least-busy core (fresh first) with no margin,
+  dwell or per-window guard, and confines load moves to the side. Active
+  only while the count is above zero; at one core there is none.
+- **The accept** (BL-R5, partly): under D19's fallback the round-robin
+  passes over the batch cores while the partition is active. Accept-time
+  least-load placement stays unbuilt (`known-gaps.md`).
+- **The slice** (BL-R2): `SelectRun` takes `PagesPerSlice` of its session's
+  level - `analytic` 16, every other 64. A DDL build's walk keeps 64.
+- **Observability** (BL-R8; BL-Q10 (a) adopted under W10's latitude):
+  `sys.meta`'s load block prints `batch_sessions`, `batch_cores` and each
+  core's `load_c<k>_partition_moves_out`. **Not built**: the per-session
+  level and per-level counters - `sys.meta` describes no session.
+- **Cells**: `LoadPlacerTest`'s BL-S4 section (the batch set at 1/2/4/8/16
+  cores; the partition move; load moves inside the side with the margin and
+  dwell; the stale fallback; `Place` reading the count, the lapse, a moved
+  and an ended seat), `CommandDispatcherTest.SetPriorityDeclaresALevelAndRefusesWithItsByte`,
+  `WalkSliceRigTest.AnAnalyticWalkYieldsFourTimesAsOftenAsANormalOne`,
+  `ConnectionHandoffTest.WhileThePartitionIsActiveNoAcceptLandsOnABatchCore`,
+  `ExpeditorTest.ALevelRunsItsTransactionsOnItsSideOfThePartition` and
+  `ExpeditorTest.AtOneCoreALevelIsTakenAndNoPartitionExists`. **Cut**: the
+  eight-connection cell at four cores (two per core, then off core 0 at the
+  first declaration) - the kernel's hash places the accepts, so the cell
+  would measure it; the partition move it pins is pinned by the unit cells.
+- **Mutations, each run three times, all killed 3/3**: the partition filter
+  removed; the partition held active with no batch session (killed by
+  `PlaceActivatesThePartitionOnlyWhileABatchSessionLives`, not the cut
+  cell); the per-level slice removed; the count's increment dropped; the
+  fallback accept's partition test dropped.
+- **The review** (`critics-developer`) fixed a bare `SET PRIORITY`'s byte,
+  which subtracted a null view's pointer, and proposed the fallback accept,
+  the cores=1 and lapse cells, a tighter stale-fallback assertion, one
+  corrected mutation comment, `PrioritySeat` moved out of `session.hpp`,
+  `OnSide` for the side test written twice, and trimmed restatements - all
+  applied. The per-session level in `sys.meta` was not built, as above.
+- **The full suite** (`ctest -LE bs-nightly`, Debug) ran 4292/4292 at
+  `402317a2` (two disabled and two skipped cells, none BL's).
+- **Overhead not measured**; measured at BL's close (BL-S5). BL-S5 also owes
+  the texts (`sched.md`, `crosscore.md`, `protocol.md`, the manual).

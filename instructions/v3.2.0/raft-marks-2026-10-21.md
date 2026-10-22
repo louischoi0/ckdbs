@@ -110,3 +110,12 @@ what the word settles and what it does not.
 | **Mark** | **Ruling 2 (a).** While the partition is active, core 0 is the first batch core. BL-R2's partition, BL-S4's cell and BL-Q19 in `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md` are amended to it; BL-S4 is unblocked. **Pushed to `main` with `--no-verify`**, documents and bench only, with no suite run |
 | **Does not settle** | BL-S4's start; BL's close and its overhead A/B; a tag, a version |
 | **Recorded at** | this file; the BL order's BL-R2, BL-S4, BL-Q19 and §6; the BL row in `instructions/v3.0.0/index.md`; `docs/inflight/known-gaps.md`'s BL section; CLAUDE.md's Cross-core execution row |
+
+## 13. BL-S4 started and built
+
+| | |
+|---|---|
+| **Word** | W15 (BL's session): *"go bl-s4"*, after ruling 2 (a) unblocked it (§12) |
+| **Mark** | **BL-S4 built** on `worktree-bl-s4-partition` (`66d8e533`, review `402317a2`): `SET PRIORITY`, the partition with core 0 first, the per-level slice, the fallback accept passing over batch cores; BL-Q10 (a) adopted under W10's latitude; the eight-connection cell cut (the BL order's §6, "BL-S4 built 2026-10-22") |
+| **Does not settle** | BL-S5 (the close, its overhead A/B and texts); a push; a tag, a version |
+| **Recorded at** | this file; the BL order's §6; `docs/inflight/known-gaps.md`'s BL section; the BL row in `instructions/v3.0.0/index.md`; CLAUDE.md's Cross-core execution row; `docs/rules/rules.md` §3 |

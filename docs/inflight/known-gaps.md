@@ -855,7 +855,12 @@ until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
   that core 0's reactor runs the group-commit drain. It separates two
   saturating batch sessions onto their own cores, and readers fill what is
   left, core 0 among it. 8 of 9 balanced runs at `418670a3` ended with a
-  reader on core 0.
+  reader on core 0. **Since BL-S4 (`402317a2`) this holds only where the
+  bulk writer declares no batch level**: a session that declares
+  `analytic` or `background` makes core 0 a batch core and keeps every
+  interactive session off it from its next head, but a writer that declares
+  nothing leaves the partition inactive and the placement BL-S3's. Not
+  re-measured since BL-S4.
 - **`TRACE ON` is per core, not per session** (`CommandDispatcher::tracing_`).
   It always was; since BL-S3 moves sessions, a session's trace stops when it
   moves and another session landing on the traced core is traced instead.
@@ -871,10 +876,17 @@ until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
   `LoadPlacer::kStaleNs` (four windows) holds while `max_idle_block_ms`
   stays under three windows (150 ms); the default is 10. A larger idle
   block makes an idle core read as held, and it draws no session.
-- **BL-R5 is not built**: under D19's fallback core 0 still hands accepted
-  sockets round-robin, not to the least busy core. The balancer corrects
-  the placement at a session's first head, so the accept-time choice was
-  not separately measured.
+- **BL-R5 is built only in part**: under D19's fallback core 0 still hands
+  accepted sockets round-robin, not to the least busy core; since BL-S4 the
+  round-robin passes over the batch cores while the partition is active.
+  The balancer corrects the placement at a session's first head, so the
+  accept-time choice was not separately measured.
+- **A session's level is not observable per session** (BL-R8, BL-S4):
+  `sys.meta` describes the instance and the asking session's core, not the
+  session, so only `SET PRIORITY`'s reply names the level; the partition's
+  instance numbers (`batch_sessions`, `batch_cores`,
+  `load_c<k>_partition_moves_out`) are printed. Verified on
+  `worktree-bl-s4-partition` at `402317a2`.
 - **What the suite does not cover:** a TLS or SCRAM session moving (the
   channel and gate travel inside the `Connection`, covered by reading only),
   a cancel sent to a session after it moved (the registry entry is keyed by
