@@ -806,15 +806,18 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 Verified on `worktree-bl-session-balancer` at BL-S3's commit, measured in
 `bench/v3.0.0/results-bl-s1-placement-premise-v2.7.0-857-g3552a03c.md`;
 the first bullet re-read on `worktree-bl-touchpattern-delete` at `05cd011f`
-and re-priced at BQ's close (2026-10-12, from `4cf30270`'s measurement).
-BL is paused (the order's §6, "BL paused 2026-10-12").
+and re-priced at BQ's close (2026-10-12, from `4cf30270`'s measurement);
+the first bullet re-measured and the second added on `bl-ruling2-remeasure` at `418670a3`
+(2026-10-21, `bench/v3.4.0/results-bl-ruling2-remeasure-v3.4.0-22-g418670a3.md`).
+BL was resumed on 2026-10-21, and ruling 2 is marked (a): core 0 is the
+first batch core (the order's §6, "BL resumed 2026-10-21").
 Owned by `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
 until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
 `docs/spec/sched.md` §5.
 
-- **A bulk writer stalls point readers on every core, and no placement
-  isolates them; what is left of the stall at `05cd011f` is the segment
-  roll's.** Two couplings through the one WAL were found at BL-S3's commit,
+- **A bulk writer stalls point readers through the segment roll; at
+  `418670a3` a held placement that keeps readers off core 0 spares them
+  most of it, and the shipped balancer does not hold one.** Two couplings through the one WAL were found at BL-S3's commit,
   where readers stalled 0.25-0.8 s. **The first is gone**: BL-S4's ruling 1
   (`raft-marks-2026-10-12.md` §11) deleted `Catalog::TouchPattern`, whose
   logged rewrite of a pattern's heat every repeated point `SELECT` made.
@@ -841,7 +844,18 @@ until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
   first trace is in BL-S1's results archive, `wal-coupling.md`),
   so no fix to the roll is coming from BQ, and releasing the latch for the
   roll (BQ's rung 4) needs the operator's own word (BQ-Q5 (b)). Ruling 2
-  stays unmarked.
+  is marked (a): core 0 is the first batch core while the partition is active.
+
+  **At `418670a3` the stall lands mostly on core 0**: readers held off
+  core 0 escape most of it, and readers on core 0 do not (the results file
+  above).
+- **BL-S3's balancer places readers on core 0 under a bulk writer.**
+  `LoadPlacer::Decide` reads each core's load words (`busy_ppm`,
+  `active_sessions`, the window end) and nothing else, so it does not know
+  that core 0's reactor runs the group-commit drain. It separates two
+  saturating batch sessions onto their own cores, and readers fill what is
+  left, core 0 among it. 8 of 9 balanced runs at `418670a3` ended with a
+  reader on core 0.
 - **`TRACE ON` is per core, not per session** (`CommandDispatcher::tracing_`).
   It always was; since BL-S3 moves sessions, a session's trace stops when it
   moves and another session landing on the traced core is traced instead.
