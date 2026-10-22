@@ -31,6 +31,18 @@
 //   same words and would leave for the same core;
 // - the session has stayed `kDwellNs` since its last move.
 //
+// **The partition comes before load** (BL-R2, BL-R4, BL-S4). While a
+// batch-level session lives on the instance (`priority.hpp`,
+// `sched::CoreLoad::BatchSessions`), the cores split: `max(1, cores / 4)`
+// batch cores - core 0 first, then the highest-numbered (ruling 2 marked
+// (a), 2026-10-21: core 0's reactor runs the log's group-commit drain,
+// which waits out every segment roll, and an interactive session sharing
+// it waits with it) - and the rest interactive. A session on a core outside
+// its level's side moves at its head to that side's least-busy core, fresh
+// first, with no margin, no dwell and no per-window guard; inside its side
+// the rules above apply, and a load move never leaves it. With no
+// batch-level session every core is every level's, which is BL-S3's path.
+//
 // Stateless apart from the session's own move time, so every core may ask it
 // at once (`transaction_placement.hpp`'s concurrency contract).
 
@@ -64,15 +76,28 @@ public:
         std::uint64_t window_end_ns = 0;
     };
 
+    // Which cores a session may run on: every core while the partition is
+    // inactive, else its level's side.
+    enum class Side : std::uint8_t { kAny, kInteractive, kBatch };
+
     std::uint32_t Place(std::uint32_t core, Session& session) override;
+
+    // Whether core `k` of `cores` is a batch core while the partition is
+    // active; none at one core, where there is no partition (BL-R9).
+    static constexpr bool IsBatchCore(std::uint32_t k, std::uint32_t cores) noexcept {
+        if (cores <= 1) return false;
+        const std::uint32_t batch = cores / 4 > 1 ? cores / 4 : 1;
+        return k == 0 || k + (batch - 1) >= cores;
+    }
 
     // The decision, over a snapshot of every core - the seam a cell drives
     // with fixed words rather than racing reactors for them. `now_ns` is the
     // asking core's latest window end, on the instance's one clock;
-    // `left_this_window` says a session already left `core` in it.
+    // `left_this_window` says a session already left `core` in it; `side` is
+    // the session's.
     static std::uint32_t Decide(std::span<const CoreView> cores, std::uint32_t core,
                                 std::uint64_t now_ns, std::uint64_t moved_at_ns,
-                                bool left_this_window) noexcept;
+                                bool left_this_window, Side side = Side::kAny) noexcept;
 };
 
 }  // namespace kds::server

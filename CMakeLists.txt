@@ -120,6 +120,7 @@ add_library(kds
     src/server/tcp_server.cpp
     src/server/connection_handoff.cpp
     src/server/load_placer.cpp
+    src/server/priority.cpp
     src/server/kwp_load_server.cpp
     src/server/kwp_session.cpp
     src/parser/lexer.cpp

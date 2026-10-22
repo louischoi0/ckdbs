@@ -228,6 +228,46 @@ TEST_F(WalkSliceRigTest, AShortWalkNeverSeesACancel) {
     EXPECT_TRUE(long_.TakeCancel());
 }
 
+// The polls of core 0's `foreground` group one walk took, at each level in
+// `levels`, run in turn by one task on the core's own thread: a walk's poll
+// count is its yields plus one, so the ratio is the slices'.
+sched::Coro CountWalkPolls(CommandDispatcher& d, sched::Scheduler& core, Session& s,
+                           std::vector<Priority> levels, std::vector<std::uint64_t>* polls,
+                           std::atomic<bool>* done) {
+    for (const Priority level : levels) {
+        s.set_priority(level);
+        DispatchOutcome out;
+        const std::uint64_t before = core.polls_total(sched::SchedulingGroup::kForeground);
+        co_await d.DispatchAsync("SELECT id FROM t WHERE name = 'none'", &s, &out);
+        polls->push_back(core.polls_total(sched::SchedulingGroup::kForeground) - before);
+    }
+    s.set_priority(Priority::kNormal);
+    done->store(true, std::memory_order_release);
+    co_return Status::OK();
+}
+
+// **The walk slice is the walking session's level's** (BL-R2, BL-S4): an
+// `analytic` walk yields every 16 pages, four times as often as a `normal`
+// one at 64, which is `exec::SlicePolicy::pages_per_slice` re-scoped.
+//
+// **The mutation**: drop `PagesPerSlice` from `SelectRun` and both walks
+// take the same polls.
+TEST_F(WalkSliceRigTest, AnAnalyticWalkYieldsFourTimesAsOftenAsANormalOne) {
+    Load(1, 1, kRows);
+    std::vector<std::uint64_t> polls;
+    std::atomic<bool> done{false};
+    rig_->core(0).scheduler().Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        CountWalkPolls(d(), rig_->core(0).scheduler(), long_,
+                       {Priority::kNormal, Priority::kAnalytic}, &polls, &done)));
+    rig_->Start();
+    ASSERT_TRUE(Within(60000ms, [&] { return done.load(std::memory_order_acquire); }))
+        << "the walks never finished";
+    ASSERT_EQ(polls.size(), 2u);
+    EXPECT_GE(polls[0], 3u) << "a normal walk over ~400 leaves did not yield";
+    EXPECT_GE(polls[1], 3 * polls[0]) << "normal " << polls[0] << " polls, analytic " << polls[1];
+}
+
 TEST_F(WalkSliceRigTest, ACoreTornDownWithAWalkBetweenSlicesReleasesItFirst) {
     // A peer's walk, run by hand to its first boundary and left queued; the
     // rig is then destroyed with it there. The scheduler goes last of the

@@ -743,6 +743,8 @@ private:
     // session statement the dispatcher routes, not a `parser::Statement`
     // arm - see the note at its definition.
     DispatchOutcome HandleSetDurability(std::string_view args, Session& session);
+    DispatchOutcome HandleSetPriority(std::string_view line, std::string_view args,
+                                      Session& session);
 
     // The read view a statement reads through. In autocommit it is minted
     // fresh here and belongs to no transaction; inside an explicit one it

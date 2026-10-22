@@ -3,6 +3,7 @@
 #include "kds/server/wal_archive.hpp"
 #include "kds/server/page_reclaim.hpp"
 #include "kds/server/statement_epoch.hpp"
+#include "kds/server/load_placer.hpp"
 #include "kds/server/read_borrow.hpp"
 
 #include "kds/txn/lock_table.hpp"
@@ -1252,9 +1253,14 @@ Role RequiredRole(std::string_view cmd, std::string_view rest) {
         // device-wide I/O for every session, and a durability class asks
         // only for the acknowledgement this session is owed. A class is
         // not a way to weaken anyone else's guarantee.
+        // `PRIORITY` too: a level places this session's own transactions,
+        // and the one level that could take from others, `transactional`,
+        // is checked against the admin role by its handler (BL-R8).
         const std::string_view target = SplitFirstToken(rest).first;
-        return (IEquals(target, "ISOLATION") || IEquals(target, "DURABILITY")) ? Role::kReadOnly
-                                                                              : Role::kAdmin;
+        return (IEquals(target, "ISOLATION") || IEquals(target, "DURABILITY") ||
+                IEquals(target, "PRIORITY"))
+                   ? Role::kReadOnly
+                   : Role::kAdmin;
     }
     // DDL in every spelling, STOP, SYNC - and everything unclassified.
     return Role::kAdmin;
@@ -1359,8 +1365,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "ISOLATION")) return HandleSetIsolation(sub_rest, session);
         if (IEquals(sub, "DURABILITY")) return HandleSetDurability(sub_rest, session);
+        if (IEquals(sub, "PRIORITY")) return HandleSetPriority(line, sub_rest, session);
         if (IEquals(sub, "CABIN_OPTIMIZER")) return HandleSetCabinOptimizer(sub_rest);
-        return {"ERR unknown SET target; SET ISOLATION LEVEL, SET DURABILITY and "
+        return {"ERR unknown SET target; SET ISOLATION LEVEL, SET DURABILITY, SET PRIORITY and "
                 "SET CABIN_OPTIMIZER are supported",
                 false};
     }
@@ -2034,6 +2041,18 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // core. `load_c<k>_*` for each of the instance's cores; none at one core,
     // where nothing writes them (BL-R9).
     section("load");
+    // **The partition** (BL-R2, `load_placer.hpp`): the live batch-level
+    // sessions - active while above zero - and which cores are batch then.
+    if (const std::uint32_t cores = sched::CoreLoad::Cores(); cores > 1) {
+        os << " batch_sessions="
+           << sched::CoreLoad::BatchSessions().load(std::memory_order_relaxed) << " batch_cores=";
+        const char* sep = "";
+        for (std::uint32_t k = 0; k < cores; ++k) {
+            if (!LoadPlacer::IsBatchCore(k, cores)) continue;
+            os << sep << k;
+            sep = ",";
+        }
+    }
     for (std::uint32_t k = 0; k < sched::CoreLoad::Cores(); ++k) {
         const sched::CoreLoad::Slot& s = sched::CoreLoad::Of(k);
         const auto r = [](const auto& v) { return v.load(std::memory_order_relaxed); };
@@ -2043,7 +2062,8 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
            << "_sessions=" << r(s.sessions) << " load_c" << k << "_active_sessions="
            << r(s.active_sessions) << " load_c" << k << "_heads=" << r(s.heads)
            << " load_c" << k << "_inside=" << r(s.inside) << " load_c" << k
-           << "_moves_out=" << r(s.moves_out);
+           << "_moves_out=" << r(s.moves_out) << " load_c" << k
+           << "_partition_moves_out=" << r(s.partition_moves_out);
         // **What the core waited on** (BL-S1's holder split): the contention
         // block's per-core slot (`base/contention.hpp`), which that block
         // prints summed. Only the latches it waited on; slot 0 also carries
@@ -5523,6 +5543,8 @@ class SelectRun {
 public:
     SelectRun(CommandDispatcher& d, Session& session) : d_(d), session_(session) {
         slice_.cancel = session.cancel_flag().get();
+        // The walking session's level sets the slice (BL-R2, `priority.hpp`).
+        slice_.pages_per_slice = PagesPerSlice(session.priority());
         if (d_.select_scratch_pool_.empty()) {
             scratch_ = std::make_unique<CommandDispatcher::SelectScratch>();
         } else {
@@ -10335,6 +10357,29 @@ DispatchOutcome CommandDispatcher::HandleSetDurability(std::string_view args, Se
     }
     session.set_durability(parsed.value());
     return {std::string("SET durability=") + wal::DurabilityClassName(parsed.value()), false};
+}
+
+// `SET PRIORITY {TRANSACTIONAL|NORMAL|ANALYTIC|BACKGROUND}` - the session's
+// level (BL-R8, `priority.hpp`), routed here for `HandleSetDurability`'s
+// reason. It takes effect at the session's next transaction head, where the
+// placer reads it, and in its next walk's slice; an open transaction stays
+// where it is (BL-R1), so the statement is admitted inside one.
+DispatchOutcome CommandDispatcher::HandleSetPriority(std::string_view line, std::string_view args,
+                                                     Session& session) {
+    const std::string_view word = Trim(args);
+    const std::string at = " (byte " + std::to_string(word.data() - line.data()) + ")";
+    auto parsed = ParsePriority(word);
+    if (!parsed.ok()) {
+        const Status s = parsed.status().WithMessage(parsed.status().message() + at);
+        return {ErrorReply(s), false, 0, s};
+    }
+    if (parsed.value() == Priority::kTransactional && session.role() != Role::kAdmin) {
+        return {"ERR permission: SET PRIORITY transactional needs admin; this connection is " +
+                    std::string(RoleName(session.role())) + at,
+                false};
+    }
+    session.set_priority(parsed.value());
+    return {"SET priority=" + std::string(PriorityName(parsed.value())), false};
 }
 
 // ---- Snapshots and the write scope ---------------------------------------

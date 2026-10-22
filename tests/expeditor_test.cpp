@@ -1258,6 +1258,57 @@ TEST_F(ExpeditorTest, EveryCoresLoadIsReadFromAnyCoreAndNoneAtOneCore) {
     }
 }
 
+// **A level runs its transactions on its side of the partition** (BL-S4,
+// BL-R2, BL-R4), through the shipped balancer at two cores, where core 0 is
+// the batch core: a session that declares `analytic` runs its next
+// transaction there, a `normal` one never does while a batch-level session
+// lives, a batch session that declares `normal` again returns to the
+// interactive core, and the partition lapses with the last batch session.
+//
+// **The mutation**: read the partition as never active in `Place` and the
+// `normal` session may stay on core 0 - the cell then fails whenever the
+// kernel accepted it there, so it is repeated over three sessions.
+TEST_F(ExpeditorTest, ALevelRunsItsTransactionsOnItsSideOfThePartition) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    KwpClient analyst(config.port);
+    KwpClient loader(config.port);
+    ASSERT_TRUE(analyst.Hello());
+    ASSERT_TRUE(loader.Hello());
+    std::vector<std::unique_ptr<KwpClient>> plain;
+    for (int i = 0; i < 3; ++i) {
+        plain.push_back(std::make_unique<KwpClient>(config.port));
+        ASSERT_TRUE(plain.back()->Hello());
+    }
+
+    EXPECT_EQ(analyst.Run("SET PRIORITY analytic").rfind("SET priority=analytic", 0), 0u);
+    EXPECT_EQ(analyst.Core(), 0) << "an analytic session ran off the batch core";
+    EXPECT_EQ(analyst.Meta("batch_sessions"), "1");
+    for (auto& p : plain) EXPECT_EQ(p->Core(), 1) << "a normal session ran on the batch core";
+
+    EXPECT_EQ(loader.Run("SET PRIORITY background").rfind("SET priority=background", 0), 0u);
+    EXPECT_EQ(loader.Core(), 0);
+    EXPECT_EQ(analyst.Run("SET PRIORITY normal").rfind("SET priority=normal", 0), 0u);
+    EXPECT_EQ(analyst.Core(), 1) << "a session that declared normal stayed on the batch core";
+    EXPECT_EQ(analyst.Meta("batch_cores"), "0");
+
+    EXPECT_EQ(loader.Run("SET PRIORITY normal").rfind("SET priority=normal", 0), 0u);
+    EXPECT_EQ(loader.Meta("batch_sessions"), "0") << "the partition outlived its last batch session";
+    std::uint64_t partition_moves = 0;
+    for (int k = 0; k < 2; ++k) {
+        partition_moves += std::strtoull(
+            analyst.Meta("load_c" + std::to_string(k) + "_partition_moves_out").c_str(), nullptr,
+            10);
+    }
+    EXPECT_GE(partition_moves, 2u) << "the analyst's move back was not counted as the partition's";
+    EXPECT_TRUE(running.Stop().ok());
+}
+
 // **A prepared statement is session state, and travels with it** (BL §1.2):
 // parsed on one core, bound and executed on the other, with the result it
 // gives where it was parsed.

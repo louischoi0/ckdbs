@@ -113,5 +113,131 @@ TEST(LoadPlacerTest, PlaceLetsOneSessionLeaveACorePerWindowAndStampsIt) {
     sched::CoreLoad::SetCores(0);
 }
 
+// ---- BL-S4: the partition (BL-R2, BL-R4) ------------------------------------
+
+using Side = LoadPlacer::Side;
+
+// `max(1, cores / 4)` batch cores, core 0 first and then the
+// highest-numbered (ruling 2 (a)); none at one core.
+TEST(LoadPlacerTest, CoreZeroIsTheFirstBatchCoreAndTheRestAreTheHighest) {
+    EXPECT_FALSE(LoadPlacer::IsBatchCore(0, 1)) << "a partition at one core";
+    EXPECT_TRUE(LoadPlacer::IsBatchCore(0, 2));
+    EXPECT_FALSE(LoadPlacer::IsBatchCore(1, 2));
+    for (std::uint32_t k = 0; k < 4; ++k) EXPECT_EQ(LoadPlacer::IsBatchCore(k, 4), k == 0) << k;
+    for (std::uint32_t k = 0; k < 8; ++k) {
+        EXPECT_EQ(LoadPlacer::IsBatchCore(k, 8), k == 0 || k == 7) << k;
+    }
+    for (std::uint32_t k = 0; k < 16; ++k) {
+        EXPECT_EQ(LoadPlacer::IsBatchCore(k, 16), k == 0 || k >= 13) << k;
+    }
+}
+
+// **A session outside its side moves at its head, whatever the load says**:
+// no margin, no dwell, no per-window guard - the first boundary after it
+// declares a level, or after the kernel's hash put it on the other side.
+//
+// **The mutation**: drop the partition filter (`inside`) and neither
+// session moves - every core is equally loaded.
+TEST(LoadPlacerTest, ASessionOutsideItsSideMovesWithNoMarginAndNoDwell) {
+    const std::array<View, 4> even = {At(500'000, 2), At(500'000, 2), At(500'000, 2),
+                                      At(500'000, 2)};
+    // An interactive session on core 0, the batch core: to the least busy of
+    // 1..3, inside its dwell and after another session left this window.
+    std::array<View, 4> skew = even;
+    skew[2].busy_ppm = 100'000;
+    EXPECT_EQ(LoadPlacer::Decide(skew, 0, kNow, kNow, true, Side::kInteractive), 2u);
+    EXPECT_EQ(LoadPlacer::Decide(even, 0, kNow, kNow, true, Side::kInteractive), 1u)
+        << "an interactive session stayed on the batch core";
+    // A batch session on an interactive core: to core 0, the only batch core.
+    for (std::uint32_t k = 1; k < 4; ++k) {
+        EXPECT_EQ(LoadPlacer::Decide(even, k, kNow, kNow, true, Side::kBatch), 0u) << k;
+    }
+}
+
+// **A load move never leaves the side**, and inside it the margin and the
+// dwell still hold.
+//
+// **The mutation**: drop `inside` from the load loop and the interactive
+// session on core 1 moves to core 0, the idle batch core.
+TEST(LoadPlacerTest, InsideItsSideALoadMoveKeepsTheMarginAndTheDwell) {
+    const std::array<View, 4> idle_batch = {At(0, 0), At(900'000, 4), At(800'000, 4),
+                                            At(800'000, 4)};
+    EXPECT_EQ(LoadPlacer::Decide(idle_batch, 1, kNow, kNever, false, Side::kInteractive), 1u)
+        << "a load move left the interactive side";
+    EXPECT_EQ(LoadPlacer::Decide(idle_batch, 1, kNow, kNever, false, Side::kAny), 0u)
+        << "with no partition the idle core is every session's";
+    const std::array<View, 4> wide = {At(0, 0), At(kM + 300'001, 4), At(300'000, 4),
+                                      At(900'000, 4)};
+    EXPECT_EQ(LoadPlacer::Decide(wide, 1, kNow, kNever, false, Side::kInteractive), 2u);
+    EXPECT_EQ(LoadPlacer::Decide(wide, 1, kNow, kNow, false, Side::kInteractive), 1u)
+        << "a load move inside the side ignored the dwell";
+    const std::array<View, 4> at = {At(0, 0), At(kM + 300'000, 4), At(300'000, 4),
+                                    At(900'000, 4)};
+    EXPECT_EQ(LoadPlacer::Decide(at, 1, kNow, kNever, false, Side::kInteractive), 1u)
+        << "a gap of exactly the margin moved";
+}
+
+// A side whose every word is stale still takes the session: the partition is
+// never given up for want of a fresh word, and a fresh core is preferred.
+TEST(LoadPlacerTest, APartitionMovePrefersAFreshCoreAndTakesAStaleOne) {
+    const std::uint64_t stale = kNow - LoadPlacer::kStaleNs - 1;
+    std::array<View, 4> words = {At(500'000, 2), View{0, 0, stale}, View{0, 0, stale},
+                                 At(700'000, 2)};
+    EXPECT_EQ(LoadPlacer::Decide(words, 0, kNow, kNever, false, Side::kInteractive), 3u)
+        << "a stale core was chosen over a fresh one";
+    words[3].window_end_ns = stale;
+    const std::uint32_t there = LoadPlacer::Decide(words, 0, kNow, kNever, false, Side::kInteractive);
+    EXPECT_NE(there, 0u) << "an interactive session was left on the batch core";
+}
+
+// **`Place` reads the partition from the instance's batch count and the
+// session's level**, and counts a partition move apart. Over the
+// process-wide slots, restored after.
+//
+// **The mutations**: read the partition as always active and the `normal`
+// session leaves core 0 with no batch session live; drop the count's
+// increment in `PrioritySeat::set` and the `normal` session stays on core 0
+// with one live.
+TEST(LoadPlacerTest, PlaceActivatesThePartitionOnlyWhileABatchSessionLives) {
+    sched::CoreLoad::SetCores(4);
+    for (std::uint32_t k = 0; k < 4; ++k) {
+        sched::CoreLoad::Reset(k);
+        sched::CoreLoad::Of(k).busy_ppm.store(500'000);
+        sched::CoreLoad::Of(k).active_sessions.store(2);
+        sched::CoreLoad::Of(k).window_end_ns.store(kNow);
+    }
+    const std::uint32_t before = sched::CoreLoad::BatchSessions().load();
+    ASSERT_EQ(before, 0u) << "a batch-level session outlived its test";
+    LoadPlacer placer;
+    Session plain;
+    EXPECT_EQ(placer.Place(0, plain), 0u) << "the partition was active with no batch session";
+    {
+        Session analyst;
+        analyst.set_priority(Priority::kAnalytic);
+        EXPECT_EQ(sched::CoreLoad::BatchSessions().load(), before + 1);
+        EXPECT_EQ(placer.Place(2, analyst), 0u) << "the batch session was not moved to core 0";
+        EXPECT_EQ(sched::CoreLoad::Of(2).partition_moves_out.load(), 1u);
+        // The next window, so the per-window guard is not what keeps it.
+        sched::CoreLoad::Of(0).window_end_ns.store(kNow + sched::CoreLoad::kWindowNs);
+        EXPECT_NE(placer.Place(0, plain), 0u) << "a normal session stayed on the batch core";
+        EXPECT_EQ(sched::CoreLoad::Of(0).partition_moves_out.load(), 1u);
+        Session moved(std::move(analyst));
+        EXPECT_EQ(moved.priority(), Priority::kAnalytic);
+        EXPECT_EQ(analyst.priority(), Priority::kNormal);  // NOLINT(bugprone-use-after-move)
+        EXPECT_EQ(sched::CoreLoad::BatchSessions().load(), before + 1) << "a move counted twice";
+    }
+    EXPECT_EQ(sched::CoreLoad::BatchSessions().load(), before)
+        << "an ended batch session still counts";
+    Session switcher;
+    switcher.set_priority(Priority::kBackground);
+    switcher.set_priority(Priority::kAnalytic);
+    EXPECT_EQ(sched::CoreLoad::BatchSessions().load(), before + 1) << "batch to batch counted";
+    switcher.set_priority(Priority::kTransactional);
+    EXPECT_EQ(sched::CoreLoad::BatchSessions().load(), before);
+
+    for (std::uint32_t k = 0; k < 4; ++k) sched::CoreLoad::Reset(k);
+    sched::CoreLoad::SetCores(0);
+}
+
 }  // namespace
 }  // namespace kds::server

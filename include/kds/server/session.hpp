@@ -12,6 +12,8 @@
 #include "kds/base/common.hpp"
 #include "kds/exec/functions.hpp"
 #include "kds/exec/set_expr.hpp"
+#include "kds/sched/core_load.hpp"
+#include "kds/server/priority.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/role.hpp"
 #include "kds/txn/manager.hpp"
@@ -103,6 +105,43 @@ struct WalkCursor {
     // statement's own writes. Carried so a resume writes exactly
     // these rows rather than re-evaluating over what it already wrote.
     std::shared_ptr<const std::unordered_set<std::uint64_t>> targets;
+};
+
+// **A session's level, and its seat in the instance's batch count** (BL-R2):
+// a batch level counts in `sched::CoreLoad::BatchSessions` for as long as
+// this holds it. Move-only - a moved session takes the seat and leaves
+// `normal` behind, and a copy would count twice - and given back when it
+// ends.
+class PrioritySeat {
+public:
+    PrioritySeat() noexcept = default;
+    PrioritySeat(const PrioritySeat&) = delete;
+    PrioritySeat& operator=(const PrioritySeat&) = delete;
+    PrioritySeat(PrioritySeat&& other) noexcept
+        : level_(std::exchange(other.level_, Priority::kNormal)) {}
+    PrioritySeat& operator=(PrioritySeat&& other) noexcept {
+        if (this != &other) {
+            set(Priority::kNormal);
+            level_ = std::exchange(other.level_, Priority::kNormal);
+        }
+        return *this;
+    }
+    ~PrioritySeat() { set(Priority::kNormal); }
+
+    Priority level() const noexcept { return level_; }
+    void set(Priority p) noexcept {
+        if (IsBatchPriority(p) != IsBatchPriority(level_)) {
+            if (IsBatchPriority(p)) {
+                sched::CoreLoad::BatchSessions().fetch_add(1, std::memory_order_relaxed);
+            } else {
+                sched::CoreLoad::BatchSessions().fetch_sub(1, std::memory_order_relaxed);
+            }
+        }
+        level_ = p;
+    }
+
+private:
+    Priority level_ = Priority::kNormal;
 };
 
 class Session {
@@ -322,6 +361,16 @@ public:
     // core's.
     std::uint64_t moved_at_ns() const noexcept { return moved_at_ns_; }
     void set_moved_at_ns(std::uint64_t ns) noexcept { moved_at_ns_ = ns; }
+
+    // **The level this session declared** (`SET PRIORITY`, BL-R8), `normal`
+    // until it declares one. Read at its next transaction head by the
+    // placer and by each walk for its slice, so a change applies from the
+    // next statement, as `SET DURABILITY`'s does. Entering or leaving a
+    // batch level moves the instance's count of live batch-level sessions
+    // (`sched::CoreLoad::BatchSessions`), which is what makes the partition
+    // active.
+    Priority priority() const noexcept { return priority_.level(); }
+    void set_priority(Priority p) noexcept { priority_.set(p); }
     // The load window this session was last counted active in (its core's
     // `window_end_ns` then, `sched/core_load.hpp`), so a session is counted
     // once a window however many statements it runs.
@@ -369,6 +418,7 @@ private:
     std::optional<ParkedWrite> parked_write_ = std::nullopt;
     std::uint64_t moved_at_ns_ = 0;
     std::uint64_t counted_in_window_ = UINT64_MAX;
+    PrioritySeat priority_;
 };
 
 }  // namespace kds::server

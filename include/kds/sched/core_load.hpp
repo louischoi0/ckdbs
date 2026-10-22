@@ -77,6 +77,10 @@ public:
         // balancer moves at most one session off a core per window.
         std::atomic<std::uint64_t> moved_out_in{0};
         std::atomic<std::uint64_t> moves_out{0};
+        // Of `moves_out`, the moves the partition made (BL-R4): a session on
+        // a core outside its level's partition, moved with no margin and no
+        // dwell.
+        std::atomic<std::uint64_t> partition_moves_out{0};
     };
 
     static Slot& Of(std::uint32_t core) noexcept { return slots()[core % kSlots]; }
@@ -103,6 +107,22 @@ public:
         s.window_end_ns.store(0, std::memory_order_relaxed);
         s.moved_out_in.store(0, std::memory_order_relaxed);
         s.moves_out.store(0, std::memory_order_relaxed);
+        s.partition_moves_out.store(0, std::memory_order_relaxed);
+    }
+
+    // **Live batch-level sessions on the instance** (BL-R2): the partition
+    // is active while this is above zero. **The table's one word with more
+    // than one writer** - every core's sessions declare levels - so it is
+    // changed by read-modify-write, never by `Bump`; read relaxed, since a
+    // stale count places one transaction by the partition it just left or
+    // entered, never on a wrong core. Written at every core count: a
+    // session's level is the session's (`Session::set_priority`), and its
+    // last holder gives it back when it ends. Not reset with a slot, for the
+    // same reason - a session of the previous instance still counts until it
+    // is destroyed.
+    static std::atomic<std::uint32_t>& BatchSessions() noexcept {
+        static std::atomic<std::uint32_t> n{0};
+        return n;
     }
 
     // Adds one to a single-writer count: a load and a store, not a

@@ -1788,5 +1788,34 @@ TEST_F(CommandDispatcherTest, RolesGateStatementClasses) {
     EXPECT_FALSE(refused(d.Dispatch("SYNC", &admin)));
 }
 
+// **`SET PRIORITY <level>`** (BL-R8, BL-S4): the four names, matched
+// ignoring case; `transactional` is the admin
+// role's, the other three anyone's; an unknown name is `InvalidArgument`
+// naming its byte, and a refused declaration leaves the level as it was.
+TEST_F(CommandDispatcherTest, SetPriorityDeclaresALevelAndRefusesWithItsByte) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    Session admin;
+    Session reader;
+    reader.set_role(Role::kReadOnly);
+    EXPECT_EQ(admin.priority(), Priority::kNormal) << "a session declared something by default";
+
+    EXPECT_EQ(d.Dispatch("SET PRIORITY analytic", &reader).response, "SET priority=analytic");
+    EXPECT_EQ(reader.priority(), Priority::kAnalytic);
+    EXPECT_EQ(d.Dispatch("set priority BACKGROUND", &reader).response, "SET priority=background");
+    EXPECT_EQ(d.Dispatch("SET PRIORITY Normal", &reader).response, "SET priority=normal");
+
+    const DispatchOutcome denied = d.Dispatch("SET PRIORITY transactional", &reader);
+    EXPECT_EQ(denied.response.rfind("ERR permission: ", 0), 0u) << denied.response;
+    EXPECT_NE(denied.response.find("(byte 13)"), std::string::npos) << denied.response;
+    EXPECT_EQ(reader.priority(), Priority::kNormal) << "a refused level was taken";
+    EXPECT_EQ(d.Dispatch("SET PRIORITY transactional", &admin).response,
+              "SET priority=transactional");
+
+    const DispatchOutcome unknown = d.Dispatch("SET PRIORITY urgent", &admin);
+    EXPECT_EQ(unknown.status.code(), StatusCode::kInvalidArgument) << unknown.response;
+    EXPECT_NE(unknown.response.find("(byte 13)"), std::string::npos) << unknown.response;
+    EXPECT_EQ(admin.priority(), Priority::kTransactional);
+}
+
 }  // namespace
 }  // namespace kds::server
