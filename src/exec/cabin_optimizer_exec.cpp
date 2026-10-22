@@ -171,7 +171,7 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
             auto bytes = ring->Fetch(leaf);
             if (!bytes.ok()) return bytes.status();
             heap::PageView page(bytes.value());
-            page_epoch = static_cast<std::uint32_t>(page.RelayoutEpoch());
+            page_epoch = static_cast<std::uint32_t>(page.PageEpoch());
             const std::uint16_t n = page.slot_count();
             staged.reserve(n);
             for (std::uint16_t i = 0; i < n; ++i) {
@@ -405,7 +405,7 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
             // the epoch the slot is valid under, as the read path's heal
             // stamps it. A stamp of 0 against a bumped page misses on every
             // later resolve and re-heals forever.
-            entry.page_epoch = CurrentRelayoutEpoch(heap::PageView(found.value().leaf.bytes()));
+            entry.page_epoch = CurrentPageEpoch(heap::PageView(found.value().leaf.bytes()));
             entry.flags |= stats::kCabinHintValid;
             rebuilt.push_back(entry);
         }

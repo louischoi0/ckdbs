@@ -45,7 +45,7 @@
 // location on its own (the Keystone-id check below still runs on an epoch
 // match), it only rejects a whole page's worth of recorded locations at
 // once. The stored width is the entry formats' u32; the header's u64 is
-// compared truncated, which reintroduces a wrap only after 2^32 relayouts
+// compared truncated, which reintroduces a wrap only after 2^32 epoch bumps
 // of one page and is harmless anyway - a wrap collision merely readmits a
 // location to the id check.
 //
@@ -78,7 +78,7 @@ enum class VerifyOutcome : std::uint8_t {
     kPageGone,
     // The slot is retired, dead, or past the directory's end.
     kSlotGone,
-    // The page's relayout epoch no longer matches the recorded one: tuples
+    // The page's page epoch no longer matches the recorded one: tuples
     // on this page have moved since the location was recorded, so every
     // location recorded against it is untrusted at once (R4). Checked
     // before the slot is read - the point of an epoch is rejecting a page
@@ -109,7 +109,7 @@ struct VerifiedTuple {
 };
 
 // Fetches `page_id` for read, checks it is a row page of `expected_owner`,
-// compares its relayout epoch against `recorded_epoch`, then reads `slot`
+// compares its page epoch against `recorded_epoch`, then reads `slot`
 // and compares the tuple's Keystone id against `expected_tuple_key`.
 //
 // Never returns a Status: there is no failure here that is not a miss, and
@@ -120,7 +120,7 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
                             std::uint64_t expected_owner);
 
 // The epoch to stamp on a location being *written*: `page_id`'s current
-// relayout epoch, truncated to the entry formats' u32, and 0 for a page
+// page epoch, truncated to the entry formats' u32, and 0 for a page
 // that cannot be read.
 //
 // The one producer, beside `VerifyTupleAt`'s one consumer, and here for the
@@ -133,12 +133,12 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
 // carries: the entry is about to be verified against the page anyway, so
 // the harmless direction is the one that re-checks rather than the one that
 // rejects.
-std::uint32_t CurrentRelayoutEpoch(storage::PageStore& store, PageId page_id);
+std::uint32_t CurrentPageEpoch(storage::PageStore& store, PageId page_id);
 
 // The same rule on a page the caller already **holds** - which is the one
 // to use when the location being stamped came from that hold (a descent's
 // leaf): a re-fetch after the hold is gone can read a divide's epoch beside
 // a pre-divide slot.
-std::uint32_t CurrentRelayoutEpoch(const heap::PageView& page);
+std::uint32_t CurrentPageEpoch(const heap::PageView& page);
 
 }  // namespace kds::exec

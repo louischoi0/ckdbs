@@ -664,7 +664,7 @@ bool FitOneLeaf(const std::vector<KeyedVersion>& versions, std::size_t from) {
 // result fits; `std::nullopt` when there is nothing to drop or it would not,
 // and the split goes ahead. No parent changes. The page is logged as the
 // one image of a `BTREE_SPLIT`, which carries the row (BD-R12), and its
-// relayout epoch moves past every slot it renumbered (section 3.1a). A write
+// page epoch moves past every slot it renumbered (section 3.1a). A write
 // failing after the reformat would leave the page half rebuilt and unlogged,
 // as a divide's would; `FitOneLeaf` is asked first so none can.
 StatusOr<std::optional<storage::InsertPlacement>> CompactLeafAndInsert(
@@ -694,7 +694,7 @@ StatusOr<std::optional<storage::InsertPlacement>> CompactLeafAndInsert(
 
     const std::uint64_t min_key = leaf.min_key();
     const PageId next = leaf.next_page_id();
-    const std::uint64_t epoch = leaf.RelayoutEpoch();
+    const std::uint64_t epoch = leaf.PageEpoch();
     const bool grown_over = leaf.grown_over();
     const std::span<std::byte, kPageSize> bytes = AsPage(descent.leaf.bytes());
     const std::uint64_t owner = storage::GetOwnerOid(bytes);
@@ -715,7 +715,7 @@ StatusOr<std::optional<storage::InsertPlacement>> CompactLeafAndInsert(
         }
     }
     rebuilt.value().set_next_page_id(next);
-    storage::SetRelayoutEpoch(bytes, epoch + 1);
+    storage::SetPageEpoch(bytes, epoch + 1);
     out.Record(leaf_id, /*is_new_page=*/false, 0);
     out.held.push_back(std::move(descent.leaf));
     return std::optional<storage::InsertPlacement>{std::move(out)};
@@ -745,7 +745,7 @@ StatusOr<std::optional<storage::InsertPlacement>> CompactLeafAndInsert(
 // page's min_key" and neither page's min_key is ever rewritten.
 //
 // **What moving a tuple costs.** Its (page_id, slot) changes, so the old
-// leaf's `relayout_epoch` is bumped: every Waystone trail entry and Cabin
+// leaf's `page_epoch` is bumped: every Waystone trail entry and Cabin
 // hint pointing into it becomes untrusted at once (section 3.1a's pairing
 // rule). Secondary indexes need nothing - an index entry's sort key is
 // `key || tuple key || covered` (index_page.hpp), never a location - and the undo chain is
@@ -776,7 +776,7 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageClaims& claim
         heap::PageView leaf(descent.leaf.bytes());
         old_min_key = leaf.min_key();
         old_next = leaf.next_page_id();
-        old_epoch = leaf.RelayoutEpoch();
+        old_epoch = leaf.PageEpoch();
         old_grown_over = leaf.grown_over();
 
         auto keyed_versions = CollectKeyed(leaf, leaf_id);
@@ -878,7 +878,7 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageClaims& claim
     // what it was rather than bumped from zero - an epoch that went backwards
     // would let a trail entry recorded at the old value compare equal again,
     // which is the one thing this field exists to stop.
-    storage::SetRelayoutEpoch(old_bytes, old_epoch + 1);
+    storage::SetPageEpoch(old_bytes, old_epoch + 1);
 
     // Both pages are logged as images, in the split's one record
     // (`BTREE_SPLIT`, BD-R12), with the incoming row already in whichever

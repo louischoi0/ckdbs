@@ -749,7 +749,7 @@ private:
             memo_page_ = found.value().page_id;
             memo_slot_ = found.value().slot;
             heap::PageView leaf(found.value().leaf.bytes());  // btree.hpp `Location`
-            memo_epoch_ = CurrentRelayoutEpoch(leaf);
+            memo_epoch_ = CurrentPageEpoch(leaf);
             co_return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
                                  found.value().slot);
         }
@@ -1701,7 +1701,7 @@ private:
                 const PageId healed_page = found.value().page_id;
                 const std::uint16_t healed_slot = found.value().slot;
                 const std::uint32_t healed_epoch =
-                    CurrentRelayoutEpoch(heap::PageView(found.value().leaf.bytes()));
+                    CurrentPageEpoch(heap::PageView(found.value().leaf.bytes()));
                 entries.Heal(i, healed_page, healed_slot, healed_epoch);
                 serve_scratch_.push_back(Located{entry.tuple_key, healed_page, healed_slot, healed_epoch});
             }
@@ -2184,7 +2184,7 @@ private:
         std::uint64_t walk_trx_id = 0;
         std::uint64_t walk_undo_ptr = txn::kNoUndoPtr;
         bool walk_deleted = false;
-        // The page's relayout epoch at the moment of access, captured under
+        // The page's page epoch at the moment of access, captured under
         // the span because the trail record below runs after its release -
         // recorded so replay's rule 2 has something real to compare
         // (docs/spec/heap-and-tuple.md §3.1a R4, PX04). One u64 load, on the
@@ -2226,7 +2226,7 @@ private:
                         // property that makes relayout a memcpy.
                         version_.assign(tuple.payload.begin(),
                                         tuple.payload.end());
-                        observed_epoch = page.RelayoutEpoch();
+                        observed_epoch = page.PageEpoch();
                         walk_trx_id = tuple.trx_id;
                         walk_undo_ptr = tuple.undo_ptr;
                         walk_deleted = tuple.deleted;
@@ -2250,7 +2250,7 @@ private:
                         // happens below, in two halves.
                         version_.assign(tuple.payload.begin(),
                                         tuple.payload.end());
-                        observed_epoch = page.RelayoutEpoch();
+                        observed_epoch = page.PageEpoch();
                         decoded = true;
                         break;
                 }
@@ -2682,7 +2682,7 @@ private:
     std::uint64_t memo_key_ = 0;
     PageId memo_page_ = kInvalidPageId;
     std::uint16_t memo_slot_ = 0;
-    std::uint32_t memo_epoch_ = 0;  // the leaf's relayout epoch at the descent
+    std::uint32_t memo_epoch_ = 0;  // the leaf's page epoch at the descent
 
     // ---- Cabin (docs/spec/cabin.md) --------------------------------------
     //
@@ -2767,7 +2767,7 @@ private:
         std::uint64_t tuple_key = 0;
         PageId page_id = kInvalidPageId;
         std::uint16_t slot = 0;
-        std::uint32_t epoch = 0;  // the page's relayout epoch the slot was valid under
+        std::uint32_t epoch = 0;  // the page's page epoch the slot was valid under
     };
     std::vector<Located> serve_scratch_;
     std::unordered_set<std::uint64_t> seen_tuple_keys_;

@@ -210,7 +210,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 // just verified - and the real heal for a descended one,
                 // whose epoch has to come from the page this fetch just
                 // read rather than from a 0 that would miss forever.
-                set.Heal(i, at_page, at_slot, CurrentRelayoutEpoch(page));
+                set.Heal(i, at_page, at_slot, CurrentPageEpoch(page));
                 auto tuple = page.ReadTuple(at_slot);
                 if (!tuple.ok()) {
                     if (tuple.status().code() == StatusCode::kNotFound) continue;

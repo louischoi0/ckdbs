@@ -89,7 +89,7 @@ inline constexpr std::uint16_t kHeaderFlagInitialized = 0x1;
 // page as the root reads it before growing a second root over it
 // (btree.cpp's `SecureParents`). Never cleared: an old root stays its
 // grower's leftmost child. A page written before the bit existed carries
-// 0, which claims nothing - the same argument that let `relayout_epoch`
+// 0, which claims nothing - the same argument that let `page_epoch`
 // take a zeroed word without a format event.
 inline constexpr std::uint16_t kHeaderFlagGrownOver = 0x2;
 
@@ -246,13 +246,13 @@ public:
     bool grown_over() const;
     void MarkGrownOver();
 
-    // The common header's relayout epoch (docs/spec/heap-and-tuple.md
+    // The common header's page epoch (docs/spec/heap-and-tuple.md
     // §3.1a R4), surfaced here because the callers that need it at tuple-access
     // time hold a PageView, not the raw span. Read-only on purpose: the
     // epoch is moved on the span under an exclusive hold - by the B+ tree's
-    // leaf division and compaction (`btree.cpp`, storage::SetRelayoutEpoch);
+    // leaf division and compaction (`btree.cpp`, storage::SetPageEpoch);
     // no mover exists (heap-and-tuple.md §7.1).
-    std::uint64_t RelayoutEpoch() const noexcept { return storage::GetRelayoutEpoch(page_); }
+    std::uint64_t PageEpoch() const noexcept { return storage::GetPageEpoch(page_); }
 
     // A tuple read back out of the page. `payload` is a view into the
     // page buffer itself - valid only as long as the owning PageView (and

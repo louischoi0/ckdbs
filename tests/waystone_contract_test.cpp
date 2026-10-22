@@ -341,7 +341,7 @@ std::size_t BumpEveryUserPage(Instance& db) {
         if (catalog_pages.value().count(id) != 0) continue;
         auto page = db.store().Get(id);
         if (!page.ok()) continue;
-        storage::BumpRelayoutEpoch(page.value().bytes());
+        storage::BumpPageEpoch(page.value().bytes());
         ++bumped;
     }
     return bumped;

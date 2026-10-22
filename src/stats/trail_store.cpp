@@ -12,7 +12,7 @@ namespace {
 // format's u32 (workplan PX04; the layout did not change - the field was
 // always here, written 0 while the engine had no epoch). The truncation is
 // this layer's decision to make, and it is safe: a wrap needs 2^32
-// relayouts of one page, and even a wrap collision only readmits the
+// epoch bumps of one page, and even a wrap collision only readmits the
 // location to the Keystone-id check (R4's pairing rule).
 WaystoneEntry EntryOf(const exec::TouchedTuple& touched) noexcept {
     WaystoneEntry entry{};
@@ -92,7 +92,7 @@ Status WriteTrail(storage::PageStore& store, PageId root, int depth, const Insta
     // Once an instance is hot, every execution re-records - and finds
     // exactly what it recorded last time. Nothing moves a tuple: the
     // fixed-length rule stops an UPDATE migrating one (invariant 13) and
-    // nothing relayouts, so a stable query over stable data produces the
+    // nothing moves its tuples, so a stable query over stable data produces the
     // same entries at the same addresses forever.
     //
     // Rewriting them costs a **dirtied page**, and a dirtied page costs a

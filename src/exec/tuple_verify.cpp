@@ -35,7 +35,7 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
     // including the slot directory the read below would consult. Compared
     // at the entry formats' stored width (u32); see the header comment for
     // why the truncation is harmless.
-    if (static_cast<std::uint32_t>(page.RelayoutEpoch()) != recorded_epoch) {
+    if (static_cast<std::uint32_t>(page.PageEpoch()) != recorded_epoch) {
         out.outcome = VerifyOutcome::kEpochMismatch;
         return out;
     }
@@ -63,14 +63,14 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
     return out;
 }
 
-std::uint32_t CurrentRelayoutEpoch(storage::PageStore& store, PageId page_id) {
+std::uint32_t CurrentPageEpoch(storage::PageStore& store, PageId page_id) {
     auto bytes = store.GetForRead(page_id);
     if (!bytes.ok()) return 0;
-    return CurrentRelayoutEpoch(heap::PageView(bytes.value().bytes()));
+    return CurrentPageEpoch(heap::PageView(bytes.value().bytes()));
 }
 
-std::uint32_t CurrentRelayoutEpoch(const heap::PageView& page) {
-    return static_cast<std::uint32_t>(page.RelayoutEpoch());
+std::uint32_t CurrentPageEpoch(const heap::PageView& page) {
+    return static_cast<std::uint32_t>(page.PageEpoch());
 }
 
 }  // namespace kds::exec

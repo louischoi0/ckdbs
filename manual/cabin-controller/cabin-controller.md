@@ -99,7 +99,7 @@ facts that stand in front of one (the reader horizon, the between-pages
 key order a descent and range pruning read, and cross-relation page reuse,
 answered only for a dropped relation's pages).
 
-The page epoch (R4) is built: every page carries `relayout_epoch`, moved
+The page epoch (R4) is built: every page carries `page_epoch`, moved
 only when a B+ tree leaf divides or is compacted in place - a row placed
 mid-leaf shifts the slots after it without moving the epoch, and the
 Keystone-id check at the slot catches the shift;

@@ -141,7 +141,7 @@ struct WaystoneEntry {
 
     // The heap page's epoch when the location was recorded. A location is
     // trustworthy only while this still matches the page's current epoch;
-    // relayout bumps one counter instead of rewriting every entry that
+    // a move of tuples bumps one counter instead of rewriting every entry that
     // pointed into the page.
     std::uint32_t page_epoch;
 

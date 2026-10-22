@@ -128,7 +128,7 @@ struct CabinEntry {
     std::uint64_t tuple_key = 0;
     PageId page_id = kInvalidPageId;
 
-    // The page's relayout epoch at the time the entry was written or last
+    // The page's page epoch at the time the entry was written or last
     // healed (docs/spec/heap-and-tuple.md §3.1a R4; recorded and compared for
     // real since workplan PX04 - the field was here from C6, written 0
     // while the engine had no epoch, precisely so there would be nowhere

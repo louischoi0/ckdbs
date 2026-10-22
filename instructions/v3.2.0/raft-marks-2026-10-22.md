@@ -11,3 +11,12 @@ what the word settles and what it does not.
 | **Mark** | **(b).** The page epoch (R4, §7) moves to `heap-and-tuple.md` §3.1a and the no-mover fact (§6, with §8's retired key and §10's mover items) to its §7.1; the lazy-decay score (R1) to a new `docs/spec/decay.md`; Part II (the Cabin controller, PO1-PO10) to a new `docs/spec/cabin-controller.md`; `manual/physical-optimizer/` becomes `manual/cabin-controller/`; every reference outside `instructions/` and `bench/` is re-pointed and `physical-optimizer.md` is deleted. Documents and source comments only. **Pushed to `main` with `--no-verify`** on this word |
 | **Does not settle** | Q1 and Q2, which were not marked: `relayout_epoch` and the `cabin_optimizer` names stay as they are |
 | **Recorded at** | this file; CLAUDE.md's milestone rows; `instructions/v3.2.0/index.md`'s row for this file |
+
+## 2. Q1 and Q2 marked (a); pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"Q1 $!a Q2 $!a push no verify"* - Q1 and Q2 of §1, each put as one proposal (Q1: rename `relayout_epoch` to `page_epoch`; Q2: keep the `CabinOptimizer` / `cabin_optimizer` / `SHOW CABIN_OPTIMIZER` names); `$!a` is read as the proposal in each |
+| **Mark** | **Q1 (a)**: the page header field and every identifier built on it are renamed - `PageHeaderFields::page_epoch`, `kPageEpochOffset`, `GetPageEpoch` / `SetPageEpoch` / `BumpPageEpoch`, `PageView::PageEpoch()`, `exec::CurrentPageEpoch` - and the prose "relayout epoch" reads "page epoch"; the byte at offset 16 is unchanged, so no superblock bump. **Q2 (a)**: the controller's names stay. **Pushed to `main` with `--no-verify`** on this word, after the full suite ran on the renamed tree |
+| **Does not settle** | a tag, a version |
+| **Recorded at** | this file; `instructions/v3.2.0/index.md`'s row for this file |

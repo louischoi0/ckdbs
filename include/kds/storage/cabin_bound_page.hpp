@@ -123,7 +123,7 @@ struct BoundCabinEntry {
 
     // The advisory location. Every Bound Cabin writer stores `page_epoch` 0
     // (`exec/assertion_build.cpp`, `exec/assertion_check.cpp`) although pages
-    // do carry a `relayout_epoch` (page_header.hpp) that a btree leaf division
+    // do carry a `page_epoch` (page_header.hpp) that a btree leaf division
     // bumps; `exec/tuple_verify.hpp` compares the two, so a hint into a page
     // whose epoch moved fails verification and costs a descent - never a
     // wrong answer, the tuple key being the authority.

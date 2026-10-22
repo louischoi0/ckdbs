@@ -42,7 +42,7 @@ struct PageHeaderFields {
     std::uint16_t flags;          // per-type meaning; 0 unless the type specifies otherwise
     std::uint32_t checksum;       // CRC32C over the full page with this field zeroed
     std::uint64_t page_lsn;       // LSN of the last WAL record applied; 0 = never logged
-    std::uint64_t relayout_epoch; // bumped when tuples on the page move; 0 = never relayouted
+    std::uint64_t page_epoch; // bumped when tuples on the page move; 0 = tuples never moved
     std::uint64_t owner_oid;      // catalog oid of the owning object; 0 = unattributed (page.md §2a)
 };
 
@@ -55,7 +55,7 @@ inline constexpr std::size_t kPageLsnOffset = 8;
 // exactly this use — which is why the field's arrival is not a format
 // event: every page ever written already carries 0 here, and 0 reads as
 // "never moved" (docs/spec/heap-and-tuple.md §3.1a R4).
-inline constexpr std::size_t kPageRelayoutEpochOffset = 16;
+inline constexpr std::size_t kPageEpochOffset = 16;
 // Offset 24 was `reserved1`, consumed by `owner_oid` the same way offset 16
 // was consumed above (page.md §2a): every page ever written already carries
 // 0 here, and 0 reads as "unattributed" — so the arrival is not a format
@@ -76,7 +76,7 @@ static_assert(offsetof(PageHeaderFields, format_version) == kFormatVersionOffset
 static_assert(offsetof(PageHeaderFields, flags) == kPageFlagsOffset);
 static_assert(offsetof(PageHeaderFields, checksum) == kPageChecksumOffset);
 static_assert(offsetof(PageHeaderFields, page_lsn) == kPageLsnOffset);
-static_assert(offsetof(PageHeaderFields, relayout_epoch) == kPageRelayoutEpochOffset);
+static_assert(offsetof(PageHeaderFields, page_epoch) == kPageEpochOffset);
 static_assert(offsetof(PageHeaderFields, owner_oid) == kPageOwnerOidOffset);
 static_assert(sizeof(PageHeaderFields) == kPageHeaderSize);
 
@@ -106,7 +106,7 @@ void WritePageHeader(std::span<std::byte, kPageSize> page, const PageHeaderField
 
 // Formats a brand-new headered page: zeroes all kPageSize bytes, then
 // writes a header for `type` at this build's current format version, with
-// page_lsn 0, relayout_epoch 0, checksum 0, and `owner_oid` as given. The
+// page_lsn 0, page_epoch 0, checksum 0, and `owner_oid` as given. The
 // body is left zeroed for the type-specific codec to initialize.
 //
 // `owner_oid` (page.md §2a): the catalog oid of the object whose structure
@@ -143,12 +143,12 @@ std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page);
 // a stale nonzero value and a page formatted since carries 0. No branch
 // reads it.
 
-// ---- Relayout epoch (docs/spec/heap-and-tuple.md §3.1a R4) -------------
+// ---- Page epoch (docs/spec/heap-and-tuple.md §3.1a R4) -------------
 //
 // Moved when a leaf division or compaction rewrites the page. Its one writer
 // is the B+ tree: a leaf division and an in-place leaf compaction set the
 // rewritten page's epoch to one past its old value (`btree.cpp`,
-// `SetRelayoutEpoch`). No relayout mover exists (heap-and-tuple.md
+// `SetPageEpoch`). No relayout mover exists (heap-and-tuple.md
 // §7.1). An INSERT, UPDATE or DELETE that divides or compacts no leaf
 // never moves it; a mid-leaf placement shifts the slots after it with no
 // bump, and the Keystone-id check at the slot turns a shifted location
@@ -164,9 +164,9 @@ std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page);
 // Like SetPageLsn, mutation does not restamp the checksum: the field is
 // inside the checksummed span, and StampPageChecksum() at flush time is
 // the one place that seals it.
-std::uint64_t GetRelayoutEpoch(std::span<const std::byte, kPageSize> page);
-void SetRelayoutEpoch(std::span<std::byte, kPageSize> page, std::uint64_t epoch);
-void BumpRelayoutEpoch(std::span<std::byte, kPageSize> page);  // +1, under the caller's exclusive access
+std::uint64_t GetPageEpoch(std::span<const std::byte, kPageSize> page);
+void SetPageEpoch(std::span<std::byte, kPageSize> page, std::uint64_t epoch);
+void BumpPageEpoch(std::span<std::byte, kPageSize> page);  // +1, under the caller's exclusive access
 
 // ---- Checksums ----------------------------------------------------------
 

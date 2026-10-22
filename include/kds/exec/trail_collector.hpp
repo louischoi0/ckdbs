@@ -54,7 +54,7 @@ struct TouchedTuple {
 
     PageId page_id = kInvalidPageId;
 
-    // The page's relayout epoch at the moment of access
+    // The page's page epoch at the moment of access
     // (docs/spec/heap-and-tuple.md §3.1a R4). Reported **verbatim** as the header's u64:
     // the executor states the fact, and each store that keeps it owns its
     // stored width - trail_store.hpp narrows to its entry format's u32 and

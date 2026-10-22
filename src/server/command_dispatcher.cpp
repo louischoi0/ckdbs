@@ -8390,7 +8390,7 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         // one producer both heal sites use, so a hint minted here and a
         // hint repaired there carry the same stamp by construction.
         if (!write_epoch.has_value()) {
-            write_epoch = exec::CurrentRelayoutEpoch(page_store_, page_id);
+            write_epoch = exec::CurrentPageEpoch(page_store_, page_id);
         }
         entry.page_epoch = *write_epoch;
         entry.slot = slot;

@@ -34,7 +34,7 @@ Fixed 32 bytes at offset 0 of every headered page. Type-specific content begins 
 | 2 | 2 | `flags` | unused: written 0, read by nothing (§2b) |
 | 4 | 4 | `checksum` | CRC32C over the full 8 KiB with this field zeroed (§10) |
 | 8 | 8 | `page_lsn` | LSN of the last WAL record applied (wal.md §9); 0 = never logged |
-| 16 | 8 | `relayout_epoch` | bumped when tuples on the page move (`heap-and-tuple.md` §3.1a, R4); 0 = never moved |
+| 16 | 8 | `page_epoch` | bumped when tuples on the page move (`heap-and-tuple.md` §3.1a, R4); 0 = never moved |
 | 24 | 8 | `owner_oid` | oid of the owning object, 0 = unattributed (§2a) |
 
 Codec rules as everywhere (rules.md §2/§5): field-wise memcpy helpers, mirror struct + `offsetof` `static_assert`s, fixed-width LE, no bitfields. A shared `page_header` codec module owns this layout; type-specific codecs compose it and must not re-implement it.
