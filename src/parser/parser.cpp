@@ -968,7 +968,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAfterIdent(const Token& t
         return ParseExprFunction(tok);
     }
     if (after.type == TokenType::kDot) {
-        if (!query_mode_) {
+        if (!query_mode_ && !conflict_set_) {
             return Status::NotImplemented(
                 "a qualified column in a SET value is not supported (byte " +
                 std::to_string(tok.byte_offset) + ")");
@@ -2585,11 +2585,11 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
 }
 
 // What follows an INSERT's rows (BU-S8): `ON CONFLICT [(col)] DO NOTHING`
-// (BU-Q18), then `RETURNING` (BU-Q17). `DO UPDATE` is understood and not
-// built.
+// (BU-Q18) or `DO UPDATE SET ...` (CG), then `RETURNING` (BU-Q17).
 Status Parser::ParseInsertTail(InsertStmt& stmt) {
     const Token& on = lexer_.Peek();
     if (on.type != TokenType::kKeyword || on.kw != Keyword::kOn) return ParseReturning(stmt.returning);
+    stmt.conflict_byte_offset = on.byte_offset;
     lexer_.Next();
     if (!IsWord(lexer_.Peek(), "CONFLICT")) {
         return Status::InvalidArgument("expected CONFLICT after ON, got '" +
@@ -2617,9 +2617,23 @@ Status Parser::ParseInsertTail(InsertStmt& stmt) {
                                        "'" + At(lexer_.Peek().byte_offset));
     }
     lexer_.Next();
+    // `DO UPDATE SET ...` (CG): the SET list an UPDATE takes, `EXCLUDED.<col>`
+    // a qualified column the dispatcher binds to the proposed row. No
+    // `WHERE` on it (CG-Q5 (a)).
     if (IsWord(lexer_.Peek(), "UPDATE")) {
-        return Status::NotImplemented("ON CONFLICT DO UPDATE is not supported" +
-                                      At(lexer_.Peek().byte_offset) + "; DO NOTHING is");
+        lexer_.Next();
+        if (Status s = ExpectKeyword("SET"); !s.ok()) return s;
+        conflict_set_ = true;
+        const Status listed = ParseAssignmentList(stmt.conflict_assignments);
+        conflict_set_ = false;
+        if (!listed.ok()) return listed;
+        if (IsWord(lexer_.Peek(), "WHERE")) {
+            return Status::NotImplemented("ON CONFLICT DO UPDATE ... WHERE is not supported" +
+                                          At(lexer_.Peek().byte_offset) +
+                                          "; every conflicting row is updated");
+        }
+        stmt.on_conflict_do_update = true;
+        return ParseReturning(stmt.returning);
     }
     if (!IsWord(lexer_.Peek(), "NOTHING")) {
         return Status::InvalidArgument("expected NOTHING, got '" +
@@ -3515,26 +3529,17 @@ Status Parser::ParseRowValueAssignments(std::vector<Assignment>& out) {
     return Status::OK();
 }
 
-StatusOr<UpdateStmt> Parser::ParseUpdate() {
-    UpdateStmt stmt;
-
-    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
-        !s.ok()) {
-        return s;
-    }
-
-    if (Status s = ExpectKeyword("SET"); !s.ok()) return s;
-
+Status Parser::ParseAssignmentList(std::vector<Assignment>& out) {
     for (;;) {
         // The row-value form (BJ-Q7): `SET (a, b) = (x, y)` is `SET a = x,
         // b = y`, every value read from the before-image (BJ-R2).
         if (lexer_.Peek().type == TokenType::kLParen) {
-            if (Status s = ParseRowValueAssignments(stmt.assignments); !s.ok()) return s;
+            if (Status s = ParseRowValueAssignments(out); !s.ok()) return s;
             if (lexer_.Peek().type == TokenType::kComma) {
                 lexer_.Next();
                 continue;
             }
-            break;
+            return Status::OK();
         }
 
         Assignment a;
@@ -3551,14 +3556,26 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
 
         if (Status s = ParseSetValue(a); !s.ok()) return s;
 
-        stmt.assignments.push_back(std::move(a));
+        out.push_back(std::move(a));
 
         if (lexer_.Peek().type == TokenType::kComma) {
             lexer_.Next();
             continue;
         }
-        break;
+        return Status::OK();
     }
+}
+
+StatusOr<UpdateStmt> Parser::ParseUpdate() {
+    UpdateStmt stmt;
+
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
+
+    if (Status s = ExpectKeyword("SET"); !s.ok()) return s;
+    if (Status s = ParseAssignmentList(stmt.assignments); !s.ok()) return s;
 
     // `UPDATE t SET ... FROM u WHERE ...` (BU-S8): one more relation the
     // WHERE reads, made an EXISTS that refuses a second match (BU-Q16). A
