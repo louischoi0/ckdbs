@@ -17,3 +17,12 @@
 | **Mark** | **Narrow, as proposed.** CG-Q1 re-marked from (c) to (b): CG-S1 builds the tuple key and one named unique index as arbiters, S2 folded in. CG-Q3 (b) leaves CG. **Pushed to `main` with `--no-verify`**, documents only; no suite was run for it and no build input changed |
 | **Does not settle** | CG-S1's start; a tag, a version |
 | **Recorded at** | this file; the CG order's header, CG-Q1 and §7 "Narrowed 2026-10-23"; the CG row in `instructions/v3.2.0/index.md` |
+
+## 3. Version 3.4.3 tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.3"* |
+| **Mark** | **`v3.4.3`**, an annotated tag on `main` at `f44846ef`, then the head of `origin/main`. Its message states the map write order fixed (`4fb01b46`), BL closed, CG opened and narrowed, and the gaps that bound it. The full Debug suite ran 4311/4311 on `4fb01b46`, whose build inputs the tagged commit shares (everything after it is under `instructions/`), so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.3` |
+| **Does not settle** | a later version |
+| **Recorded at** | this file; the tag message; CLAUDE.md's Version Management |
