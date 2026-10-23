@@ -44,3 +44,12 @@
 | **Mark** | **CG-S1 built** on `cg-on-conflict-do-update` (the CG order's §7, "CG-S1 built 2026-10-23"): `ON CONFLICT DO UPDATE` on the tuple key and a unique index's column, `DO NOTHING` on the latter too |
 | **Does not settle** | CG-S3, the close and its measurement; a push; a tag, a version |
 | **Recorded at** | this file; the CG order's §7; the CG row in `instructions/v3.2.0/index.md` |
+
+## 6. Version 3.4.4 tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.4"* |
+| **Mark** | **`v3.4.4`**, an annotated tag on `main` at `5840ee56`, then the head of `origin/main`. Its message states CG-S1 built, the WAL writer's kick fixed (`5840ee56`), CI written, and the gaps that bound it. The full Debug suite ran 4320/4320 on the tree of the tagged commit, so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.4` |
+| **Does not settle** | a later version |
+| **Recorded at** | this file; the tag message; CLAUDE.md's Version Management |
