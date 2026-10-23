@@ -20,8 +20,11 @@ English (`raft-marks-2026-10-21.md` §5):
   validation milestone and push it, documents only."* The pending entry is
   withdrawn before it reached `main`, and this order carries its content.
 
-**Written 2026-10-21; not opened.** CG-Q0..Q7 each carry CLA's proposal
-beside them, and none is marked. **Exploratory since W2** (§3): CG-S0
+**Written 2026-10-21. Opened 2026-10-23** on the operator's W3 and W4
+(`raft-marks-2026-10-23.md` §1): CG-Q0..Q7 marked as CLA proposed - Q0
+(a), Q1 (c), Q2 (a), Q3 (a), Q4 (a), Q5 (a), Q6 (a), Q7 (a). **CG-S0 ran
+the same day; its verdict is narrow** (§7), and under Q0 (a) the build,
+narrow or drop is the operator's. **Exploratory since W2** (§3): CG-S0
 checks the concept before any surface is built, and a candidate that
 fails the check is recorded, not built.
 
@@ -138,7 +141,7 @@ leave K1 and K2 standing. CG-S0 answers that before anything is built:
 
 ---
 
-## 4. Questions - not marked
+## 4. Questions - marked 2026-10-23 as CLA proposed (W4)
 
 **CG-Q0 - who decides after S0.**
 - (a) The operator marks build, narrow or drop after S0's report.
@@ -305,4 +308,110 @@ What CG does not reach:
 
 ## 7. Stage log
 
-Not opened.
+### CG opened 2026-10-23 (W3, W4)
+
+**W3**: *"go cg"*. Asked for the marks S0 needs, the operator chose
+`$!a` (**W4**): CG-Q0..Q7 as CLA proposed (`raft-marks-2026-10-23.md` §1).
+Worked on `cg-on-conflict-do-update` from `4fb01b46`
+(`v3.4.2-8-g4fb01b46`). Citations below are `[source-read]` at `4fb01b46`;
+§1's line numbers were `722006ec`'s, and `NamedKeyVerdict` and
+`TupleKeyPlaced` are now `src/server/command_dispatcher.cpp:6167` and
+`:6190`.
+
+### CG-S0 - the concept check: **narrow**
+
+No engine code was written. Three readings:
+
+**1. The pipeline: the update arm on a live row is `UPDATE`'s point path
+(CG-R1 holds), behind one split.**
+- `UPDATE` already has a tuple-key point path: `TupleKeyEqualityTarget`
+  (`command_dispatcher.cpp:6857`) then `LocateByTupleKey` (`:7227`),
+  which descends with the leaf held exclusive and hands the slot to the
+  same per-row `apply` lambda the walk uses (`:9426`, `:9907-9943`).
+  `apply` carries every consumer CG-R1 names: assertion admission, the
+  Transition edge (`:9629`), the forward fk check on assigned columns
+  (`:9616`), the Cabin witness, index maintenance with the before-image
+  and the unique check (`:9655`, BX-R4's round at `:9879`).
+- **The split**: `UpdateInner` (`:9166`) parses its statement from text
+  (`ParseKeepingShape(line)`) and does per-statement setup (resolution,
+  `CompileAssignments` at `:9243`, fk assignments at `:9336`, the unique
+  holds) inside one ~800-line function. The arm needs an entry that takes
+  a resolved relation, compiled assignments and a target key. Per row,
+  `EXCLUDED.<col>` values are constants, so CG-Q5 (a) can bind them as
+  literals; that also keeps BJ-S4's rule that a fk assignment reads no
+  column.
+- **Three S1 design points this reading leaves**, none a blocker:
+  - **the arm's view**: `apply` drops a version its snapshot cannot see
+    (`:9443`), so under READ COMMITTED the arm needs a view minted after
+    the kept `X` (CG-Q6 (a)), or a row committed after the statement's
+    view is refused instead of updated;
+  - **waits**: with the row's `X` held, the arm's only waits are unique
+    keys of other values; `apply` parks for those (AO-S3b, `:9886`),
+    which an `INSERT` statement cannot resume - so the arm answers them
+    as the insert arm's `CheckUniqueKeys` does (`:6330`);
+  - **`DO NOTHING`'s up-front verdicts** (`:6026-6060`) extend to three
+    outcomes per row: insert, update, refuse (CG-Q2 (a), CG-Q3 (a), CG-Q4
+    (a)).
+
+**2. The census for CG-Q3 (b): (b) survives as a concept but is not
+`UPDATE`'s path, so CG-R1 fails for it in substance.** Reviving one's own
+delete-mark is a third arm:
+- insert-style checks: an assertion **arrival only** (`UPDATE`'s
+  `AdmitAndReserveUpdate` departs the old row a second time,
+  `src/exec/assertion_check.cpp:771`); the forward fk check on **every** fk
+  column (`UPDATE` checks only assigned ones, `command_dispatcher.cpp:9336`;
+  counter-example: delete child `k`, delete parent `P` - RESTRICT passes,
+  `k` is self-hidden - revive `k` naming `P`); a unique check on **every**
+  unique key (counter-example: insert `k2` with `v`, revive `k` holding
+  `v`);
+- update-style maintenance: the Transition edge from the delete-marked
+  state, never `ON INSERT`'s set (`transition.md` §2's loophole), index
+  and Cabin with that image as `previous`;
+- a heap primitive that does not exist: `OverwriteTuple` never clears
+  `DELETED` (`src/storage/heap/heap_page.cpp:269-299`), so overwrite plus
+  `ClearDeleteMark` with a forward `HEAP_DELETE_UNMARK`, a kind whose
+  comments name it rollback's (`src/wal/redo.cpp:128-130`);
+- **an undo that is correct only while KDS has no statement-level
+  rollback**: compensating the overwrite leaves `DELETED` clear and the
+  earlier `kDeleteMark` compensation restores the committed row
+  (`src/txn/manager.cpp:518-556`); a future savepoint would leave the row
+  live where its delete should stand, with no error, unless a revive undo
+  kind - a format event CG-R3 forbids - is added.
+Cabin, Waystone, `sys.access_stats`, var-heap spills and `PURGE`/K1 have
+sound answers. Three of the four conditional rows fail with no error if
+the update path is reused as it is.
+
+**3. The demand: no client asks for the tuple-key arbiter; three ask for
+a business key.** Read as source in `/home/cdkbs/xrock`,
+`/home/cdkbs/anti-kdbs` and `/home/cdkbs/autotrade`:
+- **`DO UPDATE` on the tuple key: 0 call sites.** Every client lets the
+  server issue the id or computes it, and never upserts by it.
+- **An upsert on a non-key column: 3, each by hand** - a `SELECT` then
+  `UPDATE ... WHERE id` or `INSERT`, in autocommit, so two writers can both
+  insert: xrock `Registry::add_account` and `add_model` on `name`
+  (`src/session/registry.cpp:247-264`, `:293-306`), autotrade `set_sector`
+  on `symbol_id` (`src/quantlab/data/kds/repo.py:428-452`). xrock's header
+  still reads "KDS has no UNIQUE" (`registry.hpp:75`), which BX made false.
+  Two more sites are `DO NOTHING`-shaped (autotrade `add_instrument`,
+  `append_bars`).
+- **Delete-then-reinsert of one key in one transaction: 0.** xrock and
+  autotrade say in comments that they avoid it because a deleted key is
+  never given back (`src/data/kds/kds_store.hpp:20-21`; `repo.py:15-17`,
+  `:432-434`), and xrock's `replace_day` writes new keys instead.
+
+**Verdict: narrow.**
+- **Build**: the update arm on a live row, as `UPDATE`'s point path behind
+  the split (reading 1), with CG-Q2 (a), Q3 (a), Q4 (a), Q5 (a), Q6 (a),
+  Q7 (a).
+- **Narrow the arbiter**: the demand is entirely CG-S2's unique-index
+  arbiter, which CG-Q1 (c) schedules after a tuple-key S1 no client in
+  reach would use. **CLA proposes re-marking CG-Q1 to (b)**: S1 builds the
+  tuple key and one named unique index together - the index check is
+  BX-R1/BX-R3's, already built - so the first surface is the one clients
+  hand-roll today.
+- **Drop CG-Q3 (b) from CG**: recorded here as its own arm, buildable later
+  only with the three counter-examples as tests and with savepoints named
+  as the event that reopens its undo.
+
+Not run: no spike was written; the suite is unchanged by this stage
+(documents only).
