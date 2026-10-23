@@ -17,3 +17,12 @@
 | **Mark** | **Narrow, as proposed.** CG-Q1 re-marked from (c) to (b): CG-S1 builds the tuple key and one named unique index as arbiters, S2 folded in. CG-Q3 (b) leaves CG. **Pushed to `main` with `--no-verify`**, documents only; no suite was run for it and no build input changed |
 | **Does not settle** | CG-S1's start; a tag, a version |
 | **Recorded at** | this file; the CG order's header, CG-Q1 and §7 "Narrowed 2026-10-23"; the CG row in `instructions/v3.2.0/index.md` |
+
+## 3. CG-S1 started and built
+
+| | |
+|---|---|
+| **Word** | W6 (CG's session): *"go cg-s1"* |
+| **Mark** | **CG-S1 built** on `cg-on-conflict-do-update` (the CG order's §7, "CG-S1 built 2026-10-23"): `ON CONFLICT DO UPDATE` on the tuple key and a unique index's column, `DO NOTHING` on the latter too |
+| **Does not settle** | CG-S3, the close and its measurement; a push; a tag, a version |
+| **Recorded at** | this file; the CG order's §7; the CG row in `instructions/v3.2.0/index.md` |
