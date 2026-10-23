@@ -1,4 +1,4 @@
-# CG close: the paths CG touched move inside noise but one - an UPDATE walking 10,000 rows has a slow mode in 15 of 20 B runs - and an upsert by a unique column is 13x faster than the UPDATE it replaces
+# CG close: the paths CG touched move inside noise but one - an UPDATE walking 10,000 rows has a slow mode in 14 of 20 B runs - and an upsert by a unique column is 13x faster than the UPDATE it replaces
 
 **Thesis.** Measured on `cg-on-conflict-do-update` at `6775aec1`
 (`v3.4.3-8-g6775aec1`, **B**) against the commit CG opened from, `f44846ef`
@@ -9,27 +9,36 @@ build:
 - **The paths S1 touched, A -> B, two whole rotations: inside noise but
   one cell.** Plain `INSERT`, `ON CONFLICT DO NOTHING` inserting and
   skipping, and the tuple-key point `UPDATE` move -16.2 % to +5.4 % at p50
-  across the two rotations, every rep range overlapping, with no consistent
-  sign between them.
+  across the two rotations, every rep range overlapping (four of the eight
+  cells keep their sign across the rotations, four flip).
 - **The one cell: an `UPDATE` that walks 10,000 rows** (`UPDATE u SET v = x
   WHERE name = '...'`; no index serves an `UPDATE`'s WHERE) has a slow mode
   on B. First rotation: 780 -> 860 us (+10.3 %), all ten B reps (796-873)
   above all ten A reps (755-795). The rerun, which the outlier rule asks
   for: 777 -> 815 us (+4.9 %), overlapping - five B reps at 750-787, as A,
-  and five at 843-875. **In 15 of 20 B reps the walk sits above every A rep;
-  no A rep is that slow.** At 1,000 rows the cell is -5.3 % and +6.1 %. S1
+  and five at 843-875. **In 14 of 20 B reps the walk sits at 835-875 us,
+  above all twenty A reps (751-799 us)**; the other six B reps (750-796)
+  are among A's. (Against each rotation's own A reps it is 15 of 20: the
+  first rotation's fastest B rep, 796, clears that rotation's A but not the
+  rerun's 798-799.) At 1,000 rows the cell is -5.3 % and +6.1 %. S1
   changed nothing inside that walk - `UpdateInner` was split into its parse
   and `UpdateParsed`, the write borrow's declaration gained a condition and
   the point path's entry the arm target; the walk's loop and `apply` are as
-  they were - so this is no per-row cost S1 added. A placement effect of
-  the split on B's binary is the likely source; it is not attributed here.
+  they were - so this is no per-row cost S1 added. **The source is
+  unexplained**: it varies per server on one binary, and a confound is not
+  excluded - the driver runs B's extra phases in its 1,000-row block, so
+  B's 10,000-row walk runs about 3,000 statements later than A's, at
+  another log position and checkpoint phase. The decisive check, B's
+  binary run through A's phases (`--engine a`), was queued at 11:31 and
+  cut at 11:42 with no cell run: other sessions held the host above the
+  quiet gate.
 - **Each `DO UPDATE` arm against its plain counterpart, B only** (A refuses
   `DO UPDATE`): the insert arm is +7.9 % to +10.8 % over a plain `INSERT`
   (about 4-5 us), and the tuple-key update arm +9.0 % to +10.6 % over a
   point `UPDATE` (about 5 us; the first rotation's +23.9 % at 10,000 rows was
-  the median of two clusters, and the rerun has one) - the arbiter's lock
+  the median of two clusters, and the rerun's median falls in the low one) - the arbiter's lock
   and lookup plus the arm re-running `UpdateParsed`'s setup per row
-  (resolution, compile), which the S1 review named. **The unique-column upsert is 60-65 us, against
+  (resolution, compile), which the S1 review named. **The unique-column upsert is 59-65 us, against
   130-860 us for the `UPDATE ... WHERE name = ...` it replaces**: the
   arbiter finds its holder through the unique index's check, where an
   `UPDATE`'s WHERE walks the relation.
@@ -45,9 +54,9 @@ build:
 
 | Item | Value |
 |---|---|
-| Executed | 2026-10-23 UTC. Builds 10:38:24-10:40:21; the first rotation 10:43:41-10:54:21 (the quiet gate held 185 s before its first cell and 535 s before rep 8); the rerun 11:22:44-11:24:46 (held 1,660 s first) |
+| Executed | 2026-10-23 UTC. Builds 10:38:24-10:40:21; the first rotation 10:43:41-10:54:21 (the quiet gate held 185 s before its first cell and 535 s before rep 4's A cell, nine minutes after its B cell); the rerun 11:22:44-11:24:46 (held 1,660 s first) |
 | A | `f44846ef`, `v3.4.3` - the commit CG opened from (CG was written at `722006ec`, which §5 names as A; between that commit and CG's opening lie 30-odd commits of other milestones, so an A/B against it would price them, and the A1 close's precedent - A is the milestone's opening commit - is followed). Exported with `git archive`, built in a scratch directory |
-| B | `6775aec1`, `v3.4.3-8-g6775aec1`, CG-S1 merged with `origin/main` |
+| B | `6775aec1`, `v3.4.3-8-g6775aec1`, CG-S1 merged with `origin/main`; the merge brought no build input, so B - A is CG alone |
 | Binaries | Release, built this session after their commits, run from copies: `kds_server.f44846ef` sha256 `6e6c2ac19c5e7ecb5b2526628a02ffc3a96b1a54fef0a3b4eacf28114defbd35`; `kds_server.6775aec1` `3d300d01f53a2e88c9b110d8d08971223cdcd64646b6abdd80519c4df1135d36` |
 | Host / device | 8 vCPU AMD EPYC 9V74, Linux 7.0.0-1014-azure; data and WAL on `/dev/root`, ext4, not tmpfs; unpinned. The quiet gate before every cell: no `kds_tests`, no `cc1plus`, 1-minute load under 2 (`progress.txt`) |
 | Server configuration | `cores = 1`, `durability = relaxed`, `buffer_pool_frames = 131072`, `log_level = warn`; one fresh server and data file per cell |
@@ -120,7 +129,8 @@ microseconds; every rep is in `tables.md`.
 
 The update arm's 10,000-row p50 is bimodal across the first rotation's reps
 (51.7-52.2 in four, 56.8-72.8 in six), so its +23.9 % is the median of two
-clusters. The rerun has one: 52.0 us against the point `UPDATE`'s 47.2
+clusters. The rerun's median falls in the low one (eight reps at
+51.1-52.7, two at 72.2-73.6): 52.0 us against the point `UPDATE`'s 47.2
 (+10.1 %), and the arms otherwise repeat (+8.9 % / +9.4 % for the insert
 arm, -54.6 % / -92.7 % for the unique-column upsert).
 
@@ -143,8 +153,9 @@ arm, -54.6 % / -92.7 % for the unique-column upsert).
 
 - **The arm pays for being a whole `UPDATE`.** Each conflicting row runs
   `UpdateParsed` from its top: relation resolution, `InitTableAccess`,
-  `CompileAssignments`, the write admission. That is 5-11 us a row over a
-  point `UPDATE`, and it is the price of CG-R1's one write path. Compiling
+  `CompileAssignments`, the write admission. With the arbiter's lock and
+  lookup that is 4-5 us a row over a point `UPDATE` (the setup's own share
+  is not measured), and it is the price of CG-R1's one write path. Compiling
   the assignments once per statement, with `EXCLUDED` as a per-row slot,
   is the cut if the cost matters.
 - **An upsert by a business key replaces a walk with a probe.** `UPDATE ...

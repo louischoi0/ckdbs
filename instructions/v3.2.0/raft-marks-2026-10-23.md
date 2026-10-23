@@ -50,6 +50,6 @@
 | | |
 |---|---|
 | **Word** | W6b (CG's session): *"push no verify"*, then W7: *"go cg-s3"* |
-| **Mark** | **CG-S1 pushed** to `main` at `6775aec1` with `--no-verify` (the full suite 4319/4319 at `54dbc716`, whose build inputs it shares). **CG-S3 measured** (the CG order's §7, "CG-S3 measured 2026-10-23"; `bench/v3.4.3/results-cg-close-v3.4.3-8-g6775aec1.md`): A the commit CG opened from, not §5's `722006ec` |
+| **Mark** | **CG-S1 pushed** to `main` at `6775aec1` with `--no-verify` (the full suite 4319/4319 at `54dbc716`, whose build inputs it shares). **CG-S3 measured** (the CG order's §7, "CG-S3 measured 2026-10-23") |
 | **Does not settle** | **CG's close**, which is the operator's word; a push; a tag, a version |
 | **Recorded at** | this file; the CG order's §7; the CG row in `instructions/v3.2.0/index.md` |

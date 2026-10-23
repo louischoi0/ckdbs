@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""CG close tables, from cg-<A|B>-r<rep>.json beside this file
+"""CG close tables, from cg-<A|B>-r<rep>.json in the directory named (default:
+beside this file; `python3 tables.py rerun` for the second rotation)
 (tools/cg_close_benchmark.py output). A table entry is the median over the
 reps of that percentile, in microseconds."""
-import glob, json, os, re, statistics
+import glob, json, os, re, statistics, sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = (os.path.abspath(sys.argv[1]) if len(sys.argv) > 1
+        else os.path.dirname(os.path.abspath(__file__)))
 KEYS = ["p0", "p25", "p50", "p90", "p99", "max"]
 runs = {"A": {}, "B": {}}
 for f in glob.glob(f"{HERE}/cg-*-r*.json"):
