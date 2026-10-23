@@ -458,8 +458,10 @@ TEST(DdlFenceRigTest, AReindexOnCoreZeroWaitsForAWriterOnAPeerAndTheNewTreeHolds
 
 TEST(DdlFenceRigTest, AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOnCoreZero) {
     // **The net measures a build's silence, not its length**
-    // (`holder_progress.hpp`). An autocommit `CREATE INDEX` holds the
-    // relation `X` for its whole backfill, synchronously on core 0; a writer
+    // (`holder_progress.hpp`). An autocommit `CREATE UNIQUE INDEX` holds the
+    // relation `X` for its whole backfill - a unique index is not built
+    // online (CI-Q6 (a)), and every other `CREATE INDEX` is, and makes no
+    // writer wait - synchronously on core 0; a writer
     // on core 1 arriving during it waits for the decide (`assertion.md`
     // §8.1a, `index.md`). Before the build reported progress, a backfill
     // longer than the net refused that writer as though the build were
@@ -495,7 +497,7 @@ TEST(DdlFenceRigTest, AWriterOnAPeerOutlivesTheFaultNetBehindAnAutocommitBuildOn
     stats::LockWaitLog::ResetForTest();
 
     Statement build;
-    build.sql = "CREATE INDEX bix ON built_ix (v)";
+    build.sql = "CREATE UNIQUE INDEX bix ON built_ix (v)";
     Statement insert;
     insert.sql = "INSERT INTO built_ix VALUES (-1)";
     Submit(*rig, 0, build);

@@ -502,6 +502,51 @@ void LockTable::DequeueWaiter(std::uint64_t txn, const LockKey& key) {
     KickAll(kick);
 }
 
+std::vector<std::uint64_t> LockTable::IntentionWriters(const LockKey& relation,
+                                                       std::uint64_t self,
+                                                       const std::vector<std::uint64_t>* among,
+                                                       LockWake* wake) {
+    std::vector<std::uint64_t> writers;
+    Partition& part = PartitionFor(relation);
+    LatchGuard guard(part.latch);
+    Entry* entry = nullptr;
+    for (Entry& e : part.entries) {
+        if (e.key == relation) {
+            entry = &e;
+            break;
+        }
+    }
+    if (entry == nullptr) return writers;
+    for (const Tenant& h : entry->holders) {
+        if (h.mode != LockMode::kIntentionExclusive || h.txn == self || IsReadHolder(h.txn)) {
+            continue;
+        }
+        if (among != nullptr && std::find(among->begin(), among->end(), h.txn) == among->end()) {
+            continue;
+        }
+        // One holder record per mode a transaction holds, so at most once
+        // here; the test keeps the answer a set whatever the table does.
+        if (std::find(writers.begin(), writers.end(), h.txn) == writers.end()) {
+            writers.push_back(h.txn);
+        }
+    }
+    if (writers.empty() || wake == nullptr) return writers;
+    // Armed under the latch that read the holders: a removal after this
+    // section flips the slot, and one before it is not in the answer.
+    if (wake->slot != nullptr && wake->key == relation) {
+        for (const Tenant& w : entry->waiters) {
+            if (w.slot == wake->slot) {
+                wake->slot->ready.store(false, std::memory_order_release);
+                return writers;
+            }
+        }
+    }
+    Tenant& registered = RegisterWake(*entry, self, LockMode::kShared);
+    wake->key = relation;
+    wake->slot = registered.slot;
+    return writers;
+}
+
 void LockTable::DropWake(const LockKey& key, const std::shared_ptr<LockWaitSlot>& slot) {
     if (slot == nullptr) return;
     Partition& part = PartitionFor(key);

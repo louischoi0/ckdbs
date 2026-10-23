@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/row_codec.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
@@ -176,6 +177,46 @@ TEST_F(IndexMaintainTest, ManyRowsSplitTheTreeAndRepublishItsRootWithoutFailing)
     // 900 rather than an off-by-one.
     Ok("UPDATE t SET owner = 1 WHERE note = 0");
     EXPECT_EQ(Entries("by_owner"), 2 * kRows - 1);
+}
+
+// CI-Q11 (b), `instructions/v3.2.0/workorder-ci-online-index-build.md`: an
+// append from a root another writer has grown past - an online build's
+// backfill, or a writer on another core - is refused by the stale root's
+// descent with nothing written, and retried from the root the anchor slot
+// names. Before CI it reached the client as a retryable `TxnConflict`.
+TEST_F(IndexMaintainTest, AnAppendFromARootAGrowthLeftBehindIsRetriedFromTheSlot) {
+    Ok("CREATE TABLE t (id int64, owner int64, note int64) BTREE");
+    Ok("CREATE INDEX by_owner ON t (owner)");
+    Ok("INSERT INTO t VALUES (1, 0)");
+    auto oid = boot_->catalog.FindTableOidByName(catalog::kNamespacePublic, "t");
+    ASSERT_TRUE(oid.ok());
+    auto before = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(before.ok());
+    const catalog::TableAccess::IndexRef stale = before.value()->indexes[0];
+
+    // Enough rows to grow the index a level: the old root is now the new
+    // root's leftmost child, and covers the lowest keys only.
+    for (int i = 0; i < 900; ++i) Ok("INSERT INTO t VALUES (" + std::to_string(i) + ", 0)");
+    auto now = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(now.ok());
+    ASSERT_NE(now.value()->indexes[0].root_page_id, stale.root_page_id) << "no level grew";
+
+    // A key above every one the old root still covers.
+    const auto int_value = [](std::int64_t v) {
+        parser::AstValue value;
+        value.type = parser::ValueType::kInt;
+        value.int_val = v;
+        return value;
+    };
+    const std::vector<parser::AstValue> body = {int_value(1'000'000), int_value(0)};
+    auto row = EncodeRow(now.value()->schema, now.value()->layout, 5000, body);
+    ASSERT_TRUE(row.ok()) << row.status().message();
+    auto values = DecodeRow(now.value()->schema, now.value()->layout, row.value());
+    ASSERT_TRUE(values.ok()) << values.status().message();
+    auto appended = AppendIndexEntry(store_, *now.value(), stale, values.value(), 0, row.value(),
+                                     5000, {}, /*log=*/nullptr, &boot_->catalog);
+    ASSERT_TRUE(appended.ok()) << appended.status().message();
+    EXPECT_EQ(Entries("by_owner"), 902);
 }
 
 // ---- Coercion: the rule that has already cost this engine rows ----------

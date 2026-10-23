@@ -724,3 +724,82 @@ measurement is S0 item 1, below.
 
 **Suite**: 4326/4326 at the S1 commit's build inputs (`ctest -j8 -LE
 bs-nightly`). Overhead not measured; measured at the milestone's close.
+
+**CI-S2 - the online build, 2026-10-23**, built on `worktree-online-index-build`
+on top of `c31c00dd`.
+- **Which builds go online.** A plain `CREATE INDEX` in autocommit, on a
+  dispatcher that may park and has a lock table and a clock. It borrows
+  the relation `IS`, calls `Revalidate`, refuses a relation dropped and
+  created again under its name (A10), and runs its scope at READ
+  COMMITTED.
+- **H2 and H3.** `IndexBuild::Begin` logs the root as a full page image
+  (H2). `Announce` writes the slot and the row flagged building (H3) in
+  the head, with the row and the owed tree noted there, once.
+- **D, the drain.** `IndexBuildRun::Drain` runs before the first slice. It
+  reads the relation's `IX` holders after the word move through
+  `LockTable::IntentionWriters` and waits on a wake. The net restarts each
+  time the set shrinks. It draws a wait-for edge to the front holder, and
+  a cancel wakes it.
+- **B, the backfill.**
+  - It takes the high-water key at its first slice (A2) and checks each
+    leaf's owner.
+  - It reads the root from the slot per append (CI-R6).
+  - It appends through `AppendIndexEntry` with a sink into `LogIndexWrite`.
+  - A head writer that was in flight at the copy is never trusted
+    resolved later. On a failed walk with that writer decided, the row is
+    read again by tuple key, bounded (CI-R7).
+- **R and the writers.** `Finish` clears the flag through
+  `Catalog::ClearIndexBuilding` (`OverwriteLogged`).
+  `AppendIndexEntry` retries a refused append from a moved slot, for
+  writers too (CI-Q11 (b)).
+- **The rolled-back tree.** Nothing frees an online tree. The reclaimer
+  takes a rolled-back create's gate again, one step after its epochs
+  pass (A5), and does so for every rolled-back create.
+- **What the change made obsolete.** The fault-net cell of the
+  `X`-holding build now builds `UNIQUE`, which keeps the `X`. The slice
+  rig's writer cell now asserts that the writer runs inside the build.
+
+**The review** (`critics-developer`) found three bugs, and its edits fixed
+them:
+- The re-gate read the log's end before the epochs' acquire. It now takes
+  the gate from the next step's read.
+- The drain had no net without a clock. An online build now needs a clock.
+- The drain's wake leaked when the frame was destroyed. It is now a member,
+  dropped by `~IndexBuildRun`.
+
+**Applied:**
+- The re-gate is unconditional for every rolled-back create, which removed
+  the `online` flag from `OwedIndex` and `NoteOwedIndex`.
+- `AppendVersion` makes one `AppendIndexEntry` call.
+- `HighWaterKey` takes the catalog, store and oid.
+- `Announce` returns `Status`.
+- The drain arms its wake on its first read.
+- A cancel wakes the drain.
+- The comments that still assumed the `X` were corrected.
+- The root-page leak on a refusal between H2 and H3 is stated.
+
+**Tests**, each shown to fail without its code by a mutant (killed 1 in 1):
+- the drain waits for a writer that began before the build;
+- a writer that never decides refuses the build at the net, and no index
+  is left;
+- writers during the backfill lose no row under an old view or a new one,
+  including old versions held in undo alone;
+- a writer asking the relation `X` during the drain is the deadlock victim;
+- the CI-Q11 retry from a moved slot;
+- the re-gate holds a rolled-back create's tree for a second checkpoint;
+- an online build crashed between slices mounts without it and builds
+  again;
+- a frame destroyed in the drain leaves no wake.
+
+**Not covered by a failing test:**
+- CI-R7: it needs a seam between phase 1 and phase 2, and a writer below
+  the floor.
+- CI-R6's per-append slot read: its mutant survives because CI-Q11's retry
+  carries correctness, so the read saves a wasted descent per append
+  after a growth.
+- The A3 gap at the dispatcher, which needs a statement spanning H3
+  between its resolution and its `IX`. S1's covering test stands for it.
+- A2's bound, which changes liveness only.
+
+**Suite**: 4333/4333 at the S2 commit's build inputs. Overhead not
+measured; measured at the milestone's close.

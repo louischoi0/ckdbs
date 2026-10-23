@@ -621,6 +621,21 @@ public:
     // for liveness, not only for tidiness.
     void Release(std::uint64_t txn, LockHoldings& holdings);
 
+    // **An online `CREATE INDEX`'s drain** (CI-Q3 (b),
+    // `instructions/v3.2.0/workorder-ci-online-index-build.md`): the
+    // transactions holding `relation` (a relation unit) at `IX`, other than
+    // `self` and every read holder, read under the unit's partition latch -
+    // so a grant either is in the answer or publishes after it. With
+    // `among`, only those of `among` still holding: the set a drain waits on
+    // only shrinks. With `wake` and a non-empty answer, a wake on the unit
+    // is armed in the same section - its slot cleared if `wake` already
+    // names one registered there, registered afresh otherwise - so a holder
+    // that decides after this read flips it. The caller removes it with
+    // `DropWake` on every exit.
+    std::vector<std::uint64_t> IntentionWriters(const LockKey& relation, std::uint64_t self,
+                                                const std::vector<std::uint64_t>* among,
+                                                LockWake* wake);
+
     // Records that `waiter` is about to park for `holder`, and answers
     // **whether that edge closes a cycle**. When it does, no edge is
     // recorded and the caller must not park: it is the victim (AO-R7), and

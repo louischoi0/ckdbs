@@ -1293,6 +1293,15 @@ public:
     Status DropIndex(Oid index_oid, std::uint64_t trx_id = kBootstrapXid,
                       CatalogRowChange* change = nullptr);
 
+    // **An online build's R** (CI-Q7 (a),
+    // `instructions/v3.2.0/workorder-ci-online-index-build.md`): clears
+    // `kIndexFlagBuilding` on the row `trx_id` created, in place and logged
+    // (`HEAP_OVERWRITE`, RV3), then moves the schema word so every core's
+    // compile may choose the index from its next task boundary. No undo: a
+    // rollback retires the row whole. `NotFound` for a row this transaction
+    // did not create.
+    Status ClearIndexBuilding(Oid index_oid, std::uint64_t trx_id);
+
     // `view` as on `ListTables` (DT3): `SHOW INDEXES` answers "which
     // indexes exist", which is a schema question and not a diagnostic -
     // so it filters like the other schema routes rather than reporting

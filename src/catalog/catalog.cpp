@@ -4114,6 +4114,32 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
     return row.index_oid;
 }
 
+Status Catalog::ClearIndexBuilding(Oid index_oid, std::uint64_t trx_id) {
+    auto acted = ForFirstRow<SysIndexRow>(
+        store_, kCatalogPageIndexes,
+        [&](SysIndexRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.index_oid != index_oid || tuple.deleted || tuple.trx_id != trx_id) {
+                return false;
+            }
+            row.flags = static_cast<std::uint8_t>(row.flags & ~kIndexFlagBuilding);
+            auto encoded = row.Encode();
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, trx_id,
+                                           tuple.trx_id, tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            BumpVersion("sys.indexes ready");
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) {
+        return Status::NotFound("no sys.indexes row for index oid " + std::to_string(index_oid) +
+                                " that transaction " + std::to_string(trx_id) + " created");
+    }
+    return Status::OK();
+}
+
 Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange* change) {
     const bool transactional = trx_id != kBootstrapXid;
     PageId acted_page = kInvalidPageId;
