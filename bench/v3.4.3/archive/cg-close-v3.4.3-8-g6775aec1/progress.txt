@@ -1,0 +1,96 @@
+10:38:24 start
+10:39:23 A done
+10:40:21 B done; tree 1 changes at 6775aec1
+6e6c2ac19c5e7ecb5b2526628a02ffc3a96b1a54fef0a3b4eacf28114defbd35  /home/cdkbs/bench-runs/cg/bin/kds_server.f44846ef
+3d300d01f53a2e88c9b110d8d08971223cdcd64646b6abdd80519c4df1135d36  /home/cdkbs/bench-runs/cg/bin/kds_server.6775aec1
+BUILDS-END
+10:43:41 gate waited 185s
+10:43:41 start cg-A-r1 load=1.99 2.42 1.37
+10:43:44 done cg-A-r1 rc=0
+10:43:44 start cg-B-r1 load=1.99 2.42 1.37
+10:43:46 done cg-B-r1 rc=0
+10:43:46 start cg-B-r2 load=1.99 2.41 1.37
+10:43:49 done cg-B-r2 rc=0
+10:43:49 start cg-A-r2 load=1.99 2.41 1.37
+10:43:52 done cg-A-r2 rc=0
+10:43:57 gate waited 5s
+10:43:57 start cg-A-r3 load=1.98 2.40 1.38
+10:43:59 done cg-A-r3 rc=0
+10:43:59 start cg-B-r3 load=1.98 2.40 1.38
+10:44:01 done cg-B-r3 rc=0
+10:44:31 gate waited 30s
+10:44:31 start cg-B-r4 load=1.91 2.35 1.40
+10:44:38 done cg-B-r4 rc=0
+10:53:38 gate waited 535s
+10:53:38 start cg-A-r4 load=1.91 4.35 3.06
+10:53:39 done cg-A-r4 rc=0
+10:53:39 start cg-A-r5 load=1.91 4.35 3.06
+10:53:41 done cg-A-r5 rc=0
+10:53:41 start cg-B-r5 load=1.92 4.31 3.06
+10:53:44 done cg-B-r5 rc=0
+10:53:44 start cg-B-r6 load=1.92 4.31 3.06
+10:53:46 done cg-B-r6 rc=0
+10:53:46 start cg-A-r6 load=1.92 4.27 3.05
+10:53:48 done cg-A-r6 rc=0
+10:53:48 start cg-A-r7 load=1.92 4.27 3.05
+10:53:50 done cg-A-r7 rc=0
+10:53:50 start cg-B-r7 load=1.92 4.27 3.05
+10:53:53 done cg-B-r7 rc=0
+10:53:58 gate waited 5s
+10:53:58 start cg-B-r8 load=1.93 4.19 3.04
+10:54:01 done cg-B-r8 rc=0
+10:54:11 gate waited 10s
+10:54:11 start cg-A-r8 load=1.93 4.08 3.02
+10:54:13 done cg-A-r8 rc=0
+10:54:13 start cg-A-r9 load=1.93 4.08 3.02
+10:54:14 done cg-A-r9 rc=0
+10:54:14 start cg-B-r9 load=1.93 4.08 3.02
+10:54:17 done cg-B-r9 rc=0
+10:54:17 start cg-B-r10 load=1.93 4.05 3.02
+10:54:19 done cg-B-r10 rc=0
+10:54:19 start cg-A-r10 load=1.93 4.05 3.02
+10:54:21 done cg-A-r10 rc=0
+10:54:21 MATRIX-END
+11:22:44 gate waited 1660s
+11:22:44 start cg-A-r1 load=1.68 5.41 6.29
+11:22:46 done cg-A-r1 rc=0
+11:22:47 start cg-B-r1 load=1.78 5.37 6.28
+11:22:49 done cg-B-r1 rc=0
+11:22:49 start cg-B-r2 load=1.78 5.37 6.28
+11:22:51 done cg-B-r2 rc=0
+11:22:51 start cg-A-r2 load=1.72 5.30 6.25
+11:22:53 done cg-A-r2 rc=0
+11:22:53 start cg-A-r3 load=1.72 5.30 6.25
+11:22:55 done cg-A-r3 rc=0
+11:22:55 start cg-B-r3 load=1.72 5.30 6.25
+11:22:58 done cg-B-r3 rc=0
+11:22:58 start cg-B-r4 load=1.74 5.25 6.22
+11:23:00 done cg-B-r4 rc=0
+11:23:00 start cg-A-r4 load=1.74 5.25 6.22
+11:23:02 done cg-A-r4 rc=0
+11:23:02 start cg-A-r5 load=1.92 5.23 6.21
+11:23:05 done cg-A-r5 rc=0
+11:23:05 start cg-B-r5 load=1.92 5.23 6.21
+11:23:07 done cg-B-r5 rc=0
+11:23:07 start cg-B-r6 load=1.85 5.16 6.18
+11:23:10 done cg-B-r6 rc=0
+11:23:10 start cg-A-r6 load=1.85 5.16 6.18
+11:23:12 done cg-A-r6 rc=0
+11:23:12 start cg-A-r7 load=1.78 5.09 6.16
+11:23:17 done cg-A-r7 rc=0
+11:24:28 gate waited 70s
+11:24:28 start cg-B-r7 load=1.89 4.45 5.85
+11:24:30 done cg-B-r7 rc=0
+11:24:30 start cg-B-r8 load=1.89 4.45 5.85
+11:24:32 done cg-B-r8 rc=0
+11:24:32 start cg-A-r8 load=1.82 4.40 5.83
+11:24:34 done cg-A-r8 rc=0
+11:24:34 start cg-A-r9 load=1.82 4.40 5.83
+11:24:36 done cg-A-r9 rc=0
+11:24:36 start cg-B-r9 load=1.75 4.34 5.80
+11:24:38 done cg-B-r9 rc=0
+11:24:38 start cg-B-r10 load=1.75 4.34 5.80
+11:24:41 done cg-B-r10 rc=0
+11:24:41 start cg-A-r10 load=1.77 4.30 5.78
+11:24:46 done cg-A-r10 rc=0
+11:24:46 MATRIX-END
