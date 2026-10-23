@@ -547,7 +547,8 @@ transaction;
 `CREATE INDEX` in autocommit builds online since CI** (§10.3): it holds the
 relation `IS`, and writers keep writing through its backfill. A unique
 index, a `REINDEX`, a `CREATE INDEX` inside `BEGIN`, and any `CREATE INDEX`
-on a dispatcher that cannot park or has no lock table or clock build under
+on a dispatcher that cannot park or has no lock table, transaction manager
+or clock build under
 the relation's `X` (AT-S5e) as before, as `DROP INDEX` does - and **on a
 relation other relations reference
 that `X` waits for every open child writer's `IS` on it** as well as for
@@ -556,13 +557,14 @@ writer holds the parent relation's `IS` and a parent row's `S` until it
 decides, so a steady stream of child writers can refuse the DDL
 `TxnConflict` at the lock family's 1 s fault net, as AO-0 item 25 accepts
 for `DROP TABLE`. **The other direction is not refused**: a writer
-arriving during an autocommit `CREATE INDEX` or a `REINDEX INDEX` waits for its
+arriving during an `X` build - an autocommit `CREATE UNIQUE INDEX` or a
+`REINDEX INDEX` - waits for its
 decide however long the backfill runs, because the build reports its
 progress to the waiter's fault net (`txn.md` §5, `txn/holder_progress.hpp`)
 and the net ends the wait only after a net's length in which the build did
 not advance. **The backfill yields its core** every 64 relation leaves
 (`sched.md` §3), so the build's own core keeps serving its other sessions -
-a writer of the relation among them waits on the `X` like any other - and
+under the `X` a writer of the relation among them waits on it like any other - and
 a cancel ends the build at the next boundary with nothing published
 (`protocol.md` §10).
 
@@ -586,7 +588,8 @@ non-obvious requirement:
 
 > **IX10a — the backfill walks each tuple's undo chain and appends an entry
 > per distinct key value across its versions**, not merely for the current
-> one — and it runs **before** the `sys.indexes` row exists.
+> one — and under the `X` it runs **before** the `sys.indexes` row exists
+> (the online build announces its row first, flagged building, §10.3).
 
 A reader holding an older snapshot must find its version through the new
 index. Every version of a logical tuple shares one tuple key, so the walk is bounded
@@ -725,8 +728,11 @@ order. The acts, in one autocommit transaction at READ COMMITTED:
    does not make a later `IX` a repeat). The lock family's net bounds the
    wait, restarted each time the set shrinks. A writer open past it refuses
    the build `TxnConflict`, as it refuses an `X` build. The drain draws a
-   wait-for edge to the writer it waits on, so that writer's transaction
-   asking the relation `X` is the deadlock victim.
+   wait-for edge to the front of the set it waits on, so that writer's
+   transaction asking the relation `X` closes a cycle and is refused as a
+   deadlock - the writer at its ask, or the build at its next edge if the
+   ask came first. A cycle through another member is found once the front
+   decides, or by the net.
 4. **B, the backfill** - §10.1's walk with four differences:
    - Every append logs as a writer's does (`INDEX_INSERT`, `BTREE_SPLIT`),
      under the holds that placed it, from the root the slot names.
@@ -883,8 +889,8 @@ the tree too.
 
 `TableAccess` carries a `std::vector<IndexRef>`, built at
 `InitTableAccess()` beside `cabin_columns` / `cabin_ids` — the compiler needs
-the leading columns, the executor the root page and the widths, and both the
-`building` bit. The
+the leading columns and the `building` bit, the executor the root page and
+the widths. The
 list is **sorted by `index_oid`**, so §9's lowest-oid tie-break is a property
 of the list rather than of how rows happened to land on the catalog page.
 `IndexOn` answers for **leading** key columns only, for the reason

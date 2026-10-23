@@ -14,14 +14,9 @@ namespace kds::exec {
 // `TransitionBuild` resume their walk from between two slices. It holds the
 // next leaf's id and the walk budget's count - no page and no span - so a
 // caller may yield its core between two `Step`s. Resuming at a leaf id is
-// safe under the relation's `X`, which `AssertionBuild`, `TransitionBuild`
-// and an `X` index build hold - no writer can split, grow or retire a leaf
-// meanwhile - and under an online index build's `IS` (CI): a live
-// relation's leaf is never freed or retyped, a divide or a compaction keeps
-// a leaf's id and lower half and links what it moves to its right, and no
-// row moves left, so the walk reaches every row that existed when it began.
-// The online build bounds the walk at the highest key held after its drain
-// (`IndexBuild::Step`), since writers append leaves at the tail meanwhile.
+// safe under the relation's `X`, which every caller but an online index
+// build holds, and under that build's `IS`: a live relation's leaf is never
+// freed, and keeps its id and lower half (`index.md` §10.3).
 class LeafCursor {
 public:
     // At the relation's leftmost leaf.

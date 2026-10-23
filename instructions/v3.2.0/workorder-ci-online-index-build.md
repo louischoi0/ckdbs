@@ -808,7 +808,7 @@ measured; measured at the milestone's close.
 - **Measured** at `v3.4.3-13-g614864c4` against the opening
   `v3.4.3-10-gdd437a76`, interleaved A/B in `build-release` on a quiet
   host (`bench/v3.4.3/results-ci-close-v3.4.3-13-g614864c4.md`, about
-  35 minutes, nothing cut).
+  30 minutes, nothing cut).
 - **Arm B, the premise, 10M rows.**
   - The writer's longest stall during a `CREATE INDEX` fell from 27.2,
     28.1 and 26.8 s - each the whole build - to 0.74, 1.29 and 0.70 s.
@@ -843,3 +843,29 @@ measured; measured at the milestone's close.
 `c31c00dd`, S2 `614864c4`, and S4 the close. CI-S3 is not built (CI-Q6
 (a)). The close is not merged to `main`, not pushed and not tagged, which
 is the operator's word.
+
+**The S4 review** (`critics-developer`).
+- **Applied, 13 text errors:**
+  - three misstatements in the conditions for going online and in the
+    deadlock victim;
+  - IX10a's "before the row exists", which is now the `X` build's alone;
+  - the remaining texts that said every `CREATE INDEX` takes `X` (`foreign-keys.md`,
+    `catalog.md`, `heap-and-tuple.md`, `crosscore.md` CC8, `protocol.md`
+    §10, `known-gaps.md`, the manual);
+  - the results file's run counts and deltas.
+- **Applied, one source defect:** a `PURGE` under the build's `IS` can
+  release a delete-marked row's spilled values between the copy and the
+  decode, which refused the build. Such a row is now skipped as one no
+  reader reaches, or read again if its deleter was in flight at the copy
+  (`IndexStagedRow`). It is untested, like CI-R7 (`known-gaps.md`). It
+  changes only an error path, so the close measurement still stands for
+  it, and it was not measured again.
+- **Applied:** the release label is dropped from the manual,
+  `leaf_cursor.hpp`'s header is cut to a pointer at `index.md` §10.3, and
+  CLAUDE.md's row names every condition that keeps the `X` build.
+- **Rejected:** shrinking `ddl-transactional.md` §5e to a pointer. §5e owns
+  what each DDL guarantees, and the online build's atomicity and isolation
+  belong there.
+
+**Suite**: 4334/4334 on the merged tree (`origin/main` at `02077d7e`,
+merged at `9e7b4ce0`) with the review's fixes.

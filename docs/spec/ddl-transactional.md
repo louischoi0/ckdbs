@@ -451,8 +451,9 @@ writing, and clears the flag before it decides. It is atomic as below - a
 rollback or a crash retires the row and the reclaimer frees the tree - and
 isolated as below: no read chooses the index before the flag clears, and
 the clear is the transaction's. Everything else here - `DROP INDEX`,
-`REINDEX`, a unique index, a `CREATE INDEX` inside `BEGIN` - is the `X`
-build.
+`REINDEX`, a unique index, a `CREATE INDEX` inside `BEGIN` or on a
+dispatcher that cannot park or has no lock table, transaction manager or
+clock - is the `X` build.
 
 **Since AT-S5e both statements take the relation `X` before their first
 catalog write, on whichever core the session is**, and build or mark there

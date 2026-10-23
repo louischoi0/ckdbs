@@ -739,7 +739,7 @@ pages and the cases it does not reach.
 Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 `docs/spec/protocol.md` §10.
 
-- **Only a `SELECT`'s outermost walk and a relation-`X` build yield.**
+- **Only a `SELECT`'s outermost walk and a relation-`X` build (or an online `CREATE INDEX`) yield.**
   The walk yields every `exec::SlicePolicy::pages_per_slice` (64) pages, a
   `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION` or `CREATE
   TRANSITION` build every 64 relation leaves (`CREATE ASSERTION` and
@@ -1677,6 +1677,12 @@ Verified on `worktree-online-index-build` at `614864c4` (CI-S1, CI-S2).
 Owned by `docs/spec/index.md` §10.3. The order is
 `instructions/v3.2.0/workorder-ci-online-index-build.md`.
 
+- **The backfill's skip of a row `PURGE` retired under it has no test**
+  (CI-S4's review): a delete-marked row whose deleter every reader sees,
+  copied before a `PURGE` released its spilled values, fails its decode, and
+  is skipped as one no reader reaches - or read again, if its deleter was in
+  flight at the copy. Without the skip the build was refused, never wrong.
+  Showing it needs the same seam CI-R7 does.
 - **CI-R7 has no test that fails without it** `[quiet-wrong]`. A row whose
   head writer was in flight at the backfill's copy, and rolled back with
   its id below the floor before the walk, is read again instead of being

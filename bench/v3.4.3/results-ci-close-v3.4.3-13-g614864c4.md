@@ -5,10 +5,10 @@ relation holds the relation `IS`, not `X`. The one autocommit `UPDATE` writer th
 stalled for the whole build on the base (26.8-28.1 s, 3 of 3 builds, equal to the build
 to within 10 ms) is on the closing binary never stalled for more than **0.70-1.29 s**, and
 `sys.lock_waits` has **no row at all**. The price moved elsewhere: the writer runs at
-about 171 statements/s during the build (p50 3.6 ms against 1.0 ms), the build is 22-61%
+about 171 statements/s during the build (p50 3.6 ms against 1.0 ms), the build is 20-61%
 longer (33.3 / 44.1 / 32.9 s against 27.4 s), and the build writes **1.37 GB of log
 against 0.27 GB, 5.04x**, the estimate in CI §3.5 A12. With no build running, a writer on an
-indexed relation measures the same on both binaries inside a 3-22% run-to-run floor, and
+indexed relation measures the same on both binaries inside a 2-22% run-to-run floor, and
 writes the same number of log bytes per statement. The stall is gone; "a writer pays nothing"
 holds for the idle case and does not hold during a build.
 
@@ -16,7 +16,7 @@ holds for the idle case and does not hold during a build.
 
 | Item | Value |
 |---|---|
-| Executed | 2026-10-23, 13:21-13:30 UTC (arm B, 6 builds) and 13:30-13:46 UTC (arm A, 36 server runs); template loads 13:16-13:19 UTC |
+| Executed | 2026-10-23, 13:21-13:30 UTC (arm B, 6 builds) and 13:30-13:46 UTC (arm A, 18 server runs); template loads 13:16-13:19 UTC |
 | Worktree / branch | `/home/cdkbs/ckdbs/.claude/worktrees/online-index-build`, `worktree-online-index-build` |
 | Base | `dd437a76` (`v3.4.3-10-gdd437a76`, committed 2026-10-23 08:36:58 UTC), the milestone's opening commit |
 | Closing | `614864c4` (`v3.4.3-13-g614864c4`, committed 2026-10-23 13:12:19 UTC) |
@@ -55,7 +55,7 @@ server, fresh copy of a per-binary template (the closing commit bumps the superb
 
 On the base binary the writer's one stalled statement is the build (stall within 8-11 ms of the build's elapsed time,
 3 of 3). On the closing binary the writer completes 5,096-8,484 statements inside the build. The closing
-builds are 5.5 s, 16.7 s and 5.1 s longer than the base builds of the same pair (+20%, +57%, +23%). The
+builds are 6.1 s, 15.9 s and 6.1 s longer than the base builds of the same pair (+23%, +57%, +23%). The
 second pair's 44.1 s build is the outlier: the closing builds' spread is 34% (32.9-44.1 s), the base's is 5%, and
 the cause of the 44.1 s is not established (the host log shows no other process; the run's server CPU was also high, 93.1 s
 against 70.7 and 67.8 s, over a window 11 s longer). Treat the closing build as **33-44 s, median 33.3 s**, and do not read the +34% mean as a constant.
@@ -133,8 +133,8 @@ Table `t (id, c1, c2, c3 int64) BTREE` with one secondary index `ix (c1)` create
 one connection K = 8,000 statements of each shape, serially, autocommit, `group`: **ins** a single-row `INSERT` of a new id with a scrambled `c1`;
 **upd2** `UPDATE t SET c2 = c2 + 1 WHERE id = k` (the indexed column untouched); **upd1** `UPDATE t SET c1 = c1 + 1 WHERE id = k` (the indexed column changes, so the index is maintained).
 The sweep: N = 200, 10,000 and 200,000 preloaded rows (the point lookup does not scale with rows, and the three sizes are the evidence). Equal work: 8,000 completed statements per phase per run. Three
-pairs, rotation base / closing within each (N) cell, 18 runs per binary; a fresh server and data file per run. Replies checked: 0 mismatches
-in 144,000 statements per binary, no `sys.lock_waits` row in any run. The rows below are QPS derived as 8,000 / elapsed.
+pairs, rotation base / closing within each (N) cell, 9 runs per binary; a fresh server and data file per run. Replies checked: 0 mismatches
+in 216,000 statements per binary, no `sys.lock_waits` row in any run. The rows below are QPS derived as 8,000 / elapsed.
 
 ### Throughput, three runs per cell
 
@@ -221,14 +221,14 @@ pages on both (81,704 to ~114,630 on base, 81,684 to 114,636-114,680 on closing)
    figure to size `wal` retention against, not the elapsed time.
 3. **The build's elapsed time is the noisiest number of the run.** 33.3 / 44.1 / 32.9 s on closing against 27.2 / 28.1 / 26.8 s on base; the log volume to 0.07% does not vary, so the variance
    is in waiting (the WAL sync gate waits ranged 4.0-6.5 s between two closing runs), not in work. The 44.1 s run is reported, not discarded.
-4. **A single-writer idle overhead cannot be seen in time and cannot be seen in the log.** The 144,000-statement arm shows identical log bytes per statement and throughput within a 2-22% floor.
+4. **A single-writer idle overhead cannot be seen in time and cannot be seen in the log.** The 432,000-statement arm shows identical log bytes per statement and throughput within a 2-22% floor.
    The design expectation in the CI work order (CI-R5, "a writer pays nothing") is supported for the log and not contradicted for time; time's resolution is the limit.
 5. **Where the data supports no insight:** the cause of the 0.5-0.7 s regular band and of the closing `post` tail; neither was decomposed.
 
 ## 8. Limits and what was cut
 
 - **Row-set sweep:** arm A swept N = 200, 10,000, 200,000 (the work order's "smaller N"); rule 9's 1K was not run. Arm B ran at N = 10,000,000 only, one cardinality, as in S0, because the stall's size is the build's length.
-- **Runs:** three pairs in both arms (6 builds, 36 arm A runs). Nothing was cut for time beyond arm A's K = 8,000 statements per shape, and no run was dropped or repeated. Arm A's interleave is by (N) cell: base, closing, then the next N, three rounds.
+- **Runs:** three pairs in both arms (6 builds, 18 arm A runs). Nothing was cut for time beyond arm A's K = 8,000 statements per shape, and no run was dropped or repeated. Arm A's interleave is by (N) cell: base, closing, then the next N, three rounds.
 - **Not measured:** a writer that changes `c1` during a build (so the building index is maintained with a changed key; arm B's writer touches `c2` only), several writers, `relaxed` durability, `cores` other than 4, a reader that scans or ranges, the rolled-back or crashed build, and a closing run at 100M rows.
 - **The reader runs beside the writer in arm B** (as in S0), so the writer's in-build rate is a writer sharing four cores with a reader and the backfill.
 - **The base volume and the closing volume differ** (the closing commit bumps the superblock to 34), so the two templates are separate loads of the same logical data (same driver, same scramble); no cross-binary file reuse.

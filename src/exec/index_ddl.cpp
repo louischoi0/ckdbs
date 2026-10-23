@@ -291,25 +291,37 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
     };
     for (int reread = 0;; ++reread) {
         if (cx.progress != nullptr) cx.progress->Advance();
-        auto latest = AppendVersion(cx, ix, row.tuple_key, row.payload);
-        if (!latest.ok()) return latest.status();
-
         const auto trusted = [&](std::uint64_t superseder) {
             if (row.head_in_flight && superseder == row.trx_id) return false;
             return unreachable_below(superseder);
         };
+        bool stale = false;
+        auto latest = AppendVersion(cx, ix, row.tuple_key, row.payload);
+        if (!latest.ok()) {
+            // **Online, a `PURGE` can retire the row under the walk** (CI-S4's
+            // review): it takes `IX`, not `X`, and releases a delete-marked
+            // row's spilled values once its deleter is resolved for every
+            // reader - between the copy and the decode that resolves them. No
+            // reader reaches any version of such a row, so there is nothing to
+            // index; a deleter in flight at the copy is not trusted resolved
+            // (CI-R7), and the row is read again instead.
+            if (!cx.online || !row.deleted || !unreachable_below(row.trx_id)) {
+                return latest.status();
+            }
+            if (!row.head_in_flight) return Status::OK();
+            stale = true;
+        }
         // The writer that superseded the version the walk reads next. A
         // row whose current writer every reader sees contributes its
         // current version alone.
         std::uint64_t superseder = row.trx_id;
-        bool stale = false;
         // A failed append leaves the walk by its Status and fails the
         // build: the index must not be published without that version's
         // entry or any older one of the row, or an old snapshot reaches
         // its row through no entry (spec §10a). Kept apart from a failed
         // read, which the superseder's resolution may excuse.
         Status appended = Status::OK();
-        if (!trusted(superseder)) {
+        if (!stale && !trusted(superseder)) {
             Status walked = undo.Walk(
                 row.undo_ptr,
                 [&](const txn::UndoVersion& version) -> StatusOr<storage::VisitControl> {
