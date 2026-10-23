@@ -23,8 +23,10 @@ English (`raft-marks-2026-10-21.md` §5):
 **Written 2026-10-21. Opened 2026-10-23** on the operator's W3 and W4
 (`raft-marks-2026-10-23.md` §1): CG-Q0..Q7 marked as CLA proposed - Q0
 (a), Q1 (c), Q2 (a), Q3 (a), Q4 (a), Q5 (a), Q6 (a), Q7 (a). **CG-S0 ran
-the same day; its verdict is narrow** (§7), and under Q0 (a) the build,
-narrow or drop is the operator's. **Exploratory since W2** (§3): CG-S0
+the same day; its verdict is narrow** (§7). **Narrowed on the operator's
+W5** (`$!narrow`, `raft-marks-2026-10-23.md` §2): **CG-Q1 re-marked (b)**
+- S1 builds the tuple key and one named unique index as arbiters - and
+CG-Q3 (b) dropped from CG. CG-S1 is next. **Exploratory since W2** (§3): CG-S0
 checks the concept before any surface is built, and a candidate that
 fails the check is recorded, not built.
 
@@ -160,7 +162,10 @@ deleted key, and a finding should not decide that alone.
 - (c) (a) in CG-S1, and (b) as CG-S2 once S1 is closed.
 
 **CLA proposes (c)**: (a) alone leaves heaps out, and (b) at once doubles
-S1's surface before the concept is shown.
+S1's surface before the concept is shown. **Marked (c) on W4, re-marked
+(b) on W5** (`$!narrow`, after CG-S0 found the demand is the
+unique-index arbiter and read its pipeline, §7 reading 1b): CG-S1 and
+CG-S2 merge.
 
 **CG-Q2 - a committed tombstone.** The key has a committed delete that has
 not been purged. There is no live row to update, and the slot refuses an
@@ -459,3 +464,14 @@ decided.
 
 Not run: no spike was written; the suite is unchanged by this stage
 (documents only).
+
+### Narrowed 2026-10-23 (W5)
+
+**W5** (`raft-marks-2026-10-23.md` §2): *"$!narrow"*, read as the verdict
+above as CLA proposed it. **CG-Q1 is re-marked (b)**: CG-S1 builds the
+update arm with both arbiters - the tuple key and one named unique index,
+the latter with reading 1b's re-read under the holder's `X` - and
+`DO NOTHING` takes the unique-index target too; CG-S2 is folded into S1.
+**CG-Q3 (b) leaves CG**, recorded above as its own arm. CG-Q2..Q7 stand as
+marked on W4. CG-S1 opens next and must close reading 1's `[quiet-wrong]`
+snapshot case.
