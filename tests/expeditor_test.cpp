@@ -1563,5 +1563,160 @@ TEST_F(ExpeditorTest, AStatementInFlightPastTheCeilingRunsToItsEnd) {
     EXPECT_TRUE(running.Stop().ok());
 }
 
+// ---- ON CONFLICT DO UPDATE through a whole instance (CG-S1) -----------------
+
+// **Each arm runs every consumer of its write path** (CG-R1): the update arm
+// UPDATE's - the Transition's edge, the forward fk check on an assigned
+// column, the assertion's departure and arrival, the unique check on a moved
+// key, the Cabin witness - and the insert arm INSERT's.
+TEST_F(ExpeditorTest, OnConflictDoUpdateRunsEveryConsumerOfItsArm) {
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    KwpClient c(config.port);
+    ASSERT_TRUE(c.Hello());
+    const auto ok = [&](const std::string& sql) {
+        const std::string r = c.Run(sql);
+        EXPECT_NE(r.rfind("ERR", 0), 0u) << sql << " -> " << r;
+    };
+    const auto refused = [&](const std::string& sql, const std::string& needle) {
+        const std::string r = c.Run(sql);
+        EXPECT_EQ(r.rfind("ERR", 0), 0u) << sql << " -> " << r;
+        EXPECT_NE(r.find(needle), std::string::npos) << sql << " -> " << r;
+    };
+    ok("CREATE TABLE acct (id int64, name varchar(16), bal int64) BTREE");
+    ok("CREATE UNIQUE INDEX acct_name ON acct (name)");
+    ok("INSERT INTO acct VALUES (1, 'alice', 10), (2, 'bob', 20)");
+    ok("CREATE TABLE ord (id int64, acct int64 REFERENCES acct, status varchar(16), amt int64) "
+       "BTREE");
+    ok("CREATE TRANSITION ord_status ON ord(status) ON INSERT ('NEW') "
+       "ON UPDATE ('NEW' => 'CHECKED', 'CHECKED' => 'FINALIZED')");
+    ok("INSERT INTO ord VALUES (10, 1, 'NEW', 5), (11, 1, 'NEW', 6), (12, 2, 'NEW', 7)");
+    ok("CREATE ASSERTION two_per_acct ON ord GROUP BY (acct) CHECK COUNT(*) <= 2");
+    ok("CREATE CABIN ON ord(status)");
+
+    // The Transition: NEW => FINALIZED is no edge; NEW => CHECKED is. The
+    // insert arm takes ON INSERT's initial set.
+    refused("INSERT INTO ord VALUES (10, 1, 'FINALIZED', 5) ON CONFLICT (id) DO UPDATE "
+            "SET status = EXCLUDED.status",
+            "");
+    ok("INSERT INTO ord VALUES (11, 1, 'CHECKED', 6) ON CONFLICT (id) DO UPDATE "
+       "SET status = EXCLUDED.status");
+    refused("INSERT INTO ord VALUES (13, 2, 'CHECKED', 1) ON CONFLICT (id) DO UPDATE "
+            "SET status = EXCLUDED.status",
+            "");
+    // The fk on the column the arm assigns.
+    refused("INSERT INTO ord VALUES (12, 99, 'NEW', 7) ON CONFLICT (id) DO UPDATE "
+            "SET acct = EXCLUDED.acct",
+            "");
+    // The assertion: acct 1 holds two rows, so moving a third in is refused.
+    refused("INSERT INTO ord VALUES (12, 1, 'NEW', 7) ON CONFLICT (id) DO UPDATE "
+            "SET acct = EXCLUDED.acct",
+            "");
+    EXPECT_NE(c.Run("SELECT acct FROM ord WHERE id = 12").find('2'), std::string::npos);
+    // The unique check on the key the arm moves.
+    refused("INSERT INTO acct VALUES (2, 'alice', 0) ON CONFLICT (id) DO UPDATE "
+            "SET name = EXCLUDED.name",
+            "alice");
+    // The Cabin witnessed the arm's write: the set for CHECKED holds 11.
+    const std::string checked = c.Run("SELECT id FROM ord WHERE status = 'CHECKED'");
+    EXPECT_NE(checked.find("11"), std::string::npos) << checked;
+    EXPECT_EQ(checked.find("10"), std::string::npos) << checked;
+    // Rows written by the arms stand; refused ones changed nothing.
+    const std::string all = c.Run("SELECT id, acct, status FROM ord ORDER BY id");
+    EXPECT_NE(all.find("10 1 NEW"), std::string::npos) << all;
+    EXPECT_NE(all.find("11 1 CHECKED"), std::string::npos) << all;
+    EXPECT_NE(all.find("12 2 NEW"), std::string::npos) << all;
+    EXPECT_EQ(all.find("13"), std::string::npos) << all;
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+// **A live row the statement's view does not see is neither inserted nor
+// updated silently** (CG-S0 reading 1, `[quiet-wrong]`): under REPEATABLE
+// READ the view is the transaction's, a key another session inserts and
+// commits after it is placed - so the insert arm may not take it - and
+// invisible - so the update arm writes nothing. The statement is refused,
+// retryably, and the row is as the other session left it.
+//
+// **The mutation**: drop the `rows_affected == 0` refusal in
+// `InsertOnConflict` and the statement answers `rows=1` having written
+// nothing.
+TEST_F(ExpeditorTest, OnConflictDoUpdateRefusesARowItsViewCannotSee) {
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    KwpClient a(config.port);
+    KwpClient b(config.port);
+    ASSERT_TRUE(a.Hello());
+    ASSERT_TRUE(b.Hello());
+    ASSERT_EQ(a.Run("CREATE TABLE w (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(a.Run("SET ISOLATION LEVEL REPEATABLE READ").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(a.Txn(wire::ClientFrameType::kTxnBegin), "TXN_OK");
+    ASSERT_EQ(a.Run("SELECT COUNT(*) FROM w").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(b.Run("INSERT INTO w VALUES (50, 1)").rfind("INSERTED", 0), 0u);
+    const std::string upsert =
+        a.Run("INSERT INTO w VALUES (50, 9) ON CONFLICT (id) DO UPDATE SET v = EXCLUDED.v");
+    EXPECT_EQ(upsert.rfind("ERR", 0), 0u) << upsert;
+    EXPECT_NE(upsert.find("this statement's view does not see"), std::string::npos) << upsert;
+    a.Txn(wire::ClientFrameType::kTxnAbort);
+    const std::string row = b.Run("SELECT v FROM w WHERE id = 50");
+    EXPECT_NE(row.find('1'), std::string::npos) << row;
+    EXPECT_EQ(row.find('9'), std::string::npos) << row;
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+// **A writer of the same key on another core is waited for** (CG §5): the
+// arm takes the key's row unit as an UPDATE would, so an upsert meeting an
+// open writer on core 1 waits for its commit and then updates the row that
+// writer left - its write is not lost and the upsert is not refused.
+//
+// **The mutation**: give the tuple key arm `TupleKeyPlaced`'s pre-wait
+// verdict and the upsert is answered a duplicate instead of waiting.
+TEST_F(ExpeditorTest, OnConflictDoUpdateWaitsForAWriterOfItsKeyOnAnotherCore) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    ScriptedPlacer placer;
+    config.transaction_placer = &placer;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    KwpClient holder(config.port);
+    KwpClient upserter(config.port);
+    ASSERT_TRUE(holder.Hello());
+    ASSERT_TRUE(upserter.Hello());
+    ASSERT_EQ(holder.Run("CREATE TABLE acct (id int64, bal int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(holder.Run("INSERT INTO acct VALUES (1, 100)").rfind("INSERTED", 0), 0u);
+
+    placer.target = 1;
+    ASSERT_EQ(holder.Txn(wire::ClientFrameType::kTxnBegin), "TXN_OK");
+    ASSERT_EQ(holder.Run("UPDATE acct SET bal = bal + 1 WHERE id = 1").rfind("UPDATED 1", 0), 0u);
+    ASSERT_EQ(holder.Core(), 1);
+    placer.target = 0;
+    std::string upserted;
+    std::thread t([&] {
+        upserted = upserter.Run(
+            "INSERT INTO acct VALUES (1, 10) ON CONFLICT (id) DO UPDATE "
+            "SET bal = bal + EXCLUDED.bal");
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    ASSERT_EQ(holder.Txn(wire::ClientFrameType::kTxnCommit), "TXN_OK");
+    t.join();
+    EXPECT_EQ(upserted.rfind("INSERTED oid=", 0), 0u) << upserted;
+    EXPECT_NE(upserted.find(" rows=1"), std::string::npos) << upserted;
+    const std::string bal = holder.Run("SELECT bal FROM acct WHERE id = 1");
+    EXPECT_NE(bal.find("111"), std::string::npos) << bal;
+    EXPECT_TRUE(running.Stop().ok());
+}
+
 }  // namespace
 }  // namespace kds::server
