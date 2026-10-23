@@ -145,7 +145,17 @@ void WalWriter::Run() {
     }
 }
 
-void WalWriter::KickDurableWaiters() const noexcept {
+void WalWriter::SetWakeRegistry(const sched::WakeRegistry* wake) noexcept {
+    // Under the round's latch, so a round that loaded the previous registry
+    // has finished every kick through it before this returns (writer.hpp).
+    std::lock_guard<std::mutex> guard(kick_mutex_);
+    wake_.store(wake, std::memory_order_release);
+}
+
+void WalWriter::KickDurableWaiters() noexcept {
+    // Held for the whole round: the load below and every `Kick` through what
+    // it loaded are one act against `SetWakeRegistry`.
+    std::lock_guard<std::mutex> guard(kick_mutex_);
     const sched::WakeRegistry* wake = wake_.load(std::memory_order_acquire);
     if (wake == nullptr) return;
     // The other half of `EnterDurableWait`'s fence (writer.hpp): the

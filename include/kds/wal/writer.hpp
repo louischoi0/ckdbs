@@ -45,6 +45,18 @@
 //                no other held; a segment roll takes it under the stream
 //                latch, so a roll waits out this thread's fsync with every
 //                appender behind it (`wal/stream.hpp`).
+//   kick_mutex_  held across the whole of a kick round (`KickDurableWaiters`:
+//                the load of `wake_` and every `Kick` through it) and by
+//                `SetWakeRegistry`'s store. **It protects the registry - and
+//                the reactors registered in it - against teardown**: once
+//                `SetWakeRegistry(nullptr)` returns, no kick through the old
+//                registry is in flight and none will start. Taken only by
+//                this thread and by the thread that sets the registry (the
+//                instance's boot and teardown), never by a reactor, never
+//                together with `mutex_`. Order: `kick_mutex_`, then whatever
+//                a registry's `Kick` takes (`SimWakerTable::latch_`); so the
+//                registry is never set under such a latch, nor from this
+//                thread.
 //
 // The reactor's hot path - `Append` into the ring, `Flush` into the page
 // cache - touches none of it. Those stay `WalStream`'s. **This class touches
@@ -125,9 +137,16 @@ public:
     // or the writer sees the waiter and kicks it. The kick itself can still
     // be skipped by the registry's sleeping-flag race (`WakerTable::Kick`),
     // costing that core one idle block.
-    void SetWakeRegistry(const sched::WakeRegistry* wake) noexcept {
-        wake_.store(wake, std::memory_order_release);
-    }
+    //
+    // **Setting it waits out a kick in flight**, under `kick_mutex_`: on
+    // return, every kick of a round that loaded the previous registry has
+    // finished, and every later round loads the new one. So
+    // `SetWakeRegistry(nullptr)` is the writer's quiesce - after it, this
+    // thread touches neither the old registry nor any reactor registered in
+    // it - and teardown calls it before it destroys the first reactor
+    // (`WalManager::StopKicking`; `sched.md` §5). It blocks for at most one
+    // round's kicks, which take no lock this caller can hold.
+    void SetWakeRegistry(const sched::WakeRegistry* wake) noexcept;
     bool kicks_durable_waiters() const noexcept {
         return wake_.load(std::memory_order_acquire) != nullptr;
     }
@@ -171,14 +190,17 @@ public:
 private:
     void Run();
     void Reclaim();
-    void KickDurableWaiters() const noexcept;
+    void KickDurableWaiters() noexcept;
 
     // `kMaxCores` (superblock.hpp, which this layer does not include):
     // no instance has more cores, and `CheckCoreCount` refuses one that
     // would, so a core always has its own slot.
     static constexpr std::uint32_t kWaitSlots = 64;
     std::array<std::atomic<std::uint32_t>, kWaitSlots> durable_waiters_{};
+    // Atomic because a reactor reads it unlatched (`kicks_durable_waiters`);
+    // written and kicked through only under `kick_mutex_`.
     std::atomic<const sched::WakeRegistry*> wake_{nullptr};
+    std::mutex kick_mutex_;
 
     LogDevice* device_;
 

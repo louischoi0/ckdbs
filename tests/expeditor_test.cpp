@@ -384,6 +384,11 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     EXPECT_NE(testing_view::MetaField(core0_meta, "sched_foreground_polls"), std::nullopt) << core0_meta;
     EXPECT_EQ(testing_view::MetaField(core0_meta, "core"), "0") << core0_meta;
 
+    // **And the WAL writer kicks through it** (BA-R4 part 1): a parked
+    // `group` committer's core is woken when the watermark passes it.
+    EXPECT_TRUE(db.wal().KicksDurableWaiters())
+        << "a two-core instance's WAL writer kicks no parked committer";
+
     // And then it serves, and stops the way an operator stops it.
     RunningInstance running(db, config.debug_text_port);
     ASSERT_TRUE(running.Run()) << "the debug text port never accepted";
@@ -392,6 +397,12 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     // The shutdown tail cleared them, so a caller that asks afterwards sees
     // an instance with no cores rather than dangling ones.
     EXPECT_TRUE(db.cores().empty());
+    // **And the writer stopped kicking before they went** (`sched.md` §5):
+    // red if the tail drops `StopKicking`. It pins the call, not its place -
+    // a call moved below `cores_.clear()` passes here, and only a sanitizer
+    // that hits the one-kick window would show it.
+    EXPECT_FALSE(db.wal().KicksDurableWaiters())
+        << "the shutdown tail left the WAL writer kicking through the waker table";
 }
 
 // BP-S4 (BP-H11): core 0's `system` tick runs the delete-mark purge, so a

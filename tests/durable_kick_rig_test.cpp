@@ -173,11 +173,12 @@ void DrainOneGroupCommit(bool with_registry, std::uint64_t& inline_syncs,
     auto device = wal::MemoryLogDevice::Create(wal::kDefaultSegmentSize);
     ASSERT_TRUE(device.ok()) << device.status().message();
     sched::ManualClock clock;
+    // Ahead of the manager, so it outlives the writer that kicks through it.
+    NullWakers wakers;
     auto opened = wal::WalManager::Open(device.value().get(), clock, /*core_id=*/0);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     wal::WalManager& wal = *opened.value();
     wal.StartWriter();
-    NullWakers wakers;
     if (with_registry) wal.SetWakeRegistry(&wakers);
     EXPECT_EQ(wal.KicksDurableWaiters(), with_registry);
 
