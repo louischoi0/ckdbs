@@ -114,7 +114,7 @@ leave K1 and K2 standing. CG-S0 answers that before anything is built:
 - **CG-R1 - one write path per arm.** The update arm is `UPDATE`'s
   per-row path, not a second one. That path runs assertion admission, a
   Transition's `ON UPDATE` edge, the forward foreign-key check on a moved
-  fk column and the reverse check on a parent, the Cabin witness on a
+  fk column, the Cabin witness on a
   moved input, index maintenance and the unique checks. The insert arm is
   `InsertOneRow`'s (`bulkinsert.md` BI2).
 - **CG-R2 - K1 and K2 stand.** No arm rebinds a committed key, and no
@@ -327,28 +327,51 @@ No engine code was written. Three readings:
 - `UPDATE` already has a tuple-key point path: `TupleKeyEqualityTarget`
   (`command_dispatcher.cpp:6857`) then `LocateByTupleKey` (`:7227`),
   which descends with the leaf held exclusive and hands the slot to the
-  same per-row `apply` lambda the walk uses (`:9426`, `:9907-9943`).
-  `apply` carries every consumer CG-R1 names: assertion admission, the
-  Transition edge (`:9629`), the forward fk check on assigned columns
-  (`:9616`), the Cabin witness, index maintenance with the before-image
-  and the unique check (`:9655`, BX-R4's round at `:9879`).
+  same per-row `apply` lambda the walk uses (`:9426`, `:9908-9944`).
+  `apply` carries every consumer CG-R1 names that `UPDATE` runs:
+  assertion admission (`:9684`), the Transition edge (`:9629`), the
+  forward fk check on assigned columns (`:9616`), the Cabin witness
+  (`:9803`), index maintenance with the before-image (`:9811`), and the
+  unique keys a `SET` moves (`:9655`) - staged there and checked by
+  BX-R4's round `clear_unique` (`:9879`), outside `apply`, which the
+  point path's loop runs (`:9912-9944`). CG-R1's "reverse check on a
+  parent" has no `UPDATE` half: K2 leaves the referenced key unmovable
+  (`docs/spec/foreign-keys.md` §3, "There is no reverse check for parent
+  UPDATE").
 - **The split**: `UpdateInner` (`:9166`) parses its statement from text
   (`ParseKeepingShape(line)`) and does per-statement setup (resolution,
   `CompileAssignments` at `:9243`, fk assignments at `:9336`, the unique
-  holds) inside one ~800-line function. The arm needs an entry that takes
+  holds) inside one ~880-line function (`:9166-10041`). The arm needs an entry that takes
   a resolved relation, compiled assignments and a target key. Per row,
   `EXCLUDED.<col>` values are constants, so CG-Q5 (a) can bind them as
   literals; that also keeps BJ-S4's rule that a fk assignment reads no
-  column.
+  column. `UpdateInner` resolves fk parents once per statement over
+  constants (`:9347-9375`); `EXCLUDED`-bound values vary per row, but for
+  `SET fk = EXCLUDED.fk` the INSERT's own extraction pass (`:6077`) already
+  resolves the same parents.
 - **Three S1 design points this reading leaves**, none a blocker:
-  - **the arm's view**: `apply` drops a version its snapshot cannot see
-    (`:9443`), so under READ COMMITTED the arm needs a view minted after
-    the kept `X` (CG-Q6 (a)), or a row committed after the statement's
-    view is refused instead of updated;
-  - **waits**: with the row's `X` held, the arm's only waits are unique
-    keys of other values; `apply` parks for those (AO-S3b, `:9886`),
-    which an `INSERT` statement cannot resume - so the arm answers them
-    as the insert arm's `CheckUniqueKeys` does (`:6330`);
+  - **the arm's view** `[quiet-wrong]`: "placed" is judged at latest
+    state under the kept `X` (CG-Q6 (a)), but `apply` filters by the
+    statement's snapshot (`:9443`). A row **inserted** by a transaction
+    that committed after that snapshot classifies `kNoVersion` (no undo
+    behind it, `include/kds/txn/visibility.hpp:70-75`) and `apply` returns
+    OK having written nothing - the row is neither inserted nor updated,
+    with no error. A row **updated** after the snapshot classifies
+    `kNeedsUndoWalk` and the conflict check refuses it retryably, which is
+    KDS's stated `READ COMMITTED` answer (`docs/spec/txn.md` §5, "there is
+    no re-read loop"). The window is a statement's under `READ COMMITTED`
+    and the transaction's under `REPEATABLE READ`; S1 must close the first
+    case in both, by a view minted after the `X` (RC) or a refusal (RR);
+  - **waits**: with the row's `X` held, the arm can still wait on a unique
+    key it moves (`clear_unique`, `:9886`), an assertion reservation
+    (`:9684-9696`) and, with `EXCLUDED`-bound fk values, a parent's `S`.
+    None parks in place: each notes its blocker and stops, and
+    `DispatchAsync` waits and re-runs the statement only if it wrote
+    nothing (`:1026-1036`, `:10944-10946`). `UPDATE` also resumes a
+    partly written walk at its `WalkCursor` (AO-S3b); an `INSERT` has no
+    such resume, so a wait met after the statement's first write is a
+    retryable refusal, as the insert arm's `CheckUniqueKeys` (`:6330`, the
+    same function) already answers;
   - **`DO NOTHING`'s up-front verdicts** (`:6026-6060`) extend to three
     outcomes per row: insert, update, refuse (CG-Q2 (a), CG-Q3 (a), CG-Q4
     (a)).
@@ -378,8 +401,26 @@ delete-mark is a third arm:
   live where its delete should stand, with no error, unless a revive undo
   kind - a format event CG-R3 forbids - is added.
 Cabin, Waystone, `sys.access_stats`, var-heap spills and `PURGE`/K1 have
-sound answers. Three of the four conditional rows fail with no error if
-the update path is reused as it is.
+sound answers. Reused as it is, the update path fails with no error on
+three counts: the assertion double departure, the fk unchecked on
+unassigned columns, and the unique key unchecked where it did not move.
+
+**1b. The unique-index arbiter (read after S0's review, for the CG-Q1
+re-mark below): buildable, with one re-verification.** `CheckUniqueKeys`
+takes the value's `kIndexKey` `X` and keeps it to the decide
+(`command_dispatcher.cpp:10921`), and `exec::CheckUniqueKey` answers
+`kHeld` with the holder's tuple key (`:10941-10942`). So the arm is: the
+unique check finds the holder `h` of value `v`; the arm takes `h`'s row
+`X` as `TupleKeyPlaced` would; then it **re-reads `h` under that `X`**. The
+`kIndexKey` unit keeps every other writer from moving a row *onto* `v`,
+but a writer moving `h` *off* `v` takes no unit for `v` (BX checks only
+the keys a write moves to). So between the check and the `X`, `h` can
+leave `v`, and an arm that updated `h` anyway would update a row that no
+longer conflicts, `[quiet-wrong]`. Under the re-read: if `h` still holds
+`v`, update it through reading 1's path; if it moved off, `v` is free,
+because the statement still holds its unit, and the row takes the insert
+arm. A busy holder is reading 1's waits. `DO NOTHING` takes the same
+arbiter with no re-read: "held" is its whole answer.
 
 **3. The demand: no client asks for the tuple-key arbiter; three ask for
 a business key.** Read as source in `/home/cdkbs/xrock`,
@@ -399,16 +440,19 @@ a business key.** Read as source in `/home/cdkbs/xrock`,
   never given back (`src/data/kds/kds_store.hpp:20-21`; `repo.py:15-17`,
   `:432-434`), and xrock's `replace_day` writes new keys instead.
 
-**Verdict: narrow.**
+**Verdict: narrow** - S0's finding and CLA's proposal; under CG-Q0 (a)
+build, narrow or drop is the operator's mark, and nothing below is
+decided.
 - **Build**: the update arm on a live row, as `UPDATE`'s point path behind
   the split (reading 1), with CG-Q2 (a), Q3 (a), Q4 (a), Q5 (a), Q6 (a),
   Q7 (a).
-- **Narrow the arbiter**: the demand is entirely CG-S2's unique-index
+- **Re-target the arbiter**: the demand is entirely CG-S2's unique-index
   arbiter, which CG-Q1 (c) schedules after a tuple-key S1 no client in
   reach would use. **CLA proposes re-marking CG-Q1 to (b)**: S1 builds the
   tuple key and one named unique index together - the index check is
-  BX-R1/BX-R3's, already built - so the first surface is the one clients
-  hand-roll today.
+  BX-R1/BX-R3's, already built, and reading 1b is the arm's added step -
+  so the first surface is the one clients hand-roll today. This widens
+  S1 by the arbiter and its re-read.
 - **Drop CG-Q3 (b) from CG**: recorded here as its own arm, buildable later
   only with the three counter-examples as tests and with savepoints named
   as the event that reopens its undo.
