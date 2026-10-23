@@ -1297,14 +1297,24 @@ Verified on `worktree-bx-unique-index` at BX-S2
   chunk's first, meeting an undecided writer of its key is refused
   `TxnConflict`** rather than waited for (BX-Q3 (a)): `ExecuteInsert`
   cannot park mid-statement.
-- **`ON CONFLICT DO NOTHING` skips a tuple-key conflict only** (BU-Q18): a
-  row whose unique-index key is held is refused `AlreadyExists`, where
-  PostgreSQL's target-less form skips it; and `ON CONFLICT (<col>)` naming
-  anything but the tuple key is refused `NotImplemented` ("the tuple key is
-  the one conflict there is"), which BX made untrue for a uniquely indexed
-  column. A refusal, never a wrong row. Re-verified at `7dd9b789`
-  (`src/server/command_dispatcher.cpp`, `tests/dml_forms_test.cpp`). Owner:
-  none - a decision, not a defect.
+- **`ON CONFLICT` reacts to one arbiter** (BU-Q18, CG-Q1 (b)): the tuple
+  key, or the column named in `(<col>)` when it is the one column of a
+  unique index. A conflict on any other unique index is refused
+  `AlreadyExists`, where PostgreSQL's target-less form skips or updates on
+  every one, and a multi-column or expression target is refused
+  `NotImplemented`. A refusal, never a wrong row. Re-verified on
+  `cg-on-conflict-do-update` at CG-S1 (`tests/dml_forms_test.cpp`).
+  Owner: CG (`instructions/v3.2.0/workorder-cg-on-conflict-do-update.md`).
+- **`ON CONFLICT DO UPDATE`'s unique-index re-read has no forced-interleaving
+  cell** (CG-S0 reading 1b): the arm reads its holder again under the
+  holder's `X`, and a holder moved off the key between the check and the
+  `X` takes the insert arm. No cell puts a writer in that gap - it lies
+  inside one statement - so the re-read is covered by reading only.
+- **An `ON CONFLICT DO UPDATE` wait after its first write is a refusal**
+  (CG-S0 reading 1): a later row meeting an open writer of its key, its
+  unique value or its parent is refused `TxnConflict` once an earlier row
+  of the statement is written, as any `INSERT` is - only a statement that
+  wrote nothing is waited for and run again.
 
 ## The query layer and the DML forms (BU)
 
