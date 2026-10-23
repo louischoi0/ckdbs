@@ -44,3 +44,12 @@
 | **Mark** | **CG-S1 built** on `cg-on-conflict-do-update` (the CG order's §7, "CG-S1 built 2026-10-23"): `ON CONFLICT DO UPDATE` on the tuple key and a unique index's column, `DO NOTHING` on the latter too |
 | **Does not settle** | CG-S3, the close and its measurement; a push; a tag, a version |
 | **Recorded at** | this file; the CG order's §7; the CG row in `instructions/v3.2.0/index.md` |
+
+## 6. CG-S1 pushed; CG-S3 measured
+
+| | |
+|---|---|
+| **Word** | W6b (CG's session): *"push no verify"*, then W7: *"go cg-s3"* |
+| **Mark** | **CG-S1 pushed** to `main` at `6775aec1` with `--no-verify` (the full suite 4319/4319 at `54dbc716`, whose build inputs it shares). **CG-S3 measured** (the CG order's §7, "CG-S3 measured 2026-10-23"; `bench/v3.4.3/results-cg-close-v3.4.3-8-g6775aec1.md`): A the commit CG opened from, not §5's `722006ec` |
+| **Does not settle** | **CG's close**, which is the operator's word; a push; a tag, a version |
+| **Recorded at** | this file; the CG order's §7; the CG row in `instructions/v3.2.0/index.md` |

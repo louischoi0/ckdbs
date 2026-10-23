@@ -532,3 +532,30 @@ review's fixes).
 - **Texts**: `parser-v2.md` I20, `manual/sql/sql.md`, `known-gaps.md`.
 - **Overhead not measured**; measured at CG's close (CG-S3), which is next
   with CG-S2 folded into S1.
+
+### CG-S3 measured 2026-10-23 (W7) - CG's close is the operator's
+
+**W7** (`raft-marks-2026-10-23.md` §6): *"go cg-s3"*. Measured on
+`cg-on-conflict-do-update` at `6775aec1` (`v3.4.3-8-g6775aec1`),
+`bench/v3.4.3/results-cg-close-v3.4.3-8-g6775aec1.md`, inside the close's
+hour (builds 10:38-10:40, rotations 10:43-10:54 and 11:22-11:24 UTC):
+
+- **A is the commit CG opened from**, `f44846ef` (`v3.4.3`), not §5's
+  `722006ec`: 30-odd commits of other milestones lie between the two, and
+  the A1 close's precedent - A is the milestone's opening commit - is
+  followed. The results file says so.
+- **The touched paths** (plain `INSERT`, `DO NOTHING` inserting and
+  skipping, the point `UPDATE`), two whole rotations of ten servers per
+  build: inside noise, no consistent sign.
+- **The walking `UPDATE`** (10,000 rows) has a slow mode on B in 15 of 20
+  runs and none on A - no per-row work was added to its loop, and the
+  source is unattributed (`known-gaps.md`).
+- **The arms, B only**: each about 5 us over its plain counterpart (the
+  arm re-runs `UpdateParsed`'s setup per row, `known-gaps.md`); **the
+  unique-column upsert is 60-65 us against 130-860 us for the `UPDATE ...
+  WHERE name = ...` it replaces**.
+- **Texts**: this row; `known-gaps.md`; CLAUDE.md's query row and
+  `parser-v2.md` I20 and the manual were written at S1.
+- **`tools/cg_close_benchmark.py`** is the close's driver.
+
+**Every CG stage is built and measured; closing CG is the operator's word.**
