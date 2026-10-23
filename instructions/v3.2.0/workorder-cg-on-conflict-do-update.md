@@ -475,3 +475,60 @@ the latter with reading 1b's re-read under the holder's `X` - and
 **CG-Q3 (b) leaves CG**, recorded above as its own arm. CG-Q2..Q7 stand as
 marked on W4. CG-S1 opens next and must close reading 1's `[quiet-wrong]`
 snapshot case.
+
+### CG-S1 built 2026-10-23 (W6) - the narrow surface
+
+**W6** (`raft-marks-2026-10-23.md` §5): *"go cg-s1"*. Built on
+`cg-on-conflict-do-update` from `f44846ef`: `b7ddff92` (the surface),
+`8df074cf` (the instance cells), `31e9f554` (texts), `54dbc716` (the
+review's fixes).
+
+- **Parse**: `ON CONFLICT [(col)] DO UPDATE SET <list>` takes `UPDATE`'s SET
+  list (`Parser::ParseAssignmentList`, factored from `ParseUpdate`); a SET
+  value there may name a qualified column, and `DO UPDATE ... WHERE` is
+  refused `NotImplemented` (CG-Q5 (a)).
+- **The arbiter** (CG-Q1 (b), `ResolveConflictArbiter`): the tuple key, or
+  the one column of a unique index; none written is the tuple key, refused
+  for `DO UPDATE` on a heap. `DO NOTHING` takes the unique-index target too.
+- **Row by row** (`InsertOnConflict`): CG-Q4's refusal and the forward fk
+  check over every row first, then each row's verdict and write together,
+  so a unique key's unit is never held across two rows. The insert arm is
+  `InsertOneRow`. The update arm is `UPDATE`'s point path on the holder
+  (`UpdateParsed`, split from `UpdateInner`, with the holder as its target
+  and no WHERE, refusing rather than walking), under the holder's row `X`,
+  with `EXCLUDED.<col>` bound to the proposed row (`BindExcluded`). On a
+  unique index the holder is read again under its `X` (reading 1b,
+  `RowHoldsUniqueKey`). A delete-marked holder is refused (CG-Q2 (a), Q3
+  (a)); a holder the arm's view cannot see is refused `TxnConflict` (S0's
+  `[quiet-wrong]` case). The reply counts both arms, and `RETURNING`
+  returns both (CG-Q7 (a)).
+- **Cells**: `DmlFormsTest` (both arms, the refusals with their bytes, the
+  unique-index arbiter, EXCLUDED of the tuple key, a row updated twice
+  through an earlier arm), `HeapHiddenKeyTest` (a heap's unique column),
+  `ExpeditorTest` (every consumer of the update arm - Transition edge, fk,
+  assertion, unique check, Cabin witness - and the insert arm's; the unseen
+  row refused; a writer of the key on another core waited for; an arm
+  holding its row, not the relation). CG-R4: plain `INSERT` and the tuple
+  key's `DO NOTHING` take their old path; the one changed text is the
+  non-key target's refusal.
+- **Mutations, each run three times, all killed 3/3**: the unseen-row
+  refusal dropped; the tuple key arm given `TupleKeyPlaced`'s pre-wait
+  verdict; CG-Q4's refusal dropped; a delete-marked holder revived;
+  `RETURNING`'s overwrite entries dropped.
+- **The review** (`critics-developer`) found and fixed three defects: each
+  arm declared a write borrow over the whole relation (its empty WHERE),
+  holding every other writer of the relation until the decide; `EXCLUDED`
+  of the tuple key read NULL under a unique-index arbiter; a row updated
+  twice through an earlier arm's move escaped CG-Q4. Applied besides: only
+  `NotFound` reads as an absent key; the arbiter is a pointer; the refusals
+  pinned to their texts; the fk hoist over skipped rows stated in the texts.
+  **Not applied**: one slot-lookup helper for the three lookups -
+  `NamedKeyVerdict` is CG-R4's unchanged path, and the other two read
+  different things; factoring `InsertParsed`'s ordinal wrap and fk loop for
+  sharing - the same reason. Recorded in `known-gaps.md`: an explicit
+  READ COMMITTED transaction's arm reads at the statement's view (a
+  refusal where PostgreSQL updates), and `sys.relation_stats` counts
+  updated rows as inserts.
+- **Texts**: `parser-v2.md` I20, `manual/sql/sql.md`, `known-gaps.md`.
+- **Overhead not measured**; measured at CG's close (CG-S3), which is next
+  with CG-S2 folded into S1.

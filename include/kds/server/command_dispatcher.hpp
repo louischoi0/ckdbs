@@ -1026,6 +1026,13 @@ private:
                                           const catalog::TableAccess& ta,
                                           const UniqueKeysOfRow& keys, std::uint64_t self,
                                           UniqueKeyHolds& holds);
+    // One key of `CheckUniqueKeys`: its unit `X` into `holds`, then the
+    // latest-state verdict, free or held; busy is the wait it answers.
+    StatusOr<exec::UniqueVerdict> CheckUniqueKeyLatest(const WriteScope& scope,
+                                                       const catalog::TableAccess& ta,
+                                                       const catalog::TableAccess::IndexRef& ix,
+                                                       const exec::UniqueKey& key,
+                                                       std::uint64_t self, UniqueKeyHolds& holds);
 
     // Is `cond` a non-negative integer literal compared against `access`'s
     // tuple key, and if so which id? The shared half of the test
@@ -1593,6 +1600,28 @@ private:
     // keeps it only when the answer is no.
     StatusOr<bool> TupleKeyPlaced(const catalog::TableAccess& ta, std::uint64_t id,
                                   std::uint32_t byte, WriteScope& scope);
+
+    // **What an `ON CONFLICT` reacts to** (CG-Q1 (b)): the unique index whose
+    // one column `(col)` names, or null for the tuple key.
+    StatusOr<const catalog::TableAccess::IndexRef*> ResolveConflictArbiter(
+        const catalog::TableAccess& ta, const parser::InsertStmt& written);
+
+    // **`ON CONFLICT DO UPDATE`, and `DO NOTHING` on a unique index** (CG):
+    // each row's verdict - insert, update the holder, skip, or refuse - taken
+    // and acted on before the next row's, so a unique key's unit is never
+    // held across two rows (`UniqueKeyHolds`). The insert arm is
+    // `InsertOneRow`; the update arm is `UpdateParsed` on the holder, under
+    // its row `X`, with `EXCLUDED.<col>` bound to the proposed row.
+    DispatchOutcome InsertOnConflict(catalog::Oid oid, const catalog::TableAccess*& ta,
+                                     const parser::InsertStmt& written,
+                                     const parser::InsertStmt& shaped,
+                                     const catalog::TableAccess::IndexRef* arbiter,
+                                     WriteScope& scope);
+    // Whether `tuple_key`'s slot holds a live row whose `ix` key is `key` -
+    // the update arm's re-read under the row's `X` (CG-S0 reading 1b).
+    StatusOr<bool> RowHoldsUniqueKey(const catalog::TableAccess& ta,
+                                     const catalog::TableAccess::IndexRef& ix,
+                                     std::uint64_t tuple_key, const exec::UniqueKey& key);
 
     // The per-row write pipeline, verbatim and in order (bulkinsert.md
     // §4, BI2): arity, FK forward check, assertion admission, id, encode +
@@ -2173,6 +2202,16 @@ private:
                                 const txn::Snapshot& snapshot, WalkCursor resume_from,
                                 const exec::StatementContext& context,
                                 std::vector<exec::SubqueryResult>& subqueries);
+    // `UpdateInner` past its parse. `arm_target`, when set, is the one row an
+    // `ON CONFLICT DO UPDATE` arm writes (CG): it replaces the WHERE's tuple
+    // key lookup, the WHERE must be empty, and a lookup that cannot answer
+    // is refused rather than walked - a walk under an empty WHERE would
+    // write every row.
+    DispatchOutcome UpdateParsed(parser::UpdateStmt& stmt, WriteScope& scope,
+                                 const txn::Snapshot& snapshot, WalkCursor resume_from,
+                                 const exec::StatementContext& context,
+                                 std::vector<exec::SubqueryResult>& subqueries,
+                                 std::optional<std::uint64_t> arm_target);
 
     // **A scalar subquery in an UPDATE's SET value** (BJ-S7, BJ-Q6): run once,
     // before the walk, through the SELECT path under the session's view, and

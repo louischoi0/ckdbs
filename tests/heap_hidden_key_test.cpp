@@ -176,13 +176,32 @@ TEST_F(HeapHiddenKeyTest, AHeapsLastDeclaredColumnIsNotDropped) {
 }
 
 // ON CONFLICT on a heap: the target-less form is admitted (a heap's issued
-// key never collides), and a named target is refused saying why.
+// key never collides), and a target that is no unique column is refused
+// saying why.
 TEST_F(HeapHiddenKeyTest, OnConflictTakesNoTargetOnAHeap) {
     const std::string bare = Run("INSERT INTO h VALUES (1, 2) ON CONFLICT DO NOTHING");
     EXPECT_EQ(bare.rfind("INSERTED", 0), 0u) << bare;
     const std::string named = Run("INSERT INTO h VALUES (1, 2) ON CONFLICT (a) DO NOTHING");
     EXPECT_EQ(named.rfind("ERR", 0), 0u) << named;
-    EXPECT_NE(named.find("heap's is hidden"), std::string::npos) << named;
+    EXPECT_NE(named.find("heap's tuple key is hidden"), std::string::npos) << named;
+}
+
+// ON CONFLICT DO UPDATE on a heap (CG-Q1 (b)): the one column of a unique
+// index is its arbiter, and no target at all is refused saying why.
+TEST_F(HeapHiddenKeyTest, OnConflictDoUpdateArbitratesOnAUniqueColumnOfAHeap) {
+    ASSERT_EQ(Run("CREATE TABLE hu (a int64, b int64) HEAP").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE UNIQUE INDEX hu_a ON hu (a)").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run("INSERT INTO hu VALUES (1, 10)").rfind("INSERTED", 0), 0u);
+    const std::string upsert =
+        Run("INSERT INTO hu VALUES (1, 5), (2, 7) ON CONFLICT (a) DO UPDATE SET b = b + EXCLUDED.b");
+    EXPECT_EQ(upsert.rfind("INSERTED", 0), 0u) << upsert;
+    EXPECT_NE(upsert.find(" rows=2"), std::string::npos) << upsert;
+    const std::string rows = Run("SELECT a, b FROM hu ORDER BY a");
+    EXPECT_NE(rows.find("1,15"), std::string::npos) << rows;
+    EXPECT_NE(rows.find("2,7"), std::string::npos) << rows;
+    const std::string bare = Run("INSERT INTO hu VALUES (1, 1) ON CONFLICT DO UPDATE SET b = 0");
+    EXPECT_EQ(bare.rfind("ERR", 0), 0u) << bare;
+    EXPECT_NE(bare.find("names its arbiter"), std::string::npos) << bare;
 }
 
 // Rows land in insertion order: the issued key is the leaf order, so a scan

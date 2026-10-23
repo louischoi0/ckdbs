@@ -187,12 +187,105 @@ TEST_F(DmlFormsTest, OnConflictDoNothingSkipsARowWhoseTupleKeyIsPlaced) {
 }
 
 TEST_F(DmlFormsTest, OnConflictRefusesWhatItDoesNotDo) {
-    ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (id) DO UPDATE SET tier = 2",
-                  "NOT_IMPLEMENTED");
     ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (name) DO NOTHING",
-                  "the tuple key is the one conflict");
+                  "the arbiter is the tuple key or the one column of a unique index");
     ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (nosuch) DO NOTHING",
                   "");
+}
+
+// ---- ON CONFLICT DO UPDATE (CG) ---------------------------------------------
+
+// **The tuple key arbiter**: a placed key's row is updated through UPDATE's
+// per-row path, an absent key is inserted, one statement does both and
+// counts both (CG-Q7 (a)), `EXCLUDED.<col>` is the proposed row and a bare
+// column the holder's before-image.
+TEST_F(DmlFormsTest, OnConflictDoUpdateUpdatesAPlacedKeyAndInsertsAnAbsentOne) {
+    ExpectReply("INSERT INTO w VALUES (1, 'al', 'EU', 7) ON CONFLICT (id) DO UPDATE "
+                "SET name = EXCLUDED.name, tier = tier + EXCLUDED.tier",
+                "INSERTED oid=4005 rows=1");
+    ExpectRows("SELECT * FROM w WHERE id = 1", {"id,name,region,tier", "1,al,EU,8"});
+    // The target-less form arbitrates on the tuple key too.
+    ExpectReply("INSERT INTO w VALUES (2, 'b2', 'US', 5), (70, 'new', 'EU', 1) "
+                "ON CONFLICT DO UPDATE SET name = EXCLUDED.name",
+                "INSERTED oid=4005 rows=2");
+    ExpectRows("SELECT id, name, tier FROM w WHERE id = 2 OR id = 70",
+               {"id,name,tier", "2,b2,2", "70,new,1"});
+    // The target's own name qualifies its before-image.
+    Ok("INSERT INTO w VALUES (4, 'd', 'APAC', 10) ON CONFLICT (id) DO UPDATE "
+       "SET tier = w.tier * 2");
+    ExpectRows("SELECT tier FROM w WHERE id = 4", {"tier", "6"});
+    // RETURNING answers both arms' rows, in the order they were written.
+    ExpectRows("INSERT INTO w VALUES (5, 'e', 'US', 1), (71, 'f', 'EU', 2) "
+               "ON CONFLICT (id) DO UPDATE SET region = 'XX' RETURNING id, region",
+               {"id,region", "5,XX", "71,EU", "INSERTED oid=4005 rows=2"});
+}
+
+// **What the arm refuses, each at its byte**: a delete-marked key, committed
+// (CG-Q2 (a)) or this transaction's own (CG-Q3 (a)); one key twice in a
+// statement (CG-Q4 (a)); a WHERE on the arm (CG-Q5 (a)); a SET of the tuple
+// key (K2); a qualifier that names neither EXCLUDED nor the target.
+TEST_F(DmlFormsTest, OnConflictDoUpdateRefusesWhatItDoesNotDo) {
+    Ok("DELETE FROM w WHERE id = 2");
+    ExpectRefused("INSERT INTO w VALUES (2, 'x', 'US', 1) ON CONFLICT (id) DO UPDATE "
+                  "SET name = EXCLUDED.name",
+                  "not yet purged; PURGE frees it (byte 22)");
+    ExpectRefused("INSERT INTO w VALUES (3, 'x', 'EU', 1), (3, 'y', 'EU', 1) "
+                  "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name",
+                  "would update one row twice: an earlier row of this statement names the same "
+                  "tuple key (byte 41) (row 2)");
+    ExpectRows("SELECT name FROM w WHERE id = 3", {"name", "carol"});
+    ExpectRefused("INSERT INTO w VALUES (3, 'x', 'EU', 1) ON CONFLICT (id) DO UPDATE "
+                  "SET name = 'q' WHERE tier = 1",
+                  "DO UPDATE ... WHERE is not supported");
+    ExpectRefused("INSERT INTO w VALUES (3, 'x', 'EU', 1) ON CONFLICT (id) DO UPDATE SET id = 9",
+                  "tuple key column 'id' cannot be updated at byte 70");
+    ExpectRefused("INSERT INTO w VALUES (3, 'x', 'EU', 1) ON CONFLICT (id) DO UPDATE "
+                  "SET name = other.name",
+                  "names neither EXCLUDED nor the target");
+    ExpectRefused("INSERT INTO w VALUES (3, 'x', 'EU', 1) ON CONFLICT (id) DO UPDATE "
+                  "SET name = EXCLUDED.nosuch",
+                  "EXCLUDED has no column 'nosuch' (byte 77)");
+    // This transaction's own delete is not revived.
+    Ok("BEGIN");
+    Ok("DELETE FROM w WHERE id = 4");
+    ExpectRefused("INSERT INTO w VALUES (4, 'x', 'EU', 1) ON CONFLICT (id) DO UPDATE "
+                  "SET name = EXCLUDED.name",
+                  "was deleted by this transaction");
+    Ok("ROLLBACK");
+    ExpectRows("SELECT name FROM w WHERE id = 4", {"name", "dave"});
+}
+
+// **The unique-index arbiter** (CG-Q1 (b)): `ON CONFLICT (col)` on the one
+// column of a unique index updates the row holding the value, or inserts
+// when none does; `DO NOTHING` takes the same arbiter.
+TEST_F(DmlFormsTest, OnConflictArbitratesOnTheOneColumnOfAUniqueIndex) {
+    Ok("CREATE UNIQUE INDEX w_name ON w (name)");
+    ExpectReply("INSERT INTO w (name, region, tier) VALUES ('alice', 'US', 9) "
+                "ON CONFLICT (name) DO UPDATE SET region = EXCLUDED.region, tier = EXCLUDED.tier",
+                "INSERTED oid=4005 rows=1");
+    ExpectRows("SELECT id, region, tier FROM w WHERE name = 'alice'", {"id,region,tier", "1,US,9"});
+    ExpectRows("SELECT COUNT(*) FROM w", {"count(*)", "6"});
+    Ok("INSERT INTO w (name, region) VALUES ('zoe', 'EU') ON CONFLICT (name) DO UPDATE "
+       "SET region = EXCLUDED.region");
+    ExpectRows("SELECT COUNT(*) FROM w WHERE name = 'zoe'", {"count(*)", "1"});
+    ExpectReply("INSERT INTO w (name, region) VALUES ('bob', 'XX') ON CONFLICT (name) DO NOTHING",
+                "INSERTED oid=4005 rows=0");
+    ExpectRows("SELECT region FROM w WHERE name = 'bob'", {"region", "US"});
+    // `EXCLUDED` of the tuple key is the key the row named, on this arbiter
+    // too.
+    Ok("INSERT INTO w VALUES (60, 'carol', 'EU', 1) ON CONFLICT (name) DO UPDATE "
+       "SET tier = EXCLUDED.id");
+    ExpectRows("SELECT id, tier FROM w WHERE name = 'carol'", {"id,tier", "3,60"});
+    // A row an earlier row of the statement moved onto a later row's value is
+    // one row met twice (CG-Q4 (a)), which the rows' own values do not show.
+    ExpectRefused("INSERT INTO w (name, region) VALUES ('frank', 'fred'), ('fred', 'X') "
+                  "ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.region",
+                  "tuple key 6 was written by an earlier row of this statement");
+    ExpectRows("SELECT name FROM w WHERE id = 6", {"name", "frank"});
+    // A non-unique or multi-column index is no arbiter.
+    Ok("CREATE INDEX w_region ON w (region)");
+    ExpectRefused("INSERT INTO w (name, region) VALUES ('q', 'EU') ON CONFLICT (region) DO NOTHING",
+                  "the arbiter is the tuple key or the one column of a unique index");
 }
 
 // ---- UPDATE ... FROM and DELETE ... USING (BU-Q16) ---------------------------

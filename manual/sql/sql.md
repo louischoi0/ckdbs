@@ -973,9 +973,28 @@ UPDATE w SET tier = 5 WHERE id = 1 RETURNING id, tier;
   placed - live, delete-marked (its row is the tombstone until `PURGE`), or
   named by an earlier row of the statement - and decides it before the row
   is admitted, so a skipped row takes no foreign-key check, no assertion
-  reservation and no id. The tuple key is the one conflict there is: another
-  target, and `DO UPDATE`, answer `NOT_IMPLEMENTED`. The reply counts the
-  rows placed (`rows=0` when every row was skipped).
+  reservation and no id. The reply counts the rows placed (`rows=0` when
+  every row was skipped). **`ON CONFLICT (<col>)` may also name the one
+  column of a unique index**: a row whose value is held is skipped, decided
+  row by row - its foreign keys are still checked first, so a skipped row
+  can wait for a parent.
+- **`ON CONFLICT [(<col>)] DO UPDATE SET ...`** updates the row holding the
+  conflicting tuple key, or unique value, instead of skipping, and inserts
+  a row with no conflict. The SET list is an `UPDATE`'s: a bare column is
+  the existing row's value, `EXCLUDED.<col>` the proposed row's, and every
+  check an `UPDATE` makes runs (foreign keys, assertions, Transitions,
+  unique indexes). On a heap, name the unique column. Refused: a key whose
+  row is deleted but not purged (`ALREADY_EXISTS`; this transaction's own
+  delete is not revived either), two rows naming one key
+  (`CARDINALITY_VIOLATION`), `DO UPDATE ... WHERE` (`NOT_IMPLEMENTED`), and
+  a conflicting row this statement's view cannot see (`TXN_CONFLICT`,
+  retry). The reply's `rows=` counts inserted and updated rows together, and
+  `RETURNING` returns both.
+
+  ```sql
+  INSERT INTO acct (name, bal) VALUES ('alice', 10)
+    ON CONFLICT (name) DO UPDATE SET bal = bal + EXCLUDED.bal;
+  ```
 - **`UPDATE ... FROM` and `DELETE ... USING`** name one more relation, which
   the statement's relation and the WHERE share one name space with: a bare
   column both relations have is refused as ambiguous - qualify it. **A row

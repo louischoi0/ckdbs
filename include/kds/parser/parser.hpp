@@ -274,6 +274,9 @@ private:
     Status ParseReturning(Returning& out);
     StatusOr<RelationRef> ParseOtherRelation(const std::string& target);
     Status ParseRowValueAssignments(std::vector<Assignment>& out);
+    // The `col = value, ...` list after `SET` - an UPDATE's and `ON CONFLICT
+    // DO UPDATE`'s (CG) - with the row-value form (BJ-Q7).
+    Status ParseAssignmentList(std::vector<Assignment>& out);
     StatusOr<std::shared_ptr<const Expr>> ParseExprOr();
     StatusOr<std::shared_ptr<const Expr>> ParseExprAnd();
     StatusOr<std::shared_ptr<const Expr>> ParseExprNot();
@@ -327,6 +330,9 @@ private:
     // Set by `ParseQuery`: the expression levels read the query grammar's
     // forms (qualified columns, aggregates, `IN`, `LIKE`, subqueries).
     bool query_mode_ = false;
+    // Set while `ON CONFLICT DO UPDATE`'s SET list is read (CG): a SET value
+    // may then name a qualified column, `EXCLUDED.<col>` above all.
+    bool conflict_set_ = false;
     // The byte of an UPDATE's or DELETE's `WHERE`, once its parse reaches it.
     std::optional<std::uint32_t> dml_where_byte_;
     // The query blocks open around the one being parsed, bounded by

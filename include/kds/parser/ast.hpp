@@ -525,6 +525,32 @@ struct Returning {
     std::uint32_t byte_offset = 0;  // the RETURNING word
 };
 
+// One `SET col = value` - an UPDATE's, and `ON CONFLICT DO UPDATE`'s (CG).
+struct Assignment {
+    std::string col_name;
+
+    // The value when the SET value is one bare literal (`NULL`
+    // included), exactly as before BJ: such an assignment keeps the per-row
+    // type gate at the encode (BJ-Q3 (c)) and every reader of `val` stays
+    // right. Unset when `expr` is non-null.
+    AstValue val;
+
+    // Non-null when the SET value is anything but one bare literal: a column
+    // reference, an operator, a parenthesised form. `val` is then unset, and
+    // a reader that wants the value must go through the typed expression.
+    std::shared_ptr<const Expr> expr;
+
+    // Where `col_name` was written. Carried for the same reason
+    // `AstValue::byte_offset` is (types.md TY05): the SET list is
+    // resolved against the catalog at compile, and both refusals it can
+    // produce - an unknown column, and the tuple key, which is the
+    // tuple's identity and not a field of it (keystoneid-invariant.md K2)
+    // - owe the client an exact position. Nothing compares this field, so
+    // adding it moved no fingerprint: the hash folds from the token
+    // stream, not from the AST.
+    std::uint32_t byte_offset = 0;
+};
+
 struct InsertStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above
@@ -554,10 +580,16 @@ struct InsertStmt {
     std::string select_text;
     std::uint32_t select_byte_offset = 0;
     // `ON CONFLICT [(col)] DO NOTHING` (BU-S8, BU-Q18): a row whose tuple key
-    // is placed is skipped. `conflict_target` is the written `(col)`, which
-    // the dispatcher requires to be the tuple key.
+    // is placed is skipped. `conflict_target` is the written `(col)`: the
+    // tuple key, or since CG the one column of a unique index.
     bool on_conflict_do_nothing = false;
     std::optional<IndexColumnRef> conflict_target;
+    // `ON CONFLICT [(col)] DO UPDATE SET ...` (CG): a row whose arbiter is
+    // held updates the holder through `UPDATE`'s per-row path instead.
+    // `EXCLUDED.<col>` in a value names the proposed row's column.
+    bool on_conflict_do_update = false;
+    std::vector<Assignment> conflict_assignments;
+    std::uint32_t conflict_byte_offset = 0;  // the `ON` of `ON CONFLICT`
     Returning returning;
     DescribedShape described;
 };
@@ -962,31 +994,6 @@ struct Query {
     std::vector<OrderItem> order_by;
     std::optional<std::uint64_t> limit;
     std::uint64_t offset = 0;
-    std::uint32_t byte_offset = 0;
-};
-
-struct Assignment {
-    std::string col_name;
-
-    // The value when the SET value is one bare literal (`NULL`
-    // included), exactly as before BJ: such an assignment keeps the per-row
-    // type gate at the encode (BJ-Q3 (c)) and every reader of `val` stays
-    // right. Unset when `expr` is non-null.
-    AstValue val;
-
-    // Non-null when the SET value is anything but one bare literal: a column
-    // reference, an operator, a parenthesised form. `val` is then unset, and
-    // a reader that wants the value must go through the typed expression.
-    std::shared_ptr<const Expr> expr;
-
-    // Where `col_name` was written. Carried for the same reason
-    // `AstValue::byte_offset` is (types.md TY05): the SET list is
-    // resolved against the catalog at compile, and both refusals it can
-    // produce - an unknown column, and the tuple key, which is the
-    // tuple's identity and not a field of it (keystoneid-invariant.md K2)
-    // - owe the client an exact position. Nothing compares this field, so
-    // adding it moved no fingerprint: the hash folds from the token
-    // stream, not from the AST.
     std::uint32_t byte_offset = 0;
 };
 

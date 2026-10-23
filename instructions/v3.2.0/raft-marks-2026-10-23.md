@@ -35,3 +35,12 @@
 | **Mark** | **CI written**, not opened: `workorder-ci-online-index-build.md`, on `worktree-online-index-build` from `2f7ce828`. `CREATE INDEX` announces its row flagged building, drains writers on the older list, backfills with writers running and logging, then clears the flag; the relation is held `IS`, not `X`, across the walk. CI-Q0..Q10 carry CLA's proposals, none marked. **Pushed to `main` with `--no-verify`** on W1, documents only; no suite was run for it and no build input changed. The opening `critics-developer` review was still running at that push; its findings, checked by independent refuters, were applied and **pushed the same way on W2** (CI-R6 added, CI-Q3 proposed (b)) |
 | **Does not settle** | CI's opening; every CI-Q |
 | **Recorded at** | this file; the CI order; the CI row in `instructions/v3.2.0/index.md` |
+
+## 5. CG-S1 started and built
+
+| | |
+|---|---|
+| **Word** | W6 (CG's session): *"go cg-s1"* |
+| **Mark** | **CG-S1 built** on `cg-on-conflict-do-update` (the CG order's §7, "CG-S1 built 2026-10-23"): `ON CONFLICT DO UPDATE` on the tuple key and a unique index's column, `DO NOTHING` on the latter too |
+| **Does not settle** | CG-S3, the close and its measurement; a push; a tag, a version |
+| **Recorded at** | this file; the CG order's §7; the CG row in `instructions/v3.2.0/index.md` |
