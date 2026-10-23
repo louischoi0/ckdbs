@@ -18,7 +18,25 @@
 | **Does not settle** | CG-S1's start; a tag, a version |
 | **Recorded at** | this file; the CG order's header, CG-Q1 and §7 "Narrowed 2026-10-23"; the CG row in `instructions/v3.2.0/index.md` |
 
-## 3. CG-S1 started and built
+## 3. Version 3.4.3 tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.3"* |
+| **Mark** | **`v3.4.3`**, an annotated tag on `main` at `f44846ef`, then the head of `origin/main`. Its message states the map write order fixed (`4fb01b46`), BL closed, CG opened and narrowed, and the gaps that bound it. The full Debug suite ran 4311/4311 on `4fb01b46`, whose build inputs the tagged commit shares (everything after it is under `instructions/`), so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.3` |
+| **Does not settle** | a later version |
+| **Recorded at** | this file; the tag message; CLAUDE.md's Version Management |
+
+## 4. CI written: an online index build
+
+| | |
+|---|---|
+| **Word** | W0 (CI's session): *"index build online, write milestone"*; W1: *"push it, documents only, no verify"* |
+| **Mark** | **CI written**, not opened: `workorder-ci-online-index-build.md`, on `worktree-online-index-build` from `2f7ce828`. `CREATE INDEX` announces its row flagged building, drains writers on the older list, backfills with writers running and logging, then clears the flag; the relation is held `IS`, not `X`, across the walk. CI-Q0..Q10 carry CLA's proposals, none marked. **Pushed to `main` with `--no-verify`** on W1, documents only; no suite was run for it and no build input changed. The opening `critics-developer` review was still running at the push |
+| **Does not settle** | CI's opening; every CI-Q; the opening review's findings |
+| **Recorded at** | this file; the CI order; the CI row in `instructions/v3.2.0/index.md` |
+
+## 5. CG-S1 started and built
 
 | | |
 |---|---|

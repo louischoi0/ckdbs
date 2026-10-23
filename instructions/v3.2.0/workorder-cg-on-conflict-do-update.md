@@ -478,7 +478,7 @@ snapshot case.
 
 ### CG-S1 built 2026-10-23 (W6) - the narrow surface
 
-**W6** (`raft-marks-2026-10-23.md` §3): *"go cg-s1"*. Built on
+**W6** (`raft-marks-2026-10-23.md` §5): *"go cg-s1"*. Built on
 `cg-on-conflict-do-update` from `f44846ef`: `b7ddff92` (the surface),
 `8df074cf` (the instance cells), `31e9f554` (texts), `54dbc716` (the
 review's fixes).
