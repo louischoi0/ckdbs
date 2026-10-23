@@ -12,9 +12,11 @@
 
 // **The data file's one sync** (BI-S4: BI-Q2 (a), BI-Q3 (a)).
 //
-// Every `fsync` of the data file goes through here: a checkpoint step's and
+// Every `fsync` of the data file goes through here: a checkpoint step's, the
+// publish's map write barrier (`DevicePageStore::WriteHeaderlessMaps`) and
 // the anchor publish's as a request the caller parks on, and `SYNC`'s, the
-// carve's, `PersistMaps`' and shutdown's as a call that waits. **One at a
+// carve's, `PersistMaps`', shutdown's and a blocking map flush's barrier
+// (`DevicePageStore::FlushMaps`) as a call that waits. **One at a
 // time**, because two overlapping `fsync`s on one descriptor can hand the
 // error to one caller and OK to the other (`wal.md` §6 item 5, the log's
 // own reason); and **a failure is sticky**, because on Linux a failed

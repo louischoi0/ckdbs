@@ -151,6 +151,27 @@ Status DevicePageStore::LoadRegionIfPresent(std::uint32_t region) {
         }
     }
 
+    // **A headerless bit for an id the free map calls free is cleared**, and
+    // the region owes a write of both. A flush writes the headerless map and
+    // syncs before it writes the free map (the map write order, above
+    // `FlushMaps`), so a cut between the two leaves exactly this state.
+    // `IsHeaderless` already reads such an id as headered, but the bit would
+    // outlive it: the cursor reissues the id as a headered page, which would
+    // then be written unstamped, read unverified, and refused by a later
+    // `FreePage` as headerless. Cleared, the next flush's headerless write
+    // carries the clear ahead of any free bit the reissue sets.
+    if (pages.headerless_map != nullptr) {
+        const auto free_bits = std::span<const std::byte, kPageSize>(pages.free_map);
+        const auto headerless_bits = std::span<std::byte, kPageSize>(*pages.headerless_map);
+        for (std::uint32_t bit = 0; bit < kFreeMapBitsPerPage; ++bit) {
+            if (FreeMapIsAllocated(headerless_bits, bit) && !FreeMapIsAllocated(free_bits, bit)) {
+                FreeMapRelease(headerless_bits, bit);
+                pages.dirty = true;
+                pages.headerless_dirty = true;
+            }
+        }
+    }
+
     // **Published under the map hold, and the loser keeps the winner's**
     // (AM-S3); every device read above ran outside it. `try_emplace`: two
     // cores can read the same region at once, and the second must not
@@ -196,6 +217,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::EnsureHeaderlessMap(P
         FormatFreeMapPage(std::span<std::byte, kPageSize>(*made), PageType::kHeaderlessMap);
         region.value()->headerless_map = std::move(made);
         region.value()->dirty = true;
+        region.value()->headerless_dirty = true;
         any_headerless_.store(true, std::memory_order_release);
     }
     return std::span<std::byte, kPageSize>(*region.value()->headerless_map);
@@ -409,125 +431,235 @@ Status DevicePageStore::MarkHeaderlessBeforeInsert(PageId headerless_page) {
     // shares** (AM-S2), so it takes the latch even though the *id* is this
     // caller's alone: a neighbouring id's bit in the same byte belongs to
     // somebody else.
+    //
+    // **The claim leaves `headerless_claims_` in the same hold**, so the
+    // first map copy to carry this id's free bit carries its headerless bit
+    // too, and writes that ahead of it (the map write order).
     LatchGuard alloc(map_latch());
     FreeMapAllocate(map.value(), FreeMapBitIndexOf(headerless_page));
     region.value()->dirty = true;
+    region.value()->headerless_dirty = true;
+    std::erase(headerless_claims_, headerless_page);
     return Status::OK();
 }
 
-StatusOr<std::size_t> DevicePageStore::FlushMaps() {
-    // **Every core's store publishes the maps.**
-    //
+// ---- The map write order -------------------------------------------------
+//
+// **A headerless bit is durable before the free bit that makes its id exist
+// is written.** The free map is what makes an id allocated; the headerless
+// map says an allocated id carries no header, so its reads skip the
+// checksum. A device keeps any subset of the writes issued since its last
+// sync - a file does, and so does `MemoryPageDevice::CrashPersisting` - so
+// issuing the headerless map first orders nothing on its own: a power cut
+// could keep the free map and lose the headerless map, and the next read of
+// the Waystone directory page would verify a checksum it never had and
+// refuse it `Corruption`; the headerless-map page's own free bit, set when
+// the bitmap is installed, would likewise land ahead of its bytes. So a map
+// flush runs in three steps:
+//
+//   1. **Copy** every dirty region under the map latch, clearing its flags,
+//      each free-map image leaving out the headerless claims not yet marked
+//      (`headerless_claims_`), and **write the headerless map** of each
+//      region whose headerless map changed (`headerless_dirty`).
+//   2. **Sync the data file**, if step 1 wrote one: once per flush, not per
+//      region - regions are independent of one another (a page's
+//      reachability rests on its own region's maps), so one sync orders
+//      every region's pair, and the data pages a `Flush` wrote before it.
+//   3. **Write the free maps** of the same copy.
+//
+// The free maps are step 1's images, never a fresh copy: a headerless page
+// placed between the steps would otherwise put its free bit and its
+// headerless bit in one unsynced window again. A cut between steps 2 and 3
+// leaves a headerless bit for an id the device calls free: `IsHeaderless`
+// reads it as headered, since it requires allocation, and the next mount
+// clears it (`LoadRegionIfPresent`), so the id is reissued headered. With no
+// headerless map changed - every volume without a Waystone directory, and
+// every flush after a directory's pages are placed - step 2 is skipped and a
+// flush is the writes it always was.
+//
+// The blocking form, `FlushMaps` (`Flush`, `Sync`, `PersistMaps`), runs the
+// three steps under one hold of the map write barrier and waits on the sync
+// there, so a run task's half that takes the barrier meanwhile waits for
+// that sync on its reactor (`known-gaps.md`). The checkpoint's run task may
+// not wait on the data file (BI), so it runs step 1 (`WriteHeaderlessMaps`),
+// parks on the ticket that answers, and runs step 3 (`WriteFreeMaps`, which
+// refuses `OutOfRange` while the ticket is pending). The copy waits in the
+// stage (`staged_maps_`) between the two, and whichever flush takes the
+// barrier next writes it - the run task's second half, or a blocking flush
+// that adopts it, syncing first, so BF-R5's "a returning flush covers every
+// state copied before it began" holds across the park. A flush that fails
+// gives the whole stage back to the regions (`RemarkStagedLocked`) and the
+// run task's second half answers that failure, so a run never publishes an
+// anchor over free maps a failed adopter left unwritten.
+
+void DevicePageStore::MaskHeaderlessClaimsLocked(
+    std::uint32_t region, std::span<std::byte, kPageSize> free_map) const noexcept {
+    for (const PageId id : headerless_claims_) {
+        if (FreeMapRegionOf(id) == region) FreeMapRelease(free_map, FreeMapBitIndexOf(id));
+    }
+}
+
+StatusOr<bool> DevicePageStore::StageMapsLocked() {
     // **Copy under the hold, write outside it** (AM-S3): device work never
     // runs under a latch, and the map is shared with every core's
     // allocator, so the bytes are stamped and copied while the map is held
     // and the writes run after it is dropped.
     //
-    // **The dirty flag is cleared at copy time, not after the write.** A
+    // **The flags are cleared at copy time, not after the write.** A
     // concurrent allocation that dirties the region between the two must
     // re-dirty it rather than have its bit lost, which is what clearing
-    // afterwards would do. A failed write re-marks the region below.
-    struct Pending {
+    // afterwards would do. A failure gives the stage back
+    // (`RemarkStagedLocked`). A region already staged takes this copy's free
+    // map in place of the older one, which this copy supersedes.
+    struct HeaderlessImage {
         std::uint32_t region;
-        PageId free_id;
-        Page free_map;
-        bool has_headerless;
-        PageId headerless_id;
-        Page headerless_map;
+        Page bytes;
     };
-    // **The map write barrier** (BF-R5), held from the copy to the last
-    // write: a caller that finds every region clean because another core
-    // copied them first waits here until that core's write has landed, so
-    // its own sync covers it. Outer to the map latch, and held across device
-    // I/O, which is why it is not the map latch.
-    AssertNotUnderMapHold("FlushMaps");
-    LatchGuard barrier(map_flush_latch());
-    std::vector<Pending> pending;
+    std::vector<HeaderlessImage> headerless;
+    bool copied = false;
     {
         LatchGuard map(map_latch());
         for (auto& [region, pages] : map_regions_) {
             if (!pages.dirty) continue;
-            const PageId base = FreeMapRegionBase(region);
-            Pending entry;
-            entry.region = region;
-            entry.free_id = FreeMapPageIdFor(base);
-            entry.free_map = pages.free_map;
-            entry.has_headerless = pages.headerless_map != nullptr;
-            entry.headerless_id = HeaderlessMapPageIdFor(base);
-            if (entry.has_headerless) entry.headerless_map = *pages.headerless_map;
-            StampPageChecksum(std::span<std::byte, kPageSize>(entry.free_map));
-            if (entry.has_headerless) {
-                StampPageChecksum(std::span<std::byte, kPageSize>(entry.headerless_map));
+            Page& staged = staged_maps_[region];
+            staged = pages.free_map;
+            const auto fview = std::span<std::byte, kPageSize>(staged);
+            MaskHeaderlessClaimsLocked(region, fview);
+            StampPageChecksum(fview);
+            if (pages.headerless_dirty && pages.headerless_map != nullptr) {
+                headerless.push_back({region, *pages.headerless_map});
+                StampPageChecksum(std::span<std::byte, kPageSize>(headerless.back().bytes));
             }
             pages.dirty = false;
-            pending.push_back(std::move(entry));
+            pages.headerless_dirty = false;
+            copied = true;
         }
     }
-    if (pending.empty()) return std::size_t{0};
-    if (after_map_copy_for_test_) after_map_copy_for_test_();
+    if (copied && after_map_copy_for_test_) after_map_copy_for_test_();
 
-    // Ascending by region, which the copy took from `std::map` for free.
-    // Regions are independent of one another - a page's reachability rests
-    // on its own region's map and nothing else - so the order across them is
-    // a determinism choice, not a correctness one; within a region it is
-    // both. **A failure re-marks this region and every one after it**: each
-    // was copied and cleared, and one left clean but unwritten would let a
-    // restart read its pages free and re-issue them.
-    auto remark_from = [&](std::size_t first) {
-        for (std::size_t j = first; j < pending.size(); ++j) RemarkRegionDirty(pending[j].region);
-    };
-    for (std::size_t i = 0; i < pending.size(); ++i) {
-        Pending& entry = pending[i];
-        // The headerless map first, the free map second. Both orderings are
-        // safe, but this one is safe for a reason worth writing down: the
-        // free map is what makes a page id *exist*, so a crash between the
-        // two leaves a headerless bit set for an id nothing allocated -
-        // harmless, since IsHeaderless() also requires allocation. The
-        // reverse order would publish an allocated headerless page whose
-        // headerless bit had not landed, and the next read of it would
-        // verify a checksum that was never written and call the page
-        // corrupt.
-        if (entry.has_headerless) {
-            auto hbytes = std::span<std::byte, kPageSize>(entry.headerless_map);
-            if (Status s = device_.WritePage(entry.headerless_id, hbytes); !s.ok()) {
-                if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-                    log_->Error("pagestore", "headerless-map write failed for region " +
-                                                 std::to_string(entry.region) + ": " + s.message());
-                }
-                remark_from(i);
-                return s;
+    for (HeaderlessImage& entry : headerless) {
+        const PageId headerless_id = HeaderlessMapPageIdFor(FreeMapRegionBase(entry.region));
+        if (Status s = device_.WritePage(headerless_id,
+                                         std::span<const std::byte, kPageSize>(entry.bytes));
+            !s.ok()) {
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pagestore", "headerless-map write failed for region " +
+                                             std::to_string(entry.region) + ": " + s.message());
             }
+            RemarkStagedLocked(s);
+            return s;
         }
+    }
+    return !headerless.empty();
+}
 
-        auto fbytes = std::span<std::byte, kPageSize>(entry.free_map);
-        if (Status s = device_.WritePage(entry.free_id, fbytes); !s.ok()) {
+StatusOr<std::size_t> DevicePageStore::WriteStagedFreeMapsLocked() {
+    // Ascending by region, which `std::map` gives for free - a determinism
+    // choice, not a correctness one. **A failure re-marks this region and
+    // every one after it**: each was copied and cleared, and one left clean
+    // but unwritten would let a restart read its pages free and re-issue
+    // them. A written region leaves the stage as it is written, so the
+    // remark reaches exactly the rest.
+    std::size_t written = 0;
+    for (auto it = staged_maps_.begin(); it != staged_maps_.end();) {
+        const PageId free_id = FreeMapPageIdFor(FreeMapRegionBase(it->first));
+        if (Status s = device_.WritePage(
+                free_id, std::span<const std::byte, kPageSize>(it->second));
+            !s.ok()) {
             // The map is what makes a page reachable after a restart, so
             // losing this write loses pages whose bytes did land.
             if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 log_->Error("pagestore", "free-map write failed for region " +
-                                             std::to_string(entry.region) + ": " + s.message());
+                                             std::to_string(it->first) + ": " + s.message());
             }
-            remark_from(i);
+            RemarkStagedLocked(s);
             return s;
         }
+        it = staged_maps_.erase(it);
+        ++written;
     }
-
+    staged_ticket_ = 0;
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("pagestore", "maps written for " + std::to_string(pending.size()) +
+        log_->Debug("pagestore", "maps written for " + std::to_string(written) +
                                      " dirty region(s); " + std::to_string(allocated_pages()) +
                                      " page(s) allocated across the instance");
     }
-    return pending.size();
+    return written;
 }
 
-// Puts a region's dirty bit back after a failed write, so the next flush
+void DevicePageStore::RemarkStagedLocked(const Status& why) noexcept {
+    for (const auto& entry : staged_maps_) RemarkRegionDirty(entry.first);
+    staged_maps_.clear();
+    staged_ticket_ = 0;
+    stage_lost_ = why;
+}
+
+StatusOr<std::size_t> DevicePageStore::FlushMaps() {
+    // **Every core's store publishes the maps.** The map write barrier
+    // (BF-R5) is held from the copy to the last write: a caller that finds
+    // every region clean because another core copied them first waits here
+    // until that core's write has landed, so its own sync covers it. Outer
+    // to the map latch, and held across device I/O, which is why it is not
+    // the map latch.
+    AssertNotUnderMapHold("FlushMaps");
+    LatchGuard barrier(map_flush_latch());
+    auto wrote_headerless = StageMapsLocked();
+    if (!wrote_headerless.ok()) return wrote_headerless.status();
+    if (staged_maps_.empty()) return std::size_t{0};
+    // Step 2. A stage the run task left owes its own ticket, and a sync
+    // that begins now covers it as well as anything step 1 wrote here; a
+    // failed one is sticky, so this answers it too.
+    if (wrote_headerless.value() || staged_ticket_ != 0) {
+        if (Status s = data_sync_.SyncNow(); !s.ok()) {
+            RemarkStagedLocked(s);
+            return s;
+        }
+    }
+    return WriteStagedFreeMapsLocked();
+}
+
+StatusOr<std::uint64_t> DevicePageStore::WriteHeaderlessMaps() {
+    AssertNotUnderMapHold("WriteHeaderlessMaps");
+    LatchGuard barrier(map_flush_latch());
+    stage_lost_ = Status::OK();
+    auto wrote_headerless = StageMapsLocked();
+    if (!wrote_headerless.ok()) return wrote_headerless.status();
+    // Requested after the writes, so the ticket covers them; with the
+    // data-sync thread running this only notifies it. An older stage's
+    // ticket stands when nothing new was written.
+    if (wrote_headerless.value()) staged_ticket_ = data_sync_.Request();
+    return staged_ticket_;
+}
+
+StatusOr<std::size_t> DevicePageStore::WriteFreeMaps() {
+    AssertNotUnderMapHold("WriteFreeMaps");
+    LatchGuard barrier(map_flush_latch());
+    // A flush that adopted the first half's stage and failed gave it back to
+    // the regions: the free maps this run copied are not on the device.
+    if (!stage_lost_.ok()) return std::exchange(stage_lost_, Status::OK());
+    if (staged_maps_.empty()) return std::size_t{0};
+    // `Result`, never `Done` (true on a failure too): `OutOfRange` while the
+    // sync is pending, and the failure once one failed. Either way nothing
+    // is written and the stage stays for the next flush.
+    if (staged_ticket_ != 0) {
+        if (Status s = data_sync_.Result(staged_ticket_); !s.ok()) return s;
+    }
+    return WriteStagedFreeMapsLocked();
+}
+
+// Puts a region's flags back after a failed write, so the next flush
 // retries it (AM-S3). Under the hold, because it touches the map, and a
 // plain store rather than a test-then-set: an allocation may have
-// re-dirtied it already and both readings are "owes a write".
+// re-dirtied it already and both readings are "owes a write". The
+// headerless map is owed again whether or not the failed copy carried it:
+// it costs the retry one sync, and needs no record of what each copy held.
 void DevicePageStore::RemarkRegionDirty(std::uint32_t region) noexcept {
     AssertNotUnderMapHold("RemarkRegionDirty");
     LatchGuard map(map_latch());
-    if (MapRegion* pages = MutableRegion(region); pages != nullptr) pages->dirty = true;
+    if (MapRegion* pages = MutableRegion(region); pages != nullptr) {
+        pages->dirty = true;
+        if (pages->headerless_map != nullptr) pages->headerless_dirty = true;
+    }
 }
 
 Status DevicePageStore::PersistMaps() {
@@ -1401,6 +1533,10 @@ StatusOr<DevicePageStore::FreshId> DevicePageStore::ClaimFreshId(bool headerless
             auto claimed = ClaimNextFreeIdLocked(&missing_region);
             if (!claimed.ok()) return claimed.status();
             page_id = claimed.value();
+            // A headerless claim is hidden from every map copy until its
+            // headerless bit is set (`headerless_claims_`), in this hold so
+            // no copy sees the free bit alone.
+            if (headerless && page_id != kInvalidPageId) headerless_claims_.push_back(page_id);
         }
         if (page_id != kInvalidPageId) break;
         // Outside the hold: this reads the device, or grows the file.
@@ -1471,21 +1607,21 @@ void DevicePageStore::ReleaseClaim(PageId page_id, bool popped) noexcept {
     FreeMapRelease(std::span<std::byte, kPageSize>(pages->free_map), FreeMapBitIndexOf(page_id));
     pages->dirty = true;
     --allocated_pages_;
-    if (popped) {
-        // Back on the list it came from; the cursor passes over it there.
-        --pages_reused_;
-        free_list_.insert(page_id);
-        NoteFreeListSize();
-    } else if (next_new_page_id_ == page_id + 1) {
-        // The cursor's own claim, with nothing claimed after it: the cursor
-        // steps back, so the next create finds the id again. It was at or
-        // above the floor when claimed, so this never lowers past it.
-        next_new_page_id_ = page_id;
-    } else {
-        // Another claim moved the cursor past it: the list hands it out.
-        free_list_.insert(page_id);
-        NoteFreeListSize();
-    }
+    // A headerless claim given back before its mark: a later headered claim
+    // of the id must not be masked.
+    std::erase(headerless_claims_, page_id);
+    // **Onto the free list, never back under the cursor.** While the id was
+    // claimed, a map copy on another core may have put its free bit on the
+    // device, and a write that landed is not undone by clearing the bit
+    // here. The cursor serves headerless creates and the list never does
+    // (BF-R6), so a given-back id is only ever reissued headered, for which
+    // a durable free bit ahead of its bytes reads `NotFound`; a cursor
+    // stepped back over it could hand it to a Waystone directory page whose
+    // headerless bit is not durable - the map write order's failure, with
+    // no flush to order it (`FlushMaps`).
+    if (popped) --pages_reused_;
+    free_list_.insert(page_id);
+    NoteFreeListSize();
 }
 
 StatusOr<PageStore::FreeOutcome> DevicePageStore::FreePage(PageId page_id) {
@@ -2175,6 +2311,9 @@ std::vector<DevicePageStore::MapImage> DevicePageStore::MapImages() const {
     for (const auto& [region, pages] : map_regions_) {
         const PageId base = FreeMapRegionBase(region);
         out.push_back({FreeMapPageIdFor(base), pages.free_map});
+        // As a flush's copy: a headerless claim not yet marked is not
+        // allocated to anything reading these maps.
+        MaskHeaderlessClaimsLocked(region, std::span<std::byte, kPageSize>(out.back().bytes));
         StampPageChecksum(std::span<std::byte, kPageSize>(out.back().bytes));
         if (pages.headerless_map != nullptr) {
             out.push_back({HeaderlessMapPageIdFor(base), *pages.headerless_map});

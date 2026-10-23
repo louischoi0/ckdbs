@@ -515,6 +515,8 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // page written and synced, so the anchor reaches the device after every
     // page it stands for - a snapshot page another core's writeback carried,
     // which no step of this run synced, among them.
+    // The maps go in two halves with a park between (`page.md` section 5,
+    // the map write order), owed only when a headerless map changed.
     const std::vector<PageId> dirty = target_.DirtyPages();
     for (std::size_t at = 0; at < dirty.size(); at += config_.pages_per_step) {
         const std::span<const PageId> batch(
@@ -526,10 +528,22 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
     }
+    std::uint64_t map_ticket = 0;
     {
         const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
         const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
-        if (Status s = target_.WriteMaps(); !s.ok()) co_return FinishTask(core_id, s);
+        auto staged = target_.WriteHeaderlessMaps();
+        if (!staged.ok()) co_return FinishTask(core_id, staged.status());
+        map_ticket = staged.value();
+    }
+    if (Status s = co_await ParkOnDataSyncTicket(map_ticket); !s.ok()) {
+        co_return FinishTask(core_id, s);
+    }
+    if (generation != task_generation_) co_return Status::OK();
+    {
+        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+        const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
+        if (Status s = target_.WriteFreeMaps(); !s.ok()) co_return FinishTask(core_id, s);
     }
     if (Status s = co_await ParkOnDataSync(); !s.ok()) co_return FinishTask(core_id, s);
     if (generation != task_generation_) co_return Status::OK();
@@ -562,7 +576,10 @@ Status LogStopped() {
 }  // namespace
 
 sched::Coro Checkpointer::ParkOnDataSync() {
-    const std::uint64_t ticket = target_.RequestSync();
+    co_return co_await ParkOnDataSyncTicket(target_.RequestSync());
+}
+
+sched::Coro Checkpointer::ParkOnDataSyncTicket(std::uint64_t ticket) {
     if (ticket == 0) co_return Status::OK();  // a target with nothing to wait on
     const std::function<bool()> synced = [this, ticket] { return target_.SyncDone(ticket); };
     const sched::MonoTimeNs parked = wal_.clock().Now();

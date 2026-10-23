@@ -329,7 +329,10 @@ TEST_F(CheckpointDataSyncTest, ASnapshotPageAnotherWritebackCarriedIsSyncedBefor
     // One step of 16 covers every snapshot page; the "other core" carries
     // them all after Start, before the step.
     wal::Checkpointer c(*wal_, *target_, txns_, anchor, wal::CheckpointerConfig{.pages_per_step = 16});
-    ASSERT_TRUE(store_->WriteMaps().ok());  // maps clean, so they cannot stand in for the sync
+    // Maps clean, so they cannot stand in for the sync; no headerless map,
+    // so the first half owes no ticket.
+    ASSERT_EQ(store_->WriteHeaderlessMaps().value(), 0u);
+    ASSERT_TRUE(store_->WriteFreeMaps().ok());
     c.SubmitRun(reactor_, nullptr, 0);
     reactor_.RunOnce();  // Start
     const std::size_t from = held_->trace().size();
@@ -349,6 +352,39 @@ TEST_F(CheckpointDataSyncTest, ASnapshotPageAnotherWritebackCarriedIsSyncedBefor
     bool synced_between = false;
     for (std::size_t i = carried; i < anchor_write; ++i) synced_between |= trace[i].first == 's';
     EXPECT_TRUE(synced_between) << "the anchor went out with a carried page unsynced";
+}
+
+TEST_F(CheckpointDataSyncTest, TheRunSyncsAChangedHeaderlessMapBeforeItWritesTheFreeMap) {
+    // The map write order (`DevicePageStore::FlushMaps`) on the run task: a
+    // directory page placed since the last flush puts the headerless map
+    // out, then a parked sync, then the free map whose bit makes it exist.
+    store_->data_sync().Start();
+    auto directory = store_->CreateNewHeaderless();
+    ASSERT_TRUE(directory.ok()) << directory.status().message();
+    std::fill(directory.value().second.bytes().begin(), directory.value().second.bytes().end(),
+              std::byte{0xFF});
+    directory.value().second = {};
+    wal::InMemoryCheckpointAnchor anchor;
+    wal::Checkpointer c(*wal_, *target_, txns_, anchor, wal::CheckpointerConfig{.pages_per_step = 4});
+    const std::size_t from = held_->trace().size();
+    c.SubmitRun(reactor_, nullptr, 0);
+    ASSERT_TRUE(TurnUntil(reactor_, [&] { return !c.run_in_flight(); }));
+    ASSERT_EQ(anchor.publishes(), 1u);
+
+    const auto trace = held_->trace();
+    std::size_t headerless = trace.size();
+    std::size_t free = trace.size();
+    for (std::size_t i = from; i < trace.size(); ++i) {
+        if (trace[i].first != 'w') continue;
+        if (trace[i].second == kHeaderlessMapPageId && headerless == trace.size()) headerless = i;
+        if (trace[i].second == kFreeMapPageId && free == trace.size()) free = i;
+    }
+    ASSERT_LT(headerless, trace.size()) << "the run never wrote the headerless map";
+    ASSERT_LT(free, trace.size()) << "the run never wrote the free map";
+    ASSERT_LT(headerless, free);
+    bool synced_between = false;
+    for (std::size_t i = headerless; i < free; ++i) synced_between |= trace[i].first == 's';
+    EXPECT_TRUE(synced_between) << "the free map went out with the headerless map unsynced";
 }
 
 TEST(DataSyncerTest, StopAnswersAWaiterInline) {

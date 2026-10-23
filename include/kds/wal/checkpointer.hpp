@@ -201,10 +201,12 @@ public:
     virtual Status SyncResult(std::uint64_t /*ticket*/) { return Status::OK(); }
 
     // The paced publish (BI-Q5 (a)): every page dirty now, for the task to
-    // write in batches, and the maps, written after all of them. A scripted
-    // target has neither.
+    // write in batches, and the maps after all of them, in two halves the
+    // task parks between on the ticket the first answers (`page.md`
+    // section 5, the map write order). A scripted target has neither.
     virtual std::vector<PageId> DirtyPages() { return {}; }
-    virtual Status WriteMaps() { return Status::OK(); }
+    virtual StatusOr<std::uint64_t> WriteHeaderlessMaps() { return std::uint64_t{0}; }
+    virtual Status WriteFreeMaps() { return Status::OK(); }
 };
 
 // What a completed checkpoint publishes. `redo_start_lsn` is where
@@ -512,8 +514,10 @@ private:
     sched::Coro ParkOnLog(Lsn lsn, std::uint32_t core_id);
     // Parks until the data file is synced past everything written so far
     // (BI-R2's second half). No kick: the data-sync thread has none, and the
-    // drain timer ends an idle block (BI-Q6 (b)).
+    // drain timer ends an idle block (BI-Q6 (b)). `ParkOnDataSyncTicket`
+    // parks on a ticket the target already issued.
     sched::Coro ParkOnDataSync();
+    sched::Coro ParkOnDataSyncTicket(std::uint64_t ticket);
     // Writes `pages` for the publish, deferring on the log and parking as a
     // step does (BI-Q5 (a)).
     sched::Coro WriteForPublish(std::span<const PageId> pages, std::uint32_t core_id,

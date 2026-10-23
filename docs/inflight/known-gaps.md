@@ -1079,6 +1079,19 @@ closed 2026-10-11 at `ec827a19`).
   `bugs/a-checkpoint-run-holds-its-cores-reactor-for-its-whole-length.md`
   (closed unreproduced at `d83bd502`) carried the numbers and what a fix
   needs.
+- **A run's map halves can wait on its reactor for another caller's
+  data-file sync** (`[source-read]`, on `fix-map-flush-order` over
+  `27e9d03a`). The map write order (`page.md` §5) puts a sync between the
+  headerless and free maps whenever a headerless map changed. A blocking
+  flush - `SYNC`, a reclaim's `PersistMaps`, the synchronous anchor publish
+  - takes that sync inside `FlushMaps` under the map write barrier
+  (`map_flush_latch_`), a plain mutex, and the run task's
+  `WriteHeaderlessMaps` and `WriteFreeMaps` take the same barrier on the
+  reactor, so a run that meets one waits out its `fsync` there. Before the
+  map write order the barrier covered `pwrite`s only. It needs a pending
+  headerless change and a concurrent blocking flush at once; not measured.
+  Releasing the barrier across the wait would keep BF-R5 only with the run
+  re-parking on a newer ticket, a change to the halves' contract.
 - **A paced publish's map write can carry the bit of a page another core
   created unlogged after the collection** (BI-S4, `[source-read]`). The
   publish collects the dirty pages, writes them, then writes the maps; a

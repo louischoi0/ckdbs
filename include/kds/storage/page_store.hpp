@@ -775,7 +775,8 @@ inline void PinAllowance::Release() noexcept {
 
 inline PageClaims::~PageClaims() {
     if (store_ == nullptr) return;
-    // Highest first, so a store's cursor steps back over every id it gave.
+    // Highest first, a determinism choice: each goes on the store's free
+    // list, never back under its cursor (`DevicePageStore::ReleaseClaim`).
     for (std::size_t i = ids_.size(); i-- > next_;) store_->ReleaseClaimedId(ids_[i]);
 }
 

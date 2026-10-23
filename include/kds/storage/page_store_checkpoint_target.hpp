@@ -52,7 +52,8 @@ public:
     Status SyncResult(std::uint64_t ticket) override { return store_.data_sync().Result(ticket); }
 
     std::vector<PageId> DirtyPages() override { return store_.DirtyPageIds(); }
-    Status WriteMaps() override { return store_.WriteMaps().status(); }
+    StatusOr<std::uint64_t> WriteHeaderlessMaps() override { return store_.WriteHeaderlessMaps(); }
+    Status WriteFreeMaps() override { return store_.WriteFreeMaps().status(); }
 
 private:
     DevicePageStore& store_;

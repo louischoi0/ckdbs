@@ -314,11 +314,13 @@ public:
     bool IsHeaderless(PageId page_id) const noexcept;
 
     // Writes dirty frames back in page-id order, which is file order
-    // (page.md section 13), then the free map. Data pages go first so a
-    // crash between them can only orphan a page a set bit names, never
+    // (page.md section 13), then the maps (`FlushMaps`). Data pages go first
+    // so a crash between them can only orphan a page a set bit names, never
     // publish one whose bytes never landed. A bit `FreePage` cleared needs
     // no order: no replay names the id any more (BF-R4), and its frame is
-    // gone. Not durable on its own - Sync() adds the fsync.
+    // gone. Not durable on its own - Sync() adds the fsync - though a map
+    // flush whose headerless map changed syncs once inside, between the
+    // two bitmaps (`FlushMaps`' map write order).
     Status Flush();
     Status Sync() override;
 
@@ -524,7 +526,14 @@ public:
     StatusOr<std::size_t> WriteBackPages(std::span<const PageId> page_ids, wal::Lsn* defer) {
         return WriteBack(page_ids, HeldFrames::kWait, defer);
     }
-    StatusOr<std::size_t> WriteMaps() { return FlushMaps(); }
+
+    // The publish's map write as two halves the run task parks between
+    // (the map write order, above `FlushMaps` in the .cpp): the first
+    // answers the `data_sync()` ticket the second waits on, 0 for none; the
+    // second refuses `OutOfRange`, writing nothing, while it is pending, and
+    // the failure of any flush that gave the stage back since the first.
+    StatusOr<std::uint64_t> WriteHeaderlessMaps();
+    StatusOr<std::size_t> WriteFreeMaps();
 
     // **Every resident map region's pages as they stand in memory**, each
     // stamped with its checksum, and **nothing written** (BR-S5): a backup's
@@ -947,9 +956,10 @@ private:
     // One region's pair of bitmaps: the unit of residency, and the unit of
     // dirtiness.
     //
-    // One dirty flag for both pages: they are written together, at the same
-    // points, so a flag per page would only add a state where one is on
-    // disk and the other is not (FM2: per region, not per page).
+    // One dirty flag for the pair, which every flush that copies the region
+    // writes the free map of (FM2: per region, not per page), and a second
+    // for the headerless map alone, whose write owes a data-file sync ahead
+    // of the free map (the map write order).
     struct MapRegion {
         Page free_map{};
         // **Null until this region holds a headerless page** (FM6, D2(a)):
@@ -960,6 +970,10 @@ private:
         // is why allocated_pages() counts two for a fresh region.
         std::unique_ptr<Page> headerless_map;
         bool dirty = false;
+        // **The headerless map changed since it was last copied** - a bit set,
+        // cleared, or the bitmap installed. Implies `dirty`. Only a region
+        // with it set has its headerless map written and owes the sync.
+        bool headerless_dirty = false;
     };
 
     DevicePageStore(PageDevice& device, PageId first_new_page_id) noexcept;
@@ -1030,8 +1044,22 @@ private:
     bool IsAllocatedLocked(PageId page_id) const noexcept;
     bool IsHeaderlessLocked(PageId page_id) const noexcept;
 
-    // Restores a region's dirty bit after `FlushMaps`' write of it failed.
+    // Restores a region's flags after `FlushMaps`' write of it failed: its
+    // dirty flag, and `headerless_dirty` when it has a headerless map.
     void RemarkRegionDirty(std::uint32_t region) noexcept;
+
+    // The map write's steps, under `map_flush_latch_` (the map write order):
+    // copy every dirty region into the stage and write each changed
+    // headerless map, answering whether one was written; write the stage's
+    // free maps and empty it; put the whole stage back dirty, empty it and
+    // record `why` in `stage_lost_`.
+    StatusOr<bool> StageMapsLocked();
+    StatusOr<std::size_t> WriteStagedFreeMapsLocked();
+    void RemarkStagedLocked(const Status& why) noexcept;
+    // Clears, in `free_map` (a copy of `region`'s), the bit of every id in
+    // `headerless_claims_` in that region. Under `map_latch_`.
+    void MaskHeaderlessClaimsLocked(std::uint32_t region,
+                                    std::span<std::byte, kPageSize> free_map) const noexcept;
 
     // ---- Ids claimed but not yet resident (AM-S3) ------------------------
     //
@@ -1086,8 +1114,36 @@ private:
     // plain mutex, outer to the map latch and never taken under it; it is
     // held across device I/O, which is why it is not the map latch. Null
     // unarmed, as the other two.
+    //
+    // **It also guards the stage** below, which is what spans the run
+    // task's park (the map write order, above `FlushMaps` in the .cpp).
+    // **A blocking flush holds it across its data-file sync** when it owes
+    // one, so a run task's half that takes it meanwhile waits for that sync
+    // on its reactor (`docs/inflight/known-gaps.md`).
     mutable Latch map_flush_latch_{LatchKind::kFreeMapFlush};
     Latch* map_flush_latch() const noexcept { return latch_armed_ ? &map_flush_latch_ : nullptr; }
+
+    // **The free maps of a copy whose headerless half is written**, stamped,
+    // by region, and the `data_sync_` ticket that must complete before any
+    // is written - 0 when none is owed. `stage_lost_` is the failure of a
+    // flush that gave the stage back (`RemarkStagedLocked`) since the run
+    // task's first half, which its second half answers rather than finding
+    // the stage empty and reporting the maps written. Under
+    // `map_flush_latch_`, or the one reactor thread unarmed.
+    std::map<std::uint32_t, Page> staged_maps_;
+    std::uint64_t staged_ticket_ = 0;
+    Status stage_lost_;
+
+    // **Headerless ids claimed and not yet marked** (the claim-to-mark
+    // window, `CreateNewFrom`'s headerless arm). `ClaimFreshId` sets the free
+    // bit in one hold and `MarkHeaderlessBeforeInsert` the headerless bit in
+    // a later one, with a device read (and possibly a zero-write and sync)
+    // between; a map copy taken in that window would put the free bit on the
+    // device with no headerless bit ahead of it. Every free-map image a copy
+    // takes therefore leaves these ids out (`MaskHeaderlessClaimsLocked`):
+    // to the device the id is not allocated until its headerless bit is in
+    // the same copy. Under `map_latch_`; one entry per create in flight.
+    std::vector<PageId> headerless_claims_;
 
     // Debug: a public free-map reader must not be reached from inside the
     // *map* hold, because `Latch` is not recursive (`base/latch.hpp`) and a
@@ -1145,6 +1201,10 @@ private:
     // later one **waits on the map write barrier until that copy is
     // written** (BF-R5), so a returning `Sync` or `PersistMaps` covers every
     // region state copied before it began.
+    //
+    // The blocking form of the map write order (above it in the .cpp): it
+    // waits on the sync between the bitmaps, and adopts a stage the run
+    // task left between its halves.
     StatusOr<std::size_t> FlushMaps();
 
     // Waits, through `gate`, for the log records of `page_ids` to be durable
