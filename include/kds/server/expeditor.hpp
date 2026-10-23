@@ -662,7 +662,11 @@ public:
     // `RunUntilStopped()`.** Empty at `cores = 1` and before `Start()`;
     // cleared on the way down, so a caller that asks afterwards sees no
     // cores rather than dangling ones. Core 0 is not in it - core 0's
-    // runtime is this object.
+    // runtime is this object. **That window is core 0's quiet, not a
+    // peer's**: `Start()` returns with every peer's reactor already running
+    // on its own thread, so another thread reads only what
+    // `CoreRuntime::Open` fixed - its `config()`, `recovery()`, the objects
+    // it was handed - and never dispatches on a peer.
     const std::vector<std::unique_ptr<CoreRuntime>>& cores() const noexcept { return cores_; }
     // What places each transaction above one core (BL-S3): the test's seam
     // or the instance's `LoadPlacer`; null at one core, after `Start()`.

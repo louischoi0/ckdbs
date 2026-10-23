@@ -343,31 +343,15 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     EXPECT_EQ(peer.dispatcher().locks(), db.locks())
         << "the peer's dispatcher records its edges in some other table, or none";
 
-    // **The superblock image.** A peer used to hold a default-constructed
-    // copy, and zero is a legal value of most of its fields - so it reported
-    // `wal_topology=per-core` on a single-stream volume and `version=0`
-    // beside it (AL-S9). Read through `SHOW META`, which is where every
-    // wrong answer reached a client.
-    const std::string peer_meta = peer.dispatcher().Dispatch("SHOW META").response;
-    EXPECT_EQ(testing_view::MetaField(peer_meta, "wal_topology"), "single") << peer_meta;
-    EXPECT_EQ(testing_view::MetaField(peer_meta, "core"), "1") << peer_meta;
-    EXPECT_NE(testing_view::MetaField(peer_meta, "version"), "0") << peer_meta;
-    EXPECT_NE(testing_view::MetaField(peer_meta, "create_time"), "0") << peer_meta;
-
     // **The recovery report.** A fresh volume's log holds nothing, and under
     // one stream a peer runs no pass of its own in any case - core 0's is
     // the instance's. Both readings are "nothing was replayed here", and the
     // marker is what says which: a core that ran its own pass does not carry
-    // it.
+    // it. The report is read here because `Open` fills it before any worker
+    // exists and nothing writes it again; the marker, like everything else
+    // the peer answers, is asked of the peer (`APeerAnswersWithTheVolumesOwnImage`).
     EXPECT_EQ(peer.recovery().records, 0u);
     EXPECT_EQ(peer.recovery().redo_applied, 0u);
-    EXPECT_EQ(testing_view::MetaField(peer_meta, "recovery_by"), "core0") << peer_meta;
-
-    // **The catalog cache.** The peer reads the same catalog through its own
-    // cache, and a peer that came up with an empty one answers `NotFound`
-    // for relations that exist.
-    const std::string tables = peer.dispatcher().Dispatch("SHOW TABLES").response;
-    EXPECT_EQ(tables.rfind("ERR", 0), std::string::npos) << tables;
 
     // **Core 0's own `SHOW META` carries the scheduler block**, which is
     // the borrow this file nearly lost. `set_scheduler_view` installs it
@@ -1110,6 +1094,48 @@ private:
 };
 
 }  // namespace
+
+// **A peer answers with the volume's own image**, asked of the peer on its
+// own reactor: a dispatcher is its core's reactor's alone
+// (`sched/scheduler.hpp`'s threading block), so once `Start()` has put the
+// peer on a thread of its own the test thread reaches it only over a
+// session, which the placer puts on core 1.
+TEST_F(ExpeditorTest, APeerAnswersWithTheVolumesOwnImage) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    ScriptedPlacer placer;
+    placer.target = 1;
+    config.transaction_placer = &placer;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    KwpClient client(config.port);
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    ASSERT_TRUE(client.Hello());
+
+    // **The superblock image.** A peer used to hold a default-constructed
+    // copy, and zero is a legal value of most of its fields - so it reported
+    // `wal_topology=per-core` on a single-stream volume and `version=0`
+    // beside it (AL-S9). Read through `sys.meta`, the answering core's
+    // `SHOW META` field by field; `core` first, because every other field
+    // is the peer's only if the session is on it.
+    ASSERT_EQ(client.Core(), 1) << "the placer did not put the session on the peer";
+    EXPECT_EQ(client.Meta("wal_topology"), "single");
+    const std::string version = client.Meta("version");
+    EXPECT_FALSE(version.empty() || version == "0") << version;
+    const std::string create_time = client.Meta("create_time");
+    EXPECT_FALSE(create_time.empty() || create_time == "0") << create_time;
+    // The recovery marker: core 0 ran the instance's pass, not this core.
+    EXPECT_EQ(client.Meta("recovery_by"), "core0");
+
+    // **The catalog cache.** The peer reads the same catalog through its own
+    // cache, and a peer that came up with an empty one answers `NotFound`
+    // for relations that exist.
+    const std::string tables = client.Run("SHOW TABLES");
+    EXPECT_EQ(tables.rfind("ERR", 0), std::string::npos) << tables;
+    EXPECT_TRUE(running.Stop().ok());
+}
 
 // **Above one core the instance places every transaction with its balancer**
 // (BL-S3), unless a test seam is set; at one core nothing is placed.
