@@ -1320,6 +1320,21 @@ Verified on `worktree-bx-unique-index` at BX-S2
 - **`sys.relation_stats` counts `ON CONFLICT DO UPDATE`'s updated rows as
   inserts**: the statement finishes as an `INSERT` and hands the one count,
   inserted plus updated, to the insert column. Observability only.
+- **An `UPDATE` that walks its relation has a slow mode at `6775aec1` not
+  seen at `v3.4.3`** (`bench/v3.4.3/results-cg-close-v3.4.3-8-g6775aec1.md`):
+  `UPDATE u SET v = x WHERE name = '...'` over 10,000 rows sat above every
+  `v3.4.3` rep in 14 of 20 runs at `6775aec1` (835-875 us against
+  751-799), and among them in 6. The walk's loop and `apply` are unchanged,
+  so no per-row work was added; the source is unexplained - it varies per
+  server on one binary, and the driver's phase order (B's walk runs
+  about 3,000 statements later than A's) is a confound the close could not
+  exclude: its check, B's binary through A's phases, was cut.
+- **Each `ON CONFLICT DO UPDATE` arm row re-runs `UpdateParsed`'s statement
+  setup** (resolution, `InitTableAccess`, `CompileAssignments`): with the
+  arbiter's lock and lookup, about 5 us a row over a point `UPDATE` at
+  `6775aec1`'s close; the setup's own share is not measured. Compiling the
+  assignments once per statement, `EXCLUDED` as a per-row slot, is the cut
+  if it matters.
 - **An `ON CONFLICT DO UPDATE` wait after its first write is a refusal**
   (CG-S0 reading 1): a later row meeting an open writer of its key, its
   unique value or its parent is refused `TxnConflict` once an earlier row

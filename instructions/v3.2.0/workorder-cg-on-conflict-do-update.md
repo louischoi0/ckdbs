@@ -532,3 +532,23 @@ review's fixes).
 - **Texts**: `parser-v2.md` I20, `manual/sql/sql.md`, `known-gaps.md`.
 - **Overhead not measured**; measured at CG's close (CG-S3), which is next
   with CG-S2 folded into S1.
+
+### CG-S3 measured 2026-10-23 (W7) - CG's close is the operator's
+
+**W7** (`raft-marks-2026-10-23.md` §7): *"go cg-s3"*. Measured on
+`cg-on-conflict-do-update` at `6775aec1` (`v3.4.3-8-g6775aec1`),
+`bench/v3.4.3/results-cg-close-v3.4.3-8-g6775aec1.md`, which carries the
+numbers. A is the commit CG opened from, `f44846ef` (`v3.4.3`), not §5's
+`722006ec`, 30-odd commits of other milestones earlier; the results file
+says why.
+
+- **The touched paths**: every rep range overlaps, over two rotations.
+- **The walking `UPDATE`** (10,000 rows): a slow mode on B, unexplained,
+  with a phase-order confound the close could not exclude
+  (`known-gaps.md`).
+- **The arms**: each about 5 us over its plain counterpart; the
+  unique-column upsert replaces a walk with a probe.
+- **Texts**: this row and `known-gaps.md`; the rest were written at S1.
+  The close's driver is `tools/cg_close_benchmark.py`.
+
+**Every CG stage is built and measured; closing CG is the operator's word.**
