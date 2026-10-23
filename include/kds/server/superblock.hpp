@@ -209,7 +209,14 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // auto-registered shapes no operator opted, and a version-32 binary would
 // auto-register into this one. Row bytes, offsets and record kinds do not
 // change. Refused with no migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 33;
+//
+// 34 (CI-S1, `instructions/v3.2.0/workorder-ci-online-index-build.md`
+// CI-Q5 (a)): `sys.indexes` rows may carry `kIndexFlagBuilding`, an online
+// build whose entries are not yet complete, which a version-33 binary would
+// read as an ordinary index and choose for a read - a probe missing rows.
+// The row's size does not change. Refused with no migration, the standing
+// order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 34;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

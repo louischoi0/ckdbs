@@ -282,25 +282,30 @@ TEST(SuperBlockTest, DecodeRefusesAnyVersionButThisBuilds) {
     }
 }
 
+// A volume of `older` does not mount, and the refusal names both versions -
+// the one found and the one this build reads - so an operator can tell
+// which binary wrote it.
+void ExpectRefusedNamingBoth(std::uint32_t older) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &older, sizeof(older));
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_FALSE(decoded.ok()) << "version " << older << " mounted";
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+    for (const std::uint32_t named : {older, kSuperBlockVersion}) {
+        EXPECT_NE(decoded.status().message().find(std::to_string(named)), std::string::npos)
+            << decoded.status().message();
+    }
+}
+
 // BK-R4: a version-21 volume's Cabin bound entries carry their flags in the
 // bits that are the id's since BK, so it does not mount
 // (`instructions/v3.0.0/workorder-bk-keystone-48.md` §1.7). Spelt rather
 // than left to the loop above, whose `- 1` stops meaning 21 at the next bump.
 TEST(SuperBlockTest, AVersion21VolumeDoesNotMount) {
-    constexpr std::uint32_t kBeforeTheWiderId = 21;
-    SuperBlock sb = SuperBlock::CreateFresh(1000);
-    PageBuf buf{};
-    sb.Encode(AsSpan(buf));
-    std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &kBeforeTheWiderId,
-                sizeof(kBeforeTheWiderId));
-
-    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
-    ASSERT_FALSE(decoded.ok());
-    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
-    for (const std::uint32_t named : {kBeforeTheWiderId, kSuperBlockVersion}) {
-        EXPECT_NE(decoded.status().message().find(std::to_string(named)), std::string::npos)
-            << decoded.status().message();
-    }
+    ExpectRefusedNamingBoth(21);
 }
 
 // A version-30 volume's catalog chains may have grown onto the reserved
@@ -310,20 +315,7 @@ TEST(SuperBlockTest, AVersion21VolumeDoesNotMount) {
 // volume. Named rather than left to the loop above, whose `- 1` would stop
 // meaning 30 at the next bump.
 TEST(SuperBlockTest, AVersion30VolumeDoesNotMount) {
-    constexpr std::uint32_t kBeforeTheGeneralSupply = 30;
-    SuperBlock sb = SuperBlock::CreateFresh(1000);
-    PageBuf buf{};
-    sb.Encode(AsSpan(buf));
-    std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &kBeforeTheGeneralSupply,
-                sizeof(kBeforeTheGeneralSupply));
-
-    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
-    ASSERT_FALSE(decoded.ok());
-    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
-    for (const std::uint32_t named : {kBeforeTheGeneralSupply, kSuperBlockVersion}) {
-        EXPECT_NE(decoded.status().message().find(std::to_string(named)), std::string::npos)
-            << decoded.status().message();
-    }
+    ExpectRefusedNamingBoth(30);
 }
 
 // A version-31 binary writes a dropped column's cell with its bit clear, so
@@ -331,20 +323,7 @@ TEST(SuperBlockTest, AVersion30VolumeDoesNotMount) {
 // reuse, and its `sys.columns` rows are four bytes short. Named rather than
 // left to the loop above, whose `- 1` would stop meaning 31 at the next bump.
 TEST(SuperBlockTest, AVersion31VolumeDoesNotMount) {
-    constexpr std::uint32_t kBeforeTheCleanFlag = 31;
-    SuperBlock sb = SuperBlock::CreateFresh(1000);
-    PageBuf buf{};
-    sb.Encode(AsSpan(buf));
-    std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &kBeforeTheCleanFlag,
-                sizeof(kBeforeTheCleanFlag));
-
-    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
-    ASSERT_FALSE(decoded.ok());
-    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
-    for (const std::uint32_t named : {kBeforeTheCleanFlag, kSuperBlockVersion}) {
-        EXPECT_NE(decoded.status().message().find(std::to_string(named)), std::string::npos)
-            << decoded.status().message();
-    }
+    ExpectRefusedNamingBoth(31);
 }
 
 // CF-S1b: a version-32 volume's `sys.patterns` rows are auto-registered
@@ -353,21 +332,15 @@ TEST(SuperBlockTest, AVersion31VolumeDoesNotMount) {
 // this build's volume. Named rather than left to the loop above, whose `- 1`
 // would stop meaning 32 at the next bump.
 TEST(SuperBlockTest, AVersion32VolumeDoesNotMount) {
-    constexpr std::uint32_t kBeforeTheOptIn = 32;
-    SuperBlock sb = SuperBlock::CreateFresh(1000);
-    PageBuf buf{};
-    sb.Encode(AsSpan(buf));
-    std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &kBeforeTheOptIn,
-                sizeof(kBeforeTheOptIn));
+    ExpectRefusedNamingBoth(32);
+}
 
-    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
-    ASSERT_FALSE(decoded.ok());
-    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
-    for (const std::uint32_t named : {kBeforeTheOptIn, kSuperBlockVersion}) {
-        EXPECT_NE(decoded.status().message().find(std::to_string(named)), std::string::npos)
-            << decoded.status().message();
-    }
-    EXPECT_EQ(kSuperBlockVersion, 33u);
+// CI-S1: a version-33 binary reads `kIndexFlagBuilding` as an ordinary
+// index and would choose a half-built one for a read, so a version-33
+// volume does not mount here and this build's volume does not mount there.
+TEST(SuperBlockTest, AVersion33VolumeDoesNotMount) {
+    ExpectRefusedNamingBoth(33);
+    EXPECT_EQ(kSuperBlockVersion, 34u);
 }
 
 // AY-Q6 (C): a version-18 volume's log may hold an ASSERT_SNAPSHOT with no

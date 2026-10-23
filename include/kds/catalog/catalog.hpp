@@ -1254,7 +1254,8 @@ public:
     // a duplicate or out-of-range column position, an index on the tuple
     // key (the clustered tree already is one), a heap-clustered relation
     // (spec IX3 - there is no tuple key descent to resolve an entry through), and
-    // a flag bit other than `kIndexFlagUnique` (spec IX11).
+    // a flag bit outside `kIndexFlagsDefined` (spec IX11), and unique
+    // together with building (CI-Q6 (a)).
     //
     // It does **not** build the tree or check the key columns' types: the
     // root page is allocated and formatted by the caller, which is what
@@ -1309,7 +1310,8 @@ public:
     // on `(a, b)` can serve an equality on `a` and cannot serve one on `b`,
     // so answering yes for `b` would stop the compiler calling that step a
     // filter scan while leaving it exactly as slow - a lie to the access
-    // statistics, which is the one consumer that exists today.
+    // statistics, which is the one consumer that exists today. A building
+    // index (CI) is not answered.
     //
     // NotFound is the ordinary answer and is never cached
     // (catalog_cache.hpp's absence rule).

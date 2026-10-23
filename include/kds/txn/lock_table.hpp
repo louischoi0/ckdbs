@@ -465,11 +465,22 @@ public:
     std::size_t size() const noexcept { return held_.size(); }
     bool empty() const noexcept { return held_.empty(); }
     // Whether `key` is held at any mode - the question a caller asks before
-    // an ask whose *first* grant means something (AT-S5e: a writer's first
-    // relation intention, and a DDL's own-transaction test).
+    // an ask whose *first* grant means something (a DDL's own-transaction
+    // test, a row's first borrow). A writer's first relation intention asks
+    // `HoldsCovering` instead (CI §3.5 A3).
     bool Holds(const LockKey& key) const noexcept {
         for (const Held& h : held_) {
             if (h.key == key) return true;
+        }
+        return false;
+    }
+    // Whether `key` is held at a mode that covers `mode` - a writer's first
+    // relation `IX` is its first *covering* hold, so an `IS` taken earlier
+    // by a foreign-key parent read does not make it a later one (CI-S1,
+    // `instructions/v3.2.0/workorder-ci-online-index-build.md` §3.5 A3).
+    bool HoldsCovering(const LockKey& key, LockMode mode) const noexcept {
+        for (const Held& h : held_) {
+            if (h.key == key && Covers(h.mode, mode)) return true;
         }
         return false;
     }

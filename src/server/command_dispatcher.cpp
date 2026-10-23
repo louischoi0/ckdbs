@@ -10987,10 +10987,13 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // for reading - which a DDL's `X` refuses all the same (AY-Q4), and
     // another writer's `IX` does not.
     const txn::LockKey relation = txn::LockKey::Relation(unit.rel_oid);
-    const bool first_intention = !holdings.Holds(relation);
     const txn::LockMode intention = mode == txn::LockMode::kShared
                                         ? txn::LockMode::kIntentionShared
                                         : txn::LockMode::kIntentionExclusive;
+    // The first hold that covers this intention, not the first of any mode:
+    // a transaction whose foreign-key parent read took this relation's `IS`
+    // and which now writes it is a first writer all the same (CI §3.5 A3).
+    const bool first_intention = !holdings.HoldsCovering(relation, intention);
     txn::LockWake wake;
     auto rel = locks_->TryAcquire(id, relation, intention, holdings, blocker,
                                   may_park_ ? &wake : nullptr);
@@ -11010,8 +11013,12 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // ASSERTION` could take the relation `X`, publish and release in
     // between, leaving this statement to write rows into a relation whose
     // new index or assertion it never resolved. From this grant on no DDL
-    // can take the relation until this transaction decides, so the word
-    // unmoved here is the proof; moved, the statement has written nothing
+    // can take the relation `X` until this transaction decides, so the word
+    // unmoved here is the proof. An online `CREATE INDEX` (CI-S2) holds only
+    // `IS` and announces its index while writers run, so it snapshots the
+    // relation's `IX` holders after its own word move (CI-R2): either this
+    // grant is in that snapshot, or this load sees the moved word. Moved,
+    // the statement has written nothing
     // under the relation yet and runs again through a boundary that
     // re-resolves - parked on a slot already flipped, so the re-run is
     // immediate. Conservative: any catalog write anywhere moves the word.

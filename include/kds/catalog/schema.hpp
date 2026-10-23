@@ -79,8 +79,8 @@ Status CheckColumnNamesUnique(const Schema& schema);
 // so does every fixed-width type but a wide `char`.
 inline constexpr std::uint32_t kColumnSlotWidth = 16;
 
-// `CREATE TABLE ... SPARE n`'s ceiling (BW-R1): 64 keeps every slot of a
-// relation of up to 64 declared columns inside `index_mask`.
+// `CREATE TABLE ... SPARE n`'s ceiling (BW-R1): 64, chosen to keep every
+// slot inside a 64-bit column mask that CI deleted; nothing depends on it.
 inline constexpr std::uint16_t kMaxSpareSlots = 64;
 
 // True for the integer types a Keystone id can be declared as. Float,
@@ -509,6 +509,10 @@ struct TableAccess {
         std::uint8_t ncovered = 0;
         // `kIndexFlagUnique`: every write that moves a key is checked (BX).
         bool unique = false;
+        // `kIndexFlagBuilding`: an online build has not finished (CI). Every
+        // write maintains it; no path that chooses an index for a read may
+        // choose it, because its entries are not yet complete.
+        bool building = false;
         // For a unique index's refusal, which names it.
         std::string name;
         // In **declared index order**, which is the order the key encoding
@@ -534,23 +538,13 @@ struct TableAccess {
     // is exactly what a recorded `pattern_id` must not do.
     std::vector<IndexRef> indexes;
 
-    // A bit per **leading** key column, on the argument `cabin_columns`
-    // makes for a positive fact: the compiler asks "could an equality on this
-    // column enter an index" once per equality per compile, and the answer
-    // is one bit.
-    //
-    // Leading only, and the distinction is the one `Catalog::
-    // FindIndexOnColumn` makes for the same reason: an index on `(a, b)`
-    // cannot serve an equality on `b`, so a bit for `b` would stop the
-    // compiler calling that step a filter scan while leaving it exactly as
-    // slow. Bit 0 is always clear - `CreateIndex` refuses the tuple key,
-    // whose index is the clustered tree. A relation wider than 64 columns
-    // folds its high columns into no bit, which loses the acceleration and
-    // never a row.
-    std::uint64_t index_mask = 0;
-
     // The index an equality on `col_pos` may enter, or nullptr. The
     // lowest-oid one when several qualify, matching §9's tie-break.
+    //
+    // **Leading** key column only, the distinction `Catalog::
+    // FindIndexOnColumn` makes for the same reason: an index on `(a, b)`
+    // cannot serve an equality on `b`. A building index (CI) is not one an
+    // equality may enter.
     //
     // Linear over a list whose length is the number of indexes a relation
     // declares - single digits - so nothing is built for it. A caller that
@@ -558,7 +552,7 @@ struct TableAccess {
     // `indexes` itself; this answers the one-column question.
     const IndexRef* IndexOn(std::uint16_t col_pos) const noexcept {
         for (const IndexRef& ix : indexes) {
-            if (ix.nkeys > 0 && ix.leading_column() == col_pos) return &ix;
+            if (!ix.building && ix.nkeys > 0 && ix.leading_column() == col_pos) return &ix;
         }
         return nullptr;
     }

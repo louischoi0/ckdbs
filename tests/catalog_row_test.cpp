@@ -289,6 +289,24 @@ TEST(SysIndexRowTest, RoundTripsEveryFieldIncludingBothColumnArrays) {
     EXPECT_EQ(out.value().covered_cols, in.covered_cols);
 }
 
+// CI-S1: the building bit round-trips, and a bit nothing defines is
+// refused at the one door the rows come through.
+TEST(SysIndexRowTest, TheBuildingFlagRoundTripsAndAnUndefinedBitIsCorruption) {
+    SysIndexRow in = SampleIndexRow();
+    in.flags = kIndexFlagBuilding;
+    auto out = SysIndexRow::Decode(in.Encode());
+    ASSERT_TRUE(out.ok()) << out.status().message();
+    EXPECT_EQ(out.value().flags, kIndexFlagBuilding);
+
+    for (const std::uint8_t refused_flags :
+         {std::uint8_t{0x4}, std::uint8_t(kIndexFlagUnique | kIndexFlagBuilding)}) {
+        in.flags = refused_flags;
+        auto refused = SysIndexRow::Decode(in.Encode());
+        ASSERT_FALSE(refused.ok()) << int(refused_flags);
+        EXPECT_EQ(refused.status().code(), StatusCode::kCorruption);
+    }
+}
+
 TEST(SysIndexRowTest, TheColumnArraysArePackedAtTheirDeclaredStride) {
     // Written element by element rather than as one block copy, so the
     // on-disk stride is sizeof(uint16_t) and not whatever the compiler chose

@@ -217,6 +217,18 @@ StatusOr<SysIndexRow> SysIndexRow::Decode(std::span<const std::byte> bytes) {
                                   " key and " + std::to_string(row.ncovered) +
                                   " covered columns, outside the declared limits");
     }
+    // A bit nothing defines would be read as an index nobody declared: a
+    // building index chosen by a reader, or worse.
+    if ((row.flags & ~kIndexFlagsDefined) != 0) {
+        return Status::Corruption("sys.indexes row carries flags " + std::to_string(row.flags) +
+                                  ", which name a bit nothing defines");
+    }
+    // CI-Q6 (a): no unique index is built online, so no reader of a unique
+    // index - the join cost model, the ON CONFLICT arbiter, the writers'
+    // unique check - has to ask whether it is complete.
+    if ((row.flags & kIndexFlagUnique) != 0 && (row.flags & kIndexFlagBuilding) != 0) {
+        return Status::Corruption("sys.indexes row is both unique and building");
+    }
     return row;
 }
 
