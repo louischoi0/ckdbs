@@ -110,6 +110,20 @@ block (`max_idle_block_ms`, §7). Every consumer above is level-triggered -
 its parked task re-asks its predicate after every block - so a lost kick
 costs latency and never the wake.
 
+**A registry entry leaves with its reactor, and no kicker may be inside
+it then.** `~Scheduler` takes its own entry out (`WakeRegistry::Unregister`),
+unsynchronised, and its sleeping flag and `Waker` die right after; a
+kicker on the teardown thread is ordered by that thread, and the one
+kicker with a thread of its own - the WAL writer, which kicks parked
+committers' cores after each sync and lives until `~WalManager` - is
+stopped first. Every teardown joins the reactors, then calls
+`WalManager::StopKicking`, which clears the writer's registry under the
+latch each kick round holds (`WalWriter::SetWakeRegistry`, `wal.md` §3) and
+so returns only once no kick is in flight and none can start, and only
+then destroys a runtime: `Expeditor`'s tail and `StopStartedCores` (which
+a failed `Start` and the destructor of an instance never run both reach),
+and the two-core rig.
+
 ## 6. Timers
 
 - Per-core **hierarchical timing wheel** keyed on the injected monotonic clock. No `std::chrono` reads in engine logic (`docs/rules/rules.md` §4); the clock is a scheduler-provided interface.

@@ -46,6 +46,11 @@
 // a kick - `Post()`, whose inbox a pump task on each reactor drains into its
 // own scheduler. A `Submit()` from the cell's thread after `Start()` races
 // the reactor's own queue (TSan, BS-S1).
+//
+// **Teardown is `Expeditor`'s order**: join both reactors, then quiesce the
+// WAL writer's kick (`WalManager::StopKicking`), and only then destroy a
+// runtime - the writer thread kicks through `sim_` and lives until `wal_`
+// is reset, after both cores.
 
 #include <array>
 #include <atomic>
@@ -198,6 +203,12 @@ public:
 
     ~TwoCoreRig() {
         Stop();
+        // **The writer stops kicking before either runtime goes**, whether
+        // or not the rig was started (`Build` sets the registry): it kicks
+        // from its own thread through `sim_` into the real table, and a
+        // kick in flight would read the entry `~Scheduler` unregisters or
+        // wake a `Waker` being destroyed (`WalManager::StopKicking`).
+        if (wal_ != nullptr) wal_->StopKicking();
         // The runtimes first, each as its own core (`~CoreRuntime` takes the
         // guard), and the peer before core 0 for the reason `Expeditor`
         // drops peers ahead of its own stack: a peer borrows the stream,

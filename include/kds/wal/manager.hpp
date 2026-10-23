@@ -320,6 +320,18 @@ public:
         assert(owned_writer_ != nullptr && "SetWakeRegistry before StartWriter");
         if (owned_writer_ != nullptr) owned_writer_->SetWakeRegistry(wake);
     }
+    // **The writer's quiesce, before teardown destroys a reactor**: clears
+    // the registry and returns once no kick through it is in flight
+    // (`WalWriter::SetWakeRegistry`), so the writer thread - which outlives
+    // every reactor, joined only in `~WalManager` - never reads a registry
+    // entry a destroying `Scheduler` is unregistering, nor wakes its
+    // `Waker`. The owner of the owning manager calls it after the reactors
+    // are joined and before the first runtime goes (`Expeditor`'s tail and
+    // `StopStartedCores`, the two-core rig). Idempotent, and a no-op on a
+    // manager with no writer of its own.
+    void StopKicking() noexcept {
+        if (owned_writer_ != nullptr) owned_writer_->SetWakeRegistry(nullptr);
+    }
     bool KicksDurableWaiters() const noexcept {
         return writer_ != nullptr && writer_->kicks_durable_waiters();
     }

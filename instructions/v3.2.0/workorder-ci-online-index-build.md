@@ -7,7 +7,7 @@ Written 2026-10-23 on `worktree-online-index-build` from `2f7ce828`
 - **W0**: *"index build online, write milestone"*.
 
 **Written 2026-10-23. Opened 2026-10-23** on the operator's standing
-go-ahead (go-ahead-achieving-milestone, `raft-marks-2026-10-23.md` §6),
+go-ahead (go-ahead-achieving-milestone, `raft-marks-2026-10-23.md` §7),
 from `dd437a76` (`main` with this order on it). **CI-Q0..Q10 were each
 adopted as CLA proposed, on the operator's standing go-ahead of 2026-10-23
 (go-ahead-achieving-milestone)**: Q0 (a), Q1 (b), Q2 (a), Q3 (b), Q4 (a),

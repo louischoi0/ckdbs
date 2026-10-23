@@ -7,6 +7,7 @@
 #include <sched.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -1531,6 +1532,12 @@ Expeditor::~Expeditor() {
     // after `RunUntilStopped` and after a failed `Start`, both of which have
     // already unwound it.
     if (running_ != nullptr) StopStartedCores();
+    // **The WAL writer has stopped kicking before `wakers_` goes** (`wal_` is
+    // declared ahead of it, so the table dies first and the writer, joined
+    // only in `~WalManager`, would hold it dangling): only `Start` sets the
+    // registry, after `running_`, and every exit from there - the tail,
+    // `StopStartedCores` - cleared it before a reactor was destroyed.
+    assert(wal_ == nullptr || !wal_->KicksDurableWaiters());
     // **The data-sync thread, before `wal_` goes** (BI-S4): the failure
     // handler `Start` installed dereferences it, and members die in reverse
     // order - `wal_` before `store_`, whose syncer would otherwise still be
@@ -2180,6 +2187,12 @@ void Expeditor::StopStartedCores() {
         }
         running_->workers.clear();
     }
+    // **The WAL writer stops kicking before the first runtime goes**, as at
+    // the tail: it kicks from its own thread and outlives every reactor, so
+    // a kick in flight would read the entry `~Scheduler` unregisters or wake
+    // a `Waker` being destroyed (`WalManager::StopKicking`). Whether or not
+    // a worker was spawned - `Start` sets the registry before the first.
+    if (wal_ != nullptr) wal_->StopKicking();
     // **No final sync and no shutdown checkpoint here**, unlike the tail:
     // an instance that never entered core 0's reactor ran no client
     // statement, and the only thing a peer wrote is the completion
@@ -2214,6 +2227,15 @@ Status Expeditor::RunUntilStopped() {
     for (auto& worker : workers) {
         if (worker.joinable()) worker.join();
     }
+    // **The WAL writer stops kicking here, before anything below can destroy
+    // a reactor** - `cores_.clear()` and `running_.reset()`, each a
+    // `~Scheduler` that unregisters from `wakers_` - and it returns only
+    // once no kick through the table is in flight (`WalManager::
+    // StopKicking`). A peer's `Sync()` below waits on the writer's condition
+    // variable and so can return while the writer still kicks; this is what
+    // makes that harmless. Nothing past the join needs a kick: no reactor
+    // turns, and every wait below blocks this thread or syncs inline.
+    wal_->StopKicking();
     // After the join, so nothing is still appending to the stream being
     // synced.
     // A peer's listener teardown rolls back open
