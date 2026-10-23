@@ -44,3 +44,12 @@
 | **Mark** | **CG-S1 built** on `cg-on-conflict-do-update` (the CG order's §7, "CG-S1 built 2026-10-23"): `ON CONFLICT DO UPDATE` on the tuple key and a unique index's column, `DO NOTHING` on the latter too |
 | **Does not settle** | CG-S3, the close and its measurement; a push; a tag, a version |
 | **Recorded at** | this file; the CG order's §7; the CG row in `instructions/v3.2.0/index.md` |
+
+## 6. CI opened on the standing go-ahead, CI-Q0..Q10 adopted as proposed
+
+| | |
+|---|---|
+| **Word** | W3 (CI's session): `/go-ahead-achieving-milestone`, the standing word *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"* |
+| **Mark** | **CI opened** from `dd437a76`. CI-Q0 (a), Q1 (b), Q2 (a), Q3 (b), Q4 (a), Q5 (a), Q6 (a), Q7 (a), Q8 (b) if S0 shows it sound, else (a), Q9 (a), Q10 (a) if S0 finds no shared state, else (b): **each adopted as CLA proposed, on the operator's standing go-ahead of 2026-10-23 (go-ahead-achieving-milestone)**, none of them the operator's own per-item mark. Under the same word, CI-Q0 (a)'s mark after S0 is CLA's verdict. CI-Q3 (b) carries a `[quiet-wrong]` ordering clause (the holder snapshot after H3's word move); its premise, the unit's `Entry::holders` (`src/txn/lock_table.cpp:186-196`), was re-read before adoption and holds. CI-S3 drops out, since CI-Q6 is (a) |
+| **Does not settle** | a push, a merge to `main`, a tag, a version |
+| **Recorded at** | this file; the CI order's header and §7; the CI row in `instructions/v3.2.0/index.md` |
