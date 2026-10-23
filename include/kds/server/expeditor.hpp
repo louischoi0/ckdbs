@@ -74,6 +74,14 @@
 // before the reply, and no dirty page reaches the device ahead of its
 // records. Open() runs mount recovery over the stream before any core
 // serves (`mount_recovery.hpp`).
+//
+// **The teardown order the WAL writer imposes.** Above one core the writer
+// thread kicks parked committers' cores through `wakers_` and outlives
+// every reactor - it joins in `~WalManager`. So both teardown paths - the
+// tail of RunUntilStopped() and `StopStartedCores` (a failed or never-run
+// Start) - join the reactors, then call `wal_->StopKicking()`, which
+// returns once no kick is in flight, and only then destroy a `CoreRuntime`
+// or core 0's scheduler (`sched.md` §5). The destructor asserts it was done.
 
 namespace kds::server {
 

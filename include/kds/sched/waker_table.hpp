@@ -58,9 +58,12 @@ public:
     // cores its waiters were on (a heap-use-after-free BS-S7's history cells
     // found). **So a registry outlives every scheduler registered in it.**
     // Unsynchronised, like `Register`: sound only while no other thread
-    // kicks `core` beside it. `waker` is the one it registered: an entry
-    // another reactor of the core registered since is not this one's to
-    // drop. A registry that keeps no entries has none to drop.
+    // kicks `core` beside it - so a background kicker is stopped first: the
+    // WAL writer's teardown quiesce, `WalManager::StopKicking`, returns once
+    // no kick of its is in flight (`sched.md` §5). `waker` is the one it
+    // registered: an entry another reactor of the core registered since is
+    // not this one's to drop. A registry that keeps no entries has none to
+    // drop.
     virtual void Unregister(std::uint32_t /*core*/, const Waker* /*waker*/) noexcept {}
 
     // **Callable from any thread.** The caller has already published what

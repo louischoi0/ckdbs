@@ -3,9 +3,11 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 #include "kds/wal/memory_log_device.hpp"
@@ -17,6 +19,8 @@
 //   - the watermark only ever moves forwards, and never past what was asked
 //   - a waiter is woken, and a failed sync tells it rather than hanging it
 //   - stopping is clean, from any state
+//   - clearing the wake registry waits out a kick in flight - the step
+//     teardown runs before it destroys a reactor
 //
 // The device is a MemoryLogDevice, so "sync" costs nothing - which is the
 // point: these are the *protocol*'s tests, not the device's. The latency
@@ -201,6 +205,87 @@ TEST(WalWriter, AFailedSyncIsReportedAndLeavesTheWatermark) {
     EXPECT_GE(writer.failures(), 1u);
     EXPECT_EQ(writer.syncs(), 0u);
     EXPECT_FALSE(writer.last_failure().ok());
+}
+
+// ---- The kick and teardown ------------------------------------------------
+//
+// The writer kicks parked committers' cores from its own thread and outlives
+// every reactor, so teardown clears its registry before it destroys one
+// (`WalManager::StopKicking`). This cell holds the writer *inside* a kick,
+// with a registry whose `Kick` parks until the cell releases it.
+
+using namespace std::chrono_literals;
+
+class HeldKickRegistry final : public sched::WakeRegistry {
+public:
+    void Register(std::uint32_t, const std::atomic<bool>*, const sched::Waker*) override {}
+    void Kick(std::uint32_t) const noexcept override {
+        std::unique_lock<std::mutex> lock(mu_);
+        ++entered_;
+        cv_.notify_all();
+        cv_.wait(lock, [&] { return released_; });
+        ++kicks_;
+    }
+    std::uint64_t kicks() const noexcept override {
+        std::lock_guard<std::mutex> lock(mu_);
+        return kicks_;
+    }
+    // True once `n` kicks have entered, false at the timeout.
+    bool WaitEntered(std::uint64_t n, std::chrono::milliseconds timeout) const {
+        std::unique_lock<std::mutex> lock(mu_);
+        return cv_.wait_for(lock, timeout, [&] { return entered_ >= n; });
+    }
+    void Release() {
+        std::lock_guard<std::mutex> lock(mu_);
+        released_ = true;
+        cv_.notify_all();
+    }
+
+private:
+    mutable std::mutex mu_;
+    mutable std::condition_variable cv_;
+    mutable std::uint64_t entered_ = 0;
+    mutable std::uint64_t kicks_ = 0;
+    bool released_ = false;
+};
+
+// Declared after the writer, so it runs first: a writer parked in a kick
+// is let go before `~WalWriter` joins it, whatever assertion failed.
+struct ReleaseAtExit {
+    HeldKickRegistry& wakers;
+    ~ReleaseAtExit() { wakers.Release(); }
+};
+
+// **The teardown guarantee.** With the writer parked inside a kick, the
+// clear does not return; it returns once the kick has finished. Red if
+// `SetWakeRegistry` stores without taking the round's latch.
+TEST(WalWriter, ClearingTheRegistryWaitsOutAKickInFlight) {
+    HeldKickRegistry wakers;
+    auto device = MakeDevice();
+    WalWriter writer(device.get(), DeviceSync(device.get()));
+    ReleaseAtExit release_at_exit{wakers};
+    writer.SetWakeRegistry(&wakers);
+    writer.EnterDurableWait(1);
+    writer.RequestSync(64);
+    ASSERT_TRUE(wakers.WaitEntered(1, 5000ms)) << "the writer never kicked the waiting core";
+
+    std::atomic<bool> cleared{false};
+    std::thread teardown([&] {
+        writer.SetWakeRegistry(nullptr);
+        cleared.store(true, std::memory_order_release);
+    });
+    // The clear cannot return while the kick holds the round: this reads
+    // false however long the wait, and the sleep only gives a wrong build
+    // the time to show itself.
+    std::this_thread::sleep_for(200ms);
+    EXPECT_FALSE(cleared.load(std::memory_order_acquire))
+        << "the clear returned while a kick through the registry was still running";
+    wakers.Release();
+    teardown.join();
+    EXPECT_TRUE(cleared.load(std::memory_order_acquire));
+    EXPECT_FALSE(writer.kicks_durable_waiters());
+    EXPECT_EQ(wakers.kicks(), 1u);
+    writer.LeaveDurableWait(1);
 }
 
 }  // namespace

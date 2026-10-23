@@ -535,7 +535,7 @@ review's fixes).
 
 ### CG-S3 measured 2026-10-23 (W7) - CG's close is the operator's
 
-**W7** (`raft-marks-2026-10-23.md` §6): *"go cg-s3"*. Measured on
+**W7** (`raft-marks-2026-10-23.md` §7): *"go cg-s3"*. Measured on
 `cg-on-conflict-do-update` at `6775aec1` (`v3.4.3-8-g6775aec1`),
 `bench/v3.4.3/results-cg-close-v3.4.3-8-g6775aec1.md`, which carries the
 numbers. A is the commit CG opened from, `f44846ef` (`v3.4.3`), not §5's

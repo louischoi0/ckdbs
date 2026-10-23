@@ -31,9 +31,9 @@
 
 | | |
 |---|---|
-| **Word** | W0 (CI's session): *"index build online, write milestone"*; W1: *"push it, documents only, no verify"* |
-| **Mark** | **CI written**, not opened: `workorder-ci-online-index-build.md`, on `worktree-online-index-build` from `2f7ce828`. `CREATE INDEX` announces its row flagged building, drains writers on the older list, backfills with writers running and logging, then clears the flag; the relation is held `IS`, not `X`, across the walk. CI-Q0..Q10 carry CLA's proposals, none marked. **Pushed to `main` with `--no-verify`** on W1, documents only; no suite was run for it and no build input changed. The opening `critics-developer` review was still running at the push |
-| **Does not settle** | CI's opening; every CI-Q; the opening review's findings |
+| **Word** | W0 (CI's session): *"index build online, write milestone"*; W1: *"push it, documents only, no verify"*; W2, after the review was applied: the same words |
+| **Mark** | **CI written**, not opened: `workorder-ci-online-index-build.md`, on `worktree-online-index-build` from `2f7ce828`. `CREATE INDEX` announces its row flagged building, drains writers on the older list, backfills with writers running and logging, then clears the flag; the relation is held `IS`, not `X`, across the walk. CI-Q0..Q10 carry CLA's proposals, none marked. **Pushed to `main` with `--no-verify`** on W1, documents only; no suite was run for it and no build input changed. The opening `critics-developer` review was still running at that push; its findings, checked by independent refuters, were applied and **pushed the same way on W2** (CI-R6 added, CI-Q3 proposed (b)) |
+| **Does not settle** | CI's opening; every CI-Q |
 | **Recorded at** | this file; the CI order; the CI row in `instructions/v3.2.0/index.md` |
 
 ## 5. CG-S1 started and built
@@ -45,7 +45,16 @@
 | **Does not settle** | CG-S3, the close and its measurement; a push; a tag, a version |
 | **Recorded at** | this file; the CG order's §7; the CG row in `instructions/v3.2.0/index.md` |
 
-## 6. CG-S1 pushed; CG-S3 measured
+## 6. Version 3.4.4 tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.4"* |
+| **Mark** | **`v3.4.4`**, an annotated tag on `main` at `5840ee56`, then the head of `origin/main`. Its message states CG-S1 built, the WAL writer's kick fixed (`5840ee56`), CI written, and the gaps that bound it. The full Debug suite ran 4320/4320 on the tree of the tagged commit, so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.4` |
+| **Does not settle** | a later version |
+| **Recorded at** | this file; the tag message; CLAUDE.md's Version Management |
+
+## 7. CG-S1 pushed; CG-S3 measured
 
 | | |
 |---|---|
