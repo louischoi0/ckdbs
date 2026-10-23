@@ -76,6 +76,18 @@ def rows_of(conn, sql):
     return fl, [[None if v is None else bytes(v).hex() for v in r] for r in rows], tag
 
 
+def wal_bytes(data):
+    d = data + ".wal"
+    tot, n = 0, 0
+    for r, _, fs in os.walk(d):
+        for f in fs:
+            try:
+                tot += os.path.getsize(os.path.join(r, f)); n += 1
+            except OSError:
+                pass
+    return tot, n
+
+
 def scramble(i, n):
     return (i * 2654435761) % 1000003
 
@@ -108,13 +120,13 @@ def copy_volume(src, dst):
         shutil.copytree(src + ".wal", dst + ".wal")
 
 
-def session(port, stmt_of, rec, stop_at, t_zero, tag_prefix, errs):
+def session(port, stmt_of, rec, stop_at, t_zero, tag_prefix, errs, stop_evt):
     conn = kwp.Connection("127.0.0.1", port, timeout=300)
     rng = random.Random(12345)
     try:
         while True:
             now = time.perf_counter()
-            if now >= stop_at:
+            if now >= stop_at or stop_evt.is_set():
                 break
             tag, _, _, err = conn.query(stmt_of(rng))
             t1 = time.perf_counter()
@@ -138,26 +150,36 @@ def run_arm(a, arm, tmpl, run):
     time.sleep(1.0)
     cpu0 = sum(int(open(f"/proc/{proc.pid}/task/{t}/schedstat").read().split()[0])
                for t in os.listdir(f"/proc/{proc.pid}/task"))
+    stop_evt = threading.Event()
     w_rec, r_rec, w_err, r_err, b_res = [], [], [], [], {}
     meta_before = rows_of(ctl, "SHOW META") if arm == "B" else None
+    wal_w0 = wal_bytes(data)
     t_zero = time.perf_counter()
     stop_at = t_zero + a.window
 
     def build():
         time.sleep(a.build_at)
         c = kwp.Connection("127.0.0.1", a.port + 1, timeout=600)
+        wb0 = wal_bytes(data)
+        meta0 = rows_of(c, "SHOW META")
         t0 = time.perf_counter()
         got = c.execute("CREATE INDEX ix ON t (c1)")[2]
         t1 = time.perf_counter()
-        b_res.update(start=t0 - t_zero, end=t1 - t_zero, elapsed=t1 - t0, tag=got)
+        wb1 = wal_bytes(data)
+        meta1 = rows_of(c, "SHOW META")
+        b_res.update(start=t0 - t_zero, end=t1 - t_zero, elapsed=t1 - t0, tag=got,
+                     wal_before=wb0, wal_after=wb1, meta_b=meta0, meta_a=meta1)
         c.close()
+        if a.tail > 0:
+            time.sleep(a.tail)
+            stop_evt.set()
 
     ths = [threading.Thread(target=session, args=(
                a.port + 1, lambda g: f"UPDATE t SET c2 = c2 + 1 WHERE id = {g.randint(1, n)}",
-               w_rec, stop_at, t_zero, "UPDATED 1", w_err)),
+               w_rec, stop_at, t_zero, "UPDATED 1", w_err, stop_evt)),
            threading.Thread(target=session, args=(
                a.port + 1, lambda g: f"SELECT * FROM t WHERE id = {g.randint(1, n)}",
-               r_rec, stop_at, t_zero, "SELECT", r_err))]
+               r_rec, stop_at, t_zero, "SELECT", r_err, stop_evt))]
     if arm == "B":
         ths.append(threading.Thread(target=build))
     for t in ths:
@@ -166,7 +188,8 @@ def run_arm(a, arm, tmpl, run):
         t.join()
     cpu1 = sum(int(open(f"/proc/{proc.pid}/task/{t}/schedstat").read().split()[0])
                for t in os.listdir(f"/proc/{proc.pid}/task"))
-    out = {"arm": arm, "run": run, "writer": w_rec, "reader": r_rec,
+    wal_w1 = wal_bytes(data)
+    out = {"arm": arm, "wal_window": [wal_w0, wal_w1], "run": run, "writer": w_rec, "reader": r_rec,
            "writer_errs": w_err[:5], "reader_errs": r_err[:5], "build": b_res,
            "server_cpu_s": (cpu1 - cpu0) / 1e9}
     if arm == "B":
@@ -208,6 +231,9 @@ def main():
     ap.add_argument("--run-offset", type=int, default=0)
     ap.add_argument("--keep-template", action="store_true")
     ap.add_argument("--arms", default="AB")
+    ap.add_argument("--load-only", action="store_true")
+    ap.add_argument("--tail", type=float, default=0.0,
+                    help="arm B: stop the window this many s after the build returns (window is then a cap)")
     a = ap.parse_args()
     a.bin = os.path.abspath(a.bin)
     os.makedirs(a.workdir, exist_ok=True)
@@ -225,6 +251,9 @@ def main():
     results = {"rows": a.rows, "load_s": load_s, "template_bytes": os.path.getsize(tmpl),
                "cores": a.cores, "durability": a.durability, "window": a.window,
                "build_at": a.build_at, "runs": []}
+    if a.load_only:
+        prog("load-only: done")
+        return
     if a.template_only:
         # one trial build, no load
         r = run_arm(a, "B", tmpl, 0)

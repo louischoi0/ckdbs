@@ -1,7 +1,7 @@
 # Secondary indexes: multi-column and covering
 
 Status: **built** — the storage layer, the catalog, the grammar, the write
-hook, its WAL records, the backfill, the compiler, the read path, the
+hook, its WAL records, the backfill and its online build (§10.3, CI), the compiler, the read path, the
 `indexes` switch and **unique indexes** (§10.2, BX). A statement on an
 indexed column **descends the index**,
 and `tests/index_contract_test.cpp` is the suite that keeps it honest.
@@ -502,8 +502,9 @@ Two rules that keep every existing proof standing:
   is undecided, and the two spellings rank apart until it is decided
   (`TupleKeyRangeOf`, `src/exec/step_compiler.cpp`).
 
-The compiler reads the relation's cached `index_mask` (§12), which names an
-index's **leading** key column only — exactly the right question.
+The compiler asks the relation's cached index list (`TableAccess::IndexOn`,
+§12), which answers for an index's **leading** key column only — exactly the
+right question — and never for a building index (§10.3).
 
 The two kinds **execute identically** — both walk the entries between two
 encoded bounds — so the split is a statistics distinction, the same one
@@ -542,8 +543,13 @@ of a unique key, and `UNIQUE` before anything but `INDEX` is refused
 
 `CREATE INDEX`, `DROP INDEX` and `REINDEX INDEX` (§12, BY) run under a
 transaction;
-`docs/spec/ddl-transactional.md` owns what each guarantees. Both take the
-relation's `X` (AT-S5e), and **on a relation other relations reference
+`docs/spec/ddl-transactional.md` owns what each guarantees. **A plain
+`CREATE INDEX` in autocommit builds online since CI** (§10.3): it holds the
+relation `IS`, and writers keep writing through its backfill. A unique
+index, a `REINDEX`, a `CREATE INDEX` inside `BEGIN`, and any `CREATE INDEX`
+on a dispatcher that cannot park or has no lock table or clock build under
+the relation's `X` (AT-S5e) as before, as `DROP INDEX` does - and **on a
+relation other relations reference
 that `X` waits for every open child writer's `IS` on it** as well as for
 the relation's own writers (D9(a), AY-Q4; `foreign-keys.md` §2c): a child
 writer holds the parent relation's `IS` and a parent row's `S` until it
@@ -616,9 +622,11 @@ storing it twice (IX4b).
 Building before publishing is what makes an index **complete or absent, never
 partial** — a failed build leaves an unreachable tree and no catalog row,
 where the reverse order leaves a declared index missing rows, which is a wrong
-answer with a right answer's shape. Nothing can observe the half-built tree:
-it is reachable only through the catalog row, which is published after the
-build, and the build holds the relation `X` (AT-S5e). A split during the build moves
+answer with a right answer's shape. Under the `X` build nothing can observe
+the half-built tree: it is reachable only through the catalog row, which is
+published after the build, and the build holds the relation `X` (AT-S5e).
+The online build publishes its row first and keeps it from every read by
+its flag instead (§10.3). A split during the `X` build moves
 the root, so the root written into the catalog row is the one the build ended
 at, not the page first allocated.
 
@@ -686,6 +694,69 @@ keys, and the tree it filled is freed as every failed build's is (§12).
 Recovery checks nothing (BX-R9): it replays committed state, which was
 unique when it committed. The read path does not move (§8, BX-R10).
 
+## 10.3 The online build
+
+> **IX15 — a plain autocommit `CREATE INDEX` holds the relation `IS`, not
+> `X`, across its backfill** (CI,
+> `instructions/v3.2.0/workorder-ci-online-index-build.md`). Writers of the
+> relation keep writing and maintain the index themselves; no read chooses
+> it until its backfill has finished.
+
+It rests on §2: every maintenance action is an append, a byte-identical
+entry is reported rather than stored twice (IX4b), and a surplus is dropped
+at read time (IX1), so a writer's appends and the backfill's compose in any
+order. The acts, in one autocommit transaction at READ COMMITTED:
+
+1. **H2.** The root is formatted and logged as a full page image, before
+   any writer can log an entry into it.
+2. **H3, in the head.** The anchor slot, then the `sys.indexes` row flagged
+   `kIndexFlagBuilding`; the schema word moves. From here every write
+   maintains the index (the unfiltered list of `ScanAll`'s null view), and
+   every path that chooses an index for a read skips it: the literal and
+   correlated probes, `IndexOn`, `FindIndexOnColumn`. A unique index is
+   never building (`CheckIndexDef`, `Decode`), so the join cost model, the
+   ON CONFLICT arbiter and the writers' unique check never meet one. The
+   tree is owed to the reclaimer from H3, once, whatever ends the build.
+3. **D, the drain.** After the word move, the relation's `IX` holders are
+   read under the unit's partition latch (`LockTable::IntentionWriters`)
+   and waited out: each may have resolved the index list without the
+   index. A writer granted `IX` after the read meets the moved word at its
+   first covering intention and runs again (`BorrowChain`; an earlier `IS`
+   does not make a later `IX` a repeat). The lock family's net bounds the
+   wait, restarted each time the set shrinks. A writer open past it refuses
+   the build `TxnConflict`, as it refuses an `X` build. The drain draws a
+   wait-for edge to the writer it waits on, so that writer's transaction
+   asking the relation `X` is the deadlock victim.
+4. **B, the backfill** - §10.1's walk with four differences:
+   - Every append logs as a writer's does (`INDEX_INSERT`, `BTREE_SPLIT`),
+     under the holds that placed it, from the root the slot names.
+   - The walk ends at the first leaf past the highest key the relation held
+     after the drain. A leaf is never freed, retyped or moved left, and keeps
+     its id and lower half, so resuming at a leaf id under `IS` misses no row
+     that existed then.
+   - A row's head writer that was in flight at the copy is never trusted as
+     resolved later (`ResolvedForEveryReader` answers true for a rolled-back
+     id below the floor, a statement about a version still on a page). Where
+     the walk below it fails and the writer has decided, the row is read
+     again by its tuple key, a bounded number of times.
+   - The build's view is re-minted per slice, so its core's snapshot bound
+     moves. Its in-flight id still holds the floor, and with it every core's
+     undo recycling, for the build's length.
+5. **R.** The flag is cleared in place and logged (`HEAP_OVERWRITE`), and the
+   word moves. Between R and the decide the index is complete and
+   maintained, so a read that chooses it is right.
+
+**An append refused by a root another core grew is retried from the slot**
+(CI-Q11 (b)): with an anchor given, `AppendIndexEntry` reads the index's slot
+after a `TxnConflict`, which wrote nothing, and asks again from the root it
+names. This covers every writer, not only the online build's.
+
+**A rolled-back create's tree is re-gated** (CI §3.5 A5). A peer whose
+statement began before the rollback can still log into the tree until the
+statement ends. So once the statement epochs pass, the reclaimer takes the
+gate again at the log's end, on its next step, and frees nothing until the
+redo start passes that too.
+
 ## 11. What is refused, each with an exact byte
 
 Refused, each naming the reason:
@@ -723,8 +794,10 @@ Refused, each naming the reason:
 ## 12. Catalog, format and WAL
 
 > **IX12 — `SysIndexRow` is 116 bytes.** It arrived with superblock 12; the
-> superblock now refuses every version but the current one (33), so every mountable volume
-> carries it. Its `flags` byte carries `kIndexFlagUnique` since 27 (IX11).
+> superblock now refuses every version but the current one (34), so every mountable volume
+> carries it. Its `flags` byte carries `kIndexFlagUnique` since 27 (IX11) and
+> `kIndexFlagBuilding` since 34 (§10.3); `Decode` refuses any other bit, and
+> the two together.
 
 The row (`include/kds/catalog/rows.hpp`):
 
@@ -808,13 +881,15 @@ unlinked, a frame a writeback holds, or every page of a tree the walk
 refuses is left allocated, and a failure after the tree is logged leaves
 the tree too.
 
-`TableAccess` carries `index_mask` plus a `std::vector<IndexRef>`, built at
+`TableAccess` carries a `std::vector<IndexRef>`, built at
 `InitTableAccess()` beside `cabin_columns` / `cabin_ids` — the compiler needs
-the bit, the executor needs the root page and the widths. The
+the leading columns, the executor the root page and the widths, and both the
+`building` bit. The
 list is **sorted by `index_oid`**, so §9's lowest-oid tie-break is a property
-of the list rather than of how rows happened to land on the catalog page. The
-mask names **leading** key columns only, for the reason `FindIndexOnColumn`
-does.
+of the list rather than of how rows happened to land on the catalog page.
+`IndexOn` answers for **leading** key columns only, for the reason
+`FindIndexOnColumn` does. The per-column bit mask that stood beside the list
+had no reader and is deleted (CI-S1).
 
 > **IX12a — a root move changes `TableAccess` without DDL, so
 > `Catalog::AdoptRoot` updates this core's cached entry **in place** rather

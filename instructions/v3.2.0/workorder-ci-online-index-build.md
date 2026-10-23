@@ -803,3 +803,43 @@ them:
 
 **Suite**: 4333/4333 at the S2 commit's build inputs. Overhead not
 measured; measured at the milestone's close.
+
+**CI-S4 - the close, 2026-10-23.**
+- **Measured** at `v3.4.3-13-g614864c4` against the opening
+  `v3.4.3-10-gdd437a76`, interleaved A/B in `build-release` on a quiet
+  host (`bench/v3.4.3/results-ci-close-v3.4.3-13-g614864c4.md`, about
+  35 minutes, nothing cut).
+- **Arm B, the premise, 10M rows.**
+  - The writer's longest stall during a `CREATE INDEX` fell from 27.2,
+    28.1 and 26.8 s - each the whole build - to 0.74, 1.29 and 0.70 s.
+  - No relation `IX` wait is recorded.
+  - The writer runs at 155-193 statements/s during the build (about 0
+    before), with p50 3.62 ms against 0.99 ms idle and p99 17.7 ms.
+  - The build takes 33.3, 44.1 and 32.9 s against 27.2, 28.1 and 26.8 s,
+    and writes 5.04x the log: 1,370 MB against 272 MB, 137 B per row.
+    That is §3.5 A12's estimate.
+- **Arm A, CI-R5, no build running.** On an indexed relation, INSERT,
+  UPDATE of an unindexed column and UPDATE of the indexed column at 200,
+  10K and 200K rows show deltas of -7.1 % to +1.2 % against a run-to-run
+  spread of 2-22 %, with the log per statement identical. No cost is
+  outside the spread.
+- **Stated, not a bar missed: the build pays for the writers' freedom.**
+  It runs about 20-60 % longer and logs about 5x. Writers run at a quarter
+  of their idle rate during it, where before they did not run at all.
+- **Not explained:**
+  - A recurring band of 0.5-0.7 s writer statements during the build. It
+    lines up in count with the build's 21 segment rolls, and a roll syncs
+    its segment under the stream latch (`wal.md` §6, BQ). That
+    attribution is not measured.
+  - One build of 44.1 s.
+- **Texts:** `index.md` (status, §9, §10, §10.1, the new §10.3 IX15, IX12,
+  §12's list), `ddl-transactional.md` §5e, `sched.md` §3, `leaf_cursor.hpp`'s
+  header, `manual/sql/sql.md`, `manual/server/server.md` and
+  `backup-restore.md` (superblock 34), `known-gaps.md` (the online index
+  build, CI), and CLAUDE.md's secondary-index, transactional-DDL,
+  heap-relation and core-placement rows.
+
+**Every stage landed** on `worktree-online-index-build`: S0 `d40e92f9`, S1
+`c31c00dd`, S2 `614864c4`, and S4 the close. CI-S3 is not built (CI-Q6
+(a)). The close is not merged to `main`, not pushed and not tagged, which
+is the operator's word.

@@ -488,10 +488,20 @@ DROP INDEX ix_owner;
 - Maintenance is append-only; DELETE does not touch an index; there is no
   index-only scan (no visibility witness exists outside the tuple), so
   `COVERING` buys avoided base descents, nothing more.
-- `CREATE INDEX` and `DROP INDEX` **wait** for every open write to the
-  relation and for a statement already reading it, and hold new writes
-  until they commit or roll back - on any core. Like `DROP TABLE`, a wait
-  that reaches the lock family's 1 s bound is refused `TXN_CONFLICT`.
+- **A plain `CREATE INDEX` outside a transaction builds online** (CI,
+  v3.4): writes to the relation keep running while it fills, on any core,
+  and each maintains the new index itself. It first waits for the writes
+  that were already open when it started - a transaction left open past
+  the lock family's 1 s bound refuses it `TXN_CONFLICT`, and nothing is
+  left behind; run it again. No query uses the index until it is
+  complete. A write that asks for the relation exclusively while the build
+  waits on it - `ALTER TABLE`, `DROP TABLE`, a `CREATE INDEX` inside the
+  same transaction - is refused as a deadlock.
+- `CREATE UNIQUE INDEX`, `REINDEX INDEX`, `DROP INDEX`, and a `CREATE INDEX`
+  inside `BEGIN` **wait** for every open write to the relation and for a
+  statement already reading it, and hold new writes until they commit or
+  roll back - on any core. Like `DROP TABLE`, a wait that reaches the lock
+  family's 1 s bound is refused `TXN_CONFLICT`.
 - `SHOW INDEXES` lists them.
 - **A dropped index's pages are returned** (BY, v3.2.0). They are not freed
   at the `DROP INDEX` itself: once the drop is committed, checkpoints have
