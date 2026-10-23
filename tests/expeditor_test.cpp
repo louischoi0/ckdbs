@@ -1603,20 +1603,20 @@ TEST_F(ExpeditorTest, OnConflictDoUpdateRunsEveryConsumerOfItsArm) {
     // insert arm takes ON INSERT's initial set.
     refused("INSERT INTO ord VALUES (10, 1, 'FINALIZED', 5) ON CONFLICT (id) DO UPDATE "
             "SET status = EXCLUDED.status",
-            "");
+            "'NEW' => 'FINALIZED' is not a declared edge");
     ok("INSERT INTO ord VALUES (11, 1, 'CHECKED', 6) ON CONFLICT (id) DO UPDATE "
        "SET status = EXCLUDED.status");
     refused("INSERT INTO ord VALUES (13, 2, 'CHECKED', 1) ON CONFLICT (id) DO UPDATE "
             "SET status = EXCLUDED.status",
-            "");
+            "may not be inserted in state 'CHECKED'");
     // The fk on the column the arm assigns.
     refused("INSERT INTO ord VALUES (12, 99, 'NEW', 7) ON CONFLICT (id) DO UPDATE "
             "SET acct = EXCLUDED.acct",
-            "");
+            "references row id=99 of 'acct', which does not exist");
     // The assertion: acct 1 holds two rows, so moving a third in is refused.
     refused("INSERT INTO ord VALUES (12, 1, 'NEW', 7) ON CONFLICT (id) DO UPDATE "
             "SET acct = EXCLUDED.acct",
-            "");
+            "COUNT(*) would exceed bound 2");
     EXPECT_NE(c.Run("SELECT acct FROM ord WHERE id = 12").find('2'), std::string::npos);
     // The unique check on the key the arm moves.
     refused("INSERT INTO acct VALUES (2, 'alice', 0) ON CONFLICT (id) DO UPDATE "
@@ -1715,6 +1715,37 @@ TEST_F(ExpeditorTest, OnConflictDoUpdateWaitsForAWriterOfItsKeyOnAnotherCore) {
     EXPECT_NE(upserted.find(" rows=1"), std::string::npos) << upserted;
     const std::string bal = holder.Run("SELECT bal FROM acct WHERE id = 1");
     EXPECT_NE(bal.find("111"), std::string::npos) << bal;
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+// **The update arm holds its row, not the relation**: its UPDATE has no
+// WHERE, and a WHERE-less UPDATE declares the whole id space - which, held
+// to the arm's decide, would make every other writer of the relation wait
+// on one open upsert. Another session writes another key while it is open.
+//
+// **The mutation**: let `UpdateParsed` declare `DeclaredWriteBorrow` for an
+// arm and the other session's UPDATE waits out the fault net, refused.
+TEST_F(ExpeditorTest, OnConflictDoUpdateHoldsItsRowNotTheRelation) {
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    KwpClient a(config.port);
+    KwpClient b(config.port);
+    ASSERT_TRUE(a.Hello());
+    ASSERT_TRUE(b.Hello());
+    ASSERT_EQ(a.Run("CREATE TABLE acct (id int64, bal int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(a.Run("INSERT INTO acct VALUES (1, 100), (2, 200)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(a.Txn(wire::ClientFrameType::kTxnBegin), "TXN_OK");
+    const std::string upsert =
+        a.Run("INSERT INTO acct VALUES (1, 5) ON CONFLICT (id) DO UPDATE SET bal = EXCLUDED.bal");
+    ASSERT_EQ(upsert.rfind("INSERTED", 0), 0u) << upsert;
+    const std::string other = b.Run("UPDATE acct SET bal = 0 WHERE id = 2");
+    EXPECT_EQ(other.rfind("UPDATED 1", 0), 0u) << other;
+    ASSERT_EQ(a.Txn(wire::ClientFrameType::kTxnCommit), "TXN_OK");
     EXPECT_TRUE(running.Stop().ok());
 }
 

@@ -238,13 +238,13 @@ TEST_F(DmlFormsTest, OnConflictDoUpdateRefusesWhatItDoesNotDo) {
                   "SET name = 'q' WHERE tier = 1",
                   "DO UPDATE ... WHERE is not supported");
     ExpectRefused("INSERT INTO w VALUES (3, 'x', 'EU', 1) ON CONFLICT (id) DO UPDATE SET id = 9",
-                  "");
+                  "tuple key column 'id' cannot be updated at byte 70");
     ExpectRefused("INSERT INTO w VALUES (3, 'x', 'EU', 1) ON CONFLICT (id) DO UPDATE "
                   "SET name = other.name",
                   "names neither EXCLUDED nor the target");
     ExpectRefused("INSERT INTO w VALUES (3, 'x', 'EU', 1) ON CONFLICT (id) DO UPDATE "
                   "SET name = EXCLUDED.nosuch",
-                  "");
+                  "EXCLUDED has no column 'nosuch' (byte 77)");
     // This transaction's own delete is not revived.
     Ok("BEGIN");
     Ok("DELETE FROM w WHERE id = 4");
@@ -271,6 +271,17 @@ TEST_F(DmlFormsTest, OnConflictArbitratesOnTheOneColumnOfAUniqueIndex) {
     ExpectReply("INSERT INTO w (name, region) VALUES ('bob', 'XX') ON CONFLICT (name) DO NOTHING",
                 "INSERTED oid=4005 rows=0");
     ExpectRows("SELECT region FROM w WHERE name = 'bob'", {"region", "US"});
+    // `EXCLUDED` of the tuple key is the key the row named, on this arbiter
+    // too.
+    Ok("INSERT INTO w VALUES (60, 'carol', 'EU', 1) ON CONFLICT (name) DO UPDATE "
+       "SET tier = EXCLUDED.id");
+    ExpectRows("SELECT id, tier FROM w WHERE name = 'carol'", {"id,tier", "3,60"});
+    // A row an earlier row of the statement moved onto a later row's value is
+    // one row met twice (CG-Q4 (a)), which the rows' own values do not show.
+    ExpectRefused("INSERT INTO w (name, region) VALUES ('frank', 'fred'), ('fred', 'X') "
+                  "ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.region",
+                  "tuple key 6 was written by an earlier row of this statement");
+    ExpectRows("SELECT name FROM w WHERE id = 6", {"name", "frank"});
     // A non-unique or multi-column index is no arbiter.
     Ok("CREATE INDEX w_region ON w (region)");
     ExpectRefused("INSERT INTO w (name, region) VALUES ('q', 'EU') ON CONFLICT (region) DO NOTHING",

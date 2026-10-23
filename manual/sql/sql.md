@@ -975,7 +975,9 @@ UPDATE w SET tier = 5 WHERE id = 1 RETURNING id, tier;
   is admitted, so a skipped row takes no foreign-key check, no assertion
   reservation and no id. The reply counts the rows placed (`rows=0` when
   every row was skipped). **`ON CONFLICT (<col>)` may also name the one
-  column of a unique index**: a row whose value is held is skipped.
+  column of a unique index**: a row whose value is held is skipped, decided
+  row by row - its foreign keys are still checked first, so a skipped row
+  can wait for a parent.
 - **`ON CONFLICT [(<col>)] DO UPDATE SET ...`** updates the row holding the
   conflicting tuple key, or unique value, instead of skipping, and inserts
   a row with no conflict. The SET list is an `UPDATE`'s: a bare column is

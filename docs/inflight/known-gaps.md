@@ -1310,6 +1310,16 @@ Verified on `worktree-bx-unique-index` at BX-S2
   holder's `X`, and a holder moved off the key between the check and the
   `X` takes the insert arm. No cell puts a writer in that gap - it lies
   inside one statement - so the re-read is covered by reading only.
+- **Under READ COMMITTED inside an explicit transaction, `ON CONFLICT DO
+  UPDATE`'s arm reads at the statement's view**, not one minted after the
+  holder's `X`: a holder committed by another session after the statement
+  began is refused `TxnConflict` (retryable) where PostgreSQL would update
+  it. A refusal, never a wrong row; in autocommit each arm row takes a new
+  view. Re-minting a view inside a statement is a decision the order did
+  not take. Verified on `cg-on-conflict-do-update` at CG-S1's review.
+- **`sys.relation_stats` counts `ON CONFLICT DO UPDATE`'s updated rows as
+  inserts**: the statement finishes as an `INSERT` and hands the one count,
+  inserted plus updated, to the insert column. Observability only.
 - **An `ON CONFLICT DO UPDATE` wait after its first write is a refusal**
   (CG-S0 reading 1): a later row meeting an open writer of its key, its
   unique value or its parent is refused `TxnConflict` once an earlier row

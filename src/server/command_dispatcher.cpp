@@ -6028,7 +6028,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     if (written.on_conflict_do_nothing || written.on_conflict_do_update) {
         auto arbiter = ResolveConflictArbiter(*ta, written);
         if (!arbiter.ok()) return {ErrorReply(arbiter.status()), false, 0, arbiter.status()};
-        if (written.on_conflict_do_update || arbiter.value().index != nullptr) {
+        if (written.on_conflict_do_update || arbiter.value() != nullptr) {
             return InsertOnConflict(oid.value(), ta, written, shaped, arbiter.value(), scope);
         }
     }
@@ -6205,7 +6205,11 @@ StatusOr<bool> CommandDispatcher::TupleKeyPlaced(const catalog::TableAccess& ta,
     return true;
 }
 
-StatusOr<CommandDispatcher::ConflictArbiter> CommandDispatcher::ResolveConflictArbiter(
+namespace {
+constexpr const catalog::TableAccess::IndexRef* kTupleKeyArbiter = nullptr;
+}  // namespace
+
+StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConflictArbiter(
     const catalog::TableAccess& ta, const parser::InsertStmt& written) {
     if (!written.conflict_target.has_value()) {
         if (written.on_conflict_do_update && ta.schema.heap()) {
@@ -6214,15 +6218,15 @@ StatusOr<CommandDispatcher::ConflictArbiter> CommandDispatcher::ResolveConflictA
                 " on a heap names its arbiter: a heap's tuple key is hidden (BZ-R4), so write "
                 "ON CONFLICT (<the column of a unique index>)");
         }
-        return ConflictArbiter{};
+        return kTupleKeyArbiter;
     }
     const parser::IndexColumnRef& target = *written.conflict_target;
     auto col = ta.schema.FindColumn(target.name, target.byte_offset);
     if (!col.ok()) return col.status();
-    if (col.value() == &ta.schema.columns.front()) return ConflictArbiter{};
+    if (col.value() == &ta.schema.columns.front()) return kTupleKeyArbiter;
     const auto at = static_cast<std::uint16_t>(col.value() - ta.schema.columns.data());
     for (const catalog::TableAccess::IndexRef& ix : ta.indexes) {
-        if (ix.unique && ix.nkeys == 1 && ix.key_cols[0] == at) return ConflictArbiter{&ix};
+        if (ix.unique && ix.nkeys == 1 && ix.key_cols[0] == at) return &ix;
     }
     return Status::NotImplemented(
         "ON CONFLICT (" + target.name + ") at byte " + std::to_string(target.byte_offset) +
@@ -6295,7 +6299,8 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
                                                     const catalog::TableAccess*& ta,
                                                     const parser::InsertStmt& written,
                                                     const parser::InsertStmt& shaped,
-                                                    ConflictArbiter arbiter, WriteScope& scope) {
+                                                    const catalog::TableAccess::IndexRef* arbiter,
+                                                    WriteScope& scope) {
     const bool update = written.on_conflict_do_update;
     const bool bulk = shaped.rows.size() > 1;
     // A row's refusal carries its ordinal in a bulk statement, as the
@@ -6333,7 +6338,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
         RowPlan& p = plans[k];
         p.body = InsertBodyOf(*ta, r);
         bool repeated = false;
-        if (arbiter.index == nullptr) {
+        if (arbiter == nullptr) {
             if (r.size() == ta->schema.columns.size()) {
                 p.key = KeystoneIdOf(r.front());
                 p.byte = r.front().byte_offset;
@@ -6341,7 +6346,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
             }
         } else {
             // A key that does not encode is the insert arm's refusal.
-            auto key = exec::EncodeUniqueKey(*ta, *arbiter.index, p.body, 1, {});
+            auto key = exec::EncodeUniqueKey(*ta, *arbiter, p.body, 1, {});
             if (key.ok() && key.value().has_value()) {
                 p.unique = std::move(*key.value());
                 p.byte = p.unique->values.empty() ? 0 : p.unique->values.front().byte_offset;
@@ -6352,7 +6357,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
             return refuse(Status::CardinalityViolation(
                               "ON CONFLICT DO UPDATE would update one row twice: an earlier row "
                               "of this statement names the same " +
-                              std::string(arbiter.index == nullptr ? "tuple key" : "unique key") +
+                              std::string(arbiter == nullptr ? "tuple key" : "unique key") +
                               " (byte " + std::to_string(p.byte) + ")"),
                           k);
         }
@@ -6376,12 +6381,17 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
     std::uint64_t updated = 0;
     InsertRowResult first{};
     InsertRowResult last{};
+    // Every row this statement wrote, by tuple key: a holder among them is
+    // one row met twice (CG-Q4 (a)) - an issued key a later row names, or a
+    // row an earlier arm moved onto a later row's unique value - which the
+    // up-front check, reading only what the rows name, cannot see.
+    std::set<std::uint64_t> written_keys;
     for (std::size_t k = 0; k < plans.size(); ++k) {
         const RowPlan& p = plans[k];
         // The arbiter's unit for this row, given back when its write ends.
         UniqueKeyHolds holds(locks_, scope.txn);
         std::optional<std::uint64_t> holder;
-        if (arbiter.index == nullptr && p.key.has_value()) {
+        if (arbiter == nullptr && p.key.has_value()) {
             // `DO UPDATE` on the tuple key (`DO NOTHING` on it takes
             // `TupleKeyPlaced`'s path): the key's row unit, waited for -
             // a row under another writer's undecided write is updated
@@ -6413,12 +6423,14 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
                         k);
                 }
                 holder = *p.key;
-            } else {
-                // Absent: the insert arm's own descent answers anything else.
-                storage::ClearStructuralRefusal();
+            } else if (present.status().code() != StatusCode::kNotFound) {
+                // Not an answer about the key: a failed fetch or a stale
+                // descent, which BA-S14's re-run takes up where nothing is
+                // written yet - never a reason to insert over a held key.
+                return refuse(present.status(), k);
             }
         } else if (p.unique.has_value()) {
-            auto verdict = CheckUniqueKeyLatest(scope, *ta, *arbiter.index, *p.unique, 0, holds);
+            auto verdict = CheckUniqueKeyLatest(scope, *ta, *arbiter, *p.unique, 0, holds);
             if (!verdict.ok()) return refuse(verdict.status(), k);
             if (verdict.value().kind == exec::UniqueVerdict::Kind::kHeld) {
                 if (!update) continue;  // DO NOTHING: the key is held
@@ -6431,7 +6443,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
                 // unit keeps every writer from moving a row onto it, but not
                 // `h`'s writer from moving it off between the check and the
                 // `X`. Off, the key is free under the unit this row holds.
-                auto still = RowHoldsUniqueKey(*ta, *arbiter.index, h, *p.unique);
+                auto still = RowHoldsUniqueKey(*ta, *arbiter, h, *p.unique);
                 if (!still.ok()) return refuse(still.status(), k);
                 if (still.value()) holder = h;
             }
@@ -6439,9 +6451,19 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
 
         if (holder.has_value()) {
             // ---- The update arm: UPDATE's per-row path on the holder ----
+            if (written_keys.count(*holder) != 0) {
+                return refuse(Status::CardinalityViolation(
+                                  "ON CONFLICT DO UPDATE would update one row twice: tuple key " +
+                                  std::to_string(*holder) +
+                                  " was written by an earlier row of this statement (byte " +
+                                  std::to_string(p.byte) + ")"),
+                              k);
+            }
+            // `EXCLUDED` of the tuple key is the key the row named, on either
+            // arbiter, and NULL where the row omits it.
             std::vector<parser::AstValue> proposed;
             proposed.reserve(ta->schema.columns.size());
-            if (p.key.has_value()) {
+            if (shaped.rows[k].size() == ta->schema.columns.size()) {
                 proposed.push_back(shaped.rows[k].front());
             } else {
                 proposed.emplace_back().type = parser::ValueType::kNull;
@@ -6464,7 +6486,6 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
                                                StatementContextFor(*scope.session), subqueries,
                                                *holder);
             if (!out.status.ok()) return refuse(out.status, k);
-            if (out.response.rfind("ERR", 0) == 0) return out;
             // **A live row this statement's view does not see** - inserted by a
             // transaction that committed after the view was taken - is passed
             // over by `apply`, writing nothing. Neither arm may then claim the
@@ -6479,6 +6500,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
                                   std::to_string(p.byte) + ")"),
                               k);
             }
+            written_keys.insert(*holder);
             ++updated;
             continue;
         }
@@ -6489,6 +6511,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
                 InsertOneRow(oid, ta, shaped.rows[k], scope, fk_held, row)) {
             return refuse(*err, k);
         }
+        written_keys.insert(row.id);
         if (inserted == 0) first = row;
         last = row;
         ++inserted;
@@ -6513,7 +6536,7 @@ StatusOr<bool> CommandDispatcher::RowHoldsUniqueKey(const catalog::TableAccess& 
                                                     const exec::UniqueKey& key) {
     auto at = btree::BtreeLookup(page_store_, ta.desc_page_id, tuple_key);
     if (!at.ok()) {
-        storage::ClearStructuralRefusal();
+        if (at.status().code() != StatusCode::kNotFound) return at.status();
         return false;
     }
     auto tuple = heap::PageView(at.value().leaf.bytes()).ReadTuple(at.value().slot);
@@ -9723,7 +9746,12 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // demoted statement would write rows and then park, which the
     // re-runnability rule turns into a refusal; the coarse wait parks
     // having written nothing.
-    const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
+    //
+    // An arm's empty WHERE would declare the whole id space, held to the
+    // decide; its one row is under the caller's row `X` (CG), so it declares
+    // nothing.
+    const std::optional<txn::LockKey> declared =
+        arm_target.has_value() ? std::nullopt : DeclaredWriteBorrow(ta, stmt.where);
     if (declared.has_value()) {
         // `kFutile`: a declared unit is refused by whoever conflicts with
         // it, and the table reports who and not what they hold - so a

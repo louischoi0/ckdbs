@@ -1601,13 +1601,10 @@ private:
     StatusOr<bool> TupleKeyPlaced(const catalog::TableAccess& ta, std::uint64_t id,
                                   std::uint32_t byte, WriteScope& scope);
 
-    // **What an `ON CONFLICT` reacts to** (CG-Q1 (b)): the tuple key
-    // (`index` null), or the one column of a unique index.
-    struct ConflictArbiter {
-        const catalog::TableAccess::IndexRef* index = nullptr;
-    };
-    StatusOr<ConflictArbiter> ResolveConflictArbiter(const catalog::TableAccess& ta,
-                                                     const parser::InsertStmt& written);
+    // **What an `ON CONFLICT` reacts to** (CG-Q1 (b)): the unique index whose
+    // one column `(col)` names, or null for the tuple key.
+    StatusOr<const catalog::TableAccess::IndexRef*> ResolveConflictArbiter(
+        const catalog::TableAccess& ta, const parser::InsertStmt& written);
 
     // **`ON CONFLICT DO UPDATE`, and `DO NOTHING` on a unique index** (CG):
     // each row's verdict - insert, update the holder, skip, or refuse - taken
@@ -1617,7 +1614,8 @@ private:
     // its row `X`, with `EXCLUDED.<col>` bound to the proposed row.
     DispatchOutcome InsertOnConflict(catalog::Oid oid, const catalog::TableAccess*& ta,
                                      const parser::InsertStmt& written,
-                                     const parser::InsertStmt& shaped, ConflictArbiter arbiter,
+                                     const parser::InsertStmt& shaped,
+                                     const catalog::TableAccess::IndexRef* arbiter,
                                      WriteScope& scope);
     // Whether `tuple_key`'s slot holds a live row whose `ix` key is `key` -
     // the update arm's re-read under the row's `X` (CG-S0 reading 1b).
