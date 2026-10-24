@@ -50,6 +50,6 @@
 | | |
 |---|---|
 | **Word** | *"close A1"* |
-| **Mark** | **A1 closed** - a relation-`X` build gives its core back between slices: `CREATE INDEX` and `REINDEX INDEX` since stage 2a (`37a60b10`), `CREATE ASSERTION` and `CREATE TRANSITION` since stage 2b (`cca7415b`). A1 kept no work order in the tree; its close was measured at `18ffb998` (`bench/v3.4.0/results-a1-close-v3.4.0-11-gf53e62db.md`): the yield costs nothing measurable on the statement path and bounds a same-core read behind a build to one slice, but a WAL segment roll during a large build still stalls that read, which stays in `docs/inflight/known-gaps.md` and `docs/spec/sched.md` §3 |
+| **Mark** | **A1 closed** - a relation-`X` build gives its core back between slices: `CREATE INDEX` and `REINDEX INDEX` since stage 2a (`37a60b10`), `CREATE ASSERTION` and `CREATE TRANSITION` since stage 2b (`cca7415b`). A1 kept no work order in the tree; its close was measured at `18ffb998` (`bench/v3.4.0/results-a1-close-v3.4.0-11-gf53e62db.md`): the yield costs nothing measurable on the statement path and bounds a same-core read behind a build to one slice, but a WAL segment roll during a large build still stalls that read, which stays in `docs/inflight/known-gaps.md` ("A yielding build still stalls its core at a WAL segment roll") |
 | **Does not settle** | The roll's stall; a push; a tag, a version |
 | **Recorded at** | this file; the 2026-10-24 row of `instructions/v3.2.0/index.md` |
