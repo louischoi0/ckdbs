@@ -35,3 +35,12 @@
 | **Mark** | **CI closed**: every stage landed and pushed (`fb36e416`), CI-S3 not built (CI-Q6 (a)), the close measured at `v3.4.3-13-g614864c4`. The gaps it leaves are `known-gaps.md`'s "The online index build (CI)". **No tag taken by CI's session**: `v3.4.5` already stood at `0b9013c9` (§2), taken and pushed by another session before §1's push landed, so it does not carry CI. A pushed tag is not moved; which version carries CI is the operator's word |
 | **Does not settle** | the version that carries CI; a later milestone |
 | **Recorded at** | this file; the CI order's header and §7; the CI row in `instructions/v3.2.0/index.md` |
+
+## 5. Version 3.4.6 tagged
+
+| | |
+|---|---|
+| **Word** | W6 (CI's session): *"tag 3.4.6"*, after CLA reported that `v3.4.5` stood at `0b9013c9`, before CI, and proposed (a) a new tag at the head of `main` over (b) moving `v3.4.5` |
+| **Mark** | **`v3.4.6`**, an annotated tag on `main` at `ca49241a`, then the head of `origin/main`. It carries CI and CG's close. Its message states CI built and closed, CG closed, CI's premise and close measured, and the gaps that bound it. The full Debug suite ran 4335/4335 at `bcdadd10`, whose build inputs the tagged commit shares (everything after it is under `instructions/` and CLAUDE.md), so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.6`; `v3.4.5` is left where it stands |
+| **Does not settle** | a later version |
+| **Recorded at** | this file; the tag message; CLAUDE.md's Version Management; the CI order's header and §7; `instructions/v3.2.0/index.md` |
