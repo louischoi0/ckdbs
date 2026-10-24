@@ -24,6 +24,13 @@ connection, timed on the wire:
 JSON object (--json PATH also writes it): per size, per phase, nearest-rank
 p0 p25 p50 p90 p99 max and the mean, in microseconds (bench_common).
 
+With `--server-pid PID`, each phase also carries the server's on-CPU time and
+run-queue wait per statement (every thread's /proc/PID/task/*/schedstat, in
+us), and with `--watch-cpus 4,5` each listed CPU's busy share over the phase
+(/proc/stat). On-CPU time tells a waiting server from a working one, not more
+work from a slower CPU; the sibling's share names one cause of the latter.
+/proc/stat counts 10 ms ticks, so a share is noise over a phase much under 1 s.
+
     tools/cg_close_benchmark.py --port 15901 --engine b --sizes 1000,10000
 """
 
@@ -57,6 +64,32 @@ def dist(lat):
             "mean": round(sum(o) / len(o) * 1e6, 1)}
 
 
+def sched(pid):
+    """(on-CPU ns, run-queue wait ns) summed over the process's threads."""
+    cpu = wait = 0
+    base = Path(f"/proc/{pid}/task")
+    for task in base.iterdir():
+        try:
+            v = (task / "schedstat").read_text().split()
+            cpu += int(v[0])
+            wait += int(v[1])
+        except (OSError, IndexError):
+            pass
+    return cpu, wait
+
+
+def cpu_ticks(cpus):
+    """{cpu: (busy, total)} jiffies from /proc/stat; busy is all but idle and iowait."""
+    out = {}
+    for line in Path("/proc/stat").read_text().splitlines():
+        name = line.split()[0]
+        if name.startswith("cpu") and name[3:].isdigit() and int(name[3:]) in cpus:
+            v = [int(x) for x in line.split()[1:]]
+            total = sum(v[:8])  # guest and guest_nice are already in user and nice
+            out[int(name[3:])] = (total - v[3] - v[4], total)
+    return out
+
+
 def timed(conn, stmt):
     t = time.perf_counter()
     r = conn.send_command(stmt)
@@ -80,13 +113,16 @@ def load(conn, size, suffix):
     return t, u
 
 
-def run_size(conn, size, phases, ops, rng, suffix):
+def run_size(conn, size, phases, ops, rng, suffix, pid=None, cpus=()):
     t, u = load(conn, size, suffix)
     for _ in range(50):  # warm the path once per size
         conn.send_command(f"SELECT * FROM {t} WHERE id = {rng.randint(1, size)}")
     fresh = size + 1
     out = {}
     for phase in phases:
+        s0 = sched(pid) if pid else None
+        c0 = cpu_ticks(cpus) if cpus else None
+        l0 = Path("/proc/loadavg").read_text().split()[0]
         lat = []
         for _ in range(ops):
             x = rng.randint(0, 10**6)
@@ -114,6 +150,16 @@ def run_size(conn, size, phases, ops, rng, suffix):
                         f"ON CONFLICT (name) DO UPDATE SET v = EXCLUDED.v")
             lat.append(timed(conn, stmt))
         out[phase] = dist(lat)
+        if s0:
+            s1 = sched(pid)
+            out[phase]["server_cpu_us"] = round((s1[0] - s0[0]) / ops / 1e3, 1)
+            out[phase]["server_wait_us"] = round((s1[1] - s0[1]) / ops / 1e3, 1)
+        if c0:
+            c1 = cpu_ticks(cpus)
+            out[phase]["cpu_busy_pct"] = {
+                str(c): round(100.0 * (c1[c][0] - c0[c][0]) / max(1, c1[c][1] - c0[c][1]), 1)
+                for c in cpus}
+        out[phase]["load1"] = [float(l0), float(Path("/proc/loadavg").read_text().split()[0])]
     return out
 
 
@@ -125,11 +171,14 @@ def main():
     ap.add_argument("--ops", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--json")
+    ap.add_argument("--server-pid", type=int)
+    ap.add_argument("--watch-cpus", default="")
     args = ap.parse_args()
     rng = random.Random(args.seed)
+    cpus = tuple(int(c) for c in args.watch_cpus.split(",") if c)
     conn = ServerConnection("127.0.0.1", args.port, timeout=120)
     phases = PHASES_A if args.engine == "a" else PHASES_B
-    res = {str(s): run_size(conn, s, phases, args.ops, rng, "r")
+    res = {str(s): run_size(conn, s, phases, args.ops, rng, "r", args.server_pid, cpus)
            for s in [int(x) for x in args.sizes.split(",")]}
     conn.close()
     text = json.dumps(res, indent=1)

@@ -1,0 +1,61 @@
+03:58:11 start cg-A-r1 load=0.34 0.20 0.42
+03:58:13 done cg-A-r1 rc=0 maxcompeting=0
+03:58:13 start cg-B-r1 load=0.40 0.21 0.42
+03:58:15 done cg-B-r1 rc=0 maxcompeting=0
+03:58:15 start cg-Ba-r1 load=0.40 0.21 0.42
+03:58:17 done cg-Ba-r1 rc=0 maxcompeting=0
+03:58:17 start cg-B-r2 load=0.40 0.21 0.42
+03:58:20 done cg-B-r2 rc=0 maxcompeting=0
+03:58:20 start cg-Ba-r2 load=1.17 0.37 0.48
+03:58:22 done cg-Ba-r2 rc=0 maxcompeting=0
+03:58:22 start cg-A-r2 load=1.17 0.37 0.48
+03:58:24 done cg-A-r2 rc=0 maxcompeting=0
+03:58:24 start cg-Ba-r3 load=1.23 0.40 0.48
+03:58:26 done cg-Ba-r3 rc=0 maxcompeting=0
+03:58:26 start cg-A-r3 load=1.23 0.40 0.48
+03:58:28 done cg-A-r3 rc=0 maxcompeting=0
+03:58:28 start cg-B-r3 load=1.29 0.43 0.49
+03:58:31 done cg-B-r3 rc=0 maxcompeting=0
+03:58:31 start cg-A-r4 load=1.29 0.43 0.49
+03:58:33 done cg-A-r4 rc=0 maxcompeting=0
+03:58:33 start cg-B-r4 load=1.27 0.44 0.50
+03:58:35 done cg-B-r4 rc=0 maxcompeting=0
+03:58:35 start cg-Ba-r4 load=1.27 0.44 0.50
+03:58:37 done cg-Ba-r4 rc=0 maxcompeting=0
+03:58:37 start cg-B-r5 load=1.27 0.44 0.50
+03:58:40 done cg-B-r5 rc=0 maxcompeting=0
+03:58:40 start cg-Ba-r5 load=1.33 0.46 0.50
+03:58:42 done cg-Ba-r5 rc=0 maxcompeting=0
+03:58:42 start cg-A-r5 load=1.33 0.46 0.50
+03:58:44 done cg-A-r5 rc=0 maxcompeting=0
+03:58:44 start cg-Ba-r6 load=1.38 0.49 0.51
+03:58:46 done cg-Ba-r6 rc=0 maxcompeting=0
+03:58:46 start cg-A-r6 load=1.38 0.49 0.51
+03:58:48 done cg-A-r6 rc=0 maxcompeting=0
+03:58:48 start cg-B-r6 load=1.35 0.50 0.51
+03:58:50 done cg-B-r6 rc=0 maxcompeting=0
+03:58:50 start cg-A-r7 load=1.35 0.50 0.51
+03:58:52 done cg-A-r7 rc=0 maxcompeting=0
+03:58:52 start cg-B-r7 load=1.35 0.50 0.51
+03:58:55 done cg-B-r7 rc=0 maxcompeting=0
+03:58:55 start cg-Ba-r7 load=1.40 0.52 0.52
+03:58:57 done cg-Ba-r7 rc=0 maxcompeting=0
+03:58:57 start cg-B-r8 load=1.40 0.52 0.52
+03:58:59 done cg-B-r8 rc=0 maxcompeting=0
+03:58:59 start cg-Ba-r8 load=1.37 0.53 0.53
+03:59:01 done cg-Ba-r8 rc=0 maxcompeting=0
+03:59:01 start cg-A-r8 load=1.37 0.53 0.53
+03:59:03 done cg-A-r8 rc=0 maxcompeting=0
+03:59:03 start cg-Ba-r9 load=1.34 0.54 0.53
+03:59:05 done cg-Ba-r9 rc=0 maxcompeting=0
+03:59:05 start cg-A-r9 load=1.34 0.54 0.53
+03:59:07 done cg-A-r9 rc=0 maxcompeting=0
+03:59:07 start cg-B-r9 load=1.34 0.54 0.53
+03:59:10 done cg-B-r9 rc=0 maxcompeting=0
+03:59:10 start cg-A-r10 load=1.39 0.56 0.54
+03:59:12 done cg-A-r10 rc=0 maxcompeting=0
+03:59:12 start cg-B-r10 load=1.39 0.56 0.54
+03:59:14 done cg-B-r10 rc=0 maxcompeting=0
+03:59:14 start cg-Ba-r10 load=1.36 0.57 0.54
+03:59:16 done cg-Ba-r10 rc=0 maxcompeting=0
+03:59:16 MATRIX-END

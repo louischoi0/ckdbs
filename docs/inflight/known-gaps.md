@@ -1320,15 +1320,37 @@ Verified on `worktree-bx-unique-index` at BX-S2
 - **`sys.relation_stats` counts `ON CONFLICT DO UPDATE`'s updated rows as
   inserts**: the statement finishes as an `INSERT` and hands the one count,
   inserted plus updated, to the insert column. Observability only.
-- **An `UPDATE` that walks its relation has a slow mode at `6775aec1` not
-  seen at `v3.4.3`** (`bench/v3.4.3/results-cg-close-v3.4.3-8-g6775aec1.md`):
-  `UPDATE u SET v = x WHERE name = '...'` over 10,000 rows sat above every
-  `v3.4.3` rep in 14 of 20 runs at `6775aec1` (835-875 us against
-  751-799), and among them in 6. The walk's loop and `apply` are unchanged,
-  so no per-row work was added; the source is unexplained - it varies per
-  server on one binary, and the driver's phase order (B's walk runs
-  about 3,000 statements later than A's) is a confound the close could not
-  exclude: its check, B's binary through A's phases, was cut.
+- **An `UPDATE` that walks its relation costs more server CPU since
+  CG-S1** (`6775aec1` against `v3.4.3`). Sources:
+  `bench/v3.4.3/results-cg-close-v3.4.3-8-g6775aec1.md` and the attribution
+  run `bench/v3.4.6/results-cg-slow-mode-v3.4.6-3-g1011c2f3.md`.
+  - **At 10,000 rows it is bimodal.** `UPDATE u SET v = x WHERE name =
+    '...'` costs a median of about 825 us of server CPU per statement in
+    two runs of three, against about 762 us in the rest and in the
+    `v3.4.3` runs (about +8 %, about 6 ns per walked row).
+  - **At 1,000 rows it is in 19 runs of 20**: a median of 110 us against
+    100.5 us (+9.5 %). The exception sat at `v3.4.3`'s level in a run
+    whose 10,000-row walk was slow, so the mode is not fixed per server
+    process.
+  - **Ruled out by the attribution run**, made on a quiet host with the
+    server pinned:
+    - the host: the slow mode follows the binary (13 of 20 runs on
+      `6775aec1`, 0 of 10 on `v3.4.3`, interleaved within seconds); no
+      build or test process ran, run-queue wait is 3-6 us in both modes,
+      and the SMT sibling is at most 2.4 % busy in 12 of the 13 slow runs.
+      The CPU-time column alone could not exclude a slower CPU;
+    - the close's phase-order confound: B's binary through A's phases is
+      slow in 7 of 10 runs.
+  - **The point `UPDATE` and `INSERT` are within 5 % of `v3.4.3`.**
+  - **Open:** why it switches off in some 10,000-row runs (an
+    address-dependent state chosen per relation is the candidate), and which code in
+    the walk pays it. CG-S1 split `UpdateInner` into its parse and
+    `UpdateParsed`, so the compiled walk can differ though its loop and
+    `apply` are unchanged.
+  - **Next:** a sampler profile, an ASLR-off arm, an `objdump` diff of the
+    walk. Measured on the binaries of `f44846ef` and `6775aec1`, with the
+    harness at `1011c2f3`; the engine at `1011c2f3`, which has changed the
+    dispatcher and index maintenance since `6775aec1`, is not measured.
 - **Each `ON CONFLICT DO UPDATE` arm row re-runs `UpdateParsed`'s statement
   setup** (resolution, `InitTableAccess`, `CompileAssignments`): with the
   arbiter's lock and lookup, about 5 us a row over a point `UPDATE` at
