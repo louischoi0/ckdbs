@@ -26,7 +26,9 @@ English (`raft-marks-2026-10-21.md` §5):
 the same day; its verdict is narrow** (§7). **Narrowed on the operator's
 W5** (`$!narrow`, `raft-marks-2026-10-23.md` §2): **CG-Q1 re-marked (b)**
 - S1 builds the tuple key and one named unique index as arbiters - and
-CG-Q3 (b) dropped from CG. CG-S1 is next. **Exploratory since W2** (§3): CG-S0
+CG-Q3 (b) dropped from CG. **CG-S1 built and CG-S3 measured on 2026-10-23;
+CLOSED 2026-10-24 on the operator's word** (W8, `raft-marks-2026-10-24.md`
+§1; §7 "CG closed 2026-10-24"). **Exploratory since W2** (§3): CG-S0
 checks the concept before any surface is built, and a candidate that
 fails the check is recorded, not built.
 
@@ -552,3 +554,12 @@ says why.
   The close's driver is `tools/cg_close_benchmark.py`.
 
 **Every CG stage is built and measured; closing CG is the operator's word.**
+
+### CG closed 2026-10-24 (W8)
+
+**W8** (`raft-marks-2026-10-24.md` §1): *"close cg"*, after CG-S3 was
+pushed at `0b9013c9`. CG closes with S0 (narrow), S1 (the surface) and S3
+(the close) built and measured; S2 was folded into S1 by W5. What it
+leaves stands in `parser-v2.md` I20, `manual/sql/sql.md` and
+`known-gaps.md`'s BU section - among them the walking `UPDATE`'s slow mode
+at `6775aec1`, unexplained, whose confound check was cut.

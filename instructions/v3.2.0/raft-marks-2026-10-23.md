@@ -62,3 +62,12 @@
 | **Mark** | **CG-S1 pushed** to `main` at `6775aec1` with `--no-verify` (the full suite 4319/4319 at `54dbc716`, whose build inputs it shares). **CG-S3 measured** (the CG order's §7, "CG-S3 measured 2026-10-23") |
 | **Does not settle** | **CG's close**, which is the operator's word; a push; a tag, a version |
 | **Recorded at** | this file; the CG order's §7; the CG row in `instructions/v3.2.0/index.md` |
+
+## 8. CG-S3 pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W7b (CG's session): *"push no verify"* |
+| **Mark** | **CG-S3 pushed** to `main` at `0b9013c9` with `--no-verify`. `origin/main` had moved by `f3e11ff3` (an `ExpeditorTest` change) and was merged first; the full suite last ran 4320/4320 at `68938b21`, the tree before that merge, and on the pushed tree only `ExpeditorTest` ran (33/33) |
+| **Does not settle** | CG's close; a tag, a version |
+| **Recorded at** | this file |
