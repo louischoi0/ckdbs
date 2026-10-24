@@ -6,6 +6,9 @@ Written 2026-10-23 on `worktree-online-index-build` from `2f7ce828`
 
 - **W0**: *"index build online, write milestone"*.
 
+**CLOSED 2026-10-24 on the operator's word** (`raft-marks-2026-10-24.md`
+§2), every stage landed and pushed (`fb36e416`), tagged in `v3.4.5`.
+
 **Written 2026-10-23. Opened 2026-10-23** on the operator's standing
 go-ahead (go-ahead-achieving-milestone, `raft-marks-2026-10-23.md` §8),
 from `dd437a76` (`main` with this order on it). **CI-Q0..Q10 were each
@@ -841,8 +844,9 @@ measured; measured at the milestone's close.
 
 **Every stage landed** on `worktree-online-index-build`: S0 `d40e92f9`, S1
 `c31c00dd`, S2 `614864c4`, and S4 the close. CI-S3 is not built (CI-Q6
-(a)). The close is not merged to `main`, not pushed and not tagged, which
-is the operator's word.
+(a)). Pushed to `main` at `fb36e416` on the operator's word of 2026-10-24
+(`raft-marks-2026-10-24.md` §1). **CLOSED 2026-10-24 on the operator's word**
+(`raft-marks-2026-10-24.md` §2), and tagged in `v3.4.5`.
 
 **The S4 review** (`critics-developer`).
 - **Applied, 13 text errors:**
