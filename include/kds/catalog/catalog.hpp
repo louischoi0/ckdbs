@@ -1254,7 +1254,8 @@ public:
     // a duplicate or out-of-range column position, an index on the tuple
     // key (the clustered tree already is one), a heap-clustered relation
     // (spec IX3 - there is no tuple key descent to resolve an entry through), and
-    // a flag bit other than `kIndexFlagUnique` (spec IX11).
+    // a flag bit outside `kIndexFlagsDefined` (spec IX11), and unique
+    // together with building (CI-Q6 (a)).
     //
     // It does **not** build the tree or check the key columns' types: the
     // root page is allocated and formatted by the caller, which is what
@@ -1292,6 +1293,15 @@ public:
     Status DropIndex(Oid index_oid, std::uint64_t trx_id = kBootstrapXid,
                       CatalogRowChange* change = nullptr);
 
+    // **An online build's R** (CI-Q7 (a),
+    // `instructions/v3.2.0/workorder-ci-online-index-build.md`): clears
+    // `kIndexFlagBuilding` on the row `trx_id` created, in place and logged
+    // (`HEAP_OVERWRITE`, RV3), then moves the schema word so every core's
+    // compile may choose the index from its next task boundary. No undo: a
+    // rollback retires the row whole. `NotFound` for a row this transaction
+    // did not create.
+    Status ClearIndexBuilding(Oid index_oid, std::uint64_t trx_id);
+
     // `view` as on `ListTables` (DT3): `SHOW INDEXES` answers "which
     // indexes exist", which is a schema question and not a diagnostic -
     // so it filters like the other schema routes rather than reporting
@@ -1309,7 +1319,8 @@ public:
     // on `(a, b)` can serve an equality on `a` and cannot serve one on `b`,
     // so answering yes for `b` would stop the compiler calling that step a
     // filter scan while leaving it exactly as slow - a lie to the access
-    // statistics, which is the one consumer that exists today.
+    // statistics, which is the one consumer that exists today. A building
+    // index (CI) is not answered.
     //
     // NotFound is the ordinary answer and is never cached
     // (catalog_cache.hpp's absence rule).

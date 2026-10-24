@@ -179,7 +179,12 @@ TEST(IndexReclaimJobTest, ARolledBackCreatesLoggedTreeIsReclaimed) {
     ASSERT_GE(tree.size(), 4u);
     Ok(db, "ROLLBACK", &s);
     // One checkpoint opens the gate: a rollback's gate is the log's end at
-    // the decide, where the checkpoint's first record lands.
+    // the decide, where the checkpoint's first record lands. A rolled-back
+    // create is re-gated once its epochs pass (CI §3.5 A5) - at the log's
+    // end then, which a second checkpoint passes.
+    CleanCheckpoint(db);
+    Settle(db);
+    EXPECT_EQ(db.reclaim_counters().pending.load(), 1u) << "the re-gate let the job through";
     CleanCheckpoint(db);
     Settle(db);
     EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);

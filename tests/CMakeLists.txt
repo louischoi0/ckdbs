@@ -80,6 +80,7 @@ add_executable(kds_tests
     structural_rerun_rig_test.cpp
     walk_slice_rig_test.cpp
     index_build_slice_rig_test.cpp
+    index_online_build_rig_test.cpp
     ce_streaming_reply_test.cpp
     issue_under_the_leaf_rig_test.cpp
     lock_family_test.cpp

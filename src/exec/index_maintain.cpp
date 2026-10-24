@@ -7,7 +7,9 @@
 
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
+#include "kds/storage/anchor_page.hpp"
 #include "kds/storage/btree/btree.hpp"
+#include "kds/storage/insert_placement.hpp"
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/txn/visibility.hpp"
@@ -109,6 +111,19 @@ StatusOr<bool> EncodeKeyInto(const catalog::TableAccess& access,
 
 }  // namespace
 
+StatusOr<PageId> SlotRoot(storage::PageStore& store, PageId anchor, std::uint64_t index_oid) {
+    auto bytes = store.GetForRead(anchor);
+    if (!bytes.ok()) return bytes.status();
+    auto root = storage::AnchorIndexRoot(bytes.value().bytes(), index_oid);
+    if (!root.ok()) return root.status();
+    if (root.value() == kInvalidPageId) {
+        return Status::Corruption("index oid " + std::to_string(index_oid) +
+                                  " has no slot in its relation's anchor page " +
+                                  std::to_string(anchor));
+    }
+    return root.value();
+}
+
 StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   const catalog::TableAccess& access,
                                   const catalog::TableAccess::IndexRef& ix,
@@ -170,11 +185,24 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
     // unbounded the other way - one entry per write, forever.
     if (!touched) return kInvalidPageId;
 
-    auto placed = index::IndexInsert(store, ix.root_page_id, layout, key, tuple_key, covered,
-                                     ix.index_oid,
-                                     log != nullptr || publish != nullptr
-                                         ? access.anchor_page_id
-                                         : kInvalidPageId);
+    const PageId anchor =
+        log != nullptr || publish != nullptr ? access.anchor_page_id : kInvalidPageId;
+    PageId root = ix.root_page_id;
+    auto placed = index::IndexInsert(store, root, layout, key, tuple_key, covered, ix.index_oid,
+                                     anchor);
+    // CI-Q11 (b): a root another core grew past this one's memo - an online
+    // build's backfill, or a writer - refuses the descent with nothing
+    // written; the slot names the tree's root now.
+    for (int retry = 0; anchor != kInvalidPageId && !placed.ok() &&
+                        placed.status().code() == StatusCode::kTxnConflict &&
+                        retry < storage::kMaxDescentRestarts;
+         ++retry) {
+        auto current = SlotRoot(store, anchor, ix.index_oid);
+        if (!current.ok() || current.value() == root) break;
+        root = current.value();
+        placed = index::IndexInsert(store, root, layout, key, tuple_key, covered, ix.index_oid,
+                                    anchor);
+    }
     if (!placed.ok()) {
         // Failed shut. An index missing an entry is a row lost to every
         // later probe, so unlike the Cabin's hook there is nothing to

@@ -63,7 +63,16 @@
 | **Does not settle** | **CG's close**, which is the operator's word; a push; a tag, a version |
 | **Recorded at** | this file; the CG order's §7; the CG row in `instructions/v3.2.0/index.md` |
 
-## 8. CG-S3 pushed with the hook skipped
+## 8. CI opened on the standing go-ahead, CI-Q0..Q10 adopted as proposed
+
+| | |
+|---|---|
+| **Word** | W3 (CI's session): `/go-ahead-achieving-milestone`, the standing word *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"* |
+| **Mark** | **CI opened** from `dd437a76`. CI-Q0 (a), Q1 (b), Q2 (a), Q3 (b), Q4 (a), Q5 (a), Q6 (a), Q7 (a), Q8 (b) if S0 shows it sound, else (a), Q9 (a), Q10 (a) if S0 finds no shared state, else (b): **each adopted as CLA proposed, on the operator's standing go-ahead of 2026-10-23 (go-ahead-achieving-milestone)**, none of them the operator's own per-item mark. Under the same word, CI-Q0 (a)'s mark after S0 is CLA's verdict. CI-Q3 (b) carries a `[quiet-wrong]` ordering clause (the holder snapshot after H3's word move); its premise, the unit's `Entry::holders` (`src/txn/lock_table.cpp:186-196`), was re-read before adoption and holds. CI-S3 drops out, since CI-Q6 is (a). **At S0**, CI-S0's verdict build (CI-Q0 (a)), CI-Q8 resolved to (b) at READ COMMITTED and CI-Q10 to (a), and **CI-Q11 written and adopted as (b)** (retry a refused append from a moved slot), each on the same standing go-ahead. **S1, S2 built** (`c31c00dd`, `614864c4`); the close measured on `ck-tester`. Not pushed |
+| **Does not settle** | a push, a merge to `main`, a tag, a version |
+| **Recorded at** | this file; the CI order's header and §7; the CI row in `instructions/v3.2.0/index.md` |
+
+## 9. CG-S3 pushed with the hook skipped
 
 | | |
 |---|---|

@@ -522,10 +522,10 @@ TEST_F(CatalogTest, CreateIndexRefusesRatherThanTruncatingOrGuessing) {
     too_covered.covered_cols.assign(kMaxIndexCoveredColumns + 1, 2);
     EXPECT_FALSE(catalog_.CreateIndex(too_covered).ok());
 
-    // UNIQUE is admitted since BX (spec IX11); a flag bit nothing defines is
-    // not.
+    // UNIQUE is admitted since BX (spec IX11) and BUILDING since CI; a flag
+    // bit nothing defines is not.
     Catalog::IndexDef unknown = SimpleIndex(table.value(), "unknown", 1);
-    unknown.flags = kIndexFlagUnique << 1;
+    unknown.flags = kIndexFlagBuilding << 1;
     auto refused = catalog_.CreateIndex(unknown);
     EXPECT_FALSE(refused.ok());
     EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
@@ -615,7 +615,7 @@ TEST_F(CatalogTest, AnIndexRootMovesInPlaceRatherThanInvalidatingTheCache) {
     // iterates access.indexes, which is the proof.
 }
 
-// ---- TableAccess::indexes / index_mask (workplan IX04) -----------------
+// ---- TableAccess::indexes (workplan IX04) --------------------------------
 
 TEST_F(CatalogTest, TableAccessCarriesTheRelationsIndexesInCreationOrder) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
@@ -656,7 +656,7 @@ TEST_F(CatalogTest, TableAccessCarriesTheRelationsIndexesInCreationOrder) {
     EXPECT_EQ(ix.covered()[0], 1u);
 }
 
-TEST_F(CatalogTest, TheIndexMaskNamesLeadingKeyColumnsOnly) {
+TEST_F(CatalogTest, IndexOnNamesLeadingKeyColumnsOnly) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema());
     ASSERT_TRUE(table.ok());
@@ -669,13 +669,9 @@ TEST_F(CatalogTest, TheIndexMaskNamesLeadingKeyColumnsOnly) {
     ASSERT_TRUE(access.ok());
 
     // Column 1 leads the index; column 2 is in it and cannot be entered by
-    // an equality, so a bit for it would stop the compiler calling that
-    // step a filter scan while leaving it exactly as slow.
-    EXPECT_NE(access.value()->index_mask & (std::uint64_t{1} << 1), 0u);
-    EXPECT_EQ(access.value()->index_mask & (std::uint64_t{1} << 2), 0u);
-    // Bit 0 is always clear: CreateIndex refuses the tuple key.
-    EXPECT_EQ(access.value()->index_mask & 1u, 0u);
-
+    // an equality, so answering for it would stop the compiler calling that
+    // step a filter scan while leaving it exactly as slow. Column 0 is the
+    // tuple key, which CreateIndex refuses.
     ASSERT_NE(access.value()->IndexOn(1), nullptr);
     EXPECT_EQ(NameView(catalog_.FindIndexByName("composite").value().name), "composite");
     EXPECT_EQ(access.value()->IndexOn(2), nullptr);
@@ -702,21 +698,21 @@ TEST_F(CatalogTest, IndexOnPicksTheLowestOidWhenTwoIndexesShareALeadingColumn) {
 }
 
 TEST_F(CatalogTest, ACachedTableAccessSeesAnIndexCreatedAfterItWasFilled) {
-    // The reason CreateIndex bumps: an index appearing stales index_mask on
-    // every held entry for the relation, and the compiler reads it.
+    // The reason CreateIndex bumps: an index appearing stales the index list
+    // on every held entry for the relation, and the compiler reads it.
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema());
     ASSERT_TRUE(table.ok());
 
     auto before = catalog_.InitTableAccess(table.value());
     ASSERT_TRUE(before.ok());
-    EXPECT_EQ(before.value()->index_mask, 0u);
+    EXPECT_TRUE(before.value()->indexes.empty());
 
     ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1)).ok());
 
     auto after = catalog_.InitTableAccess(table.value());
     ASSERT_TRUE(after.ok());
-    EXPECT_NE(after.value()->index_mask, 0u);
+    EXPECT_NE(after.value()->IndexOn(1), nullptr);
 
     // ...and a root that moved. This is the one field on TableAccess that
     // can change without DDL, which is why a caller holding the pointer
@@ -739,13 +735,13 @@ TEST_F(CatalogTest, ADroppedIndexLeavesTheRelationWithNoneAgain) {
     ASSERT_TRUE(table.ok());
     auto oid = catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1));
     ASSERT_TRUE(oid.ok());
-    ASSERT_NE(catalog_.InitTableAccess(table.value()).value()->index_mask, 0u);
+    ASSERT_NE(catalog_.InitTableAccess(table.value()).value()->IndexOn(1), nullptr);
 
     ASSERT_TRUE(catalog_.DropIndex(oid.value()).ok());
 
     auto after = catalog_.InitTableAccess(table.value());
     ASSERT_TRUE(after.ok());
-    EXPECT_EQ(after.value()->index_mask, 0u);
+    EXPECT_EQ(after.value()->IndexOn(1), nullptr);
     EXPECT_TRUE(after.value()->indexes.empty());
 }
 
@@ -758,7 +754,37 @@ TEST_F(CatalogTest, OneRelationsIndexesDoNotAppearOnAnother) {
 
     EXPECT_EQ(catalog_.InitTableAccess(a.value()).value()->indexes.size(), 1u);
     EXPECT_TRUE(catalog_.InitTableAccess(b.value()).value()->indexes.empty());
-    EXPECT_EQ(catalog_.InitTableAccess(b.value()).value()->index_mask, 0u);
+    EXPECT_EQ(catalog_.InitTableAccess(b.value()).value()->IndexOn(1), nullptr);
+}
+
+// CI-S1: a building index is on the list every write maintains, and no
+// read path that chooses an index may choose it.
+TEST_F(CatalogTest, ABuildingIndexIsListedButNotOneAnEqualityMayEnter) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema());
+    ASSERT_TRUE(table.ok());
+    Catalog::IndexDef def = SimpleIndex(table.value(), "ix", 1);
+    def.flags = kIndexFlagBuilding;
+    ASSERT_TRUE(catalog_.CreateIndex(def).ok());
+
+    auto access = catalog_.InitTableAccess(table.value());
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    ASSERT_EQ(access.value()->indexes.size(), 1u);
+    EXPECT_TRUE(access.value()->indexes[0].building);
+    EXPECT_EQ(access.value()->IndexOn(1), nullptr);
+    EXPECT_EQ(catalog_.FindIndexOnColumn(table.value(), 1).status().code(),
+              StatusCode::kNotFound);
+}
+
+TEST_F(CatalogTest, AUniqueIndexIsNotBuiltOnline) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema());
+    ASSERT_TRUE(table.ok());
+    Catalog::IndexDef def = SimpleIndex(table.value(), "ix", 1);
+    def.flags = kIndexFlagUnique | kIndexFlagBuilding;
+    auto created = catalog_.CreateIndex(def);
+    ASSERT_FALSE(created.ok());
+    EXPECT_EQ(created.status().code(), StatusCode::kInvalidArgument);
 }
 
 // Where InsertIndexRow() deliberately did not bump: that comment was true

@@ -7,8 +7,9 @@
 // inside the build. Each cell below puts that second statement there - one
 // core, both tasks submitted before the reactor starts, the build first -
 // and asks what the build held across the gap: another relation's point read
-// is answered before the build ends; a writer of the built relation waits on
-// the `X` the build still holds and its row is in the finished index; a
+// is answered before the build ends; a writer of the built relation runs
+// inside an online build (CI), which holds `IS`, and its row is in the
+// finished index; a
 // schema-word move frees no memo the build reads and the core's epoch stays
 // at the build's word; a cancel ends the build with nothing published, and
 // a cancelled rebuild leaves the old index as it was; a core torn down
@@ -146,10 +147,11 @@ TEST_F(IndexBuildSliceRigTest, APointReadSharingACoreWithABuildIsAnsweredInsideI
               std::string::npos);
 }
 
-TEST_F(IndexBuildSliceRigTest, AWriterOnTheBuildsCoreWaitsForItsXAndItsRowIsInTheIndex) {
-    // The `X` is held across every yield: a writer of the relation that
-    // runs inside the build parks on it, and resumes into the finished
-    // index once the build's tail has decided.
+TEST_F(IndexBuildSliceRigTest, AWriterOnTheBuildsCoreRunsInsideTheBuildAndItsRowIsInTheIndex) {
+    // CI: an autocommit `CREATE INDEX` builds online, holding the relation
+    // `IS` across every yield, so a writer of the relation that runs inside
+    // the build is answered before the build ends, and maintains the
+    // building index itself - its row is in the finished index.
     Script build{&build_, {"CREATE INDEX tix ON t (v)"}};
     Script writer{&other_, {"INSERT INTO t VALUES (99999, 99999, 'y')"}};
     std::atomic<bool> build_running_at_write{false};
@@ -161,7 +163,7 @@ TEST_F(IndexBuildSliceRigTest, AWriterOnTheBuildsCoreWaitsForItsXAndItsRowIsInTh
     ASSERT_TRUE(build_running_at_write.load()) << "the writer ran after the build: nothing yielded";
     ASSERT_EQ(build.outs[0].response.rfind("CREATED INDEX", 0), 0u) << build.outs[0].response;
     ASSERT_EQ(writer.outs[0].response.rfind("INSERTED", 0), 0u) << writer.outs[0].response;
-    EXPECT_TRUE(build_done_after_write.load()) << "the writer ran past the build's X";
+    EXPECT_FALSE(build_done_after_write.load()) << "the writer waited for the build";
     EXPECT_EQ(Entries("tix"), std::to_string(kRows + 1));
     EXPECT_NE(d().Dispatch("SELECT id FROM t WHERE v = 99999").response.find("99999"),
               std::string::npos)
@@ -320,6 +322,37 @@ TEST_F(IndexBuildSliceRigTest, ACoreTornDownWithABuildBetweenSlicesAbortsIt) {
         0u)
         << "the relation's X outlived the build's frame";
     EXPECT_EQ(d().Dispatch("CREATE INDEX tix ON t (v)").response.rfind("CREATED INDEX", 0), 0u);
+}
+
+TEST_F(IndexBuildSliceRigTest, ACoreTornDownWithAnOnlineBuildInItsDrainLeavesNoWake) {
+    // CI-S2's review: a build parked in its drain on a writer that began
+    // before it holds a wake on the relation's unit. Its frame destroyed
+    // there must take the wake with it, or the relation's entry keeps a
+    // waiter nobody flips for good.
+    CommandDispatcher& peer = rig_->core(1).dispatcher();
+    Session writer;
+    ASSERT_EQ(d().Dispatch("BEGIN", &writer).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(d().Dispatch("INSERT INTO t VALUES (99999, 99999, 'y')", &writer)
+                  .response.rfind("INSERTED", 0),
+              0u);
+    auto oid = d().catalog().FindTableOidByName(catalog::kNamespacePublic, "t");
+    ASSERT_TRUE(oid.ok());
+    const txn::LockKey rel = txn::LockKey::Relation(oid.value());
+
+    Script build{&build_, {"CREATE INDEX tix ON t (v)"}};
+    rig_->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunScript(peer, build)));
+    {
+        const CurrentCoreGuard as_test_thread(CurrentCore());
+        for (int i = 0; i < 4; ++i) (void)rig_->core(1).scheduler().RunOnce();
+        ASSERT_EQ(build.done.load(), 0u) << "the build finished before the teardown";
+        ASSERT_EQ(rig_->locks().WaiterCount(rel), 1u) << "the build is not in its drain";
+        const CurrentCoreGuard as_core_1(1);
+        rig_->core(1).scheduler().DiscardTasks();
+    }
+    EXPECT_EQ(rig_->locks().WaiterCount(rel), 0u) << "the drain's wake outlived its frame";
+    EXPECT_FALSE(d().catalog().FindIndexByName("tix").ok());
+    ASSERT_EQ(d().Dispatch("COMMIT", &writer).response.rfind("COMMIT", 0), 0u);
 }
 
 // ---- `CREATE ASSERTION` and `CREATE TRANSITION` (A1 stage 2b) ----------------
@@ -654,6 +687,53 @@ TEST(IndexBuildSliceCrashTest, AnUncommittedBuildsRowIsRolledBackByTheMount) {
         << "the mount brought back an uncommitted build's index";
     EXPECT_TRUE(after.catalog().FindTableOidByName(catalog::kNamespacePublic, "w").ok())
         << "the committed DDL inside the build was lost";
+}
+
+TEST(IndexBuildSliceCrashTest, AnOnlineIndexBuildCrashedBetweenSlicesMountsWithoutIt) {
+    // CI-R3 and CI-R4: an online build logs its root's image at H2, writes
+    // its slot and its row flagged building at H3, and logs every append
+    // after (`INDEX_INSERT`, `BTREE_SPLIT`). A crash between two slices
+    // leaves that log with no decide: redo must meet no record against a
+    // page it has no image of, undo retires the row, and the same index is
+    // built again afterwards, whole.
+    crash_rig::TempDir snap;
+    std::unique_ptr<TwoCoreRig> rig = crash_rig::OpenFileRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d = rig->core(0).dispatcher();
+    crash_rig::Ok(d, "CREATE TABLE t (id int64, v int64, name varchar(2000))");
+    for (int i = 1; i <= kRows;) {
+        std::string sql = "INSERT INTO t VALUES ";
+        for (int k = 0; k < 100 && i <= kRows; ++k, ++i) {
+            if (k != 0) sql += ", ";
+            sql += "(" + std::to_string(i) + ", " + std::to_string(i) + ", 'x')";
+        }
+        crash_rig::Ok(d, sql);
+    }
+
+    Session builder;
+    Script build{&builder, {"CREATE INDEX tix ON t (v)"}};
+    rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground, RunScript(rig->core(1).dispatcher(), build)));
+    {
+        const CurrentCoreGuard as_test_thread(CurrentCore());
+        for (int i = 0; i < 4; ++i) (void)rig->core(1).scheduler().RunOnce();
+    }
+    ASSERT_EQ(build.done.load(), 0u) << "the build finished before the crash";
+    ASSERT_EQ(rig->locks().progress().Registered(), 1u) << "the build is not between slices";
+    ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+
+    auto mounted = crash_rig::Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
+    CommandDispatcher& after = mounted.value()->dispatcher();
+    EXPECT_EQ(after.Dispatch("SELECT name FROM sys.indexes").response.find("tix"),
+              std::string::npos)
+        << "the mount brought back an undecided online build's index";
+    const std::string rebuilt = after.Dispatch("CREATE INDEX tix ON t (v)").response;
+    ASSERT_EQ(rebuilt.rfind("CREATED INDEX", 0), 0u) << rebuilt;
+    EXPECT_NE(after.Dispatch("SELECT id FROM t WHERE v = 777").response.find("777"),
+              std::string::npos);
+    const CurrentCoreGuard as_core_1(1);
+    rig.reset();
 }
 
 TEST(IndexBuildSliceCrashTest, AnAssertionBuildCrashedBetweenSlicesMountsWithoutIt) {

@@ -2816,17 +2816,11 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
         ref.nkeys = row.nkeys;
         ref.ncovered = row.ncovered;
         ref.unique = (row.flags & kIndexFlagUnique) != 0;
+        ref.building = (row.flags & kIndexFlagBuilding) != 0;
         ref.name = NameView(row.name);
         ref.key_cols = row.key_cols;
         ref.covered_cols = row.covered_cols;
         access.indexes.push_back(ref);
-
-        // Leading column only - schema.hpp says why "any indexed column"
-        // would be the wrong question.
-        const std::uint16_t leading = ref.leading_column();
-        if (ref.nkeys > 0 && leading > 0 && leading < 64) {
-            access.index_mask |= (std::uint64_t{1} << leading);
-        }
     }
     // Creation order, so §9's lowest-oid tie-break is a property of the list
     // rather than of how the rows happened to land on the page.
@@ -3934,9 +3928,16 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
                                         " columns, this one declares " +
                                         std::to_string(def.covered_cols.size()));
     }
-    if ((def.flags & ~kIndexFlagUnique) != 0) {
+    if ((def.flags & ~kIndexFlagsDefined) != 0) {
         return Status::InvalidArgument("catalog: index flags " + std::to_string(def.flags) +
                                        " name a bit nothing defines");
+    }
+    // CI-Q6 (a): a unique index builds under the relation `X` only. A
+    // writer's unique check walks the key's whole run, which a building
+    // tree does not yet hold.
+    if ((def.flags & kIndexFlagUnique) != 0 && (def.flags & kIndexFlagBuilding) != 0) {
+        return Status::InvalidArgument(
+            "catalog: a unique index is not built online (CI-Q6 (a))");
     }
 
     auto access = InitTableAccess(def.table_oid);
@@ -4102,8 +4103,8 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
 
     // **Bumped**, where InsertIndexRow() deliberately did not. That comment
     // was true while nothing cached anything derived from sys.indexes; an
-    // index appearing now stales `TableAccess::index_mask` on every held
-    // entry for this relation (IX04), which is a fact the compiler reads.
+    // index appearing now stales `TableAccess::indexes` on every held entry
+    // for this relation (IX04), which the compiler and the write hook read.
     BumpVersion("sys.indexes create");
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("catalog", "created index " + def.name + " (oid " +
@@ -4111,6 +4112,32 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
                                   std::to_string(def.table_oid));
     }
     return row.index_oid;
+}
+
+Status Catalog::ClearIndexBuilding(Oid index_oid, std::uint64_t trx_id) {
+    auto acted = ForFirstRow<SysIndexRow>(
+        store_, kCatalogPageIndexes,
+        [&](SysIndexRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.index_oid != index_oid || tuple.deleted || tuple.trx_id != trx_id) {
+                return false;
+            }
+            row.flags = static_cast<std::uint8_t>(row.flags & ~kIndexFlagBuilding);
+            auto encoded = row.Encode();
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, trx_id,
+                                           tuple.trx_id, tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            BumpVersion("sys.indexes ready");
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) {
+        return Status::NotFound("no sys.indexes row for index oid " + std::to_string(index_oid) +
+                                " that transaction " + std::to_string(trx_id) + " created");
+    }
+    return Status::OK();
 }
 
 Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange* change) {
@@ -4290,8 +4317,11 @@ StatusOr<SysIndexRow> Catalog::FindIndexOnColumn(Oid table_oid, std::uint32_t co
 
     for (const SysIndexRow& row : rows.value()) {
         // `key_cols[0]` only - see the header for why "contains" would be
-        // the wrong question.
-        if (row.table_oid == table_oid && row.key_cols[0] == col_pos) return row;
+        // the wrong question. A building index (CI) is not one yet.
+        if (row.table_oid == table_oid && row.key_cols[0] == col_pos &&
+            (row.flags & kIndexFlagBuilding) == 0) {
+            return row;
+        }
     }
     return Status::NotFound("no index on this column");
 }

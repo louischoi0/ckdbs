@@ -739,7 +739,7 @@ pages and the cases it does not reach.
 Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 `docs/spec/protocol.md` §10.
 
-- **Only a `SELECT`'s outermost walk and a relation-`X` build yield.**
+- **Only a `SELECT`'s outermost walk and a relation-`X` build (or an online `CREATE INDEX`) yield.**
   The walk yields every `exec::SlicePolicy::pages_per_slice` (64) pages, a
   `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION` or `CREATE
   TRANSITION` build every 64 relation leaves (`CREATE ASSERTION` and
@@ -1685,6 +1685,49 @@ Verified on `ce-streaming-reply` at `9e568b44` (CE-S1..S4). Owned by
   release); a join, an index or Cabin fallback walk, or `LIMIT` streaming;
   and CE-S1's byte-identical reply for every shape that does not stream -
   only the capped portal has a cell.
+
+## The online index build (CI)
+
+Verified on `worktree-online-index-build` at `614864c4` (CI-S1, CI-S2).
+Owned by `docs/spec/index.md` §10.3. The order is
+`instructions/v3.2.0/workorder-ci-online-index-build.md`.
+
+- **The backfill's skip of a row `PURGE` retired under it has no test**
+  (CI-S4's review): a delete-marked row whose deleter every reader sees,
+  copied before a `PURGE` released its spilled values, fails its decode, and
+  is skipped as one no reader reaches - or read again, if its deleter was in
+  flight at the copy. Without the skip the build was refused, never wrong.
+  Showing it needs the same seam CI-R7 does.
+- **CI-R7 has no test that fails without it** `[quiet-wrong]`. A row whose
+  head writer was in flight at the backfill's copy, and rolled back with
+  its id below the floor before the walk, is read again instead of being
+  trusted resolved. Showing it needs a seam between the backfill's copy and
+  its append (one synchronous slice), and a writer whose id sorts below the
+  build's. Neither exists, so the rule is held by review alone.
+- **A writer transaction open past the fault net refuses the build.** The
+  drain's wait is the lock family's 1 s net, restarted each time a writer it
+  waits on decides. A transaction granted the relation's `IX` before the
+  announce and open longer than that refuses the build `TxnConflict`, after
+  H3 - which spends an index oid, owes a root page until the reclaimer
+  frees it, and moves the schema word twice. Today's `X` build is refused by
+  the same writer.
+- **A build holds every core's undo for its length.** Its in-flight id holds
+  the floor, so no undo page with a later writer is recycled and the commit
+  window keeps every entry above it until the build decides. The view is
+  re-minted per slice, which frees the horizon's consumers only. The
+  lifetime ceiling never ends an online build: autocommit is not bounded.
+- **Every core pays the open-DDL resolution for a build's length.** The
+  build counts as an open DDL instance-wide, so every statement head on
+  every core resolves names under a minted view and bypasses the shared
+  name cache until it decides (`ddl_open_at_head_`). Under the `X` build the
+  relation's own writers were parked instead.
+- **A refusal between H2 and H3 leaks the root page**: the image is logged
+  and no slot names it yet. A crash there leaks it too.
+- **The drain draws one wait-for edge**, to the front of its set. A cycle
+  through another member is found once the front decides, or by the net.
+- **A stream of online builds can keep an `X`-taker waiting**, since a
+  waiting `X` has no queue position (`lock_table.cpp`), as writers already
+  can.
 
 ## Decisions the revision has not taken
 

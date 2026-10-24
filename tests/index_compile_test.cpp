@@ -9,6 +9,7 @@
 #include "kds/parser/parser.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/index/index_tree.hpp"
 
 // `kIndexProbe` / `kIndexRange` in the compiler (docs/spec/index.md §§8-9,
 // workplan IX10).
@@ -601,6 +602,80 @@ TEST_F(IndexCompileTest, TheSwappedWritingGetsALookupAndAnIndexedInnerSide) {
     // Same rows as the l-first writing, which is the equivalence the two
     // access kinds must not disturb.
     EXPECT_EQ(Run(swapped), Run("SELECT l.v FROM l JOIN u ON l.uid = u.id WHERE u.id = 3"));
+}
+
+// ---- A building index (CI-S1) ---------------------------------------------
+
+// CI-R1: an online build's index is maintained by every write and chosen by
+// no read until its flag clears. The building row is written through the
+// catalog by hand - a copy of a built index's definition with the flag set -
+// and the built one dropped, so the only index on `a` is building.
+TEST_F(IndexCompileTest, NoCompileChoosesABuildingIndex) {
+    Ok("CREATE TABLE t (id int64, a int64, b int64) BTREE");
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE INDEX built ON t (a)");
+    auto row = boot_->catalog.FindIndexByName("built");
+    ASSERT_TRUE(row.ok()) << row.status().message();
+
+    catalog::Catalog::IndexDef def;
+    def.table_oid = row.value().table_oid;
+    def.name = "building";
+    def.root_page_id = row.value().root_page_id;
+    def.key_width = row.value().key_width;
+    def.entry_width = row.value().entry_width;
+    def.key_cols.assign(row.value().key_cols.begin(),
+                        row.value().key_cols.begin() + row.value().nkeys);
+    def.flags = catalog::kIndexFlagBuilding;
+    ASSERT_TRUE(boot_->catalog.CreateIndex(def).ok());
+    Ok("DROP INDEX built");
+
+    // The literal arm, the filter-scan label and the correlated arm. A range
+    // on `u.id`, not an equality: an equality propagates a literal to `t.a`
+    // and the literal arm would serve the inner step instead
+    // (`ALiteralEqualityStillBeatsTheCorrelatedForm`).
+    EXPECT_EQ(KindOf("SELECT * FROM t WHERE a = 1"), "FilterScan");
+    EXPECT_EQ(KindOf("SELECT * FROM t WHERE a BETWEEN 1 AND 4"), "Scan");
+    const std::string plan =
+        Plan("SELECT t.b FROM u JOIN t ON t.a = u.id WHERE u.id BETWEEN 1 AND 4");
+    EXPECT_EQ(plan.find("IndexProbe"), std::string::npos) << plan;
+}
+
+// ...and every write maintains it: a building row on a root of its own,
+// then rows written through the dispatcher land in its tree.
+TEST_F(IndexCompileTest, EveryWriteMaintainsABuildingIndex) {
+    Ok("CREATE TABLE t (id int64, a int64, b int64) BTREE");
+    Ok("CREATE INDEX built ON t (a)");
+    auto row = boot_->catalog.FindIndexByName("built");
+    ASSERT_TRUE(row.ok()) << row.status().message();
+
+    catalog::Catalog::IndexDef def;
+    def.table_oid = row.value().table_oid;
+    def.name = "building";
+    def.key_width = row.value().key_width;
+    def.entry_width = row.value().entry_width;
+    def.key_cols = {row.value().key_cols[0]};
+    def.flags = catalog::kIndexFlagBuilding;
+    auto oid = boot_->catalog.AllocateRowId(catalog::kSysIndexesTable);
+    ASSERT_TRUE(oid.ok());
+    def.index_oid = oid.value();
+    index::IndexLayout layout;
+    layout.key_width = def.key_width;
+    {
+        auto created = store_.CreateNew();
+        ASSERT_TRUE(created.ok());
+        auto& [id, bytes] = created.value();
+        ASSERT_TRUE(index::FormatRoot(bytes.bytes(), layout, def.index_oid).ok());
+        def.root_page_id = id;
+    }
+    ASSERT_TRUE(boot_->catalog.CreateIndex(def).ok());
+
+    Ok("INSERT INTO t VALUES (1, 10)");
+    Ok("INSERT INTO t VALUES (2, 20)");
+    Ok("UPDATE t SET a = 30 WHERE id = 2");
+    auto entries = index::IndexEntryCount(store_, def.root_page_id, layout);
+    ASSERT_TRUE(entries.ok()) << entries.status().message();
+    // Two inserts and an update that moved the key: IX2's three appends.
+    EXPECT_EQ(entries.value(), 3u);
 }
 
 }  // namespace

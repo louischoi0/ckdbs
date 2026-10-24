@@ -488,10 +488,20 @@ DROP INDEX ix_owner;
 - Maintenance is append-only; DELETE does not touch an index; there is no
   index-only scan (no visibility witness exists outside the tuple), so
   `COVERING` buys avoided base descents, nothing more.
-- `CREATE INDEX` and `DROP INDEX` **wait** for every open write to the
-  relation and for a statement already reading it, and hold new writes
-  until they commit or roll back - on any core. Like `DROP TABLE`, a wait
-  that reaches the lock family's 1 s bound is refused `TXN_CONFLICT`.
+- **A plain `CREATE INDEX` outside a transaction builds online** (CI):
+  writes to the relation keep running while it fills, on any core,
+  and each maintains the new index itself. It first waits for the writes
+  that were already open when it started - a transaction left open past
+  the lock family's 1 s bound refuses it `TXN_CONFLICT`, and no index is
+  created; run it again. No query uses the index until it is
+  complete. A write that asks for the relation exclusively while the build
+  waits on it - `ALTER TABLE`, `DROP TABLE`, a `CREATE INDEX` inside the
+  same transaction - is refused as a deadlock.
+- `CREATE UNIQUE INDEX`, `REINDEX INDEX`, `DROP INDEX`, and a `CREATE INDEX`
+  inside `BEGIN` **wait** for every open write to the relation and for a
+  statement already reading it, and hold new writes until they commit or
+  roll back - on any core. Like `DROP TABLE`, a wait that reaches the lock
+  family's 1 s bound is refused `TXN_CONFLICT`.
 - `SHOW INDEXES` lists them.
 - **A dropped index's pages are returned** (BY, v3.2.0). They are not freed
   at the `DROP INDEX` itself: once the drop is committed, checkpoints have
@@ -520,7 +530,7 @@ not yet purged keeps its entry.
 
 - **Autocommit only.** Inside `BEGIN` it is refused `NOT_IMPLEMENTED`, and
   the transaction goes on.
-- It **waits** like `CREATE INDEX`: for every open write to the relation and
+- It **waits** like `DROP INDEX`: for every open write to the relation and
   every statement already reading it, and holds new writes until it ends.
 - Queries answer exactly as before; the old tree's pages are returned as a
   dropped index's are.
@@ -673,7 +683,7 @@ DROP CABIN ON trades (DATE(ts));
   kept (keys name columns by position); a column a key reads cannot be
   dropped until the Cabin is.
 - The expression and predicate forms wait for open writes to the relation,
-  as `CREATE INDEX` does.
+  as `DROP INDEX` does.
 - `SHOW CABINS` lists them, with each one's `shape` (`column`, `expression`,
   `predicate`) and `key`. Entry sets are memory-resident and do not survive
   a restart; only the catalog row persists.
@@ -1651,8 +1661,8 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
 - **`DROP INDEX` is transactional too** (2026-08-18): inside an explicit
   transaction it is rolled back, and it is isolated — index maintenance
   keeps writing entries for an index whose drop has not committed, so a
-  `ROLLBACK` leaves the index whole. Since AT-S5e a `DROP INDEX` or
-  `CREATE INDEX` holds the relation while it is undecided, so a write to
+  `ROLLBACK` leaves the index whole. Since AT-S5e a `DROP INDEX` or a
+  `CREATE INDEX` that does not build online holds the relation while it is undecided, so a write to
   it from any core waits for the DDL to commit or roll back and then runs
   against the index list it left. It was refused inside a transaction
   between 2026-08-16 and 2026-08-18, for the wrong result that fix

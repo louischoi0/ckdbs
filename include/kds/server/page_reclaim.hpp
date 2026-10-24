@@ -125,14 +125,27 @@ public:
     // logged. Gated as a relation's drop is, until the redo start reaches
     // `gate` and every statement epoch `word`; the root is read from the slot when the job
     // walks, and the job ends by removing the slot (BY-R4, BY-R5).
+    //
+    // **`regate`: a rolled-back create whose tree peers wrote into** (CI §3.5
+    // A5, `instructions/v3.2.0/workorder-ci-online-index-build.md`). An
+    // online build's index is maintained by writers on other cores, and one
+    // whose statement began before the rollback keeps logging into the tree
+    // above `gate` until it ends. So once the epochs pass - every such
+    // statement has ended - the gate is taken again at the log's end read
+    // after that (the next `Step`'s `appended_lsn`), and the job waits for
+    // the redo start to pass that too.
     void EnqueueOrphanedIndex(catalog::Oid rel_oid, PageId anchor, catalog::Oid index_oid,
-                              wal::Lsn gate, std::uint64_t word);
+                              wal::Lsn gate, std::uint64_t word, bool regate = false);
 
     // One bounded step against the durable redo start `durable_redo_start`.
     // Returns OK when it did nothing or made progress; a job that cannot
     // proceed for a reason a later step cannot change is refused - counted,
     // logged, left pending for the next mount - and never fails the step.
-    Status Step(wal::Lsn durable_redo_start, const StatementEpochs* epochs = nullptr);
+    // `appended_lsn` is the log's end, read by the caller before this step;
+    // a `regate` job takes it at the first step after the one that saw its
+    // epochs pass. 0 (no log) leaves its gate as it was.
+    Status Step(wal::Lsn durable_redo_start, const StatementEpochs* epochs = nullptr,
+                wal::Lsn appended_lsn = 0);
 
     // Jobs this run still holds, refused ones included.
     std::size_t jobs() const noexcept { return jobs_.size(); }
@@ -194,6 +207,8 @@ private:
         // (BF-R9); 0 for a tombstone a mount found, which no statement of
         // its run can reach (BF-R8).
         std::uint64_t word = 0;
+        // Take `gate` again at the log's end once `word` passes (CI A5).
+        bool regate = false;
         Phase phase = Phase::kWalk;
         // The walk's frontier, every page it took, and what it found: tree
         // pages by level (every tree's level-L pages together), and each

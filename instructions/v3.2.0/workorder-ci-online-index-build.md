@@ -6,9 +6,17 @@ Written 2026-10-23 on `worktree-online-index-build` from `2f7ce828`
 
 - **W0**: *"index build online, write milestone"*.
 
-**Written 2026-10-23; not opened.** CI-Q0..Q10 each carry CLA's proposal
-beside them, and none is marked. CI-S0 is a census and a premise
-measurement (§5); nothing is built before it reports.
+**Written 2026-10-23. Opened 2026-10-23** on the operator's standing
+go-ahead (go-ahead-achieving-milestone, `raft-marks-2026-10-23.md` §8),
+from `dd437a76` (`main` with this order on it). **CI-Q0..Q10 were each
+adopted as CLA proposed, on the operator's standing go-ahead of 2026-10-23
+(go-ahead-achieving-milestone)**: Q0 (a), Q1 (b), Q2 (a), Q3 (b), Q4 (a),
+Q5 (a), Q6 (a), Q7 (a), Q8 (b) if S0 shows it sound, else (a), Q9 (a),
+and Q10 (a) if S0 finds no shared state, else (b). None is the operator's
+own per-item mark. Under the standing word, CI-Q0 (a)'s mark after S0 is
+CLA's verdict, adopted the same way. CI-S3 is not built, since CI-Q6 is (a).
+CI-S0 is a census and a premise measurement (§5), and nothing is built
+before it reports.
 
 **The opening review is applied** (`critics-developer`, 2026-10-23, after
 `11cc5b53`). Each design finding was checked by an independent refuter:
@@ -187,6 +195,15 @@ the delete bookkeeping a non-append-only index would need.
   backfill re-reads the slot and retries the append; it does not fail the
   build. Without this, writers and the backfill grow two roots and each
   refuses the other's keys.
+- **CI-R7 - a superseder in flight at the copy is not trusted resolved
+  (§3.5 A1).** `ResolvedForEveryReader` answers true for an aborted
+  transaction below the floor. That answer is about a version still on a
+  page. So if a row's head writer was undecided when phase 1 copied it,
+  the backfill never stops at that writer or excuses a failed read below
+  it on a later answer. Where it would, it reads the row again by tuple
+  key under its leaf's hold and indexes what it finds, at most
+  `storage::kMaxDescentRestarts` times, then refuses `TxnConflict`.
+  `[quiet-wrong]` if broken.
 
 ---
 
@@ -197,11 +214,10 @@ the delete bookkeeping a non-append-only index would need.
 `TableAccess::IndexRef` carries it. `MaintainIndexes` ignores it: a
 building index is maintained like any other. A unique one's writer check
 (`CheckUniqueKeys`, `src/server/command_dispatcher.cpp:10883-10931`) is
-CI-Q6's. The step compiler, `index_mask`, the join planner's cost model,
-`FindIndexOnColumn` and every probe-choosing path skip an index that
-carries it. `step_vm.cpp:1379` re-resolves an index by oid at execution,
-so a compiled chain never meets a flag flip mid-statement. `SHOW INDEXES`
-prints the flag. A superblock bump is CI-Q5's.
+CI-Q6's. Every probe-choosing path skips an index that carries it (§3.5
+A8 names them). `step_vm.cpp:1379` re-resolves an index by oid at
+execution, so a compiled chain never meets a flag flip mid-statement. A
+superblock bump is CI-Q5's.
 
 **3.2 The order of acts.** Everything runs in one autocommit transaction
 (CI-Q2), and the build holds the relation `IS` from head to decide, so
@@ -254,6 +270,106 @@ census answers each item with `path:line`:
 logs the tree whole. That cannot stand (CI-R3): a writer's `INDEX_INSERT`
 into a building page must not be replayed against a page whose image comes
 later in the log or never. CI-Q4 chooses how the backfill logs.
+
+**3.5 What CI-S0's census adds** `[source-read]` at `dd437a76`. These are
+amendments to the design above, each one a change S1 or S2 builds. The
+census is in §7.
+- **A1 - a superseder that loses (CI-R7, `[quiet-wrong]`).** A writer W
+  whose id is below the build's B (ids come from per-core blocks,
+  `include/kds/txn/trx_id.hpp:64`) can take its `IX` after the H3
+  snapshot, run while the backfill copies its row, and then abort.
+  Abort restores the prior image in place and appends no index entry
+  (`src/txn/manager.cpp:497-560`). Once the floor passes W,
+  `ResolvedForEveryReader(W)` answers true (`manager.cpp:839`). That
+  answer is sound only for a version still on a page
+  (`instance_visibility.hpp:546-551`). The backfill's staged copy of a
+  loser's version is not on the page. So the walk stops at W, or excuses
+  a failed read of W's recycled undo, and the restored version gets no
+  entry from anyone. Under the `X` no writer was undecided.
+- **A2 - the walk's end.** Writers append leaves at the tail while the
+  cursor chases them, and a backfill slower than the stream would run
+  into `kMaxPageWalkLength` and be refused as `Corruption`
+  (`include/kds/storage/visit.hpp:55-67`). After D the backfill takes a
+  high-water key K: the chain's last leaf, `max(last keyed slot,
+  min_key)`. A leaf whose `min_key > K` ends the walk, because every row
+  past K was written after the drain by a writer that maintains the
+  index. Leaves are never freed, retyped or moved left
+  (`src/storage/btree/btree.cpp:185-188`, `:579-591`, `:839-881`), and
+  SELECT already resumes at a leaf id under `IS`
+  (`src/exec/step_vm.cpp:2096-2116`).
+- **A3 - the IS-then-IX gap in `BorrowChain` (`[quiet-wrong]`).**
+  `first_intention = !holdings.Holds(relation)`
+  (`src/server/command_dispatcher.cpp:10990`) is true only for a
+  transaction holding the relation at no mode. A transaction that took
+  the relation's `IS` earlier, as a foreign-key parent read does
+  (`:4285`), skips the schema-word re-check on its later `IX`. The
+  drain's `IX` snapshot also misses it. The test becomes "holds no mode
+  covering `IX`" (`LockHoldings::HoldsCovering`).
+- **A4 - the build's `TableAccess` across H3.** `BumpVersion` drops the
+  cache (`src/catalog/catalog.cpp:1042-1044`). An `access_` filled at
+  `Begin` dangles after H3 unless a `MemoPin` held from before it keeps
+  the generation. Only schema, layout, oid and anchor are read from it,
+  and the root comes from the slot (CI-R6).
+- **A5 - the rolled-back tree's LSN gate.** `EndDdlScopeById` gates an
+  orphaned create at `appended_lsn()` at the rollback
+  (`command_dispatcher.cpp:7481-7495`). Online, a peer writer whose
+  statement began before the rollback keeps logging into the tree above
+  that LSN until its statement ends. The epoch gate keeps it off a freed
+  page. But the durable redo start can then fall between the gate and the
+  peer's last record, and a crash replays an `INDEX_INSERT` on a freed
+  page (`src/wal/redo.cpp:420-433`). The reclaimer samples the gate again
+  once the epochs pass (`src/server/page_reclaim.cpp:137-145`).
+- **A6 - the horizon.** The build's own transaction pins `ReadHorizon()`
+  through its view (`src/txn/manager.cpp:143`, `:701-706`). Its in-flight
+  id holds the floor, and with it every core's undo recycling and commit
+  window, whichever CI-Q8 option is taken
+  (`include/kds/txn/manager.hpp:309-323`, `src/txn/undo_log.cpp:66-77`).
+  CI-Q8 (b) moves the horizon only if the build's scope runs at
+  `kReadCommitted`: `StartStatement` does nothing under REPEATABLE READ
+  (`manager.cpp:177`).
+- **A7 - the writer's refusals during a build.** A writer whose memo
+  names a root the backfill has since grown over is refused
+  `TXN_CONFLICT retryable=1`. Index-tree refusals are not re-run
+  (`include/kds/storage/insert_placement.hpp:70-79`), and an explicit
+  transaction is poisoned. CI-Q11 decides this.
+- **A8 - the read side.** The paths that must skip a building index are
+  `IndexProbeOf` and `CorrelatedIndexProbeOf`
+  (`src/exec/step_compiler.cpp:1118`, `:1206`), `TableAccess::IndexOn`
+  (`include/kds/catalog/schema.hpp:559-563`), the join cost model
+  (`src/exec/join_order.cpp:203`), the ON CONFLICT arbiter
+  (`command_dispatcher.cpp:6228`) and `FindIndexOnColumn`
+  (`catalog.cpp:4287-4297`). `index_mask` has no production reader
+  (`schema.hpp:550`; only `tests/catalog_test.cpp` reads it), so it is
+  deleted. `SHOW INDEXES` reads under the session's view, so a building
+  row is never visible to another session there. §3.1's "prints the
+  flag" is struck. `CheckIndexDef` refuses `kIndexFlagUnique` together
+  with `kIndexFlagBuilding`, which enforces CI-Q6 (a) at the catalog.
+- **A9 - the drain's machinery.** Holders are exact under the partition
+  latch (`src/txn/lock_table.cpp:176-177`, `:306`, `:530-549`), and a
+  relation `IX` is never released before the decide
+  (`command_dispatcher.cpp:4416-4424`, `:6202`, `:6759`, `:11247`). The
+  lock table gains one public read: the relation's `IX` holders other
+  than the build, with a wake re-armed in the same latch section. The
+  drain draws a wait-for edge to the holder it waits on, so a cycle
+  through it is refused as a deadlock. Its net restarts each time the set
+  shrinks.
+- **A10 - the borrow.** `BorrowRelationForDdl(..., kIntentionShared)`
+  already exists for `CREATE TABLE`'s parent (`command_dispatcher.cpp:4896`).
+  After the grant the head calls `Revalidate()`, which no index head does
+  today. `PrepareIndexDef` takes the borrowed oid instead of resolving
+  the name a second time (`src/exec/index_ddl.cpp:345-353`). Both
+  windows are open on the `X` path too, and both are closed there as well.
+- **A11 - the cost while a build is open.** `AnyDdlOpen()` stays true
+  instance-wide for the build's length, so every statement head on every
+  core resolves names under a minted view (`command_dispatcher.cpp:7338`).
+  Under the `X`, the relation's writers were parked and did not pay this.
+  The close measures it.
+- **A12 - log volume.** A logged backfill writes about `3 +
+  f·align8(36+E)/E` times `LogBuiltTree`'s bytes: one `INDEX_INSERT` per
+  entry, plus a three-image `BTREE_SPLIT` per new leaf. For E = 17 and
+  f = 0.69 that is about 5x. This is computed from
+  `include/kds/wal/record.hpp:266-284` and `payload.hpp:257-456`, not
+  measured, because nothing logs a backfill yet. The close measures it.
 
 ---
 
@@ -414,6 +530,29 @@ stage of its own.
 **CLA proposes (a) if S0 finds no shared state between two builds,
 else (b)**.
 
+**CI-Q11 - a writer refused by a root the backfill grew (§3.5 A7).**
+Written at S0. The backfill grows the building tree's root a few times,
+mostly early on. Each growth can refuse one statement per writer task on
+another core, `TXN_CONFLICT retryable=1`, and that poisons an explicit
+transaction.
+- (a) Accept it and state it: retryable, and bounded by the tree's depth
+  per build.
+- (b) In `AppendIndexEntry`, when `IndexInsert` refuses `TxnConflict` and
+  an anchor is given, read the index's slot again. If it names another
+  root, retry once from it. The refused insert wrote nothing
+  (`src/storage/index/index_tree.cpp:263-268`, `:288-294`), and a moved
+  slot proves that a level grew. This also ends today's
+  writer-on-writer growth race with a placement instead of a refusal.
+
+**CLA proposes (b)**: the purpose of CI is a writer that keeps writing
+through a build, and (a) leaves that writer's explicit transaction to be
+poisoned by a growth it cannot see. (b) costs nothing on the path that is
+not refused, and turns a retryable refusal into a placement the descent
+already proves correct. Under CI-R5, only statements refused by that race
+change, from a refusal to a success.
+**Adopted on the operator's standing go-ahead of 2026-10-23
+(go-ahead-achieving-milestone).**
+
 ---
 
 ## 5. Stages
@@ -443,8 +582,9 @@ The verdict goes in §7: build, narrow or drop.
 encoding, the superblock (CI-Q5), and every probe-choosing path skipping
 it. Tests: a building index is maintained by every write path on every
 core, and no compile chooses it (each path that reads `TableAccess::indexes`
-for a probe, `index_mask`, `FindIndexOnColumn` and the join planner's model
-included).
+for a probe, `FindIndexOnColumn`, the ON CONFLICT arbiter and the join
+planner's model included). `index_mask` is deleted (§3.5 A8), and so is
+`BorrowChain`'s IS-then-IX gap (A3).
 
 **CI-S2 - the online build.** H1..C (§3.2), the drain (CI-Q3), the logged
 backfill (CI-Q4), the ready flip (CI-Q7), and the refused and cancelled
@@ -496,4 +636,236 @@ What CI does not reach:
 
 ## 7. Stage log
 
-Not opened.
+**CI-S0 - the census, 2026-10-23**, on `worktree-online-index-build` at
+`dd437a76`, documents only. Nine read-only census readers, one per item:
+the leaf chain under `IS`, the backfill against concurrent writers, the
+root (CI-R6), the drain, the horizon (CI-Q8), the logging (CI-Q4), the
+read side, the failure and reclaim paths, and the dispatch and lock
+shape with CI-Q10 and the superblock. **Every item came back sound with
+a named change**, and §3.5 A1-A12 records each change. Two of them are
+`[quiet-wrong]` holes in the design as written: A1, the superseder that
+loses (CI-R7 added), and A3, the IS-then-IX gap in `BorrowChain`. A1 was
+found independently by two readers. The others are a crash-time redo
+refusal (A5), a use-after-free (A4), a liveness bound (A2), and costs
+(A6, A11, A12).
+- **CI-Q8** resolves to (b), with the scope at `kReadCommitted` (A6).
+- **CI-Q10** resolves to (a). The two builds share only the name and the
+  anchor room, both refused at H3 under page holds
+  (`src/catalog/catalog.cpp:4085-4093`, `:3957-3965`). Neither build is
+  in the other's drain, because the snapshot takes `IX` holders only.
+- **PURGE and `PURGE DROPPED COLUMNS` run during the backfill.** Both
+  take `IX`, so the drain waits for them. A slot retire happens in place,
+  only for a row resolved for every reader, and leaves at most a surplus
+  entry (`command_dispatcher.cpp:12105-12115`). CD rewrites only dropped
+  cells, which no index holds.
+- **CI-Q11** was written at S0 and adopted as (b).
+
+**Verdict: build**, with A1-A12, on CI-Q0 (a), whose mark here is CLA's
+verdict, adopted on the operator's standing go-ahead of 2026-10-23
+(go-ahead-achieving-milestone). S0 item 5 (log volume) is computed
+(A12), not measured, and is measured at the close. The premise
+measurement is S0 item 1, below.
+
+**CI-S0 item 1 - the premise, measured** at `v3.4.3-10-gdd437a76`
+(`bench/v3.4.3/results-ci-s0-premise-v3.4.3-10-gdd437a76.md`, driver
+`tools/ci_s0_premise.py`). Setup: `cores=4`, `group`, 10M rows, and
+`CREATE INDEX` on one int64 column. **The premise holds for writers.**
+- One writer statement waited out the whole build each time, released
+  within 1 ms of the build's end. The stalls were 27.7, 28.4 and 34.8 s,
+  against builds of 27.7, 28.4 and 34.8 s. The wait is one relation `IX`
+  wait in `sys.lock_waits`.
+- The writer's p100 went from 138 ms with no build to 34.8 s, while
+  p50 moved from 0.96 to 1.05 ms.
+- **A point `SELECT` by tuple key was not blocked**: 14-16k/s during the
+  build, against 16.5k/s without one. §0's "every positioned reader
+  waits" is true of a walk that takes the borrow, which this run did not
+  test.
+- The index came out at height 3 with about 32.9k pages for 10M entries.
+- Over budget: the run took about 50 minutes against 20, because two
+  attempts overlapped other sessions' compiles and were taken again
+  behind a quiet gate. The row-count sweep was cut.
+- `CREATED INDEX ... entries=0` disagrees with `SHOW INDEXES`'s 10M, in
+  all three builds. The reply prints a field the build does not fill.
+  This is not CI's to fix, and it is recorded here.
+
+**CI-S1 - the flag and the read side, 2026-10-23**, built on
+`worktree-online-index-build` from `dd437a76`:
+- `kIndexFlagBuilding` (0x2). `SysIndexRow::Decode` refuses a bit nothing
+  defines, and a row that is both unique and building. `CheckIndexDef`
+  refuses the same pair, so CI-Q6 (a) holds at the catalog.
+- `IndexRef::building`, and the skips in `IndexProbeOf`,
+  `CorrelatedIndexProbeOf`, `TableAccess::IndexOn` and `FindIndexOnColumn`.
+  Since no unique index can be building, the join cost model's and the ON
+  CONFLICT arbiter's checks would be dead code, so none was added there.
+- `TableAccess::index_mask` is deleted.
+- Superblock 34.
+- `BorrowChain`'s first intention is now the first *covering* hold
+  (`LockHoldings::HoldsCovering`, §3.5 A3).
+- Tests: a building index is chosen by no compile, through the literal,
+  filter-scan and correlated arms. It is maintained by `INSERT` and by an
+  `UPDATE` that moves its key. The codec and `CheckIndexDef` refusals. A
+  v33 volume is refused. The covering test.
+
+**The review** (`critics-developer`) found S1 correct.
+- **Applied:**
+  - The correlated-arm test reached the literal arm instead; its join now
+    uses a range.
+  - Three comments no longer described the code.
+  - The maintenance test was missing, and is added.
+  - The two unique-and-building checks could never trigger. They were
+    deleted, and `Decode` refuses the pair instead (removal first).
+  - Six copies of the version-refusal test are now one helper.
+  - The redundant `0x4` lines are removed.
+  - The `BorrowChain` comment is marked as CI-S2's.
+- **Deferred to S2:** the dispatcher-level A3 test. It needs a word move
+  between a statement's resolution and its `IX`, which only an online
+  build makes; CI-S2's drain test (a) covers it.
+- **Deferred to S2:** renaming `IndexBuild::building_`.
+
+**Suite**: 4326/4326 at the S1 commit's build inputs (`ctest -j8 -LE
+bs-nightly`). Overhead not measured; measured at the milestone's close.
+
+**CI-S2 - the online build, 2026-10-23**, built on `worktree-online-index-build`
+on top of `c31c00dd`.
+- **Which builds go online.** A plain `CREATE INDEX` in autocommit, on a
+  dispatcher that may park and has a lock table and a clock. It borrows
+  the relation `IS`, calls `Revalidate`, refuses a relation dropped and
+  created again under its name (A10), and runs its scope at READ
+  COMMITTED.
+- **H2 and H3.** `IndexBuild::Begin` logs the root as a full page image
+  (H2). `Announce` writes the slot and the row flagged building (H3) in
+  the head, with the row and the owed tree noted there, once.
+- **D, the drain.** `IndexBuildRun::Drain` runs before the first slice. It
+  reads the relation's `IX` holders after the word move through
+  `LockTable::IntentionWriters` and waits on a wake. The net restarts each
+  time the set shrinks. It draws a wait-for edge to the front holder, and
+  a cancel wakes it.
+- **B, the backfill.**
+  - It takes the high-water key at its first slice (A2) and checks each
+    leaf's owner.
+  - It reads the root from the slot per append (CI-R6).
+  - It appends through `AppendIndexEntry` with a sink into `LogIndexWrite`.
+  - A head writer that was in flight at the copy is never trusted
+    resolved later. On a failed walk with that writer decided, the row is
+    read again by tuple key, bounded (CI-R7).
+- **R and the writers.** `Finish` clears the flag through
+  `Catalog::ClearIndexBuilding` (`OverwriteLogged`).
+  `AppendIndexEntry` retries a refused append from a moved slot, for
+  writers too (CI-Q11 (b)).
+- **The rolled-back tree.** Nothing frees an online tree. The reclaimer
+  takes a rolled-back create's gate again, one step after its epochs
+  pass (A5), and does so for every rolled-back create.
+- **What the change made obsolete.** The fault-net cell of the
+  `X`-holding build now builds `UNIQUE`, which keeps the `X`. The slice
+  rig's writer cell now asserts that the writer runs inside the build.
+
+**The review** (`critics-developer`) found three bugs, and its edits fixed
+them:
+- The re-gate read the log's end before the epochs' acquire. It now takes
+  the gate from the next step's read.
+- The drain had no net without a clock. An online build now needs a clock.
+- The drain's wake leaked when the frame was destroyed. It is now a member,
+  dropped by `~IndexBuildRun`.
+
+**Applied:**
+- The re-gate is unconditional for every rolled-back create, which removed
+  the `online` flag from `OwedIndex` and `NoteOwedIndex`.
+- `AppendVersion` makes one `AppendIndexEntry` call.
+- `HighWaterKey` takes the catalog, store and oid.
+- `Announce` returns `Status`.
+- The drain arms its wake on its first read.
+- A cancel wakes the drain.
+- The comments that still assumed the `X` were corrected.
+- The root-page leak on a refusal between H2 and H3 is stated.
+
+**Tests**, each shown to fail without its code by a mutant (killed 1 in 1):
+- the drain waits for a writer that began before the build;
+- a writer that never decides refuses the build at the net, and no index
+  is left;
+- writers during the backfill lose no row under an old view or a new one,
+  including old versions held in undo alone;
+- a writer asking the relation `X` during the drain is the deadlock victim;
+- the CI-Q11 retry from a moved slot;
+- the re-gate holds a rolled-back create's tree for a second checkpoint;
+- an online build crashed between slices mounts without it and builds
+  again;
+- a frame destroyed in the drain leaves no wake.
+
+**Not covered by a failing test:**
+- CI-R7: it needs a seam between phase 1 and phase 2, and a writer below
+  the floor.
+- CI-R6's per-append slot read: its mutant survives because CI-Q11's retry
+  carries correctness, so the read saves a wasted descent per append
+  after a growth.
+- The A3 gap at the dispatcher, which needs a statement spanning H3
+  between its resolution and its `IX`. S1's covering test stands for it.
+- A2's bound, which changes liveness only.
+
+**Suite**: 4333/4333 at the S2 commit's build inputs. Overhead not
+measured; measured at the milestone's close.
+
+**CI-S4 - the close, 2026-10-23.**
+- **Measured** at `v3.4.3-13-g614864c4` against the opening
+  `v3.4.3-10-gdd437a76`, interleaved A/B in `build-release` on a quiet
+  host (`bench/v3.4.3/results-ci-close-v3.4.3-13-g614864c4.md`, about
+  30 minutes, nothing cut).
+- **Arm B, the premise, 10M rows.**
+  - The writer's longest stall during a `CREATE INDEX` fell from 27.2,
+    28.1 and 26.8 s - each the whole build - to 0.74, 1.29 and 0.70 s.
+  - No relation `IX` wait is recorded.
+  - The writer runs at 155-193 statements/s during the build (about 0
+    before), with p50 3.62 ms against 0.99 ms idle and p99 17.7 ms.
+  - The build takes 33.3, 44.1 and 32.9 s against 27.2, 28.1 and 26.8 s,
+    and writes 5.04x the log: 1,370 MB against 272 MB, 137 B per row.
+    That is §3.5 A12's estimate.
+- **Arm A, CI-R5, no build running.** On an indexed relation, INSERT,
+  UPDATE of an unindexed column and UPDATE of the indexed column at 200,
+  10K and 200K rows show deltas of -7.1 % to +1.2 % against a run-to-run
+  spread of 2-22 %, with the log per statement identical. No cost is
+  outside the spread.
+- **Stated, not a bar missed: the build pays for the writers' freedom.**
+  It runs about 20-60 % longer and logs about 5x. Writers run at a quarter
+  of their idle rate during it, where before they did not run at all.
+- **Not explained:**
+  - A recurring band of 0.5-0.7 s writer statements during the build. It
+    lines up in count with the build's 21 segment rolls, and a roll syncs
+    its segment under the stream latch (`wal.md` §6, BQ). That
+    attribution is not measured.
+  - One build of 44.1 s.
+- **Texts:** `index.md` (status, §9, §10, §10.1, the new §10.3 IX15, IX12,
+  §12's list), `ddl-transactional.md` §5e, `sched.md` §3, `leaf_cursor.hpp`'s
+  header, `manual/sql/sql.md`, `manual/server/server.md` and
+  `backup-restore.md` (superblock 34), `known-gaps.md` (the online index
+  build, CI), and CLAUDE.md's secondary-index, transactional-DDL,
+  heap-relation and core-placement rows.
+
+**Every stage landed** on `worktree-online-index-build`: S0 `d40e92f9`, S1
+`c31c00dd`, S2 `614864c4`, and S4 the close. CI-S3 is not built (CI-Q6
+(a)). The close is not merged to `main`, not pushed and not tagged, which
+is the operator's word.
+
+**The S4 review** (`critics-developer`).
+- **Applied, 13 text errors:**
+  - three misstatements in the conditions for going online and in the
+    deadlock victim;
+  - IX10a's "before the row exists", which is now the `X` build's alone;
+  - the remaining texts that said every `CREATE INDEX` takes `X` (`foreign-keys.md`,
+    `catalog.md`, `heap-and-tuple.md`, `crosscore.md` CC8, `protocol.md`
+    §10, `known-gaps.md`, the manual);
+  - the results file's run counts and deltas.
+- **Applied, one source defect:** a `PURGE` under the build's `IS` can
+  release a delete-marked row's spilled values between the copy and the
+  decode, which refused the build. Such a row is now skipped as one no
+  reader reaches, or read again if its deleter was in flight at the copy
+  (`IndexStagedRow`). It is untested, like CI-R7 (`known-gaps.md`). It
+  changes only an error path, so the close measurement still stands for
+  it, and it was not measured again.
+- **Applied:** the release label is dropped from the manual,
+  `leaf_cursor.hpp`'s header is cut to a pointer at `index.md` §10.3, and
+  CLAUDE.md's row names every condition that keeps the `X` build.
+- **Rejected:** shrinking `ddl-transactional.md` §5e to a pointer. §5e owns
+  what each DDL guarantees, and the online build's atomicity and isolation
+  belong there.
+
+**Suite**: 4334/4334 on the merged tree (`origin/main` at `02077d7e`,
+merged at `9e7b4ce0`) with the review's fixes.

@@ -153,6 +153,13 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
 // `log`, a new root is republished here instead, through the catalog and
 // while the divide still pins the anchor (`UnlatchedPin`), and none is
 // reported; the backfill passes neither, and its growth pins nothing.
+//
+// **A refusal from a root another core grew past is retried from the slot**
+// (CI-Q11 (b), `instructions/v3.2.0/workorder-ci-online-index-build.md`):
+// with `log` or `publish`, an insert refused `TxnConflict` - which wrote
+// nothing - reads the index's anchor slot, and when it names another root
+// asks again from there, a few times at most. A moved slot proves a level
+// grew, and the descent from the slot's root is the current tree's.
 StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   const catalog::TableAccess& access,
                                   const catalog::TableAccess::IndexRef& ix,
@@ -162,6 +169,11 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::span<const parser::AstValue> previous = {},
                                   const IndexWriteLog* log = nullptr,
                                   catalog::Catalog* publish = nullptr);
+
+// The root `index_oid`'s slot in the relation's anchor page `anchor` names,
+// read under a shared hold of that page alone. A live index with no slot is
+// `Corruption`, as `Catalog::InitTableAccess` refuses it (BY-R10).
+StatusOr<PageId> SlotRoot(storage::PageStore& store, PageId anchor, std::uint64_t index_oid);
 
 // ---- Unique indexes (BX, `instructions/v3.2.0/workorder-bx-unique-index.md`)
 //
