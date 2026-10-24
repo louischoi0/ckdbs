@@ -44,3 +44,12 @@
 | **Mark** | **`v3.4.6`**, an annotated tag on `main` at `ca49241a`, then the head of `origin/main`. It carries CI and CG's close. Its message states CI built and closed, CG closed, CI's premise and close measured, and the gaps that bound it. The full Debug suite ran 4335/4335 at `bcdadd10`, whose build inputs the tagged commit shares (everything after it is under `instructions/` and CLAUDE.md), so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.6`; `v3.4.5` is left where it stands |
 | **Does not settle** | a later version |
 | **Recorded at** | this file; the tag message; CLAUDE.md's Version Management; the CI order's header and §7; `instructions/v3.2.0/index.md` |
+
+## 6. A1 closed
+
+| | |
+|---|---|
+| **Word** | *"close A1"* |
+| **Mark** | **A1 closed** - a relation-`X` build gives its core back between slices: `CREATE INDEX` and `REINDEX INDEX` since stage 2a (`37a60b10`), `CREATE ASSERTION` and `CREATE TRANSITION` since stage 2b (`cca7415b`). A1 kept no work order in the tree; its close was measured at `18ffb998` (`bench/v3.4.0/results-a1-close-v3.4.0-11-gf53e62db.md`): the yield costs nothing measurable on the statement path and bounds a same-core read behind a build to one slice, but a WAL segment roll during a large build still stalls that read, which stays in `docs/inflight/known-gaps.md` and `docs/spec/sched.md` §3 |
+| **Does not settle** | The roll's stall; a push; a tag, a version |
+| **Recorded at** | this file; the 2026-10-24 row of `instructions/v3.2.0/index.md` |
