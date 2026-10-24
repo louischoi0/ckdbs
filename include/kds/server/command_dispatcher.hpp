@@ -774,8 +774,12 @@ private:
 
     // Fails only if a transaction cannot be started. A dispatcher with no
     // manager returns an empty scope, and the write path stamps
-    // kBootstrapXid.
-    StatusOr<WriteScope> BeginWrite(Session& session);
+    // kBootstrapXid. `isolation`, when given, is an owned scope's level in
+    // place of the session's - an online `CREATE INDEX` runs at READ
+    // COMMITTED so its view, re-minted per slice, moves the horizon (CI §3.5
+    // A6).
+    StatusOr<WriteScope> BeginWrite(
+        Session& session, std::optional<txn::IsolationLevel> isolation = std::nullopt);
 
     // Ends what BeginWrite began. `result` is the statement's outcome: OK
     // commits an owned scope, anything else aborts it. Inside an explicit
@@ -1193,7 +1197,9 @@ private:
     // FinishDdlStatement on every exit - structural, so no route can
     // install the undo hook and leave it armed (review S4).
     template <typename Fn>
-    DispatchOutcome InDdlStatement(Session& session, Fn&& body);
+    DispatchOutcome InDdlStatement(
+        Session& session, Fn&& body,
+        std::optional<txn::IsolationLevel> isolation = std::nullopt);
     // The tail every DDL route runs: uninstalls the undo hook, resolves
     // the write scope (commit/abort for an owned one), and for an owned
     // scope runs the DDL-resolution seam - cache invalidation and the §5d

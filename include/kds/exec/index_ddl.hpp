@@ -9,6 +9,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/index_maintain.hpp"
 #include "kds/exec/leaf_cursor.hpp"
 #include "kds/txn/read_view.hpp"
 #include "kds/parser/ast.hpp"
@@ -110,13 +111,33 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
 // before `Finish` frees its unlogged tree (BX-S6); a failure after the tree
 // is logged leaves it owed in its anchor slot, seeded if the catalog refused
 // before writing it, and the next mount reclaims it (BY-R1, BY-R2).
+//
+// **An online build** (CI, `instructions/v3.2.0/workorder-ci-online-index-build.md`)
+// holds the relation `IS`, not `X`, across its walk, and writers keep
+// writing. It logs its root at `ForCreate` (H2) and writes its anchor slot
+// and its `sys.indexes` row flagged `kIndexFlagBuilding` at `Announce`
+// (H3), so every writer maintains the index from then on and no read
+// chooses it; the caller then drains the writers that resolved the
+// relation before H3. Each `Step` appends through the writers' own logged
+// path, from the root the anchor slot names (CI-R6), stops at the
+// high-water key taken at its first call (§3.5 A2), and never trusts a
+// head writer that was in flight at the copy as resolved later (CI-R7).
+// `Finish` clears the flag (CI-Q7 (a)). Its tree is logged from H2 on, so
+// nothing frees it but the reclaimer, through the slot (CI-R4).
 class IndexBuild {
 public:
-    // `CREATE INDEX`'s head: `PrepareIndexDef`, then the root.
+    // `CREATE INDEX`'s head: `PrepareIndexDef`, then the root. `relation`,
+    // when given, is the one the caller borrowed: a name that now resolves
+    // to another relation - dropped and created again since - is refused
+    // `TxnConflict`, since the borrow fences nothing of it. `online` builds
+    // under `IS` as the class comment says, and logs the root through
+    // `wal` (null: unlogged, tests).
     static StatusOr<std::unique_ptr<IndexBuild>> ForCreate(
         catalog::Catalog& catalog, storage::PageStore& store, const parser::IndexStmt& stmt,
         catalog::Oid default_namespace, const txn::ReadView* view, std::uint64_t trx_id,
-        const txn::TransactionManager* txns, txn::HolderProgress::Scope* progress);
+        const txn::TransactionManager* txns, txn::HolderProgress::Scope* progress,
+        std::optional<catalog::Oid> relation = std::nullopt, bool online = false,
+        wal::WalManager* wal = nullptr);
 
     // **`REINDEX INDEX <name>`'s head** (BY-R6,
     // `instructions/v3.2.0/workorder-by-reindex-drop-index-reclaim.md`): the
@@ -139,9 +160,22 @@ public:
     IndexBuild(const IndexBuild&) = delete;
     IndexBuild& operator=(const IndexBuild&) = delete;
 
+    // **H3, an online build's announce**: the anchor slot, then the row
+    // flagged `kIndexFlagBuilding`, under the build's transaction; the
+    // schema word moves. `written` as on `Finish`. On a refusal before the
+    // slot is down the slot is seeded best-effort, as `Finish` seeds it, and
+    // `*owed` says whether a slot now names the tree. Called once, before
+    // the first `Step`.
+    Status Announce(catalog::CatalogRowRef* written, bool* owed);
+
     // Walks up to `leaves` more of the relation's leaves. A refusal ends
-    // the build: the caller hands it to `Finish`.
-    Status Step(std::uint32_t leaves);
+    // the build: the caller hands it to `Finish`. An online build's appends
+    // log through `log` (null: no log, the root published in place).
+    Status Step(std::uint32_t leaves, const IndexWriteLog* log = nullptr);
+
+    bool online() const noexcept { return online_; }
+    // The pre-issued oid the tree's pages and the row carry.
+    catalog::Oid index_oid() const noexcept { return def_.index_oid; }
 
     // Whether the walk has reached the end of the leaf chain.
     bool walked() const noexcept { return cursor_.walked(); }
@@ -159,19 +193,30 @@ public:
     // is stamped with the build's transaction and its address reported in
     // `written`, so a rollback can retire it (DT5). `wal` null = unlogged
     // (tests). Called once.
+    //
+    // Online, the row and the tree are already down: OK clears the flag in
+    // place (R), and anything else is returned as it is - the tree is owed
+    // through its slot from H3, so nothing is freed here.
     StatusOr<IndexDdlResult> Finish(const Status& ran, catalog::CatalogRowRef* written,
                                     wal::WalManager* wal);
 
 private:
     IndexBuild(catalog::Catalog& catalog, storage::PageStore& store, parser::IndexStmt stmt,
                catalog::Catalog::IndexDef def, std::uint64_t trx_id,
-               const txn::TransactionManager* txns, txn::HolderProgress::Scope* progress);
+               const txn::TransactionManager* txns, txn::HolderProgress::Scope* progress,
+               bool online = false, wal::WalManager* wal = nullptr);
 
-    // The root, and the leaf the walk starts at.
+    // The root, and the leaf the walk starts at. Online, the root's image
+    // too (H2).
     Status Begin();
 
     // A refusal from the build, as the statement answers it.
     Status Refusal(const Status& s) const;
+
+    // A slot for the tree when the catalog refused before writing one, so a
+    // logged tree is owed rather than leaked (BY-S2's review). Whether a
+    // slot names the tree afterwards.
+    bool SeedOwedSlot();
 
     catalog::Catalog& catalog_;
     storage::PageStore& store_;
@@ -180,12 +225,24 @@ private:
     const std::uint64_t trx_id_;
     const txn::TransactionManager* const txns_;
     txn::HolderProgress::Scope* const progress_;
+    const bool online_;
+    wal::WalManager* const wal_;
+    // Online: the memo generation `access_` points into, held across H3's
+    // invalidation (§3.5 A4).
+    std::optional<catalog::Catalog::MemoPin> pin_;
     const catalog::TableAccess* access_ = nullptr;
-    // Its `root_page_id` names the root the tree has grown to even when the
-    // backfill fails, which is what a failed build frees from (BX-Q6 (b)).
-    catalog::TableAccess::IndexRef building_;
+    // The index's definition as the backfill appends with it. Fenced, its
+    // `root_page_id` names the root the tree has grown to even when the
+    // backfill fails, which is what a failed build frees from (BX-Q6 (b));
+    // online, the slot names the root and this one is read from it per
+    // append (CI-R6).
+    catalog::TableAccess::IndexRef tree_;
     LeafCursor cursor_;
+    // Online: the highest tuple key the relation held after the drain, taken
+    // at the first `Step` (§3.5 A2).
+    std::optional<std::uint64_t> high_water_;
     catalog::Oid replaced_oid_ = 0;
+    bool tree_logged_ = false;
     bool finished_ = false;
 };
 

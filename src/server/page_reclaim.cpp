@@ -92,9 +92,11 @@ void PageReclaimer::EnqueueCommittedDrop(catalog::Oid oid, catalog::PendingRoots
 
 void PageReclaimer::EnqueueOrphanedIndex(catalog::Oid rel_oid, PageId anchor,
                                          catalog::Oid index_oid, wal::Lsn gate,
-                                         std::uint64_t word) {
-    Enqueue(MakeJob(rel_oid, index_oid, catalog::PendingRoots{anchor, kInvalidPageId}, gate,
-                    word));
+                                         std::uint64_t word, bool regate) {
+    Job job = MakeJob(rel_oid, index_oid, catalog::PendingRoots{anchor, kInvalidPageId}, gate,
+                      word);
+    job.regate = regate && word != 0;
+    Enqueue(std::move(job));
 }
 
 void PageReclaimer::DropIndexJobsOfRelationJobs() {
@@ -115,7 +117,8 @@ void PageReclaimer::DropIndexJobsOfRelationJobs() {
     counters_.pending.fetch_sub(before - jobs_.size(), std::memory_order_relaxed);
 }
 
-Status PageReclaimer::Step(wal::Lsn durable_redo_start, const StatementEpochs* epochs) {
+Status PageReclaimer::Step(wal::Lsn durable_redo_start, const StatementEpochs* epochs,
+                           wal::Lsn appended_lsn) {
     {
         const std::lock_guard<std::mutex> hold(inbox_latch_);
         for (Job& job : inbox_) jobs_.push_back(std::move(job));
@@ -142,6 +145,24 @@ Status PageReclaimer::Step(wal::Lsn durable_redo_start, const StatementEpochs* e
             // Passed once is passed for good: a statement that starts later
             // revalidated past the drop, so its memo cannot hold the relation.
             job.word = 0;
+            // CI A5: every statement that could still write the tree has
+            // ended (the epochs' acquire above pairs with each one's
+            // release at its end). But `appended_lsn` was read by the caller
+            // before that acquire, so a record a peer appended in between
+            // can lie past it: the gate is taken from the next step's read,
+            // which follows this one.
+            if (job.regate) {
+                ++it;
+                continue;
+            }
+        }
+        if (job.regate) {
+            job.regate = false;
+            job.gate = std::max(job.gate, appended_lsn);
+            if (durable_redo_start < job.gate) {
+                ++it;
+                continue;
+            }
         }
         if (job.phase == Phase::kWalk) {
             if (!WalkSome(job, budget)) {

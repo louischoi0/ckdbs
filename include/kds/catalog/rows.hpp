@@ -466,6 +466,15 @@ inline constexpr std::size_t kMaxIndexCoveredColumns = 8;
 // that ignores the bit can mount a volume carrying it.
 inline constexpr std::uint8_t kIndexFlagUnique = 0x1;
 
+// An online `CREATE INDEX` that has not finished (CI,
+// `instructions/v3.2.0/workorder-ci-online-index-build.md`): every write
+// maintains the index, and no read chooses it, because its backfill has
+// not finished. Cleared in place before the create decides. Written since
+// superblock 34, so no binary that reads it as an ordinary index can mount
+// a volume carrying it.
+inline constexpr std::uint8_t kIndexFlagBuilding = 0x2;
+inline constexpr std::uint8_t kIndexFlagsDefined = kIndexFlagUnique | kIndexFlagBuilding;
+
 struct SysIndexRow {
     // From AllocateRowId(kSysIndexesTable) - this relation's own persistent
     // sequence, like a cabin_id or an fk_id, and not GenerateUserOid(),

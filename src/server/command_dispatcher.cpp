@@ -2349,13 +2349,17 @@ private:
 // yield its core between slices (`sched.md` §3), as `SelectRun` lets a
 // `SELECT`'s walk: `CREATE INDEX` and `REINDEX INDEX` (`IndexBuildRun`),
 // `CREATE ASSERTION` and `CREATE TRANSITION` (`DeclarationBuildRun`). The
-// head fills one under the relation `X`; where the statement cannot park, or
-// holds no `X`, it runs here whole, and where it can (`DispatchAsync`) it is
-// handed on in `DispatchOutcome::build_run`.
+// head fills one under the relation `X` - or, for an online `CREATE INDEX`
+// (CI), `IS` with its row announced; where the statement cannot park, or
+// holds neither, it runs here whole, and where it can (`DispatchAsync`) it
+// is handed on in `DispatchOutcome::build_run`.
 //
 // What it holds across a suspension, and why each is safe to hold: the `X` -
 // no writer and no positioned reader of the relation runs until the decide,
-// so the leaf the walk resumes at is as it was left; the build (the next leaf
+// so the leaf the walk resumes at is as it was left - or the online build's
+// `IS`, under which writers run but a leaf keeps its id and lower half and
+// rows only move right (CI §3.5 A2), so resuming at a leaf id misses no row
+// that existed at the drain; the build (the next leaf
 // and what it has built, no page); the progress registration a slice
 // advances (`holder_progress.hpp`); and this core's statement epoch and a pin
 // on the catalog memo, for the relation's `TableAccess` the build reads.
@@ -2371,8 +2375,9 @@ public:
 
     // The head's last step, once the build exists. Handed on - taking its
     // `SuspensionHold` - only where the statement may park and its relation
-    // `X` is held (`fenced`): without the `X` nothing keeps the leaf it would
-    // resume at in place, so a dispatcher with no lock table runs it whole
+    // is held (`fenced`: the `X`, or an online build's `IS`): without a hold
+    // nothing keeps the relation's leaves in place, so a dispatcher with no
+    // lock table runs it whole
     // here, as a synchronous caller does.
     DispatchOutcome HandOn(bool fenced);
 
@@ -2399,6 +2404,14 @@ protected:
 
     // The registration a slice advances; null without a lock table.
     virtual txn::HolderProgress::Scope* progress_scope() = 0;
+
+    // What runs before the first slice; nothing but for an online
+    // `CREATE INDEX`, whose drain it is (CI-Q3 (b)). A refusal is left in
+    // `*ran` and ends the build as a slice's would.
+    virtual sched::Coro Drain(Status* ran) {
+        (void)ran;
+        co_return Status::OK();
+    }
 
     // Whether the run was handed on.
     bool handed() const noexcept { return hold_.has_value(); }
@@ -2429,9 +2442,10 @@ DispatchOutcome BuildRun::HandOn(bool fenced) {
 }
 
 sched::Coro BuildRun::Execute(DispatchOutcome* out) {
-    // A cancel already pending - sent while the head waited for its `X` -
+    // A cancel already pending - sent while the head waited for its borrow -
     // is taken before the first slice.
     Status ran = slice_.TakeCancel();
+    if (ran.ok()) co_await Drain(&ran);
     while (ran.ok() && !walked()) {
         {
             // The slice writes pages as this dispatcher's core, as
@@ -2479,7 +2493,8 @@ sched::Coro BuildRun::Execute(DispatchOutcome* out) {
 
 // ---- `CREATE INDEX` and `REINDEX INDEX` --------------------------------------
 //
-// Under the statement's write scope, whose transaction holds the `X`. **Not
+// Under the statement's write scope, whose transaction holds the `X` - or,
+// online (CI), the `IS`, the row announced and the tree owed. **Not
 // the catalog's undo hook**: it is the dispatcher's, so `InDdlStatement`
 // uninstalls it before the first yield and the tail installs it again.
 class IndexBuildRun final : public BuildRun {
@@ -2488,7 +2503,8 @@ public:
     ~IndexBuildRun() override;
 
     // The head's last step, once the build exists. `relation` is the one the
-    // head took the `X` on.
+    // head borrowed: `X`, or for an online build `IS` with its row already
+    // announced (H3).
     DispatchOutcome Start(const CommandDispatcher::WriteScope& scope,
                           CommandDispatcher::DdlScope ddl, catalog::Oid relation,
                           std::unique_ptr<exec::IndexBuild> build);
@@ -2501,30 +2517,40 @@ public:
     std::optional<txn::HolderProgress::Scope> progress;
 
 private:
-    Status Step(std::uint32_t leaves) override { return build_->Step(leaves); }
+    Status Step(std::uint32_t leaves) override;
     bool walked() const override { return build_->walked(); }
     DispatchOutcome Tail(const Status& ran) override;
     DispatchOutcome FramedTail(Session& active, const Status& ran) override;
     txn::HolderProgress::Scope* progress_scope() override {
         return progress.has_value() ? &*progress : nullptr;
     }
+    sched::Coro Drain(Status* ran) override;
 
     CommandDispatcher::WriteScope scope_;
     CommandDispatcher::DdlScope ddl_;
     catalog::Oid relation_ = 0;
     std::unique_ptr<exec::IndexBuild> build_;
+    // Online: the backfill's appends log as a writer's do, under the
+    // build's transaction and the holds that placed them (CI-Q4 (a),
+    // AT-S21); null with no log, where a grown root is published in place.
+    exec::IndexWriteLog log_;
+    // The drain's wake registration, a member so a frame destroyed while
+    // the drain is parked on it still gives it back (`~IndexBuildRun`).
+    txn::LockWake drain_wake_;
 };
 
 IndexBuildRun::~IndexBuildRun() {
     // **Handed on and never decided**: the frame destroyed at a suspension,
     // a core torn down with the statement queued (`CoreRuntime`'s
-    // `DiscardTasks`). The tree goes back with the build, and an autocommit
-    // scope is aborted as a refused build's is - directly, not through
-    // `EndWrite`, which reads the members of whatever statement ran last. An
-    // explicit transaction's scope is its session's, ended by its ROLLBACK or
-    // its close.
+    // `DiscardTasks`). The tree goes back with the build - or, online, stays
+    // owed through its slot, noted at H3 - and an autocommit scope is
+    // aborted as a refused build's is - directly, not through `EndWrite`,
+    // which reads the members of whatever statement ran last. An explicit
+    // transaction's scope is its session's, ended by its ROLLBACK or its
+    // close.
     if (handed() && !decided_) {
         const CurrentCoreGuard as_this_core(d_.core_id_);
+        if (drain_wake_.slot != nullptr) d_.locks_->DropWake(drain_wake_.key, drain_wake_.slot);
         build_.reset();
         if (scope_.owned && scope_.txn != nullptr) {
             const std::uint64_t id = scope_.txn->id();
@@ -2541,9 +2567,99 @@ DispatchOutcome IndexBuildRun::Start(const CommandDispatcher::WriteScope& scope,
     ddl_ = std::move(ddl);
     relation_ = relation;
     build_ = std::move(build);
-    // The `X` is the scope's where a lock table and a transaction exist
-    // (`HandleIndex`'s borrow).
+    if (build_->online() && d_.wal_ != nullptr) {
+        const std::uint64_t txn_id = scope_.txn->id();
+        CommandDispatcher* d = &d_;
+        log_ = [d, txn_id](const exec::IndexWrite& write) {
+            return d->LogIndexWrite(write, txn_id);
+        };
+    }
+    // Resumable at a leaf id where a lock table and a transaction exist: the
+    // `X` is the scope's, or an online build's `IS` with rows only ever
+    // moving right and leaves never freed (CI §3.5 A2).
     return HandOn(d_.locks_ != nullptr && scope_.txn != nullptr);
+}
+
+Status IndexBuildRun::Step(std::uint32_t leaves) {
+    if (!build_->online()) return build_->Step(leaves);
+    // CI-Q8 (b): the build's own view re-minted per slice - its scope runs at
+    // READ COMMITTED for this - so the snapshot bound its core announces
+    // moves between slices. The backfill reads no view (it asks
+    // `ResolvedForEveryReader`), and the transaction's view is read only by
+    // the write-conflict check of its own catalog rows.
+    (void)d_.txn_->StartStatement(*scope_.txn);
+    return build_->Step(leaves, log_ ? &log_ : nullptr);
+}
+
+sched::Coro IndexBuildRun::Drain(Status* ran) {
+    if (!build_->online()) co_return Status::OK();
+    // **CI-Q3 (b), after H3's word move**: the head moved it before handing
+    // the run on. Every writer granted the relation's `IX` before the move
+    // may have resolved the index list without this index, so it is waited
+    // out; one granted after it either is in this snapshot or meets the
+    // moved word at its first intention and runs again (CI-R2). A relation
+    // `IX` is held to the decide, so the set only shrinks.
+    txn::LockTable& locks = *d_.locks_;
+    const std::uint64_t self = scope_.txn->id();
+    const txn::LockKey relation = txn::LockKey::Relation(relation_);
+    std::vector<std::uint64_t> waiting;
+    txn::LockWake& wake = drain_wake_;
+    std::size_t seen = std::numeric_limits<std::size_t>::max();
+    sched::MonoTimeNs deadline = 0;
+    Status drained = Status::OK();
+    for (bool first = true;; first = false) {
+        {
+            // The wake is registered for the core whose reactor polls it,
+            // which a decide on any core kicks (AU-S2). The first read is
+            // the snapshot; every later one keeps only its members.
+            const CurrentCoreGuard as_this_core(d_.core_id_);
+            waiting = locks.IntentionWriters(relation, self, first ? nullptr : &waiting, &wake);
+        }
+        if (waiting.empty()) break;
+        // The net is the lock family's, restarted each time a writer the
+        // drain waits on decides: a drain that makes progress is not stuck.
+        if (waiting.size() < seen) {
+            seen = waiting.size();
+            deadline = d_.NowNs() + d_.lock_wait_fault_net_ns_;
+            if (progress.has_value()) progress->Advance();
+        }
+        // The edge to the writer waited on, so a cycle through it - that
+        // writer's transaction asking the relation `X` the build's `IS`
+        // refuses - is refused as a deadlock rather than a wait the net
+        // ends (AO-R7): whichever edge closes it names the victim, the
+        // build here or that writer at its own ask. One edge, to the front
+        // of the set: a cycle through another member is found once the
+        // front decides, or by the net.
+        if (locks.NoteWaitFor(self, waiting.front())) {
+            drained = DeadlockVictim("an online index build's drain of relation oid " +
+                                     std::to_string(relation_) + ", held by " +
+                                     HolderName(waiting.front()));
+            break;
+        }
+        if (d_.NowNs() >= deadline) {
+            drained = Status::TxnConflict(
+                "an online index build waited " +
+                std::to_string(d_.lock_wait_fault_net_ns_ / 1'000'000) +
+                " ms for the writers of relation oid " + std::to_string(relation_) +
+                " that began before it, and " + HolderName(waiting.front()) +
+                " has not decided");
+            break;
+        }
+        const std::shared_ptr<txn::LockWaitSlot> slot = wake.slot;
+        CommandDispatcher& d = d_;
+        std::atomic<bool>* const cancel = slice_.cancel;
+        const std::function<bool()> freed = [slot, &d, deadline, cancel] {
+            return txn::LockWaitReady(slot) || d.NowNs() >= deadline ||
+                   (cancel != nullptr && cancel->load(std::memory_order_acquire));
+        };
+        co_await sched::WaitUntil{&freed};
+        if (drained = slice_.TakeCancel(); !drained.ok()) break;
+    }
+    locks.ClearWaitFor(self);
+    if (wake.slot != nullptr) locks.DropWake(wake.key, wake.slot);
+    wake = txn::LockWake{};
+    *ran = drained;
+    co_return Status::OK();
 }
 
 DispatchOutcome IndexBuildRun::FramedTail(Session& active, const Status& ran) {
@@ -2558,7 +2674,8 @@ DispatchOutcome IndexBuildRun::Tail(const Status& ran) {
     auto result = build_->Finish(ran, ddl_.txn != nullptr ? &created_row : nullptr, d_.wal_);
     const parser::IndexStmt& stmt = build_->stmt();
     // Before the status is read: a create that failed after the catalog
-    // row went down still left it there.
+    // row went down still left it there. Online, the head noted the row and
+    // the owed tree at H3, once (CI-R4).
     d_.NoteRowWritten(ddl_, created_row);
     if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
     if (stmt.reindex) {
@@ -2574,7 +2691,9 @@ DispatchOutcome IndexBuildRun::Tail(const Status& ran) {
            << " root=" << result.value().root_page_id;
         return {os.str(), false};
     }
-    d_.NoteOwedIndex(scope_, relation_, result.value().index_oid, /*created=*/true);
+    if (!build_->online()) {
+        d_.NoteOwedIndex(scope_, relation_, result.value().index_oid, /*created=*/true);
+    }
     if (d_.logging(LogLevel::kInfo)) {
         d_.log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
     }
@@ -2746,11 +2865,27 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         return {ErrorReply(s), false, 0, s};
     }
 
+    // **CI: an online build** (`instructions/v3.2.0/workorder-ci-online-index-build.md`)
+    // for a plain `CREATE INDEX` in autocommit, where a drain can park: it
+    // holds the relation `IS`, announces its row flagged building before the
+    // walk, and lets writers run. A unique index (CI-Q6 (a)), `REINDEX`
+    // (CI-Q9 (a)), a create inside `BEGIN` (CI-Q1 (b)) and a dispatcher
+    // that cannot park, has no lock table, or has no clock - the drain's
+    // fault net reads it, and `NowNs()` answers 0 without one - keep the `X`
+    // build.
+    const bool online = !stmt.drop && !stmt.reindex && !stmt.unique &&
+                        !session.in_explicit_txn() && locks_ != nullptr && txn_ != nullptr &&
+                        clock_ != nullptr && may_park_;
+
     // Outside the scope, so the progress it registers is withdrawn after
     // the decide (`IndexBuildRun::progress`).
     const auto run = std::make_shared<IndexBuildRun>(*this, session);
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
-        // ---- AT-S5e: the relation `X`, for both statements --------------
+        // ---- AT-S5e: the relation `X`, for every statement but CI's ------
+        //
+        // An online `CREATE INDEX` takes `IS` instead, and closes the same
+        // window by its drain (CI-R2): writers granted `IX` before its
+        // announce are waited out, and every later one maintains the index.
         //
         // **Taken before the first catalog write, on whichever core the
         // session is**, as `DROP TABLE` has taken it since AO-S6e-b. A
@@ -2793,10 +2928,17 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             if (locks_ != nullptr && scope.txn != nullptr) {
                 run->progress.emplace(&locks_->progress(), scope.txn->id());
             }
-            if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, *relation);
+            if (std::optional<Status> held = BorrowRelationForDdl(
+                    scope.txn, *relation, /*poisons=*/true,
+                    online ? txn::LockMode::kIntentionShared : txn::LockMode::kExclusive);
                 held.has_value()) {
                 return {ErrorReply(*held), false, 0, *held};
             }
+            // The memo made current under the borrow, as `RENAME` makes it:
+            // the boundary settled it before the grant, and a column change
+            // another core committed in between would be missing from what
+            // `PrepareIndexDef` checks (CI §3.5 A10).
+            catalog_.Revalidate();
         }
         txn::HolderProgress::Scope* const build_progress =
             run->progress.has_value() ? &*run->progress : nullptr;
@@ -2868,7 +3010,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
 
         // **Refused here, not by `PrepareIndexDef`'s own lookup**: an index
         // is built only over the relation borrowed above. A later lookup
-        // could find one created since, which holds no `X` of this
+        // could find one created since, which holds no borrow of this
         // statement's.
         if (!relation.has_value()) return {ErrorReply(miss), false, 0, miss};
         DdlScope create_ddl = DdlScopeFor(scope);
@@ -2881,10 +3023,27 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         auto build = exec::IndexBuild::ForCreate(
             catalog_, page_store_, stmt, session.default_namespace(),
             build_view.has_value() ? &*build_view : nullptr, create_ddl.trx_id, txn_,
-            build_progress);
+            build_progress, *relation, online, wal_);
         if (!build.ok()) return {ErrorReply(build.status()), false, 0, build.status()};
+        if (online) {
+            // **H3, in the head**, under the undo hook `DdlScopeFor`
+            // installed, so a rollback retires the row: the slot, the row
+            // flagged building, the word moved. The row and the owed tree are
+            // noted here and only here, so every ending after this queues the
+            // tree exactly once (CI-R4).
+            catalog::CatalogRowRef row;
+            bool owed = false;
+            const Status announced = build.value()->Announce(
+                create_ddl.txn != nullptr ? &row : nullptr, &owed);
+            NoteRowWritten(create_ddl, row);
+            if (owed) {
+                NoteOwedIndex(scope, *relation, build.value()->index_oid(), /*created=*/true);
+            }
+            if (!announced.ok()) return {ErrorReply(announced), false, 0, announced};
+        }
         return run->Start(scope, std::move(create_ddl), *relation, std::move(build.value()));
-    });
+    }, online ? std::optional<txn::IsolationLevel>(txn::IsolationLevel::kReadCommitted)
+              : std::nullopt);
 }
 
 DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line, Session& session) {
@@ -7273,8 +7432,9 @@ void CommandDispatcher::InstallDdlUndoHook(txn::Transaction* txn) {
 // through DdlScopeFor(scope) dies here, on every exit, and the implicit
 // transaction D2 opens resolves here too.
 template <typename Fn>
-DispatchOutcome CommandDispatcher::InDdlStatement(Session& session, Fn&& body) {
-    auto opened = BeginWrite(session);
+DispatchOutcome CommandDispatcher::InDdlStatement(Session& session, Fn&& body,
+                                                  std::optional<txn::IsolationLevel> isolation) {
+    auto opened = BeginWrite(session, isolation);
     if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
     WriteScope scope = opened.value();
     DispatchOutcome out = body(scope);
@@ -7478,8 +7638,11 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
     }
     // BY-R2: a committed drop's tree, and a create's tree at every other
     // ending. The gate: past a commit; at a rollback, which names no commit,
-    // the log's end now - every record that names the tree, the build's
-    // images, lies below it.
+    // the log's end now - every record the build itself wrote lies below it.
+    // A rolled-back create is re-gated once the epochs pass (CI A5): an
+    // online build's peers may still be logging into its tree until their
+    // statements end. An `X` build's has none, and waits one redo-start
+    // advance longer for it - one rule rather than a flag per build.
     const bool committed = committed_lsn != wal::kNoLsn;
     const wal::Lsn gate =
         committed ? committed_lsn + 1 : (wal_ != nullptr ? wal_->appended_lsn() : 0);
@@ -7490,7 +7653,8 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
         }
         if (owed->created != committed) {
             reclaim_queue_->EnqueueOrphanedIndex(owed->rel_oid, owed->anchor, owed->index_oid,
-                                                 gate, catalog_.schema_word_now());
+                                                 gate, catalog_.schema_word_now(),
+                                                 /*regate=*/owed->created);
         }
         owed = owed_indexes_.erase(owed);
     }
@@ -10790,7 +10954,8 @@ StatusOr<txn::LeasedSnapshot> CommandDispatcher::SnapshotFor(Session& session) {
     return txn::AutocommitSnapshot(txn_);
 }
 
-StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& session) {
+StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(
+    Session& session, std::optional<txn::IsolationLevel> isolation) {
     WriteScope scope;
     scope.session = &session;
     if (txn_ == nullptr) return scope;  // no manager: kBootstrapXid, as before
@@ -10807,7 +10972,7 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& s
         return scope;
     }
 
-    auto begun = txn_->Begin(session.isolation());
+    auto begun = txn_->Begin(isolation.value_or(session.isolation()));
     if (!begun.ok()) return begun.status();
     scope.txn = begun.value();
     scope.owned = true;
@@ -10987,10 +11152,13 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // for reading - which a DDL's `X` refuses all the same (AY-Q4), and
     // another writer's `IX` does not.
     const txn::LockKey relation = txn::LockKey::Relation(unit.rel_oid);
-    const bool first_intention = !holdings.Holds(relation);
     const txn::LockMode intention = mode == txn::LockMode::kShared
                                         ? txn::LockMode::kIntentionShared
                                         : txn::LockMode::kIntentionExclusive;
+    // The first hold that covers this intention, not the first of any mode:
+    // a transaction whose foreign-key parent read took this relation's `IS`
+    // and which now writes it is a first writer all the same (CI §3.5 A3).
+    const bool first_intention = !holdings.HoldsCovering(relation, intention);
     txn::LockWake wake;
     auto rel = locks_->TryAcquire(id, relation, intention, holdings, blocker,
                                   may_park_ ? &wake : nullptr);
@@ -11010,8 +11178,12 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // ASSERTION` could take the relation `X`, publish and release in
     // between, leaving this statement to write rows into a relation whose
     // new index or assertion it never resolved. From this grant on no DDL
-    // can take the relation until this transaction decides, so the word
-    // unmoved here is the proof; moved, the statement has written nothing
+    // can take the relation `X` until this transaction decides, so the word
+    // unmoved here is the proof. An online `CREATE INDEX` (CI-S2) holds only
+    // `IS` and announces its index while writers run, so it snapshots the
+    // relation's `IX` holders after its own word move (CI-R2): either this
+    // grant is in that snapshot, or this load sees the moved word. Moved,
+    // the statement has written nothing
     // under the relation yet and runs again through a boundary that
     // re-resolves - parked on a slot already flipped, so the re-run is
     // immediate. Conservative: any catalog write anywhere moves the word.

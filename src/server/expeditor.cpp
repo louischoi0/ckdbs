@@ -1410,7 +1410,7 @@ Status Expeditor::ReclaimStep() {
     // freed without a record during the window would be named by a record
     // the restore replays, with its bit clear in the copy.
     return reclaimer_->Step(backup_->ReclaimBound(checkpoint_anchor_->durable_redo_start()),
-                            &*statement_epochs_);
+                            &*statement_epochs_, wal_ != nullptr ? wal_->appended_lsn() : 0);
 }
 
 Status Expeditor::Checkpoint() {

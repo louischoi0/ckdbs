@@ -962,13 +962,13 @@ std::optional<TupleKeyRange> TupleKeyRangeOf(const Step& step, std::uint16_t slo
 // Whether this step has at least one equality against a literal on a
 // non-tuple-key column that carries no index - the thing kFilterScan names.
 //
-// **Asks the cached `index_mask`, not the catalog.** It called
-// `Catalog::FindIndexOnColumn` when nothing created indexes and the answer
-// was always "unindexed"; that was a `sys.indexes` scan per equality per
-// compile, and IX04 put the same fact on the relation's cache entry as one
-// bit. The mask names an index's **leading** key column only, which is
-// exactly the right question: an index on (a, b) cannot be entered by an
-// equality on `b`, so such an equality really is an unindexed filter.
+// **Asks the cached index list, not the catalog** (`TableAccess::IndexOn`).
+// It called `Catalog::FindIndexOnColumn` when nothing created indexes and
+// the answer was always "unindexed"; that was a `sys.indexes` scan per
+// equality per compile. `IndexOn` names an index's **leading** key column
+// only, which is exactly the right question: an index on (a, b) cannot be
+// entered by an equality on `b`, so such an equality really is an
+// unindexed filter. A building index (CI) is no index here either.
 //
 // Reached only after `IndexProbeOf` declined, so the two cannot disagree
 // about a usable index - they can only disagree about one this step's
@@ -1116,6 +1116,8 @@ std::optional<IndexProbe> IndexProbeOf(const catalog::TableAccess& access, const
     int best_score = 0;
 
     for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
+        // A building index's entries are not complete (CI-R1).
+        if (ix.building) continue;
         // How many leading key columns carry an equality, in the index's
         // declared order. Stops at the first that does not: an index on
         // (a, b) cannot be entered by `b` alone.
@@ -1204,7 +1206,7 @@ std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
     if (access.indexes.empty()) return std::nullopt;
 
     for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
-        if (ix.nkeys == 0) continue;
+        if (ix.building || ix.nkeys == 0) continue;  // CI-R1
         const std::uint16_t k0 = ix.keys()[0];
 
         // Index-level facts, settled once per index rather than once per

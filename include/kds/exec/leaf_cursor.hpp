@@ -14,8 +14,9 @@ namespace kds::exec {
 // `TransitionBuild` resume their walk from between two slices. It holds the
 // next leaf's id and the walk budget's count - no page and no span - so a
 // caller may yield its core between two `Step`s. Resuming at a leaf id is
-// safe only under the relation's `X`, which every caller holds: no writer
-// can split, grow or retire a leaf of the relation meanwhile.
+// safe under the relation's `X`, which every caller but an online index
+// build holds, and under that build's `IS`: a live relation's leaf is never
+// freed, and keeps its id and lower half (`index.md` §10.3).
 class LeafCursor {
 public:
     // At the relation's leftmost leaf.

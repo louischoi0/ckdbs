@@ -16,7 +16,8 @@ A statement holds a relation `IS` on every relation it binds, taken by
 the compiler between the name and the schema (AT-S1). **`DROP TABLE` takes
 the relation `X`** (`drop-table.md` DT7), and while a statement's `IS` is
 granted the drop waits for the statement to end. `CREATE INDEX`, `DROP INDEX` and a `CREATE ASSERTION`'s build take
-it too, since AT-S5e (`ddl-transactional.md` §5e, §5f), both renames
+it too, since AT-S5e (`ddl-transactional.md` §5e, §5f; a plain
+autocommit `CREATE INDEX` takes `IS` instead since CI, `index.md` §10.3), both renames
 since the operator's ruling of 2026-10-21, under a holder of the
 statement's own (`alter.md` AL4a), and a child's
 `CREATE TABLE` takes its parent's `IS` for each foreign key it declares

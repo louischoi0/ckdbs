@@ -282,8 +282,9 @@ D9(a) is built as ratified, and its costs are the engine's:
   cap sooner - a bulk insert whose every row names a distinct parent at
   about half the rows it reached before - and past it is refused
   `ResourceExhausted` (§2a).
-- **A DDL that takes a parent relation's `X`** - `CREATE INDEX`,
-  `DROP INDEX`, `CREATE ASSERTION` on it - **waits for
+- **A DDL that takes a parent relation's `X`** - `CREATE INDEX` but
+  an online one (`index.md` §10.3), `DROP INDEX`, `CREATE ASSERTION` on
+  it - **waits for
   every open child writer's `IS` on it**, and a steady stream of child
   writers can refuse the DDL `TxnConflict` at the lock family's 1 s fault
   net, as AO-0 item 25 accepts for `DROP TABLE` (AY-Q4).

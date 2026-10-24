@@ -168,6 +168,24 @@ TEST(LockTableTest, ARepeatAcquireOfACoveredModeAddsNoEntryAndSpendsNoCap) {
     EXPECT_FALSE(Covers(LockMode::kIntentionExclusive, LockMode::kShared));
 }
 
+// CI-S1 (§3.5 A3): a writer's first relation `IX` is its first *covering*
+// hold. An `IS` a foreign-key parent read took earlier does not make the
+// later `IX` a repeat, or the writer would skip its schema-word re-check.
+TEST(LockTableTest, AnEarlierIntentionSharedDoesNotCoverALaterIntentionExclusive) {
+    auto table = MakeTable();
+    LockHoldings h;
+    const LockKey rel = LockKey::Relation(kRel);
+
+    ASSERT_TRUE(table->Acquire(1, rel, LockMode::kIntentionShared, h).value().granted);
+    EXPECT_TRUE(h.Holds(rel));
+    EXPECT_TRUE(h.HoldsCovering(rel, LockMode::kIntentionShared));
+    EXPECT_FALSE(h.HoldsCovering(rel, LockMode::kIntentionExclusive));
+
+    ASSERT_TRUE(table->Acquire(1, rel, LockMode::kIntentionExclusive, h).value().granted);
+    EXPECT_TRUE(h.HoldsCovering(rel, LockMode::kIntentionExclusive));
+    EXPECT_TRUE(h.HoldsCovering(rel, LockMode::kIntentionShared));
+}
+
 // ---- What an uncontended borrow costs the table --------------------------
 
 TEST(LockTableTest, AnUncontendedExclusiveRegistersOneEntryAndTheTableEmptiesOnRelease) {
