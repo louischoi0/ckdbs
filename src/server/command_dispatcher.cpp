@@ -746,6 +746,12 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // (BO-S5); a frame destroyed at a park never replies and is no call.
     const sched::MonoTimeNs began_ns = NowNs();
     out->statement = statement;
+    // The shape ASH samples this statement under (CJ WE07): none until the
+    // dispatch below names it, so a sample of the waits before it (the run
+    // queue, BA-R1c's ceiling) does not carry the previous statement's.
+    sched::SessionWaitStats* const ash_stats =
+        (session != nullptr ? session : &autocommit_session_)->WaitStats();
+    ash_stats->fingerprint.set(0);
     // Every statement runs on the core its session is on (AT-S9). What
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
@@ -781,6 +787,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // Kept from the first run: every re-run is the same text, and a reply
     // rebuilt below (a refused commit, a walk's end) need not carry it.
     const std::uint64_t fetch_id = out->fetch_id;
+    ash_stats->fingerprint.set(fetch_id);
 
     // ---- R6-5: D5's bounded wait on an undecided row --------------------
     //

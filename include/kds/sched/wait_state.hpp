@@ -115,6 +115,11 @@ struct SessionWaitStats {
     RelaxedU64 current_p2;
     RelaxedU64 current_p3;
     RelaxedU64 current_since_ns;
+    // The running statement, for ASH (WE07): its shape's fingerprint (the
+    // `fetch_id` the pattern system keys on, 0 for a kind that has none) and,
+    // when the statement has one, the argument hash (WD11's opt-in rides on it).
+    RelaxedU64 fingerprint;
+    RelaxedU64 arg_hash;
 };
 
 struct TaskWaitState {
@@ -128,6 +133,9 @@ struct TaskWaitState {
     // The session this task runs a statement for, set by the dispatcher; null
     // for a background task. Not owned: the session outlives its statement.
     SessionWaitStats* session = nullptr;
+    // A background task's number in ASH records, given by the sampler on first
+    // sight (0: not yet); a statement task is told by its session.
+    std::uint32_t background_id = 0;
 };
 
 // What a core accumulates and any core may read: a static slot per core id

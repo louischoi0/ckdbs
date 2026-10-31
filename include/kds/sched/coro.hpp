@@ -394,6 +394,7 @@ public:
     std::uint64_t resumes() const noexcept { return resumes_; }
 
     bool advanced_in_last_poll() const noexcept override { return last_poll_advanced_; }
+    TaskWaitState* wait_state_for_sampling() noexcept override { return &wait_; }
 
     // The task's wait state (read by its own core only, I1).
     const TaskWaitState& wait_state() const noexcept { return wait_; }

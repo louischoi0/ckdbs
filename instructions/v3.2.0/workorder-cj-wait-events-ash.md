@@ -694,3 +694,47 @@ yet owned per core or reachable from a view (WE07, WE08).
 **Suite** at the tree committed as WE05-WE06 (`ctest -j8 -LE bs-nightly`,
 Debug): 4360 of 4361 passed; the one failure is the same `ENOSPC` cell as
 above, not a pass.
+
+**WE07 - the sampler** (from `db2696fe`). Adopts CJ-Q11 and CJ-Q12 below, on
+the operator's standing go-ahead of 2026-10-31.
+- **CJ-Q11 - what `late` means.** §2.7 says a long step yields one record
+  "with `flags.late`" and fixes no threshold. *(a) late when the turn came more
+  than a tenth of the interval after its due time; (b) late on any lateness;
+  (c) late after a whole interval.* **CLA proposes (a):** (b) flags nearly every
+  record on a real clock, (c) misses the stalls the flag is for. Adopted.
+- **CJ-Q12 - ON_CPU is never sampled (found in review).** The sampler runs
+  between polls, where no task is ON_CPU: `WaitOnPollExit` leaves each one
+  RUNNABLE, WAITING or IDLE. So CPU time shows in `sys.ash` as RUNNABLE with a
+  near-zero elapsed time. *(a) the late batch also records the task polled last
+  as ON_CPU; (b) state that a between-polls sampler cannot observe ON_CPU and
+  read RUNNABLE as "on CPU or queued".* **CLA proposes (b):** (a) invents a
+  sample for a task that was not running at the sample time, and §2.7 says
+  nothing is interpolated. Adopted. **Open for the operator:** this makes
+  `sys.ash` weaker than Oracle's ASH for CPU attribution; `sys.wait_stats`'
+  `cpu.on_cpu` rows are the exact figure.
+- **Built.** `AshSampler` per core, owned by `Scheduler` and asked once per
+  turn (`Due`, one relaxed load and a compare when not due); the walk of the
+  ready queues through a new `Task::wait_state_for_sampling()`; the drift-free
+  grid (a turn after several intervals writes one batch and moves to the first
+  grid point after it); IDLE out, background tasks in with the background bit
+  and a per-core number; `arg_hash` in `p1` of a non-WAITING sample when opted
+  in; the dispatcher stores the statement's `fetch_id` as the session's
+  fingerprint.
+- **Not done.** `trx_id`, `step_id`, `origin_session` and `flags.cross_core`
+  are always 0. `arg_hash` has no writer (`DispatchOutcome` carries only
+  `fetch_id`; the value exists at the fingerprinting site), so
+  `capture_arg_hash` does nothing yet outside the unit test. The interval is
+  not range-checked (WE09), and a reactor's idle block is not capped at the
+  next sample time (it overshoots by at most `max_idle_block_ms`, 10 ms
+  by default, which at a 100 ms interval is exactly the late threshold).
+  `turn_ns` is read before the turn's handlers, so a long handler makes a
+  sample's time slightly early.
+- **Review (`critics-developer`).** Applied: the fingerprint was left over from
+  the previous statement for a task's first samples - cleared at the statement's
+  entry (a sample between submission and first poll can still see the old one);
+  a stale comment; `ash()` moved into the scheduler's public section.
+  **Rejected:** merging `Due` and `Begin` (the test drives a batch by hand).
+
+**Suite** at the tree committed as WE07 (`ctest -j8 -LE bs-nightly`, Debug):
+4365 of 4366 passed; the one failure is the `ENOSPC` cell noted above, not a
+pass.
