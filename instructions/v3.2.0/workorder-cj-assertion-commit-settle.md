@@ -62,7 +62,9 @@ three hypotheses:
 - **H2 - removing the settle removes a failure point.** With the page work
   gone, `CommitTxn` takes the pending list out of the registry and cannot
   fail. The stranded-reservation path (§1.6) then has no failure to start
-  from.
+  from. A stranded reservation does not always fail closed (§1.6): a
+  stranded departure leaves its group's total too low. So H2 is a
+  correctness argument whichever way a reservation moves its group.
 - **H3 - the settle costs something measurable.** It costs one page fetch,
   one record, one page dirtied and one stamp per `(assertion, page)` on
   every commit that reserved. This has not been measured (§1.7).
@@ -118,7 +120,8 @@ for, and KDS does not pay it.
 
 1. **Under the directory latch.** It moves `pending_[txn]` out of the map
    before anything can fail (the comment at `:826-836` says why), and
-   groups the reservations by `(assertion, page)`.
+   groups the reservations by `(assertion, page)`. It skips an assertion
+   dropped mid-transaction (`:840`).
 2. **Outside the latch, per group.** In order:
    - `store.Get` and `BoundCabinPage::Open`;
    - `ASSERT_COMMIT` appended, with the group's index list;
@@ -137,8 +140,14 @@ for, and KDS does not pay it.
 
 ### 1.3 Every reader of `kEntryReserved`
 
-The search covered `src`, `include`, `tests` and `tools` for
-`kEntryReserved`, `reserved()` and `ClearReserved`.
+The search covered `src`, `include`, `tests`, `tools`, `sim`, `scripts`
+and `fuzz` for `kEntryReserved`, `reserved()`, `ClearReserved` and a raw
+decode of an entry's flag byte. `SetFlags` (`cabin_bound_page.cpp:188`)
+only masks. `device_page_store.cpp:1666` and `:2891` and `redo.cpp:90`
+check the page type and never an entry. No Python tool and no `sys` view
+decodes entry flags. Comment-only mentions (`wal/record.hpp:100`, `:118`,
+`wal/payload.hpp:553`) and further test lines (`assertion_wal_test.cpp:174`,
+`:320`, `:346`, `:445`, `:486`, `:516`) are not listed below.
 
 | Site | What it does with the bit |
 |---|---|
@@ -163,8 +172,8 @@ None of them reads the page's `kEntryReserved`.
 `ReplayCommit` (`assertion_replay.cpp:105-127`) clears the bit on the page
 and nothing else: *"The directory is untouched on purpose: a reservation
 counted in the aggregate from admission (§6.2), so commit moves flags and
-never sums."* It is folded in the assertion pass (`:194`, `:211-212`, *"a
-page half only"*).
+never sums."* `:194` classifies it as an assertion record. The assertion
+pass folds it at `:211-212` (*"a page half only"*).
 
 ### 1.5 The record
 
@@ -176,9 +185,19 @@ page half only"*).
 
 A `CommitTxn` that fails after taking `pending_[txn]` out leaves an
 `AbortTxn` that finds nothing (`AbortTxn` returns OK on a missing id). So
-the contributions it had not settled stay in the group totals with no row
-behind them. The result **fails closed**: the aggregate is too high, and
-the assertion refuses writes it could admit.
+the contributions it had not settled stay in the group totals, while the
+rows behind them are compensated by the transaction's undo. **Which way
+that fails depends on the contribution:**
+
+| Stranded contribution | The group's total | The outcome |
+|---|---|---|
+| An arrival (`INSERT`, an `UPDATE` moving in) of a non-negative value | too high | **fails closed**: writes it could admit are refused |
+| A **departure** (`DELETE`, an `UPDATE` moving out). Its delta lowers the total (`assertion_check.cpp:498`, `:600-601`; reserved at `:802`, `pending_` at `:612`) | **too low** | **fails open** `[quiet-wrong]`: the row comes back through undo, the total does not, and the bound (upper only, `assertion.md:63`) admits writes it should refuse |
+| A `SUM` arrival of a negative value | too low | fails open, as above |
+
+The dispatcher's comment (`command_dispatcher.cpp:11653-11660`) states
+"Fail-closed" without the second and third rows. It is wrong, and CJ-S3
+corrects it.
 
 The bug entry `assertion-reservations-stranded-by-a-failed-settle.md` was
 filed 2026-09-09 and closed unreproduced in the batch at `d83bd502`
@@ -211,19 +230,39 @@ reservations at crash are rolled back by normal transaction recovery via
 - No mount path that emits one for a loser was found:
   - `src/wal/recovery.cpp` and `src/txn/recovery_undo.cpp` name no
     assertion record;
-  - `ReplayEntry` folds every `ASSERT_RESERVE` delta without asking its
-    transaction's outcome.
-- No test crashes with a reservation undecided: `tests/assertion_crash_test.cpp`
-  has one cell, and `tests/assertion_recover_test.cpp`'s abort cells abort
-  live.
+  - `redo.cpp:495-499` only defers assertion records to the assertion pass;
+  - the assertion fold (`assertion_recover.cpp:268-312`) filters by
+    assertion id and base, never by a transaction's outcome, and
+    `ReplayEntry` folds every `ASSERT_RESERVE` delta;
+  - `mount_recovery.cpp:171-305` and `sim/instance.cpp:159` hand the
+    assertion pass no list of losers;
+  - the linkage scan re-attaches every entry that is not orphaned
+    (`assertion_recover.cpp:69`).
+- No test pins it. `tests/assertion_crash_test.cpp` has one cell, and
+  `tests/assertion_recover_test.cpp`'s abort cells abort live. The BS sim
+  crashes at a seed-chosen op with an assertion declared
+  (`sim/loop.cpp:416-425`), but no cell asserts a loser's group total.
 
-If the reading holds, a loser's contribution stays in its group after a
-mount. That fails closed, in the same direction as §1.6.
+The reading was confirmed by an independent read at `18264195`. So
+`assertion.md:477-478` is wrong: a loser's contribution stays in its group
+after a mount. **Its direction is §1.6's table**: a loser's arrival fails
+closed, and **a loser's departure or negative `SUM` arrival fails open**
+`[quiet-wrong]`. Filed as
+`docs/inflight/bugs/an-assertion-keeps-the-reservations-of-a-crash-loser-and-a-failed-settle.md`
+(found by reading, not reproduced).
 
-**CJ does not fix this** (CJ-Q5). It matters to CJ for one reason. The
-natural fix tells a winner from a loser by the transaction's `TXN_COMMIT`
-in the analysis phase, not by `ASSERT_COMMIT`. CJ-S0 confirms that before
-CJ deletes the only commit-time assertion record.
+**CJ does not fix the crash path** (CJ-Q5). It matters to CJ for two
+reasons:
+- **The fix tells winners from losers by `TXN_COMMIT`, not by the bit.**
+  After a full replay today, a set bit nearly identifies a loser's entry,
+  and the entry carries enough to undo it (tuple key, value, group,
+  departure). But the bit is not exact: a crash between a transaction's
+  `ASSERT_COMMIT` and its `TXN_COMMIT` leaves a cleared bit on a loser. So
+  the analysis phase's winners and losers are the only sound source.
+  CJ-R1 takes the bit-based fix off the table for good, and CJ-R4 binds the
+  fix to that.
+- **CJ removes one of the two paths that strand a reservation** (the failed
+  settle, §1.6). That leaves the crash path as the only one.
 
 ---
 
@@ -254,9 +293,13 @@ Three guards:
 - a cell pins that a committed reservation's entry carries the bit;
 - a mutant reader that trusts the bit fails a cell (CJ-S2).
 
-**CJ-R5 - the fail-closed paths.** After CJ no commit-time step can strand
-a reservation (H2). §1.8's crash-loser path is recorded by CJ-S0 and left
-to its own order (CJ-Q5).
+The ruling binds §1.8's fix as well. It tells losers apart by the
+analysis phase's outcome and never by the bit.
+
+**CJ-R5 - the stranding paths.** After CJ no commit-time step can strand a
+reservation (H2), so the failed-settle row of the bug entry closes with
+CJ. §1.8's crash-loser path, which fails open for departures, is confirmed
+by a cell in CJ-S0 and left to its own order (CJ-Q5).
 
 **CJ-R6 - what does not change.**
 - Admission and its O(1) header read.
@@ -333,14 +376,17 @@ onward). Otherwise (b).
 which is CJ-Q3 (b).
 
 **CJ-Q5 - §1.8's crash-loser reservations.**
-- (a) S0 confirms or refutes the reading with a sim or rig cell. If
-  confirmed, it is filed as a bug entry naming the order that would carry
-  the fix, and CJ goes on.
+- (a) The bug entry is filed with this order (§1.8). S0 reproduces it
+  with a rig cell for each direction (an arrival and a departure), and the
+  entry gains the reproduction and names the order that would carry the
+  fix. CJ goes on.
 - (b) Fix it in CJ.
 
 **CLA proposes (a)**: the fix is a recovery change (analysis-phase
 winners and losers into the assertion pass) and CJ is a commit-path
-change.
+change. **The departure direction fails open, and that ranks the fix
+above CJ's own gain**. CLA recommends that the operator open its order
+once S0 reproduces it, and not wait for CJ's close.
 
 **CJ-Q6 - the abort's per-reservation cost.**
 - (a) Out of scope.
@@ -393,8 +439,10 @@ building included.
      `VerifyAgainstEntries` agree with the base binary;
    - the same across a checkpoint;
    - AS6b's two orders (abort before and after a checkpoint) unchanged;
-   - **a crash with a reservation undecided**, which records what the
-     base binary does (§1.8) and is CJ-Q5's evidence;
+   - **a crash with a reservation undecided, once as an arrival and once
+     as a departure**, which records what the base binary does (§1.8): the
+     group total after the mount against a re-summation of the surviving
+     rows. This is CJ-Q5's evidence;
    - a log carrying `ASSERT_COMMIT` records (from the base binary),
      mounted by the spike (CJ-Q4).
 4. **The measurement (H3).** Build-release, the spike against the base,
@@ -435,8 +483,14 @@ The verdict goes in §7.
 - `assertion.md` §5.1's `flags` row, §6.2 step 4, §7's record list and
   AS6b's cost paragraph;
 - `wal.md:168`;
-- `cabin_bound_page.hpp`'s definition comment;
-- the dispatcher's comment at `:10685-10693`;
+- `cabin_bound_page.hpp`'s definition comment (`:64-73`) and its
+  `Write`/flag-move comment (`:210-217`);
+- the dispatcher's comments at `:10685-10693` and `:11653-11660`, the
+  second's "Fail-closed" corrected (§1.6);
+- `assertion.md:477-478`'s crash-recovery sentence, corrected to what the
+  tree does (§1.8);
+- the bug entry: its failed-settle half closed by CJ, its crash half left
+  open;
 - `known-gaps.md` (an assertion section naming §1.8's outcome);
 - CLAUDE.md, if a row states the settle.
 
