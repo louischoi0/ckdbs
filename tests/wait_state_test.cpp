@@ -31,7 +31,7 @@ protected:
         ResetWaitContext();
     }
 
-    const EventTotals& Totals(WaitEvent e) { return WaitContext().totals[Ix(e)]; }
+    const EventTotals& Totals(WaitEvent e) { return WaitTotals().totals[Ix(e)]; }
 
     ManualClock clock_{1'000};
 };
@@ -99,7 +99,7 @@ TEST_F(WaitStateTest, AnUnpolledTaskIsRunnableAndItsQueueTimeIsBookedAtTheFirstP
     EXPECT_EQ(task.Poll(), PollResult::kDone);
     EXPECT_EQ(Totals(WaitEvent::kSchedRunQueue).count, 2u);
     EXPECT_EQ(Totals(WaitEvent::kSchedRunQueue).total_ns, 340u);
-    EXPECT_EQ(WaitContext().unscoped_parks, 0u);
+    EXPECT_EQ(WaitTotals().unscoped_parks, 0u);
 }
 
 TEST_F(WaitStateTest, OnCpuTimeIsTheSpanInsideAResumingPoll) {
@@ -108,17 +108,17 @@ TEST_F(WaitStateTest, OnCpuTimeIsTheSpanInsideAResumingPoll) {
     bool ready = false;
     CoroTask task(SchedulingGroup::kForeground, ScopedWait(&ready));
     EXPECT_EQ(task.Poll(), PollResult::kSuspended);
-    const auto after_first = WaitContext().on_cpu_ns;
+    const auto after_first = WaitTotals().on_cpu_ns;
     clock_.Advance(1'000);
     EXPECT_EQ(task.Poll(), PollResult::kSuspended);  // asked, still false
-    EXPECT_EQ(WaitContext().on_cpu_ns, after_first);
+    EXPECT_EQ(WaitTotals().on_cpu_ns, after_first);
 }
 
 TEST_F(WaitStateTest, ASynchronousScopeIsTheEventsTimeAndNotOnCpuTime) {
     CoroTask task(SchedulingGroup::kForeground, WorkWithASynchronousRead(&clock_));
     EXPECT_EQ(task.Poll(), PollResult::kDone);
     EXPECT_EQ(Totals(WaitEvent::kIoPageRead).total_ns, 50u);
-    EXPECT_EQ(WaitContext().on_cpu_ns, 110u) << "the 160 ns poll less the 50 ns read (I4)";
+    EXPECT_EQ(WaitTotals().on_cpu_ns, 110u) << "the 160 ns poll less the 50 ns read (I4)";
     EXPECT_EQ(Totals(WaitEvent::kSchedRunQueue).total_ns, 0u);
 }
 
@@ -130,7 +130,7 @@ TEST_F(WaitStateTest, AYieldInsideAScopeIsStillTheScopesTimeAndNotRunQueueTime) 
     EXPECT_EQ(task.Poll(), PollResult::kDone);
     EXPECT_EQ(Totals(WaitEvent::kIoVarHeapRead).total_ns, 75u);
     EXPECT_EQ(Totals(WaitEvent::kSchedRunQueue).total_ns, 0u) << "booked twice (I4)";
-    EXPECT_EQ(WaitContext().on_cpu_ns, 0u);
+    EXPECT_EQ(WaitTotals().on_cpu_ns, 0u);
 }
 
 TEST_F(WaitStateTest, ATaskDroppedWhileParkedInItsScopeBooksNothingAndTakesNoCpuFromTheRunner) {
@@ -141,7 +141,7 @@ TEST_F(WaitStateTest, ATaskDroppedWhileParkedInItsScopeBooksNothingAndTakesNoCpu
     EXPECT_EQ(runner.Poll(), PollResult::kDone);
     EXPECT_EQ(parked, nullptr);
     EXPECT_EQ(Totals(WaitEvent::kCommitWalFlush).count, 0u);
-    EXPECT_EQ(WaitContext().on_cpu_ns, 50u) << "the runner's whole 50 ns poll";
+    EXPECT_EQ(WaitTotals().on_cpu_ns, 50u) << "the runner's whole 50 ns poll";
 }
 
 TEST_F(WaitStateTest, AWaitScopeBooksItsEventAndShowsParametersWhileOpen) {
@@ -153,7 +153,7 @@ TEST_F(WaitStateTest, AWaitScopeBooksItsEventAndShowsParametersWhileOpen) {
     EXPECT_EQ(task.wait_state().p1, 77u);
     EXPECT_EQ(task.wait_state().p2, 2u);
     EXPECT_EQ(task.wait_state().p3, 5u);
-    EXPECT_EQ(WaitContext().unscoped_parks, 0u);
+    EXPECT_EQ(WaitTotals().unscoped_parks, 0u);
 
     clock_.Advance(2'500);
     ready = true;
@@ -168,20 +168,86 @@ TEST_F(WaitStateTest, AParkOutsideEveryScopeIsCountedAndBookedToNoEvent) {
     bool ready = false;
     CoroTask task(SchedulingGroup::kForeground, UnscopedWait(&ready));
     EXPECT_EQ(task.Poll(), PollResult::kSuspended);
-    EXPECT_EQ(WaitContext().unscoped_parks, 1u);
+    EXPECT_EQ(WaitTotals().unscoped_parks, 1u);
     EXPECT_EQ(task.wait_state().state, TaskState::kWaiting);
 
     // Re-asking an unsatisfied wait changes nothing: no second violation.
     clock_.Advance(700);
     EXPECT_EQ(task.Poll(), PollResult::kSuspended);
-    EXPECT_EQ(WaitContext().unscoped_parks, 1u);
+    EXPECT_EQ(WaitTotals().unscoped_parks, 1u);
 
     clock_.Advance(300);
     ready = true;
     EXPECT_EQ(task.Poll(), PollResult::kDone);
-    for (const EventTotals& t : WaitContext().totals) {
+    for (const EventTotals& t : WaitTotals().totals) {
         EXPECT_EQ(t.total_ns, 0u) << "the unscoped wait's time is booked to no event";
     }
+}
+
+TEST_F(WaitStateTest, HistogramBucketKCoversTwoToTheKToTwiceThatInMicroseconds) {
+    EXPECT_EQ(WaitBucketOf(0), 0u);
+    EXPECT_EQ(WaitBucketOf(1'999), 0u);   // 1 us
+    EXPECT_EQ(WaitBucketOf(2'000), 1u);   // 2 us
+    EXPECT_EQ(WaitBucketOf(3'999), 1u);
+    EXPECT_EQ(WaitBucketOf(4'000), 2u);
+    EXPECT_EQ(WaitBucketOf(1'000'000), 9u);  // 1000 us: [512, 1024)
+    EXPECT_EQ(WaitBucketOf(~std::uint64_t{0}), kWaitHistogramBuckets - 1);
+}
+
+TEST_F(WaitStateTest, ACoreKeepsTheMaxAndTheHistogramOfAnEvent) {
+    for (const MonoTimeNs span : {500u, 3'000u, 70'000u, 3'000u}) {
+        WaitScope w(WaitEvent::kIoPageRead, 1);
+        clock_.Advance(span);
+    }
+    const EventTotals& t = Totals(WaitEvent::kIoPageRead);
+    EXPECT_EQ(t.count, 4u);
+    EXPECT_EQ(t.total_ns, 76'500u);
+    EXPECT_EQ(t.max_ns, 70'000u);
+    EXPECT_EQ(t.histogram[0], 1u);
+    EXPECT_EQ(t.histogram[1], 2u);
+    EXPECT_EQ(t.histogram[WaitBucketOf(70'000)], 1u);
+    std::uint64_t in_buckets = 0;
+    for (const RelaxedU64& b : t.histogram) in_buckets += b;
+    EXPECT_EQ(in_buckets, t.count) << "every wait lands in exactly one bucket";
+}
+
+TEST_F(WaitStateTest, ASessionBooksItsTasksTimeAndItsTimeIsConserved) {
+    // I3: over a statement, ON_CPU + the waits equal the elapsed time.
+    auto session = MakeSessionWaitStats();
+    bool ready = false;
+    auto body = [&]() -> Coro {
+        clock_.Advance(100);  // CPU
+        {
+            WaitScope w(WaitEvent::kCommitWalFlush, 9);
+            co_await WaitFor{&ready};
+        }
+        clock_.Advance(40);  // CPU
+        co_return Status::OK();
+    };
+    CoroTask task(SchedulingGroup::kForeground, body());
+    task.wait_state_mut().session = session.get();
+    clock_.Advance(10);  // run-queue time before the first poll
+    EXPECT_EQ(task.Poll(), PollResult::kSuspended);
+    EXPECT_EQ(task.wait_state().state, TaskState::kWaiting);
+    EXPECT_EQ(session->current_state.get(), static_cast<std::uint64_t>(TaskState::kWaiting));
+    EXPECT_EQ(session->current_event.get(), static_cast<std::uint64_t>(WaitEvent::kCommitWalFlush));
+    EXPECT_EQ(session->current_p1.get(), 9u);
+    clock_.Advance(900);
+    ready = true;
+    EXPECT_EQ(task.Poll(), PollResult::kDone);
+    const auto idx = [](WaitEvent e) { return static_cast<std::size_t>(e); };
+    EXPECT_EQ(session->on_cpu_ns.get(), 140u);
+    EXPECT_EQ(session->events[idx(WaitEvent::kCommitWalFlush)].total_ns.get(), 900u);
+    EXPECT_EQ(session->events[idx(WaitEvent::kSchedRunQueue)].total_ns.get(), 10u);
+    EXPECT_EQ(session->on_cpu_ns.get() + 900u + 10u, 1'050u) << "elapsed 1050 ns is all accounted";
+
+    // A session is listed while it lives and gone with its last owner.
+    bool listed = false;
+    for (const SessionWaitStats& s : SnapshotSessionWaits()) listed |= s.session_id == session->session_id;
+    EXPECT_TRUE(listed);
+    const std::uint64_t id = session->session_id;
+    session.reset();
+    for (const SessionWaitStats& s : SnapshotSessionWaits()) EXPECT_NE(s.session_id, id);
 }
 
 #ifndef NDEBUG
@@ -199,7 +265,7 @@ TEST_F(WaitStateTest, AnIdleScopeIsIdleStateAndAnExpectedParkNotAViolation) {
     CoroTask task(SchedulingGroup::kForeground, IdleWait(&ready));
     EXPECT_EQ(task.Poll(), PollResult::kSuspended);
     EXPECT_EQ(task.wait_state().state, TaskState::kIdle);
-    EXPECT_EQ(WaitContext().unscoped_parks, 0u);
+    EXPECT_EQ(WaitTotals().unscoped_parks, 0u);
     clock_.Advance(9'000);
     ready = true;
     EXPECT_EQ(task.Poll(), PollResult::kDone);

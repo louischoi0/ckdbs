@@ -1,8 +1,12 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <vector>
 
 #include "kds/sched/clock.hpp"
 #include "kds/stats/wait_event.hpp"
@@ -51,6 +55,68 @@ namespace kds::sched {
 
 enum class TaskState : std::uint8_t { kOnCpu = 0, kRunnable, kWaiting, kIdle };
 
+// A counter its core writes and any core may read (WE05's views are read on
+// the session's core, the totals belong to every core). One writer, so an
+// add is a relaxed load and store, not a read-modify-write: a plain `mov` on
+// the targets we build for. Converts to its value so a test compares it as a
+// number.
+class RelaxedU64 {
+public:
+    RelaxedU64() noexcept = default;
+    RelaxedU64(const RelaxedU64& o) noexcept : v_(o.get()) {}
+    RelaxedU64& operator=(const RelaxedU64& o) noexcept {
+        set(o.get());
+        return *this;
+    }
+    std::uint64_t get() const noexcept { return v_.load(std::memory_order_relaxed); }
+    void set(std::uint64_t v) noexcept { v_.store(v, std::memory_order_relaxed); }
+    void add(std::uint64_t d) noexcept { set(get() + d); }
+    void raise_to(std::uint64_t v) noexcept {
+        if (v > get()) set(v);
+    }
+    operator std::uint64_t() const noexcept { return get(); }  // NOLINT: a number in a comparison
+
+private:
+    std::atomic<std::uint64_t> v_{0};
+};
+
+// Histogram bucket k is [2^k, 2^(k+1)) microseconds; 0 us falls in bucket 0
+// and the last bucket takes everything above (WD5, §2.6).
+inline constexpr std::size_t kWaitHistogramBuckets = 32;
+
+constexpr std::size_t WaitBucketOf(std::uint64_t ns) noexcept {
+    const std::size_t k = static_cast<std::size_t>(std::bit_width((ns / 1000) | 1)) - 1;
+    return k < kWaitHistogramBuckets ? k : kWaitHistogramBuckets - 1;
+}
+
+// A core's cumulative wait time per event (WE05). Fixed size, no allocation.
+struct EventTotals {
+    RelaxedU64 count;
+    RelaxedU64 total_ns;
+    RelaxedU64 max_ns;
+    std::array<RelaxedU64, kWaitHistogramBuckets> histogram;
+};
+
+// What a session accumulates (§2.6): count and total per event, and its CPU
+// time. Its RUNNABLE time is its `sched.run_queue` row. The `current_*` words
+// publish the session's task state for `sys.session_state`, written by the
+// core running the task and read by any.
+struct SessionWaitStats {
+    struct PerEvent {
+        RelaxedU64 count;
+        RelaxedU64 total_ns;
+    };
+    std::uint64_t session_id = 0;
+    std::array<PerEvent, stats::kWaitEventCount> events{};
+    RelaxedU64 on_cpu_ns;
+    RelaxedU64 current_state;   // `TaskState`
+    RelaxedU64 current_event;   // `stats::WaitEvent`
+    RelaxedU64 current_p1;
+    RelaxedU64 current_p2;
+    RelaxedU64 current_p3;
+    RelaxedU64 current_since_ns;
+};
+
 struct TaskWaitState {
     TaskState state = TaskState::kRunnable;  // a task not yet polled waits its turn
     stats::WaitEvent event = stats::WaitEvent::kOnCpu;
@@ -59,22 +125,28 @@ struct TaskWaitState {
     std::uint32_t p3 = 0;
     MonoTimeNs since_ns = 0;  // when `state` was entered; a scoped wait's is its scope's start
     bool scoped = false;      // a `WaitScope` (not `Poll`) opened the WAITING state
+    // The session this task runs a statement for, set by the dispatcher; null
+    // for a background task. Not owned: the session outlives its statement.
+    SessionWaitStats* session = nullptr;
 };
 
-// A core's cumulative wait time per event (WE05 adds the histogram, the max
-// and the per-session split). Plain integers: one writer, the core.
-struct EventTotals {
-    std::uint64_t count = 0;
-    std::uint64_t total_ns = 0;
+// What a core accumulates and any core may read: a static slot per core id
+// (`BindWaitContext`). Two threads bound to one slot lose counts and nothing
+// else, because everything a thread mutates besides these counters is in its
+// own `CoreWaitContext`.
+struct CoreWaitTotals {
+    std::array<EventTotals, stats::kWaitEventCount> totals{};
+    RelaxedU64 on_cpu_ns;       // ON_CPU is a state, not an event: kept beside the table
+    RelaxedU64 unscoped_parks;  // I2 violations: parks no WaitScope covered
+    std::atomic<bool> bound{false};  // a reactor owns this slot
 };
 
+// The calling thread's own state, thread-local and constant-initialised.
 struct CoreWaitContext {
     const Clock* clock = nullptr;      // null: the process's SystemClock
     TaskWaitState* current = nullptr;  // the task being polled, null between polls
-    std::array<EventTotals, stats::kWaitEventCount> totals{};
-    std::uint64_t on_cpu_ns = 0;       // ON_CPU is a state, not an event: kept beside the table
-    std::uint64_t unscoped_parks = 0;  // I2 violations: parks no WaitScope covered
-    bool strict_scopes = false;        // an unscoped park is an `assert`, not just a count
+    CoreWaitTotals* shared = nullptr;  // the bound core's slot; null: the thread's private one
+    bool strict_scopes = false;  // an unscoped park is an `assert`, not just a count
     // Where the running task's current ON_CPU segment began. A segment ends
     // when a `WaitScope` opens (a blocking section or a suspension) and a new
     // one begins when it closes or the task is next resumed outside one, so
@@ -82,8 +154,25 @@ struct CoreWaitContext {
     MonoTimeNs cpu_since = 0;
 };
 
+inline constexpr std::uint32_t kWaitCores = 64;  // `kMaxCores` (superblock.hpp)
+
+// The instance's sessions that have run a statement, for the views. A session
+// registers on its first statement and leaves with its last owner, so a
+// session's statistics are dropped at its end (§2.6).
+std::shared_ptr<SessionWaitStats> MakeSessionWaitStats();
+// Copies of every live session's statistics.
+std::vector<SessionWaitStats> SnapshotSessionWaits();
+
+// Binds the calling thread to core `core`'s context, so other cores can read
+// its totals. Threads that never call it (tests, mount) keep a private one.
+void BindWaitContext(std::uint32_t core) noexcept;
+// A bound core's context, or null for a core never bound.
+const CoreWaitTotals* WaitContextOfCore(std::uint32_t core) noexcept;
+
 // The calling thread's context (one reactor thread per core).
 CoreWaitContext& WaitContext() noexcept;
+// The totals the calling thread books to.
+CoreWaitTotals& WaitTotals() noexcept;
 
 // Installs `clock` for the calling thread (null restores `SystemClock`).
 void SetWaitClock(const Clock* clock) noexcept;

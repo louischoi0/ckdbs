@@ -533,6 +533,26 @@ TEST_F(ShowSugarTest, ACheckpointRunIsOneRowOfSysCheckpoints) {
 
 // ---- CJ's WE01: `sys.wait_event_names` --------------------------------------
 
+TEST_F(ShowSugarTest, TheWaitStatisticsViewsAnswerWithTheirColumns) {
+    // The total rows (core NULL) are one per event; per-core rows exist only
+    // for cores a reactor bound earlier in this process.
+    const auto stats = testing_view::ReadViewText(
+        Text("SELECT core, event, class, count, total_us, max_us FROM sys.wait_stats"));
+    std::size_t cpu_rows = 0;
+    for (const std::string& e : stats.Column("event")) cpu_rows += e == "cpu.on_cpu";
+    EXPECT_GE(cpu_rows, 1u);
+    EXPECT_GE(stats.rows.size(), 20u);
+    const auto hist = testing_view::ReadViewText(
+        Text("SELECT core, event, bucket, lo_us, count FROM sys.wait_histogram"));
+    EXPECT_EQ(hist.Column("bucket").size(), hist.rows.size());
+    const auto waits = testing_view::ReadViewText(
+        Text("SELECT session_id, event, count, total_us FROM sys.session_waits"));
+    EXPECT_EQ(waits.Column("event").size(), waits.rows.size());
+    const auto state = testing_view::ReadViewText(
+        Text("SELECT session_id, state, event, p1, p2, p3, elapsed_us FROM sys.session_state"));
+    EXPECT_EQ(state.Column("state").size(), state.rows.size());
+}
+
 TEST_F(ShowSugarTest, SysWaitEventNamesListsTheRegistryByName) {
     const std::string reply = Text(
         "SELECT event_id, name, class, kind, in_db_time, p1, p2, p3 FROM sys.wait_event_names "

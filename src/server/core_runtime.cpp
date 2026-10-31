@@ -466,6 +466,7 @@ void CoreRuntime::Run() {
     exec::InstallSuspendAudit();
     // I2 (CJ WE04): a suspension outside every `WaitScope` aborts a debug
     // build on this thread.
+    sched::BindWaitContext(config_.core_id);
     sched::SetStrictWaitScopes(true);
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {

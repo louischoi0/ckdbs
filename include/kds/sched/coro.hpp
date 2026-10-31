@@ -397,6 +397,9 @@ public:
 
     // The task's wait state (read by its own core only, I1).
     const TaskWaitState& wait_state() const noexcept { return wait_; }
+    // The session a statement task books its waits to (CJ WE05), set by the
+    // task's submitter before its first poll (`TcpServer::SubmitStatement`).
+    TaskWaitState& wait_state_mut() noexcept { return wait_; }
 
 private:
     std::coroutine_handle<Coro::promise_type> handle_;

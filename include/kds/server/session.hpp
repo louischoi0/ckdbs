@@ -12,6 +12,7 @@
 #include "kds/base/common.hpp"
 #include "kds/exec/functions.hpp"
 #include "kds/exec/set_expr.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/server/priority.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/role.hpp"
@@ -117,6 +118,15 @@ public:
     explicit Session(txn::IsolationLevel default_isolation =
                          txn::IsolationLevel::kReadCommitted) noexcept
         : isolation_(default_isolation) {}
+
+    // The wait statistics this session accumulates (CJ WE05), made on its
+    // first statement and dropped with its last owner. The statement's
+    // submitter hands the pointer to its task, so whichever core runs it
+    // books here.
+    sched::SessionWaitStats* WaitStats() {
+        if (wait_stats_ == nullptr) wait_stats_ = sched::MakeSessionWaitStats();
+        return wait_stats_.get();
+    }
 
     State state() const noexcept { return state_; }
     bool in_explicit_txn() const noexcept { return state_ != State::kIdle; }
@@ -361,6 +371,7 @@ private:
     }
 
     State state_ = State::kIdle;
+    std::shared_ptr<sched::SessionWaitStats> wait_stats_;
     txn::IsolationLevel isolation_ = txn::IsolationLevel::kReadCommitted;
     catalog::Oid default_namespace_ = catalog::kNamespacePublic;
     ResultSink* result_sink_ = nullptr;

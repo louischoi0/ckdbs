@@ -649,3 +649,48 @@ after them: 4350/4350 passed (4 disabled or skipped), same command, at the tree 
   Re-run after the review edits (ctest -j8 -LE bs-nightly, Debug): 4350 of
   4351 passed, the same one failing for the same ENOSPC reason. That cell is
   not a pass; it passed at c5c2edc1 with room on /tmp.
+
+**WE05 - cumulative statistics and views** (from `7fdf3741`).
+- **Built.** `EventTotals` gains `max_ns` and a 32-bucket log2 histogram
+  (`WaitBucketOf`: bucket k is [2^k, 2^(k+1)) us); every counter is a
+  `RelaxedU64` (one writer, relaxed load/store, readable by any core). A core's
+  counters live in a static slot per core id (`CoreWaitTotals`, bound by
+  `BindWaitContext` in `CoreRuntime::Run` and `Expeditor::RunUntilStopped`);
+  everything else a thread mutates is in its own constant-initialised
+  thread-local `CoreWaitContext`. `SessionWaitStats` (count and total per
+  event, ON_CPU, the published task state) is owned by `Session`, registered
+  in a mutex-guarded table and dropped with its last owner; `SubmitStatement`
+  points the statement's task at it before the task is first polled. Views
+  `sys.wait_stats` (per core and event, plus NULL-core total rows),
+  `sys.wait_histogram`, `sys.session_waits`, `sys.session_state`; the
+  "cross-core read step" is each view reading every bound core's words, not a
+  message to the owning core (snapshot-time consistency, which §2.8 allows).
+- **Conservation (I3)** is tested at the task level on the logical clock
+  (ON_CPU + events == elapsed, session figures equal the core's). A figure over
+  "all simulated statements" is not taken: `sim/` drives no core runtime.
+- **Review (`critics-developer`).** Applied: the session lost its first queue
+  wait (the pointer was set inside `DispatchAsync`, after the wait was booked;
+  now set at submission); per-hook TLS init guard removed and `Ctx()` read once
+  per hook (G1); `bound` made atomic; a thread-private/shared split so two
+  threads bound to one slot lose counts rather than corrupt each other's
+  tasks (finding A); a finished session publishes IDLE `idle.client` instead of
+  a growing ON_CPU (B); unused `current_core` deleted (D); `WaitBucketOf` by
+  `bit_width`; the event-index clamp deleted. **Rejected / open:** `session_id`
+  is a private counter, not the KWP handshake's id (C) - joining them needs the
+  protocol identity, which `Session` does not hold; `MakeSessionWaitStats`
+  keeps its custom deleter (the proposed derived-class form needs the same
+  registration and is not shorter); `TaskStateName` stays in `sys_views.cpp`
+  until WE08 needs it. Rig tests that drive `DispatchAsync` directly book to no
+  session.
+
+**WE06 - the ring and the record codec** (`include/kds/stats/ash_record.hpp`,
+`ash_ring.hpp`, `tests/ash_ring_test.cpp`). Built: the 64-byte record at
+§2.7's offsets by per-field little-endian puts (no overlay), `static_assert`s
+on the size and the offsets, a trx id stored as its low 48 bits; `AshRing`, a
+byte-sized overwriting ring behind a `kStatsRing` latch, allocated on the
+first record. Round-trip, offset and wrap-boundary tests pass. The ring is not
+yet owned per core or reachable from a view (WE07, WE08).
+
+**Suite** at the tree committed as WE05-WE06 (`ctest -j8 -LE bs-nightly`,
+Debug): 4360 of 4361 passed; the one failure is the same `ENOSPC` cell as
+above, not a pass.

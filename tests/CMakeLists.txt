@@ -238,6 +238,7 @@ add_executable(kds_tests
     wal_checkpointer_test.cpp
     checkpoint_census_test.cpp
     wait_event_test.cpp
+    ash_ring_test.cpp
     wait_state_test.cpp
     checkpoint_task_test.cpp
     checkpoint_log_park_test.cpp

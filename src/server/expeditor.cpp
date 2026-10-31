@@ -2221,6 +2221,7 @@ Status Expeditor::RunUntilStopped() {
     // `CoreRuntime::Run` - a suspension outside every `WaitScope` aborts a
     // debug build. Set here, on the thread that runs the reactor, not in
     // `Start`: a test starts on its own thread and runs this on another.
+    sched::BindWaitContext(0);
     sched::SetStrictWaitScopes(true);
     scheduler.Run();
     sched::SetStrictWaitScopes(false);
