@@ -2,7 +2,7 @@
 
 **Found by reading, not reproduced.** Read in the main checkout on `main`
 at `18264195` (`v3.4.6-4-g18264195`), 2026-10-31, while writing
-`instructions/v3.2.0/workorder-cj-assertion-commit-settle.md`. The reading
+`instructions/v3.2.0/workorder-ck-assertion-commit-settle.md`. The reading
 was confirmed by an independent read at the same commit.
 
 ## What is wrong
@@ -61,12 +61,12 @@ re-summation after a mount.
 
 ## The fix
 
-- **Path 2** goes with CJ (`workorder-cj-assertion-commit-settle.md`
-  CJ-R2): once the settle does no page work, `CommitTxn` cannot fail.
+- **Path 2** goes with CK (`workorder-ck-assertion-commit-settle.md`
+  CK-R2): once the settle does no page work, `CommitTxn` cannot fail.
 - **Path 1** needs the analysis phase's losers to reach the assertion
   pass, so that their `ASSERT_RESERVE` deltas are unapplied and their
   entries marked orphaned. The decision must come from `TXN_COMMIT`, never
   from the entry's `kEntryReserved`: a crash between `ASSERT_COMMIT` and
-  `TXN_COMMIT` leaves a cleared bit on a loser (CJ §1.8, CJ-R4). No order
-  carries it yet. CJ-Q5 proposes that CJ-S0 reproduce it and the operator
+  `TXN_COMMIT` leaves a cleared bit on a loser (CK §1.8, CK-R4). No order
+  carries it yet. CK-Q5 proposes that CK-S0 reproduce it and the operator
   open its order.

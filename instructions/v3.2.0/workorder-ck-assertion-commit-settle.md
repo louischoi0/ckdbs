@@ -1,4 +1,4 @@
-# Work order CJ — an assertion reservation's commit settle, removed: an exploratory and verifying milestone
+# Work order CK — an assertion reservation's commit settle, removed: an exploratory and verifying milestone
 
 Written 2026-10-31 on `main` from `18264195` (`v3.4.6-4-g18264195`), on
 the operator's words, recorded in English (`raft-marks-2026-10-31.md` §1):
@@ -19,8 +19,8 @@ the operator's words, recorded in English (`raft-marks-2026-10-31.md` §1):
 - **W1**: *"Tell me about the assertion reservation settle."*
 - **W2**: *"Write an exploratory, verifying milestone document on (b)."*
 
-**Written 2026-10-31; not opened.** CJ-Q0..Q7 carry CLA's proposals and
-none is marked. **Exploratory and verifying since W2** (§3): CJ-S0
+**Written 2026-10-31; not opened.** CK-Q0..Q7 carry CLA's proposals and
+none is marked. **Exploratory and verifying since W2** (§3): CK-S0
 verifies the premise and measures the settle before anything is built,
 and its verdict is build, narrow or drop.
 
@@ -29,13 +29,15 @@ at `18264195`; `[measured]` with its results file; `[design]` for
 reasoning about code not yet written; `[quiet-wrong]` where a wrong choice
 turns a correct answer into a wrong one with no error.
 
-**The letter.** `[source-read]` CI is the last work order under
-`instructions/v3.2.0/` on `origin/main` at `18264195`, `git worktree list`
-names no `CJ`, and no commit subject on `origin/main` begins with the
-token. CLA's choice.
+**The letter.** This order was written as **CJ** (`e4f55324`,
+`c0814a6b`). **It was relettered CK on 2026-10-31 on the operator's word**
+that CJ is already in use (W3, `raft-marks-2026-10-31.md` §2): another
+session holds the letter for work not yet on `origin/main`. `[source-read]`
+At `c0814a6b`, no branch on `origin`, no commit subject and no document
+names a `CK`. The bug entry and its citations moved with the order.
 
-**CJ against other orders.**
-- CJ amends `docs/spec/assertion.md` §5.1 (the `flags` row), §6.2 step 4,
+**CK against other orders.**
+- CK amends `docs/spec/assertion.md` §5.1 (the `flags` row), §6.2 step 4,
   §7's record list and AS6b's "Cost asymmetry, stated", and `wal.md`'s
   assertion row (`docs/spec/wal.md:168`).
 - It leaves the admission, the hold, the reserve, `AbortTxn`,
@@ -47,18 +49,18 @@ token. CLA's choice.
 
 ---
 
-## 0. What CJ is
+## 0. What CK is
 
 **The hypothesis.** A reservation's entry is written with `kEntryReserved`
 set. At commit, `CommitTxn` fetches each page the transaction's
 reservations landed on, appends an `ASSERT_COMMIT`, clears the bit and
-stamps the page, all **before the transaction's commit record**. CJ holds
+stamps the page, all **before the transaction's commit record**. CK holds
 three hypotheses:
 
 - **H1 - the bit has no reader.** No admission, no recovery step, no
   verification and no tool reads the on-page `kEntryReserved` of a live
   entry, so its value after commit decides nothing (§1.3, to be confirmed
-  by CJ-S0).
+  by CK-S0).
 - **H2 - removing the settle removes a failure point.** With the page work
   gone, `CommitTxn` takes the pending list out of the registry and cannot
   fail. The stranded-reservation path (§1.6) then has no failure to start
@@ -69,7 +71,7 @@ three hypotheses:
   one record, one page dirtied and one stamp per `(assertion, page)` on
   every commit that reserved. This has not been measured (§1.7).
 
-**What CJ would do (option (b)).** `CommitTxn` stops touching pages and
+**What CK would do (option (b)).** `CommitTxn` stops touching pages and
 stops appending `ASSERT_COMMIT`. `kEntryReserved` is redefined from "this
 reservation is in flight" to **"this entry was written by the reservation
 path"** (an `ASSERT_RESERVE`, as against an `ASSERT_BUILD`). That is the
@@ -196,7 +198,7 @@ that fails depends on the contribution:**
 | A `SUM` arrival of a negative value | too low | fails open, as above |
 
 The dispatcher's comment (`command_dispatcher.cpp:11653-11660`) states
-"Fail-closed" without the second and third rows. It is wrong, and CJ-S3
+"Fail-closed" without the second and third rows. It is wrong, and CK-S3
 corrects it.
 
 The bug entry `assertion-reservations-stranded-by-a-failed-settle.md` was
@@ -251,7 +253,7 @@ closed, and **a loser's departure or negative `SUM` arrival fails open**
 `docs/inflight/bugs/an-assertion-keeps-the-reservations-of-a-crash-loser-and-a-failed-settle.md`
 (found by reading, not reproduced).
 
-**CJ does not fix the crash path** (CJ-Q5). It matters to CJ for two
+**CK does not fix the crash path** (CK-Q5). It matters to CK for two
 reasons:
 - **The fix tells winners from losers by `TXN_COMMIT`, not by the bit.**
   After a full replay today, a set bit nearly identifies a loser's entry,
@@ -259,49 +261,49 @@ reasons:
   departure). But the bit is not exact: a crash between a transaction's
   `ASSERT_COMMIT` and its `TXN_COMMIT` leaves a cleared bit on a loser. So
   the analysis phase's winners and losers are the only sound source.
-  CJ-R1 takes the bit-based fix off the table for good, and CJ-R4 binds the
+  CK-R1 takes the bit-based fix off the table for good, and CK-R4 binds the
   fix to that.
-- **CJ removes one of the two paths that strand a reservation** (the failed
+- **CK removes one of the two paths that strand a reservation** (the failed
   settle, §1.6). That leaves the crash path as the only one.
 
 ---
 
 ## 2. Rulings proposed `[design]`
 
-**CJ-R1 - the bit's meaning.** `kEntryReserved` means *"written by the
+**CK-R1 - the bit's meaning.** `kEntryReserved` means *"written by the
 reservation path"*. It is set at reserve, as today, and never cleared on
 the live path. A build entry never carries it. `assertion_replay.cpp:44`'s
 check keeps its meaning unchanged.
 
-**CJ-R2 - the settle.** `CommitTxn` moves `pending_[txn]` out under the
+**CK-R2 - the settle.** `CommitTxn` moves `pending_[txn]` out under the
 directory latch and does nothing else: no page, no record, no stamp. With
-nothing left that can fail, CJ-Q7 decides its signature and the
+nothing left that can fail, CK-Q7 decides its signature and the
 dispatcher's three failure arms (§1.2).
 
-**CJ-R3 - `ASSERT_COMMIT`.** The record is no longer written. Its record
+**CK-R3 - `ASSERT_COMMIT`.** The record is no longer written. Its record
 type keeps its number and is never reused. Its replay arm stays for a log
-written before CJ (CJ-Q4).
+written before CK (CK-Q4).
 
-**CJ-R4 - no reader may trust the bit as "in flight"** `[quiet-wrong]`. A
+**CK-R4 - no reader may trust the bit as "in flight"** `[quiet-wrong]`. A
 future consumer that reads `kEntryReserved` as "this reservation has not
 committed" would treat every committed reservation as undecided. Examples:
 a verifier that skips reserved entries, a linkage scan that drops them, a
 diagnostic view that subtracts them. Each would be wrong with no error.
 Three guards:
 - the definition's comment (`cabin_bound_page.hpp:64-73`) and §5.1 state
-  CJ-R1;
+  CK-R1;
 - a cell pins that a committed reservation's entry carries the bit;
-- a mutant reader that trusts the bit fails a cell (CJ-S2).
+- a mutant reader that trusts the bit fails a cell (CK-S2).
 
 The ruling binds §1.8's fix as well. It tells losers apart by the
 analysis phase's outcome and never by the bit.
 
-**CJ-R5 - the stranding paths.** After CJ no commit-time step can strand a
+**CK-R5 - the stranding paths.** After CK no commit-time step can strand a
 reservation (H2), so the failed-settle row of the bug entry closes with
-CJ. §1.8's crash-loser path, which fails open for departures, is confirmed
-by a cell in CJ-S0 and left to its own order (CJ-Q5).
+CK. §1.8's crash-loser path, which fails open for departures, is confirmed
+by a cell in CK-S0 and left to its own order (CK-Q5).
 
-**CJ-R6 - what does not change.**
+**CK-R6 - what does not change.**
 - Admission and its O(1) header read.
 - The hold.
 - `ASSERT_RESERVE`'s format.
@@ -316,33 +318,33 @@ by a cell in CJ-S0 and left to its own order (CJ-Q5).
 
 ## 3. The exploratory method (W2) `[design]`
 
-- **CJ-S0 verifies H1 and measures H3 before anything is built.** It runs
-  once CJ is opened and CJ-Q1..Q2 are marked. Its results file says, per
+- **CK-S0 verifies H1 and measures H3 before anything is built.** It runs
+  once CK is opened and CK-Q1..Q2 are marked. Its results file says, per
   hypothesis, held or refuted, with the evidence.
 - **A spike may be written on the work branch to answer S0.** It is never
-  merged: it is deleted, or rewritten as CJ-S1.
+  merged: it is deleted, or rewritten as CK-S1.
 - **The verdict is build, narrow or drop.**
   - **Build**: H1 holds.
   - **Narrow**: a reader is found that can be moved onto another fact, and
-    CJ-S1 moves it.
+    CK-S1 moves it.
   - **Drop**: a reader is found that needs the bit's present meaning. It is
     recorded in §7 with what sank it, and the settle stays.
 - **Nothing merges to `main` without the operator's word.** The redefinition
-  of an on-page bit's meaning is the operator's to mark (CJ-Q0).
+  of an on-page bit's meaning is the operator's to mark (CK-Q0).
 
 ---
 
 ## 4. Questions - not marked
 
-**CJ-Q0 - who decides after S0.**
+**CK-Q0 - who decides after S0.**
 - (a) The operator marks S0's verdict.
 - (b) S0's verdict decides, and the stages run on the standing go-ahead.
 
-**CLA proposes (a)**: CJ redefines what an authoritative page's bit
+**CLA proposes (a)**: CK redefines what an authoritative page's bit
 means.
 
-**CJ-Q1 - the bit's fate.**
-- (a) Keep setting it at reserve, never clear it (CJ-R1). No format
+**CK-Q1 - the bit's fate.**
+- (a) Keep setting it at reserve, never clear it (CK-R1). No format
   change, and the replay check keeps its meaning.
 - (b) Stop setting it. A reservation's entry then equals a build entry,
   and `assertion_replay.cpp:44` changes its rule.
@@ -350,7 +352,7 @@ means.
 
 **CLA proposes (a)**.
 
-**CJ-Q2 - the bar for "build".**
+**CK-Q2 - the bar for "build".**
 - (a) H1 alone: the settle's removal is justified by the failure point it
   deletes (H2), whatever S0 measures.
 - (b) H1 and a measured gain outside the spread on at least one cell.
@@ -358,45 +360,45 @@ means.
 **CLA proposes (a)**: H2 is a correctness reason, and the measurement is
 recorded either way.
 
-**CJ-Q3 - the superblock.**
+**CK-Q3 - the superblock.**
 - (a) No bump. No binary reads the bit as "in flight" (H1), so a volume
-  written after CJ means the same thing to a binary before it, and the
+  written after CK means the same thing to a binary before it, and the
   reverse.
 - (b) Bump, as every on-disk meaning change has since BB.
 
 **CLA proposes (a) if S0 confirms H1 for every shipped tag** (v3.1.0
 onward). Otherwise (b).
 
-**CJ-Q4 - `ASSERT_COMMIT`'s replay arm.**
+**CK-Q4 - `ASSERT_COMMIT`'s replay arm.**
 - (a) Kept as it is: an old log's record clears a bit nothing reads.
 - (b) Kept as a no-op.
-- (c) Refused `Corruption` on a volume written after CJ.
+- (c) Refused `Corruption` on a volume written after CK.
 
 **CLA proposes (a)**: (c) needs the volume to say when it was written,
-which is CJ-Q3 (b).
+which is CK-Q3 (b).
 
-**CJ-Q5 - §1.8's crash-loser reservations.**
+**CK-Q5 - §1.8's crash-loser reservations.**
 - (a) The bug entry is filed with this order (§1.8). S0 reproduces it
   with a rig cell for each direction (an arrival and a departure), and the
   entry gains the reproduction and names the order that would carry the
-  fix. CJ goes on.
-- (b) Fix it in CJ.
+  fix. CK goes on.
+- (b) Fix it in CK.
 
 **CLA proposes (a)**: the fix is a recovery change (analysis-phase
-winners and losers into the assertion pass) and CJ is a commit-path
+winners and losers into the assertion pass) and CK is a commit-path
 change. **The departure direction fails open, and that ranks the fix
-above CJ's own gain**. CLA recommends that the operator open its order
-once S0 reproduces it, and not wait for CJ's close.
+above CK's own gain**. CLA recommends that the operator open its order
+once S0 reproduces it, and not wait for CK's close.
 
-**CJ-Q6 - the abort's per-reservation cost.**
+**CK-Q6 - the abort's per-reservation cost.**
 - (a) Out of scope.
-- (b) Batch `ASSERT_ROLLBACK` per page in CJ.
+- (b) Batch `ASSERT_ROLLBACK` per page in CK.
 
 **CLA proposes (a)**: (b) changes a record format, and nothing has
 measured it. `tools/assertion_abort_benchmark.py` exists and no results
 file names it.
 
-**CJ-Q7 - `CommitTxn`'s signature.**
+**CK-Q7 - `CommitTxn`'s signature.**
 - (a) `void`, and the dispatcher's three failure arms (§1.2) and their
   stranded-settle comment are deleted.
 - (b) Kept as `Status`, always OK.
@@ -412,7 +414,7 @@ Every stage is reviewed by `critics-developer` and gated by the full
 Debug suite. The measurement is held to the standing hour budget,
 building included.
 
-**CJ-S0 - the premise, verified and measured.** No engine code reaches
+**CK-S0 - the premise, verified and measured.** No engine code reaches
 `main`. Four parts:
 
 1. **The census (H1).** Every reader of the page's `kEntryReserved`, by
@@ -421,18 +423,18 @@ building included.
      `docs`;
    - the backup manifest and restore checks (`backup.md`), any page dumper
      or verifier, and every `sys` view;
-   - **every shipped tag from `v3.1.0`**, for CJ-Q3.
+   - **every shipped tag from `v3.1.0`**, for CK-Q3.
 
    A reader that decides anything refutes H1.
-2. **The spike (H1, H2).** On the work branch, `CommitTxn` as CJ-R2 (no
+2. **The spike (H1, H2).** On the work branch, `CommitTxn` as CK-R2 (no
    page, no record). Run:
    - the full Debug suite, the sim's assertion workload and the
      sanitizer builds (BS-S1);
    - `tests/assertion_*_test.cpp` and `tests/bound_cabin_test.cpp`.
 
    An expectation that fails is read: either it pins the bit's old meaning
-   (rewritten under CJ-R1) or it found a reader (H1 refuted).
-3. **The crash reading (CJ-R5, §1.8).** Cells on the spike, through the
+   (rewritten under CK-R1) or it found a reader (H1 refuted).
+3. **The crash reading (CK-R5, §1.8).** Cells on the spike, through the
    recovery rig:
    - a committed reservation whose page reached the device with the bit
      set, then a mount: the aggregate, the linkage scan and
@@ -442,9 +444,9 @@ building included.
    - **a crash with a reservation undecided, once as an arrival and once
      as a departure**, which records what the base binary does (§1.8): the
      group total after the mount against a re-summation of the surviving
-     rows. This is CJ-Q5's evidence;
+     rows. This is CK-Q5's evidence;
    - a log carrying `ASSERT_COMMIT` records (from the base binary),
-     mounted by the spike (CJ-Q4).
+     mounted by the spike (CK-Q4).
 4. **The measurement (H3).** Build-release, the spike against the base,
    interleaved A/B in one window, server CPU per commit with the driver
    unpinned from the server's CPU:
@@ -460,18 +462,18 @@ building included.
 
 The verdict goes in §7.
 
-**CJ-S1 - the change**, on the operator's mark. In scope:
-- CJ-R2 and CJ-Q7's signature;
-- CJ-R1's comment at the definition;
-- CJ-Q4's replay arm;
+**CK-S1 - the change**, on the operator's mark. In scope:
+- CK-R2 and CK-Q7's signature;
+- CK-R1's comment at the definition;
+- CK-Q4's replay arm;
 - the tests the spike found pinning the old meaning, rewritten.
 
-**CJ-S2 - the verification.**
+**CK-S2 - the verification.**
 - **(i)** A committed reservation's entry carries the bit, and every
   consumer answers as the base did. The consumers are admission, the
   linkage scan, `VerifyAgainstEntries`, the fold and `sys.assertions`.
 - **(ii)** A mutant that makes the linkage scan or `VerifyAgainstEntries`
-  skip a reserved entry fails a cell (CJ-R4).
+  skip a reserved entry fails a cell (CK-R4).
 - **(iii)** S0 part 3's crash cells kept as tests.
 - **(iv)** A `CommitTxn` under a full pool (drain mode) and an injected
   append failure: the transaction commits, and the totals equal a
@@ -479,7 +481,7 @@ The verdict goes in §7.
 - **(v)** The overhead A/B against the base: every cell inside the spread
   or better, the control unchanged.
 
-**CJ-S3 - the close.** Documents to update:
+**CK-S3 - the close.** Documents to update:
 - `assertion.md` §5.1's `flags` row, §6.2 step 4, §7's record list and
   AS6b's cost paragraph;
 - `wal.md:168`;
@@ -489,7 +491,7 @@ The verdict goes in §7.
   second's "Fail-closed" corrected (§1.6);
 - `assertion.md:477-478`'s crash-recovery sentence, corrected to what the
   tree does (§1.8);
-- the bug entry: its failed-settle half closed by CJ, its crash half left
+- the bug entry: its failed-settle half closed by CK, its crash half left
   open;
 - `known-gaps.md` (an assertion section naming §1.8's outcome);
 - CLAUDE.md, if a row states the settle.
@@ -503,8 +505,8 @@ The stage log goes in §7.
 - A deferred cleanout of tuples (§0): there is no commit-time tuple write
   to defer.
 - A writer id on the entry, option (c) (§0).
-- The abort's batching (CJ-Q6 (a)).
-- The crash-loser fix (CJ-Q5 (a)).
+- The abort's batching (CK-Q6 (a)).
+- The crash-loser fix (CK-Q5 (a)).
 - A change to admission, holds, `ASSERT_RESERVE`, AS6a or AS6b.
 
 ---
