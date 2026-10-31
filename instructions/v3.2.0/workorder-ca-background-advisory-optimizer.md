@@ -22,8 +22,9 @@ English (`raft-marks-2026-10-17.md` §3):
   `/go-ahead-achieving-milestone`, the standing word to adopt CLA's
   proposals (`raft-marks-2026-10-17.md` §4).
 
-**Explored and landed on the work branch 2026-10-17; not merged, not
-closed** (§7, §8). **Opened 2026-10-17 on W2; exploratory since W3.** The scenarios are the
+**Explored and landed on the work branch 2026-10-17; merged to `main`;
+CLOSED 2026-10-31 on the operator's word** (`raft-marks-2026-10-31.md` §3;
+§7, §8). **Opened 2026-10-17 on W2; exploratory since W3.** The scenarios are the
 four drivers `tools/scenario1_backtest.py` (its BTREE copy, SUS-1),
 `scenario2_freight.py`, `scenario3_library.py` and
 `scenario4_cabinopt_days.py`. The measure of an option is all four
