@@ -528,3 +528,38 @@ The stage log goes in §7.
 
 Opened 2026-10-31 in worktree `ck-assertion-commit-settle` at `8d183e9b`
 (`origin/main` `d517cebc` and `main` `3f225096` merged).
+
+### CK-S0 part 1 - the census (H1), 2026-10-31
+
+`[source-read]` In worktree `ck-assertion-commit-settle` at `706beedb`, the
+search was `kEntryReserved`, `reserved()`, `ClearReserved` and `SetReserved`
+over `src`, `include`, `tests`, `sim`, `tools`, `scripts`, `fuzz`, `manual` and
+`docs` (the bug entries aside).
+
+- **One reader of the page-entry bit decides anything**:
+  `src/exec/assertion_replay.cpp:44`, and it reads the **record's** entry
+  bytes, never a page's (§1.3). Every other hit sets the bit
+  (`assertion_check.cpp:563`), writes a build entry without it
+  (`assertion_build.cpp:251`), clears it (`cabin_bound_page.cpp:192`,
+  `assertion_check.cpp:869`, `assertion_replay.cpp:120`), defines it, or is a
+  test or a comment. No `docs`, `manual`, `scripts`, `sim`, `fuzz`, backup
+  manifest or restore check names it.
+- **Shipped tags**: `v3.1.0` and `v3.4.6` each have exactly one
+  `.reserved()` call outside the definition, `assertion_replay.cpp:44`, and
+  `v3.1.0`, `v3.2.0`, `v3.3.0` and `v3.4.0` each have 12 lines naming
+  `kEntryReserved` or `.reserved()` under `src` and `include`. The other tags
+  (`v3.4.1`..`v3.4.5`) were not read line by line: the same count is
+  inferred, not checked.
+- **H1 holds at part 1**: no reader of a page's bit. CK-Q3 (a)'s condition
+  ("S0 confirms H1 for every shipped tag") is met for the tags read and open
+  for `v3.4.1`..`v3.4.5`.
+
+### CK-S0 parts 2-4 - not executed
+
+**The environment cannot build.** In worktree `ck-assertion-commit-settle`
+at `706beedb`, `scripts/build.sh` stops at configure: `Could NOT find GTest
+(missing: GTEST_LIBRARY GTEST_INCLUDE_DIR GTEST_MAIN_LIBRARY)`
+(`tests/CMakeLists.txt:1`). The spike, the full Debug suite, the sim's
+assertion workload, the sanitizer builds, the crash cells and the H3
+measurement have **not been run**, and nothing here is a pass for any of
+them. `libgtest-dev` (or an equivalent) has to be installed first.
