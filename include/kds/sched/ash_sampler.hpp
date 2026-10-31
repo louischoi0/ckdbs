@@ -43,6 +43,14 @@
 
 namespace kds::sched {
 
+// The rings of the cores that have a sampler, by core id, for `sys.ash`
+// (WE08). A slot is replaced when a core id is set again and cleared by the
+// sampler that owns it, so a view never reads a ring a destroyed scheduler left.
+void RegisterAshRing(std::uint32_t core_id, const std::shared_ptr<stats::AshRing>& ring);
+void UnregisterAshRing(std::uint32_t core_id, const stats::AshRing* ring);
+// Null when no sampler is registered for `core_id`.
+std::shared_ptr<stats::AshRing> AshRingOfCore(std::uint32_t core_id);
+
 class AshSampler {
 public:
     static constexpr std::uint64_t kDefaultIntervalNs = 1'000'000'000;
@@ -52,7 +60,15 @@ public:
     explicit AshSampler(std::size_t ring_bytes = stats::AshRing::kDefaultBytes)
         : ring_(std::make_shared<stats::AshRing>(ring_bytes)) {}
 
-    void set_core_id(std::uint32_t core_id) noexcept { core_id_ = core_id; }
+    ~AshSampler() { UnregisterAshRing(core_id_, ring_.get()); }
+    AshSampler(const AshSampler&) = delete;
+    AshSampler& operator=(const AshSampler&) = delete;
+
+    void set_core_id(std::uint32_t core_id) {
+        UnregisterAshRing(core_id_, ring_.get());
+        core_id_ = core_id;
+        RegisterAshRing(core_id_, ring_);
+    }
 
     void set_enabled(bool on) noexcept { enabled_.store(on, std::memory_order_relaxed); }
     bool enabled() const noexcept { return enabled_.load(std::memory_order_relaxed); }

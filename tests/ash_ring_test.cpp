@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <thread>
+
 #include "kds/stats/ash_record.hpp"
 #include "kds/stats/ash_ring.hpp"
 
@@ -89,6 +92,23 @@ TEST(AshRing, ASizeUnderOneRecordStillHoldsOne) {
     ring.Record(Sample(2));
     ASSERT_EQ(ring.Snapshot().size(), 1u);
     EXPECT_EQ(ring.Snapshot()[0], Sample(2));
+}
+
+TEST(AshRing, ASnapshotDuringWritingHoldsWholeRecordsInOrder) {
+    AshRing ring(64 * 50);
+    std::atomic<bool> stop{false};
+    std::thread writer([&] {
+        for (std::uint64_t n = 1; !stop.load(); ++n) ring.Record(Sample(n));
+    });
+    for (int i = 0; i < 200; ++i) {
+        const auto got = ring.Snapshot();
+        for (std::size_t k = 0; k < got.size(); ++k) {
+            EXPECT_EQ(got[k], Sample(got[k].sample_ts_us / 1'000'000)) << "a torn record";
+            if (k > 0) EXPECT_EQ(got[k].sample_ts_us, got[k - 1].sample_ts_us + 1'000'000);
+        }
+    }
+    stop.store(true);
+    writer.join();
 }
 
 }  // namespace

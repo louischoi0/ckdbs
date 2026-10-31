@@ -1775,6 +1775,9 @@ Status Expeditor::Start() {
     live.scheduler.emplace(clock_, io_backend.value());
     sched::Scheduler& scheduler = *live.scheduler;
     scheduler.SetLogger(&*logger_);
+    // Core 0's ASH ring into `sys.ash`'s registry (CJ WE08): at `cores = 1`
+    // no `AttachWakerTable` runs below, which is where every other core's is.
+    scheduler.ash().set_core_id(0);
     // `SHOW META`'s group-accounting block on core 0 (sched.md §4), cleared
     // on every exit by `ClearReactorBorrows` (above `ServeRuntime`).
     dispatcher_->set_scheduler_view(&scheduler);

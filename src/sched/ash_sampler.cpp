@@ -1,9 +1,34 @@
 #include "kds/sched/ash_sampler.hpp"
 
 #include <algorithm>
+#include <array>
 #include <limits>
+#include <mutex>
 
 namespace kds::sched {
+
+namespace {
+std::mutex g_ring_mutex;
+std::array<std::shared_ptr<stats::AshRing>, kWaitCores> g_rings;
+}  // namespace
+
+void RegisterAshRing(std::uint32_t core_id, const std::shared_ptr<stats::AshRing>& ring) {
+    if (core_id >= kWaitCores) return;
+    const std::lock_guard<std::mutex> held(g_ring_mutex);
+    g_rings[core_id] = ring;
+}
+
+void UnregisterAshRing(std::uint32_t core_id, const stats::AshRing* ring) {
+    if (core_id >= kWaitCores) return;
+    const std::lock_guard<std::mutex> held(g_ring_mutex);
+    if (g_rings[core_id].get() == ring) g_rings[core_id].reset();
+}
+
+std::shared_ptr<stats::AshRing> AshRingOfCore(std::uint32_t core_id) {
+    if (core_id >= kWaitCores) return nullptr;
+    const std::lock_guard<std::mutex> held(g_ring_mutex);
+    return g_rings[core_id];
+}
 
 bool AshSampler::Due(MonoTimeNs now) noexcept {
     if (!enabled_.load(std::memory_order_relaxed)) {

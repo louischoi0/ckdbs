@@ -2284,6 +2284,7 @@ private:
     StatusOr<exec::CatalogView> WaitStatsView();
     StatusOr<exec::CatalogView> WaitHistogramView();
     StatusOr<exec::CatalogView> SessionWaitsView();
+    StatusOr<exec::CatalogView> AshView();
     StatusOr<exec::CatalogView> SessionStateView();
     StatusOr<exec::CatalogView> PageSlotsView(const parser::AstValue& page_id);
     StatusOr<exec::CatalogView> MetaView();

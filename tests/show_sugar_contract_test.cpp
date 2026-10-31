@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/sched/ash_sampler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/kwp_session.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
@@ -551,6 +552,38 @@ TEST_F(ShowSugarTest, TheWaitStatisticsViewsAnswerWithTheirColumns) {
     const auto state = testing_view::ReadViewText(
         Text("SELECT session_id, state, event, p1, p2, p3, elapsed_us FROM sys.session_state"));
     EXPECT_EQ(state.Column("state").size(), state.rows.size());
+}
+
+// ---- CJ's WE08: `sys.ash` ---------------------------------------------------
+
+TEST_F(ShowSugarTest, SysAshMergesEveryCoresRingInTimeOrderAndFiltersLikeAnyView) {
+    // Two samplers on core ids no other test uses, records interleaved in time.
+    sched::AshSampler a, b;
+    a.set_core_id(60);
+    b.set_core_id(61);
+    stats::AshRecord r;
+    r.event_id = static_cast<std::uint16_t>(stats::WaitEvent::kCommitWalFlush);
+    r.fingerprint = 0xFEEDFACEull;
+    for (std::uint64_t t : {10, 30, 50}) {
+        r.sample_ts_us = t;
+        r.core_id = 60;
+        a.ring()->Record(r);
+    }
+    for (std::uint64_t t : {20, 40, 60}) {
+        r.sample_ts_us = t;
+        r.core_id = 61;
+        r.state = stats::kAshBackground;
+        b.ring()->Record(r);
+    }
+    const auto all = testing_view::ReadViewText(Text(
+        "SELECT sample_ts_us, core, session_kind, event FROM sys.ash WHERE fingerprint = 4277009102"));
+    EXPECT_EQ(all.Column("sample_ts_us"),
+              (std::vector<std::string>{"10", "20", "30", "40", "50", "60"}));
+    EXPECT_EQ(all.Column("core"), (std::vector<std::string>{"60", "61", "60", "61", "60", "61"}));
+    EXPECT_EQ(all.Column("event")[0], "commit.wal_flush");
+    const auto bg = testing_view::ReadViewText(Text(
+        "SELECT core FROM sys.ash WHERE session_kind = 'background' AND sample_ts_us >= 40"));
+    EXPECT_EQ(bg.Column("core"), (std::vector<std::string>{"61", "61"}));
 }
 
 TEST_F(ShowSugarTest, SysWaitEventNamesListsTheRegistryByName) {

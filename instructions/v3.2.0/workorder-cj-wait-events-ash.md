@@ -738,3 +738,24 @@ the operator's standing go-ahead of 2026-10-31.
 **Suite** at the tree committed as WE07 (`ctest -j8 -LE bs-nightly`, Debug):
 4365 of 4366 passed; the one failure is the `ENOSPC` cell noted above, not a
 pass.
+
+**WE08 - `sys.ash`** (from `37a8b1c9`).
+- **Built.** A process-wide registry of the per-core rings (`RegisterAshRing`,
+  `AshRingOfCore`), filled by `AshSampler::set_core_id` and cleared by the
+  sampler's destructor only if the slot still holds its own ring. `sys.ash`
+  copies each ring under its own latch and merges by `sample_ts_us`, ties by
+  core, then ring order. Filters are a `WHERE` on `sample_ts_us`, `core`,
+  `fingerprint`, `event` and `session_kind` (`session` / `background`).
+  Columns also carry `state`, `class`, `sched_group`, `late`, `arg_hash_valid`
+  (1 = `p1` is the argument hash), `p1`-`p3`, `wait_elapsed_us`.
+- **Not shown.** `step_id`, `origin_session` and `trx_id` (no writer yet).
+  `sample_ts_us` is the instance's monotonic clock, not wall time.
+- **Review (`critics-developer`).** Found and fixed: at `cores = 1` core 0 never
+  called `AttachWakerTable`, so its ring was never registered and `sys.ash` was
+  empty - `Expeditor::Start` now sets core 0's id. Applied: the `arg_hash_valid`
+  column. **Not applied:** a `CoreRuntime`/expeditor-level test of the one-core
+  registration (no rig starts an expeditor at one core cheaply); the
+  `ring()` comment trim; `std::ranges::copy` in place of the two-line insert.
+- **Suite** at this tree (`ctest -j8 -LE bs-nightly`, Debug): 4369 of 4370
+  passed; the one failure is `DropTableReclaimCrashTest` failing with ENOSPC on
+  `/tmp`, not a pass. Overhead not measured; measured at the milestone's close.

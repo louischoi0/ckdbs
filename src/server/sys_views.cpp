@@ -17,6 +17,7 @@
 #include "kds/exec/transition_catalog.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/sched/ash_sampler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -84,6 +85,7 @@ constexpr SysViewSpec kViews[] = {
     {"wait_histogram"},
     {"session_waits"},
     {"session_state"},
+    {"ash"},
     {"page_slots", ViewKeyMode::kRequired, "page_id", kInt},
     {"meta"},
 };
@@ -254,6 +256,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "wait_histogram") return WaitHistogramView();
     if (n == "session_waits") return SessionWaitsView();
     if (n == "session_state") return SessionStateView();
+    if (n == "ash") return AshView();
     if (n == "page_slots") return PageSlotsView(*key);
     if (n == "meta") return MetaView();
 
@@ -1151,6 +1154,59 @@ StatusOr<exec::CatalogView> CommandDispatcher::SessionStateView() {
              Str(TaskStateName(static_cast<sched::TaskState>(s.current_state.get()))),
              Str(stats::kWaitEvents[ev].name), Int(s.current_p1.get()), Int(s.current_p2.get()),
              Int(s.current_p3.get()), Int(now > since ? Us(now - since) : 0)});
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::AshView() {
+    exec::CatalogView view;
+    // The active-session samples every core's sampler holds (CJ WE08, WD1 at
+    // query time): each core's ring is copied under its own latch, so a query
+    // during sampling sees whole records, and the copies are merged by sample
+    // time, ties by core then ring order. A filter is a WHERE on a column
+    // (SV5): time range on `sample_ts_us`, `core`, `fingerprint`, `event`, and
+    // `session_kind` ('session' or 'background'). A sampler runs between
+    // polls, so `state` is never ON_CPU (CJ-Q12). `arg_hash_valid` = 1 means
+    // `p1` is the statement's argument hash, not an event parameter.
+    // `sample_ts_us` is the core's monotonic clock, one for the instance.
+    // `step_id`, `origin_session` and `trx_id` are not shown: no writer fills
+    // them yet. Engine-state: reads no session view.
+    Define(view, {{"sample_ts_us", kInt},
+                  {"core", kInt},
+                  {"session_id", kInt},
+                  {"session_kind", kStr},
+                  {"state", kStr},
+                  {"event", kStr},
+                  {"class", kStr},
+                  {"sched_group", kInt},
+                  {"late", kInt},
+                  {"arg_hash_valid", kInt},
+                  {"fingerprint", kInt},
+                  {"p1", kInt},
+                  {"p2", kInt},
+                  {"p3", kInt},
+                  {"wait_elapsed_us", kInt}});
+    std::vector<stats::AshRecord> all;
+    for (std::uint32_t core = 0; core < sched::kWaitCores; ++core) {
+        const auto ring = sched::AshRingOfCore(core);
+        if (ring == nullptr) continue;
+        std::vector<stats::AshRecord> part = ring->Snapshot();
+        all.insert(all.end(), part.begin(), part.end());
+    }
+    std::stable_sort(all.begin(), all.end(), [](const stats::AshRecord& a, const stats::AshRecord& b) {
+        return a.sample_ts_us != b.sample_ts_us ? a.sample_ts_us < b.sample_ts_us : a.core_id < b.core_id;
+    });
+    for (const stats::AshRecord& r : all) {
+        const std::size_t ev = r.event_id < stats::kWaitEventCount ? r.event_id : 0;
+        view.rows.push_back(
+            {Int(r.sample_ts_us), Int(r.core_id), Int(r.session_id),
+             Str((r.state & stats::kAshBackground) != 0 ? "background" : "session"),
+             Str(TaskStateName(static_cast<sched::TaskState>(r.state & stats::kAshStateMask))),
+             Str(stats::kWaitEvents[ev].name),
+             Str(stats::WaitClassName(stats::kWaitEvents[ev].wait_class)), Int(r.sched_group),
+             Int((r.flags & stats::kAshLate) != 0 ? 1 : 0),
+             Int((r.flags & stats::kAshArgHashValid) != 0 ? 1 : 0), Int(r.fingerprint), Int(r.p1),
+             Int(r.p2), Int(r.p3), Int(r.wait_elapsed_us)});
     }
     return view;
 }
