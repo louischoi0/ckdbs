@@ -19,8 +19,11 @@ the operator's words, recorded in English (`raft-marks-2026-10-31.md` §1):
 - **W1**: *"Tell me about the assertion reservation settle."*
 - **W2**: *"Write an exploratory, verifying milestone document on (b)."*
 
-**Written 2026-10-31; not opened.** CK-Q0..Q7 carry CLA's proposals and
-none is marked. **Exploratory and verifying since W2** (§3): CK-S0
+**Written 2026-10-31; opened 2026-10-31 on the operator's standing go-ahead
+(go-ahead-achieving-milestone, `raft-marks-2026-10-31.md` §4)**, CK-Q0..Q7
+adopted as CLA proposed. The adoption is CLA's under that word, not the
+operator's per-item mark. CK-Q0 (a) reserves S0's verdict to the operator, so
+the run stops there. **Exploratory and verifying since W2** (§3): CK-S0
 verifies the premise and measures the settle before anything is built,
 and its verdict is build, narrow or drop.
 
@@ -334,7 +337,17 @@ by a cell in CK-S0 and left to its own order (CK-Q5).
 
 ---
 
-## 4. Questions - not marked
+## 4. Questions
+
+**Adopted 2026-10-31 on the operator's standing go-ahead
+(go-ahead-achieving-milestone), each as CLA proposed**: CK-Q0 (a), CK-Q1 (a),
+CK-Q2 (a), CK-Q3 (a) if S0 confirms H1 for every shipped tag and otherwise
+(b), CK-Q4 (a), CK-Q5 (a), CK-Q6 (a), CK-Q7 (a). Decided by CLA, on the
+operator's word to follow its proposal; none is the operator's own mark.
+CK-R4 and CK-Q1 are `[quiet-wrong]`: their premise (the bit has no reader,
+§1.3) was re-read at `8d183e9b`, and `src` has not changed since `18264195`
+(only `instructions/` and `docs/` commits), so the proposals stand and S0 part 1
+re-verifies the census.
 
 **CK-Q0 - who decides after S0.**
 - (a) The operator marks S0's verdict.
@@ -513,4 +526,5 @@ The stage log goes in §7.
 
 ## 7. Stage log
 
-Not opened.
+Opened 2026-10-31 in worktree `ck-assertion-commit-settle` at `8d183e9b`
+(`origin/main` `d517cebc` and `main` `3f225096` merged).
