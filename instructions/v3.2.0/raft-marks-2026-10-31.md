@@ -1,0 +1,10 @@
+# The operator's words of 2026-10-31
+
+## 1. CA closed
+
+| | |
+|---|---|
+| **Word** | *"close CA"* |
+| **Mark** | **CA closed** (`workorder-ca-background-advisory-optimizer.md`, header and §7). Its premise was refuted at CA-S0 (the advisory work is 0.2-0.6 % of sampled server CPU on scenarios 1-4), so CA-S1..S3 were never built; the kept candidates are C1 `txn::VisibilityMemo`, C3 `ExecStats::For` inline and C4 `storage::InlineCellBytes`, all on `main`. Its close was measured at `v3.2.0-159-g954abc20` (`bench/v3.2.0/results-ca-close-v3.2.0-159-g954abc20.md`): scenarios 1 and 4 improved, scenarios 2 and 3 unchanged within noise. What it leaves is §8 of the order and `docs/inflight/known-gaps.md`'s "The advisory optimizer, in the background (CA)". No suite was run for this record, which adds only `instructions/` |
+| **Does not settle** | Scenario 2's commit-protocol change; the advisory structures CA-R1..R6 describe; a push; a tag, a version |
+| **Recorded at** | this file; the CA order's header; the CA row and this file's row in `instructions/v3.2.0/index.md` |
