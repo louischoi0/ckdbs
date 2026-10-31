@@ -27,6 +27,7 @@ protected:
     }
     void TearDown() override {
         SetWaitClock(nullptr);
+        SetStrictWaitScopes(false);
         ResetWaitContext();
     }
 
@@ -163,13 +164,12 @@ TEST_F(WaitStateTest, AWaitScopeBooksItsEventAndShowsParametersWhileOpen) {
     EXPECT_EQ(task.wait_state().event, WaitEvent::kOnCpu);
 }
 
-TEST_F(WaitStateTest, AParkOutsideEveryScopeIsCountedAndBookedAsUnclassified) {
+TEST_F(WaitStateTest, AParkOutsideEveryScopeIsCountedAndBookedToNoEvent) {
     bool ready = false;
     CoroTask task(SchedulingGroup::kForeground, UnscopedWait(&ready));
     EXPECT_EQ(task.Poll(), PollResult::kSuspended);
     EXPECT_EQ(WaitContext().unscoped_parks, 1u);
     EXPECT_EQ(task.wait_state().state, TaskState::kWaiting);
-    EXPECT_EQ(task.wait_state().event, WaitEvent::kSchedUnclassified);
 
     // Re-asking an unsatisfied wait changes nothing: no second violation.
     clock_.Advance(700);
@@ -179,9 +179,20 @@ TEST_F(WaitStateTest, AParkOutsideEveryScopeIsCountedAndBookedAsUnclassified) {
     clock_.Advance(300);
     ready = true;
     EXPECT_EQ(task.Poll(), PollResult::kDone);
-    EXPECT_EQ(Totals(WaitEvent::kSchedUnclassified).count, 1u);
-    EXPECT_EQ(Totals(WaitEvent::kSchedUnclassified).total_ns, 1'000u);
+    for (const EventTotals& t : WaitContext().totals) {
+        EXPECT_EQ(t.total_ns, 0u) << "the unscoped wait's time is booked to no event";
+    }
 }
+
+#ifndef NDEBUG
+TEST_F(WaitStateTest, AStrictCoreRefusesAParkOutsideEveryScope) {
+    SetStrictWaitScopes(true);
+    bool ready = false;
+    CoroTask task(SchedulingGroup::kForeground, UnscopedWait(&ready));
+    EXPECT_DEATH(task.Poll(), "WaitScope");
+    SetStrictWaitScopes(false);
+}
+#endif
 
 TEST_F(WaitStateTest, AnIdleScopeIsIdleStateAndAnExpectedParkNotAViolation) {
     bool ready = false;

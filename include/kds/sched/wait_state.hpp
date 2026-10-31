@@ -23,10 +23,12 @@
 //   ON_CPU    the task is being polled.
 //   RUNNABLE  `Poll` returned without a park: the task is re-queued, and the
 //             time to its next resume is booked as `sched.run_queue` (WD9).
-//   WAITING   a `WaitScope` is open, or `Poll` found a park with none
-//             (booked as `sched.unclassified`, counted in
-//             `CoreWaitContext::unscoped_parks` - I2's violation counter,
-//             which G1 requires to read 0).
+//   WAITING   a `WaitScope` is open, or `Poll` found a park with none: I2's
+//             violation. Counted in `CoreWaitContext::unscoped_parks`, its
+//             time booked to no event, and an `assert` where
+//             `CoreWaitContext::strict_scopes` is set (the server's reactor
+//             threads set it; a unit test's synthetic coroutine, which parks
+//             on a bare `WaitFor`, does not).
 //   IDLE      a `WaitScope` on an `idle.*` event: not DB time.
 //
 // The hooks fire only on a poll that resumes the coroutine: a poll that asks
@@ -72,6 +74,7 @@ struct CoreWaitContext {
     std::array<EventTotals, stats::kWaitEventCount> totals{};
     std::uint64_t on_cpu_ns = 0;       // ON_CPU is a state, not an event: kept beside the table
     std::uint64_t unscoped_parks = 0;  // I2 violations: parks no WaitScope covered
+    bool strict_scopes = false;        // an unscoped park is an `assert`, not just a count
     // Where the running task's current ON_CPU segment began. A segment ends
     // when a `WaitScope` opens (a blocking section or a suspension) and a new
     // one begins when it closes or the task is next resumed outside one, so
@@ -85,6 +88,10 @@ CoreWaitContext& WaitContext() noexcept;
 // Installs `clock` for the calling thread (null restores `SystemClock`).
 void SetWaitClock(const Clock* clock) noexcept;
 MonoTimeNs WaitNow() noexcept;
+
+// Makes an unscoped park on the calling thread an `assert` (I2) rather than a
+// count. Set by the server's reactor threads.
+void SetStrictWaitScopes(bool strict) noexcept;
 
 // Zeroes the calling thread's totals and violation count. Tests.
 void ResetWaitContext() noexcept;

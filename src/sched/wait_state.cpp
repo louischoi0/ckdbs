@@ -23,6 +23,8 @@ MonoTimeNs WaitNow() noexcept {
     return g_system_clock.Now();
 }
 
+void SetStrictWaitScopes(bool strict) noexcept { g_context.strict_scopes = strict; }
+
 void ResetWaitContext() noexcept {
     g_context.totals = {};
     g_context.on_cpu_ns = 0;
@@ -95,9 +97,6 @@ void WaitOnPollEnter(TaskWaitState& task) noexcept {
     if (task.state == TaskState::kRunnable) {
         // The queue wait ends: WD9's `sched.run_queue`.
         Book(stats::WaitEvent::kSchedRunQueue, now - task.since_ns);
-    } else if (task.state == TaskState::kWaiting) {
-        // The end of an unscoped park (`WaitOnPollExit` opened it).
-        Book(stats::WaitEvent::kSchedUnclassified, now - task.since_ns);
     }
     task.state = TaskState::kOnCpu;
     task.event = stats::WaitEvent::kOnCpu;
@@ -113,11 +112,11 @@ void WaitOnPollExit(TaskWaitState& task, bool parked, bool done) noexcept {
     g_context.on_cpu_ns += now - g_context.cpu_since;
     if (done) return;
     if (parked) {
-        // I2: a park outside every WaitScope. Booked as `unclassified` so
-        // the time is not lost, and counted.
+        // I2: a park outside every WaitScope. Its time is booked to no event.
+        assert(!g_context.strict_scopes && "a suspension outside every WaitScope (I2)");
         ++g_context.unscoped_parks;
         task.state = TaskState::kWaiting;
-        task.event = stats::WaitEvent::kSchedUnclassified;
+        task.event = stats::WaitEvent::kOnCpu;
     } else {
         // Yielded: re-queued, waiting for its next turn.
         task.state = TaskState::kRunnable;

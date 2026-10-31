@@ -467,7 +467,10 @@ sched::Coro TcpServer::RunHost(std::shared_ptr<HostState> state, ConnectionHando
     while (true) {
         // Level-triggered (AR0-6-R1): the reactor re-polls this after every
         // block, so the kick an offer sends only has to end the block.
-        co_await sched::WaitUntil{&ready};
+        {
+            sched::WaitScope wait(stats::WaitEvent::kIdleBackground);
+            co_await sched::WaitUntil{&ready};
+        }
         if (state->server == nullptr) co_return Status::OK();
         for (ConnectionHandoff::Arrival& a : handoff.Take(core)) {
             if (a.moved != nullptr) {

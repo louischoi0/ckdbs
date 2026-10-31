@@ -538,7 +538,7 @@ TEST_F(ShowSugarTest, SysWaitEventNamesListsTheRegistryByName) {
         "SELECT event_id, name, class, kind, in_db_time, p1, p2, p3 FROM sys.wait_event_names "
         "ORDER BY event_id");
     const auto shown = testing_view::ReadViewText(reply);
-    ASSERT_EQ(shown.rows.size(), 18u) << reply;
+    ASSERT_EQ(shown.rows.size(), 20u) << reply;
     EXPECT_EQ(shown.Find("name", "cpu.on_cpu", "event_id"), "0") << reply;
     EXPECT_EQ(shown.Find("name", "commit.wal_flush", "class"), "Commit") << reply;
     EXPECT_EQ(shown.Find("name", "commit.wal_flush", "p3"), "group_size") << reply;

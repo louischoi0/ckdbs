@@ -444,7 +444,10 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             const std::function<bool()> released = [this, &freed, deadline_ns] {
                 return freed() || NowNs() >= deadline_ns;
             };
-            co_await sched::WaitUntil{&released};
+            {
+                sched::WaitScope wait(stats::WaitEvent::kAppLockWait, block.trx_id);
+                co_await sched::WaitUntil{&released};
+            }
             const bool settled = freed();
             if (row.has_value()) {
                 row->End(settled ? stats::LockWaitOutcome::kGranted
@@ -678,7 +681,10 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
         *statement_deadline_ns = now + lock_wait_fault_net_ns_;
         return false;
     };
-    co_await sched::WaitUntil{&freed};
+    {
+        sched::WaitScope lock_wait(stats::WaitEvent::kAppLockWait, wait.holder);
+        co_await sched::WaitUntil{&freed};
+    }
     if (row.has_value()) {
         row->End(txn::LockWaitReady(slot) ? stats::LockWaitOutcome::kGranted
                                           : stats::LockWaitOutcome::kFaultNet);
@@ -756,6 +762,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     if (const wal::Lsn bound = UncoveredCommit(session); bound != wal::kNoLsn) {
         const txn::TransactionManager::CeilingWait waiting(*txn_);
         const std::function<bool()> covered = [this, bound] { return txn_->CeilingCovers(bound); };
+        sched::WaitScope wait(stats::WaitEvent::kCommitCeilingWait, bound);
         co_await sched::WaitUntil{&covered};
     }
 
@@ -838,7 +845,10 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                                    : !txn_->IsInFlight(wait.trx_id);
                 return settled || NowNs() >= deadline_ns;
             };
-            co_await sched::WaitUntil{&cleared};
+            {
+                sched::WaitScope horizon(stats::WaitEvent::kAppHorizonWait, wait.trx_id);
+                co_await sched::WaitUntil{&cleared};
+            }
             {
                 const MayParkScope parking(*this, /*allowed=*/true, statement);
                 *out = DispatchAndStage(line, session);
@@ -2659,7 +2669,10 @@ sched::Coro IndexBuildRun::Drain(Status* ran) {
             return txn::LockWaitReady(slot) || d.NowNs() >= deadline ||
                    (cancel != nullptr && cancel->load(std::memory_order_acquire));
         };
-        co_await sched::WaitUntil{&freed};
+        {
+            sched::WaitScope wait(stats::WaitEvent::kAppLockWait, waiting.front());
+            co_await sched::WaitUntil{&freed};
+        }
         if (drained = slice_.TakeCancel(); !drained.ok()) break;
     }
     locks.ClearWaitFor(self);

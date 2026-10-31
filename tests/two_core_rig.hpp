@@ -339,7 +339,12 @@ private:
             return !inbox.tasks.empty();
         };
         for (;;) {
-            co_await sched::WaitUntil{&ready};
+            {
+                // The core's own reactor runs strict (CJ WE04, I2): the pump's
+                // idle wait is background idle time.
+                sched::WaitScope idle(stats::WaitEvent::kIdleBackground);
+                co_await sched::WaitUntil{&ready};
+            }
             std::vector<sched::TaskPtr> taken;
             {
                 std::lock_guard<std::mutex> guard(inbox.mu);

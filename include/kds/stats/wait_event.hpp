@@ -80,6 +80,7 @@ enum class WaitKind : std::uint8_t { kTimed, kCounter };
 enum class WaitEvent : std::uint16_t {
     kOnCpu = 0,
     kCommitWalFlush,
+    kCommitCeilingWait,
     kIoPageRead,
     kIoVarHeapRead,
     kIoScanRingRead,
@@ -91,14 +92,12 @@ enum class WaitEvent : std::uint16_t {
     kSchedRunQueue,
     kResEvictionRetry,
     kNetSendBackpressure,
+    kAppLockWait,
+    kAppHorizonWait,
     kAppLockConflict,
     kAppAssertionReservation,
     kIdleClient,
     kIdleBackground,
-    // **Temporary** (CJ-S WE02..WE04): a suspension no stage has classified yet.
-    // `CoroTask::Poll` books an unscoped park here and counts it as an I2
-    // violation; WE04 deletes the event and with it the last such site.
-    kSchedUnclassified,
     kCount,
 };
 
@@ -121,6 +120,8 @@ inline constexpr std::array<WaitEventDef, kWaitEventCount> kWaitEvents = {{
     {WaitEvent::kOnCpu, "cpu.on_cpu", WaitClass::kCpu, WaitKind::kTimed, "", "", "", true},
     {WaitEvent::kCommitWalFlush, "commit.wal_flush", WaitClass::kCommit, WaitKind::kTimed,
      "target_lsn", "durability_class", "group_size", true},
+    {WaitEvent::kCommitCeilingWait, "commit.ceiling_wait", WaitClass::kCommit, WaitKind::kTimed,
+     "target_lsn", "", "", true},
     {WaitEvent::kIoPageRead, "io.page_read", WaitClass::kUserIo, WaitKind::kTimed, "page_id",
      "page_class", "core", true},
     {WaitEvent::kIoVarHeapRead, "io.var_heap_read", WaitClass::kUserIo, WaitKind::kTimed,
@@ -143,6 +144,10 @@ inline constexpr std::array<WaitEventDef, kWaitEventCount> kWaitEvents = {{
      "retry_count", "pool_use", "", true},
     {WaitEvent::kNetSendBackpressure, "net.send_backpressure", WaitClass::kNetwork,
      WaitKind::kTimed, "session", "unsent_bytes", "", true},
+    {WaitEvent::kAppLockWait, "app.lock_wait", WaitClass::kApplication, WaitKind::kTimed,
+     "holding_trx", "", "", true},
+    {WaitEvent::kAppHorizonWait, "app.horizon_wait", WaitClass::kApplication, WaitKind::kTimed,
+     "waited_trx", "", "", true},
     {WaitEvent::kAppLockConflict, "app.lock_conflict", WaitClass::kApplication,
      WaitKind::kCounter, "rel_oid", "pk", "holding_trx", true},
     {WaitEvent::kAppAssertionReservation, "app.assertion_reservation", WaitClass::kApplication,
@@ -150,8 +155,6 @@ inline constexpr std::array<WaitEventDef, kWaitEventCount> kWaitEvents = {{
     {WaitEvent::kIdleClient, "idle.client", WaitClass::kIdle, WaitKind::kTimed, "", "", "", false},
     {WaitEvent::kIdleBackground, "idle.background", WaitClass::kIdle, WaitKind::kTimed, "", "", "",
      false},
-    {WaitEvent::kSchedUnclassified, "sched.unclassified", WaitClass::kScheduler, WaitKind::kTimed,
-     "", "", "", true},
 }};
 
 constexpr const WaitEventDef& Def(WaitEvent e) noexcept {

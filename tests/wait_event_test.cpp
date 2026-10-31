@@ -21,7 +21,8 @@ TEST(WaitEventRegistry, OnCpuIsIdZeroAndEveryIdIsItsIndex) {
 
 TEST(WaitEventRegistry, TheV1EventsAreAllRegisteredByName) {
     const char* const names[] = {
-        "commit.wal_flush",    "io.page_read",         "io.var_heap_read",
+        "commit.wal_flush",    "commit.ceiling_wait",  "io.page_read",
+        "io.var_heap_read", "app.lock_wait",       "app.horizon_wait",
         "io.scan_ring_read",   "sysio.writeback",      "sysio.checkpoint",
         "sysio.wal_write",     "xcore.step_response",  "xcore.credit",
         "sched.run_queue",     "res.eviction_retry",   "net.send_backpressure",
@@ -31,9 +32,10 @@ TEST(WaitEventRegistry, TheV1EventsAreAllRegisteredByName) {
         EXPECT_NE(FindWaitEvent(n), WaitEvent::kCount) << n;
     }
     EXPECT_EQ(FindWaitEvent("io.nonsense"), WaitEvent::kCount);
-    // The 16 of the spec, the reserved ON_CPU row and WE02..WE04's temporary
-    // `sched.unclassified`.
-    EXPECT_EQ(kWaitEventCount, 18u);
+    // The 16 of the spec, the reserved ON_CPU row and the three timed waits
+    // WE04 added (CJ-Q9): `commit.ceiling_wait`, `app.lock_wait`,
+    // `app.horizon_wait`.
+    EXPECT_EQ(kWaitEventCount, 20u);
 }
 
 TEST(WaitEventRegistry, OnlyTheApplicationEventsAreCountersAndOnlyIdleLeavesDbTime) {

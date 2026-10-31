@@ -325,6 +325,33 @@ tree. Each carries CLA's proposal; none is the operator's mark.
   faulted; a reader of `sys.wait_stats` must remember that such an event's
   time is the core's stall (stated in WE12's dictionary).
 
+- **CJ-Q9 - the spec's 16 events leave four waits unclassified, and its
+  cross-core class has no site (found at WE04, `[source-read]`).** I3 needs
+  every DB-time wait to be an event. The tree parks on a lock or a write
+  block (`command_dispatcher.cpp` 447, 681), an online index build's drain
+  (2662), a `PURGE`'s horizon wait (841) and a session's ceiling wait on
+  another core's commit marker (759), and the 16 events name none: the lock
+  waits are `sys.lock_waits`' rows (CJ-Q3), and `app.lock_conflict` is a
+  counter. Separately, `xcore.step_response` and `xcore.credit` have no
+  site: the remote step park retired with AT-S9 (the dispatcher's own
+  comment at 743: "never a stage on another core"). *(a) three timed events
+  are added - `app.lock_wait`, `app.horizon_wait`, `commit.ceiling_wait` -
+  and the two `xcore.*` events stay registered, reserved like Concurrency;
+  (b) fold the lock waits into `app.lock_conflict` and make it timed;
+  (c) leave them unscoped.* **CLA proposes (a)** - adopted. (b) changes a
+  spec event's kind, (c) breaks I2 and I3. `app.lock_conflict` still counts
+  the refusals (CJ-Q3 (a) stands: `sys.lock_waits` keeps its rows, and the
+  wait is now also a scope).
+- **CJ-Q10 - what an unscoped park does once `unclassified` is gone (found at
+  WE04).** The order says "make I2 an assert". Unit tests and rigs park
+  synthetic coroutines on a bare `WaitFor`, so an unconditional assert fails
+  them. *(a) the assert fires where a core opts in
+  (`SetStrictWaitScopes`), which `CoreRuntime::Run` and `Expeditor::RunUntilStopped` (core 0) do on their reactor threads,
+  so each server and rig test that runs through a core is the census; a
+  synthetic coroutine on a bare test scheduler is counted and booked to no
+  event; (b) unconditional, and every synthetic test takes a scope or a
+  guard; (c) keep the counter.* **CLA proposes (a)** - adopted.
+
 ## 5. Stages (the pasted workplan, translated)
 
 Order:
@@ -547,14 +574,14 @@ park (`command_dispatcher.cpp`), and `io.page_read` / `io.scan_ring_read` /
 the bytes read). `sched.run_queue` is WE02's transition. **Not done:**
 - `commit.wal_flush`'s group size (`p3`) is 0: the writer keeps no count of
   the commits one sync covers.
-- The other commit parks (`CommitDeferred`'s strict path and the three
-  `IsDurable` waits at `command_dispatcher.cpp` 5403, 10759, 11681, 12134)
-  were not read; they stay unscoped, so they book as `sched.unclassified`.
+- The other commit parks were not read at WE03. **Read at WE04: they are not
+  parks.** Each (`command_dispatcher.cpp` 5410, 10766, 11688, 12141 and
+  `DeferCommit`) only sets `pending_lsn`, and the one park that waits on it
+  is the scoped one at the statement's tail, so WE03's scope covers them all.
 - `io.page_read`'s `p2` (page class) and `p3` (core) are 0.
 - The acceptance tests with injected IoBackend latency are not written; the
   unit tests are on a logical clock.
-- The census of `sched.unclassified` over the suite (G1's I2 bar) is not yet
-  taken.
+- The census of `sched.unclassified` over the suite: taken at WE04.
 
 **Reviews.** `critics-developer` on WE01-WE03 (`ed32c10d` plus the working
 tree): two I4 defects applied - a scope destroyed outside its task's poll
@@ -573,3 +600,52 @@ the Concurrency class"; recorded as a known gap for the operator.
 **Suite.** 4348/4348 passed (4 disabled or skipped) before the review's fixes
 (`-LE bs-nightly`, `-j8`, Debug, `ed32c10d` plus the WE01-WE03 tree); re-run
 after them: 4350/4350 passed (4 disabled or skipped), same command, at the tree committed as WE01-WE03.
+
+**WE04 - second instrumentation** (on `worktree-cj-wait-events-ash` from
+`c5c2edc1`). Adopts CJ-Q9 and CJ-Q10 above.
+- **Scopes added.** `app.lock_wait` at the write-block wait, the relation-lock
+  wait and the online-build drain; `app.horizon_wait` at the `PURGE` horizon
+  wait; `commit.ceiling_wait` at the acknowledged-commit ceiling wait;
+  `sysio.checkpoint` at the checkpoint's data-sync park and `sysio.wal_write`
+  at its log park; `net.send_backpressure` at the sliced walk's
+  `resume_when` park; `idle.background` at the connection-handoff host task.
+- **Counters.** `app.lock_conflict` on each refused ask in `LockTable::Acquire`
+  (the in-latch exit and the fence exit); `app.assertion_reservation` where a
+  refused admission names a reserving transaction.
+- **`sched.unclassified` is deleted.** The registry is 20 rows. An unscoped
+  park is counted in `unscoped_parks`, booked to no event, and an `assert`
+  on a core that set `SetStrictWaitScopes` (CJ-Q10).
+- **No site, stated rather than invented.** `xcore.step_response` and
+  `xcore.credit` (CJ-Q9); `res.eviction_retry` (the pool's retry is a
+  bounded synchronous loop on the reactor, `device_page_store.cpp` ~860
+  `kRefuseRetries`, not a suspension, and it can run inside a `FaultIn`
+  whose `io.*` scope is open - a second scope there would nest, which §2.5
+  forbids; left as ON_CPU time, open for WE05's review); `idle.client`
+  (a session is not a task while it waits for its client: the read is an
+  event callback, so no task is suspended). Their rows stay in the registry.
+- **`[OPEN]` the shared-queue attribution of §2.4** is settled by finding no
+  shared I/O queue: page reads are a blocking `pread` on the reactor
+  (CJ-Q8), a writeback is the checkpoint's `pwrite` on the same thread, and
+  the log and data syncs run on their own threads and are waited through
+  `ParkOnLog` / `ParkOnDataSyncTicket`, each its own scoped park. No request
+  is tagged, so no attribution is needed.
+- **Review (`critics-developer`).** Applied: core 0's reactor was not strict
+  (it is an `Expeditor`, not a `CoreRuntime`) - `RunUntilStopped` now sets it;
+  `sysio.checkpoint`'s p1 was the sync ticket where the registry says lsn -
+  now 0. **Rejected:** collapsing the ~25 rig-idle blocks into a `RigIdle`
+  helper (a 16-file test rebuild on a full disk for a cosmetic gain; open for
+  a later tidy). **Not done, recorded:** `net.send_backpressure` carries no
+  session or unsent-bytes; `app.lock_wait` p1 can be a borrow id or 0 at the
+  relation-lock site; `app.horizon_wait` p1 is a trx id even when it waits on
+  an epoch; an admission refused by another transaction's reservation is
+  booked as `app.lock_wait` (it goes through the write block) beside the
+  `app.assertion_reservation` count; an unscoped park leaves WAITING on
+  `cpu.on_cpu`, to decide before WE06's sampler; `sim/` drives no core
+  runtime, so G1's "suite and simulation" is the suite only so far.
+- **Suite.** The run before the review's two edits: 4349 passed, 1 failed -
+  `DropTableReclaimCrashTest.AReclaimCutAnywhereIsFinishedByTheNextMount`,
+  `No space left on device` copying a volume under `/tmp` (a tmpfs with 3 GB
+  free), an environment limit and not a wait fault. Re-run below.
+  Re-run after the review edits (ctest -j8 -LE bs-nightly, Debug): 4350 of
+  4351 passed, the same one failing for the same ENOSPC reason. That cell is
+  not a pass; it passed at c5c2edc1 with room on /tmp.

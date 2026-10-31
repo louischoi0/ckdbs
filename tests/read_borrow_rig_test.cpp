@@ -67,7 +67,11 @@ sched::Coro HoldPosition(txn::LockTable& table, Reader& r, catalog::Oid rel, std
     }
     r.release_pred = [&r] { return r.may_release.load(std::memory_order_acquire); };
     r.holding.store(true, std::memory_order_release);
-    co_await sched::WaitUntil{&r.release_pred};
+    {
+        // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+        sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+        co_await sched::WaitUntil{&r.release_pred};
+    }
     table.Release(id, r.holdings);
     r.released.store(true, std::memory_order_release);
     co_return Status::OK();
@@ -88,7 +92,11 @@ struct Dropper {
 
 sched::Coro DropWhenHeld(CommandDispatcher& d, Dropper& x) {
     x.start_pred = [&x] { return x.wait_for->load(std::memory_order_acquire); };
-    co_await sched::WaitUntil{&x.start_pred};
+    {
+        // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+        sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+        co_await sched::WaitUntil{&x.start_pred};
+    }
     co_await d.DispatchAsync(x.sql, &x.session, &x.out);
     x.done.store(true, std::memory_order_release);
     co_return Status::OK();

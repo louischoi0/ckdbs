@@ -21,6 +21,7 @@
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/core_load.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/storage/file_page_device.hpp"
 
 #if KDS_WITH_TLS
@@ -2216,7 +2217,13 @@ Status Expeditor::RunUntilStopped() {
     auto& kwp_listener = live.kwp_listener;
     auto& workers = live.workers;
 
+    // I2 (CJ WE04): core 0's reactor is strict too, as every peer's is in
+    // `CoreRuntime::Run` - a suspension outside every `WaitScope` aborts a
+    // debug build. Set here, on the thread that runs the reactor, not in
+    // `Start`: a test starts on its own thread and runs this on another.
+    sched::SetStrictWaitScopes(true);
     scheduler.Run();
+    sched::SetStrictWaitScopes(false);
     exec::UninstallSuspendAudit();
     logger_->Info("expeditor", "stopping");
 
