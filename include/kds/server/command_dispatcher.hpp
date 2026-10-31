@@ -2280,6 +2280,7 @@ private:
     StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> StatementStatsView();
     StatusOr<exec::CatalogView> CheckpointsView();
+    StatusOr<exec::CatalogView> WaitEventNamesView();
     StatusOr<exec::CatalogView> PageSlotsView(const parser::AstValue& page_id);
     StatusOr<exec::CatalogView> MetaView();
     // The clustered root a relation's anchor names, or its descriptor page.

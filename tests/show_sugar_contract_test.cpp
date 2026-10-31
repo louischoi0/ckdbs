@@ -531,6 +531,27 @@ TEST_F(ShowSugarTest, ACheckpointRunIsOneRowOfSysCheckpoints) {
     EXPECT_EQ(testing_view::MetaField(Text("SHOW META"), "checkpoints_recorded"), "2");
 }
 
+// ---- CJ's WE01: `sys.wait_event_names` --------------------------------------
+
+TEST_F(ShowSugarTest, SysWaitEventNamesListsTheRegistryByName) {
+    const std::string reply = Text(
+        "SELECT event_id, name, class, kind, in_db_time, p1, p2, p3 FROM sys.wait_event_names "
+        "ORDER BY event_id");
+    const auto shown = testing_view::ReadViewText(reply);
+    ASSERT_EQ(shown.rows.size(), 18u) << reply;
+    EXPECT_EQ(shown.Find("name", "cpu.on_cpu", "event_id"), "0") << reply;
+    EXPECT_EQ(shown.Find("name", "commit.wal_flush", "class"), "Commit") << reply;
+    EXPECT_EQ(shown.Find("name", "commit.wal_flush", "p3"), "group_size") << reply;
+    EXPECT_EQ(shown.Find("name", "app.lock_conflict", "kind"), "counter") << reply;
+    EXPECT_EQ(shown.Find("name", "idle.client", "in_db_time"), "0") << reply;
+    EXPECT_EQ(shown.Find("name", "io.page_read", "in_db_time"), "1") << reply;
+    // A filter by name works as on any view (SV5).
+    const auto one = testing_view::ReadViewText(
+        Text("SELECT name FROM sys.wait_event_names WHERE class = 'Idle' ORDER BY name"));
+    EXPECT_EQ(one.Column("name"),
+              (std::vector<std::string>{"idle.background", "idle.client"}));
+}
+
 TEST_F(ShowSugarTest, TheTraceSurfaceIsRetired) {
     // BO-Q9 (a): nothing ever installed a sink, so these always answered ERR.
     for (const char* sql : {"SHOW TRACES", "SHOW TRACE 1", "TRACE ON"}) {

@@ -884,7 +884,14 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // Counted in before the wait's first read, so the writer kicks this
         // core when the watermark passes (BA-R4 part 1).
         const wal::WalManager::DurableWait waiting(*wal_, core_id_);
-        co_await sched::WaitUntil{&durable};
+        {
+            // CJ WE03: the commit's wait for its record to be durable. The
+            // group size (p3) is not recorded: the writer keeps no count of
+            // the commits one sync covers.
+            sched::WaitScope wait(stats::WaitEvent::kCommitWalFlush, lsn,
+                                  static_cast<std::uint32_t>(effective_durability_));
+            co_await sched::WaitUntil{&durable};
+        }
         // A deferred `strict` commit publishes here, after its record is
         // durable (BA-S7 part 2) - this statement's and any other this
         // core parked that the same sync covered.

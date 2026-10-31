@@ -17,3 +17,12 @@
 | **Mark** | **CJ written** (`workorder-cj-wait-events-ash.md`), translated into English, **not opened**. WD1-WD13 are recorded as the operator's decisions as the paste states them; the paste's `[PROPOSED]` values stay proposed. CLA's additions are tagged `[CLA]` and CJ-Q0..Q7 are unmarked. Nothing is built, measured or read against the tree yet |
 | **Does not settle** | CJ's opening; CJ-Q0..Q7; any stage; a push; a tag, a version |
 | **Recorded at** | this file; the CJ order; the CJ row in `instructions/v3.2.0/index.md` |
+
+## 3. CJ opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone`, with CJ the milestone this session is on: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"* |
+| **Mark** | **CJ opened** on `worktree-cj-wait-events-ash` from `ed32c10d`. CJ-Q0..Q7 are adopted as CLA proposed and CJ-Q8 (a page read is not a suspension) was added and adopted at WE03. None is the operator's own per-item mark; each is recorded in the order's §8 as adopted under this word |
+| **Does not settle** | a push, a merge to `main`, a tag, a version; the milestone's close (the stages are not all built) |
+| **Recorded at** | this file; the CJ order's header, §4 and §8; the CJ row in `instructions/v3.2.0/index.md` |

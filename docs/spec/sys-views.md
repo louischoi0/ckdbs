@@ -205,6 +205,17 @@ are gone with the process; the mount's recovery block stays in `sys.meta`.
 A ring of 1024 per core; `checkpoints_recorded`, `_overwritten`,
 `_dropped`.
 
+### 6.5 `sys.wait_event_names` (`stats/wait_event.hpp`)
+
+The wait-event registry, one row per event (CJ's WE01,
+`instructions/v3.2.0/workorder-cj-wait-events-ash.md`): `event_id`, `name`
+(`class.event`, the only public contract), `class`, `kind` (`timed`,
+`counter`), `in_db_time` (0 for `idle.*` alone) and `p1`-`p3`, what the
+event's parameters mean, NULL where it has none. `event_id` is the table
+index, internal and not stable across versions; 0 is the reserved
+`cpu.on_cpu`. A compile-time table: no ring, no counters, nothing to
+overflow. An engine-state view, reading no session view.
+
 ## 7. `sys.meta`
 
 **Tall** (BO-Q4): `(section, field, value)`, every value text, so a field

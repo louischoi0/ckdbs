@@ -8,7 +8,13 @@ operator chose "work order" as their form (the session's question of
 2026-10-31). The operator's words are recorded in `raft-marks-2026-10-31.md`
 §2.
 
-**Written, not opened.** Nothing is built. No stage has started, no
+**Opened 2026-10-31** on the operator's standing go-ahead
+(go-ahead-achieving-milestone, `raft-marks-2026-10-31.md` §3) on
+`worktree-cj-wait-events-ash` from `ed32c10d`. CJ-Q0..Q7 are adopted as CLA
+proposed, and CJ-Q8 (below) was added when WE03 found a premise false; none
+is the operator's own per-item mark. **In progress; stage log §8.**
+
+**(Written as: not opened. Nothing was built at writing.)** No stage has started, no
 measurement has been taken, and no claim below about the tree is
 `[source-read]` unless it says so: the pasted documents were written
 against a tree this order has not yet read (§3 lists what it must read
@@ -307,6 +313,18 @@ tree. Each carries CLA's proposal; none is the operator's mark.
   views are computed, like `sys.meta`. Confirmed by CJ-S0 reading
   `sys-views.md`; a stage that needs a persisted word stops and asks.
 
+- **CJ-Q8 - a page read is not a suspension (found at WE03, `[source-read]`
+  `src/storage/device_page_store.cpp` `FaultIn`).** The spec reads a wait as
+  a coroutine suspended in the loop (§2). A page fault is a blocking `pread`
+  on the reactor thread: the core stops, no task is parked, and the whole
+  core waits. *(a) a `WaitScope` around a synchronous call is allowed: it
+  never suspends, its span is the event's and is taken out of ON_CPU (I4);
+  (b) leave synchronous reads unmeasured until they are made suspensions.*
+  **CLA proposes (a)** - adopted. It is the more useful measurement, since a
+  blocking read stalls every task on the core, not only the one that
+  faulted; a reader of `sys.wait_stats` must remember that such an event's
+  time is the core's stall (stated in WE12's dictionary).
+
 ## 5. Stages (the pasted workplan, translated)
 
 Order:
@@ -473,4 +491,85 @@ wait data (CJ-Q7); the Concurrency class's events (reserved, no v1 site).
 
 ## 8. Stage log
 
-None. Written 2026-10-31; not opened.
+**Adopted on the operator's standing go-ahead of 2026-10-31
+(go-ahead-achieving-milestone), CLA's proposal in each case:** CJ-Q0 (left
+unopened until the word - the word is the go-ahead, so opened), CJ-Q1 (a)
+(a census, folded into this log's CJ-S0 entry), CJ-Q2 (the budget stands),
+CJ-Q3 (a) (the new views stand beside the old), CJ-Q4 (a) (WE13 re-aimed at
+the Cabin controller), CJ-Q5 (this order carries the design), CJ-Q6 (a) (the
+sampler on the loop turn), CJ-Q7 (nothing logged or persisted), CJ-Q8 (a).
+
+**CJ-S0 - the census** (`[source-read]`, `ed32c10d`).
+- Every suspension in the tree is one of three awaitables in
+  `include/kds/sched/coro.hpp` - `Yield`, `WaitFor`, `WaitUntil` - resumed
+  from one place, `CoroTask::Poll`. That is what makes I2 checkable: the
+  bracket goes around the one resume site and the scope around each
+  `co_await`.
+- `co_await` sites outside the coroutine plumbing: `src/exec/step_vm.cpp`
+  (the sliced walk's `Yield` / `WaitUntil` at 2110-2112, the rest are
+  child-step awaits), `src/server/command_dispatcher.cpp` (lock-wait,
+  relation-lock and write-block parks, the group-commit park, DDL and drain
+  parks, `Yield`s), `src/wal/checkpointer.cpp` (log and data-sync parks),
+  `src/server/tcp_server.cpp:470`.
+- Page reads, WAL appends and many `pwrite`s are synchronous (CJ-Q8).
+- The clock: `sched::Clock` already exists (`SystemClock` is
+  `steady_clock`, `CLOCK_MONOTONIC`); WD3 is met by reusing it. The
+  scheduler reads its own `clock_` around every poll. WE02 keeps a
+  per-thread `SetWaitClock` beside it rather than threading the
+  scheduler's clock into `sched/coro.hpp`; **unifying the two is open** and
+  belongs to G1's overhead cell (four clock reads per resuming poll instead
+  of two).
+- The overhead cost of the clock read was **not measured** (no time-boxed
+  `build-release` census was run); G1 carries it.
+
+**WE01 - the event registry** (`include/kds/stats/wait_event.hpp`,
+`sys.wait_event_names`, `docs/spec/sys-views.md` §6.5). Built. The table has
+the 16 events of §2.4, the reserved `cpu.on_cpu` (id 0) and the temporary
+`sched.unclassified`, 18 rows. `static_assert`s refuse an id that is not its
+index, a name that is not `<class prefix>.<event>`, a duplicate name, and a
+DB-time flag that is not "all but idle". `cpu` is a class prefix this order
+adds for id 0.
+
+**WE02 - the seam, the state, the scope** (`include/kds/sched/wait_state.hpp`,
+`src/sched/wait_state.cpp`, hooks in `CoroTask::Poll`). Built.
+- **I2 is a counter, not an assert, until WE04.** An unscoped park is booked
+  as `sched.unclassified` and counted in `CoreWaitContext::unscoped_parks`;
+  every existing wait is unscoped, so an assert now would fail the suite.
+  WE04 turns the counter into an assert. Nesting is an `assert`.
+- ON_CPU is a segment timer: a `WaitScope` ends the segment on opening and a
+  new one starts on closing, so a blocking scope's time is the event's alone.
+- `KDS_WAIT_INSTRUMENTATION_OFF` compiles the hooks out; no CMake option sets
+  it yet (the P1 measurement adds one).
+
+**WE03 - first sites, partial.** `commit.wal_flush` around the group-commit
+park (`command_dispatcher.cpp`), and `io.page_read` / `io.scan_ring_read` /
+`io.var_heap_read` around `FaultIn`'s `pread` (a var-heap page is named from
+the bytes read). `sched.run_queue` is WE02's transition. **Not done:**
+- `commit.wal_flush`'s group size (`p3`) is 0: the writer keeps no count of
+  the commits one sync covers.
+- The other commit parks (`CommitDeferred`'s strict path and the three
+  `IsDurable` waits at `command_dispatcher.cpp` 5403, 10759, 11681, 12134)
+  were not read; they stay unscoped, so they book as `sched.unclassified`.
+- `io.page_read`'s `p2` (page class) and `p3` (core) are 0.
+- The acceptance tests with injected IoBackend latency are not written; the
+  unit tests are on a logical clock.
+- The census of `sched.unclassified` over the suite (G1's I2 bar) is not yet
+  taken.
+
+**Reviews.** `critics-developer` on WE01-WE03 (`ed32c10d` plus the working
+tree): two I4 defects applied - a scope destroyed outside its task's poll
+charged the running task's ON_CPU time, and a yield inside a scope was booked
+as run-queue time too - each with a test; the segment timer replaced the
+poll-span arithmetic (removing three fields); the scope's start is the
+task's `since_ns`; the OFF build no longer reads the clock in the task
+constructor. **Rejected:** unifying the scheduler's clock now (S3 - see the
+census; it needs a read of `scheduler.cpp` and belongs with G1's
+measurement); dropping `ParkedOnAWait` for a hoisted bool (the helper is
+three lines and keeps `Poll`'s loop unchanged).
+The review also notes that the shared pool makes a core waiting on another
+core's in-flight fault look ON_CPU, which contradicts §2.4's "no v1 site for
+the Concurrency class"; recorded as a known gap for the operator.
+
+**Suite.** 4348/4348 passed (4 disabled or skipped) before the review's fixes
+(`-LE bs-nightly`, `-j8`, Debug, `ed32c10d` plus the WE01-WE03 tree); re-run
+after them: 4350/4350 passed (4 disabled or skipped), same command, at the tree committed as WE01-WE03.

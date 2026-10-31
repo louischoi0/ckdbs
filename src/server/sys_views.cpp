@@ -24,6 +24,7 @@
 #include "kds/stats/checkpoint_log.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/relation_stats.hpp"
+#include "kds/stats/wait_event.hpp"
 #include "kds/stats/statement_stats.hpp"
 
 // The builders of every `sys` view (`include/kds/server/sys_views.hpp`).
@@ -78,6 +79,7 @@ constexpr SysViewSpec kViews[] = {
     {"lock_waits"},
     {"statement_stats"},
     {"checkpoints"},
+    {"wait_event_names"},
     {"page_slots", ViewKeyMode::kRequired, "page_id", kInt},
     {"meta"},
 };
@@ -243,6 +245,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "lock_waits") return LockWaitsView();
     if (n == "statement_stats") return StatementStatsView();
     if (n == "checkpoints") return CheckpointsView();
+    if (n == "wait_event_names") return WaitEventNamesView();
     if (n == "page_slots") return PageSlotsView(*key);
     if (n == "meta") return MetaView();
 
@@ -975,6 +978,34 @@ StatusOr<exec::CatalogView> CommandDispatcher::CheckpointsView() {
                              Int(r.duration_us), Int(r.steps), Int(r.pages_flushed),
                              Int(r.dirty_at_start), Int(r.log_wait_us), Int(r.data_wait_us),
                              Bool(r.resumed), Str(r.completed ? "completed" : "failed")});
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::WaitEventNamesView() {
+    exec::CatalogView view;
+    // The wait-event registry, one row per event (`stats/wait_event.hpp`, CJ's
+    // WE01): the name is the public contract (WD2), `event_id` the table index,
+    // internal and not stable across versions. `kind` is `timed` or `counter`;
+    // `in_db_time` is 0 only for `idle.*` (I3). The `p1`-`p3` columns say what
+    // the event's parameters mean, NULL where it has none. An engine-state
+    // view: it reads no session view.
+    Define(view, {{"event_id", kInt},
+                  {"name", kStr},
+                  {"class", kStr},
+                  {"kind", kStr},
+                  {"in_db_time", kInt},
+                  {"p1", kStr},
+                  {"p2", kStr},
+                  {"p3", kStr}});
+    const auto param = [](std::string_view meaning) {
+        return meaning.empty() ? Null() : Str(meaning);
+    };
+    for (const stats::WaitEventDef& d : stats::kWaitEvents) {
+        view.rows.push_back({Int(static_cast<std::uint64_t>(d.id)), Str(d.name),
+                             Str(stats::WaitClassName(d.wait_class)),
+                             Str(d.kind == stats::WaitKind::kTimed ? "timed" : "counter"),
+                             Bool(d.in_db_time), param(d.p1), param(d.p2), param(d.p3)});
     }
     return view;
 }

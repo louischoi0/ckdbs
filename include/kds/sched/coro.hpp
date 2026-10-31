@@ -9,6 +9,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/sched/task.hpp"
+#include "kds/sched/wait_state.hpp"
 
 // C++20 stackless coroutines as the engine's task representation
 // (`docs/spec/sched.md` §3, settled 2026-08-05).
@@ -311,7 +312,11 @@ public:
     // `on_done` is invoked once, with the coroutine's returned Status, when
     // it finishes. Optional.
     CoroTask(SchedulingGroup group, Coro coro, DoneFn on_done = {})
-        : Task(group), handle_(coro.Release()), on_done_(std::move(on_done)) {}
+        : Task(group), handle_(coro.Release()), on_done_(std::move(on_done)) {
+#ifndef KDS_WAIT_INSTRUMENTATION_OFF
+        wait_.since_ns = WaitNow();  // RUNNABLE from submission (CJ WE02)
+#endif
+    }
 
     CoroTask(const CoroTask&) = delete;
     CoroTask& operator=(const CoroTask&) = delete;
@@ -331,6 +336,7 @@ public:
         // two can never disagree.
         const std::uint64_t resumes_at_entry = resumes_;
         last_poll_advanced_ = true;
+        bool entered = false;  // CJ WE02: the wait-state hooks bracket a resuming poll only
 
         // One Poll runs the chain until it genuinely parks or finishes -
         // the multi-resume loop is what a flat coroutine gets for free by
@@ -351,9 +357,14 @@ public:
                 // frames and then parked did work, and the reactor must
                 // not sleep on it.
                 last_poll_advanced_ = (resumes_ != resumes_at_entry);
+                if (entered) WaitOnPollExit(wait_, /*parked=*/true, /*done=*/false);
                 return PollResult::kSuspended;
             }
 
+            if (!entered) {
+                WaitOnPollEnter(wait_);
+                entered = true;
+            }
             ++resumes_;
             active.resume();
 
@@ -362,6 +373,7 @@ public:
             // now stops at its parent, which resumes in this same Poll.
             if (!active.done() && active.promise().active_child == nullptr) break;
         }
+        if (entered) WaitOnPollExit(wait_, ParkedOnAWait(), handle_.done());
         if (!handle_.done()) {
 #ifndef NDEBUG
             // The coroutine gave the core back. Anything it is still
@@ -383,10 +395,22 @@ public:
 
     bool advanced_in_last_poll() const noexcept override { return last_poll_advanced_; }
 
+    // The task's wait state (read by its own core only, I1).
+    const TaskWaitState& wait_state() const noexcept { return wait_; }
+
 private:
     std::coroutine_handle<Coro::promise_type> handle_;
     DoneFn on_done_;
     std::uint64_t resumes_ = 0;
+    TaskWaitState wait_;  // the task's state for the wait-event model (wait_state.hpp)
+
+    // Whether the coroutine, left suspended, is parked on a wait (as opposed
+    // to having yielded).
+    bool ParkedOnAWait() const noexcept {
+        if (handle_.done()) return false;
+        const auto& p = Coro::DeepestPending(handle_).promise();
+        return p.wait_flag != nullptr || p.wait_pred != nullptr;
+    }
     // Starts true: a task that has never been polled is not a parked one,
     // and the idle policy must not read "never ran" as "nothing to do".
     bool last_poll_advanced_ = true;
