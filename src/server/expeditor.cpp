@@ -1,4 +1,5 @@
 #include "kds/server/expeditor.hpp"
+#include "kds/sched/ash_sampler.hpp"
 
 #include "kds/server/restore.hpp"
 
@@ -90,7 +91,8 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "cabin_optimizer_theta_swap_pct",   "cabin_optimizer_theta_extend_pct",
             "cabin_optimizer_theta_heal_pct",   "cabin_optimizer_confirm_snapshots",
             "cabin_optimizer_amort_windows", "cabin_optimizer_cooldown_half_lives",
-            "cabin_optimizer_snapshot_interval_ms"};
+            "cabin_optimizer_snapshot_interval_ms",
+            "ash_enabled", "ash_interval_ms", "ash_ring_bytes_per_core", "ash_capture_arg_hash"};
 }
 
 stats::CabinOptimizerConfig Expeditor::Config::CabinOptimizerSettings() const {
@@ -361,6 +363,32 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetBool("waystone_recording");
         if (!v.ok()) return v.status();
         waystone_recording = v.value();
+    }
+    if (file.Has("ash_enabled")) {
+        auto v = file.GetBool("ash_enabled");
+        if (!v.ok()) return v.status();
+        ash_enabled = v.value();
+    }
+    if (file.Has("ash_capture_arg_hash")) {
+        auto v = file.GetBool("ash_capture_arg_hash");
+        if (!v.ok()) return v.status();
+        ash_capture_arg_hash = v.value();
+    }
+    if (file.Has("ash_interval_ms")) {
+        auto v = file.GetUint("ash_interval_ms");
+        if (!v.ok()) return v.status();
+        if (Status r = sched::CheckAshIntervalMs(v.value()); !r.ok()) {
+            return Status::InvalidArgument(file.origin() + ": " + r.message());
+        }
+        ash_interval_ms = v.value();
+    }
+    if (file.Has("ash_ring_bytes_per_core")) {
+        auto v = file.GetUint("ash_ring_bytes_per_core");
+        if (!v.ok()) return v.status();
+        if (Status r = sched::CheckAshRingBytes(v.value()); !r.ok()) {
+            return Status::InvalidArgument(file.origin() + ": " + r.message());
+        }
+        ash_ring_bytes_per_core = static_cast<std::size_t>(v.value());
     }
     if (file.Has("isolation")) {
         auto v = file.GetString("isolation");
@@ -1772,6 +1800,11 @@ Status Expeditor::Start() {
         kwp_listener.emplace(std::move(kwp.value()));
     }
 
+    // The sampler's boot settings, before any scheduler (and its ring) exists.
+    sched::SetAshEnabled(config_.ash_enabled);
+    sched::SetAshCaptureArgHash(config_.ash_capture_arg_hash);
+    (void)sched::SetAshIntervalMs(config_.ash_interval_ms);      // range-checked at parse
+    (void)sched::SetAshRingBytes(config_.ash_ring_bytes_per_core);
     live.scheduler.emplace(clock_, io_backend.value());
     sched::Scheduler& scheduler = *live.scheduler;
     scheduler.SetLogger(&*logger_);

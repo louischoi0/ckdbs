@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "kds/base/status.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/wait_state.hpp"
 #include "kds/stats/ash_ring.hpp"
@@ -37,28 +38,62 @@
 //   `kAshArgHashValid`; a `WAITING` sample keeps the event's parameters. Bind
 //   values are never recorded.
 //
-// The settings are relaxed atomics, changed at runtime from any thread (WE09
-// binds them to `kds.ash.*`). Turning sampling off keeps the ring and turning
-// it on continues it.
+// The settings (WE09, `kds.ash.*`) are relaxed atomics in an `AshControl` the
+// sampler shares with a process-wide registry, so one `SET ASH ...` reaches
+// every core's sampler without a message to its reactor. Turning sampling off
+// keeps the ring and turning it on continues it. The process defaults below
+// are what a sampler adopts when it takes its core id; the ring size is read
+// once, at construction, and changes only on restart.
 
 namespace kds::sched {
+
+// `kds.ash.interval_ms` and `kds.ash.ring_bytes_per_core` ranges (the order's
+// §2.9; the ring range is `[PROPOSED]`, adopted under CJ-Q13).
+inline constexpr std::uint64_t kAshMinIntervalMs = 100;
+inline constexpr std::uint64_t kAshMaxIntervalMs = 10'000;
+inline constexpr std::size_t kAshMinRingBytes = 1u << 20;
+inline constexpr std::size_t kAshMaxRingBytes = 64u << 20;
+
+struct AshControl {
+    std::atomic<bool> enabled{true};
+    std::atomic<std::uint64_t> interval_ns{1'000'000'000};
+    std::atomic<bool> capture_arg_hash{false};
+};
+
+// The process-wide settings. Each setter range-checks (InvalidArgument naming
+// the range), then applies to the defaults and to every registered sampler.
+struct AshSettings {
+    bool enabled = true;
+    std::uint64_t interval_ms = 1000;
+    bool capture_arg_hash = false;
+    std::size_t ring_bytes = stats::AshRing::kDefaultBytes;
+};
+AshSettings AshDefaults();
+// The ranges' one home; the setters and the config file both ask.
+Status CheckAshIntervalMs(std::uint64_t ms);
+Status CheckAshRingBytes(std::uint64_t bytes);
+void SetAshEnabled(bool on);
+Status SetAshIntervalMs(std::uint64_t ms);
+void SetAshCaptureArgHash(bool on);
+// Takes effect for samplers built after the call (restart-only).
+Status SetAshRingBytes(std::size_t bytes);
 
 // The rings of the cores that have a sampler, by core id, for `sys.ash`
 // (WE08). A slot is replaced when a core id is set again and cleared by the
 // sampler that owns it, so a view never reads a ring a destroyed scheduler left.
-void RegisterAshRing(std::uint32_t core_id, const std::shared_ptr<stats::AshRing>& ring);
+void RegisterAshRing(std::uint32_t core_id, const std::shared_ptr<stats::AshRing>& ring,
+                     const std::shared_ptr<AshControl>& control);
 void UnregisterAshRing(std::uint32_t core_id, const stats::AshRing* ring);
 // Null when no sampler is registered for `core_id`.
 std::shared_ptr<stats::AshRing> AshRingOfCore(std::uint32_t core_id);
 
 class AshSampler {
 public:
-    static constexpr std::uint64_t kDefaultIntervalNs = 1'000'000'000;
     // A batch is late when its turn came more than interval / this after its due time.
     static constexpr std::uint64_t kLateDivisor = 10;
 
-    explicit AshSampler(std::size_t ring_bytes = stats::AshRing::kDefaultBytes)
-        : ring_(std::make_shared<stats::AshRing>(ring_bytes)) {}
+    explicit AshSampler(std::size_t ring_bytes = AshDefaults().ring_bytes)
+        : ring_(std::make_shared<stats::AshRing>(ring_bytes)), control_(std::make_shared<AshControl>()) {}
 
     ~AshSampler() { UnregisterAshRing(core_id_, ring_.get()); }
     AshSampler(const AshSampler&) = delete;
@@ -67,14 +102,18 @@ public:
     void set_core_id(std::uint32_t core_id) {
         UnregisterAshRing(core_id_, ring_.get());
         core_id_ = core_id;
-        RegisterAshRing(core_id_, ring_);
+        RegisterAshRing(core_id_, ring_, control_);
     }
 
-    void set_enabled(bool on) noexcept { enabled_.store(on, std::memory_order_relaxed); }
-    bool enabled() const noexcept { return enabled_.load(std::memory_order_relaxed); }
-    void set_interval_ns(std::uint64_t ns) noexcept { interval_ns_.store(ns, std::memory_order_relaxed); }
-    std::uint64_t interval_ns() const noexcept { return interval_ns_.load(std::memory_order_relaxed); }
-    void set_capture_arg_hash(bool on) noexcept { capture_arg_hash_.store(on, std::memory_order_relaxed); }
+    // Unchecked, for tests that drive a logical clock; the checked settings
+    // are `SetAsh*` above.
+    void set_enabled(bool on) noexcept { control_->enabled.store(on, std::memory_order_relaxed); }
+    bool enabled() const noexcept { return control_->enabled.load(std::memory_order_relaxed); }
+    void set_interval_ns(std::uint64_t ns) noexcept { control_->interval_ns.store(ns, std::memory_order_relaxed); }
+    std::uint64_t interval_ns() const noexcept { return control_->interval_ns.load(std::memory_order_relaxed); }
+    void set_capture_arg_hash(bool on) noexcept {
+        control_->capture_arg_hash.store(on, std::memory_order_relaxed);
+    }
 
     // The ring, shared so a reader on another core outlives the scheduler's
     // teardown (WE08).
@@ -92,9 +131,7 @@ public:
 private:
     std::uint32_t core_id_ = 0;
     std::shared_ptr<stats::AshRing> ring_;
-    std::atomic<bool> enabled_{true};
-    std::atomic<std::uint64_t> interval_ns_{kDefaultIntervalNs};
-    std::atomic<bool> capture_arg_hash_{false};
+    std::shared_ptr<AshControl> control_;
     bool armed_ = false;
     MonoTimeNs next_due_ns_ = 0;
     // The current batch.

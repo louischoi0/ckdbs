@@ -279,6 +279,14 @@ public:
         // operator can check on their own data.
         bool waystone_recording = true;
 
+        // CJ's WE09, `kds.ash.*` (workorder-cj-wait-events-ash.md §2.9): the
+        // sampler's boot values, applied to the process before any scheduler is
+        // built. The semantics have one home, `sched/ash_sampler.hpp`.
+        bool ash_enabled = true;
+        std::uint64_t ash_interval_ms = 1000;
+        std::size_t ash_ring_bytes_per_core = std::size_t{4} << 20;
+        bool ash_capture_arg_hash = false;
+
         // Whether an opted SELECT may be served from a trail a previous
         // execution recorded (`waystone_replay`, default on; the same
         // ceiling over the opted shapes). This is the half that

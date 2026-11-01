@@ -1481,6 +1481,7 @@ private:
                                            std::string_view relation_name, std::string_view verb,
                                            DdlBuildLock& out);
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
+    DispatchOutcome HandleSetAsh(std::string_view line, std::string_view rest);
 
 
     // ---- Foreign-key checks (docs/spec/foreign-keys.md §§2-4) -----------

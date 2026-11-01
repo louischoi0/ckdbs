@@ -586,6 +586,31 @@ TEST_F(ShowSugarTest, SysAshMergesEveryCoresRingInTimeOrderAndFiltersLikeAnyView
     EXPECT_EQ(bg.Column("core"), (std::vector<std::string>{"61", "61"}));
 }
 
+TEST_F(ShowSugarTest, SetAshChangesTheSamplersAtRuntimeAndRefusesWhatIsOutOfRange) {
+    // The process defaults are restored on exit: other tests build samplers.
+    const sched::AshSettings before = sched::AshDefaults();
+    sched::AshSampler a;
+    a.set_core_id(62);
+    EXPECT_EQ(Text("SET ASH ENABLED off"), "OK ash_enabled=off");
+    EXPECT_FALSE(a.enabled()) << "reaches a sampler already registered";
+    EXPECT_EQ(Text("SET ASH ENABLED = on"), "OK ash_enabled=on");
+    EXPECT_TRUE(a.enabled());
+    EXPECT_EQ(Text("SET ASH INTERVAL_MS 250"), "OK ash_interval_ms=250");
+    EXPECT_EQ(a.interval_ns(), 250'000'000u);
+    EXPECT_EQ(Text("SET ASH CAPTURE_ARG_HASH on"), "OK ash_capture_arg_hash=on");
+    for (const char* bad : {"SET ASH INTERVAL_MS 99", "SET ASH INTERVAL_MS 10001", "SET ASH INTERVAL_MS x",
+                            "SET ASH ENABLED maybe", "SET ASH RING_BYTES 1", "SET ASH", "SET ASH ENABLED on off"}) {
+        EXPECT_EQ(Text(bad).rfind("ERR", 0), 0u) << bad;
+    }
+    EXPECT_EQ(a.interval_ns(), 250'000'000u) << "a refused value changes nothing";
+    sched::AshSampler late;
+    late.set_core_id(63);
+    EXPECT_EQ(late.interval_ns(), 250'000'000u) << "a sampler registering later adopts the settings";
+    sched::SetAshEnabled(before.enabled);
+    ASSERT_TRUE(sched::SetAshIntervalMs(before.interval_ms).ok());
+    sched::SetAshCaptureArgHash(before.capture_arg_hash);
+}
+
 TEST_F(ShowSugarTest, SysWaitEventNamesListsTheRegistryByName) {
     const std::string reply = Text(
         "SELECT event_id, name, class, kind, in_db_time, p1, p2, p3 FROM sys.wait_event_names "

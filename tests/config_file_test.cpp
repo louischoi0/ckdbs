@@ -616,5 +616,26 @@ TEST(ExpeditorConfigTest, TheTransactionLifetimeCeilingDefaultsTo60sAndHasNoOffS
     EXPECT_EQ(config.txn_lifetime_ceiling_ns, 250ULL * 1'000'000ULL);
 }
 
+TEST(ExpeditorConfigTest, TheAshKeysTakeTheirRangesAndRefuseOutsideThem) {
+    // CJ's WE09 (workorder-cj-wait-events-ash.md §2.9).
+    Expeditor::Config config;
+    EXPECT_TRUE(config.ash_enabled);
+    EXPECT_EQ(config.ash_interval_ms, 1000u);
+    EXPECT_FALSE(config.ash_capture_arg_hash);
+    ASSERT_TRUE(config.ApplyFile(WithPool("ash_enabled = off\nash_interval_ms = 250\n"
+                                          "ash_capture_arg_hash = on\nash_ring_bytes_per_core = 2097152\n"))
+                    .ok());
+    EXPECT_FALSE(config.ash_enabled);
+    EXPECT_EQ(config.ash_interval_ms, 250u);
+    EXPECT_TRUE(config.ash_capture_arg_hash);
+    EXPECT_EQ(config.ash_ring_bytes_per_core, 2097152u);
+    for (const char* bad : {"ash_interval_ms = 99\n", "ash_interval_ms = 10001\n",
+                            "ash_ring_bytes_per_core = 1024\n", "ash_ring_bytes_per_core = 67108865\n"}) {
+        const Status s = config.ApplyFile(WithPool(bad));
+        EXPECT_EQ(s.code(), StatusCode::kInvalidArgument) << bad;
+    }
+    EXPECT_EQ(config.ash_interval_ms, 250u) << "a refused value changes nothing";
+}
+
 }  // namespace
 }  // namespace kds::server

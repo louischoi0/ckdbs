@@ -151,6 +151,19 @@ TEST_F(AshSamplerTest, TurningSamplingOffKeepsTheRingAndOnContinuesIt) {
     EXPECT_EQ(Records().size(), 2u);
 }
 
+TEST_F(AshSamplerTest, AShorterIntervalTakesEffectAtTheNextTurn) {
+    scheduler_.ash().set_interval_ns(10 * kInterval);
+    Park(WaitEvent::kCommitWalFlush);
+    scheduler_.RunOnce();  // armed: next due at 10 intervals
+    scheduler_.ash().set_interval_ns(kInterval);
+    clock_.Advance(kInterval);
+    scheduler_.RunOnce();  // the grid is pulled in to one new interval from here
+    EXPECT_TRUE(Records().empty());
+    clock_.Advance(kInterval);
+    scheduler_.RunOnce();
+    EXPECT_EQ(Records().size(), 1u) << "no wait for the old, longer grid point";
+}
+
 }  // namespace
 }  // namespace kds::sched
 

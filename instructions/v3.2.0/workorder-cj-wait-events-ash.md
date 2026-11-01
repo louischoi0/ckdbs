@@ -759,3 +759,38 @@ pass.
 - **Suite** at this tree (`ctest -j8 -LE bs-nightly`, Debug): 4369 of 4370
   passed; the one failure is `DropTableReclaimCrashTest` failing with ENOSPC on
   `/tmp`, not a pass. Overhead not measured; measured at the milestone's close.
+
+**WE09 - settings and the kill switch** (from `5363f42a`). Adopts CJ-Q13 on the
+operator's standing go-ahead of 2026-11-01 (go-ahead-achieving-milestone).
+- **CJ-Q13 - names, ranges, spelling.** The order's table spells the keys
+  `kds.ash.*`; the config file's keys are bare words with underscores
+  (`inline_cell_width`), and `ring_bytes_per_core` has a `[PROPOSED]` range.
+  *(a) file keys `ash_enabled`, `ash_interval_ms`, `ash_ring_bytes_per_core`,
+  `ash_capture_arg_hash`, runtime change by `SET ASH {ENABLED | INTERVAL_MS |
+  CAPTURE_ARG_HASH} [=] v`, ring 1-64 MiB; (b) a dotted key family.* **CLA
+  proposes (a):** it matches every existing key and `SET CABIN_OPTIMIZER`.
+  Adopted. The ring size is restart-only and has no statement.
+- **Built.** One `AshControl` of relaxed atomics per sampler, registered with
+  its ring; the setters range-check (`CheckAshIntervalMs`, `CheckAshRingBytes`,
+  the one home of the ranges, used by the file too), update the process
+  defaults and every registered sampler under one mutex; a sampler adopts the
+  defaults when it registers, so a `SET` before a core registered still reaches
+  it. Boot values are applied in `Expeditor::Start` before any scheduler is
+  built. `SET ASH` is admin (the existing `SET` classification) and its
+  refusals carry the token's byte. Off keeps the ring; on re-arms a fresh grid
+  and continues it. A shortened interval pulls the next sample in at the next
+  turn.
+- **Review (`critics-developer`).** No blocking bug. Applied: the shortened
+  interval waited out the old grid point (`Due` now caps the next due time);
+  byte positions on `SET ASH` refusals; one shared range checker instead of
+  two copies; one `Update` helper for the three setters; one decision for
+  ENABLED vs CAPTURE_ARG_HASH. **Not applied:** `Expeditor::Config` holding a
+  `sched::AshSettings` (the four fields stay, defaults restated - a drift risk
+  noted); the documentation sync (`kds.conf.sample`, `docker/kds.conf`,
+  `manual/server/server.md`, `client-manual.md`, the spec) is left to the
+  milestone's close, where the durable content moves.
+- **Limits.** The settings are process-wide: two instances in one process
+  share one kill switch. A sampler that never registers keeps its own defaults.
+- **Suite** at this tree (`ctest -j8 -LE bs-nightly`, Debug): all but
+  `DropTableReclaimCrashTest` (ENOSPC on `/tmp`, not a pass). Overhead not
+  measured; measured at the milestone's close.

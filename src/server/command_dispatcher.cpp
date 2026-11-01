@@ -1,4 +1,5 @@
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/sched/ash_sampler.hpp"
 #include "kds/server/backup.hpp"
 #include "kds/server/wal_archive.hpp"
 #include "kds/server/page_reclaim.hpp"
@@ -1391,8 +1392,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "DURABILITY")) return HandleSetDurability(sub_rest, session);
         if (IEquals(sub, "PRIORITY")) return HandleSetPriority(line, sub_rest, session);
         if (IEquals(sub, "CABIN_OPTIMIZER")) return HandleSetCabinOptimizer(sub_rest);
-        return {"ERR unknown SET target; SET ISOLATION LEVEL, SET DURABILITY, SET PRIORITY and "
-                "SET CABIN_OPTIMIZER are supported",
+        if (IEquals(sub, "ASH")) return HandleSetAsh(line, sub_rest);
+        return {"ERR unknown SET target; SET ISOLATION LEVEL, SET DURABILITY, SET PRIORITY, "
+                "SET CABIN_OPTIMIZER and SET ASH are supported",
                 false};
     }
     if (IEquals(cmd, "PING")) {
@@ -2259,6 +2261,57 @@ DispatchOutcome CommandDispatcher::HandleSetCabinOptimizer(std::string_view rest
     }
     return {std::string("OK cabin_optimizer=") + (cabin_optimizer_enabled() ? "on" : "off"),
             false};
+}
+
+DispatchOutcome CommandDispatcher::HandleSetAsh(std::string_view line, std::string_view rest) {
+    // CJ's WE09: `SET ASH {ENABLED | INTERVAL_MS | CAPTURE_ARG_HASH} [=] value`,
+    // the runtime half of `kds.ash.*` (`ring_bytes_per_core` is restart-only and
+    // has no statement). The kill switch stops the sampler and keeps its ring;
+    // every core's sampler reads the new value at its next turn. Admin.
+    auto [key, tail] = SplitFirstToken(Trim(rest));
+    auto [value, extra] = SplitFirstToken(Trim(tail));
+    if (IEquals(value, "=")) std::tie(value, extra) = SplitFirstToken(Trim(extra));
+    // A refusal names the offending token's byte; a missing one is the line's end.
+    const auto refuse = [&](const Status& s, std::string_view at) {
+        const std::size_t byte = at.data() == nullptr ? line.size() : static_cast<std::size_t>(at.data() - line.data());
+        const Status located = s.WithMessage(s.message() + " (byte " + std::to_string(byte) + ")");
+        return DispatchOutcome{ErrorReply(located), false, 0, located};
+    };
+    if (key.empty() || value.empty() || !Trim(extra).empty()) {
+        return refuse(Status::InvalidArgument("SET ASH takes a setting and one value: ENABLED on|off, "
+                                              "INTERVAL_MS n, CAPTURE_ARG_HASH on|off"),
+                      value.empty() ? std::string_view{} : Trim(extra));
+    }
+    const bool is_enabled = IEquals(key, "ENABLED");
+    if (is_enabled || IEquals(key, "CAPTURE_ARG_HASH")) {
+        if (!IEquals(value, "ON") && !IEquals(value, "OFF")) {
+            return refuse(Status::InvalidArgument("SET ASH " + std::string(key) + " takes on or off, not '" +
+                                                  std::string(value) + "'"),
+                          value);
+        }
+        const bool on = IEquals(value, "ON");
+        if (is_enabled) {
+            sched::SetAshEnabled(on);
+        } else {
+            sched::SetAshCaptureArgHash(on);
+        }
+        return {std::string("OK ash_") + (is_enabled ? "enabled" : "capture_arg_hash") + "=" + (on ? "on" : "off"),
+                false};
+    }
+    if (IEquals(key, "INTERVAL_MS")) {
+        std::uint64_t ms = 0;
+        const auto [end, ec] = std::from_chars(value.data(), value.data() + value.size(), ms);
+        if (ec != std::errc{} || end != value.data() + value.size()) {
+            return refuse(Status::InvalidArgument("SET ASH INTERVAL_MS takes a number of milliseconds, not '" +
+                                                  std::string(value) + "'"),
+                          value);
+        }
+        if (const Status s = sched::SetAshIntervalMs(ms); !s.ok()) return refuse(s, value);
+        return {"OK ash_interval_ms=" + std::to_string(ms), false};
+    }
+    return refuse(Status::InvalidArgument("unknown SET ASH setting '" + std::string(key) +
+                                          "'; ENABLED, INTERVAL_MS and CAPTURE_ARG_HASH are supported"),
+                  key);
 }
 
 
