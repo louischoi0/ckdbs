@@ -12,7 +12,12 @@ operator chose "work order" as their form (the session's question of
 (go-ahead-achieving-milestone, `raft-marks-2026-10-31.md` §3) on
 `worktree-cj-wait-events-ash` from `ed32c10d`. CJ-Q0..Q7 are adopted as CLA
 proposed, and CJ-Q8 (below) was added when WE03 found a premise false; none
-is the operator's own per-item mark. **In progress; stage log §8.**
+is the operator's own per-item mark. **Stages WE01-WE13 and gates G1, G2 landed
+2026-11-01 on `worktree-cj-wait-events-ash` (closing commit `f17bdf81`,
+`v3.4.6-16-gf17bdf81`); WE14 stays reserved. Not merged, not pushed. Close
+measurement and its reading: stage log §8, "The close".** CJ-Q13, CJ-Q14 and
+CJ-Q15 were added and adopted on the standing go-ahead
+(`raft-marks-2026-11-01.md` §1).
 
 **(Written as: not opened. Nothing was built at writing.)** No stage has started, no
 measurement has been taken, and no claim below about the tree is
@@ -935,3 +940,45 @@ standing go-ahead of 2026-11-01 (go-ahead-achieving-milestone).
   `DropTableReclaimCrashTest`, which fails with ENOSPC because `/tmp` is a
   nearly full tmpfs; the same three cells run with `TMPDIR` on the root
   filesystem pass. Overhead not measured here; measured at the close.
+
+**The close** (closing commit `f17bdf81`, `v3.4.6-16-gf17bdf81`; opened from
+`ed32c10d`).
+- **Measurement** (`ck-tester`, release builds, four arms interleaved with the
+  order rotated and the servers pinned; `bench/v3.4.6/results-cj-close-v3.4.6-16-gf17bdf81.md`).
+  PK single-row read, one session, `cores = 1`, default durability.
+  - **G1** (loss <= 0.8 % against the compiled-out build): the quiet batch
+    (36 runs) lost 0.03 % [-0.42, +0.49] - met; the noisy batch (36 runs, host
+    load 2.4) 1.02 % [-1.75, +3.72] and all 72 runs pooled 0.56 % [-0.93, +2.02]
+    - **not resolvable at the bar's size**.
+  - **G2** (ASH on vs off <= 0.5 %): the quiet batch was 0.48 % faster
+    [-0.97, -0.01] - met; the noisy batch 1.84 % [-0.96, +4.50] and pooled
+    0.77 % [-0.71, +2.25] - **not resolvable**; the pooled point estimate is
+    above the bar, its interval spans zero.
+  - **Read this plainly:** the quiet batch is the headline only because it was
+    chosen after both were seen. The measured noise floor (the arm without CJ
+    against the arm with the hooks compiled out) is 0.09 % quiet and 0.49 %
+    pooled, so a delta under about 0.5 % is not a finding. The bars were met on
+    the quiet batch and neither met nor missed on the whole; they were not shown
+    to be missed.
+  - **Milestone delta** (opening commit against closing commit, point read):
+    about 0.1 %, inside the noise floor on both batches. No regression seen.
+  - **Cut**: `cores > 1`, scans, joins, lock contention, an ASH interval below
+    1000 ms, the cross-core and lock-wait scope paths. The autocommit INSERT cell
+    cannot resolve the commit path's added scope below about 5 %.
+  - **Not part of this run**: I3 accuracy, determinism and I2 completeness (the
+    G1/G2 test cells above and the suite carry those).
+  - A point read is about 8.2 us of engine DB time (7.9 CPU, 0.29 run queue) of
+    a 46 us client latency; an INSERT is 432 us of `commit.wal_flush` in 490 us.
+- **Suite** at the closing commit (`ctest -j8 -LE bs-nightly`, Debug): green.
+  `DropTableReclaimCrashTest` fails with ENOSPC when its directory is on `/tmp`
+  (a nearly full tmpfs); with `TMPDIR` on the root filesystem its three cells
+  pass.
+- **Documents moved**: `docs/spec/sys-views.md` §6.6-6.7 (the views, DB time,
+  the sampler, the settings), `docs/spec/wait-events.md` (new), `kds.conf.sample`,
+  `docs/spec/client-manual.md`, `manual/server/server.md`, `manual/sql/sql.md`
+  (`ANALYZE`), `docs/inflight/known-gaps.md` ("Wait events and ASH (CJ)"),
+  `CLAUDE.md`'s Observability row, the index row.
+- **Open for the operator**: KDS Studio's own view (CJ-Q14); whether an argument
+  hash may be published (WD11 against KWP's substituted binds); `sys.ash`'s
+  CPU attribution (CJ-Q12, ON_CPU is not observable to a between-polls sampler);
+  `sim/` driving no core runtime, so I2 is not checked under simulation.
