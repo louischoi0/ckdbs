@@ -17,7 +17,7 @@ is the operator's own per-item mark. **Stages WE01-WE13 and gates G1, G2 landed
 `v3.4.6-16-gf17bdf81`); WE14 stays reserved. Not merged, not pushed. Close
 measurement and its reading: stage log §8, "The close".** CJ-Q13, CJ-Q14 and
 CJ-Q15 were added and adopted on the standing go-ahead
-(`raft-marks-2026-11-01.md` §1).
+(`raft-marks-2026-11-01.md` §2).
 
 **(Written as: not opened. Nothing was built at writing.)** No stage has started, no
 measurement has been taken, and no claim below about the tree is
