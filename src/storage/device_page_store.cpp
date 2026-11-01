@@ -3,6 +3,7 @@
 #include <unordered_set>
 
 #include "kds/sched/checkpoint_census.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
@@ -1075,7 +1076,24 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FaultIn(PageId page_i
     if (!reserved.ok()) return reserved.status();
     ReservedFrame slot(*this, reserved.value());
     const std::span<std::byte, kPageSize> bytes = slot.bytes();
-    if (Status s = device_.ReadPage(page_id, bytes); !s.ok()) return s;
+    {
+        // CJ WE03: the read is a blocking `pread` on the reactor, so it is a
+        // scope that never suspends - the time is the event's, not ON_CPU's.
+        // The scan ring's fills are `io.scan_ring_read`; a var-heap page is
+        // known only from the bytes read, so the scope is renamed after.
+        sched::WaitScope wait(heat == FetchHeat::kRing ? stats::WaitEvent::kIoScanRingRead
+                                                       : stats::WaitEvent::kIoPageRead,
+                              page_id);
+        if (Status s = device_.ReadPage(page_id, bytes); !s.ok()) return s;
+        if (!IsHeaderless(page_id)) {
+            const PageHeaderFields header =
+                ReadPageHeader(std::span<const std::byte, kPageSize>(bytes));
+            if (header.page_type == static_cast<std::uint8_t>(PageType::kVarHeap)) {
+                wait.Reclassify(stats::WaitEvent::kIoVarHeapRead,
+                                static_cast<std::uint32_t>(header.owner_oid));
+            }
+        }
+    }
 
     // Verified on the miss path only, never on a hit (page.md section 10).
     // Every *headered* page this store writes was stamped in Flush(), so a

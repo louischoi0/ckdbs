@@ -36,3 +36,21 @@
 | **Mark** | **CK opened** in worktree `ck-assertion-commit-settle` at `8d183e9b`. CK-Q0..Q7 **adopted as CLA proposed, by CLA, on the operator's standing go-ahead** and not as per-item marks: Q0 (a), Q1 (a), Q2 (a), Q3 (a) if S0 confirms H1 for every shipped tag (else (b)), Q4 (a), Q5 (a), Q6 (a), Q7 (a). CK-Q0 (a) reserves S0's verdict (build, narrow or drop) to the operator, so the run ends at S0's close |
 | **Does not settle** | S0's verdict; CK-S1 onward; the crash-loser order (CK-Q5); a push; a tag, a version |
 | **Recorded at** | this file; the order's header and §4 and §7; the CK row in `index.md` |
+
+## 5. CJ written
+
+| | |
+|---|---|
+| **Word** | The operator pasted the spec "Wait Events & ASH" (decisions WD1-WD13 stated as settled on 2026-10-31) and its workplan (WE01-WE14), then, asked what to do with them, chose *"work order"* |
+| **Mark** | **CJ written** (`workorder-cj-wait-events-ash.md`), translated into English, **not opened**. WD1-WD13 are recorded as the operator's decisions as the paste states them; the paste's `[PROPOSED]` values stay proposed. CLA's additions are tagged `[CLA]` and CJ-Q0..Q7 are unmarked. Nothing is built, measured or read against the tree yet |
+| **Does not settle** | CJ's opening; CJ-Q0..Q7; any stage; a push; a tag, a version |
+| **Recorded at** | this file; the CJ order; the CJ row in `instructions/v3.2.0/index.md` |
+
+## 6. CJ opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone`, with CJ the milestone this session is on: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"* |
+| **Mark** | **CJ opened** on `worktree-cj-wait-events-ash` from `ed32c10d`. CJ-Q0..Q7 are adopted as CLA proposed and CJ-Q8 (a page read is not a suspension) was added and adopted at WE03. None is the operator's own per-item mark; each is recorded in the order's §8 as adopted under this word |
+| **Does not settle** | a push, a merge to `main`, a tag, a version; the milestone's close (the stages are not all built) |
+| **Recorded at** | this file; the CJ order's header, §4 and §8; the CJ row in `instructions/v3.2.0/index.md` |

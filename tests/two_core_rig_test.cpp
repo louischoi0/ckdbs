@@ -40,7 +40,11 @@ struct ParkedTask {
 
 sched::Coro ParkUntilGo(ParkedTask& t) {
     t.pred = [&t] { return t.go.load(std::memory_order_acquire); };
-    co_await sched::WaitUntil{&t.pred};
+    {
+        // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+        sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+        co_await sched::WaitUntil{&t.pred};
+    }
     t.done.store(true, std::memory_order_release);
     co_return Status::OK();
 }
@@ -169,7 +173,11 @@ sched::Coro HoldExclusive(storage::DevicePageStore& store, PageHold& h) {
 // must.
 sched::Coro FetchThroughRing(storage::DevicePageStore& store, PageHold& h) {
     h.held_pred = [&h] { return h.held.load(std::memory_order_acquire); };
-    co_await sched::WaitUntil{&h.held_pred};
+    {
+        // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+        sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+        co_await sched::WaitUntil{&h.held_pred};
+    }
     auto ring = store.OpenScanRing(/*frames=*/1);
     h.fetching.store(true, std::memory_order_release);
     auto bytes = ring->Fetch(h.page);

@@ -48,7 +48,11 @@ struct Script {
 sched::Coro RunScript(CommandDispatcher& d, Script& s) {
     for (std::size_t i = 0; i < s.statements.size(); ++i) {
         s.gate = [&s, i] { return s.allowed.load(std::memory_order_acquire) > i; };
-        co_await sched::WaitUntil{&s.gate};
+        {
+            // The test's own gate, standing in for a client between statements.
+            sched::WaitScope idle(stats::WaitEvent::kIdleClient);
+            co_await sched::WaitUntil{&s.gate};
+        }
         s.started.store(i + 1, std::memory_order_release);
         co_await d.DispatchAsync(s.statements[i], &s.session, &s.outs[i]);
         s.finished.store(i + 1, std::memory_order_release);

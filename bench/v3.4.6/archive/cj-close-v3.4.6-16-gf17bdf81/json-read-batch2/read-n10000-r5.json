@@ -1,0 +1,107 @@
+{
+ "cell": "read",
+ "rows": 10000,
+ "run": 5,
+ "cpu_of": {
+  "A": 4,
+  "B": 0,
+  "C": 1,
+  "O": 3
+ },
+ "host_before": {
+  "loadavg": "1.17 2.14 4.00 1/369 405208",
+  "competing": []
+ },
+ "host_after": {
+  "loadavg": "1.08 2.11 3.97 1/388 405286",
+  "competing": []
+ },
+ "count": {
+  "A": "count(*) 10000",
+  "B": "count(*) 10000",
+  "C": "count(*) 10000",
+  "O": "count(*) 10000"
+ },
+ "arms": {
+  "A": {
+   "phase": "read",
+   "detail": "",
+   "ops": 30000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.449688,
+   "qps": 20694.1,
+   "mean_us": 47.6,
+   "p0_us": 37.3,
+   "p25_us": 45.1,
+   "p50_us": 45.9,
+   "p95_us": 54.7,
+   "p99_us": 65.6,
+   "max_us": 587.0,
+   "server_cpu_s": 0.55,
+   "cpu_us_per_op": 18.333333333333332,
+   "fg_polls": 30030.0,
+   "fg_polled_us": 338474.0
+  },
+  "B": {
+   "phase": "read",
+   "detail": "",
+   "ops": 30000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.424592,
+   "qps": 21058.7,
+   "mean_us": 46.8,
+   "p0_us": 36.9,
+   "p25_us": 44.7,
+   "p50_us": 45.6,
+   "p95_us": 53.0,
+   "p99_us": 62.5,
+   "max_us": 2167.8,
+   "server_cpu_s": 0.52,
+   "cpu_us_per_op": 17.333333333333332,
+   "fg_polls": 30030.0,
+   "fg_polled_us": 332770.0
+  },
+  "C": {
+   "phase": "read",
+   "detail": "",
+   "ops": 30000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.428854,
+   "qps": 20995.9,
+   "mean_us": 46.9,
+   "p0_us": 37.2,
+   "p25_us": 44.7,
+   "p50_us": 45.5,
+   "p95_us": 53.1,
+   "p99_us": 63.1,
+   "max_us": 1927.5,
+   "server_cpu_s": 0.52,
+   "cpu_us_per_op": 17.333333333333332,
+   "fg_polls": 30030.0,
+   "fg_polled_us": 335621.0
+  },
+  "O": {
+   "phase": "read",
+   "detail": "",
+   "ops": 30000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.448837,
+   "qps": 20706.3,
+   "mean_us": 47.6,
+   "p0_us": 37.6,
+   "p25_us": 44.8,
+   "p50_us": 45.6,
+   "p95_us": 53.3,
+   "p99_us": 63.6,
+   "max_us": 5511.0,
+   "server_cpu_s": 0.57,
+   "cpu_us_per_op": 19.0,
+   "fg_polls": 30030.0,
+   "fg_polled_us": 334586.0
+  }
+ }
+}

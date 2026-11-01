@@ -2107,6 +2107,7 @@ private:
                 if (Status s = TakeCancel(); !s.ok()) co_return s;
                 if (slice_->at_boundary) slice_->at_boundary();
                 if (slice_->resume_when != nullptr && !(*slice_->resume_when)()) {
+                    sched::WaitScope wait(stats::WaitEvent::kNetSendBackpressure);
                     co_await sched::WaitUntil{slice_->resume_when};
                 } else {
                     co_await sched::Yield{};

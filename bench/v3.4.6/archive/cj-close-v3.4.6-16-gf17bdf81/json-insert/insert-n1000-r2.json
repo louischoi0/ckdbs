@@ -1,0 +1,107 @@
+{
+ "cell": "insert",
+ "rows": 1000,
+ "run": 2,
+ "cpu_of": {
+  "A": 3,
+  "B": 4,
+  "C": 0,
+  "O": 1
+ },
+ "host_before": {
+  "loadavg": "1.99 2.97 4.77 3/402 402967",
+  "competing": []
+ },
+ "host_after": {
+  "loadavg": "1.99 2.95 4.76 1/407 403040",
+  "competing": []
+ },
+ "count": {
+  "A": "count(*) 3000",
+  "B": "count(*) 3000",
+  "C": "count(*) 3000",
+  "O": "count(*) 3000"
+ },
+ "arms": {
+  "A": {
+   "phase": "insert",
+   "detail": "",
+   "ops": 2000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.085905,
+   "qps": 1841.8,
+   "mean_us": 540.5,
+   "p0_us": 322.5,
+   "p25_us": 460.9,
+   "p50_us": 518.1,
+   "p95_us": 725.0,
+   "p99_us": 862.7,
+   "max_us": 5053.9,
+   "server_cpu_s": 0.17,
+   "cpu_us_per_op": 85.0,
+   "fg_polls": 4020.0,
+   "fg_polled_us": 70073.0
+  },
+  "B": {
+   "phase": "insert",
+   "detail": "",
+   "ops": 2000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 0.993508,
+   "qps": 2013.1,
+   "mean_us": 494.4,
+   "p0_us": 287.4,
+   "p25_us": 417.8,
+   "p50_us": 476.2,
+   "p95_us": 667.8,
+   "p99_us": 770.7,
+   "max_us": 5000.7,
+   "server_cpu_s": 0.15,
+   "cpu_us_per_op": 75.0,
+   "fg_polls": 4020.0,
+   "fg_polled_us": 69599.0
+  },
+  "C": {
+   "phase": "insert",
+   "detail": "",
+   "ops": 2000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.023628,
+   "qps": 1953.8,
+   "mean_us": 509.5,
+   "p0_us": 305.1,
+   "p25_us": 433.7,
+   "p50_us": 484.5,
+   "p95_us": 687.0,
+   "p99_us": 838.4,
+   "max_us": 6942.2,
+   "server_cpu_s": 0.13,
+   "cpu_us_per_op": 65.0,
+   "fg_polls": 4020.0,
+   "fg_polled_us": 60702.0
+  },
+  "O": {
+   "phase": "insert",
+   "detail": "",
+   "ops": 2000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.024762,
+   "qps": 1951.7,
+   "mean_us": 510.0,
+   "p0_us": 287.6,
+   "p25_us": 437.3,
+   "p50_us": 486.7,
+   "p95_us": 677.4,
+   "p99_us": 819.0,
+   "max_us": 2986.8,
+   "server_cpu_s": 0.15,
+   "cpu_us_per_op": 75.0,
+   "fg_polls": 4020.0,
+   "fg_polled_us": 61246.0
+  }
+ }
+}

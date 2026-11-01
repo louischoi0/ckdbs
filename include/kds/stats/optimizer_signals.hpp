@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
@@ -86,6 +87,9 @@ struct CandidateRef {
 struct FingerprintSignal {
     DecayState executions;
     DecayState pages;
+    // S4 (CJ's WE13, `[EXPERIMENTAL]`): ASH samples of this shape found
+    // WAITING, decayed. Read by nothing that decides.
+    DecayState wait_samples;
     // Last-observed candidacy. A shape's target is a function of the
     // shape, so overwriting is idempotent in the steady state; it moves
     // only when the catalog under the shape moved (a Cabin created or
@@ -106,6 +110,10 @@ struct SnapshotFingerprint {
     std::uint64_t pattern_id = 0;
     std::uint32_t frequency_q8 = 0;  // decayed executions, Q24.8
     std::uint32_t pages_q8 = 0;      // decayed page sum, Q24.8
+    // S4, appended: the decayed count of ASH samples of this shape that were
+    // WAITING. `Decide` does not read it (no cost model prices a wait), so it
+    // moves no decision and no digest (`{version, decay_epoch}`).
+    std::uint32_t wait_samples_q8 = 0;
 
     // The same two values in the log domain (decay.hpp's `Log2Q16`),
     // carried beside the linear pair rather than replacing it. The linear
@@ -154,6 +162,12 @@ public:
     void NoteExecution(std::uint64_t pattern_id, std::uint64_t pages_fetched,
                        CandidateRef candidate = {});
 
+    // S4 (CJ's WE13): one ASH sample of `pattern_id` found WAITING. Counted
+    // only for a shape already tracked (a wait never admits or evicts one) and
+    // only while `gate` is true: the controller's own switch.
+    void NoteWaitSample(std::uint64_t pattern_id) noexcept;
+    void set_wait_gate(const std::atomic<bool>* gate) noexcept { wait_gate_ = gate; }
+
     // S3, forwarded by CabinStore: a probe against `cabin_id`. `served`
     // false is a coverage miss - the value was not observed.
     void NoteCabinLookup(std::uint64_t cabin_id, bool served);
@@ -196,6 +210,7 @@ private:
     const sched::Clock* clock_;
     sched::MonoTimeNs half_life_ns_;
     Latch* latch_ = nullptr;
+    const std::atomic<bool>* wait_gate_ = nullptr;
     std::uint64_t version_ = 0;
     std::unordered_map<std::uint64_t, FingerprintSignal> fingerprints_;
     std::unordered_map<std::uint64_t, CabinQualitySignal> cabins_;

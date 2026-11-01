@@ -8,6 +8,7 @@
 
 #include "kds/exec/assertion_violation.hpp"
 #include "kds/exec/row_codec.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/payload.hpp"
 
@@ -399,7 +400,12 @@ StatusOr<std::uint64_t> AssertionEnforcer::AdmitLocked(
         if (!admitted.ok()) return admitted.status();
         if (!admitted.value().admitted) {
             ++a.counters.violations;
-            if (reserver != nullptr) *reserver = ReserverOnLocked(a.assertion_id, key, txn_id);
+            if (reserver != nullptr) {
+                *reserver = ReserverOnLocked(a.assertion_id, key, txn_id);
+                if (*reserver != 0) {
+                    sched::RecordCounterEvent(stats::WaitEvent::kAppAssertionReservation);
+                }
+            }
             return Refuse(a, row, first_col_pos);
         }
     }

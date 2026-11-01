@@ -1,0 +1,107 @@
+{
+ "cell": "read",
+ "rows": 1000,
+ "run": 2,
+ "cpu_of": {
+  "A": 3,
+  "B": 4,
+  "C": 0,
+  "O": 1
+ },
+ "host_before": {
+  "loadavg": "3.01 5.01 5.98 3/394 400136",
+  "competing": []
+ },
+ "host_after": {
+  "loadavg": "3.00 4.94 5.94 1/380 400185",
+  "competing": []
+ },
+ "count": {
+  "A": "count(*) 1000",
+  "B": "count(*) 1000",
+  "C": "count(*) 1000",
+  "O": "count(*) 1000"
+ },
+ "arms": {
+  "A": {
+   "phase": "read",
+   "detail": "",
+   "ops": 30000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.472416,
+   "qps": 20374.7,
+   "mean_us": 48.3,
+   "p0_us": 37.7,
+   "p25_us": 45.2,
+   "p50_us": 46.1,
+   "p95_us": 55.0,
+   "p99_us": 82.5,
+   "max_us": 789.9,
+   "server_cpu_s": 0.5,
+   "cpu_us_per_op": 16.666666666666668,
+   "fg_polls": 30030.0,
+   "fg_polled_us": 330662.0
+  },
+  "B": {
+   "phase": "read",
+   "detail": "",
+   "ops": 30000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.507911,
+   "qps": 19895.1,
+   "mean_us": 49.5,
+   "p0_us": 39.0,
+   "p25_us": 45.5,
+   "p50_us": 46.7,
+   "p95_us": 59.5,
+   "p99_us": 91.1,
+   "max_us": 1492.3,
+   "server_cpu_s": 0.58,
+   "cpu_us_per_op": 19.333333333333332,
+   "fg_polls": 30030.0,
+   "fg_polled_us": 352783.0
+  },
+  "C": {
+   "phase": "read",
+   "detail": "",
+   "ops": 30000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.529127,
+   "qps": 19619.0,
+   "mean_us": 50.2,
+   "p0_us": 37.6,
+   "p25_us": 45.4,
+   "p50_us": 46.3,
+   "p95_us": 57.3,
+   "p99_us": 87.4,
+   "max_us": 6039.2,
+   "server_cpu_s": 0.6,
+   "cpu_us_per_op": 20.0,
+   "fg_polls": 30030.0,
+   "fg_polled_us": 341781.0
+  },
+  "O": {
+   "phase": "read",
+   "detail": "",
+   "ops": 30000,
+   "errors": 0,
+   "first_error": null,
+   "elapsed_s": 1.471594,
+   "qps": 20386.1,
+   "mean_us": 48.3,
+   "p0_us": 37.6,
+   "p25_us": 45.2,
+   "p50_us": 46.1,
+   "p95_us": 55.1,
+   "p99_us": 83.3,
+   "max_us": 1783.1,
+   "server_cpu_s": 0.52,
+   "cpu_us_per_op": 17.333333333333332,
+   "fg_polls": 30030.0,
+   "fg_polled_us": 332355.0
+  }
+ }
+}

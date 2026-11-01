@@ -237,6 +237,13 @@ add_executable(kds_tests
     page_mgr_wal_gate_test.cpp
     wal_checkpointer_test.cpp
     checkpoint_census_test.cpp
+    wait_event_test.cpp
+    wait_event_doc_test.cpp
+    ash_ring_test.cpp
+    ash_sampler_test.cpp
+    ash_gate_test.cpp
+    ash_panel_queries_test.cpp
+    wait_state_test.cpp
     checkpoint_task_test.cpp
     checkpoint_log_park_test.cpp
     writeback_rec_lsn_test.cpp

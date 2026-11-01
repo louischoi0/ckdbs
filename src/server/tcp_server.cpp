@@ -467,7 +467,10 @@ sched::Coro TcpServer::RunHost(std::shared_ptr<HostState> state, ConnectionHando
     while (true) {
         // Level-triggered (AR0-6-R1): the reactor re-polls this after every
         // block, so the kick an offer sends only has to end the block.
-        co_await sched::WaitUntil{&ready};
+        {
+            sched::WaitScope wait(stats::WaitEvent::kIdleBackground);
+            co_await sched::WaitUntil{&ready};
+        }
         if (state->server == nullptr) co_return Status::OK();
         for (ConnectionHandoff::Arrival& a : handoff.Take(core)) {
             if (a.moved != nullptr) {
@@ -726,10 +729,14 @@ void TcpServer::SubmitStatement(int client_fd, Connection& conn) {
         };
         conn.kwp->ArmStream(&conn.stream);
     }
-    scheduler_->Submit(sched::MakeCoroTask(
+    auto task = sched::MakeCoroTask(
         sched::SchedulingGroup::kForeground,
         dispatcher_->DispatchAsync(conn.current_line, &conn.session, &conn.pending),
-        [this, client_fd](const Status&) { OnStatementComplete(client_fd); }));
+        [this, client_fd](const Status&) { OnStatementComplete(client_fd); });
+    // The statement's waits are its session's (CJ WE05) from submission on:
+    // its first `sched.run_queue` wait ends before `DispatchAsync` runs.
+    task->wait_state_mut().session = conn.session.WaitStats();
+    scheduler_->Submit(std::move(task));
 }
 
 void TcpServer::ShipRunning(int client_fd) {

@@ -10,7 +10,9 @@
 #include "kds/exec/step_compiler.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
+#include "kds/sched/coro.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/session.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/tagged_cell.hpp"
 
@@ -84,6 +86,44 @@ protected:
     storage::InMemoryPageStore store_{kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
 };
+
+// ---- The DB-time line (CJ's WE10) -----------------------------------------
+
+TEST_F(AnalyzeTest, ASynchronousRunWithNoTaskPrintsNoDbTimeLine) {
+    // Nothing books this run's time to the session, so a line would say 0.
+    const std::string plan = Unescaped(Run("ANALYZE SELECT acct.name FROM acct"));
+    EXPECT_EQ(plan.find("DB time"), std::string::npos) << plan;
+}
+
+#ifndef KDS_WAIT_INSTRUMENTATION_OFF
+TEST_F(AnalyzeTest, ARunInsideATaskOfTheSessionCountsItsOwnCpu) {
+    // A wait clock that moves 1 ms per reading, so the run's CPU is never
+    // below the line's 0.01 ms resolution however fast the machine is.
+    struct TickingClock final : sched::Clock {
+        mutable sched::MonoTimeNs now = 1'000'000;
+        sched::MonoTimeNs Now() const override { return now += 1'000'000; }
+    } clock;
+    sched::SetWaitClock(&clock);
+    struct Restore {
+        ~Restore() { sched::SetWaitClock(nullptr); }
+    } restore;
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    Session session;
+    std::string reply;
+    auto body = [&]() -> sched::Coro {
+        reply = d.Dispatch("ANALYZE SELECT acct.name FROM acct", &session).response;
+        co_return Status::OK();
+    };
+    sched::CoroTask task(sched::SchedulingGroup::kForeground, body());
+    task.wait_state_mut().session = session.WaitStats();
+    ASSERT_EQ(task.Poll(), sched::PollResult::kDone);
+    const std::string text = Unescaped(reply);
+    const std::size_t at = text.rfind("DB time ");
+    ASSERT_NE(at, std::string::npos) << text;
+    EXPECT_EQ(text.find("DB time 0.00 ms", at), std::string::npos)
+        << "the statement's own CPU is in the line: " << text.substr(at);
+}
+#endif
 
 // ---- The plan ------------------------------------------------------------
 

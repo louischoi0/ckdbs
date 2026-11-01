@@ -94,13 +94,21 @@ struct ParentWriter {
 sched::Coro WriteParent(CommandDispatcher& d, ParentWriter& p) {
     if (p.gated) {
         p.go_pred = [&p] { return p.go.load(std::memory_order_acquire); };
-        co_await sched::WaitUntil{&p.go_pred};
+        {
+            // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+            sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+            co_await sched::WaitUntil{&p.go_pred};
+        }
     }
     co_await d.DispatchAsync("BEGIN", &p.session, &p.begin_out);
     co_await d.DispatchAsync(p.statement, &p.session, &p.insert_out);
     p.holding.store(true, std::memory_order_release);
     p.end_pred = [&p] { return p.may_end.load(std::memory_order_acquire); };
-    co_await sched::WaitUntil{&p.end_pred};
+    {
+        // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+        sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+        co_await sched::WaitUntil{&p.end_pred};
+    }
     co_await d.DispatchAsync(p.ending, &p.session, &p.end_out);
     p.ended.store(true, std::memory_order_release);
     if (!p.after.empty()) {
@@ -139,7 +147,11 @@ struct ChildWriter {
 
 sched::Coro WriteChild(CommandDispatcher& d, ChildWriter& c) {
     c.go_pred = [&c] { return c.go.load(std::memory_order_acquire); };
-    co_await sched::WaitUntil{&c.go_pred};
+    {
+        // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+        sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+        co_await sched::WaitUntil{&c.go_pred};
+    }
     if (c.in_txn) co_await d.DispatchAsync("BEGIN", &c.session, &c.begin_out);
     co_await d.DispatchAsync(c.statement, &c.session, &c.out);
     c.inserted.store(true, std::memory_order_release);
@@ -334,7 +346,11 @@ struct Script {
 sched::Coro RunScript(CommandDispatcher& d, Script& s) {
     for (std::size_t i = 0; i < s.statements.size(); ++i) {
         s.pred = [&s, i] { return s.allowed.load(std::memory_order_acquire) > i; };
-        co_await sched::WaitUntil{&s.pred};
+        {
+            // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+            sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+            co_await sched::WaitUntil{&s.pred};
+        }
         co_await d.DispatchAsync(s.statements[i], &s.session, &s.outs[i]);
         s.done.store(i + 1, std::memory_order_release);
     }

@@ -1666,6 +1666,40 @@ Verified on `bo-relation-stats-checkpoints` at `86d1fe1a` (BO-S7). Owned by
   `docs/spec/wal.md` §11. Checking the generation first at each park closes
   it.
 
+## Wait events and ASH (CJ)
+
+Verified on `cj-wait-events-ash` at the milestone's close
+(`instructions/v3.2.0/workorder-cj-wait-events-ash.md` §8).
+
+- **`sys.ash` never shows ON_CPU** (CJ-Q12). The sampler runs between polls, so a
+  task that is using CPU reads RUNNABLE; the exact figure is `sys.wait_stats`'
+  `cpu.on_cpu`. Weaker than Oracle's ASH for CPU attribution.
+- **`ash_capture_arg_hash` does nothing outside its unit test.** The only hash
+  the engine has, `fingerprint->arg_hash`, is taken after a KWP bind is
+  substituted into the text, so it covers bind values, which WD11 forbids
+  recording. Publishing it waits for the operator's ruling (a hash of a
+  low-entropy value can be reversed).
+- **Records not filled**: `trx_id`, `step_id`, `origin_session` and the
+  cross-core flag are always 0 and `sys.ash` does not show them. `xcore.*`,
+  `res.eviction_retry` and `sysio.writeback` have no booking site; several
+  events have unfilled parameters (`docs/spec/wait-events.md` marks each).
+- **An unscoped park** on a core that is not strict is counted
+  (`unscoped_parks`), booked to no event, and leaves the task WAITING on
+  `cpu.on_cpu`.
+- **A reactor's idle block is not capped at the next sample time**, so a batch can
+  read as late by up to `max_idle_block_ms` (10 ms), which at the 100 ms minimum
+  interval is exactly the late threshold.
+- **`session_id`** is a private counter, not the KWP handshake id; a session's
+  rows in `sys.session_waits` do not join to a client-visible id.
+- **The settings are process-wide** (`SET ASH`, the `ash_*` keys): two instances
+  in one process share one kill switch.
+- **A `sys` view answers no aggregate** (AG12), so a panel counts client-side.
+  KDS Studio is not in this tree; `tools/ash_panel.sql` is the data contract.
+- **`sim/` drives no core runtime**, so the I2 assertion is checked over the unit
+  and integration suite, not the simulation.
+- **S4**, the Cabin controller's wait signal (WE13, `[EXPERIMENTAL]`), is counted
+  and shown in the snapshot and read by no decision.
+
 ## Streamed replies (CE)
 
 Verified on `ce-streaming-reply` at `9e568b44` (CE-S1..S4). Owned by

@@ -78,6 +78,7 @@ Status Scheduler::ArmWaker() {
 
 Status Scheduler::AttachWakerTable(WakeRegistry* table, std::uint32_t core_id) {
     core_id_ = core_id;
+    ash_.set_core_id(core_id);
     wakers_ = table;
     if (table == nullptr) return Status::OK();
     CoreLoad::Reset(core_id_);  // this reactor's slot from here on (core_load.hpp)
@@ -383,8 +384,10 @@ bool Scheduler::RunOnce() {
     // is nothing to run" argument the counters above stand on.
     const MonoTimeNs block_entry_ns = timeout_ms != 0 ? clock_.Now() : 0;
     Status io_status = io_backend_.PollReady(timeout_ms, io_events_scratch_);
+    MonoTimeNs turn_ns = iteration_start_ns;  // the turn's time, for the ASH sampler
     if (timeout_ms != 0) {
         const MonoTimeNs now = clock_.Now();
+        turn_ns = now;
         if (now > block_entry_ns) iteration_block_ns = now - block_entry_ns;
         idle_block_ns_ += static_cast<std::uint64_t>(iteration_block_ns);
     }
@@ -427,6 +430,18 @@ bool Scheduler::RunOnce() {
     if (ExpireTimers()) {
         did_work = true;
         advanced = true;
+    }
+
+    // Phase 3.9: the ASH sample (CJ WE07), before the polls so every task is
+    // queued and none is mid-resume. A turn that is not due costs a relaxed
+    // load and a compare.
+    if (ash_.Due(turn_ns)) {
+        ash_.Begin(turn_ns);
+        for (std::size_t g = 0; g < ready_queues_.size(); ++g) {
+            for (const TaskPtr& task : ready_queues_[g]) {
+                ash_.Add(task->wait_state_for_sampling(), static_cast<std::uint8_t>(g));
+            }
+        }
     }
 
     // Phase 4: run ready tasks under the loop budget.

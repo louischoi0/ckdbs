@@ -80,6 +80,14 @@ void OptimizerSignals::NoteExecution(std::uint64_t pattern_id, std::uint64_t pag
     Accumulate(signal->pages, clock_, half_life_ns_, points);
 }
 
+void OptimizerSignals::NoteWaitSample(std::uint64_t pattern_id) noexcept {
+    if (wait_gate_ != nullptr && !wait_gate_->load(std::memory_order_relaxed)) return;
+    LatchGuard hold(latch_);
+    const auto found = fingerprints_.find(pattern_id);
+    if (found == fingerprints_.end()) return;
+    Touch(found->second.wait_samples, clock_, half_life_ns_);
+}
+
 void OptimizerSignals::NoteCabinLookup(std::uint64_t cabin_id, bool served) {
     LatchGuard hold(latch_);
     CabinQualitySignal* signal = CabinFor(cabin_id);
@@ -117,6 +125,7 @@ OptimizerSnapshot OptimizerSignals::Snapshot() {
         out.pattern_id = id;
         out.frequency_q8 = ValueAt(signal.executions, clock_, half_life_ns_);
         out.pages_q8 = ValueAt(signal.pages, clock_, half_life_ns_);
+        out.wait_samples_q8 = ValueAt(signal.wait_samples, clock_, half_life_ns_);
         // The same reads in the log domain, for the consumer that must
         // still order two shapes after both have decayed past Q24.8's
         // floor. Same state, same instant - only the projection differs.

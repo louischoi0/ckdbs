@@ -324,6 +324,10 @@ struct DispatchOutcome {
     // `SELECT`, `INSERT` and `UPDATE` do). Carried for `poison_withheld`'s
     // reason: another statement of this core can run before this one ends.
     std::uint64_t fetch_id = 0;
+    // The same fingerprint's shape (CJ WE13), for ASH. Its argument hash is
+    // not carried: a KWP bind is substituted into the text before the parse, so
+    // the hash covers bind values, which WD11 forbids recording.
+    std::uint64_t pattern_id = 0;
 
     // **The relation `rows_affected` counts rows of** (BO-S6), for
     // `sys.relation_stats`: set beside a write's count, 0 everywhere else.
@@ -1481,6 +1485,7 @@ private:
                                            std::string_view relation_name, std::string_view verb,
                                            DdlBuildLock& out);
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
+    DispatchOutcome HandleSetAsh(std::string_view line, std::string_view rest);
 
 
     // ---- Foreign-key checks (docs/spec/foreign-keys.md §§2-4) -----------
@@ -2280,6 +2285,12 @@ private:
     StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> StatementStatsView();
     StatusOr<exec::CatalogView> CheckpointsView();
+    StatusOr<exec::CatalogView> WaitEventNamesView();
+    StatusOr<exec::CatalogView> WaitStatsView();
+    StatusOr<exec::CatalogView> WaitHistogramView();
+    StatusOr<exec::CatalogView> SessionWaitsView();
+    StatusOr<exec::CatalogView> AshView();
+    StatusOr<exec::CatalogView> SessionStateView();
     StatusOr<exec::CatalogView> PageSlotsView(const parser::AstValue& page_id);
     StatusOr<exec::CatalogView> MetaView();
     // The clustered root a relation's anchor names, or its descriptor page.
@@ -2731,6 +2742,7 @@ private:
     // The running statement's `fetch_id`, set by the parse that has one and
     // copied onto its outcome by `DispatchAndStage` (BO-S5).
     std::uint64_t statement_fetch_id_ = 0;
+    std::uint64_t statement_pattern_id_ = 0;
 
     // **The fault net every wait in this file is bounded by**, and the
     // one thing `lock_wait_fault_net_ms` sets; defaults to the constant.

@@ -2,6 +2,7 @@
 
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/sched/waker_table.hpp"
 
 #include <algorithm>
@@ -224,6 +225,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                         FenceCounterFor(key.rel_oid).fetch_sub(1, std::memory_order_release);
                     result.granted = false;
                     result.blocking_txn = h.txn;
+                    sched::RecordCounterEvent(stats::WaitEvent::kAppLockConflict);
                     // **The non-queueing exit** (AO-S6a): the caller asked
                     // for the unit only if it was free, so a conflict
                     // leaves the table exactly as it was found - no waiter
@@ -358,6 +360,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
         ReleaseOne(txn, key, mode, holdings);
         result.granted = false;
         result.blocking_txn = blocker;
+        sched::RecordCounterEvent(stats::WaitEvent::kAppLockConflict);
         result.wake = std::move(cross);
         // **A queueing ask is not queued here, and that is stated rather
         // than implied.** A queue position is a place in *this* key's line,
