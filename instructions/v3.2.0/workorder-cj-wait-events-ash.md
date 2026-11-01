@@ -6,10 +6,10 @@ operator pasted into the session, translated into English here (nothing
 Korean enters the tree): the spec "Wait Events & ASH" and its workplan. The
 operator chose "work order" as their form (the session's question of
 2026-10-31). The operator's words are recorded in `raft-marks-2026-10-31.md`
-§2.
+§4.
 
 **Opened 2026-10-31** on the operator's standing go-ahead
-(go-ahead-achieving-milestone, `raft-marks-2026-10-31.md` §3) on
+(go-ahead-achieving-milestone, `raft-marks-2026-10-31.md` §5) on
 `worktree-cj-wait-events-ash` from `ed32c10d`. CJ-Q0..Q7 are adopted as CLA
 proposed, and CJ-Q8 (below) was added when WE03 found a premise false; none
 is the operator's own per-item mark. **Stages WE01-WE13 and gates G1, G2 landed
