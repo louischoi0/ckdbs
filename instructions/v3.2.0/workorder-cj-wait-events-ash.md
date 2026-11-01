@@ -852,3 +852,47 @@ operator's standing go-ahead of 2026-11-01 (go-ahead-achieving-milestone).
 - **Suite** at this tree (`ctest -j8 -LE bs-nightly`, Debug): all but
   `DropTableReclaimCrashTest` (ENOSPC on `/tmp`, not a pass). Overhead not
   measured; measured at the milestone's close.
+
+**WE12 - event dictionary** (from `2a21fb58`).
+- **Built.** `docs/spec/wait-events.md`: per event the registry's class, kind and
+  DB-time flag, what `p1`-`p3` hold (or "not filled yet"), meaning, usual causes,
+  remedies and the sites that book it. `tests/wait_event_doc_test.cpp` fails when
+  the page and `kWaitEvents` disagree on a name, the order, class, kind, DB-time
+  flag or a parameter name.
+- **Review (`critics-developer`).** Eight claims in the first draft were wrong
+  against the code and are corrected: `sysio.checkpoint`'s `p1` is not filled;
+  `sysio.wal_write` issues no write (it parks until the log is durable up to a
+  page's LSN); `commit.ceiling_wait` is at the head of the next statement, not
+  before an acknowledgement; `io.scan_ring_read` is the Cabin optimizer's build,
+  not a `SELECT` walk; `app.horizon_wait`'s `p1` and three wait kinds;
+  `commit.wal_flush`'s `p2` numbers; `idle.background`'s only site; `idle.client`
+  also on session creation. Test hardened: a missing file, a repeated field.
+  **Limit:** the test cannot check the prose (which parameter is filled, whether a
+  site is true); the review is the only check on it.
+
+**WE11 - the wait-event panel** (from `2a21fb58`). Adopts CJ-Q14 on the operator's
+standing go-ahead of 2026-11-01 (go-ahead-achieving-milestone).
+- **CJ-Q14 - KDS Studio is not in this tree.** The order asks for a Studio panel;
+  no Studio source exists here, and the order fixes only its data sources.
+  *(a) deliver the panel's data contract - the queries - and a reference text
+  rendering, and leave Studio's own view to its owner; (b) stop for the operator.*
+  **CLA proposes (a):** the order's done-when is about the data (`sys.ash` and
+  `sys.wait_stats` only, no new frame), which this checks. Adopted. **Open for the
+  operator:** the Studio view itself.
+- **Found.** A `sys` view answers plain filtered selects only: no `GROUP BY`, no
+  aggregate, no alias on the catalog-view path (`a catalog view in this query form
+  is not supported`), against SV5's "ordinary typed table". So the panel's counting
+  is client-side, over one `samples` read. To go into `known-gaps.md` at the close.
+- **Built.** `tools/ash_panel.sql` (three reads: the newest sample, the samples
+  since a time, the cumulative waits), `tools/ash_panel.py` (KWP client: active
+  sessions over time stacked by class, bucketed by the sampling interval across
+  cores; top events; top fingerprints; a fingerprint-to-event drill-down; the
+  cumulative table) and `tests/ash_panel_queries_test.cpp`, which runs every query
+  against the engine and checks rows, order, the time filter and the NULL-core
+  filter.
+- **Review (`critics-developer`).** Applied: the default port was wrong (15432);
+  class letters collided in the stacked bars; the time axis counted one core per
+  point above one core (now bucketed); the test could pass with a broken panel (now
+  parses rows); `--fingerprint 0` was ignored. **Not applied:** a test of the Python
+  tallies (nothing in the suite runs Python); a mention of the panel in
+  `wait-events.md` (left to the close, where the views are written up).
