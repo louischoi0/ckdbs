@@ -794,3 +794,22 @@ operator's standing go-ahead of 2026-11-01 (go-ahead-achieving-milestone).
 - **Suite** at this tree (`ctest -j8 -LE bs-nightly`, Debug): all but
   `DropTableReclaimCrashTest` (ENOSPC on `/tmp`, not a pass). Overhead not
   measured; measured at the milestone's close.
+
+**G2 gate** (from `82f59864`; `tests/ash_gate_test.cpp`, logical clock).
+
+| Check | Result |
+|---|---|
+| ASH distribution | Met on 12,000 samples: a task alternating `commit.wal_flush` / `io.page_read` on a seeded schedule; the sampled share is within 3 points of the injected share, and each sample names the true state turn for turn (stricter than the bar). |
+| Determinism | Met: one seed and clock run twice give byte-identical encoded records; a different seed gives different ones. |
+| Overhead | **Not measured.** ASH on vs off needs `build-release` and a second build tree the disk cannot hold; it is the milestone-close measurement. |
+| Boundaries | Met by tests already in the tree: wrap-around (`ash_ring_test`), `late` and the grid (`ash_sampler_test`), merge order (`show_sugar_contract_test`), the kill switch and a shortened interval (`ash_sampler_test`, `SET ASH` in `show_sugar_contract_test`). |
+| Volatility | Met at the unit level: a new scheduler for a core id starts with an empty ring and the dead one leaves the registry. A real crash and restart of an instance is not run: `sim/` drives no core runtime. |
+
+- **Review (`critics-developer`).** Applied: the truth count was one turn out of
+  step with the sample point; the share test now asserts exactly 12,000 records;
+  the determinism test asserts it produced records and that a second seed
+  differs in the encoded samples; the restart test no longer depends on the
+  process defaults or on test order. The per-sample check was added on the
+  review's suggestion. **Not applied:** none rejected.
+- **Suite** at this tree (`ctest -j8 -LE bs-nightly`, Debug): all but
+  `DropTableReclaimCrashTest` (ENOSPC on `/tmp`, not a pass).
