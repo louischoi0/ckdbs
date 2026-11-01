@@ -1,6 +1,7 @@
 #include "kds/sched/wait_state.hpp"
 
 #include <cassert>
+#include <cstdio>
 #include <mutex>
 
 namespace kds::sched {
@@ -54,6 +55,38 @@ std::vector<SessionWaitStats> SnapshotSessionWaits() {
     out.reserve(g_sessions.size());
     for (const SessionWaitStats* s : g_sessions) out.push_back(*s);
     return out;
+}
+
+std::string FormatDbTimeLine(const SessionWaitStats& before, const SessionWaitStats& after) {
+    static_assert(Index(stats::WaitEvent::kOnCpu) == 0, "ON_CPU is kept beside the table, not in it");
+    const auto delta = [](std::uint64_t a, std::uint64_t b) { return a > b ? a - b : 0; };
+    // Units of 10 us, so a part and the total print without a visible gap.
+    const auto units = [](std::uint64_t ns) { return (ns + 5'000) / 10'000; };
+    const auto ms = [](std::uint64_t u) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%llu.%02llu", static_cast<unsigned long long>(u / 100),
+                      static_cast<unsigned long long>(u % 100));
+        return std::string(buf);
+    };
+    const std::uint64_t cpu = units(delta(after.on_cpu_ns.get(), before.on_cpu_ns.get()));
+    std::uint64_t total = cpu;
+    std::string parts = " = CPU " + ms(cpu);
+    for (std::size_t i = 1; i < stats::kWaitEventCount; ++i) {
+        const stats::WaitEventDef& d = stats::kWaitEvents[i];
+        if (d.kind != stats::WaitKind::kTimed || !d.in_db_time) continue;
+        const std::uint64_t t = units(delta(after.events[i].total_ns.get(), before.events[i].total_ns.get()));
+        if (t == 0) continue;
+        total += t;
+        std::string_view name = d.name;
+        if (i == Index(stats::WaitEvent::kSchedRunQueue)) name = "run_queue";
+        parts += " + " + std::string(name) + " " + ms(t);
+    }
+    return "DB time " + ms(total) + " ms" + parts;
+}
+
+bool RunningTaskBooksTo(const SessionWaitStats* session) noexcept {
+    const TaskWaitState* t = Ctx().current;
+    return t != nullptr && session != nullptr && t->session == session;
 }
 
 void BindWaitContext(std::uint32_t core) noexcept {
@@ -196,6 +229,14 @@ void WaitOnPollEnter(TaskWaitState& task) noexcept {
     task.since_ns = now;
     c.cpu_since = now;
     Publish(task);
+}
+
+void FlushOnCpu() noexcept {
+    CoreWaitContext& c = Ctx();
+    if (c.current == nullptr || c.current->scoped) return;
+    const MonoTimeNs now = WaitNow();
+    BookCpu(c, *c.current, now - c.cpu_since);
+    c.cpu_since = now;
 }
 
 void WaitOnPollExit(TaskWaitState& task, bool parked, bool done) noexcept {

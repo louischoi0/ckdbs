@@ -1509,7 +1509,22 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (rest.empty()) {
             return {"ERR ANALYZE needs a statement to analyze", false};
         }
-        return HandleSelect(rest, session, /*analyze=*/true);
+        // **The DB-time line** (CJ's WE10, the order's §2.8): the session's wait
+        // statistics before and after the run, the open ON_CPU segment booked
+        // first so the statement's own CPU is in the second reading. Printed
+        // only when the task being polled books to this session; a run with no
+        // such task (a synchronous caller) would print a false 0, so it prints
+        // no line.
+        sched::SessionWaitStats* waits = session.WaitStats();
+        const bool measured = sched::RunningTaskBooksTo(waits);
+        sched::FlushOnCpu();
+        const sched::SessionWaitStats before = *waits;
+        DispatchOutcome out = HandleSelect(rest, session, /*analyze=*/true);
+        if (measured && out.status.ok() && out.response.rfind("analyze ", 0) == 0) {
+            sched::FlushOnCpu();
+            out.response += "\\n" + sched::FormatDbTimeLine(before, *waits);
+        }
+        return out;
     }
     // **The Waystone opt-in** (CF-S1b, `workorder-cf-waystone-premise.md`
     // §8.3): a dispatcher prefix beside ANALYZE, so it needs no grammar

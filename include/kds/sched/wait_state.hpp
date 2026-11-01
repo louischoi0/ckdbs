@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "kds/sched/clock.hpp"
@@ -193,6 +194,20 @@ void SetStrictWaitScopes(bool strict) noexcept;
 // Zeroes the calling thread's totals and violation count. Tests.
 void ResetWaitContext() noexcept;
 
+// `ANALYZE`'s DB-time line (CJ's WE10, the order's §2.8), from a session's
+// statistics before and after a statement:
+//   `DB time 4.21 ms = CPU 1.02 + run_queue 0.11 + commit.wal_flush 2.95`
+// The total is the sum of the parts, and the parts are the session's deltas
+// (`sys.session_waits`), so the two views of the same statement agree. Idle
+// events and counters are not DB time (WD6) and are left out; events appear in
+// registry order, those with no time omitted.
+// Each part is rounded to 10 us and the total is the sum of the rounded parts,
+// so the line adds up as printed.
+std::string FormatDbTimeLine(const SessionWaitStats& before, const SessionWaitStats& after);
+// True when the task being polled on this thread books to `session`: the only
+// case in which a statement's own time is in the session's statistics.
+bool RunningTaskBooksTo(const SessionWaitStats* session) noexcept;
+
 #ifndef KDS_WAIT_INSTRUMENTATION_OFF
 
 // `WaitScope w(Event, p1, p2, p3); co_await ...;` - the task is WAITING on
@@ -227,6 +242,11 @@ void RecordCounterEvent(stats::WaitEvent event) noexcept;
 // wait; `done`: it finished. Neither: it yielded.
 void WaitOnPollEnter(TaskWaitState& task) noexcept;
 void WaitOnPollExit(TaskWaitState& task, bool parked, bool done) noexcept;
+// Books the running task's open ON_CPU segment to its session now and starts
+// the next from here, so a statement can read its own CPU time before it
+// ends. Segments are additive: this changes no total, only when it is booked.
+// A no-op when no task is being polled.
+void FlushOnCpu() noexcept;
 
 #else
 
@@ -239,6 +259,7 @@ public:
 inline void RecordCounterEvent(stats::WaitEvent) noexcept {}
 inline void WaitOnPollEnter(TaskWaitState&) noexcept {}
 inline void WaitOnPollExit(TaskWaitState&, bool, bool) noexcept {}
+inline void FlushOnCpu() noexcept {}
 
 #endif
 

@@ -813,3 +813,42 @@ operator's standing go-ahead of 2026-11-01 (go-ahead-achieving-milestone).
   review's suggestion. **Not applied:** none rejected.
 - **Suite** at this tree (`ctest -j8 -LE bs-nightly`, Debug): all but
   `DropTableReclaimCrashTest` (ENOSPC on `/tmp`, not a pass).
+
+**G1 gate** (run after P2, before WE10; `tests/ash_gate_test.cpp`).
+
+| Check | Result |
+|---|---|
+| I2 completeness | Met for the suite: 0 assert violations over `ctest -LE bs-nightly` (Debug), every core a strict one. `sim/` drives no core runtime, so "and simulation" is not covered. |
+| I3 DB time | Met: over 2,000 seeded statements ON_CPU + run queue + waits equal the elapsed time within 1 % (exactly, on the logical clock). |
+| Overhead | **Not measured** (milestone-close measurement; the disk cannot hold `build-release`). |
+| Determinism | Met: the same seed gives identical cumulative statistics, histograms included. |
+
+**WE10 - `ANALYZE`** (from `aeec4e0d`).
+- **Built.** `ANALYZE` appends `DB time 4.21 ms = CPU 1.02 + commit.wal_flush
+  2.95 + ...` (`FormatDbTimeLine`): the session's on-CPU and timed in-DB-time
+  event deltas across the run, in registry order, `sched.run_queue` printed
+  `run_queue`, idle and counters left out, each part rounded to 10 us and the
+  total their sum. `FlushOnCpu` books the running task's open ON_CPU segment
+  before each reading, so the statement's own CPU is in the second one; it
+  changes no total, only when a segment is booked.
+- **Scope of "equals the delta".** The total equals the `sys.session_waits`
+  delta taken between the two readings, i.e. the run itself; the parse prefix,
+  the queue wait before the dispatch and the tail after the second reading are
+  outside it.
+- **Printed only when measured.** The line appears only when the task being
+  polled books to the ANALYZE's own session (`RunningTaskBooksTo`). A
+  synchronous `Dispatch` with no such task would print a false 0, so it
+  prints no line (found in review).
+- **No cross-core line.** `xcore.*` has no call site (WE04 finding), so no
+  remote step exists to print; the events stay registered and would count in
+  the originating session if booked (WD1).
+- **Review (`critics-developer`).** Applied: the measured gate; the total as
+  the sum of rounded parts; a compiled-out-build guard and a 1 ms ticking
+  clock for the in-task test (it was flaky below the 10 us resolution); a
+  `static_assert` on ON_CPU being index 0. **Not applied:** an
+  `ANALYZE`-over-`DispatchAsync` test (the branch is shared; the in-task test
+  polls the synchronous call); the manual and spec lines for the new output,
+  left to the milestone's close.
+- **Suite** at this tree (`ctest -j8 -LE bs-nightly`, Debug): all but
+  `DropTableReclaimCrashTest` (ENOSPC on `/tmp`, not a pass). Overhead not
+  measured; measured at the milestone's close.

@@ -250,6 +250,37 @@ TEST_F(WaitStateTest, ASessionBooksItsTasksTimeAndItsTimeIsConserved) {
     for (const SessionWaitStats& s : SnapshotSessionWaits()) EXPECT_NE(s.session_id, id);
 }
 
+TEST_F(WaitStateTest, TheDbTimeLineIsTheSessionsDeltaInRegistryOrder) {
+    // CJ's WE10: the line's total is the sum of the session's deltas.
+    auto session = MakeSessionWaitStats();
+    const SessionWaitStats before = *session;
+    const auto idx = [](WaitEvent e) { return static_cast<std::size_t>(e); };
+    session->on_cpu_ns.add(1'020'000);
+    session->events[idx(WaitEvent::kIoPageRead)].total_ns.add(130'000);
+    session->events[idx(WaitEvent::kCommitWalFlush)].total_ns.add(2'950'000);
+    session->events[idx(WaitEvent::kSchedRunQueue)].total_ns.add(110'000);
+    session->events[idx(WaitEvent::kIdleClient)].total_ns.add(9'000'000);  // not DB time
+    EXPECT_EQ(FormatDbTimeLine(before, *session),
+              "DB time 4.21 ms = CPU 1.02 + commit.wal_flush 2.95 + io.page_read 0.13 + run_queue 0.11")
+        << "registry order, idle left out";
+    EXPECT_EQ(FormatDbTimeLine(*session, *session), "DB time 0.00 ms = CPU 0.00");
+}
+
+TEST_F(WaitStateTest, FlushOnCpuBooksTheOpenSegmentWithoutChangingTheTotal) {
+    auto session = MakeSessionWaitStats();
+    auto body = [&]() -> Coro {
+        clock_.Advance(100);
+        FlushOnCpu();
+        EXPECT_EQ(session->on_cpu_ns.get(), 100u) << "booked before the statement ends";
+        clock_.Advance(50);
+        co_return Status::OK();
+    };
+    CoroTask task(SchedulingGroup::kForeground, body());
+    task.wait_state_mut().session = session.get();
+    EXPECT_EQ(task.Poll(), PollResult::kDone);
+    EXPECT_EQ(session->on_cpu_ns.get(), 150u);
+}
+
 #ifndef NDEBUG
 TEST_F(WaitStateTest, AStrictCoreRefusesAParkOutsideEveryScope) {
     SetStrictWaitScopes(true);

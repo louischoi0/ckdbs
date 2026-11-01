@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -163,6 +165,79 @@ TEST(AshGate, ARestartedCoreStartsWithAnEmptyRing) {
     EXPECT_TRUE(AshRingOfCore(57)->Snapshot().empty());
     SetWaitClock(nullptr);
     ResetWaitContext();
+}
+
+// ---- G1: I3 and the determinism of the cumulative statistics -----------------
+
+// What a run of `kStatements` seeded statements leaves in the calling
+// thread's totals, and the worst per-statement conservation error.
+struct StatementRun {
+    double worst_error = 0;  // |elapsed - accounted| / elapsed, over statements
+    std::vector<std::uint64_t> core_totals;  // count, total, max per event + on_cpu
+};
+
+StatementRun RunStatements(std::uint64_t seed, int kStatements) {
+    ResetWaitContext();
+    ManualClock clock(0);
+    SetWaitClock(&clock);
+    std::uint64_t x = seed * 6364136223846793005ull + 1;
+    const auto next = [&](std::uint64_t mod) {
+        x = x * 6364136223846793005ull + 1442695040888963407ull;
+        return (x >> 33) % mod;
+    };
+    static constexpr WaitEvent kEvents[] = {WaitEvent::kCommitWalFlush, WaitEvent::kIoPageRead,
+                                            WaitEvent::kAppLockWait, WaitEvent::kIoVarHeapRead};
+    StatementRun out;
+    for (int i = 0; i < kStatements; ++i) {
+        auto session = MakeSessionWaitStats();
+        const WaitEvent ev = kEvents[next(4)];
+        const std::uint64_t cpu1 = 1 + next(5000), cpu2 = next(5000), wait = 1 + next(2'000'000);
+        bool ready = false;
+        auto body = [&]() -> Coro {
+            clock.Advance(cpu1);
+            {
+                WaitScope w(ev, 1);
+                co_await WaitFor{&ready};
+            }
+            clock.Advance(cpu2);
+            co_return Status::OK();
+        };
+        CoroTask task(SchedulingGroup::kForeground, body());
+        task.wait_state_mut().session = session.get();
+        const MonoTimeNs start = clock.Now();
+        clock.Advance(next(3000));  // queued before the first poll
+        task.Poll();
+        clock.Advance(wait);
+        ready = true;
+        task.Poll();
+        const double elapsed = static_cast<double>(clock.Now() - start);
+        std::uint64_t accounted = session->on_cpu_ns.get();
+        for (std::size_t e = 1; e < stats::kWaitEventCount; ++e) accounted += session->events[e].total_ns.get();
+        out.worst_error = std::max(out.worst_error, std::abs(elapsed - static_cast<double>(accounted)) / elapsed);
+    }
+    const CoreWaitTotals& t = WaitTotals();
+    out.core_totals.push_back(t.on_cpu_ns.get());
+    for (const EventTotals& e : t.totals) {
+        out.core_totals.push_back(e.count.get());
+        out.core_totals.push_back(e.total_ns.get());
+        out.core_totals.push_back(e.max_ns.get());
+        for (const RelaxedU64& b : e.histogram) out.core_totals.push_back(b.get());
+    }
+    SetWaitClock(nullptr);
+    ResetWaitContext();
+    return out;
+}
+
+TEST(AshGate, EveryStatementsDbTimeIsConservedWithinOnePercent) {
+    const StatementRun r = RunStatements(3, 2000);
+    EXPECT_LE(r.worst_error, 0.01) << "I3: ON_CPU + run queue + waits account for the statement's elapsed time";
+}
+
+TEST(AshGate, TheSameSeedGivesIdenticalCumulativeStatistics) {
+    const StatementRun a = RunStatements(5, 500);
+    const StatementRun b = RunStatements(5, 500);
+    EXPECT_EQ(a.core_totals, b.core_totals);
+    EXPECT_NE(a.core_totals, RunStatements(6, 500).core_totals) << "the seed does change the run";
 }
 
 }  // namespace
