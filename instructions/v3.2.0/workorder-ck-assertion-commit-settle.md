@@ -544,22 +544,91 @@ over `src`, `include`, `tests`, `sim`, `tools`, `scripts`, `fuzz`, `manual` and
   `assertion_check.cpp:869`, `assertion_replay.cpp:120`), defines it, or is a
   test or a comment. No `docs`, `manual`, `scripts`, `sim`, `fuzz`, backup
   manifest or restore check names it.
-- **Shipped tags**: `v3.1.0` and `v3.4.6` each have exactly one
-  `.reserved()` call outside the definition, `assertion_replay.cpp:44`, and
-  `v3.1.0`, `v3.2.0`, `v3.3.0` and `v3.4.0` each have 12 lines naming
-  `kEntryReserved` or `.reserved()` under `src` and `include`. The other tags
-  (`v3.4.1`..`v3.4.5`) were not read line by line: the same count is
-  inferred, not checked.
-- **H1 holds at part 1**: no reader of a page's bit. CK-Q3 (a)'s condition
-  ("S0 confirms H1 for every shipped tag") is met for the tags read and open
-  for `v3.4.1`..`v3.4.5`.
+- **Shipped tags, all ten read** (`v3.1.0`, `v3.2.0`, `v3.3.0`, `v3.4.0`,
+  `v3.4.1`..`v3.4.6`): each has exactly one `.reserved()` call outside the
+  definition, `src/exec/assertion_replay.cpp:44`. CK-Q3 (a)'s condition
+  ("S0 confirms H1 for every shipped tag") is met.
+- **H1 holds at part 1.**
 
-### CK-S0 parts 2-4 - not executed
+### CK-S0 parts 2-4 - 2026-11-01
 
-**The environment cannot build.** In worktree `ck-assertion-commit-settle`
-at `706beedb`, `scripts/build.sh` stops at configure: `Could NOT find GTest
-(missing: GTEST_LIBRARY GTEST_INCLUDE_DIR GTEST_MAIN_LIBRARY)`
-(`tests/CMakeLists.txt:1`). The spike, the full Debug suite, the sim's
-assertion workload, the sanitizer builds, the crash cells and the H3
-measurement have **not been run**, and nothing here is a pass for any of
-them. `libgtest-dev` (or an equivalent) has to be installed first.
+`[measured]` In worktree `ck-assertion-commit-settle` at `b66a0dbe`
+(`v3.4.6-12-gb66a0dbe`). The first build stopped at configure for want of
+GTest, and then at a compile for want of `/tmp` space; both were the host's,
+not the tree's (GTest installed by the operator, compiles run with `TMPDIR`
+on the root disk).
+
+**Part 2, the spike** (`CommitTxn` erases `pending_[txn]` and nothing else).
+- **The base suite**, `-j6`, 4337 cells: 4332 pass, 4 not run (2 disabled, 2
+  skipped), 1 failed (`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`);
+  it passed alone, 5 of 5.
+- **The spike suite**, `-j6`, 4337 cells: 4332 pass, 4 not run, 1 failed
+  (`SortedLeafRigTest.NamedKeysFromTwoCoresInterleaveIntoOneLeafInKeyOrder`,
+  `file_rig_crash.hpp:81`, a statement answered `ERR`). That cell declares no
+  assertion, and **the base binary fails it too: 9 of 50 serial runs**, so it is
+  a pre-existing flake and not the spike's. It is not filed as a bug here.
+- **Every `assertion_*` and `bound_cabin` cell** (174) passes on the spike, so
+  no expectation pinned the settle. No cell had to be rewritten, and none
+  found a reader.
+- **The sim corpus**, Debug `ckdbs-sim`, `SIM_BIN=build/ckdbs-sim
+  scripts/sim.sh 4`, on the spike: 280 runs, 0 failures.
+- **Not run: the sanitizer builds** (BS-S1). They cost a rebuild each and are
+  left for CK-S2.
+
+**Part 3, the crash cells** (`tests/assertion_crash_test.cpp`, `b66a0dbe`).
+- A committed departure across a crash (`ACommittedDepartureFreesItsSlotAcrossACrash`)
+  gives the same answer on the base and the spike.
+- **CK-Q4**: an image written by the base binary, holding 2 `ASSERT_COMMIT`
+  records, mounts on the spike and enforces; an image written by the spike
+  (no `ASSERT_COMMIT`) mounts on the base and enforces. This is the evidence
+  for CK-Q3 (a) in both directions, and it was run once by a throwaway cell
+  that is not in the tree.
+- **CK-Q5 (a), reproduced on the base binary**: an undecided **departure**
+  fails open (a full group admits another row after the mount) and an
+  undecided **arrival** fails closed (both probes refused where one should
+  be admitted). The spike answers the same, so the path does not run
+  through the settle. The two cells are `DISABLED_` and red when enabled;
+  the bug entry carries the reproduction.
+- **Not written: the same across a checkpoint**, and AS6b's two orders as new
+  cells; the existing `AnAbortBeforeTheCheckpoint...` and `AnAbortAfter...`
+  cells (`assertion_recover_test.cpp:1242`, `:1296`) pass on the spike. A
+  checkpoint variant needs a checkpoint driven through the rig, and is left
+  for CK-S2.
+
+**Part 4, H3** (`bench/v3.4.6/results-ck-s0-settle-v3.4.6-12-gb66a0dbe.md`,
+driver `tools/assertion_settle_benchmark.py`, a sibling of
+`tools/assertion_benchmark.py`, which is unchanged). Release builds of both
+trees, an interleaved A/B in one window, the driver pinned off the server's
+CPUs; the full grid ran (0, 1 and 4 assertions, K = 1, 10, 100, `relaxed`
+and `group`, 1 and 2 cores), with 1,000 preload rows only and 5 measured rounds.
+- **Server CPU per commit: no cell is outside the spread**, and the control
+  moves as much as the asserted cells. The meter is 10 ms `/proc` ticks (1 to
+  85 µs per commit), and about one window in five ran at twice the CPU for an
+  unidentified cause. So CPU cannot resolve the settle.
+- **The `COMMIT` statement's latency shows it**, `relaxed` only: spike minus
+  base at p50 is -0.3 to -0.9 µs at K=1, -0.7 to -2.7 µs at K=10, and -4.2 to
+  -4.8 µs (one assertion) and -14.8 to -16.0 µs (four) at K=100, against a
+  control of 0.3 µs or less. That is about 40 to 70 ns per reservation, under
+  0.5 % of a K=100 transaction's wall time. Under `group` the settle is
+  unresolved against the sync's noise, not shown to be zero.
+- **Cut**: preload 200 and 10,000 rows, per-round percentiles, and a count of
+  `ASSERT_COMMIT` records or pages on the base (the settle's cost is inferred
+  from latency, not counted).
+
+### CK-S0 verdict - for the operator's mark (CK-Q0 (a))
+
+| Hypothesis | Result |
+|---|---|
+| **H1**, the page's bit has no reader | **Held**: one reader in ten tags, reading the record's bytes; no cell, view or tool reads a page's bit; 174 assertion cells and the sim corpus pass without the settle. Not covered: the sanitizer builds and a checkpoint-variant cell |
+| **H2**, removing the settle removes a failure point | **Held by reading**: the spike's `CommitTxn` cannot fail. Not exercised by a cell: the full-pool / injected-append failure of CK-S2 (iv) is not written, and the failure it removes was never reproduced (§1.6) |
+| **H3**, the settle costs something measurable | **Held in sign, small**: visible only in the `COMMIT` statement's latency, tens of ns per reservation; no server-CPU cell is outside the spread |
+
+**CLA's reading of §3's rule: build**, on H1 and CK-Q2 (a), whose reason is
+H2 and not H3. The operator marks it: CK-Q0 (a) reserves this verdict, because
+CK redefines what an authoritative page's bit means. Nothing in CK-S1 has been
+built, and the spike is not in the tree (its patch was kept outside it).
+
+**Separately, CK-Q5's recommendation stands and is firmer**: the crash-loser
+path is reproduced on the base, a departure fails open `[quiet-wrong]`, and CLA
+recommends the operator open an order for its fix without waiting for CK's
+close.
