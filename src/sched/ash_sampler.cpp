@@ -1,5 +1,7 @@
 #include "kds/sched/ash_sampler.hpp"
 
+#include "kds/stats/optimizer_signals.hpp"
+
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -144,6 +146,11 @@ void AshSampler::Add(TaskWaitState* state, std::uint8_t sched_group) noexcept {
         r.session_id = state->background_id;
     }
     if (state->state == TaskState::kWaiting) {
+        if (wait_sink_ != nullptr && session != nullptr) {
+            if (const std::uint64_t pattern = session->pattern_id.get(); pattern != 0) {
+                wait_sink_->NoteWaitSample(pattern);
+            }
+        }
         r.p1 = state->p1;
         r.p2 = state->p2;
         r.p3 = state->p3;

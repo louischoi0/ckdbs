@@ -5,6 +5,7 @@
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/sched/wait_state.hpp"
+#include "kds/stats/optimizer_signals.hpp"
 
 // CJ's WE07 (`instructions/v3.2.0/workorder-cj-wait-events-ash.md` §2.7): the
 // sampler on a logical clock, driven by the real scheduler's turn.
@@ -162,6 +163,25 @@ TEST_F(AshSamplerTest, AShorterIntervalTakesEffectAtTheNextTurn) {
     clock_.Advance(kInterval);
     scheduler_.RunOnce();
     EXPECT_EQ(Records().size(), 1u) << "no wait for the old, longer grid point";
+}
+
+TEST_F(AshSamplerTest, AWaitingSampleOfAShapeIsHandedToTheWaitSink) {
+    stats::OptimizerSignals sink(&clock_, 600'000'000'000ULL);
+    sink.NoteExecution(77, 1);  // a shape is tracked once it has run
+    scheduler_.ash().set_wait_sink(&sink);
+    auto shaped = MakeSessionWaitStats();
+    shaped->pattern_id.set(77);
+    auto unshaped = MakeSessionWaitStats();  // a session between statements: no shape
+    Park(WaitEvent::kCommitWalFlush, shaped.get());
+    Park(WaitEvent::kCommitWalFlush, unshaped.get());
+    Park(WaitEvent::kCommitWalFlush);  // a background task: no session
+    scheduler_.RunOnce();
+    clock_.Advance(kInterval);
+    scheduler_.RunOnce();
+    const auto snap = sink.Snapshot();
+    ASSERT_EQ(snap.fingerprints.size(), 1u);
+    EXPECT_EQ(snap.fingerprints[0].wait_samples_q8, stats::kDecayScoreScale)
+        << "one waiting sample of the shape; the unshaped session and the background task add none";
 }
 
 }  // namespace

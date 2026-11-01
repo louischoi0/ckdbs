@@ -324,6 +324,10 @@ struct DispatchOutcome {
     // `SELECT`, `INSERT` and `UPDATE` do). Carried for `poison_withheld`'s
     // reason: another statement of this core can run before this one ends.
     std::uint64_t fetch_id = 0;
+    // The same fingerprint's shape (CJ WE13), for ASH. Its argument hash is
+    // not carried: a KWP bind is substituted into the text before the parse, so
+    // the hash covers bind values, which WD11 forbids recording.
+    std::uint64_t pattern_id = 0;
 
     // **The relation `rows_affected` counts rows of** (BO-S6), for
     // `sys.relation_stats`: set beside a write's count, 0 everywhere else.
@@ -2738,6 +2742,7 @@ private:
     // The running statement's `fetch_id`, set by the parse that has one and
     // copied onto its outcome by `DispatchAndStage` (BO-S5).
     std::uint64_t statement_fetch_id_ = 0;
+    std::uint64_t statement_pattern_id_ = 0;
 
     // **The fault net every wait in this file is bounded by**, and the
     // one thing `lock_wait_fault_net_ms` sets; defaults to the constant.

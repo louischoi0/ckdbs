@@ -45,6 +45,10 @@
 // are what a sampler adopts when it takes its core id; the ring size is read
 // once, at construction, and changes only on restart.
 
+namespace kds::stats {
+class OptimizerSignals;
+}
+
 namespace kds::sched {
 
 // `kds.ash.interval_ms` and `kds.ash.ring_bytes_per_core` ranges (the order's
@@ -115,6 +119,12 @@ public:
         control_->capture_arg_hash.store(on, std::memory_order_relaxed);
     }
 
+    // The Cabin controller's collector, which gets one note per WAITING sample
+    // of a statement that has a shape (CJ's WE13; called on this core's thread,
+    // the collector latches itself). Set at startup, before the worker exists;
+    // null (the default) notes nothing.
+    void set_wait_sink(stats::OptimizerSignals* sink) noexcept { wait_sink_ = sink; }
+
     // The ring, shared so a reader on another core outlives the scheduler's
     // teardown (WE08).
     const std::shared_ptr<stats::AshRing>& ring() const noexcept { return ring_; }
@@ -132,6 +142,7 @@ private:
     std::uint32_t core_id_ = 0;
     std::shared_ptr<stats::AshRing> ring_;
     std::shared_ptr<AshControl> control_;
+    stats::OptimizerSignals* wait_sink_ = nullptr;
     bool armed_ = false;
     MonoTimeNs next_due_ns_ = 0;
     // The current batch.

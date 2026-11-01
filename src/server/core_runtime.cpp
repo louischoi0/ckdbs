@@ -106,6 +106,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
 
     runtime->scheduler_.emplace(clock, *runtime->io_backend_, config.scheduler);
     runtime->scheduler_->SetLogger(log);
+    // The ASH sampler's wait signal into the instance's collector (CJ WE13).
+    runtime->scheduler_->ash().set_wait_sink(config.optimizer.signals);
     // **The reactor learns its core here**, with no registry: `RunOnce`
     // sets the thread's `CurrentCore()` from it every iteration, so a
     // reactor left at the default runs as core 0 - re-entering core 0's

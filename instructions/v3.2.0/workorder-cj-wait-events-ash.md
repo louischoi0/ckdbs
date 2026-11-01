@@ -896,3 +896,42 @@ standing go-ahead of 2026-11-01 (go-ahead-achieving-milestone).
   parses rows); `--fingerprint 0` was ignored. **Not applied:** a test of the Python
   tallies (nothing in the suite runs Python); a mention of the panel in
   `wait-events.md` (left to the close, where the views are written up).
+
+**WE13 - an auxiliary wait signal for the Cabin controller `[EXPERIMENTAL]`**
+(from `5af336a3`). Adopts CJ-Q15 on the operator's standing go-ahead of
+2026-11-01 (go-ahead-achieving-milestone), under CJ-Q4 (a).
+- **CJ-Q15 - what "an auxiliary input" may be.** The order says ASH fingerprint
+  activity feeds the controller, must not break the deterministic replay tests
+  and shares the controller's switch. No cost model prices a wait. *(a) collect
+  it as a fourth signal S4 (a decayed count of WAITING samples per shape) in the
+  snapshot, read by no decision, so no decision or digest can move; (b) feed it
+  into `Decide` with a weight.* **CLA proposes (a):** (b) needs a cost model the
+  tree does not have, and any weight is a guess the replay tests would then pin.
+  Adopted. Nothing consumes S4 yet; it is the input a later cost model reads.
+- **Built.** `SessionWaitStats::pattern_id`, published by the dispatcher beside
+  the fingerprint (cleared at the statement's head, set after its dispatch);
+  `AshSampler::set_wait_sink(stats::OptimizerSignals*)`, called once per
+  WAITING sample of a statement that has a shape; `OptimizerSignals::
+  NoteWaitSample`, counting only a shape already tracked (a wait never admits or
+  evicts one) and only while `SET CABIN_OPTIMIZER` is on (its gate is the
+  switch); `SnapshotFingerprint::wait_samples_q8`. Wired for core 0 in
+  `Expeditor::Start` and for every peer in `CoreRuntime::Open`.
+- **Unchanged.** `Decide` reads `frequency_q8`, `pages_q8` and the log fields
+  only; the digest is `{version, decay_epoch}` and `NoteWaitSample` does not move
+  the version; eviction ranks by executions. The cabin traces and optimizer
+  tests pass unchanged, and a new test shows two collectors fed alike, one also
+  fed 100 waits, with equal decision fields.
+- **Review (`critics-developer`).** No correctness bug. Applied: the
+  one-implementation `AshWaitSink` interface is gone (a forward-declared
+  `OptimizerSignals*`; `stats` no longer includes the sampler header); the
+  dispatcher no longer publishes `arg_hash`. **Found, open for the operator:**
+  `fingerprint->arg_hash` is taken after a KWP bind is substituted into the SQL
+  text, so it covers bind values; WD11 says bind values are never recorded and a
+  hash of a low-entropy value can be reversed. Publishing it would have given
+  `ash_capture_arg_hash` its first writer; it is left unpublished, so that
+  setting still changes nothing outside its unit test (recorded in
+  `known-gaps.md`). **Not applied:** none rejected.
+- **Suite** at this tree (`ctest -j8 -LE bs-nightly`, Debug): all but
+  `DropTableReclaimCrashTest`, which fails with ENOSPC because `/tmp` is a
+  nearly full tmpfs; the same three cells run with `TMPDIR` on the root
+  filesystem pass. Overhead not measured here; measured at the close.

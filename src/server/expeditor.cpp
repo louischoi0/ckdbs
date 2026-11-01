@@ -1336,6 +1336,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->optimizer_signals_->SetLatch(&expeditor->optimizer_signals_latch_);
     }
     expeditor->cabin_optimizer_on_.store(expeditor->config_.cabin_optimizer);
+    // S4 (CJ WE13) counts only while the controller's own switch is on.
+    expeditor->optimizer_signals_->set_wait_gate(&expeditor->cabin_optimizer_on_);
     expeditor->plan_stats_.emplace(expeditor->config_.cores);
     // PHY04: the decision core and its executor, only where a Cabin can
     // exist at all. The cadence task registers in Serve() beside the
@@ -1811,6 +1813,7 @@ Status Expeditor::Start() {
     // Core 0's ASH ring into `sys.ash`'s registry (CJ WE08): at `cores = 1`
     // no `AttachWakerTable` runs below, which is where every other core's is.
     scheduler.ash().set_core_id(0);
+    scheduler.ash().set_wait_sink(&*optimizer_signals_);
     // `SHOW META`'s group-accounting block on core 0 (sched.md §4), cleared
     // on every exit by `ClearReactorBorrows` (above `ServeRuntime`).
     dispatcher_->set_scheduler_view(&scheduler);

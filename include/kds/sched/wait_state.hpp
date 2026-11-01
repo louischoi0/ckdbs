@@ -121,6 +121,9 @@ struct SessionWaitStats {
     // when the statement has one, the argument hash (WD11's opt-in rides on it).
     RelaxedU64 fingerprint;
     RelaxedU64 arg_hash;
+    // The statement's shape (`pattern_id`), which the Cabin controller counts
+    // by (WE13); `fingerprint` is its `fetch_id`.
+    RelaxedU64 pattern_id;
 };
 
 struct TaskWaitState {

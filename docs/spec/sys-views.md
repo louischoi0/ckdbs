@@ -57,7 +57,8 @@ than a relation:
 - **Refused:** aggregation (AG12: a view's rows come from no step chain), a
   join, a subquery predicate, a boolean conjunct (`OR`, `NOT`, an `IN`
   list, `LIKE`, `NotImplemented`), a function call (`NotImplemented`), a
-  column-to-column comparison, and `ANALYZE` over a view. A form only the
+  column-to-column comparison, and `ANALYZE` over a view. A panel that needs
+  counts reads the rows and counts them (`tools/ash_panel.py`). A form only the
   query layer reads (`parser-v2.md` I19: a value expression, an alias,
   `DISTINCT`, a set operation) is refused `NotImplemented` at the view's
   byte. The aggregation, join, `ANALYZE`, subquery-predicate and
@@ -111,6 +112,12 @@ returns only what it names, so that conjunct is not compared again.
 | `lock_waits` | engine | - | one lock wait (§6.3) |
 | `statement_stats` | engine | - | one statement shape (§6.1) |
 | `checkpoints` | engine | - | one checkpoint run (§6.4) |
+| `wait_event_names` | engine | - | one wait event of the registry (§6.5) |
+| `wait_stats` | engine | - | one event on one core, plus a NULL-core total row per event (§6.6) |
+| `wait_histogram` | engine | - | one non-empty log2 bucket of one event on one core (§6.6) |
+| `session_waits` | engine | - | one event a session has waited on, cumulative (§6.6) |
+| `session_state` | engine | - | one session's statement task as last published (§6.6) |
+| `ash` | engine | - | one active-session sample (§6.7) |
 | `page_slots` | engine | `page_id`, required | one page's header row, then one row per slot - or, on an internal node, its leftmost child, then one row per entry |
 | `meta` | engine | - | one `sys.meta` field: `(section, field, value)`, the session's core's (§7) |
 
@@ -215,6 +222,62 @@ event's parameters mean, NULL where it has none. `event_id` is the table
 index, internal and not stable across versions; 0 is the reserved
 `cpu.on_cpu`. A compile-time table: no ring, no counters, nothing to
 overflow. An engine-state view, reading no session view.
+
+### 6.6 Wait statistics (`sched/wait_state.hpp`)
+
+Cumulative, always on, memory only (CJ's WE05, WD4, `docs/spec/wait-events.md`
+names every event). A core's counters have one writer, that core, and are
+relaxed atomics any core reads without a latch, so a row is a moment's view:
+two columns of one row may differ by a wait in flight.
+
+- `wait_stats`: `core`, `event`, `class`, `count`, `total_us`, `max_us`. The
+  `cpu.on_cpu` row is the core's ON_CPU time (count 0). `core` is NULL on the
+  total rows (the sum over cores, `max_us` the largest). A synchronous read's
+  time is the core's stall, not one task's (CJ-Q8).
+- `wait_histogram`: `core`, `event`, `bucket`, `lo_us`, `count`; bucket k holds
+  waits of [2^k, 2^(k+1)) microseconds, 32 buckets, bucket 0 everything under
+  2 us.
+- `session_waits`: `session_id`, `event`, `count`, `total_us`; a session's
+  `cpu.on_cpu` row is its ON_CPU time and its RUNNABLE time is `sched.run_queue`.
+  A session's rows leave with it; a background task is no session.
+- `session_state`: `session_id`, `state`, `event`, `p1`-`p3`, `elapsed_us`. A
+  session between statements shows IDLE on `idle.client`. `session_id` is the
+  engine's private counter, not the KWP handshake id.
+
+**DB time** (I3) is ON_CPU + `sched.run_queue` + every timed event outside
+`idle.*`; `ANALYZE` prints a statement's as `DB time 4.21 ms = CPU 1.02 +
+commit.wal_flush 2.95 + ...` when the statement runs inside a task of its own
+session (the sum of the parts as printed, each rounded to 10 us). A cross-core
+step has no site today (every statement runs on its session's core, AT-S9), so
+no cross-core line prints.
+
+### 6.7 `sys.ash` (`sched/ash_sampler.hpp`, `stats/ash_ring.hpp`)
+
+The active-session history (CJ's WE06-WE09). Each core's reactor samples its
+own tasks once per `ash_interval_ms` (default 1000) on a drift-free grid: a
+task that is not IDLE, background tasks included (`session_kind` =
+`background`). A long step yields one batch at the real time with `late` = 1
+(more than a tenth of an interval after its due time), nothing interpolated.
+The sampler runs between polls, so `state` is never ON_CPU: CPU time reads as
+RUNNABLE (CJ-Q12); `sys.wait_stats` carries the exact figure.
+
+Columns: `sample_ts_us` (the instance's monotonic clock, not wall time), `core`,
+`session_id`, `session_kind`, `state`, `event`, `class`, `sched_group`, `late`,
+`arg_hash_valid` (1: `p1` is the statement's argument hash), `fingerprint` (the
+statement's `fetch_id`, 0 before a statement names one), `p1`-`p3`,
+`wait_elapsed_us`. The 64-byte record also holds `step_id`, `origin_session`
+and `trx_id`, which nothing fills yet and the view does not show.
+
+A view read copies each core's ring under that ring's own latch, so a query
+during sampling sees whole records, and merges by time (ties by core, then
+ring order). The ring is memory only, a fixed `ash_ring_bytes_per_core`
+(default 4 MiB, 1-64 MiB, restart-only) overwritten oldest-first; a restart
+begins empty. Filters are `WHERE` on the columns above.
+
+**Settings** (`kds.conf` keys, runtime change by `SET ASH`, admin): `ash_enabled`
+(on), `ash_interval_ms` (1000, 100-10000), `ash_capture_arg_hash` (off),
+`ash_ring_bytes_per_core`. Off keeps the ring; on continues it. The settings are
+process-wide, so two instances in one process share them.
 
 ## 7. `sys.meta`
 

@@ -753,6 +753,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     sched::SessionWaitStats* const ash_stats =
         (session != nullptr ? session : &autocommit_session_)->WaitStats();
     ash_stats->fingerprint.set(0);
+    ash_stats->pattern_id.set(0);
     // Every statement runs on the core its session is on (AT-S9). What
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
@@ -789,6 +790,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // rebuilt below (a refused commit, a walk's end) need not carry it.
     const std::uint64_t fetch_id = out->fetch_id;
     ash_stats->fingerprint.set(fetch_id);
+    ash_stats->pattern_id.set(out->pattern_id);
 
     // ---- R6-5: D5's bounded wait on an undecided row --------------------
     //
@@ -1038,9 +1040,11 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     last_refusal_detail_ = wire::kNoDetail;
     statement_trail_mark_ = 0;
     statement_fetch_id_ = 0;
+    statement_pattern_id_ = 0;
 
     DispatchOutcome outcome = body(active);
     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
+    outcome.pattern_id = std::exchange(statement_pattern_id_, 0);
     // Read back out of the member the write paths set: threading it through
     // InsertInner/UpdateInner/EndWrite and every handler between would be a
     // parameter on a dozen signatures for one number, and one statement runs
@@ -6003,6 +6007,7 @@ StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_vie
     if (const auto fingerprint = parser.fingerprint();
         fingerprint.has_value() && statement_fetch_id_ == 0) {
         statement_fetch_id_ = fingerprint->fetch_id;
+        statement_pattern_id_ = fingerprint->pattern_id;
     }
     return parsed;
 }
@@ -8578,6 +8583,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     if (const auto fingerprint = parser.fingerprint();
         fingerprint.has_value() && statement_fetch_id_ == 0) {
         statement_fetch_id_ = fingerprint->fetch_id;
+        statement_pattern_id_ = fingerprint->pattern_id;
     }
     if (!parsed.ok()) {
         // BU-Q9: what the native grammar refuses, the query layer may read.
