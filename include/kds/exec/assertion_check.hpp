@@ -49,8 +49,8 @@
 // A reservation counts in the aggregate from the moment of admission, which
 // is what makes a false admission impossible and is §4.3's deliberate
 // stricter-than-snapshot semantics. The pending set is keyed by the writing
-// transaction's id; COMMIT clears the RESERVED flags (batched per page,
-// ASSERT_COMMIT), ABORT reverses each reservation (ASSERT_ROLLBACK). In the
+// transaction's id; COMMIT drops it and writes nothing (CK-R2), ABORT reverses
+// each reservation (ASSERT_ROLLBACK). In the
 // no-transaction-manager configuration every statement is its own
 // transaction under kBootstrapXid, and the dispatcher ends it either way at
 // statement end - one statement at a time per registry is what makes the
@@ -93,8 +93,8 @@
 // (`rules.md` §3): a relation's page latch (UPDATE and DELETE reserve from
 // inside their walk), then the chain latch, then the cabin page's latch,
 // then the directory latch, then the WAL stream latch. Nothing takes the
-// directory latch and then a page latch: commit takes it, releases it, and
-// only then touches a page; abort takes the page first and the directory
+// directory latch and then a page latch: commit touches no page (CK-R2);
+// abort takes the page first and the directory
 // latch inside it, so its record is appended under the page's hold.
 // Nothing parks under either - every call here is synchronous.
 //
@@ -320,12 +320,12 @@ public:
                          catalog::Oid oid, std::span<const parser::AstValue> old_row,
                          std::uint64_t tuple_key, PageId row_page, std::uint16_t row_slot);
 
-    // Transaction end. Commit clears RESERVED flags on the entry pages and
-    // logs ASSERT_COMMIT per (assertion, page); the aggregates were correct
-    // from admission, so nothing else moves. Abort reverses each
-    // reservation and logs ASSERT_ROLLBACK per entry. Both forget the
-    // transaction's pending set; a transaction with none is a no-op.
-    Status CommitTxn(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id);
+    // Transaction end. Commit forgets the transaction's pending set and
+    // touches no page and no log: the aggregates were correct from admission,
+    // and `kEntryReserved` stays set on a committed entry (CK-R1). Abort
+    // reverses each reservation and logs ASSERT_ROLLBACK per entry; a
+    // transaction with no pending set is a no-op for both.
+    void CommitTxn(std::uint64_t txn_id);
     Status AbortTxn(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id);
 
 private:

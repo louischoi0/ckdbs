@@ -1,9 +1,11 @@
 # An assertion keeps the reservations of a crash loser and of a failed settle, and a stranded departure fails open
 
-**Found by reading, not reproduced.** Read in the main checkout on `main`
-at `18264195` (`v3.4.6-4-g18264195`), 2026-10-31, while writing
-`instructions/v3.2.0/workorder-ck-assertion-commit-settle.md`. The reading
-was confirmed by an independent read at the same commit.
+**Path 1 reproduced 2026-11-01** in worktree `ck-assertion-commit-settle` at
+`b66a0dbe` (`v3.4.6-12-gb66a0dbe`), on the base binary, in both directions
+(below); path 2 is still found by reading only. Found by reading in the main
+checkout on `main` at `18264195` (`v3.4.6-4-g18264195`), 2026-10-31, while
+writing `instructions/v3.2.0/workorder-ck-assertion-commit-settle.md`. The
+reading was confirmed by an independent read at the same commit.
 
 ## What is wrong
 
@@ -45,17 +47,28 @@ snapshot carries it forward. The dispatcher's comment calling path 2
 "Fail-closed" (`src/server/command_dispatcher.cpp:11653-11660`) misses the
 second and third rows.
 
-## The smallest reproduction (not yet run)
+## The reproduction (path 1, run on the base binary)
 
-Path 1, departure. Use an assertion `COUNT(*) <= 1` on a group holding one
-row:
-1. In a transaction, `DELETE` that row, and crash before `COMMIT`.
-2. Mount. The row is back, and the group's count reads 0.
-3. An `INSERT` into the group is admitted, giving 2 rows under a bound of
-   1.
+Two cells in `tests/assertion_crash_test.cpp`, `DISABLED_` because they are
+red: `DISABLED_AnUndecidedDepartureAtTheCrashIsGivenBack` and
+`DISABLED_AnUndecidedArrivalAtTheCrashIsGivenBack`
+(`kds_tests --gtest_filter='AssertionCrashTest.*' --gtest_also_run_disabled_tests`).
+Each runs the statements on a file-backed rig with an open transaction,
+takes the crash image and mounts it through production's mount.
 
-The recovery rig (`tests/assertion_recover_test.cpp`'s fixture) can drive
-it. The BS sim crashes at random ops with an assertion declared
+- **Departure, fails open `[quiet-wrong]`.** A group holds 3 rows under
+  `COUNT(*) <= 3`. An open transaction `DELETE`s one, and the crash image is
+  taken. After the mount 3 rows stand, and an `INSERT` into the group is
+  **admitted** (4 rows under a bound of 3).
+- **Arrival, fails closed.** A group holds 2 rows under `COUNT(*) <= 3`. An
+  open transaction `INSERT`s one, and the crash image is taken. After the
+  mount 2 rows stand, and **both** probing `INSERT`s are refused
+  `ASSERTION_VIOLATION`, where one should be admitted.
+
+The same two cells give the same answers on a binary with CK's spike (the
+settle removed), so the crash path does not depend on the settle. A
+committed departure across a crash is correct on both
+(`ACommittedDepartureFreesItsSlotAcrossACrash`). The BS sim crashes at random ops with an assertion declared
 (`sim/loop.cpp:416-425`), but no cell checks a group's total against a
 re-summation after a mount.
 
@@ -70,3 +83,20 @@ re-summation after a mount.
   `TXN_COMMIT` leaves a cleared bit on a loser (CK §1.8, CK-R4). No order
   carries it yet. CK-Q5 proposes that CK-S0 reproduce it and the operator
   open its order.
+
+## After CK-S1 (worktree `ck-assertion-commit-settle`, `9fd02f2e`, 2026-11-01)
+
+- **Path 2 as written is closed**: `CommitTxn` no longer touches a page or a
+  record, so it cannot fail part-way (CK-R2, CK-Q7 (a)).
+- **A neighbouring path stays open, and CK-R5's "no commit-time step can
+  strand a reservation" was wrong.** `CommitTxn` still takes the pending set
+  before `TransactionManager::Commit`, as it did on the base. A failed
+  `Commit` reaches `AbortTxn` with an empty set, so the reservations stay in
+  their totals while undo takes the rows back (a departure, or a negative SUM,
+  fails open `[quiet-wrong]`). `CommitLocal`'s failure arm never calls
+  `AbortTxn`, and the deferred path's `wal_->stopped()` abort finds the set
+  gone too. Not reproduced by a cell; found by the CK-S1 review's reading.
+  The fix is to drop the set only after the commit succeeds and to abort in
+  `CommitLocal`; it changes what `ReserverOnLocked` sees on another core, so
+  it belongs with path 1's order.
+- **Path 1 is untouched** by CK and is still open.

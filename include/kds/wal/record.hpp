@@ -99,7 +99,10 @@ enum class RecordType : std::uint8_t {
     // directory without re-reading any relation row. txn_id is the writer,
     // and the entry bytes carry kEntryReserved set.
     kAssertReserve = 18,
-    // The reserved→committed flag transition, batched **per page** rather
+    // **No longer written since CK (CK-R3)**: the number stays reserved and
+    // replay still folds one from a log written before CK (CK-Q4), clearing
+    // a bit no reader trusts (CK-R4). What it was:
+    // the reserved→committed flag transition, batched **per page** rather
     // than per transaction: a physiological record describes one page, so a
     // transaction holding reservations on N pages commits them with N of
     // these. Replay touches flags only - a reservation counts in the

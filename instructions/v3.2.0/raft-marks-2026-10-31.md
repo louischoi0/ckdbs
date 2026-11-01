@@ -28,7 +28,16 @@
 | **Does not settle** | Scenario 2's commit-protocol change; the advisory structures CA-R1..R6 describe; a push; a tag, a version |
 | **Recorded at** | this file; the CA order's header; the CA row and this file's row in `instructions/v3.2.0/index.md` |
 
-## 4. CJ written
+## 4. CK opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | *"go ck"*, then the standing go-ahead (`go-ahead-achieving-milestone`): follow CLA's proposal where a decision is needed |
+| **Mark** | **CK opened** in worktree `ck-assertion-commit-settle` at `8d183e9b`. CK-Q0..Q7 **adopted as CLA proposed, by CLA, on the operator's standing go-ahead** and not as per-item marks: Q0 (a), Q1 (a), Q2 (a), Q3 (a) if S0 confirms H1 for every shipped tag (else (b)), Q4 (a), Q5 (a), Q6 (a), Q7 (a). CK-Q0 (a) reserves S0's verdict (build, narrow or drop) to the operator, so the run ends at S0's close |
+| **Does not settle** | S0's verdict; CK-S1 onward; the crash-loser order (CK-Q5); a push; a tag, a version |
+| **Recorded at** | this file; the order's header and §4 and §7; the CK row in `index.md` |
+
+## 5. CJ written
 
 | | |
 |---|---|
@@ -37,7 +46,7 @@
 | **Does not settle** | CJ's opening; CJ-Q0..Q7; any stage; a push; a tag, a version |
 | **Recorded at** | this file; the CJ order; the CJ row in `instructions/v3.2.0/index.md` |
 
-## 5. CJ opened on the standing go-ahead
+## 6. CJ opened on the standing go-ahead
 
 | | |
 |---|---|

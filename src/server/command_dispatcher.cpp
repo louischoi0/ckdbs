@@ -10783,18 +10783,9 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
     txn::Transaction* txn = session.transaction();
     const std::uint64_t id = txn->id();
 
-    // The transaction's reservations become committed entries (§6.2 step
-    // 4): flags cleared, ASSERT_COMMIT logged, before the commit record. A
-    // failure leaves the transaction open - the client may retry COMMIT or
-    // ROLLBACK - but **not its pending set**: `CommitTxn` took it before the
-    // settle that failed. A retried COMMIT commits with the unsettled
-    // entries' flags left set; a ROLLBACK finds nothing to unapply and
-    // leaves their group totals counting rows it took back - too high, so
-    // the assertion refuses writes it could admit
-    // (`assertion-reservations-stranded-by-a-failed-settle.md`).
-    if (Status s = enforcer_->CommitTxn(page_store_, wal_, id); !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
-    }
+    // The transaction's reservations are committed by dropping its pending
+    // set (§6.2 step 4, CK-R2): no page and no record, so no failure.
+    enforcer_->CommitTxn(id);
     const bool deferred = DefersCommit(id);
     auto committed = deferred ? txn_->CommitDeferred(*txn) : txn_->Commit(*txn, effective_durability_);
 
@@ -11673,9 +11664,11 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // reservations settle here, exactly as a real transaction's do
         // below. One statement at a time per registry is what makes the shared
         // id safe.
-        return result.ok()
-                   ? enforcer_->CommitTxn(page_store_, wal_, catalog::kBootstrapXid)
-                   : enforcer_->AbortTxn(page_store_, wal_, catalog::kBootstrapXid);
+        if (result.ok()) {
+            enforcer_->CommitTxn(catalog::kBootstrapXid);
+            return Status::OK();
+        }
+        return enforcer_->AbortTxn(page_store_, wal_, catalog::kBootstrapXid);
     }
 
     // **R6-5: was this refusal one a wait could get past, and is the
@@ -11745,25 +11738,14 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         return AbortOwnedScope(scope, /*reported=*/Status::OK());
     }
 
-    // Flags before the commit record (§6.2 step 4's piggyback): if the
-    // commit then fails, the abort arm removes the entries whatever their
-    // flags say, so clearing early is recoverable in both directions.
-    //
-    // **Both failures below unwind** (AO-S6d, item 15), through
-    // `AbortOwnedScope`. Both are states `Abort` is defined for:
-    // `CommitTxn` here only clears assertion entries, and
-    // `TransactionManager::Commit` fails only ahead of its `PublishCommit`.
-    //
-    // **What the unwind cannot reach on the first arm**:
-    // `AssertionEnforcer::CommitTxn` takes the reservation list out of
-    // `pending_` before anything can fail, so a part-way failure strands
-    // its unsettled reservations and the Bound Cabin counts a contribution
-    // whose row was compensated. **Fail-closed** - an aggregate too high
-    // refuses writes, never admits one it should refuse. Its bug entry was
-    // closed unreproduced (`git show eeb88f47:docs/inflight/bugs/assertion-reservations-stranded-by-a-failed-settle.md`).
-    if (Status s = enforcer_->CommitTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
-        return AbortOwnedScope(scope, s);
-    }
+    // The reservations commit by dropping the pending set (§6.2 step 4,
+    // CK-R2): nothing is written, so nothing can fail before the commit
+    // record. A failed `TransactionManager::Commit` below fails only ahead of
+    // its `PublishCommit`, a state `Abort` is defined for - but the pending
+    // set is gone by then, so `AbortOwnedScope`'s `AbortTxn` finds nothing
+    // and the reservations stay in their group totals while undo takes the
+    // rows back (fails open for a departure).
+    enforcer_->CommitTxn(scope.txn->id());
     const bool deferred = DefersCommit(scope.txn->id());
     auto committed = deferred ? txn_->CommitDeferred(*scope.txn)
                               : txn_->Commit(*scope.txn, effective_durability_);
@@ -11792,8 +11774,8 @@ Status CommandDispatcher::AbortOwnedScope(WriteScope& scope, const Status& repor
 
     // **The enforcer's failure does not skip the transaction's own unwind**
     // (AO-S6d): unsettled assertion entries say nothing about whether the
-    // trail can be compensated. A no-op after a failed `enforcer_->CommitTxn`
-    // (nothing pending is left; `EndWrite` says what that leaves), called
+    // trail can be compensated. A no-op after a failed commit (`CommitTxn`
+    // dropped the pending set first; `EndWrite` says what that leaves), called
     // unconditionally because on the other two callers it is the whole
     // assertion unwind.
     Status unwound = enforcer_->AbortTxn(page_store_, wal_, id);

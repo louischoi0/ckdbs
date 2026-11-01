@@ -19,8 +19,12 @@ the operator's words, recorded in English (`raft-marks-2026-10-31.md` §1):
 - **W1**: *"Tell me about the assertion reservation settle."*
 - **W2**: *"Write an exploratory, verifying milestone document on (b)."*
 
-**Written 2026-10-31; not opened.** CK-Q0..Q7 carry CLA's proposals and
-none is marked. **Exploratory and verifying since W2** (§3): CK-S0
+**Written 2026-10-31; opened 2026-10-31 on the operator's standing go-ahead
+(go-ahead-achieving-milestone, `raft-marks-2026-10-31.md` §4)**, CK-Q0..Q7
+adopted as CLA proposed. The adoption is CLA's under that word, not the
+operator's per-item mark. CK-Q0 (a) reserved S0's verdict to the operator,
+who marked it **build** on 2026-11-01 ("build, go ahead with S1"); **closed on
+the work branch 2026-11-01** (§7, "CK close"), unmerged. **Exploratory and verifying since W2** (§3): CK-S0
 verifies the premise and measures the settle before anything is built,
 and its verdict is build, narrow or drop.
 
@@ -334,7 +338,17 @@ by a cell in CK-S0 and left to its own order (CK-Q5).
 
 ---
 
-## 4. Questions - not marked
+## 4. Questions
+
+**Adopted 2026-10-31 on the operator's standing go-ahead
+(go-ahead-achieving-milestone), each as CLA proposed**: CK-Q0 (a), CK-Q1 (a),
+CK-Q2 (a), CK-Q3 (a) if S0 confirms H1 for every shipped tag and otherwise
+(b), CK-Q4 (a), CK-Q5 (a), CK-Q6 (a), CK-Q7 (a). Decided by CLA, on the
+operator's word to follow its proposal; none is the operator's own mark.
+CK-R4 and CK-Q1 are `[quiet-wrong]`: their premise (the bit has no reader,
+§1.3) was re-read at `8d183e9b`, and `src` has not changed since `18264195`
+(only `instructions/` and `docs/` commits), so the proposals stand and S0 part 1
+re-verifies the census.
 
 **CK-Q0 - who decides after S0.**
 - (a) The operator marks S0's verdict.
@@ -513,4 +527,187 @@ The stage log goes in §7.
 
 ## 7. Stage log
 
-Not opened.
+Opened 2026-10-31 in worktree `ck-assertion-commit-settle` at `8d183e9b`
+(`origin/main` `d517cebc` and `main` `3f225096` merged).
+
+### CK-S0 part 1 - the census (H1), 2026-10-31
+
+`[source-read]` In worktree `ck-assertion-commit-settle` at `706beedb`, the
+search was `kEntryReserved`, `reserved()`, `ClearReserved` and `SetReserved`
+over `src`, `include`, `tests`, `sim`, `tools`, `scripts`, `fuzz`, `manual` and
+`docs` (the bug entries aside).
+
+- **One reader of the page-entry bit decides anything**:
+  `src/exec/assertion_replay.cpp:44`, and it reads the **record's** entry
+  bytes, never a page's (§1.3). Every other hit sets the bit
+  (`assertion_check.cpp:563`), writes a build entry without it
+  (`assertion_build.cpp:251`), clears it (`cabin_bound_page.cpp:192`,
+  `assertion_check.cpp:869`, `assertion_replay.cpp:120`), defines it, or is a
+  test or a comment. No `docs`, `manual`, `scripts`, `sim`, `fuzz`, backup
+  manifest or restore check names it.
+- **Shipped tags, all ten read** (`v3.1.0`, `v3.2.0`, `v3.3.0`, `v3.4.0`,
+  `v3.4.1`..`v3.4.6`): each has exactly one `.reserved()` call outside the
+  definition, `src/exec/assertion_replay.cpp:44`. CK-Q3 (a)'s condition
+  ("S0 confirms H1 for every shipped tag") is met.
+- **H1 holds at part 1.**
+
+### CK-S0 parts 2-4 - 2026-11-01
+
+`[measured]` In worktree `ck-assertion-commit-settle` at `b66a0dbe`
+(`v3.4.6-12-gb66a0dbe`). The first build stopped at configure for want of
+GTest, and then at a compile for want of `/tmp` space; both were the host's,
+not the tree's (GTest installed by the operator, compiles run with `TMPDIR`
+on the root disk).
+
+**Part 2, the spike** (`CommitTxn` erases `pending_[txn]` and nothing else).
+- **The base suite**, `-j6`, 4337 cells: 4332 pass, 4 not run (2 disabled, 2
+  skipped), 1 failed (`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`);
+  it passed alone, 5 of 5.
+- **The spike suite**, `-j6`, 4337 cells: 4332 pass, 4 not run, 1 failed
+  (`SortedLeafRigTest.NamedKeysFromTwoCoresInterleaveIntoOneLeafInKeyOrder`,
+  `file_rig_crash.hpp:81`, a statement answered `ERR`). That cell declares no
+  assertion, and **the base binary fails it too: 9 of 50 serial runs**, so it is
+  a pre-existing flake and not the spike's. It is not filed as a bug here.
+- **Every `assertion_*` and `bound_cabin` cell** (174) passes on the spike, so
+  no expectation pinned the settle. No cell had to be rewritten, and none
+  found a reader.
+- **The sim corpus**, Debug `ckdbs-sim`, `SIM_BIN=build/ckdbs-sim
+  scripts/sim.sh 4`, on the spike: 280 runs, 0 failures.
+- **Not run: the sanitizer builds** (BS-S1). They cost a rebuild each and are
+  left for CK-S2.
+
+**Part 3, the crash cells** (`tests/assertion_crash_test.cpp`, `b66a0dbe`).
+- A committed departure across a crash (`ACommittedDepartureFreesItsSlotAcrossACrash`)
+  gives the same answer on the base and the spike.
+- **CK-Q4**: an image written by the base binary, holding 2 `ASSERT_COMMIT`
+  records, mounts on the spike and enforces; an image written by the spike
+  (no `ASSERT_COMMIT`) mounts on the base and enforces. This is the evidence
+  for CK-Q3 (a) in both directions, and it was run once by a throwaway cell
+  that is not in the tree.
+- **CK-Q5 (a), reproduced on the base binary**: an undecided **departure**
+  fails open (a full group admits another row after the mount) and an
+  undecided **arrival** fails closed (both probes refused where one should
+  be admitted). The spike answers the same, so the path does not run
+  through the settle. The two cells are `DISABLED_` and red when enabled;
+  the bug entry carries the reproduction.
+- **Not written: the same across a checkpoint**, and AS6b's two orders as new
+  cells; the existing `AnAbortBeforeTheCheckpoint...` and `AnAbortAfter...`
+  cells (`assertion_recover_test.cpp:1242`, `:1296`) pass on the spike. A
+  checkpoint variant needs a checkpoint driven through the rig, and is left
+  for CK-S2.
+
+**Part 4, H3** (`bench/v3.4.6/results-ck-s0-settle-v3.4.6-12-gb66a0dbe.md`,
+driver `tools/assertion_settle_benchmark.py`, a sibling of
+`tools/assertion_benchmark.py`, which is unchanged). Release builds of both
+trees, an interleaved A/B in one window, the driver pinned off the server's
+CPUs; the full grid ran (0, 1 and 4 assertions, K = 1, 10, 100, `relaxed`
+and `group`, 1 and 2 cores), with 1,000 preload rows only and 5 measured rounds.
+- **Server CPU per commit: no cell is outside the spread**, and the control
+  moves as much as the asserted cells. The meter is 10 ms `/proc` ticks (1 to
+  85 µs per commit), and about one window in five ran at twice the CPU for an
+  unidentified cause. So CPU cannot resolve the settle.
+- **The `COMMIT` statement's latency shows it**, `relaxed` only: spike minus
+  base at p50 is -0.3 to -0.9 µs at K=1, -0.7 to -2.7 µs at K=10, and -4.2 to
+  -4.8 µs (one assertion) and -14.8 to -16.0 µs (four) at K=100, against a
+  control of 0.3 µs or less. That is about 40 to 70 ns per reservation, under
+  0.5 % of a K=100 transaction's wall time. Under `group` the settle is
+  unresolved against the sync's noise, not shown to be zero.
+- **Cut**: preload 200 and 10,000 rows, per-round percentiles, and a count of
+  `ASSERT_COMMIT` records or pages on the base (the settle's cost is inferred
+  from latency, not counted).
+
+### CK-S0 verdict - for the operator's mark (CK-Q0 (a))
+
+| Hypothesis | Result |
+|---|---|
+| **H1**, the page's bit has no reader | **Held**: one reader in ten tags, reading the record's bytes; no cell, view or tool reads a page's bit; 174 assertion cells and the sim corpus pass without the settle. Not covered: the sanitizer builds and a checkpoint-variant cell |
+| **H2**, removing the settle removes a failure point | **Held by reading**: the spike's `CommitTxn` cannot fail. Not exercised by a cell: the full-pool / injected-append failure of CK-S2 (iv) is not written, and the failure it removes was never reproduced (§1.6) |
+| **H3**, the settle costs something measurable | **Held in sign, small**: visible only in the `COMMIT` statement's latency, tens of ns per reservation; no server-CPU cell is outside the spread |
+
+**CLA's reading of §3's rule: build**, on H1 and CK-Q2 (a), whose reason is
+H2 and not H3. The operator marks it: CK-Q0 (a) reserves this verdict, because
+CK redefines what an authoritative page's bit means. Nothing in CK-S1 has been
+built, and the spike is not in the tree (its patch was kept outside it).
+
+**Separately, CK-Q5's recommendation stands and is firmer**: the crash-loser
+path is reproduced on the base, a departure fails open `[quiet-wrong]`, and CLA
+recommends the operator open an order for its fix without waiting for CK's
+close.
+
+### CK-S1 - the change (2026-11-01, operator's mark: "build, go ahead with S1")
+
+The operator marked CK-S0's verdict **build** on 2026-11-01 ("build, go ahead
+with S1"), so CK-Q0 (a) is the operator's own mark and not an adoption.
+
+Landed on `ck-assertion-commit-settle`: `AssertionEnforcer::CommitTxn` is
+`void CommitTxn(txn_id)` and erases the pending set only (CK-R2, CK-Q7 (a));
+the dispatcher's three failure arms are gone; `kEntryReserved`'s definition
+states CK-R1 and CK-R4; `ReplayCommit` stays (CK-Q4); the cell
+`ACommitLogsNoAssertCommitAndTheMountKeepsItsTotals` pins that no
+`ASSERT_COMMIT` is written and the mount keeps a commit's totals.
+
+**Review finding that corrects CK-R5 (not fixed here, not in scope).**
+CK-R5's "no commit-time step can strand a reservation" is false. `CommitTxn`
+still runs *before* `TransactionManager::Commit`, as it did on the base, so a
+failed `Commit` reaches `AbortTxn` with an empty pending set: the reservations
+stay in their group totals while undo takes the rows back (a departure or a
+negative SUM fails open, `[quiet-wrong]`). `CommitLocal`'s failure arm never
+calls `AbortTxn`, and the deferred path's `wal_->stopped()` abort finds the set
+gone too. What CK removed is the settle's own failure, nothing else. The fix
+(drop the set only after the commit succeeds, abort in `CommitLocal`) changes
+what `ReserverOnLocked` sees on another core and is its own order, with the
+crash-loser fix (CK-Q5). CK-S3 must not repeat CK-R5's sentence, and the bug
+entry's failed-settle half stays open for this path.
+
+### CK-S2 and CK-S3 (2026-11-01, worktree `ck-assertion-commit-settle`, `59167d99`)
+
+- **(i)** `AssertionRecoverTest.ACommittedReservationsEntryKeepsItsBitAndEveryConsumerAnswersAsBefore`:
+  entries written with `kEntryReserved` and never cleared; the linkage scan
+  attaches all, the sums and `VerifyAgainstEntries` agree. Passes.
+- **(ii)** The same cell runs a verifier that skips a reserved entry and
+  requires it to fail. Passes (the mutant is caught). The linkage scan's own
+  mutant was not written.
+- **(iii)** S0 part 3's crash cells are kept in `tests/assertion_crash_test.cpp`
+  (the committed departure cell enabled, the two crash-loser cells `DISABLED_`
+  for the order that fixes them), plus
+  `ACommitLogsNoAssertCommitAndTheMountKeepsItsTotals`.
+- **(iv)** **No cell, by construction**: `CommitTxn` is `void` and takes no
+  store and no log, so there is no pool refusal or append failure to inject.
+  H2 is carried by the signature, not exercised.
+- **(v)** `bench/v3.4.6/results-ck-close-v3.4.6-15-g59167d99.md`, base
+  `8d183e9b` against `59167d99`, release builds, interleaved, driver unpinned:
+  `relaxed` with assertions, the `COMMIT` p50 is shorter in every cell and never
+  longer (4.2 to 5.9 us at K=100 with one assertion, 14.7 to 17.8 us with
+  four); the control is unchanged on one core and moved up to 1.5 us on two,
+  which is the floor. `group` and server CPU resolve nothing, as in S0, and no
+  `group` cell is worse. Cut: preload 200 and 10,000, `strict`, per-round
+  percentiles.
+- **Review** (`critics-developer`): the diff correct; six stale comments and a
+  dead `#include <map>` fixed; **it found CK-R5's claim false** (the entry
+  above). Rejected: renaming `CommitClearsTheReservedFlagInPlace` in
+  `bound_cabin_test.cpp` (stale name, left so test ids hold; to rename with the
+  next touch).
+- **Suite**: Debug `ctest` at `9fd02f2e` (comment edits included) 4363 of 4363
+  passed, and the assertion and Bound Cabin cells (148) pass under gcc
+  ASan+UBSan on `59167d99`. The first run's one failure was
+  `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the known flake,
+  passing alone. **Not run**: clang ASan/TSan (no clang on the host,
+  `scripts/bs/install-llvm18.sh` not run), the sim corpus on the final tree, a
+  checkpoint-variant crash cell and `scripts/bs/mutants.sh`. The full suite was
+  not re-run after the two commits that touched only tests and docs
+  (`59167d99`'s tests: the 148 above and the new cell ran).
+- **CK-S3**: `assertion.md` (the `flags` row, §6.2 step 4, the record list,
+  the recovery sentence, the cost paragraph), `wal.md`, the bound-page and
+  enforcer comments, the dispatcher's comments (the stranded-settle and the
+  "Fail-closed" paragraphs deleted with their arms), the bug entry and
+  `known-gaps.md`. CLAUDE.md states no settle in any row, so it is unchanged.
+- **`origin/main`** fetched at close: nothing beyond the earlier merge.
+
+### CK close
+
+CK is closed on the work branch: build verified (H1), H2 by signature, H3
+small and sign-correct. The reason to have built it is one fewer failure point,
+not speed. **Two fail-open paths remain and are not CK's**: the crash loser
+(CK-Q5) and a failed `TransactionManager::Commit` (CK-R5's correction); CLA
+recommends one order for both. Push, merge to `main` and any tag wait for the
+operator.

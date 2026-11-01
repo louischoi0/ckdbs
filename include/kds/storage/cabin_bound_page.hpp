@@ -62,9 +62,14 @@
 
 namespace kds::storage::cabin {
 
-// `flags` bit 0: the entry was written by a statement that has not committed
-// (`docs/spec/assertion.md` §6.2 step 3). Cleared at commit, and the entry
-// plus its delta are removed at abort.
+// `flags` bit 0: the entry was written by the reservation path
+// (`docs/spec/assertion.md` §6.2 step 3). **It is never cleared on the live
+// path since CK (CK-R1)**: a commit writes nothing, so a committed entry
+// carries the bit as an undecided one does, and **no reader may trust it as
+// "in flight"** (CK-R4, `[quiet-wrong]`) - the one place it is read is
+// `ReplayEntry`, on a record's own bytes. A log written before CK holds
+// `ASSERT_COMMIT` records whose replay still clears it. At abort the entry
+// plus its delta are removed.
 //
 // **A reservation counts in the aggregate from the moment of admission**,
 // which is what makes false *admissions* impossible - the property §6.2 calls
@@ -207,20 +212,22 @@ public:
     StatusOr<BoundCabinEntry> Read(std::uint16_t index) const;
 
     // Rewrites an entry in place. The only mutations the format needs are flag
-    // moves - commit clears `kEntryReserved`, abort sets `kEntryOrphaned` - so
+    // moves - abort sets `kEntryOrphaned`, and replaying a pre-CK
+    // `ASSERT_COMMIT` clears `kEntryReserved` - so
     // nothing here ever shrinks and an entry's tuple key never changes. Abort still
     // removes the entry from the *directory*; the flag is what lets a rebuild
     // that reads only these pages agree with it.
     Status Write(std::uint16_t index, const BoundCabinEntry& entry);
 
-    // The two flag moves the format allows, named. Commit clears
-    // `kEntryReserved` (§6.2 step 4); abort sets `kEntryOrphaned` (AS6b).
+    // The two flag moves the format allows, named. Replaying a pre-CK
+    // `ASSERT_COMMIT` clears `kEntryReserved` (the live commit no longer does,
+    // CK-R1); abort sets `kEntryOrphaned` (AS6b).
     //
     // **Here rather than at the call sites**, because "a live page and a
     // replayed page hold the same bytes after the same flag move" is a property
     // of one function, not of four copies of read-tweak-write staying in step by
-    // eye. Both the live path (`exec/assertion_check.cpp`) and replay
-    // (`exec/assertion_replay.cpp`) go through these, which is what makes
+    // eye. Both the live abort (`exec/assertion_check.cpp`) and replay
+    // (`exec/assertion_replay.cpp`) go through `MarkOrphaned`, which is what makes
     // `AssertionReplayTest.TheFoldRestoresThePageAndTheDirectoryExactly`'s
     // byte-for-byte comparison a check on the callers rather than on the
     // mutation.
