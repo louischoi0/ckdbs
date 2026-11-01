@@ -22,8 +22,9 @@ the operator's words, recorded in English (`raft-marks-2026-10-31.md` §1):
 **Written 2026-10-31; opened 2026-10-31 on the operator's standing go-ahead
 (go-ahead-achieving-milestone, `raft-marks-2026-10-31.md` §4)**, CK-Q0..Q7
 adopted as CLA proposed. The adoption is CLA's under that word, not the
-operator's per-item mark. CK-Q0 (a) reserves S0's verdict to the operator, so
-the run stops there. **Exploratory and verifying since W2** (§3): CK-S0
+operator's per-item mark. CK-Q0 (a) reserved S0's verdict to the operator,
+who marked it **build** on 2026-11-01 ("build, go ahead with S1"); **closed on
+the work branch 2026-11-01** (§7, "CK close"), unmerged. **Exploratory and verifying since W2** (§3): CK-S0
 verifies the premise and measures the settle before anything is built,
 and its verdict is build, narrow or drop.
 
@@ -657,3 +658,56 @@ gone too. What CK removed is the settle's own failure, nothing else. The fix
 what `ReserverOnLocked` sees on another core and is its own order, with the
 crash-loser fix (CK-Q5). CK-S3 must not repeat CK-R5's sentence, and the bug
 entry's failed-settle half stays open for this path.
+
+### CK-S2 and CK-S3 (2026-11-01, worktree `ck-assertion-commit-settle`, `59167d99`)
+
+- **(i)** `AssertionRecoverTest.ACommittedReservationsEntryKeepsItsBitAndEveryConsumerAnswersAsBefore`:
+  entries written with `kEntryReserved` and never cleared; the linkage scan
+  attaches all, the sums and `VerifyAgainstEntries` agree. Passes.
+- **(ii)** The same cell runs a verifier that skips a reserved entry and
+  requires it to fail. Passes (the mutant is caught). The linkage scan's own
+  mutant was not written.
+- **(iii)** S0 part 3's crash cells are kept in `tests/assertion_crash_test.cpp`
+  (the committed departure cell enabled, the two crash-loser cells `DISABLED_`
+  for the order that fixes them), plus
+  `ACommitLogsNoAssertCommitAndTheMountKeepsItsTotals`.
+- **(iv)** **No cell, by construction**: `CommitTxn` is `void` and takes no
+  store and no log, so there is no pool refusal or append failure to inject.
+  H2 is carried by the signature, not exercised.
+- **(v)** `bench/v3.4.6/results-ck-close-v3.4.6-15-g59167d99.md`, base
+  `8d183e9b` against `59167d99`, release builds, interleaved, driver unpinned:
+  `relaxed` with assertions, the `COMMIT` p50 is shorter in every cell and never
+  longer (4.2 to 5.9 us at K=100 with one assertion, 14.7 to 17.8 us with
+  four); the control is unchanged on one core and moved up to 1.5 us on two,
+  which is the floor. `group` and server CPU resolve nothing, as in S0, and no
+  `group` cell is worse. Cut: preload 200 and 10,000, `strict`, per-round
+  percentiles.
+- **Review** (`critics-developer`): the diff correct; six stale comments and a
+  dead `#include <map>` fixed; **it found CK-R5's claim false** (the entry
+  above). Rejected: renaming `CommitClearsTheReservedFlagInPlace` in
+  `bound_cabin_test.cpp` (stale name, left so test ids hold; to rename with the
+  next touch).
+- **Suite**: Debug `ctest` at `9fd02f2e` (comment edits included) 4363 of 4363
+  passed, and the assertion and Bound Cabin cells (148) pass under gcc
+  ASan+UBSan on `59167d99`. The first run's one failure was
+  `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the known flake,
+  passing alone. **Not run**: clang ASan/TSan (no clang on the host,
+  `scripts/bs/install-llvm18.sh` not run), the sim corpus on the final tree, a
+  checkpoint-variant crash cell and `scripts/bs/mutants.sh`. The full suite was
+  not re-run after the two commits that touched only tests and docs
+  (`59167d99`'s tests: the 148 above and the new cell ran).
+- **CK-S3**: `assertion.md` (the `flags` row, §6.2 step 4, the record list,
+  the recovery sentence, the cost paragraph), `wal.md`, the bound-page and
+  enforcer comments, the dispatcher's comments (the stranded-settle and the
+  "Fail-closed" paragraphs deleted with their arms), the bug entry and
+  `known-gaps.md`. CLAUDE.md states no settle in any row, so it is unchanged.
+- **`origin/main`** fetched at close: nothing beyond the earlier merge.
+
+### CK close
+
+CK is closed on the work branch: build verified (H1), H2 by signature, H3
+small and sign-correct. The reason to have built it is one fewer failure point,
+not speed. **Two fail-open paths remain and are not CK's**: the crash loser
+(CK-Q5) and a failed `TransactionManager::Commit` (CK-R5's correction); CLA
+recommends one order for both. Push, merge to `main` and any tag wait for the
+operator.
