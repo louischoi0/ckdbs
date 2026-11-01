@@ -222,7 +222,7 @@ shared lookup machinery but different lifecycle contracts:
 | Field | Width | Notes |
 |---|---|---|
 | tuple key | 48 bit | Keystone id, authoritative (K1 invariants: never reused except after a `PURGE` freed it, never changed - `DELETE` writes the departure and `PURGE` writes none) |
-| flags | 8 bit | includes `RESERVED` for in-flight entries (§6) and `ORPHANED` (bit 3, `kEntryOrphaned`) for an entry whose reservation aborted (AS6b, §7) |
+| flags | 8 bit | includes `RESERVED` (bit 0), **set on every entry the reservation path wrote and never cleared on the live path since CK**: a committed entry carries it as an undecided one does, so no reader may trust it as "in flight" (CK-R4, `[quiet-wrong]`) - the one place it is read is replay's check of a record's own bytes - and `ORPHANED` (bit 3, `kEntryOrphaned`) for an entry whose reservation aborted (AS6b, §7) |
 | reserved | 8 bit | alignment; the word is the Keystone word's layout (BK-R2) |
 | location hint: page id / epoch / slot | 64 bit | advisory; shares Waystone validation rules; on hint failure fall back to tuple key descent and heal in place |
 | aggregate value | 64 bit | the row's `SUM` column value, inline (int64). For COUNT-only assertions this field is written as 1. |
@@ -380,8 +380,10 @@ On a checked write (per §4.2), executed inline in the writing statement:
    one step under the registry's latch - emit the WAL record (§7), apply the
    delta to the group header and release the hold. Proceed with the
    heap/index writes of the statement.
-4. **Commit:** clear `RESERVED` on the transaction's entries (piggybacked on
-   commit processing; aggregate is already correct).
+4. **Commit:** the transaction's pending set is dropped, and nothing is
+   written - no page, no record, no stamp (CK-R2). The aggregate was correct
+   from admission, and `RESERVED` stays set on the entries (CK-R1), so the
+   step cannot fail. (Before CK it cleared the bit and logged `ASSERT_COMMIT`.)
 5. **Abort:** via the undo chain, remove the transaction's reserved entries
    and subtract their deltas from the group headers. Emit the compensating
    WAL records.
@@ -467,15 +469,21 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   standard buffer pool, which is the instance's one frame table since AM-S2 step 3 (`page.md` S7).
 - WAL record types (extends `wal.md`):
   - `ASSERT_RESERVE` — entry append + group delta (statement time);
-  - `ASSERT_COMMIT` — reserved→committed flag transition (batched per txn);
+  - `ASSERT_COMMIT` — **no longer written since CK** (CK-R3); its number is
+    never reused and replay still folds one in a log written before CK
+    (CK-Q4), clearing a bit no reader trusts;
   - `ASSERT_ROLLBACK` — compensating removal + negative delta (abort path);
   - `ASSERT_BUILD` — bulk records emitted by the CREATE-time builder;
   - `ASSERT_SNAPSHOT` — AS6a's per-checkpoint group-header base;
   - `ASSERT_DROP` — teardown.
 - Ordering: WAL-before-data, consistent with the existing contract.
-- Recovery: replay restores group headers and entries exactly; in-flight
-  (uncommitted) reservations at crash are rolled back by normal transaction
-  recovery via `ASSERT_ROLLBACK` compensation. The constraint is enforceable
+- Recovery: replay restores group headers and entries exactly. **A
+  reservation undecided at a crash is not compensated by any mount path**
+  (CK §1.8, reproduced at `b66a0dbe`): the row is undone and the group total
+  keeps the reservation, so an arrival fails closed and a departure fails
+  open `[quiet-wrong]` (`docs/inflight/bugs/an-assertion-keeps-the-reservations-of-a-crash-loser-and-a-failed-settle.md`).
+  A reservation of an explicit `ROLLBACK` is compensated by `ASSERT_ROLLBACK`.
+  The constraint is enforceable
   immediately at restart — **no rebuild scan, no enforcement gap**. "No
   rebuild scan" means no re-scan of the *relation*, which is what AS7's
   CREATE-time build costs; AS6a's linkage rebuild reads the cabin's own
@@ -634,14 +642,13 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > transaction's own reservation list; a rebuild is entitled not to have
   > restored it.
   >
-  > **Cost asymmetry, stated.** `CommitTxn` groups its pending reservations
-  > by `(assertion, page)` and pays one page fetch, one `Open`, one WAL
-  > record and one `StampPageLsn` per *group*; `AbortTxn` walks reservations
-  > one at a time and pays all four per *reservation*, because
-  > `ASSERT_ROLLBACK` carries one group key per record where `ASSERT_COMMIT`
-  > takes a repeated-index list. Since `BoundCabinChainWriter::Append`
-  > always appends at the tail, a transaction's K entries share a page
-  > whatever their `GROUP BY` values, so the two costs coincide only at K=1.
+  > **Cost, stated (since CK).** A commit pays nothing at the page (CK-R2).
+  > `AbortTxn` walks reservations one at a time and pays one page fetch, one
+  > `Open`, one WAL record and one `StampPageLsn` per *reservation*, because
+  > `ASSERT_ROLLBACK` carries one group key per record. Before CK a commit
+  > paid those per `(assertion, page)` group, which cost about 40 to 70 ns
+  > per reservation at the `COMMIT` statement (CK-S0, `bench/v3.4.6/results-ck-s0-settle-v3.4.6-12-gb66a0dbe.md`).
+  > The abort's batching is out of CK's scope (CK-Q6 (a)).
 
 - Verification: `VerifyAgainstEntries` re-sums entries against group headers.
 

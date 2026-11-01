@@ -1751,6 +1751,22 @@ Owned by `docs/spec/index.md` §10.3. The order is
   waiting `X` has no queue position (`lock_table.cpp`), as writers already
   can.
 
+## Assertion reservations (CK)
+
+- **A reservation undecided at a crash is never compensated at the mount.**
+  On `ck-assertion-commit-settle` at `b66a0dbe` an undecided arrival fails
+  closed and an undecided departure fails open `[quiet-wrong]`; two
+  `DISABLED_` cells in `tests/assertion_crash_test.cpp` state the right
+  answer. Bug entry `an-assertion-keeps-the-reservations-of-a-crash-loser-and-a-failed-settle.md`.
+- **A failed `TransactionManager::Commit` strands the transaction's
+  reservations**, because `CommitTxn` takes the pending set first and the
+  abort then finds none (the same entry, "After CK-S1"). Same sign rule: a
+  departure fails open.
+- **`kEntryReserved` no longer means "in flight"** (CK-R1): no reader may
+  trust it as such (CK-R4, `[quiet-wrong]`); the cell
+  `AssertionRecoverTest.ACommittedReservationsEntryKeepsItsBitAndEveryConsumerAnswersAsBefore`
+  pins it.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,

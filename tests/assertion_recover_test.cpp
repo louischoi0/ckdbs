@@ -61,6 +61,7 @@ catalog::SysColumnRow GroupColumn(std::uint32_t type_val) {
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryBytes;
 using storage::cabin::kEntryHintValid;
+using storage::cabin::kEntryReserved;
 
 constexpr std::uint64_t kSegmentSize = wal::kMinSegmentSize;
 constexpr std::uint64_t kAssertionId = 77;
@@ -95,10 +96,10 @@ protected:
     // the CREATE-time builder and the enforcer do: id first, then the page, then
     // the directory.
     std::uint16_t Write(BoundCabin& live, const std::string& key, std::int64_t value,
-                        std::uint64_t tuple_key) {
+                        std::uint64_t tuple_key, std::uint8_t flags = kEntryHintValid) {
         BoundCabinEntry entry;
         entry.tuple_key = tuple_key;
-        entry.flags = kEntryHintValid;
+        entry.flags = flags;
         entry.value = value;
         entry.group_id = live.EnsureGroupId(key);
 
@@ -372,6 +373,50 @@ TEST_F(AssertionRecoverTest, TheLinkageComesBackFromTheCabinsOwnPages) {
         return view.value().Read(index);
     };
     EXPECT_TRUE(rebuilt.VerifyAgainstEntries(read).ok());
+}
+
+// CK-R1, CK-R4 (CK-S2 (i), (ii)): since CK a committed reservation's entry
+// still carries `kEntryReserved`, so the pages hold the bit on every entry the
+// reservation path wrote, committed or not. Every consumer answers as it did
+// when commit cleared it - the linkage, the sums and `VerifyAgainstEntries` -
+// and a reader that trusts the bit as "in flight" is caught by this cell.
+TEST_F(AssertionRecoverTest, ACommittedReservationsEntryKeepsItsBitAndEveryConsumerAnswersAsBefore) {
+    constexpr std::uint8_t kReservedFlags = kEntryReserved | kEntryHintValid;
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, Key("x"), 5, 1, kReservedFlags);
+    Write(live, Key("x"), 7, 2, kReservedFlags);
+    Write(live, Key("y"), 9, 3, kReservedFlags);
+    const wal::Lsn checkpoint_lsn = Checkpoint(live);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
+    auto report = Recover(checkpoint_lsn, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_EQ(report.value().assertions[0].entries_attached, 3u)
+        << "the linkage scan took every entry, reserved bit or not";
+    const GroupHeader* x = rebuilt.Find(Key("x"));
+    ASSERT_NE(x, nullptr);
+    EXPECT_EQ(x->sum, 12);
+    EXPECT_EQ(x->count, 2);
+    EXPECT_EQ(x->entries.size(), 2u);
+
+    auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
+        auto page = store_.Get(page_id);
+        if (!page.ok()) return page.status();
+        auto view = BoundCabinPage::Open(page.value().bytes());
+        if (!view.ok()) return view.status();
+        return view.value().Read(index);
+    };
+    EXPECT_TRUE(rebuilt.VerifyAgainstEntries(read).ok());
+
+    // The mutant: a reader that skips a reserved entry. The cell must fail it,
+    // which is what makes the bit untrustworthy as "in flight" visible.
+    auto skipping = [&read](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
+        auto entry = read(page_id, index);
+        if (entry.ok() && entry.value().reserved()) return Status::NotFound("skipped: reserved");
+        return entry;
+    };
+    EXPECT_FALSE(rebuilt.VerifyAgainstEntries(skipping).ok())
+        << "a verifier that trusts the bit as in flight disagrees with the totals";
 }
 
 TEST_F(AssertionRecoverTest, RecordsWithNoSnapshotAreCountedAndTheAssertionStaysUnrecovered) {

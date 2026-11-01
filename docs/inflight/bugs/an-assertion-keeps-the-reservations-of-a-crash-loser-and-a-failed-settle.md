@@ -83,3 +83,20 @@ re-summation after a mount.
   `TXN_COMMIT` leaves a cleared bit on a loser (CK §1.8, CK-R4). No order
   carries it yet. CK-Q5 proposes that CK-S0 reproduce it and the operator
   open its order.
+
+## After CK-S1 (worktree `ck-assertion-commit-settle`, `9fd02f2e`, 2026-11-01)
+
+- **Path 2 as written is closed**: `CommitTxn` no longer touches a page or a
+  record, so it cannot fail part-way (CK-R2, CK-Q7 (a)).
+- **A neighbouring path stays open, and CK-R5's "no commit-time step can
+  strand a reservation" was wrong.** `CommitTxn` still takes the pending set
+  before `TransactionManager::Commit`, as it did on the base. A failed
+  `Commit` reaches `AbortTxn` with an empty set, so the reservations stay in
+  their totals while undo takes the rows back (a departure, or a negative SUM,
+  fails open `[quiet-wrong]`). `CommitLocal`'s failure arm never calls
+  `AbortTxn`, and the deferred path's `wal_->stopped()` abort finds the set
+  gone too. Not reproduced by a cell; found by the CK-S1 review's reading.
+  The fix is to drop the set only after the commit succeeds and to abort in
+  `CommitLocal`; it changes what `ReserverOnLocked` sees on another core, so
+  it belongs with path 1's order.
+- **Path 1 is untouched** by CK and is still open.

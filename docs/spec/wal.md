@@ -165,7 +165,7 @@ Verified against the emission sites:
 | `UPDATE` | `UNDO_WRITE` (before-image) → **`UNDO_WRITE{kVarHeapAppend}` per spilled cell** → `VARHEAP_APPEND` per spilled cell → `INDEX_INSERT` per touched index → `HEAP_OVERWRITE` |
 | `DELETE` | `UNDO_WRITE` → `HEAP_DELETE_MARK` |
 | rollback | the compensations of `docs/spec/txn.md` §6 — `SLOT_RETIRE` / `HEAP_OVERWRITE` / `HEAP_DELETE_UNMARK` / `VARHEAP_RELEASE` — then `TXN_ABORT` |
-| assertions | `ASSERT_BUILD` at CREATE, `ASSERT_RESERVE` / `ASSERT_COMMIT` / `ASSERT_ROLLBACK` on the write paths, `ASSERT_DROP` at teardown |
+| assertions | `ASSERT_BUILD` at CREATE, `ASSERT_RESERVE` / `ASSERT_ROLLBACK` on the write paths (`ASSERT_COMMIT` is no longer written since CK and replays from an older log), `ASSERT_DROP` at teardown |
 | checkpointer | `CHECKPOINT_BEGIN` / `CHECKPOINT_END` |
 
 **Ordering rules**, each load-bearing and enforced:
