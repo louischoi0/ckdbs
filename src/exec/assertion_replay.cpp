@@ -102,6 +102,9 @@ Status ReplayEntry(const wal::DecodedRecord& record, storage::PageStore& store,
     return applied.WithContext("assert replay: applying the group delta");
 }
 
+// A log written before CK holds these; the live commit no longer writes one
+// (CK-R3, CK-Q4). The arm stays so such a log mounts, and it only clears a bit
+// no reader trusts (CK-R4).
 Status ReplayCommit(const wal::DecodedRecord& record, storage::PageStore& store,
                     AssertionReplayContext& context) {
     auto decoded = wal::DecodeAssertCommit(record.payload);

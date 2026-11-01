@@ -181,9 +181,9 @@ TEST_F(BoundCabinPageTest, AppendsReadBackInOrderAndFillTheStatedCapacity) {
 }
 
 TEST_F(BoundCabinPageTest, CommitClearsTheReservedFlagInPlace) {
-    // The one mutation the format needs: §6.2 step 4 clears RESERVED, and the
-    // aggregate is already correct because the reservation counted from
-    // admission. Nothing else about an entry ever changes - its tuple key least of
+    // A flag move in place, as replaying a pre-CK `ASSERT_COMMIT` makes it
+    // (the live commit clears nothing since CK-R1); the aggregate is already
+    // correct because the reservation counted from admission. Nothing else about an entry ever changes - its tuple key least of
     // all.
     auto view = BoundCabinPage::Open(page());
     ASSERT_TRUE(view.ok());

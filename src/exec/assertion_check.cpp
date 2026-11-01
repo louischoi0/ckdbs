@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <map>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -808,87 +807,33 @@ Status AssertionEnforcer::ReserveDelete(storage::PageStore& store, wal::WalManag
     return Status::OK();
 }
 
-Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* wal,
-                                    std::uint64_t txn_id) {
-    // Drain mode (BE-Q11): the pending list is taken before the loop, so a
-    // settle refused for a full pool part-way would drift the totals.
-    const storage::DrainOnPressure drain(store);
-    // Batched per (assertion, page), the physiological unit ASSERT_COMMIT
-    // describes. Built under the latch, settled outside it: a commit moves
-    // no header, so its records need no atomicity against a snapshot, and
-    // its page work may not run under the directory latch.
-    std::map<std::pair<std::uint64_t, PageId>, std::vector<std::uint16_t>> by_page;
-    {
-        const LatchGuard guard(latch_.get());
-        auto pending = pending_.find(txn_id);
-        if (pending == pending_.end()) return Status::OK();
-
-        // **Taken out of the map before anything can fail**, so a
-        // transaction's reservations are settled exactly once whatever
-        // happens below. Every exit from here is an error return, and leaving
-        // the list behind on one means the *next* transaction under this id
-        // settles them a second time - reachable, because
-        // `CommandDispatcher::EndWrite` uses `catalog::kBootstrapXid` for
-        // every statement when there is no transaction manager, so the id is
-        // not unique per transaction there. Double-settling silently moves an
-        // aggregate twice; dropping the remainder of a failed settle leaves it
-        // wrong in a way the returned error already reports. The second is
-        // the failure to prefer.
-        const std::vector<Reservation> reservations = std::move(pending->second);
-        pending_.erase(pending);
-        for (const Reservation& r : reservations) {
-            if (live_.count(r.assertion_id) == 0) continue;  // dropped mid-transaction
-            by_page[{r.assertion_id, r.page}].push_back(r.index);
-        }
-    }
-
-    for (const auto& [group, indexes] : by_page) {
-        auto page = store.Get(group.second);
-        if (!page.ok()) return page.status();
-        auto view = BoundCabinPage::Open(page.value().bytes());
-        if (!view.ok()) return view.status();
-        // Log, then clear, then stamp - the order `AbortTxn` documents below,
-        // and the same window it closes: between a flag move and its
-        // `StampPageLsn` the frame still carries an already-durable `page_lsn`,
-        // so the flush gate would let the move out ahead of the record that
-        // describes it.
-        wal::Lsn stamp = wal::kNoLsn;
-        if (wal != nullptr) {
-            std::vector<std::byte> payload(wal::kAssertCommitFixedSize + indexes.size() * 2);
-            wal::AssertCommitPayload fields{};
-            fields.assertion_id = group.first;
-            auto used = wal::EncodeAssertCommit(payload, fields, indexes);
-            if (!used.ok()) return used.status();
-            auto rec = wal->Append(
-                wal::RecordSpec{wal::RecordType::kAssertCommit, txn_id, group.second}, payload);
-            if (!rec.ok()) return rec.status();
-            stamp = rec.value();
-        }
-
-        for (const std::uint16_t index : indexes) {
-            if (Status s = view.value().ClearReserved(index); !s.ok()) {
-                return s.WithContext("assert commit: clearing the reserved flag");
-            }
-        }
-
-        if (stamp != wal::kNoLsn) {
-            if (Status s = store.StampPageLsn(group.second, stamp); !s.ok()) return s;
-        }
-    }
-    return Status::OK();
+void AssertionEnforcer::CommitTxn(std::uint64_t txn_id) {
+    // CK-R2: a commit settles nothing on the page. A reservation counted in
+    // the aggregate from admission (§6.2), and `kEntryReserved` means "written
+    // by the reservation path", never "in flight" (CK-R1), so there is no flag
+    // to clear, no record to append and no stamp to take - and so nothing here
+    // that can fail. The pending list is dropped, once, whatever id it is
+    // under (`EndWrite` reuses `catalog::kBootstrapXid` per statement when
+    // there is no transaction manager).
+    const LatchGuard guard(latch_.get());
+    pending_.erase(txn_id);
 }
 
 Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* wal,
                                    std::uint64_t txn_id) {
-    const storage::DrainOnPressure drain(store);  // as `CommitTxn`'s
+    // Drain mode (BE-Q11): the pending list is taken before the loop, so an
+    // unwind refused for a full pool part-way would drift the totals.
+    const storage::DrainOnPressure drain(store);
     std::vector<Reservation> reservations;
     {
         const LatchGuard guard(latch_.get());
         auto pending = pending_.find(txn_id);
         if (pending == pending_.end()) return Status::OK();
-        // Taken out of the map first, for the reason `CommitTxn` states: every
-        // exit below is an error return, and a reservation left pending is one
-        // the next transaction under this id would settle a second time.
+        // **Taken out of the map first**: every exit below is an error
+        // return, and a reservation left pending is one the next transaction
+        // under this id would unwind a second time - reachable, because
+        // `EndWrite` reuses `catalog::kBootstrapXid` per statement when there
+        // is no transaction manager.
         reservations = std::move(pending->second);
         pending_.erase(pending);
     }

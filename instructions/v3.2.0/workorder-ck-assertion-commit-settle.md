@@ -632,3 +632,28 @@ built, and the spike is not in the tree (its patch was kept outside it).
 path is reproduced on the base, a departure fails open `[quiet-wrong]`, and CLA
 recommends the operator open an order for its fix without waiting for CK's
 close.
+
+### CK-S1 - the change (2026-11-01, operator's mark: "build, go ahead with S1")
+
+The operator marked CK-S0's verdict **build** on 2026-11-01 ("build, go ahead
+with S1"), so CK-Q0 (a) is the operator's own mark and not an adoption.
+
+Landed on `ck-assertion-commit-settle`: `AssertionEnforcer::CommitTxn` is
+`void CommitTxn(txn_id)` and erases the pending set only (CK-R2, CK-Q7 (a));
+the dispatcher's three failure arms are gone; `kEntryReserved`'s definition
+states CK-R1 and CK-R4; `ReplayCommit` stays (CK-Q4); the cell
+`ACommitLogsNoAssertCommitAndTheMountKeepsItsTotals` pins that no
+`ASSERT_COMMIT` is written and the mount keeps a commit's totals.
+
+**Review finding that corrects CK-R5 (not fixed here, not in scope).**
+CK-R5's "no commit-time step can strand a reservation" is false. `CommitTxn`
+still runs *before* `TransactionManager::Commit`, as it did on the base, so a
+failed `Commit` reaches `AbortTxn` with an empty pending set: the reservations
+stay in their group totals while undo takes the rows back (a departure or a
+negative SUM fails open, `[quiet-wrong]`). `CommitLocal`'s failure arm never
+calls `AbortTxn`, and the deferred path's `wal_->stopped()` abort finds the set
+gone too. What CK removed is the settle's own failure, nothing else. The fix
+(drop the set only after the commit succeeds, abort in `CommitLocal`) changes
+what `ReserverOnLocked` sees on another core and is its own order, with the
+crash-loser fix (CK-Q5). CK-S3 must not repeat CK-R5's sentence, and the bug
+entry's failed-settle half stays open for this path.

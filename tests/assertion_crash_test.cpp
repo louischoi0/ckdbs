@@ -82,6 +82,39 @@ TEST(AssertionCrashTest, ACommittedDepartureFreesItsSlotAcrossACrash) {
     EXPECT_TRUE(StartsWith(Probe(d, 5, 1), "ERR ASSERTION_VIOLATION"));
 }
 
+// CK-R3: a commit writes no `ASSERT_COMMIT` (its replay arm stays for a log
+// written before CK), and a log without one mounts to the totals a commit
+// produced: the reservation counted from admission, the group full.
+TEST(AssertionCrashTest, ACommitLogsNoAssertCommitAndTheMountKeepsItsTotals) {
+    TempDir image;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CurrentCoreGuard as(0);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        Ok(d0, "CREATE TABLE t (id int64, grp int64) BTREE");
+        Ok(d0, "INSERT INTO t VALUES (1, 1)");
+        Ok(d0, "CREATE ASSERTION a1 ON t GROUP BY (grp) CHECK COUNT(*) <= 3");
+        Ok(d0, "INSERT INTO t VALUES (2, 1), (3, 1)");
+        ASSERT_TRUE(rig->Snapshot(image.path).ok());
+    }
+    const std::optional<crash_rig::Segment> seg = crash_rig::ReadSegment(image.path / "wal");
+    ASSERT_TRUE(seg.has_value());
+    int reserves = 0;
+    for (const wal::RecordType type : seg->types) {
+        EXPECT_NE(type, wal::RecordType::kAssertCommit);
+        reserves += type == wal::RecordType::kAssertReserve ? 1 : 0;
+    }
+    EXPECT_GE(reserves, 2) << "the committed insert reserved its two rows";
+
+    auto db = Mount(image.path);
+    ASSERT_TRUE(db.ok()) << db.status().message();
+    CurrentCoreGuard as(0);
+    CommandDispatcher& d = db.value()->dispatcher();
+    EXPECT_TRUE(StartsWith(Probe(d, 4, 1), "ERR ASSERTION_VIOLATION"));
+    EXPECT_EQ(Probe(d, 4, 2), "INSERTED");
+}
+
 // **Disabled, and red when enabled** (`--gtest_also_run_disabled_tests`): the
 // two cells below state what a mount should answer and the tree does not
 // (`docs/inflight/bugs/an-assertion-keeps-the-reservations-of-a-crash-loser-and-a-failed-settle.md`,
