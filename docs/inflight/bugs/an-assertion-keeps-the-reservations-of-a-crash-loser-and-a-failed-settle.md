@@ -100,3 +100,9 @@ re-summation after a mount.
   `CommitLocal`; it changes what `ReserverOnLocked` sees on another core, so
   it belongs with path 1's order.
 - **Path 1 is untouched** by CK and is still open.
+
+## The order
+
+`instructions/v3.2.0/workorder-cl-assertion-reservations-of-an-undecided-transaction.md`
+(CL, written 2026-11-01, not opened for work) carries the fix for path 1 and
+the failed-`Commit` path above.
