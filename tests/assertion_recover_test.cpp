@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <thread>
@@ -168,10 +169,12 @@ protected:
 
     // The checkpoint, through the real Checkpointer and the real seam - so the
     // snapshot under test is the one a mount would actually find.
-    wal::Lsn Checkpoint(const BoundCabin& live) {
+    wal::Lsn Checkpoint(const BoundCabin& live,
+                        std::vector<wal::AssertionPendingReservation> pending = {}) {
         class Source final : public wal::AssertionSnapshotSource {
         public:
-            explicit Source(const BoundCabin& cabin) : cabin_(cabin) {}
+            Source(const BoundCabin& cabin, std::vector<wal::AssertionPendingReservation> pending)
+                : cabin_(cabin), pending_(std::move(pending)) {}
             Status VisitSnapshots(std::size_t, const wal::SnapshotVisitor& visit) override {
                 // The seam owns its keys, so this is a straight copy - the
                 // first version of this fixture had to keep a `mutable` vector
@@ -187,11 +190,13 @@ protected:
                     entry.key = g.key;
                     out.groups.push_back(std::move(entry));
                 }
+                out.pending = pending_;
                 return visit({out});
             }
 
         private:
             const BoundCabin& cabin_;
+            std::vector<wal::AssertionPendingReservation> pending_;
         };
 
         class NoPages final : public wal::CheckpointTarget {
@@ -200,7 +205,7 @@ protected:
             Status FlushPages(std::span<const PageId>) override { return Status::OK(); }
         };
 
-        Source source(live);
+        Source source(live, std::move(pending));
         NoPages target;
         wal::NoActiveTransactions none;
         wal::InMemoryCheckpointAnchor anchor;
@@ -225,6 +230,73 @@ protected:
                                     });
         EXPECT_TRUE(scanned.ok()) << scanned.status().message();
         return n;
+    }
+
+    // One reservation as the enforcer writes it: the entry on the page counted by
+    // `live`, flagged reserved (and departing), and its `ASSERT_RESERVE` under
+    // transaction `txn`. Returns its index. **Never cleared**, since CK.
+    std::uint16_t Reserve(BoundCabin& live, std::uint64_t txn, const std::string& key,
+                          std::int64_t value, std::uint64_t tuple_key, bool departure,
+                          bool log_it = true) {
+        const std::uint8_t flags = static_cast<std::uint8_t>(
+            kEntryReserved | kEntryHintValid | (departure ? storage::cabin::kEntryDeparture : 0));
+        BoundCabinEntry entry;
+        entry.tuple_key = tuple_key;
+        entry.flags = flags;
+        entry.value = value;
+        entry.group_id = live.EnsureGroupId(key);
+        auto page = store_.Get(kCabinPage);
+        EXPECT_TRUE(page.ok());
+        auto view = BoundCabinPage::Open(page.value().bytes());
+        EXPECT_TRUE(view.ok());
+        auto index = view.value().Append(entry);
+        EXPECT_TRUE(index.ok()) << index.status().message();
+        EXPECT_TRUE((departure ? live.ApplyDeparture(key, value, kCabinPage, index.value())
+                               : live.Apply(key, value, kCabinPage, index.value()))
+                        .ok());
+        if (!log_it) return index.value();
+        std::array<std::byte, kEntryBytes> bytes{};
+        EXPECT_TRUE(storage::cabin::EncodeEntry(entry, bytes).ok());
+        std::vector<std::byte> payload(wal::kAssertEntryFixedSize + kEntryBytes + key.size());
+        wal::AssertEntryPayload fields{};
+        fields.assertion_id = kAssertionId;
+        fields.index = index.value();
+        fields.group_id = entry.group_id;
+        auto used = wal::EncodeAssertEntry(
+            payload, fields, bytes, std::as_bytes(std::span<const char>(key.data(), key.size())));
+        EXPECT_TRUE(used.ok()) << used.status().message();
+        EXPECT_TRUE(wal_->Append({wal::RecordType::kAssertReserve, txn, kCabinPage},
+                                 std::span(payload).first(used.value()))
+                        .ok());
+        return index.value();
+    }
+
+    BoundCabinEntry EntryOnPage(std::uint16_t index) {
+        auto page = store_.Get(kCabinPage);
+        EXPECT_TRUE(page.ok());
+        auto view = BoundCabinPage::Open(page.value().bytes());
+        EXPECT_TRUE(view.ok());
+        auto entry = view.value().Read(index);
+        EXPECT_TRUE(entry.ok());
+        return entry.value();
+    }
+
+    static wal::AssertionPendingReservation Pending(std::uint64_t txn, std::uint16_t index,
+                                                    const std::string& key, std::int64_t value,
+                                                    bool departure) {
+        return wal::AssertionPendingReservation{txn, kCabinPage, index, value, departure, key};
+    }
+
+    StatusOr<AssertionRecoveryReport> Recover(wal::Lsn from_lsn, BoundCabin& into,
+                                              std::set<std::uint64_t> undecided) {
+        RecoverableAssertion a;
+        a.assertion_id = kAssertionId;
+        a.root_page_id = kCabinPage;
+        a.cabin = &into;
+        const std::array<RecoverableAssertion, 1> list = {a};
+        EXPECT_TRUE(wal_->Flush().ok());
+        return RecoverAssertions(*device_, /*core_id=*/0, from_lsn, store_, list, /*log=*/nullptr,
+                                 undecided);
     }
 
     StatusOr<AssertionRecoveryReport> Recover(wal::Lsn from_lsn, BoundCabin& into) {
@@ -1704,6 +1776,111 @@ TEST_F(AssertionResumeTest, AStoredAssertionOverTheTupleKeyComesUpUnenforcing) {
     AssertionEnforcer::Hold hold;
     const Status write = fresh.AdmitInsert(def.target_oid, IntRow(6), /*writer_txn=*/0, hold);
     EXPECT_FALSE(write.ok()) << "a write was admitted by an assertion that cannot enforce";
+}
+
+// ---- CL-S1: what a mount gives back for a transaction no commit decided -----
+//
+// The cells hand-build the log a checkpoint and its transactions leave, so the
+// pass's reading of `ASSERT_PENDING`, `ASSERT_RESERVE` and `ASSERT_ROLLBACK`
+// is under test directly; `assertion_crash_test.cpp` runs the same through a
+// real mount.
+
+std::string KeyX() { return Key("x"); }
+
+TEST_F(AssertionRecoverTest, AnArrivalAnUndecidedTransactionHeldAtTheCheckpointIsGivenBack) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, KeyX(), 5, 1);  // committed
+    const std::uint16_t held = Reserve(live, 7, KeyX(), 4, 2, false, /*log_it=*/false);
+    const wal::Lsn checkpoint_lsn = Checkpoint(live, {Pending(7, held, KeyX(), 4, false)});
+
+    BoundCabin rebuilt(BoundAggregate::kSum, 1000);
+    auto report = Recover(checkpoint_lsn, rebuilt, {7});
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_EQ(report.value().assertions[0].undecided_compensated, 1u);
+    const GroupHeader* x = rebuilt.Find(KeyX());
+    ASSERT_NE(x, nullptr);
+    EXPECT_EQ(x->sum, 5);
+    EXPECT_EQ(x->count, 1);
+    EXPECT_NE(EntryOnPage(held).flags & storage::cabin::kEntryOrphaned, 0);
+}
+
+TEST_F(AssertionRecoverTest, ADepartureAnUndecidedTransactionHeldAtTheCheckpointIsGivenBack) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, KeyX(), 5, 1);
+    Write(live, KeyX(), 5, 2);
+    const std::uint16_t held = Reserve(live, 7, KeyX(), 5, 1, true, /*log_it=*/false);
+    ASSERT_EQ(live.Find(KeyX())->count, 1);
+    const wal::Lsn checkpoint_lsn = Checkpoint(live, {Pending(7, held, KeyX(), 5, true)});
+
+    BoundCabin rebuilt(BoundAggregate::kSum, 1000);
+    auto report = Recover(checkpoint_lsn, rebuilt, {7});
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    const GroupHeader* x = rebuilt.Find(KeyX());
+    ASSERT_NE(x, nullptr);
+    EXPECT_EQ(x->count, 2) << "the loser's delete is undone, so both rows stand";
+    EXPECT_EQ(x->sum, 10);
+}
+
+TEST_F(AssertionRecoverTest, AWinnerOrATransactionNoneKnowsLeavesItsReservationsCounted) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    const std::uint16_t held = Reserve(live, 7, KeyX(), 4, 1, false, /*log_it=*/false);
+    const wal::Lsn checkpoint_lsn = Checkpoint(live, {Pending(7, held, KeyX(), 4, false)});
+
+    BoundCabin rebuilt(BoundAggregate::kSum, 1000);
+    auto report = Recover(checkpoint_lsn, rebuilt, std::set<std::uint64_t>{});
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_EQ(report.value().assertions[0].undecided_compensated, 0u);
+    EXPECT_EQ(rebuilt.Find(KeyX())->sum, 4);
+    EXPECT_EQ(EntryOnPage(held).flags & storage::cabin::kEntryOrphaned, 0);
+}
+
+TEST_F(AssertionRecoverTest, AReservationAfterTheBaseOfAnUndecidedTransactionIsGivenBackOnce) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, KeyX(), 5, 1);
+    const wal::Lsn checkpoint_lsn = Checkpoint(live);
+    const std::uint16_t after = Reserve(live, 8, KeyX(), 3, 2, false);  // loser
+    const std::uint16_t kept = Reserve(live, 9, KeyX(), 2, 3, false);   // winner
+
+    BoundCabin rebuilt(BoundAggregate::kSum, 1000);
+    auto report = Recover(checkpoint_lsn, rebuilt, {8});
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_EQ(report.value().assertions[0].undecided_compensated, 1u);
+    EXPECT_EQ(rebuilt.Find(KeyX())->sum, 7) << "5 and the winner's 2; the loser's 3 is back out";
+    EXPECT_NE(EntryOnPage(after).flags & storage::cabin::kEntryOrphaned, 0);
+    EXPECT_EQ(EntryOnPage(kept).flags & storage::cabin::kEntryOrphaned, 0);
+}
+
+TEST_F(AssertionRecoverTest, AnAbortThatLoggedItsRollbackIsNotGivenBackAgain) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, KeyX(), 5, 1);
+    const std::uint16_t held = Reserve(live, 9, KeyX(), 4, 2, false, /*log_it=*/false);
+    const wal::Lsn checkpoint_lsn = Checkpoint(live, {Pending(9, held, KeyX(), 4, false)});
+    // The abort after the checkpoint: the live side gives it back and logs it
+    // (`LogRollback` names transaction 9, the one the list names).
+    ASSERT_TRUE(live.Unapply(KeyX(), 4, kCabinPage, held).ok());
+    MarkOrphaned(held);
+    LogRollback(held, KeyX(), 4);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, 1000);
+    auto report = Recover(checkpoint_lsn, rebuilt, {9});
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_EQ(report.value().assertions[0].undecided_compensated, 0u)
+        << "the record already gave it back; a second compensation would subtract twice";
+    EXPECT_EQ(rebuilt.Find(KeyX())->sum, 5);
+}
+
+TEST_F(AssertionRecoverTest, ALaterCheckpointsListOfTheSameReservationIsSkipped) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, KeyX(), 5, 1);
+    const std::uint16_t held = Reserve(live, 7, KeyX(), 4, 2, false, /*log_it=*/false);
+    const wal::Lsn first = Checkpoint(live, {Pending(7, held, KeyX(), 4, false)});
+    Checkpoint(live, {Pending(7, held, KeyX(), 4, false)});
+
+    BoundCabin rebuilt(BoundAggregate::kSum, 1000);
+    auto report = Recover(first, rebuilt, {7});
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_EQ(report.value().assertions[0].undecided_compensated, 1u);
+    EXPECT_EQ(rebuilt.Find(KeyX())->sum, 5) << "given back once, not twice";
 }
 
 }  // namespace

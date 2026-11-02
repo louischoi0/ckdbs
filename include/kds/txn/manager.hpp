@@ -385,7 +385,20 @@ public:
     // given. Nothing here waits on a group commit - the caller owes the
     // client that acknowledgement and owns the wait, exactly as the
     // dispatcher's INSERT path already does.
-    StatusOr<wal::Lsn> Commit(Transaction& txn, wal::DurabilityClass durability);
+    //
+    // **`after_logged` runs once the commit record is in the log** (CL-R5) -
+    // appended, and synced for `strict` - and before the publish, so the
+    // caller can drop state that must outlive the record by exactly that much:
+    // the assertion registry's pending set, which a checkpoint lists so a mount
+    // can compensate an undecided transaction. It is not called when the
+    // append or an inline sync failed. Appended is enough, durable is not
+    // needed: a checkpoint that no longer lists the set lies after the commit
+    // record in the one log, so a mount that reads that checkpoint reads the
+    // commit too. A later `group` sync failure finds the set already dropped;
+    // the log has stopped by then, and the mount compensates.
+    using AfterLogged = std::function<void()>;
+    StatusOr<wal::Lsn> Commit(Transaction& txn, wal::DurabilityClass durability,
+                              const AfterLogged& after_logged = {});
 
     // **A `strict` commit in two halves** (BA-S7 part 2, BA-Q3 (b)): the
     // commit record is staged for the writer's sync and the marker set, and
@@ -397,7 +410,10 @@ public:
     // transaction as a failed `Commit` does; the caller owes an `Abort`. So
     // does a record the log stopped before it was durable: a failed sync
     // aborts on both paths (txn.md §6), and `Abort` lifts the marker.
-    StatusOr<wal::Lsn> CommitDeferred(Transaction& txn);
+    // `after_logged` runs once the record is staged - before its sync, unlike
+    // a `strict` `Commit`'s - on `Commit`'s argument that appended is enough;
+    // the abort a failed sync owes then finds the pending set already gone.
+    StatusOr<wal::Lsn> CommitDeferred(Transaction& txn, const AfterLogged& after_logged = {});
     void FinishDeferredCommit(Transaction& txn);
 
     // ---- Re-locating a row whose address moved --------------------------

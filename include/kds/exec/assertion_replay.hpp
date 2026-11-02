@@ -74,6 +74,19 @@ bool IsAssertionRecord(wal::RecordType type) noexcept;
 // after it, and no later write may land past the append point it set.
 enum class ReplayHalves : std::uint8_t { kPageAndDirectory, kPageOnly };
 
+// A group key's bytes as a record carries them, as the directory's key.
+std::string AssertionKeyOf(std::span<const std::byte> bytes);
+
+// **One reservation given back** (CL-R1, CL-R3): the entry marked
+// `kEntryOrphaned` on its page (AS6b), then its delta taken out of the group -
+// or a departure's restored - relinking the entry first if the page walk
+// skipped it. A replayed `ASSERT_ROLLBACK` and a mount's compensation of an
+// undecided transaction both come here, so the two reach one directory. The
+// caller decides the reservation is owed back; this function does not ask.
+Status GiveBackReservation(storage::PageStore& store, BoundCabin& cabin, const std::string& key,
+                           std::int64_t delta, bool departure, PageId page_id,
+                           std::uint16_t index);
+
 // Applies one record. InvalidArgument for a record type this fold does not
 // own; Corruption for a payload that lies (an entry that is not
 // kEntryBytes wide, a RESERVE whose entry is not flagged reserved, a BUILD

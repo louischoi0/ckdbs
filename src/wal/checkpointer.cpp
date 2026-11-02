@@ -145,6 +145,25 @@ Status LogAssertionSnapshot(WalManager& wal, const AssertionCabinSnapshot& cabin
             return lsn.status();
         }
     }
+    // After the run, in the same hold: the reservations the headers count for
+    // a transaction not yet decided (CL-R1). A mount that finds the run its
+    // base reads these next, and compensates each whose transaction is not a
+    // winner.
+    for (const AssertionPendingReservation& r : cabin.pending) {
+        std::vector<std::byte> payload(kAssertRollbackFixedSize + r.key.size());
+        AssertRollbackPayload fields{};
+        fields.assertion_id = cabin.assertion_id;
+        fields.delta = r.delta;
+        fields.index = r.index;
+        auto used = EncodeAssertRollback(
+            payload, fields, std::as_bytes(std::span<const char>(r.key.data(), r.key.size())));
+        if (!used.ok()) return used.status();
+        RecordSpec spec{RecordType::kAssertPending, r.txn_id, r.page_id};
+        spec.flags = r.departure ? kAssertRollbackFlagDeparture : 0;
+        if (auto lsn = wal.Append(spec, std::span(payload).first(used.value())); !lsn.ok()) {
+            return lsn.status();
+        }
+    }
     return Status::OK();
 }
 

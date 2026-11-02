@@ -244,6 +244,15 @@ struct SimVerdict {
     std::size_t census_leaks = 0;
     // BR-S8: backups taken and restored and reconciled.
     std::size_t backups_restored = 0;
+    // CL-Q5 (a): restarts after which the asserted relation's group totals
+    // were re-summed against its rows, and those whose assertion the mount
+    // left unenforcing (nothing to re-sum; under a fault only, at the mount
+    // included - a run with none that reaches it fails).
+    std::size_t assertion_totals_checked = 0;
+    std::size_t assertion_unenforcing = 0;
+    // Restarts after which the declared assertion was gone: a create a crash
+    // cut before its sync (a clean, fault-free restart that reaches it fails).
+    std::size_t assertion_lost = 0;
 
     // Recycling (BC-S4): mid-run checkpoints, advances the recycler was
     // handed, and segments removed. A run where these stay 0 recovered from

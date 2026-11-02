@@ -106,9 +106,24 @@ struct AssertionSnapshotGroup {
     std::string key;
 };
 
+// One reservation an undecided transaction holds as the snapshot is taken
+// (`ASSERT_PENDING`, CL-R1): counted in a header above, owned by `txn_id`.
+struct AssertionPendingReservation {
+    std::uint64_t txn_id = 0;
+    PageId page_id = kInvalidPageId;
+    std::uint16_t index = 0;
+    std::int64_t delta = 0;
+    bool departure = false;
+    std::string key;
+};
+
 struct AssertionCabinSnapshot {
     std::uint64_t assertion_id = 0;
     std::vector<AssertionSnapshotGroup> groups;
+    // Empty on a create's base. A checkpoint's carries what its headers count
+    // for transactions not yet decided, written as `ASSERT_PENDING` right
+    // after the run.
+    std::vector<AssertionPendingReservation> pending;
 };
 
 // Writes one cabin's group headers as `ASSERT_SNAPSHOT` records, chunked so no

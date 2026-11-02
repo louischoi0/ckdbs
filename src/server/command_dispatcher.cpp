@@ -10683,10 +10683,14 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
     const std::uint64_t id = txn->id();
 
     // The transaction's reservations are committed by dropping its pending
-    // set (§6.2 step 4, CK-R2): no page and no record, so no failure.
-    enforcer_->CommitTxn(id);
+    // set (§6.2 step 4, CK-R2), **once the commit record is in the log**
+    // (CL-R5): a checkpoint taken before it lists the set, so a mount that
+    // finds the record missing can compensate the reservations. A commit that
+    // fails first leaves the set for the abort below.
+    const auto commit_reservations = [this, id] { enforcer_->CommitTxn(id); };
     const bool deferred = DefersCommit(id);
-    auto committed = deferred ? txn_->CommitDeferred(*txn) : txn_->Commit(*txn, effective_durability_);
+    auto committed = deferred ? txn_->CommitDeferred(*txn, commit_reservations)
+                              : txn_->Commit(*txn, effective_durability_, commit_reservations);
 
     if (!committed.ok()) {
         // **A failed commit must abort, not merely be reported.**
@@ -10707,6 +10711,10 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
         //
         // Before `EndDdlScope`, so the invalidation it does describes
         // pages the compensation has already rewritten.
+        // The reservations first, as `RollbackLocal` does: a commit that failed
+        // before its record left the pending set (CL-R5), and no one else gives
+        // it back.
+        (void)enforcer_->AbortTxn(page_store_, wal_, id);
         Status rolled = txn_->Abort(*txn, RowLocatorForRollback());
         EndDdlScope(session);
         session.Finish();
@@ -11638,16 +11646,16 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     }
 
     // The reservations commit by dropping the pending set (§6.2 step 4,
-    // CK-R2): nothing is written, so nothing can fail before the commit
-    // record. A failed `TransactionManager::Commit` below fails only ahead of
-    // its `PublishCommit`, a state `Abort` is defined for - but the pending
-    // set is gone by then, so `AbortOwnedScope`'s `AbortTxn` finds nothing
-    // and the reservations stay in their group totals while undo takes the
-    // rows back (fails open for a departure).
-    enforcer_->CommitTxn(scope.txn->id());
-    const bool deferred = DefersCommit(scope.txn->id());
-    auto committed = deferred ? txn_->CommitDeferred(*scope.txn)
-                              : txn_->Commit(*scope.txn, effective_durability_);
+    // CK-R2), **once the commit record is in the log** (CL-R5), so a commit
+    // that fails first leaves the set for `AbortOwnedScope`'s `AbortTxn`, and a
+    // checkpoint before the record lists it (CL-R1).
+    const std::uint64_t committing_id = scope.txn->id();
+    const auto commit_reservations = [this, committing_id] {
+        enforcer_->CommitTxn(committing_id);
+    };
+    const bool deferred = DefersCommit(committing_id);
+    auto committed = deferred ? txn_->CommitDeferred(*scope.txn, commit_reservations)
+                              : txn_->Commit(*scope.txn, effective_durability_, commit_reservations);
     if (!committed.ok()) {
         return AbortOwnedScope(scope, committed.status());
     }
@@ -11673,10 +11681,10 @@ Status CommandDispatcher::AbortOwnedScope(WriteScope& scope, const Status& repor
 
     // **The enforcer's failure does not skip the transaction's own unwind**
     // (AO-S6d): unsettled assertion entries say nothing about whether the
-    // trail can be compensated. A no-op after a failed commit (`CommitTxn`
-    // dropped the pending set first; `EndWrite` says what that leaves), called
-    // unconditionally because on the other two callers it is the whole
-    // assertion unwind.
+    // trail can be compensated. After a failed commit it gives back the
+    // reservations the commit left (CL-R5: the pending set is dropped only once
+    // the record is logged); on the other two callers it is the whole assertion
+    // unwind.
     Status unwound = enforcer_->AbortTxn(page_store_, wal_, id);
     if (Status s = txn_->Abort(*scope.txn, RowLocatorForRollback()); unwound.ok()) {
         unwound = s;

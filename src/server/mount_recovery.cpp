@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include "kds/catalog/well_known.hpp"
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/assertion_recover.hpp"
 #include "kds/txn/recovery_undo.hpp"
@@ -40,6 +41,14 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     out.winners = report.value().analysis.winners;
     out.aborted = report.value().analysis.aborted;
     out.losers = report.value().analysis.losers;
+    for (const auto& [txn_id, state] : report.value().analysis.transactions) {
+        // `kBootstrapXid` writes no `TXN_COMMIT` and so always reads as a loser,
+        // but it is committed by construction: bootstrap rows, and a dispatcher
+        // with no transaction manager settling each statement's reservations
+        // under it (`EndWrite`). Compensating it would take committed totals out.
+        if (txn_id == catalog::kBootstrapXid) continue;
+        if (state.outcome != wal::TxnOutcome::kWinner) out.undecided_txns.insert(txn_id);
+    }
     out.redo_applied = report.value().redo.applied;
     out.redo_skipped_by_lsn = report.value().redo.skipped_by_lsn;
     out.redo_skipped_not_dirty = report.value().redo.skipped_not_dirty;
@@ -246,7 +255,8 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
 
     // The *stream's* core, 0 under one stream: the scanner validates every
     // segment header against it.
-    auto recovered = exec::RecoverAssertions(device, stream_core, from_lsn, store, targets, log);
+    auto recovered = exec::RecoverAssertions(device, stream_core, from_lsn, store, targets, log,
+                                             report.undecided_txns);
     if (!recovered.ok()) {
         // Reported, not fatal: a mount that refused here would refuse to open a
         // database whose *data* is intact over a constraint that can be rebuilt

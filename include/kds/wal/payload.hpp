@@ -665,13 +665,14 @@ StatusOr<DecodedAssertCommit> DecodeAssertCommit(std::span<const std::byte> in);
 
 // ---- ASSERT_ROLLBACK -----------------------------------------------------
 //
-// One reserved entry compensated (§6.2 step 5, or recovery closing a
-// crashed in-flight reservation): the delta leaves the group's aggregate
-// and the directory forgets the entry at (envelope page_id, index). The
-// page entry itself is **not** rewritten - the slot is orphaned, see the
-// record-type comment - so the payload carries the delta rather than
-// pointing replay at page bytes whose flags no longer distinguish an
-// aborted entry from a live reservation.
+// One reserved entry compensated by a live abort (§6.2 step 5): the delta
+// leaves the group's aggregate and the directory forgets the entry at
+// (envelope page_id, index). The page entry is only marked `kEntryOrphaned`
+// (AS6b), never removed or shrunk, and the payload carries the delta because
+// since CK the reserved bit says nothing about whether an entry is in flight
+// (CK-R1). `ASSERT_PENDING` (34, CL-R1) shares this payload and the flag bit
+// below: a checkpoint's statement of a reservation an undecided transaction
+// holds, which a mount gives back if the transaction never committed.
 
 // The envelope's per-type `flags` byte, bit 0: the reservation being
 // compensated was a **departure** (kEntryDeparture), so replay restores it

@@ -10,7 +10,11 @@ on the operator's word, recorded in English (`raft-marks-2026-11-01.md` §1):
 with CL, CL-Q all as proposed"* (`raft-marks-2026-11-02.md` §1): CL-Q0 (a),
 CL-Q1 (a), CL-Q2 (a), CL-Q3 (a), CL-Q4 (a), CL-Q5 (a) are **the operator's own
 marks**. **CL-S0 then found that CL-Q2 (a)'s and CL-Q3 (a)'s premises do not
-hold (§6), so CL-S1 and CL-S2 wait on the operator.** The letter CL is CLA's
+hold (§6), so CL-S1 and CL-S2 waited on the operator.** **Resumed 2026-11-02
+on the operator's standing go-ahead** (go-ahead-achieving-milestone,
+`raft-marks-2026-11-02.md` §2): **CL-Q2 (b')** and **CL-Q6 (a)** adopted as CLA
+proposed - not the operator's per-item marks - and the operator's **CL-Q3 (a)**
+kept, CL-S0's revised (b) withdrawn (§3). The letter CL is CLA's
 proposal: CA..CK are taken (CJ by another session). The operator may reletter
 it.
 
@@ -188,6 +192,20 @@ waiter on a decided id**. If it runs to the 1 s fault net, CL-R5's ordering
 costs a stall on a hot group and CLA revises the proposal (drop the set at the
 publish, before the release) and records it.
 
+**Resolved 2026-11-02 on the standing go-ahead** (`raft-marks-2026-11-02.md`
+§2): CL-S0 showed (a) cannot work (§6 item 3); **(b') of §6 adopted**: the
+checkpoint writes `ASSERT_PENDING` - the txn id, page, index, key, delta and
+departure of every reservation the registry holds pending or is unwinding -
+after each `ASSERT_SNAPSHOT` run, and the pass compensates those of a
+transaction analysis did not find committed. `[quiet-wrong]` through CL-R2.
+
+**CL-Q3 kept at (a), CL-S0's revised (b) withdrawn** (same record): (b')
+needs CL-R5's ordering. A set dropped before the commit record leaves a
+checkpoint taken between the two listing nothing for a transaction that then
+crashes undecided, so its base counts a loser no record attributes. The
+waiter question is moot: the set is dropped once the record is logged, before
+the publish and the release.
+
 **CL-Q4 - the `DISABLED_` cells.**
 - (a) Enabled by CL-S1 and kept as regression cells.
 - (b) Deleted and replaced.
@@ -201,6 +219,44 @@ publish, before the release) and records it.
 
 **CLA proposes (a)**: the sim crashes at random ops with an assertion declared
 and has no check on its total; this is what would have found P1.
+
+**CL-Q6 - the superblock** (written 2026-11-02, at CL-S1).
+- (a) Bump to 35, refused with no migration (the standing order of 2026-10-07).
+- (b) No bump: a log holding `ASSERT_PENDING` is refused by an older build as
+  an unknown record kind.
+
+**CLA proposes (a)**, adopted on the standing go-ahead of 2026-11-02
+(go-ahead-achieving-milestone): (b) refuses only a scan that reaches the
+record, so a version-34 binary whose scan holds none mounts a CL volume and
+leaves a loser's departure counted `[quiet-wrong]`; and a version-34 volume's
+checkpoints list nothing, so this build cannot compensate a loser its base
+counts. Every format change a neighbour would mishandle has bumped
+(29 for `ANCHOR_SLOT_REMOVE`, 34 for CI).
+
+**CL-Q7 - an abort's unwind refused part-way** (written 2026-11-02, at the
+CL-S1/S2 review). `AbortTxn` gives a transaction's reservations back one by
+one; a refused page fetch, `Unapply`'s missing pair, the mark or the stamp
+returns early, the caller's `Abort` still takes the rows back, and the
+reservations not reached stay counted with nothing naming them - live, and in
+every later checkpoint's base. It predates CL (the live total was already
+wrong) and is not P1 or P2, but CL's repair is the one that can reach it.
+- (a) Keep the remainder in `aborting_` and flag its `ASSERT_PENDING` entries
+  "abort refused", compensated at a mount whatever analysis says (analysis
+  forgets the transaction once its `TXN_ABORT` is below the scan start, so the
+  listing alone would compensate nothing); fail closed live by evicting the
+  assertion to unenforcing.
+- (b) Fail-stop the log on the refusal: no `TXN_ABORT` and no later checkpoint
+  becomes durable, so the next mount finds the transaction a loser in its
+  base's active list with its reservations listed or folded, and CL-R1 gives
+  them back.
+- (c) Record it as a known gap.
+
+**CLA proposes (b)**, adopted on the standing go-ahead of 2026-11-02
+(go-ahead-achieving-milestone): it reuses CL's own repair exactly, adds no
+flag or on-disk meaning, and fails closed the way a refused log write already
+does (a refused `Append` in the same loop has always stopped the log). Its
+cost is availability on a page read error or a directory defect during an
+abort, both of which already leave a wrong total. `[quiet-wrong]` in kind.
 
 ---
 
@@ -236,7 +292,10 @@ as not run); the sim corpus with the oracle; `scripts/bs/mutants.sh`.
 the commit the milestone opened from against its closing commit, with the
 control relation unmoved; `assertion.md` §6.2 and §7 (the recovery sentence
 CK corrected), `known-gaps.md`, the bug entry closed, the index row, CLAUDE.md
-only if a row states it.
+only if a row states it. **Added at the CL-S1/S2 review**: `wal.md` - kind 34
+in its list and the assertions row, analysis's `ASSERT_PENDING` exception
+(§12), the checkpoint's write after each `ASSERT_SNAPSHOT` run - and superblock
+35 wherever a spec or CLAUDE.md row states 34.
 
 ---
 
@@ -325,3 +384,79 @@ adopted:
   additive record kind, and the list is bounded by the active transactions'
   reservations. It still needs the operator's mark because it adds a record
   kind and a checkpoint write.
+
+### CL-S1 and CL-S2 - P1 and P2 (2026-11-02, one commit)
+
+Resumed on the standing go-ahead (`raft-marks-2026-11-02.md` §2) over a diff
+an earlier session of this worktree left uncommitted on `d75c4539`, read whole
+and taken as the stage's draft. The two stages land together because CL-Q2
+(b') needs CL-R5: the pending set must outlive the commit record for a
+checkpoint to list it.
+
+**What is built.**
+- **`ASSERT_PENDING` (34)**, superblock 35 (CL-Q6 (a)): after each
+  `ASSERT_SNAPSHOT` run, in the same hold, the checkpoint lists every
+  reservation the registry holds pending - and, new, every one an abort has
+  taken out of `pending_` and not yet given back (`aborting_`), popped in the
+  hold that logs its `ASSERT_ROLLBACK`. `ASSERT_ROLLBACK`'s payload and flag.
+- **CL-R5**: `TransactionManager::Commit` and `CommitDeferred` take an
+  `after_logged` callback, run once the commit record is appended (after the
+  sync for `strict`) and before the publish; the dispatcher drops the pending
+  set there, and the failed-commit arms call `AbortTxn`.
+- **CL-R1/R2/R3**: the mount hands `RecoverAssertions` the analysis phase's
+  non-winners (less `kBootstrapXid`); the pass keeps what is owed - the base's
+  `ASSERT_PENDING` plus every `ASSERT_RESERVE` after the base, less each
+  `ASSERT_ROLLBACK` - and gives back what an undecided transaction still owes
+  through `GiveBackReservation`, the one path a replayed rollback also takes
+  (mark `kEntryOrphaned`, relink if skipped, unapply). Unlogged, redone at every
+  mount until a checkpoint's base carries it.
+- **Analysis**: an `ASSERT_PENDING` alone does not note its transaction - a
+  checkpoint may list a transaction whose commit lies just below the scan start.
+- **CL-Q7 (b)**: an abort's unwind refused part-way fail-stops the log.
+- **CL-Q4**: both `DISABLED_` crash cells enabled and green.
+- **CL-Q5 (a)**: the sim re-sums every group of `a0`'s assertion against its
+  rows after each restart, exactly and in both directions, and **the stream
+  now writes `a0` inside explicit transactions** (`AssertedTxnWrite`). As the
+  draft wired it, every constrained write was autocommit, so no crash ever left
+  a loser holding a reservation and the oracle could not see P1 - measured: the
+  mutant below killed 0 of 20 runs. With it, 3 of 20.
+
+**Review, round 1** (five `critics-developer` lenses, each finding put to an
+independent skeptic): 12 confirmed, 6 refuted. Applied: the record and payload
+comments (C0, C9, C11); one compensation path instead of two (C1); the exact
+oracle (C4) and no oracle-unknown gate (C5); an unenforcing assertion fails a
+fault-free run and is counted under faults (C6); cells for analysis's exception
+(C7) and for the mid-abort listing (C8). **C2/C3** - an abort refused part-way
+leaves reservations counted with nothing naming them - **not as proposed**:
+both skeptics showed that keeping the remainder in `aborting_` compensates
+nothing once analysis forgets the transaction, so CL-Q7 was written and (b)
+adopted. **C10** (the specs) is CL-S4's, which the order already scheduled;
+its list is extended (§4). Refuted and not applied: `ReplayAssertionRecord`
+refusing kind 34 (unreachable; it now returns OK anyway, harmless), a peer
+`CoreRuntime` passing no undecided set (no production path), a coverage gap
+on the deferred commit (the claimed wrong result cannot occur), three
+suggested cells the order does not require, and "no format event" (the
+superblock was bumped).
+
+**Review, round 2** (two lenses over round 1's fixes): 5 confirmed. Applied:
+the replay leftovers (C0); **a poisoned transaction's remaining ops are not
+sent** (C1 - a refusal inside `AssertedTxnWrite`'s transaction left the stream
+drawing a `DROP` that then ran in autocommit, and its `ROLLBACK` revived the
+table in the workload's books: a false failure in a fault-free run); an
+at-mount fault counts as a fault for the oracle (C2); the closing rollback's
+fail-stop is a fail-stop (C3); a lost assertion fails a clean fault-free run
+and is counted otherwise (C4). Rejected: one shared `IsAssertionRecord` for
+`wal` and `exec` - it predates CL, the two agree, and `wal` cannot depend on
+`exec`.
+
+**Mutations, measured** (Debug, the cells named): `list(aborting_)` removed,
+and the give-back's `pop_back` removed - each killed by
+`AssertionPendingListTest.ACheckpointDuringAnAbortListsWhatItHasNotGivenBack`;
+`FailStop` removed - killed by `AnUnwindRefusedPartWayStopsTheLog`; analysis
+noting `ASSERT_PENDING` - killed by
+`AnalysisTest.AnAssertPendingAloneDoesNotMakeItsTransactionALoser`; the
+pass compensating nothing - killed by both crash cells, the recover cells and,
+in `build-release`, 3 of 20 sim runs (seeds 3, 4 and 20261102002,
+`sync-crash`; one of them a stranded departure, `rows=1/total=0`).
+
+Overhead not measured; measured at the milestone's close.
