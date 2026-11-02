@@ -292,6 +292,57 @@ TEST(StrictParkRigTest, AParkedStrictCommitWhoseSyncFailsAbortsAndIsNeverVisible
     EXPECT_EQ(Response(observer, 0), "id") << "a strict commit the log never made durable was published";
 }
 
+// CL-S0 part 1 (`instructions/v3.2.0/workorder-cl-assertion-reservations-of-an-undecided-transaction.md`
+// §4): a `Commit` that fails strands the transaction's reservations (P2), since
+// `CommitTxn` drops the pending set before the commit and the abort then finds
+// none. Every refusal of `Commit` stops the log (`WalManager::Append` fail-stops
+// a refused record; a failed sync does), so the stranded departure's total
+// should change no admission: the next write on the asserted relation is
+// refused whatever the total says. This cell pins that, on the departure
+// direction that would otherwise admit a fourth row.
+TEST(StrictParkRigTest, AFailedStrictCommitsStrandedDepartureAdmitsNothingOnAStoppedLog) {
+    Fixture f;
+    f.Open();
+    if (HasFatalFailure()) return;
+    CommandDispatcher& d1 = f.rig->core(1).dispatcher();
+    ASSERT_FALSE(StartsWith(d1.Dispatch("INSERT INTO t VALUES (3, 1)").response, "ERR"));
+    ASSERT_FALSE(StartsWith(
+        d1.Dispatch("CREATE ASSERTION a1 ON t GROUP BY (v) CHECK COUNT(*) <= 2").response, "ERR"));
+    Session strict_session;
+    strict_session.set_durability(wal::DurabilityClass::kStrict);
+    Script strict{&strict_session, {"DELETE FROM t WHERE id = 3"}};
+    Session probe_session;
+    Script probe{&probe_session, {"INSERT INTO t VALUES (4, 1)"}};
+    f.Submit(1, strict);
+    f.Submit(1, probe);
+    struct StopAtExit {
+        TwoCoreRig& rig;
+        ~StopAtExit() {
+            rig.log_gate().Release();
+            rig.Stop();
+        }
+    } stop_at_exit{*f.rig};
+    f.rig->log_gate().Hold();
+    strict.go.store(true, std::memory_order_release);
+    f.rig->Start();
+    ASSERT_TRUE(KickUntil(*f.rig, 1, [&] {
+        return f.rig->log_gate().parked() >= 1 &&
+               f.rig->visibility().slot(1).pending_commit_bound.load() != txn::kUnboundedBound;
+    }));
+    f.rig->log_gate().FailSyncs();
+    f.rig->log_gate().Release();
+    ASSERT_TRUE(KickUntil(*f.rig, 1, [&] { return strict.done.load() == 1; }));
+    EXPECT_TRUE(StartsWith(Response(strict, 0), "ERR")) << Response(strict, 0);
+
+    // Group 1 holds rows 1 and 3 (the bound is 2). The refused DELETE was
+    // undone, so both stand; the stranded departure leaves the total at 1.
+    probe.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*f.rig, 1, [&] { return probe.done.load() == 1; }));
+    EXPECT_TRUE(StartsWith(Response(probe, 0), "ERR"))
+        << "a write was admitted after the log stopped: " << Response(probe, 0);
+    EXPECT_TRUE(f.rig->wal().stopped());
+}
+
 TEST(StrictParkRigTest, StrictCommitsStagedDuringOneSyncShareTheNext) {
     // **`strict` batches now** (BA-R4: "under (b), D1 shares whatever sync
     // concurrent requests ride"). Four sessions on one core commit `strict`

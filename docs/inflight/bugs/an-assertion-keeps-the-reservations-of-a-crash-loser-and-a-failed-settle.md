@@ -106,3 +106,14 @@ re-summation after a mount.
 `instructions/v3.2.0/workorder-cl-assertion-reservations-of-an-undecided-transaction.md`
 (CL, written 2026-11-01, not opened for work) carries the fix for path 1 and
 the failed-`Commit` path above.
+
+## After CL-S0 (worktree `ck-assertion-commit-settle`, 2026-11-02)
+
+The failed-`Commit` path above **changes no admission**: every refusal of
+`Commit` stops the log, and a stopped log refuses every later write
+(`StrictParkRigTest.AFailedStrictCommitsStrandedDepartureAdmitsNothingOnAStoppedLog`).
+Its stranded total is dropped at the restart, whose case is path 1. Path 1
+stays open, and a loser that reserved before the last checkpoint cannot be
+told from the page (an entry carries no transaction id), so its fix needs a
+durable record of which entries a transaction reserved
+(`instructions/v3.2.0/workorder-cl-assertion-reservations-of-an-undecided-transaction.md` §6).
