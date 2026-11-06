@@ -384,9 +384,21 @@ On a checked write (per §4.2), executed inline in the writing statement:
    written - no page, no record, no stamp (CK-R2). The aggregate was correct
    from admission, and `RESERVED` stays set on the entries (CK-R1), so the
    step cannot fail. (Before CK it cleared the bit and logged `ASSERT_COMMIT`.)
+   **The set is dropped once the commit record is in the log, and before the
+   commit is published** (CL-Q3 as resolved): appended for `group` and
+   `relaxed`, synced for `strict`, staged for a deferred `strict` commit.
+   Appended is enough: a checkpoint that no longer lists the set lies after
+   the record in the one log, so a mount that reads that checkpoint reads the
+   commit too. Until then a checkpoint lists it (§7). A commit refused before
+   the record leaves the set to its caller's abort; a sync refused after the
+   drop finds it gone. Either refusal stops the log (CL-S0), and the next
+   mount decides by whether the record is durable.
 5. **Abort:** via the undo chain, remove the transaction's reserved entries
    and subtract their deltas from the group headers. Emit the compensating
-   WAL records.
+   WAL records. **An unwind refused part-way stops the log** (CL-Q7 (b)): the
+   reservations not reached stay counted and nothing later names them, so no
+   `TXN_ABORT` or later checkpoint may become durable; the next mount gives
+   them back as a crash loser's.
 
 Properties. AO-S6e-c (M2, `instructions/v3.0.0/workorder-ao-m2-lock-family.md`
 census row 11) turned a refusal behind an undecided reservation from an
@@ -475,14 +487,34 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   - `ASSERT_ROLLBACK` — compensating removal + negative delta (abort path);
   - `ASSERT_BUILD` — bulk records emitted by the CREATE-time builder;
   - `ASSERT_SNAPSHOT` — AS6a's per-checkpoint group-header base;
+  - `ASSERT_PENDING` (34, since superblock 35) — written by each checkpoint
+    right after an assertion's `ASSERT_SNAPSHOT` run, one per reservation the
+    registry holds for a transaction not yet decided - pending, or taken out
+    by an abort and not yet given back - naming the transaction in the
+    envelope, the entry by page and index, its key, delta and departure bit
+    (`ASSERT_ROLLBACK`'s payload and flag). A page entry carries no
+    transaction id, so for a reservation the base already counts this is the
+    only durable statement of whose it is (CL-R1). Not a page change; redo
+    passes it;
   - `ASSERT_DROP` — teardown.
 - Ordering: WAL-before-data, consistent with the existing contract.
-- Recovery: replay restores group headers and entries exactly. **A
-  reservation undecided at a crash is not compensated by any mount path**
-  (CK §1.8, reproduced at `b66a0dbe`): the row is undone and the group total
-  keeps the reservation, so an arrival fails closed and a departure fails
-  open `[quiet-wrong]` (`docs/inflight/bugs/an-assertion-keeps-the-reservations-of-a-crash-loser-and-a-failed-settle.md`).
-  A reservation of an explicit `ROLLBACK` is compensated by `ASSERT_ROLLBACK`.
+- Recovery: replay restores group headers and entries exactly. A
+  reservation of an explicit `ROLLBACK` is compensated by `ASSERT_ROLLBACK`.
+  **A reservation undecided at a crash is given back at the mount since CL**
+  (`instructions/v3.2.0/workorder-cl-assertion-reservations-of-an-undecided-transaction.md`):
+  the mount hands the assertion pass the analysis phase's non-winners - losers
+  and aborted alike, less `kBootstrapXid`, which writes no `TXN_COMMIT` and is
+  treated as committed (`known-gaps.md`) - and the pass keeps what each owes: the base
+  checkpoint's `ASSERT_PENDING` list, plus every `ASSERT_RESERVE` after the
+  base, less each `ASSERT_ROLLBACK`. What an undecided transaction still owes
+  when the scan ends is given back as a replayed rollback is - the entry
+  marked `kEntryOrphaned`, the delta unapplied - unlogged, and redone at every
+  mount until a checkpoint's base carries it. **The decision is the commit
+  record's, never the entry's bit** (CK-R4), and a transaction the analysis
+  never saw is left counted. Analysis does not note a transaction from
+  `ASSERT_PENDING` alone: a checkpoint may list one whose commit lies just
+  below the scan start (`wal.md` §12). A transaction undecided at a restore's
+  or a PITR's stop point is given back the same way.
   The constraint is enforceable
   immediately at restart — **no rebuild scan, no enforcement gap**. "No
   rebuild scan" means no re-scan of the *relation*, which is what AS7's
@@ -511,7 +543,9 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > record before its assertion's base has its page half applied and nothing
   > folded → the snapshot is loaded → the cabin's pages are scanned and
   > bucketed by `group_id`, rebuilding the linkage → `ASSERT_*` records are
-  > folded, page and directory, from the snapshot forward. A `CREATE
+  > folded, page and directory, from the snapshot forward → the linkage is
+  > reconciled → what an undecided transaction still owes is given back
+  > (the recovery paragraph above, since CL). A `CREATE
   > ASSERTION`'s build entries all precede its own base, so an entry its page
   > lost before write-back is restored by the second step or not at all. An
   > `ASSERT_DROP` is never folded: the assertions recovered are the catalog's

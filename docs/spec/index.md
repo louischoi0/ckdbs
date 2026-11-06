@@ -800,7 +800,7 @@ Refused, each naming the reason:
 ## 12. Catalog, format and WAL
 
 > **IX12 — `SysIndexRow` is 116 bytes.** It arrived with superblock 12; the
-> superblock now refuses every version but the current one (34), so every mountable volume
+> superblock now refuses every version but the current one (35), so every mountable volume
 > carries it. Its `flags` byte carries `kIndexFlagUnique` since 27 (IX11) and
 > `kIndexFlagBuilding` since 34 (§10.3); `Decode` refuses any other bit, and
 > the two together.

@@ -940,8 +940,10 @@ void TcpServer::ExpireOverdueTransactions() {
                                   " is past the lifetime ceiling and its rollback failed: " +
                                   rolled.response);
         }
-        // Refused before it ended the transaction (an assertion
-        // reservation's unwind): still open, and the next tick tries again.
+        // `RollbackLocal` always ends the transaction - an assertion
+        // unwind refused part-way stops the log instead (CL-Q7 (b)) - so
+        // this guards only a refusal before it is reached: still open, and
+        // the next tick tries again.
         if (conn.session.transaction() != nullptr) continue;
         conn.session.Expire(id);
         if (logging(LogLevel::kInfo)) {

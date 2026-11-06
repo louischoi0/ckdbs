@@ -14,7 +14,9 @@ hold (§6), so CL-S1 and CL-S2 waited on the operator.** **Resumed 2026-11-02
 on the operator's standing go-ahead** (go-ahead-achieving-milestone,
 `raft-marks-2026-11-02.md` §2): **CL-Q2 (b')** and **CL-Q6 (a)** adopted as CLA
 proposed - not the operator's per-item marks - and the operator's **CL-Q3 (a)**
-kept, CL-S0's revised (b) withdrawn (§3). The letter CL is CLA's
+kept, CL-S0's revised (b) withdrawn (§3). **Resumed again 2026-11-06 on the standing
+go-ahead and closed on the work branch** (`raft-marks-2026-11-06.md` §1): CL-S3 and CL-S4
+landed, no item adopted (§6). The letter CL is CLA's
 proposal: CA..CK are taken (CJ by another session). The operator may reletter
 it.
 
@@ -520,3 +522,81 @@ the cell's comment tightened; the mutation count re-measured (above).
 Rejected: none.
 
 Overhead not measured; measured at the milestone's close.
+
+### CL-S4 - the close (2026-11-06)
+
+**The close measurement**
+(`bench/v3.4.6/results-cl-close-v3.4.6-20-g291cc251.md`, `ck-tester`,
+`build-release`).
+- Sides: base `v3.4.6-17-gb4a9e102`, the commit CL opened from, against
+  close `v3.4.6-20-g291cc251`. The engine code is that of `8751ec2f`.
+- Shape: CK's close shape and driver unchanged
+  (`tools/assertion_settle_benchmark.py`): 0/1/4 assertions, K = 1/10/100,
+  `relaxed` and `group`, 1 and 2 cores, run 05:14 to 05:25 UTC. Nothing was
+  cut.
+- **H3 holds**: the control relation (no assertion) moved inside its floor
+  in every cell (relaxed −0.3 to +0.4 µs at p50, group ±12 µs).
+- **Relaxed**: every asserted cell is inside the floor.
+  - The one marginal reading (2 cores, 4 assertions, K = 100: +0.7 µs) did
+    not recur in two fresh-server re-runs of the configuration (−0.1 and
+    +0.1 µs, 05:28 to 05:33 UTC), so it was server-to-server drift.
+- **Group**: every asserted cell is noise. Deltas of opposite sign appear at
+  the same K, which no per-reservation cost produces.
+- Not measured: `strict` and `CommitDeferred`; a transaction held open
+  across a checkpoint (the `ASSERT_PENDING` list's cost, recorded in
+  `known-gaps.md` instead); the mount's assertion pass.
+- PostgreSQL has no twin for this shape.
+
+**The documents.**
+- `assertion.md` §6.2 steps 4 and 5 (the drop's point and the fail-stop),
+  §7 (`ASSERT_PENDING`, the recovery paragraph, the recovery order box).
+- `wal.md`: the emission table, analysis's exception and the record list.
+- Superblock 35 where a spec or the manual stated 34 as current:
+  `crosscore.md` CC8, `index.md` IX12, `manual/server/server.md`; and
+  `heap-and-tuple.md` §3.1b's stale "33 now" dropped.
+- `known-gaps.md` "Assertion reservations (CK, CL)".
+- CLAUDE.md's Assertions row; the Heap relations and Core placement rows no
+  longer restate the current superblock.
+- One stale comment in `src/server/tcp_server.cpp` (comment only).
+- The bug entry
+  `an-assertion-keeps-the-reservations-of-a-crash-loser-and-a-failed-settle.md`
+  is deleted. Its deletion was staged before CL-S3 and landed in `291cc251`.
+- The manual's SQL surface did not change.
+
+**Review** (`critics-developer`, one pass over the documents against the code
+at `291cc251`). The code matched the documents on every mechanism checked.
+
+Applied:
+- F1: a gap bullet saying no crash cell runs a checkpoint between an
+  undecided reservation and the crash was false.
+  `AnArrivalUndecidedAcrossACheckpointIsGivenBack` and
+  `ADepartureUndecidedAcrossACheckpointIsGivenBack` do it. The bullet now
+  states the sim's limit alone.
+- F2: "a failed commit aborts them" overstated it. A refused commit is
+  always behind a stopped log, and the next mount gives it back. Step 4 now
+  says why "appended" is enough, and what a refused sync after the drop
+  leaves.
+- F3: `kBootstrapXid` is "treated as committed", not "committed by
+  construction".
+- F4: the stale "current superblock" statements listed above.
+- F5: step 4 cites CL-Q3 as resolved, not CL-R5, whose §2 text predates the
+  resolution.
+- F6: the recovery order box gains the give-back step.
+- F7: "the only durable statement" is narrowed to a reservation the base
+  already counts.
+- F8: the `tcp_server.cpp` comment.
+- Simplifications 1 to 3: CLAUDE.md's two rows stop restating the current
+  superblock; the Assertions row is cut to one clause plus `§6.2`; the
+  "unlogged compensation" bullet, a design fact the spec states, is removed
+  from `known-gaps.md`.
+
+Rejected:
+- Simplification 4 (`ASSERT_PENDING` described once only, in `wal.md`):
+  `assertion.md` owns the record's meaning, and `ANCHOR_SLOT_REMOVE` sets
+  the precedent of both.
+- The latent note that the pending list carries no count: its one refusal
+  that does not stop the log is unreachable (`ASSERT_RESERVE` already
+  encoded the same key), so it is not a gap.
+
+**Every stage landed**: CL-S0 `d75c4539`, CL-S1 and CL-S2 `8751ec2f`, CL-S3
+`291cc251`, CL-S4 this commit.

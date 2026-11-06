@@ -83,7 +83,7 @@ mounts has **one WAL stream for the instance**, whatever `cores` says, and
 `SHOW META`'s `wal_topology` field says so. A volume whose superblock
 records more than one stream **does not mount**: there is no migration,
 and the refusal names it. Recreate the database. The same holds
-for every volume older than superblock version 34 (2026-10-23): 20 keeps a
+for every volume older than superblock version 35 (2026-11-02): 20 keeps a
 B+ tree leaf in key order by placement, 21 records a dropped relation's
 roots in its tombstone, 22 carries the 48-bit Keystone id, 27 marks a
 unique index, 28 orders a secondary index by its whole entry, 29 logs
@@ -92,8 +92,10 @@ B+ tree with a hidden tuple key, 31 grows the catalog onto ordinary
 pages, which lifts the old limit of about 800 tables, 32 marks a
 dropped column whose bytes `PURGE DROPPED COLUMNS` has cleaned, 33
 (2026-10-21) makes a `sys.patterns` row a Waystone opt-in rather than a
-shape traffic registered, and 34 (2026-10-23) marks an index an online
-`CREATE INDEX` is still building. **A version-33 volume does not mount under this
+shape traffic registered, 34 (2026-10-23) marks an index an online
+`CREATE INDEX` is still building, and 35 (2026-11-02) lets a checkpoint
+list the assertion reservations of an undecided transaction, so a crash
+gives them back. **A version-34 volume does not mount under this
 build, and a backup taken from one is refused by its restore**: recreate
 the database, or keep the build that wrote it.
 
