@@ -343,5 +343,43 @@ TEST(OptimizerSignalsTest, ANoteWaitsForTheCollectorsLatch) {
     peer.join();
     EXPECT_EQ(signals.tracked_cabins(), 1u);
 }
+// ---- S4: the ASH wait signal (CJ's WE13, [EXPERIMENTAL]) ---------------------
+
+TEST(OptimizerSignalsTest, WaitSamplesCountOnlyTrackedShapesAndOnlyWhileTheSwitchIsOn) {
+    sched::ManualClock clock;
+    stats::OptimizerSignals signals(&clock, kHalfLife);
+    std::atomic<bool> on{true};
+    signals.set_wait_gate(&on);
+    signals.NoteExecution(7, 10);
+    signals.NoteWaitSample(7);
+    signals.NoteWaitSample(7);
+    signals.NoteWaitSample(99);  // never executed: admitted nowhere
+    on.store(false);
+    signals.NoteWaitSample(7);  // switch off: not counted
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    ASSERT_EQ(snap.fingerprints.size(), 1u) << "a wait sample admits no shape";
+    EXPECT_EQ(snap.fingerprints[0].wait_samples_q8, 2 * stats::kDecayScoreScale);
+}
+
+TEST(OptimizerSignalsTest, TheWaitSignalMovesNothingTheControllerReads) {
+    // Two collectors fed the same executions, one also fed waits: every field a
+    // decision reads is identical.
+    sched::ManualClock clock;
+    stats::OptimizerSignals plain(&clock, kHalfLife), waited(&clock, kHalfLife);
+    for (auto* s : {&plain, &waited}) {
+        s->NoteExecution(5, 3);
+        s->NoteExecution(5, 3);
+    }
+    for (int i = 0; i < 100; ++i) waited.NoteWaitSample(5);
+    const auto a = plain.Snapshot().fingerprints.at(0);
+    const auto b = waited.Snapshot().fingerprints.at(0);
+    EXPECT_EQ(a.frequency_q8, b.frequency_q8);
+    EXPECT_EQ(a.pages_q8, b.pages_q8);
+    EXPECT_EQ(a.frequency_log2, b.frequency_log2);
+    EXPECT_EQ(a.pages_log2, b.pages_log2);
+    EXPECT_EQ(a.wait_samples_q8, 0u);
+    EXPECT_GT(b.wait_samples_q8, 0u);
+}
+
 }  // namespace
 }  // namespace kds::server

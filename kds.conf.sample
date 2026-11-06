@@ -432,6 +432,21 @@ cabin_optimizer = off
 #cabin_optimizer_confirm_snapshots = 3
 #cabin_optimizer_snapshot_interval_ms = 10000
 
+# ---- Wait events and the active-session history (CJ) ---------------------------
+# Cumulative wait statistics are always on and have no key. The active-session
+# sampler (`sys.ash`) is on by default, one sample per active task every
+# `ash_interval_ms` into a fixed per-core ring that overwrites its oldest.
+# `SET ASH ENABLED off|on`, `SET ASH INTERVAL_MS n` and `SET ASH
+# CAPTURE_ARG_HASH on|off` change the first, second and fourth at runtime
+# (admin); turning it off keeps the ring. The ring size changes on restart.
+# `ash_capture_arg_hash` is accepted and changes nothing yet: no statement
+# publishes an argument hash, because a KWP bind is substituted into the text
+# before the parse and WD11 forbids recording bind values (known-gaps.md, CJ).
+#ash_enabled = on
+#ash_interval_ms = 1000            # 100-10000
+#ash_ring_bytes_per_core = 4194304 # 1 MiB - 64 MiB
+#ash_capture_arg_hash = off
+
 # T_amort: how many decay half-lives a Cabin's build cost amortizes over.
 # One number, one belief - the structure's expected useful lifetime - read
 # by both sides of the cost model: the admission bar (build cost / window)

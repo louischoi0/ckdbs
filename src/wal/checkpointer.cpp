@@ -602,7 +602,10 @@ sched::Coro Checkpointer::ParkOnDataSyncTicket(std::uint64_t ticket) {
     if (ticket == 0) co_return Status::OK();  // a target with nothing to wait on
     const std::function<bool()> synced = [this, ticket] { return target_.SyncDone(ticket); };
     const sched::MonoTimeNs parked = wal_.clock().Now();
-    co_await sched::WaitUntil{&synced};
+    {
+        sched::WaitScope wait(stats::WaitEvent::kSysioCheckpoint);
+        co_await sched::WaitUntil{&synced};
+    }
     task_report_.data_park_ns += wal_.clock().Now() - parked;
     co_return target_.SyncResult(ticket);
 }
@@ -641,7 +644,10 @@ sched::Coro Checkpointer::ParkOnLog(Lsn lsn, std::uint32_t core_id) {
     if (!durable()) {
         const WalManager::DurableWait waiting(wal_, core_id);
         const sched::MonoTimeNs parked = wal_.clock().Now();
-        co_await sched::WaitUntil{&durable};
+        {
+            sched::WaitScope wait(stats::WaitEvent::kSysioWalWrite, lsn);
+            co_await sched::WaitUntil{&durable};
+        }
         task_report_.log_park_ns += wal_.clock().Now() - parked;
     }
     co_return wal_.IsDurable(lsn) ? Status::OK() : LogStopped();

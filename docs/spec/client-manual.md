@@ -73,7 +73,7 @@ statement (`docs/spec/protocol.md` §10):
 |---|---|
 | `readonly` | `SELECT`, `WITH`, `ANALYZE`, `SHOW *`, `DESCRIBE`, `PING`, `BEGIN`/`COMMIT`/`ROLLBACK`, `SET ISOLATION`, `SET DURABILITY`, `SET PRIORITY` (all but `TRANSACTIONAL`, which is `admin`'s) |
 | `readwrite` | everything above, plus `INSERT`, `UPDATE`, `DELETE` |
-| `admin` | everything, including `CREATE`/`DROP`/`ALTER`, `STOP`, `SYNC`, `SET CABIN_OPTIMIZER` |
+| `admin` | everything, including `CREATE`/`DROP`/`ALTER`, `STOP`, `SYNC`, `SET CABIN_OPTIMIZER`, `SET ASH` |
 
 A refused statement answers `ERR permission: <cmd> needs <role>; this
 connection is <role>`. Commands the server does not recognize also
@@ -107,6 +107,7 @@ defaults → config file (`--config <path>`) → command-line flags.** See
 | `tcp_keepalive_s` | — | `60` | Idle seconds before keepalive probes a connection; a dead peer is reaped after about twice this value. `0` turns it off; above 32767 is refused. |
 | `max_locks_per_txn` | — | `65536` | The lock family's per-transaction entry budget (`docs/spec/txn.md` §5). |
 | `lock_wait_fault_net_ms` | — | `1000` | The longest a lock wait runs before it is refused `TxnConflict`; `0` refuses immediately. |
+| `ash_enabled` / `ash_interval_ms` / `ash_capture_arg_hash` / `ash_ring_bytes_per_core` | — | `on` / `1000` / `off` / `4194304` | The active-session sampler behind `sys.ash` (`docs/spec/sys-views.md` §6.7). The interval is 100-10000 ms and the ring 1-64 MiB; `SET ASH` changes the first three at runtime, the ring only on restart. |
 | `txn_lifetime_ceiling_ms` | — | `60000` | An explicit transaction older than this is rolled back at its listener's sweep; `0` is refused, there is no off-switch (`docs/spec/txn.md` §1). |
 | `tls` | — | `off` | Direct TLS 1.3 on the port above (`docs/spec/protocol.md` §1): every connection opens with a handshake, no plaintext fallback, no STARTTLS-style upgrade. Requires both file keys below; a server built with `-DKDS_WITH_TLS=OFF` refuses `on` naming the flag. |
 | `tls_cert_file` | — | — | PEM certificate presented to every client, leaf first with any chain appended. Read once at startup. |

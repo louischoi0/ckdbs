@@ -53,7 +53,11 @@ struct Script {
 
 sched::Coro RunScript(CommandDispatcher& d, Script& s) {
     s.go_pred = [&s] { return s.go.load(std::memory_order_acquire); };
-    co_await sched::WaitUntil{&s.go_pred};
+    {
+        // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+        sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+        co_await sched::WaitUntil{&s.go_pred};
+    }
     s.outs.resize(s.lines.size());
     for (std::size_t i = 0; i < s.lines.size(); ++i) {
         co_await d.DispatchAsync(s.lines[i], s.session, &s.outs[i]);

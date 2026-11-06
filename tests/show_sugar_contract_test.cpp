@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/sched/ash_sampler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/kwp_session.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
@@ -529,6 +530,104 @@ TEST_F(ShowSugarTest, ACheckpointRunIsOneRowOfSysCheckpoints) {
         Text("SELECT seq FROM sys.checkpoints WHERE started < '2023-11-14 22:13:23'"));
     EXPECT_EQ(early.Column("seq"), std::vector<std::string>{"1"});
     EXPECT_EQ(testing_view::MetaField(Text("SHOW META"), "checkpoints_recorded"), "2");
+}
+
+// ---- CJ's WE01: `sys.wait_event_names` --------------------------------------
+
+TEST_F(ShowSugarTest, TheWaitStatisticsViewsAnswerWithTheirColumns) {
+    // The total rows (core NULL) are one per event; per-core rows exist only
+    // for cores a reactor bound earlier in this process.
+    const auto stats = testing_view::ReadViewText(
+        Text("SELECT core, event, class, count, total_us, max_us FROM sys.wait_stats"));
+    std::size_t cpu_rows = 0;
+    for (const std::string& e : stats.Column("event")) cpu_rows += e == "cpu.on_cpu";
+    EXPECT_GE(cpu_rows, 1u);
+    EXPECT_GE(stats.rows.size(), 20u);
+    const auto hist = testing_view::ReadViewText(
+        Text("SELECT core, event, bucket, lo_us, count FROM sys.wait_histogram"));
+    EXPECT_EQ(hist.Column("bucket").size(), hist.rows.size());
+    const auto waits = testing_view::ReadViewText(
+        Text("SELECT session_id, event, count, total_us FROM sys.session_waits"));
+    EXPECT_EQ(waits.Column("event").size(), waits.rows.size());
+    const auto state = testing_view::ReadViewText(
+        Text("SELECT session_id, state, event, p1, p2, p3, elapsed_us FROM sys.session_state"));
+    EXPECT_EQ(state.Column("state").size(), state.rows.size());
+}
+
+// ---- CJ's WE08: `sys.ash` ---------------------------------------------------
+
+TEST_F(ShowSugarTest, SysAshMergesEveryCoresRingInTimeOrderAndFiltersLikeAnyView) {
+    // Two samplers on core ids no other test uses, records interleaved in time.
+    sched::AshSampler a, b;
+    a.set_core_id(60);
+    b.set_core_id(61);
+    stats::AshRecord r;
+    r.event_id = static_cast<std::uint16_t>(stats::WaitEvent::kCommitWalFlush);
+    r.fingerprint = 0xFEEDFACEull;
+    for (std::uint64_t t : {10, 30, 50}) {
+        r.sample_ts_us = t;
+        r.core_id = 60;
+        a.ring()->Record(r);
+    }
+    for (std::uint64_t t : {20, 40, 60}) {
+        r.sample_ts_us = t;
+        r.core_id = 61;
+        r.state = stats::kAshBackground;
+        b.ring()->Record(r);
+    }
+    const auto all = testing_view::ReadViewText(Text(
+        "SELECT sample_ts_us, core, session_kind, event FROM sys.ash WHERE fingerprint = 4277009102"));
+    EXPECT_EQ(all.Column("sample_ts_us"),
+              (std::vector<std::string>{"10", "20", "30", "40", "50", "60"}));
+    EXPECT_EQ(all.Column("core"), (std::vector<std::string>{"60", "61", "60", "61", "60", "61"}));
+    EXPECT_EQ(all.Column("event")[0], "commit.wal_flush");
+    const auto bg = testing_view::ReadViewText(Text(
+        "SELECT core FROM sys.ash WHERE session_kind = 'background' AND sample_ts_us >= 40"));
+    EXPECT_EQ(bg.Column("core"), (std::vector<std::string>{"61", "61"}));
+}
+
+TEST_F(ShowSugarTest, SetAshChangesTheSamplersAtRuntimeAndRefusesWhatIsOutOfRange) {
+    // The process defaults are restored on exit: other tests build samplers.
+    const sched::AshSettings before = sched::AshDefaults();
+    sched::AshSampler a;
+    a.set_core_id(62);
+    EXPECT_EQ(Text("SET ASH ENABLED off"), "OK ash_enabled=off");
+    EXPECT_FALSE(a.enabled()) << "reaches a sampler already registered";
+    EXPECT_EQ(Text("SET ASH ENABLED = on"), "OK ash_enabled=on");
+    EXPECT_TRUE(a.enabled());
+    EXPECT_EQ(Text("SET ASH INTERVAL_MS 250"), "OK ash_interval_ms=250");
+    EXPECT_EQ(a.interval_ns(), 250'000'000u);
+    EXPECT_EQ(Text("SET ASH CAPTURE_ARG_HASH on"), "OK ash_capture_arg_hash=on");
+    for (const char* bad : {"SET ASH INTERVAL_MS 99", "SET ASH INTERVAL_MS 10001", "SET ASH INTERVAL_MS x",
+                            "SET ASH ENABLED maybe", "SET ASH RING_BYTES 1", "SET ASH", "SET ASH ENABLED on off"}) {
+        EXPECT_EQ(Text(bad).rfind("ERR", 0), 0u) << bad;
+    }
+    EXPECT_EQ(a.interval_ns(), 250'000'000u) << "a refused value changes nothing";
+    sched::AshSampler late;
+    late.set_core_id(63);
+    EXPECT_EQ(late.interval_ns(), 250'000'000u) << "a sampler registering later adopts the settings";
+    sched::SetAshEnabled(before.enabled);
+    ASSERT_TRUE(sched::SetAshIntervalMs(before.interval_ms).ok());
+    sched::SetAshCaptureArgHash(before.capture_arg_hash);
+}
+
+TEST_F(ShowSugarTest, SysWaitEventNamesListsTheRegistryByName) {
+    const std::string reply = Text(
+        "SELECT event_id, name, class, kind, in_db_time, p1, p2, p3 FROM sys.wait_event_names "
+        "ORDER BY event_id");
+    const auto shown = testing_view::ReadViewText(reply);
+    ASSERT_EQ(shown.rows.size(), 20u) << reply;
+    EXPECT_EQ(shown.Find("name", "cpu.on_cpu", "event_id"), "0") << reply;
+    EXPECT_EQ(shown.Find("name", "commit.wal_flush", "class"), "Commit") << reply;
+    EXPECT_EQ(shown.Find("name", "commit.wal_flush", "p3"), "group_size") << reply;
+    EXPECT_EQ(shown.Find("name", "app.lock_conflict", "kind"), "counter") << reply;
+    EXPECT_EQ(shown.Find("name", "idle.client", "in_db_time"), "0") << reply;
+    EXPECT_EQ(shown.Find("name", "io.page_read", "in_db_time"), "1") << reply;
+    // A filter by name works as on any view (SV5).
+    const auto one = testing_view::ReadViewText(
+        Text("SELECT name FROM sys.wait_event_names WHERE class = 'Idle' ORDER BY name"));
+    EXPECT_EQ(one.Column("name"),
+              (std::vector<std::string>{"idle.background", "idle.client"}));
 }
 
 TEST_F(ShowSugarTest, TheTraceSurfaceIsRetired) {

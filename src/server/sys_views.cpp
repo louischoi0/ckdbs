@@ -17,6 +17,7 @@
 #include "kds/exec/transition_catalog.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/sched/ash_sampler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -24,6 +25,7 @@
 #include "kds/stats/checkpoint_log.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/relation_stats.hpp"
+#include "kds/stats/wait_event.hpp"
 #include "kds/stats/statement_stats.hpp"
 
 // The builders of every `sys` view (`include/kds/server/sys_views.hpp`).
@@ -78,6 +80,12 @@ constexpr SysViewSpec kViews[] = {
     {"lock_waits"},
     {"statement_stats"},
     {"checkpoints"},
+    {"wait_event_names"},
+    {"wait_stats"},
+    {"wait_histogram"},
+    {"session_waits"},
+    {"session_state"},
+    {"ash"},
     {"page_slots", ViewKeyMode::kRequired, "page_id", kInt},
     {"meta"},
 };
@@ -243,6 +251,12 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "lock_waits") return LockWaitsView();
     if (n == "statement_stats") return StatementStatsView();
     if (n == "checkpoints") return CheckpointsView();
+    if (n == "wait_event_names") return WaitEventNamesView();
+    if (n == "wait_stats") return WaitStatsView();
+    if (n == "wait_histogram") return WaitHistogramView();
+    if (n == "session_waits") return SessionWaitsView();
+    if (n == "session_state") return SessionStateView();
+    if (n == "ash") return AshView();
     if (n == "page_slots") return PageSlotsView(*key);
     if (n == "meta") return MetaView();
 
@@ -975,6 +989,224 @@ StatusOr<exec::CatalogView> CommandDispatcher::CheckpointsView() {
                              Int(r.duration_us), Int(r.steps), Int(r.pages_flushed),
                              Int(r.dirty_at_start), Int(r.log_wait_us), Int(r.data_wait_us),
                              Bool(r.resumed), Str(r.completed ? "completed" : "failed")});
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::WaitEventNamesView() {
+    exec::CatalogView view;
+    // The wait-event registry, one row per event (`stats/wait_event.hpp`, CJ's
+    // WE01): the name is the public contract (WD2), `event_id` the table index,
+    // internal and not stable across versions. `kind` is `timed` or `counter`;
+    // `in_db_time` is 0 only for `idle.*` (I3). The `p1`-`p3` columns say what
+    // the event's parameters mean, NULL where it has none. An engine-state
+    // view: it reads no session view.
+    Define(view, {{"event_id", kInt},
+                  {"name", kStr},
+                  {"class", kStr},
+                  {"kind", kStr},
+                  {"in_db_time", kInt},
+                  {"p1", kStr},
+                  {"p2", kStr},
+                  {"p3", kStr}});
+    const auto param = [](std::string_view meaning) {
+        return meaning.empty() ? Null() : Str(meaning);
+    };
+    for (const stats::WaitEventDef& d : stats::kWaitEvents) {
+        view.rows.push_back({Int(static_cast<std::uint64_t>(d.id)), Str(d.name),
+                             Str(stats::WaitClassName(d.wait_class)),
+                             Str(d.kind == stats::WaitKind::kTimed ? "timed" : "counter"),
+                             Bool(d.in_db_time), param(d.p1), param(d.p2), param(d.p3)});
+    }
+    return view;
+}
+
+namespace {
+
+std::uint64_t Us(std::uint64_t ns) { return ns / 1000; }
+
+const char* TaskStateName(sched::TaskState s) {
+    switch (s) {
+        case sched::TaskState::kOnCpu: return "ON_CPU";
+        case sched::TaskState::kRunnable: return "RUNNABLE";
+        case sched::TaskState::kWaiting: return "WAITING";
+        case sched::TaskState::kIdle: return "IDLE";
+    }
+    return "?";
+}
+
+// Every core whose reactor bound a context, with that context.
+template <class Fn>
+void ForEachWaitCore(Fn&& fn) {
+    for (std::uint32_t core = 0; core < sched::kWaitCores; ++core) {
+        if (const sched::CoreWaitTotals* c = sched::WaitContextOfCore(core)) fn(core, *c);
+    }
+}
+
+}  // namespace
+
+StatusOr<exec::CatalogView> CommandDispatcher::WaitStatsView() {
+    exec::CatalogView view;
+    // Cumulative wait statistics, one row per core and event (CJ's WE05): the
+    // count, the total and the longest wait in microseconds, and a `cpu.on_cpu`
+    // row carrying the core's ON_CPU time. A core's counters have one writer,
+    // that core; this read takes every core's words without a latch, so a
+    // row is a moment's view and two columns of one row may differ by a wait
+    // in flight. `core` is NULL on the total rows (the sum over cores, its
+    // `max_us` the largest). A synchronous read's time (CJ-Q8) is the core's
+    // stall, not one task's. Engine-state: reads no session view.
+    Define(view, {{"core", kInt},
+                  {"event", kStr},
+                  {"class", kStr},
+                  {"count", kInt},
+                  {"total_us", kInt},
+                  {"max_us", kInt}});
+    std::array<std::uint64_t, stats::kWaitEventCount> count{}, total{}, max{};
+    ForEachWaitCore([&](std::uint32_t core, const sched::CoreWaitTotals& c) {
+        for (std::size_t i = 0; i < stats::kWaitEventCount; ++i) {
+            const stats::WaitEventDef& d = stats::kWaitEvents[i];
+            const sched::EventTotals& t = c.totals[i];
+            const std::uint64_t n = i == 0 ? 0 : t.count.get();
+            const std::uint64_t tot = i == 0 ? c.on_cpu_ns.get() : t.total_ns.get();
+            const std::uint64_t mx = t.max_ns.get();
+            count[i] += n;
+            total[i] += tot;
+            max[i] = std::max(max[i], mx);
+            view.rows.push_back({Int(core), Str(d.name), Str(stats::WaitClassName(d.wait_class)),
+                                 Int(n), Int(Us(tot)), Int(Us(mx))});
+        }
+    });
+    for (std::size_t i = 0; i < stats::kWaitEventCount; ++i) {
+        const stats::WaitEventDef& d = stats::kWaitEvents[i];
+        view.rows.push_back({Null(), Str(d.name), Str(stats::WaitClassName(d.wait_class)),
+                             Int(count[i]), Int(Us(total[i])), Int(Us(max[i]))});
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::WaitHistogramView() {
+    exec::CatalogView view;
+    // The wait-time distribution (WD5): bucket k holds waits of
+    // [2^k, 2^(k+1)) microseconds, 32 buckets, the last open-ended and bucket
+    // 0 taking everything under 2 us. One row per core, event and non-empty
+    // bucket; `lo_us` is the bucket's lower bound.
+    Define(view, {{"core", kInt},
+                  {"event", kStr},
+                  {"bucket", kInt},
+                  {"lo_us", kInt},
+                  {"count", kInt}});
+    ForEachWaitCore([&](std::uint32_t core, const sched::CoreWaitTotals& c) {
+        for (std::size_t i = 1; i < stats::kWaitEventCount; ++i) {
+            for (std::size_t k = 0; k < sched::kWaitHistogramBuckets; ++k) {
+                const std::uint64_t n = c.totals[i].histogram[k].get();
+                if (n == 0) continue;
+                view.rows.push_back({Int(core), Str(stats::kWaitEvents[i].name), Int(k),
+                                     Int(k == 0 ? 0 : std::uint64_t{1} << k), Int(n)});
+            }
+        }
+    });
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::SessionWaitsView() {
+    exec::CatalogView view;
+    // Cumulative wait statistics per session and event (CJ WE05); a session's
+    // `cpu.on_cpu` row is its ON_CPU time and its RUNNABLE time is the
+    // `sched.run_queue` row. Only events a session has waited on and only
+    // sessions that have run a statement appear; a session's rows leave with
+    // it. A background task is no session and has none.
+    Define(view, {{"session_id", kInt}, {"event", kStr}, {"count", kInt}, {"total_us", kInt}});
+    for (const sched::SessionWaitStats& s : sched::SnapshotSessionWaits()) {
+        if (s.on_cpu_ns.get() != 0) {
+            view.rows.push_back({Int(s.session_id), Str(stats::kWaitEvents[0].name), Int(0),
+                                 Int(Us(s.on_cpu_ns.get()))});
+        }
+        for (std::size_t i = 1; i < stats::kWaitEventCount; ++i) {
+            if (s.events[i].count.get() == 0) continue;
+            view.rows.push_back({Int(s.session_id), Str(stats::kWaitEvents[i].name),
+                                 Int(s.events[i].count.get()),
+                                 Int(Us(s.events[i].total_ns.get()))});
+        }
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::SessionStateView() {
+    exec::CatalogView view;
+    // Each session's statement task as last published (CJ WE05; Oracle's
+    // `v$session_wait`): its state, the event it waits on (`cpu.on_cpu` when
+    // it is not waiting), the parameters the event defines and how long it
+    // has been in that state, by this core's clock. A session between
+    // statements shows the state its last statement ended in.
+    Define(view, {{"session_id", kInt},
+                  {"state", kStr},
+                  {"event", kStr},
+                  {"p1", kInt},
+                  {"p2", kInt},
+                  {"p3", kInt},
+                  {"elapsed_us", kInt}});
+    const std::uint64_t now = sched::WaitNow();
+    for (const sched::SessionWaitStats& s : sched::SnapshotSessionWaits()) {
+        const std::size_t ev = s.current_event.get();
+        const std::uint64_t since = s.current_since_ns.get();
+        view.rows.push_back(
+            {Int(s.session_id),
+             Str(TaskStateName(static_cast<sched::TaskState>(s.current_state.get()))),
+             Str(stats::kWaitEvents[ev].name), Int(s.current_p1.get()), Int(s.current_p2.get()),
+             Int(s.current_p3.get()), Int(now > since ? Us(now - since) : 0)});
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::AshView() {
+    exec::CatalogView view;
+    // The active-session samples every core's sampler holds (CJ WE08, WD1 at
+    // query time): each core's ring is copied under its own latch, so a query
+    // during sampling sees whole records, and the copies are merged by sample
+    // time, ties by core then ring order. A filter is a WHERE on a column
+    // (SV5): time range on `sample_ts_us`, `core`, `fingerprint`, `event`, and
+    // `session_kind` ('session' or 'background'). A sampler runs between
+    // polls, so `state` is never ON_CPU (CJ-Q12). `arg_hash_valid` = 1 means
+    // `p1` is the statement's argument hash, not an event parameter.
+    // `sample_ts_us` is the core's monotonic clock, one for the instance.
+    // `step_id`, `origin_session` and `trx_id` are not shown: no writer fills
+    // them yet. Engine-state: reads no session view.
+    Define(view, {{"sample_ts_us", kInt},
+                  {"core", kInt},
+                  {"session_id", kInt},
+                  {"session_kind", kStr},
+                  {"state", kStr},
+                  {"event", kStr},
+                  {"class", kStr},
+                  {"sched_group", kInt},
+                  {"late", kInt},
+                  {"arg_hash_valid", kInt},
+                  {"fingerprint", kInt},
+                  {"p1", kInt},
+                  {"p2", kInt},
+                  {"p3", kInt},
+                  {"wait_elapsed_us", kInt}});
+    std::vector<stats::AshRecord> all;
+    for (std::uint32_t core = 0; core < sched::kWaitCores; ++core) {
+        const auto ring = sched::AshRingOfCore(core);
+        if (ring == nullptr) continue;
+        std::vector<stats::AshRecord> part = ring->Snapshot();
+        all.insert(all.end(), part.begin(), part.end());
+    }
+    std::stable_sort(all.begin(), all.end(), [](const stats::AshRecord& a, const stats::AshRecord& b) {
+        return a.sample_ts_us != b.sample_ts_us ? a.sample_ts_us < b.sample_ts_us : a.core_id < b.core_id;
+    });
+    for (const stats::AshRecord& r : all) {
+        const std::size_t ev = r.event_id < stats::kWaitEventCount ? r.event_id : 0;
+        view.rows.push_back(
+            {Int(r.sample_ts_us), Int(r.core_id), Int(r.session_id),
+             Str((r.state & stats::kAshBackground) != 0 ? "background" : "session"),
+             Str(TaskStateName(static_cast<sched::TaskState>(r.state & stats::kAshStateMask))),
+             Str(stats::kWaitEvents[ev].name),
+             Str(stats::WaitClassName(stats::kWaitEvents[ev].wait_class)), Int(r.sched_group),
+             Int((r.flags & stats::kAshLate) != 0 ? 1 : 0),
+             Int((r.flags & stats::kAshArgHashValid) != 0 ? 1 : 0), Int(r.fingerprint), Int(r.p1),
+             Int(r.p2), Int(r.p3), Int(r.wait_elapsed_us)});
     }
     return view;
 }

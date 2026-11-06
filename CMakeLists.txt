@@ -186,6 +186,8 @@ add_library(kds
     src/sched/clock.cpp
     src/sched/scheduler.cpp
     src/sched/coro.cpp
+    src/sched/wait_state.cpp
+    src/sched/ash_sampler.cpp
     src/sched/waker.cpp
     src/sched/sim_waker_table.cpp
     src/sched/epoll_io_backend.cpp

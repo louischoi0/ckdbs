@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "kds/base/log.hpp"
+#include "kds/sched/ash_sampler.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/waker.hpp"
@@ -99,6 +100,9 @@ public:
     // Takes this core's entry out of the waker table it registered in
     // (`WakeRegistry::Unregister` says why).
     ~Scheduler();
+
+    // This core's ASH sampler: its settings and its ring (CJ WE07).
+    AshSampler& ash() noexcept { return ash_; }
 
     Scheduler(const Scheduler&) = delete;
     Scheduler& operator=(const Scheduler&) = delete;
@@ -318,6 +322,8 @@ private:
     std::uint64_t consecutive_io_failures_ = 0;
 
     std::array<std::deque<TaskPtr>, kNumSchedulingGroups> ready_queues_;
+    // This core's ASH sampler (CJ WE07), asked once per turn.
+    AshSampler ash_;
     std::array<std::uint64_t, kNumSchedulingGroups> consumed_ns_{};
     // The undecayed pair; the accessors above say why.
     std::array<std::uint64_t, kNumSchedulingGroups> polled_ns_total_{};

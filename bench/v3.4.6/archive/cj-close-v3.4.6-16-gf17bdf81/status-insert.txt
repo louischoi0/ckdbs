@@ -1,0 +1,25 @@
+07:47:33 insert-n200-r0 load=1.38 A:qps=1929,cpu=55.0us,e=0 B:qps=1940,cpu=75.0us,e=0 C:qps=1479,cpu=100.0us,e=0 O:qps=1562,cpu=70.0us,e=0
+07:47:40 insert-n1000-r0 load=1.51 A:qps=2062,cpu=55.0us,e=0 B:qps=1977,cpu=55.0us,e=0 C:qps=1861,cpu=45.0us,e=0 O:qps=2001,cpu=60.0us,e=0
+07:47:46 insert-n10000-r0 load=1.50 A:qps=2003,cpu=70.0us,e=0 B:qps=1926,cpu=65.0us,e=0 C:qps=1833,cpu=80.0us,e=0 O:qps=2065,cpu=65.0us,e=0
+07:47:52 insert-n200-r1 load=1.62 A:qps=2020,cpu=60.0us,e=0 B:qps=1509,cpu=50.0us,e=0 C:qps=1917,cpu=65.0us,e=0 O:qps=1446,cpu=75.0us,e=0
+07:47:59 insert-n1000-r1 load=1.65 A:qps=2009,cpu=75.0us,e=0 B:qps=1976,cpu=65.0us,e=0 C:qps=1929,cpu=65.0us,e=0 O:qps=1855,cpu=70.0us,e=0
+07:48:05 insert-n10000-r1 load=1.68 A:qps=2024,cpu=40.0us,e=0 B:qps=1977,cpu=70.0us,e=0 C:qps=2028,cpu=50.0us,e=0 O:qps=1901,cpu=80.0us,e=0
+07:48:11 insert-n200-r2 load=1.73 A:qps=1469,cpu=70.0us,e=0 B:qps=1558,cpu=70.0us,e=0 C:qps=2008,cpu=60.0us,e=0 O:qps=1921,cpu=65.0us,e=0
+07:48:18 insert-n1000-r2 load=1.99 A:qps=1842,cpu=85.0us,e=0 B:qps=2013,cpu=75.0us,e=0 C:qps=1954,cpu=65.0us,e=0 O:qps=1952,cpu=75.0us,e=0
+07:48:24 insert-n10000-r2 load=1.99 A:qps=1835,cpu=60.0us,e=0 B:qps=2086,cpu=75.0us,e=0 C:qps=2024,cpu=60.0us,e=0 O:qps=1973,cpu=60.0us,e=0
+07:48:30 insert-n200-r3 load=2.07 A:qps=1507,cpu=55.0us,e=0 B:qps=1832,cpu=70.0us,e=0 C:qps=1999,cpu=80.0us,e=0 O:qps=1945,cpu=55.0us,e=0
+07:48:37 insert-n1000-r3 load=2.13 A:qps=1967,cpu=65.0us,e=0 B:qps=1846,cpu=60.0us,e=0 C:qps=1514,cpu=75.0us,e=0 O:qps=1976,cpu=75.0us,e=0
+07:48:43 insert-n10000-r3 load=2.12 A:qps=1994,cpu=60.0us,e=0 B:qps=1883,cpu=70.0us,e=0 C:qps=2050,cpu=70.0us,e=0 O:qps=1968,cpu=75.0us,e=0
+07:48:50 insert-n200-r4 load=2.11 A:qps=1529,cpu=65.0us,e=0 B:qps=1944,cpu=60.0us,e=0 C:qps=1468,cpu=90.0us,e=0 O:qps=1999,cpu=80.0us,e=0
+07:48:56 insert-n1000-r4 load=2.17 A:qps=1947,cpu=45.0us,e=0 B:qps=1950,cpu=50.0us,e=0 C:qps=1837,cpu=70.0us,e=0 O:qps=2014,cpu=80.0us,e=0
+07:49:03 insert-n10000-r4 load=2.16 A:qps=1556,cpu=70.0us,e=0 B:qps=1940,cpu=75.0us,e=0 C:qps=1870,cpu=80.0us,e=0 O:qps=1590,cpu=75.0us,e=0
+07:49:09 insert-n200-r5 load=2.15 A:qps=2009,cpu=80.0us,e=0 B:qps=1952,cpu=70.0us,e=0 C:qps=1953,cpu=70.0us,e=0 O:qps=1841,cpu=90.0us,e=0
+07:49:15 insert-n1000-r5 load=2.05 A:qps=1995,cpu=70.0us,e=0 B:qps=1930,cpu=65.0us,e=0 C:qps=1950,cpu=75.0us,e=0 O:qps=1816,cpu=60.0us,e=0
+07:49:22 insert-n10000-r5 load=2.19 A:qps=2075,cpu=75.0us,e=0 B:qps=1978,cpu=70.0us,e=0 C:qps=1052,cpu=65.0us,e=0 O:qps=1887,cpu=70.0us,e=0
+07:49:29 insert-n200-r6 load=2.02 A:qps=1429,cpu=80.0us,e=0 B:qps=1987,cpu=80.0us,e=0 C:qps=1947,cpu=45.0us,e=0 O:qps=1495,cpu=65.0us,e=0
+07:49:35 insert-n1000-r6 load=2.10 A:qps=1841,cpu=80.0us,e=0 B:qps=2029,cpu=85.0us,e=0 C:qps=1951,cpu=65.0us,e=0 O:qps=1921,cpu=65.0us,e=0
+07:49:42 insert-n10000-r6 load=2.24 A:qps=1913,cpu=85.0us,e=0 B:qps=2081,cpu=70.0us,e=0 C:qps=1994,cpu=70.0us,e=0 O:qps=1544,cpu=70.0us,e=0
+07:49:49 insert-n200-r7 load=2.14 A:qps=1926,cpu=70.0us,e=0 B:qps=1855,cpu=80.0us,e=0 C:qps=2042,cpu=70.0us,e=0 O:qps=1919,cpu=70.0us,e=0
+07:49:55 insert-n1000-r7 load=2.13 A:qps=1962,cpu=75.0us,e=0 B:qps=1879,cpu=85.0us,e=0 C:qps=1202,cpu=75.0us,e=0 O:qps=1833,cpu=65.0us,e=0
+07:50:02 insert-n10000-r7 load=2.18 A:qps=1992,cpu=45.0us,e=0 B:qps=1922,cpu=85.0us,e=0 C:qps=2052,cpu=75.0us,e=0 O:qps=1534,cpu=75.0us,e=0
+DONE

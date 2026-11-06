@@ -1464,6 +1464,12 @@ their order, `examined=` and `sel=` are the same either way; the server's
 `scan_kernel = off` turns the early test off, for comparison
 (`docs/spec/parser-v2.md` §7).
 
+**DB time.** When the statement runs inside a task of the session that asked,
+`ANALYZE` ends with one more line, `DB time 4.21 ms = CPU 1.02 + commit.wal_flush
+2.95 + ...`: the statement's CPU and every timed wait, each rounded to 10 us, the
+total their sum (`docs/spec/wait-events.md` names the events). A statement run
+with no such task prints no line rather than a false 0.
+
 ### WAYSTONE ON / WAYSTONE OFF (built 2026-10-21, CF-S1b)
 
 **Waystone records and replays only for the query shapes you opt in.** For

@@ -1,4 +1,5 @@
 #include "kds/server/expeditor.hpp"
+#include "kds/sched/ash_sampler.hpp"
 
 #include "kds/server/restore.hpp"
 
@@ -21,6 +22,7 @@
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/core_load.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/storage/file_page_device.hpp"
 
 #if KDS_WITH_TLS
@@ -89,7 +91,8 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "cabin_optimizer_theta_swap_pct",   "cabin_optimizer_theta_extend_pct",
             "cabin_optimizer_theta_heal_pct",   "cabin_optimizer_confirm_snapshots",
             "cabin_optimizer_amort_windows", "cabin_optimizer_cooldown_half_lives",
-            "cabin_optimizer_snapshot_interval_ms"};
+            "cabin_optimizer_snapshot_interval_ms",
+            "ash_enabled", "ash_interval_ms", "ash_ring_bytes_per_core", "ash_capture_arg_hash"};
 }
 
 stats::CabinOptimizerConfig Expeditor::Config::CabinOptimizerSettings() const {
@@ -360,6 +363,32 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetBool("waystone_recording");
         if (!v.ok()) return v.status();
         waystone_recording = v.value();
+    }
+    if (file.Has("ash_enabled")) {
+        auto v = file.GetBool("ash_enabled");
+        if (!v.ok()) return v.status();
+        ash_enabled = v.value();
+    }
+    if (file.Has("ash_capture_arg_hash")) {
+        auto v = file.GetBool("ash_capture_arg_hash");
+        if (!v.ok()) return v.status();
+        ash_capture_arg_hash = v.value();
+    }
+    if (file.Has("ash_interval_ms")) {
+        auto v = file.GetUint("ash_interval_ms");
+        if (!v.ok()) return v.status();
+        if (Status r = sched::CheckAshIntervalMs(v.value()); !r.ok()) {
+            return Status::InvalidArgument(file.origin() + ": " + r.message());
+        }
+        ash_interval_ms = v.value();
+    }
+    if (file.Has("ash_ring_bytes_per_core")) {
+        auto v = file.GetUint("ash_ring_bytes_per_core");
+        if (!v.ok()) return v.status();
+        if (Status r = sched::CheckAshRingBytes(v.value()); !r.ok()) {
+            return Status::InvalidArgument(file.origin() + ": " + r.message());
+        }
+        ash_ring_bytes_per_core = static_cast<std::size_t>(v.value());
     }
     if (file.Has("isolation")) {
         auto v = file.GetString("isolation");
@@ -1307,6 +1336,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->optimizer_signals_->SetLatch(&expeditor->optimizer_signals_latch_);
     }
     expeditor->cabin_optimizer_on_.store(expeditor->config_.cabin_optimizer);
+    // S4 (CJ WE13) counts only while the controller's own switch is on.
+    expeditor->optimizer_signals_->set_wait_gate(&expeditor->cabin_optimizer_on_);
     expeditor->plan_stats_.emplace(expeditor->config_.cores);
     // PHY04: the decision core and its executor, only where a Cabin can
     // exist at all. The cadence task registers in Serve() beside the
@@ -1771,9 +1802,18 @@ Status Expeditor::Start() {
         kwp_listener.emplace(std::move(kwp.value()));
     }
 
+    // The sampler's boot settings, before any scheduler (and its ring) exists.
+    sched::SetAshEnabled(config_.ash_enabled);
+    sched::SetAshCaptureArgHash(config_.ash_capture_arg_hash);
+    (void)sched::SetAshIntervalMs(config_.ash_interval_ms);      // range-checked at parse
+    (void)sched::SetAshRingBytes(config_.ash_ring_bytes_per_core);
     live.scheduler.emplace(clock_, io_backend.value());
     sched::Scheduler& scheduler = *live.scheduler;
     scheduler.SetLogger(&*logger_);
+    // Core 0's ASH ring into `sys.ash`'s registry (CJ WE08): at `cores = 1`
+    // no `AttachWakerTable` runs below, which is where every other core's is.
+    scheduler.ash().set_core_id(0);
+    scheduler.ash().set_wait_sink(&*optimizer_signals_);
     // `SHOW META`'s group-accounting block on core 0 (sched.md §4), cleared
     // on every exit by `ClearReactorBorrows` (above `ServeRuntime`).
     dispatcher_->set_scheduler_view(&scheduler);
@@ -2216,7 +2256,14 @@ Status Expeditor::RunUntilStopped() {
     auto& kwp_listener = live.kwp_listener;
     auto& workers = live.workers;
 
+    // I2 (CJ WE04): core 0's reactor is strict too, as every peer's is in
+    // `CoreRuntime::Run` - a suspension outside every `WaitScope` aborts a
+    // debug build. Set here, on the thread that runs the reactor, not in
+    // `Start`: a test starts on its own thread and runs this on another.
+    sched::BindWaitContext(0);
+    sched::SetStrictWaitScopes(true);
     scheduler.Run();
+    sched::SetStrictWaitScopes(false);
     exec::UninstallSuspendAudit();
     logger_->Info("expeditor", "stopping");
 

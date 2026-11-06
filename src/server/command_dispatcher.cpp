@@ -1,4 +1,5 @@
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/sched/ash_sampler.hpp"
 #include "kds/server/backup.hpp"
 #include "kds/server/wal_archive.hpp"
 #include "kds/server/page_reclaim.hpp"
@@ -444,7 +445,10 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             const std::function<bool()> released = [this, &freed, deadline_ns] {
                 return freed() || NowNs() >= deadline_ns;
             };
-            co_await sched::WaitUntil{&released};
+            {
+                sched::WaitScope wait(stats::WaitEvent::kAppLockWait, block.trx_id);
+                co_await sched::WaitUntil{&released};
+            }
             const bool settled = freed();
             if (row.has_value()) {
                 row->End(settled ? stats::LockWaitOutcome::kGranted
@@ -678,7 +682,10 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
         *statement_deadline_ns = now + lock_wait_fault_net_ns_;
         return false;
     };
-    co_await sched::WaitUntil{&freed};
+    {
+        sched::WaitScope lock_wait(stats::WaitEvent::kAppLockWait, wait.holder);
+        co_await sched::WaitUntil{&freed};
+    }
     if (row.has_value()) {
         row->End(txn::LockWaitReady(slot) ? stats::LockWaitOutcome::kGranted
                                           : stats::LockWaitOutcome::kFaultNet);
@@ -740,6 +747,13 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // (BO-S5); a frame destroyed at a park never replies and is no call.
     const sched::MonoTimeNs began_ns = NowNs();
     out->statement = statement;
+    // The shape ASH samples this statement under (CJ WE07): none until the
+    // dispatch below names it, so a sample of the waits before it (the run
+    // queue, BA-R1c's ceiling) does not carry the previous statement's.
+    sched::SessionWaitStats* const ash_stats =
+        (session != nullptr ? session : &autocommit_session_)->WaitStats();
+    ash_stats->fingerprint.set(0);
+    ash_stats->pattern_id.set(0);
     // Every statement runs on the core its session is on (AT-S9). What
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
@@ -756,6 +770,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     if (const wal::Lsn bound = UncoveredCommit(session); bound != wal::kNoLsn) {
         const txn::TransactionManager::CeilingWait waiting(*txn_);
         const std::function<bool()> covered = [this, bound] { return txn_->CeilingCovers(bound); };
+        sched::WaitScope wait(stats::WaitEvent::kCommitCeilingWait, bound);
         co_await sched::WaitUntil{&covered};
     }
 
@@ -774,6 +789,8 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // Kept from the first run: every re-run is the same text, and a reply
     // rebuilt below (a refused commit, a walk's end) need not carry it.
     const std::uint64_t fetch_id = out->fetch_id;
+    ash_stats->fingerprint.set(fetch_id);
+    ash_stats->pattern_id.set(out->pattern_id);
 
     // ---- R6-5: D5's bounded wait on an undecided row --------------------
     //
@@ -838,7 +855,10 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                                    : !txn_->IsInFlight(wait.trx_id);
                 return settled || NowNs() >= deadline_ns;
             };
-            co_await sched::WaitUntil{&cleared};
+            {
+                sched::WaitScope horizon(stats::WaitEvent::kAppHorizonWait, wait.trx_id);
+                co_await sched::WaitUntil{&cleared};
+            }
             {
                 const MayParkScope parking(*this, /*allowed=*/true, statement);
                 *out = DispatchAndStage(line, session);
@@ -884,7 +904,14 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // Counted in before the wait's first read, so the writer kicks this
         // core when the watermark passes (BA-R4 part 1).
         const wal::WalManager::DurableWait waiting(*wal_, core_id_);
-        co_await sched::WaitUntil{&durable};
+        {
+            // CJ WE03: the commit's wait for its record to be durable. The
+            // group size (p3) is not recorded: the writer keeps no count of
+            // the commits one sync covers.
+            sched::WaitScope wait(stats::WaitEvent::kCommitWalFlush, lsn,
+                                  static_cast<std::uint32_t>(effective_durability_));
+            co_await sched::WaitUntil{&durable};
+        }
         // A deferred `strict` commit publishes here, after its record is
         // durable (BA-S7 part 2) - this statement's and any other this
         // core parked that the same sync covered.
@@ -1013,9 +1040,11 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     last_refusal_detail_ = wire::kNoDetail;
     statement_trail_mark_ = 0;
     statement_fetch_id_ = 0;
+    statement_pattern_id_ = 0;
 
     DispatchOutcome outcome = body(active);
     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
+    outcome.pattern_id = std::exchange(statement_pattern_id_, 0);
     // Read back out of the member the write paths set: threading it through
     // InsertInner/UpdateInner/EndWrite and every handler between would be a
     // parameter on a dozen signatures for one number, and one statement runs
@@ -1367,8 +1396,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "DURABILITY")) return HandleSetDurability(sub_rest, session);
         if (IEquals(sub, "PRIORITY")) return HandleSetPriority(line, sub_rest, session);
         if (IEquals(sub, "CABIN_OPTIMIZER")) return HandleSetCabinOptimizer(sub_rest);
-        return {"ERR unknown SET target; SET ISOLATION LEVEL, SET DURABILITY, SET PRIORITY and "
-                "SET CABIN_OPTIMIZER are supported",
+        if (IEquals(sub, "ASH")) return HandleSetAsh(line, sub_rest);
+        return {"ERR unknown SET target; SET ISOLATION LEVEL, SET DURABILITY, SET PRIORITY, "
+                "SET CABIN_OPTIMIZER and SET ASH are supported",
                 false};
     }
     if (IEquals(cmd, "PING")) {
@@ -1483,7 +1513,22 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (rest.empty()) {
             return {"ERR ANALYZE needs a statement to analyze", false};
         }
-        return HandleSelect(rest, session, /*analyze=*/true);
+        // **The DB-time line** (CJ's WE10, the order's §2.8): the session's wait
+        // statistics before and after the run, the open ON_CPU segment booked
+        // first so the statement's own CPU is in the second reading. Printed
+        // only when the task being polled books to this session; a run with no
+        // such task (a synchronous caller) would print a false 0, so it prints
+        // no line.
+        sched::SessionWaitStats* waits = session.WaitStats();
+        const bool measured = sched::RunningTaskBooksTo(waits);
+        sched::FlushOnCpu();
+        const sched::SessionWaitStats before = *waits;
+        DispatchOutcome out = HandleSelect(rest, session, /*analyze=*/true);
+        if (measured && out.status.ok() && out.response.rfind("analyze ", 0) == 0) {
+            sched::FlushOnCpu();
+            out.response += "\\n" + sched::FormatDbTimeLine(before, *waits);
+        }
+        return out;
     }
     // **The Waystone opt-in** (CF-S1b, `workorder-cf-waystone-premise.md`
     // §8.3): a dispatcher prefix beside ANALYZE, so it needs no grammar
@@ -2237,6 +2282,57 @@ DispatchOutcome CommandDispatcher::HandleSetCabinOptimizer(std::string_view rest
             false};
 }
 
+DispatchOutcome CommandDispatcher::HandleSetAsh(std::string_view line, std::string_view rest) {
+    // CJ's WE09: `SET ASH {ENABLED | INTERVAL_MS | CAPTURE_ARG_HASH} [=] value`,
+    // the runtime half of `kds.ash.*` (`ring_bytes_per_core` is restart-only and
+    // has no statement). The kill switch stops the sampler and keeps its ring;
+    // every core's sampler reads the new value at its next turn. Admin.
+    auto [key, tail] = SplitFirstToken(Trim(rest));
+    auto [value, extra] = SplitFirstToken(Trim(tail));
+    if (IEquals(value, "=")) std::tie(value, extra) = SplitFirstToken(Trim(extra));
+    // A refusal names the offending token's byte; a missing one is the line's end.
+    const auto refuse = [&](const Status& s, std::string_view at) {
+        const std::size_t byte = at.data() == nullptr ? line.size() : static_cast<std::size_t>(at.data() - line.data());
+        const Status located = s.WithMessage(s.message() + " (byte " + std::to_string(byte) + ")");
+        return DispatchOutcome{ErrorReply(located), false, 0, located};
+    };
+    if (key.empty() || value.empty() || !Trim(extra).empty()) {
+        return refuse(Status::InvalidArgument("SET ASH takes a setting and one value: ENABLED on|off, "
+                                              "INTERVAL_MS n, CAPTURE_ARG_HASH on|off"),
+                      value.empty() ? std::string_view{} : Trim(extra));
+    }
+    const bool is_enabled = IEquals(key, "ENABLED");
+    if (is_enabled || IEquals(key, "CAPTURE_ARG_HASH")) {
+        if (!IEquals(value, "ON") && !IEquals(value, "OFF")) {
+            return refuse(Status::InvalidArgument("SET ASH " + std::string(key) + " takes on or off, not '" +
+                                                  std::string(value) + "'"),
+                          value);
+        }
+        const bool on = IEquals(value, "ON");
+        if (is_enabled) {
+            sched::SetAshEnabled(on);
+        } else {
+            sched::SetAshCaptureArgHash(on);
+        }
+        return {std::string("OK ash_") + (is_enabled ? "enabled" : "capture_arg_hash") + "=" + (on ? "on" : "off"),
+                false};
+    }
+    if (IEquals(key, "INTERVAL_MS")) {
+        std::uint64_t ms = 0;
+        const auto [end, ec] = std::from_chars(value.data(), value.data() + value.size(), ms);
+        if (ec != std::errc{} || end != value.data() + value.size()) {
+            return refuse(Status::InvalidArgument("SET ASH INTERVAL_MS takes a number of milliseconds, not '" +
+                                                  std::string(value) + "'"),
+                          value);
+        }
+        if (const Status s = sched::SetAshIntervalMs(ms); !s.ok()) return refuse(s, value);
+        return {"OK ash_interval_ms=" + std::to_string(ms), false};
+    }
+    return refuse(Status::InvalidArgument("unknown SET ASH setting '" + std::string(key) +
+                                          "'; ENABLED, INTERVAL_MS and CAPTURE_ARG_HASH are supported"),
+                  key);
+}
+
 
 // `t` or `ns.t` in a **raw argument** (AF-T3). The debug surface's commands
 // take a bare token rather than a parse - `DESCRIBE`, the
@@ -2652,7 +2748,10 @@ sched::Coro IndexBuildRun::Drain(Status* ran) {
             return txn::LockWaitReady(slot) || d.NowNs() >= deadline ||
                    (cancel != nullptr && cancel->load(std::memory_order_acquire));
         };
-        co_await sched::WaitUntil{&freed};
+        {
+            sched::WaitScope wait(stats::WaitEvent::kAppLockWait, waiting.front());
+            co_await sched::WaitUntil{&freed};
+        }
         if (drained = slice_.TakeCancel(); !drained.ok()) break;
     }
     locks.ClearWaitFor(self);
@@ -5908,6 +6007,7 @@ StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_vie
     if (const auto fingerprint = parser.fingerprint();
         fingerprint.has_value() && statement_fetch_id_ == 0) {
         statement_fetch_id_ = fingerprint->fetch_id;
+        statement_pattern_id_ = fingerprint->pattern_id;
     }
     return parsed;
 }
@@ -8483,6 +8583,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     if (const auto fingerprint = parser.fingerprint();
         fingerprint.has_value() && statement_fetch_id_ == 0) {
         statement_fetch_id_ = fingerprint->fetch_id;
+        statement_pattern_id_ = fingerprint->pattern_id;
     }
     if (!parsed.ok()) {
         // BU-Q9: what the native grammar refuses, the query layer may read.

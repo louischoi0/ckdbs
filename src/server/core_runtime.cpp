@@ -12,6 +12,7 @@
 #include "kds/exec/catalog_spills.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/storage/page_header.hpp"
 
@@ -105,6 +106,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
 
     runtime->scheduler_.emplace(clock, *runtime->io_backend_, config.scheduler);
     runtime->scheduler_->SetLogger(log);
+    // The ASH sampler's wait signal into the instance's collector (CJ WE13).
+    runtime->scheduler_->ash().set_wait_sink(config.optimizer.signals);
     // **The reactor learns its core here**, with no registry: `RunOnce`
     // sets the thread's `CurrentCore()` from it every iteration, so a
     // reactor left at the default runs as core 0 - re-entering core 0's
@@ -463,11 +466,16 @@ void CoreRuntime::Run() {
     // counts this thread's pins, so a core borrowing core 0's pool is
     // audited whole too.
     exec::InstallSuspendAudit();
+    // I2 (CJ WE04): a suspension outside every `WaitScope` aborts a debug
+    // build on this thread.
+    sched::BindWaitContext(config_.core_id);
+    sched::SetStrictWaitScopes(true);
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor running");
     }
     scheduler_->Run();
+    sched::SetStrictWaitScopes(false);
     exec::UninstallSuspendAudit();
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor stopped");

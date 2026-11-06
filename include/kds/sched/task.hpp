@@ -32,6 +32,8 @@ enum class PollResult {
 // exactly one scheduling group (sched.md section 4) for its whole
 // lifetime. Poll() must return promptly (cooperative yield, docs/spec/sched.md
 // section 3) - there is no preemption.
+struct TaskWaitState;
+
 class Task {
 public:
     explicit Task(SchedulingGroup group) noexcept : group_(group) {}
@@ -58,6 +60,10 @@ public:
     // `CoroTask` — the one place a park is a real, detectable state —
     // answers otherwise.
     virtual bool advanced_in_last_poll() const noexcept { return true; }
+
+    // The task's wait state, for the ASH sampler (CJ WE07); null for a task that
+    // keeps none.
+    virtual TaskWaitState* wait_state_for_sampling() noexcept { return nullptr; }
 
     SchedulingGroup group() const noexcept { return group_; }
 

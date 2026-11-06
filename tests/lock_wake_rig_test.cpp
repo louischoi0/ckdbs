@@ -61,7 +61,11 @@ sched::Coro Borrow(LockTable& table, Session& s, std::uint64_t txn, LockKey key,
                    const std::atomic<bool>* after = nullptr) {
     if (after != nullptr) {
         s.after_pred = [after] { return after->load(std::memory_order_acquire); };
-        co_await sched::WaitUntil{&s.after_pred};
+        {
+            // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+            sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+            co_await sched::WaitUntil{&s.after_pred};
+        }
     }
     for (;;) {
         auto r = table.Acquire(txn, key, LockMode::kExclusive, s.holdings);
@@ -69,12 +73,20 @@ sched::Coro Borrow(LockTable& table, Session& s, std::uint64_t txn, LockKey key,
         if (r.value().granted) break;
         s.parks.fetch_add(1, std::memory_order_relaxed);
         s.pred = [slot = r.value().wake.slot] { return txn::LockWaitReady(slot); };
-        co_await sched::WaitUntil{&s.pred};
+        {
+            // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+            sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+            co_await sched::WaitUntil{&s.pred};
+        }
         // The re-check is the loop going round again (AO-3's finding G).
     }
     s.granted.store(true, std::memory_order_release);
     s.decide_pred = [&s] { return s.may_decide.load(std::memory_order_acquire); };
-    co_await sched::WaitUntil{&s.decide_pred};
+    {
+        // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+        sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+        co_await sched::WaitUntil{&s.decide_pred};
+    }
     table.Release(txn, s.holdings);
     s.released.store(true, std::memory_order_release);
     co_return Status::OK();

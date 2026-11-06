@@ -76,7 +76,11 @@ struct Statement {
 
 sched::Coro RunStatement(CommandDispatcher& d, Statement& s) {
     s.go_pred = [&s] { return s.go.load(std::memory_order_acquire); };
-    co_await sched::WaitUntil{&s.go_pred};
+    {
+        // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
+        sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);
+        co_await sched::WaitUntil{&s.go_pred};
+    }
     co_await d.DispatchAsync(s.line, s.session, &s.out);
     s.done.store(true, std::memory_order_release);
     co_return Status::OK();
