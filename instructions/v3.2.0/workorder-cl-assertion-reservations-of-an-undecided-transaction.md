@@ -460,3 +460,63 @@ in `build-release`, 3 of 20 sim runs (seeds 3, 4 and 20261102002,
 `sync-crash`; one of them a stranded departure, `rows=1/total=0`).
 
 Overhead not measured; measured at the milestone's close.
+
+### CL-S3 - verification (2026-11-06)
+
+Resumed on the standing go-ahead (go-ahead-achieving-milestone, invoked as
+*"cl /go-ahead-achieving-milestone"*) in `ck-assertion-commit-settle` at
+`8751ec2f` (`v3.4.6-19-g8751ec2f`). An earlier session's `mutants.sh` run had
+died with its `holds-ignored` mutant still applied to
+`src/exec/assertion_check.cpp`; the file was restored from the script's own
+snapshot (`build-bs-noassert/mutants/snapshot`, differing in that one line)
+before anything ran.
+
+**The full Debug suite at `8751ec2f` was red**: 4352 of 4353 passed, and
+`AssertionRaceTest.EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt` hung for
+4960 s and was killed. CL-S1/S2 had landed without a full-suite run. The
+cell's two writers reserved 400 rows each under one never-committed
+transaction per thread, so with CL-R1 every pass of its back-to-back snapshot
+loop listed up to 800 `ASSERT_PENDING` records under the registry's latch (a
+plain, unfair `std::mutex`): the snapshot thread ran at 100 % CPU, the writers
+waited on the latch, and the memory log grew ~1.5 GB per 10 s. **Fixed in the
+cell**: one transaction per row, its pending set dropped after the reservation
+as the dispatcher drops it once `TXN_COMMIT` is logged. The claim is checked
+as before (the fold reads `ASSERT_RESERVE` alone; kind 34 falls through the
+scan). The cell now takes ~40 s in Debug on this host (41, 53, 38, 38 s); the
+old shape with the listing disabled takes ~30 s, so the 8.8 s in
+`CTestCostData` is not this host's number. The engine-side cost is recorded in
+`known-gaps.md` ("A checkpoint's `ASSERT_PENDING` list is as long as the open
+reservations"): R records per checkpoint under the instance's directory latch,
+nothing bounding R but the transactions' size. No other cell holds
+reservations open across a tight snapshot loop (the review's census).
+
+**Verification** (code at `8751ec2f`, the cell fix on top):
+- **Sanitizers**: no clang on this host (`scripts/bs/config.sh`'s
+  `KDS_LLVM` is absent), so gcc 14.2 ASan (`build-gcc-asan`) and TSan
+  (`build-gcc-tsan`) Debug builds ran the cells matching
+  `Assertion|Analysis|Recover|StrictParkRig|TransactionManager|Checkpoint|MountRecovery`:
+  326/326 under each. The rest of the suite was not run under a sanitizer.
+- **Sim corpus with the CL-Q5 oracle**: `scripts/sim.sh 4` on
+  `build-release/ckdbs-sim`, 280 runs, 0 failures.
+- **`scripts/bs/mutants.sh`** (3 rounds, `build-bs-noassert`): baseline 0/9
+  sim, 0/3 cell rounds; every mutant killed - `admit-everything`,
+  `bound-off-by-one` and `parent-delete-unchecked` by 9/9 sim and 3/3 cell
+  rounds, `holds-ignored` by 3/3 cell rounds, and CL's two,
+  **`loser-not-given-back`** (the pass compensating no undecided transaction)
+  and **`pending-unlisted`** (the checkpoint listing no pending set), each by
+  3/3 cell rounds (0/9 sim at 1500 ops, `clean` mode, which crashes nothing).
+- **The cell's own mutation re-measured** on the per-row shape (Debug):
+  `ReserveOne` logging before it takes the latch for the header change -
+  killed 5 runs in 5.
+
+**Review** (`critics-developer`, one lens over the cell fix and the gap):
+no correctness finding. Applied: the gap bullet widened to say the latch is
+the registry's one (every assertion's writers wait, not one's), that the
+appends can incur a ring-full flush or a roll's sync under it, and that no
+existing cap bounds R (`AssertionSnapshotFits` sizes groups only,
+`max_locks_per_txn` counts one coarse unit for a bulk write, autocommit has
+no lifetime ceiling); "fixed in the cell" reworded (the gap is not fixed);
+the cell's comment tightened; the mutation count re-measured (above).
+Rejected: none.
+
+Overhead not measured; measured at the milestone's close.

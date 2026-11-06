@@ -458,7 +458,8 @@ TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
     //
     // **Mutation**, measured: `ReserveOne` appending its record before it
     // takes the directory latch for the header change - a snapshot lands
-    // between the two - killed 5 runs in 5.
+    // between the two - killed 5 runs in 5, and again 5 in 5 on the per-row
+    // commit shape (CL-S3, Debug).
     constexpr std::uint64_t kSegment = 4 * 1024 * 1024;
     auto log_device = wal::MemoryLogDevice::Create(kSegment);
     ASSERT_TRUE(log_device.ok()) << log_device.status().message();
@@ -492,11 +493,17 @@ TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
                 writing.fetch_sub(1);
                 return;
             }
-            const std::uint64_t txn = 100 + static_cast<std::uint64_t>(t);
             const auto values = Row(t);
             for (int n = 0; n < kPerThread; ++n) {
                 AssertionEnforcer::Hold hold;
                 const std::uint64_t tuple_key = static_cast<std::uint64_t>(n) * kThreads + t + 1;
+                // One transaction per row, its pending set dropped right
+                // after the reservation - the dispatcher drops it once
+                // TXN_COMMIT is logged (CL-R5); the fold reads ASSERT_RESERVE
+                // alone, so no commit record is needed. Left open, every
+                // snapshot would list all of them (ASSERT_PENDING, CL-R1)
+                // under the latch the loop holds, starving the writers.
+                const std::uint64_t txn = 100 + tuple_key;
                 if (!enforcer.AdmitInsert(kOid, values, txn, hold).ok() ||
                     !enforcer
                          .ReserveInsert(*store, wal.value().get(), txn, hold, kOid, values, tuple_key,
@@ -504,6 +511,7 @@ TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
                          .ok()) {
                     failures.fetch_add(1);
                 }
+                enforcer.CommitTxn(txn);
             }
             writing.fetch_sub(1);
         });
