@@ -419,6 +419,9 @@ Op Workload::Next() {
             return op;
         }
         --txn_ops_left_;
+        if (shapes_ && constrained_ddl_ >= 4 && constraint_rng_.Chance(12)) {
+            return AssertedTxnWrite();
+        }
         if (drops_left_ != 0 && LiveIndices().size() >= 2 && drop_rng_.Chance(3)) return Drop();
         if (shapes_ && query_rng_.Chance(8)) return Query(/*ddl=*/false);
         return DataOp();
@@ -538,6 +541,35 @@ Op Workload::ConstrainedDdl() {
                      " GROUP BY (v) CHECK COUNT(*) <= " + std::to_string(kAssertBound);
             return op;
     }
+}
+
+Op Workload::AssertedTxnWrite() {
+    Rng& r = constraint_rng_;
+    Table& asserted = constrained_[2];
+    Op op;
+    op.table = asserted.name;
+    const std::uint64_t roll = r.Below(100);
+    if (roll < 50) {
+        op.kind = Op::Kind::kInsert;
+        op.v = r.Range(0, 4);
+        op.name = std::string(1, static_cast<char>('a' + r.Below(26)));
+        op.sql = "INSERT INTO " + asserted.name + " (v, name) VALUES (" + std::to_string(op.v) +
+                 ", '" + op.name + "')";
+        ++asserted.inserted;
+        return op;
+    }
+    op.by_tuple_key = true;
+    op.key = 1 + r.Below(asserted.inserted + 2);
+    if (roll < 80) {  // the departure CL's P1 strands: a total too low
+        op.kind = Op::Kind::kDelete;
+        op.sql = "DELETE FROM " + asserted.name + " WHERE id = " + std::to_string(op.key);
+        return op;
+    }
+    op.kind = Op::Kind::kUpdate;
+    op.v = r.Range(0, 4);
+    op.sql = "UPDATE " + asserted.name + " SET v = " + std::to_string(op.v) +
+             " WHERE id = " + std::to_string(op.key);
+    return op;
 }
 
 Op Workload::ConstrainedOp() {

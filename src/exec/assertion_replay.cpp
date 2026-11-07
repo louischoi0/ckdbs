@@ -16,11 +16,15 @@ using storage::cabin::BoundCabinEntry;
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryBytes;
 
-std::string KeyOf(std::span<const std::byte> bytes) {
-    std::string key;
-    key.resize(bytes.size());
-    if (!bytes.empty()) std::memcpy(key.data(), bytes.data(), bytes.size());
-    return key;
+// The `kEntryOrphaned` mark a live abort writes (AS6b), so a rebuild that reads
+// only the pages agrees with the directory a compensation produces.
+Status MarkEntryOrphaned(storage::PageStore& store, PageId page_id, std::uint16_t index) {
+    auto page = store.Get(page_id);
+    if (!page.ok()) return page.status().WithContext("assert replay: fetching the entry page");
+    auto opened = BoundCabinPage::Open(page.value().bytes());
+    if (!opened.ok()) return opened.status().WithContext("assert replay: opening the entry page");
+    return opened.value().MarkOrphaned(index).WithContext(
+        "assert replay: marking the entry orphaned");
 }
 
 // The shared half of RESERVE and BUILD: the entry onto the page, the delta
@@ -89,7 +93,7 @@ Status ReplayEntry(const wal::DecodedRecord& record, storage::PageStore& store,
     // The entry's inline value is the group delta (wal/payload.hpp: a COUNT
     // assertion writes 1), so the directory fold reads it and nothing else -
     // with the departure flag saying which sign it applies under.
-    const std::string key = KeyOf(d.key);
+    const std::string key = AssertionKeyOf(d.key);
     // AS6a: the record's id decides which group this is, before the fold can
     // create one under an id of its own choosing (`bound_cabin.hpp`).
     if (Status s = cabin->AdoptGroupId(key, d.fields.group_id); !s.ok()) {
@@ -149,17 +153,17 @@ Status ReplayRollback(const wal::DecodedRecord& record, storage::PageStore& stor
     // confirms against the group's list. The envelope's flag byte says whether
     // the reservation was a departure, which decides the sign the compensation
     // restores under.
-    auto page = store.Get(record.header.page_id);
-    if (!page.ok()) return page.status().WithContext("assert replay: fetching the entry page");
-    auto opened = BoundCabinPage::Open(page.value().bytes());
-    if (!opened.ok()) return opened.status().WithContext("assert replay: opening the entry page");
-    if (Status s = opened.value().MarkOrphaned(d.fields.index); !s.ok()) {
-        return s.WithContext("assert replay: marking the entry orphaned");
+    const bool departure =
+        (record.header.flags & wal::kAssertRollbackFlagDeparture) != 0;
+    if (halves == ReplayHalves::kPageOnly) {
+        return MarkEntryOrphaned(store, record.header.page_id, d.fields.index);
     }
-    if (halves == ReplayHalves::kPageOnly) return Status::OK();
+    return GiveBackReservation(store, *cabin, AssertionKeyOf(d.key), d.fields.delta, departure,
+                               record.header.page_id, d.fields.index);
+}
 
-    const std::string key = KeyOf(d.key);
-
+Status CompensateReservation(BoundCabin& cabin, const std::string& key, std::int64_t delta,
+                             bool departure, PageId page_id, std::uint16_t index) {
     // **The linkage may legitimately be absent, and then it is restored for
     // `Unapply` to take away again.** The rebuild that runs before this fold
     // walks the cabin's pages and *skips* an entry the page already marks
@@ -172,24 +176,36 @@ Status ReplayRollback(const wal::DecodedRecord& record, storage::PageStore& stor
     // abort path, where the pair comes from the transaction's own reservation
     // list and its absence is a defect; a rebuild is entitled not to have
     // restored it, and failing here failed the whole recovery pass.
-    const std::pair<PageId, std::uint16_t> at{record.header.page_id, d.fields.index};
-    if (const GroupHeader* header = cabin->Find(key);
+    const std::pair<PageId, std::uint16_t> at{page_id, index};
+    if (const GroupHeader* header = cabin.Find(key);
         header != nullptr &&
         std::find(header->entries.begin(), header->entries.end(), at) ==
             header->entries.end()) {
-        if (Status s = cabin->AttachEntry(header->group_id, at.first, at.second); !s.ok()) {
+        if (Status s = cabin.AttachEntry(header->group_id, at.first, at.second); !s.ok()) {
             return s.WithContext("assert replay: relinking an entry the page walk skipped");
         }
     }
 
-    const bool departure =
-        (record.header.flags & wal::kAssertRollbackFlagDeparture) != 0;
-    Status undone = departure ? cabin->UnapplyDeparture(key, d.fields.delta, at.first, at.second)
-                              : cabin->Unapply(key, d.fields.delta, at.first, at.second);
+    Status undone = departure ? cabin.UnapplyDeparture(key, delta, at.first, at.second)
+                              : cabin.Unapply(key, delta, at.first, at.second);
     return undone.WithContext("assert replay: compensating a reservation");
 }
 
 }  // namespace
+
+std::string AssertionKeyOf(std::span<const std::byte> bytes) {
+    std::string key;
+    key.resize(bytes.size());
+    if (!bytes.empty()) std::memcpy(key.data(), bytes.data(), bytes.size());
+    return key;
+}
+
+Status GiveBackReservation(storage::PageStore& store, BoundCabin& cabin, const std::string& key,
+                           std::int64_t delta, bool departure, PageId page_id,
+                           std::uint16_t index) {
+    if (Status s = MarkEntryOrphaned(store, page_id, index); !s.ok()) return s;
+    return CompensateReservation(cabin, key, delta, departure, page_id, index);
+}
 
 bool IsAssertionRecord(wal::RecordType type) noexcept {
     switch (type) {
@@ -198,6 +214,7 @@ bool IsAssertionRecord(wal::RecordType type) noexcept {
         case wal::RecordType::kAssertRollback:
         case wal::RecordType::kAssertBuild:
         case wal::RecordType::kAssertDrop:
+        case wal::RecordType::kAssertPending:
             return true;
         default:
             return false;
@@ -215,6 +232,11 @@ Status ReplayAssertionRecord(const wal::DecodedRecord& record, storage::PageStor
             return ReplayCommit(record, store, context);  // a page half only
         case wal::RecordType::kAssertRollback:
             return ReplayRollback(record, store, context, halves);
+        case wal::RecordType::kAssertPending:
+            // A checkpoint's statement of whose a counted reservation is: no
+            // page and no directory change. Assertion recovery reads it
+            // itself (CL-R1); the fold has nothing to apply.
+            return Status::OK();
         case wal::RecordType::kAssertDrop: {
             auto decoded = wal::DecodeAssertDrop(record.payload);
             if (!decoded.ok()) return decoded.status();

@@ -84,7 +84,20 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // Every record whose envelope names a transaction implies that
         // transaction existed, even if its TXN_BEGIN is below the scan
         // start or its id came from a checkpoint's active list.
-        note_txn(record.header.txn_id, TxnOutcome::kLoser);
+        //
+        // **Except `ASSERT_PENDING`** (CL-R1): a checkpoint writes it, naming a
+        // transaction it saw holding a reservation - possibly one whose
+        // `TXN_COMMIT` was appended just before, below this scan's start, the
+        // registry's pending set being dropped only after the commit record
+        // (CL-R5). Noted here it would make that winner a loser, and assertion
+        // recovery would take its committed reservations out. A transaction
+        // that is truly undecided is already known from its own records or a
+        // BEGIN's active list, which is what undo relies on too.
+        if (record.type() == RecordType::kAssertPending) {
+            out.max_txn_id = std::max(out.max_txn_id, record.header.txn_id);
+        } else {
+            note_txn(record.header.txn_id, TxnOutcome::kLoser);
+        }
 
         // A page mutation dirties its page as of *this* LSN, unless the
         // page is already known dirty from earlier - the recLSN is the

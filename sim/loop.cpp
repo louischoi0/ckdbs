@@ -1,5 +1,8 @@
 #include "sim/loop.hpp"
 #include "kds/storage/page_header.hpp"
+#include "kds/exec/assertion_check.hpp"
+#include "kds/exec/bound_cabin.hpp"
+#include "kds/parser/ast.hpp"
 #include "kds/server/page_reclaim.hpp"
 
 #include <algorithm>
@@ -117,6 +120,13 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
         out += " fail_stops=" + std::to_string(fail_stops);
     }
     if (backups_restored != 0) out += " backups_restored=" + std::to_string(backups_restored);
+    if (assertion_totals_checked != 0) {
+        out += " assertion_totals_checked=" + std::to_string(assertion_totals_checked);
+    }
+    if (assertion_unenforcing != 0) {
+        out += " assertion_unenforcing=" + std::to_string(assertion_unenforcing);
+    }
+    if (assertion_lost != 0) out += " assertion_lost=" + std::to_string(assertion_lost);
     if (gated_missing_rows != 0) {
         out += " gated_missing_rows=" + std::to_string(gated_missing_rows) + " [GATED: recovery]";
     }
@@ -170,6 +180,17 @@ struct Iteration {
     // the generator would then apply a whole transaction's writes to an
     // oracle the engine never opened one for.
     bool txn_open = false;
+    // **The client rolled the stream's transaction back before its end**: a
+    // constraint refusal, a refused named key or an absorbed error poisoned
+    // it. The stream does not know and goes on drawing the transaction's ops;
+    // a client that has rolled back sends none of them - run in autocommit, a
+    // drawn DROP would commit and the stream's ROLLBACK then revive the table
+    // in the workload's books - so they are skipped up to its COMMIT or
+    // ROLLBACK (`ExecuteOp`).
+    bool txn_poisoned = false;
+    // The mount that stood ran under an at-mount fault that fired: what it
+    // left unenforcing or lost is the fault's, not a defect (`ReconcileAssertion`).
+    bool mount_faulted = false;
 
     // **The census's ledger** (BF-R12): each committed drop's oid, with every
     // page its roots reached at the commit and that page's owner, taken by
@@ -418,6 +439,10 @@ Refusal ConstraintRefusal(const Iteration& it, const Op& op) {
                                   (op.kind == Op::Kind::kUpdate && !op.set_name))) {
         if (it.assertion == Iteration::Declared::kAbsent) return Refusal::kFree;
         if (it.assertion == Iteration::Declared::kUnknown) return Refusal::kUnknown;
+        // Inside a transaction the committed rows the oracle holds are not
+        // what the assertion reads - its own pending writes count too - so the
+        // answer is taken either way (`AssertedTxnWrite`, CL-Q5 (a)).
+        if (it.txn_open) return Refusal::kUnknown;
         const Oracle::TableRows* asserted = o.Rows(kAsserted);
         if (asserted == nullptr || o.has_unknowns(kAsserted)) return Refusal::kUnknown;
         std::size_t at_v = 0;     // rows already at the written value
@@ -513,6 +538,7 @@ void AbsorbError(Iteration& it, const Op& op, std::size_t op_index) {
         // succeeds the transaction's writes are *definitely* gone, which is
         // a stronger fact than the abandonment above.
         CloseOpenTransaction(it);
+        it.txn_poisoned = true;
         it.trace.Note("poisoned txn rolled back at op " + std::to_string(op_index));
         return;
     }
@@ -651,6 +677,7 @@ bool CheckNamedInsert(Iteration& it, const Op& op, const std::string& reply,
         it.oracle.ApplyInsert(op.table, *placed, OracleRow{op.v, op.name});
     } else if (it.txn_open) {
         CloseOpenTransaction(it);
+        it.txn_poisoned = true;
         it.trace.Note("txn poisoned by a refused named key at op " + std::to_string(op_index));
     }
     ++it.verdict.ops_run;
@@ -693,6 +720,18 @@ void LedgerDrop(Iteration& it, std::uint64_t oid) {
 }
 
 bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
+    // **The rest of a transaction the client already rolled back is not
+    // sent** (`Iteration::txn_poisoned`), its COMMIT or ROLLBACK included,
+    // which ends the skip. Since CL's `AssertedTxnWrite` a poisoned
+    // transaction is an ordinary shape, not a shrunk case's.
+    if (it.txn_poisoned) {
+        if (op.kind == Op::Kind::kCommit || op.kind == Op::Kind::kRollback) {
+            it.txn_poisoned = false;
+        }
+        it.trace.Note("op " + std::to_string(op_index) + " skipped: its transaction was rolled back");
+        ++it.verdict.ops_run;
+        return true;
+    }
     std::string reply = it.instance.Execute(op.sql);
 
     // **A CREATE TABLE that catches an injection is retried once.** The
@@ -741,8 +780,9 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             if (expect == Refusal::kRefuse) ++it.verdict.constraint_refusals;
             ++it.verdict.ops_run;
             // A refusal poisons an open transaction (`assertion.md` §4.4),
-            // so the client rolls back - reached only by a shrunk case that
-            // lost its COMMIT, the stream writing these in autocommit.
+            // so the client rolls back - reached by `AssertedTxnWrite` (CL),
+            // the stream's other constrained writes being autocommit.
+            if (it.txn_open) it.txn_poisoned = true;
             CloseOpenTransaction(it);
             return true;
         }
@@ -1078,6 +1118,82 @@ void Reconcile(Iteration& it) {
             }
         }
     }
+}
+
+// **A group's total against its surviving rows, after the restart** (CL-Q5 (a)).
+// The assertion's directory is rebuilt at the mount from a snapshot, the log and
+// - since CL - the compensation of every transaction no commit decided; whatever
+// it counts for a row the undo took back is a wrong total, too high (a write the
+// assertion could admit is refused) or too low (one it forbids is admitted,
+// `[quiet-wrong]`). The relation is read as the engine now holds it - every
+// transaction is decided after a restart, so its rows are the ground truth
+// whatever the oracle knows of their history - and every group the directory
+// holds is compared with the rows standing at its key, in both directions: a
+// key with rows and a key with none. An assertion the mount left unenforcing
+// refuses its relation's writes, which is recoverable; under faults that is
+// counted, and without one it fails, since nothing injected could cause it.
+void ReconcileAssertion(Iteration& it) {
+    if (it.assertion != Iteration::Declared::kPresent) return;
+    const std::string reply = it.instance.Execute(std::string("SELECT v FROM ") + kAsserted);
+    if (IsErr(reply)) return;  // the relation is gone: Reconcile has said so
+    std::map<std::string, std::int64_t> rows_at;  // by the directory's group key
+    for (const std::string& line : RowsOf(reply)) {
+        parser::AstValue v;
+        v.type = parser::ValueType::kInt;
+        try {
+            v.int_val = std::stoll(line);
+        } catch (const std::exception&) {
+            return;  // not a plain value row: nothing to compare
+        }
+        ++rows_at[exec::EncodeGroupKey({v})];
+    }
+    auto oid = it.instance.catalog().FindTableOidByName(catalog::kNamespacePublic, kAsserted);
+    if (!oid.ok()) return;
+    exec::AssertionEnforcer& enforcer = it.instance.dispatcher().assertions();
+    const bool faulted = it.faults_on() || it.mount_faulted;
+    if (enforcer.CannotEnforce(oid.value())) {
+        if (!faulted) {
+            Fail(it, "after restart, the assertion on " + std::string(kAsserted) +
+                         " is unenforcing in a run with no fault armed");
+            return;
+        }
+        ++it.verdict.assertion_unenforcing;
+        return;
+    }
+    const std::vector<wal::AssertionCabinSnapshot> cabins = enforcer.SnapshotAssertions();
+    if (cabins.empty()) {
+        // An acknowledged create a crash cut before its sync is a legitimate
+        // loss; after a clean stop with nothing armed it is a durability defect.
+        if (it.config.mode == SimMode::kClean && !faulted) {
+            Fail(it, "after a clean restart, the acknowledged assertion on " +
+                         std::string(kAsserted) + " is gone");
+            return;
+        }
+        ++it.verdict.assertion_lost;
+        return;
+    }
+    if (cabins.size() != 1) return;  // the workload declares one; another is not this check's
+    std::map<std::string, std::int64_t> counted;
+    for (const wal::AssertionSnapshotGroup& g : cabins.front().groups) {
+        if (g.count != 0) counted[g.key] = g.count;
+    }
+    if (counted != rows_at) {
+        std::string detail;
+        for (const auto& [key, n] : rows_at) {
+            const auto c = counted.find(key);
+            const std::int64_t total = c == counted.end() ? 0 : c->second;
+            if (total != n) detail += " rows=" + std::to_string(n) + "/total=" + std::to_string(total);
+        }
+        for (const auto& [key, total] : counted) {
+            if (rows_at.count(key) == 0) detail += " rows=0/total=" + std::to_string(total);
+        }
+        Fail(it, "after restart, the assertion's group totals disagree with the rows of " +
+                     std::string(kAsserted) + ":" + detail +
+                     " (a total too low admits writes the assertion forbids; too high refuses "
+                     "writes it admits)");
+        return;
+    }
+    ++it.verdict.assertion_totals_checked;
 }
 
 // **The dropped relations, and the census** (BF-R12), after the reboot's
@@ -1471,6 +1587,13 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     if (!fail_stopped && it.faults_on()) {
         CloseOpenTransaction(it);
         fail_stopped = it.instance.page_device().power_lost();
+        // Its unwind refused part-way stops the log (CL-Q7 (b)), as a refused
+        // append always did: a fail-stop, not a run to shut down cleanly.
+        if (!fail_stopped && it.instance.log_stopped()) {
+            it.trace.Note("log fail-stopped by the closing rollback");
+            ++verdict.fail_stops;
+            fail_stopped = true;
+        }
     }
     if (fail_stopped) {
         // No quiescence probe and no clean shutdown: a stopped instance is
@@ -1545,6 +1668,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     if (config.nth_fault.has_value() && config.nth_fault->at_mount) {
         verdict.faults_fired =
             InjectionsFired(it.instance.page_device(), it.instance.log_device());
+        it.mount_faulted = verdict.faults_fired != 0;
         DisarmInjections(it);
         // A mount the power left is no mount, whatever it answered.
         if (!rebooted.ok() || it.instance.page_device().power_lost()) {
@@ -1554,6 +1678,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
             ++verdict.mounts_refused;
             // A power lost during the mount cuts recovery's own writes too.
             CutPower(it, "/mount");
+            it.mount_faulted = false;  // the mount that stands ran with nothing armed
             rebooted = it.instance.Reboot();
         }
     }
@@ -1597,6 +1722,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
 
     Reconcile(it);
     ReconcileDrops(it);
+    ReconcileAssertion(it);
     record_recycling();
     if (!verdict.ok || !backup.has_value()) return verdict.ok;
 
@@ -1665,6 +1791,9 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     segments_recycled += other.segments_recycled;
     crashes_reviving_segments += other.crashes_reviving_segments;
     backups_restored += other.backups_restored;
+    assertion_totals_checked += other.assertion_totals_checked;
+    assertion_unenforcing += other.assertion_unenforcing;
+    assertion_lost += other.assertion_lost;
     fail_stops += other.fail_stops;
     mounts_refused += other.mounts_refused;
     derived_reads += other.derived_reads;

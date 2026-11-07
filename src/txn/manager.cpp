@@ -336,7 +336,8 @@ void TransactionManager::FinishCommitBody(Transaction& txn, wal::Lsn lsn,
     if (locks_ != nullptr) locks_->Release(txn.id_, txn.borrows_);
 }
 
-StatusOr<wal::Lsn> TransactionManager::CommitDeferred(Transaction& txn) {
+StatusOr<wal::Lsn> TransactionManager::CommitDeferred(Transaction& txn,
+                                                      const AfterLogged& after_logged) {
     if (!txn.active_) {
         return Status::InvalidArgument("transaction " + std::to_string(txn.id_) +
                                        " is no longer active");
@@ -353,6 +354,7 @@ StatusOr<wal::Lsn> TransactionManager::CommitDeferred(Transaction& txn) {
         return staged.status();
     }
     txn.deferred_lsn_ = staged.value();
+    if (after_logged) after_logged();
     return staged.value();
 }
 
@@ -362,7 +364,8 @@ void TransactionManager::FinishDeferredCommit(Transaction& txn) {
 }
 
 StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
-                                              wal::DurabilityClass durability) {
+                                              wal::DurabilityClass durability,
+                                              const AfterLogged& after_logged) {
     if (!txn.active_) {
         return Status::InvalidArgument("transaction " + std::to_string(txn.id_) +
                                        " is no longer active");
@@ -390,6 +393,7 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
         if (!committed.ok()) return committed.status();
         lsn = committed.value();
     }
+    if (after_logged) after_logged();
 
     FinishCommitBody(txn, lsn, pending);
     return lsn;

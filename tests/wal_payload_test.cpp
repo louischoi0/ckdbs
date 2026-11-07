@@ -535,9 +535,12 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBackupBegin), 31);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBackupEnd), 32);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAnchorSlotRemove), 33);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertPending), 34);
     // Derived from the enum now, not typed here: pinning it as a literal is
     // what let type 23 ship unwritable (record.hpp).
-    EXPECT_EQ(kMaxAssignedRecordType, 33);
+    EXPECT_EQ(kMaxAssignedRecordType, 34);
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kAssertPending)));
+    EXPECT_STREQ(RecordTypeName(RecordType::kAssertPending), "ASSERT_PENDING");
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kAnchorSlotRemove)));
     EXPECT_STREQ(RecordTypeName(RecordType::kAnchorSlotRemove), "ANCHOR_SLOT_REMOVE");
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kBackupBegin)));

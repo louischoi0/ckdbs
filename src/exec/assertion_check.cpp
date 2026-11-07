@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <string_view>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 
@@ -238,6 +239,32 @@ std::vector<wal::AssertionCabinSnapshot> AssertionEnforcer::SnapshotLocked() con
     out.reserve(live_.size());
     for (const auto& [assertion_id, live] : live_) {
         out.push_back(SnapshotOf(assertion_id, live->a.cabin));
+    }
+    // The reservations of transactions not yet decided, which the headers above
+    // count and no page entry attributes (CL-R1): `pending_` and the part of an
+    // abort not yet unwound. Ordered below with everything else.
+    std::unordered_map<std::uint64_t, wal::AssertionCabinSnapshot*> by_assertion;
+    for (wal::AssertionCabinSnapshot& cabin : out) by_assertion[cabin.assertion_id] = &cabin;
+    const auto list = [&by_assertion](const std::unordered_map<std::uint64_t, std::vector<Reservation>>& held) {
+        for (const auto& [txn_id, reservations] : held) {
+            for (const Reservation& r : reservations) {
+                auto cabin = by_assertion.find(r.assertion_id);
+                if (cabin == by_assertion.end()) continue;  // dropped mid-transaction
+                cabin->second->pending.push_back(
+                    wal::AssertionPendingReservation{txn_id, r.page, r.index, r.value,
+                                                     r.departure, r.key});
+            }
+        }
+    };
+    list(pending_);
+    list(aborting_);
+    for (wal::AssertionCabinSnapshot& cabin : out) {
+        std::sort(cabin.pending.begin(), cabin.pending.end(),
+                  [](const wal::AssertionPendingReservation& a,
+                     const wal::AssertionPendingReservation& b) {
+                      return std::tie(a.txn_id, a.page_id, a.index) <
+                             std::tie(b.txn_id, b.page_id, b.index);
+                  });
     }
     // Ordered by assertion id, for the reason SnapshotGroups() orders by group
     // id: a checkpoint's bytes must be a function of its input, and an
@@ -842,88 +869,120 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
         // is no transaction manager.
         reservations = std::move(pending->second);
         pending_.erase(pending);
+        // Still listed by a checkpoint until each is given back (CL-R1).
+        aborting_[txn_id] = reservations;
     }
+    struct DoneAborting {
+        AssertionEnforcer& self;
+        std::uint64_t txn_id;
+        ~DoneAborting() {
+            const LatchGuard guard(self.latch_.get());
+            self.aborting_.erase(txn_id);
+        }
+    } done_aborting{*this, txn_id};
 
-    // Reverse order, the undo trail's own convention - not load-bearing for
-    // these (removal is by name), but it keeps the compensation stream
-    // reading as an unwind.
-    for (auto it = reservations.rbegin(); it != reservations.rend(); ++it) {
-        // **Log, then mark, then stamp** - WAL-before-data, and here the order
-        // is the correctness argument rather than a convention. Marking first
-        // leaves a window where the frame carries its *old*, already-durable
-        // `page_lsn`, so the flush gate would let the mark out ahead of the
-        // record describing it; a failing `Append` then makes that permanent,
-        // and the next recovery meets a header counting a reservation whose
-        // entry the page says is orphaned - `VerifyAgainstEntries` reporting
-        // Corruption for a directory that this time really is wrong.
-        //
-        // `Unapply` stays ahead of both: its missing-pair refusal is the check
-        // that proves `(page, index)` names *this* group's entry, and it must
-        // run before a flag is OR'd into whatever lives at that slot. It and
-        // the record are one step under the directory latch, for the snapshot
-        // (the header's paragraph); the mark is page work and runs after.
-        //
-        // **The page is held from before the record to after its stamp**
-        // (`wal.md` §8-1), the cabin page's latch ahead of the directory
-        // latch as the header orders them. Taken after the append, the
-        // record existed while the page did not yet carry its mark: another
-        // core's stamp in between was followed by this one, lowering
-        // `page_lsn`, and a writeback copy before the mark whose clean that
-        // stamp skipped moved the recLSN above the record (`WriteBack`) - a
-        // checkpoint could then flush the page unmarked and publish a redo
-        // start past `ASSERT_ROLLBACK`, and a crash lose the mark. A dropped
-        // assertion frees no page, so the fetch ahead of the `live_` check
-        // is sound.
-        auto page = store.Get(it->page);
-        if (!page.ok()) return page.status().WithContext("assert abort: fetching the entry page");
-        wal::Lsn stamp = wal::kNoLsn;
-        {
-            const LatchGuard guard(latch_.get());
-            auto held = live_.find(it->assertion_id);
-            if (held == live_.end()) continue;  // dropped mid-transaction
-            LiveAssertion& a = held->second->a;
-            Status undone = it->departure
-                                ? a.cabin.UnapplyDeparture(it->key, it->value, it->page, it->index)
-                                : a.cabin.Unapply(it->key, it->value, it->page, it->index);
-            if (!undone.ok()) return undone;
-            ++a.counters.aborted;
+    // **An unwind refused part-way stops the log** (CL-Q7 (b)): the
+    // reservations not yet given back stay counted in their headers while the
+    // caller's `Abort` takes the rows back, and from here no record names them
+    // - `aborting_` is cleared on every exit, and once `TXN_ABORT` is below a
+    // later scan's start analysis no longer knows the transaction. Stopped, no
+    // `TXN_ABORT` and no later checkpoint becomes durable, so the next mount
+    // finds the transaction a loser in its base's active list, with its
+    // reservations in that base's `ASSERT_PENDING` or folded after it, and
+    // gives them back (CL-R1). A refused `Append` has stopped the log already;
+    // this reaches the others - the page fetch, `Unapply`'s missing pair, the
+    // mark and the stamp. With no log there is nothing durable to repair.
+    const auto unwind = [&]() -> Status {
+        // Reverse order, the undo trail's own convention - not load-bearing for
+        // these (removal is by name), but it keeps the compensation stream
+        // reading as an unwind.
+        for (auto it = reservations.rbegin(); it != reservations.rend(); ++it) {
+            // **Log, then mark, then stamp** - WAL-before-data, and here the order
+            // is the correctness argument rather than a convention. Marking first
+            // leaves a window where the frame carries its *old*, already-durable
+            // `page_lsn`, so the flush gate would let the mark out ahead of the
+            // record describing it; a failing `Append` then makes that permanent,
+            // and the next recovery meets a header counting a reservation whose
+            // entry the page says is orphaned - `VerifyAgainstEntries` reporting
+            // Corruption for a directory that this time really is wrong.
+            //
+            // `Unapply` stays ahead of both: its missing-pair refusal is the check
+            // that proves `(page, index)` names *this* group's entry, and it must
+            // run before a flag is OR'd into whatever lives at that slot. It and
+            // the record are one step under the directory latch, for the snapshot
+            // (the header's paragraph); the mark is page work and runs after.
+            //
+            // **The page is held from before the record to after its stamp**
+            // (`wal.md` §8-1), the cabin page's latch ahead of the directory
+            // latch as the header orders them. Taken after the append, the
+            // record existed while the page did not yet carry its mark: another
+            // core's stamp in between was followed by this one, lowering
+            // `page_lsn`, and a writeback copy before the mark whose clean that
+            // stamp skipped moved the recLSN above the record (`WriteBack`) - a
+            // checkpoint could then flush the page unmarked and publish a redo
+            // start past `ASSERT_ROLLBACK`, and a crash lose the mark. A dropped
+            // assertion frees no page, so the fetch ahead of the `live_` check
+            // is sound.
+            auto page = store.Get(it->page);
+            if (!page.ok()) return page.status().WithContext("assert abort: fetching the entry page");
+            wal::Lsn stamp = wal::kNoLsn;
+            {
+                const LatchGuard guard(latch_.get());
+                auto held = live_.find(it->assertion_id);
+                if (held == live_.end()) {  // dropped mid-transaction
+                    aborting_[txn_id].pop_back();
+                    continue;
+                }
+                LiveAssertion& a = held->second->a;
+                Status undone = it->departure
+                                    ? a.cabin.UnapplyDeparture(it->key, it->value, it->page, it->index)
+                                    : a.cabin.Unapply(it->key, it->value, it->page, it->index);
+                if (!undone.ok()) return undone;
+                ++a.counters.aborted;
 
-            if (wal != nullptr) {
-                std::vector<std::byte> payload(wal::kAssertRollbackFixedSize + it->key.size());
-                wal::AssertRollbackPayload fields{};
-                fields.assertion_id = it->assertion_id;
-                fields.delta = it->value;
-                fields.index = it->index;
-                auto used = wal::EncodeAssertRollback(
-                    payload, fields,
-                    std::as_bytes(std::span<const char>(it->key.data(), it->key.size())));
-                if (!used.ok()) return used.status();
-                wal::RecordSpec spec{wal::RecordType::kAssertRollback, txn_id, it->page};
-                spec.flags = it->departure ? wal::kAssertRollbackFlagDeparture : 0;
-                auto rec = wal->Append(spec, payload);
-                if (!rec.ok()) return rec.status();
-                stamp = rec.value();
+                if (wal != nullptr) {
+                    std::vector<std::byte> payload(wal::kAssertRollbackFixedSize + it->key.size());
+                    wal::AssertRollbackPayload fields{};
+                    fields.assertion_id = it->assertion_id;
+                    fields.delta = it->value;
+                    fields.index = it->index;
+                    auto used = wal::EncodeAssertRollback(
+                        payload, fields,
+                        std::as_bytes(std::span<const char>(it->key.data(), it->key.size())));
+                    if (!used.ok()) return used.status();
+                    wal::RecordSpec spec{wal::RecordType::kAssertRollback, txn_id, it->page};
+                    spec.flags = it->departure ? wal::kAssertRollbackFlagDeparture : 0;
+                    auto rec = wal->Append(spec, payload);
+                    if (!rec.ok()) return rec.status();
+                    stamp = rec.value();
+                }
+                // Given back and logged in one hold, so a checkpoint sees it listed
+                // exactly while its header still counts it (CL-R1).
+                aborting_[txn_id].pop_back();
+            }
+
+            // The entry bytes stay - the slot is the recorded leak that rides on
+            // purge - but they are marked, so a rebuild scanning only these pages
+            // reaches the same directory this `Unapply` just produced
+            // (`storage/cabin_bound_page.hpp`'s `kEntryOrphaned`, the AS6b decision
+            // in `docs/spec/assertion.md` §7). Unconditional, not `wal != nullptr`:
+            // the mark is a data change, and skipping it without a log would leave
+            // a page the next scan misreads.
+            auto view = BoundCabinPage::Open(page.value().bytes());
+            if (!view.ok()) return view.status().WithContext("assert abort: opening the entry page");
+            if (Status s = view.value().MarkOrphaned(it->index); !s.ok()) {
+                return s.WithContext("assert abort: marking the entry orphaned");
+            }
+
+            if (stamp != wal::kNoLsn) {
+                if (Status s = store.StampPageLsn(it->page, stamp); !s.ok()) return s;
             }
         }
-
-        // The entry bytes stay - the slot is the recorded leak that rides on
-        // purge - but they are marked, so a rebuild scanning only these pages
-        // reaches the same directory this `Unapply` just produced
-        // (`storage/cabin_bound_page.hpp`'s `kEntryOrphaned`, the AS6b decision
-        // in `docs/spec/assertion.md` §7). Unconditional, not `wal != nullptr`:
-        // the mark is a data change, and skipping it without a log would leave
-        // a page the next scan misreads.
-        auto view = BoundCabinPage::Open(page.value().bytes());
-        if (!view.ok()) return view.status().WithContext("assert abort: opening the entry page");
-        if (Status s = view.value().MarkOrphaned(it->index); !s.ok()) {
-            return s.WithContext("assert abort: marking the entry orphaned");
-        }
-
-        if (stamp != wal::kNoLsn) {
-            if (Status s = store.StampPageLsn(it->page, stamp); !s.ok()) return s;
-        }
-    }
-    return Status::OK();
+        return Status::OK();
+    };
+    Status unwound = unwind();
+    if (!unwound.ok() && wal != nullptr) (void)wal->stream()->FailStop(unwound);
+    return unwound;
 }
 
 }  // namespace kds::exec

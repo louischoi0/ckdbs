@@ -1785,17 +1785,39 @@ Owned by `docs/spec/index.md` §10.3. The order is
   waiting `X` has no queue position (`lock_table.cpp`), as writers already
   can.
 
-## Assertion reservations (CK)
+## Assertion reservations (CK, CL)
 
-- **A reservation undecided at a crash is never compensated at the mount.**
-  On `ck-assertion-commit-settle` at `b66a0dbe` an undecided arrival fails
-  closed and an undecided departure fails open `[quiet-wrong]`; two
-  `DISABLED_` cells in `tests/assertion_crash_test.cpp` state the right
-  answer. Bug entry `an-assertion-keeps-the-reservations-of-a-crash-loser-and-a-failed-settle.md`.
-- **A failed `TransactionManager::Commit` strands the transaction's
-  reservations**, because `CommitTxn` takes the pending set first and the
-  abort then finds none (the same entry, "After CK-S1"). Same sign rule: a
-  departure fails open.
+Verified on `ck-assertion-commit-settle` at `291cc251`. A crash loser's
+reservations are given back at the mount, and a failed commit - always behind
+a stopped log (CL-S0) - is given back by the next one (`assertion.md` §6.2,
+§7); what that leaves:
+
+- **An abort's unwind refused part-way stops the instance's log** (CL-Q7 (b)):
+  a page read error on a Bound Cabin page, or a directory refusal, during a
+  `ROLLBACK` or a statement's abort is a fail-stop until a restart, where it
+  used to leave the total wrong. Availability for correctness, as a refused
+  log write already was.
+- **The sim checks a loser only after a restart**: its `a0` writes inside
+  explicit transactions are judged `kUnknown` at the statement (the oracle's
+  committed rows are not what the assertion reads there) and checked by the
+  after-restart re-summation alone.
+- **A reservation under `kBootstrapXid`** - a dispatcher with no transaction
+  manager - is never given back at a mount: that id writes no `TXN_COMMIT`, so
+  the mount cannot tell its statements apart and treats it as committed. No
+  production configuration reaches it.
+- **A checkpoint's `ASSERT_PENDING` list is as long as the open reservations,
+  and is written under the registry's one directory latch.** Undecided
+  transactions holding R reservations in all (`pending_` and `aborting_`)
+  cost every checkpoint they span R records, appended under that latch -
+  with any ring-full flush or segment-roll sync the appends incur - so every
+  assertion's admissions and reservations, on every core, wait for them.
+  Nothing bounds R but the transactions' size: not `AssertionSnapshotFits`
+  (groups only), not `max_locks_per_txn` (a bulk write declares one coarse
+  unit), and an autocommit statement or a KWP load has no lifetime ceiling.
+  Seen in `AssertionRaceTest.EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt`
+  at `8751ec2f` (800 open reservations against a back-to-back snapshot loop,
+  killed past 80 minutes); the cell now commits each row, as the dispatcher
+  does. Not measured on a server.
 - **`kEntryReserved` no longer means "in flight"** (CK-R1): no reader may
   trust it as such (CK-R4, `[quiet-wrong]`); the cell
   `AssertionRecoverTest.ACommittedReservationsEntryKeepsItsBitAndEveryConsumerAnswersAsBefore`

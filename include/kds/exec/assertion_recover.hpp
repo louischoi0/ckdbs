@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <vector>
 
 #include "kds/base/log.hpp"
@@ -81,6 +82,11 @@ struct AssertionRecoveryResult {
     // discarded rather than taken as a base (AY-S8, AY-Q7). A run whose chunk 0
     // precedes the scan's start is skipped chunk by chunk and not counted.
     std::uint64_t partial_runs_discarded = 0;
+
+    // Reservations of a transaction that was not a winner, still counted when the
+    // scan ended, and given back (CL-R1): marked orphaned on their pages and
+    // subtracted from their groups.
+    std::uint64_t undecided_compensated = 0;
 };
 
 struct AssertionRecoveryReport {
@@ -109,8 +115,17 @@ struct RecoverableAssertion {
 // group twice, an entry whose `group_id` no restored group carries *and* whose
 // group no later record creates, a page that is not a `kCabinBound` page, or a
 // fold that reports Corruption. A missing snapshot is a report, not a failure.
+//
+// **`undecided_txns` is the analysis phase's answer** (CL-R1): the transactions
+// with no durable `TXN_COMMIT` - losers and aborted alike. A reservation the
+// scan saw reserved (or that a checkpoint's `ASSERT_PENDING` lists) and no
+// `ASSERT_ROLLBACK` gave back, whose transaction is in the set, is compensated
+// once the scan ends. A transaction in neither the set nor the log's winners is
+// left alone: an empty set, which is what a caller with no analysis passes,
+// compensates nothing. Never the page's reserved bit (CK-R4).
 StatusOr<AssertionRecoveryReport> RecoverAssertions(
     wal::LogDevice& device, std::uint32_t core_id, wal::Lsn from_lsn,
-    storage::PageStore& store, std::span<const RecoverableAssertion> assertions, Logger* log);
+    storage::PageStore& store, std::span<const RecoverableAssertion> assertions, Logger* log,
+    const std::set<std::uint64_t>& undecided_txns = {});
 
 }  // namespace kds::exec

@@ -225,6 +225,11 @@ private:
     // (`constraint_rng_`).
     Op ConstrainedDdl();
     Op ConstrainedOp();
+    // One write to the asserted relation inside an explicit transaction
+    // (CL-Q5 (a)): what leaves an undecided transaction holding a reservation
+    // when the iteration crashes, the state a mount must give back. Drawn from
+    // `constraint_rng_`, once the constrained DDL has run.
+    Op AssertedTxnWrite();
     std::vector<std::size_t> LiveIndices() const;
     void AddReplacement();
 

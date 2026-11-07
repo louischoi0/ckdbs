@@ -216,7 +216,17 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // read as an ordinary index and choose for a read - a probe missing rows.
 // The row's size does not change. Refused with no migration, the standing
 // order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 34;
+//
+// 35 (CL-S1, `instructions/v3.2.0/workorder-cl-assertion-reservations-of-an-undecided-transaction.md`
+// CL-Q6 (a)): the log may carry `ASSERT_PENDING` (34), a checkpoint's list of
+// the reservations an undecided transaction holds, which a mount compensates
+// for a transaction that never committed. A version-34 binary refuses the
+// record kind mid-recovery, or - with none in its scan - leaves a crash
+// loser's departure in its group total and admits writes the assertion
+// forbids; a version-34 volume's checkpoints listed none, so this build could
+// not compensate a loser its base counts. Refused with no migration, the
+// standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 35;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

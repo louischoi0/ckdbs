@@ -145,6 +145,46 @@ TEST_F(AnalysisTest, TheCheckpointSeedsBothTables) {
         << "the checkpoint's recLSN must survive, not be replaced by the record's LSN";
 }
 
+// **`ASSERT_PENDING` alone does not make a loser** (CL-R1,
+// `instructions/v3.2.0/workorder-cl-assertion-reservations-of-an-undecided-transaction.md`).
+// A checkpoint lists a reservation the registry still holds, and the registry
+// drops a committing transaction's set only once its `TXN_COMMIT` is appended
+// (CL-R5) - so a checkpoint can name 42 whose commit lies just below the scan
+// start. Noted as a loser here, assertion recovery would take a committed
+// reservation out of its group: a total too low, an assertion admitting what it
+// forbids. A truly undecided 42 is known from the checkpoint's active list or
+// its own records; the second half pins that the exemption is this kind's only.
+TEST_F(AnalysisTest, AnAssertPendingAloneDoesNotMakeItsTransactionALoser) {
+    Lsn checkpoint_lsn = 0;
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        WalStream& w = *s.value();
+        checkpoint_lsn = AppendCheckpointBegin(w, {}, {});
+        ASSERT_NE(checkpoint_lsn, 0u);
+        ASSERT_TRUE(w.Append({RecordType::kAssertPending, 42, 900}).ok());
+        ASSERT_TRUE(w.Sync().ok());
+    }
+    auto r = Run(checkpoint_lsn);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().transactions.count(42), 0u)
+        << "a checkpoint's list names a transaction it saw, not one left undecided";
+    EXPECT_EQ(r.value().losers, 0u);
+    EXPECT_GE(r.value().max_txn_id, 42u) << "the id is still spent: no later carve reissues it";
+
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kAssertReserve, 42, 900}).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto again = Run(checkpoint_lsn);
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    ASSERT_EQ(again.value().transactions.count(42), 1u);
+    EXPECT_EQ(again.value().transactions.at(42).outcome, TxnOutcome::kLoser)
+        << "any other record naming 42 still notes it";
+}
+
 // **A retired record kind is refused, never skipped** (BP-R4). No build
 // that writes superblock 22 appends TXN_PREPARE or PAGE_HANDOFF, so a log
 // carrying either is not this build's to replay. Both cells write the kind

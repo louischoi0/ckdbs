@@ -108,13 +108,15 @@ enum class RecordType : std::uint8_t {
     // these. Replay touches flags only - a reservation counts in the
     // aggregate from the moment of admission, so commit moves no sum.
     kAssertCommit = 19,
-    // The compensation (§6.2 step 5, and recovery's answer to a crashed
-    // in-flight reservation): the reserved delta subtracted and the entry
-    // forgotten by the group directory. **The page entry is not rewritten**
-    // - abort is a removal the directory performs (cabin_bound_page.hpp) -
-    // so the slot is orphaned and its 32 bytes ride on purge like every
-    // superseded value in this engine. txn_id is the aborting transaction,
-    // SLOT_RETIRE's rollback rule.
+    // The compensation of a live abort (§6.2 step 5): the reserved delta
+    // subtracted and the entry forgotten by the group directory. The page
+    // entry is only marked `kEntryOrphaned` (AS6b) - abort is a removal the
+    // directory performs (cabin_bound_page.hpp) - so the slot is orphaned and
+    // its 32 bytes ride on purge like every superseded value in this engine.
+    // txn_id is the aborting transaction, SLOT_RETIRE's rollback rule. **A
+    // mount writes none**: what a crash left undecided is given back unlogged
+    // by assertion recovery (CL-R1, `ASSERT_PENDING` below), and redone at
+    // every mount until a checkpoint's base carries it.
     kAssertRollback = 20,
     // One entry materialized by the CREATE-time builder (AST06): the same
     // payload shape as ASSERT_RESERVE, but owned by no transaction and with
@@ -218,6 +220,20 @@ enum class RecordType : std::uint8_t {
     // because redo reaches this only for a page below the record's LSN, and
     // every ANCHOR_UPDATE for the oid precedes it. Since superblock 29.
     kAnchorSlotRemove = 33,
+    // **One reservation an undecided transaction held at a checkpoint** (CL-R1,
+    // `instructions/v3.2.0/workorder-cl-assertion-reservations-of-an-undecided-transaction.md`),
+    // written after that checkpoint's `ASSERT_SNAPSHOT` run, under the registry's
+    // latch, for every reservation the registry still holds pending or is
+    // unwinding. The snapshot's headers count it, and a page entry carries no
+    // transaction id (and since CK its reserved bit says nothing about commit),
+    // so this record is the only durable statement of whose it is: assertion
+    // recovery compensates it if the envelope's transaction is not a winner.
+    // The payload is `ASSERT_ROLLBACK`'s, the envelope's flag bit 0 the same
+    // departure bit, the envelope's page the entry's. Not a page change: redo
+    // passes it. Since superblock 35 (CL-Q6 (a), `superblock.hpp`): an older
+    // build is refused at mount, since refusing the record kind alone would let
+    // one mount a log whose scan holds none and leave a loser counted.
+    kAssertPending = 34,
     // INDEX_PAGE_INIT (index.md §12.1's proposal) is not assigned: a new
     // index page leaves a divide holding half the entries, so only a full
     // page image describes it.
@@ -229,7 +245,7 @@ enum class RecordType : std::uint8_t {
 // Keep it pinned to the last enumerator; the test that every named type
 // encodes proves it.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
-    static_cast<std::uint8_t>(RecordType::kAnchorSlotRemove);
+    static_cast<std::uint8_t>(RecordType::kAssertPending);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 

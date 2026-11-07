@@ -340,7 +340,14 @@ TEST(SuperBlockTest, AVersion32VolumeDoesNotMount) {
 // volume does not mount here and this build's volume does not mount there.
 TEST(SuperBlockTest, AVersion33VolumeDoesNotMount) {
     ExpectRefusedNamingBoth(33);
-    EXPECT_EQ(kSuperBlockVersion, 34u);
+}
+
+// CL-S1: a version-34 volume's checkpoints list no `ASSERT_PENDING`, so a
+// crash loser its base counts cannot be given back here, and a version-34
+// binary refuses the record kind or leaves the loser's departure counted.
+TEST(SuperBlockTest, AVersion34VolumeDoesNotMount) {
+    ExpectRefusedNamingBoth(34);
+    EXPECT_EQ(kSuperBlockVersion, 35u);
 }
 
 // AY-Q6 (C): a version-18 volume's log may hold an ASSERT_SNAPSHOT with no

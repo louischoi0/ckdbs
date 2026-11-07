@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -72,6 +73,11 @@ struct MountRecovery {
     std::uint64_t winners = 0;
     std::uint64_t aborted = 0;
     std::uint64_t losers = 0;
+    // The ids of the transactions with no durable `TXN_COMMIT` - losers and
+    // aborted - which the assertion pass compensates what they still hold
+    // (CL-R1, `exec::RecoverAssertions`). Empty on a peer and when nothing
+    // was undecided.
+    std::set<std::uint64_t> undecided_txns;
 
     // ---- What redo wrote ----
     std::uint64_t redo_applied = 0;

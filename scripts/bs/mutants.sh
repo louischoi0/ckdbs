@@ -116,5 +116,11 @@ mutant holds-ignored src/exec/assertion_check.cpp \
 mutant parent-delete-unchecked src/server/command_dispatcher.cpp \
     '                return Status::FkViolation("row id=" + std::to_string(parent_tuple_key) +' \
     '                if (false) return Status::FkViolation("row id=" + std::to_string(parent_tuple_key) +'
+# CL: a crash loser's reservations not given back at the mount, and a
+# checkpoint that lists no undecided transaction's reservation.
+mutant loser-not-given-back src/exec/assertion_recover.cpp \
+    '        if (undecided_txns.count(txn_id) == 0) continue;' '        continue;'
+mutant pending-unlisted src/exec/assertion_check.cpp \
+    '    list(pending_);' '    (void)list;'
 
 build restore || { echo "the restored build failed ($LOGS/restore-build.log)"; exit 1; }

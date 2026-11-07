@@ -34,6 +34,7 @@ bool IsAssertionRecord(RecordType type) noexcept {
         case RecordType::kAssertRollback:
         case RecordType::kAssertBuild:
         case RecordType::kAssertDrop:
+        case RecordType::kAssertPending:
             return true;
         default:
             return false;

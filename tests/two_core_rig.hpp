@@ -270,6 +270,9 @@ public:
         LatchGuard hold(&superblock_latch_);
         return boot_->superblock.wal_anchor(0);
     }
+    // The anchor a `fold_anchor` rig's checkpoints publish into, for a cell that
+    // runs a `wal::Checkpointer` of its own over a target it scripts.
+    wal::CheckpointAnchor& checkpoint_anchor() noexcept { return *fold_anchor_; }
     // Engaged only on a `gated_log_sync` rig.
     GatedLogDevice& log_gate() noexcept { return *log_gate_; }
     sched::SimWakerTable& wake() noexcept { return *sim_; }

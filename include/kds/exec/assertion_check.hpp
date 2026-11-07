@@ -425,6 +425,10 @@ private:
     // relation's others.
     std::unordered_map<catalog::Oid, std::vector<std::uint64_t>> unenforceable_;
     std::unordered_map<std::uint64_t, std::vector<Reservation>> pending_;
+    // The reservations `AbortTxn` has taken out of `pending_` and not yet given
+    // back, so a checkpoint taken between two of its steps still lists them
+    // (CL-R1): the headers count them until each `Unapply`.
+    std::unordered_map<std::uint64_t, std::vector<Reservation>> aborting_;
     // Held contributions by serial. Bounded by the rows in flight - one per
     // statement per assertion - so an admission sums it by scanning.
     std::unordered_map<std::uint64_t, HeldContribution> holds_;

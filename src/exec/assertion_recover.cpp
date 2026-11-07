@@ -119,7 +119,8 @@ private:
 
 StatusOr<AssertionRecoveryReport> RecoverAssertions(
     wal::LogDevice& device, std::uint32_t core_id, wal::Lsn from_lsn,
-    storage::PageStore& store, std::span<const RecoverableAssertion> assertions, Logger* log) {
+    storage::PageStore& store, std::span<const RecoverableAssertion> assertions, Logger* log,
+    const std::set<std::uint64_t>& undecided_txns) {
     AssertionRecoveryReport report;
     if (assertions.empty()) {
         return report;  // nothing to recover, and no scan to pay for
@@ -164,6 +165,25 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
     };
     std::map<std::uint64_t, PendingRun> pending;
 
+    // **The reservations still counted for a transaction not yet decided**
+    // (CL-R1): `ASSERT_PENDING` records a base's checkpoint listed, and
+    // `ASSERT_RESERVE` records folded after the base, each removed by the
+    // `ASSERT_ROLLBACK` that gave it back. What is left when the scan ends, for
+    // a transaction analysis did not find committed, is compensated.
+    struct Owed {
+        std::uint64_t assertion_id = 0;
+        PageId page = kInvalidPageId;
+        std::uint16_t index = 0;
+        std::string key;
+        std::int64_t delta = 0;
+        bool departure = false;
+    };
+    std::map<std::uint64_t, std::vector<Owed>> owed;  // by transaction id
+    // The assertions whose base just closed and whose `ASSERT_PENDING` run
+    // follows. A later checkpoint's snapshot is skipped (below) and so is its
+    // list, which only repeats what the folded records already show.
+    std::set<std::uint64_t> accepting_pending;
+
     auto discard = [&](std::uint64_t id) {
         if (pending.erase(id) == 0) return;
         if (AssertionRecoveryResult* r = result_for(id); r != nullptr) {
@@ -200,6 +220,7 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
         r->entries_attached += attached.value();
         r->recovered = true;
         context.MarkBased(id);
+        accepting_pending.insert(id);
         return Status::OK();
     };
 
@@ -216,6 +237,7 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
                 // (RV3). Skipped, exactly as the fold skips an unknown id.
                 return Status::OK();
             }
+            accepting_pending.erase(id);
             if (context.based(id)) {
                 // **A later checkpoint's snapshot, and it is skipped.** The scan
                 // starts at the anchor's `redo_start_lsn`, at or below the
@@ -282,6 +304,17 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
         if (by_id.count(id) == 0) {
             return Status::OK();  // not ours; the fold's own skip rule agrees
         }
+        if (record.type() == wal::RecordType::kAssertPending) {
+            if (accepting_pending.count(id) == 0) return Status::OK();
+            auto decoded = wal::DecodeAssertRollback(record.payload);
+            if (!decoded.ok()) return decoded.status();
+            const wal::DecodedAssertRollback& d = decoded.value();
+            owed[record.header.txn_id].push_back(
+                Owed{id, record.header.page_id, d.fields.index, AssertionKeyOf(d.key), d.fields.delta,
+                     (record.header.flags & wal::kAssertRollbackFlagDeparture) != 0});
+            return Status::OK();
+        }
+        accepting_pending.erase(id);
         if (record.type() == wal::RecordType::kAssertDrop) {
             // **An id the catalog lists was not dropped**: the list is read
             // after undo, and `DropAssertion` logs this record before it
@@ -308,6 +341,28 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
             return ReplayAssertionRecord(record, store, context, ReplayHalves::kPageOnly);
         }
 
+        if (record.type() == wal::RecordType::kAssertReserve) {
+            auto decoded = wal::DecodeAssertEntry(record.payload);
+            if (!decoded.ok()) return decoded.status();
+            const wal::DecodedAssertEntry& d = decoded.value();
+            if (d.fields.entry_len == storage::cabin::kEntryBytes) {
+                const storage::cabin::BoundCabinEntry entry = storage::cabin::DecodeEntry(
+                    std::span<const std::byte, storage::cabin::kEntryBytes>(
+                        d.entry.data(), storage::cabin::kEntryBytes));
+                owed[record.header.txn_id].push_back(
+                    Owed{id, record.header.page_id, d.fields.index, AssertionKeyOf(d.key), entry.value,
+                         entry.departure()});
+            }
+        } else if (record.type() == wal::RecordType::kAssertRollback) {
+            auto decoded = wal::DecodeAssertRollback(record.payload);
+            if (!decoded.ok()) return decoded.status();
+            if (auto held = owed.find(record.header.txn_id); held != owed.end()) {
+                std::erase_if(held->second, [&](const Owed& o) {
+                    return o.assertion_id == id && o.page == record.header.page_id &&
+                           o.index == decoded.value().fields.index;
+                });
+            }
+        }
         if (Status s = ReplayAssertionRecord(record, store, context); !s.ok()) {
             return s;
         }
@@ -340,6 +395,25 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
         if (AssertionRecoveryResult* r = result_for(a.assertion_id);
             r != nullptr && r->recovered) {
             r->duplicate_links_dropped = a.cabin->DedupeEntryLinkage();
+        }
+    }
+
+    // **What an undecided transaction still holds is given back** (CL-R1,
+    // CL-R2): after the reconcile above, so each pair is linked once. A
+    // transaction analysis found committed is not in `undecided_txns`, and one
+    // it never saw is left alone.
+    for (auto& [txn_id, entries] : owed) {
+        if (undecided_txns.count(txn_id) == 0) continue;
+        for (const Owed& o : entries) {
+            AssertionRecoveryResult* r = result_for(o.assertion_id);
+            if (r == nullptr || !r->recovered) continue;  // no base: nothing counts it
+            if (Status s = GiveBackReservation(store, *by_id.at(o.assertion_id)->cabin, o.key,
+                                               o.delta, o.departure, o.page, o.index);
+                !s.ok()) {
+                return s.WithContext("assertion recovery: giving back transaction " +
+                                     std::to_string(txn_id) + "'s reservation");
+            }
+            ++r->undecided_compensated;
         }
     }
 

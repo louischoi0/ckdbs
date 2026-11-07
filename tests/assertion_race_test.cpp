@@ -16,6 +16,7 @@
 #include "kds/parser/ast.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/device_page_store.hpp"
+#include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/wal/checkpointer.hpp"
@@ -24,6 +25,7 @@
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
 
+#include "act_on_fetch_store.hpp"
 #include "armed_race.hpp"
 
 // **One assertion registry, reserved into from more than one core** (AT-S5d,
@@ -456,7 +458,8 @@ TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
     //
     // **Mutation**, measured: `ReserveOne` appending its record before it
     // takes the directory latch for the header change - a snapshot lands
-    // between the two - killed 5 runs in 5.
+    // between the two - killed 5 runs in 5, and again 5 in 5 on the per-row
+    // commit shape (CL-S3, Debug).
     constexpr std::uint64_t kSegment = 4 * 1024 * 1024;
     auto log_device = wal::MemoryLogDevice::Create(kSegment);
     ASSERT_TRUE(log_device.ok()) << log_device.status().message();
@@ -490,11 +493,17 @@ TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
                 writing.fetch_sub(1);
                 return;
             }
-            const std::uint64_t txn = 100 + static_cast<std::uint64_t>(t);
             const auto values = Row(t);
             for (int n = 0; n < kPerThread; ++n) {
                 AssertionEnforcer::Hold hold;
                 const std::uint64_t tuple_key = static_cast<std::uint64_t>(n) * kThreads + t + 1;
+                // One transaction per row, its pending set dropped right
+                // after the reservation - the dispatcher drops it once
+                // TXN_COMMIT is logged (CL-R5); the fold reads ASSERT_RESERVE
+                // alone, so no commit record is needed. Left open, every
+                // snapshot would list all of them (ASSERT_PENDING, CL-R1)
+                // under the latch the loop holds, starving the writers.
+                const std::uint64_t txn = 100 + tuple_key;
                 if (!enforcer.AdmitInsert(kOid, values, txn, hold).ok() ||
                     !enforcer
                          .ReserveInsert(*store, wal.value().get(), txn, hold, kOid, values, tuple_key,
@@ -502,6 +511,7 @@ TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
                          .ok()) {
                     failures.fetch_add(1);
                 }
+                enforcer.CommitTxn(txn);
             }
             writing.fetch_sub(1);
         });
@@ -560,6 +570,117 @@ TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
     std::int64_t total = 0;
     for (const auto& [group, count] : folded) total += count;
     EXPECT_EQ(total, static_cast<std::int64_t>(kThreads) * kPerThread);
+}
+
+// ---- CL: what a checkpoint lists for a transaction not yet decided ---------
+//
+// A page entry names no transaction, so a checkpoint's `ASSERT_PENDING` is the
+// only durable statement of whose a counted reservation is (CL-R1). These pin
+// the registry's half: what `SnapshotAssertions` lists while a transaction is
+// open, while its abort is part-way, and after.
+
+// The reservations the snapshot lists under `txn`, across every assertion.
+std::vector<wal::AssertionPendingReservation> ListedFor(const AssertionEnforcer& enforcer,
+                                                        std::uint64_t txn) {
+    std::vector<wal::AssertionPendingReservation> out;
+    for (const wal::AssertionCabinSnapshot& cabin : enforcer.SnapshotAssertions()) {
+        for (const wal::AssertionPendingReservation& r : cabin.pending) {
+            if (r.txn_id == txn) out.push_back(r);
+        }
+    }
+    return out;
+}
+
+// Admits and reserves one `INSERT` row of `v` under `txn`.
+void ReserveRow(AssertionEnforcer& enforcer, storage::PageStore& store, wal::WalManager* wal,
+                std::uint64_t txn, std::int64_t v, std::uint64_t tuple_key) {
+    AssertionEnforcer::Hold hold;
+    const auto values = Row(v);
+    ASSERT_TRUE(enforcer.AdmitInsert(kOid, values, txn, hold).ok());
+    ASSERT_TRUE(enforcer
+                    .ReserveInsert(store, wal, txn, hold, kOid, values, tuple_key,
+                                   kInvalidPageId, 0)
+                    .ok());
+}
+
+// **A checkpoint during an abort lists exactly what the abort has not given
+// back.** `AbortTxn` takes the set out of `pending_` before its loop and gives
+// each reservation back in turn, fetching its page outside the registry latch
+// - where another core's checkpoint can snapshot. The headers then still count
+// the ones not yet reached, and a crash after that checkpoint, before the
+// abort's own records are durable, leaves them in the base: only the list
+// names them.
+//
+// **Mutation**: `list(aborting_)` removed from `SnapshotLocked` - the
+// mid-abort list is empty; the `pop_back` after a give-back removed - it lists
+// two.
+TEST(AssertionPendingListTest, ACheckpointDuringAnAbortListsWhatItHasNotGivenBack) {
+    storage::InMemoryPageStore backing;
+    testing_race::ActOnFetchStore store(backing);
+    AssertionEnforcer enforcer(/*shared=*/false);
+    enforcer.Adopt(CountCap(store, /*id=*/1, /*bound=*/10));
+
+    ReserveRow(enforcer, store, nullptr, /*txn=*/7, /*v=*/1, /*tuple_key=*/1);
+    ReserveRow(enforcer, store, nullptr, /*txn=*/7, /*v=*/2, /*tuple_key=*/2);
+    ReserveRow(enforcer, store, nullptr, /*txn=*/8, /*v=*/1, /*tuple_key=*/3);
+    const auto open = ListedFor(enforcer, 7);
+    ASSERT_EQ(open.size(), 2u) << "an open transaction's reservations are listed";
+    ASSERT_EQ(ListedFor(enforcer, 8).size(), 1u);
+
+    // The abort unwinds in reverse: v=2 first, then v=1. Its second fetch of
+    // the entry page is the window between the two.
+    std::vector<wal::AssertionPendingReservation> mid;
+    std::int64_t mid_count_1 = -1;
+    std::int64_t mid_count_2 = -1;
+    store.OnFetch(open.front().page_id, /*nth=*/2, [&] {
+        mid = ListedFor(enforcer, 7);
+        mid_count_1 = SnapshotCount(enforcer, 1);
+        mid_count_2 = SnapshotCount(enforcer, 2);
+    });
+    ASSERT_TRUE(enforcer.AbortTxn(store, nullptr, 7).ok());
+    ASSERT_TRUE(store.fired());
+    ASSERT_EQ(mid.size(), 1u) << "mid-abort, the one not yet given back is listed, and only it";
+    EXPECT_EQ(mid.front().key, EncodeGroupKey(Row(1)));
+    EXPECT_FALSE(mid.front().departure);
+    EXPECT_EQ(mid_count_2, 0) << "the one given back is out of its header";
+    EXPECT_EQ(mid_count_1, 2) << "the one listed is still counted";
+
+    EXPECT_TRUE(ListedFor(enforcer, 7).empty()) << "a finished abort lists nothing";
+    enforcer.CommitTxn(8);
+    EXPECT_TRUE(ListedFor(enforcer, 8).empty()) << "a committed set lists nothing";
+    EXPECT_EQ(SnapshotCount(enforcer, 1), 1);
+}
+
+// **An unwind refused part-way stops the log** (CL-Q7 (b)). The reservation
+// not reached stays counted in its header while the caller's `Abort` takes the
+// row back, and nothing after the abort names it; stopped, no `TXN_ABORT` and
+// no later checkpoint becomes durable, so the next mount finds the transaction
+// a loser and gives it back (CL-R1).
+//
+// **Mutation**: the `FailStop` call in `AbortTxn` removed - the log runs on.
+TEST(AssertionPendingListTest, AnUnwindRefusedPartWayStopsTheLog) {
+    auto log_device = wal::MemoryLogDevice::Create(4 * 1024 * 1024);
+    ASSERT_TRUE(log_device.ok()) << log_device.status().message();
+    sched::ManualClock clock;
+    auto wal = wal::WalManager::Open(log_device.value().get(), clock, /*core_id=*/0,
+                                     wal::WalManagerConfig{});
+    ASSERT_TRUE(wal.ok()) << wal.status().message();
+
+    storage::InMemoryPageStore backing;
+    testing_race::ActOnFetchStore store(backing);
+    AssertionEnforcer enforcer(/*shared=*/false);
+    enforcer.Adopt(CountCap(store, /*id=*/1, /*bound=*/10));
+    ReserveRow(enforcer, store, wal.value().get(), /*txn=*/7, /*v=*/1, /*tuple_key=*/1);
+    ReserveRow(enforcer, store, wal.value().get(), /*txn=*/7, /*v=*/2, /*tuple_key=*/2);
+    const auto open = ListedFor(enforcer, 7);
+    ASSERT_EQ(open.size(), 2u);
+
+    store.FailFetch(open.front().page_id, /*nth=*/2);
+    const Status unwound = enforcer.AbortTxn(store, wal.value().get(), 7);
+    EXPECT_EQ(unwound.code(), StatusCode::kIoError) << unwound.message();
+    EXPECT_TRUE(wal.value()->stopped()) << "a part-way unwind must not leave the log running";
+    EXPECT_FALSE(wal.value()->Append({wal::RecordType::kTxnAbort, 7, kInvalidPageId}).ok())
+        << "no TXN_ABORT reaches the log after it";
 }
 
 }  // namespace
