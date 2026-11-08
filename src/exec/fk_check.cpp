@@ -87,8 +87,8 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
                                        const catalog::TableAccess& parent,
                                        std::uint64_t parent_tuple_key,
                                        const txn::ReadView& check_view, Budget* budget,
-                                       std::uint64_t* busy_trx) {
-    if (busy_trx != nullptr) *busy_trx = 0;
+                                       BusyHead* busy) {
+    if (busy != nullptr) *busy = BusyHead{};
     if (budget != nullptr) {
         if (Status s = budget->ChargeRow(); !s.ok()) return s;
     }
@@ -113,11 +113,12 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
         return tuple.status();
     }
     const FkVerdict verdict = VerdictOf(txn::CheckVisibility(check_view, tuple.value()));
-    // The holder's id, for the caller that means to wait rather than
-    // refuse (AO-S3). Read from the header the verdict was decided
+    // The holder's id and the head's two fields, for the caller that means
+    // to wait rather than refuse (AO-S3) or to read the writer as an
+    // `UPDATE` (CP-S2b). Read from the header the verdict was decided
     // from, so the two cannot disagree.
-    if (verdict == FkVerdict::kBusy && busy_trx != nullptr) {
-        *busy_trx = tuple.value().trx_id;
+    if (verdict == FkVerdict::kBusy && busy != nullptr) {
+        *busy = BusyHead{tuple.value().trx_id, tuple.value().undo_ptr, tuple.value().deleted};
     }
     return verdict;
 }

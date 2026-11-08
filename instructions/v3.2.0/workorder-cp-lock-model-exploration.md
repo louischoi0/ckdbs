@@ -17,7 +17,9 @@ started the same day from `cc54a296` (`v3.4.7-1-gcc54a296`, build inputs
 `6c4b9a6d`'s); **CP-S0 landed at `c2937a32` and CP-S1 at `2a4a3f79`**
 (§7, §8), S1 carrying three items to the operator (CP-Q10..CP-Q12, §8.10),
 **all marked (a) on 2026-11-08** (`raft-marks-2026-11-08.md` §3), and
-**CP-S2 started** on that word. Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
+**CP-S2 started** on that word and **landed on the work branch the same
+day**: S2a at `0ddfbfab` (the slice unit deleted), S2b the next commit
+(the `U` mode; §7). S3, the close, is next. Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
 the opening review): the census corrected, two missed risks written into C2
 and C4, one candidate (release before durability) withdrawn because the
 tree contradicts its premise. **Exploratory on W0**: CP-S0 (the census and
@@ -196,7 +198,8 @@ both hold `S` on P (A6), both ask `X` on P (A5), and the second is refused
 naming deadlock; before AY-S5 the two updates serialised. *"Insert a
 trade, then update its account"* is the shape, pinned by
 `FkCrossCoreRigTest.TwoChildWritersThatThenUpdateTheirParentDeadlock`
-(`tests/fk_cross_core_rig_test.cpp:471`). **Scenario 0 has the shape but
+(`tests/fk_cross_core_rig_test.cpp:471`; renamed `...Serialise` at CP-S2b,
+when `U` made the pair a wait). **Scenario 0 has the shape but
 cannot show the contention**: its key is declared only under `--fk` and
 its four statements form one transaction only under `--txn`, both off by
 default (`tools/scenario0_stockmarket.py:1142`, `:1154`), and every trader
@@ -621,7 +624,7 @@ which opened S2b:
 |---|---|---|
 | **CP-S0** | **The census and the premise.** (1) §1.2's table re-read at the opening commit, every `path:line` checked. (2) The measurement, `build-release`, interleaved A/B, inside 20 minutes, in this priority: **M1** a point `UPDATE ... WHERE id = k` on disjoint rows, one session, `relaxed`, against a measurement build with the dispatcher's table null - the family's whole share, which that build also strips of `DeclaredWriteBorrow`, the first-intention memo check and the detector-gated park rule, as the file states; A1 and A5 apart only by a second decomposition build if the budget holds (no tally counts asks); **M3** scenario 2 (`--bookers 8`) and scenario 0 (`--fk --txn`), `sys.lock_waits` and `sys.ash` read after each, outcomes by unit and mode, `app.lock_wait`'s share of DB time, deadlock and `fault_net` counts (M3a is C2's price on the uncontended path; its contender is the rig cell, §3 C2); **M2** a `SELECT` walk over ~100-1,000 leaf pages against a build whose `Position` declines slices (C1); **M5** a held `UPDATE ... WHERE id > k` beside point writers (C3); **M4** `tools/lock_contention_benchmark.py` contended against disjoint, the shape AT-S5 made real; **M6**, a cell and not a measurement: two sessions under `group`, the second's `UPDATE` of a row the first just committed proceeding before the first's sync, confirming §1.1's last bullet and correcting `known-gaps.md:1417`. A cell cut for the budget is named in the file. (3) A results file `bench/v3.4.7/results-cp-s0-premise-<describe>.md` and this order's §7 stating each candidate's number against its rule | the operator's opening; the census is `[source-read]`, the measurement `[measured]` |
 | **CP-S1** | **The model.** **Landed 2026-11-08 on the work branch (§8); CP-Q10..CP-Q12 await the operator's marks.** A design memo in this order (§8): the matrix re-derived from S0 - the cells kept by §2's rule, the cells deleted, `U` added or not with C2's three re-statements, the structure proposed (C3, C4 as S0 ranks them) with its soundness argument written as `lock_table.hpp` writes publish-then-verify, C4's (α) or (β) as marked, and the amendments owed to `txn.md` §5, `foreign-keys.md` §2a-§3, `rules.md` §3's row, AR2 E1/E12 and `lock_table.hpp`'s header. Every `[quiet-wrong]` or `[loud]` choice goes to the operator as a CP-Q amendment before S2 | S0 landed; the operator's marks on any amended CP-Q |
-| **CP-S2** | **Started 2026-11-08 on CP-Q10..CP-Q12 (a)** (`raft-marks-2026-11-08.md` §3): S2a C1 and S2b `U` as §8.12 ranks them, no S2c or S2d (§8.4). **Build what S1 kept**, one sub-stage per candidate (S2a C1, S2b C2, S2c C4, S2d C3 as ranked), each with a `critics-developer` review and the full suite; each a separate commit so one that fails CP-Q7's bar is reverted alone | S1's model |
+| **CP-S2** | **Started and landed 2026-11-08 on CP-Q10..CP-Q12 (a)** (`raft-marks-2026-11-08.md` §3; §7): S2a C1 at `0ddfbfab` and S2b `U` the commit after it, as §8.12 ranks them, no S2c or S2d (§8.4). **Build what S1 kept**, one sub-stage per candidate (S2a C1, S2b C2, S2c C4, S2d C3 as ranked), each with a `critics-developer` review and the full suite; each a separate commit so one that fails CP-Q7's bar is reverted alone | S1's model |
 | **CP-S3** | **The close.** The overhead measured over the milestone's whole change (the opening commit against the closing one), scenario 0 and 2 beside M1's point write; the specs brought to the tree; `known-gaps.md`'s Locks section rewritten to the engine as it then is; this order's §7 and the index row | S2 landed |
 
 **Instruments** for S0 and S3: `sys.lock_waits` (`sys-views.md` §6.3),
@@ -934,6 +937,119 @@ review's cuts (a first run on the pre-review tree was stopped when the
 cuts changed its build inputs). The targeted set - every lock, exec-chain,
 read-borrow, foreign-key and walk-slice cell, 340 - passed before it. The
 overhead measurement is the milestone's close's (S3).
+
+### CP-S2b, 2026-11-08: the `U` mode built (C2, CP-Q2 (a); CP-Q10 (a))
+
+Run on `worktree-cp-lock-model-exploration` from `0ddfbfab` on the
+operator's marks (`raft-marks-2026-11-08.md` §3). **What landed**, §8.3's
+code shape: `LockMode::kUpdate = 4`, `kExclusive = 5`, `kLockModeCount =
+5`, the two 5×5 tables as §8.3 A states them, `IsIntention` as the one
+fence predicate at `IsFence`, `FenceCoversKey`'s skip and
+`ConflictingOverlap`'s skip, a `static_assert` block (the last enumerator
+is the count; compatibility symmetric; every mode covers itself; `X`
+admits nothing and covers all; covering monotone; the `U` cells by name)
+in place of the compile claim the tree did not honour, `LockModeName`'s
+`"U"`; the four `U` asks - `UPDATE`'s per-row row and declared window, `ON
+CONFLICT DO UPDATE`'s unique-arbiter row, the reverse probe with its four
+literals and its guard narrowed to `!HoldsCovering(unit, kUpdate)`; the
+forward check's witness - `CheckParentPresent` fills an `exec::BusyHead`
+(`trx_id`, `undo_ptr`, `deleted`) from the head the verdict was decided
+on, and the hoist, with a lock table, holds a busy head that is not
+delete-marked and has a predecessor as `kPass`, logs any other busy head
+at `Warn` and keeps today's refusal for it, and without a table keeps the
+`IsInFlight` poll; the two named-key doors read `held_before` with
+`HoldsCovering(unit, kExclusive)` and give back the `X` record alone.
+**Cells**: `tests/lock_table_test.cpp` - the matrix cell's 25 literals and
+five-mode loops, `kModes` and the covering list gaining `U`,
+`AVersionClaimCoversAShareAndIsCoveredByExclusive`,
+`AShareThenAVersionClaimThenAnExistenceClaimAreThreeEntries` (three
+records; releasing the `U` leaves the `X`, releasing both leaves the `S`),
+`AVersionClaimFenceAdmitsAShareAndRefusesAWriterInsideIt` (counter raised
+and lowered through one predicate, tuple `S` admitted, tuple `U`/`X` and
+overlapping `U`/`X` windows refused naming the fence, a refused window
+raising nothing, a range `S` over it admitted, both orders),
+`AProbeInUpdateModeIsAdmittedByAShareAndRefusedByAWriter`,
+`TwoOverlappingAsksThatBothPublishFirstAreBothRefusedAndBothWoken` run in
+`X` and in `U`; `tests/fk_cross_core_rig_test.cpp` -
+`TwoChildWritersThatThenUpdateTheirParentDeadlock` becomes
+`...Serialise` (CP-Q7 (a): a refusal became a wait),
+`TwoChildWritersThatThenDeleteTheirParentDeadlock` keeps the `X` family's
+shape, `AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRollback` gains
+its `ParkedOn` (a park, not a spin), new
+`AChildInsertProceedsPastAParentUpdateOnAnotherCore`,
+`ARangeUpdateOfParentsPassesAChildsOpenReference`,
+`AParentDeleteParksOnAChildUpdatedInOtherColumns`,
+`AParentDeleteParksOnABulkChildUpdatesWindow` (a waiter on the range),
+`AnUpdateThenADeleteOfAParentUnderAChildsShareWaitsAtTheDeleteAndDeadlocks`
+and `AParentUpdaterThatThenWaitsOnTheChildWriterElsewhereDeadlocks`
+(CP-Q10's class, F.1 (i) and (ii), each refused naming deadlock),
+`AParentDeleteParksOnAChildRowItHoldsAGrandchildsShareOn` (the narrowed
+guard; red under the old `Holds`), over a seeded `c2 (id, pid REFERENCES
+p, note)`, `q` and `g` where a cell needs them;
+`tests/fk_parent_hold_test.cpp` - `TheRelationsIntentionOutlivesAFailedChecksHold`
+keeps its parent `UPDATE` as the positive expectation and pins `S(10)` by
+a `DELETE`, new `AParentUnderAnOpenUpdateIsPresentToAChildsCheck` and
+`ABulkUpdateWindowPassesAChildsShareAndABulkDeleteWaitsForIt`;
+`tests/lock_family_test.cpp` - the view cell reads `mode` `U`, its `DELETE`
+sibling `X`, `ARefusedUpdateClaimUnderAFenceIsARangeRowWithModeU`,
+`AChildWhoseParentIsUnderAnUpdateWindowIsNotHeldUp`,
+`ANamedInsertInsideAnUpdateWindowWaits`,
+`AnOnConflictDoUpdateOnAUniqueArbiterPassesAChildsShare` (with the
+tuple-key form still waiting, G.6), `AnUpdateThenANamedInsertOfTheSameKeyHoldsOneRecordAfterTheDoor`,
+`AChildsShareSurvivesItsOwnNamedInsertOfTheParentKey` and
+`...PlainInsertOfTheParentKey` (both doors' give-back by mode; red without
+the mode filter). The rig cells repeated five times without a failure.
+**Documents** (§8.7): `txn.md` §5 (the five modes, `U` a version claim,
+the rule for a verb not yet written, the class of deadlocks `U` adds,
+"a row's `U` or `X`", the window in `U` for an `UPDATE`, the counter for a
+`U` window, the forward check's wait narrowed to `X`, the fence rule as
+**the** rule, the counter's wording, the probe's `U`), `foreign-keys.md`
+§2 (the verdict row), §2a (the busy sentence), §2c (the costs rewritten:
+the parent `UPDATE` proceeds, the pair serialises, the narrower class),
+§3a (the probe), `rules.md` §3's row, `sys-views.md` §6.3's domains, the
+manual's sentence, `CLAUDE.md`'s two rows, AR2's E1 (built), fence
+definition and `UPDATE` row, `tools/cp_s0_release_order.py`'s docstring,
+this order's §1.3 (the cell's rename) and §8.8 (`c2`, the cell's name).
+
+**The review** (`critics-developer`, 2026-11-08, on the step before the
+commit): **no correctness bug** - the witness read from the verdict's own
+head and gated on the table, the converted pass flowing as a normal pass
+with its `S` kept, no sequence found that leaves a committed child over an
+absent or re-keyed parent (every `X` site, the arbiter's insert arm, a
+`DELETE`'s rollback through the intermediate head, a decided-unreleased
+`X`, `PURGE`, `U` then `X` by one transaction all tried); the probe's four
+literals and the guard right; both doors' give-back exact; one fence
+predicate at every site; the `static_assert`s computing what they say; no
+site outside the FK paths assuming a row writer holds `X`; the four named
+cells red under their mutations. **Applied**: (1) the plain named-key
+`INSERT` door's give-back was untested (removing its mode filter failed no
+cell) - `AChildsShareSurvivesItsOwnPlainInsertOfTheParentKey` added; (2)
+the both-publish-first cell's second pass in `U` and (3) the refused
+window's unraised counter and (4) the range `S` over a `U` window, all
+three listed in §8.8 and not yet written - added; (5) two weak assertions
+replaced by foreign asks that fail under the mutation; (6) the F.1 (i)
+cell renamed `...AndDeadlocks` for what it guards; four stale comments
+("places, delete-marks or retires" - a `PURGE` retire stamps no
+transaction; "under its row `X`" on the arbiter; "the caller holds the
+row's `X`"; "a tuple `X` inside its window"). Fixed by the reviewer in
+the documents: `CLAUDE.md`'s units clause, `txn.md`'s "under any window"
+(an `S` window admits a tuple `U`), "before CP" made "before CP-S2b",
+`foreign-keys.md` §2a's `PURGE` clause and §2c's `ON CONFLICT (tuple key)
+DO UPDATE` exception, `sys-views.md`'s `U` on the probe's wait, §8.8's
+bulk-window cell ending `FK_VIOLATION`. **Deferred, not rejected**: three
+design comments that restate the specs at length (the hoist's, the
+probe's, the tables' lead) - a trim for S3 with the specs in hand; the two
+literal `static_assert`s duplicate the matrix cell and are kept as the
+order asked. **Rejected**: none.
+
+**The suite** (`scripts/test.sh`, Debug, every label but `bs-nightly`):
+**4427 of 4427 passed** (993 s) on the tree as committed, after the
+review's additions - 22 cells more than S2a's 4405; a first run on the
+pre-review tree was stopped when the additions changed its build inputs.
+Before it the targeted set - every lock, exec-chain, read-borrow,
+foreign-key, unique and `ON CONFLICT` cell, 297 - passed. The overhead
+measurement is the milestone's close's (S3), over S2a and S2b together
+against `cc54a296`.
 
 ---
 
@@ -1855,8 +1971,10 @@ marks of 2026-11-08.
   (`:1325`) a second pass with both fences in `U`; new
   `AProbeInUpdateModeIsAdmittedByAShareAndRefusedByAWriter`; the
   `static_assert` block and `EXPECT_STREQ(LockModeName(kUpdate), "U")`.
-- `tests/fk_cross_core_rig_test.cpp` (the rig's `c` gains a non-fk column,
-  `:206`, and the rig a `child_oid`): `TwoChildWritersThatThenUpdateTheirParentDeadlock`
+- `tests/fk_cross_core_rig_test.cpp` (the rig's `c` stays `(id, pid)`, its
+  cells inserting into it positionally; the cells that need a non-fk column
+  seed a `c2 (id, pid REFERENCES p, note)` and read its oid; the rig gains a
+  `child_oid`): `TwoChildWritersThatThenUpdateTheirParentDeadlock`
   (`:467-494`) becomes `...Serialise` - core 0's `UPDATE` answers `UPDATED
   1` at once with no waiter on `Tuple(p, 7)`, core 1's is `ParkedOn(1,
   core1, 3, parent_oid, 7)` with no "deadlock" in any reply, core 0's
@@ -1872,7 +1990,8 @@ marks of 2026-11-08.
   parks on `Tuple(c, 1)`; at core 1's `COMMIT`, `FK_VIOLATION`). New
   `AParentDeleteParksOnABulkChildUpdatesWindow` (core 1 `BEGIN; UPDATE c
   SET note = 1` -> range `U`; core 0's `DELETE` parks with a waiter on
-  `Range(c, 0, kIdSpaceEnd)`; `ROLLBACK`; `DELETED 1`). New
+  `Range(c, 0, kIdSpaceEnd)`; `ROLLBACK`; `FK_VIOLATION`, the rolled-back
+  row still referencing 7 - corrected at S2b's review). New
   `AChildInsertProceedsPastAParentUpdateOnAnotherCore` (core 0 `BEGIN;
   UPDATE p SET v = 1 WHERE id = 7` held; core 1 **`BEGIN;`** `INSERT INTO c
   VALUES (7)` -> `INSERTED` with no waiter on row 7; core 0's `DELETE FROM
@@ -1883,8 +2002,8 @@ marks of 2026-11-08.
   New `ARangeUpdateOfParentsPassesAChildsOpenReference` beside `:452`
   (`UPDATE p SET v = 1 WHERE id >= 7` answers without parking; the
   `DELETE` sibling keeps parking). New
-  `AnUpdateThenADeleteOfAParentUnderAChildsShareWaitsAtTheDelete` with
-  its deadlock arm (F.1 (i)) and new
+  `AnUpdateThenADeleteOfAParentUnderAChildsShareWaitsAtTheDeleteAndDeadlocks`
+  (F.1 (i)) and new
   `AParentUpdaterThatThenWaitsOnTheChildWriterElsewhereDeadlocks` (F.1
   (ii): the rig gains a relation `q`; core 1 `BEGIN; INSERT INTO c VALUES
   (1, 7); UPDATE q SET v = 1 WHERE id = 5`; core 0 `BEGIN; UPDATE p SET v =

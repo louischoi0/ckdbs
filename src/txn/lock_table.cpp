@@ -20,11 +20,13 @@ constexpr std::uint64_t Mix(std::uint64_t x) noexcept {
     return x ^ (x >> 31);
 }
 
-// A fence is a range-unit borrow in `S` or `X` (AR2 §2 defines a gap lock
-// as either). The counter gates the probe, so it must count exactly what
-// the probe matches.
+// A fence is a range-unit borrow in any non-intention mode - `S`, `U` or
+// `X` (AR2 §2 as amended at CP-S2b). The counter gates the probe, so it
+// must count exactly what the probe matches: this predicate, read at the
+// raise, the give-backs and the lower, and `IsIntention` at both scans'
+// skips, are one rule.
 constexpr bool IsFence(const LockKey& key, LockMode mode) noexcept {
-    return key.IsFenceUnit() && (mode == LockMode::kShared || mode == LockMode::kExclusive);
+    return key.IsFenceUnit() && !IsIntention(mode);
 }
 
 }  // namespace
@@ -51,6 +53,8 @@ const char* LockModeName(LockMode mode) noexcept {
             return "IX";
         case LockMode::kShared:
             return "S";
+        case LockMode::kUpdate:
+            return "U";
         case LockMode::kExclusive:
             return "X";
     }
@@ -663,12 +667,13 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t tuple_key, std::u
             if (!e.key.ContainsKey(tuple_key)) continue;
             for (const Tenant& h : e.holders) {
                 if (h.txn == txn) continue;
-                // A fence is held in `S` or `X`; an intention mode on a
-                // range key is not one and fences nothing. Given a real
-                // fence, the compatibility table is what decides - the
-                // same table `ConflictingOverlap` reads from the other
-                // side, so the two answers cannot drift apart.
-                if (h.mode != LockMode::kShared && h.mode != LockMode::kExclusive) continue;
+                // A fence is held in any non-intention mode; an intention
+                // mode on a range key is not one and fences nothing. Given
+                // a real fence, the compatibility table is what decides -
+                // the same table `ConflictingOverlap` reads from the other
+                // side, so the two answers cannot drift apart: a tuple `S`
+                // under a range `U` is admitted, a tuple `U` or `X` refused.
+                if (IsIntention(h.mode)) continue;
                 if (!Compatible(h.mode, want)) {
                     if (holder != nullptr) *holder = h.txn;
                     if (wake != nullptr) *wake = LockWake{e.key, RegisterWake(e, txn, want).slot};
@@ -727,13 +732,10 @@ bool LockTable::ConflictingOverlap(const LockKey& fence, LockMode mode, std::uin
                 // interval unit - the slice unit is gone, no mover exists -
                 // so the rule has no live instance and stays as a table
                 // property. What stops a write inside a fence is every unit
-                // that is not an intention: a tuple `X` inside its window,
-                // another fence over it. The relation entry is where a
+                // that is not an intention: a tuple `U` or `X` inside its
+                // window, another fence over it. The relation entry is where a
                 // reader and DDL meet, by the intention rule.
-                if (h.mode == LockMode::kIntentionShared ||
-                    h.mode == LockMode::kIntentionExclusive) {
-                    continue;
-                }
+                if (IsIntention(h.mode)) continue;
                 // **The fence's own mode decides**, not a fixed pair: an
                 // `S` fence admits an `S` descendant and refuses an `X`
                 // one, and the compatibility table is the single place

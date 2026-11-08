@@ -719,7 +719,7 @@ test the instance's - where the refused ask handed back a slot the wait
 is on that slot, flipped at the holder's release and kicked across
 (AX-S2b). A refusal on the ask's own key is registered there, and one the
 lock table's verify finds in another unit - a declared range met by a
-row's `X`, a row under a range fence - is registered on the unit that
+row's `U` or `X`, a row under a range fence - is registered on the unit that
 refused it (AY-S2). A holder that slot names is waited for **even once it
 has decided and not yet released** (AY-S3, B6): a decide retires before it
 releases, and a first encounter inside that window parks until the release
@@ -775,6 +775,34 @@ snapshot and its write; KDS aborts retryably rather than re-reading. That is
 stricter than PostgreSQL's `READ COMMITTED` and was a deliberate simplification —
 there is no re-read loop.
 
+**Five modes since CP-S2b** (CP-Q2 (a), `raft-marks-2026-11-08.md` §1;
+`instructions/v3.2.0/workorder-cp-lock-model-exploration.md` §8.3): `IS`,
+`IX`, `S`, `U`, `X`. **`U` is a version claim**: its holder may write a
+new version of the row - or of every row of its window - under the same
+key and nothing else; the row keeps its existence and its key whichever
+way the holder decides. **`X` is an existence claim**: a placement, a
+delete-mark, a retire. `UPDATE` asks `U` on its tuple or its declared
+window, and so does `ON CONFLICT ... DO UPDATE`'s update arm on the row a
+unique arbiter found; `DELETE` asks `X` on its tuple and its window; every
+`INSERT` asks `X` on its key, `ON CONFLICT DO UPDATE` on the tuple key
+included, whose up-front unit covers an insert. `U` admits a foreign key's
+share `S` and refuses `U` and `X`; `U` covers `S` and `IS`, `X` covers
+`U`; `S` does not cover `U`, so a child writer that then updates its parent
+holds two records, and one that then deletes it three - one cap slot more
+than before `U`. **The rule for a verb not yet written** `[quiet-wrong]`: a
+write that may end a row's existence or re-bind its key asks `X`, whatever
+the verb is called; placed under `U` it would pass every key share.
+**The class of deadlocks `U` adds** (CP-Q10 (a), accepted `[loud]`): a
+parent updater granted `U` over a child writer's share, that then waits on
+that child writer for any reason - a `DELETE` of the same row, a write of
+another row the child wrote, a per-row statement parking mid-walk -
+deadlocks with it if the child writer then writes the parent row; one of
+the two is refused retryably naming deadlock, where before CP-S2b the updater
+waited at the parent row first, holding nothing there, and the child's
+write proceeded. It replaces the commoner pair it removes, two child
+writers that each update their parent (`foreign-keys.md` §2c), and is
+PostgreSQL's shape too (`FOR NO KEY UPDATE` over `FOR KEY SHARE`).
+
 **A key-window write waits before it walks** (AO-S6c-c, the operator's mark
 of 2026-09-08). A write whose predicate covers a key window declares that
 window and borrows it **before it walks** (AO-0 item 14). If the unit is
@@ -784,9 +812,11 @@ PostgreSQL's `READ COMMITTED` than to the verdict table above.
 
 **The widest case is a write with no `WHERE` at all**, and it is worth
 naming because it is the commonest bulk shape: it declares **the whole id
-space** and borrows it in `X`. So `UPDATE t SET v = 1` waits for any
-transaction holding a key of `t`, and once granted blocks every other
-writer of `t` for the length of its walk. That is a table-level
+space** and borrows it in `U` for an `UPDATE`, `X` for a `DELETE`
+(CP-S2b). So `UPDATE t SET v = 1` waits for any transaction holding a key
+of `t` in `U` or `X` - a foreign key's share on a row of `t` it passes -
+and once granted blocks every other writer of `t` for the length of its
+walk while admitting a key share on any row. That is a table-level
 serialization point where the per-row path had none, and such a statement
 can join a deadlock cycle where before it could not. It is the price of the
 guarantee the declaration buys — the statement's whole walk sees one state —
@@ -799,7 +829,7 @@ claims and a positioned reader's `IS` names; a write's claim is over
 scan finds every key of `t`, and a concurrent DDL still meets the `IX`
 taken above the range. Consequences: a transaction holding a bare `IX` and
 no key does not conflict with it; and the relation's fence counter is
-raised for the write's length, so every writer of the relation - the
+raised for the write's length, for a `U` window as for an `X` one, so every writer of the relation - the
 declaring transaction's own later single-row writes included - pays the
 all-partition probe AO-R3's counter gates.
 
@@ -843,7 +873,10 @@ level: **can the re-run answer differently once this holder decides?**
   core the holder is on**: the check asks the instance's
   lock table for the parent row and parks on the slot, which the holder's
   release flips and kicks across - a wake the `IsInFlight` poll does not
-  have (AX-S2b's row wait is the same shape).
+  have (AX-S2b's row wait is the same shape). The wait is a `DELETE`'s or
+  an `INSERT`'s `X` to give; a parent `UPDATE`'s `U` admits the share, and
+  the check reads a parent under an open `UPDATE` as present (CP-S2b,
+  `foreign-keys.md` §2a).
 - **No, where the site cannot tell.** A statement that declared a coarse
   unit and had it refused knows *who* refused it and not *what* they hold,
   so a holder that already wrote a row the walk will reach is
@@ -920,16 +953,21 @@ statement runs under the session's borrow.
   transaction - its id is a read holder's (`read_borrow.hpp`), which no
   in-flight table publishes - and the slot is flipped by whichever core
   releases and carried across by AU-S2's kick.
-- **A bulk write's declared unit is not a consumer**, and that is a rule
-  rather than an omission: an intention mode on an interval unit neither
-  fences nor is fenced (AO-0 item 27). A `DELETE FROM t WHERE id < 50`
-  changes no key's assignment - it writes row versions, which MVCC already
-  answers a concurrent reader from its snapshot - so no read's declaration
-  stops it, and since CP-S2a no read declares anything finer than the
-  relation, so the rule has no live instance and stands as a table
-  property (`lock_table.hpp`, `ConflictingOverlap`). What still stops a
-  write inside a fence is every unit that is not an intention: a tuple
-  `X`, another fence.
+- **The fence rule: an interval unit held in any non-intention mode - `S`,
+  `U` or `X` - is a fence, and an intention mode on an interval unit
+  neither fences nor is fenced** (AO-0 item 27; one predicate,
+  `IsIntention`, at the counter's raise and lower and at both scans' skips
+  since CP-S2b). The relation's fence counter counts the fences, the tuple
+  probe reads them, and the compatibility table says what each admits: a
+  tuple `S` under an `UPDATE`'s window is admitted, a tuple `U` or `X`
+  under a `U` or `X` window refused. A `DELETE FROM t WHERE id < 50` changes no
+  key's assignment - it writes row versions, which MVCC already answers a
+  concurrent reader from its snapshot - so no read's declaration stops it,
+  and since CP-S2a no read declares anything finer than the relation, so
+  the intention half of the rule has no live instance and stands as a
+  table property (`lock_table.hpp`, `ConflictingOverlap`). What stops a
+  write inside a fence is every unit that is not an intention: a tuple `U`
+  or `X`, another fence.
 - **The holder is not a transaction.** An autocommit `SELECT` has no
   transaction, so a read borrow holds under an id from a space of its own
   (bit 63, which no 48-bit trx id reaches, `read_borrow.hpp`'s
@@ -945,7 +983,9 @@ statement runs under the session's borrow.
   forward check takes the parent relation's `IS` and the parent row's `S`
   itself, before it descends (D9(a), AY-S5, `foreign-keys.md`); a
   `DELETE`'s reverse walk over the children takes no borrow, under the
-  parent row's `X`.
+  parent row's `X`, and its wait on a child row's undecided writer is a
+  probe in `U` on that row (CP-S2b), refused by the writer's `U` or `X`
+  and parked on its wake.
 
 **The table itself, and what serializes it** — the declared-shared row
 `rules.md` §3 points here for (moved at AO-S8):
@@ -958,7 +998,8 @@ statement runs under the session's borrow.
 > relation's entry and its tuples hash apart. Each partition carries a
 > `base/latch.hpp` latch, **null at `cores = 1`**. One thing is read
 > *without* that latch and it is not a field of the entry: a **striped
-> `S`/`X`-fence counter per relation**, an atomic array beside the
+> fence counter per relation** - interval units held in any non-intention
+> mode, `S`, `U` or `X` - an atomic array beside the
 > partitions, which is what lets a writer ask "is any fence over this
 > relation" without scanning. An entry's holders and waiters are vectors
 > and are read under the latch.

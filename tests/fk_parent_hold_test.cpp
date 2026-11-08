@@ -467,11 +467,83 @@ TEST_F(FkParentHoldTest, TheRelationsIntentionOutlivesAFailedChecksHold) {
     EXPECT_EQ(index.rfind("ERR TXN_CONFLICT", 0), 0u)
         << "a relation X was granted over a held parent row: " << index;
     EXPECT_EQ(Other("INSERT INTO p VALUES (99, 0)").rfind("INSERTED", 0), 0u);
-    // And S(10) itself: a present parent's `S` is not an absent one's.
+    // A version claim passes the share (CP-S2b, CP-Q2 (a)): an `UPDATE` asks
+    // `U(10)`, which S(10) admits, so this answers where it was refused
+    // `TXN_CONFLICT` until CP-S2b - a wait that became a grant, not a pin
+    // of the `S`.
     const std::string update = Other("UPDATE p SET v = 1 WHERE id = 10");
-    EXPECT_EQ(update.rfind("ERR TXN_CONFLICT", 0), 0u)
-        << "the violation gave back a present parent's S: " << update;
+    EXPECT_EQ(update, "UPDATED 1") << "a parent UPDATE was refused by a child's key share: "
+                                   << update;
+    // And S(10) itself: a present parent's `S` is not an absent one's, and
+    // an existence claim - the `DELETE`'s `X(10)` - is what it refuses.
+    const std::string deleted = Other("DELETE FROM p WHERE id = 10");
+    EXPECT_EQ(deleted.rfind("ERR TXN_CONFLICT", 0), 0u)
+        << "the violation gave back a present parent's S: " << deleted;
     ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+}
+
+// ---- A parent under an open `UPDATE` is present (CP-S2b §8.3 C.1) ---------
+//
+// The child's `S` is admitted by the updater's `U`, so the descent runs and
+// reads the parent's head busy: an overwrite over a live predecessor, not
+// delete-marked. With a lock table that has one cause - every writer that
+// places, delete-marks or retires holds `X`, which the `S` would have been
+// refused by - and the hoist holds the verdict as present. This fixture
+// dispatches synchronously (`clock_ = nullptr`, so nothing parks), and the
+// conversion happens at the hoist before any park decision, so it holds
+// here as on a served session. `AParentRowHeldByAWriterIsNotReadBeforeTheChildHoldsIt`
+// above keeps the `INSERT` writer's refusal: a placement holds `X`.
+//
+// **Mutation**: the witness not read (the `kBusy` kept under a table) - the
+// child is refused `TXN_CONFLICT` with the parent's leaf read.
+TEST_F(FkParentHoldTest, AParentUnderAnOpenUpdateIsPresentToAChildsCheck) {
+    ASSERT_EQ(Run("INSERT INTO p VALUES (7, 0)").rfind("INSERTED", 0), 0u);
+    Session writer;
+    ASSERT_EQ(Run(writer, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(Run(writer, "UPDATE p SET v = 1 WHERE id = 7"), "UPDATED 1");
+
+    // Inside a transaction, so the `S` the check holds outlives the statement
+    // and the `DELETE` below meets it rather than the updater's `U` alone.
+    Session child;
+    ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
+    bool read_under_share = false;
+    store_.OnFetch(parent_leaf_, 1, [&] { read_under_share = true; });
+    const std::string inserted = Run(child, "INSERT INTO c VALUES (7)");
+    EXPECT_EQ(inserted.rfind("INSERTED", 0), 0u)
+        << "the child was refused by a parent whose version is being written: " << inserted;
+    EXPECT_TRUE(read_under_share) << "the check passed without descending the parent";
+
+    // The updater decided, the child's `S(7)` alone stands, and an existence
+    // claim is refused by it; the child's commit makes the answer final.
+    ASSERT_EQ(Run(writer, "COMMIT").rfind("COMMIT", 0), 0u);
+    const std::string held = Other("DELETE FROM p WHERE id = 7");
+    EXPECT_EQ(held.rfind("ERR TXN_CONFLICT", 0), 0u)
+        << "the child's share did not refuse the parent's DELETE: " << held;
+    ASSERT_EQ(Run(child, "COMMIT").rfind("COMMIT", 0), 0u);
+    const std::string deleted = Other("DELETE FROM p WHERE id = 7");
+    EXPECT_NE(deleted.find("FK_VIOLATION"), std::string::npos) << deleted;
+    EXPECT_EQ(Run("SELECT v FROM p WHERE id = 7"), "v\\n1");
+}
+
+// A bulk `UPDATE`'s window is a range `U` (CP-S2b §8.3 C.3), admitted over
+// the child's tuple `S` in the verify arm's scan (`Compatible(S, U)`); a
+// bulk `DELETE`'s window is a range `X`, which the same scan refuses - here,
+// synchronously, `TXN_CONFLICT`. Until CP-S2b the `UPDATE` was refused too.
+TEST_F(FkParentHoldTest, ABulkUpdateWindowPassesAChildsShareAndABulkDeleteWaitsForIt) {
+    ASSERT_EQ(Run("INSERT INTO p VALUES (7, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO p VALUES (8, 0)").rfind("INSERTED", 0), 0u);
+    Session child;
+    ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(Run(child, "INSERT INTO c VALUES (7)").rfind("INSERTED", 0), 0u);
+
+    const std::string updated = Other("UPDATE p SET v = 1 WHERE id > 0 AND id < 100");
+    EXPECT_EQ(updated, "UPDATED 2") << "a parent UPDATE's window was refused by a child's share: "
+                                    << updated;
+    const std::string deleted = Other("DELETE FROM p WHERE id > 0 AND id < 100");
+    EXPECT_EQ(deleted.rfind("ERR TXN_CONFLICT", 0), 0u)
+        << "a parent DELETE's window ran over a child's share: " << deleted;
+    ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(Run("SELECT v FROM p WHERE id = 7"), "v\\n1");
 }
 
 }  // namespace

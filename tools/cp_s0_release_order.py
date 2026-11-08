@@ -32,7 +32,8 @@ What the engine does, as read
   (`CheckWriteConflictBlocking`, `command_dispatcher.cpp:11616-11640`), parked
   on A's slot (`DispatchAsync`, `:441-450`, `WaitScope(kAppLockWait)`), and
   re-runs from the top at A's release (AX-S2b; `:467-469` "running it
-  again"). That wait is one `sys.lock_waits` row (`unit` tuple, `mode` X,
+  again"). That wait is one `sys.lock_waits` row (`unit` tuple, `mode` U
+  since CP-S2b - X when S0 ran,
   `outcome` granted) and `app.lock_wait` time in `sys.wait_stats` /
   `sys.session_waits` - **when B's `UPDATE` reaches the row before A's
   release**. B is triggered after A's `COMMIT` has left the socket, and the

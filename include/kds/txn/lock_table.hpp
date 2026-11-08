@@ -33,7 +33,13 @@
 // a gap is a key interval, and a fence over it must outlive the btree leaf
 // division that moves keys between pages.
 //
-// **Modes** `IS`, `IX`, `S`, `X`; no `SIX` and no update mode (E1).
+// **Modes** `IS`, `IX`, `S`, `U`, `X`; no `SIX` (E1, amended at CP-S2b by
+// CP-Q2 (a): the update mode `U` is a **version claim** - its holder may
+// write a new version of the row, or of every row of its window, under the
+// same key and nothing else, so a foreign key's share `S` is admitted under
+// it; `X` stays the **existence claim** of a placement, a delete-mark and a
+// retire. `UPDATE` asks `U`, `DELETE` and every `INSERT` ask `X`;
+// `txn.md` §5 carries the rule for a verb not yet written).
 //
 // ---- The engine's ask, and the wait ---------------------------------------
 //
@@ -214,17 +220,30 @@ enum class LockUnit : std::uint8_t {
     kIndexKey = 4,
 };
 
+// In strength order: `ModeIndex` below needs the values contiguous from 1,
+// and nothing persists or transmits one (the memory-resident
+// `stats/lock_wait_log.hpp` record is rendered by name).
 enum class LockMode : std::uint8_t {
     kIntentionShared = 1,
     kIntentionExclusive = 2,
     kShared = 3,
-    kExclusive = 4,
+    kUpdate = 4,
+    kExclusive = 5,
 };
 
-inline constexpr std::size_t kLockModeCount = 4;
+inline constexpr std::size_t kLockModeCount = 5;
 
 const char* LockUnitName(LockUnit unit) noexcept;
 const char* LockModeName(LockMode mode) noexcept;
+
+// The one predicate the fence sites read (CP-S2b): an intention mode on an
+// interval unit neither fences nor is fenced (AO-0 item 27), and every
+// other mode on one is a fence. `IsFence`, `FenceCoversKey`'s skip and
+// `ConflictingOverlap`'s skip all read this and nothing else, so a sixth
+// mode is classified once.
+constexpr bool IsIntention(LockMode m) noexcept {
+    return m == LockMode::kIntentionShared || m == LockMode::kIntentionExclusive;
+}
 
 namespace detail {
 
@@ -233,33 +252,43 @@ constexpr std::size_t ModeIndex(LockMode m) noexcept {
 }
 
 // **The compatibility matrix, as a table.** `IS` conflicts only with `X`;
-// `IX` with `S` and `X`; `S` with `IX` and `X`; `X` with everything
-// (AR2 §2).
+// `IX` with `S`, `U` and `X`; `S` with `IX` and `X` **and not with `U`**;
+// `U` with `IX`, `U` and `X`; `X` with everything (AR2 §2, `U` added at
+// CP-S2b). `S`/`U` compatible is the cell `U` exists for: a key share
+// protects a row's existence and its key, and a version claim changes
+// neither (`foreign-keys.md` §2c). `U`/`U` refuses as `X`/`X` did, the
+// header's first-updater-wins deciding the re-run.
 //
-// A table and not a chain of predicates, and the reason is a widening that
-// has a name: adding `SIX` to the enum must not compile until somebody
-// fills its row. An expression form falls through to its final `return`
-// and answers a plausible default for the mode nobody considered, which is
-// how a lock manager admits two writers and passes its tests.
+// A table and not a chain of predicates, so a widening fills every cell by
+// hand; and the `static_assert`s below are what makes an unfilled cell a
+// compile error, since the array's size alone does not (the count sizes it
+// and a missing initializer reads `false`, which for a `kCompatible` row
+// refuses what should be admitted and for a `kCovers` row spends a cap slot
+// per re-ask - loud and quiet respectively, neither a build error).
 inline constexpr bool kCompatible[kLockModeCount][kLockModeCount] = {
-    //            IS     IX      S      X
-    /* IS */ {true, true, true, false},
-    /* IX */ {true, true, false, false},
-    /* S  */ {true, false, true, false},
-    /* X  */ {false, false, false, false},
+    //            IS     IX      S      U      X
+    /* IS */ {true, true, true, true, false},
+    /* IX */ {true, true, false, false, false},
+    /* S  */ {true, false, true, true, false},
+    /* U  */ {true, false, true, false, false},
+    /* X  */ {false, false, false, false, false},
 };
 
 // Does holding the row's mode make the column's mode a no-op for the same
-// transaction? `X` covers all; `S` and `IX` each cover `IS`. `S` does not
-// cover `IX` and `IX` does not cover `S` - v1 has no `SIX`, so a
-// transaction needing both holds both entries, which is the honest
-// accounting rather than a silent upgrade.
+// transaction? `X` covers all; `U` covers `S`, `IS` and itself (a version
+// claim is at least a key share, so a transaction that updated a parent
+// takes no `S` record to reference it, and a resumed walk re-asking its
+// row adds no entry); `S` and `IX` each cover `IS`. `S` does not cover
+// `IX`, `IX` does not cover `S`, `S` does not cover `U` and `U` covers
+// neither `IX` nor `X` - no `SIX` and no silent upgrade: a transaction
+// needing both holds both entries, which is the honest accounting.
 inline constexpr bool kCovers[kLockModeCount][kLockModeCount] = {
-    //            IS     IX      S      X
-    /* IS */ {true, false, false, false},
-    /* IX */ {true, true, false, false},
-    /* S  */ {true, false, true, false},
-    /* X  */ {true, true, true, true},
+    //            IS     IX      S      U      X
+    /* IS */ {true, false, false, false, false},
+    /* IX */ {true, true, false, false, false},
+    /* S  */ {true, false, true, false, false},
+    /* U  */ {true, false, true, true, false},
+    /* X  */ {true, true, true, true, true},
 };
 
 }  // namespace detail
@@ -271,6 +300,74 @@ constexpr bool Compatible(LockMode held, LockMode want) noexcept {
 constexpr bool Covers(LockMode held, LockMode want) noexcept {
     return detail::kCovers[detail::ModeIndex(held)][detail::ModeIndex(want)];
 }
+
+// ---- The tables' guards (CP-S2b) -----------------------------------------
+//
+// What the comment above the tables promises and the language does not:
+// the enum's last value is the count, so an enumerator added without the
+// count fails here rather than indexing past the arrays; the compatibility
+// relation is symmetric, which `lock_table.hpp`'s publish-then-verify
+// argument needs (the two scans read one question from either side);
+// `X` admits nothing; a mode covers itself, which is the only thing that
+// stops a second holder record of one `(txn, mode)` pair; `X` covers all;
+// covering is monotone - a covering mode admits no more than the mode it
+// covers, or "covered" would not mean "a no-op"; and the `U` cells by name,
+// so an unfilled row cannot read `false` quietly.
+namespace detail {
+constexpr bool CompatibleIsSymmetric() noexcept {
+    for (std::size_t a = 0; a < kLockModeCount; ++a) {
+        for (std::size_t b = 0; b < kLockModeCount; ++b) {
+            if (kCompatible[a][b] != kCompatible[b][a]) return false;
+        }
+    }
+    return true;
+}
+constexpr bool CoveringIsMonotone() noexcept {
+    for (std::size_t h = 0; h < kLockModeCount; ++h) {
+        for (std::size_t w = 0; w < kLockModeCount; ++w) {
+            if (!kCovers[h][w]) continue;
+            for (std::size_t m = 0; m < kLockModeCount; ++m) {
+                if (kCompatible[h][m] && !kCompatible[w][m]) return false;
+            }
+        }
+    }
+    return true;
+}
+constexpr bool EveryModeCoversItself() noexcept {
+    for (std::size_t m = 0; m < kLockModeCount; ++m) {
+        if (!kCovers[m][m]) return false;
+    }
+    return true;
+}
+constexpr bool ExclusiveAdmitsNothingAndCoversAll() noexcept {
+    const std::size_t x = ModeIndex(LockMode::kExclusive);
+    for (std::size_t m = 0; m < kLockModeCount; ++m) {
+        if (kCompatible[x][m] || !kCovers[x][m]) return false;
+    }
+    return true;
+}
+}  // namespace detail
+
+static_assert(static_cast<std::size_t>(LockMode::kExclusive) == kLockModeCount,
+              "the last mode is the count: an enumerator was added without widening the tables");
+static_assert(detail::CompatibleIsSymmetric(), "compatibility is symmetric");
+static_assert(detail::EveryModeCoversItself(), "a mode covers itself");
+static_assert(detail::ExclusiveAdmitsNothingAndCoversAll(), "X admits nothing and covers all");
+static_assert(detail::CoveringIsMonotone(), "a covering mode admits no more than the covered one");
+static_assert(Compatible(LockMode::kShared, LockMode::kUpdate) &&
+                  Compatible(LockMode::kUpdate, LockMode::kShared) &&
+                  Compatible(LockMode::kIntentionShared, LockMode::kUpdate) &&
+                  !Compatible(LockMode::kIntentionExclusive, LockMode::kUpdate) &&
+                  !Compatible(LockMode::kUpdate, LockMode::kUpdate) &&
+                  !Compatible(LockMode::kUpdate, LockMode::kExclusive),
+              "U admits IS and S, refuses IX, U and X");
+static_assert(Covers(LockMode::kUpdate, LockMode::kIntentionShared) &&
+                  Covers(LockMode::kUpdate, LockMode::kShared) &&
+                  Covers(LockMode::kExclusive, LockMode::kUpdate) &&
+                  !Covers(LockMode::kShared, LockMode::kUpdate) &&
+                  !Covers(LockMode::kUpdate, LockMode::kIntentionExclusive) &&
+                  !Covers(LockMode::kUpdate, LockMode::kExclusive),
+              "U covers IS and S, X covers U, S does not cover U, U covers neither IX nor X");
 
 // A unit's identity. The interval is part of the identity; only `lo` is
 // part of the hash, so two ranges sharing a lower bound land in one
@@ -307,9 +404,9 @@ struct LockKey {
     // Is this unit a **fence** - a borrow taken over a key interval rather
     // than over one row? The range unit is (the slice was, until CP-S2a); a
     // tuple's conflict is found by looking its own key up, and a relation's
-    // by the intention rule at the relation entry. AR2 §2 defines a gap lock
-    // as an `S` *or `X`* fence, which is why the mode is not part of this
-    // test.
+    // by the intention rule at the relation entry. A fence is one in any
+    // non-intention mode - `S`, `U` or `X` (AR2 §2 as amended at CP-S2b) -
+    // which is why the mode is not part of this test; `IsIntention` is.
     constexpr bool IsFenceUnit() const noexcept { return unit == LockUnit::kRange; }
 
     constexpr bool ContainsKey(std::uint64_t tuple_key) const noexcept { return tuple_key >= lo && tuple_key < hi; }
@@ -671,7 +768,8 @@ public:
     const sched::WakeRegistry* wake_registry() const noexcept { return wake_; }
 
     // Is a range-unit fence held over `tuple_key` by anyone but `txn`, in
-    // `S` or `X`? The probe AO-R3 puts in place of a persisted lock bit.
+    // a mode that refuses `want`? The probe AO-R3 puts in place of a
+    // persisted lock bit.
     // Tuple-unit conflicts are **not** its business - those are found by
     // looking the tuple's own key up - and neither are relation-unit
     // borrows, which the intention rule catches at the relation entry.

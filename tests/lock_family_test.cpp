@@ -816,6 +816,231 @@ TEST_F(LockDeadlockTest, AChildWhoseParentIsUnderARangeFenceWaitsForTheFence) {
     EXPECT_EQ(locks_->EntryCount(), 0u) << "the fence's registration outlived the wait";
 }
 
+// ---- CP-S2b: the `U` mode, a version claim ---------------------------------
+//
+// `instructions/v3.2.0/workorder-cp-lock-model-exploration.md` §8.3 (CP-Q2
+// (a)); `txn.md` §5 owns the rule. An `UPDATE` asks `U` on its row or its
+// window, `DELETE` and every `INSERT` ask `X`. `U` admits a foreign key's
+// `S` and `IS`, refuses `IX`, `U` and `X`; `U` covers `S`, `IS` and itself,
+// `X` covers `U`; a range `U` is a fence. The cells below are the one-core
+// half; the cross-core half, the conversion deadlock it removes and the
+// class it adds (CP-Q10) are `fk_cross_core_rig_test.cpp`'s.
+
+// The `UPDATE` sibling of the cell above: the window is a range `U`, the
+// child's tuple `S` on the parent row meets it in the verify arm and is
+// admitted (`Compatible(U, S)`), the descent reads the parent's head busy -
+// an overwrite over a live predecessor - and the hoist holds it as present
+// (§8.3 C.1). A wait removed; the `DELETE`-window cell keeps parking.
+TEST_F(LockDeadlockTest, AChildWhoseParentIsUnderAnUpdateWindowIsNotHeldUp) {
+    ASSERT_EQ(Local("CREATE TABLE p (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE c (id int64, pid int64 REFERENCES p) BTREE").rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(Local("INSERT INTO p VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+
+    Session updater;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &updater).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE p SET v = 1 WHERE id > 0 AND id < 100", &updater)
+                  .response,
+              "UPDATED 1");
+
+    Session child;
+    Started insert = Start("INSERT INTO c VALUES (1, 5)", child);
+    Pump();
+    ASSERT_TRUE(*insert.done) << "the child waited on a parent whose version is being written";
+    EXPECT_EQ(insert.out->response.rfind("INSERTED", 0), 0u) << insert.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &updater).response.rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(Local("SELECT id, pid FROM c"), "id,pid\\n1,5");
+    EXPECT_EQ(locks_->EntryCount(), 0u);
+}
+
+// A named `INSERT` inside an `UPDATE`'s window waits (§8.3 E "unchanged"):
+// a placement asks `X`, which the range `U` refuses in `FenceCoversKey` as
+// a range `X` did - the fence rule is by unit and any non-intention mode
+// (C.3), so the mode change admits a share under the window and nothing
+// that places a row.
+TEST_F(LockDeadlockTest, ANamedInsertInsideAnUpdateWindowWaits) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 1 WHERE id > 0 AND id < 100", &holder)
+                  .response,
+              "UPDATED 1");
+
+    Session inserter;
+    Started insert = Start("INSERT INTO t VALUES (50, 1)", inserter);
+    Pump();
+    ASSERT_FALSE(*insert.done) << "a placement went through an UPDATE's window: "
+                               << insert.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*insert.done) << "the insert never resumed after the window was released";
+    EXPECT_EQ(insert.out->response.rfind("INSERTED", 0), 0u) << insert.out->response;
+    EXPECT_EQ(locks_->EntryCount(), 0u);
+}
+
+// `ON CONFLICT (<unique column>) DO UPDATE` asks `U` on the arbiter's holder
+// row (§8.3 "who asks `U`"): a child's key share on that row admits it, and
+// the update arm proceeds without parking. The tuple-key form's up-front
+// unit stays `X` - it covers the insert arm - and still waits (§8.3 G.6).
+TEST_F(LockDeadlockTest, AnOnConflictDoUpdateOnAUniqueArbiterPassesAChildsShare) {
+    ASSERT_EQ(Local("CREATE TABLE p (id int64, v int64, w int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE c (id int64, pid int64 REFERENCES p) BTREE").rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(Local("CREATE UNIQUE INDEX pv ON p (v)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO p VALUES (5, 1, 0)").rfind("INSERTED", 0), 0u);
+
+    Session child;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &child).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO c VALUES (1, 5)", &child)
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    Session upsert;
+    Started u = Start("INSERT INTO p VALUES (9, 1, 2) ON CONFLICT (v) DO UPDATE SET w = EXCLUDED.w",
+                      upsert);
+    Pump();
+    ASSERT_TRUE(*u.done) << "the arbiter's row was held up by a child's key share";
+    EXPECT_EQ(u.out->response.rfind("INSERTED", 0), 0u) << u.out->response;
+    EXPECT_NE(u.out->response.find("rows=1"), std::string::npos) << u.out->response;
+    EXPECT_EQ(Local("SELECT id, w FROM p"), "id,w\\n5,2");
+
+    // The tuple-key form over the same held row: its up-front `X(5)` is
+    // refused by the share and waits for the child.
+    Session keyed;
+    Started k = Start("INSERT INTO p VALUES (5, 1, 3) ON CONFLICT (id) DO UPDATE SET w = EXCLUDED.w",
+                      keyed);
+    Pump();
+    ASSERT_FALSE(*k.done) << "the tuple-key arbiter's X was granted over a child's share: "
+                          << k.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &child).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*k.done);
+    EXPECT_EQ(Local("SELECT id, w FROM p"), "id,w\\n5,3");
+    EXPECT_EQ(locks_->EntryCount(), 0u);
+}
+
+// The two named-key doors test their `held_before` by covering mode and give
+// back only the `X` record they added (§8.3 B). A transaction that updated
+// key 7 holds `U(7)`, which does not cover `X`, so `ON CONFLICT DO NOTHING`'s
+// door asks `X(7)`, finds the key placed, and gives that `X` back - leaving
+// the `U` as the one record, where a mode-agnostic test left the row `X`-held
+// to the decide (a cap slot and a share refused, never a wrong answer).
+TEST_F(LockDeadlockTest, AnUpdateThenANamedInsertOfTheSameKeyHoldsOneRecordAfterTheDoor) {
+    const std::uint64_t oid = OidIn(Local("INSERT INTO t VALUES (7, 1)"));
+    const txn::LockKey row = txn::LockKey::Tuple(static_cast<catalog::Oid>(oid), 7);
+
+    Session s;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &s).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &s).response, "UPDATED 1");
+    ASSERT_NE(s.transaction(), nullptr);
+    ASSERT_TRUE(s.transaction()->borrows().HoldsAt(row, txn::LockMode::kUpdate));
+
+    const DispatchOutcome skipped =
+        dispatcher_->Dispatch("INSERT INTO t VALUES (7, 0) ON CONFLICT DO NOTHING", &s);
+    EXPECT_EQ(skipped.response.rfind("INSERTED", 0), 0u) << skipped.response;
+    EXPECT_NE(skipped.response.find("rows=0"), std::string::npos) << skipped.response;
+
+    EXPECT_TRUE(s.transaction()->borrows().HoldsAt(row, txn::LockMode::kUpdate))
+        << "the door's give-back took the UPDATE's version claim with it";
+    EXPECT_FALSE(s.transaction()->borrows().HoldsAt(row, txn::LockMode::kExclusive))
+        << "the door's X stayed in the ledger past the skip";
+    // And in the table: a foreign share is admitted by a `U` and refused by
+    // an `X`, so a granted probe is the absence of the door's record.
+    txn::LockHoldings probe;
+    auto share = locks_->TryAcquire(/*txn=*/4242, row, txn::LockMode::kShared, probe);
+    ASSERT_TRUE(share.ok()) << share.status().message();
+    EXPECT_TRUE(share.value()) << "the row is X-held where the contract says U";
+    locks_->Release(4242, probe);
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &s).response.rfind("COMMIT", 0), 0u);
+    EXPECT_EQ(Local("SELECT v FROM t WHERE id = 7"), "v\\n2");
+    EXPECT_EQ(locks_->EntryCount(), 0u);
+}
+
+// The sibling that D9(a) rests on: a transaction holding `S(p, 5)` from a
+// child insert names 5 in `INSERT INTO p ... ON CONFLICT DO NOTHING`. The
+// door's `X(5)` is granted over its own `S`, the key is placed, and the
+// give-back removes the `X` record alone - a give-back by key would take
+// the `S` with it, and another session's `DELETE` of 5 would then run over
+// the open child. The `DELETE` still waits, and the child's rollback is
+// what lets it through.
+TEST_F(LockDeadlockTest, AChildsShareSurvivesItsOwnNamedInsertOfTheParentKey) {
+    ASSERT_EQ(Local("CREATE TABLE p (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE c (id int64, pid int64 REFERENCES p) BTREE").rfind("CREATED", 0),
+              0u);
+    const std::uint64_t oid = OidIn(Local("INSERT INTO p VALUES (5, 0)"));
+    const txn::LockKey row = txn::LockKey::Tuple(static_cast<catalog::Oid>(oid), 5);
+
+    Session child;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &child).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO c VALUES (1, 5)", &child)
+                  .response.rfind("INSERTED", 0),
+              0u);
+    ASSERT_NE(child.transaction(), nullptr);
+    ASSERT_TRUE(child.transaction()->borrows().HoldsAt(row, txn::LockMode::kShared));
+
+    const DispatchOutcome skipped =
+        dispatcher_->Dispatch("INSERT INTO p VALUES (5, 0) ON CONFLICT DO NOTHING", &child);
+    EXPECT_EQ(skipped.response.rfind("INSERTED", 0), 0u) << skipped.response;
+    EXPECT_NE(skipped.response.find("rows=0"), std::string::npos) << skipped.response;
+    EXPECT_TRUE(child.transaction()->borrows().HoldsAt(row, txn::LockMode::kShared))
+        << "the door's give-back took the child's key share with it";
+    EXPECT_FALSE(child.transaction()->borrows().HoldsAt(row, txn::LockMode::kExclusive));
+
+    Session other;
+    Started del = Start("DELETE FROM p WHERE id = 5", other);
+    Pump();
+    ASSERT_FALSE(*del.done) << "the parent DELETE ran over an open child: " << del.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &child).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*del.done) << "the DELETE never resumed after the child rolled back";
+    EXPECT_EQ(del.out->response, "DELETED 1") << del.out->response;
+    EXPECT_EQ(locks_->EntryCount(), 0u);
+}
+
+// The other named-key door, the plain `INSERT` of a key that is present:
+// refused as a duplicate, it gives back the `X` it took for the placement
+// (BB-S3's review) and, since CP-S2b, that `X` alone - the child's `S` on
+// the same key stays, and another session's `DELETE` of 5 still waits.
+TEST_F(LockDeadlockTest, AChildsShareSurvivesItsOwnPlainInsertOfTheParentKey) {
+    ASSERT_EQ(Local("CREATE TABLE p (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE c (id int64, pid int64 REFERENCES p) BTREE").rfind("CREATED", 0),
+              0u);
+    const std::uint64_t oid = OidIn(Local("INSERT INTO p VALUES (5, 0)"));
+    const txn::LockKey row = txn::LockKey::Tuple(static_cast<catalog::Oid>(oid), 5);
+
+    Session child;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &child).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO c VALUES (1, 5)", &child)
+                  .response.rfind("INSERTED", 0),
+              0u);
+    ASSERT_NE(child.transaction(), nullptr);
+    ASSERT_TRUE(child.transaction()->borrows().HoldsAt(row, txn::LockMode::kShared));
+
+    const std::string duplicate = dispatcher_->Dispatch("INSERT INTO p VALUES (5, 0)", &child).response;
+    EXPECT_EQ(duplicate.rfind("ERR", 0), 0u) << duplicate;
+    ASSERT_NE(child.transaction(), nullptr);
+    EXPECT_TRUE(child.transaction()->borrows().HoldsAt(row, txn::LockMode::kShared))
+        << "the door's give-back took the child's key share with it";
+    EXPECT_FALSE(child.transaction()->borrows().HoldsAt(row, txn::LockMode::kExclusive))
+        << "the door kept the X it took for a placement that did not happen";
+
+    Session other;
+    Started del = Start("DELETE FROM p WHERE id = 5", other);
+    Pump();
+    ASSERT_FALSE(*del.done) << "the parent DELETE ran over an open child: " << del.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &child).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*del.done) << "the DELETE never resumed after the child rolled back";
+    EXPECT_EQ(del.out->response, "DELETED 1") << del.out->response;
+    EXPECT_EQ(locks_->EntryCount(), 0u);
+}
+
 // ---- AT-S3: the sys.tables row has no contender the page latch does not serialise --
 //
 // E13 asked whether the relation's `sys.tables` row becomes borrowable at
@@ -3200,7 +3425,10 @@ TEST_F(LockWaitsViewTest, AGrantedRowWaitIsOneRowNamingItsUnitModeAndHolder) {
     const testing_view::ViewText waits = Waits();
     ASSERT_EQ(waits.rows.size(), 1u);
     EXPECT_EQ(waits.Column("unit"), std::vector<std::string>{"tuple"});
-    EXPECT_EQ(waits.Column("mode"), std::vector<std::string>{"X"});
+    // The mode the waiter asked: an `UPDATE`'s row is a version claim, `U`,
+    // since CP-S2b (CP-Q2 (a)); it read `X` before. The `DELETE` sibling
+    // below keeps `X`.
+    EXPECT_EQ(waits.Column("mode"), std::vector<std::string>{"U"});
     EXPECT_EQ(waits.Column("rel_oid"), std::vector<std::string>{std::to_string(oid)});
     EXPECT_EQ(waits.Column("key"), std::vector<std::string>{"7"});
     EXPECT_EQ(waits.Column("holder_trx"), std::vector<std::string>{std::to_string(holder_trx)});
@@ -3212,6 +3440,73 @@ TEST_F(LockWaitsViewTest, AGrantedRowWaitIsOneRowNamingItsUnitModeAndHolder) {
     EXPECT_EQ(Local("SELECT seq, core FROM sys.lock_waits WHERE started = '1970-01-02 00:00:00'"),
               "seq,core\\n1,0");
     EXPECT_EQ(testing_view::MetaField(Local("SHOW META"), "lock_waits_recorded"), "1");
+}
+
+// A `DELETE`'s row is an existence claim and asks `X` (CP-S2b, `txn.md`
+// §5), refused here by the holder's `U`; its row names that mode.
+TEST_F(LockWaitsViewTest, AGrantedRowWaitOfADeleteNamesModeX) {
+    const std::uint64_t oid = OidIn(Local("INSERT INTO t VALUES (7, 1)"));
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+    const std::uint64_t holder_trx = holder.transaction()->id();
+
+    Session waiter;
+    Started w = Start("DELETE FROM t WHERE id = 7", waiter);
+    Pump();
+    ASSERT_FALSE(*w.done) << w.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done);
+    EXPECT_EQ(w.out->response, "DELETED 1");
+
+    const testing_view::ViewText waits = Waits();
+    ASSERT_EQ(waits.rows.size(), 1u);
+    EXPECT_EQ(waits.Column("unit"), std::vector<std::string>{"tuple"});
+    EXPECT_EQ(waits.Column("mode"), std::vector<std::string>{"X"});
+    EXPECT_EQ(waits.Column("rel_oid"), std::vector<std::string>{std::to_string(oid)});
+    EXPECT_EQ(waits.Column("key"), std::vector<std::string>{"7"});
+    EXPECT_EQ(waits.Column("holder_trx"), std::vector<std::string>{std::to_string(holder_trx)});
+    EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"granted"});
+}
+
+// A point `UPDATE` inside a bulk `UPDATE`'s window (CP-S2b §8.3 C.3): the
+// window is a range `U`, a fence since CP-S2b, and the tuple `U` under it
+// is refused in `FenceCoversKey` with the wake on the fence's entry (AY-S2)
+// - so the row names the unit the wait was registered on, the range, and
+// the mode the waiter asked, `U`. Before C.3 a range `U` was no fence and
+// the point write went through to meet the holder's version mid-walk.
+TEST_F(LockWaitsViewTest, ARefusedUpdateClaimUnderAFenceIsARangeRowWithModeU) {
+    const std::uint64_t oid = OidIn(Local("INSERT INTO t VALUES (7, 1)"));
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id > 0 AND id < 100", &holder)
+                  .response,
+              "UPDATED 1");
+    const std::uint64_t holder_trx = holder.transaction()->id();
+    ASSERT_EQ(locks_->RelationFenceCount(static_cast<catalog::Oid>(oid)), 1u)
+        << "the bulk UPDATE's window is not counted as a fence";
+
+    Session waiter;
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 7", waiter);
+    Pump();
+    ASSERT_FALSE(*w.done) << "the point UPDATE wrote through the window: " << w.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done);
+    EXPECT_EQ(w.out->response, "UPDATED 1");
+
+    const testing_view::ViewText waits = Waits();
+    ASSERT_EQ(waits.rows.size(), 1u);
+    EXPECT_EQ(waits.Column("unit"), std::vector<std::string>{"range"});
+    EXPECT_EQ(waits.Column("mode"), std::vector<std::string>{"U"});
+    EXPECT_EQ(waits.Column("rel_oid"), std::vector<std::string>{std::to_string(oid)});
+    EXPECT_EQ(waits.Column("key"), std::vector<std::string>{"1"}) << "the window's lower bound";
+    EXPECT_EQ(waits.Column("holder_trx"), std::vector<std::string>{std::to_string(holder_trx)});
+    EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"granted"});
+    EXPECT_EQ(locks_->RelationFenceCount(static_cast<catalog::Oid>(oid)), 0u)
+        << "the fence counter drifted";
 }
 
 TEST_F(LockWaitsViewTest, AWaitTheFaultNetEndsIsAFaultNetRow) {

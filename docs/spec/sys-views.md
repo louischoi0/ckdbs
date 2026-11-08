@@ -187,7 +187,10 @@ One row per lock wait that parked, written when it ends: `seq`, `core`,
 `holder_trx` and `outcome` (`granted`, `deadlock`, `fault_net`,
 `cancelled`). `unit`, `rel_oid` and `key` name the unit that refused, where
 the wait is registered; `mode` is what was asked - since AY-S2 they can be
-two units. `granted` is a flipped slot, not a grant, so a re-run that parks
+two units. `unit` is one of `relation`, `range`, `tuple`, `index key`
+(the slice unit left at CP-S2a); `mode` one of `IS`, `IX`, `S`, `U`, `X`
+(`U` since CP-S2b: an `UPDATE`'s version claim, and a parent `DELETE`'s
+wait on a child row's writer, whose probe asks `U`, `txn.md` §5). `granted` is a flipped slot, not a grant, so a re-run that parks
 again is a second row. A waiter refused at the edge for closing a cycle is
 a `deadlock` row with `waited_us` 0. A path that polls a holder with no slot
 behind it is no wait here (`known-gaps.md`, Locks). A ring of 4096 per

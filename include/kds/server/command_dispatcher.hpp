@@ -1129,9 +1129,10 @@ private:
     // A dispatcher with no lock table, or a null transaction, borrows
     // nothing and answers granted.
     //
-    // `mode` is the unit's: `X` for a writer's row, range or fence, `S` for
-    // a foreign key's parent row (D9(a), AY-S5). The intention asked above
-    // it follows - `IX` over `X`, `IS` over `S`.
+    // `mode` is the unit's: `U` for an `UPDATE`'s row or window (CP-S2b),
+    // `X` for a `DELETE`'s and an `INSERT`'s, `S` for a foreign key's parent
+    // row (D9(a), AY-S5). The intention asked above it follows - `IX` over
+    // `U` and `X`, `IS` over `S`.
     StatusOr<bool> BorrowChain(const WriteScope& scope, const txn::LockKey& unit,
                                std::uint64_t* blocker = nullptr,
                                txn::LockMode mode = txn::LockMode::kExclusive);
@@ -1622,7 +1623,8 @@ private:
     // and acted on before the next row's, so a unique key's unit is never
     // held across two rows (`UniqueKeyHolds`). The insert arm is
     // `InsertOneRow`; the update arm is `UpdateParsed` on the holder, under
-    // its row `X`, with `EXCLUDED.<col>` bound to the proposed row.
+    // its row unit - `X` on the tuple-key arm, `U` on the unique arbiter's
+    // (CP-S2b) - with `EXCLUDED.<col>` bound to the proposed row.
     DispatchOutcome InsertOnConflict(catalog::Oid oid, const catalog::TableAccess*& ta,
                                      const parser::InsertStmt& written,
                                      const parser::InsertStmt& shaped,

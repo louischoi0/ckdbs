@@ -4549,23 +4549,50 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // between the statement's start and the grant is visible to it
         // rather than read as busy.
         const txn::ReadView check_view = CheckView(scope);
-        std::uint64_t busy_trx = 0;
+        exec::BusyHead busy;
         auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), tuple_key, check_view,
-                                                &budget_, &busy_trx);
+                                                &budget_, &busy);
         if (!verdict.ok()) return verdict.status();
+        exec::FkVerdict resolved = verdict.value();
 
-        // **Busy under a granted `S` means no lock table**: every writer of
-        // a row holds its `X` (AO-S6a), which would have refused the `S`.
-        // Without a table the `IsInFlight` poll is the wait (AO-S3); with
-        // one the busy verdict refuses retryably, defensively.
-        if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0 && locks_ == nullptr) {
-            NoteBlockingWriter(scope.txn, busy_trx, tuple_key, RepeatableReadWait::kCapable);
+        // **Busy under a granted `S` has one cause with a table, and it
+        // reads present** (CP-S2b, `U`). Every writer that places or
+        // delete-marks a row holds its `X` - an `INSERT`'s, a `DELETE`'s row
+        // or window; a `PURGE` retire stamps no transaction and is never
+        // busy - and `X` refuses the `S` this check
+        // holds, so the writer the view cannot see holds `U`: an `UPDATE`,
+        // whose head is an overwrite over a live predecessor and is not
+        // delete-marked. Whichever way it decides, a live version of this
+        // key stands, and no `DELETE` of the row is granted while the `S`
+        // is held - so the parent is present. The two header fields are the
+        // witness of that discipline: a busy head that is delete-marked or
+        // has no predecessor is a verb placed under the wrong mode, kept as
+        // today's retryable refusal (`CheckForeignKeyOnWrite`'s `kBusy` arm)
+        // and logged, never answered.
+        //
+        // Without a table nothing refuses an inserter, so the witness is not
+        // read there: the `IsInFlight` poll is the wait (AO-S3).
+        if (resolved == exec::FkVerdict::kBusy && busy.trx_id != 0) {
+            if (locks_ == nullptr) {
+                NoteBlockingWriter(scope.txn, busy.trx_id, tuple_key, RepeatableReadWait::kCapable);
+            } else if (!busy.deleted && busy.undo_ptr != txn::kNoUndoPtr) {
+                resolved = exec::FkVerdict::kPass;
+            } else if (logging(LogLevel::kWarn)) {
+                log_->Warn("lock", "core " + std::to_string(core_id_) +
+                                       " read parent row id=" + std::to_string(tuple_key) +
+                                       " of oid " + std::to_string(fk.rel_oid) +
+                                       " busy under a granted S by transaction " +
+                                       std::to_string(busy.trx_id) +
+                                       " whose head is a placement or a delete-mark: a writer "
+                                       "that changes a row's existence must hold X (txn.md "
+                                       "section 5)");
+            }
         }
 
         // Recorded **per resolution, not per row**: a thousand-row insert
         // against one parent reports one lookup in `SHOW ACCESS`.
         RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
-        into.Put(fk.rel_oid, tuple_key, verdict.value());
+        into.Put(fk.rel_oid, tuple_key, resolved);
     }
     return Status::OK();
 }
@@ -4647,10 +4674,13 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         case exec::FkVerdict::kBusy:
             // **Reached only by a writer the lock table does not know**
             // since AY-S5: the extraction pass takes the parent row's `S`
-            // before it descends, and a writer holding its `X` refuses that ask, which
-            // is a wait. What is left is a dispatcher with no table, where
-            // the extraction pass recorded `NoteBlockingWriter`'s poll.
-            // Retryable: the holder decides and the retry gets a real answer.
+            // before it descends, a writer holding the row's `X` refuses
+            // that ask, which is a wait, and an `UPDATE` holding its `U` is
+            // read as present (CP-S2b). What is left is a dispatcher with no
+            // table, where the extraction pass recorded `NoteBlockingWriter`'s
+            // poll - or, with one, a busy head the witness refused (a verb
+            // placed under the wrong mode, logged there). Retryable: the
+            // holder decides and the retry gets a real answer.
             return Status::TxnConflict("row id=" + std::to_string(value.int_val) + " of '" +
                                        RelationNameOf(fk.rel_oid) +
                                        "' is being written by another transaction that has "
@@ -4776,37 +4806,50 @@ void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::
                                               std::uint64_t tuple_key, std::uint64_t holder) {
     // **The wake is the child row's own**, asked for the way the forward
     // check asked for its parent's until AY-S5 folded that into its `S`: the
-    // writer holds the row's `X` (AO-S6a), the table is the instance's, and
-    // the release flips the slot from whichever core releases. A refused
-    // ask leaves the table as it found it but for the registration, and a
-    // granted one - the writer released between the walk and this line -
-    // is given back at once, with a wake already flipped so the statement
-    // runs again rather than being refused for a wait that has ended (the
-    // stale-memo arm of `BorrowChain` does the same). Nothing here outlives
-    // the ask, which is why no intention is taken above it.
+    // writer holds the row's `U` or `X` (AO-S6a; CP-S2b), the table is the
+    // instance's, and the release flips the slot from whichever core
+    // releases. A refused ask leaves the table as it found it but for the
+    // registration, and a granted one - the writer released between the
+    // walk and this line - is given back at once, with a wake already
+    // flipped so the statement runs again rather than being refused for a
+    // wait that has ended (the stale-memo arm of `BorrowChain` does the
+    // same). Nothing here outlives the ask, which is why no intention is
+    // taken above it.
     //
-    // **Not over a hold this transaction already has**: the child row is a
-    // parent of its own children, and an `S` taken on it for a grandchild's
-    // reference would be the one the grant arm's release drops.
+    // **The probe asks `U`** (CP-S2b): a child `UPDATE` of other columns
+    // holds the row in `U`, which admits `S` - an `S` probe would be granted
+    // over it and the pre-flipped slot would re-run the whole walk until the
+    // writer decided or the net refused it. `U` is refused by the writer's
+    // `U` or `X`, and by a bulk child write's range over the row, and is
+    // admitted only by a grandchild writer's `S` on the row - a holder that
+    // is not writing it - which is the released-in-between case the grant
+    // arm was written for.
+    //
+    // **Not over a `U` or `X` this transaction already holds**: the probe
+    // would be answered `already_held` and the grant arm's release would
+    // drop the record the probe never added. An `S` this transaction holds
+    // on the row - the child row is a parent of its own children - does not
+    // skip the probe: the release matches by mode, so it cannot drop the
+    // `S`, and skipping would leave this `DELETE` polling with no slot.
     const txn::LockKey unit = txn::LockKey::Tuple(child_rel, tuple_key);
     if (locks_ != nullptr && scope.txn != nullptr && may_park_ &&
-        !scope.txn->borrows().Holds(unit)) {
+        !scope.txn->borrows().HoldsCovering(unit, txn::LockMode::kUpdate)) {
         std::uint64_t blocker = 0;
         txn::LockWake wake;
-        auto took = locks_->TryAcquire(scope.txn->id(), unit, txn::LockMode::kShared,
+        auto took = locks_->TryAcquire(scope.txn->id(), unit, txn::LockMode::kUpdate,
                                        scope.txn->borrows(), &blocker, &wake);
         if (took.ok() && took.value()) {
-            locks_->ReleaseOne(scope.txn->id(), unit, txn::LockMode::kShared, scope.txn->borrows());
+            locks_->ReleaseOne(scope.txn->id(), unit, txn::LockMode::kUpdate, scope.txn->borrows());
             auto flipped = std::make_shared<txn::LockWaitSlot>();
             flipped->ready.store(true, std::memory_order_release);
             TakeLockWait(blocking_wake_,
                          DispatchOutcome::LockWait{unit, holder, std::move(flipped), true,
-                                                   txn::LockMode::kShared});
+                                                   txn::LockMode::kUpdate});
         } else if (took.ok() && wake.slot != nullptr) {
             TakeLockWait(blocking_wake_,
                          DispatchOutcome::LockWait{wake.key, blocker != 0 ? blocker : holder,
                                                    std::move(wake.slot), true,
-                                                   txn::LockMode::kShared});
+                                                   txn::LockMode::kUpdate});
         }
     }
     // The reverse check reads latest state and the writer's decide changes
@@ -6443,7 +6486,11 @@ Status CommandDispatcher::NamedKeyVerdict(const catalog::TableAccess& ta, std::u
 StatusOr<bool> CommandDispatcher::TupleKeyPlaced(const catalog::TableAccess& ta, std::uint64_t id,
                                                  std::uint32_t byte, WriteScope& scope) {
     const txn::LockKey unit = txn::LockKey::Tuple(ta.oid, id);
-    const bool held_before = scope.txn != nullptr && scope.txn->borrows().Holds(unit);
+    // Whether this door's `X` is already held - by mode, since CP-S2b: a
+    // transaction that updated `id` holds `U` on it, which does not cover
+    // `X`, so the door adds an `X` record and must give back exactly that.
+    const bool held_before = scope.txn != nullptr &&
+                             scope.txn->borrows().HoldsCovering(unit, txn::LockMode::kExclusive);
     if (std::optional<Status> held =
             BorrowOrWait(scope, unit, RepeatableReadWait::kCapable, txn::LockMode::kExclusive,
                          [&]() { return NamedKeyVerdict(ta, id, byte, scope.txn); })) {
@@ -6458,8 +6505,13 @@ StatusOr<bool> CommandDispatcher::TupleKeyPlaced(const catalog::TableAccess& ta,
     // never be skipped as though its rollback could not free the key.
     if (NamedKeyVerdict(ta, id, byte, scope.txn).ok()) return false;
     if (!held_before && locks_ != nullptr && scope.txn != nullptr) {
+        // The door's `X` and nothing else: a `U` (this transaction's own
+        // `UPDATE` of the key) or an `S` (a child's reference to it) on the
+        // same key is held to the decide.
         locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
-                          [&](const txn::LockHoldings::Held& h) { return h.key == unit; });
+                          [&](const txn::LockHoldings::Held& h) {
+                              return h.key == unit && h.mode == txn::LockMode::kExclusive;
+                          });
     }
     return true;
 }
@@ -6694,14 +6746,19 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
             if (verdict.value().kind == exec::UniqueVerdict::Kind::kHeld) {
                 if (!update) continue;  // DO NOTHING: the key is held
                 const std::uint64_t h = verdict.value().tuple_key;
-                if (std::optional<Status> held = BorrowOrWait(
-                        scope, txn::LockKey::Tuple(ta->oid, h), RepeatableReadWait::kCapable)) {
+                // `U` (CP-S2b): the arm is `UPDATE`'s per-row path on `h`,
+                // a version claim a child's share on `h` admits.
+                if (std::optional<Status> held =
+                        BorrowOrWait(scope, txn::LockKey::Tuple(ta->oid, h),
+                                     RepeatableReadWait::kCapable, txn::LockMode::kUpdate)) {
                     return refuse(*held, k);
                 }
-                // **Read `h` again under its `X`** (CG-S0 reading 1b): the key's
+                // **Read `h` again under its `U`** (CG-S0 reading 1b): the key's
                 // unit keeps every writer from moving a row onto it, but not
                 // `h`'s writer from moving it off between the check and the
-                // `X`. Off, the key is free under the unit this row holds.
+                // `U`. Off, the key is free under the unit this row holds.
+                // What could move `h` off its value is an `UPDATE` or a
+                // `DELETE` of `h`, and `U` refuses both.
                 auto still = RowHoldsUniqueKey(*ta, *arbiter, h, *p.unique);
                 if (!still.ok()) return refuse(still.status(), k);
                 if (still.value()) holder = h;
@@ -7013,10 +7070,14 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // (BB-S3's review; AZ-S5's shape for a failed check's `S`): nothing was
     // written under it, and kept to the decide it would stall another insert
     // of the same id, waiting on a holder that can no longer place it.
+    // By mode (CP-S2b): the `X` the door added and nothing else, so a `U`
+    // or `S` this transaction holds on the key stays to the decide.
     const auto give_back = [&](const txn::LockKey& unit, bool held_before) {
         if (held_before || locks_ == nullptr || scope.txn == nullptr) return;
         locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
-                          [&](const txn::LockHoldings::Held& h) { return h.key == unit; });
+                          [&](const txn::LockHoldings::Held& h) {
+                              return h.key == unit && h.mode == txn::LockMode::kExclusive;
+                          });
     };
 
     // ---- The no-refuse window (BE-Q11) -----------------------------------
@@ -7050,7 +7111,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         const auto refuse_if_never_admissible = [&]() -> Status {
             return NamedKeyVerdict(ta, supplied_id, values.front().byte_offset, scope.txn);
         };
-        const bool held_before = scope.txn != nullptr && scope.txn->borrows().Holds(key_unit);
+        const bool held_before =
+            scope.txn != nullptr &&
+            scope.txn->borrows().HoldsCovering(key_unit, txn::LockMode::kExclusive);
         if (std::optional<Status> held =
                 BorrowOrWait(scope, key_unit, RepeatableReadWait::kCapable,
                              txn::LockMode::kExclusive, refuse_if_never_admissible)) {
@@ -10009,7 +10072,8 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // having written nothing.
     //
     // An arm's empty WHERE would declare the whole id space, held to the
-    // decide; its one row is under the caller's row `X` (CG), so it declares
+    // decide; its one row is under the caller's row unit (CG; `X` on the
+    // tuple-key arm, `U` on the unique arbiter's since CP-S2b), so it declares
     // nothing.
     const std::optional<txn::LockKey> declared =
         arm_target.has_value() ? std::nullopt : DeclaredWriteBorrow(ta, stmt.where);
@@ -10021,8 +10085,11 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         // statement keeps the exclusion rather than guessing. The row-level
         // arm below is where the two *are* distinguishable, because there
         // the header names the row's own writer.
-        if (std::optional<Status> held =
-                BorrowOrWait(scope, *declared, RepeatableReadWait::kFutile)) {
+        //
+        // In `U` (CP-S2b): the window is a fence over every writer of a row
+        // in it and admits a foreign key's share on any of them.
+        if (std::optional<Status> held = BorrowOrWait(scope, *declared, RepeatableReadWait::kFutile,
+                                                      txn::LockMode::kUpdate)) {
             return {ErrorReply(*held), false, 0, *held};
         }
     }
@@ -10140,7 +10207,10 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             // where the table has nothing to say.
             std::uint64_t blocker = 0;
             if (!declared.has_value()) {
-                auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id.value()), &blocker);
+                // `U`, the version claim (CP-S2b): a foreign key's share on
+                // this row admits it, another writer's `U` or `X` refuses it.
+                auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id.value()), &blocker,
+                                        txn::LockMode::kUpdate);
                 if (!took.ok()) return took.status();
             }
             if (Status s = CheckWriteConflictBlocking(scope, trx_id, id.value(), blocker);
@@ -10571,7 +10641,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         }
     }
     // An arm's row is never walked for: its WHERE is empty, so the walk would
-    // write every row (CG). The caller holds the row's `X`, so the descent
+    // write every row (CG). The caller holds the row's `X` or `U`, so the descent
     // declined only for a structural reason, which a re-run answers.
     if (arm_target.has_value()) {
         const Status s = Status::TxnConflict(

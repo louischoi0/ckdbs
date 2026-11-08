@@ -71,18 +71,28 @@ enum class FkVerdict : std::uint8_t {
 // walk stopping at the id - unreachable through the DDL surface, and written
 // out anyway because a check that cannot run is worse than a check that runs
 // slowly, and because "can't happen" is not a thing to encode as an error.
-// `busy_trx`, when given, is set to the transaction holding the parent row
-// on a `kBusy` verdict and to 0 otherwise. **Since AY-S5 only a dispatcher
-// with no lock table reads it**: with one, the caller holds the parent
-// row's `S` before it descends, a writer's `X` refuses that ask, and the
-// refusal is the wait - so a busy answer under the `S` does not arise.
-// Without one, `IsInFlight(busy_trx)` is AO-S3's poll. Optional so the
-// paths that cannot wait keep F3's retryable refusal.
+// `busy`, when given, is filled from the head the verdict was decided on
+// when it is `kBusy` - the in-flight writer, the head's undo pointer and
+// its delete-mark - and zeroed otherwise. Two readers (`foreign-keys.md`
+// §2a): a dispatcher with no lock table polls `IsInFlight(busy.trx_id)`
+// (AO-S3); one with a table, which holds the parent row's `S` before it
+// descends, reads the two header fields as the **witness** that the busy
+// writer is an `UPDATE` - its head not delete-marked and over a predecessor
+// - since every writer that places or delete-marks the row holds `X`,
+// which refused the `S` (a `PURGE` retire stamps no transaction; CP-S2b,
+// `U`). Optional so the paths that
+// cannot wait keep F3's retryable refusal.
+struct BusyHead {
+    std::uint64_t trx_id = 0;
+    std::uint64_t undo_ptr = 0;
+    bool deleted = false;
+};
+
 StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
                                        const catalog::TableAccess& parent,
                                        std::uint64_t parent_tuple_key,
                                        const txn::ReadView& check_view, Budget* budget,
-                                       std::uint64_t* busy_trx = nullptr);
+                                       BusyHead* busy = nullptr);
 
 // ---- The hoisted forward check's held verdicts (AH-T1) -------------------
 //

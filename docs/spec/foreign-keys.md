@@ -167,9 +167,11 @@ probe parent_rel  key = <fk value being written>
   no probe. A non-integer value stays the codec's refusal. The test is
   `KeystoneIdOf`, the one a named tuple key is refused `OutOfRange` by (BD-R5).
 - Probe finds a version → apply **check visibility** (§4): visible
-  committed parent → pass; written or delete-marked by an in-flight
-  foreign trx → busy (`TxnConflict`, F3); deleted-committed or not found →
-  `kFkViolation`.
+  committed parent → pass; overwritten by an in-flight foreign `UPDATE` →
+  **pass**, its `U` having admitted the `S` (CP-S2b, §2a); inserted or
+  delete-marked in flight → the `S` was refused before the read and the
+  statement waits (with a lock table), or busy (`TxnConflict`, F3) without
+  one; deleted-committed or not found → `kFkViolation`.
 - Check runs **before** the heap write of the child row: on failure
   the statement aborts with no undo work. Ordering is free under
   run-to-completion; check-first is simply cheaper.
@@ -229,9 +231,10 @@ writer of that row on whichever core either runs (§3a).
   before the grant, and the check would have passed a row that is gone.
   With the `S` first, a parent row held by a writer is not read at all
   until the writer decides (`FkParentHoldTest`).
-- **A refused `S` is the wait.** A writer of the parent row holds its `X`
-  (AO-S6a), and a parent `DELETE` with a tuple key window holds a range over it,
-  met in the lock table's verify (AY-S2); the refused ask registers a wake
+- **A refused `S` is the wait.** An `INSERT` or a `DELETE` of the parent
+  row holds its `X` (AO-S6a), and a parent `DELETE` with a tuple key window
+  holds a range `X` over it, met in the lock table's verify (AY-S2); an
+  `UPDATE` holds `U`, which admits the `S` (CP-S2b); the refused ask registers a wake
   on the entry that refused it, and the statement - which has written
   nothing - parks and runs again at the release, from whichever core
   releases. The waiter records `waiter -> holder` in the wait-for graph,
@@ -241,8 +244,15 @@ writer of that row on whichever core either runs (§3a).
   escalation (AO-R10).
 - **Without a lock table** - a dispatcher built without one - nothing is
   held, and a busy parent is `NoteBlockingWriter`'s `IsInFlight` poll
-  (AO-S3's wait, unchanged). With a table a busy verdict under a granted
-  `S` does not arise; if it did, it would refuse retryably.
+  (AO-S3's wait, unchanged). **With a table, busy under a granted `S` has
+  one cause, and it reads present** (CP-S2b): the view is minted after the
+  grant, every writer that places or delete-marks the row holds `X` to its
+  decide and `X` refuses `S` (a `PURGE` retire stamps no transaction, so it
+  is never busy), so the writer the view cannot see
+  holds `U` - an `UPDATE`, whose head is not delete-marked and has a
+  predecessor; the check passes. A busy head that is delete-marked or has
+  no predecessor is a verb placed under the wrong mode (`txn.md` §5's
+  rule), refused retryably as before and logged.
 - **At every isolation level**, because the check view is minted at the
   check and not at `BEGIN` (`txn.md` §5): a commit makes the parent
   visible to the re-run and an abort makes the violation terminal, so
@@ -268,15 +278,22 @@ hoist; it has no statement text to re-run, and handles no lock wait.
 
 D9(a) is built as ratified, and its costs are the engine's:
 
-- **Every `UPDATE` of a parent row waits while a child writer of it is
-  open**, not only its `DELETE`: the `UPDATE`'s row `X` meets the child's
-  `S`. The `S` protects the row's existence and the lock family has one
-  unit per row.
-- **Two transactions that each write a child of P and then update P
-  deadlock**, and the second to ask is refused naming deadlock; before
-  AY-S5 the two updates serialised on P's `X`. "Insert a trade, then
-  update its account" is that shape
-  (`FkCrossCoreRigTest.TwoChildWritersThatThenUpdateTheirParentDeadlock`).
+- **An `UPDATE` of a parent row proceeds past open child writers of it**
+  (CP-S2b): its `U` admits their `S`, and a child's check reads a parent
+  under an open `UPDATE` as present; only a `DELETE` - and `ON CONFLICT
+  (tuple key) DO UPDATE`, whose up-front unit is `X` - waits for them. Before
+  CP-S2b the `UPDATE` took `X` and waited, and two transactions that each
+  wrote a child of P and then updated P deadlocked - "insert a trade, then
+  update its account"; they now serialise on P's `U`
+  (`FkCrossCoreRigTest.TwoChildWritersThatThenUpdateTheirParentSerialise`;
+  two that then `DELETE` P still deadlock, the `X` family keeping that
+  shape).
+- **The class that replaces it is narrower** (CP-Q10 (a), `[loud]`): a
+  parent updater granted `U(P)` over a child writer's share that then
+  waits on that writer - at a `DELETE` of P, at another row the child
+  wrote - deadlocks with it if the child writer then updates P; one of the
+  two is refused retryably naming deadlock, where before CP-S2b the updater
+  waited at P first, holding nothing there. `txn.md` §5 states it.
 - **Each distinct parent's `S` counts against `max_locks_per_txn`**
   beside the transaction's own row borrows, so a transaction reaches the
   cap sooner - a bulk insert whose every row names a distinct parent at
@@ -302,7 +319,8 @@ D9(a) is built as ratified, and its costs are the engine's:
   check reads as absent was absent at every grant - no child this
   transaction wrote references it, since every check runs before its row is
   placed and a failed one poisons the transaction - or was deleted by this
-  transaction under its own `X`, which the release leaves alone. So an `S` taken by an earlier
+  transaction under its own `X`, which the release leaves alone (as it
+  leaves a `U`, which changes neither existence nor key). So an `S` taken by an earlier
   statement (a zero-row `UPDATE`'s) goes too, and so does one this
   statement's run took before it parked and ran again. **The relation's `IS`
   stays**, since the statement's present parent rows stand under it.
@@ -314,9 +332,10 @@ D9(a) is built as ratified, and its costs are the engine's:
   parent's `S` stays. They go in one pass over the ledger
   (`LockTable::ReleaseIf`), O(ledger) however many there are.
 
-An existence-only unit that only a `DELETE` would take is not built; it is
-a change to AR2's units, and would be put forward as its own item if these
-costs are measured to matter.
+The existence/version split is built as a **mode** since CP-S2b - `U`,
+`txn.md` §5 - on the deadlock above, not on a measured cost (CP-S0 found
+the `S` unpriceable on the uncontended path and its contender in no
+scenario).
 
 ## 3a. The reverse check sees every child
 
@@ -354,7 +373,14 @@ statement's passing check and its row write - is pinned on one thread,
 instead** (AY-Q8): a child `DELETE`, an `UPDATE` of other columns, or
 one moving the fk column off it. The walk answers busy and carries that writer's id and the row's tuple key
 out; the `DELETE` parks mid-walk on the row, nothing of the parent row
-written yet, and runs the check again at the writer's decide - a commit
+written yet, and runs the check again at the writer's decide. **The
+`DELETE` gets its slot from a probe in `U` on the child row** (CP-S2b):
+refused by the row's own writer in `U` or `X` and parked on that entry's
+wake; admitted by a grandchild writer's `S` on the row and given back at
+once. In `S` the probe would be admitted by a child `UPDATE`'s `U` and the
+`DELETE` would re-run on a pre-flipped slot until the writer decided. The
+probe is asked over a share this transaction holds on the child row (a
+grandchild of its own), since the give-back matches by mode. A commit
 leaves the parent unreferenced, a rollback puts the reference back and the
 re-check refuses. The check's view is minted per checked row, after the
 row's `X`: every child writer that set the fk to the parent has decided by

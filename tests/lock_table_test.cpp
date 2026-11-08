@@ -50,43 +50,57 @@ std::unique_ptr<LockTable> MakeTable(std::uint32_t cores = 8,
 
 TEST(LockTableTest, TheCompatibilityMatrixIsTheOneAR2States) {
     // AR2 §2: `IS` conflicts only with `X`; `IX` with `S` and `X`; `S` with
-    // `IX` and `X`; `X` with everything. Written out as sixteen literal
-    // expectations rather than looped over `Compatible`, so that a change
-    // to the function cannot also change what the cell believes.
+    // `IX` and `X`; `X` with everything - and since CP-S2b (CP-Q2 (a)) `U`,
+    // the version claim, compatible with `IS` and `S`, refusing `IX`, `U`
+    // and `X`. Written out as twenty-five literal expectations rather than
+    // looped over `Compatible`, so that a change to the function cannot
+    // also change what the cell believes.
     constexpr LockMode kIS = LockMode::kIntentionShared;
     constexpr LockMode kIX = LockMode::kIntentionExclusive;
     constexpr LockMode kS = LockMode::kShared;
+    constexpr LockMode kU = LockMode::kUpdate;
     constexpr LockMode kX = LockMode::kExclusive;
 
     EXPECT_TRUE(Compatible(kIS, kIS));
     EXPECT_TRUE(Compatible(kIS, kIX));
     EXPECT_TRUE(Compatible(kIS, kS));
+    EXPECT_TRUE(Compatible(kIS, kU));
     EXPECT_FALSE(Compatible(kIS, kX));
 
     EXPECT_TRUE(Compatible(kIX, kIS));
     EXPECT_TRUE(Compatible(kIX, kIX));
     EXPECT_FALSE(Compatible(kIX, kS));
+    EXPECT_FALSE(Compatible(kIX, kU));
     EXPECT_FALSE(Compatible(kIX, kX));
 
     EXPECT_TRUE(Compatible(kS, kIS));
     EXPECT_FALSE(Compatible(kS, kIX));
     EXPECT_TRUE(Compatible(kS, kS));
+    EXPECT_TRUE(Compatible(kS, kU)) << "a key share admits a version claim: the cell U exists for";
     EXPECT_FALSE(Compatible(kS, kX));
+
+    EXPECT_TRUE(Compatible(kU, kIS));
+    EXPECT_FALSE(Compatible(kU, kIX));
+    EXPECT_TRUE(Compatible(kU, kS));
+    EXPECT_FALSE(Compatible(kU, kU)) << "two version writers of one row serialise, as two X did";
+    EXPECT_FALSE(Compatible(kU, kX));
 
     EXPECT_FALSE(Compatible(kX, kIS));
     EXPECT_FALSE(Compatible(kX, kIX));
     EXPECT_FALSE(Compatible(kX, kS));
+    EXPECT_FALSE(Compatible(kX, kU));
     EXPECT_FALSE(Compatible(kX, kX));
 
     // Symmetric, which is a property of the relation and not of the table's
     // walk order: the table tests a held mode against a wanted one and
     // would answer differently per arrival order if this failed.
-    for (LockMode a : {kIS, kIX, kS, kX}) {
-        for (LockMode b : {kIS, kIX, kS, kX}) {
+    for (LockMode a : {kIS, kIX, kS, kU, kX}) {
+        for (LockMode b : {kIS, kIX, kS, kU, kX}) {
             EXPECT_EQ(Compatible(a, b), Compatible(b, a))
                 << LockModeName(a) << " vs " << LockModeName(b);
         }
     }
+    EXPECT_STREQ(LockModeName(kU), "U");
 }
 
 TEST(LockTableTest, EveryConflictingModePairIsRefusedOnOneUnit) {
@@ -94,7 +108,7 @@ TEST(LockTableTest, EveryConflictingModePairIsRefusedOnOneUnit) {
     // tuple. The compatible pairs are both granted and the conflicting ones
     // name the holder.
     constexpr LockMode kModes[] = {LockMode::kIntentionShared, LockMode::kIntentionExclusive,
-                                   LockMode::kShared, LockMode::kExclusive};
+                                   LockMode::kShared, LockMode::kUpdate, LockMode::kExclusive};
     for (LockMode held : kModes) {
         for (LockMode want : kModes) {
             auto table = MakeTable();
@@ -152,20 +166,83 @@ TEST(LockTableTest, ARepeatAcquireOfACoveredModeAddsNoEntryAndSpendsNoCap) {
     EXPECT_EQ(h.size(), 1u);
 
     for (LockMode weaker : {LockMode::kIntentionShared, LockMode::kIntentionExclusive,
-                            LockMode::kShared, LockMode::kExclusive}) {
+                            LockMode::kShared, LockMode::kUpdate, LockMode::kExclusive}) {
         auto again = table->Acquire(1, key, weaker, h);
         ASSERT_TRUE(again.ok());
         EXPECT_TRUE(again.value().granted);
         EXPECT_TRUE(again.value().already_held) << "X covers " << LockModeName(weaker);
     }
-    EXPECT_EQ(h.size(), 1u) << "no entry was added by any of the four";
+    EXPECT_EQ(h.size(), 1u) << "no entry was added by any of the five";
     EXPECT_EQ(table->EntryCount(), 1u);
 
-    // `S` does not cover `IX` and `IX` does not cover `S`, because v1 has no
-    // `SIX` (E1). A transaction needing both holds both entries, which is
+    // `S` does not cover `IX` and `IX` does not cover `S`, because there is
+    // no `SIX` (E1). A transaction needing both holds both entries, which is
     // the honest accounting rather than a silent upgrade.
     EXPECT_FALSE(Covers(LockMode::kShared, LockMode::kIntentionExclusive));
     EXPECT_FALSE(Covers(LockMode::kIntentionExclusive, LockMode::kShared));
+}
+
+TEST(LockTableTest, AVersionClaimCoversAShareAndIsCoveredByExclusive) {
+    // CP-S2b: `U` is a version claim - at least a key share - so it covers
+    // `S`, `IS` and itself and `X` covers it; `S` does not cover it, and it
+    // covers neither `IX` nor `X` (the honest accounting, no silent upgrade).
+    EXPECT_TRUE(Covers(LockMode::kUpdate, LockMode::kIntentionShared));
+    EXPECT_TRUE(Covers(LockMode::kUpdate, LockMode::kShared));
+    EXPECT_TRUE(Covers(LockMode::kUpdate, LockMode::kUpdate));
+    EXPECT_TRUE(Covers(LockMode::kExclusive, LockMode::kUpdate));
+    EXPECT_FALSE(Covers(LockMode::kShared, LockMode::kUpdate));
+    EXPECT_FALSE(Covers(LockMode::kUpdate, LockMode::kIntentionExclusive));
+    EXPECT_FALSE(Covers(LockMode::kUpdate, LockMode::kExclusive));
+
+    // As behaviour: a holder of `U` re-asking `S` adds no entry - the
+    // transaction that updated a parent row references it for free.
+    auto table = MakeTable();
+    LockHoldings h;
+    const LockKey key = LockKey::Tuple(kRel, 7);
+    ASSERT_TRUE(table->Acquire(1, key, LockMode::kUpdate, h).value().granted);
+    auto share = table->Acquire(1, key, LockMode::kShared, h);
+    ASSERT_TRUE(share.ok());
+    EXPECT_TRUE(share.value().granted);
+    EXPECT_TRUE(share.value().already_held) << "U covers S";
+    EXPECT_EQ(h.size(), 1u);
+}
+
+TEST(LockTableTest, AShareThenAVersionClaimThenAnExistenceClaimAreThreeEntries) {
+    // A child writer holds `S(P)` from its forward check, then updates P,
+    // then deletes it: `S`, `U`, `X` by one transaction on one row are three
+    // records, each granted and none covered (CP-S2b; the order's §8.3 B) -
+    // one cap slot more than before `U`, when the `DELETE`'s re-ask was
+    // covered by the `UPDATE`'s `X`. Releasing the `U` alone leaves the `S`
+    // and the `X`: a release matches by mode.
+    auto table = MakeTable();
+    LockHoldings h;
+    const LockKey key = LockKey::Tuple(kRel, 7);
+    auto s = table->Acquire(1, key, LockMode::kShared, h);
+    ASSERT_TRUE(s.ok());
+    ASSERT_TRUE(s.value().granted);
+    auto u = table->Acquire(1, key, LockMode::kUpdate, h);
+    ASSERT_TRUE(u.ok());
+    ASSERT_TRUE(u.value().granted);
+    EXPECT_FALSE(u.value().already_held) << "S does not cover U";
+    auto x = table->Acquire(1, key, LockMode::kExclusive, h);
+    ASSERT_TRUE(x.ok());
+    ASSERT_TRUE(x.value().granted);
+    EXPECT_FALSE(x.value().already_held) << "U does not cover X";
+    EXPECT_EQ(h.size(), 3u);
+
+    table->ReleaseOne(1, key, LockMode::kUpdate, h);
+    EXPECT_EQ(h.size(), 2u);
+    LockHoldings other;
+    auto foreign = table->TryAcquire(2, key, LockMode::kShared, other);
+    ASSERT_TRUE(foreign.ok());
+    EXPECT_FALSE(foreign.value()) << "releasing the U dropped the X";
+    table->ReleaseOne(1, key, LockMode::kExclusive, h);
+    EXPECT_EQ(h.size(), 1u);
+    auto foreign_x = table->TryAcquire(2, key, LockMode::kExclusive, other);
+    ASSERT_TRUE(foreign_x.ok());
+    EXPECT_FALSE(foreign_x.value()) << "releasing the U and the X dropped the S";
+    table->Release(1, h);
+    EXPECT_EQ(table->EntryCount(), 0u);
 }
 
 // CI-S1 (§3.5 A3): a writer's first relation `IX` is its first *covering*
@@ -1088,6 +1165,120 @@ TEST(LockTableTest, AFencesModeDecidesWhichDescendantsItAdmits) {
     EXPECT_FALSE(write_inside.value());
 }
 
+TEST(LockTableTest, AVersionClaimFenceAdmitsAShareAndRefusesAWriterInsideIt) {
+    // CP-S2b's fence rule: an interval unit in any non-intention mode is a
+    // fence. A range `U` - an `UPDATE`'s declared window - raises the
+    // counter, admits a foreign key's tuple `S` inside it, refuses a tuple
+    // `U` or `X` inside it naming the fence, and refuses an overlapping
+    // window in `U` or `X`; and from the other side, a window asked over a
+    // standing tuple `S` is granted and over a standing tuple `U` refused.
+    // Before CP-S2b a range `U` raised no counter and was invisible to
+    // every tuple probe, so a point write inside an `UPDATE`'s window would
+    // have proceeded and the bulk statement been refused mid-walk.
+    auto table = MakeTable();
+    LockHoldings window;
+    ASSERT_TRUE(table->Acquire(1, LockKey::Range(kRel, 10, 20), LockMode::kUpdate, window)
+                    .value()
+                    .granted);
+    EXPECT_EQ(table->RelationFenceCount(kRel), 1u) << "a range U is a fence";
+
+    LockHoldings share;
+    auto s = table->TryAcquire(2, LockKey::Tuple(kRel, 15), LockMode::kShared, share);
+    ASSERT_TRUE(s.ok());
+    EXPECT_TRUE(s.value()) << "a key share under an UPDATE's window must be admitted";
+
+    LockHoldings point;
+    std::uint64_t blocker = 0;
+    LockWake wake;
+    auto u = table->TryAcquire(3, LockKey::Tuple(kRel, 15), LockMode::kUpdate, point, &blocker,
+                               &wake);
+    ASSERT_TRUE(u.ok());
+    EXPECT_FALSE(u.value()) << "a point UPDATE inside an UPDATE's window must wait";
+    EXPECT_EQ(blocker, 1u);
+    EXPECT_EQ(wake.key, LockKey::Range(kRel, 10, 20)) << "registered on the fence's entry";
+    LockHoldings deleter;
+    auto x = table->TryAcquire(4, LockKey::Tuple(kRel, 15), LockMode::kExclusive, deleter);
+    ASSERT_TRUE(x.ok());
+    EXPECT_FALSE(x.value()) << "a point DELETE inside an UPDATE's window must wait";
+    auto outside = table->TryAcquire(3, LockKey::Tuple(kRel, 25), LockMode::kUpdate, point);
+    ASSERT_TRUE(outside.ok());
+    EXPECT_TRUE(outside.value()) << "outside the window nothing stands";
+
+    LockHoldings second;
+    auto overlap = table->TryAcquire(5, LockKey::Range(kRel, 12, 18), LockMode::kUpdate, second);
+    ASSERT_TRUE(overlap.ok());
+    EXPECT_FALSE(overlap.value()) << "two UPDATE windows overlapping must wait";
+    auto erase = table->TryAcquire(5, LockKey::Range(kRel, 12, 18), LockMode::kExclusive, second);
+    ASSERT_TRUE(erase.ok());
+    EXPECT_FALSE(erase.value()) << "a DELETE window over an UPDATE window must wait";
+    EXPECT_EQ(table->RelationFenceCount(kRel), 1u) << "a refused window raised the counter";
+    // A range `S` over the window is admitted - `S`/`U` is compatible at a
+    // distance as it is in place - and is the second fence.
+    LockHoldings share_window;
+    auto s_over = table->TryAcquire(6, LockKey::Range(kRel, 12, 18), LockMode::kShared, share_window);
+    ASSERT_TRUE(s_over.ok());
+    EXPECT_TRUE(s_over.value()) << "an S window over an UPDATE window must be admitted";
+    EXPECT_EQ(table->RelationFenceCount(kRel), 2u);
+
+    table->Release(1, window);
+    table->Release(6, share_window);
+    EXPECT_EQ(table->RelationFenceCount(kRel), 0u) << "lowered through the same predicate";
+
+    // The other order: the share stands first, then the window.
+    auto table2 = MakeTable();
+    LockHoldings share2;
+    ASSERT_TRUE(
+        table2->Acquire(2, LockKey::Tuple(kRel, 15), LockMode::kShared, share2).value().granted);
+    LockHoldings window2;
+    auto over_share = table2->TryAcquire(1, LockKey::Range(kRel, 10, 20), LockMode::kUpdate, window2);
+    ASSERT_TRUE(over_share.ok());
+    EXPECT_TRUE(over_share.value()) << "a bulk UPDATE's window must pass open child writers' shares";
+    LockHoldings point2;
+    ASSERT_TRUE(
+        table2->Acquire(3, LockKey::Tuple(kRel, 40), LockMode::kUpdate, point2).value().granted);
+    LockHoldings window3;
+    auto over_point = table2->TryAcquire(4, LockKey::Range(kRel, 30, 50), LockMode::kUpdate, window3);
+    ASSERT_TRUE(over_point.ok());
+    EXPECT_FALSE(over_point.value()) << "a window over an open point UPDATE must wait";
+}
+
+TEST(LockTableTest, AProbeInUpdateModeIsAdmittedByAShareAndRefusedByAWriter) {
+    // The reverse check's probe (CP-S2b, item 2): asked in `U` on a child
+    // row, it is admitted by a grandchild writer's `S` on that row - a
+    // holder that is not writing it - and given back by mode, leaving the
+    // `S`; and it is refused by the row's own writer in `U` or `X`, with a
+    // wake on the row. In `S` the probe would be admitted by a child
+    // `UPDATE`'s `U` and the parent `DELETE` would re-run on a pre-flipped
+    // slot until the net refused it.
+    auto table = MakeTable();
+    LockHoldings grandchild;
+    const LockKey row = LockKey::Tuple(kRel, 5);
+    ASSERT_TRUE(table->Acquire(1, row, LockMode::kShared, grandchild).value().granted);
+
+    LockHoldings prober;
+    auto probe = table->TryAcquire(2, row, LockMode::kUpdate, prober);
+    ASSERT_TRUE(probe.ok());
+    EXPECT_TRUE(probe.value()) << "a share admits the probe";
+    table->ReleaseOne(2, row, LockMode::kUpdate, prober);
+    EXPECT_EQ(prober.size(), 0u);
+    EXPECT_EQ(table->EntryCount(), 1u);
+    LockHoldings stranger;
+    auto over_share = table->TryAcquire(9, row, LockMode::kExclusive, stranger);
+    ASSERT_TRUE(over_share.ok());
+    EXPECT_FALSE(over_share.value()) << "the give-back dropped the share";
+
+    LockHoldings writer;
+    ASSERT_TRUE(table->Acquire(3, row, LockMode::kUpdate, writer).value().granted);
+    std::uint64_t blocker = 0;
+    LockWake wake;
+    auto refused = table->TryAcquire(2, row, LockMode::kUpdate, prober, &blocker, &wake);
+    ASSERT_TRUE(refused.ok());
+    EXPECT_FALSE(refused.value()) << "the row's writer in U must refuse the probe";
+    EXPECT_EQ(blocker, 3u);
+    EXPECT_NE(wake.slot, nullptr);
+    EXPECT_EQ(table->WaiterCount(row), 1u);
+}
+
 TEST(LockTableTest, TwoOverlappingFencesMeetEachOther) {
     // The review finding against this stage's first draft. The scan looked
     // at tuple units only, so two ranges over one relation conflicted only
@@ -1350,63 +1541,72 @@ TEST(LockTableTest, TwoOverlappingAsksThatBothPublishFirstAreBothRefusedAndBothW
     // the other's slot - neither waits for the fault net - and the two
     // edges the dispatcher draws close a cycle, so a waiter that holds
     // anything is a deadlock victim rather than a wait (AO-R7).
-    auto table = MakeTable(/*cores=*/2);
-    std::mutex mu;
-    std::condition_variable cv;
-    int arrived[2] = {0, 0};
-    table->SetVerifyHookForTest([&](std::uint64_t, LockTable::VerifyPoint point) {
-        const int at = point == LockTable::VerifyPoint::kPublished ? 0 : 1;
-        std::unique_lock<std::mutex> lock(mu);
-        ++arrived[at];
-        cv.notify_all();
-        // Bounded, so an ask that stops reaching a point fails the cell
-        // rather than hanging the suite.
-        EXPECT_TRUE(cv.wait_for(lock, std::chrono::seconds(5), [&] { return arrived[at] >= 2; }))
-            << "the other ask never reached the same point";
-    });
+    //
+    // Run twice since CP-S2b: with both fences in `X`, and with both in `U`
+    // - an `UPDATE`'s window is a fence now, and the argument names no mode.
+    const auto pair_in = [&](LockMode mode) {
+        SCOPED_TRACE(std::string("both fences in ") + LockModeName(mode));
+        auto table = MakeTable(/*cores=*/2);
+        std::mutex mu;
+        std::condition_variable cv;
+        int arrived[2] = {0, 0};
+        table->SetVerifyHookForTest([&](std::uint64_t, LockTable::VerifyPoint point) {
+            const int at = point == LockTable::VerifyPoint::kPublished ? 0 : 1;
+            std::unique_lock<std::mutex> lock(mu);
+            ++arrived[at];
+            cv.notify_all();
+            // Bounded, so an ask that stops reaching a point fails the cell
+            // rather than hanging the suite.
+            EXPECT_TRUE(
+                cv.wait_for(lock, std::chrono::seconds(5), [&] { return arrived[at] >= 2; }))
+                << "the other ask never reached the same point";
+        });
 
-    struct Ask {
-        std::uint64_t txn;
-        LockKey key;
-        LockHoldings holdings;
-        std::uint64_t blocker = 0;
-        LockWake wake;
-        bool granted = true;
+        struct Ask {
+            std::uint64_t txn;
+            LockKey key;
+            LockHoldings holdings;
+            std::uint64_t blocker = 0;
+            LockWake wake;
+            bool granted = true;
+        };
+        Ask a{1, LockKey::Range(kRel, 100, 200)};
+        Ask b{2, LockKey::Range(kRel, 150, 250)};
+        auto run = [&](Ask& ask) {
+            auto r = table->TryAcquire(ask.txn, ask.key, mode, ask.holdings, &ask.blocker,
+                                       &ask.wake);
+            ASSERT_TRUE(r.ok()) << r.status().message();
+            ask.granted = r.value();
+        };
+        std::thread ta([&] { run(a); });
+        std::thread tb([&] { run(b); });
+        ta.join();
+        tb.join();
+        table->SetVerifyHookForTest(nullptr);
+
+        ASSERT_FALSE(a.granted);
+        ASSERT_FALSE(b.granted) << "both scans ran after both publications, so both must refuse";
+        EXPECT_EQ(a.blocker, 2u);
+        EXPECT_EQ(b.blocker, 1u);
+        ASSERT_NE(a.wake.slot, nullptr);
+        ASSERT_NE(b.wake.slot, nullptr);
+        EXPECT_TRUE(a.wake.key == b.key) << "a registered somewhere other than b's fence";
+        EXPECT_TRUE(b.wake.key == a.key);
+        EXPECT_TRUE(LockWaitReady(a.wake.slot)) << "b's unwind did not wake a";
+        EXPECT_TRUE(LockWaitReady(b.wake.slot)) << "a's unwind did not wake b";
+
+        // The edges the two waits draw: the second closes the cycle.
+        EXPECT_FALSE(table->NoteWaitFor(a.txn, a.blocker));
+        EXPECT_TRUE(table->NoteWaitFor(b.txn, b.blocker)) << "the mutual refusal is not a cycle";
+        table->ClearWaitFor(a.txn);
+
+        table->DropWake(a.wake.key, a.wake.slot);
+        table->DropWake(b.wake.key, b.wake.slot);
+        EXPECT_EQ(table->EntryCount(), 0u);
+        EXPECT_EQ(table->RelationFenceCount(kRel), 0u);
     };
-    Ask a{1, LockKey::Range(kRel, 100, 200)};
-    Ask b{2, LockKey::Range(kRel, 150, 250)};
-    auto run = [&](Ask& ask) {
-        auto r = table->TryAcquire(ask.txn, ask.key, LockMode::kExclusive, ask.holdings,
-                                   &ask.blocker, &ask.wake);
-        ASSERT_TRUE(r.ok()) << r.status().message();
-        ask.granted = r.value();
-    };
-    std::thread ta([&] { run(a); });
-    std::thread tb([&] { run(b); });
-    ta.join();
-    tb.join();
-    table->SetVerifyHookForTest(nullptr);
-
-    ASSERT_FALSE(a.granted);
-    ASSERT_FALSE(b.granted) << "both scans ran after both publications, so both must refuse";
-    EXPECT_EQ(a.blocker, 2u);
-    EXPECT_EQ(b.blocker, 1u);
-    ASSERT_NE(a.wake.slot, nullptr);
-    ASSERT_NE(b.wake.slot, nullptr);
-    EXPECT_TRUE(a.wake.key == b.key) << "a registered somewhere other than b's fence";
-    EXPECT_TRUE(b.wake.key == a.key);
-    EXPECT_TRUE(LockWaitReady(a.wake.slot)) << "b's unwind did not wake a";
-    EXPECT_TRUE(LockWaitReady(b.wake.slot)) << "a's unwind did not wake b";
-
-    // The edges the two waits draw: the second closes the cycle.
-    EXPECT_FALSE(table->NoteWaitFor(a.txn, a.blocker));
-    EXPECT_TRUE(table->NoteWaitFor(b.txn, b.blocker)) << "the mutual refusal is not a cycle";
-    table->ClearWaitFor(a.txn);
-
-    table->DropWake(a.wake.key, a.wake.slot);
-    table->DropWake(b.wake.key, b.wake.slot);
-    EXPECT_EQ(table->EntryCount(), 0u);
-    EXPECT_EQ(table->RelationFenceCount(kRel), 0u);
+    pair_in(LockMode::kExclusive);
+    pair_in(LockMode::kUpdate);
 }
 
 // ---- The wait-for graph, without a dispatcher ----------------------------

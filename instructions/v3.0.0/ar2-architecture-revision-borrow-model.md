@@ -170,9 +170,10 @@ in the lock family. Standard compatibility: `IS` conflicts only with `X`;
 **Fence.** A borrow taken not to mutate the unit but to keep another
 transaction from mutating it: a gap lock is an `S` or `X` fence on a
 slice; D9(a)'s shared lock on a parent row is an `S` fence on a tuple.
-**Amended 2026-11-08 (CP-Q3 (a), `raft-marks-2026-11-08.md` §1): on a
-range - the slice unit is deleted at CP-S2a, and the range is the one
-interval unit** (`U`'s part of this definition is CP-S2b's).
+**Amended 2026-11-08 (CP-Q3 (a) and CP-Q2 (a), `raft-marks-2026-11-08.md`
+§1): a gap lock is an `S`, `U` or `X` fence on a range - the slice unit is
+deleted at CP-S2a and the range is the one interval unit; and since CP-S2b
+an interval unit in any non-intention mode is a fence, `U` included.**
 
 **Two borrow-like things already in the tree, named so they are not
 rebuilt** `[source-read]`: the reader lease (`docs/spec/txn.md:296-309`;
@@ -193,7 +194,7 @@ refill), and AR2 renames neither.
 |---|---|---|---|---|---|
 | `INSERT`, pk issued by the engine | the range's **id block**, plus `IX` on the relation | `X` on the block (implicit: one core holds it) | lock (implicit) + latch on the tail page | block: the lease; tail page: critical section | `AllocateRowIdRange`; `heap-and-tuple.md:180` "row-id leases work on every relation"; R5 |
 | `INSERT`, pk **named** — at or above the mark, or below it on a btree relation | the row above's units, or the leaf page and the new tuple; **and the relation's `sys.tables` row**, a core 0 catalog page | `X` on the tuple, `IX` on the relation; the catalog write is core 0's | lock + latch | transaction; critical section | ships to core 0 as today (`heap-and-tuple.md:182` "a peer core refuses a named key, per row"); R5's third paragraph |
-| `UPDATE`, `DELETE` | the **tuple**, `IX` on the relation; the page for the write | `X` | lock + latch | transaction; critical section | M2's row lock: the Keystone lock byte is its fast path and D2(a)'s table its wait path (R2's second paragraph; `docs/spec/txn.md:401-402`, `include/kds/storage/heap/heap_page.hpp:127-128`, AR0-V4) |
+| `UPDATE`, `DELETE` | the **tuple**, `IX` on the relation; the page for the write | `X`; **since CP-S2b `U` for `UPDATE`** (CP-Q2 (a), the version claim) | lock + latch | transaction; critical section | M2's row lock: the Keystone lock byte is its fast path and D2(a)'s table its wait path (R2's second paragraph; `docs/spec/txn.md:401-402`, `include/kds/storage/heap/heap_page.hpp:127-128`, AR0-V4) |
 | `SELECT` under SI (D1(b)) | none for visibility; `IS` on the **slice** the statement is positioned in — the page's `[min_key, next.min_key)` on a page, the range between pages — with `IS` on the range and the relation by the intention rule | `IS` | lock | the statement | AN's snapshot LSN decides what is visible; the `IS` exists so a move (R13) waits for a positioned reader at the unit it moves — §5.4, **E12, ratified at R14's unit (AR2-A)**. **Amended 2026-11-08 (CP-Q3 (a), `raft-marks-2026-11-08.md` §1): the slice `IS` is deleted at CP-S2a - a read declares the relation at its bind and nothing finer, no mover existing to wait on a position (`txn.md` §5)** |
 | assertion check (D8) | the **slice** of the group key | `S` while checking, `X` when the writer changes the group's state | lock + latch on the Bound Cabin page | transaction | D8; §5.2 |
 | FK forward check, child insert (D9(a)) | the parent **tuple** | `S` fence | lock | the child transaction | D9(a); §5.3 |
@@ -625,7 +626,7 @@ added at AR2-A's request.
 
 | # | item | class | CLA proposal |
 |---|---|---|---|
-| E1 | Lock mode set | **ratified (AR2-A)**. **Amended 2026-11-08 (CP-Q2 (a), `raft-marks-2026-11-08.md` §1):** the update mode `U` is added - a version claim an `UPDATE` takes on its row and its declared window, admitting a foreign key's `S` and refusing `U` and `X`; `DELETE` and every `INSERT` keep `X` (`instructions/v3.2.0/workorder-cp-lock-model-exploration.md` §8.3). To be built at CP-S2b, gated by CP-Q10's mark (the order's §8.10; CP-Q10 (b) re-marks CP-Q2 (c) and withdraws this amendment); the ratified text stands to its right as it stood | `IS`, `IX`, `S`, `X` only; no `SIX`, no update mode in v1 |
+| E1 | Lock mode set | **ratified (AR2-A)**. **Amended 2026-11-08 (CP-Q2 (a), `raft-marks-2026-11-08.md` §1):** the update mode `U` is added - a version claim an `UPDATE` takes on its row and its declared window, admitting a foreign key's `S` and refusing `U` and `X`; `DELETE` and every `INSERT` keep `X` (`instructions/v3.2.0/workorder-cp-lock-model-exploration.md` §8.3). Built at CP-S2b on CP-Q10 (a) (`raft-marks-2026-11-08.md` §3); the ratified text stands to its right as it stood | `IS`, `IX`, `S`, `X` only; no `SIX`, no update mode in v1 |
 | E2 | Per-transaction borrow cap, `max_locks_per_txn`: its value and its refusal code | constant; user-visible — deferred to M2 (AR2-A) | 65,536; `ResourceExhausted`, non-retryable, never escalate (R4) — the one refusal the model keeps, because a cap cannot be waited out |
 | E3 | FK reverse check with no covering Bound structure | quiet-wrong — deferred to M3 (AR2-A). **Retires once the two-core cells pass** (operator, 2026-09-28, D8 ratified as revised - `raft-marks-2026-09-28.md` §5): the FK's write skew is closed from the parent row by D9(a)'s held `S`, so no child-side fence is needed. **The cells are D9(a)'s own** (operator, 2026-09-29, `raft-marks-2026-09-29.md` §4): a parent `DELETE` on one core against a child write on another, on the two-core rig. **Retired 2026-09-30 at AY-S5** (`workorder-ay-following-letter.md` §6): D9(a) built, and its two-core cells in `fk_cross_core_rig_test.cpp` pass - E3 (i)-(v) and AY-Q8's two | child **relation** `S` fence as the coarse arm; slice fence once AR1's supporting Cabin covers the column (R7, §5.1) |
 | E4 | Slice key | **ratified (AR2-A)**. **Amended 2026-11-08 (CP-Q11 (a), `raft-marks-2026-11-08.md` §3):** re-read as the **range** unit's - the slice unit is deleted at CP-S2a (CP-Q3 (a)) and the key-space rule stands of the range unit, which `LockKey` keys the same way (`include/kds/txn/lock_table.hpp`; `tests/lock_table_test.cpp`, `ARangeIsFoundAfterThePageItCameFromChangesItsBounds`) | `(rel_oid, [lo, hi))`, page as hint only (R6) |

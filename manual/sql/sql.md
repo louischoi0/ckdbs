@@ -299,9 +299,11 @@ CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts, amount int6
 - v1 is RESTRICT-only and fail-fast. INSERT/UPDATE of an fk column checks the
   parent exists; DELETE of a parent checks for live children and stops at the
   first one. Violations answer `ERR FK_VIOLATION retryable=0 ...`.
-- **A parent being written is waited for, not refused**: the check holds the
-  statement until that transaction commits or rolls back and then runs it
-  again, wherever in the instance the writer is. A `DELETE` that meets a
+- **A parent being inserted or deleted is waited for, not refused**: the
+  check holds the statement until that transaction commits or rolls back
+  and then runs it again, wherever in the instance the writer is. A parent
+  being updated is read as present, since an update keeps the row and its
+  key. A `DELETE` that meets a
   child row being written still answers `ERR TXN_CONFLICT retryable=1 ...`,
   and so does a wait that runs out of time.
 - `SHOW FKEYS` lists declarations. CASCADE / SET NULL do not exist (FK-M6,

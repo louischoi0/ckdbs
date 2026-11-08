@@ -53,6 +53,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/server/session.hpp"
+#include "kds/storage/keystone.hpp"
 #include "view_text.hpp"
 
 namespace kds::server {
@@ -214,8 +215,17 @@ struct FkRig {
         parent_oid = parent_rel.value();
         auto child = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "c");
         if (!child.ok()) return child.status();
+        child_oid = child.value();
         if (Status s = rig->store().Flush(); !s.ok()) return s;
         return Status::OK();
+    }
+
+    // The oid of a relation a cell seeded beyond `p` and `c`, read from
+    // core 0's catalog (every core reads one catalog since AT-S5).
+    catalog::Oid OidOf(const char* name) const {
+        auto oid = rig->core(0).catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, name);
+        EXPECT_TRUE(oid.ok()) << name << ": " << oid.status().message();
+        return oid.ok() ? oid.value() : 0;
     }
 
     // The parent's writer on core 0 and the child's on core 1.
@@ -238,6 +248,7 @@ struct FkRig {
     ParentWriter parent;
     ChildWriter child;
     catalog::Oid parent_oid = 0;
+    catalog::Oid child_oid = 0;
     OneShot one;
     std::unique_ptr<TwoCoreRig> rig;
 };
@@ -399,9 +410,13 @@ struct ScriptRig {
     // rather than finished: what "parks on the parent row" means below.
     bool ParkedOn(std::uint32_t core, Script& script, std::size_t n, catalog::Oid rel,
                   std::uint64_t tuple_key) {
+        return ParkedOnUnit(core, script, n, txn::LockKey::Tuple(rel, tuple_key));
+    }
+    // The same for any unit - a bulk write's range, whose entry is what a
+    // wait refused by its fence registers on (AY-S2's containment wake).
+    bool ParkedOnUnit(std::uint32_t core, Script& script, std::size_t n, const txn::LockKey& unit) {
         script.Allow(n);
-        const txn::LockKey row = txn::LockKey::Tuple(rel, tuple_key);
-        auto waiting = [&] { return r.rig->locks().WaiterCount(row) >= 1; };
+        auto waiting = [&] { return r.rig->locks().WaiterCount(unit) >= 1; };
         KickUntil(*r.rig, core, [&] { return script.Done(n) || waiting(); }, 4000ms);
         return !script.Done(n) && waiting();
     }
@@ -464,11 +479,17 @@ TEST(FkCrossCoreRigTest, ARangeDeleteOfParentsParksOnAChildsOpenReference) {
     EXPECT_EQ(f.r.rig->core(0).dispatcher().Dispatch("SELECT id FROM p").response, "id\\n7\\n8");
 }
 
-// E3 (v), and AY-Q1's cost. Two transactions each write a child of 7 and
-// then update 7: each holds `S(7)` and asks `X(7)` over the other's, and
-// the second asker closes the cycle and is refused naming deadlock. Without
-// the `S` the two updates serialise on the row's `X`.
-TEST(FkCrossCoreRigTest, TwoChildWritersThatThenUpdateTheirParentDeadlock) {
+// E3 (v), and AY-Q1's cost as the `U` mode leaves it (CP-S2b, CP-Q2 (a);
+// `txn.md` §5). Two transactions each write a child of 7 and then update 7:
+// each holds `S(7)`, and an `UPDATE` asks `U(7)`, which a key share admits -
+// a version claim changes neither the row's existence nor its key, which is
+// all the share protects. So core 0's `UPDATE` is granted over core 1's `S`
+// at once, core 1's `U` is refused by core 0's `U` and parks on one edge,
+// and no cycle closes. **Until CP-S2b both asked `X(7)`, the second closed
+// a cycle and was refused naming deadlock** (the conversion deadlock
+// `foreign-keys.md` §2c carried); CP-Q7 (a) accepts the change as a refusal
+// that became a wait. The `DELETE` sibling below keeps the deadlock.
+TEST(FkCrossCoreRigTest, TwoChildWritersThatThenUpdateTheirParentSerialise) {
     ScriptRig f(
         {"BEGIN", "INSERT INTO c VALUES (7)", "UPDATE p SET v = 1 WHERE id = 7", "ROLLBACK"},
         {"BEGIN", "INSERT INTO c VALUES (7)", "UPDATE p SET v = 2 WHERE id = 7", "ROLLBACK"});
@@ -476,8 +497,45 @@ TEST(FkCrossCoreRigTest, TwoChildWritersThatThenUpdateTheirParentDeadlock) {
     ASSERT_TRUE(f.RunTo(0, f.core0, 2)) << f.core0.Reply(1);
     ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
 
+    ASSERT_TRUE(f.RunTo(0, f.core0, 3)) << f.core0.Reply(2);
+    EXPECT_EQ(f.core0.Reply(2), "UPDATED 1")
+        << "a parent UPDATE was held up by another transaction's open child";
+    EXPECT_EQ(f.r.rig->locks().WaiterCount(f.r.parent_row()), 0u)
+        << "the granted UPDATE left a registration on the parent row";
+
+    EXPECT_TRUE(f.ParkedOn(1, f.core1, 3, f.r.parent_oid, 7))
+        << "the second UPDATE was answered over the first's open version claim: "
+        << f.core1.Reply(2);
+    EXPECT_EQ(f.core1.Reply(2).find("deadlock"), std::string::npos) << f.core1.Reply(2);
+
+    // Core 0's rollback releases its `U`, and the parked update proceeds -
+    // over the version the rollback restored.
+    ASSERT_TRUE(f.RunTo(0, f.core0, 4)) << f.core0.Reply(3);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 1, [&] { return f.core1.Done(3); }, 4000ms));
+    EXPECT_EQ(f.core1.Reply(2), "UPDATED 1");
+    for (const Script* s : {&f.core0, &f.core1}) {
+        for (const DispatchOutcome& out : s->outs) {
+            EXPECT_EQ(out.response.find("deadlock"), std::string::npos) << out.response;
+        }
+    }
+    ASSERT_TRUE(f.RunTo(1, f.core1, 4)) << f.core1.Reply(3);
+}
+
+// The `X` family keeps the conversion deadlock: a `DELETE` is an existence
+// claim and asks `X(7)`, which the other transaction's `S(7)` refuses, so
+// two child writers that each then delete their parent still close a cycle
+// and the second asker is the victim. The survivor's re-run then meets its
+// own child of 7 and is refused `FK_VIOLATION` - two refusals, as before
+// CP-S2b (§8.3 F.1).
+TEST(FkCrossCoreRigTest, TwoChildWritersThatThenDeleteTheirParentDeadlock) {
+    ScriptRig f({"BEGIN", "INSERT INTO c VALUES (7)", "DELETE FROM p WHERE id = 7", "ROLLBACK"},
+                {"BEGIN", "INSERT INTO c VALUES (7)", "DELETE FROM p WHERE id = 7", "ROLLBACK"});
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(0, f.core0, 2)) << f.core0.Reply(1);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+
     EXPECT_TRUE(f.ParkedOn(0, f.core0, 3, f.r.parent_oid, 7))
-        << "a parent UPDATE ran past another transaction's open child: " << f.core0.Reply(2);
+        << "a parent DELETE ran past another transaction's open child: " << f.core0.Reply(2);
     // The waiter count moves inside the ask and the wait-for edge is drawn
     // just after it, with no suspension between; asked in that gap, core 1
     // would find no cycle yet and core 0 would close it instead.
@@ -486,8 +544,140 @@ TEST(FkCrossCoreRigTest, TwoChildWritersThatThenUpdateTheirParentDeadlock) {
     ASSERT_TRUE(f.RunTo(1, f.core1, 3));
     EXPECT_NE(f.core1.Reply(2).find("deadlock"), std::string::npos) << f.core1.Reply(2);
 
-    // The victim's rollback releases its `S`, and the first update proceeds.
+    // The victim's rollback releases its `S`; the survivor's `X` is granted
+    // and its reverse check finds the child it wrote itself.
     ASSERT_TRUE(f.RunTo(1, f.core1, 4)) << f.core1.Reply(3);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(3); }, 4000ms));
+    EXPECT_NE(f.core0.Reply(2).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(2);
+    ASSERT_TRUE(f.RunTo(0, f.core0, 4)) << f.core0.Reply(3);
+}
+
+// A child `INSERT` under a parent `UPDATE` in flight (CP-S2b §8.3 C.1). The
+// child's `S(7)` is admitted by the updater's `U(7)`, and its descent reads
+// the parent's head busy - an overwrite over a live predecessor, not
+// delete-marked - which the hoist holds as present: whichever way the
+// updater decides, a live version of key 7 stands, and no `DELETE` of 7 is
+// granted while the `S` is held. **The `BEGIN` is load-bearing**: an
+// autocommit `INSERT` releases its `S` at its end, and the `DELETE` that
+// then asks `X(7)` is refused by that `S`, not by the updater's own `U`.
+// Until CP-S2b the `S` was refused by the updater's `X` and the child waited
+// (a wait removed, §8.3 E).
+TEST(FkCrossCoreRigTest, AChildInsertProceedsPastAParentUpdateOnAnotherCore) {
+    ScriptRig f({"BEGIN", "UPDATE p SET v = 1 WHERE id = 7", "DELETE FROM p WHERE id = 7",
+                 "ROLLBACK"},
+                {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(0, f.core0, 2)) << f.core0.Reply(1);
+    ASSERT_EQ(f.core0.Reply(1), "UPDATED 1");
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    EXPECT_EQ(f.core1.Reply(1).rfind("INSERTED", 0), 0u)
+        << "the child waited on, or was refused by, a parent whose version is being written: "
+        << f.core1.Reply(1);
+    EXPECT_EQ(f.r.rig->locks().WaiterCount(f.r.parent_row()), 0u)
+        << "the child's check left a registration on the parent row";
+
+    // The updater's own `DELETE` of 7 asks `X(7)`, which the child's `S`
+    // refuses: it parks holding its `U`, and the child's commit makes the
+    // answer a violation.
+    EXPECT_TRUE(f.ParkedOn(0, f.core0, 3, f.r.parent_oid, 7))
+        << "the parent DELETE did not park on the child's share: " << f.core0.Reply(2);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(3); }, 4000ms));
+    EXPECT_NE(f.core0.Reply(2).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(2);
+
+    ASSERT_TRUE(f.RunTo(0, f.core0, 4)) << f.core0.Reply(3);
+    EXPECT_EQ(f.r.rig->core(0).dispatcher().Dispatch("SELECT id FROM p WHERE id = 7").response,
+              "id\\n7");
+}
+
+// E3 (iii)'s `UPDATE` sibling (CP-S2b §8.3 E): a multi-key parent `UPDATE`
+// declares a range `U`, which meets the child's tuple `S` in the verify arm
+// as the `DELETE`'s range `X` does - and is admitted, `Compatible(S, U)`
+// being the cell the mode exists for. The statement proceeds over both
+// parents without parking; the `DELETE` above keeps parking.
+TEST(FkCrossCoreRigTest, ARangeUpdateOfParentsPassesAChildsOpenReference) {
+    ScriptRig f({"UPDATE p SET v = 1 WHERE id >= 7"}, {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(1).rfind("INSERTED", 0), 0u) << f.core1.Reply(1);
+
+    ASSERT_TRUE(f.RunTo(0, f.core0, 1)) << f.core0.Reply(0);
+    EXPECT_EQ(f.core0.Reply(0), "UPDATED 2")
+        << "a range UPDATE of parents was held up by a child's open reference";
+    EXPECT_EQ(f.r.rig->locks().WaiterCount(f.r.parent_row()), 0u);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    EXPECT_EQ(f.r.rig->core(0).dispatcher().Dispatch("SELECT v FROM p WHERE id >= 7").response,
+              "v\\n1\\n1");
+}
+
+// F.1 (i) of `txn.md` §5 as CP-S2b states it (CP-Q10): the wait moves from
+// the `UPDATE` to the `DELETE`. Core 0 updates 7 over core 1's `S(7)` -
+// granted - and then deletes it: the `X(7)` is refused by the `S`, and the
+// `DELETE` parks **holding `U(7)`**, an edge core 0 -> core 1. Core 1's own
+// `UPDATE` of 7 is then refused by core 0's `U`, closes the cycle, and is the
+// victim. Until CP-S2b the `UPDATE` waited at 7 holding nothing on it and
+// core 1's `UPDATE` found only its own `S` - a deadlock where there was none,
+// accepted on CP-Q10's mark as the class any matrix that admits the `UPDATE`
+// over the share carries.
+TEST(FkCrossCoreRigTest, AnUpdateThenADeleteOfAParentUnderAChildsShareWaitsAtTheDeleteAndDeadlocks) {
+    ScriptRig f({"BEGIN", "UPDATE p SET v = 1 WHERE id = 7", "DELETE FROM p WHERE id = 7",
+                 "ROLLBACK"},
+                {"BEGIN", "INSERT INTO c VALUES (7)", "UPDATE p SET v = 2 WHERE id = 7",
+                 "ROLLBACK"});
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(1).rfind("INSERTED", 0), 0u) << f.core1.Reply(1);
+
+    ASSERT_TRUE(f.RunTo(0, f.core0, 2)) << f.core0.Reply(1);
+    EXPECT_EQ(f.core0.Reply(1), "UPDATED 1") << "the UPDATE waited where the DELETE should";
+    EXPECT_TRUE(f.ParkedOn(0, f.core0, 3, f.r.parent_oid, 7))
+        << "the DELETE did not park on the child's share: " << f.core0.Reply(2);
+    // The edge is drawn just after the waiter count moves (the cell above
+    // says why the gap is waited out).
+    std::this_thread::sleep_for(20ms);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3));
+    EXPECT_NE(f.core1.Reply(2).find("deadlock"), std::string::npos)
+        << "the child writer's UPDATE of the parent did not close the cycle: " << f.core1.Reply(2);
+
+    // The victim's rollback takes its child with it: the survivor's `DELETE`
+    // re-runs, its `X` granted, and finds no child.
+    ASSERT_TRUE(f.RunTo(1, f.core1, 4)) << f.core1.Reply(3);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(3); }, 4000ms));
+    EXPECT_EQ(f.core0.Reply(2), "DELETED 1");
+    ASSERT_TRUE(f.RunTo(0, f.core0, 4)) << f.core0.Reply(3);
+}
+
+// F.1 (ii): the parent updater waits on the child writer **elsewhere**. Core
+// 1 references 7 (`S(p7)`) and updates `q5` (`U(q5)`); core 0 updates 7 over
+// the share - granted, holding `U(p7)` - and then asks `U(q5)`, refused by
+// core 1's `U`, an edge core 0 -> core 1. Core 1's `UPDATE` of 7 is refused
+// by core 0's `U(p7)` and closes the cycle. Until CP-S2b core 0 parked at
+// its first `UPDATE` holding nothing on 7 and core 1 proceeded (CP-Q10).
+TEST(FkCrossCoreRigTest, AParentUpdaterThatThenWaitsOnTheChildWriterElsewhereDeadlocks) {
+    ScriptRig f({"BEGIN", "UPDATE p SET v = 1 WHERE id = 7", "UPDATE q SET v = 2 WHERE id = 5",
+                 "ROLLBACK"},
+                {"BEGIN", "INSERT INTO c VALUES (7)", "UPDATE q SET v = 1 WHERE id = 5",
+                 "UPDATE p SET v = 2 WHERE id = 7", "ROLLBACK"},
+                {"CREATE TABLE q (id int64, v int64) BTREE", "INSERT INTO q VALUES (5, 0)"});
+    ASSERT_TRUE(f.ok);
+    const catalog::Oid q_oid = f.r.OidOf("q");
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    ASSERT_EQ(f.core1.Reply(1).rfind("INSERTED", 0), 0u) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(2), "UPDATED 1");
+
+    ASSERT_TRUE(f.RunTo(0, f.core0, 2)) << f.core0.Reply(1);
+    EXPECT_EQ(f.core0.Reply(1), "UPDATED 1") << "the parent UPDATE waited on the child's share";
+    EXPECT_TRUE(f.ParkedOn(0, f.core0, 3, q_oid, 5))
+        << "the updater did not park on the child writer's other row: " << f.core0.Reply(2);
+    std::this_thread::sleep_for(20ms);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 4));
+    EXPECT_NE(f.core1.Reply(3).find("deadlock"), std::string::npos) << f.core1.Reply(3);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 5)) << f.core1.Reply(4);
     ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(3); }, 4000ms));
     EXPECT_EQ(f.core0.Reply(2), "UPDATED 1");
     ASSERT_TRUE(f.RunTo(0, f.core0, 4)) << f.core0.Reply(3);
@@ -524,6 +714,14 @@ TEST(FkCrossCoreRigTest, AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRol
     ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
     ASSERT_EQ(f.core1.Reply(1), "UPDATED 1");
 
+    // **A park, not a spin** (CP-S2b §8.3 C.2): the reverse probe asks `U`
+    // on the child row, which the mover's `U(c, 1)` refuses, so the `DELETE`
+    // is registered on that row's entry and woken at the mover's decide. An
+    // `S` probe would be admitted by the `U`, and its pre-flipped slot would
+    // re-run the whole walk until the net - still "waiting" to the next
+    // line, which is why this one pins the unit.
+    EXPECT_TRUE(f.ParkedOn(0, f.core0, 1, f.r.child_oid, 1))
+        << "the parent DELETE is not parked on the moved child's row: " << f.core0.Reply(0);
     EXPECT_TRUE(f.StillWaiting(0, f.core0, 1))
         << "the parent DELETE was answered with the child's writer open: " << f.core0.Reply(0);
 
@@ -533,6 +731,91 @@ TEST(FkCrossCoreRigTest, AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRol
     // Whatever the answer, the child row references 7 again, so 7 is there.
     EXPECT_EQ(f.r.rig->core(0).dispatcher().Dispatch("SELECT id FROM p WHERE id = 7").response,
               "id\\n7");
+}
+
+// A child relation with a column beside the key and the foreign key, for
+// the cells whose child writer touches neither: `c` has none, and the cells
+// above insert into it positionally.
+constexpr const char* kCreateC2 =
+    "CREATE TABLE c2 (id int64, pid int64 REFERENCES p, note int64) BTREE";
+
+// The reverse probe against a child `UPDATE` of other columns (CP-S2b §8.3
+// C.2, E "unchanged"). The writer holds the row in `U`, which the probe's `U`
+// is refused by - the row's own entry, a slot, a park. Until CP-S2b the
+// writer held `X` and the `S` probe parked the same way; what the cell pins
+// is that the park survived the mode change, where an `S` probe under `U`
+// would have spun. The commit leaves the row referencing 7.
+TEST(FkCrossCoreRigTest, AParentDeleteParksOnAChildUpdatedInOtherColumns) {
+    ScriptRig f({"DELETE FROM p WHERE id = 7"},
+                {"BEGIN", "UPDATE c2 SET note = 1 WHERE id = 1", "COMMIT"},
+                {kCreateC2, "INSERT INTO c2 VALUES (7, 0)"});
+    ASSERT_TRUE(f.ok);
+    const catalog::Oid c2_oid = f.r.OidOf("c2");
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(1), "UPDATED 1");
+
+    EXPECT_TRUE(f.ParkedOn(0, f.core0, 1, c2_oid, 1))
+        << "the parent DELETE is not parked on the updated child's row: " << f.core0.Reply(0);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    ASSERT_TRUE(f.RunTo(0, f.core0, 1));
+    EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
+}
+
+// The reverse probe against a bulk child `UPDATE`'s window (CP-S2b §8.3
+// C.3): a `WHERE`-less `UPDATE` declares a range `U` over the whole id
+// space, which is a fence since CP-S2b - it raises the relation's counter,
+// and the probe's tuple `U` under it is refused in `FenceCoversKey`, with
+// the wake on the fence's own entry (AY-S2). Before C.3 a range `U` raised
+// no counter and nothing stood between the probe and the net. The rollback
+// leaves the row as it was, referencing 7.
+TEST(FkCrossCoreRigTest, AParentDeleteParksOnABulkChildUpdatesWindow) {
+    ScriptRig f({"DELETE FROM p WHERE id = 7"}, {"BEGIN", "UPDATE c2 SET note = 1", "ROLLBACK"},
+                {kCreateC2, "INSERT INTO c2 VALUES (7, 0)"});
+    ASSERT_TRUE(f.ok);
+    const catalog::Oid c2_oid = f.r.OidOf("c2");
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(1), "UPDATED 1");
+    EXPECT_EQ(f.r.rig->locks().RelationFenceCount(c2_oid), 1u)
+        << "the bulk UPDATE's window is not counted as a fence";
+
+    EXPECT_TRUE(f.ParkedOnUnit(0, f.core0, 1, txn::LockKey::Range(c2_oid, 0, kIdSpaceEnd)))
+        << "the parent DELETE is not parked on the bulk UPDATE's window: " << f.core0.Reply(0);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    ASSERT_TRUE(f.RunTo(0, f.core0, 1));
+    EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
+    EXPECT_EQ(f.r.rig->locks().RelationFenceCount(c2_oid), 0u) << "the fence counter drifted";
+}
+
+// Three levels, `p <- c2 <- g`, and the narrowed guard (CP-S2b §8.3 C.2):
+// core 0 inserts into `g` and holds `S` on child row `c2(1)`; core 1 updates
+// that row's other column, granted `U(c2, 1)` over the share - a script the
+// `X` mode never admitted, so the case is new. Core 0's `DELETE` of 7 is
+// granted `X(p, 7)` (nobody holds `S(7)`), reads `c2(1)` busy, and the probe
+// is asked because the guard is by covering mode - an `S` this transaction
+// holds does not cover `U` - rather than by any hold at all, under which
+// the `DELETE` would have fallen to the `IsInFlight` poll with no slot.
+TEST(FkCrossCoreRigTest, AParentDeleteParksOnAChildRowItHoldsAGrandchildsShareOn) {
+    ScriptRig f({"BEGIN", "INSERT INTO g VALUES (1)", "DELETE FROM p WHERE id = 7", "ROLLBACK"},
+                {"BEGIN", "UPDATE c2 SET note = 1 WHERE id = 1", "ROLLBACK"},
+                {kCreateC2, "INSERT INTO c2 VALUES (7, 0)",
+                 "CREATE TABLE g (id int64, cid int64 REFERENCES c2) BTREE"});
+    ASSERT_TRUE(f.ok);
+    const catalog::Oid c2_oid = f.r.OidOf("c2");
+    ASSERT_TRUE(f.RunTo(0, f.core0, 2)) << f.core0.Reply(1);
+    ASSERT_EQ(f.core0.Reply(1).rfind("INSERTED", 0), 0u) << f.core0.Reply(1);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(1), "UPDATED 1") << "the child UPDATE was refused by a grandchild's share";
+
+    EXPECT_TRUE(f.ParkedOn(0, f.core0, 3, c2_oid, 1))
+        << "the parent DELETE is not parked on the child row it holds a share on: "
+        << f.core0.Reply(2);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(3); }, 4000ms));
+    EXPECT_NE(f.core0.Reply(2).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(2);
+    ASSERT_TRUE(f.RunTo(0, f.core0, 4)) << f.core0.Reply(3);
 }
 
 // ---- The Cabin's "no children" answer (AY-S6) ----------------------------
