@@ -1,0 +1,18 @@
+
+sessions=8 rows=256 ops/arm/session=4000 blocks=4
+  base: cores accepted on = 0, 1, 2, 3
+host before: 1.04 1.03 0.53 2/358 337273   competing: none
+host after : 1.74 1.19 0.60 1/358 337705   competing: none
+
+arm                                                   base
+                            p50us    p99us      qps    err
+update-hot                  282.9   1019.5    23170   2519
+update-disjoint             277.9    944.2    24429      0
+update-disjoint-again       280.6   1015.2    23813      0
+insert-omitted              279.2    961.2    19979      0
+select-hot                  383.2   1278.8    17876      0
+ping                       3613.6  15688.5     1741      0
+
+base: noise floor (disjoint vs its repeat) p50 = 2.7 us; hot - disjoint p50 = 5.0 us
+
+raw summaries: /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m4/m4.json

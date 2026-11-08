@@ -1,0 +1,1628 @@
+{
+  "label": "m1-rep3-nolock",
+  "protocol": "KWP/1 :15522",
+  "port": 15522,
+  "errors": {},
+  "lock_waits": {
+    "rows_total": 0,
+    "by_unit_mode_outcome": [],
+    "by_outcome": {},
+    "by_core": {}
+  },
+  "lock_waits_rows": [],
+  "wait_stats": {
+    "app_rows": [
+      {
+        "core": "0",
+        "event": "app.lock_wait",
+        "class": "Application",
+        "count": "0",
+        "total_us": "0",
+        "max_us": "0"
+      },
+      {
+        "core": "0",
+        "event": "app.lock_conflict",
+        "class": "Application",
+        "count": "0",
+        "total_us": "0",
+        "max_us": "0"
+      },
+      {
+        "core": "1",
+        "event": "app.lock_wait",
+        "class": "Application",
+        "count": "0",
+        "total_us": "0",
+        "max_us": "0"
+      },
+      {
+        "core": "1",
+        "event": "app.lock_conflict",
+        "class": "Application",
+        "count": "0",
+        "total_us": "0",
+        "max_us": "0"
+      },
+      {
+        "core": "2",
+        "event": "app.lock_wait",
+        "class": "Application",
+        "count": "0",
+        "total_us": "0",
+        "max_us": "0"
+      },
+      {
+        "core": "2",
+        "event": "app.lock_conflict",
+        "class": "Application",
+        "count": "0",
+        "total_us": "0",
+        "max_us": "0"
+      },
+      {
+        "core": "3",
+        "event": "app.lock_wait",
+        "class": "Application",
+        "count": "0",
+        "total_us": "0",
+        "max_us": "0"
+      },
+      {
+        "core": "3",
+        "event": "app.lock_conflict",
+        "class": "Application",
+        "count": "0",
+        "total_us": "0",
+        "max_us": "0"
+      },
+      {
+        "core": "NULL",
+        "event": "app.lock_wait",
+        "class": "Application",
+        "count": "0",
+        "total_us": "0",
+        "max_us": "0"
+      },
+      {
+        "core": "NULL",
+        "event": "app.lock_conflict",
+        "class": "Application",
+        "count": "0",
+        "total_us": "0",
+        "max_us": "0"
+      }
+    ],
+    "totals_non_idle_us": {
+      "cpu.on_cpu": 8191784,
+      "sysio.checkpoint": 188421,
+      "sysio.wal_write": 305625,
+      "sched.run_queue": 338710
+    },
+    "db_time_us": 9024540,
+    "app_lock_wait_total_us": 0,
+    "app_lock_wait_count": 0,
+    "app_lock_wait_max_us": 0,
+    "app_lock_conflict_count": 0,
+    "app_lock_wait_share_of_db_time": 0.0
+  },
+  "wait_stats_rows": [
+    {
+      "core": "0",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "count": "0",
+      "total_us": "2851",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "commit.wal_flush",
+      "class": "Commit",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "commit.ceiling_wait",
+      "class": "Commit",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "io.page_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "io.var_heap_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "io.scan_ring_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "sysio.writeback",
+      "class": "System I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "sysio.checkpoint",
+      "class": "System I/O",
+      "count": "30",
+      "total_us": "49609",
+      "max_us": "2197"
+    },
+    {
+      "core": "0",
+      "event": "sysio.wal_write",
+      "class": "System I/O",
+      "count": "29",
+      "total_us": "18153",
+      "max_us": "2055"
+    },
+    {
+      "core": "0",
+      "event": "xcore.step_response",
+      "class": "CrossCore",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "xcore.credit",
+      "class": "CrossCore",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "sched.run_queue",
+      "class": "Scheduler",
+      "count": "47",
+      "total_us": "2662",
+      "max_us": "1618"
+    },
+    {
+      "core": "0",
+      "event": "res.eviction_retry",
+      "class": "Resource",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "net.send_backpressure",
+      "class": "Network",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "app.lock_wait",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "app.horizon_wait",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "app.lock_conflict",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "app.assertion_reservation",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "idle.client",
+      "class": "Idle",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "0",
+      "event": "idle.background",
+      "class": "Idle",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "count": "0",
+      "total_us": "7763",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "commit.wal_flush",
+      "class": "Commit",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "commit.ceiling_wait",
+      "class": "Commit",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "io.page_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "io.var_heap_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "io.scan_ring_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "sysio.writeback",
+      "class": "System I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "sysio.checkpoint",
+      "class": "System I/O",
+      "count": "30",
+      "total_us": "48380",
+      "max_us": "2200"
+    },
+    {
+      "core": "1",
+      "event": "sysio.wal_write",
+      "class": "System I/O",
+      "count": "82",
+      "total_us": "239539",
+      "max_us": "197939"
+    },
+    {
+      "core": "1",
+      "event": "xcore.step_response",
+      "class": "CrossCore",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "xcore.credit",
+      "class": "CrossCore",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "sched.run_queue",
+      "class": "Scheduler",
+      "count": "51",
+      "total_us": "3759",
+      "max_us": "3665"
+    },
+    {
+      "core": "1",
+      "event": "res.eviction_retry",
+      "class": "Resource",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "net.send_backpressure",
+      "class": "Network",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "app.lock_wait",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "app.horizon_wait",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "app.lock_conflict",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "app.assertion_reservation",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "idle.client",
+      "class": "Idle",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "1",
+      "event": "idle.background",
+      "class": "Idle",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "count": "0",
+      "total_us": "8177789",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "commit.wal_flush",
+      "class": "Commit",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "commit.ceiling_wait",
+      "class": "Commit",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "io.page_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "io.var_heap_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "io.scan_ring_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "sysio.writeback",
+      "class": "System I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "sysio.checkpoint",
+      "class": "System I/O",
+      "count": "28",
+      "total_us": "41491",
+      "max_us": "2444"
+    },
+    {
+      "core": "2",
+      "event": "sysio.wal_write",
+      "class": "System I/O",
+      "count": "60",
+      "total_us": "30023",
+      "max_us": "818"
+    },
+    {
+      "core": "2",
+      "event": "xcore.step_response",
+      "class": "CrossCore",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "xcore.credit",
+      "class": "CrossCore",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "sched.run_queue",
+      "class": "Scheduler",
+      "count": "240306",
+      "total_us": "332010",
+      "max_us": "194952"
+    },
+    {
+      "core": "2",
+      "event": "res.eviction_retry",
+      "class": "Resource",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "net.send_backpressure",
+      "class": "Network",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "app.lock_wait",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "app.horizon_wait",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "app.lock_conflict",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "app.assertion_reservation",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "idle.client",
+      "class": "Idle",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "2",
+      "event": "idle.background",
+      "class": "Idle",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "count": "0",
+      "total_us": "3380",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "commit.wal_flush",
+      "class": "Commit",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "commit.ceiling_wait",
+      "class": "Commit",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "io.page_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "io.var_heap_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "io.scan_ring_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "sysio.writeback",
+      "class": "System I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "sysio.checkpoint",
+      "class": "System I/O",
+      "count": "28",
+      "total_us": "48940",
+      "max_us": "4249"
+    },
+    {
+      "core": "3",
+      "event": "sysio.wal_write",
+      "class": "System I/O",
+      "count": "28",
+      "total_us": "17909",
+      "max_us": "910"
+    },
+    {
+      "core": "3",
+      "event": "xcore.step_response",
+      "class": "CrossCore",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "xcore.credit",
+      "class": "CrossCore",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "sched.run_queue",
+      "class": "Scheduler",
+      "count": "45",
+      "total_us": "278",
+      "max_us": "221"
+    },
+    {
+      "core": "3",
+      "event": "res.eviction_retry",
+      "class": "Resource",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "net.send_backpressure",
+      "class": "Network",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "app.lock_wait",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "app.horizon_wait",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "app.lock_conflict",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "app.assertion_reservation",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "idle.client",
+      "class": "Idle",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "3",
+      "event": "idle.background",
+      "class": "Idle",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "count": "0",
+      "total_us": "8191784",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "commit.wal_flush",
+      "class": "Commit",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "commit.ceiling_wait",
+      "class": "Commit",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "io.page_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "io.var_heap_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "io.scan_ring_read",
+      "class": "User I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "sysio.writeback",
+      "class": "System I/O",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "sysio.checkpoint",
+      "class": "System I/O",
+      "count": "116",
+      "total_us": "188421",
+      "max_us": "4249"
+    },
+    {
+      "core": "NULL",
+      "event": "sysio.wal_write",
+      "class": "System I/O",
+      "count": "199",
+      "total_us": "305625",
+      "max_us": "197939"
+    },
+    {
+      "core": "NULL",
+      "event": "xcore.step_response",
+      "class": "CrossCore",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "xcore.credit",
+      "class": "CrossCore",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "sched.run_queue",
+      "class": "Scheduler",
+      "count": "240449",
+      "total_us": "338710",
+      "max_us": "194952"
+    },
+    {
+      "core": "NULL",
+      "event": "res.eviction_retry",
+      "class": "Resource",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "net.send_backpressure",
+      "class": "Network",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "app.lock_wait",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "app.horizon_wait",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "app.lock_conflict",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "app.assertion_reservation",
+      "class": "Application",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "idle.client",
+      "class": "Idle",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    },
+    {
+      "core": "NULL",
+      "event": "idle.background",
+      "class": "Idle",
+      "count": "0",
+      "total_us": "0",
+      "max_us": "0"
+    }
+  ],
+  "meta": {
+    "version": "35",
+    "wal_topology": "single",
+    "core": "1",
+    "lock_waits_recorded": "0",
+    "lock_waits_overwritten": "0",
+    "lock_waits_dropped": "0"
+  },
+  "ash": {
+    "samples": 41,
+    "by_event_state": [
+      {
+        "event": "cpu.on_cpu",
+        "state": "RUNNABLE",
+        "samples": 41
+      }
+    ]
+  },
+  "ash_rows": [
+    {
+      "sample_ts_us": "190405817706",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "2539740065035395558",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190408817712",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "2539740065035395558",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190409817761",
+      "core": "0",
+      "session_id": "1",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "17"
+    },
+    {
+      "sample_ts_us": "190410817708",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "2539740065035395558",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190414817957",
+      "core": "0",
+      "session_id": "2",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190419817800",
+      "core": "0",
+      "session_id": "3",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190421817728",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "1119240944572166998",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190424818528",
+      "core": "0",
+      "session_id": "4",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190429818725",
+      "core": "0",
+      "session_id": "5",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190430818052",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190431817913",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190432818215",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190433817924",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190434817858",
+      "core": "0",
+      "session_id": "6",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190434818009",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190435818015",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190436818175",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190437818159",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190438818108",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190439817727",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190439818190",
+      "core": "0",
+      "session_id": "7",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190440817766",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190441817737",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190444818191",
+      "core": "0",
+      "session_id": "8",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190449818431",
+      "core": "0",
+      "session_id": "9",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190454818483",
+      "core": "0",
+      "session_id": "10",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190459818777",
+      "core": "0",
+      "session_id": "11",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190460818126",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190462818169",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190463818034",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190464817781",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190464818516",
+      "core": "0",
+      "session_id": "12",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190465817704",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190466817871",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190467818047",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190468817962",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190469818748",
+      "core": "0",
+      "session_id": "13",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190471817741",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190472817914",
+      "core": "2",
+      "session_id": "2",
+      "session_kind": "session",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "0",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190474818428",
+      "core": "0",
+      "session_id": "14",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    },
+    {
+      "sample_ts_us": "190479818660",
+      "core": "0",
+      "session_id": "15",
+      "session_kind": "background",
+      "state": "RUNNABLE",
+      "event": "cpu.on_cpu",
+      "class": "CPU",
+      "sched_group": "2",
+      "late": "0",
+      "arg_hash_valid": "0",
+      "fingerprint": "0",
+      "p1": "0",
+      "p2": "0",
+      "p3": "0",
+      "wait_elapsed_us": "0"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+started_utc=2026-11-08 07:30:51 UTC
+tree=/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration
+describe=v3.4.7-1-gcc54a296
+head=cc54a296
+binary=/tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-base
+binary_sha256=d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4
+workdir=/home/louis/bench-runs/cp-s0/20261108T073051Z/m5/m5-20261108T073051Z
+server_cpus=2-5 driver_cpus=0,1 cores=4
+rows=4096 ops=1000 blocks=6
+loadavg=0.57 0.94 0.55 2/346 338029
+competing=
+workdir_fstype=ext4
+{"pid": 338049, "port": 15561, "workdir": "/home/louis/bench-runs/cp-s0/20261108T073051Z/m5/m5-20261108T073051Z", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+server_pid=338049
+== cell kwp-w4 07:30:51 UTC
+cell=kwp-w4 rc=0
+== cell kwp-w1 07:30:53 UTC
+cell=kwp-w1 rc=0
+== cell text-w4 07:30:54 UTC
+cell=text-w4 rc=0
+== cell text-w1 07:30:55 UTC
+cell=text-w1 rc=0
+results under /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m5/out-20261108T073051Z

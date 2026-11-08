@@ -1,0 +1,23 @@
+CP-S0 M6 scripted half - arm=strict protocol=text 127.0.0.1:15529 table=cp_release_strict_337118 oid=4000
+  usable iterations      300/300  (A commit errors 0, B update errors 0)
+  B reply before A reply 0.0133
+  margin A_reply - B_reply us  p50     -31.4  p90     -12.7  p99      24.6  min   -170.0  max      32.7
+  A COMMIT ack latency us      p50     536.8  p90     680.5  p99    1214.9  min    359.7  max    4989.5
+  B UPDATE latency us          p50     524.4  p90     686.6  p99    1105.1  min    326.3  max    4996.2
+  B send after A send us       p50      38.5  p90      90.9  p99     112.6  min     10.3  max     395.4
+  margin p50 / ack p50   -0.058   B latency p50 / ack p50 0.977
+  final v                305 (expected 305, ok=True)
+  verdict                shown=True  [margin p50 <= max(200 us, 0.2 * ack p50) and B latency p50 >= 0.5 * ack p50]
+  sys.lock_waits on the relation: 305 rows
+    tuple    X   granted    n=305   waited_us p50 440.0 p90 570.0 p99 972.0 max 4892.0
+  sys.wait_stats total   commit.wal_flush       count     307 total_us     160394 max_us 4910
+  sys.wait_stats total   commit.ceiling_wait    count       0 total_us          0 max_us 0
+  sys.wait_stats total   app.lock_wait          count     305 total_us     142202 max_us 4892
+  sys.wait_stats total   app.lock_conflict      count     305 total_us          0 max_us 0
+  sys.wait_stats core 0  commit.wal_flush       count     307 total_us     160394
+  sys.wait_stats core 0  app.lock_wait          count     305 total_us     142202
+  sys.wait_stats core 0  app.lock_conflict      count     305 total_us          0
+  sys.session_waits A (commit.wal_flush)   session_id 2 count 305 total_us 159179
+  sys.session_waits B (app.lock_wait)      session_id 3 count 305 total_us 142202
+  sys.meta               {'version': '35', 'core': '0', 'lock_waits_recorded': '305', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0'}
+  wrote /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m6/m6-strict.json

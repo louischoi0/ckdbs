@@ -1,0 +1,174 @@
+2026-11-08 07:23:51 UTC  phase: preflight
+2026-11-08 07:23:51 UTC  WT=/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration  OUT=/tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1  RUN_ROOT=/home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4  DRY_RUN=0  CELLS=prove,m1
+2026-11-08 07:23:51 UTC  RUN_ROOT filesystem: ext4 (/dev/nvme0n1p1 ext4 263968576 42377992 210738792  17% /)
+2026-11-08 07:23:51 UTC  manifest: /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1/manifest.json
+2026-11-08 07:23:51 UTC  phase: prove: start servers
+2026-11-08 07:23:51 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-base --workdir /home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/prove/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label prove-base
+{"pid": 331415, "port": 15520, "workdir": "/home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/prove/base", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+2026-11-08 07:23:52 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-nolock --workdir /home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/prove/nolock --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label prove-nolock
+{"pid": 331430, "port": 15522, "workdir": "/home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/prove/nolock", "ready_after_s": 0.403, "binary_sha256": "aed7b9b0303bea6f030f43b13ca7582710f4b4ea4d0604e7a8a0b0dcb93bd706"}
+2026-11-08 07:23:52 UTC  phase: prove: driver
+2026-11-08 07:23:52 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label nolock --sessions 8 --rows 256 --ops 300 --blocks 4 --prove --json /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1/prove.json
+
+AO-0 item 23's PROOF RUN - this is a check of the driver, not a price.
+On a server with no lock family the two write arms may differ only by what
+first-updater-wins already costs; a family cost reported there is this file.
+
+sessions=8 rows=256 ops/arm/session=300 blocks=4
+  base: cores accepted on = 0, 1, 3
+  nolock: cores accepted on = 0, 2, 3
+host before: 0.16 0.14 0.09 1/363 331440   competing: none
+host after : 0.16 0.14 0.09 1/370 331864   competing: none
+
+arm                                                   base                            nolock
+                            p50us    p99us      qps    err    p50us    p99us      qps    err
+update-hot                  295.6    971.9    21735    149    269.3    942.0    23743    141
+update-disjoint             283.6    985.0    22194      0    266.7    904.8    23988      0
+update-disjoint-again       221.9   1018.1    25287      0    211.2    850.0    27095      0
+insert-omitted              283.7   1100.0    22518      0    263.7    936.8    24550      0
+select-hot                  385.2   1364.3    16786      0    368.8   1238.1    17460      0
+ping                       3135.9  15872.7     1774      0   3176.4  15597.8     1833      0
+
+base: noise floor (disjoint vs its repeat) p50 = 61.7 us; hot - disjoint p50 = 12.0 us
+nolock: noise floor (disjoint vs its repeat) p50 = 55.5 us; hot - disjoint p50 = 2.6 us
+
+raw summaries: /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1/prove.json
+2026-11-08 07:23:56 UTC  phase: prove: views
+2026-11-08 07:23:56 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/read_views.py --port 15520 --label prove-base --tools /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1/prove-base
+views read over KWP/1 :15520 prove-base
+sys.lock_waits: 1 rows; by outcome {'granted': 1}; by core {'3': 1}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+  tuple         X     granted          1          12        12      12.0
+sys.wait_stats: app.lock_wait count=48 total_us=20 max_us=12; app.lock_conflict count=48; DB time 743268 us; lock_wait share 2.7e-05
+  core=0,event=app.lock_wait,class=Application,count=20,total_us=3,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=20,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=10,total_us=1,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=10,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=5,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=5,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=13,total_us=14,max_us=12
+  core=3,event=app.lock_conflict,class=Application,count=13,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=48,total_us=20,max_us=12
+  core=NULL,event=app.lock_conflict,class=Application,count=48,total_us=0,max_us=0
+sys.meta: core=2, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=1, version=35, wal_topology=single
+sys.ash: 2 samples
+  cpu.on_cpu                  RUNNABLE         2
+2026-11-08 07:23:56 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/read_views.py --port 15522 --label prove-nolock --tools /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1/prove-nolock
+views read over KWP/1 :15522 prove-nolock
+sys.lock_waits: 0 rows; by outcome {}; by core {}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+sys.wait_stats: app.lock_wait count=12 total_us=3 max_us=0; app.lock_conflict count=0; DB time 673274 us; lock_wait share 4e-06
+  core=0,event=app.lock_wait,class=Application,count=5,total_us=1,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=4,total_us=1,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=3,total_us=0,max_us=0
+  core=3,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=12,total_us=3,max_us=0
+  core=NULL,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+sys.meta: core=0, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=0, version=35, wal_topology=single
+sys.ash: 6 samples
+  cpu.on_cpu                  RUNNABLE         6
+2026-11-08 07:23:56 UTC  phase: prove: stop servers
+2026-11-08 07:23:56 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/prove/base
+{"pid": 331415, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-08 07:23:56 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/prove/nolock
+{"pid": 331430, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-08 07:23:56 UTC  phase: m1-rep1: start servers
+2026-11-08 07:23:56 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-base --workdir /home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/m1-rep1/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep1-base
+{"pid": 331899, "port": 15520, "workdir": "/home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/m1-rep1/base", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+2026-11-08 07:23:57 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-nolock --workdir /home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/m1-rep1/nolock --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep1-nolock
+{"pid": 331911, "port": 15522, "workdir": "/home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/m1-rep1/nolock", "ready_after_s": 0.403, "binary_sha256": "aed7b9b0303bea6f030f43b13ca7582710f4b4ea4d0604e7a8a0b0dcb93bd706"}
+2026-11-08 07:23:57 UTC  phase: m1-rep1: driver
+2026-11-08 07:23:57 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label nolock --sessions 1 --rows 256 --ops 12000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1/m1-rep1.json
+
+sessions=1 rows=256 ops/arm/session=12000 blocks=4
+  base: cores accepted on = 1
+  nolock: cores accepted on = 0
+host before: 0.23 0.16 0.09 1/370 331937   competing: none
+host after : 0.45 0.21 0.11 2/362 332191   competing: none
+
+arm                                                   base                            nolock
+                            p50us    p99us      qps    err    p50us    p99us      qps    err
+update-hot                   49.8     67.2    20614      0     49.0     66.0    20053      0
+update-disjoint              43.7     68.9    21055      0     39.6     62.0    22542      0
+update-disjoint-again        40.0     64.0    22084      0     49.0     65.4    19825      0
+insert-omitted               42.2     68.7    22316      0     45.9     70.7    21465      0
+select-hot                   71.3     98.3    13398      0     51.0     82.3    17896      0
+ping                        671.3    982.2     1425      0    675.4    924.8     1414      0
+
+base: noise floor (disjoint vs its repeat) p50 = 3.7 us; hot - disjoint p50 = 6.1 us
+nolock: noise floor (disjoint vs its repeat) p50 = 9.4 us; hot - disjoint p50 = 9.4 us
+
+raw summaries: /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1/m1-rep1.json
+2026-11-08 07:24:20 UTC  cores accepted on: base=1; nolock=0
+2026-11-08 07:24:20 UTC  WARNING: the labels are not all on core 0 or all on peer cores; core 0 carries the ticks - treat this rep as biased and add a rep (M1_REPS)
+2026-11-08 07:24:20 UTC  phase: m1-rep1: views
+2026-11-08 07:24:20 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/read_views.py --port 15520 --label m1-rep1-base --tools /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1/m1-rep1-base
+views read over KWP/1 :15520 m1-rep1-base
+sys.lock_waits: 0 rows; by outcome {}; by core {}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+sys.wait_stats: app.lock_wait count=0 total_us=0 max_us=0; app.lock_conflict count=0; DB time 2700162 us; lock_wait share 0.0
+  core=0,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+sys.meta: core=1, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=0, version=35, wal_topology=single
+sys.ash: 11 samples
+  cpu.on_cpu                  RUNNABLE        11
+2026-11-08 07:24:21 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/read_views.py --port 15522 --label m1-rep1-nolock --tools /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1/m1-rep1-nolock
+views read over KWP/1 :15522 m1-rep1-nolock
+sys.lock_waits: 0 rows; by outcome {}; by core {}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+sys.wait_stats: app.lock_wait count=0 total_us=0 max_us=0; app.lock_conflict count=0; DB time 2630174 us; lock_wait share 0.0
+  core=0,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+sys.meta: core=0, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=0, version=35, wal_topology=single
+sys.ash: 14 samples
+  cpu.on_cpu                  RUNNABLE        14
+2026-11-08 07:24:21 UTC  phase: m1-rep1: stop servers
+2026-11-08 07:24:21 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/m1-rep1/base
+{"pid": 331899, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-08 07:24:21 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-s0/20261108T072351Z/m1m4/20261108T072351Z/m1-rep1/nolock
+{"pid": 331911, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-08 07:24:21 UTC  phase: done
+2026-11-08 07:24:21 UTC  outputs under /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m1m4-m1:
+  active_servers
+  heartbeat
+  m1-rep1-base.server.json
+  m1-rep1-base.views.json
+  m1-rep1-base.views.txt
+  m1-rep1-nolock.server.json
+  m1-rep1-nolock.views.json
+  m1-rep1-nolock.views.txt
+  m1-rep1.json
+  m1-rep1.txt
+  manifest.json
+  phase
+  prove-base.server.json
+  prove-base.views.json
+  prove-base.views.txt
+  prove-nolock.server.json
+  prove-nolock.views.json
+  prove-nolock.views.txt
+  prove.json
+  prove.txt
+  servers.log
+  timeline.txt
+2026-11-08 07:24:21 UTC  cleanup (exit 0)

@@ -1,0 +1,33 @@
+created 8 relations with suffix _m3s2:
+  organizations_m3s2
+  ships_m3s2
+  operations_m3s2
+  cargos_m3s2
+  fees_m3s2
+  recipes_m3s2
+  freights_m3s2
+  charges_m3s2
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools/scenario2_freight.py --suffix m3s2
+
+ckdbs benchmark - 68 columns, 24735 rows resident, 1 connection
+server 127.0.0.1:25731  table scenario2_m3s2
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0     698.1    455.2    477.8    555.8   1458.7   1458.7    1458.7     0
+load-organizations         300         0     619.5    378.6    536.6    611.2    809.0    927.6    1538.0     0
+load-ships                  30         0     561.1    340.3    469.9    550.4    707.0    853.5     853.5     0
+load-operations            300         0     594.6    372.6    501.4    583.6    778.7   1075.9    2210.3     0
+load-fees                   12         0     609.9    390.9    476.5    598.8    844.6    844.6     844.6     0
+load-recipes                93         0     625.5    395.1    533.9    605.7    841.7   1071.4    1071.4     0
+load-cargos              24000         0     603.9    327.4    512.4    586.5    820.0    969.3   11010.9     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.

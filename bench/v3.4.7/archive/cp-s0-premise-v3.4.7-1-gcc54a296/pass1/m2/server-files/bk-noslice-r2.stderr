@@ -1,0 +1,4 @@
+ckdbs on /home/louis/bench-runs/cp-s0/20261108T072351Z/m2/work/bk-noslice-r2.db: 17 pages, superblock version 35
+logging to /home/louis/bench-runs/cp-s0/20261108T072351Z/m2/work/bk-noslice-r2.log at level WARN
+listening on 127.0.0.1:32612
+stopped; 1331 pages persisted

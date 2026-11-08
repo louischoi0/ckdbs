@@ -1,0 +1,74 @@
+2026-11-08 07:30:56 UTC  phase: preflight
+2026-11-08 07:30:56 UTC  WT=/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration  OUT=/tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1  RUN_ROOT=/home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4  DRY_RUN=0  CELLS=m1
+2026-11-08 07:30:56 UTC  RUN_ROOT filesystem: ext4 (/dev/nvme0n1p1 ext4 263968576 43473764 209643020  18% /)
+2026-11-08 07:30:56 UTC  manifest: /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1/manifest.json
+2026-11-08 07:30:56 UTC  phase: m1-rep1: start servers
+2026-11-08 07:30:56 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-base --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep1/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep1-base
+2026-11-08 07:30:57 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-nolock --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep1/nolock --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep1-nolock
+2026-11-08 07:30:57 UTC  phase: m1-rep1: driver
+2026-11-08 07:30:57 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label nolock --sessions 1 --rows 256 --ops 40000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1/m1-rep1.json
+2026-11-08 07:32:15 UTC  cores accepted on: base=3; nolock=3
+2026-11-08 07:32:15 UTC  phase: m1-rep1: views
+2026-11-08 07:32:15 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/read_views.py --port 15520 --label m1-rep1-base --tools /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1/m1-rep1-base
+2026-11-08 07:32:15 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/read_views.py --port 15522 --label m1-rep1-nolock --tools /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1/m1-rep1-nolock
+2026-11-08 07:32:15 UTC  phase: m1-rep1: stop servers
+2026-11-08 07:32:15 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep1/base
+2026-11-08 07:32:15 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep1/nolock
+2026-11-08 07:32:15 UTC  phase: m1-rep2: start servers
+2026-11-08 07:32:15 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-base --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep2/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep2-base
+2026-11-08 07:32:16 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-nolock --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep2/nolock --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep2-nolock
+2026-11-08 07:32:16 UTC  phase: m1-rep2: driver
+2026-11-08 07:32:16 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label nolock --sessions 1 --rows 256 --ops 40000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1/m1-rep2.json
+2026-11-08 07:33:34 UTC  cores accepted on: base=0; nolock=1
+2026-11-08 07:33:34 UTC  WARNING: the labels are not all on core 0 or all on peer cores; core 0 carries the ticks - treat this rep as biased and add a rep (M1_REPS)
+2026-11-08 07:33:34 UTC  phase: m1-rep2: views
+2026-11-08 07:33:34 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/read_views.py --port 15520 --label m1-rep2-base --tools /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1/m1-rep2-base
+2026-11-08 07:33:34 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/read_views.py --port 15522 --label m1-rep2-nolock --tools /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1/m1-rep2-nolock
+2026-11-08 07:33:34 UTC  phase: m1-rep2: stop servers
+2026-11-08 07:33:34 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep2/base
+2026-11-08 07:33:34 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep2/nolock
+2026-11-08 07:33:34 UTC  phase: m1-rep3: start servers
+2026-11-08 07:33:34 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-base --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep3/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep3-base
+2026-11-08 07:33:34 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-nolock --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep3/nolock --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep3-nolock
+2026-11-08 07:33:35 UTC  phase: m1-rep3: driver
+2026-11-08 07:33:35 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label nolock --sessions 1 --rows 256 --ops 40000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1/m1-rep3.json
+2026-11-08 07:34:52 UTC  cores accepted on: base=3; nolock=2
+2026-11-08 07:34:52 UTC  phase: m1-rep3: views
+2026-11-08 07:34:52 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/read_views.py --port 15520 --label m1-rep3-base --tools /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1/m1-rep3-base
+2026-11-08 07:34:52 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/read_views.py --port 15522 --label m1-rep3-nolock --tools /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1/m1-rep3-nolock
+2026-11-08 07:34:52 UTC  phase: m1-rep3: stop servers
+2026-11-08 07:34:52 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep3/base
+2026-11-08 07:34:52 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-s0/20261108T073051Z/m1m4/20261108T073056Z/m1-rep3/nolock
+2026-11-08 07:34:52 UTC  phase: done
+2026-11-08 07:34:52 UTC  outputs under /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z/m1m4-m1:
+  active_servers
+  heartbeat
+  m1-rep1-base.server.json
+  m1-rep1-base.views.json
+  m1-rep1-base.views.txt
+  m1-rep1-nolock.server.json
+  m1-rep1-nolock.views.json
+  m1-rep1-nolock.views.txt
+  m1-rep1.json
+  m1-rep1.txt
+  m1-rep2-base.server.json
+  m1-rep2-base.views.json
+  m1-rep2-base.views.txt
+  m1-rep2-nolock.server.json
+  m1-rep2-nolock.views.json
+  m1-rep2-nolock.views.txt
+  m1-rep2.json
+  m1-rep2.txt
+  m1-rep3-base.server.json
+  m1-rep3-base.views.json
+  m1-rep3-base.views.txt
+  m1-rep3-nolock.server.json
+  m1-rep3-nolock.views.json
+  m1-rep3-nolock.views.txt
+  m1-rep3.json
+  m1-rep3.txt
+  manifest.json
+  phase
+  servers.log
+  timeline.txt
+2026-11-08 07:34:52 UTC  cleanup (exit 0)

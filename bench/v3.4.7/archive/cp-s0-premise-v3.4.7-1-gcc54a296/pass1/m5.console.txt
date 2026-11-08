@@ -1,0 +1,31 @@
+started_utc=2026-11-08 07:29:06 UTC
+tree=/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration
+describe=v3.4.7-1-gcc54a296
+head=cc54a296
+binary=/tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-base
+binary_sha256=d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4
+workdir=/home/louis/bench-runs/cp-s0/20261108T072351Z/m5/m5-20261108T072906Z
+server_cpus=2-5 driver_cpus=0,1 cores=4
+rows=4096 ops=1000 blocks=6
+loadavg=0.87 1.00 0.52 1/342 336917
+competing=
+workdir_fstype=ext4
+{"pid": 336930, "port": 15561, "workdir": "/home/louis/bench-runs/cp-s0/20261108T072351Z/m5/m5-20261108T072906Z", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+server_pid=336930
+== cell kwp-w4 07:29:06 UTC
+cell=kwp-w4 rc=1
+run_m5.sh: cell kwp-w4 exited 1; /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m5/out-20261108T072906Z/m5-kwp-w4.err ends:
+setup: CREATE TABLE cp_fence_kwp-w4 refused: ERR expected '(', got '-' at byte 25
+== cell kwp-w1 07:29:06 UTC
+cell=kwp-w1 rc=1
+run_m5.sh: cell kwp-w1 exited 1; /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m5/out-20261108T072906Z/m5-kwp-w1.err ends:
+setup: CREATE TABLE cp_fence_kwp-w1 refused: ERR expected '(', got '-' at byte 25
+== cell text-w4 07:29:06 UTC
+cell=text-w4 rc=1
+run_m5.sh: cell text-w4 exited 1; /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m5/out-20261108T072906Z/m5-text-w4.err ends:
+setup: CREATE TABLE cp_fence_text-w4 refused: ERR expected '(', got '-' at byte 26
+== cell text-w1 07:29:06 UTC
+cell=text-w1 rc=1
+run_m5.sh: cell text-w1 exited 1; /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m5/out-20261108T072906Z/m5-text-w1.err ends:
+setup: CREATE TABLE cp_fence_text-w1 refused: ERR expected '(', got '-' at byte 26
+results under /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/m5/out-20261108T072906Z

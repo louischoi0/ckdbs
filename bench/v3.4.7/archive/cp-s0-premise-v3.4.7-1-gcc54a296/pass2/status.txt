@@ -1,0 +1,6 @@
+2026-11-08T07:30:51Z START2 run=/home/louis/bench-runs/cp-s0/20261108T073051Z out=/tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T073051Z
+2026-11-08T07:30:51Z BEGIN m5
+2026-11-08T07:30:56Z END m5 rc=0 elapsed=5s
+2026-11-08T07:30:56Z BEGIN m1
+2026-11-08T07:34:52Z END m1 rc=0 elapsed=241s
+2026-11-08T07:34:52Z DONE elapsed=241s

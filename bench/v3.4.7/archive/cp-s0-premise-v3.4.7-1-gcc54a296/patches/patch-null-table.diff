@@ -1,0 +1,45 @@
+--- a/src/server/expeditor.cpp
++++ b/src/server/expeditor.cpp
+@@ -1179,10 +1179,19 @@
+         if (!locks.ok()) return locks.status();
+         expeditor->locks_ = std::move(locks.value());
+     }
++    // CP-S0 M1 MEASUREMENT BUILD - never landed. The table above is still
++    // created, so `Start`'s `SetWakeRegistry` and the `locks()` accessor
++    // keep their object, but no manager and no dispatcher on any core is
++    // handed it: core 0's manager and dispatcher take nullptr here, and
++    // every peer takes nullptr through `core_config.locks` in `Start`
++    // (`CoreRuntime::Open` builds its own only at `core_count == 1`, and a
++    // peer exists only above one core). The instance therefore has no lock
++    // family; `txn.md` §5 and `workorder-cp-lock-model-exploration.md` §5
++    // (CP-S0) say what else that strips.
+     expeditor->txn_manager_.emplace(*expeditor->trx_ids_, *expeditor->undo_log_,
+                                     *expeditor->store_, &*expeditor->wal_,
+                                     &*expeditor->visibility_,
+-                                    /*core=*/0, expeditor->locks_.get());
++                                    /*core=*/0, /*locks=*/nullptr);
+     // The schema word a catalog-writing decide moves before its borrows go
+     // (AT-S5e) - the instance's, every core's catalog asks it.
+     expeditor->txn_manager_->SetSchemaWord(&expeditor->instance_words_.schema_word);
+@@ -1215,7 +1224,8 @@
+     expeditor->dispatcher_->set_recovery(&expeditor->recovery_);
+     // The dispatcher takes the table too (AO-S4b): its deadlock detector's
+     // wait-for graph spans every core.
+-    expeditor->dispatcher_->set_locks(expeditor->locks_.get());
++    // CP-S0 M1 MEASUREMENT BUILD: no table for core 0's dispatcher.
++    expeditor->dispatcher_->set_locks(nullptr);
+ 
+     // **Assertion enforcement, resumed** (RC07, AS6a). Here rather than beside
+     // the recovery call above, because the registry it refills lives on the
+@@ -1944,7 +1954,10 @@
+             // And the instance's lock table (AO-S5), on the same terms: one
+             // table is what lets this peer's decide wake a waiter on core 0
+             // and core 0's wake one here.
+-            core_config.locks = locks_.get();
++            // CP-S0 M1 MEASUREMENT BUILD: no table for any peer either, so
++            // the instance is not mixed (`core_count > 1` here, so
++            // `CoreRuntime::Open` builds none of its own).
++            core_config.locks = nullptr;
+             // The instance's four words (CT6), on the same terms.
+             core_config.instance_words = &instance_words_;
+             // **The instance's Cabin store** (AT-S7): every peer observes

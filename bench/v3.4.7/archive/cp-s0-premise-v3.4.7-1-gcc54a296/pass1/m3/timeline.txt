@@ -1,0 +1,12 @@
+2026-11-08T07:24:21Z m3-s2 server up: {"pid": 332307, "port": 25731, "workdir": "/home/louis/bench-runs/cp-s0/20261108T072351Z/m3/s2", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+2026-11-08T07:24:21Z s2-schema begin loadavg=0.45 0.21 0.11
+2026-11-08T07:24:21Z s2-schema end rc=0 loadavg=0.45 0.21 0.11
+2026-11-08T07:24:21Z s2-load begin loadavg=0.45 0.21 0.11
+2026-11-08T07:24:37Z s2-load end rc=0 loadavg=0.79 0.30 0.14
+2026-11-08T07:24:37Z s2-run begin loadavg=0.79 0.30 0.14
+2026-11-08T07:25:31Z s2-run end rc=0 loadavg=1.29 0.54 0.24
+2026-11-08T07:25:31Z m3-s2 server stop rc=0: {"pid": 332307, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-08T07:25:32Z m3-s0 server up: {"pid": 333085, "port": 25741, "workdir": "/home/louis/bench-runs/cp-s0/20261108T072351Z/m3/s0", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+2026-11-08T07:25:32Z s0-run begin loadavg=1.29 0.54 0.24
+2026-11-08T07:26:40Z s0-run end rc=0 loadavg=3.13 1.27 0.51
+2026-11-08T07:26:40Z m3-s0 server stop rc=0: {"pid": 333085, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}

@@ -1,0 +1,12 @@
+created 8 relations with suffix _m3s2:
+  organizations_m3s2
+  ships_m3s2
+  operations_m3s2
+  cargos_m3s2
+  fees_m3s2
+  recipes_m3s2
+  freights_m3s2
+  charges_m3s2
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools/scenario2_freight.py --suffix m3s2 [--load-only]

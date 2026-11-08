@@ -1,0 +1,14 @@
+[2026-11-08 07:29:07 UTC] manifest: /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m6/manifest.json (v3.4.7-1-gcc54a296, binary d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4)
+[2026-11-08 07:29:07 UTC] arm=group: starting server (KWP 15526, text 15527) in /home/louis/bench-runs/cp-s0/20261108T072351Z/m6/20261108T072907Z/group
+{"pid": 337048, "port": 15526, "workdir": "/home/louis/bench-runs/cp-s0/20261108T072351Z/m6/20261108T072907Z/group", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+[2026-11-08 07:29:07 UTC] arm=group: running 300 iterations (+5 warm-up) over text on port 15527
+[2026-11-08 07:29:07 UTC] arm=group: script exit 0
+{"pid": 337048, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+[2026-11-08 07:29:07 UTC] arm=group: stop exit 0 (0 = SIGTERM and clean banner; 2 = forced or no banner, the arm is suspect)
+[2026-11-08 07:29:07 UTC] arm=strict: starting server (KWP 15528, text 15529) in /home/louis/bench-runs/cp-s0/20261108T072351Z/m6/20261108T072907Z/strict
+{"pid": 337083, "port": 15528, "workdir": "/home/louis/bench-runs/cp-s0/20261108T072351Z/m6/20261108T072907Z/strict", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+[2026-11-08 07:29:08 UTC] arm=strict: running 300 iterations (+5 warm-up) over text on port 15529
+[2026-11-08 07:29:08 UTC] arm=strict: script exit 0
+{"pid": 337083, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+[2026-11-08 07:29:08 UTC] arm=strict: stop exit 0 (0 = SIGTERM and clean banner; 2 = forced or no banner, the arm is suspect)
+[2026-11-08 07:29:08 UTC] finished; outputs in /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m6

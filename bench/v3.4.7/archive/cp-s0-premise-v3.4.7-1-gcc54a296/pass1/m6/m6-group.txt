@@ -1,0 +1,19 @@
+CP-S0 M6 scripted half - arm=group protocol=text 127.0.0.1:15527 table=cp_release_group_337059 oid=4000
+  usable iterations      300/300  (A commit errors 0, B update errors 0)
+  B reply before A reply 1.0
+  margin A_reply - B_reply us  p50     423.0  p90     643.0  p99     933.3  min     55.6  max    1141.7
+  A COMMIT ack latency us      p50     539.0  p90     736.4  p99    1039.9  min    316.9  max    1227.2
+  B UPDATE latency us          p50      52.1  p90      89.8  p99     118.9  min     32.7  max     333.8
+  B send after A send us       p50      46.9  p90      83.6  p99     102.2  min     17.4  max     473.4
+  margin p50 / ack p50   0.785   B latency p50 / ack p50 0.097
+  final v                305 (expected 305, ok=True)
+  verdict                shown=True  [fraction >= 0.9 and margin p50 >= 0.5 * ack p50]
+  sys.lock_waits on the relation: 0 rows
+  sys.wait_stats total   commit.wal_flush       count     307 total_us     155437 max_us 1187
+  sys.wait_stats total   commit.ceiling_wait    count       0 total_us          0 max_us 0
+  sys.wait_stats total   app.lock_wait          count       0 total_us          0 max_us 0
+  sys.wait_stats total   app.lock_conflict      count       0 total_us          0 max_us 0
+  sys.wait_stats core 0  commit.wal_flush       count     307 total_us     155437
+  sys.session_waits A (commit.wal_flush)   session_id 2 count 305 total_us 154167
+  sys.meta               {'version': '35', 'core': '0', 'lock_waits_recorded': '0', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0'}
+  wrote /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m6/m6-group.json

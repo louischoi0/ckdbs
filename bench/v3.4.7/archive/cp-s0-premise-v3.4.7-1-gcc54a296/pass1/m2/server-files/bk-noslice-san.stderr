@@ -1,0 +1,4 @@
+ckdbs on /home/louis/bench-runs/cp-s0/20261108T072351Z/m2/work/sanity/bk-noslice-san.db: 17 pages, superblock version 35
+logging to /home/louis/bench-runs/cp-s0/20261108T072351Z/m2/work/sanity/bk-noslice-san.log at level WARN
+listening on 127.0.0.1:32621
+stopped; 626 pages persisted

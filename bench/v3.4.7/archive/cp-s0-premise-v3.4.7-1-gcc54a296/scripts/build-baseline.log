@@ -1,0 +1,313 @@
+-- The CXX compiler identification is GNU 14.2.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found suitable version "3.5.7", minimum required is "3.0")
+-- Found GTest: /usr/lib/x86_64-linux-gnu/cmake/GTest/GTestConfig.cmake (found version "1.15.0")
+-- Found Threads: TRUE
+-- Configuring done (0.3s)
+-- Generating done (0.1s)
+-- Build files have been written to: /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/build-release
+[  0%] Built target kds_version
+[  0%] Building CXX object CMakeFiles/kds.dir/src/base/log.cpp.o
+[  0%] Building CXX object CMakeFiles/kds.dir/src/storage/page_header.cpp.o
+[  2%] Building CXX object CMakeFiles/kds.dir/src/base/crash_point.cpp.o
+[  2%] Building CXX object CMakeFiles/kds.dir/src/base/fail_stop.cpp.o
+[  2%] Building CXX object CMakeFiles/kds.dir/src/storage/crc32c.cpp.o
+[  5%] Building CXX object CMakeFiles/kds.dir/src/storage/anchor_page.cpp.o
+[  5%] Building CXX object CMakeFiles/kds.dir/src/storage/page_device.cpp.o
+[  5%] Building CXX object CMakeFiles/kds.dir/src/storage/page_write_fence.cpp.o
+[  5%] Building CXX object CMakeFiles/kds.dir/src/storage/file_page_device.cpp.o
+[  5%] Building CXX object CMakeFiles/kds.dir/src/storage/memory_page_device.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/storage/keystone.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/storage/tagged_cell.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/storage/varheap.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/storage/heap/heap_page.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/storage/heap/heap_chain.cpp.o
+[ 11%] Building CXX object CMakeFiles/kds.dir/src/storage/btree/btree_page.cpp.o
+[ 11%] Building CXX object CMakeFiles/kds.dir/src/storage/btree/btree.cpp.o
+[ 11%] Building CXX object CMakeFiles/kds.dir/src/storage/index/index_page.cpp.o
+[ 11%] Building CXX object CMakeFiles/kds.dir/src/storage/index/index_tree.cpp.o
+[ 13%] Building CXX object CMakeFiles/kds.dir/src/storage/free_map.cpp.o
+[ 13%] Building CXX object CMakeFiles/kds.dir/src/txn/undo_page.cpp.o
+[ 13%] Building CXX object CMakeFiles/kds.dir/src/txn/varheap_release.cpp.o
+[ 13%] Building CXX object CMakeFiles/kds.dir/src/txn/undo_log.cpp.o
+[ 16%] Building CXX object CMakeFiles/kds.dir/src/txn/recovery_undo.cpp.o
+[ 16%] Building CXX object CMakeFiles/kds.dir/src/txn/visibility.cpp.o
+[ 16%] Building CXX object CMakeFiles/kds.dir/src/txn/trx_id.cpp.o
+[ 16%] Building CXX object CMakeFiles/kds.dir/src/txn/instance_visibility.cpp.o
+[ 19%] Building CXX object CMakeFiles/kds.dir/src/txn/lock_table.cpp.o
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/txn/visibility.cpp: In function ‘kds::StatusOr<kds::txn::Visibility> kds::txn::ResolveThroughUndo(const ReadView&, UndoLog&, uint64_t, bool, uint64_t, std::vector<std::byte>&)’:
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/txn/visibility.cpp:25:16: warning: enumeration value ‘kVarHeapAppend’ not handled in switch [-Wswitch]
+   25 |         switch (version.value().type) {
+      |                ^
+[ 19%] Building CXX object CMakeFiles/kds.dir/src/txn/manager.cpp.o
+[ 19%] Building CXX object CMakeFiles/kds.dir/src/storage/in_memory_page_store.cpp.o
+[ 19%] Building CXX object CMakeFiles/kds.dir/src/storage/cabin_bound_page.cpp.o
+[ 19%] Building CXX object CMakeFiles/kds.dir/src/storage/data_syncer.cpp.o
+[ 22%] Building CXX object CMakeFiles/kds.dir/src/storage/device_page_store.cpp.o
+[ 22%] Building CXX object CMakeFiles/kds.dir/src/storage/page_mgr/page_mgr.cpp.o
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/txn/manager.cpp: In member function ‘kds::Status kds::txn::TransactionManager::Compensate(const kds::txn::TrailEntry&, uint64_t, const RowLocator&)’:
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/txn/manager.cpp:504:12: warning: enumeration value ‘kVarHeapAppend’ not handled in switch [-Wswitch]
+  504 |     switch (entry.action) {
+      |            ^
+[ 22%] Building CXX object CMakeFiles/kds.dir/src/server/superblock.cpp.o
+[ 22%] Building CXX object CMakeFiles/kds.dir/src/server/superblock_checkpoint_anchor.cpp.o
+[ 25%] Building CXX object CMakeFiles/kds.dir/src/server/page_reclaim.cpp.o
+[ 25%] Building CXX object CMakeFiles/kds.dir/src/server/restore.cpp.o
+[ 25%] Building CXX object CMakeFiles/kds.dir/src/server/backup.cpp.o
+[ 25%] Building CXX object CMakeFiles/kds.dir/src/server/backup_manifest.cpp.o
+[ 27%] Building CXX object CMakeFiles/kds.dir/src/server/wal_archive.cpp.o
+[ 27%] Building CXX object CMakeFiles/kds.dir/src/server/core_runtime.cpp.o
+[ 27%] Building CXX object CMakeFiles/kds.dir/src/server/mount_recovery.cpp.o
+[ 27%] Building CXX object CMakeFiles/kds.dir/src/server/stop_signal.cpp.o
+[ 30%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_recover.cpp.o
+[ 30%] Building CXX object CMakeFiles/kds.dir/src/catalog/oid.cpp.o
+[ 30%] Building CXX object CMakeFiles/kds.dir/src/catalog/rows.cpp.o
+[ 30%] Building CXX object CMakeFiles/kds.dir/src/catalog/keystone_budget.cpp.o
+[ 30%] Building CXX object CMakeFiles/kds.dir/src/catalog/schema.cpp.o
+[ 33%] Building CXX object CMakeFiles/kds.dir/src/catalog/foreign_key.cpp.o
+[ 33%] Building CXX object CMakeFiles/kds.dir/src/catalog/row_layout.cpp.o
+[ 33%] Building CXX object CMakeFiles/kds.dir/src/catalog/sys_object_registry.cpp.o
+[ 33%] Building CXX object CMakeFiles/kds.dir/src/stats/waystone_page.cpp.o
+[ 36%] Building CXX object CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o
+[ 36%] Building CXX object CMakeFiles/kds.dir/src/stats/trail_store.cpp.o
+[ 36%] Building CXX object CMakeFiles/kds.dir/src/stats/plan_stats.cpp.o
+[ 36%] Building CXX object CMakeFiles/kds.dir/src/stats/checkpoint_log.cpp.o
+[ 38%] Building CXX object CMakeFiles/kds.dir/src/stats/lock_wait_log.cpp.o
+[ 38%] Building CXX object CMakeFiles/kds.dir/src/stats/relation_stats.cpp.o
+[ 38%] Building CXX object CMakeFiles/kds.dir/src/stats/statement_stats.cpp.o
+[ 38%] Building CXX object CMakeFiles/kds.dir/src/stats/trail_recorder.cpp.o
+[ 38%] Building CXX object CMakeFiles/kds.dir/src/stats/access_stats.cpp.o
+[ 41%] Building CXX object CMakeFiles/kds.dir/src/stats/cabin_store.cpp.o
+[ 41%] Building CXX object CMakeFiles/kds.dir/src/stats/optimizer_signals.cpp.o
+[ 41%] Building CXX object CMakeFiles/kds.dir/src/stats/cabin_optimizer.cpp.o
+[ 41%] Building CXX object CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o
+[ 44%] Building CXX object CMakeFiles/kds.dir/src/catalog/catalog.cpp.o
+[ 44%] Building CXX object CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o
+[ 44%] Building CXX object CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o
+[ 44%] Building CXX object CMakeFiles/kds.dir/src/server/sys_views.cpp.o
+[ 47%] Building CXX object CMakeFiles/kds.dir/src/server/expeditor.cpp.o
+[ 47%] Building CXX object CMakeFiles/kds.dir/src/server/config_file.cpp.o
+[ 47%] Building CXX object CMakeFiles/kds.dir/src/server/tcp_server.cpp.o
+[ 47%] Building CXX object CMakeFiles/kds.dir/src/server/connection_handoff.cpp.o
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement(kds::server::Session*, Body&&)’:
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/command_dispatcher.cpp:1065:95: warning: missing initializer for member ‘kds::server::DispatchOutcome::WriteBlock::slot’ [-Wmissing-field-initializers]
+ 1065 |         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_tuple_key_};
+      |                                                                                               ^
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+   91 | };
+      | ^
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/sys_views.cpp:91:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+[ 50%] Building CXX object CMakeFiles/kds.dir/src/server/load_placer.cpp.o
+[ 50%] Building CXX object CMakeFiles/kds.dir/src/server/priority.cpp.o
+[ 50%] Building CXX object CMakeFiles/kds.dir/src/server/kwp_load_server.cpp.o
+[ 50%] Building CXX object CMakeFiles/kds.dir/src/server/kwp_session.cpp.o
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/command_dispatcher.cpp: In instantiation of ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement(kds::server::Session*, Body&&) [with Body = kds::server::CommandDispatcher::DispatchAndStage(std::string_view, kds::server::Session*)::<lambda(kds::server::Session&)>]’:
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/command_dispatcher.cpp:992:23:   required from here
+  992 |         StageStatement(session, [&](Session& active) { return DispatchInner(line, active); });
+      |         ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/command_dispatcher.cpp:1065:95: warning: missing initializer for member ‘kds::server::DispatchOutcome::WriteBlock::slot’ [-Wmissing-field-initializers]
+ 1065 |         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_tuple_key_};
+      |                                                                                               ^
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/command_dispatcher.cpp: In instantiation of ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement(kds::server::Session*, Body&&) [with Body = kds::server::BuildRun::Execute(kds::server::BuildRun::Execute(kds::server::DispatchOutcome*)::_ZN3kds6server8BuildRun7ExecuteEPNS0_15DispatchOutcomeE.Frame*)::<lambda(kds::server::Session&)>]’:
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/command_dispatcher.cpp:2573:29:   required from here
+ 2573 |     *out = d_.StageStatement(&session_, [&](Session& active) {
+      |            ~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2574 |         d_.StampStatement(active);
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2575 |         // The head took the statement's boundary; a second would re-mint an
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2576 |         // explicit transaction's view mid-statement.
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2577 |         d_.statement_boundary_taken_ = true;
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2578 |         DispatchOutcome reply = FramedTail(active, ran);
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2579 |         // A cancelled statement leaves an open transaction failed
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2580 |         // (`protocol.md` §10), whatever the build's own refusals leave - a
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2581 |         // declaration's own refusals poison nothing (the operator's ruling of
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2582 |         // 2026-10-21).
+      |         ~~~~~~~~~~~~~~~      
+ 2583 |         if (ran.code() == StatusCode::kCancelled) active.Poison();
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2584 |         decided_ = true;
+      |         ~~~~~~~~~~~~~~~~     
+ 2585 |         return reply;
+      |         ~~~~~~~~~~~~~        
+ 2586 |     });
+      |     ~~                       
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/command_dispatcher.cpp:1065:95: warning: missing initializer for member ‘kds::server::DispatchOutcome::WriteBlock::slot’ [-Wmissing-field-initializers]
+ 1065 |         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_tuple_key_};
+      |                                                                                               ^
+[ 50%] Building CXX object CMakeFiles/kds.dir/src/parser/lexer.cpp.o
+[ 52%] Building CXX object CMakeFiles/kds.dir/src/parser/fingerprint.cpp.o
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/kwp_session.cpp: In function ‘constexpr uint8_t kds::server::{anonymous}::TxnStateOf(const kds::server::Session&)’:
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/kwp_session.cpp:33:51: warning: call to non-‘constexpr’ function ‘kds::server::Session::State kds::server::Session::state() const’ [-Winvalid-constexpr]
+   33 |     return static_cast<std::uint8_t>(session.state());
+      |                                      ~~~~~~~~~~~~~^~
+In file included from /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/include/kds/server/command_dispatcher.hpp:52,
+                 from /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/include/kds/server/kwp_session.hpp:16,
+                 from /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/kwp_session.cpp:1:
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/include/kds/server/session.hpp:131:11: note: ‘kds::server::Session::State kds::server::Session::state() const’ declared here
+  131 |     State state() const noexcept { return state_; }
+      |           ^~~~~
+[ 52%] Building CXX object CMakeFiles/kds.dir/src/parser/ast.cpp.o
+[ 52%] Building CXX object CMakeFiles/kds.dir/src/parser/parser.cpp.o
+[ 52%] Building CXX object CMakeFiles/kds.dir/src/wire/frame_codec.cpp.o
+[ 55%] Building CXX object CMakeFiles/kds.dir/src/wire/kwp_types.cpp.o
+In file included from /usr/include/x86_64-linux-gnu/c++/14/bits/c++allocator.h:33,
+                 from /usr/include/c++/14/bits/allocator.h:46,
+                 from /usr/include/c++/14/deque:63,
+                 from /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/include/kds/server/kwp_session.hpp:4:
+In member function ‘void std::__new_allocator<_Tp>::deallocate(_Tp*, size_type) [with _Tp = std::byte]’,
+    inlined from ‘constexpr void std::allocator< <template-parameter-1-1> >::deallocate(_Tp*, std::size_t) [with _Tp = std::byte]’ at /usr/include/c++/14/bits/allocator.h:208:35,
+    inlined from ‘static constexpr void std::allocator_traits<std::allocator<_Up> >::deallocate(allocator_type&, pointer, size_type) [with _Tp = std::byte]’ at /usr/include/c++/14/bits/alloc_traits.h:550:23,
+    inlined from ‘constexpr std::vector<_Tp, _Alloc>::_M_realloc_append(_Args&& ...)::_Guard::~_Guard() [with _Args = {std::byte}; _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/vector.tcc:616:18,
+    inlined from ‘constexpr void std::vector<_Tp, _Alloc>::_M_realloc_append(_Args&& ...) [with _Args = {std::byte}; _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/vector.tcc:688:7,
+    inlined from ‘constexpr std::vector<_Tp, _Alloc>::reference std::vector<_Tp, _Alloc>::emplace_back(_Args&& ...) [with _Args = {std::byte}; _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/vector.tcc:123:21,
+    inlined from ‘constexpr void std::vector<_Tp, _Alloc>::push_back(value_type&&) [with _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/stl_vector.h:1301:21,
+    inlined from ‘void kds::server::WireResultSink::Seal()’ at /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/kwp_session.cpp:286:28:
+/usr/include/c++/14/bits/new_allocator.h:172:33: warning: ‘void operator delete(void*, std::size_t)’ called on pointer ‘<unknown>’ with nonzero offset [1, 9223372036854775807] [-Wfree-nonheap-object]
+  172 |         _GLIBCXX_OPERATOR_DELETE(_GLIBCXX_SIZED_DEALLOC(__p, __n));
+      |                                 ^
+In member function ‘_Tp* std::__new_allocator<_Tp>::allocate(size_type, const void*) [with _Tp = std::byte]’,
+    inlined from ‘constexpr _Tp* std::allocator< <template-parameter-1-1> >::allocate(std::size_t) [with _Tp = std::byte]’ at /usr/include/c++/14/bits/allocator.h:196:40,
+    inlined from ‘static constexpr _Tp* std::allocator_traits<std::allocator<_Up> >::allocate(allocator_type&, size_type) [with _Tp = std::byte]’ at /usr/include/c++/14/bits/alloc_traits.h:515:28,
+    inlined from ‘constexpr std::_Vector_base<_Tp, _Alloc>::pointer std::_Vector_base<_Tp, _Alloc>::_M_allocate(std::size_t) [with _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/stl_vector.h:380:33,
+    inlined from ‘constexpr void std::vector<_Tp, _Alloc>::reserve(size_type) [with _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/vector.tcc:79:33,
+    inlined from ‘void kds::server::WireResultSink::Seal()’ at /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/kwp_session.cpp:285:26:
+/usr/include/c++/14/bits/new_allocator.h:151:55: note: returned from ‘void* operator new(std::size_t)’
+  151 |         return static_cast<_Tp*>(_GLIBCXX_OPERATOR_NEW(__n * sizeof(_Tp)));
+      |                                                       ^
+[ 55%] Building CXX object CMakeFiles/kds.dir/src/wire/handshake.cpp.o
+[ 55%] Building CXX object CMakeFiles/kds.dir/src/wire/error_registry.cpp.o
+[ 55%] Building CXX object CMakeFiles/kds.dir/src/wire/row_codec.cpp.o
+[ 58%] Building CXX object CMakeFiles/kds.dir/src/wal/record.cpp.o
+[ 58%] Building CXX object CMakeFiles/kds.dir/src/wal/payload.cpp.o
+[ 58%] Building CXX object CMakeFiles/kds.dir/src/wal/stream.cpp.o
+[ 58%] Building CXX object CMakeFiles/kds.dir/src/wal/log_scanner.cpp.o
+[ 61%] Building CXX object CMakeFiles/kds.dir/src/wal/analysis.cpp.o
+[ 61%] Building CXX object CMakeFiles/kds.dir/src/wal/redo.cpp.o
+[ 61%] Building CXX object CMakeFiles/kds.dir/src/wal/high_water.cpp.o
+[ 61%] Building CXX object CMakeFiles/kds.dir/src/wal/recovery.cpp.o
+[ 61%] Building CXX object CMakeFiles/kds.dir/src/wal/manager.cpp.o
+[ 63%] Building CXX object CMakeFiles/kds.dir/src/wal/checkpointer.cpp.o
+[ 63%] Building CXX object CMakeFiles/kds.dir/src/wal/log_device.cpp.o
+[ 63%] Building CXX object CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.o
+[ 63%] Building CXX object CMakeFiles/kds.dir/src/wal/file_log_device.cpp.o
+[ 66%] Building CXX object CMakeFiles/kds.dir/src/wal/writer.cpp.o
+[ 66%] Building CXX object CMakeFiles/kds.dir/src/exec/row_codec.cpp.o
+In file included from /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/include/kds/exec/assertion_build.hpp:12,
+                 from /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/include/kds/exec/assertion_check.hpp:15,
+                 from /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/include/kds/server/command_dispatcher.hpp:23,
+                 from /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/command_dispatcher.cpp:1:
+In destructor ‘kds::txn::HolderProgress::Scope::~Scope()’,
+    inlined from ‘constexpr void std::_Optional_payload_base<_Tp>::_M_destroy() [with _Tp = kds::txn::HolderProgress::Scope]’ at /usr/include/c++/14/optional:283:35,
+    inlined from ‘constexpr void std::_Optional_payload_base<_Tp>::_M_reset() [with _Tp = kds::txn::HolderProgress::Scope]’ at /usr/include/c++/14/optional:314:14,
+    inlined from ‘constexpr void std::_Optional_payload_base<_Tp>::_M_reset() [with _Tp = kds::txn::HolderProgress::Scope]’ at /usr/include/c++/14/optional:311:7,
+    inlined from ‘constexpr std::_Optional_payload<_Tp, false, _Copy, _Move>::~_Optional_payload() [with _Tp = kds::txn::HolderProgress::Scope; bool _Copy = false; bool _Move = false]’ at /usr/include/c++/14/optional:437:65,
+    inlined from ‘constexpr std::_Optional_base<kds::txn::HolderProgress::Scope, false, false>::~_Optional_base()’ at /usr/include/c++/14/optional:508:12,
+    inlined from ‘constexpr std::optional<kds::txn::HolderProgress::Scope>::~optional()’ at /usr/include/c++/14/optional:703:11,
+    inlined from ‘kds::server::CommandDispatcher::DdlBuildLock::~DdlBuildLock()’ at /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/server/command_dispatcher.cpp:3928:59:
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/include/kds/txn/holder_progress.hpp:73:17: warning: ‘((kds::txn::HolderProgress::Scope*)this)[2].kds::txn::HolderProgress::Scope::slot_’ may be used uninitialized [-Wmaybe-uninitialized]
+   73 |             if (slot_ != nullptr) slot_->holder.store(0, std::memory_order_release);
+      |                 ^~~~~
+[ 66%] Building CXX object CMakeFiles/kds.dir/src/exec/catalog_spills.cpp.o
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/exec/row_codec.cpp: In function ‘std::optional<kds::exec::ScanKernelTerm> kds::exec::CompileScanKernelTerm(const kds::catalog::Schema&, const kds::catalog::RowLayout&, uint16_t, kds::parser::CompareOp, const kds::parser::AstValue&)’:
+/home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/src/exec/row_codec.cpp:1396:79: warning: unused parameter ‘layout’ [-Wunused-parameter]
+ 1396 |                                                     const catalog::RowLayout& layout,
+      |                                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~
+[ 66%] Building CXX object CMakeFiles/kds.dir/src/exec/purge_key.cpp.o
+[ 69%] Building CXX object CMakeFiles/kds.dir/src/exec/clean_dropped.cpp.o
+[ 69%] Building CXX object CMakeFiles/kds.dir/src/exec/varheap_sweep.cpp.o
+[ 69%] Building CXX object CMakeFiles/kds.dir/src/exec/index_key.cpp.o
+[ 69%] Building CXX object CMakeFiles/kds.dir/src/exec/fk_check.cpp.o
+[ 69%] Building CXX object CMakeFiles/kds.dir/src/exec/plan_printer.cpp.o
+[ 72%] Building CXX object CMakeFiles/kds.dir/src/exec/functions.cpp.o
+[ 72%] Building CXX object CMakeFiles/kds.dir/src/exec/step_compiler.cpp.o
+[ 72%] Building CXX object CMakeFiles/kds.dir/src/exec/join_order.cpp.o
+[ 72%] Building CXX object CMakeFiles/kds.dir/src/exec/plan_memo.cpp.o
+[ 75%] Building CXX object CMakeFiles/kds.dir/src/exec/set_expr.cpp.o
+[ 75%] Building CXX object CMakeFiles/kds.dir/src/exec/query_layer.cpp.o
+[ 75%] Building CXX object CMakeFiles/kds.dir/src/exec/aggregate.cpp.o
+[ 75%] Building CXX object CMakeFiles/kds.dir/src/exec/sort.cpp.o
+[ 77%] Building CXX object CMakeFiles/kds.dir/src/exec/type_literals.cpp.o
+[ 77%] Building CXX object CMakeFiles/kds.dir/src/exec/chain_frame.cpp.o
+[ 77%] Building CXX object CMakeFiles/kds.dir/src/exec/step_vm.cpp.o
+[ 77%] Building CXX object CMakeFiles/kds.dir/src/exec/budget.cpp.o
+[ 80%] Building CXX object CMakeFiles/kds.dir/src/exec/trail_replay.cpp.o
+[ 80%] Building CXX object CMakeFiles/kds.dir/src/exec/tuple_verify.cpp.o
+[ 80%] Building CXX object CMakeFiles/kds.dir/src/exec/wal_row_log.cpp.o
+[ 80%] Building CXX object CMakeFiles/kds.dir/src/exec/cabin_ddl.cpp.o
+[ 80%] Building CXX object CMakeFiles/kds.dir/src/exec/cabin_expr.cpp.o
+[ 83%] Building CXX object CMakeFiles/kds.dir/src/exec/index_ddl.cpp.o
+In file included from /usr/include/c++/14/bits/hashtable_policy.h:36,
+                 from /usr/include/c++/14/bits/hashtable.h:35,
+                 from /usr/include/c++/14/bits/unordered_map.h:33,
+                 from /usr/include/c++/14/unordered_map:41,
+                 from /usr/include/c++/14/functional:63,
+                 from /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/include/kds/server/command_dispatcher.hpp:5:
+In function ‘constexpr decltype (__comp((* __first1), (* __first2))) std::lexicographical_compare_three_way(_InputIter1, _InputIter1, _InputIter2, _InputIter2, _Comp) [with _InputIter1 = __gnu_cxx::__normal_iterator<const byte*, vector<byte> >; _InputIter2 = __gnu_cxx::__normal_iterator<const byte*, vector<byte> >; _Comp = __detail::_Synth3way]’,
+    inlined from ‘constexpr std::__detail::__synth3way_t<_Iterator> std::operator<=>(const vector<_Tp, _Alloc>&, const vector<_Tp, _Alloc>&) [with _Tp = byte; _Alloc = allocator<byte>]’ at /usr/include/c++/14/bits/stl_vector.h:2071:52,
+    inlined from ‘constexpr bool std::less<_Tp>::operator()(const _Tp&, const _Tp&) const [with _Tp = std::vector<std::byte>]’ at /usr/include/c++/14/bits/stl_function.h:405:20,
+    inlined from ‘std::pair<std::_Rb_tree_node_base*, std::_Rb_tree_node_base*> std::_Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::_M_get_insert_unique_pos(const key_type&) [with _Key = std::vector<std::byte>; _Val = std::vector<std::byte>; _KeyOfValue = std::_Identity<std::vector<std::byte> >; _Compare = std::less<std::vector<std::byte> >; _Alloc = std::allocator<std::vector<std::byte> >]’ at /usr/include/c++/14/bits/stl_tree.h:2116:35,
+    inlined from ‘std::pair<std::_Rb_tree_iterator<_Val>, bool> std::_Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::_M_insert_unique(_Arg&&) [with _Arg = const std::vector<std::byte>&; _Key = std::vector<std::byte>; _Val = std::vector<std::byte>; _KeyOfValue = std::_Identity<std::vector<std::byte> >; _Compare = std::less<std::vector<std::byte> >; _Alloc = std::allocator<std::vector<std::byte> >]’ at /usr/include/c++/14/bits/stl_tree.h:2169:28:
+/usr/include/c++/14/bits/stl_algobase.h:1884:39: warning: ‘int __builtin_memcmp(const void*, const void*, long unsigned int)’ specified bound [9223372036854775808, 18446744073709551615] exceeds maximum object size 9223372036854775807 [-Wstringop-overread]
+ 1884 |                     = __builtin_memcmp(&*__first1, &*__first2, __blen) <=> 0;
+      |                       ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+[ 83%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_build.cpp.o
+[ 83%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_catalog.cpp.o
+[ 83%] Building CXX object CMakeFiles/kds.dir/src/exec/declaration_relation.cpp.o
+[ 86%] Building CXX object CMakeFiles/kds.dir/src/exec/transition_catalog.cpp.o
+[ 86%] Building CXX object CMakeFiles/kds.dir/src/exec/transition.cpp.o
+[ 86%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_check.cpp.o
+[ 86%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_replay.cpp.o
+[ 88%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_violation.cpp.o
+[ 88%] Building CXX object CMakeFiles/kds.dir/src/exec/bound_cabin.cpp.o
+[ 88%] Building CXX object CMakeFiles/kds.dir/src/exec/cabin_optimizer_exec.cpp.o
+[ 88%] Building CXX object CMakeFiles/kds.dir/src/exec/index_maintain.cpp.o
+[ 91%] Building CXX object CMakeFiles/kds.dir/src/sched/clock.cpp.o
+[ 91%] Building CXX object CMakeFiles/kds.dir/src/sched/scheduler.cpp.o
+[ 91%] Building CXX object CMakeFiles/kds.dir/src/sched/coro.cpp.o
+[ 91%] Building CXX object CMakeFiles/kds.dir/src/sched/wait_state.cpp.o
+[ 91%] Building CXX object CMakeFiles/kds.dir/src/sched/ash_sampler.cpp.o
+[ 94%] Building CXX object CMakeFiles/kds.dir/src/sched/waker.cpp.o
+[ 94%] Building CXX object CMakeFiles/kds.dir/src/sched/sim_waker_table.cpp.o
+[ 94%] Building CXX object CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o
+[ 94%] Building CXX object CMakeFiles/kds.dir/src/server/tls_channel.cpp.o
+[ 97%] Building CXX object CMakeFiles/kds.dir/src/server/scram.cpp.o
+[ 97%] Building CXX object CMakeFiles/kds.dir/src/server/auth.cpp.o
+[ 97%] Linking CXX static library libkds.a
+[ 97%] Built target kds
+[ 97%] Building CXX object CMakeFiles/kds_server.dir/src/server/main.cpp.o
+[100%] Linking CXX executable kds_server
+[100%] Built target kds_server
+exit=0
+Sun Nov  8 06:21:17 UTC 2026

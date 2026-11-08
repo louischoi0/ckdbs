@@ -1,0 +1,4 @@
+ckdbs on /home/louis/bench-runs/cp-s0/20261108T073051Z/m5/m5-20261108T073051Z/kds.db: 17 pages, superblock version 35
+logging to /home/louis/bench-runs/cp-s0/20261108T073051Z/m5/m5-20261108T073051Z/kdb.log at level INFO
+listening on 127.0.0.1:15561
+stopped; 260 pages persisted

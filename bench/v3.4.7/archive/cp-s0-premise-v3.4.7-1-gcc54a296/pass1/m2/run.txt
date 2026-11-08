@@ -1,0 +1,24 @@
+== CP-S0 M2 run
+started_utc 2026-11-08 07:26:40 UTC
+tree /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration
+describe v3.4.7-1-gcc54a296 head cc54a296
+driver /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools/bm_scan.py (unmodified)
+base /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-base
+noslice /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-noslice
+workdir /home/louis/bench-runs/cp-s0/20261108T072351Z/m2/work
+out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m2
+port 32611 (arms from 32611; sanity 32621)
+replicate 0
+runs 5 blocks 12 scan_ops 768 point_ops 3000 cells rows-100k,wide-a
+pin_server 2 pin_driver 3 quiet_load 2 quiet_wait 60
+workdir_fs /dev/nvme0n1p1 ext4
+host_wait_s 0
+sanity_start 07:26:40
+sanity_rc 0
+census_start 07:27:42
+census_cmd python3 /home/louis/ckdbs/.claude/worktrees/cp-lock-model-exploration/tools/bm_scan.py census --arm base=/tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-base --arm noslice=/tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/bin/kds_server-noslice --workdir /home/louis/bench-runs/cp-s0/20261108T072351Z/m2/work --port 32611 --pin-server 2 --pin-driver 3 --runs 5 --blocks 12 --scan-ops 768 --point-ops 3000 --cells rows-100k\,wide-a --quiet-load 2 --quiet-wait 60 --out /tmp/claude-1000/-home-louis-ckdbs/1c794fd2-a838-4425-a96a-e3b26a73757b/scratchpad/cp-s0/run/20261108T072351Z/m2/census.json
+census_rc 0
+census_end 07:29:03
+summary_rc 0
+0.87 1.00 0.52 1/349 336878
+ended_utc 2026-11-08 07:29:04 UTC

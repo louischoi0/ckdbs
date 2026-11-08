@@ -1,0 +1,20 @@
+--- a/include/kds/server/read_borrow.hpp
++++ b/include/kds/server/read_borrow.hpp
+@@ -98,6 +98,17 @@
+             if (took && taken_ != nullptr) ++*taken_;
+             ask = asks_.insert(asks_.end(), Ask{rel, took});
+         }
++        // ---- CP-S0 measurement build (cell M2, candidate C1) ------------
++        //
++        // **A slice is declined here.** The relation ask above ran exactly
++        // as it does in the tree, so the relation `IS` - the unit a DDL's
++        // `X` meets - is unchanged; what is left out is the per-leaf-page
++        // slice `IS` the outermost walk reports from `step_vm.cpp:2089`,
++        // neither taken nor released. The whole-id-space calls (every bind,
++        // a walk's first report) pass through and return at the check below
++        // as before. Not for landing: C1 as landed deletes the report site
++        // and the `rel_`/`slice_` state under this line as well.
++        if (!(lo == 0 && hi == kIdSpaceEnd)) return;
+         if (rel != rel_) {
+             rel_ = rel;
+             // The slice belonged to the relation being left: a slice kept

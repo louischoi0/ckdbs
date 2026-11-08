@@ -1414,13 +1414,32 @@ Verified on `worktree-bz-background-advisory-optimizer` at `954abc20`
   (`bench/v3.2.0/results-ca-s0-premise-*.md`). The order's note, drain, steward and
   published route table (CA-R2..R4) are not built. Neither is the base-fetch hint
   (CA-S3).
-- **Scenario 2's booking rate is the hot row's lock held across the group
-  fsync.** Each booking updates one of a few hot `operations` rows, and keeps
-  the row's `X` until its commit is durable. So eight bookers serialize on
-  `fsync` latency, and a read path made 6 % cheaper moved the committed TPS by
-  nothing (`bench/v3.2.0/results-ca-r1-visibility-*.md`). Releasing a lock before
-  the commit is durable, with the dependency tracking that makes it sound, is a
-  commit-protocol decision nobody has taken.
+- **Scenario 2's booking rate is not a hot row's lock held across the group
+  fsync (lock waits are 0.03 % of its DB time); a booker's time is CPU and
+  its own commit acknowledgement.** Corrected 2026-11-08
+  on `worktree-cp-lock-model-exploration` at `cc54a296` (CP-S0, cell M6,
+  `bench/v3.4.7/results-cp-s0-premise-v3.4.7-1-gcc54a296.md`); the earlier
+  text here, verified at `954abc20`, said the row's `X` is kept "until its
+  commit is durable", and the tree says otherwise: under `group`
+  `WalManager::Commit` returns after the append (`src/wal/manager.cpp:441-445`),
+  `FinishCommitBody` publishes, retires and releases every borrow
+  (`src/txn/manager.cpp:306-336`), and only the acknowledgement waits for the
+  batch (`txn.md` §4: "a reader sees a commit as soon as the record is
+  appended, which under `group` is before the platter has it"). Measured: a
+  second session's `UPDATE` of the row a first session had just committed
+  answered before the first's `COMMIT` in 300 of 300 iterations, by a margin
+  of 78 % of the acknowledgement's latency (p50 423 us of 539 us), and parked
+  on no lock; under `strict` above one core, where the deferred commit does
+  hold its borrows across the sync by design (BA-S7), the second waited the
+  whole sync (305 `sys.lock_waits` rows, p50 440 us) and answered first in
+  1.3 % of iterations. `tests/lock_release_before_sync_rig_test.cpp` pins
+  the `group` order on the two-core rig. So eight bookers each wait for their
+  own `commit.wal_flush` (44 % of the run's DB time in CP-S0's scenario 2
+  run, beside 53 % on CPU; lock waits 0.03 %), which is consistent with a
+  read path made 6 % cheaper moving the committed TPS by nothing
+  (`bench/v3.2.0/results-ca-r1-visibility-*.md`).
+  Releasing a lock before durability is not a decision left to take: the
+  engine does it, and CP withdrew the candidate (its order §3).
 - **A pinned floor still costs a latched lookup per writer, per statement.** A
   memo removes the per-row cost (`txn.md` §4.4). Lowering the idle burn's
   threshold so the floor would follow was measured and reverted: it added

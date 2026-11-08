@@ -1,0 +1,43 @@
+== date
+2026-11-08 07:26:40 UTC
+== uname
+Linux kdbs 6.12.113+deb13-cloud-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.113-1 (2026-10-15) x86_64 GNU/Linux
+== cpus
+8
+model name	: INTEL(R) XEON(R) PLATINUM 8581C CPU @ 2.10GHz
+== siblings
+cpu0: 0,4
+cpu1: 1,5
+cpu2: 2,6
+cpu3: 3,7
+cpu4: 0,4
+cpu5: 1,5
+cpu6: 2,6
+cpu7: 3,7
+== mem
+               total        used        free      shared  buff/cache   available
+Mem:           32098        2234       18438         248       12129       29863
+Swap:              0           0           0
+== loadavg
+3.13 1.27 0.51 1/348 333987
+== df -T workdir
+Filesystem     Type 1K-blocks     Used Available Use% Mounted on
+/dev/nvme0n1p1 ext4 263968576 42963516 210153268  17% /
+== df -T out
+Filesystem     Type  1K-blocks   Used Available Use% Mounted on
+tmpfs          tmpfs  16434548 253740  16180808   2% /tmp
+== competing (pgrep cc1plus|cmake --build|ctest|kds_tests)
+none
+== listeners
+State  Recv-Q Send-Q Local Address:Port  Peer Address:Port
+LISTEN 0      128          0.0.0.0:20202      0.0.0.0:*   
+LISTEN 0      128          0.0.0.0:22         0.0.0.0:*   
+LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*   
+LISTEN 0      4096      127.0.0.54:53         0.0.0.0:*   
+LISTEN 0      4096         0.0.0.0:5355       0.0.0.0:*   
+LISTEN 0      4096       127.0.0.1:20241      0.0.0.0:*   
+LISTEN 0      20         127.0.0.1:25         0.0.0.0:*   
+LISTEN 0      20             [::1]:25            [::]:*   
+LISTEN 0      4096               *:20201            *:*   
+LISTEN 0      128             [::]:22            [::]:*   
+LISTEN 0      4096            [::]:5355          [::]:*   

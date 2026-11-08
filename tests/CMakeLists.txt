@@ -76,6 +76,7 @@ add_executable(kds_tests
     contention_counters_test.cpp
     durable_kick_rig_test.cpp
     strict_park_rig_test.cpp
+    lock_release_before_sync_rig_test.cpp
     trx_id_carve_crash_rig_test.cpp
     structural_rerun_rig_test.cpp
     walk_slice_rig_test.cpp

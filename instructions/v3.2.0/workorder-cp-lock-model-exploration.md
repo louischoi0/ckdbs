@@ -10,14 +10,17 @@ Written 2026-11-07 on `worktree-cp-lock-model-exploration` from `6c4b9a6d`
   one that is new, fits the KDS system better, is optimized, and keeps
   correctness - that is what we research."*
 
-**Written 2026-11-07; not opened.** Reviewed the same day by the
-`critics-developer` pass (§7, the opening review): the census corrected,
-two missed risks written into C2 and C4, one candidate (release before
-durability) withdrawn because the tree contradicts its premise. CP-Q0..CP-Q9
-carry CLA's proposals, none marked. **Exploratory on W0**: CP-S0 (the
-census and the premise measurement) and CP-S1 (the model) decide which
-candidates of §3 are built; a candidate not taken is recorded with the
-number that refused it, not built.
+**Written 2026-11-07; opened 2026-11-08** on the operator's marks
+(`raft-marks-2026-11-08.md` §1, W1: *"CP-Q0..Q9 `$!a`, proceed with S0"*):
+**CP-Q0..CP-Q9 are all marked (a)**, CLA's proposal in each (§4), and CP-S0
+started the same day from `cc54a296` (`v3.4.7-1-gcc54a296`, build inputs
+`6c4b9a6d`'s). Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
+the opening review): the census corrected, two missed risks written into C2
+and C4, one candidate (release before durability) withdrawn because the
+tree contradicts its premise. **Exploratory on W0**: CP-S0 (the census and
+the premise measurement) and CP-S1 (the model) decide which candidates of
+§3 are built; a candidate not taken is recorded with the number that
+refused it, not built.
 
 **Claim tags**: `[operator]` for W0; `[source-read]` with `path:line` at
 `6c4b9a6d`; `[measured]` with its results file or, where the file left the
@@ -88,8 +91,8 @@ argument as explicit as `lock_table.hpp`'s publish-then-verify one.
   rows). **Three sites filter by mode name before the matrix is read**:
   `IsFence` counts an interval unit as a fence only in `S` or `X`
   (`src/txn/lock_table.cpp:26`), `FenceCoversKey` skips any holder not in
-  `S` or `X` (`:675`), and `AcquireInner` runs the verify only for a
-  fence or a tuple (`:340-356`). A mode added to the enum compiles past
+  `S` or `X` (`:673`), and `AcquireInner` runs the verify only for a
+  fence or a tuple (`:339-353`). A mode added to the enum compiles past
   all three; only the two tables refuse to compile unfilled.
 - One table for the instance, 64 partitions at every core count keyed by
   `(rel_oid, unit, lo)` (`lock_table.hpp:339`, BP-S6), a `std::mutex`
@@ -113,11 +116,15 @@ argument as explicit as `lock_table.hpp`'s publish-then-verify one.
 - **A commit releases its borrows before its sync under `group`**:
   `WalManager::Commit` returns after the append for `kGroup`
   (`src/wal/manager.cpp:441-445`), `TransactionManager::Commit` then runs
-  `FinishCommitBody` (`src/txn/manager.cpp:385`, `:398`), which publishes,
-  retires, moves the schema word and releases (`:306-336`), and only the
-  acknowledgement waits on the batch (`command_dispatcher.cpp:11768-11771`,
-  `wal.md` §1). Borrows are held across a sync only by `strict`'s deferred
-  commit above one core (`DefersCommit`, `:1141-1145`, BA-S7).
+  `FinishCommitBody` (`src/txn/manager.cpp:398`; `:363` is the deferred
+  commit's call), which publishes, retires, moves the schema word and
+  releases (`:306-336`), and only the acknowledgement waits on the batch
+  (the group commit's pending mark `command_dispatcher.cpp:11771-11774`,
+  waited at `:890-913` for `DispatchAsync` and `:1235-1240` for `Dispatch`;
+  `wal.md` §1; `txn.md` §4 "When a commit becomes visible": *"a reader sees
+  a commit as soon as the record is appended, which under `group` is before
+  the platter has it"*). Borrows are held across a sync only by `strict`'s
+  deferred commit above one core (`DefersCommit`, `:1141-1145`, BA-S7).
 
 ### 1.2 Every ask, by what it protects
 
@@ -127,14 +134,14 @@ Every site in `src/` and `include/` that names a `LockKey` or calls
 
 | # | site | unit, mode | scope | what it protects | what else protects it |
 |---|---|---|---|---|---|
-| A1 | `BorrowChain`, `src/server/command_dispatcher.cpp:11254-11263`; the CI drain reads the entry's holders at `:2700` | relation `IX` (a write), `IS` (a foreign key's parent read) | transaction | a DDL's relation `X` waits for every open writer (AT-S5e); the first intention is where the statement's memo must be current; CI-R2's drain snapshots the `IX` holders | nothing: a writer maintaining an index a build is announcing, or writing rows into a relation a drop is tombstoning, is kept out by this alone |
+| A1 | `BorrowChain`, `src/server/command_dispatcher.cpp:11254-11263` (the intention above every unit ask); the relation unit asked directly, stopping at the intention (`:11307`): `InsertParsed` `:6216`, `HandlePurge` `:12344` (BH-R4, the one `IX` with no unit beneath it), `HandlePurgeDroppedColumns` `:12466`; the CI drain reads the entry's `IX` holders at `:2712` (`IntentionWriters`, `lock_table.cpp:523-526`) | relation `IX` (a write), `IS` (a foreign key's parent read) | transaction | a DDL's relation `X` waits for every open writer (AT-S5e); the first intention is where the statement's memo must be current; CI-R2's drain snapshots the `IX` holders | nothing: a writer maintaining an index a build is announcing, or writing rows into a relation a drop is tombstoning, is kept out by this alone |
 | A2 | `ReadBorrow::Position`, `include/kds/server/read_borrow.hpp:97`, at every bind (AT-S1); `CREATE TABLE ... REFERENCES` on the parent, `:5154` | relation `IS` | statement; the DDL transaction | a granted reader is not overtaken by a DDL `X` for the statement's length | catalog MVCC, the statement epoch (`drop-table.md` DT1), no DDL moving data: the refused arm is right by these, so the defence is one-directional (`read_borrow.hpp`'s header) |
-| A3 | `ReadBorrow::Position`, `read_borrow.hpp:120`, from `src/exec/step_vm.cpp:2089` at **every leaf page** of the outermost walk | slice `IS`, `[min_key(page), kIdSpaceEnd)` | the page, moved at each boundary: one `TryAcquire` and one `ReleaseOne` per page | **nothing today.** Its consumer was a mover (AO-R12, AR2-R13) and none exists (`heap-and-tuple.md` §7.1, BZ). No conflict test reads it: `ConflictingOverlap` skips intention holders on interval units (`lock_table.cpp:719-722`), `FenceCoversKey` counts `S`/`X` holders only (`:675`), `IsFence` excludes it from the counter (`:26`), a slice `IS` triggers no verify (`:340-356`), and a DDL's `X` meets the reader at the relation entry (A2). `LockUnit::kSlice` and `LockKey::Slice` appear nowhere else in `src/` or `include/` but the table's own name switch | - |
+| A3 | `ReadBorrow::Position`, `read_borrow.hpp:120`, from `src/exec/step_vm.cpp:2089` at **every leaf page** of the outermost walk | slice `IS`, `[min_key(page), kIdSpaceEnd)` | the page, moved at each boundary: one `TryAcquire` and one `ReleaseOne` per page | **nothing today.** Its consumer was a mover (AO-R12, AR2-R13) and none exists (`heap-and-tuple.md` §7.1, BZ). No conflict test reads it: `ConflictingOverlap` skips intention holders on interval units (`lock_table.cpp:733-736`), `FenceCoversKey` counts `S`/`X` holders only (`:673`), `IsFence` excludes it from the counter (`:26`), a slice `IS` triggers no verify (`:339-353`), and a DDL's `X` meets the reader at the relation entry (A2). `LockUnit::kSlice` and `LockKey::Slice` appear nowhere else in `src/` or `include/` but the table's own definitions (`lock_table.hpp:291` the factory, `:313` `IsFenceUnit`, `lock_table.cpp:38` the name switch); `read_borrow.hpp:120` is the one consumer | - |
 | A4 | `BorrowRelationForDdl`, `:11162-11177` | relation `X`: `DROP TABLE`, `CREATE`/`DROP INDEX`, `REINDEX`, `CREATE ASSERTION`, `CREATE TRANSITION`, `DROP TRANSITION` (`:4101`), `ADD`/`DROP COLUMN` (`:3513`), `CREATE`/`DROP CABIN` (`:3176`), the two renames; relation `IS` for an online `CREATE INDEX` (CI) | the DDL transaction | the DDL against open writers (A1) and positioned readers (A2) | nothing for the writers |
-| A5 | the per-row `UPDATE` and `DELETE`: `:10147`, `:12782` | tuple `X` | transaction | (i) the wait **with a kick** on a row held by another core's transaction (AX-S2b); (ii) being seen by a range fence's verify (A7); (iii) refusing a foreign key's `S` (A6) and a reverse check's probe (A6'); (iv) the arbiter's row read "under its `X`" in `ON CONFLICT DO UPDATE` (`:6700-6703`) | **the header**: first-updater-wins under the page latch is the lock, and the table "adds the wait and the `S` mode, not the lock" (AO-R3) |
-| A5' | the `INSERT`: every issued key `:7096`, a named key `:7037`, `ON CONFLICT DO NOTHING` on the tuple key `TupleKeyPlaced` `:6445`, `ON CONFLICT DO UPDATE`'s up-front tuple-key unit `:6660` and its arbiter row `:6698` | tuple `X` | transaction | BD-R6: two statements naming one key serialise on its row unit (`:7062-7066`); an issued key against a named one (`:7085-7093`); BD-Q9's wait on an undecided insert of the same key; `TupleKeyPlaced`'s "granted: no other writer holds the key" (`:6452-6457`) | the descent under the leaf hold and `UndecidedInsert`'s header read; without a table "every borrow is granted" and the placement answers (`:6452-6457`) |
+| A5 | the per-row `UPDATE` and `DELETE`: `:10147`, `:12782` - **asked only when the statement declared no range** (`if (!declared.has_value())`, `:10146`, `:12781`): under A7's range `X` the walk asks no tuple unit and the row conflict is the header check alone, so A5 and A7 are alternatives per statement, not layers | tuple `X` | transaction | (i) the wait **with a kick** on a row held by another core's transaction (AX-S2b); (ii) being seen by a range fence's verify (A7); (iii) refusing a foreign key's `S` (A6) and a reverse check's probe (A6'); (iv) the arbiter's row read "under its `X`" in `ON CONFLICT DO UPDATE` (`:6701-6705`) | **the header**: first-updater-wins under the page latch is the lock, and the table "adds the wait and the `S` mode, not the lock" (AO-R3) |
+| A5' | the `INSERT`: every issued key `:7096`, a named key `:7037`, `ON CONFLICT DO NOTHING` on the tuple key `TupleKeyPlaced` `:6445`, `ON CONFLICT DO UPDATE`'s up-front tuple-key unit `:6660` and its arbiter row `:6698` | tuple `X` | transaction | BD-R6: two statements naming one key serialise on its row unit (`:7065-7069`); an issued key against a named one (`:7083-7090` the comment, `:7091-7100` the loop); BD-Q9's wait on an undecided insert of the same key; `TupleKeyPlaced`'s "granted: no other writer holds the key" (`:6452-6457`) | the descent under the leaf hold and `UndecidedInsert`'s header read; without a table "every borrow is granted" and the placement answers (`:6452-6457`) |
 | A6 | the foreign-key forward check, `:4543` | tuple `S` on the parent row, under relation `IS` | transaction (given back on a failed check, AZ-S5) | the parent row's existence while a child writer is open: a parent `DELETE`'s `X` waits for it (D9(a)). **Its verdict relies on the `S` having refused every writer**: a busy verdict under a granted `S` "means no lock table" and with one "refuses retryably, defensively" (`:4556-4562`; `foreign-keys.md` §2a) | nothing |
-| A6' | the reverse check's wait, `WaitForChildRowWriter` `:4775-4815` | a **probe** `S` on the child row, given back at once | the ask | a wake from the child writer's `X`: a refused probe parks on it; a granted one installs a pre-flipped slot and the statement re-runs at once (`:4797-4803`) | `NoteBlockingWriter`'s poll of the holder (`:4813`) |
+| A6' | the reverse check's wait, `WaitForChildRowWriter` `:4775-4815` | a **probe** `S` on the child row, given back at once | the ask | a wake from the child writer's `X`: a refused probe parks on it; a granted one installs a pre-flipped slot and the statement re-runs at once (`:4797-4803`) | `NoteBlockingWriter`'s poll of the holder (`:4814`) |
 | A7 | `DeclaredWriteBorrow`, `:11409-11441` | range `X`: `[0, kIdSpaceEnd)` for no `WHERE`, else the folded tuple-key window of two or more keys | transaction | the statement's whole walk sees one state; the wait is before the walk, with nothing written (AO-S6c-c, the operator's mark of 2026-09-08). `CheckWriteConflictBlocking`'s header (`:11621-11625`) says why the header alone cannot give this: the MVCC check "is silent about a transaction holding a range over the key that has not reached the row yet" | the header, per row, mid-walk - and then the statement that already wrote rows is refused, not parked (C4) |
 | A8 | the unique check, `:11576-11578` (the key built at `src/exec/index_maintain.cpp:292`) | index key `X` | from the check to the append | two writers of one unique value cannot both find it free (BX, `index.md` §10.2) | nothing |
 
@@ -563,6 +570,12 @@ returned; it is not a lock question and is not CP's.
 
 ## 4. Items for the operator (CP-Q), CLA's proposals
 
+**Marked 2026-11-08: (a) on every item** (`raft-marks-2026-11-08.md` §1,
+the operator's `$!a` over CP-Q0..CP-Q9). The table keeps the options as
+they were put, so a later amendment reads against them; CP-Q2 and CP-Q3
+amend AR2 E1 and E12 by this mark, and S1 carries the amendments to the
+documents named in its row (§5).
+
 | # | item | options | CLA proposes |
 |---|---|---|---|
 | CP-Q0 | the letter | (a) CP; (b) another | (a) |
@@ -673,6 +686,105 @@ list needs the names it drops to point at something.
 
 *Nothing built, nothing measured; every claim above is `[source-read]`
 at `6c4b9a6d` or tagged otherwise.*
+
+### CP-S0, 2026-11-08: the census re-read, the premise measured
+
+Run on `worktree-cp-lock-model-exploration` from `cc54a296`
+(`v3.4.7-1-gcc54a296`; build inputs `6c4b9a6d`'s) on the operator's opening
+(`raft-marks-2026-11-08.md` §1, every CP-Q (a)). The results file is
+`bench/v3.4.7/results-cp-s0-premise-v3.4.7-1-gcc54a296.md`, its raw outputs
+under `bench/v3.4.7/archive/cp-s0-premise-v3.4.7-1-gcc54a296/`; every
+number below is `[measured]` there unless tagged.
+
+**(1) The census re-read** `[source-read]` at `cc54a296`: every unit and
+mode §1.2 states is what the code asks, and the eight-of-twenty count
+stands. Corrected in place: nine citations had drifted by a few lines
+(`FenceCoversKey`'s filter is `lock_table.cpp:673`, `ConflictingOverlap`'s
+skip `:733-736`, the verify gate `:339-353`, `FinishCommitBody`'s callers
+`txn/manager.cpp:398` and `:363`, the group commit's pending mark
+`command_dispatcher.cpp:11771-11774` with its waits at `:890-913` and
+`:1235-1240`, A5's arbiter re-read `:6701-6705`, the A5' row's BD-R6
+note `:7065-7069` and its issued-against-named note and loop
+`:7083-7100`, the A6' row's poll `:4814`); A1 gained the three relation `IX` asks the table missed
+(`InsertParsed` `:6216`, `HandlePurge` `:12344`, `HandlePurgeDroppedColumns`
+`:12466`) and the drain's `IntentionWriters` read (`:2712`); A3's "nowhere
+else" now names the table's own three definitions. **One substantive
+addition**: the per-row tuple `X` (A5) is asked only when the statement
+declared no range (`:10146`, `:12781`) - under A7's range `X` the walk asks
+no tuple unit and the row conflict is the header check alone - so A5 and
+A7 are alternatives per statement, not layers; C4's scope reads the same
+but its argument must not count the two together.
+
+**(2) The measurement**, `build-release` at `cc54a296`, `cores = 4` pinned
+to CPUs 2-5 (M2: `cores = 1`, `bm_scan.py`'s shape), data files on
+`/dev/nvme0n1p1` ext4, two passes of 344 s and 241 s inside the 20-minute
+budget, three binaries from one tree: the base, a null-table build
+(`patch-null-table.diff` in the archive: core 0's manager and dispatcher
+and every peer handed no table) and a no-slice build
+(`patch-no-slice.diff`: `ReadBorrow::Position` declines slices). Neither
+patch is landed. The cells and their rule, from §3:
+
+| cell | what it says | candidate, rule |
+|---|---|---|
+| **M1** point `UPDATE`, one session, `relaxed`, base against null-table, interleaved, three reps | update-disjoint p50 `39.4 vs 39.0 us` and `39.1 vs 38.7 us` on the two reps whose sessions both sat on peer cores (the third, base on core 0 against a peer, flagged by the run script and set aside), noise floor `0.2 us`: **the family's whole share is about `0.4 us`, about `1 %` of the client round trip**; the proof arm shows no family cost on the null-table binary (hot - disjoint `2.6 us` inside a `55 us` floor) | C4: M1 does not say "build" - the whole family, the row entry included, is a 1 % matter on this shape. C3: the same |
+| **M3** scenario 2, `--bookers 8`, `group`; scenario 0, `--fk --txn`, 8 traders, `group` | scenario 2: `2,374 TPS`, **84 lock waits, every one granted** (tuple `X`, p50 `76 us`, max `10.3 ms` on `organizations`), `app.lock_wait` **`0.03 %` of DB time**, `app.lock_conflict` 92, deadlock 0, `fault_net` 0; `commit.wal_flush` is `44 %` of the run's DB time (`51 %` since boot, the load included); 4 `UPDATE`s refused `TXN_CONFLICT` by the MVCC window (below), retried by the driver. Scenario 0: `5,344 TPS`, 641,218 child `INSERT`s each taking the parent's `IS` and `S` (of 650,200 `INSERT`s; the rest are the load's and the reporter's), **lock waits 0, conflicts 0**; the family's only trace the partition latch, `149,134` waits for `220 ms` over 240 core-seconds (`0.09 %`) | C2: the uncontended price is below what the cell resolves (0 waits); its contender - two writers of one parent - is not in either scenario by construction (§1.3), so C2 stays judged by the rig cell and §2c, not by a number. C5: no `fault_net` row anywhere - **nothing built** (CP-Q9 (a)) |
+| **M2** `bm_scan.py` census, base against no-slice, `cores = 1` | the slice `IS` costs **`88-126 ns` per leaf page** of server CPU: `2.5-2.8 %` of a 603-page scan, `9-12 %` of a 304-page wide-row scan; point controls inside `0.4 us`; same pages and digest on both builds. AO-S7's extrapolation was `<= 3 us` a page; the unlatched price is thirty times smaller, and the latched price above one core was not measured (`bm_scan.py` fixes `cores = 1`) | C1: **deleted on CP-Q3 (a)**; the gain is 2.5-12 % of a scan's CPU, more on wide rows |
+| **M5** a held `UPDATE ... WHERE id > 4080` beside point writers on uncovered rows, `cores = 4` | the fence walk costs **about `1 us` per point statement** (`+1.1`, `+1.2`, `+1.4 us` at p50 on three cells, block spread `0.9-3.5 us`; `-2.6 us` inside a `19 us` spread on the fourth), one 64-partition walk per statement as designed, `1,457` partition latch waits over that cell's run (`927` in the fenced blocks, `530` in the unfenced, 24,000 statements each) | C3: BP-H10's `+12 %` at eight cores is **not reproduced at four** - on a four-core instance whose sessions mostly shared core 0 (the text cells by construction, the four-writer KWP cell's writers on cores `0, 0, 0, 2`), so cross-core partition-latch contention was barely exercised; below CF's bar on this host, so C3 is not built on S0's number alone - S1 may keep it as a measured item for an eight-core host |
+| **M4** `lock_contention_benchmark.py`, 8 sessions, contended against disjoint, `relaxed` | hot - disjoint `+5.0 us` at p50 (floor `2.7 us`); **`2,519` of `32,000` hot statements refused** - `TXN_CONFLICT retryable=1 row id=1 was written by transaction N`, which is `txn.md` §5's first-updater-wins over a version committed after the statement's snapshot (READ COMMITTED's deliberate no-re-read window, `txn.md:769-773`), **not a lock refusal**; the family's own counts over that server's whole run: `app.lock_conflict 1,026` (3 % of hot statements if every one is the hot arm's), 17 parked (granted, mean `40 us`), `app.lock_wait` `0.008 %` of DB time | the hot row's client-visible effect is the MVCC window (8 %), outside CP's scope (§6) but to be named in S1: a decide-slot wait (C4) relieves the undecided-holder case only, and the decided-newer case is refused by `txn.md` §5's choice, not the family's. C5: `fault_net` 0 |
+| **M6** two sessions, `group`; the `strict` control | B's `UPDATE` of the row A just committed answered **before A's `COMMIT` ack in 300 of 300 iterations**, margin p50 `423 us` of an ack latency of `539 us` (`78 %`), parked on no lock; under `strict` above one core B answered first in `1.3 %` and waited the sync (305 `sys.lock_waits` rows, tuple `X` granted, p50 `440 us`). `tests/lock_release_before_sync_rig_test.cpp` pins the `group` order on the two-core rig | CP-Q5 (a) confirmed: the engine releases before durability; `known-gaps.md`'s CA entry corrected in this stage |
+
+**What was cut** (CP-Q8 (a)): M1's first pass ran one rep and was re-run
+as three; M5's first attempt lost its four cells to a relation name with a
+hyphen and was re-run; scenario 2 at 24,000 cargos ended at the pool's
+exhaustion after `8.4 s`, so its TPS is an average over that window.
+PostgreSQL's floor was not measured for these shapes.
+
+**What S0 says to S1.** Every live cell has a contender in the tree, and
+S0 priced the two the candidates named: the slice `IS` (dead weight, C1
+goes) and the fence walk (about `1 us`, C3 not on this number). The family
+as a whole is a 1 % matter on a point write and `0.03 %` of a contended
+scenario's DB time; where the client sees contention on a hot row, it sees
+the MVCC window's refusal, which no lock cell changes. C2's reason stands
+unmeasured and unchanged: §2c's conversion deadlock and the parent
+`UPDATE`'s wait are correctness shapes, pinned by a rig cell, not a
+throughput number, and CP-Q2 (a) builds `U` for them. C4 has no number
+asking for it; S1 proposes whether it is built on §2's rule or recorded as
+not taken. The decided-newer refusal (M4) is named for S1 as a boundary,
+not as a candidate.
+
+**The review** (`critics-developer`, 2026-11-08, on the step as it stood
+before the commit): no engine correctness bug; the rig cell sound against
+`txn/manager.cpp:287-400`, `wal/manager.cpp:424-453` and
+`instance_visibility.cpp:136-157`, `:313-314`; M4's reading right. Applied:
+the rig cell's stale comment on `known-gaps.md`, its last wait on A's
+acknowledgement made a `KickUntil` (the kick is best-effort), one redundant
+`EXPECT` cut; the two drivers refuse a relation suffix that is not `\w+`
+(the hyphen that lost M5's first attempt), the release-order driver's
+`--protocol kwp` mode deleted (its send stamp preceded the socket write,
+so its ordering meant something else; S0 ran the text mode only), its
+unused JSON extras and a unit-conversion wrapper cut, the fence driver's
+docstring trimmed to pointers at §1.2; in the documents, nine drifted
+citations not five, `:11307` for BorrowChain's relation-unit return,
+scenario 2's `commit.wal_flush` at `44 %` of the run's DB time (`51 %`
+since boot), M5's "not reproduced at four" qualified (the text cells sit
+on core 0 by construction and the four KWP writers landed on cores 0, 0,
+0, 2, so cross-core partition contention was barely exercised), the
+`known-gaps.md` headline re-cut to "not a hot row's lock; CPU and the
+booker's own acknowledgement". **Deferred, not rejected**: the rig
+scaffolding (`Script`, `RunScript`, `StartsWith`, `Response`) is now the
+eleventh copy across the rig tests and `host_state` the third across the
+drivers - one `tests/rig_script.hpp` and a `bench_common` helper, outside
+this stage because they touch build inputs and an existing driver.
+**Rejected**: none.
+
+**The suite** (`scripts/test.sh`, Debug, every label but `bs-nightly`):
+run twice on 2026-11-08 - **4405 of 4405 passed** (957 s) on the tree
+before the review's edits to the rig cell, and **4405 of 4405 passed**
+(915 s) on the tree as committed, the two new cells
+`LockReleaseBeforeSyncRigTest.*` passing in both runs (0.07 s each). The
+only build inputs the stage changes are the rig cell and its line in
+`tests/CMakeLists.txt`; the two measurement patches are not landed. The
+overhead measurement is the milestone's close's (S3), not a stage's.
 
 ---
 

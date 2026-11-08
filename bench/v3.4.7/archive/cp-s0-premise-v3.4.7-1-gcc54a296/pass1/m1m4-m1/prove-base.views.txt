@@ -1,0 +1,18 @@
+views read over KWP/1 :15520 prove-base
+sys.lock_waits: 1 rows; by outcome {'granted': 1}; by core {'3': 1}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+  tuple         X     granted          1          12        12      12.0
+sys.wait_stats: app.lock_wait count=48 total_us=20 max_us=12; app.lock_conflict count=48; DB time 743268 us; lock_wait share 2.7e-05
+  core=0,event=app.lock_wait,class=Application,count=20,total_us=3,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=20,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=10,total_us=1,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=10,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=5,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=5,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=13,total_us=14,max_us=12
+  core=3,event=app.lock_conflict,class=Application,count=13,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=48,total_us=20,max_us=12
+  core=NULL,event=app.lock_conflict,class=Application,count=48,total_us=0,max_us=0
+sys.meta: core=2, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=1, version=35, wal_topology=single
+sys.ash: 2 samples
+  cpu.on_cpu                  RUNNABLE         2
