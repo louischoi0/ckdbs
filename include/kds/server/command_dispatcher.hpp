@@ -1801,8 +1801,7 @@ private:
     DispatchOutcome RunAnalyze(const exec::StepChain& chain, exec::TrailCollector* trail,
                                const exec::TrailReplay* replay,
                                const std::optional<StatementIdentity>& identity,
-                               const txn::Snapshot& snapshot, exec::PositionSink& borrow,
-                               exec::OutputSort& sorter);
+                               const txn::Snapshot& snapshot, exec::OutputSort& sorter);
 
 public:
     // AG11's caps, from `aggregate_max_groups` / `aggregate_max_distinct`.
@@ -2081,8 +2080,7 @@ private:
                                   const exec::StepChain& chain, exec::TrailCollector* trail,
                                   const exec::TrailReplay* replay,
                                   const std::optional<StatementIdentity>& identity,
-                                  const txn::Snapshot& snapshot, exec::PositionSink& borrow,
-                                  exec::ExecStats& stats);
+                                  const txn::Snapshot& snapshot, exec::ExecStats& stats);
 
     // **The success-path recording point.** Three collectors observe the
     // same moment - a completed execution - and they are called from one

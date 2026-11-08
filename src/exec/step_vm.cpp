@@ -257,8 +257,7 @@ public:
     ChainRunner(catalog::Catalog& catalog, storage::PageStore& store, const RowSink& sink,
                 std::uint32_t depth, const ChainFrame* parent, ExecStats& stats, Budget& budget,
                 TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-                const txn::Snapshot* snapshot, bool indexes,
-                StatementStore* statement = nullptr, PositionSink* position = nullptr)
+                const txn::Snapshot* snapshot, bool indexes, StatementStore* statement = nullptr)
         // In declaration order. No initializer dereferences a member
         // (`statement_` only takes `&owned_statement_`'s address), so the
         // list is order-independent; a reorder that dereferenced one would
@@ -267,7 +266,7 @@ public:
           snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), sink_(sink),
           depth_(depth), parent_(parent), stats_(stats), budget_(budget), trail_(trail),
           replay_(replay), cabins_(cabins), indexes_(indexes),
-          statement_(statement != nullptr ? statement : &owned_statement_), position_(position) {}
+          statement_(statement != nullptr ? statement : &owned_statement_) {}
 
     // Sub-chain mode - see `record_through_stops_`'s comment for what it
     // licenses and why only a sub-chain may have it.
@@ -1822,15 +1821,6 @@ private:
         // The page the visitor is on: the tuple's address, which a trail
         // records rather than re-derives by searching (workplan P09).
         PageId walk_last_page = kInvalidPageId;
-        // The min_key of the page the visitor is on, for the read borrow
-        // (AO-S6e-b). Taken from the header the visitor already holds, on
-        // the page transition it already detects, so a walk that reports no
-        // position pays one store per page for it. An **empty** page never
-        // calls the visitor and so leaves the previous value standing,
-        // which under-declares the position and never over-declares it -
-        // the safe direction, since the borrow is a lower bound on where
-        // the walk has reached.
-        std::uint64_t walk_page_min_key = 0;
 
         // The access the visitor reads. A slice boundary (BA-S15) can cross
         // a catalog invalidation; the statement's memo pin
@@ -1884,7 +1874,6 @@ private:
             if (page_id != walk_last_page) {
                 ++stats_.For(step.step_id).pages_fetched;
                 walk_last_page = page_id;
-                walk_page_min_key = page.min_key();
             }
 
             // Checked per slot rather than per page because the walk has no
@@ -2021,18 +2010,9 @@ private:
         // The first page is visited unconditionally, exactly as the
         // whole-chain forms do: a bad head fails inside the fetch, where
         // testing it here would answer a corrupt catalog row with an empty
-        // result instead of an error.
-        // ---- The read borrow's first report (AO-S6e-b) -------------------
-        //
-        // Before the first page, and unconditionally: a walk of a
-        // single-page relation never reaches the boundary below, so a
-        // position reported only there would leave the commonest relation
-        // in the engine declaring nothing. The interval is the whole id
-        // space, which is the relation - what the walk is positioned in
-        // before it is positioned anywhere.
-        if (position_ != nullptr && index == 0) {
-            position_->Position(access.oid, 0, kIdSpaceEnd);
-        }
+        // result instead of an error. The walk declares nothing to the lock
+        // family (CP-S2a): its relations were declared at the bind (AT-S1),
+        // and the per-page slice `IS` it reported until then had no consumer.
 
         // **The outermost walk faults cold** (BE-R5): a page it reads once is
         // the hand's first victim, so a scan larger than the pool does not
@@ -2065,29 +2045,6 @@ private:
                 co_return Status::OK();
             }
             cur = next.value();
-
-            // ---- The read borrow moves with the position (AO-S6e-b) ------
-            //
-            // Here and not at page entry, which is what AR2-R14's
-            // `[min_key, next.min_key)` would need: the upper bound is the
-            // *next* page's min_key, and a walk that has not read that page
-            // does not know it. Reading ahead for it would be a pin per
-            // page bought for a bound nothing consumes.
-            //
-            // So the interval declared is `[min_key(page), kIdSpaceEnd)` -
-            // **a lower bound on where the walk has reached**, and the
-            // honest one for a forward walk: everything ahead of the
-            // position is what the walk will still read, so everything
-            // ahead is what a move would have to wait for. R14's narrower
-            // interval would under-declare exactly the keys a resumed walk
-            // is about to visit.
-            // `parent_ == nullptr`: a sub-chain's walk is `index == 0` in
-            // its own runner and would otherwise re-take a slice per outer
-            // row, over-declaring a position the relation `IS` above
-            // already covers. The M2 rule: a nested walk declares no slice.
-            if (position_ != nullptr && outermost) {
-                position_->Position(live_access->oid, walk_page_min_key, kIdSpaceEnd);
-            }
 
             // ---- BA-S15: the slice boundary ----------------------------
             //
@@ -2821,13 +2778,6 @@ private:
     StatementStore owned_statement_;
     StatementStore* statement_ = nullptr;
 
-    // The read borrow's seam (AO-S6e-b). Null for every nested runner and
-    // for every caller that holds no position - which is every caller but
-    // the dispatcher's read path. Reported from the outermost walk only,
-    // beside the resume gate and for the same reason: a nested walk runs
-    // once per outer row, so a per-page borrow there is the page cost times
-    // the outer cardinality, and nothing consumes the finer position yet.
-    PositionSink* position_ = nullptr;
     // BA-S15: the statement's slice, and the outermost walk's pages since
     // its last yield.
     const SlicePolicy* slice_ = nullptr;
@@ -2983,7 +2933,7 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
                          stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
-                         PositionSink* position, const SlicePolicy* slice = nullptr) {
+                         const SlicePolicy* slice = nullptr) {
     if (chain.steps.empty()) {
         co_return Status::InvalidArgument("a step chain with no steps reads nothing");
     }
@@ -3008,7 +2958,7 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
     Budget spend = budget.Fresh();
 
     ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       trail, replay, cabins, snapshot, indexes, /*statement=*/nullptr, position);
+                       trail, replay, cabins, snapshot, indexes);
     runner.SetSlice(slice);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
@@ -3036,20 +2986,19 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
                          stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
-                         PositionSink* position, const SlicePolicy& slice) {
+                         const SlicePolicy& slice) {
     return ExecuteChain(catalog, store, chain, sink, stats, budget, trail, replay, cabins, snapshot,
-                        indexes, position, &slice);
+                        indexes, &slice);
 }
 
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats, const Budget& budget,
                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-               const txn::Snapshot* snapshot, bool indexes, PositionSink* position) {
+               const txn::Snapshot* snapshot, bool indexes) {
     // No slice policy, so nothing beneath parks and the gated driver
     // completes the coroutine inline.
     return RunToCompletionAtWalkBoundary(ExecuteChain(catalog, store, chain, sink, stats, budget,
-                                                      trail, replay, cabins, snapshot, indexes,
-                                                      position));
+                                                      trail, replay, cabins, snapshot, indexes));
 }
 
 }  // namespace kds::exec

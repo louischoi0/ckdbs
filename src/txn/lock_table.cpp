@@ -20,9 +20,9 @@ constexpr std::uint64_t Mix(std::uint64_t x) noexcept {
     return x ^ (x >> 31);
 }
 
-// A fence is a range- or slice-unit borrow in `S` or `X` (AR2 §2 defines a
-// gap lock as either). The counter gates the probe, so it must count
-// exactly what the probe matches.
+// A fence is a range-unit borrow in `S` or `X` (AR2 §2 defines a gap lock
+// as either). The counter gates the probe, so it must count exactly what
+// the probe matches.
 constexpr bool IsFence(const LockKey& key, LockMode mode) noexcept {
     return key.IsFenceUnit() && (mode == LockMode::kShared || mode == LockMode::kExclusive);
 }
@@ -35,8 +35,6 @@ const char* LockUnitName(LockUnit unit) noexcept {
             return "relation";
         case LockUnit::kRange:
             return "range";
-        case LockUnit::kSlice:
-            return "slice";
         case LockUnit::kTuple:
             return "tuple";
         case LockUnit::kIndexKey:
@@ -714,22 +712,24 @@ bool LockTable::ConflictingOverlap(const LockKey& fence, LockMode mode, std::uin
                 // passed in is the caller's copy, not the table's.
                 if (h.txn == txn) continue;
                 // **An intention mode on an interval unit neither fences
-                // nor is fenced** (AO-S6e-b) - `FenceCoversKey`'s rule from
-                // this side: a positioned reader's slice `IS` is what a
-                // writer's declared range meets here.
+                // nor is fenced** (AO-S6e-b; AO-0 item 27, ratified
+                // 2026-09-29) - `FenceCoversKey`'s rule from this side.
                 //
-                // Why the rule and not raw compatibility: the read borrow
-                // declares **where a statement is**, so that an operation
-                // changing a key's unit - a move (R13), DDL's relation `X`
-                // (AO-R12) - can wait for it. A `DELETE FROM t WHERE id <
-                // 50` changes no key's assignment; it writes row versions,
-                // and MVCC already answers a concurrent reader from its
-                // snapshot. Letting it wait for readers would buy the
-                // writer nothing and cost a bulk write every scan on the
-                // relation. What still stops it is every unit that is not
-                // an intention: a tuple `X` inside its window, another
-                // fence over it. The relation entry is where a reader and
-                // DDL meet, by the intention rule.
+                // Why the rule and not raw compatibility: a declaration of
+                // **where a statement is** - the read borrow's slice `IS`,
+                // until CP-S2a - is for an operation changing a key's unit
+                // to wait on, and a `DELETE FROM t WHERE id < 50` changes
+                // no key's assignment; it writes row versions, and MVCC
+                // already answers a concurrent reader from its snapshot.
+                // Letting it wait for readers would buy the writer nothing
+                // and cost a bulk write every scan on the relation. Since
+                // CP-S2a no engine ask holds an intention mode on an
+                // interval unit - the slice unit is gone, no mover exists -
+                // so the rule has no live instance and stays as a table
+                // property. What stops a write inside a fence is every unit
+                // that is not an intention: a tuple `X` inside its window,
+                // another fence over it. The relation entry is where a
+                // reader and DDL meet, by the intention rule.
                 if (h.mode == LockMode::kIntentionShared ||
                     h.mode == LockMode::kIntentionExclusive) {
                     continue;

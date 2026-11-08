@@ -474,91 +474,53 @@ TEST(ExecSuspendAuditTest, AnotherThreadsPinIsNotUnsafeToSuspendUnder) {
 
 // ---- AO-S6e-b: the read borrow's seam -------------------------------------
 
-// Collects what the walk says about where it is, so a cell can read the
-// sequence rather than a side effect of it.
+// Records every relation the compile and the walk declare, so a cell can
+// read the sequence rather than a side effect of it.
 class RecordingPosition final : public PositionSink {
 public:
-    struct At {
-        catalog::Oid rel;
-        std::uint64_t lo;
-        std::uint64_t hi;
-    };
-    void Position(catalog::Oid rel, std::uint64_t lo, std::uint64_t hi) override {
-        at.push_back(At{rel, lo, hi});
-    }
-    std::vector<At> at;
+    void Position(catalog::Oid rel) override { at.push_back(rel); }
+    std::vector<catalog::Oid> at;
 };
 
-TEST_F(ExecChainTest, AWalkReportsWhereItIsAtEveryPageBoundary) {
-    // AO-R12 and AR2-R14, as AO-S6e-b built them. Two claims, and the
-    // second is the one the sub-stage argued for rather than inherited:
-    //
-    //   1. the **first** report is the whole id space, made before the
-    //      first page - so a relation of one page, which never reaches a
-    //      boundary, still declares a position;
-    //   2. every later report raises `lo` and leaves `hi` at the end of the
-    //      id space. R14 names `[min_key, next.min_key)`, which a walk
-    //      cannot know at page entry - the upper bound is a page it has not
-    //      read - and which would under-declare the keys a resumed walk is
-    //      about to visit. What the walk knows exactly is how far it has
-    //      got, and everything ahead of that is what it will still read.
+TEST_F(ExecChainTest, AWalkDeclaresItsRelationAndNoPosition) {
+    // CP-S2a (CP-Q3 (a), `workorder-cp-lock-model-exploration.md` §8.2): a
+    // read declares the relation it binds and nothing finer. Until CP-S2a
+    // the outermost walk reported `IS` on the slice it had reached at every
+    // page boundary (AO-R12, AR2-R14) - a position for a mover to wait on,
+    // and no mover exists - so the report left with the slice unit. M2's
+    // gain, no partition-latch section per leaf page, is this: the
+    // declarations do not grow with the pages walked.
     Create("CREATE TABLE b (id int64, v int64)");
     for (int i = 0; i < 600; ++i) Insert("b", {Int(i)});
+    const catalog::Oid b =
+        boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "b").value();
 
+    // The bind declares the one relation the statement names (AT-S1).
     RecordingPosition seen;
-    const StepChain chain = CompileSql("SELECT id FROM b");
+    auto parsed = parser::Parse("SELECT id FROM b");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    auto compiled = Compile(boot_->catalog, std::get<parser::SelectStmt>(parsed.value()),
+                            /*view=*/nullptr, &seen);
+    ASSERT_TRUE(compiled.ok()) << compiled.status().message();
+    ASSERT_EQ(seen.at.size(), 1u) << "the bind declares the one relation it names";
+    EXPECT_EQ(seen.at.front(), b);
+
+    // The walk, over several pages, declares nothing: the executor has no
+    // sink to report to since CP-S2a.
+    ExecStats stats;
     std::size_t rows = 0;
     Status ran = Execute(
-        boot_->catalog, store_, chain,
+        boot_->catalog, store_, compiled.value(),
         [&](const ChainFrame&) -> StatusOr<storage::VisitControl> {
             ++rows;
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
-        /*snapshot=*/nullptr, /*indexes=*/true, &seen);
+        &stats);
     ASSERT_TRUE(ran.ok()) << ran.message();
     ASSERT_EQ(rows, 600u);
-
-    ASSERT_FALSE(seen.at.empty());
-    EXPECT_EQ(seen.at.front().lo, 0u);
-    EXPECT_EQ(seen.at.front().hi, kIdSpaceEnd)
-        << "before its first page a walk is positioned anywhere in the relation";
-    ASSERT_GT(seen.at.size(), 2u) << "600 rows must span several pages, or this cell tests one";
-
-    // Non-decreasing, and the first boundary is where it may repeat: the
-    // leftmost leaf's `min_key` is 0, which is what the report before the
-    // walk already said. Everything after it rises, and the last report is
-    // strictly past the first - a position that never moved would satisfy
-    // "non-decreasing" and nothing else here.
-    std::uint64_t previous = 0;
-    for (std::size_t i = 1; i < seen.at.size(); ++i) {
-        EXPECT_EQ(seen.at[i].rel, seen.at.front().rel);
-        EXPECT_EQ(seen.at[i].hi, kIdSpaceEnd);
-        EXPECT_GE(seen.at[i].lo, previous) << "the position only moves forward, at report " << i;
-        previous = seen.at[i].lo;
-    }
-    EXPECT_GT(seen.at.back().lo, seen.at.front().lo) << "the position never left the first page";
-
-    // Claim 1 on its own, where nothing else can stand in for it: a
-    // relation of one page reaches no boundary, so the report before the
-    // walk is the only one it will ever make - and without it such a
-    // relation would declare nothing and a `DROP TABLE` would have nothing
-    // to wait for.
-    Create("CREATE TABLE one (id int64, v int64)");
-    Insert("one", {Int(1)});
-    RecordingPosition small;
-    const StepChain single = CompileSql("SELECT id FROM one");
-    Status ran_one = Execute(
-        boot_->catalog, store_, single,
-        [&](const ChainFrame&) -> StatusOr<storage::VisitControl> {
-            return storage::VisitControl::kContinue;
-        },
-        /*stats=*/nullptr, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
-        /*snapshot=*/nullptr, /*indexes=*/true, &small);
-    ASSERT_TRUE(ran_one.ok()) << ran_one.message();
-    ASSERT_EQ(small.at.size(), 1u) << "a one-page walk declares its position exactly once";
-    EXPECT_EQ(small.at.front().lo, 0u);
-    EXPECT_EQ(small.at.front().hi, kIdSpaceEnd);
+    ASSERT_GT(stats.Total().pages_fetched, 2u)
+        << "600 rows must span several pages, or this cell tests one";
+    EXPECT_EQ(seen.at.size(), 1u) << "the declarations grew with the walk";
 }
 
 // ---- BD-S4: JB6's mark is a key on a btree (BD-R3 E4) ---------------------
@@ -569,16 +531,16 @@ TEST_F(ExecChainTest, AWalkReportsWhereItIsAtEveryPageBoundary) {
 // marked leaf drops retired slots, so after one the ordinal names a later
 // row - and a resume skips a row it never covered. The cell makes that
 // divide happen between two resumes, deterministically: at the outer walk's
-// page boundary (`PositionSink`, where the walk holds no pin).
+// page boundary (`SlicePolicy::at_boundary` with one page per slice, where
+// the walk holds no pin - the same place in the page loop the read borrow's
+// per-page report sat until CP-S2a, gated to the outermost walk as it was).
 
 // The inner relation's divide, at the outer walk's first page boundary.
-class DivideAtTheBoundary final : public PositionSink {
-public:
+struct DivideAtTheBoundary {
     std::function<void()> divide;
-    catalog::Oid outer = 0;
     bool done = false;
-    void Position(catalog::Oid rel, std::uint64_t lo, std::uint64_t) override {
-        if (done || rel != outer || lo == 0) return;
+    void AtBoundary() {
+        if (done) return;
         done = true;
         divide();
     }
@@ -627,7 +589,6 @@ TEST_F(ExecChainTest, AResumedPrefixCoversEveryInnerRowAcrossADivideThatDropsARe
                     .ok());
 
     DivideAtTheBoundary sink;
-    sink.outer = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "au").value();
     std::vector<std::uint64_t> got;
     std::size_t divides = 0;
     std::uint64_t inserted = 0;
@@ -654,14 +615,24 @@ TEST_F(ExecChainTest, AResumedPrefixCoversEveryInnerRowAcrossADivideThatDropsARe
     const StepChain chain = CompileSql(
         "SELECT au.id FROM au WHERE EXISTS (SELECT tr.id FROM tr WHERE tr.au_id = au.id)");
     ExecStats stats;
-    Status ran = Execute(
+    // One page per slice, so the first outermost page boundary runs the
+    // divide; the yield beneath it is resumed inline, as `Execute`'s own
+    // driver does.
+    SlicePolicy policy;
+    policy.pages_per_slice = 1;
+    policy.at_boundary = [&] { sink.AtBoundary(); };
+    sched::Coro walk = ExecuteAsync(
         boot_->catalog, store_, chain,
         [&](const ChainFrame& frame) -> StatusOr<storage::VisitControl> {
             got.push_back(static_cast<std::uint64_t>(frame.Get(chain.projection.front()).int_val));
             return storage::VisitControl::kContinue;
         },
         &stats, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
-        /*snapshot=*/nullptr, /*indexes=*/true, &sink);
+        /*snapshot=*/nullptr, /*indexes=*/true, policy);
+    while (!walk.done()) {
+        ASSERT_TRUE(walk.TryResumeDeepest()) << "the walk parked beneath a slice boundary";
+    }
+    const Status ran = walk.result();
     ASSERT_TRUE(ran.ok()) << ran.message();
     ASSERT_TRUE(sink.done) << "the outer walk never crossed a page boundary";
     ASSERT_EQ(divides, 1u) << "the inner leaf never divided at the boundary";

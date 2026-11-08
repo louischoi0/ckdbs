@@ -24,12 +24,14 @@
 // persisted bit), AO-R10 (the cap), AO-R11 (modes and units).
 // `docs/spec/txn.md` §5 owns the contract.
 //
-// **Units** relation -> range -> {slice, tuple}, AR2-R3's chain; the page
-// is not in it and belongs to the latch family
-// (`storage/page_latch.hpp`). A **slice** is `(rel_oid, [lo, hi))` in key
-// space and never by page (AR2-R6, ratified as E4): a gap is a key
-// interval, and a fence over it must outlive the btree leaf division that
-// moves keys between pages.
+// **Units** relation -> range -> tuple, AR2-R3's chain less the slice,
+// which left at CP-S2a (CP-Q3 (a): its one consumer was a positioned
+// reader's `IS` for a mover to wait on, and no mover exists); the page is
+// not in it and belongs to the latch family (`storage/page_latch.hpp`). A
+// **range** is `(rel_oid, [lo, hi))` in key space and never by page
+// (AR2-R6, ratified as E4 and re-read as the range unit's by CP-Q11 (a)):
+// a gap is a key interval, and a fence over it must outlive the btree leaf
+// division that moves keys between pages.
 //
 // **Modes** `IS`, `IX`, `S`, `X`; no `SIX` and no update mode (E1).
 //
@@ -78,8 +80,8 @@
 // BP-Q15 (a)), keyed by `(rel_oid, unit kind, lo)` so a relation's own
 // entry - touched by every writer's `IX` and every positioned reader's
 // `IS` - hashes apart from the units beneath it. The unit kind is in the
-// key because `Relation(r)`, `Tuple(r, 0)`, `Slice(r, 0, h)` and
-// `Range(r, 0, h)` all carry `lo = 0`.
+// key because `Relation(r)`, `Tuple(r, 0)` and `Range(r, 0, h)` all carry
+// `lo = 0`.
 //
 // **A `Latch*` per partition, null at `cores = 1`** (AO-R9,
 // `base/latch.hpp`'s shape).
@@ -101,8 +103,8 @@
 //
 // The operator decided against a lock bit in the Keystone byte, so a
 // writer cannot learn from a page that a fence covers its key. Instead a
-// striped counter per relation records how many range- and slice-unit
-// fences exist, and a writer reads it on the `IX` it takes anyway; only a
+// striped counter per relation records how many range-unit fences exist,
+// and a writer reads it on the `IX` it takes anyway; only a
 // nonzero reading costs the scan `FenceCoversKey` performs.
 //
 // **What the counter protocol establishes, and what it does not.** A
@@ -192,7 +194,9 @@ class WakeRegistry;
 namespace kds::txn {
 
 // The nesting order is the enum's order, so an ancestor compares less than
-// its descendants - for the first four.
+// its descendants - for the first three. Nothing persists or transmits a
+// value: the one numeric use is the partition hash, so the slice's slot
+// closed at CP-S2a and the units below it renumbered.
 //
 // **`kIndexKey` sits outside that nesting** (BX-R3,
 // `instructions/v3.2.0/workorder-bx-unique-index.md`): one value of one
@@ -206,9 +210,8 @@ namespace kds::txn {
 enum class LockUnit : std::uint8_t {
     kRelation = 1,
     kRange = 2,
-    kSlice = 3,
-    kTuple = 4,
-    kIndexKey = 5,
+    kTuple = 3,
+    kIndexKey = 4,
 };
 
 enum class LockMode : std::uint8_t {
@@ -270,11 +273,11 @@ constexpr bool Covers(LockMode held, LockMode want) noexcept {
 }
 
 // A unit's identity. The interval is part of the identity; only `lo` is
-// part of the hash, so two slices sharing a lower bound land in one
+// part of the hash, so two ranges sharing a lower bound land in one
 // partition and the chain tells them apart.
 //
 // `hi` is exclusive. A tuple is the unit-length interval `[tuple key, tuple key + 1)`,
-// so one containment test serves tuples and slices alike.
+// so one containment test serves tuples and ranges alike.
 struct LockKey {
     catalog::Oid rel_oid = 0;
     LockUnit unit = LockUnit::kRelation;
@@ -286,9 +289,6 @@ struct LockKey {
     }
     static constexpr LockKey Range(catalog::Oid rel, std::uint64_t lo, std::uint64_t hi) noexcept {
         return LockKey{rel, LockUnit::kRange, lo, hi};
-    }
-    static constexpr LockKey Slice(catalog::Oid rel, std::uint64_t lo, std::uint64_t hi) noexcept {
-        return LockKey{rel, LockUnit::kSlice, lo, hi};
     }
     static constexpr LockKey Tuple(catalog::Oid rel, std::uint64_t tuple_key) noexcept {
         return LockKey{rel, LockUnit::kTuple, tuple_key, tuple_key + 1};
@@ -305,13 +305,12 @@ struct LockKey {
     }
 
     // Is this unit a **fence** - a borrow taken over a key interval rather
-    // than over one row? Range and slice units are; a tuple's conflict is
-    // found by looking its own key up, and a relation's by the intention
-    // rule at the relation entry. AR2 §2 defines a gap lock as an `S` *or
-    // `X`* fence, which is why the mode is not part of this test.
-    constexpr bool IsFenceUnit() const noexcept {
-        return unit == LockUnit::kRange || unit == LockUnit::kSlice;
-    }
+    // than over one row? The range unit is (the slice was, until CP-S2a); a
+    // tuple's conflict is found by looking its own key up, and a relation's
+    // by the intention rule at the relation entry. AR2 §2 defines a gap lock
+    // as an `S` *or `X`* fence, which is why the mode is not part of this
+    // test.
+    constexpr bool IsFenceUnit() const noexcept { return unit == LockUnit::kRange; }
 
     constexpr bool ContainsKey(std::uint64_t tuple_key) const noexcept { return tuple_key >= lo && tuple_key < hi; }
 
@@ -579,10 +578,8 @@ public:
     // never taken.
     //
     // Its callers give back one borrow before the decide: the verify below
-    // unwinds a grant it just published; a positioned reader's borrow
-    // **moves** (AO-S6e-b) - it takes the slice it is entering before letting
-    // go of the one it is leaving, so the position is never unheld between
-    // two pages; and a child-row wait gives back a grant it did not need.
+    // unwinds a grant it just published, and a child-row wait gives back a
+    // grant it did not need.
     void ReleaseOne(std::uint64_t txn, const LockKey& key, LockMode mode,
                     LockHoldings& holdings);
 
@@ -673,8 +670,8 @@ public:
     void SetWakeRegistry(const sched::WakeRegistry* registry) noexcept { wake_ = registry; }
     const sched::WakeRegistry* wake_registry() const noexcept { return wake_; }
 
-    // Is a range- or slice-unit fence held over `tuple_key` by anyone but `txn`,
-    // in `S` or `X`? The probe AO-R3 puts in place of a persisted lock bit.
+    // Is a range-unit fence held over `tuple_key` by anyone but `txn`, in
+    // `S` or `X`? The probe AO-R3 puts in place of a persisted lock bit.
     // Tuple-unit conflicts are **not** its business - those are found by
     // looking the tuple's own key up - and neither are relation-unit
     // borrows, which the intention rule catches at the relation entry.
@@ -711,11 +708,11 @@ public:
     // not be. A relation-unit holder is still not looked at: it carries the
     // empty interval and is caught at the relation entry.
     //
-    // **An intention-mode holder is not looked at either** (AO-S6e-b), the
-    // rule `FenceCoversKey` already applies from the other side: a slice
-    // `IS` is a positioned reader's declaration of where it is, not a claim
-    // on the keys, so a fence-taker passes it and the two meet - if they
-    // meet at all - at the relation entry.
+    // **An intention-mode holder is not looked at either** (AO-0 item 27,
+    // ratified 2026-09-29): `FenceCoversKey`'s rule from this side, said in
+    // full at the skip in `lock_table.cpp`. No engine ask holds one since
+    // CP-S2a; the rule stays as a table property with its pin,
+    // `AnIntentionModeOnAnIntervalUnitNeitherFencesNorIsFenced`.
     //
     // `wake` as `FenceCoversKey`'s: registered on the overlapping entry.
     bool ConflictingOverlap(const LockKey& fence, LockMode mode, std::uint64_t txn,
@@ -733,7 +730,7 @@ public:
         verify_hook_ = std::move(hook);
     }
 
-    // How many range- and slice-unit fences exist for `rel`. The gate a
+    // How many range-unit fences exist for `rel`. The gate a
     // writer reads on the `IX` it takes anyway; only nonzero costs the
     // scan. **Striped and hash-keyed**, so two relations may share a
     // counter: a collision is a false positive that costs one scan and

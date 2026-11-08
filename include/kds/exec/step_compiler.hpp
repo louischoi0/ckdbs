@@ -63,9 +63,9 @@ namespace kds::exec {
 // until the statement ends, which protects the schema this compile reads.
 // The ask is non-blocking and a refusal is not an error - a read borrow
 // never refuses a read (`read_borrow.hpp` says what that defends and what
-// it does not). A bind's declaration is a `PositionSink` position over the
-// whole id space. Null is "declare nothing", every caller that is not
-// executing a client's statement.
+// it does not). A bind's declaration is a `PositionSink::Position` of the
+// relation, and nothing finer. Null is "declare nothing", every caller that
+// is not executing a client's statement.
 //
 // `context`, when given, is the statement's `NOW()` instead of a fresh
 // reading: a scalar subquery of an UPDATE reads its UPDATE's (BJ-S7), so
@@ -75,7 +75,21 @@ namespace kds::exec {
 // join order (CB-S2, instructions/v3.2.0/workorder-cb-join-planner.md §3.2);
 // null keeps the written order. Only a client's SELECT asks
 // (`join_order = planned`); a compile that only checks a statement does not.
-class PositionSink;
+
+// **The relations a statement declares, told to whoever holds its borrow**
+// (AO-S6e-b, the read borrow; **the relation alone since CP-S2a**, CP-Q3
+// (a)). One caller: the compiler, once per relation it binds, between the
+// name and the schema (AT-S1). Nothing finer than the relation is declared
+// - nothing in this engine moves a key between units (`heap-and-tuple.md`
+// §7.1), so the slice `IS` the outermost walk reported at every page
+// boundary until CP-S2a had no consumer and left with the slice unit
+// (`txn.md` §5). The compiler knows nothing about locks: the implementation
+// is `read_borrow.hpp`'s.
+class PositionSink {
+public:
+    virtual ~PositionSink() = default;
+    virtual void Position(catalog::Oid rel) = 0;
+};
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                             const txn::ReadView* view = nullptr,

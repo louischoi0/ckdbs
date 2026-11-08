@@ -12,13 +12,12 @@
 // For `CoerceLiteralToColumn`: the codec owns literal coercion, so the
 // value a predicate compares and the value a write keys on are identical by
 // construction.
-#include "kds/storage/keystone.hpp"  // kIdSpaceEnd - a bind's whole-relation declaration
 #include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/join_order.hpp"
 #include "kds/exec/plan_memo.hpp"
 #include "kds/exec/row_codec.hpp"
-#include "kds/exec/step_vm.hpp"  // PositionSink - the declaration sink AT-R1 threads
+#include "kds/exec/step_vm.hpp"
 
 namespace kds::exec {
 
@@ -2105,11 +2104,11 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                                            rel->byte_offset, view);
         if (!oid.ok()) return oid.status();
         // AT-R1: the declaration, between the name and the schema
-        // (`step_compiler.hpp` on `declare`). The whole id space, because a
-        // bind is a claim on the relation and not on any part of it; the
-        // walk narrows it to a slice later through this same sink.
+        // (`step_compiler.hpp` on `declare`). A bind is a claim on the
+        // relation and not on any part of it, and nothing finer is declared
+        // by anyone since CP-S2a.
         if (declare != nullptr) {
-            declare->Position(oid.value(), 0, kIdSpaceEnd);
+            declare->Position(oid.value());
         }
         auto access = catalog.InitTableAccess(oid.value());
         if (!access.ok()) return access.status();

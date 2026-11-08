@@ -60,7 +60,7 @@ StatusOr<IsolationLevel> ParseIsolationLevel(std::string_view text) {
     if (folded == "repeatable read" || folded == "rr") return IsolationLevel::kRepeatableRead;
     if (folded == "serializable") {
         // Out of scope and **not** [OPEN] (section 1): the lock family has
-        // no **predicate** lock - its finest fence is a slice, a bounded
+        // no **predicate** lock - its finest fence is a range, a bounded
         // key interval, which cannot express "every row a `WHERE` matches"
         // over a non-key column - and SSI's alternative needs per-row read
         // tracking that nothing records.

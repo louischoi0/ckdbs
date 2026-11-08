@@ -917,7 +917,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::LockWaitsView() {
     // the instance's store whatever core asks - an engine-state view, so it
     // filters nothing. `unit`, `rel_oid` and `key` name the unit that refused
     // and `mode` what was asked (`stats/lock_wait_log.hpp`); `key` is the
-    // unit's low bound: a tuple's id, a range's or slice's first id, 0 for a
+    // unit's low bound: a tuple's id, a range's first id, 0 for a
     // relation. `granted` is a flipped slot, not a grant. A waiter or holder
     // that is no transaction (an autocommit statement holding nothing, a
     // read borrow) is NULL.

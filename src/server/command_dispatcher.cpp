@@ -5922,7 +5922,7 @@ sched::Coro SelectRun::Execute(DispatchOutcome* out) {
     }
     const Status ran = co_await exec::ExecuteAsync(
         d_.catalog_, d_.page_store_, *chain, visit, &scratch.stats, d_.budget_, trail, replay,
-        d_.cabins_, &snapshot->snap, d_.indexes_enabled_, &*borrow, slice_);
+        d_.cabins_, &snapshot->snap, d_.indexes_enabled_, slice_);
     const std::uint64_t statement = out->statement;
     *out = Finish(ran);
     out->statement = statement;
@@ -8336,7 +8336,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     ResultSink& sink, TextResultSink& text_sink, const exec::StepChain& chain,
     exec::TrailCollector* trail, const exec::TrailReplay* replay,
     const std::optional<StatementIdentity>& identity, const txn::Snapshot& snapshot,
-    exec::PositionSink& borrow, exec::ExecStats& stats) {
+    exec::ExecStats& stats) {
     if (Status s = aggregator_.Reset(*chain.aggregate, chain.column_names, aggregate_limits_);
         !s.ok()) {
         return {ErrorReply(s), false, 0, s};
@@ -8373,8 +8373,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
             if (Status s = aggregator_.Accumulate(frame); !s.ok()) return s;
             return storage::VisitControl::kContinue;
         },
-        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_,
-        &borrow);
+        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
     if (!ran.ok()) {
         // **No trail on the failure path**, exactly as the unaggregated
         // path has it: a statement that stopped part way through touched
@@ -8415,7 +8414,6 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
                                               const exec::TrailReplay* replay,
                                               const std::optional<StatementIdentity>& identity,
                                               const txn::Snapshot& snapshot,
-                                              exec::PositionSink& borrow,
                                               exec::OutputSort& sorter) {
     exec::ExecStats stats;
     std::uint64_t rows = 0;
@@ -8484,8 +8482,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
                        ? storage::VisitControl::kStop
                        : storage::VisitControl::kContinue;
         },
-        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_,
-        &borrow);
+        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
     if (!ran.ok()) {
         return {ErrorReply(ran), false, 0, ran};
     }
@@ -8837,8 +8834,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // replay would report descents a real execution does not perform, which
     // is the one thing it must not do.
     if (analyze) {
-        return RunAnalyze(compiled, trail, replay_ptr, identity, snap, borrow,
-                          run->scratch().sorter);
+        return RunAnalyze(compiled, trail, replay_ptr, identity, snap, run->scratch().sorter);
     }
 
     // ---- AG1: the fold wraps the sink, and nothing else moves -----------
@@ -8850,7 +8846,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // and access statistics hold unchanged" a structural fact rather than a
     // list of things that were remembered.
     if (compiled.aggregated()) {
-        return RunAggregated(sink, text_sink, compiled, trail, replay_ptr, identity, snap, borrow,
+        return RunAggregated(sink, text_sink, compiled, trail, replay_ptr, identity, snap,
                              run->scratch().stats);
     }
 
@@ -11314,7 +11310,7 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // **On the unit that refused, which since AY-S2 need not be `unit`**: a
     // declared range refused by a row's `X`, or a row refused by a range
     // fence, is found by the table's verify in another unit's entry and is
-    // registered there (`lock_table.hpp`, `AcquireResult::slot_key`). Until
+    // registered there (`lock_table.hpp`, `AcquireResult::wake`). Until
     // then that refusal came back with no slot and the wait was a poll of
     // `IsInFlight` that no release kicked.
     txn::LockWake unit_wake;

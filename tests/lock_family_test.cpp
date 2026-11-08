@@ -454,18 +454,21 @@ TEST_F(LockDeadlockTest, ADropWithNoReactorToParkOnNamesThePositionedReader) {
 
 TEST_F(LockDeadlockTest, AWholeRelationWriteIsNotHeldUpByAPositionedReader) {
     // **The rule at the unit where it actually lands** (the AO-S6e-b
-    // review's B2). `ConflictingOverlap` skips intention holders, so a
-    // reader's slice `IS` passes a declared range - but a `WHERE`-less
-    // write used to collapse onto the **relation** unit, where the conflict
-    // is decided by the entry's own compatibility test and `IS` against `X`
-    // is a refusal. So the rule was written on one path and the traffic ran
-    // down another: a scan of the relation would have refused
-    // `DELETE FROM rb`, and refused rather than waited, because a read
-    // borrow's holder is not a transaction and nothing can wait for it.
+    // review's B2). A reader's declaration is the relation `IS` (and, until
+    // CP-S2a, a slice `IS` beneath it, which `ConflictingOverlap` skipped as
+    // an intention holder) - but a `WHERE`-less write used to collapse onto
+    // the **relation** unit, where the conflict is decided by the entry's
+    // own compatibility test and `IS` against `X` is a refusal. So the rule
+    // was written on one path and the traffic ran down another: a scan of
+    // the relation would have refused `DELETE FROM rb`, and refused rather
+    // than waited, because a read borrow's holder is not a transaction and
+    // nothing can wait for it.
     //
     // Since AO-S6e-b a `WHERE`-less write declares the whole id space as a
     // range: the relation unit means the relation as an object, which is
-    // what DDL claims, and a write's claim is over keys.
+    // what DDL claims, and a write's claim is over keys. The relation unit
+    // overlaps no range (`lock_table.hpp`, `Overlaps`), which is the whole
+    // of what the reader's `IS` meets here.
     ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
     const std::uint64_t oid = OidIn(Local("INSERT INTO rb VALUES (1, 1)"));
     ASSERT_NE(oid, 0u);
@@ -474,14 +477,6 @@ TEST_F(LockDeadlockTest, AWholeRelationWriteIsNotHeldUpByAPositionedReader) {
     const std::uint64_t reader_id = txn::kReadHolderBit | 13;
     ASSERT_TRUE(locks_
                     ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
-                              txn::LockMode::kIntentionShared, reader)
-                    .value()
-                    .granted);
-    // And the slice under it, which is the other half of what a walk holds.
-    ASSERT_TRUE(locks_
-                    ->Acquire(reader_id,
-                              txn::LockKey::Slice(static_cast<catalog::Oid>(oid), 1,
-                                                  kIdSpaceEnd),
                               txn::LockMode::kIntentionShared, reader)
                     .value()
                     .granted);

@@ -702,11 +702,14 @@ persisted lock bit, no page bit, no superblock field; a crash releases every
 lock because the loser is rolled back at mount). **The lock table is a
 second source** (AO-S6c-b): a transaction may hold a *unit* rather than a
 row - a range declared by a predicate-covering write (AO-0 item 14) - and a
-row's header inside it names its last writer, not the holder. **A fifth
+row's header inside it names its last writer, not the holder. **A fourth
 unit, `kIndexKey`, names one value of one unique index** (BX,
 `index.md` §10.2): taken `X` by a writer of that value from its check to
-its append, outside the relation-range-slice-tuple nesting, and overlapping
-no fence and no tuple. A borrow the
+its append, outside the relation-range-tuple nesting, and overlapping
+no fence and no tuple. **The slice unit is deleted since CP-S2a** (CP-Q3
+(a), `raft-marks-2026-11-08.md` §1): its one consumer was a positioned
+reader's `IS` for a mover to wait on, and no mover exists; the units are
+relation, range, tuple and index key. A borrow the
 lock table refuses is a conflict of its own, reported in the same shape and
 naming the **holder**. Where a dispatcher has no lock table the header is
 all there is. **Detection is followed by a wait, not a refusal** (M2,
@@ -859,13 +862,20 @@ declared over a window wider than what it wrote.
 `SELECT` row, AO-R12; **at the bind since AT-S1**, AT-R1). A statement
 declares **every relation it binds** — `IS` on the relation, asked by the
 compiler between the name and the schema, for the `FROM`, every `JOIN`,
-every subquery block, and a write's own relation — and its outermost walk
-declares **where it is**, `IS` on the slice it has reached, moved at every
-page boundary. The scope is **the statement**, not the transaction, so two
-`SELECT`s in one transaction declare twice and hold nothing between them.
-Every step of a statement runs under the session's borrow.
+every subquery block, and a write's own relation — **and nothing finer**
+(CP-S2a, CP-Q3 (a)). No read declares a position: nothing in this engine
+moves a key between units (`heap-and-tuple.md` §7.1), and the one operation
+that waits for a reader, DDL's relation `X`, meets it at the relation entry
+by the intention rule. Until CP-S2a the outermost walk also declared `IS`
+on the slice it had reached, moved at every page boundary (AR2-R14, E12),
+a position for a mover to wait on, read by nothing; a mover re-adds a
+position unit when one exists. E12's unit was un-ratified on that ground on 2026-11-08, and
+E12's reason - a move must wait for a positioned reader - was not. The
+scope is **the statement**, not the transaction, so two `SELECT`s in one
+transaction declare twice and hold nothing between them. Every step of a
+statement runs under the session's borrow.
 
-- **It is a position, never a permission.** Visibility is the snapshot's
+- **It is a declaration, never a permission.** Visibility is the snapshot's
   and nothing here changes it. A borrow the table refuses leaves the reader
   holding nothing and reading on: a read is never refused and never waits
   for a borrow, because it needs none to be correct - no page of a
@@ -912,28 +922,24 @@ Every step of a statement runs under the session's borrow.
   releases and carried across by AU-S2's kick.
 - **A bulk write's declared unit is not a consumer**, and that is a rule
   rather than an omission: an intention mode on an interval unit neither
-  fences nor is fenced. A `DELETE FROM t WHERE id < 50` changes no key's
-  assignment - it writes row versions, which MVCC already answers a
-  concurrent reader from its snapshot - so it passes a reader's slice and a
-  reader passes its range. What still stops a write inside a fence is every
-  unit that is not an intention: a tuple `X`, another fence.
-- **The interval is `[min_key(page), kIdSpaceEnd)`** and not AR2-R14's
-  `[min_key, next.min_key)`: the upper bound is a page the walk has not
-  read, and a forward walk's future is the whole tail of the key space
-  anyway, so the narrower interval would under-declare exactly the keys a
-  resumed walk is about to visit.
+  fences nor is fenced (AO-0 item 27). A `DELETE FROM t WHERE id < 50`
+  changes no key's assignment - it writes row versions, which MVCC already
+  answers a concurrent reader from its snapshot - so no read's declaration
+  stops it, and since CP-S2a no read declares anything finer than the
+  relation, so the rule has no live instance and stands as a table
+  property (`lock_table.hpp`, `ConflictingOverlap`). What still stops a
+  write inside a fence is every unit that is not an intention: a tuple
+  `X`, another fence.
 - **The holder is not a transaction.** An autocommit `SELECT` has no
   transaction, so a read borrow holds under an id from a space of its own
   (bit 63, which no 48-bit trx id reaches, `read_borrow.hpp`'s
   `ReadHolderId`). The dispatcher is the one minter; bit 62 is set by
   nothing.
   A refusal naming one says "a positioned reader".
-- **What declares the relation and no slice**: a nested step's walk (the
-  per-page cost would be the page count times the outer cardinality), a
-  point, index or Cabin read on the path that serves it, and a write. Each
-  is bound, so each holds the relation `IS`; the slice is the outermost
-  walk's alone, and each of the three reads falls through to that walk when
-  its own path cannot answer. **The foreign-key checks are helpers beside
+- **Every bound relation holds `IS`, and nothing declares a position**
+  (CP-S2a): a nested step's walk, a point, index or Cabin read, a write and
+  the outermost walk alike hold the relation `IS` their bind declared and
+  nothing finer. **The foreign-key checks are helpers beside
   the executor, not steps** (`fk_check.hpp`: "`exec::Compile()` is
   SELECT-only"), so neither passes the compiler seam AT-S1 threaded: the
   forward check takes the parent relation's `IS` and the parent row's `S`

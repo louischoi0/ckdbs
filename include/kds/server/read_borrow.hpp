@@ -2,27 +2,29 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <optional>
 #include <vector>
 
-#include "kds/storage/keystone.hpp"
-#include "kds/exec/step_vm.hpp"
+#include "kds/exec/step_compiler.hpp"
 #include "kds/txn/lock_table.hpp"
 
-// ---- The read borrow (AO-S6e-b; AO-R12, AR2-R14, AR2 §3's `SELECT` row;
-// moved to the bind at AT-S1, `workorder-at-m3-uniformity.md` AT-R1) ------
+// ---- The read borrow (AO-S6e-b; AO-R12, AR2 §3's `SELECT` row; moved to
+// the bind at AT-S1, `workorder-at-m3-uniformity.md` AT-R1; the relation
+// alone since CP-S2a, CP-Q3 (a)) --------------------------------------------
 //
 // What a statement declares about the relations it reads, and the whole of
 // what it declares: `IS` on every relation it **binds**, asked by the
-// compiler between the name and the schema, and `IS` on the slice its
-// outermost walk has reached, moved at every page boundary - all of it held
-// for **the statement** and released when this object dies. Nothing about
-// visibility passes through here - the snapshot decides what a reader sees,
-// as it always has (AN-S2) - and nothing about permission: this is a
-// position, published so that an operation which changes where a key lives
-// can wait for the reader rather than run out from under it. The one such
-// operation is DDL's relation `X` (AO-R12: no mover exists), which meets
-// this at the relation entry by the intention rule.
+// compiler between the name and the schema, held for **the statement** and
+// released when this object dies. Nothing finer: until CP-S2a the outermost
+// walk also took `IS` on the slice it had reached, moved at every page
+// boundary (AR2-R14, E12) - a position for a mover to wait on, and no mover
+// exists (`heap-and-tuple.md` §7.1), so nothing read it; E12's unit was
+// un-ratified on that ground, and a mover re-adds a position unit when one
+// exists (`txn.md` §5). Nothing about visibility passes through here - the
+// snapshot decides what a reader sees, as it always has (AN-S2) - and
+// nothing about permission: this is a declaration, published so that an
+// operation which changes where a key lives can wait for the reader rather
+// than run out from under it. The one such operation is DDL's relation `X`,
+// which meets this at the relation entry by the intention rule.
 //
 // **A read borrow never refuses a read and never makes one wait.** Every
 // ask is a non-queueing `TryAcquire`; a refused ask leaves the reader
@@ -48,7 +50,7 @@
 //
 // The cap is not special-cased for the same reason: `TryAcquire` refuses
 // at `max_locks_per_txn` and the reader carries on. The ledger holds one
-// entry per bound relation plus one slice, which no statement approaches.
+// entry per bound relation, which no statement approaches.
 
 namespace kds::server {
 
@@ -72,7 +74,7 @@ public:
     ReadBorrow(txn::LockTable* locks, std::uint64_t holder, std::uint64_t* taken,
                catalog::Oid rel) noexcept
         : ReadBorrow(locks, holder, taken) {
-        Position(rel, 0, kIdSpaceEnd);
+        Position(rel);
     }
     ReadBorrow(const ReadBorrow&) = delete;
     ReadBorrow& operator=(const ReadBorrow&) = delete;
@@ -80,79 +82,34 @@ public:
         if (locks_ != nullptr) locks_->Release(holder_, holdings_);
     }
 
-    void Position(catalog::Oid rel, std::uint64_t lo, std::uint64_t hi) override {
+    void Position(catalog::Oid rel) override {
         if (locks_ == nullptr) return;
-        // The intention above the slice, and the unit a `DROP TABLE`
-        // meets. **Asked once per relation, whatever the answer**: the
+        // The unit a `DROP TABLE` meets, and since CP-S2a the whole of the
+        // borrow. **Asked once per relation, whatever the answer**: the
         // record is of the ask and not of the grant, because a reader that
         // was refused - a DDL holds the relation `X` - would otherwise
-        // re-ask at every page boundary, taking a partition latch per page
-        // for the length of a walk that has already decided to run without
-        // a position. One record per relation rather than one slot, since a
+        // re-ask at every declaration, taking a partition latch each time
+        // for a statement that has already decided to run without the
+        // borrow. One record per relation rather than one slot, since a
         // statement binds every relation it joins or nests before its walk
-        // reports anything.
-        auto ask = std::find_if(asks_.begin(), asks_.end(),
-                                [rel](const Ask& a) { return a.rel == rel; });
-        if (ask == asks_.end()) {
-            const bool took = Take(txn::LockKey::Relation(rel), txn::LockMode::kIntentionShared);
-            if (took && taken_ != nullptr) ++*taken_;
-            ask = asks_.insert(asks_.end(), Ask{rel, took});
-        }
-        if (rel != rel_) {
-            rel_ = rel;
-            // The slice belonged to the relation being left: a slice kept
-            // across the change would be a position declared in a relation
-            // this reader is no longer in, and on the refused arm it would
-            // be held for the rest of the statement.
-            if (slice_.has_value()) {
-                locks_->ReleaseOne(holder_, *slice_, txn::LockMode::kIntentionShared, holdings_);
-                slice_.reset();
-            }
-        }
-        // No unit without the intention above it (`lock_table.hpp`): a
-        // slice borrowed under a relation entry this holder has no `IS` on
-        // is invisible to a relation-level ask.
-        if (!ask->granted) return;
-        // The whole id space is the relation, which is already held - what
-        // every bind declares, and what a walk's first report carries.
-        if (lo == 0 && hi == kIdSpaceEnd) return;
-
-        const txn::LockKey slice = txn::LockKey::Slice(rel, lo, hi);
-        if (slice_.has_value() && *slice_ == slice) return;
-        // **Taken before the previous one is let go**, so the position is
-        // never unheld between two pages - which is the one instant a mover
-        // could pass through if the order were reversed.
-        if (!Take(slice, txn::LockMode::kIntentionShared)) return;
-        if (slice_.has_value()) {
-            locks_->ReleaseOne(holder_, *slice_, txn::LockMode::kIntentionShared, holdings_);
-        }
-        slice_ = slice;
+        // opens.
+        if (std::find(asked_.begin(), asked_.end(), rel) != asked_.end()) return;
+        asked_.push_back(rel);
+        auto took = locks_->TryAcquire(holder_, txn::LockKey::Relation(rel),
+                                       txn::LockMode::kIntentionShared, holdings_);
+        if (took.ok() && took.value() && taken_ != nullptr) ++*taken_;
     }
 
 private:
-    struct Ask {
-        catalog::Oid rel;
-        bool granted;
-    };
-
-    bool Take(const txn::LockKey& key, txn::LockMode mode) {
-        auto took = locks_->TryAcquire(holder_, key, mode, holdings_);
-        return took.ok() && took.value();
-    }
-
     txn::LockTable* locks_ = nullptr;
     std::uint64_t holder_ = 0;
     std::uint64_t* taken_ = nullptr;
     txn::LockHoldings holdings_;
-    // Every relation asked for, with its answer. A vector and a linear
+    // Every relation asked for, whatever the answer. A vector and a linear
     // scan: the count is the statement's relation count, small in practice
-    // and never large enough for the scan to show, and a walk consults it
-    // once per page boundary.
-    std::vector<Ask> asks_;
-    // The relation the *position* is in - the walk's, not the bind's -
-    // which is the one the slice below belongs to.
-    catalog::Oid rel_ = 0;
-    std::optional<txn::LockKey> slice_;
+    // and never large enough for the scan to show, consulted once per
+    // declaration.
+    std::vector<catalog::Oid> asked_;
 };
 
 // The holder id a read borrow is taken under, and the one spelling of its

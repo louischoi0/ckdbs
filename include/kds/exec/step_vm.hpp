@@ -307,31 +307,15 @@ private:
 // There is deliberately no switch for index **maintenance**. An index that
 // stops being maintained is *wrong* rather than slow, and a config key that
 // can produce a wrong answer is not a config key.
-// **Where the statement is, told to whoever is holding its position**
-// (AO-S6e-b; AO-R12 and AR2-R14, the read borrow). Two callers: the
-// compiler, once per relation it binds, with the whole id space (AT-S1);
-// and the outermost walk, once before its first page and again at every
-// page boundary - the one place it holds no pin and no span - naming the
-// relation and the key interval it is positioned in. The executor knows
-// nothing about locks: the implementation is `read_borrow.hpp`'s, and what
-// it does with the interval (an `IS` at the slice, with the relation by
-// the intention rule) is that file's and the census's business.
-//
-// **`[0, kIdSpaceEnd)` is the whole relation** and is what the first call
-// carries: before the first page a walk is positioned nowhere in particular,
-// which is the same statement as "anywhere in it".
-class PositionSink {
-public:
-    virtual ~PositionSink() = default;
-    virtual void Position(catalog::Oid rel, std::uint64_t lo, std::uint64_t hi) = 0;
-};
-
+// The executor declares nothing to the lock family: a statement's relations
+// are declared at the bind (`step_compiler.hpp`, `PositionSink`, AT-S1), and
+// the per-page slice `IS` the outermost walk reported until CP-S2a left with
+// the slice unit (CP-Q3 (a), `txn.md` §5).
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats = nullptr,
                const Budget& budget = Budget(), TrailCollector* trail = nullptr,
                const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
-               const txn::Snapshot* snapshot = nullptr, bool indexes = true,
-               PositionSink* position = nullptr);
+               const txn::Snapshot* snapshot = nullptr, bool indexes = true);
 
 // **A statement's walk yields every `pages_per_slice` pages** (BA-S15,
 // BA-R12): the outermost walk, at the bottom of its page loop - its one
@@ -377,7 +361,7 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
                          stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
-                         PositionSink* position, const SlicePolicy& slice);
+                         const SlicePolicy& slice);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row. **The

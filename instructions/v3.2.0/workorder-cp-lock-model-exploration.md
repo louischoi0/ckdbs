@@ -14,9 +14,10 @@ Written 2026-11-07 on `worktree-cp-lock-model-exploration` from `6c4b9a6d`
 (`raft-marks-2026-11-08.md` §1, W1: *"CP-Q0..Q9 `$!a`, proceed with S0"*):
 **CP-Q0..CP-Q9 are all marked (a)**, CLA's proposal in each (§4), and CP-S0
 started the same day from `cc54a296` (`v3.4.7-1-gcc54a296`, build inputs
-`6c4b9a6d`'s); **CP-S0 landed at `c2937a32` and CP-S1 on 2026-11-08 on the
-tree after `d7b75977`** (§7, §8), S1 carrying three items to the operator
-before S2 (CP-Q10..CP-Q12, §8.10). Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
+`6c4b9a6d`'s); **CP-S0 landed at `c2937a32` and CP-S1 at `2a4a3f79`**
+(§7, §8), S1 carrying three items to the operator (CP-Q10..CP-Q12, §8.10),
+**all marked (a) on 2026-11-08** (`raft-marks-2026-11-08.md` §3), and
+**CP-S2 started** on that word. Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
 the opening review): the census corrected, two missed risks written into C2
 and C4, one candidate (release before durability) withdrawn because the
 tree contradicts its premise. **Exploratory on W0**: CP-S0 (the census and
@@ -601,8 +602,10 @@ documents named in its row (§5).
 | CP-Q8 | the measurement budget | (a) the standing rule (20 min a stage, about an hour the milestone); (b) lifted for S0 | (a); S0's cells are cut to fit and the file says what was cut |
 | CP-Q9 | fairness (C5) | (a) **nothing built** while M3 and M4 count no `fault_net` row; (b) a reservation built | (a) |
 
-**Added by S1 on 2026-11-08 (§8.10), unmarked** - the `[loud]` and
-ratification choices the model met, per §5's gate; CP-Q10 gates S2b:
+**Added by S1 on 2026-11-08 (§8.10)** - the `[loud]` and ratification
+choices the model met, per §5's gate - and **marked (a) the same day**
+(`raft-marks-2026-11-08.md` §3, *"CP-Q10..Q12 `$!a`, proceed with S2"*),
+which opened S2b:
 
 | # | item | options | CLA proposes |
 |---|---|---|---|
@@ -618,7 +621,7 @@ ratification choices the model met, per §5's gate; CP-Q10 gates S2b:
 |---|---|---|
 | **CP-S0** | **The census and the premise.** (1) §1.2's table re-read at the opening commit, every `path:line` checked. (2) The measurement, `build-release`, interleaved A/B, inside 20 minutes, in this priority: **M1** a point `UPDATE ... WHERE id = k` on disjoint rows, one session, `relaxed`, against a measurement build with the dispatcher's table null - the family's whole share, which that build also strips of `DeclaredWriteBorrow`, the first-intention memo check and the detector-gated park rule, as the file states; A1 and A5 apart only by a second decomposition build if the budget holds (no tally counts asks); **M3** scenario 2 (`--bookers 8`) and scenario 0 (`--fk --txn`), `sys.lock_waits` and `sys.ash` read after each, outcomes by unit and mode, `app.lock_wait`'s share of DB time, deadlock and `fault_net` counts (M3a is C2's price on the uncontended path; its contender is the rig cell, §3 C2); **M2** a `SELECT` walk over ~100-1,000 leaf pages against a build whose `Position` declines slices (C1); **M5** a held `UPDATE ... WHERE id > k` beside point writers (C3); **M4** `tools/lock_contention_benchmark.py` contended against disjoint, the shape AT-S5 made real; **M6**, a cell and not a measurement: two sessions under `group`, the second's `UPDATE` of a row the first just committed proceeding before the first's sync, confirming §1.1's last bullet and correcting `known-gaps.md:1417`. A cell cut for the budget is named in the file. (3) A results file `bench/v3.4.7/results-cp-s0-premise-<describe>.md` and this order's §7 stating each candidate's number against its rule | the operator's opening; the census is `[source-read]`, the measurement `[measured]` |
 | **CP-S1** | **The model.** **Landed 2026-11-08 on the work branch (§8); CP-Q10..CP-Q12 await the operator's marks.** A design memo in this order (§8): the matrix re-derived from S0 - the cells kept by §2's rule, the cells deleted, `U` added or not with C2's three re-statements, the structure proposed (C3, C4 as S0 ranks them) with its soundness argument written as `lock_table.hpp` writes publish-then-verify, C4's (α) or (β) as marked, and the amendments owed to `txn.md` §5, `foreign-keys.md` §2a-§3, `rules.md` §3's row, AR2 E1/E12 and `lock_table.hpp`'s header. Every `[quiet-wrong]` or `[loud]` choice goes to the operator as a CP-Q amendment before S2 | S0 landed; the operator's marks on any amended CP-Q |
-| **CP-S2** | **Build what S1 kept**, one sub-stage per candidate (S2a C1, S2b C2, S2c C4, S2d C3 as ranked), each with a `critics-developer` review and the full suite; each a separate commit so one that fails CP-Q7's bar is reverted alone | S1's model |
+| **CP-S2** | **Started 2026-11-08 on CP-Q10..CP-Q12 (a)** (`raft-marks-2026-11-08.md` §3): S2a C1 and S2b `U` as §8.12 ranks them, no S2c or S2d (§8.4). **Build what S1 kept**, one sub-stage per candidate (S2a C1, S2b C2, S2c C4, S2d C3 as ranked), each with a `critics-developer` review and the full suite; each a separate commit so one that fails CP-Q7's bar is reverted alone | S1's model |
 | **CP-S3** | **The close.** The overhead measured over the milestone's whole change (the opening commit against the closing one), scenario 0 and 2 beside M1's point write; the specs brought to the tree; `known-gaps.md`'s Locks section rewritten to the engine as it then is; this order's §7 and the index row | S2 landed |
 
 **Instruments** for S0 and S3: `sys.lock_waits` (`sys-views.md` §6.3),
@@ -859,6 +862,78 @@ pointed to from §4, §8.7 and the index; the CP-Q table kept in §4 alone,
 documents under `instructions/`); the last full run on these build inputs
 is S0's, 4405 of 4405 twice at `c2937a32` (above). The overhead
 measurement is the milestone's close's (S3).
+
+### CP-S2a, 2026-11-08: the slice unit deleted (C1, CP-Q3 (a); E4/R6 re-read, CP-Q11 (a))
+
+Run on `worktree-cp-lock-model-exploration` from `2a4a3f79` on the
+operator's marks (`raft-marks-2026-11-08.md` §3). **What landed**, §8.2's
+inventory whole: `LockUnit::kSlice`, `LockKey::Slice` and the slice arm of
+`IsFenceUnit` gone (`kTuple = 3`, `kIndexKey = 4`; nothing persists or
+orders on the value, the partition hash being the one numeric use); the
+read borrow is the relation `IS` at the bind and nothing else -
+`ReadBorrow::Position(rel)` asks once per relation, recorded whatever the
+answer; **the executor declares nothing**: the per-page report, the first
+report, `walk_page_min_key`, `ChainRunner::position_` and the `position`
+parameter of `Execute`/`ExecuteAsync` are deleted, `RunAnalyze` and
+`RunAggregated` lose their `borrow` parameter, and `PositionSink` moves to
+`step_compiler.hpp` as the compiler's declaring sink; the two
+`AcquireResult::slot_key` citations read `wake`; the comments in
+`lock_table.hpp`/`.cpp`, `manager.cpp` and `sys_views.cpp` say "range" for
+"slice". **Cells**: `ARangeIsFoundAfterThePageItCameFromChangesItsBounds`
+(renamed, E4's property over a range), four cells rewritten over
+`LockKey::Range` (the counter's gate, the `S`/`X` fence pair, the underflow
+guard, `S`/`S` on an interval), `TheUnitKindIsInTheKeyBecauseThreeUnitsShareABound`
+with the one pair the unit kind alone tells apart (`Tuple(r, 0)` against
+`Range(r, 0, 1)`), `AnIntentionModeOnAnIntervalUnitNeitherFencesNorIsFenced`
+kept over a range `IS` as AO-0 item 27's table property with no engine
+caller, `AWholeRelationWriteIsNotHeldUpByAPositionedReader` on the relation
+`IS` alone, `AWalkDeclaresItsRelationAndNoPosition` (the bind declares once,
+a six-page walk adds nothing) in place of the deleted
+`AWalkReportsWhereItIsAtEveryPageBoundary`, and the BD-S4 cell re-hooked to
+`SlicePolicy::at_boundary` with one page per slice over `ExecuteAsync` and
+a `TryResumeDeepest` loop, both its asserts kept. Inventory row 15's
+lock-table-level cell (one entry per bound relation while a walk runs) is
+**stood in for** by the exec-level cell: the sink is called once per bound
+relation and `ReadBorrow` asks once per call, so the table holds one entry
+per relation; the lock-level observation would need a walk parked
+mid-statement and adds nothing to that. **Documents**: `txn.md` §5 (the
+units sentence, the read-borrow paragraph with E12's unit un-ratified and a
+mover re-adding a position unit, the "not a consumer" bullet as a table
+property, "every bound relation holds `IS`, and nothing declares a
+position"), `CLAUDE.md`'s Transactions & MVCC row, AR2's E4 row and R6
+paragraph (CP-Q11 (a)), its §2 fence definition and §3 `SELECT` row (C1's
+half; `U`'s is S2b's), E12's status.
+
+**The review** (`critics-developer`, 2026-11-08, on the step before the
+commit): **no correctness bug** - the deletion complete in code (grep of
+`src/ include/ tests/ sim/ tools/` for the unit and the report empty),
+nothing numeric on the renumbering, the borrow's threading through
+`Compile` and the three execute calls one object, the BD-S4 hook at the
+same loop position with both asserts loud, the rewritten cells testing
+what their comments claim, the documents accurate. **Applied**: (1) §8.2
+row 4 as written - the walk's kept relation report deleted, since every
+execute caller passing a sink compiled with the same one, and with it the
+executor's whole `position` path (about 20 lines over 15 sites); (2)
+`ReadBorrow::Ask::granted` was written and never read - the struct is a
+`std::vector<catalog::Oid>` and `Take` inlined; (3) two dead includes
+(`keystone.hpp` in `step_compiler.cpp` and `read_borrow.hpp`); (4) the
+unit-kind cell pinned less than its name - the `Tuple(r, 0)`/`Range(r, 0,
+1)` pair added; (5) row 15 recorded as stood in for (above); (6) the
+intention-holder rule told once in `lock_table.cpp` and pointed to from
+the header, `ReleaseOne`'s history clause cut; (7) `CLAUDE.md`'s row
+carried a plan and `txn.md` §5 a measurement - both cut; (8) "reader"
+wording in the intention cell made "intention holder"; (9) AR2's §2 fence
+definition and §3 `SELECT` row amended for C1's half. Fixed by the
+reviewer: `txn.md`'s "a fifth unit" (now a fourth), "a position, never a
+permission" (a declaration), E12's status. **Rejected**: none; finding 10
+(`live_access` an alias of `&access`) is outside the diff and left.
+
+**The suite** (`scripts/test.sh`, Debug, every label but `bs-nightly`):
+**4405 of 4405 passed** (944 s) on the tree as committed, after the
+review's cuts (a first run on the pre-review tree was stopped when the
+cuts changed its build inputs). The targeted set - every lock, exec-chain,
+read-borrow, foreign-key and walk-slice cell, 340 - passed before it. The
+overhead measurement is the milestone's close's (S3).
 
 ---
 

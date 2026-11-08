@@ -40,7 +40,7 @@ const char* LockWaitOutcomeName(LockWaitOutcome outcome) noexcept;
 // **`unit`, `rel_oid` and `key` name the unit that refused** - the one the
 // wait is registered on - and `mode` is what the waiter asked. Since AY-S2
 // the two can differ: a row's `X` refused by a range fence is a `range` row
-// whose `mode` is the row's `X` (`lock_table.hpp`, `AcquireResult::slot_key`).
+// whose `mode` is the row's `X` (`lock_table.hpp`, `AcquireResult::wake`).
 struct LockWaitRecord {
     std::uint64_t seq = 0;         // the core's own count of rows, from 1
     std::int64_t started_us = 0;   // UTC epoch microseconds (a TIMESTAMP)

@@ -212,22 +212,26 @@ TEST(LockTableTest, AnUncontendedExclusiveRegistersOneEntryAndTheTableEmptiesOnR
     EXPECT_TRUE(h.empty());
 }
 
-TEST(LockTableTest, TheUnitKindIsInTheKeyBecauseFourUnitsShareABound) {
+TEST(LockTableTest, TheUnitKindIsInTheKeyBecauseThreeUnitsShareABound) {
     // What the unit kind in AO-R2's key actually buys. For a tuple with
     // `tuple key != 0` the bound alone already separates it from its relation, so
     // a collision census over many tuples measures the hash rather than the
-    // design. The keys that need the unit kind are the four carrying the
-    // **same** `lo = 0`: without it they would be one entry, and a relation
-    // `X` would be indistinguishable from a tuple `X` on row 0.
+    // design. The keys that need the unit kind are the three carrying the
+    // **same** `lo = 0` (four until the slice unit left at CP-S2a): without
+    // it they would be one entry, and a relation `X` would be
+    // indistinguishable from a tuple `X` on row 0.
     auto table = MakeTable();
     const LockKey rel = LockKey::Relation(kRel);
     const LockKey tuple0 = LockKey::Tuple(kRel, 0);
-    const LockKey slice0 = LockKey::Slice(kRel, 0, 100);
     const LockKey range0 = LockKey::Range(kRel, 0, 100);
 
     EXPECT_FALSE(rel == tuple0);
-    EXPECT_FALSE(rel == slice0);
-    EXPECT_FALSE(slice0 == range0) << "same relation, same interval, different unit";
+    EXPECT_FALSE(rel == range0);
+    EXPECT_FALSE(tuple0 == range0) << "same relation, same lower bound, different unit";
+    // The one pair the unit kind alone tells apart: same relation, same
+    // interval `[0, 1)`, different unit.
+    EXPECT_FALSE(tuple0 == LockKey::Range(kRel, 0, 1))
+        << "same relation, same interval, different unit";
     EXPECT_FALSE(LockKey::Relation(kRel) == LockKey::Relation(kOtherRel));
 
     // Separated in the table and not merely as values: two transactions
@@ -346,24 +350,25 @@ TEST(LockTableTest, TheCapsRefusalCarriesItsOwnWireDetail) {
     EXPECT_NE(wire::ResourceDetail::kLockCap, wire::ResourceDetail::kPortalIdleTimeout);
 }
 
-// ---- The slice is keyed in key space -------------------------------------
+// ---- The range is keyed in key space -------------------------------------
 
-TEST(LockTableTest, ASliceIsFoundAfterThePageItCameFromChangesItsBounds) {
-    // E4, ratified: a slice is `(rel_oid, [lo, hi))` in **key space**. The
-    // structural half of that claim is what makes it survive a btree leaf
-    // division - `LockKey` has no page field, so a division has no identity
-    // to invalidate - and the behavioural half is that the fence answers at
-    // every key it covers and no other.
+TEST(LockTableTest, ARangeIsFoundAfterThePageItCameFromChangesItsBounds) {
+    // E4, ratified, and re-read as the range unit's by CP-Q11 (a) when the
+    // slice unit left (CP-S2a): a range is `(rel_oid, [lo, hi))` in **key
+    // space**. The structural half of that claim is what makes it survive a
+    // btree leaf division - `LockKey` has no page field, so a division has
+    // no identity to invalidate - and the behavioural half is that the
+    // fence answers at every key it covers and no other.
     auto table = MakeTable();
     LockHoldings fence_holder;
-    const LockKey fence = LockKey::Slice(kRel, 100, 200);
+    const LockKey fence = LockKey::Range(kRel, 100, 200);
 
     ASSERT_TRUE(table->Acquire(1, fence, LockMode::kShared, fence_holder).value().granted);
     EXPECT_EQ(table->RelationFenceCount(kRel), 1u);
 
     // A division would move keys between pages here. Nothing in `fence`
     // named a page, so there is nothing to update and nothing to lose.
-    EXPECT_EQ(fence, LockKey::Slice(kRel, 100, 200)) << "identity is the bounds and nothing else";
+    EXPECT_EQ(fence, LockKey::Range(kRel, 100, 200)) << "identity is the bounds and nothing else";
     EXPECT_TRUE(table->FenceCoversKey(kRel, 100, /*txn=*/2));
     EXPECT_TRUE(table->FenceCoversKey(kRel, 150, 2));
     EXPECT_TRUE(table->FenceCoversKey(kRel, 199, 2));
@@ -397,12 +402,12 @@ TEST(LockTableTest, TheFenceCounterIsTheProbesGateAndARelationLockIsNotAFence) {
     EXPECT_FALSE(ix.value().granted) << "IX against S at the relation is one compatibility check";
 
     // A refused acquire raises no counter it does not hold.
-    LockHoldings slice_waiter;
-    LockHoldings slice_holder;
-    const LockKey slice = LockKey::Slice(kOtherRel, 0, 50);
-    ASSERT_TRUE(table->Acquire(3, slice, LockMode::kShared, slice_holder).value().granted);
+    LockHoldings fence_waiter;
+    LockHoldings fence_holder;
+    const LockKey fence = LockKey::Range(kOtherRel, 0, 50);
+    ASSERT_TRUE(table->Acquire(3, fence, LockMode::kShared, fence_holder).value().granted);
     EXPECT_EQ(table->RelationFenceCount(kOtherRel), 1u);
-    auto refused = table->Acquire(4, slice, LockMode::kExclusive, slice_waiter);
+    auto refused = table->Acquire(4, fence, LockMode::kExclusive, fence_waiter);
     ASSERT_TRUE(refused.ok());
     EXPECT_FALSE(refused.value().granted);
     EXPECT_EQ(table->RelationFenceCount(kOtherRel), 1u)
@@ -473,13 +478,14 @@ TEST(LockTableTest, ACappedTransactionIsRefusedRatherThanQueued) {
 }
 
 TEST(LockTableTest, AFenceIsSharedOrExclusiveAndOnlyOverAKeyInterval) {
-    // AR2 §2 defines a gap lock as "an `S` **or `X`** fence on a slice", and
-    // AR2 §3's assertion row takes `X` on the slice when the writer changes
-    // the group's state. The probe matches both: a gate that saw only `S`
-    // would miss half the fences AR2 defines.
+    // AR2 §2 defines a gap lock as "an `S` **or `X`** fence" (on a slice
+    // until CP-S2a, on a range since), and AR2 §3's assertion row took `X`
+    // on the interval when the writer changes the group's state. The probe
+    // matches both: a gate that saw only `S` would miss half the fences AR2
+    // defines.
     auto table = MakeTable();
     LockHoldings x_fence;
-    ASSERT_TRUE(table->Acquire(1, LockKey::Slice(kRel, 10, 20), LockMode::kExclusive, x_fence)
+    ASSERT_TRUE(table->Acquire(1, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, x_fence)
                     .value()
                     .granted);
     EXPECT_EQ(table->RelationFenceCount(kRel), 1u);
@@ -517,7 +523,7 @@ TEST(LockTableTest, AReleaseThatRemovesNoHolderLeavesTheFenceCounterAlone) {
     // stage's review found and fixed.
     auto table = MakeTable();
     LockHoldings h;
-    const LockKey fence = LockKey::Slice(kRel, 0, 10);
+    const LockKey fence = LockKey::Range(kRel, 0, 10);
     ASSERT_TRUE(table->Acquire(1, fence, LockMode::kShared, h).value().granted);
     EXPECT_EQ(table->RelationFenceCount(kRel), 1u);
 
@@ -892,7 +898,7 @@ TEST_F(LockWaitOnOneReactor, ACompatibleWaiterIsGrantedWithoutDisturbingTheHolde
     // the second is granted on its first ask and never parks. The cell
     // exists because a lock manager that queued every second arrival would
     // pass every conflict test in this file and still serialize reads.
-    const LockKey fence = LockKey::Slice(kRel, 0, 100);
+    const LockKey fence = LockKey::Range(kRel, 0, 100);
     Session first;
     Session second;
     scheduler.Submit(sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
@@ -981,7 +987,7 @@ TEST(LockTableTest, AFenceRefusesAWriteInsideIt) {
     ASSERT_TRUE(outside.ok());
     EXPECT_TRUE(outside.value());
     // And the upper bound stays exclusive at the acquire path, not only at
-    // the probe `ASliceIsFoundAfter...` tests directly.
+    // the probe `ARangeIsFoundAfter...` tests directly.
     auto at_hi = table->TryAcquire(2, LockKey::Tuple(kRel, 20), LockMode::kExclusive, writer);
     ASSERT_TRUE(at_hi.ok());
     EXPECT_TRUE(at_hi.value());
@@ -1130,54 +1136,63 @@ TEST(LockTableTest, TwoOverlappingFencesMeetEachOther) {
 // ---- AO-S6e-b: the read borrow's two table properties ---------------------
 
 TEST(LockTableTest, AnIntentionModeOnAnIntervalUnitNeitherFencesNorIsFenced) {
-    // The read borrow's slice `IS` and a bulk write's declared range `X`
-    // overlap in key space and **do not conflict**, in either order. The
-    // rule is one `FenceCoversKey` has applied from the tuple's side since
-    // AO-S6b ("an intention mode on a range key is not one and fences
-    // nothing"); until a reader took one, no holder had an intention mode
-    // on an interval unit and the two sides could not be seen to disagree.
+    // AO-0 item 27, ratified as built 2026-09-29: an intention mode on an
+    // interval unit and a bulk write's declared range `X` overlap in key
+    // space and **do not conflict**, in either order. The rule is one
+    // `FenceCoversKey` has applied from the tuple's side since AO-S6b ("an
+    // intention mode on a range key is not one and fences nothing") and
+    // `ConflictingOverlap` from the fence's side since AO-S6e-b.
+    //
+    // **A table property with no engine caller since CP-S2a**: its one live
+    // instance was the read borrow's slice `IS`, a positioned reader's
+    // declaration of where it was, and the slice unit left with it (CP-Q3
+    // (a): no mover exists to wait on a position). The rule stays, and so
+    // does this pin, because it is the operator's ratification and the fence
+    // rule CP states - "an interval unit in any non-intention mode is a
+    // fence" - is this rule said from the other side. The cell takes a range
+    // `IS` directly, as the table admits one.
     //
     // Why it is the rule and not raw compatibility: a declared range says
     // which rows a statement will *write*, and MVCC already answers a
     // concurrent reader from its snapshot - so making the writer wait for
     // readers would buy it nothing and cost a bulk write every scan on the
-    // relation. What the read borrow is for is an operation that changes
-    // where a key *lives*, and in M2 that is DDL's relation `X`, which
+    // relation. What a read's declaration is for is an operation that
+    // changes where a key *lives*, and that is DDL's relation `X`, which
     // meets a reader at the relation entry (AO-R12).
     auto table = MakeTable();
     LockHoldings reader;
     LockHoldings writer;
 
-    // The reader first: its slice is published, and the writer's own scan
-    // is what must pass it.
-    ASSERT_TRUE(table->Acquire(1, LockKey::Slice(kRel, 100, 400), LockMode::kIntentionShared,
+    // The intention holder first: its range is published, and the writer's
+    // own scan is what must pass it.
+    ASSERT_TRUE(table->Acquire(1, LockKey::Range(kRel, 100, 400), LockMode::kIntentionShared,
                                reader)
                     .value()
                     .granted);
     auto declared = table->Acquire(2, LockKey::Range(kRel, 200, 300), LockMode::kExclusive, writer);
     ASSERT_TRUE(declared.ok()) << declared.status().message();
     EXPECT_TRUE(declared.value().granted)
-        << "a declared write range waited for a reader's position, which no writer needs";
+        << "a declared write range waited for an intention holder, which no writer needs";
 
-    // A reader's slice raises no fence counter either, so a writer taking a
+    // A range `IS` raises no fence counter either, so a writer taking a
     // tuple inside it pays no scan and is not refused.
     EXPECT_EQ(table->RelationFenceCount(kRel), 1u) << "the range X is the only fence here";
     EXPECT_FALSE(table->FenceCoversKey(kRel, 150, /*txn=*/3))
-        << "a slice IS is not a fence over the keys it spans";
+        << "a range IS is not a fence over the keys it spans";
 
-    // And the other order: the writer's fence first, the reader's slice
-    // after. A read borrow is never refused, which is what lets the reader
-    // take what is free and read on regardless.
+    // And the other order: the writer's fence first, the intention holder's
+    // range after - granted, as a fence stops no intention.
     auto table2 = MakeTable();
     LockHoldings writer2;
     LockHoldings reader2;
     ASSERT_TRUE(table2->Acquire(2, LockKey::Range(kRel, 200, 300), LockMode::kExclusive, writer2)
                     .value()
                     .granted);
-    auto position = table2->Acquire(1, LockKey::Slice(kRel, 100, 400), LockMode::kIntentionShared,
+    auto position = table2->Acquire(1, LockKey::Range(kRel, 100, 400), LockMode::kIntentionShared,
                                     reader2);
     ASSERT_TRUE(position.ok()) << position.status().message();
-    EXPECT_TRUE(position.value().granted) << "a reader waited for a writer's declared range";
+    EXPECT_TRUE(position.value().granted)
+        << "an intention holder waited for a writer's declared range";
 
     // The tuple side is untouched: a real `X` inside the fence still
     // conflicts, which is the property AO-S6c-c rests on.
