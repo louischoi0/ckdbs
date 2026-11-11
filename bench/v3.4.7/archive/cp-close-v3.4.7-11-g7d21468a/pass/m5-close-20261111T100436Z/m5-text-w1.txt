@@ -1,0 +1,40 @@
+
+ckdbs benchmark - 2 columns, 4096 rows resident, BTREE-clustered, 1 connection
+server 127.0.0.1:15562  table cp_fence_text_w1
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+update-fenced             6000    15,282      64.4     31.0     32.8     33.2     38.5     52.0  180238.1     0
+update-unfenced           6000    25,447      38.3     27.9     31.7     32.2     39.3     66.7    5838.2     0
+
+  update-fenced: fence `id > 4080` held by another session: every tuple ask walks 64 partitions
+  update-unfenced: no fence standing: the counter reads 0, no walk
+
+  protocol text: every session on core 0 (text listener, expeditor.cpp:1779/2045)
+  fence session core 0; writer cores ['0'] (initial; an autocommit session may move between transactions, BL-S3)
+  latency is the client's wall clock around one send + one receive; sub-10us deltas are inside the harness floor
+arm                        ops   mean us      p50      p90      p99      p100  walks/stmt            p50 spread
+update-fenced             6000      64.4     33.2     36.2     52.0  180238.1  1.00..1.00      33.1..33.4      
+update-unfenced           6000      38.3     32.2     36.7     66.7    5838.2  0.00..0.00      31.9..32.9      
+
+  C3: fenced - unfenced = +1.0 us at p50, +26.1 us at the mean, per point UPDATE on an uncovered row (1 writer, text); block-to-block p50 spread within one arm up to 1.0 us
+  C3 (server CPU, pid 881202, every thread): fenced 20.00 us/stmt, unfenced 30.00 us/stmt, delta -10.00 us/stmt; block-to-block spread within one arm up to 30.00 us (CLK_TCK 100 Hz)
+  walks: 6000 fence walks over the run; fenced arm 1.000..1.000 per statement, unfenced arm 0.000..0.000
+  lock_partition latch waits over the run: 0 waits, 0 us
+
+  per block: block arm statements walks/stmt p50 p99 partition-waits fence_rows fence_held_s cpu_us/stmt
+      0 update-fenced       1000    1.000     33.4     59.9        0     16    0.038    30.00
+      0 update-unfenced     1000    0.000     32.1     50.9        0      -        -    20.00
+      1 update-unfenced     1000    0.000     31.9     43.7        0      -        -    20.00
+      1 update-fenced       1000    1.000     33.1     47.9        0     16    0.037    10.00
+      2 update-fenced       1000    1.000     33.3     52.9        0     16    0.037    20.00
+      2 update-unfenced     1000    0.000     32.4    113.9        0      -        -    50.00
+      3 update-unfenced     1000    0.000     32.2     54.5        0      -        -    40.00
+      3 update-fenced       1000    1.000     33.4     49.2        0     16    0.038    20.00
+      4 update-fenced       1000    1.000     33.1     52.9        0     16    0.218    20.00
+      4 update-unfenced     1000    0.000     32.9     95.9        0      -        -    30.00
+      5 update-unfenced     1000    0.000     32.1     53.5        0      -        -    20.00
+      5 update-fenced       1000    1.000     33.2     50.5        0     16    0.037    20.00
+
+  sys.lock_waits: 0 row(s) (recorded 0, overwritten 0, dropped 0)
+  wrote /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m5/out-20261111T100436Z/m5-text-w1.json

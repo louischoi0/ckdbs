@@ -1,0 +1,8 @@
+2026-11-11T10:02:17Z m3-s2 server up: {"pid": 878544, "port": 25731, "workdir": "/home/louis/bench-runs/cp-close/20261111T094919Z/m3-s2-close-b/s2", "ready_after_s": 0.403, "binary_sha256": "049f27e66219f684588e0b40543512ef2b31437243aca2cedbb13d257eee4ecb"}
+2026-11-11T10:02:17Z s2-schema begin loadavg=4.03 2.94 3.60
+2026-11-11T10:02:17Z s2-schema end rc=0 loadavg=4.03 2.94 3.60
+2026-11-11T10:02:17Z s2-load begin loadavg=4.03 2.94 3.60
+2026-11-11T10:02:32Z s2-load end rc=0 loadavg=3.31 2.84 3.55
+2026-11-11T10:02:32Z s2-run begin loadavg=3.31 2.84 3.55
+2026-11-11T10:03:25Z s2-run end rc=0 loadavg=2.25 2.63 3.44
+2026-11-11T10:03:25Z m3-s2 server stop rc=0: {"pid": 878544, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}

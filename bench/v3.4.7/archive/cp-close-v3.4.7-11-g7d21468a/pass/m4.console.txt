@@ -1,0 +1,92 @@
+2026-11-11 09:54:23 UTC  phase: preflight
+2026-11-11 09:54:23 UTC  WT=/home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration  OUT=/tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m4  RUN_ROOT=/home/louis/bench-runs/cp-close/20261111T094919Z/m4  DRY_RUN=0  CELLS=m4
+2026-11-11 09:54:23 UTC  RUN_ROOT filesystem: ext4 (/dev/nvme0n1p1 ext4 263968576 212010128  41106656  84% /)
+2026-11-11 09:54:23 UTC  manifest: /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m4/manifest.json
+2026-11-11 09:54:23 UTC  phase: m4: start servers
+2026-11-11 09:54:23 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-base --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m4/20261111T095423Z/m4/base --port 15524 --debug-text-port 15525 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m4-base
+{"pid": 868195, "port": 15524, "workdir": "/home/louis/bench-runs/cp-close/20261111T094919Z/m4/20261111T095423Z/m4/base", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+2026-11-11 09:54:23 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-close --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m4/20261111T095423Z/m4/close --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m4-close
+{"pid": 868214, "port": 15522, "workdir": "/home/louis/bench-runs/cp-close/20261111T094919Z/m4/20261111T095423Z/m4/close", "ready_after_s": 0.403, "binary_sha256": "049f27e66219f684588e0b40543512ef2b31437243aca2cedbb13d257eee4ecb"}
+2026-11-11 09:54:24 UTC  phase: m4: driver
+2026-11-11 09:54:24 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/lock_contention_benchmark.py --port 15524 --label base --ab-port 15522 --ab-label close --sessions 8 --rows 256 --ops 4000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m4/m4.json
+
+sessions=8 rows=256 ops/arm/session=4000 blocks=4
+  base: cores accepted on = 0, 2, 3
+  close: cores accepted on = 0, 1, 2, 3
+host before: 3.35 4.42 4.49 1/448 868242   competing: none
+host after : 3.46 4.32 4.45 2/448 869406   competing: none
+
+arm                                                   base                             close
+                            p50us    p99us      qps    err    p50us    p99us      qps    err
+update-hot                  303.2   1059.7    22270   2318    288.1    997.2    23575   2065
+update-disjoint             292.9    985.3    23378      0    276.7    942.2    24584      0
+update-disjoint-again       280.7    986.0    23779      0    272.1    940.6    24690      0
+insert-omitted              280.2    938.4    24289      0    194.7    845.9    21963      0
+select-hot                  397.6   1371.9    17016      0    401.8   1339.8    17109      0
+ping                       3818.5  15611.5     1692      0   3789.9  15267.0     1703      0
+
+base: noise floor (disjoint vs its repeat) p50 = 12.2 us; hot - disjoint p50 = 10.3 us
+close: noise floor (disjoint vs its repeat) p50 = 4.6 us; hot - disjoint p50 = 11.4 us
+
+raw summaries: /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m4/m4.json
+2026-11-11 09:55:17 UTC  phase: m4: views
+2026-11-11 09:55:17 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/read_views.py --port 15524 --label m4-base --tools /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m4/m4-base
+views read over KWP/1 :15524 m4-base
+sys.lock_waits: 9 rows; by outcome {'granted': 9}; by core {'0': 2, '1': 1, '2': 1, '3': 5}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+  tuple         X     granted          9         137        38      15.2
+sys.wait_stats: app.lock_wait count=817 total_us=277 max_us=38; app.lock_conflict count=817; DB time 10141858 us; lock_wait share 2.7e-05
+  core=0,event=app.lock_wait,class=Application,count=308,total_us=82,max_us=28
+  core=0,event=app.lock_conflict,class=Application,count=308,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=162,total_us=48,max_us=17
+  core=1,event=app.lock_conflict,class=Application,count=162,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=58,total_us=31,max_us=18
+  core=2,event=app.lock_conflict,class=Application,count=58,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=289,total_us=115,max_us=38
+  core=3,event=app.lock_conflict,class=Application,count=289,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=817,total_us=277,max_us=38
+  core=NULL,event=app.lock_conflict,class=Application,count=817,total_us=0,max_us=0
+sys.meta: core=1, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=9, version=35, wal_topology=single
+sys.ash: 53 samples
+  cpu.on_cpu                  RUNNABLE        53
+2026-11-11 09:55:17 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/read_views.py --port 15522 --label m4-close --tools /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m4/m4-close
+views read over KWP/1 :15522 m4-close
+sys.lock_waits: 18 rows; by outcome {'granted': 18}; by core {'0': 1, '1': 3, '2': 7, '3': 7}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+  tuple         U     granted         18         303       166      16.8
+sys.wait_stats: app.lock_wait count=824 total_us=426 max_us=165; app.lock_conflict count=824; DB time 10637332 us; lock_wait share 4e-05
+  core=0,event=app.lock_wait,class=Application,count=131,total_us=30,max_us=2
+  core=0,event=app.lock_conflict,class=Application,count=131,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=54,total_us=194,max_us=165
+  core=1,event=app.lock_conflict,class=Application,count=54,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=442,total_us=138,max_us=34
+  core=2,event=app.lock_conflict,class=Application,count=442,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=197,total_us=61,max_us=17
+  core=3,event=app.lock_conflict,class=Application,count=197,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=824,total_us=426,max_us=165
+  core=NULL,event=app.lock_conflict,class=Application,count=824,total_us=0,max_us=0
+sys.meta: core=0, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=18, version=35, wal_topology=single
+sys.ash: 53 samples
+  cpu.on_cpu                  RUNNABLE        53
+2026-11-11 09:55:17 UTC  phase: m4: stop servers
+2026-11-11 09:55:17 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m4/20261111T095423Z/m4/base
+{"pid": 868195, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-11 09:55:17 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m4/20261111T095423Z/m4/close
+{"pid": 868214, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-11 09:55:17 UTC  phase: done
+2026-11-11 09:55:17 UTC  outputs under /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m4:
+  active_servers
+  heartbeat
+  m4-base.server.json
+  m4-base.views.json
+  m4-base.views.txt
+  m4-close.server.json
+  m4-close.views.json
+  m4-close.views.txt
+  m4.json
+  m4.txt
+  manifest.json
+  phase
+  servers.log
+  timeline.txt
+2026-11-11 09:55:17 UTC  cleanup (exit 0)

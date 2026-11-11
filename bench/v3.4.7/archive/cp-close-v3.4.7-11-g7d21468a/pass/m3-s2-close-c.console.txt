@@ -1,0 +1,25 @@
+2026-11-11T10:09:00Z M3 preflight
+started_utc=2026-11-11T10:09:00Z
+tree=/home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration
+describe=v3.4.7-11-g7d21468a
+head=7d21468a
+dirty=0 (build inputs)
+bin=/tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-close sha256=049f27e66219f684588e0b40543512ef2b31437243aca2cedbb13d257eee4ecb
+host=Linux 6.12.113+deb13-cloud-amd64 x86_64 nproc=8 loadavg=3.32 3.00 3.30
+workroot_fs=/dev/nvme0n1p1 ext4 263968576 213972796  39143988  85% /
+competing=0
+cores=4 taskset=2-5 driver_cpus=0,1,6,7 durability=group ash_interval_ms=100
+s2: --organizations 300 --ships 30 --operations 300 --cargos 24000 --verify 100 --seed 1 --sync --bookers 8 --seconds 60 --bookings 0  (suffix m3s2)
+s0: --users 2000 --assets 2000 --traders 8 --seconds 60 --fk --txn --verify 200 --seed 1 --sync  (suffix m3s0)
+2026-11-11T10:09:00Z == M3 scenario 2: cores 4, group, --bookers 8, --organizations 300 --ships 30 --operations 300 --cargos 24000, --seconds 60, bookings 0
++ python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-close --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m3-s2-close-c/s2 --port 25731 --debug-text-port 25732 --cores 4 --taskset 2-5 --durability group --buffer-pool-frames 65536 --ash on --conf-extra ash_interval_ms = 100 --log-level info --label m3-s2
++ timeout 900 taskset -c 0,1,6,7 python3 /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/scenario2_freight.py --port 25731 --suffix m3s2 --organizations 300 --ships 30 --operations 300 --cargos 24000 --verify 100 --seed 1 --sync --bookers 8 --seconds 60 --bookings 0 --server-log /home/louis/bench-runs/cp-close/20261111T094919Z/m3-s2-close-c/s2/kdb.log --schema-only
+2026-11-11T10:09:01Z s2-schema rc=0
++ timeout 900 taskset -c 0,1,6,7 python3 /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/scenario2_freight.py --port 25731 --suffix m3s2 --organizations 300 --ships 30 --operations 300 --cargos 24000 --verify 100 --seed 1 --sync --bookers 8 --seconds 60 --bookings 0 --server-log /home/louis/bench-runs/cp-close/20261111T094919Z/m3-s2-close-c/s2/kdb.log --load-only
+2026-11-11T10:09:16Z s2-load rc=0
++ python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m3/read_views.py --port 25731 --out /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m3-s2-close-c/s2-pre --label s2-pre --tools /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools
++ timeout 900 taskset -c 0,1,6,7 python3 /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/scenario2_freight.py --port 25731 --suffix m3s2 --organizations 300 --ships 30 --operations 300 --cargos 24000 --verify 100 --seed 1 --sync --bookers 8 --seconds 60 --bookings 0 --server-log /home/louis/bench-runs/cp-close/20261111T094919Z/m3-s2-close-c/s2/kdb.log --json /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m3-s2-close-c/s2.json
+2026-11-11T10:10:09Z s2-run rc=0
++ python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m3/read_views.py --port 25731 --out /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m3-s2-close-c/s2-post --label s2-post --tools /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools --baseline /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m3-s2-close-c/s2-pre.views.json
++ python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m3-s2-close-c/s2
+2026-11-11T10:10:09Z M3 done; outputs under /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m3-s2-close-c (s2.json, s0.json, *-pre/*-post.views.json/.txt, *.log, stamp.txt, timeline.txt)

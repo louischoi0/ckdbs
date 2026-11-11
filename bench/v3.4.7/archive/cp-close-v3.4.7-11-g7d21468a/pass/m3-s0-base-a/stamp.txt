@@ -1,0 +1,13 @@
+started_utc=2026-11-11T10:01:07Z
+tree=/home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration
+describe=v3.4.7-11-g7d21468a
+head=7d21468a
+dirty=0 (build inputs)
+bin=/tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-base sha256=d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4
+host=Linux 6.12.113+deb13-cloud-amd64 x86_64 nproc=8 loadavg=2.48 2.52 3.52
+workroot_fs=/dev/nvme0n1p1 ext4 263968576 212188004  40928780  84% /
+competing=0
+cores=4 taskset=2-5 driver_cpus=0,1,6,7 durability=group ash_interval_ms=100
+s2: --organizations 300 --ships 30 --operations 300 --cargos 24000 --verify 100 --seed 1 --sync --bookers 8 --seconds 60 --bookings 0  (suffix m3s2)
+s0: --users 2000 --assets 2000 --traders 8 --seconds 60 --fk --txn --verify 200 --seed 1 --sync  (suffix m3s0)
+finished_utc=2026-11-11T10:02:16Z

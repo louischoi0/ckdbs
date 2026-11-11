@@ -375,9 +375,10 @@ one moving the fk column off it. The walk answers busy and carries that writer's
 out; the `DELETE` parks mid-walk on the row, nothing of the parent row
 written yet, and runs the check again at the writer's decide. **The
 `DELETE` gets its slot from a probe in `U` on the child row** (CP-S2b):
-refused by the row's own writer in `U` or `X` and parked on that entry's
-wake; admitted by a grandchild writer's `S` on the row and given back at
-once. In `S` the probe would be admitted by a child `UPDATE`'s `U` and the
+refused by the row's own writer in `U` or `X`, or by a bulk child write's
+range over the row, and parked on the refusing entry's wake; admitted by a
+grandchild writer's `S` on the row and given back at once. The probe takes
+no intention above it, since nothing of it outlives the ask. In `S` the probe would be admitted by a child `UPDATE`'s `U` and the
 `DELETE` would re-run on a pre-flipped slot until the writer decided. The
 probe is asked over a share this transaction holds on the child row (a
 grandchild of its own), since the give-back matches by mode. A commit
