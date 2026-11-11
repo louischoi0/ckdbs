@@ -18,8 +18,10 @@ started the same day from `cc54a296` (`v3.4.7-1-gcc54a296`, build inputs
 (§7, §8), S1 carrying three items to the operator (CP-Q10..CP-Q12, §8.10),
 **all marked (a) on 2026-11-08** (`raft-marks-2026-11-08.md` §3), and
 **CP-S2 started** on that word and **landed on the work branch the same
-day**: S2a at `0ddfbfab` (the slice unit deleted), S2b the next commit
-(the `U` mode; §7). S3, the close, is next. Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
+day**: S2a at `0ddfbfab` (the slice unit deleted), S2b at `766f6a6d` (the
+`U` mode; §7). **Paused there on 2026-11-11 on the operator's word**
+(`raft-marks-2026-11-11.md` §1), nothing merged or pushed; S3, the close,
+is next, and §7's last entry is the hand-off. Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
 the opening review): the census corrected, two missed risks written into C2
 and C4, one candidate (release before durability) withdrawn because the
 tree contradicts its premise. **Exploratory on W0**: CP-S0 (the census and
@@ -624,8 +626,8 @@ which opened S2b:
 |---|---|---|
 | **CP-S0** | **The census and the premise.** (1) §1.2's table re-read at the opening commit, every `path:line` checked. (2) The measurement, `build-release`, interleaved A/B, inside 20 minutes, in this priority: **M1** a point `UPDATE ... WHERE id = k` on disjoint rows, one session, `relaxed`, against a measurement build with the dispatcher's table null - the family's whole share, which that build also strips of `DeclaredWriteBorrow`, the first-intention memo check and the detector-gated park rule, as the file states; A1 and A5 apart only by a second decomposition build if the budget holds (no tally counts asks); **M3** scenario 2 (`--bookers 8`) and scenario 0 (`--fk --txn`), `sys.lock_waits` and `sys.ash` read after each, outcomes by unit and mode, `app.lock_wait`'s share of DB time, deadlock and `fault_net` counts (M3a is C2's price on the uncontended path; its contender is the rig cell, §3 C2); **M2** a `SELECT` walk over ~100-1,000 leaf pages against a build whose `Position` declines slices (C1); **M5** a held `UPDATE ... WHERE id > k` beside point writers (C3); **M4** `tools/lock_contention_benchmark.py` contended against disjoint, the shape AT-S5 made real; **M6**, a cell and not a measurement: two sessions under `group`, the second's `UPDATE` of a row the first just committed proceeding before the first's sync, confirming §1.1's last bullet and correcting `known-gaps.md:1417`. A cell cut for the budget is named in the file. (3) A results file `bench/v3.4.7/results-cp-s0-premise-<describe>.md` and this order's §7 stating each candidate's number against its rule | the operator's opening; the census is `[source-read]`, the measurement `[measured]` |
 | **CP-S1** | **The model.** **Landed 2026-11-08 on the work branch (§8); CP-Q10..CP-Q12 await the operator's marks.** A design memo in this order (§8): the matrix re-derived from S0 - the cells kept by §2's rule, the cells deleted, `U` added or not with C2's three re-statements, the structure proposed (C3, C4 as S0 ranks them) with its soundness argument written as `lock_table.hpp` writes publish-then-verify, C4's (α) or (β) as marked, and the amendments owed to `txn.md` §5, `foreign-keys.md` §2a-§3, `rules.md` §3's row, AR2 E1/E12 and `lock_table.hpp`'s header. Every `[quiet-wrong]` or `[loud]` choice goes to the operator as a CP-Q amendment before S2 | S0 landed; the operator's marks on any amended CP-Q |
-| **CP-S2** | **Started and landed 2026-11-08 on CP-Q10..CP-Q12 (a)** (`raft-marks-2026-11-08.md` §3; §7): S2a C1 at `0ddfbfab` and S2b `U` the commit after it, as §8.12 ranks them, no S2c or S2d (§8.4). **Build what S1 kept**, one sub-stage per candidate (S2a C1, S2b C2, S2c C4, S2d C3 as ranked), each with a `critics-developer` review and the full suite; each a separate commit so one that fails CP-Q7's bar is reverted alone | S1's model |
-| **CP-S3** | **The close.** The overhead measured over the milestone's whole change (the opening commit against the closing one), scenario 0 and 2 beside M1's point write; the specs brought to the tree; `known-gaps.md`'s Locks section rewritten to the engine as it then is; this order's §7 and the index row | S2 landed |
+| **CP-S2** | **Started and landed 2026-11-08 on CP-Q10..CP-Q12 (a)** (`raft-marks-2026-11-08.md` §3; §7): S2a C1 at `0ddfbfab` and S2b `U` at `766f6a6d`, as §8.12 ranks them, no S2c or S2d (§8.4). **Build what S1 kept**, one sub-stage per candidate (S2a C1, S2b C2, S2c C4, S2d C3 as ranked), each with a `critics-developer` review and the full suite; each a separate commit so one that fails CP-Q7's bar is reverted alone | S1's model |
+| **CP-S3** | **The close.** The overhead measured over the milestone's whole change (the opening commit against the closing one), scenario 0 and 2 beside M1's point write; the specs brought to the tree; `known-gaps.md`'s Locks section rewritten to the engine as it then is; this order's §7 and the index row. **Not started**: §7's hand-off entry of 2026-11-11 lists its steps in order | S2 landed; the operator's word to start |
 
 **Instruments** for S0 and S3: `sys.lock_waits` (`sys-views.md` §6.3),
 `sys.ash` with `tools/ash_panel.py` (§6.7), the `app.lock_wait` and
@@ -1050,6 +1052,113 @@ Before it the targeted set - every lock, exec-chain, read-borrow,
 foreign-key, unique and `ON CONFLICT` cell, 297 - passed. The overhead
 measurement is the milestone's close's (S3), over S2a and S2b together
 against `cc54a296`.
+
+### Paused after S2, 2026-11-11: the hand-off
+
+Written on the operator's word (`raft-marks-2026-11-11.md` §1) so that a
+session opening cold can take S3 up from this entry and the files it
+names.
+
+**Where CP stands.** Everything is on `worktree-cp-lock-model-exploration`
+(the worktree under `.claude/worktrees/`), **unmerged and unpushed**:
+
+| commit | what | suite |
+|---|---|---|
+| `cc54a296` | CP written (documents only) | - |
+| `c2937a32` | CP-S0: the census re-read, M1-M6 measured, `lock_release_before_sync_rig_test.cpp`, `known-gaps.md`'s CA entry corrected | 4405/4405, twice |
+| `d7b75977` | `origin/main` (`adbe2638`, a `CLAUDE.md` line) merged; nothing since on `origin/main` as of 2026-11-08 15:33 UTC | - |
+| `2a4a3f79` | CP-S1: the model (§8), CP-Q10..CP-Q12 raised and then marked (a) | no build input |
+| `0ddfbfab` | CP-S2a: the slice unit deleted, the executor's position path gone (§7) | 4405/4405 |
+| `766f6a6d` | CP-S2b: the `U` mode with its three re-statements, 22 cells (§7) | 4427/4427 |
+
+The version of record is still `v3.4.7` (`6c4b9a6d` on `main`); `git
+describe --tags` on the branch reads `v3.4.7-7-g766f6a6d`. **The build
+inputs of `766f6a6d` ran the full suite green and nothing changed them
+since**, so a push of the branch as it stands goes out with `--no-verify`
+and names 4427/4427 at `766f6a6d` - on the operator's word only. The
+`build/` tree is Debug at `766f6a6d`; `build-release/` holds a Release
+build of the *clean S0 tree* (`cc54a296`'s build inputs), not of the branch
+- S3 rebuilds it. The S0 scratch files (binaries, run scripts, logs) were
+under the session's scratchpad in `/tmp` and are gone with it; everything
+that matters is in `bench/v3.4.7/archive/cp-s0-premise-v3.4.7-1-gcc54a296/`.
+
+**What CP-S3 does, in order** (the close; §5's row, the standing budget
+of about an hour for the milestone's measurement, CP-Q8 (a)):
+
+1. **The overhead over the milestone's whole change**, `build-release` at
+   `766f6a6d` (or the closing commit) against `build-release` at
+   `cc54a296` (build it from `git worktree add` or a checkout of that
+   commit; hash both binaries into the results file), interleaved A/B, on
+   ext4 data files, host load sampled, a 60 s watchdog by file. The cells,
+   from S0's: **M1** the point `UPDATE ... WHERE id = k` on disjoint rows
+   (`tools/lock_contention_benchmark.py`, one session, `relaxed`; the
+   family's share was about 0.4 µs at S0, so the close reads for a change
+   inside the 0.2 µs noise floor); **M2** `tools/bm_scan.py census` at
+   `cores = 1` (the slice `IS`'s 88-126 ns a leaf page should now be
+   gone from the base-to-close delta: the gain C1 bought); **M3** scenario 2
+   `--bookers 8` under `group` and scenario 0 `--fk --txn` with 8 traders
+   (`sys.lock_waits` by unit and mode - the `U` rows appear here -
+   `app.lock_wait`'s share of DB time, deadlock and `fault_net` counts,
+   TPS); **M4** `lock_contention_benchmark.py` contended against disjoint
+   (the hot-row refusals stay the MVCC window's, §8.5); **M5** optional,
+   `tools/cp_s0_fence.py` under a held `UPDATE ... WHERE id > k` - the
+   window is now a range `U` and the point writers' tuple asks still scan,
+   so the walk's cost should read as at S0. The run scripts, launcher and
+   view readers as run at S0 are in the archive's `scripts/` and
+   `tools-at-run/`; `tools/cp_s0_release_order.py` is committed (text
+   protocol only). Results file `bench/v3.4.7/results-cp-close-<describe>.md`
+   per `bench/README.md`'s rules, with a delta against S0's numbers and
+   the archive beside it; a cell cut for the budget is named in the file.
+   **The bar is CP-Q7 (a)**: a measured gain on the shape each candidate
+   names (C1's scan CPU), no cost outside the spread elsewhere (M1, M3,
+   M4), the four contract suites byte-identical (they ran inside the
+   suite), no wait turned into a refusal but CP-Q10's class.
+2. **`docs/inflight/known-gaps.md`, the Locks section** rewritten to the
+   engine as it is: the §2c pair (a parent `UPDATE` waits for child
+   writers; two child writers that then update their parent deadlock)
+   recorded as closed by `U`; CP-Q10's class recorded as the one shape `U`
+   added, with its two rig cells; the unique check's busy-holder wait
+   (`CheckUniqueKeyLatest`, a header poll with no wake) added to "what
+   still polls"; C4's decide slot named as the design that would close
+   "what still polls" and recorded as not built with its (ii) `[loud]`
+   risk and CP-Q4 (a)'s (α); C3 named as a measured item for an eight-core
+   host (BP-H10's +12 % untested at four cores, CP-Q12 (a)); "a wake is not
+   a grant" stands; the CA entry (corrected at S0) stands. Every entry
+   names the commit it was verified at.
+3. **The deferred trims** from the two reviews: the three design comments
+   that restate the specs at length (the hoist's at `command_dispatcher.cpp`
+   "Busy under a granted `S`", `WaitForChildRowWriter`'s, the tables' lead
+   in `lock_table.hpp`) cut to a few lines plus a pointer now that the
+   specs carry the text; the rig scaffolding (`Script`, `RunScript`,
+   `StartsWith`, `Response`, the eleventh copy across the rig tests) and
+   `host_state` (the third copy across the drivers) are **not** CP's - a
+   `tests/rig_script.hpp` and a `bench_common` helper, their own small
+   order, noted here so they are not lost.
+4. **The documents at the close**: `CLAUDE.md`'s Transactions & MVCC and
+   Foreign keys rows already state the `U` mode and the slice's deletion;
+   the close adds nothing there but the overhead's result if it moves a
+   stated number. This order's §7 gains the close entry and the index row
+   flips to closed; `docs/conceptnotes/cn11-templated-transaction.md:94-96`
+   lists the pre-CP costs and is a concept note, left as dated;
+   `workorder-ay-following-letter.md:594` cites the renamed rig cell as
+   history, left. The AR2 rows (E1, E4, E12, the fence definition, the
+   `UPDATE` and `SELECT` rows) already carry their dated amendments.
+5. **Then stop**: the merge to `main` and the push are the operator's
+   word; the version is the operator's to name (`z` alone is CLA's to
+   move, said plainly if moved). Nothing of CP persists on disk, so no
+   superblock or protocol change accompanies the merge.
+
+**What a resuming session reads first**: this file's §7 entries from
+CP-S0 down (the measurements, the review findings and what was deferred),
+§8.3 and §8.8 (the model and its cells, now built), `raft-marks-2026-11-08.md`
+and `raft-marks-2026-11-11.md`; then `docs/spec/txn.md` §5 and
+`docs/spec/foreign-keys.md` §2a-§3a as amended at S2b, and
+`include/kds/txn/lock_table.hpp`'s header. The standing rules it inherits
+unchanged: `CLAUDE.md`'s Session Workflow (worktree, a `critics-developer`
+review per step, the full suite, sync then stop), the measurement rules
+(`build-release`, interleaved A/B, the budget, the watchdog), English in
+every document, the version named by the operator, no push without the
+word.
 
 ---
 
