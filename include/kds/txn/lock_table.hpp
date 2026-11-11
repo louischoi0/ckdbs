@@ -251,20 +251,13 @@ constexpr std::size_t ModeIndex(LockMode m) noexcept {
     return static_cast<std::size_t>(m) - 1;
 }
 
-// **The compatibility matrix, as a table.** `IS` conflicts only with `X`;
-// `IX` with `S`, `U` and `X`; `S` with `IX` and `X` **and not with `U`**;
-// `U` with `IX`, `U` and `X`; `X` with everything (AR2 §2, `U` added at
-// CP-S2b). `S`/`U` compatible is the cell `U` exists for: a key share
-// protects a row's existence and its key, and a version claim changes
-// neither (`foreign-keys.md` §2c). `U`/`U` refuses as `X`/`X` did, the
-// header's first-updater-wins deciding the re-run.
+// **The compatibility matrix** (`txn.md` §5; `U` added at CP-S2b).
+// `S`/`U` compatible is the cell `U` exists for: a key share protects a
+// row's existence and its key, and a version claim changes neither.
 //
-// A table and not a chain of predicates, so a widening fills every cell by
-// hand; and the `static_assert`s below are what makes an unfilled cell a
-// compile error, since the array's size alone does not (the count sizes it
-// and a missing initializer reads `false`, which for a `kCompatible` row
-// refuses what should be admitted and for a `kCovers` row spends a cap slot
-// per re-ask - loud and quiet respectively, neither a build error).
+// A table, so a widening fills every cell by hand; the `static_assert`s
+// below make an unfilled cell a compile error, which the array's size alone
+// does not (a missing initializer reads `false`).
 inline constexpr bool kCompatible[kLockModeCount][kLockModeCount] = {
     //            IS     IX      S      U      X
     /* IS */ {true, true, true, true, false},
@@ -275,13 +268,8 @@ inline constexpr bool kCompatible[kLockModeCount][kLockModeCount] = {
 };
 
 // Does holding the row's mode make the column's mode a no-op for the same
-// transaction? `X` covers all; `U` covers `S`, `IS` and itself (a version
-// claim is at least a key share, so a transaction that updated a parent
-// takes no `S` record to reference it, and a resumed walk re-asking its
-// row adds no entry); `S` and `IX` each cover `IS`. `S` does not cover
-// `IX`, `IX` does not cover `S`, `S` does not cover `U` and `U` covers
-// neither `IX` nor `X` - no `SIX` and no silent upgrade: a transaction
-// needing both holds both entries, which is the honest accounting.
+// transaction (`txn.md` §5)? No `SIX` and no silent upgrade: a transaction
+// needing two modes neither covers holds both entries.
 inline constexpr bool kCovers[kLockModeCount][kLockModeCount] = {
     //            IS     IX      S      U      X
     /* IS */ {true, false, false, false, false},

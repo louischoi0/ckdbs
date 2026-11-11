@@ -4555,23 +4555,12 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         if (!verdict.ok()) return verdict.status();
         exec::FkVerdict resolved = verdict.value();
 
-        // **Busy under a granted `S` has one cause with a table, and it
-        // reads present** (CP-S2b, `U`). Every writer that places or
-        // delete-marks a row holds its `X` - an `INSERT`'s, a `DELETE`'s row
-        // or window; a `PURGE` retire stamps no transaction and is never
-        // busy - and `X` refuses the `S` this check
-        // holds, so the writer the view cannot see holds `U`: an `UPDATE`,
-        // whose head is an overwrite over a live predecessor and is not
-        // delete-marked. Whichever way it decides, a live version of this
-        // key stands, and no `DELETE` of the row is granted while the `S`
-        // is held - so the parent is present. The two header fields are the
-        // witness of that discipline: a busy head that is delete-marked or
-        // has no predecessor is a verb placed under the wrong mode, kept as
-        // today's retryable refusal (`CheckForeignKeyOnWrite`'s `kBusy` arm)
-        // and logged, never answered.
-        //
-        // Without a table nothing refuses an inserter, so the witness is not
-        // read there: the `IsInFlight` poll is the wait (AO-S3).
+        // **Busy under a granted `S` reads present** (CP-S2b;
+        // `foreign-keys.md` §2a): with a table the unseen writer holds `U`,
+        // an `UPDATE` whose head is an overwrite over a live predecessor. A
+        // busy head that is delete-marked or has no predecessor is a verb
+        // under the wrong mode: kept busy and logged, never answered.
+        // Without a table the `IsInFlight` poll is the wait (AO-S3).
         if (resolved == exec::FkVerdict::kBusy && busy.trx_id != 0) {
             if (locks_ == nullptr) {
                 NoteBlockingWriter(scope.txn, busy.trx_id, tuple_key, RepeatableReadWait::kCapable);
@@ -4804,33 +4793,17 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
 
 void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel,
                                               std::uint64_t tuple_key, std::uint64_t holder) {
-    // **The wake is the child row's own**, asked for the way the forward
-    // check asked for its parent's until AY-S5 folded that into its `S`: the
-    // writer holds the row's `U` or `X` (AO-S6a; CP-S2b), the table is the
-    // instance's, and the release flips the slot from whichever core
-    // releases. A refused ask leaves the table as it found it but for the
-    // registration, and a granted one - the writer released between the
-    // walk and this line - is given back at once, with a wake already
-    // flipped so the statement runs again rather than being refused for a
-    // wait that has ended (the stale-memo arm of `BorrowChain` does the
-    // same). Nothing here outlives the ask, which is why no intention is
-    // taken above it.
+    // **The wake is the child row's own, from a probe in `U`**
+    // (`foreign-keys.md` §3a): refused by the writer's `U` or `X`, it
+    // registers the slot that writer's release flips; granted - the writer
+    // released in between - it is given back at once with a slot already
+    // flipped, so the statement re-runs. An `S` probe would be admitted by a
+    // child `UPDATE`'s `U` and re-run the walk until the net.
     //
-    // **The probe asks `U`** (CP-S2b): a child `UPDATE` of other columns
-    // holds the row in `U`, which admits `S` - an `S` probe would be granted
-    // over it and the pre-flipped slot would re-run the whole walk until the
-    // writer decided or the net refused it. `U` is refused by the writer's
-    // `U` or `X`, and by a bulk child write's range over the row, and is
-    // admitted only by a grandchild writer's `S` on the row - a holder that
-    // is not writing it - which is the released-in-between case the grant
-    // arm was written for.
-    //
-    // **Not over a `U` or `X` this transaction already holds**: the probe
-    // would be answered `already_held` and the grant arm's release would
-    // drop the record the probe never added. An `S` this transaction holds
-    // on the row - the child row is a parent of its own children - does not
-    // skip the probe: the release matches by mode, so it cannot drop the
-    // `S`, and skipping would leave this `DELETE` polling with no slot.
+    // **Not over a `U` or `X` this transaction holds**: the probe would
+    // answer `already_held` and the grant arm's release would drop a record
+    // the probe never added. An `S` it holds does not skip the probe - the
+    // release matches by mode.
     const txn::LockKey unit = txn::LockKey::Tuple(child_rel, tuple_key);
     if (locks_ != nullptr && scope.txn != nullptr && may_park_ &&
         !scope.txn->borrows().HoldsCovering(unit, txn::LockMode::kUpdate)) {
