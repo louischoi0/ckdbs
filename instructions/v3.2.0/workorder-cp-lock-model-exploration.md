@@ -27,7 +27,9 @@ the close, ran on 2026-11-11** on the operator's schedule
 (`raft-marks-2026-11-11.md` §3; §7's last entry): the overhead measured
 over `cc54a296`..`7d21468a`
 (`bench/v3.4.7/results-cp-close-v3.4.7-11-g7d21468a.md`), `known-gaps.md`'s
-Locks rewritten, the deferred trims made and reviewed. Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
+Locks rewritten, the deferred trims made and reviewed. **The close was
+merged to `main` and pushed with `--no-verify` the same day** on the
+operator's word (`raft-marks-2026-11-11.md` §4). Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
 the opening review): the census corrected, two missed risks written into C2
 and C4, one candidate (release before durability) withdrawn because the
 tree contradicts its premise. **Exploratory on W0**: CP-S0 (the census and
@@ -1267,6 +1269,15 @@ the overhead is measured and stated with what it did not resolve. The
 merge to `main`, the push and the version are the operator's word; nothing
 of CP persists on disk, so no superblock or protocol change accompanies
 the merge.
+
+**Landed the same day.** On the operator's word of 23:05 UTC, *"Merge it
+into main and push with no verify."* (`raft-marks-2026-11-11.md` §4), the
+work branch was merged into `main` with `--no-ff` and pushed with the
+pre-push hook skipped: the suite above is the one that covers it, since
+nothing after `7d21468a` is a build input, and `origin/main` still stood at
+`5d858feb`, so the merge resolved nothing. Scenario 0's unresolved cell
+and the cells not measured land as stated. No tag and no version: the
+version of record stays `v3.4.7`.
 
 
 ## 8. The model (CP-S1)
