@@ -1,0 +1,11 @@
+== binaries (sha256, size, mtime)
+d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4  7604736 2026-11-11 09:47:23.177848925 +0000  /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-base
+049f27e66219f684588e0b40543512ef2b31437243aca2cedbb13d257eee4ecb  7604344 2026-11-11 09:47:23.173848928 +0000  /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-close
+== no-slice patch
+== drivers
+1a1ca4ee151e5e96a490227c733ebdd8c364db987fbae34c5e7692b6e989c9e4  /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/bm_scan.py
+35693dc24f1714e089a5c6734173e595a6004a15dbba5b6ee045f2b934811a7b  /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/bn_census.py
+63bf63a4635fa0761fe7600f49df58d520e2839ce47cb1923b9d409848f7534c  /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/kwp.py
+6333c1407194cca300c336157ab259fdfa3d5f0eb4a23448230e1007087e9f41  /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/sys_meta.py
+d5dee2cb6eac1995162c8a33b6611b7759ab98ebd88e48235a67b9ba4582c442  /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m2/m2_sanity.py
+2d0add888b942c2eea8f95d5fe449e7af09a77b2dd68cab492ed82d45b8de73f  /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m2/m2_summary.py

@@ -1,0 +1,69 @@
+## M1
+
+rep 1: cores base=2 close=2 -> CLEAN; host before 2.35 2.61 3.11 3/458 888652 after 4.46 3.29 3.30 4/454 890511
+| arm | binary | ops | p0 | p25 | p50 | p95 | p99 | mean | QPS | err |
+|---|---|---|---|---|---|---|---|---|---|---|
+| update-hot | base | 40,000 | 35.7 µs | 46.5 µs | 54.4 µs | 110.5 µs | 154.4 µs | 61.7 µs | 15,920 QPS | 0 |
+| update-hot | close | 40,000 | 36.0 µs | 50.2 µs | 58.1 µs | 122.9 µs | 172.0 µs | 67.5 µs | 14,556 QPS | 0 |
+| update-disjoint | base | 40,000 | 34.7 µs | 51.4 µs | 59.5 µs | 121.1 µs | 170.5 µs | 68.9 µs | 14,245 QPS | 0 |
+| update-disjoint | close | 40,000 | 37.4 µs | 41.6 µs | 51.6 µs | 112.1 µs | 159.1 µs | 60.3 µs | 16,268 QPS | 0 |
+| update-disjoint-again | base | 40,000 | 37.2 µs | 45.7 µs | 58.5 µs | 129.4 µs | 190.1 µs | 67.7 µs | 14,492 QPS | 0 |
+| update-disjoint-again | close | 40,000 | 35.7 µs | 48.2 µs | 61.3 µs | 135.3 µs | 189.8 µs | 76.4 µs | 12,850 QPS | 0 |
+| insert-omitted | base | 40,000 | 34.9 µs | 39.3 µs | 49.8 µs | 110.1 µs | 175.5 µs | 64.3 µs | 15,324 QPS | 0 |
+| insert-omitted | close | 40,000 | 34.5 µs | 44.6 µs | 55.7 µs | 119.6 µs | 180.6 µs | 69.8 µs | 14,124 QPS | 0 |
+| select-hot | base | 40,000 | 48.9 µs | 58.3 µs | 72.3 µs | 155.8 µs | 215.8 µs | 83.6 µs | 11,802 QPS | 0 |
+| select-hot | close | 40,000 | 48.9 µs | 57.8 µs | 72.0 µs | 152.2 µs | 214.9 µs | 83.3 µs | 11,840 QPS | 0 |
+| ping | base | 40,000 | 574.9 µs | 839.0 µs | 950.7 µs | 1,179.9 µs | 1,318.3 µs | 947.1 µs | 1,054 QPS | 0 |
+| ping | close | 40,000 | 581.4 µs | 838.5 µs | 958.7 µs | 1,183.7 µs | 1,328.5 µs | 949.2 µs | 1,052 QPS | 0 |
+cpu.on_cpu base 22,095,782 close 22,407,298 base-close -311,516 us; per stmt -1.30 us (n=240000)
+  p50 update-hot: 54.4 -> 58.1 (+3.7)
+  p50 update-disjoint: 59.5 -> 51.6 (-7.9)
+  p50 update-disjoint-again: 58.5 -> 61.3 (+2.8)
+  p50 insert-omitted: 49.8 -> 55.7 (+5.9)
+  p50 select-hot: 72.3 -> 72.0 (-0.3)
+
+rep 2: cores base=0 close=1 -> BIASED; host before 4.35 3.28 3.29 6/449 890605 after 4.28 3.69 3.45 2/469 892317
+| arm | binary | ops | p0 | p25 | p50 | p95 | p99 | mean | QPS | err |
+|---|---|---|---|---|---|---|---|---|---|---|
+| update-hot | base | 40,000 | 34.3 µs | 52.7 µs | 57.8 µs | 122.2 µs | 163.9 µs | 70.4 µs | 13,941 QPS | 0 |
+| update-hot | close | 40,000 | 38.2 µs | 52.2 µs | 57.0 µs | 119.2 µs | 162.4 µs | 65.4 µs | 14,994 QPS | 0 |
+| update-disjoint | base | 40,000 | 35.1 µs | 51.8 µs | 56.0 µs | 116.0 µs | 150.3 µs | 63.8 µs | 15,350 QPS | 0 |
+| update-disjoint | close | 40,000 | 36.9 µs | 53.5 µs | 58.5 µs | 122.5 µs | 160.3 µs | 68.5 µs | 14,293 QPS | 0 |
+| update-disjoint-again | base | 40,000 | 33.7 µs | 52.3 µs | 56.9 µs | 131.6 µs | 191.3 µs | 68.7 µs | 14,262 QPS | 0 |
+| update-disjoint-again | close | 40,000 | 35.8 µs | 53.1 µs | 59.7 µs | 137.0 µs | 198.5 µs | 72.1 µs | 13,577 QPS | 0 |
+| insert-omitted | base | 40,000 | 33.2 µs | 49.1 µs | 53.7 µs | 117.8 µs | 185.1 µs | 68.6 µs | 14,347 QPS | 0 |
+| insert-omitted | close | 40,000 | 35.8 µs | 49.5 µs | 54.2 µs | 115.6 µs | 168.6 µs | 69.0 µs | 14,260 QPS | 0 |
+| select-hot | base | 40,000 | 49.2 µs | 76.4 µs | 86.7 µs | 181.9 µs | 238.7 µs | 101.0 µs | 9,764 QPS | 0 |
+| select-hot | close | 40,000 | 48.9 µs | 67.9 µs | 73.9 µs | 153.2 µs | 221.6 µs | 83.5 µs | 11,818 QPS | 0 |
+| ping | base | 40,000 | 594.1 µs | 836.9 µs | 952.3 µs | 1,197.5 µs | 1,335.0 µs | 947.1 µs | 1,054 QPS | 0 |
+| ping | close | 40,000 | 580.3 µs | 816.4 µs | 936.6 µs | 1,177.4 µs | 1,319.6 µs | 932.9 µs | 1,070 QPS | 0 |
+cpu.on_cpu base 22,752,725 close 22,365,455 base-close 387,270 us; per stmt 1.61 us (n=240000)
+  p50 update-hot: 57.8 -> 57.0 (-0.8)
+  p50 update-disjoint: 56.0 -> 58.5 (+2.5)
+  p50 update-disjoint-again: 56.9 -> 59.7 (+2.8)
+  p50 insert-omitted: 53.7 -> 54.2 (+0.5)
+  p50 select-hot: 86.7 -> 73.9 (-12.8)
+
+rep 3: cores base=1 close=3 -> CLEAN; host before 4.28 3.69 3.45 4/467 892413 after 4.09 3.92 3.56 1/461 893963
+| arm | binary | ops | p0 | p25 | p50 | p95 | p99 | mean | QPS | err |
+|---|---|---|---|---|---|---|---|---|---|---|
+| update-hot | base | 40,000 | 36.3 µs | 52.9 µs | 57.8 µs | 121.7 µs | 158.7 µs | 67.3 µs | 14,565 QPS | 0 |
+| update-hot | close | 40,000 | 37.3 µs | 48.4 µs | 57.3 µs | 117.2 µs | 163.6 µs | 64.9 µs | 15,150 QPS | 0 |
+| update-disjoint | base | 40,000 | 37.9 µs | 52.0 µs | 57.8 µs | 124.5 µs | 171.8 µs | 67.5 µs | 14,516 QPS | 0 |
+| update-disjoint | close | 40,000 | 37.3 µs | 49.3 µs | 60.2 µs | 126.9 µs | 182.1 µs | 69.1 µs | 14,204 QPS | 0 |
+| update-disjoint-again | base | 40,000 | 37.4 µs | 55.5 µs | 63.7 µs | 137.6 µs | 188.3 µs | 75.3 µs | 12,996 QPS | 0 |
+| update-disjoint-again | close | 40,000 | 37.0 µs | 48.4 µs | 58.3 µs | 127.0 µs | 179.9 µs | 74.4 µs | 13,203 QPS | 0 |
+| insert-omitted | base | 40,000 | 34.7 µs | 49.5 µs | 54.0 µs | 117.2 µs | 175.0 µs | 68.7 µs | 14,314 QPS | 0 |
+| insert-omitted | close | 40,000 | 35.2 µs | 40.1 µs | 48.5 µs | 106.2 µs | 157.6 µs | 62.6 µs | 15,736 QPS | 0 |
+| select-hot | base | 40,000 | 47.6 µs | 63.0 µs | 77.4 µs | 169.5 µs | 231.2 µs | 90.1 µs | 10,943 QPS | 0 |
+| select-hot | close | 40,000 | 48.4 µs | 70.0 µs | 86.6 µs | 186.0 µs | 267.5 µs | 100.9 µs | 9,775 QPS | 0 |
+| ping | base | 40,000 | 582.8 µs | 698.4 µs | 781.8 µs | 1,198.7 µs | 1,341.0 µs | 867.8 µs | 1,151 QPS | 0 |
+| ping | close | 40,000 | 575.6 µs | 663.2 µs | 746.0 µs | 1,054.1 µs | 1,185.0 µs | 778.1 µs | 1,283 QPS | 0 |
+cpu.on_cpu base 21,743,438 close 19,618,158 base-close 2,125,280 us; per stmt 8.86 us (n=240000)
+  p50 update-hot: 57.8 -> 57.3 (-0.5)
+  p50 update-disjoint: 57.8 -> 60.2 (+2.4)
+  p50 update-disjoint-again: 63.7 -> 58.3 (-5.4)
+  p50 insert-omitted: 54.0 -> 48.5 (-5.5)
+  p50 select-hot: 77.4 -> 86.6 (+9.2)
+
+## M4

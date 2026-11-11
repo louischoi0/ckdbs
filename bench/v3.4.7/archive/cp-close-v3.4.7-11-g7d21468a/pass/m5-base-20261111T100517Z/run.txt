@@ -1,0 +1,22 @@
+started_utc=2026-11-11 10:05:17 UTC
+tree=/home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration
+describe=v3.4.7-11-g7d21468a
+head=7d21468a
+binary=/tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-base
+binary_sha256=d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4
+workdir=/home/louis/bench-runs/cp-close/20261111T094919Z/m5-base-a/m5-20261111T100517Z
+server_cpus=2-5 driver_cpus=0,1 cores=4
+rows=4096 ops=1000 blocks=6
+loadavg=1.13 2.13 3.16 2/437 881872
+competing=
+workdir_fstype=ext4
+server_pid=881885
+== cell kwp-w4 10:05:18 UTC
+cell=kwp-w4 rc=0
+== cell kwp-w1 10:05:20 UTC
+cell=kwp-w1 rc=0
+== cell text-w4 10:05:20 UTC
+cell=text-w4 rc=0
+== cell text-w1 10:05:21 UTC
+cell=text-w1 rc=0
+stopped_utc=2026-11-11 10:05:22 UTC

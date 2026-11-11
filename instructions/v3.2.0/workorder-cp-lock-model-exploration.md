@@ -22,8 +22,12 @@ day**: S2a at `0ddfbfab` (the slice unit deleted), S2b at `766f6a6d` (the
 `U` mode; §7). **Paused there on 2026-11-11 on the operator's word**
 (`raft-marks-2026-11-11.md` §1), then **pushed to `main` with
 `--no-verify` the same day, S3 not run** (`raft-marks-2026-11-11.md` §2:
-the suite 4427/4427 at `766f6a6d`, the overhead not measured); S3, the
-close, is next, and §7's last entry is the hand-off. Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
+the suite 4427/4427 at `766f6a6d`, the overhead not measured). **CP-S3,
+the close, ran on 2026-11-11** on the operator's schedule
+(`raft-marks-2026-11-11.md` §3; §7's last entry): the overhead measured
+over `cc54a296`..`7d21468a`
+(`bench/v3.4.7/results-cp-close-v3.4.7-11-g7d21468a.md`), `known-gaps.md`'s
+Locks rewritten, the deferred trims made and reviewed. Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
 the opening review): the census corrected, two missed risks written into C2
 and C4, one candidate (release before durability) withdrawn because the
 tree contradicts its premise. **Exploratory on W0**: CP-S0 (the census and
@@ -629,7 +633,7 @@ which opened S2b:
 | **CP-S0** | **The census and the premise.** (1) §1.2's table re-read at the opening commit, every `path:line` checked. (2) The measurement, `build-release`, interleaved A/B, inside 20 minutes, in this priority: **M1** a point `UPDATE ... WHERE id = k` on disjoint rows, one session, `relaxed`, against a measurement build with the dispatcher's table null - the family's whole share, which that build also strips of `DeclaredWriteBorrow`, the first-intention memo check and the detector-gated park rule, as the file states; A1 and A5 apart only by a second decomposition build if the budget holds (no tally counts asks); **M3** scenario 2 (`--bookers 8`) and scenario 0 (`--fk --txn`), `sys.lock_waits` and `sys.ash` read after each, outcomes by unit and mode, `app.lock_wait`'s share of DB time, deadlock and `fault_net` counts (M3a is C2's price on the uncontended path; its contender is the rig cell, §3 C2); **M2** a `SELECT` walk over ~100-1,000 leaf pages against a build whose `Position` declines slices (C1); **M5** a held `UPDATE ... WHERE id > k` beside point writers (C3); **M4** `tools/lock_contention_benchmark.py` contended against disjoint, the shape AT-S5 made real; **M6**, a cell and not a measurement: two sessions under `group`, the second's `UPDATE` of a row the first just committed proceeding before the first's sync, confirming §1.1's last bullet and correcting `known-gaps.md:1417`. A cell cut for the budget is named in the file. (3) A results file `bench/v3.4.7/results-cp-s0-premise-<describe>.md` and this order's §7 stating each candidate's number against its rule | the operator's opening; the census is `[source-read]`, the measurement `[measured]` |
 | **CP-S1** | **The model.** **Landed 2026-11-08 on the work branch (§8); CP-Q10..CP-Q12 await the operator's marks.** A design memo in this order (§8): the matrix re-derived from S0 - the cells kept by §2's rule, the cells deleted, `U` added or not with C2's three re-statements, the structure proposed (C3, C4 as S0 ranks them) with its soundness argument written as `lock_table.hpp` writes publish-then-verify, C4's (α) or (β) as marked, and the amendments owed to `txn.md` §5, `foreign-keys.md` §2a-§3, `rules.md` §3's row, AR2 E1/E12 and `lock_table.hpp`'s header. Every `[quiet-wrong]` or `[loud]` choice goes to the operator as a CP-Q amendment before S2 | S0 landed; the operator's marks on any amended CP-Q |
 | **CP-S2** | **Started and landed 2026-11-08 on CP-Q10..CP-Q12 (a)** (`raft-marks-2026-11-08.md` §3; §7): S2a C1 at `0ddfbfab` and S2b `U` at `766f6a6d`, as §8.12 ranks them, no S2c or S2d (§8.4). **Build what S1 kept**, one sub-stage per candidate (S2a C1, S2b C2, S2c C4, S2d C3 as ranked), each with a `critics-developer` review and the full suite; each a separate commit so one that fails CP-Q7's bar is reverted alone | S1's model |
-| **CP-S3** | **The close.** The overhead measured over the milestone's whole change (the opening commit against the closing one), scenario 0 and 2 beside M1's point write; the specs brought to the tree; `known-gaps.md`'s Locks section rewritten to the engine as it then is; this order's §7 and the index row. **Not started**: §7's hand-off entry of 2026-11-11 lists its steps in order | S2 landed; the operator's word to start |
+| **CP-S3** | **The close.** The overhead measured over the milestone's whole change (the opening commit against the closing one), scenario 0 and 2 beside M1's point write; the specs brought to the tree; `known-gaps.md`'s Locks section rewritten to the engine as it then is; this order's §7 and the index row. **Run 2026-11-11** on the operator's schedule (`raft-marks-2026-11-11.md` §3), by the steps §7's hand-off entry lists; §7's "CP-S3" entry carries the result | S2 landed; the operator's word to start |
 
 **Instruments** for S0 and S3: `sys.lock_waits` (`sys-views.md` §6.3),
 `sys.ash` with `tools/ash_panel.py` (§6.7), the `app.lock_wait` and
@@ -1153,6 +1157,10 @@ of about an hour for the milestone's measurement, CP-Q8 (a)):
    move, said plainly if moved). Nothing of CP persists on disk, so no
    superblock or protocol change accompanies the merge.
 
+**Taken up on 2026-11-11 09:35 UTC** on the operator's schedule
+(`raft-marks-2026-11-11.md` §3); the entry below, "CP-S3", is what these
+five steps did.
+
 **What a resuming session reads first**: this file's §7 entries from
 CP-S0 down (the measurements, the review findings and what was deferred),
 §8.3 and §8.8 (the model and its cells, now built), `raft-marks-2026-11-08.md`
@@ -1165,7 +1173,101 @@ review per step, the full suite, sync then stop), the measurement rules
 every document, the version named by the operator, no push without the
 word.
 
----
+### CP-S3, 2026-11-11: the close
+
+Run on `worktree-worktree-cp-lock-model-exploration` - a second worktree
+opened from `5d858feb`, the commit the work branch and `main` both stood
+at - on the operator's schedule (`raft-marks-2026-11-11.md` §3), by the
+hand-off's five steps. Three commits: `f5d310ec` (the trims), `7d21468a`
+(the trims' review applied, `known-gaps.md`'s Locks, the word recorded)
+and the commit carrying this entry and the results file.
+
+**(1) The overhead over the milestone's whole change** `[measured]`:
+`bench/v3.4.7/results-cp-close-v3.4.7-11-g7d21468a.md`, raw outputs under
+`bench/v3.4.7/archive/cp-close-v3.4.7-11-g7d21468a/`. `build-release` at
+`7d21468a` (sha256 `049f27e6...`) against `build-release` at `cc54a296`
+built from a `git worktree` of that commit (sha256 `d78b1147...`, **the
+same bytes as the base S0 measured**), interleaved, every server from a
+copy, data on `/dev/nvme0n1p1` ext4, `cores = 4` on CPUs 2-5 (M2:
+`cores = 1`), host load sampled with no compiler or test process in any
+sample, a 60 s watchdog by file that found no stall. About 29 minutes of
+measurement (09:49-10:16 UTC and a follow-up pair at 11:42 UTC) and about
+ten of building, inside the hour.
+
+| cell | base (`cc54a296`) against close (`7d21468a`) | against S0 |
+|---|---|---|
+| **M2** `bm_scan.py census`, `cores = 1`, 5 runs x 12 blocks | the scan's server CPU is **82-99 ns less per leaf page** on the closing build: `2,155.7 -> 2,096.2 us` and `2,151.2 -> 2,103.5 us` on the 603-page scan (`2.5-2.8 %`), `310.7 -> 284.7 us` and `305.5 -> 280.7 us` on the 304-page wide-row scan (`8.2-8.8 %`); point controls `-0.08` to `-0.30 us`; three of four cells with their whole range above zero, the fourth's lowest run crossing it | S0's no-slice patch gave `88-126 ns` a page; the closing build's scan CPU is within `0.6 %` of that patch's. **C1's gain is the one S0 priced** |
+| **M1** point `UPDATE`, one session, `relaxed`, 6 reps (3 with the driver's label roles swapped), 5 clean | p50 close minus base `+1.1 us` (`+2 %`, standard error about `1 us`) over 15 clean comparisons; `+2.4 us` in the first batch and `-0.8 us` in the swapped one, so the role swap moved the reading by about `3 us`, as much as the reading; whole-server CPU per statement median `+0.8 us` in a `-2.7..+8.9 us` spread | the same base binary read `50-59 us` p50 against S0's `39 us`, cause not found (M5's one-session point `UPDATE`, driver on other CPUs, is unchanged at `42.7-44.2 us`); S0's `0.4 us` family share is below what this run resolves |
+| **M3** scenario 2, `--bookers 8`, `group`, 3 runs a binary | committed TPS mean `2,312.3` against `2,312.8` (`+0.02 %`); `sys.lock_waits` `49-63` rows a run on base, **all tuple `X`**, and `45-67` on close, **all tuple `U`**, every one granted, mean about `100 us` on both; `app.lock_wait` `0.009-0.043 %` of DB time on base, `0.007-0.009 %` on close; deadlock 0, `fault_net` 0 | S0: 84 granted waits, `0.033 %`; the same base is `2.6 %` slower in TPS than at S0 |
+| **M3** scenario 0, `--fk --txn`, 8 traders, `group`, 3 runs a binary | TPS base `5,210 / 5,175 / 5,281` (mean `5,222`, spread `2.0 %`), close `5,188 / 5,062 / 5,346` (mean `5,199`, spread `5.5 %`): `-0.45 %`, **inside the run-to-run spread and not resolved by three runs** - neither a cost nor a demonstrated equality below about `3-5 %`; lock waits 0 and `app.lock_wait` 0 events on both; `commit.wal_flush` `85 %` of DB time on both | S0: `5,344 TPS`, lock waits 0; the same base is `2.3 %` slower than at S0 |
+| **M4** 8 sessions, one hot row, `relaxed` | hot refusals `2,318` of `32,000` on base (`7.2 %`), `2,065` on close (`6.5 %`), the same `TXN_CONFLICT ... was written by transaction N`; `sys.lock_waits` 9 rows `X` on base, 18 rows `U` on close, all granted; hot minus disjoint `+10.3` and `+11.4 us` inside floors of `4.6-12.2 us`; deadlock 0, `fault_net` 0 | S0: `2,519` (`7.9 %`), 17 rows `X` |
+| **M5** a held `UPDATE ... WHERE id > 4080` beside point writers, 2 runs a binary | fenced minus unfenced `0` to `+1.5 us` at p50 on both builds, one walk a statement on both | S0: about `1 us`. The mode of the held range was not read from the table (no wait named it) |
+
+**Against the bar, CP-Q7 (a).** *(i) A measured gain on the shape each
+candidate names*: **met for C1** (M2). For C2 no throughput cell names its
+shape - neither scenario shares a parent between writers - and none was
+expected to (§7's S0 entry, §8.3): what `U` buys is the pair that no longer
+deadlocks and the parent `UPDATE` that no longer waits, shown by the rig
+cells (`FkCrossCoreRigTest.TwoChildWritersThatThenUpdateTheirParentSerialise`,
+`...AChildInsertProceedsPastAParentUpdateOnAnotherCore`), which ran in the
+suite. A reader wanting C2's gain as a number has none. *(ii) No cost
+outside the spread elsewhere*: **met at the resolution the host gave** -
+M1 inside about `+-1-2 us` of a `52 us` round trip, scenario 2 equal to
+`0.02 %`, M4 and M5 unchanged, scenario 0's `-0.45 %` inside a `5.5 %`
+spread and so unresolved rather than passed. *(iii) No wait turned into a
+refusal but CP-Q10's class*: **met on every shape run** - 0 deadlocks, 0
+`fault_net`, 0 cancelled, every parked ask granted on the closing build,
+and the one refusal text on either build is the MVCC window's; CP-Q10's
+class is reachable by no driver cell and is pinned by its two rig cells.
+The four contract suites ran inside the suite below.
+
+**What was cut or not measured**: nothing cut for the budget; M6 not
+re-run (the hand-off did not list it). Not measured: the slice's latched
+price above one core (`bm_scan.py` fixes `cores = 1`), eight cores,
+`strict`, a shared-parent throughput arm for C2, PostgreSQL's floor.
+
+**(2) `known-gaps.md`'s Locks section** rewritten at `7d21468a`: the
+unique check's busy holder added to "what still polls"; the decide slot
+(C4) and the per-relation header (C3) entered as designs not built, each
+with the number that declined it and the condition that would reopen it;
+the `U` mode's closed pair and CP-Q10's accepted class with their three
+rig cells; the hot row's refusal recorded as the MVCC window's. "A wake is
+not a grant" and the CA entry stand unchanged.
+
+**(3) The deferred trims** at `f5d310ec`: the hoist's busy note and
+`WaitForChildRowWriter`'s lead in `command_dispatcher.cpp` and the two
+tables' leads in `lock_table.hpp` cut to a few lines and a pointer
+(33 lines fewer with the review's additions). **The review** (`critics-developer`, 2026-11-11, read
+only): comments only, nothing false of the code beneath; **four findings,
+all applied at `7d21468a`, none rejected** - (1) the trim had dropped two
+facts no spec carried, the refusal by a bulk child write's range (why the
+park names `wake.key`) and why the probe takes no intention above it:
+both back at the site in a line each and added to `foreign-keys.md` §3a;
+(2) the busy note's last sentence had lost its reason - without a table no
+`S` is held, so the witness proves nothing; (3) "never answered" made
+"never read as present"; (4) the tables' lead claimed the `static_assert`s
+catch every unfilled cell, which is true of `kCompatible` and not of
+`kCovers` - narrowed to what they catch. The rig scaffolding and
+`host_state` helpers stay deferred to their own small order, as the
+hand-off said.
+
+**(4) The documents**: this entry, the header, §5's row, the index row and
+`raft-marks-2026-11-11.md` §3. `CLAUDE.md` is not touched: its two rows
+state the `U` mode and the slice's deletion since S2 and the close moves
+no number they state.
+
+**The suite** (`scripts/test.sh`, Debug, every label but `bs-nightly`):
+**4427 of 4427 passed** (995 s, 11:45-12:02 UTC) on the build inputs of
+`7d21468a` - S2b's 4427 cells, the stage adding none since it changes
+comments only - the four contract suites inside it. Everything committed
+after `7d21468a` is under `bench/` and `instructions/`.
+
+**(5) Stopped here.** CP is closed on the work branch: every stage ran,
+the overhead is measured and stated with what it did not resolve. The
+merge to `main`, the push and the version are the operator's word; nothing
+of CP persists on disk, so no superblock or protocol change accompanies
+the merge.
+
 
 ## 8. The model (CP-S1)
 

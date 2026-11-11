@@ -1,0 +1,248 @@
+2026-11-11 09:49:19 UTC  phase: preflight
+2026-11-11 09:49:19 UTC  WT=/home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration  OUT=/tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1  RUN_ROOT=/home/louis/bench-runs/cp-close/20261111T094919Z/m1  DRY_RUN=0  CELLS=m1
+2026-11-11 09:49:19 UTC  RUN_ROOT filesystem: ext4 (/dev/nvme0n1p1 ext4 263968576 210866816  42249968  84% /)
+2026-11-11 09:49:20 UTC  manifest: /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/manifest.json
+2026-11-11 09:49:20 UTC  phase: m1-rep1: start servers
+2026-11-11 09:49:20 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-base --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep1/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep1-base
+{"pid": 862562, "port": 15520, "workdir": "/home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep1/base", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+2026-11-11 09:49:20 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-close --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep1/close --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep1-close
+{"pid": 862574, "port": 15522, "workdir": "/home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep1/close", "ready_after_s": 0.403, "binary_sha256": "049f27e66219f684588e0b40543512ef2b31437243aca2cedbb13d257eee4ecb"}
+2026-11-11 09:49:21 UTC  phase: m1-rep1: driver
+2026-11-11 09:49:21 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label close --sessions 1 --rows 256 --ops 40000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep1.json
+
+sessions=1 rows=256 ops/arm/session=40000 blocks=4
+  base: cores accepted on = 3
+  close: cores accepted on = 1
+host before: 1.54 5.15 4.63 1/457 862584   competing: none
+host after : 4.67 5.08 4.66 6/457 864539   competing: none
+
+arm                                                   base                             close
+                            p50us    p99us      qps    err    p50us    p99us      qps    err
+update-hot                   53.6    170.3    15937      0     53.6    171.8    15788      0
+update-disjoint              52.4    141.4    16734      0     55.0    147.3    15382      0
+update-disjoint-again        64.5    182.9    13325      0     63.8    186.5    12205      0
+insert-omitted               64.0    192.0    12492      0     55.3    177.6    13765      0
+select-hot                   86.9    242.8    10000      0     85.0    243.4     9863      0
+ping                        957.3   1316.2     1055      0    954.4   1357.2     1042      0
+
+base: noise floor (disjoint vs its repeat) p50 = 12.1 us; hot - disjoint p50 = 1.2 us
+close: noise floor (disjoint vs its repeat) p50 = 8.8 us; hot - disjoint p50 = -1.4 us
+
+raw summaries: /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep1.json
+2026-11-11 09:51:08 UTC  cores accepted on: base=3; close=1
+2026-11-11 09:51:08 UTC  phase: m1-rep1: views
+2026-11-11 09:51:08 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/read_views.py --port 15520 --label m1-rep1-base --tools /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep1-base
+views read over KWP/1 :15520 m1-rep1-base
+sys.lock_waits: 0 rows; by outcome {}; by core {}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+sys.wait_stats: app.lock_wait count=0 total_us=0 max_us=0; app.lock_conflict count=0; DB time 12589650 us; lock_wait share 0.0
+  core=0,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+sys.meta: core=1, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=0, version=35, wal_topology=single
+sys.ash: 59 samples
+  cpu.on_cpu                  RUNNABLE        59
+2026-11-11 09:51:09 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/read_views.py --port 15522 --label m1-rep1-close --tools /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep1-close
+views read over KWP/1 :15522 m1-rep1-close
+sys.lock_waits: 0 rows; by outcome {}; by core {}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+sys.wait_stats: app.lock_wait count=0 total_us=0 max_us=0; app.lock_conflict count=0; DB time 13448496 us; lock_wait share 0.0
+  core=0,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+sys.meta: core=1, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=0, version=35, wal_topology=single
+sys.ash: 66 samples
+  cpu.on_cpu                  RUNNABLE        65
+  sysio.wal_write             WAITING          1
+2026-11-11 09:51:09 UTC  phase: m1-rep1: stop servers
+2026-11-11 09:51:09 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep1/base
+{"pid": 862562, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-11 09:51:09 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep1/close
+{"pid": 862574, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-11 09:51:09 UTC  phase: m1-rep2: start servers
+2026-11-11 09:51:09 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-base --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep2/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep2-base
+{"pid": 864578, "port": 15520, "workdir": "/home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep2/base", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+2026-11-11 09:51:09 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-close --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep2/close --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep2-close
+{"pid": 864609, "port": 15522, "workdir": "/home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep2/close", "ready_after_s": 0.403, "binary_sha256": "049f27e66219f684588e0b40543512ef2b31437243aca2cedbb13d257eee4ecb"}
+2026-11-11 09:51:10 UTC  phase: m1-rep2: driver
+2026-11-11 09:51:10 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label close --sessions 1 --rows 256 --ops 40000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep2.json
+
+sessions=1 rows=256 ops/arm/session=40000 blocks=4
+  base: cores accepted on = 3
+  close: cores accepted on = 1
+host before: 4.67 5.08 4.66 5/455 864619   competing: none
+host after : 3.55 4.74 4.59 2/456 866174   competing: none
+
+arm                                                   base                             close
+                            p50us    p99us      qps    err    p50us    p99us      qps    err
+update-hot                   55.4    178.6    15426      0     56.9    174.1    14604      0
+update-disjoint              51.6    147.6    16372      0     58.0    161.4    14501      0
+update-disjoint-again        55.1    173.0    15553      0     57.5    170.6    14579      0
+insert-omitted               54.4    148.2    14876      0     51.7    137.4    15591      0
+select-hot                   74.1    188.8    12234      0     81.7    204.6    10648      0
+ping                        814.0   1331.6     1160      0    731.4   1302.8     1209      0
+
+base: noise floor (disjoint vs its repeat) p50 = 3.5 us; hot - disjoint p50 = 3.8 us
+close: noise floor (disjoint vs its repeat) p50 = 0.5 us; hot - disjoint p50 = -1.1 us
+
+raw summaries: /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep2.json
+2026-11-11 09:52:47 UTC  cores accepted on: base=3; close=1
+2026-11-11 09:52:47 UTC  phase: m1-rep2: views
+2026-11-11 09:52:47 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/read_views.py --port 15520 --label m1-rep2-base --tools /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep2-base
+views read over KWP/1 :15520 m1-rep2-base
+sys.lock_waits: 0 rows; by outcome {}; by core {}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+sys.wait_stats: app.lock_wait count=0 total_us=0 max_us=0; app.lock_conflict count=0; DB time 10962019 us; lock_wait share 0.0
+  core=0,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+sys.meta: core=2, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=0, version=35, wal_topology=single
+sys.ash: 48 samples
+  cpu.on_cpu                  RUNNABLE        48
+2026-11-11 09:52:47 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/read_views.py --port 15522 --label m1-rep2-close --tools /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep2-close
+views read over KWP/1 :15522 m1-rep2-close
+sys.lock_waits: 0 rows; by outcome {}; by core {}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+sys.wait_stats: app.lock_wait count=0 total_us=0 max_us=0; app.lock_conflict count=0; DB time 11288988 us; lock_wait share 0.0
+  core=0,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+sys.meta: core=3, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=0, version=35, wal_topology=single
+sys.ash: 53 samples
+  cpu.on_cpu                  RUNNABLE        53
+2026-11-11 09:52:47 UTC  phase: m1-rep2: stop servers
+2026-11-11 09:52:47 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep2/base
+{"pid": 864578, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-11 09:52:47 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep2/close
+{"pid": 864609, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-11 09:52:47 UTC  phase: m1-rep3: start servers
+2026-11-11 09:52:47 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-base --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep3/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep3-base
+{"pid": 866235, "port": 15520, "workdir": "/home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep3/base", "ready_after_s": 0.403, "binary_sha256": "d78b1147d6196cb08c53cda378105fecbb3dd352ba5c7ec2dd03e6ef3bc9a1d4"}
+2026-11-11 09:52:47 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/bin/kds_server-close --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep3/close --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep3-close
+{"pid": 866247, "port": 15522, "workdir": "/home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep3/close", "ready_after_s": 0.403, "binary_sha256": "049f27e66219f684588e0b40543512ef2b31437243aca2cedbb13d257eee4ecb"}
+2026-11-11 09:52:48 UTC  phase: m1-rep3: driver
+2026-11-11 09:52:48 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label close --sessions 1 --rows 256 --ops 40000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep3.json
+
+sessions=1 rows=256 ops/arm/session=40000 blocks=4
+  base: cores accepted on = 3
+  close: cores accepted on = 3
+host before: 3.59 4.72 4.58 1/461 866283   competing: none
+host after : 3.35 4.42 4.49 1/458 868052   competing: none
+
+arm                                                   base                             close
+                            p50us    p99us      qps    err    p50us    p99us      qps    err
+update-hot                   50.5    153.5    16546      0     46.3    130.4    19091      0
+update-disjoint              51.3    183.2    15121      0     59.3    197.3    12477      0
+update-disjoint-again        53.0    197.2    14568      0     58.5    194.1    13821      0
+insert-omitted               45.6    148.1    17097      0     42.6    109.4    18978      0
+select-hot                   61.3    211.5    13517      0     59.5    193.5    14162      0
+ping                        839.9   1295.3     1162      0    788.5   1270.1     1212      0
+
+base: noise floor (disjoint vs its repeat) p50 = 1.7 us; hot - disjoint p50 = -0.8 us
+close: noise floor (disjoint vs its repeat) p50 = 0.8 us; hot - disjoint p50 = -13.0 us
+
+raw summaries: /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep3.json
+2026-11-11 09:54:22 UTC  cores accepted on: base=3; close=3
+2026-11-11 09:54:22 UTC  phase: m1-rep3: views
+2026-11-11 09:54:22 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/read_views.py --port 15520 --label m1-rep3-base --tools /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep3-base
+views read over KWP/1 :15520 m1-rep3-base
+sys.lock_waits: 0 rows; by outcome {}; by core {}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+sys.wait_stats: app.lock_wait count=0 total_us=0 max_us=0; app.lock_conflict count=0; DB time 10987830 us; lock_wait share 0.0
+  core=0,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+sys.meta: core=1, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=0, version=35, wal_topology=single
+sys.ash: 52 samples
+  cpu.on_cpu                  RUNNABLE        52
+2026-11-11 09:54:22 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/read_views.py --port 15522 --label m1-rep3-close --tools /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools --out /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1/m1-rep3-close
+views read over KWP/1 :15522 m1-rep3-close
+sys.lock_waits: 0 rows; by outcome {}; by core {}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+sys.wait_stats: app.lock_wait count=0 total_us=0 max_us=0; app.lock_conflict count=0; DB time 11293428 us; lock_wait share 0.0
+  core=0,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+sys.meta: core=0, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=0, version=35, wal_topology=single
+sys.ash: 47 samples
+  cpu.on_cpu                  RUNNABLE        47
+2026-11-11 09:54:22 UTC  phase: m1-rep3: stop servers
+2026-11-11 09:54:22 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep3/base
+{"pid": 866235, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-11 09:54:23 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/m1m4/srv.py stop --workdir /home/louis/bench-runs/cp-close/20261111T094919Z/m1/20261111T094919Z/m1-rep3/close
+{"pid": 866247, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-11 09:54:23 UTC  phase: done
+2026-11-11 09:54:23 UTC  outputs under /tmp/claude-1000/-home-louis-ckdbs/5bdaae98-e052-4814-8a2c-eb67c5cf878d/scratchpad/cp-close/run/20261111T094919Z/m1:
+  active_servers
+  heartbeat
+  m1-rep1-base.server.json
+  m1-rep1-base.views.json
+  m1-rep1-base.views.txt
+  m1-rep1-close.server.json
+  m1-rep1-close.views.json
+  m1-rep1-close.views.txt
+  m1-rep1.json
+  m1-rep1.txt
+  m1-rep2-base.server.json
+  m1-rep2-base.views.json
+  m1-rep2-base.views.txt
+  m1-rep2-close.server.json
+  m1-rep2-close.views.json
+  m1-rep2-close.views.txt
+  m1-rep2.json
+  m1-rep2.txt
+  m1-rep3-base.server.json
+  m1-rep3-base.views.json
+  m1-rep3-base.views.txt
+  m1-rep3-close.server.json
+  m1-rep3-close.views.json
+  m1-rep3-close.views.txt
+  m1-rep3.json
+  m1-rep3.txt
+  manifest.json
+  phase
+  servers.log
+  timeline.txt
+2026-11-11 09:54:23 UTC  cleanup (exit 0)

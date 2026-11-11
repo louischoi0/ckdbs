@@ -1,0 +1,23 @@
+== views read over KWP/1 :25731 at 2026-11-11T09:59:05.699213Z s2-pre
+-- sys.lock_waits (whole ring): 0 rows; granted 0 deadlock 0 fault_net 0 cancelled 0; waited_us sum 0 p50 0 max 0; by core {}
+   unit       mode outcome      rows      sum_us   p50_us    max_us   mean_us
+   holder_trx top: []; distinct holders 0; waiters with no trx 0
+-- sys.wait_stats (since boot): DB time 12384120 us (cpu.on_cpu 630671 us); app.lock_wait count 0 total 0 us max 0 us; share of DB time 0.0, of CPU 0.0, of statement time 0.0; app.lock_conflict 0
+   DB time parts: commit.wal_flush 11670997, cpu.on_cpu 630671, sysio.checkpoint 43621, sched.run_queue 21536, sysio.wal_write 17295
+   core 0: DB 26743 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 1: DB 12318296 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 2: DB 24318 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 3: DB 14757 us, lock_wait 0x 0 us share 0.0, conflicts 0
+-- sys.statement_stats (since boot): 12 shapes, 24757 calls, 0 refused, 12256548 us
+   INSERT        24735 calls      0 refused      12242655 us max 6199
+   CREATE           16 calls      0 refused          9179 us max 906
+   SYNC              2 calls      0 refused          4356 us max 2253
+   SELECT            4 calls      0 refused           358 us max 183
+-- sys.meta: lock_waits_recorded=0, lock_waits_overwritten=0, lock_waits_dropped=0, contention_lock_partition_waits=0, contention_lock_partition_wait_us=0, contention_lock_wait_for_waits=0, contention_lock_wait_for_wait_us=0, contention_fence_walks=0, contention_inflight_asks=0, contention_inflight_misses=0, contention_inflight_miss_ids_read=0, contention_structural_reruns=0, statement_stats_dropped=0
+   lock latches: contention_lock_partition_wait_us=0, contention_lock_partition_waits=0, contention_lock_wait_for_wait_us=0, contention_lock_wait_for_waits=0, contention_superblock_wait_us=0, contention_superblock_waits=0, contention_wal_roll_blocked_wait_us=0, contention_wal_roll_blocked_waits=0
+-- sys.ash (whole ring): 154 samples over 15.2 s; grid points per core {0: 3, 1: 150, 2: 1}; implied interval ms {1: 102.0, 0: 4999.9}; late 0; by state {'WAITING': 125, 'RUNNABLE': 29}; by kind {'session': 150, 'background': 4}
+   commit.wal_flush                 125
+   cpu.on_cpu                        29
+   app.lock_wait samples 0 (0.0); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
+-- sys.ash (whole ring) [concurrent window: 0 bins of 1.0 s with >= 2 sessions, max 1 in a bin, 154 rows outside]: 0 samples over 0.0 s; grid points per core {}; implied interval ms {}; late 0; by state {}; by kind {}
+   app.lock_wait samples 0 (None); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []

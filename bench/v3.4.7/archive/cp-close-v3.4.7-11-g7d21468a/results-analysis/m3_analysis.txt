@@ -1,0 +1,324 @@
+
+### m3-s0-base-a
+committed line: transactions/sec
+   txn: one business transaction: 2 INSERT trades + 2 UPDATE accounts, latency measured across all four; qps here IS the TPS
+   the four statements are NOT atomic as this tool runs them: the engine has BEGIN/COMMIT (docs/spec/txn.md, built) but this tool does not use them, so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
+   balances are computed client-side because UPDATE ... SET takes a literal, not an expression; each trader owns a disjoint account partition so no update can be lost between them, and --verify reads a sample back to confirm it.
+   TPS                      5,209.6   committed transactions/sec
+   committed                312,561
+   rolled back                    0   unwound whole; nothing was half-applied
+   torn                           0   zero by construction under --txn
+   underfunded               19,826   skipped before any statement was sent
+   balance verify               200 accounts read back - all match
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| txn | 312,561 | 0 | 608.5 | 1,243.5 | 1,434.6 | 1,930.0 | 2,434.0 | 289,748.6 | 5,210/s |
+| trade-insert | 625,122 | 0 | 37.7 | 83.4 | 104.2 | 195.6 | 329.7 | 8,094.4 | 10,419/s |
+| account-update | 625,122 | 0 | 36.8 | 73.1 | 88.1 | 167.8 | 327.7 | 7,323.6 | 10,419/s |
+phases seen: ['load-users', 'load-assets', 'load-accounts', 'txn', 'trade-insert', 'account-update', 'profit-scan', 'profit-insert', 'sync']
+lock_waits: 0 granted 0 deadlock 0 fault_net 0 cancelled 0 sum_us 0 max 0 p50 0
+DB time 340,127,476 {'commit.wal_flush': '291,019,660 (85.562%)', 'cpu.on_cpu': '42,405,524 (12.468%)', 'sched.run_queue': '5,407,531 (1.590%)', 'sysio.wal_write': '1,100,738 (0.324%)', 'sysio.checkpoint': '194,023 (0.057%)'}
+app.lock_wait {'count': 0, 'total_us': 0} app.lock_conflict 0 share of DB 0.0
+meta: {'lock_waits_recorded': '0', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '149894', 'contention_lock_partition_wait_us': '201300', 'contention_lock_wait_for_waits': '0', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '0', 'contention_inflight_misses': '0', 'contention_inflight_miss_ids_read': '0'}
+stmt refused (since boot) 0 []
+ash lock_wait samples 0
+errors {}
+
+### m3-s0-base-b
+committed line: transactions/sec
+   txn: one business transaction: 2 INSERT trades + 2 UPDATE accounts, latency measured across all four; qps here IS the TPS
+   the four statements are NOT atomic as this tool runs them: the engine has BEGIN/COMMIT (docs/spec/txn.md, built) but this tool does not use them, so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
+   balances are computed client-side because UPDATE ... SET takes a literal, not an expression; each trader owns a disjoint account partition so no update can be lost between them, and --verify reads a sample back to confirm it.
+   TPS                      5,174.8   committed transactions/sec
+   committed                310,484
+   rolled back                    0   unwound whole; nothing was half-applied
+   torn                           0   zero by construction under --txn
+   underfunded               19,642   skipped before any statement was sent
+   balance verify               200 accounts read back - all match
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| txn | 310,484 | 0 | 593.7 | 1,245.9 | 1,440.7 | 1,955.6 | 2,600.8 | 301,974.5 | 5,175/s |
+| trade-insert | 620,968 | 0 | 37.8 | 83.4 | 103.9 | 196.3 | 323.6 | 57,798.0 | 10,350/s |
+| account-update | 620,968 | 0 | 36.7 | 73.1 | 87.9 | 167.9 | 315.2 | 6,844.8 | 10,350/s |
+phases seen: ['load-users', 'load-assets', 'load-accounts', 'txn', 'trade-insert', 'account-update', 'profit-scan', 'profit-insert', 'sync']
+lock_waits: 0 granted 0 deadlock 0 fault_net 0 cancelled 0 sum_us 0 max 0 p50 0
+DB time 339,366,564 {'commit.wal_flush': '290,989,094 (85.745%)', 'cpu.on_cpu': '41,694,269 (12.286%)', 'sched.run_queue': '5,283,982 (1.557%)', 'sysio.wal_write': '1,203,047 (0.354%)', 'sysio.checkpoint': '196,172 (0.058%)'}
+app.lock_wait {'count': 1, 'total_us': 0} app.lock_conflict 0 share of DB 0.0
+meta: {'lock_waits_recorded': '0', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '148510', 'contention_lock_partition_wait_us': '205636', 'contention_lock_wait_for_waits': '0', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '0', 'contention_inflight_misses': '0', 'contention_inflight_miss_ids_read': '0'}
+stmt refused (since boot) 0 []
+ash lock_wait samples 0
+errors {}
+
+### m3-s0-base-c
+committed line: transactions/sec
+   txn: one business transaction: 2 INSERT trades + 2 UPDATE accounts, latency measured across all four; qps here IS the TPS
+   the four statements are NOT atomic as this tool runs them: the engine has BEGIN/COMMIT (docs/spec/txn.md, built) but this tool does not use them, so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
+   balances are computed client-side because UPDATE ... SET takes a literal, not an expression; each trader owns a disjoint account partition so no update can be lost between them, and --verify reads a sample back to confirm it.
+   TPS                      5,280.9   committed transactions/sec
+   committed                316,836
+   rolled back                    0   unwound whole; nothing was half-applied
+   torn                           0   zero by construction under --txn
+   underfunded               20,171   skipped before any statement was sent
+   balance verify               200 accounts read back - all match
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| txn | 316,836 | 0 | 607.4 | 1,223.6 | 1,404.2 | 1,895.4 | 2,705.8 | 291,778.1 | 5,281/s |
+| trade-insert | 633,672 | 0 | 37.9 | 83.3 | 104.1 | 195.3 | 335.7 | 65,491.9 | 10,562/s |
+| account-update | 633,672 | 0 | 37.3 | 73.3 | 88.3 | 168.0 | 324.5 | 8,943.2 | 10,562/s |
+phases seen: ['load-users', 'load-assets', 'load-accounts', 'txn', 'trade-insert', 'account-update', 'profit-scan', 'profit-insert', 'sync']
+lock_waits: 0 granted 0 deadlock 0 fault_net 0 cancelled 0 sum_us 0 max 0 p50 0
+DB time 335,712,201 {'commit.wal_flush': '286,034,645 (85.202%)', 'cpu.on_cpu': '42,929,960 (12.788%)', 'sched.run_queue': '5,406,750 (1.611%)', 'sysio.wal_write': '1,153,845 (0.344%)', 'sysio.checkpoint': '182,046 (0.054%)', 'commit.ceiling_wait': '4,955 (0.001%)'}
+app.lock_wait {'count': 0, 'total_us': 0} app.lock_conflict 0 share of DB 0.0
+meta: {'lock_waits_recorded': '0', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '146676', 'contention_lock_partition_wait_us': '205741', 'contention_lock_wait_for_waits': '0', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '0', 'contention_inflight_misses': '0', 'contention_inflight_miss_ids_read': '0'}
+stmt refused (since boot) 0 []
+ash lock_wait samples 0
+errors {}
+
+### m3-s0-close-a
+committed line: transactions/sec
+   txn: one business transaction: 2 INSERT trades + 2 UPDATE accounts, latency measured across all four; qps here IS the TPS
+   the four statements are NOT atomic as this tool runs them: the engine has BEGIN/COMMIT (docs/spec/txn.md, built) but this tool does not use them, so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
+   balances are computed client-side because UPDATE ... SET takes a literal, not an expression; each trader owns a disjoint account partition so no update can be lost between them, and --verify reads a sample back to confirm it.
+   TPS                      5,188.4   committed transactions/sec
+   committed                311,304
+   rolled back                    0   unwound whole; nothing was half-applied
+   torn                           0   zero by construction under --txn
+   underfunded               19,723   skipped before any statement was sent
+   balance verify               200 accounts read back - all match
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| txn | 311,304 | 0 | 627.6 | 1,237.6 | 1,427.5 | 1,935.4 | 2,549.3 | 287,626.6 | 5,188/s |
+| trade-insert | 622,608 | 0 | 38.0 | 83.6 | 104.8 | 196.9 | 327.4 | 9,405.4 | 10,377/s |
+| account-update | 622,608 | 0 | 36.9 | 73.1 | 88.5 | 168.8 | 322.7 | 7,274.0 | 10,377/s |
+phases seen: ['load-users', 'load-assets', 'load-accounts', 'txn', 'trade-insert', 'account-update', 'profit-scan', 'profit-insert', 'sync']
+lock_waits: 0 granted 0 deadlock 0 fault_net 0 cancelled 0 sum_us 0 max 0 p50 0
+DB time 339,736,133 {'commit.wal_flush': '290,400,618 (85.478%)', 'cpu.on_cpu': '42,643,527 (12.552%)', 'sched.run_queue': '5,355,723 (1.576%)', 'sysio.wal_write': '1,125,930 (0.331%)', 'sysio.checkpoint': '210,335 (0.062%)'}
+app.lock_wait {'count': 0, 'total_us': 0} app.lock_conflict 0 share of DB 0.0
+meta: {'lock_waits_recorded': '0', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '142876', 'contention_lock_partition_wait_us': '205664', 'contention_lock_wait_for_waits': '0', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '0', 'contention_inflight_misses': '0', 'contention_inflight_miss_ids_read': '0'}
+stmt refused (since boot) 0 []
+ash lock_wait samples 0
+errors {}
+
+### m3-s0-close-b
+committed line: transactions/sec
+   txn: one business transaction: 2 INSERT trades + 2 UPDATE accounts, latency measured across all four; qps here IS the TPS
+   the four statements are NOT atomic as this tool runs them: the engine has BEGIN/COMMIT (docs/spec/txn.md, built) but this tool does not use them, so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
+   balances are computed client-side because UPDATE ... SET takes a literal, not an expression; each trader owns a disjoint account partition so no update can be lost between them, and --verify reads a sample back to confirm it.
+   TPS                      5,061.9   committed transactions/sec
+   committed                303,719
+   rolled back                    0   unwound whole; nothing was half-applied
+   torn                           0   zero by construction under --txn
+   underfunded               19,068   skipped before any statement was sent
+   balance verify               200 accounts read back - all match
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| txn | 303,719 | 0 | 618.4 | 1,269.2 | 1,458.6 | 2,006.7 | 2,752.8 | 292,376.0 | 5,062/s |
+| trade-insert | 607,438 | 0 | 37.8 | 85.7 | 108.2 | 221.4 | 358.0 | 9,538.5 | 10,124/s |
+| account-update | 607,438 | 0 | 36.7 | 75.3 | 92.0 | 204.3 | 338.8 | 80,118.6 | 10,124/s |
+phases seen: ['load-users', 'load-assets', 'load-accounts', 'txn', 'trade-insert', 'account-update', 'profit-scan', 'profit-insert', 'sync']
+lock_waits: 0 granted 0 deadlock 0 fault_net 0 cancelled 0 sum_us 0 max 0 p50 0
+DB time 337,112,342 {'commit.wal_flush': '285,028,798 (84.550%)', 'cpu.on_cpu': '44,192,634 (13.109%)', 'sched.run_queue': '6,124,225 (1.817%)', 'sysio.wal_write': '1,568,620 (0.465%)', 'sysio.checkpoint': '198,065 (0.059%)'}
+app.lock_wait {'count': 1, 'total_us': 0} app.lock_conflict 0 share of DB 0.0
+meta: {'lock_waits_recorded': '0', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '130483', 'contention_lock_partition_wait_us': '207880', 'contention_lock_wait_for_waits': '0', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '0', 'contention_inflight_misses': '0', 'contention_inflight_miss_ids_read': '0'}
+stmt refused (since boot) 0 []
+ash lock_wait samples 0
+errors {}
+
+### m3-s0-close-c
+committed line: transactions/sec
+   txn: one business transaction: 2 INSERT trades + 2 UPDATE accounts, latency measured across all four; qps here IS the TPS
+   the four statements are NOT atomic as this tool runs them: the engine has BEGIN/COMMIT (docs/spec/txn.md, built) but this tool does not use them, so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
+   balances are computed client-side because UPDATE ... SET takes a literal, not an expression; each trader owns a disjoint account partition so no update can be lost between them, and --verify reads a sample back to confirm it.
+   TPS                      5,345.5   committed transactions/sec
+   committed                320,712
+   rolled back                    0   unwound whole; nothing was half-applied
+   torn                           0   zero by construction under --txn
+   underfunded               20,460   skipped before any statement was sent
+   balance verify               200 accounts read back - all match
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| txn | 320,712 | 0 | 603.4 | 1,220.2 | 1,396.8 | 1,856.5 | 2,350.3 | 292,730.5 | 5,346/s |
+| trade-insert | 641,424 | 0 | 37.2 | 83.3 | 103.8 | 193.2 | 323.1 | 168,213.9 | 10,691/s |
+| account-update | 641,424 | 0 | 36.8 | 73.2 | 88.3 | 167.7 | 318.8 | 167,703.6 | 10,691/s |
+phases seen: ['load-users', 'load-assets', 'load-accounts', 'txn', 'trade-insert', 'account-update', 'profit-scan', 'profit-insert', 'sync']
+lock_waits: 0 granted 0 deadlock 0 fault_net 0 cancelled 0 sum_us 0 max 0 p50 0
+DB time 336,003,408 {'commit.wal_flush': '286,125,210 (85.155%)', 'cpu.on_cpu': '43,367,268 (12.907%)', 'sched.run_queue': '5,453,764 (1.623%)', 'sysio.wal_write': '875,954 (0.261%)', 'sysio.checkpoint': '181,212 (0.054%)'}
+app.lock_wait {'count': 0, 'total_us': 0} app.lock_conflict 0 share of DB 0.0
+meta: {'lock_waits_recorded': '0', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '147539', 'contention_lock_partition_wait_us': '206468', 'contention_lock_wait_for_waits': '0', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '0', 'contention_inflight_misses': '0', 'contention_inflight_miss_ids_read': '0'}
+stmt refused (since boot) 0 []
+ash lock_wait samples 0
+errors {}
+
+### m3-s2-base-a
+committed line: committed                19894      2309.6 TPS
+   committed                19894      2309.6 TPS
+   rejected-capacity         3032       11.2% of attempts
+   rejected-credit           4106       15.2% of attempts
+   conflicted                   3          3 retries
+   the cargo pool ran out before --seconds did: every cargo was booked.
+   Raise --cargos, or read the TPS as an average over a run that ended early.
+   verify (§4)          400 checks, 97 failure(s)
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| booking | 27,032 | 0 | 403.2 | 1,263.0 | 2,544.5 | 3,361.7 | 5,112.8 | 289,712.2 | 3,138/s |
+| freight-insert | 19,897 | 0 | 46.3 | 98.0 | 121.4 | 256.1 | 430.8 | 14,371.3 | 2,310/s |
+| charge-insert | 111,924 | 0 | 33.3 | 66.0 | 81.0 | 189.5 | 330.0 | 20,483.2 | 12,994/s |
+| operation-update | 19,897 | 3 | 43.8 | 83.5 | 97.8 | 215.5 | 362.5 | 20,441.1 | 2,310/s |
+| org-update | 19,894 | 0 | 39.5 | 73.4 | 86.9 | 230.5 | 384.3 | 8,279.2 | 2,310/s |
+| commit | 19,894 | 0 | 396.3 | 735.0 | 879.1 | 1,337.0 | 2,024.8 | 287,805.3 | 2,310/s |
+phases seen: ['ddl', 'load-organizations', 'load-ships', 'load-operations', 'load-fees', 'load-recipes', 'load-cargos', 'booking', 'cargo-lookup', 'credit-lookup', 'capacity-read', 'recipe-read', 'freight-insert', 'charge-insert', 'operation-update', 'org-update', 'commit', 'manifest-scan', 'voyage-rollup', 'customer-statement']
+lock_waits: 49 granted 49 deadlock 0 fault_net 0 cancelled 0 sum_us 6879 max 1975 p50 91
+    {'unit': 'tuple', 'mode': 'X', 'outcome': 'granted', 'rows': 49, 'waited_us_sum': 6879, 'waited_us_max': 1975, 'waited_us_mean': 140.4, 'waited_us_p50': 91}
+    {'relation': 'public.operations_m3s2', 'unit': 'tuple', 'mode': 'X', 'outcome': 'granted', 'rows': 34, 'waited_us_sum': 5709, 'waited_us_max': 1975, 'waited_us_mean': 167.9, 'waited_us_p50': 108.0}
+    {'relation': 'public.organizations_m3s2', 'unit': 'tuple', 'mode': 'X', 'outcome': 'granted', 'rows': 15, 'waited_us_sum': 1170, 'waited_us_max': 441, 'waited_us_mean': 78.0, 'waited_us_p50': 32}
+DB time 71,978,179 {'cpu.on_cpu': '37,802,636 (52.520%)', 'commit.wal_flush': '32,252,003 (44.808%)', 'sched.run_queue': '1,482,160 (2.059%)', 'sysio.wal_write': '242,740 (0.337%)', 'sysio.checkpoint': '191,758 (0.266%)', 'app.lock_wait': '6,882 (0.010%)'}
+app.lock_wait {'count': 52, 'total_us': 6882} app.lock_conflict 52 share of DB 9.6e-05
+meta: {'lock_waits_recorded': '49', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '7437', 'contention_lock_partition_wait_us': '3949', 'contention_lock_wait_for_waits': '1', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '3', 'contention_inflight_misses': '3', 'contention_inflight_miss_ids_read': '16'}
+stmt refused (since boot) 3 [('UPDATE', 3)]
+ash lock_wait samples 0
+errors {}
+
+### m3-s2-base-b
+committed line: committed                19921      2327.5 TPS
+   committed                19921      2327.5 TPS
+   rejected-capacity         2921       10.9% of attempts
+   rejected-credit           4079       15.2% of attempts
+   conflicted                   4          4 retries
+   the cargo pool ran out before --seconds did: every cargo was booked.
+   Raise --cargos, or read the TPS as an average over a run that ended early.
+   verify (§4)          400 checks, 91 failure(s)
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| booking | 26,921 | 0 | 390.4 | 1,298.0 | 2,548.4 | 3,338.0 | 4,731.8 | 278,186.1 | 3,145/s |
+| freight-insert | 19,925 | 0 | 41.9 | 98.1 | 120.6 | 258.5 | 413.0 | 20,115.7 | 2,328/s |
+| charge-insert | 112,064 | 0 | 34.0 | 66.1 | 80.6 | 183.0 | 315.9 | 21,433.2 | 13,093/s |
+| operation-update | 19,925 | 3 | 42.5 | 83.7 | 98.1 | 211.5 | 347.5 | 13,891.1 | 2,328/s |
+| org-update | 19,922 | 1 | 40.9 | 73.6 | 86.4 | 230.6 | 363.2 | 15,193.8 | 2,328/s |
+| commit | 19,921 | 0 | 418.0 | 747.8 | 897.7 | 1,357.7 | 2,028.1 | 276,754.5 | 2,328/s |
+phases seen: ['ddl', 'load-organizations', 'load-ships', 'load-operations', 'load-fees', 'load-recipes', 'load-cargos', 'booking', 'cargo-lookup', 'credit-lookup', 'capacity-read', 'recipe-read', 'freight-insert', 'charge-insert', 'operation-update', 'org-update', 'commit', 'manifest-scan', 'voyage-rollup', 'customer-statement']
+lock_waits: 59 granted 59 deadlock 0 fault_net 0 cancelled 0 sum_us 6300 max 432 p50 81
+    {'unit': 'tuple', 'mode': 'X', 'outcome': 'granted', 'rows': 59, 'waited_us_sum': 6300, 'waited_us_max': 432, 'waited_us_mean': 106.8, 'waited_us_p50': 81}
+    {'relation': 'public.operations_m3s2', 'unit': 'tuple', 'mode': 'X', 'outcome': 'granted', 'rows': 41, 'waited_us_sum': 5162, 'waited_us_max': 373, 'waited_us_mean': 125.9, 'waited_us_p50': 107}
+    {'relation': 'public.organizations_m3s2', 'unit': 'tuple', 'mode': 'X', 'outcome': 'granted', 'rows': 18, 'waited_us_sum': 1138, 'waited_us_max': 432, 'waited_us_mean': 63.2, 'waited_us_p50': 39.0}
+DB time 73,358,108 {'cpu.on_cpu': '37,995,246 (51.794%)', 'commit.wal_flush': '33,258,177 (45.337%)', 'sched.run_queue': '1,483,596 (2.022%)', 'sysio.wal_write': '427,628 (0.583%)', 'sysio.checkpoint': '187,152 (0.255%)', 'app.lock_wait': '6,309 (0.009%)'}
+app.lock_wait {'count': 69, 'total_us': 6309} app.lock_conflict 69 share of DB 8.6e-05
+meta: {'lock_waits_recorded': '59', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '7824', 'contention_lock_partition_wait_us': '3893', 'contention_lock_wait_for_waits': '1', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '4', 'contention_inflight_misses': '4', 'contention_inflight_miss_ids_read': '20'}
+stmt refused (since boot) 4 [('UPDATE', 4)]
+ash lock_wait samples 0
+errors {}
+
+### m3-s2-base-c
+committed line: committed                19907      2299.8 TPS
+   committed                19907      2299.8 TPS
+   rejected-capacity         2992       11.1% of attempts
+   rejected-credit           4093       15.2% of attempts
+   conflicted                   4          4 retries
+   the cargo pool ran out before --seconds did: every cargo was booked.
+   Raise --cargos, or read the TPS as an average over a run that ended early.
+   verify (§4)          400 checks, 121 failure(s)
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| booking | 26,992 | 0 | 399.3 | 1,318.1 | 2,558.5 | 3,391.1 | 5,381.6 | 278,626.3 | 3,118/s |
+| freight-insert | 19,911 | 0 | 45.0 | 99.4 | 122.2 | 260.4 | 429.8 | 16,916.7 | 2,300/s |
+| charge-insert | 112,004 | 0 | 34.3 | 66.8 | 82.3 | 194.8 | 308.1 | 18,449.4 | 12,940/s |
+| operation-update | 19,911 | 0 | 40.2 | 84.1 | 99.0 | 210.8 | 325.0 | 17,306.0 | 2,300/s |
+| org-update | 19,911 | 4 | 39.1 | 73.9 | 87.3 | 215.1 | 315.1 | 12,613.2 | 2,300/s |
+| commit | 19,907 | 0 | 370.1 | 736.9 | 880.7 | 1,368.1 | 2,228.1 | 277,188.4 | 2,300/s |
+phases seen: ['ddl', 'load-organizations', 'load-ships', 'load-operations', 'load-fees', 'load-recipes', 'load-cargos', 'booking', 'cargo-lookup', 'credit-lookup', 'capacity-read', 'recipe-read', 'freight-insert', 'charge-insert', 'operation-update', 'org-update', 'commit', 'manifest-scan', 'voyage-rollup', 'customer-statement']
+lock_waits: 63 granted 63 deadlock 0 fault_net 0 cancelled 0 sum_us 31672 max 12311 p50 71
+    {'unit': 'tuple', 'mode': 'X', 'outcome': 'granted', 'rows': 63, 'waited_us_sum': 31672, 'waited_us_max': 12311, 'waited_us_mean': 502.7, 'waited_us_p50': 71}
+    {'relation': 'public.operations_m3s2', 'unit': 'tuple', 'mode': 'X', 'outcome': 'granted', 'rows': 44, 'waited_us_sum': 18621, 'waited_us_max': 6037, 'waited_us_mean': 423.2, 'waited_us_p50': 98.0}
+    {'relation': 'public.organizations_m3s2', 'unit': 'tuple', 'mode': 'X', 'outcome': 'granted', 'rows': 19, 'waited_us_sum': 13051, 'waited_us_max': 12311, 'waited_us_mean': 686.9, 'waited_us_p50': 32}
+DB time 72,954,238 {'cpu.on_cpu': '37,961,463 (52.035%)', 'commit.wal_flush': '32,687,449 (44.805%)', 'sched.run_queue': '1,875,800 (2.571%)', 'sysio.wal_write': '204,880 (0.281%)', 'sysio.checkpoint': '192,968 (0.265%)', 'app.lock_wait': '31,678 (0.043%)'}
+app.lock_wait {'count': 68, 'total_us': 31678} app.lock_conflict 68 share of DB 0.000434
+meta: {'lock_waits_recorded': '63', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '7760', 'contention_lock_partition_wait_us': '5258', 'contention_lock_wait_for_waits': '0', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '4', 'contention_inflight_misses': '4', 'contention_inflight_miss_ids_read': '19'}
+stmt refused (since boot) 4 [('UPDATE', 4)]
+ash lock_wait samples 0
+errors {}
+
+### m3-s2-close-a
+committed line: committed                19890      2277.0 TPS
+   committed                19890      2277.0 TPS
+   rejected-capacity         2970       11.0% of attempts
+   rejected-credit           4110       15.2% of attempts
+   conflicted                   5          5 retries
+   the cargo pool ran out before --seconds did: every cargo was booked.
+   Raise --cargos, or read the TPS as an average over a run that ended early.
+   verify (§4)          400 checks, 109 failure(s)
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| booking | 26,970 | 0 | 386.9 | 1,287.3 | 2,542.0 | 3,393.3 | 5,363.9 | 287,199.7 | 3,088/s |
+| freight-insert | 19,895 | 0 | 48.0 | 97.2 | 121.1 | 267.1 | 458.5 | 19,739.6 | 2,278/s |
+| charge-insert | 111,903 | 0 | 33.9 | 65.9 | 81.1 | 192.0 | 336.9 | 19,897.1 | 12,811/s |
+| operation-update | 19,895 | 1 | 39.4 | 83.6 | 98.9 | 220.1 | 370.3 | 19,633.5 | 2,278/s |
+| org-update | 19,894 | 4 | 41.5 | 73.4 | 86.9 | 232.7 | 392.6 | 17,583.0 | 2,278/s |
+| commit | 19,890 | 0 | 402.9 | 730.6 | 876.4 | 1,334.1 | 1,955.9 | 285,802.1 | 2,277/s |
+phases seen: ['ddl', 'load-organizations', 'load-ships', 'load-operations', 'load-fees', 'load-recipes', 'load-cargos', 'booking', 'cargo-lookup', 'credit-lookup', 'capacity-read', 'recipe-read', 'freight-insert', 'charge-insert', 'operation-update', 'org-update', 'commit', 'manifest-scan', 'voyage-rollup', 'customer-statement']
+lock_waits: 67 granted 67 deadlock 0 fault_net 0 cancelled 0 sum_us 6195 max 1013 p50 56
+    {'unit': 'tuple', 'mode': 'U', 'outcome': 'granted', 'rows': 67, 'waited_us_sum': 6195, 'waited_us_max': 1013, 'waited_us_mean': 92.5, 'waited_us_p50': 56}
+    {'relation': 'public.operations_m3s2', 'unit': 'tuple', 'mode': 'U', 'outcome': 'granted', 'rows': 39, 'waited_us_sum': 4845, 'waited_us_max': 1013, 'waited_us_mean': 124.2, 'waited_us_p50': 82}
+    {'relation': 'public.organizations_m3s2', 'unit': 'tuple', 'mode': 'U', 'outcome': 'granted', 'rows': 28, 'waited_us_sum': 1350, 'waited_us_max': 189, 'waited_us_mean': 48.2, 'waited_us_p50': 31.5}
+DB time 71,804,396 {'cpu.on_cpu': '37,153,136 (51.742%)', 'commit.wal_flush': '32,501,565 (45.264%)', 'sched.run_queue': '1,700,157 (2.368%)', 'sysio.wal_write': '254,628 (0.355%)', 'sysio.checkpoint': '188,710 (0.263%)', 'app.lock_wait': '6,200 (0.009%)'}
+app.lock_wait {'count': 75, 'total_us': 6200} app.lock_conflict 74 share of DB 8.6e-05
+meta: {'lock_waits_recorded': '67', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '7439', 'contention_lock_partition_wait_us': '4334', 'contention_lock_wait_for_waits': '1', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '5', 'contention_inflight_misses': '5', 'contention_inflight_miss_ids_read': '25'}
+stmt refused (since boot) 5 [('UPDATE', 5)]
+ash lock_wait samples 1
+errors {}
+
+### m3-s2-close-b
+committed line: committed                19914      2323.9 TPS
+   committed                19914      2323.9 TPS
+   rejected-capacity         3057       11.3% of attempts
+   rejected-credit           4086       15.1% of attempts
+   conflicted                   4          4 retries
+   the cargo pool ran out before --seconds did: every cargo was booked.
+   Raise --cargos, or read the TPS as an average over a run that ended early.
+   verify (§4)          400 checks, 110 failure(s)
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| booking | 27,057 | 0 | 411.2 | 1,259.2 | 2,545.8 | 3,343.9 | 4,756.8 | 289,160.6 | 3,158/s |
+| freight-insert | 19,918 | 0 | 43.8 | 98.4 | 121.3 | 253.9 | 403.8 | 16,771.4 | 2,324/s |
+| charge-insert | 112,046 | 0 | 33.9 | 66.7 | 82.2 | 187.1 | 296.5 | 18,851.0 | 13,076/s |
+| operation-update | 19,918 | 1 | 44.7 | 84.2 | 99.3 | 198.0 | 308.2 | 18,772.1 | 2,324/s |
+| org-update | 19,917 | 3 | 41.6 | 74.0 | 87.5 | 208.0 | 300.5 | 13,320.2 | 2,324/s |
+| commit | 19,914 | 0 | 368.6 | 746.3 | 891.9 | 1,335.9 | 1,980.8 | 285,743.3 | 2,324/s |
+phases seen: ['ddl', 'load-organizations', 'load-ships', 'load-operations', 'load-fees', 'load-recipes', 'load-cargos', 'booking', 'cargo-lookup', 'credit-lookup', 'capacity-read', 'recipe-read', 'freight-insert', 'charge-insert', 'operation-update', 'org-update', 'commit', 'manifest-scan', 'voyage-rollup', 'customer-statement']
+lock_waits: 45 granted 45 deadlock 0 fault_net 0 cancelled 0 sum_us 5238 max 1276 p50 76
+    {'unit': 'tuple', 'mode': 'U', 'outcome': 'granted', 'rows': 45, 'waited_us_sum': 5238, 'waited_us_max': 1276, 'waited_us_mean': 116.4, 'waited_us_p50': 76}
+    {'relation': 'public.operations_m3s2', 'unit': 'tuple', 'mode': 'U', 'outcome': 'granted', 'rows': 30, 'waited_us_sum': 4531, 'waited_us_max': 1276, 'waited_us_mean': 151.0, 'waited_us_p50': 99.0}
+    {'relation': 'public.organizations_m3s2', 'unit': 'tuple', 'mode': 'U', 'outcome': 'granted', 'rows': 15, 'waited_us_sum': 707, 'waited_us_max': 170, 'waited_us_mean': 47.1, 'waited_us_p50': 32}
+DB time 71,822,806 {'cpu.on_cpu': '36,688,440 (51.082%)', 'commit.wal_flush': '32,777,908 (45.637%)', 'sched.run_queue': '1,865,596 (2.597%)', 'sysio.wal_write': '299,871 (0.418%)', 'sysio.checkpoint': '185,751 (0.259%)', 'app.lock_wait': '5,240 (0.007%)'}
+app.lock_wait {'count': 52, 'total_us': 5240} app.lock_conflict 51 share of DB 7.3e-05
+meta: {'lock_waits_recorded': '45', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '7129', 'contention_lock_partition_wait_us': '3870', 'contention_lock_wait_for_waits': '0', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '4', 'contention_inflight_misses': '4', 'contention_inflight_miss_ids_read': '18'}
+stmt refused (since boot) 4 [('UPDATE', 4)]
+ash lock_wait samples 0
+errors {}
+
+### m3-s2-close-c
+committed line: committed                19915      2337.4 TPS
+   committed                19915      2337.4 TPS
+   rejected-capacity         2931       10.9% of attempts
+   rejected-credit           4085       15.2% of attempts
+   conflicted                   1          1 retries
+   the cargo pool ran out before --seconds did: every cargo was booked.
+   Raise --cargos, or read the TPS as an average over a run that ended early.
+   verify (§4)          400 checks, 111 failure(s)
+| phase | ops | errors | p0 | p25 | p50 | p95 | p99 | max | rate |
+|---|---|---|---|---|---|---|---|---|---|
+| booking | 26,931 | 0 | 393.5 | 1,280.7 | 2,524.7 | 3,288.5 | 4,528.2 | 278,323.7 | 3,161/s |
+| freight-insert | 19,916 | 0 | 44.2 | 99.0 | 121.4 | 255.9 | 405.4 | 19,299.8 | 2,338/s |
+| charge-insert | 112,012 | 0 | 34.6 | 66.8 | 82.2 | 187.8 | 299.9 | 19,212.1 | 13,147/s |
+| operation-update | 19,916 | 1 | 44.7 | 83.9 | 98.8 | 206.2 | 307.5 | 8,328.5 | 2,338/s |
+| org-update | 19,915 | 0 | 40.7 | 74.0 | 87.5 | 212.7 | 306.2 | 14,848.5 | 2,337/s |
+| commit | 19,915 | 0 | 336.3 | 725.2 | 864.2 | 1,282.9 | 1,663.4 | 277,466.3 | 2,337/s |
+phases seen: ['ddl', 'load-organizations', 'load-ships', 'load-operations', 'load-fees', 'load-recipes', 'load-cargos', 'booking', 'cargo-lookup', 'credit-lookup', 'capacity-read', 'recipe-read', 'freight-insert', 'charge-insert', 'operation-update', 'org-update', 'commit', 'manifest-scan', 'voyage-rollup', 'customer-statement']
+lock_waits: 62 granted 62 deadlock 0 fault_net 0 cancelled 0 sum_us 6750 max 1750 p50 70.5
+    {'unit': 'tuple', 'mode': 'U', 'outcome': 'granted', 'rows': 62, 'waited_us_sum': 6750, 'waited_us_max': 1750, 'waited_us_mean': 108.9, 'waited_us_p50': 70.5}
+    {'relation': 'public.operations_m3s2', 'unit': 'tuple', 'mode': 'U', 'outcome': 'granted', 'rows': 42, 'waited_us_sum': 5718, 'waited_us_max': 1750, 'waited_us_mean': 136.1, 'waited_us_p50': 91.5}
+    {'relation': 'public.organizations_m3s2', 'unit': 'tuple', 'mode': 'U', 'outcome': 'granted', 'rows': 20, 'waited_us_sum': 1032, 'waited_us_max': 115, 'waited_us_mean': 51.6, 'waited_us_p50': 52.5}
+DB time 71,488,464 {'cpu.on_cpu': '37,014,543 (51.777%)', 'commit.wal_flush': '32,076,401 (44.869%)', 'sched.run_queue': '1,674,241 (2.342%)', 'sysio.checkpoint': '466,899 (0.653%)', 'sysio.wal_write': '249,629 (0.349%)', 'app.lock_wait': '6,751 (0.009%)'}
+app.lock_wait {'count': 65, 'total_us': 6751} app.lock_conflict 65 share of DB 9.4e-05
+meta: {'lock_waits_recorded': '62', 'lock_waits_overwritten': '0', 'lock_waits_dropped': '0', 'contention_lock_partition_waits': '7323', 'contention_lock_partition_wait_us': '3875', 'contention_lock_wait_for_waits': '2', 'contention_lock_wait_for_wait_us': '0', 'contention_fence_walks': '0', 'contention_inflight_asks': '1', 'contention_inflight_misses': '1', 'contention_inflight_miss_ids_read': '6'}
+stmt refused (since boot) 1 [('UPDATE', 1)]
+ash lock_wait samples 0
+errors {}

@@ -1,0 +1,33 @@
+created 8 relations with suffix _m3s2:
+  organizations_m3s2
+  ships_m3s2
+  operations_m3s2
+  cargos_m3s2
+  fees_m3s2
+  recipes_m3s2
+  freights_m3s2
+  charges_m3s2
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/louis/ckdbs/.claude/worktrees/worktree-cp-lock-model-exploration/tools/scenario2_freight.py --suffix m3s2
+
+ckdbs benchmark - 68 columns, 24735 rows resident, 1 connection
+server 127.0.0.1:25731  table scenario2_m3s2
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0     544.9    433.2    469.0    528.4    695.0    695.0     695.0     0
+load-organizations         300         0     609.2    398.4    524.4    581.5    815.3    985.7    1979.5     0
+load-ships                  30         0     617.6    384.1    498.9    592.6    810.7   1067.6    1067.6     0
+load-operations            300         0     633.0    361.8    515.1    585.2    870.4   1641.0    5684.2     0
+load-fees                   12         0     723.6    394.0    625.0    679.2   1229.1   1229.1    1229.1     0
+load-recipes                93         0     715.8    463.8    591.6    656.5    994.4   3771.8    3771.8     0
+load-cargos              24000         0     600.1    308.0    506.2    578.7    821.5   1036.5    6628.9     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.

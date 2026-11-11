@@ -1,0 +1,17 @@
+views read over KWP/1 :15520 m1-rep1-base
+sys.lock_waits: 0 rows; by outcome {}; by core {}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+sys.wait_stats: app.lock_wait count=0 total_us=0 max_us=0; app.lock_conflict count=0; DB time 12589650 us; lock_wait share 0.0
+  core=0,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=0,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=1,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=2,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=3,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=0,total_us=0,max_us=0
+  core=NULL,event=app.lock_conflict,class=Application,count=0,total_us=0,max_us=0
+sys.meta: core=1, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=0, version=35, wal_topology=single
+sys.ash: 59 samples
+  cpu.on_cpu                  RUNNABLE        59
