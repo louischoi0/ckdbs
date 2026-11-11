@@ -20,8 +20,10 @@ started the same day from `cc54a296` (`v3.4.7-1-gcc54a296`, build inputs
 **CP-S2 started** on that word and **landed on the work branch the same
 day**: S2a at `0ddfbfab` (the slice unit deleted), S2b at `766f6a6d` (the
 `U` mode; §7). **Paused there on 2026-11-11 on the operator's word**
-(`raft-marks-2026-11-11.md` §1), nothing merged or pushed; S3, the close,
-is next, and §7's last entry is the hand-off. Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
+(`raft-marks-2026-11-11.md` §1), then **pushed to `main` with
+`--no-verify` the same day, S3 not run** (`raft-marks-2026-11-11.md` §2:
+the suite 4427/4427 at `766f6a6d`, the overhead not measured); S3, the
+close, is next, and §7's last entry is the hand-off. Reviewed on 2026-11-07 by the `critics-developer` pass (§7,
 the opening review): the census corrected, two missed risks written into C2
 and C4, one candidate (release before durability) withdrawn because the
 tree contradicts its premise. **Exploratory on W0**: CP-S0 (the census and
@@ -1060,7 +1062,10 @@ session opening cold can take S3 up from this entry and the files it
 names.
 
 **Where CP stands.** Everything is on `worktree-cp-lock-model-exploration`
-(the worktree under `.claude/worktrees/`), **unmerged and unpushed**:
+(the worktree under `.claude/worktrees/`), **unmerged and unpushed** when
+this entry was written; **pushed to `main` with `--no-verify` later the
+same day** on the operator's word (`raft-marks-2026-11-11.md` §2), a
+fast-forward over `adbe2638`, with S3 still not run:
 
 | commit | what | suite |
 |---|---|---|
