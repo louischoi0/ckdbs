@@ -256,8 +256,9 @@ constexpr std::size_t ModeIndex(LockMode m) noexcept {
 // row's existence and its key, and a version claim changes neither.
 //
 // A table, so a widening fills every cell by hand; the `static_assert`s
-// below make an unfilled cell a compile error, which the array's size alone
-// does not (a missing initializer reads `false`).
+// below catch an unfilled `kCompatible` cell and the `U` cells by name,
+// and the array's size alone catches nothing (a missing initializer reads
+// `false`).
 inline constexpr bool kCompatible[kLockModeCount][kLockModeCount] = {
     //            IS     IX      S      U      X
     /* IS */ {true, true, true, true, false},

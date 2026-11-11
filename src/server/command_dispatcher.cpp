@@ -4559,8 +4559,10 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // `foreign-keys.md` §2a): with a table the unseen writer holds `U`,
         // an `UPDATE` whose head is an overwrite over a live predecessor. A
         // busy head that is delete-marked or has no predecessor is a verb
-        // under the wrong mode: kept busy and logged, never answered.
-        // Without a table the `IsInFlight` poll is the wait (AO-S3).
+        // under the wrong mode: kept busy (the retryable refusal) and
+        // logged, never read as present. Without a table nothing is held
+        // and the witness proves nothing: the `IsInFlight` poll is the wait
+        // (AO-S3).
         if (resolved == exec::FkVerdict::kBusy && busy.trx_id != 0) {
             if (locks_ == nullptr) {
                 NoteBlockingWriter(scope.txn, busy.trx_id, tuple_key, RepeatableReadWait::kCapable);
@@ -4794,11 +4796,14 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
 void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel,
                                               std::uint64_t tuple_key, std::uint64_t holder) {
     // **The wake is the child row's own, from a probe in `U`**
-    // (`foreign-keys.md` §3a): refused by the writer's `U` or `X`, it
-    // registers the slot that writer's release flips; granted - the writer
-    // released in between - it is given back at once with a slot already
-    // flipped, so the statement re-runs. An `S` probe would be admitted by a
-    // child `UPDATE`'s `U` and re-run the walk until the net.
+    // (`foreign-keys.md` §3a): refused by the writer's `U` or `X`, or by a
+    // bulk child write's range over the row, it registers the slot that
+    // holder's release flips - on the refusing unit, which is why the park
+    // names `wake.key`; granted - the writer released in between - it is
+    // given back at once with a slot already flipped, so the statement
+    // re-runs. An `S` probe would be admitted by a child `UPDATE`'s `U` and
+    // re-run the walk until the net. Nothing here outlives the ask, which is
+    // why no intention is taken above it.
     //
     // **Not over a `U` or `X` this transaction holds**: the probe would
     // answer `already_held` and the grant arm's release would drop a record

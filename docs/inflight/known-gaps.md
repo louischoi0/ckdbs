@@ -580,13 +580,74 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     sustained contention the waiter ends at the 1 s fault net naming the
     last holder.
   - **What still polls** has no slot behind it: no lock table, a holder only
-    the header names, an assertion's group, and a `PURGE` waiting on a
-    deleter's decide or the read horizon (`heap-and-tuple.md` §4.1c).
+    the header names, an assertion's group, a `PURGE` waiting on a
+    deleter's decide or the read horizon (`heap-and-tuple.md` §4.1c), and
+    **the unique check's busy holder**: `CheckUniqueKeyLatest` holds the key
+    unit, finds the value under an undecided writer of another row, and
+    records the block by `NoteBlockingWriter` alone - the key unit is the
+    waiter's own, so no release flips a slot for it and the re-run is the
+    `IsInFlight` poll (`command_dispatcher.cpp`, added by CP-S1's reading).
   - A holder that never decides costs a cross-core writer the 1 s fault net
     and its defect warning, as a same-core writer pays.
 
-  Re-verified at `7dd9b789` by reading (`TryAcquire` non-queueing, the rig
-  cells exist). Spec: `docs/spec/txn.md` §5.
+  Re-verified at `f5d310ec` by reading (`TryAcquire` non-queueing, the rig
+  cells exist, the unique check's `kBusy` arm). Spec: `docs/spec/txn.md` §5.
+
+- **The decide slot is designed and not built** (CP's C4,
+  `instructions/v3.2.0/workorder-cp-lock-model-exploration.md` §3, §8.4).
+  One slot per in-flight transaction, flipped where `Release` runs today
+  (`FinishCommitBody` after `RetireInFlight` and the schema word; `Abort`),
+  would put a wake behind every entry of "what still polls" but the
+  no-table case. No number asked for it: at CP-S0 the family's whole share
+  of a point `UPDATE` was about 0.4 µs of 39 µs, every parked ask in
+  scenario 2, scenario 0 and the hot-row cell was granted, and no wait
+  ended at the fault net. Its second half - the row's table entry
+  published only while a fence stands - carries a `[loud]` risk: a fenced
+  bulk statement that today waits before its walk would meet an undecided
+  row mid-walk and be refused retryably. CP-Q4 (a) marks the form that
+  avoids it, (α): the fence-taker waits out the statements that began
+  before its publish, so no wait becomes a refusal. It is a design for its
+  own order. Read at `f5d310ec`; nothing of it is in the tree.
+
+- **The per-relation lock header is not built, and its eight-core number
+  is not measured** (CP's C3, the order's §3, §8.4). A standing range
+  fence costs every point write of the relation one walk of the 64
+  partitions: about 1 µs a statement at four cores at CP-S0
+  (`bench/v3.4.7/results-cp-s0-premise-v3.4.7-1-gcc54a296.md` §7), against
+  a point write whose own floor is about 36 µs (CP-Q12 (a) reads the rule's
+  "floor" as the write's). BP-H10's +12 % of a statement's CPU at eight
+  cores was not reproduced because eight cores were not run, and the
+  four-core cells barely exercised cross-core partition contention. A
+  relation header holding its entry and its fences under one latch is the
+  design; it is re-proposed as its own item only if an eight-core run
+  reproduces the figure. Read at `f5d310ec`.
+
+- **A parent `UPDATE` no longer waits for child writers, and one class of
+  deadlock replaced the one that removed** (CP-S2b, `766f6a6d`; `txn.md`
+  §5, `foreign-keys.md` §2c). **Closed**: the parent `UPDATE`'s wait on
+  every open child writer's `S`, and the deadlock of two transactions that
+  each wrote a child of P and then updated P - they serialise on P's `U`
+  (`FkCrossCoreRigTest.TwoChildWritersThatThenUpdateTheirParentSerialise`).
+  **Open by the operator's acceptance** (CP-Q10 (a), `[loud]`): a
+  transaction granted `U` on a parent row over a child writer's share,
+  that then waits on that child writer for any reason, deadlocks with it
+  if the child writer then writes the parent row; one of the two is
+  refused retryably naming deadlock, where before CP-S2b the updater
+  waited at the parent row first. Pinned by
+  `FkCrossCoreRigTest.AnUpdateThenADeleteOfAParentUnderAChildsShareWaitsAtTheDeleteAndDeadlocks`
+  (the same row) and
+  `FkCrossCoreRigTest.AParentUpdaterThatThenWaitsOnTheChildWriterElsewhereDeadlocks`
+  (another row). Two child writers that then `DELETE` their parent still
+  deadlock (`...TwoChildWritersThatThenDeleteTheirParentDeadlock`): `X`
+  keeps that shape. Cells ran green in the suite at `766f6a6d`.
+
+- **A hot row's client-visible refusal is not a lock's.** At CP-S0, eight
+  sessions on one row had 7.9 % of their `UPDATE`s refused `TXN_CONFLICT`
+  by `txn.md` §5's first-updater-wins - a version committed after the
+  statement's snapshot, READ COMMITTED's no-re-read window - while the
+  family parked 17 asks and granted every one. No lock cell reaches it and
+  the decide slot would not either; removing it is a re-read loop, an
+  isolation-level change no order has taken (the CP order's §8.5).
 
 - **The relation `IS` is declared at the bind for every relation a
   statement names** (closed at AT-S1, 2026-09-09; `step_compiler.cpp`). What

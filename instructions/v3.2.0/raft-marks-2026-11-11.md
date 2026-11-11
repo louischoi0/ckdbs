@@ -17,3 +17,12 @@
 | **Mark** | **CP's branch pushed to `main` with `--no-verify`**: CP written `cc54a296`, CP-S0 `c2937a32`, `origin/main` (`adbe2638`) merged at `d7b75977`, CP-S1 `2a4a3f79`, CP-S2a `0ddfbfab`, CP-S2b `766f6a6d`, the hand-off `b558f30a` and this record. `origin/main` still stood at `adbe2638` at the push, already merged, so the push is a fast-forward and resolved nothing. The pre-push hook was skipped; the full Debug suite ran 4427/4427 at `766f6a6d`, the last commit that changed a build input, and everything after it is under `instructions/`. **CP is not closed**: CP-S3 - the close measurement over `cc54a296`..`766f6a6d`, `known-gaps.md`'s Locks rewritten, the deferred comment trims - has not run, so the milestone lands on `main` with its overhead **not measured**, stated here as a fact and not an implied pass. The operator's question of the same moment, whether CP has yet produced a new concept or a new solution, was answered in the reply: no new mechanism - the two-source structure stands as the census found it; what CP produced is §2's rule for keeping a cell, S0's measured boundary (the hot row's client-visible effect is `txn.md` §5's refusal, not a lock's), the `U` mode re-derived as a version claim against `X`'s existence claim, the slice unit deleted, and two designs recorded unbuilt (C3, C4) because no number asked for them |
 | **Does not settle** | whether CP-S3 starts; a tag; a version |
 | **Recorded at** | this file; the order's header and its §7 hand-off entry; the CP row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 3. CP-S3 started on a schedule
+
+| | |
+|---|---|
+| **Word** | *"Start the CP milestone in 30 minutes."* (given in Korean; recorded in English), at 09:05 UTC in a new session; the session's one-shot job fired at 09:35 UTC |
+| **Mark** | **CP-S3, the close, starts** at 09:35 UTC on 2026-11-11, on a worktree of the same commit (`worktree-worktree-cp-lock-model-exploration`, opened from `5d858feb`), by the steps of the order's §7 hand-off entry. It supersedes the schedule the earlier session set for 17:00 UTC, which died with that session |
+| **Does not settle** | the merge to `main`, a push, a tag, a version - each waits for the operator's word, repeated in the scheduled prompt: "do not push or tag until the operator says so" |
+| **Recorded at** | this file; the order's §7 close entry; the CP row and this file's row in `instructions/v3.2.0/index.md` |
