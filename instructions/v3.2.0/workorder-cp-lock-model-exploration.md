@@ -1276,8 +1276,13 @@ work branch was merged into `main` with `--no-ff` and pushed with the
 pre-push hook skipped: the suite above is the one that covers it, since
 nothing after `7d21468a` is a build input, and `origin/main` still stood at
 `5d858feb`, so the merge resolved nothing. Scenario 0's unresolved cell
-and the cells not measured land as stated. No tag and no version: the
-version of record stays `v3.4.7`.
+and the cells not measured land as stated. No tag and no version were
+taken with the push.
+
+**Carried by `v3.4.8`.** On the operator's word *"tag 3.4.8"*
+(`raft-marks-2026-11-11.md` §5) the merge commit `b0c11e0a` was tagged
+`v3.4.8`, annotated and pushed with the hook skipped on the same suite;
+the tag message states what CP built and the gaps that bound it.
 
 
 ## 8. The model (CP-S1)

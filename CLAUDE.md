@@ -249,9 +249,9 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
 ## Version Management
 
 The version of record is an **annotated git tag on `main`**. **The current
-version of record is `v3.4.7`**, taken on `main` at `6c4b9a6d` (wait
-events and ASH, CK and CL closed), operator-named on 2026-11-07
-("tag 3.4.7"); read its tag message.
+version of record is `v3.4.8`**, taken on `main` at `b0c11e0a` (the lock
+model re-examined, CP closed: the slice unit deleted, the `U` mode),
+operator-named on 2026-11-11 ("tag 3.4.8"); read its tag message.
 
 - **The operator names the version; CLA may move only `z`.** A version is
   set by the operator saying it — *"it is version x.y.z"* — and nothing

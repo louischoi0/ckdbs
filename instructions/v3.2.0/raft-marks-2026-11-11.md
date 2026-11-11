@@ -35,3 +35,12 @@
 | **Mark** | **CP's close lands on `main`**: `worktree-worktree-cp-lock-model-exploration` - the trims `f5d310ec`, their review applied with `known-gaps.md`'s Locks rewritten `7d21468a`, the close entry and its results file `e855b6d5`, and this record - merged into `main` with `--no-ff` and pushed with `--no-verify`. `origin/main` still stood at `5d858feb` at the push, an ancestor of the branch, so the merge resolved nothing. The pre-push hook was skipped; the full Debug suite ran 4427/4427 at `7d21468a`, the last commit that changed a build input (comments only), and everything after it is under `bench/` and `instructions/`. The close's open ends land with it as stated facts, not passes: scenario 0's -0.45 % inside a 5.5 % run-to-run spread is unresolved, the `U` mode has no throughput number, and the eight-core, `strict` and PostgreSQL cells were not measured (`bench/v3.4.7/results-cp-close-v3.4.7-11-g7d21468a.md`) |
 | **Does not settle** | a tag; a version - the version of record stays `v3.4.7` |
 | **Recorded at** | this file; the order's header and its §7 close entry; the CP row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 5. Version 3.4.8 tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.8"* (given in Korean; recorded in English), in the same session, after §4's push was reported at 23:06 UTC |
+| **Mark** | **`v3.4.8`**, an annotated tag on `main` at `b0c11e0a`, the head of `origin/main` when the tag was taken. It carries CP whole: the slice unit deleted (`0ddfbfab`), the `U` mode (`766f6a6d`), the close (§4). Its message states what CP built, that nothing of it persists on disk, the close's measurement, and the gaps that bound it - CP-Q10 (a)'s accepted deadlock class, the `U` mode with no throughput number, scenario 0 unresolved, the cells not measured, C3 and C4 not built. The full Debug suite ran 4427/4427 at `7d21468a`, whose build inputs the tagged commit shares, so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.8` |
+| **Does not settle** | nothing of CP; the next version is the operator's to name |
+| **Recorded at** | this file; the tag message; CLAUDE.md's Version Management; the CP order's §7 close entry; `instructions/v3.2.0/index.md` |
