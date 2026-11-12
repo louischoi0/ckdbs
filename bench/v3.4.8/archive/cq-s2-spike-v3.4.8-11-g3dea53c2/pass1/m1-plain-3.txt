@@ -1,0 +1,6 @@
+{"label": "plain-3", "arm": "hot", "k": 2, "rep": 0, "tps": 4238.3, "refused": {"decided_newer": 1133}}
+{"label": "plain-3", "arm": "hot-last-piped", "k": 2, "rep": 0, "tps": 6584.5, "refused": {"decided_newer": 3519}}
+{"label": "plain-3", "arm": "disjoint", "k": 2, "rep": 0, "tps": 7322.8, "refused": {}}
+{"label": "plain-3", "arm": "hot", "k": 8, "rep": 0, "tps": 1744.5, "refused": {"decided_newer": 169}}
+{"label": "plain-3", "arm": "hot-last-piped", "k": 8, "rep": 0, "tps": 4708.2, "refused": {"decided_newer": 1340}}
+{"label": "plain-3", "arm": "disjoint", "k": 8, "rep": 0, "tps": 4467.8, "refused": {}}

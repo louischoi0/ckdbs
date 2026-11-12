@@ -1,0 +1,1 @@
+{"label": "plain-pause", "arm": "hot", "k": 0, "rep": 0, "tps": 0.9, "refused": {"fault_net": 131}}

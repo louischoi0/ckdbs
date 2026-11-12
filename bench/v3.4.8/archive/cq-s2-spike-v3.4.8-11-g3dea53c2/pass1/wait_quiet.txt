@@ -1,0 +1,1 @@
+waited 10s load 1.41 3.35 3.02 1/544 1188762 competing 0

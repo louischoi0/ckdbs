@@ -1,0 +1,118 @@
+{
+ "args": {
+  "host": "127.0.0.1",
+  "port": 15540,
+  "server_pid": 888189,
+  "label": "group-pause",
+  "sessions": 8,
+  "k": "0",
+  "arms": "hot",
+  "reps": 1,
+  "seconds": 20.0,
+  "pause_ms": 1200.0,
+  "json": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s0/pass2/m4p-group.json",
+  "heartbeat": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s0/pass2/heartbeat",
+  "status": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s0/pass2/status.txt"
+ },
+ "cells": [
+  {
+   "arm": "hot",
+   "k": 0,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 20.0,
+   "pause_ms": 1200.0,
+   "label": "group-pause",
+   "committed": 18,
+   "tps": 0.9,
+   "refused": {
+    "fault_net": 134
+   },
+   "refusal_shapes": {
+    "row id=N is held by transaction N, which has not decided after N ms; the write hit the lock-wait fault net and was refused. A wait ends when the holder decides,": 134
+   },
+   "txn": {
+    "n": 18,
+    "p0_us": 1201395.6,
+    "p25_us": 1400045.4,
+    "p50_us": 1599167.1,
+    "p95_us": 2197572.4,
+    "p99_us": 2197572.4,
+    "max_us": 2197572.4
+   },
+   "debit": {
+    "n": 18,
+    "p0_us": 265.6,
+    "p25_us": 198943.0,
+    "p50_us": 398080.5,
+    "p95_us": 996349.3,
+    "p99_us": 996349.3,
+    "max_us": 996349.3
+   },
+   "commit": {
+    "n": 18,
+    "p0_us": 800.2,
+    "p25_us": 832.5,
+    "p50_us": 868.7,
+    "p95_us": 1250.2,
+    "p99_us": 1250.2,
+    "max_us": 1250.2
+   },
+   "per_session_committed": [
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    4,
+    1
+   ],
+   "cores_start": [
+    0,
+    2,
+    0,
+    2,
+    3,
+    1,
+    1,
+    0
+   ],
+   "cores_end": [
+    0,
+    2,
+    0,
+    2,
+    3,
+    1,
+    1,
+    0
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "5.69 4.16 3.62 2/455 893336",
+    "competing": []
+   },
+   "server_cpu_s": 0.89,
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {
+     "fault_net": 134,
+     "granted": 116
+    },
+    "by_unit_mode": {
+     "tuple/U": 250
+    },
+    "new_rows": 250,
+    "waited_p50_us": 597668.0,
+    "waited_p99_us": 1000898.0,
+    "waited_max_us": 1001051.0
+   },
+   "oracle": {
+    "ok": true,
+    "rows_checked": 9,
+    "mismatches": []
+   }
+  }
+ ]
+}

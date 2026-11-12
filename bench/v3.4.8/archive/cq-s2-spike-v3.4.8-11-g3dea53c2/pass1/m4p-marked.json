@@ -1,0 +1,113 @@
+{
+ "args": {
+  "host": "127.0.0.1",
+  "port": 15553,
+  "server_pid": 1190577,
+  "label": "marked-pause",
+  "sessions": 8,
+  "k": "0",
+  "arms": "hot",
+  "reps": 1,
+  "seconds": 20.0,
+  "pause_ms": 1200.0,
+  "json": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass1/m4p-marked.json",
+  "heartbeat": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass1/heartbeat",
+  "status": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass1/status.txt"
+ },
+ "cells": [
+  {
+   "arm": "hot",
+   "k": 0,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 20.0,
+   "pause_ms": 1200.0,
+   "label": "marked-pause",
+   "committed": 136,
+   "tps": 6.8,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 136,
+    "p0_us": 1200932.8,
+    "p25_us": 1201286.6,
+    "p50_us": 1201384.3,
+    "p95_us": 1202030.1,
+    "p99_us": 1202604.9,
+    "max_us": 1202644.0
+   },
+   "debit": {
+    "n": 136,
+    "p0_us": 70.2,
+    "p25_us": 117.7,
+    "p50_us": 136.2,
+    "p95_us": 212.0,
+    "p99_us": 266.3,
+    "max_us": 298.5
+   },
+   "commit": {
+    "n": 136,
+    "p0_us": 628.6,
+    "p25_us": 954.9,
+    "p50_us": 1059.1,
+    "p95_us": 1466.3,
+    "p99_us": 2333.3,
+    "max_us": 2355.9
+   },
+   "per_session_committed": [
+    17,
+    17,
+    17,
+    17,
+    17,
+    17,
+    17,
+    17
+   ],
+   "cores_start": [
+    2,
+    2,
+    2,
+    3,
+    2,
+    2,
+    2,
+    1
+   ],
+   "cores_end": [
+    2,
+    2,
+    2,
+    3,
+    2,
+    2,
+    2,
+    1
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "4.01 3.56 3.15 1/551 1190584",
+    "competing": []
+   },
+   "server_cpu_s": 1.02,
+   "lock_waits": {
+    "rows_in_ring": 77,
+    "by_outcome": {
+     "granted": 77
+    },
+    "by_unit_mode": {
+     "tuple/U": 77
+    },
+    "new_rows": 77,
+    "waited_p50_us": 68.0,
+    "waited_p99_us": 307.0,
+    "waited_max_us": 307.0
+   },
+   "oracle": {
+    "ok": true,
+    "rows_checked": 9,
+    "mismatches": []
+   }
+  }
+ ]
+}

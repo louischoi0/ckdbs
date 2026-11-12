@@ -10,6 +10,8 @@ Author: CLA, 2026-09-26, against `2b41d31`
 **Revised 2026-10-10 on `worktree-bj-expression-update` at `080cd55`**, on
 the operator's word *"Write CN-7 to match the changed spec (not deleted,
 not closed)"* (`instructions/v3.0.0/raft-marks-2026-10-10.md` §1, BJ-R8).
+**Annotated 2026-11-12** in §6, marked "(CQ)": a pointer to the order that
+explored the ledger; nothing else is changed.
 `instructions/v3.0.0/workorder-bj-expression-update.md` (BJ, written, not
 opened) gives `SET` a value expression, so §1's premise that a delta cannot
 be written in one statement no longer holds once BJ is built, and §6's
@@ -227,6 +229,11 @@ note changes neither.
   without the wait gap. This note's one obligation to that future is
   §1's last-but-one row: **the statement and its inverse mean the same
   under a ledger as under the lock.**
+  **(CQ, 2026-11-12)** Explored as a declared column under an exception
+  the operator granted for a spike only (CQ-Q1 (a)); closed narrow, not
+  adopted. The findings are in
+  `instructions/v3.2.0/workorder-cq-column-reservation.md` §8 (CQ-S3) and
+  §9. R1, R2 and R3 stand as ruled.
 - Sagas, compensation callbacks, at-most-once tokens (CN-5) and any
   cross-instance step. The inverse is defined here; who calls it is not.
 - Any commutative operation other than addition: set insertion,

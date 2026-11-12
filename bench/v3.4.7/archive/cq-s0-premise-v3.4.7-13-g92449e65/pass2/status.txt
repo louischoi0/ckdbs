@@ -1,0 +1,127 @@
+10:10:37 schedule start mode=full describe=v3.4.7-13-g92449e65 load=1.48 2.53 3.10
+10:10:37 group rep 0 k 0 hot start
+10:10:44 group rep 0 k 0 hot tps 7825.2 refused {'decided_newer': 4231} oracle True
+10:10:44 group rep 0 k 0 hot-last start
+10:10:51 group rep 0 k 0 hot-last tps 8062.5 refused {'decided_newer': 4323} oracle True
+10:10:51 group rep 0 k 0 hot-last-piped start
+10:10:58 group rep 0 k 0 hot-last-piped tps 8597.0 refused {'decided_newer': 7537} oracle True
+10:10:58 group rep 0 k 0 disjoint start
+10:11:04 group rep 0 k 0 disjoint tps 8905.0 refused {} oracle True
+10:11:04 group rep 0 k 0 disjoint-piped start
+10:11:11 group rep 0 k 0 disjoint-piped tps 8381.0 refused {} oracle True
+10:11:11 group rep 0 k 2 hot start
+10:11:18 group rep 0 k 2 hot tps 3800.7 refused {'decided_newer': 1095} oracle True
+10:11:18 group rep 0 k 2 hot-last start
+10:11:25 group rep 0 k 2 hot-last tps 6458.2 refused {'decided_newer': 2350} oracle True
+10:11:25 group rep 0 k 2 hot-last-piped start
+10:11:32 group rep 0 k 2 hot-last-piped tps 5992.3 refused {'decided_newer': 3334} oracle True
+10:11:32 group rep 0 k 2 disjoint start
+10:11:38 group rep 0 k 2 disjoint tps 6823.3 refused {} oracle True
+10:11:38 group rep 0 k 2 disjoint-piped start
+10:11:45 group rep 0 k 2 disjoint-piped tps 7144.0 refused {} oracle True
+10:11:45 group rep 0 k 8 hot start
+10:11:52 group rep 0 k 8 hot tps 1510.7 refused {'decided_newer': 127} oracle True
+10:11:52 group rep 0 k 8 hot-last start
+10:11:59 group rep 0 k 8 hot-last tps 4442.7 refused {'decided_newer': 674} oracle True
+10:11:59 group rep 0 k 8 hot-last-piped start
+10:12:06 group rep 0 k 8 hot-last-piped tps 4437.2 refused {'decided_newer': 910} oracle True
+10:12:06 group rep 0 k 8 disjoint start
+10:12:12 group rep 0 k 8 disjoint tps 4276.7 refused {} oracle True
+10:12:12 group rep 0 k 8 disjoint-piped start
+10:12:19 group rep 0 k 8 disjoint-piped tps 4737.8 refused {} oracle True
+10:12:19 group rep 1 k 0 hot-last start
+10:12:26 group rep 1 k 0 hot-last tps 7440.8 refused {'decided_newer': 4208} oracle True
+10:12:26 group rep 1 k 0 hot start
+10:12:33 group rep 1 k 0 hot tps 7281.2 refused {'decided_newer': 4081} oracle True
+10:12:33 group rep 1 k 0 disjoint-piped start
+10:12:39 group rep 1 k 0 disjoint-piped tps 9370.5 refused {} oracle True
+10:12:39 group rep 1 k 0 disjoint start
+10:12:46 group rep 1 k 0 disjoint tps 9077.5 refused {} oracle True
+10:12:46 group rep 1 k 0 hot-last-piped start
+10:12:53 group rep 1 k 0 hot-last-piped tps 7794.2 refused {'decided_newer': 7034} oracle True
+10:12:53 group rep 1 k 2 hot-last start
+10:13:00 group rep 1 k 2 hot-last tps 6063.3 refused {'decided_newer': 2054} oracle True
+10:13:00 group rep 1 k 2 hot start
+10:13:07 group rep 1 k 2 hot tps 3741.5 refused {'decided_newer': 1052} oracle True
+10:13:07 group rep 1 k 2 disjoint-piped start
+10:13:13 group rep 1 k 2 disjoint-piped tps 7516.2 refused {} oracle True
+10:13:13 group rep 1 k 2 disjoint start
+10:13:20 group rep 1 k 2 disjoint tps 6179.2 refused {} oracle True
+10:13:20 group rep 1 k 2 hot-last-piped start
+10:13:27 group rep 1 k 2 hot-last-piped tps 6756.0 refused {'decided_newer': 3810} oracle True
+10:13:27 group rep 1 k 8 hot-last start
+10:13:34 group rep 1 k 8 hot-last tps 4490.5 refused {'decided_newer': 723} oracle True
+10:13:34 group rep 1 k 8 hot start
+10:13:40 group rep 1 k 8 hot tps 1571.2 refused {'decided_newer': 136} oracle True
+10:13:40 group rep 1 k 8 disjoint-piped start
+10:13:47 group rep 1 k 8 disjoint-piped tps 4690.2 refused {} oracle True
+10:13:47 group rep 1 k 8 disjoint start
+10:13:54 group rep 1 k 8 disjoint tps 4410.0 refused {} oracle True
+10:13:54 group rep 1 k 8 hot-last-piped start
+10:14:01 group rep 1 k 8 hot-last-piped tps 4317.3 refused {'decided_newer': 851} oracle True
+10:14:01 group rep 2 k 0 disjoint-piped start
+10:14:08 group rep 2 k 0 disjoint-piped tps 9260.7 refused {} oracle True
+10:14:08 group rep 2 k 0 hot start
+10:14:14 group rep 2 k 0 hot tps 7886.7 refused {'decided_newer': 4496} oracle True
+10:14:14 group rep 2 k 0 hot-last start
+10:14:21 group rep 2 k 0 hot-last tps 7668.5 refused {'decided_newer': 4461} oracle True
+10:14:21 group rep 2 k 0 hot-last-piped start
+10:14:28 group rep 2 k 0 hot-last-piped tps 8303.5 refused {'decided_newer': 7209} oracle True
+10:14:28 group rep 2 k 0 disjoint start
+10:14:35 group rep 2 k 0 disjoint tps 9502.0 refused {} oracle True
+10:14:35 group rep 2 k 2 disjoint-piped start
+10:14:42 group rep 2 k 2 disjoint-piped tps 7260.8 refused {} oracle True
+10:14:42 group rep 2 k 2 hot start
+10:14:48 group rep 2 k 2 hot tps 3598.8 refused {'decided_newer': 973} oracle True
+10:14:48 group rep 2 k 2 hot-last start
+10:14:55 group rep 2 k 2 hot-last tps 6301.2 refused {'decided_newer': 2367} oracle True
+10:14:55 group rep 2 k 2 hot-last-piped start
+10:15:02 group rep 2 k 2 hot-last-piped tps 6750.7 refused {'decided_newer': 3982} oracle True
+10:15:02 group rep 2 k 2 disjoint start
+10:15:09 group rep 2 k 2 disjoint tps 6356.3 refused {} oracle True
+10:15:09 group rep 2 k 8 disjoint-piped start
+10:15:16 group rep 2 k 8 disjoint-piped tps 4274.2 refused {} oracle True
+10:15:16 group rep 2 k 8 hot start
+10:15:22 group rep 2 k 8 hot tps 1593.2 refused {'decided_newer': 145} oracle True
+10:15:22 group rep 2 k 8 hot-last start
+10:15:29 group rep 2 k 8 hot-last tps 4447.2 refused {'decided_newer': 691} oracle True
+10:15:29 group rep 2 k 8 hot-last-piped start
+10:15:36 group rep 2 k 8 hot-last-piped tps 4459.7 refused {'decided_newer': 958} oracle True
+10:15:36 group rep 2 k 8 disjoint start
+10:15:43 group rep 2 k 8 disjoint tps 4402.0 refused {} oracle True
+10:15:43 group driver finished
+10:15:43 group-pause rep 0 k 0 hot start
+10:16:05 group-pause rep 0 k 0 hot tps 0.9 refused {'fault_net': 134} oracle True
+10:16:05 group-pause driver finished
+10:16:06 strict rep 0 k 8 hot start
+10:16:13 strict rep 0 k 8 hot tps 823.0 refused {} oracle True
+10:16:13 strict rep 0 k 8 hot-last start
+10:16:19 strict rep 0 k 8 hot-last tps 1300.0 refused {'decided_newer': 37} oracle True
+10:16:19 strict rep 0 k 8 hot-last-piped start
+10:16:26 strict rep 0 k 8 hot-last-piped tps 1294.7 refused {'decided_newer': 35} oracle True
+10:16:26 strict rep 0 k 8 disjoint start
+10:16:33 strict rep 0 k 8 disjoint tps 3826.7 refused {} oracle True
+10:16:33 strict rep 0 k 8 disjoint-piped start
+10:16:40 strict rep 0 k 8 disjoint-piped tps 3827.0 refused {} oracle True
+10:16:40 strict rep 1 k 8 hot-last start
+10:16:47 strict rep 1 k 8 hot-last tps 1174.3 refused {'decided_newer': 22} oracle True
+10:16:47 strict rep 1 k 8 hot start
+10:16:53 strict rep 1 k 8 hot tps 805.3 refused {} oracle True
+10:16:53 strict rep 1 k 8 disjoint-piped start
+10:17:00 strict rep 1 k 8 disjoint-piped tps 4042.7 refused {} oracle True
+10:17:00 strict rep 1 k 8 disjoint start
+10:17:07 strict rep 1 k 8 disjoint tps 3784.8 refused {} oracle True
+10:17:07 strict rep 1 k 8 hot-last-piped start
+10:17:14 strict rep 1 k 8 hot-last-piped tps 1222.0 refused {'decided_newer': 24} oracle True
+10:17:14 strict rep 2 k 8 disjoint-piped start
+10:17:20 strict rep 2 k 8 disjoint-piped tps 3851.8 refused {} oracle True
+10:17:20 strict rep 2 k 8 hot start
+10:17:27 strict rep 2 k 8 hot tps 869.2 refused {} oracle True
+10:17:27 strict rep 2 k 8 hot-last start
+10:17:34 strict rep 2 k 8 hot-last tps 1322.3 refused {'decided_newer': 29} oracle True
+10:17:34 strict rep 2 k 8 hot-last-piped start
+10:17:41 strict rep 2 k 8 hot-last-piped tps 1232.8 refused {'decided_newer': 21} oracle True
+10:17:41 strict rep 2 k 8 disjoint start
+10:17:47 strict rep 2 k 8 disjoint tps 3873.8 refused {} oracle True
+10:17:47 strict driver finished
+10:17:47 DONE load=3.13 3.68 3.51

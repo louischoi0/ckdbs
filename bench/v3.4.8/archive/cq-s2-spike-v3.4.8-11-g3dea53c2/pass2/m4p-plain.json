@@ -1,0 +1,120 @@
+{
+ "args": {
+  "host": "127.0.0.1",
+  "port": 15554,
+  "server_pid": 1204705,
+  "label": "plain-pause",
+  "sessions": 8,
+  "k": "0",
+  "arms": "hot",
+  "reps": 1,
+  "seconds": 20.0,
+  "pause_ms": 1200.0,
+  "json": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass2/m4p-plain.json",
+  "heartbeat": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass2/heartbeat",
+  "status": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass2/status.txt"
+ },
+ "cells": [
+  {
+   "arm": "hot",
+   "k": 0,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 20.0,
+   "pause_ms": 1200.0,
+   "label": "plain-pause",
+   "committed": 18,
+   "tps": 0.9,
+   "refused": {
+    "fault_net": 134
+   },
+   "refusal_shapes": {
+    "row id=N is held by transaction N, which has not decided after N ms; the write hit the lock-wait fault net and was refused. A wait ends when the holder decides,": 134
+   },
+   "txn": {
+    "n": 18,
+    "p0_us": 1201578.0,
+    "p25_us": 1399302.6,
+    "p50_us": 1590038.0,
+    "p95_us": 2197171.6,
+    "p99_us": 2197171.6,
+    "max_us": 2197171.6
+   },
+   "debit": {
+    "n": 18,
+    "p0_us": 402.4,
+    "p25_us": 198263.5,
+    "p50_us": 388937.5,
+    "p95_us": 995951.2,
+    "p99_us": 995951.2,
+    "max_us": 995951.2
+   },
+   "commit": {
+    "n": 18,
+    "p0_us": 855.7,
+    "p25_us": 873.6,
+    "p50_us": 950.3,
+    "p95_us": 1154.4,
+    "p99_us": 1154.4,
+    "max_us": 1154.4
+   },
+   "per_session_committed": [
+    3,
+    1,
+    3,
+    4,
+    3,
+    0,
+    3,
+    1
+   ],
+   "cores_start": [
+    2,
+    1,
+    3,
+    0,
+    0,
+    1,
+    1,
+    3
+   ],
+   "cores_end": [
+    2,
+    1,
+    3,
+    0,
+    0,
+    1,
+    1,
+    3
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "2.74 2.68 2.47 1/545 1204712",
+    "competing": [
+     "1192354 /bin/bash -c source /home/louis/.claude/shell-snapshots/snapshot-bash-1794385760540-q3ytlk.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'S=/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2 && ctest --test-dir build -LE bs-nightly -j4 > $S/suite3.log 2>&1; echo \"SUITE_EXIT=$?\"; grep '\"'\"'tests passed'\"'\"' $S/suite3.log; $S/launch.sh pass2 full; tail -1 $S/pass2/status.txt' < /dev/null && pwd -P >| /tmp/claude-7564-cwd"
+    ]
+   },
+   "server_cpu_s": 1.22,
+   "lock_waits": {
+    "rows_in_ring": 249,
+    "by_outcome": {
+     "fault_net": 134,
+     "granted": 115
+    },
+    "by_unit_mode": {
+     "tuple/U": 249
+    },
+    "new_rows": 249,
+    "waited_p50_us": 596984.0,
+    "waited_p99_us": 1000985.0,
+    "waited_max_us": 1001047.0
+   },
+   "oracle": {
+    "ok": true,
+    "rows_checked": 9,
+    "mismatches": []
+   }
+  }
+ ]
+}

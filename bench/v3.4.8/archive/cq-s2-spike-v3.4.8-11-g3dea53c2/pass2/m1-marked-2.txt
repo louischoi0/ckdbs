@@ -1,0 +1,2 @@
+{"label": "marked-2", "arm": "hot", "k": 2, "rep": 0, "tps": 6817.3, "refused": {}}
+{"label": "marked-2", "arm": "hot", "k": 8, "rep": 0, "tps": 4567.0, "refused": {}}

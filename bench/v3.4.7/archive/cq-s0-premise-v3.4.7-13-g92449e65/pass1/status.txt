@@ -1,0 +1,91 @@
+09:48:50 schedule start mode=full describe=v3.4.7-13-g92449e65 load=1.10 5.46 4.71
+09:48:51 group rep 0 k 0 hot start
+09:48:57 group rep 0 k 0 hot tps 8232.5 refused {'decided_newer': 4438}
+09:48:57 group rep 0 k 0 hot-last start
+09:49:04 group rep 0 k 0 hot-last tps 8285.3 refused {'decided_newer': 4425}
+09:49:04 group rep 0 k 0 hot-last-piped start
+09:49:11 group rep 0 k 0 hot-last-piped tps 8027.7 refused {'decided_newer': 8162}
+09:49:11 group rep 0 k 0 disjoint start
+09:49:18 group rep 0 k 0 disjoint tps 8734.3 refused {}
+09:49:18 group rep 0 k 0 disjoint-piped start
+09:49:25 group rep 0 k 0 disjoint-piped tps 7595.5 refused {}
+09:49:25 group rep 0 k 8 hot start
+09:49:31 group rep 0 k 8 hot tps 1557.7 refused {'decided_newer': 173}
+09:49:31 group rep 0 k 8 hot-last start
+09:49:38 group rep 0 k 8 hot-last tps 4196.5 refused {'decided_newer': 732}
+09:49:38 group rep 0 k 8 hot-last-piped start
+09:49:45 group rep 0 k 8 hot-last-piped tps 4169.5 refused {'decided_newer': 1051}
+09:49:45 group rep 0 k 8 disjoint start
+09:49:52 group rep 0 k 8 disjoint tps 4347.3 refused {}
+09:49:52 group rep 0 k 8 disjoint-piped start
+09:49:58 group rep 0 k 8 disjoint-piped tps 4313.8 refused {}
+09:49:58 group rep 1 k 0 hot start
+09:50:05 group rep 1 k 0 hot tps 7489.0 refused {'decided_newer': 4553}
+09:50:05 group rep 1 k 0 disjoint-piped start
+09:50:12 group rep 1 k 0 disjoint-piped tps 9661.0 refused {}
+09:50:12 group rep 1 k 0 disjoint start
+09:50:19 group rep 1 k 0 disjoint tps 8631.0 refused {}
+09:50:19 group rep 1 k 0 hot-last-piped start
+09:50:26 group rep 1 k 0 hot-last-piped tps 7219.2 refused {'decided_newer': 6981}
+09:50:26 group rep 1 k 0 hot-last start
+09:50:32 group rep 1 k 0 hot-last tps 7552.2 refused {'decided_newer': 4429}
+09:50:32 group rep 1 k 8 hot start
+09:50:39 group rep 1 k 8 hot tps 1476.5 refused {'decided_newer': 142}
+09:50:39 group rep 1 k 8 disjoint-piped start
+09:50:46 group rep 1 k 8 disjoint-piped tps 4618.5 refused {}
+09:50:46 group rep 1 k 8 disjoint start
+09:50:53 group rep 1 k 8 disjoint tps 4287.2 refused {}
+09:50:53 group rep 1 k 8 hot-last-piped start
+09:51:00 group rep 1 k 8 hot-last-piped tps 4292.7 refused {'decided_newer': 878}
+09:51:00 group rep 1 k 8 hot-last start
+09:51:06 group rep 1 k 8 hot-last tps 4436.8 refused {'decided_newer': 733}
+09:51:06 group rep 2 k 0 hot-last-piped start
+09:51:13 group rep 2 k 0 hot-last-piped tps 6976.2 refused {'decided_newer': 7578}
+09:51:13 group rep 2 k 0 disjoint start
+09:51:20 group rep 2 k 0 disjoint tps 9466.2 refused {}
+09:51:20 group rep 2 k 0 disjoint-piped start
+09:51:27 group rep 2 k 0 disjoint-piped tps 9766.2 refused {}
+09:51:27 group rep 2 k 0 hot start
+09:51:34 group rep 2 k 0 hot tps 7492.2 refused {'decided_newer': 4554}
+09:51:34 group rep 2 k 0 hot-last start
+09:51:41 group rep 2 k 0 hot-last tps 7685.5 refused {'decided_newer': 4869}
+09:51:41 group rep 2 k 8 hot-last-piped start
+09:51:47 group rep 2 k 8 hot-last-piped tps 4229.0 refused {'decided_newer': 942}
+09:51:47 group rep 2 k 8 disjoint start
+09:51:54 group rep 2 k 8 disjoint tps 4620.0 refused {}
+09:51:54 group rep 2 k 8 disjoint-piped start
+09:52:01 group rep 2 k 8 disjoint-piped tps 4489.0 refused {}
+09:52:01 group rep 2 k 8 hot start
+09:52:08 group rep 2 k 8 hot tps 1595.0 refused {'decided_newer': 149}
+09:52:08 group rep 2 k 8 hot-last start
+09:52:14 group rep 2 k 8 hot-last tps 4229.7 refused {'decided_newer': 688}
+09:52:14 group driver finished
+09:52:15 group-pause rep 0 k 0 hot start
+09:52:37 group-pause rep 0 k 0 hot tps 0.9 refused {'fault_net': 132}
+09:52:37 group-pause driver finished
+09:52:38 strict rep 0 k 8 hot start
+09:52:44 strict rep 0 k 8 hot tps 773.0 refused {'decided_newer': 1}
+09:52:44 strict rep 0 k 8 hot-last-piped start
+09:52:51 strict rep 0 k 8 hot-last-piped tps 1177.5 refused {'decided_newer': 46}
+09:52:51 strict rep 0 k 8 disjoint start
+09:52:58 strict rep 0 k 8 disjoint tps 3633.3 refused {}
+09:52:58 strict rep 0 k 8 disjoint-piped start
+09:53:05 strict rep 0 k 8 disjoint-piped tps 3768.8 refused {}
+09:53:05 strict rep 1 k 8 hot start
+09:53:12 strict rep 1 k 8 hot tps 766.7 refused {'decided_newer': 2}
+09:53:12 strict rep 1 k 8 disjoint-piped start
+09:53:18 strict rep 1 k 8 disjoint-piped tps 3611.7 refused {}
+09:53:18 strict rep 1 k 8 disjoint start
+09:53:25 strict rep 1 k 8 disjoint tps 3520.0 refused {}
+09:53:25 strict rep 1 k 8 hot-last-piped start
+09:53:32 strict rep 1 k 8 hot-last-piped tps 1183.3 refused {'decided_newer': 28}
+09:53:32 strict rep 2 k 8 disjoint start
+09:53:39 strict rep 2 k 8 disjoint tps 3612.8 refused {}
+09:53:39 strict rep 2 k 8 disjoint-piped start
+09:53:45 strict rep 2 k 8 disjoint-piped tps 3412.7 refused {}
+09:53:45 strict rep 2 k 8 hot start
+09:53:52 strict rep 2 k 8 hot tps 782.3 refused {'decided_newer': 2}
+09:53:52 strict rep 2 k 8 hot-last-piped start
+09:53:59 strict rep 2 k 8 hot-last-piped tps 1282.0 refused {'decided_newer': 38}
+09:53:59 strict driver finished
+09:53:59 DONE load=4.46 4.70 4.58

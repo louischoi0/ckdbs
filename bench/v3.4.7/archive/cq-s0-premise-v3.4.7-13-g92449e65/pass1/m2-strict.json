@@ -1,0 +1,810 @@
+{
+ "args": {
+  "host": "127.0.0.1",
+  "port": 15542,
+  "label": "strict",
+  "sessions": 8,
+  "k": "8",
+  "arms": "hot,hot-last-piped,disjoint,disjoint-piped",
+  "reps": 3,
+  "seconds": 6.0,
+  "pause_ms": 0.0,
+  "json": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s0/pass1/m2-strict.json",
+  "heartbeat": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s0/pass1/heartbeat",
+  "status": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s0/pass1/status.txt"
+ },
+ "cells": [
+  {
+   "arm": "hot",
+   "k": 8,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 4638,
+   "tps": 773.0,
+   "refused": {
+    "decided_newer": 1
+   },
+   "refusal_shapes": {
+    "row id=N was written by transaction N": 1
+   },
+   "txn": {
+    "n": 4638,
+    "p0_us": 1466.1,
+    "p25_us": 4010.2,
+    "p50_us": 6961.2,
+    "p95_us": 30245.5,
+    "p99_us": 47931.8,
+    "max_us": 89035.6
+   },
+   "debit": {
+    "n": 4638,
+    "p0_us": 262.6,
+    "p25_us": 2680.2,
+    "p50_us": 5666.6,
+    "p95_us": 28958.7,
+    "p99_us": 46192.2,
+    "max_us": 87464.3
+   },
+   "commit": {
+    "n": 4638,
+    "p0_us": 367.2,
+    "p25_us": 552.0,
+    "p50_us": 625.5,
+    "p95_us": 885.3,
+    "p99_us": 1096.0,
+    "max_us": 6981.8
+   },
+   "per_session_committed": [
+    635,
+    862,
+    409,
+    636,
+    408,
+    637,
+    407,
+    644
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.60 4.77 4.60 2/448 866033",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 15901,
+    "by_outcome": {
+     "granted": 15901
+    },
+    "by_unit_mode": {
+     "tuple/U": 15901
+    },
+    "new_rows": 15901,
+    "waited_p50_us": 1208.0,
+    "waited_p99_us": 1984.0,
+    "waited_max_us": 7382.0
+   },
+   "oracle": {
+    "hot_before": 0,
+    "hot_after": -4638,
+    "fell_by": 4638,
+    "committed": 4638,
+    "ok": true
+   }
+  },
+  {
+   "arm": "hot-last-piped",
+   "k": 8,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 7065,
+   "tps": 1177.5,
+   "refused": {
+    "decided_newer": 46
+   },
+   "refusal_shapes": {
+    "row id=N was written by transaction N": 46
+   },
+   "txn": {
+    "n": 7065,
+    "p0_us": 889.7,
+    "p25_us": 2284.7,
+    "p50_us": 3418.0,
+    "p95_us": 20506.8,
+    "p99_us": 39937.2,
+    "max_us": 362770.5
+   },
+   "debit": null,
+   "commit": {
+    "n": 7065,
+    "p0_us": 401.1,
+    "p25_us": 1691.1,
+    "p50_us": 2793.2,
+    "p95_us": 19926.8,
+    "p99_us": 39373.9,
+    "max_us": 362162.6
+   },
+   "per_session_committed": [
+    1021,
+    786,
+    966,
+    899,
+    933,
+    924,
+    737,
+    799
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.55 4.74 4.59 2/458 866165",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {
+     "granted": 16384
+    },
+    "by_unit_mode": {
+     "tuple/U": 16384
+    },
+    "new_rows": 16384,
+    "waited_p50_us": 686.0,
+    "waited_p99_us": 1361.0,
+    "waited_max_us": 7564.0
+   },
+   "oracle": {
+    "hot_before": -4638,
+    "hot_after": -11703,
+    "fell_by": 7065,
+    "committed": 7065,
+    "ok": true
+   }
+  },
+  {
+   "arm": "disjoint",
+   "k": 8,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 21800,
+   "tps": 3633.3,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 21800,
+    "p0_us": 1080.9,
+    "p25_us": 1834.5,
+    "p50_us": 2021.9,
+    "p95_us": 2722.8,
+    "p99_us": 4176.1,
+    "max_us": 163295.8
+   },
+   "debit": {
+    "n": 21800,
+    "p0_us": 53.6,
+    "p25_us": 107.6,
+    "p50_us": 130.9,
+    "p95_us": 221.8,
+    "p99_us": 295.4,
+    "max_us": 4476.0
+   },
+   "commit": {
+    "n": 21800,
+    "p0_us": 374.5,
+    "p25_us": 715.1,
+    "p50_us": 874.6,
+    "p95_us": 1281.4,
+    "p99_us": 1556.6,
+    "max_us": 158828.9
+   },
+   "per_session_committed": [
+    2695,
+    2723,
+    2742,
+    2732,
+    2739,
+    2700,
+    2746,
+    2723
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.59 4.72 4.58 2/456 866410",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {},
+    "by_unit_mode": {},
+    "new_rows": 0
+   }
+  },
+  {
+   "arm": "disjoint-piped",
+   "k": 8,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 22613,
+   "tps": 3768.8,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 22613,
+    "p0_us": 1069.5,
+    "p25_us": 1869.2,
+    "p50_us": 2066.6,
+    "p95_us": 2750.8,
+    "p99_us": 3615.6,
+    "max_us": 17818.1
+   },
+   "debit": null,
+   "commit": {
+    "n": 22613,
+    "p0_us": 423.6,
+    "p25_us": 826.8,
+    "p50_us": 993.0,
+    "p95_us": 1424.3,
+    "p99_us": 1673.6,
+    "max_us": 9995.2
+   },
+   "per_session_committed": [
+    2801,
+    2824,
+    2831,
+    2840,
+    2845,
+    2843,
+    2801,
+    2828
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.51 4.67 4.57 2/445 866582",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {},
+    "by_unit_mode": {},
+    "new_rows": 0
+   }
+  },
+  {
+   "arm": "hot",
+   "k": 8,
+   "rep": 1,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 4600,
+   "tps": 766.7,
+   "refused": {
+    "decided_newer": 2
+   },
+   "refusal_shapes": {
+    "row id=N was written by transaction N": 2
+   },
+   "txn": {
+    "n": 4600,
+    "p0_us": 1371.2,
+    "p25_us": 3310.8,
+    "p50_us": 6439.7,
+    "p95_us": 29381.7,
+    "p99_us": 50500.2,
+    "max_us": 308290.6
+   },
+   "debit": {
+    "n": 4600,
+    "p0_us": 131.5,
+    "p25_us": 2167.4,
+    "p50_us": 5208.8,
+    "p95_us": 28060.9,
+    "p99_us": 49071.5,
+    "max_us": 306987.0
+   },
+   "commit": {
+    "n": 4600,
+    "p0_us": 369.7,
+    "p25_us": 515.4,
+    "p50_us": 577.1,
+    "p95_us": 792.5,
+    "p99_us": 1043.8,
+    "max_us": 207691.7
+   },
+   "per_session_committed": [
+    1429,
+    573,
+    333,
+    695,
+    335,
+    332,
+    570,
+    333
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.55 4.66 4.56 2/453 866726",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {
+     "granted": 15247
+    },
+    "by_unit_mode": {
+     "tuple/U": 15247
+    },
+    "new_rows": 15247,
+    "waited_p50_us": 1130.0,
+    "waited_p99_us": 1817.0,
+    "waited_max_us": 208202.0
+   },
+   "oracle": {
+    "hot_before": -11703,
+    "hot_after": -16303,
+    "fell_by": 4600,
+    "committed": 4600,
+    "ok": true
+   }
+  },
+  {
+   "arm": "disjoint-piped",
+   "k": 8,
+   "rep": 1,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 21670,
+   "tps": 3611.7,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 21670,
+    "p0_us": 982.5,
+    "p25_us": 1835.8,
+    "p50_us": 2052.5,
+    "p95_us": 2799.6,
+    "p99_us": 3663.2,
+    "max_us": 277923.7
+   },
+   "debit": null,
+   "commit": {
+    "n": 21670,
+    "p0_us": 356.5,
+    "p25_us": 779.5,
+    "p50_us": 930.9,
+    "p95_us": 1361.2,
+    "p99_us": 1735.8,
+    "max_us": 230873.5
+   },
+   "per_session_committed": [
+    2722,
+    2739,
+    2718,
+    2646,
+    2716,
+    2737,
+    2648,
+    2744
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.54 4.62 4.55 2/455 866825",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {},
+    "by_unit_mode": {},
+    "new_rows": 0
+   }
+  },
+  {
+   "arm": "disjoint",
+   "k": 8,
+   "rep": 1,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 21120,
+   "tps": 3520.0,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 21120,
+    "p0_us": 1088.6,
+    "p25_us": 1976.3,
+    "p50_us": 2210.3,
+    "p95_us": 3037.7,
+    "p99_us": 3755.6,
+    "max_us": 8510.6
+   },
+   "debit": {
+    "n": 21120,
+    "p0_us": 48.3,
+    "p25_us": 109.9,
+    "p50_us": 132.4,
+    "p95_us": 247.8,
+    "p99_us": 479.2,
+    "max_us": 3419.2
+   },
+   "commit": {
+    "n": 21120,
+    "p0_us": 406.1,
+    "p25_us": 797.1,
+    "p50_us": 965.6,
+    "p95_us": 1454.5,
+    "p99_us": 1800.6,
+    "max_us": 6567.2
+   },
+   "per_session_committed": [
+    2655,
+    2665,
+    2579,
+    2661,
+    2659,
+    2654,
+    2664,
+    2583
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.58 4.61 4.55 2/461 866927",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {},
+    "by_unit_mode": {},
+    "new_rows": 0
+   }
+  },
+  {
+   "arm": "hot-last-piped",
+   "k": 8,
+   "rep": 1,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 7100,
+   "tps": 1183.3,
+   "refused": {
+    "decided_newer": 28
+   },
+   "refusal_shapes": {
+    "row id=N was written by transaction N": 28
+   },
+   "txn": {
+    "n": 7100,
+    "p0_us": 953.5,
+    "p25_us": 2208.4,
+    "p50_us": 3209.4,
+    "p95_us": 23982.4,
+    "p99_us": 46421.0,
+    "max_us": 333712.6
+   },
+   "debit": null,
+   "commit": {
+    "n": 7100,
+    "p0_us": 463.0,
+    "p25_us": 1568.0,
+    "p50_us": 2566.5,
+    "p95_us": 23287.7,
+    "p99_us": 45892.7,
+    "max_us": 332884.9
+   },
+   "per_session_committed": [
+    1222,
+    631,
+    721,
+    803,
+    1247,
+    906,
+    669,
+    901
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.45 4.56 4.53 2/454 867066",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {
+     "granted": 16384
+    },
+    "by_unit_mode": {
+     "tuple/U": 16384
+    },
+    "new_rows": 16384,
+    "waited_p50_us": 766.0,
+    "waited_p99_us": 1453.0,
+    "waited_max_us": 4540.0
+   },
+   "oracle": {
+    "hot_before": -16303,
+    "hot_after": -23403,
+    "fell_by": 7100,
+    "committed": 7100,
+    "ok": true
+   }
+  },
+  {
+   "arm": "disjoint",
+   "k": 8,
+   "rep": 2,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 21677,
+   "tps": 3612.8,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 21677,
+    "p0_us": 1018.1,
+    "p25_us": 1922.1,
+    "p50_us": 2155.3,
+    "p95_us": 2966.1,
+    "p99_us": 3702.5,
+    "max_us": 9572.3
+   },
+   "debit": {
+    "n": 21677,
+    "p0_us": 53.6,
+    "p25_us": 111.1,
+    "p50_us": 136.5,
+    "p95_us": 309.8,
+    "p99_us": 503.4,
+    "max_us": 5087.4
+   },
+   "commit": {
+    "n": 21677,
+    "p0_us": 347.5,
+    "p25_us": 751.8,
+    "p50_us": 915.6,
+    "p95_us": 1414.8,
+    "p99_us": 1834.4,
+    "max_us": 6563.2
+   },
+   "per_session_committed": [
+    2725,
+    2737,
+    2751,
+    2718,
+    2648,
+    2644,
+    2727,
+    2727
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.71 4.58 4.54 2/447 867153",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {},
+    "by_unit_mode": {},
+    "new_rows": 0
+   }
+  },
+  {
+   "arm": "disjoint-piped",
+   "k": 8,
+   "rep": 2,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 20476,
+   "tps": 3412.7,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 20476,
+    "p0_us": 1048.9,
+    "p25_us": 1921.1,
+    "p50_us": 2168.3,
+    "p95_us": 3032.9,
+    "p99_us": 3983.5,
+    "max_us": 276122.5
+   },
+   "debit": null,
+   "commit": {
+    "n": 20476,
+    "p0_us": 439.7,
+    "p25_us": 823.9,
+    "p50_us": 988.4,
+    "p95_us": 1508.7,
+    "p99_us": 2167.4,
+    "max_us": 207981.3
+   },
+   "per_session_committed": [
+    2529,
+    2573,
+    2572,
+    2573,
+    2571,
+    2586,
+    2511,
+    2561
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "4.21 4.67 4.57 3/452 867253",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {},
+    "by_unit_mode": {},
+    "new_rows": 0
+   }
+  },
+  {
+   "arm": "hot",
+   "k": 8,
+   "rep": 2,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 4694,
+   "tps": 782.3,
+   "refused": {
+    "decided_newer": 2
+   },
+   "refusal_shapes": {
+    "row id=N was written by transaction N": 2
+   },
+   "txn": {
+    "n": 4694,
+    "p0_us": 1754.9,
+    "p25_us": 3538.1,
+    "p50_us": 6721.5,
+    "p95_us": 29124.1,
+    "p99_us": 51747.3,
+    "max_us": 238245.4
+   },
+   "debit": {
+    "n": 4694,
+    "p0_us": 243.3,
+    "p25_us": 2334.9,
+    "p50_us": 5406.0,
+    "p95_us": 27696.5,
+    "p99_us": 50467.8,
+    "max_us": 237220.9
+   },
+   "commit": {
+    "n": 4694,
+    "p0_us": 355.7,
+    "p25_us": 558.2,
+    "p50_us": 628.1,
+    "p95_us": 886.6,
+    "p99_us": 1151.7,
+    "max_us": 5727.8
+   },
+   "per_session_committed": [
+    645,
+    699,
+    644,
+    646,
+    243,
+    698,
+    560,
+    559
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "4.59 4.74 4.59 2/469 867395",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {
+     "granted": 16384
+    },
+    "by_unit_mode": {
+     "tuple/U": 16384
+    },
+    "new_rows": 16384,
+    "waited_p50_us": 1172.0,
+    "waited_p99_us": 2113.0,
+    "waited_max_us": 6655.0
+   },
+   "oracle": {
+    "hot_before": -23403,
+    "hot_after": -28097,
+    "fell_by": 4694,
+    "committed": 4694,
+    "ok": true
+   }
+  },
+  {
+   "arm": "hot-last-piped",
+   "k": 8,
+   "rep": 2,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "strict",
+   "committed": 7692,
+   "tps": 1282.0,
+   "refused": {
+    "decided_newer": 38
+   },
+   "refusal_shapes": {
+    "row id=N was written by transaction N": 38
+   },
+   "txn": {
+    "n": 7692,
+    "p0_us": 1026.0,
+    "p25_us": 2238.3,
+    "p50_us": 3179.8,
+    "p95_us": 21806.7,
+    "p99_us": 41506.0,
+    "max_us": 124964.8
+   },
+   "debit": null,
+   "commit": {
+    "n": 7692,
+    "p0_us": 472.0,
+    "p25_us": 1617.3,
+    "p50_us": 2549.9,
+    "p95_us": 21105.2,
+    "p99_us": 40890.1,
+    "max_us": 124303.3
+   },
+   "per_session_committed": [
+    1290,
+    646,
+    1024,
+    1298,
+    808,
+    685,
+    1027,
+    914
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "4.42 4.70 4.58 2/463 867520",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {
+     "granted": 16384
+    },
+    "by_unit_mode": {
+     "tuple/U": 16384
+    },
+    "new_rows": 16384,
+    "waited_p50_us": 699.0,
+    "waited_p99_us": 1263.0,
+    "waited_max_us": 4275.0
+   },
+   "oracle": {
+    "hot_before": -28097,
+    "hot_after": -35789,
+    "fell_by": 7692,
+    "committed": 7692,
+    "ok": true
+   }
+  }
+ ]
+}

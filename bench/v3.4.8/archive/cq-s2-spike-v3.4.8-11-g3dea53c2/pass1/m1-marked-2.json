@@ -1,0 +1,207 @@
+{
+ "args": {
+  "host": "127.0.0.1",
+  "port": 15551,
+  "server_pid": 1189758,
+  "label": "marked-2",
+  "sessions": 8,
+  "k": "2,8",
+  "arms": "hot",
+  "reps": 1,
+  "seconds": 6.0,
+  "pause_ms": 0.0,
+  "json": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass1/m1-marked-2.json",
+  "heartbeat": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass1/heartbeat",
+  "status": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass1/status.txt"
+ },
+ "cells": [
+  {
+   "arm": "hot",
+   "k": 2,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "marked-2",
+   "committed": 41412,
+   "tps": 6902.0,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 41412,
+    "p0_us": 551.3,
+    "p25_us": 941.2,
+    "p50_us": 1136.6,
+    "p95_us": 1581.4,
+    "p99_us": 2185.2,
+    "max_us": 9453.6
+   },
+   "debit": {
+    "n": 41412,
+    "p0_us": 43.7,
+    "p25_us": 75.9,
+    "p50_us": 90.7,
+    "p95_us": 149.1,
+    "p99_us": 192.7,
+    "max_us": 6689.7
+   },
+   "commit": {
+    "n": 41412,
+    "p0_us": 331.5,
+    "p25_us": 651.0,
+    "p50_us": 800.0,
+    "p95_us": 1210.3,
+    "p99_us": 1687.7,
+    "max_us": 9015.4
+   },
+   "per_session_committed": [
+    5108,
+    5289,
+    5117,
+    5107,
+    5302,
+    5194,
+    5120,
+    5175
+   ],
+   "cores_start": [
+    0,
+    0,
+    3,
+    2,
+    1,
+    1,
+    2,
+    2
+   ],
+   "cores_end": [
+    2,
+    0,
+    3,
+    2,
+    0,
+    1,
+    3,
+    1
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "2.99 3.28 3.02 1/566 1189765",
+    "competing": []
+   },
+   "server_cpu_s": 8.62,
+   "lock_waits": {
+    "rows_in_ring": 16160,
+    "by_outcome": {
+     "granted": 16160
+    },
+    "by_unit_mode": {
+     "tuple/U": 16160
+    },
+    "new_rows": 16160,
+    "waited_p50_us": 18.0,
+    "waited_p99_us": 132.0,
+    "waited_max_us": 5150.0
+   },
+   "oracle": {
+    "ok": true,
+    "rows_checked": 73,
+    "mismatches": []
+   }
+  },
+  {
+   "arm": "hot",
+   "k": 8,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "marked-2",
+   "committed": 27520,
+   "tps": 4586.7,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 27520,
+    "p0_us": 804.6,
+    "p25_us": 1433.0,
+    "p50_us": 1618.8,
+    "p95_us": 2119.8,
+    "p99_us": 2885.5,
+    "max_us": 292634.5
+   },
+   "debit": {
+    "n": 27520,
+    "p0_us": 44.3,
+    "p25_us": 74.8,
+    "p50_us": 87.5,
+    "p95_us": 146.4,
+    "p99_us": 211.0,
+    "max_us": 4235.9
+   },
+   "commit": {
+    "n": 27520,
+    "p0_us": 323.9,
+    "p25_us": 693.6,
+    "p50_us": 824.8,
+    "p95_us": 1199.8,
+    "p99_us": 1558.1,
+    "max_us": 281869.8
+   },
+   "per_session_committed": [
+    3486,
+    3422,
+    3416,
+    3438,
+    3465,
+    3432,
+    3415,
+    3446
+   ],
+   "cores_start": [
+    2,
+    1,
+    1,
+    0,
+    3,
+    0,
+    0,
+    2
+   ],
+   "cores_end": [
+    0,
+    2,
+    3,
+    1,
+    0,
+    2,
+    3,
+    1
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.39 3.36 3.05 1/572 1189867",
+    "competing": []
+   },
+   "server_cpu_s": 11.61,
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {
+     "granted": 5809
+    },
+    "by_unit_mode": {
+     "tuple/U": 5809
+    },
+    "new_rows": 5809,
+    "waited_p50_us": 18.0,
+    "waited_p99_us": 141.0,
+    "waited_max_us": 6058.0
+   },
+   "oracle": {
+    "ok": true,
+    "rows_checked": 73,
+    "mismatches": []
+   }
+  }
+ ]
+}

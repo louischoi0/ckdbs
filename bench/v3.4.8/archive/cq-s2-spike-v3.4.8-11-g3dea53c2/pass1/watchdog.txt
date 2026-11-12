@@ -1,0 +1,4 @@
+00:47:10 age=3s last='00:47:07 base-2 rep 0 k 8 disjoint start'
+00:48:10 age=0s last='00:48:10 base-3 rep 0 k 8 hot start'
+00:49:10 age=1s last='00:49:09 plain-strict rep 0 k 8 hot start'
+00:50:10 age=6s last='00:50:04 DONE load=1.85 2.86 2.93'

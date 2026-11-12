@@ -156,6 +156,30 @@ nothing else.
   transaction (`BEGIN ISOLATION LEVEL ...`).
 - A `recv()` of zero bytes means the server closed the socket (after
   `STOP`, or a crash) — reconnect, do not spin.
+- **Write the row many transactions share last.** An `UPDATE` holds its
+  row from the statement to the transaction's end, so a transaction that
+  debits a shared row - an account, a counter, a stock level - and then
+  does other work keeps every other writer of that row waiting for all of
+  it. Put that `UPDATE` last. Measured on one host at `cores = 4`, 8
+  sessions each debiting one shared row and writing eight rows of its
+  own, `group` durability, 6 s cells, the median of three
+  (`bench/v3.4.7/results-cq-s0-premise-v3.4.7-13-g92449e65.md`):
+  `1,571 tps` with the debit first, `4,447 tps` with it last, against
+  `4,402 tps` for sessions that share no row. What it does not do:
+  - **It trades waiting for retries.** `2.5 %` of those transactions were
+    refused `TXN_CONFLICT` with `retryable = 1` (§4) with the debit last,
+    against `1.4 %` with it first.
+  - Under `strict` durability above one core the row is held across the
+    commit's sync, and the last-written form reaches about a third of
+    the unshared figure (`1,300 tps` against `3,827 tps`).
+  - Sending the debit and `COMMIT` in one write over KWP (`EXECUTE`,
+    `C_SYNC`, `C_TXN_COMMIT`, then both answers read) saves a round trip
+    and no more: `4,437 tps`, with `3.3 %` refused.
+  - A transaction that must know the debit's outcome before its other
+    work, or that waits on its user after the debit, cannot reorder and
+    pays the wait.
+  - A transaction that writes two shared rows writes them in one fixed
+    order, or the deadlock detector refuses one of two that meet.
 
 ## 6. Data rules a client must know
 

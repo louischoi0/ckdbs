@@ -1,0 +1,98 @@
+{
+ "args": {
+  "host": "127.0.0.1",
+  "port": 15540,
+  "label": "group-pause",
+  "sessions": 8,
+  "k": "0",
+  "arms": "hot",
+  "reps": 1,
+  "seconds": 20.0,
+  "pause_ms": 1200.0,
+  "json": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s0/pass1/m4p-group.json",
+  "heartbeat": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s0/pass1/heartbeat",
+  "status": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s0/pass1/status.txt"
+ },
+ "cells": [
+  {
+   "arm": "hot",
+   "k": 0,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 20.0,
+   "pause_ms": 1200.0,
+   "label": "group-pause",
+   "committed": 18,
+   "tps": 0.9,
+   "refused": {
+    "fault_net": 132
+   },
+   "refusal_shapes": {
+    "row id=N is held by transaction N, which has not decided after N ms; the write hit the lock-wait fault net and was refused. A wait ends when the holder decides,": 132
+   },
+   "txn": {
+    "n": 18,
+    "p0_us": 1201734.7,
+    "p25_us": 1595907.3,
+    "p50_us": 1599363.5,
+    "p95_us": 2197825.7,
+    "p99_us": 2197825.7,
+    "max_us": 2197825.7
+   },
+   "debit": {
+    "n": 18,
+    "p0_us": 322.7,
+    "p25_us": 394912.8,
+    "p50_us": 398357.8,
+    "p95_us": 996680.6,
+    "p99_us": 996680.6,
+    "max_us": 996680.6
+   },
+   "commit": {
+    "n": 18,
+    "p0_us": 753.5,
+    "p25_us": 835.5,
+    "p50_us": 938.4,
+    "p95_us": 1091.6,
+    "p99_us": 1091.6,
+    "max_us": 1091.6
+   },
+   "per_session_committed": [
+    3,
+    2,
+    0,
+    4,
+    1,
+    2,
+    4,
+    2
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "4.95 5.10 4.70 2/458 865702",
+    "competing": 0
+   },
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {
+     "fault_net": 132,
+     "granted": 115
+    },
+    "by_unit_mode": {
+     "tuple/U": 247
+    },
+    "new_rows": 247,
+    "waited_p50_us": 597598.0,
+    "waited_p99_us": 1001009.0,
+    "waited_max_us": 1001066.0
+   },
+   "oracle": {
+    "hot_before": 0,
+    "hot_after": -18,
+    "fell_by": 18,
+    "committed": 18,
+    "ok": true
+   }
+  }
+ ]
+}

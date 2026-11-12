@@ -1,0 +1,95 @@
+00:44:54 schedule start mode=full describe=v3.4.8-10-gf72b8232 load=1.41 3.35 3.02
+00:44:54 plain-1 rep 0 k 2 hot start
+00:45:01 plain-1 rep 0 k 2 hot tps 4424.8 refused {'decided_newer': 1188} oracle True
+00:45:01 plain-1 rep 0 k 2 hot-last-piped start
+00:45:08 plain-1 rep 0 k 2 hot-last-piped tps 6907.7 refused {'decided_newer': 3960} oracle True
+00:45:08 plain-1 rep 0 k 2 disjoint start
+00:45:15 plain-1 rep 0 k 2 disjoint tps 7426.3 refused {} oracle True
+00:45:15 plain-1 rep 0 k 8 hot start
+00:45:22 plain-1 rep 0 k 8 hot tps 1751.8 refused {'decided_newer': 192} oracle True
+00:45:22 plain-1 rep 0 k 8 hot-last-piped start
+00:45:28 plain-1 rep 0 k 8 hot-last-piped tps 4669.0 refused {'decided_newer': 1332} oracle True
+00:45:28 plain-1 rep 0 k 8 disjoint start
+00:45:35 plain-1 rep 0 k 8 disjoint tps 4550.7 refused {} oracle True
+00:45:35 plain-1 driver finished
+00:45:36 marked-1 rep 0 k 2 hot start
+00:45:43 marked-1 rep 0 k 2 hot tps 7093.2 refused {} oracle True
+00:45:43 marked-1 rep 0 k 8 hot start
+00:45:49 marked-1 rep 0 k 8 hot tps 4612.7 refused {'other': 1} oracle True
+00:45:49 marked-1 driver finished
+00:45:50 base-1 rep 0 k 8 hot start
+00:45:57 base-1 rep 0 k 8 hot tps 1799.5 refused {'decided_newer': 174} oracle True
+00:45:57 base-1 rep 0 k 8 disjoint start
+00:46:04 base-1 rep 0 k 8 disjoint tps 4662.7 refused {} oracle True
+00:46:04 base-1 driver finished
+00:46:04 plain-2 rep 0 k 2 hot start
+00:46:11 plain-2 rep 0 k 2 hot tps 4334.3 refused {'decided_newer': 1162} oracle True
+00:46:11 plain-2 rep 0 k 2 hot-last-piped start
+00:46:18 plain-2 rep 0 k 2 hot-last-piped tps 6946.0 refused {'decided_newer': 4020} oracle True
+00:46:18 plain-2 rep 0 k 2 disjoint start
+00:46:25 plain-2 rep 0 k 2 disjoint tps 7414.2 refused {} oracle True
+00:46:25 plain-2 rep 0 k 8 hot start
+00:46:31 plain-2 rep 0 k 8 hot tps 1728.3 refused {'decided_newer': 156} oracle True
+00:46:31 plain-2 rep 0 k 8 hot-last-piped start
+00:46:38 plain-2 rep 0 k 8 hot-last-piped tps 4636.5 refused {'decided_newer': 1325} oracle True
+00:46:38 plain-2 rep 0 k 8 disjoint start
+00:46:45 plain-2 rep 0 k 8 disjoint tps 4490.0 refused {} oracle True
+00:46:45 plain-2 driver finished
+00:46:46 marked-2 rep 0 k 2 hot start
+00:46:52 marked-2 rep 0 k 2 hot tps 6902.0 refused {} oracle True
+00:46:52 marked-2 rep 0 k 8 hot start
+00:46:59 marked-2 rep 0 k 8 hot tps 4586.7 refused {} oracle True
+00:46:59 marked-2 driver finished
+00:47:00 base-2 rep 0 k 8 hot start
+00:47:07 base-2 rep 0 k 8 hot tps 1715.2 refused {'decided_newer': 152} oracle True
+00:47:07 base-2 rep 0 k 8 disjoint start
+00:47:14 base-2 rep 0 k 8 disjoint tps 4658.7 refused {} oracle True
+00:47:14 base-2 driver finished
+00:47:14 plain-3 rep 0 k 2 hot start
+00:47:21 plain-3 rep 0 k 2 hot tps 4238.3 refused {'decided_newer': 1133} oracle True
+00:47:21 plain-3 rep 0 k 2 hot-last-piped start
+00:47:28 plain-3 rep 0 k 2 hot-last-piped tps 6584.5 refused {'decided_newer': 3519} oracle True
+00:47:28 plain-3 rep 0 k 2 disjoint start
+00:47:35 plain-3 rep 0 k 2 disjoint tps 7322.8 refused {} oracle True
+00:47:35 plain-3 rep 0 k 8 hot start
+00:47:41 plain-3 rep 0 k 8 hot tps 1744.5 refused {'decided_newer': 169} oracle True
+00:47:41 plain-3 rep 0 k 8 hot-last-piped start
+00:47:48 plain-3 rep 0 k 8 hot-last-piped tps 4708.2 refused {'decided_newer': 1340} oracle True
+00:47:48 plain-3 rep 0 k 8 disjoint start
+00:47:55 plain-3 rep 0 k 8 disjoint tps 4467.8 refused {} oracle True
+00:47:55 plain-3 driver finished
+00:47:56 marked-3 rep 0 k 2 hot start
+00:48:02 marked-3 rep 0 k 2 hot tps 6999.5 refused {'other': 3} oracle True
+00:48:02 marked-3 rep 0 k 8 hot start
+00:48:09 marked-3 rep 0 k 8 hot tps 4568.3 refused {} oracle True
+00:48:09 marked-3 driver finished
+00:48:10 base-3 rep 0 k 8 hot start
+00:48:17 base-3 rep 0 k 8 hot tps 1745.3 refused {'decided_newer': 148} oracle True
+00:48:17 base-3 rep 0 k 8 disjoint start
+00:48:23 base-3 rep 0 k 8 disjoint tps 4717.8 refused {} oracle True
+00:48:23 base-3 driver finished
+00:48:24 marked-pause rep 0 k 0 hot start
+00:48:45 marked-pause rep 0 k 0 hot tps 6.8 refused {} oracle True
+00:48:45 marked-pause driver finished
+00:48:46 plain-pause rep 0 k 0 hot start
+00:49:08 plain-pause rep 0 k 0 hot tps 0.9 refused {'fault_net': 131} oracle True
+00:49:08 plain-pause driver finished
+00:49:09 plain-strict rep 0 k 8 hot start
+00:49:15 plain-strict rep 0 k 8 hot tps 851.7 refused {'decided_newer': 1} oracle True
+00:49:15 plain-strict rep 0 k 8 hot-last-piped start
+00:49:22 plain-strict rep 0 k 8 hot-last-piped tps 1289.3 refused {'decided_newer': 31} oracle True
+00:49:22 plain-strict rep 0 k 8 disjoint start
+00:49:29 plain-strict rep 0 k 8 disjoint tps 3834.5 refused {} oracle True
+00:49:29 plain-strict rep 1 k 8 hot-last-piped start
+00:49:36 plain-strict rep 1 k 8 hot-last-piped tps 1254.7 refused {'decided_newer': 31} oracle True
+00:49:36 plain-strict rep 1 k 8 hot start
+00:49:43 plain-strict rep 1 k 8 hot tps 829.0 refused {'decided_newer': 1} oracle True
+00:49:43 plain-strict rep 1 k 8 disjoint start
+00:49:49 plain-strict rep 1 k 8 disjoint tps 3823.7 refused {} oracle True
+00:49:49 plain-strict driver finished
+00:49:50 marked-strict rep 0 k 8 hot start
+00:49:57 marked-strict rep 0 k 8 hot tps 1211.8 refused {} oracle True
+00:49:57 marked-strict rep 1 k 8 hot start
+00:50:04 marked-strict rep 1 k 8 hot tps 1231.8 refused {} oracle True
+00:50:04 marked-strict driver finished
+00:50:04 DONE load=1.85 2.86 2.93

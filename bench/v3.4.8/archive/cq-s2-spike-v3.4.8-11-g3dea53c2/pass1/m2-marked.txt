@@ -1,0 +1,2 @@
+{"label": "marked-strict", "arm": "hot", "k": 8, "rep": 0, "tps": 1211.8, "refused": {}}
+{"label": "marked-strict", "arm": "hot", "k": 8, "rep": 1, "tps": 1231.8, "refused": {}}

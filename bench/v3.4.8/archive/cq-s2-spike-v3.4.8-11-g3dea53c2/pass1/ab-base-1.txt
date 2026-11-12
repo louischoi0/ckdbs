@@ -1,0 +1,2 @@
+{"label": "base-1", "arm": "hot", "k": 8, "rep": 0, "tps": 1799.5, "refused": {"decided_newer": 174}}
+{"label": "base-1", "arm": "disjoint", "k": 8, "rep": 0, "tps": 4662.7, "refused": {}}

@@ -1,0 +1,211 @@
+{
+ "args": {
+  "host": "127.0.0.1",
+  "port": 15551,
+  "server_pid": 1203552,
+  "label": "marked-2",
+  "sessions": 8,
+  "k": "2,8",
+  "arms": "hot",
+  "reps": 1,
+  "seconds": 6.0,
+  "pause_ms": 0.0,
+  "json": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass2/m1-marked-2.json",
+  "heartbeat": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass2/heartbeat",
+  "status": "/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2/pass2/status.txt"
+ },
+ "cells": [
+  {
+   "arm": "hot",
+   "k": 2,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "marked-2",
+   "committed": 40904,
+   "tps": 6817.3,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 40904,
+    "p0_us": 534.3,
+    "p25_us": 948.9,
+    "p50_us": 1162.4,
+    "p95_us": 1586.9,
+    "p99_us": 1980.1,
+    "max_us": 7644.8
+   },
+   "debit": {
+    "n": 40904,
+    "p0_us": 44.3,
+    "p25_us": 76.6,
+    "p50_us": 92.7,
+    "p95_us": 153.4,
+    "p99_us": 196.9,
+    "max_us": 5833.0
+   },
+   "commit": {
+    "n": 40904,
+    "p0_us": 319.9,
+    "p25_us": 663.1,
+    "p50_us": 821.3,
+    "p95_us": 1205.9,
+    "p99_us": 1520.4,
+    "max_us": 7309.4
+   },
+   "per_session_committed": [
+    5150,
+    5026,
+    5059,
+    5036,
+    5081,
+    5208,
+    5202,
+    5142
+   ],
+   "cores_start": [
+    1,
+    3,
+    3,
+    3,
+    2,
+    1,
+    2,
+    0
+   ],
+   "cores_end": [
+    1,
+    3,
+    2,
+    3,
+    2,
+    0,
+    0,
+    1
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.38 2.12 2.26 2/546 1203559",
+    "competing": [
+     "1192354 /bin/bash -c source /home/louis/.claude/shell-snapshots/snapshot-bash-1794385760540-q3ytlk.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'S=/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2 && ctest --test-dir build -LE bs-nightly -j4 > $S/suite3.log 2>&1; echo \"SUITE_EXIT=$?\"; grep '\"'\"'tests passed'\"'\"' $S/suite3.log; $S/launch.sh pass2 full; tail -1 $S/pass2/status.txt' < /dev/null && pwd -P >| /tmp/claude-7564-cwd"
+    ]
+   },
+   "server_cpu_s": 8.68,
+   "lock_waits": {
+    "rows_in_ring": 15716,
+    "by_outcome": {
+     "granted": 15716
+    },
+    "by_unit_mode": {
+     "tuple/U": 15716
+    },
+    "new_rows": 15716,
+    "waited_p50_us": 18.0,
+    "waited_p99_us": 142.0,
+    "waited_max_us": 1013.0
+   },
+   "oracle": {
+    "ok": true,
+    "rows_checked": 73,
+    "mismatches": []
+   }
+  },
+  {
+   "arm": "hot",
+   "k": 8,
+   "rep": 0,
+   "sessions": 8,
+   "seconds": 6.0,
+   "pause_ms": 0.0,
+   "label": "marked-2",
+   "committed": 27402,
+   "tps": 4567.0,
+   "refused": {},
+   "refusal_shapes": {},
+   "txn": {
+    "n": 27402,
+    "p0_us": 807.3,
+    "p25_us": 1444.9,
+    "p50_us": 1636.9,
+    "p95_us": 2156.9,
+    "p99_us": 2562.4,
+    "max_us": 281003.4
+   },
+   "debit": {
+    "n": 27402,
+    "p0_us": 37.5,
+    "p25_us": 75.2,
+    "p50_us": 88.5,
+    "p95_us": 152.0,
+    "p99_us": 231.8,
+    "max_us": 2059.3
+   },
+   "commit": {
+    "n": 27402,
+    "p0_us": 369.5,
+    "p25_us": 706.0,
+    "p50_us": 843.4,
+    "p95_us": 1246.6,
+    "p99_us": 1557.9,
+    "max_us": 280259.0
+   },
+   "per_session_committed": [
+    3425,
+    3468,
+    3452,
+    3402,
+    3420,
+    3447,
+    3382,
+    3406
+   ],
+   "cores_start": [
+    1,
+    3,
+    0,
+    0,
+    0,
+    1,
+    1,
+    3
+   ],
+   "cores_end": [
+    1,
+    1,
+    0,
+    3,
+    2,
+    0,
+    2,
+    3
+   ],
+   "fatal": [],
+   "host": {
+    "loadavg": "3.51 2.17 2.27 2/538 1203611",
+    "competing": [
+     "1192354 /bin/bash -c source /home/louis/.claude/shell-snapshots/snapshot-bash-1794385760540-q3ytlk.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'S=/tmp/claude-1000/-home-louis-ckdbs/3b3f74ff-c58d-49b7-accd-f52f3f568ee0/scratchpad/cq-s2 && ctest --test-dir build -LE bs-nightly -j4 > $S/suite3.log 2>&1; echo \"SUITE_EXIT=$?\"; grep '\"'\"'tests passed'\"'\"' $S/suite3.log; $S/launch.sh pass2 full; tail -1 $S/pass2/status.txt' < /dev/null && pwd -P >| /tmp/claude-7564-cwd"
+    ]
+   },
+   "server_cpu_s": 11.52,
+   "lock_waits": {
+    "rows_in_ring": 16384,
+    "by_outcome": {
+     "granted": 5737
+    },
+    "by_unit_mode": {
+     "tuple/U": 5737
+    },
+    "new_rows": 5737,
+    "waited_p50_us": 19.0,
+    "waited_p99_us": 164.0,
+    "waited_max_us": 358.0
+   },
+   "oracle": {
+    "ok": true,
+    "rows_checked": 73,
+    "mismatches": []
+   }
+  }
+ ]
+}

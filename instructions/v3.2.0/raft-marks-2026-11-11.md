@@ -44,3 +44,58 @@
 | **Mark** | **`v3.4.8`**, an annotated tag on `main` at `b0c11e0a`, the head of `origin/main` when the tag was taken. It carries CP whole: the slice unit deleted (`0ddfbfab`), the `U` mode (`766f6a6d`), the close (§4). Its message states what CP built, that nothing of it persists on disk, the close's measurement, and the gaps that bound it - CP-Q10 (a)'s accepted deadlock class, the `U` mode with no throughput number, scenario 0 unresolved, the cells not measured, C3 and C4 not built. The full Debug suite ran 4427/4427 at `7d21468a`, whose build inputs the tagged commit shares, so the tag was pushed with `--no-verify`. CLAUDE.md's version line moved to `v3.4.8` |
 | **Does not settle** | nothing of CP; the next version is the operator's to name |
 | **Recorded at** | this file; the tag message; CLAUDE.md's Version Management; the CP order's §7 close entry; `instructions/v3.2.0/index.md` |
+
+## 6. CQ written: column reservations, an exploratory proof of concept
+
+| | |
+|---|---|
+| **Word** | W0: *"Among the features KDBS could borrow, is there an OLTP-specialized feature of Oracle's?"*; W1, after CLA's ranked answer: *"Write a milestone document that borrows feature 1. It is an exploratory (experimental, empirical) milestone and the proof of concept comes first. Adopting it must weigh cost against benefit. Write the milestone document first."*; W2: *"No, not a concept document - write a work order under instructions."* (given in Korean; recorded in English), in another session than §1's and §2's |
+| **Mark** | **CQ written**, `workorder-cq-column-reservation.md`, on `worktree-cq-lock-free-reservation`: Oracle 23ai's Lock-Free Reservation as an exploratory order whose deliverable is a benefit-against-cost ledger and whose spike stays on the branch. Documents only; the suite not executed |
+| **Does not settle** | whether CQ opens; **CQ-Q1** - how CN-7's rulings R1-R3 read against a marked column - which is the operator's alone; CQ-Q0 and CQ-Q2..Q9, which carry CLA's proposals unmarked; a merge to `main`, a push |
+| **Recorded at** | this file; the order's header; the CQ row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 7. CQ opened: CQ-Q1 (a), the rest as proposed; CQ-S0 to start in 40 minutes
+
+| | |
+|---|---|
+| **Word** | W3, at 09:00 UTC, after CQ's report: *"Start this work in 40 minutes."*; asked how that reads against CQ-Q1, the operator chose *"(a) explore as an exception"*, the option stating that CQ-Q0 and CQ-Q2..Q9 are adopted as CLA proposed and that work starts from S0 (given in Korean; recorded in English) |
+| **Mark** | **CQ opened. CQ-Q1 (a) is the operator's own mark**: CN-7's R1, R2 and R3 are set aside for the spike only, nothing ships, and the rulings are put again at CQ-S3 with the ledger. **CQ-Q0 (a), CQ-Q2 (a), CQ-Q3 (a), CQ-Q4 (a), CQ-Q5 (a), CQ-Q6 (a), CQ-Q7 (a), CQ-Q8 (a), CQ-Q9 (a)** adopted as CLA proposed, by the same choice. CQ-S0 is scheduled for about 09:40 UTC in the session that wrote the order |
+| **Does not settle** | anything past CQ-S0's verdict; CN-7's rulings outside the spike; a merge to `main`, a push |
+| **Recorded at** | this file; the order's header and §5; the CQ row and this file's row in `instructions/v3.2.0/index.md` |
+
+
+## 8. CQ-Q10 (a): CQ-S1 only, S2 to be put again
+
+| | |
+|---|---|
+| **Word** | W4, after CQ-S0's report: *"CQ-Q10 $!a, proceed with S1."* (given in Korean; recorded in English), in the session that ran S0 |
+| **Mark** | **CQ-Q10 (a)**: the model (CQ-S1) and K2's and K8's lists are written, and S2 is put to the operator again with them. CQ-Q6 (a)'s schedule is amended to that extent: the judgement it left to S3 is taken before the spike is paid for |
+| **Does not settle** | whether S2 is built (CQ-Q15); CQ-Q11..CQ-Q14 and CQ-Q16, which S1 raises; CN-7's rulings outside the spike; a merge to `main`, a push |
+| **Recorded at** | this file; the order's header, §5, §8 and §9; the CQ row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 9. CQ-Q11..CQ-Q16 (a): CQ-S2, the reduced spike
+
+| | |
+|---|---|
+| **Word** | W5, given on 2026-11-12 after CQ-S1's report: *"CQ-Q11~Q16 $!a, proceed with S2."* (given in Korean; recorded in English), in the session that ran S0 and S1. Recorded in this file beside W4 because it continues that day's exchange |
+| **Mark** | **CQ-Q11 (a)**: a `COMMIT` refused in its apply rolls the transaction back and ends it. **CQ-Q12 (a)**: a reserving statement's row count is read from the newest committed version. **CQ-Q13 (a)**: the apply does not ask the archive's gate. **CQ-Q14 (a)**: the apply's two view tests are replaced by "the writer is committed", an exception to `txn.md` §5 for the spike. **CQ-Q15 (a)**: the reduced spike - a floor on one `int64` column, every other write of the column refused, CQ-Q5 (b)'s refusal at once. **CQ-Q16 (a)**: a starving `DELETE` is accepted |
+| **Does not settle** | CQ-S3 and its verdict; CN-7's rulings outside the spike, which CQ-Q1 (a) puts again at S3; whether anything of the spike leaves the branch (CQ-Q2 (a) says nothing does); a merge to `main`, a push |
+| **Recorded at** | this file; the order's header, §5 and §8; the CQ row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 10. CQ-S3: the verdict is narrow
+
+| | |
+|---|---|
+| **Word** | W6, on 2026-11-12 after CQ-S2's report: *"Proceed with S3."*; asked how CQ closes against S0's to S2's results, the operator chose *"narrow"*, the option stating that C1 is not adopted, that the advice to put the debit last and send it with `COMMIT` goes into the client manual, that the re-run (A1) stays in `docs/pending/`, that the model and the numbers stay in the order as a design record, that the spike's code is reverted on the branch, and that CN-7's R1 to R3 stand (given in Korean; recorded in English). Recorded in this file beside W4 and W5 because it continues that exchange |
+| **Mark** | **CQ closed, narrow.** The column reservation (C1) is not adopted. CQ-Q1 (a)'s exception ends with the spike: **CN-7's R1, R2 and R3 stand as ruled** |
+| **Does not settle** | A1, the re-run under `READ COMMITTED`, which stays the operator's pending question; a merge of the work branch to `main`, a push; a version |
+| **Recorded at** | this file; the order's header, §5 and §8; the CQ row and this file's row in `instructions/v3.2.0/index.md`; `docs/conceptnotes/cn7-delta-verbs.md` §6; `manual/client/client.md` §5 |
+
+## 11. CQ landed by a squash merge
+
+| | |
+|---|---|
+| **Word** | W7, on 2026-11-12 after CQ-S3's report, which said a `--no-ff` merge would carry the spike's two commits into `main`'s history: *"Merge into main with a squash merge and push with no-verify."* (given in Korean; recorded in English) |
+| **Mark** | **CQ lands on `main` as one squashed commit**, pushed with the pre-push hook skipped. `f72b8232` and `3dea53c2` stay on `worktree-cq-lock-free-reservation` |
+| **Does not settle** | a tag, a version; A1, which stays the operator's pending question |
+| **Recorded at** | this file; the order's header and §8; the CQ row in `instructions/v3.2.0/index.md` |

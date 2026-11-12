@@ -1,0 +1,15 @@
+{"label": "strict", "arm": "hot", "k": 8, "rep": 0, "tps": 823.0, "refused": {}}
+{"label": "strict", "arm": "hot-last", "k": 8, "rep": 0, "tps": 1300.0, "refused": {"decided_newer": 37}}
+{"label": "strict", "arm": "hot-last-piped", "k": 8, "rep": 0, "tps": 1294.7, "refused": {"decided_newer": 35}}
+{"label": "strict", "arm": "disjoint", "k": 8, "rep": 0, "tps": 3826.7, "refused": {}}
+{"label": "strict", "arm": "disjoint-piped", "k": 8, "rep": 0, "tps": 3827.0, "refused": {}}
+{"label": "strict", "arm": "hot-last", "k": 8, "rep": 1, "tps": 1174.3, "refused": {"decided_newer": 22}}
+{"label": "strict", "arm": "hot", "k": 8, "rep": 1, "tps": 805.3, "refused": {}}
+{"label": "strict", "arm": "disjoint-piped", "k": 8, "rep": 1, "tps": 4042.7, "refused": {}}
+{"label": "strict", "arm": "disjoint", "k": 8, "rep": 1, "tps": 3784.8, "refused": {}}
+{"label": "strict", "arm": "hot-last-piped", "k": 8, "rep": 1, "tps": 1222.0, "refused": {"decided_newer": 24}}
+{"label": "strict", "arm": "disjoint-piped", "k": 8, "rep": 2, "tps": 3851.8, "refused": {}}
+{"label": "strict", "arm": "hot", "k": 8, "rep": 2, "tps": 869.2, "refused": {}}
+{"label": "strict", "arm": "hot-last", "k": 8, "rep": 2, "tps": 1322.3, "refused": {"decided_newer": 29}}
+{"label": "strict", "arm": "hot-last-piped", "k": 8, "rep": 2, "tps": 1232.8, "refused": {"decided_newer": 21}}
+{"label": "strict", "arm": "disjoint", "k": 8, "rep": 2, "tps": 3873.8, "refused": {}}
