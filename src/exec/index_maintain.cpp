@@ -275,6 +275,17 @@ StatusOr<std::optional<UniqueKey>> EncodeUniqueKey(const catalog::TableAccess& a
     return std::optional<UniqueKey>{std::move(out)};
 }
 
+bool SameUniqueKey(const catalog::TableAccess& access, const catalog::TableAccess::IndexRef& ix,
+                   const UniqueKey& a, const UniqueKey& b) {
+    for (std::size_t i = 0; i < ix.nkeys; ++i) {
+        if (!CompareValues(access.schema.columns[ix.key_cols[i]].type_val, a.values[i],
+                           b.values[i], parser::CompareOp::kEq)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 txn::LockKey UniqueKeyUnit(const catalog::TableAccess& access,
                            const catalog::TableAccess::IndexRef& ix, const UniqueKey& key) {
     // FNV-1a over the index oid and the encoded key. Not a persisted format:

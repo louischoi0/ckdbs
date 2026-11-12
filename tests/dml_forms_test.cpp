@@ -288,6 +288,25 @@ TEST_F(DmlFormsTest, OnConflictArbitratesOnTheOneColumnOfAUniqueIndex) {
                   "the arbiter is the tuple key or the one column of a unique index");
 }
 
+// A string key's index encoding is its first 32 bytes (IX6), so two values
+// that share them encode alike and are still two keys (BX-R1): the statement
+// writes both, and only the same value twice is one row met twice.
+TEST_F(DmlFormsTest, OnConflictTellsApartStringKeysThatShareTheEncodedPrefix) {
+    Ok("CREATE TABLE refs (id int64, ref varchar(64), v int64) BTREE");
+    Ok("CREATE UNIQUE INDEX refs_ref ON refs (ref)");
+    const std::string p(32, 'p');
+    const std::string upsert = " ON CONFLICT (ref) DO UPDATE SET v = EXCLUDED.v";
+    Ok("INSERT INTO refs (ref, v) VALUES ('" + p + "-A', 1), ('" + p + "-B', 2)" + upsert);
+    ExpectRows("SELECT COUNT(*) FROM refs", {"count(*)", "2"});
+    ExpectRefused("INSERT INTO refs (ref, v) VALUES ('" + p + "-C', 1), ('" + p + "-C', 2)" + upsert,
+                  "names the same unique key");
+    // A conflict on one of the two updates that one alone.
+    Ok("INSERT INTO refs (ref, v) VALUES ('" + p + "-A', 7)" + upsert);
+    ExpectRows("SELECT v FROM refs WHERE ref = '" + p + "-A'", {"v", "7"});
+    ExpectRows("SELECT v FROM refs WHERE ref = '" + p + "-B'", {"v", "2"});
+    ExpectRows("SELECT COUNT(*) FROM refs", {"count(*)", "2"});
+}
+
 // ---- UPDATE ... FROM and DELETE ... USING (BU-Q16) ---------------------------
 
 TEST_F(DmlFormsTest, UpdateFromWritesTheRowsThatMatchExactlyOneFromRow) {

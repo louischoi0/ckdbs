@@ -209,6 +209,14 @@ StatusOr<std::optional<UniqueKey>> EncodeUniqueKey(const catalog::TableAccess& a
                                                    std::uint16_t first_col_pos,
                                                    std::span<const parser::AstValue> previous = {});
 
+// Whether `a` and `b` are one key of `ix`: every key column's value equal,
+// by the engine's own comparison. **Never `encoded` equality**, which on a
+// string column is a prefix test (`index_key.hpp`, IX6): two values sharing
+// their first `kIndexStringKeyBytes` bytes encode alike and are two keys
+// (BX-R1).
+bool SameUniqueKey(const catalog::TableAccess& access, const catalog::TableAccess::IndexRef& ix,
+                   const UniqueKey& a, const UniqueKey& b);
+
 // The lock unit a writer of `key` takes `X` from its check to its append
 // (BX-R3, BX-Q2 (a)): the relation's oid, and a hash of the index's oid and
 // the encoded key.

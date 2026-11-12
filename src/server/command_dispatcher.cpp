@@ -6636,7 +6636,10 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
     };
     std::vector<RowPlan> plans(shaped.rows.size());
     std::set<std::uint64_t> keys_seen;
-    std::set<std::vector<std::byte>> uniques_seen;
+    // Keyed by the encoded key and compared by value: on a string column
+    // the encoding is a prefix (IX6), and two rows that share one are two
+    // keys unless `SameUniqueKey` says otherwise.
+    std::map<std::vector<std::byte>, std::vector<std::size_t>> uniques_seen;
     for (std::size_t k = 0; k < shaped.rows.size(); ++k) {
         const std::vector<parser::AstValue>& r = shaped.rows[k];
         RowPlan& p = plans[k];
@@ -6654,7 +6657,11 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
             if (key.ok() && key.value().has_value()) {
                 p.unique = std::move(*key.value());
                 p.byte = p.unique->values.empty() ? 0 : p.unique->values.front().byte_offset;
-                repeated = !uniques_seen.insert(p.unique->encoded).second;
+                std::vector<std::size_t>& alike = uniques_seen[p.unique->encoded];
+                repeated = std::ranges::any_of(alike, [&](std::size_t earlier) {
+                    return exec::SameUniqueKey(*ta, *arbiter, *plans[earlier].unique, *p.unique);
+                });
+                alike.push_back(k);
             }
         }
         if (repeated && update) {
@@ -6862,7 +6869,8 @@ StatusOr<bool> CommandDispatcher::RowHoldsUniqueKey(const catalog::TableAccess& 
     }
     auto now = exec::EncodeUniqueKey(ta, ix, image, /*first_col_pos=*/0, {});
     if (!now.ok() || !now.value().has_value()) return false;
-    return now.value()->encoded == key.encoded;
+    // By value: equal encodings are a shared prefix on a string key (IX6).
+    return exec::SameUniqueKey(ta, ix, *now.value(), key);
 }
 
 std::optional<Status> CommandDispatcher::InsertOneRow(
@@ -10097,9 +10105,10 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     std::optional<std::pair<std::uint64_t, UniqueKeysOfRow>> unique_pending;
     std::optional<std::pair<std::uint64_t, UniqueKeysOfRow>> unique_cleared;
     UniqueKeyHolds unique_holds(locks_, scope.txn);
-    const auto same_keys = [](const UniqueKeysOfRow& a, const UniqueKeysOfRow& b) {
-        return std::ranges::equal(a, b, [](const auto& x, const auto& y) {
-            return x.first == y.first && x.second.encoded == y.second.encoded;
+    const auto same_keys = [&ta](const UniqueKeysOfRow& a, const UniqueKeysOfRow& b) {
+        return std::ranges::equal(a, b, [&ta](const auto& x, const auto& y) {
+            // By value, not by encoding: a string key encodes a prefix (IX6).
+            return x.first == y.first && exec::SameUniqueKey(ta, *x.first, x.second, y.second);
         });
     };
 
