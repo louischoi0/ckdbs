@@ -888,6 +888,43 @@ TEST_F(CommandDispatcherTest, WithIsDeclinedByNameRatherThanAsAnUnknownCommand) 
     EXPECT_EQ(out.response.find("unknown command"), std::string::npos) << out.response;
 }
 
+TEST_F(CommandDispatcherTest, AVerbFollowedByANewlineRoutesAsTheVerb) {
+    // KWP hands SQL over verbatim and the lexer calls every `isspace` byte
+    // whitespace, so a statement broken after its verb is the statement.
+    // The router ended its first token at space and tab alone, so `SELECT\n`
+    // matched nothing: "unknown command" for an admin, and for a lesser
+    // role a permission refusal naming admin.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE\nTABLE nl (id INT64, v INT64)").response.rfind("CREATED", 0), 0u);
+    EXPECT_EQ(d.Dispatch("INSERT\r\nINTO nl VALUES (1, 7)").response.rfind("INSERTED", 0), 0u);
+    EXPECT_EQ(d.Dispatch("UPDATE\n\tnl SET v = 8 WHERE id = 1").response, "UPDATED 1");
+    const std::string rows = d.Dispatch("SELECT\n  id, v\nFROM nl").response;
+    EXPECT_NE(rows.find("1,8"), std::string::npos) << rows;
+
+    Session reader;
+    reader.set_role(Role::kReadOnly);
+    const std::string read = d.Dispatch("SELECT\n* FROM nl", &reader).response;
+    EXPECT_NE(read.find("1,8"), std::string::npos) << read;
+}
+
+TEST_F(CommandDispatcherTest, ReturningWithoutATransactionManagerIsRefusedBeforeTheWrite) {
+    // RETURNING reads its rows off the writing transaction's trail, and a
+    // dispatcher with no manager keeps none. The refusal used to come after
+    // the write - placed and, with no manager, committed - so the client
+    // read ERR for a statement that had happened.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE rt (id INT64, v INT64)").response.rfind("CREATED", 0), 0u);
+    ASSERT_EQ(d.Dispatch("INSERT INTO rt VALUES (1, 1)").response.rfind("INSERTED", 0), 0u);
+    for (const char* sql : {"INSERT INTO rt VALUES (2, 2) RETURNING id",
+                            "UPDATE rt SET v = 9 WHERE id = 1 RETURNING v",
+                            "DELETE FROM rt WHERE id = 1 RETURNING id"}) {
+        const DispatchOutcome out = d.Dispatch(sql);
+        EXPECT_EQ(out.status.code(), StatusCode::kNotImplemented) << sql << " -> " << out.response;
+    }
+    EXPECT_EQ(d.Dispatch("SELECT * FROM rt").response, "id,v\\n1,1")
+        << "a refused RETURNING statement wrote its row";
+}
+
 // ---- Catalog views (sys.*) ------------------------------------------------
 
 TEST_F(CommandDispatcherTest, CatalogViewsAreSelectable) {

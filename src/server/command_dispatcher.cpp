@@ -140,8 +140,13 @@ bool NamesTupleKey(const catalog::Schema& schema, std::string_view name) {
 // be matched one token at a time without pulling in a real tokenizer.
 std::pair<std::string_view, std::string_view> SplitFirstToken(std::string_view line) {
     line = Trim(line);
-    std::size_t sp = line.find_first_of(" \t");
-    if (sp == std::string_view::npos) return {line, std::string_view{}};
+    // The token ends at any byte `Trim` and the lexer call whitespace: KWP
+    // hands SQL over verbatim, and `SELECT\n  id ...` is the statement
+    // `SELECT id ...` is. Ending it at space and tab alone routed the verb
+    // as `SELECT\n`, which matches nothing.
+    std::size_t sp = 0;
+    while (sp < line.size() && !std::isspace(static_cast<unsigned char>(line[sp]))) ++sp;
+    if (sp == line.size()) return {line, std::string_view{}};
     return {line.substr(0, sp), Trim(line.substr(sp + 1))};
 }
 
@@ -296,13 +301,6 @@ Status StatusFromErrorReply(std::string_view reply) {
     // the line the dispatcher wrote whichever of them it was.
     return Status::InvalidArgument(std::string(reply));
 }
-
-// Whether a write is checked against a Bound Cabin - true since AST07,
-// whose enforcer runs in the three write paths. Still a conjunct rather
-// than a constant `1` in the replies, because enforcement also needs the
-// *registry* to hold the assertion: one the registry cannot enforce is not
-// enforced however true this constant is (`assertion.md` §6.1, §8.1).
-constexpr bool kWritePathEnforcesAssertions = true;
 
 stats::LockWaitRecord CommandDispatcher::LockWaitRow(const txn::LockKey& key,
                                                     txn::LockMode mode, std::uint64_t waiter,
@@ -1259,7 +1257,10 @@ DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Sessi
     Status s = wal_->DrainOnce();
     if (s.ok()) s = wal_->EnsureDurable(outcome.pending_lsn);
     if (!s.ok()) {
-        DispatchOutcome refused{ErrorReply(s), outcome.should_stop};
+        // The `Status` with the line, as `DispatchAsync`'s arm carries it: a
+        // typed caller reads `status`, and the bare line folds to
+        // `InvalidArgument`, which a failed device sync is not.
+        DispatchOutcome refused{ErrorReply(s), outcome.should_stop, 0, s};
         refused.fetch_id = outcome.fetch_id;  // still this shape's call (BO-S5)
         return refused;
     }
@@ -2375,7 +2376,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
     // under a real transaction - the session's, or an implicit one this
     // scope opens and FinishDdlStatement resolves - so a crash mid-DDL
     // has a loser recovery can roll back.
-    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+    return InDdlStatement(session, [&](WriteScope&) -> DispatchOutcome {
         if (args.empty()) {
             return {"ERR CREATE TABLE requires a name", false};
         }
@@ -2399,14 +2400,13 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
             return *exists;
         }
 
-        catalog::Schema schema;
-        DdlScope ddl = DdlScopeFor(scope);
-        auto oid = catalog_.CreateTable(create_ns.value(), name, schema, ddl.trx_id, ddl.sink());
-        NoteDdlRows(ddl);  // before the status, for the partial-write reason above
-        if (!oid.ok()) {
-            return {ErrorReply(oid.status()), false, 0, oid.status()};
-        }
-        return {"CREATED oid=" + std::to_string(oid.value()), false};
+        // **The form names no column, and a relation with none is refused**:
+        // the refusal `Catalog::CreateTable` opens with, asked here directly.
+        // Handing it an empty schema opened a DDL scope - an undo hook, a
+        // memo invalidation at the statement's end - for a create that
+        // could not happen, and kept a `CREATED` reply nothing reached.
+        const Status no_columns = catalog::CheckKeystoneColumn(catalog::Schema{});
+        return {ErrorReply(no_columns), false, 0, no_columns};
     });
 }
 
@@ -2930,7 +2930,7 @@ DispatchOutcome AssertionBuildRun::Publish(const Status& ran) {
     os << "CREATED ASSERTION name=" << stmt.name << " assertion_id=" << result.assertion_id
        << " on=" << stmt.table_name << " cabin_root=" << result.cabin_root
        << " rows=" << result.rows_incorporated << " groups=" << result.group_count
-       << " enforcing=" << (kWritePathEnforcesAssertions ? 1 : 0);
+       << " enforcing=1";
     if (d_.logging(LogLevel::kInfo)) {
         d_.log_->Info("ddl", "created assertion '" + stmt.name + "' on '" + stmt.table_name +
                                  "' (built, enforcing)");
@@ -3533,6 +3533,20 @@ StatusOr<catalog::Oid> CommandDispatcher::AlterColumnRelation(const parser::Alte
     if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, oid.value());
         held.has_value()) {
         return *held;
+    }
+    // **The memo made current and the name asked again under the `X`**, as
+    // `RENAME` does both (`HandleAlter`). The statement's head settled the
+    // memo before the grant, and a grant nobody contended re-runs nothing:
+    // a DDL another core finished in between - a `DROP COLUMN` that left a
+    // heap one declared column, a rename that moved the name - would be
+    // missing from what the caller's checks read, and the write would land
+    // on the oid resolved before it.
+    catalog_.Revalidate();
+    auto settled = ResolveAlterTarget(stmt, session);
+    if (!settled.ok()) return settled.status();
+    if (settled.value() != oid.value()) {
+        return Status::TxnConflict("relation '" + stmt.table_name +
+                                   "' changed while the ALTER waited for it - retry");
     }
     return oid.value();
 }
@@ -4283,6 +4297,20 @@ StatusOr<std::vector<const catalog::SysColumnRow*>> InsertTargetColumns(
     return out;
 }
 
+// **RETURNING with no transaction, refused before the first row.** Its rows
+// are read off the writing transaction's trail, and a dispatcher with no
+// manager keeps none - but the refusal used to come from `WithReturning`,
+// after the write was placed (and, with no manager, committed): the client
+// read ERR for a statement that had happened. Asked by every write path once
+// its relation is resolved and before any row work.
+std::optional<Status> ReturningWithoutTransaction(const parser::Returning& returning,
+                                                  const txn::Transaction* txn) {
+    if (returning.items.empty() || txn != nullptr) return std::nullopt;
+    return Status::NotImplemented(
+        "RETURNING needs the transaction manager, whose trail names the rows written (byte " +
+        std::to_string(returning.byte_offset) + ")");
+}
+
 // **The values written as expressions, typed and evaluated** (BU-S8): each
 // for the column its position reaches - the listed column, or the live
 // column at its position, one later when the row leaves its tuple key out -
@@ -4291,8 +4319,8 @@ StatusOr<std::vector<const catalog::SysColumnRow*>> InsertTargetColumns(
 // expression naming a column is refused; a row whose length reaches no
 // column is left to the arity refusal below.
 StatusOr<parser::InsertStmt> EvaluateInsertExpressions(const catalog::TableAccess& ta,
-                                                       const parser::InsertStmt& written) {
-    const exec::StatementContext context = exec::StatementContextNow();
+                                                       const parser::InsertStmt& written,
+                                                       const exec::StatementContext& context) {
     parser::InsertStmt out = written;
     out.value_exprs.clear();
     for (const parser::InsertStmt::ValueExpr& v : written.value_exprs) {
@@ -5373,7 +5401,8 @@ std::function<Status(const exec::AppendedSpill&)> CommandDispatcher::SpillLogFor
         // chain logs against a page redo never built, which refuses the mount.
         // Logged, the value is one leaked slot no row names and no undo
         // record releases.
-        const Status noted = NoteSpills(scope, rel_oid, tuple_key, {spill});
+        const Status noted = txn_->NoteVarHeapAppend(*scope.txn, rel_oid, spill.ptr.page_id,
+                                                     spill.ptr.slot, tuple_key);
         const Status logged = exec::LogSpill(wal_, page_store_, spill, txn_id, rel_oid);
         return noted.ok() ? logged : noted;
     };
@@ -5411,12 +5440,6 @@ exec::IndexWriteLog CommandDispatcher::IndexWriteLogFor(const WriteScope& scope,
     };
 }
 
-Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id) {
-    // The one writer (storage/log_page_image.hpp), kept as a member only
-    // for its callers' brevity.
-    return storage::LogFullPageImage(wal_, page_store_, txn_id, page_id);
-}
-
 // The durability a statement with no commit record owes its
 // acknowledgement (workplan-rv3-catalog-recovery.md's remainder round):
 // assertion, cabin and ALTER DDL write no commit record of their own, so
@@ -5437,21 +5460,6 @@ Status CommandDispatcher::AwaitDdlDurability() {
         return Status::OK();
     }
     return wal_->SyncAll();
-}
-
-
-Status CommandDispatcher::NoteSpills(const WriteScope& scope, std::uint32_t rel_oid,
-                                     std::uint64_t tuple_key,
-                                     const std::vector<exec::AppendedSpill>& spills) {
-    if (scope.txn == nullptr) return Status::OK();
-    for (const exec::AppendedSpill& spill : spills) {
-        if (Status s = txn_->NoteVarHeapAppend(*scope.txn, rel_oid, spill.ptr.page_id,
-                                                spill.ptr.slot, tuple_key);
-            !s.ok()) {
-            return s;
-        }
-    }
-    return Status::OK();
 }
 
 Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed,
@@ -5612,9 +5620,14 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     auto opened = BeginWrite(session);
     if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
     WriteScope scope = opened.value();
+    // **One context for the statement** (`functions.hpp`): the values, an
+    // `INSERT ... SELECT`'s source, every `ON CONFLICT` update arm and the
+    // RETURNING list read one `NOW()`.
+    const exec::StatementContext context = StatementContextFor(session);
 
     return FinishWrite(session, scope,
-                       WithReturning(line, session, scope, InsertInner(line, scope)),
+                       WithReturning(line, session, scope, InsertInner(line, scope, context),
+                                     context),
                        stats::RelationWrite::kInsert);
 }
 
@@ -6053,7 +6066,8 @@ StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_vie
     return parsed;
 }
 
-DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
+DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope,
+                                               const exec::StatementContext& context) {
     auto parsed = ParseKeepingShape(line);
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
@@ -6061,7 +6075,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     if (!std::holds_alternative<parser::InsertStmt>(parsed.value())) {
         return {"ERR expected an INSERT statement", false};
     }
-    return InsertParsed(std::get<parser::InsertStmt>(parsed.value()), scope);
+    return InsertParsed(std::get<parser::InsertStmt>(parsed.value()), scope, context);
 }
 
 std::optional<DispatchOutcome> CommandDispatcher::ArchiveRefusal() const {
@@ -6097,7 +6111,8 @@ DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
 
     // A load chunk's rows are a relation's inserts (BO-S6), though the
     // chunk is no statement of `sys.statement_stats`'.
-    return FinishWrite(session, scope, InsertParsed(stmt, scope), stats::RelationWrite::kInsert);
+    return FinishWrite(session, scope, InsertParsed(stmt, scope, StatementContextFor(session)),
+                       stats::RelationWrite::kInsert);
 }
 
 // **`INSERT ... SELECT`'s rows** (BU-S8): the source run by the query
@@ -6108,7 +6123,8 @@ DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
 // decimal at the target's scale.
 StatusOr<parser::InsertStmt> CommandDispatcher::InsertSelectRows(const catalog::TableAccess& ta,
                                                                  const parser::InsertStmt& written,
-                                                                 WriteScope& scope) {
+                                                                 WriteScope& scope,
+                                                                 const exec::StatementContext& context) {
     if (scope.session == nullptr) {
         return Status::NotImplemented("INSERT ... SELECT needs a session (byte " +
                                       std::to_string(written.select_byte_offset) + ")");
@@ -6116,7 +6132,7 @@ StatusOr<parser::InsertStmt> CommandDispatcher::InsertSelectRows(const catalog::
     auto snapshot = SnapshotFor(*scope.session);
     if (!snapshot.ok()) return snapshot.status();
     auto rs = RunLayerQuery(*written.select, written.select_text, *scope.session,
-                            snapshot.value().snap, StatementContextFor(*scope.session));
+                            snapshot.value().snap, context);
     if (!rs.ok()) return rs.status();
     const std::vector<exec::LayerColumn>& from = rs.value().columns;
     auto targets = InsertTargetColumns(ta, written, from.size());
@@ -6184,7 +6200,8 @@ DispatchOutcome WroteRows(std::string reply, std::uint64_t rows, catalog::Oid oi
 }  // namespace
 
 DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& written,
-                                                WriteScope& scope) {
+                                                WriteScope& scope,
+                                                const exec::StatementContext& context) {
     // BI3: the row cap, at the first config-aware layer (the parser is a
     // pure syntax layer and deliberately config-blind). A refusal naming
     // the cap and the count, never a truncation.
@@ -6228,8 +6245,9 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         return {ErrorReply(access.status()), false, 0, access.status()};
     }
     // Borrowed from the catalog's cache, not owned: valid for this
-    // statement, including across AllocateRowId() (catalog.hpp), and
-    // refreshed by InsertOneRow when a root repoint invalidates it.
+    // statement, including across AllocateRowId() (catalog.hpp) and a root
+    // a split republishes - `Catalog::AdoptRoot` updates the cached entry in
+    // place.
     const catalog::TableAccess* ta = access.value();
 
     // Insert routing and spreading retired (AT-S9); their history is at
@@ -6286,12 +6304,12 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     }
     std::optional<parser::InsertStmt> evaluated;
     if (!written.value_exprs.empty()) {
-        auto e = EvaluateInsertExpressions(*ta, written);
+        auto e = EvaluateInsertExpressions(*ta, written, context);
         if (!e.ok()) return {ErrorReply(e.status()), false, 0, e.status()};
         evaluated.emplace(std::move(e.value()));
     }
     if (written.select != nullptr) {
-        auto e = InsertSelectRows(*ta, written, scope);
+        auto e = InsertSelectRows(*ta, written, scope, context);
         if (!e.ok()) return {ErrorReply(e.status()), false, 0, e.status()};
         evaluated.emplace(std::move(e.value()));
         if (evaluated->rows.size() > max_insert_rows_) {
@@ -6313,6 +6331,9 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     if (!normalized.ok()) return {ErrorReply(normalized.status()), false, 0, normalized.status()};
     const parser::InsertStmt& shaped =
         normalized.value().has_value() ? *normalized.value() : valued;
+    if (auto refused = ReturningWithoutTransaction(written.returning, scope.txn)) {
+        return {ErrorReply(*refused), false, 0, *refused};
+    }
 
     // ---- ON CONFLICT DO NOTHING (BU-Q18) --------------------------------
     //
@@ -6329,7 +6350,8 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         auto arbiter = ResolveConflictArbiter(*ta, written);
         if (!arbiter.ok()) return {ErrorReply(arbiter.status()), false, 0, arbiter.status()};
         if (written.on_conflict_do_update || arbiter.value() != nullptr) {
-            return InsertOnConflict(oid.value(), ta, written, shaped, arbiter.value(), scope);
+            return InsertOnConflict(oid.value(), *ta, written, shaped, arbiter.value(), scope,
+                                    context);
         }
     }
     std::optional<parser::InsertStmt> kept;
@@ -6350,11 +6372,15 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
             }
             kept->rows.push_back(r);
         }
-        if (kept->rows.empty()) {
-            return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
-        }
     }
     const parser::InsertStmt& stmt = kept.has_value() ? *kept : shaped;
+    // **No row to place**: every row a `DO NOTHING` skipped, or a KWP load
+    // chunk that carried none. The loop below would run zero times and the
+    // single-row reply be built from a row that was never placed, counted
+    // as one insert.
+    if (stmt.rows.empty()) {
+        return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
+    }
 
     // ---- The bulk loop (docs/spec/bulkinsert.md §2.3, §4) ---------------
     //
@@ -6391,7 +6417,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         // `AlreadyExists` or an `OutOfRange` for a named key (BD-R5) - reaches
         // the wire rather than being re-read off the rendered line.
         if (std::optional<Status> err =
-                InsertOneRow(oid.value(), ta, stmt.rows[k], scope, fk_held, row)) {
+                InsertOneRow(oid.value(), *ta, stmt.rows[k], scope, fk_held, row)) {
             // The row's ordinal rides in the carried message too, so a KWP
             // client - which reads the `Status`, not the line - is told which
             // row (BB-S3's review).
@@ -6532,10 +6558,14 @@ StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConfli
     const parser::IndexColumnRef& target = *written.conflict_target;
     auto col = ta.schema.FindColumn(target.name, target.byte_offset);
     if (!col.ok()) return col.status();
-    if (col.value() == &ta.schema.columns.front()) return kTupleKeyArbiter;
-    const auto at = static_cast<std::uint16_t>(col.value() - ta.schema.columns.data());
-    for (const catalog::TableAccess::IndexRef& ix : ta.indexes) {
-        if (ix.unique && ix.nkeys == 1 && ix.key_cols[0] == at) return &ix;
+    // `FindColumn` answers OK with no column for a name the relation does not
+    // have: no position to look an index up by, so the refusal below.
+    if (col.value() != nullptr) {
+        if (col.value() == &ta.schema.columns.front()) return kTupleKeyArbiter;
+        const auto at = static_cast<std::uint16_t>(col.value() - ta.schema.columns.data());
+        for (const catalog::TableAccess::IndexRef& ix : ta.indexes) {
+            if (ix.unique && ix.nkeys == 1 && ix.key_cols[0] == at) return &ix;
+        }
     }
     return Status::NotImplemented(
         "ON CONFLICT (" + target.name + ") at byte " + std::to_string(target.byte_offset) +
@@ -6605,11 +6635,12 @@ StatusOr<std::shared_ptr<const parser::Expr>> BindExcluded(
 }  // namespace
 
 DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
-                                                    const catalog::TableAccess*& ta,
+                                                    const catalog::TableAccess& ta,
                                                     const parser::InsertStmt& written,
                                                     const parser::InsertStmt& shaped,
                                                     const catalog::TableAccess::IndexRef* arbiter,
-                                                    WriteScope& scope) {
+                                                    WriteScope& scope,
+                                                    const exec::StatementContext& context) {
     const bool update = written.on_conflict_do_update;
     const bool bulk = shaped.rows.size() > 1;
     // A row's refusal carries its ordinal in a bulk statement, as the
@@ -6648,23 +6679,23 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
     for (std::size_t k = 0; k < shaped.rows.size(); ++k) {
         const std::vector<parser::AstValue>& r = shaped.rows[k];
         RowPlan& p = plans[k];
-        p.body = InsertBodyOf(*ta, r);
+        p.body = InsertBodyOf(ta, r);
         bool repeated = false;
         if (arbiter == nullptr) {
-            if (r.size() == ta->schema.columns.size()) {
+            if (r.size() == ta.schema.columns.size()) {
                 p.key = KeystoneIdOf(r.front());
                 p.byte = r.front().byte_offset;
                 repeated = p.key.has_value() && !keys_seen.insert(*p.key).second;
             }
         } else {
             // A key that does not encode is the insert arm's refusal.
-            auto key = exec::EncodeUniqueKey(*ta, *arbiter, p.body, 1, {});
+            auto key = exec::EncodeUniqueKey(ta, *arbiter, p.body, 1, {});
             if (key.ok() && key.value().has_value()) {
                 p.unique = std::move(*key.value());
                 p.byte = p.unique->values.empty() ? 0 : p.unique->values.front().byte_offset;
                 std::vector<std::size_t>& alike = uniques_seen[p.unique->encoded];
                 repeated = std::ranges::any_of(alike, [&](std::size_t earlier) {
-                    return exec::SameUniqueKey(*ta, *arbiter, *plans[earlier].unique, *p.unique);
+                    return exec::SameUniqueKey(ta, *arbiter, *plans[earlier].unique, *p.unique);
                 });
                 alike.push_back(k);
             }
@@ -6685,9 +6716,9 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
     // row is written. A row that ends in the update arm holds a parent's
     // `S` it may not use; the update arm checks the fk columns it assigns.
     exec::FkParentVerdicts fk_held;
-    if (!ta->fkeys_out.empty()) {
+    if (!ta.fkeys_out.empty()) {
         for (std::size_t k = 0; k < plans.size(); ++k) {
-            if (Status s = ResolveForeignKeyParents(*ta, plans[k].body, fk_held, scope); !s.ok()) {
+            if (Status s = ResolveForeignKeyParents(ta, plans[k].body, fk_held, scope); !s.ok()) {
                 return refuse(s, k);
             }
         }
@@ -6714,11 +6745,11 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
             // after its decide, not skipped - then the slot, which under the
             // unit is decided or this transaction's own.
             if (std::optional<Status> held =
-                    BorrowOrWait(scope, txn::LockKey::Tuple(ta->oid, *p.key),
+                    BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, *p.key),
                                  RepeatableReadWait::kCapable)) {
                 return refuse(*held, k);
             }
-            auto present = btree::BtreeLookup(page_store_, ta->desc_page_id, *p.key);
+            auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, *p.key);
             if (present.ok()) {
                 auto version =
                     heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
@@ -6746,7 +6777,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
                 return refuse(present.status(), k);
             }
         } else if (p.unique.has_value()) {
-            auto verdict = CheckUniqueKeyLatest(scope, *ta, *arbiter, *p.unique, 0, holds);
+            auto verdict = CheckUniqueKeyLatest(scope, ta, *arbiter, *p.unique, 0, holds);
             if (!verdict.ok()) return refuse(verdict.status(), k);
             if (verdict.value().kind == exec::UniqueVerdict::Kind::kHeld) {
                 if (!update) continue;  // DO NOTHING: the key is held
@@ -6754,7 +6785,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
                 // `U` (CP-S2b): the arm is `UPDATE`'s per-row path on `h`,
                 // a version claim a child's share on `h` admits.
                 if (std::optional<Status> held =
-                        BorrowOrWait(scope, txn::LockKey::Tuple(ta->oid, h),
+                        BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, h),
                                      RepeatableReadWait::kCapable, txn::LockMode::kUpdate)) {
                     return refuse(*held, k);
                 }
@@ -6764,7 +6795,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
                 // `U`. Off, the key is free under the unit this row holds.
                 // What could move `h` off its value is an `UPDATE` or a
                 // `DELETE` of `h`, and `U` refuses both.
-                auto still = RowHoldsUniqueKey(*ta, *arbiter, h, *p.unique);
+                auto still = RowHoldsUniqueKey(ta, *arbiter, h, *p.unique);
                 if (!still.ok()) return refuse(still.status(), k);
                 if (still.value()) holder = h;
             }
@@ -6783,8 +6814,8 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
             // `EXCLUDED` of the tuple key is the key the row named, on either
             // arbiter, and NULL where the row omits it.
             std::vector<parser::AstValue> proposed;
-            proposed.reserve(ta->schema.columns.size());
-            if (shaped.rows[k].size() == ta->schema.columns.size()) {
+            proposed.reserve(ta.schema.columns.size());
+            if (shaped.rows[k].size() == ta.schema.columns.size()) {
                 proposed.push_back(shaped.rows[k].front());
             } else {
                 proposed.emplace_back().type = parser::ValueType::kNull;
@@ -6796,16 +6827,17 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
             arm.table_byte_offset = written.table_byte_offset;
             arm.assignments = written.conflict_assignments;
             for (parser::Assignment& a : arm.assignments) {
-                auto bound = BindExcluded(a.expr, *ta, proposed, written.table_name);
+                auto bound = BindExcluded(a.expr, ta, proposed, written.table_name);
                 if (!bound.ok()) return refuse(bound.status(), k);
                 a.expr = std::move(bound.value());
             }
             auto snapshot = SnapshotFor(*scope.session);
             if (!snapshot.ok()) return refuse(snapshot.status(), k);
             std::vector<exec::SubqueryResult> subqueries;
+            // The statement's context, not one taken per row: two arms of
+            // one statement stamp one `NOW()`.
             DispatchOutcome out = UpdateParsed(arm, scope, snapshot.value().snap, WalkCursor{},
-                                               StatementContextFor(*scope.session), subqueries,
-                                               *holder);
+                                               context, subqueries, *holder);
             if (!out.status.ok()) return refuse(out.status, k);
             // **A live row this statement's view does not see** - inserted by a
             // transaction that committed after the view was taken - is passed
@@ -6879,10 +6911,9 @@ StatusOr<bool> CommandDispatcher::RowHoldsUniqueKey(const catalog::TableAccess& 
 }
 
 std::optional<Status> CommandDispatcher::InsertOneRow(
-    catalog::Oid oid, const catalog::TableAccess*& ta_ptr,
+    catalog::Oid oid, const catalog::TableAccess& ta,
     const std::vector<parser::AstValue>& values, WriteScope& scope,
     const exec::FkParentVerdicts& fk_held, InsertRowResult& out) {
-    const catalog::TableAccess& ta = *ta_ptr;
 
     // ---- How a refusal below reaches the wire -----------------------------
     //
@@ -7254,9 +7285,6 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // (LogInsert's comment) - and a row sitting in a page that no Cabin
     // witnessed is exactly the completeness break C1 forbids. Witnessing
     // first makes the failure cost a log record and never an authority.
-    //
-    // `ta` is still valid here: the only thing that invalidates it is the
-    // desc-page relink below, which happens after.
     NoteCabinWrite(ta, body, /*first_col_pos=*/1, row_id, placed.value().page_id,
                    placed.value().slot);
 
@@ -7269,8 +7297,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     //
     // `ta` survives this call even when a split republishes an index root:
     // Catalog::AdoptRoot updates the cached entry in place rather than
-    // invalidating it (catalog_cache.hpp), which is exactly what the
-    // desc-page relink below does *not* do.
+    // invalidating it (catalog_cache.hpp).
     // Collected only when there is a log to write to, so the unlogged path
     // stays the code it always was.
     std::vector<exec::IndexWrite> index_writes;
@@ -9062,8 +9089,7 @@ void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
     // every core writes the relation itself, so `access_statistics` means
     // the same thing wherever the statement ran.
     if (!access_stats_enabled_) return;
-    stats::RecordChainAccess(catalog_, chain, static_cast<std::uint64_t>(NowNs()),
-                             &access_counters_);
+    stats::RecordChainAccess(catalog_, chain, static_cast<std::uint64_t>(NowNs()));
 }
 
 void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
@@ -9327,7 +9353,17 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         auto snapshot = SnapshotFor(session);
         // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse, and the
         // wire's `retryable=1` is what a client's retry loop reads.
-        if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
+        //
+        // **Through `FinishWrite`, so the scope `BeginWrite` opened ends**:
+        // an owned transaction left behind here is never decided - it stays
+        // in flight, holds the horizon and one of the core's in-flight
+        // slots - and the refusal is the lease table's, which is full for
+        // as long as 256 walks stay parked (`known-gaps.md`).
+        if (!snapshot.ok()) {
+            return FinishWrite(session, scope,
+                               {ErrorReply(snapshot.status()), false, 0, snapshot.status()},
+                               stats::RelationWrite::kUpdate);
+        }
         snap = snapshot.value().snap;
     }
 
@@ -9343,7 +9379,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
                                                       std::move(subquery_answers)});
         return out;
     }
-    return FinishWrite(session, scope, WithReturning(line, session, scope, std::move(out)),
+    return FinishWrite(session, scope, WithReturning(line, session, scope, std::move(out), context),
                        stats::RelationWrite::kUpdate);
 }
 
@@ -9628,7 +9664,8 @@ StatusOr<std::vector<std::vector<parser::AstValue>>> CommandDispatcher::WalkForL
 }
 
 DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session& session,
-                                                 WriteScope& scope, DispatchOutcome out) {
+                                                 WriteScope& scope, DispatchOutcome out,
+                                                 const exec::StatementContext& context) {
     if (out.response.rfind("ERR", 0) == 0 || !ContainsWordIgnoringCase(line, "RETURNING")) {
         return out;
     }
@@ -9661,11 +9698,9 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
     const auto refuse = [](const Status& s) {
         return DispatchOutcome{ErrorReply(s), false, 0, s};
     };
-    if (txn_ == nullptr || scope.txn == nullptr) {
-        return refuse(Status::NotImplemented(
-            "RETURNING needs the transaction manager, whose trail names the rows written (byte " +
-            std::to_string(returning->byte_offset) + ")"));
-    }
+    // Asked before the write by every path that reaches here; kept because
+    // the trail read below dereferences the transaction.
+    if (auto refused = ReturningWithoutTransaction(*returning, scope.txn)) return refuse(*refused);
     auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
         return catalog_.ResolveRelation(schema, table, session.default_namespace(), 0, v);
     });
@@ -9675,7 +9710,8 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
     const catalog::TableAccess& ta = *access.value();
 
     // ---- The items, typed over the relation's live columns ---------------
-    const exec::StatementContext context = exec::StatementContextNow();
+    // Under the statement's own context: `RETURNING ts, NOW()` after
+    // `SET ts = NOW()` answers one instant.
     std::vector<std::unique_ptr<exec::TypedSetExpr>> items;
     std::vector<wire::FieldDescription> fields;
     std::vector<std::uint32_t> wire_types;
@@ -9893,6 +9929,9 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
         return {ErrorReply(access.status()), false, 0, access.status()};
+    }
+    if (auto refused = ReturningWithoutTransaction(stmt.returning, scope.txn)) {
+        return {ErrorReply(*refused), false, 0, *refused};
     }
     // Borrowed from the catalog's cache, not owned: valid for this
     // statement, including across AllocateRowId() (catalog.hpp).
@@ -10399,20 +10438,13 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             }
         }
 
-        // The spills this re-encode appended, collected so they can be noted
-        // and logged below - a spill left unlogged is a recovered cell
-        // pointing at bytes no record describes. Collected when there is a
-        // log **or a transaction to roll them back** (VC-B3): a live Abort
-        // needs the trail entry whether or not anything is logged.
-        //
-        // `appended_spills`, not `spills`: the enclosing scope already has a
-        // `PendingSpill` list, which is the opposite direction - values this
-        // statement *read* out of the var-heap to evaluate the WHERE clause.
-        std::vector<exec::AppendedSpill> appended_spills;
-        const bool collect_spills = wal_ != nullptr || scope.txn != nullptr;
-        // With a manager, noted and logged at each append (`SpillLogFor`),
-        // under the var-heap page's hold - this leaf's hold outside it, the
-        // order a reader takes too; `appended_spills` then stays empty.
+        // **A spill this re-encode appends is noted and logged at its
+        // append** (`SpillLogFor`), under the var-heap page's hold - this
+        // leaf's hold outside it, the order a reader takes too: the undo
+        // record that can release the value, then the records that make it
+        // durable (RV3's order, wal.md §11a). With no transaction there is
+        // neither, and the UPDATE logs nothing at all - so nothing is
+        // collected here for a later pass.
         const auto log_spill = SpillLogFor(scope, ta.oid, id.value());
         // **Only the assigned cells are encoded** (BN-R3): every other cell
         // is carried from `payload_copy`, the version this walk read, so a
@@ -10422,8 +10454,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         // assignable (rejected above).
         auto encoded = exec::EncodeAssigned(
             ta.schema, ta.layout, id.value(), payload_copy, assigned,
-            exec::VarHeapSink{&page_store_, ta.varheap_page_id,
-                              collect_spills ? &appended_spills : nullptr, ta.oid,
+            exec::VarHeapSink{&page_store_, ta.varheap_page_id, /*appended=*/nullptr, ta.oid,
                               log_spill ? &log_spill : nullptr});
         if (!encoded.ok()) return encoded.status();
 
@@ -10530,25 +10561,10 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         // never reach a pointer that resolves to nothing, and a version no
         // index entry names is a row a probe cannot find
         // (docs/spec/index.md §12.1).
-        // Each spill's rollback, before the records that make the spill
-        // durable: an UNDO_WRITE must precede the VARHEAP_APPEND it can
-        // undo, so redo alone can never resurrect an append the undo phase
-        // has no record to release (RV3's ordering rule, wal.md §11a).
-        // Outside the logging gate below because the trail entry is what a
-        // *live* Abort reads, and that is owed whether or not there is a log.
-        if (Status s = NoteSpills(scope, ta.oid, id.value(), appended_spills); !s.ok()) {
-            return s;
-        }
-
         if (wal_ != nullptr && scope.txn != nullptr) {
-            // The var-heap first, for the reason the comment above gives and
-            // INSERT already obeyed: the cell in the tuple record below points
-            // into these pages, so the records that create, link and fill them
-            // must precede it.
-            if (Status s = exec::LogSpills(wal_, page_store_, appended_spills, scope.txn->id(), ta.oid);
-                !s.ok()) {
-                return s;
-            }
+            // The var-heap's records are already in the log (`SpillLogFor`):
+            // the cell in the tuple record below points into those pages, so
+            // the records that create, link and fill them precede it.
             // The index entries were logged as maintenance made them, under
             // this transaction (`IndexWriteLogFor`).
 
@@ -10885,20 +10901,20 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
         //
         // Before `EndDdlScope`, so the invalidation it does describes
         // pages the compensation has already rewritten.
-        // The reservations first, as `RollbackLocal` does: a commit that failed
-        // before its record left the pending set (CL-R5), and no one else gives
-        // it back.
-        (void)enforcer_->AbortTxn(page_store_, wal_, id);
-        Status rolled = txn_->Abort(*txn, RowLocatorForRollback());
-        EndDdlScope(session);
-        session.Finish();
-        txn_->Release(*txn);
+        // **`RollbackLocal` itself, not a copy of it**: the reservations
+        // first - a commit that failed before its record left the pending
+        // set (CL-R5), and no one else gives it back - then the abort, the
+        // DDL scope, the session and the release. The copy that stood here
+        // discarded the reservations' status.
+        const DispatchOutcome rolled = RollbackLocal(session);
         // The commit failure is the client's answer; a failure to unwind
-        // on top of it is a second, worse fact and is not swallowed.
-        if (!rolled.ok()) {
-            return {ErrorReply(committed.status()) +
-                        " (and rolling it back failed: " + rolled.message() + ")",
-                    false};
+        // on top of it is a second, worse fact and is not swallowed - and
+        // the answer keeps the commit's code beside its line.
+        if (!rolled.status.ok()) {
+            const Status both = committed.status().WithMessage(
+                committed.status().message() + " (and rolling it back failed: " +
+                rolled.status.message() + ")");
+            return {ErrorReply(both), false, 0, both};
         }
         return {ErrorReply(committed.status()), false, 0, committed.status()};
     }
@@ -11912,7 +11928,12 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
 
         // After `BeginWrite`: `HandleUpdate`'s order, for its reason (Census A row 4).
         auto snapshot = SnapshotFor(session);
-        if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
+        // Through `FinishWrite`, as `HandleUpdate`'s: the opened scope ends.
+        if (!snapshot.ok()) {
+            return FinishWrite(session, scope,
+                               {ErrorReply(snapshot.status()), false, 0, snapshot.status()},
+                               stats::RelationWrite::kDelete);
+        }
         snap = snapshot.value().snap;
     }
 
@@ -11927,7 +11948,7 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
                                                       /*is_delete=*/true, context});
         return out;
     }
-    return FinishWrite(session, scope, WithReturning(line, session, scope, std::move(out)),
+    return FinishWrite(session, scope, WithReturning(line, session, scope, std::move(out), context),
                        stats::RelationWrite::kDelete);
 }
 
@@ -12373,6 +12394,20 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
             at_name));
     }
 
+    // **A qualifier is part of what was written.** PURGE has no compiler
+    // behind it and the fold reads a conjunct's column by its name alone, so
+    // `WHERE other.id = 5` folded as this relation's tuple key and freed it.
+    // Refused as `DELETE`'s compiler refuses it, with its code and wording;
+    // the relation's own name qualifies its columns.
+    for (const parser::Condition& cond : stmt.where) {
+        if (cond.col.qualified() && !IEquals(cond.col.qualifier, stmt.table_name)) {
+            return refuse(Status::InvalidArgument(
+                "'" + cond.col.qualifier + "." + cond.col.name +
+                "' names no relation in scope (byte " + std::to_string(cond.col.byte_offset) +
+                ")"));
+        }
+    }
+
     // PU1: the one recognizer of the window, refusing what it cannot read
     // rather than skipping it (BH-R2), clamped to the key space.
     const TupleKeyWindow window = FoldTupleKeyWindow(ta, stmt.where);
@@ -12725,6 +12760,9 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return {ErrorReply(access.status()), false, 0, access.status()};
     const catalog::TableAccess& ta = *access.value();
+    if (auto refused = ReturningWithoutTransaction(stmt.returning, scope.txn)) {
+        return {ErrorReply(*refused), false, 0, *refused};
+    }
 
     // Before anything is marked: UPDATE's rule and UPDATE's reason. A
     // delete-mark is a write.

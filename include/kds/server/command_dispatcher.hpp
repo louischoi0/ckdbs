@@ -1124,8 +1124,10 @@ private:
     //
     // **Non-queueing**: takes the unit when free, else answers `false`
     // with `*blocker` set and, where the dispatcher may park, a wake
-    // registered on the refusing unit (`TakeLockWait`). The only non-OK
-    // status is the cap's, a refusal no wait gets past (AO-R10, AR2-R4).
+    // registered on the refusing unit (`TakeLockWait`). `blocker` is never
+    // null: a refusal writes through it. The non-OK statuses are the cap's,
+    // a refusal no wait gets past (AO-R10, AR2-R4), and the stale memo's
+    // `TxnConflict`, which re-runs the statement.
     //
     // A dispatcher with no lock table, or a null transaction, borrows
     // nothing and answers granted.
@@ -1135,7 +1137,7 @@ private:
     // row (D9(a), AY-S5). The intention asked above it follows - `IX` over
     // `U` and `X`, `IS` over `S`.
     StatusOr<bool> BorrowChain(const WriteScope& scope, const txn::LockKey& unit,
-                               std::uint64_t* blocker = nullptr,
+                               std::uint64_t* blocker,
                                txn::LockMode mode = txn::LockMode::kExclusive);
 
     // **One wait per statement, and the registration of the one it drops
@@ -1419,7 +1421,7 @@ private:
 
     // `VarHeapSink::on_append` for a row `tuple_key` of `rel_oid` (AT-S21's
     // review): with a manager owning the transaction, the spill's undo record
-    // (`NoteSpills`) and then its records (`exec::LogSpill`), under the
+    // (`NoteVarHeapAppend`) and then its records (`exec::LogSpill`), under the
     // var-heap page's hold. Null without a manager, whose spills are
     // collected and logged by `LogInsert`.
     std::function<Status(const exec::AppendedSpill&)> SpillLogFor(const WriteScope& scope,
@@ -1592,7 +1594,8 @@ private:
     // The statement itself, inside a write scope the wrapper opened and
     // will close. Split so that every early return below is an ordinary
     // return rather than one that has to remember to end a transaction.
-    DispatchOutcome InsertInner(std::string_view line, WriteScope& scope);
+    DispatchOutcome InsertInner(std::string_view line, WriteScope& scope,
+                                const exec::StatementContext& context);
 
     // Where one row landed, for the reply.
     struct InsertRowResult {
@@ -1626,11 +1629,11 @@ private:
     // `InsertOneRow`; the update arm is `UpdateParsed` on the holder, under
     // its row unit - `X` on the tuple-key arm, `U` on the unique arbiter's
     // (CP-S2b) - with `EXCLUDED.<col>` bound to the proposed row.
-    DispatchOutcome InsertOnConflict(catalog::Oid oid, const catalog::TableAccess*& ta,
+    DispatchOutcome InsertOnConflict(catalog::Oid oid, const catalog::TableAccess& ta,
                                      const parser::InsertStmt& written,
                                      const parser::InsertStmt& shaped,
                                      const catalog::TableAccess::IndexRef* arbiter,
-                                     WriteScope& scope);
+                                     WriteScope& scope, const exec::StatementContext& context);
     // Whether `tuple_key`'s slot holds a live row whose `ix` key is `key` -
     // the update arm's re-read under the row's `X` (CG-S0 reading 1b).
     StatusOr<bool> RowHoldsUniqueKey(const catalog::TableAccess& ta,
@@ -1647,10 +1650,9 @@ private:
     // ErrorReply's leading tokens are a compatibility surface, which is why
     // the bulk loop appends its row ordinal rather than prefixing it).
     //
-    // `ta` is a live borrow the callee may *refresh*: a btree level growth
-    // repoints the relation's root, which invalidates the catalog cache -
-    // harmless on the last row, fatal to the next one, so the pointer is
-    // re-borrowed before returning.
+    // `ta` is the statement's borrow from the catalog's cache, valid across
+    // every row: a root a split republishes is adopted into the cached entry
+    // in place (`Catalog::AdoptRoot`).
     //
     // `fk_held` is what the caller's extraction pass resolved over **every**
     // row of the statement (§2a): this function answers from it and starts
@@ -1659,7 +1661,7 @@ private:
     //
     // A refusal comes back as its `Status`, rendered by the caller (BB-S3):
     // the code it carries reaches the wire, not only its line.
-    std::optional<Status> InsertOneRow(catalog::Oid oid, const catalog::TableAccess*& ta,
+    std::optional<Status> InsertOneRow(catalog::Oid oid, const catalog::TableAccess& ta,
                                        const std::vector<parser::AstValue>& values,
                                        WriteScope& scope, const exec::FkParentVerdicts& fk_held,
                                        InsertRowResult& out);
@@ -1671,7 +1673,11 @@ private:
     // path" made literal, since this IS the path a T1 statement takes.
     // **No `line`**: an INSERT reaches this path the way a KWP load chunk
     // always did, with no text.
-    DispatchOutcome InsertParsed(const parser::InsertStmt& stmt, WriteScope& scope);
+    //
+    // `context` is the statement's (`functions.hpp`), taken once by the
+    // caller and read by every expression the statement evaluates.
+    DispatchOutcome InsertParsed(const parser::InsertStmt& stmt, WriteScope& scope,
+                                 const exec::StatementContext& context);
 
 public:
     // KW5's public seam: run one parsed INSERT under `session` exactly as
@@ -1739,11 +1745,14 @@ private:
     // found on its transaction's trail since the statement's mark and read
     // back by tuple key, emitted through the session's sink. Read before
     // the write scope ends, so a failure here fails the statement.
+    // `context` is the writing statement's, so a function in the list
+    // reads what the write read.
     DispatchOutcome WithReturning(std::string_view line, Session& session, WriteScope& scope,
-                                  DispatchOutcome out);
+                                  DispatchOutcome out, const exec::StatementContext& context);
     StatusOr<parser::InsertStmt> InsertSelectRows(const catalog::TableAccess& ta,
                                                   const parser::InsertStmt& written,
-                                                  WriteScope& scope);
+                                                  WriteScope& scope,
+                                                  const exec::StatementContext& context);
     // Runs a query-layer query whose text is `text` at `snap`, under this
     // dispatcher's row and group caps (BU-Q10): TryQueryLayer's and
     // INSERT ... SELECT's one way in.
@@ -2327,21 +2336,6 @@ private:
                                                             std::uint16_t)>& fn,
         WalkCursor* cursor);
 
-    // Gives every spilled value a rollback: one undo record per spill, in
-    // the writing transaction's chain, plus the trail entry a live Abort
-    // reads. Both compensate by releasing the slot.
-    //
-    // **Called before whatever logs the VARHEAP_APPENDs**, because an
-    // UNDO_WRITE must precede the record it can undo - RV3's rule for
-    // catalog writes, for the same reason: redo alone must never resurrect
-    // an append the undo phase has no record to release.
-    //
-    // A scope with no transaction records nothing (a dispatcher built
-    // without a manager, and the `kNoTxnId` writes `LogChainInsert` makes
-    // for the assertion catalog); those spills leak on rollback.
-    Status NoteSpills(const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t tuple_key,
-                      const std::vector<exec::AppendedSpill>& spills);
-
     // Logs an insert **under the holds its placement handed out** (AT-S21,
     // `wal.md` §8-1), released here once the row's record is stamped - and
     // before an own transaction's commit, whose durability wait must not run
@@ -2386,12 +2380,6 @@ private:
                         std::uint64_t txn_id,
                         catalog::Oid rel_oid, std::uint64_t index_oid, PageId new_root,
                         PageId anchor_page_id, storage::UnlatchedPin* anchor_pin);
-
-    // One page's full image, logged and the page stamped behind it - a
-    // wrapper over `storage::LogFullPageImage`, the one helper every site
-    // uses so none can omit the stamp (`redo.cpp` gates every record on
-    // `page_lsn`). No-op with no WAL attached.
-    Status LogFullPageImage(PageId page_id, std::uint64_t txn_id);
 
     // What a `WHERE id = <const>` statement should do instead of scanning.
     // The three cases are distinct because the *authority* of the answer
@@ -2656,7 +2644,6 @@ private:
     // someone enables it does not exist when `SHOW ACCESS` or CREATE
     // CABIN's no-filter warning asks for it (docs/spec/heap-and-tuple.md §7).
     bool access_stats_enabled_;
-    stats::AccessStatsCounters access_counters_;
 
     // The instance's Cabin store, or null when cabins are switched off
     // (`cabins = off`, and the default here), so "identical replies with

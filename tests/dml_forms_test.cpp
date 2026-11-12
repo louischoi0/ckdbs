@@ -189,8 +189,13 @@ TEST_F(DmlFormsTest, OnConflictDoNothingSkipsARowWhoseTupleKeyIsPlaced) {
 TEST_F(DmlFormsTest, OnConflictRefusesWhatItDoesNotDo) {
     ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (name) DO NOTHING",
                   "the arbiter is the tuple key or the one column of a unique index");
+    // A name the relation has no column for is no arbiter either - with a
+    // unique index present too, whose key position the lookup once compared
+    // against a position computed from no column at all.
+    Ok("CREATE UNIQUE INDEX w_name_u ON w (name)");
     ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (nosuch) DO NOTHING",
-                  "");
+                  "ON CONFLICT (nosuch) at byte 52: the arbiter is the tuple key or the one "
+                  "column of a unique index");
 }
 
 // ---- ON CONFLICT DO UPDATE (CG) ---------------------------------------------
@@ -399,6 +404,46 @@ TEST_F(DmlFormsTest, AValuesExpressionMayCallNowAndCurrentDate) {
     Ok("CREATE TABLE ev (id int64, d date, ts timestamp)");
     Ok("INSERT INTO ev VALUES (1, CURRENT_DATE, NOW())");
     ExpectRows("SELECT COUNT(*) FROM ev WHERE d IS NOT NULL", {"count(*)", "1"});
+}
+
+// One statement, one `NOW()` (`functions.hpp`, types.md §3.2b): the value a
+// SET or a VALUES row writes, the value RETURNING reads beside it, and every
+// `ON CONFLICT` update arm of one statement. On the wall clock, and several
+// rounds: a pinned clock answers one value however often it is read, which
+// is why no cell saw the write and its RETURNING take two.
+TEST_F(DmlFormsTest, NowIsOneInstantForAWriteItsReturningAndEveryConflictArm) {
+    Ok("CREATE TABLE stamp (id int64, ts timestamp)");
+    Ok("INSERT INTO stamp VALUES (1, NOW()), (2, NOW())");
+    // "written,read" on the first row after the header.
+    const auto both_alike = [&](const std::string& sql) {
+        const std::vector<std::string> got = Lines(Run(sql));
+        ASSERT_GE(got.size(), 2u) << sql;
+        const std::size_t comma = got[1].find(',');
+        ASSERT_NE(comma, std::string::npos) << got[1];
+        EXPECT_EQ(got[1].substr(0, comma), got[1].substr(comma + 1)) << sql << " -> " << got[1];
+    };
+    for (int round = 0; round < 20; ++round) {
+        both_alike("UPDATE stamp SET ts = NOW() WHERE id = 1 RETURNING ts, NOW() AS n");
+        both_alike("INSERT INTO stamp VALUES (" + std::to_string(10 + round) +
+                   ", NOW()) RETURNING ts, NOW() AS n");
+        Ok("INSERT INTO stamp VALUES (1, NOW()), (2, NOW()) "
+           "ON CONFLICT (id) DO UPDATE SET ts = NOW()");
+        const std::vector<std::string> arms = Lines(Run("SELECT ts FROM stamp WHERE id <= 2"));
+        ASSERT_EQ(arms.size(), 3u);
+        EXPECT_EQ(arms[1], arms[2]) << "two update arms of one statement stamped two instants";
+    }
+}
+
+// A KWP load chunk may carry no row (`DecodeRowBatch` admits it), and it
+// reaches the insert path as a statement with none. Nothing is placed, so
+// nothing is answered as placed or counted into `sys.relation_stats`.
+TEST_F(DmlFormsTest, AnInsertCarryingNoRowPlacesAndCountsNone) {
+    parser::InsertStmt chunk;
+    chunk.table_name = "w";
+    Session session;
+    const DispatchOutcome out = dispatcher_->ExecuteInsert(chunk, session);
+    EXPECT_EQ(out.response, "INSERTED oid=4005 rows=0");
+    EXPECT_EQ(out.rows_affected, 0u);
 }
 
 // An integer literal settles as `int64` with no stored width; an `int64`

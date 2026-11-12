@@ -37,16 +37,11 @@
 // Every function here returns void. A statistic that could not be written is
 // a statistic that was not written; the query already succeeded, and failing
 // it afterwards to report a counting problem would be strictly worse than
-// having no counter. Failures are counted so "the statistics quietly stopped
-// working" is visible rather than assumed.
+// having no counter. **A failed write is dropped and counted nowhere**: the
+// counters that stood here were incremented on every `SELECT` and read by
+// nothing, so they made no silent stop visible.
 
 namespace kds::stats {
-
-// Counters for the recorder itself, so a silent stop is detectable.
-struct AccessStatsCounters {
-    std::uint64_t steps_recorded = 0;
-    std::uint64_t write_failures = 0;  // includes the shape cap being reached
-};
 
 // Records one execution of every step in `chain`, including its sub-chains.
 //
@@ -61,7 +56,7 @@ struct AccessStatsCounters {
 // writes every page. The access batch, its ring kind and CR8's permitted
 // drop retired (AT-S7); their history is at cf889b63.
 void RecordChainAccess(catalog::Catalog& catalog, const exec::StepChain& chain,
-                       std::uint64_t now, AccessStatsCounters* counters = nullptr);
+                       std::uint64_t now);
 
 // The column bitmap for one step's access shape.
 //

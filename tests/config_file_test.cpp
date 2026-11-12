@@ -616,6 +616,41 @@ TEST(ExpeditorConfigTest, TheTransactionLifetimeCeilingDefaultsTo60sAndHasNoOffS
     EXPECT_EQ(config.txn_lifetime_ceiling_ns, 250ULL * 1'000'000ULL);
 }
 
+// Every interval key is held in nanoseconds and becomes a deadline, `now +
+// interval`. A value whose nanoseconds wrap - or whose deadline would - is
+// refused by name for each of them, not only for the lifetime ceiling:
+// `lock_wait_fault_net_ms = 18446744073709551615` was accepted and made
+// every lock wait's deadline already past.
+TEST(ExpeditorConfigTest, AnIntervalTheNanosecondClockCannotHoldIsRefusedForEveryKey) {
+    struct Case {
+        const char* key;
+        const char* wraps;  // the product wraps
+        const char* past_half;  // the product fits, `now + it` would not
+    };
+    const Case cases[] = {
+        {"checkpoint_interval_ms", "18446744073710", "9223372036855"},
+        {"lock_wait_fault_net_ms", "18446744073709551615", "9223372036855"},
+        {"txn_lifetime_ceiling_ms", "18446744073710", "9223372036855"},
+        {"cabin_optimizer_snapshot_interval_ms", "18446744073710", "9223372036855"},
+        {"wal_drain_interval_us", "18446744073709552", "9223372036854776"},
+        {"relaxed_flush_interval_us", "18446744073709552", "9223372036854776"},
+    };
+    for (const Case& c : cases) {
+        for (const char* value : {c.wraps, c.past_half}) {
+            Expeditor::Config config;
+            const Status refused =
+                config.ApplyFile(WithPool(std::string(c.key) + " = " + value + "\n"));
+            EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument)
+                << c.key << " = " << value << ": " << refused.message();
+            EXPECT_NE(refused.message().find(c.key), std::string::npos) << refused.message();
+        }
+    }
+    // A long interval that fits is taken as written.
+    Expeditor::Config config;
+    ASSERT_TRUE(config.ApplyFile(WithPool("lock_wait_fault_net_ms = 86400000\n")).ok());
+    EXPECT_EQ(config.lock_wait_fault_net_ns, 86'400'000ULL * 1'000'000ULL);
+}
+
 TEST(ExpeditorConfigTest, TheAshKeysTakeTheirRangesAndRefuseOutsideThem) {
     // CJ's WE09 (workorder-cj-wait-events-ash.md §2.9).
     Expeditor::Config config;

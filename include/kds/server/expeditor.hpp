@@ -654,9 +654,6 @@ public:
     const StatementEpochs& statement_epochs() const noexcept { return *statement_epochs_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
     const Config& config() const noexcept { return config_; }
-    const wal::CheckpointStats& checkpoint_stats() const noexcept {
-        return checkpointer_->stats();
-    }
     wal::WalManager& wal() noexcept { return *wal_; }
 
     // What recovery did to this core's stream at mount. Zeroed on a database
@@ -707,10 +704,6 @@ public:
     // Unset means "no signal handling", which is what every in-process caller
     // and every test wants.
     void set_stop_signal(StopSignal* stop) noexcept { stop_signal_ = stop; }
-
-    // The server's log. Always non-null: with no file configured it is a
-    // Logger over a null sink, so call sites never test for one.
-    Logger& log() noexcept { return *logger_; }
 
 private:
     Expeditor(Config config, std::unique_ptr<storage::PageDevice> device,
@@ -898,10 +891,6 @@ private:
     // placer is set (`load_placer.hpp`).
     LoadPlacer load_placer_;
     TransactionPlacer* placer_ = nullptr;
-    // AU-S3: what a peer calls when a client says STOP on it. Built once
-    // core 0's scheduler and the waker table both exist, and handed to every
-    // peer so none of them needs to know about either.
-    std::function<void()> instance_stop_;
 
     // Core 0's checkpoint target, and **the instance's anchor**, which every
     // peer's checkpointer publishes into since AT-S8 - so declared above
@@ -926,11 +915,6 @@ private:
     std::optional<WalArchiver> archiver_;
     // BF-R9's statement-epoch slots, one per core.
     std::optional<StatementEpochs> statement_epochs_;
-    // Where the mount's recovery scan ended (BF-R4): every record that names
-    // a pending tombstone's pages lies below it, so once the durable redo
-    // start reaches it no mount can replay one. Set once `RecoverCoreAtMount`
-    // returns, before anything reads it.
-    wal::Lsn reclaim_gate_ = 0;
 
     std::vector<std::unique_ptr<CoreRuntime>> cores_;
 

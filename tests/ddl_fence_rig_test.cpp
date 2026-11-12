@@ -765,5 +765,66 @@ TEST(DdlFenceRigTest, ARenameToWhoseNameMovedBeforeItsGrantIsRefused) {
     EXPECT_EQ(d0.Dispatch("SELECT v FROM moved_a").response.rfind("ERR", 0), 0u);
 }
 
+TEST(DdlFenceRigTest, ADropColumnReadsTheRelationAsItIsUnderItsGrant) {
+    // Core 1 drops one of a heap's two declared columns between core 0's
+    // head and its uncontended grant. Core 0's memo still shows two, so its
+    // own `DROP COLUMN` of the other passed the last-declared-column rule
+    // (BZ-Q3) and left a heap with none. The memo is made current under the
+    // `X`, `RENAME`'s way, and the rule reads what is there.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_EQ(d0.Dispatch("CREATE TABLE two_cols (x int64, y int64) HEAP").response.rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(d0.Dispatch("SELECT x, y FROM two_cols").response.rfind("ERR", 0), std::string::npos);
+
+    bool ran = false;
+    std::string first;
+    d0.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterPublish, [&] {
+        if (ran) return;
+        ran = true;
+        first = d1.Dispatch("ALTER TABLE two_cols DROP COLUMN x").response;
+    });
+    const DispatchOutcome second = d0.Dispatch("ALTER TABLE two_cols DROP COLUMN y");
+    d0.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterPublish, nullptr);
+    ASSERT_TRUE(ran);
+    ASSERT_EQ(first.rfind("DROPPED COLUMN", 0), 0u) << first;
+    EXPECT_NE(second.response.find("last declared column"), std::string::npos)
+        << "dropped the heap's last declared column: " << second.response;
+    EXPECT_EQ(d0.Dispatch("SELECT y FROM two_cols").response.rfind("ERR", 0), std::string::npos);
+}
+
+TEST(DdlFenceRigTest, ADropColumnOfANameThatMovedBeforeItsGrantIsRefused) {
+    // `RENAME TO`'s cell above, for `DROP COLUMN`: core 1 renames the
+    // relation between core 0's resolution and its grant. The name is asked
+    // again under the `X`, and core 0 refuses rather than dropping a column
+    // of the relation now named something else and answering with the old
+    // name.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    PeerRelation(*rig, "named_once");
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_EQ(d0.Dispatch("SELECT v FROM named_once").response.rfind("ERR", 0), std::string::npos);
+
+    bool ran = false;
+    std::string first;
+    d0.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterPublish, [&] {
+        if (ran) return;
+        ran = true;
+        first = d1.Dispatch("ALTER TABLE named_once RENAME TO named_twice").response;
+    });
+    const DispatchOutcome second = d0.Dispatch("ALTER TABLE named_once DROP COLUMN v");
+    d0.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterPublish, nullptr);
+    ASSERT_TRUE(ran);
+    ASSERT_EQ(first.rfind("RENAMED TABLE", 0), 0u) << first;
+    EXPECT_EQ(second.response.rfind("ERR", 0), 0u)
+        << "dropped a column of a relation no longer named 'named_once': " << second.response;
+    EXPECT_EQ(d0.Dispatch("SELECT v FROM named_twice").response.rfind("ERR", 0), std::string::npos);
+}
+
 }  // namespace
 }  // namespace kds::server

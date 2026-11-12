@@ -551,7 +551,8 @@ void KwpLoadServer::HandleLoadEnd(Connection& conn, bool abort) {
     const std::uint64_t rows = abort ? 0 : conn.load.rows_accepted;
     auto out = dispatcher_->DispatchInternal(abort ? "ROLLBACK" : "COMMIT", &conn.session);
     if (!abort && out.response.rfind("ERR", 0) == 0) {
-        SendError(conn, StatusFromErrorReply(out.response));
+        // The carried code where there is one, as the chunk path reads it.
+        SendError(conn, !out.status.ok() ? out.status : StatusFromErrorReply(out.response));
         (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         conn.phase = Phase::kIdle;
         conn.load = LoadState{};

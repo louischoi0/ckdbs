@@ -542,10 +542,14 @@ TEST_F(PurgeKeyTest, EveryRefusalCarriesItsCodeAndByte) {
         {"PURGE FROM t WHERE id = 18446744073709551621", StatusCode::kInvalidArgument, 24},
         {"PURGE FROM t WHERE id BETWEEN 1 AND 18446744073709551621",
          StatusCode::kInvalidArgument, 36},
+        // A qualifier naming another relation, or none: the fold reads a
+        // column by name, and without this row `h.id = 5` freed t's key 5.
+        {"PURGE FROM t WHERE h.id = 5", StatusCode::kInvalidArgument, 19},
+        {"PURGE FROM t WHERE id >= 1 AND nosuch.id <= 9", StatusCode::kInvalidArgument, 31},
     };
     for (const Case& c : cases) Refused(c.sql, c.code, c.byte);
-    // None of them purged 5.
-    EXPECT_EQ(Run("PURGE FROM t WHERE id = 5"), "PURGED 1");
+    // None of them purged 5; the relation's own name qualifies its columns.
+    EXPECT_EQ(Run("PURGE FROM t WHERE t.id = 5"), "PURGED 1");
 }
 
 TEST_F(PurgeKeyTest, ARefusalWhileWritingKeepsTheKeysItPurgedAndSaysHowMany) {

@@ -205,6 +205,26 @@ std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfi
     };
 }
 
+namespace {
+
+// An interval key's value in nanoseconds, or the refusal of one the clock
+// cannot hold. **Half the clock's range is the bound**, not the whole of it:
+// every interval here becomes a deadline, `now + interval`, and one above
+// half the range wraps that sum - a `lock_wait_fault_net_ms` of 2^64 - 1
+// was accepted and answered every wait `TxnConflict` at once. A value that
+// merely wraps the multiplication would enforce a different interval than
+// the one written, down to a fraction of a millisecond.
+StatusOr<std::uint64_t> IntervalNs(std::string_view key, std::uint64_t value,
+                                   std::uint64_t ns_per_unit) {
+    if (value > std::numeric_limits<std::uint64_t>::max() / 2 / ns_per_unit) {
+        return Status::InvalidArgument(std::string(key) + " = " + std::to_string(value) +
+                                       " overflows the nanosecond clock");
+    }
+    return value * ns_per_unit;
+}
+
+}  // namespace
+
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
     // **A retired key is refused by name, before the unknown-key check**,
     // which would otherwise refuse it as merely unknown (AT-S8). Refused
@@ -300,7 +320,9 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // Expressed in ms in the file because that is the unit an operator
         // reasons about, and held in ns internally because that is the
         // scheduler's. 0 keeps its documented meaning: no cadence.
-        checkpoint_interval_ns = v.value() * 1'000'000ULL;
+        auto ns = IntervalNs("checkpoint_interval_ms", v.value(), 1'000'000ULL);
+        if (!ns.ok()) return ns.status();
+        checkpoint_interval_ns = ns.value();
     }
     if (file.Has("durability")) {
         auto v = file.GetString("durability");
@@ -496,7 +518,9 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // No zero check: 0 is "refuse at once rather than wait", which is a
         // value someone sweeping this knob is entitled to. The semantics
         // have one home, at `kLockWaitFaultNetNs` (txn/lock_table.hpp).
-        lock_wait_fault_net_ns = v.value() * 1'000'000ULL;
+        auto ns = IntervalNs("lock_wait_fault_net_ms", v.value(), 1'000'000ULL);
+        if (!ns.ok()) return ns.status();
+        lock_wait_fault_net_ns = ns.value();
     }
     if (file.Has("txn_lifetime_ceiling_ms")) {
         auto v = file.GetUint("txn_lifetime_ceiling_ms");
@@ -507,14 +531,9 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
                 "txn_lifetime_ceiling_ms = 0 would end every explicit transaction at once; the "
                 "ceiling has no off-switch (docs/spec/txn.md §1)");
         }
-        // A value whose nanoseconds wrap would enforce a different, possibly
-        // sub-millisecond, ceiling than the one written.
-        if (v.value() > std::numeric_limits<std::uint64_t>::max() / 1'000'000ULL) {
-            return Status::InvalidArgument("txn_lifetime_ceiling_ms = " +
-                                           std::to_string(v.value()) +
-                                           " overflows the nanosecond clock");
-        }
-        txn_lifetime_ceiling_ns = v.value() * 1'000'000ULL;
+        auto ns = IntervalNs("txn_lifetime_ceiling_ms", v.value(), 1'000'000ULL);
+        if (!ns.ok()) return ns.status();
+        txn_lifetime_ceiling_ns = ns.value();
     }
     if (file.Has("tcp_keepalive_s")) {
         auto v = file.GetUint("tcp_keepalive_s");
@@ -657,6 +676,12 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         if (!v.ok()) return v.status();
         // 0 keeps its documented meaning: no cadence (the
         // checkpoint_interval_ms precedent).
+        // Held in ms and scaled where the cadence is registered (`Start`):
+        // bounded here, so that product cannot wrap.
+        if (auto ns = IntervalNs("cabin_optimizer_snapshot_interval_ms", v.value(), 1'000'000ULL);
+            !ns.ok()) {
+            return ns.status();
+        }
         cabin_optimizer_snapshot_interval_ms = v.value();
     }
     if (file.Has("max_rows_touched")) {
@@ -699,12 +724,16 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         if (!v.ok()) return v.status();
         // Microseconds in the file: a drain interval an operator cares
         // about is well under a millisecond, so ms would round it away.
-        wal_drain_interval_ns = v.value() * 1'000ULL;
+        auto ns = IntervalNs("wal_drain_interval_us", v.value(), 1'000ULL);
+        if (!ns.ok()) return ns.status();
+        wal_drain_interval_ns = ns.value();
     }
     if (file.Has("relaxed_flush_interval_us")) {
         auto v = file.GetUint("relaxed_flush_interval_us");
         if (!v.ok()) return v.status();
-        relaxed_flush_interval_ns = v.value() * 1'000ULL;
+        auto ns = IntervalNs("relaxed_flush_interval_us", v.value(), 1'000ULL);
+        if (!ns.ok()) return ns.status();
+        relaxed_flush_interval_ns = ns.value();
     }
     if (file.Has("inline_cell_width")) {
         auto v = file.GetUint("inline_cell_width");
@@ -1036,12 +1065,6 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->recovery_.restore_redo_start = mount_anchor.redo_start_lsn;
         expeditor->recovery_.restore_stop_lsn = mount_anchor.durable_lsn;
     }
-    // BF-R4's gate for a tombstone this mount finds pending: where the scan
-    // ended. Not the append point after undo - a compensation's recLSN
-    // holds the completion checkpoint's redo start below that, and no
-    // compensation names a dropped relation's page.
-    expeditor->reclaim_gate_ = expeditor->recovery_.scan_end;
-
     // RV3 D3a: redo just mutated catalog pages under a catalog constructed
     // above it. Nothing reads a catalog row between construction and here
     // (bootstrap on an existing database reads only the superblock), so
@@ -1314,7 +1337,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // system tick, never here, so a mount does not grow by what was dropped.
     expeditor->reclaimer_.emplace(expeditor->database_->catalog, *expeditor->store_,
                                   expeditor->reclaim_counters_, &*expeditor->logger_);
-    if (Status s = expeditor->reclaimer_->CollectAtMount(expeditor->reclaim_gate_); !s.ok()) {
+    // **BF-R4's gate for a tombstone this mount finds pending is where the
+    // recovery scan ended**: every record that names such a tombstone's
+    // pages lies below it, so once the durable redo start reaches it no
+    // mount can replay one. Not the append point after undo - a
+    // compensation's recLSN holds the completion checkpoint's redo start
+    // below that, and no compensation names a dropped relation's page.
+    if (Status s = expeditor->reclaimer_->CollectAtMount(expeditor->recovery_.scan_end);
+        !s.ok()) {
         return s;
     }
     expeditor->dispatcher_->SetReclaimCounters(&expeditor->reclaim_counters_);
@@ -1489,40 +1519,13 @@ void Expeditor::BroadcastShutdown() {
     }
 }
 
-// **The reactor-borrow guard** (`expeditor.hpp`'s `ServeRuntime`). One
-// member holds a pointer into the serving reactor - the dispatcher's
-// scheduler view - and the reactor outlives it. A guard rather than a line at the
-// bottom of `Start`: there are twenty early returns above it, and a path
-// that missed one would leave the dispatcher pointing at a destroyed
-// reactor, so `SHOW META` through the public `dispatcher()` accessor would
-// read freed memory. `ServeRuntime` holds it *after* the scheduler, so
-// reverse-order destruction clears the view before the reactor goes.
-namespace {
-
-struct ClearReactorBorrows {
-    // **A constructor, and the copy deleted beside it**: an aggregate
-    // `emplace(ClearReactorBorrows{...})` would build a temporary whose
-    // destructor withdraws the scheduler view just installed, emptying
-    // `SHOW META`'s group-accounting block. Deleting the copy makes that
-    // spelling fail to compile.
-    explicit ClearReactorBorrows(CommandDispatcher* d) noexcept : dispatcher(d) {}
-    ClearReactorBorrows(const ClearReactorBorrows&) = delete;
-    ClearReactorBorrows& operator=(const ClearReactorBorrows&) = delete;
-
-    CommandDispatcher* dispatcher;
-    ~ClearReactorBorrows() {
-        dispatcher->set_scheduler_view(nullptr);
-    }
-};
-
-}  // namespace
-
 // The running instance's state. **Every member is an `optional` because
 // each is built by a step that can fail**, and the field order is the
 // destruction order: reverse, so the peer threads go first (already
-// joined), then the borrow guard, then the reactor, then the listeners,
-// then the cancel registry, the credential store and TLS context, then the
-// io backend.
+// joined), then the reactor, then the listeners, then the cancel registry,
+// the credential store and TLS context, then the io backend. The
+// destructor's body runs before any of them: it withdraws the dispatcher's
+// view of the reactor and detaches the listeners.
 struct Expeditor::ServeRuntime {
     std::optional<sched::EpollIoBackend> io_backend;
 #if KDS_WITH_TLS
@@ -1536,8 +1539,11 @@ struct Expeditor::ServeRuntime {
     std::optional<TcpServer> text_listener;
     std::optional<KwpLoadServer> kwp_listener;
     std::optional<sched::Scheduler> scheduler;
-    // After `scheduler`, so reverse order clears the borrows first.
-    std::optional<ClearReactorBorrows> clear_reactor_borrows;
+    // The dispatcher holding a view of `scheduler` (`set_scheduler_view`,
+    // `SHOW META`'s group-accounting block), or null. Withdrawn by the
+    // destructor below, before any member - the reactor it names included -
+    // is destroyed.
+    CommandDispatcher* scheduler_view_of = nullptr;
     std::vector<std::thread> workers;
 
     // **The listeners are declared *before* `scheduler`, so reverse-order
@@ -1548,6 +1554,7 @@ struct Expeditor::ServeRuntime {
     // (`~Expeditor`) unwind this struct without the tail, so it detaches
     // here too. Idempotent, so the tail's explicit detach still stands.
     ~ServeRuntime() {
+        if (scheduler_view_of != nullptr) scheduler_view_of->set_scheduler_view(nullptr);
         if (listener.has_value()) listener->Detach();
         if (text_listener.has_value()) text_listener->Detach();
         if (kwp_listener.has_value()) kwp_listener->Detach();
@@ -1623,6 +1630,14 @@ Status Expeditor::Start() {
             if (owner == nullptr) return;
             owner->StopStartedCores();
             owner->running_.reset();
+            // **And the data-sync thread, started above this guard**, with
+            // its handler: the header's "nothing is left running" covered
+            // every thread but this one, and a refused `Start` left an
+            // instance whose failed data-file sync aborts the process where
+            // one never started returns the `Status`. Both calls are
+            // idempotent; `~Expeditor` keeps its own.
+            owner->store_->data_sync().Stop();
+            owner->store_->data_sync().SetFailureHandler({});
         }
     } drop_on_failure{this};
     ServeRuntime& live = *running_;
@@ -1815,9 +1830,9 @@ Status Expeditor::Start() {
     scheduler.ash().set_core_id(0);
     scheduler.ash().set_wait_sink(&*optimizer_signals_);
     // `SHOW META`'s group-accounting block on core 0 (sched.md §4), cleared
-    // on every exit by `ClearReactorBorrows` (above `ServeRuntime`).
+    // on every exit by `~ServeRuntime`.
     dispatcher_->set_scheduler_view(&scheduler);
-    live.clear_reactor_borrows.emplace(&*dispatcher_);
+    live.scheduler_view_of = &*dispatcher_;
 
     // Core-local, and installed before any statement runs: from here on a
     // coroutine that suspends while holding a page span - or, since P4d-3,
@@ -1871,7 +1886,10 @@ Status Expeditor::Start() {
         // sequence a STOP on core 0's own listener has always produced.
         sched::Scheduler* core0_sched = &scheduler;
         sched::WakerTable* wakers = &*wakers_;
-        instance_stop_ = [core0_sched, wakers, this] {
+        // What a peer calls when a client says STOP on it: handed to every
+        // peer below, so none of them needs to know about core 0's
+        // scheduler or the waker table. Each peer keeps its own copy.
+        const std::function<void()> instance_stop = [core0_sched, wakers, this] {
             logger_->Info("expeditor", "stop routed from a peer; the shutdown tail follows");
             // Write, then kick (AR0-6-R1): the flag ends core 0's loop, the
             // kick ends the block it is sitting in.
@@ -1968,7 +1986,7 @@ Status Expeditor::Start() {
             if (!core.ok()) return core.status();
             // AU-S3: into the waker table, so core 0 can stop this reactor
             // with a flag plus a kick, and every other kick can reach it.
-            core.value()->set_instance_stop(instance_stop_);
+            core.value()->set_instance_stop(instance_stop);
             if (Status s = core.value()->scheduler().AttachWakerTable(
                     &*wakers_, core.value()->core_id());
                 !s.ok()) {

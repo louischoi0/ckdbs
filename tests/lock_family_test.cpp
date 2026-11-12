@@ -2026,6 +2026,19 @@ TEST_F(FailedCommitTest, ACleanWhoseCommitFailsLeavesTheColumnUnflagged) {
     EXPECT_EQ(locks_->EntryCount(), held_before);
 }
 
+// Under `group` the synchronous path syncs the staged commit inline, after
+// the statement answered. A failure there replaces the answer - and has to
+// carry its `Status` beside the line, as the served path's arm does: KWP and
+// the load stream read `status`, and the bare line folds to InvalidArgument.
+TEST_F(LockDeadlockTest, AGroupCommitWhoseInlineSyncFailsCarriesItsCodeBesideItsLine) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    log_device_->FailNextSync(Status::IoError("injected"));
+    const DispatchOutcome out = dispatcher_->Dispatch("UPDATE t SET v = 1 WHERE id = 5");
+    ASSERT_EQ(out.response.rfind("ERR ", 0), 0u)
+        << "the injected sync failure did not reach the statement: " << out.response;
+    EXPECT_EQ(out.status.code(), StatusCode::kIoError) << out.response;
+}
+
 TEST_F(FailedCommitTest, AnAutocommitWriteWhoseCommitFailsReleasesEverythingItHeld) {
     ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
     const std::size_t held_before = locks_->EntryCount();
@@ -2745,6 +2758,30 @@ TEST_F(MidWalkWaitTest, AResumeRefusedAtTheArchiveGateEndsTheParkedScope) {
     EXPECT_TRUE(x.failed()) << "a partial UPDATE inside BEGIN stayed committable";
     EXPECT_EQ(dispatcher_->Dispatch("ROLLBACK", &x).response.rfind("ROLLBACK", 0), 0u);
     EXPECT_EQ(RowsWith(1), 0);
+}
+
+TEST_F(MidWalkWaitTest, AWriteRefusedAtItsSnapshotLeavesNoTransactionBehind) {
+    // An autocommit UPDATE or DELETE begins its owned transaction before it
+    // takes its snapshot (BH-S1's order), and the snapshot is a reader lease
+    // of which a core has 256 - all of them held while that many walks stay
+    // parked. The refusal has to end the transaction it had already begun:
+    // one left behind is never decided, and each further refused write
+    // leaves another until `Begin` refuses the core.
+    const txn::ReadView view = txns_->MintReadView(txn::kNoTrxId);
+    std::vector<txn::ReaderLease> held;
+    for (std::size_t i = 0; i < txn::kMaxRegisteredReaders; ++i) {
+        auto lease = txns_->RegisterReader(view);
+        ASSERT_TRUE(lease.ok()) << lease.status().message();
+        held.push_back(std::move(lease.value()));
+    }
+    const std::size_t before = txns_->ActiveCount();
+    for (const char* sql : {"UPDATE t SET v = 1 WHERE id = 5", "DELETE FROM t WHERE id = 5"}) {
+        const DispatchOutcome out = dispatcher_->Dispatch(sql);
+        EXPECT_EQ(out.status.code(), StatusCode::kOutOfSpace) << out.response;
+        EXPECT_EQ(txns_->ActiveCount(), before) << sql << " left its transaction in flight";
+    }
+    held.clear();
+    EXPECT_EQ(Local("UPDATE t SET v = 1 WHERE id = 5").rfind("UPDATED 1", 0), 0u);
 }
 
 TEST_F(MidWalkWaitTest, AClusteredBtreeParksAndResumesByKey) {
