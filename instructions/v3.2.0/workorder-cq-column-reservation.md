@@ -913,6 +913,8 @@ event. **What survives, named:**
   what the advice does not do; sending it with `COMMIT` is given as a
   saved round trip, not a gain.
 - **A1 stays pending**: `docs/pending/read-committed-rerun-on-decided-newer.md`.
+  (2026-11-12, after the close: the operator ruled A1 option (c); the
+  entry is deleted and `workorder-cr-read-committed-rerun.md` owns it.)
 - **This order**: §9's model, with the three corrections a build would
   need, and both results files, as the design of record should a client
   appear that cannot reorder.

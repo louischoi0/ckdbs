@@ -25,4 +25,3 @@ entry.
 |---|---|---|
 | `v20-insert-slowdown.md` | xrock's trade load ran ~3x slower after the move to superblock 20; the first pass found the comparison confounded and the exact investigation deferred | 2026-10-08 |
 | `multicore-scaling-cores4-below-cores2.md` | `cores = 4` delivers 21-28 % less than `cores = 2` on `point` and `insert1` at `9b7d53d7`; whether the engine or the client/reactor CPU overlap causes it is unresolved | 2026-10-15 |
-| `read-committed-rerun-on-decided-newer.md` | under `READ COMMITTED` a writer that lost to a decided newer version is refused, on `1.4-12.8 %` of contended explicit transactions and `7.9 %` of contended autocommit statements; whether the engine runs it again instead (CQ-Q9 (a)) | 2026-11-11 |
