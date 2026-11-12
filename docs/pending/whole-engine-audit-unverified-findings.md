@@ -8,7 +8,11 @@ Every `path:line` below is at that commit, before any fix.
 Related: `docs/inflight/known-gaps.md` (each finder was told to leave out
 what it records); `docs/inflight/README.md` (its rule - "verified against
 the code, at a named commit, or it does not go in" - is why the open
-findings are here and not under `docs/inflight/bugs/`).
+findings are here and not under `docs/inflight/bugs/`);
+`instructions/v3.2.0/workorder-cr-read-committed-rerun.md` (written, not
+opened: it re-runs a writer refused on a decided newer version, which is
+beside F4 and does not cover it - F4's row is passed over before any
+refusal).
 
 **Where the 32 findings stand, at `c6caa100`.** The operator had them taken up
 one at a time, in order. Each of F1 to F25 was read again against the code
