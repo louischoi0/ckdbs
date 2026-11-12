@@ -2674,16 +2674,26 @@ TEST_F(MidWalkWaitTest, AResumeRefusedAtTheArchiveGateEndsTheParkedScope) {
     // the park left open, or its six rows stay held by a transaction nothing
     // will decide and the session's next UPDATE resumes this one's walk.
     namespace fs = std::filesystem;
-    const fs::path wal =
-        fs::temp_directory_path() / ("kds_lock_archive_" + std::to_string(::getpid()));
-    fs::create_directories(wal);
+    // Declared before the archiver, so it runs after the archiver's thread
+    // has stopped; the dispatcher is not used in between.
+    struct Cleanup {
+        CommandDispatcher& dispatcher;
+        fs::path dir;
+        ~Cleanup() {
+            dispatcher.set_archiver(nullptr);
+            std::error_code ignored;
+            fs::remove_all(dir, ignored);
+        }
+    } cleanup{*dispatcher_, fs::temp_directory_path() /
+                                ("kds_lock_archive_" + std::to_string(::getpid()))};
+    fs::create_directories(cleanup.dir);
     {
-        std::ofstream segment(wal / SegmentFileName(0), std::ios::binary);
+        std::ofstream segment(cleanup.dir / SegmentFileName(0), std::ios::binary);
         segment << std::string(4096, 'a');
     }
     // Failing, with a segment size no filesystem has four of: blocking.
     constexpr std::uint64_t kHuge = std::uint64_t{1} << 50;
-    WalArchiver archiver(WalArchiver::Wiring{{{}, "false"}, wal.string(), 7, kHuge, 0,
+    WalArchiver archiver(WalArchiver::Wiring{{{}, "false"}, cleanup.dir.string(), 7, kHuge, 0,
                                              [] { return wal::Lsn{2 * kHuge}; }, {}, nullptr});
     archiver.Start();
     for (int i = 0; i < 3000 && !archiver.blocking(); ++i) {
@@ -2691,29 +2701,34 @@ TEST_F(MidWalkWaitTest, AResumeRefusedAtTheArchiveGateEndsTheParkedScope) {
     }
     ASSERT_TRUE(archiver.blocking()) << "the premise moved: the archive never blocked";
 
-    Session holder;
-    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
-    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 9 WHERE id = 7", &holder)
-                  .response.rfind("UPDATED", 0),
-              0u);
+    // Parks a ten-row UPDATE on `walker` behind a holder of row 7, closes
+    // the gate, and lets the holder go: the re-run meets the gate.
+    const auto refused_resume = [&](Session& walker) {
+        Session holder;
+        EXPECT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+        EXPECT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 9 WHERE id = 7", &holder)
+                      .response.rfind("UPDATED", 0),
+                  0u);
+        // `v >= 0` for the fixture's reason: the per-row path.
+        Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", walker);
+        Pump();
+        EXPECT_FALSE(*walk.done) << "the statement did not park: " << walk.out->response;
+        EXPECT_TRUE(walker.parked_write().has_value());
+        // ROLLBACK writes no row and passes the gate.
+        dispatcher_->set_archiver(&archiver);
+        EXPECT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+        Pump();
+        dispatcher_->set_archiver(nullptr);
+        EXPECT_TRUE(*walk.done) << "the wait never ended after the holder decided";
+        // The gate's own refusal, on the channel KWP reads (`out.status`).
+        EXPECT_EQ(walk.out->status.code(), StatusCode::kResourceExhausted) << walk.out->response;
+        EXPECT_FALSE(walker.parked_write().has_value())
+            << "the refused resume left its park on the session";
+    };
 
+    // ---- Autocommit: the owned scope aborts and gives its rows back -------
     Session w;
-    // `v >= 0` for the fixture's reason: the per-row path.
-    Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", w);
-    Pump();
-    ASSERT_FALSE(*walk.done) << "the statement did not park: " << walk.out->response;
-    ASSERT_TRUE(w.parked_write().has_value());
-
-    // The gate closes during the park. ROLLBACK writes no row and passes it.
-    dispatcher_->set_archiver(&archiver);
-    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
-    Pump();
-    dispatcher_->set_archiver(nullptr);
-
-    ASSERT_TRUE(*walk.done) << "the wait never ended after the holder decided";
-    // The gate's own refusal, on the channel KWP reads (`out.status`).
-    EXPECT_EQ(walk.out->status.code(), StatusCode::kResourceExhausted) << walk.out->response;
-    EXPECT_FALSE(w.parked_write().has_value()) << "the refused resume left its park on the session";
+    refused_resume(w);
     EXPECT_EQ(RowsWith(1), 0) << "a refused autocommit statement left rows behind";
     // The six rows are released: another session writes one at once, where a
     // stranded scope would refuse it for an undecided holder.
@@ -2722,8 +2737,14 @@ TEST_F(MidWalkWaitTest, AResumeRefusedAtTheArchiveGateEndsTheParkedScope) {
     EXPECT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 3 WHERE id = 2", &w)
                   .response.rfind("UPDATED 1", 0),
               0u);
-    std::error_code ignored;
-    fs::remove_all(wal, ignored);
+
+    // ---- Inside BEGIN: the transaction is failed, never half committed ----
+    Session x;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &x).response.rfind("BEGIN", 0), 0u);
+    refused_resume(x);
+    EXPECT_TRUE(x.failed()) << "a partial UPDATE inside BEGIN stayed committable";
+    EXPECT_EQ(dispatcher_->Dispatch("ROLLBACK", &x).response.rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(RowsWith(1), 0);
 }
 
 TEST_F(MidWalkWaitTest, AClusteredBtreeParksAndResumesByKey) {

@@ -470,21 +470,6 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             }
             const MayParkScope parking(*this, /*allowed=*/true, out->statement);
             *out = DispatchAndStage(line, session);
-            // **A re-run answered before its handler ran never took the
-            // park back.** `DispatchInner`'s gates stand ahead of
-            // `HandleUpdate`/`HandleDelete` - the archive's, which another
-            // thread closes at any moment - and only the handler's resume
-            // branch re-enters the parked scope. A handler that ran has
-            // cleared the park, or set it again together with
-            // `parked_mid_walk`; one still set without the flag is a scope
-            // nothing will ever end, held by a session whose next UPDATE
-            // would resume it with another statement's cursor. Ended here,
-            // with the gate's own refusal as the answer.
-            if (waiting_session.parked_write().has_value() && !out->parked_mid_walk) {
-                RefuseParkedWrite(*out, waiting_session,
-                                  out->status.ok() ? StatusFromErrorReply(out->response)
-                                                   : out->status);
-            }
         }
         // However the wait ended - granted, victim, or the net - this
         // transaction is no longer waiting for anything, and an edge left
@@ -584,6 +569,26 @@ sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Sessio
             continue;
         }
         break;
+    }
+    // **No wait is pending, so a park still on the session is one nothing
+    // will resume.** A re-run enters through `DispatchInner`, whose gates
+    // (the archive's, closed by another thread at any moment) answer before
+    // the handler whose resume branch takes the park back. Its scope is
+    // ended here, with the gate's refusal as the answer; otherwise an owned
+    // transaction would never decide and the session's next UPDATE would
+    // resume this statement's walk.
+    if (Session& waiting = session != nullptr ? *session : autocommit_session_;
+        waiting.parked_write().has_value()) {
+        Status refused = out->status.ok() ? StatusFromErrorReply(out->response) : out->status;
+        // Never OK: `EndWrite` would commit an owned scope half written. No
+        // gate answers without an error today; `TxnConflict` as the fault
+        // net's refusal is, the statement being unwound and safe to retry.
+        if (refused.ok()) {
+            refused = Status::TxnConflict(
+                "a parked write's re-run was answered without reaching its handler; the "
+                "statement was refused and what it had written is undone");
+        }
+        RefuseParkedWrite(*out, waiting, refused);
     }
     // ---- BA-S15: a `SELECT`'s walk runs here, sliced --------------------
     //

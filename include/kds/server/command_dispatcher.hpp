@@ -864,9 +864,10 @@ private:
                             RepeatableReadWait rerun);
 
     // Ends a parked write with `refused`, on every channel a client reads.
-    // Both endings a park can have - the deadlock victim and the fault net
-    // - are this call plus their own sentence, because writing them out
-    // twice is what let the `status` half be forgotten in both.
+    // Every ending a park can have - the deadlock victim, the fault net and
+    // a re-run a gate answered before its handler (`AwaitStatementWaits`) -
+    // is this call plus its own sentence, because writing them out twice is
+    // what let the `status` half be forgotten in two of them.
     //
     // **`response` is not enough.** `KwpSession::OnStatementComplete`
     // prefers `out.status` over `StatusFromErrorReply(out.response)`, and
