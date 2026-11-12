@@ -1,9 +1,15 @@
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
@@ -15,8 +21,10 @@
 #include "kds/sched/coro.hpp"
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/scheduler.hpp"
+#include "kds/server/backup_manifest.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/statement_epoch.hpp"
+#include "kds/server/wal_archive.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/txn/lock_table.hpp"
@@ -2656,6 +2664,66 @@ TEST_F(MidWalkWaitTest, ADeleteParksInTheMiddleOfItsWalkToo) {
     Pump();
     ASSERT_TRUE(*walk.done) << "the wait never ended";
     EXPECT_EQ(walk.out->response.rfind("DELETED 10", 0), 0u) << walk.out->response;
+}
+
+TEST_F(MidWalkWaitTest, AResumeRefusedAtTheArchiveGateEndsTheParkedScope) {
+    // A parked write's re-run enters through `DispatchInner`, whose archive
+    // gate answers before `HandleUpdate`'s resume branch runs - and that
+    // branch was the only thing that took the park back. The archive turns
+    // blocking while the statement waits; the refusal has to end the scope
+    // the park left open, or its six rows stay held by a transaction nothing
+    // will decide and the session's next UPDATE resumes this one's walk.
+    namespace fs = std::filesystem;
+    const fs::path wal =
+        fs::temp_directory_path() / ("kds_lock_archive_" + std::to_string(::getpid()));
+    fs::create_directories(wal);
+    {
+        std::ofstream segment(wal / SegmentFileName(0), std::ios::binary);
+        segment << std::string(4096, 'a');
+    }
+    // Failing, with a segment size no filesystem has four of: blocking.
+    constexpr std::uint64_t kHuge = std::uint64_t{1} << 50;
+    WalArchiver archiver(WalArchiver::Wiring{{{}, "false"}, wal.string(), 7, kHuge, 0,
+                                             [] { return wal::Lsn{2 * kHuge}; }, {}, nullptr});
+    archiver.Start();
+    for (int i = 0; i < 3000 && !archiver.blocking(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(archiver.blocking()) << "the premise moved: the archive never blocked";
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 9 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    // `v >= 0` for the fixture's reason: the per-row path.
+    Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", w);
+    Pump();
+    ASSERT_FALSE(*walk.done) << "the statement did not park: " << walk.out->response;
+    ASSERT_TRUE(w.parked_write().has_value());
+
+    // The gate closes during the park. ROLLBACK writes no row and passes it.
+    dispatcher_->set_archiver(&archiver);
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    dispatcher_->set_archiver(nullptr);
+
+    ASSERT_TRUE(*walk.done) << "the wait never ended after the holder decided";
+    // The gate's own refusal, on the channel KWP reads (`out.status`).
+    EXPECT_EQ(walk.out->status.code(), StatusCode::kResourceExhausted) << walk.out->response;
+    EXPECT_FALSE(w.parked_write().has_value()) << "the refused resume left its park on the session";
+    EXPECT_EQ(RowsWith(1), 0) << "a refused autocommit statement left rows behind";
+    // The six rows are released: another session writes one at once, where a
+    // stranded scope would refuse it for an undecided holder.
+    EXPECT_EQ(Local("UPDATE t SET v = 2 WHERE id = 1").rfind("UPDATED 1", 0), 0u);
+    // And the session's next UPDATE is its own statement, not a resume.
+    EXPECT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 3 WHERE id = 2", &w)
+                  .response.rfind("UPDATED 1", 0),
+              0u);
+    std::error_code ignored;
+    fs::remove_all(wal, ignored);
 }
 
 TEST_F(MidWalkWaitTest, AClusteredBtreeParksAndResumesByKey) {

@@ -470,6 +470,21 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             }
             const MayParkScope parking(*this, /*allowed=*/true, out->statement);
             *out = DispatchAndStage(line, session);
+            // **A re-run answered before its handler ran never took the
+            // park back.** `DispatchInner`'s gates stand ahead of
+            // `HandleUpdate`/`HandleDelete` - the archive's, which another
+            // thread closes at any moment - and only the handler's resume
+            // branch re-enters the parked scope. A handler that ran has
+            // cleared the park, or set it again together with
+            // `parked_mid_walk`; one still set without the flag is a scope
+            // nothing will ever end, held by a session whose next UPDATE
+            // would resume it with another statement's cursor. Ended here,
+            // with the gate's own refusal as the answer.
+            if (waiting_session.parked_write().has_value() && !out->parked_mid_walk) {
+                RefuseParkedWrite(*out, waiting_session,
+                                  out->status.ok() ? StatusFromErrorReply(out->response)
+                                                   : out->status);
+            }
         }
         // However the wait ended - granted, victim, or the net - this
         // transaction is no longer waiting for anything, and an edge left
