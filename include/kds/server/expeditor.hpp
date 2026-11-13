@@ -930,6 +930,14 @@ private:
     // and nothing to checkpoint.
     void StopStartedCores();
 
+    // The data file's sync thread joined and its failure handler withdrawn:
+    // a refused `Start()` and the destructor both owe it. Idempotent.
+    void StopDataSync();
+
+    // The services every core's dispatcher is handed, core 0's and each
+    // peer's alike, so one added here reaches all of them.
+    void WireInstanceServices(CommandDispatcher& dispatcher);
+
     // The optimizer surface every core's dispatcher is handed (AT-S8,
     // `OptimizerSurface`): the collector, the switch, and
     // the controller view where a Cabin store exists. The view latch is

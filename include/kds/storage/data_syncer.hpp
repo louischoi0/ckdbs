@@ -78,6 +78,11 @@ public:
     Status SyncNow();
 
     bool failed() const noexcept { return failed_.load(std::memory_order_acquire); }
+    // The thread runs: after `Start`, until `Stop` has joined it.
+    bool running() const {
+        std::lock_guard lock(mu_);
+        return running_;
+    }
 
     // Called once, with the first failure, on whichever thread synced.
     void SetFailureHandler(std::function<void(const Status&)> handler) {

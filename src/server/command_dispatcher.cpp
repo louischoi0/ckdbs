@@ -306,6 +306,14 @@ Status OutcomeStatus(const DispatchOutcome& outcome) {
     return !outcome.status.ok() ? outcome.status : StatusFromErrorReply(outcome.response);
 }
 
+namespace {
+
+// A statement's refusal: the line and the `Status` it was rendered from,
+// so no site carries one without the other.
+DispatchOutcome Refused(const Status& status) { return {ErrorReply(status), false, 0, status}; }
+
+}  // namespace
+
 stats::LockWaitRecord CommandDispatcher::LockWaitRow(const txn::LockKey& key,
                                                     txn::LockMode mode, std::uint64_t waiter,
                                                     std::uint64_t holder) const {
@@ -1392,7 +1400,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
                 "rolled back by the server; its writes are undone. ROLLBACK to end it");
             last_refusal_detail_ =
                 static_cast<std::uint16_t>(wire::ResourceDetail::kTxnLifetimeCeiling);
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
         return {"ERR current transaction is aborted; commands are ignored until ROLLBACK",
                 false};
@@ -1406,13 +1414,13 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     }
     if (IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT")) {
         if (Status s = RefuseTxnEndTail(line, cmd, rest, session); !s.ok()) {
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
         return IEquals(cmd, "COMMIT") ? HandleCommit(session) : HandleRollback(session);
     }
     if (IEquals(cmd, "SAVEPOINT") || IEquals(cmd, "RELEASE")) {
         const Status s = RefuseWhole(line, cmd, std::string(cmd) + " is not supported");
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
     if (IEquals(cmd, "USE")) return HandleUse(line, rest, session);
     if (IEquals(cmd, "SET")) {
@@ -1656,24 +1664,23 @@ StatusOr<std::vector<BackupWord>> SplitBackupWords(std::string_view line) {
 }  // namespace
 
 DispatchOutcome CommandDispatcher::HandleBackup(std::string_view line, Session& session) {
-    const auto refuse = [](const Status& s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
     const auto answer = [&](StatusOr<std::string> r) {
-        return r.ok() ? DispatchOutcome{r.value(), false} : refuse(r.status());
+        return r.ok() ? DispatchOutcome{r.value(), false} : Refused(r.status());
     };
     auto split = SplitBackupWords(line);
-    if (!split.ok()) return refuse(split.status());
+    if (!split.ok()) return Refused(split.status());
     const std::vector<BackupWord>& w = split.value();
     const std::size_t verb_at = w.size() > 1 ? w[1].at : line.size();
     const std::string verb = w.size() > 1 ? w[1].text : std::string();
     if (backup_ == nullptr || wal_ == nullptr) {
-        return refuse(Status::Unsupported(
+        return Refused(Status::Unsupported(
             "BACKUP needs a mounted volume with a log, and this dispatcher has none (byte 0)"));
     }
     if (IEquals(verb, "STATUS") && w.size() == 2) {
         return {backup_->StatusLine(), false};
     }
     if (session.in_explicit_txn()) {
-        return refuse(Status::NotImplemented(
+        return Refused(Status::NotImplemented(
             "BACKUP inside a transaction is not implemented; run it in autocommit (byte 0)"));
     }
     // `<verb> '<arg>'` or `<verb> TO '<arg>'`: the one argument, quoted.
@@ -1702,23 +1709,23 @@ DispatchOutcome CommandDispatcher::HandleBackup(std::string_view line, Session& 
     const auto now_unix = static_cast<std::uint64_t>(std::time(nullptr));
     if (IEquals(verb, "START")) {
         auto label = quoted_arg(/*to=*/false);
-        if (!label.ok()) return refuse(label.status());
+        if (!label.ok()) return Refused(label.status());
         return answer(backup_->Start(label.value(), *wal_));
     }
     if (IEquals(verb, "COPY")) {
         auto dir = quoted_arg(/*to=*/true);
-        if (!dir.ok()) return refuse(dir.status());
+        if (!dir.ok()) return Refused(dir.status());
         return answer(backup_->Copy(dir.value()));
     }
     if (IEquals(verb, "STOP")) {
         auto dir = quoted_arg(/*to=*/true);
-        if (!dir.ok()) return refuse(dir.status());
+        if (!dir.ok()) return Refused(dir.status());
         return answer(backup_->Stop(dir.value(), *wal_, now_unix));
     }
     if (IEquals(verb, "ABORT") && w.size() == 2) {
         return answer(backup_->Abort());
     }
-    return refuse(Status::InvalidArgument(
+    return Refused(Status::InvalidArgument(
         "BACKUP expects START '<label>', COPY TO '<directory>', STOP TO '<directory>', ABORT "
         "or STATUS (byte " + std::to_string(w.size() > 2 ? w[2].at : verb_at) + ")"));
 }
@@ -1733,14 +1740,14 @@ DispatchOutcome CommandDispatcher::HandleSync() {
             if (logging(LogLevel::kError)) {
                 log_->Error("wal", "client SYNC failed to sync the log: " + s.message());
             }
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
     }
     if (Status s = page_store_.Sync(); !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("storage", "client SYNC failed: " + s.message());
         }
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
     // Info, not Debug: a client-forced sync is rare and it is a durability
     // point, so it is one of the few things worth having in a default log.
@@ -2319,7 +2326,7 @@ DispatchOutcome CommandDispatcher::HandleSetAsh(std::string_view line, std::stri
     const auto refuse = [&](const Status& s, std::string_view at) {
         const std::size_t byte = at.data() == nullptr ? line.size() : static_cast<std::size_t>(at.data() - line.data());
         const Status located = s.WithMessage(s.message() + " (byte " + std::to_string(byte) + ")");
-        return DispatchOutcome{ErrorReply(located), false, 0, located};
+        return Refused(located);
     };
     if (key.empty() || value.empty() || !Trim(extra).empty()) {
         return refuse(Status::InvalidArgument("SET ASH takes a setting and one value: ENABLED on|off, "
@@ -2395,7 +2402,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
             return ResolveCreateNamespace(qualifier, /*byte_offset=*/0, session, v);
         });
         if (!create_ns.ok()) {
-            return {ErrorReply(create_ns.status()), false, 0, create_ns.status()};
+            return Refused(create_ns.status());
         }
 
         if (auto exists = ExistingRelationReply(create_ns.value(), name);
@@ -2409,7 +2416,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
         // memo invalidation at the statement's end - for a create that
         // could not happen, and kept a `CREATED` reply nothing reached.
         const Status no_columns = catalog::CheckKeystoneColumn(catalog::Schema{});
-        return {ErrorReply(no_columns), false, 0, no_columns};
+        return Refused(no_columns);
     });
 }
 
@@ -2799,7 +2806,7 @@ DispatchOutcome IndexBuildRun::Tail(const Status& ran) {
     // row went down still left it there. Online, the head noted the row and
     // the owed tree at H3, once (CI-R4).
     d_.NoteRowWritten(ddl_, created_row);
-    if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
+    if (!result.ok()) return Refused(result.status());
     if (stmt.reindex) {
         const catalog::Oid old_oid = result.value().replaced_oid;
         d_.NoteOwedIndex(scope_, relation_, old_oid, /*created=*/false);
@@ -2905,7 +2912,7 @@ private:
         // with the declaration already in force - over-enforcing until the
         // operator retries, where the other order left a durably created
         // constraint unenforced on the running instance.
-        if (Status s = d_.AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
+        if (Status s = d_.AwaitDdlDurability(); !s.ok()) return Refused(s);
         return reply;
     }
     DispatchOutcome Publish(const Status& ran);
@@ -2922,7 +2929,7 @@ DispatchOutcome AssertionBuildRun::Publish(const Status& ran) {
     // bound, TXN_CONFLICT for an unsettled relation - and both are
     // compatibility surfaces a client switches on.
     auto created = build->Finish(ran, *d_.enforcer_, d_.after_assertion_publish_run_for_test_);
-    if (!created.ok()) return {ErrorReply(created.status()), false, 0, created.status()};
+    if (!created.ok()) return Refused(created.status());
     const exec::AssertionDdlResult& result = created.value();
     // A freshly created assertion **is** enforcing (AST07): a create that
     // returns was adopted inside `AssertionBuild::Finish` (AZ-S2). SHOW
@@ -2945,7 +2952,7 @@ template <>
 DispatchOutcome TransitionBuildRun::Publish(const Status& ran) {
     const parser::TransitionStmt& stmt = build->stmt();
     auto created = build->Finish(ran);
-    if (!created.ok()) return {ErrorReply(created.status()), false, 0, created.status()};
+    if (!created.ok()) return Refused(created.status());
     if (d_.logging(LogLevel::kInfo)) {
         d_.log_->Info("ddl", "created transition '" + stmt.name + "' on '" + stmt.table_name + "'");
     }
@@ -2973,7 +2980,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
-        return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+        return Refused(parsed.status());
     }
     if (!std::holds_alternative<parser::IndexStmt>(parsed.value())) {
         return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
@@ -2984,7 +2991,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     if (stmt.reindex && session.in_explicit_txn()) {
         const Status s = Status::NotImplemented(
             "REINDEX inside a transaction is not implemented; run it in autocommit (byte 0)");
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
 
     // **CI: an online build** (`instructions/v3.2.0/workorder-ci-online-index-build.md`)
@@ -3054,7 +3061,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                     scope.txn, *relation, /*poisons=*/true,
                     online ? txn::LockMode::kIntentionShared : txn::LockMode::kExclusive);
                 held.has_value()) {
-                return {ErrorReply(*held), false, 0, *held};
+                return Refused(*held);
             }
             // The memo made current under the borrow, as `RENAME` makes it:
             // the boundary settled it before the grant, and a column change
@@ -3090,7 +3097,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                 name_view.has_value() ? &*name_view : nullptr, ddl.trx_id,
                 ddl.txn != nullptr ? &change : nullptr, txn_, build_progress);
             NoteIndexRowDropped(ddl, change);
-            if (!build.ok()) return {ErrorReply(build.status()), false, 0, build.status()};
+            if (!build.ok()) return Refused(build.status());
             return run->Start(scope, std::move(ddl), *relation, std::move(build.value()));
         }
 
@@ -3119,7 +3126,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                              ddl.trx_id, ddl.txn != nullptr ? &change : nullptr);
             NoteIndexRowDropped(ddl, change);
             if (!index_oid.ok()) {
-                return {ErrorReply(index_oid.status()), false, 0, index_oid.status()};
+                return Refused(index_oid.status());
             }
             NoteOwedIndex(scope, *relation, index_oid.value(), /*created=*/false);
             std::ostringstream os;
@@ -3134,7 +3141,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         // is built only over the relation borrowed above. A later lookup
         // could find one created since, which holds no borrow of this
         // statement's.
-        if (!relation.has_value()) return {ErrorReply(miss), false, 0, miss};
+        if (!relation.has_value()) return Refused(miss);
         DdlScope create_ddl = DdlScopeFor(scope);
         // Resolved under the session's view (spec §5's rule: an index is a
         // schema object and CREATE INDEX is a resolution route). An index
@@ -3146,7 +3153,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             catalog_, page_store_, stmt, session.default_namespace(),
             build_view.has_value() ? &*build_view : nullptr, create_ddl.trx_id, txn_,
             build_progress, *relation, online, wal_);
-        if (!build.ok()) return {ErrorReply(build.status()), false, 0, build.status()};
+        if (!build.ok()) return Refused(build.status());
         if (online) {
             // **H3, in the head**, under the undo hook `DdlScopeFor`
             // installed, so a rollback retires the row: the slot, the row
@@ -3161,7 +3168,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             if (owed) {
                 NoteOwedIndex(scope, *relation, build.value()->index_oid(), /*created=*/true);
             }
-            if (!announced.ok()) return {ErrorReply(announced), false, 0, announced};
+            if (!announced.ok()) return Refused(announced);
         }
         return run->Start(scope, std::move(create_ddl), *relation, std::move(build.value()));
     }, online ? std::optional<txn::IsolationLevel>(txn::IsolationLevel::kReadCommitted)
@@ -3171,7 +3178,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
 DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line, Session& session) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
-        return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+        return Refused(parsed.status());
     }
     if (!std::holds_alternative<parser::CabinStmt>(parsed.value())) {
         return {"ERR expected a CREATE CABIN or DROP CABIN statement", false};
@@ -3198,7 +3205,7 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line, Session& s
         if (relation.has_value()) {
             if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, *relation);
                 held.has_value()) {
-                return {ErrorReply(*held), false, 0, *held};
+                return Refused(*held);
             }
         }
         return RunCabinDdl(stmt, session.default_namespace());
@@ -3214,7 +3221,7 @@ DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt,
         auto cabin_id =
             exec::DropCabin(catalog_, page_store_, wal_, stmt, default_namespace);
         if (!cabin_id.ok()) {
-            return {ErrorReply(cabin_id.status()), false, 0, cabin_id.status()};
+            return Refused(cabin_id.status());
         }
         // The runtime half. The catalog cannot see the observed sets, and
         // they are unreachable the moment its row is gone - the compiler
@@ -3223,7 +3230,7 @@ DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt,
         if (cabins_ != nullptr) cabins_->Forget(cabin_id.value());
         // Transactionless like the pattern and assertion routes: the
         // sys.cabins row is logged but no commit record follows it.
-        if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
+        if (Status s = AwaitDdlDurability(); !s.ok()) return Refused(s);
         std::ostringstream os;
         os << "DROPPED CABIN on=" << stmt.table_name;
         if (stmt.shape == catalog::kCabinShapeColumn) os << '.' << stmt.column_name;
@@ -3243,9 +3250,9 @@ DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt,
     auto result = exec::CreateCabin(catalog_, page_store_, wal_, stmt, default_namespace,
                                     committed.has_value() ? &*committed : nullptr);
     if (!result.ok()) {
-        return {ErrorReply(result.status()), false, 0, result.status()};
+        return Refused(result.status());
     }
-    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
+    if (Status s = AwaitDdlDurability(); !s.ok()) return Refused(s);
 
     std::ostringstream os;
     // `observed=0` is printed rather than left out, because it is the thing
@@ -3274,7 +3281,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
                                                Session& session) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
-        return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+        return Refused(parsed.status());
     }
     if (!std::holds_alternative<parser::AlterStmt>(parsed.value())) {
         return {"ERR expected an ALTER TABLE statement", false};
@@ -3285,7 +3292,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     const bool rename_column = stmt.action == parser::AlterAction::kRenameColumn;
 
     auto oid = ResolveAlterTarget(stmt, session);
-    if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
+    if (!oid.ok()) return Refused(oid.status());
 
     // ---- AL4a: the relation `X`, for both renames -------------------------
     //
@@ -3313,7 +3320,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
                   : TakeDdlBuildLock(session, oid.value(), stmt.table_name,
                                      rename_column ? "RENAME COLUMN" : "RENAME TO", rename_lock);
         refused.has_value()) {
-        return {ErrorReply(*refused), false, 0, *refused};
+        return Refused(*refused);
     }
     // The memo made current under the `X`, as `HandleTransition` makes it
     // (the BV S2 review's B2): the boundary settled it before the grant, and
@@ -3326,12 +3333,12 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     // oid, or on none, and the grant is on the old one.
     if (rename_lock.txn != nullptr) {
         auto settled = ResolveAlterTarget(stmt, session);
-        if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
+        if (!settled.ok()) return Refused(settled.status());
         if (settled.value() != oid.value()) {
             const Status moved = Status::TxnConflict("relation '" + stmt.table_name +
                                                      "' changed while the rename waited for it "
                                                      "- retry");
-            return {ErrorReply(moved), false, 0, moved};
+            return Refused(moved);
         }
     }
 
@@ -3343,7 +3350,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     // AssertionsOnRelation()'s first live call site.
     auto restricting = exec::AssertionsOnRelation(catalog_, page_store_, oid.value());
     if (!restricting.ok()) {
-        return {ErrorReply(restricting.status()), false, 0, restricting.status()};
+        return Refused(restricting.status());
     }
     if (!restricting.value().empty()) {
         return {"ERR assertion '" + restricting.value().front().name +
@@ -3390,11 +3397,11 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
                                        ? session.transaction()->id()
                                        : txn::kNoTrxId);
     if (!renamed.ok()) {
-        return {ErrorReply(renamed), false, 0, renamed};
+        return Refused(renamed);
     }
     // Transactionless like the pattern and assertion routes: the renamed
     // catalog rows are logged but no commit record follows them.
-    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
+    if (Status s = AwaitDdlDurability(); !s.ok()) return Refused(s);
 
     std::ostringstream os;
     if (rename_column) {
@@ -3560,7 +3567,7 @@ DispatchOutcome CommandDispatcher::HandleAddColumn(const parser::AlterStmt& stmt
     const auto refuse = [](const std::string& what, std::uint32_t byte) {
         const Status s =
             Status::NotImplemented(what + " (byte " + std::to_string(byte) + ")");
-        return DispatchOutcome{ErrorReply(s), false, 0, s};
+        return Refused(s);
     };
     // BW-R5: the rows that predate the column have no value for it, so
     // it is nullable and says so - this engine's columns are NOT NULL
@@ -3589,12 +3596,12 @@ DispatchOutcome CommandDispatcher::HandleAddColumn(const parser::AlterStmt& stmt
 
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         auto oid = AlterColumnRelation(stmt, session, scope);
-        if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
+        if (!oid.ok()) return Refused(oid.status());
 
 
         const auto refused = [&](const Status& status) {
             const Status s = status.WithContext("byte " + std::to_string(stmt.column_byte_offset));
-            return DispatchOutcome{ErrorReply(s), false, 0, s};
+            return Refused(s);
         };
         // ---- CD-S4: the position first, then what still names it ---------
         //
@@ -3646,22 +3653,22 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
                                                     Session& session) {
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         auto oid = AlterColumnRelation(stmt, session, scope);
-        if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
+        if (!oid.ok()) return Refused(oid.status());
 
         // Resolved under the `X`, so no dependant can arrive between the
         // restrict and the write.
         auto access = catalog_.InitTableAccess(oid.value());
-        if (!access.ok()) return {ErrorReply(access.status()), false, 0, access.status()};
+        if (!access.ok()) return Refused(access.status());
         auto found =
             access.value()->schema.FindColumn(stmt.old_column, stmt.old_column_byte_offset);
-        if (!found.ok()) return {ErrorReply(found.status()), false, 0, found.status()};
+        if (!found.ok()) return Refused(found.status());
         const catalog::SysColumnRow* column = found.value();
         const auto at = " (byte " + std::to_string(stmt.old_column_byte_offset) + ")";
         if (column == nullptr) {
             const Status s = Status::NotFound("relation '" + stmt.table_name +
                                               "' has no column named '" + stmt.old_column +
                                               "'" + at);
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
         // A copy, not `column->pos`: `column` points into the catalog cache,
         // which any catalog write before the drop's clears (the test seam's
@@ -3672,7 +3679,7 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
             const Status s = Status::InvalidArgument("column '" + stmt.old_column +
                                                       "' is the tuple key and cannot be "
                                                       "dropped (invariant 11)" + at);
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
         // A heap's last declared column (BZ-Q3): without it the relation has
         // no column a statement can write or read, only its hidden key.
@@ -3680,11 +3687,11 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
             const Status s = Status::InvalidArgument(
                 "column '" + stmt.old_column + "' is the heap's last declared column and cannot "
                 "be dropped; a heap keeps at least one" + at);
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
         auto restricted = DropColumnRestriction(oid.value(), pos);
         if (!restricted.ok()) {
-            return {ErrorReply(restricted.status()), false, 0, restricted.status()};
+            return Refused(restricted.status());
         }
         if (restricted.value().has_value()) {
             return {"ERR column '" + stmt.old_column + "' cannot be dropped" + at + ": " +
@@ -3703,7 +3710,7 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
         NoteCatalogRowChanges(ddl, changed);
         if (!dropped.ok()) {
             const Status s = dropped.WithContext("byte " + std::to_string(stmt.old_column_byte_offset));
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
         if (logging(LogLevel::kInfo)) {
             log_->Info("ddl", "dropped column " + stmt.table_name + "." + stmt.old_column);
@@ -3723,7 +3730,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
     DispatchOutcome out = InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         auto parsed = parser::Parse(line);
         if (!parsed.ok()) {
-            return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+            return Refused(parsed.status());
         }
         if (!std::holds_alternative<parser::DropTableStmt>(parsed.value())) {
             return {"ERR expected a DROP TABLE statement", false};
@@ -3736,7 +3743,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                             session.default_namespace(), stmt.byte_offset, v);
         });
         if (!oid.ok()) {
-            return {ErrorReply(oid.status()), false, 0, oid.status()};
+            return Refused(oid.status());
         }
 
         // DT3's RESTRICT, both blockers named. A referencing foreign key
@@ -3755,7 +3762,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         const auto restricted = [&]() -> std::optional<DispatchOutcome> {
             auto fkeys = catalog_.ListForeignKeys();
             if (!fkeys.ok()) {
-                return DispatchOutcome{ErrorReply(fkeys.status()), false, 0, fkeys.status()};
+                return Refused(fkeys.status());
             }
             for (const catalog::SysFkeyRow& fk : fkeys.value()) {
                 if (fk.parent_rel_oid != oid.value()) continue;
@@ -3767,8 +3774,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             }
             auto restricting = exec::AssertionsOnRelation(catalog_, page_store_, oid.value());
             if (!restricting.ok()) {
-                return DispatchOutcome{ErrorReply(restricting.status()), false, 0,
-                                       restricting.status()};
+                return Refused(restricting.status());
             }
             if (!restricting.value().empty()) {
                 return DispatchOutcome{"ERR assertion '" + restricting.value().front().name +
@@ -3783,8 +3789,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             if (session.in_explicit_txn()) {
                 auto governing = exec::TransitionsOnRelation(catalog_, page_store_, oid.value());
                 if (!governing.ok()) {
-                    return DispatchOutcome{ErrorReply(governing.status()), false, 0,
-                                           governing.status()};
+                    return Refused(governing.status());
                 }
                 if (!governing.value().empty()) {
                     const Status s = Status::NotImplemented(
@@ -3792,7 +3797,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                         "' is declared on this relation; inside an explicit transaction DROP "
                         "TRANSITION first, or drop the relation in autocommit (byte " +
                         std::to_string(stmt.byte_offset) + ")");
-                    return DispatchOutcome{ErrorReply(s), false, 0, s};
+                    return Refused(s);
                 }
             }
             return std::nullopt;
@@ -3811,7 +3816,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         // that could have bound the relation runs (the statement epoch).
         if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, oid.value());
             held.has_value()) {
-            return {ErrorReply(*held), false, 0, *held};
+            return Refused(*held);
         }
         if (auto refused = restricted(); refused.has_value()) return *refused;
 
@@ -3830,7 +3835,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                ddl.txn != nullptr ? &changed : nullptr, &owed);
         NoteCatalogRowChanges(ddl, changed);
         if (Status s = dropped; !s.ok()) {
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
         // What the drop owes (BF-R9), queued at its transaction's commit by
         // `EndDdlScopeById`: the roots its retype wrote into the tombstone.
@@ -3897,7 +3902,7 @@ DispatchOutcome CommandDispatcher::HandleNamespace(std::string_view line, Sessio
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
-        return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+        return Refused(parsed.status());
     }
     if (!std::holds_alternative<parser::NamespaceStmt>(parsed.value())) {
         return {"ERR expected a CREATE NAMESPACE or DROP NAMESPACE statement", false};
@@ -3913,7 +3918,7 @@ DispatchOutcome CommandDispatcher::HandleNamespace(std::string_view line, Sessio
             if (!oid.ok()) {
                 Status s = oid.status().WithContext("byte " +
                                                     std::to_string(stmt.byte_offset));
-                return {ErrorReply(s), false, 0, s};
+                return Refused(s);
             }
             if (logging(LogLevel::kInfo)) {
                 log_->Info("ddl", "created namespace '" + stmt.name + "' oid=" +
@@ -3931,7 +3936,7 @@ DispatchOutcome CommandDispatcher::HandleNamespace(std::string_view line, Sessio
                            ? Status::NotFound("no namespace named '" + stmt.name + "' (byte " +
                                               std::to_string(stmt.byte_offset) + ")")
                            : oid.status();
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
 
         // RESTRICT, and the catalog names the relation that blocked it.
@@ -3941,7 +3946,7 @@ DispatchOutcome CommandDispatcher::HandleNamespace(std::string_view line, Sessio
         NoteCatalogRowChanges(ddl, changed);
         if (!dropped.ok()) {
             Status s = dropped.WithContext("byte " + std::to_string(stmt.byte_offset));
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
         if (logging(LogLevel::kInfo)) {
             log_->Info("ddl", "dropped namespace '" + stmt.name + "' oid=" +
@@ -3996,7 +4001,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
-        return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+        return Refused(parsed.status());
     }
     if (!std::holds_alternative<parser::AssertionStmt>(parsed.value())) {
         return {"ERR expected a CREATE ASSERTION or DROP ASSERTION statement", false};
@@ -4006,9 +4011,9 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     if (stmt.drop) {
         auto id = exec::DropAssertion(catalog_, page_store_, stmt, wal_);
         if (!id.ok()) {
-            return {ErrorReply(id.status()), false, 0, id.status()};
+            return Refused(id.status());
         }
-        if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
+        if (Status s = AwaitDdlDurability(); !s.ok()) return Refused(s);
         // The instance's registry, the one place the directory is (AT-S5d).
         enforcer_->Evict(id.value());
         std::ostringstream os;
@@ -4041,7 +4046,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // every socket-free test runs on.
     const txn::ReadView view = SettledView();
     auto target = exec::AssertionTargetOid(catalog_, stmt, session.default_namespace(), &view);
-    if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
+    if (!target.ok()) return Refused(target.status());
 
     // The run owns the lock from the ask on, so a build handed on keeps the
     // `X` until its tail has published (A1 stage 2, `DeclarationBuildRun`).
@@ -4051,7 +4056,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
             TakeDdlBuildLock(session, target.value(), stmt.table_name, "CREATE ASSERTION",
                              build_lock);
         refused.has_value()) {
-        return {ErrorReply(*refused), false, 0, *refused};
+        return Refused(*refused);
     }
     // **The memo made current under the `X`**, as `HandleTransition` and the
     // renames make it (the BV S2 review's B2): a `RENAME COLUMN` another core
@@ -4074,19 +4079,19 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     if (build_lock.txn != nullptr) {
         auto settled =
             exec::AssertionTargetOid(catalog_, stmt, session.default_namespace(), &check_view);
-        if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
+        if (!settled.ok()) return Refused(settled.status());
         if (settled.value() != target.value()) {
             const Status moved = Status::TxnConflict(
                 "relation '" + stmt.table_name +
                 "' changed while CREATE ASSERTION waited for it - retry");
-            return {ErrorReply(moved), false, 0, moved};
+            return Refused(moved);
         }
     }
 
     auto build = exec::AssertionBuild::ForCreate(
         catalog_, page_store_, stmt, target.value(), wal_,
         build_lock.progress.has_value() ? &*build_lock.progress : nullptr);
-    if (!build.ok()) return {ErrorReply(build.status()), false, 0, build.status()};
+    if (!build.ok()) return Refused(build.status());
     run->build = std::move(build.value());
     return run->HandOn(build_lock.txn != nullptr);
 }
@@ -4094,7 +4099,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
 DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Session& session) {
     parser::Parser parser(line);
     auto parsed = parser.Parse();
-    if (!parsed.ok()) return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+    if (!parsed.ok()) return Refused(parsed.status());
     if (!std::holds_alternative<parser::TransitionStmt>(parsed.value())) {
         return {"ERR expected a CREATE TRANSITION or DROP TRANSITION statement", false};
     }
@@ -4115,18 +4120,18 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
     StatusOr<catalog::Oid> target = Status::NotFound("");
     if (stmt.drop) {
         auto def = exec::FindTransitionByName(catalog_, page_store_, stmt.name);
-        if (!def.ok()) return {ErrorReply(def.status()), false, 0, def.status()};
+        if (!def.ok()) return Refused(def.status());
         if (!def.value().has_value()) {
             const Status s = Status::NotFound("no transition named \"" + stmt.name +
                                               "\" (byte " + std::to_string(stmt.byte_offset) +
                                               ")");
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
         target = def.value()->target_oid;
     } else {
         target = exec::TransitionTargetOid(catalog_, stmt, session.default_namespace(), &view);
     }
-    if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
+    if (!target.ok()) return Refused(target.status());
 
     // A CREATE's run owns its lock from the ask on, so a build handed on
     // keeps the `X` until its tail has published (A1 stage 2,
@@ -4138,7 +4143,7 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
             TakeDdlBuildLock(session, target.value(), RelationNameOf(target.value()), verb,
                              build_lock);
         refused.has_value()) {
-        return {ErrorReply(*refused), false, 0, *refused};
+        return Refused(*refused);
     }
     const txn::ReadView check_view = SettledView();
     // **The memo is made current under the `X`** (the S2 review's B2): the
@@ -4157,16 +4162,16 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
         // whose relation this statement does not hold. Asked again under the
         // `X`, as a CREATE re-resolves its table (the S3 review's C1).
         auto still = exec::FindTransitionByName(catalog_, page_store_, stmt.name);
-        if (!still.ok()) return {ErrorReply(still.status()), false, 0, still.status()};
+        if (!still.ok()) return Refused(still.status());
         if (still.value().has_value() && still.value()->target_oid != target.value()) {
             const Status moved = Status::TxnConflict(
                 "transition \"" + stmt.name +
                 "\" moved to another relation while DROP TRANSITION waited for it - retry");
-            return {ErrorReply(moved), false, 0, moved};
+            return Refused(moved);
         }
         auto dropped = exec::DropTransition(catalog_, page_store_, stmt, wal_);
-        if (!dropped.ok()) return {ErrorReply(dropped.status()), false, 0, dropped.status()};
-        if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
+        if (!dropped.ok()) return Refused(dropped.status());
+        if (Status s = AwaitDdlDurability(); !s.ok()) return Refused(s);
         if (logging(LogLevel::kInfo)) log_->Info("ddl", "dropped transition '" + stmt.name + "'");
         return {"DROPPED TRANSITION name=" + stmt.name +
                     " transition_id=" + std::to_string(dropped.value().id),
@@ -4179,18 +4184,18 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
     if (build_lock.txn != nullptr) {
         auto settled =
             exec::TransitionTargetOid(catalog_, stmt, session.default_namespace(), &check_view);
-        if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
+        if (!settled.ok()) return Refused(settled.status());
         if (settled.value() != target.value()) {
             const Status moved = Status::TxnConflict(
                 "relation '" + stmt.table_name +
                 "' changed while CREATE TRANSITION waited for it - retry");
-            return {ErrorReply(moved), false, 0, moved};
+            return Refused(moved);
         }
     }
     auto build = exec::TransitionBuild::ForCreate(
         catalog_, page_store_, stmt, target.value(), wal_,
         build_lock.progress.has_value() ? &*build_lock.progress : nullptr);
-    if (!build.ok()) return {ErrorReply(build.status()), false, 0, build.status()};
+    if (!build.ok()) return Refused(build.status());
     run->build = std::move(build.value());
     return run->HandOn(build_lock.txn != nullptr);
 }
@@ -4942,11 +4947,11 @@ std::optional<DispatchOutcome> CommandDispatcher::ColumnRowOf(const parser::Colu
             "column name '" + col.name + "' is longer than " +
             std::to_string(catalog::kCatalogNameMax - 1) + " bytes (byte " +
             std::to_string(col.name_byte_offset) + ")");
-        return DispatchOutcome{ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
     auto type_row = catalog_.ResolveTypeByName(col.type_name);
     if (!type_row.ok()) {
-        return DispatchOutcome{ErrorReply(type_row.status()), false, 0, type_row.status()};
+        return Refused(type_row.status());
     }
 
     // A cabin policy on the tuple key is refused rather than ignored.
@@ -5098,7 +5103,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         auto parsed = parser::Parse(line);
         if (!parsed.ok()) {
-            return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+            return Refused(parsed.status());
         }
         if (!std::holds_alternative<parser::CreateTableStmt>(parsed.value())) {
             return {"ERR expected a CREATE TABLE statement", false};
@@ -5116,7 +5121,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             return ResolveCreateNamespace(stmt.schema, stmt.table_byte_offset, session, v);
         });
         if (!create_ns.ok()) {
-            return {ErrorReply(create_ns.status()), false, 0, create_ns.status()};
+            return Refused(create_ns.status());
         }
 
         // The duplicate check, answered early so a taken name costs no type
@@ -5155,7 +5160,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                         std::string(catalog::NameView(earlier.name)) +
                         "' (names are unique ignoring case) (byte " +
                         std::to_string(col.name_byte_offset) + ")");
-                    return {ErrorReply(s), false, 0, s};
+                    return Refused(s);
                 }
             }
             schema.columns.push_back(row);
@@ -5196,7 +5201,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                     const Status s = refused.WithMessage(
                         refused.message() + " (byte " +
                         std::to_string(col.references_byte_offset) + ")");
-                    return {ErrorReply(s), false, 0, s};
+                    return Refused(s);
                 }
             }
 
@@ -5211,7 +5216,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                                 col.references_byte_offset, v);
             });
             if (!parent_oid.ok()) {
-                return {ErrorReply(parent_oid.status()), false, 0, parent_oid.status()};
+                return Refused(parent_oid.status());
             }
             // The parent's `IS`, held to the decide (BF-Q11 (a)), taken as
             // soon as the parent is named and before anything is written,
@@ -5226,11 +5231,11 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                     BorrowRelationForDdl(scope.txn, parent_oid.value(), /*poisons=*/true,
                                          txn::LockMode::kIntentionShared);
                 held.has_value()) {
-                return {ErrorReply(*held), false, 0, *held};
+                return Refused(*held);
             }
             auto parent = catalog_.InitTableAccess(parent_oid.value());
             if (!parent.ok()) {
-                return {ErrorReply(parent.status()), false, 0, parent.status()};
+                return Refused(parent.status());
             }
 
             // The shared declaration checks (catalog/foreign_key.hpp) - the same
@@ -5274,7 +5279,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                     return *exists;
                 }
             }
-            return {ErrorReply(oid.status()), false, 0, oid.status()};
+            return Refused(oid.status());
         }
 
         // The constraints, now that there is a child relation to hang them on.
@@ -5621,7 +5626,7 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     // `retryable=1` where its code is retryable, which is what a client's
     // retry loop reads.
     auto opened = BeginWrite(session);
-    if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
+    if (!opened.ok()) return Refused(opened.status());
     WriteScope scope = opened.value();
     // **One context for the statement** (`functions.hpp`): the values, an
     // `INSERT ... SELECT`'s source, every `ON CONFLICT` update arm and the
@@ -5642,7 +5647,7 @@ DispatchOutcome CommandDispatcher::FinishWrite(Session& session, WriteScope& sco
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
     if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
     // `sys.relation_stats`' count (BO-S6), once the statement has answered.
     if (!failed) stats::RelationStats::Record(core_id_, out.written_oid, kind, out.rows_affected);
@@ -5995,7 +6000,7 @@ DispatchOutcome SelectRun::RunInline() {
         if (!walk.TryResumeDeepest()) {
             const Status parked = Status::InvalidArgument(
                 "a SELECT's walk parked on a wait under a synchronous dispatch");
-            return {ErrorReply(parked), false, 0, parked};
+            return Refused(parked);
         }
     }
     return out;
@@ -6014,7 +6019,7 @@ DispatchOutcome SelectRun::Finish(const Status& ran) {
         // way through touched some tuples and then stopped; a trail
         // describing that is a trail describing a state no reader should
         // ever be pointed at (workplan P10).
-        return {ErrorReply(ran), false, 0, ran};
+        return Refused(ran);
     }
     CommandDispatcher::SelectScratch& scratch = *scratch_;
 
@@ -6029,7 +6034,7 @@ DispatchOutcome SelectRun::Finish(const Status& ran) {
             if (!drained.ok()) return;
             drained = sink->Emit(row.text);
         });
-        if (!drained.ok()) return {ErrorReply(drained), false, 0, drained};
+        if (!drained.ok()) return Refused(drained);
     }
 
     d_.RecordExecution(identity, trail, *chain, scratch.stats);
@@ -6073,7 +6078,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
                                                const exec::StatementContext& context) {
     auto parsed = ParseKeepingShape(line);
     if (!parsed.ok()) {
-        return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+        return Refused(parsed.status());
     }
     if (!std::holds_alternative<parser::InsertStmt>(parsed.value())) {
         return {"ERR expected an INSERT statement", false};
@@ -6090,7 +6095,7 @@ std::optional<DispatchOutcome> CommandDispatcher::ArchiveRefusal() const {
         "the WAL archive is failing (" + archiver_->last_error() +
         ") and the WAL filesystem is near full; statements that write the log are refused "
         "until archiving recovers (byte 0)");
-    return DispatchOutcome{ErrorReply(s), false, 0, s};
+    return Refused(s);
 }
 
 StatusOr<catalog::Oid> CommandDispatcher::ResolveRelationName(Session& session,
@@ -6109,7 +6114,7 @@ DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
     // rule, so a load chunk and a textual statement are indistinguishable
     // from the write pipeline's side (KW5, BI2).
     auto opened = BeginWrite(session);
-    if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
+    if (!opened.ok()) return Refused(opened.status());
     WriteScope scope = opened.value();
 
     // A load chunk's rows are a relation's inserts (BO-S6), though the
@@ -6205,25 +6210,33 @@ DispatchOutcome WroteRows(std::string reply, std::uint64_t rows, catalog::Oid oi
 DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& written,
                                                 WriteScope& scope,
                                                 const exec::StatementContext& context) {
-    // BI3: the row cap, at the first config-aware layer (the parser is a
-    // pure syntax layer and deliberately config-blind). A refusal naming
-    // the cap and the count, never a truncation.
-    if (written.rows.size() > max_insert_rows_) {
-        return {"ERR INSERT of " + std::to_string(written.rows.size()) +
-                    " rows exceeds max_insert_rows (" + std::to_string(max_insert_rows_) + ")",
-                false};
-    }
-
-    // BI4's atomicity is the transaction scope's: rows placed before a
-    // failure are unwound by rollback, and rollback replays the manager's
-    // in-memory trail. A configuration without one (tests; production
-    // always builds it) could place rows it cannot take back, which is a
-    // wrong answer with a right answer's shape - refused upfront instead.
-    if (written.rows.size() > 1 && txn_ == nullptr) {
-        return {"ERR a multi-row INSERT requires the transaction manager; this configuration "
+    // The two gates on a statement's row count, asked of the rows written
+    // and again of the rows an `INSERT ... SELECT` produced.
+    const auto too_many = [&](std::size_t rows) -> std::optional<DispatchOutcome> {
+        // BI3: the row cap, at the first config-aware layer (the parser is
+        // a pure syntax layer and deliberately config-blind). A refusal
+        // naming the cap and the count, never a truncation.
+        if (rows > max_insert_rows_) {
+            return DispatchOutcome{"ERR INSERT of " + std::to_string(rows) +
+                                       " rows exceeds max_insert_rows (" +
+                                       std::to_string(max_insert_rows_) + ")",
+                                   false};
+        }
+        // BI4's atomicity is the transaction scope's: rows placed before a
+        // failure are unwound by rollback, and rollback replays the
+        // manager's in-memory trail. A configuration without one (tests;
+        // production always builds it) could place rows it cannot take
+        // back, which is a wrong answer with a right answer's shape -
+        // refused upfront instead.
+        if (rows > 1 && txn_ == nullptr) {
+            return DispatchOutcome{
+                "ERR a multi-row INSERT requires the transaction manager; this configuration "
                 "cannot unwind a partially placed statement and is single-row only",
                 false};
-    }
+        }
+        return std::nullopt;
+    };
+    if (auto refused = too_many(written.rows.size())) return std::move(*refused);
 
     // Resolved under the writing session's view (DT3c): a write to a
     // relation another transaction created and has not committed must not
@@ -6238,14 +6251,14 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
             written.table_byte_offset, v);
     });
     if (!oid.ok()) {
-        return {ErrorReply(oid.status()), false, 0, oid.status()};
+        return Refused(oid.status());
     }
 
     ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
 
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
-        return {ErrorReply(access.status()), false, 0, access.status()};
+        return Refused(access.status());
     }
     // Borrowed from the catalog's cache, not owned: valid for this
     // statement, including across AllocateRowId() (catalog.hpp) and a root
@@ -6262,7 +6275,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     if (Status admitted = CheckWriteAdmission(ta); !admitted.ok()) {
         // ErrorReply, not a bare "ERR ": what the gate refuses
         // (`CannotEnforce`) must reach the wire with its code.
-        return {ErrorReply(admitted), false, 0, admitted};
+        return Refused(admitted);
     }
     // ---- The relation's intention, before anything is admitted (AT-S5e,
     // AT-0 item 13) ---------------------------------------------------------
@@ -6277,7 +6290,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     // of the statement is covered by this one ask.
     if (std::optional<Status> held = BorrowOrWait(scope, txn::LockKey::Relation(ta.oid),
                                                   RepeatableReadWait::kCapable)) {
-        return {ErrorReply(*held), false, 0, *held};
+        return Refused(*held);
     }
 
     // **Positional `VALUES` name the live columns** (BW-R6, BW-Q9 of
@@ -6303,39 +6316,30 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
             "relation '" + written.table_name +
             "' is not the relation this load described at its BEGIN: it was dropped or its "
             "columns were changed by ALTER TABLE since; begin a new load");
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
     std::optional<parser::InsertStmt> evaluated;
     if (!written.value_exprs.empty()) {
         auto e = EvaluateInsertExpressions(ta, written, context);
-        if (!e.ok()) return {ErrorReply(e.status()), false, 0, e.status()};
+        if (!e.ok()) return Refused(e.status());
         evaluated.emplace(std::move(e.value()));
     }
     if (written.select != nullptr) {
         auto e = InsertSelectRows(ta, written, scope, context);
-        if (!e.ok()) return {ErrorReply(e.status()), false, 0, e.status()};
+        if (!e.ok()) return Refused(e.status());
         evaluated.emplace(std::move(e.value()));
-        if (evaluated->rows.size() > max_insert_rows_) {
-            return {"ERR INSERT of " + std::to_string(evaluated->rows.size()) +
-                        " rows exceeds max_insert_rows (" + std::to_string(max_insert_rows_) + ")",
-                    false};
-        }
-        if (evaluated->rows.size() > 1 && txn_ == nullptr) {
-            return {"ERR a multi-row INSERT requires the transaction manager; this configuration "
-                    "cannot unwind a partially placed statement and is single-row only",
-                    false};
-        }
+        if (auto refused = too_many(evaluated->rows.size())) return std::move(*refused);
         if (evaluated->rows.empty()) {
             return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
         }
     }
     const parser::InsertStmt& valued = evaluated.has_value() ? *evaluated : written;
     auto normalized = NormalizeInsertRows(ta, valued);
-    if (!normalized.ok()) return {ErrorReply(normalized.status()), false, 0, normalized.status()};
+    if (!normalized.ok()) return Refused(normalized.status());
     const parser::InsertStmt& shaped =
         normalized.value().has_value() ? *normalized.value() : valued;
     if (auto refused = ReturningWithoutTransaction(written.returning, scope.txn)) {
-        return {ErrorReply(*refused), false, 0, *refused};
+        return Refused(*refused);
     }
 
     // ---- ON CONFLICT DO NOTHING (BU-Q18) --------------------------------
@@ -6351,7 +6355,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     // tuple key's `DO NOTHING` decides every row up front, below.
     if (written.on_conflict_do_nothing || written.on_conflict_do_update) {
         auto arbiter = ResolveConflictArbiter(ta, written);
-        if (!arbiter.ok()) return {ErrorReply(arbiter.status()), false, 0, arbiter.status()};
+        if (!arbiter.ok()) return Refused(arbiter.status());
         if (written.on_conflict_do_update || arbiter.value() != nullptr) {
             return InsertOnConflict(oid.value(), ta, written, shaped, arbiter.value(), scope,
                                     context);
@@ -6368,7 +6372,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
                 if (named.count(*id) != 0) continue;
                 auto placed = TupleKeyPlaced(ta, *id, r.front().byte_offset, scope);
                 if (!placed.ok()) {
-                    return {ErrorReply(placed.status()), false, 0, placed.status()};
+                    return Refused(placed.status());
                 }
                 if (placed.value()) continue;
                 named.insert(*id);
@@ -6407,7 +6411,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         for (const auto& values : stmt.rows) {
             const std::vector<parser::AstValue> body = InsertBodyOf(ta, values);
             if (Status s = ResolveForeignKeyParents(ta, body, fk_held, scope); !s.ok()) {
-                return {ErrorReply(s), false, 0, s};
+                return Refused(s);
             }
         }
     }
@@ -6428,7 +6432,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
                 bulk ? Status::FromWire(static_cast<std::uint32_t>(err->code()),
                                         err->message() + " (row " + std::to_string(k + 1) + ")")
                      : *err;
-            return {ErrorReply(carried), false, 0, carried};
+            return Refused(carried);
         }
         if (k == 0) first = row;
         last = row;
@@ -6653,7 +6657,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
             bulk ? Status::FromWire(static_cast<std::uint32_t>(s.code()),
                                     s.message() + " (row " + std::to_string(k + 1) + ")")
                  : s;
-        return DispatchOutcome{ErrorReply(carried), false, 0, carried};
+        return Refused(carried);
     };
     if (txn_ == nullptr || scope.txn == nullptr || scope.session == nullptr) {
         return refuse(Status::NotImplemented(
@@ -7634,7 +7638,7 @@ template <typename Fn>
 DispatchOutcome CommandDispatcher::InDdlStatement(Session& session, Fn&& body,
                                                   std::optional<txn::IsolationLevel> isolation) {
     auto opened = BeginWrite(session, isolation);
-    if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
+    if (!opened.ok()) return Refused(opened.status());
     WriteScope scope = opened.value();
     DispatchOutcome out = body(scope);
     // **A build handed on is finished by its run** (A1 stage 2), which took
@@ -7665,7 +7669,7 @@ void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
     if (!ended.ok() && !failed) {
         // The DDL succeeded and its commit did not - the commit failure is
         // the client's answer, exactly as the DML handlers report it.
-        out = {ErrorReply(ended), false, 0, ended};
+        out = Refused(ended);
     }
     // The implicit transaction resolved inside EndWrite, so the seam that
     // explicit COMMIT/ROLLBACK reaches through EndDdlScope runs here: the
@@ -7744,7 +7748,7 @@ std::optional<DispatchOutcome> CommandDispatcher::ExistingRelationReply(
     auto existing = catalog_.FindTableOidByName(namespace_oid, name);
     if (existing.status().code() == StatusCode::kNotFound) return std::nullopt;
     if (!existing.ok()) {
-        return DispatchOutcome{ErrorReply(existing.status()), false, 0, existing.status()};
+        return Refused(existing.status());
     }
     return DispatchOutcome{"EXISTS oid=" + std::to_string(existing.value()), false};
 }
@@ -8016,7 +8020,7 @@ DispatchOutcome CommandDispatcher::HandleShow(std::string_view line, std::string
     };
     const auto refuse = [&](std::string what) {
         const Status s = Status::InvalidArgument(std::move(what));
-        return DispatchOutcome{ErrorReply(s), false, 0, s};
+        return Refused(s);
     };
     static constexpr std::string_view kBudget[] = {
         "oid", "namespace", "name", "next_id", "ids_issued", "ids_remaining", "budget_used_ppm",
@@ -8141,7 +8145,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     if (spec == nullptr) {
         const Status s = Status::NotFound("no catalog view named 'sys." + stmt.from.table_name +
                                           "'");
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
     // **A view's key** (BO-Q12, `sys_views.hpp`): the conjunct
     // `key = <literal>`, coerced to the key's type, is handed to the builder
@@ -8166,7 +8170,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                                .WithContext("column '" + cond.col.name + "' literal at byte " +
                                             std::to_string(cond.val.byte_offset));
                 !s.ok()) {
-                return {ErrorReply(s), false, 0, s};
+                return Refused(s);
             }
             key = std::move(literal);
             key_at = i;
@@ -8194,13 +8198,13 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                 "sys." + std::string(spec->name) + " is read one key at a time: write WHERE " +
                 std::string(spec->key_column) + " = <literal> (byte " +
                 std::to_string(stmt.from.byte_offset) + ")");
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
     }
     auto view =
         ReadSysView(*spec, session, key.has_value() ? &*key : nullptr, stmt.from.byte_offset);
     if (!view.ok()) {
-        return {ErrorReply(view.status()), false, 0, view.status()};
+        return Refused(view.status());
     }
     const exec::CatalogView& rows = view.value();
 
@@ -8213,7 +8217,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     } else {
         for (const parser::ColumnName& col : stmt.projection) {
             auto found = ResolveViewColumn(rows, stmt, col);
-            if (!found.ok()) return {ErrorReply(found.status()), false, 0, found.status()};
+            if (!found.ok()) return Refused(found.status());
             project.push_back(found.value());
         }
     }
@@ -8228,7 +8232,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     sort_by.reserve(stmt.order_by.size());
     for (const parser::SortKey& key : stmt.order_by) {
         auto at = ResolveViewColumn(rows, stmt, key.key.column);
-        if (!at.ok()) return {ErrorReply(at.status()), false, 0, at.status()};
+        if (!at.ok()) return Refused(at.status());
         sort_by.emplace_back(at.value(), key.descending);
     }
 
@@ -8263,7 +8267,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             const Status refused = Status::NotImplemented(
                 "a boolean conjunct (OR, NOT, an IN list, LIKE) over a catalog view (byte " +
                 std::to_string(cond.tree->byte_offset) + ")");
-            return {ErrorReply(refused), false, 0, refused};
+            return Refused(refused);
         }
         // Before anything reads `col`: a function conjunct has none on a
         // call's side, and the view's evaluator compares `col op val` only.
@@ -8272,14 +8276,14 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                                                              : cond.rhs_fn->byte_offset;
             const Status refused = Status::NotImplemented(
                 "a function call over a catalog view (byte " + std::to_string(at) + ")");
-            return {ErrorReply(refused), false, 0, refused};
+            return Refused(refused);
         }
         if (cond.rhs_kind == parser::RhsKind::kColumn) {
             return {"ERR a column-to-column comparison over a catalog view is not "
                     "supported", false};
         }
         auto at = ResolveViewColumn(rows, stmt, cond.col);
-        if (!at.ok()) return {ErrorReply(at.status()), false, 0, at.status()};
+        if (!at.ok()) return Refused(at.status());
         where_at.push_back(at.value());
 
         // The relation's literal rule (types.md §3.1a), against the type the
@@ -8299,7 +8303,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         if (checked.ok() && cond.kind == parser::PredicateKind::kBetween) {
             checked = coerce(high);
         }
-        if (!checked.ok()) return {ErrorReply(checked), false, 0, checked};
+        if (!checked.ok()) return Refused(checked);
     }
 
     // **SV5 (BO-R3): a view answers as a relation does** - described and
@@ -8317,7 +8321,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         types.push_back(rows.column_types[index]);
     }
     if (Status s = sink.Describe(DescribeFields(names, types, {})); !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
 
     std::vector<const std::vector<parser::AstValue>*> qualifying;
@@ -8366,7 +8370,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             Keyed& k = keyed.emplace_back(Keyed{{}, row});
             for (const auto& [at, descending] : sort_by) {
                 auto key = exec::OrderKeyOf(rows.column_types[at], (*row)[at]);
-                if (!key.ok()) return {ErrorReply(key.status()), false, 0, key.status()};
+                if (!key.ok()) return Refused(key.status());
                 k.keys.push_back(std::move(key.value()));
             }
         }
@@ -8393,7 +8397,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         for (std::size_t i = 0; i < project.size(); ++i) values[i] = (*row)[project[i]];
         Status s = sink.EncodeValueRow(types, values, encoded);
         if (s.ok()) s = sink.Emit(encoded);
-        if (!s.ok()) return {ErrorReply(s), false, 0, s};
+        if (!s.ok()) return Refused(s);
         if (verdict == exec::QuotaVerdict::kEmitThenStop) break;
     }
     return {text_sink.Take(), false};
@@ -8438,7 +8442,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     exec::ExecStats& stats) {
     if (Status s = aggregator_.Reset(*chain.aggregate, chain.column_names, aggregate_limits_);
         !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
 
     // A MIN/MAX or a group key over a relation's column 0 is a Keystone id,
@@ -8458,7 +8462,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         fields[i].type_len = wire::WireTypeLen(wire_types[i]);
     }
     if (Status s = sink.Describe(std::move(fields)); !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
 
     // The fold's own failures - a SUM overflow, a cap - have to reach the
@@ -8478,7 +8482,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         // path has it: a statement that stopped part way through touched
         // some tuples, and a trail describing that points a later reader at
         // a state no reader should be pointed at.
-        return {ErrorReply(ran), false, 0, ran};
+        return Refused(ran);
     }
 
     // Through the one sink every row path emits by: two formatters for a
@@ -8490,7 +8494,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
             return sink.Emit(row_scratch);
         });
     if (!emitted.ok()) {
-        return {ErrorReply(emitted), false, 0, emitted};
+        return Refused(emitted);
     }
 
     // Recorded after a *complete* execution, and unconditionally - the fold
@@ -8531,7 +8535,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
         if (Status s = aggregator_.Reset(*chain.aggregate, chain.column_names,
                                          aggregate_limits_);
             !s.ok()) {
-            return {ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
     }
 
@@ -8583,7 +8587,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
         },
         &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
     if (!ran.ok()) {
-        return {ErrorReply(ran), false, 0, ran};
+        return Refused(ran);
     }
     // `rows=` counts what the client would have been sent, so on the sorted
     // path the quota runs where the real path runs it: after the order
@@ -8664,7 +8668,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                         : SnapshotFor(session);
     // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse, and the
     // wire's `retryable=1` is what a client's retry loop reads.
-    if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
+    if (!snapshot.ok()) return Refused(snapshot.status());
     run->snapshot.emplace(std::move(snapshot.value()));
     const txn::Snapshot& snap = run->snapshot->snap;
 
@@ -8688,7 +8692,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                 return std::move(*layered);
             }
         }
-        return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+        return Refused(parsed.status());
     }
     if (!std::holds_alternative<parser::SelectStmt>(parsed.value())) {
         return {"ERR expected a SELECT statement", false};
@@ -8794,7 +8798,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
                 return std::move(*layered);
             }
         }
-        return {ErrorReply(chain.status()), false, 0, chain.status()};
+        return Refused(chain.status());
     }
 
     // **Every read runs where the session is, walking the whole relation** (AT-S9,
@@ -8975,7 +8979,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     const catalog::TableAccess* star_access = nullptr;
     if (compiled.star()) {
         auto access = catalog_.InitTableAccess(compiled.steps[0].rel_oid);
-        if (!access.ok()) return {ErrorReply(access.status()), false, 0, access.status()};
+        if (!access.ok()) return Refused(access.status());
         star_access = access.value();
     }
 
@@ -9308,16 +9312,24 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIden
 }
 
 DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& session) {
+    return RunWalkWrite(line, session, /*is_delete=*/false);
+}
+
+DispatchOutcome CommandDispatcher::RunWalkWrite(std::string_view line, Session& session,
+                                                bool is_delete) {
+    const stats::RelationWrite kind =
+        is_delete ? stats::RelationWrite::kDelete : stats::RelationWrite::kUpdate;
     WriteScope scope;
     txn::Snapshot snap;
     WalkCursor resume_from;
     exec::StatementContext context;  // NOW()'s instant, carried across a park (AP-S4)
-    std::vector<exec::SubqueryResult> subquery_answers;  // BJ-S7, carried the same way
+    // BJ-S7, carried the same way. A DELETE has none.
+    std::vector<exec::SubqueryResult> subquery_answers;
 
     // **A resume re-enters the scope and the view it already had** (AO-S3b):
     // the rows already written live in that transaction, and a second
     // snapshot would show one statement two states of the database.
-    if (session.parked_write().has_value() && !session.parked_write()->is_delete) {
+    if (session.parked_write().has_value() && session.parked_write()->is_delete == is_delete) {
         const Session::ParkedWrite& parked = *session.parked_write();
         scope = WriteScope{parked.txn, parked.owned, &session};
         snap = parked.snapshot;
@@ -9338,12 +9350,12 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         session.clear_parked_write();
     } else {
         auto opened = BeginWrite(session);
-        if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
+        if (!opened.ok()) return Refused(opened.status());
         scope = opened.value();
         context = StatementContextFor(session);
 
-        // The read view this UPDATE filters through. An UPDATE reads before
-        // it writes, and it must not see a row a SELECT in the same
+        // The read view this write filters through. It reads before it
+        // writes, and it must not see a row a SELECT in the same
         // transaction would not - so it takes the snapshot the same way.
         //
         // **After `BeginWrite`, and the order is a correctness fact** (BH-S1,
@@ -9362,31 +9374,76 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         // in flight, holds the horizon and one of the core's in-flight
         // slots - and the refusal is the lease table's, which is full for
         // as long as 256 walks stay parked (`known-gaps.md`).
-        if (!snapshot.ok()) {
-            return FinishWrite(session, scope,
-                               {ErrorReply(snapshot.status()), false, 0, snapshot.status()},
-                               stats::RelationWrite::kUpdate);
-        }
+        if (!snapshot.ok()) return FinishWrite(session, scope, Refused(snapshot.status()), kind);
         snap = snapshot.value().snap;
     }
 
-    DispatchOutcome out = UpdateInner(line, scope, snap, resume_from, context, subquery_answers);
+    DispatchOutcome out =
+        is_delete ? DeleteInner(line, scope, snap, resume_from, context)
+                  : UpdateInner(line, scope, snap, resume_from, context, subquery_answers);
 
     // **Parked mid-walk, the scope stays open** (AO-S3b): the statement has
-    // written rows and there is no savepoint, so its transaction, view and
+    // written rows and there is no savepoint - a DELETE that has marked
+    // rows has nothing to roll them back to - so its transaction, view and
     // position go to the session for the branch at the top to resume.
+    // Ahead of `FinishWrite`, which *ends* the scope.
     if (out.parked_mid_walk) {
         session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
                                                       out.walk_cursor, statement_trail_mark_,
-                                                      /*is_delete=*/false, context,
+                                                      is_delete, context,
                                                       std::move(subquery_answers)});
         return out;
     }
     return FinishWrite(session, scope, WithReturning(line, session, scope, std::move(out), context),
-                       stats::RelationWrite::kUpdate);
+                       kind);
 }
 
 namespace {
+
+// Rows a capturing sink holds between their encode and their emit. **The
+// text a row is encoded to is its index here**, so what `Emit` is handed
+// is the row that was encoded for it: a sorted statement encodes rows as
+// the top-N heap admits them and emits the survivors afterwards, in order,
+// and "the last row encoded" is not the row emitted.
+template <typename Row>
+class ParkedRows {
+public:
+    void Park(Row row, std::string& text) {
+        rows_.push_back(std::move(row));
+        text = std::to_string(rows_.size() - 1);
+    }
+    Row Take(std::string_view text) {
+        return std::move(rows_[static_cast<std::size_t>(std::stoull(std::string(text)))]);
+    }
+
+private:
+    std::vector<Row> rows_;
+};
+
+// A session's rows sent to `sink` for one nested SELECT, and back to
+// whatever took them before when this goes.
+class ScopedResultSink {
+public:
+    ScopedResultSink(Session& session, ResultSink* sink)
+        : session_(session), previous_(session.result_sink()) {
+        session_.set_result_sink(sink);
+    }
+    ~ScopedResultSink() { session_.set_result_sink(previous_); }
+    ScopedResultSink(const ScopedResultSink&) = delete;
+    ScopedResultSink& operator=(const ScopedResultSink&) = delete;
+
+private:
+    Session& session_;
+    ResultSink* const previous_;
+};
+
+// A nested SELECT run to its end where it stands: its walk is handed on
+// for a yield, and a statement that needs the rows now takes none.
+DispatchOutcome RunToEnd(DispatchOutcome out) {
+    if (out.select_run == nullptr) return out;
+    const std::shared_ptr<SelectRun> run = std::move(out.select_run);
+    return run->RunInline();
+}
 
 // What a scalar subquery's rows land in: the first column of at most one row.
 class ScalarSubquerySink final : public ResultSink {
@@ -9400,21 +9457,15 @@ public:
         field_ = std::move(fields[0]);
         return Status::OK();
     }
-    // The row's text is the index of its value, so what `Emit` is handed is the
-    // value that was encoded for it: a sorted statement encodes rows as the top-N
-    // heap admits them and emits the survivors afterwards, in order, and "the
-    // last row encoded" is not the row emitted.
     Status EncodeProjectedRow(std::span<const exec::ColumnRef> projection,
                               std::span<const std::uint32_t>, const exec::ChainFrame& frame,
                               std::string& out) override {
-        rendered_.push_back(projection.empty() ? parser::AstValue{} : frame.Get(projection[0]));
-        out = std::to_string(rendered_.size() - 1);
+        rendered_.Park(projection.empty() ? parser::AstValue{} : frame.Get(projection[0]), out);
         return Status::OK();
     }
     Status EncodeValueRow(std::span<const std::uint32_t>, std::span<const parser::AstValue> values,
                           std::string& out) override {
-        rendered_.push_back(values.empty() ? parser::AstValue{} : values[0]);
-        out = std::to_string(rendered_.size() - 1);
+        rendered_.Park(values.empty() ? parser::AstValue{} : values[0], out);
         return Status::OK();
     }
     Status Emit(std::string_view row) override {
@@ -9422,7 +9473,7 @@ public:
             return Status::InvalidArgument(
                 "more than one row returned by a subquery used as an expression");
         }
-        value_ = std::move(rendered_[static_cast<std::size_t>(std::stoull(std::string(row)))]);
+        value_ = rendered_.Take(row);
         return Status::OK();
     }
 
@@ -9432,7 +9483,7 @@ public:
 private:
     wire::FieldDescription field_;
     std::uint64_t rows_ = 0;
-    std::vector<parser::AstValue> rendered_;
+    ParkedRows<parser::AstValue> rendered_;
     parser::AstValue value_;  // NULL until a row arrives
 };
 
@@ -9482,32 +9533,20 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
     }
 
     ScalarSubquerySink sink;
-    ResultSink* const previous = session.result_sink();
-    session.set_result_sink(&sink);
-    struct Restore {
-        Session& session;
-        ResultSink* sink;
-        ~Restore() { session.set_result_sink(sink); }
-    } restore{session, previous};
+    const ScopedResultSink capture(session, &sink);
 
     // The text is padded to where it stood in the statement, so every byte the
-    // SELECT reports is a byte of the UPDATE.
+    // SELECT reports is a byte of the UPDATE. A SET value's subquery is run
+    // to its end here, before the statement's own walk begins.
     const std::string text = std::string(node.byte_offset + 1, ' ') + node.subquery_sql;
-    DispatchOutcome out = HandleSelect(text, session, /*analyze=*/false, &snapshot, &context);
-    // The walk is handed on for a yield; a SET value's subquery is run to its
-    // end here, before the statement's own walk begins.
-    if (out.select_run != nullptr) {
-        const std::shared_ptr<SelectRun> run = std::move(out.select_run);
-        out = run->RunInline();
-    }
+    const DispatchOutcome out =
+        RunToEnd(HandleSelect(text, session, /*analyze=*/false, &snapshot, &context));
     // The subquery's own refusals carry their byte already; the rest are given
     // the subquery's.
-    const auto Positioned = [&](const std::string& what) {
-        return what.find("byte ") != std::string::npos ? what : what + at;
-    };
-    if (!out.status.ok()) return out.status.WithMessage(Positioned(out.status.message()));
-    if (out.response.rfind("ERR", 0) == 0) {
-        return Status::InvalidArgument(Positioned(out.response.substr(4)));
+    if (Status refused = OutcomeStatus(out); !refused.ok()) {
+        return refused.message().find("byte ") != std::string::npos
+                   ? refused
+                   : refused.WithMessage(refused.message() + at);
     }
 
     const wire::FieldDescription& field = sink.field();
@@ -9528,10 +9567,9 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
 
 namespace {
 
-// A layer walk's rows, captured as values. The row's text is the index of
-// its values, `ScalarSubquerySink`'s device, so what `Emit` keeps is the row
-// that was encoded for it. Bounded as the layer's own row sets are (BU-Q10):
-// the walk is refused at the row past `max_rows`, not held whole first.
+// A layer walk's rows, captured as values. Bounded as the layer's own row
+// sets are (BU-Q10): the walk is refused at the row past `max_rows`, not
+// held whole first.
 class LayerWalkSink final : public ResultSink {
 public:
     explicit LayerWalkSink(std::size_t max_rows) : max_rows_(max_rows) {}
@@ -9542,14 +9580,12 @@ public:
         std::vector<parser::AstValue> row;
         row.reserve(projection.size());
         for (const exec::ColumnRef& ref : projection) row.push_back(frame.Get(ref));
-        rendered_.push_back(std::move(row));
-        out = std::to_string(rendered_.size() - 1);
+        rendered_.Park(std::move(row), out);
         return Status::OK();
     }
     Status EncodeValueRow(std::span<const std::uint32_t>, std::span<const parser::AstValue> values,
                           std::string& out) override {
-        rendered_.emplace_back(values.begin(), values.end());
-        out = std::to_string(rendered_.size() - 1);
+        rendered_.Park(std::vector<parser::AstValue>(values.begin(), values.end()), out);
         return Status::OK();
     }
     Status Emit(std::string_view row) override {
@@ -9560,14 +9596,14 @@ public:
                 ") rows; the query layer answers from rows it holds (BU-Q10) - raise "
                 "sort_max_rows, or narrow the statement");
         }
-        rows_.push_back(std::move(rendered_[static_cast<std::size_t>(std::stoull(std::string(row)))]));
+        rows_.push_back(rendered_.Take(row));
         return Status::OK();
     }
     std::vector<std::vector<parser::AstValue>> TakeRows() { return std::move(rows_); }
 
 private:
     std::size_t max_rows_;
-    std::vector<std::vector<parser::AstValue>> rendered_;
+    ParkedRows<std::vector<parser::AstValue>> rendered_;
     std::vector<std::vector<parser::AstValue>> rows_;
 };
 
@@ -9645,24 +9681,14 @@ StatusOr<std::vector<std::vector<parser::AstValue>>> CommandDispatcher::WalkForL
     parser::SelectStmt stmt, Session& session, const txn::Snapshot& snap,
     const exec::StatementContext& context) {
     LayerWalkSink sink(sort_max_rows_);
-    ResultSink* const previous = session.result_sink();
-    session.set_result_sink(&sink);
-    struct Restore {
-        Session& session;
-        ResultSink* sink;
-        ~Restore() { session.set_result_sink(sink); }
-    } restore{session, previous};
+    const ScopedResultSink capture(session, &sink);
 
     const auto run = std::make_shared<SelectRun>(*this, session);
     run->snapshot.emplace(txn::LeasedSnapshot{snap, {}});
     run->statement.emplace(std::move(stmt));
-    DispatchOutcome out = SelectBody(run, session, /*analyze=*/false, &context, {});
-    if (out.select_run != nullptr) {
-        const std::shared_ptr<SelectRun> handed = std::move(out.select_run);
-        out = handed->RunInline();
-    }
-    if (!out.status.ok()) return out.status;
-    if (out.response.rfind("ERR", 0) == 0) return Status::InvalidArgument(out.response.substr(4));
+    const DispatchOutcome out =
+        RunToEnd(SelectBody(run, session, /*analyze=*/false, &context, {}));
+    if (Status refused = OutcomeStatus(out); !refused.ok()) return refused;
     return sink.TakeRows();
 }
 
@@ -9698,18 +9724,15 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
         wrote = txn::TrailAction::kDeleteMark;
     }
     if (returning == nullptr || returning->items.empty()) return out;
-    const auto refuse = [](const Status& s) {
-        return DispatchOutcome{ErrorReply(s), false, 0, s};
-    };
     // Asked before the write by every path that reaches here; kept because
     // the trail read below dereferences the transaction.
-    if (auto refused = ReturningWithoutTransaction(*returning, scope.txn)) return refuse(*refused);
+    if (auto refused = ReturningWithoutTransaction(*returning, scope.txn)) return Refused(*refused);
     auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
         return catalog_.ResolveRelation(schema, table, session.default_namespace(), 0, v);
     });
-    if (!oid.ok()) return refuse(oid.status());
+    if (!oid.ok()) return Refused(oid.status());
     auto access = catalog_.InitTableAccess(oid.value());
-    if (!access.ok()) return refuse(access.status());
+    if (!access.ok()) return Refused(access.status());
     const catalog::TableAccess& ta = *access.value();
 
     // ---- The items, typed over the relation's live columns ---------------
@@ -9755,7 +9778,7 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
     for (const parser::OutputItem& item : returning->items) {
         if (item.star) {
             if (!item.star_qualifier.empty() && !IEquals(item.star_qualifier, table)) {
-                return refuse(Status::InvalidArgument(
+                return Refused(Status::InvalidArgument(
                     "'" + item.star_qualifier + "' names no relation of this statement (byte " +
                     std::to_string(item.byte_offset) + ")"));
             }
@@ -9768,7 +9791,7 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
             continue;
         }
         auto typed = exec::TypeQueryExpression(*item.expr, scope_of);
-        if (!typed.ok()) return refuse(typed.status());
+        if (!typed.ok()) return Refused(typed.status());
         const bool key = item.expr->kind == parser::Expr::Kind::kColumn &&
                          typed.value()->column_no == 0;
         // Headed as the query layer heads an item (parser-v2.md I19): the
@@ -9791,7 +9814,7 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
 
     TextResultSink text_sink;
     ResultSink& sink = SinkFor(session, text_sink);
-    if (Status s = sink.Describe(std::move(fields)); !s.ok()) return refuse(s);
+    if (Status s = sink.Describe(std::move(fields)); !s.ok()) return Refused(s);
     std::vector<parser::AstValue> image(ta.schema.columns.size());
     std::vector<exec::PendingSpill> spills;
     std::string row_scratch;
@@ -9799,9 +9822,9 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
         // The slot holds this statement's version: an INSERT's and an
         // UPDATE's after-image, and a DELETE's before-image under its mark.
         auto at = btree::BtreeLookup(page_store_, ta.desc_page_id, key);
-        if (!at.ok()) return refuse(at.status());
+        if (!at.ok()) return Refused(at.status());
         auto tuple = heap::PageView(at.value().leaf.bytes()).ReadTuple(at.value().slot);
-        if (!tuple.ok()) return refuse(tuple.status());
+        if (!tuple.ok()) return Refused(tuple.status());
         const std::vector<std::byte> payload(tuple.value().payload.begin(),
                                              tuple.value().payload.end());
         at.value().leaf.Release();
@@ -9809,17 +9832,17 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
         if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload, image,
                                               exec::kAllColumnsMask, spills);
             !s.ok()) {
-            return refuse(s);
+            return Refused(s);
         }
         std::vector<parser::AstValue> row;
         row.reserve(items.size());
         for (const auto& item : items) {
             auto v = exec::EvaluateQueryExpression(*item, image, context, nullptr);
-            if (!v.ok()) return refuse(v.status());
+            if (!v.ok()) return Refused(v.status());
             row.push_back(std::move(v.value()));
         }
-        if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) return refuse(s);
-        if (Status s = sink.Emit(row_scratch); !s.ok()) return refuse(s);
+        if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) return Refused(s);
+        if (Status s = sink.Emit(row_scratch); !s.ok()) return Refused(s);
     }
     out.returning = true;
     if (session.result_sink() == nullptr) out.response = text_sink.Take() + "\\n" + out.response;
@@ -9848,7 +9871,7 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
     const exec::StatementContext now =
         context != nullptr ? *context : StatementContextFor(session);
     auto result = RunLayerQuery(query.value(), line, session, snap, now);
-    if (!result.ok()) return DispatchOutcome{ErrorReply(result.status()), false, 0, result.status()};
+    if (!result.ok()) return Refused(result.status());
 
     TextResultSink text_sink;
     ResultSink& sink = SinkFor(session, text_sink);
@@ -9868,15 +9891,15 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
         wire_types.push_back(wire_type);
     }
     if (Status s = sink.Describe(std::move(fields)); !s.ok()) {
-        return DispatchOutcome{ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
     std::string row_scratch;
     for (const auto& row : rs.rows) {
         if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) {
-            return DispatchOutcome{ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
         if (Status s = sink.Emit(row_scratch); !s.ok()) {
-            return DispatchOutcome{ErrorReply(s), false, 0, s};
+            return Refused(s);
         }
     }
     return DispatchOutcome{text_sink.Take(), false};
@@ -9889,7 +9912,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                                std::vector<exec::SubqueryResult>& subqueries) {
     auto parsed = ParseKeepingShape(line);
     if (!parsed.ok()) {
-        return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+        return Refused(parsed.status());
     }
     if (!std::holds_alternative<parser::UpdateStmt>(parsed.value())) {
         return {"ERR expected an UPDATE statement", false};
@@ -9898,23 +9921,246 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                         context, subqueries, /*arm_target=*/std::nullopt);
 }
 
+// ---- The row walk UPDATE and DELETE share -----------------------------------
+//
+// What the two writing walks do to a row before they differ, in one copy so
+// that both judge and claim a row the same way: read it and test it against
+// the statement's view and its WHERE (`Qualify`), claim it and take the
+// first-updater-wins verdict (`Claim`), and - where the WHERE holds a
+// subquery - collect the matching keys in a read pass first
+// (`CollectTargets`). It carries the park a held row ends the walk with.
+// UPDATE's SET list and DELETE's mark stay with their statement.
+class CommandDispatcher::WriteWalk {
+public:
+    // A row that qualified: its tuple key, and the writer and undo pointer
+    // of the version on the page.
+    struct Row {
+        std::uint64_t id = 0;
+        std::uint64_t trx_id = 0;
+        std::uint64_t undo_ptr = 0;
+    };
+
+    WriteWalk(CommandDispatcher& d, const WriteScope& scope, const catalog::TableAccess& ta,
+              const txn::Snapshot& snapshot, const exec::Step& predicates,
+              std::shared_ptr<const std::unordered_set<std::uint64_t>> resumed_targets)
+        : targets(std::move(resumed_targets)),
+          d_(d),
+          scope_(scope),
+          ta_(ta),
+          snapshot_(snapshot),
+          predicates_(predicates),
+          schemas_{&ta.schema} {
+        frame.Open(schemas_, /*parent=*/nullptr);
+    }
+
+    // ---- Stage 1: only what the WHERE reads (OPT-001) --------------------
+    //
+    // The row at `slot` if a version of it is visible under the snapshot
+    // and it qualifies, else nothing. For a row that qualified,
+    // `payload_copy` holds its bytes and `frame` the columns the WHERE
+    // reads until the next call; the statement decodes the rest (its
+    // stage 2) from `payload_copy`.
+    StatusOr<std::optional<Row>> Qualify(heap::PageView& page, std::uint16_t slot) {
+        auto tuple = page.ReadTuple(slot);
+        if (!tuple.ok()) return std::optional<Row>{};  // dead or out-of-range slot - skip
+
+        // ---- MVCC, the same predicate the step VM applies --------------
+        //
+        // A write does not compile to a chain, so it is the one read path
+        // outside `AcceptTupleAt` (workplan A1). It filters here rather
+        // than reimplementing anything: Classify is the same function, and
+        // a row this reader cannot see - or one already delete-marked - is
+        // a row it must not write.
+        //
+        // **A version reached through the undo chain is not writable.**
+        // Its bytes are not the bytes on the page, so an edit of it written
+        // back would lose whatever superseded it. kNeedsUndoWalk therefore
+        // falls through to the conflict check in `Claim` rather than
+        // resolving - and that check is what rejects it, because a writer
+        // this view cannot see is either in flight or committed after it.
+        if (txn::Classify(snapshot_.view, tuple.value()) == txn::Visibility::kNoVersion) {
+            return std::optional<Row>{};
+        }
+
+        // **The row is copied out of the page once, and decoded from the
+        // copy**, which is what makes the two-stage decode legal under R1:
+        // stage 1 resolves spills and may evaluate a subquery, both of
+        // which fetch pages, and R1's rule is that no span into a tuple's
+        // page may be live across a nested fetch. The pin this walk holds
+        // would in fact keep the bytes valid - `PageRef::bytes()` is valid
+        // as long as the handle is - so this is the *discipline* rather
+        // than a dangling-pointer fix, and it is the discipline because
+        // this path has no PageSpanGuard to catch a violation of it.
+        // `payload_copy` is the statement's, so this is one memcpy of a
+        // schema-constant row size per scanned row and no allocation after
+        // the first.
+        payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
+        auto id = KeystoneIdOfPayload(payload_copy);
+        if (!id.ok()) return id.status();
+        const Row row{id.value(), tuple.value().trx_id, tuple.value().undo_ptr};
+        // Not a collected target: nothing to decode.
+        if (targets != nullptr && !targets->contains(row.id)) return std::optional<Row>{};
+
+        // A row is decoded only as far as the WHERE needs before it is
+        // tested. The mask is the compiler's; it is kAllColumns whenever a
+        // sub-chain or a >64-column relation makes a partial decode unsound
+        // (step_compiler.cpp's CompileWhere).
+        if (Status s = exec::DecodeAndResolve(d_.page_store_, ta_.schema, ta_.layout,
+                                              payload_copy, frame.SlotsFor(0),
+                                              predicates_.filter_columns, frame_spills);
+            !s.ok()) {
+            return s;
+        }
+        // Checked at the first row, as a SELECT's step is (BT-R5): an
+        // empty relation refuses nothing.
+        if (!conjuncts_checked_) {
+            if (Status s = exec::CheckConjuncts(schemas_, predicates_, frame); !s.ok()) return s;
+            conjuncts_checked_ = true;
+        }
+        // A collected target matched in the collection pass, and its WHERE
+        // is not evaluated again.
+        if (targets == nullptr) {
+            auto matched = exec::EvaluateConjuncts(d_.catalog_, d_.page_store_, schemas_,
+                                                   predicates_, frame, /*stats=*/nullptr,
+                                                   d_.budget_, &snapshot_);
+            if (!matched.ok()) return matched.status();
+            if (!matched.value()) return std::optional<Row>{};
+        }
+        return std::optional<Row>{row};
+    }
+
+    // ---- First-updater-wins (docs/spec/txn.md section 5) -----------------
+    //
+    // True once `row` is this statement's to write. False for a row a
+    // writer that has not decided holds, where the wait is one this
+    // statement may make: the park is recorded, and the caller answers OK
+    // and stops the walk. Any other conflict is the status.
+    //
+    // Asked only once the row has qualified: a conflict is reported about a
+    // row this statement actually wanted, never about one it scanned past.
+    // `declared` says the statement's declared unit already covers the row,
+    // so no row unit is asked; `mode` is the row unit's otherwise.
+    StatusOr<bool> Claim(const Row& row, bool declared, txn::LockMode mode) {
+        if (scope_.txn == nullptr) return true;
+        // **The borrow, before the conflict is decided** (AO-S6a, the
+        // operator's choice of order). No re-read after the grant is owed
+        // (AO-S6b): the walk holds a live write `PageRef` for the page and
+        // carries no `co_await`, so the captured `trx_id` cannot go stale
+        // between the read and the grant.
+        //
+        // Per row, so no refusal of an earlier row is ever read as this
+        // one's - `CheckWriteConflictBlocking` falls it back to `cur` where
+        // the table has nothing to say.
+        std::uint64_t blocker = 0;
+        if (!declared) {
+            auto took =
+                d_.BorrowChain(scope_, txn::LockKey::Tuple(ta_.oid, row.id), &blocker, mode);
+            if (!took.ok()) return took.status();
+        }
+        Status s = d_.CheckWriteConflictBlocking(scope_, row.trx_id, row.id, blocker);
+        if (s.ok()) return true;
+        // **A conflict a wait can get past stops the walk rather than
+        // failing the statement** (AO-S3b). `blocking_writer_` is set only
+        // under `may_park_` with a live clock.
+        //
+        // **Compared against this row's `blocker`, not tested non-zero**:
+        // the member is the statement's, and the forward foreign-key check
+        // may have left a parent's holder in it. `CheckWriteConflictBlocking`
+        // writes back the holder it recorded - the table's (a range holder,
+        // AO-S6c-b), or `trx_id` where the table named nobody.
+        if (blocker != 0 && d_.blocking_writer_ == blocker) {
+            parked_on_row = true;
+            blocked_verdict = s;
+            return false;
+        }
+        return s;
+    }
+
+    // **The collection pass**, when the WHERE holds a subquery: a read walk
+    // that evaluates the WHERE over every row and writes nothing, so the
+    // write walk writes exactly the rows that matched and runs no subquery.
+    // Two reasons, either sufficient. Over the relation this writes, a
+    // subquery re-run per row would read the rows the statement has already
+    // written (parser-v2.md R2). Over any relation, it would read pages
+    // under the write walk's exclusive leaf: a held `X` asking an `S`, which
+    // two statements on two cores close into a cycle no latch wait breaks
+    // (`rules.md` §3's page latch row). A resume carries its targets and
+    // does not collect again. False when the pass collected nothing, and
+    // the statement then writes nothing.
+    StatusOr<bool> CollectTargets() {
+        if (targets != nullptr || predicates_.sub_chains.empty()) return true;
+        auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
+        Status pass = d_.VisitRelation(
+            ta_, storage::PageAccess::kRead,
+            [&](PageId, heap::PageView& page,
+                std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+                auto qualified = Qualify(page, slot);
+                if (!qualified.ok()) return qualified.status();
+                if (qualified.value().has_value()) collected->insert(qualified.value()->id);
+                return storage::VisitControl::kContinue;
+            },
+            /*cursor=*/nullptr);
+        if (!pass.ok()) return pass;
+        if (collected->empty()) return false;
+        targets = std::move(collected);
+        return true;
+    }
+
+    // **The walk stopped on a held row, so its count is not an answer**
+    // (AO-S3b): it counts rows written *so far*, and returning it would be
+    // a silent partial write.
+    //
+    // **Only a statement that has written rows resumes.** One that has not
+    // is answered with its conflict and re-run whole by `DispatchAsync`
+    // (AO-S3) under a fresh snapshot, which sees a holder that committed
+    // meanwhile; a resume keeps the original view, under which that holder
+    // stays invisible.
+    DispatchOutcome ParkedOutcome(WalkCursor cursor, std::uint32_t rows_done) const {
+        if (scope_.txn == nullptr || scope_.txn->trail().size() == d_.statement_trail_mark_) {
+            return Refused(blocked_verdict);
+        }
+        DispatchOutcome parked;
+        parked.parked_mid_walk = true;
+        cursor.rows_done = rows_done;
+        parked.walk_cursor = std::move(cursor);
+        return parked;
+    }
+
+    // The row in hand: its bytes, copied out of the page, and its columns
+    // as far as the stage reached. Statement-lived scratch - refilled per
+    // scanned row, allocating only on the first.
+    exec::ChainFrame frame;
+    std::vector<std::byte> payload_copy;
+    std::vector<exec::PendingSpill> frame_spills;
+    // The collected targets (`WalkCursor::targets`): when set, a row is
+    // written if its key is in them.
+    std::shared_ptr<const std::unordered_set<std::uint64_t>> targets;
+    // AO-S3b: set when the row callback meets a row held by a writer that
+    // has not decided and the wait is one this statement may make. The
+    // callback cannot park - it runs under a page span, which AO-R2 forbids
+    // parking under - so it records the fact and stops the walk, and the
+    // park happens in `DispatchAsync` with no span held. `blocked_verdict`
+    // is the conflict it stopped on, kept because a statement that turns
+    // out to have written nothing is answered with it after all.
+    bool parked_on_row = false;
+    Status blocked_verdict;
+
+private:
+    CommandDispatcher& d_;
+    const WriteScope& scope_;
+    const catalog::TableAccess& ta_;
+    const txn::Snapshot& snapshot_;
+    const exec::Step& predicates_;
+    const std::vector<const catalog::Schema*> schemas_;
+    bool conjuncts_checked_ = false;
+};
+
 DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteScope& scope,
                                                 const txn::Snapshot& snapshot,
                                                 WalkCursor resume_from,
                                                 const exec::StatementContext& context,
                                                 std::vector<exec::SubqueryResult>& subqueries,
                                                 std::optional<std::uint64_t> arm_target) {
-    // AO-S3b: set by the row callback when it meets a row held by a writer
-    // that has not decided and the wait is one this statement may make.
-    // The callback cannot park - it runs under a page span, which AO-R2
-    // forbids parking under - so it records the fact and stops the walk,
-    // and the park happens in `DispatchAsync` with no span held.
-    // `blocked_verdict` is the conflict it stopped on, kept because a
-    // statement that turns out to have written nothing is answered with it
-    // after all (see the stop's arm below).
-    bool parked_on_row = false;
-    Status blocked_verdict;
-
     // Resolved under the writing session's view (DT3c): a write to a
     // relation another transaction created and has not committed must not
     // find it.
@@ -9924,17 +10170,17 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
                                         stmt.table_byte_offset, v);
     });
     if (!oid.ok()) {
-        return {ErrorReply(oid.status()), false, 0, oid.status()};
+        return Refused(oid.status());
     }
 
     ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
 
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
-        return {ErrorReply(access.status()), false, 0, access.status()};
+        return Refused(access.status());
     }
     if (auto refused = ReturningWithoutTransaction(stmt.returning, scope.txn)) {
-        return {ErrorReply(*refused), false, 0, *refused};
+        return Refused(*refused);
     }
     // Borrowed from the catalog's cache, not owned: valid for this
     // statement, including across AllocateRowId() (catalog.hpp).
@@ -9944,7 +10190,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // (AT-S9); their history is at cf889b63. This write walks the whole
     // relation here, on the core its session is on.
     if (Status admitted = CheckWriteAdmission(ta); !admitted.ok()) {
-        return {ErrorReply(admitted), false, 0, admitted};
+        return Refused(admitted);
     }
 
     // Resolve the SET list before touching storage, so a bad target fails
@@ -9973,7 +10219,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     }
     if (Status s = exec::CompileAssignments(ta, stmt.assignments, &compiled, &resolve_subquery);
         !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
     // One value per assignment for the row in hand. A bare literal's slot is
     // filled once, here; an expression's is overwritten for every row. Owned
@@ -9998,26 +10244,17 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
                                   &context);
     });
     if (!predicates.ok()) {
-        return {ErrorReply(predicates.status()), false, 0, predicates.status()};
+        return Refused(predicates.status());
     }
-    const std::vector<const catalog::Schema*> schemas = {&ta.schema};
-    exec::ChainFrame frame;
-    frame.Open(schemas, /*parent=*/nullptr);
-
+    // The walk's first stage, its claim and its park are DELETE's too
+    // (`WriteWalk`). `payload_copy` is the row in hand: its bytes, copied
+    // out of the page.
+    WriteWalk walk(*this, scope, ta, snapshot, predicates.value(), resume_from.targets);
+    const std::vector<std::byte>& payload_copy = walk.payload_copy;
     // Per-row scratch, owned by the statement rather than by the row loop:
-    // each is cleared and refilled per scanned row, so after the first row
-    // none of them allocates. `payload_copy` is the row's own bytes, copied
-    // out of the page for the reason its use site states.
-    std::vector<std::byte> payload_copy;
-    std::vector<exec::PendingSpill> frame_spills;
+    // cleared and refilled per scanned row, so after the first row it does
+    // not allocate.
     std::vector<exec::PendingSpill> spills;
-    const std::uint64_t filter_mask = predicates.value().filter_columns;
-    bool conjuncts_checked = false;
-    // The collected targets (`WalkCursor::targets`): when set, a row is
-    // written if its key is in them and the WHERE is not evaluated again.
-    // `collecting` is the collection pass's sink, set only during it.
-    std::shared_ptr<const std::unordered_set<std::uint64_t>> targets = resume_from.targets;
-    std::unordered_set<std::uint64_t>* collecting = nullptr;
 
     // Stage 2's decode target and what it decodes (BN-R2): every column
     // where a Cabin or an index reads the row (an assertion is asked per
@@ -10096,7 +10333,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             if (fk->column_no == 0 || fk->column_no > one.size()) continue;
             one[fk->column_no - 1] = *compiled[index].constant;
             if (Status s = ResolveForeignKeyParents(ta, one, fk_held, scope); !s.ok()) {
-                return {ErrorReply(s), false, 0, s};
+                return Refused(s);
             }
         }
         // Resolved before a single row qualifies - which is also why an
@@ -10138,7 +10375,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         // in it and admits a foreign key's share on any of them.
         if (std::optional<Status> held = BorrowOrWait(scope, *declared, RepeatableReadWait::kFutile,
                                                       txn::LockMode::kUpdate)) {
-            return {ErrorReply(*held), false, 0, *held};
+            return Refused(*held);
         }
     }
 
@@ -10165,124 +10402,20 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // the probed path and the scanned path to do different things to the
     // same tuple.
     auto apply = [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {
-        auto tuple = page.ReadTuple(slot);
-        if (!tuple.ok()) return Status::OK();  // dead or out-of-range slot - skip
+        auto qualified = walk.Qualify(page, slot);
+        if (!qualified.ok()) return qualified.status();
+        if (!qualified.value().has_value()) return Status::OK();
+        const std::uint64_t id = qualified.value()->id;
+        const std::uint64_t trx_id = qualified.value()->trx_id;
+        const std::uint64_t undo_ptr = qualified.value()->undo_ptr;
 
-        // ---- MVCC, the same predicate the step VM applies --------------
-        //
-        // UPDATE does not compile to a chain, so it is the one read path
-        // outside `AcceptTupleAt` (workplan A1). It filters here rather
-        // than reimplementing anything: Classify is the same function, and
-        // a row this reader cannot see is a row it must not write.
-        //
-        // **A version reached through the undo chain is not updatable.**
-        // Its bytes are not the bytes on the page, so an edit of it written
-        // back would lose whatever superseded it. kNeedsUndoWalk therefore
-        // falls through to the conflict check below rather than resolving -
-        // and that check is what rejects it, because a writer this view
-        // cannot see is either in flight or committed after it.
-        if (txn::Classify(snapshot.view, tuple.value()) == txn::Visibility::kNoVersion) {
-            return Status::OK();
-        }
-
-        // **The row is copied out of the page once, and decoded from the
-        // copy**, which is what makes the two-stage decode below legal
-        // under R1: stage 1 resolves spills and may evaluate a subquery,
-        // both of which fetch pages, and R1's rule is that no span into a
-        // tuple's page may be live across a nested fetch. The pin this walk
-        // holds would in fact keep the bytes valid - `PageRef::bytes()` is
-        // valid as long as the handle is - so this is the *discipline*
-        // rather than a dangling-pointer fix, and it is the discipline
-        // because this path has no PageSpanGuard to catch a violation of
-        // it. `payload_copy` is hoisted to the statement, so this is one
-        // memcpy of a schema-constant row size per scanned row and no
-        // allocation after the first.
-        payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
-        auto id = KeystoneIdOfPayload(payload_copy);
-        if (!id.ok()) return id.status();
-        const std::uint64_t trx_id = tuple.value().trx_id;
-        const std::uint64_t undo_ptr = tuple.value().undo_ptr;
-        // Not a collected target: nothing to decode.
-        if (targets != nullptr && !targets->contains(id.value())) return Status::OK();
-
-        // ---- Stage 1: only what the WHERE reads (OPT-001) ---------------
-        //
-        // A row is decoded only as far as the WHERE needs before it is
-        // tested. `filter_mask` is the compiler's, hoisted to the
-        // statement because that is what it is a fact about; it is
-        // kAllColumns whenever a sub-chain or a >64-column relation makes a
-        // partial decode unsound (step_compiler.cpp's CompileWhere).
-        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy,
-                                              frame.SlotsFor(0), filter_mask, frame_spills);
-            !s.ok()) {
-            return s;
-        }
-        // Checked at the first row, as a SELECT's step is (BT-R5): an
-        // empty relation refuses nothing.
-        if (!conjuncts_checked) {
-            if (Status s = exec::CheckConjuncts(schemas, predicates.value(), frame);
-                !s.ok()) {
-                return s;
-            }
-            conjuncts_checked = true;
-        }
-        if (targets == nullptr) {
-            auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas,
-                                                   predicates.value(), frame, /*stats=*/nullptr,
-                                                   budget_, &snapshot);
-            if (!matched.ok()) return matched.status();
-            if (!matched.value()) return Status::OK();
-            if (collecting != nullptr) {
-                collecting->insert(id.value());
-                return Status::OK();
-            }
-        }
-
-        // ---- First-updater-wins (docs/spec/txn.md section 5) ----------------
-        //
-        // Checked only once the row has qualified: a conflict is reported
-        // about a row this statement actually wanted, never about one it
-        // scanned past. No lock and no wait - the verdict is a pure
-        // function of the tuple's current writer and this view.
-        if (scope.txn != nullptr) {
-            // **The borrow, before the conflict is decided** (AO-S6a, the
-            // operator's choice of order). No re-read after the grant is
-            // owed (AO-S6b): the walk holds a live write `PageRef` for the
-            // page and carries no `co_await`, so the captured `trx_id`
-            // cannot go stale between the read and the grant.
-            //
-            // Per row, so no refusal of an earlier row is ever read as this
-            // one's - `CheckWriteConflictBlocking` falls it back to `cur`
-            // where the table has nothing to say.
-            std::uint64_t blocker = 0;
-            if (!declared.has_value()) {
-                // `U`, the version claim (CP-S2b): a foreign key's share on
-                // this row admits it, another writer's `U` or `X` refuses it.
-                auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id.value()), &blocker,
-                                        txn::LockMode::kUpdate);
-                if (!took.ok()) return took.status();
-            }
-            if (Status s = CheckWriteConflictBlocking(scope, trx_id, id.value(), blocker);
-                !s.ok()) {
-                // **A conflict a wait can get past stops the walk rather
-                // than failing the statement** (AO-S3b). `blocking_writer_`
-                // is set only under `may_park_` with a live clock; returning
-                // OK lets the caller turn this into a `kStop` holding no span.
-                //
-                // **Compared against this row's `blocker`, not tested
-                // non-zero**: the member is the statement's, and the forward
-                // foreign-key check may have left a parent's holder in it.
-                // `CheckWriteConflictBlocking` writes back the holder it
-                // recorded - the table's (a range holder, AO-S6c-b), or
-                // `trx_id` where the table named nobody.
-                if (blocker != 0 && blocking_writer_ == blocker) {
-                    parked_on_row = true;
-                    blocked_verdict = s;
-                    return Status::OK();
-                }
-                return s;
-            }
-        }
+        // `U`, the version claim (CP-S2b): a foreign key's share on this
+        // row admits it, another writer's `U` or `X` refuses it. A held row
+        // answers OK with nothing written, and the walk stops on it.
+        auto claimed = walk.Claim(*qualified.value(), declared.has_value(),
+                                  txn::LockMode::kUpdate);
+        if (!claimed.ok()) return claimed.status();
+        if (!claimed.value()) return Status::OK();
 
         // ---- Stage 2: what the SET list and the hooks read (BN-R2) -------
         //
@@ -10343,7 +10476,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             if (!value.ok()) {
                 return value.status().WithMessage(
                     value.status().message() + " in the expression at byte " +
-                    std::to_string(expression_byte) + ", row id " + std::to_string(id.value()));
+                    std::to_string(expression_byte) + ", row id " + std::to_string(id));
             }
             values[i] = std::move(value.value());
             // A computed value carries no position of its own; the encode's
@@ -10371,7 +10504,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         // and the no-refuse window (BV-R3).
         for (const auto& [t, index] : transition_assignments) {
             if (Status s = exec::CheckTransitionUpdate(ta, *t, row[t->column_no], values[index],
-                                                       id.value());
+                                                       id);
                 !s.ok()) {
                 return s;
             }
@@ -10398,9 +10531,9 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         if (!ta.indexes.empty()) {
             UniqueKeysOfRow unique_keys = UniqueKeysOf(ta, row, /*first_col_pos=*/0, previous);
             if (!unique_keys.empty() &&
-                !(unique_cleared.has_value() && unique_cleared->first == id.value() &&
+                !(unique_cleared.has_value() && unique_cleared->first == id &&
                   same_keys(unique_cleared->second, unique_keys))) {
-                unique_pending.emplace(id.value(), std::move(unique_keys));
+                unique_pending.emplace(id, std::move(unique_keys));
                 return Status::OK();
             }
         }
@@ -10427,7 +10560,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             std::uint64_t reserver = 0;
             if (Status s = enforcer_->AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),
                                                            ta.oid, previous, row,
-                                                           id.value(), page_id, slot, &reserver);
+                                                           id, page_id, slot, &reserver);
                 !s.ok()) {
                 // AO-S6e-c, and the INSERT site states the argument.
                 // **`tuple key = 0` although the tuple key is known**: the holder holds a
@@ -10448,7 +10581,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         // durable (RV3's order, wal.md §11a). With no transaction there is
         // neither, and the UPDATE logs nothing at all - so nothing is
         // collected here for a later pass.
-        const auto log_spill = SpillLogFor(scope, ta.oid, id.value());
+        const auto log_spill = SpillLogFor(scope, ta.oid, id);
         // **Only the assigned cells are encoded** (BN-R3): every other cell
         // is carried from `payload_copy`, the version this walk read, so a
         // spilled value the SET list does not name is shared with the new
@@ -10456,7 +10589,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         // UPDATE of its row. The tuple key is the tuple's own Keystone word, never
         // assignable (rejected above).
         auto encoded = exec::EncodeAssigned(
-            ta.schema, ta.layout, id.value(), payload_copy, assigned,
+            ta.schema, ta.layout, id, payload_copy, assigned,
             exec::VarHeapSink{&page_store_, ta.varheap_page_id, /*appended=*/nullptr, ta.oid,
                               log_spill ? &log_spill : nullptr});
         if (!encoded.ok()) return encoded.status();
@@ -10491,8 +10624,8 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             // read - not reconstructed from `row`, which has had the SET list
             // applied and would restore the *new* values. Nothing has written
             // the slot since the copy: the walk holds this page's write
-            // `PageRef` and carries no `co_await` (the conflict check's
-            // argument above), and the new image the carry starts from is
+            // `PageRef` and carries no `co_await` (`WriteWalk::Claim`'s
+            // argument), and the new image the carry starts from is
             // the same buffer (BN-R3).
             const std::vector<std::byte>& image = payload_copy;
 
@@ -10503,7 +10636,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             rec.target_slot = slot;
             rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kOverwrite);
 
-            auto ptr = txn_->AppendUndo(*scope.txn, rec, id.value(), image);
+            auto ptr = txn_->AppendUndo(*scope.txn, rec, id, image);
             if (!ptr.ok()) return ptr.status();
             new_trx_id = scope.txn->id();
             new_undo_ptr = ptr.value();
@@ -10511,7 +10644,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             // What rollback compensates from. Recorded before the
             // mutation, so an abort can undo a write a later failure
             // interrupted.
-            txn_->NoteOverwrite(*scope.txn, ta.oid, page_id, slot, id.value(), trx_id, undo_ptr,
+            txn_->NoteOverwrite(*scope.txn, ta.oid, page_id, slot, id, trx_id, undo_ptr,
                                 image);
         }
 
@@ -10536,7 +10669,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         // in-place overwrite under invariant 13 - so the appended hint is
         // the row's real address.
         if (witnessed) {
-            NoteCabinWrite(ta, row, /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+            NoteCabinWrite(ta, row, /*first_col_pos=*/0, id, page_id, slot, previous);
         }
 
         // The index half. `previous` is what makes §2's rule work: an UPDATE
@@ -10545,7 +10678,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         std::vector<exec::IndexWrite> index_writes;
         const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
         if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row,
-                                              /*first_col_pos=*/0, encoded.value(), id.value(),
+                                              /*first_col_pos=*/0, encoded.value(), id,
                                               previous, log_index ? &log_index : nullptr);
             !s.ok()) {
             return s;
@@ -10585,7 +10718,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         }
 
         ++updated;
-        if (after_update_row_applied_for_test_) after_update_row_applied_for_test_(id.value());
+        if (after_update_row_applied_for_test_) after_update_row_applied_for_test_(id);
         if (page_id != last_page) {
             last_page = page_id;
             ++pages_touched;
@@ -10607,8 +10740,8 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
                 CheckUniqueKeys(scope, ta, pending.second, pending.first, unique_holds)) {
             unique_holds.Release();
             if (blocking_writer_ != 0) {
-                parked_on_row = true;
-                blocked_verdict = *refused;
+                walk.parked_on_row = true;
+                walk.blocked_verdict = *refused;
                 return Status::OK();
             }
             blocking_writer_ = noted_before;
@@ -10643,20 +10776,20 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             // the slot, and `apply` declined another row on the WHERE.
             heap::PageView page(found.at.leaf.bytes());
             if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) {
-                return {ErrorReply(s), false, 0, s};
+                return Refused(s);
             }
             if (unique_pending.has_value()) {
                 found.at.leaf.Release();
-                if (Status s = clear_unique(); !s.ok()) return {ErrorReply(s), false, 0, s};
-                if (!parked_on_row) continue;
+                if (Status s = clear_unique(); !s.ok()) return Refused(s);
+                if (!walk.parked_on_row) continue;
             }
             // **`apply` answers OK for a row it declined to write**
             // (AO-S3b), so without this a held row would render
             // `UPDATED 0`. One row is in scope, so nothing was written:
             // the conflict is the answer, and `EndWrite` keeps the blocker
             // that makes `DispatchAsync` wait and re-run the statement.
-            if (parked_on_row) {
-                return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
+            if (walk.parked_on_row) {
+                return Refused(walk.blocked_verdict);
             }
             if (logging(LogLevel::kTrace)) {
                 log_->Trace("query", "tuple key " + std::to_string(*tuple_key) + " updated at " +
@@ -10673,40 +10806,19 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         const Status s = Status::TxnConflict(
             "ON CONFLICT DO UPDATE could not locate tuple key " + std::to_string(*arm_target) +
             " to update; retry the statement");
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
 
-    // **The collection pass**, when the WHERE holds a subquery: a read walk
-    // that evaluates the WHERE over every row and writes nothing, so the
-    // walk below writes exactly the rows that matched and runs no subquery.
-    // Two reasons, either sufficient. Over the relation this writes, a
-    // subquery re-run per row would read the rows the statement has already
-    // written (parser-v2.md R2). Over any relation, it would read pages
-    // under the write walk's exclusive leaf: a held `X` asking an `S`, which
-    // two statements on two cores close into a cycle no latch wait breaks
-    // (`rules.md` §3's page latch row). A resume carries its targets and
-    // does not collect again, and one that collects nothing writes nothing.
-    if (targets == nullptr && !predicates.value().sub_chains.empty()) {
-        auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
-        collecting = collected.get();
-        Status pass = VisitRelation(
-            ta, storage::PageAccess::kRead,
-            [&](PageId page_id, heap::PageView& page,
-                std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-                if (Status s = apply(page_id, page, slot); !s.ok()) return s;
-                return storage::VisitControl::kContinue;
-            },
-            /*cursor=*/nullptr);
-        collecting = nullptr;
-        if (!pass.ok()) return {ErrorReply(pass), false, 0, pass};
-        if (collected->empty()) return {"UPDATED " + std::to_string(updated), false, updated};
-        targets = std::move(collected);
-    }
+    // The collection pass, where the WHERE holds a subquery
+    // (`WriteWalk::CollectTargets`); one that collects nothing writes nothing.
+    auto any = walk.CollectTargets();
+    if (!any.ok()) return Refused(any.status());
+    if (!any.value()) return {"UPDATED " + std::to_string(updated), false, updated};
 
     // AO-S3b's resume position. A first walk starts inactive, which is
     // "from the head"; a resumed statement is handed the one its park left.
     WalkCursor walk_cursor = resume_from;
-    walk_cursor.targets = targets;
+    walk_cursor.targets = walk.targets;
     Status scan;
     for (;;) {
         scan = VisitRelation(
@@ -10720,7 +10832,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
                 // statement above can park, and at a row whose unique key it
                 // must check with no span (BX-R4).
                 if (Status s = apply(page_id, page, slot); !s.ok()) return s;
-                if (parked_on_row || unique_pending.has_value()) {
+                if (walk.parked_on_row || unique_pending.has_value()) {
                     return storage::VisitControl::kStop;
                 }
                 return storage::VisitControl::kContinue;
@@ -10733,7 +10845,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             scan = s;
             break;
         }
-        if (parked_on_row) break;
+        if (walk.parked_on_row) break;
     }
     if (!scan.ok()) {
         // Partial **within the statement**, which is section 6's stated
@@ -10742,27 +10854,10 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         // statement is atomic after all. Inside an explicit transaction
         // they stay written and the session is poisoned - the client must
         // ROLLBACK, which undoes all of them.
-        return {ErrorReply(scan), false, 0, scan};
+        return Refused(scan);
     }
 
-    // **The walk stopped on a held row, so this is not an answer** (AO-S3b):
-    // `updated` counts rows written *so far*, and returning it would be a
-    // silent partial UPDATE.
-    if (parked_on_row) {
-        // **Only a statement that has written rows resumes.** One that has
-        // not is answered with its conflict and re-run whole by
-        // `DispatchAsync` (AO-S3) under a fresh snapshot, which sees a holder
-        // that committed meanwhile; a resume keeps the original view, under
-        // which that holder stays invisible.
-        if (scope.txn == nullptr || scope.txn->trail().size() == statement_trail_mark_) {
-            return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
-        }
-        DispatchOutcome parked;
-        parked.parked_mid_walk = true;
-        walk_cursor.rows_done = updated;
-        parked.walk_cursor = walk_cursor;
-        return parked;
-    }
+    if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, updated);
 
     if (updated > 0 && logging(LogLevel::kTrace)) {
         log_->Trace("heap", "overwrite rows=" + std::to_string(updated) + " across " +
@@ -10809,7 +10904,7 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
             // of the statement or the next clause keyword.
             auto [name, tail] = SplitBeforeClause(after, "DURABILITY");
             auto parsed = txn::ParseIsolationLevel(Trim(name));
-            if (!parsed.ok()) return {"ERR " + parsed.status().message(), false, 0, parsed.status()};
+            if (!parsed.ok()) return Refused(parsed.status());
             level = parsed.value();
             std::tie(word, rest) = SplitFirstToken(tail);
             continue;
@@ -10819,15 +10914,14 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
             // single word (`strict`/`group`/`relaxed`, `d1`/`d2`/`d3`).
             auto [name, tail] = SplitFirstToken(rest);
             auto parsed = wal::ParseDurabilityClass(Trim(name));
-            if (!parsed.ok()) return {"ERR " + parsed.status().message(), false, 0, parsed.status()};
+            if (!parsed.ok()) return Refused(parsed.status());
             durability = parsed.value();
             std::tie(word, rest) = SplitFirstToken(tail);
             continue;
         }
-        return {ErrorReply(Status::InvalidArgument(
-                    "expected ISOLATION LEVEL or DURABILITY after BEGIN, got '" +
-                    std::string(word) + "'")),
-                false};
+        return Refused(Status::InvalidArgument(
+            "expected ISOLATION LEVEL or DURABILITY after BEGIN, got '" + std::string(word) +
+            "'"));
     }
 
     auto begun = txn_->Begin(level);
@@ -10835,7 +10929,7 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
     // and inside an explicit transaction that refusal lands *here* rather
     // than at the INSERT - the id is drawn once, at BEGIN - so this is the
     // site a retryable refusal has to reach the wire from.
-    if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
+    if (!begun.ok()) return Refused(begun.status());
     session.Adopt(begun.value());
     // After `Adopt`, which is what makes `EffectiveDurability` read the
     // transaction rung at all - and after `Begin`, so a refused BEGIN
@@ -10917,9 +11011,9 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
             const Status both = committed.status().WithMessage(
                 committed.status().message() + " (and rolling it back failed: " +
                 rolled.status.message() + ")");
-            return {ErrorReply(both), false, 0, both};
+            return Refused(both);
         }
-        return {ErrorReply(committed.status()), false, 0, committed.status()};
+        return Refused(committed.status());
     }
 
     if (deferred) {
@@ -10996,7 +11090,7 @@ DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {
     EndDdlScope(session);
     session.Finish();
     txn_->Release(*txn);
-    if (!aborted.ok()) return {ErrorReply(aborted), false, 0, aborted};
+    if (!aborted.ok()) return Refused(aborted);
     return {"ROLLBACK trx_id=" + std::to_string(id), false};
 }
 
@@ -11020,20 +11114,19 @@ DispatchOutcome CommandDispatcher::HandleUse(std::string_view line, std::string_
     const std::string_view whole = Trim(line);
     const auto byte = static_cast<std::uint32_t>(
         (name.empty() ? whole.data() + whole.size() : name.data()) - line.data());
-    const auto refuse = [](Status s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
     const auto at = " (byte " + std::to_string(byte) + ")";
     if (!parser::IsIdentifier(name)) {
-        return refuse(Status::InvalidArgument("USE takes one namespace name" + at));
+        return Refused(Status::InvalidArgument("USE takes one namespace name" + at));
     }
     auto ns = ResolveNames(session, [&](const txn::ReadView* v) {
         return catalog_.FindNamespaceOidByName(name, v);
     });
     if (!ns.ok()) {
-        if (ns.status().code() != StatusCode::kNotFound) return refuse(ns.status());
-        return refuse(Status::NotFound("no namespace named '" + std::string(name) + "'" + at));
+        if (ns.status().code() != StatusCode::kNotFound) return Refused(ns.status());
+        return Refused(Status::NotFound("no namespace named '" + std::string(name) + "'" + at));
     }
     if (catalog::IsSystemNamespace(ns.value())) {
-        return refuse(Status::InvalidArgument(
+        return Refused(Status::InvalidArgument(
             "namespace '" + std::string(name) +
             "' holds the catalog, whose relations are read qualified as catalog views "
             "(sys.tables); it cannot be the session's namespace" + at));
@@ -11048,7 +11141,7 @@ DispatchOutcome CommandDispatcher::HandleSetIsolation(std::string_view args, Ses
         return {"ERR expected LEVEL after SET ISOLATION", false};
     }
     auto parsed = txn::ParseIsolationLevel(Trim(name));
-    if (!parsed.ok()) return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+    if (!parsed.ok()) return Refused(parsed.status());
 
     // Applies to the *next* transaction, never the open one: changing what
     // a running transaction's read view means halfway through would make
@@ -11082,7 +11175,7 @@ DispatchOutcome CommandDispatcher::HandleSetIsolation(std::string_view args, Ses
 // retroactively, because the window it spent is spent.
 DispatchOutcome CommandDispatcher::HandleSetDurability(std::string_view args, Session& session) {
     auto parsed = wal::ParseDurabilityClass(Trim(args));
-    if (!parsed.ok()) return {"ERR " + parsed.status().message(), false, 0, parsed.status()};
+    if (!parsed.ok()) return Refused(parsed.status());
     if (session.in_explicit_txn()) {
         return {"ERR cannot change the durability class inside a transaction", false};
     }
@@ -11108,7 +11201,7 @@ DispatchOutcome CommandDispatcher::HandleSetPriority(std::string_view line, std:
     auto parsed = ParsePriority(word);
     if (!parsed.ok()) {
         const Status s = parsed.status().WithMessage(parsed.status().message() + at);
-        return {ErrorReply(s), false, 0, s};
+        return Refused(s);
     }
     if (parsed.value() == Priority::kTransactional && session.role() != Role::kAdmin) {
         return {"ERR permission: SET PRIORITY transactional needs admin; this connection is " +
@@ -11908,51 +12001,7 @@ std::uint64_t CommandDispatcher::WriterId(const WriteScope& scope) {
 }
 
 DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& session) {
-    WriteScope scope;
-    txn::Snapshot snap;
-    WalkCursor resume_from;
-    exec::StatementContext context;  // NOW()'s instant, carried across a park (AP-S4)
-
-    // AO-S3b's resume: `HandleUpdate`'s branch, for its reason.
-    if (session.parked_write().has_value() && session.parked_write()->is_delete) {
-        const Session::ParkedWrite& parked = *session.parked_write();
-        scope = WriteScope{parked.txn, parked.owned, &session};
-        snap = parked.snapshot;
-        resume_from = parked.cursor;
-        statement_trail_mark_ = parked.trail_mark;
-        context = parked.context;
-        statement_boundary_taken_ = true;  // `HandleUpdate`'s resume, for its reason
-        session.clear_parked_write();
-    } else {
-        auto opened = BeginWrite(session);
-        if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
-        scope = opened.value();
-        context = StatementContextFor(session);
-
-        // After `BeginWrite`: `HandleUpdate`'s order, for its reason (Census A row 4).
-        auto snapshot = SnapshotFor(session);
-        // Through `FinishWrite`, as `HandleUpdate`'s: the opened scope ends.
-        if (!snapshot.ok()) {
-            return FinishWrite(session, scope,
-                               {ErrorReply(snapshot.status()), false, 0, snapshot.status()},
-                               stats::RelationWrite::kDelete);
-        }
-        snap = snapshot.value().snap;
-    }
-
-    DispatchOutcome out = DeleteInner(line, scope, snap, resume_from, context);
-
-    // AO-S3b's park: `HandleUpdate`'s arm, for its reason. Ahead of
-    // `EndWrite` below because that *ends* the scope and this must not - a
-    // DELETE that has already marked rows has nothing to roll them back to.
-    if (out.parked_mid_walk) {
-        session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
-                                                      out.walk_cursor, statement_trail_mark_,
-                                                      /*is_delete=*/true, context});
-        return out;
-    }
-    return FinishWrite(session, scope, WithReturning(line, session, scope, std::move(out), context),
-                       stats::RelationWrite::kDelete);
+    return RunWalkWrite(line, session, /*is_delete=*/true);
 }
 
 namespace {
@@ -12075,7 +12124,6 @@ std::optional<std::uint64_t> ParseFetchId(std::string_view text) {
 }  // namespace
 
 DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session& session) {
-    const auto refuse = [](const Status& s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
     const auto at = [&line](std::string_view word) {
         return static_cast<std::size_t>(word.data() - line.data());
     };
@@ -12086,7 +12134,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
     // `kBootstrapXid`, an overwrite at `kNoTxnId`), and an advisory bit gains
     // nothing from atomicity with user writes.
     if (session.in_explicit_txn()) {
-        return refuse(Status::NotImplemented(
+        return Refused(Status::NotImplemented(
             "WAYSTONE inside a transaction is not implemented; run it in autocommit (byte 0)"));
     }
 
@@ -12094,14 +12142,14 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
     const auto [mode, example] = SplitFirstToken(rest);
     const bool on = IEquals(mode, "ON");
     if (!on && !IEquals(mode, "OFF")) {
-        return refuse(Status::InvalidArgument(
+        return Refused(Status::InvalidArgument(
             (mode.empty() ? std::string("WAYSTONE expects ON or OFF")
                           : "WAYSTONE expects ON or OFF, not '" + std::string(mode) + "'") +
             " (byte " + std::to_string(mode.empty() ? line.size() : at(mode)) + ")"));
     }
     const std::string verb = on ? "WAYSTONE ON" : "WAYSTONE OFF";
     if (example.empty()) {
-        return refuse(Status::InvalidArgument(
+        return Refused(Status::InvalidArgument(
             verb + (on ? " expects a SELECT" : " expects a SELECT or a fetch_id") + " (byte " +
             std::to_string(line.size()) + ")"));
     }
@@ -12117,13 +12165,13 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
         // would accept a shape this check never saw, a spelling that
         // enforces nothing.
         if (on) {
-            return refuse(Status::InvalidArgument(
+            return Refused(Status::InvalidArgument(
                 "WAYSTONE ON takes a SELECT to opt in, not a fetch_id; WAYSTONE OFF takes "
                 "either (byte " + std::to_string(example_at) + ")"));
         }
         const auto parsed = ParseFetchId(example);
         if (!parsed.has_value()) {
-            return refuse(Status::InvalidArgument(
+            return Refused(Status::InvalidArgument(
                 "WAYSTONE OFF's fetch_id is a decimal, or 0x and 1 to 16 hex digits, that fits "
                 "64 bits; '" + std::string(example) + "' is not (byte " +
                 std::to_string(example_at) + ")"));
@@ -12132,7 +12180,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
     } else {
         // ---- The example's leading word, before any parse ----------------
         if (IEquals(lead, "INSERT") || IEquals(lead, "UPDATE") || IEquals(lead, "DELETE")) {
-            return refuse(Status::NotImplemented(
+            return Refused(Status::NotImplemented(
                 verb + " over " + std::string(lead) + " is not implemented: only a SELECT "
                 "records a trail (byte " + std::to_string(example_at) + ")"));
         }
@@ -12147,13 +12195,13 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
             return layered.ParseQuery().ok();
         };
         if (IEquals(lead, "WITH") || (!IEquals(lead, "SELECT") && layer_reads())) {
-            return refuse(Status::NotImplemented(
+            return Refused(Status::NotImplemented(
                 verb + " over a statement the query layer answers is not implemented: Waystone "
                 "records only a native SELECT's step chain (byte " +
                 std::to_string(example_at) + ")"));
         }
         if (!IEquals(lead, "SELECT")) {
-            return refuse(Status::InvalidArgument(
+            return Refused(Status::InvalidArgument(
                 verb + " expects a SELECT" + (on ? "" : " or a fetch_id") + ", not '" +
                 std::string(lead) + "' (byte " + std::to_string(example_at) + ")"));
         }
@@ -12178,7 +12226,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
             }
         }
         if (on && param_at.has_value()) {
-            return refuse(Status::NotImplemented(
+            return Refused(Status::NotImplemented(
                 "WAYSTONE ON over a '?' placeholder is not implemented: write the example "
                 "with a literal, whose fetch_id the placeholder form shares (byte " +
                 std::to_string(*param_at) + ")"));
@@ -12192,19 +12240,19 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
             // to record. `OFF` never had such a shape opted, so it answers
             // with the parser's own refusal.
             if (on && layer_reads()) {
-                return refuse(Status::NotImplemented(
+                return Refused(Status::NotImplemented(
                     "WAYSTONE ON over a SELECT the query layer answers is not implemented: "
                     "Waystone records only a native step chain; the native grammar declined "
                     "it (byte " +
                     std::to_string(ByteNamedIn(parsed.status()).value_or(example_at)) + ")"));
             }
-            return refuse(parsed.status());
+            return Refused(parsed.status());
         }
         const auto fingerprint =
             param_at.has_value() ? parser::FingerprintOf(padded) : parser.fingerprint();
         if (!std::holds_alternative<parser::SelectStmt>(parsed.value()) ||
             !fingerprint.has_value()) {
-            return refuse(Status::InvalidArgument(verb + " expects one SELECT (byte " +
+            return Refused(Status::InvalidArgument(verb + " expects one SELECT (byte " +
                                                   std::to_string(example_at) + ")"));
         }
         fetch_id = fingerprint->fetch_id;
@@ -12234,14 +12282,14 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
                 });
                 if (!chain.ok()) {
                     if (chain.status().code() == StatusCode::kNotImplemented && layer_reads()) {
-                        return refuse(Status::NotImplemented(
+                        return Refused(Status::NotImplemented(
                             "WAYSTONE ON over a SELECT the query layer answers is not "
                             "implemented: Waystone records only a native step chain; the "
                             "native compile declined it (byte " +
                             std::to_string(ByteNamedIn(chain.status()).value_or(example_at)) +
                             ")"));
                     }
-                    return refuse(AtByte(chain.status(), example_at));
+                    return Refused(AtByte(chain.status(), example_at));
                 }
                 const exec::StepChain& compiled = chain.value();
 
@@ -12261,7 +12309,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
                             break;
                         }
                     }
-                    return refuse(Status::Unsupported(
+                    return Refused(Status::Unsupported(
                         "WAYSTONE ON over a statement calling a row-volatile function: its "
                         "instance names no stable set of rows, so it never records or replays "
                         "(byte " + std::to_string(call_at) + ")"));
@@ -12273,7 +12321,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
                 // accepted, and the run-time `HasReplayableStep` keeps such
                 // a run from recording.
                 if (!exec::ShapeAdmitsDescent(compiled)) {
-                    return refuse(Status::Unsupported(
+                    return Refused(Status::Unsupported(
                         "WAYSTONE ON over a SELECT with no tuple key equality: no step of it "
                         "is a tuple key lookup or probe under any plan, and a trail replaces "
                         "only those, never a search (invariant 9) (byte " +
@@ -12293,12 +12341,12 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
             if (recorder_ != nullptr) {
                 auto row = catalog_.GetSysPatternRow(fetch_id);
                 if (!row.ok() && row.status().code() != StatusCode::kNotFound) {
-                    return refuse(AtByte(row.status(), 0));
+                    return Refused(AtByte(row.status(), 0));
                 }
                 if (!row.ok() || !catalog::HasWaystoneDirectory(row.value())) {
                     auto made = stats::CreateDirPage(page_store_);
                     if (!made.ok()) {
-                        return refuse(made.status().WithMessage(
+                        return Refused(made.status().WithMessage(
                             "WAYSTONE ON: no page for the pattern's directory: " +
                             made.status().message() + " (byte 0)"));
                     }
@@ -12309,7 +12357,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
     }
 
     auto wrote = catalog_.SetPatternWaystone(fetch_id, stmt_class, on, root);
-    if (!wrote.ok()) return refuse(AtByte(wrote.status(), 0));
+    if (!wrote.ok()) return Refused(AtByte(wrote.status(), 0));
 
     // **The named park** (§8.3, Durability of OK): the hold is released, and
     // the answer waits where a `group` commit does, on the record it rests
@@ -12326,7 +12374,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
         // state stands on every core for this run, so the reply says so
         // rather than reading as an opt-in that did not happen.
         if (Status s = wal_->RequestSyncNow(); !s.ok()) {
-            return refuse(s.WithMessage(
+            return Refused(s.WithMessage(
                 verb + " is in effect for this run but its record is not durable, so the "
                 "state may be lost at a restart: " + s.message() + " (byte 0)"));
         }
@@ -12345,16 +12393,15 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
 }
 
 DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& session) {
-    const auto refuse = [](const Status& s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
 
     // PU9, BH-Q4: autocommit only, refused before anything opens, so the
     // transaction it meets is not poisoned.
     if (session.in_explicit_txn()) {
-        return refuse(Status::NotImplemented(
+        return Refused(Status::NotImplemented(
             "PURGE inside a transaction is not implemented; run it in autocommit (byte 0)"));
     }
     auto parsed = parser::Parse(line);
-    if (!parsed.ok()) return refuse(parsed.status());
+    if (!parsed.ok()) return Refused(parsed.status());
     if (!std::holds_alternative<parser::PurgeStmt>(parsed.value())) {
         return {"ERR expected a PURGE statement", false};
     }
@@ -12370,15 +12417,15 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
         return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
                                         session.default_namespace(), stmt.table_byte_offset, v);
     });
-    if (!oid.ok()) return refuse(oid.status());
+    if (!oid.ok()) return Refused(oid.status());
     ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // IS, AT-R1
     auto access = catalog_.InitTableAccess(oid.value());
-    if (!access.ok()) return refuse(access.status());
+    if (!access.ok()) return Refused(access.status());
     const catalog::TableAccess& ta = *access.value();
     // BZ-R4: a heap's tuple key is hidden, and PURGE's window is written
     // in tuple key comparisons, so there is no window a statement can name.
     if (ta.schema.heap()) {
-        return refuse(Status::Unsupported("'" + stmt.table_name +
+        return Refused(Status::Unsupported("'" + stmt.table_name +
                                           "' is a heap, whose tuple key is hidden; PURGE's "
                                           "window names tuple keys, so it frees none on a heap" +
                                           at_name));
@@ -12390,7 +12437,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     // Transition created after this read takes the relation `X`, which the
     // purge's `IX` waits for, and the memo check re-runs this statement.
     if (!ta.transitions.empty()) {
-        return refuse(Status::Unsupported(
+        return Refused(Status::Unsupported(
             "'" + stmt.table_name + "' carries transition '" + ta.transitions.front().name +
             "', whose state history a freed key would restart; PURGE frees no key of a "
             "relation that carries a Transition" +
@@ -12404,7 +12451,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     // the relation's own name qualifies its columns.
     for (const parser::Condition& cond : stmt.where) {
         if (cond.col.qualified() && !IEquals(cond.col.qualifier, stmt.table_name)) {
-            return refuse(Status::InvalidArgument(
+            return Refused(Status::InvalidArgument(
                 "'" + cond.col.qualifier + "." + cond.col.name +
                 "' names no relation in scope (byte " + std::to_string(cond.col.byte_offset) +
                 ")"));
@@ -12415,7 +12462,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     // rather than skipping it (BH-R2), clamped to the key space.
     const TupleKeyWindow window = FoldTupleKeyWindow(ta, stmt.where);
     if (window.unfolded != nullptr) {
-        return refuse(PurgeConjunctRefusal(ta, *window.unfolded, stmt.where_byte_offset));
+        return Refused(PurgeConjunctRefusal(ta, *window.unfolded, stmt.where_byte_offset));
     }
     const std::uint64_t lo = std::max(window.lo, catalog::kFirstRowId);
     const std::uint64_t hi = std::min(window.hi, kIdSpaceEnd);
@@ -12426,7 +12473,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     // it waited for, and between attempts it holds nothing - no view to
     // keep the horizon down, no `IX` to keep a DDL out.
     auto opened = BeginWrite(session);
-    if (!opened.ok()) return refuse(opened.status());
+    if (!opened.ok()) return Refused(opened.status());
     WriteScope scope = opened.value();
     // `purged` keys are written whatever the decide does - their records
     // are no transaction's - so a commit that fails after them still says
@@ -12442,7 +12489,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
                                    : (out.status.ok() ? Status::InvalidArgument(out.response)
                                                       : out.status);
         if (Status s = EndWrite(session, scope, verdict); !s.ok() && verdict.ok()) {
-            return refuse(purged == 0 ? s : partly(s, purged));
+            return Refused(purged == 0 ? s : partly(s, purged));
         }
         return out;
     };
@@ -12453,7 +12500,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     // `X` keeps this out (Census A).
     if (std::optional<Status> held =
             BorrowOrWait(scope, txn::LockKey::Relation(ta.oid), RepeatableReadWait::kCapable)) {
-        return ended(refuse(*held));
+        return ended(Refused(*held));
     }
 
     // ---- Phase 1: judge the whole window, writing nothing (BH-R6) ------
@@ -12502,10 +12549,10 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
             }
             return storage::VisitControl::kContinue;
         });
-    if (!walked.ok()) return ended(refuse(walked));
+    if (!walked.ok()) return ended(Refused(walked));
     if (one_key_live) {
         const std::uint32_t at = stmt.where.front().val.byte_offset;
-        return ended(refuse(Status::InvalidArgument(
+        return ended(Refused(Status::InvalidArgument(
             "tuple key " + std::to_string(lo) +
             " is live; PURGE frees only a key whose row was deleted (byte " + std::to_string(at) +
             ")")));
@@ -12516,7 +12563,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
                 ? "a snapshot older than its DELETE's commit is still open"
                 : "its latest writer, transaction " + std::to_string(pending->trx_id) +
                       ", has not decided";
-        DispatchOutcome out = ended(refuse(Status::TxnConflict(
+        DispatchOutcome out = ended(Refused(Status::TxnConflict(
             "PURGE cannot free tuple key " + std::to_string(pending->tuple_key) + " yet: " + why +
             "; nothing was purged, and running it again once that ends will")));
         out.purge_wait = pending;
@@ -12546,20 +12593,19 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     // `sys.relation_stats`' count (BO-S6), whatever the decide does: a
     // purged key is no transaction's (PU6).
     stats::RelationStats::Record(core_id_, ta.oid, stats::RelationWrite::kPurge, purged);
-    if (!keyed.ok()) return ended(refuse(partly(keyed, purged)));
+    if (!keyed.ok()) return ended(Refused(partly(keyed, purged)));
     return ended({"PURGED " + std::to_string(purged), false, purged}, purged);
 }
 
 DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::PurgeStmt& stmt,
                                                               Session& session) {
-    const auto refuse = [](const Status& s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
     const std::string at_name = " (byte " + std::to_string(stmt.table_byte_offset) + ")";
 
     auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
         return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
                                         session.default_namespace(), stmt.table_byte_offset, v);
     });
-    if (!oid.ok()) return refuse(oid.status());
+    if (!oid.ok()) return Refused(oid.status());
     ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // IS, AT-R1
 
     // **A DDL transaction, though S2 writes no catalog row**: CD-S3's flag is
@@ -12575,14 +12621,14 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
         // committed.
         if (std::optional<Status> held = BorrowOrWait(
                 scope, txn::LockKey::Relation(oid.value()), RepeatableReadWait::kCapable)) {
-            return refuse(*held);
+            return Refused(*held);
         }
         auto access = catalog_.InitTableAccess(oid.value());
-        if (!access.ok()) return refuse(access.status());
+        if (!access.ok()) return Refused(access.status());
         const catalog::TableAccess& ta = *access.value();
         const std::vector<std::uint16_t> targets = exec::DroppedColumns(ta);
         if (targets.empty()) {
-            return refuse(Status::NotImplemented("'" + stmt.table_name +
+            return Refused(Status::NotImplemented("'" + stmt.table_name +
                                                  "' has no dropped column, so PURGE DROPPED "
                                                  "COLUMNS has nothing to clean" +
                                                  at_name));
@@ -12599,7 +12645,7 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
         // path).
         const std::uint64_t word = catalog_.cache_built_at();
         if (epochs_ != nullptr && !epochs_->AllAtLeast(word)) {
-            DispatchOutcome out = refuse(Status::TxnConflict(
+            DispatchOutcome out = Refused(Status::TxnConflict(
                 "PURGE DROPPED COLUMNS cannot clean '" + stmt.table_name +
                 "' yet: an older statement may still read its dropped columns as live; nothing "
                 "was cleaned, and running it again once that statement ends will"));
@@ -12643,7 +12689,7 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
                     dirty.push_back(tuple_key);
                     return storage::VisitControl::kContinue;
                 });
-            if (!walked.ok()) return refuse(partly(walked));
+            if (!walked.ok()) return Refused(partly(walked));
 
             if (purge_seam_for_test_) purge_seam_for_test_();
             {
@@ -12651,7 +12697,7 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
                 for (const std::uint64_t key : dirty) {
                     auto one = exec::CleanDroppedCells(page_store_, wal_, ta, targets, key,
                                                        resolved);
-                    if (!one.ok()) return refuse(partly(one.status()));
+                    if (!one.ok()) return Refused(partly(one.status()));
                     switch (one.value().outcome) {
                         case exec::CleanOutcome::kCleaned:
                             ++cleaned;
@@ -12680,7 +12726,7 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
                     ? "a snapshot older than its writer's commit is still open"
                     : "its writer, transaction " + std::to_string(pending->trx_id) +
                           ", has not decided";
-            DispatchOutcome out = refuse(Status::TxnConflict(
+            DispatchOutcome out = Refused(Status::TxnConflict(
                 "PURGE DROPPED COLUMNS cannot clean tuple key " +
                 std::to_string(pending->tuple_key) + " of '" + stmt.table_name + "' yet: " + why +
                 "; " + std::to_string(blocked) + " row(s) are blocked, " +
@@ -12713,7 +12759,7 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
         // re-run removes one. Transactionless, as DROP CABIN is: a Cabin on a
         // dropped position is never served, so dropping it is always right.
         auto swept = SweepColumnCabins(oid.value(), targets);
-        if (!swept.ok()) return refuse(partly(swept.status()));
+        if (!swept.ok()) return Refused(partly(swept.status()));
         // (b) The flag, in this statement's DDL transaction under its `IX`
         // (CD-OI-9 (a)), so a rollback - here or at mount - clears it. A
         // re-run with every target flagged opens no DDL and moves no word.
@@ -12723,7 +12769,7 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
             auto flagged =
                 catalog_.MarkColumnsSlotClean(oid.value(), targets, ddl.trx_id, &changed);
             NoteCatalogRowChanges(ddl, changed);
-            if (!flagged.ok()) return refuse(partly(flagged.status()));
+            if (!flagged.ok()) return Refused(partly(flagged.status()));
         }
 
         std::string reply = "PURGED DROPPED COLUMNS " + stmt.table_name + ": " +
@@ -12741,11 +12787,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                                                const txn::Snapshot& snapshot,
                                                WalkCursor resume_from,
                                                const exec::StatementContext& context) {
-    // AO-S3b, and `UpdateInner`'s site states the argument.
-    bool parked_on_row = false;
-    Status blocked_verdict;
     auto parsed = parser::Parse(line);
-    if (!parsed.ok()) return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+    if (!parsed.ok()) return Refused(parsed.status());
     if (!std::holds_alternative<parser::DeleteStmt>(parsed.value())) {
         return {"ERR expected a DELETE statement", false};
     }
@@ -12757,20 +12800,20 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         return catalog_.ResolveRelation(stmt.schema, stmt.table_name, context.default_namespace,
                                         stmt.table_byte_offset, v);
     });
-    if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
+    if (!oid.ok()) return Refused(oid.status());
     ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
 
     auto access = catalog_.InitTableAccess(oid.value());
-    if (!access.ok()) return {ErrorReply(access.status()), false, 0, access.status()};
+    if (!access.ok()) return Refused(access.status());
     const catalog::TableAccess& ta = *access.value();
     if (auto refused = ReturningWithoutTransaction(stmt.returning, scope.txn)) {
-        return {ErrorReply(*refused), false, 0, *refused};
+        return Refused(*refused);
     }
 
     // Before anything is marked: UPDATE's rule and UPDATE's reason. A
     // delete-mark is a write.
     if (Status admitted = CheckWriteAdmission(ta); !admitted.ok()) {
-        return {ErrorReply(admitted), false, 0, admitted};
+        return Refused(admitted);
     }
 
     // The same WHERE compilation UPDATE uses, so a DELETE's predicate means
@@ -12779,68 +12822,14 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         return exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where, v, &borrow,
                                   &context);
     });
-    if (!predicates.ok()) return {ErrorReply(predicates.status()), false, 0, predicates.status()};
-    const std::vector<const catalog::Schema*> schemas = {&ta.schema};
-    exec::ChainFrame frame;
-    frame.Open(schemas, /*parent=*/nullptr);
-
-    // Per-row scratch owned by the statement, as UPDATE's site explains:
-    // cleared and refilled per scanned row, allocating only on the first.
-    std::vector<std::byte> payload_copy;
-    std::vector<exec::PendingSpill> frame_spills;
+    if (!predicates.ok()) return Refused(predicates.status());
+    // The walk's first stage, its claim and its park are UPDATE's too
+    // (`WriteWalk`). Stage 1 decodes only what the WHERE reads; `mark`
+    // completes a row that qualified.
+    WriteWalk walk(*this, scope, ta, snapshot, predicates.value(), resume_from.targets);
+    exec::ChainFrame& frame = walk.frame;
+    const std::vector<std::byte>& payload_copy = walk.payload_copy;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
-    bool conjuncts_checked = false;
-    // The collected targets, as UPDATE's (`WalkCursor::targets`).
-    std::shared_ptr<const std::unordered_set<std::uint64_t>> targets = resume_from.targets;
-
-    // ---- Stage 1 of the walk -------------------------------------------
-    //
-    // Only what the WHERE reads (OPT-001): the row's tuple key if a version is
-    // visible under the snapshot and qualifies, else nothing. DELETE walks
-    // the whole relation exactly as UPDATE does, so it decoded every row of
-    // it to mark one; the mask is the compiler's, and is kAllColumns
-    // wherever a partial decode would be unsound. `payload_copy` holds the
-    // row's bytes afterwards - copied out of the page before anything can
-    // fetch another one, the same reason UPDATE's apply() copies - and the
-    // version's ids are handed out for the mark that needs them.
-    auto qualifies = [&](heap::PageView& page, std::uint16_t slot, std::uint64_t* trx_id_out,
-                         std::uint64_t* undo_ptr_out) -> StatusOr<std::optional<std::uint64_t>> {
-        auto tuple = page.ReadTuple(slot);
-        if (!tuple.ok()) return std::optional<std::uint64_t>{};  // dead or out-of-range slot
-        // Already delete-marked, or invisible to this reader: either way
-        // there is no version here to delete.
-        if (txn::Classify(snapshot.view, tuple.value()) == txn::Visibility::kNoVersion) {
-            return std::optional<std::uint64_t>{};
-        }
-        payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
-        auto id = KeystoneIdOfPayload(payload_copy);
-        if (!id.ok()) return id.status();
-        // Not a collected target: nothing to decode.
-        if (targets != nullptr && !targets->contains(id.value())) {
-            return std::optional<std::uint64_t>{};
-        }
-        if (trx_id_out != nullptr) *trx_id_out = tuple.value().trx_id;
-        if (undo_ptr_out != nullptr) *undo_ptr_out = tuple.value().undo_ptr;
-        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy,
-                                              frame.SlotsFor(0), filter_mask, frame_spills);
-            !s.ok()) {
-            return s;
-        }
-        // Checked once at the first row, as UPDATE's (BT-R5).
-        if (!conjuncts_checked) {
-            if (Status s = exec::CheckConjuncts(schemas, predicates.value(), frame);
-                !s.ok()) {
-                return s;
-            }
-            conjuncts_checked = true;
-        }
-        if (targets != nullptr) return std::optional<std::uint64_t>{id.value()};
-        auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas, predicates.value(),
-                                               frame, /*stats=*/nullptr, budget_, &snapshot);
-        if (!matched.ok()) return matched.status();
-        if (!matched.value()) return std::optional<std::uint64_t>{};
-        return std::optional<std::uint64_t>{id.value()};
-    };
     // The reverse hoist retired with the fan-out (AT-S5f); its history is
     // at cf889b63. The check runs per row inside the walk, because a walk
     // that sees every chain has nothing to ask anyone - and it mints its
@@ -12848,24 +12837,24 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
     std::uint32_t deleted = resume_from.rows_done;  // AO-S3b, as UPDATE
 
-    // The unit this write declares, as UPDATE - `UpdateInner`'s site
+    // The unit this write declares, as UPDATE - `UpdateParsed`'s site
     // states the argument.
     const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
     if (declared.has_value()) {
-        // `kFutile`, and `UpdateInner`'s site states the argument.
+        // `kFutile`, and `UpdateParsed`'s site states the argument.
         if (std::optional<Status> held =
                 BorrowOrWait(scope, *declared, RepeatableReadWait::kFutile)) {
-            return {ErrorReply(*held), false, 0, *held};
+            return Refused(*held);
         }
     }
 
     auto mark = [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {
-        std::uint64_t trx_id = 0;
-        std::uint64_t undo_ptr = 0;
-        auto qualified = qualifies(page, slot, &trx_id, &undo_ptr);
+        auto qualified = walk.Qualify(page, slot);
         if (!qualified.ok()) return qualified.status();
         if (!qualified.value().has_value()) return Status::OK();
-        const std::uint64_t id = *qualified.value();
+        const std::uint64_t id = qualified.value()->id;
+        const std::uint64_t trx_id = qualified.value()->trx_id;
+        const std::uint64_t undo_ptr = qualified.value()->undo_ptr;
 
         // ---- Stage 2: complete the row that qualified -------------------
         //
@@ -12883,31 +12872,19 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // get stale slots.
         if (filter_mask != exec::kAllColumnsMask) {
             if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy,
-                                                  frame.SlotsFor(0), ~filter_mask, frame_spills);
+                                                  frame.SlotsFor(0), ~filter_mask,
+                                                  walk.frame_spills);
                 !s.ok()) {
                 return s;
             }
         }
 
-        if (scope.txn != nullptr) {
-            // The borrow first, `UpdateInner`'s site states the order.
-            std::uint64_t blocker = 0;
-            if (!declared.has_value()) {
-                auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id), &blocker);
-                if (!took.ok()) return took.status();
-            }
-            if (Status s = CheckWriteConflictBlocking(scope, trx_id, id, blocker); !s.ok()) {
-                // AO-S3b, and `UpdateInner`'s site states the argument -
-                // including why this is an equality, and why it is against
-                // the lock's blocker rather than the header's writer.
-                if (blocker != 0 && blocking_writer_ == blocker) {
-                    parked_on_row = true;
-                    blocked_verdict = s;
-                    return Status::OK();
-                }
-                return s;
-            }
-        }
+        // `X`: the row goes. A held row answers OK with nothing marked, and
+        // the walk stops on it.
+        auto claimed = walk.Claim(*qualified.value(), declared.has_value(),
+                                  txn::LockMode::kExclusive);
+        if (!claimed.ok()) return claimed.status();
+        if (!claimed.value()) return Status::OK();
 
         // ---- The Transition check (BV-R3) ------------------------------
         //
@@ -12935,8 +12912,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                 // is written yet. The check recorded the writer; a held row
                 // above would have returned before reaching it.
                 if (blocking_writer_ != 0) {
-                    parked_on_row = true;
-                    blocked_verdict = s;
+                    walk.parked_on_row = true;
+                    walk.blocked_verdict = s;
                     return Status::OK();
                 }
                 return s;
@@ -13036,64 +13013,39 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             // Through the held leaf, as UPDATE's point arm (btree.hpp `Location`).
             heap::PageView page(found.at.leaf.bytes());
             if (Status s = mark(found.at.page_id, page, found.at.slot); !s.ok()) {
-                return {ErrorReply(s), false, 0, s};
+                return Refused(s);
             }
             // AO-S3b, and UPDATE's point arm states the argument: a
             // held row leaves `mark` answering OK with nothing marked,
             // and rendering the count would answer `DELETED 0` for a
             // row this statement is waiting on.
-            if (parked_on_row) {
-                return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
+            if (walk.parked_on_row) {
+                return Refused(walk.blocked_verdict);
             }
             return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
         }
     }
 
-    // The collection pass, and `UpdateInner`'s site states the argument.
-    if (targets == nullptr && !predicates.value().sub_chains.empty()) {
-        auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
-        Status pass = VisitRelation(
-            ta, storage::PageAccess::kRead,
-            [&](PageId, heap::PageView& page,
-                std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-                auto qualified = qualifies(page, slot, nullptr, nullptr);
-                if (!qualified.ok()) return qualified.status();
-                if (qualified.value().has_value()) collected->insert(*qualified.value());
-                return storage::VisitControl::kContinue;
-            },
-            /*cursor=*/nullptr);
-        if (!pass.ok()) return {ErrorReply(pass), false, 0, pass};
-        if (collected->empty()) return {"DELETED " + std::to_string(deleted), false, deleted};
-        targets = std::move(collected);
-    }
+    auto any = walk.CollectTargets();
+    if (!any.ok()) return Refused(any.status());
+    if (!any.value()) return {"DELETED " + std::to_string(deleted), false, deleted};
 
-    // AO-S3b, and `UpdateInner`'s site states the argument.
+    // AO-S3b, and `UpdateParsed`'s site states the argument.
     WalkCursor walk_cursor = resume_from;
-    walk_cursor.targets = targets;
+    walk_cursor.targets = walk.targets;
     Status scan = VisitRelation(
         ta, storage::PageAccess::kWrite,
         [&](PageId page_id, heap::PageView& page,
             std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             if (Status s = mark(page_id, page, slot); !s.ok()) return s;
             // AO-S3b, and UPDATE's walk states the argument.
-            if (parked_on_row) return storage::VisitControl::kStop;
+            if (walk.parked_on_row) return storage::VisitControl::kStop;
             return storage::VisitControl::kContinue;
         },
         &walk_cursor);
-    if (!scan.ok()) return {ErrorReply(scan), false, 0, scan};
+    if (!scan.ok()) return Refused(scan);
 
-    // AO-S3b, and `UpdateInner`'s site states both arms of the argument -
-    // the probe-resume arm (AO-S6d) included.
-    if (parked_on_row) {
-        if (scope.txn == nullptr || scope.txn->trail().size() == statement_trail_mark_) {
-            return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
-        }
-        DispatchOutcome parked;
-        parked.parked_mid_walk = true;
-        walk_cursor.rows_done = deleted;
-        parked.walk_cursor = walk_cursor;
-        return parked;
-    }
+    if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, deleted);
 
     return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
 }

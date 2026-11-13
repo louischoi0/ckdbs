@@ -233,6 +233,30 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         if (file.Has(key)) return Status::InvalidArgument(file.origin() + ": " + why);
     }
 
+    // A key with no rule of its own: absent leaves the field alone, and the
+    // refusal of a value that does not parse is the file's.
+    const auto text = [&](const char* key, std::string& out) -> Status {
+        if (!file.Has(key)) return Status::OK();
+        auto v = file.GetString(key);
+        if (!v.ok()) return v.status();
+        out = std::move(v.value());
+        return Status::OK();
+    };
+    const auto flag = [&](const char* key, bool& out) -> Status {
+        if (!file.Has(key)) return Status::OK();
+        auto v = file.GetBool(key);
+        if (!v.ok()) return v.status();
+        out = v.value();
+        return Status::OK();
+    };
+    const auto number = [&]<typename T>(const char* key, T& out) -> Status {
+        if (!file.Has(key)) return Status::OK();
+        auto v = file.GetUint(key);
+        if (!v.ok()) return v.status();
+        out = static_cast<T>(v.value());
+        return Status::OK();
+    };
+
     std::vector<std::string> unknown = file.UnknownKeys(KnownConfigKeys());
     if (!unknown.empty()) {
         std::string msg = file.origin() + ": unknown config key(s):";
@@ -240,11 +264,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         return Status::InvalidArgument(std::move(msg));
     }
 
-    if (file.Has("data_file")) {
-        auto v = file.GetString("data_file");
-        if (!v.ok()) return v.status();
-        data_file = std::move(v.value());
-    }
+    if (Status s = text("data_file", data_file); !s.ok()) return s;
     if (file.Has("port")) {
         auto v = file.GetUint("port");
         if (!v.ok()) return v.status();
@@ -263,24 +283,12 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         listen_address = std::move(v.value());
     }
-    if (file.Has("wal_dir")) {
-        auto v = file.GetString("wal_dir");
-        if (!v.ok()) return v.status();
-        wal_dir = std::move(v.value());
-    }
+    if (Status s = text("wal_dir", wal_dir); !s.ok()) return s;
     // The WAL archive (BR-S4): on when one of the two is set, and only one
     // may be - two destinations for one segment would be two archives whose
     // agreement nothing checks.
-    if (file.Has("archive_dir")) {
-        auto v = file.GetString("archive_dir");
-        if (!v.ok()) return v.status();
-        archive.archive_dir = std::move(v.value());
-    }
-    if (file.Has("archive_command")) {
-        auto v = file.GetString("archive_command");
-        if (!v.ok()) return v.status();
-        archive.archive_command = std::move(v.value());
-    }
+    if (Status s = text("archive_dir", archive.archive_dir); !s.ok()) return s;
+    if (Status s = text("archive_command", archive.archive_command); !s.ok()) return s;
     if (!archive.archive_dir.empty() && !archive.archive_command.empty()) {
         return Status::InvalidArgument(file.origin() +
                                        ": archive_dir and archive_command are two destinations "
@@ -333,21 +341,9 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         durability = parsed.value();
     }
-    if (file.Has("tls")) {
-        auto v = file.GetBool("tls");
-        if (!v.ok()) return v.status();
-        tls = v.value();
-    }
-    if (file.Has("tls_cert_file")) {
-        auto v = file.GetString("tls_cert_file");
-        if (!v.ok()) return v.status();
-        tls_cert_file = std::move(v.value());
-    }
-    if (file.Has("tls_key_file")) {
-        auto v = file.GetString("tls_key_file");
-        if (!v.ok()) return v.status();
-        tls_key_file = std::move(v.value());
-    }
+    if (Status s = flag("tls", tls); !s.ok()) return s;
+    if (Status s = text("tls_cert_file", tls_cert_file); !s.ok()) return s;
+    if (Status s = text("tls_key_file", tls_key_file); !s.ok()) return s;
     // Checked here rather than at Serve(): a config that can never serve
     // should refuse at the same moment a typo'd key does. The *contents*
     // of the files are checked where they are read (Serve), which is as
@@ -372,30 +368,14 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
                                             v.value() + "'");
         }
     }
-    if (file.Has("users_file")) {
-        auto v = file.GetString("users_file");
-        if (!v.ok()) return v.status();
-        users_file = std::move(v.value());
-    }
+    if (Status s = text("users_file", users_file); !s.ok()) return s;
     if (auth_scram && users_file.empty()) {
         return Status::InvalidArgument(file.origin() +
                                         ": auth = scram requires users_file");
     }
-    if (file.Has("waystone_recording")) {
-        auto v = file.GetBool("waystone_recording");
-        if (!v.ok()) return v.status();
-        waystone_recording = v.value();
-    }
-    if (file.Has("ash_enabled")) {
-        auto v = file.GetBool("ash_enabled");
-        if (!v.ok()) return v.status();
-        ash_enabled = v.value();
-    }
-    if (file.Has("ash_capture_arg_hash")) {
-        auto v = file.GetBool("ash_capture_arg_hash");
-        if (!v.ok()) return v.status();
-        ash_capture_arg_hash = v.value();
-    }
+    if (Status s = flag("waystone_recording", waystone_recording); !s.ok()) return s;
+    if (Status s = flag("ash_enabled", ash_enabled); !s.ok()) return s;
+    if (Status s = flag("ash_capture_arg_hash", ash_capture_arg_hash); !s.ok()) return s;
     if (file.Has("ash_interval_ms")) {
         auto v = file.GetUint("ash_interval_ms");
         if (!v.ok()) return v.status();
@@ -432,66 +412,29 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
             "caller-supplied tuple key or issues one when INSERT omits it, so there is no "
             "default to set - remove the line");
     }
-    if (file.Has("waystone_replay")) {
-        auto v = file.GetBool("waystone_replay");
-        if (!v.ok()) return v.status();
-        waystone_replay = v.value();
+    if (Status s = flag("waystone_replay", waystone_replay); !s.ok()) return s;
+    if (Status s = flag("access_statistics", access_statistics); !s.ok()) return s;
+    if (Status s = flag("cabins", cabins); !s.ok()) return s;
+    if (Status s = flag("indexes", indexes); !s.ok()) return s;
+    // No upper range check, and no zero check either: 0 means no value
+    // may be observed, which is a coherent way to keep the catalog
+    // objects while switching the behaviour off per instance.
+    if (Status s = number("cabin_max_values", cabin_max_values); !s.ok()) return s;
+    if (Status s = number("cabin_max_entries_per_value", cabin_max_entries_per_value);
+        !s.ok()) {
+        return s;
     }
-    if (file.Has("access_statistics")) {
-        auto v = file.GetBool("access_statistics");
-        if (!v.ok()) return v.status();
-        access_statistics = v.value();
-    }
-    if (file.Has("cabins")) {
-        auto v = file.GetBool("cabins");
-        if (!v.ok()) return v.status();
-        cabins = v.value();
-    }
-    if (file.Has("indexes")) {
-        auto v = file.GetBool("indexes");
-        if (!v.ok()) return v.status();
-        indexes = v.value();
-    }
-    if (file.Has("cabin_max_values")) {
-        auto v = file.GetUint("cabin_max_values");
-        if (!v.ok()) return v.status();
-        // No upper range check, and no zero check either: 0 means no value
-        // may be observed, which is a coherent way to keep the catalog
-        // objects while switching the behaviour off per instance.
-        cabin_max_values = static_cast<std::size_t>(v.value());
-    }
-    if (file.Has("cabin_max_entries_per_value")) {
-        auto v = file.GetUint("cabin_max_entries_per_value");
-        if (!v.ok()) return v.status();
-        cabin_max_entries_per_value = static_cast<std::size_t>(v.value());
-    }
-    if (file.Has("aggregate_max_groups")) {
-        auto v = file.GetUint("aggregate_max_groups");
-        if (!v.ok()) return v.status();
-        // No zero check, for the reason `cabin_max_values` has none: 0
-        // means no group may be founded, which refuses every aggregated
-        // statement - a coherent way to switch the feature off per
-        // instance while leaving the grammar in place.
-        aggregate_max_groups = static_cast<std::size_t>(v.value());
-    }
-    if (file.Has("aggregate_max_distinct")) {
-        auto v = file.GetUint("aggregate_max_distinct");
-        if (!v.ok()) return v.status();
-        aggregate_max_distinct = static_cast<std::size_t>(v.value());
-    }
-    if (file.Has("sort_max_rows")) {
-        auto v = file.GetUint("sort_max_rows");
-        if (!v.ok()) return v.status();
-        // No zero check, for `aggregate_max_groups`'s reason: 0 means no
-        // row may be held, which refuses every statement that needs a sort
-        // while leaving the grammar in place.
-        sort_max_rows = static_cast<std::size_t>(v.value());
-    }
-    if (file.Has("scan_kernel")) {
-        auto v = file.GetBool("scan_kernel");
-        if (!v.ok()) return v.status();
-        scan_kernel = v.value();
-    }
+    // No zero check, for the reason `cabin_max_values` has none: 0
+    // means no group may be founded, which refuses every aggregated
+    // statement - a coherent way to switch the feature off per
+    // instance while leaving the grammar in place.
+    if (Status s = number("aggregate_max_groups", aggregate_max_groups); !s.ok()) return s;
+    if (Status s = number("aggregate_max_distinct", aggregate_max_distinct); !s.ok()) return s;
+    // No zero check, for `aggregate_max_groups`'s reason: 0 means no
+    // row may be held, which refuses every statement that needs a sort
+    // while leaving the grammar in place.
+    if (Status s = number("sort_max_rows", sort_max_rows); !s.ok()) return s;
+    if (Status s = flag("scan_kernel", scan_kernel); !s.ok()) return s;
     if (file.Has("join_order")) {
         auto v = file.GetString("join_order");
         if (!v.ok()) return v.status();
@@ -504,14 +447,10 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
                                            v.value() + "'");
         }
     }
-    if (file.Has("join_build_max_rows")) {
-        auto v = file.GetUint("join_build_max_rows");
-        if (!v.ok()) return v.status();
-        // 0 is the off-switch, not a refusal: no statement is refused by
-        // this knob at any value. The semantics have one home, at
-        // `kDefaultJoinBuildMaxRows` (exec/budget.hpp).
-        join_build_max_rows = static_cast<std::size_t>(v.value());
-    }
+    // 0 is the off-switch, not a refusal: no statement is refused by
+    // this knob at any value. The semantics have one home, at
+    // `kDefaultJoinBuildMaxRows` (exec/budget.hpp).
+    if (Status s = number("join_build_max_rows", join_build_max_rows); !s.ok()) return s;
     if (file.Has("lock_wait_fault_net_ms")) {
         auto v = file.GetUint("lock_wait_fault_net_ms");
         if (!v.ok()) return v.status();
@@ -566,11 +505,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         decay_half_life_ns = v.value() * 1'000'000'000ULL;
     }
-    if (file.Has("cabin_optimizer")) {
-        auto v = file.GetBool("cabin_optimizer");
-        if (!v.ok()) return v.status();
-        cabin_optimizer = v.value();
-    }
+    if (Status s = flag("cabin_optimizer", cabin_optimizer); !s.ok()) return s;
     if (file.Has("cabin_optimizer_page_budget")) {
         auto v = file.GetUint("cabin_optimizer_page_budget");
         if (!v.ok()) return v.status();
@@ -684,15 +619,11 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         cabin_optimizer_snapshot_interval_ms = v.value();
     }
-    if (file.Has("max_rows_touched")) {
-        auto v = file.GetUint("max_rows_touched");
-        if (!v.ok()) return v.status();
-        // No range check beyond the parse: 0 is a documented value
-        // (unlimited) and there is no upper bound worth inventing - a
-        // ceiling too high to reach is the same as no ceiling, which the
-        // operator has already asked for by setting it.
-        max_rows_touched = v.value();
-    }
+    // No range check beyond the parse: 0 is a documented value
+    // (unlimited) and there is no upper bound worth inventing - a
+    // ceiling too high to reach is the same as no ceiling, which the
+    // operator has already asked for by setting it.
+    if (Status s = number("max_rows_touched", max_rows_touched); !s.ok()) return s;
     if (file.Has("debug_text_port")) {
         auto v = file.GetUint("debug_text_port");
         if (!v.ok()) return v.status();
@@ -777,16 +708,8 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         reactor_cpus = std::move(cpus.value());
     }
-    if (file.Has("log_dir")) {
-        auto v = file.GetString("log_dir");
-        if (!v.ok()) return v.status();
-        log_dir = std::move(v.value());
-    }
-    if (file.Has("log_file")) {
-        auto v = file.GetString("log_file");
-        if (!v.ok()) return v.status();
-        log_file = std::move(v.value());
-    }
+    if (Status s = text("log_dir", log_dir); !s.ok()) return s;
+    if (Status s = text("log_file", log_file); !s.ok()) return s;
     if (file.Has("log_level")) {
         auto v = file.GetString("log_level");
         if (!v.ok()) return v.status();
@@ -1217,9 +1140,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->trail_recorder_ ? &*expeditor->trail_recorder_ : nullptr,
         expeditor->config_.waystone_replay, expeditor->config_.access_statistics,
         expeditor->cabin_store_ ? &*expeditor->cabin_store_ : nullptr,
-        &*expeditor->txn_manager_, expeditor->config_.isolation, /*core_id=*/0,
-        expeditor->config_.indexes, expeditor->config_.max_insert_rows);
-    // The same value every peer is handed (AT-S8, `StatementLimits`).
+        &*expeditor->txn_manager_, expeditor->config_.isolation, /*core_id=*/0);
+    // The same value every peer is handed (AT-S8, `StatementLimits`), and
+    // where `indexes` and `max_insert_rows` reach this dispatcher from.
     expeditor->dispatcher_->set_statement_limits(expeditor->config_.Limits());
     // The lock family's fault net, from `lock_wait_fault_net_ms` (AT-0
     // item 7). Core 0's dispatcher waits by the same bound a peer's does,
@@ -1347,14 +1270,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         !s.ok()) {
         return s;
     }
-    expeditor->dispatcher_->SetReclaimCounters(&expeditor->reclaim_counters_);
-    expeditor->dispatcher_->set_backup(&*expeditor->backup_);
-    expeditor->dispatcher_->set_archiver(expeditor->archiver());
     // Reclaim within the run (BF-R9): every core publishes its statement
     // epoch, and a committed drop is queued from whichever core committed it.
     expeditor->statement_epochs_.emplace(expeditor->config_.cores);
-    expeditor->dispatcher_->SetStatementEpochs(&*expeditor->statement_epochs_);
-    expeditor->dispatcher_->SetReclaimQueue(&*expeditor->reclaimer_);
+    expeditor->WireInstanceServices(*expeditor->dispatcher_);
 
     // PHY01's collector, wired to both feeders: every core's dispatcher
     // touches S1/S2 per successful SELECT, the one Cabin store forwards S3
@@ -1580,10 +1499,7 @@ Expeditor::~Expeditor() {
     // handler `Start` installed dereferences it, and members die in reverse
     // order - `wal_` before `store_`, whose syncer would otherwise still be
     // running.
-    if (store_ != nullptr) {
-        store_->data_sync().Stop();
-        store_->data_sync().SetFailureHandler({});
-    }
+    StopDataSync();
     // **And the suspend audit `Start` installed on the calling thread**,
     // so an instance started and dropped without the tail does not leave
     // it behind. Idempotent after the tail's own withdrawal.
@@ -1631,13 +1547,9 @@ Status Expeditor::Start() {
             owner->StopStartedCores();
             owner->running_.reset();
             // **And the data-sync thread, started above this guard**, with
-            // its handler: the header's "nothing is left running" covered
-            // every thread but this one, and a refused `Start` left an
-            // instance whose failed data-file sync aborts the process where
-            // one never started returns the `Status`. Both calls are
-            // idempotent; `~Expeditor` keeps its own.
-            owner->store_->data_sync().Stop();
-            owner->store_->data_sync().SetFailureHandler({});
+            // its handler: a refused `Start` returns its `Status` and leaves
+            // no thread whose failed data-file sync would abort the process.
+            owner->StopDataSync();
         }
     } drop_on_failure{this};
     ServeRuntime& live = *running_;
@@ -1797,15 +1709,11 @@ Status Expeditor::Start() {
         text_setup.protocol = Protocol::kText;
         text_setup.keepalive_s = config_.tcp_keepalive_s;
         text_setup.txn_lifetime_ceiling_ns = config_.txn_lifetime_ceiling_ns;
+        // The default port's gate, where there is one: empty without
+        // credentials, and `Configure` then leaves the listener's own.
+        text_setup.auth = client_setup.auth;
         text.value().Configure(text_setup);
         text_listener.emplace(std::move(text.value()));
-#if KDS_WITH_TLS
-        if (credentials.has_value()) {
-            text_listener->set_auth_gate_factory([store = &*credentials] {
-                return std::make_unique<ScramAuthGate>(store);
-            });
-        }
-#endif
     }
 
     // KWP v0's load endpoint (docs/inflight/in-progress/workplan-kwp-load.md KW1): a second
@@ -2003,11 +1911,7 @@ Status Expeditor::Start() {
             }
             // BL-S2: and takes the connections other cores move to it.
             if (Status s = core.value()->AcceptMoves(*handoff_, placer_); !s.ok()) return s;
-            core.value()->dispatcher().SetReclaimCounters(&reclaim_counters_);
-            core.value()->dispatcher().set_backup(&*backup_);
-            core.value()->dispatcher().set_archiver(archiver());
-            core.value()->dispatcher().SetStatementEpochs(&*statement_epochs_);
-            core.value()->dispatcher().SetReclaimQueue(&*reclaimer_);
+            WireInstanceServices(core.value()->dispatcher());
             cores_.push_back(std::move(core.value()));
         }
 
@@ -2227,6 +2131,20 @@ Status Expeditor::Start() {
     // looks at.
     drop_on_failure.owner = nullptr;
     return Status::OK();
+}
+
+void Expeditor::WireInstanceServices(CommandDispatcher& dispatcher) {
+    dispatcher.SetReclaimCounters(&reclaim_counters_);
+    dispatcher.set_backup(&*backup_);
+    dispatcher.set_archiver(archiver());
+    dispatcher.SetStatementEpochs(&*statement_epochs_);
+    dispatcher.SetReclaimQueue(&*reclaimer_);
+}
+
+void Expeditor::StopDataSync() {
+    if (store_ == nullptr) return;
+    store_->data_sync().Stop();
+    store_->data_sync().SetFailureHandler({});
 }
 
 void Expeditor::StopStartedCores() {
