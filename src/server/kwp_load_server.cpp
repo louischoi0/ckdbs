@@ -427,7 +427,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // honestly outlive `txn_lifetime_ceiling_ms`.
     if (auto out = dispatcher_->DispatchInternal("BEGIN", &conn.session);
         out.response.rfind("ERR", 0) == 0) {
-        SendError(conn, StatusFromErrorReply(out.response));
+        SendError(conn, OutcomeStatus(out));
         return;
     }
 
@@ -531,7 +531,7 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     if (out.response.rfind("ERR", 0) == 0) {
         // The refusal keeps its code - a named key's `AlreadyExists` is what
         // a loader switches on - and the line its row ordinal rides in.
-        const Status cause = !out.status.ok() ? out.status : StatusFromErrorReply(out.response);
+        const Status cause = OutcomeStatus(out);
         fail_load(cause.WithContext(chunk));
         return;
     }
@@ -552,7 +552,7 @@ void KwpLoadServer::HandleLoadEnd(Connection& conn, bool abort) {
     auto out = dispatcher_->DispatchInternal(abort ? "ROLLBACK" : "COMMIT", &conn.session);
     if (!abort && out.response.rfind("ERR", 0) == 0) {
         // The carried code where there is one, as the chunk path reads it.
-        SendError(conn, !out.status.ok() ? out.status : StatusFromErrorReply(out.response));
+        SendError(conn, OutcomeStatus(out));
         (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         conn.phase = Phase::kIdle;
         conn.load = LoadState{};

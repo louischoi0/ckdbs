@@ -2039,6 +2039,34 @@ TEST_F(LockDeadlockTest, AGroupCommitWhoseInlineSyncFailsCarriesItsCodeBesideIts
     EXPECT_EQ(out.status.code(), StatusCode::kIoError) << out.response;
 }
 
+// An explicit transaction's COMMIT, through `CommitLocal`. The failed sync
+// stops the log, so the rollback that follows it fails too - its abort
+// record is refused. The client is answered the commit's failure with the
+// commit's code beside it, the rollback's failure named after it, and the
+// transaction is gone all the same.
+TEST_F(FailedCommitTest, ACommitWhoseRollbackAlsoFailsKeepsTheCommitsCode) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    const std::size_t held_before = locks_->EntryCount();
+    Session s;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &s).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 1 WHERE id = 5", &s).response.rfind(
+                  "UPDATED", 0),
+              0u);
+
+    log_device_->FailNextSync(Status::IoError("injected"));
+    const DispatchOutcome out = dispatcher_->Dispatch("COMMIT", &s);
+    ASSERT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("injected"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("rolling it back failed"), std::string::npos)
+        << "the failed sync stops the log, so the abort's record is refused: " << out.response;
+    EXPECT_EQ(out.status.code(), StatusCode::kIoError)
+        << "the double failure dropped the commit's code: " << out.response;
+
+    EXPECT_EQ(txns_->ActiveCount(), 0u);
+    EXPECT_EQ(locks_->EntryCount(), held_before);
+    EXPECT_EQ(s.transaction(), nullptr);
+}
+
 TEST_F(FailedCommitTest, AnAutocommitWriteWhoseCommitFailsReleasesEverythingItHeld) {
     ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
     const std::size_t held_before = locks_->EntryCount();

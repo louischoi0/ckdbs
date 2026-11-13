@@ -366,6 +366,10 @@ std::string ErrorReply(const Status& status);
 // later that can lead with free text breaks it silently.
 Status StatusFromErrorReply(std::string_view reply);
 
+// What an outcome refused with: the `Status` it carries where there is one,
+// else the code its line folds back to. OK for an outcome that is no refusal.
+Status OutcomeStatus(const DispatchOutcome& outcome);
+
 // **The deadlock victim's refusal, one sentence for both sites** (AO-R7):
 // the dispatcher loop and the owner-side arm. `TxnConflict`, the one
 // retryable code - the survivor will have released by the time this one

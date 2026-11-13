@@ -302,6 +302,10 @@ Status StatusFromErrorReply(std::string_view reply) {
     return Status::InvalidArgument(std::string(reply));
 }
 
+Status OutcomeStatus(const DispatchOutcome& outcome) {
+    return !outcome.status.ok() ? outcome.status : StatusFromErrorReply(outcome.response);
+}
+
 stats::LockWaitRecord CommandDispatcher::LockWaitRow(const txn::LockKey& key,
                                                     txn::LockMode mode, std::uint64_t waiter,
                                                     std::uint64_t holder) const {
@@ -577,7 +581,7 @@ sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Sessio
     // resume this statement's walk.
     if (Session& waiting = session != nullptr ? *session : autocommit_session_;
         waiting.parked_write().has_value()) {
-        Status refused = out->status.ok() ? StatusFromErrorReply(out->response) : out->status;
+        Status refused = OutcomeStatus(*out);
         // Never OK: `EndWrite` would commit an owned scope half written. No
         // gate answers without an error today; `TxnConflict` as the fault
         // net's refusal is, the statement being unwound and safe to retry.
@@ -2372,10 +2376,9 @@ std::pair<std::string_view, std::string_view> SplitQualifiedArg(std::string_view
 
 DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
                                                      Session& session) {
-    // D2 (workplan-rv3-catalog-recovery.md): every DDL statement runs
-    // under a real transaction - the session's, or an implicit one this
-    // scope opens and FinishDdlStatement resolves - so a crash mid-DDL
-    // has a loser recovery can roll back.
+    // The form writes nothing - every arm below is a reply. It stays a DDL
+    // statement so its refusal is handled as every other DDL's is: inside
+    // an explicit transaction, the failed statement is the transaction's.
     return InDdlStatement(session, [&](WriteScope&) -> DispatchOutcome {
         if (args.empty()) {
             return {"ERR CREATE TABLE requires a name", false};
@@ -6248,7 +6251,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     // statement, including across AllocateRowId() (catalog.hpp) and a root
     // a split republishes - `Catalog::AdoptRoot` updates the cached entry in
     // place.
-    const catalog::TableAccess* ta = access.value();
+    const catalog::TableAccess& ta = *access.value();
 
     // Insert routing and spreading retired (AT-S9); their history is at
     // cf889b63. A row lands in its relation's one structure on the core the
@@ -6256,7 +6259,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
 
     // Before anything is written, once per statement - every row goes to
     // the one relation.
-    if (Status admitted = CheckWriteAdmission(*ta); !admitted.ok()) {
+    if (Status admitted = CheckWriteAdmission(ta); !admitted.ok()) {
         // ErrorReply, not a bare "ERR ": what the gate refuses
         // (`CannotEnforce`) must reach the wire with its code.
         return {ErrorReply(admitted), false, 0, admitted};
@@ -6272,7 +6275,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     // against no assertion, let a build finish and publish, and then place
     // a row the cabin never counts. Held for the transaction, so every row
     // of the statement is covered by this one ask.
-    if (std::optional<Status> held = BorrowOrWait(scope, txn::LockKey::Relation(ta->oid),
+    if (std::optional<Status> held = BorrowOrWait(scope, txn::LockKey::Relation(ta.oid),
                                                   RepeatableReadWait::kCapable)) {
         return {ErrorReply(*held), false, 0, *held};
     }
@@ -6294,8 +6297,8 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     // drop and an add of equal net width would otherwise land its values in
     // other columns. Asked behind the `IX`, where no column DDL can move it.
     if (written.described.oid != 0 &&
-        (written.described.oid != ta->oid ||
-         written.described.column_set != catalog::ColumnSetDigest(ta->schema))) {
+        (written.described.oid != ta.oid ||
+         written.described.column_set != catalog::ColumnSetDigest(ta.schema))) {
         const Status s = Status::InvalidArgument(
             "relation '" + written.table_name +
             "' is not the relation this load described at its BEGIN: it was dropped or its "
@@ -6304,12 +6307,12 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     }
     std::optional<parser::InsertStmt> evaluated;
     if (!written.value_exprs.empty()) {
-        auto e = EvaluateInsertExpressions(*ta, written, context);
+        auto e = EvaluateInsertExpressions(ta, written, context);
         if (!e.ok()) return {ErrorReply(e.status()), false, 0, e.status()};
         evaluated.emplace(std::move(e.value()));
     }
     if (written.select != nullptr) {
-        auto e = InsertSelectRows(*ta, written, scope, context);
+        auto e = InsertSelectRows(ta, written, scope, context);
         if (!e.ok()) return {ErrorReply(e.status()), false, 0, e.status()};
         evaluated.emplace(std::move(e.value()));
         if (evaluated->rows.size() > max_insert_rows_) {
@@ -6327,7 +6330,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         }
     }
     const parser::InsertStmt& valued = evaluated.has_value() ? *evaluated : written;
-    auto normalized = NormalizeInsertRows(*ta, valued);
+    auto normalized = NormalizeInsertRows(ta, valued);
     if (!normalized.ok()) return {ErrorReply(normalized.status()), false, 0, normalized.status()};
     const parser::InsertStmt& shaped =
         normalized.value().has_value() ? *normalized.value() : valued;
@@ -6347,10 +6350,10 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     // verdict and its write together, row by row (`InsertOnConflict`); the
     // tuple key's `DO NOTHING` decides every row up front, below.
     if (written.on_conflict_do_nothing || written.on_conflict_do_update) {
-        auto arbiter = ResolveConflictArbiter(*ta, written);
+        auto arbiter = ResolveConflictArbiter(ta, written);
         if (!arbiter.ok()) return {ErrorReply(arbiter.status()), false, 0, arbiter.status()};
         if (written.on_conflict_do_update || arbiter.value() != nullptr) {
-            return InsertOnConflict(oid.value(), *ta, written, shaped, arbiter.value(), scope,
+            return InsertOnConflict(oid.value(), ta, written, shaped, arbiter.value(), scope,
                                     context);
         }
     }
@@ -6360,10 +6363,10 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         std::set<std::uint64_t> named;
         for (const std::vector<parser::AstValue>& r : shaped.rows) {
             const std::optional<std::uint64_t> id =
-                r.size() == ta->schema.columns.size() ? KeystoneIdOf(r.front()) : std::nullopt;
+                r.size() == ta.schema.columns.size() ? KeystoneIdOf(r.front()) : std::nullopt;
             if (id.has_value()) {
                 if (named.count(*id) != 0) continue;
-                auto placed = TupleKeyPlaced(*ta, *id, r.front().byte_offset, scope);
+                auto placed = TupleKeyPlaced(ta, *id, r.front().byte_offset, scope);
                 if (!placed.ok()) {
                     return {ErrorReply(placed.status()), false, 0, placed.status()};
                 }
@@ -6400,10 +6403,10 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     // them. That is the whole hoist on this path: a thousand-row insert
     // against one parent descends once rather than a thousand times.
     exec::FkParentVerdicts fk_held;
-    if (!ta->fkeys_out.empty()) {
+    if (!ta.fkeys_out.empty()) {
         for (const auto& values : stmt.rows) {
-            const std::vector<parser::AstValue> body = InsertBodyOf(*ta, values);
-            if (Status s = ResolveForeignKeyParents(*ta, body, fk_held, scope); !s.ok()) {
+            const std::vector<parser::AstValue> body = InsertBodyOf(ta, values);
+            if (Status s = ResolveForeignKeyParents(ta, body, fk_held, scope); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
         }
@@ -6417,7 +6420,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         // `AlreadyExists` or an `OutOfRange` for a named key (BD-R5) - reaches
         // the wire rather than being re-read off the rendered line.
         if (std::optional<Status> err =
-                InsertOneRow(oid.value(), *ta, stmt.rows[k], scope, fk_held, row)) {
+                InsertOneRow(oid.value(), ta, stmt.rows[k], scope, fk_held, row)) {
             // The row's ordinal rides in the carried message too, so a KWP
             // client - which reads the `Status`, not the line - is told which
             // row (BB-S3's review).

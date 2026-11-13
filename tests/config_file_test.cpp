@@ -622,20 +622,42 @@ TEST(ExpeditorConfigTest, TheTransactionLifetimeCeilingDefaultsTo60sAndHasNoOffS
 // `lock_wait_fault_net_ms = 18446744073709551615` was accepted and made
 // every lock wait's deadline already past.
 TEST(ExpeditorConfigTest, AnIntervalTheNanosecondClockCannotHoldIsRefusedForEveryKey) {
+    // The last value half the clock's range holds: 2^63 - 1 ns is
+    // 9,223,372,036,854.775807 ms and 9,223,372,036,854,775.807 us.
+    constexpr std::uint64_t kLastMs = 9'223'372'036'854ULL;
+    constexpr std::uint64_t kLastUs = 9'223'372'036'854'775ULL;
+    using Config = Expeditor::Config;
     struct Case {
         const char* key;
         const char* wraps;  // the product wraps
         const char* past_half;  // the product fits, `now + it` would not
+        std::uint64_t last;  // the largest value admitted
+        std::uint64_t Config::* field;
+        std::uint64_t field_per_unit;  // what the field holds per unit written
     };
     const Case cases[] = {
-        {"checkpoint_interval_ms", "18446744073710", "9223372036855"},
-        {"lock_wait_fault_net_ms", "18446744073709551615", "9223372036855"},
-        {"txn_lifetime_ceiling_ms", "18446744073710", "9223372036855"},
-        {"cabin_optimizer_snapshot_interval_ms", "18446744073710", "9223372036855"},
-        {"wal_drain_interval_us", "18446744073709552", "9223372036854776"},
-        {"relaxed_flush_interval_us", "18446744073709552", "9223372036854776"},
+        {"checkpoint_interval_ms", "18446744073710", "9223372036855", kLastMs,
+         &Config::checkpoint_interval_ns, 1'000'000},
+        {"lock_wait_fault_net_ms", "18446744073709551615", "9223372036855", kLastMs,
+         &Config::lock_wait_fault_net_ns, 1'000'000},
+        {"txn_lifetime_ceiling_ms", "18446744073710", "9223372036855", kLastMs,
+         &Config::txn_lifetime_ceiling_ns, 1'000'000},
+        // Held in milliseconds; `Start` makes the nanoseconds.
+        {"cabin_optimizer_snapshot_interval_ms", "18446744073710", "9223372036855", kLastMs,
+         &Config::cabin_optimizer_snapshot_interval_ms, 1},
+        {"wal_drain_interval_us", "18446744073709552", "9223372036854776", kLastUs,
+         &Config::wal_drain_interval_ns, 1'000},
+        {"relaxed_flush_interval_us", "18446744073709552", "9223372036854776", kLastUs,
+         &Config::relaxed_flush_interval_ns, 1'000},
     };
     for (const Case& c : cases) {
+        // One below the first refused value is admitted, so the bound is
+        // where it is written and not a value short of it.
+        Config admitted;
+        const Status taken = admitted.ApplyFile(
+            WithPool(std::string(c.key) + " = " + std::to_string(c.last) + "\n"));
+        EXPECT_TRUE(taken.ok()) << c.key << " = " << c.last << ": " << taken.message();
+        EXPECT_EQ(admitted.*c.field, c.last * c.field_per_unit) << c.key;
         for (const char* value : {c.wraps, c.past_half}) {
             Expeditor::Config config;
             const Status refused =

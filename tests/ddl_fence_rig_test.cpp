@@ -826,5 +826,40 @@ TEST(DdlFenceRigTest, ADropColumnOfANameThatMovedBeforeItsGrantIsRefused) {
     EXPECT_EQ(d0.Dispatch("SELECT v FROM named_twice").response.rfind("ERR", 0), std::string::npos);
 }
 
+TEST(DdlFenceRigTest, ADropColumnOfANameThatNowMeansAnotherRelationIsRefused) {
+    // The name still resolves, to another relation: core 1 drops the
+    // relation and creates one of the same name between core 0's resolution
+    // and its grant. Core 0 holds the `X` of the relation that is gone, so
+    // it refuses - retryable - rather than changing a relation it does not
+    // hold.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    PeerRelation(*rig, "made_twice");
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_EQ(d0.Dispatch("SELECT v FROM made_twice").response.rfind("ERR", 0), std::string::npos);
+
+    bool ran = false;
+    std::string dropped;
+    std::string made;
+    d0.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterPublish, [&] {
+        if (ran) return;
+        ran = true;
+        dropped = d1.Dispatch("DROP TABLE made_twice").response;
+        made = d1.Dispatch("CREATE TABLE made_twice (id int64, v int64) BTREE").response;
+    });
+    const DispatchOutcome second = d0.Dispatch("ALTER TABLE made_twice DROP COLUMN v");
+    d0.SetEpochSeamForTest(CommandDispatcher::EpochSeam::kAfterPublish, nullptr);
+    ASSERT_TRUE(ran);
+    ASSERT_EQ(dropped.rfind("ERR", 0), std::string::npos) << dropped;
+    ASSERT_EQ(made.rfind("CREATED", 0), 0u) << made;
+    EXPECT_EQ(second.status.code(), StatusCode::kTxnConflict) << second.response;
+    EXPECT_NE(second.response.find("changed while the ALTER waited"), std::string::npos)
+        << second.response;
+    EXPECT_EQ(d0.Dispatch("SELECT v FROM made_twice").response.rfind("ERR", 0), std::string::npos)
+        << "the new relation lost a column to an ALTER that held another relation's lock";
+}
+
 }  // namespace
 }  // namespace kds::server
