@@ -1,7 +1,7 @@
 # Pending: a whole-engine audit, stopped after 6 of 33 slices - what is fixed, and what waits
 
-Status: **PENDING** - F4 and F26 to F32 wait for the operator; 27 slices are
-unread. Decides nothing, opens no stage, licenses no code.
+Status: **PENDING** - F4 waits for the operator; 27 slices are unread.
+Decides nothing, opens no stage, licenses no code.
 Raised: 2026-11-12, in conversation with the operator.
 Read at: `ce5347e6` (`v3.4.8-2-gce5347e6`), on worktree `audit-lean-and-correct`.
 Every `path:line` below is at that commit, before any fix.
@@ -14,26 +14,34 @@ opened: it re-runs a writer refused on a decided newer version, which is
 beside F4 and does not cover it - F4's row is passed over before any
 refusal).
 
-**Where the 32 findings stand, at `c6caa100`.** The operator had them taken up
-one at a time, in order. Each of F1 to F25 was read again against the code
-before anything was changed:
+**Where the 32 findings stand, at `3f8c499c`.** The operator had them taken
+up one at a time, in order. Each was read again against the code before
+anything was changed:
 
 | Findings | Outcome |
 |---|---|
-| F1, F2, F3, F5 to F15 | fixed - fourteen defects, each with a cell but F13 and F15 |
+| F1, F2, F3, F5 to F15 | fixed - fourteen defects, each with a cell |
 | F16, F18 to F22, F25 | removed - dead code and one needless guard type |
 | F17, F23 | applied in part |
+| F26 to F28, F30 to F32 | applied - duplication folded into one copy each |
+| F29 | applied in part, with one stated change of behaviour |
 | F4 | found as described, **not fixed**: a change of contract, the operator's to rule on |
 | F24 | not applied: the re-read is kept |
-| F26 to F32 | **not read again and not applied**: duplication, each a change of its own |
 
 **What bounds that.** Only F1's cell was run against the unfixed tree and
 seen to fail; the others pin the fixed behaviour and were not shown to fail
-without it. F1 and F2 were reviewed (`critics-developer`); F3 to F25 were
-not. The full suite passed 4429 of 4429 at `01a7e905` (F1 and F2); on
-`c6caa100` only the suites the change touches were run (346 cells), and the
-full suite was not. F26 to F32 remain one reader's `[source-read]` claim
-each, unverified, as every finding here was when this entry was written.
+without it - the reviews argue from the code that F6's, F9's, F13's, F14's
+and F15's would. F11's cell pins the refusal's text and would pass on the
+unfixed tree: the defect was a null pointer's arithmetic, which only a
+sanitizer build sees. Every change was reviewed (`critics-developer`): F1
+and F2 at their commits, F3 to F25 in three slices at `0b98bc4f`, F15 and
+F26 to F32 in two on the tree that became `3f8c499c`; no review found a
+defect, and what each asked for is in section 3. The full suite
+(`scripts/test.sh`, `ctest -LE bs-nightly`) passed 4429 of 4429 at
+`01a7e905`, 4438 of 4438 at `0b98bc4f` and 4441 of 4441 at `3f8c499c`. **No
+overhead was measured**: F26 moves UPDATE's and DELETE's per-row qualify
+and claim from a lambda into a class's member functions in the same
+translation unit, and nothing here says what that costs or saves.
 
 ## 1. What prompted it
 
@@ -44,7 +52,8 @@ deferred it: *"Proceed only with the tasks running now and stop for the
 moment; I have no tokens"*, then *"for now, leave what was found in a
 document"*. Later the same day: *"take what is in the findings now and
 handle it one at a time, in order"*, and then *"push what was worked on in
-this session to remote main, no verify"*.
+this session to remote main, no verify"*. On 2026-11-13: *"review again from
+where it ended"*, and then *"handle F15, F26 to F32"*.
 
 ## 2. What ran, and what did not
 
@@ -79,7 +88,9 @@ was built or run by a finder; every claim is from reading and grep.
   for F1 to F25 is the second reading each got before it was taken up (the
   table at the top).
 - **The audit itself changed no source file.** The fixes came after, one
-  finding at a time, at the commits section 3 names.
+  finding at a time, at the commits section 3 names. `c6caa100` is on
+  `origin/main` since `0b98bc4f`; `bf3bc936` and `3f8c499c` are on the work
+  branch.
 
 What each finished finder says it read, in its own words:
 
@@ -133,7 +144,7 @@ Symbols: `CommandDispatcher::UpdateParsed`, `CommandDispatcher::DeleteInner`, `t
 
 #### F6. ADD/DROP COLUMN act on a stale memo and a stale name after an uncontended X grant
 
-**Fixed** at `c6caa100`: `AlterColumnRelation` revalidates the memo and resolves the name again under the `X`. Pinned by `DdlFenceRigTest.ADropColumnReadsTheRelationAsItIsUnderItsGrant` and `ADropColumnOfANameThatMovedBeforeItsGrantIsRefused`.
+**Fixed** at `c6caa100`: `AlterColumnRelation` revalidates the memo and resolves the name again under the `X`. Pinned by `DdlFenceRigTest.ADropColumnReadsTheRelationAsItIsUnderItsGrant` and `ADropColumnOfANameThatMovedBeforeItsGrantIsRefused`, and since `bf3bc936` by `ADropColumnOfANameThatNowMeansAnotherRelationIsRefused`, the one cell that reaches the `TxnConflict` arm.
 
 #### F7. NOW() is not one value per statement in ON CONFLICT DO UPDATE and in RETURNING
 
@@ -145,7 +156,7 @@ Symbols: `CommandDispatcher::UpdateParsed`, `CommandDispatcher::DeleteInner`, `t
 
 #### F9. The synchronous path's failed commit sync answers ERR with DispatchOutcome::status left OK
 
-**Fixed** at `c6caa100`: the outcome carries the `Status`, and `KwpLoadServer::HandleLoadEnd` reads it. Pinned by `LockDeadlockTest.AGroupCommitWhoseInlineSyncFailsCarriesItsCodeBesideItsLine`.
+**Fixed** at `c6caa100`: the outcome carries the `Status`, and `KwpLoadServer::HandleLoadEnd` reads it. Pinned by `LockDeadlockTest.AGroupCommitWhoseInlineSyncFailsCarriesItsCodeBesideItsLine`. Since `bf3bc936` the load stream's `BEGIN` reads it too, through `OutcomeStatus`, the one function every reader of an outcome's refusal now calls.
 
 #### F10. An empty KWP load chunk is answered and counted as one inserted row
 
@@ -161,15 +172,15 @@ Symbols: `CommandDispatcher::UpdateParsed`, `CommandDispatcher::DeleteInner`, `t
 
 #### F13. CommitLocal's failed-commit arm re-implements RollbackLocal, drops AbortTxn's Status and loses the commit failure's code on a double failure
 
-**Fixed** at `c6caa100`: the arm calls `RollbackLocal`, and a double failure keeps the commit's code. **No cell**: nothing in the suite injects a commit failure followed by an abort failure.
+**Fixed** at `c6caa100`: the arm calls `RollbackLocal`, and a double failure keeps the commit's code. Pinned since `bf3bc936` by `FailedCommitTest.ACommitWhoseRollbackAlsoFailsKeepsTheCommitsCode`: a failed sync stops the log, so the rollback's abort record is refused too.
 
 #### F14. Four interval keys and the lock fault net wrap their unit conversion unchecked
 
-**Fixed** at `c6caa100`: one helper, `IntervalNs`, bounds all six interval keys at half the nanosecond clock's range, so neither the product nor `now + interval` wraps. That bound is new for `txn_lifetime_ceiling_ms` too, which refused only a wrapping product before. Pinned by `ExpeditorConfigTest.AnIntervalTheNanosecondClockCannotHoldIsRefusedForEveryKey`.
+**Fixed** at `c6caa100`: one helper, `IntervalNs`, bounds all six interval keys at half the nanosecond clock's range, so neither the product nor `now + interval` wraps. That bound is new for `txn_lifetime_ceiling_ms` too, which refused only a wrapping product before. Pinned by `ExpeditorConfigTest.AnIntervalTheNanosecondClockCannotHoldIsRefusedForEveryKey`, which since `bf3bc936` also admits the last value each key holds.
 
 #### F15. A failed Start() leaves the data-sync thread running with its abort handler installed
 
-**Fixed** at `c6caa100`: `DropOnFailure` stops the data-sync thread and clears its handler. **No cell**: `DataSyncer` exposes nothing a test can ask whether its thread runs.
+**Fixed** at `c6caa100`: `DropOnFailure` stops the data-sync thread and clears its handler. At `3f8c499c` the destructor and the guard share one `Expeditor::StopDataSync`, and `DataSyncer::running()` lets `ExpeditorTest.ARefusedStartLeavesNoDataSyncThread` pin the thread half; the withdrawn handler has no cell.
 
 ### 3.2 Dead code (6)
 
@@ -252,87 +263,31 @@ Symbols: `CommandDispatcher::DeleteInner`, `heap::PageView::OverwriteTuple`, `he
 
 #### F26. UPDATE's and DELETE's row walk are two hand-kept copies (qualify, claim, collection pass, park epilogue, Handle* wrapper)
 
-`src/server/command_dispatcher.cpp:12736` - finder's severity **medium**, finder's confidence **medium**, slice `dispatcher-4`, estimated net lines removed 90
-
-Symbols: `CommandDispatcher::UpdateParsed`, `CommandDispatcher::DeleteInner`, `CommandDispatcher::HandleUpdate`, `CommandDispatcher::HandleDelete`
-
-**Claim.** DeleteInner repeats UpdateParsed block for block, with comments that only point back ('as UPDATE's site states'). Five pairs: (1) stage-1 qualify - ReadTuple, Classify, payload copy, key, targets test, masked decode, CheckConjuncts once, EvaluateConjuncts; (2) per-row borrow + CheckWriteConflictBlocking + the `blocker != 0 && blocking_writer_ == blocker` park test; (3) the subquery collection pass; (4) the parked-on-row epilogue; (5) HandleUpdate/HandleDelete's resume-or-begin and park-save wrapper. The visibility bug above has to be fixed in both copies, which is the cost the `apply` comment at 10091-10095 itself names.
-
-**Evidence as the finder read it.** (1) 10097-10168 vs 12736-12773. (2) 10176-10214 vs 12822-12840. (3) 10641-10656 vs 12983-12998. (4) 10703-10717 vs 13017-13026. (5) 9253-9320 vs 11862-11903, differing only in `is_delete`, the carried subquery answers, the inner call and the RelationWrite kind.
-
-**Proposed fix.** Lift DELETE's `qualifies` into one private helper over a small struct of the statement's scratch (ta, snapshot, predicates, schemas, frame, payload_copy, frame_spills, filter_mask, conjuncts_checked, targets) returning `StatusOr<optional<{id, trx_id, undo_ptr}>>`, and call it from UPDATE's `apply`. Add `ClaimRowForWrite(scope, ta, id, trx_id, declared, mode) -> StatusOr<bool /*parked*/>` for pair 2, `CollectWriteTargets(ta, qualify)` for pair 3, `ParkedOrVerdict(scope, cursor, rows, verdict)` for pair 4, and one `RunParkableWrite(line, session, is_delete, inner, kind)` for pair 5. Same order of checks, same statuses and messages, same lock asks and modes (mode stays a parameter: U for UPDATE, X for DELETE).
+**Applied** at `3f8c499c`: `CommandDispatcher::WriteWalk` holds the first stage of a row (`Qualify`), its claim and first-updater-wins verdict (`Claim`), the collection pass (`CollectTargets`) and the park's outcome (`ParkedOutcome`); UPDATE's `apply` and DELETE's `mark` call it. The lock mode stays the caller's (`U` for UPDATE, `X` for DELETE), and DELETE's complement decode, its Transition and reverse checks and UPDATE's SET list stay with their statement. Its review found old and new equivalent line for line. F4's row is passed over in `Qualify`, so its fix, if ruled, lands once. The fifth pair is F30.
 
 #### F27. The refusal outcome literal is written out 178 times, with the same local lambda redefined five times
 
-`src/server/command_dispatcher.cpp:1634` - finder's severity **low**, finder's confidence **high**, slice `dispatcher-1`, estimated net lines removed 12
-
-Symbols: `ErrorReply`, `DispatchOutcome`, `CommandDispatcher::HandleBackup`, `CommandDispatcher::DispatchInternal`
-
-**Claim.** `{ErrorReply(s), false, 0, s}` (response, should_stop, rows_affected, status) is spelled positionally at 178 sites in this file, 30 of them in lines 1-3300, and five handlers each define an identical `refuse` lambda for it. The positional form is how sites drift: DispatchInternal's durability refusal (line 1242) builds `{ErrorReply(s), should_stop}` and leaves status OK, where DispatchAsync's twin (line 921) carries it.
-
-**Evidence as the finder read it.** grep -c "{ErrorReply(.*), false, 0, " src/server/command_dispatcher.cpp = 178. Identical lambdas `[](const Status& s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; }` at lines 1634, 10975, 12025, 12295, 12488 (9633 is the same over two lines). In-slice sites include 1370, 1384, 1390, 1711, 1718, 2297, 2374, 2387, 2779, 2885, 2902, 2925, 2953, 2964, 3034, 3070, 3099, 3114, 3126, 3141, 3151, 3178, 3194, 3203, 3223, 3225, 3254, 3265, 3293.
-
-**Proposed fix.** One file-scope helper beside ErrorReply: `DispatchOutcome Refused(const Status& s) { return {ErrorReply(s), false, 0, s}; }`. Replace the six local lambdas with it and convert the literal sites mechanically (`return Refused(x.status());`). Same response bytes, same status, same rows_affected at every site, so no refusal code or byte position moves. Leave line 1242 as it is in this patch: giving it the status is a behaviour change to report separately. Covered by the whole dispatcher suite, tests/command_dispatcher_test.cpp and tests/kwp_session_test.cpp first.
+**Applied** at `3f8c499c`: a file-local `Refused(status)` replaces the literal at 184 sites and six identical lambdas, and three sites that spelled `"ERR " + message` beside the status. `HandleBegin`'s unknown-clause refusal now carries its `InvalidArgument` as its neighbours do; its line is unchanged. `DispatchInternal`'s durability refusal, which keeps `should_stop`, is left as it was.
 
 #### F28. InsertParsed spells the row-cap and manager-less multi-row refusals twice
 
-`src/server/command_dispatcher.cpp:6277` - finder's severity **low**, finder's confidence **high**, slice `dispatcher-2`, estimated net lines removed 8
-
-Symbols: `CommandDispatcher::InsertParsed`
-
-**Claim.** The two statement-size gates (BI3's max_insert_rows cap and the "multi-row INSERT requires the transaction manager" refusal) are written out once for VALUES rows at the top of InsertParsed and again, byte for byte, for the rows an INSERT ... SELECT produced. The two copies must stay identical in condition and message for the cap to mean one thing.
-
-**Evidence as the finder read it.** Site 1: 6171-6175 (`written.rows.size() > max_insert_rows_` -> "ERR INSERT of N rows exceeds max_insert_rows (M)") and 6182-6186 (`written.rows.size() > 1 && txn_ == nullptr` -> "ERR a multi-row INSERT requires the transaction manager; ..."). Site 2: 6277-6281 and 6282-6286, the same two conditions and strings over `evaluated->rows.size()`. `grep -n 'exceeds max_insert_rows\|requires the transaction manager' src/server/*.cpp` shows exactly these four lines.
-
-**Proposed fix.** Hoist one local `const auto size_refusal = [&](std::size_t rows) -> std::optional<DispatchOutcome>` holding both checks in today's order with today's strings, and call it at 6171 with written.rows.size() and at 6277 with evaluated->rows.size(), returning its value when set. Same refusal text, same order relative to name resolution and the IX, same bare (status-OK) outcome. Covered by tests/bulk_insert_test.cpp and tests/insert_column_list_test.cpp (max_insert_rows), tests/expeditor_test.cpp, and tests/dml_forms_test.cpp's INSERT ... SELECT cells.
+**Applied** at `3f8c499c`: one local `too_many(rows)`, asked of the written rows and of the rows an `INSERT ... SELECT` produced.
 
 #### F29. Two value-capturing sinks and two sink-swap wrappers repeat one mechanism
 
-`src/server/command_dispatcher.cpp:9417` - finder's severity **low**, finder's confidence **medium**, slice `dispatcher-3`, estimated net lines removed 30
-
-Symbols: `ScalarSubquerySink`, `LayerWalkSink`, `CommandDispatcher::RunScalarSubquery`, `CommandDispatcher::WalkForLayer`, `StatusFromErrorReply`
-
-**Claim.** RunScalarSubquery and WalkForLayer each (a) define a ResultSink that parks rows in `rendered_` and passes the row's index as text through EncodeProjectedRow/EncodeValueRow -> Emit (`std::to_string` / `std::stoull`), (b) swap the session's sink under a local `struct Restore`, (c) run the SELECT to its end with `if (out.select_run) out = run->RunInline()`, and (d) fold a bare `ERR` reply into InvalidArgument via `substr(4)` - which StatusFromErrorReply already does. Two copies of each piece must be kept in step (the index-as-text device especially).
-
-**Evidence as the finder read it.** Sinks: ScalarSubquerySink 9325-9370 and LayerWalkSink 9468-9505 (same rendered_/index/Emit shape; 9465 even says "`ScalarSubquerySink`'s device"). Restore guard: 9418-9424 and 9581-9587, identical. Run-to-end: 9432-9435 and 9593-9596. ERR fold: 9442-9444 and 9598; helper at cpp:283 `Status StatusFromErrorReply(std::string_view reply)`.
-
-**Proposed fix.** One file-local base `ValueCaptureSink` owning `rendered_`, the two Encode overrides and a `Take(row_text)` that returns the parked row; ScalarSubquerySink and LayerWalkSink keep only Describe/Emit policy (one-column/one-row vs. the max_rows cap). One file-local RAII `ScopedResultSink(session, sink)` replacing both Restore structs, and one helper `DispatchOutcome RunToEnd(DispatchOutcome)` for the select_run hand-back. Keep each site's exact message handling (RunScalarSubquery's Positioned()), so replies and byte positions are unchanged.
+**In part** at `3f8c499c`: `ScopedResultSink` replaces the two `Restore` structs, `RunToEnd` the two run-inline blocks, and `ParkedRows` holds the index-as-text device both sinks use. No common base class: one sink keeps a value and the other rows, and a base would hold only what `ParkedRows` now does. **One change of behaviour**: both runners read the nested SELECT's refusal through `OutcomeStatus`, so a line that spells a code and carries no `Status` keeps that code where it became `InvalidArgument` with the token in its message.
 
 #### F30. HandleUpdate and HandleDelete are the same open / resume / park / finish frame written twice
 
-`src/server/command_dispatcher.cpp:11862` - finder's severity **low**, finder's confidence **high**, slice `dispatcher-hpp`, estimated net lines removed 35
-
-Symbols: `CommandDispatcher::HandleUpdate`, `CommandDispatcher::HandleDelete`, `Session::ParkedWrite`, `CommandDispatcher::FinishWrite`, `CommandDispatcher::WithReturning`
-
-**Claim.** The two handlers share about 40 lines. Each has the AO-S3b resume branch (restore scope, snapshot, cursor, trail mark and context, set statement_boundary_taken_, clear the park), the first-run branch (BeginWrite, StatementContextFor, SnapshotFor after it), the park arm that stores Session::ParkedWrite, and the FinishWrite(WithReturning(...)) tail. They differ only in the is_delete flag, the subquery vector, the Inner call and the RelationWrite kind. HandleDelete's comments say "`HandleUpdate`'s branch, for its reason" four times. The snapshot-failure leak reported above sits in both copies.
-
-**Evidence as the finder read it.** Sites: command_dispatcher.cpp:9253-9320 (HandleUpdate) and :11862-11903 (HandleDelete). Resume branches :9263-9281 against :11869-11877; first-run branches :9283-9303 against :11879-11887; park arms :9311-9317 against :11895-11900; tails :9318-9319 against :11901-11902. HandleDelete's comments at :11868, :11876, :11884 and :11892 each defer to HandleUpdate's.
-
-**Proposed fix.** One private helper, e.g. `template <typename Inner> DispatchOutcome RunWalkWrite(std::string_view line, Session&, bool is_delete, stats::RelationWrite kind, Inner&& inner)`. It selects the resume branch by `parked->is_delete == is_delete`, or opens the scope and snapshot (with the scope ended on a snapshot failure), calls `inner(scope, snap, resume_from, context, subqueries)`, then parks or runs `FinishWrite(WithReturning(...))`. HandleUpdate and HandleDelete become one call each around UpdateInner / DeleteInner. Same order of BeginWrite and SnapshotFor, same replies, same lock order. Covered by tests/lock_family_test.cpp (MidWalkWaitTest) and the update/delete suites.
+**Applied** at `3f8c499c`: `CommandDispatcher::RunWalkWrite(line, session, is_delete)`; the two handlers are one call each.
 
 #### F31. ApplyFile repeats the same five-line read for 27 unvalidated keys
 
-`src/server/expeditor.cpp:223` - finder's severity **low**, finder's confidence **high**, slice `expeditor`, estimated net lines removed 80
-
-Symbols: `Expeditor::Config::ApplyFile`
-
-**Claim.** ApplyFile is 575 lines, and 27 of its keys are the identical block `if (file.Has(k)) { auto v = file.GetX(k); if (!v.ok()) return v.status(); field = v.value(); }` with no validation. The function already uses a local lambda for the five theta keys (line 569); the plain keys never got one. A key added by copy-paste that assigns the wrong field compiles and is caught only if a test sets that key.
-
-**Evidence as the finder read it.** Bool keys: tls 314, waystone_recording 362, ash_enabled 367, ash_capture_arg_hash 372, waystone_replay 413, access_statistics 418, cabins 423, indexes 428, scan_kernel 468, cabin_optimizer 550. String keys: data_file 223, wal_dir 246, archive_dir 254, archive_command 259, tls_cert_file 319, tls_key_file 324, users_file 353, log_dir 751, log_file 756. Plain uint keys: cabin_max_values 433, cabin_max_entries_per_value 441, aggregate_max_groups 446, aggregate_max_distinct 455, sort_max_rows 460, join_build_max_rows 485, cabin_optimizer_snapshot_interval_ms 655, max_rows_touched 662. Precedent: the `theta` lambda at 569-579.
-
-**Proposed fix.** Three local lambdas beside `theta` - `flag(key, bool&)`, `text(key, std::string&)`, `number(key, T&)` - each `if (!file.Has(key)) return OK; auto v = file.GetX(key); if (!v.ok()) return v.status(); out = ...; return OK;`, called in the existing order so the first refusal a file produces is unchanged. Statuses are GetX's own, so codes and messages are identical. Keep every key that validates as it is. Covered by tests/config_file_test.cpp (ExpeditorConfigTest.EveryKnownKeyIsApplied, KnownKeysCoverEveryKeyTheOverlayReads, TlsKeysParseAndDefaultOff, AggregateCapsParseAndCarryTheProposedDefaults).
+**Applied** at `3f8c499c`: three local lambdas, `text`, `flag` and `number`, called in place for 26 keys, so the first refusal a file produces is unchanged. The 27th, `cabin_optimizer_snapshot_interval_ms`, is bounded since F14 and keeps its block.
 
 #### F32. Core 0 and peer wiring written twice: instance services, statement limits, the SCRAM gate factory
 
-`src/server/expeditor.cpp:1320` - finder's severity **low**, finder's confidence **high**, slice `expeditor`, estimated net lines removed 12
-
-Symbols: `Expeditor::Open`, `Expeditor::Start`, `CommandDispatcher::set_statement_limits`, `TcpServer::ClientSetup`, `ScramAuthGate`
-
-**Claim.** Three small repeats in the instance assembly. (a) The five instance-service setters are called by hand for core 0's dispatcher in Open and again for each peer's in Start; a sixth service must be added at both or one side silently lacks it. (b) Core 0's dispatcher is constructed with `indexes` and `max_insert_rows`, then `set_statement_limits(config_.Limits())` overwrites both on the next statement; the peer's construction passes neither. (c) The ScramAuthGate factory lambda is built twice, and the text listener takes it through a second `#if KDS_WITH_TLS` block instead of its ClientSetup.
-
-**Evidence as the finder read it.** (a) expeditor.cpp:1320-1322, 1326-1327 (SetReclaimCounters, set_backup, set_archiver, SetStatementEpochs, SetReclaimQueue on `dispatcher_`) and 1988-1992 (the same five on `core.value()->dispatcher()`). (b) 1197-1198 `expeditor->config_.indexes, expeditor->config_.max_insert_rows);` then 1200 `set_statement_limits(expeditor->config_.Limits())`; command_dispatcher.hpp:1839-1841 assigns `indexes_enabled_` and `max_insert_rows_` from the limits; core_runtime.cpp:274-285 omits the two arguments. (c) 1749-1751 and 1789-1791 are the same lambda; tcp_server.hpp:263 `if (setup.auth) auth_gate_factory_ = setup.auth;` is what Configure does with it.
-
-**Proposed fix.** (a) A private `void WireInstanceServices(CommandDispatcher&)` holding the five calls, used at both sites (in Open after `statement_epochs_` is emplaced). (b) Drop the two trailing constructor arguments at 1197-1198; nothing runs between the constructor and line 1200. (c) Set `text_setup.auth = client_setup.auth;` before `text.value().Configure(text_setup)` and delete 1787-1793; without TLS the factory is empty and Configure leaves the default, as now. Covered by tests/expeditor_test.cpp (EveryPeerListensAndCarriesCoreZerosStatementLimits), tests/drop_table_reclaim_test.cpp, tests/tcp_server_test.cpp's auth cells.
+**Applied** at `3f8c499c`: `Expeditor::WireInstanceServices` for both sites; core 0's dispatcher is built without `indexes` and `max_insert_rows`, which `set_statement_limits` sets on the next line; the text listener takes the gate through its `ClientSetup`. Left: the dispatcher's constructor still takes the two parameters, which four test fixtures pass - a second way to set what `set_statement_limits` sets.
 
 ## 4. One item read a second time
 
@@ -358,10 +313,10 @@ returns.
 1. **F4**, on the operator's ruling: resolve the snapshot's version when the
    head fails the WHERE and let the conflict check answer; or evaluate the
    WHERE on the snapshot's version always; or state today's behaviour in
-   `txn.md` §5 and `known-gaps.md` as accepted.
-2. **F26 to F32**, if wanted: F28, F29, F31 and F32 are local; F27 rewrites
-   178 refusal sites and F26 and F30 fold UPDATE's and DELETE's walks into
-   one, in the file every open worktree also edits.
-3. **The review F3 to F25 did not get**, and the full suite on `c6caa100`.
+   `txn.md` §5 and `known-gaps.md` as accepted. The row is passed over in
+   `WriteWalk::Qualify`, for both statements.
+2. **Section 4's `kVarHeapAppend` arm**, if wanted.
+3. **The overhead of F26**, if wanted: an interleaved A/B of UPDATE and
+   DELETE walks in `build-release`, `bf3bc936` against `3f8c499c`.
 4. **The other 27 slices**, or the decision that the audit stops at the
    dispatcher and the expeditor.
