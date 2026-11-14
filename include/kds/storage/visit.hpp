@@ -60,8 +60,9 @@ inline constexpr std::uint32_t kMaxPageWalkLength = 1u << 20;
 // The guard itself, shared for ResolveVisit's reason: every catalog- or
 // heap-chain loop (the heap chain, the catalog chains, and each caller that
 // steps their pages itself) owes the same check, and copies drift; a
-// leaf-chain walk owes `LeafChainGuard` below instead. Call with the count of pages already visited, before visiting the
-// next; `what` names the walk for the message.
+// leaf-chain walk owes `LeafChainGuard` below instead. Call with the count
+// of pages already visited, before visiting the next; `what` names the walk
+// for the message.
 inline Status CheckPageWalkBudget(std::uint32_t pages_visited, PageId origin, const char* what) {
     if (pages_visited < kMaxPageWalkLength) return Status::OK();
     return Status::Corruption(std::string(what) + " from page " + std::to_string(origin) +

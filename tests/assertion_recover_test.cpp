@@ -709,9 +709,14 @@ TEST_F(AssertionRecoverTest, ASnapshotRunBesideAnotherCoresAppendsDoesNotStopThe
     // vanished (an append failing for any other reason) cannot pass for one
     // that held under it.
     std::atomic<bool> done{false};
+    std::atomic<bool> peer_exited{false};
     std::atomic<std::uint64_t> appended{0};
     Status peer_end = Status::OK();
     std::thread peer([&] {
+        struct Exit {
+            std::atomic<bool>& flag;
+            ~Exit() { flag.store(true, std::memory_order_release); }
+        } exit{peer_exited};
         const std::vector<std::byte> payload(64, std::byte{0x5A});
         while (!done.load(std::memory_order_acquire)) {
             auto lsn = wal.stream()->Append(
@@ -730,6 +735,12 @@ TEST_F(AssertionRecoverTest, ASnapshotRunBesideAnotherCoresAppendsDoesNotStopThe
             }
         }
     });
+    // The run starts only once the peer is appending, so the contention the
+    // cell is about does not hang on how soon the thread is scheduled.
+    while (appended.load(std::memory_order_relaxed) == 0 &&
+           !peer_exited.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
     const Status logged = wal::LogAssertionSnapshot(wal, cabin);
     done.store(true, std::memory_order_release);
     peer.join();

@@ -1147,10 +1147,10 @@ public:
     // is what that path would need, and it does not exist to need it.
     //
     // Fails with NotFound for either relation; InvalidArgument for column 0,
-    // a column past the schema, or a column that cannot hold a Keystone id;
-    // NotImplemented for a heap parent or a cross-core pair (F5, both named
-    // open in foreign-keys.md); AlreadyExists
-    // for a second foreign key on the same column.
+    // a column past the schema, a column that cannot hold a Keystone id, or
+    // a system relation as the parent; Unsupported for a heap parent (BZ-R7,
+    // its tuple key is hidden); NotImplemented for a self-reference;
+    // AlreadyExists for a second foreign key on the same column.
     //
     // **Bumps the catalog version**, and reaches further than its arguments:
     // the parent's cached `fkeys_in` is stale too. Not to be called from a

@@ -225,7 +225,7 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   than `ring_capacity` less that size during each of the
   `kRingDrainAttempts` (4) drains, the append is refused and the log
   fail-stops (`wal.md` §6-5). At the default 1 MiB ring that needs about
-  745 KiB of other cores' records per drain; at the 512 KiB floor, 240 KiB.
+  752 KiB of other cores' records per drain; at the 512 KiB floor, 240 KiB.
   `ASnapshotRunBesideAnotherCoresAppendsDoesNotStopTheLog` shows the common
   case only. Owner: `docs/spec/wal.md` §6.
 
