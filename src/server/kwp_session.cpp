@@ -697,9 +697,7 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
     // ---- Transaction control (§9) ---------------------------------------
     if (running_txn_) {
         running_txn_ = false;
-        if (Status failed = !outcome.status.ok() ? outcome.status
-                                                 : StatusFromErrorReply(outcome.response);
-            !failed.ok()) {
+        if (Status failed = OutcomeStatus(outcome); !failed.ok()) {
             (void)Refuse(out, wire::ErrorFromStatus(failed, outcome.resource_detail));
             return;
         }
@@ -740,9 +738,7 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
     // fallback is `StatusFromErrorReply`, which recovers exactly the four
     // spellings `ErrorReply` gives a token to and folds every other into
     // `InvalidArgument` - a floor for a reply that carried no status.
-    if (Status failed = !outcome.status.ok() ? outcome.status
-                                             : StatusFromErrorReply(outcome.response);
-        !failed.ok()) {
+    if (Status failed = OutcomeStatus(outcome); !failed.ok()) {
         // **XG-R8: the portal goes with the statement that failed.**
         //
         // The client cannot close it: after this `Refuse` arms §5's skip,

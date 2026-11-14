@@ -1432,7 +1432,7 @@ TEST_F(CoreRuntimeTest, APeerListenerServesAReadAndAWriteWithNothingGrantedAndRo
     auto row = catalog2.GetSysTableRow(rotated.value());
     ASSERT_TRUE(row.ok());
     // AU-S3: what the instance installs on every peer, standing in for
-    // `Expeditor`'s `instance_stop_`. Installed **before** the listener, so
+    // the stop `Expeditor::Serve` hands each. Installed **before** the listener, so
     // the stop handler it feeds exists by the time a client can send STOP.
     std::atomic<bool> instance_stopped{false};
     peer.value()->set_instance_stop([&instance_stopped] { instance_stopped.store(true); });
