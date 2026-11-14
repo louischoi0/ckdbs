@@ -1144,7 +1144,11 @@ engine defect was found in either review.
 the fix taken out by hand, not against `2789a457`. G2's own failure, a chain
 past 8 GiB refused after a restart, has no reproduction; the first spilling
 write after a mount still walks its chain from the root. Since `7c2dec3b` the scrub
-tests the scan's own buffer and reads nothing twice. The full suite and the overhead
-measurement are in the milestone's close report, not here. Two cuts the
+tests the scan's own buffer and reads nothing twice. `[measured]` The close's A/B
+(`bench/v3.4.8/results-audit-g-close-v3.4.8-16-g713a84d0.md`) put every
+ordinary-path shape inside its spread and a mount 25-33 ms slower; after the
+remedy (`7c2dec3b`, `4cf04d4c`) a mount is 4-6 ms over `2789a457`, inside the
+baseline's spread (`results-audit-g-close-v3.4.8-20-g4cf04d4c.md`), accepted as
+G4-M (a). The full suite ran 4439/4439 at `4cf04d4c`. Two cuts the
 reviews proposed were not taken and are not owed: folding `AcquireInner`
 into `TryAcquire`, and the forward declaration in `row_compensation.hpp`.
