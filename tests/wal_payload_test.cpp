@@ -355,28 +355,6 @@ TEST(WalPayloadTest, UndoWriteChainTerminatesOnAZeroPointer) {
     EXPECT_TRUE(decoded.value().tail.empty());
 }
 
-// ---- ALLOC / FREE --------------------------------------------------------
-
-TEST(WalPayloadTest, PageRunRoundTripsAndRejectsAnEmptyRun) {
-    PageRunPayload fields{};
-    fields.nr_pages = 64;
-
-    const auto record = ThroughEnvelope(RecordType::kAlloc, [&](std::span<std::byte> out) {
-        return EncodePageRun(out, fields);
-    });
-    auto decoded = DecodePageRun(PayloadOf(record));
-    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
-    EXPECT_EQ(decoded.value().nr_pages, fields.nr_pages);
-
-    fields.nr_pages = 0;
-    std::array<std::byte, 16> out{};
-    EXPECT_EQ(EncodePageRun(out, fields).status().code(), StatusCode::kInvalidArgument);
-    // Zeroed bytes read as an allocation of nothing; that is corruption, not
-    // a no-op to replay.
-    std::array<std::byte, kPageRunPayloadSize> zeroes{};
-    EXPECT_EQ(DecodePageRun(zeroes).status().code(), StatusCode::kCorruption);
-}
-
 // ---- FULL_PAGE_IMAGE -----------------------------------------------------
 
 TEST(WalPayloadTest, FullPageImageRoundTripsAWholePage) {

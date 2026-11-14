@@ -2,14 +2,22 @@
 #include "kds/exec/declaration_relation.hpp"
 #include "kds/exec/varheap_sweep.hpp"
 
+#include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/sched/clock.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/wal/log_scanner.hpp"
+#include "kds/wal/manager.hpp"
+#include "kds/wal/memory_log_device.hpp"
+#include "kds/wal/payload.hpp"
+#include "kds/wal/stream.hpp"
 
 // `sys.transitions` - the catalog half of BV (BV-S1,
 // `instructions/v3.2.0/workorder-bv-transition-constraints.md`, BV-Q1 (a)).
@@ -105,6 +113,48 @@ TEST_F(TransitionCatalogTest, DeleteRetiresTheRowAndFreesTheName) {
     EXPECT_EQ(DeleteTransition(catalog(), store_, nullptr, "a").status().code(),
               StatusCode::kNotFound);
     EXPECT_TRUE(InsertTransition(catalog(), store_, nullptr, Def("a", 5000, 1, "x")).ok());
+}
+
+TEST_F(TransitionCatalogTest, ASpillBeforeARefusedPlacementIsStillLogged) {
+    // Var-heap redo needs dense slots: a VARHEAP_APPEND naming slot k+1 on a
+    // page whose slot k no record built refuses the mount. A declaration
+    // whose row is refused after its text spilled (here a duplicate tuple
+    // key, met only once the row is encoded) must log that spill, so the
+    // next declaration's append is not the first record past a hole.
+    auto device = wal::MemoryLogDevice::Create(wal::kMinSegmentSize);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    sched::ManualClock clock;
+    auto wal = wal::WalManager::Open(device.value().get(), clock, /*core_id=*/0);
+    ASSERT_TRUE(wal.ok()) << wal.status().message();
+
+    const std::string text(400, 's');
+    const TransitionDef first = Def("first", 5000, 1, text);
+    ASSERT_TRUE(InsertTransition(catalog(), store_, wal.value().get(), first).ok());
+    TransitionDef clash = Def("clash", 5000, 2, text);
+    clash.id = first.id;
+    EXPECT_EQ(InsertTransition(catalog(), store_, wal.value().get(), clash).code(),
+              StatusCode::kAlreadyExists);
+    ASSERT_TRUE(
+        InsertTransition(catalog(), store_, wal.value().get(), Def("last", 5000, 3, text)).ok());
+    ASSERT_TRUE(wal.value()->Flush().ok());
+
+    std::map<PageId, std::vector<std::uint16_t>> slots;
+    auto scanned = wal::ScanLog(*device.value(), 0, 0, [&](const wal::DecodedRecord& record) {
+        if (record.type() != wal::RecordType::kVarHeapAppend) return Status::OK();
+        auto append = wal::DecodeVarHeapAppend(record.payload);
+        if (!append.ok()) return append.status();
+        slots[record.header.page_id].push_back(append.value().fields.slot);
+        return Status::OK();
+    });
+    ASSERT_TRUE(scanned.ok()) << scanned.status().message();
+    std::size_t appends = 0;
+    for (const auto& [page, logged] : slots) {
+        appends += logged.size();
+        for (std::size_t i = 1; i < logged.size(); ++i) {
+            EXPECT_EQ(logged[i], logged[i - 1] + 1) << "page " << page << " has a hole";
+        }
+    }
+    EXPECT_EQ(appends, 3u) << "the refused row's spill went unlogged";
 }
 
 TEST_F(TransitionCatalogTest, TheMountSweepCollectsADroppedTransitionsSpilledText) {

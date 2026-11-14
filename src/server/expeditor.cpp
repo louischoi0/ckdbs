@@ -1037,7 +1037,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // every core's records.
     // **Recovery runs in drain mode** (BE-Q11): it is not a row's mutation,
     // it holds no page latch between records, and the log it replays is
-    // durable - so at the cap it writes dirty frames back and goes on,
+    // durable (`WalStream::Open` synced what its scan found) - so at the cap it writes dirty frames back and goes on,
     // where a refusal would refuse the mount. Held through the completion
     // checkpoint below, which ends the pass.
     std::optional<storage::DrainOnPressure> mount_drain;
@@ -1135,8 +1135,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                             std::to_string(expeditor->database_->catalog.opted_patterns()));
     }
 
-    // H7: collect the spills nothing points at. The assertion catalog -
-    // `exec::LogChainInsert`'s one remaining caller - logs its spills under
+    // H7: collect the spills nothing points at. The declaration relations -
+    // `exec::InsertDeclaration`, the one path that does - log their spills under
     // `kNoTxnId`, so a rolled-back `CREATE ASSERTION`'s body text has no
     // compensation to release it; every other spill is released by the
     // ordinary rollback path.

@@ -133,6 +133,10 @@ struct WalStats {
     std::uint64_t strict_commits = 0;
     std::uint64_t group_commits = 0;    // D2 commits registered
     std::uint64_t group_batches = 0;    // syncs that resolved at least one
+    // Every commit a resolved batch held: `group` ones and, above one core,
+    // the staged `strict` ones `StageStrictCommit` counts as strict - the
+    // mean's numerator, since both are members of the batches counted above.
+    std::uint64_t batched_commits = 0;
 
     // The batch's spread, which `mean_group_batch_size()` cannot show
     // (added 2026-09-02 to tell a tight n/2 batch from a mix of full and
@@ -160,11 +164,12 @@ struct WalStats {
     // every load; nonzero is a sizing bug, not a slow device.
     std::uint64_t ring_full_refusals = 0;
 
-    // Mean records per group-commit sync, the number section 16-7 is
-    // about. Zero when no batch has completed.
+    // Mean commits per batch-resolving sync, `group` and staged `strict`
+    // alike - the number section 16-7 is about. Zero when no batch has
+    // completed.
     double mean_group_batch_size() const noexcept {
         return group_batches == 0 ? 0.0
-                                  : static_cast<double>(group_commits) /
+                                  : static_cast<double>(batched_commits) /
                                         static_cast<double>(group_batches);
     }
 };

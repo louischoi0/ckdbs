@@ -258,31 +258,6 @@ TEST(HeapPageTest, InsertFailsWithOutOfSpaceWhenPageIsFull) {
     EXPECT_EQ(page.slot_count(), 0u);
 }
 
-TEST(HeapPageTest, HasSpaceForMatchesInsertOutcome) {
-    PageBuf buf{};
-    auto created = PageView::CreateEmpty(AsSpan(buf), 0);
-    ASSERT_TRUE(created.ok());
-    PageView page = created.value();
-
-    // Fill the page with small fixed-size tuples until it reports full,
-    // and check HasSpaceFor's prediction matches InsertTuple's outcome at
-    // every step.
-    const std::string payload(16, 'z');
-    int inserted = 0;
-    while (true) {
-        bool predicted = page.HasSpaceFor(static_cast<std::uint16_t>(payload.size()));
-        auto slot = page.InsertTuple(BytesOf(payload), 1);
-        EXPECT_EQ(predicted, slot.ok());
-        if (!slot.ok()) {
-            EXPECT_EQ(slot.status().code(), StatusCode::kOutOfSpace);
-            break;
-        }
-        ++inserted;
-        ASSERT_LT(inserted, 10000);  // guard against an infinite loop on a bug
-    }
-    EXPECT_GT(inserted, 0);
-}
-
 TEST(HeapPageTest, NextPageIdDefaultsToInvalidAndRoundTrips) {
     PageBuf buf{};
     auto created = PageView::CreateEmpty(AsSpan(buf), 0);

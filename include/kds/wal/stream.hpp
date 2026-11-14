@@ -243,7 +243,10 @@ public:
     // header written. Otherwise the last segment is scanned for the durable
     // end and appending resumes there - the same forward walk recovery
     // does, stopping at the first record that does not decode (wal.md
-    // section 4.2). A segment header that does not match this stream
+    // section 4.2). An unsealed tail's bytes past that record's header are
+    // zeroed, and the device is synced before durable_lsn() claims what the
+    // scan found: a killed process's writes may be in the OS cache only. A
+    // refused sync, write or read refuses the open. A segment header that does not match this stream
     // (magic, format version, core_id, segment_no, start_lsn) is Corruption
     // rather than something to append past.
     //
@@ -418,6 +421,10 @@ private:
     // Walks segment `segment_no` forward and leaves append_lsn_ at its
     // durable end, or seals it if a PAD marker is found. Open() only.
     Status ScanTail(std::uint64_t segment_no);
+    // Zeroes an unsealed segment's bytes from one record header past `end`
+    // to the segment's end, writing only what is not already zero. Open()
+    // only, before its sync.
+    Status ScrubTail(std::uint64_t segment_no, Lsn end);
     // Moves the durable watermark forward to `lsn`, never back: a plain
     // store unshared, a compare-exchange maximum shared.
     void PublishDurable(Lsn lsn) noexcept;

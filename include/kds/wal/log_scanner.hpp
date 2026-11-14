@@ -52,18 +52,18 @@
 //
 // One thread: a scan runs at mount or open, before anything appends. Each
 // segment's body is read whole into one buffer reused across segments (64
-// MiB at the format's segment size), as WalStream::ScanTail does.
+// MiB at the format's segment size). WalStream::ScanTail resumes through
+// ScanLogToEnd, so the append path's end is this scanner's.
 
 namespace kds::wal {
 
 // Validates that `header_block` is segment `segment_no` of core `core_id`'s
 // stream, and returns its decoded header.
 //
-// Shared by this scanner and WalStream::ScanTail deliberately: "is this
-// segment mine, and does it start where I think it does" is one question,
-// and two implementations of it are two answers that can drift - the rule
-// exec/tuple_verify.hpp states for its own verifier. The messages are
-// WalStream's originals, since it asked first.
+// "Is this segment mine, and does it start where I think it does" is one
+// question with one answer: WalStream::Open reaches it through this
+// scanner, never through a second walk. The messages are WalStream's
+// originals, since it asked first.
 StatusOr<SegmentHeaderFields> ValidateSegmentHeader(std::span<const std::byte> header_block,
                                                     std::uint32_t core_id,
                                                     std::uint64_t segment_no,

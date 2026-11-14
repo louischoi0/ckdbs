@@ -1959,7 +1959,9 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
         // quotient alone: an operator reading a live server needs to see
         // whether the batches are few and large or many and small, and a
         // mean over a whole uptime hides a phase change. `1.000` is the
-        // cliff - every D2 commit paid its own device sync.
+        // cliff - every D2 commit paid its own device sync. The mean counts
+        // a batch's staged `strict` commits too (`WalStats::batched_commits`),
+        // so above one core it is not `wal_group_commits / wal_group_batches`.
         //
         // Per core, like every other row in this reply: `SHOW META` answers
         // from the dispatcher the session is on, so reading a peer's batch

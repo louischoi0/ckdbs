@@ -13,10 +13,42 @@ namespace kds::varheap {
 
 namespace {
 
-// Bounds the walk in ChainAppend/ChainLength for the same reason
-// heap_chain.cpp bounds its own: a cycle in the links would otherwise hang
-// a request rather than fail it. Matched to that file's ceiling.
-inline constexpr std::uint32_t kMaxChainPages = 1u << 20;
+// The cycle guard of ChainAppend's and ChainLength's walks, **never a length
+// limit**: a var-heap chain only grows, and the tail hint lets it grow past
+// any walk budget, so a chain longer than a budget would be refused at the
+// first walk from its root (after a restart, or a hint slot another root
+// took) and every spilling write to its relation with it. Brent's check
+// instead: the page reached at each power-of-two step is remembered, and
+// meeting it again is a cycle, found within about three times its length; a
+// legal chain is bounded only by the page-id space, which no acyclic chain
+// can exceed.
+class CycleGuard {
+public:
+    explicit CycleGuard(PageId start) noexcept : mark_(start) {}
+
+    // True when the hop to `next` closes a cycle, or the walk has taken more
+    // hops than there are page ids.
+    bool Revisits(PageId next) noexcept {
+        if (next == mark_ || ++hops_ >= kMaxPageCount) return true;
+        if (++lap_ == power_) {
+            mark_ = next;
+            power_ <<= 1;
+            lap_ = 0;
+        }
+        return false;
+    }
+
+private:
+    PageId mark_;
+    std::uint64_t hops_ = 0;
+    std::uint64_t lap_ = 0;
+    std::uint64_t power_ = 1;
+};
+
+Status CycleRefusal(PageId root) {
+    return Status::Corruption("var-heap chain from page " + std::to_string(root) +
+                              " revisits a page; its links form a cycle");
+}
 
 std::size_t SlotOffset(std::uint16_t idx) {
     return kVarHeapHeaderOffset + kHeaderSize + static_cast<std::size_t>(idx) * kSlotOnDiskSize;
@@ -83,11 +115,6 @@ Status FormatPage(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 
 std::uint16_t PageSlotCount(std::span<const std::byte, kPageSize> page) {
     return ReadHeader(page).nr_slots;
-}
-
-std::uint16_t PageFreeSpace(std::span<const std::byte, kPageSize> page) {
-    VarHeapPageHeaderFields h = ReadHeader(page);
-    return h.upper > h.lower ? static_cast<std::uint16_t>(h.upper - h.lower) : 0;
 }
 
 PageId PageNextPageId(std::span<const std::byte, kPageSize> page) {
@@ -178,23 +205,10 @@ Status PageWriteAt(std::span<std::byte, kPageSize> page, std::uint16_t slot,
         return Status::OK();
     }
 
-    const std::size_t needed = kSlotOnDiskSize + value.size();
-    const std::size_t avail = h.upper > h.lower ? (h.upper - h.lower) : 0;
-    if (avail < needed) {
-        return Status::OutOfSpace("var-heap page has no room for this value");
-    }
-
-    const auto new_upper = static_cast<std::uint16_t>(h.upper - value.size());
-    if (!value.empty()) {
-        std::memcpy(page.data() + new_upper, value.data(), value.size());
-    }
-    WriteSlot(page, slot, VarHeapSlotFields{new_upper, static_cast<std::uint16_t>(value.size())});
-
-    h.nr_slots = static_cast<std::uint16_t>(h.nr_slots + 1);
-    h.lower = static_cast<std::uint16_t>(h.lower + kSlotOnDiskSize);
-    h.upper = new_upper;
-    WriteHeader(page, h);
-    return Status::OK();
+    // Append: slot == nr_slots, checked above, which is the slot PageAppend
+    // takes - one writer of the slot layout, live and replayed.
+    auto placed = PageAppend(page, value);
+    return placed.ok() ? Status::OK() : placed.status();
 }
 
 StatusOr<std::span<const std::byte>> PageRead(std::span<const std::byte, kPageSize> page,
@@ -336,11 +350,8 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
         from_hint = true;
     }
     storage::PageRef tail;
-    for (std::uint32_t steps = 0;; ++steps) {
-        if (steps >= kMaxChainPages) {
-            return Status::Corruption("var-heap chain from page " + std::to_string(root) +
-                                       " exceeds the maximum length; the links may form a cycle");
-        }
+    CycleGuard guard(tail_id);
+    for (;;) {
         PageId next = kInvalidPageId;
         {
             auto bytes = store.GetForRead(tail_id);
@@ -351,6 +362,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
                         static_cast<std::uint8_t>(PageType::kVarHeap) ||
                     storage::GetOwnerOid(bytes.value().bytes()) != owner_oid) {
                     tail_id = root;
+                    guard = CycleGuard(root);
                     continue;
                 }
             }
@@ -366,6 +378,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
                 break;
             }
         }
+        if (guard.Revisits(next)) return CycleRefusal(root);
         tail_id = next;
     }
 
@@ -441,17 +454,15 @@ StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr
 StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId root) {
     if (root == kInvalidPageId) return 0u;
 
-    std::uint32_t pages = 0;
+    std::uint32_t pages = 1;
     PageId current = root;
+    CycleGuard guard(root);
     for (;; ++pages) {
-        if (pages >= kMaxChainPages) {
-            return Status::Corruption("var-heap chain from page " + std::to_string(root) +
-                                       " exceeds the maximum length; the links may form a cycle");
-        }
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
         const PageId next = PageNextPageId(bytes.value().bytes());
-        if (next == kInvalidPageId) return pages + 1;
+        if (next == kInvalidPageId) return pages;
+        if (guard.Revisits(next)) return CycleRefusal(root);
         current = next;
     }
 }
