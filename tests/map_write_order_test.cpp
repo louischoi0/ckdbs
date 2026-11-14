@@ -549,52 +549,125 @@ TEST(MapWriteOrderTest, AHeaderlessBitWhoseFreeBitWasLostIsClearedAtMount) {
     EXPECT_EQ(got.value().bytes()[kPageBodyOffset], std::byte{7});
 }
 
-TEST(MapWriteOrderTest, ARegionReCreatedOverADurableHeaderlessMapClearsIt) {
-    // The cut the cell above cannot reach (the audit's G18): a region whose
-    // *first* flush lost its free-map write after the headerless map's sync.
-    // Its free-map page reads as zeroes, so the next mount finds no region,
-    // and the region's re-creation must not leave the device's headerless
-    // bits to be loaded beside the free bits it then sets.
-    const PageId base = FreeMapRegionBase(1);
-    const PageId headerless_id = HeaderlessMapPageIdFor(base);
-    const PageId first_id = base + 2;  // the region's first id past its two maps
-    constexpr PageId kStaleIds = 16;  // the stale bits: every id the cell can be issued
-    auto created = MemoryPageDevice::Create(/*extent_pages=*/64, first_id + 64);
-    ASSERT_TRUE(created.ok()) << created.status().message();
+// ---- G18: a region re-created over a durable headerless map ---------------
+//
+// The cut the cell above cannot reach (the audit's G18): a region whose
+// *first* flush lost its free-map write after the headerless map's sync.
+// Its free-map page reads as zeroes, so the next mount finds no region, and
+// the region's re-creation must not leave the device's headerless bits to
+// be loaded beside the free bits it then sets - whether the stale image is
+// a valid map or torn.
+
+constexpr PageId kRegionOneBase = FreeMapRegionBase(1);
+constexpr PageId kRegionOneHeaderless = HeaderlessMapPageIdFor(kRegionOneBase);
+constexpr PageId kRegionOneFirst = kRegionOneHeaderless + 1;  // past its two maps
+constexpr PageId kStaleIds = 16;  // the stale bits: every id the cells can be issued
+
+// A device holding, at region 1's headerless-map id, a stale map marking
+// region 1's first ids - or, `torn`, bytes no map validates - and nothing
+// at region 1's free-map id.
+std::unique_ptr<MemoryPageDevice> MakeStaleRegionDevice(bool torn) {
+    auto created = MemoryPageDevice::Create(/*extent_pages=*/64, kRegionOneFirst + 64);
+    EXPECT_TRUE(created.ok()) << created.status().message();
+    if (!created.ok()) return nullptr;
     auto device = std::move(created.value());
-    {
-        Page stale{};
-        const auto view = std::span<std::byte, kPageSize>(stale);
+    Page stale{};
+    const auto view = std::span<std::byte, kPageSize>(stale);
+    if (torn) {
+        std::fill(stale.begin(), stale.end(), std::byte{0xFF});
+    } else {
         FormatFreeMapPage(view, PageType::kHeaderlessMap);
-        FreeMapAllocate(view, FreeMapBitIndexOf(headerless_id));
-        for (PageId id = first_id; id < first_id + kStaleIds; ++id) {
+        FreeMapAllocate(view, FreeMapBitIndexOf(kRegionOneHeaderless));
+        for (PageId id = kRegionOneFirst; id < kRegionOneFirst + kStaleIds; ++id) {
             FreeMapAllocate(view, FreeMapBitIndexOf(id));
         }
         StampPageChecksum(view);
-        ASSERT_TRUE(
-            device->WritePage(headerless_id, std::span<const std::byte, kPageSize>(stale)).ok());
-        ASSERT_TRUE(device->Sync().ok());
     }
-    PageId reissued = kInvalidPageId;
-    {
-        auto opened = DevicePageStore::Open(*device, FrameCapacity{4096}, first_id);
-        ASSERT_TRUE(opened.ok()) << opened.status().message();
-        auto& store = *opened.value();
-        reissued = MakeHeadered(store, 9);
-        ASSERT_GE(reissued, first_id);
-        ASSERT_LT(reissued, first_id + kStaleIds) << "the cell's stale bits miss the issued id";
-        EXPECT_FALSE(store.IsHeaderless(reissued));
-        ASSERT_TRUE(store.Sync().ok());
+    EXPECT_TRUE(
+        device->WritePage(kRegionOneHeaderless, std::span<const std::byte, kPageSize>(stale)).ok());
+    EXPECT_TRUE(device->Sync().ok());
+    return device;
+}
+
+std::unique_ptr<DevicePageStore> OpenRegionOneStore(PageDevice& device) {
+    auto opened = DevicePageStore::Open(device, FrameCapacity{4096}, kRegionOneFirst);
+    EXPECT_TRUE(opened.ok()) << opened.status().message();
+    return opened.ok() ? std::move(opened.value()) : nullptr;
+}
+
+TEST(MapWriteOrderTest, ARegionReCreatedOverADurableHeaderlessMapClearsIt) {
+    for (const bool torn : {false, true}) {
+        SCOPED_TRACE(torn ? "torn image" : "valid stale map");
+        auto device = MakeStaleRegionDevice(torn);
+        ASSERT_NE(device, nullptr);
+        PageId reissued = kInvalidPageId;
+        {
+            auto store = OpenRegionOneStore(*device);
+            ASSERT_NE(store, nullptr);
+            reissued = MakeHeadered(*store, 9);
+            ASSERT_GE(reissued, kRegionOneFirst);
+            ASSERT_LT(reissued, kRegionOneFirst + kStaleIds)
+                << "the cell's stale bits miss the issued id";
+            EXPECT_FALSE(store->IsHeaderless(reissued));
+            ASSERT_TRUE(store->Sync().ok());
+        }
+        auto store = OpenRegionOneStore(*device);
+        ASSERT_NE(store, nullptr) << "the reopen refused the region the creation replaced";
+        EXPECT_FALSE(store->IsHeaderless(reissued))
+            << "the stale headerless bit was loaded beside the re-created region's free bit";
+        Page map = DeviceImage(*device, kRegionOneHeaderless);
+        EXPECT_TRUE(ValidateFreeMapPage(std::span<const std::byte, kPageSize>(map),
+                                        PageType::kHeaderlessMap)
+                        .ok())
+            << "the device's headerless map is not the empty one the creation put there";
+        EXPECT_FALSE(BitSet(map, reissued));
+        auto got = store->GetForRead(reissued);
+        ASSERT_TRUE(got.ok()) << got.status().message();
+        EXPECT_EQ(got.value().bytes()[kPageBodyOffset], std::byte{9});
     }
-    auto opened = DevicePageStore::Open(*device, FrameCapacity{4096}, first_id);
-    ASSERT_TRUE(opened.ok()) << opened.status().message();
-    auto& store = *opened.value();
-    EXPECT_FALSE(store.IsHeaderless(reissued))
-        << "the stale headerless bit was loaded beside the re-created region's free bit";
-    EXPECT_FALSE(BitSet(DeviceImage(*device, headerless_id), reissued));
-    auto got = store.GetForRead(reissued);
-    ASSERT_TRUE(got.ok()) << got.status().message();
-    EXPECT_EQ(got.value().bytes()[kPageBodyOffset], std::byte{9});
+}
+
+TEST(MapWriteOrderTest, ACutAnywhereInAReCreatedRegionsFirstFlushLeavesNoStaleBit) {
+    // The re-created region's first flush is the one that must land the
+    // empty map ahead of its free bits: power lost at each of its page
+    // writes, each cut kept as `kSeedsPerCut` subsets of what was unsynced.
+    // Whatever survives, the issued id never reads headerless, and an
+    // allocated headerless-map id never sits over bytes that are not a map.
+    for (const bool torn : {false, true}) {
+        SCOPED_TRACE(torn ? "torn image" : "valid stale map");
+        for (std::uint64_t k = 0;; ++k) {
+            bool lost = false;
+            for (std::uint64_t seed = 0; seed < kSeedsPerCut; ++seed) {
+                auto device = MakeStaleRegionDevice(torn);
+                ASSERT_NE(device, nullptr);
+                PageId reissued = kInvalidPageId;
+                {
+                    auto store = OpenRegionOneStore(*device);
+                    ASSERT_NE(store, nullptr);
+                    reissued = MakeHeadered(*store, 9);
+                    device->LosePowerAtWrite(k, nullptr);
+                    (void)store->Sync();
+                    lost = device->power_lost();
+                }
+                device->CrashPersisting(seed, /*tear=*/false);
+                const std::string where =
+                    "cut at write " + std::to_string(k) + ", seed " + std::to_string(seed);
+                auto store = OpenRegionOneStore(*device);
+                ASSERT_NE(store, nullptr) << where;
+                EXPECT_FALSE(store->IsHeaderless(reissued)) << where;
+                if (store->IsAllocated(kRegionOneHeaderless)) {
+                    Page map = DeviceImage(*device, kRegionOneHeaderless);
+                    EXPECT_TRUE(ValidateFreeMapPage(std::span<const std::byte, kPageSize>(map),
+                                                    PageType::kHeaderlessMap)
+                                    .ok())
+                        << where << ": the headerless map's id is allocated over a bad image";
+                    EXPECT_FALSE(BitSet(map, reissued)) << where;
+                }
+                if (::testing::Test::HasFailure()) return;
+            }
+            if (!lost) break;  // the flush finished before its k-th write
+        }
+    }
 }
 
 TEST(MapWriteOrderTest, AClaimGivenBackAfterItsFreeBitLandedIsNeverAHeaderlessId) {

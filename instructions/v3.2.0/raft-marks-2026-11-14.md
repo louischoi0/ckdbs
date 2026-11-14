@@ -37,3 +37,24 @@ per-item mark.
 | **Mark** | **W2:** `worktree-audit-g1-g15-fixes` merged to `main` with `--no-ff` at `37ee470d` and pushed with `--no-verify`. The hook was skipped; the full suite had run 4439/4439 at `4cf04d4c`, the last build input, and the sim corpus 280/0. **W3:** `v3.4.9` is an annotated tag at `37ee470d`, pushed; its message carries what is built and the gaps that bound it. `CLAUDE.md`'s version line moved in a documents-only commit |
 | **Does not settle** | G16-G64, the 15 unread slices, F4, F26-F32 |
 | **Recorded at** | this file; the tag message; `CLAUDE.md`'s Version Management; this file's row in `instructions/v3.2.0/index.md` |
+
+## 4. G16-G20 verified, then taken up
+
+| | |
+|---|---|
+| **Words** | W4, on 2026-11-14: *"resume the G16-G64 verification"*, and on the scale CLA asked about, *"priority first, ~10 agents"*; W5, the same day: *"fix G16-G20; G17 and G20 as proposed"*, with the skill `go-ahead-achieving-milestone` invoked (each given in Korean; recorded in English) |
+| **Mark** | **W4:** G16-G20 verified by two lenses each at `6a3ce231`, all five surviving (the pending entry's §9, `63fec9d6`). **W5:** G16-G20 taken up as one milestone, on worktree `audit-g1-g15-fixes` (its directory; a worktree-isolated session cannot create a second one) on branch `worktree-audit-g16-g20-fixes` from `63fec9d6`. **G17-D and G20-D are the operator's own marks**: the contract changes the verifiers proposed - G17's record bound (`assertion.md`'s AZ-S3 paragraph, `wal.md` §4.1) cut to the largest split's, and G20's `sys.fkeys` rows on the `CREATE TABLE`'s trail (`ddl-transactional.md` §5) |
+| **Does not settle** | G21-G64, the 15 unread slices, a merge, a push, a version |
+| **Recorded at** | this file; the pending entry; the index row |
+
+Decisions adopted on the standing go-ahead of 2026-11-14
+(go-ahead-achieving-milestone), not the operator's per-item marks:
+
+| Item | Options | Adopted, and why |
+|---|---|---|
+| **G16-D** - the undo chain's bound | (a) Brent's cycle check; (b) a budget raised to 2^48 | **(a)**, both verifiers' preference: (b) turns the cycle guard into a hang of up to 2^48 steps |
+| **CG-D** - where the cycle check lives, now that three walks need it | (a) one `kds::CycleGuard<Id>` in `base/cycle_guard.hpp`, G2's copy moved onto it; (b) a copy per walk | **(a)**: one definition, an undo pointer and a page id alike, and a unit suite that pins it never refuses an acyclic walk and finds every cycle within three times its length plus its tail |
+| **G18-D** - how a re-created region meets a stale headerless map | (a) install an empty map, written and synced by the region's first flush ahead of its free bits; (b) zero the page and sync before publishing the region | **(a)**, the codepath verifier's: no extra sync, no new lock order, and the map write order already gives the ordering |
+| **G19-D** - the leaf walks' guard | (a) `storage::LeafChainGuard`, `Visit(page)` at each loop head, the origin first; (b) `Revisits(next)` threaded through each loop | **(a)**: one call shape at all nine sites, in place of the budget check it replaces |
+| **G20-D2** - `CreateForeignKey`'s new parameters | (a) defaulted `trx_id` and `where`, so tests and bootstrap stay a write no transaction owns; (b) required | **(a)**, as `CreateCabin` has them |
+

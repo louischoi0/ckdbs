@@ -15,13 +15,9 @@ namespace kds::varheap {
 
 namespace {
 
-// ChainAppend's and ChainLength's walks are bounded by `CycleGuard`
-// (`base/cycle_guard.hpp`), never by a length: a var-heap chain only grows,
-// and the tail hint lets it grow past any walk budget, which a budget would
-// refuse at the first walk from its root after a restart (the audit's G2).
-// A chain grows only at its tail and never relinks a page, so no legal walk
-// revisits one.
-using CycleGuard = kds::CycleGuard<PageId>;
+// ChainAppend's and ChainLength's walks are bounded by `CycleGuard<PageId>`
+// (`base/cycle_guard.hpp`, the audit's G2): a var-heap chain grows only at
+// its tail and never relinks a page, so no legal walk revisits one.
 
 Status CycleRefusal(PageId root) {
     return Status::Corruption("var-heap chain from page " + std::to_string(root) +
@@ -328,7 +324,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
         from_hint = true;
     }
     storage::PageRef tail;
-    CycleGuard guard(tail_id);
+    CycleGuard<PageId> guard(tail_id);
     for (;;) {
         PageId next = kInvalidPageId;
         {
@@ -340,7 +336,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
                         static_cast<std::uint8_t>(PageType::kVarHeap) ||
                     storage::GetOwnerOid(bytes.value().bytes()) != owner_oid) {
                     tail_id = root;
-                    guard = CycleGuard(root);
+                    guard = CycleGuard<PageId>(root);
                     continue;
                 }
             }
@@ -434,7 +430,7 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId root) {
 
     std::uint32_t pages = 1;
     PageId current = root;
-    CycleGuard guard(root);
+    CycleGuard<PageId> guard(root);
     for (;; ++pages) {
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();

@@ -207,21 +207,25 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::EnsureHeaderlessMap(P
     AssertNotUnderMapHold("EnsureHeaderlessMap");
     LatchGuard map(map_latch());
     if (region.value()->headerless_map == nullptr) {
-        // The id is claimed *here*, as the page is placed, so the free map
-        // never says a page exists whose bytes have not been written. It
-        // cannot have been taken in the meantime: every allocation path
-        // skips a bitmap id by arithmetic.
-        FreeMapAllocate(std::span<std::byte, kPageSize>(region.value()->free_map),
-                        FreeMapBitIndexOf(headerless_id));
-        ++allocated_pages_;
-        auto made = std::make_unique<Page>();
-        FormatFreeMapPage(std::span<std::byte, kPageSize>(*made), PageType::kHeaderlessMap);
-        region.value()->headerless_map = std::move(made);
-        region.value()->dirty = true;
-        region.value()->headerless_dirty = true;
-        any_headerless_.store(true, std::memory_order_release);
+        InstallEmptyHeaderlessMapLocked(*region.value(), headerless_id);
     }
     return std::span<std::byte, kPageSize>(*region.value()->headerless_map);
+}
+
+void DevicePageStore::InstallEmptyHeaderlessMapLocked(MapRegion& region, PageId headerless_id) {
+    // The id is claimed *here*, as the page is placed, so the free map never
+    // says a page exists whose bytes have not been written. It cannot have
+    // been taken in the meantime: every allocation path skips a bitmap id by
+    // arithmetic.
+    FreeMapAllocate(std::span<std::byte, kPageSize>(region.free_map),
+                    FreeMapBitIndexOf(headerless_id));
+    ++allocated_pages_;
+    auto made = std::make_unique<Page>();
+    FormatFreeMapPage(std::span<std::byte, kPageSize>(*made), PageType::kHeaderlessMap);
+    region.headerless_map = std::move(made);
+    region.dirty = true;
+    region.headerless_dirty = true;
+    any_headerless_.store(true, std::memory_order_release);
 }
 
 StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
@@ -264,19 +268,18 @@ StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
     // once its new free map lands, the next mount loads them, and an id the
     // cursor reissued as a headered page reads as headerless - written
     // unstamped, read unverified, past both WAL gates. So any non-zero image
-    // there (valid or torn) gets an empty map in its place, owed by the
-    // region's first flush, which writes and syncs it before any free bit of
-    // the region lands (the map write order above `FlushMaps`). Device work,
+    // there (valid or torn) gets an empty map in its place - installed as
+    // `EnsureHeaderlessMap` installs one, below - owed by the region's first
+    // flush, which writes and syncs it before any free bit of the region
+    // lands (the map write order above `FlushMaps`). The read is device work,
     // so outside the hold; a region is created once per 64 Ki pages.
-    std::unique_ptr<Page> stale_headerless;
+    bool stale_headerless = false;
     {
         auto read = std::make_unique<Page>();
         auto rview = std::span<std::byte, kPageSize>(*read);
         if (Status s = device_.ReadPage(headerless_id, rview); !s.ok()) return s;
-        if (std::any_of(rview.begin(), rview.end(), [](std::byte b) { return b != std::byte{0}; })) {
-            FormatFreeMapPage(rview, PageType::kHeaderlessMap);
-            stale_headerless = std::move(read);
-        }
+        stale_headerless =
+            std::any_of(rview.begin(), rview.end(), [](std::byte b) { return b != std::byte{0}; });
     }
 
     MapRegion pages;
@@ -291,17 +294,9 @@ StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
     // signature of a torn creation (the simulation harness's integrity
     // sweep refuses it). Both allocation paths skip a bitmap id by
     // arithmetic (IsMapPageId), so no reservation is needed.
+    // Except over a stale map (above), which installs one at publication.
     FreeMapAllocate(view, FreeMapBitIndexOf(free_id));
     pages.dirty = true;
-    // Except over a stale map (above): then the page is there, and the empty
-    // map that replaces it is the region's, claimed as `EnsureHeaderlessMap`
-    // claims one.
-    const bool replaces_stale = stale_headerless != nullptr;
-    if (replaces_stale) {
-        FreeMapAllocate(view, FreeMapBitIndexOf(headerless_id));
-        pages.headerless_map = std::move(stale_headerless);
-        pages.headerless_dirty = true;
-    }
 
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("pagestore", "free-map region " + std::to_string(region) +
@@ -317,8 +312,8 @@ StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
     LatchGuard map(map_latch());
     auto [it, inserted] = map_regions_.try_emplace(region, std::move(pages));
     if (inserted) {
-        allocated_pages_ += replaces_stale ? 2 : 1;
-        if (replaces_stale) any_headerless_.store(true, std::memory_order_release);
+        ++allocated_pages_;
+        if (stale_headerless) InstallEmptyHeaderlessMapLocked(it->second, headerless_id);
     }
     return &it->second;
 }

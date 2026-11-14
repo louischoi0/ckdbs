@@ -25,6 +25,7 @@ add_executable(kds_tests
     frame_table_race_test.cpp
     status_test.cpp
     cycle_guard_test.cpp
+    leaf_cursor_test.cpp
     crc32c_test.cpp
     page_header_test.cpp
     anchor_page_test.cpp

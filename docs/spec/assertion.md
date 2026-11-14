@@ -575,11 +575,13 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > audit's G17, on the operator's word of 2026-11-14):
   > `WalManager::shared_record_payload_bytes()`, the smaller of a segment,
   > the ring and `kLargestSplitRecord`, less the record header - about
-  > 272 KiB at the defaults. Cut against the segment alone, a cabin past one
+  > 272 KiB at every legal size. Cut against the segment alone, a cabin past one
   > ring of headers had its first chunk refused by the append; cut against
   > the ring, a chunk on the shared stream fit only an empty ring, and above
   > one core the append's drains ran out while other cores refilled it and
-  > fail-stopped the log. Admission's budget is the same number, so a group
+  > fail-stopped the log. A split-sized chunk leaves room beside other cores'
+  > records, as a `BTREE_SPLIT` does - improbable to refuse, not impossible
+  > (`wal.md` §4.1). Admission's budget is the same number, so a group
   > admitted is a group a checkpoint can write.
   >
   > **A cabin no run can carry is refused at admission, and failed closed

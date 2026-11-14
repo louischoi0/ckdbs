@@ -3749,8 +3749,8 @@ StatusOr<std::uint64_t> Catalog::CreateExprCabin(Oid rel_oid, std::uint8_t shape
 }
 
 StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16_t child_column_no,
-                                                  Oid parent_rel_oid, std::uint16_t flags,
-                                                  std::uint64_t trx_id, CatalogRowRef* where) {
+                                                  Oid parent_rel_oid, std::uint64_t trx_id,
+                                                  CatalogRowRef* where) {
     auto child = InitTableAccess(child_rel_oid);
     if (!child.ok()) return child.status();
     auto parent = InitTableAccess(parent_rel_oid);
@@ -3791,7 +3791,7 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     row.child_rel_oid = child_rel_oid;
     row.parent_rel_oid = parent_rel_oid;
     row.child_column_no = child_column_no;
-    row.flags = flags;
+    row.flags = 0;
     // kFkNullable's one writer, stamped from the column's declaration - the
     // moment the fact is known and the only moment it can change (no ALTER
     // touches nullability). Enforcement never reads it: a NULL fk value

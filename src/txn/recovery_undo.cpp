@@ -163,12 +163,14 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
 
 Status RecoveryUndo::CompensateOnLeaf(storage::PageStore& store, std::uint64_t txn_id,
                                       const UndoVersion& rec) {
+    // A leaf walk like every other (`storage::LeafChainGuard`, the audit's
+    // G19): bounded by a cycle check, not a budget - the row may have been
+    // pushed past any number of leaves by splits while its loser was live,
+    // and a recovered tree frees and relinks nothing under the walk.
     PageId page_id = rec.target_page_id;
-    for (std::uint32_t steps = 0;; ++steps) {
-        if (Status s = storage::CheckPageWalkBudget(steps, rec.target_page_id, "undo's re-find");
-            !s.ok()) {
-            return s;
-        }
+    storage::LeafChainGuard guard("undo's re-find");
+    for (;;) {
+        if (Status s = guard.Visit(page_id); !s.ok()) return s;
         auto bytes = store.Get(page_id);
         if (!bytes.ok()) return bytes.status().WithContext("undo: leaf " + std::to_string(page_id));
         if (storage::RawPageType(bytes.value().bytes()) !=
@@ -247,9 +249,10 @@ Status RecoveryUndo::Apply(storage::PageStore& store, std::uint64_t txn_id,
 
 Status RecoveryUndo::RollBackOne(storage::PageStore& store, std::uint64_t txn_id,
                                  std::uint64_t head) {
-    // The chain is fixed under the walk: a compensation writes heap pages,
-    // never the undo page a chain record sits on, so the step from a pointer
-    // to the next is a function of the pointer and `CycleGuard` applies.
+    // The chain is fixed under the walk: a compensation writes the page its
+    // record targets - a heap page, a leaf or a var-heap page - and never an
+    // undo page, so the step from a pointer to the next is a function of the
+    // pointer and `CycleGuard` applies.
     std::uint64_t ptr = head;
     CycleGuard<std::uint64_t> guard(head);
     while (ptr != kNoUndoPtr) {

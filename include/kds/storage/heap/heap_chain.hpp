@@ -69,8 +69,9 @@ namespace kds::heap {
 // Bound on how many pages a walk will follow before declaring the chain
 // corrupt. The rule and the guard live in storage/visit.hpp
 // (kMaxPageWalkLength / CheckPageWalkBudget) - the heap chain named it
-// first, but every next-page walk owes the same check. The alias keeps
-// this header's public spelling.
+// first, and every catalog- and heap-chain walk owes the same check; a leaf
+// chain owes `storage::LeafChainGuard` instead (the audit's G19). The alias
+// keeps this header's public spelling.
 inline constexpr std::uint32_t kMaxChainPages = storage::kMaxPageWalkLength;
 
 struct ChainInsertResult {

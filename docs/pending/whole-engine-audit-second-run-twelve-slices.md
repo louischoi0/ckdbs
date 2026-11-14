@@ -2,9 +2,9 @@
 
 Status: **PENDING** - G1-G15 are fixed or applied since 2026-11-14 on the
 operator's word (section 8, `instructions/v3.2.0/raft-marks-2026-11-14.md`);
-G16-G20 survived a verification resumed on 2026-11-14 (section 9) and wait
-for the operator's word; 44 findings still wait for a verifier, and 15 slices
-are still unread. The rest decides nothing, opens no stage, licenses no code.
+G16-G20 survived a verification resumed on 2026-11-14 and are fixed since
+(section 9); 44 findings still wait for a verifier, and 15 slices are still
+unread. The rest decides nothing, opens no stage, licenses no code.
 Raised: 2026-11-13, in conversation with the operator; recorded 2026-11-14.
 Read at: `0b98bc4f` (`v3.4.8-11-g0b98bc4f`), on worktree `audit-core12-slices`.
 Every `path:line` below is at that commit.
@@ -21,7 +21,7 @@ under `docs/inflight/bugs/`).
 | Findings | Outcome |
 |---|---|
 | G1 to G15 | **survived** every verifier assigned to them: five logic defects (G1-G5), five dead code (G6-G10), five duplication (G11-G15). **All fifteen taken up on 2026-11-14** (section 8) |
-| G16 to G20 | **survived** both verifiers of a resumed pass on 2026-11-14, read at `6a3ce231` (section 9) |
+| G16 to G20 | **survived** both verifiers of a resumed pass on 2026-11-14, read at `6a3ce231`, and **fixed** the same day (section 9) |
 | G21 to G64 | **unjudged**: at least one verifier did not return. G21 and G24 each have one of their two verdicts, and it is "survived"; the other 42 have none. G22 is G4's defect and G59 is G14's change, both resolved since (section 8) |
 | G65, G66 | **refuted**: G65 is already in `known-gaps.md`, G66 is not worth the change |
 
@@ -511,6 +511,8 @@ Symbols: `ResolveThroughUndo`, `UndoLog::Walk`, `kMaxUndoChainLength`
 **Fix as the finder proposed it.** Use the same exact cycle detector as the recovery finding (one small helper in undo_log.hpp, e.g. UndoCycleGuard::Step(ptr)) in ResolveThroughUndo and UndoLog::Walk, and drop the count cap. Cycles stay Corruption; a long acyclic chain resolves. Amend txn.md section 3.7 and the undo_log.hpp comment. CommandDispatcher::UndecidedInsert's own bounded loop (command_dispatcher.cpp:6463) answers false at the cap and can keep it. Covered by tests/visibility_test.cpp, tests/undo_log_test.cpp, tests/txn_session_test.cpp.
 
 **Verifier, lens `intent`: survived** (confidence medium, risk of the fix low, **the operator's to rule on**). Not refuted: the cap fails legitimate reads, and nothing shows that was chosen. - Both walks count every step and answer Corruption past 2^16 (src/txn/visibility.cpp:16, src/txn/undo_log.cpp:206). - The stated premise is wrong (include/kds/txn/undo_log.hpp:109-113): the walk steps over committed-but-invisible versions, since Classify continues while the writer is invisible (visibility.cpp:52). - UPDATE links every record to the tuple's current undo_ptr with no truncation (src/server/command_dispatcher.cpp:10497-10498); own re-writes link too (src/txn/manager.cpp:191-195). - docs/spec/txn.md:552-553 promises nothing a live view can reach is freed and no read fails for age; autocommit SELECT has no ceiling. - Not in known-gaps.md, docs/pending or docs/inflight/bugs; no work order chose it (the constant dates from the original T01-T14 commit). - Tests pin only the cycle case (tests/undo_log_test.cpp:249, tests/visibility_test.cpp:351), never the count. The fix changes txn.md §3.7's stated bound, hence operator decision. Reachability needs about 65,537 updates of one row under one snapshot; read from code, not run.
+
+**Since G16's fix (2026-11-14) the guard this proposes exists**: `kds::CycleGuard<Id>` in `include/kds/base/cycle_guard.hpp`, which `RecoveryUndo::RollBackOne` already uses for the transaction chain. A fix of G21 reuses it rather than defining `UndoCycleGuard`, and `recovery_undo.hpp:78-80`, cited below, no longer holds the old bound. The verifier's text as written at `0b98bc4f` follows.
 
 **Fix as that verifier refined it.** No `UndoCycleGuard` exists in the tree at 0b98bc4f; the finder's helper is a proposal, so this fix defines it. 1. include/kds/txn/undo_log.hpp: add a small Brent-style guard next to `kMaxUndoChainLength`. It needs O(1) memory and no extra `Read`: `struct UndoCycleGuard { std::uint64_t mark = kNoUndoPtr; std::uint64_t steps = 0, limit = 1; bool Step(std::uint64_t ptr) { if (ptr == mark) return false; if (++steps == limit) { mark = ptr; limit <<= 1; steps = 0; } return true; } };` `Step` is called with each pointer about to be read; `false` means a revisited record, i.e. a cycle. 2. src/txn/visibility.cpp `ResolveThroughUndo` (lines 14-20) and src/txn/undo_log.cpp `UndoLog::Walk` (lines 204-210): replace the `steps` counter and the `++steps > kMaxUndoChainLength` test with `if (!guard.Step(ptr)) return Status::Corruption("undo chain revisits the record at <ptr>; a cycle")`. A long acyclic chain then resolves. A damaged acyclic chain still ends at a failed `Read` or at `kNoUndoPtr`, because undo space is finite. 3. Keep `kMaxUndoChainLength` only for `UndecidedInsert` (src/server/command_dispatcher.cpp:6463), which answers `false` at the cap. Reword its comment at undo_log.hpp:109-113 to drop the "no transaction can produce" claim. 4. Fix the comments that cite the old bound: undo_log.hpp:171-175 (`Walk`'s contract), include/kds/txn/visibility.hpp:42-45, include/kds/txn/recovery_undo.hpp:78-80. 5. Amend docs/spec/txn.md §3.7 (lines 376-378): the walk is bounded by exact cycle detection, a cycle is `Corruption`, and length alone is never refused. 6. Tests: add one to tests/visibility_test.cpp that builds more than 65,536 invisible versions and expects `kVisible`, and one to tests/undo_log_test.cpp for a multi-record cycle. The existing self-referential test must stay green: the guard marks the first pointer and refuses the second.
 
@@ -1179,3 +1181,21 @@ re-located there. Ten of ten returned. Nothing was built, run or changed.
 was written and nothing reproduced. The full verdicts, with their path:line
 evidence and fixes, are in this session's workflow journal (run
 `wf_a6a8d1d7-ddb`), not copied here beyond the table.
+
+**What became of them**, on the operator's word of 2026-11-14 (W5,
+`instructions/v3.2.0/raft-marks-2026-11-14.md` §4): all five fixed on
+worktree `audit-g1-g15-fixes`, branch `worktree-audit-g16-g20-fixes`, from
+`63fec9d6` - `f9014108`, then the review round. Each cell named here fails
+on `63fec9d6` and passes on the fix `[measured]`.
+
+| Finding | Became | Cell |
+|---|---|---|
+| G16 | the loser's chain walked whole, a cycle refused by `kds::CycleGuard` (`base/cycle_guard.hpp`, Brent's check) | `RecoveryUndoTest.ALongAcyclicChainIsRolledBackWhole` (2^20 + 1 records), `ACycleOfTwoRecordsIsCorruption` |
+| G17 | `WalManager::shared_record_payload_bytes()`, the largest split's bound, for the snapshot run, the checkpoint's visit, `CHECKPOINT_BEGIN` and admission; a split-sized record's residual refusal recorded in `known-gaps.md` (G17-D, the operator's mark) | `AssertionRecoverTest.ASnapshotRunBesideAnotherCoresAppendsDoesNotStopTheLog` (3 of 3 failing on the ring bound) |
+| G18 | a region re-created over a non-zero headerless-map image gets an empty map, installed as `EnsureHeaderlessMap` installs one; a volume an older build already left so is not repaired (`known-gaps.md`) | `MapWriteOrderTest.ARegionReCreatedOverADurableHeaderlessMapClearsIt`, `ACutAnywhereInAReCreatedRegionsFirstFlushLeavesNoStaleBit`, each over a valid and a torn image |
+| G19 | every user-relation and index leaf walk bounded by `storage::LeafChainGuard` - mount undo's leaf re-find included, which the review found the commit had missed - and catalog and heap chains keeping their stated budget | `LeafCursorTest.AChainLongerThanTheOldBudgetIsWalkedToItsEnd` (2^20 + 2 leaves), `ACycleIsFoundAcrossSlicesWhereverItReentersTheChain`, the btree, index and re-find cycle cells |
+| G20 | `CREATE TABLE ... REFERENCES` puts each `sys.fkeys` row on its trail (G20-D, the operator's mark); `CreateForeignKey`'s unused `flags` parameter dropped | `ForeignKeyCheckTest.ARolledBackCreateTableTakesItsForeignKeyWithIt`, `...TakesEveryForeignKeyItDeclared`, `ForeignKeyRecoveryTest.ACrashedCreateTableReferencesLeavesTheCatalogARollbackDoes` |
+
+What bounds that: G19's failure itself, a relation past 8 GiB of leaves, is
+reproduced only through `LeafCursor`'s synthetic chain, not a real tree; and
+G18 does not repair a volume an older build already wrote.

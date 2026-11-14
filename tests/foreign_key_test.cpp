@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "sim/instance.hpp"
+
 #include <algorithm>
 #include <optional>
 #include <string>
@@ -624,15 +626,65 @@ TEST_F(ForeignKeyCheckTest, ARolledBackCreateTableTakesItsForeignKeyWithIt) {
               "CREATED");
     ASSERT_EQ(Run(ddl, "ROLLBACK").substr(0, 8), "ROLLBACK");
 
-    const std::string fkeys = Run("SHOW FKEYS");
-    EXPECT_EQ(testing_view::ReadViewText(fkeys).rows.size(), 1u)
-        << "only trades' foreign key may stand: " << fkeys;
-    EXPECT_EQ(Run("DELETE FROM trades WHERE id = 1").substr(0, 7), "DELETED");
+    // The catalog's own rows, not `SHOW FKEYS`: the view lists a row only
+    // when its child exists, so it never showed the orphan.
+    auto fkeys = boot_->catalog.ListForeignKeys();
+    ASSERT_TRUE(fkeys.ok()) << fkeys.status().message();
+    EXPECT_EQ(fkeys.value().size(), 1u) << "only trades' foreign key may stand";
     const std::string deleted = Run("DELETE FROM accounts WHERE id = 2");
     EXPECT_EQ(deleted, "DELETED 1") << "the parent's DELETE met the rolled-back child";
     EXPECT_EQ(Run("DROP TABLE trades").substr(0, 7), "DROPPED");
     const std::string dropped = Run("DROP TABLE accounts");
     EXPECT_EQ(dropped.substr(0, 7), "DROPPED") << dropped;
+}
+
+// Every reference of one create is on the trail, not only the first or the
+// last: two `REFERENCES` columns, rolled back, leave neither row.
+TEST_F(ForeignKeyCheckTest, ARolledBackCreateTableTakesEveryForeignKeyItDeclared) {
+    ASSERT_EQ(Run("CREATE TABLE desks (id int64, name varchar) BTREE").substr(0, 7), "CREATED");
+    Session ddl;
+    ASSERT_EQ(Run(ddl, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(ddl, "CREATE TABLE fills (id int64, account_id int64 REFERENCES accounts, "
+                       "desk_id int64 REFERENCES desks) BTREE")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run(ddl, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    auto fkeys = boot_->catalog.ListForeignKeys();
+    ASSERT_TRUE(fkeys.ok()) << fkeys.status().message();
+    EXPECT_EQ(fkeys.value().size(), 1u) << "a reference of the rolled-back create stayed";
+    const std::string dropped = Run("DROP TABLE desks");
+    EXPECT_EQ(dropped.substr(0, 7), "DROPPED") << dropped;
+}
+
+// A crash's undo and a live ROLLBACK leave one catalog (G20): before the
+// fix the mount retired the row and the ROLLBACK did not.
+TEST(ForeignKeyRecoveryTest, ACrashedCreateTableReferencesLeavesTheCatalogARollbackDoes) {
+    for (const bool crash : {false, true}) {
+        SCOPED_TRACE(crash ? "crash" : "rollback");
+        auto created = sim::SimInstance::Create();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        sim::SimInstance& db = *created.value();
+        ASSERT_EQ(db.Execute("CREATE TABLE accounts (id int64, owner varchar) BTREE").substr(0, 7),
+                  "CREATED");
+        ASSERT_EQ(db.Execute("INSERT INTO accounts VALUES ('ada')").substr(0, 8), "INSERTED");
+        ASSERT_EQ(db.Execute("BEGIN").substr(0, 5), "BEGIN");
+        ASSERT_EQ(db.Execute("CREATE TABLE fills (id int64, account_id int64 REFERENCES accounts) "
+                             "BTREE")
+                      .substr(0, 7),
+                  "CREATED");
+        if (crash) {
+            ASSERT_EQ(db.Execute("SYNC").substr(0, 2), "OK");
+            db.Crash();
+            const Status rebooted = db.Reboot();
+            ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+        } else {
+            ASSERT_EQ(db.Execute("ROLLBACK").substr(0, 8), "ROLLBACK");
+        }
+        EXPECT_EQ(db.Execute("DELETE FROM accounts WHERE id = 1"), "DELETED 1");
+        const std::string dropped = db.Execute("DROP TABLE accounts");
+        EXPECT_EQ(dropped.substr(0, 7), "DROPPED") << dropped;
+    }
 }
 
 // ---- UPDATE of an fk column (§2, FK-M3) ----------------------------------

@@ -141,6 +141,25 @@ protected:
         return ptr.ok() ? ptr.value() : kNoUndoPtr;
     }
 
+    // Points the record at `ptr` at `prev` instead, in place: the shape a
+    // damaged chain has.
+    void Relink(std::uint64_t ptr, std::uint64_t prev) {
+        auto read = undo_.Read(ptr);
+        ASSERT_TRUE(read.ok()) << read.status().message();
+        auto page = store_.Get(UndoPtrPageId(ptr));
+        ASSERT_TRUE(page.ok()) << page.status().message();
+        const UndoVersion& was = read.value();
+        UndoRecordFields rec{};
+        rec.prior_trx_id = was.prior_trx_id;
+        rec.prior_undo_ptr = was.prior_undo_ptr;
+        rec.target_page_id = was.target_page_id;
+        rec.target_slot = was.target_slot;
+        rec.type = static_cast<std::uint8_t>(was.type);
+        rec.tuple_key = was.tuple_key;
+        rec.txn_prev_undo_ptr = prev;
+        ASSERT_TRUE(UndoPageWriteAt(page.value().bytes(), UndoPtrOffset(ptr), rec, was.image).ok());
+    }
+
     wal::AnalysisResult Losing(std::uint64_t head) {
         wal::AnalysisResult a;
         a.transactions[kLoser] = wal::TxnState{wal::TxnOutcome::kLoser, head};
@@ -524,24 +543,16 @@ TEST_F(RecoveryUndoTest, ACycleOfTwoRecordsIsCorruption) {
     // more than the last step can see it (the audit's G16).
     const std::uint64_t a = Record(UndoRecordType::kInsert, /*slot=*/5, 1, kNoUndoPtr);
     const std::uint64_t b = Record(UndoRecordType::kInsert, /*slot=*/6, 2, a);
-    auto first = undo_.Read(a);
-    ASSERT_TRUE(first.ok()) << first.status().message();
-    UndoRecordFields rec{};
-    rec.prior_trx_id = 5;
-    rec.prior_undo_ptr = kNoUndoPtr;
-    rec.target_page_id = kHeapPage;
-    rec.target_slot = 5;
-    rec.type = static_cast<std::uint8_t>(UndoRecordType::kInsert);
-    rec.tuple_key = 1;
-    rec.txn_prev_undo_ptr = b;
-    auto landed = store_.Get(UndoPtrPageId(a));
-    ASSERT_TRUE(landed.ok()) << landed.status().message();
-    ASSERT_TRUE(UndoPageWriteAt(landed.value().bytes(), UndoPtrOffset(a), rec, {}).ok());
+    Relink(a, b);
 
     RecoveryUndo undo(undo_);
     auto s = undo.RollBack(store_, Losing(b));
     ASSERT_FALSE(s.ok());
     EXPECT_EQ(s.code(), StatusCode::kCorruption) << s.message();
+    // Found by the cycle check, and soon - within three times the cycle's
+    // length - rather than by a budget after 2^20 steps.
+    EXPECT_NE(s.message().find("revisits"), std::string::npos) << s.message();
+    EXPECT_LE(undo.already_done(), 3u * 2 + 2);
 }
 
 TEST_F(RecoveryUndoTest, ALongAcyclicChainIsRolledBackWhole) {
@@ -642,6 +653,29 @@ TEST_F(RecoveryUndoLeafTest, ALoserRowADivideMovedToTheRightSiblingIsRolledBack)
     EXPECT_EQ(Keys(kHeapPage), (std::vector<std::uint64_t>{10, 20}));
     EXPECT_EQ(Keys(kRightLeaf), (std::vector<std::uint64_t>{160}))
         << "the loser's moved row survived the crash";
+}
+
+TEST_F(RecoveryUndoLeafTest, AReFindOverACyclicLeafChainIsCorruptionNotAHang) {
+    // The re-find is a leaf walk like every other, bounded by its cycle
+    // check and not a 2^20-leaf budget a row pushed far right by splits
+    // could outrun (the audit's G19, found by its review): a sibling link
+    // back into the chain is refused as a revisit.
+    auto right = store_.CreateAt(kRightLeaf);
+    ASSERT_TRUE(right.ok()) << right.status().message();
+    auto right_view = heap::PageView::CreateEmptyAs(right.value().bytes(), /*min_key=*/100,
+                                                    PageType::kBtreeLeaf);
+    ASSERT_TRUE(right_view.ok());
+    right_view.value().set_next_page_id(kHeapPage);  // back to the first leaf
+    right.value().Release();
+    heap::PageView(Heap()).set_next_page_id(kRightLeaf);
+    const std::uint64_t head =
+        Record(UndoRecordType::kOverwrite, /*slot=*/0, /*tuple_key=*/500, kNoUndoPtr);
+
+    RecoveryUndo undo(undo_);
+    const Status s = undo.RollBack(store_, Losing(head));
+    ASSERT_FALSE(s.ok());
+    EXPECT_EQ(s.code(), StatusCode::kCorruption) << s.message();
+    EXPECT_NE(s.message().find("revisits"), std::string::npos) << s.message();
 }
 
 }  // namespace

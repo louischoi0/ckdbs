@@ -216,11 +216,12 @@ public:
     WalWriter* writer() const noexcept { return writer_; }
     std::uint64_t segment_size() const noexcept { return stream_->segment_size(); }
 
-    // Bytes a single record's payload may occupy, for a caller that has to chunk
-    // its own data to fit one (AS6a's group snapshots are the first). The record
-    // header is subtracted here rather than by every such caller, since a caller
-    // that forgot would produce a record the append path refuses at the worst
-    // possible moment - mid-checkpoint.
+    // The largest payload the stream accepts whole: what a single record may
+    // occupy. **A caller that chunks its own data cuts against
+    // `shared_record_payload_bytes()` below, not this** (the audit's G17). The
+    // record header is subtracted here rather than by every caller, since a
+    // caller that forgot would produce a record the append path refuses at the
+    // worst possible moment - mid-checkpoint.
     //
     // **The smaller of the segment and the ring** (AZ-S3): `WalStream::Append`
     // refuses a record either cannot hold whole, and at the defaults the ring
@@ -234,13 +235,16 @@ public:
         return whole - kRecordHeaderSize;
     }
     // **The payload a record a caller chunks its own data into may hold**:
-    // the smaller of `usable_payload_bytes()` and the largest split's (the
-    // audit's G17). On the one shared stream a ring-sized record fits only an
-    // empty ring, and every other core refills the ring a drain empties, so
-    // its append exhausts its drains and fail-stops the instance's log; a
-    // record of at most `kLargestSplitRecord` is what `kMinRingCapacity` is
-    // sized to stage beside the others. `CHECKPOINT_BEGIN`'s dirty table and
-    // the assertion snapshot run cut against it.
+    // the largest split's (the audit's G17), which every legal ring and
+    // segment hold (`stream.hpp`'s floors), so in effect a constant. On the
+    // one shared stream a ring-sized record fits only an empty ring, and
+    // every other core refills the ring a drain empties, so its append
+    // exhausts its drains and fail-stops the instance's log. A record of the
+    // split's size leaves room beside other cores' records, as a split's own
+    // does: the drains make a refusal improbable, not impossible, and it is
+    // the same residue every `BTREE_SPLIT` carries (`known-gaps.md`).
+    // `CHECKPOINT_BEGIN`'s dirty table and the assertion snapshot run cut
+    // against it.
     std::size_t shared_record_payload_bytes() const noexcept {
         return std::min(usable_payload_bytes(), kLargestSplitRecord - kRecordHeaderSize);
     }

@@ -176,11 +176,11 @@ Built, and what each gets:
   commits immediately.
 
 **Not transactional:** `ALTER TABLE`'s renames, `CREATE CABIN` and
-`DROP CABIN`, and assertions. (A foreign key exists only as a `CREATE
-TABLE ... REFERENCES` clause, and is that statement's, above; there is no
-statement that adds or drops one alone.)
+`DROP CABIN`, and assertions.
 Their catalog writes are logged and durable (§7) but not undone by
-`ROLLBACK`. **The renames still take the relation `X`** (the operator's
+`ROLLBACK`. (A foreign key exists only as a `CREATE TABLE ...
+REFERENCES` clause and is that statement's, above; no statement adds or
+drops one alone.) **The renames still take the relation `X`** (the operator's
 ruling of 2026-10-21, `alter.md` AL4a), under §5f's holder - a transaction
 of the statement's own that writes nothing and is rolled back when the
 statement ends, so the `X` is held across `AwaitDdlDurability` (§7) and a

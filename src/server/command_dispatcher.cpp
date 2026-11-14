@@ -5289,7 +5289,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         for (const PendingForeignKey& fk : pending_fkeys) {
             catalog::CatalogRowRef written;
             auto created = catalog_.CreateForeignKey(oid.value(), fk.column_no, fk.parent_oid,
-                                                     /*flags=*/0, ddl.trx_id, &written);
+                                                     ddl.trx_id, &written);
             // Before the status: a row logged before a later failure is
             // still the rollback's to retire.
             NoteRowWritten(ddl, written);
@@ -7443,7 +7443,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
     bool cut = false;
     std::uint64_t cut_tuple_key = 0;
     PageId leaf = start.value();
-    storage::LeafChainGuard guard(leaf, "relation walk");
+    storage::LeafChainGuard guard("relation walk");
     while (leaf != kInvalidPageId) {
         if (Status s = guard.Visit(leaf); !s.ok()) return s;
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,

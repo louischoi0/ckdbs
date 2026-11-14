@@ -2024,7 +2024,7 @@ private:
             outermost ? storage::PageAccess::kScan : storage::PageAccess::kRead;
         // Across the slice boundaries below too: the guard is the whole
         // walk's, and a yield resumes at a leaf the walk has not visited.
-        storage::LeafChainGuard guard(cur, "relation walk");
+        storage::LeafChainGuard guard("relation walk");
         for (;;) {
             if (Status s = guard.Visit(cur); !s.ok()) co_return s;
             // Per page, not once per walk: the VM makes these fetches

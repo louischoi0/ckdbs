@@ -1164,7 +1164,7 @@ public:
     // a loser. The defaults, `kBootstrapXid` and no report, are a write no
     // transaction owns.
     StatusOr<std::uint64_t> CreateForeignKey(Oid child_rel_oid, std::uint16_t child_column_no,
-                                             Oid parent_rel_oid, std::uint16_t flags = 0,
+                                             Oid parent_rel_oid,
                                              std::uint64_t trx_id = kBootstrapXid,
                                              CatalogRowRef* where = nullptr);
 

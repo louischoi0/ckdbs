@@ -405,7 +405,8 @@ TEST(IndexTreeTest, ALeafChainThatLinksBackIntoItselfIsCorruptionNotAHang) {
     EXPECT_NE(s.message().find("revisits"), std::string::npos) << s.message();
     auto count = IndexLeafCount(f.store, f.root, f.layout);
     ASSERT_FALSE(count.ok());
-    EXPECT_EQ(count.status().code(), StatusCode::kCorruption);
+    EXPECT_NE(count.status().message().find("revisits"), std::string::npos)
+        << count.status().message();
 }
 
 TEST(IndexTreeTest, TheClusteredTreesPagesAreNotThisTrees) {

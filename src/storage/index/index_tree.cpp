@@ -593,7 +593,7 @@ Status IndexVisitFrom(
     PageId current = first_leaf;
     // A cyclic sibling link would otherwise be an infinite loop inside a
     // request; the guard is a cycle check, not a length (G19).
-    storage::LeafChainGuard guard(first_leaf, "index leaf chain");
+    storage::LeafChainGuard guard("index leaf chain");
     for (;;) {
         if (Status s = guard.Visit(current); !s.ok()) return s;
 
@@ -647,7 +647,7 @@ StatusOr<std::uint32_t> IndexLeafCount(storage::PageStore& store, PageId root,
 
     std::uint32_t leaves = 0;
     PageId current = first.value();
-    storage::LeafChainGuard guard(current, "index leaf chain");
+    storage::LeafChainGuard guard("index leaf chain");
     for (;;) {
         if (Status s = guard.Visit(current); !s.ok()) return s;
         auto bytes = store.GetForRead(current);

@@ -24,7 +24,7 @@ public:
         auto first = btree::BtreeLeftmostLeaf(store, desc_page_id);
         if (!first.ok()) return first.status();
         leaf_ = first.value();
-        guard_ = storage::LeafChainGuard(leaf_, "relation leaf chain");
+        guard_ = storage::LeafChainGuard("relation leaf chain");
         return Status::OK();
     }
 

@@ -1294,7 +1294,7 @@ Status BtreeVisitFrom(
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn) {
     PageId current = first_leaf;
-    storage::LeafChainGuard guard(first_leaf, "btree leaf chain");
+    storage::LeafChainGuard guard("btree leaf chain");
     for (;;) {
         if (Status s = guard.Visit(current); !s.ok()) return s;
         // A bad `current` (an invalid first_leaf included) fails inside
@@ -1358,7 +1358,7 @@ StatusOr<std::uint32_t> BtreeLeafCount(storage::PageStore& store, PageId root) {
     if (!first.ok()) return first.status();
 
     PageId current = first.value();
-    storage::LeafChainGuard guard(current, "btree leaf chain");
+    storage::LeafChainGuard guard("btree leaf chain");
     for (;;) {
         if (Status s = guard.Visit(current); !s.ok()) return s;
         auto bytes = store.GetForRead(current);

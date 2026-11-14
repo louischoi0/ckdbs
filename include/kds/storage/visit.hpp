@@ -57,10 +57,10 @@ inline StatusOr<VisitControl> ResolveVisit(StatusOr<VisitControl> outcome, const
 // but by `LeafChainGuard` below (the audit's G19).
 inline constexpr std::uint32_t kMaxPageWalkLength = 1u << 20;
 
-// The guard itself, shared for ResolveVisit's reason: every loop that
-// follows next-page links (the heap chain, the btree leaf siblings, and
-// each caller that steps pages itself) owes the same check, and copies
-// drift. Call with the count of pages already visited, before visiting the
+// The guard itself, shared for ResolveVisit's reason: every catalog- or
+// heap-chain loop (the heap chain, the catalog chains, and each caller that
+// steps their pages itself) owes the same check, and copies drift; a
+// leaf-chain walk owes `LeafChainGuard` below instead. Call with the count of pages already visited, before visiting the
 // next; `what` names the walk for the message.
 inline Status CheckPageWalkBudget(std::uint32_t pages_visited, PageId origin, const char* what) {
     if (pages_visited < kMaxPageWalkLength) return Status::OK();
@@ -78,16 +78,16 @@ inline Status CheckPageWalkBudget(std::uint32_t pages_visited, PageId origin, co
 // a split keeps a leaf's id and links the new page after it, and a sliced
 // walk that yields between leaves resumes at an id it has not visited.
 //
-// Call `Visit` with each page the walk is about to read, its origin first.
+// Call `Visit` with each page the walk is about to read, its origin first;
+// the first call names the origin. `what` names the walk for the message.
 class LeafChainGuard {
 public:
-    LeafChainGuard() noexcept : LeafChainGuard(kInvalidPageId, "leaf chain") {}
-    LeafChainGuard(PageId origin, const char* what) noexcept
-        : origin_(origin), what_(what), cycle_(origin) {}
+    explicit LeafChainGuard(const char* what = "leaf chain") noexcept : what_(what) {}
 
     Status Visit(PageId page) {
-        if (first_) {
-            first_ = false;
+        if (origin_ == kInvalidPageId) {
+            origin_ = page;
+            cycle_ = CycleGuard<PageId>(page);
             return Status::OK();
         }
         if (!cycle_.Revisits(page)) return Status::OK();
@@ -97,10 +97,9 @@ public:
     }
 
 private:
-    PageId origin_;
     const char* what_;
-    CycleGuard<PageId> cycle_;
-    bool first_ = true;
+    PageId origin_ = kInvalidPageId;
+    CycleGuard<PageId> cycle_{kInvalidPageId};
 };
 
 }  // namespace kds::storage

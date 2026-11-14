@@ -14,10 +14,10 @@
 // length plus its tail. No acyclic chain revisits an id, so a legal chain
 // is never refused, whatever its length, and every cycle is.
 //
-// The guard is sound only over a walk whose links do not change under it
-// in a way that revisits an id legally - a chain that only grows at its
-// tail and never relinks a page, or a fixed chain. Each user states why its
-// chain is one.
+// The guard is sound over any walk that never legally reaches an id it has
+// already visited - a chain that grows only at its tail, a chain fixed
+// under the walk, a leaf chain whose splits link only new pages. Each user
+// states why its walk is one.
 //
 // Concurrency: none; one walk owns one guard.
 
