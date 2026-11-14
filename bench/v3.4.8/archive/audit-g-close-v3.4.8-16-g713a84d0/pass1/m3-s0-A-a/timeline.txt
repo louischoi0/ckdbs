@@ -1,0 +1,4 @@
+2026-11-14T02:20:04Z m3-s0 server up: {"pid": 268036, "port": 25741, "workdir": "/home/louis/bench-runs/audit-g-close/20261114T021002Z/m3-s0-A-a/s0", "ready_after_s": 0.403, "binary_sha256": "bb33f463ef4a0eb50a53b3e5422240f1c8dfa1d563ec12ac70f6a3899bdd4488"}
+2026-11-14T02:20:04Z s0-run begin loadavg=1.55 2.70 4.34
+2026-11-14T02:21:12Z s0-run end rc=0 loadavg=3.39 3.00 4.33
+2026-11-14T02:21:12Z m3-s0 server stop rc=0: {"pid": 268036, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}

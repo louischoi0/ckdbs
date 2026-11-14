@@ -1,0 +1,49 @@
+== views read over KWP/1 :25741 at 2026-11-14T02:21:12.779103Z s0-post
+-- sys.lock_waits (whole ring): 0 rows; granted 0 deadlock 0 fault_net 0 cancelled 0; waited_us sum 0 p50 0 max 0; by core {}
+   unit       mode outcome      rows      sum_us   p50_us    max_us   mean_us
+   holder_trx top: []; distinct holders 0; waiters with no trx 0
+-- sys.lock_waits since baseline: 0 rows; granted 0 deadlock 0 fault_net 0 cancelled 0; waited_us sum 0 p50 0 max 0; by core {}
+   unit       mode outcome      rows      sum_us   p50_us    max_us   mean_us
+   holder_trx top: []; distinct holders 0; waiters with no trx 0
+-- sys.wait_stats (since boot): DB time 337619759 us (cpu.on_cpu 43594374 us); app.lock_wait count 0 total 0 us max 0 us; share of DB time 0.0, of CPU 0.0, of statement time 0.0; app.lock_conflict 0
+   DB time parts: commit.wal_flush 287005872, cpu.on_cpu 43594374, sched.run_queue 5605865, sysio.wal_write 1217669, sysio.checkpoint 195979
+   core 0: DB 82840356 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 1: DB 88143175 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 2: DB 83591140 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 3: DB 83045081 us, lock_wait 0x 0 us share 0.0, conflicts 0
+-- sys.wait_stats delta since baseline: DB time 337612691 us (cpu.on_cpu 43594155 us); app.lock_wait count 0 total 0 us max - us; share of DB time 0.0, of CPU 0.0, of statement time 0.0; app.lock_conflict 0
+   DB time parts: commit.wal_flush 287005872, cpu.on_cpu 43594155, sched.run_queue 5599016, sysio.wal_write 1217669, sysio.checkpoint 195979
+-- sys.statement_stats (since boot): 19 shapes, 1826431 calls, 0 refused, 328154917 us
+   COMMIT       302697 calls      0 refused     284003687 us max 286793
+   INSERT       614376 calls      0 refused      25926637 us max 161138
+   UPDATE       605394 calls      0 refused      16740086 us max 6216
+   BEGIN        302697 calls      0 refused       1061171 us max 2588
+   SELECT         1260 calls      0 refused        414233 us max 997
+   SYNC              1 calls      0 refused          5379 us max 5379
+   CREATE            5 calls      0 refused          3433 us max 851
+   SHOW              1 calls      0 refused           291 us max 291
+   delta since baseline: 1826427 calls, 0 refused, 328154572 us; COMMIT 302697x/284003687us, INSERT 614376x/25926637us, UPDATE 605394x/16740086us, BEGIN 302697x/1061171us, SELECT 1256x/413888us, SYNC 1x/5379us
+-- sys.meta: lock_waits_recorded=0, lock_waits_overwritten=0, lock_waits_dropped=0, contention_lock_partition_waits=136380, contention_lock_partition_wait_us=206403, contention_lock_wait_for_waits=0, contention_lock_wait_for_wait_us=0, contention_fence_walks=0, contention_inflight_asks=0, contention_inflight_misses=0, contention_inflight_miss_ids_read=0, contention_structural_reruns=2, statement_stats_dropped=0
+   lock latches: contention_lock_partition_wait_us=206403, contention_lock_partition_waits=136380, contention_lock_wait_for_wait_us=0, contention_lock_wait_for_waits=0, contention_superblock_wait_us=1, contention_superblock_waits=1, contention_wal_roll_blocked_wait_us=31151, contention_wal_roll_blocked_waits=14
+   per core: load_c0_waited_lock_partition_us=52753, load_c1_waited_lock_partition_us=52975, load_c2_waited_lock_partition_us=51613, load_c3_waited_lock_partition_us=49062
+   delta since baseline: contention_assertion_dir_wait_us=26, contention_assertion_dir_waits=24, contention_carve_longest_us=209820, contention_carves=132, contention_catalog_memo_drops=17, contention_checkpoint_longest_us=313383, contention_checkpoint_pages_written=16890, contention_checkpoint_runs=51, contention_data_syncs=405, contention_drain_passes_pending=1901252, contention_frame_table_wait_us=2518753, contention_frame_table_waits=2488322, contention_free_map_wait_us=1077, contention_free_map_waits=1373, contention_lock_partition_wait_us=206403, contention_lock_partition_waits=136380, contention_page_latch_spin_turns=10390869, contention_page_latch_waits=144051, contention_refused_btree_descend=2, contention_structural_reruns=2, contention_syncs_inline=16, contention_syncs_writer=110298, contention_visibility_window_lookups=3633864, contention_wal_drain_latch_wait_us=33963, contention_wal_roll_blocked_wait_us=31151, contention_wal_roll_blocked_waits=14, contention_wal_stream_wait_us=110372, contention_wal_stream_waits=80264, contention_wal_sync_gate_wait_us=22149, contention_wal_sync_gate_waits=24, contention_window_wait_us=2579416, contention_window_waits=42251, contention_word_moves_resolve=10, contention_word_moves_root=6, contention_word_moves_schema=38
+-- sys.ash (whole ring): 3683 samples over 65.5 s; grid points per core {0: 527, 1: 607, 2: 535, 3: 537}; implied interval ms {1: 108.1, 0: 115.4, 2: 112.2, 3: 111.8}; late 1; by state {'RUNNABLE': 882, 'WAITING': 2801}; by kind {'session': 3667, 'background': 16}
+   commit.wal_flush                2798
+   cpu.on_cpu                       882
+   sysio.wal_write                    3
+   app.lock_wait samples 0 (0.0); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
+-- sys.ash (whole ring) [concurrent window: 61 bins of 1.0 s with >= 2 sessions, max 14 in a bin, 51 rows outside]: 3632 samples over 60.4 s; grid points per core {0: 526, 1: 557, 2: 535, 3: 537}; implied interval ms {1: 108.6, 2: 112.2, 3: 111.8, 0: 113.7}; late 1; by state {'WAITING': 2760, 'RUNNABLE': 872}; by kind {'session': 3617, 'background': 15}
+   commit.wal_flush                2757
+   cpu.on_cpu                       872
+   sysio.wal_write                    3
+   app.lock_wait samples 0 (0.0); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
+-- sys.ash since baseline: 3683 samples over 65.5 s; grid points per core {0: 527, 1: 607, 2: 535, 3: 537}; implied interval ms {1: 108.1, 0: 115.4, 2: 112.2, 3: 111.8}; late 1; by state {'RUNNABLE': 882, 'WAITING': 2801}; by kind {'session': 3667, 'background': 16}
+   commit.wal_flush                2798
+   cpu.on_cpu                       882
+   sysio.wal_write                    3
+   app.lock_wait samples 0 (0.0); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
+-- sys.ash since baseline [concurrent window: 61 bins of 1.0 s with >= 2 sessions, max 14 in a bin, 51 rows outside]: 3632 samples over 60.4 s; grid points per core {0: 526, 1: 557, 2: 535, 3: 537}; implied interval ms {1: 108.6, 2: 112.2, 3: 111.8, 0: 113.7}; late 1; by state {'WAITING': 2760, 'RUNNABLE': 872}; by kind {'session': 3617, 'background': 15}
+   commit.wal_flush                2757
+   cpu.on_cpu                       872
+   sysio.wal_write                    3
+   app.lock_wait samples 0 (0.0); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
