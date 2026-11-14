@@ -1128,7 +1128,7 @@ engine defect was found in either review.
 | G1 | **fixed**: `WalStream::Open` syncs the device before `durable_lsn()` claims what it scanned; a writable `FileLogDevice` open also fsyncs its directory (a review finding next to G1) | `cbe61e87`, the directory sync in the review commit | `ReopenSyncsWhatItScannedBeforeClaimingItDurable`, `ARefusedSyncRefusesTheReopen` - both fail with the sync removed `[measured]` |
 | G2 | **fixed**: the var-heap walk's 2^20-page budget replaced by Brent's cycle check; a legal chain is bounded only by the page-id space | `cbe61e87` | `ACycleInTheLinksIsRefusedFromTheRootAndFromAHint` pins the guard; a chain past 2^20 pages cannot be built in a cell, so the defect itself has none |
 | G3 | **fixed**: `InsertDeclaration` logs each spill at its append (G3-D (a)); `LogChainInsert` lost its spills | `cbe61e87` | `TransitionCatalogTest.ASpillBeforeARefusedPlacementIsStillLogged` - fails with the on-append log removed `[measured]` |
-| G4 | **fixed** (G4-D (a), `[quiet-wrong]`): the open zeroes an unsealed tail from one record header past the scan's end; the scrub writes only non-zero spans | `cbe61e87`, narrowed in the review commit | `AnIntactRecordAboveAHoleIsNeverReadBackIntoTheStream` - fails with the scrub removed `[measured]` |
+| G4 | **fixed** (G4-D (a), `[quiet-wrong]`): the open zeroes an unsealed tail from one record header past the scan's end; the scrub writes only the blocks from the first non-zero one to the last, out of the scan's own buffer | `cbe61e87`; narrowed at `713a84d0`; the close's mount regression remedied at `7c2dec3b` | `AnIntactRecordAboveAHoleIsNeverReadBackIntoTheStream` - fails with the scrub removed `[measured]` |
 | G5 | **fixed**: `WalStats::batched_commits` is the mean's numerator | `cbe61e87` | `TheBatchMeanCountsStagedStrictCommitsAsMembers` - fails with the count removed `[measured]` |
 | G6 | **removed**: the queueing ask whole, `already_held` with it (G6-D (a)); the cells ask through `TryAcquire` | `41a48732` | `ARefusedTransactionTakesItsQueuedRequestWithIt` deleted (queue-only) |
 | G7, G8 | **removed** | `41a48732` | - |
@@ -1143,8 +1143,8 @@ engine defect was found in either review.
 **What bounds that.** The cells shown failing were run against the tree with
 the fix taken out by hand, not against `2789a457`. G2's own failure, a chain
 past 8 GiB refused after a restart, has no reproduction; the first spilling
-write after a mount still walks its chain from the root. The scrub re-reads
-the last segment once more at every mount. The full suite and the overhead
+write after a mount still walks its chain from the root. Since `7c2dec3b` the scrub
+tests the scan's own buffer and reads nothing twice. The full suite and the overhead
 measurement are in the milestone's close report, not here. Two cuts the
 reviews proposed were not taken and are not owed: folding `AcquireInner`
 into `TryAcquire`, and the forward declaration in `row_compensation.hpp`.

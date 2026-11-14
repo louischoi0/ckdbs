@@ -33,7 +33,7 @@ StatusOr<SegmentHeaderFields> ValidateSegmentHeader(std::span<const std::byte> h
 }
 
 StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from_lsn,
-                              const RecordVisitor& visit, const TailVisitor* tail) {
+                              const RecordVisitor& visit, const TailVisitor& tail) {
     const std::uint64_t segment_size = device.segment_size();
     const std::uint64_t first_segment = device.first_segment();
     const std::uint64_t end_segment = device.end_segment();
@@ -177,12 +177,10 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
                 segment_size - consumed < kRecordHeaderSize && segment_no + 1 < end_segment;
             if (!sealed_by_exhaustion) {
                 out.stopped_early = reader.stopped_early();
-                if (tail != nullptr) {
-                    const auto at =
-                        static_cast<std::size_t>(out.end_lsn - start_lsn - body_offset);
-                    if (Status s = (*tail)(segment_no, consumed, body.subspan(at)); !s.ok()) {
-                        return s;
-                    }
+                if (tail) {
+                    const auto past_end =
+                        body.subspan(static_cast<std::size_t>(consumed - body_offset));
+                    if (Status s = tail(segment_no, consumed, past_end); !s.ok()) return s;
                 }
                 return out;
             }
@@ -205,7 +203,7 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
 }
 
 StatusOr<ScanOutcome> ScanLogToEnd(LogDevice& device, std::uint32_t core_id, Lsn from_lsn,
-                                   const TailVisitor* tail) {
+                                   const TailVisitor& tail) {
     // One implementation, per the header's promise: this is ScanLog with a
     // visitor that accepts everything, not a second walk.
     static const RecordVisitor kAcceptAll = [](const DecodedRecord&) { return Status::OK(); };

@@ -420,7 +420,8 @@ private:
     StatusOr<Lsn> AppendLocked(const RecordSpec& spec, std::span<const std::byte> payload,
                                RollRecord* rolled);
     // Walks segment `segment_no` forward and leaves append_lsn_ at its
-    // durable end, or seals it if a PAD marker is found. Open() only.
+    // durable end, or seals it if a PAD marker is found, scrubbing an
+    // unsealed tail (`ScrubTail`). Open() only.
     Status ScanTail(std::uint64_t segment_no);
     // Zeroes an unsealed segment's bytes from one record header past the
     // scan's end to the segment's end: `past_end` is the scan's own buffer

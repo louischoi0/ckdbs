@@ -127,13 +127,13 @@ using TailVisitor =
     std::function<Status(std::uint64_t segment_no, std::uint64_t offset,
                          std::span<const std::byte> past_end)>;
 StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from_lsn,
-                              const RecordVisitor& visit, const TailVisitor* tail = nullptr);
+                              const RecordVisitor& visit, const TailVisitor& tail = {});
 
 // The same walk with no visitor, for the caller that wants only the end:
 // WalStream::Open's resume, and recovery's "is there anything here at all"
 // probe. Equivalent to ScanLog with a visitor that accepts everything, and
 // implemented as exactly that so the two cannot disagree.
 StatusOr<ScanOutcome> ScanLogToEnd(LogDevice& device, std::uint32_t core_id, Lsn from_lsn,
-                                   const TailVisitor* tail = nullptr);
+                                   const TailVisitor& tail = {});
 
 }  // namespace kds::wal

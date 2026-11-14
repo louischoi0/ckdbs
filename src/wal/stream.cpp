@@ -200,12 +200,11 @@ Status WalStream::ScanTail(std::uint64_t segment_no) {
     // a second walk of its own: the append path and the replay path must not
     // find two ends of one log (`log_scanner.hpp`). An unsealed end's tail is
     // scrubbed from the bytes the scan already holds.
-    const TailVisitor scrub = [this](std::uint64_t segment, std::uint64_t offset,
-                                     std::span<const std::byte> past_end) {
-        return ScrubTail(segment, offset, past_end);
-    };
-    auto scanned = ScanLogToEnd(*device_, core_id_,
-                                segment_no * segment_size_ + kSegmentHeaderSize, &scrub);
+    auto scanned = ScanLogToEnd(
+        *device_, core_id_, segment_no * segment_size_ + kSegmentHeaderSize,
+        [this](std::uint64_t segment, std::uint64_t offset, std::span<const std::byte> past_end) {
+            return ScrubTail(segment, offset, past_end);
+        });
     if (!scanned.ok()) {
         return scanned.status();
     }
@@ -247,19 +246,16 @@ Status WalStream::ScrubTail(std::uint64_t segment_no, std::uint64_t offset,
         const std::size_t n = std::min(kBlock, scrub.size() - at);
         return std::memcmp(scrub.data() + at, kZeroBlock.data(), n) == 0;
     };
+    // The first and last blocks holding a non-zero byte, by their starts.
     std::size_t first = scrub.size();
+    std::size_t last = 0;
     for (std::size_t at = 0; at < scrub.size(); at += kBlock) {
-        if (!block_is_zero(at)) {
-            first = at;
-            break;
-        }
+        if (block_is_zero(at)) continue;
+        if (first == scrub.size()) first = at;
+        last = at;
     }
     if (first == scrub.size()) {
         return Status::OK();
-    }
-    std::size_t last = first;  // the start of the last non-zero block
-    for (std::size_t at = first; at < scrub.size(); at += kBlock) {
-        if (!block_is_zero(at)) last = at;
     }
     const std::size_t stop = std::min(scrub.size(), last + kBlock);
     for (std::size_t at = first; at < stop; at += kBlock) {
