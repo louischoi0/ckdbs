@@ -789,6 +789,23 @@ TEST_F(ExpeditorTest, StartIsRefusedTwiceAndTheRunHalfIsRefusedWithoutIt) {
     EXPECT_NE(again.message().find("already started"), std::string::npos) << again.message();
 }
 
+// `Start()` promises a refused start leaves nothing running. The data-sync
+// thread is started ahead of every refusal past the already-started check,
+// so it is the one thread a refusal has to take back. Refused here by the
+// text listener's port, which the default listener has just bound.
+TEST_F(ExpeditorTest, ARefusedStartLeavesNoDataSyncThread) {
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.debug_text_port = config.port;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_FALSE(db.store().data_sync().running());
+
+    const Status refused = db.Start();
+    ASSERT_FALSE(refused.ok()) << "two listeners bound one port";
+    EXPECT_FALSE(db.store().data_sync().running()) << refused.message();
+}
+
 TEST_F(ExpeditorTest, APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt) {
     // **M0's segfault, reproduced through the assembly it lives in**
     // (AL-7c). The first run leaves a peer-owned relation with an assertion

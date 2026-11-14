@@ -366,6 +366,10 @@ std::string ErrorReply(const Status& status);
 // later that can lead with free text breaks it silently.
 Status StatusFromErrorReply(std::string_view reply);
 
+// What an outcome refused with: the `Status` it carries where there is one,
+// else the code its line folds back to. OK for an outcome that is no refusal.
+Status OutcomeStatus(const DispatchOutcome& outcome);
+
 // **The deadlock victim's refusal, one sentence for both sites** (AO-R7):
 // the dispatcher loop and the owner-side arm. `TxnConflict`, the one
 // retryable code - the survivor will have released by the time this one
@@ -1733,6 +1737,10 @@ private:
     // and its walks, at the statement's snapshot.
     class LayerHostImpl;
 
+    // What UPDATE's and DELETE's row walks share: a row's first stage, its
+    // claim, the collection pass and the park (command_dispatcher.cpp).
+    class WriteWalk;
+
     // **The query layer's door** (BU-S4, BU-Q9): `line` as the query
     // grammar reads it, run by `exec::RunQuery` at `snap`, its reply emitted
     // through the session's sink. nullopt when the query grammar refuses
@@ -2183,6 +2191,10 @@ private:
     // dropping its entry would break the superset invariant. The surplus is
     // subtracted at read time, which now includes the visibility predicate.
     DispatchOutcome HandleDelete(std::string_view line, Session& session);
+    // The frame UPDATE and DELETE share: open the write scope and take the
+    // snapshot, or re-enter the ones a mid-walk park left on the session
+    // (AO-S3b); run the walk; park again, or finish through `FinishWrite`.
+    DispatchOutcome RunWalkWrite(std::string_view line, Session& session, bool is_delete);
     // `PURGE FROM t WHERE <tuple key window>` (BH): one whole attempt - judge the
     // window, then write it key by key - under an owned transaction of its
     // own, so each re-drive after a wait begins with a fresh view (BH-R5)
