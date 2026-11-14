@@ -142,8 +142,12 @@ Built, and what each gets:
   names, and a column's cabin). **A `CABIN` column's Cabin is a row of
   the `CREATE TABLE`**: its `sys.cabins` row carries the transaction's id
   and is on its trail, so `ROLLBACK` and the mount's undo of a loser
-  retire it with the relation (`cabin.md` §8.1). The `sys.fkeys` rows a
-  `REFERENCES` clause writes are not on the trail, and stay (below).
+  retire it with the relation (`cabin.md` §8.1). **So are the `sys.fkeys`
+  rows a `REFERENCES` clause writes, since the audit's G20** (on the
+  operator's word of 2026-11-14): each carries the transaction's id and is on
+  its trail, and goes with the relation. Kept by a `ROLLBACK` while a
+  crash's undo retired it, the row named a child that no longer existed, and
+  every `DELETE` and `DROP TABLE` of the parent was refused for good.
 - **`DROP TABLE`** — **atomic only**, and deliberately not isolated;
   §5a is the whole argument. Every production drop delete-marks its
   dependent rows, autocommit's implicit transaction included; a drop at
@@ -172,7 +176,9 @@ Built, and what each gets:
   commits immediately.
 
 **Not transactional:** `ALTER TABLE`'s renames, `CREATE CABIN` and
-`DROP CABIN`, assertions and foreign keys.
+`DROP CABIN`, and assertions. (A foreign key exists only as a `CREATE
+TABLE ... REFERENCES` clause, and is that statement's, above; there is no
+statement that adds or drops one alone.)
 Their catalog writes are logged and durable (§7) but not undone by
 `ROLLBACK`. **The renames still take the relation `X`** (the operator's
 ruling of 2026-10-21, `alter.md` AL4a), under §5f's holder - a transaction

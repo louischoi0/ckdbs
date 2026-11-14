@@ -233,6 +233,17 @@ public:
             ~(kRecordAlignment - 1);
         return whole - kRecordHeaderSize;
     }
+    // **The payload a record a caller chunks its own data into may hold**:
+    // the smaller of `usable_payload_bytes()` and the largest split's (the
+    // audit's G17). On the one shared stream a ring-sized record fits only an
+    // empty ring, and every other core refills the ring a drain empties, so
+    // its append exhausts its drains and fail-stops the instance's log; a
+    // record of at most `kLargestSplitRecord` is what `kMinRingCapacity` is
+    // sized to stage beside the others. `CHECKPOINT_BEGIN`'s dirty table and
+    // the assertion snapshot run cut against it.
+    std::size_t shared_record_payload_bytes() const noexcept {
+        return std::min(usable_payload_bytes(), kLargestSplitRecord - kRecordHeaderSize);
+    }
     const WalStats& stats() const noexcept { return stats_; }
 
     // Where the next record goes; every byte below it has been appended.

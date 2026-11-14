@@ -1483,6 +1483,39 @@ TEST(BtreeTest, ANonLeafReachedThroughASiblingLinkIsReported) {
     EXPECT_EQ(s.code(), StatusCode::kCorruption);
 }
 
+TEST(BtreeTest, ALeafChainThatLinksBackIntoItselfIsCorruptionNotAHang) {
+    // The leaf walks' bound is a cycle check, not a 2^20-page budget a
+    // relation past 8 GiB of leaves met on every whole walk (the audit's
+    // G19): the last leaf linked back to the second is refused, by the visit
+    // and by the count alike.
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    for (std::uint64_t id = 1; id <= 4; ++id) ASSERT_TRUE(tree.Insert(id, kOnePerLeafFiller).ok());
+    auto first = BtreeLeftmostLeaf(store, tree.root);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    std::vector<PageId> leaves;
+    for (PageId at = first.value(); at != kInvalidPageId;) {
+        leaves.push_back(at);
+        at = heap::PageView(store.GetForRead(at).value().bytes()).next_page_id();
+    }
+    ASSERT_GE(leaves.size(), 3u) << "the fixture must span leaves to prove anything";
+    auto last = store.Get(leaves.back());
+    ASSERT_TRUE(last.ok()) << last.status().message();
+    heap::PageView(last.value().bytes()).set_next_page_id(leaves[1]);
+    last.value().Release();
+
+    Status s = BtreeVisit(
+        store, tree.root, storage::PageAccess::kRead,
+        [](PageId, heap::PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            return storage::VisitControl::kContinue;
+        });
+    EXPECT_EQ(s.code(), StatusCode::kCorruption) << s.message();
+    EXPECT_NE(s.message().find("revisits"), std::string::npos) << s.message();
+    auto count = BtreeLeafCount(store, tree.root);
+    ASSERT_FALSE(count.ok());
+    EXPECT_EQ(count.status().code(), StatusCode::kCorruption);
+}
+
 // ---- InternalView --------------------------------------------------------
 
 TEST(InternalViewTest, ALevelZeroNodeIsRefusedBecauseThatIsALeaf) {

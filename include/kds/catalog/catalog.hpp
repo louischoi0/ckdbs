@@ -1155,8 +1155,18 @@ public:
     // **Bumps the catalog version**, and reaches further than its arguments:
     // the parent's cached `fkeys_in` is stale too. Not to be called from a
     // statement path holding a `const TableAccess*`.
+    //
+    // **The row is the creating DDL's** when `trx_id` and `where` name it
+    // (the audit's G20, `ddl-transactional.md` §5): stamped with the
+    // transaction, reported through `where` - set on a failure too, since a
+    // row logged before it is still the rollback's - for the caller to note
+    // on the trail, and so retired by a `ROLLBACK` as by the mount's undo of
+    // a loser. The defaults, `kBootstrapXid` and no report, are a write no
+    // transaction owns.
     StatusOr<std::uint64_t> CreateForeignKey(Oid child_rel_oid, std::uint16_t child_column_no,
-                                             Oid parent_rel_oid, std::uint16_t flags = 0);
+                                             Oid parent_rel_oid, std::uint16_t flags = 0,
+                                             std::uint64_t trx_id = kBootstrapXid,
+                                             CatalogRowRef* where = nullptr);
 
     // Every sys.fkeys row, in page order. The inspection surface behind
     // `SHOW FKEYS`, and what InitTableAccess() builds both per-relation

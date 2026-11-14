@@ -479,11 +479,9 @@ StatusOr<std::uint64_t> HighWaterKey(catalog::Catalog& catalog, storage::PageSto
     if (!leaf.ok()) return leaf.status();
     PageId at = leaf.value();
     std::uint64_t high = 0;
-    for (std::uint32_t walked = 0; at != kInvalidPageId; ++walked) {
-        if (Status s = storage::CheckPageWalkBudget(walked, leaf.value(), "relation leaf chain");
-            !s.ok()) {
-            return s;
-        }
+    storage::LeafChainGuard guard(at, "relation leaf chain");
+    while (at != kInvalidPageId) {
+        if (Status s = guard.Visit(at); !s.ok()) return s;
         auto bytes = store.GetForRead(at);
         if (!bytes.ok()) return bytes.status();
         heap::PageView page(bytes.value().bytes());

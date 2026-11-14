@@ -519,6 +519,51 @@ TEST_F(RecoveryUndoTest, AChainThatDoesNotTerminateIsCorruptionRatherThanAHang) 
 }
 
 
+TEST_F(RecoveryUndoTest, ACycleOfTwoRecordsIsCorruption) {
+    // A -> B -> A: no record links to itself, so only a check that remembers
+    // more than the last step can see it (the audit's G16).
+    const std::uint64_t a = Record(UndoRecordType::kInsert, /*slot=*/5, 1, kNoUndoPtr);
+    const std::uint64_t b = Record(UndoRecordType::kInsert, /*slot=*/6, 2, a);
+    auto first = undo_.Read(a);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    UndoRecordFields rec{};
+    rec.prior_trx_id = 5;
+    rec.prior_undo_ptr = kNoUndoPtr;
+    rec.target_page_id = kHeapPage;
+    rec.target_slot = 5;
+    rec.type = static_cast<std::uint8_t>(UndoRecordType::kInsert);
+    rec.tuple_key = 1;
+    rec.txn_prev_undo_ptr = b;
+    auto landed = store_.Get(UndoPtrPageId(a));
+    ASSERT_TRUE(landed.ok()) << landed.status().message();
+    ASSERT_TRUE(UndoPageWriteAt(landed.value().bytes(), UndoPtrOffset(a), rec, {}).ok());
+
+    RecoveryUndo undo(undo_);
+    auto s = undo.RollBack(store_, Losing(b));
+    ASSERT_FALSE(s.ok());
+    EXPECT_EQ(s.code(), StatusCode::kCorruption) << s.message();
+}
+
+TEST_F(RecoveryUndoTest, ALongAcyclicChainIsRolledBackWhole) {
+    // A loser's chain is bounded by its cycle check, not a length: the live
+    // `Abort` rolls back a trail of any length, and a budget refused a
+    // statement over 2^20 rows at every mount after a crash (G16). The
+    // records are inserts whose slots redo never placed - each compensates
+    // as already done, so the chain is long and cheap, and spans many undo
+    // pages - past 2^20, the budget that refused it.
+    constexpr std::uint64_t kRecords = (std::uint64_t{1} << 20) + 1;
+    std::uint64_t head = kNoUndoPtr;
+    for (std::uint64_t i = 0; i < kRecords; ++i) {
+        head = Record(UndoRecordType::kInsert, /*slot=*/9, 1000 + i, head);
+        ASSERT_NE(head, kNoUndoPtr);
+    }
+    RecoveryUndo undo(undo_);
+    const Status s = undo.RollBack(store_, Losing(head));
+    ASSERT_TRUE(s.ok()) << s.message();
+    EXPECT_EQ(undo.already_done(), kRecords);
+    EXPECT_EQ(undo.transactions(), 1u);
+}
+
 // ---- BD-S1: a loser's row a shift or a divide moved (BD-R3 E1, BD-Q8) ------
 //
 // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md` §1.2. Under

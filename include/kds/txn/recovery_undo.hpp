@@ -71,14 +71,15 @@
 // `TXN_ABORT` is what ends the loop for good: once it is durable, analysis
 // classifies the transaction `kAborted` and undo is never asked again.
 //
+// **A loser's chain is walked whole, however long** (the audit's G16): a
+// cycle in a damaged chain is Corruption, found by `CycleGuard`, and an
+// acyclic chain of any length is rolled back, as the live `Abort` rolls back
+// a trail of any length. A step budget refused a statement over 2^20 rows at
+// every mount after a crash.
+//
 // Concurrency: core-local, like everything it touches.
 
 namespace kds::txn {
-
-// Chain steps before the walk gives up. The same bound and the same
-// reasoning as `kMaxUndoChainLength` on the version chain: a cycle in a
-// damaged chain must be a reported Corruption and never a hang.
-inline constexpr std::size_t kMaxUndoTxnChainLength = 1u << 20;
 
 class RecoveryUndo final : public wal::UndoPhase {
 public:

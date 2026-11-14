@@ -549,6 +549,54 @@ TEST(MapWriteOrderTest, AHeaderlessBitWhoseFreeBitWasLostIsClearedAtMount) {
     EXPECT_EQ(got.value().bytes()[kPageBodyOffset], std::byte{7});
 }
 
+TEST(MapWriteOrderTest, ARegionReCreatedOverADurableHeaderlessMapClearsIt) {
+    // The cut the cell above cannot reach (the audit's G18): a region whose
+    // *first* flush lost its free-map write after the headerless map's sync.
+    // Its free-map page reads as zeroes, so the next mount finds no region,
+    // and the region's re-creation must not leave the device's headerless
+    // bits to be loaded beside the free bits it then sets.
+    const PageId base = FreeMapRegionBase(1);
+    const PageId headerless_id = HeaderlessMapPageIdFor(base);
+    const PageId first_id = base + 2;  // the region's first id past its two maps
+    constexpr PageId kStaleIds = 16;  // the stale bits: every id the cell can be issued
+    auto created = MemoryPageDevice::Create(/*extent_pages=*/64, first_id + 64);
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    auto device = std::move(created.value());
+    {
+        Page stale{};
+        const auto view = std::span<std::byte, kPageSize>(stale);
+        FormatFreeMapPage(view, PageType::kHeaderlessMap);
+        FreeMapAllocate(view, FreeMapBitIndexOf(headerless_id));
+        for (PageId id = first_id; id < first_id + kStaleIds; ++id) {
+            FreeMapAllocate(view, FreeMapBitIndexOf(id));
+        }
+        StampPageChecksum(view);
+        ASSERT_TRUE(
+            device->WritePage(headerless_id, std::span<const std::byte, kPageSize>(stale)).ok());
+        ASSERT_TRUE(device->Sync().ok());
+    }
+    PageId reissued = kInvalidPageId;
+    {
+        auto opened = DevicePageStore::Open(*device, FrameCapacity{4096}, first_id);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        auto& store = *opened.value();
+        reissued = MakeHeadered(store, 9);
+        ASSERT_GE(reissued, first_id);
+        ASSERT_LT(reissued, first_id + kStaleIds) << "the cell's stale bits miss the issued id";
+        EXPECT_FALSE(store.IsHeaderless(reissued));
+        ASSERT_TRUE(store.Sync().ok());
+    }
+    auto opened = DevicePageStore::Open(*device, FrameCapacity{4096}, first_id);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    auto& store = *opened.value();
+    EXPECT_FALSE(store.IsHeaderless(reissued))
+        << "the stale headerless bit was loaded beside the re-created region's free bit";
+    EXPECT_FALSE(BitSet(DeviceImage(*device, headerless_id), reissued));
+    auto got = store.GetForRead(reissued);
+    ASSERT_TRUE(got.ok()) << got.status().message();
+    EXPECT_EQ(got.value().bytes()[kPageBodyOffset], std::byte{9});
+}
+
 TEST(MapWriteOrderTest, AClaimGivenBackAfterItsFreeBitLandedIsNeverAHeaderlessId) {
     // A split claims ids ahead (`PageClaims`) and gives back what it did not
     // use. Above one core another core's flush can copy the region while

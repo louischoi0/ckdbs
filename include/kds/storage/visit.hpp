@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 
+#include "kds/base/cycle_guard.hpp"
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
 
@@ -47,11 +48,13 @@ inline StatusOr<VisitControl> ResolveVisit(StatusOr<VisitControl> outcome, const
     return outcome;
 }
 
-// The most hops any next-page walk may take from one origin. Far above any
-// real relation (2^20 pages = 8 GiB at 8 KiB each); what it bounds is a
-// cyclic or corrupt link, which without it is an infinite loop inside a
-// statement. heap::kMaxChainPages aliases this - the heap chain named the
-// rule first, but it was never heap-specific.
+// The most hops a **catalog or heap chain** walk may take from one origin
+// (`catalog.md`, `heap-and-tuple.md` §3): 2^20 pages, 8 GiB at 8 KiB each,
+// a budget no system relation nears. What it bounds is a cyclic or corrupt
+// link, which without it is an infinite loop inside a statement.
+// heap::kMaxChainPages aliases this. **A user relation's or an index's leaf
+// chain is not bounded by it** - it grows with the data past any budget -
+// but by `LeafChainGuard` below (the audit's G19).
 inline constexpr std::uint32_t kMaxPageWalkLength = 1u << 20;
 
 // The guard itself, shared for ResolveVisit's reason: every loop that
@@ -65,5 +68,39 @@ inline Status CheckPageWalkBudget(std::uint32_t pages_visited, PageId origin, co
                               " exceeds " + std::to_string(kMaxPageWalkLength) +
                               " pages; the page links are cyclic or corrupt");
 }
+
+// **The bound of a leaf-chain walk**: a btree's or an index's leaves, from
+// any leaf rightward. A cycle check (`CycleGuard`), never a length, because
+// a relation's leaf chain is as long as its data - a budget refused every
+// whole walk of a relation past 8 GiB of leaves as `Corruption` (the audit's
+// G19). Sound because no legal walk revisits a leaf: a live tree never
+// frees one (a drop or a rebuild waits out every walk that could bind it),
+// a split keeps a leaf's id and links the new page after it, and a sliced
+// walk that yields between leaves resumes at an id it has not visited.
+//
+// Call `Visit` with each page the walk is about to read, its origin first.
+class LeafChainGuard {
+public:
+    LeafChainGuard() noexcept : LeafChainGuard(kInvalidPageId, "leaf chain") {}
+    LeafChainGuard(PageId origin, const char* what) noexcept
+        : origin_(origin), what_(what), cycle_(origin) {}
+
+    Status Visit(PageId page) {
+        if (first_) {
+            first_ = false;
+            return Status::OK();
+        }
+        if (!cycle_.Revisits(page)) return Status::OK();
+        return Status::Corruption(std::string(what_) + " from page " + std::to_string(origin_) +
+                                  " revisits page " + std::to_string(page) +
+                                  "; the page links are cyclic or corrupt");
+    }
+
+private:
+    PageId origin_;
+    const char* what_;
+    CycleGuard<PageId> cycle_;
+    bool first_ = true;
+};
 
 }  // namespace kds::storage

@@ -3,6 +3,8 @@
 #include <cstring>
 #include <string>
 
+#include "kds/base/cycle_guard.hpp"
+
 // rules.md #2: all access to on-disk page bytes goes through field-wise
 // memcpy helpers; reinterpret_cast of struct types onto page buffers is
 // forbidden. Every read/write below copies one field at a time through an
@@ -13,35 +15,13 @@ namespace kds::varheap {
 
 namespace {
 
-// The cycle guard of ChainAppend's and ChainLength's walks, **never a length
-// limit**: a var-heap chain only grows, and the tail hint lets it grow past
-// any walk budget, so a chain longer than a budget would be refused at the
-// first walk from its root (after a restart, or a hint slot another root
-// took) and every spilling write to its relation with it. Brent's check
-// instead: the page reached at each power-of-two step is remembered, and
-// meeting it again is a cycle, found within about three times its length -
-// so every cycle is refused and a legal chain is bounded only by the
-// page-id space it lives in.
-class CycleGuard {
-public:
-    explicit CycleGuard(PageId start) noexcept : mark_(start) {}
-
-    // True when the hop to `next` meets the remembered page: a cycle.
-    bool Revisits(PageId next) noexcept {
-        if (next == mark_) return true;
-        if (++lap_ == power_) {
-            mark_ = next;
-            power_ <<= 1;
-            lap_ = 0;
-        }
-        return false;
-    }
-
-private:
-    PageId mark_;
-    std::uint64_t lap_ = 0;
-    std::uint64_t power_ = 1;
-};
+// ChainAppend's and ChainLength's walks are bounded by `CycleGuard`
+// (`base/cycle_guard.hpp`), never by a length: a var-heap chain only grows,
+// and the tail hint lets it grow past any walk budget, which a budget would
+// refuse at the first walk from its root after a restart (the audit's G2).
+// A chain grows only at its tail and never relinks a page, so no legal walk
+// revisits one.
+using CycleGuard = kds::CycleGuard<PageId>;
 
 Status CycleRefusal(PageId root) {
     return Status::Corruption("var-heap chain from page " + std::to_string(root) +

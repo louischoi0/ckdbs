@@ -2022,12 +2022,11 @@ private:
         const bool outermost = index == 0 && parent_ == nullptr;
         const storage::PageAccess walk_access =
             outermost ? storage::PageAccess::kScan : storage::PageAccess::kRead;
-        const PageId walk_origin = cur;
-        for (std::uint32_t pages = 0;; ++pages) {
-            if (Status s = storage::CheckPageWalkBudget(pages, walk_origin, "relation walk");
-                !s.ok()) {
-                co_return s;
-            }
+        // Across the slice boundaries below too: the guard is the whole
+        // walk's, and a yield resumes at a leaf the walk has not visited.
+        storage::LeafChainGuard guard(cur, "relation walk");
+        for (;;) {
+            if (Status s = guard.Visit(cur); !s.ok()) co_return s;
             // Per page, not once per walk: the VM makes these fetches
             // itself now, so R1's guard gets to see each one.
             NoteFetch();

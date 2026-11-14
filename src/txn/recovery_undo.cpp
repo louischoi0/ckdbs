@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 
+#include "kds/base/cycle_guard.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
@@ -246,15 +247,12 @@ Status RecoveryUndo::Apply(storage::PageStore& store, std::uint64_t txn_id,
 
 Status RecoveryUndo::RollBackOne(storage::PageStore& store, std::uint64_t txn_id,
                                  std::uint64_t head) {
+    // The chain is fixed under the walk: a compensation writes heap pages,
+    // never the undo page a chain record sits on, so the step from a pointer
+    // to the next is a function of the pointer and `CycleGuard` applies.
     std::uint64_t ptr = head;
-    std::size_t steps = 0;
+    CycleGuard<std::uint64_t> guard(head);
     while (ptr != kNoUndoPtr) {
-        if (++steps > kMaxUndoTxnChainLength) {
-            return Status::Corruption("undo: transaction " + std::to_string(txn_id) +
-                                      "'s chain exceeded " +
-                                      std::to_string(kMaxUndoTxnChainLength) +
-                                      " records; it does not terminate");
-        }
         auto rec = undo_.Read(ptr);
         if (!rec.ok()) {
             return rec.status().WithContext("undo: transaction " + std::to_string(txn_id) +
@@ -266,6 +264,11 @@ Status RecoveryUndo::RollBackOne(storage::PageStore& store, std::uint64_t txn_id
         // Read before the next step, because the record is copied out and
         // the page it came from may be re-fetched underneath us.
         ptr = rec.value().txn_prev_undo_ptr;
+        if (ptr != kNoUndoPtr && guard.Revisits(ptr)) {
+            return Status::Corruption("undo: transaction " + std::to_string(txn_id) +
+                                      "'s chain revisits record " + std::to_string(ptr) +
+                                      "; it does not terminate");
+        }
     }
 
     // **Last, and after every compensation.** A durable TXN_ABORT is what

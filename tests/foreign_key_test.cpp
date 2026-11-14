@@ -611,6 +611,30 @@ TEST_F(ForeignKeyCheckTest, AParentFromARolledBackTransactionIsAViolation) {
     EXPECT_EQ(out.substr(0, 16), "ERR FK_VIOLATION") << out;
 }
 
+// A rolled-back `CREATE TABLE ... REFERENCES` leaves no foreign key behind
+// (the audit's G20): its sys.fkeys row is the DDL's, on its trail, and goes
+// with the relation. Kept, it named a child that no longer exists, and every
+// DELETE and DROP of the parent was refused for good.
+TEST_F(ForeignKeyCheckTest, ARolledBackCreateTableTakesItsForeignKeyWithIt) {
+    Session ddl;
+    ASSERT_EQ(Run(ddl, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(ddl, "CREATE TABLE fills (id int64, account_id int64 REFERENCES accounts) "
+                       "BTREE")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run(ddl, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    const std::string fkeys = Run("SHOW FKEYS");
+    EXPECT_EQ(testing_view::ReadViewText(fkeys).rows.size(), 1u)
+        << "only trades' foreign key may stand: " << fkeys;
+    EXPECT_EQ(Run("DELETE FROM trades WHERE id = 1").substr(0, 7), "DELETED");
+    const std::string deleted = Run("DELETE FROM accounts WHERE id = 2");
+    EXPECT_EQ(deleted, "DELETED 1") << "the parent's DELETE met the rolled-back child";
+    EXPECT_EQ(Run("DROP TABLE trades").substr(0, 7), "DROPPED");
+    const std::string dropped = Run("DROP TABLE accounts");
+    EXPECT_EQ(dropped.substr(0, 7), "DROPPED") << dropped;
+}
+
 // ---- UPDATE of an fk column (§2, FK-M3) ----------------------------------
 
 TEST_F(ForeignKeyCheckTest, UpdatingAnFkColumnIsChecked) {

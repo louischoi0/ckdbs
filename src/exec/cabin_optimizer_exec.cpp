@@ -149,11 +149,9 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
         std::vector<std::byte> payload;
     };
 
-    for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
-        if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation chain");
-            !s.ok()) {
-            return s;
-        }
+    storage::LeafChainGuard guard(walk_origin, "relation chain");
+    while (leaf != kInvalidPageId) {
+        if (Status s = guard.Visit(leaf); !s.ok()) return s;
         // PO8, between pages: an OFF mid-build discards cleanly, because
         // nothing commits until the walk completes.
         if (!enabled()) {
