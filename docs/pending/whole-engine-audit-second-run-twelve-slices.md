@@ -2,8 +2,9 @@
 
 Status: **PENDING** - G1-G15 are fixed or applied since 2026-11-14 on the
 operator's word (section 8, `instructions/v3.2.0/raft-marks-2026-11-14.md`);
-49 findings still wait for a verifier, and 15 slices are still unread. The
-rest decides nothing, opens no stage, licenses no code.
+G16-G20 survived a verification resumed on 2026-11-14 (section 9) and wait
+for the operator's word; 44 findings still wait for a verifier, and 15 slices
+are still unread. The rest decides nothing, opens no stage, licenses no code.
 Raised: 2026-11-13, in conversation with the operator; recorded 2026-11-14.
 Read at: `0b98bc4f` (`v3.4.8-11-g0b98bc4f`), on worktree `audit-core12-slices`.
 Every `path:line` below is at that commit.
@@ -20,7 +21,8 @@ under `docs/inflight/bugs/`).
 | Findings | Outcome |
 |---|---|
 | G1 to G15 | **survived** every verifier assigned to them: five logic defects (G1-G5), five dead code (G6-G10), five duplication (G11-G15). **All fifteen taken up on 2026-11-14** (section 8) |
-| G16 to G64 | **unjudged**: at least one verifier did not return. G21 and G24 each have one of their two verdicts, and it is "survived"; the other 47 have none |
+| G16 to G20 | **survived** both verifiers of a resumed pass on 2026-11-14, read at `6a3ce231` (section 9) |
+| G21 to G64 | **unjudged**: at least one verifier did not return. G21 and G24 each have one of their two verdicts, and it is "survived"; the other 42 have none. G22 is G4's defect and G59 is G14's change, both resolved since (section 8) |
 | G65, G66 | **refuted**: G65 is already in `known-gaps.md`, G66 is not worth the change |
 
 **What bounds that.** Nothing was built, run or changed: every finder and
@@ -1106,7 +1108,8 @@ up, not a proof that the code is right.
 
 `[design]` In the order it would run:
 
-1. **The 74 verifiers that did not return**, over G16-G64. The finders'
+1. **The verifiers that did not return**, over G21-G64 (G16-G20 done,
+   section 9; G22 and G59 moot). The finders'
    results need not be read again: a resume reruns only the verifiers. Until
    then G16-G64 are not to be taken up as defects - G16 (a mount refused for
    a loser past 2^20 undo records), G17, G18, G19 and G20 are the finders'
@@ -1152,3 +1155,27 @@ baseline's spread (`results-audit-g-close-v3.4.8-20-g4cf04d4c.md`), accepted as
 G4-M (a). The full suite ran 4439/4439 at `4cf04d4c`. Two cuts the
 reviews proposed were not taken and are not owed: folding `AcquireInner`
 into `TryAcquire`, and the forward declaration in `row_compensation.hpp`.
+
+## 9. The resumed verification: G16-G20
+
+`[source-read]` On 2026-11-14 the operator asked for the verification to be
+resumed and chose the five findings their finders rated critical or high
+first. The first run's resume was the earlier session's alone, so this is a
+fresh pass by the same method: two verifiers per finding, one tracing the
+code path and one asking whether the behaviour is intended or known, each
+told to refute it and to answer "refuted" when in doubt. It ran on worktree
+`audit-g1-g15-fixes` at `6a3ce231` (`v3.4.9-1-g6a3ce231`), every cited line
+re-located there. Ten of ten returned. Nothing was built, run or changed.
+
+| Finding | Outcome | Still present at `6a3ce231` | The verifiers' refined fix | Operator's ruling needed |
+|---|---|---|---|---|
+| G16 | **survived** both, high | yes | `RecoveryUndo::RollBackOne`'s 2^20-step cap becomes a Brent cycle check, as G2's; `kMaxUndoTxnChainLength` goes. The live `Abort` already walks a trail of any length, so a statement over 2^20 rows rolls back live and is refused at the mount after a crash, at every remount | no |
+| G17 | **survived** both (high, medium) | yes | the assertion snapshot's chunks, `VisitSnapshots`' budget and the admission budget cut against `kLargestSplitRecord`, as `LogBegin` already does; a ring-sized chunk on the shared stream fits only an empty ring and fail-stops the log after its drains | yes (intent lens): the bound `assertion.md`'s AZ-S3 paragraph and `wal.md` §4.1 state changes |
+| G18 | **survived** both, medium | yes | `EnsureRegionResident`'s creation arm installs an empty headerless map when the device holds a stale one, so a region whose first free-map write a cut lost never answers a reissued id as headerless (which would skip its checksum and both WAL gates) | no; `page.md` §5's clear-on-load sentence widened |
+| G19 | **survived** both, high | yes | every user-relation and index leaf walk takes G2's cycle guard (moved to `visit.hpp`) in place of the 2^20-page budget; catalog and heap chains keep theirs, as `catalog.md` and `heap-and-tuple.md` state | no |
+| G20 | **survived** both (high, medium) | yes | `CreateForeignKey` takes the DDL's transaction id and a `CatalogRowRef`, and `CREATE TABLE ... REFERENCES` notes its `sys.fkeys` rows on the trail, as the Cabin rows already are; a `ROLLBACK` then retires them as the mount's undo does | yes (both lenses): `ddl-transactional.md` §5 states the rows "stay" and lists foreign keys as not transactional |
+
+**What bounds that.** "Survived" is two readers failing to refute; no cell
+was written and nothing reproduced. The full verdicts, with their path:line
+evidence and fixes, are in this session's workflow journal (run
+`wf_a6a8d1d7-ddb`), not copied here beyond the table.
