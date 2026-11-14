@@ -1,11 +1,14 @@
 #include "kds/wal/stream.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
@@ -78,9 +81,20 @@ StatusOr<std::unique_ptr<WalStream>> WalStream::Open(LogDevice* device, std::uin
         if (Status s = stream->ScanTail(device->end_segment() - 1); !s.ok()) {
             return s;
         }
+        // **The scanned tail is synced before the watermark claims it.** A
+        // killed process's last writes can sit in the OS cache, readable but
+        // never synced; claiming them durable unsynced would let the mount's
+        // writeback put replayed pages on disk ahead of their log, and a power
+        // loss then would keep the pages and lose the records. The device
+        // directly, not `SyncDevice()`: nothing else holds the stream, and a
+        // failed sync refuses the open rather than stopping a stream nobody
+        // has. The empty branch needs none: `StartSegment(0)` creates a synced
+        // header.
+        if (Status s = device->Sync(); !s.ok()) {
+            return s;
+        }
     }
-    // Whatever is already on the device is durable by definition; nothing is
-    // staged yet.
+    // Nothing is staged yet, and everything scanned is now synced.
     stream->durable_lsn_.store(stream->append_lsn(), std::memory_order_relaxed);
     return stream;
 }
@@ -182,48 +196,75 @@ Status WalStream::StartSegment(std::uint64_t segment_no, RollRecord* roll) {
 }
 
 Status WalStream::ScanTail(std::uint64_t segment_no) {
-    const Lsn start_lsn = segment_no * segment_size_;
-
-    if (Status s = device_->ReadAt(segment_no, 0, header_block_); !s.ok()) {
-        return s;
+    // The last segment's (end, sealed) is the recovery scanner's answer, not
+    // a second walk of its own: the append path and the replay path must not
+    // find two ends of one log (`log_scanner.hpp`). An unsealed end's tail is
+    // scrubbed from the bytes the scan already holds.
+    auto scanned = ScanLogToEnd(
+        *device_, core_id_, segment_no * segment_size_ + kSegmentHeaderSize,
+        [this](std::uint64_t segment, std::uint64_t offset, std::span<const std::byte> past_end) {
+            return ScrubTail(segment, offset, past_end);
+        });
+    if (!scanned.ok()) {
+        return scanned.status();
     }
-    // Shared with the recovery scanner (wal/log_scanner.hpp): "is this
-    // segment mine, and does it start where I think it does" is one
-    // question, and the append path and the replay path must not answer it
-    // two ways.
-    if (auto header = ValidateSegmentHeader(header_block_, core_id_, segment_no, segment_size_);
-        !header.ok()) {
-        return header.status();
-    }
-
-    // The whole body at once (a 64 MiB segment by default). Unzeroed, for
-    // `log_scanner.cpp`'s reason: every byte the walk below touches is
-    // written by the `ReadAt` on the next line.
-    const std::size_t body_bytes = static_cast<std::size_t>(segment_size_ - kSegmentHeaderSize);
-    auto body_storage = std::make_unique_for_overwrite<std::byte[]>(body_bytes);
-    const std::span<std::byte> body(body_storage.get(), body_bytes);
-    if (Status s = device_->ReadAt(segment_no, kSegmentHeaderSize, body); !s.ok()) {
-        return s;
-    }
-
-    RecordReader reader(body, start_lsn + kSegmentHeaderSize);
-    Lsn end = start_lsn + kSegmentHeaderSize;
-    bool sealed = false;
-    while (std::optional<DecodedRecord> record = reader.Next()) {
-        if (record->type() == RecordType::kPad) {
-            // The seal marker: nothing after it in this segment is part of
-            // the stream, whatever the bytes there decode to.
-            sealed = true;
-            break;
-        }
-        end = record->header.lsn + record->header.total_len;
-    }
-
-    const Lsn resume = sealed ? start_lsn + segment_size_ : end;
+    const Lsn resume = scanned.value().end_lsn;
     append_lsn_.store(resume, std::memory_order_relaxed);
     flushed_lsn_.store(resume, std::memory_order_relaxed);
     ring_used_.store(0, std::memory_order_relaxed);
-    sealed_.store(sealed, std::memory_order_relaxed);
+    sealed_.store(scanned.value().sealed, std::memory_order_relaxed);
+    return Status::OK();
+}
+
+Status WalStream::ScrubTail(std::uint64_t segment_no, std::uint64_t offset,
+                            std::span<const std::byte> past_end) {
+    // **What lies past the end is zeroed before anything is appended there**
+    // (wal.md §4.2). A record is accepted on its CRC and `lsn == position`
+    // alone, so a lost run's intact record above a hole - a power cut that
+    // kept a later block of buffered writes and lost an earlier one - would
+    // become part of the stream again the moment new appends end exactly at
+    // its start. The record header at the end itself is kept: it is what
+    // makes the torn tail torn to the scans after this one
+    // (`recovery_torn_tail`), no record boundary can fall inside it (every
+    // record is at least a header long), and the first append overwrites it.
+    //
+    // **The bytes are the scan's**, never read a second time, and tested a
+    // 4 KiB block at a time with `memcmp` rather than byte by byte: a
+    // mostly empty 64 MiB segment is the common tail, and a mount pays this
+    // test on every start (`bench/v3.4.8/results-audit-g-close-*`). A clean
+    // tail is that test and no write; otherwise the blocks from the first
+    // that holds a non-zero byte to the last are written as zeroes, and
+    // `Open`'s sync makes that durable before the first append can be.
+    if (past_end.size() <= kRecordHeaderSize) {
+        return Status::OK();
+    }
+    const std::span<const std::byte> scrub = past_end.subspan(kRecordHeaderSize);
+    const std::uint64_t base = offset + kRecordHeaderSize;
+    constexpr std::size_t kBlock = 4096;
+    static const std::array<std::byte, kBlock> kZeroBlock{};
+    const auto block_is_zero = [&](std::size_t at) {
+        const std::size_t n = std::min(kBlock, scrub.size() - at);
+        return std::memcmp(scrub.data() + at, kZeroBlock.data(), n) == 0;
+    };
+    // The first and last blocks holding a non-zero byte, by their starts.
+    std::size_t first = scrub.size();
+    std::size_t last = 0;
+    for (std::size_t at = 0; at < scrub.size(); at += kBlock) {
+        if (block_is_zero(at)) continue;
+        if (first == scrub.size()) first = at;
+        last = at;
+    }
+    if (first == scrub.size()) {
+        return Status::OK();
+    }
+    const std::size_t stop = std::min(scrub.size(), last + kBlock);
+    for (std::size_t at = first; at < stop; at += kBlock) {
+        const std::size_t n = std::min(kBlock, stop - at);
+        if (Status s = device_->WriteAt(segment_no, base + at, std::span(kZeroBlock).first(n));
+            !s.ok()) {
+            return s;
+        }
+    }
     return Status::OK();
 }
 

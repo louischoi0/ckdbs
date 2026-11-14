@@ -96,17 +96,6 @@ std::uint16_t PageView::free_space() const {
     return h.upper > h.lower ? static_cast<std::uint16_t>(h.upper - h.lower) : 0;
 }
 
-bool PageView::HasSpaceFor(std::uint16_t payload_len) const {
-    // Guard against uint16_t wraparound in the `needed` computation for
-    // pathological payload_len values; kPageSize is well within uint16_t
-    // range, so anything larger can never fit regardless.
-    if (payload_len > kPageSize) {
-        return false;
-    }
-    std::size_t needed = kSlotOnDiskSize + kTupleHeaderOnDiskSize + payload_len;
-    return free_space() >= needed;
-}
-
 PageId PageView::next_page_id() const {
     PageId id;
     std::memcpy(&id, page_.data() + kNextPageIdOffset, sizeof(id));
@@ -412,41 +401,11 @@ Status PageView::RedoWriteTuple(std::uint16_t slot_idx, std::span<const std::byt
         return OverwriteTuple(slot_idx, payload, trx_id, undo_ptr);
     }
 
-    // Append. Identical arithmetic to InsertTuple, whose returned slot is
-    // `h.nr_slots` - which is `slot_idx` here, checked above.
-    const auto payload_len = static_cast<std::uint16_t>(payload.size());
-    const std::size_t needed = kSlotOnDiskSize + kTupleHeaderOnDiskSize + payload_len;
-    const std::size_t avail = h.upper > h.lower ? (h.upper - h.lower) : 0;
-    if (avail < needed) {
-        return Status::OutOfSpace("heap page has no room for this tuple");
-    }
-
-    const auto new_upper =
-        static_cast<std::uint16_t>(h.upper - (kTupleHeaderOnDiskSize + payload_len));
-
-    std::byte* tuple_base = page_.data() + new_upper;
-    std::memcpy(tuple_base + kTupleTrxIdOffset, &trx_id, sizeof(trx_id));
-    std::memcpy(tuple_base + kTupleUndoPtrOffset, &undo_ptr, sizeof(undo_ptr));
-    std::memcpy(tuple_base + kTupleDataLenOffset, &payload_len, sizeof(payload_len));
-    const std::uint8_t tuple_flags = 0;
-    const std::uint8_t tuple_reserved = 0;
-    std::memcpy(tuple_base + kTupleFlagsOffset, &tuple_flags, sizeof(tuple_flags));
-    std::memcpy(tuple_base + kTupleReservedOffset, &tuple_reserved, sizeof(tuple_reserved));
-    if (payload_len > 0) {
-        std::memcpy(tuple_base + kTupleHeaderOnDiskSize, payload.data(), payload_len);
-    }
-
-    HeapSlotFields slot{};
-    slot.offset = new_upper;
-    slot.length = static_cast<std::uint16_t>(kTupleHeaderOnDiskSize + payload_len);
-    slot.flags = 0;
-    WriteSlot(slot_idx, slot);
-
-    h.nr_slots = static_cast<std::uint16_t>(h.nr_slots + 1);
-    h.lower = static_cast<std::uint16_t>(h.lower + kSlotOnDiskSize);
-    h.upper = new_upper;
-    WriteHeader(h);
-    return Status::OK();
+    // Append: slot_idx == nr_slots, checked above, so InsertTupleAt moves no
+    // directory entry and takes slot_idx - one writer of the tuple layout,
+    // live and replayed.
+    auto placed = InsertTupleAt(slot_idx, payload, trx_id, undo_ptr);
+    return placed.ok() ? Status::OK() : placed.status();
 }
 
 }  // namespace kds::heap

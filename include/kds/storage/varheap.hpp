@@ -272,7 +272,6 @@ Status PageRelease(std::span<std::byte, kPageSize> page, std::uint16_t slot);
 std::uint16_t PageLiveSlots(std::span<const std::byte, kPageSize> page);
 
 std::uint16_t PageSlotCount(std::span<const std::byte, kPageSize> page);
-std::uint16_t PageFreeSpace(std::span<const std::byte, kPageSize> page);
 PageId PageNextPageId(std::span<const std::byte, kPageSize> page);
 
 // ---- Chain operations ----------------------------------------------------
@@ -315,8 +314,6 @@ struct ChainAppendResult {
     // refuses. The caller logs and stamps, then drops them.
     storage::PageRef value_page;
     storage::PageRef linked_page;
-
-    bool grew() const noexcept { return created_page_id != kInvalidPageId; }
 };
 
 // Appends `value` to the chain rooted at `root`, growing it by one page if

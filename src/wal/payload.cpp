@@ -183,14 +183,6 @@ StatusOr<std::size_t> EncodeBackupMark(std::span<std::byte> out, const BackupMar
     return kBackupMarkPayloadSize;
 }
 
-StatusOr<BackupMarkPayload> DecodeBackupMark(std::span<const std::byte> in) {
-    if (Status s = CheckInputSize(in, kBackupMarkPayloadSize, "BACKUP_MARK"); !s.ok()) return s;
-    BackupMarkPayload fields{};
-    fields.backup_id = Load<std::uint64_t>(in, kBackupMarkIdOffset);
-    fields.start_lsn = Load<std::uint64_t>(in, kBackupMarkStartOffset);
-    return fields;
-}
-
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 
 StatusOr<std::size_t> EncodeHeapWrite(std::span<std::byte> out, const HeapWritePayload& fields,
@@ -479,31 +471,6 @@ StatusOr<DecodedUndoWrite> DecodeUndoWrite(std::span<const std::byte> in) {
     }
     decoded.tail = in.subspan(kUndoWriteFixedSize, decoded.fields.tail_len);
     return decoded;
-}
-
-// ---- ALLOC / FREE --------------------------------------------------------
-
-StatusOr<std::size_t> EncodePageRun(std::span<std::byte> out, const PageRunPayload& fields) {
-    if (Status s = CheckOutputSize(out, kPageRunPayloadSize, "ALLOC/FREE"); !s.ok()) {
-        return s;
-    }
-    if (fields.nr_pages == 0) {
-        return Status::InvalidArgument("wal payload: ALLOC/FREE of zero pages");
-    }
-    Store<std::uint32_t>(out, kPageRunNrPagesOffset, fields.nr_pages);
-    return kPageRunPayloadSize;
-}
-
-StatusOr<PageRunPayload> DecodePageRun(std::span<const std::byte> in) {
-    if (Status s = CheckInputSize(in, kPageRunPayloadSize, "ALLOC/FREE"); !s.ok()) {
-        return s;
-    }
-    PageRunPayload fields{};
-    fields.nr_pages = Load<std::uint32_t>(in, kPageRunNrPagesOffset);
-    if (fields.nr_pages == 0) {
-        return Status::Corruption("wal payload: ALLOC/FREE of zero pages");
-    }
-    return fields;
 }
 
 // ---- FULL_PAGE_IMAGE -----------------------------------------------------

@@ -142,7 +142,7 @@ struct MountRecovery {
 
     // Var-heap slots this mount collected because no row pointed at them
     // (H7, `exec/varheap_sweep.hpp`). The leak it exists for is a
-    // rolled-back `CREATE ASSERTION`'s spilled body text: `LogChainInsert`
+    // rolled-back `CREATE ASSERTION`'s spilled body text: `InsertDeclaration`
     // logs its spills under `kNoTxnId`, so there is no transaction to chain
     // an undo record to and no compensation runs.
     //

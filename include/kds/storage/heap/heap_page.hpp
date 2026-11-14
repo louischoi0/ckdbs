@@ -235,7 +235,6 @@ public:
     std::uint16_t lower() const;
     std::uint16_t upper() const;
     std::uint16_t free_space() const;
-    bool HasSpaceFor(std::uint16_t payload_len) const;
 
     PageId next_page_id() const;
     void set_next_page_id(PageId next);
@@ -418,9 +417,10 @@ public:
     // position is *durably referenced elsewhere* - an undo record names
     // `target_page_id` + `target_slot`, so a tuple that came back at a
     // different slot would leave every undo chain pointing at the wrong
-    // row. InsertTuple() cannot be used for this: it allocates the next
-    // slot and returns it, which is the right contract for a writer and
-    // the wrong one for a replayer.
+    // row. InsertTuple() alone cannot be the contract: it allocates the next
+    // slot and returns it, which is right for a writer and wrong for a
+    // replayer - so the append case delegates to InsertTupleAt only once
+    // `slot == nr_slots` is proven.
     //
     // Three cases, and only the first two are reachable from a correct
     // stream:

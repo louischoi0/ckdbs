@@ -1,0 +1,13 @@
+started_utc=2026-11-14T02:21:13Z
+tree=/home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes
+describe=v3.4.8-17-ga8a73f44
+head=a8a73f44
+dirty=0 (build inputs)
+bin=/tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/bin/kds_server-B sha256=072347a000f1dc851f835f2ac61f5f790c24b90ab5305054143e46c2996f4a5c
+host=Linux 6.12.116+deb13-cloud-amd64 x86_64 nproc=8 loadavg=3.39 3.00 4.33
+workroot_fs=/dev/nvme0n1p1 ext4 263968576 206713920  46402864  82% /
+competing=0
+cores=4 taskset=2-5 driver_cpus=0,1,6,7 durability=group ash_interval_ms=100
+s2: --organizations 300 --ships 30 --operations 300 --cargos 24000 --verify 100 --seed 1 --sync --bookers 8 --seconds 60 --bookings 0  (suffix m3s2)
+s0: --users 2000 --assets 2000 --traders 8 --seconds 60 --fk --txn --verify 200 --seed 1 --sync  (suffix m3s0)
+finished_utc=2026-11-14T02:22:22Z

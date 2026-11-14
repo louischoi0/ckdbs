@@ -472,6 +472,88 @@ TEST_F(WalStreamTest, ReopenStopsBeforeATornRecord) {
     EXPECT_EQ(reopened->append_lsn(), second);
 }
 
+TEST_F(WalStreamTest, ReopenSyncsWhatItScannedBeforeClaimingItDurable) {
+    // A killed process's flushed-but-unsynced records are readable from the
+    // OS cache; the reopen must make them durable before it says they are,
+    // or the mount writes replayed pages ahead of a log a power loss drops.
+    const std::vector<std::byte> payload = Pattern(kPayloadSize, 16);
+    {
+        auto stream = OpenStream();
+        ASSERT_NE(stream, nullptr);
+        ASSERT_TRUE(stream->Append(HeapInsert(1, 1), payload).ok());
+        ASSERT_TRUE(stream->Append(HeapInsert(2, 2), payload).ok());
+        ASSERT_TRUE(stream->Flush().ok());  // written, never synced
+    }
+    ASSERT_GT(device_->UnsyncedBytes(), 0u);
+
+    Lsn claimed = 0;
+    {
+        auto reopened = OpenStream();
+        ASSERT_NE(reopened, nullptr);
+        EXPECT_EQ(device_->UnsyncedBytes(), 0u);
+        claimed = reopened->durable_lsn();
+        EXPECT_EQ(claimed, reopened->append_lsn());
+    }
+    device_->Crash();  // the power loss during the mount
+    auto after = OpenStream();
+    ASSERT_NE(after, nullptr);
+    EXPECT_EQ(after->append_lsn(), claimed);
+}
+
+TEST_F(WalStreamTest, ARefusedSyncRefusesTheReopen) {
+    {
+        auto stream = OpenStream();
+        ASSERT_NE(stream, nullptr);
+        ASSERT_TRUE(stream->Append(HeapInsert(1, 1), Pattern(kPayloadSize, 17)).ok());
+        ASSERT_TRUE(stream->Sync().ok());
+    }
+    device_->FailNextSync(Status::IoError("injected"));
+    auto opened = WalStream::Open(device_.get(), 0, kMinRingCapacity);
+    ASSERT_FALSE(opened.ok());
+    EXPECT_EQ(opened.status().code(), StatusCode::kIoError);
+}
+
+TEST_F(WalStreamTest, AnIntactRecordAboveAHoleIsNeverReadBackIntoTheStream) {
+    // A cut that kept a later block and lost an earlier one: R3 survives
+    // above R2's zeroes. A second run that ends exactly at R3's start must
+    // not find R3 there as its own next record.
+    const std::vector<std::byte> payload = Pattern(kPayloadSize, 18);
+    Lsn second = 0;
+    Lsn third = 0;
+    {
+        auto stream = OpenStream();
+        ASSERT_NE(stream, nullptr);
+        ASSERT_TRUE(stream->Append(HeapInsert(1, 1), payload).ok());
+        auto lsn2 = stream->Append(HeapInsert(2, 2), payload);
+        auto lsn3 = stream->Append(HeapInsert(3, 3), payload);
+        ASSERT_TRUE(lsn2.ok() && lsn3.ok());
+        second = lsn2.value();
+        third = lsn3.value();
+        ASSERT_TRUE(stream->Sync().ok());
+    }
+    const std::vector<std::byte> hole(third - second, std::byte{0});
+    ASSERT_TRUE(device_->WriteAt(0, second, hole).ok());
+    ASSERT_TRUE(device_->Sync().ok());
+
+    {
+        auto reopened = OpenStream();
+        ASSERT_NE(reopened, nullptr);
+        EXPECT_EQ(reopened->append_lsn(), second);
+        // A record the size of R2's, so the run ends on R3's old start.
+        auto lsn = reopened->Append(HeapInsert(4, 4), payload);
+        ASSERT_TRUE(lsn.ok());
+        EXPECT_EQ(reopened->append_lsn(), third);
+        ASSERT_TRUE(reopened->Sync().ok());
+    }
+
+    auto after = OpenStream();
+    ASSERT_NE(after, nullptr);
+    EXPECT_EQ(after->append_lsn(), third);
+    auto scanned = ScanLogToEnd(*device_, 0, 0);
+    ASSERT_TRUE(scanned.ok());
+    EXPECT_EQ(scanned.value().records, 2u);
+}
+
 TEST_F(WalStreamTest, ReopenRefusesAnotherCoresSegment) {
     {
         auto stream = OpenStream(1);

@@ -66,6 +66,47 @@ protected:
         std::move(MemoryLogDevice::Create(kSegmentSize).value());
 };
 
+// ---- The tail visitor ----------------------------------------------------
+
+TEST_F(LogScannerTest, TheTailVisitorIsHandedThePastEndOfAnUnsealedSegmentOnce) {
+    // `WalStream::Open`'s scrub reads the tail out of the scan's own buffer:
+    // once, at the end's offset, to the segment's end - and never for a
+    // sealed segment, where nothing past the PAD is the stream's.
+    Lsn end = 0;
+    {
+        auto stream = WalStream::Open(device_.get(), /*core_id=*/0);
+        ASSERT_TRUE(stream.ok()) << stream.status().message();
+        ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 100}, Payload(64, 1)).ok());
+        ASSERT_TRUE(stream.value()->Sync().ok());
+        end = stream.value()->append_lsn();
+    }
+    int calls = 0;
+    const TailVisitor tail = [&](std::uint64_t segment, std::uint64_t offset,
+                                 std::span<const std::byte> past_end) {
+        ++calls;
+        EXPECT_EQ(segment, 0u);
+        EXPECT_EQ(offset, end % kSegmentSize);
+        EXPECT_EQ(past_end.size(), kSegmentSize - offset);
+        return Status::OK();
+    };
+    auto unsealed = ScanLogToEnd(*device_, /*core_id=*/0, /*from_lsn=*/0, tail);
+    ASSERT_TRUE(unsealed.ok()) << unsealed.status().message();
+    EXPECT_EQ(unsealed.value().end_lsn, end);
+    EXPECT_EQ(calls, 1);
+
+    {
+        auto stream = WalStream::Open(device_.get(), /*core_id=*/0);
+        ASSERT_TRUE(stream.ok()) << stream.status().message();
+        ASSERT_TRUE(stream.value()->Seal().ok());
+        ASSERT_TRUE(stream.value()->Sync().ok());
+    }
+    calls = 0;
+    auto sealed = ScanLogToEnd(*device_, /*core_id=*/0, /*from_lsn=*/0, tail);
+    ASSERT_TRUE(sealed.ok()) << sealed.status().message();
+    EXPECT_TRUE(sealed.value().sealed);
+    EXPECT_EQ(calls, 0) << "nothing past a PAD is handed to the tail visitor";
+}
+
 // ---- 1. Round trip, including across a roll ------------------------------
 
 TEST_F(LogScannerTest, ReadsBackExactlyWhatWasAppended) {

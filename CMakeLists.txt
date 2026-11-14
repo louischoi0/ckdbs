@@ -66,6 +66,7 @@ add_library(kds
     src/storage/index/index_tree.cpp
     src/storage/free_map.cpp
     src/txn/undo_page.cpp
+    src/txn/row_compensation.cpp
     src/txn/varheap_release.cpp
     src/txn/undo_log.cpp
     src/txn/recovery_undo.cpp

@@ -123,7 +123,6 @@ static_assert(offsetof(BackupMarkPayload, backup_id) == kBackupMarkIdOffset);
 static_assert(offsetof(BackupMarkPayload, start_lsn) == kBackupMarkStartOffset);
 
 StatusOr<std::size_t> EncodeBackupMark(std::span<std::byte> out, const BackupMarkPayload& fields);
-StatusOr<BackupMarkPayload> DecodeBackupMark(std::span<const std::byte> in);
 
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 //
@@ -339,8 +338,8 @@ StatusOr<HeapDeleteUnmarkPayload> DecodeHeapDeleteUnmark(std::span<const std::by
 // `kBootstrapXid` - the mark sweep, `sys.cabins`' drop, a non-transactional
 // catalog delete), `sys.assertions`' drop of a live row
 // (`exec::LogSlotRetire`), and a user `PURGE` (`exec::PurgeKey`, BH). Every
-// other SLOT_RETIRE is a rollback compensation (`txn/manager.cpp`,
-// `txn/recovery_undo.cpp`).
+// other SLOT_RETIRE is a rollback compensation (`txn/row_compensation.cpp`,
+// called by `txn/manager.cpp` and `txn/recovery_undo.cpp`).
 
 struct SlotRetirePayload {
     std::uint16_t slot;
@@ -399,25 +398,6 @@ struct DecodedUndoWrite {
 StatusOr<std::size_t> EncodeUndoWrite(std::span<std::byte> out, const UndoWritePayload& fields,
                                       std::span<const std::byte> image);
 StatusOr<DecodedUndoWrite> DecodeUndoWrite(std::span<const std::byte> in);
-
-// ---- ALLOC / FREE --------------------------------------------------------
-//
-// The codec of two reserved record types: a run of pages starting at the
-// envelope's page_id. Nothing emits either, and redo refuses both: the free
-// map is unlogged, a crash mid-growth is made safe by the allocation floor
-// (`high_water.hpp`), and a page is freed without a record (BF-R4).
-
-struct PageRunPayload {
-    std::uint32_t nr_pages;
-};
-
-inline constexpr std::size_t kPageRunNrPagesOffset = 0;
-inline constexpr std::size_t kPageRunPayloadSize = 4;
-
-static_assert(offsetof(PageRunPayload, nr_pages) == kPageRunNrPagesOffset);
-
-StatusOr<std::size_t> EncodePageRun(std::span<std::byte> out, const PageRunPayload& fields);
-StatusOr<PageRunPayload> DecodePageRun(std::span<const std::byte> in);
 
 // ---- FULL_PAGE_IMAGE -----------------------------------------------------
 //

@@ -292,6 +292,7 @@ void WalManager::ResolveBatches() noexcept {
         if (stats_.group_batch_min == 0 || pending_group_commits_ < stats_.group_batch_min) {
             stats_.group_batch_min = pending_group_commits_;
         }
+        stats_.batched_commits += pending_group_commits_;
         pending_group_commits_ = 0;
         highest_group_commit_lsn_ = 0;
     }

@@ -28,14 +28,14 @@ using SpillRef = std::pair<PageId, std::uint16_t>;
 // and in different ways - **check both tests before adding a second**:
 //
 //   - the **sweep** requires that the relation's spills are logged under
-//     `wal::kNoTxnId` (`exec::LogChainInsert`), since a relation whose
+//     `wal::kNoTxnId` (`exec::InsertDeclaration`), since a relation whose
 //     spills a transaction owns is already released by rollback and undo,
 //     and sweeping it would put a second authority over the same bytes;
 //   - the **grant** requires only that a peer reads the relation.
 //
 // Every entry - the three declaration relations (`declaration_relation.hpp`)
-// - satisfies both: each logs its spills through `LogChainInsert` at
-// `kBootstrapXid`, which is `kNoTxnId`. A relation that satisfies one test
+// - satisfies both: `InsertDeclaration` logs each spill at its append
+// under `kNoTxnId`. A relation that satisfies one test
 // and not the other needs its own list, not an entry here.
 //
 // **A list, not a constant**: a constant would put the two consumers back

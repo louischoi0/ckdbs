@@ -317,7 +317,6 @@ TEST_F(VarHeapChainTest, AppendAndFetchRoundTrip) {
     // The root had room, so nothing structural happened - and saying so is
     // what keeps a caller from logging a PAGE_INIT for a page it did not
     // create.
-    EXPECT_FALSE(ptr.value().grew());
     EXPECT_EQ(ptr.value().created_page_id, kInvalidPageId);
     EXPECT_EQ(ptr.value().linked_page_id, kInvalidPageId);
 }
@@ -337,7 +336,7 @@ TEST_F(VarHeapChainTest, GrowthReportsThePageItCreatedAndTheTailItLinked) {
             ChainAppend(store_, root.value(), std::vector<std::byte>(1000, std::byte{'z'}), 0);
         ASSERT_TRUE(appended.ok()) << appended.status().message();
 
-        if (!appended.value().grew()) {
+        if (appended.value().created_page_id == kInvalidPageId) {
             // No growth means no structural record is owed, and the value
             // landed in the page that was already the tail.
             EXPECT_EQ(appended.value().linked_page_id, kInvalidPageId);
@@ -518,6 +517,31 @@ TEST_F(VarHeapChainTest, AHintAtAnythingButThisChainsPageSendsTheWalkToTheRoot) 
         EXPECT_EQ(ChainPages(store_, root).size(), before.size() + 1);
     }
     EXPECT_EQ(ChainPages(store_, other), other_before) << "an append wrote another chain";
+}
+
+TEST_F(VarHeapChainTest, ACycleInTheLinksIsRefusedFromTheRootAndFromAHint) {
+    // The walk's bound is a cycle check, not a length: a chain grows past
+    // any walk budget through the tail hint, and a budget would refuse it
+    // at the first walk from its root (a restart). A link back into the
+    // chain is what is refused, from the root and from a hint alike.
+    const PageId root = GrowChain(store_, store_, 7, 4);  // four pages, root first
+    const std::vector<PageId> pages = ChainPages(store_, root);
+    ASSERT_EQ(pages.size(), 4u);
+    {
+        auto tail = store_.Get(pages.back());
+        ASSERT_TRUE(tail.ok());
+        std::memcpy(tail.value().bytes().data() + kNextPageIdOffset, &pages[1], sizeof(PageId));
+    }
+    for (const PageId hint : {root, pages[2]}) {
+        SCOPED_TRACE(hint);
+        store_.SetVarHeapTailHint(root, hint);
+        auto appended = ChainAppend(store_, root, Bytes(std::string(10, 'c')), 7);
+        ASSERT_FALSE(appended.ok());
+        EXPECT_EQ(appended.status().code(), StatusCode::kCorruption);
+    }
+    auto length = ChainLength(store_, root);
+    ASSERT_FALSE(length.ok());
+    EXPECT_EQ(length.status().code(), StatusCode::kCorruption);
 }
 
 TEST_F(VarHeapChainTest, ARootIsBornWithNoHint) {
