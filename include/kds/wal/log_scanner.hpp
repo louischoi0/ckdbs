@@ -116,13 +116,24 @@ using RecordVisitor = std::function<Status(const DecodedRecord&)>;
 //
 // PAD records are consumed by the scan and never reach `visit`: they are
 // framing, not content.
+//
+// `tail`, when given, is handed the bytes past the end once, when the scan
+// ends in an unsealed segment: that segment's number, the end's offset in
+// it, and the segment's bytes from there to its end - out of the buffer the
+// walk already read, so a caller that inspects the tail (`WalStream::Open`'s
+// scrub) reads nothing twice. The span is valid for the call only. The scan
+// itself stays read-only; a non-ok Status fails it.
+using TailVisitor =
+    std::function<Status(std::uint64_t segment_no, std::uint64_t offset,
+                         std::span<const std::byte> past_end)>;
 StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from_lsn,
-                              const RecordVisitor& visit);
+                              const RecordVisitor& visit, const TailVisitor* tail = nullptr);
 
 // The same walk with no visitor, for the caller that wants only the end:
 // WalStream::Open's resume, and recovery's "is there anything here at all"
 // probe. Equivalent to ScanLog with a visitor that accepts everything, and
 // implemented as exactly that so the two cannot disagree.
-StatusOr<ScanOutcome> ScanLogToEnd(LogDevice& device, std::uint32_t core_id, Lsn from_lsn);
+StatusOr<ScanOutcome> ScanLogToEnd(LogDevice& device, std::uint32_t core_id, Lsn from_lsn,
+                                   const TailVisitor* tail = nullptr);
 
 }  // namespace kds::wal

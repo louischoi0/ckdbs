@@ -422,10 +422,13 @@ private:
     // Walks segment `segment_no` forward and leaves append_lsn_ at its
     // durable end, or seals it if a PAD marker is found. Open() only.
     Status ScanTail(std::uint64_t segment_no);
-    // Zeroes an unsealed segment's bytes from one record header past `end`
-    // to the segment's end, writing only what is not already zero. Open()
+    // Zeroes an unsealed segment's bytes from one record header past the
+    // scan's end to the segment's end: `past_end` is the scan's own buffer
+    // from `offset` in segment `segment_no` (`TailVisitor`), and only the
+    // blocks from the first non-zero one to the last are written. Open()
     // only, before its sync.
-    Status ScrubTail(std::uint64_t segment_no, Lsn end);
+    Status ScrubTail(std::uint64_t segment_no, std::uint64_t offset,
+                     std::span<const std::byte> past_end);
     // Moves the durable watermark forward to `lsn`, never back: a plain
     // store unshared, a compare-exchange maximum shared.
     void PublishDurable(Lsn lsn) noexcept;

@@ -33,7 +33,7 @@ StatusOr<SegmentHeaderFields> ValidateSegmentHeader(std::span<const std::byte> h
 }
 
 StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from_lsn,
-                              const RecordVisitor& visit) {
+                              const RecordVisitor& visit, const TailVisitor* tail) {
     const std::uint64_t segment_size = device.segment_size();
     const std::uint64_t first_segment = device.first_segment();
     const std::uint64_t end_segment = device.end_segment();
@@ -177,6 +177,13 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
                 segment_size - consumed < kRecordHeaderSize && segment_no + 1 < end_segment;
             if (!sealed_by_exhaustion) {
                 out.stopped_early = reader.stopped_early();
+                if (tail != nullptr) {
+                    const auto at =
+                        static_cast<std::size_t>(out.end_lsn - start_lsn - body_offset);
+                    if (Status s = (*tail)(segment_no, consumed, body.subspan(at)); !s.ok()) {
+                        return s;
+                    }
+                }
                 return out;
             }
             // Continue exactly as the PAD path does: the next iteration sets
@@ -197,11 +204,12 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
     return out;
 }
 
-StatusOr<ScanOutcome> ScanLogToEnd(LogDevice& device, std::uint32_t core_id, Lsn from_lsn) {
+StatusOr<ScanOutcome> ScanLogToEnd(LogDevice& device, std::uint32_t core_id, Lsn from_lsn,
+                                   const TailVisitor* tail) {
     // One implementation, per the header's promise: this is ScanLog with a
     // visitor that accepts everything, not a second walk.
     static const RecordVisitor kAcceptAll = [](const DecodedRecord&) { return Status::OK(); };
-    return ScanLog(device, core_id, from_lsn, kAcceptAll);
+    return ScanLog(device, core_id, from_lsn, kAcceptAll, tail);
 }
 
 }  // namespace kds::wal

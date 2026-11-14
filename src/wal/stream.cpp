@@ -1,7 +1,9 @@
 #include "kds/wal/stream.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
@@ -196,67 +198,76 @@ Status WalStream::StartSegment(std::uint64_t segment_no, RollRecord* roll) {
 Status WalStream::ScanTail(std::uint64_t segment_no) {
     // The last segment's (end, sealed) is the recovery scanner's answer, not
     // a second walk of its own: the append path and the replay path must not
-    // find two ends of one log (`log_scanner.hpp`).
-    auto scanned =
-        ScanLogToEnd(*device_, core_id_, segment_no * segment_size_ + kSegmentHeaderSize);
+    // find two ends of one log (`log_scanner.hpp`). An unsealed end's tail is
+    // scrubbed from the bytes the scan already holds.
+    const TailVisitor scrub = [this](std::uint64_t segment, std::uint64_t offset,
+                                     std::span<const std::byte> past_end) {
+        return ScrubTail(segment, offset, past_end);
+    };
+    auto scanned = ScanLogToEnd(*device_, core_id_,
+                                segment_no * segment_size_ + kSegmentHeaderSize, &scrub);
     if (!scanned.ok()) {
         return scanned.status();
     }
     const Lsn resume = scanned.value().end_lsn;
-    const bool sealed = scanned.value().sealed;
-    if (!sealed) {
-        if (Status s = ScrubTail(segment_no, resume); !s.ok()) {
-            return s;
-        }
-    }
     append_lsn_.store(resume, std::memory_order_relaxed);
     flushed_lsn_.store(resume, std::memory_order_relaxed);
     ring_used_.store(0, std::memory_order_relaxed);
-    sealed_.store(sealed, std::memory_order_relaxed);
+    sealed_.store(scanned.value().sealed, std::memory_order_relaxed);
     return Status::OK();
 }
 
-Status WalStream::ScrubTail(std::uint64_t segment_no, Lsn end) {
+Status WalStream::ScrubTail(std::uint64_t segment_no, std::uint64_t offset,
+                            std::span<const std::byte> past_end) {
     // **What lies past the end is zeroed before anything is appended there**
     // (wal.md §4.2). A record is accepted on its CRC and `lsn == position`
     // alone, so a lost run's intact record above a hole - a power cut that
     // kept a later block of buffered writes and lost an earlier one - would
     // become part of the stream again the moment new appends end exactly at
-    // its start. The record header at `end` itself is kept: it is what makes
-    // the torn tail torn to the scans after this one (`recovery_torn_tail`),
-    // no record boundary can fall inside it (every record is at least a
-    // header long), and the first append overwrites it. A clean tail costs
-    // one read and no write; `Open`'s sync makes a scrub durable before the
-    // first append can be.
-    const std::uint64_t from = (end - segment_no * segment_size_) + kRecordHeaderSize;
-    if (from >= segment_size_) {
+    // its start. The record header at the end itself is kept: it is what
+    // makes the torn tail torn to the scans after this one
+    // (`recovery_torn_tail`), no record boundary can fall inside it (every
+    // record is at least a header long), and the first append overwrites it.
+    //
+    // **The bytes are the scan's**, never read a second time, and tested a
+    // 4 KiB block at a time with `memcmp` rather than byte by byte: a
+    // mostly empty 64 MiB segment is the common tail, and a mount pays this
+    // test on every start (`bench/v3.4.8/results-audit-g-close-*`). A clean
+    // tail is that test and no write; otherwise the blocks from the first
+    // that holds a non-zero byte to the last are written as zeroes, and
+    // `Open`'s sync makes that durable before the first append can be.
+    if (past_end.size() <= kRecordHeaderSize) {
         return Status::OK();
     }
-    // In 1 MiB pieces, so the scrub never holds a second segment-sized buffer.
-    constexpr std::size_t kScrubChunk = std::size_t{1} << 20;
-    std::vector<std::byte> chunk(kScrubChunk);
-    for (std::uint64_t offset = from; offset < segment_size_;) {
-        const std::size_t n =
-            static_cast<std::size_t>(std::min<std::uint64_t>(kScrubChunk, segment_size_ - offset));
-        const std::span<std::byte> piece(chunk.data(), n);
-        if (Status s = device_->ReadAt(segment_no, offset, piece); !s.ok()) {
+    const std::span<const std::byte> scrub = past_end.subspan(kRecordHeaderSize);
+    const std::uint64_t base = offset + kRecordHeaderSize;
+    constexpr std::size_t kBlock = 4096;
+    static const std::array<std::byte, kBlock> kZeroBlock{};
+    const auto block_is_zero = [&](std::size_t at) {
+        const std::size_t n = std::min(kBlock, scrub.size() - at);
+        return std::memcmp(scrub.data() + at, kZeroBlock.data(), n) == 0;
+    };
+    std::size_t first = scrub.size();
+    for (std::size_t at = 0; at < scrub.size(); at += kBlock) {
+        if (!block_is_zero(at)) {
+            first = at;
+            break;
+        }
+    }
+    if (first == scrub.size()) {
+        return Status::OK();
+    }
+    std::size_t last = first;  // the start of the last non-zero block
+    for (std::size_t at = first; at < scrub.size(); at += kBlock) {
+        if (!block_is_zero(at)) last = at;
+    }
+    const std::size_t stop = std::min(scrub.size(), last + kBlock);
+    for (std::size_t at = first; at < stop; at += kBlock) {
+        const std::size_t n = std::min(kBlock, stop - at);
+        if (Status s = device_->WriteAt(segment_no, base + at, std::span(kZeroBlock).first(n));
+            !s.ok()) {
             return s;
         }
-        // Only the span from the piece's first non-zero byte to its last is
-        // written: the zero bytes around it are already what the scrub wants.
-        const auto nonzero = [](std::byte b) { return b != std::byte{0}; };
-        const auto first = std::find_if(piece.begin(), piece.end(), nonzero);
-        if (first != piece.end()) {
-            const auto last = std::find_if(piece.rbegin(), piece.rend(), nonzero).base();
-            std::fill(first, last, std::byte{0});
-            const auto at = static_cast<std::size_t>(first - piece.begin());
-            const auto len = static_cast<std::size_t>(last - first);
-            if (Status s = device_->WriteAt(segment_no, offset + at, piece.subspan(at, len));
-                !s.ok()) {
-                return s;
-            }
-        }
-        offset += n;
     }
     return Status::OK();
 }
