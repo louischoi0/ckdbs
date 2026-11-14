@@ -59,10 +59,10 @@ struct Reader {
 };
 
 sched::Coro HoldPosition(txn::LockTable& table, Reader& r, catalog::Oid rel, std::uint64_t id) {
-    auto took =
-        table.Acquire(id, txn::LockKey::Relation(rel), txn::LockMode::kIntentionShared, r.holdings);
+    auto took = table.TryAcquire(id, txn::LockKey::Relation(rel), txn::LockMode::kIntentionShared,
+                                 r.holdings);
     if (!took.ok()) co_return took.status();
-    if (!took.value().granted) {
+    if (!took.value()) {
         co_return Status::InvalidArgument("the reader's position was refused on the peer");
     }
     r.release_pred = [&r] { return r.may_release.load(std::memory_order_acquire); };

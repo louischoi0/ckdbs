@@ -37,12 +37,12 @@ Status LogSpills(wal::WalManager* wal, storage::PageStore& store,
 
 // Everything one ChainInsert owes: the grown page's PAGE_INIT (min_key
 // read back off the landed page - ChainInsertResult does not carry it),
-// the repointed old tail as a full page image, the spills, then the
-// HEAP_INSERT itself, stamped.
+// the repointed old tail as a full page image, then the HEAP_INSERT itself,
+// stamped. The row's spills are not among them: its one caller logs each at
+// its append (`InsertDeclaration`), so they precede the row's records.
 Status LogChainInsert(wal::WalManager* wal, storage::PageStore& store,
                       const heap::ChainInsertResult& placed, std::span<const std::byte> tuple,
-                      std::uint64_t hdr_trx, std::uint64_t owner_oid,
-                      const std::vector<AppendedSpill>& spills);
+                      std::uint64_t hdr_trx, std::uint64_t owner_oid);
 
 // One retired slot, stamped.
 Status LogSlotRetire(wal::WalManager* wal, storage::PageStore& store, std::uint64_t env_txn,

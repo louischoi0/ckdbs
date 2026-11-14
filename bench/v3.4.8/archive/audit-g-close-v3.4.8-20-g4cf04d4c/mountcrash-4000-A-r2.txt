@@ -1,0 +1,22 @@
+
+mount cost [A] - 4000 rows loaded, SIGKILL before the sweep, durability relaxed
+binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/bin/wrap-A.sh (mtime 2026-11-14 02:20:13)
+create+load mount: 361.4 ms   load average 3.94 (1m) / 6.06 (5m)   filesystem ext4
+
+ mount   wall ms  analysis     redo  highwtr    undo    ckpt  records  redone  healed
+-------------------------------------------------------------------------------------
+     1    120.61      30.5     32.3      0.0     0.0    15.1    29547   21670       0
+     2     60.36      16.4      0.0      0.0     0.0     3.3        2       0       0
+     3     60.44      17.1      0.0      0.0     0.0     4.1        2       0       0
+     4     53.70      16.0      0.0      0.0     0.0     3.0        2       0       0
+     5     58.16      17.2      0.0      0.0     0.0     3.0        2       0       0
+     6     57.87      16.4      0.0      0.0     0.0     4.2        2       0       0
+     7     58.00      17.2      0.0      0.0     0.0     2.9        2       0       0
+
+            mean        p0      p25      p50     p95     p99      max
+    ms     67.02     53.70    57.87    58.16  120.61  120.61   120.61
+
+  the ms columns after `wall` are SHOW META's own per-phase counters; `-` means this
+  server reports none, which is not the same as zero
+
+  wrote /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/out2/mountcrash-4000-A-r2.json

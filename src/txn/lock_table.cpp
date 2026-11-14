@@ -123,16 +123,26 @@ const std::atomic<std::uint64_t>& LockTable::FenceCounterFor(catalog::Oid rel) c
     return fence_counters_[static_cast<std::size_t>(Mix(rel) % fence_counters_.size())];
 }
 
-StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key, LockMode mode,
-                                           LockHoldings& holdings) {
-    return AcquireInner(txn, key, mode, holdings, /*queue_on_conflict=*/true);
+LockTable::Entry* LockTable::FindEntry(Partition& part, const LockKey& key) noexcept {
+    for (Entry& e : part.entries) {
+        if (e.key == key) return &e;
+    }
+    return nullptr;
+}
+
+void LockTable::EraseIfIdle(Partition& part, Entry* e) {
+    // An entry nobody holds and nobody waits on is erased, so the table
+    // measures live borrows rather than every key ever touched - and
+    // `EntryCount`/`WaiterCount`, AO-R3's probe gate, return to zero.
+    if (e->holders.empty() && e->waiters.empty()) {
+        part.entries.erase(part.entries.begin() + (e - part.entries.data()));
+    }
 }
 
 StatusOr<bool> LockTable::TryAcquire(std::uint64_t txn, const LockKey& key, LockMode mode,
                                      LockHoldings& holdings, std::uint64_t* blocker,
                                      LockWake* wake) {
-    auto r = AcquireInner(txn, key, mode, holdings, /*queue_on_conflict=*/false,
-                          /*register_wake=*/wake != nullptr);
+    auto r = AcquireInner(txn, key, mode, holdings, /*register_wake=*/wake != nullptr);
     if (!r.ok()) return r.status();
     if (wake != nullptr && !r.value().granted) *wake = r.value().wake;
     // `AcquireInner` has always computed this and this wrapper has always
@@ -145,26 +155,8 @@ StatusOr<bool> LockTable::TryAcquire(std::uint64_t txn, const LockKey& key, Lock
 
 StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey& key,
                                                 LockMode mode, LockHoldings& holdings,
-                                                bool queue_on_conflict, bool register_wake) {
+                                                bool register_wake) {
     AcquireResult result;
-
-    // **A transaction waits on at most one unit**, which `LockHoldings`
-    // records as one field - so asking for a *different* unit abandons the
-    // previous wait, and the queued record has to go with it. Left behind
-    // it is an orphan nothing can ever withdraw: `Release` unwinds only
-    // `waiting_`, which now names the new key, so the old entry keeps a
-    // waiter for the life of the instance, `WaiterCount` - AO-R3's probe
-    // gate - never returns to zero, and AO-S4a's wait-for graph would read
-    // an edge for a wait nobody is in and close a cycle on it.
-    //
-    // Withdrawn **before** the partition latch below, so only one partition
-    // latch is ever held at a time (AO-R2's order).
-    // Only a queueing ask withdraws: a `TryAcquire` puts no wait in the
-    // place of the one it would drop (the declaration says why).
-    if (queue_on_conflict && holdings.waiting_ && !(*holdings.waiting_ == key)) {
-        DequeueWaiter(txn, *holdings.waiting_);
-        holdings.waiting_.reset();
-    }
 
     const bool fence = IsFence(key, mode);
 
@@ -179,13 +171,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
         Partition& part = PartitionFor(key);
         LatchGuard guard(part.latch);
 
-        Entry* entry = nullptr;
-        for (Entry& e : part.entries) {
-            if (e.key == key) {
-                entry = &e;
-                break;
-            }
-        }
+        Entry* entry = FindEntry(part, key);
 
         if (entry != nullptr) {
             // Already covered by this transaction's own hold: no entry, no
@@ -195,7 +181,6 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                 if (h.txn == txn && Covers(h.mode, mode)) {
                     if (fence) FenceCounterFor(key.rel_oid).fetch_sub(1, std::memory_order_release);
                     result.granted = true;
-                    result.already_held = true;
                     return result;
                 }
             }
@@ -228,13 +213,12 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                     result.granted = false;
                     result.blocking_txn = h.txn;
                     sched::RecordCounterEvent(stats::WaitEvent::kAppLockConflict);
-                    // **The non-queueing exit** (AO-S6a): the caller asked
-                    // for the unit only if it was free, so a conflict
-                    // leaves the table exactly as it was found - no waiter
-                    // record, no slot, and `holdings.waiting_` untouched.
-                    // `blocking_txn` is still reported, because a caller
-                    // that declines to wait may still want to say who it
-                    // declined to wait for.
+                    // **The plain exit** (AO-S6a): the caller asked for
+                    // the unit only if it was free, so a conflict leaves the
+                    // table exactly as it was found - no waiter record and
+                    // no slot. `blocking_txn` is still reported, because a
+                    // caller that declines to wait may still want to say
+                    // who it declined to wait for.
                     //
                     // **Unless it asked for a wake** (AO-S6e-b), which is
                     // the same record without the queue position: written
@@ -242,15 +226,8 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                     // conflict, because a registration made after the
                     // refusal returned would race the holder's release and
                     // park on a slot nobody will flip again.
-                    if (!queue_on_conflict && !register_wake) return result;
-                    // Queued, and **recorded in `holdings`** so it can be
-                    // withdrawn: a transaction is one thread of control, so
-                    // it waits on at most one unit and one record suffices.
-                    // Without this the entry would outlive every holder and
-                    // `WaiterCount` - AO-R3's probe gate - would stay
-                    // nonzero for the life of the instance.
-                    //
-                    // A re-ask by an already-queued waiter keeps the slot it
+                    if (!register_wake) return result;
+                    // A re-ask by an already-registered waiter keeps the slot it
                     // is parked on. Handing it a fresh one would strand the
                     // `WaitUntil` predicate on a slot the next decide no
                     // longer knows about - a lost wakeup whose only exit is
@@ -291,13 +268,12 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                     // polled rather than where it first asked.
                     queued->core = CurrentCore();
                     result.wake = LockWake{key, queued->slot};
-                    // **A wake is not a queue position** (AO-S6e-b). Only a
-                    // queueing ask records `waiting_`, because only it is
-                    // withdrawn by `Release` - a wake registration outlives
-                    // the transaction that asked for it, since the
+                    // **A wake is not a queue position** (AO-S6e-b), and
+                    // `Release` does not withdraw it: a registration
+                    // outlives the transaction that asked for it, since the
                     // statement is torn down and re-run under a new id
-                    // before the grant it is waiting for arrives.
-                    if (queue_on_conflict) holdings.waiting_ = key;
+                    // before the grant it is waiting for arrives. The
+                    // waiter drops it (`DropWake`).
                     return result;
                 }
             }
@@ -319,7 +295,6 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                              entry->waiters.end());
     }
 
-    if (holdings.waiting_ && *holdings.waiting_ == key) holdings.waiting_.reset();
     holdings.held_.push_back(LockHoldings::Held{key, mode});
 
     // ---- The verify, outside the grant's latch (AO-S6b) ------------------
@@ -364,12 +339,6 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
         result.blocking_txn = blocker;
         sched::RecordCounterEvent(stats::WaitEvent::kAppLockConflict);
         result.wake = std::move(cross);
-        // **A queueing ask is not queued here, and that is stated rather
-        // than implied.** A queue position is a place in *this* key's line,
-        // and the release that would admit it is the other unit's; a
-        // non-queueing ask gets the registration above instead, which is a
-        // wake and not a place. No engine path calls `Acquire`, so this
-        // narrows nothing it does.
         return result;
     }
 
@@ -437,9 +406,9 @@ std::size_t LockTable::WaitEdgeCount() const {
 
 void LockTable::WakeWaiters(const LockKey& key) {
     // Flip every queued slot on the unit. **A wake is not a grant**: each
-    // woken waiter re-asks through `Acquire`, and those that still conflict
-    // queue again on the slot they already hold. That costs a poll per
-    // waiter per decide and never a wrong answer, which is the trade
+    // woken waiter re-asks through `TryAcquire`, and those that still
+    // conflict register again on the slot they already hold. That costs a
+    // poll per waiter per decide and never a wrong answer, which is the trade
     // AO-R4's mandatory re-check makes unavoidable - a grant handed out
     // here would be a grant decided under this latch and consumed after it,
     // with nothing holding the unit in between.
@@ -447,10 +416,8 @@ void LockTable::WakeWaiters(const LockKey& key) {
     {
         Partition& part = PartitionFor(key);
         LatchGuard guard(part.latch);
-        for (Entry& e : part.entries) {
-            if (!(e.key == key)) continue;
-            for (Tenant& w : e.waiters) FlipSlot(w, kick);
-            break;
+        if (Entry* e = FindEntry(part, key)) {
+            for (Tenant& w : e->waiters) FlipSlot(w, kick);
         }
     }
     // Write, then kick (AR0-6-R1): the flips above are the write, published
@@ -477,36 +444,6 @@ void LockTable::KickAll(const std::vector<std::uint32_t>& cores) const noexcept 
     for (const std::uint32_t core : cores) wake_->Kick(core);
 }
 
-void LockTable::DequeueWaiter(std::uint64_t txn, const LockKey& key) {
-    std::vector<std::uint32_t> kick;
-    {
-        Partition& part = PartitionFor(key);
-        LatchGuard guard(part.latch);
-        for (std::size_t i = 0; i < part.entries.size(); ++i) {
-            Entry& e = part.entries[i];
-            if (!(e.key == key)) continue;
-            // **Flipped on the way out.** A withdrawal drops the record the
-            // next decide would have flipped, so a waiter still parked on
-            // this slot - AO-S4a's deadlock victim, AO-R8's fault net -
-            // would poll a bit nobody owns any more and never be entered
-            // again. The wake is not a grant (`WakeWaiters`), so telling a
-            // withdrawn waiter to look again costs one poll and cannot
-            // admit it to anything.
-            for (Tenant& w : e.waiters) {
-                if (w.txn == txn) FlipSlot(w, kick);
-            }
-            e.waiters.erase(std::remove_if(e.waiters.begin(), e.waiters.end(),
-                                           [&](const Tenant& w) { return w.txn == txn; }),
-                            e.waiters.end());
-            if (e.holders.empty() && e.waiters.empty()) {
-                part.entries.erase(part.entries.begin() + static_cast<std::ptrdiff_t>(i));
-            }
-            break;
-        }
-    }
-    KickAll(kick);
-}
-
 std::vector<std::uint64_t> LockTable::IntentionWriters(const LockKey& relation,
                                                        std::uint64_t self,
                                                        const std::vector<std::uint64_t>* among,
@@ -514,13 +451,7 @@ std::vector<std::uint64_t> LockTable::IntentionWriters(const LockKey& relation,
     std::vector<std::uint64_t> writers;
     Partition& part = PartitionFor(relation);
     LatchGuard guard(part.latch);
-    Entry* entry = nullptr;
-    for (Entry& e : part.entries) {
-        if (e.key == relation) {
-            entry = &e;
-            break;
-        }
-    }
+    Entry* entry = FindEntry(part, relation);
     if (entry == nullptr) return writers;
     for (const Tenant& h : entry->holders) {
         if (h.mode != LockMode::kIntentionExclusive || h.txn == self || IsReadHolder(h.txn)) {
@@ -556,23 +487,16 @@ void LockTable::DropWake(const LockKey& key, const std::shared_ptr<LockWaitSlot>
     if (slot == nullptr) return;
     Partition& part = PartitionFor(key);
     LatchGuard guard(part.latch);
-    for (std::size_t i = 0; i < part.entries.size(); ++i) {
-        Entry& e = part.entries[i];
-        if (!(e.key == key)) continue;
-        // By the slot and not by the transaction id: the statement that
-        // registered this has since been torn down, and the one dropping it
-        // is the same statement under a new id. Nothing is flipped on the
-        // way out - unlike `DequeueWaiter`, whose withdrawal has to re-enter
-        // a waiter that is still parked, the caller here has already left
-        // the park it registered for.
-        e.waiters.erase(std::remove_if(e.waiters.begin(), e.waiters.end(),
-                                       [&](const Tenant& w) { return w.slot == slot; }),
-                        e.waiters.end());
-        if (e.holders.empty() && e.waiters.empty()) {
-            part.entries.erase(part.entries.begin() + static_cast<std::ptrdiff_t>(i));
-        }
-        break;
-    }
+    Entry* e = FindEntry(part, key);
+    if (e == nullptr) return;
+    // By the slot and not by the transaction id: the statement that
+    // registered this has since been torn down, and the one dropping it is
+    // the same statement under a new id. Nothing is flipped on the way out:
+    // the caller here has already left the park it registered for.
+    e->waiters.erase(std::remove_if(e->waiters.begin(), e->waiters.end(),
+                                    [&](const Tenant& w) { return w.slot == slot; }),
+                     e->waiters.end());
+    EraseIfIdle(part, e);
 }
 
 void LockTable::ReleaseHeld(std::uint64_t txn, const LockHoldings::Held& held) {
@@ -580,23 +504,15 @@ void LockTable::ReleaseHeld(std::uint64_t txn, const LockHoldings::Held& held) {
     {
         Partition& part = PartitionFor(held.key);
         LatchGuard guard(part.latch);
-        for (std::size_t i = 0; i < part.entries.size(); ++i) {
-            Entry& e = part.entries[i];
-            if (!(e.key == held.key)) continue;
-            for (std::size_t j = 0; j < e.holders.size(); ++j) {
-                if (e.holders[j].txn == txn && e.holders[j].mode == held.mode) {
-                    e.holders.erase(e.holders.begin() + static_cast<std::ptrdiff_t>(j));
+        if (Entry* e = FindEntry(part, held.key)) {
+            for (std::size_t j = 0; j < e->holders.size(); ++j) {
+                if (e->holders[j].txn == txn && e->holders[j].mode == held.mode) {
+                    e->holders.erase(e->holders.begin() + static_cast<std::ptrdiff_t>(j));
                     removed_holder = true;
                     break;
                 }
             }
-            // An entry nobody holds and nobody waits on is erased, so
-            // the table measures live borrows rather than every key
-            // ever touched.
-            if (e.holders.empty() && e.waiters.empty()) {
-                part.entries.erase(part.entries.begin() + static_cast<std::ptrdiff_t>(i));
-            }
-            break;
+            EraseIfIdle(part, e);
         }
     }
     // Lowered **only when a holder was actually removed**, and after
@@ -637,14 +553,9 @@ void LockTable::Release(std::uint64_t txn, LockHoldings& holdings) {
     for (const LockHoldings::Held& held : holdings.held_) ReleaseHeld(txn, held);
     holdings.held_.clear();
 
-    // A transaction that ended while queued takes its request with it, and
-    // its wait-for edge with that: a decided transaction waits for nothing,
-    // and an edge left behind would be a false cycle for the next waiter to
-    // close against.
-    if (holdings.waiting_) {
-        DequeueWaiter(txn, *holdings.waiting_);
-        holdings.waiting_.reset();
-    }
+    // A decided transaction's wait-for edge goes with it: it waits for
+    // nothing, and an edge left behind would be a false cycle for the next
+    // waiter to close against.
     ClearWaitFor(txn);
 }
 
@@ -687,9 +598,9 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t tuple_key, std::u
 
 LockTable::Tenant& LockTable::RegisterWake(Entry& e, std::uint64_t txn, LockMode mode) {
     // Under the caller's latch, the one that observed the refusing holder,
-    // and on the core that asked, whose reactor polls the slot (AU-S2). For
-    // a non-queueing ask a wake and not a queue position: nothing in
-    // `holdings.waiting_`, and `DropWake` by the slot is its only removal.
+    // and on the core that asked, whose reactor polls the slot (AU-S2). A
+    // wake and not a queue position: `DropWake` by the slot, or the
+    // waiter's own grant, is its only removal.
     e.waiters.push_back(Tenant{txn, mode, std::make_shared<LockWaitSlot>(), CurrentCore()});
     return e.waiters.back();
 }

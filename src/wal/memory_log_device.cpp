@@ -224,9 +224,10 @@ void MemoryLogDevice::Crash(std::uint64_t keep_bytes) {
     //
     // What is deliberately **not** modelled is a hole in the middle - later
     // records durable while an earlier one is not. `faults.hpp` argues that
-    // case is unrealistic for a power cut and that nothing in `wal.md` is
-    // written against it, and this primitive keeps that scope: the cut is a
-    // suffix truncation, never a scatter.
+    // case is unrealistic for a power cut, and this primitive keeps that
+    // scope: the cut is a suffix truncation, never a scatter. What `wal.md`
+    // §4.2 does write against it - the open zeroing past the tail - is
+    // pinned by a cell that plants the hole by hand (`wal_stream_test.cpp`).
     std::lock_guard<std::mutex> guard(mutex_);
     power_lost_ = false;
     std::uint64_t kept = 0;

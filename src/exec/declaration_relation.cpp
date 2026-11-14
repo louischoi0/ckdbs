@@ -1,5 +1,6 @@
 #include "kds/exec/declaration_relation.hpp"
 
+#include <functional>
 #include <utility>
 
 #include "kds/exec/row_codec.hpp"
@@ -204,12 +205,23 @@ Status InsertDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
     set_str(kColName, row.name);
     set_str(kColSourceText, row.source_text);
 
-    std::vector<AppendedSpill> spills;
+    // **Each spill is logged at its append, under its page's hold** (AT-S21,
+    // wal.md §11), not after the row is placed: a refusal after the spill -
+    // the row's second spill, or ChainInsert's - would otherwise leave a
+    // written var-heap slot no record names, and the next append's
+    // VARHEAP_APPEND would name a slot redo never built. A value logged for a
+    // row that then fails is unreferenced, which the mount sweep collects for
+    // these relations (`catalog_spills.hpp`). The root page's hold
+    // serialises every appender here, so the records land in slot order.
+    const std::function<Status(const AppendedSpill&)> log_spill =
+        [&](const AppendedSpill& spill) {
+            return LogSpill(wal, store, spill, wal::kNoTxnId, rel.oid);
+        };
     VarHeapSink sink;
     sink.store = &store;
     sink.root = rel.varheap_page_id;
     sink.owner_oid = rel.oid;
-    sink.appended = &spills;
+    sink.on_append = &log_spill;
 
     auto payload = EncodeRow(rel.schema, rel.layout, row.id, values, sink);
     if (!payload.ok()) return payload.status();
@@ -220,7 +232,7 @@ Status InsertDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
     // Logged: an acknowledged declaration must survive a crash by redo like
     // any other catalog write (exec/wal_row_log.hpp has the order).
     return LogChainInsert(wal, store, placed.value(), payload.value(), catalog::kBootstrapXid,
-                          rel.oid, spills);
+                          rel.oid);
 }
 
 StatusOr<DeclarationRow> DeleteDeclaration(catalog::Catalog& catalog, storage::PageStore& store,

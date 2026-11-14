@@ -23,7 +23,8 @@
 // a tear the run then *continues past* is not the failure it looks like:
 // it models a device that reported success for a partial transfer and kept
 // working, which leaves a hole in the middle of a log whose later records
-// all landed. Nothing in `docs/spec/wal.md` is written against that — a torn
+// all landed. `docs/spec/wal.md` §4.2 answers it only at the open, which
+// zeroes what lies past the tail; nothing else is written against it — a torn
 // transfer is what the power cut leaves in flight, so the realistic image
 // is a partial record at the **tail** with nothing after it, made durable
 // by the flush the cut interrupted.

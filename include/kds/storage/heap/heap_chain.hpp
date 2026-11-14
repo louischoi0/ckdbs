@@ -106,22 +106,8 @@ StatusOr<PageId> ChainTail(storage::PageStore& store, PageId head);
 StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head);
 
 // Inserts `payload` (whose leading Keystone word must carry `id`) into the
-// chain, extending it if the tail page is full.
-//
-// `tail_hint`, when given, is where the tail *search* starts and where the
-// landing page is written back, so an insert touches O(1) pages rather than
-// walking from the head per row (quadratic bulk loads otherwise).
-//
-// **A hint can be behind, never wrong**, and that is the whole safety
-// argument: `next_page_id` is written exactly once (kInvalid -> the new
-// tail) and a page never leaves its chain, so any page id a previous
-// ChainInsert on THIS chain reported still reaches the current tail by
-// walking forward. Two failure modes remain and both heal: a hint page
-// the store cannot fetch falls back to a walk from `head`, and a caller
-// handing in some other chain's page is a logic error upstream that this
-// layer cannot detect - which is why the contract is stated here: the
-// hint must be a value this function previously wrote back for this
-// chain, or kInvalidPageId. Null walks from `head`.
+// chain, extending it if the tail page is full. The tail is found by a walk
+// from `head`.
 //
 // Fails with:
 //   AlreadyExists  a live tuple in the tail page already carries `id`
@@ -142,8 +128,7 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head);
 // walked on to, never linked over (the orphaned-page defect this closed).
 StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, std::uint64_t id,
                                         std::span<const std::byte> payload, std::uint64_t trx_id,
-                                        std::uint64_t owner_oid,
-                                        PageId* tail_hint = nullptr);
+                                        std::uint64_t owner_oid);
 
 // Calls `fn` once per live slot of every page in the chain, in chain order
 // (which is id order page-wise, per the ordering property above). The
@@ -166,14 +151,8 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
 // relation dirty behind it; kWrite is required of any visitor that
 // overwrites or delete-marks, and passing kRead from one of those loses
 // the write.
-// `fetcher`, when given and `access` is not kWrite, routes the page fetches
-// through it - ring mode for a bulk scan (docs/spec/eviction.md §5), so the
-// walk reuses a few frames cyclically instead of flooding the pool. Null is
-// the ordinary path. Ignored for a write walk: the ring never bypasses the
-// dirty protocol.
 Status ChainVisit(
     storage::PageStore& store, PageId head, storage::PageAccess access,
-    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
-    storage::ScanFetcher* fetcher = nullptr);
+    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn);
 
 }  // namespace kds::heap

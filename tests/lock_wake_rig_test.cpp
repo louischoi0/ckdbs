@@ -7,7 +7,7 @@
 // **What is under test is the table's own wake, not a statement's.** No
 // production wait parks on a `LockWaitSlot` yet - the dispatcher's write
 // wait polls its core's `IsInFlight`, which is AO-S5's cutover to make -
-// so these cells drive `LockTable::Acquire`/`Release` from coroutines on
+// so these cells drive `LockTable::TryAcquire`/`Release` from coroutines on
 // the two reactors exactly as `lock_table_test.cpp`'s `LockWaitOnOneReactor`
 // does on one, over a table the rig shares between them and a
 // `SimWakerTable` that logs and holds the kick the decide sends.
@@ -68,11 +68,12 @@ sched::Coro Borrow(LockTable& table, Session& s, std::uint64_t txn, LockKey key,
         }
     }
     for (;;) {
-        auto r = table.Acquire(txn, key, LockMode::kExclusive, s.holdings);
+        txn::LockWake wake;
+        auto r = table.TryAcquire(txn, key, LockMode::kExclusive, s.holdings, nullptr, &wake);
         if (!r.ok()) co_return r.status();
-        if (r.value().granted) break;
+        if (r.value()) break;  // a grant erases this transaction's registration
         s.parks.fetch_add(1, std::memory_order_relaxed);
-        s.pred = [slot = r.value().wake.slot] { return txn::LockWaitReady(slot); };
+        s.pred = [slot = wake.slot] { return txn::LockWaitReady(slot); };
         {
             // A test driver standing in for a client: the reactor runs strict (CJ WE04, I2).
             sched::WaitScope rig_idle(stats::WaitEvent::kIdleClient);

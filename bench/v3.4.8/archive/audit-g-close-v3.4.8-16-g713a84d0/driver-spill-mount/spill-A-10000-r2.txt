@@ -1,0 +1,24 @@
+
+ckdbs [A] benchmark - 3 columns, 10000 rows resident, btree-clustered, 1 connection
+server 127.0.0.1:15461  table vh_spill_1794623039_281782
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ping                       200     1,523     655.6    508.4    590.2    645.7    799.6    950.9    1014.2     0
+insert-spill             10000     1,210     738.7    352.2    612.2    697.0    944.1   1129.4  198995.2     0
+insert-inline            10000     1,716     573.1    299.9    487.3    557.2    782.4    933.8    3531.2     0
+update-spill              1000     1,282     680.3    407.9    598.6    667.5    878.8   1023.1    2079.6     0
+update-inline             1000     1,749     562.2    308.6    475.2    549.4    766.5    920.9    1611.9     0
+
+  ping: SHOW META: round trip + dispatch + reply, no relation touched
+  insert-spill: 1600-byte value, one var-heap page per 5 rows
+  insert-inline: 32-byte value, inline - the control
+  update-spill: each UPDATE appends a new version's value; values are immutable
+  update-inline: inline - the control
+
+  binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/bin/wrap-A.sh (mtime 2026-11-14 02:20:13), durability strict
+  WAL written: 4170 B at mount, 67108864 B after insert-spill (6710 B/row), 67108864 B at end
+  every latency includes Python's socket round trip; sub-10us deltas are noise
+  host guards overridden with --force; the load average recorded above is what the run actually saw
+  verify: clean
+  wrote /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/out/spill-A-10000-r2.json

@@ -1,0 +1,92 @@
+2026-11-14 02:14:11 UTC  phase: preflight
+2026-11-14 02:14:11 UTC  WT=/home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes  OUT=/tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run/20261114T021002Z/m4  RUN_ROOT=/home/louis/bench-runs/audit-g-close/20261114T021002Z/m4  DRY_RUN=0  CELLS=m4
+2026-11-14 02:14:11 UTC  RUN_ROOT filesystem: ext4 (/dev/nvme0n1p1 ext4 263968576 205602596  47514188  82% /)
+2026-11-14 02:14:11 UTC  manifest: /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run/20261114T021002Z/m4/manifest.json
+2026-11-14 02:14:11 UTC  phase: m4: start servers
+2026-11-14 02:14:11 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/bin/kds_server-A --workdir /home/louis/bench-runs/audit-g-close/20261114T021002Z/m4/20261114T021411Z/m4/base --port 15524 --debug-text-port 15525 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m4-base
+{"pid": 263041, "port": 15524, "workdir": "/home/louis/bench-runs/audit-g-close/20261114T021002Z/m4/20261114T021411Z/m4/base", "ready_after_s": 0.403, "binary_sha256": "bb33f463ef4a0eb50a53b3e5422240f1c8dfa1d563ec12ac70f6a3899bdd4488"}
+2026-11-14 02:14:12 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/bin/kds_server-B --workdir /home/louis/bench-runs/audit-g-close/20261114T021002Z/m4/20261114T021411Z/m4/close --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m4-close
+{"pid": 263053, "port": 15522, "workdir": "/home/louis/bench-runs/audit-g-close/20261114T021002Z/m4/20261114T021411Z/m4/close", "ready_after_s": 0.403, "binary_sha256": "072347a000f1dc851f835f2ac61f5f790c24b90ab5305054143e46c2996f4a5c"}
+2026-11-14 02:14:12 UTC  phase: m4: driver
+2026-11-14 02:14:12 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/lock_contention_benchmark.py --port 15524 --label base --ab-port 15522 --ab-label close --sessions 8 --rows 256 --ops 4000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run/20261114T021002Z/m4/m4.json
+
+sessions=8 rows=256 ops/arm/session=4000 blocks=4
+  base: cores accepted on = 0, 1, 2, 3
+  close: cores accepted on = 1, 2, 3
+host before: 1.43 4.60 5.45 1/412 263086   competing: none
+host after : 2.84 4.49 5.36 2/413 264054   competing: none
+
+arm                                                   base                             close
+                            p50us    p99us      qps    err    p50us    p99us      qps    err
+update-hot                  315.3   1088.4    21390   3130    303.0   1067.9    22153   2901
+update-disjoint             303.9   1042.2    22196      0    298.7   1040.0    22631      0
+update-disjoint-again       298.3   1041.0    22398      0    292.4   1036.5    22861      0
+insert-omitted              296.0   1042.1    22408      0    222.5    945.7    21358      0
+select-hot                  417.6   1443.5    16055      0    416.9   1446.3    16156      0
+ping                       3498.8  17765.2     1692      0   3675.2  16657.0     1691      0
+
+base: noise floor (disjoint vs its repeat) p50 = 5.6 us; hot - disjoint p50 = 11.4 us
+close: noise floor (disjoint vs its repeat) p50 = 6.3 us; hot - disjoint p50 = 4.3 us
+
+raw summaries: /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run/20261114T021002Z/m4/m4.json
+2026-11-14 02:15:06 UTC  phase: m4: views
+2026-11-14 02:15:06 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/read_views.py --port 15524 --label m4-base --tools /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run/20261114T021002Z/m4/m4-base
+views read over KWP/1 :15524 m4-base
+sys.lock_waits: 17 rows; by outcome {'granted': 17}; by core {'0': 9, '1': 5, '2': 2, '3': 1}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+  tuple         U     granted         17         282        57      16.6
+sys.wait_stats: app.lock_wait count=1149 total_us=489 max_us=56; app.lock_conflict count=1149; DB time 11147973 us; lock_wait share 4.4e-05
+  core=0,event=app.lock_wait,class=Application,count=474,total_us=196,max_us=54
+  core=0,event=app.lock_conflict,class=Application,count=474,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=350,total_us=198,max_us=56
+  core=1,event=app.lock_conflict,class=Application,count=350,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=272,total_us=58,max_us=18
+  core=2,event=app.lock_conflict,class=Application,count=272,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=53,total_us=35,max_us=23
+  core=3,event=app.lock_conflict,class=Application,count=53,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=1149,total_us=489,max_us=56
+  core=NULL,event=app.lock_conflict,class=Application,count=1149,total_us=0,max_us=0
+sys.meta: core=1, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=17, version=35, wal_topology=single
+sys.ash: 50 samples
+  cpu.on_cpu                  RUNNABLE        50
+2026-11-14 02:15:06 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/read_views.py --port 15522 --label m4-close --tools /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run/20261114T021002Z/m4/m4-close
+views read over KWP/1 :15522 m4-close
+sys.lock_waits: 30 rows; by outcome {'granted': 30}; by core {'0': 4, '1': 3, '2': 20, '3': 3}
+  unit          mode  outcome       rows      sum_us    max_us   mean_us
+  tuple         U     granted         30         535        94      17.8
+sys.wait_stats: app.lock_wait count=1202 total_us=706 max_us=93; app.lock_conflict count=1202; DB time 11050171 us; lock_wait share 6.4e-05
+  core=0,event=app.lock_wait,class=Application,count=222,total_us=88,max_us=21
+  core=0,event=app.lock_conflict,class=Application,count=222,total_us=0,max_us=0
+  core=1,event=app.lock_wait,class=Application,count=211,total_us=90,max_us=39
+  core=1,event=app.lock_conflict,class=Application,count=211,total_us=0,max_us=0
+  core=2,event=app.lock_wait,class=Application,count=722,total_us=516,max_us=93
+  core=2,event=app.lock_conflict,class=Application,count=722,total_us=0,max_us=0
+  core=3,event=app.lock_wait,class=Application,count=47,total_us=11,max_us=2
+  core=3,event=app.lock_conflict,class=Application,count=47,total_us=0,max_us=0
+  core=NULL,event=app.lock_wait,class=Application,count=1202,total_us=706,max_us=93
+  core=NULL,event=app.lock_conflict,class=Application,count=1202,total_us=0,max_us=0
+sys.meta: core=2, lock_waits_dropped=0, lock_waits_overwritten=0, lock_waits_recorded=30, version=35, wal_topology=single
+sys.ash: 56 samples
+  cpu.on_cpu                  RUNNABLE        56
+2026-11-14 02:15:07 UTC  phase: m4: stop servers
+2026-11-14 02:15:07 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py stop --workdir /home/louis/bench-runs/audit-g-close/20261114T021002Z/m4/20261114T021411Z/m4/base
+{"pid": 263041, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-14 02:15:07 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py stop --workdir /home/louis/bench-runs/audit-g-close/20261114T021002Z/m4/20261114T021411Z/m4/close
+{"pid": 263053, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}
+2026-11-14 02:15:07 UTC  phase: done
+2026-11-14 02:15:07 UTC  outputs under /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run/20261114T021002Z/m4:
+  active_servers
+  heartbeat
+  m4-base.server.json
+  m4-base.views.json
+  m4-base.views.txt
+  m4-close.server.json
+  m4-close.views.json
+  m4-close.views.txt
+  m4.json
+  m4.txt
+  manifest.json
+  phase
+  servers.log
+  timeline.txt
+2026-11-14 02:15:07 UTC  cleanup (exit 0)

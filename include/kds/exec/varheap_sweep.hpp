@@ -17,8 +17,8 @@
 // rollback and recovery's undo phase both reach it. This file covers the
 // one hole left.
 //
-// `exec::LogChainInsert` logs its spills under `wal::kNoTxnId`, and **one**
-// caller takes that path: the assertion catalog, which stores a
+// `exec::InsertDeclaration` logs its spills under `wal::kNoTxnId`: the three
+// declaration relations (`catalog_spills.hpp`), each storing a
 // declaration's source text. `kNoTxnId` means *no transaction owns this
 // write*, so there is no undo chain to link the append into and no
 // compensation to run: a rolled-back `CREATE ASSERTION`'s spilled body

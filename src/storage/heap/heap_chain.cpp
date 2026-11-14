@@ -36,8 +36,8 @@ struct HeldTail {
     storage::PageRef page;
 };
 
-StatusOr<HeldTail> WalkToHeldTail(storage::PageStore& store, PageId from, PageId head) {
-    PageId current = from;
+StatusOr<HeldTail> WalkToHeldTail(storage::PageStore& store, PageId head) {
+    PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
         if (Status s = storage::CheckPageWalkBudget(steps, head, "heap chain"); !s.ok()) return s;
         auto bytes = store.Get(current);
@@ -46,18 +46,6 @@ StatusOr<HeldTail> WalkToHeldTail(storage::PageStore& store, PageId from, PageId
         if (next == kInvalidPageId) return HeldTail{current, std::move(bytes.value())};
         current = next;
     }
-}
-
-// From the hint when one is offered (the header's argument: a former chain
-// page is always a valid start, because next_page_id is write-once and pages
-// never leave a chain), from the head otherwise - and from the head again if
-// the hinted walk fails, so a damaged hint costs one retry and never an
-// answer.
-StatusOr<HeldTail> HoldTail(storage::PageStore& store, PageId head, const PageId* tail_hint) {
-    const bool hinted = tail_hint != nullptr && *tail_hint != kInvalidPageId;
-    auto held = WalkToHeldTail(store, hinted ? *tail_hint : head, head);
-    if (!held.ok() && hinted) held = WalkToHeldTail(store, head, head);
-    return held;
 }
 
 // Invariant 3, enforced at the one door tuples come through. Below the
@@ -76,8 +64,7 @@ Status RefuseBelowTail(PageView& tail, PageId tail_id, std::uint64_t id) {
 // duplicate check, and the slot or the growth. Every door below ends here.
 StatusOr<ChainInsertResult> PlaceOnTail(storage::PageStore& store, HeldTail tail,
                                         std::uint64_t id, std::span<const std::byte> payload,
-                                        std::uint64_t trx_id, std::uint64_t owner_oid,
-                                        PageId* tail_hint) {
+                                        std::uint64_t trx_id, std::uint64_t owner_oid) {
     PageView page(tail.page.bytes());
     if (Status s = RefuseBelowTail(page, tail.id, id); !s.ok()) return s;
 
@@ -101,7 +88,6 @@ StatusOr<ChainInsertResult> PlaceOnTail(storage::PageStore& store, HeldTail tail
 
     auto slot = page.InsertTuple(payload, trx_id);
     if (slot.ok()) {
-        if (tail_hint != nullptr) *tail_hint = tail.id;
         return ChainInsertResult{tail.id, slot.value(), /*grew_chain=*/false,
                                  /*linked_from=*/kInvalidPageId, std::move(tail.page), id};
     }
@@ -140,7 +126,6 @@ StatusOr<ChainInsertResult> PlaceOnTail(storage::PageStore& store, HeldTail tail
     // frame is pinned, and a pinned frame is never moved or evicted.
     page.set_next_page_id(new_id);
 
-    if (tail_hint != nullptr) *tail_hint = new_id;
     return ChainInsertResult{new_id, new_slot.value(), /*grew_chain=*/true,
                              /*linked_from=*/tail.id, std::move(tail.page), id};
 }
@@ -148,19 +133,18 @@ StatusOr<ChainInsertResult> PlaceOnTail(storage::PageStore& store, HeldTail tail
 }  // namespace
 
 StatusOr<PageId> ChainTail(storage::PageStore& store, PageId head) {
-    auto tail = WalkToHeldTail(store, head, head);
+    auto tail = WalkToHeldTail(store, head);
     if (!tail.ok()) return tail.status();
     return tail.value().id;
 }
 
 StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, std::uint64_t id,
                                         std::span<const std::byte> payload,
-                                        std::uint64_t trx_id, std::uint64_t owner_oid,
-                                        PageId* tail_hint) {
+                                        std::uint64_t trx_id, std::uint64_t owner_oid) {
     if (Status s = RequirePayloadCarries(payload, id); !s.ok()) return s;
-    auto tail = HoldTail(store, head, tail_hint);
+    auto tail = WalkToHeldTail(store, head);
     if (!tail.ok()) return tail.status();
-    return PlaceOnTail(store, std::move(tail.value()), id, payload, trx_id, owner_oid, tail_hint);
+    return PlaceOnTail(store, std::move(tail.value()), id, payload, trx_id, owner_oid);
 }
 
 namespace {
@@ -170,37 +154,13 @@ namespace {
 // or the chain ends here.
 StatusOr<PageId> ChainVisitOnePage(
     storage::PageStore& store, PageId page_id, storage::PageAccess access,
-    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
-    storage::ScanFetcher* fetcher) {
-    // Ring mode is a read path only (spec-eviction §5): a writer's walk
-    // takes the ordinary route, because the ring never bypasses the
-    // dirty protocol. The visitor's per-page discipline is what makes
-    // the ring's stricter lifetime safe: each page is finished before
-    // the next fetch can rotate its frame away.
-    // Peak pins held by this call: 1. On the `store` branch it is
-    // dropped on return, which is the between-pages suspension property the
-    // header promises. **On the ring branch the pin is the fetcher's and
-    // outlives this call** (AM-R8): a ScanFetcher holds one pin, and
-    // DevicePageStore's ring holds the shared page latch with it, on the
-    // page its last Fetch returned, and drops both at its next Fetch or
-    // when it is destroyed. The per-page discipline is the same - each page
-    // is finished before the next fetch - but the suspension point between
-    // pages is not, which is why the header promises it for the no-fetcher
-    // forms only.
-    storage::PageRef page_ref;
-    std::byte* page_data = nullptr;
-    if (access != storage::PageAccess::kWrite && fetcher != nullptr) {
-        auto fetched = fetcher->Fetch(page_id);
-        if (!fetched.ok()) return fetched.status();
-        page_data = fetched.value().data();
-    } else {
-        auto fetched = store.Fetch(page_id, access);
-        if (!fetched.ok()) return fetched.status();
-        page_ref = std::move(fetched.value());
-        page_data = page_ref.bytes().data();
-    }
-    const std::span<std::byte, kPageSize> page_bytes(page_data, kPageSize);
-    PageView page(page_bytes);
+    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn) {
+    // Peak pins held by this call: 1, dropped on return - the between-pages
+    // suspension property the header promises.
+    auto fetched = store.Fetch(page_id, access);
+    if (!fetched.ok()) return fetched.status();
+    storage::PageRef page_ref = std::move(fetched.value());
+    PageView page(page_ref.bytes());
 
     const std::uint16_t n = page.slot_count();
     for (std::uint16_t i = 0; i < n; ++i) {
@@ -221,14 +181,13 @@ StatusOr<PageId> ChainVisitOnePage(
 
 Status ChainVisit(
     storage::PageStore& store, PageId head, storage::PageAccess access,
-    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
-    storage::ScanFetcher* fetcher) {
+    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn) {
     PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
         if (Status s = storage::CheckPageWalkBudget(steps, head, "heap chain"); !s.ok()) return s;
         // A bad `current` (an invalid head included) fails inside the
         // fetch, exactly as the inlined loop did.
-        auto next = ChainVisitOnePage(store, current, access, fn, fetcher);
+        auto next = ChainVisitOnePage(store, current, access, fn);
         if (!next.ok()) return next.status();
         if (next.value() == kInvalidPageId) return Status::OK();
         current = next.value();

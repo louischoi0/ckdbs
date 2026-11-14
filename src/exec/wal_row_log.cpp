@@ -69,8 +69,7 @@ Status LogSpill(wal::WalManager* wal, storage::PageStore& store, const AppendedS
 
 Status LogChainInsert(wal::WalManager* wal, storage::PageStore& store,
                       const heap::ChainInsertResult& placed, std::span<const std::byte> tuple,
-                      std::uint64_t hdr_trx, std::uint64_t owner_oid,
-                      const std::vector<AppendedSpill>& spills) {
+                      std::uint64_t hdr_trx, std::uint64_t owner_oid) {
     if (wal == nullptr) return Status::OK();
 
     if (placed.grew_chain) {
@@ -98,11 +97,6 @@ Status LogChainInsert(wal::WalManager* wal, storage::PageStore& store,
             }
         }
     }
-
-    // The values this row points at, before the row itself (wal.md §5.2's
-    // direction: a replay must never reach a cell whose pointer resolves
-    // to nothing).
-    if (Status s = LogSpills(wal, store, spills, wal::kNoTxnId, owner_oid); !s.ok()) return s;
 
     return LogHeapWrite(wal, store, wal::RecordType::kHeapInsert, wal::kNoTxnId, placed.page_id,
                         placed.slot, tuple, hdr_trx, /*hdr_undo=*/0);

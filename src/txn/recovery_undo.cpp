@@ -1,16 +1,14 @@
 #include "kds/txn/recovery_undo.hpp"
 
-#include <array>
 #include <optional>
-#include <span>
 #include <string>
-#include <vector>
 
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/storage/visit.hpp"
+#include "kds/txn/row_compensation.hpp"
 #include "kds/txn/varheap_release.hpp"  // a loser's spill is released, not retired
 #include "kds/wal/payload.hpp"
 
@@ -213,61 +211,27 @@ Status RecoveryUndo::Apply(storage::PageStore& store, std::uint64_t txn_id,
                            const UndoVersion& rec, PageId page_id, heap::PageView& view,
                            std::uint16_t slot) {
     switch (rec.type) {
-        case UndoRecordType::kInsert: {
-            if (Status s = view.RetireSlot(slot); !s.ok()) return s;
-            if (wal_ == nullptr) break;
-            std::array<std::byte, wal::kSlotRetirePayloadSize> buf{};
-            const wal::SlotRetirePayload fields{slot};
-            if (auto n = wal::EncodeSlotRetire(buf, fields); !n.ok()) return n.status();
-            // **The aborting transaction's id, not kNoTxnId** - the same
-            // amendment the live compensation carries: kNoTxnId would hide
-            // the rollback from the next analysis phase.
-            auto out = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kSlotRetire, txn_id, page_id}, buf);
-            if (!out.ok()) return out.status();
-            if (Status s = store.StampPageLsn(page_id, out.value()); !s.ok()) return s;
+        case UndoRecordType::kInsert:
+            if (Status s = CompensateInsert(store, wal_, txn_id, page_id, view, slot); !s.ok()) {
+                return s;
+            }
             break;
-        }
 
-        case UndoRecordType::kOverwrite: {
-            if (Status s = view.OverwriteTuple(slot, rec.image, rec.prior_trx_id,
-                                               rec.prior_undo_ptr);
+        case UndoRecordType::kOverwrite:
+            if (Status s = CompensateOverwrite(store, wal_, txn_id, page_id, view, slot, rec.image,
+                                               rec.prior_trx_id, rec.prior_undo_ptr);
                 !s.ok()) {
                 return s;
             }
-            if (wal_ == nullptr) break;
-            std::vector<std::byte> buf(wal::kHeapWriteFixedSize + rec.image.size());
-            const wal::HeapWritePayload fields{rec.prior_trx_id, rec.prior_undo_ptr,
-                                               slot,
-                                               static_cast<std::uint16_t>(rec.image.size())};
-            auto n = wal::EncodeHeapWrite(buf, fields, rec.image);
-            if (!n.ok()) return n.status();
-            auto out = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapOverwrite, txn_id, page_id},
-                std::span(buf).first(n.value()));
-            if (!out.ok()) return out.status();
-            if (Status s = store.StampPageLsn(page_id, out.value()); !s.ok()) return s;
             break;
-        }
 
-        case UndoRecordType::kDeleteMark: {
-            if (Status s = view.ClearDeleteMark(slot, rec.prior_trx_id,
-                                                rec.prior_undo_ptr);
+        case UndoRecordType::kDeleteMark:
+            if (Status s = CompensateDeleteMark(store, wal_, txn_id, page_id, view, slot,
+                                                rec.prior_trx_id, rec.prior_undo_ptr);
                 !s.ok()) {
                 return s;
             }
-            if (wal_ == nullptr) break;
-            std::array<std::byte, wal::kDeleteUnmarkPayloadSize> buf{};
-            const wal::HeapDeleteUnmarkPayload fields{rec.prior_trx_id, rec.prior_undo_ptr,
-                                                      slot};
-            if (auto n = wal::EncodeHeapDeleteUnmark(buf, fields); !n.ok()) return n.status();
-            auto out = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapDeleteUnmark, txn_id, page_id},
-                buf);
-            if (!out.ok()) return out.status();
-            if (Status s = store.StampPageLsn(page_id, out.value()); !s.ok()) return s;
             break;
-        }
 
         case UndoRecordType::kInvalid:
         default:

@@ -162,6 +162,27 @@ TEST_F(WalManagerTest, ManyCommittersResolveOnOneSync) {
     }
 }
 
+TEST_F(WalManagerTest, TheBatchMeanCountsStagedStrictCommitsAsMembers) {
+    // A staged `strict` commit (BA-S7) is counted strict, but it rides the
+    // batch's sync like a `group` one, so the mean counts it with them.
+    auto wal = OpenManager();
+    ASSERT_NE(wal, nullptr);
+    constexpr std::uint64_t kStrict = 3;
+    constexpr std::uint64_t kGroup = 2;
+    for (std::uint64_t txn = 1; txn <= kStrict; ++txn) {
+        ASSERT_TRUE(wal->StageStrictCommit(txn).ok());
+    }
+    for (std::uint64_t txn = kStrict + 1; txn <= kStrict + kGroup; ++txn) {
+        ASSERT_TRUE(wal->Commit(txn, DurabilityClass::kGroup).ok());
+    }
+    ASSERT_TRUE(wal->DrainOnce().ok());
+    EXPECT_EQ(wal->stats().group_batches, 1u);
+    EXPECT_EQ(wal->stats().group_commits, kGroup);
+    EXPECT_EQ(wal->stats().strict_commits, kStrict);
+    EXPECT_EQ(wal->stats().group_batch_max, kStrict + kGroup);
+    EXPECT_EQ(wal->stats().mean_group_batch_size(), static_cast<double>(kStrict + kGroup));
+}
+
 // The writer thread's failed sync stops the stream every core appends to,
 // through the hook `StartWriter` installs: not only the reactor's inline sync.
 TEST_F(WalManagerTest, AFailedSyncOnTheWriterThreadStopsTheLog) {
