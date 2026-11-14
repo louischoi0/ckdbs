@@ -1,8 +1,9 @@
 # Pending: the whole-engine audit's second run - twelve slices read, fifteen findings verified, the verification left short
 
-Status: **PENDING** - nothing here is fixed or applied; 49 findings wait for a
-verifier, 15 for the operator's word on what to take up, and 15 slices are
-still unread. Decides nothing, opens no stage, licenses no code.
+Status: **PENDING** - G1-G15 are fixed or applied since 2026-11-14 on the
+operator's word (section 8, `instructions/v3.2.0/raft-marks-2026-11-14.md`);
+49 findings still wait for a verifier, and 15 slices are still unread. The
+rest decides nothing, opens no stage, licenses no code.
 Raised: 2026-11-13, in conversation with the operator; recorded 2026-11-14.
 Read at: `0b98bc4f` (`v3.4.8-11-g0b98bc4f`), on worktree `audit-core12-slices`.
 Every `path:line` below is at that commit.
@@ -18,7 +19,7 @@ under `docs/inflight/bugs/`).
 
 | Findings | Outcome |
 |---|---|
-| G1 to G15 | **survived** every verifier assigned to them: five logic defects (G1-G5), five dead code (G6-G10), five duplication (G11-G15) |
+| G1 to G15 | **survived** every verifier assigned to them: five logic defects (G1-G5), five dead code (G6-G10), five duplication (G11-G15). **All fifteen taken up on 2026-11-14** (section 8) |
 | G16 to G64 | **unjudged**: at least one verifier did not return. G21 and G24 each have one of their two verdicts, and it is "survived"; the other 47 have none |
 | G65, G66 | **refuted**: G65 is already in `known-gaps.md`, G66 is not worth the change |
 
@@ -1110,12 +1111,40 @@ up, not a proof that the code is right.
    then G16-G64 are not to be taken up as defects - G16 (a mount refused for
    a loser past 2^20 undo records), G17, G18, G19 and G20 are the finders'
    own `critical`/`high`, and would be the first to verify.
-2. **G1-G5**, on the operator's word, one at a time, each with a cell run
-   against the unfixed tree first. G1 (the reopened log's tail claimed
-   durable without a sync) and G3 (an unlogged var-heap slot left by a failed
-   declaration insert) are durability holes; G2 is a capacity limit read as
-   `Corruption`; G4 and G5 are smaller. Both of G1's verifiers note the fix
-   adds one sync per mount, which moves the sim's sync-fault numbering.
-3. **G6-G15**, if wanted: dead code and duplication, each a change of its
-   own, none in the dispatcher.
-4. **The other 15 slices**, or the decision that the audit stops here.
+2. ~~G1-G5~~ and ~~G6-G15~~: done, section 8.
+3. **The other 15 slices**, or the decision that the audit stops here.
+
+## 8. What became of G1-G15
+
+`[source-read]` and `[measured]` as marked. Taken up on 2026-11-14 on the
+operator's word (`instructions/v3.2.0/raft-marks-2026-11-14.md` §1), on
+worktree `audit-g1-g15-fixes` from `2789a457`; the decisions the verifiers
+left open were adopted on the standing go-ahead (that file's §2), never
+marked by the operator. Each step was reviewed by `critics-developer`; no
+engine defect was found in either review.
+
+| Finding | Became | Commit | Cell |
+|---|---|---|---|
+| G1 | **fixed**: `WalStream::Open` syncs the device before `durable_lsn()` claims what it scanned; a writable `FileLogDevice` open also fsyncs its directory (a review finding next to G1) | `cbe61e87`, the directory sync in the review commit | `ReopenSyncsWhatItScannedBeforeClaimingItDurable`, `ARefusedSyncRefusesTheReopen` - both fail with the sync removed `[measured]` |
+| G2 | **fixed**: the var-heap walk's 2^20-page budget replaced by Brent's cycle check; a legal chain is bounded only by the page-id space | `cbe61e87` | `ACycleInTheLinksIsRefusedFromTheRootAndFromAHint` pins the guard; a chain past 2^20 pages cannot be built in a cell, so the defect itself has none |
+| G3 | **fixed**: `InsertDeclaration` logs each spill at its append (G3-D (a)); `LogChainInsert` lost its spills | `cbe61e87` | `TransitionCatalogTest.ASpillBeforeARefusedPlacementIsStillLogged` - fails with the on-append log removed `[measured]` |
+| G4 | **fixed** (G4-D (a), `[quiet-wrong]`): the open zeroes an unsealed tail from one record header past the scan's end; the scrub writes only non-zero spans | `cbe61e87`, narrowed in the review commit | `AnIntactRecordAboveAHoleIsNeverReadBackIntoTheStream` - fails with the scrub removed `[measured]` |
+| G5 | **fixed**: `WalStats::batched_commits` is the mean's numerator | `cbe61e87` | `TheBatchMeanCountsStagedStrictCommitsAsMembers` - fails with the count removed `[measured]` |
+| G6 | **removed**: the queueing ask whole, `already_held` with it (G6-D (a)); the cells ask through `TryAcquire` | `41a48732` | `ARefusedTransactionTakesItsQueuedRequestWithIt` deleted (queue-only) |
+| G7, G8 | **removed** | `41a48732` | - |
+| G9 | **removed**: `DecodeBackupMark`, the ALLOC/FREE codec and its round-trip cell; the record numbers stay | `cbe61e87` | - |
+| G10 | **removed, narrowed** (G10-D (b)): the tail hint, the fetcher, `varheap::PageFreeSpace`, `grew()`, `HasSpaceFor`; BZ-R5's helpers and `SlotCapacity` kept | `cbe61e87` | three hint cells deleted |
+| G11 | **applied**: `FindEntry`, `EraseIfIdle` | `41a48732` | - |
+| G12 | **applied**: `txn/row_compensation.{hpp,cpp}` | `41a48732` | - |
+| G13 | **applied**: `ReadTailFields`/`WriteTailFields`; the optional test hardening not taken (G13-D (b)) | `41a48732` | - |
+| G14 | **applied**: `ScanTail` resumes through `ScanLogToEnd` | `cbe61e87` | - |
+| G15 | **applied**: the redo append arms delegate to `InsertTupleAt` and `PageAppend` | `cbe61e87` | - |
+
+**What bounds that.** The cells shown failing were run against the tree with
+the fix taken out by hand, not against `2789a457`. G2's own failure, a chain
+past 8 GiB refused after a restart, has no reproduction; the first spilling
+write after a mount still walks its chain from the root. The scrub re-reads
+the last segment once more at every mount. The full suite and the overhead
+measurement are in the milestone's close report, not here. Two cuts the
+reviews proposed were not taken and are not owed: folding `AcquireInner`
+into `TryAcquire`, and the forward declaration in `row_compensation.hpp`.
