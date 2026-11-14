@@ -691,7 +691,7 @@ TEST(LockTableTest, ContendedThreadsOnOneUnitProduceExactlyOneHolder) {
     EXPECT_EQ(granted.load(), 1) << "an exclusive borrow admits exactly one holder";
     EXPECT_EQ(blocked.load(), kThreads - 1);
     EXPECT_EQ(table->WaiterCount(key), static_cast<std::size_t>(kThreads - 1))
-        << "every refused request is queued, which is what a decide reads before it probes";
+        << "every refused ask left its wake registration, which is what a decide reads before it probes";
 
     // **The slot half, under a latch that is real.** Every reactor cell in
     // this file runs at one core, where `LatchGuard(nullptr)` is a no-op -
@@ -1099,15 +1099,19 @@ TEST(LockTableTest, ARefusedFenceLeavesTheTableAsItFoundIt) {
         Ask(*table, 1, LockKey::Tuple(kRel, 15), LockMode::kExclusive, writer).value().granted);
     const std::size_t entries_before = table->EntryCount();
 
+    // Asked with no wake, so "as it found it" is checkable whole: a wake
+    // would leave a registration on the row's entry by design.
     LockHoldings fence_holder;
-    auto fence =
-        Ask(*table, 2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
+    auto fence = table->TryAcquire(2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive,
+                                   fence_holder);
     ASSERT_TRUE(fence.ok());
-    ASSERT_FALSE(fence.value().granted);
+    ASSERT_FALSE(fence.value());
 
     EXPECT_EQ(table->RelationFenceCount(kRel), 0u)
         << "the counter was raised before the entry was published and must come back down with it";
     EXPECT_EQ(table->EntryCount(), entries_before) << "the entry the verify published is gone";
+    EXPECT_EQ(table->WaiterCount(LockKey::Tuple(kRel, 15)), 0u)
+        << "and no registration was left on the row that refused it";
     EXPECT_EQ(fence_holder.size(), 0u)
         << "and the ledger record with it, or the cap is spent on a borrow nobody holds and "
            "Release lowers the fence counter a second time";
@@ -1116,9 +1120,10 @@ TEST(LockTableTest, ARefusedFenceLeavesTheTableAsItFoundIt) {
 
     // The refusal is repeatable rather than a one-shot: nothing about the
     // first attempt makes the second answer differently.
-    auto again = Ask(*table, 2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
+    auto again =
+        table->TryAcquire(2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
     ASSERT_TRUE(again.ok());
-    EXPECT_FALSE(again.value().granted);
+    EXPECT_FALSE(again.value());
     EXPECT_EQ(table->RelationFenceCount(kRel), 0u);
 }
 

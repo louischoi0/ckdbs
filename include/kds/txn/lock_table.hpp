@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -60,13 +59,14 @@
 // never seen - no lost wake without AO-R4's disjunctive predicate.
 //
 // **Cross-core, a wake is write-then-kick** (AU-S2, AR0-6-R1). Whoever
-// flips a waiter's slot - a decide's `WakeWaiters` - kicks the core it parked on through the wake registry
-// (`sched/waker_table.hpp`, installed with `SetWakeRegistry`) **after**
-// releasing the partition latch. A waiter on the decider's own core is not
-// kicked; from a non-reactor thread `CurrentCore()` is 0 and a core-0
-// waiter goes unkicked. None is installed at `cores = 1`. A skipped or lost
-// kick costs one idle block (`max_idle_block_ms`), never liveness: the
-// park is level-triggered and re-polled after every block.
+// flips a waiter's slot - a decide's `WakeWaiters` - kicks the core it
+// parked on through the wake registry (`sched/waker_table.hpp`, installed
+// with `SetWakeRegistry`) **after** releasing the partition latch. A
+// waiter on the decider's own core is not kicked; from a non-reactor
+// thread `CurrentCore()` is 0 and a core-0 waiter goes unkicked. None is
+// installed at `cores = 1`. A skipped or lost kick costs one idle block
+// (`max_idle_block_ms`), never liveness: the park is level-triggered and
+// re-polled after every block.
 //
 // **The caller owes the ancestor chain and nothing here enforces it.** A
 // relation `X` and a tuple `X` under it are both granted by this table,
@@ -599,8 +599,9 @@ public:
     // after the covering test and **before** the conflict test, because a
     // cap is not a conflict and cannot be waited out.
     //
-    // **Why a conflict is reported, not waited on.** The two write sites run inside a page-latched span (`BtreeVisitLeafPage`'s,
-    // for the first of them), which is no place to park - so the borrow is
+    // **Why a conflict is reported, not waited on.** The two write sites
+    // run inside a page-latched span (`BtreeVisitLeafPage`'s, for the first
+    // of them), which is no place to park - so the borrow is
     // taken where it is free and a conflict is *reported* rather than
     // waited on here. AO-S3b's shape is what carries the wait: the walk
     // stops holding nothing, and the park happens on the statement, in
@@ -613,8 +614,9 @@ public:
     //
     // **`wake`, when given, receives a slot to park on** (AO-S6e-b). The
     // ask stays non-queueing - no queue position, and the grant this waiter
-    // eventually gets is one it asks for again - but a registration is left on the entry so the
-    // holder's release flips the slot and kicks the core that asked. It is
+    // eventually gets is one it asks for again - but a registration is left
+    // on the entry so the holder's release flips the slot and kicks the
+    // core that asked. It is
     // what a **statement** waits on: the release wakes it from whichever
     // core releases, where a poll of `TransactionManager::IsInFlight` - the
     // instance's since AX-S1 - is re-read only when the waiter's reactor

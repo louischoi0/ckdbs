@@ -338,8 +338,8 @@ StatusOr<HeapDeleteUnmarkPayload> DecodeHeapDeleteUnmark(std::span<const std::by
 // `kBootstrapXid` - the mark sweep, `sys.cabins`' drop, a non-transactional
 // catalog delete), `sys.assertions`' drop of a live row
 // (`exec::LogSlotRetire`), and a user `PURGE` (`exec::PurgeKey`, BH). Every
-// other SLOT_RETIRE is a rollback compensation (`txn/manager.cpp`,
-// `txn/recovery_undo.cpp`).
+// other SLOT_RETIRE is a rollback compensation (`txn/row_compensation.cpp`,
+// called by `txn/manager.cpp` and `txn/recovery_undo.cpp`).
 
 struct SlotRetirePayload {
     std::uint16_t slot;

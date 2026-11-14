@@ -4857,8 +4857,8 @@ void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::
     //
     // **Not over a `U` or `X` this transaction holds**: the probe would be
     // granted as already covered, adding no record, and the grant arm's
-    // release would drop a record the probe never added. An `S` it holds does not skip the probe - the
-    // release matches by mode.
+    // release would drop a record the probe never added. An `S` it holds
+    // does not skip the probe - the release matches by mode.
     const txn::LockKey unit = txn::LockKey::Tuple(child_rel, tuple_key);
     if (locks_ != nullptr && scope.txn != nullptr && may_park_ &&
         !scope.txn->borrows().HoldsCovering(unit, txn::LockMode::kUpdate)) {

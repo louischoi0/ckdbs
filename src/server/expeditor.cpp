@@ -1037,8 +1037,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // every core's records.
     // **Recovery runs in drain mode** (BE-Q11): it is not a row's mutation,
     // it holds no page latch between records, and the log it replays is
-    // durable (`WalStream::Open` synced what its scan found) - so at the cap it writes dirty frames back and goes on,
-    // where a refusal would refuse the mount. Held through the completion
+    // durable (`WalStream::Open` synced what its scan found) - so at the cap
+    // it writes dirty frames back and goes on, where a refusal would refuse
+    // the mount. Held through the completion
     // checkpoint below, which ends the pass.
     std::optional<storage::DrainOnPressure> mount_drain;
     mount_drain.emplace(*expeditor->store_);

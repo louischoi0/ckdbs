@@ -318,7 +318,6 @@ TEST_F(VarHeapChainTest, AppendAndFetchRoundTrip) {
     // what keeps a caller from logging a PAGE_INIT for a page it did not
     // create.
     EXPECT_EQ(ptr.value().created_page_id, kInvalidPageId);
-    EXPECT_EQ(ptr.value().created_page_id, kInvalidPageId);
     EXPECT_EQ(ptr.value().linked_page_id, kInvalidPageId);
 }
 

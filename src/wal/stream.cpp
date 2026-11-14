@@ -197,7 +197,8 @@ Status WalStream::ScanTail(std::uint64_t segment_no) {
     // The last segment's (end, sealed) is the recovery scanner's answer, not
     // a second walk of its own: the append path and the replay path must not
     // find two ends of one log (`log_scanner.hpp`).
-    auto scanned = ScanLogToEnd(*device_, core_id_, segment_no * segment_size_ + kSegmentHeaderSize);
+    auto scanned =
+        ScanLogToEnd(*device_, core_id_, segment_no * segment_size_ + kSegmentHeaderSize);
     if (!scanned.ok()) {
         return scanned.status();
     }
@@ -241,9 +242,17 @@ Status WalStream::ScrubTail(std::uint64_t segment_no, Lsn end) {
         if (Status s = device_->ReadAt(segment_no, offset, piece); !s.ok()) {
             return s;
         }
-        if (std::any_of(piece.begin(), piece.end(), [](std::byte b) { return b != std::byte{0}; })) {
-            std::fill(piece.begin(), piece.end(), std::byte{0});
-            if (Status s = device_->WriteAt(segment_no, offset, piece); !s.ok()) {
+        // Only the span from the piece's first non-zero byte to its last is
+        // written: the zero bytes around it are already what the scrub wants.
+        const auto nonzero = [](std::byte b) { return b != std::byte{0}; };
+        const auto first = std::find_if(piece.begin(), piece.end(), nonzero);
+        if (first != piece.end()) {
+            const auto last = std::find_if(piece.rbegin(), piece.rend(), nonzero).base();
+            std::fill(first, last, std::byte{0});
+            const auto at = static_cast<std::size_t>(first - piece.begin());
+            const auto len = static_cast<std::size_t>(last - first);
+            if (Status s = device_->WriteAt(segment_no, offset + at, piece.subspan(at, len));
+                !s.ok()) {
                 return s;
             }
         }

@@ -246,9 +246,10 @@ public:
     // section 4.2). An unsealed tail's bytes past that record's header are
     // zeroed, and the device is synced before durable_lsn() claims what the
     // scan found: a killed process's writes may be in the OS cache only. A
-    // refused sync, write or read refuses the open. A segment header that does not match this stream
-    // (magic, format version, core_id, segment_no, start_lsn) is Corruption
-    // rather than something to append past.
+    // refused sync, write or read refuses the open. A segment header that
+    // does not match this stream (magic, format version, core_id,
+    // segment_no, start_lsn) is Corruption rather than something to append
+    // past.
     //
     // `shared` arms the latch (the concurrency section above). Off, the
     // stream is one thread's and the latch is never touched.

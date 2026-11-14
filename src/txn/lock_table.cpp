@@ -407,8 +407,8 @@ std::size_t LockTable::WaitEdgeCount() const {
 void LockTable::WakeWaiters(const LockKey& key) {
     // Flip every queued slot on the unit. **A wake is not a grant**: each
     // woken waiter re-asks through `TryAcquire`, and those that still
-    // conflict register again on the slot they already hold. That costs a poll per
-    // waiter per decide and never a wrong answer, which is the trade
+    // conflict register again on the slot they already hold. That costs a
+    // poll per waiter per decide and never a wrong answer, which is the trade
     // AO-R4's mandatory re-check makes unavoidable - a grant handed out
     // here would be a grant decided under this latch and consumed after it,
     // with nothing holding the unit in between.

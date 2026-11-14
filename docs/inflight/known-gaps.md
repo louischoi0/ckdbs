@@ -69,7 +69,12 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `2f08b71c`: access statistics, Waystone trails, the delete-mark purge,
   Cabin and assertion builds, and DDL page creation open no window. Census
   B classified each as refusing before its first write. No cell drives one
-  into a full pool. Owned by `docs/spec/eviction.md` (§3.3).
+  into a full pool. **A declaration insert does write before its refusal**
+  (verified at `cbe61e87`): `CREATE ASSERTION`, `CREATE TRANSITION` and a
+  Cabin expression spill their text before the row is placed; each spill is
+  logged at its append since the audit's G3, so a refusal after it leaves an
+  unreferenced value the mount sweep collects, not a slot redo never built.
+  Owned by `docs/spec/eviction.md` (§3.3).
 
 ## Testing
 
@@ -1940,4 +1945,8 @@ Verified on `bs-test-hardening` from `5d58f3ca`
   suffix of its unsynced run, never scattered; the page device keeps one
   pending image a page, so a page written twice since its sync persists as
   its latest image or not at all; and a page past the durable capacity is
-  lost with the growth. A disk can do each of these differently.
+  lost with the growth. A disk can do each of these differently. The
+  scattered log cut is one the engine answers since the audit's G4 - the
+  open zeroes what lies past the tail (`wal.md` §4.2) - but the sim cannot
+  produce it; `WalStreamTest.AnIntactRecordAboveAHoleIsNeverReadBackIntoTheStream`
+  plants the image by hand (verified at `cbe61e87`).

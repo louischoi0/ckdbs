@@ -545,7 +545,7 @@ TEST_F(WaystoneOptInTest, ABindBorrowRefusedIsRecordedAndTheOptInStillRuns) {
     txn::LockHoldings ddl;
     constexpr std::uint64_t kDdl = 9'000'001;
     ASSERT_TRUE(locks_->TryAcquire(kDdl, txn::LockKey::Relation(oid.value()),
-                                txn::LockMode::kExclusive, ddl).value());
+                                   txn::LockMode::kExclusive, ddl).value());
     EXPECT_EQ(Run(kPoint), "id,v\\n3,30") << "the premise moved: a reader waited for the DDL";
     EXPECT_EQ(Run("WAYSTONE ON " + kPoint).rfind("OK WAYSTONE ON", 0), 0u);
     locks_->Release(kDdl, ddl);

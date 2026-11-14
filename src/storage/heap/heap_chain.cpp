@@ -36,8 +36,8 @@ struct HeldTail {
     storage::PageRef page;
 };
 
-StatusOr<HeldTail> WalkToHeldTail(storage::PageStore& store, PageId from, PageId head) {
-    PageId current = from;
+StatusOr<HeldTail> WalkToHeldTail(storage::PageStore& store, PageId head) {
+    PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
         if (Status s = storage::CheckPageWalkBudget(steps, head, "heap chain"); !s.ok()) return s;
         auto bytes = store.Get(current);
@@ -133,7 +133,7 @@ StatusOr<ChainInsertResult> PlaceOnTail(storage::PageStore& store, HeldTail tail
 }  // namespace
 
 StatusOr<PageId> ChainTail(storage::PageStore& store, PageId head) {
-    auto tail = WalkToHeldTail(store, head, head);
+    auto tail = WalkToHeldTail(store, head);
     if (!tail.ok()) return tail.status();
     return tail.value().id;
 }
@@ -142,7 +142,7 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
                                         std::span<const std::byte> payload,
                                         std::uint64_t trx_id, std::uint64_t owner_oid) {
     if (Status s = RequirePayloadCarries(payload, id); !s.ok()) return s;
-    auto tail = WalkToHeldTail(store, head, head);
+    auto tail = WalkToHeldTail(store, head);
     if (!tail.ok()) return tail.status();
     return PlaceOnTail(store, std::move(tail.value()), id, payload, trx_id, owner_oid);
 }

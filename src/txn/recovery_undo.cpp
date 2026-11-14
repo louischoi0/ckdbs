@@ -1,10 +1,7 @@
 #include "kds/txn/recovery_undo.hpp"
 
-#include <array>
 #include <optional>
-#include <span>
 #include <string>
-#include <vector>
 
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"

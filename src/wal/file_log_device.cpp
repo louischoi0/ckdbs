@@ -322,6 +322,14 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::OpenImpl(const std::stri
         ++expected;
     }
 
+    // **The names it adopted are made durable too.** `Sync` makes segment
+    // bytes durable, not segment names, and a process killed between a
+    // creation's rename and its directory fsync leaves a segment whose name
+    // may be only in the dentry cache: adopted here, appended to, and its
+    // commits acknowledged, it could vanish with them at a power loss.
+    if (!read_only && !device->segments_.empty()) {
+        if (Status s = device->SyncDirectory(); !s.ok()) return s;
+    }
     return device;
 }
 

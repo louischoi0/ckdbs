@@ -19,17 +19,16 @@ namespace {
 // first walk from its root (after a restart, or a hint slot another root
 // took) and every spilling write to its relation with it. Brent's check
 // instead: the page reached at each power-of-two step is remembered, and
-// meeting it again is a cycle, found within about three times its length; a
-// legal chain is bounded only by the page-id space, which no acyclic chain
-// can exceed.
+// meeting it again is a cycle, found within about three times its length -
+// so every cycle is refused and a legal chain is bounded only by the
+// page-id space it lives in.
 class CycleGuard {
 public:
     explicit CycleGuard(PageId start) noexcept : mark_(start) {}
 
-    // True when the hop to `next` closes a cycle, or the walk has taken more
-    // hops than there are page ids.
+    // True when the hop to `next` meets the remembered page: a cycle.
     bool Revisits(PageId next) noexcept {
-        if (next == mark_ || ++hops_ >= kMaxPageCount) return true;
+        if (next == mark_) return true;
         if (++lap_ == power_) {
             mark_ = next;
             power_ <<= 1;
@@ -40,7 +39,6 @@ public:
 
 private:
     PageId mark_;
-    std::uint64_t hops_ = 0;
     std::uint64_t lap_ = 0;
     std::uint64_t power_ = 1;
 };
