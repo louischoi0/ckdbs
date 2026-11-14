@@ -146,17 +146,6 @@ public:
 
     const std::vector<TrailEntry>& trail() const noexcept { return trail_; }
 
-    // The newest undo record this transaction wrote - the head of its
-    // `txn_prev_undo_ptr` chain (RV10, `undo_page.hpp`). `kNoUndoPtr` until
-    // it writes one.
-    //
-    // **This is what a checkpoint persists** so recovery can walk the chain
-    // after a crash. The trail above is the live rollback path's and does
-    // not survive one; this pointer is the durable equivalent, and the two
-    // are kept in step by `TransactionManager::AppendUndo` being the only
-    // thing that advances either.
-    std::uint64_t last_undo_ptr() const noexcept { return last_undo_ptr_; }
-
     // The borrow list AO-R6 puts here. Non-const because `LockTable`
     // records into it; a transaction owns exactly one and it is move-only,
     // so there is no way to hand a second owner the same borrows.
@@ -185,6 +174,12 @@ private:
     // against a holder it can already see as decided. A manager with no
     // lock table never touches it.
     LockHoldings borrows_;
+    // The newest undo record this transaction wrote - the head of its
+    // `txn_prev_undo_ptr` chain (RV10, `undo_page.hpp`); `kNoUndoPtr` until
+    // it writes one. **What a checkpoint persists** (`TransactionManager::
+    // Snapshot`) so recovery can walk the chain after a crash: the trail does
+    // not survive one. Advanced, with the trail, only by
+    // `TransactionManager::AppendUndo`.
     std::uint64_t last_undo_ptr_ = kNoUndoPtr;
     bool active_ = false;
     // A deferred commit's first half (`TransactionManager::CommitDeferred`):

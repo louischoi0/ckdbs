@@ -227,13 +227,6 @@ struct Snapshot {
     // needs the chain with no log to walk is a caller error, and the
     // reader below reports it rather than guessing.
     UndoLog* undo = nullptr;
-
-    // True when this snapshot can never need the undo chain, so a reader
-    // may skip the classification entirely. Not an optimization the reader
-    // depends on - Classify() answers this view in one branch - but it
-    // makes "nothing changed for a non-transactional caller" checkable in
-    // one place.
-    bool sees_everything() const noexcept { return view.sees_everything; }
 };
 
 }  // namespace kds::txn

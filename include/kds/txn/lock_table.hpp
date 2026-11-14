@@ -46,8 +46,8 @@
 // **The engine asks with `TryAcquire`**, which never queues: a conflict is
 // reported with the holder it lost to and a wake registration, and the
 // statement parks outside every page-latched span (`DispatchAsync`), then
-// re-runs. `Acquire`, the queueing ask, has no engine caller; the cells
-// drive it.
+// re-runs. There is no queueing ask: a registration is a wake, never a
+// place in a line.
 //
 // **The re-check after a park is mandatory, and the slot does not replace
 // it** (AO-3's finding G). A wait breaks `manager.hpp`'s premise that
@@ -60,8 +60,7 @@
 // never seen - no lost wake without AO-R4's disjunctive predicate.
 //
 // **Cross-core, a wake is write-then-kick** (AU-S2, AR0-6-R1). Whoever
-// flips a waiter's slot - a decide's `WakeWaiters`, a withdrawal's
-// `DequeueWaiter` - kicks the core it parked on through the wake registry
+// flips a waiter's slot - a decide's `WakeWaiters` - kicks the core it parked on through the wake registry
 // (`sched/waker_table.hpp`, installed with `SetWakeRegistry`) **after**
 // releasing the partition latch. A waiter on the decider's own core is not
 // kicked; from a non-reactor thread `CurrentCore()` is 0 and a core-0
@@ -190,8 +189,8 @@
 // mid-flight, which is a wait the transaction did not ask for and a
 // deadlock edge nobody drew. The one refusal the borrow model *adds* and
 // keeps, because a cap cannot be waited out (AR2-A §3) - which is why it
-// is refused **before** a conflict is queued: a transaction at its cap must
-// not be left waiting for a grant that will be refused on arrival.
+// is refused **before** a conflict is registered: a transaction at its cap
+// must not be left waiting for a grant that will be refused on arrival.
 
 namespace kds::sched {
 class WakeRegistry;
@@ -487,9 +486,6 @@ struct AcquireResult {
     // because a cycle needs one edge per waiter and the detector walks
     // transitively.
     std::uint64_t blocking_txn = 0;
-    // The transaction already held this unit at a covering mode, so no
-    // entry was added and no cap was spent. `granted` is true.
-    bool already_held = false;
     // Set only when `granted` is false: what to park on
     // (`sched::WaitUntil` over `LockWaitReady(wake.slot)`), what a decide on
     // the blocking unit flips, and `wake.key`, the unit it is registered on
@@ -504,11 +500,9 @@ struct AcquireResult {
     // either before the holder's removal, whose release flips it, or after
     // it, in which case the scan never saw the holder and nothing refused.
     //
-    // **Null on one refusal still, and a caller must test for it**: a
-    // *queueing* `Acquire`'s cross-unit conflict, which is given no queue
-    // position on another unit and no slot. No engine path calls `Acquire`.
-    // `LockWaitReady` has no null branch by design, so parking on this
-    // without the test is a crash.
+    // Null when the ask registered no wake (`TryAcquire` given no `wake`).
+    // `LockWaitReady` has no null branch by design, so parking on a null
+    // slot is a crash.
     LockWake wake;
 };
 
@@ -579,16 +573,9 @@ public:
         return false;
     }
 
-    // The unit this transaction is queued on, if any. **At most one**: a
-    // transaction is one thread of control and can be blocked on exactly
-    // one borrow at a time. That is what makes the queue unwindable
-    // without a second index - `Release` dequeues this one record.
-    const std::optional<LockKey>& waiting_on() const noexcept { return waiting_; }
-
 private:
     friend class LockTable;
     std::vector<Held> held_;
-    std::optional<LockKey> waiting_;
 };
 
 class LockTable {
@@ -604,27 +591,15 @@ public:
     LockTable(const LockTable&) = delete;
     LockTable& operator=(const LockTable&) = delete;
 
-    // Takes `key` in `mode` for `txn`, recording it in `holdings`.
+    // Takes `key` in `mode` for `txn` if it is free, recording it in
+    // `holdings` (AO-S6a): `true` on a grant - a re-borrow at a covering mode
+    // adds no entry and spends no cap - and `false` on a conflict, with
+    // nothing queued and only a wake registration left, when `wake` asks for
+    // one. `ResourceExhausted` when the transaction is at its cap - checked
+    // after the covering test and **before** the conflict test, because a
+    // cap is not a conflict and cannot be waited out.
     //
-    // `ResourceExhausted` when the transaction is at its cap - checked
-    // after the covering test (a re-borrow spends nothing) and **before**
-    // the conflict test, so a capped transaction is refused rather than
-    // queued behind a grant that would refuse it anyway.
-    //
-    // A conflict is an answer, not a park: `granted` is false,
-    // `blocking_txn` names a holder, and the request is queued on the
-    // entry and recorded in `holdings` so it can be withdrawn.
-    StatusOr<AcquireResult> Acquire(std::uint64_t txn, const LockKey& key, LockMode mode,
-                                    LockHoldings& holdings);
-
-    // **The non-queueing acquire** (AO-S6a). Grants and records exactly as
-    // `Acquire` does when the unit is free, and on a conflict returns
-    // `false` with no waiter queued and `holdings.waiting_` not moved - only
-    // a wake registration left, when `wake` asks for one. The cap still
-    // refuses, because a cap is not a conflict.
-    //
-    // **Why the engine's acquire is this one and not `Acquire`.** The two
-    // write sites run inside a page-latched span (`BtreeVisitLeafPage`'s,
+    // **Why a conflict is reported, not waited on.** The two write sites run inside a page-latched span (`BtreeVisitLeafPage`'s,
     // for the first of them), which is no place to park - so the borrow is
     // taken where it is free and a conflict is *reported* rather than
     // waited on here. AO-S3b's shape is what carries the wait: the walk
@@ -637,9 +612,8 @@ public:
     // the cap's refusal, which is not a conflict and names nobody.
     //
     // **`wake`, when given, receives a slot to park on** (AO-S6e-b). The
-    // ask stays non-queueing - no queue position, nothing recorded in
-    // `holdings.waiting_`, and the grant this waiter eventually gets is one
-    // it asks for again - but a registration is left on the entry so the
+    // ask stays non-queueing - no queue position, and the grant this waiter
+    // eventually gets is one it asks for again - but a registration is left on the entry so the
     // holder's release flips the slot and kicks the core that asked. It is
     // what a **statement** waits on: the release wakes it from whichever
     // core releases, where a poll of `TransactionManager::IsInFlight` - the
@@ -694,8 +668,9 @@ public:
     void DropWake(const LockKey& key, const std::shared_ptr<LockWaitSlot>& slot);
 
     // Releases every borrow `holdings` records, **wakes everyone queued on
-    // the units it let go**, and withdraws its own pending wait, then
-    // empties it.
+    // the units it let go**, clears `txn`'s wait-for edge, then empties it.
+    // A wake registration `txn` left is not withdrawn: it is its waiter's to
+    // drop (`DropWake`).
     //
     // The last act of a decide, **after** visibility is published (AO-R6):
     // a waiter woken here re-checks immediately, and if it ran before the
@@ -851,29 +826,12 @@ public:
     bool latched() const noexcept { return !latches_.empty(); }
 
 private:
-    // `Acquire` and `TryAcquire` are one body; `queue_on_conflict` is the
-    // only difference between them, and it gates two things rather than
-    // one - whether a conflict queues, and whether the preamble withdraws
-    // a wait this transaction already holds on another unit. A
-    // non-queueing ask must not withdraw one: it puts no wait in the place
-    // of the one it would drop, so a transaction asking opportunistically
-    // for a second unit would silently give up the queue position it is
-    // still parked on. **Not a lost wakeup** - `DequeueWaiter` flips the
-    // slot on the way out, exactly so a still-parked waiter is re-entered
-    // and re-asks - but a live wait turned into a re-ask nobody ordered,
-    // which is a loss of place and, at the back of a busy unit, of
-    // liveness. Withdrawing belongs to the queueing ask, because only it
-    // replaces what it takes.
-    //
-    // `register_wake` is the third thing it gates, and only for a
-    // non-queueing ask: the waiter record is written and its slot handed
-    // back, while `holdings.waiting_` stays empty. That combination is what
-    // AO-S6e-b's statement wait needs - a wake with no queue position -
-    // and it is why the flag is separate from `queue_on_conflict` rather
-    // than derived from it.
+    // `TryAcquire`'s body. `register_wake` decides whether a conflict
+    // leaves a waiter record and hands its slot back (AO-S6e-b's statement
+    // wait - a wake with no queue position) or leaves the table as it found
+    // it.
     StatusOr<AcquireResult> AcquireInner(std::uint64_t txn, const LockKey& key, LockMode mode,
-                                         LockHoldings& holdings, bool queue_on_conflict,
-                                         bool register_wake = false);
+                                         LockHoldings& holdings, bool register_wake);
 
     // One tenancy. Holders and waiters are the same shape, so they are the
     // same type: a waiter is a tenant that has not been admitted.
@@ -882,8 +840,8 @@ private:
         LockMode mode = LockMode::kIntentionShared;
         // A waiter's slot; null for a holder.
         std::shared_ptr<LockWaitSlot> slot;
-        // The core a waiter parks on - `CurrentCore()` at the `Acquire` that
-        // queued it, which is the reactor its `WaitUntil` polls on - so a
+        // The core a waiter parks on - `CurrentCore()` at the ask that
+        // registered it, which is the reactor its `WaitUntil` polls on - so a
         // flip from another core knows whom to kick (AU-S2). Meaningless
         // for a holder.
         std::uint32_t core = 0;
@@ -906,16 +864,18 @@ private:
         std::vector<Entry> entries;
     };
 
+    // `key`'s entry in `part`, or null. The caller holds the partition latch.
+    static Entry* FindEntry(Partition& part, const LockKey& key) noexcept;
+    // Erases `e` from `part` if no holder and no waiter is left on it. The
+    // caller holds the partition latch; `e` is dangling after an erase.
+    static void EraseIfIdle(Partition& part, Entry* e);
+
     LockTable(std::uint32_t core_count, std::size_t max_locks_per_txn);
 
     Partition& PartitionFor(const LockKey& key) noexcept;
     const Partition& PartitionFor(const LockKey& key) const noexcept;
     std::atomic<std::uint64_t>& FenceCounterFor(catalog::Oid rel) noexcept;
     const std::atomic<std::uint64_t>& FenceCounterFor(catalog::Oid rel) const noexcept;
-
-    // Drops `txn`'s queued request on `key`, erasing the entry if that
-    // leaves it empty. One partition, taken and released here.
-    void DequeueWaiter(std::uint64_t txn, const LockKey& key);
 
     // Removes one holder record from the table: the body `Release` runs
     // per held unit, factored so the verify's unwind runs exactly the same

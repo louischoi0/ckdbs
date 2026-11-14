@@ -39,6 +39,25 @@ namespace {
 constexpr catalog::Oid kRel = 4018;
 constexpr catalog::Oid kOtherRel = 4026;
 
+// The engine's ask with every out-parameter taken, as one value: what a
+// cell reads after a refusal. A conflict leaves a wake registration, which
+// `Release` does not withdraw - a cell that counts entries afterwards drops
+// it (`DropWake`).
+struct Asked {
+    bool granted = false;
+    std::uint64_t blocking_txn = 0;
+    LockWake wake;
+};
+
+StatusOr<Asked> Ask(LockTable& table, std::uint64_t txn, const LockKey& key, LockMode mode,
+                    LockHoldings& holdings) {
+    Asked out;
+    auto r = table.TryAcquire(txn, key, mode, holdings, &out.blocking_txn, &out.wake);
+    if (!r.ok()) return r.status();
+    out.granted = r.value();
+    return out;
+}
+
 std::unique_ptr<LockTable> MakeTable(std::uint32_t cores = 8,
                                      std::size_t cap = kMaxLocksPerTxnDefault) {
     auto t = LockTable::Create(cores, cap);
@@ -116,11 +135,11 @@ TEST(LockTableTest, EveryConflictingModePairIsRefusedOnOneUnit) {
             LockHoldings h2;
             const LockKey key = LockKey::Tuple(kRel, 7);
 
-            auto first = table->Acquire(1, key, held, h1);
+            auto first = Ask(*table, 1, key, held, h1);
             ASSERT_TRUE(first.ok());
             EXPECT_TRUE(first.value().granted);
 
-            auto second = table->Acquire(2, key, want, h2);
+            auto second = Ask(*table, 2, key, want, h2);
             ASSERT_TRUE(second.ok());
             EXPECT_EQ(second.value().granted, Compatible(held, want))
                 << "holder " << LockModeName(held) << ", requester " << LockModeName(want);
@@ -129,10 +148,7 @@ TEST(LockTableTest, EveryConflictingModePairIsRefusedOnOneUnit) {
                     << "a refused borrow names the holder it waits for - the edge AO-S4a's "
                        "wait-for graph reads";
                 EXPECT_EQ(table->WaiterCount(key), 1u)
-                    << "the queue is a data structure at S1: a refused request is recorded even "
-                       "though nothing parks on it yet";
-                EXPECT_EQ(h2.waiting_on(), key)
-                    << "and it is recorded on the requester, which is what lets it be withdrawn";
+                    << "a refused ask that wants a wake leaves its registration on the entry";
             }
         }
     }
@@ -147,12 +163,11 @@ TEST(LockTableTest, ATransactionNeverConflictsWithItself) {
     LockHoldings h;
     const LockKey key = LockKey::Tuple(kRel, 9);
 
-    ASSERT_TRUE(table->Acquire(1, key, LockMode::kIntentionExclusive, h).value().granted);
-    auto second = table->Acquire(1, key, LockMode::kExclusive, h);
+    ASSERT_TRUE(Ask(*table, 1, key, LockMode::kIntentionExclusive, h).value().granted);
+    auto second = Ask(*table, 1, key, LockMode::kExclusive, h);
     ASSERT_TRUE(second.ok());
     EXPECT_TRUE(second.value().granted);
-    EXPECT_FALSE(second.value().already_held) << "IX does not cover X; this is a second entry";
-    EXPECT_EQ(h.size(), 2u);
+    EXPECT_EQ(h.size(), 2u) << "IX does not cover X; this is a second entry";
 }
 
 TEST(LockTableTest, ARepeatAcquireOfACoveredModeAddsNoEntryAndSpendsNoCap) {
@@ -162,15 +177,15 @@ TEST(LockTableTest, ARepeatAcquireOfACoveredModeAddsNoEntryAndSpendsNoCap) {
     LockHoldings h;
     const LockKey key = LockKey::Relation(kRel);
 
-    ASSERT_TRUE(table->Acquire(1, key, LockMode::kExclusive, h).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, key, LockMode::kExclusive, h).value().granted);
     EXPECT_EQ(h.size(), 1u);
 
     for (LockMode weaker : {LockMode::kIntentionShared, LockMode::kIntentionExclusive,
                             LockMode::kShared, LockMode::kUpdate, LockMode::kExclusive}) {
-        auto again = table->Acquire(1, key, weaker, h);
+        auto again = Ask(*table, 1, key, weaker, h);
         ASSERT_TRUE(again.ok());
         EXPECT_TRUE(again.value().granted);
-        EXPECT_TRUE(again.value().already_held) << "X covers " << LockModeName(weaker);
+        EXPECT_EQ(h.size(), 1u) << "X covers " << LockModeName(weaker);
     }
     EXPECT_EQ(h.size(), 1u) << "no entry was added by any of the five";
     EXPECT_EQ(table->EntryCount(), 1u);
@@ -199,12 +214,11 @@ TEST(LockTableTest, AVersionClaimCoversAShareAndIsCoveredByExclusive) {
     auto table = MakeTable();
     LockHoldings h;
     const LockKey key = LockKey::Tuple(kRel, 7);
-    ASSERT_TRUE(table->Acquire(1, key, LockMode::kUpdate, h).value().granted);
-    auto share = table->Acquire(1, key, LockMode::kShared, h);
+    ASSERT_TRUE(Ask(*table, 1, key, LockMode::kUpdate, h).value().granted);
+    auto share = Ask(*table, 1, key, LockMode::kShared, h);
     ASSERT_TRUE(share.ok());
     EXPECT_TRUE(share.value().granted);
-    EXPECT_TRUE(share.value().already_held) << "U covers S";
-    EXPECT_EQ(h.size(), 1u);
+    EXPECT_EQ(h.size(), 1u) << "U covers S";
 }
 
 TEST(LockTableTest, AShareThenAVersionClaimThenAnExistenceClaimAreThreeEntries) {
@@ -217,18 +231,17 @@ TEST(LockTableTest, AShareThenAVersionClaimThenAnExistenceClaimAreThreeEntries) 
     auto table = MakeTable();
     LockHoldings h;
     const LockKey key = LockKey::Tuple(kRel, 7);
-    auto s = table->Acquire(1, key, LockMode::kShared, h);
+    auto s = Ask(*table, 1, key, LockMode::kShared, h);
     ASSERT_TRUE(s.ok());
     ASSERT_TRUE(s.value().granted);
-    auto u = table->Acquire(1, key, LockMode::kUpdate, h);
+    auto u = Ask(*table, 1, key, LockMode::kUpdate, h);
     ASSERT_TRUE(u.ok());
     ASSERT_TRUE(u.value().granted);
-    EXPECT_FALSE(u.value().already_held) << "S does not cover U";
-    auto x = table->Acquire(1, key, LockMode::kExclusive, h);
+    EXPECT_EQ(h.size(), 2u) << "S does not cover U";
+    auto x = Ask(*table, 1, key, LockMode::kExclusive, h);
     ASSERT_TRUE(x.ok());
     ASSERT_TRUE(x.value().granted);
-    EXPECT_FALSE(x.value().already_held) << "U does not cover X";
-    EXPECT_EQ(h.size(), 3u);
+    EXPECT_EQ(h.size(), 3u) << "U does not cover X";
 
     table->ReleaseOne(1, key, LockMode::kUpdate, h);
     EXPECT_EQ(h.size(), 2u);
@@ -253,12 +266,12 @@ TEST(LockTableTest, AnEarlierIntentionSharedDoesNotCoverALaterIntentionExclusive
     LockHoldings h;
     const LockKey rel = LockKey::Relation(kRel);
 
-    ASSERT_TRUE(table->Acquire(1, rel, LockMode::kIntentionShared, h).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, rel, LockMode::kIntentionShared, h).value().granted);
     EXPECT_TRUE(h.Holds(rel));
     EXPECT_TRUE(h.HoldsCovering(rel, LockMode::kIntentionShared));
     EXPECT_FALSE(h.HoldsCovering(rel, LockMode::kIntentionExclusive));
 
-    ASSERT_TRUE(table->Acquire(1, rel, LockMode::kIntentionExclusive, h).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, rel, LockMode::kIntentionExclusive, h).value().granted);
     EXPECT_TRUE(h.HoldsCovering(rel, LockMode::kIntentionExclusive));
     EXPECT_TRUE(h.HoldsCovering(rel, LockMode::kIntentionShared));
 }
@@ -276,7 +289,7 @@ TEST(LockTableTest, AnUncontendedExclusiveRegistersOneEntryAndTheTableEmptiesOnR
     LockHoldings h;
     EXPECT_EQ(table->EntryCount(), 0u);
 
-    ASSERT_TRUE(table->Acquire(1, LockKey::Tuple(kRel, 42), LockMode::kExclusive, h).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, LockKey::Tuple(kRel, 42), LockMode::kExclusive, h).value().granted);
     EXPECT_EQ(table->EntryCount(), 1u) << "one entry per borrowed unit, and no entry for the "
                                           "transaction itself";
     EXPECT_EQ(h.size(), 1u);
@@ -316,8 +329,8 @@ TEST(LockTableTest, TheUnitKindIsInTheKeyBecauseThreeUnitsShareABound) {
     // could not if the keys collided into one entry.
     LockHoldings h1;
     LockHoldings h2;
-    ASSERT_TRUE(table->Acquire(1, rel, LockMode::kExclusive, h1).value().granted);
-    auto row = table->Acquire(2, tuple0, LockMode::kExclusive, h2);
+    ASSERT_TRUE(Ask(*table, 1, rel, LockMode::kExclusive, h1).value().granted);
+    auto row = Ask(*table, 2, tuple0, LockMode::kExclusive, h2);
     ASSERT_TRUE(row.ok());
     EXPECT_TRUE(row.value().granted);
     EXPECT_EQ(table->EntryCount(), 2u);
@@ -337,9 +350,9 @@ TEST(LockTableTest, TheTableDoesNotInferTheAncestorChain) {
     LockHoldings ddl;
     LockHoldings writer;
     ASSERT_TRUE(
-        table->Acquire(1, LockKey::Relation(kRel), LockMode::kExclusive, ddl).value().granted);
+        Ask(*table, 1, LockKey::Relation(kRel), LockMode::kExclusive, ddl).value().granted);
 
-    auto no_chain = table->Acquire(2, LockKey::Tuple(kRel, 5), LockMode::kExclusive, writer);
+    auto no_chain = Ask(*table, 2, LockKey::Tuple(kRel, 5), LockMode::kExclusive, writer);
     ASSERT_TRUE(no_chain.ok());
     EXPECT_TRUE(no_chain.value().granted)
         << "the table cannot see that a relation X is held above this tuple; nothing here is "
@@ -349,7 +362,7 @@ TEST(LockTableTest, TheTableDoesNotInferTheAncestorChain) {
     // one compatibility check, which is what the intention modes are for.
     LockHoldings proper;
     auto chained =
-        table->Acquire(3, LockKey::Relation(kRel), LockMode::kIntentionExclusive, proper);
+        Ask(*table, 3, LockKey::Relation(kRel), LockMode::kIntentionExclusive, proper);
     ASSERT_TRUE(chained.ok());
     EXPECT_FALSE(chained.value().granted);
     EXPECT_EQ(chained.value().blocking_txn, 1u);
@@ -378,8 +391,8 @@ TEST(LockTableTest, AtOneCoreNoLatchIsConstructed) {
     LockHoldings h1;
     LockHoldings h2;
     const LockKey key = LockKey::Tuple(kRel, 3);
-    ASSERT_TRUE(one->Acquire(1, key, LockMode::kExclusive, h1).value().granted);
-    auto blocked = one->Acquire(2, key, LockMode::kExclusive, h2);
+    ASSERT_TRUE(Ask(*one, 1, key, LockMode::kExclusive, h1).value().granted);
+    auto blocked = Ask(*one, 2, key, LockMode::kExclusive, h2);
     ASSERT_TRUE(blocked.ok());
     EXPECT_FALSE(blocked.value().granted);
     EXPECT_EQ(blocked.value().blocking_txn, 1u);
@@ -395,13 +408,13 @@ TEST(LockTableTest, TheCapRefusesTheEntryPastItAndNeverTruncates) {
     LockHoldings h;
 
     for (std::uint64_t tuple_key = 0; tuple_key < kCap; ++tuple_key) {
-        auto r = table->Acquire(1, LockKey::Tuple(kRel, tuple_key), LockMode::kExclusive, h);
+        auto r = Ask(*table, 1, LockKey::Tuple(kRel, tuple_key), LockMode::kExclusive, h);
         ASSERT_TRUE(r.ok()) << "at " << tuple_key;
         ASSERT_TRUE(r.value().granted);
     }
     EXPECT_EQ(h.size(), kCap);
 
-    auto over = table->Acquire(1, LockKey::Tuple(kRel, kCap), LockMode::kExclusive, h);
+    auto over = Ask(*table, 1, LockKey::Tuple(kRel, kCap), LockMode::kExclusive, h);
     ASSERT_FALSE(over.ok());
     EXPECT_EQ(over.status().code(), StatusCode::kResourceExhausted);
     EXPECT_FALSE(IsRetryable(over.status().code()))
@@ -440,7 +453,7 @@ TEST(LockTableTest, ARangeIsFoundAfterThePageItCameFromChangesItsBounds) {
     LockHoldings fence_holder;
     const LockKey fence = LockKey::Range(kRel, 100, 200);
 
-    ASSERT_TRUE(table->Acquire(1, fence, LockMode::kShared, fence_holder).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, fence, LockMode::kShared, fence_holder).value().granted);
     EXPECT_EQ(table->RelationFenceCount(kRel), 1u);
 
     // A division would move keys between pages here. Nothing in `fence`
@@ -469,12 +482,12 @@ TEST(LockTableTest, TheFenceCounterIsTheProbesGateAndARelationLockIsNotAFence) {
     // writer never reaches the probe.
     auto table = MakeTable();
     LockHoldings rel_s;
-    ASSERT_TRUE(table->Acquire(1, LockKey::Relation(kRel), LockMode::kShared, rel_s).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, LockKey::Relation(kRel), LockMode::kShared, rel_s).value().granted);
     EXPECT_EQ(table->RelationFenceCount(kRel), 0u)
         << "a relation `S` is caught by the intention rule, not by the probe";
 
     LockHoldings writer;
-    auto ix = table->Acquire(2, LockKey::Relation(kRel), LockMode::kIntentionExclusive, writer);
+    auto ix = Ask(*table, 2, LockKey::Relation(kRel), LockMode::kIntentionExclusive, writer);
     ASSERT_TRUE(ix.ok());
     EXPECT_FALSE(ix.value().granted) << "IX against S at the relation is one compatibility check";
 
@@ -482,43 +495,13 @@ TEST(LockTableTest, TheFenceCounterIsTheProbesGateAndARelationLockIsNotAFence) {
     LockHoldings fence_waiter;
     LockHoldings fence_holder;
     const LockKey fence = LockKey::Range(kOtherRel, 0, 50);
-    ASSERT_TRUE(table->Acquire(3, fence, LockMode::kShared, fence_holder).value().granted);
+    ASSERT_TRUE(Ask(*table, 3, fence, LockMode::kShared, fence_holder).value().granted);
     EXPECT_EQ(table->RelationFenceCount(kOtherRel), 1u);
-    auto refused = table->Acquire(4, fence, LockMode::kExclusive, fence_waiter);
+    auto refused = Ask(*table, 4, fence, LockMode::kExclusive, fence_waiter);
     ASSERT_TRUE(refused.ok());
     EXPECT_FALSE(refused.value().granted);
     EXPECT_EQ(table->RelationFenceCount(kOtherRel), 1u)
         << "the refused `X` is not a fence and must not have raised the counter";
-}
-
-TEST(LockTableTest, ARefusedTransactionTakesItsQueuedRequestWithIt) {
-    // The queue must be unwindable, or the entry outlives every holder and
-    // `WaiterCount` - AO-R3's gate on whether a decide probes at all -
-    // stays nonzero for the life of the instance. A transaction is one
-    // thread of control, so it is queued on at most one unit and one record
-    // on the requester is enough to withdraw it.
-    auto table = MakeTable();
-    const LockKey key = LockKey::Tuple(kRel, 11);
-    LockHoldings holder;
-    LockHoldings refused;
-
-    ASSERT_TRUE(table->Acquire(1, key, LockMode::kExclusive, holder).value().granted);
-    auto blocked = table->Acquire(2, key, LockMode::kExclusive, refused);
-    ASSERT_TRUE(blocked.ok());
-    ASSERT_FALSE(blocked.value().granted);
-    EXPECT_EQ(table->WaiterCount(key), 1u);
-    EXPECT_TRUE(refused.waiting_on().has_value());
-    EXPECT_TRUE(refused.empty()) << "a refused request holds nothing";
-
-    // The refused transaction aborts - which at S1 is what always happens,
-    // since nothing parks. Its request goes with it.
-    table->Release(2, refused);
-    EXPECT_EQ(table->WaiterCount(key), 0u);
-    EXPECT_FALSE(refused.waiting_on().has_value());
-
-    table->Release(1, holder);
-    EXPECT_EQ(table->EntryCount(), 0u)
-        << "no holder, no waiter, no entry - a dead waiter would have pinned this forever";
 }
 
 TEST(LockTableTest, ACappedTransactionIsRefusedRatherThanQueued) {
@@ -532,23 +515,23 @@ TEST(LockTableTest, ACappedTransactionIsRefusedRatherThanQueued) {
     LockHoldings other;
 
     ASSERT_TRUE(
-        table->Acquire(1, LockKey::Tuple(kRel, 1), LockMode::kExclusive, capped).value().granted);
+        Ask(*table, 1, LockKey::Tuple(kRel, 1), LockMode::kExclusive, capped).value().granted);
     ASSERT_TRUE(
-        table->Acquire(1, LockKey::Tuple(kRel, 2), LockMode::kExclusive, capped).value().granted);
+        Ask(*table, 1, LockKey::Tuple(kRel, 2), LockMode::kExclusive, capped).value().granted);
     const LockKey contended = LockKey::Tuple(kRel, 3);
-    ASSERT_TRUE(table->Acquire(9, contended, LockMode::kExclusive, other).value().granted);
+    ASSERT_TRUE(Ask(*table, 9, contended, LockMode::kExclusive, other).value().granted);
 
-    auto over = table->Acquire(1, contended, LockMode::kExclusive, capped);
+    auto over = Ask(*table, 1, contended, LockMode::kExclusive, capped);
     ASSERT_FALSE(over.ok()) << "the cap answers before the conflict does";
     EXPECT_EQ(over.status().code(), StatusCode::kResourceExhausted);
     EXPECT_EQ(table->WaiterCount(contended), 0u) << "and nothing was queued behind it";
-    EXPECT_FALSE(capped.waiting_on().has_value());
 
     // A borrow it already covers still succeeds at the cap: a re-borrow
     // spends nothing, so the covering test runs first.
-    auto repeat = table->Acquire(1, LockKey::Tuple(kRel, 1), LockMode::kExclusive, capped);
+    auto repeat = Ask(*table, 1, LockKey::Tuple(kRel, 1), LockMode::kExclusive, capped);
     ASSERT_TRUE(repeat.ok());
-    EXPECT_TRUE(repeat.value().already_held);
+    EXPECT_TRUE(repeat.value().granted);
+    EXPECT_EQ(capped.size(), kCap) << "and spent nothing";
 
     table->Release(1, capped);
     table->Release(9, other);
@@ -562,7 +545,7 @@ TEST(LockTableTest, AFenceIsSharedOrExclusiveAndOnlyOverAKeyInterval) {
     // defines.
     auto table = MakeTable();
     LockHoldings x_fence;
-    ASSERT_TRUE(table->Acquire(1, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, x_fence)
+    ASSERT_TRUE(Ask(*table, 1, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, x_fence)
                     .value()
                     .granted);
     EXPECT_EQ(table->RelationFenceCount(kRel), 1u);
@@ -571,7 +554,7 @@ TEST(LockTableTest, AFenceIsSharedOrExclusiveAndOnlyOverAKeyInterval) {
     // A range is a fence unit too - a mover borrows one (AR2-R13).
     LockHoldings range_fence;
     ASSERT_TRUE(
-        table->Acquire(3, LockKey::Range(kOtherRel, 0, 64), LockMode::kExclusive, range_fence)
+        Ask(*table, 3, LockKey::Range(kOtherRel, 0, 64), LockMode::kExclusive, range_fence)
             .value()
             .granted);
     EXPECT_TRUE(table->FenceCoversKey(kOtherRel, 30, 4));
@@ -579,7 +562,7 @@ TEST(LockTableTest, AFenceIsSharedOrExclusiveAndOnlyOverAKeyInterval) {
     // A tuple `X` is not a fence: its conflict is found by looking its own
     // key up, which is the ordinary row lock and not a probe.
     LockHoldings row;
-    ASSERT_TRUE(table->Acquire(5, LockKey::Tuple(kOtherRel, 500), LockMode::kExclusive, row)
+    ASSERT_TRUE(Ask(*table, 5, LockKey::Tuple(kOtherRel, 500), LockMode::kExclusive, row)
                     .value()
                     .granted);
     EXPECT_FALSE(table->FenceCoversKey(kOtherRel, 500, 6))
@@ -601,7 +584,7 @@ TEST(LockTableTest, AReleaseThatRemovesNoHolderLeavesTheFenceCounterAlone) {
     auto table = MakeTable();
     LockHoldings h;
     const LockKey fence = LockKey::Range(kRel, 0, 10);
-    ASSERT_TRUE(table->Acquire(1, fence, LockMode::kShared, h).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, fence, LockMode::kShared, h).value().granted);
     EXPECT_EQ(table->RelationFenceCount(kRel), 1u);
 
     table->Release(1, h);
@@ -656,7 +639,7 @@ TEST(LockTableTest, DistinctPartitionsCarryDistinctLatchesAndDisjointBorrowsAllG
                 // unit and every acquire must be granted.
                 const std::uint64_t tuple_key =
                     static_cast<std::uint64_t>(i) * kThreads + static_cast<std::uint64_t>(t);
-                auto r = table->Acquire(static_cast<std::uint64_t>(t) + 1,
+                auto r = Ask(*table, static_cast<std::uint64_t>(t) + 1,
                                         LockKey::Tuple(kRel, tuple_key), LockMode::kExclusive, h);
                 if (r.ok() && r.value().granted) {
                     granted.fetch_add(1, std::memory_order_relaxed);
@@ -687,12 +670,14 @@ TEST(LockTableTest, ContendedThreadsOnOneUnitProduceExactlyOneHolder) {
     std::atomic<int> blocked{0};
     std::vector<std::thread> threads;
     std::vector<LockHoldings> holdings(kThreads);
+    std::vector<Asked> asked(kThreads);
     threads.reserve(kThreads);
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&, t] {
-            auto r = table->Acquire(static_cast<std::uint64_t>(t) + 1, key, LockMode::kExclusive,
-                                    holdings[static_cast<std::size_t>(t)]);
+            auto r = Ask(*table, static_cast<std::uint64_t>(t) + 1, key, LockMode::kExclusive,
+                         holdings[static_cast<std::size_t>(t)]);
             ASSERT_TRUE(r.ok());
+            asked[static_cast<std::size_t>(t)] = r.value();
             if (r.value().granted) {
                 granted.fetch_add(1, std::memory_order_relaxed);
             } else {
@@ -715,19 +700,22 @@ TEST(LockTableTest, ContendedThreadsOnOneUnitProduceExactlyOneHolder) {
     // Here eight threads met on one key at eight cores, so the latch did
     // the work; the winner now decides and every loser must see its slot.
     std::size_t with_slot = 0;
-    for (int t = 0; t < kThreads; ++t) {
-        LockHoldings& h = holdings[static_cast<std::size_t>(t)];
-        if (h.waiting_on().has_value()) ++with_slot;
+    for (const Asked& a : asked) {
+        if (a.wake.slot != nullptr) ++with_slot;
     }
     EXPECT_EQ(with_slot, static_cast<std::size_t>(kThreads - 1))
-        << "a refusal records the wait on the requester; without that record nothing can "
-           "withdraw it and the entry outlives every holder";
+        << "every refusal hands back the slot it registered";
 
     for (int t = 0; t < kThreads; ++t) {
         table->Release(static_cast<std::uint64_t>(t) + 1, holdings[static_cast<std::size_t>(t)]);
     }
+    for (const Asked& a : asked) {
+        if (a.wake.slot == nullptr) continue;
+        EXPECT_TRUE(LockWaitReady(a.wake.slot)) << "the winner's release woke every loser";
+        table->DropWake(a.wake.key, a.wake.slot);
+    }
     EXPECT_EQ(table->EntryCount(), 0u)
-        << "the winner's release woke the seven, and each of them withdrew its own request";
+        << "no holder, no waiter, no entry once each loser dropped its registration";
 }
 
 
@@ -764,7 +752,7 @@ protected:
 
     sched::Coro Borrow(Session& s, std::uint64_t txn, LockKey key, LockMode mode) {
         for (;;) {
-            auto r = table->Acquire(txn, key, mode, s.holdings);
+            auto r = Ask(*table, txn, key, mode, s.holdings);
             if (!r.ok()) co_return r.status();
             if (r.value().granted) break;
             // **The park.** The predicate reads the slot and nothing else -
@@ -866,11 +854,11 @@ TEST_F(BorrowsReleasedAtDecide, ACommitGivesEveryBorrowBackAndWakesWhoWasQueued)
     Transaction* t1 = Begin();
     ASSERT_NE(t1, nullptr);
     const LockKey row = LockKey::Tuple(kRel, 31);
-    ASSERT_TRUE(table_->Acquire(t1->id(), LockKey::Relation(kRel),
+    ASSERT_TRUE(Ask(*table_, t1->id(), LockKey::Relation(kRel),
                                 LockMode::kIntentionExclusive, t1->borrows())
                     .value()
                     .granted);
-    ASSERT_TRUE(table_->Acquire(t1->id(), row, LockMode::kExclusive, t1->borrows())
+    ASSERT_TRUE(Ask(*table_, t1->id(), row, LockMode::kExclusive, t1->borrows())
                     .value()
                     .granted);
     EXPECT_EQ(t1->borrows().size(), 2u);
@@ -878,7 +866,7 @@ TEST_F(BorrowsReleasedAtDecide, ACommitGivesEveryBorrowBackAndWakesWhoWasQueued)
 
     // A second transaction queues behind the row.
     LockHoldings peer;
-    auto refused = table_->Acquire(999, row, LockMode::kExclusive, peer);
+    auto refused = Ask(*table_, 999, row, LockMode::kExclusive, peer);
     ASSERT_TRUE(refused.ok());
     ASSERT_FALSE(refused.value().granted);
     ASSERT_FALSE(LockWaitReady(refused.value().wake.slot));
@@ -890,7 +878,7 @@ TEST_F(BorrowsReleasedAtDecide, ACommitGivesEveryBorrowBackAndWakesWhoWasQueued)
 
     // The peer re-asks and is now admitted, which is the wait ending in the
     // grant it waited for rather than in a refusal.
-    auto retry = table_->Acquire(999, row, LockMode::kExclusive, peer);
+    auto retry = Ask(*table_, 999, row, LockMode::kExclusive, peer);
     ASSERT_TRUE(retry.ok());
     EXPECT_TRUE(retry.value().granted);
     table_->Release(999, peer);
@@ -905,17 +893,17 @@ TEST_F(BorrowsReleasedAtDecide, AnAbortGivesThemBackToo) {
     Transaction* t1 = Begin();
     ASSERT_NE(t1, nullptr);
     const LockKey row = LockKey::Tuple(kRel, 32);
-    ASSERT_TRUE(table_->Acquire(t1->id(), row, LockMode::kExclusive, t1->borrows())
+    ASSERT_TRUE(Ask(*table_, t1->id(), row, LockMode::kExclusive, t1->borrows())
                     .value()
                     .granted);
     LockHoldings peer;
-    auto refused = table_->Acquire(999, row, LockMode::kExclusive, peer);
+    auto refused = Ask(*table_, 999, row, LockMode::kExclusive, peer);
     ASSERT_TRUE(refused.ok());
     ASSERT_FALSE(refused.value().granted);
 
     ASSERT_TRUE(mgr_->Abort(*t1).ok());
     EXPECT_TRUE(LockWaitReady(refused.value().wake.slot));
-    auto retry = table_->Acquire(999, row, LockMode::kExclusive, peer);
+    auto retry = Ask(*table_, 999, row, LockMode::kExclusive, peer);
     ASSERT_TRUE(retry.ok());
     EXPECT_TRUE(retry.value().granted) << "the loser's row is free the moment it decides";
     table_->Release(999, peer);
@@ -928,7 +916,7 @@ TEST_F(BorrowsReleasedAtDecide, AManagerTornDownWithALiveTransactionGivesItsBorr
     // in the table forever, with every waiter behind them parked forever.
     Transaction* t1 = Begin();
     ASSERT_NE(t1, nullptr);
-    ASSERT_TRUE(table_->Acquire(t1->id(), LockKey::Tuple(kRel, 33), LockMode::kExclusive,
+    ASSERT_TRUE(Ask(*table_, t1->id(), LockKey::Tuple(kRel, 33), LockMode::kExclusive,
                                 t1->borrows())
                     .value()
                     .granted);
@@ -1006,8 +994,8 @@ TEST(LockTableTest, AWakeIsNotAGrant) {
     const LockKey key = LockKey::Tuple(kRel, 21);
     LockHoldings holder;
     LockHoldings waiter;
-    ASSERT_TRUE(table->Acquire(1, key, LockMode::kExclusive, holder).value().granted);
-    auto refused = table->Acquire(2, key, LockMode::kExclusive, waiter);
+    ASSERT_TRUE(Ask(*table, 1, key, LockMode::kExclusive, holder).value().granted);
+    auto refused = Ask(*table, 2, key, LockMode::kExclusive, waiter);
     ASSERT_TRUE(refused.ok());
     ASSERT_FALSE(refused.value().granted);
     ASSERT_NE(refused.value().wake.slot, nullptr) << "a refusal always carries what to park on";
@@ -1019,7 +1007,7 @@ TEST(LockTableTest, AWakeIsNotAGrant) {
 
     // The woken waiter re-asks and is still refused, because the holder
     // still holds - the re-check is what makes that answer right.
-    auto again = table->Acquire(2, key, LockMode::kExclusive, waiter);
+    auto again = Ask(*table, 2, key, LockMode::kExclusive, waiter);
     ASSERT_TRUE(again.ok());
     EXPECT_FALSE(again.value().granted);
     EXPECT_EQ(again.value().wake.slot, refused.value().wake.slot)
@@ -1033,6 +1021,7 @@ TEST(LockTableTest, AWakeIsNotAGrant) {
 
     table->Release(1, holder);
     table->Release(2, waiter);
+    table->DropWake(again.value().wake.key, again.value().wake.slot);
     EXPECT_EQ(table->EntryCount(), 0u);
 }
 
@@ -1048,7 +1037,7 @@ TEST(LockTableTest, AFenceRefusesAWriteInsideIt) {
     auto table = MakeTable();
     LockHoldings fence_holder;
     ASSERT_TRUE(
-        table->Acquire(1, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder)
+        Ask(*table, 1, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder)
             .value()
             .granted);
 
@@ -1082,18 +1071,18 @@ TEST(LockTableTest, AWriteInsideAFenceRefusesTheFence) {
     auto table = MakeTable();
     LockHoldings writer;
     ASSERT_TRUE(
-        table->Acquire(1, LockKey::Tuple(kRel, 15), LockMode::kExclusive, writer).value().granted);
+        Ask(*table, 1, LockKey::Tuple(kRel, 15), LockMode::kExclusive, writer).value().granted);
 
     LockHoldings fence_holder;
     auto fence =
-        table->Acquire(2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
+        Ask(*table, 2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
     ASSERT_TRUE(fence.ok());
     EXPECT_FALSE(fence.value().granted);
     EXPECT_EQ(fence.value().blocking_txn, 1u) << "the blocker is named, so a caller can report it";
 
     // A fence that covers no held key is granted.
     LockHoldings elsewhere;
-    auto clear = table->Acquire(3, LockKey::Range(kRel, 100, 200), LockMode::kExclusive, elsewhere);
+    auto clear = Ask(*table, 3, LockKey::Range(kRel, 100, 200), LockMode::kExclusive, elsewhere);
     ASSERT_TRUE(clear.ok());
     EXPECT_TRUE(clear.value().granted);
 }
@@ -1107,12 +1096,12 @@ TEST(LockTableTest, ARefusedFenceLeavesTheTableAsItFoundIt) {
     auto table = MakeTable();
     LockHoldings writer;
     ASSERT_TRUE(
-        table->Acquire(1, LockKey::Tuple(kRel, 15), LockMode::kExclusive, writer).value().granted);
+        Ask(*table, 1, LockKey::Tuple(kRel, 15), LockMode::kExclusive, writer).value().granted);
     const std::size_t entries_before = table->EntryCount();
 
     LockHoldings fence_holder;
     auto fence =
-        table->Acquire(2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
+        Ask(*table, 2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
     ASSERT_TRUE(fence.ok());
     ASSERT_FALSE(fence.value().granted);
 
@@ -1127,7 +1116,7 @@ TEST(LockTableTest, ARefusedFenceLeavesTheTableAsItFoundIt) {
 
     // The refusal is repeatable rather than a one-shot: nothing about the
     // first attempt makes the second answer differently.
-    auto again = table->Acquire(2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
+    auto again = Ask(*table, 2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
     ASSERT_TRUE(again.ok());
     EXPECT_FALSE(again.value().granted);
     EXPECT_EQ(table->RelationFenceCount(kRel), 0u);
@@ -1140,15 +1129,15 @@ TEST(LockTableTest, AFencesModeDecidesWhichDescendantsItAdmits) {
     auto table = MakeTable();
     LockHoldings reader;
     ASSERT_TRUE(
-        table->Acquire(1, LockKey::Tuple(kRel, 15), LockMode::kShared, reader).value().granted);
+        Ask(*table, 1, LockKey::Tuple(kRel, 15), LockMode::kShared, reader).value().granted);
 
     LockHoldings s_fence;
-    auto shared = table->Acquire(2, LockKey::Range(kRel, 10, 20), LockMode::kShared, s_fence);
+    auto shared = Ask(*table, 2, LockKey::Range(kRel, 10, 20), LockMode::kShared, s_fence);
     ASSERT_TRUE(shared.ok());
     EXPECT_TRUE(shared.value().granted) << "S over S is compatible at a distance as it is in place";
 
     LockHoldings x_fence;
-    auto exclusive = table->Acquire(3, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, x_fence);
+    auto exclusive = Ask(*table, 3, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, x_fence);
     ASSERT_TRUE(exclusive.ok());
     EXPECT_FALSE(exclusive.value().granted);
 
@@ -1177,7 +1166,7 @@ TEST(LockTableTest, AVersionClaimFenceAdmitsAShareAndRefusesAWriterInsideIt) {
     // have proceeded and the bulk statement been refused mid-walk.
     auto table = MakeTable();
     LockHoldings window;
-    ASSERT_TRUE(table->Acquire(1, LockKey::Range(kRel, 10, 20), LockMode::kUpdate, window)
+    ASSERT_TRUE(Ask(*table, 1, LockKey::Range(kRel, 10, 20), LockMode::kUpdate, window)
                     .value()
                     .granted);
     EXPECT_EQ(table->RelationFenceCount(kRel), 1u) << "a range U is a fence";
@@ -1228,14 +1217,14 @@ TEST(LockTableTest, AVersionClaimFenceAdmitsAShareAndRefusesAWriterInsideIt) {
     auto table2 = MakeTable();
     LockHoldings share2;
     ASSERT_TRUE(
-        table2->Acquire(2, LockKey::Tuple(kRel, 15), LockMode::kShared, share2).value().granted);
+        Ask(*table2, 2, LockKey::Tuple(kRel, 15), LockMode::kShared, share2).value().granted);
     LockHoldings window2;
     auto over_share = table2->TryAcquire(1, LockKey::Range(kRel, 10, 20), LockMode::kUpdate, window2);
     ASSERT_TRUE(over_share.ok());
     EXPECT_TRUE(over_share.value()) << "a bulk UPDATE's window must pass open child writers' shares";
     LockHoldings point2;
     ASSERT_TRUE(
-        table2->Acquire(3, LockKey::Tuple(kRel, 40), LockMode::kUpdate, point2).value().granted);
+        Ask(*table2, 3, LockKey::Tuple(kRel, 40), LockMode::kUpdate, point2).value().granted);
     LockHoldings window3;
     auto over_point = table2->TryAcquire(4, LockKey::Range(kRel, 30, 50), LockMode::kUpdate, window3);
     ASSERT_TRUE(over_point.ok());
@@ -1253,7 +1242,7 @@ TEST(LockTableTest, AProbeInUpdateModeIsAdmittedByAShareAndRefusedByAWriter) {
     auto table = MakeTable();
     LockHoldings grandchild;
     const LockKey row = LockKey::Tuple(kRel, 5);
-    ASSERT_TRUE(table->Acquire(1, row, LockMode::kShared, grandchild).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, row, LockMode::kShared, grandchild).value().granted);
 
     LockHoldings prober;
     auto probe = table->TryAcquire(2, row, LockMode::kUpdate, prober);
@@ -1268,7 +1257,7 @@ TEST(LockTableTest, AProbeInUpdateModeIsAdmittedByAShareAndRefusedByAWriter) {
     EXPECT_FALSE(over_share.value()) << "the give-back dropped the share";
 
     LockHoldings writer;
-    ASSERT_TRUE(table->Acquire(3, row, LockMode::kUpdate, writer).value().granted);
+    ASSERT_TRUE(Ask(*table, 3, row, LockMode::kUpdate, writer).value().granted);
     std::uint64_t blocker = 0;
     LockWake wake;
     auto refused = table->TryAcquire(2, row, LockMode::kUpdate, prober, &blocker, &wake);
@@ -1290,12 +1279,12 @@ TEST(LockTableTest, TwoOverlappingFencesMeetEachOther) {
     // the thing it replaces.
     auto table = MakeTable();
     LockHoldings wide;
-    ASSERT_TRUE(table->Acquire(1, LockKey::Range(kRel, 2, 1u << 20), LockMode::kExclusive, wide)
+    ASSERT_TRUE(Ask(*table, 1, LockKey::Range(kRel, 2, 1u << 20), LockMode::kExclusive, wide)
                     .value()
                     .granted);
 
     LockHoldings narrow;
-    auto overlapping = table->Acquire(2, LockKey::Range(kRel, 2, 4), LockMode::kExclusive, narrow);
+    auto overlapping = Ask(*table, 2, LockKey::Range(kRel, 2, 4), LockMode::kExclusive, narrow);
     ASSERT_TRUE(overlapping.ok());
     EXPECT_FALSE(overlapping.value().granted) << "the two intervals meet at key 2";
     EXPECT_EQ(overlapping.value().blocking_txn, 1u);
@@ -1303,14 +1292,14 @@ TEST(LockTableTest, TwoOverlappingFencesMeetEachOther) {
     // Adjacent but disjoint is not overlapping: `hi` is exclusive on both
     // sides, so `[2, 20)` and `[20, 30)` share no key.
     LockHoldings adjacent;
-    auto after = table->Acquire(3, LockKey::Range(kRel, 1u << 20, 1u << 21), LockMode::kExclusive,
+    auto after = Ask(*table, 3, LockKey::Range(kRel, 1u << 20, 1u << 21), LockMode::kExclusive,
                                 adjacent);
     ASSERT_TRUE(after.ok());
     EXPECT_TRUE(after.value().granted);
 
     // A fence over another relation never meets this one.
     LockHoldings elsewhere;
-    auto other_rel = table->Acquire(4, LockKey::Range(kOtherRel, 2, 4), LockMode::kExclusive,
+    auto other_rel = Ask(*table, 4, LockKey::Range(kOtherRel, 2, 4), LockMode::kExclusive,
                                     elsewhere);
     ASSERT_TRUE(other_rel.ok());
     EXPECT_TRUE(other_rel.value().granted);
@@ -1319,7 +1308,7 @@ TEST(LockTableTest, TwoOverlappingFencesMeetEachOther) {
     // itself - which is also what excludes the asker's own just-published
     // entry from its own scan.
     LockHoldings second_of_one;
-    auto own = table->Acquire(1, LockKey::Range(kRel, 3, 5), LockMode::kExclusive, second_of_one);
+    auto own = Ask(*table, 1, LockKey::Range(kRel, 3, 5), LockMode::kExclusive, second_of_one);
     ASSERT_TRUE(own.ok());
     EXPECT_TRUE(own.value().granted);
 }
@@ -1356,11 +1345,11 @@ TEST(LockTableTest, AnIntentionModeOnAnIntervalUnitNeitherFencesNorIsFenced) {
 
     // The intention holder first: its range is published, and the writer's
     // own scan is what must pass it.
-    ASSERT_TRUE(table->Acquire(1, LockKey::Range(kRel, 100, 400), LockMode::kIntentionShared,
+    ASSERT_TRUE(Ask(*table, 1, LockKey::Range(kRel, 100, 400), LockMode::kIntentionShared,
                                reader)
                     .value()
                     .granted);
-    auto declared = table->Acquire(2, LockKey::Range(kRel, 200, 300), LockMode::kExclusive, writer);
+    auto declared = Ask(*table, 2, LockKey::Range(kRel, 200, 300), LockMode::kExclusive, writer);
     ASSERT_TRUE(declared.ok()) << declared.status().message();
     EXPECT_TRUE(declared.value().granted)
         << "a declared write range waited for an intention holder, which no writer needs";
@@ -1376,10 +1365,10 @@ TEST(LockTableTest, AnIntentionModeOnAnIntervalUnitNeitherFencesNorIsFenced) {
     auto table2 = MakeTable();
     LockHoldings writer2;
     LockHoldings reader2;
-    ASSERT_TRUE(table2->Acquire(2, LockKey::Range(kRel, 200, 300), LockMode::kExclusive, writer2)
+    ASSERT_TRUE(Ask(*table2, 2, LockKey::Range(kRel, 200, 300), LockMode::kExclusive, writer2)
                     .value()
                     .granted);
-    auto position = table2->Acquire(1, LockKey::Range(kRel, 100, 400), LockMode::kIntentionShared,
+    auto position = Ask(*table2, 1, LockKey::Range(kRel, 100, 400), LockMode::kIntentionShared,
                                     reader2);
     ASSERT_TRUE(position.ok()) << position.status().message();
     EXPECT_TRUE(position.value().granted)
@@ -1388,7 +1377,7 @@ TEST(LockTableTest, AnIntentionModeOnAnIntervalUnitNeitherFencesNorIsFenced) {
     // The tuple side is untouched: a real `X` inside the fence still
     // conflicts, which is the property AO-S6c-c rests on.
     LockHoldings inside;
-    auto row = table2->Acquire(3, LockKey::Tuple(kRel, 250), LockMode::kExclusive, inside);
+    auto row = Ask(*table2, 3, LockKey::Tuple(kRel, 250), LockMode::kExclusive, inside);
     ASSERT_TRUE(row.ok()) << row.status().message();
     EXPECT_FALSE(row.value().granted) << "the fence must still stop a write of a key it spans";
 }
@@ -1400,13 +1389,13 @@ TEST(LockTableTest, AWakeRegistrationIsFlippedByTheReleaseAndTakesNoQueuePositio
     // could answer for, so the wait has to be on the unit's own slot. What
     // it must *not* take is a queue
     // position - the asker's transaction is unwound between the ask and the
-    // park, and `Release` withdraws exactly what `waiting_` names.
+    // park, and the registration has to outlive it.
     auto table = MakeTable();
     LockHoldings reader;
     LockHoldings ddl;
     const LockKey rel = LockKey::Relation(kRel);
 
-    ASSERT_TRUE(table->Acquire(1, rel, LockMode::kIntentionShared, reader).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, rel, LockMode::kIntentionShared, reader).value().granted);
 
     std::uint64_t blocker = 0;
     LockWake registered;
@@ -1418,9 +1407,6 @@ TEST(LockTableTest, AWakeRegistrationIsFlippedByTheReleaseAndTakesNoQueuePositio
     ASSERT_NE(wake, nullptr);
     EXPECT_TRUE(registered.key == rel) << "a same-key refusal is registered on the key asked for";
     EXPECT_FALSE(LockWaitReady(wake)) << "a registration starts unflipped or the park never parks";
-    EXPECT_FALSE(ddl.waiting_on().has_value())
-        << "a wake is not a queue position: `Release` would withdraw one, and the statement that "
-           "registered this is torn down before the park it is for";
     EXPECT_TRUE(ddl.empty()) << "a refused ask holds nothing";
 
     // The DDL transaction is unwound - which is what happens between the
@@ -1455,13 +1441,13 @@ TEST(LockTableTest, AWakeRegistrationAdmitsNobodyAndBlocksNobody) {
     LockHoldings other;
     const LockKey rel = LockKey::Relation(kRel);
 
-    ASSERT_TRUE(table->Acquire(1, rel, LockMode::kIntentionShared, reader).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, rel, LockMode::kIntentionShared, reader).value().granted);
     LockWake wake;
     ASSERT_FALSE(
         table->TryAcquire(2, rel, LockMode::kExclusive, ddl, /*blocker=*/nullptr, &wake).value());
     ASSERT_NE(wake.slot, nullptr);
 
-    auto second_reader = table->Acquire(3, rel, LockMode::kIntentionShared, other);
+    auto second_reader = Ask(*table, 3, rel, LockMode::kIntentionShared, other);
     ASSERT_TRUE(second_reader.ok()) << second_reader.status().message();
     EXPECT_TRUE(second_reader.value().granted)
         << "a waiting DDL's registration refused a compatible reader";
@@ -1478,7 +1464,7 @@ TEST(LockTableTest, AFenceRefusedByARowIsWokenByTheRowsRelease) {
     LockHoldings row;
     LockHoldings fence;
     const LockKey tuple = LockKey::Tuple(kRel, 150);
-    ASSERT_TRUE(table->Acquire(1, tuple, LockMode::kExclusive, row).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, tuple, LockMode::kExclusive, row).value().granted);
 
     std::uint64_t blocker = 0;
     LockWake wake;
@@ -1508,7 +1494,7 @@ TEST(LockTableTest, ARowRefusedByAFenceIsWokenByTheFencesRelease) {
     LockHoldings fence;
     LockHoldings row;
     const LockKey range = LockKey::Range(kRel, 100, 200);
-    ASSERT_TRUE(table->Acquire(1, range, LockMode::kExclusive, fence).value().granted);
+    ASSERT_TRUE(Ask(*table, 1, range, LockMode::kExclusive, fence).value().granted);
 
     std::uint64_t blocker = 0;
     LockWake wake;

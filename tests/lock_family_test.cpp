@@ -413,10 +413,8 @@ TEST_F(LockDeadlockTest, ADropWaitsForAPositionedReaderAndThenRunsAgain) {
     txn::LockHoldings reader;
     const std::uint64_t reader_id = txn::kReadHolderBit | 7;
     ASSERT_TRUE(locks_
-                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
-                              txn::LockMode::kIntentionShared, reader)
-                    .value()
-                    .granted);
+                    ->TryAcquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader).value());
 
     Session s;
     Started drop = Start("DROP TABLE rb", s);
@@ -447,10 +445,8 @@ TEST_F(LockDeadlockTest, ADropWithNoReactorToParkOnNamesThePositionedReader) {
     txn::LockHoldings reader;
     const std::uint64_t reader_id = txn::kReadHolderBit | 7;
     ASSERT_TRUE(locks_
-                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
-                              txn::LockMode::kIntentionShared, reader)
-                    .value()
-                    .granted);
+                    ->TryAcquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader).value());
 
     const std::string refused = Local("DROP TABLE rb");
     EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
@@ -484,10 +480,8 @@ TEST_F(LockDeadlockTest, AWholeRelationWriteIsNotHeldUpByAPositionedReader) {
     txn::LockHoldings reader;
     const std::uint64_t reader_id = txn::kReadHolderBit | 13;
     ASSERT_TRUE(locks_
-                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
-                              txn::LockMode::kIntentionShared, reader)
-                    .value()
-                    .granted);
+                    ->TryAcquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader).value());
 
     const std::string deleted = Local("DELETE FROM rb");
     EXPECT_EQ(deleted.rfind("DELETED", 0), 0u)
@@ -517,10 +511,8 @@ TEST_F(LockDeadlockTest, ADropInsideATransactionWaitsWithoutPoisoningIt) {
     txn::LockHoldings reader;
     const std::uint64_t reader_id = txn::kReadHolderBit | 9;
     ASSERT_TRUE(locks_
-                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
-                              txn::LockMode::kIntentionShared, reader)
-                    .value()
-                    .granted);
+                    ->TryAcquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader).value());
 
     Session s;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &s).response.rfind("BEGIN", 0), 0u);
@@ -556,10 +548,8 @@ TEST_F(LockDeadlockTest, ADropWhoseWaitReachesTheFaultNetPoisonsItsTransaction) 
     txn::LockHoldings reader;
     const std::uint64_t reader_id = txn::kReadHolderBit | 21;
     ASSERT_TRUE(locks_
-                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
-                              txn::LockMode::kIntentionShared, reader)
-                    .value()
-                    .granted);
+                    ->TryAcquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader).value());
 
     Session s;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &s).response.rfind("BEGIN", 0), 0u);
@@ -1258,10 +1248,8 @@ TEST_F(LockDeadlockTest, AReadIsNotRefusedByADropThatHoldsTheRelation) {
 
     txn::LockHoldings ddl;
     ASSERT_TRUE(locks_
-                    ->Acquire(4242, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
-                              txn::LockMode::kExclusive, ddl)
-                    .value()
-                    .granted);
+                    ->TryAcquire(4242, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kExclusive, ddl).value());
 
     const std::uint64_t before = dispatcher_->read_borrows();
     const std::string rows = Local("SELECT * FROM rb");
@@ -1283,10 +1271,8 @@ TEST_F(LockDeadlockTest, AWriterBehindAnAdvancingBuildOutlivesTheNetAndRunsAtThe
     ASSERT_NE(oid, 0u);
     txn::LockHoldings ddl;
     ASSERT_TRUE(locks_
-                    ->Acquire(4243, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
-                              txn::LockMode::kExclusive, ddl)
-                    .value()
-                    .granted);
+                    ->TryAcquire(4243, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kExclusive, ddl).value());
     std::optional<txn::HolderProgress::Scope> build;
     build.emplace(&locks_->progress(), 4243);
 
@@ -1317,10 +1303,8 @@ TEST_F(LockDeadlockTest, AWriterBehindABuildThatStopsAdvancingEndsAtTheNet) {
     ASSERT_NE(oid, 0u);
     txn::LockHoldings ddl;
     ASSERT_TRUE(locks_
-                    ->Acquire(4244, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
-                              txn::LockMode::kExclusive, ddl)
-                    .value()
-                    .granted);
+                    ->TryAcquire(4244, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kExclusive, ddl).value());
     txn::HolderProgress::Scope build(&locks_->progress(), 4244);
 
     Session s;
@@ -3727,10 +3711,8 @@ TEST_F(LockWaitsViewTest, ADropHeldByAPositionedReaderIsARelationRowWithNoTransa
     txn::LockHoldings reader;
     const std::uint64_t reader_id = txn::kReadHolderBit | 7;
     ASSERT_TRUE(locks_
-                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
-                              txn::LockMode::kIntentionShared, reader)
-                    .value()
-                    .granted);
+                    ->TryAcquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader).value());
     Session s;
     Started drop = Start("DROP TABLE rb", s);
     Pump();

@@ -4855,9 +4855,9 @@ void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::
     // re-run the walk until the net. Nothing here outlives the ask, which is
     // why no intention is taken above it.
     //
-    // **Not over a `U` or `X` this transaction holds**: the probe would
-    // answer `already_held` and the grant arm's release would drop a record
-    // the probe never added. An `S` it holds does not skip the probe - the
+    // **Not over a `U` or `X` this transaction holds**: the probe would be
+    // granted as already covered, adding no record, and the grant arm's
+    // release would drop a record the probe never added. An `S` it holds does not skip the probe - the
     // release matches by mode.
     const txn::LockKey unit = txn::LockKey::Tuple(child_rel, tuple_key);
     if (locks_ != nullptr && scope.txn != nullptr && may_park_ &&

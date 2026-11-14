@@ -11,6 +11,7 @@
 #include "kds/base/contention.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
+#include "kds/txn/row_compensation.hpp"
 #include "kds/txn/varheap_release.hpp"  // a rolled-back spill is released, not retired
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
@@ -502,64 +503,14 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
     // `BackupRestoreTest.ARolledBackDropSurvivesAReplayOverPagesFromBeforeIt`.
 
     switch (entry.action) {
-        case TrailAction::kInsert: {
-            if (Status s = page.RetireSlot(slot); !s.ok()) return s;
-            if (wal_ == nullptr) return Status::OK();
-            std::array<std::byte, wal::kSlotRetirePayloadSize> buf{};
-            const wal::SlotRetirePayload fields{slot};
-            if (auto n = wal::EncodeSlotRetire(buf, fields); !n.ok()) return n.status();
-            // **The aborting transaction's id, not kNoTxnId.** payload.hpp
-            // says no transaction owns a SLOT_RETIRE; that is true of a
-            // purge pass and false of a rollback compensation, and stamping
-            // kNoTxnId would hide the rollback from recovery's analysis
-            // phase (section 6's amendment).
-            auto rec = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kSlotRetire, trx_id, page_id}, buf);
-            if (!rec.ok()) return rec.status();
-            return store_.StampPageLsn(page_id, rec.value());
-        }
-
-        case TrailAction::kOverwrite: {
-            if (Status s = page.OverwriteTuple(slot, entry.image, entry.prior_trx_id,
-                                                entry.prior_undo_ptr);
-                !s.ok()) {
-                return s;
-            }
-            if (wal_ == nullptr) return Status::OK();
-            std::vector<std::byte> buf(wal::kHeapWriteFixedSize + entry.image.size());
-            const wal::HeapWritePayload fields{entry.prior_trx_id, entry.prior_undo_ptr,
-                                               slot,
-                                               static_cast<std::uint16_t>(entry.image.size())};
-            if (auto n = wal::EncodeHeapWrite(buf, fields, entry.image); !n.ok()) {
-                return n.status();
-            }
-            auto rec = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapOverwrite, trx_id, page_id}, buf);
-            if (!rec.ok()) return rec.status();
-            return store_.StampPageLsn(page_id, rec.value());
-        }
-
-        case TrailAction::kDeleteMark: {
-            if (Status s = page.ClearDeleteMark(slot, entry.prior_trx_id,
-                                                 entry.prior_undo_ptr);
-                !s.ok()) {
-                return s;
-            }
-            if (wal_ == nullptr) return Status::OK();
-            // **HEAP_DELETE_UNMARK, not HEAP_DELETE_MARK.** This logged the
-            // mark record until 2026-08-11, which redo replays by *setting*
-            // a mark - so a crash after this rollback brought the row back
-            // deleted, the abort undone by its own compensation. The two
-            // directions are two record types (`record.hpp`).
-            std::array<std::byte, wal::kDeleteUnmarkPayloadSize> buf{};
-            const wal::HeapDeleteUnmarkPayload fields{entry.prior_trx_id, entry.prior_undo_ptr,
-                                                      slot};
-            if (auto n = wal::EncodeHeapDeleteUnmark(buf, fields); !n.ok()) return n.status();
-            auto rec = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapDeleteUnmark, trx_id, page_id}, buf);
-            if (!rec.ok()) return rec.status();
-            return store_.StampPageLsn(page_id, rec.value());
-        }
+        case TrailAction::kInsert:
+            return CompensateInsert(store_, wal_, trx_id, page_id, page, slot);
+        case TrailAction::kOverwrite:
+            return CompensateOverwrite(store_, wal_, trx_id, page_id, page, slot, entry.image,
+                                       entry.prior_trx_id, entry.prior_undo_ptr);
+        case TrailAction::kDeleteMark:
+            return CompensateDeleteMark(store_, wal_, trx_id, page_id, page, slot,
+                                        entry.prior_trx_id, entry.prior_undo_ptr);
     }
     return Status::Corruption("trail entry with an unknown action");
 }
