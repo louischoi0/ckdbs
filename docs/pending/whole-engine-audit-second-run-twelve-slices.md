@@ -1196,6 +1196,15 @@ on `63fec9d6` and passes on the fix `[measured]`.
 | G19 | every user-relation and index leaf walk bounded by `storage::LeafChainGuard` - mount undo's leaf re-find included, which the review found the commit had missed - and catalog and heap chains keeping their stated budget | `LeafCursorTest.AChainLongerThanTheOldBudgetIsWalkedToItsEnd` (2^20 + 2 leaves), `ACycleIsFoundAcrossSlicesWhereverItReentersTheChain`, the btree, index and re-find cycle cells |
 | G20 | `CREATE TABLE ... REFERENCES` puts each `sys.fkeys` row on its trail (G20-D, the operator's mark); `CreateForeignKey`'s unused `flags` parameter dropped | `ForeignKeyCheckTest.ARolledBackCreateTableTakesItsForeignKeyWithIt`, `...TakesEveryForeignKeyItDeclared`, `ForeignKeyRecoveryTest.ACrashedCreateTableReferencesLeavesTheCatalogARollbackDoes` |
 
+`[measured]` The close's A/B, `63fec9d6` against `83375075`
+(`bench/v3.4.9/results-audit-g16-close-v3.4.9-5-g83375075.md`): no shape
+regressed - the scan census 15-25 ns a leaf page cheaper, the point
+statements, scenario 0, the hot row and mount inside their spread, scenario
+2 +1.8 % and not claimed. The full suite ran 4458/4458 after `origin/main`
+(`27c6ebad`) was merged at `5f7287a9`, and the sim corpus 280/0.
+
 What bounds that: G19's failure itself, a relation past 8 GiB of leaves, is
-reproduced only through `LeafCursor`'s synthetic chain, not a real tree; and
-G18 does not repair a volume an older build already wrote.
+reproduced only through `LeafCursor`'s synthetic chain, not a real tree; G18
+does not repair a volume an older build already wrote; and the measurement
+did not reach G16's long loser chain, G17's 272 KiB snapshot cut, G18's
+region creation or G20's foreign-key create, no driver exercising them.

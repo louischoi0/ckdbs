@@ -46,6 +46,7 @@ per-item mark.
 | **Mark** | **W4:** G16-G20 verified by two lenses each at `6a3ce231`, all five surviving (the pending entry's §9, `63fec9d6`). **W5:** G16-G20 taken up as one milestone, on worktree `audit-g1-g15-fixes` (its directory; a worktree-isolated session cannot create a second one) on branch `worktree-audit-g16-g20-fixes` from `63fec9d6`. **G17-D and G20-D are the operator's own marks**: the contract changes the verifiers proposed - G17's record bound (`assertion.md`'s AZ-S3 paragraph, `wal.md` §4.1) cut to the largest split's, and G20's `sys.fkeys` rows on the `CREATE TABLE`'s trail (`ddl-transactional.md` §5) |
 | **Does not settle** | G21-G64, the 15 unread slices, a merge, a push, a version |
 | **Recorded at** | this file; the pending entry; the index row |
+| **Closed** | on the work branch at `bcfedce5`: three reviews (the step's two-lens workflow, then a second round), every new cell failing on `63fec9d6`, the full suite 4458/4458 after `origin/main` merged at `5f7287a9`, the sim corpus 280/0, the close's A/B with no shape regressed (`bench/v3.4.9/results-audit-g16-close-v3.4.9-5-g83375075.md`). Waits for the word to land |
 
 Decisions adopted on the standing go-ahead of 2026-11-14
 (go-ahead-achieving-milestone), not the operator's per-item marks:
