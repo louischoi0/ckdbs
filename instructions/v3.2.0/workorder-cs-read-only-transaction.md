@@ -266,6 +266,8 @@ so. None is the operator's own per-item mark.
 | CS-Q7 | A refused write | (a) refused, and the transaction is not poisoned: nothing was written and the view is unchanged. (b) refused and poisoned, as every other failed statement in an explicit transaction is | (a). Poisoning protects writes a client might commit unknowingly, and a read-only transaction has none | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
 | CS-Q8 | What is reported | (a) `read_only_begins` and `read_only_write_refusals` in the transaction counters, and no wait event, since CS adds no wait. (b) nothing new | (a) | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
 | CS-Q9 | The lazy-id census | (a) CS-S0 lists every reading of `Transaction::id()` and every `kNoTrxId` comparison on a write path, in a `docs/pending/` entry for a later order. (b) not in CS | (a). It is a read with no code, and the census CS-R1 needs covers half of it | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q10 | A `DURABILITY` clause on a `READ ONLY` `BEGIN` (surfaced at CS-S1, written here before adoption) | (a) accepted, binding nothing: a commit that acknowledges no write keeps every class's promise, and the reply names no class. (b) refused `InvalidArgument`: the clause has nothing to bind | (a). KWP's `C_TXN_BEGIN` always sends `BEGIN [DURABILITY <c>]`, and under CS-Q3 (a) a `readonly` connection's frame `BEGIN` is `READ ONLY`, so (b) would refuse every such client that names a class; and (a) is not a spelling enforced as something else - no class is owed on a commit with nothing to make durable | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q11 | What a read inside a `READ ONLY` transaction records `[quiet-wrong]` (surfaced by CS-S0's census, written here before adoption) | (a) what an autocommit read records, unchanged: the unlogged `sys.access_stats` fold (`Catalog::RecordAccess`, written at `kBootstrapXid` with no log), an opted pattern's Waystone trail, the in-memory statistics, and a Cabin bank under the bank's own gate. (b) suppress all of it inside a `READ ONLY` transaction | (a). None is the transaction's write: each is advisory or unlogged state every autocommit read already writes outside any transaction, and CS-R1's ground - user data stamped `kNoTrxId` - does not arise. The `[quiet-wrong]` half is the Cabin bank, which a `READ WRITE` view never reaches (`own_trx_id != 0` declines it, `step_vm.cpp:937-940`) and a `READ ONLY` view now does. **Premise re-read at `bbaff33a`**: the bank declines a view minted with anything in flight (`in_flight_at_mint`) and, after its announce, any view whose `CommitCeiling()` is not its own `snapshot_lsn` (`step_vm.cpp:994-1000`) - so a `REPEATABLE READ` view held past a commit is declined, and a view that passes both is indistinguishable from an autocommit view minted at the same instant. The premise holds | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
 
 ## 5. Stages
 
@@ -292,3 +294,74 @@ so. None is the operator's own per-item mark.
 
 On `main` from `030b5bd9`, on the operator's word. No stage is opened and
 no code is written. Documents only.
+
+### CS-S0 - the premise and the census, 2026-11-15
+
+On worktree `cs-read-only-transaction`. **The bar of CS-Q1 (a) is met, so CS
+continues.** Measured at `bbaff33a` (`v3.4.11-3-gbbaff33a`, no engine change
+from `32354dbe`), Release from a `git archive` export:
+`bench/v3.4.11/results-cs-s0-premise-v3.4.11-3-gbbaff33a.md` (committed at
+`059d6b42`). `BEGIN; <k> tuple-key SELECTs; COMMIT` against the same reads in
+autocommit is costlier beyond the run's A/A spread in 23 of 36 cells: every
+durability class has such cells (`strict` 10 of 12, `group` 8, `relaxed` 5),
+and by `k` 11 of 12 at `k = 1`, 9 at `k = 4`, 3 at `k = 16`. Throughput falls
+81-91 % at `strict`, `k = 1`. The explicit arm appends 64 WAL bytes per
+transaction in every cell, the autocommit arm 0. It spends one id per
+transaction at `cores = 1`, the autocommit arm none. The probe could not
+count ids at `cores = 4`, where each core carves its own window. **What
+bounds the reading**: the host was loaded (load average 11-21, other
+sessions compiling), so the spread is wide (median about 30 %). The
+explicit arm's two extra round trips are not separated from the engine's
+share, and under `relaxed` at `k = 1` they may be most of it. The id, the
+64 bytes and the `strict` sync are the engine's share. Cut to the stage's
+budget: one table size (10,000 rows), 2 repeats of 2 s per arm, no wait
+decomposition, no PostgreSQL floor.
+
+**The census** (an `Explore` read at `bbaff33a`; line numbers there):
+
+- **One chokepoint.** Every client statement, newline and KWP alike, passes
+  through `CommandDispatcher::DispatchInner` (`:1349`). KWP's
+  `C_TXN_*` and `C_EXECUTE` become statement text there (`kwp_session.cpp:650-693`, `:986-1038`).
+  The one bypass is the KWP load stream, which enters `ExecuteInsert`
+  (`:6116`) on a session of its own whose role is `admin`, so under
+  CS-Q3 (a) it is never `READ ONLY`.
+- **Write routes.** Every DML and `InDdlStatement` DDL reaches
+  `BeginWrite` (`:11317`), which at HEAD dereferences a null transaction
+  for a session in a transaction with none (`:11331`); `CommitLocal` and
+  `RollbackLocal` do the same. Five transactionless write routes never call
+  `BeginWrite` and would have written: column-shape `CREATE`/`DROP CABIN`
+  (`:3217`), `ALTER ... RENAME` (`:3282-3421`, drawing an id through
+  `TakeDdlBuildLock`), `DROP ASSERTION` (`:4014`), `CREATE ASSERTION`
+  (`:4057`) and `CREATE`/`DROP TRANSITION` (`:4101`). All of them are
+  routed under `CREATE`, `DROP` or `ALTER`, so a refusal on the routing
+  token covers them. `PURGE`, `REINDEX`, `WAYSTONE` and `BACKUP` (but
+  `STATUS`) already refuse inside any transaction.
+- **Writes a read makes** (CS-Q11): `sys.access_stats` (`Catalog::RecordAccess`,
+  unlogged, `kBootstrapXid`); an opted pattern's Waystone trail
+  (`trail_store.cpp:70`, unlogged); the in-memory statistics, plan memo and
+  optimizer signals; and the Cabin bank, which a `READ ONLY` view reaches.
+- **Read paths.** `SnapshotFor` (`:11292`), `EnsureStatementBoundary`
+  (`:7689`) and `MintResolveView` (`:7711`) are the three readers of the
+  session's transaction on a read path. Every subquery, query-layer walk
+  and `SelectRun` reuses the snapshot `SnapshotFor` returned and takes no
+  lease of its own. So the session's lease covers a suspended walk, which
+  `CloseClient` defers past (`tcp_server.cpp:1090-1094`).
+- **Lifetime and placement.** The sweep keyed on `transaction()` and the
+  id (`tcp_server.cpp:926-975`), so a read-only transaction would have been
+  unswept. BL's placer tests `in_explicit_txn()` (`tcp_server.cpp:670`), which a
+  read-only transaction answers true, so it stays on its core.
+- **Transaction-id observability.** `sys.lock_waits`' `waiter_trx` reads
+  NULL for a holder with no id (`sys_views.cpp:127-128`, `:317-332`). The
+  wait-event parameters name the other party. ASH's `trx_id` is filled by no
+  writer, and `sys.session_state`/`session_waits` carry no id. Nothing else
+  changes.
+- **A tuple stamped `0`** is invisible to every view, its writer's
+  included, until the first floor reclaim, and visible to every view, older
+  snapshots included, after it. Recovery skips its records. At HEAD the
+  write path would have stamped `kBootstrapXid` (`:12075`), had it not
+  crashed first. This is why CS-R1's refusal sits at the head.
+- **Counters.** `sys.meta` has no transaction block. CS-Q8's two counters
+  go in a new per-core `txn` section.
+- **CS-Q9**: `docs/pending/lazy-id-assignment-census.md`.
+
+Overhead not measured; measured at the milestone's close.
