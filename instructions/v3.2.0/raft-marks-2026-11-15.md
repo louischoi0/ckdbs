@@ -33,3 +33,25 @@ before the merge.
 | **Mark** | **F4-M (a)**, the operator's own mark: the measured cost is accepted as the fix's - nil on the common path, about 123 ns of server CPU per row on a row whose writer the view cannot see and whose page version fails the WHERE (`bench/v3.4.10/results-audit-f4-overhead-v3.4.10-1-g4f5b2e17.md`); no profiling or memo of the in-flight answer is owed. **Landed:** `worktree-audit-f4-where-on-snapshot` merged to `main` with `--no-ff` and pushed with `--no-verify`. The hook was skipped; the full suite had run 4462/4462 at `4f5b2e17`, and every commit after it is documents only |
 | **Does not settle** | a version; CR-Q1..Q8 |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 4. G21, G23-G26 verified, then taken up
+
+| | |
+|---|---|
+| **Words** | W3: *"resume the G21-G64 verification"*; W4: *"fix G21 and G23-G26; G21 as proposed"*, with the skill `go-ahead-achieving-milestone` invoked (*"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*) (each given in Korean; recorded in English) |
+| **Mark** | **W3:** CLA kept the scale the operator chose on 2026-11-14 for G16-G20 (the finders' highest severity first, two verifiers a finding, about ten a pass) and verified G21 and G23-G26 at `030b5bd9`; all five survived both lenses (the pending entry's §10, `f63c6023`). **W4:** the five taken up as one milestone, on worktree `audit-g1-g15-fixes` (its directory; a worktree-isolated session cannot create a second one) on branch `worktree-audit-g21-g26-fixes` from `f63c6023`, whose build inputs are `61917b0f`'s - `origin/main` with F4 landed by another session (§3) after the verification read `030b5bd9`. **G21-D is the operator's own mark**: the version-chain walks take `kds::CycleGuard` in place of the 2^16-step bound `txn.md` §3.7 stated, `kMaxUndoChainLength` kept only for `UndecidedInsert`, as the verifiers proposed |
+| **Does not settle** | G27-G64 (less G59), the 15 unread slices, the review's two findings put to the operator (the pending entry's §10), a merge, a push, a version |
+| **Recorded at** | this file; the pending entry's §10; this file's row in `instructions/v3.2.0/index.md` |
+
+## 5. Decisions adopted on the standing go-ahead
+
+Each is **adopted on the operator's standing go-ahead of 2026-11-15
+(go-ahead-achieving-milestone)**: CLA's proposal, not the operator's own
+per-item mark. None is `[quiet-wrong]`.
+
+| Item | Options | Adopted, and why |
+|---|---|---|
+| **G23-D** - where the cut run's length is applied | (a) `scratch.resize(run * kPageSize)` where the run is cut; (b) a span over the prefix at the write | **(a)**, the verifiers' alternative: the buffer is the run's in every later use, not only at the write |
+| **G24-D** - how a released spill under the copy is answered | (a) the decode split from the append, and a `NotFound` decode of a version the head writer wrote read again by CI-R7's loop; (b) decode only the key columns | **(a)**, both verifiers': (b) does not hold for a covering index or a unique build's check, which use the whole row. Widened at review to the head writer's older versions in the undo walk, and to a re-read that finds the row exactly as copied failing with the decode's own status. No cell: the copy/append seam CI-R7 lacks does not exist (`known-gaps.md`) |
+| **G25-D** - the guard on the Bound Cabin walks | (a) the leaf walks' guard, renamed `storage::PageChainGuard` now that it guards two chain kinds; (b) `kds::CycleGuard` written into each walk | **(a)**: one call shape and one message at every page-chain site; the old name survives only in history records |
+| **G26-D** - how a refused apply leaves no record | (a) check under the registry latch, then log, then apply; a refused check takes the placed entry back off the held tail (`BoundCabinPage::TakeBackLast`); (b) check before the page work | **(a)**, both verifiers': the check must run under the hold the apply runs under, which the page work is outside of, and an entry left unlogged on the tail would shift the next record's index at replay. Widened at review: a departure whose first hold found no group (group id 0) is refused before its record, as replay would refuse it |
