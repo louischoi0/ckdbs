@@ -281,6 +281,12 @@ public:
     Status Apply(const std::string& key, std::int64_t delta, PageId page_id,
                  std::uint16_t index);
 
+    // Whether `Apply(key, delta, ...)` would succeed, asked without moving
+    // anything: the same arithmetic, the same Status. A reservation asks it
+    // before it logs, so no record names an apply that refused (the audit's
+    // G26).
+    Status CheckApply(const std::string& key, std::int64_t delta) const;
+
     // Removes an entry's contribution: subtracts `delta` and forgets the
     // entry. §6.2's step 5, the abort path.
     //
@@ -304,6 +310,8 @@ public:
     // creating an empty group to go negative in.
     Status ApplyDeparture(const std::string& key, std::int64_t delta, PageId page_id,
                           std::uint16_t index);
+    // `CheckApply`'s twin for a departure.
+    Status CheckDeparture(const std::string& key, std::int64_t delta) const;
     Status UnapplyDeparture(const std::string& key, std::int64_t delta, PageId page_id,
                             std::uint16_t index);
 

@@ -1860,7 +1860,11 @@ Owned by `docs/spec/index.md` §10.3. The order is
   copied before a `PURGE` released its spilled values, fails its decode, and
   is skipped as one no reader reaches - or read again, if its deleter was in
   flight at the copy. Without the skip the build was refused, never wrong.
-  Showing it needs the same seam CI-R7 does.
+  Showing it needs the same seam CI-R7 does. **Neither has the re-read of a
+  head whose spilled value a rollback released under the copy** (the
+  audit's G24, verified at `030b5bd9`): the same seam, and a writer on
+  another core rolling back between the copy and the decode. Without it the
+  build was refused `NotFound`, never wrong.
 - **CI-R7 has no test that fails without it** `[quiet-wrong]`. A row whose
   head writer was in flight at the backfill's copy, and rolled back with
   its id below the floor before the walk, is read again instead of being

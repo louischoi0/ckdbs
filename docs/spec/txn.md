@@ -373,9 +373,21 @@ recovery's undo phase uses the record.
 
 ### 3.7 Chain walks
 
-`UndoLog::Walk` follows `prior_undo_ptr` newest→oldest, bounded by
-`kMaxUndoChainLength = 2^16`. Exceeding the bound is `Corruption`, not a hang —
-the same guard `kMaxChainPages` provides for a catalog chain.
+`UndoLog::Walk` and the visibility walk (`ResolveThroughUndo`, §4.3) follow
+`prior_undo_ptr` newest→oldest, **bounded by a cycle check, not a length,
+since the audit's G21**: a chain that revisits a record is `Corruption`, not
+a hang, found by `kds::CycleGuard` (`base/cycle_guard.hpp`, Brent's check),
+and a chain of any length that does not is walked to its end. A legal chain
+is as long as the row's write history a reader's snapshot keeps - one
+transaction updating one row 65,537 times, or a hot row updated under one
+long `SELECT` - and a length bound (`2^16` before G21) refused such a read
+as `Corruption`. The check is sound because a record's `prior_undo_ptr`
+names a record written before it, and no record is rewritten while a
+reader can reach it (§4.1); the recycled-record window `known-gaps.md`
+records still ends at a failed read, a failed identity check or
+`kNoUndoPtr`. `kMaxUndoChainLength` survives only as how far a named key's
+undecided-insert test asks down a chain of in-flight versions before
+answering "not an insert".
 
 ## 4. Snapshots and visibility
 

@@ -106,10 +106,12 @@
 
 namespace kds::txn {
 
-// The ceiling on a version-chain walk. Exceeding it is Corruption, not a
-// hang - the same guard `kMaxChainPages` provides for the heap chain. A
-// legitimate chain this long would mean 65,536 uncommitted versions of one
-// tuple, which no transaction this engine can express produces.
+// How far `UndecidedInsert` (command_dispatcher.cpp) asks down a chain of
+// in-flight versions before it answers "not an insert". **Not a bound on a
+// version-chain walk**: a legal chain is as long as its row's write history
+// a reader's snapshot keeps - one transaction updating one row 65,537
+// times, or a hot row updated under one long `SELECT` - so `Walk` and
+// `ResolveThroughUndo` take a cycle check instead (the audit's G21).
 inline constexpr std::uint32_t kMaxUndoChainLength = 1u << 16;
 
 // One version-chain step, as `Walk` reports it. The image is **copied**,
@@ -169,10 +171,13 @@ public:
     StatusOr<UndoVersion> Read(std::uint64_t ptr);
 
     // Walks a version chain newest -> oldest from `ptr`, calling `fn` for
-    // each version until it returns `kStop`, the chain ends at kNoUndoPtr,
-    // or kMaxUndoChainLength steps have been taken - the last of which is
-    // Corruption. **A visitor's failure leaves by its Status**, as in every
-    // other walk (`storage/visit.hpp`).
+    // each version until it returns `kStop` or the chain ends at
+    // kNoUndoPtr. A chain that revisits a record is Corruption, found by
+    // `kds::CycleGuard`; length alone is never refused. The check is sound
+    // because a record's `prior_undo_ptr` names a record written before it
+    // and no record is rewritten while a reader can reach it (txn.md
+    // section 3.7). **A visitor's failure leaves by its Status**, as in
+    // every other walk (`storage/visit.hpp`).
     //
     // A caller that only needs one step calls Read(); this is for the index
     // backfill, which indexes every version of a row a reader can reach,

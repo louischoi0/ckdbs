@@ -163,12 +163,12 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
 
 Status RecoveryUndo::CompensateOnLeaf(storage::PageStore& store, std::uint64_t txn_id,
                                       const UndoVersion& rec) {
-    // A leaf walk like every other (`storage::LeafChainGuard`, the audit's
+    // A leaf walk like every other (`storage::PageChainGuard`, the audit's
     // G19): bounded by a cycle check, not a budget - the row may have been
     // pushed past any number of leaves by splits while its loser was live,
     // and a recovered tree frees and relinks nothing under the walk.
     PageId page_id = rec.target_page_id;
-    storage::LeafChainGuard guard("undo's re-find");
+    storage::PageChainGuard guard("undo's re-find");
     for (;;) {
         if (Status s = guard.Visit(page_id); !s.ok()) return s;
         auto bytes = store.Get(page_id);

@@ -209,6 +209,13 @@ public:
     // caller grows the chain, exactly as a heap chain's tail does.
     StatusOr<std::uint16_t> Append(const BoundCabinEntry& entry);
 
+    // Takes back the entry `Append` just placed at `index`, leaving the page
+    // as it was before it: the bytes zeroed and the count lowered. Only the
+    // last entry, and only before anything logged it - a reservation whose
+    // apply is refused after its placement (the audit's G26). InvalidArgument
+    // for any other index.
+    Status TakeBackLast(std::uint16_t index);
+
     StatusOr<BoundCabinEntry> Read(std::uint16_t index) const;
 
     // Rewrites an entry in place. The only mutations the format needs are flag

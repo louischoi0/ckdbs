@@ -2092,6 +2092,9 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 }
                 copied.resize(k);
                 run = k;
+                // The buffer the write is given is the prefix's own, or every
+                // device refuses the run's length (the audit's G23).
+                scratch.resize(run * kPageSize);
                 break;
             }
             {

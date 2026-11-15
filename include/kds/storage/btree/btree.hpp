@@ -294,7 +294,7 @@ StatusOr<storage::PageRef> BtreeFetchLeaf(storage::PageStore& store, PageId leaf
 // this is the rightmost leaf. The leaf's pin is held only inside this
 // call, so the gap between two calls is a legal suspension point, and the
 // caller owns the cycle guard the whole-chain forms apply
-// (storage::LeafChainGuard).
+// (storage::PageChainGuard).
 StatusOr<PageId> BtreeVisitLeafPage(
     storage::PageStore& store, PageId leaf, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&

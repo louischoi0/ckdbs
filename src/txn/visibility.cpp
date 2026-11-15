@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include "kds/base/cycle_guard.hpp"
+
 namespace kds::txn {
 
 StatusOr<Visibility> ResolveThroughUndo(const ReadView& view, UndoLog& undo,
@@ -10,15 +12,11 @@ StatusOr<Visibility> ResolveThroughUndo(const ReadView& view, UndoLog& undo,
                                          std::vector<std::byte>& payload) {
     // The loop is txn.md section 4.3 step 4, and it re-enters at step 2
     // every time - which is why Classify() is called on the *stepped-back*
-    // state rather than the predicate being reimplemented here.
-    std::uint32_t steps = 0;
+    // state rather than the predicate being reimplemented here. Bounded by a
+    // cycle check, not a length (the audit's G21; `UndoLog::Walk` says why
+    // the check is sound here).
+    CycleGuard<std::uint64_t> guard(undo_ptr);
     while (undo_ptr != kNoUndoPtr) {
-        if (++steps > kMaxUndoChainLength) {
-            return Status::Corruption("undo chain exceeds " +
-                                      std::to_string(kMaxUndoChainLength) +
-                                      " versions; treating it as a cycle");
-        }
-
         auto version = undo.Read(undo_ptr);
         if (!version.ok()) return version.status();
 
@@ -48,6 +46,10 @@ StatusOr<Visibility> ResolveThroughUndo(const ReadView& view, UndoLog& undo,
 
         trx_id = version.value().prior_trx_id;
         undo_ptr = version.value().prior_undo_ptr;
+        if (undo_ptr != kNoUndoPtr && guard.Revisits(undo_ptr)) {
+            return Status::Corruption("undo chain revisits the record at " +
+                                      std::to_string(undo_ptr) + "; the links are cyclic");
+        }
 
         const Visibility verdict = Classify(view, trx_id, deleted, undo_ptr);
         if (verdict != Visibility::kNeedsUndoWalk) return verdict;

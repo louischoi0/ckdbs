@@ -7450,7 +7450,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
     bool cut = false;
     std::uint64_t cut_tuple_key = 0;
     PageId leaf = start.value();
-    storage::LeafChainGuard guard("relation walk");
+    storage::PageChainGuard guard("relation walk");
     while (leaf != kInvalidPageId) {
         if (Status s = guard.Visit(leaf); !s.ok()) return s;
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,

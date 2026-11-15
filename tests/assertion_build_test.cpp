@@ -340,5 +340,41 @@ TEST_F(AssertionBuildWalTest, TheEmittedRecordsRebuildTheDirectoryTheBuildProduc
     EXPECT_TRUE(rebuilt.VerifyAgainstEntries(reader).ok());
 }
 
+// A Bound Cabin chain's adoption is bounded by a cycle check, not by the
+// 2^20 pages the walk once counted (the audit's G25): the chain grows with
+// every checked write for the assertion's life. A link that re-enters the
+// chain mid-way is Corruption naming the revisit; an acyclic chain is
+// adopted with its tail.
+TEST(BoundCabinChainAdoptTest, ACycleIsCorruptionAndAnAcyclicChainIsAdoptedToItsTail) {
+    storage::InMemoryPageStore store{64};
+    std::vector<PageId> ids;
+    for (int i = 0; i < 3; ++i) {
+        auto created = store.CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        ASSERT_TRUE(storage::cabin::BoundCabinPage::Format(created.value().second.bytes()).ok());
+        ids.push_back(created.value().first);
+    }
+    const auto link = [&](PageId from, PageId to) {
+        auto page = store.Get(from);
+        ASSERT_TRUE(page.ok());
+        auto view = storage::cabin::BoundCabinPage::Open(page.value().bytes());
+        ASSERT_TRUE(view.ok());
+        view.value().SetNextPageId(to);
+    };
+    link(ids[0], ids[1]);
+    link(ids[1], ids[2]);
+
+    exec::BoundCabinChainWriter whole(/*assertion_id=*/7);
+    ASSERT_TRUE(whole.AdoptChain(store, ids[0]).ok());
+    EXPECT_EQ(whole.root(), ids[0]);
+    EXPECT_EQ(whole.pages(), 3u);
+
+    link(ids[2], ids[1]);
+    exec::BoundCabinChainWriter cyclic(/*assertion_id=*/7);
+    const Status adopted = cyclic.AdoptChain(store, ids[0]);
+    EXPECT_EQ(adopted.code(), StatusCode::kCorruption) << adopted.message();
+    EXPECT_NE(adopted.message().find("revisits"), std::string::npos) << adopted.message();
+}
+
 }  // namespace
 }  // namespace kds::server

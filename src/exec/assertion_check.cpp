@@ -622,15 +622,35 @@ Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager*
 
     // The record, the header and the hold's conversion as one step against
     // a snapshot (the header's paragraph): no page is touched in here.
+    //
+    // **Checked, then logged, then applied** (the audit's G26). An apply can
+    // refuse - a departure's sum underflowing, which no admission asks, or
+    // a group a departure finds missing - and a record logged ahead of a
+    // refused apply is one the mount's fold refuses the same way, which
+    // leaves every assertion of the instance unenforcing. So the check runs
+    // first, under the hold the apply runs under, and a refusal takes the
+    // entry back off the tail it placed, still held and named by no record:
+    // left there, the next logged entry's index would sit past the append
+    // point replay finds.
     wal::Lsn stamp = wal::kNoLsn;
     {
         const LatchGuard guard(latch_.get());
+        Status admissible =
+            departure ? a.cabin.CheckDeparture(key, value) : a.cabin.CheckApply(key, value);
+        if (!admissible.ok()) {
+            auto tail = BoundCabinPage::Open(placed.value().page.bytes());
+            if (!tail.ok()) return tail.status();
+            if (Status s = tail.value().TakeBackLast(index); !s.ok()) return s;
+            return admissible;
+        }
         auto logged =
             a.chain.Log(wal, placed.value(), entry, key, wal::RecordType::kAssertReserve, txn_id);
         if (!logged.ok()) return logged.status();
         stamp = logged.value();
         Status applied = departure ? a.cabin.ApplyDeparture(key, value, page_id, index)
                                    : a.cabin.Apply(key, value, page_id, index);
+        // Cannot refuse: the check above asked the same arithmetic under
+        // this hold.
         if (!applied.ok()) return applied;
         if (serial != 0) ReleaseHoldLocked(serial);
 

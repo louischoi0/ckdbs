@@ -744,7 +744,11 @@ order. The acts, in one autocommit transaction at READ COMMITTED:
      resolved later (`ResolvedForEveryReader` answers true for a rolled-back
      id below the floor, a statement about a version still on a page). Where
      the walk below it fails and the writer has decided, the row is read
-     again by its tuple key, a bounded number of times.
+     again by its tuple key, a bounded number of times. **So is such a row
+     whose head version's spilled value the decode finds released** (the
+     audit's G24): a rollback on another core restores the row before it
+     releases the spill, so the re-read meets the row restored, not the
+     dead value; before G24 the build was refused `NotFound`, never wrong.
    - The build's view is re-minted per slice, so its core's snapshot bound
      moves. Its in-flight id still holds the floor, and with it every core's
      undo recycling, for the build's length.

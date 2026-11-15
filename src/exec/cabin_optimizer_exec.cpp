@@ -148,7 +148,7 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
         std::vector<std::byte> payload;
     };
 
-    storage::LeafChainGuard guard("relation chain");
+    storage::PageChainGuard guard("relation chain");
     while (leaf != kInvalidPageId) {
         if (Status s = guard.Visit(leaf); !s.ok()) return s;
         // PO8, between pages: an OFF mid-build discards cleanly, because

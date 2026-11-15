@@ -41,8 +41,8 @@
 // ---- Every chain terminates -----------------------------------------------
 //
 // At an always-visible trx_id == 1 version, at undo_ptr == 0, or at a
-// kInsert record. `UndoLog::Walk`'s kMaxUndoChainLength bound is the
-// backstop for a damaged chain, not the normal exit.
+// kInsert record. The cycle check `UndoLog::Walk` and this walk share is the
+// backstop for a damaged chain, not the normal exit; a long chain is not one.
 
 namespace kds::txn {
 
