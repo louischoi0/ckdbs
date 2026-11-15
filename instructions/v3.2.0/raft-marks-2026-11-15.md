@@ -51,3 +51,21 @@ before the merge.
 | **Mark** | **W3:** `v3.4.11` is an annotated tag at `a61ab905`, the head of `origin/main`, pushed; its message carries what is built - F4 - and the gaps that bound it. One error in it: its "15 + 27 slices are unread" double-counts, and 15 slices are unread in all (the second run read 12 of the first run's 27). The tag was not re-pointed, which would need a force push. **W4:** `CLAUDE.md`'s version line moved in a documents-only commit, pushed to `main` with `--no-verify` |
 | **Does not settle** | CR-Q1..Q8; CS-Q0..Q9; G21-G64 |
 | **Recorded at** | this file; the tag message; `CLAUDE.md`'s Version Management; this file's row in `instructions/v3.2.0/index.md` |
+
+## 6. The optimizer survey's item 1, and a work order written
+
+| | |
+|---|---|
+| **Word** | W5, on 2026-11-15, after CLA's survey of the optimizer layer against other engines (six candidates, item 1 a value list served as a key): *"Write the work order for the item 1 milestone."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-cu-key-set-access.md` is written and not opened.** The letter CU is CLA's proposal; CT is passed over because `catalog.md` numbers its rules CT1..CT7 |
+| **Does not settle** | the opening of CU or of any stage; CU-Q0 to CU-Q7, each CLA's proposal only; a merge, a push, a version |
+| **Recorded at** | this file; the order's header and §7; the CU row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 7. The optimizer survey's item 2, and a work order written
+
+| | |
+|---|---|
+| **Word** | W6, on 2026-11-15, while §6's order was being written: *"And write the item 2 milestone as a work order."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-cv-ordered-index-walk.md` is written and not opened.** The letter CV is CLA's proposal |
+| **Does not settle** | the opening of CV or of any stage; CV-Q0 to CV-Q6, each CLA's proposal only - CV-Q4, the tie order under a reverse walk, amends `parser-v2.md` I12 if marked (a); a merge, a push, a version |
+| **Recorded at** | this file; the order's header and §7; the CV row and this file's row in `instructions/v3.2.0/index.md` |
