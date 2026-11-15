@@ -147,7 +147,11 @@ inline Visibility Classify(const ReadView& view, VisibilityMemo& memo,
 }
 
 // Phase 2 (txn.md section 4.3 step 4). Called only after Classify()
-// answered kNeedsUndoWalk **and the caller's page span has been released**.
+// answered kNeedsUndoWalk **and with no span into the tuple's page live**
+// (R1): the tuple's bytes are copied into `payload` first, since the walk
+// fetches undo pages. A pin or latch on the page may stay held where the
+// caller's latch order allows an undo page after it - UPDATE's and
+// DELETE's row walk holds its leaf (`WriteWalk::Qualify`, F4).
 //
 // `payload` is in/out: on entry it holds a copy of the tuple's own payload
 // bytes; on return, if the result is kVisible, it holds the visible

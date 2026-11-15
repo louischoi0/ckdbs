@@ -1769,10 +1769,8 @@ TEST_F(LockDeadlockTest, AStatementThatHasWrittenRowsNowWaitsInsteadOfBeingRefus
     // having written nothing, hold no rows, and correctly register no edge
     // at all. That is the better behaviour and it is why the declaration
     // exists; it is simply not the shape this cell measures. Both rows
-    // are matched by `v > 0` whichever value the page carries - `apply`
-    // evaluates the WHERE against the page's current bytes, so row 2 reads
-    // as the holder's uncommitted `9` rather than as the `1` this writer's
-    // view would resolve.
+    // are matched by `v > 0` whichever version is read - the holder's
+    // uncommitted `9` on the page, or the `1` this writer's view resolves.
     Session writer;
     Started w = Start("UPDATE t SET v = 3 WHERE v > 0", writer);
     Pump();
@@ -2414,9 +2412,8 @@ protected:
     // (`ACoarseDeclarationWaitsBeforeItWritesAnythingAndThenSucceeds`).
     // The mid-walk park these cells exist to measure is what a predicate
     // naming no tuple key window still takes. Every row is inserted with `v = 0`
-    // and a holder's row carries `9`, so `v >= 0` matches all ten whichever
-    // value the page holds - `apply` evaluates the WHERE against the page's
-    // current bytes, not against the version the view would resolve.
+    // and a holder's row carries `9`, so `v >= 0` matches all ten on the
+    // page's version and on the one the view would resolve alike.
     //
     // How many rows carry the new value. The point of every cell here is
     // *which* rows the statement wrote, so this is what they assert on.
@@ -3126,11 +3123,13 @@ TEST_F(MidWalkWaitTest, ADeadlockBetweenTwoMidWalkParksUnwindsTheVictimsOpenScop
     // That edge closes the cycle, so B is the victim by AO-R7's rule, and
     // B has an open scope with four rows of its own already written.
     //
-    // `v <= 1` selects exactly those: rows 1..4 now read as A's uncommitted
-    // `3`, row 5 as B's own `2`, and row 10 as A's anchor `1` - `apply`
-    // evaluates the WHERE against the page's current bytes, so the
-    // uncommitted values are what the predicate sees.
-    Started wb = Start("UPDATE t SET v = 4 WHERE v <= 1", b);
+    // **Carved by tuple key, in an `OR` group**, which is one residual
+    // conjunct and declares no window, so the walk stays per-row. Not by
+    // value: since F4 a WHERE the page's version fails is tested again on
+    // the snapshot's, and rows 1..4 read `0` in B's snapshot as rows 6..9
+    // do - `v <= 1` would stop B at row 1 on A's write, having written
+    // nothing. `id > 5 OR id < 1` passes 1..5 over in every version.
+    Started wb = Start("UPDATE t SET v = 4 WHERE id > 5 OR id < 1", b);
     Pump();
     ASSERT_TRUE(*wb.done) << "the cycle was not detected; only the fault net would end this";
     const Status victim = StatusFromErrorReply(wb.out->response);
@@ -3237,6 +3236,129 @@ TEST_F(MidWalkWaitTest, WithoutADetectorTheMidWalkParkIsNotOffered) {
     EXPECT_EQ(StatusFromErrorReply(walk.out->response).code(), StatusCode::kTxnConflict)
         << walk.out->response;
     EXPECT_EQ(RowsWith(1), 0) << "the refused statement left rows behind";
+}
+
+// ---- F4: a WHERE the head fails and the snapshot's version passes ----------
+//
+// `docs/pending/whole-engine-audit-unverified-findings.md` F4, ruled `$!a` on
+// 2026-11-15. A holder changes row 3 to `9` and stays open; the writer's
+// `v = 0` fails on the page's version and passes on the one its snapshot
+// sees. Before F4 the writer passed row 3 over with no conflict and
+// answered at once - and when the holder rolled back, a committed write had
+// missed a row matching in every committed state.
+
+TEST_F(MidWalkWaitTest, F4AWriteWaitsForAnUndecidedHeadItsWhereFailsOn) {
+    for (const char* rel : {"t", "tb"}) {
+        for (const bool update : {true, false}) {
+            SCOPED_TRACE(std::string(rel) + (update ? " UPDATE" : " DELETE"));
+            Session holder;
+            ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+            ASSERT_EQ(dispatcher_->Dispatch(std::string("UPDATE ") + rel +
+                                                " SET v = 9 WHERE id = 3",
+                                            &holder)
+                          .response.rfind("UPDATED", 0),
+                      0u);
+
+            Session w;
+            const std::string write = update
+                                          ? std::string("UPDATE ") + rel + " SET v = 5 WHERE v = 0"
+                                          : std::string("DELETE FROM ") + rel + " WHERE v = 0";
+            Started walk = Start(write, w);
+            Pump();
+            ASSERT_FALSE(*walk.done)
+                << "row 3 was passed over on its head's bytes: " << walk.out->response;
+
+            ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0),
+                      0u);
+            Pump();
+            ASSERT_TRUE(*walk.done) << "the wait never ended after the holder decided";
+            EXPECT_EQ(walk.out->response, update ? "UPDATED 10" : "DELETED 10");
+            if (update) {  // back to the fixture's rows for the DELETE arm
+                ASSERT_EQ(Local(std::string("UPDATE ") + rel + " SET v = 0 WHERE v >= 0"),
+                          "UPDATED 10");
+            }
+        }
+    }
+}
+
+TEST_F(MidWalkWaitTest, F4UnderReadCommittedAHeadCommittedDuringTheWaitIsSkipped) {
+    // The holder commits instead. The resumed walk keeps the snapshot it
+    // parked under, and row 3's head is now the newest committed state,
+    // failing `v = 0` - which is what PostgreSQL's re-check of the newest
+    // version answers: the row is skipped, not refused.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 9 WHERE id = 3", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+    Session w;
+    Started walk = Start("UPDATE t SET v = 5 WHERE v = 0", w);
+    Pump();
+    ASSERT_FALSE(*walk.done) << walk.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*walk.done) << "the wait never ended after the holder decided";
+    EXPECT_EQ(walk.out->response, "UPDATED 9");
+    EXPECT_EQ(RowsWith(5), 9);
+    EXPECT_EQ(RowsWith(9), 1);
+}
+
+TEST_F(MidWalkWaitTest, F4ACompareAndSetOnOneKeyWaitsHavingWrittenNothing) {
+    // Two conjuncts, so no point lookup and no declared window (a window of
+    // one key stays per-row): the scan meets row 3 having written nothing,
+    // and the statement waits and is re-run whole after the decide.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 9 WHERE id = 3", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+    Session w;
+    Started cas = Start("UPDATE t SET v = 5 WHERE id = 3 AND v = 0", w);
+    Pump();
+    ASSERT_FALSE(*cas.done) << "the compare-and-set answered on the head: " << cas.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*cas.done);
+    EXPECT_EQ(cas.out->response, "UPDATED 1");
+    EXPECT_EQ(RowsWith(5), 1);
+}
+
+TEST_F(MidWalkWaitTest, F4UnderRepeatableReadTheRowItsSnapshotMatchesIsRefused) {
+    // Under REPEATABLE READ the statement's state says row 3 matches, so a
+    // newer version of it - committed or not - is first-updater-wins'
+    // refusal, never a skip. A decided one cannot be waited out, and an
+    // undecided one is the writer of the row's current version, which the
+    // level does not wait for (`txn.md` §5).
+    for (const bool committed : {true, false}) {
+        SCOPED_TRACE(committed ? "committed after the view" : "undecided");
+        Session w;
+        ASSERT_EQ(dispatcher_->Dispatch("BEGIN ISOLATION LEVEL REPEATABLE READ", &w)
+                      .response.rfind("BEGIN", 0),
+                  0u);
+        Session holder;
+        if (committed) {
+            ASSERT_EQ(Local("UPDATE t SET v = 9 WHERE id = 3"), "UPDATED 1");
+        } else {
+            ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+            ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 9 WHERE id = 3", &holder)
+                          .response.rfind("UPDATED", 0),
+                      0u);
+        }
+        Started walk = Start("UPDATE t SET v = 5 WHERE v = 0", w);
+        Pump();
+        ASSERT_TRUE(*walk.done) << "a repeatable-read write waited on the row's own writer";
+        EXPECT_EQ(StatusFromErrorReply(walk.out->response).code(), StatusCode::kTxnConflict)
+            << walk.out->response;
+        ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &w).response.rfind("ROLLBACK", 0), 0u);
+        if (committed) {
+            ASSERT_EQ(Local("UPDATE t SET v = 0 WHERE id = 3"), "UPDATED 1");
+        } else {
+            ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0),
+                      0u);
+        }
+        Pump();
+        EXPECT_EQ(RowsWith(0), 10) << "a refused statement left rows behind";
+    }
 }
 
 

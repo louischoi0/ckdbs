@@ -1,6 +1,6 @@
 # Pending: a whole-engine audit, stopped after 6 of 33 slices - what is fixed, and what waits
 
-Status: **PENDING** - F4 waits for the operator; 27 slices are unread.
+Status: **PENDING** - F4 ruled (a) on 2026-11-15 and fixed; 27 slices are unread.
 Decides nothing, opens no stage, licenses no code.
 Raised: 2026-11-12, in conversation with the operator.
 Read at: `ce5347e6` (`v3.4.8-2-gce5347e6`), on worktree `audit-lean-and-correct`.
@@ -25,7 +25,7 @@ anything was changed:
 | F17, F23 | applied in part |
 | F26 to F28, F30 to F32 | applied - duplication folded into one copy each |
 | F29 | applied in part, with one stated change of behaviour |
-| F4 | found as described, **not fixed**: a change of contract, the operator's to rule on |
+| F4 | found as described; **ruled (a) on 2026-11-15 and fixed** on `audit-f4-where-on-snapshot` (`instructions/v3.2.0/raft-marks-2026-11-15.md`) |
 | F24 | not applied: the re-read is kept |
 
 **What bounds that.** Only F1's cell was run against the unfixed tree and
@@ -122,6 +122,8 @@ line; its text as the finder wrote it is at `f7c312cf`.
 **Fixed** at `c6caa100`: the refusal goes through `FinishWrite`. Pinned by `MidWalkWaitTest.AWriteRefusedAtItsSnapshotLeavesNoTransactionBehind`.
 
 #### F4. UPDATE/DELETE judge the WHERE on an invisible writer's head bytes and skip the row with no conflict (dirty read)
+
+**Ruled (a) by the operator on 2026-11-15 and fixed** (`instructions/v3.2.0/raft-marks-2026-11-15.md`): `WriteWalk::Qualify` resolves the snapshot's version when the page's fails the WHERE and its writer is undecided, or committed after the view under `REPEATABLE READ`; a match goes to `Claim`. The rule is `txn.md` §5's "Which version selects a row", and `MidWalkWaitTest`'s four `F4...` cells pin it. What follows is the finding as it stood.
 
 **Read again and found as described; not fixed - the operator's to rule on.** `apply` and `qualifies` judge the WHERE on the page's current bytes whenever `Classify` answers anything but `kNoVersion`, so a row whose head an undecided writer changed is skipped before the conflict check. `tests/lock_family_test.cpp`'s `MidWalkWaitTest` fixture comment already states it ("`apply` evaluates the WHERE against the page's current bytes, not against the version the view would resolve"); `txn.md` §5 gives the verdict for a row the writer reaches and does not say which version selects the rows. A fix turns a statement that answers `UPDATED 0` today into one that waits or is refused, which is a change of contract, not a repair.
 
@@ -310,11 +312,7 @@ returns.
 
 `[design]` In the order it would run:
 
-1. **F4**, on the operator's ruling: resolve the snapshot's version when the
-   head fails the WHERE and let the conflict check answer; or evaluate the
-   WHERE on the snapshot's version always; or state today's behaviour in
-   `txn.md` §5 and `known-gaps.md` as accepted. The row is passed over in
-   `WriteWalk::Qualify`, for both statements.
+1. ~~**F4**~~ - ruled (a) on 2026-11-15 and fixed (§3.1's F4).
 2. **Section 4's `kVarHeapAppend` arm**, if wanted.
 3. **The overhead of F26**, if wanted: an interleaved A/B of UPDATE and
    DELETE walks in `build-release`, `bf3bc936` against `3f8c499c`.

@@ -195,7 +195,11 @@
 //     page), a split's parents (a leaf then its parents, bottom-up,
 //     `SecureParents`, AT-S16), and a scan ring's shared hold on a leaf
 //     across its consumer's var-heap fetches (AM-R8: `S(leaf)` then
-//     `S(var-heap page)`, the Cabin build's phase 2). The order: old before new, leaf before parent, a leaf
+//     `S(var-heap page)`, the Cabin build's phase 2), and a write walk's
+//     leaf `X` across its undo pages - `AppendUndo`'s, and the snapshot's
+//     version read for a WHERE (F4, `WriteWalk::Qualify`); no holder of an
+//     undo page asks for a leaf (`UndoLog::Read` copies out and releases).
+//     The order: old before new, leaf before parent, a leaf
 //     before its right neighbour. A descent holds one at a time. Since the
 //     owner-core invariant retired (AT-S5, AT-S7; history at cf889b63) any
 //     core may take any pair, so an ABBA is possible against a path that

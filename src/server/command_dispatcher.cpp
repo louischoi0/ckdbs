@@ -9937,11 +9937,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 class CommandDispatcher::WriteWalk {
 public:
     // A row that qualified: its tuple key, and the writer and undo pointer
-    // of the version on the page.
+    // of the version on the page. `through_undo` says it qualified on the
+    // snapshot's version, not the page's (F4, `Qualify`): `payload_copy`
+    // then holds bytes that are not the page's, and `Claim` never admits it.
     struct Row {
         std::uint64_t id = 0;
         std::uint64_t trx_id = 0;
         std::uint64_t undo_ptr = 0;
+        bool through_undo = false;
     };
 
     WriteWalk(CommandDispatcher& d, const WriteScope& scope, const catalog::TableAccess& ta,
@@ -9978,13 +9981,13 @@ public:
         //
         // **A version reached through the undo chain is not writable.**
         // Its bytes are not the bytes on the page, so an edit of it written
-        // back would lose whatever superseded it. kNeedsUndoWalk therefore
-        // falls through to the conflict check in `Claim` rather than
-        // resolving - and that check is what rejects it, because a writer
-        // this view cannot see is either in flight or committed after it.
-        if (txn::Classify(snapshot_.view, tuple.value()) == txn::Visibility::kNoVersion) {
-            return std::optional<Row>{};
-        }
+        // back would lose whatever superseded it. A kNeedsUndoWalk row whose
+        // head matches therefore falls through to the conflict check in
+        // `Claim` - which rejects it, because a writer this view cannot see
+        // is either in flight or committed after it. One whose head does not
+        // match is the snapshot's to decide (`SnapshotVersionDecides`).
+        const txn::Visibility seen = txn::Classify(snapshot_.view, tuple.value());
+        if (seen == txn::Visibility::kNoVersion) return std::optional<Row>{};
 
         // **The row is copied out of the page once, and decoded from the
         // copy**, which is what makes the two-stage decode legal under R1:
@@ -10001,20 +10004,11 @@ public:
         payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
         auto id = KeystoneIdOfPayload(payload_copy);
         if (!id.ok()) return id.status();
-        const Row row{id.value(), tuple.value().trx_id, tuple.value().undo_ptr};
+        Row row{id.value(), tuple.value().trx_id, tuple.value().undo_ptr};
         // Not a collected target: nothing to decode.
         if (targets != nullptr && !targets->contains(row.id)) return std::optional<Row>{};
 
-        // A row is decoded only as far as the WHERE needs before it is
-        // tested. The mask is the compiler's; it is kAllColumns whenever a
-        // sub-chain or a >64-column relation makes a partial decode unsound
-        // (step_compiler.cpp's CompileWhere).
-        if (Status s = exec::DecodeAndResolve(d_.page_store_, ta_.schema, ta_.layout,
-                                              payload_copy, frame.SlotsFor(0),
-                                              predicates_.filter_columns, frame_spills);
-            !s.ok()) {
-            return s;
-        }
+        if (Status s = DecodeWhereColumns(); !s.ok()) return s;
         // Checked at the first row, as a SELECT's step is (BT-R5): an
         // empty relation refuses nothing.
         if (!conjuncts_checked_) {
@@ -10023,13 +10017,40 @@ public:
         }
         // A collected target matched in the collection pass, and its WHERE
         // is not evaluated again.
-        if (targets == nullptr) {
-            auto matched = exec::EvaluateConjuncts(d_.catalog_, d_.page_store_, schemas_,
-                                                   predicates_, frame, /*stats=*/nullptr,
-                                                   d_.budget_, &snapshot_);
-            if (!matched.ok()) return matched.status();
-            if (!matched.value()) return std::optional<Row>{};
+        if (targets != nullptr) return std::optional<Row>{row};
+        auto matched = MatchesWhere();
+        if (!matched.ok()) return matched.status();
+        if (matched.value()) return std::optional<Row>{row};
+
+        // ---- The head failed the WHERE: the snapshot's version (F4) ------
+        //
+        // Where `SnapshotVersionDecides` says so, the snapshot's version is
+        // resolved and tested, and a match goes on to `Claim` (`txn.md` §5,
+        // "Which version selects a row").
+        //
+        // **Read through the undo chain with the leaf held**, which
+        // `ResolveThroughUndo`'s "span released" note does not forbid here:
+        // the bytes are already copied out (R1), and the undo page is taken
+        // shared after the leaf - the order this walk's own `AppendUndo`
+        // takes it in, under the same hold.
+        if (seen != txn::Visibility::kNeedsUndoWalk || !SnapshotVersionDecides(row.trx_id)) {
+            return std::optional<Row>{};
         }
+        if (snapshot_.undo == nullptr) {
+            // The step VM's refusal, for the step VM's reason: guessing
+            // either way invents a row or hides one.
+            return Status::InvalidArgument(
+                "a read view that cannot see a tuple's writer was given no undo log");
+        }
+        auto resolved = txn::ResolveThroughUndo(snapshot_.view, *snapshot_.undo, row.trx_id,
+                                                tuple.value().deleted, row.undo_ptr, payload_copy);
+        if (!resolved.ok()) return resolved.status();
+        if (resolved.value() != txn::Visibility::kVisible) return std::optional<Row>{};
+        if (Status s = DecodeWhereColumns(); !s.ok()) return s;
+        matched = MatchesWhere();
+        if (!matched.ok()) return matched.status();
+        if (!matched.value()) return std::optional<Row>{};
+        row.through_undo = true;
         return std::optional<Row>{row};
     }
 
@@ -10062,6 +10083,16 @@ public:
             if (!took.ok()) return took.status();
         }
         Status s = d_.CheckWriteConflictBlocking(scope_, row.trx_id, row.id, blocker);
+        if (s.ok() && row.through_undo) {
+            // Unreachable: the head's writer is invisible to the walk's
+            // view, so it is invisible to the transaction's - the same view,
+            // or (autocommit) one minted before it - and is not this
+            // transaction (`SnapshotVersionDecides`). Refused rather than
+            // written, since the bytes in hand are not the page's.
+            return Status::Corruption("row id=" + std::to_string(row.id) +
+                                      " qualified on a version its writer superseded, and the "
+                                      "conflict check admitted the write");
+        }
         if (s.ok()) return true;
         // **A conflict a wait can get past stops the walk rather than
         // failing the statement** (AO-S3b). `blocking_writer_` is set only
@@ -10150,6 +10181,46 @@ public:
     Status blocked_verdict;
 
 private:
+    // A row is decoded only as far as the WHERE needs before it is tested.
+    // The mask is the compiler's; it is kAllColumns whenever a sub-chain or
+    // a >64-column relation makes a partial decode unsound
+    // (step_compiler.cpp's CompileWhere).
+    Status DecodeWhereColumns() {
+        return exec::DecodeAndResolve(d_.page_store_, ta_.schema, ta_.layout, payload_copy,
+                                      frame.SlotsFor(0), predicates_.filter_columns,
+                                      frame_spills);
+    }
+
+    StatusOr<bool> MatchesWhere() {
+        return exec::EvaluateConjuncts(d_.catalog_, d_.page_store_, schemas_, predicates_, frame,
+                                       /*stats=*/nullptr, d_.budget_, &snapshot_);
+    }
+
+    // **Whether the snapshot's version decides a row whose head failed the
+    // WHERE** (F4, the operator's ruling `$!a` of 2026-11-15).
+    //
+    // - **An undecided head's writer**: yes, at either level. Its rollback
+    //   would restore the version the snapshot sees, so the row is one the
+    //   statement may want.
+    // - **A head committed after the view, under `REPEATABLE READ`**: yes.
+    //   The statement's state says the row matches, and a newer committed
+    //   version means first-updater-wins refuses it - PostgreSQL's
+    //   serialization failure.
+    // - **The same under `READ COMMITTED`**: no. The head is the newest
+    //   committed state and fails the WHERE, which is what PostgreSQL's
+    //   re-check of the newest version answers: the row is skipped.
+    // - **The statement's own transaction**: no. Its write is what the
+    //   statement already did, and an autocommit view owned by nobody does
+    //   not see it as its own; the conflict check would admit the write.
+    //
+    // A writer `IsInFlight` reads as decided is committed: a rollback retires
+    // its id only after the trail is undone, so its version is not the head.
+    bool SnapshotVersionDecides(std::uint64_t head_writer) const {
+        if (scope_.txn == nullptr || head_writer == scope_.txn->id()) return false;
+        if (scope_.txn->isolation() == txn::IsolationLevel::kRepeatableRead) return true;
+        return d_.txn_->IsInFlight(head_writer);
+    }
+
     CommandDispatcher& d_;
     const WriteScope& scope_;
     const catalog::TableAccess& ta_;
