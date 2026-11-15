@@ -42,3 +42,12 @@ before the merge.
 | **Mark** | **`workorder-cs-read-only-transaction.md` is written and not opened.** The letter CS is CLA's proposal |
 | **Does not settle** | the opening of CS or of any stage; CS-Q0 to CS-Q9, each CLA's proposal only - CS-Q1 among them, whether CS-S0's measurement can stop the build; a merge, a push, a version |
 | **Recorded at** | this file; the order's header and §7; the CS row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 5. Tagged
+
+| | |
+|---|---|
+| **Words** | W3, on 2026-11-15: *"tag 3.4.11"*; W4, the same day: *"push no verify"* |
+| **Mark** | **W3:** `v3.4.11` is an annotated tag at `a61ab905`, the head of `origin/main`, pushed; its message carries what is built - F4 - and the gaps that bound it. One error in it: its "15 + 27 slices are unread" double-counts, and 15 slices are unread in all (the second run read 12 of the first run's 27). The tag was not re-pointed, which would need a force push. **W4:** `CLAUDE.md`'s version line moved in a documents-only commit, pushed to `main` with `--no-verify` |
+| **Does not settle** | CR-Q1..Q8; CS-Q0..Q9; G21-G64 |
+| **Recorded at** | this file; the tag message; `CLAUDE.md`'s Version Management; this file's row in `instructions/v3.2.0/index.md` |
