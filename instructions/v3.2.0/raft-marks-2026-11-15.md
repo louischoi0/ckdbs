@@ -34,16 +34,52 @@ before the merge.
 | **Does not settle** | a version; CR-Q1..Q8 |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
 
-## 4. G21, G23-G26 verified, then taken up
+## 4. Oracle's read-only transaction, and a work order written
 
 | | |
 |---|---|
-| **Words** | W3: *"resume the G21-G64 verification"*; W4: *"fix G21 and G23-G26; G21 as proposed"*, with the skill `go-ahead-achieving-milestone` invoked (*"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*) (each given in Korean; recorded in English) |
-| **Mark** | **W3:** CLA kept the scale the operator chose on 2026-11-14 for G16-G20 (the finders' highest severity first, two verifiers a finding, about ten a pass) and verified G21 and G23-G26 at `030b5bd9`; all five survived both lenses (the pending entry's §10, `f63c6023`). **W4:** the five taken up as one milestone, on worktree `audit-g1-g15-fixes` (its directory; a worktree-isolated session cannot create a second one) on branch `worktree-audit-g21-g26-fixes` from `f63c6023`, whose build inputs are `61917b0f`'s - `origin/main` with F4 landed by another session (§3) after the verification read `030b5bd9`. **G21-D is the operator's own mark**: the version-chain walks take `kds::CycleGuard` in place of the 2^16-step bound `txn.md` §3.7 stated, `kMaxUndoChainLength` kept only for `UndecidedInsert`, as the verifiers proposed |
+| **Word** | W1, on 2026-11-15, after CLA's survey of Oracle features this engine could adopt (item 1: a `READ ONLY` transaction over an SCN-style snapshot) and CLA's reading of the tree, which found the one-number snapshot already built (the commit LSN ceiling) and the writer's machinery spent at every `BEGIN`: *"Write the work order for item 1."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-cs-read-only-transaction.md` is written and not opened.** The letter CS is CLA's proposal |
+| **Does not settle** | the opening of CS or of any stage; CS-Q0 to CS-Q9, each CLA's proposal only - CS-Q1 among them, whether CS-S0's measurement can stop the build; a merge, a push, a version |
+| **Recorded at** | this file; the order's header and §7; the CS row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 5. Tagged
+
+| | |
+|---|---|
+| **Words** | W3, on 2026-11-15: *"tag 3.4.11"*; W4, the same day: *"push no verify"* |
+| **Mark** | **W3:** `v3.4.11` is an annotated tag at `a61ab905`, the head of `origin/main`, pushed; its message carries what is built - F4 - and the gaps that bound it. One error in it: its "15 + 27 slices are unread" double-counts, and 15 slices are unread in all (the second run read 12 of the first run's 27). The tag was not re-pointed, which would need a force push. **W4:** `CLAUDE.md`'s version line moved in a documents-only commit, pushed to `main` with `--no-verify` |
+| **Does not settle** | CR-Q1..Q8; CS-Q0..Q9; G21-G64 |
+| **Recorded at** | this file; the tag message; `CLAUDE.md`'s Version Management; this file's row in `instructions/v3.2.0/index.md` |
+
+## 6. The optimizer survey's item 1, and a work order written
+
+| | |
+|---|---|
+| **Word** | W5, on 2026-11-15, after CLA's survey of the optimizer layer against other engines (six candidates, item 1 a value list served as a key): *"Write the work order for the item 1 milestone."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-cu-key-set-access.md` is written and not opened.** The letter CU is CLA's proposal; CT is passed over because `catalog.md` numbers its rules CT1..CT7 |
+| **Does not settle** | the opening of CU or of any stage; CU-Q0 to CU-Q7, each CLA's proposal only; a merge, a push, a version |
+| **Recorded at** | this file; the order's header and §7; the CU row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 7. The optimizer survey's item 2, and a work order written
+
+| | |
+|---|---|
+| **Word** | W6, on 2026-11-15, while §6's order was being written: *"And write the item 2 milestone as a work order."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-cv-ordered-index-walk.md` is written and not opened.** The letter CV is CLA's proposal |
+| **Does not settle** | the opening of CV or of any stage; CV-Q0 to CV-Q6, each CLA's proposal only - CV-Q4, the tie order under a reverse walk, amends `parser-v2.md` I12 if marked (a); a merge, a push, a version |
+| **Recorded at** | this file; the order's header and §7; the CV row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 8. G21, G23-G26 verified, then taken up
+
+| | |
+|---|---|
+| **Words** | W7: *"resume the G21-G64 verification"*; W8: *"fix G21 and G23-G26; G21 as proposed"*, with the skill `go-ahead-achieving-milestone` invoked (*"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*) (each given in Korean; recorded in English) |
+| **Mark** | **W7:** CLA kept the scale the operator chose on 2026-11-14 for G16-G20 (the finders' highest severity first, two verifiers a finding, about ten a pass) and verified G21 and G23-G26 at `030b5bd9`; all five survived both lenses (the pending entry's §10, `f63c6023`). **W8:** the five taken up as one milestone, on worktree `audit-g1-g15-fixes` (its directory; a worktree-isolated session cannot create a second one) on branch `worktree-audit-g21-g26-fixes` from `f63c6023`, whose build inputs are `61917b0f`'s - `origin/main` with F4 landed by another session (§3) after the verification read `030b5bd9`. **G21-D is the operator's own mark**: the version-chain walks take `kds::CycleGuard` in place of the 2^16-step bound `txn.md` §3.7 stated, `kMaxUndoChainLength` kept only for `UndecidedInsert`, as the verifiers proposed |
 | **Does not settle** | G27-G64 (less G59), the 15 unread slices, the review's two findings put to the operator (the pending entry's §10), a merge, a push, a version |
 | **Recorded at** | this file; the pending entry's §10; this file's row in `instructions/v3.2.0/index.md` |
 
-## 5. Decisions adopted on the standing go-ahead
+## 9. Decisions adopted on the standing go-ahead
 
 Each is **adopted on the operator's standing go-ahead of 2026-11-15
 (go-ahead-achieving-milestone)**: CLA's proposal, not the operator's own
