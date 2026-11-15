@@ -1,0 +1,8 @@
+2026-11-15T08:12:47Z m3-s2 server up: {"pid": 677944, "port": 25731, "workdir": "/home/louis/bench-runs/audit-g21-close/20261115T074119Z/m3-s2-B-b/s2", "ready_after_s": 0.403, "binary_sha256": "1d84cab14b452936b161bd25407aa73ce1fb851d8548bb8493feaab6ab6017a5"}
+2026-11-15T08:12:47Z s2-schema begin loadavg=2.56 4.23 6.01
+2026-11-15T08:12:47Z s2-schema end rc=0 loadavg=2.56 4.23 6.01
+2026-11-15T08:12:47Z s2-load begin loadavg=2.56 4.23 6.01
+2026-11-15T08:13:02Z s2-load end rc=0 loadavg=3.24 4.30 6.00
+2026-11-15T08:13:02Z s2-run begin loadavg=3.24 4.30 6.00
+2026-11-15T08:13:56Z s2-run end rc=0 loadavg=4.93 4.57 6.00
+2026-11-15T08:13:56Z m3-s2 server stop rc=0: {"pid": 677944, "how": "SIGTERM", "took_s": 0.05, "clean_banner": true}

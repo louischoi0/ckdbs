@@ -1,0 +1,74 @@
+2026-11-15 07:41:19 UTC  phase: preflight
+2026-11-15 07:41:19 UTC  WT=/home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes  OUT=/tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1  RUN_ROOT=/home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1  DRY_RUN=0  CELLS=m1
+2026-11-15 07:41:19 UTC  RUN_ROOT filesystem: ext4 (/dev/nvme0n1p1 ext4 263968576 221596284  31520500  88% /)
+2026-11-15 07:41:19 UTC  manifest: /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/manifest.json
+2026-11-15 07:41:19 UTC  phase: m1-rep1: start servers
+2026-11-15 07:41:19 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-A --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep1/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep1-base
+2026-11-15 07:41:20 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-B --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep1/close --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep1-close
+2026-11-15 07:41:20 UTC  phase: m1-rep1: driver
+2026-11-15 07:41:20 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label close --sessions 1 --rows 256 --ops 40000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/m1-rep1.json
+2026-11-15 07:43:27 UTC  cores accepted on: base=1; close=0
+2026-11-15 07:43:27 UTC  WARNING: the labels are not all on core 0 or all on peer cores; core 0 carries the ticks - treat this rep as biased and add a rep (M1_REPS)
+2026-11-15 07:43:27 UTC  phase: m1-rep1: views
+2026-11-15 07:43:27 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/read_views.py --port 15520 --label m1-rep1-base --tools /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/m1-rep1-base
+2026-11-15 07:43:27 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/read_views.py --port 15522 --label m1-rep1-close --tools /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/m1-rep1-close
+2026-11-15 07:43:27 UTC  phase: m1-rep1: stop servers
+2026-11-15 07:43:27 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py stop --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep1/base
+2026-11-15 07:43:27 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py stop --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep1/close
+2026-11-15 07:43:27 UTC  phase: m1-rep2: start servers
+2026-11-15 07:43:27 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-A --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep2/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep2-base
+2026-11-15 07:43:27 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-B --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep2/close --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep2-close
+2026-11-15 07:43:28 UTC  phase: m1-rep2: driver
+2026-11-15 07:43:28 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label close --sessions 1 --rows 256 --ops 40000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/m1-rep2.json
+2026-11-15 07:44:48 UTC  cores accepted on: base=3; close=3
+2026-11-15 07:44:48 UTC  phase: m1-rep2: views
+2026-11-15 07:44:48 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/read_views.py --port 15520 --label m1-rep2-base --tools /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/m1-rep2-base
+2026-11-15 07:44:48 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/read_views.py --port 15522 --label m1-rep2-close --tools /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/m1-rep2-close
+2026-11-15 07:44:48 UTC  phase: m1-rep2: stop servers
+2026-11-15 07:44:48 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py stop --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep2/base
+2026-11-15 07:44:48 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py stop --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep2/close
+2026-11-15 07:44:48 UTC  phase: m1-rep3: start servers
+2026-11-15 07:44:48 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-A --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep3/base --port 15520 --debug-text-port 15521 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep3-base
+2026-11-15 07:44:49 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-B --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep3/close --port 15522 --debug-text-port 15523 --cores 4 --taskset 2-5 --durability relaxed --buffer-pool-frames 65536 --ash on --label m1-rep3-close
+2026-11-15 07:44:49 UTC  phase: m1-rep3: driver
+2026-11-15 07:44:49 UTC  + taskset -c 6-7 python3 -u /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/lock_contention_benchmark.py --port 15520 --label base --ab-port 15522 --ab-label close --sessions 1 --rows 256 --ops 40000 --blocks 4 --json /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/m1-rep3.json
+2026-11-15 07:46:08 UTC  cores accepted on: base=1; close=3
+2026-11-15 07:46:08 UTC  phase: m1-rep3: views
+2026-11-15 07:46:08 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/read_views.py --port 15520 --label m1-rep3-base --tools /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/m1-rep3-base
+2026-11-15 07:46:08 UTC  + taskset -c 6-7 python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/read_views.py --port 15522 --label m1-rep3-close --tools /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/m1-rep3-close
+2026-11-15 07:46:08 UTC  phase: m1-rep3: stop servers
+2026-11-15 07:46:08 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py stop --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep3/base
+2026-11-15 07:46:08 UTC  + python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py stop --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m1/20261115T074119Z/m1-rep3/close
+2026-11-15 07:46:08 UTC  phase: done
+2026-11-15 07:46:08 UTC  outputs under /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1:
+  active_servers
+  heartbeat
+  m1-rep1-base.server.json
+  m1-rep1-base.views.json
+  m1-rep1-base.views.txt
+  m1-rep1-close.server.json
+  m1-rep1-close.views.json
+  m1-rep1-close.views.txt
+  m1-rep1.json
+  m1-rep1.txt
+  m1-rep2-base.server.json
+  m1-rep2-base.views.json
+  m1-rep2-base.views.txt
+  m1-rep2-close.server.json
+  m1-rep2-close.views.json
+  m1-rep2-close.views.txt
+  m1-rep2.json
+  m1-rep2.txt
+  m1-rep3-base.server.json
+  m1-rep3-base.views.json
+  m1-rep3-base.views.txt
+  m1-rep3-close.server.json
+  m1-rep3-close.views.json
+  m1-rep3-close.views.txt
+  m1-rep3.json
+  m1-rep3.txt
+  manifest.json
+  phase
+  servers.log
+  timeline.txt
+2026-11-15 07:46:08 UTC  cleanup (exit 0)

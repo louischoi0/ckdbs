@@ -1,0 +1,20 @@
+2026-11-15T08:07:56Z BEGIN m4 try1
+2026-11-15T08:07:56Z END m4 rc=2 busy_samples=0 t=15s
+2026-11-15T08:08:11Z BEGIN assert try1
+2026-11-15T08:08:12Z assertion preload=200
+2026-11-15T08:08:44Z assertion preload=1000
+2026-11-15T08:09:08Z assertion preload=10000
+2026-11-15T08:09:32Z END assert rc=0 busy_samples=40 t=111s
+2026-11-15T08:09:32Z TAINTED assert: kept, flagged
+2026-11-15T08:09:47Z BEGIN m3-s2-A-a try1
+2026-11-15T08:11:05Z END m3-s2-A-a rc=0 busy_samples=38 t=204s
+2026-11-15T08:11:05Z TAINTED m3-s2-A-a: kept, flagged
+2026-11-15T08:11:20Z BEGIN m3-s2-B-a try1
+2026-11-15T08:12:32Z END m3-s2-B-a rc=0 busy_samples=36 t=291s
+2026-11-15T08:12:32Z TAINTED m3-s2-B-a: kept, flagged
+2026-11-15T08:12:47Z BEGIN m3-s2-B-b try1
+2026-11-15T08:13:56Z END m3-s2-B-b rc=0 busy_samples=34 t=375s
+2026-11-15T08:13:56Z TAINTED m3-s2-B-b: kept, flagged
+2026-11-15T08:14:11Z BEGIN m3-s2-A-b try1
+2026-11-15T08:15:36Z END m3-s2-A-b rc=0 busy_samples=42 t=475s
+2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged
