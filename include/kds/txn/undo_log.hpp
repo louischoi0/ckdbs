@@ -176,8 +176,9 @@ public:
     // `kds::CycleGuard`; length alone is never refused. The check is sound
     // because a record's `prior_undo_ptr` names a record written before it
     // and no record is rewritten while a reader can reach it, outside the
-    // backfill's recycled-record window (txn.md section 3.7). **A visitor's failure leaves by its Status**, as in
-    // every other walk (`storage/visit.hpp`).
+    // backfill's recycled-record window (txn.md section 3.7). **A visitor's
+    // failure leaves by its Status**, as in every other walk
+    // (`storage/visit.hpp`).
     //
     // A caller that only needs one step calls Read(); this is for the index
     // backfill, which indexes every version of a row a reader can reach,

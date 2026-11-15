@@ -603,11 +603,17 @@ Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager*
         // unconditionally: a departure's group must already exist (the row it
         // removes was incorporated by build or insert), and creating one here
         // would create a group to immediately go negative in - which
-        // `ApplyDeparture` answers NotFound for, deliberately.
+        // `ApplyDeparture` answers NotFound for, deliberately. Refused here,
+        // before any page work: no group is ever erased from a live cabin,
+        // so one missing now is missing at the apply, and an entry carrying
+        // group id 0 is one replay refuses (the audit's G26).
         const LatchGuard guard(latch_.get());
         if (departure) {
             const GroupHeader* header = a.cabin.Find(key);
-            entry.group_id = header != nullptr ? header->group_id : 0;
+            if (header == nullptr) {
+                return Status::NotFound("bound cabin: no group for a departure to leave");
+            }
+            entry.group_id = header->group_id;
         } else {
             entry.group_id = a.cabin.EnsureGroupId(key);
         }
@@ -624,8 +630,8 @@ Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager*
     // a snapshot (the header's paragraph): no page is touched in here.
     //
     // **Checked, then logged, then applied** (the audit's G26). An apply can
-    // refuse - a departure's sum underflowing, which no admission asks, or
-    // a group a departure finds missing - and a record logged ahead of a
+    // refuse - a departure's sum underflowing, which no admission asks -
+    // and a record logged ahead of a
     // refused apply is one the mount's fold refuses the same way, which
     // leaves every assertion of the instance unenforcing. So the check runs
     // first, under the hold the apply runs under, and a refusal takes the
@@ -635,13 +641,8 @@ Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager*
     wal::Lsn stamp = wal::kNoLsn;
     {
         const LatchGuard guard(latch_.get());
-        // A departure whose group the first hold found missing carries group
-        // id 0, which replay refuses whatever the check would say now.
         Status admissible =
             departure ? a.cabin.CheckDeparture(key, value) : a.cabin.CheckApply(key, value);
-        if (admissible.ok() && departure && entry.group_id == 0) {
-            admissible = Status::NotFound("bound cabin: no group for a departure to leave");
-        }
         if (!admissible.ok()) {
             auto tail = BoundCabinPage::Open(placed.value().page.bytes());
             if (!tail.ok()) return tail.status();

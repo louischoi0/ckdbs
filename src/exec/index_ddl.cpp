@@ -375,7 +375,9 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
                             released_under_copy(older.status(), version.prior_trx_id)) {
                             // An older version the head writer wrote, its
                             // spill released by the same rollback (G24).
-                            released = older.status();
+                            released = older.status().WithContext(
+                                "indexing an older version of the row with tuple key " +
+                                std::to_string(row.tuple_key));
                             stale = true;
                             return storage::VisitControl::kStop;
                         }

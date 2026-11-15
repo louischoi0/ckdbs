@@ -386,8 +386,9 @@ On a checked write (per §4.2), executed inline in the writing statement:
    record the mount's fold refused the same way, bringing every assertion
    of the instance up unenforcing. A refused check is AG3's statement error;
    it takes the entry back off the tail, still held and named by no record,
-   so the next logged entry lands at the append point replay finds. A log
-   an older build wrote with such a stray record is not repaired: its
+   so the next logged entry lands at the append point replay finds. A
+   departure that finds no group is refused before its entry is placed. A
+   log written before G26 with such a stray record is not repaired: its
    mount still leaves every assertion unenforcing, until `DROP` and
    `CREATE ASSERTION`.
 4. **Commit:** the transaction's pending set is dropped, and nothing is

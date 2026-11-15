@@ -383,12 +383,11 @@ transaction updating one row 65,537 times, or a hot row updated under one
 long `SELECT` - and a length bound (`2^16` before G21) refused such a read
 as `Corruption`. The check is sound because a record's `prior_undo_ptr`
 names a record written before it, and no record is rewritten while a
-reader can reach it (§4.1) - outside the backfill's recycled-record window,
-which `known-gaps.md` records, and whose walk ends at a failed read, a
-failed identity check, a revisit, the visitor's stop or `kNoUndoPtr`, each
-answered as that entry says. `kMaxUndoChainLength` survives only as how far a named key's
-undecided-insert test asks down a chain of in-flight versions before
-answering "not an insert".
+reader can reach it (§4.1) - outside the backfill's recycled-record
+window, which `known-gaps.md` records; there a revisit is answered as a
+failed read is (`index.md` §10.1, §10.3). `kMaxUndoChainLength` survives
+only as how far a named key's undecided-insert test asks down a chain of
+in-flight versions before answering "not an insert".
 
 ## 4. Snapshots and visibility
 
