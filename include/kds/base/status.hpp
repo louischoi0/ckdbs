@@ -154,6 +154,15 @@ enum class StatusCode {
     // same way forever, so it is not retryable, and folding it into
     // kInvalidArgument would give a client nothing to switch on.
     kTransitionViolation,
+    // **A write inside a `READ ONLY` transaction** (CS, `docs/spec/txn.md`
+    // §1): refused at the statement head, before anything is touched. Its
+    // own code rather than kInvalidArgument, because the statement is
+    // well-formed and would run outside the transaction - a client must be
+    // able to tell "wrong statement" from "wrong transaction" - and not
+    // kUnsupported/kNotImplemented, because the engine admits the write and
+    // the transaction's declaration is what refuses it. Not retryable: the
+    // same statement in the same transaction is refused the same way.
+    kReadOnlyTransaction,
 };
 
 // True for a Status a caller may sensibly re-issue the same statement for.
@@ -221,6 +230,9 @@ public:
     static Status TransitionViolation(std::string msg) {
         return Status(StatusCode::kTransitionViolation, std::move(msg));
     }
+    static Status ReadOnlyTransaction(std::string msg) {
+        return Status(StatusCode::kReadOnlyTransaction, std::move(msg));
+    }
 
     // A status decoded off a wire: the code as the integer it travelled as,
     // and a message the receiver chose. **A code outside the enum degrades
@@ -250,6 +262,7 @@ public:
             case StatusCode::kNotImplemented: return NotImplemented(std::move(msg));
             case StatusCode::kCancelled: return Cancelled(std::move(msg));
             case StatusCode::kTransitionViolation: return TransitionViolation(std::move(msg));
+            case StatusCode::kReadOnlyTransaction: return ReadOnlyTransaction(std::move(msg));
         }
         return IoError(std::move(msg));
     }

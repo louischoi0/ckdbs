@@ -132,9 +132,23 @@ public:
     bool in_explicit_txn() const noexcept { return state_ != State::kIdle; }
     bool failed() const noexcept { return state_ == State::kFailedTxn; }
     // The id of the transaction the lifetime sweep rolled back, or 0 when
-    // the session was not expired. Non-zero only in kFailedTxn, with no
-    // transaction held.
-    std::uint64_t expired_trx_id() const noexcept { return expired_trx_id_; }
+    // the session was not expired - or when the expired transaction was
+    // `READ ONLY`, which has none (`expired()` tells the two apart).
+    std::uint64_t expired_trx_id() const noexcept { return expired_trx_id_.value_or(0); }
+    // The lifetime sweep rolled this session's transaction back. Its own
+    // flag beside the id, because a `READ ONLY` transaction has no id and
+    // is expired all the same (CS).
+    bool expired() const noexcept { return expired_trx_id_.has_value(); }
+
+    // **Which explicit transaction is open**, as a number that moves at
+    // every `BEGIN` of either kind; 0 when none is held. The lifetime
+    // sweep's stamp is keyed on it (`TcpServer::Connection`), so a `COMMIT`
+    // and the next `BEGIN` cannot leave one transaction timed from
+    // another's start - and a `READ ONLY` one, which has no id to key on,
+    // is timed too.
+    std::uint64_t open_txn_seq() const noexcept {
+        return (txn_ != nullptr || read_only_.has_value()) ? txn_seq_ : 0;
+    }
 
     // The level the *next* BEGIN will use. Set from the server config at
     // construction and by `SET ISOLATION LEVEL`; a `BEGIN ISOLATION LEVEL`
@@ -242,6 +256,36 @@ public:
     void Adopt(txn::Transaction* txn) noexcept {
         txn_ = txn;
         state_ = State::kInTxn;
+        ++txn_seq_;
+    }
+
+    // ---- A `READ ONLY` transaction (CS, docs/spec/txn.md §1) -------------
+    //
+    // **The other kind of explicit transaction**: a read view held across
+    // statements and the lease that registers it with the horizon, and
+    // nothing of a writer's - no id, no record, no in-flight slot, no
+    // `live_` entry, no borrows. `in_explicit_txn()` answers true for both
+    // kinds and `transaction()` answers null for this one; a write
+    // statement is refused before it reaches anything that would read the
+    // null (CS-R1: `CommandDispatcher::DispatchInner`'s read-only gate, and
+    // `BeginWrite`'s second line).
+    //
+    // The lease is released on whichever path ends the transaction -
+    // `Finish`, `Expire`, the session's destruction - on the core whose
+    // manager issued it: a transaction never crosses (sched.md).
+    struct ReadOnlyTxn {
+        txn::ReadView view{};
+        txn::IsolationLevel isolation = txn::IsolationLevel::kReadCommitted;
+        txn::ReaderLease lease;
+    };
+    bool in_read_only_txn() const noexcept { return read_only_.has_value(); }
+    ReadOnlyTxn* read_only_txn() noexcept {
+        return read_only_.has_value() ? &*read_only_ : nullptr;
+    }
+    void AdoptReadOnly(ReadOnlyTxn ro) noexcept {
+        read_only_ = std::move(ro);
+        state_ = State::kInTxn;
+        ++txn_seq_;
     }
 
     // ---- A write statement parked in the middle of its walk (AO-S3b) ----
@@ -300,8 +344,9 @@ public:
     txn::Transaction* Finish() noexcept {
         txn::Transaction* ended = txn_;
         txn_ = nullptr;
+        read_only_.reset();
         state_ = State::kIdle;
-        expired_trx_id_ = 0;
+        expired_trx_id_.reset();
         // The class this transaction was begun under belongs to the
         // transaction, not the connection: `BEGIN ... DURABILITY strict`
         // binds one transaction, and a session whose next statement is
@@ -318,6 +363,7 @@ public:
     // writes it believes pending would be silently missing from its COMMIT.
     void Expire(std::uint64_t trx_id) noexcept {
         txn_ = nullptr;
+        read_only_.reset();
         state_ = State::kFailedTxn;
         expired_trx_id_ = trx_id;
         txn_durability_.reset();
@@ -381,7 +427,10 @@ private:
     wal::Lsn acknowledged_commit_lsn_ = wal::kNoLsn;      // BA-R1c
     Role role_ = Role::kAdmin;
     txn::Transaction* txn_ = nullptr;
-    std::uint64_t expired_trx_id_ = 0;  // AN-R14's sweep; see `Expire`
+    std::optional<ReadOnlyTxn> read_only_;  // CS; see `ReadOnlyTxn`
+    // AN-R14's sweep; see `Expire`. Set, with 0, for a `READ ONLY` one.
+    std::optional<std::uint64_t> expired_trx_id_;
+    std::uint64_t txn_seq_ = 0;  // see `open_txn_seq`
     // AO-S3b. Absent on every session that is not parked mid-walk, which
     // is every session almost all of the time.
     std::optional<ParkedWrite> parked_write_ = std::nullopt;

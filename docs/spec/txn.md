@@ -127,6 +127,84 @@ and matches PostgreSQL and Oracle. Settable per server (config key `isolation`),
 per session (`SET ISOLATION LEVEL`), and per transaction (`BEGIN ISOLATION
 LEVEL ...`) — the same three-level precedence chain `durability` already uses.
 
+### The access mode: `READ ONLY` (CS)
+
+**An explicit transaction is one of two kinds, chosen at `BEGIN`**
+(`instructions/v3.2.0/workorder-cs-read-only-transaction.md`, built
+2026-11-15): `BEGIN [TRANSACTION|WORK] [ISOLATION LEVEL <l>] [DURABILITY
+<c>] [READ ONLY | READ WRITE]`, the clauses order-free, `START TRANSACTION`
+the same. Unwritten, the mode is `READ WRITE` - except on a `readonly`
+connection, whose `BEGIN` is `READ ONLY` and whose `READ WRITE` is refused
+`ERR permission: BEGIN READ WRITE needs readwrite; ...` (CS-Q3 (a)). There
+is no session default and no `SET TRANSACTION` spelling (CS-Q2 (a)); KWP's
+`C_TXN_BEGIN` carries no access byte, and a KWP client sends
+`BEGIN READ ONLY` as a statement (CS-Q4 (a)).
+
+- **`READ WRITE` is the transaction of everything else in this file**,
+  unchanged: an id from the carve, `TXN_BEGIN`, an in-flight slot, a
+  `live_` entry, `TXN_COMMIT` and the class's wait at `COMMIT`, and the
+  reply `BEGIN trx_id=<n> isolation=<l> durability=<c>` (CS-R4).
+- **`READ ONLY` is a read view and a reader lease held across
+  statements**, and nothing else: `AutocommitSnapshot`'s two steps - a
+  view minted with `own_trx_id = 0`, a lease in the core's registry - kept
+  on the session (`Session::ReadOnlyTxn`). No id is drawn, no record
+  appended, no in-flight slot taken, no `live_` entry, no borrow held, no
+  checkpoint active-list entry, nothing for recovery. The reply is
+  `BEGIN trx_id=none isolation=<l> access=read only`; `COMMIT` and
+  `ROLLBACK` drop the lease, append nothing, wait for nothing, and answer
+  `COMMIT trx_id=none` / `ROLLBACK trx_id=none` (KWP's `S_TXN_OK` with no
+  `RELAXED` flag, CS-Q6 (a)). A `DURABILITY` clause is accepted and binds
+  nothing: a commit that acknowledges no write keeps every class's
+  promise (CS-Q10 (a)). Its one refusal at `BEGIN` is the registry's
+  `OutOfSpace` past `kMaxRegisteredReaders` (256) per core, a slot it
+  shares with every suspended `SELECT` walk for its whole life, idle time
+  included (CS-R6, CS-Q5 (a)).
+- **The levels apply unchanged.** Under `REPEATABLE READ` the view taken at
+  `BEGIN` is held; under `READ COMMITTED` each statement boundary mints a
+  fresh view and **re-points the held lease at it**
+  (`TransactionManager::RefreshReader`) - the slot is never released and
+  registered again, so there is no instant at which the core announces no
+  reader for the session (CS-R3). **The lease is the horizon's whole
+  record of the view** (CS-R2, `[quiet-wrong]`): a purge that freed a
+  version the view can still reach would answer a wrong row, and the lease
+  holds the horizon from the mint to the end exactly as a writer's `live_`
+  entry does (`lock_family_test.cpp`'s
+  `AnOlderReadOnlyTransactionKeepsItsRowAcrossStatementsAndThePurge`).
+- **Every write is refused at the statement head** (CS-R1, `[quiet-wrong]`):
+  on `DispatchInner`'s routing token, before the statement is parsed,
+  read, borrowed or logged, every verb but the reads (`SELECT`, `WITH`,
+  `ANALYZE`, `SHOW`, `DESCRIBE`), the session statements (`USE`, `SET`,
+  `PING`, `SYNC`, `STOP`, `BACKUP`, whose own handler refuses inside a
+  transaction) and transaction control is refused
+  `READ_ONLY_TRANSACTION retryable=0` (`StatusCode::kReadOnlyTransaction`,
+  wire category 19) with the verb's byte - an allowlist, so a statement
+  added later is refused by default. The refusal **does not poison** the
+  transaction: nothing was written and the view is the one it held
+  (CS-Q7 (a)). The ground is that a write reaching a write path under no
+  transaction would be stamped `kBootstrapXid`, which every view answers
+  as always visible and no rollback undoes. `BeginWrite` refuses a
+  read-only session too, a second line for a route that enters below the
+  head. **What is not the transaction's write is not refused**: `SYNC`
+  (admin's) may write a checkpoint record, and a read records what an
+  autocommit read records - the unlogged `sys.access_stats` fold, an
+  opted pattern's Waystone trail, a Cabin bank under the bank's own gate
+  (CS-Q11 (a)). The `in_flight_at_mint` bit and the `CommitCeiling` test
+  decline a bank from a `REPEATABLE READ` view held past a commit.
+- **The tests**: `tests/read_only_txn_test.cpp` (no id, record or slot spent;
+  `READ WRITE` byte for byte; both levels across another core's commit;
+  the lease cap; the role default; every write route refused with no log
+  byte and no dirty page; the cross-core purge), the purge cell in
+  `lock_family_test.cpp`, the lifetime cell in `expeditor_test.cpp`, and the
+  sim, whose shapes draw a quarter of their transactions `READ ONLY`
+  (`read_only_txns=` in the verdict).
+- **The lifetime ceiling reaches it** as it reaches a writer: the sweep's
+  stamp is keyed on `Session::open_txn_seq()`, which moves at every
+  `BEGIN` of either kind, and an expired read-only transaction is reported
+  `trx_id=none`. A transaction never crosses cores (`sched.md`), and a
+  read-only one does not either.
+- **Counted** per core in `sys.meta`: `read_only_begins` and
+  `read_only_write_refusals` (CS-Q8 (a)).
+
 `SERIALIZABLE` is out of scope and is **not** `[OPEN]`: it needs predicate
 locking or SSI read-tracking, and this engine has neither. **It does have a
 lock manager** since M2 — the lock family of §5, with units, modes, a

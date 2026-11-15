@@ -333,10 +333,12 @@ private:
         // at the first statement completion that finds a transaction the
         // stamp does not name - the `BEGIN`'s own - so a clock is read once
         // per transaction and never per statement (AW's H2). Keyed on the
-        // id rather than a flag so a `COMMIT` and the next `BEGIN` cannot
-        // leave one transaction timed from another's start.
+        // session's `open_txn_seq()` rather than a flag so a `COMMIT` and
+        // the next `BEGIN` cannot leave one transaction timed from another's
+        // start, and rather than the id so a `READ ONLY` one, which has
+        // none, is timed too (CS).
         sched::MonoTimeNs txn_began_at_ns = 0;
-        std::uint64_t txn_stamped_id = 0;
+        std::uint64_t txn_stamped_seq = 0;
 
         // The finished statement's reply, waiting to be appended to the
         // outbox. Owned by the connection because the coroutine writes

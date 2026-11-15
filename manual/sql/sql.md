@@ -1595,6 +1595,7 @@ two keys and `waystone_opted`, how many shapes are opted now.
 
 ```
 BEGIN [TRANSACTION | WORK] [ISOLATION LEVEL {READ COMMITTED | REPEATABLE READ}]
+      [DURABILITY <class>] [READ ONLY | READ WRITE]
 COMMIT [TRANSACTION | WORK]
 ROLLBACK [TRANSACTION | WORK]   (ABORT is a synonym)
 SET ISOLATION LEVEL <name>
@@ -1635,6 +1636,21 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   is refused as not supported - both by name, with their reasons. The precedence chain
   is config key → `SET ISOLATION LEVEL` (session, next transaction) →
   `BEGIN ISOLATION LEVEL` (this transaction).
+- **`READ ONLY` / `READ WRITE`** (CS, verified in `HandleBegin` and
+  `BeginReadOnly`) is one more order-free clause; unwritten it is
+  `READ WRITE`, except on a `readonly` connection, whose `BEGIN` is
+  `READ ONLY` and whose `BEGIN READ WRITE` is refused
+  `ERR permission: BEGIN READ WRITE needs readwrite; this connection is readonly`.
+  A `READ ONLY` transaction draws no id, logs nothing and waits for no
+  sync at `COMMIT`; it replies `BEGIN trx_id=none isolation=<level>
+  access=read only`, then `COMMIT trx_id=none` / `ROLLBACK trx_id=none`. A
+  `DURABILITY` clause is accepted and binds nothing. Inside it, `SELECT`,
+  `WITH`, `ANALYZE SELECT`, `SHOW`, `DESCRIBE`, `USE`, `SET`, `PING`, `SYNC`,
+  `STOP`, `BACKUP STATUS` and transaction control run, and every other
+  statement is refused `ERR READ_ONLY_TRANSACTION retryable=0 <verb> is not
+  admitted in a READ ONLY transaction (byte <n>); ...` **without poisoning
+  it**. Its snapshot holds one of the core's 256 reader slots until it
+  ends; the 257th holder is refused `OutOfSpace`.
 - No nested transactions, no savepoints: a second `BEGIN` is an error.
   `SET ISOLATION LEVEL` inside an open transaction is an error.
 - **A transaction commits or rolls back whole.** `SAVEPOINT`, `RELEASE`,
@@ -1896,10 +1912,10 @@ they were before the split.
 ## 8. Error surfaces
 
 Reply shape (verified, `server::ErrorReply` — a compatibility surface, not a
-diagnostic): `ERR <TOKEN> retryable=<b> <message>` for the seven codes a client
-library switches on, `ERR <message>` for everything else. The seven are
+diagnostic): `ERR <TOKEN> retryable=<b> <message>` for the eight codes a client
+library switches on, `ERR <message>` for everything else. The eight are
 `TXN_CONFLICT`, `FK_VIOLATION`, `ASSERTION_VIOLATION`, `UNKNOWN_OUTCOME`,
-`TRANSITION_VIOLATION` (since BV, 2026-10-14), and — since 2026-08-31 —
+`TRANSITION_VIOLATION` (since BV, 2026-10-14), `READ_ONLY_TRANSACTION` (since CS, 2026-11-15), and — since 2026-08-31 —
 `UNSUPPORTED` and `NOT_IMPLEMENTED`, which every refusal
 in §7 below now carries and which both used to reach a client as a bare
 `ERR <message>`.
@@ -1912,6 +1928,7 @@ in §7 below now carries and which both used to reach a client as a bare
 | A Transition broken: an INSERT outside `ON INSERT`, an UPDATE along no declared edge, a DELETE outside `ON DELETE FROM` | `ERR TRANSITION_VIOLATION retryable=0 transition '<name>' on column '<c>': <what>, row id <n> (byte <b>)` |
 | `PURGE` of a relation carrying a Transition | `Unsupported` — `ERR UNSUPPORTED retryable=0 '<t>' carries transition '<name>', whose state history a freed key would restart; PURGE frees no key of a relation that carries a Transition (byte <n>)` |
 | Statement in a poisoned transaction | `ERR current transaction is aborted; commands are ignored until ROLLBACK` |
+| A write (`INSERT`, `UPDATE`, `DELETE`, `PURGE`, any DDL, `WAYSTONE`, ...) inside `BEGIN READ ONLY` | `ERR READ_ONLY_TRANSACTION retryable=0 <verb> is not admitted in a READ ONLY transaction (byte <n>); the transaction is unchanged - ...`; the transaction stays open and usable |
 | `BEGIN` inside a transaction | `ERR a transaction is already open; COMMIT or ROLLBACK first` |
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
 | A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including tuple key column '<name>', or <n-1> to have it issued; got <k> (byte <b>)` |

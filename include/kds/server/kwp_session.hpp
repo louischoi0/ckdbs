@@ -395,6 +395,14 @@ private:
     // and whether that dispatch is the `BEGIN` - which decides at which
     // side of the dispatch the class is readable. See `OnTxn`.
     bool running_relaxed_ = false;
+    // `S_TXN_OK`'s RELAXED flag for the session's transaction as it stands:
+    // its class is `relaxed` - and it is not `READ ONLY`, which acknowledged
+    // nothing at any class (CS-Q6).
+    bool TxnIsRelaxed() const noexcept {
+        return !session_.in_read_only_txn() &&
+               session_.EffectiveDurability(server_durability_) ==
+                   wal::DurabilityClass::kRelaxed;
+    }
     bool running_txn_begin_ = false;
 };
 

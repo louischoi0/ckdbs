@@ -69,6 +69,9 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
     out += " reads=" + std::to_string(reads_checked);
     if (writes_checked != 0) out += " writes=" + std::to_string(writes_checked);
     if (transactions != 0) out += " txns=" + std::to_string(transactions);
+    if (read_only_transactions != 0) {
+        out += " read_only_txns=" + std::to_string(read_only_transactions);
+    }
     if (config.faults != FaultProfile::kNone || config.nth_fault.has_value()) {
         out += " faults=";
         out += config.nth_fault.has_value() ? "nth:" + config.nth_fault->Describe()
@@ -856,6 +859,9 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             }
             it.oracle.Begin();
             it.txn_open = true;
+            if (reply.find("access=read only") != std::string::npos) {
+                ++it.verdict.read_only_transactions;
+            }
             break;
         case Op::Kind::kCommit:
             if (reply.rfind("COMMIT ", 0) != 0) {
@@ -1771,6 +1777,7 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     reads_checked += other.reads_checked;
     writes_checked += other.writes_checked;
     transactions += other.transactions;
+    read_only_transactions += other.read_only_transactions;
     faults_armed += other.faults_armed;
     faults_fired += other.faults_fired;
     errored_ops += other.errored_ops;

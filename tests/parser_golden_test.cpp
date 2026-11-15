@@ -92,6 +92,8 @@ std::string_view StatusCodeName(StatusCode code) {
         case StatusCode::kCancelled: return "Cancelled";
         // A write's (BV-Q3), never a parse's.
         case StatusCode::kTransitionViolation: return "TransitionViolation";
+        // A transaction's declaration, never a parse's (CS).
+        case StatusCode::kReadOnlyTransaction: return "ReadOnlyTransaction";
     }
     return "<unknown>";
 }

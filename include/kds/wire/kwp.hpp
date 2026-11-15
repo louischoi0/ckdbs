@@ -249,6 +249,8 @@ enum class ErrorCategory : std::uint16_t {
     // Appended for StatusCode::kTransitionViolation (BV-Q3), 18, on the
     // same rule as the two above it.
     kTransitionViolation,
+    // Appended for StatusCode::kReadOnlyTransaction (CS), 19.
+    kReadOnlyTransaction,
 };
 
 // Packs a wire error code as `category u16 << 16 | detail u16` (spec

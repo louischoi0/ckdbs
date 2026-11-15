@@ -256,6 +256,14 @@ private:
     bool shapes_ = false;
     Rng query_rng_;
     Rng constraint_rng_;
+    // **`READ ONLY` transactions** (CS, `txn.md` §1), with the shapes only:
+    // a transaction start becomes `BEGIN READ ONLY` on its own stream, and
+    // its body is reads drawn from that stream - so the main stream draws
+    // what it always drew at every other op, and the shapes-off corpus,
+    // whose seeds are pinned, is unchanged.
+    Rng read_only_rng_;
+    bool read_only_txn_ = false;
+    Op ReadOnlyTxnOp();
     // p0, c0, a0: their own id-guessing counters (`Table::inserted`).
     std::vector<Table> constrained_;
     std::size_t constrained_ddl_ = 0;

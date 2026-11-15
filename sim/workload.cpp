@@ -72,7 +72,8 @@ Workload::Workload(Rng rng, Profile profile, bool shapes)
       column_rng_(rng_.Fork("column")),
       shapes_(shapes),
       query_rng_(rng_.Fork("query")),
-      constraint_rng_(rng_.Fork("constraint")) {
+      constraint_rng_(rng_.Fork("constraint")),
+      read_only_rng_(rng_.Fork("read_only")) {
     for (const char* name : {kFkParent, kFkChild, kAsserted}) {
         constrained_.emplace_back();
         constrained_.back().name = name;
@@ -390,6 +391,7 @@ Op Workload::Next() {
     if (in_txn_) {
         if (txn_ops_left_ == 0) {
             in_txn_ = false;
+            read_only_txn_ = false;
             Op op;
             // Rollback often enough to be a shape rather than a curiosity:
             // it is the half that has to leave *nothing* behind, and the
@@ -419,6 +421,7 @@ Op Workload::Next() {
             return op;
         }
         --txn_ops_left_;
+        if (read_only_txn_) return ReadOnlyTxnOp();
         if (shapes_ && constrained_ddl_ >= 4 && constraint_rng_.Chance(12)) {
             return AssertedTxnWrite();
         }
@@ -468,7 +471,39 @@ Op Workload::Next() {
     Op op;
     op.kind = Op::Kind::kBegin;
     op.sql = rng_.Chance(50) ? "BEGIN" : "BEGIN ISOLATION LEVEL REPEATABLE READ";
+    read_only_txn_ = shapes_ && read_only_rng_.Chance(25);
+    if (read_only_txn_) op.sql += " READ ONLY";
     return op;
+}
+
+// One statement of a `READ ONLY` transaction: a tuple key or range read, or
+// one of the shapes' derived queries - never a write, which the engine
+// refuses inside one (CS-R1; `tests/read_only_txn_test.cpp` pins every
+// route). Drawn from `read_only_rng_` only.
+Op Workload::ReadOnlyTxnOp() {
+    const std::vector<std::size_t> live = LiveIndices();
+    const Table& table = tables_[live[read_only_rng_.Below(live.size())]];
+    Op op;
+    op.table = table.name;
+    const std::uint64_t key = 1 + read_only_rng_.Below(table.inserted + 3);
+    switch (read_only_rng_.Below(3)) {
+        case 0:
+            op.kind = Op::Kind::kSelectTupleKey;
+            op.key = key;
+            op.sql = std::string("SELECT ") + kReadColumns + " FROM " + table.name +
+                     " WHERE id = " + std::to_string(op.key);
+            return op;
+        case 1:
+            op.kind = Op::Kind::kSelectRange;
+            op.lo = key;
+            op.hi = op.lo + read_only_rng_.Below(20);
+            op.sql = std::string("SELECT ") + kReadColumns + " FROM " + table.name +
+                     " WHERE id BETWEEN " + std::to_string(op.lo) + " AND " +
+                     std::to_string(op.hi);
+            return op;
+        default:
+            return Query(/*ddl=*/false);
+    }
 }
 
 Op Workload::Query(bool ddl) {

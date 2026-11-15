@@ -203,6 +203,8 @@ struct SimVerdict {
     // and transactions resolved either way (SIM06).
     std::size_t writes_checked = 0;
     std::size_t transactions = 0;
+    // Of them, the `BEGIN ... READ ONLY` ones the shapes draw (CS).
+    std::size_t read_only_transactions = 0;
 
     // Fault bookkeeping (SIM05). `faults_fired` is what the devices
     // actually consumed: a schedule whose faults never fire proved

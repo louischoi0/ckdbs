@@ -521,7 +521,8 @@ TEST_F(TxnSessionTest, AnUnknownDurabilityClassAndAnUnknownSetTargetAreBothRefus
         << "the refusal names the accepted set, so a typo is self-correcting";
 
     const std::string bad_clause = Run(s, "BEGIN FLAVOUR STRONG");
-    EXPECT_NE(bad_clause.find("expected ISOLATION LEVEL or DURABILITY"), std::string::npos)
+    EXPECT_NE(bad_clause.find("expected ISOLATION LEVEL, DURABILITY, READ ONLY or READ WRITE"),
+              std::string::npos)
         << bad_clause;
 }
 

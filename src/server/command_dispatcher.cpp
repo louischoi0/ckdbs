@@ -160,6 +160,24 @@ Status RefuseWhole(std::string_view line, std::string_view word, const std::stri
                                "transaction commits or rolls back whole (docs/spec/txn.md §9)");
 }
 
+// A transaction id as a reply names it: `none` for a `READ ONLY`
+// transaction, which draws none (CS-Q6), and the number otherwise.
+std::string TrxIdText(std::uint64_t id) { return id == 0 ? "none" : std::to_string(id); }
+
+// What a `READ ONLY` transaction admits (CS-R1), on `DispatchInner`'s
+// routing token: the reads, the session statements, and the verbs that end
+// or steer the transaction. Everything else - every write, every DDL, and
+// every statement added later - is refused inside one.
+bool ReadOnlyAdmits(std::string_view cmd) {
+    for (std::string_view admitted :
+         {"SELECT", "WITH", "ANALYZE", "SHOW", "DESCRIBE", "DESC", "PING", "USE", "SET",
+          "BEGIN", "START", "COMMIT", "ROLLBACK", "ABORT", "SAVEPOINT", "RELEASE", "SYNC",
+          "STOP", "BACKUP"}) {
+        if (IEquals(cmd, admitted)) return true;
+    }
+    return false;
+}
+
 // The refusal of any word after an ending's noise word, or OK.
 //
 // **A refused rollback form poisons an open transaction.** The client asked
@@ -177,7 +195,7 @@ Status RefuseTxnEndTail(std::string_view line, std::string_view cmd, std::string
     const Status s = RefuseWhole(line, word, std::string(cmd) + " takes no '" +
                                                  std::string(word) + "'");
     if (IEquals(cmd, "COMMIT") || !session.in_explicit_txn()) return s;
-    if (session.expired_trx_id() != 0) {
+    if (session.expired()) {
         // The lifetime sweep already rolled it back (`Session::Expire`).
         return s.WithMessage(s.message() +
                              "; the server already rolled this transaction back at "
@@ -186,30 +204,6 @@ Status RefuseTxnEndTail(std::string_view line, std::string_view cmd, std::string
     session.Poison();
     return s.WithMessage(s.message() +
                          "; nothing was rolled back, and the transaction is failed until ROLLBACK");
-}
-
-// Splits `line` at the first token equal to `keyword`, answering
-// `{before, from-the-keyword-on}`. `{line, ""}` where the keyword does not
-// appear.
-//
-// What `SplitFirstToken` cannot do: a clause whose value spans several
-// words (`ISOLATION LEVEL repeatable read`) ends where the next clause
-// begins, and nowhere else. Whole-token comparison, so a relation or a
-// level named with the keyword as a substring is not a boundary.
-std::pair<std::string_view, std::string_view> SplitBeforeClause(std::string_view line,
-                                                                std::string_view keyword) {
-    std::string_view rest = Trim(line);
-    std::size_t consumed = 0;
-    while (!rest.empty()) {
-        auto [word, tail] = SplitFirstToken(rest);
-        if (IEquals(word, keyword)) return {Trim(line.substr(0, consumed)), rest};
-        // Where the next token begins, measured against the original line
-        // so the answer's first half keeps the caller's own bytes.
-        consumed = static_cast<std::size_t>(tail.empty() ? line.size()
-                                                         : tail.data() - line.data());
-        rest = tail;
-    }
-    return {Trim(line), std::string_view{}};
 }
 
 }  // namespace
@@ -251,6 +245,10 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     {StatusCode::kAssertionViolation, "ASSERTION_VIOLATION retryable=0 "},
     // The fourth (BV-Q3), shaped exactly like the two above.
     {StatusCode::kTransitionViolation, "TRANSITION_VIOLATION retryable=0 "},
+    // A write the transaction's `READ ONLY` declaration refused (CS): a
+    // token of its own, because a client must tell it from the statement
+    // being wrong - outside the transaction it would run.
+    {StatusCode::kReadOnlyTransaction, "READ_ONLY_TRANSACTION retryable=0 "},
     // Statement shipping, this spelling's producer, retired (AT-S6); its
     // history is at cf889b63. The spelling stays because the wire pins it. Its own spelling
     // because it is the one refusal here that does **not** mean "nothing
@@ -1387,7 +1385,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // a whitelist, so a statement added later is refused by default rather
     // than admitted by omission.
     if (session.failed() && !Session::AdmittedWhileFailed(cmd)) {
-        if (const std::uint64_t expired = session.expired_trx_id(); expired != 0) {
+        if (session.expired()) {
             // **Already rolled back, and the client has to be told so**
             // (AN-R14, docs/spec/txn.md §1): the generic text below says
             // "aborted" and leaves a reader to assume ROLLBACK will undo
@@ -1395,15 +1393,39 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             // transaction - COMMIT included, which must never quietly
             // succeed over writes that are already gone.
             Status s = Status::ResourceExhausted(
-                "transaction trx_id=" + std::to_string(expired) +
+                "transaction trx_id=" + TrxIdText(session.expired_trx_id()) +
                 " exceeded the transaction lifetime ceiling (txn_lifetime_ceiling_ms) and was "
-                "rolled back by the server; its writes are undone. ROLLBACK to end it");
+                "rolled back by the server; " +
+                std::string(session.expired_trx_id() != 0
+                                ? "its writes are undone"
+                                : "it was READ ONLY, so only its snapshot is released") +
+                ". ROLLBACK to end it");
             last_refusal_detail_ =
                 static_cast<std::uint16_t>(wire::ResourceDetail::kTxnLifetimeCeiling);
             return Refused(s);
         }
         return {"ERR current transaction is aborted; commands are ignored until ROLLBACK",
                 false};
+    }
+
+    // ---- The read-only gate (CS-R1, `[quiet-wrong]`) -------------------------
+    //
+    // A `READ ONLY` transaction holds no `txn::Transaction`, so a write that
+    // reached a write path would find a null scope and write under
+    // `kBootstrapXid` (`WriterId`), which every view answers as always
+    // visible and no rollback undoes. Refused
+    // here, on the routing tokens and before anything is read or borrowed.
+    // An allowlist, as the failed-txn gate's is: a statement added later is
+    // refused inside one by default rather than admitted by omission.
+    if (session.in_read_only_txn() && !ReadOnlyAdmits(cmd)) {
+        ++read_only_write_refusals_;
+        // CS-Q7 (a): not poisoned - nothing was written and the view is
+        // the one the transaction held.
+        return Refused(Status::ReadOnlyTransaction(
+            std::string(cmd) + " is not admitted in a READ ONLY transaction (byte " +
+            std::to_string(cmd.data() - line.data()) +
+            "); the transaction is unchanged - COMMIT or ROLLBACK it, then write in autocommit "
+            "or under BEGIN READ WRITE"));
     }
 
     // ---- Transaction control --------------------------------------------
@@ -1916,6 +1938,16 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     if (txn_ != nullptr) {
         os << " undo_pages_live=" << txn_->undo().LivePages()
            << " undo_pages_recycled=" << txn_->undo().PagesRecycled();
+    }
+
+    // **This core's `READ ONLY` transactions** (CS-Q8 (a), `txn.md` §1):
+    // begun, and the write statements refused inside one. Per core, like
+    // the catalog purge's two; absent without a manager, which serves no
+    // transaction of either kind.
+    section("txn");
+    if (txn_ != nullptr) {
+        os << " read_only_begins=" << read_only_begins_
+           << " read_only_write_refusals=" << read_only_write_refusals_;
     }
 
     // **The device syncs, read off counters that already increment** (XD0,
@@ -7689,6 +7721,17 @@ void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
 Status CommandDispatcher::EnsureStatementBoundary(Session& session) {
     if (txn_ == nullptr || !session.in_explicit_txn()) return Status::OK();
     if (statement_boundary_taken_) return Status::OK();
+    if (Session::ReadOnlyTxn* ro = session.read_only_txn(); ro != nullptr) {
+        // `StartStatement`'s branch for the kind with no transaction: under
+        // READ COMMITTED a fresh view, the held lease re-pointed at it -
+        // never dropped and taken again (CS-R3).
+        if (ro->isolation == txn::IsolationLevel::kReadCommitted) {
+            ro->view = txn_->MintReadView(txn::kNoTrxId);
+            txn_->RefreshReader(ro->lease, ro->view);
+        }
+        statement_boundary_taken_ = true;
+        return Status::OK();
+    }
     txn::Transaction* txn = session.transaction();
     if (txn == nullptr) return Status::OK();
     if (Status s = txn_->StartStatement(*txn); !s.ok()) return s;
@@ -7721,6 +7764,7 @@ txn::ReadView CommandDispatcher::MintResolveView(Session& session) {
     if (session.in_explicit_txn() && session.transaction() != nullptr) {
         return session.transaction()->view();
     }
+    if (const Session::ReadOnlyTxn* ro = session.read_only_txn(); ro != nullptr) return ro->view;
     // Autocommit: everything committed right now. Minted per resolution
     // rather than reused, because "right now" is the whole meaning of an
     // autocommit read - and this only runs while DDL is genuinely open.
@@ -10955,15 +10999,20 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
         return {"ERR a transaction is already open; COMMIT or ROLLBACK first", false};
     }
 
-    // `BEGIN [TRANSACTION] [ISOLATION LEVEL <name>] [DURABILITY <class>]`.
-    // Either clause given here overrides the session's for this transaction
-    // only - the third rung of the two precedence chains, and the spelling
-    // KWP's `C_TXN_BEGIN{durability}` reaches (protocol.md §9). Both are
-    // optional and order-free, because two independent overrides that must
-    // be written in one order would be a grammar rule with nothing behind
-    // it.
+    // `BEGIN [TRANSACTION] [ISOLATION LEVEL <name>] [DURABILITY <class>]
+    // [READ ONLY | READ WRITE]`. Each clause given here overrides the
+    // session's for this transaction only - the third rung of the two
+    // precedence chains, and the spelling KWP's `C_TXN_BEGIN{durability}`
+    // reaches (protocol.md §9). All are optional and order-free, because
+    // independent overrides that must be written in one order would be a
+    // grammar rule with nothing behind it.
     txn::IsolationLevel level = session.isolation();
     std::optional<wal::DurabilityClass> durability;
+    // The access mode (CS-Q2): unwritten, `READ WRITE` - except on a
+    // `readonly` connection, whose transactions could only spend ids and
+    // records, so its default is `READ ONLY` and `READ WRITE` is refused
+    // (CS-Q3).
+    std::optional<bool> read_only;
     auto [word, rest] = SplitFirstToken(args);
     if (IEquals(word, "TRANSACTION") || IEquals(word, "WORK")) {
         std::tie(word, rest) = SplitFirstToken(rest);
@@ -10975,9 +11024,19 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
                 return {"ERR expected LEVEL after ISOLATION", false};
             }
             // **The level name is not one token** - `repeatable read` is two
-            // - so it runs to the end of the clause, which is either the end
-            // of the statement or the next clause keyword.
-            auto [name, tail] = SplitBeforeClause(after, "DURABILITY");
+            // - and its first word can be `READ`, the access clause's too,
+            // so it is read by its own shape: `READ <word>` and
+            // `REPEATABLE <word>` are two tokens, any other spelling (the
+            // hyphen and underscore forms) one.
+            auto [first, after_first] = SplitFirstToken(after);
+            std::string_view tail = after_first;
+            std::string name(first);
+            if (IEquals(first, "READ") || IEquals(first, "REPEATABLE")) {
+                auto [second, after_second] = SplitFirstToken(after_first);
+                name += " ";
+                name += second;
+                tail = after_second;
+            }
             auto parsed = txn::ParseIsolationLevel(Trim(name));
             if (!parsed.ok()) return Refused(parsed.status());
             level = parsed.value();
@@ -10994,10 +11053,32 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
             std::tie(word, rest) = SplitFirstToken(tail);
             continue;
         }
+        if (IEquals(word, "READ")) {
+            auto [mode, tail] = SplitFirstToken(rest);
+            if (IEquals(mode, "ONLY")) {
+                read_only = true;
+            } else if (IEquals(mode, "WRITE")) {
+                read_only = false;
+            } else {
+                return Refused(Status::InvalidArgument(
+                    "expected ONLY or WRITE after READ, got '" + std::string(mode) + "'"));
+            }
+            std::tie(word, rest) = SplitFirstToken(tail);
+            continue;
+        }
         return Refused(Status::InvalidArgument(
-            "expected ISOLATION LEVEL or DURABILITY after BEGIN, got '" + std::string(word) +
-            "'"));
+            "expected ISOLATION LEVEL, DURABILITY, READ ONLY or READ WRITE after BEGIN, got '" +
+            std::string(word) + "'"));
     }
+
+    if (session.role() == Role::kReadOnly) {
+        if (read_only == std::optional<bool>(false)) {
+            return {"ERR permission: BEGIN READ WRITE needs readwrite; this connection is readonly",
+                    false};
+        }
+        read_only = true;
+    }
+    if (read_only.value_or(false)) return BeginReadOnly(level, session);
 
     auto begun = txn_->Begin(level);
     // ErrorReply, not a bare "ERR ": the id this draws can fail to carve,
@@ -11023,6 +11104,35 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
             false};
 }
 
+// **A `READ ONLY` transaction** (CS, `txn.md` §1): `AutocommitSnapshot`'s
+// two steps - a view minted with no owning id, then a lease that registers
+// it with the horizon - held on the session across statements. No id is
+// drawn, no record appended, no in-flight slot taken, and so the only
+// refusal is the lease registry's `OutOfSpace`. A `DURABILITY` clause is
+// accepted and binds nothing (CS-Q10): a commit that acknowledges no write
+// keeps every class's promise.
+DispatchOutcome CommandDispatcher::BeginReadOnly(txn::IsolationLevel level, Session& session) {
+    auto leased = txn::AutocommitSnapshot(txn_);
+    if (!leased.ok()) {
+        const Status& s = leased.status();
+        return Refused(s.WithMessage(s.message() +
+                                     " (suspended SELECT walks and READ ONLY transactions "
+                                     "share them); BEGIN READ ONLY was refused"));
+    }
+    Session::ReadOnlyTxn ro;
+    ro.view = leased.value().snap.view;
+    ro.isolation = level;
+    ro.lease = std::move(leased.value().lease);
+    session.AdoptReadOnly(std::move(ro));
+    // The statement that opened it has taken its boundary: under READ
+    // COMMITTED the next statement re-mints, this one already did.
+    statement_boundary_taken_ = true;
+    ++read_only_begins_;
+    return {std::string("BEGIN trx_id=none isolation=") + txn::IsolationLevelName(level) +
+                " access=read only",
+            false};
+}
+
 DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
     if (!session.in_explicit_txn()) {
         return {"ERR no transaction is open", false};
@@ -11034,6 +11144,12 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
         return {"ERR current transaction is aborted; ROLLBACK", false};
     }
 
+    // A `READ ONLY` transaction ends by dropping its lease (CS): nothing
+    // was written, so nothing is appended and nothing waited for.
+    if (session.in_read_only_txn()) {
+        session.Finish();
+        return {"COMMIT trx_id=none", false};
+    }
     // The cross-owner commit fork retired (AT-S6); its history is at
     // cf889b63. A transaction has no half on another core, so the local
     // path is the only path there is.
@@ -11128,11 +11244,17 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     if (!session.in_explicit_txn()) {
         return {"ERR no transaction is open", false};
     }
-    if (const std::uint64_t expired = session.expired_trx_id(); expired != 0) {
+    if (session.expired()) {
         // The lifetime sweep already rolled it back (`Session::Expire`);
         // what is left to end is the session's failed state.
+        const std::uint64_t expired = session.expired_trx_id();
         session.Finish();
-        return {"ROLLBACK trx_id=" + std::to_string(expired), false};
+        return {"ROLLBACK trx_id=" + TrxIdText(expired), false};
+    }
+
+    if (session.in_read_only_txn()) {
+        session.Finish();
+        return {"ROLLBACK trx_id=none", false};
     }
 
     DispatchOutcome out = RollbackLocal(session);
@@ -11293,16 +11415,18 @@ StatusOr<txn::LeasedSnapshot> CommandDispatcher::SnapshotFor(Session& session) {
     if (txn_ == nullptr) return txn::LeasedSnapshot{};  // sees everything, as before
 
     if (session.in_explicit_txn()) {
-        txn::Transaction* txn = session.transaction();
         // The statement boundary. Under READ COMMITTED this re-mints;
         // under REPEATABLE READ it is a no-op, and that one branch is the
         // whole difference between the levels.
         if (Status s = EnsureStatementBoundary(session); !s.ok()) return s;
         // No lease: the transaction is its own registration - `live_` is
         // what ReadHorizon() walks, and it holds this view until the
-        // transaction resolves.
+        // transaction resolves - or, for a `READ ONLY` one (CS), the lease
+        // its session holds for the transaction's life.
         txn::LeasedSnapshot out;
-        out.snap = txn_->SnapshotFor(*txn);
+        const Session::ReadOnlyTxn* ro = session.read_only_txn();
+        out.snap = ro != nullptr ? txn::Snapshot{ro->view, &txn_->undo()}
+                                 : txn_->SnapshotFor(*session.transaction());
         return out;
     }
 
@@ -11321,6 +11445,15 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(
     if (txn_ == nullptr) return scope;  // no manager: kBootstrapXid, as before
 
     if (session.in_explicit_txn()) {
+        // **The second line of CS-R1**, behind `DispatchInner`'s gate: a
+        // route that reached a write scope past it - the KWP load stream
+        // enters at `ExecuteInsert` - must not open one with no
+        // transaction, which would write under `kBootstrapXid`.
+        if (session.in_read_only_txn()) {
+            ++read_only_write_refusals_;
+            return Status::ReadOnlyTransaction(
+                "a write is not admitted in a READ ONLY transaction (byte 0)");
+        }
         scope.txn = session.transaction();
         scope.owned = false;
         if (Status s = EnsureStatementBoundary(session); !s.ok()) return s;

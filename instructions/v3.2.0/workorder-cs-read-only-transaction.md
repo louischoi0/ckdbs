@@ -365,3 +365,71 @@ decomposition, no PostgreSQL floor.
 - **CS-Q9**: `docs/pending/lazy-id-assignment-census.md`.
 
 Overhead not measured; measured at the milestone's close.
+
+### CS-S1 and CS-S2 - the mode and the refusals, landed together, 2026-11-15
+
+On worktree `cs-read-only-transaction`, one commit. **Together, not in
+turn**, because the census showed the mode without the head gate is a null
+dereference at `BeginWrite`, `CommitLocal` and `RollbackLocal` for any
+write a read-only session sends. An S1 without S2's gate would not be a
+safe intermediate tree.
+
+- **Built**:
+  - `Session::ReadOnlyTxn` (a view, the level, the lease) with
+    `in_read_only_txn()`;
+  - `BEGIN`'s `READ ONLY`/`READ WRITE` clause, with the isolation level now
+    read by its shape, because `READ` opens both;
+  - `CommandDispatcher::BeginReadOnly`;
+  - `COMMIT`/`ROLLBACK` dropping the lease;
+  - `EnsureStatementBoundary`, `SnapshotFor` and `MintResolveView` for both
+    kinds;
+  - `TransactionManager::RefreshReader` (CS-R3);
+  - the readonly-role default (CS-Q3);
+  - KWP's RELAXED flag cleared for a read-only transaction
+    (`KwpSession::TxnIsRelaxed`, CS-Q6);
+  - the lifetime sweep keyed on `Session::open_txn_seq()`, with
+    `Session::expired()`, so a read-only transaction is swept;
+  - `StatusCode::kReadOnlyTransaction`, wire category 19,
+    `READ_ONLY_TRANSACTION retryable=0`;
+  - `DispatchInner`'s allowlist gate (`ReadOnlyAdmits`) and `BeginWrite`'s
+    second line;
+  - CS-Q8's per-core `sys.meta` `txn` section;
+  - the sim's read-only transactions (shapes on only, own stream).
+- **Tests**:
+  - `tests/read_only_txn_test.cpp`, 10 cells on the two-core rig;
+  - `PurgeWaitTest.AnOlderReadOnlyTransactionKeepsItsRowAcrossStatementsAndThePurge`;
+  - `ExpeditorTest.AReadOnlyTransactionPastItsLifetimeIsEndedAndItsNextStatementIsTold`;
+  - the new code in the status, kwp-error and parser-golden lists.
+
+  Both CS-R2 cells fail under a mutation that releases the lease at
+  `BEGIN`. The sim ran seeds 1-8 and 11-14 in `clean`, `crash` and
+  `sync-crash`, all `ok`, with 5-19 read-only transactions per run. The
+  shapes-off stream is unchanged.
+- **Review** (`critics-developer`): no correctness bug. Three comment and
+  spec fixes were applied by the reviewer. A wrong claim that a write past
+  the gate would stamp `kNoTrxId` now reads `kBootstrapXid` in the gate's
+  comment and in `txn.md`, and a non-existent function name in
+  `session.hpp` was corrected. **Applied from its list**:
+  - deleted `SplitBeforeClause`, dead now;
+  - `Session::expired_trx_id_` is an `optional`;
+  - plain counters, read and written on one core only;
+  - `SnapshotFor`'s two explicit branches merged, which also keeps the
+    autocommit path free of a new branch;
+  - `RefreshReader`'s silent guard turned into an `assert`;
+  - KWP's RELAXED expression written once;
+  - the sim counts the engine's reply rather than the SQL;
+  - the expired refusal no longer tells a read-only transaction its writes
+    were undone;
+  - the cross-core purge cell it asked for, `ItsLeaseHoldsTheHorizonAgainstAPurgeOnAnotherCore`;
+  - `SYNC`'s checkpoint record and CS-Q11 stated in `txn.md`.
+
+  **Rejected**: sharing `TrxIdText` with `tcp_server.cpp`. It is a
+  dispatcher-internal helper, and exporting it for one log line adds a
+  header surface for no reader.
+- **Suite**: full `ctest -LE bs-nightly`, 4474/4474.
+- **Docs**: `txn.md` §1 (the access mode); `sched.md` (the lease slot);
+  `protocol.md` §11 (category 19) and §14 (the readonly role);
+  `sys-views.md` §7 (`txn`); `manual/sql/sql.md` §5 and §8;
+  `manual/client/client.md`.
+
+Overhead not measured; measured at the milestone's close.

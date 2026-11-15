@@ -711,10 +711,7 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
         // through the same precedence chain the commit read it through -
         // not on the byte `C_TXN_BEGIN` carried, which may have said
         // "session default".
-        const bool relaxed =
-            running_txn_begin_ ? session_.EffectiveDurability(server_durability_) ==
-                                     wal::DurabilityClass::kRelaxed
-                               : running_relaxed_;
+        const bool relaxed = running_txn_begin_ ? TxnIsRelaxed() : running_relaxed_;
         Send(out, ServerFrameType::kTxnOk, relaxed ? kTxnOkRelaxed : 0, {});
         return;
     }
@@ -1028,8 +1025,7 @@ FrameAction KwpSession::OnTxn(ClientFrameType type, std::span<const std::byte> p
     // One rule - the class of *this* transaction - read where the
     // transaction exists.
     running_txn_begin_ = type == ClientFrameType::kTxnBegin;
-    running_relaxed_ =
-        session_.EffectiveDurability(server_durability_) == wal::DurabilityClass::kRelaxed;
+    running_relaxed_ = TxnIsRelaxed();
     FrameAction action;
     action.dispatch = true;
     action.sql = std::move(sql);
