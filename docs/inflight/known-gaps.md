@@ -1910,6 +1910,21 @@ Owned by `docs/spec/index.md` §10.3. The order is
   waiting `X` has no queue position (`lock_table.cpp`), as writers already
   can.
 
+## Assertion admission
+
+- **A departure that raises a SUM is never admitted** `[quiet-wrong]` (a
+  review finding next to the audit's G26, verified by reading at
+  `0304a822`; the pending entry's G26-R). A `DELETE`'s departure, and a
+  group-moving `UPDATE`'s, is reserved with no admission check, on AS11's
+  premise that a departure cannot violate an upper bound (`assertion.md`).
+  For `SUM` over a column holding negative values, removing a negative
+  contribution raises the group's sum: under `CHECK SUM(x) <= 100 GROUP BY
+  grp`, `(1, 1, -50)` then `(2, 1, 140)` is admitted (sum 90), and deleting
+  row 1 is accepted with the group then summing to 140. The declared
+  invariant is broken with no refusal. Admitting such a departure narrows
+  AS11, a contract change that waits for the operator. `COUNT` and `SUM`
+  over non-negative values are unaffected.
+
 ## Assertion reservations (CK, CL)
 
 Verified on `ck-assertion-commit-settle` at `291cc251`. A crash loser's
