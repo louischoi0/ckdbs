@@ -69,3 +69,12 @@ before the merge.
 | **Mark** | **`workorder-cv-ordered-index-walk.md` is written and not opened.** The letter CV is CLA's proposal |
 | **Does not settle** | the opening of CV or of any stage; CV-Q0 to CV-Q6, each CLA's proposal only - CV-Q4, the tie order under a reverse walk, amends `parser-v2.md` I12 if marked (a); a merge, a push, a version |
 | **Recorded at** | this file; the order's header and §7; the CV row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 8. CS opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | W7, on 2026-11-15: the operator invoked `go-ahead-achieving-milestone` with the argument `cs-read-only-transaction` - the skill's standing word, *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | **CS is opened** on worktree `cs-read-only-transaction` from `32354dbe` (`v3.4.11-1-g32354dbe`). **CS-Q0..CS-Q9 are each adopted as CLA proposed - option (a) in every row - on the operator's standing go-ahead of 2026-11-15 (go-ahead-achieving-milestone)**, not the operator's own per-item marks. No item of the table carries `[quiet-wrong]`; the two `[quiet-wrong]` rules, CS-R1 and CS-R2, are rules and not choices, and each is pinned by a test in the stage that lands it. CS-Q1 (a) keeps its own stop: if CS-S0's bar is not met, CS returns to the operator |
+| **Does not settle** | a merge, a push, a tag or a version |
+| **Recorded at** | this file; the order's header, items table and §7; the CS row and this file's row in `instructions/v3.2.0/index.md` |

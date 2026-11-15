@@ -1,14 +1,17 @@
 # Work order CS - `BEGIN READ ONLY`: a transaction that issues no id, logs nothing and is a held snapshot
 
-Status: **WRITTEN 2026-11-15, not opened.** Written on `main` from
-`030b5bd9` (`v3.4.10-1-g030b5bd9`) on the operator's word of 2026-11-15
+Status: **OPENED 2026-11-15** on the operator's standing go-ahead of
+2026-11-15 (go-ahead-achieving-milestone, argument
+`cs-read-only-transaction`), on worktree `cs-read-only-transaction` from
+`32354dbe` (`v3.4.11-1-g32354dbe`). **CS-Q0..Q9 are adopted as CLA
+proposed** under that word (`raft-marks-2026-11-15.md` §8); none is the
+operator's own per-item mark. Written on `main` from `030b5bd9`
+(`v3.4.10-1-g030b5bd9`) on the operator's word of 2026-11-15
 (`raft-marks-2026-11-15.md` §4), and carried onto `61917b0f`
-(`v3.4.10-6-g61917b0f`, F4 landed) before its commit. No stage is
-started. CS-S0 waits for the operator's word and for the marks on §4's
-items. Every `[source-read]` claim below was read at `030b5bd9`. F4
-changed none of the code read, and the line numbers of
-`src/server/command_dispatcher.cpp` and `docs/spec/txn.md` are given at
-`61917b0f`, where F4 moved them.
+(`v3.4.10-6-g61917b0f`, F4 landed) before its commit. Every
+`[source-read]` claim below was read at `030b5bd9`. F4 changed none of
+the code read, and the line numbers of `src/server/command_dispatcher.cpp`
+and `docs/spec/txn.md` are given at `61917b0f`, where F4 moved them.
 
 Tags: `[operator]` the operator's word; `[source-read]` read in the tree,
 with `path:line`; `[measured]` with the results file; `[design]` CLA's,
@@ -247,20 +250,22 @@ visible to: the horizon, through its lease, and nothing else.
 
 ## 4. Items for the operator (CS-Q), CLA's proposals
 
-None is assumed; each waits for a mark.
+Each is **adopted on the operator's standing go-ahead of 2026-11-15
+(go-ahead-achieving-milestone)**, as CLA proposed; the mark column says
+so. None is the operator's own per-item mark.
 
-| | item | options | CLA proposes |
-|---|---|---|---|
-| CS-Q0 | The shape | (a) the declared mode only, as §2 builds it. (b) lazy id assignment only, no keyword. (c) both in this order | (a). (b) is the larger saving but the larger `[quiet-wrong]` surface (§0.2), and the declaration is also a contract a client can rely on. CS-S0 records (b)'s census for a later order (CS-Q9) |
-| CS-Q1 | Does CS-S0 gate the build? | (a) yes, with a bar: if `BEGIN READ WRITE; <k reads>; COMMIT` against the same reads in autocommit differs by less than the spread at every durability class and every `k` S0 runs, CS stops and returns to the operator. (b) built whatever S0 shows | (a). No structure without a measured premise |
-| CS-Q2 | The spelling | (a) `BEGIN ... READ ONLY` / `READ WRITE` as one more order-free clause, and `START TRANSACTION` the same. (b) (a) and `SET TRANSACTION READ ONLY` as the first statement of a transaction. (c) (a) and a session default, `SET TRANSACTION_MODE read only` | (a). One spelling per rung, the same shape as `ISOLATION LEVEL` and `DURABILITY`. (c) is a fourth rung with no consumer yet |
-| CS-Q3 | The `readonly` role | (a) a `readonly` connection's `BEGIN` is `READ ONLY` unless it says `READ WRITE`, and `READ WRITE` is refused for the role. (b) unchanged: the role's `BEGIN` stays `READ WRITE`, and its writes are refused by the role gate as today | (a). Such a connection cannot write, so its transactions only spend ids and records. The reply text changes for it, and that is its only visible change |
-| CS-Q4 | KWP | (a) text only in CS: a KWP client sends `BEGIN READ ONLY` as a statement, and `C_TXN_BEGIN` is unchanged. (b) `C_TXN_BEGIN` gains an access-mode byte under a capability bit | (a). A frame change is a protocol revision with its own capability, and no client asks for one yet |
-| CS-Q5 | The cap | (a) the shared 256-slot registry, as CS-R6 states, with the `OutOfSpace` message naming read-only transactions as a holder. (b) a separate registry for read-only transactions, sized by measurement | (a), until a measurement shows held transactions starving suspended walks |
-| CS-Q6 | The replies | (a) `BEGIN trx_id=none isolation=<l> access=read only`, `COMMIT` replies as today without the `RELAXED` flag, and `READ WRITE`'s reply unchanged. (b) `READ WRITE`'s reply gains `access=read write` too | (a). CS-R4 |
-| CS-Q7 | A refused write | (a) refused, and the transaction is not poisoned: nothing was written and the view is unchanged. (b) refused and poisoned, as every other failed statement in an explicit transaction is | (a). Poisoning protects writes a client might commit unknowingly, and a read-only transaction has none |
-| CS-Q8 | What is reported | (a) `read_only_begins` and `read_only_write_refusals` in the transaction counters, and no wait event, since CS adds no wait. (b) nothing new | (a) |
-| CS-Q9 | The lazy-id census | (a) CS-S0 lists every reading of `Transaction::id()` and every `kNoTrxId` comparison on a write path, in a `docs/pending/` entry for a later order. (b) not in CS | (a). It is a read with no code, and the census CS-R1 needs covers half of it |
+| | item | options | CLA proposes | mark |
+|---|---|---|---|---|
+| CS-Q0 | The shape | (a) the declared mode only, as §2 builds it. (b) lazy id assignment only, no keyword. (c) both in this order | (a). (b) is the larger saving but the larger `[quiet-wrong]` surface (§0.2), and the declaration is also a contract a client can rely on. CS-S0 records (b)'s census for a later order (CS-Q9) | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q1 | Does CS-S0 gate the build? | (a) yes, with a bar: if `BEGIN READ WRITE; <k reads>; COMMIT` against the same reads in autocommit differs by less than the spread at every durability class and every `k` S0 runs, CS stops and returns to the operator. (b) built whatever S0 shows | (a). No structure without a measured premise | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q2 | The spelling | (a) `BEGIN ... READ ONLY` / `READ WRITE` as one more order-free clause, and `START TRANSACTION` the same. (b) (a) and `SET TRANSACTION READ ONLY` as the first statement of a transaction. (c) (a) and a session default, `SET TRANSACTION_MODE read only` | (a). One spelling per rung, the same shape as `ISOLATION LEVEL` and `DURABILITY`. (c) is a fourth rung with no consumer yet | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q3 | The `readonly` role | (a) a `readonly` connection's `BEGIN` is `READ ONLY` unless it says `READ WRITE`, and `READ WRITE` is refused for the role. (b) unchanged: the role's `BEGIN` stays `READ WRITE`, and its writes are refused by the role gate as today | (a). Such a connection cannot write, so its transactions only spend ids and records. The reply text changes for it, and that is its only visible change | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q4 | KWP | (a) text only in CS: a KWP client sends `BEGIN READ ONLY` as a statement, and `C_TXN_BEGIN` is unchanged. (b) `C_TXN_BEGIN` gains an access-mode byte under a capability bit | (a). A frame change is a protocol revision with its own capability, and no client asks for one yet | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q5 | The cap | (a) the shared 256-slot registry, as CS-R6 states, with the `OutOfSpace` message naming read-only transactions as a holder. (b) a separate registry for read-only transactions, sized by measurement | (a), until a measurement shows held transactions starving suspended walks | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q6 | The replies | (a) `BEGIN trx_id=none isolation=<l> access=read only`, `COMMIT` replies as today without the `RELAXED` flag, and `READ WRITE`'s reply unchanged. (b) `READ WRITE`'s reply gains `access=read write` too | (a). CS-R4 | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q7 | A refused write | (a) refused, and the transaction is not poisoned: nothing was written and the view is unchanged. (b) refused and poisoned, as every other failed statement in an explicit transaction is | (a). Poisoning protects writes a client might commit unknowingly, and a read-only transaction has none | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q8 | What is reported | (a) `read_only_begins` and `read_only_write_refusals` in the transaction counters, and no wait event, since CS adds no wait. (b) nothing new | (a) | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q9 | The lazy-id census | (a) CS-S0 lists every reading of `Transaction::id()` and every `kNoTrxId` comparison on a write path, in a `docs/pending/` entry for a later order. (b) not in CS | (a). It is a read with no code, and the census CS-R1 needs covers half of it | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
 
 ## 5. Stages
 
