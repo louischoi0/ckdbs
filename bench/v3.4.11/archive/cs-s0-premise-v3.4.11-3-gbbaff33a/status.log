@@ -1,0 +1,241 @@
+07:21:02 strict-c1 conns 1 k 1 rep 0 W
+07:21:04 strict-c1 conns 1 k 1 rep 0 A
+07:21:07 strict-c1 conns 1 k 1 rep 0 A2
+07:21:09 strict-c1 conns 1 k 1 rep 1 W
+07:21:12 strict-c1 conns 1 k 1 rep 1 A2
+07:21:14 strict-c1 conns 1 k 1 rep 1 A
+07:21:17 strict-c1 conns 1 k 4 rep 0 W
+07:21:19 strict-c1 conns 1 k 4 rep 0 A
+07:21:22 strict-c1 conns 1 k 4 rep 0 A2
+07:21:25 strict-c1 conns 1 k 4 rep 1 W
+07:21:27 strict-c1 conns 1 k 4 rep 1 A2
+07:21:30 strict-c1 conns 1 k 4 rep 1 A
+07:21:32 strict-c1 conns 1 k 16 rep 0 W
+07:21:35 strict-c1 conns 1 k 16 rep 0 A
+07:21:37 strict-c1 conns 1 k 16 rep 0 A2
+07:21:40 strict-c1 conns 1 k 16 rep 1 W
+07:21:42 strict-c1 conns 1 k 16 rep 1 A2
+07:21:45 strict-c1 conns 1 k 16 rep 1 A
+07:21:48 strict-c1 conns 8 k 1 rep 0 W
+07:21:50 strict-c1 conns 8 k 1 rep 0 A
+07:21:53 strict-c1 conns 8 k 1 rep 0 A2
+07:21:55 strict-c1 conns 8 k 1 rep 1 W
+07:21:58 strict-c1 conns 8 k 1 rep 1 A2
+07:22:00 strict-c1 conns 8 k 1 rep 1 A
+07:22:03 strict-c1 conns 8 k 4 rep 0 W
+07:22:06 strict-c1 conns 8 k 4 rep 0 A
+07:22:08 strict-c1 conns 8 k 4 rep 0 A2
+07:22:11 strict-c1 conns 8 k 4 rep 1 W
+07:22:13 strict-c1 conns 8 k 4 rep 1 A2
+07:22:16 strict-c1 conns 8 k 4 rep 1 A
+07:22:18 strict-c1 conns 8 k 16 rep 0 W
+07:22:21 strict-c1 conns 8 k 16 rep 0 A
+07:22:24 strict-c1 conns 8 k 16 rep 0 A2
+07:22:26 strict-c1 conns 8 k 16 rep 1 W
+07:22:29 strict-c1 conns 8 k 16 rep 1 A2
+07:22:31 strict-c1 conns 8 k 16 rep 1 A
+07:22:34 probe strict-c1 probe-only k0: 16797 -> 16800 over 0 groups
+07:22:36 probe strict-c1 A k16: 16803 -> 16806 over 190 groups
+07:22:38 probe strict-c1 W k1: 16809 -> 17383 over 571 groups
+07:22:40 probe strict-c1 W k16: 17386 -> 17608 over 219 groups
+07:22:41 group-c1 conns 1 k 1 rep 0 W
+07:22:44 group-c1 conns 1 k 1 rep 0 A
+07:22:46 group-c1 conns 1 k 1 rep 0 A2
+07:22:49 group-c1 conns 1 k 1 rep 1 W
+07:22:52 group-c1 conns 1 k 1 rep 1 A2
+07:22:54 group-c1 conns 1 k 1 rep 1 A
+07:22:57 group-c1 conns 1 k 4 rep 0 W
+07:22:59 group-c1 conns 1 k 4 rep 0 A
+07:23:02 group-c1 conns 1 k 4 rep 0 A2
+07:23:04 group-c1 conns 1 k 4 rep 1 W
+07:23:07 group-c1 conns 1 k 4 rep 1 A2
+07:23:09 group-c1 conns 1 k 4 rep 1 A
+07:23:12 group-c1 conns 1 k 16 rep 0 W
+07:23:15 group-c1 conns 1 k 16 rep 0 A
+07:23:17 group-c1 conns 1 k 16 rep 0 A2
+07:23:20 group-c1 conns 1 k 16 rep 1 W
+07:23:22 group-c1 conns 1 k 16 rep 1 A2
+07:23:25 group-c1 conns 1 k 16 rep 1 A
+07:23:27 group-c1 conns 8 k 1 rep 0 W
+07:23:30 group-c1 conns 8 k 1 rep 0 A
+07:23:33 group-c1 conns 8 k 1 rep 0 A2
+07:23:35 group-c1 conns 8 k 1 rep 1 W
+07:23:38 group-c1 conns 8 k 1 rep 1 A2
+07:23:40 group-c1 conns 8 k 1 rep 1 A
+07:23:43 group-c1 conns 8 k 4 rep 0 W
+07:23:45 group-c1 conns 8 k 4 rep 0 A
+07:23:48 group-c1 conns 8 k 4 rep 0 A2
+07:23:50 group-c1 conns 8 k 4 rep 1 W
+07:23:53 group-c1 conns 8 k 4 rep 1 A2
+07:23:56 group-c1 conns 8 k 4 rep 1 A
+07:23:58 group-c1 conns 8 k 16 rep 0 W
+07:24:01 group-c1 conns 8 k 16 rep 0 A
+07:24:03 group-c1 conns 8 k 16 rep 0 A2
+07:24:06 group-c1 conns 8 k 16 rep 1 W
+07:24:08 group-c1 conns 8 k 16 rep 1 A2
+07:24:11 group-c1 conns 8 k 16 rep 1 A
+07:24:14 probe group-c1 probe-only k0: 19835 -> 19838 over 0 groups
+07:24:16 probe group-c1 A k16: 19841 -> 19844 over 267 groups
+07:24:18 probe group-c1 W k1: 19847 -> 20718 over 868 groups
+07:24:19 probe group-c1 W k16: 20721 -> 21086 over 362 groups
+07:24:21 relaxed-c1 conns 1 k 1 rep 0 W
+07:24:24 relaxed-c1 conns 1 k 1 rep 0 A
+07:24:26 relaxed-c1 conns 1 k 1 rep 0 A2
+07:24:29 relaxed-c1 conns 1 k 1 rep 1 W
+07:24:31 relaxed-c1 conns 1 k 1 rep 1 A2
+07:24:34 relaxed-c1 conns 1 k 1 rep 1 A
+07:24:36 relaxed-c1 conns 1 k 4 rep 0 W
+07:24:39 relaxed-c1 conns 1 k 4 rep 0 A
+07:24:41 relaxed-c1 conns 1 k 4 rep 0 A2
+07:24:44 relaxed-c1 conns 1 k 4 rep 1 W
+07:24:46 relaxed-c1 conns 1 k 4 rep 1 A2
+07:24:49 relaxed-c1 conns 1 k 4 rep 1 A
+07:24:51 relaxed-c1 conns 1 k 16 rep 0 W
+07:24:54 relaxed-c1 conns 1 k 16 rep 0 A
+07:24:56 relaxed-c1 conns 1 k 16 rep 0 A2
+07:24:59 relaxed-c1 conns 1 k 16 rep 1 W
+07:25:02 relaxed-c1 conns 1 k 16 rep 1 A2
+07:25:04 relaxed-c1 conns 1 k 16 rep 1 A
+07:25:07 relaxed-c1 conns 8 k 1 rep 0 W
+07:25:09 relaxed-c1 conns 8 k 1 rep 0 A
+07:25:12 relaxed-c1 conns 8 k 1 rep 0 A2
+07:25:14 relaxed-c1 conns 8 k 1 rep 1 W
+07:25:17 relaxed-c1 conns 8 k 1 rep 1 A2
+07:25:19 relaxed-c1 conns 8 k 1 rep 1 A
+07:25:22 relaxed-c1 conns 8 k 4 rep 0 W
+07:25:25 relaxed-c1 conns 8 k 4 rep 0 A
+07:25:27 relaxed-c1 conns 8 k 4 rep 0 A2
+07:25:30 relaxed-c1 conns 8 k 4 rep 1 W
+07:25:32 relaxed-c1 conns 8 k 4 rep 1 A2
+07:25:35 relaxed-c1 conns 8 k 4 rep 1 A
+07:25:37 relaxed-c1 conns 8 k 16 rep 0 W
+07:25:40 relaxed-c1 conns 8 k 16 rep 0 A
+07:25:43 relaxed-c1 conns 8 k 16 rep 0 A2
+07:25:45 relaxed-c1 conns 8 k 16 rep 1 W
+07:25:48 relaxed-c1 conns 8 k 16 rep 1 A2
+07:25:50 relaxed-c1 conns 8 k 16 rep 1 A
+07:25:53 probe relaxed-c1 probe-only k0: 66620 -> 66623 over 0 groups
+07:25:55 probe relaxed-c1 A k16: 66626 -> 66629 over 881 groups
+07:25:57 probe relaxed-c1 W k1: 66632 -> 73006 over 6371 groups
+07:25:58 probe relaxed-c1 W k16: 73009 -> 73293 over 281 groups
+07:26:03 strict-c4 conns 1 k 1 rep 0 W
+07:26:05 strict-c4 conns 1 k 1 rep 0 A
+07:26:08 strict-c4 conns 1 k 1 rep 0 A2
+07:26:10 strict-c4 conns 1 k 1 rep 1 W
+07:26:13 strict-c4 conns 1 k 1 rep 1 A2
+07:26:15 strict-c4 conns 1 k 1 rep 1 A
+07:26:18 strict-c4 conns 1 k 4 rep 0 W
+07:26:21 strict-c4 conns 1 k 4 rep 0 A
+07:26:23 strict-c4 conns 1 k 4 rep 0 A2
+07:26:26 strict-c4 conns 1 k 4 rep 1 W
+07:26:28 strict-c4 conns 1 k 4 rep 1 A2
+07:26:31 strict-c4 conns 1 k 4 rep 1 A
+07:26:33 strict-c4 conns 1 k 16 rep 0 W
+07:26:36 strict-c4 conns 1 k 16 rep 0 A
+07:26:39 strict-c4 conns 1 k 16 rep 0 A2
+07:26:41 strict-c4 conns 1 k 16 rep 1 W
+07:26:44 strict-c4 conns 1 k 16 rep 1 A2
+07:26:47 strict-c4 conns 1 k 16 rep 1 A
+07:26:50 strict-c4 conns 8 k 1 rep 0 W
+07:26:52 strict-c4 conns 8 k 1 rep 0 A
+07:26:55 strict-c4 conns 8 k 1 rep 0 A2
+07:26:57 strict-c4 conns 8 k 1 rep 1 W
+07:27:00 strict-c4 conns 8 k 1 rep 1 A2
+07:27:02 strict-c4 conns 8 k 1 rep 1 A
+07:27:05 strict-c4 conns 8 k 4 rep 0 W
+07:27:08 strict-c4 conns 8 k 4 rep 0 A
+07:27:10 strict-c4 conns 8 k 4 rep 0 A2
+07:27:13 strict-c4 conns 8 k 4 rep 1 W
+07:27:15 strict-c4 conns 8 k 4 rep 1 A2
+07:27:18 strict-c4 conns 8 k 4 rep 1 A
+07:27:20 strict-c4 conns 8 k 16 rep 0 W
+07:27:24 strict-c4 conns 8 k 16 rep 0 A
+07:27:26 strict-c4 conns 8 k 16 rep 0 A2
+07:27:29 strict-c4 conns 8 k 16 rep 1 W
+07:27:31 strict-c4 conns 8 k 16 rep 1 A2
+07:27:34 strict-c4 conns 8 k 16 rep 1 A
+07:27:37 probe strict-c4 probe-only k0: 41659 -> 38424 over 0 groups
+07:27:39 probe strict-c4 A k16: 38424 -> 49252 over 435 groups
+07:27:40 probe strict-c4 W k1: 38427 -> 49255 over 751 groups
+07:27:42 probe strict-c4 W k16: 38430 -> 38430 over 244 groups
+07:27:44 group-c4 conns 1 k 1 rep 0 W
+07:27:47 group-c4 conns 1 k 1 rep 0 A
+07:27:49 group-c4 conns 1 k 1 rep 0 A2
+07:27:52 group-c4 conns 1 k 1 rep 1 W
+07:27:54 group-c4 conns 1 k 1 rep 1 A2
+07:27:57 group-c4 conns 1 k 1 rep 1 A
+07:27:59 group-c4 conns 1 k 4 rep 0 W
+07:28:02 group-c4 conns 1 k 4 rep 0 A
+07:28:05 group-c4 conns 1 k 4 rep 0 A2
+07:28:07 group-c4 conns 1 k 4 rep 1 W
+07:28:10 group-c4 conns 1 k 4 rep 1 A2
+07:28:12 group-c4 conns 1 k 4 rep 1 A
+07:28:15 group-c4 conns 1 k 16 rep 0 W
+07:28:17 group-c4 conns 1 k 16 rep 0 A
+07:28:20 group-c4 conns 1 k 16 rep 0 A2
+07:28:22 group-c4 conns 1 k 16 rep 1 W
+07:28:25 group-c4 conns 1 k 16 rep 1 A2
+07:28:28 group-c4 conns 1 k 16 rep 1 A
+07:28:30 group-c4 conns 8 k 1 rep 0 W
+07:28:33 group-c4 conns 8 k 1 rep 0 A
+07:28:35 group-c4 conns 8 k 1 rep 0 A2
+07:28:38 group-c4 conns 8 k 1 rep 1 W
+07:28:40 group-c4 conns 8 k 1 rep 1 A2
+07:28:43 group-c4 conns 8 k 1 rep 1 A
+07:28:46 group-c4 conns 8 k 4 rep 0 W
+07:28:48 group-c4 conns 8 k 4 rep 0 A
+07:28:51 group-c4 conns 8 k 4 rep 0 A2
+07:28:53 group-c4 conns 8 k 4 rep 1 W
+07:28:56 group-c4 conns 8 k 4 rep 1 A2
+07:28:59 group-c4 conns 8 k 4 rep 1 A
+07:29:01 group-c4 conns 8 k 16 rep 0 W
+07:29:04 group-c4 conns 8 k 16 rep 0 A
+07:29:06 group-c4 conns 8 k 16 rep 0 A2
+07:29:09 group-c4 conns 8 k 16 rep 1 W
+07:29:11 group-c4 conns 8 k 16 rep 1 A2
+07:29:14 group-c4 conns 8 k 16 rep 1 A
+07:29:17 probe group-c4 probe-only k0: 58247 -> 58247 over 0 groups
+07:29:19 probe group-c4 A k16: 58248 -> 58249 over 217 groups
+07:29:21 probe group-c4 W k1: 58249 -> 66127 over 433 groups
+07:29:22 probe group-c4 W k16: 66127 -> 58250 over 271 groups
+07:29:24 relaxed-c4 conns 1 k 1 rep 0 W
+07:29:27 relaxed-c4 conns 1 k 1 rep 0 A
+07:29:29 relaxed-c4 conns 1 k 1 rep 0 A2
+07:29:32 relaxed-c4 conns 1 k 1 rep 1 W
+07:29:34 relaxed-c4 conns 1 k 1 rep 1 A2
+07:29:37 relaxed-c4 conns 1 k 1 rep 1 A
+07:29:40 relaxed-c4 conns 1 k 4 rep 0 W
+07:29:42 relaxed-c4 conns 1 k 4 rep 0 A
+07:29:45 relaxed-c4 conns 1 k 4 rep 0 A2
+07:29:47 relaxed-c4 conns 1 k 4 rep 1 W
+07:29:50 relaxed-c4 conns 1 k 4 rep 1 A2
+07:29:52 relaxed-c4 conns 1 k 4 rep 1 A
+07:29:55 relaxed-c4 conns 1 k 16 rep 0 W
+07:29:58 relaxed-c4 conns 1 k 16 rep 0 A
+07:30:00 relaxed-c4 conns 1 k 16 rep 0 A2
+07:30:03 relaxed-c4 conns 1 k 16 rep 1 W
+07:30:05 relaxed-c4 conns 1 k 16 rep 1 A2
+07:30:08 relaxed-c4 conns 1 k 16 rep 1 A
+07:30:10 relaxed-c4 conns 8 k 1 rep 0 W
+07:30:13 relaxed-c4 conns 8 k 1 rep 0 A
+07:30:15 relaxed-c4 conns 8 k 1 rep 0 A2
+07:30:18 relaxed-c4 conns 8 k 1 rep 1 W
+07:30:21 relaxed-c4 conns 8 k 1 rep 1 A2
+07:30:23 relaxed-c4 conns 8 k 1 rep 1 A
+07:30:26 relaxed-c4 conns 8 k 4 rep 0 W
+07:30:29 relaxed-c4 conns 8 k 4 rep 0 A
+07:30:31 relaxed-c4 conns 8 k 4 rep 0 A2
+07:30:34 relaxed-c4 conns 8 k 4 rep 1 W
+07:30:36 relaxed-c4 conns 8 k 4 rep 1 A2
+07:30:39 relaxed-c4 conns 8 k 4 rep 1 A
+07:30:41 relaxed-c4 conns 8 k 16 rep 0 W
+07:30:44 relaxed-c4 conns 8 k 16 rep 0 A
+07:30:47 relaxed-c4 conns 8 k 16 rep 0 A2
+07:30:49 relaxed-c4 conns 8 k 16 rep 1 W
+07:30:52 relaxed-c4 conns 8 k 16 rep 1 A2
+07:30:54 relaxed-c4 conns 8 k 16 rep 1 A
+07:30:57 probe relaxed-c4 probe-only k0: 135990 -> 139266 over 0 groups
+07:30:59 probe relaxed-c4 A k16: 139266 -> 135991 over 597 groups
+07:31:01 probe relaxed-c4 W k1: 132050 -> 132050 over 5850 groups
+07:31:03 probe relaxed-c4 W k16: 155652 -> 151555 over 432 groups
+07:31:03 driver finished
