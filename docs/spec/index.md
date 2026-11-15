@@ -745,10 +745,13 @@ order. The acts, in one autocommit transaction at READ COMMITTED:
      id below the floor, a statement about a version still on a page). Where
      the walk below it fails and the writer has decided, the row is read
      again by its tuple key, a bounded number of times. **So is such a row
-     whose head version's spilled value the decode finds released** (the
-     audit's G24): a rollback on another core restores the row before it
-     releases the spill, so the re-read meets the row restored, not the
-     dead value; before G24 the build was refused `NotFound`, never wrong.
+     when a version its head writer wrote - the head or an older one -
+     names a spilled value the decode finds released** (the audit's G24): a
+     rollback on another core restores the row before it releases its
+     spills, so the re-read meets the row restored, not the dead value; a
+     re-read that finds the row exactly as copied fails the build with the
+     decode's own status. Before G24 the build was refused `NotFound`,
+     never wrong.
    - The build's view is re-minted per slice, so its core's snapshot bound
      moves. Its in-flight id still holds the floor, and with it every core's
      undo recycling, for the build's length.

@@ -596,6 +596,19 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Locks
 
+- **A named key meeting another transaction's undecided insert past 2^16
+  versions is refused rather than waited on** (a review finding next to the
+  audit's G21, verified by reading at `0304a822`). `UndecidedInsert`
+  (`command_dispatcher.cpp`) asks down a chain of in-flight versions at most
+  `kMaxUndoChainLength` steps before answering "not an insert", so a
+  transaction that inserts key `k` and then updates its own row 2^16 times
+  leaves a chain that a second session's `INSERT` naming `k` reads as a
+  committed row: refused `AlreadyExists` at once, where BD-Q9 (a) says it
+  waits for the decide - and wrongly if the first transaction rolls back.
+  Never a wrong row. The operator's G21 ruling kept the cap ("as
+  proposed"); a cycle check would close it, every record of such a chain
+  being an in-flight writer's and so never recycled.
+
 - **A write refused by a lock unit waits on that unit's slot, and a wake is
   not a grant.** A refusal on the ask's own unit waits on its slot since
   AX-S2b, one in another unit since AY-S2, and a first encounter with a
@@ -1861,10 +1874,11 @@ Owned by `docs/spec/index.md` §10.3. The order is
   is skipped as one no reader reaches - or read again, if its deleter was in
   flight at the copy. Without the skip the build was refused, never wrong.
   Showing it needs the same seam CI-R7 does. **Neither has the re-read of a
-  head whose spilled value a rollback released under the copy** (the
-  audit's G24, verified at `030b5bd9`): the same seam, and a writer on
-  another core rolling back between the copy and the decode. Without it the
-  build was refused `NotFound`, never wrong.
+  row whose head writer's spill - the head version's or an older one's it
+  wrote - a rollback released under the copy** (the audit's G24, verified
+  at `030b5bd9`): the same seam, and a writer on another core rolling back
+  between the copy and the decode. Without it the build was refused
+  `NotFound`, never wrong.
 - **CI-R7 has no test that fails without it** `[quiet-wrong]`. A row whose
   head writer was in flight at the backfill's copy, and rolled back with
   its id below the floor before the walk, is read again instead of being

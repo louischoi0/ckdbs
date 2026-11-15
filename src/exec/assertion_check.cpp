@@ -635,8 +635,13 @@ Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager*
     wal::Lsn stamp = wal::kNoLsn;
     {
         const LatchGuard guard(latch_.get());
+        // A departure whose group the first hold found missing carries group
+        // id 0, which replay refuses whatever the check would say now.
         Status admissible =
             departure ? a.cabin.CheckDeparture(key, value) : a.cabin.CheckApply(key, value);
+        if (admissible.ok() && departure && entry.group_id == 0) {
+            admissible = Status::NotFound("bound cabin: no group for a departure to leave");
+        }
         if (!admissible.ok()) {
             auto tail = BoundCabinPage::Open(placed.value().page.bytes());
             if (!tail.ok()) return tail.status();

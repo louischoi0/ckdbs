@@ -8,7 +8,7 @@
 // any budget a walk would set itself - a var-heap chain, a relation's leaf
 // chain and a transaction's undo chain all grow with the data - and a
 // budget refuses such a chain as `Corruption` on every walk, a capacity
-// limit read as damage (the audit's G2, G16 and G19). Brent's check
+// limit read as damage (the audit's G2, G16, G19, G21 and G25). Brent's check
 // instead: the id reached at each power-of-two step is remembered, and
 // meeting it again is a cycle, found within about three times the cycle's
 // length plus its tail. No acyclic chain revisits an id, so a legal chain

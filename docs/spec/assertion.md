@@ -386,7 +386,10 @@ On a checked write (per §4.2), executed inline in the writing statement:
    record the mount's fold refused the same way, bringing every assertion
    of the instance up unenforcing. A refused check is AG3's statement error;
    it takes the entry back off the tail, still held and named by no record,
-   so the next logged entry lands at the append point replay finds.
+   so the next logged entry lands at the append point replay finds. A log
+   an older build wrote with such a stray record is not repaired: its
+   mount still leaves every assertion unenforcing, until `DROP` and
+   `CREATE ASSERTION`.
 4. **Commit:** the transaction's pending set is dropped, and nothing is
    written - no page, no record, no stamp (CK-R2). The aggregate was correct
    from admission, and `RESERVED` stays set on the entries (CK-R1), so the

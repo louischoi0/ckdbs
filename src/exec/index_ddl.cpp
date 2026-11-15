@@ -247,16 +247,6 @@ StatusOr<std::vector<parser::AstValue>> AppendVersion(const Backfill& cx,
     return row;
 }
 
-// Decodes then appends: an older version, whose decode failure fails the
-// walk as its append's would.
-StatusOr<std::vector<parser::AstValue>> DecodeAndAppendVersion(
-    const Backfill& cx, catalog::TableAccess::IndexRef& ix, std::uint64_t tuple_key,
-    std::span<const std::byte> payload) {
-    auto row = DecodeVersion(cx, payload);
-    if (!row.ok()) return row.status();
-    return AppendVersion(cx, ix, tuple_key, payload, std::move(row.value()));
-}
-
 // The row `tuple_key` as it now stands, copied out of its leaf under that
 // leaf's hold and released (I15's R1), or none: retired, rolled back,
 // purged. Descends from the clustered root as this core's catalog now
@@ -304,10 +294,13 @@ StatusOr<std::optional<StagedRow>> ReadRowAgain(const Backfill& cx, std::uint64_
 // which is the version a rollback restores. Where that read fails and the
 // writer has decided since, the row is read again as it now stands and
 // indexed instead, at most `storage::kMaxDescentRestarts` times. **So is a
-// head in flight at the copy whose spilled value the decode finds released**
-// (the audit's G24): a rollback on another core restores the row and then
-// releases the slot, so the copy can name a value that is gone while the
-// row it belonged to is back.
+// row whose head writer was in flight at the copy when a version that writer
+// wrote - the head, or an older one of its own - names a spilled value the
+// decode finds released** (the audit's G24): a rollback on another core
+// restores the row and then releases its spills, so the copy can name a
+// value that is gone while the row it belonged to is back. A re-read that
+// finds the row exactly as copied was no rollback's, and its decode failure
+// is the build's.
 Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
                       txn::UndoLog& undo, StagedRow row) {
     const auto unreachable_below = [&cx](std::uint64_t superseder) {
@@ -320,18 +313,23 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
             return unreachable_below(superseder);
         };
         bool stale = false;
-        auto decoded = DecodeVersion(cx, row.payload);
-        auto latest = decoded.ok() ? AppendVersion(cx, ix, row.tuple_key, row.payload,
-                                                   std::move(decoded.value()))
-                                   : decoded;
-        if (!decoded.ok() && cx.online && row.head_in_flight &&
-            decoded.status().code() == StatusCode::kNotFound) {
-            // A rolled-back write's spill, released under the copy (G24).
-            // Not `!IsInFlight`: the release comes before the writer leaves
-            // the in-flight table, and a statement's own take-back leaves it
-            // in flight. Read again; the re-read meets the restored row.
+        // A decode that found a spill of the head writer's own released,
+        // which the re-read below must explain (G24). Not `!IsInFlight`: a
+        // rollback releases its spills before the writer leaves the
+        // in-flight table.
+        Status released = Status::OK();
+        const auto released_under_copy = [&](const Status& decode, std::uint64_t writer) {
+            return cx.online && row.head_in_flight && writer == row.trx_id &&
+                   decode.code() == StatusCode::kNotFound;
+        };
+        auto latest = DecodeVersion(cx, row.payload);
+        if (!latest.ok() && released_under_copy(latest.status(), row.trx_id)) {
+            released = latest.status();
             stale = true;
-        } else if (!latest.ok()) {
+        } else if (latest.ok()) {
+            latest = AppendVersion(cx, ix, row.tuple_key, row.payload, std::move(latest.value()));
+        }
+        if (!stale && !latest.ok()) {
             // **Online, a `PURGE` can retire the row under the walk** (CI-S4's
             // review): it takes `IX`, not `X`, and releases a delete-marked
             // row's spilled values once its deleter is resolved for every
@@ -372,8 +370,19 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
                     // is the one already appended, so there is nothing
                     // new here.
                     if (!version.image.empty()) {
-                        auto older =
-                            DecodeAndAppendVersion(cx, ix, row.tuple_key, version.image);
+                        auto older = DecodeVersion(cx, version.image);
+                        if (!older.ok() &&
+                            released_under_copy(older.status(), version.prior_trx_id)) {
+                            // An older version the head writer wrote, its
+                            // spill released by the same rollback (G24).
+                            released = older.status();
+                            stale = true;
+                            return storage::VisitControl::kStop;
+                        }
+                        if (older.ok()) {
+                            older = AppendVersion(cx, ix, row.tuple_key, version.image,
+                                                  std::move(older.value()));
+                        }
                         if (!older.ok()) {
                             appended = older.status().WithContext(
                                 "indexing an older version of the row with tuple key " +
@@ -413,6 +422,12 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
         auto again = ReadRowAgain(cx, row.tuple_key);
         if (!again.ok()) return again.status();
         if (!again.value().has_value()) return Status::OK();  // gone: nothing to index
+        const StagedRow& now = *again.value();
+        if (!released.ok() && now.trx_id == row.trx_id && now.undo_ptr == row.undo_ptr &&
+            now.payload == row.payload) {
+            // No rollback restored it: the dead value is the row's own.
+            return released;
+        }
         row = std::move(*again.value());
     }
 }
