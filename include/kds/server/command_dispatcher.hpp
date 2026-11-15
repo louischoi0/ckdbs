@@ -729,7 +729,7 @@ private:
     // dispatcher's stream can carry. Every core's stream is the instance's
     // one, so the value is the same from every dispatcher.
     void ArmAssertionRecordBudget() noexcept {
-        if (wal_ != nullptr) enforcer_->SetRecordBudget(wal_->usable_payload_bytes());
+        if (wal_ != nullptr) enforcer_->SetRecordBudget(wal_->shared_record_payload_bytes());
     }
 
     std::function<void()> before_insert_log_for_test_;

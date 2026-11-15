@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "kds/base/contention.hpp"
-#include "kds/storage/heap/heap_chain.hpp"  // kMaxChainPages: one cycle guard, not two
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/page_header.hpp"
 
@@ -1294,11 +1294,9 @@ Status BtreeVisitFrom(
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn) {
     PageId current = first_leaf;
-    for (std::uint32_t steps = 0;; ++steps) {
-        if (Status s = storage::CheckPageWalkBudget(steps, first_leaf, "btree leaf chain");
-            !s.ok()) {
-            return s;
-        }
+    storage::LeafChainGuard guard("btree leaf chain");
+    for (;;) {
+        if (Status s = guard.Visit(current); !s.ok()) return s;
         // A bad `current` (an invalid first_leaf included) fails inside
         // the fetch - the same shape as ChainVisit, comment included.
         auto next = BtreeVisitLeafPage(store, current, access, fn);
@@ -1360,12 +1358,9 @@ StatusOr<std::uint32_t> BtreeLeafCount(storage::PageStore& store, PageId root) {
     if (!first.ok()) return first.status();
 
     PageId current = first.value();
+    storage::LeafChainGuard guard("btree leaf chain");
     for (;;) {
-        if (leaves >= heap::kMaxChainPages) {
-            return Status::Corruption("btree leaf chain from page " + std::to_string(root) +
-                                      " exceeds " + std::to_string(heap::kMaxChainPages) +
-                                      " pages; the sibling links are cyclic or corrupt");
-        }
+        if (Status s = guard.Visit(current); !s.ok()) return s;
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
         ++leaves;

@@ -1,6 +1,7 @@
 #include "kds/exec/assertion_recover.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -66,6 +67,26 @@ using storage::cabin::kEntryReserved;
 
 constexpr std::uint64_t kSegmentSize = wal::kMinSegmentSize;
 constexpr std::uint64_t kAssertionId = 77;
+
+std::string Key(std::string s);
+
+// A cabin whose snapshot run needs more than one ring - `groups` keys of
+// about 300 bytes each - built in `live` and returned as the run's input.
+wal::AssertionCabinSnapshot CabinPastOneRing(BoundCabin& live, const wal::WalManager& wal,
+                                             int groups) {
+    for (int i = 0; i < groups; ++i) {
+        live.EnsureGroupId(Key("group-" + std::string(300, 'k') + std::to_string(i)));
+    }
+    wal::AssertionCabinSnapshot cabin;
+    cabin.assertion_id = kAssertionId;
+    std::size_t bytes = 0;
+    for (const BoundCabin::GroupSnapshot& g : live.SnapshotGroups()) {
+        bytes += wal::AssertSnapshotGroupBytes(g.key.size());
+        cabin.groups.push_back(wal::AssertionSnapshotGroup{g.group_id, g.count, g.sum, g.key});
+    }
+    EXPECT_GT(bytes, wal.stream()->ring_capacity()) << "the cabin fits one ring";
+    return cabin;
+}
 constexpr PageId kCabinPage = 300;
 
 std::string Key(std::string s) {
@@ -644,17 +665,7 @@ TEST_F(AssertionRecoverTest, ACabinPastOneRingOfHeadersIsCutToChunksTheRingCanSt
         << "the default ring is no longer below the segment";
 
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
-    for (int i = 0; i < 5000; ++i) {
-        live.EnsureGroupId(Key("group-" + std::string(300, 'k') + std::to_string(i)));
-    }
-    wal::AssertionCabinSnapshot cabin;
-    cabin.assertion_id = kAssertionId;
-    std::size_t bytes = 0;
-    for (const BoundCabin::GroupSnapshot& g : live.SnapshotGroups()) {
-        bytes += wal::AssertSnapshotGroupBytes(g.key.size());
-        cabin.groups.push_back(wal::AssertionSnapshotGroup{g.group_id, g.count, g.sum, g.key});
-    }
-    ASSERT_GT(bytes, wal.stream()->ring_capacity()) << "the cabin fits one ring";
+    const wal::AssertionCabinSnapshot cabin = CabinPastOneRing(live, wal, 5000);
 
     const Status logged = wal::LogAssertionSnapshot(wal, cabin);
     ASSERT_TRUE(logged.ok()) << logged.message();
@@ -671,6 +682,84 @@ TEST_F(AssertionRecoverTest, ACabinPastOneRingOfHeadersIsCutToChunksTheRingCanSt
     ASSERT_TRUE(report.ok()) << report.status().message();
     EXPECT_TRUE(report.value().assertions[0].recovered);
     EXPECT_EQ(rebuilt.group_count(), live.group_count());
+}
+
+// **A snapshot run on the shared stream does not fail-stop the log while
+// another core appends** (the audit's G17). Cut to the ring, a chunk fit only
+// an empty ring; every drain the append made was refilled by the other core,
+// and the fourth refusal stopped the instance's one log. Cut to the largest
+// split's bound, a chunk is staged beside the other core's records - the
+// common case; a peer that refills most of the ring at every drain can still
+// defeat it, as it can a split (`known-gaps.md`). The second thread appends
+// straight to the latched stream, as a peer does.
+TEST_F(AssertionRecoverTest, ASnapshotRunBesideAnotherCoresAppendsDoesNotStopTheLog) {
+    constexpr std::uint64_t kSegment = 8 * 1024 * 1024;
+    auto device = wal::MemoryLogDevice::Create(kSegment);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    wal::WalManagerConfig config;
+    config.shared_stream = true;
+    auto manager = wal::WalManager::Open(device.value().get(), clock_, /*core_id=*/0, config);
+    ASSERT_TRUE(manager.ok()) << manager.status().message();
+    wal::WalManager& wal = *manager.value();
+
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
+    const wal::AssertionCabinSnapshot cabin = CabinPastOneRing(live, wal, 6000);
+
+    // The peer says why it stopped, so a cell whose contention silently
+    // vanished (an append failing for any other reason) cannot pass for one
+    // that held under it.
+    std::atomic<bool> done{false};
+    std::atomic<bool> peer_exited{false};
+    std::atomic<std::uint64_t> appended{0};
+    Status peer_end = Status::OK();
+    std::thread peer([&] {
+        struct Exit {
+            std::atomic<bool>& flag;
+            ~Exit() { flag.store(true, std::memory_order_release); }
+        } exit{peer_exited};
+        const std::vector<std::byte> payload(64, std::byte{0x5A});
+        while (!done.load(std::memory_order_acquire)) {
+            auto lsn = wal.stream()->Append(
+                wal::RecordSpec{wal::RecordType::kHeapInsert, 9, 300, 0}, payload);
+            if (lsn.ok()) {
+                appended.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            if (lsn.status().code() != StatusCode::kOutOfSpace) {
+                peer_end = lsn.status();
+                return;
+            }
+            if (Status s = wal.stream()->Flush(); !s.ok()) {
+                peer_end = s;
+                return;
+            }
+        }
+    });
+    // The run starts only once the peer is appending, so the contention the
+    // cell is about does not hang on how soon the thread is scheduled.
+    while (appended.load(std::memory_order_relaxed) == 0 &&
+           !peer_exited.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    const Status logged = wal::LogAssertionSnapshot(wal, cabin);
+    done.store(true, std::memory_order_release);
+    peer.join();
+    ASSERT_TRUE(logged.ok()) << logged.message();
+    EXPECT_FALSE(wal.stopped()) << "the snapshot run fail-stopped the shared log";
+    EXPECT_TRUE(peer_end.ok()) << "the peer stopped appending: " << peer_end.message();
+    EXPECT_GT(appended.load(), 0u) << "no other core's record met the run";
+    ASSERT_TRUE(wal.Flush().ok());
+
+    std::uint64_t chunks = 0;
+    auto scanned = wal::ScanLog(*device.value(), 0, 0, [&](const wal::DecodedRecord& record) {
+        if (record.type() != wal::RecordType::kAssertSnapshot) return Status::OK();
+        ++chunks;
+        EXPECT_LE(record.header.total_len, wal::kLargestSplitRecord)
+            << "a snapshot chunk outgrew the largest split's bound";
+        return Status::OK();
+    });
+    ASSERT_TRUE(scanned.ok()) << scanned.status().message();
+    EXPECT_GT(chunks, 1u) << "the cabin was not cut into a run";
 }
 
 // **A checkpoint that meets a cabin no run can carry completes** (AZ-S3,
@@ -692,7 +781,7 @@ TEST_F(AssertionRecoverTest, ACheckpointMeetingACabinNoRunCanCarryCompletesAndFa
     unsnapshottable.target_oid = 4000;
     unsnapshottable.aggregate = BoundAggregate::kSum;
     unsnapshottable.cabin = BoundCabin(BoundAggregate::kSum, /*bound=*/1'000'000);
-    unsnapshottable.cabin.EnsureGroupId(Key(std::string(wal_->usable_payload_bytes(), 'z')));
+    unsnapshottable.cabin.EnsureGroupId(Key(std::string(wal_->shared_record_payload_bytes(), 'z')));
     registry.Adopt(std::move(unsnapshottable));
     LiveAssertion other;
     other.assertion_id = kAssertionId + 1;
@@ -737,7 +826,7 @@ TEST_F(AssertionRecoverTest, AGroupNoRecordCanCarryIsRefusedBeforeAnyChunkIsWrit
     // in the cabin - here the last - leaves no partial run in the log.
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
     FillToChunk(live);
-    live.EnsureGroupId(Key(std::string(wal_->usable_payload_bytes(), 'z')));
+    live.EnsureGroupId(Key(std::string(wal_->shared_record_payload_bytes(), 'z')));
     wal::AssertionCabinSnapshot cabin;
     cabin.assertion_id = kAssertionId;
     for (const BoundCabin::GroupSnapshot& g : live.SnapshotGroups()) {
@@ -1287,7 +1376,8 @@ TEST_F(AssertionRecoverTest, ACreatesPublishRunAndACheckpointsRunOfItNeverInterl
         cv.wait(lock, [&] { return announced; });
     }
     const Status snapshot = registry.VisitSnapshots(
-        wal_->usable_payload_bytes(), [&](const std::vector<wal::AssertionCabinSnapshot>& cabins) -> Status {
+        wal_->shared_record_payload_bytes(),
+        [&](const std::vector<wal::AssertionCabinSnapshot>& cabins) -> Status {
             EXPECT_EQ(cabins.size(), 1u) << "the checkpoint ran without the created assertion";
             AppendChunk(chunks[0]);
             AppendChunk(chunks[1]);
@@ -1624,12 +1714,12 @@ TEST_F(AssertionResumeTest, ADateGroupKeyedFromALiteralMeetsItsCountAcrossAResta
 TEST_F(AssertionResumeTest, AGroupKeyNoRecordCanCarryIsRefusedAtAdmission) {
     // **The survey's question, answered by SQL** (AZ-S3): a `GROUP BY` over
     // spilled `varchar`s reaches a key past one record - seventy values of
-    // 8,000 bytes against this fixture's record, which the stream's floor
-    // (`kMinSegmentSize`) holds at about 508 KiB. The row is refused at
+    // 8,000 bytes against this fixture's record, the largest split's bound
+    // (`shared_record_payload_bytes`, about 272 KiB). The row is refused at
     // admission, before anything is placed, and `NOT_IMPLEMENTED` says
     // why: the bound is the log format's, not the data's fault.
     constexpr int kColumns = 70;
-    ASSERT_GT(kColumns * 8000u, wal_->usable_payload_bytes());
+    ASSERT_GT(kColumns * 8000u, wal_->shared_record_payload_bytes());
     std::string columns;
     std::string group;
     for (int i = 0; i < kColumns; ++i) {

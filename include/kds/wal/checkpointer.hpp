@@ -127,7 +127,7 @@ struct AssertionCabinSnapshot {
 };
 
 // Writes one cabin's group headers as `ASSERT_SNAPSHOT` records, chunked so no
-// record outgrows `wal.usable_payload_bytes()` (`payload.hpp`). A cabin no run
+// record outgrows `wal.shared_record_payload_bytes()` (`payload.hpp`). A cabin no run
 // can carry - a group larger than a record, or more than
 // `kMaxAssertSnapshotChunks` chunks - is refused `NotImplemented` before any
 // chunk is written (`AssertionSnapshotFits`).
@@ -174,7 +174,7 @@ public:
     // registry, which every core reserves into, holds its latch across the
     // call (AT-S5d, `exec/assertion_check.hpp`).
     //
-    // `record_budget` is the checkpoint's `usable_payload_bytes()`. A cabin
+    // `record_budget` is the checkpoint's `shared_record_payload_bytes()`. A cabin
     // no run of that budget can carry is the source's to deal with before
     // `visit` (AZ-S3): the registry fails it closed rather than failing the
     // checkpoint.
@@ -489,8 +489,9 @@ private:
                     std::span<const CheckpointDirtyPage> dirty_pages);
 
     // AS6a: every live cabin's group headers, chunked so no record outgrows
-    // `usable_payload_bytes()`. Emitted immediately after CHECKPOINT_BEGIN, which is what puts
-    // the base ahead of every record folded onto it.
+    // `shared_record_payload_bytes()`. Emitted immediately after
+    // CHECKPOINT_BEGIN, which is what puts the base ahead of every record
+    // folded onto it.
     Status LogAssertionSnapshots();
 
     // Complete's halves: the end record appended (its LSN), and the anchor

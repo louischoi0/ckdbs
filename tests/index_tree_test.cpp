@@ -377,6 +377,38 @@ TEST(IndexTreeTest, ACorruptedLeafIsRejectedRatherThanDescended) {
     EXPECT_EQ(StatusCode::kCorruption, seek.status().code());
 }
 
+TEST(IndexTreeTest, ALeafChainThatLinksBackIntoItselfIsCorruptionNotAHang) {
+    // The leaf walks' bound is a cycle check, not a 2^20-page budget an
+    // index past 8 GiB of leaves met on every whole walk (the audit's G19).
+    Fixture f(Layout(/*key_width=*/1000));
+    for (std::uint32_t k = 0; k < 40; ++k) ASSERT_TRUE(f.Insert(k, k + 1).ok());
+    std::vector<PageId> leaves;
+    Status walked = IndexVisit(
+        f.store, f.root, f.layout, storage::PageAccess::kRead,
+        [&](PageId page, IndexLeafView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            if (leaves.empty() || leaves.back() != page) leaves.push_back(page);
+            return storage::VisitControl::kContinue;
+        });
+    ASSERT_TRUE(walked.ok()) << walked.message();
+    ASSERT_GE(leaves.size(), 3u) << "the fixture must span leaves to prove anything";
+    auto last = f.store.Get(leaves.back());
+    ASSERT_TRUE(last.ok()) << last.status().message();
+    IndexLeafView(last.value().bytes()).set_right_sibling(leaves[1]);
+    last.value().Release();
+
+    Status s = IndexVisit(
+        f.store, f.root, f.layout, storage::PageAccess::kRead,
+        [](PageId, IndexLeafView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            return storage::VisitControl::kContinue;
+        });
+    EXPECT_EQ(s.code(), StatusCode::kCorruption) << s.message();
+    EXPECT_NE(s.message().find("revisits"), std::string::npos) << s.message();
+    auto count = IndexLeafCount(f.store, f.root, f.layout);
+    ASSERT_FALSE(count.ok());
+    EXPECT_NE(count.status().message().find("revisits"), std::string::npos)
+        << count.status().message();
+}
+
 TEST(IndexTreeTest, TheClusteredTreesPagesAreNotThisTrees) {
     // An index tree handed a clustered-tree root must say so rather than
     // parse a heap page's slot directory as an entry array.

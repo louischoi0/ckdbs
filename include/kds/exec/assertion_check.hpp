@@ -250,7 +250,9 @@ public:
     // that would add a group whose key no record can carry, or take its
     // cabin's snapshot run past `kMaxAssertSnapshotChunks`, is refused
     // `NotImplemented` before anything is placed. Set by every dispatcher with
-    // a log, from its `usable_payload_bytes()`; 0, a registry with no log,
+    // a log, from its `shared_record_payload_bytes()` - the writer's own
+    // bound, so a group admission lets in never fails the checkpoint closed;
+    // 0, a registry with no log,
     // admits every group, and the writer's refusal is the last line.
     void SetRecordBudget(std::size_t bytes) noexcept {
         record_budget_.store(bytes, std::memory_order_relaxed);

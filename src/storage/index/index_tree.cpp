@@ -4,7 +4,6 @@
 #include <string>
 
 #include "kds/base/contention.hpp"
-#include "kds/storage/heap/heap_chain.hpp"  // kMaxChainPages: one cycle guard, not two
 #include "kds/storage/page_header.hpp"
 
 namespace kds::index {
@@ -592,16 +591,11 @@ Status IndexVisitFrom(
     const std::function<StatusOr<storage::VisitControl>(PageId, IndexLeafView&, std::uint16_t)>&
         fn) {
     PageId current = first_leaf;
-    for (std::uint32_t steps = 0;; ++steps) {
-        // The same cycle guard the heap chain applies to next_page_id: a
-        // cyclic sibling link would otherwise be an infinite loop inside a
-        // request.
-        if (steps >= heap::kMaxChainPages) {
-            return Status::Corruption("index leaf chain from page " +
-                                      std::to_string(first_leaf) + " exceeds " +
-                                      std::to_string(heap::kMaxChainPages) +
-                                      " pages; the sibling links are cyclic or corrupt");
-        }
+    // A cyclic sibling link would otherwise be an infinite loop inside a
+    // request; the guard is a cycle check, not a length (G19).
+    storage::LeafChainGuard guard("index leaf chain");
+    for (;;) {
+        if (Status s = guard.Visit(current); !s.ok()) return s;
 
         auto bytes = store.Fetch(current, access);
         if (!bytes.ok()) return bytes.status();
@@ -653,12 +647,9 @@ StatusOr<std::uint32_t> IndexLeafCount(storage::PageStore& store, PageId root,
 
     std::uint32_t leaves = 0;
     PageId current = first.value();
+    storage::LeafChainGuard guard("index leaf chain");
     for (;;) {
-        if (leaves >= heap::kMaxChainPages) {
-            return Status::Corruption("index leaf chain from page " + std::to_string(root) +
-                                      " exceeds " + std::to_string(heap::kMaxChainPages) +
-                                      " pages; the sibling links are cyclic or corrupt");
-        }
+        if (Status s = guard.Visit(current); !s.ok()) return s;
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
         ++leaves;

@@ -5288,14 +5288,19 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // What can still fail here is catalog I/O. Since D2 the ERR
         // makes FinishDdlStatement abort the statement's transaction, so
         // the relation's own rows are taken back - the message must not
-        // claim otherwise. What the abort does NOT take back is any
-        // sys.fkeys row already written in this loop: CreateForeignKey
-        // reports no CatalogRowRef, so those rows never reach the trail
-        // (`git show 925f483:docs/workplan-rv3-catalog-recovery.md`'s remainder).
-        // The cross-owner foreign-key notice retired (AT-S5f, AT-S9); its
-        // history is at cf889b63.
+        // claim otherwise. **Each sys.fkeys row is on the trail too** (the
+        // audit's G20): left off it, a ROLLBACK kept the row naming a child
+        // that no longer exists, and every DELETE and DROP of the parent was
+        // refused for good, while a crash's undo retired it. The cross-owner
+        // foreign-key notice retired (AT-S5f, AT-S9); its history is at
+        // cf889b63.
         for (const PendingForeignKey& fk : pending_fkeys) {
-            auto created = catalog_.CreateForeignKey(oid.value(), fk.column_no, fk.parent_oid);
+            catalog::CatalogRowRef written;
+            auto created = catalog_.CreateForeignKey(oid.value(), fk.column_no, fk.parent_oid,
+                                                     ddl.trx_id, &written);
+            // Before the status: a row logged before a later failure is
+            // still the rollback's to retire.
+            NoteRowWritten(ddl, written);
             if (!created.ok()) {
                 // No survival claim in either direction: autocommit's
                 // abort takes the relation back, an explicit transaction
@@ -7445,12 +7450,9 @@ Status CommandDispatcher::WalkBtreeLeaves(
     bool cut = false;
     std::uint64_t cut_tuple_key = 0;
     PageId leaf = start.value();
-    const PageId walk_origin = leaf;
-    for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
-        if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation walk");
-            !s.ok()) {
-            return s;
-        }
+    storage::LeafChainGuard guard("relation walk");
+    while (leaf != kInvalidPageId) {
+        if (Status s = guard.Visit(leaf); !s.ok()) return s;
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>
             guarded = [&](PageId page_id, heap::PageView& page,

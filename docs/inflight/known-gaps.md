@@ -207,6 +207,28 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `client-manual.md` repeats it, which `7dd9b789` does not (no ring-counter
   row there). Owner: `docs/spec/wal.md` §16.
 
+- **A stale headerless bit an older build left is not repaired.** Verified
+  at `f9014108` by reading: a region whose first flush lost its free-map
+  write, re-created at the next mount by a build before the audit's G18,
+  wrote its new free map beside the old headerless map, so both landed and
+  the region now loads; an id the cursor reissued there as a headered page
+  stays marked headerless - written unstamped, read unverified, past both
+  WAL gates. Since G18 the state is never made, but nothing detects one
+  already made: that would take reading each such page. Owner:
+  `docs/spec/page.md` §5.
+
+- **A split-sized record can still lose its drains, and fail-stop the log.**
+  Verified at `f9014108` by reading: the largest `BTREE_SPLIT`, a
+  `CHECKPOINT_BEGIN` and, since the audit's G17, every assertion snapshot
+  chunk are cut to `kLargestSplitRecord` (about 272 KiB), which leaves the
+  ring room beside other cores' records - but if other cores refill more
+  than `ring_capacity` less that size during each of the
+  `kRingDrainAttempts` (4) drains, the append is refused and the log
+  fail-stops (`wal.md` §6-5). At the default 1 MiB ring that needs about
+  752 KiB of other cores' records per drain; at the 512 KiB floor, 240 KiB.
+  `ASnapshotRunBesideAnotherCoresAppendsDoesNotStopTheLog` shows the common
+  case only. Owner: `docs/spec/wal.md` §6.
+
 - **Two drivers' text still describes the old heap.** Verified at
   `18e7b511` by grep: the drivers that declared `(id int64, ...) HEAP` and meant `id`
   as the tuple key (`aggregate_benchmark.py`, `kwp_load_benchmark.py`,

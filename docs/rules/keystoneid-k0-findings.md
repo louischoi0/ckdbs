@@ -105,7 +105,7 @@ unlogged INSERT. Measured pre-v3 with `bench/keystone_alloc_bench.cpp` at
 page links to the next, taken from the free map's general supply
 (`CreateNew`) and stamped with the catalog relation's oid since
 superblock 31 (`crosscore.md` CC12 CR3). Nothing caps a chain but the
-walk budget every next-page loop owes (2^20 pages): a page holds 68
+walk budget every catalog-chain loop owes (2^20 pages): a page holds 68
 `sys.columns` rows, and no count of catalog pages bounds how many
 relations or columns the instance holds. §3's scan is O(relations)
 across pages; that scaling belongs to the catalog's lookup path.

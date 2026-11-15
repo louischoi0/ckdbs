@@ -160,7 +160,9 @@ unused (`crosscore.md` CC9).
 
 **A walk of a catalog chain is bounded by the walk budget**
 (`storage::CheckPageWalkBudget`, `kMaxPageWalkLength` = 2^20 steps), the
-bound every next-page loop owes, and not by a count of catalog pages: what
+bound every catalog-chain loop owes - a user relation's leaf walk is
+bounded by a cycle check instead (`heap-and-tuple.md` §3.1, the audit's
+G19) - and not by a count of catalog pages: what
 it stops is a cyclic link, and a long chain is not a fault. `ForFirstRow`
 and `InsertRow` refuse a spent budget `Corruption` naming the chain's root.
 

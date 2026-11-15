@@ -962,12 +962,14 @@ private:
     // of the free map (the map write order).
     struct MapRegion {
         Page free_map{};
-        // **Null until this region holds a headerless page** (FM6, D2(a)):
-        // the one headerless class is the Waystone directory's interior
-        // pages (`src/stats/waystone_dir.cpp`), so the bitmap is built only
-        // where it records something. Its id is still **reserved** in
-        // free_map at region creation - only the bytes are deferred - which
-        // is why allocated_pages() counts two for a fresh region.
+        // **Null until this region holds a headerless page** (FM6, D2(a)) -
+        // or until its creation replaced a stale image with an empty one
+        // (the audit's G18): the one headerless class is the Waystone
+        // directory's interior pages (`src/stats/waystone_dir.cpp`), so the
+        // bitmap is built only where it records something. Its id is
+        // claimed in free_map when the bitmap is installed
+        // (`InstallEmptyHeaderlessMapLocked`), so a fresh region counts one
+        // page in allocated_pages(), two once it has a bitmap.
         std::unique_ptr<Page> headerless_map;
         bool dirty = false;
         // **The headerless map changed since it was last copied** - a bit set,
@@ -1513,6 +1515,11 @@ private:
     // caller is MarkHeaderlessBeforeInsert - the moment the fact the
     // bitmap records stops being "no".
     StatusOr<std::span<std::byte, kPageSize>> EnsureHeaderlessMap(PageId page_id);
+    // Installs an empty headerless bitmap in `region`, claiming its id in the
+    // region's free map and counting it, and arms `any_headerless_`. The
+    // caller holds the map hold and has checked `region.headerless_map` is
+    // null.
+    void InstallEmptyHeaderlessMapLocked(MapRegion& region, PageId headerless_id);
 
     PageDevice& device_;
     // Syncs `device_`. Declared second, so it is destroyed (its thread
@@ -1628,7 +1635,9 @@ private:
 
     // FM6's whole-instance fast path: false until some region holds a
     // headerless bitmap, so a database with no Waystone directory answers
-    // IsHeaderless (fault path, writeback, WAL gate) with no lookup. Seeded
+    // IsHeaderless (fault path, writeback, WAL gate) with no lookup. A
+    // region re-created over a stale headerless map (G18) holds an empty
+    // bitmap, which sets it, and keeps it set on that volume. Seeded
     // at mount, moved by the one writer that can change it.
     // **Atomic, because it gates the latched read** (AM-S3's review):
     // `IsHeaderless` reads it before the map hold, and a torn read of a

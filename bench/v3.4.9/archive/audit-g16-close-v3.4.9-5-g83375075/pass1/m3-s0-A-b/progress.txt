@@ -1,0 +1,79 @@
+2026-11-14T07:24:10Z M3 preflight
+started_utc=2026-11-14T07:24:10Z
+tree=/home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes
+describe=v3.4.9-11-g5f7287a9
+head=5f7287a9
+dirty=0 (build inputs)
+bin=/tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/bin/kds_server-A2 sha256=f7e6c034de352ca65911345befdbb00ca8374e9d861774e5ef59459174aed35a
+host=Linux 6.12.116+deb13-cloud-amd64 x86_64 nproc=8 loadavg=3.43 2.66 3.15
+workroot_fs=/dev/nvme0n1p1 ext4 263968576 211170368  41946416  84% /
+competing=0
+cores=4 taskset=2-5 driver_cpus=0,1,6,7 durability=group ash_interval_ms=100
+s2: --organizations 300 --ships 30 --operations 300 --cargos 24000 --verify 100 --seed 1 --sync --bookers 8 --seconds 60 --bookings 0  (suffix m3s2)
+s0: --users 2000 --assets 2000 --traders 8 --seconds 60 --fk --txn --verify 200 --seed 1 --sync  (suffix m3s0)
+2026-11-14T07:24:10Z == M3 scenario 0: cores 4, group, --users 2000 --assets 2000 --traders 8 --seconds 60 --fk --txn --verify 200 --seed 1 --sync (disjoint partitions: C2's uncontended price, no two writers on one parent by construction)
++ python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py start --binary /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/bin/kds_server-A2 --workdir /home/louis/bench-runs/audit-g16-close/20261114T070437Z/m3-s0-A-b/s0 --port 25741 --debug-text-port 25742 --cores 4 --taskset 2-5 --durability group --buffer-pool-frames 65536 --ash on --conf-extra ash_interval_ms = 100 --log-level info --label m3-s0
++ python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m3/read_views.py --port 25741 --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run4/20261114T070437Z/m3-s0-A-b/s0-pre --label s0-pre --tools /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools
+== views read over KWP/1 :25741 at 2026-11-14T07:24:10.814581Z s0-pre
+-- sys.lock_waits (whole ring): 0 rows; granted 0 deadlock 0 fault_net 0 cancelled 0; waited_us sum 0 p50 0 max 0; by core {}
+   unit       mode outcome      rows      sum_us   p50_us    max_us   mean_us
+   holder_trx top: []; distinct holders 0; waiters with no trx 0
+-- sys.wait_stats (since boot): DB time 5099 us (cpu.on_cpu 231 us); app.lock_wait count 0 total 0 us max 0 us; share of DB time 0.0, of CPU 0.0, of statement time 0.0; app.lock_conflict 0
+   DB time parts: sched.run_queue 4868, cpu.on_cpu 231
+   core 0: DB 244 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 1: DB 3048 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 2: DB 1559 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 3: DB 246 us, lock_wait 0x 0 us share 0.0, conflicts 0
+-- sys.statement_stats (since boot): 4 shapes, 4 calls, 0 refused, 345 us
+   SELECT            4 calls      0 refused           345 us max 149
+-- sys.meta: lock_waits_recorded=0, lock_waits_overwritten=0, lock_waits_dropped=0, contention_lock_partition_waits=0, contention_lock_partition_wait_us=0, contention_lock_wait_for_waits=0, contention_lock_wait_for_wait_us=0, contention_fence_walks=0, contention_inflight_asks=0, contention_inflight_misses=0, contention_inflight_miss_ids_read=0, contention_structural_reruns=0, statement_stats_dropped=0
+   lock latches: contention_lock_partition_wait_us=0, contention_lock_partition_waits=0, contention_lock_wait_for_wait_us=0, contention_lock_wait_for_waits=0, contention_superblock_wait_us=0, contention_superblock_waits=0, contention_wal_roll_blocked_wait_us=0, contention_wal_roll_blocked_waits=0
+-- sys.ash (whole ring): 0 samples over 0.0 s; grid points per core {}; implied interval ms {}; late 0; by state {}; by kind {}
+   app.lock_wait samples 0 (None); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
+-- sys.ash (whole ring) [concurrent window: 0 bins of 1.0 s with >= 2 sessions, max 0 in a bin, 0 rows outside]: 0 samples over 0.0 s; grid points per core {}; implied interval ms {}; late 0; by state {}; by kind {}
+   app.lock_wait samples 0 (None); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
++ timeout 900 taskset -c 0,1,6,7 python3 /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/scenario0_stockmarket.py --port 25741 --suffix m3s0 --users 2000 --assets 2000 --traders 8 --seconds 60 --fk --txn --verify 200 --seed 1 --sync --server-log /home/louis/bench-runs/audit-g16-close/20261114T070437Z/m3-s0-A-b/s0/kdb.log --json /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run4/20261114T070437Z/m3-s0-A-b/s0.json
+2026-11-14T07:25:18Z s0-run rc=0
++ python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m3/read_views.py --port 25741 --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run4/20261114T070437Z/m3-s0-A-b/s0-post --label s0-post --tools /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools --baseline /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run4/20261114T070437Z/m3-s0-A-b/s0-pre.views.json
+   core 0: DB 83478729 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 1: DB 83178088 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 2: DB 84145463 us, lock_wait 0x 0 us share 0.0, conflicts 0
+   core 3: DB 87510526 us, lock_wait 0x 0 us share 0.0, conflicts 0
+-- sys.wait_stats delta since baseline: DB time 338307713 us (cpu.on_cpu 43780229 us); app.lock_wait count 0 total 0 us max - us; share of DB time 0.0, of CPU 0.0, of statement time 0.0; app.lock_conflict 0
+   DB time parts: commit.wal_flush 287813554, cpu.on_cpu 43780229, sched.run_queue 5520118, sysio.wal_write 988058, sysio.checkpoint 205754
+-- sys.statement_stats (since boot): 19 shapes, 1872889 calls, 0 refused, 329196592 us
+   COMMIT       310440 calls      0 refused     284957479 us max 286727
+   INSERT       629862 calls      0 refused      26046728 us max 218124
+   UPDATE       620880 calls      0 refused      16800470 us max 6520
+   BEGIN        310440 calls      0 refused        973163 us max 2187
+   SELECT         1260 calls      0 refused        410054 us max 1067
+   SYNC              1 calls      0 refused          4953 us max 4953
+   CREATE            5 calls      0 refused          3431 us max 951
+   SHOW              1 calls      0 refused           314 us max 314
+   delta since baseline: 1872885 calls, 0 refused, 329196247 us; COMMIT 310440x/284957479us, INSERT 629862x/26046728us, UPDATE 620880x/16800470us, BEGIN 310440x/973163us, SELECT 1256x/409709us, SYNC 1x/4953us
+-- sys.meta: lock_waits_recorded=0, lock_waits_overwritten=0, lock_waits_dropped=0, contention_lock_partition_waits=143782, contention_lock_partition_wait_us=221887, contention_lock_wait_for_waits=0, contention_lock_wait_for_wait_us=0, contention_fence_walks=0, contention_inflight_asks=0, contention_inflight_misses=0, contention_inflight_miss_ids_read=0, contention_structural_reruns=2, statement_stats_dropped=0
+   lock latches: contention_lock_partition_wait_us=221887, contention_lock_partition_waits=143782, contention_lock_wait_for_wait_us=0, contention_lock_wait_for_waits=0, contention_superblock_wait_us=0, contention_superblock_waits=0, contention_wal_roll_blocked_wait_us=38577, contention_wal_roll_blocked_waits=18
+   per core: load_c0_waited_lock_partition_us=56434, load_c1_waited_lock_partition_us=55113, load_c2_waited_lock_partition_us=54722, load_c3_waited_lock_partition_us=55617
+   delta since baseline: contention_assertion_dir_wait_us=19, contention_assertion_dir_waits=56, contention_carve_longest_us=200288, contention_carves=136, contention_catalog_memo_drops=16, contention_checkpoint_longest_us=171019, contention_checkpoint_pages_written=17530, contention_checkpoint_runs=51, contention_data_syncs=418, contention_drain_passes_pending=1959604, contention_frame_table_wait_us=2800982, contention_frame_table_waits=2641536, contention_free_map_wait_us=1111, contention_free_map_waits=1424, contention_lock_partition_wait_us=221887, contention_lock_partition_waits=143782, contention_page_latch_spin_turns=11226527, contention_page_latch_waits=155904, contention_refused_btree_descend=2, contention_structural_reruns=2, contention_syncs_inline=8, contention_syncs_writer=111967, contention_visibility_window_lookups=3695960, contention_wal_drain_latch_wait_us=25852, contention_wal_roll_blocked_wait_us=38577, contention_wal_roll_blocked_waits=18, contention_wal_stream_wait_us=111590, contention_wal_stream_waits=81284, contention_wal_sync_gate_wait_us=9697, contention_wal_sync_gate_waits=15, contention_window_wait_us=2572243, contention_window_waits=43665, contention_word_moves_resolve=10, contention_word_moves_root=6, contention_word_moves_schema=38
+-- sys.ash (whole ring): 3727 samples over 67.3 s; grid points per core {0: 545, 1: 547, 2: 547, 3: 591}; implied interval ms {3: 110.3, 0: 111.0, 1: 109.7, 2: 113.6}; late 0; by state {'WAITING': 2792, 'RUNNABLE': 935}; by kind {'session': 3711, 'background': 16}
+   commit.wal_flush                2790
+   cpu.on_cpu                       935
+   sysio.wal_write                    2
+   app.lock_wait samples 0 (0.0); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
+-- sys.ash (whole ring) [concurrent window: 61 bins of 1.0 s with >= 2 sessions, max 15 in a bin, 46 rows outside]: 3681 samples over 60.5 s; grid points per core {0: 545, 1: 547, 2: 546, 3: 546}; implied interval ms {3: 110.8, 0: 111.0, 1: 109.7, 2: 109.9}; late 0; by state {'WAITING': 2753, 'RUNNABLE': 928}; by kind {'session': 3666, 'background': 15}
+   commit.wal_flush                2751
+   cpu.on_cpu                       928
+   sysio.wal_write                    2
+   app.lock_wait samples 0 (0.0); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
+-- sys.ash since baseline: 3727 samples over 67.3 s; grid points per core {0: 545, 1: 547, 2: 547, 3: 591}; implied interval ms {3: 110.3, 0: 111.0, 1: 109.7, 2: 113.6}; late 0; by state {'WAITING': 2792, 'RUNNABLE': 935}; by kind {'session': 3711, 'background': 16}
+   commit.wal_flush                2790
+   cpu.on_cpu                       935
+   sysio.wal_write                    2
+   app.lock_wait samples 0 (0.0); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
+-- sys.ash since baseline [concurrent window: 61 bins of 1.0 s with >= 2 sessions, max 15 in a bin, 46 rows outside]: 3681 samples over 60.5 s; grid points per core {0: 545, 1: 547, 2: 546, 3: 546}; implied interval ms {3: 110.8, 0: 111.0, 1: 109.7, 2: 109.9}; late 0; by state {'WAITING': 2753, 'RUNNABLE': 928}; by kind {'session': 3666, 'background': 15}
+   commit.wal_flush                2751
+   cpu.on_cpu                       928
+   sysio.wal_write                    2
+   app.lock_wait samples 0 (0.0); holders (p1) top []; distinct 0; elapsed p50 0 max 0 us; fingerprints []
++ python3 /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m1m4/srv.py stop --workdir /home/louis/bench-runs/audit-g16-close/20261114T070437Z/m3-s0-A-b/s0
+2026-11-14T07:25:19Z M3 done; outputs under /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/run4/20261114T070437Z/m3-s0-A-b (s2.json, s0.json, *-pre/*-post.views.json/.txt, *.log, stamp.txt, timeline.txt)

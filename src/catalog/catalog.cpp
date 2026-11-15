@@ -3749,7 +3749,8 @@ StatusOr<std::uint64_t> Catalog::CreateExprCabin(Oid rel_oid, std::uint8_t shape
 }
 
 StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16_t child_column_no,
-                                                  Oid parent_rel_oid, std::uint16_t flags) {
+                                                  Oid parent_rel_oid, std::uint64_t trx_id,
+                                                  CatalogRowRef* where) {
     auto child = InitTableAccess(child_rel_oid);
     if (!child.ok()) return child.status();
     auto parent = InitTableAccess(parent_rel_oid);
@@ -3790,7 +3791,7 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     row.child_rel_oid = child_rel_oid;
     row.parent_rel_oid = parent_rel_oid;
     row.child_column_no = child_column_no;
-    row.flags = flags;
+    row.flags = 0;
     // kFkNullable's one writer, stamped from the column's declaration - the
     // moment the fact is known and the only moment it can change (no ALTER
     // touches nullability). Enforcement never reads it: a NULL fk value
@@ -3801,9 +3802,16 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
         row.flags |= kFkNullable;
     }
 
-    if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageFkeys, row, kBootstrapXid); !s.ok()) {
-        return s;
+    const Status inserted =
+        InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageFkeys, row, trx_id, where);
+    // The identity a rollback's compensation re-reads, set on a failure too,
+    // as `InsertCabinRow` sets it: a row logged before the failure is still
+    // the rollback's to retire.
+    if (where != nullptr) {
+        where->oid = row.fk_id;
+        where->rel_oid = kSysFkeysTable;
     }
+    if (!inserted.ok()) return inserted;
 
     // **Bumped**, and note which entries it has to reach: a new foreign key
     // stales `fkeys_out` on the child *and* `fkeys_in` on the parent, which

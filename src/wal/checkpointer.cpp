@@ -21,11 +21,9 @@ Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
     // keeping the highest page id - the allocation floor analysis takes from
     // a recLSN-0 page, which no record names; the redo start and the
     // writeback stay the whole table's (`Start`). The bound is the largest
-    // split's, not the ring: on a shared stream a ring-sized record fits only
-    // an empty ring, and the drains other cores refill end in fail-stop.
+    // split's, not the ring (`WalManager::shared_record_payload_bytes`).
     std::vector<CheckpointDirtyPage> cut;
-    const std::size_t budget =
-        std::min(wal_.usable_payload_bytes(), kLargestSplitRecord - kRecordHeaderSize);
+    const std::size_t budget = wal_.shared_record_payload_bytes();
     const std::size_t fixed = CheckpointBeginSize(active_txns.size(), 0);
     if (CheckpointBeginSize(active_txns.size(), dirty_pages.size()) > budget &&
         fixed + kDirtyEntrySize <= budget) {
@@ -111,8 +109,10 @@ Status AssertionSnapshotFits(const AssertionCabinSnapshot& cabin, std::size_t re
 Status LogAssertionSnapshot(WalManager& wal, const AssertionCabinSnapshot& cabin) {
     // The chunk bound: what one record's payload may hold. A cabin's group count
     // is bounded by the data, so a cabin can need several records - a run, each
-    // chunk naming its place in it (payload.hpp, AY-R7).
-    auto cut = CutRun(cabin, wal.usable_payload_bytes());
+    // chunk naming its place in it (payload.hpp, AY-R7). The largest split's
+    // bound, not the ring's: a ring-sized chunk on the shared stream
+    // fail-stops the log (`shared_record_payload_bytes`, G17).
+    auto cut = CutRun(cabin, wal.shared_record_payload_bytes());
     if (!cut.ok()) return cut.status();
     const std::vector<SnapshotChunk>& chunks = cut.value();
 
@@ -172,7 +172,7 @@ Status Checkpointer::LogAssertionSnapshots() {
         return Status::OK();  // no assertions on this core: no records, no cost
     }
     return assertions_->VisitSnapshots(
-        wal_.usable_payload_bytes(),
+        wal_.shared_record_payload_bytes(),
         [this](const std::vector<AssertionCabinSnapshot>& cabins) -> Status {
             for (const AssertionCabinSnapshot& cabin : cabins) {
                 if (Status s = LogAssertionSnapshot(wal_, cabin); !s.ok()) {

@@ -1147,16 +1147,26 @@ public:
     // is what that path would need, and it does not exist to need it.
     //
     // Fails with NotFound for either relation; InvalidArgument for column 0,
-    // a column past the schema, or a column that cannot hold a Keystone id;
-    // NotImplemented for a heap parent or a cross-core pair (F5, both named
-    // open in foreign-keys.md); AlreadyExists
-    // for a second foreign key on the same column.
+    // a column past the schema, a column that cannot hold a Keystone id, or
+    // a system relation as the parent; Unsupported for a heap parent (BZ-R7,
+    // its tuple key is hidden); NotImplemented for a self-reference;
+    // AlreadyExists for a second foreign key on the same column.
     //
     // **Bumps the catalog version**, and reaches further than its arguments:
     // the parent's cached `fkeys_in` is stale too. Not to be called from a
     // statement path holding a `const TableAccess*`.
+    //
+    // **The row is the creating DDL's** when `trx_id` and `where` name it
+    // (the audit's G20, `ddl-transactional.md` §5): stamped with the
+    // transaction, reported through `where` - set on a failure too, since a
+    // row logged before it is still the rollback's - for the caller to note
+    // on the trail, and so retired by a `ROLLBACK` as by the mount's undo of
+    // a loser. The defaults, `kBootstrapXid` and no report, are a write no
+    // transaction owns.
     StatusOr<std::uint64_t> CreateForeignKey(Oid child_rel_oid, std::uint16_t child_column_no,
-                                             Oid parent_rel_oid, std::uint16_t flags = 0);
+                                             Oid parent_rel_oid,
+                                             std::uint64_t trx_id = kBootstrapXid,
+                                             CatalogRowRef* where = nullptr);
 
     // Every sys.fkeys row, in page order. The inspection surface behind
     // `SHOW FKEYS`, and what InitTableAccess() builds both per-relation

@@ -521,7 +521,7 @@ TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
     int snapshots = 0;
     while (writing.load(std::memory_order_acquire) > 0) {
         ASSERT_TRUE(enforcer
-                        .VisitSnapshots(owner.value()->usable_payload_bytes(),
+                        .VisitSnapshots(owner.value()->shared_record_payload_bytes(),
                                         [&](const std::vector<wal::AssertionCabinSnapshot>& cabins)
                                             -> Status {
                             for (const wal::AssertionCabinSnapshot& cabin : cabins) {
