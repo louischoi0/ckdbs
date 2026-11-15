@@ -24,3 +24,12 @@ before the merge.
 | **F4-3** - F4 against CR | (a) F4 first, on its own, so that CR-S0's census reads a tree with F4 in it; (b) fold F4 into CR | **(a)** |
 | **F4-4** - what form the work takes | (a) a work order of its own; (b) a fix on a worktree, the pending entry carrying the claim, as G1-G15 were taken | **(b)**: the pending entry carries the claim, the scenario and the fix, and one stage needs no order |
 | **F4-6** - a measurement | (a) one contended cell at the close, interleaved A/B in `build-release`; (b) none | **(a)**: the added cost falls only on a row whose current writer is invisible and whose page version fails the WHERE - one undo read and one decode |
+
+## 3. The cost accepted, and landed
+
+| | |
+|---|---|
+| **Word** | W2, on 2026-11-15, after CLA reported the close measurement: *"`$!a`, push no verify"* |
+| **Mark** | **F4-M (a)**, the operator's own mark: the measured cost is accepted as the fix's - nil on the common path, about 123 ns of server CPU per row on a row whose writer the view cannot see and whose page version fails the WHERE (`bench/v3.4.10/results-audit-f4-overhead-v3.4.10-1-g4f5b2e17.md`); no profiling or memo of the in-flight answer is owed. **Landed:** `worktree-audit-f4-where-on-snapshot` merged to `main` with `--no-ff` and pushed with `--no-verify`. The hook was skipped; the full suite had run 4462/4462 at `4f5b2e17`, and every commit after it is documents only |
+| **Does not settle** | a version; CR-Q1..Q8 |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
