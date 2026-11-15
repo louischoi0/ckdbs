@@ -775,6 +775,41 @@ snapshot and its write; KDS aborts retryably rather than re-reading. That is
 stricter than PostgreSQL's `READ COMMITTED` and was a deliberate simplification —
 there is no re-read loop.
 
+**Which version selects a row** (F4, the operator's ruling `$!a` of
+2026-11-15, `instructions/v3.2.0/raft-marks-2026-11-15.md` §1;
+`WriteWalk::Qualify`). The table above decides a row an `UPDATE` or a
+`DELETE` wants, and the WHERE decides which rows it wants. A row whose
+writer the statement's view can see is judged on the page's version, which
+is the snapshot's. A row whose current writer it cannot see is judged on
+the page's version first: a match goes to the table, which waits on or
+refuses that writer. A miss goes on as this table says:
+
+| The current writer, `cur` | The page's version fails the WHERE |
+|---|---|
+| undecided, at either level | the snapshot's version is resolved through the undo chain and tested; a match goes to the table above - so the statement waits for `cur`'s decide - and a miss or no visible version skips the row |
+| committed after the view, `REPEATABLE READ` | the same: a snapshot match is refused first-updater-wins - the row the statement's state says matches has a newer version |
+| committed after the view, `READ COMMITTED` | skipped - the page's version is the newest committed state and fails the WHERE, which is the answer PostgreSQL's re-check of the newest version gives |
+| this transaction | skipped - the statement's own write, which an autocommit view (owned by nobody) cannot see as its own |
+
+Before the ruling every such miss was skipped, so a holder's rollback left a
+committed write that had missed a row matching in every committed state.
+The undo chain is read under the walk's leaf hold: the bytes are already
+copied out, and the undo page is taken shared after the leaf, the order
+the walk's own `AppendUndo` takes it in. A version reached through undo is
+never written - `Claim` refuses one the conflict check would admit,
+`Corruption`, a state no view allows.
+
+Two residues, each a retryable refusal where a skip was owed, never a
+wrong answer. First, a writer `IsInFlight` reads as undecided that commits
+before `Claim` asks is refused as committed-after-the-view. Second, the
+collection pass (a WHERE holding a subquery) collects a row by its
+snapshot's version, and the write walk does not test the WHERE again: if
+the holder commits between the collection pass and the write walk's claim -
+a wait for it included - `READ COMMITTED` refuses the row instead of
+skipping it. That is the usual outcome for a statement that has written
+rows and parks on the holder, which then commits. A statement that has
+written nothing is re-run whole and skips the row.
+
 **Five modes since CP-S2b** (CP-Q2 (a), `raft-marks-2026-11-08.md` §1;
 `instructions/v3.2.0/workorder-cp-lock-model-exploration.md` §8.3): `IS`,
 `IX`, `S`, `U`, `X`. **`U` is a version claim**: its holder may write a

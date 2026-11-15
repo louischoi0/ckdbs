@@ -1648,6 +1648,13 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   undecided holder **waits for it** rather than being refused
   (`docs/spec/txn.md` §5):
   `ERR TXN_CONFLICT retryable=1 row id=<n> was written by transaction <n>`.
+  An `UPDATE` or `DELETE` selects rows by the version its snapshot sees:
+  a row another transaction has changed but not committed is waited for
+  when the version this statement sees matches the `WHERE`, even if the
+  uncommitted change does not match. Under `READ COMMITTED` a row whose
+  newer committed version fails the `WHERE` is skipped. Under
+  `REPEATABLE READ` that row is refused, because the statement's own
+  state says it matches.
 - A failed statement inside an explicit transaction **poisons the session**:
   only `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING` are admitted (a whitelist)
   until the client rolls back. An autocommit statement is its own
