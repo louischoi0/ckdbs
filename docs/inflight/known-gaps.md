@@ -1849,6 +1849,37 @@ Verified on `ce-streaming-reply` at `9e568b44` (CE-S1..S4). Owned by
   and CE-S1's byte-identical reply for every shape that does not stream -
   only the capped portal has a cell.
 
+## `READ ONLY` transactions (CS)
+
+Verified on `cs-read-only-transaction` at `adbea55b` (CS-S1, CS-S2). Owned
+by `docs/spec/txn.md` §1 ("The access mode"); the order is
+`instructions/v3.2.0/workorder-cs-read-only-transaction.md`.
+
+- **A `READ ONLY` transaction holds a reader-lease slot for its whole
+  life**, idle time included, and shares the core's 256 with every
+  suspended `SELECT` walk (CS-R6, CS-Q5 (a)). 256 idle read-only
+  transactions on one core refuse that core's next walk head and next
+  `BEGIN READ ONLY` `OutOfSpace` until one ends - at the latest at the 60 s
+  lifetime ceiling. No measurement has shown starvation; none was taken.
+- **Only the declared form is cheap.** An undeclared `BEGIN` that only reads
+  still draws an id, logs `TXN_BEGIN`/`TXN_COMMIT` and, under `strict`,
+  syncs at `COMMIT` (CS-S0: `bench/v3.4.11/results-cs-s0-premise-v3.4.11-3-gbbaff33a.md`).
+  Lazy id assignment is not built; its census is
+  `docs/pending/lazy-id-assignment-census.md` (CS-Q9).
+- **KWP has no access byte.** `C_TXN_BEGIN{durability}` opens a `READ WRITE`
+  transaction (`READ ONLY` on a `readonly` connection), and a KWP client
+  asks for `READ ONLY` by sending the statement text (CS-Q4 (a)).
+- **The refusal is on the routing token, not the parse.** An admitted verb
+  that a later grammar let carry a write (a data-modifying `WITH`, say)
+  would pass the head gate. `BeginWrite`'s second line refuses it there,
+  but only on a route that opens a write scope.
+- **What the cells do not cover**: a read-only transaction across a
+  session move. None can happen: the placer moves only a session with no
+  transaction. Also uncovered: `C_CANCEL` of a walk inside one, and a
+  `READ COMMITTED` read-only transaction whose lease is re-pointed while
+  another core's undo purge runs. The purge cells cover `PURGE`'s horizon
+  gate, not the undo purge's.
+
 ## The online index build (CI)
 
 Verified on `worktree-online-index-build` at `614864c4` (CI-S1, CI-S2).
