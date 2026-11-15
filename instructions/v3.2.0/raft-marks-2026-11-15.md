@@ -33,3 +33,12 @@ before the merge.
 | **Mark** | **F4-M (a)**, the operator's own mark: the measured cost is accepted as the fix's - nil on the common path, about 123 ns of server CPU per row on a row whose writer the view cannot see and whose page version fails the WHERE (`bench/v3.4.10/results-audit-f4-overhead-v3.4.10-1-g4f5b2e17.md`); no profiling or memo of the in-flight answer is owed. **Landed:** `worktree-audit-f4-where-on-snapshot` merged to `main` with `--no-ff` and pushed with `--no-verify`. The hook was skipped; the full suite had run 4462/4462 at `4f5b2e17`, and every commit after it is documents only |
 | **Does not settle** | a version; CR-Q1..Q8 |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 4. Oracle's read-only transaction, and a work order written
+
+| | |
+|---|---|
+| **Word** | W1, on 2026-11-15, after CLA's survey of Oracle features this engine could adopt (item 1: a `READ ONLY` transaction over an SCN-style snapshot) and CLA's reading of the tree, which found the one-number snapshot already built (the commit LSN ceiling) and the writer's machinery spent at every `BEGIN`: *"Write the work order for item 1."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-cs-read-only-transaction.md` is written and not opened.** The letter CS is CLA's proposal |
+| **Does not settle** | the opening of CS or of any stage; CS-Q0 to CS-Q9, each CLA's proposal only - CS-Q1 among them, whether CS-S0's measurement can stop the build; a merge, a push, a version |
+| **Recorded at** | this file; the order's header and §7; the CS row and this file's row in `instructions/v3.2.0/index.md` |
