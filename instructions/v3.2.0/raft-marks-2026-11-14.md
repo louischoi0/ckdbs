@@ -46,7 +46,7 @@ per-item mark.
 | **Mark** | **W4:** G16-G20 verified by two lenses each at `6a3ce231`, all five surviving (the pending entry's §9, `63fec9d6`). **W5:** G16-G20 taken up as one milestone, on worktree `audit-g1-g15-fixes` (its directory; a worktree-isolated session cannot create a second one) on branch `worktree-audit-g16-g20-fixes` from `63fec9d6`. **G17-D and G20-D are the operator's own marks**: the contract changes the verifiers proposed - G17's record bound (`assertion.md`'s AZ-S3 paragraph, `wal.md` §4.1) cut to the largest split's, and G20's `sys.fkeys` rows on the `CREATE TABLE`'s trail (`ddl-transactional.md` §5) |
 | **Does not settle** | G21-G64, the 15 unread slices, a merge, a push, a version |
 | **Recorded at** | this file; the pending entry; the index row |
-| **Closed** | on the work branch at `bcfedce5`: three reviews (the step's two-lens workflow, then a second round), every new cell failing on `63fec9d6`, the full suite 4458/4458 after `origin/main` merged at `5f7287a9`, the sim corpus 280/0, the close's A/B with no shape regressed (`bench/v3.4.9/results-audit-g16-close-v3.4.9-5-g83375075.md`). Waits for the word to land |
+| **Closed** | on the work branch at `bcfedce5`: three reviews (the step's two-lens workflow, then a second round), every new cell failing on `63fec9d6`, the full suite 4458/4458 after `origin/main` merged at `5f7287a9`, the sim corpus 280/0, the close's A/B with no shape regressed (`bench/v3.4.9/results-audit-g16-close-v3.4.9-5-g83375075.md`). Landed and tagged, §5 |
 
 Decisions adopted on the standing go-ahead of 2026-11-14
 (go-ahead-achieving-milestone), not the operator's per-item marks:
@@ -59,3 +59,11 @@ Decisions adopted on the standing go-ahead of 2026-11-14
 | **G19-D** - the leaf walks' guard | (a) `storage::LeafChainGuard`, `Visit(page)` at each loop head, the origin first; (b) `Revisits(next)` threaded through each loop | **(a)**: one call shape at all nine sites, in place of the budget check it replaces |
 | **G20-D2** - `CreateForeignKey`'s new parameters | (a) defaulted `trx_id` and `where`, so tests and bootstrap stay a write no transaction owns; (b) required | **(a)**, as `CreateCabin` has them |
 
+## 5. G16-G20 landed and tagged
+
+| | |
+|---|---|
+| **Words** | W6, on 2026-11-15: *"push no verify"*; W7, the same day: *"tag 3.4.10"* (each given in Korean; recorded in English) |
+| **Mark** | **W6:** `worktree-audit-g16-g20-fixes` merged to `main` with `--no-ff` at `8d3adccc` and pushed with `--no-verify`. The hook was skipped; the full suite had run 4458/4458 at `bcfedce5`, after `origin/main` merged, and `8d3adccc`'s tree is `c210a872`'s, which changed no build input since. **W7:** `v3.4.10` is an annotated tag at `8d3adccc`, pushed; its message carries what is built and the gaps that bound it. `CLAUDE.md`'s version line moved in a documents-only commit |
+| **Does not settle** | G21-G64 (less G22 and G59), the 15 unread slices, F4 |
+| **Recorded at** | this file; the tag message; `CLAUDE.md`'s Version Management; this file's row in `instructions/v3.2.0/index.md` |
