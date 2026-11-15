@@ -1,9 +1,9 @@
 # Work order CS - `BEGIN READ ONLY`: a transaction that issues no id, logs nothing and is a held snapshot
 
-Status: **OPENED 2026-11-15** on the operator's standing go-ahead of
+Status: **CLOSED 2026-11-15 on the work branch, not landed** - every stage on worktree `cs-read-only-transaction`, the close measured (§7's CS-S3); landing waits for the operator's word. Opened 2026-11-15 on the operator's standing go-ahead of
 2026-11-15 (go-ahead-achieving-milestone, argument
 `cs-read-only-transaction`), on worktree `cs-read-only-transaction` from
-`32354dbe` (`v3.4.11-1-g32354dbe`). **CS-Q0..Q9 are adopted as CLA
+`32354dbe` (`v3.4.11-1-g32354dbe`). **CS-Q0..Q11 are adopted as CLA
 proposed** under that word (`raft-marks-2026-11-15.md` §8); none is the
 operator's own per-item mark. Written on `main` from `030b5bd9`
 (`v3.4.10-1-g030b5bd9`) on the operator's word of 2026-11-15
@@ -433,3 +433,59 @@ safe intermediate tree.
   `manual/client/client.md`.
 
 Overhead not measured; measured at the milestone's close.
+
+### CS-S3 - the close, 2026-11-15
+
+On worktree `cs-read-only-transaction`. The measurement is
+`bench/v3.4.11/results-cs-close-v3.4.11-6-gadbea55b.md`, committed at
+`20228de1`. A = `32354dbe` (opened from) and B = `adbea55b` (the closing
+code; every commit after it is documents, bench or tools only), both
+Release from `git archive` exports, with an A2 control byte-identical to A.
+Interleaved, about 26 minutes in all, host load 2-8.
+
+- **CS-R5 is met.** Server CPU per unit at `cores = 1`, `relaxed`, one
+  connection, pooled over 200, 1,000 and 10,000 rows, 14 runs:
+
+  | shape | B−A | A2−A |
+  |---|---|---|
+  | autocommit tuple-key `SELECT` | +0.08 µs (SE 0.15) | −0.04 |
+  | autocommit point `UPDATE` | +0.27 µs (SE 0.14) | −0.02 |
+  | `READ WRITE` `BEGIN; 4 SELECTs; COMMIT` | −0.81 µs (SE 0.86) | −0.29 |
+
+  **The `UPDATE` delta is not resolved**: +0.27 µs on 26.5, positive at all
+  three sizes, about 1.9 SE, so below 1 % but not ruled out. B's only new
+  instructions on that path are the statement head's `in_read_only_txn()`
+  test, a load and a branch, and `BeginWrite`'s test sits inside the
+  explicit-transaction arm, which autocommit does not take. Stated, not
+  remedied.
+- **The win** (arm R = `BEGIN READ ONLY; k reads; COMMIT` on B):
+  - R appends 0.00-0.10 WAL bytes per group in every cell, against W's
+    64.
+  - Under `strict`, R runs 4.7-10x W's throughput at `k = 1` and 1.6-2.3x
+    at `k = 16`. The sync is the difference.
+  - Under `relaxed`, R and W are indistinguishable: within each cell's
+    spread, −13 % to +23 %. A server-CPU supplement prices the gap at
+    1.8 µs per group at `k = 1` and 9.4 µs at `k = 16`, out of the
+    `BEGIN`+`COMMIT` pair's about 30 µs.
+  - R tracks autocommit at `k = 16` in all 8 cells. At `k = 1` it is
+    46-60 % below autocommit: the two extra statements, not the engine.
+  - `read_only_begins` reads 1 per R group at `cores = 1`. At `cores = 4`
+    `sys.meta` showed only the probing session's core, so the WAL bytes
+    carry that claim.
+- **Cut to the budget**: one table size for the matrix, `k` in {1, 16},
+  no `group` durability, 4 repeats of 2 s, no A2 for the supplement, no
+  wait decomposition, no PostgreSQL floor.
+- **The durable content moved**:
+  - `txn.md` §1 (the access mode), `sched.md`, `protocol.md` §11 and §14,
+    `sys-views.md` §7;
+  - `manual/sql/sql.md` §5 and §8, `manual/client/client.md`;
+  - `known-gaps.md` ("`READ ONLY` transactions (CS)");
+  - `docs/pending/lazy-id-assignment-census.md`;
+  - `CLAUDE.md`'s Transactions & MVCC row and the index row.
+
+  No `bugs/` entry: nothing was found and left unfixed.
+- **Synced**: `origin/main` has not moved since `32354dbe`, so the merge
+  brought nothing.
+
+**CS is closed on the work branch.** Landing on `main`, a push and any tag
+wait for the operator's word.
