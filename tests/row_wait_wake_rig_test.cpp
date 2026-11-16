@@ -552,7 +552,7 @@ TEST(RowWaitWakeRigTest, ACrossCoreRowCycleRefusesTheWaiterThatClosesItAndTheOth
 // `NoteBlockingWriter` alone - no kick to core 1 follows the decide.
 void BusyUniqueKeyIsKickedAtTheRelease(const std::vector<std::string>& seed,
                                        const std::string& holder_write, const char* decide,
-                                       const char* expected_prefix) {
+                                       const char* expected) {
     // Before the rig, so a failed assertion's early return stops the
     // reactors before the frames they borrow go.
     Session holder;
@@ -615,20 +615,17 @@ void BusyUniqueKeyIsKickedAtTheRelease(const std::vector<std::string>& seed,
     rig->wake().Advance(2);
     ASSERT_TRUE(Within(1000ms, [&] { return insert.done.load(std::memory_order_acquire); }))
         << "core 1's INSERT did not proceed at the kick; " << Since(before_kick, *rig, 1);
-    if (expected_prefix != nullptr) {
-        EXPECT_TRUE(StartsWith(insert.out.response, expected_prefix)) << insert.out.response;
-    } else {
-        // `AlreadyExists` renders with no token of its own.
-        EXPECT_NE(insert.out.response.find("is already held by tuple key"), std::string::npos)
-            << insert.out.response;
-    }
+    EXPECT_NE(insert.out.response.find(expected), std::string::npos) << insert.out.response;
     rig->Stop();
     EXPECT_EQ(rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
 }
 
+// `AlreadyExists` renders with no token of its own: matched on its words.
+constexpr const char* kKeyHeld = "is already held by tuple key";
+
 TEST(RowWaitWakeRigTest, ABusyUniqueKeyUnderAnUndecidedInsertIsKickedAtItsCommit) {
     // The holder's tuple `X` on the row it placed refuses the probe.
-    BusyUniqueKeyIsKickedAtTheRelease({}, "INSERT INTO t VALUES (1, 7, 0)", "COMMIT", nullptr);
+    BusyUniqueKeyIsKickedAtTheRelease({}, "INSERT INTO t VALUES (1, 7, 0)", "COMMIT", kKeyHeld);
 }
 
 TEST(RowWaitWakeRigTest, ABusyUniqueKeyUnderAnUndecidedInsertIsKickedAtItsRollback) {
@@ -640,7 +637,7 @@ TEST(RowWaitWakeRigTest, ABusyUniqueKeyUnderAnUpdateOfAnotherColumnIsKickedAtIts
     // The conservative arm (`index_maintain.hpp`): the holder moves no key,
     // and the row is busy all the same. Its per-row `U` refuses the probe.
     BusyUniqueKeyIsKickedAtTheRelease({"INSERT INTO t VALUES (1, 7, 0)"},
-                                      "UPDATE t SET note = 1 WHERE note = 0", "ROLLBACK", nullptr);
+                                      "UPDATE t SET note = 1 WHERE note = 0", "ROLLBACK", kKeyHeld);
 }
 
 TEST(RowWaitWakeRigTest, ABusyUniqueKeyUnderADeclaredRangeIsKickedAtItsRelease) {

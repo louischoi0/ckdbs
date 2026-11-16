@@ -684,8 +684,15 @@ are answered by machinery the engine already had, plus one lock unit:
 A busy verdict uses the waits that exist (BX-Q3 (a)): a statement that has
 written nothing waits for the holder's decide and runs again; an UPDATE
 that has written rows parks mid-walk; row 2 onward of a multi-row `INSERT`,
-and a KWP load row past its chunk's first, is refused `TxnConflict`. The
-check runs **per row, immediately** (BX-Q4 (a)), so `UPDATE t SET k = k + 1`
+and a KWP load row past its chunk's first, is refused `TxnConflict`. **The
+wait is on the named row's wake**: the key unit is the waiter's own and was
+granted, so the busy arm probes the busy row's tuple unit in `U`, which the
+holder's `U` or `X` on the row (or a range fence over it) refuses. The
+probe registers on the refusing unit, the holder's release flips that
+registration and kicks the waiter's core, and nothing of the probe
+outlives the ask. This is the reverse foreign-key walk's wait
+(`foreign-keys.md` §3a). The check
+runs **per row, immediately** (BX-Q4 (a)), so `UPDATE t SET k = k + 1`
 over consecutive keys is refused where the standard admits it. A nullable
 key column stays refused (BX-Q5 (a)).
 

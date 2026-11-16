@@ -4891,6 +4891,12 @@ void CommandDispatcher::WaitForRowWriter(const WriteScope& scope, catalog::Oid r
     // release flips - on the refusing unit, which is why the park names
     // `wake.key`; granted - the writer released in between - it is given
     // back at once with a slot already flipped, so the statement re-runs.
+    // That re-run is immediate, with no yield, so a caller probes only a
+    // writer whose decide its next check view can see: a writer released
+    // but above the snapshot ceiling would be granted again, re-run after
+    // re-run, until the net. The unique check probes only an in-flight
+    // writer for that reason; the reverse walk's exposure is
+    // `docs/inflight/bugs/a-granted-row-probe-re-runs-without-yielding-under-a-capped-ceiling.md`.
     // An `S` probe would be admitted by an `UPDATE`'s `U` and re-run the
     // statement until the net. Nothing here outlives the ask, which is why
     // no intention is taken above it.
@@ -12001,7 +12007,19 @@ StatusOr<exec::UniqueVerdict> CommandDispatcher::CheckUniqueKeyLatest(
             // own, so nothing it asked was refused, and the holder is known
             // only by the row's header. The row's probe parks on the unit
             // the holder writes it under, whose release kicks this core.
-            WaitForRowWriter(scope, ta.oid, verdict.value().tuple_key, verdict.value().writer);
+            //
+            // **Only while the writer is in flight.** A writer decided and
+            // released but above the check view's ceiling - capped by another
+            // commit's marker, up to one `strict` sync - still answers busy,
+            // the rounds above end on it, and a probe would be granted with
+            // its slot already flipped: the re-run would land here again
+            // without yielding, until the net, and on the marker's own core
+            // its publish could not run. Refused retryably instead, as
+            // `NoteBlockingWriter` refuses a decided writer with no wake.
+            if (txn_->IsInFlight(verdict.value().writer)) {
+                WaitForRowWriter(scope, ta.oid, verdict.value().tuple_key,
+                                 verdict.value().writer);
+            }
             return Status::TxnConflict(exec::UniqueKeyText(ta, ix, key) +
                                        " is being written by " +
                                        HolderName(verdict.value().writer) + " in tuple key " +

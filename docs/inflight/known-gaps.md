@@ -620,18 +620,20 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     sustained contention the waiter ends at the 1 s fault net naming the
     last holder.
   - **What still polls** has no slot behind it: no lock table, a holder only
-    the header names, an assertion's group, a `PURGE` waiting on a
-    deleter's decide or the read horizon (`heap-and-tuple.md` §4.1c), and
-    **the unique check's busy holder**: `CheckUniqueKeyLatest` holds the key
-    unit, finds the value under an undecided writer of another row, and
-    records the block by `NoteBlockingWriter` alone - the key unit is the
-    waiter's own, so no release flips a slot for it and the re-run is the
-    `IsInFlight` poll (`command_dispatcher.cpp`, added by CP-S1's reading).
+    the header names, an assertion's group, and a `PURGE` waiting on a
+    deleter's decide or the read horizon (`heap-and-tuple.md` §4.1c). The
+    unique check's busy holder left this list at `f1ce9953`: its busy arm
+    probes the named row in `U` (`WaitForRowWriter`, the reverse foreign-key
+    walk's probe), so it parks on the wake of the unit the holder writes the
+    row under (`index.md` §10.2). A holder that writes the row under no
+    unit, which only a dispatcher with no lock table does, still polls.
   - A holder that never decides costs a cross-core writer the 1 s fault net
     and its defect warning, as a same-core writer pays.
 
   Re-verified at `f5d310ec` by reading (`TryAcquire` non-queueing, the rig
-  cells exist, the unique check's `kBusy` arm). Spec: `docs/spec/txn.md` §5.
+  cells exist); the unique check's `kBusy` arm at `f1ce9953`, by the four
+  `RowWaitWakeRigTest.ABusyUniqueKey*` cells, red before it. Spec:
+  `docs/spec/txn.md` §5.
 
 - **The decide slot is designed and not built** (CP's C4,
   `instructions/v3.2.0/workorder-cp-lock-model-exploration.md` §3, §8.4).
