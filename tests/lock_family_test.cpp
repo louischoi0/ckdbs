@@ -3512,6 +3512,38 @@ TEST_F(PurgeWaitTest, AnOlderRepeatableReadReaderKeepsItsRowAndThePurgeIsRefused
     EXPECT_EQ(Local("INSERT INTO tb VALUES (5, 2)").rfind("INSERTED", 0), 0u);
 }
 
+TEST_F(PurgeWaitTest, AnOlderReadOnlyTransactionKeepsItsRowAcrossStatementsAndThePurge) {
+    // CS-R2, `[quiet-wrong]`: a `READ ONLY` transaction holds no `live_`
+    // entry, so its lease is the only thing that keeps the horizon below the
+    // deleter - across every statement boundary, not only within one.
+    Session reader;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ", &reader)
+                  .response,
+              "BEGIN trx_id=none isolation=repeatable read access=read only");
+    ASSERT_NE(dispatcher_->Dispatch("SELECT * FROM tb WHERE id = 5", &reader).response.find("5,1"),
+              std::string::npos);
+    ASSERT_EQ(Local("DELETE FROM tb WHERE id = 5"), "DELETED 1");
+
+    Session b;
+    Started purge = Start("PURGE FROM tb WHERE id = 5", b);
+    Pump();
+    ASSERT_FALSE(*purge.done) << "the purge answered over an older read-only reader: "
+                              << purge.out->response;
+    clock_.Advance(kPastTheBoundNs);
+    Pump();
+    ASSERT_TRUE(*purge.done) << "the wait outlived kPurgeHorizonWait";
+    EXPECT_EQ(StatusFromErrorReply(purge.out->response).code(), StatusCode::kTxnConflict)
+        << purge.out->response;
+
+    EXPECT_NE(dispatcher_->Dispatch("SELECT * FROM tb WHERE id = 5", &reader).response.find("5,1"),
+              std::string::npos)
+        << "the older read-only reader lost its row";
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &reader).response, "COMMIT trx_id=none");
+
+    // Its lease released, nothing holds the horizon below the deleter.
+    EXPECT_EQ(RunAsync("PURGE FROM tb WHERE id = 5", b).response, "PURGED 1");
+}
+
 TEST_F(PurgeWaitTest, AnUndecidedDeleteThatRollsBackWhileAPurgeWaitsLeavesTheKeyLive) {
     // The rollback arm: the deleter's abort puts the row back, so the
     // re-run meets a live key in a window of one and refuses it (PU3) -

@@ -301,6 +301,14 @@ load, `waystone-concpets.md` §4b). Nothing records until an operator opts
 a shape in, so a config reading `waystone_recording = on` means less than it
 did, and this section, the boot log line and `WAYSTONE ON`'s reply say so.
 
+**The `txn` section** (CS-Q8 (a), `txn.md` §1) carries this core's
+`read_only_begins`, the `BEGIN ... READ ONLY` transactions it opened, and
+`read_only_write_refusals`, the statements it refused
+`READ_ONLY_TRANSACTION` inside one (at the head or at `BeginWrite`'s second
+line). Both are per core, count from the process's start, and are absent
+on a dispatcher with no transaction manager. No wait event goes with them:
+a read-only transaction adds no wait.
+
 ## 8. What is not here
 
 - `sys.sessions` (W2: excluded by the operator).

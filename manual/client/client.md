@@ -89,7 +89,7 @@ client parses:
 | `SELECT` | header line, then one `\n`-escaped comma row per match (per group when aggregated; groups in first-seen order) |
 | `CREATE TABLE` (SQL form) | `CREATED oid=<n> ...` |
 | `CREATE INDEX` / `CABIN` / `PATTERN` / `ASSERTION` | `CREATED <KIND> name=... ...`, possibly with `\n`-escaped `WARN ...` sections |
-| `BEGIN` / `COMMIT` / `ROLLBACK` | `BEGIN trx_id=<n> isolation=<s> durability=<c>` / `COMMIT trx_id=<n>` / `ROLLBACK trx_id=<n>` |
+| `BEGIN` / `COMMIT` / `ROLLBACK` | `BEGIN trx_id=<n> isolation=<s> durability=<c>` / `COMMIT trx_id=<n>` / `ROLLBACK trx_id=<n>`; a `READ ONLY` transaction answers `BEGIN trx_id=none isolation=<s> access=read only` / `COMMIT trx_id=none` / `ROLLBACK trx_id=none` |
 | `SET ISOLATION LEVEL` | `SET isolation=<s>` |
 | `SET DURABILITY` | `SET durability=<c>` |
 | `SET PRIORITY` | `SET priority=<level>` |
@@ -154,6 +154,18 @@ nothing else.
 - Isolation: `READ COMMITTED` default, `REPEATABLE READ` available per
   session (`SET ISOLATION LEVEL`, takes effect next transaction) or per
   transaction (`BEGIN ISOLATION LEVEL ...`).
+- **For several reads from one snapshot, say so: `BEGIN READ ONLY
+  ISOLATION LEVEL REPEATABLE READ`.** A plain `BEGIN` draws a transaction
+  id, logs a begin and a commit record and, under `strict`, waits for a
+  device sync at `COMMIT`, even when it writes nothing. A `READ ONLY` one
+  holds only its snapshot: no id, no record, no sync, so its `COMMIT`
+  returns at once. Every write inside it is refused
+  `ERR READ_ONLY_TRANSACTION retryable=0 ...` and the transaction stays
+  usable. A `readonly` connection's `BEGIN` is `READ ONLY` without saying
+  so. An open one holds the server's undo history like any transaction
+  and is ended at the same lifetime ceiling, so keep it short. Over KWP,
+  send `BEGIN READ ONLY` as a statement: `C_TXN_BEGIN` has no access
+  byte.
 - A `recv()` of zero bytes means the server closed the socket (after
   `STOP`, or a crash) — reconnect, do not spin.
 - **Write the row many transactions share last.** An `UPDATE` holds its

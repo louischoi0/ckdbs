@@ -3,6 +3,7 @@
 #include <optional>
 
 #include <algorithm>
+#include <cassert>
 #include <bit>
 #include <limits>
 #include <cctype>
@@ -772,6 +773,12 @@ StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {
     }
     return Status::OutOfSpace("more than " + std::to_string(kMaxRegisteredReaders) +
                               " registered readers on this core");
+}
+
+void TransactionManager::RefreshReader(const ReaderLease& lease, const ReadView& view) noexcept {
+    assert(lease.mgr_ == this);
+    reader_slots_[lease.slot_] = view.snapshot_lsn;
+    PublishCoreBounds();
 }
 
 void TransactionManager::UnregisterReader(std::uint32_t slot) noexcept {

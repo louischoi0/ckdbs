@@ -1498,6 +1498,36 @@ TEST_F(ExpeditorTest, AnIdleTransactionPastItsLifetimeIsRolledBackAndItsNextStat
     EXPECT_TRUE(running.Stop().ok());
 }
 
+TEST_F(ExpeditorTest, AReadOnlyTransactionPastItsLifetimeIsEndedAndItsNextStatementIsTold) {
+    // CS: a `READ ONLY` transaction has no id to stamp the sweep with, and
+    // its lease holds the horizon as a writer's view does. **The
+    // mutation**: key the stamp on the transaction's id again, and this
+    // transaction is never swept - the SELECT after the sleep answers.
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.txn_lifetime_ceiling_ns = kCellCeilingMs * 1'000'000ULL;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    const int fd = running.client();
+
+    ASSERT_EQ(SendLine(fd, "CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(SendLine(fd, "BEGIN READ ONLY"),
+              "BEGIN trx_id=none isolation=read committed access=read only");
+    std::this_thread::sleep_for(kWellPastTheCeiling);
+
+    const std::string next = SendLine(fd, "SELECT * FROM t");
+    EXPECT_TRUE(Refused(next)) << next;
+    EXPECT_NE(next.find("trx_id=none"), std::string::npos) << next;
+    const std::string commit = SendLine(fd, "COMMIT");
+    EXPECT_TRUE(Refused(commit)) << commit;
+    EXPECT_EQ(SendLine(fd, "ROLLBACK"), "ROLLBACK trx_id=none");
+    EXPECT_EQ(SendLine(fd, "INSERT INTO t VALUES (1, 10)").rfind("INSERTED", 0), 0u)
+        << "the session did not return to autocommit";
+    EXPECT_TRUE(running.Stop().ok());
+}
+
 TEST_F(ExpeditorTest, ABusyTransactionIsRolledBackAtItsLifetimeNotItsIdleness) {
     // AN-R14's cost, stated in `txn.md` §1: a transaction that keeps
     // issuing statements is still ended at its lifetime. **The mutation**:

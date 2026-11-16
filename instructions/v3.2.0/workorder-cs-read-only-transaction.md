@@ -1,14 +1,17 @@
 # Work order CS - `BEGIN READ ONLY`: a transaction that issues no id, logs nothing and is a held snapshot
 
-Status: **WRITTEN 2026-11-15, not opened.** Written on `main` from
-`030b5bd9` (`v3.4.10-1-g030b5bd9`) on the operator's word of 2026-11-15
+Status: **CLOSED 2026-11-15, landed on `main` on the operator's word "push no verify" of 2026-11-16 - a `--no-ff` merge pushed with `--no-verify`, after `origin/main` `75f4d5dc` (audit G21, G23-G26) was merged into the work branch and the full suite run there** - every stage on worktree `cs-read-only-transaction`, the close measured (§7's CS-S3). Opened 2026-11-15 on the operator's standing go-ahead of
+2026-11-15 (go-ahead-achieving-milestone, argument
+`cs-read-only-transaction`), on worktree `cs-read-only-transaction` from
+`32354dbe` (`v3.4.11-1-g32354dbe`). **CS-Q0..Q11 are adopted as CLA
+proposed** under that word (`raft-marks-2026-11-15.md` §10); none is the
+operator's own per-item mark. Written on `main` from `030b5bd9`
+(`v3.4.10-1-g030b5bd9`) on the operator's word of 2026-11-15
 (`raft-marks-2026-11-15.md` §4), and carried onto `61917b0f`
-(`v3.4.10-6-g61917b0f`, F4 landed) before its commit. No stage is
-started. CS-S0 waits for the operator's word and for the marks on §4's
-items. Every `[source-read]` claim below was read at `030b5bd9`. F4
-changed none of the code read, and the line numbers of
-`src/server/command_dispatcher.cpp` and `docs/spec/txn.md` are given at
-`61917b0f`, where F4 moved them.
+(`v3.4.10-6-g61917b0f`, F4 landed) before its commit. Every
+`[source-read]` claim below was read at `030b5bd9`. F4 changed none of
+the code read, and the line numbers of `src/server/command_dispatcher.cpp`
+and `docs/spec/txn.md` are given at `61917b0f`, where F4 moved them.
 
 Tags: `[operator]` the operator's word; `[source-read]` read in the tree,
 with `path:line`; `[measured]` with the results file; `[design]` CLA's,
@@ -247,20 +250,24 @@ visible to: the horizon, through its lease, and nothing else.
 
 ## 4. Items for the operator (CS-Q), CLA's proposals
 
-None is assumed; each waits for a mark.
+Each is **adopted on the operator's standing go-ahead of 2026-11-15
+(go-ahead-achieving-milestone)**, as CLA proposed; the mark column says
+so. None is the operator's own per-item mark.
 
-| | item | options | CLA proposes |
-|---|---|---|---|
-| CS-Q0 | The shape | (a) the declared mode only, as §2 builds it. (b) lazy id assignment only, no keyword. (c) both in this order | (a). (b) is the larger saving but the larger `[quiet-wrong]` surface (§0.2), and the declaration is also a contract a client can rely on. CS-S0 records (b)'s census for a later order (CS-Q9) |
-| CS-Q1 | Does CS-S0 gate the build? | (a) yes, with a bar: if `BEGIN READ WRITE; <k reads>; COMMIT` against the same reads in autocommit differs by less than the spread at every durability class and every `k` S0 runs, CS stops and returns to the operator. (b) built whatever S0 shows | (a). No structure without a measured premise |
-| CS-Q2 | The spelling | (a) `BEGIN ... READ ONLY` / `READ WRITE` as one more order-free clause, and `START TRANSACTION` the same. (b) (a) and `SET TRANSACTION READ ONLY` as the first statement of a transaction. (c) (a) and a session default, `SET TRANSACTION_MODE read only` | (a). One spelling per rung, the same shape as `ISOLATION LEVEL` and `DURABILITY`. (c) is a fourth rung with no consumer yet |
-| CS-Q3 | The `readonly` role | (a) a `readonly` connection's `BEGIN` is `READ ONLY` unless it says `READ WRITE`, and `READ WRITE` is refused for the role. (b) unchanged: the role's `BEGIN` stays `READ WRITE`, and its writes are refused by the role gate as today | (a). Such a connection cannot write, so its transactions only spend ids and records. The reply text changes for it, and that is its only visible change |
-| CS-Q4 | KWP | (a) text only in CS: a KWP client sends `BEGIN READ ONLY` as a statement, and `C_TXN_BEGIN` is unchanged. (b) `C_TXN_BEGIN` gains an access-mode byte under a capability bit | (a). A frame change is a protocol revision with its own capability, and no client asks for one yet |
-| CS-Q5 | The cap | (a) the shared 256-slot registry, as CS-R6 states, with the `OutOfSpace` message naming read-only transactions as a holder. (b) a separate registry for read-only transactions, sized by measurement | (a), until a measurement shows held transactions starving suspended walks |
-| CS-Q6 | The replies | (a) `BEGIN trx_id=none isolation=<l> access=read only`, `COMMIT` replies as today without the `RELAXED` flag, and `READ WRITE`'s reply unchanged. (b) `READ WRITE`'s reply gains `access=read write` too | (a). CS-R4 |
-| CS-Q7 | A refused write | (a) refused, and the transaction is not poisoned: nothing was written and the view is unchanged. (b) refused and poisoned, as every other failed statement in an explicit transaction is | (a). Poisoning protects writes a client might commit unknowingly, and a read-only transaction has none |
-| CS-Q8 | What is reported | (a) `read_only_begins` and `read_only_write_refusals` in the transaction counters, and no wait event, since CS adds no wait. (b) nothing new | (a) |
-| CS-Q9 | The lazy-id census | (a) CS-S0 lists every reading of `Transaction::id()` and every `kNoTrxId` comparison on a write path, in a `docs/pending/` entry for a later order. (b) not in CS | (a). It is a read with no code, and the census CS-R1 needs covers half of it |
+| | item | options | CLA proposes | mark |
+|---|---|---|---|---|
+| CS-Q0 | The shape | (a) the declared mode only, as §2 builds it. (b) lazy id assignment only, no keyword. (c) both in this order | (a). (b) is the larger saving but the larger `[quiet-wrong]` surface (§0.2), and the declaration is also a contract a client can rely on. CS-S0 records (b)'s census for a later order (CS-Q9) | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q1 | Does CS-S0 gate the build? | (a) yes, with a bar: if `BEGIN READ WRITE; <k reads>; COMMIT` against the same reads in autocommit differs by less than the spread at every durability class and every `k` S0 runs, CS stops and returns to the operator. (b) built whatever S0 shows | (a). No structure without a measured premise | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q2 | The spelling | (a) `BEGIN ... READ ONLY` / `READ WRITE` as one more order-free clause, and `START TRANSACTION` the same. (b) (a) and `SET TRANSACTION READ ONLY` as the first statement of a transaction. (c) (a) and a session default, `SET TRANSACTION_MODE read only` | (a). One spelling per rung, the same shape as `ISOLATION LEVEL` and `DURABILITY`. (c) is a fourth rung with no consumer yet | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q3 | The `readonly` role | (a) a `readonly` connection's `BEGIN` is `READ ONLY` unless it says `READ WRITE`, and `READ WRITE` is refused for the role. (b) unchanged: the role's `BEGIN` stays `READ WRITE`, and its writes are refused by the role gate as today | (a). Such a connection cannot write, so its transactions only spend ids and records. The reply text changes for it, and that is its only visible change | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q4 | KWP | (a) text only in CS: a KWP client sends `BEGIN READ ONLY` as a statement, and `C_TXN_BEGIN` is unchanged. (b) `C_TXN_BEGIN` gains an access-mode byte under a capability bit | (a). A frame change is a protocol revision with its own capability, and no client asks for one yet | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q5 | The cap | (a) the shared 256-slot registry, as CS-R6 states, with the `OutOfSpace` message naming read-only transactions as a holder. (b) a separate registry for read-only transactions, sized by measurement | (a), until a measurement shows held transactions starving suspended walks | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q6 | The replies | (a) `BEGIN trx_id=none isolation=<l> access=read only`, `COMMIT` replies as today without the `RELAXED` flag, and `READ WRITE`'s reply unchanged. (b) `READ WRITE`'s reply gains `access=read write` too | (a). CS-R4 | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q7 | A refused write | (a) refused, and the transaction is not poisoned: nothing was written and the view is unchanged. (b) refused and poisoned, as every other failed statement in an explicit transaction is | (a). Poisoning protects writes a client might commit unknowingly, and a read-only transaction has none | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q8 | What is reported | (a) `read_only_begins` and `read_only_write_refusals` in the transaction counters, and no wait event, since CS adds no wait. (b) nothing new | (a) | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q9 | The lazy-id census | (a) CS-S0 lists every reading of `Transaction::id()` and every `kNoTrxId` comparison on a write path, in a `docs/pending/` entry for a later order. (b) not in CS | (a). It is a read with no code, and the census CS-R1 needs covers half of it | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q10 | A `DURABILITY` clause on a `READ ONLY` `BEGIN` (surfaced at CS-S1, written here before adoption) | (a) accepted, binding nothing: a commit that acknowledges no write keeps every class's promise, and the reply names no class. (b) refused `InvalidArgument`: the clause has nothing to bind | (a). KWP's `C_TXN_BEGIN` always sends `BEGIN [DURABILITY <c>]`, and under CS-Q3 (a) a `readonly` connection's frame `BEGIN` is `READ ONLY`, so (b) would refuse every such client that names a class; and (a) is not a spelling enforced as something else - no class is owed on a commit with nothing to make durable | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
+| CS-Q11 | What a read inside a `READ ONLY` transaction records `[quiet-wrong]` (surfaced by CS-S0's census, written here before adoption) | (a) what an autocommit read records, unchanged: the unlogged `sys.access_stats` fold (`Catalog::RecordAccess`, written at `kBootstrapXid` with no log), an opted pattern's Waystone trail, the in-memory statistics, and a Cabin bank under the bank's own gate. (b) suppress all of it inside a `READ ONLY` transaction | (a). None is the transaction's write: each is advisory or unlogged state every autocommit read already writes outside any transaction, and CS-R1's ground - user data stamped `kNoTrxId` - does not arise. The `[quiet-wrong]` half is the Cabin bank, which a `READ WRITE` view never reaches (`own_trx_id != 0` declines it, `step_vm.cpp:937-940`) and a `READ ONLY` view now does. **Premise re-read at `bbaff33a`**: the bank declines a view minted with anything in flight (`in_flight_at_mint`) and, after its announce, any view whose `CommitCeiling()` is not its own `snapshot_lsn` (`step_vm.cpp:994-1000`) - so a `REPEATABLE READ` view held past a commit is declined, and a view that passes both is indistinguishable from an autocommit view minted at the same instant. The premise holds | **(a)**, adopted on the standing go-ahead of 2026-11-15 |
 
 ## 5. Stages
 
@@ -287,3 +294,198 @@ None is assumed; each waits for a mark.
 
 On `main` from `030b5bd9`, on the operator's word. No stage is opened and
 no code is written. Documents only.
+
+### CS-S0 - the premise and the census, 2026-11-15
+
+On worktree `cs-read-only-transaction`. **The bar of CS-Q1 (a) is met, so CS
+continues.** Measured at `bbaff33a` (`v3.4.11-3-gbbaff33a`, no engine change
+from `32354dbe`), Release from a `git archive` export:
+`bench/v3.4.11/results-cs-s0-premise-v3.4.11-3-gbbaff33a.md` (committed at
+`059d6b42`). `BEGIN; <k> tuple-key SELECTs; COMMIT` against the same reads in
+autocommit is costlier beyond the run's A/A spread in 23 of 36 cells: every
+durability class has such cells (`strict` 10 of 12, `group` 8, `relaxed` 5),
+and by `k` 11 of 12 at `k = 1`, 9 at `k = 4`, 3 at `k = 16`. Throughput falls
+81-91 % at `strict`, `k = 1`. The explicit arm appends 64 WAL bytes per
+transaction in every cell, the autocommit arm 0. It spends one id per
+transaction at `cores = 1`, the autocommit arm none. The probe could not
+count ids at `cores = 4`, where each core carves its own window. **What
+bounds the reading**: the host was loaded (load average 11-21, other
+sessions compiling), so the spread is wide (median about 30 %). The
+explicit arm's two extra round trips are not separated from the engine's
+share, and under `relaxed` at `k = 1` they may be most of it. The id, the
+64 bytes and the `strict` sync are the engine's share. Cut to the stage's
+budget: one table size (10,000 rows), 2 repeats of 2 s per arm, no wait
+decomposition, no PostgreSQL floor.
+
+**The census** (an `Explore` read at `bbaff33a`; line numbers there):
+
+- **One chokepoint.** Every client statement, newline and KWP alike, passes
+  through `CommandDispatcher::DispatchInner` (`:1349`). KWP's
+  `C_TXN_*` and `C_EXECUTE` become statement text there (`kwp_session.cpp:650-693`, `:986-1038`).
+  The one bypass is the KWP load stream, which enters `ExecuteInsert`
+  (`:6116`) on a session of its own whose role is `admin`, so under
+  CS-Q3 (a) it is never `READ ONLY`.
+- **Write routes.** Every DML and `InDdlStatement` DDL reaches
+  `BeginWrite` (`:11317`), which at HEAD dereferences a null transaction
+  for a session in a transaction with none (`:11331`); `CommitLocal` and
+  `RollbackLocal` do the same. Five transactionless write routes never call
+  `BeginWrite` and would have written: column-shape `CREATE`/`DROP CABIN`
+  (`:3217`), `ALTER ... RENAME` (`:3282-3421`, drawing an id through
+  `TakeDdlBuildLock`), `DROP ASSERTION` (`:4014`), `CREATE ASSERTION`
+  (`:4057`) and `CREATE`/`DROP TRANSITION` (`:4101`). All of them are
+  routed under `CREATE`, `DROP` or `ALTER`, so a refusal on the routing
+  token covers them. `PURGE`, `REINDEX`, `WAYSTONE` and `BACKUP` (but
+  `STATUS`) already refuse inside any transaction.
+- **Writes a read makes** (CS-Q11): `sys.access_stats` (`Catalog::RecordAccess`,
+  unlogged, `kBootstrapXid`); an opted pattern's Waystone trail
+  (`trail_store.cpp:70`, unlogged); the in-memory statistics, plan memo and
+  optimizer signals; and the Cabin bank, which a `READ ONLY` view reaches.
+- **Read paths.** `SnapshotFor` (`:11292`), `EnsureStatementBoundary`
+  (`:7689`) and `MintResolveView` (`:7711`) are the three readers of the
+  session's transaction on a read path. Every subquery, query-layer walk
+  and `SelectRun` reuses the snapshot `SnapshotFor` returned and takes no
+  lease of its own. So the session's lease covers a suspended walk, which
+  `CloseClient` defers past (`tcp_server.cpp:1090-1094`).
+- **Lifetime and placement.** The sweep keyed on `transaction()` and the
+  id (`tcp_server.cpp:926-975`), so a read-only transaction would have been
+  unswept. BL's placer tests `in_explicit_txn()` (`tcp_server.cpp:670`), which a
+  read-only transaction answers true, so it stays on its core.
+- **Transaction-id observability.** `sys.lock_waits`' `waiter_trx` reads
+  NULL for a holder with no id (`sys_views.cpp:127-128`, `:317-332`). The
+  wait-event parameters name the other party. ASH's `trx_id` is filled by no
+  writer, and `sys.session_state`/`session_waits` carry no id. Nothing else
+  changes.
+- **A tuple stamped `0`** is invisible to every view, its writer's
+  included, until the first floor reclaim, and visible to every view, older
+  snapshots included, after it. Recovery skips its records. At HEAD the
+  write path would have stamped `kBootstrapXid` (`:12075`), had it not
+  crashed first. This is why CS-R1's refusal sits at the head.
+- **Counters.** `sys.meta` has no transaction block. CS-Q8's two counters
+  go in a new per-core `txn` section.
+- **CS-Q9**: `docs/pending/lazy-id-assignment-census.md`.
+
+Overhead not measured; measured at the milestone's close.
+
+### CS-S1 and CS-S2 - the mode and the refusals, landed together, 2026-11-15
+
+On worktree `cs-read-only-transaction`, one commit. **Together, not in
+turn**, because the census showed the mode without the head gate is a null
+dereference at `BeginWrite`, `CommitLocal` and `RollbackLocal` for any
+write a read-only session sends. An S1 without S2's gate would not be a
+safe intermediate tree.
+
+- **Built**:
+  - `Session::ReadOnlyTxn` (a view, the level, the lease) with
+    `in_read_only_txn()`;
+  - `BEGIN`'s `READ ONLY`/`READ WRITE` clause, with the isolation level now
+    read by its shape, because `READ` opens both;
+  - `CommandDispatcher::BeginReadOnly`;
+  - `COMMIT`/`ROLLBACK` dropping the lease;
+  - `EnsureStatementBoundary`, `SnapshotFor` and `MintResolveView` for both
+    kinds;
+  - `TransactionManager::RefreshReader` (CS-R3);
+  - the readonly-role default (CS-Q3);
+  - KWP's RELAXED flag cleared for a read-only transaction
+    (`KwpSession::TxnIsRelaxed`, CS-Q6);
+  - the lifetime sweep keyed on `Session::open_txn_seq()`, with
+    `Session::expired()`, so a read-only transaction is swept;
+  - `StatusCode::kReadOnlyTransaction`, wire category 19,
+    `READ_ONLY_TRANSACTION retryable=0`;
+  - `DispatchInner`'s allowlist gate (`ReadOnlyAdmits`) and `BeginWrite`'s
+    second line;
+  - CS-Q8's per-core `sys.meta` `txn` section;
+  - the sim's read-only transactions (shapes on only, own stream).
+- **Tests**:
+  - `tests/read_only_txn_test.cpp`, 10 cells on the two-core rig;
+  - `PurgeWaitTest.AnOlderReadOnlyTransactionKeepsItsRowAcrossStatementsAndThePurge`;
+  - `ExpeditorTest.AReadOnlyTransactionPastItsLifetimeIsEndedAndItsNextStatementIsTold`;
+  - the new code in the status, kwp-error and parser-golden lists.
+
+  Both CS-R2 cells fail under a mutation that releases the lease at
+  `BEGIN`. The sim ran seeds 1-8 and 11-14 in `clean`, `crash` and
+  `sync-crash`, all `ok`, with 5-19 read-only transactions per run. The
+  shapes-off stream is unchanged.
+- **Review** (`critics-developer`): no correctness bug. Three comment and
+  spec fixes were applied by the reviewer. A wrong claim that a write past
+  the gate would stamp `kNoTrxId` now reads `kBootstrapXid` in the gate's
+  comment and in `txn.md`, and a non-existent function name in
+  `session.hpp` was corrected. **Applied from its list**:
+  - deleted `SplitBeforeClause`, dead now;
+  - `Session::expired_trx_id_` is an `optional`;
+  - plain counters, read and written on one core only;
+  - `SnapshotFor`'s two explicit branches merged, which also keeps the
+    autocommit path free of a new branch;
+  - `RefreshReader`'s silent guard turned into an `assert`;
+  - KWP's RELAXED expression written once;
+  - the sim counts the engine's reply rather than the SQL;
+  - the expired refusal no longer tells a read-only transaction its writes
+    were undone;
+  - the cross-core purge cell it asked for, `ItsLeaseHoldsTheHorizonAgainstAPurgeOnAnotherCore`;
+  - `SYNC`'s checkpoint record and CS-Q11 stated in `txn.md`.
+
+  **Rejected**: sharing `TrxIdText` with `tcp_server.cpp`. It is a
+  dispatcher-internal helper, and exporting it for one log line adds a
+  header surface for no reader.
+- **Suite**: full `ctest -LE bs-nightly`, 4474/4474.
+- **Docs**: `txn.md` §1 (the access mode); `sched.md` (the lease slot);
+  `protocol.md` §11 (category 19) and §14 (the readonly role);
+  `sys-views.md` §7 (`txn`); `manual/sql/sql.md` §5 and §8;
+  `manual/client/client.md`.
+
+Overhead not measured; measured at the milestone's close.
+
+### CS-S3 - the close, 2026-11-15
+
+On worktree `cs-read-only-transaction`. The measurement is
+`bench/v3.4.11/results-cs-close-v3.4.11-6-gadbea55b.md`, committed at
+`20228de1`. A = `32354dbe` (opened from) and B = `adbea55b` (the closing
+code; every commit after it is documents, bench or tools only), both
+Release from `git archive` exports, with an A2 control byte-identical to A.
+Interleaved, about 26 minutes in all, host load 2-8.
+
+- **CS-R5 is met.** Server CPU per unit at `cores = 1`, `relaxed`, one
+  connection, pooled over 200, 1,000 and 10,000 rows, 14 runs:
+
+  | shape | B−A | A2−A |
+  |---|---|---|
+  | autocommit tuple-key `SELECT` | +0.08 µs (SE 0.15) | −0.04 |
+  | autocommit point `UPDATE` | +0.27 µs (SE 0.14) | −0.02 |
+  | `READ WRITE` `BEGIN; 4 SELECTs; COMMIT` | −0.81 µs (SE 0.86) | −0.29 |
+
+  **The `UPDATE` delta is not resolved**: +0.27 µs on 26.5, positive at all
+  three sizes, about 1.9 SE, so below 1 % but not ruled out. B's only new
+  instructions on that path are the statement head's `in_read_only_txn()`
+  test, a load and a branch, and `BeginWrite`'s test sits inside the
+  explicit-transaction arm, which autocommit does not take. Stated, not
+  remedied.
+- **The win** (arm R = `BEGIN READ ONLY; k reads; COMMIT` on B):
+  - R appends 0.00-0.10 WAL bytes per group in every cell, against W's
+    64.
+  - Under `strict`, R runs 4.7-10x W's throughput at `k = 1` and 1.6-2.3x
+    at `k = 16`. The sync is the difference.
+  - Under `relaxed`, R and W are indistinguishable: within each cell's
+    spread, −13 % to +23 %. A server-CPU supplement prices the gap at
+    1.8 µs per group at `k = 1` and 9.4 µs at `k = 16`, out of the
+    `BEGIN`+`COMMIT` pair's about 30 µs.
+  - R tracks autocommit at `k = 16` in all 8 cells. At `k = 1` it is
+    46-60 % below autocommit: the two extra statements, not the engine.
+  - `read_only_begins` reads 1 per R group at `cores = 1`. At `cores = 4`
+    `sys.meta` showed only the probing session's core, so the WAL bytes
+    carry that claim.
+- **Cut to the budget**: one table size for the matrix, `k` in {1, 16},
+  no `group` durability, 4 repeats of 2 s, no A2 for the supplement, no
+  wait decomposition, no PostgreSQL floor.
+- **The durable content moved**:
+  - `txn.md` §1 (the access mode), `sched.md`, `protocol.md` §11 and §14,
+    `sys-views.md` §7;
+  - `manual/sql/sql.md` §5 and §8, `manual/client/client.md`;
+  - `known-gaps.md` ("`READ ONLY` transactions (CS)");
+  - `docs/pending/lazy-id-assignment-census.md`;
+  - `CLAUDE.md`'s Transactions & MVCC row and the index row.
+
+  No `bugs/` entry: nothing was found and left unfixed.
+- **Synced**: `origin/main` has not moved since `32354dbe`, so the merge
+  brought nothing.
+
+**CS is closed on the work branch.** Landing on `main`, a push and any tag
+wait for the operator's word.

@@ -930,12 +930,16 @@ void TcpServer::ExpireOverdueTransactions() {
         // transaction under it would pull state from under a coroutine.
         // Deferred to a tick after it ends, not exempted.
         if (conn.in_flight) continue;
-        const txn::Transaction* open = conn.session.transaction();
-        // Autocommit, or already expired and waiting for its ROLLBACK.
-        if (open == nullptr || open->id() != conn.txn_stamped_id) continue;
+        // Autocommit, or already expired and waiting for its ROLLBACK. A
+        // `READ ONLY` transaction is swept too (CS): it holds no id, but its
+        // lease holds the horizon exactly as a writer's view does.
+        const std::uint64_t seq = conn.session.open_txn_seq();
+        if (seq == 0 || seq != conn.txn_stamped_seq) continue;
         if (now - conn.txn_began_at_ns < txn_lifetime_ceiling_ns_) continue;
 
-        const std::uint64_t id = open->id();
+        const txn::Transaction* open = conn.session.transaction();
+        const std::uint64_t id = open != nullptr ? open->id() : 0;
+        const std::string id_text = open != nullptr ? std::to_string(id) : "none";
         // The connection-close path's own rollback (`CloseClient`), so the
         // sweep adds no second way to end a transaction.
         const DispatchOutcome rolled = dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
@@ -943,7 +947,7 @@ void TcpServer::ExpireOverdueTransactions() {
         // fell on: the client's refusal will say its writes are undone,
         // and this line is where an operator learns when that is untrue.
         if (!rolled.status.ok() && logging(LogLevel::kWarn)) {
-            log_->Warn("txn", "fd=" + std::to_string(fd) + " trx_id=" + std::to_string(id) +
+            log_->Warn("txn", "fd=" + std::to_string(fd) + " trx_id=" + id_text +
                                   " is past the lifetime ceiling and its rollback failed: " +
                                   rolled.response);
         }
@@ -951,10 +955,10 @@ void TcpServer::ExpireOverdueTransactions() {
         // unwind refused part-way stops the log instead (CL-Q7 (b)) - so
         // this guards only a refusal before it is reached: still open, and
         // the next tick tries again.
-        if (conn.session.transaction() != nullptr) continue;
+        if (conn.session.open_txn_seq() != 0) continue;
         conn.session.Expire(id);
         if (logging(LogLevel::kInfo)) {
-            log_->Info("txn", "fd=" + std::to_string(fd) + " trx_id=" + std::to_string(id) +
+            log_->Info("txn", "fd=" + std::to_string(fd) + " trx_id=" + id_text +
                                   " rolled back at the lifetime ceiling of " +
                                   std::to_string(txn_lifetime_ceiling_ns_ / 1'000'000) + " ms");
         }
@@ -969,9 +973,9 @@ void TcpServer::OnStatementComplete(int client_fd) {
     // The lifetime sweep's stamp (`Connection::txn_began_at_ns`). Here
     // because every statement either protocol runs ends here, so the
     // `BEGIN` that opened a transaction is the first completion to see it.
-    if (const txn::Transaction* open = conn.session.transaction();
-        open != nullptr && open->id() != conn.txn_stamped_id) {
-        conn.txn_stamped_id = open->id();
+    if (const std::uint64_t seq = conn.session.open_txn_seq();
+        seq != 0 && seq != conn.txn_stamped_seq) {
+        conn.txn_stamped_seq = seq;
         conn.txn_began_at_ns = scheduler_->clock().Now();
     }
     // Cleared whatever happens next: the sink belongs to the portal that

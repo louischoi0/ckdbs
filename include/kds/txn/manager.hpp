@@ -666,6 +666,16 @@ public:
     // reader, never the accounting.
     StatusOr<ReaderLease> RegisterReader(const ReadView& view);
 
+    // **Re-points a held lease at a newer view** (CS-R3): a `READ ONLY`
+    // transaction's `READ COMMITTED` statement boundary. The slot stays
+    // registered throughout - it holds the older, lower snapshot until the
+    // store below - so there is no instant at which this core announces no
+    // reader for the holder, the window a release-and-register would open.
+    // `view` must be minted by `MintReadView` on this manager, which lowered
+    // the core's bound before it read the ceiling, and `lease` must be one
+    // this manager handed out.
+    void RefreshReader(const ReaderLease& lease, const ReadView& view) noexcept;
+
     // ---- Unpinning the instance's commit-order floor (AN-R13, AN-S1b) ----
     //
     // What `MaybeBurnIdleBlock` answered.

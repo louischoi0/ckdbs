@@ -51,6 +51,7 @@ constexpr GoldenCategory kGolden[] = {
     {ErrorCategory::kFkViolation, 16, "FK_VIOLATION"},
     {ErrorCategory::kAssertionViolation, 17, "ASSERTION_VIOLATION"},
     {ErrorCategory::kTransitionViolation, 18, "TRANSITION_VIOLATION"},
+    {ErrorCategory::kReadOnlyTransaction, 19, "READ_ONLY_TRANSACTION"},
 };
 
 TEST(KwpErrorRegistryTest, TheCategoryNumberingIsFrozen) {
@@ -119,6 +120,7 @@ TEST(KwpErrorRegistryTest, EveryStatusCodeMapsToACategory) {
         {StatusCode::kFkViolation, ErrorCategory::kFkViolation},
         {StatusCode::kAssertionViolation, ErrorCategory::kAssertionViolation},
         {StatusCode::kTransitionViolation, ErrorCategory::kTransitionViolation},
+        {StatusCode::kReadOnlyTransaction, ErrorCategory::kReadOnlyTransaction},
         {StatusCode::kUnknownOutcome, ErrorCategory::kUnknownOutcome},
         {StatusCode::kNotImplemented, ErrorCategory::kNotImplemented},
     };

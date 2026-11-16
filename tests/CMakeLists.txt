@@ -46,6 +46,7 @@ add_executable(kds_tests
     step_vm_mvcc_test.cpp
     txn_manager_test.cpp
     txn_session_test.cpp
+    read_only_txn_test.cpp
     heap_chain_test.cpp
     heap_hidden_key_test.cpp
     btree_test.cpp

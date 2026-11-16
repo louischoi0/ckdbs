@@ -1,0 +1,241 @@
+strict-c1 conns 1 k 1 rep 0 W
+strict-c1 conns 1 k 1 rep 0 A
+strict-c1 conns 1 k 1 rep 0 A2
+strict-c1 conns 1 k 1 rep 1 W
+strict-c1 conns 1 k 1 rep 1 A2
+strict-c1 conns 1 k 1 rep 1 A
+strict-c1 conns 1 k 4 rep 0 W
+strict-c1 conns 1 k 4 rep 0 A
+strict-c1 conns 1 k 4 rep 0 A2
+strict-c1 conns 1 k 4 rep 1 W
+strict-c1 conns 1 k 4 rep 1 A2
+strict-c1 conns 1 k 4 rep 1 A
+strict-c1 conns 1 k 16 rep 0 W
+strict-c1 conns 1 k 16 rep 0 A
+strict-c1 conns 1 k 16 rep 0 A2
+strict-c1 conns 1 k 16 rep 1 W
+strict-c1 conns 1 k 16 rep 1 A2
+strict-c1 conns 1 k 16 rep 1 A
+strict-c1 conns 8 k 1 rep 0 W
+strict-c1 conns 8 k 1 rep 0 A
+strict-c1 conns 8 k 1 rep 0 A2
+strict-c1 conns 8 k 1 rep 1 W
+strict-c1 conns 8 k 1 rep 1 A2
+strict-c1 conns 8 k 1 rep 1 A
+strict-c1 conns 8 k 4 rep 0 W
+strict-c1 conns 8 k 4 rep 0 A
+strict-c1 conns 8 k 4 rep 0 A2
+strict-c1 conns 8 k 4 rep 1 W
+strict-c1 conns 8 k 4 rep 1 A2
+strict-c1 conns 8 k 4 rep 1 A
+strict-c1 conns 8 k 16 rep 0 W
+strict-c1 conns 8 k 16 rep 0 A
+strict-c1 conns 8 k 16 rep 0 A2
+strict-c1 conns 8 k 16 rep 1 W
+strict-c1 conns 8 k 16 rep 1 A2
+strict-c1 conns 8 k 16 rep 1 A
+probe strict-c1 probe-only k0: 16797 -> 16800 over 0 groups
+probe strict-c1 A k16: 16803 -> 16806 over 190 groups
+probe strict-c1 W k1: 16809 -> 17383 over 571 groups
+probe strict-c1 W k16: 17386 -> 17608 over 219 groups
+group-c1 conns 1 k 1 rep 0 W
+group-c1 conns 1 k 1 rep 0 A
+group-c1 conns 1 k 1 rep 0 A2
+group-c1 conns 1 k 1 rep 1 W
+group-c1 conns 1 k 1 rep 1 A2
+group-c1 conns 1 k 1 rep 1 A
+group-c1 conns 1 k 4 rep 0 W
+group-c1 conns 1 k 4 rep 0 A
+group-c1 conns 1 k 4 rep 0 A2
+group-c1 conns 1 k 4 rep 1 W
+group-c1 conns 1 k 4 rep 1 A2
+group-c1 conns 1 k 4 rep 1 A
+group-c1 conns 1 k 16 rep 0 W
+group-c1 conns 1 k 16 rep 0 A
+group-c1 conns 1 k 16 rep 0 A2
+group-c1 conns 1 k 16 rep 1 W
+group-c1 conns 1 k 16 rep 1 A2
+group-c1 conns 1 k 16 rep 1 A
+group-c1 conns 8 k 1 rep 0 W
+group-c1 conns 8 k 1 rep 0 A
+group-c1 conns 8 k 1 rep 0 A2
+group-c1 conns 8 k 1 rep 1 W
+group-c1 conns 8 k 1 rep 1 A2
+group-c1 conns 8 k 1 rep 1 A
+group-c1 conns 8 k 4 rep 0 W
+group-c1 conns 8 k 4 rep 0 A
+group-c1 conns 8 k 4 rep 0 A2
+group-c1 conns 8 k 4 rep 1 W
+group-c1 conns 8 k 4 rep 1 A2
+group-c1 conns 8 k 4 rep 1 A
+group-c1 conns 8 k 16 rep 0 W
+group-c1 conns 8 k 16 rep 0 A
+group-c1 conns 8 k 16 rep 0 A2
+group-c1 conns 8 k 16 rep 1 W
+group-c1 conns 8 k 16 rep 1 A2
+group-c1 conns 8 k 16 rep 1 A
+probe group-c1 probe-only k0: 19835 -> 19838 over 0 groups
+probe group-c1 A k16: 19841 -> 19844 over 267 groups
+probe group-c1 W k1: 19847 -> 20718 over 868 groups
+probe group-c1 W k16: 20721 -> 21086 over 362 groups
+relaxed-c1 conns 1 k 1 rep 0 W
+relaxed-c1 conns 1 k 1 rep 0 A
+relaxed-c1 conns 1 k 1 rep 0 A2
+relaxed-c1 conns 1 k 1 rep 1 W
+relaxed-c1 conns 1 k 1 rep 1 A2
+relaxed-c1 conns 1 k 1 rep 1 A
+relaxed-c1 conns 1 k 4 rep 0 W
+relaxed-c1 conns 1 k 4 rep 0 A
+relaxed-c1 conns 1 k 4 rep 0 A2
+relaxed-c1 conns 1 k 4 rep 1 W
+relaxed-c1 conns 1 k 4 rep 1 A2
+relaxed-c1 conns 1 k 4 rep 1 A
+relaxed-c1 conns 1 k 16 rep 0 W
+relaxed-c1 conns 1 k 16 rep 0 A
+relaxed-c1 conns 1 k 16 rep 0 A2
+relaxed-c1 conns 1 k 16 rep 1 W
+relaxed-c1 conns 1 k 16 rep 1 A2
+relaxed-c1 conns 1 k 16 rep 1 A
+relaxed-c1 conns 8 k 1 rep 0 W
+relaxed-c1 conns 8 k 1 rep 0 A
+relaxed-c1 conns 8 k 1 rep 0 A2
+relaxed-c1 conns 8 k 1 rep 1 W
+relaxed-c1 conns 8 k 1 rep 1 A2
+relaxed-c1 conns 8 k 1 rep 1 A
+relaxed-c1 conns 8 k 4 rep 0 W
+relaxed-c1 conns 8 k 4 rep 0 A
+relaxed-c1 conns 8 k 4 rep 0 A2
+relaxed-c1 conns 8 k 4 rep 1 W
+relaxed-c1 conns 8 k 4 rep 1 A2
+relaxed-c1 conns 8 k 4 rep 1 A
+relaxed-c1 conns 8 k 16 rep 0 W
+relaxed-c1 conns 8 k 16 rep 0 A
+relaxed-c1 conns 8 k 16 rep 0 A2
+relaxed-c1 conns 8 k 16 rep 1 W
+relaxed-c1 conns 8 k 16 rep 1 A2
+relaxed-c1 conns 8 k 16 rep 1 A
+probe relaxed-c1 probe-only k0: 66620 -> 66623 over 0 groups
+probe relaxed-c1 A k16: 66626 -> 66629 over 881 groups
+probe relaxed-c1 W k1: 66632 -> 73006 over 6371 groups
+probe relaxed-c1 W k16: 73009 -> 73293 over 281 groups
+strict-c4 conns 1 k 1 rep 0 W
+strict-c4 conns 1 k 1 rep 0 A
+strict-c4 conns 1 k 1 rep 0 A2
+strict-c4 conns 1 k 1 rep 1 W
+strict-c4 conns 1 k 1 rep 1 A2
+strict-c4 conns 1 k 1 rep 1 A
+strict-c4 conns 1 k 4 rep 0 W
+strict-c4 conns 1 k 4 rep 0 A
+strict-c4 conns 1 k 4 rep 0 A2
+strict-c4 conns 1 k 4 rep 1 W
+strict-c4 conns 1 k 4 rep 1 A2
+strict-c4 conns 1 k 4 rep 1 A
+strict-c4 conns 1 k 16 rep 0 W
+strict-c4 conns 1 k 16 rep 0 A
+strict-c4 conns 1 k 16 rep 0 A2
+strict-c4 conns 1 k 16 rep 1 W
+strict-c4 conns 1 k 16 rep 1 A2
+strict-c4 conns 1 k 16 rep 1 A
+strict-c4 conns 8 k 1 rep 0 W
+strict-c4 conns 8 k 1 rep 0 A
+strict-c4 conns 8 k 1 rep 0 A2
+strict-c4 conns 8 k 1 rep 1 W
+strict-c4 conns 8 k 1 rep 1 A2
+strict-c4 conns 8 k 1 rep 1 A
+strict-c4 conns 8 k 4 rep 0 W
+strict-c4 conns 8 k 4 rep 0 A
+strict-c4 conns 8 k 4 rep 0 A2
+strict-c4 conns 8 k 4 rep 1 W
+strict-c4 conns 8 k 4 rep 1 A2
+strict-c4 conns 8 k 4 rep 1 A
+strict-c4 conns 8 k 16 rep 0 W
+strict-c4 conns 8 k 16 rep 0 A
+strict-c4 conns 8 k 16 rep 0 A2
+strict-c4 conns 8 k 16 rep 1 W
+strict-c4 conns 8 k 16 rep 1 A2
+strict-c4 conns 8 k 16 rep 1 A
+probe strict-c4 probe-only k0: 41659 -> 38424 over 0 groups
+probe strict-c4 A k16: 38424 -> 49252 over 435 groups
+probe strict-c4 W k1: 38427 -> 49255 over 751 groups
+probe strict-c4 W k16: 38430 -> 38430 over 244 groups
+group-c4 conns 1 k 1 rep 0 W
+group-c4 conns 1 k 1 rep 0 A
+group-c4 conns 1 k 1 rep 0 A2
+group-c4 conns 1 k 1 rep 1 W
+group-c4 conns 1 k 1 rep 1 A2
+group-c4 conns 1 k 1 rep 1 A
+group-c4 conns 1 k 4 rep 0 W
+group-c4 conns 1 k 4 rep 0 A
+group-c4 conns 1 k 4 rep 0 A2
+group-c4 conns 1 k 4 rep 1 W
+group-c4 conns 1 k 4 rep 1 A2
+group-c4 conns 1 k 4 rep 1 A
+group-c4 conns 1 k 16 rep 0 W
+group-c4 conns 1 k 16 rep 0 A
+group-c4 conns 1 k 16 rep 0 A2
+group-c4 conns 1 k 16 rep 1 W
+group-c4 conns 1 k 16 rep 1 A2
+group-c4 conns 1 k 16 rep 1 A
+group-c4 conns 8 k 1 rep 0 W
+group-c4 conns 8 k 1 rep 0 A
+group-c4 conns 8 k 1 rep 0 A2
+group-c4 conns 8 k 1 rep 1 W
+group-c4 conns 8 k 1 rep 1 A2
+group-c4 conns 8 k 1 rep 1 A
+group-c4 conns 8 k 4 rep 0 W
+group-c4 conns 8 k 4 rep 0 A
+group-c4 conns 8 k 4 rep 0 A2
+group-c4 conns 8 k 4 rep 1 W
+group-c4 conns 8 k 4 rep 1 A2
+group-c4 conns 8 k 4 rep 1 A
+group-c4 conns 8 k 16 rep 0 W
+group-c4 conns 8 k 16 rep 0 A
+group-c4 conns 8 k 16 rep 0 A2
+group-c4 conns 8 k 16 rep 1 W
+group-c4 conns 8 k 16 rep 1 A2
+group-c4 conns 8 k 16 rep 1 A
+probe group-c4 probe-only k0: 58247 -> 58247 over 0 groups
+probe group-c4 A k16: 58248 -> 58249 over 217 groups
+probe group-c4 W k1: 58249 -> 66127 over 433 groups
+probe group-c4 W k16: 66127 -> 58250 over 271 groups
+relaxed-c4 conns 1 k 1 rep 0 W
+relaxed-c4 conns 1 k 1 rep 0 A
+relaxed-c4 conns 1 k 1 rep 0 A2
+relaxed-c4 conns 1 k 1 rep 1 W
+relaxed-c4 conns 1 k 1 rep 1 A2
+relaxed-c4 conns 1 k 1 rep 1 A
+relaxed-c4 conns 1 k 4 rep 0 W
+relaxed-c4 conns 1 k 4 rep 0 A
+relaxed-c4 conns 1 k 4 rep 0 A2
+relaxed-c4 conns 1 k 4 rep 1 W
+relaxed-c4 conns 1 k 4 rep 1 A2
+relaxed-c4 conns 1 k 4 rep 1 A
+relaxed-c4 conns 1 k 16 rep 0 W
+relaxed-c4 conns 1 k 16 rep 0 A
+relaxed-c4 conns 1 k 16 rep 0 A2
+relaxed-c4 conns 1 k 16 rep 1 W
+relaxed-c4 conns 1 k 16 rep 1 A2
+relaxed-c4 conns 1 k 16 rep 1 A
+relaxed-c4 conns 8 k 1 rep 0 W
+relaxed-c4 conns 8 k 1 rep 0 A
+relaxed-c4 conns 8 k 1 rep 0 A2
+relaxed-c4 conns 8 k 1 rep 1 W
+relaxed-c4 conns 8 k 1 rep 1 A2
+relaxed-c4 conns 8 k 1 rep 1 A
+relaxed-c4 conns 8 k 4 rep 0 W
+relaxed-c4 conns 8 k 4 rep 0 A
+relaxed-c4 conns 8 k 4 rep 0 A2
+relaxed-c4 conns 8 k 4 rep 1 W
+relaxed-c4 conns 8 k 4 rep 1 A2
+relaxed-c4 conns 8 k 4 rep 1 A
+relaxed-c4 conns 8 k 16 rep 0 W
+relaxed-c4 conns 8 k 16 rep 0 A
+relaxed-c4 conns 8 k 16 rep 0 A2
+relaxed-c4 conns 8 k 16 rep 1 W
+relaxed-c4 conns 8 k 16 rep 1 A2
+relaxed-c4 conns 8 k 16 rep 1 A
+probe relaxed-c4 probe-only k0: 135990 -> 139266 over 0 groups
+probe relaxed-c4 A k16: 139266 -> 135991 over 597 groups
+probe relaxed-c4 W k1: 132050 -> 132050 over 5850 groups
+probe relaxed-c4 W k16: 155652 -> 151555 over 432 groups
+driver finished

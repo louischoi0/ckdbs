@@ -741,6 +741,8 @@ private:
 
     // ---- Transaction control (docs/spec/txn.md sections 1, 6) ----------------
     DispatchOutcome HandleBegin(std::string_view args, Session& session);
+    // `BEGIN ... READ ONLY` (CS): a held view and its lease, no transaction.
+    DispatchOutcome BeginReadOnly(txn::IsolationLevel level, Session& session);
     DispatchOutcome HandleCommit(Session& session);
     DispatchOutcome HandleRollback(Session& session);
     DispatchOutcome HandleUse(std::string_view line, std::string_view args, Session& session);
@@ -1294,6 +1296,12 @@ private:
     // statement never see different views.
     Status EnsureStatementBoundary(Session& session);
     bool statement_boundary_taken_ = false;
+
+    // CS-Q8 (a): this core's `READ ONLY` transactions begun, and the write
+    // statements refused inside one - written and read (`sys.meta`) by this
+    // core's dispatcher only, like `catalog_marks_purged_`.
+    std::uint64_t read_only_begins_ = 0;
+    std::uint64_t read_only_write_refusals_ = 0;
 
     // Registers everything `written` holds on the transaction's trail.
     // Called **even when the DDL failed**: rows written before the failure
