@@ -817,5 +817,14 @@ Debug), after the review's changes; `build-release` compiles. The suite
 was not run on the tree before the review's changes: the review ran the
 cells nearest the change, 64 of 64.
 
+**Synced with `origin/main`** at `d9f89624` (the unique check's busy key
+parking on the named row's wake), merged into the work branch at
+`5007ef48` with no conflict. The merge brought build inputs
+(`command_dispatcher.cpp`, two rig tests), so the suite was run again on
+the merged tree: 4554 of 4554 at `5007ef48` (the same range, Debug),
+main's four new cells among them. CU-S3's unique-key cell runs under
+main's check, which now also asks that no wake registration outlives the
+statement.
+
 Overhead not measured; measured at the milestone's close.
 
