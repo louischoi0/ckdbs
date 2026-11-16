@@ -3,8 +3,10 @@
 Status: **PENDING** - G1-G15 are fixed or applied since 2026-11-14 on the
 operator's word (section 8, `instructions/v3.2.0/raft-marks-2026-11-14.md`);
 G16-G20 survived a verification resumed on 2026-11-14 and are fixed since
-(section 9); 44 findings still wait for a verifier, and 15 slices are still
-unread. The rest decides nothing, opens no stage, licenses no code.
+(section 9); G21 and G23-G26 survived its next pass on 2026-11-15 and are
+fixed since (section 10), whose review raised two questions for the
+operator (G26-R, G21-R); 37 findings still wait for a verifier, and 15
+slices are still unread. The rest decides nothing, opens no stage, licenses no code.
 Raised: 2026-11-13, in conversation with the operator; recorded 2026-11-14.
 Read at: `0b98bc4f` (`v3.4.8-11-g0b98bc4f`), on worktree `audit-core12-slices`.
 Every `path:line` below is at that commit.
@@ -22,7 +24,8 @@ under `docs/inflight/bugs/`).
 |---|---|
 | G1 to G15 | **survived** every verifier assigned to them: five logic defects (G1-G5), five dead code (G6-G10), five duplication (G11-G15). **All fifteen taken up on 2026-11-14** (section 8) |
 | G16 to G20 | **survived** both verifiers of a resumed pass on 2026-11-14, read at `6a3ce231`, and **fixed** the same day (section 9) |
-| G21 to G64 | **unjudged**: at least one verifier did not return. G21 and G24 each have one of their two verdicts, and it is "survived"; the other 42 have none. G22 is G4's defect and G59 is G14's change, both resolved since (section 8) |
+| G21, G23 to G26 | **survived** both verifiers of the next resumed pass on 2026-11-15, read at `030b5bd9`, and **fixed** the same day (section 10) |
+| G27 to G64 | **unjudged**: at least one verifier did not return, and none has a verdict. G22 is G4's defect and G59 is G14's change, both resolved since (section 8) |
 | G65, G66 | **refuted**: G65 is already in `known-gaps.md`, G66 is not worth the change |
 
 **What bounds that.** Nothing was built, run or changed: every finder and
@@ -1110,8 +1113,8 @@ up, not a proof that the code is right.
 
 `[design]` In the order it would run:
 
-1. **The verifiers that did not return**, over G21-G64 (G16-G20 done,
-   section 9; G22 and G59 moot). The finders'
+1. **The verifiers that did not return**, over G27-G64 (G16-G21 and
+   G23-G26 done, sections 9 and 10; G22 and G59 moot). The finders'
    results need not be read again: a resume reruns only the verifiers. Until
    then G16-G64 are not to be taken up as defects - G16 (a mount refused for
    a loser past 2^20 undo records), G17, G18, G19 and G20 are the finders'
@@ -1208,3 +1211,100 @@ reproduced only through `LeafCursor`'s synthetic chain, not a real tree; G18
 does not repair a volume an older build already wrote; and the measurement
 did not reach G16's long loser chain, G17's 272 KiB snapshot cut, G18's
 region creation or G20's foreign-key create, no driver exercising them.
+
+## 10. The resumed verification: G21, G23-G26
+
+`[source-read]` On 2026-11-15 the operator asked for the verification of
+G21-G64 to be resumed (W8, given in Korean; recorded in English). CLA kept
+the scale the operator chose for section 9 - the finders' highest severity
+first, two verifiers a finding, about ten verifiers a pass - and took the
+first five of the ten the finders rated medium. The method is section 9's:
+one verifier tracing the code path and one asking whether the behaviour is
+intended or known, each told to refute it and to answer "refuted" when in
+doubt. It ran on worktree `audit-g1-g15-fixes` at `030b5bd9`
+(`v3.4.10-1-g030b5bd9`), every cited line re-located there. Ten of ten
+returned. Nothing was built, run or changed.
+
+| Finding | Outcome | Still present at `030b5bd9` | The verifiers' refined fix | Operator's ruling needed |
+|---|---|---|---|---|
+| G21 | **survived** both (high, medium) | yes | `ResolveThroughUndo` (`txn/visibility.cpp`) and `UndoLog::Walk` (`txn/undo_log.cpp`) take `kds::CycleGuard` in place of the 2^16-step count, as G16's walk did; `kMaxUndoChainLength` stays only for `UndecidedInsert`, which answers false at it. Reachable two ways: one transaction updating one row 65,537 times, read by any concurrent reader, and 65,537 committed updates of a hot row under one long `SELECT`'s snapshot; the online index backfill and the foreign-key check walk the same chain | yes (both lenses): `txn.md` §3.7 states the bound and its `Corruption`, though as a damage guard; G16-D and CG-D are the precedent |
+| G23 | **survived** both, high | yes | `DevicePageStore::WriteBack` passes the cut run's own length, `scratch.data()` for `run * kPageSize`, to `WritePageRun`; a `kSkip` drain whose run another core cut at its third page or later sends a buffer every device refuses `InvalidArgument`. No page is lost (the frames stay dirty), but the pass cleans nothing and a drain-mode pass counts toward `ResourceExhausted` | no |
+| G24 | **survived** both, high | yes | `IndexStagedRow` decodes the version before it appends, and a `NotFound` decode of a head that was in flight at the copy is read again by the CI-R7 loop rather than failing the build; a writer on another core rolling back a spilled value between the backfill's copy and its decode makes an online `CREATE INDEX` refused, never wrong | no; `index.md` §10.3's CI-R7 paragraph widened |
+| G25 | **survived** both, high | yes | `BoundCabinChainWriter::AdoptChain` and `AttachEntriesFromPages` bounded by a cycle check (G19's guard) in place of the 2^20-page budget, which the two walks also apply one page apart; a Bound Cabin chain grows with its relation's write history and its pages are never freed. Reachable only with `buffer_pool_frames` past about 2^20 (the pages are pinned), a smaller pool refusing the growth live | no; the finder's other option, a live refusal in `Grow`, would be a new stated limit and is not proposed |
+| G26 | **survived** both, high; the fix's risk medium | yes | `ReserveOne` checks the apply before it logs `ASSERT_RESERVE` - one arithmetic shared by a const check and `Apply`/`ApplyDeparture` - and on a refusal takes the placed entry back off the tail it still holds, so no unlogged entry shifts the next record's index at replay. Today an unchecked departure that underflows a SUM (inserts of -6e18, +6e18, -6e18, then the +6e18 row deleted) leaves a record the mount's fold refuses the same way, and the mount then leaves every assertion of the instance unenforcing | no: the statement error stays, only the stray record goes |
+
+**What bounds that.** "Survived" is two readers failing to refute; no cell
+was written and nothing reproduced. G23's harm is throughput and a drain's
+retries, not data; G24 needs more than one core; G25 needs an 8 GiB pool.
+The full verdicts, with their path:line evidence and fixes, are in this
+session's workflow journal (run `wf_62ea49b0-3c0`), not copied here beyond
+the table.
+
+**What became of them**, on the operator's word of 2026-11-15 (W8,
+`instructions/v3.2.0/raft-marks-2026-11-15.md` §8-§9): all five fixed on
+worktree `audit-g1-g15-fixes`, branch `worktree-audit-g21-g26-fixes`, from
+`f63c6023` (build inputs `61917b0f`'s, `origin/main` with F4) - `0304a822`,
+then two review rounds, `6c26ee45` and `f2b8aa09`. Each cell named here
+fails with `030b5bd9`'s copy of the files the fix changed and passes on the
+fix `[measured]` (F4 changed none of them).
+
+| Finding | Became | Cell |
+|---|---|---|
+| G21 | `ResolveThroughUndo` and `UndoLog::Walk` bounded by `kds::CycleGuard`, length never refused (G21-D, the operator's mark); `kMaxUndoChainLength` kept for `UndecidedInsert` alone; `txn.md` §3.7 amended | `UndoLogTest.AChainLongerThanTheOldBoundIsWalkedToItsEnd` (2^16 + 2 records), `VisibilityTest.AChainLongerThanTheOldBoundResolvesToTheVersionTheViewSees`, and a two-record cycle in each |
+| G23 | a `kSkip` drain run another core cut short sizes its buffer to the prefix | `EvictionWritebackTest.ADrainRunCutShortByAnotherCoresHoldWritesItsPrefix` |
+| G24 | the backfill decodes before it appends; a `NotFound` decode of a version the head writer wrote - the head, or an older one, which the review found the first commit had missed - is read again, and a re-read finding the row exactly as copied fails with the decode's own status | none: the copy/append seam CI-R7 lacks (`known-gaps.md`) |
+| G25 | `AdoptChain` and `AttachEntriesFromPages` bounded by the page-chain cycle guard, `LeafChainGuard` renamed `storage::PageChainGuard` | `BoundCabinChainAdoptTest.ACycleIsCorruptionAndAnAcyclicChainIsAdoptedToItsTail` (pins the cycle report; no cell holds a chain past 2^20 pages, and the re-link has none) |
+| G26 | `ReserveOne` checks the apply (`BoundCabin::CheckApply`/`CheckDeparture`, one arithmetic with the applies) before it logs, a refusal taking the entry back off the held tail (`BoundCabinPage::TakeBackLast`); a departure with no group refused at its first hold, before any page work | `AssertionCrashTest.AnUnderflowingDepartureLeavesNoRecordAndTheMountStaysEnforcing` - fails on `030b5bd9` and fails again with the take-back removed |
+
+**Found by the review, not fixed - each a question for the operator.**
+
+- **G26-R `[quiet-wrong]`: a departure that raises a SUM is never
+  admitted.** `[source-read]` at `0304a822`, one reviewer. A `DELETE`'s
+  departure, and a group-moving `UPDATE`'s, is reserved with no admission
+  check, on the premise that a departure "cannot violate an upper bound"
+  (`assertion.md` AS11, the `DELETE` row of §4.2). For `SUM` over a column
+  that holds negative values, which the spec admits, removing a negative
+  contribution raises the group's sum: under `CHECK SUM(x) <= 100 GROUP BY
+  grp`, inserting `(1, 1, -50)` then `(2, 1, 140)` is admitted (sum 90), and
+  `DELETE ... WHERE id = 1` is accepted with group 1 then summing to 140.
+  The declared invariant is broken with no refusal. The reviewer's fix:
+  admit a departure whose contribution is negative against the bound, with
+  a hold, as an arrival is, and narrow AS11 to `COUNT` and to `SUM` over
+  non-negative values - a contract change, so not taken under the
+  go-ahead.
+- **G21-R: `UndecidedInsert` keeps the 2^16 cap**, as the operator's G21
+  ruling kept it; past it a named key meeting an undecided insert is
+  refused `AlreadyExists` where BD-Q9 (a) says it waits. Two reviewers
+  proposed the cycle guard there too. Recorded in `known-gaps.md` (Locks).
+
+**Rejected at review, with reasons.** A shared helper for G21's one
+duplicated message (two lines in two walks that are rightly separate). A
+long-chain cell for G25 (no store holds 2^20 pinned pages cheaply, and the
+`PageStore` interface is too wide to fake for one cell). A cell for the
+re-link's guard (`AdoptChain` walks the same chain first at the revive, so
+a cycle is refused before the re-link is reached). Corruption in place of
+the take-back's own error exits (unreachable: the page was opened and the
+index returned under the same latches). Dropping `cx.online` from G24's
+test (it changes nothing today). The bound's order before the exactness
+check (a dead value on the last pass answers `TxnConflict` and the retry
+`NotFound`, which is not wrong).
+
+`[measured]` The full suite ran 4469/4469 on the merged tree at
+`e944b639` (after `origin/main` `32354dbe`, documents only), and the sim
+corpus 280/0.
+
+
+`[measured]` The close's interleaved A/B in `build-release`, `61917b0f`
+(`v3.4.10-6-g61917b0f`) against `f2b8aa09` (`v3.4.10-10-gf2b8aa09`),
+`bench/v3.4.10/results-audit-g21-close-v3.4.10-10-gf2b8aa09.md`
+(`f153f3e5`), ran on a host another session was compiling and testing on,
+so only its quiet cells resolve anything. G21's cell, writes that resolve
+every row through one undo step, is +0.7 % to +2.4 % (about 1.4-2.6 ns a
+resolved row at 10,000 rows), but its own control, a non-key scan
+`UPDATE` the fix does not reach, read +4.2 % to +4.5 % in the same run, so
+that bound is no tighter than build-layout noise. G26's assertion insert
+cell (`--cores 1`) and G25's mount with an assertion read A and B equal;
+the hot-row, scenario 0 and scenario 2 cells sit inside their noise. Not
+measured: G23 and G24 (no driver reaches the cut drain run or the online
+backfill's decode), `CheckDeparture`, deep undo chains, and every cell on
+a quiet host.

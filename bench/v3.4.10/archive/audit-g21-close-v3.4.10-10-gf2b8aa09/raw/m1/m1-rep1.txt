@@ -1,0 +1,20 @@
+
+sessions=1 rows=256 ops/arm/session=40000 blocks=4
+  base: cores accepted on = 1
+  close: cores accepted on = 0
+host before: 14.40 10.28 10.99 9/469 627157   competing: ["621015 /bin/bash -c source /home/louis/.claude/shell-snapshots/snapshot-bash-1794726634400-doy9zt.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'ctest --test-dir build -LE bs-nightly -j8 --output-on-failure > /tmp/claude-1000/-home-louis-ckdbs/5ff9367d-cac7-4fa9-af4a-33e062ea9f5a/scratchpad/suite1.log 2>&1; tail -15 /tmp/claude-1000/-home-louis-ckdbs/5ff9367d-cac7-4fa9-af4a-33e062ea9f5a/scratchpad/suite1.log' < /dev/null && pwd -P >| /tmp/claude-2636-cwd", '621016 ctest --test-dir build -LE bs-nightly -j8 --output-on-failure', '626986 /bin/bash -c source /home/louis/.claude/shell-snapshots/snapshot-bash-1794619493497-d806wd.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- \'which\'; \\builtin unset -f -- \'which\'; } >/dev/null 2>&1 || true && { \\builtin unalias -- \'unsetenv\'; \\builtin unset -f -- \'unsetenv\'; } >/dev/null 2>&1 || true && eval \'cd /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21; for l in A B; do tail -n 2 bld$l.log; cp bld$l/kds_server bin/kds_server-$l; stat -c \'"\'"\'%y %s\'"\'"\' bld$l/kds_server; done; sha256sum bin/kds_server-*; pgrep cc1plus; uptime; mkdir -p out; (nohup bash master.sh > master.console 2>&1 &) ; sleep 5; cat status.txt\' < /dev/null && pwd -P >| /tmp/claude-5c7c-cwd']
+host after : 7.41 9.45 10.62 2/455 631272   competing: none
+
+arm                                                   base                             close
+                            p50us    p99us      qps    err    p50us    p99us      qps    err
+update-hot                   51.4   3006.1     8579      0     47.8   3778.7     4400      0
+update-disjoint              51.5    935.0    11390      0     51.8    709.3    12650      0
+update-disjoint-again        46.7   3337.4     7478      0     51.4    889.9    11534      0
+insert-omitted               49.9    111.2    15297      0     46.9   2908.2     9076      0
+select-hot                   72.1    510.4     9950      0     71.7   3224.3     6795      0
+ping                        996.9   2607.4     1028      0    767.3   6153.8      993      0
+
+base: noise floor (disjoint vs its repeat) p50 = 4.8 us; hot - disjoint p50 = -0.1 us
+close: noise floor (disjoint vs its repeat) p50 = 0.4 us; hot - disjoint p50 = -4.0 us
+
+raw summaries: /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m1/m1-rep1.json

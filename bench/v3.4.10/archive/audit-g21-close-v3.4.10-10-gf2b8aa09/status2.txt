@@ -1,0 +1,12 @@
+2026-11-15T07:54:44Z BEGIN m4 try1
+2026-11-15T07:55:39Z END m4 rc=0 busy_samples=27 t=70s
+2026-11-15T07:55:39Z TAINTED m4: rerun
+2026-11-15T07:55:54Z BEGIN m4 try2
+2026-11-15T07:57:00Z END m4 rc=0 busy_samples=32 t=151s
+2026-11-15T07:57:00Z TAINTED m4: kept, flagged
+2026-11-15T08:00:28Z BEGIN assert try1
+2026-11-15T08:00:29Z assertion preload=200
+2026-11-15T08:00:48Z assertion preload=1000
+2026-11-15T08:01:12Z assertion preload=10000
+2026-11-15T08:01:40Z END assert rc=0 busy_samples=35 t=431s
+2026-11-15T08:01:40Z TAINTED assert: rerun

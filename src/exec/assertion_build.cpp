@@ -10,6 +10,7 @@
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/log_page_image.hpp"
+#include "kds/storage/visit.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/txn/visibility.hpp"
@@ -48,13 +49,15 @@ Status BoundCabinChainWriter::AdoptChain(storage::PageStore& store, PageId root)
             "root was never built");
     }
 
+    // Bounded by a cycle check, not a length (the audit's G25): the chain
+    // grows with every checked write for the assertion's life, and
+    // `PageChainGuard` says why no legal walk of it revisits a page.
     PageId page_id = root;
     std::uint32_t pages = 0;
+    storage::PageChainGuard guard("bound cabin chain");
     while (true) {
-        if (Status s = storage::CheckPageWalkBudget(pages++, root, "bound cabin chain");
-            !s.ok()) {
-            return s;
-        }
+        if (Status s = guard.Visit(page_id); !s.ok()) return s;
+        ++pages;
         auto page = store.Get(page_id);
         if (!page.ok()) return page.status();
         // Open() is what proves the page class: a root that is not a

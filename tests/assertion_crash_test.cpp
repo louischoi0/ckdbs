@@ -51,6 +51,44 @@ TEST(AssertionCrashTest, ACheckedWriteAfterACreateMountsEnforcingWithNoCheckpoin
 }
 
 
+// A departure whose sum would underflow is refused before its reservation
+// is logged, and its entry taken back off the tail (the audit's G26): the
+// record logged ahead of the refused apply was one the mount's fold refused
+// the same way, which brought every assertion up unenforcing, and an entry
+// left on the tail unlogged would put the next logged one past the append
+// point replay finds.
+TEST(AssertionCrashTest, AnUnderflowingDepartureLeavesNoRecordAndTheMountStaysEnforcing) {
+    TempDir image;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CurrentCoreGuard as(0);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        Ok(d0, "CREATE TABLE t (id int64, grp int64, x int64) BTREE");
+        Ok(d0, "CREATE ASSERTION a1 ON t GROUP BY (grp) CHECK SUM(x) <= 100");
+        Ok(d0, "INSERT INTO t VALUES (1, 1, -6000000000000000000)");
+        Ok(d0, "INSERT INTO t VALUES (2, 1, 6000000000000000000)");
+        Ok(d0, "INSERT INTO t VALUES (3, 1, -6000000000000000000)");
+        // -6e18 less 6e18 fits no int64: AG3's statement error.
+        const std::string refused = d0.Dispatch("DELETE FROM t WHERE id = 2").response;
+        EXPECT_TRUE(StartsWith(refused, "ERR")) << refused;
+        Ok(d0, "INSERT INTO t VALUES (4, 1, 1)");
+        ASSERT_TRUE(rig->Snapshot(image.path).ok());
+    }
+    auto db = Mount(image.path);
+    ASSERT_TRUE(db.ok()) << db.status().message();
+    EXPECT_EQ(db.value()->recovery().assertions_enforcing, 1u);
+    EXPECT_EQ(db.value()->recovery().assertions_unrecovered, 0u);
+
+    CurrentCoreGuard as(0);
+    CommandDispatcher& d = db.value()->dispatcher();
+    // Group 1 sums to -6e18 + 1: the refused departure took nothing with it.
+    EXPECT_TRUE(StartsWith(d.Dispatch("DELETE FROM t WHERE id = 1").response, "DELETED"));
+    const std::string over = d.Dispatch("INSERT INTO t VALUES (5, 1, 200)").response;
+    EXPECT_TRUE(StartsWith(over, "ERR ASSERTION_VIOLATION")) << "group 1 sums to 1: " << over;
+    EXPECT_TRUE(StartsWith(d.Dispatch("INSERT INTO t VALUES (6, 1, 99)").response, "INSERTED"));
+}
+
 // CK-S0 part 3 (`instructions/v3.2.0/workorder-ck-assertion-commit-settle.md`
 // §5): what a mount makes of a group total when a reservation is committed and
 // when it is undecided at the crash, as an arrival and as a departure.

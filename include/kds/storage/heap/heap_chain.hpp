@@ -70,7 +70,7 @@ namespace kds::heap {
 // corrupt. The rule and the guard live in storage/visit.hpp
 // (kMaxPageWalkLength / CheckPageWalkBudget) - the heap chain named it
 // first, and every catalog- and heap-chain walk owes the same check; a leaf
-// chain owes `storage::LeafChainGuard` instead (the audit's G19). The alias
+// chain owes `storage::PageChainGuard` instead (the audit's G19). The alias
 // keeps this header's public spelling.
 inline constexpr std::uint32_t kMaxChainPages = storage::kMaxPageWalkLength;
 

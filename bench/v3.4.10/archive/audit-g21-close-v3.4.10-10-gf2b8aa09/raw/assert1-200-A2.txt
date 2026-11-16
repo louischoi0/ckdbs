@@ -1,0 +1,19 @@
+host before: 7.00 5.10 5.78 6/471 687860  competing: none
+host after : 7.41 5.33 5.84 12/470 688259  competing: none
+== B  create_assertion_ms=0.4
+  insert-assert-existing     p50=    50.0 p99=   170.5 qps=   16025 err=0
+  insert-assert-newgroup     p50=    44.6 p99=   150.5 qps=   17938 err=0
+  insert-none-existing       p50=    55.0 p99=   175.4 qps=   14701 err=0
+  insert-none-newgroup       p50=    44.9 p99=   141.5 qps=   18089 err=0
+  insert-none-again          p50=    52.9 p99=   174.3 qps=   15460 err=0
+  select                     p50=    70.3 p99=   178.7 qps=   12142 err=0
+  ping                       p50=   671.7 p99=  1289.6 qps=    1380 err=0
+== A  create_assertion_ms=0.3
+  insert-assert-existing     p50=    49.7 p99=   172.8 qps=   16240 err=0
+  insert-assert-newgroup     p50=    43.8 p99=   147.1 qps=   18834 err=0
+  insert-none-existing       p50=    54.2 p99=   160.1 qps=   15483 err=0
+  insert-none-newgroup       p50=    45.4 p99=   142.5 qps=   17958 err=0
+  insert-none-again          p50=    55.2 p99=   169.3 qps=   15018 err=0
+  select                     p50=    70.9 p99=   188.2 qps=   12057 err=0
+  ping                       p50=   684.4 p99=  1233.4 qps=    1370 err=0
+raw: /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/assert1-200-A2.json

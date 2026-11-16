@@ -263,6 +263,49 @@ TEST_F(UndoLogTest, ASelfReferentialLinkIsCorruptionNotAHang) {
     EXPECT_EQ(walked.code(), StatusCode::kCorruption) << walked.message();
 }
 
+// A legal chain longer than the 2^16 steps the walk once counted is walked
+// to its end (the audit's G21): one transaction re-updating one row that
+// many times leaves one record per update, all of them reachable.
+TEST_F(UndoLogTest, AChainLongerThanTheOldBoundIsWalkedToItsEnd) {
+    constexpr std::uint32_t kVersions = (1u << 16) + 2;
+    std::uint64_t head = kNoUndoPtr;
+    for (std::uint32_t i = 0; i < kVersions; ++i) {
+        auto ptr = log_->Append(50, Overwrite(i == 0 ? 41 : 50, head, 300, 2), BytesOf("v"));
+        ASSERT_TRUE(ptr.ok()) << ptr.status().message();
+        head = ptr.value();
+    }
+    std::uint32_t visits = 0;
+    Status walked = log_->Walk(head, [&](const UndoVersion&) -> StatusOr<storage::VisitControl> {
+        ++visits;
+        return storage::VisitControl::kContinue;
+    });
+    ASSERT_TRUE(walked.ok()) << walked.message();
+    EXPECT_EQ(visits, kVersions);
+}
+
+// A cycle of two records is still Corruption, and found within a few laps.
+TEST_F(UndoLogTest, ACycleOfTwoRecordsIsCorruptionNotAHang) {
+    auto v1 = log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), BytesOf("v1"));
+    ASSERT_TRUE(v1.ok());
+    auto v2 = log_->Append(50, Overwrite(50, v1.value(), 300, 2), BytesOf("v2"));
+    ASSERT_TRUE(v2.ok());
+    // v1's prior_undo_ptr now names v2, in place.
+    auto page = store_->Get(UndoPtrPageId(v1.value()));
+    ASSERT_TRUE(page.ok());
+    const std::uint64_t back = v2.value();
+    std::memcpy(page.value().bytes().data() + UndoPtrOffset(v1.value()) + kUndoRecPriorUndoPtrOffset,
+                &back, sizeof(back));
+
+    int visits = 0;
+    Status walked = log_->Walk(v2.value(), [&](const UndoVersion&) -> StatusOr<storage::VisitControl> {
+        ++visits;
+        return storage::VisitControl::kContinue;
+    });
+    EXPECT_EQ(walked.code(), StatusCode::kCorruption) << walked.message();
+    EXPECT_NE(walked.message().find("revisits"), std::string::npos) << walked.message();
+    EXPECT_LE(visits, 8);
+}
+
 TEST_F(UndoLogTest, AVisitorsFailureEndsTheWalkAndIsTheWalksStatus) {
     // A visitor that fails says so by its Status; the walk neither swallows it
     // nor goes on to the older versions.

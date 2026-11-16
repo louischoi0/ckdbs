@@ -458,6 +458,54 @@ TEST_F(EvictionTest, TheDrainWritesQueuedDirtCleanAndTheNextSweepReclaims) {
     EXPECT_EQ(empty.value(), 0u);
 }
 
+// A drain's run that another core cuts short at its third page writes the
+// two-page prefix it copied, and only those bytes (the audit's G23): the
+// buffer was the uncut run's, which every device refuses for its length,
+// so the pass cleaned nothing.
+TEST(EvictionWritebackTest, ADrainRunCutShortByAnotherCoresHoldWritesItsPrefix) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    ProbedDevice probed(*device.value(), /*gate=*/nullptr);
+    auto opened = DevicePageStore::Open(probed, ::kds::storage::FrameCapacity{4096},
+                                        /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    DevicePageStore& store = *opened.value();
+    store.SetLatchArmed(true, /*concurrent_pinners=*/3);
+    SetCurrentCore(0);
+
+    std::vector<PageId> ids;
+    for (int i = 0; i < 3; ++i) {
+        auto created = store.CreateNew();
+        ASSERT_TRUE(created.ok());
+        FormatPage(created.value().second.bytes(), PageType::kHeap);
+        created.value().second.bytes()[kPageBodyOffset] =
+            std::byte{static_cast<unsigned char>(20 + i)};
+        ids.push_back(created.value().first);
+    }
+    ASSERT_EQ(ids[1], ids[0] + 1);
+    ASSERT_EQ(ids[2], ids[0] + 2);
+    EXPECT_EQ(store.EvictColdFrames(8), 0u);  // dirty at zero: queued
+
+    ASSERT_TRUE(store.LatchFrameForTest(ids[2], PinMode::kExclusive, /*core=*/2).ok());
+    auto drained = store.DrainDirtyEvictionQueue();
+    ASSERT_TRUE(drained.ok()) << drained.status().message();
+    EXPECT_EQ(drained.value(), 2u);
+    EXPECT_EQ(probed.run_writes(), 1u);
+    EXPECT_EQ(store.DirtyPageIds(), std::vector<PageId>{ids[2]});
+    for (int i = 0; i < 2; ++i) {
+        std::array<std::byte, kPageSize> on_device{};
+        ASSERT_TRUE(device.value()->ReadPage(ids[i], on_device).ok());
+        EXPECT_EQ(on_device[kPageBodyOffset], std::byte{static_cast<unsigned char>(20 + i)});
+    }
+
+    ASSERT_TRUE(store.UnlatchFrameForTest(ids[2], /*core=*/2).ok());
+    (void)store.EvictColdFrames(8);  // reclaims the two cleaned, queues the third
+    auto rest = store.DrainDirtyEvictionQueue();
+    ASSERT_TRUE(rest.ok()) << rest.status().message();
+    EXPECT_EQ(rest.value(), 1u);
+    EXPECT_TRUE(store.DirtyPageIds().empty());
+}
+
 TEST(EvictionWritebackTest, NoPageWritePrecedesItsWalDurabilityPoint) {
     auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
     ASSERT_TRUE(device.ok());
