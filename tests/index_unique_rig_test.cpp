@@ -231,6 +231,9 @@ TEST(UniqueIndexRigTest, AMultiRowInsertsLaterRowMeetingABusyKeyIsRefusedNotPark
     EXPECT_EQ(r.b.outs[1].response.rfind("INSERTED", 0), 0u)
         << "row 1 outlived its refused statement: " << r.b.outs[1].response;
     ASSERT_TRUE(r.Step(r.a, 0, 2));
+    // Row 2's wake on the busy row went with its refusal.
+    r.rig->Stop();
+    EXPECT_EQ(r.rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
 }
 
 // An UPDATE that has written a row parks mid-walk on a busy key and resumes
@@ -259,6 +262,8 @@ void WalkParksMidStatement(const char* decide, const char* expected,
     // Autocommit: a refused walk takes row 1 back with it.
     ASSERT_TRUE(r.Step(r.b, 1, 1));
     EXPECT_EQ(r.b.outs[1].response, rows_after);
+    r.rig->Stop();
+    EXPECT_EQ(r.rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
 }
 
 TEST(UniqueIndexRigTest, AWalkParkedOnABusyKeyResumesAndWritesAtTheHoldersRollback) {
