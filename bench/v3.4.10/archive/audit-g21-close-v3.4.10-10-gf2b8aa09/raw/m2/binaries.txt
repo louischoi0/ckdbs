@@ -1,0 +1,11 @@
+== binaries (sha256, size, mtime)
+a810124f81c968049b163df2882289143721115cd1ac6072ad40a95056eb2780  7578800 2026-11-15 07:41:19.382288609 +0000  /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-A
+1d84cab14b452936b161bd25407aa73ce1fb851d8548bb8493feaab6ab6017a5  7592672 2026-11-15 07:41:19.394288611 +0000  /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-B
+== no-slice patch
+== drivers
+1a1ca4ee151e5e96a490227c733ebdd8c364db987fbae34c5e7692b6e989c9e4  /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/bm_scan.py
+35693dc24f1714e089a5c6734173e595a6004a15dbba5b6ee045f2b934811a7b  /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/bn_census.py
+63bf63a4635fa0761fe7600f49df58d520e2839ce47cb1923b9d409848f7534c  /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/kwp.py
+6333c1407194cca300c336157ab259fdfa3d5f0eb4a23448230e1007087e9f41  /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/sys_meta.py
+d5dee2cb6eac1995162c8a33b6611b7759ab98ebd88e48235a67b9ba4582c442  /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m2/m2_sanity.py
+2d0add888b942c2eea8f95d5fe449e7af09a77b2dd68cab492ed82d45b8de73f  /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/m2/m2_summary.py

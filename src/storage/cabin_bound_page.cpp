@@ -1,5 +1,6 @@
 #include "kds/storage/cabin_bound_page.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -156,6 +157,19 @@ StatusOr<std::uint16_t> BoundCabinPage::Append(const BoundCabinEntry& entry) {
     if (Status s = Write(at, entry); !s.ok()) return s;
     SetEntryCount(static_cast<std::uint16_t>(at + 1));
     return at;
+}
+
+Status BoundCabinPage::TakeBackLast(std::uint16_t index) {
+    const std::uint16_t count = entry_count();
+    if (count == 0 || index != count - 1) {
+        return Status::InvalidArgument("bound cabin entry " + std::to_string(index) +
+                                       " is not the last of the page's " +
+                                       std::to_string(count));
+    }
+    const std::size_t at = kEntriesOffset + static_cast<std::size_t>(index) * kEntryBytes;
+    std::fill_n(page_.begin() + static_cast<std::ptrdiff_t>(at), kEntryBytes, std::byte{0});
+    SetEntryCount(index);
+    return Status::OK();
 }
 
 StatusOr<BoundCabinEntry> BoundCabinPage::Read(std::uint16_t index) const {

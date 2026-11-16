@@ -1,10 +1,10 @@
 # Work order CS - `BEGIN READ ONLY`: a transaction that issues no id, logs nothing and is a held snapshot
 
-Status: **CLOSED 2026-11-15 on the work branch, not landed** - every stage on worktree `cs-read-only-transaction`, the close measured (§7's CS-S3); landing waits for the operator's word. Opened 2026-11-15 on the operator's standing go-ahead of
+Status: **CLOSED 2026-11-15, landed on `main` on the operator's word "push no verify" of 2026-11-16 - a `--no-ff` merge pushed with `--no-verify`, after `origin/main` `75f4d5dc` (audit G21, G23-G26) was merged into the work branch and the full suite run there** - every stage on worktree `cs-read-only-transaction`, the close measured (§7's CS-S3). Opened 2026-11-15 on the operator's standing go-ahead of
 2026-11-15 (go-ahead-achieving-milestone, argument
 `cs-read-only-transaction`), on worktree `cs-read-only-transaction` from
 `32354dbe` (`v3.4.11-1-g32354dbe`). **CS-Q0..Q11 are adopted as CLA
-proposed** under that word (`raft-marks-2026-11-15.md` §8); none is the
+proposed** under that word (`raft-marks-2026-11-15.md` §10); none is the
 operator's own per-item mark. Written on `main` from `030b5bd9`
 (`v3.4.10-1-g030b5bd9`) on the operator's word of 2026-11-15
 (`raft-marks-2026-11-15.md` §4), and carried onto `61917b0f`

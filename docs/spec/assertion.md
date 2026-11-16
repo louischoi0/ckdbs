@@ -377,9 +377,20 @@ On a checked write (per §4.2), executed inline in the writing statement:
      later admission, and the statement gives it back on any exit that does
      not reach step 3.
 3. **Reserve:** append a Bound Cabin entry with the `RESERVED` flag, then -
-   one step under the registry's latch - emit the WAL record (§7), apply the
-   delta to the group header and release the hold. Proceed with the
-   heap/index writes of the statement.
+   one step under the registry's latch - check the apply, emit the WAL
+   record (§7), apply the delta to the group header and release the hold.
+   Proceed with the heap/index writes of the statement. **The apply is
+   checked before the record since the audit's G26**: a departure's sum can
+   underflow and its group can be missing, and no admission asks either
+   (step 2 checks arrivals), so a refused apply after its record left a
+   record the mount's fold refused the same way, bringing every assertion
+   of the instance up unenforcing. A refused check is AG3's statement error;
+   it takes the entry back off the tail, still held and named by no record,
+   so the next logged entry lands at the append point replay finds. A
+   departure that finds no group is refused before its entry is placed. A
+   log written before G26 with such a stray record is not repaired: its
+   mount still leaves every assertion unenforcing, until `DROP` and
+   `CREATE ASSERTION`.
 4. **Commit:** the transaction's pending set is dropped, and nothing is
    written - no page, no record, no stamp (CK-R2). The aggregate was correct
    from admission, and `RESERVED` stays set on the entries (CK-R1), so the
@@ -650,6 +661,13 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > Carrying `group_id` on the entry and on `AssertEntryPayload` is what
   > makes the linkage reconstructible instead, and reduces the snapshot to
   > the group count.
+  >
+  > **The chain is O(all writes, forever) too**, so its walks - the
+  > mount's adoption of its tail and its re-link from the pages - are
+  > bounded by a cycle check, not a length, since the audit's G25
+  > (`storage::PageChainGuard`): a 2^20-page budget refused a long-lived
+  > assertion's revival as `Corruption`. The chain grows only at its tail
+  > and never frees a page, so no legal walk revisits one.
   >
   > **Unchanged:** the write amplification budgeted below, the admission
   > check, and its O(1) read.

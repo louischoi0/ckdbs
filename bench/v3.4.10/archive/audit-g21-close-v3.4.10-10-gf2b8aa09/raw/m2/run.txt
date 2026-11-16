@@ -1,0 +1,24 @@
+== CP-S0 M2 run
+started_utc 2026-11-15 08:20:08 UTC
+tree /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes
+describe v3.4.11-8-ge944b639 head e944b639
+driver /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/bm_scan.py (unmodified)
+base /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-A
+noslice /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-B
+workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m2work
+out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m2
+port 32611 (arms from 32611; sanity 32621)
+replicate 0
+runs 5 blocks 12 scan_ops 768 point_ops 3000 cells rows-100k,wide-a
+pin_server 2 pin_driver 3 quiet_load 2 quiet_wait 60
+workdir_fs /dev/nvme0n1p1 ext4
+host_wait_s 0
+sanity_start 08:20:09
+sanity_rc 0
+census_start 08:20:26
+census_cmd python3 /home/louis/ckdbs/.claude/worktrees/audit-g1-g15-fixes/tools/bm_scan.py census --arm base=/tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-A --arm close=/tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/bin/kds_server-B --workdir /home/louis/bench-runs/audit-g21-close/20261115T074119Z/m2work --port 32611 --pin-server 2 --pin-driver 3 --runs 5 --blocks 12 --scan-ops 768 --point-ops 3000 --cells rows-100k\,wide-a --quiet-load 2 --quiet-wait 60 --out /tmp/claude-1000/-home-louis-ckdbs/27596f25-ceea-4694-a7ec-1a2566519ac2/scratchpad/g21/out/20261115T074119Z/m2/census.json
+census_rc 0
+census_end 08:24:25
+summary_rc 0
+1.47 3.56 4.94 1/446 697719
+ended_utc 2026-11-15 08:24:25 UTC

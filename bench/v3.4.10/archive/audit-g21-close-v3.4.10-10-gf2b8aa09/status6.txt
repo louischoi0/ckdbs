@@ -1,0 +1,47 @@
+2026-11-15T08:15:56Z BEGIN m4 try1
+2026-11-15T08:17:02Z END m4 rc=0 busy_samples=33 t=81s
+2026-11-15T08:17:02Z TAINTED m4: kept, flagged
+2026-11-15T08:17:17Z BEGIN mount try1
+2026-11-15T08:17:17Z mount A rows=0 rep=1
+2026-11-15T08:17:18Z mount B rows=0 rep=1
+2026-11-15T08:17:19Z mount B rows=0 rep=2
+2026-11-15T08:17:20Z mount A rows=0 rep=2
+2026-11-15T08:17:21Z mount A rows=0 rep=3
+2026-11-15T08:17:22Z mount B rows=0 rep=3
+2026-11-15T08:17:23Z mountassert A rows=4000 rep=1
+2026-11-15T08:17:25Z mountassert B rows=4000 rep=1
+2026-11-15T08:17:27Z mountassert B rows=4000 rep=2
+2026-11-15T08:17:29Z mountassert A rows=4000 rep=2
+2026-11-15T08:17:31Z mountassert A rows=4000 rep=3
+2026-11-15T08:17:33Z mountassert B rows=4000 rep=3
+2026-11-15T08:17:35Z mountassertcrash A rows=4000 rep=1
+2026-11-15T08:17:37Z mountassertcrash B rows=4000 rep=1
+2026-11-15T08:17:39Z mountassertcrash B rows=4000 rep=2
+2026-11-15T08:17:40Z mountassertcrash A rows=4000 rep=2
+2026-11-15T08:17:42Z mountassertcrash A rows=4000 rep=3
+2026-11-15T08:17:45Z mountassertcrash B rows=4000 rep=3
+2026-11-15T08:17:46Z mountassert A rows=10000 rep=1
+2026-11-15T08:17:52Z mountassert B rows=10000 rep=1
+2026-11-15T08:17:57Z mountassert B rows=10000 rep=2
+2026-11-15T08:18:03Z mountassert A rows=10000 rep=2
+2026-11-15T08:18:09Z mountassert A rows=10000 rep=3
+2026-11-15T08:18:15Z mountassert B rows=10000 rep=3
+2026-11-15T08:18:21Z END mount rc=0 busy_samples=31 t=160s
+2026-11-15T08:18:21Z TAINTED mount: kept, flagged
+2026-11-15T08:18:36Z BEGIN assert1 try1
+2026-11-15T08:18:37Z assert1 preload=200 A@2 B@3
+2026-11-15T08:18:57Z assert1 preload=1000 A@2 B@3
+2026-11-15T08:19:17Z assert1 preload=10000 A@2 B@3
+2026-11-15T08:19:37Z assert1 preload=1000 A@3 B@2
+2026-11-15T08:19:53Z END assert1 rc=0 busy_samples=37 t=252s
+2026-11-15T08:19:53Z TAINTED assert1: kept, flagged
+2026-11-15T08:20:08Z BEGIN m2 try1
+2026-11-15T08:24:26Z END m2 rc=0 busy_samples=127 t=525s
+2026-11-15T08:24:26Z TAINTED m2: kept, flagged
+2026-11-15T08:24:41Z BEGIN m3-s0-A-a try1
+2026-11-15T08:25:50Z END m3-s0-A-a rc=0 busy_samples=34 t=609s
+2026-11-15T08:25:50Z TAINTED m3-s0-A-a: kept, flagged
+2026-11-15T08:26:05Z BEGIN m3-s0-B-a try1
+2026-11-15T08:27:14Z END m3-s0-B-a rc=0 busy_samples=34 t=693s
+2026-11-15T08:27:14Z TAINTED m3-s0-B-a: kept, flagged
+2026-11-15T08:27:17Z DONE (m1x cut for the budget)

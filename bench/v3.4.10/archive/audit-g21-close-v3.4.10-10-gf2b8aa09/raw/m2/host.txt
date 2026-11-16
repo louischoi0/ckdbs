@@ -1,0 +1,55 @@
+== date
+2026-11-15 08:20:09 UTC
+== uname
+Linux kdbs 6.12.116+deb13-cloud-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.116-1 (2026-11-07) x86_64 GNU/Linux
+== cpus
+8
+model name	: INTEL(R) XEON(R) PLATINUM 8581C CPU @ 2.10GHz
+== siblings
+cpu0: 0,4
+cpu1: 1,5
+cpu2: 2,6
+cpu3: 3,7
+cpu4: 0,4
+cpu5: 1,5
+cpu6: 2,6
+cpu7: 3,7
+== mem
+               total        used        free      shared  buff/cache   available
+Mem:           32098        4248        3458        1621       26524       27850
+Swap:              0           0           0
+== loadavg
+4.08 4.78 5.61 2/463 690070
+== df -T workdir
+Filesystem     Type 1K-blocks      Used Available Use% Mounted on
+/dev/nvme0n1p1 ext4 263968576 229711116  23405668  91% /
+== df -T out
+Filesystem     Type  1K-blocks    Used Available Use% Mounted on
+tmpfs          tmpfs  16434540 1659212  14775328  11% /tmp
+== competing (pgrep cc1plus|cmake --build|ctest|kds_tests)
+none
+== listeners
+State  Recv-Q Send-Q Local Address:Port  Peer Address:Port
+LISTEN 0      4096       127.0.0.1:15611      0.0.0.0:*   
+LISTEN 0      4096       127.0.0.1:15611      0.0.0.0:*   
+LISTEN 0      4096       127.0.0.1:15611      0.0.0.0:*   
+LISTEN 0      4096       127.0.0.1:15611      0.0.0.0:*   
+LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*   
+LISTEN 0      512        127.0.0.1:46633      0.0.0.0:*   
+LISTEN 0      512        127.0.0.1:45379      0.0.0.0:*   
+LISTEN 0      512        127.0.0.1:44339      0.0.0.0:*   
+LISTEN 0      4096       127.0.0.1:9999       0.0.0.0:*   
+LISTEN 0      511        127.0.0.1:9001       0.0.0.0:*   
+LISTEN 0      511        127.0.0.1:9000       0.0.0.0:*   
+LISTEN 0      4096       127.0.0.1:40587      0.0.0.0:*   
+LISTEN 0      512        127.0.0.1:39523      0.0.0.0:*   
+LISTEN 0      128          0.0.0.0:20202      0.0.0.0:*   
+LISTEN 0      128          0.0.0.0:22         0.0.0.0:*   
+LISTEN 0      4096       127.0.0.1:20241      0.0.0.0:*   
+LISTEN 0      4096      127.0.0.54:53         0.0.0.0:*   
+LISTEN 0      20         127.0.0.1:25         0.0.0.0:*   
+LISTEN 0      4096         0.0.0.0:5355       0.0.0.0:*   
+LISTEN 0      20             [::1]:25            [::]:*   
+LISTEN 0      4096               *:20201            *:*   
+LISTEN 0      128             [::]:22            [::]:*   
+LISTEN 0      4096            [::]:5355          [::]:*   

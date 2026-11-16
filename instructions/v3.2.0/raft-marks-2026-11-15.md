@@ -70,11 +70,34 @@ before the merge.
 | **Does not settle** | the opening of CV or of any stage; CV-Q0 to CV-Q6, each CLA's proposal only - CV-Q4, the tie order under a reverse walk, amends `parser-v2.md` I12 if marked (a); a merge, a push, a version |
 | **Recorded at** | this file; the order's header and §7; the CV row and this file's row in `instructions/v3.2.0/index.md` |
 
-## 8. CS opened on the standing go-ahead
+## 8. G21, G23-G26 verified, then taken up
+
+| | |
+|---|---|
+| **Words** | W7: *"resume the G21-G64 verification"*; W8: *"fix G21 and G23-G26; G21 as proposed"*, with the skill `go-ahead-achieving-milestone` invoked (*"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*) (each given in Korean; recorded in English) |
+| **Mark** | **W7:** CLA kept the scale the operator chose on 2026-11-14 for G16-G20 (the finders' highest severity first, two verifiers a finding, about ten a pass) and verified G21 and G23-G26 at `030b5bd9`; all five survived both lenses (the pending entry's §10, `f63c6023`). **W8:** the five taken up as one milestone, on worktree `audit-g1-g15-fixes` (its directory; a worktree-isolated session cannot create a second one) on branch `worktree-audit-g21-g26-fixes` from `f63c6023`, whose build inputs are `61917b0f`'s - `origin/main` with F4 landed by another session (§3) after the verification read `030b5bd9`. **G21-D is the operator's own mark**: the version-chain walks take `kds::CycleGuard` in place of the 2^16-step bound `txn.md` §3.7 stated, `kMaxUndoChainLength` kept only for `UndecidedInsert`, as the verifiers proposed |
+| **Does not settle** | G27-G64 (less G59), the 15 unread slices, the review's two findings put to the operator (the pending entry's §10), a merge, a push, a version |
+| **Closed** | on branch `worktree-audit-g21-g26-fixes`: the fixes at `0304a822`, two reviews (`6c26ee45`, `f2b8aa09`), `origin/main` `32354dbe` merged at `e944b639` (documents only), the suite 4469/4469 and the sim corpus 280/0 there, the close's A/B at `f153f3e5` (`bench/v3.4.10/results-audit-g21-close-v3.4.10-10-gf2b8aa09.md`; a shared host, nothing attributable to the fixes). Not merged to `main`, not pushed |
+| **Recorded at** | this file; the pending entry's §10; this file's row in `instructions/v3.2.0/index.md` |
+
+## 9. Decisions adopted on the standing go-ahead
+
+Each is **adopted on the operator's standing go-ahead of 2026-11-15
+(go-ahead-achieving-milestone)**: CLA's proposal, not the operator's own
+per-item mark. None is `[quiet-wrong]`.
+
+| Item | Options | Adopted, and why |
+|---|---|---|
+| **G23-D** - where the cut run's length is applied | (a) `scratch.resize(run * kPageSize)` where the run is cut; (b) a span over the prefix at the write | **(a)**, the verifiers' alternative: the buffer is the run's in every later use, not only at the write |
+| **G24-D** - how a released spill under the copy is answered | (a) the decode split from the append, and a `NotFound` decode of a version the head writer wrote read again by CI-R7's loop; (b) decode only the key columns | **(a)**, both verifiers': (b) does not hold for a covering index or a unique build's check, which use the whole row. Widened at review to the head writer's older versions in the undo walk, and to a re-read that finds the row exactly as copied failing with the decode's own status. No cell: the copy/append seam CI-R7 lacks does not exist (`known-gaps.md`) |
+| **G25-D** - the guard on the Bound Cabin walks | (a) the leaf walks' guard, renamed `storage::PageChainGuard` now that it guards two chain kinds; (b) `kds::CycleGuard` written into each walk | **(a)**: one call shape and one message at every page-chain site; the old name survives only in history records |
+| **G26-D** - how a refused apply leaves no record | (a) check under the registry latch, then log, then apply; a refused check takes the placed entry back off the held tail (`BoundCabinPage::TakeBackLast`); (b) check before the page work | **(a)**, both verifiers': the check must run under the hold the apply runs under, which the page work is outside of, and an entry left unlogged on the tail would shift the next record's index at replay. Widened at review: a departure whose first hold found no group (group id 0) is refused before its record, as replay would refuse it |
+
+## 10. CS opened on the standing go-ahead
 
 | | |
 |---|---|
 | **Word** | W7, on 2026-11-15: the operator invoked `go-ahead-achieving-milestone` with the argument `cs-read-only-transaction` - the skill's standing word, *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
-| **Mark** | **CS is opened** on worktree `cs-read-only-transaction` from `32354dbe` (`v3.4.11-1-g32354dbe`). **CS-Q0..CS-Q9 are each adopted as CLA proposed - option (a) in every row - on the operator's standing go-ahead of 2026-11-15 (go-ahead-achieving-milestone)**, not the operator's own per-item marks. No item of the table carries `[quiet-wrong]`; the two `[quiet-wrong]` rules, CS-R1 and CS-R2, are rules and not choices, and each is pinned by a test in the stage that lands it. CS-Q1 (a) keeps its own stop: if CS-S0's bar is not met, CS returns to the operator. The bar was met. **CS-Q10** (a `DURABILITY` clause on `READ ONLY`: accepted, binding nothing) and **CS-Q11** (`[quiet-wrong]`, what a read inside one records: what an autocommit read records, the Cabin bank's premise re-read at `bbaff33a` and found holding) surfaced in the stages. Each was written into the order's items table first and adopted (a) under the same word. **CS closed on the work branch** at `20228de1`, not landed |
-| **Does not settle** | a merge, a push, a tag or a version |
+| **Mark** | **CS is opened** on worktree `cs-read-only-transaction` from `32354dbe` (`v3.4.11-1-g32354dbe`). **CS-Q0..CS-Q9 are each adopted as CLA proposed - option (a) in every row - on the operator's standing go-ahead of 2026-11-15 (go-ahead-achieving-milestone)**, not the operator's own per-item marks. No item of the table carries `[quiet-wrong]`; the two `[quiet-wrong]` rules, CS-R1 and CS-R2, are rules and not choices, and each is pinned by a test in the stage that lands it. CS-Q1 (a) keeps its own stop: if CS-S0's bar is not met, CS returns to the operator. The bar was met. **CS-Q10** (a `DURABILITY` clause on `READ ONLY`: accepted, binding nothing) and **CS-Q11** (`[quiet-wrong]`, what a read inside one records: what an autocommit read records, the Cabin bank's premise re-read at `bbaff33a` and found holding) surfaced in the stages. Each was written into the order's items table first and adopted (a) under the same word. **CS closed on the work branch** at `20228de1`; **landed on `main` on the operator's word "push no verify" of 2026-11-16 - a `--no-ff` merge pushed with `--no-verify`, after `origin/main` `75f4d5dc` (audit G21, G23-G26) was merged into the work branch and the full suite run there** |
+| **Does not settle** | a tag or a version |
 | **Recorded at** | this file; the order's header, items table and §7; the CS row and this file's row in `instructions/v3.2.0/index.md` |

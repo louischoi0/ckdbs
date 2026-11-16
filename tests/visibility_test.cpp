@@ -355,6 +355,43 @@ TEST_F(VisibilityTest, ADamagedChainIsCorruptionRatherThanAWrongAnswer) {
     EXPECT_EQ(verdict.status().code(), StatusCode::kCorruption);
 }
 
+// A reader whose snapshot predates one transaction's 2^16 + 2 updates of one
+// row steps back over every one of them to the version it sees (the audit's
+// G21: the walk once answered Corruption past 2^16 steps).
+TEST_F(VisibilityTest, AChainLongerThanTheOldBoundResolvesToTheVersionTheViewSees) {
+    constexpr std::uint32_t kVersions = (1u << 16) + 2;
+    std::uint64_t head = Supersede(/*writer=*/60, /*prior_trx_id=*/kAlwaysVisibleTrxId,
+                                   kNoUndoPtr, UndoRecordType::kOverwrite, "orig");
+    for (std::uint32_t i = 1; i < kVersions; ++i) {
+        head = Supersede(60, /*prior_trx_id=*/60, head, UndoRecordType::kOverwrite, "mid");
+        ASSERT_NE(head, kNoUndoPtr);
+    }
+    std::string seen;
+    auto verdict = Resolve(ViewAt(60), /*trx_id=*/60, /*deleted=*/false, head, "newest", &seen);
+    ASSERT_TRUE(verdict.ok()) << verdict.status().message();
+    EXPECT_EQ(verdict.value(), Visibility::kVisible);
+    EXPECT_EQ(seen, "orig");
+}
+
+// Two records naming each other, every writer invisible: Corruption, not a
+// hang and not a wrong answer.
+TEST_F(VisibilityTest, ACycleOfTwoRecordsIsCorruptionRatherThanAHang) {
+    const std::uint64_t first =
+        Supersede(60, /*prior_trx_id=*/60, kNoUndoPtr, UndoRecordType::kOverwrite, "a");
+    const std::uint64_t second =
+        Supersede(60, /*prior_trx_id=*/60, first, UndoRecordType::kOverwrite, "b");
+    auto page = store_->Get(UndoPtrPageId(first));
+    ASSERT_TRUE(page.ok());
+    std::memcpy(page.value().bytes().data() + UndoPtrOffset(first) + kUndoRecPriorUndoPtrOffset,
+                &second, sizeof(second));
+
+    auto verdict = Resolve(ViewAt(60), /*trx_id=*/60, /*deleted=*/false, second, "c", nullptr);
+    ASSERT_FALSE(verdict.ok());
+    EXPECT_EQ(verdict.status().code(), StatusCode::kCorruption) << verdict.status().message();
+    EXPECT_NE(verdict.status().message().find("revisits"), std::string::npos)
+        << verdict.status().message();
+}
+
 // ---- No xmax anywhere -----------------------------------------------------
 //
 // The tuple header's `reserved` byte and the slot's spare bits are the two

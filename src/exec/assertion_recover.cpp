@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "kds/storage/cabin_bound_page.hpp"
-#include "kds/storage/heap/heap_chain.hpp"
+#include "kds/storage/visit.hpp"
 #include "kds/wal/log_scanner.hpp"
 #include "kds/wal/payload.hpp"
 
@@ -34,16 +34,12 @@ StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId
     // individually is O(entries x groups) (`bound_cabin.hpp`).
     std::vector<BoundCabin::ScannedEntry> scanned;
     PageId page_id = root;
-    // The same cycle bound the chain walks elsewhere use: a damaged link must be
-    // a reported Corruption and never a hang.
-    for (std::uint32_t steps = 0; page_id != kInvalidPageId; ++steps) {
-        // The same bound `AdoptChain` walks under, named rather than repeated:
-        // one chain, one cycle guard.
-        if (steps > heap::kMaxChainPages) {
-            return Status::Corruption("assertion recovery: cabin page chain from " +
-                                      std::to_string(root) +
-                                      " exceeds the maximum length; the links may form a cycle");
-        }
+    // The bound `AdoptChain` walks under, one chain, one guard: a damaged link
+    // is a reported Corruption and never a hang, and a long chain is neither
+    // (the audit's G25).
+    storage::PageChainGuard guard("assertion recovery: cabin page chain");
+    while (page_id != kInvalidPageId) {
+        if (Status s = guard.Visit(page_id); !s.ok()) return s;
         auto page = store.GetForRead(page_id);
         if (!page.ok()) {
             return page.status().WithContext("assertion recovery: cabin page " +

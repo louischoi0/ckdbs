@@ -4,6 +4,7 @@
 #include <cstring>
 #include <string>
 
+#include "kds/base/cycle_guard.hpp"
 #include "kds/wal/log_page_init.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
@@ -201,19 +202,18 @@ StatusOr<UndoVersion> UndoLog::Read(std::uint64_t ptr) {
 Status UndoLog::Walk(
     std::uint64_t ptr,
     const std::function<StatusOr<storage::VisitControl>(const UndoVersion&)>& fn) {
-    std::uint32_t steps = 0;
+    CycleGuard<std::uint64_t> guard(ptr);
     while (ptr != kNoUndoPtr) {
-        if (++steps > kMaxUndoChainLength) {
-            return Status::Corruption("undo chain exceeds " +
-                                      std::to_string(kMaxUndoChainLength) +
-                                      " versions; treating it as a cycle");
-        }
         auto version = Read(ptr);
         if (!version.ok()) return version.status();
         auto control = storage::ResolveVisit(fn(version.value()), "undo chain");
         if (!control.ok()) return control.status();
         if (control.value() == storage::VisitControl::kStop) return Status::OK();
         ptr = version.value().prior_undo_ptr;
+        if (ptr != kNoUndoPtr && guard.Revisits(ptr)) {
+            return Status::Corruption("undo chain revisits the record at " +
+                                      std::to_string(ptr) + "; the links are cyclic");
+        }
     }
     return Status::OK();
 }

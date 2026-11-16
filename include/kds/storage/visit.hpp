@@ -54,13 +54,14 @@ inline StatusOr<VisitControl> ResolveVisit(StatusOr<VisitControl> outcome, const
 // link, which without it is an infinite loop inside a statement.
 // heap::kMaxChainPages aliases this. **A user relation's or an index's leaf
 // chain is not bounded by it** - it grows with the data past any budget -
-// but by `LeafChainGuard` below (the audit's G19).
+// but by `PageChainGuard` below (the audit's G19), and neither is a Bound
+// Cabin chain, which grows with its relation's write history (G25).
 inline constexpr std::uint32_t kMaxPageWalkLength = 1u << 20;
 
 // The guard itself, shared for ResolveVisit's reason: every catalog- or
 // heap-chain loop (the heap chain, the catalog chains, and each caller that
 // steps their pages itself) owes the same check, and copies drift; a
-// leaf-chain walk owes `LeafChainGuard` below instead. Call with the count
+// leaf-chain or Bound Cabin chain walk owes `PageChainGuard` below instead. Call with the count
 // of pages already visited, before visiting the next; `what` names the walk
 // for the message.
 inline Status CheckPageWalkBudget(std::uint32_t pages_visited, PageId origin, const char* what) {
@@ -70,20 +71,23 @@ inline Status CheckPageWalkBudget(std::uint32_t pages_visited, PageId origin, co
                               " pages; the page links are cyclic or corrupt");
 }
 
-// **The bound of a leaf-chain walk**: a btree's or an index's leaves, from
-// any leaf rightward. A cycle check (`CycleGuard`), never a length, because
-// a relation's leaf chain is as long as its data - a budget refused every
-// whole walk of a relation past 8 GiB of leaves as `Corruption` (the audit's
-// G19). Sound because no legal walk revisits a leaf: a live tree never
-// frees one (a drop or a rebuild waits out every walk that could bind it),
-// a split keeps a leaf's id and links the new page after it, and a sliced
-// walk that yields between leaves resumes at an id it has not visited.
+// **The bound of a page-chain walk that grows with the data**: a btree's or
+// an index's leaves, from any leaf rightward (the audit's G19), and an
+// assertion's Bound Cabin chain (G25). A cycle check (`CycleGuard`), never a
+// length, because such a chain is as long as what it holds - a budget
+// refused every whole walk of a relation past 8 GiB of leaves as
+// `Corruption`. Sound because no legal walk revisits a page: a live tree
+// never frees a leaf (a drop or a rebuild waits out every walk that could
+// bind it), a split keeps a leaf's id and links the new page after it, and
+// a sliced walk that yields between leaves resumes at an id it has not
+// visited; a Bound Cabin chain grows only at its tail and never frees a
+// page (`page.md`, `FreePage` refuses the class).
 //
 // Call `Visit` with each page the walk is about to read, its origin first;
 // the first call names the origin. `what` names the walk for the message.
-class LeafChainGuard {
+class PageChainGuard {
 public:
-    explicit LeafChainGuard(const char* what = "leaf chain") noexcept : what_(what) {}
+    explicit PageChainGuard(const char* what = "page chain") noexcept : what_(what) {}
 
     Status Visit(PageId page) {
         if (origin_ == kInvalidPageId) {

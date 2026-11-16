@@ -1,0 +1,30 @@
+07:41:30 hb_age=11 last=2026-11-15T07:41:19Z BEGIN m1
+07:42:30 hb_age=11 last=2026-11-15T07:41:19Z BEGIN m1
+07:43:30 hb_age=11 last=2026-11-15T07:41:19Z BEGIN m1
+07:44:30 hb_age=11 last=2026-11-15T07:41:19Z BEGIN m1
+07:45:30 hb_age=11 last=2026-11-15T07:41:19Z BEGIN m1
+07:46:30 hb_age=11 last=2026-11-15T07:46:08Z BEGIN m1swap
+07:47:30 hb_age=11 last=2026-11-15T07:46:08Z BEGIN m1swap
+07:48:30 hb_age=11 last=2026-11-15T07:46:08Z BEGIN m1swap
+07:49:30 hb_age=11 last=2026-11-15T07:46:08Z BEGIN m1swap
+07:50:30 hb_age=11 last=2026-11-15T07:50:09Z BEGIN m4
+07:51:30 hb_age=11 last=2026-11-15T07:51:15Z assertion preload=200
+07:52:30 hb_age=11 last=2026-11-15T07:52:23Z assertion preload=10000
+07:53:30 hb_age=11 last=2026-11-15T07:52:58Z BEGIN m3-s2-A-a
+08:11:14 hb_age=3 s5=2026-11-15T08:11:05Z TAINTED m3-s2-A-a: kept, flagged s6=
+08:12:14 hb_age=3 s5=2026-11-15T08:11:20Z BEGIN m3-s2-B-a try1 s6=
+08:13:14 hb_age=3 s5=2026-11-15T08:12:47Z BEGIN m3-s2-B-b try1 s6=
+08:14:14 hb_age=3 s5=2026-11-15T08:14:11Z BEGIN m3-s2-A-b try1 s6=
+08:15:14 hb_age=3 s5=2026-11-15T08:14:11Z BEGIN m3-s2-A-b try1 s6=
+08:16:14 hb_age=3 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:15:56Z BEGIN m4 try1
+08:17:14 hb_age=3 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:17:02Z TAINTED m4: kept, flagged
+08:18:14 hb_age=3 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:18:09Z mountassert A rows=10000 rep=3
+08:19:14 hb_age=3 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:18:57Z assert1 preload=1000 A@2 B@3
+08:20:14 hb_age=3 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:20:08Z BEGIN m2 try1
+08:21:14 hb_age=3 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:20:08Z BEGIN m2 try1
+08:22:14 hb_age=3 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:20:08Z BEGIN m2 try1
+08:23:14 hb_age=3 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:20:08Z BEGIN m2 try1
+08:24:14 hb_age=3 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:20:08Z BEGIN m2 try1
+08:25:14 hb_age=3 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:24:41Z BEGIN m3-s0-A-a try1
+08:26:14 hb_age=2 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:26:05Z BEGIN m3-s0-B-a try1
+08:27:14 hb_age=2 s5=2026-11-15T08:15:36Z TAINTED m3-s2-A-b: kept, flagged s6=2026-11-15T08:27:14Z TAINTED m3-s0-B-a: kept, flagged

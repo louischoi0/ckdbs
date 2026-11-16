@@ -195,8 +195,23 @@ void FreeUnbuiltTree(storage::PageStore& store, PageId root, catalog::Oid owner)
     }
 }
 
-// Appends one version's entry, decoding the key columns out of `payload`,
-// and returns the decoded version for a unique build's check.
+// Decodes one version's columns out of `payload`, its spilled values
+// resolved. Kept apart from the append so a caller can tell a value the
+// decode could not read - a spill a rollback released under the copy - from
+// a failed append.
+StatusOr<std::vector<parser::AstValue>> DecodeVersion(const Backfill& cx,
+                                                      std::span<const std::byte> payload) {
+    std::vector<PendingSpill> spills;
+    auto row = DecodeRow(cx.access.schema, cx.access.layout, payload, &spills);
+    if (!row.ok()) return row.status();
+    // Safe here and only here: no span into a heap page is live, because the
+    // caller copied the payload out and released it.
+    if (Status s = ResolveSpills(cx.store, spills, row.value()); !s.ok()) return s;
+    return row;
+}
+
+// Appends one version's entry from its decoded `row`, and returns the row
+// for a unique build's check.
 //
 // Through `AppendIndexEntry`, the same function the write hook loops over -
 // so a backfilled entry and a written one cannot disagree about what an entry
@@ -205,15 +220,10 @@ void FreeUnbuiltTree(storage::PageStore& store, PageId root, catalog::Oid owner)
 StatusOr<std::vector<parser::AstValue>> AppendVersion(const Backfill& cx,
                                                       catalog::TableAccess::IndexRef& ix,
                                                       std::uint64_t tuple_key,
-                                                      std::span<const std::byte> payload) {
+                                                      std::span<const std::byte> payload,
+                                                      std::vector<parser::AstValue> row) {
     storage::PageStore& store = cx.store;
     const catalog::TableAccess& access = cx.access;
-    std::vector<PendingSpill> spills;
-    auto row = DecodeRow(access.schema, access.layout, payload, &spills);
-    if (!row.ok()) return row.status();
-    // Safe here and only here: no span into a heap page is live, because the
-    // caller copied the payload out and released it.
-    if (Status s = ResolveSpills(store, spills, row.value()); !s.ok()) return s;
 
     if (cx.online) {
         // CI-R6: one root, the slot's. Writers grow the tree too, and each
@@ -229,12 +239,12 @@ StatusOr<std::vector<parser::AstValue>> AppendVersion(const Backfill& cx,
     // place, and reports none. Fenced the root is held in the caller's own
     // IndexRef rather than published: the index has no sys.indexes row yet,
     // which is the point of building it before it is visible.
-    auto moved = AppendIndexEntry(store, access, ix, row.value(), /*first_col_pos=*/0, payload,
+    auto moved = AppendIndexEntry(store, access, ix, row, /*first_col_pos=*/0, payload,
                                   tuple_key, /*previous=*/{}, cx.log,
                                   cx.online && cx.log == nullptr ? &cx.catalog : nullptr);
     if (!moved.ok()) return moved.status();
     if (moved.value() != kInvalidPageId) ix.root_page_id = moved.value();
-    return std::move(row.value());
+    return row;
 }
 
 // The row `tuple_key` as it now stands, copied out of its leaf under that
@@ -283,7 +293,14 @@ StatusOr<std::optional<StagedRow>> ReadRowAgain(const Backfill& cx, std::uint64_
 // it. So the walk never stops at that writer; it reads the writer's undo,
 // which is the version a rollback restores. Where that read fails and the
 // writer has decided since, the row is read again as it now stands and
-// indexed instead, at most `storage::kMaxDescentRestarts` times.
+// indexed instead, at most `storage::kMaxDescentRestarts` times. **So is a
+// row whose head writer was in flight at the copy when a version that writer
+// wrote - the head, or an older one of its own - names a spilled value the
+// decode finds released** (the audit's G24): a rollback on another core
+// restores the row and then releases its spills, so the copy can name a
+// value that is gone while the row it belonged to is back. A re-read that
+// finds the row exactly as copied was no rollback's, and its decode failure
+// is the build's.
 Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
                       txn::UndoLog& undo, StagedRow row) {
     const auto unreachable_below = [&cx](std::uint64_t superseder) {
@@ -296,8 +313,23 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
             return unreachable_below(superseder);
         };
         bool stale = false;
-        auto latest = AppendVersion(cx, ix, row.tuple_key, row.payload);
-        if (!latest.ok()) {
+        // A decode that found a spill of the head writer's own released,
+        // which the re-read below must explain (G24). Not `!IsInFlight`: a
+        // rollback releases its spills before the writer leaves the
+        // in-flight table.
+        Status released = Status::OK();
+        const auto released_under_copy = [&](const Status& decode, std::uint64_t writer) {
+            return cx.online && row.head_in_flight && writer == row.trx_id &&
+                   decode.code() == StatusCode::kNotFound;
+        };
+        auto latest = DecodeVersion(cx, row.payload);
+        if (!latest.ok() && released_under_copy(latest.status(), row.trx_id)) {
+            released = latest.status();
+            stale = true;
+        } else if (latest.ok()) {
+            latest = AppendVersion(cx, ix, row.tuple_key, row.payload, std::move(latest.value()));
+        }
+        if (!stale && !latest.ok()) {
             // **Online, a `PURGE` can retire the row under the walk** (CI-S4's
             // review): it takes `IX`, not `X`, and releases a delete-marked
             // row's spilled values once its deleter is resolved for every
@@ -338,7 +370,21 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
                     // is the one already appended, so there is nothing
                     // new here.
                     if (!version.image.empty()) {
-                        auto older = AppendVersion(cx, ix, row.tuple_key, version.image);
+                        auto older = DecodeVersion(cx, version.image);
+                        if (!older.ok() &&
+                            released_under_copy(older.status(), version.prior_trx_id)) {
+                            // An older version the head writer wrote, its
+                            // spill released by the same rollback (G24).
+                            released = older.status().WithContext(
+                                "indexing an older version of the row with tuple key " +
+                                std::to_string(row.tuple_key));
+                            stale = true;
+                            return storage::VisitControl::kStop;
+                        }
+                        if (older.ok()) {
+                            older = AppendVersion(cx, ix, row.tuple_key, version.image,
+                                                  std::move(older.value()));
+                        }
                         if (!older.ok()) {
                             appended = older.status().WithContext(
                                 "indexing an older version of the row with tuple key " +
@@ -378,6 +424,12 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
         auto again = ReadRowAgain(cx, row.tuple_key);
         if (!again.ok()) return again.status();
         if (!again.value().has_value()) return Status::OK();  // gone: nothing to index
+        const StagedRow& now = *again.value();
+        if (!released.ok() && now.trx_id == row.trx_id && now.undo_ptr == row.undo_ptr &&
+            now.payload == row.payload) {
+            // No rollback restored it: the dead value is the row's own.
+            return released;
+        }
         row = std::move(*again.value());
     }
 }
@@ -479,7 +531,7 @@ StatusOr<std::uint64_t> HighWaterKey(catalog::Catalog& catalog, storage::PageSto
     if (!leaf.ok()) return leaf.status();
     PageId at = leaf.value();
     std::uint64_t high = 0;
-    storage::LeafChainGuard guard("relation leaf chain");
+    storage::PageChainGuard guard("relation leaf chain");
     while (at != kInvalidPageId) {
         if (Status s = guard.Visit(at); !s.ok()) return s;
         auto bytes = store.GetForRead(at);

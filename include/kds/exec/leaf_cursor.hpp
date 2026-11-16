@@ -24,7 +24,7 @@ public:
         auto first = btree::BtreeLeftmostLeaf(store, desc_page_id);
         if (!first.ok()) return first.status();
         leaf_ = first.value();
-        guard_ = storage::LeafChainGuard("relation leaf chain");
+        guard_ = storage::PageChainGuard("relation leaf chain");
         return Status::OK();
     }
 
@@ -33,7 +33,7 @@ public:
 
     // Walks up to `leaves` more leaves through `per_leaf(leaf)`, which
     // returns the leaf after it. The chain's cycle guard is the whole
-    // walk's, not a slice's (`storage::LeafChainGuard`). A refusal ends the
+    // walk's, not a slice's (`storage::PageChainGuard`). A refusal ends the
     // walk where it stands.
     template <typename PerLeaf>
     Status Step(std::uint32_t leaves, PerLeaf&& per_leaf) {
@@ -48,7 +48,7 @@ public:
 
 private:
     PageId leaf_ = kInvalidPageId;
-    storage::LeafChainGuard guard_;
+    storage::PageChainGuard guard_;
 };
 
 }  // namespace kds::exec
