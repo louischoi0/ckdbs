@@ -11,7 +11,7 @@ key set (§7). **CU-S1's review found that CU-Q8 (a) was marked on a
 bound that covers a one-step statement only** (§7); the operator re-read
 it and **kept (a)** on the third word of that day, which **opened CU-S2**
 (§3 of that file): a list on a column of an index's equality prefix and on
-a cabined column is a key set (§7). Every mark is the operator's own.
+a cabined column is a key set (§7, `9ceb32ee`). Every mark is the operator's own.
 **CU-S2 raised CU-Q10 to CU-Q13, each built to CLA's proposal and not
 marked** (§4). That word names CU-S2 only, so CU-S3 waits for the
 operator's word. Nothing is merged or pushed. Written
@@ -571,8 +571,8 @@ measurement and no number from it is recorded.
 
 ### CU-S2 - the index set and the Cabin set, 2026-11-16
 
-On worktree `cu-key-set-access`, from `ffdcc6d5`. **A value list on one
-column of an index's equality prefix, and on a column with a column
+On worktree `cu-key-set-access`, from `ffdcc6d5`, committed at `9ceb32ee`.
+**A value list on one column of an index's equality prefix, and on a column with a column
 Cabin, is a key set.**
 
 **What is built** (`docs/spec/index.md` IX8b and §9, `docs/spec/cabin.md`

@@ -27,6 +27,6 @@ day is recorded where CS was opened, `raft-marks-2026-11-15.md` §10.)
 | | |
 |---|---|
 | **Word** | W3, on 2026-11-16, after CLA reported CU-S1 (`2066487c`) and put CU-Q8 back, its review having found that (a) was marked on a bound that covers a one-step statement only - a set driving a join runs the rest of the chain once per value, inline, with no yield, no cancel and no row sent before the end: *"CU-Q8 keep `$!a`, proceed with CU-S2"* (given in Korean; recorded in English) |
-| **Mark** | **CU-Q8 (a) kept**, the operator's own mark, re-read against the join bound: a set runs as a descent does, inline and unyielded, the bound stated in `known-gaps.md`. **CU-S2 is opened**, on worktree `cu-key-set-access` from `ffdcc6d5` |
+| **Mark** | **CU-Q8 (a) kept**, the operator's own mark, re-read against the join bound: a set runs as a descent does, inline and unyielded, the bound stated in `known-gaps.md`. **CU-S2 is opened**, on worktree `cu-key-set-access` from `ffdcc6d5`; it landed on the work branch at `9ceb32ee`, raising CU-Q10 to CU-Q13, each built to CLA's proposal and not marked |
 | **Does not settle** | the opening of CU-S3 or CU-S4 - the word names CU-S2; what CU-S2 raises that the order's items do not decide; a merge, a push, a version |
 | **Recorded at** | this file; the order's header, items table and §7; the CU row and this file's row in `instructions/v3.2.0/index.md` |
