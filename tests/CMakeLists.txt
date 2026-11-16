@@ -139,6 +139,7 @@ add_executable(kds_tests
     function_conjunct_test.cpp
     where_bool_test.cpp
     where_value_list_test.cpp
+    key_set_test.cpp
     where_bool_subquery_test.cpp
     query_layer_test.cpp
     dml_forms_test.cpp

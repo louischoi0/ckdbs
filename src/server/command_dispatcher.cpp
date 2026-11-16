@@ -9070,7 +9070,9 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     //
     // **A tuple key descent is never handed on**: it reads one leaf and cannot fill
     // a slice, so it would pay the hand-off - a frame, a hold, a pin - for
-    // a yield it never reaches.
+    // a yield it never reaches. A key set (CU) is such a descent once per
+    // value and is run here too, unyielded (CU-Q8): the cap on a conjunct's
+    // conditions bounds it, and `known-gaps.md` states the bound.
     const exec::AccessKind outer = compiled.steps.front().kind;
     const bool descends = outer == exec::AccessKind::kLookup || outer == exec::AccessKind::kProbe;
     if (!may_park_ || descends) return run->RunInline();

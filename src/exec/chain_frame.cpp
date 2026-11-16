@@ -295,9 +295,18 @@ StatusOr<TriState> EvaluateTri(const std::vector<const catalog::Schema*>& schema
 
 StatusOr<bool> EvaluateBoolConjuncts(const std::vector<const catalog::Schema*>& schemas,
                                      const std::vector<BoolPredicate>& predicates,
-                                     const ChainFrame& frame, const SubChainAnswer* sub_chains) {
-    for (const BoolPredicate& pred : predicates) {
+                                     const ChainFrame& frame, const SubChainAnswer* sub_chains,
+                                     const BoolLeafFirst* first) {
+    for (std::size_t i = 0; i < predicates.size(); ++i) {
+        const BoolPredicate& pred = predicates[i];
         if (pred.reads_sub_chain != (sub_chains != nullptr)) continue;  // the other pass's
+        if (first != nullptr && first->conjunct == i && pred.op == BoolPredicate::Op::kOr &&
+            first->leaf < pred.children.size()) {
+            // An `OR` with a true leaf is true, whichever leaf is asked first.
+            auto leaf = EvaluateTri(schemas, pred.children[first->leaf], frame, sub_chains);
+            if (!leaf.ok()) return leaf.status();
+            if (leaf.value() == TriState::kTrue) continue;
+        }
         auto t = EvaluateTri(schemas, pred, frame, sub_chains);
         if (!t.ok()) return t.status();
         if (!Collapse(t.value())) return false;  // at the root (BU-R4)

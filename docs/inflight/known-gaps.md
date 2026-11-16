@@ -847,7 +847,8 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
   `CREATE TRANSITION` since A1 stage 2b, `IndexBuildSliceRigTest`).
   Nothing else running gives its core back:
   - a write;
-  - a tuple key descent, run inline by design;
+  - a tuple key descent, run inline by design, and a key set's descents
+    (CU-Q8; "Key sets (CU)" below states the bound);
   - an index walk (`RunIndexStep`);
   - a join's inner walk under one outer page.
 
@@ -1892,6 +1893,63 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   `READ COMMITTED` read-only transaction whose lease is re-pointed while
   another core's undo purge runs. The purge cells cover `PURGE`'s horizon
   gate, not the undo purge's.
+
+## Key sets (CU)
+
+Verified on `cu-key-set-access` at CU-S1's commit. Owned by
+`docs/spec/parser-v2.md` I10; the order is
+`instructions/v3.2.0/workorder-cu-key-set-access.md`.
+
+- **Only a list on the tuple key is keyed.** A list on an indexed or
+  cabined column (`v IN (10, 20)`) walks the relation as before; the index
+  set and the Cabin set are CU-S2, unbuilt.
+- **A write's own rows by list are found by a walk.** `UPDATE` and
+  `DELETE ... WHERE id IN (...)` visit every slot of every leaf and take a
+  tuple lock per match, as before; CU-S3, unbuilt. A list on a relation
+  the write only reads (`UPDATE ... FROM`, `DELETE ... USING`, a subquery,
+  `INSERT ... SELECT`) is keyed. `PURGE` by list is refused
+  `NotImplemented` and is in no stage.
+- **The shape is exact.** `id IN (1, 2) OR id = 3`,
+  `(id = 1 OR id = 2) OR id = 3` and a list under `NOT` or mixed with
+  another column are not keyed and walk. A client that wants the set
+  writes one flat list.
+- **A set is taken at every relation size** (CU-Q3 (a)), and below about
+  100 rows the walk it replaces is cheaper. CU-S0 estimated the loss at up
+  to 3.7 ms of server CPU per statement, for a 4,096-value list
+  (`bench/v3.4.11/results-cu-s0-premise-v3.4.11-20-g1edf5c54.md`). The
+  built path is measured at CU-S4, not before.
+- **A statement driven by a set never yields, takes no cancel and
+  streams no row before its end** (CU-Q8 (a)). It is run inline, like one
+  driven by a single descent, and a set on an inner step runs whole per
+  outer row. For a one-step statement CU-S0's estimate for the largest set
+  the grammar admits, 4,096 values, is 1.6 to 4.2 ms of descents on top of
+  about 4 ms for parsing the list, which the walk also spent before its
+  first slice. **For a join the bound is the values times the rest of the
+  chain**: each value's row runs every later step before the next descent,
+  so a set of 4,096 rows over an inner step that walks 100,000 rows (one
+  with a boolean conjunct, which takes no build) holds its core for about
+  4,096 walks. Before CU the same statement's driver was a walk, which
+  yielded and took a cancel every 64 of its own pages and sent its rows at
+  those boundaries (CE), so the worst case lost its yields, though they
+  were already as far apart as the matches in 64 pages. `exec::Budget`
+  bounds both. CU-Q8 (a) was marked on the one-step bound; the join bound
+  was found by CU-S1's review. Not measured on the built path.
+- **Each list length is its own statement shape.** The fingerprint hashes
+  the token stream, so `IN (1, 2)` and `IN (1, 2, 3)` have different
+  `fetch_id`s and their own rows in `sys.statement_stats`,
+  `sys.access_stats` and the plan statistics. CU did not change this; a
+  client that sends lists of many lengths fills those stores faster than
+  one that sends a few.
+- **The Cabin controller no longer sees a filter beside a list.**
+  `id IN (...) AND sym = 'x'` was a filter scan and a Cabin candidate for
+  `sym`; its step is a lookup now and feeds no candidate, as `id = 5 AND
+  sym = 'x'` never did.
+- **What the cells do not cover**: a set read while a writer on another
+  core divides the leaf it descends to (the descent and `AcceptTupleAt`
+  are the single lookup's, whose cells cover it); a KWP portal read with
+  `max_rows` over a set-driven statement; and whether a recorded trail
+  holds no entry for a set step, which is pinned only through
+  `IsTrailReplayable(const Step&)` and the absence of `replays=`.
 
 ## The online index build (CI)
 

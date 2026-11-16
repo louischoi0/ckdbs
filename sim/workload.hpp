@@ -264,6 +264,14 @@ private:
     Rng read_only_rng_;
     bool read_only_txn_ = false;
     Op ReadOnlyTxnOp();
+    // **A key list** (CU, `instructions/v3.2.0/workorder-cu-key-set-access.md`),
+    // with the shapes only: a range read's keys named one by one in an `IN`
+    // list, shuffled, one of them twice. Still a `kSelectRange` with the
+    // range's `lo` and `hi`, so the oracle's expectation is the range's and
+    // only the spelling - and the access path - differs. Its own stream, so
+    // the op is drawn after the range drew and nothing else moves.
+    Rng key_list_rng_;
+    std::string KeyListSql(const std::string& table, std::uint64_t lo, std::uint64_t hi);
     // p0, c0, a0: their own id-guessing counters (`Table::inserted`).
     std::vector<Table> constrained_;
     std::size_t constrained_ddl_ = 0;

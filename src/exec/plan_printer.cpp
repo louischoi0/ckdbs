@@ -11,7 +11,7 @@
 namespace kds::exec {
 
 bool HasReplayableStep(const StepChain& chain) noexcept {
-    return !ForEachStep(chain, [](const Step& step) { return !IsTrailReplayable(step.kind); });
+    return !ForEachStep(chain, [](const Step& step) { return !IsTrailReplayable(step); });
 }
 
 bool ShapeAdmitsDescent(const StepChain& chain) noexcept {
@@ -232,6 +232,9 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
         os << " build on=col" << step.build->col_pos
            << " key=" << FormatColumnRef(step.build->key_from);
     }
+    // A key set's distinct values (CU): how many descents the step makes.
+    // Its values are the leaves of the `filter bool` line below.
+    if (step.key_set.has_value()) os << " key_set=" << step.key_set->items.size();
     os << '\n';
 
     for (const StepPredicate& pred : step.residual) {

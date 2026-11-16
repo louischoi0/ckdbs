@@ -627,6 +627,8 @@ private:
 
         ++stats_.For(step.step_id).relation_opens;
         if (step.kind == AccessKind::kLookup || step.kind == AccessKind::kProbe) {
+            // A key set is on `kLookup` and has no `key` (CU).
+            if (step.key_set.has_value()) co_return RunKeySetStep(steps, index, step, access);
             co_return co_await RunPointStep(steps, index, step, access);
         }
         if (step.kind == AccessKind::kCabinProbe) {
@@ -664,13 +666,39 @@ private:
             if (key.status().code() == StatusCode::kNotFound) co_return Status::OK();
             co_return key.status();
         }
+        co_return AcceptByKey(steps, index, step, access, key.value());
+    }
 
+    // A key set (CU; `KeySet`, step_chain.hpp): the single-value descent,
+    // once per value, ascending - so the step emits in tuple key order, and
+    // a value with no visible row emits nothing. Every row found is filtered
+    // by the whole residual, the list's own conjunct included (CU-R1); the
+    // leaf that named the value is asked first (CU-Q9).
+    //
+    // No trail is recorded or replayed for it (`IsTrailReplayable(const
+    // Step&)`), so `AcceptByKey`'s replay finds no entry. Not a coroutine and
+    // never yields (CU-Q8): BU-Q2's cap on a conjunct bounds the values.
+    Status RunKeySetStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                         const catalog::TableAccess& access) {
+        for (const KeySet::Item& item : step.key_set->items) {
+            if (stopped_) break;
+            // Set per value, not once: a deeper step's own set overwrites it.
+            key_set_leaf_ = item.leaf;
+            if (Status s = AcceptByKey(steps, index, step, access, item.key); !s.ok()) return s;
+        }
+        return Status::OK();
+    }
+
+    // One tuple key descent and the row it finds, through the memo, a
+    // replayable trail and the tree, in that order.
+    Status AcceptByKey(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                       const catalog::TableAccess& access, const std::uint64_t key) {
         // The memo, checked before the descent. It holds a *location*,
         // not a row, so a hit re-reads and re-filters exactly what a
         // fresh descent would have handed to the same code - which is
         // what makes "results identical with the memo on and off" a
         // property of the structure rather than of the test data.
-        if (memo_valid_ && memo_step_ == step.step_id && memo_key_ == key.value()) {
+        if (memo_valid_ && memo_step_ == step.step_id && memo_key_ == key) {
             NoteFetch();
             ++stats_.For(step.step_id).pages_fetched;
             // Through the one verifier, as a trail or a Cabin hint is:
@@ -678,11 +706,11 @@ private:
             // renumbers the slot and bumps the epoch (btree.hpp
             // `Location`).
             VerifiedTuple verified =
-                VerifyTupleAt(store_, memo_page_, memo_slot_, key.value(), memo_epoch_,
+                VerifyTupleAt(store_, memo_page_, memo_slot_, key, memo_epoch_,
                               access.oid);
             if (verified.ok()) {
                 ++stats_.For(step.step_id).probe_memo_hits;
-                co_return AcceptTupleAt(steps, index, step, access, memo_page_,
+                return AcceptTupleAt(steps, index, step, access, memo_page_,
                                      *verified.page, memo_slot_);
             }
             // Moved or gone. Fall through to the descent rather than
@@ -714,7 +742,7 @@ private:
         // just derived for this step, so an entry is only found by matching
         // it. There is no separate check to forget.
         if (const TrailLocation* at =
-                replay_ != nullptr ? replay_->Find(step.step_id, key.value()) : nullptr;
+                replay_ != nullptr ? replay_->Find(step.step_id, key) : nullptr;
             at != nullptr) {
             StepStats& step_stats = stats_.For(step.step_id);
             NoteFetch();
@@ -723,7 +751,7 @@ private:
             // and Cabin's location hints go through (exec/tuple_verify.hpp).
             // Verified against the derived `key`, not an entry tuple key -
             // the location carries none - which is rule 0's second hold.
-            VerifiedTuple verified = VerifyTupleAt(store_, at->page_id, at->slot, key.value(),
+            VerifiedTuple verified = VerifyTupleAt(store_, at->page_id, at->slot, key,
                                                    at->page_epoch, access.oid);
             if (verified.ok()) {
                 // Validated. From here it is the authoritative path's own
@@ -732,7 +760,7 @@ private:
                 // visibility exactly as the authoritative path would" is not
                 // implemented here so much as inherited.
                 ++step_stats.trail_replays;
-                co_return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page,
+                return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page,
                                         at->slot);
             }
             ++step_stats.trail_misses;
@@ -740,20 +768,20 @@ private:
 
         NoteFetch();
         ++stats_.For(step.step_id).pages_fetched;
-        auto found = btree::BtreeLookup(store_, access.desc_page_id, key.value());
+        auto found = btree::BtreeLookup(store_, access.desc_page_id, key);
         if (found.ok()) {
             memo_valid_ = true;
             memo_step_ = step.step_id;
-            memo_key_ = key.value();
+            memo_key_ = key;
             memo_page_ = found.value().page_id;
             memo_slot_ = found.value().slot;
             heap::PageView leaf(found.value().leaf.bytes());  // btree.hpp `Location`
             memo_epoch_ = CurrentPageEpoch(leaf);
-            co_return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
+            return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
                                  found.value().slot);
         }
-        if (found.status().code() == StatusCode::kNotFound) co_return Status::OK();
-        co_return found.status();
+        if (found.status().code() == StatusCode::kNotFound) return Status::OK();
+        return found.status();
     }
 
     // ---- Cabin (docs/spec/cabin.md §4) -----------------------------------
@@ -2404,7 +2432,12 @@ private:
         // The boolean conjuncts (BU-S1), after the function ones. A step
         // carrying one takes no build annotation either.
         if (!step.bool_residual.empty()) {
-            auto bool_matched = EvaluateBoolConjuncts(schemas_, step.bool_residual, frame_);
+            // A key set's row asks the leaf its descent was made for first
+            // (CU-Q9); the conjunct evaluated is still the written one.
+            const bool set = step.key_set.has_value();
+            const BoolLeafFirst first{set ? step.key_set->conjunct : 0, key_set_leaf_};
+            auto bool_matched = EvaluateBoolConjuncts(schemas_, step.bool_residual, frame_,
+                                                      nullptr, set ? &first : nullptr);
             if (!bool_matched.ok()) return bool_matched.status();
             if (!bool_matched.value()) return Status::OK();
         }
@@ -2509,8 +2542,9 @@ private:
         // a lookup and never a search, so a kScan step's rows could only
         // ever be prefetched - and nothing prefetches. Recording them would
         // be paying a write per scanned row for a read nobody makes. The
-        // test is the step's *kind*, not how the row was found.
-        if (trail_ != nullptr && IsTrailReplayable(step.kind)) {
+        // test is the step's *kind* and its key set (CU-Q4), not how the row
+        // was found.
+        if (trail_ != nullptr && IsTrailReplayable(step)) {
             TouchedTuple touched;
             touched.rel_oid = access.oid;
             // Column 0 is the Keystone tuple key, already decoded into the frame
@@ -2640,6 +2674,11 @@ private:
     PageId memo_page_ = kInvalidPageId;
     std::uint16_t memo_slot_ = 0;
     std::uint32_t memo_epoch_ = 0;  // the leaf's page epoch at the descent
+
+    // The conjunct leaf that names the value the running key set step last
+    // descended for (`RunKeySetStep`), read by that step's own residual
+    // before anything deeper runs.
+    std::uint32_t key_set_leaf_ = 0;
 
     // ---- Cabin (docs/spec/cabin.md) --------------------------------------
     //

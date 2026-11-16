@@ -178,7 +178,7 @@ const std::vector<std::string>& Queries() {
         // **What it does not pin, stated so nobody quotes it for that.**
         // The converse - "a build feeds no trail" (spec §3's hard rule) -
         // is *not* tested by these comparisons: recording is gated on
-        // `IsTrailReplayable(step.kind)` and consultation happens only in
+        // `IsTrailReplayable(step)` and consultation happens only in
         // `RunPointStep`, so entries wrongly recorded for this kScan step
         // would be written and never read, and every reply here would
         // stay byte-identical. Pinning that needs the trail itself
@@ -634,7 +634,7 @@ TEST(WaystoneContractTest, ANonTupleKeyPredicateStillSearchesAndSaysSo) {
     // a *search*. Reading the trust line off `IsTrailReplayable` rather than
     // off a rendered kind name is what keeps this test about invariant 9
     // instead of about whichever accelerator exists this month.
-    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kIndexProbe));
+    EXPECT_FALSE(exec::IsTrailReplayableKind(exec::AccessKind::kIndexProbe));
     EXPECT_NE(analyzed.find("IndexProbe"), std::string::npos) << analyzed;
     EXPECT_EQ(analyzed.find("replays="), std::string::npos)
         << "a search was served from a trail, which invariant 9 forbids: " << analyzed;
@@ -790,7 +790,7 @@ TEST(WaystoneContractTest, ABuiltJoinFeedsNoTrail) {
 // A trail entry for the built step's rows would be written and never read
 // (consultation is inside `RunPointStep` only), so every reply would stay
 // byte-identical while the rule was broken; the trail's contents are what
-// fails if someone drops `IsTrailReplayable(step.kind)` at the recording
+// fails if someone drops `IsTrailReplayable(step)` at the recording
 // site.
 TEST(WaystoneContractTest, AnOptedShapeWithABuiltJoinRecordsItsLookupStepOnly) {
     Instance db(/*record=*/true, /*replay=*/true);

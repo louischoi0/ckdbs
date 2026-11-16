@@ -73,7 +73,8 @@ Workload::Workload(Rng rng, Profile profile, bool shapes)
       shapes_(shapes),
       query_rng_(rng_.Fork("query")),
       constraint_rng_(rng_.Fork("constraint")),
-      read_only_rng_(rng_.Fork("read_only")) {
+      read_only_rng_(rng_.Fork("read_only")),
+      key_list_rng_(rng_.Fork("key_list")) {
     for (const char* name : {kFkParent, kFkChild, kAsserted}) {
         constrained_.emplace_back();
         constrained_.back().name = name;
@@ -345,6 +346,7 @@ Op Workload::DataOp() {
         op.hi = op.lo + rng_.Below(20);
         op.sql = std::string("SELECT ") + kReadColumns + " FROM " + table.name + " WHERE id BETWEEN " + std::to_string(op.lo) +
                  " AND " + std::to_string(op.hi);
+        if (shapes_ && key_list_rng_.Chance(40)) op.sql = KeyListSql(table.name, op.lo, op.hi);
         return op;
     }
     const Table& table = PickTable();
@@ -354,6 +356,20 @@ Op Workload::DataOp() {
     op.v = NextValue();
     op.sql = std::string("SELECT ") + kReadColumns + " FROM " + table.name + " WHERE v = " + std::to_string(op.v);
     return op;
+}
+
+std::string Workload::KeyListSql(const std::string& table, std::uint64_t lo, std::uint64_t hi) {
+    std::vector<std::uint64_t> keys;
+    for (std::uint64_t key = lo; key <= hi; ++key) keys.push_back(key);
+    keys.push_back(lo + key_list_rng_.Below(hi - lo + 1));  // one key twice
+    for (std::size_t i = keys.size() - 1; i > 0; --i) {
+        std::swap(keys[i], keys[key_list_rng_.Below(i + 1)]);
+    }
+    std::string sql = std::string("SELECT ") + kReadColumns + " FROM " + table + " WHERE id IN (";
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        sql += (i == 0 ? "" : ", ") + std::to_string(keys[i]);
+    }
+    return sql + ")";
 }
 
 Op Workload::AlterColumn() {

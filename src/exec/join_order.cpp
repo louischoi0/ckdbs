@@ -164,9 +164,17 @@ StepEstimate Estimate(const Block& block, std::size_t slot) {
             own *= kOtherSelectivity;
         }
     }
-    for (std::size_t i = 0; i < step.fn_residual.size() + step.bool_residual.size(); ++i) {
+    // A key set's own conjunct is priced by its values, below (CU).
+    const std::size_t other_conjuncts = step.fn_residual.size() + step.bool_residual.size() -
+                                        (step.key_set.has_value() ? 1 : 0);
+    for (std::size_t i = 0; i < other_conjuncts; ++i) {
         own *= kOtherSelectivity;
     }
+    // One descent per value, each finding at most one row: the values over
+    // the relation's rows is what the set keeps, as a range's span is.
+    const double set_values =
+        step.key_set.has_value() ? static_cast<double>(step.key_set->items.size()) : 1.0;
+    if (step.key_set.has_value()) own *= std::min(1.0, set_values / relation_rows);
 
     double span = relation_rows;  // what a kRange walks
     if (step.kind == AccessKind::kRange && step.range.has_value()) {
@@ -216,7 +224,7 @@ StepEstimate Estimate(const Block& block, std::size_t slot) {
     switch (step.kind) {
         case AccessKind::kLookup:
         case AccessKind::kProbe:
-            e.per_execution = kDescentCost;
+            e.per_execution = set_values * kDescentCost;
             break;
         case AccessKind::kRange:
             e.per_execution = kDescentCost + span;

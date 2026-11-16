@@ -891,6 +891,51 @@ std::optional<std::uint64_t> TupleKeyBound(const Operand& operand) {
     return static_cast<std::uint64_t>(operand.literal.int_val);
 }
 
+// The tuple key set this step's boolean conjuncts name, if any (CU; `KeySet`,
+// step_chain.hpp): the first conjunct whose root is an `OR` and whose every
+// leaf is `<this step's tuple key> = <literal>`, which is what `id IN (...)`
+// and a flat `id = a OR id = b` both lower to. An `OR` across columns, one
+// holding a leaf that is not such an equality, and one nested under another
+// node are not the shape and stay a residual only.
+//
+// An item is keyed by `TupleKeyBound`, the single-value arm's own test
+// (CU-R3): a NULL or a negative literal names no key, so it is left out and
+// stays a leaf of the conjunct. A conjunct none of whose items is a key
+// gives no set, and the step keeps its walk.
+std::optional<KeySet> TupleKeySetOf(const Step& step, std::uint16_t slot) {
+    const auto names_the_key = [slot](const BoolPredicate& leaf) {
+        return leaf.op == BoolPredicate::Op::kCompare &&
+               leaf.compare.op == parser::CompareOp::kEq &&
+               leaf.compare.rhs.kind == OperandKind::kLiteral &&
+               IsOwnColumn(leaf.compare.lhs, slot) && IsTupleKey(leaf.compare.lhs);
+    };
+    for (std::size_t c = 0; c < step.bool_residual.size(); ++c) {
+        const BoolPredicate& pred = step.bool_residual[c];
+        if (pred.op != BoolPredicate::Op::kOr ||
+            !std::all_of(pred.children.begin(), pred.children.end(), names_the_key)) {
+            continue;
+        }
+        KeySet set;
+        set.conjunct = static_cast<std::uint32_t>(c);
+        for (std::size_t leaf = 0; leaf < pred.children.size(); ++leaf) {
+            if (auto key = TupleKeyBound(pred.children[leaf].compare.rhs); key.has_value()) {
+                set.items.push_back({*key, static_cast<std::uint32_t>(leaf)});
+            }
+        }
+        if (set.items.empty()) continue;
+        // Stable, so of two leaves naming one key the first written is kept.
+        std::stable_sort(set.items.begin(), set.items.end(),
+                         [](const KeySet::Item& a, const KeySet::Item& b) { return a.key < b.key; });
+        set.items.erase(std::unique(set.items.begin(), set.items.end(),
+                                    [](const KeySet::Item& a, const KeySet::Item& b) {
+                                        return a.key == b.key;
+                                    }),
+                        set.items.end());
+        return set;
+    }
+    return std::nullopt;
+}
+
 // The tuple key bounds this step's residual implies, if any.
 //
 // Reads the *lowered* conjuncts rather than the AST's `BETWEEN`, which is
@@ -1734,7 +1779,7 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
     // accepts, and reads it from the frame rather than looking it up. The
     // *kind* is a compile-time fact, so this costs a column only on the
     // steps that can record one.
-    if (IsTrailReplayable(step.kind)) {
+    if (IsTrailReplayable(step)) {
         mask |= 1;  // column 0 is the tuple key (invariant 11)
     }
 
@@ -2155,8 +2200,8 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     if (!best.ok()) return best;
     next_step_id = base_step_id + static_cast<std::uint32_t>(refs.size());
     // A written chain of tuple key descents alone - a lookup, then probes -
-    // reads one row per step, and every order pays at least its driver's
-    // descent: no search can repay its compiles. Measured at CB's close: the
+    // reads one row per step (a key set, its values' rows), and every order
+    // pays at least its driver's descent: no search can repay its compiles. Measured at CB's close: the
     // six orders of a three-relation point join cost 15 us a statement
     // (bench/v3.2.0/results-cb-close-v3.2.0-174-g0640941f.md).
     const auto is_descent = [](const Step& step) {
@@ -2564,6 +2609,19 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
             }
         }
 
+        // ---- A tuple key set (CU) ----------------------------------------
+        //
+        // Directly below the single-value descent, which always wins over
+        // it, and above every arm that follows: a pure function of the
+        // shape, as each of them is. An annotation - the kind is the
+        // single-value kind and `Step::key` stays empty (`KeySet`).
+        if (step.kind == AccessKind::kScan && !step.bool_residual.empty()) {
+            if (auto set = TupleKeySetOf(step, static_cast<std::uint16_t>(i)); set.has_value()) {
+                step.kind = AccessKind::kLookup;
+                step.key_set = std::move(set);
+            }
+        }
+
         // ---- Range and filter scans -------------------------------------
         //
         // Only reached when the step did not become a keyed descent: a
@@ -2777,7 +2835,8 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     // The premise is that step 0 emits in tuple key order. A walk or range does
     // (page-wise `min_key`, which a division preserves); an index step does
     // because IX8a sorts its tuple keys back into that order deliberately; a
-    // lookup or probe emits one row. **A leaf's slot order is its key
+    // lookup or probe emits one row, and a key set descends for its values
+    // ascending (`KeySet`), which this elision now rests on too. **A leaf's slot order is its key
     // order** by placement (BD-R1,
     // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), which is
     // the premise all of that rests on. A Cabin probe stays excluded by
@@ -2806,7 +2865,8 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     // access path - which is why nothing below looks at `projection`.
     if (chain.steps.size() > 1) {
         chain.klass = StatementClass::kJoinSelect;
-    } else if (chain.steps[0].kind == AccessKind::kLookup) {
+    } else if (chain.steps[0].kind == AccessKind::kLookup && !chain.steps[0].key_set.has_value()) {
+        // A key set names several rows and stays a step-chain select (CU-Q6).
         chain.klass = StatementClass::kPointSelect;
     } else if (chain.steps[0].kind == AccessKind::kRange) {
         chain.klass = StatementClass::kRangeSelect;
