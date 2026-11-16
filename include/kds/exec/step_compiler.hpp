@@ -135,6 +135,18 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                             PositionSink* declare = nullptr,
                             const StatementContext* context = nullptr);
 
+// The tuple key set a write's WHERE names (CU-S3; `KeySet`,
+// step_chain.hpp), read off `CompileWhere`'s step: the clause's **only**
+// conjunct is a value list on the tuple key. Its items are ascending and
+// distinct, each a key the single-value arm would descend to.
+//
+// **The only conjunct, which is the point write's own gate**
+// (`CommandDispatcher::TupleKeyEqualityTarget`): `id IN (1, 2) AND v = 3`
+// walks, as `id = 1 AND v = 3` does. The list stays the step's boolean
+// conjunct and the caller tests every row a descent finds against it
+// (CU-R1).
+std::optional<KeySet> WriteKeySetOf(const Step& where);
+
 // Resolve an UPDATE's SET list against the relation, before any storage is
 // touched (keystoneid-invariant.md K-M3).
 //

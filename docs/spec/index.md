@@ -520,8 +520,9 @@ keep the choice a function of the shape and no worse than it was:
   the relation first, where no join key reaches it and the list is its
   set.
 
-CU-Q10, CU-Q11 and CU-Q13 are built to CLA's proposal and not marked
-(`instructions/v3.2.0/workorder-cu-key-set-access.md` §4).
+CU-Q10, CU-Q11 and CU-Q13 are each (a), the operator's marks of
+2026-11-16 (`instructions/v3.2.0/workorder-cu-key-set-access.md` §4,
+`raft-marks-2026-11-16.md` §4).
 
 Deterministic and stable is not a preference here: a recorded pattern must
 not compile differently as the data changes, or `pattern_id` stops naming a

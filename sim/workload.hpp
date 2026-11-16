@@ -272,6 +272,14 @@ private:
     // the op is drawn after the range drew and nothing else moves.
     Rng key_list_rng_;
     std::string KeyListSql(const std::string& table, std::uint64_t lo, std::uint64_t hi);
+    // **A write by key list** (CU-S3), with the shapes only: a by-key
+    // UPDATE's or DELETE's `id = k` spelled `id IN (k, 0, k)` - the key
+    // twice and a key no row holds (0 is outside the id space) - 40 times in
+    // 100. The op's kind and `key` are unchanged, so the oracle's expectation
+    // is the single key's and only the access - one descent per value -
+    // differs. Its own stream, for `key_list_rng_`'s reason.
+    Rng write_list_rng_;
+    std::string KeyPredicate(std::uint64_t key);
     // p0, c0, a0: their own id-guessing counters (`Table::inserted`).
     std::vector<Table> constrained_;
     std::size_t constrained_ddl_ = 0;

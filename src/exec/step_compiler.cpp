@@ -2253,6 +2253,14 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
     return out;
 }
 
+std::optional<KeySet> WriteKeySetOf(const Step& where) {
+    if (!where.residual.empty() || !where.fn_residual.empty() || !where.sub_chains.empty() ||
+        where.bool_residual.size() != 1) {
+        return std::nullopt;
+    }
+    return TupleKeySetOf(where, /*slot=*/0);
+}
+
 namespace {
 
 // A greedy order above this many relations; every permutation at or below

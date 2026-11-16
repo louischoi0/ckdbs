@@ -9978,10 +9978,20 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 // the statement's view and its WHERE (`Qualify`), claim it and take the
 // first-updater-wins verdict (`Claim`), and - where the WHERE holds a
 // subquery - collect the matching keys in a read pass first
-// (`CollectTargets`). It carries the park a held row ends the walk with.
+// (`CollectTargets`). It carries the park a held row ends the walk with,
+// and the loop over a list of tuple keys (`WriteKeySet`).
 // UPDATE's SET list and DELETE's mark stay with their statement.
 class CommandDispatcher::WriteWalk {
 public:
+    // What one descent to a tuple key came to (`LocateByTupleKey`), as the
+    // statement's point arm reports it.
+    enum class PointWrite : std::uint8_t {
+        kOffered,  // the slot was handed to the statement's row function
+        kAbsent,   // no such key, on the tree's authority
+        kParked,   // the row is held by a writer that has not decided
+        kScan,     // the descent declined, and the walk answers
+    };
+
     // A row that qualified: its tuple key, and the writer and undo pointer
     // of the version on the page. `through_undo` says it qualified on the
     // snapshot's version, not the page's (F4, `Qualify`): `payload_copy`
@@ -10187,6 +10197,51 @@ public:
         return true;
     }
 
+    // **A list on the tuple key** (CU-S3; `exec::WriteKeySetOf`):
+    // `write_at`, the statement's point arm, once per value of `set` in
+    // ascending order - the order the walk meets the same rows in, so the
+    // row units are asked in the order they always were.
+    //
+    // **The loop's position is the walk's** (`WalkCursor`): a walk resumes
+    // by key and skips every key below its cursor's, and the values ascend,
+    // so "stopped at value k" and "stopped at key k" are one statement. A
+    // held row parks the statement at its key and the resume starts at the
+    // first value at or above it; a descent that declines hands the rest to
+    // the walk from that key, which is where the walk would have been. No
+    // row is offered twice either way.
+    //
+    // True when every value was offered or is absent. False with `cursor`
+    // at the value it stopped on: `parked_on_row` says a held row, and
+    // otherwise a descent declined and the walk answers from `cursor`.
+    //
+    // **CU-R1 holds by construction**: the row a descent finds goes through
+    // `Qualify` like a walked one, the list its WHERE. The leaf whose value
+    // made the descent is asked first (CU-Q9, `first_leaf_`).
+    template <typename WriteAt>
+    StatusOr<bool> WriteKeySet(const exec::KeySet& set, WalkCursor& cursor, WriteAt&& write_at) {
+        auto item = set.items.begin();
+        if (cursor.active) {
+            item = std::lower_bound(set.items.begin(), set.items.end(), cursor.tuple_key,
+                                    [](const exec::KeySet::Item& i, std::uint64_t key) {
+                                        return i.key < key;
+                                    });
+        }
+        for (; item != set.items.end(); ++item) {
+            const exec::BoolLeafFirst first{set.conjunct, item->leaf};
+            first_leaf_ = &first;
+            StatusOr<PointWrite> wrote = write_at(item->key);
+            first_leaf_ = nullptr;
+            if (!wrote.ok()) return wrote.status();
+            if (wrote.value() == PointWrite::kOffered || wrote.value() == PointWrite::kAbsent) {
+                continue;
+            }
+            cursor.tuple_key = item->key;
+            cursor.active = true;
+            return false;
+        }
+        return true;
+    }
+
     // **The walk stopped on a held row, so its count is not an answer**
     // (AO-S3b): it counts rows written *so far*, and returning it would be
     // a silent partial write.
@@ -10239,7 +10294,7 @@ private:
 
     StatusOr<bool> MatchesWhere() {
         return exec::EvaluateConjuncts(d_.catalog_, d_.page_store_, schemas_, predicates_, frame,
-                                       /*stats=*/nullptr, d_.budget_, &snapshot_);
+                                       /*stats=*/nullptr, d_.budget_, &snapshot_, first_leaf_);
     }
 
     // **Whether the snapshot's version decides a row whose head failed the
@@ -10274,6 +10329,9 @@ private:
     const exec::Step& predicates_;
     const std::vector<const catalog::Schema*> schemas_;
     bool conjuncts_checked_ = false;
+    // The leaf of the WHERE's list whose value the descent in hand was made
+    // for (`WriteKeySet`); null on a walk and on a single-key write.
+    const exec::BoolLeafFirst* first_leaf_ = nullptr;
 };
 
 DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteScope& scope,
@@ -10880,44 +10938,58 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // at, never which rows match. Its target is the WHERE's only conjunct,
     // so a point write carries no subquery to evaluate under the exclusive
     // leaf (the collection pass's reason, below).
-    if (std::optional<std::uint64_t> tuple_key =
-            arm_target.has_value() ? arm_target : TupleKeyEqualityTarget(ta, stmt.where);
-        tuple_key.has_value()) {
+    //
+    // One descent to `key` and `apply` on the slot it finds: the single-key
+    // arm's body, and a list's once per value (CU-S3).
+    using PointWrite = WriteWalk::PointWrite;
+    const auto write_at = [&](std::uint64_t key) -> StatusOr<PointWrite> {
         // A second round only when a moved unique key sent the row round:
         // checked with the leaf released, then found and applied again under
         // the clearance (BX-R4).
         for (;;) {
-            TupleKeyLookup found = LocateByTupleKey(ta, *tuple_key);
-            if (found.kind == TupleKeyLookup::Kind::kAbsent) {
-                return {"UPDATED 0", false, 0};  // no such row, on the tree's authority
-            }
-            if (found.kind != TupleKeyLookup::Kind::kAt) break;
+            TupleKeyLookup found = LocateByTupleKey(ta, key);
+            // No such row, on the tree's authority.
+            if (found.kind == TupleKeyLookup::Kind::kAbsent) return PointWrite::kAbsent;
+            if (found.kind != TupleKeyLookup::Kind::kAt) return PointWrite::kScan;
             // Through the leaf the descent holds exclusive and dirty (btree.hpp
             // `Location`): a shared lookup then `Get()` let a divide renumber
             // the slot, and `apply` declined another row on the WHERE.
             heap::PageView page(found.at.leaf.bytes());
-            if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) {
-                return Refused(s);
-            }
+            if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) return s;
             if (unique_pending.has_value()) {
                 found.at.leaf.Release();
-                if (Status s = clear_unique(); !s.ok()) return Refused(s);
+                if (Status s = clear_unique(); !s.ok()) return s;
                 if (!walk.parked_on_row) continue;
             }
             // **`apply` answers OK for a row it declined to write**
-            // (AO-S3b), so without this a held row would render
-            // `UPDATED 0`. One row is in scope, so nothing was written:
-            // the conflict is the answer, and `EndWrite` keeps the blocker
-            // that makes `DispatchAsync` wait and re-run the statement.
-            if (walk.parked_on_row) {
-                return Refused(walk.blocked_verdict);
-            }
+            // (AO-S3b), so without this a held row would render as a row
+            // offered and counted nothing.
+            if (walk.parked_on_row) return PointWrite::kParked;
             if (logging(LogLevel::kTrace)) {
-                log_->Trace("query", "tuple key " + std::to_string(*tuple_key) + " updated at " +
+                log_->Trace("query", "tuple key " + std::to_string(key) + " updated at " +
                                          std::to_string(found.at.page_id) + ":" +
                                          std::to_string(found.at.slot));
             }
-            return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
+            return PointWrite::kOffered;
+        }
+    };
+    if (std::optional<std::uint64_t> tuple_key =
+            arm_target.has_value() ? arm_target : TupleKeyEqualityTarget(ta, stmt.where);
+        tuple_key.has_value()) {
+        StatusOr<PointWrite> wrote = write_at(*tuple_key);
+        if (!wrote.ok()) return Refused(wrote.status());
+        switch (wrote.value()) {
+            case PointWrite::kAbsent:
+                return {"UPDATED 0", false, 0};
+            case PointWrite::kParked:
+                // One row is in scope, so nothing was written: the conflict
+                // is the answer, and `EndWrite` keeps the blocker that makes
+                // `DispatchAsync` wait and re-run the statement.
+                return Refused(walk.blocked_verdict);
+            case PointWrite::kOffered:
+                return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
+            case PointWrite::kScan:
+                break;
         }
     }
     // An arm's row is never walked for: its WHERE is empty, so the walk would
@@ -10930,15 +11002,30 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         return Refused(s);
     }
 
+    // AO-S3b's resume position. A first walk starts inactive, which is
+    // "from the head"; a resumed statement is handed the one its park left.
+    WalkCursor walk_cursor = resume_from;
+
+    // **A list on the tuple key is the point arm once per value** (CU-S3;
+    // `WriteWalk::WriteKeySet`), under the row units the walk of the same
+    // list takes and no declared window: `DeclaredWriteBorrow` reads no
+    // bound off a list.
+    if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates.value());
+        set.has_value()) {
+        auto done = walk.WriteKeySet(*set, walk_cursor, write_at);
+        if (!done.ok()) return Refused(done.status());
+        if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, updated);
+        if (done.value()) {
+            return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
+        }
+    }
+
     // The collection pass, where the WHERE holds a subquery
     // (`WriteWalk::CollectTargets`); one that collects nothing writes nothing.
     auto any = walk.CollectTargets();
     if (!any.ok()) return Refused(any.status());
     if (!any.value()) return {"UPDATED " + std::to_string(updated), false, updated};
 
-    // AO-S3b's resume position. A first walk starts inactive, which is
-    // "from the head"; a resumed statement is handed the one its park left.
-    WalkCursor walk_cursor = resume_from;
     walk_cursor.targets = walk.targets;
     Status scan;
     for (;;) {
@@ -13214,24 +13301,49 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // contract: the locator picks the slot to look at, never which rows
     // match, so falling through to the scan produces the identical answer.
     // Its target is the WHERE's only conjunct, so it carries no subquery.
-    if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where); tuple_key.has_value()) {
-        TupleKeyLookup found = LocateByTupleKey(ta, *tuple_key);
-        if (found.kind == TupleKeyLookup::Kind::kAbsent) {
-            return {"DELETED 0", false, 0};
-        }
-        if (found.kind == TupleKeyLookup::Kind::kAt) {
-            // Through the held leaf, as UPDATE's point arm (btree.hpp `Location`).
-            heap::PageView page(found.at.leaf.bytes());
-            if (Status s = mark(found.at.page_id, page, found.at.slot); !s.ok()) {
-                return Refused(s);
-            }
-            // AO-S3b, and UPDATE's point arm states the argument: a
-            // held row leaves `mark` answering OK with nothing marked,
-            // and rendering the count would answer `DELETED 0` for a
-            // row this statement is waiting on.
-            if (walk.parked_on_row) {
+    //
+    // One descent to `key` and `mark` on the slot it finds: the single-key
+    // arm's body, and a list's once per value (CU-S3).
+    using PointWrite = WriteWalk::PointWrite;
+    const auto mark_at = [&](std::uint64_t key) -> StatusOr<PointWrite> {
+        TupleKeyLookup found = LocateByTupleKey(ta, key);
+        if (found.kind == TupleKeyLookup::Kind::kAbsent) return PointWrite::kAbsent;
+        if (found.kind != TupleKeyLookup::Kind::kAt) return PointWrite::kScan;
+        // Through the held leaf, as UPDATE's point arm (btree.hpp `Location`).
+        heap::PageView page(found.at.leaf.bytes());
+        if (Status s = mark(found.at.page_id, page, found.at.slot); !s.ok()) return s;
+        // AO-S3b, and UPDATE's point arm states the argument: a held row
+        // leaves `mark` answering OK with nothing marked.
+        return walk.parked_on_row ? PointWrite::kParked : PointWrite::kOffered;
+    };
+    if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where);
+        tuple_key.has_value()) {
+        StatusOr<PointWrite> marked = mark_at(*tuple_key);
+        if (!marked.ok()) return Refused(marked.status());
+        switch (marked.value()) {
+            case PointWrite::kAbsent:
+                return {"DELETED 0", false, 0};
+            case PointWrite::kParked:
+                // Rendering the count would answer `DELETED 0` for a row
+                // this statement is waiting on.
                 return Refused(walk.blocked_verdict);
-            }
+            case PointWrite::kOffered:
+                return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
+            case PointWrite::kScan:
+                break;
+        }
+    }
+
+    // AO-S3b, and `UpdateParsed`'s site states the argument.
+    WalkCursor walk_cursor = resume_from;
+
+    // A list on the tuple key, as UPDATE's (CU-S3).
+    if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates.value());
+        set.has_value()) {
+        auto done = walk.WriteKeySet(*set, walk_cursor, mark_at);
+        if (!done.ok()) return Refused(done.status());
+        if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, deleted);
+        if (done.value()) {
             return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
         }
     }
@@ -13240,8 +13352,6 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     if (!any.ok()) return Refused(any.status());
     if (!any.value()) return {"DELETED " + std::to_string(deleted), false, deleted};
 
-    // AO-S3b, and `UpdateParsed`'s site states the argument.
-    WalkCursor walk_cursor = resume_from;
     walk_cursor.targets = walk.targets;
     Status scan = VisitRelation(
         ta, storage::PageAccess::kWrite,

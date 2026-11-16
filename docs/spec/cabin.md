@@ -301,8 +301,8 @@ row. An expression or predicate Cabin takes no list, and a list holding a
 value the Cabin cannot key is no set.
 
 **It is the last of the Cabin arms, and takes only a step that would
-otherwise walk its relation whole** (CU-Q12, built to CLA's proposal and
-not marked): below the single-value probe of §4 and every expression,
+otherwise walk its relation whole** (CU-Q12 (a), the operator's mark of
+2026-11-16): below the single-value probe of §4 and every expression,
 predicate, correlated and cover arm, above the filter scan, and never on a
 step with a strict tuple key range, which bounds its walk. The reason is
 the paragraph after next: a set observes nothing, so over an arm that

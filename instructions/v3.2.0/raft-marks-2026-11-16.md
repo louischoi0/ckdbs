@@ -30,3 +30,12 @@ day is recorded where CS was opened, `raft-marks-2026-11-15.md` §10.)
 | **Mark** | **CU-Q8 (a) kept**, the operator's own mark, re-read against the join bound: a set runs as a descent does, inline and unyielded, the bound stated in `known-gaps.md`. **CU-S2 is opened**, on worktree `cu-key-set-access` from `ffdcc6d5`; it landed on the work branch at `9ceb32ee`, raising CU-Q10 to CU-Q13, each built to CLA's proposal and not marked |
 | **Does not settle** | the opening of CU-S3 or CU-S4 - the word names CU-S2; what CU-S2 raises that the order's items do not decide; a merge, a push, a version |
 | **Recorded at** | this file; the order's header, items table and §7; the CU row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 4. CU-Q10 to CU-Q13 marked, CU-S3 opened
+
+| | |
+|---|---|
+| **Word** | W4, on 2026-11-16, after CLA reported CU-S2 (`9ceb32ee`) and the four items it raised, each built to CLA's proposal (a) and unmarked, two of them departing from the order's §2: *"CU-Q10 to Q13, all `$!a`; proceed with CU-S3"* (given in Korean; recorded in English) |
+| **Mark** | **CU-Q10 (a)**: at one equality prefix length a single equality outranks a list. **CU-Q11 (a)**: an item an index's key encoder refuses declines the list for that index; only a NULL item is left out. **CU-Q12 (a)**: the Cabin set is the last of the Cabin arms and takes only a step that would otherwise walk its relation whole. **CU-Q13 (a)**: no list is read on a step a correlated index or Cabin probe could enter. Each the operator's own mark, and each what CU-S2 built, so no code moved for them. **CU-S3 is opened**, on worktree `cu-key-set-access` from `f1213c77` |
+| **Does not settle** | the opening of CU-S4, the close - the word names CU-S3; a merge, a push, a version |
+| **Recorded at** | this file; the order's header, items table and §7; `docs/spec/index.md` §9 and `docs/spec/cabin.md` §4e, which named the four as unmarked; the CU row and this file's row in `instructions/v3.2.0/index.md` |

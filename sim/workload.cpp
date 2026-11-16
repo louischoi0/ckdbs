@@ -74,7 +74,8 @@ Workload::Workload(Rng rng, Profile profile, bool shapes)
       query_rng_(rng_.Fork("query")),
       constraint_rng_(rng_.Fork("constraint")),
       read_only_rng_(rng_.Fork("read_only")),
-      key_list_rng_(rng_.Fork("key_list")) {
+      key_list_rng_(rng_.Fork("key_list")),
+      write_list_rng_(rng_.Fork("write_list")) {
     for (const char* name : {kFkParent, kFkChild, kAsserted}) {
         constrained_.emplace_back();
         constrained_.back().name = name;
@@ -252,12 +253,18 @@ Op Workload::Update(const Table& table) {
     }
     if (op.by_tuple_key) {
         op.key = GuessKey(table);
-        op.sql += " WHERE id = " + std::to_string(op.key);
+        op.sql += " WHERE " + KeyPredicate(op.key);
     } else {
         op.pred_v = NextValue();
         op.sql += " WHERE v = " + std::to_string(op.pred_v);
     }
     return op;
+}
+
+std::string Workload::KeyPredicate(std::uint64_t key) {
+    const std::string k = std::to_string(key);
+    if (shapes_ && write_list_rng_.Chance(40)) return "id IN (" + k + ", 0, " + k + ")";
+    return "id = " + k;
 }
 
 Op Workload::Delete(Table& table) {
@@ -268,7 +275,7 @@ Op Workload::Delete(Table& table) {
     op.sql = "DELETE FROM " + table.name;
     if (op.by_tuple_key) {
         op.key = GuessKey(table);
-        op.sql += " WHERE id = " + std::to_string(op.key);
+        op.sql += " WHERE " + KeyPredicate(op.key);
         // A key a named INSERT names again later: a duplicate for good if
         // this delete matched and committed (BD-R4), the oracle decides.
         if (table.deleted.size() < 64) table.deleted.push_back(op.key);

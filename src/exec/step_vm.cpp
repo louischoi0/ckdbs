@@ -3029,7 +3029,8 @@ void UninstallSuspendAudit() noexcept {
 StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& store,
                                  const std::vector<const catalog::Schema*>& schemas,
                                  const Step& step, const ChainFrame& frame, ExecStats* stats,
-                                 const Budget& budget, const txn::Snapshot* snapshot) {
+                                 const Budget& budget, const txn::Snapshot* snapshot,
+                                 const BoolLeafFirst* first) {
     if (!EvaluateAllChecked(schemas, step.residual, frame)) return false;
     if (!step.fn_residual.empty()) {
         auto fn_matched = EvaluateFunctionConjuncts(step.fn_residual, frame);
@@ -3037,7 +3038,8 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
         if (!fn_matched.value()) return false;
     }
     if (!step.bool_residual.empty()) {
-        auto bool_matched = EvaluateBoolConjuncts(schemas, step.bool_residual, frame);
+        auto bool_matched =
+            EvaluateBoolConjuncts(schemas, step.bool_residual, frame, nullptr, first);
         if (!bool_matched.ok()) return bool_matched.status();
         if (!bool_matched.value()) return false;
     }

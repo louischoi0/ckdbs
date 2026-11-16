@@ -2,8 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
@@ -12,10 +14,13 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/page_header.hpp"
 
 // CU-S1 and CU-S2: a value list on the tuple key, on a column of an index's
 // equality prefix or on a cabined column is a key set - one descent per
-// value (instructions/v3.2.0/workorder-cu-key-set-access.md).
+// value (instructions/v3.2.0/workorder-cu-key-set-access.md). CU-S3: an
+// UPDATE or a DELETE whose WHERE is a list on the tuple key writes by one
+// descent per value.
 //
 // The claim every cell here rests on is CU-R1's: the list stays in the
 // residual, so a keyed list returns exactly the rows the walk of the same
@@ -715,13 +720,239 @@ TEST_F(KeySetTest, ASetStepRecordsAndReplaysNoTrail) {
     EXPECT_EQ(Run(sql), first);
 }
 
-// ---- Writes are CU-S3's ------------------------------------------------------
+// ---- CU-S3: a write by list -----------------------------------------------------
 
-TEST_F(KeySetTest, AWriteByListStillWritesTheRowsItNames) {
+TEST_F(KeySetTest, AWriteByListWritesTheRowsItNames) {
     EXPECT_EQ(Run("UPDATE t SET g = 9 WHERE id IN (2, 5, 7)"), "UPDATED 2");
     EXPECT_EQ(Ids("g = 9"), "id\\n2\\n5");
     EXPECT_EQ(Run("DELETE FROM t WHERE id IN (5, 400)"), "DELETED 1");
     EXPECT_EQ(Ids("id IN (2, 5)"), "id\\n2");
+    // No value names a row, and no value names a key at all.
+    EXPECT_EQ(Run("UPDATE t SET g = 1 WHERE id IN (7, 400)"), "UPDATED 0");
+    EXPECT_EQ(Run("DELETE FROM t WHERE id IN (-3, NULL)"), "DELETED 0");
+}
+
+// CU-R1 on a write: every statement leaves the relation as the walk of the
+// same list leaves it - its rows, what its indexes answer and what its
+// Cabin answers. One engine runs the list, the other its walk.
+TEST(KeySetWriteTest, EveryWriteLeavesWhatTheWalkOfItsListLeaves) {
+    Engine keyed;
+    Engine walked;
+    struct Case {
+        const char* head;
+        const char* list;
+        const char* leaf;  // one of the list's own leaves, for `Walked`
+    };
+    const Case cases[] = {
+        // Duplicates, a gap (7) and a key past the relation; a SET that
+        // reads the row, so a row written twice would show.
+        {"UPDATE t SET g = g + 5 WHERE ", "id IN (9, 2, 2, 7, 400)", "id = 2"},
+        {"UPDATE t SET g = g + 5 WHERE ", "id = 2 OR id = 9 OR 2 = id", "id = 2"},
+        // An indexed column, a cabined one and a spilled-or-inline string.
+        {"UPDATE t SET v = v + 1000 WHERE ", "id = 3 OR id = 11", "id = 3"},
+        {"UPDATE t SET sym = 'z' WHERE ", "id IN (1, 4, 12)", "id = 4"},
+        {"UPDATE t SET name = 'renamed' WHERE ", "id IN (6, -6, NULL)", "id = 6"},
+        // No value is a key: both walk.
+        {"UPDATE t SET g = 77 WHERE ", "id IN (-1, NULL)", "id = -1"},
+        {"DELETE FROM t WHERE ", "id IN (5, 6, 400, 5)", "id = 5"},
+        {"DELETE FROM t WHERE ", "8 = id OR id = 10", "id = 10"},
+        // Rows the statements above already deleted.
+        {"DELETE FROM t WHERE ", "id IN (5, 8, 1)", "id = 1"},
+    };
+    const char* reads[] = {
+        "SELECT id, v, g, name, sym FROM t",
+        "SELECT id FROM t WHERE v IN (20, 1030, 1110, 40)",   // by t_by_v
+        "SELECT id, v FROM t WHERE g IN (0, 5, 7) AND v > 0",  // by t_by_g_v
+        "SELECT id FROM t WHERE name = 'renamed'",             // by t_by_name
+        "SELECT id FROM t WHERE sym = 'z'",                    // by the Cabin
+        "SELECT id FROM t WHERE sym = 'a'",
+    };
+    for (const Case& c : cases) {
+        const std::string statement = std::string(c.head) + c.list;
+        const std::string reply = keyed.Run(statement);
+        EXPECT_NE(reply.rfind("ERR", 0), 0u) << statement << " -> " << reply;
+        EXPECT_EQ(reply, walked.Run(std::string(c.head) + Walked(c.list, c.leaf))) << statement;
+        for (const char* read : reads) {
+            // Twice, so a Cabin read is served the second time.
+            keyed.Run(read);
+            walked.Run(read);
+            EXPECT_EQ(keyed.Run(read), walked.Run(read)) << read << " after " << statement;
+        }
+    }
+    EXPECT_EQ(keyed.Run("SELECT id, g FROM t WHERE id IN (2, 9)"), "id,g\\n2,12\\n9,10");
+}
+
+// A heap's declared first column is an ordinary column, so a write by a
+// list on it walks (heap-and-tuple.md 3.1b).
+TEST_F(KeySetTest, AWriteByListOnAHeapsDeclaredFirstColumnWalks) {
+    db_.Ok("CREATE TABLE h (id int64, v int64) HEAP");
+    for (int id = 1; id <= 4; ++id) {
+        db_.Ok("INSERT INTO h VALUES (" + std::to_string(id) + ", 0)");
+    }
+    EXPECT_EQ(Run("UPDATE h SET v = v + 1 WHERE id IN (2, 4, 4, 9)"), "UPDATED 2");
+    EXPECT_EQ(Run("DELETE FROM h WHERE id IN (1, 4)"), "DELETED 2");
+    EXPECT_EQ(Run("SELECT id, v FROM h"), "id,v\\n2,1\\n3,0");
+}
+
+// ---- The descents, seen by their holds ------------------------------------------
+//
+// A write has no `ANALYZE`. What tells a descent from a walk is the hold: a
+// write walk takes every leaf of the relation exclusive, a descent the leaf
+// its key is in. The store below records the pages of one relation pinned
+// exclusive, and can fail one fetch.
+
+class LeafWatchingStore final : public storage::PageStore {
+public:
+    explicit LeafWatchingStore(storage::InMemoryPageStore& inner) : inner_(inner) {}
+
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
+        return inner_.CreateAtUnpinned(page_id);
+    }
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
+        return inner_.CreateNewUnpinned();
+    }
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
+        if (Fails()) return Status::IoError("a fetch the test failed");
+        return inner_.GetUnpinned(page_id);
+    }
+    StatusOr<std::span<std::byte, kPageSize>> GetForReadUnpinned(PageId page_id) override {
+        if (Fails()) return Status::IoError("a fetch the test failed");
+        return inner_.GetForReadUnpinned(page_id);
+    }
+    Status RaiseAllocationFloor(PageId first_allocatable_page_id) override {
+        return inner_.RaiseAllocationFloor(first_allocatable_page_id);
+    }
+    void PinFrame(PageId page_id, storage::PinMode mode) noexcept override {
+        if (watched_oid_ == 0 || mode != storage::PinMode::kExclusive) return;
+        auto bytes = inner_.GetForReadUnpinned(page_id);
+        if (bytes.ok() && storage::GetOwnerOid(bytes.value()) == watched_oid_) held_.insert(page_id);
+    }
+
+    // From now on, the pages `oid` owns that are pinned exclusive.
+    void Watch(std::uint64_t oid) {
+        watched_oid_ = oid;
+        held_.clear();
+    }
+    std::size_t held() const noexcept { return held_.size(); }
+    void FailNextFetch() noexcept { fail_next_ = true; }
+    int failed() const noexcept { return failed_; }
+
+private:
+    bool Fails() noexcept {
+        if (!fail_next_) return false;
+        fail_next_ = false;
+        ++failed_;
+        return true;
+    }
+
+    storage::InMemoryPageStore& inner_;
+    std::unordered_set<PageId> held_;
+    std::uint64_t watched_oid_ = 0;
+    bool fail_next_ = false;
+    int failed_ = 0;
+};
+
+class KeySetWriteHoldTest : public ::testing::Test {
+protected:
+    static constexpr int kRows = 1200;
+
+    void SetUp() override {
+        auto boot = bootstrap::BootstrapDatabase(store_, 1000);
+        ASSERT_TRUE(boot.ok()) << boot.status().message();
+        boot_.emplace(std::move(boot.value()));
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_);
+        // w: ids 1..1200 in key order, v = 0 - several leaves, no index and
+        // no Cabin, so the only pages the relation owns are its tree's.
+        ASSERT_EQ(Run("CREATE TABLE w (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+        std::string inserted;
+        for (int id = 1; id <= kRows; ++id) {
+            inserted = Run("INSERT INTO w VALUES (" + std::to_string(id) + ", 0)");
+            ASSERT_EQ(inserted.rfind("INSERTED", 0), 0u) << inserted;
+        }
+        const auto at = inserted.find("oid=");
+        ASSERT_NE(at, std::string::npos) << inserted;
+        oid_ = std::strtoull(inserted.c_str() + at + 4, nullptr, 10);
+
+        // What a write walk holds: every leaf.
+        store_.Watch(oid_);
+        ASSERT_EQ(Run("UPDATE w SET v = 0 WHERE v < 0"), "UPDATED 0");
+        every_leaf_ = store_.held();
+        ASSERT_GE(every_leaf_, 4u) << "the relation is too small to tell a descent from a walk";
+    }
+
+    std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+    // The leaves `sql` took exclusive.
+    std::size_t Held(const std::string& sql, const std::string& want) {
+        store_.Watch(oid_);
+        EXPECT_EQ(Run(sql), want) << sql;
+        return store_.held();
+    }
+
+    storage::InMemoryPageStore inner_{kFirstUserPageId};
+    LeafWatchingStore store_{inner_};
+    std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<CommandDispatcher> dispatcher_;
+    std::uint64_t oid_ = 0;
+    std::size_t every_leaf_ = 0;
+};
+
+TEST_F(KeySetWriteHoldTest, AnUpdateByListHoldsOnlyTheLeavesItsKeysAreIn) {
+    // Three neighbours: one leaf. The walk of the same list holds them all.
+    EXPECT_EQ(Held("UPDATE w SET v = v + 1 WHERE id IN (5, 3, 4, 3, -1, NULL)", "UPDATED 3"), 1u);
+    // A key past the relation is a descent too, to the last leaf, where the
+    // tree answers that there is no such row.
+    EXPECT_EQ(Held("UPDATE w SET v = v + 1 WHERE id IN (5, 3, 4, 999999)", "UPDATED 3"), 2u);
+    EXPECT_EQ(Held("UPDATE w SET v = v + 1 WHERE " + Walked("id IN (5, 3, 4)", "id = 3"),
+                   "UPDATED 3"),
+              every_leaf_);
+    // The first and the last row: two leaves.
+    EXPECT_EQ(Held("UPDATE w SET v = v + 1 WHERE id = 1200 OR id = 1", "UPDATED 2"), 2u);
+    EXPECT_EQ(Run("SELECT id, v FROM w WHERE v > 0"),
+              "id,v\\n1,1\\n3,3\\n4,3\\n5,3\\n1200,1");
+}
+
+TEST_F(KeySetWriteHoldTest, ADeleteByListHoldsOnlyTheLeavesItsKeysAreIn) {
+    EXPECT_EQ(Held("DELETE FROM w WHERE id IN (5, 3, 4, 3, -1, NULL)", "DELETED 3"), 1u);
+    EXPECT_EQ(Held("DELETE FROM w WHERE " + Walked("id IN (8, 9)", "id = 8"), "DELETED 2"),
+              every_leaf_);
+    EXPECT_EQ(Held("DELETE FROM w WHERE id = 1200 OR id = 1", "DELETED 2"), 2u);
+    // A deleted key's descent finds its delete-marked row and writes nothing.
+    EXPECT_EQ(Held("DELETE FROM w WHERE id IN (3, 4, 5)", "DELETED 0"), 1u);
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM w"), "count(*)\\n" + std::to_string(kRows - 7));
+}
+
+// The point write's own gate (`TupleKeyEqualityTarget`): the list is the
+// WHERE's only conjunct, or the statement walks - as a single key beside
+// another conjunct does.
+TEST_F(KeySetWriteHoldTest, AListBesideAnotherConjunctWalksAsASingleKeyBesideOneDoes) {
+    EXPECT_EQ(Held("UPDATE w SET v = 7 WHERE id IN (3, 4) AND v = 0", "UPDATED 2"), every_leaf_);
+    EXPECT_EQ(Held("UPDATE w SET v = 8 WHERE id = 5 AND v = 0", "UPDATED 1"), every_leaf_);
+    EXPECT_EQ(Held("DELETE FROM w WHERE id IN (3, 4) AND v = 7", "DELETED 2"), every_leaf_);
+    // A list on another column, and two lists, are no tuple key set.
+    EXPECT_EQ(Held("UPDATE w SET v = 9 WHERE v IN (8, 9)", "UPDATED 1"), every_leaf_);
+    EXPECT_EQ(Held("UPDATE w SET v = 1 WHERE id IN (5, 6) AND id IN (6, 7)", "UPDATED 1"),
+              every_leaf_);
+    // The single key alone is the point write it was.
+    EXPECT_EQ(Held("UPDATE w SET v = 2 WHERE id = 6", "UPDATED 1"), 1u);
+}
+
+// A descent that declines - here a fetch that fails - hands the rest of the
+// list to the walk from the key it declined at. Rows below it were written
+// by their descents and are not offered again; `v = v + 1` shows a row
+// written twice.
+TEST_F(KeySetWriteHoldTest, ADescentThatDeclinesHandsTheRestToTheWalkFromItsKey) {
+    dispatcher_->SetAfterUpdateRowAppliedForTest([this](std::uint64_t id) {
+        if (id == 5) store_.FailNextFetch();
+    });
+    const std::size_t held =
+        Held("UPDATE w SET v = v + 1 WHERE id IN (3, 5, 700, 1100, 1300)", "UPDATED 4");
+    dispatcher_->SetAfterUpdateRowAppliedForTest(nullptr);
+    EXPECT_EQ(store_.failed(), 1) << "the fetch was never failed, so no descent declined";
+    // The walk took over at 700: more leaves than the list's keys are in,
+    // fewer than the relation's, since the walk starts at its key's leaf.
+    EXPECT_GT(held, 3u);
+    EXPECT_LT(held, every_leaf_);
+    EXPECT_EQ(Run("SELECT id, v FROM w WHERE v > 0"), "id,v\\n3,1\\n5,1\\n700,1\\n1100,1");
 }
 
 // ---- Under transactions ------------------------------------------------------
@@ -846,6 +1077,102 @@ TEST_F(KeySetTxnTest, ARowWitnessedUnderTwoListedValuesIsServedOnce) {
     EXPECT_EQ(Run(1, older, keyed), "id,sym\\n1,a\\n2,b\\n3,a");
     EXPECT_EQ(Run(1, older, walked), "id,sym\\n1,a\\n2,b\\n3,a");
     ASSERT_EQ(Run(1, older, "COMMIT").rfind("COMMIT", 0), 0u);
+}
+
+// ---- CU-S3 under transactions: every write route by list ------------------------
+
+TEST_F(KeySetTxnTest, AWriteByListIsItsTransactionsUntilItDecides) {
+    Session writer;
+    Session reader;
+    ASSERT_EQ(Run(0, writer, "BEGIN").rfind("BEGIN", 0), 0u);
+    EXPECT_EQ(Run(0, writer, "UPDATE t SET v = v + 1 WHERE id IN (2, 3, 9)"), "UPDATED 2");
+    EXPECT_EQ(Run(0, writer, "DELETE FROM t WHERE id = 5 OR id = 1"), "DELETED 2");
+    // Its own rows by its own list, written once more through its own
+    // versions; the other core's reader sees none of it.
+    EXPECT_EQ(Run(0, writer, "UPDATE t SET v = v + 1 WHERE id IN (3, 5)"), "UPDATED 1");
+    EXPECT_EQ(Run(0, writer, "SELECT id, v FROM t"), "id,v\\n2,21\\n3,32\\n4,40");
+    EXPECT_EQ(Run(1, reader, "SELECT id, v FROM t"),
+              "id,v\\n1,10\\n2,20\\n3,30\\n4,40\\n5,50");
+    ASSERT_EQ(Run(0, writer, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(Run(1, reader, "SELECT id, v FROM t"),
+              "id,v\\n1,10\\n2,20\\n3,30\\n4,40\\n5,50");
+
+    // Committed from the other core.
+    EXPECT_EQ(Run(1, writer, "UPDATE t SET v = v + 1 WHERE id IN (4, 2)"), "UPDATED 2");
+    EXPECT_EQ(Run(1, writer, "DELETE FROM t WHERE id IN (1, 5, 5)"), "DELETED 2");
+    EXPECT_EQ(Run(0, reader, "SELECT id, v FROM t"), "id,v\\n2,21\\n3,30\\n4,41");
+}
+
+TEST_F(KeySetTxnTest, ReturningAnswersTheRowsAWriteByListWrote) {
+    Session s;
+    EXPECT_EQ(Run(0, s, "UPDATE t SET v = v + 1 WHERE id IN (4, 2, 9) RETURNING id, v"),
+              "id,v\\n2,21\\n4,41\\nUPDATED 2");
+    EXPECT_EQ(Run(0, s, "DELETE FROM t WHERE id = 5 OR id = 1 RETURNING id, v"),
+              "id,v\\n1,10\\n5,50\\nDELETED 2");
+}
+
+// The checks a row's write runs are the row function's, which a descent and
+// a walk share: a refusal on the list's second row unwinds its first.
+TEST_F(KeySetTxnTest, AWriteByListRunsEveryCheckTheWalkRuns) {
+    Session s;
+    const auto refused = [&](const std::string& sql, const std::string& needle) {
+        const std::string reply = Run(0, s, sql);
+        EXPECT_EQ(reply.rfind("ERR", 0), 0u) << sql << " -> " << reply;
+        EXPECT_NE(reply.find(needle), std::string::npos) << sql << " -> " << reply;
+    };
+    const auto ok = [&](const std::string& sql) {
+        const std::string reply = Run(0, s, sql);
+        ASSERT_NE(reply.rfind("ERR", 0), 0u) << sql << " -> " << reply;
+    };
+
+    // A foreign key, both directions.
+    ok("CREATE TABLE p (id int64, n int64) BTREE");
+    ok("INSERT INTO p VALUES (1, 0), (2, 0), (3, 0)");
+    ok("CREATE TABLE c (id int64, pid int64 REFERENCES p) BTREE");
+    ok("INSERT INTO c VALUES (1, 1), (2, 1), (3, 3)");
+    refused("DELETE FROM p WHERE id IN (2, 3)", "c");  // 3 is referenced
+    EXPECT_EQ(Run(0, s, "SELECT id FROM p"), "id\\n1\\n2\\n3");
+    refused("UPDATE c SET pid = 9 WHERE id IN (1, 2)", "9");  // no such parent
+    EXPECT_EQ(Run(0, s, "UPDATE c SET pid = 2 WHERE id IN (1, 2)"), "UPDATED 2");
+    EXPECT_EQ(Run(0, s, "DELETE FROM p WHERE id IN (1, 4)"), "DELETED 1");
+    EXPECT_EQ(Run(0, s, "SELECT id, pid FROM c"), "id,pid\\n1,2\\n2,2\\n3,3");
+
+    // A unique index: the second row takes the first row's new key.
+    ok("CREATE TABLE q (id int64, k int64) BTREE");
+    ok("INSERT INTO q VALUES (1, 10), (2, 20), (3, 30)");
+    ok("CREATE UNIQUE INDEX q_by_k ON q (k)");
+    refused("UPDATE q SET k = 99 WHERE id IN (1, 2)", "q_by_k");
+    EXPECT_EQ(Run(0, s, "SELECT id, k FROM q"), "id,k\\n1,10\\n2,20\\n3,30");
+    EXPECT_EQ(Run(0, s, "UPDATE q SET k = k + 5 WHERE id IN (1, 2)"), "UPDATED 2");
+    EXPECT_EQ(Run(0, s, "SELECT id FROM q WHERE k IN (15, 25)"), "id\\n1\\n2");
+
+    // An assertion: the list's rows together pass the bound the second breaks.
+    ok("CREATE TABLE a (id int64, acct int64, qty int64) BTREE");
+    ok("INSERT INTO a VALUES (1, 7, 10), (2, 7, 10), (3, 7, 10)");
+    ok("CREATE ASSERTION cap ON a GROUP BY (acct) CHECK SUM(qty) <= 100");
+    refused("UPDATE a SET qty = 50 WHERE id IN (1, 2, 3)", "cap");
+    EXPECT_EQ(Run(0, s, "SELECT id, qty FROM a"), "id,qty\\n1,10\\n2,10\\n3,10");
+    EXPECT_EQ(Run(0, s, "UPDATE a SET qty = 40 WHERE id IN (1, 3)"), "UPDATED 2");
+    EXPECT_EQ(Run(0, s, "DELETE FROM a WHERE id IN (1, 3)"), "DELETED 2");
+    EXPECT_EQ(Run(0, s, "UPDATE a SET qty = 100 WHERE id IN (2)"), "UPDATED 1");
+
+    // A Transition: one listed row is in a state no edge leaves.
+    ok("CREATE TABLE f (id int64, st varchar(16)) BTREE");
+    ok("INSERT INTO f VALUES (1, 'new'), (2, 'new'), (3, 'new')");
+    ok("CREATE TRANSITION flow ON f(st) ON INSERT ('new') ON UPDATE ('new' => 'done', "
+       "'new' => 'held')");
+    EXPECT_EQ(Run(0, s, "UPDATE f SET st = 'done' WHERE id IN (2)"), "UPDATED 1");
+    refused("UPDATE f SET st = 'held' WHERE id IN (1, 2, 3)", "flow");
+    EXPECT_EQ(Run(0, s, "SELECT id, st FROM f"), "id,st\\n1,new\\n2,done\\n3,new");
+    EXPECT_EQ(Run(0, s, "UPDATE f SET st = 'held' WHERE id IN (1, 3)"), "UPDATED 2");
+}
+
+// `PURGE` by list stays refused: CU-Q5 names UPDATE and DELETE only.
+TEST_F(KeySetTxnTest, APurgeByListIsStillRefused) {
+    Session s;
+    ASSERT_EQ(Run(0, s, "DELETE FROM t WHERE id IN (2, 3)"), "DELETED 2");
+    const std::string reply = Run(0, s, "PURGE FROM t WHERE id IN (2, 3)");
+    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
 }
 
 TEST_F(KeySetTxnTest, ARepeatableReadSnapshotKeepsTheVersionsItBeganWith) {

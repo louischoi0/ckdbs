@@ -809,6 +809,25 @@ TEST(SimWorkload, TheGeneratedStreamCoversEveryV2Shape) {
     EXPECT_TRUE(by_value);
 }
 
+// CU: with the shapes a range read and a by-key write are sometimes spelled
+// as a key list, which is what puts a key set's descents - a read's and a
+// write's - under the sim's crashes; without them never, so the pinned
+// corpus draws what it always drew.
+TEST(SimWorkload, TheShapesSpellARangeReadAndAByKeyWriteAsAKeyList) {
+    for (const bool shapes : {false, true}) {
+        Workload workload(Rng(11).Fork("workload"), Profile::kUniform, shapes);
+        std::map<Op::Kind, int> listed;
+        for (int i = 0; i < 4000; ++i) {
+            const Op op = workload.Next();
+            if (op.sql.find(" WHERE id IN (") != std::string::npos) ++listed[op.kind];
+        }
+        for (const Op::Kind kind :
+             {Op::Kind::kSelectRange, Op::Kind::kUpdate, Op::Kind::kDelete}) {
+            EXPECT_EQ(listed[kind] > 0, shapes) << OpKindName(kind) << " shapes=" << shapes;
+        }
+    }
+}
+
 // The count a mutation reports is compared against the oracle's own count
 // of the rows the predicate matches — the sharpest single assertion the
 // harness makes. This pins that the corpus actually reaches it.

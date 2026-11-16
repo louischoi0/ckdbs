@@ -1,7 +1,7 @@
 # Work order CU - a value list as a key: `IN (...)` and an `OR` of equalities served by one descent per value
 
-Status: **OPEN since 2026-11-16: CU-S0, CU-S1 and CU-S2 are done on the
-work branch, CU-S3 is not opened.** CU-S0 was opened on the operator's word of
+Status: **OPEN since 2026-11-16: CU-S0, CU-S1, CU-S2 and CU-S3 are done
+on the work branch, CU-S4 (the close) is not opened.** CU-S0 was opened on the operator's word of
 2026-11-16 (`raft-marks-2026-11-16.md` §1), on worktree
 `cu-key-set-access` from `1edf5c54` (`v3.4.11-20-g1edf5c54`), with
 **CU-Q0 to CU-Q7 each marked (a)**; CU-Q0's bar is met (§7). CU-S1 was
@@ -11,10 +11,14 @@ key set (§7). **CU-S1's review found that CU-Q8 (a) was marked on a
 bound that covers a one-step statement only** (§7); the operator re-read
 it and **kept (a)** on the third word of that day, which **opened CU-S2**
 (§3 of that file): a list on a column of an index's equality prefix and on
-a cabined column is a key set (§7, `9ceb32ee`). Every mark is the operator's own.
-**CU-S2 raised CU-Q10 to CU-Q13, each built to CLA's proposal and not
-marked** (§4). That word names CU-S2 only, so CU-S3 waits for the
-operator's word. Nothing is merged or pushed. Written
+a cabined column is a key set (§7, `9ceb32ee`). **CU-S2 raised CU-Q10 to
+CU-Q13, each built to CLA's proposal; the operator marked all four (a)**
+on the fourth word of that day, which **opened CU-S3** (§4 of that file):
+an `UPDATE` or `DELETE` whose `WHERE` is a list on the tuple key writes
+by one descent per value (§7). Every mark is the operator's own. That
+word names CU-S3 only, so CU-S4 - the close, with the overhead
+measurement - waits for the operator's word. Nothing is merged or pushed.
+Written
 on `main` at `a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15
 (`raft-marks-2026-11-15.md` §6). Every `[source-read]` claim in §1 was
 read at `a61ab905`; §7's census re-read each at `1edf5c54` and lists the
@@ -230,9 +234,10 @@ Every item is **the operator's own mark of 2026-11-16**: CU-Q0 to CU-Q7
 on the word that opened CU-S0 (`raft-marks-2026-11-16.md` §1), and CU-Q8,
 CU-Q9 and CU-Q1 again, which CU-S0 raised, on the word that opened CU-S1
 (§2 of that file), and CU-Q8 a third time on the word that opened CU-S2
-(§3). **CU-Q10 to CU-Q13 surfaced in CU-S2, are built to CLA's proposal
-and wait for a mark**; each is a few lines to turn, and CU-Q12 and CU-Q13
-depart from §2's "a set wins over every arm ranked below it".
+(§3). **CU-Q10 to CU-Q13 surfaced in CU-S2, were built to CLA's proposal
+and were each marked (a)** on the word that opened CU-S3 (§4 of that
+file); CU-Q12 and CU-Q13 depart from §2's "a set wins over every arm
+ranked below it", and the mark is what amends it.
 
 | | item | options | CLA proposes | mark |
 |---|---|---|---|---|
@@ -246,10 +251,10 @@ depart from §2's "a set wins over every arm ranked below it".
 | CU-Q7 | Propagation across a join key | (a) not in CU. (b) in CU, as CB-S1 does for ranges | (a) | **(a)**, the operator, 2026-11-16 |
 | CU-Q8 | Does a long set yield? A statement driven by a tuple key descent is run inline and never handed to the sliced walk (`SelectBody`); an index-driven one is handed on but reaches no boundary, since among a statement's steps only the outermost walk's page loop has one (`sched.md` §3). A set of 4,096 values is 1.6 to 4.2 ms of descents on the tuple key and 2.0 to 12.7 ms on an index, on top of about 4 ms for the list itself, which today's walk also spends unyielded; under CU-Q9 (a) the re-check adds up to about 84 ms (§7, derived) | (a) a set runs as a descent does today: inline, no yield, no cancel point inside it, the measured bound stated in `known-gaps.md`. (b) a set driving a `SELECT` is handed to the sliced run and yields, and takes `C_CANCEL`, every 64 values | (a) if CU-Q9 is (c) or (b): an index walk and a join's inner probes already run unyielded under `exec::Budget` (`sched.md` §3), the bound is then a few milliseconds, and (b) needs a resumable position inside the set and moves `sched.md` §3 and `protocol.md` §7 and §10, for a list length few statements reach. If CU-Q9 is (a) the bound is about 0.1 s and CLA proposes (b) | **(a)**, the operator, 2026-11-16; **kept** on the operator's re-read of the same day against the join bound CU-S1's review found (`raft-marks-2026-11-16.md` §3) |
 | CU-Q9 | The cost of CU-R1's re-check `[quiet-wrong]`. CU-R1 keeps the list in the residual, and the residual is evaluated leaf by leaf in written order on every row a step emits, so a row found through the list's i-th value costs i comparisons: a set emitting h rows pays about h x (n + 1) / 2 of them, about 84 ms at 4,096 matching rows (§7, derived from the walk's measured 10 ns a comparison) | (a) as CU-R1 is written: the whole conjunct, in written order, on every emitted row. (b) the set step tests the row's column for membership in the set's sorted values, O(log n), and the conjunct leaves the residual for that step. (c) the conjunct stays in the residual and is evaluated whole, but for a row a set found the leaf whose value drove the descent is tested first; only if that leaf is not true is the rest of the tree evaluated in written order | (c). An `OR` is true as soon as one leaf is, so testing one leaf first changes no answer, three-valued included, and the conjunct that is evaluated is still the written one with its own literals: a wrong coercion or a stale index entry fails the leaf and falls to the whole tree, exactly as under (a). The cost is one comparison per emitted row where the row holds the value that found it. (b) tests against the coerced set, which is what CU-R1 exists to check | **(c)**, the operator, 2026-11-16 |
-| CU-Q10 | A list's rank among indexes at one prefix length. §2 says a list column counts as an equality column and ties go to `index_oid` as today. With indexes on `(status)` and `(user_id)`, `status IN ('A', 'B') AND user_id = 5` is such a tie, and today it enters `(user_id)` | (a) at one equality prefix length single equalities outrank a prefix a list fills, before the range column and `index_oid` are asked: no statement leaves an index an equality put it on unless a list reaches a longer run of equality columns. (b) as §2 wrote: `index_oid` alone, so the statement above moves to `(status)` when that index is the older | (a). (b) changes the plan of statements that exist today, for the worse where the list's column is the less selective. **Built as (a)**; (b) is one term of `IndexChoiceOver`'s score | *not marked* |
-| CU-Q11 | An item an index's key encoder refuses `[quiet-wrong]`. CU-R3 says an item the descent would refuse to encode is dropped from the set. On the tuple key that is safe by invariant 7: a negative number is no key. For an index the encoder's refusal is not a proof that no row holds the value | (a) a NULL item is left out, since a key column is never NULL; any other refused item declines the list for that index, which is then scored without it. (b) as CU-R3 wrote: every refused item is dropped and the rest are keyed | (a). (b) answers a row short wherever the encoder refuses a value a row can hold. No such value was found to construct, since coercion refuses first, so (a) costs nothing known. **Built as (a)** | *not marked* |
-| CU-Q12 | The Cabin set's rank. §2 puts it directly after the literal `CabinProbeOf` and has it win over every arm below: the expression, predicate, correlated and cover Cabin arms, and a strict tuple key range. A set observes nothing, so while one of its values is unobserved it walks and no run of the statement changes that; each of those arms records what it misses, is keyed per outer row, or bounds its walk. With Cabins on `DATE(ts)` and on `sym`, `DATE(ts) = '2026-10-02' AND sym IN ('a', 'b')` was an expression probe that served from its second run, and under §2 it walks until other statements have observed `'a'` and `'b'` | (a) the Cabin set is the last of the Cabin arms and takes only a step that would otherwise walk its relation whole: above the filter scan, never on a step with a strict tuple key range. (b) as §2 wrote | (a). Under (b) a list turns statements that are served today into walks nothing in them ends. Under (a) a set replaces only a walk. **Built as (a)**; (b) is the arm moved back up in the ladder | *not marked* |
-| CU-Q13 | A list on a step a join key could enter. §2 puts the index set beside the literal `kIndexProbe`, which outranks the correlated index probe and the correlated Cabin probe (`index.md` §8a). `o.user_id = u.id AND o.status IN ('open', 'held')`, with indexes on `(user_id)` and `(status)` and `o` the inner step, was one descent into `(user_id)` per outer row; under §2 it walks every entry of both statuses per outer row | (a) no list is read on a step where a correlated index probe or a correlated Cabin probe stands: the step takes what it took before lists were read. The planner may still order the relation first, where the list is its set. (b) as §2 wrote: the set outranks both, as a single literal equality does today | (a). (b) multiplies by the list's length a trade the single-value rule already makes, on every outer row. (a) changes no plan that exists. A correlated probe that also carries the list on a later prefix column is the better plan than either and is not built. **Built as (a)**: `LiteralIndexChoiceOf` | *not marked* |
+| CU-Q10 | A list's rank among indexes at one prefix length. §2 says a list column counts as an equality column and ties go to `index_oid` as today. With indexes on `(status)` and `(user_id)`, `status IN ('A', 'B') AND user_id = 5` is such a tie, and today it enters `(user_id)` | (a) at one equality prefix length single equalities outrank a prefix a list fills, before the range column and `index_oid` are asked: no statement leaves an index an equality put it on unless a list reaches a longer run of equality columns. (b) as §2 wrote: `index_oid` alone, so the statement above moves to `(status)` when that index is the older | (a). (b) changes the plan of statements that exist today, for the worse where the list's column is the less selective. **Built as (a)**; (b) is one term of `IndexChoiceOver`'s score | **(a)**, the operator, 2026-11-16 |
+| CU-Q11 | An item an index's key encoder refuses `[quiet-wrong]`. CU-R3 says an item the descent would refuse to encode is dropped from the set. On the tuple key that is safe by invariant 7: a negative number is no key. For an index the encoder's refusal is not a proof that no row holds the value | (a) a NULL item is left out, since a key column is never NULL; any other refused item declines the list for that index, which is then scored without it. (b) as CU-R3 wrote: every refused item is dropped and the rest are keyed | (a). (b) answers a row short wherever the encoder refuses a value a row can hold. No such value was found to construct, since coercion refuses first, so (a) costs nothing known. **Built as (a)** | **(a)**, the operator, 2026-11-16 |
+| CU-Q12 | The Cabin set's rank. §2 puts it directly after the literal `CabinProbeOf` and has it win over every arm below: the expression, predicate, correlated and cover Cabin arms, and a strict tuple key range. A set observes nothing, so while one of its values is unobserved it walks and no run of the statement changes that; each of those arms records what it misses, is keyed per outer row, or bounds its walk. With Cabins on `DATE(ts)` and on `sym`, `DATE(ts) = '2026-10-02' AND sym IN ('a', 'b')` was an expression probe that served from its second run, and under §2 it walks until other statements have observed `'a'` and `'b'` | (a) the Cabin set is the last of the Cabin arms and takes only a step that would otherwise walk its relation whole: above the filter scan, never on a step with a strict tuple key range. (b) as §2 wrote | (a). Under (b) a list turns statements that are served today into walks nothing in them ends. Under (a) a set replaces only a walk. **Built as (a)**; (b) is the arm moved back up in the ladder | **(a)**, the operator, 2026-11-16 |
+| CU-Q13 | A list on a step a join key could enter. §2 puts the index set beside the literal `kIndexProbe`, which outranks the correlated index probe and the correlated Cabin probe (`index.md` §8a). `o.user_id = u.id AND o.status IN ('open', 'held')`, with indexes on `(user_id)` and `(status)` and `o` the inner step, was one descent into `(user_id)` per outer row; under §2 it walks every entry of both statuses per outer row | (a) no list is read on a step where a correlated index probe or a correlated Cabin probe stands: the step takes what it took before lists were read. The planner may still order the relation first, where the list is its set. (b) as §2 wrote: the set outranks both, as a single literal equality does today | (a). (b) multiplies by the list's length a trade the single-value rule already makes, on every outer row. (a) changes no plan that exists. A correlated probe that also carries the list on a later prefix column is the better plan than either and is not built. **Built as (a)**: `LiteralIndexChoiceOf` | **(a)**, the operator, 2026-11-16 |
 
 ## 5. Stages
 
@@ -687,3 +692,130 @@ committed with (`ctest -LE bs-nightly`, the range the push hook runs,
 Debug), after the review's changes; 4525 of 4525 before them.
 
 Overhead not measured; measured at the milestone's close.
+
+### CU-S3 - writes, 2026-11-16
+
+On worktree `cu-key-set-access`, from `f1213c77`, committed at
+the commit this section arrives in. **An `UPDATE` or a `DELETE` whose `WHERE` is a list on the
+tuple key, and nothing else, writes by one descent per value.**
+
+**What is built** (`docs/spec/parser-v2.md` I10 owns the contract;
+`docs/spec/txn.md` §5 states that the window does not move):
+
+- **The shape is read off the compiled `WHERE`, not off
+  `parser::Condition`** (`exec::WriteKeySetOf`, `step_compiler.cpp`). The
+  census above expected the write to recognise the shape again at the
+  dispatcher's level, because the point-write target and the lock window
+  read the raw conjuncts. A write compiles its `WHERE` through
+  `CompileWhere` before it touches a row, so CU-S1's `TupleKeySetOf` is
+  asked of that step and there is one recogniser. The gate is the point
+  write's own (`TupleKeyEqualityTarget`): the list is the clause's only
+  conjunct.
+- **The loop** (`WriteWalk::WriteKeySet`, `command_dispatcher.cpp`): the
+  statement's point arm once per distinct value, ascending. The point
+  arm's body is one function per statement now (`write_at` in
+  `UpdateParsed`, `mark_at` in `DeleteInner`), called by the single-key
+  arm and by the loop, so a list's row and a single key's row are written
+  by the same code, UPDATE's unique-key round (BX-R4) included.
+- **The row** goes through `WriteWalk::Qualify` and `Claim` as a walked
+  row does, the list its `WHERE` (CU-R1), with the leaf whose value made
+  the descent asked first (CU-Q9 (c); `EvaluateConjuncts` takes the
+  `BoolLeafFirst` the step VM already passed).
+- **The position is the walk's** (`WalkCursor`, `session.hpp`). A walk
+  resumes by key and the values ascend, so a held row parks the statement
+  at its value and the resume starts at the first value at or above the
+  cursor's key; a descent that declines (`TupleKeyLookup::Kind::kScan`)
+  hands the rest of the list to the walk from that key. Nothing new is
+  carried across a park.
+- **The lock window does not move**, as the census read: a list declares
+  no window (`DeclaredWriteBorrow` reads no bound off a `kBoolTree`,
+  before CU and after) and each row written takes its row unit, `U` or
+  `X`, in key order. No change to `PURGE`, which refuses a list
+  `NotImplemented`.
+- **The sim** (`sim/workload.cpp`): with the shapes on, a by-key UPDATE's
+  or DELETE's `id = k` is spelled `id IN (k, 0, k)` 40 times in 100, on a
+  stream of its own (`write_list`). The op's kind and key are unchanged,
+  so the oracle's expectation is the single key's and the shapes-off
+  corpus is untouched.
+
+**The foreign-key, unique, assertion and Transition paths are
+unchanged**: each is the row function's, which the descent and the walk
+share. A cell pins each by a refusal on a list's later row that unwinds
+its earlier ones.
+
+**Tests.** `tests/key_set_test.cpp`: every write leaves what the walk of
+its list leaves, compared across two engines - rows, what each index
+answers and what the Cabin answers - for duplicates, a gap, a key past
+the relation, a NULL and a negative item, a list that names no key, and a
+`SET` that reads the row; **the descents are seen by their holds**, since
+a write has no `ANALYZE`: a store that records the leaves of one relation
+pinned exclusive shows one leaf for three neighbouring keys where the
+walk of the same list holds every leaf, for UPDATE and DELETE; a list
+beside another conjunct, a list on another column and two lists hold
+every leaf, as a single key beside a conjunct does; a failed fetch makes
+one descent decline and the walk takes over from its key, each listed row
+written once (`v = v + 1`); a heap's declared first column walks. Under
+transactions, on the two-core rig: a write by list is its transaction's
+until it decides, `RETURNING` answers its rows, the four checks above,
+`PURGE` by list refused. `tests/lock_family_test.cpp`: a list parks at a
+held value with the values below it written and resumes there, the trail
+holding each row once; a list whose first value is held waits having
+written nothing and is run again; the commit arm refuses and unwinds; a
+DELETE parks too; and under a cap of three, three listed rows reach the
+cap where a window over them would not. `tests/index_unique_rig_test.cpp`:
+a list write that has written a row parks on a busy unique key and
+resumes at its value, on both of the holder's decides.
+`tests/sim_loop_test.cpp`: the
+shapes spell a range read and a by-key write as a key list, and without
+them never. A shapes-on sweep of the sim, 8 seeds by 3 modes by 2
+profiles at 1,500 ops and 2 iterations, passed 48 of 48 (Debug).
+
+**Review** (`critics-developer`, on the uncommitted tree over
+`f1213c77`): no correctness finding, and no edit of its own. It traced
+each interleaving the position argument rests on - a park in the loop, a
+declined descent, a walk that took over and then parked, the count
+carried across a park, a first value held, and UPDATE's unique-key round
+inside a list, a park inside its check included - and found the
+single-key arm's replies unchanged line for line, the leaf-first hint
+safe (a stack local cleared before the status is read, one conjunct by
+the gate), and the gate closed to a heap's hidden key, a parameter, a
+subquery leaf and a derived conjunct. Taken:
+
+- **`WriteKeySet`'s own end enum is gone**: a park is already
+  `parked_on_row`, which is how the walk beside it tells one, so the loop
+  answers whether every value is done and there is one source for
+  "parked".
+- **A cell for the unique-key round inside a list** (BX-R4), the one
+  interleaving no cell reached: `tests/index_unique_rig_test.cpp`'s
+  mid-statement park, run by `id IN (2, 1, 7)` as well as by the walk,
+  on both of the holder's decides.
+- Wording: a phrase of history out of a code comment and I10; the
+  `CLAUDE.md` row no longer reads as though a write's list on an indexed
+  column were keyed; the cap sentence in `known-gaps.md`.
+
+Not taken: folding the single-key arm and the list arm of both
+statements into one `WriteWalk` member taking the verb, the counter and
+the oid. It would save about twenty lines for a seven-argument helper
+that formats replies, and the two arms answer differently on purpose - a
+single absent key is `UPDATED 0` with no relation named, a list is the
+walk's reply - with the `ON CONFLICT` arm's refusal standing between
+them in `UpdateParsed`.
+
+**Not covered, stated in `known-gaps.md`**: a write by list while
+another core divides the leaf a descent lands in; a declining descent
+under a `DELETE`; a list write resumed after its walk took over. Also
+stated there: a list beside any other conjunct walks, because the point
+write's gate is "the only conjunct" - `WHERE id = 1 AND v = 3` walks the
+relation too, before CU and after, though the row function evaluates the
+whole `WHERE` on the row a descent finds; lifting that gate is the point
+write's question and outside CU. A write finds its rows through no index
+and no Cabin, for a list as for a single value.
+
+**Test suite**: 4550 of 4550 passed on the tree this section is
+committed with (`ctest -LE bs-nightly`, the range the push hook runs,
+Debug), after the review's changes; `build-release` compiles. The suite
+was not run on the tree before the review's changes: the review ran the
+cells nearest the change, 64 of 64.
+
+Overhead not measured; measured at the milestone's close.
+

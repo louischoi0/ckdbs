@@ -1896,8 +1896,8 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 ## Key sets (CU)
 
-Verified on `cu-key-set-access` at `9ceb32ee` (CU-S2). Owned by
-`docs/spec/parser-v2.md` I10; the order is
+Verified on `cu-key-set-access` at CU-S3's commit (the order's §7 names
+it). Owned by `docs/spec/parser-v2.md` I10; the order is
 `instructions/v3.2.0/workorder-cu-key-set-access.md`.
 
 - **A Cabin set is served only when every value is already observed, and
@@ -1940,12 +1940,31 @@ Verified on `cu-key-set-access` at `9ceb32ee` (CU-S2). Owned by
   the rule that such an item declines the list for that index
   (`IndexChoiceOver`) has no cell. Coercion refuses a literal its column
   cannot hold before the encoder is asked.
-- **A write's own rows by list are found by a walk.** `UPDATE` and
-  `DELETE ... WHERE id IN (...)` visit every slot of every leaf and take a
-  tuple lock per match, as before; CU-S3, unbuilt. A list on a relation
-  the write only reads (`UPDATE ... FROM`, `DELETE ... USING`, a subquery,
-  `INSERT ... SELECT`) is keyed. `PURGE` by list is refused
-  `NotImplemented` and is in no stage.
+- **A write is by key set only where the list is its whole `WHERE`**
+  (CU-S3). `UPDATE` and `DELETE ... WHERE id IN (...)` descend once per
+  value; `... WHERE id IN (1, 2) AND v = 3` visits every slot of every
+  leaf under a write latch, because the gate is the point write's
+  (`TupleKeyEqualityTarget`): `WHERE id = 1 AND v = 3` walks the relation
+  too, before CU and after. The row function evaluates the whole `WHERE`
+  on the row a descent finds, so a conjunct with no subquery beside the
+  key could be admitted for both; that is the point write's rule and
+  outside CU. A list on a relation the write only reads (`UPDATE ...
+  FROM`, `DELETE ... USING`, a subquery, `INSERT ... SELECT`) is keyed.
+  `PURGE` by list is refused `NotImplemented` and is in no stage.
+- **A write finds its rows through no index and no Cabin**, for a list as
+  for a single value: `UPDATE ... WHERE owner IN (1, 9)` walks the
+  relation whatever index `owner` has. CU-Q5 names the point-write
+  target; an index-driven write is no stage of CU.
+- **A write by list holds its core for all its descents**, as every write
+  does for its whole walk: no write yields (`sched.md` §3). It takes a
+  row unit per row written and no window, so a list naming more rows than
+  `max_locks_per_txn` admits is refused at the cap, as the walk of it was.
+- **What CU-S3's cells do not cover**: a write by list while another
+  core's writer divides the leaf a descent lands in (the descent and the
+  row function are the point write's, whose cells cover it); a descent
+  that declines on a `DELETE` (the cell fails a fetch under an `UPDATE`,
+  and the loop is one function for both); and a list write resumed after
+  its walk took over from a declined descent.
 - **The shape is exact.** `id IN (1, 2) OR id = 3`,
   `(id = 1 OR id = 2) OR id = 3` and a list under `NOT` or mixed with
   another column are not keyed and walk. A client that wants the set
