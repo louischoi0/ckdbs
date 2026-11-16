@@ -55,9 +55,9 @@ retryably, as it did before its probe existed.
 **The fix is known and not scheduled.** There are two options.
 
 - **(A) The same guard at the reverse walk.** Probe only an in-flight
-  child writer. The cost is that a child writer which aborted between the
-  walk and the probe gets a retryable refusal where today it gets an
-  immediate re-run.
+  child writer. The cost is that a child writer which decided between the
+  walk and the probe, committed or aborted, gets a retryable refusal where
+  today it gets an immediate re-run.
 - **(B) Inside `WaitForRowWriter`.** Pre-flip the granted slot only when a
   fresh check view sees the holder's decide.
 
