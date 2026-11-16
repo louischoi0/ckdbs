@@ -15,7 +15,7 @@ a cabined column is a key set (§7, `9ceb32ee`). **CU-S2 raised CU-Q10 to
 CU-Q13, each built to CLA's proposal; the operator marked all four (a)**
 on the fourth word of that day, which **opened CU-S3** (§4 of that file):
 an `UPDATE` or `DELETE` whose `WHERE` is a list on the tuple key writes
-by one descent per value (§7). Every mark is the operator's own. That
+by one descent per value (§7, `84bf6828`). Every mark is the operator's own. That
 word names CU-S3 only, so CU-S4 - the close, with the overhead
 measurement - waits for the operator's word. Nothing is merged or pushed.
 Written
@@ -696,7 +696,7 @@ Overhead not measured; measured at the milestone's close.
 ### CU-S3 - writes, 2026-11-16
 
 On worktree `cu-key-set-access`, from `f1213c77`, committed at
-the commit this section arrives in. **An `UPDATE` or a `DELETE` whose `WHERE` is a list on the
+`84bf6828`. **An `UPDATE` or a `DELETE` whose `WHERE` is a list on the
 tuple key, and nothing else, writes by one descent per value.**
 
 **What is built** (`docs/spec/parser-v2.md` I10 owns the contract;
