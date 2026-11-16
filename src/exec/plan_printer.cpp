@@ -212,7 +212,8 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
             os << " cover=" << step.cabin->cover->first << ".." << step.cabin->cover->second;
         } else if (step.cabin->key_from.has_value()) {
             os << " key=" << FormatColumnRef(*step.cabin->key_from);
-        } else {
+        } else if (!step.key_set.has_value()) {
+            // A Cabin set's values are its `filter bool` leaves (CU).
             os << " value=" << FormatValue(/*type_val=*/0, step.cabin->value);
         }
         // PO9: an optimizer-managed Cabin is marked, a declared one is

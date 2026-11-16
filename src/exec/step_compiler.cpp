@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 // For `CoerceLiteralToColumn`: the codec owns literal coercion, so the
@@ -18,6 +19,7 @@
 #include "kds/exec/plan_memo.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_vm.hpp"
+#include "kds/stats/cabin_store.hpp"
 
 namespace kds::exec {
 
@@ -891,32 +893,45 @@ std::optional<std::uint64_t> TupleKeyBound(const Operand& operand) {
     return static_cast<std::uint64_t>(operand.literal.int_val);
 }
 
-// The tuple key set this step's boolean conjuncts name, if any (CU; `KeySet`,
-// step_chain.hpp): the first conjunct whose root is an `OR` and whose every
-// leaf is `<this step's tuple key> = <literal>`, which is what `id IN (...)`
-// and a flat `id = a OR id = b` both lower to. An `OR` across columns, one
+// The first boolean conjunct at or after `from` that is a value list on
+// `col_pos` (CU; `KeySet`, step_chain.hpp): its root an `OR` and its every
+// leaf `<this step's column> = <literal>`, which is what `col IN (...)` and
+// a flat `col = a OR col = b` both lower to. An `OR` across columns, one
 // holding a leaf that is not such an equality, and one nested under another
 // node are not the shape and stay a residual only.
+std::optional<std::uint32_t> ListConjunctOn(const Step& step, std::uint16_t slot,
+                                            std::uint16_t col_pos, std::size_t from) {
+    const auto names_the_column = [slot, col_pos](const BoolPredicate& leaf) {
+        return leaf.op == BoolPredicate::Op::kCompare &&
+               leaf.compare.op == parser::CompareOp::kEq &&
+               leaf.compare.rhs.kind == OperandKind::kLiteral &&
+               leaf.compare.rhs.literal.type != parser::ValueType::kParam &&
+               IsOwnColumn(leaf.compare.lhs, slot) && leaf.compare.lhs.col_pos == col_pos;
+    };
+    for (std::size_t c = from; c < step.bool_residual.size(); ++c) {
+        const BoolPredicate& pred = step.bool_residual[c];
+        if (pred.op == BoolPredicate::Op::kOr &&
+            pred.children.size() <= (std::size_t{1} << kKeySetLeafBits) &&
+            std::all_of(pred.children.begin(), pred.children.end(), names_the_column)) {
+            return static_cast<std::uint32_t>(c);
+        }
+    }
+    return std::nullopt;
+}
+
+// The tuple key set this step's boolean conjuncts name, if any: the first
+// value list on the tuple key that names a key.
 //
 // An item is keyed by `TupleKeyBound`, the single-value arm's own test
 // (CU-R3): a NULL or a negative literal names no key, so it is left out and
 // stays a leaf of the conjunct. A conjunct none of whose items is a key
 // gives no set, and the step keeps its walk.
 std::optional<KeySet> TupleKeySetOf(const Step& step, std::uint16_t slot) {
-    const auto names_the_key = [slot](const BoolPredicate& leaf) {
-        return leaf.op == BoolPredicate::Op::kCompare &&
-               leaf.compare.op == parser::CompareOp::kEq &&
-               leaf.compare.rhs.kind == OperandKind::kLiteral &&
-               IsOwnColumn(leaf.compare.lhs, slot) && IsTupleKey(leaf.compare.lhs);
-    };
-    for (std::size_t c = 0; c < step.bool_residual.size(); ++c) {
-        const BoolPredicate& pred = step.bool_residual[c];
-        if (pred.op != BoolPredicate::Op::kOr ||
-            !std::all_of(pred.children.begin(), pred.children.end(), names_the_key)) {
-            continue;
-        }
+    for (auto c = ListConjunctOn(step, slot, /*col_pos=*/0, 0); c.has_value();
+         c = ListConjunctOn(step, slot, /*col_pos=*/0, *c + 1)) {
+        const BoolPredicate& pred = step.bool_residual[*c];
         KeySet set;
-        set.conjunct = static_cast<std::uint32_t>(c);
+        set.conjunct = *c;
         for (std::size_t leaf = 0; leaf < pred.children.size(); ++leaf) {
             if (auto key = TupleKeyBound(pred.children[leaf].compare.rhs); key.has_value()) {
                 set.items.push_back({*key, static_cast<std::uint32_t>(leaf)});
@@ -1147,77 +1162,227 @@ IndexProbe ProbeOverIndex(const catalog::TableAccess::IndexRef& ix) {
     return probe;
 }
 
+// An index probe and, where a value list stands as one of its prefix
+// columns, the key set that serves it (CU).
+struct IndexChoice {
+    IndexProbe probe;
+    std::optional<KeySet> set;
+    int score = 0;  // `IndexChoiceOver`'s rank of it; higher wins
+};
+
+// One index's probe over its longest usable key prefix, or nullopt where it
+// has none, scores no higher than `best_score`, or cannot be encoded.
+//
+// `with_list` lets **one** value list stand as an equality column of the
+// prefix (CU; `ListConjunctOn`), the first prefix column that has a list and
+// no single equality. The probe's bounds then hold every other column of
+// the prefix, and the set holds them once per value with the list's column
+// encoded in. A NULL item names no row and is left out (`col = NULL` is
+// never true). **Any other item the key encoder refuses declines the list
+// for this index** (CU-Q11), and the caller's attempt without it stands:
+// unlike a negative tuple key, a refused value is not known to match no row.
+std::optional<IndexChoice> IndexChoiceOver(const catalog::TableAccess& access, const Step& step,
+                                           std::uint16_t slot,
+                                           const catalog::TableAccess::IndexRef& ix,
+                                           bool with_list, int best_score) {
+    // How many leading key columns carry an equality, in the index's
+    // declared order. Stops at the first that does not: an index on
+    // (a, b) cannot be entered by `b` alone.
+    std::uint8_t eq = 0;
+    std::optional<std::uint8_t> list_at;
+    std::uint32_t list_conjunct = 0;
+    for (; eq < ix.nkeys; ++eq) {
+        if (EqualityOnColumn(step, slot, ix.keys()[eq]) != nullptr) continue;
+        if (!with_list || list_at.has_value()) break;
+        const auto list = ListConjunctOn(step, slot, ix.keys()[eq], 0);
+        if (!list.has_value()) break;
+        list_at = eq;
+        list_conjunct = *list;
+    }
+    if (with_list && !list_at.has_value()) return std::nullopt;  // the other attempt's
+
+    ColumnBounds bounds;
+    const bool ranged =
+        eq < ix.nkeys &&
+        (bounds = BoundsOnColumn(step, slot, ix.keys()[eq])).low != nullptr &&
+        bounds.high != nullptr;
+
+    // A longer equality prefix is worth more than a shorter one; at one
+    // length, single equalities are worth more than a prefix a list fills,
+    // whatever range follows either (CU-Q10); and then a range on the next
+    // column more than none. Among probes with no list this is the order
+    // `eq * 2 + ranged` gave before lists were read, so a list takes a
+    // statement off an index only by reaching a longer equality prefix.
+    const int score =
+        static_cast<int>(eq) * 4 + (list_at.has_value() ? 0 : 2) + (ranged ? 1 : 0);
+    if ((eq == 0 && !ranged) || score <= best_score) return std::nullopt;
+
+    // The bounds are encoded into the templates now: coercion is a
+    // compile-time act and so is the encoding that follows it.
+    IndexChoice choice;
+    choice.score = score;
+    IndexProbe& probe = choice.probe;
+    probe = ProbeOverIndex(ix);
+    probe.eq_prefix = eq;
+    probe.ranged = ranged;
+
+    std::size_t at = 0;
+    std::size_t list_offset = 0;
+    std::size_t list_width = 0;
+    for (std::uint8_t i = 0; i < eq + (ranged ? 1 : 0); ++i) {
+        const catalog::SysColumnRow& col = access.schema.columns[ix.keys()[i]];
+        auto width = IndexKeyColumnWidth(col);
+        if (!width.ok() || at + width.value() > ix.key_width) return std::nullopt;
+        if (list_at.has_value() && i == *list_at) {
+            list_offset = at;
+            list_width = width.value();
+            at += width.value();
+            continue;  // encoded per item, below
+        }
+        const parser::AstValue* low_value =
+            i < eq ? EqualityOnColumn(step, slot, ix.keys()[i]) : bounds.low;
+        const parser::AstValue* high_value = i < eq ? low_value : bounds.high;
+        // A value the key encoder refuses - an integer wider than its
+        // column, say - means this index cannot be entered for it. The
+        // step falls through to the walk, which returns the identical
+        // rows because the residual is untouched.
+        if (!EncodeIndexKeyColumn(col, *low_value,
+                                  std::span<std::byte>(probe.low).subspan(at, width.value()))
+                 .ok() ||
+            !EncodeIndexKeyColumn(col, *high_value,
+                                  std::span<std::byte>(probe.high).subspan(at, width.value()))
+                 .ok()) {
+            return std::nullopt;
+        }
+        at += width.value();
+    }
+    if (!list_at.has_value()) return choice;
+
+    // The list's column, once per value: distinct, in key order.
+    const catalog::SysColumnRow& list_col = access.schema.columns[ix.keys()[*list_at]];
+    const std::vector<BoolPredicate>& leaves = step.bool_residual[list_conjunct].children;
+    struct Encoded {
+        std::vector<std::byte> bytes;
+        std::uint32_t leaf = 0;
+    };
+    std::vector<Encoded> values;
+    for (std::size_t leaf = 0; leaf < leaves.size(); ++leaf) {
+        const parser::AstValue& value = leaves[leaf].compare.rhs.literal;
+        if (value.type == parser::ValueType::kNull) continue;
+        Encoded item;
+        item.bytes.resize(list_width);
+        item.leaf = static_cast<std::uint32_t>(leaf);
+        if (!EncodeIndexKeyColumn(list_col, value, item.bytes).ok()) return std::nullopt;
+        values.push_back(std::move(item));
+    }
+    if (values.empty()) return std::nullopt;
+    // Stable, so of two leaves naming one value the first written is kept.
+    std::stable_sort(values.begin(), values.end(),
+                     [](const Encoded& a, const Encoded& b) { return a.bytes < b.bytes; });
+    values.erase(std::unique(values.begin(), values.end(),
+                             [](const Encoded& a, const Encoded& b) { return a.bytes == b.bytes; }),
+                 values.end());
+
+    KeySet set;
+    set.conjunct = list_conjunct;
+    set.col_pos = ix.keys()[*list_at];
+    set.bounds.reserve(values.size() * 2 * ix.entry_width);
+    for (const Encoded& item : values) {
+        set.items.push_back({0, item.leaf});
+        for (const std::vector<std::byte>* bound : {&probe.low, &probe.high}) {
+            const std::size_t base = set.bounds.size();
+            set.bounds.insert(set.bounds.end(), bound->begin(), bound->end());
+            std::copy(item.bytes.begin(), item.bytes.end(),
+                      set.bounds.begin() + static_cast<std::ptrdiff_t>(base + list_offset));
+        }
+    }
+    choice.set = std::move(set);
+    return choice;
+}
+
 // The index this step should enter, or nullopt.
 //
 // Picks the **longest usable key prefix**, ties broken by lowest
 // `index_oid` - which is free, because `TableAccess::indexes` is sorted by
-// it and this keeps the first index to reach a given score.
-std::optional<IndexProbe> IndexProbeOf(const catalog::TableAccess& access, const Step& step,
-                                       std::uint16_t slot) {
-    if (access.indexes.empty()) return std::nullopt;
-
-    std::optional<IndexProbe> best;
+// it and this keeps the first index to reach a given score. With
+// `with_lists`, each index is first asked with one value list as a prefix
+// column: where that form stands it outscores the same index's plain form,
+// which is asked only when it does not.
+std::optional<IndexChoice> IndexProbeOf(const catalog::TableAccess& access, const Step& step,
+                                        std::uint16_t slot, bool with_lists) {
+    std::optional<IndexChoice> best;
     int best_score = 0;
-
     for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
         // A building index's entries are not complete (CI-R1).
         if (ix.building) continue;
-        // How many leading key columns carry an equality, in the index's
-        // declared order. Stops at the first that does not: an index on
-        // (a, b) cannot be entered by `b` alone.
-        std::uint8_t eq = 0;
-        while (eq < ix.nkeys && EqualityOnColumn(step, slot, ix.keys()[eq]) != nullptr) ++eq;
-
-        ColumnBounds bounds;
-        const bool ranged =
-            eq < ix.nkeys &&
-            (bounds = BoundsOnColumn(step, slot, ix.keys()[eq])).low != nullptr &&
-            bounds.high != nullptr;
-
-        // An equality is worth more than a range on the same column, and a
-        // longer prefix more than a shorter one.
-        const int score = static_cast<int>(eq) * 2 + (ranged ? 1 : 0);
-        if (score == 0 || score <= best_score) continue;
-
-        // The bounds are encoded into the templates now: coercion is a
-        // compile-time act and so is the encoding that follows it.
-        IndexProbe probe = ProbeOverIndex(ix);
-        probe.eq_prefix = eq;
-        probe.ranged = ranged;
-
-        std::size_t at = 0;
-        bool encoded = true;
-        for (std::uint8_t i = 0; i < eq + (ranged ? 1 : 0) && encoded; ++i) {
-            const catalog::SysColumnRow& col = access.schema.columns[ix.keys()[i]];
-            auto width = IndexKeyColumnWidth(col);
-            if (!width.ok() || at + width.value() > ix.key_width) {
-                encoded = false;
-                break;
-            }
-            const parser::AstValue* low_value =
-                i < eq ? EqualityOnColumn(step, slot, ix.keys()[i]) : bounds.low;
-            const parser::AstValue* high_value =
-                i < eq ? low_value : bounds.high;
-            // A value the key encoder refuses - an integer wider than its
-            // column, say - means this index cannot be entered for it. The
-            // step falls through to the walk, which returns the identical
-            // rows because the residual is untouched.
-            encoded = EncodeIndexKeyColumn(col, *low_value,
-                                            std::span<std::byte>(probe.low).subspan(
-                                                at, width.value()))
-                          .ok() &&
-                      EncodeIndexKeyColumn(col, *high_value,
-                                            std::span<std::byte>(probe.high).subspan(
-                                                at, width.value()))
-                          .ok();
-            at += width.value();
+        std::optional<IndexChoice> choice;
+        if (with_lists && !step.bool_residual.empty()) {
+            choice = IndexChoiceOver(access, step, slot, ix, /*with_list=*/true, best_score);
         }
-        if (!encoded) continue;
-
-        best = std::move(probe);
-        best_score = score;
+        if (!choice.has_value()) {
+            choice = IndexChoiceOver(access, step, slot, ix, /*with_list=*/false, best_score);
+        }
+        if (!choice.has_value()) continue;
+        best_score = choice->score;
+        best = std::move(choice);
     }
     return best;
+}
+
+// A column Cabin's probe, less what it is keyed by.
+CabinProbe ColumnProbeFor(const catalog::TableAccess::CabinRef& cabin, std::uint16_t col_pos) {
+    CabinProbe probe;
+    probe.cabin_id = cabin.id;
+    probe.col_pos = col_pos;
+    probe.declared = cabin.origin == catalog::kCabinOriginUser;
+    probe.managed = cabin.origin == catalog::kCabinOriginAuto;
+    return probe;
+}
+
+// The Cabin set this step's boolean conjuncts name, if any (CU; `KeySet`):
+// the first value list on one non-tuple-key column that carries a column
+// Cabin. Its items are the list's leaves in written order, one per distinct
+// Cabin key - the first leaf naming it - less its NULLs, which equal no
+// row; the runner makes each value's key again and serves the union
+// (`RunCabinSetStep`). A list holding a value the Cabin cannot key is no
+// set: that value may still match a row, and only a walk would find it.
+struct CabinSetChoice {
+    CabinProbe probe;
+    KeySet set;
+};
+std::optional<CabinSetChoice> CabinSetOf(const catalog::TableAccess& access, const Step& step,
+                                         std::uint16_t slot) {
+    for (std::size_t c = 0; c < step.bool_residual.size(); ++c) {
+        const BoolPredicate& pred = step.bool_residual[c];
+        if (pred.op != BoolPredicate::Op::kOr || pred.children.empty() ||
+            pred.children.front().op != BoolPredicate::Op::kCompare) {
+            continue;
+        }
+        const ColumnRef& column = pred.children.front().compare.lhs;
+        if (!IsOwnColumn(column, slot) || IsTupleKey(column)) continue;
+        if (ListConjunctOn(step, slot, column.col_pos, c) != static_cast<std::uint32_t>(c)) continue;
+        const catalog::TableAccess::CabinRef cabin = access.CabinOn(column.col_pos);
+        if (cabin.id == 0) continue;
+
+        CabinSetChoice choice;
+        choice.probe = ColumnProbeFor(cabin, column.col_pos);
+        choice.set.conjunct = static_cast<std::uint32_t>(c);
+        choice.set.col_pos = column.col_pos;
+        std::unordered_set<stats::CabinKey, stats::CabinKeyHash> distinct;
+        bool keyable = true;
+        for (std::size_t leaf = 0; leaf < pred.children.size() && keyable; ++leaf) {
+            const parser::AstValue& value = pred.children[leaf].compare.rhs.literal;
+            if (value.type == parser::ValueType::kNull) continue;
+            auto key = stats::MakeCabinKey(cabin.id, value);
+            keyable = key.has_value();
+            if (keyable && distinct.insert(std::move(*key)).second) {
+                choice.set.items.push_back({0, static_cast<std::uint32_t>(leaf)});
+            }
+        }
+        if (!keyable || choice.set.items.empty()) continue;
+        return choice;
+    }
+    return std::nullopt;
 }
 
 // The correlated index probe (docs/spec/index.md §8a), or nullopt: an index
@@ -1311,12 +1476,8 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
         // guard saves the walk rather than the answer.
         if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
 
-        CabinProbe probe;
-        probe.cabin_id = cabin.id;
-        probe.col_pos = pred.lhs.col_pos;
+        CabinProbe probe = ColumnProbeFor(cabin, pred.lhs.col_pos);
         probe.value = pred.rhs.literal;
-        probe.declared = cabin.origin == catalog::kCabinOriginUser;
-        probe.managed = cabin.origin == catalog::kCabinOriginAuto;
         return probe;
     }
     return std::nullopt;
@@ -1510,15 +1671,30 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
             continue;
         }
 
-        CabinProbe probe;
-        probe.cabin_id = cabin.id;
-        probe.col_pos = eq->own.col_pos;
+        CabinProbe probe = ColumnProbeFor(cabin, eq->own.col_pos);
         probe.key_from = eq->other;
-        probe.declared = cabin.origin == catalog::kCabinOriginUser;
-        probe.managed = cabin.origin == catalog::kCabinOriginAuto;
         return probe;
     }
     return std::nullopt;
+}
+
+// The literal index arm's choice for a step: `IndexProbeOf`, reading value
+// lists **only where no join key could enter a structure of the step**
+// (CU-Q13). A set is asked once per outer row, walking every entry of
+// every listed value each time, where the correlated index or Cabin probe
+// the step had before lists were read asks for one join key's rows; so
+// where either correlated arm stands, the step is compiled as though the
+// list were any other filter, and takes whatever it took then.
+std::optional<IndexChoice> LiteralIndexChoiceOf(const Scope& scope,
+                                                const catalog::TableAccess& access,
+                                                const Step& step, std::uint16_t slot) {
+    auto choice = IndexProbeOf(access, step, slot, /*with_lists=*/true);
+    if (choice.has_value() && choice->set.has_value() &&
+        (CorrelatedIndexProbeOf(scope, access, step, slot).has_value() ||
+         CorrelatedCabinProbeOf(scope, access, step, slot).has_value())) {
+        return IndexProbeOf(access, step, slot, /*with_lists=*/false);
+    }
+    return choice;
 }
 
 // The walked-join annotation (docs/spec/join-inner-build.md §5, workplan
@@ -2632,16 +2808,20 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
             if (key_range.has_value() && !key_range->strict) {
                 step.kind = AccessKind::kRange;
                 step.range = key_range->bounds;
-            } else if (auto ix = IndexProbeOf(*scope.relations[i].access, step,
-                                               static_cast<std::uint16_t>(i));
+            } else if (auto ix = LiteralIndexChoiceOf(scope, *scope.relations[i].access, step,
+                                                       static_cast<std::uint16_t>(i));
                        ix.has_value()) {
                 // Ahead of the Cabin, per spec §9: an index is complete for
                 // every key value where a Cabin is authoritative only for
                 // the observed ones, so a cabined column that also carries
                 // an index is served by the index and the Cabin becomes
                 // dead weight the operator may drop.
-                step.kind = ix->ranged ? AccessKind::kIndexRange : AccessKind::kIndexProbe;
-                step.index = std::move(ix);
+                // A value list may stand as one column of the prefix, and
+                // then the step carries its key set (CU) - on a step no
+                // join key could enter (`LiteralIndexChoiceOf`).
+                step.kind = ix->probe.ranged ? AccessKind::kIndexRange : AccessKind::kIndexProbe;
+                step.key_set = std::move(ix->set);
+                step.index = std::move(ix->probe);
             } else if (auto cx = CorrelatedIndexProbeOf(scope, *scope.relations[i].access, step,
                                                          static_cast<std::uint16_t>(i));
                        cx.has_value()) {
@@ -2696,6 +2876,25 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // a cover would re-serve its whole union for every outer row.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cv);
+            } else if (auto cs = key_range.has_value()
+                                     ? std::nullopt
+                                     : CabinSetOf(*scope.relations[i].access, step,
+                                                  static_cast<std::uint16_t>(i));
+                       cs.has_value()) {
+                // A value list on a cabined column (CU), **last of the Cabin
+                // arms and only on a step that would otherwise walk its
+                // relation whole** (CU-Q12): a set observes nothing, so
+                // while one of its values is unobserved it walks, and no
+                // run of the statement changes that. Every arm above
+                // records what it misses or is keyed per outer row, and a
+                // strict tuple key range (`key_range`, taken below) bounds
+                // its walk; a set ranked over any of them would turn a
+                // statement they serve into a walk nothing ends. What it
+                // replaces is a filter scan or a bare walk, each a whole
+                // walk already.
+                step.kind = AccessKind::kCabinProbe;
+                step.cabin = std::move(cs->probe);
+                step.key_set = std::move(cs->set);
             } else if (HasUnindexedEqualityFilter(*scope.relations[i].access, step,
                                                    static_cast<std::uint16_t>(i))) {
                 // Ahead of the build annotation by decision, not

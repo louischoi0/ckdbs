@@ -1896,13 +1896,51 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 ## Key sets (CU)
 
-Verified on `cu-key-set-access` at `2066487c` (CU-S1). Owned by
+Verified on `cu-key-set-access` at the commit that carries CU-S2 (the
+order's §7 names it). Owned by
 `docs/spec/parser-v2.md` I10; the order is
 `instructions/v3.2.0/workorder-cu-key-set-access.md`.
 
-- **Only a list on the tuple key is keyed.** A list on an indexed or
-  cabined column (`v IN (10, 20)`) walks the relation as before; the index
-  set and the Cabin set are CU-S2, unbuilt.
+- **A Cabin set is served only when every value is already observed, and
+  a list observes nothing** (`cabin.md` §4e). `sym IN ('a', 'b')` walks
+  until single-value statements have banked both sets, and walks again
+  whenever one is dropped. An expression or predicate Cabin, and a
+  correlated list, take no set.
+- **A list on a join's inner relation is a filter wherever the join key
+  enters that relation by an index or a Cabin** (CU-Q13, `index.md` §9).
+  `o.user_id = u.id AND o.status IN ('open', 'held')` enters `(user_id)`
+  per outer row as before and filters by the list; an index on
+  `(user_id, status)` is entered by its leading column only. A correlated
+  probe carrying a list on a later prefix column is not built.
+- **An index set displaces a literal Cabin probe and a strict tuple key
+  range**, as a single index probe does (`index.md` §9: an index ahead of
+  the Cabin). `sym = 'a' AND v IN (1, 2)` with a Cabin on `sym` and an
+  index on `v` took the Cabin before CU and takes `(v)` by set now.
+- **A list that misses is counted against its Cabin and can never be the
+  statement that ends the miss.** Each run adds a `cabin_misses` and, on a
+  managed Cabin, a coverage miss the controller reads toward EXTEND
+  (`cabin-controller.md`); the walk's pages count toward that Cabin's
+  benefit; and a shape that was a filter scan before CU-S2
+  (`sym IN (...) AND region = 'x'`) now names `sym`'s Cabin as its
+  candidate, so the controller no longer prices a Cabin on `region` from
+  it.
+- **Two declines have no cell**: a set step whose bounds do not match its
+  index's entry width (`RunIndexStep` walks; no compile produces one), and
+  a Cabin set asked while a recording of one of its values is in flight
+  (the value reads as unobserved and the step walks).
+- **One list an index probe.** `a IN (...) AND b IN (...)` on an index
+  over `(a, b)` enters it by one list and filters by the other; no cross
+  product of the two is formed.
+- **A list that reaches a longer prefix displaces a single probe** (IX9).
+  With indexes on `(v)` and `(g, v)`, `v = 50 AND g IN (0, 2)` enters
+  `(g, v)` once per value of `g`, where before CU it entered `(v)` once.
+  The longest-prefix rule is unchanged; a long list makes it cost more
+  descents than the probe it replaced. At one equality prefix length a
+  list never displaces a single equality (CU-Q10).
+- **No item an index's key encoder refuses was found to construct**, so
+  the rule that such an item declines the list for that index
+  (`IndexChoiceOver`) has no cell. Coercion refuses a literal its column
+  cannot hold before the encoder is asked.
 - **A write's own rows by list are found by a walk.** `UPDATE` and
   `DELETE ... WHERE id IN (...)` visit every slot of every leaf and take a
   tuple lock per match, as before; CU-S3, unbuilt. A list on a relation

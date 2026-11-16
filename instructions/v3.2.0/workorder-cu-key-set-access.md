@@ -1,17 +1,20 @@
 # Work order CU - a value list as a key: `IN (...)` and an `OR` of equalities served by one descent per value
 
-Status: **OPEN since 2026-11-16: CU-S0 and CU-S1 are done on the work
-branch, CU-S2 is not opened.** CU-S0 was opened on the operator's word of
+Status: **OPEN since 2026-11-16: CU-S0, CU-S1 and CU-S2 are done on the
+work branch, CU-S3 is not opened.** CU-S0 was opened on the operator's word of
 2026-11-16 (`raft-marks-2026-11-16.md` §1), on worktree
 `cu-key-set-access` from `1edf5c54` (`v3.4.11-20-g1edf5c54`), with
 **CU-Q0 to CU-Q7 each marked (a)**; CU-Q0's bar is met (§7). CU-S1 was
 opened on the operator's second word of that day (§2 of that file), with
 **CU-Q9 (c), CU-Q8 (a) and CU-Q1 (a) kept**: a list on the tuple key is a
-key set (§7). Every mark is the operator's own. That word names CU-S1
-only, so CU-S2 waits for the operator's word. **CU-S1's review found
-that CU-Q8 (a) was marked on a bound that covers a one-step statement
-only** (§7); it is put to the operator and nothing is assumed. Nothing is
-merged or pushed. Written
+key set (§7). **CU-S1's review found that CU-Q8 (a) was marked on a
+bound that covers a one-step statement only** (§7); the operator re-read
+it and **kept (a)** on the third word of that day, which **opened CU-S2**
+(§3 of that file): a list on a column of an index's equality prefix and on
+a cabined column is a key set (§7). Every mark is the operator's own.
+**CU-S2 raised CU-Q10 to CU-Q13, each built to CLA's proposal and not
+marked** (§4). That word names CU-S2 only, so CU-S3 waits for the
+operator's word. Nothing is merged or pushed. Written
 on `main` at `a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15
 (`raft-marks-2026-11-15.md` §6). Every `[source-read]` claim in §1 was
 read at `a61ab905`; §7's census re-read each at `1edf5c54` and lists the
@@ -226,7 +229,10 @@ tuple key sets skips the order search as today.
 Every item is **the operator's own mark of 2026-11-16**: CU-Q0 to CU-Q7
 on the word that opened CU-S0 (`raft-marks-2026-11-16.md` §1), and CU-Q8,
 CU-Q9 and CU-Q1 again, which CU-S0 raised, on the word that opened CU-S1
-(§2 of that file).
+(§2 of that file), and CU-Q8 a third time on the word that opened CU-S2
+(§3). **CU-Q10 to CU-Q13 surfaced in CU-S2, are built to CLA's proposal
+and wait for a mark**; each is a few lines to turn, and CU-Q12 and CU-Q13
+depart from §2's "a set wins over every arm ranked below it".
 
 | | item | options | CLA proposes | mark |
 |---|---|---|---|---|
@@ -238,8 +244,12 @@ CU-Q9 and CU-Q1 again, which CU-S0 raised, on the word that opened CU-S1
 | CU-Q5 | Writes | (a) reads in CU-S1/S2; `UPDATE`/`DELETE ... WHERE <list>` in CU-S3, after S0's census of the point-write target and the lock window. (b) reads only, writes a later order | (a). A write by list walks and locks today what a read by list no longer walks | **(a)**, the operator, 2026-11-16 |
 | CU-Q6 | The class | (a) a one-step tuple key set stays `kJoinSelect`. (b) `kPointSelect` | (a). `kPointSelect` names one row, and `sys.patterns.stmt_class` is a byte on disk | **(a)**, the operator, 2026-11-16 |
 | CU-Q7 | Propagation across a join key | (a) not in CU. (b) in CU, as CB-S1 does for ranges | (a) | **(a)**, the operator, 2026-11-16 |
-| CU-Q8 | Does a long set yield? A statement driven by a tuple key descent is run inline and never handed to the sliced walk (`SelectBody`); an index-driven one is handed on but reaches no boundary, since among a statement's steps only the outermost walk's page loop has one (`sched.md` §3). A set of 4,096 values is 1.6 to 4.2 ms of descents on the tuple key and 2.0 to 12.7 ms on an index, on top of about 4 ms for the list itself, which today's walk also spends unyielded; under CU-Q9 (a) the re-check adds up to about 84 ms (§7, derived) | (a) a set runs as a descent does today: inline, no yield, no cancel point inside it, the measured bound stated in `known-gaps.md`. (b) a set driving a `SELECT` is handed to the sliced run and yields, and takes `C_CANCEL`, every 64 values | (a) if CU-Q9 is (c) or (b): an index walk and a join's inner probes already run unyielded under `exec::Budget` (`sched.md` §3), the bound is then a few milliseconds, and (b) needs a resumable position inside the set and moves `sched.md` §3 and `protocol.md` §7 and §10, for a list length few statements reach. If CU-Q9 is (a) the bound is about 0.1 s and CLA proposes (b) | **(a)**, the operator, 2026-11-16 |
+| CU-Q8 | Does a long set yield? A statement driven by a tuple key descent is run inline and never handed to the sliced walk (`SelectBody`); an index-driven one is handed on but reaches no boundary, since among a statement's steps only the outermost walk's page loop has one (`sched.md` §3). A set of 4,096 values is 1.6 to 4.2 ms of descents on the tuple key and 2.0 to 12.7 ms on an index, on top of about 4 ms for the list itself, which today's walk also spends unyielded; under CU-Q9 (a) the re-check adds up to about 84 ms (§7, derived) | (a) a set runs as a descent does today: inline, no yield, no cancel point inside it, the measured bound stated in `known-gaps.md`. (b) a set driving a `SELECT` is handed to the sliced run and yields, and takes `C_CANCEL`, every 64 values | (a) if CU-Q9 is (c) or (b): an index walk and a join's inner probes already run unyielded under `exec::Budget` (`sched.md` §3), the bound is then a few milliseconds, and (b) needs a resumable position inside the set and moves `sched.md` §3 and `protocol.md` §7 and §10, for a list length few statements reach. If CU-Q9 is (a) the bound is about 0.1 s and CLA proposes (b) | **(a)**, the operator, 2026-11-16; **kept** on the operator's re-read of the same day against the join bound CU-S1's review found (`raft-marks-2026-11-16.md` §3) |
 | CU-Q9 | The cost of CU-R1's re-check `[quiet-wrong]`. CU-R1 keeps the list in the residual, and the residual is evaluated leaf by leaf in written order on every row a step emits, so a row found through the list's i-th value costs i comparisons: a set emitting h rows pays about h x (n + 1) / 2 of them, about 84 ms at 4,096 matching rows (§7, derived from the walk's measured 10 ns a comparison) | (a) as CU-R1 is written: the whole conjunct, in written order, on every emitted row. (b) the set step tests the row's column for membership in the set's sorted values, O(log n), and the conjunct leaves the residual for that step. (c) the conjunct stays in the residual and is evaluated whole, but for a row a set found the leaf whose value drove the descent is tested first; only if that leaf is not true is the rest of the tree evaluated in written order | (c). An `OR` is true as soon as one leaf is, so testing one leaf first changes no answer, three-valued included, and the conjunct that is evaluated is still the written one with its own literals: a wrong coercion or a stale index entry fails the leaf and falls to the whole tree, exactly as under (a). The cost is one comparison per emitted row where the row holds the value that found it. (b) tests against the coerced set, which is what CU-R1 exists to check | **(c)**, the operator, 2026-11-16 |
+| CU-Q10 | A list's rank among indexes at one prefix length. §2 says a list column counts as an equality column and ties go to `index_oid` as today. With indexes on `(status)` and `(user_id)`, `status IN ('A', 'B') AND user_id = 5` is such a tie, and today it enters `(user_id)` | (a) at one equality prefix length single equalities outrank a prefix a list fills, before the range column and `index_oid` are asked: no statement leaves an index an equality put it on unless a list reaches a longer run of equality columns. (b) as §2 wrote: `index_oid` alone, so the statement above moves to `(status)` when that index is the older | (a). (b) changes the plan of statements that exist today, for the worse where the list's column is the less selective. **Built as (a)**; (b) is one term of `IndexChoiceOver`'s score | *not marked* |
+| CU-Q11 | An item an index's key encoder refuses `[quiet-wrong]`. CU-R3 says an item the descent would refuse to encode is dropped from the set. On the tuple key that is safe by invariant 7: a negative number is no key. For an index the encoder's refusal is not a proof that no row holds the value | (a) a NULL item is left out, since a key column is never NULL; any other refused item declines the list for that index, which is then scored without it. (b) as CU-R3 wrote: every refused item is dropped and the rest are keyed | (a). (b) answers a row short wherever the encoder refuses a value a row can hold. No such value was found to construct, since coercion refuses first, so (a) costs nothing known. **Built as (a)** | *not marked* |
+| CU-Q12 | The Cabin set's rank. §2 puts it directly after the literal `CabinProbeOf` and has it win over every arm below: the expression, predicate, correlated and cover Cabin arms, and a strict tuple key range. A set observes nothing, so while one of its values is unobserved it walks and no run of the statement changes that; each of those arms records what it misses, is keyed per outer row, or bounds its walk. With Cabins on `DATE(ts)` and on `sym`, `DATE(ts) = '2026-10-02' AND sym IN ('a', 'b')` was an expression probe that served from its second run, and under §2 it walks until other statements have observed `'a'` and `'b'` | (a) the Cabin set is the last of the Cabin arms and takes only a step that would otherwise walk its relation whole: above the filter scan, never on a step with a strict tuple key range. (b) as §2 wrote | (a). Under (b) a list turns statements that are served today into walks nothing in them ends. Under (a) a set replaces only a walk. **Built as (a)**; (b) is the arm moved back up in the ladder | *not marked* |
+| CU-Q13 | A list on a step a join key could enter. §2 puts the index set beside the literal `kIndexProbe`, which outranks the correlated index probe and the correlated Cabin probe (`index.md` §8a). `o.user_id = u.id AND o.status IN ('open', 'held')`, with indexes on `(user_id)` and `(status)` and `o` the inner step, was one descent into `(user_id)` per outer row; under §2 it walks every entry of both statuses per outer row | (a) no list is read on a step where a correlated index probe or a correlated Cabin probe stands: the step takes what it took before lists were read. The planner may still order the relation first, where the list is its set. (b) as §2 wrote: the set outranks both, as a single literal equality does today | (a). (b) multiplies by the list's length a trade the single-value rule already makes, on every outer row. (a) changes no plan that exists. A correlated probe that also carries the list on a later prefix column is the better plan than either and is not built. **Built as (a)**: `LiteralIndexChoiceOf` | *not marked* |
 
 ## 5. Stages
 
@@ -558,3 +568,122 @@ Overhead not measured; measured at the milestone's close. A check of the
 built path on the uncommitted tree, on a host that was running the test
 suite, put the bar's two cells near CU-S0's estimate; it is not a
 measurement and no number from it is recorded.
+
+### CU-S2 - the index set and the Cabin set, 2026-11-16
+
+On worktree `cu-key-set-access`, from `ffdcc6d5`. **A value list on one
+column of an index's equality prefix, and on a column with a column
+Cabin, is a key set.**
+
+**What is built** (`docs/spec/index.md` IX8b and §9, `docs/spec/cabin.md`
+§4e and `docs/spec/parser-v2.md` I10 own the contract):
+
+- **The shape, read once** (`ListConjunctOn`, `step_compiler.cpp`): the
+  first boolean conjunct whose root is `kOr` and whose every leaf is
+  `<this step's column> = <literal>` on one named column. The tuple key
+  set of CU-S1 reads it too.
+- **The index set** (`IndexChoiceOver`, `IndexProbeOf`): one list may
+  stand as one equality column of an index's prefix - anywhere in it, and
+  before the range column - where that column has no single equality.
+  The probe's bounds are encoded at compile once per distinct value, in
+  key order, into `KeySet::bounds`; the step is `kIndexProbe` or
+  `kIndexRange`. A second list ends the prefix and filters.
+- **Its run** (`RunIndexStep`, `step_vm.cpp`): the collect phase is asked
+  once per value into **one seen set** (CU-R2), each new tuple key packed
+  with the leaf of the value whose entry found it; one sort, one resolve.
+  The covering filter judges an entry, and a row is kept if any entry of
+  any value passes. A set whose bounds do not fit its index's entry width
+  walks.
+- **The Cabin set** (`CabinSetOf`): the first list on a non-key column
+  that carries a column Cabin, one item per distinct Cabin key, NULLs
+  left out; a list holding a value the Cabin cannot key is no set. The
+  step is `kCabinProbe`.
+- **Its run** (`RunCabinSetStep`, `ServeAllOrWalk`): every value's set
+  looked up; all observed, the step is served from their union through
+  `ServeFromCabin`, whose one seen set is CU-R2's; one unobserved, or more
+  values than `cabin_max_values`, the whole step walks. **A list observes
+  and banks nothing.** The cover's run and the set's are one function.
+- **The re-check** (CU-R1, CU-Q9 (c)): the conjunct stays in the residual
+  on both, and the leaf of the value that found the row is asked first.
+- **The cost model** (`join_order.cpp`): a set's own conjunct is not
+  counted twice; a set costs one descent per value and one resolve per
+  match.
+- **`ANALYZE`**: `key_set=<n>` on the step line, `n` the descents or sets
+  asked.
+
+**What differs from §2 as written**, each an item in §4 waiting for a
+mark:
+
+- **CU-Q10**: at one equality prefix length a single equality outranks a
+  list, before the range column and `index_oid`.
+- **CU-Q11** `[quiet-wrong]`: an item the index key encoder refuses
+  declines the list for that index; only a NULL item is dropped.
+- **CU-Q12**: the Cabin set is the last Cabin arm and takes only a step
+  that would otherwise walk whole.
+- **CU-Q13**: no list is read on a step a correlated index or Cabin probe
+  could enter.
+
+§2's "sorted, deduplicated" holds for the index set by encoded bytes and
+for the Cabin set by Cabin key, in written order: a Cabin has no order.
+
+**Tests.** `tests/key_set_test.cpp` (47 cells, 19 of them this stage's):
+the index set alone, at each prefix position, before a range, two lists,
+the ranking rules of CU-Q10 with and without a range, CU-Q13 on a join
+key's index and on a join key's Cabin in the written order and the
+planner's own, a tuple key set over an index set, the 4,096-value list on
+an index, lists of dates, decimals and timestamps; CU-R2 on an index by a
+row moved between listed values, in one session and under two snapshots;
+the covering filter across two values' entries of one row, both ways; the
+Cabin set served, unobserved, partly observed, an observed empty set,
+duplicates and a NULL, CU-R2 on a row in two sets, in one session and
+under two snapshots, CU-Q12 against a strict range, a predicate Cabin and
+a filter scan, the sort not elided. Every keyed statement is compared
+with the walk of the same list. `tests/index_contract_test.cpp` and
+`tests/cabin_contract_test.cpp` carry list statements in the set every
+configuration must answer byte for byte.
+
+**Review** (`critics-developer`, on the uncommitted tree over
+`ffdcc6d5`): no wrong answer found in either path; the encoding, the
+packing, the shared seen sets, the covering filter across values and the
+Cabin gates were each traced. Taken:
+
+- **The Cabin set ranked above four arms that served better** - an
+  expression, predicate, correlated or cover Cabin statement carrying a
+  list on a cabined column became a walk nothing ended. Moved below them
+  and kept off a strict range; raised as CU-Q12.
+- **An index set took a join's inner step from its correlated probe**, a
+  set of every listed value's entries per outer row. No list is read
+  there now; raised as CU-Q13.
+- **The score did not say what CU-Q10 says**: a list followed by a range
+  outranked a single equality at one prefix length. The score is now
+  equality columns, then no list, then the range.
+- **A Cabin set counted duplicate values** in `key_set=<n>`, in the cost
+  model and against `cabin_max_values`. Deduplicated at compile.
+- `RunCabinSetStep` and `RunCoverStep` were one gate written twice: one
+  function now. One constructor for a column Cabin's probe, where three
+  sites filled it by hand. `IndexChoiceOver`'s score out-parameter became
+  a field.
+- Cells added: the transaction cell's `ANALYZE` after the move (it could
+  pass on a walk), the covering filter across values, the list-then-range
+  tie, CU-Q12, CU-Q13, the cap on an index, typed lists.
+- Documents: the NULL rule's reason is that `col = NULL` is true of no
+  row, not that a key column is never NULL.
+
+Not taken: turning the runner's two defensive walks (a conjunct or leaf
+index out of range) into `Corruption` - a walk answers such a chain
+correctly and costs one compare; replacing the packed `uint64` scratch
+with a pair vector, which the review itself advised against.
+
+**Not covered, stated in `known-gaps.md`**: the decline of a set whose
+bounds do not fit its index (no compile produces one); a Cabin set asked
+while a recording of one of its values is in flight; an item an index's
+key encoder refuses (none was found to construct). Also stated there: an
+index set displaces a literal Cabin probe and a strict range, as a single
+index probe does; a list that misses is counted against its Cabin and
+moves a filter scan's controller candidacy to the list's column.
+
+**Test suite**: 4532 of 4532 passed on the tree this section is
+committed with (`ctest -LE bs-nightly`, the range the push hook runs,
+Debug), after the review's changes; 4525 of 4525 before them.
+
+Overhead not measured; measured at the milestone's close.

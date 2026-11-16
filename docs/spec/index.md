@@ -404,6 +404,28 @@ It costs one sort of the matched set against one descent per element of it,
 and it buys locality as well: on a btree relation tuple key order *is* leaf order,
 so the descents walk the tree forwards instead of jumping.
 
+> **IX8b — a value list on a prefix column is served by one walk per value
+> into one seen set (CU-S2).**
+
+`owner IN (1, 9)` is not a new kind. The step is `kIndexProbe` or
+`kIndexRange` and carries a **key set** (`parser-v2.md` I10,
+`step_chain.hpp`'s `KeySet`): the probe's bounds once per distinct value
+of the list, encoded at compile like the probe's own. The collect phase
+walks each pair of bounds in turn; the sort and the resolve phase are the
+single probe's, run once over everything collected.
+
+**The seen set is shared across the values, and that is a correctness
+statement** `[quiet-wrong]` (CU-R2). An entry an earlier version left under
+`owner = 1` names a row whose visible version may hold `owner = 9`. The
+list's conjunct, which stays in the residual, passes that row whichever
+entry reached it, so two seen sets would emit it twice. The covering filter
+keeps its rule across the values too: an entry judges itself, and a row is
+kept if any entry of any value passes (§7).
+
+The row a value's entry found is tested against the leaf of that value
+first (CU-Q9); a row reached through a stale entry fails that leaf and is
+decided by the whole list, as it would have been.
+
 Invariant 9's line is **lookup versus search**, not authoritative versus
 advisory. An index probe returns a *set*, and a set missing a row inserted
 since a trail was recorded is wrong in a way no per-tuple validation can
@@ -467,6 +489,39 @@ What it deliberately does not change:
 Among the relation's indexes, take the one matching the **longest usable key
 prefix** of the step's residual equalities; break a tie by **lowest
 `index_oid`**, which is creation order.
+
+**A value list counts as one equality column of the prefix since CU-S2**
+(IX8b): the first prefix column that has a list on it and no single
+equality. One list a probe - a second list ends the prefix and filters.
+The list may stand anywhere in the prefix (`owner = 2 AND qty IN (...)`,
+`owner IN (...) AND qty = 3`) and before the range column. Three rules
+keep the choice a function of the shape and no worse than it was:
+
+- **At one equality prefix length, single equalities outrank a prefix a
+  list fills** (CU-Q10), before the range column and before `index_oid`
+  are asked: the order is equality columns, then no list over a list,
+  then a range on the next column, then the lower oid. So a statement
+  that an equality put on an index before lists were read stays on that
+  index when a list could enter another of the same length, whatever
+  range follows the list there. Among probes with no list the order is
+  what it was.
+- **A longer equality prefix still wins**, list or not: with indexes on
+  `(v)` and `(g, v)`, `v = 50 AND g IN (0, 2)` enters `(g, v)` once per
+  value of `g`, where it entered `(v)` once.
+- **An item the key encoder refuses declines the list for that index**
+  (CU-Q11), and the index is scored without it. A NULL item is left out
+  instead: `col = NULL` is true of no row.
+- **No list is read on a step a join key could enter** (CU-Q13): where a
+  correlated index probe (§8a) or a correlated Cabin probe stands on the
+  step, the step is compiled as though the list were any other filter and
+  takes what it took before lists were read. A set is asked once per outer
+  row and walks every entry of every listed value each time; the join
+  key's probe asks for one key's rows. The join planner may still order
+  the relation first, where no join key reaches it and the list is its
+  set.
+
+CU-Q10, CU-Q11 and CU-Q13 are built to CLA's proposal and not marked
+(`instructions/v3.2.0/workorder-cu-key-set-access.md` §4).
 
 Deterministic and stable is not a preference here: a recorded pattern must
 not compile differently as the data changes, or `pattern_id` stops naming a

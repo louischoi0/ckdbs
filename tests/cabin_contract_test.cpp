@@ -178,6 +178,18 @@ const std::vector<std::string>& Queries() {
         "(SELECT i.id FROM b AS i WHERE i.sym = o.sym AND i.qty > 30)",
         "SELECT id FROM h AS o WHERE EXISTS "
         "(SELECT i.id FROM h AS i WHERE i.sym = o.sym AND i.qty > 30)",
+
+        // ---- Value lists (CU-S2) --------------------------------------------
+        //
+        // A list is served from the union of its values' sets once every
+        // one is observed - `zzz` among them, whose empty set is an answer -
+        // and walks while one is not, as `ccc` on `b` never is. Last in the
+        // set, so the statements above observe as they did.
+        "SELECT * FROM b WHERE sym IN ('aaa', 'bbb')",
+        "SELECT * FROM b WHERE sym IN ('zzz', 'ddd', 'aaa')",
+        "SELECT * FROM b WHERE sym IN ('aaa', 'ccc')",
+        "SELECT id, qty FROM b WHERE sym IN ('bbb', 'aaa') AND qty > 30",
+        "SELECT * FROM h WHERE sym IN ('aaa', 'zzz')",
     };
     return kQueries;
 }

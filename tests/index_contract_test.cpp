@@ -204,6 +204,27 @@ const std::vector<std::string>& Queries() {
         // And the whole relation, which every configuration must agree on.
         "SELECT id, owner, qty, sym, code FROM b",
 
+        // ---- Value lists (CU-S2, IX9) ---------------------------------------
+        //
+        // A list is one equality column of a prefix, served by one walk per
+        // value into one seen set. The moved key (owner 9 and the 3 it
+        // left), the key that came back, a miss, the covering index under a
+        // filter its entries decide, the composite index with the list
+        // first and second and before a range, the truncated string key and
+        // the unique key - each must be the rows the plain relation gives.
+        "SELECT id, owner, qty FROM b WHERE owner IN (1, 3, 9, 42)",
+        "SELECT id FROM b WHERE owner IN (0, 4)",
+        "SELECT id FROM b WHERE owner IN (0, 1, 9) AND qty >= 2",
+        "SELECT id FROM b WHERE owner = 2 AND qty IN (0, 2, 7)",
+        "SELECT id FROM b WHERE owner IN (1, 2, 9) AND qty = 3",
+        "SELECT id FROM b WHERE owner IN (1, 9) AND qty BETWEEN 1 AND 3",
+        "SELECT id FROM b WHERE sym IN ('s1', 'nope', 's2')",
+        "SELECT id, code FROM b WHERE code IN (21, 1000, 14, 35, 42)",
+        "SELECT COUNT(*) FROM b WHERE owner IN (0, 1, 9)",
+        "SELECT owner, COUNT(*) FROM b WHERE owner IN (1, 2, 3) GROUP BY owner",
+        "SELECT id FROM b WHERE owner IN (1, 2, 3) ORDER BY id LIMIT 3",
+        "SELECT id FROM b WHERE owner IN (1, 2, 3) LIMIT 1",
+
         // ---- Paginated statements (docs/spec/parser-v2.md I11, V09) ---------
         //
         // A limited index step must slice, never reorder: the walk

@@ -21,3 +21,12 @@ day is recorded where CS was opened, `raft-marks-2026-11-15.md` §10.)
 | **Mark** | **CU-Q9 (c)**, the operator's own mark: the list conjunct stays in the residual and is evaluated whole, the leaf whose value drove the descent first. **CU-Q8 (a)**, the operator's own mark: a set runs as a descent does, inline and unyielded, the bound stated in `known-gaps.md`. **CU-Q1 (a) kept**, re-read against the census: an annotation on the single-value kind, with the readers of the kind that must learn it named in the order's §7. **CU-S1 is opened**, on worktree `cu-key-set-access` from `c9eba484` |
 | **Does not settle** | the opening of CU-S2 or any later stage - the word names CU-S1; a merge, a push, a version |
 | **Recorded at** | this file; the order's header, items table and §7; `docs/spec/parser-v2.md` I10; the CU row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 3. CU-Q8 kept, CU-S2 opened
+
+| | |
+|---|---|
+| **Word** | W3, on 2026-11-16, after CLA reported CU-S1 (`2066487c`) and put CU-Q8 back, its review having found that (a) was marked on a bound that covers a one-step statement only - a set driving a join runs the rest of the chain once per value, inline, with no yield, no cancel and no row sent before the end: *"CU-Q8 keep `$!a`, proceed with CU-S2"* (given in Korean; recorded in English) |
+| **Mark** | **CU-Q8 (a) kept**, the operator's own mark, re-read against the join bound: a set runs as a descent does, inline and unyielded, the bound stated in `known-gaps.md`. **CU-S2 is opened**, on worktree `cu-key-set-access` from `ffdcc6d5` |
+| **Does not settle** | the opening of CU-S3 or CU-S4 - the word names CU-S2; what CU-S2 raises that the order's items do not decide; a merge, a push, a version |
+| **Recorded at** | this file; the order's header, items table and §7; the CU row and this file's row in `instructions/v3.2.0/index.md` |

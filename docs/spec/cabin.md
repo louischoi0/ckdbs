@@ -292,6 +292,48 @@ so there is no transition for a set to be discarded across.
 `SHOW CABINS`' per-cabin `observed=`, `entries=`, `hits=` and `misses=`
 and from `ANALYZE`'s per-step `cabin_hits=`/`cabin_misses=` (§7).
 
+### 4e. A value list (CU-S2)
+
+`sym IN ('a', 'b')` on a column that carries a **column** Cabin is a Cabin
+step carrying a key set (`parser-v2.md` I10, `step_chain.hpp`'s `KeySet`):
+one item per distinct value of the list, less its NULLs, which equal no
+row. An expression or predicate Cabin takes no list, and a list holding a
+value the Cabin cannot key is no set.
+
+**It is the last of the Cabin arms, and takes only a step that would
+otherwise walk its relation whole** (CU-Q12, built to CLA's proposal and
+not marked): below the single-value probe of §4 and every expression,
+predicate, correlated and cover arm, above the filter scan, and never on a
+step with a strict tuple key range, which bounds its walk. The reason is
+the paragraph after next: a set observes nothing, so over an arm that
+records what it misses, or one keyed per outer row, it would turn a
+statement that arm serves into a walk no run of the statement ends.
+
+At execution every value's key is made and its set looked up:
+
+1. **Every value observed** - an observed empty set included - the step is
+   served from the union of the sets by §4's serve path, which already
+   deduplicates by tuple key across the sets it is handed and sorts into
+   tuple key order. **The deduplication is a correctness statement**
+   `[quiet-wrong]` (CU-R2): a row witnessed under two values of the list is
+   in both sets, and the list's conjunct passes it either way.
+2. **One value unobserved** - or more distinct values than
+   `cabin_max_values` - the whole step walks. An unobserved value's rows
+   are in no set, so a partial union is no answer. This is the cover's
+   rule (§4d), for its reason and by its code (`ServeAllOrWalk`).
+
+**A list observes nothing and banks nothing.** A walk under a list names
+no one value whose rows it could bank, so a list is served only once
+single-value statements have observed each of its values. A value written
+twice in the list is one item: `ANALYZE`'s `key_set=<n>` counts sets asked.
+A list that misses is still counted against its Cabin (`cabin_misses`,
+the controller's coverage share), a miss it cannot itself turn into a hit.
+
+The list's conjunct stays in the residual (CU-R1) and is the re-check §6
+requires of every served row; the leaf of the value whose set held the row
+is asked first (CU-Q9). A Cabin set keeps the Cabin step's exclusion from
+the sort elision.
+
 ### 4d. Expression, predicate and cover serving (AQ)
 
 **Identity is the compiled `F`, never its hash** `[quiet-wrong]`. `F` has
