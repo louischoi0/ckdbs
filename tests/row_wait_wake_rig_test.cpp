@@ -537,5 +537,118 @@ TEST(RowWaitWakeRigTest, ACrossCoreRowCycleRefusesTheWaiterThatClosesItAndTheOth
     EXPECT_EQ(rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
 }
 
+// **A unique check that finds its key busy is kicked at the holder's
+// release** (`index.md` §10.2). The check holds its own key unit - granted,
+// since the holder gave it back once its entry was appended (BX-Q2 (a)) -
+// and finds the holder only through the named row's header, so until this
+// cell nothing it asked was refused and nothing registered a wake: the wait
+// polled `IsInFlight`, and a waiter whose reactor slept saw the decide at
+// the end of its idle block. The busy arm now probes the named row in `U`,
+// as the reverse foreign-key walk does (`WaitForRowWriter`), and parks on
+// the wake the holder's `U` or `X` - or a range fence over the row - hands
+// back.
+//
+// **Mutation**: `CheckUniqueKeyLatest`'s busy arm calling
+// `NoteBlockingWriter` alone - no kick to core 1 follows the decide.
+void BusyUniqueKeyIsKickedAtTheRelease(const std::vector<std::string>& seed,
+                                       const std::string& holder_write, const char* decide,
+                                       const char* expected_prefix) {
+    // Before the rig, so a failed assertion's early return stops the
+    // reactors before the frames they borrow go.
+    Session holder;
+    Session waiter;
+    Statement insert;
+    Statement decided;
+    TwoCoreRig::Options options;
+    options.wake.min_delay_ticks = 2;
+    options.wake.max_delay_ticks = 2;
+    auto opened = TwoCoreRig::Open(options);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+
+    ASSERT_TRUE(StartsWith(
+        d0.Dispatch("CREATE TABLE t (id int64, owner int64, note int64) BTREE").response,
+        "CREATED"));
+    ASSERT_FALSE(
+        StartsWith(d0.Dispatch("CREATE UNIQUE INDEX by_owner ON t (owner)").response, "ERR"));
+    for (const std::string& sql : seed) {
+        const std::string out = d0.Dispatch(sql).response;
+        ASSERT_FALSE(StartsWith(out, "ERR")) << sql << " -> " << out;
+    }
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN"));
+    const std::string held = d0.Dispatch(holder_write, &holder).response;
+    ASSERT_FALSE(StartsWith(held, "ERR")) << held;
+
+    // `relaxed`, as in the cells above: the wake under test is the release's.
+    waiter.set_durability(wal::DurabilityClass::kRelaxed);
+    insert.session = &waiter;
+    insert.line = "INSERT INTO t VALUES (9, 7, 0)";
+    decided.session = &holder;
+    decided.line = decide;
+    decided.go.store(false, std::memory_order_release);
+    rig->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, insert)));
+    rig->core(0).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d0, decided)));
+    rig->Start();
+
+    sched::Scheduler& peer = rig->core(1).scheduler();
+    ASSERT_TRUE(Within(2000ms, [&] { return peer.idle_blocks() >= 1; }))
+        << "core 1 never blocked with its INSERT parked; saw " << Seen(insert);
+    ASSERT_FALSE(insert.done.load(std::memory_order_acquire))
+        << "core 1's INSERT did not wait: " << insert.out.response;
+    const std::size_t kicks_to_peer_before = KicksTo(*rig, 1).size();
+
+    decided.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return decided.done.load(std::memory_order_acquire); }))
+        << "core 0's " << decide << " never finished; saw " << Seen(decided);
+    ASSERT_FALSE(StartsWith(decided.out.response, "ERR")) << decided.out.response;
+
+    const std::vector<sched::SimWakerTable::Record> to_peer = KicksTo(*rig, 1);
+    ASSERT_EQ(to_peer.size(), kicks_to_peer_before + 1) << "the decide did not kick core 1";
+    EXPECT_FALSE(insert.done.load(std::memory_order_acquire))
+        << "core 1's INSERT ran before any kick reached its reactor";
+
+    const WakePath before_kick = WakesTo(*rig, 1);
+    rig->wake().Advance(2);
+    ASSERT_TRUE(Within(1000ms, [&] { return insert.done.load(std::memory_order_acquire); }))
+        << "core 1's INSERT did not proceed at the kick; " << Since(before_kick, *rig, 1);
+    if (expected_prefix != nullptr) {
+        EXPECT_TRUE(StartsWith(insert.out.response, expected_prefix)) << insert.out.response;
+    } else {
+        // `AlreadyExists` renders with no token of its own.
+        EXPECT_NE(insert.out.response.find("is already held by tuple key"), std::string::npos)
+            << insert.out.response;
+    }
+    rig->Stop();
+    EXPECT_EQ(rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
+}
+
+TEST(RowWaitWakeRigTest, ABusyUniqueKeyUnderAnUndecidedInsertIsKickedAtItsCommit) {
+    // The holder's tuple `X` on the row it placed refuses the probe.
+    BusyUniqueKeyIsKickedAtTheRelease({}, "INSERT INTO t VALUES (1, 7, 0)", "COMMIT", nullptr);
+}
+
+TEST(RowWaitWakeRigTest, ABusyUniqueKeyUnderAnUndecidedInsertIsKickedAtItsRollback) {
+    BusyUniqueKeyIsKickedAtTheRelease({}, "INSERT INTO t VALUES (1, 7, 0)", "ROLLBACK",
+                                      "INSERTED");
+}
+
+TEST(RowWaitWakeRigTest, ABusyUniqueKeyUnderAnUpdateOfAnotherColumnIsKickedAtItsRelease) {
+    // The conservative arm (`index_maintain.hpp`): the holder moves no key,
+    // and the row is busy all the same. Its per-row `U` refuses the probe.
+    BusyUniqueKeyIsKickedAtTheRelease({"INSERT INTO t VALUES (1, 7, 0)"},
+                                      "UPDATE t SET note = 1 WHERE note = 0", "ROLLBACK", nullptr);
+}
+
+TEST(RowWaitWakeRigTest, ABusyUniqueKeyUnderADeclaredRangeIsKickedAtItsRelease) {
+    // The holder declared a window in `U` and holds no tuple unit; the
+    // probe is refused in the verify arm and registers on the range.
+    BusyUniqueKeyIsKickedAtTheRelease({"INSERT INTO t VALUES (1, 7, 0)"},
+                                      "UPDATE t SET owner = 8 WHERE id < 5", "COMMIT", "INSERTED");
+}
+
 }  // namespace
 }  // namespace kds::server
