@@ -1569,16 +1569,18 @@ private:
     // inside, after that grant (the body says why).
     //
     // A busy answer naming a child writer records a wait on it (AY-Q8,
-    // `WaitForChildRowWriter`), which the caller parks its walk on.
+    // `WaitForRowWriter`), which the caller parks its walk on.
     Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_tuple_key,
                                        const WriteScope& scope);
 
-    // **The reverse check's wait** (AY-Q8): the child row `tuple_key` of
-    // `child_rel` is being written by `holder`, which holds no `S` on the
-    // parent. Registers a wake on that row where a table and a reactor exist,
-    // and records the block.
-    void WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel, std::uint64_t tuple_key,
-                               std::uint64_t holder);
+    // **A latest-state check's wait on a row's undecided writer**: the row
+    // `tuple_key` of `rel` is being written by `holder`, whom the check
+    // knows only by the row's header - a child row under the reverse check
+    // (AY-Q8; `holder` holds no `S` on the parent), or a row a unique
+    // check's run names (`index.md` §10.2). Registers a wake on that row
+    // where a table and a reactor exist, and records the block.
+    void WaitForRowWriter(const WriteScope& scope, catalog::Oid rel, std::uint64_t tuple_key,
+                          std::uint64_t holder);
 
     // One access shape, recorded by hand because a check is not a step
     // (FK-M4). Never fails a write.

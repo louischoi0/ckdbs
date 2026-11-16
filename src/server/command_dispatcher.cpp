@@ -4867,8 +4867,8 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
                 // columns or one moving the column off - and its decide is
                 // what the answer depends on. The caller parks on it.
                 if (outcome.value().busy_trx != 0) {
-                    WaitForChildRowWriter(scope, fk.rel_oid, outcome.value().busy_tuple_key,
-                                          outcome.value().busy_trx);
+                    WaitForRowWriter(scope, fk.rel_oid, outcome.value().busy_tuple_key,
+                                     outcome.value().busy_trx);
                 }
                 return Status::TxnConflict("a row of '" + RelationNameOf(fk.rel_oid) +
                                            "' referencing id=" + std::to_string(parent_tuple_key) +
@@ -4883,23 +4883,29 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
     return Status::OK();
 }
 
-void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel,
-                                              std::uint64_t tuple_key, std::uint64_t holder) {
-    // **The wake is the child row's own, from a probe in `U`**
-    // (`foreign-keys.md` §3a): refused by the writer's `U` or `X`, or by a
-    // bulk child write's range over the row, it registers the slot that
-    // holder's release flips - on the refusing unit, which is why the park
-    // names `wake.key`; granted - the writer released in between - it is
-    // given back at once with a slot already flipped, so the statement
-    // re-runs. An `S` probe would be admitted by a child `UPDATE`'s `U` and
-    // re-run the walk until the net. Nothing here outlives the ask, which is
-    // why no intention is taken above it.
+void CommandDispatcher::WaitForRowWriter(const WriteScope& scope, catalog::Oid rel,
+                                         std::uint64_t tuple_key, std::uint64_t holder) {
+    // **The wake is the row's own, from a probe in `U`** (`foreign-keys.md`
+    // §3a, `index.md` §10.2): refused by the writer's `U` or `X`, or by a
+    // bulk write's range over the row, it registers the slot that holder's
+    // release flips - on the refusing unit, which is why the park names
+    // `wake.key`; granted - the writer released in between - it is given
+    // back at once with a slot already flipped, so the statement re-runs.
+    // That re-run is immediate, with no yield, so a caller probes only a
+    // writer whose decide its next check view can see: a writer released
+    // but above the snapshot ceiling would be granted again, re-run after
+    // re-run, until the net. The unique check probes only an in-flight
+    // writer for that reason; the reverse walk's exposure is
+    // `docs/inflight/bugs/a-granted-row-probe-re-runs-without-yielding-under-a-capped-ceiling.md`.
+    // An `S` probe would be admitted by an `UPDATE`'s `U` and re-run the
+    // statement until the net. Nothing here outlives the ask, which is why
+    // no intention is taken above it.
     //
     // **Not over a `U` or `X` this transaction holds**: the probe would be
     // granted as already covered, adding no record, and the grant arm's
     // release would drop a record the probe never added. An `S` it holds
     // does not skip the probe - the release matches by mode.
-    const txn::LockKey unit = txn::LockKey::Tuple(child_rel, tuple_key);
+    const txn::LockKey unit = txn::LockKey::Tuple(rel, tuple_key);
     if (locks_ != nullptr && scope.txn != nullptr && may_park_ &&
         !scope.txn->borrows().HoldsCovering(unit, txn::LockMode::kUpdate)) {
         std::uint64_t blocker = 0;
@@ -4920,8 +4926,8 @@ void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::
                                                    txn::LockMode::kUpdate});
         }
     }
-    // The reverse check reads latest state and the writer's decide changes
-    // it either way, so the re-run is not futile at any level.
+    // Both callers read latest state and the writer's decide changes it
+    // either way, so the re-run is not futile at any level.
     NoteBlockingWriter(scope.txn, holder, tuple_key, RepeatableReadWait::kCapable);
 }
 
@@ -12085,8 +12091,24 @@ StatusOr<exec::UniqueVerdict> CommandDispatcher::CheckUniqueKeyLatest(
             // Its decide answers: a commit makes the key held, a rollback
             // frees it (BX-Q3 (a)). Waited for where nothing of the
             // statement is written yet; refused where something is.
-            NoteBlockingWriter(scope.txn, verdict.value().writer, verdict.value().tuple_key,
-                               RepeatableReadWait::kCapable);
+            //
+            // **On the named row's wake**: the key unit is this writer's
+            // own, so nothing it asked was refused, and the holder is known
+            // only by the row's header. The row's probe parks on the unit
+            // the holder writes it under, whose release kicks this core.
+            //
+            // **Only while the writer is in flight.** A writer decided and
+            // released but above the check view's ceiling - capped by another
+            // commit's marker, up to one `strict` sync - still answers busy,
+            // the rounds above end on it, and a probe would be granted with
+            // its slot already flipped: the re-run would land here again
+            // without yielding, until the net, and on the marker's own core
+            // its publish could not run. Refused retryably instead, as
+            // `NoteBlockingWriter` refuses a decided writer with no wake.
+            if (txn_->IsInFlight(verdict.value().writer)) {
+                WaitForRowWriter(scope, ta.oid, verdict.value().tuple_key,
+                                 verdict.value().writer);
+            }
             return Status::TxnConflict(exec::UniqueKeyText(ta, ix, key) +
                                        " is being written by " +
                                        HolderName(verdict.value().writer) + " in tuple key " +
