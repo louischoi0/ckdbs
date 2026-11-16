@@ -1,10 +1,17 @@
 # Work order CU - a value list as a key: `IN (...)` and an `OR` of equalities served by one descent per value
 
-Status: **WRITTEN 2026-11-15, not opened.** Written on `main` at
-`a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15
-(`raft-marks-2026-11-15.md` §6). No stage is started. CU-S0 waits for the
-operator's word and for the marks on §4's items. Every `[source-read]`
-claim below was read at `a61ab905`.
+Status: **OPEN since 2026-11-16: CU-S0 is done, CU-S1 is not opened.**
+CU-S0 was opened on the operator's word of 2026-11-16
+(`raft-marks-2026-11-16.md` §1), on worktree `cu-key-set-access` from
+`1edf5c54` (`v3.4.11-20-g1edf5c54`), and **CU-Q0 to CU-Q7 are each marked
+(a), the operator's own marks**. CU-Q0's bar is met (§7). The word names
+CU-S0 only, so CU-S1 waits for the operator's word; **CU-Q8 and CU-Q9
+are unmarked, and §7's census puts one of CU-Q1's stated reasons in
+question**. Written
+on `main` at `a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15
+(`raft-marks-2026-11-15.md` §6). Every `[source-read]` claim in §1 was
+read at `a61ab905`; §7's census re-read each at `1edf5c54` and lists the
+line numbers that differ.
 
 Tags: `[operator]` the operator's word; `[source-read]` read in the tree,
 with `path:line`; `[measured]` with the results file; `[design]` CLA's,
@@ -55,6 +62,11 @@ step's** relation. This is what `ParseValueList` builds for `col IN (...)`
 today's walk:
 - an `OR` across columns (an index union);
 - an `OR` under `NOT` or nested under an `AND` inside the tree;
+- an `OR` nested under an `OR`: `a IN (1, 2) OR a = 3` and
+  `(a = 1 OR a = 2) OR a = 3` are a `kOr` holding a `kOr`, which
+  `ParseBoolChain` does not flatten, so they are not a `kOr` of leaves
+  (CU-S0's census, §7; `a = 1 OR a = 2 OR a = 3` written flat is one
+  `kOr` of three leaves and is the shape);
 - a leaf that is not `=`;
 - a column from another step, which would be a correlated list;
 - `NOT IN`;
@@ -207,18 +219,22 @@ tuple key sets skips the order search as today.
 
 ## 4. Items for the operator (CU-Q), CLA's proposals
 
-None is assumed; each waits for a mark.
+CU-Q0 to CU-Q7 are **the operator's own marks of 2026-11-16**
+(`raft-marks-2026-11-16.md` §1). CU-Q8 and CU-Q9 surfaced in CU-S0 and
+wait for a mark; neither is assumed.
 
-| | item | options | CLA proposes |
-|---|---|---|---|
-| CU-Q0 | Does CU-S0 gate the build? | (a) yes: if a tuple key list of 4 and of 64 values over a relation of 100k rows is not served faster than today's walk, CU stops. (b) built whatever S0 shows | (a) |
-| CU-Q1 | Kind or annotation | (a) an annotation, `Step::key_set`, on the single-value kind. (b) new kinds `kLookupSet`, `kIndexSet`, `kCabinSet`, with `sys.access_stats` numbers 9..11 | (a). No persisted number moves, Waystone's line is untouched by construction, and `SHOW ACCESS` still names the structure that served |
-| CU-Q2 | Which structures | (a) tuple key, index leading column, Cabin column, in that order of stages. (b) tuple key only | (a), staged so the tuple key lands alone if S2 stalls |
-| CU-Q3 | A cap | (a) none beyond BU-Q2's 4,096 conditions: the ladder is `f(shape, catalog)` and a set is always taken. (b) a measured crossover above which the walk is kept | (a). (b) is the cardinality estimate IX9 refuses. The loss on a small relation is bounded by 4,096 descents, which S0 measures and states |
-| CU-Q4 | Waystone | (a) a step carrying a set records and replays no trail. (b) a trail per value | (a). A set is a search over `n` points, and invariant 9's line stays where it is |
-| CU-Q5 | Writes | (a) reads in CU-S1/S2; `UPDATE`/`DELETE ... WHERE <list>` in CU-S3, after S0's census of the point-write target and the lock window. (b) reads only, writes a later order | (a). A write by list walks and locks today what a read by list no longer walks |
-| CU-Q6 | The class | (a) a one-step tuple key set stays `kJoinSelect`. (b) `kPointSelect` | (a). `kPointSelect` names one row, and `sys.patterns.stmt_class` is a byte on disk |
-| CU-Q7 | Propagation across a join key | (a) not in CU. (b) in CU, as CB-S1 does for ranges | (a) |
+| | item | options | CLA proposes | mark |
+|---|---|---|---|---|
+| CU-Q0 | Does CU-S0 gate the build? | (a) yes: if a tuple key list of 4 and of 64 values over a relation of 100k rows is not served faster than today's walk, CU stops. (b) built whatever S0 shows | (a) | **(a)**, the operator, 2026-11-16. The bar is met (§7) |
+| CU-Q1 | Kind or annotation | (a) an annotation, `Step::key_set`, on the single-value kind. (b) new kinds `kLookupSet`, `kIndexSet`, `kCabinSet`, with `sys.access_stats` numbers 9..11 | (a). No persisted number moves, Waystone's line is untouched by construction, and `SHOW ACCESS` still names the structure that served | **(a)**, the operator, 2026-11-16. **One stated reason is wrong** (§7's census): under (a) Waystone's line is *not* untouched by construction, because `IsTrailReplayable` reads the kind and a set on `kLookup` would answer replayable. Four readers of the kind have to learn the annotation, and no compiler check enforces any of them; a missed `IsTrailReplayable` records a trail for a set step. Under (b) those readers stay right by construction and `EmitsTupleKeyOrder`'s `switch` refuses to compile until the new kinds are judged, at the price of three persisted numbers and a case in every other `switch`. CLA still proposes (a), on the other two reasons, with a test that a set step records and replays no trail; the operator has not re-read the item |
+| CU-Q2 | Which structures | (a) tuple key, index leading column, Cabin column, in that order of stages. (b) tuple key only | (a), staged so the tuple key lands alone if S2 stalls | **(a)**, the operator, 2026-11-16 |
+| CU-Q3 | A cap | (a) none beyond BU-Q2's 4,096 conditions: the ladder is `f(shape, catalog)` and a set is always taken. (b) a measured crossover above which the walk is kept | (a). (b) is the cardinality estimate IX9 refuses. The loss on a small relation is bounded by 4,096 descents, which S0 measures and states | **(a)**, the operator, 2026-11-16. The loss S0 states (§7): below about 100 rows on the tuple key and below a few hundred on an index a set is estimated slower than the walk, by at most 3.7 ms per statement, and by at most about 12 ms if CU-R1's re-check stays a test of the whole list (CU-Q9 (a)), in which case a list that matches most of a 1,000-row relation loses too |
+| CU-Q4 | Waystone | (a) a step carrying a set records and replays no trail. (b) a trail per value | (a). A set is a search over `n` points, and invariant 9's line stays where it is | **(a)**, the operator, 2026-11-16 |
+| CU-Q5 | Writes | (a) reads in CU-S1/S2; `UPDATE`/`DELETE ... WHERE <list>` in CU-S3, after S0's census of the point-write target and the lock window. (b) reads only, writes a later order | (a). A write by list walks and locks today what a read by list no longer walks | **(a)**, the operator, 2026-11-16 |
+| CU-Q6 | The class | (a) a one-step tuple key set stays `kJoinSelect`. (b) `kPointSelect` | (a). `kPointSelect` names one row, and `sys.patterns.stmt_class` is a byte on disk | **(a)**, the operator, 2026-11-16 |
+| CU-Q7 | Propagation across a join key | (a) not in CU. (b) in CU, as CB-S1 does for ranges | (a) | **(a)**, the operator, 2026-11-16 |
+| CU-Q8 | Does a long set yield? A statement driven by a tuple key descent is run inline and never handed to the sliced walk (`SelectBody`); an index-driven one is handed on but reaches no boundary, since among a statement's steps only the outermost walk's page loop has one (`sched.md` §3). A set of 4,096 values is 1.6 to 4.2 ms of descents on the tuple key and 2.0 to 12.7 ms on an index, on top of about 4 ms for the list itself, which today's walk also spends unyielded; under CU-Q9 (a) the re-check adds up to about 84 ms (§7, derived) | (a) a set runs as a descent does today: inline, no yield, no cancel point inside it, the measured bound stated in `known-gaps.md`. (b) a set driving a `SELECT` is handed to the sliced run and yields, and takes `C_CANCEL`, every 64 values | (a) if CU-Q9 is (c) or (b): an index walk and a join's inner probes already run unyielded under `exec::Budget` (`sched.md` §3), the bound is then a few milliseconds, and (b) needs a resumable position inside the set and moves `sched.md` §3 and `protocol.md` §7 and §10, for a list length few statements reach. If CU-Q9 is (a) the bound is about 0.1 s and CLA proposes (b) | *not marked* |
+| CU-Q9 | The cost of CU-R1's re-check `[quiet-wrong]`. CU-R1 keeps the list in the residual, and the residual is evaluated leaf by leaf in written order on every row a step emits, so a row found through the list's i-th value costs i comparisons: a set emitting h rows pays about h x (n + 1) / 2 of them, about 84 ms at 4,096 matching rows (§7, derived from the walk's measured 10 ns a comparison) | (a) as CU-R1 is written: the whole conjunct, in written order, on every emitted row. (b) the set step tests the row's column for membership in the set's sorted values, O(log n), and the conjunct leaves the residual for that step. (c) the conjunct stays in the residual and is evaluated whole, but for a row a set found the leaf whose value drove the descent is tested first; only if that leaf is not true is the rest of the tree evaluated in written order | (c). An `OR` is true as soon as one leaf is, so testing one leaf first changes no answer, three-valued included, and the conjunct that is evaluated is still the written one with its own literals: a wrong coercion or a stale index entry fails the leaf and falls to the whole tree, exactly as under (a). The cost is one comparison per emitted row where the row holds the value that found it. (b) tests against the coerced set, which is what CU-R1 exists to check | *not marked* |
 
 ## 5. Stages
 
@@ -244,3 +260,173 @@ None is assumed; each waits for a mark.
 
 On `main` at `a61ab905`, on the operator's word. No stage is opened and
 no code is written. Documents only.
+
+### CU-S0 - the premise and the census, 2026-11-16
+
+On worktree `cu-key-set-access` at `1edf5c54` (`v3.4.11-20-g1edf5c54`).
+**The bar of CU-Q0 (a) is met.** No engine code is changed; the stage adds
+a driver (`tools/cu_s0_premise.py`), a results file and these documents.
+
+**The premise** `[measured]`, Release at `1edf5c54`:
+`bench/v3.4.11/results-cu-s0-premise-v3.4.11-20-g1edf5c54.md`. Server CPU
+per list, `cores = 1`, one connection, a quiet host:
+
+- **The bar's two cells**, tuple key, 100,000 rows. A list of 4 values:
+  9,110 µs as today's walk, 98.4 µs as four separate statements, an
+  estimated 30.9 µs as a key set. A list of 64 values: 73.3 ms, 1,479 µs,
+  an estimated 113 µs. The indexed column reads the same: 9,359 µs
+  against an estimated 37.4 µs, and 72.7 ms against 242 µs.
+- **The walk is a product.** A list as a residual tests each row against
+  each value, about 10 ns a comparison: 1,024 values over 100,000 rows
+  cost 1.04 s of server CPU and 4,096 values 3.98 s.
+- **A descent inside a statement** costs 0.4 to 1.1 µs per value on the
+  tuple key and 2.6 to 3.2 µs on an index, at 1,000 rows and more. A
+  separate statement costs 21 to 29 µs per value. The list itself costs
+  about 0.5 to 1 µs per item to parse, type and compile, 4 ms at 4,096
+  items, and the walk pays that too.
+- **No arm is a key set**, which is unbuilt. The estimate is the list
+  alone (the walk arm over a 1-row relation) plus the descents (the
+  values stored as a relation's rows and joined to the table, which the
+  engine runs as one probe per row). The bar does not rest on it: the
+  separate statements, which overpay, already beat the walk 93 and 50
+  times.
+- **The estimate leaves out CU-R1's re-check.** Every row a set emits is
+  tested against the whole list (`AcceptTupleAt`, `step_vm.cpp:2406`), and
+  the `OR` stops at its first true leaf in written order
+  (`chain_frame.cpp:278-288`), so a set emitting `h` rows pays about
+  `h × (n + 1) / 2` comparisons at the walk's own 10 ns (derived from the
+  walk cells, not measured). The bar's cells move by under 21 µs, and the
+  separate statements stay above the estimate with it in every cell. The
+  re-check reaches about 84 ms at 4,096 matching rows.
+- **CU-Q3's loss, stated.** A set is estimated slower than the walk in 7
+  of the 12 cells at 10 and 100 rows: on the tuple key at 10 rows from 64
+  values up, on the index at 10 rows at every length and at 100 rows from
+  64 values up. The largest loss is 3.7 ms, a 4,096-value index list over
+  100 rows. At 1,000 rows a set is estimated 1.5 to 7.4 times faster in
+  every cell. The crossover is between 10 and 100 rows on the tuple key
+  and between 100 and 1,000 on an index. **That is without the re-check.**
+  With it, 8 of the 12 small cells lose, and so do the four 1,000-row cells
+  of 1,024 and 4,096 values, where every row of the relation matches the
+  list and the walk's whole cost is the check a set repeats. The largest
+  loss is then about 12 ms (index, 1,000 rows, 4,096 values).
+- **Beyond the order's cells**: 4,096 values (BU-Q2's cap), and relations
+  of 1, 10 and 100 rows, added to state CU-Q3's loss. **Cut to the
+  budget**: 2 repeats of 2 s per arm (1 s on the small relations), no
+  Cabin column, no PostgreSQL floor, no wait sampling beyond `ANALYZE`'s
+  `DB time` line, which shows CPU only.
+
+**The census** `[source-read]` (an `Explore` read at `1edf5c54`; CLA
+re-read the lines marked *). Line numbers are `1edf5c54`'s.
+
+- **§1's citations.** None of the files §1 cites changed between
+  `a61ab905` and `1edf5c54` but `step_vm.cpp` (one rename). Three
+  citations were off when written: the one-item collapse is
+  `parser.cpp:1612`* (not `:1608-1609`), `ParseValueList` is `:1589-1614`,
+  and `seen_tuple_keys_` is a runner member (`step_vm.cpp:2730`) cleared
+  at the head of each `RunIndexStep` (`:1445-1447`), not a per-probe set.
+  `bool_residual` has two feeders, not one: `CompileBound` and
+  `CompileWhere`, the write path (`step_compiler.cpp:2448`, `:2013`).
+- **§0.2's shape is narrower than its sentence.** A written
+  `col = a OR col = b OR col = c` is one flat `kOr`. `a IN (1, 2) OR a = 3`
+  and `(a = 1 OR a = 2) OR a = 3` are a `kOr` holding a `kOr`
+  (`ParseBoolChain`, `parser.cpp:1526-1546`), so they are not the shape
+  and keep the walk. §0.2's list now says so. `NOT IN` never reaches
+  `bool_residual`: `Flatten` splits it into flat `!=` conjuncts.
+- **Readers of `bool_residual`**: fourteen sites, all of which evaluate,
+  type-check, print or collect columns from the conjuncts whatever the
+  step's kind. `AcceptTupleAt` (`step_vm.cpp:2406`) evaluates them on
+  every accepted row for every access kind, so CU-R1 holds with no change
+  there. One site assumes a walk: the ladder's build arm (`:2648`), which
+  is reached only while the kind is `kScan`.
+- **Readers of the access kind that a set on a single-value kind would
+  mislead** (this is what puts CU-Q1's reason in question):
+  1. `IsTrailReplayable` (`step_chain.hpp:170-172`) answers true for
+     `kLookup`, and through it `HasReplayableStep`, the trail recording in
+     `AcceptTupleAt` (`step_vm.cpp:2513`), `ReadColumnsOf` (`step_compiler.cpp:1737`) and
+     `trail_replay.cpp:44`. Under CU-Q4 (a) it has to read the annotation.
+  2. The class (`step_compiler.cpp:2807-2815`*): a one-step `kLookup` is
+     `kPointSelect`. Under CU-Q6 (a) it has to read the annotation.
+  3. `RunStep`'s dispatch (`step_vm.cpp:629-637`) sends `kLookup` to
+     `RunPointStep`, which dereferences `step.key` unconditionally
+     (`:661`*). A set has no `step.key`.
+  4. `Estimate` (`join_order.cpp:155-179`, `:216-250`): a set has no flat
+     key equality, so its matches would be priced as a filtered walk's
+     while its execution is priced as one descent.
+  Readers that need no change: `EmitsTupleKeyOrder`, `StoredAccessKind`,
+  `AccessKindName`, `RecordAccess`, the all-descents test that skips the
+  order search (`:2162-2167`).
+- **`SelectBody` runs a descent-driven statement inline**
+  (`command_dispatcher.cpp:9074-9076`*), so a tuple key set would never
+  reach the sliced walk. This is CU-Q8. An index-driven statement is
+  handed on but never reaches a boundary, since only the walk's page loop
+  has one. With the re-check, the unyielded bound at 4,096 values over
+  100,000 rows is about 0.1 s, not a few milliseconds (derived). Today's
+  walk of that list holds its core about 0.36 s per 64-page slice (3.98 s
+  over 705 pages). Under (b), `sched.md` §3 and `protocol.md` §7 (what
+  streams) and §10 (where a cancel is taken) move too.
+- **`WAYSTONE ON`** over a list is refused today (`ShapeAdmitsDescent`
+  reads `step.residual` only, `plan_printer.cpp:17-38`) and stays refused
+  under CU-Q4 (a).
+- **Writes** (CU-S3). The point-write target (`TupleKeyEqualityTarget`,
+  `command_dispatcher.cpp:7600-7617`*), the lock window
+  (`FoldTupleKeyWindow`, `:11725-11800`) and `PURGE`'s window all read
+  `parser::Condition`, never a `Step`, so a `Step` annotation does not
+  reach them and CU-S3 recognises the shape again at that level. Today
+  `UPDATE ... WHERE id IN (1, 2, 3)` declares no range, visits every slot
+  of every leaf under a write latch, and takes the relation `IX` and a
+  tuple `U` on each match (`X` for `DELETE`). A write by descents takes
+  the same units, so the lock window does not move. `PURGE` by list stays
+  refused `NotImplemented`; CU-Q5 names `UPDATE` and `DELETE` only.
+- **The fingerprint reads the item count** (CU-R4's item). It hashes the
+  token stream: `IN (1, 2)` and `IN (1, 2, 3)` differ in `fetch_id`,
+  `IN (1, 2)` and `IN (3, 4)` share it and differ in `arg_hash`, and
+  `id IN (1, 2)` and `id = 1 OR id = 2` differ in `fetch_id` and share an
+  `arg_hash` (`tests/testdata/parser_corpus.txt:232`*, `:244`*). So each
+  list length is its own shape in `sys.statement_stats`, `sys.access_stats`
+  and the plan statistics, today and after CU.
+- **The plan memo** stores a join order only (`plan_memo.hpp:52-56`),
+  keyed by `fetch_id` and `arg_hash` among others, and a hit recompiles
+  the chain through the ladder. A key set built from the step's literals
+  at each compile is correct under it.
+- **`ANALYZE`**: a step's plan line is printed by `PrintStep`
+  (`plan_printer.cpp:188-258`) and ends at `:235`. `key_set=<n>` goes
+  there, beside `build on=`. Every test that pins a step line matches a
+  substring that ends before that point or starts at `opens=` on the
+  statistics line, so a token printed only on set steps moves none.
+- **Tests that pin today's answer by name**:
+  `where_bool_test.cpp`'s `OverTheTupleKeyItIsNotALookupOrARange` and
+  `OverAnIndexedColumnItIsNotAnIndexProbe`, and
+  `where_value_list_test.cpp`, whose header says a list is never a key.
+  They pin rows, not plan lines. CU-S1 and CU-S2 keep their rows and
+  rename them.
+
+**What CU-S1 needs before it opens**: the operator's word, marks on
+CU-Q8 and CU-Q9, and CU-Q1 re-read against the census.
+
+**Review** (`critics-developer`, on the stage's diff at `1edf5c54`). The
+bar stands. Taken:
+
+- *The estimate left out CU-R1's re-check* (the reviewer's finding, not
+  CLA's): the results file prices it, the loss and the unyielded bound
+  above are restated with it, and it is CU-Q9.
+- Seven wording and range errors in the results file, corrected there
+  (`21 to 29 µs`; the per-descent range is by relation size, not hit
+  ratio; the separate statements are 36 to 93 times cheaper than the
+  walk, not orders of magnitude).
+- One wrong path in this section (`ReadColumnsOf` is in
+  `step_compiler.cpp`); the index-driven statement's missing boundary.
+- CU-Q1's note: under (a) no compiler check enforces the four readers.
+
+Stated, not fixed: with two repeats the driver's arm order starts with L
+both times, and L and D share their draws. Neither moved a number (L's and L2's means differ by at most 5 % in
+every 1,000- and 100,000-row cell of 4 values and more).
+The driver is left byte-identical to the copy that ran.
+
+Rejected: cutting the client-latency tables from the results file (a
+results file carries the full percentile table, p0 and p25 included);
+merging the archive's two table scripts (they are the evidence of how the
+tables were made).
+
+Test suite: not executed; the stage changes no build input (`tools/`,
+`bench/` and `instructions/` only). Overhead not measured; measured at
+the milestone's close.
