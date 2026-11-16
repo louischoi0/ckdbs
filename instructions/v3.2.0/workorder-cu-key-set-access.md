@@ -438,7 +438,8 @@ the milestone's close.
 
 ### CU-S1 - the tuple key set, 2026-11-16
 
-On worktree `cu-key-set-access`, from `c9eba484`. **A value list on the
+On worktree `cu-key-set-access`, from `c9eba484`, committed at `2066487c`.
+**A value list on the
 tuple key is served by one descent per value.**
 
 **What is built** (`docs/spec/parser-v2.md` I10 owns the contract):

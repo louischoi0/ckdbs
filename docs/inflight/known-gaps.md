@@ -1896,7 +1896,7 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 ## Key sets (CU)
 
-Verified on `cu-key-set-access` at CU-S1's commit. Owned by
+Verified on `cu-key-set-access` at `2066487c` (CU-S1). Owned by
 `docs/spec/parser-v2.md` I10; the order is
 `instructions/v3.2.0/workorder-cu-key-set-access.md`.
 
