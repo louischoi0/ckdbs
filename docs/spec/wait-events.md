@@ -54,13 +54,13 @@ Reading a wait: `sys.wait_stats` (cumulative, per core), `sys.wait_histogram`
 - **Class:** Commit
 - **Kind:** timed
 - **In DB time:** yes
-- **p1:** target_lsn — the session's last acknowledged commit, which the snapshot ceiling must cover.
+- **p1:** target_lsn — the commit the snapshot ceiling must cover: the session's last acknowledged commit, or a busy row's writer's.
 - **p2:** (unused)
 - **p3:** (unused)
-- **Meaning:** A statement, at its head and before its snapshot is minted, waits for the instance's snapshot ceiling to cover its own session's last acknowledged commit, so it sees its own row. It holds nothing while it waits.
-- **Usual causes:** Another core's commit marker held below that commit, typically for a whole `strict` sync.
+- **Meaning:** A statement waits for the instance's snapshot ceiling to cover a commit. At its head, before its snapshot is minted, the commit is its own session's last acknowledged one, so it sees its own row, and it holds nothing while it waits. Mid-statement, the commit is that of a row's writer which a check found busy and which has already released (`WaitForRowWriter`, `foreign-keys.md` §3a, `index.md` §10.2), and the statement holds what it has taken so far.
+- **Usual causes:** Another commit's marker held below that commit, typically for a whole `strict` sync; on the mid-statement site the marker can be on the waiter's own core.
 - **Remedies:** Look at `commit.wal_flush` on the other cores; the cause is usually there.
-- **Sites:** The ceiling park at the head of the dispatcher's statement run.
+- **Sites:** The ceiling park at the head of the dispatcher's statement run, and its write-block wait when the block names a commit rather than a slot.
 
 ### io.page_read
 
