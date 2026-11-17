@@ -42,3 +42,12 @@ the words were given: §3 and §4 were given in another session, on worktree
 | **Mark** | **CU-S4 is opened**, on worktree `cu-key-set-access`: the overhead A/B over the whole change (CU-R5), CU-S0's arms measured again, the known gaps, the report. No item is marked; none was open |
 | **Does not settle** | a merge to `main`, a push, a version: the order's stages table ends CU-S4 in "the operator's word on landing", and CLA stops at the report; any option of `docs/pending/keyed-write-beside-a-subquery.md` |
 | **Recorded at** | this file; the order's header and §7; the CU row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 5. CU landed
+
+| | |
+|---|---|
+| **Word** | W5 (the third word of the CU session), on 2026-11-17, after CLA reported CU-S4 (`bc3cb6ba`, the branch at `e5a85e24` with `origin/main` `f345652f` merged in): *"Merge it into main and push, no verify"* (given in Korean; recorded in English) |
+| **Mark** | Branch `worktree-cu-key-set-access` is merged to `main` with `--no-ff` and pushed with `--no-verify`. **Skipped: the pre-push hook.** The full suite is not skipped: it ran green on the merged tree at `70a307ea`, 4565 of 4565 (`ctest -LE bs-nightly`, Debug), and every commit after it holds drivers under `tools/`, `bench/` and documents only. The stage's `critics-developer` review ran (the order's §7) |
+| **Does not settle** | a tag, a version; any option of `docs/pending/keyed-write-beside-a-subquery.md`; what the close did not measure (`docs/inflight/known-gaps.md`, "Key sets (CU)") |
+| **Recorded at** | this file; the order's header and §7; the CU row and this file's row in `instructions/v3.2.0/index.md` |

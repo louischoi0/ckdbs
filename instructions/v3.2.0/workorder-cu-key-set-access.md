@@ -1,8 +1,9 @@
 # Work order CU - a value list as a key: `IN (...)` and an `OR` of equalities served by one descent per value
 
-Status: **CLOSED on the work branch on 2026-11-17 (CU-S4), not landed:
-CU-S0 to CU-S4 are done on worktree `cu-key-set-access`, and the merge to
-`main` waits for the operator's word.** CU-S0 was opened on the operator's word of
+Status: **CLOSED on 2026-11-17 (CU-S4) and landed: CU-S0 to CU-S4 were
+done on worktree `cu-key-set-access` and are merged to `main` and pushed
+on the operator's word of that day (`raft-marks-2026-11-17.md` §5).**
+CU-S0 was opened on the operator's word of
 2026-11-16 (`raft-marks-2026-11-16.md` §1), on worktree
 `cu-key-set-access` from `1edf5c54` (`v3.4.11-20-g1edf5c54`), with
 **CU-Q0 to CU-Q7 each marked (a)**; CU-Q0's bar is met (§7). CU-S1 was
@@ -25,7 +26,8 @@ holding a subquery is left pending
 operator's own. **The operator's second word of 2026-11-17 opened CU-S4**
 (`raft-marks-2026-11-17.md` §4): the close is measured (§7,
 `bench/v3.4.11/results-cu-close-v3.4.11-40-g70a307ea.md`).
-Nothing is merged or pushed.
+The work branch is merged to `main` with `--no-ff` and pushed with
+`--no-verify` (§5 of that file); no version is taken.
 Written
 on `main` at `a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15
 (`raft-marks-2026-11-15.md` §6). Every `[source-read]` claim in §1 was
@@ -1104,5 +1106,9 @@ results file and documents.
 
 Overhead: measured, above.
 
-**What the landing needs**: the operator's word. Nothing is merged to
-`main`, pushed or tagged.
+**Landed** on the operator's word of 2026-11-17
+(`raft-marks-2026-11-17.md` §5): the work branch, at the commit this
+paragraph arrives in, is merged to `main` with `--no-ff` and pushed with
+`--no-verify`. Skipped: the pre-push hook. The suite is not skipped: it
+ran green at `70a307ea`, 4565 of 4565, and no commit after it changes a
+build input. Not tagged; no version is taken.
