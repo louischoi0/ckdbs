@@ -5,8 +5,10 @@ operator's word (section 8, `instructions/v3.2.0/raft-marks-2026-11-14.md`);
 G16-G20 survived a verification resumed on 2026-11-14 and are fixed since
 (section 9); G21 and G23-G26 survived its next pass on 2026-11-15 and are
 fixed since (section 10), whose review raised two questions for the
-operator (G26-R, G21-R); 37 findings still wait for a verifier, and 15
-slices are still unread. The rest decides nothing, opens no stage, licenses no code.
+operator (G26-R, G21-R); **the last 37 were verified on 2026-11-17 at
+`102d4450` - 31 survived, 1 is moot, 5 are refuted - and none is taken up
+(section 11)**; 15 slices are still unread. The rest decides nothing, opens
+no stage, licenses no code.
 Raised: 2026-11-13, in conversation with the operator; recorded 2026-11-14.
 Read at: `0b98bc4f` (`v3.4.8-11-g0b98bc4f`), on worktree `audit-core12-slices`.
 Every `path:line` below is at that commit.
@@ -25,7 +27,7 @@ under `docs/inflight/bugs/`).
 | G1 to G15 | **survived** every verifier assigned to them: five logic defects (G1-G5), five dead code (G6-G10), five duplication (G11-G15). **All fifteen taken up on 2026-11-14** (section 8) |
 | G16 to G20 | **survived** both verifiers of a resumed pass on 2026-11-14, read at `6a3ce231`, and **fixed** the same day (section 9) |
 | G21, G23 to G26 | **survived** both verifiers of the next resumed pass on 2026-11-15, read at `030b5bd9`, and **fixed** the same day (section 10) |
-| G27 to G64 | **unjudged**: at least one verifier did not return, and none has a verdict. G22 is G4's defect and G59 is G14's change, both resolved since (section 8) |
+| G27 to G64 | **verified** on 2026-11-17, read at `102d4450` (section 11), and **not taken up**: 31 **survived**, some in part or narrowed (G27-G31, G33-G49, G51, G52, G54-G56, G58, G62-G64); G32 is **moot**, closed by G1's fix; G50, G53, G57, G60 and G61 are **refuted**. G22 is G4's defect and G59 is G14's change, both resolved since (section 8) |
 | G65, G66 | **refuted**: G65 is already in `known-gaps.md`, G66 is not worth the change |
 
 **What bounds that.** Nothing was built, run or changed: every finder and
@@ -427,7 +429,10 @@ Symbols: `PageView::RedoWriteTuple`, `PageView::InsertTupleAt`, `varheap::PageWr
 ## 5. Findings no verifier refuted, but not every verifier answered (49)
 
 A verifier that did not return leaves its finding unjudged, which is not
-a pass. These are one reader's `[source-read]` claim each.
+a pass. These are one reader's `[source-read]` claim each, as written on
+2026-11-14. **Every one has a verdict since 2026-11-17** - sections 9, 10
+and 11 - and a verdict there overrides the finder's text here: several
+scenarios below are refuted or narrowed, and two fixes are replaced.
 
 #### G16. Recovery refuses the mount for any loser with more than 2^20 undo records
 
@@ -1113,12 +1118,11 @@ up, not a proof that the code is right.
 
 `[design]` In the order it would run:
 
-1. **The verifiers that did not return**, over G27-G64 (G16-G21 and
-   G23-G26 done, sections 9 and 10; G22 and G59 moot). The finders'
-   results need not be read again: a resume reruns only the verifiers. Until
-   then G16-G64 are not to be taken up as defects - G16 (a mount refused for
-   a loser past 2^20 undo records), G17, G18, G19 and G20 are the finders'
-   own `critical`/`high`, and would be the first to verify.
+1. ~~The verifiers that did not return~~: done. G16-G21 and G23-G26 in
+   sections 9 and 10, G27-G58 and G60-G64 in section 11; G22 and G59 moot.
+   Every finding of this run now has a verdict. **What is left of this item
+   is the operator's**: section 11's five questions, and whether its 31
+   survivors are taken up - until then none is to be fixed as a defect.
 2. ~~G1-G5~~ and ~~G6-G15~~: done, section 8.
 3. **The other 15 slices**, or the decision that the audit stops here.
 
@@ -1308,3 +1312,125 @@ the hot-row, scenario 0 and scenario 2 cells sit inside their noise. Not
 measured: G23 and G24 (no driver reaches the cut drain run or the online
 backfill's decode), `CheckDeparture`, deep undo chains, and every cell on
 a quiet host.
+
+## 11. The resumed verification: G27-G58, G60-G64
+
+`[source-read]` On 2026-11-17 the operator asked for what the audit left
+unverified to be verified to its end (W7 of that day, given in Korean;
+recorded in English; `instructions/v3.2.0/raft-marks-2026-11-17.md` §7).
+That is the 37 findings this entry still carried as unjudged. The method is
+section 2's: a logic defect read by two verifiers, one tracing the code path
+and one asking whether the behaviour is intended or known; dead code by one
+asking whether it is really dead; duplication and complexity by one asking
+whether the change is behaviour-preserving and worth it; each told to refute
+and to answer "refuted" when in doubt. It ran on worktree
+`cw-optimistic-page-read`, branch `worktree-audit-g27-g64-verify`, at
+`102d4450` (`v3.4.12-1-g102d4450`), every cited line re-located there.
+Nothing was built, run or changed.
+
+**Two departures from sections 9 and 10, both CLA's.** The verifiers were
+batched by slice, two to four findings each, so 16 verifiers carried the 53
+verdicts (32 for the 16 logic defects, 13 dead code, 8 duplication). And the
+16 were first launched at once: every one was lost to the account's
+five-hour usage limit before it wrote a verdict. On the operator's word
+after the reset (W8: *"in the next session, fetch them six at a time and
+process them"*) they were resumed in waves of six, six, four. Sixteen of
+sixteen then returned.
+
+**Where the 37 stand.** 31 survived, some in part; 1 is moot; 5 are refuted.
+
+### 11.1 Logic defects (16): 15 survived, 1 moot
+
+Each row is two verdicts. "Narrowed" means the defect stands and the
+finder's scenario or reach does not.
+
+| Finding | Outcome | Site at `102d4450` | What the verifiers changed, and the refined fix | Operator's ruling needed |
+|---|---|---|---|---|
+| G27 | **survived** both, high | `src/catalog/catalog.cpp:1330`, `:1216` | Nothing upstream caps an identifier (lexer, parser, KWP). `CheckRenameName` hoisted above `CreateTable` and called first; the dispatcher refuses with the table name's byte, as `ColumnRowOf` does for a column | no: `catalog.md:322` states the 63-byte bound |
+| G28 | **survived** both, high; narrowed | `src/catalog/catalog.cpp:4058`, `:3919` | "Cannot be named again" is overstated: the 63-byte prefix reaches the object, so the defect is a duplicate name and an answer naming a spelling that was not stored. `CheckRenameName("index", def.name)` at the top of `CheckIndexDef`; `REINDEX` reaches it with a stored name and cannot be refused | no |
+| G29 | **survived** both, medium | `src/catalog/row_layout.cpp:76`, `:110`, `:152`; `src/catalog/catalog.cpp:2753` | The wrap needs exactly the finder's shape, 65,538 `char(65535)` columns (about 1.3 MB of statement), a hostile DDL only; the stored row size is then 7 and the next `InitTableAccess` runs a `uint16` loop over 65,538 columns that cannot end, under the anchor's read hold. `Build` refuses before the add (`width > kMaxTuplePayloadSize - offset`), which also covers one damaged `len`; the loop index becomes `size_t` | no |
+| G30 | **survived** both, high | `src/server/backup_manifest.cpp:122`, `:186`; `src/server/restore.cpp:436` | `data_file` is never made absolute and its default is the bare `kds.db`. `SyncDirectory` opens `.` for an empty directory; one site covers both. The failure is a refused restore that leaves nothing behind | no |
+| G31 | **survived** both, medium; narrowed | `src/server/expeditor.cpp:1228`, `:1235`; `src/server/wal_archive.cpp:117-136` | A process crash cannot leave the hole (unlinks run in ascending order): it needs a power loss on a filesystem that does not order unlinks, one failed unlink, or a file removed by hand. The stall is permanent within a run, and each restart clears one hole. `FileLogDevice::lowest_contiguous_segment()` at both sites | **the lenses differ**: intent says yes, narrowly (`wal_archive.hpp:36` "never skips one" and `backup.md` B11 hold for a leftover below a hole only if it was already archived); codepath says no, and asks that `backup.md` state it |
+| G32 | **moot** both | `src/wal/memory_log_device.cpp:204-261` (unchanged) | The scenario was real at `0b98bc4f` and is G1's defect seen from the sim: `WalStream::Open` now syncs what it scanned before it claims it (`src/wal/stream.cpp:93`, `cbe61e87`). **The finder's fix should not be applied**: promoting the survivors would blind the sim to a regression of that sync. At most one header sentence saying the survivors stay unsynced on purpose | no |
+| G33 | **survived** both, high | `src/wal/redo.cpp:400-414`, `:462-467` | An operator-facing undercount (`recovery_pages_healed`, the mount's log line); no replay decision reads it. A local `torn` flag set in the checksum arm, counted after the apply; exact, one a heal | no |
+| G34 | **survived** both (high, medium); narrowed | `src/storage/device_page_store.cpp:2939-2946` | The finder's scenario, a grown directory, is test-only: production writes depth 0 or 1. What is reachable is one frame an opted pattern, at 3 in 256, held out of the reclaimable set; never a wrong answer. `IsPinnedClassFrame` returns `!IsHeaderless(id)` on a type match | no: it restores `eviction.md` EV3 |
+| G35 | **survived** both, high | `src/exec/index_ddl.cpp:644-648`; `src/server/command_dispatcher.cpp:3099-3103` | A wrong code and message only; nothing is written. The dispatcher's first lookup makes the same collapse earlier, so both sites change. The fix must not filter by code, since the store itself can answer `NotFound` for a never-written growth page: return `ListIndexes`' failure as it is. **`DROP CABIN` has the same collapse** (`src/exec/cabin_ddl.cpp:245-249`), outside the finding | no |
+| G36 | **survived** both, medium; narrowed to a damage guard | `src/exec/index_maintain.cpp:156-181` | No admitted DDL builds the disagreement, and the finder's scenario stores nothing (every index page carries its widths and the descent refuses `Corruption`). What reaches a page: a damaged `sys.indexes` row with `REINDEX INDEX`, or a damaged `ncovered` / covered column. The finder's one comparison after the covered loop, before the untouched-row return | no: it enforces `index.md:206-209` |
+| G37 | **survived** both, high | `src/exec/assertion_build.cpp:60` | Unchanged by G25. `GetForRead` in `AdoptChain`; nothing else. It removes the write-back of every chain page at every mount, not the reads | no |
+| G38 | **survived** both (medium, high) | `src/exec/assertion_replay.cpp:165-192`; `src/exec/bound_cabin.cpp:436`, `:473` | Unchanged by G25, G26 and CL, and easier to reach than stated. No production path reads the stale pair (`VerifyAgainstEntries` has test callers only) and the next mount drops it. The lenses place the fix differently: erase every copy of the pair in `Unapply` itself, or in `CompensateReservation` after it, leaving the live path's refusal alone | no |
+| G39 | **survived** both (medium, high) | `src/catalog/catalog.cpp:2270-2273` | One statement, two answers by core and by process age. The refusal protects nothing: no production code resolves through the registry. `sys` and `public` are refused unconditionally and are not affected. Either delete the check, which `namespace.md` NS7 supports, or refuse from a `constexpr` name list every `Catalog` shares | **yes** (both lenses): NS7 (`namespace.md:187-189`) lists two refusals; `catalog.hpp:450` and `tests/catalog_test.cpp:203-207` state a third. One ruling with G53 |
+| G40 | **survived in part** (high, medium) | `src/catalog/catalog.cpp:3606`, `:3782` | **The `CreateForeignKey` half is refuted as unreachable**: its one caller passes the oid `CreateTable` just issued. The Cabin half stands on a narrower trigger than the finder's, whose slot-reuse step cannot happen (a catalog chain never gives a slot back): a pool refusal that clears between two fetches at `cores >= 2`, or in-memory damage. `CreateExprCabin`'s shape - return `ListCabins`' failure - not a filter by code | no: it enforces `catalog.md` CT7 |
+| G41 | **survived** both, high | `src/server/restore.cpp:372-375`, `:457` | The damaged-archive guard does not catch it. Refuse `NotFound` when the archive is not a directory, before the first write; `fs::status` in the loop. An existing but wrong directory still restores to the stop, indistinguishable from an empty archive | no, unless `latest` over an archive with no segment of the lineage is also to be refused (`backup.md` B14) |
+| G42 | **survived** both, medium; narrowed | `src/server/wal_archive.cpp:199-208` | The one reachable failure is `ECHILD` under an inherited `SIG_IGN` for `SIGCHLD`, which a plain shell, systemd and a container's PID 1 do not produce. Return `IoError` when `waitpid` does not return the pid; and, so that the archive then works at all, set `SIGCHLD` to `SIG_DFL` once in `main` | no; the `SIGCHLD` reset is a process-wide choice to state |
+
+### 11.2 Dead code (13): 11 survived, 2 refuted
+
+One verdict each.
+
+| Finding | Outcome | What the verifier changed, and the refined fix | Operator's ruling needed |
+|---|---|---|---|
+| G43 | **survived**, medium | "Cannot fire on any `Analyze` result" is false as written: what makes the filter dead is `RecoverCore`'s floor (`src/wal/recovery.cpp:74-77`), and the cells that call `Redo` unfloored (`tests/wal_recycle_premise_test.cpp:219`, `:316`, `:553`, `tests/wal_high_water_test.cpp:174`) very likely fire it today and must be run, not assumed. Delete the filter, the two unread members and `orphaned_records`; state the floor in `Redo`'s header | no; the mount's Info line loses ", skipped-not-dirty N" |
+| G44 | **survived**, medium | Nothing in production calls `PageRef::MarkDirty`, `MarkFrameDirty` or the `PinnedGet` aliases. Two of the three test callers of `MarkDirty` already do nothing | **yes, lightly**: `page.md:80` names `MarkDirty()` in `PageRef`'s surface (and a `page_class()` that does not exist) |
+| G45 | **survived** in its dead half; the merge refuted on worth | `is_new_page` and `min_key` are read by tests only (the finder said `min_key` is never read; one cell asserts it). Both lists become arrays of page ids and the two change types go; the two result types are not merged (about 12 lines for a third type name) | no |
+| G46 | **survived** | The four index-page accessors have no caller. `AsPage` is not dead but an identity with 11 call sites, not 13, and a third copy at `src/exec/index_maintain.cpp:226-227`. `IndexLeafCount` is test-only with three callers since G19's cell; leave it or move it to the tests | no |
+| G47 | **survived** in its narrow form; **refuted** in its wide form | No production path reaches `storage::BufferPool`. Moving `page_mgr` out of the engine library into a test-support target survives; deleting it (the 720 lines) does not: it is the only code and the only test behind three spec sentences | **yes** for anything beyond the move: `wal.md:35`, `:129`, `:131`, `:147` and `page.md` sections 8 and 18-4 name `BufferPool` / `MarkClean`. The move also changes `src/storage`'s ratcheted coverage floor |
+| G48 | **survived**, high | As the finder wrote it; the AZ work order already recorded it as not taken, a scope deferral. `Put` returns `void` | no |
+| G49 | **survived**, high | `docs/spec/index.md:267` (IX5) names `exec::EncodeIndexKey` as the one function; the sentence is already untrue of the engine and must be reworded with the deletion. The byte encoding, which is IX5's contract, is `EncodeIndexKeyColumn`'s and does not move | no contract changes; one spec sentence is reworded |
+| G50 | **refuted** as a deletion, medium | The unreachability held: only superblock 35 mounts, no writer emits `ASSERT_COMMIT`, and no v35 volume, backup or archive can carry one or a group keyed as written. But `CheckGroupKeyKinds` is called at every mount with an assertion, and `assertion.md:363-369`, `:495-497` and `wal.md:170` state both as present behaviour | **yes**, to delete: it reverses CK-Q4 (a) to (c). BP-R4's retired-kind precedent is the shape |
+| G51 | **survived**, three pieces of four | `unenforceable()`, `empty()` (its test callers are in `assertion_recover_test.cpp`) and the fold's unreached arms go; `ASSERT_DROP` joins the existing no-op arm instead of being deleted, or the fold would answer a false "not an assertion record". **`pages()` stays**: G25's cell reads it as the only observable that the adopt reached the tail | no |
+| G52 | **survived**, high | `Catalog::FindIndexesForTable`: two test callers, none in production. Judged once, here | no |
+| G53 | **refuted** as dead code | Every fact the finder states is true, and the finder says itself that the deletion is not behaviour-preserving: a production path reaches the registry and its answer is a client-visible refusal, the only one of the 22 stored well-known names. It is one of the two answers to G39, not an independent deletion | **yes**, with G39 |
+| G54 | **survived**, high, all three symbols | `catalog::kMaxPatternDirDepth` is referenced only by its own assert (every other hit is `stats::`'s), and the two constants already differ in type | no |
+| G55 | **survived**, two parts of three | `MarkRestoreOwed`'s path overload (nine test callers) and `DataFileCheck::pages_forgotten` are dead. `ForgetUnwrittenPages` is reached on every restore and named by `backup.md:64` and four other places: at most it loses its external linkage, keeping the name. `backup.md:16` then names `MarkRestoreOwedOn` | no |
+
+### 11.3 Duplication and complexity (8): 5 survived, 3 refuted
+
+One verdict each.
+
+| Finding | Outcome | What the verifier changed, and the refined fix | Operator's ruling needed |
+|---|---|---|---|
+| G56 | **survived**, medium; unmeasured | "A resident frame implies a set bit" could not be broken, and `page.md:102` states it. The cost is uncontended latch work and hold time, not contention, and it is unmeasured: **measure in `build-release` before building**, ideally inside CW-S0's census, whose hit-path description omits this latch. `Resolve` probes `frames_` first and asks `IsAllocated` only before a fault | no contract moves; `page.md:109` and `rules.md:33` say "`Resolve` begins with `IsAllocated`" and are reworded |
+| G57 | **refuted** on worth | Every caller does pass `kRead`. 4 to 8 lines for about 29 call-site edits; `index_tree.hpp:209-211` states the signature parity with `ChainVisit` as deliberate, and `ChainVisit`'s callers do vary | no |
+| G58 | **survived**, high | About 12 lines, not 14. The sweep is also the one site that mutates and logs by hand, against the stated purpose of the logged pairs | no |
+| G60 | **refuted** on worth, high | What carries logic is already shared (`ReclaimWalk::Done`, `InlineBatchLocked`); a shared loop nets about zero lines and needs a flag for the one behavioural difference, on the path every fault takes | no |
+| G61 | **refuted** on worth, medium | Eight real differences a template would carry, one of them behavioural (`NoteStructuralRefusal` is the clustered tree's alone, BA-S14). Net 10 to 25 lines, not 80. The history shows no drift: three symmetric edits landed in both files, three deliberate divergences would each have been a new seam | no |
+| G62 | **survived** as duplication only | The "only one of them guarded" half is refuted as a robustness point: no writer produces such widths, and a damaged row is refused loudly at every site. About 6 lines. Width robustness, if wanted, is a bound in `SysIndexRow::Decode`, a separate change | no |
+| G63 | **survived**, high | **`LogCatDeleteMark`'s rewrite of the payload's deleter is a latent defect, not a difference to keep**: redo stamps the tuple header from the payload (`src/wal/redo.cpp:123-133`), so a bootstrap-id mark would read 1 on the live page and 0 on a replayed one. Unreachable today: both callers are behind `transactional`. `EnvelopeTrx()` for the envelope, the unmapped id for the payload | no |
+| G64 | **survived** on its claim; the fix replaced | The finder's wrapper adds about 5 lines; it does not remove 8. `OverwriteLogged` itself takes the tuple and an acting transaction, so that all eleven callers fit one rule and none can transpose the stamps; about 4 lines fewer | no |
+
+**What bounds that.** "Survived" is one or two readers failing to refute; no
+cell was written and nothing reproduced. Every verdict is `[source-read]`.
+Where a row says a path is unreachable or a fix is sound, that is a reader's
+trace, not a run. G29's hang and its two quadratic name checks were traced,
+not executed. G56's cost is not measured. Batching put two to four findings
+before each verifier, which sections 9 and 10 did not do; each was told to
+judge every finding on its own. The full verdicts, with their `path:line`
+evidence, were returned to the session and written to its scratch
+directory, which is not durable; this section's rows are what is kept.
+
+**Seen by the verifiers outside the findings, not judged by a second
+reader.** `DROP CABIN` reading a failed scan as "no cabin" (G35's row).
+`page.md:80` naming a `PageRef::page_class()` that does not exist (G44's).
+`index_tree.hpp:103-106` calling the two change-list bounds unrelated when
+they are one formula (G45's). `wal_archive.hpp:39` and `expeditor.cpp:1221`
+saying "the first live segment" where the code takes the lowest on disk
+(G31's).
+
+**What the operator is asked.** Nothing here is taken up: section 7's rule
+stands, and a survivor is a candidate, not a work order.
+
+- **G39 with G53**: is a well-known object's stored name refused by
+  `CREATE NAMESPACE` at all? NS7 as written says no (delete the check and
+  the registry); the header and one cell say yes (a shared name list).
+- **G31**: may a leftover segment below a hole be removed unarchived, on
+  the premise that it was archived before the hole could form?
+- **G44**: `page.md:80`'s list of `PageRef`'s surface.
+- **G47**: move `page_mgr` to a test target only, or also reword `wal.md`
+  and `page.md` and delete it.
+- **G50**: keep CK-Q4 (a), or retire `ASSERT_COMMIT` as BP-R4 retired
+  `TXN_PREPARE`.
+- **Whether and in what order the 31 are taken up.** CLA's proposal, for
+  when it is asked: the fifteen logic defects first, G27/G28, G29, G30,
+  G41, G42 and G35/G40 ahead of the rest, since each is a refusal or a
+  propagated status with a low-risk fix and no ruling; then the dead code;
+  the duplication last, G56 only after its measurement.

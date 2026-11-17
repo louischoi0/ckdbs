@@ -60,3 +60,12 @@ the words were given: §3 and §4 were given in another session, on worktree
 | **Mark** | **`v3.4.12` is the version of record**, the operator's own naming: an annotated tag on `main` at `a0672010`, pushed. Its message carries what `main` gained since `v3.4.11` (`a61ab905`) - CU, CS, the audit's G21 and G23-G26, the two row-probe fixes - then the suite (4565 of 4565 at `70a307ea`), the close measurements and the gaps that bound it. `CLAUDE.md`'s version line moves in the commit this section arrives in |
 | **Does not settle** | G26-R and G21-R; any option of `docs/pending/keyed-write-beside-a-subquery.md`; the opening of CR, CV or CW |
 | **Recorded at** | this file; `CLAUDE.md`, "Version Management"; this file's row in `instructions/v3.2.0/index.md` |
+
+## 7. The second audit's verification finished
+
+| | |
+|---|---|
+| **Words** | W7, on 2026-11-17, in a session on worktree `cw-optimistic-page-read`: *"Finish verifying what the audit results left unverified."* W8, after every verifier CLA had launched was lost to the usage limit: *"In the next session, fetch them six at a time and process them."* (each given in Korean; recorded in English) |
+| **Mark** | **W7:** the 37 findings `docs/pending/whole-engine-audit-second-run-twelve-slices.md` still carried as unjudged (G27-G58, G60-G64) are verified at `102d4450` (`v3.4.12-1-g102d4450`), on branch `worktree-audit-g27-g64-verify` in that worktree's directory, by the entry's own method: two lenses for a logic defect, one for dead code, one for duplication. **31 survived, some in part or narrowed; G32 is moot; G50, G53, G57, G60 and G61 are refuted** (the entry's §11). Batching the verifiers by slice, 16 for 53 verdicts, is CLA's choice and is stated there. Nothing was built, run or changed; every verdict is `[source-read]`. **W8:** the 16 verifiers, first launched at once and all lost before a verdict, were resumed in waves of six, six and four; sixteen returned. CLA reads W8 as standing for every fan-out of subagents until told otherwise |
+| **Does not settle** | whether any survivor is taken up, and in what order (CLA's proposal is in §11); §11's five questions - G39 with G53 (`namespace.md` NS7), G31, G44 (`page.md` §3), G47, G50 (CK-Q4); G26-R and G21-R; the 15 unread slices; a version |
+| **Recorded at** | this file; the pending entry's header, table, §5, §7 and §11; this file's row in `instructions/v3.2.0/index.md` |
