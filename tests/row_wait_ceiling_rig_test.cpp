@@ -17,9 +17,14 @@
 // (`TransactionManager::CeilingWait`), counted into its core's ceiling
 // waiters so that the lift kicks it.
 //
-// **Mutation**: the grant arm pre-flipping its slot whatever the ceiling -
-// every cell sees the statement answer without counting itself a ceiling
-// waiter.
+// **Mutations**, each built and run: the grant arm pre-flipping its slot
+// whatever the ceiling - every cell sees the statement answer without
+// counting itself a ceiling waiter; the marker's lift kicking nobody
+// (`InstanceVisibility::EndCommit`) - the three cells that end at the lift
+// of a marker on core 0 wait out core 1's idle block (5 s on this rig) and
+// fail the 1 s bound, and the own-core cell passes, its lift running on the
+// waiter's reactor. The net cell was added after both and run under
+// neither.
 
 #include "two_core_rig.hpp"
 
@@ -80,7 +85,8 @@ struct Shape {
     std::string holder_write;              // core 1, inside BEGIN, before the reactors start
     std::string waiter_write;              // core 1, autocommit, after the holder's COMMIT
     std::uint32_t marker_core = 0;         // where the `strict` commit holds its marker
-    const char* expected = "";             // words the waiter's answer carries after the lift
+    const char* expected = "";             // words the waiter's answer carries
+    bool to_the_net = false;               // the marker is held past the fault net
 };
 
 // **The shape every cell runs.** A `strict` commit on `marker_core` is held
@@ -177,6 +183,14 @@ void WaitsForTheCeiling(const Shape& shape) {
     ASSERT_FALSE(wait.done.load())
         << "core 1's statement did not wait for the ceiling; it answered " << Response(wait);
 
+    if (shape.to_the_net) {
+        // The marker stays: the net ends the wait, and its refusal says
+        // what was waited for. The net's deadline expiring kicks nobody,
+        // so the barrier does.
+        ASSERT_TRUE(KickUntil(*rig, 1, [&] { return wait.done.load(); }, 3000ms))
+            << "core 1's statement was not refused at the fault net";
+        EXPECT_EQ(waiter_slot.ceiling_waiters.load(), 0u);
+    }
     // The sync lands, the marker lifts, and the lift kicks core 1.
     rig->log_gate().Release();
     ASSERT_TRUE(Within(1000ms, [&] { return wait.done.load(); }))
@@ -227,6 +241,13 @@ TEST(RowWaitCeilingRigTest, ABusyUniqueKeyWhoseWriterCommittedAboveTheCeilingWai
                         "INSERT INTO u VALUES (9, 7)",
                         0,
                         "is already held by tuple key"});
+}
+
+TEST(RowWaitCeilingRigTest, ACeilingWaitThatReachesTheNetIsRefusedNamingTheCeiling) {
+    // The holder has decided, so the net's "has not decided" would be false.
+    WaitsForTheCeiling({kParentChild, "UPDATE c SET note = 1 WHERE id = 1",
+                        "DELETE FROM p WHERE id = 7", 0,
+                        "whose commit no new snapshot covers", /*to_the_net=*/true});
 }
 
 }  // namespace

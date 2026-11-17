@@ -630,8 +630,10 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     **A granted probe - the holder has released - waits for the snapshot
     ceiling** where the holder committed above it, kicked at the marker's
     lift (`foreign-keys.md` §3a; on `worktree-fk-walk-ceiling-wait` from
-    `d9f89624`, the four `RowWaitCeilingRigTest` cells, red before it at
-    the 1 s net). A holder still in flight when its row's probe is granted
+    `d9f89624`, `RowWaitCeilingRigTest`'s four cells that end at the lift,
+    red before it: the three foreign-key cells at the 1 s net, the unique
+    cell refused at once; a fifth pins the refusal a ceiling wait gets at
+    the net). A holder still in flight when its row's probe is granted
     polls `IsInFlight`; no cell reaches that arm and no writer is known to
     take it.
   - A holder that never decides costs a cross-core writer the 1 s fault net

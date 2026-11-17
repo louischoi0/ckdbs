@@ -378,7 +378,9 @@ written yet, and runs the check again at the writer's decide. **The
 refused by the row's own writer in `U` or `X`, or by a bulk child write's
 range over the row, and parked on the refusing entry's wake; admitted by a
 grandchild writer's `S` on the row and given back at once. **A granted
-probe means the writer has released**, and what the `DELETE` does then
+probe means the writer has released** (a writer still in flight that holds
+nothing on the row would be granted too; none is known, and the wait is
+then a poll of its decide), and what the `DELETE` does then
 depends on whether a fresh check view would see its decide. Where it would,
 the check runs again at once. Where it would not - the writer committed
 above the snapshot ceiling, which another commit's marker holds down for

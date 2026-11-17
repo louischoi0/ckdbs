@@ -201,13 +201,10 @@ struct DispatchOutcome {
     // names - and there the wait polls `IsInFlight`.
     //
     // **`ceiling_lsn` set: the holder has released, and the wait is for the
-    // snapshot ceiling** (`WaitForRowWriter`). The holder committed at that
-    // LSN and gave its units back, but another commit's marker holds the
-    // ceiling below it, so a re-run now would mint a view that still reads
-    // the row as busy. No `slot` stands beside it; the statement counts
-    // itself into its core's ceiling waiters and the marker's lift kicks it
-    // (`TransactionManager::CeilingWait`). No wait-for edge is drawn: a
-    // marker's holder is past its decide and waits for no lock.
+    // snapshot ceiling to cover its commit** (`WaitForRowWriter`'s grant
+    // arm carries the argument). No `slot` stands beside it and no wait-for
+    // edge is drawn; the marker's lift kicks this core
+    // (`TransactionManager::CeilingWait`).
     struct WriteBlock {
         std::uint64_t trx_id = 0;  // the holder being waited for
         std::uint64_t tuple_key = 0;      // the row it holds
@@ -216,7 +213,7 @@ struct DispatchOutcome {
         // The mode the refused ask wanted, for `sys.lock_waits`; meaningful
         // only beside a `slot`.
         txn::LockMode mode = txn::LockMode::kExclusive;
-        std::uint64_t ceiling_lsn = 0;  // `wal::kNoLsn`: no ceiling wait
+        std::uint64_t ceiling_lsn = 0;  // `txn::kNoCommitLsn`: no ceiling wait
     };
     std::optional<WriteBlock> write_block = std::nullopt;
 

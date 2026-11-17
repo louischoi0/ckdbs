@@ -413,10 +413,9 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             waiter_id = waiter_now();
             if (was != waiter_id && was != 0 && locks_ != nullptr) locks_->ClearWaitFor(was);
             if (NowNs() >= deadline_ns) break;
-            // **A holder that released above the snapshot ceiling**
-            // (`WaitForRowWriter`): the wait is for the ceiling to cover its
-            // commit, not for a lock.
-            const bool on_ceiling = block.ceiling_lsn != wal::kNoLsn;
+            // The holder released above the snapshot ceiling
+            // (`WaitForRowWriter`'s grant arm carries the argument).
+            const bool on_ceiling = block.ceiling_lsn != txn::kNoCommitLsn;
             // **The edge, and the cycle test in the same breath.** A cycle
             // can only close at the instant a waiter adds the edge that
             // closes it, so the waiter that would close one is the victim
@@ -451,11 +450,8 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             // settles the moment the transaction is decided, whichever way
             // - a committed one releases the row to a re-read, an aborted
             // one puts the old version back - on a poll that nothing kicks
-            // (`known-gaps.md`, Locks).
-            //
-            // **On the ceiling where the holder has released above it**: a
-            // re-run before the ceiling covers the holder's commit would
-            // meet the same busy row. The marker's lift kicks this core.
+            // (`known-gaps.md`, Locks). On the ceiling, the marker's lift
+            // kicks this core.
             const auto freed = [this, &block, on_ceiling] {
                 if (on_ceiling) return txn_->CeilingCovers(block.ceiling_lsn);
                 return block.slot != nullptr ? txn::LockWaitReady(block.slot)
@@ -491,7 +487,9 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
                 log_->Debug("lock", "core " + std::to_string(core_id_) + " held a write of " +
                                         held_name(block.tuple_key) + " until transaction " +
                                         std::to_string(block.trx_id) +
-                                        " decided, and is running it again");
+                                        (on_ceiling ? "'s commit was under the snapshot ceiling"
+                                                    : " decided") +
+                                        ", and is running it again");
             }
             const MayParkScope parking(*this, /*allowed=*/true, out->statement);
             *out = DispatchAndStage(line, session);
@@ -549,27 +547,20 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             // statement plainly did nothing. The message names the net.
             const DispatchOutcome::WriteBlock block = *out->write_block;
             const std::string held = held_name(block.tuple_key);
-            // **A ceiling wait names what it waited for**: the holder has
+            // **A ceiling wait names what it waited for**: its holder has
             // decided, so "has not decided" would be false of it.
-            if (block.ceiling_lsn != wal::kNoLsn) {
-                RefuseParkedWrite(
-                    *out, waiting_session,
-                    Status::TxnConflict(
-                        held + " was written by transaction " + std::to_string(block.trx_id) +
-                        ", which has committed, and no new snapshot covers that commit after " +
-                        std::to_string(lock_wait_fault_net_ns_ / 1'000'000) +
-                        " ms; the write hit the lock-wait fault net and was refused. Another "
-                        "commit has held the snapshot ceiling below it that long, so reaching "
-                        "the net means a commit's sync is slow or stuck - not that the row was "
-                        "busy"));
-                co_return Status::OK();
-            }
+            const bool on_ceiling = block.ceiling_lsn != txn::kNoCommitLsn;
             // **For a bound assertion's group it means contention, not a
             // defect** (AO-S6e-c): every writer touching one group serialises
             // on it, so the message says so. Whether a group wait should have
             // a shorter bound of its own is undecided (AO-0 item 22).
             const std::string why =
-                block.tuple_key != 0
+                on_ceiling
+                    ? std::string(
+                          "Another commit has held the snapshot ceiling below that commit for "
+                          "that long, so reaching the net means a commit's sync is slow or "
+                          "stuck - not that the row was busy")
+                : block.tuple_key != 0
                     ? std::string(
                           "A wait ends when the holder decides, so reaching the net means a "
                           "deadlock went undetected or a holder is stuck - not that the row "
@@ -581,8 +572,10 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             RefuseParkedWrite(
                 *out, waiting_session,
                 Status::TxnConflict(
-                    held + " is held by transaction " +
-                    std::to_string(block.trx_id) + ", which has not decided after " +
+                    held + (on_ceiling ? " was written by transaction " : " is held by transaction ") +
+                    std::to_string(block.trx_id) +
+                    (on_ceiling ? ", whose commit no new snapshot covers after "
+                                : ", which has not decided after ") +
                     std::to_string(lock_wait_fault_net_ns_ / 1'000'000) +
                     " ms; the write hit the lock-wait fault net and was refused. " + why));
         }
@@ -4957,17 +4950,14 @@ void CommandDispatcher::WaitForRowWriter(const WriteScope& scope, catalog::Oid r
             //   So the wait is for the ceiling to cover the commit.
             // - **Otherwise decided**: a slot already flipped, and the
             //   statement re-runs at once under a view that sees it.
-            // - **Still in flight**: a writer the row's header names that
-            //   holds nothing on the row. No wake is recorded, and
-            //   `NoteBlockingWriter` leaves the wait on `IsInFlight`'s poll.
-            const std::uint64_t committed_at =
-                txn_ != nullptr ? txn_->visibility().LookupCommit(holder).commit_lsn
-                                : txn::kNoCommitLsn;
+            // - **Still in flight**, holding nothing on the row: no wake,
+            //   and the wait is `IsInFlight`'s poll (`known-gaps.md`, Locks).
+            const std::uint64_t committed_at = txn_->visibility().LookupCommit(holder).commit_lsn;
             if (committed_at != txn::kNoCommitLsn && !txn_->CeilingCovers(committed_at)) {
                 TakeLockWait(blocking_wake_,
                              DispatchOutcome::LockWait{unit, holder, nullptr, true,
                                                        txn::LockMode::kUpdate, committed_at});
-            } else if (txn_ == nullptr || !txn_->IsInFlight(holder)) {
+            } else if (!txn_->IsInFlight(holder)) {
                 auto flipped = std::make_shared<txn::LockWaitSlot>();
                 flipped->ready.store(true, std::memory_order_release);
                 TakeLockWait(blocking_wake_,
@@ -11587,7 +11577,9 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
     // already, or imminently - so the park ends at the release rather than
     // the statement being refused for a wait that was about to end. A holder
     // with no wake behind it keeps the poll's test: nothing would flip a
-    // slot for it, and a decided one has nothing left to wait for.
+    // slot for it, and a decided one has nothing left to wait for. A row
+    // probe's granted wake (`WaitForRowWriter`) names a released holder the
+    // same way: its re-run is at once, or at the ceiling's lift.
     const bool woken_at_release = blocking_wake_.has_value() && blocking_wake_->holder == trx;
     if (!woken_at_release && !txn_->IsInFlight(trx)) return;
     // The two guards the declaration argues for. A null `waiter` is

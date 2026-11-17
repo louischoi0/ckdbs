@@ -376,8 +376,11 @@ waited. Beside them: `contention_page_latch_waits` and
 `contention_page_latch_spin_turns`; `contention_syncs_inline` (a sync run
 inline on a reactor) and `contention_syncs_writer` (the writer
 thread's); `contention_drain_passes_pending`; `contention_ceiling_waits` and
-`contention_ceiling_wait_us` (a statement waiting for another core's commit
-marker, BA-S1c); `contention_carves`, `contention_checkpoint_runs`,
+`contention_ceiling_wait_us` (a statement waiting for another commit's
+marker, at its head for its own session's last commit, BA-S1c, or
+mid-statement for a busy row's writer that committed above the snapshot
+ceiling, `foreign-keys.md` §3a; one per wait entered, including one the
+ceiling already covers); `contention_carves`, `contention_checkpoint_runs`,
 `contention_carve_longest_us` and `contention_checkpoint_longest_us`; and
 one `contention_refused_<site>` per site a stale descent is refused
 `TXN_CONFLICT` at (`btree_descend`, `btree_parent`, `btree_secure`,
