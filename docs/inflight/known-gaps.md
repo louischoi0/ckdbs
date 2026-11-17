@@ -1918,7 +1918,8 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 ## Key sets (CU)
 
-Verified on `cu-key-set-access` at `04d9afe9` (CU-S3b). Owned by `docs/spec/parser-v2.md` I10; the order is
+Verified on `cu-key-set-access` at `04d9afe9` (CU-S3b); the measured
+numbers at `70a307ea` (CU-S4, the close). Owned by `docs/spec/parser-v2.md` I10; the order is
 `instructions/v3.2.0/workorder-cu-key-set-access.md`.
 
 - **A Cabin set is served only when every value is already observed, and
@@ -1999,11 +2000,17 @@ Verified on `cu-key-set-access` at `04d9afe9` (CU-S3b). Owned by `docs/spec/pars
   `(id = 1 OR id = 2) OR id = 3` and a list under `NOT` or mixed with
   another column are not keyed and walk. A client that wants the set
   writes one flat list.
-- **A set is taken at every relation size** (CU-Q3 (a)), and below about
-  100 rows the walk it replaces is cheaper. CU-S0 estimated the loss at up
-  to 3.7 ms of server CPU per statement, for a 4,096-value list
-  (`bench/v3.4.11/results-cu-s0-premise-v3.4.11-20-g1edf5c54.md`). The
-  built path is measured at CU-S4, not before.
+- **A set is taken at every relation size** (CU-Q3 (a)), and on a small
+  relation the walk it replaces is cheaper. Measured at the close
+  (`bench/v3.4.11/results-cu-close-v3.4.11-40-g70a307ea.md`):
+  on the tuple key a set is slower at 1 and 10 rows from 64 values up (the
+  10-row 64-value cell inside its spread), by up to 1.1 ms of server CPU
+  per statement at 4,096 values, and faster at 100 rows; on an index it is
+  slower at 1 and 10 rows from 4 values up (the 1-row 64-value cell inside
+  its spread) and
+  at 100 rows from 64 values up, by up to about 3.6 ms (100 rows, 4,096
+  values; CU-S0 estimated 3.7 ms). At 1,000 rows a set is faster in every
+  cell measured.
 - **A statement driven by a set never yields, takes no cancel and
   streams no row before its end** (CU-Q8 (a)). It is run inline, like one
   driven by a single descent, and a set on an inner step runs whole per
@@ -2019,7 +2026,21 @@ Verified on `cu-key-set-access` at `04d9afe9` (CU-S3b). Owned by `docs/spec/pars
   those boundaries (CE), so the worst case lost its yields, though they
   were already as far apart as the matches in 64 pages. `exec::Budget`
   bounds both. CU-Q8 (a) was marked on the one-step bound; the join bound
-  was found by CU-S1's review. Not measured on the built path.
+  was found by CU-S1's review. **Measured at the close, one step**: a
+  4,096-value set holds its core for 8.3 ms of server CPU on the tuple key
+  over 100,000 rows and 20.0 ms on an index, the list's own 4.5 to 5.3 ms
+  included (`bench/v3.4.11/results-cu-close-v3.4.11-40-g70a307ea.md`).
+  The join bound is not measured.
+- **What the close did not measure** (CU-S4): a Cabin set; a set on a
+  join's inner step; `cores` above 1 or a second session, so the leaf
+  holds a keyed write no longer takes have no number beside them; a
+  `DELETE` by key or by list on its own (it is measured with the `INSERT`
+  that feeds it). The overhead off the set's shape is "none found", not
+  "none": the largest cost the run does not exclude (the pooled delta
+  plus two standard errors) is 0.2 to 4.8 % of a statement's server CPU,
+  4.8 % on a tuple key lookup, and 3.0 % on the statements that reach
+  CU-R5's per-row tests (a boolean conjunct on a walked step, a recorded
+  and replayed trail).
 - **Each list length is its own statement shape.** The fingerprint hashes
   the token stream, so `IN (1, 2)` and `IN (1, 2, 3)` have different
   `fetch_id`s and their own rows in `sys.statement_stats`,

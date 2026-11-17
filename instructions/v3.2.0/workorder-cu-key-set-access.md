@@ -1,7 +1,8 @@
 # Work order CU - a value list as a key: `IN (...)` and an `OR` of equalities served by one descent per value
 
-Status: **OPEN since 2026-11-16: CU-S0, CU-S1, CU-S2, CU-S3 and CU-S3b
-are done on the work branch, CU-S4 (the close) is not opened.** CU-S0 was opened on the operator's word of
+Status: **CLOSED on the work branch on 2026-11-17 (CU-S4), not landed:
+CU-S0 to CU-S4 are done on worktree `cu-key-set-access`, and the merge to
+`main` waits for the operator's word.** CU-S0 was opened on the operator's word of
 2026-11-16 (`raft-marks-2026-11-16.md` §1), on worktree
 `cu-key-set-access` from `1edf5c54` (`v3.4.11-20-g1edf5c54`), with
 **CU-Q0 to CU-Q7 each marked (a)**; CU-Q0's bar is met (§7). CU-S1 was
@@ -21,8 +22,10 @@ opened CU-S3b** (`raft-marks-2026-11-17.md` §1): a write descends for a
 tuple key or a tuple key list beside any other conjunct (§7, `04d9afe9`), and a `WHERE`
 holding a subquery is left pending
 (`docs/pending/keyed-write-beside-a-subquery.md`). Every mark is the
-operator's own. No word names CU-S4, so the close, with the overhead
-measurement, waits for the operator's word. Nothing is merged or pushed.
+operator's own. **The operator's second word of 2026-11-17 opened CU-S4**
+(`raft-marks-2026-11-17.md` §2): the close is measured (§7,
+`bench/v3.4.11/results-cu-close-v3.4.11-40-g70a307ea.md`).
+Nothing is merged or pushed.
 Written
 on `main` at `a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15
 (`raft-marks-2026-11-15.md` §6). Every `[source-read]` claim in §1 was
@@ -958,3 +961,142 @@ the change passed there, 187 of 187, and 188 of 188 after.
 merge.
 
 Overhead not measured; measured at the milestone's close.
+
+### CU-S4 - the close, 2026-11-17
+
+On worktree `cu-key-set-access`, opened on the operator's word
+(`raft-marks-2026-11-17.md` §2) from `3cc59968`. No engine code is
+changed: the stage merges `origin/main`, adds three drivers
+(`tools/cu_close_overhead.py`, `tools/cu_close_rows.py`,
+`tools/cu_close_lists.py`), a results file and these documents.
+
+**Synced with `origin/main` first.** `main` had moved to `7aa75760` (a
+granted row probe's ceiling wait); it is merged at `70a307ea` with no
+conflict, and the close is measured and tested on the merged tree.
+
+**The measurement** `[measured]`, Release:
+`bench/v3.4.11/results-cu-close-v3.4.11-40-g70a307ea.md`,
+which holds every table, the method and the cuts. Arm A is `7aa75760`
+(`v3.4.11-28-g7aa75760`) and arm B `70a307ea` (`v3.4.11-40-g70a307ea`).
+**A is not the commit CU opened from** (`1edf5c54`): `main` moved twice
+while CU was open and both moves are in the work branch, so the merge
+base of the closing commit and `main` is the base whose difference from B
+is CU's change alone. `cores = 1`, one connection, a host that was not
+quiet during the main run (another user's PostgreSQL workload), every
+delta read against an in-run control. About 30 minutes, building
+included.
+
+- **CU-R5: no cost found off the set's shape.** Eight shapes with no list
+  conjunct - a tuple key lookup, a range, an index probe, a walk, a join,
+  a point `UPDATE`, a walked `UPDATE`, an `INSERT` with a `DELETE` by key
+  - in 13 cells, three servers interleaved (A, B, and A2 on a copy of A's
+  binary), 10 runs. B - A is -1.59 to +0.80 us of server CPU on 24.7 to
+  108.6 us a statement, within 2 standard errors of zero in every cell,
+  and -1.6 % to +1.6 % pooled per shape; A2 - A spans -1.10 to +4.46 us.
+  The largest cost the run does not exclude (the pooled delta plus two
+  standard errors) is 0.2 to 4.8 % by shape, 4.8 % on a tuple key lookup.
+- **CU-R5's per-row tests, a supplement.** None of those shapes has a
+  boolean conjunct or records a trail, which is where CU-R5 as restated at
+  CU-S1 puts three of its four tests. Four statements that reach them - a
+  walked list on a column nothing serves, an `OR` over two columns, a
+  walked write by such a list, a tuple key lookup recorded and replayed
+  under `WAYSTONE ON` - ran on the same arms on the host once it was
+  quiet: B - A is -1.81 to +0.02 us on 22.7 to 134.7 us, and the largest
+  cost not excluded is 3.0 %. CU-R5 is "no cost found", not "no cost".
+- **CU-S0's arms again, the bar's cells.** A tuple key list over 100,000
+  rows: 4 values cost 9,974 us as the walk on A and 34.4 us as a set on B
+  (290 times); 64 values 78.1 ms and 148 us (526 times). On the indexed
+  column 12.7 ms against 56.4 us and 91.6 ms against 343 us. CU-S0
+  estimated the set at 30.9, 113, 37.4 and 242 us. Over the 28 cells both
+  runs hold the measured set is 0.81 to 1.51 times CU-S0's estimate and
+  0.81 to 1.26 times the same estimate made from this run's own arms. A
+  hundred times the rows cost a set 0.97 to 1.32 times, where they cost
+  the walk 73 to 186 times.
+- **The writes CU moved** (CU-S3, CU-S3b), over 100,000 rows: `UPDATE ...
+  WHERE id = k AND u >= 0` 8,755 us on A, which visits every leaf under a
+  write latch, and 42.8 us on B (205 times); a 4-value list 13,855 us
+  against 59.7 us; a 64-value list 86.5 ms against 312 us (278 times); an
+  `INSERT` of four rows with a `DELETE` by their list 14,340 us against
+  88.9 us. At 1,000 rows 3.3 to 4.9 times.
+- **CU-Q3's loss, measured.** A set is slower than the walk on the tuple
+  key at 1 and 10 rows from 64 values up (up to 1.1 ms at 4,096 values;
+  the 10-row 64-value cell inside its spread), and on an index at 1 and
+  10 rows from 4 values up (the 1-row 64-value cell inside its spread) and
+  at 100 rows from 64 values up. The largest loss is about 3.6 ms per
+  statement (index, 100 rows, 4,096 values); CU-S0 estimated 3.7 ms. At
+  100 rows the tuple key set is faster at every length, and at 1,000 rows
+  every cell is.
+- **The loss CU-S0 priced for a whole-list re-check is absent.** The four
+  1,000-row cells of 1,024 and 4,096 values, where every row matches the
+  list, were estimated to lose under CU-Q9 (a) and are 1.6 to 4.8 times
+  faster as built, at 0.20 to 0.55 times CU-S0's estimate with that
+  re-check added; no arm runs (a), so this is consistent with CU-Q9 (c)
+  rather than a measurement of it.
+- **CU-Q8's bound, one step.** A 4,096-value set holds its core for 8.3 ms
+  on the tuple key over 100,000 rows and 20.0 ms on the index, the list's
+  own 4.5 to 5.3 ms included. The join bound is not measured.
+- **Cut**: no Cabin set, no set on a join's inner step, no `cores` above 1
+  and no second session, no `DELETE` cell of its own, 120 units per run
+  in the 100,000-row write cells, two repeats per list arm, no PostgreSQL
+  floor, no wait sampling (one connection on one core takes no lock,
+  latch or I/O wait and `ANALYZE`'s `DB time` lines read CPU alone;
+  run-queue wait behind the host's other load was not recorded).
+
+**The known gaps** (`docs/inflight/known-gaps.md`, "Key sets (CU)"): the
+small-relation loss and the one-step unyielded bound are restated with
+the measured numbers, and what the close did not measure is listed.
+Nothing a stage recorded there is closed by this one.
+
+**Review** (`critics-developer`, on the uncommitted tree over
+`70a307ea`). It recomputed every range, ratio and count from the run's
+files and found the measurement and the choice of base sound, and the
+arithmetic right; its findings were in what the prose claimed. It edited
+this section, `known-gaps.md` and the index row, and left the drivers,
+the archive and the results file alone as asked. Taken:
+
+- **The resolution was understated.** "Nothing below 1.6 to 3.4 %" was
+  the half-width of the interval; the largest cost the run does not
+  exclude is the delta plus that, 0.2 to 4.8 %. The control fails its own
+  null in 2 of 13 cells, so two standard errors are not a 95 % bound, and
+  the results file says so.
+- **No cell reached CU-R5's per-row tests.** The reviewer recorded it as
+  a cut; CLA ran the supplement above instead, on the same binaries.
+- **The CU-Q8 paragraph compared a 100,000-row statement with a 1,000-row
+  sum** (20.0 ms against 16.7 ms; the sum for that cell is 15.7 ms).
+- **The index cells' drift against CU-S0 was laid to the host without
+  support**: the two columns' walks are one scan and only one drifted. It
+  is stated as unexplained, and the same-run estimate is added beside
+  CU-S0's.
+- **Two claims reworded to what the data holds**: "the relation's size
+  has left the cost" is now the measured factors, and CU-Q9 (c) is
+  "consistent with", no arm having run (a).
+- **What `bench/README.md` asks and the file lacked**: question 1's driver
+  records no process list, so the file names the Debug build and the
+  suite and the seconds that separate them from the cells; units in every
+  cell; a delta against the engine's previous number (CS close's two
+  shapes); the ports, which were the drivers' defaults, stated as such.
+- **What the drivers do that a reader would not assume**, stated in the
+  results file and not corrected, since the drivers are what ran: the
+  single-key shapes cycle over 125 and 3,125 keys, block order is one of
+  three rotations so B follows A in two blocks of three, L2 and LA share
+  their draws, and the walk's longest cells rest on 2 to 4 statements.
+- This section cut to the verdicts, with the per-value detail left to the
+  results file; smaller wording, the percentile labels, the commands
+  block, a hardcoded path in the table assembly.
+
+Not taken: dropping the per-value table's column for the n single
+statements, which is flat. It is CU-S0's column, and the table is read
+beside CU-S0's. The numbers stay in `known-gaps.md` and in the index row
+though the reviewer counted them as restatement: the first owns the gap
+and the second carries each order's result.
+
+**Test suite**: 4565 of 4565 passed on the merged tree at `70a307ea`
+(`ctest -LE bs-nightly`, the range the push hook runs, Debug), run after
+the main measurement and before the supplement. Nothing after it changed
+a build input: the stage's own files are drivers under `tools/`, the
+results file and documents.
+
+Overhead: measured, above.
+
+**What the landing needs**: the operator's word. Nothing is merged to
+`main`, pushed or tagged.

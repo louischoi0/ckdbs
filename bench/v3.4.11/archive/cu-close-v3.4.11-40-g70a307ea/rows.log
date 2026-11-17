@@ -1,0 +1,11 @@
+run 1/10 done load=0.29
+run 2/10 done load=0.35
+run 3/10 done load=0.40
+run 4/10 done load=0.45
+run 5/10 done load=0.49
+run 6/10 done load=0.61
+run 7/10 done load=0.64
+run 8/10 done load=0.67
+run 9/10 done load=0.70
+run 10/10 done load=0.64
+ALL DONE
