@@ -310,6 +310,16 @@ namespace {
 // so no site carries one without the other.
 DispatchOutcome Refused(const Status& status) { return {ErrorReply(status), false, 0, status}; }
 
+// The catalog's bound on a name (`catalog::CheckNameFits`), refused at the
+// name's byte: a name its fixed-width field cannot hold is never stored
+// truncated. Three statements write one - a relation's, a column's, an
+// index's - and each asks here, so they cannot word it three ways.
+Status NameFitsAt(std::string_view what, std::string_view name, std::uint32_t byte_offset) {
+    Status fits = catalog::CheckNameFits(what, name);
+    if (fits.ok()) return fits;
+    return Status::InvalidArgument(fits.message() + " (byte " + std::to_string(byte_offset) + ")");
+}
+
 }  // namespace
 
 stats::LockWaitRecord CommandDispatcher::LockWaitRow(const txn::LockKey& key,
@@ -3046,6 +3056,15 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
     }
     const parser::IndexStmt stmt = std::get<parser::IndexStmt>(std::move(parsed.value()));
+    // A new index's name must fit the catalog's field (the audit's G28;
+    // `Catalog::CheckIndexDef` refuses it too, this is the byte). A `DROP`
+    // or a `REINDEX` of such a spelling names no stored index and answers
+    // that it found none, which is true.
+    if (!stmt.drop && !stmt.reindex) {
+        if (Status s = NameFitsAt("index", stmt.index_name, stmt.byte_offset); !s.ok()) {
+            return Refused(s);
+        }
+    }
     // BY-Q4 (a): autocommit only. Refused before a scope opens, so an
     // explicit transaction is not poisoned by asking - `PURGE`'s shape.
     if (stmt.reindex && session.in_explicit_txn()) {
@@ -3096,11 +3115,22 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         std::optional<catalog::Oid> relation;
         Status miss;  // why a create's relation did not resolve
         if (stmt.drop || stmt.reindex) {
-            relation = ResolveNames(session, [&](const txn::ReadView* v) {
-                auto ix = catalog_.FindIndexByName(stmt.index_name, v);
-                return ix.ok() ? std::optional<catalog::Oid>(ix.value().table_oid)
-                               : std::nullopt;
-            });
+            // A read of `sys.indexes` that failed is refused as itself, here
+            // as in `exec`'s second lookup: read as "no such index" it would
+            // take no borrow and answer that the index does not exist (the
+            // audit's G35).
+            auto named = ResolveNames(
+                session,
+                [&](const txn::ReadView* v) -> StatusOr<std::optional<catalog::Oid>> {
+                    auto ix = catalog_.LookupIndexByName(stmt.index_name, v);
+                    if (!ix.ok()) return ix.status();
+                    if (!ix.value().has_value()) return std::optional<catalog::Oid>();
+                    return std::optional<catalog::Oid>(ix.value()->table_oid);
+                });
+            if (!named.ok()) {
+                return Refused(named.status());
+            }
+            relation = named.value();
         } else {
             auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
                 return catalog_.ResolveRelation(stmt.schema, stmt.table_name,
@@ -5026,12 +5056,7 @@ std::optional<DispatchOutcome> CommandDispatcher::ColumnRowOf(const parser::Colu
     // truncated: `SetName` keeps at most `kCatalogNameMax - 1` bytes, and a
     // truncated name is not the one that was declared - a read of it would
     // miss, and two names sharing their first 63 bytes would be one name.
-    // RENAME COLUMN's own bound (`CheckRenameName`).
-    if (col.name.size() >= catalog::kCatalogNameMax) {
-        const Status s = Status::InvalidArgument(
-            "column name '" + col.name + "' is longer than " +
-            std::to_string(catalog::kCatalogNameMax - 1) + " bytes (byte " +
-            std::to_string(col.name_byte_offset) + ")");
+    if (Status s = NameFitsAt("column", col.name, col.name_byte_offset); !s.ok()) {
         return Refused(s);
     }
     auto type_row = catalog_.ResolveTypeByName(col.type_name);
@@ -5194,6 +5219,16 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             return {"ERR expected a CREATE TABLE statement", false};
         }
         auto& stmt = std::get<parser::CreateTableStmt>(parsed.value());
+
+        // A relation name the catalog's fixed-width field cannot hold is
+        // refused, never stored truncated - `ColumnRowOf`'s rule for a
+        // column, and for its reason: the name checks below compare the
+        // written spelling against the stored bytes, so a truncated name
+        // would be found by neither and admitted twice (the audit's G27).
+        // `Catalog::CreateTable` refuses it too; this is the byte.
+        if (Status s = NameFitsAt("table", stmt.table_name, stmt.table_byte_offset); !s.ok()) {
+            return Refused(s);
+        }
 
         // The qualifier decides the namespace; an unqualified name lands in
         // the session's (`USE`, namespace.md NS7). A named namespace must

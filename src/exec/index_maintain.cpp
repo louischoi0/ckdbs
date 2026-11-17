@@ -179,6 +179,18 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
             touched = Moved(access, previous, col, value.value());
         }
     }
+    // The covered half's twin of the key's check in `EncodeKeyInto`. The
+    // loop refuses an overrun only; an underrun - a damaged `sys.indexes`
+    // row covering less than its `entry_width` counts - would leave the
+    // tail of `covered_buf` uninitialized stack for `IndexInsert` to store
+    // (the audit's G36; index.md §4.2). Ahead of the untouched return, as
+    // the key's is.
+    if (covered_at != covered.size()) {
+        return Status::Corruption("index '" + std::to_string(ix.index_oid) +
+                                  "' covered columns encoded to " + std::to_string(covered_at) +
+                                  " bytes, but its catalog row declares " +
+                                  std::to_string(covered.size()));
+    }
 
     // **§2's rule: an UPDATE that moved nothing this index cares about
     // appends nothing.** Correct either way by IX1's superset rule, and

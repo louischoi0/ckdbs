@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -259,6 +260,56 @@ TEST(WalArchiverTest, AnArchiveCommandIsHandedThePathAndTheName) {
     ASSERT_TRUE(WaitFor([&] { return !failing.last_error().empty(); }));
     EXPECT_EQ(failing.next_segment(), 0u);
     EXPECT_EQ(failing.floor(), 0u);
+}
+
+// The audit's G42. With SIGCHLD ignored the kernel reaps the command itself
+// and `waitpid` answers `ECHILD`; the status word was still the 0 it was
+// initialised to, which read as a clean exit, so a command that failed -
+// or whose outcome nobody learned - counted its segment as archived and
+// released it to the recycler. An ignored SIGCHLD is inherited across
+// `execve`, so a launcher decides it, not the server.
+TEST(WalArchiverTest, ACommandWhoseExitCannotBeReadIsNotCountedAsArchived) {
+    struct RestoreSigchld {
+        ~RestoreSigchld() { ::signal(SIGCHLD, SIG_DFL); }
+    } restore;
+    TempDir dir;
+    const fs::path wal = dir.path / "wal", out = dir.path / "out";
+    fs::create_directories(out);
+    constexpr std::uint64_t kSize = 4096;
+    FakeSegments(wal, 2, kSize);
+    const auto wiring = [&](std::string command) {
+        return WalArchiver::Wiring{{{}, std::move(command)}, wal.string(), 7, kSize, 0,
+                                   [kSize] { return wal::Lsn{kSize + 1}; }, {}, nullptr};
+    };
+
+    // Inherited: ignored before the archiver starts. `Start` puts the
+    // default back, so the command's exit is read and the archive works.
+    ::signal(SIGCHLD, SIG_IGN);
+    {
+        WalArchiver archiver(wiring("cp %p " + out.string() + "/%f"));
+        archiver.Start();
+        ASSERT_TRUE(WaitFor([&] { return archiver.next_segment() == 1; }))
+            << archiver.last_error();
+        EXPECT_TRUE(fs::exists(out / ArchiveName(7, 0)));
+    }
+
+    // Ignored while a command runs, which `Start` cannot rule out: the
+    // command fails, its exit is unreadable, and the segment stays owed.
+    // The command waits for a file made after the disposition is set, so
+    // the order is the cell's and not the scheduler's.
+    {
+        const fs::path go = dir.path / "go";
+        WalArchiver archiver(
+            wiring("while [ ! -e " + go.string() + " ]; do sleep 0.01; done; false"));
+        archiver.Start();
+        ::signal(SIGCHLD, SIG_IGN);
+        std::ofstream(go) << "go";
+        ASSERT_TRUE(WaitFor([&] { return !archiver.last_error().empty(); }));
+        EXPECT_NE(archiver.last_error().find("could not be read"), std::string::npos)
+            << archiver.last_error();
+        EXPECT_EQ(archiver.next_segment(), 0u);
+        EXPECT_EQ(archiver.floor(), 0u);
+    }
 }
 
 // BR-Q2 (a), fail-closed: an archive that keeps failing with less than
@@ -577,10 +628,75 @@ TEST(PointInTimeTest, ARestoreToAnLsnPastTheStopEndsJustBeforeIt) {
     RestoreRequest latest{dir.string(), (early.path / "kds.db").string(),
                           (early.path / "wal").string(), {}, archive.path.string(), 0, true};
     ASSERT_TRUE(LayOutRestore(latest).ok());
-    auto all = Mount(early.path);
-    ASSERT_TRUE(all.ok()) << all.status().message();
+    {
+        auto all = Mount(early.path);
+        ASSERT_TRUE(all.ok()) << all.status().message();
+        CurrentCoreGuard as(0);
+        EXPECT_EQ(Ids(*all.value(), "SELECT id FROM u"), Range(1, 5));
+    }
+
+    // **An archive that is not there is refused, never read as an empty
+    // one** (the audit's G41). Before, `latest` over a mistyped or unmounted
+    // archive found no segment past the stop, laid the backup out to its
+    // stop and answered OK - every commit after the stop dropped, under the
+    // word "latest". Nothing is laid out by the refusal.
+    TempDir nowhere;
+    RestoreRequest absent{dir.string(),
+                          (nowhere.path / "kds.db").string(),
+                          (nowhere.path / "wal").string(),
+                          {},
+                          (archive.path / "no-such-archive").string(),
+                          0,
+                          true};
+    const Status missing = LayOutRestore(absent);
+    EXPECT_EQ(missing.code(), StatusCode::kNotFound) << missing.message();
+    EXPECT_NE(missing.message().find("no-such-archive"), std::string::npos) << missing.message();
+    EXPECT_FALSE(fs::exists(nowhere.path / "kds.db"));
+    EXPECT_FALSE(fs::exists(nowhere.path / "wal"));
+    // An archive that exists and holds nothing newer is still the stop.
+    TempDir empty_archive, at_stop;
+    RestoreRequest nothing_newer{dir.string(),
+                                 (at_stop.path / "kds.db").string(),
+                                 (at_stop.path / "wal").string(),
+                                 {},
+                                 empty_archive.path.string(),
+                                 0,
+                                 true};
+    const Status stop = LayOutRestore(nothing_newer);
+    EXPECT_TRUE(stop.ok()) << stop.message();
+}
+
+// The audit's G30: `data_file`'s default is the bare `kds.db`, a path with
+// no directory component. Its parent is the empty string, which the copy's
+// directory sync opened as given - ENOENT - so a restore run from the data
+// directory, with the default, was refused whatever the backup held.
+TEST(BaseBackupTest, ARestoreToADataFileWithNoDirectoryComponentLaysItOut) {
+    TempDir live, backups, target;
+    const fs::path dir = backups.path / "b";
+    {
+        auto opened = Mount(live.path);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        Ok(db, "CREATE TABLE t (id int64, v int64)");
+        Insert(db, "t", 1, 5);
+        CleanCheckpoint(db);
+        (void)TakeBaseBackup(db, dir, [] {});
+    }
+
+    // The working directory is the process's, so it is put back whatever
+    // the layout answers.
+    const fs::path before = fs::current_path();
+    fs::current_path(target.path);
+    const Status laid = LayOutRestore(RestoreRequest{dir.string(), "kds.db", "wal"});
+    fs::current_path(before);
+    ASSERT_TRUE(laid.ok()) << laid.message();
+    EXPECT_TRUE(fs::exists(target.path / "kds.db"));
+
+    auto restored = Mount(target.path);
+    ASSERT_TRUE(restored.ok()) << restored.status().message();
     CurrentCoreGuard as(0);
-    EXPECT_EQ(Ids(*all.value(), "SELECT id FROM u"), Range(1, 5));
+    EXPECT_EQ(Ids(*restored.value(), "SELECT id FROM t"), Range(1, 5));
 }
 
 

@@ -890,7 +890,9 @@ key_cols[kMaxIndexKeyColumns], covered_cols[kMaxIndexCoveredColumns]
 
 `kMaxIndexKeyColumns = 4` and `kMaxIndexCoveredColumns = 8` `[PROPOSED]`,
 chosen to keep the row inside one catalog slot; both are refusals, never
-truncations (§11). The column arrays are in **declared index order**, which
+truncations (§11). **So is the name's length**: an index name of 64 bytes or
+more is `InvalidArgument` at its byte (`catalog.md`, "the same bound holds"),
+never stored cut to the field. The column arrays are in **declared index order**, which
 is the order §5 concatenates them in — part of the format, not a
 presentation detail. `Decode` refuses a count past its array, so one corrupt
 byte cannot make every later reader index out of bounds.

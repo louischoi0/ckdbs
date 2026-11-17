@@ -1537,6 +1537,50 @@ TEST_F(AssertionRecoverTest, AnAbortAfterTheCheckpointStillCompensatesWithTheMar
         << "§5.2's proof must hold on a recovered cabin, which is where it earns its keep";
 }
 
+// The audit's G38: the two shapes above, met together. The entry is written
+// after the checkpoint into a group the checkpoint carries, so the page walk
+// attaches it and the fold's replay of its record attaches it again; then its
+// transaction aborts and the mark does not reach the device. The folded
+// rollback found the pair, so relinked nothing, and un-applied one copy. The
+// other stayed: a group linking an entry the rollback had just marked
+// orphaned and its header no longer counted. The end-of-rebuild dedupe saw a
+// single pair and kept it, and §5.2's proof answered `Corruption` about a
+// directory whose aggregate was right.
+TEST_F(AssertionRecoverTest, ARolledBackEntryTheWalkAndTheFoldBothAttachedIsInNoGroup) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, Key("x"), 5, /*tuple_key=*/1);
+    const wal::Lsn checkpoint_lsn = Checkpoint(live);
+
+    const std::uint32_t gx = live.Find(Key("x"))->group_id;
+    const std::uint16_t after = Write(live, Key("x"), 7, /*tuple_key=*/2);
+    LogEntry(after, Key("x"), gx);
+
+    // The abort: the directory drops the linkage and the record is appended.
+    // The page's mark is the half a crash loses - `MarkOrphaned` is not run.
+    ASSERT_TRUE(live.Unapply(Key("x"), 7, kCabinPage, after).ok());
+    LogRollback(after, Key("x"), /*delta=*/7);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
+    auto report = Recover(checkpoint_lsn, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+
+    const GroupHeader* x = rebuilt.Find(Key("x"));
+    ASSERT_NE(x, nullptr);
+    EXPECT_EQ(x->sum, 5);
+    EXPECT_EQ(x->count, 1);
+    ASSERT_EQ(x->entries.size(), 1u) << "the aborted entry is still linked";
+
+    auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
+        auto p = store_.Get(page_id);
+        if (!p.ok()) return p.status();
+        auto v = BoundCabinPage::Open(p.value().bytes());
+        if (!v.ok()) return v.status();
+        return v.value().Read(index);
+    };
+    const Status proof = rebuilt.VerifyAgainstEntries(read);
+    EXPECT_TRUE(proof.ok()) << proof.message();
+}
+
 // ---- The mount wiring (RC07): a real assertion, resumed --------------------
 
 // Everything above drives the pass directly. This drives it the way a mount

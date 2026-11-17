@@ -212,6 +212,32 @@ TEST(RowLayoutTest, TheWidestRowThatStillFitsAPageIsAccepted) {
     EXPECT_FALSE(RowLayout::Build(schema, kW).ok());
 }
 
+// The audit's G29: the width sum is 32 bits, and the page bound used to be
+// asked once, after the loop. A sum that wrapped came back under the bound
+// and was accepted as a row of a few bytes.
+TEST(RowLayoutTest, AWidthSumThatWrapsThirtyTwoBitsIsRefusedNotAccepted) {
+    // One column whose stored length alone wraps the sum: 8 + (2^32 - 1)
+    // is 7 in 32 bits. No statement declares it (a type argument stops at
+    // 65535); a damaged `sys.columns` row does.
+    Schema one;
+    one.columns.push_back(Col(0, "id", kTypeValInt64));
+    one.columns.push_back(Col(1, "c", kTypeValChar, 0xFFFFFFFFu));
+    auto wrapped = RowLayout::Build(one, kW);
+    ASSERT_FALSE(wrapped.ok());
+    EXPECT_EQ(wrapped.status().code(), StatusCode::kUnsupported);
+
+    // The shape a statement can write: 65,537 columns of char(65535) sum to
+    // 2^32 - 1 past the Keystone word, the same 7.
+    Schema many;
+    many.columns.push_back(Col(0, "id", kTypeValInt64));
+    for (std::uint32_t i = 0; i < 65537; ++i) {
+        many.columns.push_back(Col(i + 1, "c", kTypeValChar, 0xFFFFu));
+    }
+    auto summed = RowLayout::Build(many, kW);
+    ASSERT_FALSE(summed.ok());
+    EXPECT_EQ(summed.status().code(), StatusCode::kUnsupported);
+}
+
 TEST(RowLayoutTest, AZeroWidthColumnIsRefused) {
     // Two columns at one offset is an ambiguous layout, not merely a
     // useless one. `char` with len 0 is the only way to spell it.

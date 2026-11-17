@@ -413,6 +413,39 @@ TEST(DevicePageStoreHeaderlessTest, AHeaderlessPageIsMarkedAndAHeaderedOneIsNot)
     EXPECT_FALSE(store->IsHeaderless(50000));
 }
 
+// The audit's G34. A headerless page has no header, so the byte a header
+// keeps `page_type` in is its own data - a Waystone directory's interior
+// page keeps its first child's page id there. A child id whose low byte is
+// one of the pinned kinds read as that kind, and the evictable page
+// (`eviction.md` EV3) was held out of every sweep for as long as it stayed
+// resident.
+TEST(DevicePageStoreHeaderlessTest, AHeaderlessPagesFirstByteIsNotReadAsAPinnedPageType) {
+    auto device = MakeDevice();
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    for (const PageType kind :
+         {PageType::kCabinBound, PageType::kFreeMap, PageType::kHeaderlessMap}) {
+        auto raw = store->CreateNewHeaderless();
+        ASSERT_TRUE(raw.ok());
+        const PageId id = raw.value().first;
+        ASSERT_FALSE(store->IsPinnedClass(id)) << "a fresh headerless page is evictable";
+        // A page id whose low byte is the kind's value, as a child slot
+        // stores it: little-endian, low byte first.
+        const PageId child = 0x00012300u | static_cast<std::uint8_t>(kind);
+        std::memcpy(raw.value().second.bytes().data(), &child, sizeof(child));
+        EXPECT_FALSE(store->IsPinnedClass(id))
+            << "first byte " << static_cast<int>(kind) << " read as a page type";
+    }
+
+    // A headered page of a pinned kind is still pinned: the header is what
+    // says so.
+    auto bound = store->CreateNew();
+    ASSERT_TRUE(bound.ok());
+    FormatPage(bound.value().second.bytes(), PageType::kCabinBound);
+    EXPECT_TRUE(store->IsPinnedClass(bound.value().first));
+}
+
 TEST(DevicePageStoreHeaderlessTest, FlushDoesNotStampAChecksumOverItsBytes) {
     auto device = MakeDevice();
     auto store = OpenStore(*device);

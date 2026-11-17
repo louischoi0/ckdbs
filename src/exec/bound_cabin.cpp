@@ -433,7 +433,8 @@ Status BoundCabin::Unapply(const std::string& key, std::int64_t delta, PageId pa
 
     header->count = next_count;
     header->sum = next_sum;
-    header->entries.erase(at);
+    // Every link to the entry, not the one `at` names (the header says why).
+    std::erase(header->entries, std::pair<PageId, std::uint16_t>(page_id, index));
     return Status::OK();
 }
 
@@ -470,7 +471,8 @@ Status BoundCabin::UnapplyDeparture(const std::string& key, std::int64_t delta, 
     }
     header->count = next_count;
     header->sum = next_sum;
-    header->entries.erase(at);
+    // Every link to the entry, not the one `at` names (the header says why).
+    std::erase(header->entries, std::pair<PageId, std::uint16_t>(page_id, index));
     return Status::OK();
 }
 

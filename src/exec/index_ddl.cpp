@@ -641,17 +641,20 @@ StatusOr<catalog::SysIndexRow> FindNamedIndex(catalog::Catalog& catalog,
                                               const parser::IndexStmt& stmt,
                                               std::optional<catalog::Oid> relation,
                                               const txn::ReadView* view) {
-    auto row = catalog.FindIndexByName(stmt.index_name, view);
-    if (!relation.has_value() || !row.ok()) {
+    // A `sys.indexes` that could not be read is not a missing index: the
+    // read's own failure is the statement's answer (the audit's G35).
+    auto row = catalog.LookupIndexByName(stmt.index_name, view);
+    if (!row.ok()) return row.status();
+    if (!relation.has_value() || !row.value().has_value()) {
         return Status::NotFound("no index named '" + stmt.index_name + "' (byte " +
                                 std::to_string(stmt.byte_offset) + ")");
     }
-    if (row.value().table_oid != *relation) {
+    if (row.value()->table_oid != *relation) {
         return Status::TxnConflict("index '" + stmt.index_name +
                                    "' moved to another relation while the statement waited (byte " +
                                    std::to_string(stmt.byte_offset) + ")");
     }
-    return row;
+    return *row.value();
 }
 
 Status DropNamedIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
@@ -966,7 +969,10 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
     // An index is complete for every value where a Cabin is authoritative
     // only for observed ones, so the Cabin becomes dead weight - but
     // dropping it is the operator's call, not the engine's.
-    if (catalog.FindCabinOnColumn(def.table_oid, def.key_cols[0]).ok()) {
+    // A read that failed drops the warning and nothing else: the index is
+    // built already, and a warning is not worth failing its statement for.
+    if (auto cabin = catalog.FindCabinOnColumn(def.table_oid, def.key_cols[0]);
+        cabin.ok() && cabin.value().has_value()) {
         warnings.push_back("column '" + std::string(key_column) +
                            "' already carries a cabin; this index supersedes it for every "
                            "value, not just observed ones, and the cabin's write hook and "

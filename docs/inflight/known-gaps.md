@@ -2201,3 +2201,45 @@ Verified on `bs-test-hardening` from `5d58f3ca`
   open zeroes what lies past the tail (`wal.md` §4.2) - but the sim cannot
   produce it; `WalStreamTest.AnIntactRecordAboveAHoleIsNeverReadBackIntoTheStream`
   plants the image by hand (verified at `cbe61e87`).
+
+## The audit's logic defects (G27-G42)
+
+Verified on `worktree-audit-g27-g42-fixes` at `ef0e3664`
+(`docs/pending/whole-engine-audit-second-run-twelve-slices.md` §12). What
+the thirteen fixes leave, each `[source-read]` unless marked.
+
+- **A `CREATE TABLE` of tens of thousands of columns is refused late.**
+  `RowLayout::Build` now refuses a row past a page before its width sum can
+  wrap (G29), which bounds a relation near 8,100 columns - but the
+  dispatcher's and the catalog's two column-name checks run first, each
+  comparing every pair, unyielding: at the 65,538 columns one 1.3 MB
+  statement can spell that is about 2 x 10^9 comparisons apiece before the
+  refusal. No column-count cap is stated or checked ahead of them. Traced by
+  the audit's verifier, not run.
+- **The Cabin controller parks a candidate on a failed catalog read it
+  cannot tell from a permanent refusal.** `CreateCabin` now returns its
+  duplicate scan's failure (G40). `cabin_optimizer_exec.cpp` retries on
+  `ResourceExhausted` and treats `NotFound` as permanent, and the store can
+  answer `NotFound` for a page of a damaged chain; that candidate is parked
+  until the controller is reset. Read by the step's reviewer.
+- **`RENAME TO` refuses a name too long with no byte.** The catalog's
+  refusal reaches the client as it is (`command_dispatcher.cpp`, the
+  rename's `Refused(renamed)`); CREATE TABLE's, CREATE INDEX's and a
+  column's carry theirs. It predates the fixes.
+- **A volume that already holds a truncated name is not repaired.** Two
+  relations, or two indexes, created under one 64-byte-or-longer spelling
+  before G27/G28 keep their two rows under one stored name; the 63-byte
+  prefix reaches one (`FindIndexByName`: the larger oid; a relation: the
+  first in scan order), and dropping by it twice removes both.
+- **No cell covers a restore's unreadable archive or unreadable archived
+  segment** (`IoError`, G41's two other answers): the cells have a missing
+  archive and an existing empty one. A cell would need a directory the test
+  cannot search, which a test run as root can.
+- **`IsPinnedClassFrame` takes the map latch for every Bound Cabin frame it
+  is asked about, on a volume with a Waystone directory** (G34): once per
+  frame per sweep visit, under the frame table's latch, for frames the sweep
+  never evicts. Free where no pattern is opted in. Not measured.
+- **`FindIndexByName` has no caller in the engine**: the statements ask
+  `LookupIndexByName`, and the `NotFound`-shaped form is kept for the cells
+  that open an index by its name (about 25 call sites in 9 test files).
+

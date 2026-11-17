@@ -111,7 +111,12 @@ none writes BACKUP_END, so none is a backup.
 (`server/wal_archive.hpp`). On when `archive_dir` or `archive_command` is
 set (one, never both). A thread archives in order every segment below the
 durable LSN's; its floor joins the recycler's bound. `archive_dir` never
-writes a different body under one name.
+writes a different body under one name. **A command counts as having
+archived its segment only on an exit 0 that was read**: an exit that could
+not be read (`waitpid` failing - `ECHILD` while SIGCHLD is ignored) is a
+failed attempt, retried and counted like any other, and the archiver puts
+SIGCHLD's default disposition back at its start where the process inherited
+it ignored.
 
 **B12 - Every archived name carries the lineage**:
 `kds-<lineage>-<segment>.log`. A fresh lineage is drawn at creation and by
@@ -131,7 +136,14 @@ log, so reads go on.
 record carries no time). The restore reads the archive's segments after the
 stop under the backup's lineage, cuts the log at the first record at or past
 the target (`LayOutRestore`), and recovers; a transaction open at the cut is
-a loser. `latest` reads every archived segment.
+a loser. `latest` reads every archived segment. **An archive that is not
+there is refused, never read as an empty one**: a named archive that does
+not exist is `NotFound`, one that cannot be read `IoError`, one that is not
+a directory `InvalidArgument`, each before anything is laid out - under
+`latest` a mistyped or unmounted archive would otherwise restore to the
+backup's stop and answer OK. An existing archive holding no later segment
+restores to the stop. A target equal to the stop still names an archive,
+and it must exist.
 
 ## 5. What this does not do
 

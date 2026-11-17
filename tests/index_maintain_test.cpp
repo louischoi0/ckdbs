@@ -8,6 +8,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 #include "view_text.hpp"
@@ -155,6 +156,50 @@ TEST_F(IndexMaintainTest, ACompositeKeyAndACoveringListAreBothMaintained) {
     // drop a row that now matches.
     Ok("UPDATE t SET c = 999 WHERE id = 1");
     EXPECT_EQ(Entries("ix"), 11);
+}
+
+// The audit's G36. The covered half of an entry is copied out of a stack
+// buffer sized by the catalog row's `entry_width`, and the loop that fills
+// it checked only that it did not overrun. A `sys.indexes` row that covers
+// less than its width was computed from - no statement writes one; a
+// damaged row is one - left the tail unfilled, and the entry, its sort key
+// and its log record carried whatever the stack held. The key half has
+// always refused its own disagreement; this is the covered half's.
+TEST_F(IndexMaintainTest, ACatalogRowCoveringLessThanItsEntryWidthIsCorruptionNotStackBytes) {
+    Ok("CREATE TABLE t (id int64, a int64, c int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a) COVERING (c)");
+    Ok("INSERT INTO t VALUES (1, 10)");
+    ASSERT_EQ(Entries("ix"), 1);
+
+    // The row's covered-column count struck to zero in place; its
+    // `entry_width` still counts the covered column, so every page of the
+    // tree still agrees with the row and the descent has nothing to refuse.
+    int struck = 0;
+    for (PageId at = catalog::kCatalogPageIndexes; at != kInvalidPageId;) {
+        auto page = store_.Get(at);
+        ASSERT_TRUE(page.ok()) << page.status().message();
+        heap::PageView view(page.value().bytes());
+        for (std::uint16_t slot = 0; slot < view.slot_count(); ++slot) {
+            auto tuple = view.ReadTuple(slot);
+            if (!tuple.ok()) continue;
+            auto row = catalog::SysIndexRow::Decode(tuple.value().payload);
+            if (!row.ok() || catalog::NameView(row.value().name) != "ix") continue;
+            ASSERT_EQ(row.value().ncovered, 1);
+            const std::size_t offset =
+                static_cast<std::size_t>(tuple.value().payload.data() -
+                                         page.value().bytes().data()) +
+                catalog::SysIndexRow::kNcoveredOffset;
+            page.value().bytes()[offset] = std::byte{0};
+            ++struck;
+        }
+        at = view.next_page_id();
+    }
+    ASSERT_EQ(struck, 1);
+    boot_->catalog.DropCache();
+
+    const std::string out = Run("INSERT INTO t VALUES (2, 20)");
+    EXPECT_EQ(out.rfind("ERR", 0), 0u) << out;
+    EXPECT_NE(out.find("covered columns encoded to 0 bytes"), std::string::npos) << out;
 }
 
 TEST_F(IndexMaintainTest, ManyRowsSplitTheTreeAndRepublishItsRootWithoutFailing) {

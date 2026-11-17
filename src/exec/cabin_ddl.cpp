@@ -242,14 +242,18 @@ StatusOr<std::uint64_t> DropCabin(catalog::Catalog& catalog, storage::PageStore&
     auto resolved = Resolve(catalog, stmt, default_namespace, nullptr);
     if (!resolved.ok()) return resolved.status();
 
+    // A `sys.cabins` that could not be read is not a bare column: its
+    // failure is the statement's answer - the index drop's rule (the
+    // audit's G35), one statement over.
     auto row = catalog.FindCabinOnColumn(resolved.value().rel_oid, resolved.value().col_pos);
-    if (!row.ok()) {
+    if (!row.ok()) return row.status();
+    if (!row.value().has_value()) {
         return Status::NotFound("no cabin on '" + stmt.table_name + "." + stmt.column_name +
                                 "' (byte " + std::to_string(stmt.column_byte_offset) + ")");
     }
 
-    if (Status s = catalog.DropCabin(row.value().cabin_id); !s.ok()) return s;
-    return row.value().cabin_id;
+    if (Status s = catalog.DropCabin(row.value()->cabin_id); !s.ok()) return s;
+    return row.value()->cabin_id;
 }
 
 Status LoadExprCabins(catalog::Catalog& catalog, storage::PageStore& store,

@@ -204,6 +204,8 @@ note it before an operation you may want to undo, and restore to it.
 | `restore: ... already holds data` | the target is not empty | an empty target |
 | `restore: target lsn T is below ... stop lsn` | the target precedes the backup's stop | an older backup |
 | `restore: the archive's history ... ends at lsn E ... segment K is missing` | the archive does not reach the target | a lower target, or find segment K |
+| `restore: the WAL archive <dir> does not exist` / `cannot be read` / `is not a directory` | the archive path is mistyped, not mounted, or not readable | fix or mount the archive path; the restore wrote nothing |
+| `archive_command: its exit could not be read (waitpid: ...)` in `wal_archive_last_error` | the server was started with SIGCHLD ignored and it was set so again after start | start the server with SIGCHLD at its default; the segment is retried |
 | `restore of backup N (start ..., stop ...) did not complete; the instance does not open` | the log does not reach the stop, or recovery failed | the message's tail says which; a restore that stops short never opens |
 | `ERR ... the WAL archive is failing (...)` on a write | §4's fail-closed | fix the archive destination |
 

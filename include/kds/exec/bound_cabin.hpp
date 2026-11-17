@@ -290,6 +290,14 @@ public:
     // Removes an entry's contribution: subtracts `delta` and forgets the
     // entry. §6.2's step 5, the abort path.
     //
+    // **Forgets every link to it**, which on the live path is the one link
+    // there is. A rebuild can hold the pair twice - attached by the page
+    // walk and again by the fold (`DedupeEntryLinkage` says why) - and a
+    // folded rollback that took one copy left the other naming an entry the
+    // page then marks orphaned and the header no longer counts, which §5.2's
+    // proof reports as `Corruption` about a directory that is right (the
+    // audit's G38). `UnapplyDeparture` the same.
+    //
     // The group is kept even at zero. A group that reached zero may be
     // written to again, and re-creating a header is not free — but more to
     // the point, `cabin.md` §5's "removal is forbidden" is about the
