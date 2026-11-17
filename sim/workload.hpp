@@ -279,6 +279,12 @@ private:
     // is the single key's and only the access - one descent per value -
     // differs. Its own stream, for `key_list_rng_`'s reason.
     Rng write_list_rng_;
+    // CU-S3b: with the shapes on, 30 in 100 by-key writes carry a second
+    // conjunct, `id != 0`. It holds of every row (no key is 0) and bounds no
+    // lock window, so the oracle's expectation and the units taken are the
+    // bare key's; the write descends with a conjunct to ask of the row it
+    // finds. Its own stream, so `write_list_rng_` draws what it drew.
+    Rng write_conjunct_rng_;
     std::string KeyPredicate(std::uint64_t key);
     // p0, c0, a0: their own id-guessing counters (`Table::inserted`).
     std::vector<Table> constrained_;

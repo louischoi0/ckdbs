@@ -7574,21 +7574,25 @@ Status CommandDispatcher::VisitRelation(
     return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor);
 }
 
-std::optional<std::uint64_t> CommandDispatcher::TupleKeyLiteral(const catalog::TableAccess& access,
-                                                          const parser::Condition& cond) const {
+namespace {
+
+// Is `cond` a non-negative integer literal compared against `access`'s
+// tuple key, and if so which id? What `FoldTupleKeyWindow` reads a bound
+// off, from the raw condition. Answers `nullopt` for every kind that is not
+// a `kCompareValue` against a literal, leaving `kBetween` to the fold,
+// which knows it carries two bounds.
+std::optional<std::uint64_t> TupleKeyLiteral(const catalog::TableAccess& access,
+                                             const parser::Condition& cond) {
     if (access.schema.columns.empty()) return std::nullopt;
-    // **`op` only means anything for a `kCompareValue`** (`ast.hpp:226`
-    // says so), and every other kind leaves it at its `kEq` default. For
-    // most of them that is harmless because `val` is unset and the type
-    // test below rejects it - but **`kBetween` carries a real integer
-    // literal in `val`: its *low bound*.** Without this line
-    // `WHERE id BETWEEN 2 AND 5` reads as `WHERE id = 2`, and the callers
-    // then act on it: the point-lookup fast path applies an UPDATE/DELETE
-    // to the low bound's row alone and reports `UPDATED 1` - a silent
-    // wrong answer; the read path is unaffected because
-    // `exec::CompileWhere` lowers a `kBetween` into two conjuncts before
-    // anything executes, and the consumers of the *raw* condition are what
-    // this function exists to keep honest.
+    // **`kind` before `op` and before `val`.** `op` only means anything
+    // for a `kCompareValue` (`ast.hpp` says so), and every other kind
+    // leaves it at its `kEq` default. For most of them that is harmless
+    // because `val` is unset and the type test below rejects it - but
+    // **`kBetween` carries a real integer literal in `val`: its *low
+    // bound*.** Without this line `WHERE id BETWEEN 2 AND 5` reads as
+    // `WHERE id = 2` and the window folds to that one key. The compiled
+    // WHERE is unaffected: `exec::CompileWhere` lowers a `kBetween` into
+    // two conjuncts.
     if (cond.kind != parser::PredicateKind::kCompareValue) return std::nullopt;
     if (cond.rhs_kind != parser::RhsKind::kLiteral) return std::nullopt;
     if (cond.val.type != parser::ValueType::kInt) return std::nullopt;
@@ -7603,24 +7607,7 @@ std::optional<std::uint64_t> CommandDispatcher::TupleKeyLiteral(const catalog::T
     return static_cast<std::uint64_t>(cond.val.int_val);
 }
 
-std::optional<std::uint64_t> CommandDispatcher::TupleKeyEqualityTarget(
-    const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const {
-    // Deliberately storage-agnostic: this answers "is this statement a bare
-    // tuple key point lookup", which is a property of the WHERE clause alone.
-    // Whether anything can shortcut it - a tree descent, or nothing at
-    // all - is LocateByTupleKey's question.
-    //
-    // Exactly one condition: an extra AND could exclude the row the probe
-    // would find, and the probe cannot evaluate the second predicate.
-    // Falling through costs a scan; getting this wrong costs a wrong answer.
-    // **That is what keeps this separate from `DeclaredWriteBorrow`**,
-    // which asks a different question of the same conjuncts - "what window
-    // does this AND-list bound" - and is right to read every one of them.
-    if (where.size() != 1) return std::nullopt;
-    const parser::Condition& cond = where.front();
-    if (cond.op != parser::CompareOp::kEq) return std::nullopt;
-    return TupleKeyLiteral(access, cond);
-}
+}  // namespace
 
 CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
     DdlScope scope;
@@ -10941,9 +10928,11 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // is the other statement shape whose cost is otherwise linear in the
     // relation. Any reason to decline falls through to the scan, which
     // produces the identical result - the locator picks the slot to look
-    // at, never which rows match. Its target is the WHERE's only conjunct,
-    // so a point write carries no subquery to evaluate under the exclusive
-    // leaf (the collection pass's reason, below).
+    // at, never which rows match: `apply` tests the row it is handed
+    // against the whole WHERE, so the key's conjunct may stand beside any
+    // other (CU-S3b). A WHERE holding a subquery names no target
+    // (`exec::WriteKeyOf`), so a point write evaluates none under the
+    // exclusive leaf (the collection pass's reason, below).
     //
     // One descent to `key` and `apply` on the slot it finds: the single-key
     // arm's body, and a list's once per value (CU-S3).
@@ -10980,7 +10969,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         }
     };
     if (std::optional<std::uint64_t> tuple_key =
-            arm_target.has_value() ? arm_target : TupleKeyEqualityTarget(ta, stmt.where);
+            arm_target.has_value() ? arm_target : exec::WriteKeyOf(predicates.value());
         tuple_key.has_value()) {
         StatusOr<PointWrite> wrote = write_at(*tuple_key);
         if (!wrote.ok()) return Refused(wrote.status());
@@ -10988,7 +10977,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             case PointWrite::kAbsent:
                 return {"UPDATED 0", false, 0};
             case PointWrite::kParked:
-                // One row is in scope, so nothing was written: the conflict
+                // One key is in scope, so nothing was written: the conflict
                 // is the answer, and `EndWrite` keeps the blocker that makes
                 // `DispatchAsync` wait and re-run the statement.
                 return Refused(walk.blocked_verdict);
@@ -11013,9 +11002,10 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     WalkCursor walk_cursor = resume_from;
 
     // **A list on the tuple key is the point arm once per value** (CU-S3;
-    // `WriteWalk::WriteKeySet`), under the row units the walk of the same
-    // list takes and no declared window: `DeclaredWriteBorrow` reads no
-    // bound off a list.
+    // `WriteWalk::WriteKeySet`), under what the walk of the same WHERE
+    // takes: `DeclaredWriteBorrow` reads no bound off a list, so each row
+    // written takes its row unit, unless a range conjunct beside the list
+    // declared a window above.
     if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates.value());
         set.has_value()) {
         auto done = walk.WriteKeySet(*set, walk_cursor, write_at);
@@ -13322,7 +13312,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // The same point-lookup fast path SELECT and UPDATE take, and the same
     // contract: the locator picks the slot to look at, never which rows
     // match, so falling through to the scan produces the identical answer.
-    // Its target is the WHERE's only conjunct, so it carries no subquery.
+    // `mark` tests the row against the whole WHERE, and a WHERE holding a
+    // subquery names no target, as UPDATE's point arm states.
     //
     // One descent to `key` and `mark` on the slot it finds: the single-key
     // arm's body, and a list's once per value (CU-S3).
@@ -13338,7 +13329,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // leaves `mark` answering OK with nothing marked.
         return walk.parked_on_row ? PointWrite::kParked : PointWrite::kOffered;
     };
-    if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where);
+    if (std::optional<std::uint64_t> tuple_key = exec::WriteKeyOf(predicates.value());
         tuple_key.has_value()) {
         StatusOr<PointWrite> marked = mark_at(*tuple_key);
         if (!marked.ok()) return Refused(marked.status());

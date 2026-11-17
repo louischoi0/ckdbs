@@ -2253,11 +2253,18 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
     return out;
 }
 
-std::optional<KeySet> WriteKeySetOf(const Step& where) {
-    if (!where.residual.empty() || !where.fn_residual.empty() || !where.sub_chains.empty() ||
-        where.bool_residual.size() != 1) {
-        return std::nullopt;
+std::optional<std::uint64_t> WriteKeyOf(const Step& where) {
+    if (!where.sub_chains.empty()) return std::nullopt;
+    for (const StepPredicate& pred : where.residual) {
+        if (pred.op != parser::CompareOp::kEq) continue;
+        if (!IsOwnColumn(pred.lhs, /*slot=*/0) || !IsTupleKey(pred.lhs)) continue;
+        if (auto key = TupleKeyBound(pred.rhs); key.has_value()) return key;
     }
+    return std::nullopt;
+}
+
+std::optional<KeySet> WriteKeySetOf(const Step& where) {
+    if (!where.sub_chains.empty()) return std::nullopt;
     return TupleKeySetOf(where, /*slot=*/0);
 }
 
@@ -2730,13 +2737,10 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     // conjunct attached to it is an equality binding **this relation's tuple key**
     // to a value already available. Anything else is a scan.
     //
-    // Deliberately NOT TupleKeyEqualityTarget (the dispatcher's point-statement
-    // check): that refuses whenever the WHERE holds more than one
-    // condition, which is right for a statement that must answer with a
-    // single tuple and cannot shortcut a second predicate - but a chain
-    // step only *locates* a candidate, and every residual is evaluated on
-    // the located row before it is accepted. Reusing it would degrade
-    // every chain carrying a WHERE clause to a full scan per step.
+    // A step only *locates* a candidate, and every residual is evaluated
+    // on the located row before it is accepted, so a conjunct beside the
+    // equality does not degrade the step to a scan. A write's point arm
+    // reads a literal target the same way (`WriteKeyOf`).
     for (std::size_t i = 0; i < chain.steps.size(); ++i) {
         Step& step = chain.steps[i];
         for (const StepPredicate& pred : step.residual) {

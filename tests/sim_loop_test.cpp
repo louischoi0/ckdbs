@@ -817,13 +817,24 @@ TEST(SimWorkload, TheShapesSpellARangeReadAndAByKeyWriteAsAKeyList) {
     for (const bool shapes : {false, true}) {
         Workload workload(Rng(11).Fork("workload"), Profile::kUniform, shapes);
         std::map<Op::Kind, int> listed;
+        // CU-S3b: a by-key write with a second conjunct, beside a list and
+        // beside a single key.
+        std::map<Op::Kind, int> list_beside;
+        std::map<Op::Kind, int> key_beside;
         for (int i = 0; i < 4000; ++i) {
             const Op op = workload.Next();
-            if (op.sql.find(" WHERE id IN (") != std::string::npos) ++listed[op.kind];
+            const bool list = op.sql.find(" WHERE id IN (") != std::string::npos;
+            if (list) ++listed[op.kind];
+            if (op.sql.find(" AND id != 0") == std::string::npos) continue;
+            ++(list ? list_beside : key_beside)[op.kind];
         }
         for (const Op::Kind kind :
              {Op::Kind::kSelectRange, Op::Kind::kUpdate, Op::Kind::kDelete}) {
             EXPECT_EQ(listed[kind] > 0, shapes) << OpKindName(kind) << " shapes=" << shapes;
+        }
+        for (const Op::Kind kind : {Op::Kind::kUpdate, Op::Kind::kDelete}) {
+            EXPECT_EQ(list_beside[kind] > 0, shapes) << OpKindName(kind) << " shapes=" << shapes;
+            EXPECT_EQ(key_beside[kind] > 0, shapes) << OpKindName(kind) << " shapes=" << shapes;
         }
     }
 }

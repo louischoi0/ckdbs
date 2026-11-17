@@ -1207,7 +1207,7 @@ is one of (verified — the `PredicateKind` enum):
 | `NOT EXISTS (SELECT ...)` | kNotExists | |
 | `col BETWEEN low AND high` | kBetween | inclusive both ends; lowers to `>= low AND <= high`, the range on the step is only a hint |
 | `col IS NULL` / `col IS NOT NULL` | kCompareValue | the one spelling that finds NULLs — answered from the stored bitmap |
-| `col IN (v, ...)` | kBoolTree (one item: kCompareValue) | since BU-S2: `col = v1 OR col = v2 ...`; at most 4,096 items. On the tuple key (CU-S1), on a column of an index's prefix and on a cabined column (CU-S2) it is a key set: one descent per value. An `UPDATE` or `DELETE` whose whole `WHERE` is a list on the tuple key writes by one descent per value (CU-S3) |
+| `col IN (v, ...)` | kBoolTree (one item: kCompareValue) | since BU-S2: `col = v1 OR col = v2 ...`; at most 4,096 items. On the tuple key (CU-S1), on a column of an index's prefix and on a cabined column (CU-S2) it is a key set: one descent per value. An `UPDATE` or `DELETE` whose `WHERE` holds a list on the tuple key writes by one descent per value (CU-S3), beside any other condition but a subquery (CU-S3b) |
 | `col NOT IN (v, ...)` | kCompareValue `!=`, one per item | since BU-S2: `col != v1 AND col != v2 ...`, flattened into the AND-list where it stands at the top; a NULL item is unknown, so `NOT IN (1, NULL)` keeps no row |
 | `col NOT BETWEEN low AND high` | kBoolTree | since BU-S2: `NOT (col BETWEEN low AND high)` |
 | `col [NOT] LIKE 'pattern'` | kBoolTree | since BU-S2: `char`/`varchar` only; `%` any run, `_` one byte, case-sensitive bytes; no `ESCAPE` |
@@ -1264,10 +1264,16 @@ is one of (verified — the `PredicateKind` enum):
   the relation. **A write by a list of tuple keys descends once per value
   since CU-S3**: `UPDATE t SET ... WHERE id IN (1, 7, 42)` and `DELETE FROM
   t WHERE id = 1 OR id = 7` write the rows they name without walking the
-  relation, in key order, each row locked as it is written. The list has
-  to be the whole `WHERE`: with any other condition beside it (`id IN (1,
-  7) AND status = 'open'`) the statement walks the relation, as `id = 1
-  AND status = 'open'` does, and a write never finds its rows through an
+  relation, in key order, each row locked as it is written. **Other
+  conditions may stand beside the key since CU-S3b**: `id IN (1, 7) AND
+  status = 'open'` and `id = 1 AND status = 'open'` descend to the rows
+  their keys name and write those the other conditions keep. A range on
+  the tuple key beside a list (`id IN (1, 7) AND id < 100`) still
+  descends, and the rows are written under the range's lock window
+  instead of a lock each. A `WHERE` that holds a subquery is the
+  exception: `id = 1 AND status IN (SELECT ...)` walks the relation. So
+  does a write keyed only by a range (`id BETWEEN 10 AND 20`), and a
+  write never finds its rows through an
   index or a Cabin. `PURGE` takes no list. (A
   list on a relation a write only reads - `UPDATE ... FROM`, `DELETE ...
   USING`, a subquery, `INSERT ... SELECT` - is a read and is keyed.) `LIKE`, `NOT BETWEEN` and `NOT IN` (a list of `!=`)

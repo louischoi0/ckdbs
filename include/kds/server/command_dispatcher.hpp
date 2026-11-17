@@ -1049,19 +1049,6 @@ private:
                                                        const exec::UniqueKey& key,
                                                        std::uint64_t self, UniqueKeyHolds& holds);
 
-    // Is `cond` a non-negative integer literal compared against `access`'s
-    // tuple key, and if so which id? The shared half of the test
-    // `TupleKeyEqualityTarget` and `DeclaredWriteBorrow` both need.
-    //
-    // **`kind` before `op` and before `val`, which is why this is one
-    // function.** `ast.hpp` records that both default to a value reading as
-    // a legal equality - a `kBetween`'s low bound once made an UPDATE write
-    // one row and answer `UPDATED 1`. Answers `nullopt` for every kind that
-    // is not a `kCompareValue` against a literal, leaving `kBetween` to the
-    // caller that knows it carries two bounds.
-    std::optional<std::uint64_t> TupleKeyLiteral(const catalog::TableAccess& access,
-                                           const parser::Condition& cond) const;
-
     // **The unit a write declares before it walks** (AO-0 item 14, marked
     // by the operator on 2026-09-08), or `nullopt` for the per-row borrow.
     // A write whose predicate covers a key window borrows that window
@@ -2425,18 +2412,6 @@ private:
     // moved rows this transaction wrote (txn/manager.hpp's RowLocator).
     // Built per abort, never stored on the manager - see the definition.
     txn::TransactionManager::RowLocator RowLocatorForRollback();
-
-    // The tuple key value a WHERE clause is a *bare* equality against, or nullopt
-    // if it is anything else - no WHERE, more than one condition, a non-tuple-key
-    // column, a non-equality operator, or a non-integer or negative
-    // literal.
-    //
-    // Shared by SELECT and UPDATE so the two cannot disagree about which
-    // predicates take the point path. Duplicating this check is how one
-    // path ends up descending for a query the other correctly scans.
-    std::optional<std::uint64_t> TupleKeyEqualityTarget(
-        const catalog::TableAccess& access,
-        const std::vector<parser::Condition>& where) const;
 
     // Diagnostics. Levels are chosen so the default (info) is quiet under
     // load: DDL and SYNC are Info because they are rare and consequential,

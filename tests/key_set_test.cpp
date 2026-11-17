@@ -20,7 +20,8 @@
 // equality prefix or on a cabined column is a key set - one descent per
 // value (instructions/v3.2.0/workorder-cu-key-set-access.md). CU-S3: an
 // UPDATE or a DELETE whose WHERE is a list on the tuple key writes by one
-// descent per value.
+// descent per value. CU-S3b: beside any conjunct but a subquery, as a
+// single tuple key does.
 //
 // The claim every cell here rests on is CU-R1's: the list stays in the
 // residual, so a keyed list returns exactly the rows the walk of the same
@@ -733,15 +734,19 @@ TEST_F(KeySetTest, AWriteByListWritesTheRowsItNames) {
 }
 
 // CU-R1 on a write: every statement leaves the relation as the walk of the
-// same list leaves it - its rows, what its indexes answer and what its
-// Cabin answers. One engine runs the list, the other its walk.
+// same WHERE leaves it - its rows, what its indexes answer and what its
+// Cabin answers. One engine runs the key or the list, the other its walk.
 TEST(KeySetWriteTest, EveryWriteLeavesWhatTheWalkOfItsListLeaves) {
     Engine keyed;
     Engine walked;
     struct Case {
         const char* head;
-        const char* list;
-        const char* leaf;  // one of the list's own leaves, for `Walked`
+        const char* list;  // the key's conjunct: a list, or a single equality
+        // One of the list's own leaves, for `Walked`. For a single equality,
+        // the bound that names the same key: a write walks a range.
+        const char* leaf;
+        const char* tail = "";  // the conjuncts after it (CU-S3b)
+        bool single = false;    // `list` is one equality, `leaf` its walk
     };
     const Case cases[] = {
         // Duplicates, a gap (7) and a key past the relation; a SET that
@@ -754,6 +759,20 @@ TEST(KeySetWriteTest, EveryWriteLeavesWhatTheWalkOfItsListLeaves) {
         {"UPDATE t SET name = 'renamed' WHERE ", "id IN (6, -6, NULL)", "id = 6"},
         // No value is a key: both walk.
         {"UPDATE t SET g = 77 WHERE ", "id IN (-1, NULL)", "id = -1"},
+        // CU-S3b: other conjuncts beside the list - one that leaves a listed
+        // row out, one before and one after, and a bound on the key.
+        {"UPDATE t SET v = v + 3 WHERE ", "id IN (9, 2, 3)", "id = 2", " AND v > 25"},
+        {"UPDATE t SET name = 'again' WHERE sym = 'z' AND ", "id IN (1, 4, 12, 2)", "id = 1",
+         " AND v < 1000"},
+        {"UPDATE t SET v = v + 7 WHERE ", "id IN (2, 9, 11)", "id = 2", " AND id < 10"},
+        // A single key beside a conjunct its row passes, one it fails, and
+        // a second key that excludes it.
+        {"UPDATE t SET v = v + 1 WHERE ", "id = 3", "id BETWEEN 3 AND 3", " AND g = 0", true},
+        {"UPDATE t SET v = v + 1 WHERE ", "id = 3", "id BETWEEN 3 AND 3",
+         " AND name = 'nobody'", true},
+        {"UPDATE t SET name = 'never' WHERE ", "id = 2", "id BETWEEN 2 AND 2", " AND id = 9", true},
+        {"DELETE FROM t WHERE ", "id IN (11, 12)", "id = 11", " AND g = 2"},
+        {"DELETE FROM t WHERE ", "id = 4", "id BETWEEN 4 AND 4", " AND sym = 'z'", true},
         {"DELETE FROM t WHERE ", "id IN (5, 6, 400, 5)", "id = 5"},
         {"DELETE FROM t WHERE ", "8 = id OR id = 10", "id = 10"},
         // Rows the statements above already deleted.
@@ -768,10 +787,11 @@ TEST(KeySetWriteTest, EveryWriteLeavesWhatTheWalkOfItsListLeaves) {
         "SELECT id FROM t WHERE sym = 'a'",
     };
     for (const Case& c : cases) {
-        const std::string statement = std::string(c.head) + c.list;
+        const std::string statement = std::string(c.head) + c.list + c.tail;
+        const std::string walk = c.single ? std::string(c.leaf) : Walked(c.list, c.leaf);
         const std::string reply = keyed.Run(statement);
         EXPECT_NE(reply.rfind("ERR", 0), 0u) << statement << " -> " << reply;
-        EXPECT_EQ(reply, walked.Run(std::string(c.head) + Walked(c.list, c.leaf))) << statement;
+        EXPECT_EQ(reply, walked.Run(std::string(c.head) + walk + c.tail)) << statement;
         for (const char* read : reads) {
             // Twice, so a Cabin read is served the second time.
             keyed.Run(read);
@@ -780,18 +800,40 @@ TEST(KeySetWriteTest, EveryWriteLeavesWhatTheWalkOfItsListLeaves) {
         }
     }
     EXPECT_EQ(keyed.Run("SELECT id, g FROM t WHERE id IN (2, 9)"), "id,g\\n2,12\\n9,10");
+    // The conjuncts chose: 2 failed `v > 25` and passed `id < 10`, 3 passed
+    // `v > 25` and `g = 0`, and 11 was past the bound.
+    EXPECT_EQ(keyed.Run("SELECT id, v FROM t WHERE id IN (2, 3, 9)"),
+              "id,v\\n2,27\\n3,1034\\n9,100");
+}
+
+// A function conjunct beside the key is asked of the row the descent finds.
+TEST_F(KeySetTest, AKeyedWriteBesideAFunctionConjunctAsksItOfTheRowFound) {
+    db_.Ok("CREATE TABLE f (id int64, ts timestamp, v int64) BTREE");
+    db_.Ok("INSERT INTO f VALUES (1, '2026-10-01 09:00:00', 0)");
+    db_.Ok("INSERT INTO f VALUES (2, '2026-10-02 09:00:00', 0)");
+    db_.Ok("INSERT INTO f VALUES (3, '2026-10-01 23:00:00', 0)");
+    EXPECT_EQ(Run("UPDATE f SET v = 1 WHERE id = 2 AND DATE(ts) = '2026-10-01'"), "UPDATED 0");
+    EXPECT_EQ(Run("UPDATE f SET v = 1 WHERE id = 1 AND DATE(ts) = '2026-10-01'"), "UPDATED 1");
+    EXPECT_EQ(Run("UPDATE f SET v = v + 2 WHERE DATE(ts) = '2026-10-01' AND id IN (1, 2, 3)"),
+              "UPDATED 2");
+    EXPECT_EQ(Run("DELETE FROM f WHERE id IN (2, 3) AND DATE(ts) = '2026-10-02'"), "DELETED 1");
+    EXPECT_EQ(Run("SELECT id, v FROM f"), "id,v\\n1,3\\n3,2");
 }
 
 // A heap's declared first column is an ordinary column, so a write by a
-// list on it walks (heap-and-tuple.md 3.1b).
-TEST_F(KeySetTest, AWriteByListOnAHeapsDeclaredFirstColumnWalks) {
+// key or a list on it walks (heap-and-tuple.md 3.1b). The rows are inserted
+// out of order, so the hidden keys 1..4 hold ids 20, 10, 2 and 1 and a
+// descent to the declared value would land on another row.
+TEST_F(KeySetTest, AWriteOnAHeapsDeclaredFirstColumnWalks) {
     db_.Ok("CREATE TABLE h (id int64, v int64) HEAP");
-    for (int id = 1; id <= 4; ++id) {
+    for (const int id : {20, 10, 2, 1}) {
         db_.Ok("INSERT INTO h VALUES (" + std::to_string(id) + ", 0)");
     }
-    EXPECT_EQ(Run("UPDATE h SET v = v + 1 WHERE id IN (2, 4, 4, 9)"), "UPDATED 2");
-    EXPECT_EQ(Run("DELETE FROM h WHERE id IN (1, 4)"), "DELETED 2");
-    EXPECT_EQ(Run("SELECT id, v FROM h"), "id,v\\n2,1\\n3,0");
+    EXPECT_EQ(Run("UPDATE h SET v = v + 1 WHERE id IN (2, 4, 4, 9)"), "UPDATED 1");
+    EXPECT_EQ(Run("UPDATE h SET v = v + 5 WHERE id = 2 AND v = 1"), "UPDATED 1");
+    EXPECT_EQ(Run("DELETE FROM h WHERE id IN (1, 20)"), "DELETED 2");
+    EXPECT_EQ(Run("DELETE FROM h WHERE id = 10 AND v = 0"), "DELETED 1");
+    EXPECT_EQ(Run("SELECT id, v FROM h"), "id,v\\n2,6");
 }
 
 // ---- The descents, seen by their holds ------------------------------------------
@@ -921,17 +963,49 @@ TEST_F(KeySetWriteHoldTest, ADeleteByListHoldsOnlyTheLeavesItsKeysAreIn) {
     EXPECT_EQ(Run("SELECT COUNT(*) FROM w"), "count(*)\\n" + std::to_string(kRows - 7));
 }
 
-// The point write's own gate (`TupleKeyEqualityTarget`): the list is the
-// WHERE's only conjunct, or the statement walks - as a single key beside
-// another conjunct does.
-TEST_F(KeySetWriteHoldTest, AListBesideAnotherConjunctWalksAsASingleKeyBesideOneDoes) {
-    EXPECT_EQ(Held("UPDATE w SET v = 7 WHERE id IN (3, 4) AND v = 0", "UPDATED 2"), every_leaf_);
-    EXPECT_EQ(Held("UPDATE w SET v = 8 WHERE id = 5 AND v = 0", "UPDATED 1"), every_leaf_);
-    EXPECT_EQ(Held("DELETE FROM w WHERE id IN (3, 4) AND v = 7", "DELETED 2"), every_leaf_);
-    // A list on another column, and two lists, are no tuple key set.
-    EXPECT_EQ(Held("UPDATE w SET v = 9 WHERE v IN (8, 9)", "UPDATED 1"), every_leaf_);
-    EXPECT_EQ(Held("UPDATE w SET v = 1 WHERE id IN (5, 6) AND id IN (6, 7)", "UPDATED 1"),
+// CU-S3b: the key's conjunct may stand beside any other but a subquery. The
+// descent finds the slot and the whole WHERE is asked of its row, so each
+// statement holds the leaves its keys are in and writes what its walk would.
+TEST_F(KeySetWriteHoldTest, AKeyOrAListBesideOtherConjunctsHoldsOnlyItsLeaves) {
+    EXPECT_EQ(Held("UPDATE w SET v = 7 WHERE id IN (3, 4) AND v = 0", "UPDATED 2"), 1u);
+    EXPECT_EQ(Held("UPDATE w SET v = 8 WHERE id = 5 AND v = 0", "UPDATED 1"), 1u);
+    // The row the descent finds fails the other conjunct: nothing is written.
+    EXPECT_EQ(Held("UPDATE w SET v = 8 WHERE id = 5 AND v = 0", "UPDATED 0"), 1u);
+    EXPECT_EQ(Held("UPDATE w SET v = 1 WHERE id IN (3, 5, 6) AND v = 8", "UPDATED 1"), 1u);
+    // Wherever the key's conjunct is written, and beside a bound on the key.
+    EXPECT_EQ(Held("UPDATE w SET v = 9 WHERE v = 1 AND id < 100 AND id = 5", "UPDATED 1"), 1u);
+    // Two keys: the first is descended to, and the other excludes its row.
+    EXPECT_EQ(Held("UPDATE w SET v = 2 WHERE id = 10 AND id = 11", "UPDATED 0"), 1u);
+    // Two lists: one drives the descents and the other filters.
+    EXPECT_EQ(Held("UPDATE w SET v = 2 WHERE id IN (15, 16) AND id IN (16, 17)", "UPDATED 1"),
+              1u);
+    // A single key beside a list is the single key's one descent: the list
+    // alone would also descend to the last leaf.
+    EXPECT_EQ(Held("UPDATE w SET v = 3 WHERE id IN (16, 1200) AND id = 16", "UPDATED 1"), 1u);
+    EXPECT_EQ(Held("DELETE FROM w WHERE id IN (3, 4) AND v = 7", "DELETED 2"), 1u);
+    EXPECT_EQ(Held("DELETE FROM w WHERE id = 5 AND v = 0", "DELETED 0"), 1u);
+    EXPECT_EQ(Held("DELETE FROM w WHERE v = 9 AND id = 5", "DELETED 1"), 1u);
+    EXPECT_EQ(Run("SELECT id, v FROM w WHERE v > 0"), "id,v\\n16,3");
+}
+
+// What still walks. A WHERE holding a subquery: its rows are collected by a
+// read walk and written by a write walk, key or no key
+// (docs/pending/keyed-write-beside-a-subquery.md). A bound on the tuple key,
+// which declares a lock window and names no descent. A list on another
+// column.
+TEST_F(KeySetWriteHoldTest, AWriteBesideASubqueryOverABoundOrByAnotherColumnsListWalks) {
+    EXPECT_EQ(Held("UPDATE w SET v = 4 WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 21)",
+                   "UPDATED 1"),
               every_leaf_);
+    EXPECT_EQ(Held("UPDATE w SET v = 5 WHERE id IN (22, 23) AND "
+                   "EXISTS (SELECT id FROM w WHERE id = 1)",
+                   "UPDATED 2"),
+              every_leaf_);
+    EXPECT_EQ(Held("DELETE FROM w WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 20)",
+                   "DELETED 1"),
+              every_leaf_);
+    EXPECT_EQ(Held("UPDATE w SET v = 6 WHERE id BETWEEN 30 AND 31", "UPDATED 2"), every_leaf_);
+    EXPECT_EQ(Held("UPDATE w SET v = 9 WHERE v IN (5, 6)", "UPDATED 4"), every_leaf_);
     // The single key alone is the point write it was.
     EXPECT_EQ(Held("UPDATE w SET v = 2 WHERE id = 6", "UPDATED 1"), 1u);
 }
@@ -953,6 +1027,24 @@ TEST_F(KeySetWriteHoldTest, ADescentThatDeclinesHandsTheRestToTheWalkFromItsKey)
     EXPECT_GT(held, 3u);
     EXPECT_LT(held, every_leaf_);
     EXPECT_EQ(Run("SELECT id, v FROM w WHERE v > 0"), "id,v\\n3,1\\n5,1\\n700,1\\n1100,1");
+}
+
+// The single key's descent declines, beside a conjunct and beside a list:
+// the statement falls to the list's loop where there is one, and to the walk
+// otherwise, and writes its row once.
+TEST_F(KeySetWriteHoldTest, ASingleKeysDescentThatDeclinesIsAnsweredByTheListOrTheWalk) {
+    store_.Watch(oid_);
+    store_.FailNextFetch();
+    EXPECT_EQ(Run("UPDATE w SET v = v + 1 WHERE id = 700 AND v = 0"), "UPDATED 1");
+    EXPECT_EQ(store_.failed(), 1) << "the fetch was never failed, so no descent declined";
+    EXPECT_EQ(store_.held(), every_leaf_);
+
+    store_.Watch(oid_);
+    store_.FailNextFetch();
+    EXPECT_EQ(Run("UPDATE w SET v = v + 1 WHERE id = 3 AND id IN (3, 4)"), "UPDATED 1");
+    EXPECT_EQ(store_.failed(), 2);
+    EXPECT_EQ(store_.held(), 1u) << "the list's descents answered, not the walk";
+    EXPECT_EQ(Run("SELECT id, v FROM w WHERE v > 0"), "id,v\\n3,1\\n700,1");
 }
 
 // ---- Under transactions ------------------------------------------------------

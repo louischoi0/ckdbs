@@ -75,7 +75,8 @@ Workload::Workload(Rng rng, Profile profile, bool shapes)
       constraint_rng_(rng_.Fork("constraint")),
       read_only_rng_(rng_.Fork("read_only")),
       key_list_rng_(rng_.Fork("key_list")),
-      write_list_rng_(rng_.Fork("write_list")) {
+      write_list_rng_(rng_.Fork("write_list")),
+      write_conjunct_rng_(rng_.Fork("write_conjunct")) {
     for (const char* name : {kFkParent, kFkChild, kAsserted}) {
         constrained_.emplace_back();
         constrained_.back().name = name;
@@ -263,8 +264,11 @@ Op Workload::Update(const Table& table) {
 
 std::string Workload::KeyPredicate(std::uint64_t key) {
     const std::string k = std::to_string(key);
-    if (shapes_ && write_list_rng_.Chance(40)) return "id IN (" + k + ", 0, " + k + ")";
-    return "id = " + k;
+    if (!shapes_) return "id = " + k;
+    std::string where =
+        write_list_rng_.Chance(40) ? "id IN (" + k + ", 0, " + k + ")" : "id = " + k;
+    if (write_conjunct_rng_.Chance(30)) where += " AND id != 0";
+    return where;
 }
 
 Op Workload::Delete(Table& table) {

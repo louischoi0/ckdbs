@@ -1,7 +1,7 @@
 # Work order CU - a value list as a key: `IN (...)` and an `OR` of equalities served by one descent per value
 
-Status: **OPEN since 2026-11-16: CU-S0, CU-S1, CU-S2 and CU-S3 are done
-on the work branch, CU-S4 (the close) is not opened.** CU-S0 was opened on the operator's word of
+Status: **OPEN since 2026-11-16: CU-S0, CU-S1, CU-S2, CU-S3 and CU-S3b
+are done on the work branch, CU-S4 (the close) is not opened.** CU-S0 was opened on the operator's word of
 2026-11-16 (`raft-marks-2026-11-16.md` §1), on worktree
 `cu-key-set-access` from `1edf5c54` (`v3.4.11-20-g1edf5c54`), with
 **CU-Q0 to CU-Q7 each marked (a)**; CU-Q0's bar is met (§7). CU-S1 was
@@ -15,9 +15,14 @@ a cabined column is a key set (§7, `9ceb32ee`). **CU-S2 raised CU-Q10 to
 CU-Q13, each built to CLA's proposal; the operator marked all four (a)**
 on the fourth word of that day, which **opened CU-S3** (§4 of that file):
 an `UPDATE` or `DELETE` whose `WHERE` is a list on the tuple key writes
-by one descent per value (§7, `84bf6828`). Every mark is the operator's own. That
-word names CU-S3 only, so CU-S4 - the close, with the overhead
-measurement - waits for the operator's word. Nothing is merged or pushed.
+by one descent per value (§7, `84bf6828`). **CU-S3's report raised
+CU-Q14; the operator marked it (a) on the word of 2026-11-17, which
+opened CU-S3b** (`raft-marks-2026-11-17.md` §1): a write descends for a
+tuple key or a tuple key list beside any other conjunct, and a `WHERE`
+holding a subquery is left pending
+(`docs/pending/keyed-write-beside-a-subquery.md`). Every mark is the
+operator's own. No word names CU-S4, so the close, with the overhead
+measurement, waits for the operator's word. Nothing is merged or pushed.
 Written
 on `main` at `a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15
 (`raft-marks-2026-11-15.md` §6). Every `[source-read]` claim in §1 was
@@ -237,7 +242,9 @@ CU-Q9 and CU-Q1 again, which CU-S0 raised, on the word that opened CU-S1
 (§3). **CU-Q10 to CU-Q13 surfaced in CU-S2, were built to CLA's proposal
 and were each marked (a)** on the word that opened CU-S3 (§4 of that
 file); CU-Q12 and CU-Q13 depart from §2's "a set wins over every arm
-ranked below it", and the mark is what amends it.
+ranked below it", and the mark is what amends it. **CU-Q14 surfaced in
+CU-S3's report and is the operator's mark of 2026-11-17**
+(`raft-marks-2026-11-17.md` §1).
 
 | | item | options | CLA proposes | mark |
 |---|---|---|---|---|
@@ -255,6 +262,7 @@ ranked below it", and the mark is what amends it.
 | CU-Q11 | An item an index's key encoder refuses `[quiet-wrong]`. CU-R3 says an item the descent would refuse to encode is dropped from the set. On the tuple key that is safe by invariant 7: a negative number is no key. For an index the encoder's refusal is not a proof that no row holds the value | (a) a NULL item is left out, since a key column is never NULL; any other refused item declines the list for that index, which is then scored without it. (b) as CU-R3 wrote: every refused item is dropped and the rest are keyed | (a). (b) answers a row short wherever the encoder refuses a value a row can hold. No such value was found to construct, since coercion refuses first, so (a) costs nothing known. **Built as (a)** | **(a)**, the operator, 2026-11-16 |
 | CU-Q12 | The Cabin set's rank. §2 puts it directly after the literal `CabinProbeOf` and has it win over every arm below: the expression, predicate, correlated and cover Cabin arms, and a strict tuple key range. A set observes nothing, so while one of its values is unobserved it walks and no run of the statement changes that; each of those arms records what it misses, is keyed per outer row, or bounds its walk. With Cabins on `DATE(ts)` and on `sym`, `DATE(ts) = '2026-10-02' AND sym IN ('a', 'b')` was an expression probe that served from its second run, and under §2 it walks until other statements have observed `'a'` and `'b'` | (a) the Cabin set is the last of the Cabin arms and takes only a step that would otherwise walk its relation whole: above the filter scan, never on a step with a strict tuple key range. (b) as §2 wrote | (a). Under (b) a list turns statements that are served today into walks nothing in them ends. Under (a) a set replaces only a walk. **Built as (a)**; (b) is the arm moved back up in the ladder | **(a)**, the operator, 2026-11-16 |
 | CU-Q13 | A list on a step a join key could enter. §2 puts the index set beside the literal `kIndexProbe`, which outranks the correlated index probe and the correlated Cabin probe (`index.md` §8a). `o.user_id = u.id AND o.status IN ('open', 'held')`, with indexes on `(user_id)` and `(status)` and `o` the inner step, was one descent into `(user_id)` per outer row; under §2 it walks every entry of both statuses per outer row | (a) no list is read on a step where a correlated index probe or a correlated Cabin probe stands: the step takes what it took before lists were read. The planner may still order the relation first, where the list is its set. (b) as §2 wrote: the set outranks both, as a single literal equality does today | (a). (b) multiplies by the list's length a trade the single-value rule already makes, on every outer row. (a) changes no plan that exists. A correlated probe that also carries the list on a later prefix column is the better plan than either and is not built. **Built as (a)**: `LiteralIndexChoiceOf` | **(a)**, the operator, 2026-11-16 |
+| CU-Q14 | A write's key beside other conjuncts. CU-S3 kept the point write's gate: a write descends only where the tuple key's conjunct - a single equality, or since CU-S3 a list - is the clause's only one, so `UPDATE ... WHERE id = 1 AND v = 3` visits every leaf under a write latch, before CU and after. The row function asks the whole `WHERE` of the row a descent finds, so the gate is narrower than it need be, except for a `WHERE` holding a subquery, which a write must not evaluate under the leaf it holds exclusive | (a) in CU, as a stage before the close: a write descends for a key or a list beside any conjunct; a `WHERE` holding a subquery keeps its walks. (b) outside CU, a later order, and CU closes with the list's write "the whole `WHERE`" | (a), so the close's overhead measurement covers it | **(a)**, the operator, 2026-11-17, with the subquery case recorded as pending (`docs/pending/keyed-write-beside-a-subquery.md`) |
 
 ## 5. Stages
 
@@ -264,6 +272,7 @@ ranked below it", and the mark is what amends it.
 | **CU-S1** | **Tuple key set.** The annotation, the ladder arm, the run, the elision, the pricing. Tests: duplicates, NULLs, negative and out-of-range items, a one-item list unchanged, a list under `NOT` and across columns not keyed, `ORDER BY <tuple key>` elided, every row byte for byte against `indexes = off` and `join_order = written`, a join's inner step keyed by a list, a sim cell | `parser-v2.md` I10, I11; the manual |
 | **CU-S2** | **Index set and Cabin set.** CU-R2's shared seen set and its version-moving tests; IX9's prefix with a list column; the Cabin fallback for an unobserved value. The contract suites (index, cabin) extended byte for byte | `index.md` IX9, §8; `cabin.md` |
 | **CU-S3** | **Writes**, as CU-Q5 is marked: the point-write target and the lock window over a set, a test per write route, FK and assertion paths unchanged | `parser-v2.md` I10's write half; `txn.md` §5 if the window moves |
+| **CU-S3b** | **A write's key beside other conjuncts**, as CU-Q14 is marked: the single-key target and the list read off the compiled `WHERE` with any conjunct beside them but a subquery; the lock window unmoved | `parser-v2.md` I10; the manual; `docs/pending/keyed-write-beside-a-subquery.md` |
 | **CU-S4** | **The close.** The overhead A/B over the whole change (CU-R5), S0's arms measured again, the known gaps, the report | the operator's word on landing |
 
 ## 6. What CU does not do
@@ -828,3 +837,124 @@ statement.
 
 Overhead not measured; measured at the milestone's close.
 
+
+### CU-S3b - a write's key beside other conjuncts, 2026-11-17
+
+On worktree `cu-key-set-access`, from `94f3c4a3`, committed at
+the commit this section arrives in. **An `UPDATE` or a `DELETE` descends for a tuple key
+equality or a tuple key list beside any other conjunct but a subquery**
+(CU-Q14 (a), the operator's mark of 2026-11-17).
+
+**What is built** (`docs/spec/parser-v2.md` I10 owns the contract):
+
+- **Both targets are read off the compiled `WHERE`** (`step_compiler.cpp`).
+  `exec::WriteKeyOf` is the single key: a conjunct `<tuple key> =
+  <literal>` in the step's residual, keyed by `TupleKeyBound`, which is
+  the rule a read's step becomes a lookup by. `exec::WriteKeySetOf` no
+  longer asks that the list be the clause's only conjunct. Each names
+  nothing for a `WHERE` with a sub-chain. The single key is asked first,
+  so `id = 5 AND id IN (5, 6)` is one descent.
+- **The dispatcher's raw-condition gate is deleted**
+  (`CommandDispatcher::TupleKeyEqualityTarget`). It answered for exactly
+  one condition on the stated ground that the probe could not evaluate a
+  second; the row function has evaluated the whole `WHERE` on the row a
+  descent finds since the point arm and the walk came to share it, and
+  CU-S3's list already relied on that.
+- **Nothing else moves.** The point arm's body, the list loop, the park
+  and the resume position are CU-S3's. The lock window is read off the
+  raw conjuncts as before (`DeclaredWriteBorrow`): a key or a list beside
+  a conjunct on another column takes a row unit per row written, and a
+  bound on the tuple key beside a list declares its window, under which
+  the descents write with no row unit - what the walk of the same `WHERE`
+  takes in both cases.
+- **The subquery case is not built** (the operator's word): a `WHERE`
+  holding a subquery collects its rows in a read walk and writes them in
+  a write walk, whatever key it names
+  (`docs/pending/keyed-write-beside-a-subquery.md` holds the options).
+- **The sim** (`sim/workload.cpp`): with the shapes on, 30 in 100 by-key
+  writes carry a second conjunct, `id != 0`, beside the single key or the
+  list, on a stream of its own (`write_conjunct`). It holds of every row
+  and bounds no window, so the oracle's expectation is unchanged. The
+  first sweep refused every run at its first such write - the conjunct
+  was spelled `<>`, which the grammar does not read - and was run again
+  with `!=`.
+
+**Tests.** `tests/key_set_test.cpp`: the two-engine cell compares a key
+and a list beside conjuncts against the walk of the same `WHERE` - a
+conjunct that leaves a listed row out, conjuncts before and after the
+list, a bound on the key, a single key whose row passes its conjunct,
+one whose row fails it and a second key that excludes it, for UPDATE and
+DELETE; **the holds**: a key or a list beside other conjuncts takes the
+leaf its keys are in where CU-S3's cell showed every leaf, a row that
+fails the other conjunct is not written, a single key beside a list is
+one descent, and a `WHERE` with a subquery (`IN (SELECT ...)`,
+`EXISTS`), a bound on the tuple key and a list on another column still
+take every leaf; a single key's descent that declines, beside a conjunct
+and beside a list, is answered by the walk and by the list's loop, the
+row written once; a function conjunct (`DATE(ts) = ...`) beside a key and
+beside a list is asked of the row found; on a heap whose rows went in
+out of id order, a key beside a conjunct and a list on the declared
+first column write the rows the walk writes. `tests/lock_family_test.cpp`:
+under a cap of three, a list of three rows beside a bound on the key is
+written under the declared window where the bare list reaches the cap;
+a list beside a conjunct parks at a held value whose head fails the
+conjunct and whose snapshot version passes it (F4), and resumes there
+with each row written once; a single key beside a conjunct waits on its
+held row having written nothing and is run again, the conjunct asked of
+what the holder left on either decide. `tests/sim_loop_test.cpp`: the
+shapes spell a by-key write with a second conjunct beside a key and
+beside a list, and without them never. A shapes-on sweep of the sim, 8
+seeds by 3 modes by 2 profiles at 1,500 ops and 2 iterations, passed 48
+of 48 (Debug), on the tree before the review's changes, which moved no
+behaviour.
+
+**Review** (`critics-developer`, on the uncommitted tree over
+`94f3c4a3`): no correctness finding, and no edit of its own. It traced
+that `sub_chains.empty()` is "no subquery anywhere" - a top-level
+subquery, a leaf under a boolean conjunct, and `UPDATE ... FROM` and
+`DELETE ... USING`, which lower to one, are each a sub-chain of the step,
+and a `SET` subquery is answered before any leaf is taken; that
+`CompileWhere` runs no equality propagation, so no derived conjunct names
+a key; that no conjunct beside a key has a per-row refusal the walk of
+the other rows would have raised; that whenever `WriteKeyOf` names a key
+the raw fold's window is one key wide or empty, so nothing is declared,
+and that every row a descent writes under a declared window lies inside
+it; that the single-key arm cannot be reached on a resume that has
+written a row; and that the leaf-first hint indexes the vector the
+evaluator indexes however many boolean conjuncts stand. Against the
+deleted gate it found nothing that descended and now walks; a
+single-conjunct `WHERE` whose literal the raw test did not read as an
+integer and the compile coerces to one now descends, and is asked its
+coerced conjunct on the row found. Taken:
+
+- **The heap cell could not tell a wrong descent from the walk**: its
+  rows were inserted in id order, so each declared id equalled its hidden
+  key. The rows now go in out of order and the cell runs a single key
+  beside a conjunct as well as a list.
+- **A cell for a single key's descent that declines**, beside a conjunct
+  (the walk answers) and beside a list (the list's loop answers): the
+  two fall-throughs it found with no cell.
+- **`TupleKeyLiteral` is a file-local helper** beside its one remaining
+  caller, the lock window's fold, and is off the dispatcher's header.
+- The two-engine cell's cases say which are a single key instead of the
+  cell reading it off the SQL text.
+- Wording: the manual read as though a list beside a range walked; a test
+  comment and a header comment described the deleted gate;
+  `docs/rules/rules.md` §3 names both recognisers; a long line in
+  `txn.md`.
+
+Not taken: nothing was rejected. The review advised against one merge it
+considered itself - `WriteKeyOf` with the read compiler's key loop, which
+also picks column probes in written order - and the two stay apart.
+
+**Test suite**: 4560 of 4560 passed on the tree this section is
+committed with (`ctest -LE bs-nightly`, the range the push hook runs,
+Debug), after the review's changes; `build-release` compiles. The suite
+was not run on the tree before the review's changes: the cells nearest
+the change passed there, 187 of 187, and 188 of 188 after.
+
+**Synced with `origin/main`**: fetched on 2026-11-17 and still at
+`d9f89624`, which the work branch holds since `5007ef48`. Nothing to
+merge.
+
+Overhead not measured; measured at the milestone's close.

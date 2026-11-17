@@ -1017,21 +1017,17 @@ TEST_F(CommandDispatcherTest, ACatalogViewsBetweenTakesBothBounds) {
 }
 
 TEST_F(CommandDispatcherTest, AWriteWhoseTupleKeyPredicateIsBetweenTouchesEveryRowInTheRange) {
-    // **The same `op`-default hazard as the test above, in a second
-    // consumer.** `TupleKeyEqualityTarget` answers "is this a bare tuple key point
-    // lookup" from the raw `Condition`, and it read `op` alone - which a
-    // `kBetween` leaves at `kEq` while `val` holds the *low bound*. So
-    // `WHERE id BETWEEN 2 AND 5` reported itself as `WHERE id = 2`, and
-    // the point-lookup fast path then wrote that one row and answered
-    // `UPDATED 1`. On a **btree** relation the descent makes that fast
-    // path fire, which is why the relation here is btree and not heap:
-    // on a heap one the locator declines and the scan hides the defect.
+    // **The same `op`-default hazard as the test above, on a write.** A
+    // raw `kBetween` leaves `op` at `kEq` while `val` holds its *low
+    // bound*, so a reader of the raw `Condition` that tests `op` alone
+    // takes `WHERE id BETWEEN 2 AND 5` for `WHERE id = 2`. A write's point
+    // target is read off the compiled WHERE, where a `BETWEEN` is two
+    // bounds and no equality, and the lock window's fold tests the kind
+    // first; a write that descended to the low bound's row alone would
+    // answer `UPDATED 1` here.
     //
-    // Read-side `BETWEEN` was always right (`exec::CompileWhere` lowers
-    // the kind into two conjuncts), so the SELECT below is the control
-    // that says the predicate itself parses and matches four rows - and
-    // therefore that `UPDATED 1` was a write disagreeing with a read of
-    // its own WHERE clause, not a predicate nobody supported.
+    // The SELECT below is the control that says the predicate itself
+    // parses and matches four rows.
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE b (id int64, v int64) BTREE").response.substr(0, 7),
               "CREATED");

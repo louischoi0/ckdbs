@@ -268,10 +268,8 @@ TEST_F(StepCompileTest, ANegativeLiteralTupleKeyIsAScanRatherThanAProbeIntoAHuge
 }
 
 TEST_F(StepCompileTest, AWhereClauseDoesNotDowngradeALookupToAScan) {
-    // The TupleKeyEqualityTarget trap the workplan calls out. That helper
-    // refuses whenever the WHERE holds more than one condition - correct
-    // for a point statement, wrong for a chain step, which only locates a
-    // candidate and evaluates the rest on the located row.
+    // A chain step only locates a candidate and evaluates the rest on the
+    // located row, so a conjunct beside the key leaves it a lookup.
     const StepChain chain = MustCompile("SELECT * FROM acct WHERE id = 7 AND tier = 'gold'");
     ASSERT_EQ(chain.steps.size(), 1u);
     EXPECT_EQ(chain.steps[0].kind, AccessKind::kLookup)

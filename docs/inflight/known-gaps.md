@@ -1898,7 +1898,8 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 ## Key sets (CU)
 
-Verified on `cu-key-set-access` at `84bf6828` (CU-S3). Owned by `docs/spec/parser-v2.md` I10; the order is
+Verified on `cu-key-set-access` at the commit CU-S3b arrives in (the order's §7 names
+it). Owned by `docs/spec/parser-v2.md` I10; the order is
 `instructions/v3.2.0/workorder-cu-key-set-access.md`.
 
 - **A Cabin set is served only when every value is already observed, and
@@ -1941,16 +1942,21 @@ Verified on `cu-key-set-access` at `84bf6828` (CU-S3). Owned by `docs/spec/parse
   the rule that such an item declines the list for that index
   (`IndexChoiceOver`) has no cell. Coercion refuses a literal its column
   cannot hold before the encoder is asked.
-- **A write is by key set only where the list is its whole `WHERE`**
-  (CU-S3). `UPDATE` and `DELETE ... WHERE id IN (...)` descend once per
-  value; `... WHERE id IN (1, 2) AND v = 3` visits every slot of every
-  leaf under a write latch, because the gate is the point write's
-  (`TupleKeyEqualityTarget`): `WHERE id = 1 AND v = 3` walks the relation
-  too, before CU and after. The row function evaluates the whole `WHERE`
-  on the row a descent finds, so a conjunct with no subquery beside the
-  key could be admitted for both; that is the point write's rule and
-  outside CU. A list on a relation the write only reads (`UPDATE ...
-  FROM`, `DELETE ... USING`, a subquery, `INSERT ... SELECT`) is keyed.
+- **A write whose `WHERE` holds a subquery walks its relation twice,
+  whatever key the clause names** (CU-S3b). `UPDATE` and `DELETE ...
+  WHERE id = 1 AND v = 3` and `... WHERE id IN (1, 2) AND v = 3` descend;
+  `... WHERE id = 1 AND v IN (SELECT ...)` reads every row in a
+  collection pass and then visits every slot of every leaf under a write
+  latch (`WriteWalk::CollectTargets`), because a write evaluates no
+  subquery under the leaf it holds exclusive. Keying either pass is
+  deferred on the operator's word of 2026-11-17
+  (`docs/pending/keyed-write-beside-a-subquery.md`).
+- **A write over a bound on the tuple key walks the relation.** `UPDATE
+  ... WHERE id BETWEEN 10 AND 20` declares its lock window off the bound
+  and finds its rows by visiting every leaf: a write's walk has a resume
+  position and no end. Before CU and after; in no stage.
+- **A list on a relation the write only reads** (`UPDATE ... FROM`,
+  `DELETE ... USING`, a subquery, `INSERT ... SELECT`) is keyed.
   `PURGE` by list is refused `NotImplemented` and is in no stage.
 - **A write finds its rows through no index and no Cabin**, for a list as
   for a single value: `UPDATE ... WHERE owner IN (1, 9)` walks the
@@ -1959,13 +1965,17 @@ Verified on `cu-key-set-access` at `84bf6828` (CU-S3). Owned by `docs/spec/parse
 - **A write by list holds its core for all its descents**, as every write
   does for its whole walk: no write yields (`sched.md` §3). It takes a
   row unit per row written and no window, so a list naming more rows than
-  `max_locks_per_txn` admits is refused at the cap, as the walk of it was.
+  `max_locks_per_txn` admits is refused at the cap, as the walk of it was;
+  a bound on the tuple key beside the list declares a window, and the
+  list is then written under it.
 - **What CU-S3's cells do not cover**: a write by list while another
   core's writer divides the leaf a descent lands in (the descent and the
   row function are the point write's, whose cells cover it); a descent
   that declines on a `DELETE` (the cell fails a fetch under an `UPDATE`,
   and the loop is one function for both); and a list write resumed after
-  its walk took over from a declined descent.
+  its walk took over from a declined descent. **CU-S3b adds none of its
+  own for** UPDATE's unique-key round (BX-R4) under a list beside a
+  conjunct, which is the bare list's loop and has that cell.
 - **The shape is exact.** `id IN (1, 2) OR id = 3`,
   `(id = 1 OR id = 2) OR id = 3` and a list under `NOT` or mixed with
   another column are not keyed and walk. A client that wants the set
