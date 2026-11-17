@@ -18,12 +18,12 @@ on the fourth word of that day, which **opened CU-S3** (§4 of that file):
 an `UPDATE` or `DELETE` whose `WHERE` is a list on the tuple key writes
 by one descent per value (§7, `84bf6828`). **CU-S3's report raised
 CU-Q14; the operator marked it (a) on the word of 2026-11-17, which
-opened CU-S3b** (`raft-marks-2026-11-17.md` §1): a write descends for a
+opened CU-S3b** (`raft-marks-2026-11-17.md` §3): a write descends for a
 tuple key or a tuple key list beside any other conjunct (§7, `04d9afe9`), and a `WHERE`
 holding a subquery is left pending
 (`docs/pending/keyed-write-beside-a-subquery.md`). Every mark is the
 operator's own. **The operator's second word of 2026-11-17 opened CU-S4**
-(`raft-marks-2026-11-17.md` §2): the close is measured (§7,
+(`raft-marks-2026-11-17.md` §4): the close is measured (§7,
 `bench/v3.4.11/results-cu-close-v3.4.11-40-g70a307ea.md`).
 Nothing is merged or pushed.
 Written
@@ -247,7 +247,7 @@ and were each marked (a)** on the word that opened CU-S3 (§4 of that
 file); CU-Q12 and CU-Q13 depart from §2's "a set wins over every arm
 ranked below it", and the mark is what amends it. **CU-Q14 surfaced in
 CU-S3's report and is the operator's mark of 2026-11-17**
-(`raft-marks-2026-11-17.md` §1).
+(`raft-marks-2026-11-17.md` §3).
 
 | | item | options | CLA proposes | mark |
 |---|---|---|---|---|
@@ -965,7 +965,7 @@ Overhead not measured; measured at the milestone's close.
 ### CU-S4 - the close, 2026-11-17
 
 On worktree `cu-key-set-access`, opened on the operator's word
-(`raft-marks-2026-11-17.md` §2) from `3cc59968`. No engine code is
+(`raft-marks-2026-11-17.md` §4) from `3cc59968`. No engine code is
 changed: the stage merges `origin/main`, adds three drivers
 (`tools/cu_close_overhead.py`, `tools/cu_close_rows.py`,
 `tools/cu_close_lists.py`), a results file and these documents.
@@ -973,6 +973,12 @@ changed: the stage merges `origin/main`, adds three drivers
 **Synced with `origin/main` first.** `main` had moved to `7aa75760` (a
 granted row probe's ceiling wait); it is merged at `70a307ea` with no
 conflict, and the close is measured and tested on the merged tree.
+**And again after the stage's commit** (`bc3cb6ba`): `main` had moved to
+`f345652f`, which adds work order CW and its words, documents only. Both
+sides had created `raft-marks-2026-11-17.md`: `main`'s §1 and §2 keep
+their numbers and this order's two sections follow as §3 and §4, with
+every citation of them moved. No build input came with it, so the
+measurement and the suite stand.
 
 **The measurement** `[measured]`, Release:
 `bench/v3.4.11/results-cu-close-v3.4.11-40-g70a307ea.md`,

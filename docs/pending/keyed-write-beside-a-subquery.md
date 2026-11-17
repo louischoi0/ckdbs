@@ -1,7 +1,7 @@
 # A write whose `WHERE` holds a subquery walks its relation twice, whatever key the clause names
 
 Status: **PENDING.** Raised 2026-11-17 on the operator's word
-(`instructions/v3.2.0/raft-marks-2026-11-17.md` §1), which took the keyed
+(`instructions/v3.2.0/raft-marks-2026-11-17.md` §3), which took the keyed
 write beside other conjuncts into work order CU as CU-S3b and left this
 case out of it. Every `[source-read]` line number is on worktree
 `cu-key-set-access` at `04d9afe9` (CU-S3b). Related:
