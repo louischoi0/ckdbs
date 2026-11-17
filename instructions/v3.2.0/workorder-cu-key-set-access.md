@@ -18,7 +18,7 @@ an `UPDATE` or `DELETE` whose `WHERE` is a list on the tuple key writes
 by one descent per value (§7, `84bf6828`). **CU-S3's report raised
 CU-Q14; the operator marked it (a) on the word of 2026-11-17, which
 opened CU-S3b** (`raft-marks-2026-11-17.md` §1): a write descends for a
-tuple key or a tuple key list beside any other conjunct, and a `WHERE`
+tuple key or a tuple key list beside any other conjunct (§7, `04d9afe9`), and a `WHERE`
 holding a subquery is left pending
 (`docs/pending/keyed-write-beside-a-subquery.md`). Every mark is the
 operator's own. No word names CU-S4, so the close, with the overhead
@@ -841,7 +841,7 @@ Overhead not measured; measured at the milestone's close.
 ### CU-S3b - a write's key beside other conjuncts, 2026-11-17
 
 On worktree `cu-key-set-access`, from `94f3c4a3`, committed at
-the commit this section arrives in. **An `UPDATE` or a `DELETE` descends for a tuple key
+`04d9afe9`. **An `UPDATE` or a `DELETE` descends for a tuple key
 equality or a tuple key list beside any other conjunct but a subquery**
 (CU-Q14 (a), the operator's mark of 2026-11-17).
 

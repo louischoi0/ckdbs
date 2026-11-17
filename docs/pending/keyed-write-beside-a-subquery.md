@@ -4,8 +4,7 @@ Status: **PENDING.** Raised 2026-11-17 on the operator's word
 (`instructions/v3.2.0/raft-marks-2026-11-17.md` §1), which took the keyed
 write beside other conjuncts into work order CU as CU-S3b and left this
 case out of it. Every `[source-read]` line number is on worktree
-`cu-key-set-access` at the commit CU-S3b arrives in (the order's §7 names
-it). Related:
+`cu-key-set-access` at `04d9afe9` (CU-S3b). Related:
 `instructions/v3.2.0/workorder-cu-key-set-access.md` §4 (CU-Q14), §7
 (CU-S3b); `docs/spec/parser-v2.md` I10, R2; `docs/rules/rules.md` §3 (the
 page latch row); `docs/inflight/known-gaps.md`, "Key sets (CU)".
@@ -37,12 +36,12 @@ given in Korean; recorded in English).
   (`docs/spec/parser-v2.md` R2).
 - `[source-read]` **What it does instead**
   (`CommandDispatcher::WriteWalk::CollectTargets`,
-  `src/server/command_dispatcher.cpp:10168`). A read walk visits every
+  `src/server/command_dispatcher.cpp:10174`). A read walk visits every
   row of the relation, asks the whole `WHERE` of it - sub-chains included,
   through `exec::EvaluateConjuncts` (`src/exec/step_vm.cpp:3029`) - and
   collects the tuple keys that matched. A write walk then visits every
   slot of every leaf under a write latch and writes the rows whose key is
-  collected, their `WHERE` not asked again (`:10052`). The set is carried
+  collected, their `WHERE` not asked again (`:10058`). The set is carried
   across a park (`WalkCursor::targets`, `include/kds/server/session.hpp:107`),
   so a resumed statement does not collect again. A pass that collects
   nothing ends the statement before the write walk.

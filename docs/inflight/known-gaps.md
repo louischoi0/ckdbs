@@ -1898,8 +1898,7 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 ## Key sets (CU)
 
-Verified on `cu-key-set-access` at the commit CU-S3b arrives in (the order's §7 names
-it). Owned by `docs/spec/parser-v2.md` I10; the order is
+Verified on `cu-key-set-access` at `04d9afe9` (CU-S3b). Owned by `docs/spec/parser-v2.md` I10; the order is
 `instructions/v3.2.0/workorder-cu-key-set-access.md`.
 
 - **A Cabin set is served only when every value is already observed, and
