@@ -174,6 +174,17 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   parked. Bounds not widened; keep the next failure with
   `--output-on-failure`. Re-verified at `7dd9b789` by reading. Owner: none.
 
+- **A `strict` park cell failed once under `-j8` and did not reproduce.**
+  Seen once, on `worktree-fk-walk-ceiling-wait` at `448c35c1`, in
+  `StrictParkRigTest.AnExplicitStrictCommitParksAndPublishesAtItsSync`
+  (`tests/strict_park_rig_test.cpp:200`): after the gate's release the
+  `COMMIT` did not answer inside `Within(2000ms)`. Thirty repeats of the
+  file alone passed at the same commit, and the same `-j8` run passed at
+  `941d05e8`. The suspected cause is unconfirmed: nothing kicks core 1
+  after the release but the WAL writer's own kick, which is best-effort,
+  and a skipped one costs the rig's 5 s idle block. The commit it was seen
+  at changes no commit or park path. Bounds not widened. Owner: none.
+
 - **A rollback's schema-word move has no cell that kills its removal since
   AX-S2.** Removing `MoveSchemaWordIfCatalogWriter` from
   `TransactionManager::Abort` leaves
@@ -627,6 +638,15 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     walk's probe), so it parks on the wake of the unit the holder writes the
     row under (`index.md` §10.2). A holder that writes the row under no
     unit, which only a dispatcher with no lock table does, still polls.
+    **A granted probe - the holder has released - waits for the snapshot
+    ceiling** where the holder committed above it, kicked at the marker's
+    lift (`foreign-keys.md` §3a; on `worktree-fk-walk-ceiling-wait` from
+    `d9f89624`, `RowWaitCeilingRigTest`'s four cells that end at the lift,
+    red before it: the three foreign-key cells at the 1 s net, the unique
+    cell refused at once; a fifth pins the refusal a ceiling wait gets at
+    the net). A holder still in flight when its row's probe is granted
+    polls `IsInFlight`; no cell reaches that arm and no writer is known to
+    take it.
   - A holder that never decides costs a cross-core writer the 1 s fault net
     and its defect warning, as a same-core writer pays.
 
