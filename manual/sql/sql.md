@@ -150,7 +150,8 @@ CREATE TABLE [<namespace>.]<name>
 - **Column names are unique ignoring case.** `(id int64, a int64, A int64)`
   is refused at the later name's byte: `ERR column 'A' repeats column 'a'
   (names are unique ignoring case) (byte <n>)`, and so is an exact repeat.
-  A name is at most 63 bytes; a longer one is refused at its byte.
+  A name is at most 63 bytes; a longer one is refused at its byte. The
+  same holds for a table's name and an index's.
   **Case is ignored everywhere a column is named**: `SELECT A` reads `a`,
   and so do a `WHERE`, an `ORDER BY` and a `SET` value; `UPDATE ... SET A`,
   an `INSERT` column list, `DROP COLUMN A`, `RENAME COLUMN A TO b`,
@@ -1980,6 +1981,7 @@ in §7 below now carries and which both used to reach a client as a bare
 | `ADD COLUMN` or `RENAME COLUMN` to a name equal, ignoring case, to a live column's | `AlreadyExists` — `ERR the relation already has a column named '<existing>' (names are unique ignoring case)`, with the new name's byte |
 | Any statement - a read, a `SET` target, an `INSERT` column list, `DROP COLUMN`, `RENAME COLUMN`'s old name, `CREATE INDEX`, `CABIN`, `ASSERTION` or `TRANSITION` - naming a column that matches two or more columns ignoring case (only a relation created before names were unique ignoring case can hold them) | `InvalidArgument` — `ERR column name '<name>' is ambiguous: it matches '<a>' (position <i>) and '<b>' (position <j>) ignoring case (byte <n>)`; no statement can name either column of such a pair |
 | A column name longer than 63 bytes in `CREATE TABLE`, `ADD COLUMN` or `RENAME COLUMN` | `InvalidArgument` at the name's byte |
+| A table name longer than 63 bytes in `CREATE TABLE`, or an index name longer than 63 bytes in `CREATE INDEX` | `InvalidArgument` — `ERR table name '<name>' is longer than 63 bytes (byte <n>)` (`index name` for an index); nothing is created |
 | A column named twice in an `INSERT` column list | `InvalidArgument` — `ERR column '<name>' is listed twice in the column list at byte <n>` (the second occurrence's byte) |
 | An `INSERT` column list that leaves out a `NOT NULL` column | `InvalidArgument` — `ERR column '<name>' is NOT NULL and the column list leaves it out (byte <n>); there is no DEFAULT` (the list's `(`; nothing is written) |
 | A row whose length is not the `INSERT` column list's | `InvalidArgument` — `ERR expected <n> value(s), one per listed column; got <k> at byte <b>`, with ` (row <r>)` on a multi-row statement |

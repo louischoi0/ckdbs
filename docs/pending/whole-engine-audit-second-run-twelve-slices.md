@@ -6,8 +6,10 @@ G16-G20 survived a verification resumed on 2026-11-14 and are fixed since
 (section 9); G21 and G23-G26 survived its next pass on 2026-11-15 and are
 fixed since (section 10), whose review raised two questions for the
 operator (G26-R, G21-R); **the last 37 were verified on 2026-11-17 at
-`102d4450` - 31 survived, 1 is moot, 5 are refuted - and none is taken up
-(section 11)**; 15 slices are still unread. The rest decides nothing, opens
+`102d4450` - 31 survived, 1 is moot, 5 are refuted (section 11) - and
+thirteen of the fifteen surviving logic defects are fixed since (section
+12); G31 and G39 wait for a ruling, and the dead-code and duplication
+survivors are not taken up**; 15 slices are still unread. The rest decides nothing, opens
 no stage, licenses no code.
 Raised: 2026-11-13, in conversation with the operator; recorded 2026-11-14.
 Read at: `0b98bc4f` (`v3.4.8-11-g0b98bc4f`), on worktree `audit-core12-slices`.
@@ -27,7 +29,7 @@ under `docs/inflight/bugs/`).
 | G1 to G15 | **survived** every verifier assigned to them: five logic defects (G1-G5), five dead code (G6-G10), five duplication (G11-G15). **All fifteen taken up on 2026-11-14** (section 8) |
 | G16 to G20 | **survived** both verifiers of a resumed pass on 2026-11-14, read at `6a3ce231`, and **fixed** the same day (section 9) |
 | G21, G23 to G26 | **survived** both verifiers of the next resumed pass on 2026-11-15, read at `030b5bd9`, and **fixed** the same day (section 10) |
-| G27 to G64 | **verified** on 2026-11-17, read at `102d4450` (section 11), and **not taken up**: 31 **survived**, some in part or narrowed (G27-G31, G33-G49, G51, G52, G54-G56, G58, G62-G64); G32 is **moot**, closed by G1's fix; G50, G53, G57, G60 and G61 are **refuted**. G22 is G4's defect and G59 is G14's change, both resolved since (section 8) |
+| G27 to G64 | **verified** on 2026-11-17, read at `102d4450` (section 11). **Fixed the same day** (section 12): G27-G30, G33-G38, G40-G42. **Not taken up**: G31 and G39 (a ruling each), and every dead-code and duplication survivor. 31 **survived**, some in part or narrowed (G27-G31, G33-G49, G51, G52, G54-G56, G58, G62-G64); G32 is **moot**, closed by G1's fix; G50, G53, G57, G60 and G61 are **refuted**. G22 is G4's defect and G59 is G14's change, both resolved since (section 8) |
 | G65, G66 | **refuted**: G65 is already in `known-gaps.md`, G66 is not worth the change |
 
 **What bounds that.** Nothing was built, run or changed: every finder and
@@ -1120,9 +1122,11 @@ up, not a proof that the code is right.
 
 1. ~~The verifiers that did not return~~: done. G16-G21 and G23-G26 in
    sections 9 and 10, G27-G58 and G60-G64 in section 11; G22 and G59 moot.
-   Every finding of this run now has a verdict. **What is left of this item
-   is the operator's**: section 11's five questions, and whether its 31
-   survivors are taken up - until then none is to be fixed as a defect.
+   Every finding of this run now has a verdict. Thirteen logic defects are
+   fixed (section 12). **What is left of this item is the operator's**:
+   section 11's five questions - G31 and G39 among them, which are the two
+   logic defects not fixed - and whether the 11 dead-code and 5 duplication
+   survivors are taken up; until then none of those is to be changed.
 2. ~~G1-G5~~ and ~~G6-G15~~: done, section 8.
 3. **The other 15 slices**, or the decision that the audit stops here.
 
@@ -1434,3 +1438,77 @@ stands, and a survivor is a candidate, not a work order.
   G41, G42 and G35/G40 ahead of the rest, since each is a refusal or a
   propagated status with a low-risk fix and no ruling; then the dead code;
   the duplication last, G56 only after its measurement.
+
+## 12. What became of the logic defects: G27-G30, G33-G38, G40-G42
+
+`[source-read]` and `[measured]` as marked. On 2026-11-17 the operator had
+section 11's fifteen logic defects taken up, in the order it proposed (W10,
+given in Korean; recorded in English:
+`instructions/v3.2.0/raft-marks-2026-11-17.md` §8). **Thirteen are fixed;
+G31 and G39 wait for the rulings section 11 asks**, and nothing was built
+for either. The work is on worktree `cw-optimistic-page-read` (its
+directory; a worktree-isolated session cannot make a second), branch
+`worktree-audit-g27-g42-fixes`, from `22669b95` - three steps (`9c52cb3c`,
+`72292b30`, `2bb9ab6e`), each reviewed by `critics-developer`, then the
+review rounds (`6d4ee233`, `6dec07af`, `ef0e3664`).
+
+| Finding | Became | Cell |
+|---|---|---|
+| G27, G28 | `catalog::CheckNameFits` (the former `CheckRenameName`) asked by `CreateTable` and `CheckIndexDef`; the dispatcher refuses a table's, a column's and an index's name through one `NameFitsAt`, at the name's byte. `DROP INDEX` / `REINDEX` of a spelling too long names no stored index and says so | `ColumnNameCaseTest.ARelationOrIndexNameLongerThanTheCatalogHoldsIsRefusedAtItsByte` |
+| G29 | `RowLayout::Build` refuses a declared column that would pass a page's capacity before it adds the width, so the sum cannot wrap; `InitTableAccess`'s cabin loop indexes by `size_t` | `RowLayoutTest.AWidthSumThatWrapsThirtyTwoBitsIsRefusedNotAccepted` (one damaged `len`, and the 65,537 columns a statement can write) |
+| G30 | `SyncDirectory` opens `.` for an empty parent | `BaseBackupTest.ARestoreToADataFileWithNoDirectoryComponentLaysItOut` |
+| G33 | redo counts a heal by the image having been laid over a torn page (`healing`), not by an earlier record having met the tear | `RedoHealTest.AnImageThatIsTheTornPagesFirstRecordCountsAsAHeal` (and a second image over the healed page is not a second heal) |
+| G34 | `IsPinnedClassFrame` asks `IsHeaderless` on a type match | `DevicePageStoreHeaderlessTest.AHeaderlessPagesFirstByteIsNotReadAsAPinnedPageType` |
+| G35 | `Catalog::LookupIndexByName` keeps a miss and a failed read apart; `FindNamedIndex` and the dispatcher's first lookup return the read's failure. `DROP CABIN`, which section 11 named beside it, the same | `CatalogReadFailureTest.ADropIndex...`, `AReindex...`, `ADropCabin...` |
+| G36 | `AppendIndexEntry` refuses `Corruption` when the covered columns do not fill the covered half, ahead of the untouched return | `IndexMaintainTest.ACatalogRowCoveringLessThanItsEntryWidthIsCorruptionNotStackBytes` (a `sys.indexes` row's `ncovered` struck in place) |
+| G37 | `BoundCabinChainWriter::AdoptChain` fetches read-only | `BoundCabinChainAdoptTest.AdoptingAChainLeavesItsPagesClean` (a `DevicePageStore`'s dirty table) |
+| G38 | `BoundCabin::Unapply` and `UnapplyDeparture` forget every link to the entry - the intent lens's placement, taken at review over a recovery-only method | `AssertionRecoverTest.ARolledBackEntryTheWalkAndTheFoldBothAttachedIsInNoGroup` |
+| G40 | `FindCabinOnColumn` and `FindForeignKeyOnColumn` return an optional row, so none is not a status; `CreateCabin` and `CreateForeignKey` return the scan's failure | `CatalogReadFailureTest.ACreateCabinWhoseDuplicateScanFailedWritesNoSecondRow` |
+| G41 | `LayOutRestore` refuses a named archive that does not exist (`NotFound`), cannot be read (`IoError`) or is not a directory (`InvalidArgument`), before anything is laid out; a segment's status is asked only below the target | additions to `PointInTimeTest.ARestoreToAnLsnPastTheStopEndsJustBeforeIt` (a missing archive, and an existing empty one) |
+| G42 | `ArchiveOne` returns `IoError` when `waitpid` does not return the command's pid; `WalArchiver::Start` puts SIGCHLD's default back where a command is configured and the disposition is ignored - both halves, as the code-path lens asked | `WalArchiverTest.ACommandWhoseExitCannotBeReadIsNotCountedAsArchived` |
+| G31, G39 | **not taken**: each needs the operator's ruling (section 11) | - |
+
+`[measured]` **Every cell fails with its fix taken out** - each fix removed
+by hand from the fixed tree, the cells run, the fix put back - and passes
+with it. Two cells did not, the first time: `ADropCabin...` and
+`ACreateCabin...` passed without their fixes, the injected read failure
+landing on an earlier read of the same page (the statement's memo load).
+They were rewritten to refuse every fetch of the page in turn and name
+none, and `ACreateCabin...` to make the relation's memo current first;
+both then went red.
+
+**The reviews.** No review found a wrong answer. Taken from them: the
+per-column lookups' optional shape and the end of `CreateForeignKey`'s
+filter by code, which did not do what its comment said; one wording for the
+name bound; the archive check's three answers; a SIGCHLD handler the
+process installed left alone; `DetachEntry` folded into `Unapply`; the
+unread-exit cell ordered by a file and not a sleep; the two-image heal
+cell; the latch-protocol comments. **Rejected, with reasons**: converting
+`FindIndexByName` in place to an optional (about 25 test call sites in 9
+files rely on its `NotFound` shape; it stays as a wrapper no statement
+asks, recorded in `known-gaps.md`); dropping the 65,537-column case of
+G29's cell (it is the finding's own shape and the only one a statement can
+write); caching a headerless bit on the frame for G34 (a second copy of a
+fact the map holds, for a cost not measured).
+
+**What changed that a client can see**: `CREATE TABLE` and `CREATE INDEX`
+refuse a name of 64 bytes or more (`catalog.md`, `index.md` §11,
+`manual/sql/sql.md`); a restore naming an archive that is not there is
+refused, a target equal to the stop included (`backup.md` B14); the
+manual's two new refusal rows. What the fixes leave is in `known-gaps.md`,
+"The audit's logic defects (G27-G42)".
+
+`[measured]` The full suite ran 4578 of 4578 at `ef0e3664`
+(`ctest -LE bs-nightly`, Debug, `-j8`), the last build input; two cells are
+disabled and two skipped, as before. The sim corpus (`scripts/sim.sh 4`,
+the Debug build, the same commit) ran 280 runs with 0 failures.
+`origin/main` was `22669b95`, the commit the branch opened from, so there
+was nothing to merge.
+
+**What bounds that.** The overhead is not measured: the milestone is the
+fifteen and it is not closed while G31 and G39 wait, so its interleaved A/B
+is owed at that close. G29's hang, G34's pinned frame, G37's mount write-back
+and G42's inherited disposition are each pinned by a cell of the mechanism,
+not reproduced on a running server. G36's cell damages a catalog row by
+hand, the only way the defect is reached.
+

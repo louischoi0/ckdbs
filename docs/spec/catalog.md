@@ -323,6 +323,27 @@ is at most 63 bytes (`kCatalogNameMax - 1`): CREATE TABLE and ADD COLUMN
 refuse a longer one at its byte, as `RenameColumn` does, rather than store
 it truncated.
 
+**The same bound holds for every user-written name stored in a fixed `Name`
+field** - a relation's (CREATE TABLE, RENAME TO), a namespace's, an index's
+(CREATE INDEX) - and one function states it, `catalog::CheckNameFits`:
+`InvalidArgument`, at the name's byte where a statement wrote it. Until
+2026-11-17 CREATE TABLE and CREATE INDEX stored a longer name cut to 63
+bytes; every name check compares the written spelling against the stored
+bytes, so the same statement run twice was admitted twice and left two rows
+under one stored name (the whole-engine audit's G27 and G28). A volume that
+already holds such a name keeps it, reachable by its 63-byte prefix. An
+assertion's and a Transition's name are declaration text, not a `Name`
+field, and are not cut.
+
+**A catalog scan that failed is never the answer "no such row".** A lookup
+whose miss is an ordinary answer returns an empty optional for it
+(`LookupIndexByName`, `FindCabinOnColumn`, `FindForeignKeyOnColumn`) and a
+status only for a relation that could not be read - the store itself can
+answer `NotFound` for a page of a chain, so a miss told by its code could not
+be told from that. `DROP INDEX`, `REINDEX INDEX` and `DROP CABIN` answer the
+read's failure as itself; `CreateCabin` fails on it instead of taking the
+column for bare and writing a second row (the audit's G35 and G40).
+
 **Assertion names have no pending drop to ask about**: `DROP ASSERTION`
 retires its row outside any transaction (`ddl-transactional.md` §5).
 
