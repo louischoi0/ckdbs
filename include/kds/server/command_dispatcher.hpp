@@ -199,6 +199,15 @@ struct DispatchOutcome {
     // names. Null where the refusal handed back none - an assertion's
     // group, a dispatcher with no lock table, a holder only the header
     // names - and there the wait polls `IsInFlight`.
+    //
+    // **`ceiling_lsn` set: the holder has released, and the wait is for the
+    // snapshot ceiling** (`WaitForRowWriter`). The holder committed at that
+    // LSN and gave its units back, but another commit's marker holds the
+    // ceiling below it, so a re-run now would mint a view that still reads
+    // the row as busy. No `slot` stands beside it; the statement counts
+    // itself into its core's ceiling waiters and the marker's lift kicks it
+    // (`TransactionManager::CeilingWait`). No wait-for edge is drawn: a
+    // marker's holder is past its decide and waits for no lock.
     struct WriteBlock {
         std::uint64_t trx_id = 0;  // the holder being waited for
         std::uint64_t tuple_key = 0;      // the row it holds
@@ -207,6 +216,7 @@ struct DispatchOutcome {
         // The mode the refused ask wanted, for `sys.lock_waits`; meaningful
         // only beside a `slot`.
         txn::LockMode mode = txn::LockMode::kExclusive;
+        std::uint64_t ceiling_lsn = 0;  // `wal::kNoLsn`: no ceiling wait
     };
     std::optional<WriteBlock> write_block = std::nullopt;
 
@@ -238,6 +248,10 @@ struct DispatchOutcome {
         // The mode the refused ask wanted (`sys.lock_waits`). Every site
         // names it; the default is only aggregate initialization's.
         txn::LockMode mode = txn::LockMode::kExclusive;
+        // **A row wake's only** (`WaitForRowWriter`, carried to
+        // `WriteBlock::ceiling_lsn`): the holder's commit, above the
+        // snapshot ceiling. Never set on a relation wait.
+        std::uint64_t ceiling_lsn = 0;
     };
     std::optional<LockWait> lock_wait = std::nullopt;
 
@@ -1578,7 +1592,9 @@ private:
     // knows only by the row's header - a child row under the reverse check
     // (AY-Q8; `holder` holds no `S` on the parent), or a row a unique
     // check's run names (`index.md` §10.2). Registers a wake on that row
-    // where a table and a reactor exist, and records the block.
+    // where a table and a reactor exist, and records the block. Where the
+    // writer has already released, the wait is for whatever still hides its
+    // decide from a fresh check view - nothing, or the snapshot ceiling.
     void WaitForRowWriter(const WriteScope& scope, catalog::Oid rel, std::uint64_t tuple_key,
                           std::uint64_t holder);
 

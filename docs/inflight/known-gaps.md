@@ -627,6 +627,13 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     walk's probe), so it parks on the wake of the unit the holder writes the
     row under (`index.md` §10.2). A holder that writes the row under no
     unit, which only a dispatcher with no lock table does, still polls.
+    **A granted probe - the holder has released - waits for the snapshot
+    ceiling** where the holder committed above it, kicked at the marker's
+    lift (`foreign-keys.md` §3a; on `worktree-fk-walk-ceiling-wait` from
+    `d9f89624`, the four `RowWaitCeilingRigTest` cells, red before it at
+    the 1 s net). A holder still in flight when its row's probe is granted
+    polls `IsInFlight`; no cell reaches that arm and no writer is known to
+    take it.
   - A holder that never decides costs a cross-core writer the 1 s fault net
     and its defect warning, as a same-core writer pays.
 

@@ -691,12 +691,12 @@ holder's `U` or `X` on the row (or a range fence over it) refuses. The
 probe registers on the refusing unit, the holder's release flips that
 registration and kicks the waiter's core, and nothing of the probe
 outlives the ask. This is the reverse foreign-key walk's wait
-(`foreign-keys.md` §3a). A writer can be decided while its commit is still
-above the check view's ceiling, because another commit's marker holds the
-ceiling down for up to one `strict` sync. Such a writer is still busy but
-no longer in flight, and it is refused `TxnConflict` retryably, not waited
-for: a probe of it would be granted and the statement would re-run without
-yielding. The check
+(`foreign-keys.md` §3a), and so is its one other arm: a writer that has
+committed and released while its commit is still above the check view's
+ceiling - another commit's marker holds the ceiling down for up to one
+`strict` sync - is still busy, its probe is granted, and the statement
+waits for the ceiling to cover that commit, kicked at the marker's lift.
+The check
 runs **per row, immediately** (BX-Q4 (a)), so `UPDATE t SET k = k + 1`
 over consecutive keys is refused where the standard admits it. A nullable
 key column stays refused (BX-Q5 (a)).

@@ -377,7 +377,18 @@ written yet, and runs the check again at the writer's decide. **The
 `DELETE` gets its slot from a probe in `U` on the child row** (CP-S2b):
 refused by the row's own writer in `U` or `X`, or by a bulk child write's
 range over the row, and parked on the refusing entry's wake; admitted by a
-grandchild writer's `S` on the row and given back at once. The probe takes
+grandchild writer's `S` on the row and given back at once. **A granted
+probe means the writer has released**, and what the `DELETE` does then
+depends on whether a fresh check view would see its decide. Where it would,
+the check runs again at once. Where it would not - the writer committed
+above the snapshot ceiling, which another commit's marker holds down for
+up to one `strict` sync - the `DELETE` waits for the ceiling to cover that
+commit, counted into its core's ceiling waiters, and is kicked at the
+marker's lift. Re-running at once there would meet the same busy row with
+no yield in between, until the 1 s net, and on the marker's own core it
+would hold off the publish that lifts it. This is the operator's ruling of
+2026-11-17 ("proceed with $!B2"), over refusing that writer retryably at
+the walk or at the grant. The probe takes
 no intention above it, since nothing of it outlives the ask. In `S` the probe would be admitted by a child `UPDATE`'s `U` and the
 `DELETE` would re-run on a pre-flipped slot until the writer decided. The
 probe is asked over a share this transaction holds on the child row (a
