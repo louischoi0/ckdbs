@@ -8,8 +8,10 @@ fixed since (section 10), whose review raised two questions for the
 operator (G26-R, G21-R); **the last 37 were verified on 2026-11-17 at
 `102d4450` - 31 survived, 1 is moot, 5 are refuted (section 11) - and
 thirteen of the fifteen surviving logic defects are fixed since (section
-12); G31 and G39 wait for a ruling, and the dead-code and duplication
-survivors are not taken up**; 15 slices are still unread. The rest decides nothing, opens
+12); G31 and G39 wait for a ruling, each deferred by the operator into an
+entry of its own (`archiver-stalls-on-a-hole-among-leftover-segments.md`,
+`well-known-name-refusal-in-create-namespace.md`), and the dead-code and
+duplication survivors are not taken up**; 15 slices are still unread. The rest decides nothing, opens
 no stage, licenses no code.
 Raised: 2026-11-13, in conversation with the operator; recorded 2026-11-14.
 Read at: `0b98bc4f` (`v3.4.8-11-g0b98bc4f`), on worktree `audit-core12-slices`.
@@ -1466,7 +1468,7 @@ review rounds (`6d4ee233`, `6dec07af`, `ef0e3664`).
 | G40 | `FindCabinOnColumn` and `FindForeignKeyOnColumn` return an optional row, so none is not a status; `CreateCabin` and `CreateForeignKey` return the scan's failure | `CatalogReadFailureTest.ACreateCabinWhoseDuplicateScanFailedWritesNoSecondRow` |
 | G41 | `LayOutRestore` refuses a named archive that does not exist (`NotFound`), cannot be read (`IoError`) or is not a directory (`InvalidArgument`), before anything is laid out; a segment's status is asked only below the target | additions to `PointInTimeTest.ARestoreToAnLsnPastTheStopEndsJustBeforeIt` (a missing archive, and an existing empty one) |
 | G42 | `ArchiveOne` returns `IoError` when `waitpid` does not return the command's pid; `WalArchiver::Start` puts SIGCHLD's default back where a command is configured and the disposition is ignored - both halves, as the code-path lens asked | `WalArchiverTest.ACommandWhoseExitCannotBeReadIsNotCountedAsArchived` |
-| G31, G39 | **not taken**: each needs the operator's ruling (section 11) | - |
+| G31, G39 | **not taken**: each needs the operator's ruling (section 11), and the operator deferred both on 2026-11-17 into pending entries of their own - `docs/pending/archiver-stalls-on-a-hole-among-leftover-segments.md` (G31) and `docs/pending/well-known-name-refusal-in-create-namespace.md` (G39, with G53) | - |
 
 `[measured]` **Every cell fails with its fix taken out** - each fix removed
 by hand from the fixed tree, the cells run, the fix put back - and passes
