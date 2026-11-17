@@ -279,6 +279,37 @@ TEST_F(ColumnNameCaseTest, AColumnNameLongerThanTheCatalogHoldsIsRefusedAtItsByt
             {"is longer than 63 bytes", "byte 25"});
 }
 
+// The same bound at the relation's door and at the index's (the audit's G27
+// and G28). Before, a name of 64 bytes or more was stored cut to 63: the name
+// checks compare the written spelling against the stored bytes, so the same
+// statement run twice was admitted twice, and the answer named a spelling
+// that was not stored.
+TEST_F(ColumnNameCaseTest, ARelationOrIndexNameLongerThanTheCatalogHoldsIsRefusedAtItsByte) {
+    const std::string x63(63, 'x');
+    //   "CREATE TABLE " is 13 bytes.
+    Refused("CREATE TABLE " + x63 + "a (id int64, v int64)",
+            {"table name", "is longer than 63 bytes", "byte 13"});
+    // Nothing was stored under the prefix either.
+    EXPECT_TRUE(IsErr(Run("SELECT * FROM " + x63)));
+    // 63 bytes is the longest name, and it is the relation the name reaches.
+    Ok("CREATE TABLE " + x63 + " (id int64, v int64)");
+    Ok("INSERT INTO " + x63 + " VALUES (5)");
+    EXPECT_EQ(Run("SELECT v FROM " + x63), "v\\n5");
+    // And it is found again by its own spelling: a second create of it is
+    // the existing relation, not a second row.
+    EXPECT_EQ(Run("CREATE TABLE " + x63 + " (id int64, v int64)").rfind("EXISTS", 0), 0u);
+
+    //   "CREATE INDEX " is 13 bytes.
+    Refused("CREATE INDEX " + x63 + "a ON " + x63 + " (v)",
+            {"index name", "is longer than 63 bytes", "byte 13"});
+    Ok("CREATE INDEX " + x63 + " ON " + x63 + " (v)");
+    Refused("CREATE INDEX " + x63 + " ON " + x63 + " (v)", {"already"});
+    // A drop of the long spelling names no stored index, and says so; the
+    // stored one is still there to be dropped by its own name.
+    Refused("DROP INDEX " + x63 + "a", {"no index named"});
+    Ok("DROP INDEX " + x63);
+}
+
 // A column read inside a SET value resolves as every read does: ignoring
 // case, a twin refused. Before, it matched exactly, so a column named
 // `CURRENT_DATE` lost to the function for `current_date` - a write of today

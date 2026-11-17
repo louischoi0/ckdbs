@@ -665,6 +665,28 @@ Schema DeclarationSchema(Oid rel_oid, Oid column_oid_base, std::string_view aux_
     return schema;
 }
 
+// Every door that stores a user-written name in a fixed `Name` field asks
+// this first: a relation's (`CreateTable`, `RenameTable`), a column's
+// rename, a namespace's, an index's (`CheckIndexDef`). A name the field
+// cannot hold is refused, never truncated - a truncated name is not the one
+// that was asked for, the name checks compare the full spelling against the
+// stored bytes and so miss it, and two names sharing their first 63 bytes
+// would be one name stored twice (the audit's G27, G28).
+Status CheckNameFits(std::string_view what, std::string_view name) {
+    if (name.empty()) {
+        return Status::InvalidArgument(std::string(what) + " name is empty");
+    }
+    // `>=` rather than `>`: SetName stores at most kCatalogNameMax - 1
+    // bytes and a terminator, so a name of kCatalogNameMax bytes is the
+    // first one it would cut.
+    if (name.size() >= kCatalogNameMax) {
+        return Status::InvalidArgument(std::string(what) + " name '" + std::string(name) +
+                                        "' is longer than " +
+                                        std::to_string(kCatalogNameMax - 1) + " bytes");
+    }
+    return Status::OK();
+}
+
 }  // namespace
 
 Status Catalog::Bootstrap() {
@@ -1329,6 +1351,11 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
 
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                     std::uint64_t trx_id, std::vector<CatalogRowRef>* written) {
+    // The name first, before anything is asked of the schema: the
+    // dispatcher refuses a name too long at its byte, and this is the
+    // door's own defence for any other caller.
+    if (Status s = CheckNameFits("table", name); !s.ok()) return s;
+
     // Refused at definition time rather than at the first INSERT: a table
     // whose first column cannot hold the Keystone id is one no row can
     // ever be written to (heap-and-tuple.md section 4).
@@ -1723,30 +1750,9 @@ Status Catalog::CheckNamespaceEmpty(Oid namespace_oid, std::uint64_t own_trx_id)
 // followed by BumpVersion(): a name is read by resolution itself. (The
 // pattern setters once updated the cache in place instead; since CF-S1b
 // `SetPatternWaystone` bumps, and the mount's renewal drops the cache.)
-namespace {
-
-Status CheckRenameName(std::string_view what, std::string_view name) {
-    if (name.empty()) {
-        return Status::InvalidArgument(std::string(what) + " name is empty");
-    }
-    // `>=` rather than `>`: SetName stores at most kCatalogNameMax bytes
-    // and NameView stops at the array's end, so a name that exactly fills
-    // the array round-trips - but the check refuses at the same boundary
-    // CreateTable's rows actually hold, and never lets SetName truncate,
-    // because a truncated name is not the one that was asked for.
-    if (name.size() >= kCatalogNameMax) {
-        return Status::InvalidArgument(std::string(what) + " name '" + std::string(name) +
-                                        "' is longer than " +
-                                        std::to_string(kCatalogNameMax - 1) + " bytes");
-    }
-    return Status::OK();
-}
-
-}  // namespace
-
 Status Catalog::RenameTable(Oid table_oid, std::string_view new_name,
                             std::uint64_t own_trx_id) {
-    if (Status s = CheckRenameName("table", new_name); !s.ok()) return s;
+    if (Status s = CheckNameFits("table", new_name); !s.ok()) return s;
 
     // **Check and rewrite under one hold** (AT-S17), `CreateTable`'s: the
     // row being renamed and the name being taken are both on `sys.objects`,
@@ -1798,7 +1804,7 @@ Status Catalog::RenameTable(Oid table_oid, std::string_view new_name,
 
 Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
                              std::string_view new_name) {
-    if (Status s = CheckRenameName("column", new_name); !s.ok()) return s;
+    if (Status s = CheckNameFits("column", new_name); !s.ok()) return s;
 
     // Sibling collision and old-name existence in one read, and the rewrite,
     // **under one hold of `sys.columns`' root page** (AT-S17). `HandleAlter`
@@ -2257,7 +2263,7 @@ StatusOr<Oid> Catalog::CreateNamespace(std::string_view name, std::uint64_t trx_
     // Same validator as a rename's, and deliberately the same one: a name
     // this refuses is a name `SetName` would truncate, and a truncated
     // name is not the one that was asked for.
-    if (Status s = CheckRenameName("namespace", name); !s.ok()) return s;
+    if (Status s = CheckNameFits("namespace", name); !s.ok()) return s;
 
     if (name == kNamespaceSysName || name == kNamespacePublicName) {
         return Status::InvalidArgument("catalog: '" + std::string(name) +
@@ -2750,8 +2756,13 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     }
     // Read off `cabin_ids` rather than pushed in the loop, so the list is
     // ascending and names each position once whatever the page order.
-    for (std::uint16_t col = 1; col < access.cabin_ids.size(); ++col) {
-        if (access.cabin_ids[col].id != 0) access.cabin_columns.push_back(col);
+    // The index is as wide as the size it is compared with: a 16-bit one
+    // could not end over more columns than it counts. `RowLayout::Build`
+    // above bounds the column count far below that, so the cast holds.
+    for (std::size_t col = 1; col < access.cabin_ids.size(); ++col) {
+        if (access.cabin_ids[col].id != 0) {
+            access.cabin_columns.push_back(static_cast<std::uint16_t>(col));
+        }
     }
 
     // The relation's foreign keys at **both** ends, in one sys.fkeys scan
@@ -3603,8 +3614,18 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // column bare. Two rows for one column leave one set nothing serves.
     auto held = store_.Get(kCatalogPageCabins);
     if (!held.ok()) return held.status();
-    if (FindCabinOnColumn(rel_oid, col_pos).ok()) {
-        return Status::AlreadyExists("catalog: this column already has a cabin");
+    // A scan that failed is not "none exists" (the audit's G40): its
+    // failure is the create's. The rows are listed here, `CreateExprCabin`'s
+    // shape, rather than asked of `FindCabinOnColumn`, whose `NotFound` for
+    // a bare column the store's own `NotFound` for an unwritten growth page
+    // could not be told from.
+    auto existing = ListCabins();
+    if (!existing.ok()) return existing.status();
+    for (const SysCabinRow& other : existing.value()) {
+        if (other.shape == kCabinShapeColumn && other.rel_oid == rel_oid &&
+            other.column_no == col_pos) {
+            return Status::AlreadyExists("catalog: this column already has a cabin");
+        }
     }
 
     SysCabinRow row{};
@@ -3779,8 +3800,14 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     // One foreign key per (child, column). A second would mean a column
     // referencing two parents, which under F1 - the value *is* a parent's
     // Keystone id - would require one id to name a row in both.
-    if (FindForeignKeyOnColumn(child_rel_oid, child_column_no).ok()) {
+    // A failed scan fails the create, as in `CreateCabin`. No caller can
+    // meet a duplicate today - a foreign key is declared only by the
+    // `CREATE TABLE` that issued the child's oid - so this is the door's
+    // own defence, and a read failure it no longer drops.
+    if (auto existing = FindForeignKeyOnColumn(child_rel_oid, child_column_no); existing.ok()) {
         return Status::AlreadyExists("catalog: this column already has a foreign key");
+    } else if (existing.status().code() != StatusCode::kNotFound) {
+        return existing.status();
     }
 
     auto fk_id = AllocateRowId(kSysFkeysTable);
@@ -3917,6 +3944,9 @@ StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {
 }
 
 Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
+    // Before a build, as every refusal here is. A `REINDEX` arrives with a
+    // name read back from a stored row, which always fits.
+    if (Status s = CheckNameFits("index", def.name); !s.ok()) return s;
     if (def.key_cols.empty()) {
         return Status::InvalidArgument("catalog: an index needs at least one key column");
     }
@@ -4251,6 +4281,14 @@ StatusOr<std::vector<SysIndexRow>> Catalog::FindIndexesForTable(Oid table_oid) {
 
 StatusOr<SysIndexRow> Catalog::FindIndexByName(std::string_view name,
                                                const txn::ReadView* view) {
+    auto found = LookupIndexByName(name, view);
+    if (!found.ok()) return found.status();
+    if (found.value().has_value()) return *found.value();
+    return Status::NotFound("no index by that name");
+}
+
+StatusOr<std::optional<SysIndexRow>> Catalog::LookupIndexByName(std::string_view name,
+                                                                const txn::ReadView* view) {
     auto rows = ListIndexes(view);
     if (!rows.ok()) return rows.status();
     // BY-R8: a name can be held twice inside one transaction - the row it
@@ -4265,8 +4303,7 @@ StatusOr<SysIndexRow> Catalog::FindIndexByName(std::string_view name,
             found = row;
         }
     }
-    if (found.has_value()) return *found;
-    return Status::NotFound("no index by that name");
+    return found;
 }
 
 Status Catalog::CheckIndexNameFree(std::string_view name, std::uint64_t own_trx_id) {

@@ -106,6 +106,19 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
                                                 "' has zero width; every column must occupy "
                                                 "bytes");
             }
+            // Refused here, before the add, and not only by the bound after
+            // the loop: `offset` is 32 bits, and enough wide columns - or
+            // one damaged `len` - would wrap it back under that bound, a
+            // row size the page check then passes (the audit's G29). The
+            // subtraction cannot wrap: `offset` never passes the page's
+            // capacity. It also bounds the declared column count at that
+            // capacity, so every 16-bit position and null bit below holds.
+            if (width.value() > heap::kMaxTuplePayloadSize - offset) {
+                return Status::Unsupported(
+                    "row size exceeds the " + std::to_string(heap::kMaxTuplePayloadSize) +
+                    " bytes a heap page can hold, at column '" + std::string(NameView(col.name)) +
+                    "'; no row of this relation could ever be inserted");
+            }
             layout.offsets.push_back(offset);
             offset += width.value();
             layout.cell_ends.push_back(offset);

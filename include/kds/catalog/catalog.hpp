@@ -1322,6 +1322,13 @@ public:
     // not find an index another transaction's open `CREATE INDEX` wrote.
     StatusOr<SysIndexRow> FindIndexByName(std::string_view name,
                                           const txn::ReadView* view = nullptr);
+    // The same lookup with the miss and the failed read kept apart: no row
+    // is an empty optional, and a status is `sys.indexes` not read. A
+    // statement that answers "no index named" asks this one, because the
+    // store itself can answer `NotFound` for a page of the chain and
+    // `FindIndexByName`'s miss cannot be told from it (the audit's G35).
+    StatusOr<std::optional<SysIndexRow>> LookupIndexByName(std::string_view name,
+                                                           const txn::ReadView* view = nullptr);
 
     // An index whose **leading** key column is `col_pos`.
     //

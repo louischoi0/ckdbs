@@ -51,6 +51,7 @@ add_executable(kds_tests
     heap_hidden_key_test.cpp
     btree_test.cpp
     btree_lookup_statement_test.cpp
+    catalog_read_failure_test.cpp
     fk_parent_hold_test.cpp
     btree_race_test.cpp
     index_key_test.cpp
