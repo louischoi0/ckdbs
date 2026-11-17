@@ -969,7 +969,10 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
     // An index is complete for every value where a Cabin is authoritative
     // only for observed ones, so the Cabin becomes dead weight - but
     // dropping it is the operator's call, not the engine's.
-    if (catalog.FindCabinOnColumn(def.table_oid, def.key_cols[0]).ok()) {
+    // A read that failed drops the warning and nothing else: the index is
+    // built already, and a warning is not worth failing its statement for.
+    if (auto cabin = catalog.FindCabinOnColumn(def.table_oid, def.key_cols[0]);
+        cabin.ok() && cabin.value().has_value()) {
         warnings.push_back("column '" + std::string(key_column) +
                            "' already carries a cabin; this index supersedes it for every "
                            "value, not just observed ones, and the cabin's write hook and "

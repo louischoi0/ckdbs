@@ -84,17 +84,28 @@ protected:
 TEST_F(CatalogReadFailureTest, ADropIndexWhoseCatalogReadFailedDoesNotAnswerNoSuchIndex) {
     ASSERT_FALSE(IsErr(Run("CREATE INDEX ix ON t (v)")));
 
+    // After each refused statement the index is asked for: whichever read
+    // the refusal landed on, the statement did not go on to drop or rebuild
+    // it. (A rebuild takes a new oid, which is how one is told.)
+    const auto index_oid = [&] {
+        auto row = boot_->catalog.LookupIndexByName("ix");
+        EXPECT_TRUE(row.ok() && row.value().has_value()) << "the index is gone";
+        return row.ok() && row.value().has_value() ? row.value()->index_oid : 0;
+    };
+    const auto created_as = index_oid();
     for (int nth : {1, 2}) {
         const std::string reply =
             RunRefusing("DROP INDEX ix", ::kds::catalog::kCatalogPageIndexes, nth);
         ExpectTheReadsFailure(reply, "DROP INDEX, fetch " + std::to_string(nth));
         EXPECT_EQ(reply.find("no index named"), std::string::npos) << reply;
+        EXPECT_EQ(index_oid(), created_as);
     }
     for (int nth : {1, 2}) {
         const std::string reply =
             RunRefusing("REINDEX INDEX ix", ::kds::catalog::kCatalogPageIndexes, nth);
         ExpectTheReadsFailure(reply, "REINDEX INDEX, fetch " + std::to_string(nth));
         EXPECT_EQ(reply.find("no index named"), std::string::npos) << reply;
+        EXPECT_EQ(index_oid(), created_as);
     }
 
     // The index is still there, and a read that works still tells a miss

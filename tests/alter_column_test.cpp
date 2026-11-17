@@ -535,16 +535,16 @@ TEST_F(AlterColumnTest, ACabinLeftOnADroppedColumnIsSwept) {
     land(2, catalog::kCabinOriginAuto, &cabins[1]);
     Ok("ALTER TABLE t DROP COLUMN b");
     dispatcher_->SetBeforeDropColumnWriteForTest(nullptr);
-    ASSERT_TRUE(boot_->catalog.FindCabinOnColumn(oid, 1).ok());
-    ASSERT_TRUE(boot_->catalog.FindCabinOnColumn(oid, 2).ok());
+    ASSERT_TRUE(boot_->catalog.FindCabinOnColumn(oid, 1).value().has_value());
+    ASSERT_TRUE(boot_->catalog.FindCabinOnColumn(oid, 2).value().has_value());
 
     EXPECT_EQ(Run("PURGE DROPPED COLUMNS FROM t"),
               "PURGED DROPPED COLUMNS t: 2 column(s) clean, 1 row(s) cleaned, 0 spill(s) "
               "released, cabin " +
                   std::to_string(cabins[0]) + " dropped, cabin " + std::to_string(cabins[1]) +
                   " dropped");
-    EXPECT_EQ(boot_->catalog.FindCabinOnColumn(oid, 1).status().code(), StatusCode::kNotFound);
-    EXPECT_EQ(boot_->catalog.FindCabinOnColumn(oid, 2).status().code(), StatusCode::kNotFound);
+    EXPECT_FALSE(boot_->catalog.FindCabinOnColumn(oid, 1).value().has_value());
+    EXPECT_FALSE(boot_->catalog.FindCabinOnColumn(oid, 2).value().has_value());
     EXPECT_EQ(Run("SELECT * FROM t WHERE n = 4"), "id,n\\n1,4");
 }
 
@@ -706,11 +706,11 @@ TEST_F(AlterColumnTest, ACabinLeftByARolledBackAddIsDroppedByTheNextAdd) {
     auto cabin = boot_->catalog.CreateCabin(oid, 2, catalog::kCabinOriginUser);
     ASSERT_TRUE(cabin.ok()) << cabin.status().message();
     ASSERT_FALSE(IsErr(Run(s, "ROLLBACK")));
-    ASSERT_TRUE(boot_->catalog.FindCabinOnColumn(oid, 2).ok());
+    ASSERT_TRUE(boot_->catalog.FindCabinOnColumn(oid, 2).value().has_value());
 
     EXPECT_EQ(Run("ALTER TABLE t ADD COLUMN y int64 NULL"),
               "ADDED COLUMN t.y, cabin " + std::to_string(cabin.value()) + " dropped");
-    EXPECT_EQ(boot_->catalog.FindCabinOnColumn(oid, 2).status().code(), StatusCode::kNotFound);
+    EXPECT_FALSE(boot_->catalog.FindCabinOnColumn(oid, 2).value().has_value());
 }
 
 // Positions stay at most declared + spare: each cycle's ADD takes the slot

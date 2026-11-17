@@ -89,6 +89,18 @@ namespace kds::catalog {
 // here; the admission asks again for any other caller.
 Status CheckNamedRowIdSpellable(std::uint64_t id);
 
+// **Can this user-written name be stored as written?** Every door that puts
+// one in a fixed `Name` field asks first: a relation's (`CreateTable`,
+// `RenameTable`), a column's, a namespace's, an index's (`CheckIndexDef`).
+// Empty, or `kCatalogNameMax` bytes and over, is `InvalidArgument` naming
+// `what` and the name. A name the field cannot hold is refused, never
+// truncated: a truncated name is not the one that was asked for, the name
+// checks compare the full spelling against the stored bytes and so miss it,
+// and two names sharing their first 63 bytes would be one name stored twice
+// (the audit's G27, G28). The catalog's doors ask it themselves; a statement
+// asks it too, to refuse at the name's byte.
+Status CheckNameFits(std::string_view what, std::string_view name);
+
 // Where a catalog row landed (workplan-ddl-transactional.md DT3a). A DDL
 // running inside a transaction hands these to
 // `TransactionManager::NoteInsert` so a rollback can retire the slots:
@@ -1101,11 +1113,14 @@ public:
     // `SHOW CABINS`.
     StatusOr<std::vector<SysCabinRow>> ListCabins();
 
-    // The Cabin on `(rel_oid, col_pos)`. NotFound is the ordinary answer -
-    // most columns have no Cabin - and is never cached, which is exactly
-    // why the *compiler* asks `TableAccess::cabin_columns` instead of calling
-    // this per step (catalog_cache.hpp's absence rule).
-    StatusOr<SysCabinRow> FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos);
+    // The Cabin on `(rel_oid, col_pos)`. None is the ordinary answer - most
+    // columns have no Cabin - and is an empty optional, never a status: a
+    // status here is `sys.cabins` not read, which a caller must not take for
+    // a bare column (the audit's G40; the store can itself answer `NotFound`
+    // for a page of the chain). Never cached, which is exactly why the
+    // *compiler* asks `TableAccess::cabin_columns` instead of calling this
+    // per step (catalog_cache.hpp's absence rule).
+    StatusOr<std::optional<SysCabinRow>> FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos);
 
     // Declares an **expression or predicate** Cabin (AQ-R1, R2) and returns
     // its `cabin_id`. `F` is `exec/`'s, so the two questions only it can
@@ -1173,11 +1188,14 @@ public:
     // lists from in one scan.
     StatusOr<std::vector<SysFkeyRow>> ListForeignKeys();
 
-    // The foreign key on `(child_rel_oid, child_column_no)`. NotFound is the
-    // ordinary answer - most columns reference nothing - and is never
-    // cached, which is why a *write path* asks `TableAccess::fkeys_out`
-    // instead of calling this per row (catalog_cache.hpp's absence rule).
-    StatusOr<SysFkeyRow> FindForeignKeyOnColumn(Oid child_rel_oid, std::uint16_t child_column_no);
+    // The foreign key on `(child_rel_oid, child_column_no)`. None is the
+    // ordinary answer - most columns reference nothing - and is an empty
+    // optional; a status is `sys.fkeys` not read (`FindCabinOnColumn`'s
+    // rule). Never cached, which is why a *write path* asks
+    // `TableAccess::fkeys_out` instead of calling this per row
+    // (catalog_cache.hpp's absence rule).
+    StatusOr<std::optional<SysFkeyRow>> FindForeignKeyOnColumn(Oid child_rel_oid,
+                                                              std::uint16_t child_column_no);
 
     // The `trx_id` on these three is the row's MVCC stamp (DT2). It
     // defaults to `kBootstrapXid` because every caller that does not pass
@@ -1318,17 +1336,20 @@ public:
     // whatever is on the page.
     StatusOr<std::vector<SysIndexRow>> ListIndexes(const txn::ReadView* view = nullptr);
     StatusOr<std::vector<SysIndexRow>> FindIndexesForTable(Oid table_oid);
-    // `view` as on `ListIndexes`: `DROP INDEX` resolves a name, so it must
-    // not find an index another transaction's open `CREATE INDEX` wrote.
-    StatusOr<SysIndexRow> FindIndexByName(std::string_view name,
-                                          const txn::ReadView* view = nullptr);
-    // The same lookup with the miss and the failed read kept apart: no row
-    // is an empty optional, and a status is `sys.indexes` not read. A
-    // statement that answers "no index named" asks this one, because the
-    // store itself can answer `NotFound` for a page of the chain and
-    // `FindIndexByName`'s miss cannot be told from it (the audit's G35).
+    // The index named `name`. `view` as on `ListIndexes`: `DROP INDEX`
+    // resolves a name, so it must not find an index another transaction's
+    // open `CREATE INDEX` wrote. **No row is an empty optional, and a
+    // status is `sys.indexes` not read** - the two kept apart because the
+    // store itself can answer `NotFound` for a page of the chain, and a
+    // statement that took a failed read for a miss answered "no index
+    // named" about an index that was there (the audit's G35).
     StatusOr<std::optional<SysIndexRow>> LookupIndexByName(std::string_view name,
                                                            const txn::ReadView* view = nullptr);
+    // `LookupIndexByName` with the miss folded into `NotFound`, for a caller
+    // that holds the name to exist and treats either failure alike. No
+    // statement asks it: the cells that open an index by its name do.
+    StatusOr<SysIndexRow> FindIndexByName(std::string_view name,
+                                          const txn::ReadView* view = nullptr);
 
     // An index whose **leading** key column is `col_pos`.
     //

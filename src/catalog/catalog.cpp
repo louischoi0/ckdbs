@@ -665,13 +665,8 @@ Schema DeclarationSchema(Oid rel_oid, Oid column_oid_base, std::string_view aux_
     return schema;
 }
 
-// Every door that stores a user-written name in a fixed `Name` field asks
-// this first: a relation's (`CreateTable`, `RenameTable`), a column's
-// rename, a namespace's, an index's (`CheckIndexDef`). A name the field
-// cannot hold is refused, never truncated - a truncated name is not the one
-// that was asked for, the name checks compare the full spelling against the
-// stored bytes and so miss it, and two names sharing their first 63 bytes
-// would be one name stored twice (the audit's G27, G28).
+}  // namespace
+
 Status CheckNameFits(std::string_view what, std::string_view name) {
     if (name.empty()) {
         return Status::InvalidArgument(std::string(what) + " name is empty");
@@ -686,8 +681,6 @@ Status CheckNameFits(std::string_view what, std::string_view name) {
     }
     return Status::OK();
 }
-
-}  // namespace
 
 Status Catalog::Bootstrap() {
     InitWellKnownObjects();
@@ -3615,17 +3608,12 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     auto held = store_.Get(kCatalogPageCabins);
     if (!held.ok()) return held.status();
     // A scan that failed is not "none exists" (the audit's G40): its
-    // failure is the create's. The rows are listed here, `CreateExprCabin`'s
-    // shape, rather than asked of `FindCabinOnColumn`, whose `NotFound` for
-    // a bare column the store's own `NotFound` for an unwritten growth page
-    // could not be told from.
-    auto existing = ListCabins();
+    // failure is the create's, and read as a bare column it let the insert
+    // below write a second row for one.
+    auto existing = FindCabinOnColumn(rel_oid, col_pos);
     if (!existing.ok()) return existing.status();
-    for (const SysCabinRow& other : existing.value()) {
-        if (other.shape == kCabinShapeColumn && other.rel_oid == rel_oid &&
-            other.column_no == col_pos) {
-            return Status::AlreadyExists("catalog: this column already has a cabin");
-        }
+    if (existing.value().has_value()) {
+        return Status::AlreadyExists("catalog: this column already has a cabin");
     }
 
     SysCabinRow row{};
@@ -3708,15 +3696,16 @@ StatusOr<std::vector<SysCabinRow>> Catalog::ListCabins() {
     return ScanAll<SysCabinRow>(store_, kCatalogPageCabins, nullptr, txn_);
 }
 
-StatusOr<SysCabinRow> Catalog::FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos) {
+StatusOr<std::optional<SysCabinRow>> Catalog::FindCabinOnColumn(Oid rel_oid,
+                                                                std::uint16_t col_pos) {
     auto rows = ListCabins();
     if (!rows.ok()) return rows.status();
     for (const SysCabinRow& row : rows.value()) {
         if (row.shape == kCabinShapeColumn && row.rel_oid == rel_oid && row.column_no == col_pos) {
-            return row;
+            return std::optional<SysCabinRow>(row);
         }
     }
-    return Status::NotFound("no cabin on this column");
+    return std::optional<SysCabinRow>();
 }
 
 StatusOr<std::uint64_t> Catalog::CreateExprCabin(Oid rel_oid, std::uint8_t shape,
@@ -3804,10 +3793,10 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     // meet a duplicate today - a foreign key is declared only by the
     // `CREATE TABLE` that issued the child's oid - so this is the door's
     // own defence, and a read failure it no longer drops.
-    if (auto existing = FindForeignKeyOnColumn(child_rel_oid, child_column_no); existing.ok()) {
+    auto existing = FindForeignKeyOnColumn(child_rel_oid, child_column_no);
+    if (!existing.ok()) return existing.status();
+    if (existing.value().has_value()) {
         return Status::AlreadyExists("catalog: this column already has a foreign key");
-    } else if (existing.status().code() != StatusCode::kNotFound) {
-        return existing.status();
     }
 
     auto fk_id = AllocateRowId(kSysFkeysTable);
@@ -3859,16 +3848,16 @@ StatusOr<std::vector<SysFkeyRow>> Catalog::ListForeignKeys() {
     return ScanAll<SysFkeyRow>(store_, kCatalogPageFkeys, nullptr, txn_);
 }
 
-StatusOr<SysFkeyRow> Catalog::FindForeignKeyOnColumn(Oid child_rel_oid,
-                                                     std::uint16_t child_column_no) {
+StatusOr<std::optional<SysFkeyRow>> Catalog::FindForeignKeyOnColumn(
+    Oid child_rel_oid, std::uint16_t child_column_no) {
     auto rows = ListForeignKeys();
     if (!rows.ok()) return rows.status();
     for (const SysFkeyRow& row : rows.value()) {
         if (row.child_rel_oid == child_rel_oid && row.child_column_no == child_column_no) {
-            return row;
+            return std::optional<SysFkeyRow>(row);
         }
     }
-    return Status::NotFound("no foreign key on this column");
+    return std::optional<SysFkeyRow>();
 }
 
 Status Catalog::DiscardAccessStats() {
@@ -3944,8 +3933,8 @@ StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {
 }
 
 Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
-    // Before a build, as every refusal here is. A `REINDEX` arrives with a
-    // name read back from a stored row, which always fits.
+    // Before a build, as every refusal here is. A `REINDEX` arrives with
+    // the statement's spelling after it matched a stored name, so it fits.
     if (Status s = CheckNameFits("index", def.name); !s.ok()) return s;
     if (def.key_cols.empty()) {
         return Status::InvalidArgument("catalog: an index needs at least one key column");

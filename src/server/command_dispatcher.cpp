@@ -310,6 +310,16 @@ namespace {
 // so no site carries one without the other.
 DispatchOutcome Refused(const Status& status) { return {ErrorReply(status), false, 0, status}; }
 
+// The catalog's bound on a name (`catalog::CheckNameFits`), refused at the
+// name's byte: a name its fixed-width field cannot hold is never stored
+// truncated. Three statements write one - a relation's, a column's, an
+// index's - and each asks here, so they cannot word it three ways.
+Status NameFitsAt(std::string_view what, std::string_view name, std::uint32_t byte_offset) {
+    Status fits = catalog::CheckNameFits(what, name);
+    if (fits.ok()) return fits;
+    return Status::InvalidArgument(fits.message() + " (byte " + std::to_string(byte_offset) + ")");
+}
+
 }  // namespace
 
 stats::LockWaitRecord CommandDispatcher::LockWaitRow(const txn::LockKey& key,
@@ -3050,12 +3060,10 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     // `Catalog::CheckIndexDef` refuses it too, this is the byte). A `DROP`
     // or a `REINDEX` of such a spelling names no stored index and answers
     // that it found none, which is true.
-    if (!stmt.drop && !stmt.reindex && stmt.index_name.size() >= catalog::kCatalogNameMax) {
-        const Status s = Status::InvalidArgument(
-            "index name '" + stmt.index_name + "' is longer than " +
-            std::to_string(catalog::kCatalogNameMax - 1) + " bytes (byte " +
-            std::to_string(stmt.byte_offset) + ")");
-        return Refused(s);
+    if (!stmt.drop && !stmt.reindex) {
+        if (Status s = NameFitsAt("index", stmt.index_name, stmt.byte_offset); !s.ok()) {
+            return Refused(s);
+        }
     }
     // BY-Q4 (a): autocommit only. Refused before a scope opens, so an
     // explicit transaction is not poisoned by asking - `PURGE`'s shape.
@@ -5048,12 +5056,7 @@ std::optional<DispatchOutcome> CommandDispatcher::ColumnRowOf(const parser::Colu
     // truncated: `SetName` keeps at most `kCatalogNameMax - 1` bytes, and a
     // truncated name is not the one that was declared - a read of it would
     // miss, and two names sharing their first 63 bytes would be one name.
-    // the catalog doors' own bound (`CheckNameFits`).
-    if (col.name.size() >= catalog::kCatalogNameMax) {
-        const Status s = Status::InvalidArgument(
-            "column name '" + col.name + "' is longer than " +
-            std::to_string(catalog::kCatalogNameMax - 1) + " bytes (byte " +
-            std::to_string(col.name_byte_offset) + ")");
+    if (Status s = NameFitsAt("column", col.name, col.name_byte_offset); !s.ok()) {
         return Refused(s);
     }
     auto type_row = catalog_.ResolveTypeByName(col.type_name);
@@ -5223,11 +5226,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // written spelling against the stored bytes, so a truncated name
         // would be found by neither and admitted twice (the audit's G27).
         // `Catalog::CreateTable` refuses it too; this is the byte.
-        if (stmt.table_name.size() >= catalog::kCatalogNameMax) {
-            const Status s = Status::InvalidArgument(
-                "table name '" + stmt.table_name + "' is longer than " +
-                std::to_string(catalog::kCatalogNameMax - 1) + " bytes (byte " +
-                std::to_string(stmt.table_byte_offset) + ")");
+        if (Status s = NameFitsAt("table", stmt.table_name, stmt.table_byte_offset); !s.ok()) {
             return Refused(s);
         }
 
