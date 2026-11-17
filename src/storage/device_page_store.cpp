@@ -2940,9 +2940,19 @@ bool DevicePageStore::IsPinnedClassFrame(const Frame& frame) const noexcept {
     if (frame.page_id < first_evictable_page_id_ || IsMapPageId(frame.page_id)) return true;
     const PageHeaderFields header =
         ReadPageHeader(std::span<const std::byte, kPageSize>(*frame.bytes));
-    return header.page_type == static_cast<std::uint8_t>(PageType::kCabinBound) ||
-           header.page_type == static_cast<std::uint8_t>(PageType::kFreeMap) ||
-           header.page_type == static_cast<std::uint8_t>(PageType::kHeaderlessMap);
+    const bool typed_pinned =
+        header.page_type == static_cast<std::uint8_t>(PageType::kCabinBound) ||
+        header.page_type == static_cast<std::uint8_t>(PageType::kFreeMap) ||
+        header.page_type == static_cast<std::uint8_t>(PageType::kHeaderlessMap);
+    // **A headerless page has no type to read** (page.md §2, the audit's
+    // G34): a Waystone directory's interior page keeps its first child's id
+    // where a header keeps `page_type`, and a child id whose low byte is
+    // one of the three above would make an evictable page (EV3) a pinned
+    // one - skipped by the sweep for as long as it is resident. Asked only
+    // on a match, so every other frame pays nothing, and free where no
+    // directory exists. The frame table's latch is held here and the map's
+    // is the inner one (page.md §5's order).
+    return typed_pinned && !IsHeaderless(frame.page_id);
 }
 
 std::vector<PageId> DevicePageStore::TakeDirtyEvictionQueue() {

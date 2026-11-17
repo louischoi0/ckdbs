@@ -315,6 +315,14 @@ public:
     Status UnapplyDeparture(const std::string& key, std::int64_t delta, PageId page_id,
                             std::uint16_t index);
 
+    // Drops every link `key`'s group still holds to (page_id, index) and
+    // says how many. **Recovery's alone**: a live directory holds a pair
+    // once and `Unapply` takes that one, but a rebuild can hold it twice -
+    // attached by the page walk and again by the fold (`DedupeEntryLinkage`
+    // says why) - and a folded rollback that un-applied one copy would
+    // leave the other naming an entry the page now marks orphaned.
+    std::uint64_t DetachEntry(const std::string& key, PageId page_id, std::uint16_t index);
+
     // Re-sums the group headers from a caller-supplied entry reader — §7's
     // verification hook, and the reason the aggregate value rides inline in
     // every entry. Answers Corruption naming the first group whose header

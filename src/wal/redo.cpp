@@ -394,6 +394,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // that arm's closing brace, leaving `page_bytes` pointing into a
         // frame nothing holds (page.md §3's pin model).
         storage::PageRef created_ref;
+        bool healing = false;  // this record is an image laid over a torn page
         auto got = store.Get(page_id);
         if (got.ok()) {
             page_bytes = got.value().bytes();
@@ -412,6 +413,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             }
             created_ref = std::move(created.value());
             page_bytes = created_ref.bytes();
+            healing = true;
         } else if (record.type() == RecordType::kPageInit || is_image) {
             auto created = store.CreateAt(page_id);
             if (!created.ok()) {
@@ -461,7 +463,14 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         }
         if (is_image) {
             ++stats.page_images;
-            if (poisoned.erase(page_id) != 0) {
+            // Counted by what this image did - it was laid over a page that
+            // failed its checksum - and not by whether an earlier record had
+            // met the tear first (the audit's G33): a torn page whose first
+            // record in range is its image is healed all the same, and used
+            // to count as nothing. One a heal either way: a poisoned page is
+            // never created, so its image arrives through the same arm.
+            poisoned.erase(page_id);
+            if (healing) {
                 ++stats.pages_healed;
             }
         }

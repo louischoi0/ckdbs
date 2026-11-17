@@ -14,6 +14,8 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
+#include "kds/storage/device_page_store.hpp"
+#include "kds/storage/memory_page_device.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
@@ -338,6 +340,44 @@ TEST_F(AssertionBuildWalTest, TheEmittedRecordsRebuildTheDirectoryTheBuildProduc
         return view.value().Read(index);
     };
     EXPECT_TRUE(rebuilt.VerifyAgainstEntries(reader).ok());
+}
+
+// The audit's G37. Adopting a chain reads each page's link and writes
+// nothing, but it fetched every page write-intent, and a write-intent fetch
+// marks the frame dirty whether or not a byte moved. The adoption runs at
+// every mount, before the completion checkpoint that flushes every dirty
+// frame, so each mount wrote back every page of every Bound Cabin - pages
+// that are never freed and grow with the relation's write history.
+TEST(BoundCabinChainAdoptTest, AdoptingAChainLeavesItsPagesClean) {
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto opened = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{4096},
+                                                 /*first_new_page_id=*/128);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    storage::DevicePageStore& store = *opened.value();
+
+    std::vector<PageId> ids;
+    for (int i = 0; i < 3; ++i) {
+        auto created = store.CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        ASSERT_TRUE(storage::cabin::BoundCabinPage::Format(created.value().second.bytes()).ok());
+        ids.push_back(created.value().first);
+    }
+    for (std::size_t i = 0; i + 1 < ids.size(); ++i) {
+        auto page = store.Get(ids[i]);
+        ASSERT_TRUE(page.ok());
+        auto view = storage::cabin::BoundCabinPage::Open(page.value().bytes());
+        ASSERT_TRUE(view.ok());
+        view.value().SetNextPageId(ids[i + 1]);
+    }
+    ASSERT_TRUE(store.Flush().ok());
+    ASSERT_TRUE(store.DirtyPageIds().empty()) << "the chain is not clean before the adopt";
+
+    exec::BoundCabinChainWriter writer(/*assertion_id=*/7);
+    ASSERT_TRUE(writer.AdoptChain(store, ids[0]).ok());
+    EXPECT_EQ(writer.pages(), 3u);
+    EXPECT_TRUE(store.DirtyPageIds().empty())
+        << store.DirtyPageIds().size() << " page(s) dirtied by a walk that wrote nothing";
 }
 
 // A Bound Cabin chain's adoption is bounded by a cycle check, not by the

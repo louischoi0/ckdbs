@@ -766,6 +766,34 @@ protected:
     }
 };
 
+// The audit's G33: the heal was counted only when a record before the image
+// had met the tear. A torn page whose first record in range is its image -
+// a split's new sibling, a page a checkpoint imaged - was healed and
+// reported as `pages_healed = 0`, so a mount that repaired a tear said it
+// had repaired none.
+TEST_F(RedoHealTest, AnImageThatIsTheTornPagesFirstRecordCountsAsAHeal) {
+    WriteTornPage();
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+        AppendImage(*s.value(), /*rows=*/1);
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0x40), 0u);
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    auto store = OpenPages();
+    ASSERT_NE(store, nullptr);
+    ASSERT_EQ(store->Get(kPage).status().code(), StatusCode::kCorruption) << "the page is not torn";
+    auto redone = Redo(*device_, 0, *store, Analyzed());
+    ASSERT_TRUE(redone.ok()) << redone.status().message();
+    EXPECT_EQ(redone.value().pages_healed, 1u);
+    EXPECT_EQ(redone.value().page_images, 1u);
+
+    auto page = store->Get(kPage);
+    ASSERT_TRUE(page.ok()) << page.status().message();
+    EXPECT_EQ(heap::PageView(page.value().bytes()).slot_count(), 2u);
+}
+
 TEST_F(RedoHealTest, AFullPageImageHealsAnAllocatedPageThatFailedItsChecksum) {
     WriteTornPage();
     {

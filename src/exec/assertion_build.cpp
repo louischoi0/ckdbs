@@ -58,7 +58,12 @@ Status BoundCabinChainWriter::AdoptChain(storage::PageStore& store, PageId root)
     while (true) {
         if (Status s = guard.Visit(page_id); !s.ok()) return s;
         ++pages;
-        auto page = store.Get(page_id);
+        // Read-only: the walk reads each page's link and writes nothing, and
+        // a write-intent fetch marks the frame dirty whether or not a byte
+        // moved - every page of every Bound Cabin, written back by the
+        // mount's completion checkpoint at every mount (the audit's G37).
+        // `Place` fetches the tail write-intent when it appends.
+        auto page = store.GetForRead(page_id);
         if (!page.ok()) return page.status();
         // Open() is what proves the page class: a root that is not a
         // kCabinBound page is not this cabin's chain, and appending into it

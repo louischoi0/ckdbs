@@ -474,6 +474,13 @@ Status BoundCabin::UnapplyDeparture(const std::string& key, std::int64_t delta, 
     return Status::OK();
 }
 
+std::uint64_t BoundCabin::DetachEntry(const std::string& key, PageId page_id,
+                                      std::uint16_t index) {
+    GroupHeader* header = FindMutable(key);
+    if (header == nullptr) return 0;
+    return std::erase(header->entries, std::pair<PageId, std::uint16_t>(page_id, index));
+}
+
 Status BoundCabin::VerifyAgainstEntries(const EntryReader& read) const {
     for (const auto& [hash, headers] : groups_by_hash_) {
         for (const GroupHeader& header : headers) {

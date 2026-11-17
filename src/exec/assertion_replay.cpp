@@ -188,7 +188,18 @@ Status CompensateReservation(BoundCabin& cabin, const std::string& key, std::int
 
     Status undone = departure ? cabin.UnapplyDeparture(key, delta, at.first, at.second)
                               : cabin.Unapply(key, delta, at.first, at.second);
-    return undone.WithContext("assert replay: compensating a reservation");
+    if (!undone.ok()) return undone.WithContext("assert replay: compensating a reservation");
+    // **The pair may also be there twice** (the audit's G38): the page walk
+    // attached an entry that reached the device unmarked - a checkpoint's
+    // flush between the reserve and the abort - and the fold's replay of its
+    // record attached it again. `Unapply` took one; the other would name an
+    // entry this rollback marks orphaned and the header no longer counts,
+    // which is what §5.2's proof (`VerifyAgainstEntries`) reports as
+    // `Corruption` for a directory that is right. The end-of-rebuild dedupe
+    // cannot see it: by then the pair is single. The aggregate moved once,
+    // above; only the linkage is taken here.
+    cabin.DetachEntry(key, at.first, at.second);
+    return Status::OK();
 }
 
 }  // namespace

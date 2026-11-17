@@ -66,8 +66,9 @@ struct RedoStats {
     std::uint64_t deferred_assertions = 0;  // RC07's, counted not applied
     std::uint64_t no_page = 0;        // records with no page target (txn, checkpoint)
 
-    // Pages that failed to load with a checksum error and were healed by a
-    // later FPI. `page.md` §10's division of labour, counted: the checksum
+    // Pages that failed to load with a checksum error and were healed by an
+    // image in the range - whether or not a record before the image met the
+    // tear first. `page.md` §10's division of labour, counted: the checksum
     // detects, the image heals.
     std::uint64_t pages_healed = 0;
 };
