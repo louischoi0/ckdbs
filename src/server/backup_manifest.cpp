@@ -119,9 +119,14 @@ std::string SegmentFileName(std::uint64_t segment_no) {
 }
 
 Status SyncDirectory(const std::string& dir) {
-    Fd fd(::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
-    if (fd.fd < 0) return Errno("backup: open directory " + dir, errno);
-    if (::fsync(fd.fd) != 0) return Errno("backup: fsync directory " + dir, errno);
+    // A path with no directory component has an empty parent, and its
+    // directory is the working one: `data_file`'s default is the bare
+    // `kds.db`, and `open("")` is ENOENT, which refused every restore to it
+    // (the audit's G30).
+    const std::string where = dir.empty() ? "." : dir;
+    Fd fd(::open(where.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+    if (fd.fd < 0) return Errno("backup: open directory " + where, errno);
+    if (::fsync(fd.fd) != 0) return Errno("backup: fsync directory " + where, errno);
     return Status::OK();
 }
 

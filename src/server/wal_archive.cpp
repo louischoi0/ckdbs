@@ -82,6 +82,13 @@ WalArchiver::WalArchiver(Wiring wiring) : wiring_(std::move(wiring)), next_(wiri
 WalArchiver::~WalArchiver() { Stop(); }
 
 void WalArchiver::Start() {
+    // A command's exit is read by `waitpid`, which answers `ECHILD` while
+    // SIGCHLD is ignored - and an ignored disposition is inherited across
+    // `execve`, so a launcher that left it so would make every archive
+    // attempt fail (G42's refusal, above). The default disposition also
+    // discards the signal, so nothing else in the process changes; this is
+    // the one place the engine spawns a child.
+    if (!wiring_.settings.archive_command.empty()) ::signal(SIGCHLD, SIG_DFL);
     if (wiring_.hold_from) wiring_.hold_from(next_.load(std::memory_order_acquire));
     std::lock_guard<std::mutex> lock(mu_);
     if (thread_.joinable()) return;
@@ -197,9 +204,22 @@ Status WalArchiver::ArchiveOne(std::uint64_t segment) {
     }
     child_.store(pid, std::memory_order_release);
     int rc = 0;
-    while (::waitpid(pid, &rc, 0) < 0 && errno == EINTR) {
-    }
+    pid_t reaped = 0;
+    do {
+        reaped = ::waitpid(pid, &rc, 0);
+    } while (reaped < 0 && errno == EINTR);
+    const int wait_errno = errno;
     child_.store(0, std::memory_order_release);
+    // **A wait that failed is not an exit 0** (the audit's G42): `rc` is
+    // still the 0 it was initialised to, which reads as a clean exit, and
+    // the segment would count as archived and be recycled on the word of a
+    // command whose outcome nobody learned. The reachable case is `ECHILD`
+    // where SIGCHLD is ignored - the kernel reaps the child itself - which
+    // `Start` rules out for this process and a caller of this alone may not.
+    if (reaped != pid) {
+        return Status::IoError("archive_command: its exit could not be read (waitpid: " +
+                               std::string(std::strerror(wait_errno)) + "): " + command);
+    }
     if (!WIFEXITED(rc) || WEXITSTATUS(rc) != 0) {
         return Status::IoError("archive_command exited " +
                                std::to_string(WIFEXITED(rc) ? WEXITSTATUS(rc) : -1) + ": " +

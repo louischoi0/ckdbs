@@ -373,6 +373,25 @@ Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {
         return Status::InvalidArgument("restore: a target past the stop reads the WAL archive; "
                                        "name it");
     }
+    // **An archive that is not there is not an empty archive** (the audit's
+    // G41). The copy below ends at the first segment the archive does not
+    // hold, which is right for an archive read to its end and wrong for a
+    // directory that is mistyped or not mounted: under `latest` nothing
+    // else refuses it, and the instance would come up at the backup's stop
+    // answered as "restored to latest", every commit after the stop
+    // dropped. Asked before anything is laid out. An existing directory
+    // holding no later segment still restores to the stop - that is what
+    // an archive with nothing newer means.
+    if (to_target) {
+        std::error_code archive_ec;
+        if (!fs::is_directory(request.archive_dir, archive_ec)) {
+            return Status::NotFound(
+                "restore: the WAL archive " + request.archive_dir +
+                (archive_ec ? " cannot be read (" + archive_ec.message() + ")"
+                            : " is not a directory") +
+                "; a target past the stop reads it");
+        }
+    }
 
     // From here on the layout writes, and a failure takes back what it laid
     // out - the target held nothing - so a retry meets an empty target again.
@@ -454,7 +473,16 @@ Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {
         for (std::uint64_t seg = manifest.stop_segment + 1;; ++seg) {
             const fs::path archived =
                 fs::path(request.archive_dir) / ArchiveName(manifest.lineage_id, seg);
-            if (!fs::exists(archived, ec)) break;
+            // Missing ends the archive; any other answer is a segment that
+            // may be there and could not be asked about, which is a failed
+            // restore and not a shorter history.
+            std::error_code status_ec;
+            const fs::file_status found = fs::status(archived, status_ec);
+            if (found.type() == fs::file_type::not_found) break;
+            if (status_ec) {
+                return Status::IoError("restore: archived segment " + archived.string() +
+                                       " cannot be read: " + status_ec.message());
+            }
             if (request.target_lsn != 0 && seg * manifest.segment_size >= request.target_lsn) {
                 break;  // starts at or past the target: nothing in it is kept
             }
