@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/chain_frame.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -94,7 +95,7 @@ TEST_F(StepCompileTest, TupleKeyEqualityAgainstALiteralCompilesToLookup) {
     ASSERT_TRUE(chain.steps[0].key.has_value());
     EXPECT_EQ(chain.steps[0].key->kind, OperandKind::kLiteral);
     EXPECT_EQ(chain.steps[0].key->literal.int_val, 7);
-    EXPECT_TRUE(IsTrailReplayable(chain.steps[0].kind));
+    EXPECT_TRUE(IsTrailReplayable(chain.steps[0]));
 }
 
 TEST_F(StepCompileTest, EqualityOnANonTupleKeyColumnIsAFilterScanHoweverSelective) {
@@ -112,7 +113,7 @@ TEST_F(StepCompileTest, EqualityOnANonTupleKeyColumnIsAFilterScanHoweverSelectiv
     ASSERT_EQ(chain.steps.size(), 1u);
     EXPECT_EQ(chain.steps[0].kind, AccessKind::kFilterScan);
     EXPECT_FALSE(chain.steps[0].key.has_value());
-    EXPECT_FALSE(IsTrailReplayable(chain.steps[0].kind));
+    EXPECT_FALSE(IsTrailReplayable(chain.steps[0]));
 
     // And the column it was classified for is recorded, which is what the
     // access statistics key on.
@@ -142,7 +143,7 @@ TEST_F(StepCompileTest, BetweenOnTheTupleKeyCompilesToARangeWithItsBoundsKept) {
     // "downgrading any step to a plain scan cannot change the result"
     // true, and that property is what invariant 9's fall-through rests on.
     EXPECT_EQ(chain.steps[0].residual.size(), 2u);
-    EXPECT_FALSE(IsTrailReplayable(chain.steps[0].kind)) << "a range is a search";
+    EXPECT_FALSE(IsTrailReplayable(chain.steps[0])) << "a range is a search";
 
     // Spelling it out by hand is the same statement, so it gets the same
     // range. An optimizer that rewarded phrasing would be a worse one.
@@ -267,10 +268,8 @@ TEST_F(StepCompileTest, ANegativeLiteralTupleKeyIsAScanRatherThanAProbeIntoAHuge
 }
 
 TEST_F(StepCompileTest, AWhereClauseDoesNotDowngradeALookupToAScan) {
-    // The TupleKeyEqualityTarget trap the workplan calls out. That helper
-    // refuses whenever the WHERE holds more than one condition - correct
-    // for a point statement, wrong for a chain step, which only locates a
-    // candidate and evaluates the rest on the located row.
+    // A chain step only locates a candidate and evaluates the rest on the
+    // located row, so a conjunct beside the key leaves it a lookup.
     const StepChain chain = MustCompile("SELECT * FROM acct WHERE id = 7 AND tier = 'gold'");
     ASSERT_EQ(chain.steps.size(), 1u);
     EXPECT_EQ(chain.steps[0].kind, AccessKind::kLookup)
@@ -978,7 +977,7 @@ TEST_F(StepCompileTest, TheAnnotatedStepIsAScanByEveryOtherMeasure) {
     EXPECT_FALSE(inner.cabin.has_value());
     EXPECT_FALSE(inner.index.has_value());
     EXPECT_TRUE(inner.access_columns.empty()) << "kScan's statistics shape stays empty";
-    EXPECT_FALSE(IsTrailReplayable(inner.kind));
+    EXPECT_FALSE(IsTrailReplayable(inner));
     EXPECT_EQ(chain.klass, StatementClass::kJoinSelect);
     EXPECT_EQ(inner.filter_columns, Col(1)) << "the join conjunct's own column";
     EXPECT_EQ(inner.read_columns, Col(1) | Col(2)) << "the conjunct plus the projection";
@@ -1470,6 +1469,125 @@ TEST_F(CompileAssignmentsTest, ATupleKeyNamedOnAnotherRelationIsNotThisRelations
     // `acct_id` is trade's second column and an ordinary field. Nothing
     // about the *name* is what makes a column refusable - position 0 is.
     EXPECT_TRUE(Check("UPDATE trade SET acct_id = 3").ok());
+}
+
+// ---- The key set (CU) -------------------------------------------------------
+
+TEST_F(StepCompileTest, AListOnTheTupleKeyIsAKeySetOnTheLookupKind) {
+    const StepChain chain = MustCompile("SELECT * FROM acct WHERE id IN (9, 2, 9, -1, 5, 2)");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    const Step& step = chain.steps[0];
+    // The single-value kind, with no single key (CU-Q1).
+    EXPECT_EQ(step.kind, AccessKind::kLookup);
+    EXPECT_FALSE(step.key.has_value());
+    ASSERT_TRUE(step.key_set.has_value());
+    // The conjunct stays where it was, whole (CU-R1).
+    ASSERT_EQ(step.bool_residual.size(), 1u);
+    EXPECT_EQ(step.key_set->conjunct, 0u);
+    EXPECT_EQ(step.bool_residual[0].children.size(), 6u);
+    // Ascending, distinct, the negative item left out; each names the first
+    // leaf that wrote it (CU-Q9).
+    ASSERT_EQ(step.key_set->items.size(), 3u);
+    EXPECT_EQ(step.key_set->items[0].key, 2u);
+    EXPECT_EQ(step.key_set->items[0].leaf, 1u);
+    EXPECT_EQ(step.key_set->items[1].key, 5u);
+    EXPECT_EQ(step.key_set->items[1].leaf, 4u);
+    EXPECT_EQ(step.key_set->items[2].key, 9u);
+    EXPECT_EQ(step.key_set->items[2].leaf, 0u);
+    // What it was assigned for is still the tuple key.
+    ASSERT_EQ(step.access_columns.size(), 1u);
+    EXPECT_EQ(step.access_columns[0], 0);
+}
+
+// CU-Q4 and CU-Q6: the two readers that took `kLookup` to mean one row.
+TEST_F(StepCompileTest, AKeySetIsASearchAndAStepChainSelect) {
+    const StepChain chain = MustCompile("SELECT * FROM acct WHERE id = 2 OR id = 5");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    ASSERT_TRUE(chain.steps[0].key_set.has_value());
+    EXPECT_TRUE(IsTrailReplayableKind(chain.steps[0].kind)) << "the kind's line is unmoved";
+    EXPECT_FALSE(IsTrailReplayable(chain.steps[0])) << "a set step records and replays no trail";
+    EXPECT_FALSE(HasReplayableStep(chain));
+    EXPECT_EQ(chain.klass, StatementClass::kJoinSelect);
+
+    const StepChain point = MustCompile("SELECT * FROM acct WHERE id = 2");
+    EXPECT_TRUE(IsTrailReplayable(point.steps[0]));
+    EXPECT_EQ(point.klass, StatementClass::kPointSelect);
+}
+
+// CU-Q9: asking one leaf of an `OR` first changes what is evaluated first
+// and never the answer. A row a key set finds always passes the leaf its
+// descent was made for, so the fall-through is reachable only here.
+TEST_F(StepCompileTest, AskingOneLeafFirstNeverChangesAConjunctsAnswer) {
+    // One int64 column, the tuple key, as `Create` builds it.
+    auto type_row = boot_->catalog.ResolveTypeByName("int64");
+    ASSERT_TRUE(type_row.ok());
+    catalog::SysColumnRow row{};
+    catalog::SetName(row.name, "id");
+    row.type_val = type_row.value().type_val;
+    row.len = type_row.value().len;
+    row.notnull = true;
+    catalog::Schema schema;
+    schema.columns.push_back(row);
+    const std::vector<const catalog::Schema*> schemas = {&schema};
+    ChainFrame frame;
+    frame.Open(schemas, nullptr);
+
+    const StepChain list = MustCompile("SELECT * FROM acct WHERE id = 2 OR id = 5 OR id = 9");
+    const StepChain negated = MustCompile("SELECT * FROM acct WHERE NOT (id = 2 OR id = 5)");
+    ASSERT_EQ(list.steps[0].bool_residual.size(), 1u);
+    ASSERT_EQ(negated.steps[0].bool_residual.size(), 1u);
+
+    const auto answer = [&](const StepChain& chain, std::optional<std::int64_t> id,
+                            const BoolLeafFirst* first) {
+        parser::AstValue value;
+        if (id.has_value()) {
+            value.type = parser::ValueType::kInt;
+            value.int_val = *id;
+        }
+        frame.SlotsFor(0)[0] = value;
+        auto matched =
+            EvaluateBoolConjuncts(schemas, chain.steps[0].bool_residual, frame, nullptr, first);
+        EXPECT_TRUE(matched.ok()) << matched.status().message();
+        return matched.ok() && matched.value();
+    };
+
+    for (const std::optional<std::int64_t> id :
+         {std::optional<std::int64_t>(2), std::optional<std::int64_t>(5),
+          std::optional<std::int64_t>(9), std::optional<std::int64_t>(7),
+          std::optional<std::int64_t>()}) {
+        const bool plain = answer(list, id, nullptr);
+        EXPECT_EQ(plain, id.has_value() && (*id == 2 || *id == 5 || *id == 9));
+        // Every leaf asked first, the true one and the false ones; a leaf
+        // past the end and a conjunct that is not there are not asked.
+        for (const std::uint32_t leaf : {0u, 1u, 2u, 99u}) {
+            const BoolLeafFirst first{0, leaf};
+            EXPECT_EQ(answer(list, id, &first), plain) << "leaf " << leaf;
+        }
+        const BoolLeafFirst elsewhere{1, 0};
+        EXPECT_EQ(answer(list, id, &elsewhere), plain);
+        // Only an `OR` root takes it: under `NOT` a true child is a false
+        // conjunct, and asking it first must not pass the row.
+        const BoolLeafFirst under_not{0, 0};
+        EXPECT_EQ(answer(negated, id, &under_not), answer(negated, id, nullptr));
+    }
+    EXPECT_FALSE(answer(negated, 2, nullptr));
+    EXPECT_TRUE(answer(negated, 7, nullptr));
+}
+
+TEST_F(StepCompileTest, AnOrThatIsNotALiteralListOnTheTupleKeyIsNoKeySet) {
+    for (const char* sql : {
+             "SELECT * FROM acct WHERE id = 2 OR name = 'x'",
+             "SELECT * FROM acct WHERE id = 2 OR id > 5",
+             "SELECT * FROM acct WHERE (id = 2 OR id = 5) OR id = 9",
+             "SELECT * FROM acct WHERE NOT (id = 2 OR id = 5)",
+             "SELECT * FROM acct WHERE id IN (-1, NULL)",
+             "SELECT * FROM acct WHERE name IN ('a', 'b')",
+         }) {
+        const StepChain chain = MustCompile(sql);
+        ASSERT_EQ(chain.steps.size(), 1u) << sql;
+        EXPECT_FALSE(chain.steps[0].key_set.has_value()) << sql;
+        EXPECT_NE(chain.steps[0].kind, AccessKind::kLookup) << sql;
+    }
 }
 
 }  // namespace

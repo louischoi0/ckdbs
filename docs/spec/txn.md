@@ -963,7 +963,14 @@ transaction** keeps its read view across the re-run, so `REPEATABLE READ`
 reaches the verdict above exactly as before. A predicate that names **no tuple key
 window** — `WHERE name = 'x'` — declares nothing, takes the per-row path,
 and can still park mid-walk with rows already written, where the table
-above is what decides. And the wait is the ordinary one: it ends at the
+above is what decides. **A list of tuple keys names no window either**
+(`parser-v2.md` I10): `WHERE id IN (1, 7, 42)` declares nothing and takes
+a row unit per row it writes, in key order, whether its rows are found by
+the walk or - since CU-S3 - by one descent per value, and it parks at a
+held value with the values below it written, as the walk parks at a held
+row. A bound on the tuple key beside
+the list (`id IN (1, 7, 42) AND id < 100`) declares its window as it does
+beside anything else, and the descents write under it (CU-S3b). And the wait is the ordinary one: it ends at the
 holder's decide, it is an edge in the wait-for graph, and it is refused
 rather than entered where it would close a cycle.
 

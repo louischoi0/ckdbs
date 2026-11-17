@@ -178,6 +178,18 @@ const std::vector<std::string>& Queries() {
         "(SELECT i.id FROM b AS i WHERE i.sym = o.sym AND i.qty > 30)",
         "SELECT id FROM h AS o WHERE EXISTS "
         "(SELECT i.id FROM h AS i WHERE i.sym = o.sym AND i.qty > 30)",
+
+        // ---- Value lists (CU-S2) --------------------------------------------
+        //
+        // A list is served from the union of its values' sets once every
+        // one is observed - `zzz` among them, whose empty set is an answer -
+        // and walks while one is not, as `ccc` on `b` never is. Last in the
+        // set, so the statements above observe as they did.
+        "SELECT * FROM b WHERE sym IN ('aaa', 'bbb')",
+        "SELECT * FROM b WHERE sym IN ('zzz', 'ddd', 'aaa')",
+        "SELECT * FROM b WHERE sym IN ('aaa', 'ccc')",
+        "SELECT id, qty FROM b WHERE sym IN ('bbb', 'aaa') AND qty > 30",
+        "SELECT * FROM h WHERE sym IN ('aaa', 'zzz')",
     };
     return kQueries;
 }
@@ -685,18 +697,18 @@ TEST(CabinContractTest, ACabinIsNotTrailReplayable) {
     // versus advisory*. A cabin probe is authoritative and still must not be
     // replayable from a trail - this is the check that the two trust models
     // did not quietly merge.
-    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kCabinProbe));
-    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kFilterScan));
-    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kRange));
-    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kScan));
+    EXPECT_FALSE(exec::IsTrailReplayableKind(exec::AccessKind::kCabinProbe));
+    EXPECT_FALSE(exec::IsTrailReplayableKind(exec::AccessKind::kFilterScan));
+    EXPECT_FALSE(exec::IsTrailReplayableKind(exec::AccessKind::kRange));
+    EXPECT_FALSE(exec::IsTrailReplayableKind(exec::AccessKind::kScan));
     // A secondary index is authoritative too, and lands on the same side of
     // the line for the same reason (docs/spec/index.md §8): an index probe
     // answers with a *set*, and a trail has no witness for a row inserted
     // since it was recorded.
-    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kIndexProbe));
-    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kIndexRange));
-    EXPECT_TRUE(exec::IsTrailReplayable(exec::AccessKind::kLookup));
-    EXPECT_TRUE(exec::IsTrailReplayable(exec::AccessKind::kProbe));
+    EXPECT_FALSE(exec::IsTrailReplayableKind(exec::AccessKind::kIndexProbe));
+    EXPECT_FALSE(exec::IsTrailReplayableKind(exec::AccessKind::kIndexRange));
+    EXPECT_TRUE(exec::IsTrailReplayableKind(exec::AccessKind::kLookup));
+    EXPECT_TRUE(exec::IsTrailReplayableKind(exec::AccessKind::kProbe));
 }
 
 // ---- DDL ------------------------------------------------------------------

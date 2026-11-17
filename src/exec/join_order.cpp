@@ -164,8 +164,22 @@ StepEstimate Estimate(const Block& block, std::size_t slot) {
             own *= kOtherSelectivity;
         }
     }
-    for (std::size_t i = 0; i < step.fn_residual.size() + step.bool_residual.size(); ++i) {
+    // A key set's own conjunct is priced by its values, below (CU).
+    const std::size_t other_conjuncts = step.fn_residual.size() + step.bool_residual.size() -
+                                        (step.key_set.has_value() ? 1 : 0);
+    for (std::size_t i = 0; i < other_conjuncts; ++i) {
         own *= kOtherSelectivity;
+    }
+    // One descent per value. On the tuple key each finds at most one row,
+    // so the set keeps the values over the relation's rows, as a range's
+    // span does; on another column each value keeps what an equality does.
+    const double set_values =
+        step.key_set.has_value() ? static_cast<double>(step.key_set->items.size()) : 1.0;
+    if (step.key_set.has_value()) {
+        const std::uint16_t col = step.key_set->col_pos;
+        own *= std::min(1.0, col == 0 ? set_values / relation_rows
+                                      : set_values * EqualitySelectivity(access, col,
+                                                                         kEqualitySelectivity));
     }
 
     double span = relation_rows;  // what a kRange walks
@@ -216,7 +230,7 @@ StepEstimate Estimate(const Block& block, std::size_t slot) {
     switch (step.kind) {
         case AccessKind::kLookup:
         case AccessKind::kProbe:
-            e.per_execution = kDescentCost;
+            e.per_execution = set_values * kDescentCost;
             break;
         case AccessKind::kRange:
             e.per_execution = kDescentCost + span;
@@ -224,8 +238,9 @@ StepEstimate Estimate(const Block& block, std::size_t slot) {
         case AccessKind::kIndexProbe:
         case AccessKind::kIndexRange:
         case AccessKind::kCabinProbe:
-            // Each entry resolved through the clustered tree.
-            e.per_execution = kDescentCost + matches * (1.0 + kDescentCost);
+            // Each entry resolved through the clustered tree; a key set
+            // enters the structure once per value.
+            e.per_execution = set_values * kDescentCost + matches * (1.0 + kDescentCost);
             break;
         case AccessKind::kFilterScan:
         case AccessKind::kScan: {

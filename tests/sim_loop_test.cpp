@@ -809,6 +809,36 @@ TEST(SimWorkload, TheGeneratedStreamCoversEveryV2Shape) {
     EXPECT_TRUE(by_value);
 }
 
+// CU: with the shapes a range read and a by-key write are sometimes spelled
+// as a key list, which is what puts a key set's descents - a read's and a
+// write's - under the sim's crashes; without them never, so the pinned
+// corpus draws what it always drew.
+TEST(SimWorkload, TheShapesSpellARangeReadAndAByKeyWriteAsAKeyList) {
+    for (const bool shapes : {false, true}) {
+        Workload workload(Rng(11).Fork("workload"), Profile::kUniform, shapes);
+        std::map<Op::Kind, int> listed;
+        // CU-S3b: a by-key write with a second conjunct, beside a list and
+        // beside a single key.
+        std::map<Op::Kind, int> list_beside;
+        std::map<Op::Kind, int> key_beside;
+        for (int i = 0; i < 4000; ++i) {
+            const Op op = workload.Next();
+            const bool list = op.sql.find(" WHERE id IN (") != std::string::npos;
+            if (list) ++listed[op.kind];
+            if (op.sql.find(" AND id != 0") == std::string::npos) continue;
+            ++(list ? list_beside : key_beside)[op.kind];
+        }
+        for (const Op::Kind kind :
+             {Op::Kind::kSelectRange, Op::Kind::kUpdate, Op::Kind::kDelete}) {
+            EXPECT_EQ(listed[kind] > 0, shapes) << OpKindName(kind) << " shapes=" << shapes;
+        }
+        for (const Op::Kind kind : {Op::Kind::kUpdate, Op::Kind::kDelete}) {
+            EXPECT_EQ(list_beside[kind] > 0, shapes) << OpKindName(kind) << " shapes=" << shapes;
+            EXPECT_EQ(key_beside[kind] > 0, shapes) << OpKindName(kind) << " shapes=" << shapes;
+        }
+    }
+}
+
 // The count a mutation reports is compared against the oracle's own count
 // of the rows the predicate matches — the sharpest single assertion the
 // harness makes. This pins that the corpus actually reaches it.

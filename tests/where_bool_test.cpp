@@ -131,7 +131,9 @@ TEST_F(WhereBoolTest, ANullLiteralUnderNotIsUnknown) {
 
 // ---- The readers (BU-R5) --------------------------------------------------
 
-TEST_F(WhereBoolTest, OverTheTupleKeyItIsNotALookupOrARange) {
+// A flat `OR` of literal equalities on the tuple key is a key set since CU
+// (key_set_test.cpp); any other `OR` on it is still no lookup and no range.
+TEST_F(WhereBoolTest, OverTheTupleKeyItKeepsTheRowsAFilterKeeps) {
     EXPECT_EQ(Ids("id = 2 OR id = 5"), "id\\n2\\n5");
     EXPECT_EQ(Ids("id BETWEEN 2 AND 3 OR id = 6"), "id\\n2\\n3\\n6");
     EXPECT_EQ(Ids("NOT (id = 2)"), "id\\n1\\n3\\n4\\n5\\n6");

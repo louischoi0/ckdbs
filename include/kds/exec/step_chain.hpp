@@ -167,7 +167,12 @@ enum class AccessKind : std::uint8_t {
 // So a cabin probe stays search-class, and the fact that adding an
 // authoritative kind did not move this function is the check that the two
 // trust models stayed separate.
-constexpr bool IsTrailReplayable(AccessKind kind) noexcept {
+//
+// **This is the kind's line only.** What a reader of a step asks is
+// `IsTrailReplayable(const Step&)`, below `Step`, which also refuses a step
+// carrying a key set (CU-Q4); the two have different names so that asking
+// the kind where the step was meant does not compile.
+constexpr bool IsTrailReplayableKind(AccessKind kind) noexcept {
     return kind == AccessKind::kLookup || kind == AccessKind::kProbe;
 }
 // **Unchanged by kIndexProbe and kIndexRange either**, and for the reason
@@ -182,7 +187,8 @@ constexpr bool IsTrailReplayable(AccessKind kind) noexcept {
 // premise of eliding `ORDER BY <driving tuple key> ASC`
 // (step_compiler.cpp's elision). A walk or range does, page by page; an
 // index step sorts its tuple keys back into that order (IX8a); a lookup or
-// probe emits one row. A Cabin probe is excluded by name (BB). **No
+// probe emits one row, and a lookup carrying a key set descends for its
+// values in ascending order (`KeySet`). A Cabin probe is excluded by name (BB). **No
 // `default`**: a kind added to the enum fails to compile here until it is
 // judged, which is the guard a planner that moves any relation onto slot 0
 // needs (CC §7).
@@ -516,6 +522,54 @@ void ForEachFunction(const BoolPredicate& pred, Fn&& fn) {
     for (const BoolPredicate& child : pred.children) ForEachFunction(child, fn);
 }
 
+// ---- The key set (CU) -----------------------------------------------------
+//
+// A value list served by one descent per value
+// (instructions/v3.2.0/workorder-cu-key-set-access.md): `id IN (1, 7, 42)`
+// or `id = 1 OR id = 7`, which is one boolean conjunct whose root is an `OR`
+// of `<column> = <literal>` leaves on one column of this step and nothing
+// else. The column is the tuple key, one column of a secondary index's
+// equality prefix, or a column that carries a Cabin. **An annotation on the
+// single-value kind, never a kind** (CU-Q1): the step is `kLookup` with no
+// `Step::key`, `kIndexProbe` or `kIndexRange`, or `kCabinProbe`, so
+// `sys.access_stats` names the structure that served and no persisted
+// number moves. Every reader that takes `kLookup` to mean one row asks for
+// the annotation: `IsTrailReplayable(const Step&)`, the statement class,
+// the runner's dispatch and the join cost model.
+//
+// **A hint on top of the residual, as a lookup's key is** (CU-R1): the
+// conjunct the items were read from stays in `Step::bool_residual` and
+// every row a descent finds is tested against it, so a step downgraded to a
+// plain walk returns the same rows. An item that names no row - a NULL on
+// any column, a negative tuple key - is left out of `items` and is still a
+// leaf of the conjunct (CU-R3).
+//
+// **On the tuple key the items are ascending and distinct**, so the step
+// emits in tuple key order and `ORDER BY <tuple key>` over it is elided as
+// it is over a walk. An index set's items are distinct, in index key order,
+// and its step sorts the tuple keys it collects as any index step does
+// (IX8a). A Cabin set's items are in written order, one per distinct Cabin
+// key and less the list's NULLs: a Cabin has no order to put them in.
+struct KeySet {
+    struct Item {
+        std::uint64_t key = 0;  // on `kLookup`: the tuple key
+        // The first leaf of the conjunct that names the value, tested
+        // before the rest of the tree on a row the value found (CU-Q9).
+        std::uint32_t leaf = 0;
+    };
+    std::uint32_t conjunct = 0;  // index into `Step::bool_residual`
+    std::uint16_t col_pos = 0;   // the list's column
+    std::vector<Item> items;     // never empty
+    // On an index kind only: item `i`'s inclusive entry bounds, `low` then
+    // `high`, each one entry wide, starting at `2 * i * entry_width`. The
+    // probe's own bounds with the list's column encoded for the item.
+    std::vector<std::byte> bounds;
+};
+
+// A conjunct leaf's index fits these bits, which an index set's step packs
+// below a 48-bit tuple key (invariant 7) to carry the leaf through its sort.
+inline constexpr std::size_t kKeySetLeafBits = 16;
+
 struct Step;
 
 // A predicate-position subquery, lowered (V15). It is a chain in its own
@@ -710,7 +764,19 @@ struct Step {
     // The boolean conjuncts placed at this step (see BoolPredicate), for
     // `fn_residual`'s reasons and evaluated after it.
     std::vector<BoolPredicate> bool_residual;
+
+    // The value list this step descends for, on `kLookup` with no `key`
+    // (see KeySet). Cold, with `build`.
+    std::optional<KeySet> key_set;
 };
+
+// Whether a trail may replace this step: its kind's line
+// (`IsTrailReplayableKind`), and no key set - a set is a search over its
+// values, so a step carrying one records and replays no trail whatever its
+// kind (CU-Q4, invariant 9). **The one form a reader of a step may ask.**
+inline bool IsTrailReplayable(const Step& step) noexcept {
+    return IsTrailReplayableKind(step.kind) && !step.key_set.has_value();
+}
 
 // Execution shape, dispatched on by a `switch` - there is no plan
 // enumeration anywhere in this engine.

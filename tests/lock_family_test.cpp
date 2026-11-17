@@ -358,6 +358,50 @@ TEST_F(LockCapTest, ARangePredicateDeclaresItsWindowRatherThanAccumulatingRows) 
            "the cap";
 }
 
+// CU-S3: a write by a list of tuple keys takes the units the walk of that
+// list takes - a row unit per row it writes and no declared window - so the
+// lock window does not move with the access. Three listed rows are the
+// relation `IX` plus three tuples, which reaches a cap of three; a window
+// over them would be two entries and would not.
+TEST_F(LockCapTest, AWriteByListTakesARowUnitPerRowAndDeclaresNoWindow) {
+    Session session;
+    ASSERT_EQ(Local("CREATE TABLE k (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    for (int id = 1; id <= 4; ++id) {
+        ASSERT_EQ(Local("INSERT INTO k VALUES (" + std::to_string(id) + ", 0)").rfind("INSERTED", 0),
+                  0u);
+    }
+    const DispatchOutcome two = RunAsync("UPDATE k SET v = 9 WHERE id IN (1, 2)", session);
+    EXPECT_EQ(two.response, "UPDATED 2") << two.response;
+    EXPECT_EQ(dispatcher_->borrow_cap_stops(), 0u);
+
+    const DispatchOutcome three = RunAsync("UPDATE k SET v = 9 WHERE id IN (1, 2, 3)", session);
+    EXPECT_EQ(three.status.code(), StatusCode::kResourceExhausted) << three.response;
+    EXPECT_GE(dispatcher_->borrow_cap_stops(), 1u);
+    const DispatchOutcome gone = RunAsync("DELETE FROM k WHERE id IN (2, 3, 4)", session);
+    EXPECT_EQ(gone.status.code(), StatusCode::kResourceExhausted) << gone.response;
+    EXPECT_EQ(Local("SELECT id, v FROM k"), "id,v\\n1,9\\n2,9\\n3,0\\n4,0");
+}
+
+// CU-S3b: a list beside a bound on the tuple key writes under the window the
+// bound declares, as the walk of that WHERE does, and takes no row unit: the
+// three rows a bare list cannot write under this cap are written.
+TEST_F(LockCapTest, AListBesideABoundOnTheKeyWritesUnderTheDeclaredWindow) {
+    Session session;
+    ASSERT_EQ(Local("CREATE TABLE k (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    for (int id = 1; id <= 4; ++id) {
+        ASSERT_EQ(Local("INSERT INTO k VALUES (" + std::to_string(id) + ", 0)").rfind("INSERTED", 0),
+                  0u);
+    }
+    const DispatchOutcome three =
+        RunAsync("UPDATE k SET v = 9 WHERE id IN (1, 2, 3) AND id < 100", session);
+    EXPECT_EQ(three.response, "UPDATED 3") << three.response;
+    const DispatchOutcome gone =
+        RunAsync("DELETE FROM k WHERE id >= 2 AND id IN (2, 3, 4) AND id <= 50", session);
+    EXPECT_EQ(gone.response, "DELETED 3") << gone.response;
+    EXPECT_EQ(dispatcher_->borrow_cap_stops(), 0u);
+    EXPECT_EQ(Local("SELECT id, v FROM k"), "id,v\\n1,9");
+}
+
 // The default cap; the name is the cells', kept from the file they came
 // from.
 class LockDeadlockTest : public LockFamilyTest {
@@ -2825,6 +2869,171 @@ TEST_F(MidWalkWaitTest, AClusteredBtreeParksAndResumesByKey) {
     // only ones the resume wrote.
     EXPECT_EQ(w.transaction()->trail().size(), 10u)
         << "the key-ordered skip did not hold - rows below the resume key were written twice";
+}
+
+// ---- CU-S3: a write by a list of tuple keys parks at its value ----------------
+//
+// `WHERE id IN (...)` on `tb` is one descent per value in ascending order
+// (`WriteWalk::WriteKeySet`), under row units, so it meets a held row having
+// written the values below it, as the walk does. Its position is the walk's
+// cursor - the key it stopped at - and the resume starts at that value.
+
+TEST_F(MidWalkWaitTest, AListUpdateParksAtAHeldValueAndResumesThere) {
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
+    // `v = v + 1`, so a value written twice shows in the row as well as on
+    // the trail.
+    Started set = Start("UPDATE tb SET v = v + 1 WHERE id IN (9, 3, 7, 5, 10, 400, 3)", w);
+    Pump();
+    ASSERT_FALSE(*set.done) << "the list did not park at its held value: " << set.out->response;
+    ASSERT_NE(w.transaction(), nullptr);
+    EXPECT_EQ(w.transaction()->trail().size(), 2u)
+        << "the parked list should have written exactly the values below the held one";
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*set.done) << "the wait never ended";
+    EXPECT_EQ(set.out->response.rfind("UPDATED 5", 0), 0u) << set.out->response;
+    EXPECT_EQ(w.transaction()->trail().size(), 5u)
+        << "seven would mean the values below the held one were written again";
+    EXPECT_EQ(dispatcher_->Dispatch("SELECT id, v FROM tb WHERE v > 0", &w).response,
+              "id,v\\n3,1\\n5,1\\n7,1\\n9,1\\n10,1");
+    EXPECT_FALSE(w.failed());
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &w).response.rfind("ROLLBACK", 0), 0u);
+}
+
+TEST_F(MidWalkWaitTest, AListWhoseFirstValueIsHeldWaitsHavingWrittenNothingAndRunsAgain) {
+    // Nothing written, so nothing to resume: the statement is re-run whole
+    // under a fresh snapshot, which sees the holder's committed version.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 3", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    Started set = Start("UPDATE tb SET v = v + 1 WHERE id IN (5, 3)", w);
+    Pump();
+    ASSERT_FALSE(*set.done) << "the list answered instead of waiting: " << set.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*set.done) << "the wait never ended";
+    EXPECT_EQ(set.out->response.rfind("UPDATED 2", 0), 0u) << set.out->response;
+    EXPECT_EQ(Local("SELECT id, v FROM tb WHERE v > 0"), "id,v\\n3,10\\n5,1");
+}
+
+// CU-S3b: the same park with a conjunct beside the list. The held row's
+// head fails `v < 5` and the version the statement's snapshot sees passes
+// it (F4), so the row is wanted and the statement parks there. `v < 5`
+// still holds of the rows written below it, so a resume that offered them
+// again would write them twice.
+TEST_F(MidWalkWaitTest, AListBesideAConjunctParksAtAHeldValueAndResumesThere) {
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
+    Started set = Start("UPDATE tb SET v = v + 1 WHERE id IN (9, 3, 7, 5, 10, 400) AND v < 5", w);
+    Pump();
+    ASSERT_FALSE(*set.done) << "the list did not park at its held value: " << set.out->response;
+    ASSERT_NE(w.transaction(), nullptr);
+    EXPECT_EQ(w.transaction()->trail().size(), 2u);
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*set.done) << "the wait never ended";
+    EXPECT_EQ(set.out->response.rfind("UPDATED 5", 0), 0u) << set.out->response;
+    EXPECT_EQ(w.transaction()->trail().size(), 5u);
+    EXPECT_EQ(dispatcher_->Dispatch("SELECT id, v FROM tb WHERE v > 0", &w).response,
+              "id,v\\n3,1\\n5,1\\n7,1\\n9,1\\n10,1");
+    EXPECT_FALSE(w.failed());
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &w).response.rfind("ROLLBACK", 0), 0u);
+}
+
+// CU-S3b: a single key beside a conjunct, its row held. One key is in scope,
+// so the statement waits having written nothing and is run again under a
+// fresh snapshot - and the conjunct is asked of what the holder committed.
+TEST_F(MidWalkWaitTest, AKeyBesideAConjunctWaitsOnItsHeldRowAndIsRunAgain) {
+    for (const bool commits : {true, false}) {
+        Session holder;
+        ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+        ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 3", &holder)
+                      .response.rfind("UPDATED", 0),
+                  0u);
+
+        Session w;
+        Started one = Start("UPDATE tb SET v = v + 1 WHERE id = 3 AND v < 5", w);
+        Pump();
+        ASSERT_FALSE(*one.done) << "the write answered instead of waiting: " << one.out->response;
+
+        const char* decide = commits ? "COMMIT" : "ROLLBACK";
+        ASSERT_EQ(dispatcher_->Dispatch(decide, &holder).response.rfind(decide, 0), 0u);
+        Pump();
+        ASSERT_TRUE(*one.done) << "the wait never ended";
+        // Committed, the row's `v = 9` fails the conjunct; rolled back, its
+        // `v = 0` passes.
+        EXPECT_EQ(one.out->response.rfind(commits ? "UPDATED 0" : "UPDATED 1", 0), 0u)
+            << one.out->response;
+        EXPECT_EQ(Local("SELECT id, v FROM tb WHERE id = 3"), commits ? "id,v\\n3,9" : "id,v\\n3,1");
+        ASSERT_EQ(Local("UPDATE tb SET v = 0 WHERE id = 3"), "UPDATED 1");
+    }
+}
+
+TEST_F(MidWalkWaitTest, AListUpdateRefusedAtItsHeldValueUnwindsWhatItWrote) {
+    // The commit arm, as the walk's: the resume keeps its view, the holder's
+    // committed version is newer than it, and first-updater-wins refuses.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    Started set = Start("UPDATE tb SET v = 1 WHERE id IN (3, 5, 7, 9)", w);
+    Pump();
+    ASSERT_FALSE(*set.done) << set.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*set.done) << "the wait never ended after the holder committed";
+    EXPECT_EQ(StatusFromErrorReply(set.out->response).code(), StatusCode::kTxnConflict)
+        << set.out->response;
+    EXPECT_EQ(Local("SELECT id, v FROM tb WHERE v > 0"), "id,v\\n7,9")
+        << "a refused autocommit list left rows behind";
+}
+
+TEST_F(MidWalkWaitTest, AListDeleteParksAtAHeldValueToo) {
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
+    Started set = Start("DELETE FROM tb WHERE id = 8 OR id = 2 OR id = 7 OR id = 400", w);
+    Pump();
+    ASSERT_FALSE(*set.done) << "the list DELETE did not park: " << set.out->response;
+    ASSERT_NE(w.transaction(), nullptr);
+    EXPECT_EQ(w.transaction()->trail().size(), 1u);
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*set.done) << "the wait never ended";
+    EXPECT_EQ(set.out->response.rfind("DELETED 3", 0), 0u) << set.out->response;
+    EXPECT_EQ(w.transaction()->trail().size(), 3u);
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &w).response.rfind("COMMIT", 0), 0u);
+    EXPECT_EQ(Local("SELECT id FROM tb"), "id\\n1\\n3\\n4\\n5\\n6\\n9\\n10");
 }
 
 TEST_F(MidWalkWaitTest, AResumedWriteOverItsOwnRelationWritesTheTargetsItCollected) {

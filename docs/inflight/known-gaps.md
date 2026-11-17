@@ -869,7 +869,8 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
   `CREATE TRANSITION` since A1 stage 2b, `IndexBuildSliceRigTest`).
   Nothing else running gives its core back:
   - a write;
-  - a tuple key descent, run inline by design;
+  - a tuple key descent, run inline by design, and a key set's descents
+    (CU-Q8; "Key sets (CU)" below states the bound);
   - an index walk (`RunIndexStep`);
   - a join's inner walk under one outer page.
 
@@ -1914,6 +1915,148 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   `READ COMMITTED` read-only transaction whose lease is re-pointed while
   another core's undo purge runs. The purge cells cover `PURGE`'s horizon
   gate, not the undo purge's.
+
+## Key sets (CU)
+
+Verified on `cu-key-set-access` at `04d9afe9` (CU-S3b); the measured
+numbers at `70a307ea` (CU-S4, the close). Owned by `docs/spec/parser-v2.md` I10; the order is
+`instructions/v3.2.0/workorder-cu-key-set-access.md`.
+
+- **A Cabin set is served only when every value is already observed, and
+  a list observes nothing** (`cabin.md` §4e). `sym IN ('a', 'b')` walks
+  until single-value statements have banked both sets, and walks again
+  whenever one is dropped. An expression or predicate Cabin, and a
+  correlated list, take no set.
+- **A list on a join's inner relation is a filter wherever the join key
+  enters that relation by an index or a Cabin** (CU-Q13, `index.md` §9).
+  `o.user_id = u.id AND o.status IN ('open', 'held')` enters `(user_id)`
+  per outer row as before and filters by the list; an index on
+  `(user_id, status)` is entered by its leading column only. A correlated
+  probe carrying a list on a later prefix column is not built.
+- **An index set displaces a literal Cabin probe and a strict tuple key
+  range**, as a single index probe does (`index.md` §9: an index ahead of
+  the Cabin). `sym = 'a' AND v IN (1, 2)` with a Cabin on `sym` and an
+  index on `v` took the Cabin before CU and takes `(v)` by set now.
+- **A list that misses is counted against its Cabin and can never be the
+  statement that ends the miss.** Each run adds a `cabin_misses` and, on a
+  managed Cabin, a coverage miss the controller reads toward EXTEND
+  (`cabin-controller.md`); the walk's pages count toward that Cabin's
+  benefit; and a shape that was a filter scan before CU-S2
+  (`sym IN (...) AND region = 'x'`) now names `sym`'s Cabin as its
+  candidate, so the controller no longer prices a Cabin on `region` from
+  it.
+- **Two declines have no cell**: a set step whose bounds do not match its
+  index's entry width (`RunIndexStep` walks; no compile produces one), and
+  a Cabin set asked while a recording of one of its values is in flight
+  (the value reads as unobserved and the step walks).
+- **One list an index probe.** `a IN (...) AND b IN (...)` on an index
+  over `(a, b)` enters it by one list and filters by the other; no cross
+  product of the two is formed.
+- **A list that reaches a longer prefix displaces a single probe** (IX9).
+  With indexes on `(v)` and `(g, v)`, `v = 50 AND g IN (0, 2)` enters
+  `(g, v)` once per value of `g`, where before CU it entered `(v)` once.
+  The longest-prefix rule is unchanged; a long list makes it cost more
+  descents than the probe it replaced. At one equality prefix length a
+  list never displaces a single equality (CU-Q10).
+- **No item an index's key encoder refuses was found to construct**, so
+  the rule that such an item declines the list for that index
+  (`IndexChoiceOver`) has no cell. Coercion refuses a literal its column
+  cannot hold before the encoder is asked.
+- **A write whose `WHERE` holds a subquery walks its relation twice,
+  whatever key the clause names** (CU-S3b). `UPDATE` and `DELETE ...
+  WHERE id = 1 AND v = 3` and `... WHERE id IN (1, 2) AND v = 3` descend;
+  `... WHERE id = 1 AND v IN (SELECT ...)` reads every row in a
+  collection pass and then visits every slot of every leaf under a write
+  latch (`WriteWalk::CollectTargets`), because a write evaluates no
+  subquery under the leaf it holds exclusive. Keying either pass is
+  deferred on the operator's word of 2026-11-17
+  (`docs/pending/keyed-write-beside-a-subquery.md`).
+- **A write over a bound on the tuple key walks the relation.** `UPDATE
+  ... WHERE id BETWEEN 10 AND 20` declares its lock window off the bound
+  and finds its rows by visiting every leaf: a write's walk has a resume
+  position and no end. Before CU and after; in no stage.
+- **A list on a relation the write only reads** (`UPDATE ... FROM`,
+  `DELETE ... USING`, a subquery, `INSERT ... SELECT`) is keyed.
+  `PURGE` by list is refused `NotImplemented` and is in no stage.
+- **A write finds its rows through no index and no Cabin**, for a list as
+  for a single value: `UPDATE ... WHERE owner IN (1, 9)` walks the
+  relation whatever index `owner` has. CU-Q5 names the point-write
+  target; an index-driven write is no stage of CU.
+- **A write by list holds its core for all its descents**, as every write
+  does for its whole walk: no write yields (`sched.md` §3). It takes a
+  row unit per row written and no window, so a list naming more rows than
+  `max_locks_per_txn` admits is refused at the cap, as the walk of it was;
+  a bound on the tuple key beside the list declares a window, and the
+  list is then written under it.
+- **What CU-S3's cells do not cover**: a write by list while another
+  core's writer divides the leaf a descent lands in (the descent and the
+  row function are the point write's, whose cells cover it); a descent
+  that declines on a `DELETE` (the cell fails a fetch under an `UPDATE`,
+  and the loop is one function for both); and a list write resumed after
+  its walk took over from a declined descent. **CU-S3b adds none of its
+  own for** UPDATE's unique-key round (BX-R4) under a list beside a
+  conjunct, which is the bare list's loop and has that cell.
+- **The shape is exact.** `id IN (1, 2) OR id = 3`,
+  `(id = 1 OR id = 2) OR id = 3` and a list under `NOT` or mixed with
+  another column are not keyed and walk. A client that wants the set
+  writes one flat list.
+- **A set is taken at every relation size** (CU-Q3 (a)), and on a small
+  relation the walk it replaces is cheaper. Measured at the close
+  (`bench/v3.4.11/results-cu-close-v3.4.11-40-g70a307ea.md`):
+  on the tuple key a set is slower at 1 and 10 rows from 64 values up (the
+  10-row 64-value cell inside its spread), by up to 1.1 ms of server CPU
+  per statement at 4,096 values, and faster at 100 rows; on an index it is
+  slower at 1 and 10 rows from 4 values up (the 1-row 64-value cell inside
+  its spread) and
+  at 100 rows from 64 values up, by up to about 3.6 ms (100 rows, 4,096
+  values; CU-S0 estimated 3.7 ms). At 1,000 rows a set is faster in every
+  cell measured.
+- **A statement driven by a set never yields, takes no cancel and
+  streams no row before its end** (CU-Q8 (a)). It is run inline, like one
+  driven by a single descent, and a set on an inner step runs whole per
+  outer row. For a one-step statement CU-S0's estimate for the largest set
+  the grammar admits, 4,096 values, is 1.6 to 4.2 ms of descents on top of
+  about 4 ms for parsing the list, which the walk also spent before its
+  first slice. **For a join the bound is the values times the rest of the
+  chain**: each value's row runs every later step before the next descent,
+  so a set of 4,096 rows over an inner step that walks 100,000 rows (one
+  with a boolean conjunct, which takes no build) holds its core for about
+  4,096 walks. Before CU the same statement's driver was a walk, which
+  yielded and took a cancel every 64 of its own pages and sent its rows at
+  those boundaries (CE), so the worst case lost its yields, though they
+  were already as far apart as the matches in 64 pages. `exec::Budget`
+  bounds both. CU-Q8 (a) was marked on the one-step bound; the join bound
+  was found by CU-S1's review. **Measured at the close, one step**: a
+  4,096-value set holds its core for 8.3 ms of server CPU on the tuple key
+  over 100,000 rows and 20.0 ms on an index, the list's own 4.5 to 5.3 ms
+  included (`bench/v3.4.11/results-cu-close-v3.4.11-40-g70a307ea.md`).
+  The join bound is not measured.
+- **What the close did not measure** (CU-S4): a Cabin set; a set on a
+  join's inner step; `cores` above 1 or a second session, so the leaf
+  holds a keyed write no longer takes have no number beside them; a
+  `DELETE` by key or by list on its own (it is measured with the `INSERT`
+  that feeds it). The overhead off the set's shape is "none found", not
+  "none": the largest cost the run does not exclude (the pooled delta
+  plus two standard errors) is 0.2 to 4.8 % of a statement's server CPU,
+  4.8 % on a tuple key lookup, and 3.0 % on the statements that reach
+  CU-R5's per-row tests (a boolean conjunct on a walked step, a recorded
+  and replayed trail).
+- **Each list length is its own statement shape.** The fingerprint hashes
+  the token stream, so `IN (1, 2)` and `IN (1, 2, 3)` have different
+  `fetch_id`s and their own rows in `sys.statement_stats`,
+  `sys.access_stats` and the plan statistics. CU did not change this; a
+  client that sends lists of many lengths fills those stores faster than
+  one that sends a few.
+- **The Cabin controller no longer sees a filter beside a list.**
+  `id IN (...) AND sym = 'x'` was a filter scan and a Cabin candidate for
+  `sym`; its step is a lookup now and feeds no candidate, as `id = 5 AND
+  sym = 'x'` never did.
+- **What the cells do not cover**: a set read while a writer on another
+  core divides the leaf it descends to (the descent and `AcceptTupleAt`
+  are the single lookup's, whose cells cover it); a KWP portal read with
+  `max_rows` over a set-driven statement; and whether a recorded trail
+  holds no entry for a set step, which is pinned only through
+  `IsTrailReplayable(const Step&)` and the absence of `replays=`.
 
 ## The online index build (CI)
 

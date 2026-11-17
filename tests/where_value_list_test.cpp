@@ -16,7 +16,9 @@
 // A value list is a disjunction of equalities and `NOT IN` a conjunction of
 // inequalities, so each is three-valued exactly as the standard says: a
 // NULL in a `NOT IN` list keeps no row, and a NULL probe is unknown for
-// both. Like every `OR`, a list is never a key (BU-R5).
+// both. Like every `OR`, a list is no key (BU-R5) - but for a list on the
+// tuple key, which is a key set since CU and answers the same rows
+// (key_set_test.cpp).
 
 namespace kds::server {
 namespace {

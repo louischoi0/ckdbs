@@ -627,6 +627,8 @@ private:
 
         ++stats_.For(step.step_id).relation_opens;
         if (step.kind == AccessKind::kLookup || step.kind == AccessKind::kProbe) {
+            // A key set is on `kLookup` and has no `key` (CU).
+            if (step.key_set.has_value()) co_return RunKeySetStep(steps, index, step, access);
             co_return co_await RunPointStep(steps, index, step, access);
         }
         if (step.kind == AccessKind::kCabinProbe) {
@@ -664,13 +666,39 @@ private:
             if (key.status().code() == StatusCode::kNotFound) co_return Status::OK();
             co_return key.status();
         }
+        co_return AcceptByKey(steps, index, step, access, key.value());
+    }
 
+    // A key set (CU; `KeySet`, step_chain.hpp): the single-value descent,
+    // once per value, ascending - so the step emits in tuple key order, and
+    // a value with no visible row emits nothing. Every row found is filtered
+    // by the whole residual, the list's own conjunct included (CU-R1); the
+    // leaf that named the value is asked first (CU-Q9).
+    //
+    // No trail is recorded or replayed for it (`IsTrailReplayable(const
+    // Step&)`), so `AcceptByKey`'s replay finds no entry. Not a coroutine and
+    // never yields (CU-Q8): BU-Q2's cap on a conjunct bounds the values.
+    Status RunKeySetStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                         const catalog::TableAccess& access) {
+        for (const KeySet::Item& item : step.key_set->items) {
+            if (stopped_) break;
+            // Set per value, not once: a deeper step's own set overwrites it.
+            key_set_leaf_ = item.leaf;
+            if (Status s = AcceptByKey(steps, index, step, access, item.key); !s.ok()) return s;
+        }
+        return Status::OK();
+    }
+
+    // One tuple key descent and the row it finds, through the memo, a
+    // replayable trail and the tree, in that order.
+    Status AcceptByKey(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                       const catalog::TableAccess& access, const std::uint64_t key) {
         // The memo, checked before the descent. It holds a *location*,
         // not a row, so a hit re-reads and re-filters exactly what a
         // fresh descent would have handed to the same code - which is
         // what makes "results identical with the memo on and off" a
         // property of the structure rather than of the test data.
-        if (memo_valid_ && memo_step_ == step.step_id && memo_key_ == key.value()) {
+        if (memo_valid_ && memo_step_ == step.step_id && memo_key_ == key) {
             NoteFetch();
             ++stats_.For(step.step_id).pages_fetched;
             // Through the one verifier, as a trail or a Cabin hint is:
@@ -678,11 +706,11 @@ private:
             // renumbers the slot and bumps the epoch (btree.hpp
             // `Location`).
             VerifiedTuple verified =
-                VerifyTupleAt(store_, memo_page_, memo_slot_, key.value(), memo_epoch_,
+                VerifyTupleAt(store_, memo_page_, memo_slot_, key, memo_epoch_,
                               access.oid);
             if (verified.ok()) {
                 ++stats_.For(step.step_id).probe_memo_hits;
-                co_return AcceptTupleAt(steps, index, step, access, memo_page_,
+                return AcceptTupleAt(steps, index, step, access, memo_page_,
                                      *verified.page, memo_slot_);
             }
             // Moved or gone. Fall through to the descent rather than
@@ -714,7 +742,7 @@ private:
         // just derived for this step, so an entry is only found by matching
         // it. There is no separate check to forget.
         if (const TrailLocation* at =
-                replay_ != nullptr ? replay_->Find(step.step_id, key.value()) : nullptr;
+                replay_ != nullptr ? replay_->Find(step.step_id, key) : nullptr;
             at != nullptr) {
             StepStats& step_stats = stats_.For(step.step_id);
             NoteFetch();
@@ -723,7 +751,7 @@ private:
             // and Cabin's location hints go through (exec/tuple_verify.hpp).
             // Verified against the derived `key`, not an entry tuple key -
             // the location carries none - which is rule 0's second hold.
-            VerifiedTuple verified = VerifyTupleAt(store_, at->page_id, at->slot, key.value(),
+            VerifiedTuple verified = VerifyTupleAt(store_, at->page_id, at->slot, key,
                                                    at->page_epoch, access.oid);
             if (verified.ok()) {
                 // Validated. From here it is the authoritative path's own
@@ -732,7 +760,7 @@ private:
                 // visibility exactly as the authoritative path would" is not
                 // implemented here so much as inherited.
                 ++step_stats.trail_replays;
-                co_return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page,
+                return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page,
                                         at->slot);
             }
             ++step_stats.trail_misses;
@@ -740,20 +768,20 @@ private:
 
         NoteFetch();
         ++stats_.For(step.step_id).pages_fetched;
-        auto found = btree::BtreeLookup(store_, access.desc_page_id, key.value());
+        auto found = btree::BtreeLookup(store_, access.desc_page_id, key);
         if (found.ok()) {
             memo_valid_ = true;
             memo_step_ = step.step_id;
-            memo_key_ = key.value();
+            memo_key_ = key;
             memo_page_ = found.value().page_id;
             memo_slot_ = found.value().slot;
             heap::PageView leaf(found.value().leaf.bytes());  // btree.hpp `Location`
             memo_epoch_ = CurrentPageEpoch(leaf);
-            co_return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
+            return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
                                  found.value().slot);
         }
-        if (found.status().code() == StatusCode::kNotFound) co_return Status::OK();
-        co_return found.status();
+        if (found.status().code() == StatusCode::kNotFound) return Status::OK();
+        return found.status();
     }
 
     // ---- Cabin (docs/spec/cabin.md §4) -----------------------------------
@@ -789,32 +817,41 @@ private:
     struct ServedSet {
         const stats::CabinKey* key;
         const stats::CabinSet* set;
+        // A Cabin set's (CU): the conjunct leaf that names this value.
+        std::uint32_t leaf = 0;
     };
 
-    // A cover step (AQ-R8): served from the union of every covered key's set
-    // when **every** one is observed, and walked otherwise - all or nothing,
-    // since one unobserved key's rows are in no set. A cover wider than the
-    // Cabin's value cap (`cabin_max_values`) could never be all observed and
-    // is walked without asking. Nothing is recorded: a cover names no one
-    // value a walk could bank.
-    sched::Coro RunCoverStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
-                        const catalog::TableAccess& access) {
-        const auto [first, last] = *step.cabin->cover;
-        const std::uint64_t width =
-            static_cast<std::uint64_t>(last) - static_cast<std::uint64_t>(first) + 1;
-        if (cabins_ == nullptr || width > cabins_->max_values()) {
+    // One value a multi-value Cabin step asks, and the list leaf that named
+    // it (CU-Q9; 0 where no list did).
+    struct AskedValue {
+        parser::AstValue value;
+        std::uint32_t leaf = 0;
+    };
+
+    // A Cabin step over more than one value - a cover's days, a list's
+    // items: served from the union of every value's set when **every** one
+    // is observed, and walked otherwise - all or nothing, since one
+    // unobserved value's rows are in no set. More values than the Cabin's
+    // cap (`cabin_max_values`) could never be all observed and are walked
+    // without asking, and so is a value the Cabin cannot key, which may
+    // still match a row. Nothing is recorded: such a walk names no one
+    // value it could bank.
+    sched::Coro ServeAllOrWalk(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                               const catalog::TableAccess& access,
+                               std::vector<AskedValue> values) {
+        if (cabins_ == nullptr || values.size() > cabins_->max_values()) {
             co_return co_await RunWalkStep(steps, index, step, access);
         }
-        // Keys and handles held here, for the serve that points into them.
+        // Keys and handles held here, for the serve that points into them:
+        // reserved whole, so no push moves one.
         std::vector<stats::CabinKey> keys;
         std::vector<stats::CabinSet> handles;
-        keys.reserve(static_cast<std::size_t>(width));
-        handles.reserve(static_cast<std::size_t>(width));
-        for (std::int64_t day = first;; ++day) {
-            parser::AstValue value;
-            value.type = parser::ValueType::kInt;
-            value.int_val = day;
-            auto key = stats::MakeCabinKey(step.cabin->cabin_id, value);
+        std::vector<ServedSet> sets;
+        keys.reserve(values.size());
+        handles.reserve(values.size());
+        sets.reserve(values.size());
+        for (const AskedValue& asked : values) {
+            auto key = stats::MakeCabinKey(step.cabin->cabin_id, asked.value);
             if (!key.has_value()) co_return co_await RunWalkStep(steps, index, step, access);
             stats::CabinSet set = cabins_->Find(*key);
             if (!set.valid()) {
@@ -824,20 +861,67 @@ private:
             }
             keys.push_back(std::move(*key));
             handles.push_back(std::move(set));
-            if (day == last) break;
+            sets.push_back({&keys.back(), &handles.back(), asked.leaf});
         }
-        std::vector<ServedSet> sets;
-        sets.reserve(keys.size());
-        for (std::size_t i = 0; i < keys.size(); ++i) sets.push_back({&keys[i], &handles[i]});
         cabins_->NoteHit(step.cabin->cabin_id);
         ++stats_.For(step.step_id).cabin_hits;
         co_return co_await ServeFromCabin(steps, index, step, access, sets);
+    }
+
+    // A cover step (AQ-R8): every day of a two-sided range, all or nothing
+    // (`ServeAllOrWalk`). The width is asked before a day is made: a cover
+    // wider than the Cabin's value cap is walked without building it.
+    sched::Coro RunCoverStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                        const catalog::TableAccess& access) {
+        const auto [first, last] = *step.cabin->cover;
+        const std::uint64_t width =
+            static_cast<std::uint64_t>(last) - static_cast<std::uint64_t>(first) + 1;
+        if (cabins_ == nullptr || width > cabins_->max_values()) {
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+        std::vector<AskedValue> days;
+        days.reserve(static_cast<std::size_t>(width));
+        for (std::int64_t day = first;; ++day) {
+            AskedValue asked;
+            asked.value.type = parser::ValueType::kInt;
+            asked.value.int_val = day;
+            days.push_back(std::move(asked));
+            if (day == last) break;
+        }
+        co_return co_await ServeAllOrWalk(steps, index, step, access, std::move(days));
+    }
+
+    // A Cabin set (CU; `KeySet`, step_chain.hpp): each value of the list
+    // served from its own observed set, the sets unioned and deduplicated by
+    // tuple key in `ServeFromCabin` (CU-R2) - all or nothing
+    // (`ServeAllOrWalk`). Every row served is filtered by the whole
+    // residual, the list's conjunct included (CU-R1), the leaf of the value
+    // whose set held it asked first (CU-Q9). The items are distinct by
+    // Cabin key since the compile (`CabinSetOf`).
+    sched::Coro RunCabinSetStep(const std::vector<Step>& steps, std::size_t index,
+                                const Step& step, const catalog::TableAccess& access) {
+        const KeySet& list = *step.key_set;
+        // A chain the compiler did not make: the walk answers it.
+        if (!step.cabin.has_value() || list.conjunct >= step.bool_residual.size()) {
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+        const std::vector<BoolPredicate>& leaves = step.bool_residual[list.conjunct].children;
+        std::vector<AskedValue> values;
+        values.reserve(list.items.size());
+        for (const KeySet::Item& item : list.items) {
+            if (item.leaf >= leaves.size()) co_return co_await RunWalkStep(steps, index, step, access);
+            values.push_back({leaves[item.leaf].compare.rhs.literal, item.leaf});
+        }
+        co_return co_await ServeAllOrWalk(steps, index, step, access, std::move(values));
     }
 
     sched::Coro RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
         if (step.cabin.has_value() && step.cabin->cover.has_value()) {
             co_return co_await RunCoverStep(steps, index, step, access);
+        }
+        if (step.key_set.has_value()) {
+            co_return co_await RunCabinSetStep(steps, index, step, access);
         }
         // **No span rule** (`cabin.md` §4b): every walk here covers the
         // whole relation, so a set is neither banked from nor served to a
@@ -1393,6 +1477,12 @@ private:
             // a dropped one.
             co_return co_await RunWalkStep(steps, index, step, access);
         }
+        // A key set's bounds are whole entries of this index too (CU;
+        // `KeySet::bounds`), or the chain is stale in the same way.
+        const KeySet* set = step.key_set.has_value() ? &*step.key_set : nullptr;
+        if (set != nullptr && set->bounds.size() != set->items.size() * 2 * entry_width) {
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
 
         // The correlated form (index.md §8a): the bounds are built
         // here, per outer row - the padding templates copied, the frame
@@ -1446,12 +1536,16 @@ private:
         seen_tuple_keys_.clear();
         filtered_tuple_keys_.clear();
 
-        auto first = index::IndexSeekLeaf(store_, ix->root_page_id, layout, *low);
-        if (!first.ok()) co_return first.status();
-        NoteFetch();
-        ++step_stats.pages_fetched;
+        // Phase 1 between one pair of bounds: the tuple keys of the entries
+        // there, each once, appended to `index_scratch_`.
+        const auto collect = [&](std::span<const std::byte> lo,
+                                 std::span<const std::byte> hi) -> Status {
+          auto first = index::IndexSeekLeaf(store_, ix->root_page_id, layout, lo);
+          if (!first.ok()) return first.status();
+          NoteFetch();
+          ++step_stats.pages_fetched;
 
-        Status walked = index::IndexVisitFrom(
+          return index::IndexVisitFrom(
             store_, first.value(), layout, storage::PageAccess::kRead,
             [&](PageId, index::IndexLeafView& leaf,
                 std::uint16_t at) -> StatusOr<storage::VisitControl> {
@@ -1461,12 +1555,12 @@ private:
                 // The descent lands on the first leaf that *could* hold the
                 // low bound, so the entries before it are skipped rather
                 // than assumed absent.
-                if (std::memcmp(entry.value().data(), low->data(), entry_width) < 0) {
+                if (std::memcmp(entry.value().data(), lo.data(), entry_width) < 0) {
                     return storage::VisitControl::kContinue;
                 }
                 // Past the high bound: the leaves to the right are never
                 // fetched, which is what makes a range cost its range.
-                if (std::memcmp(entry.value().data(), high->data(), entry_width) > 0) {
+                if (std::memcmp(entry.value().data(), hi.data(), entry_width) > 0) {
                     return storage::VisitControl::kStop;
                 }
                 ++step_stats.index_entries_scanned;
@@ -1505,7 +1599,34 @@ private:
                 index_scratch_.push_back(tuple_key);
                 return storage::VisitControl::kContinue;
             });
-        if (!walked.ok()) co_return walked;
+        };
+        if (set == nullptr) {
+            if (Status walked = collect(*low, *high); !walked.ok()) co_return walked;
+        } else {
+            // **A key set walks once per value into the one seen set**
+            // (CU-R2): an entry an earlier version left under one value of
+            // the list names a row whose visible version may hold another
+            // value of it, and the list's conjunct passes that row whichever
+            // entry found it - so two seen sets would emit it twice. Each
+            // key keeps the leaf of the value that found it first, packed
+            // below it for the sort (`kKeySetLeafBits`).
+            const std::span<const std::byte> bounds(set->bounds);
+            for (std::size_t i = 0; i < set->items.size(); ++i) {
+                const std::size_t before = index_scratch_.size();
+                if (Status walked = collect(bounds.subspan(2 * i * entry_width, entry_width),
+                                            bounds.subspan((2 * i + 1) * entry_width, entry_width));
+                    !walked.ok()) {
+                    co_return walked;
+                }
+                for (std::size_t k = before; k < index_scratch_.size(); ++k) {
+                    if ((index_scratch_[k] >> (64 - kKeySetLeafBits)) != 0) {
+                        co_return Status::Corruption(
+                            "an index entry names a tuple key wider than 48 bits");
+                    }
+                    index_scratch_[k] = (index_scratch_[k] << kKeySetLeafBits) | set->items[i].leaf;
+                }
+            }
+        }
         // Descents avoided: the rows every one of whose entries failed.
         step_stats.index_entries_filtered += filtered_tuple_keys_.size();
 
@@ -1536,8 +1657,15 @@ private:
 
         // Phase 2. Every tuple key resolves through the clustered tree (spec
         // IX3).
-        for (const std::uint64_t tuple_key : tuple_keys) {
+        for (const std::uint64_t collected : tuple_keys) {
             if (stopped_) break;
+            // A key set's keys carry the leaf of the value that found them.
+            const std::uint64_t tuple_key =
+                set != nullptr ? collected >> kKeySetLeafBits : collected;
+            if (set != nullptr) {
+                key_set_leaf_ = static_cast<std::uint32_t>(
+                    collected & ((std::uint64_t{1} << kKeySetLeafBits) - 1));
+            }
             NoteFetch();
             ++step_stats.pages_fetched;
             // Counted per descent actually made, not from the scratch size:
@@ -1664,8 +1792,8 @@ private:
                     if (verified.ok()) {
                         ++step_stats.cabin_hint_hits;
                         cabins_->NoteHint(key.cabin_id, /*ok=*/true);
-                        serve_scratch_.push_back(
-                            Located{entry.tuple_key, entry.page_id, entry.slot, entry.page_epoch});
+                        serve_scratch_.push_back(Located{entry.tuple_key, entry.page_id, entry.slot,
+                                                         entry.page_epoch, served.leaf});
                         continue;
                     }
                     ++step_stats.cabin_hint_misses;
@@ -1702,7 +1830,8 @@ private:
                 const std::uint32_t healed_epoch =
                     CurrentPageEpoch(heap::PageView(found.value().leaf.bytes()));
                 entries.Heal(i, healed_page, healed_slot, healed_epoch);
-                serve_scratch_.push_back(Located{entry.tuple_key, healed_page, healed_slot, healed_epoch});
+                serve_scratch_.push_back(
+                    Located{entry.tuple_key, healed_page, healed_slot, healed_epoch, served.leaf});
             }
         }
 
@@ -1740,6 +1869,7 @@ private:
         // held.
         for (const Located& at : located) {
             if (stopped_) break;
+            key_set_leaf_ = at.leaf;  // read only where the step carries a key set
             NoteFetch();
             ++step_stats.pages_fetched;
             VerifiedTuple verified =
@@ -2404,7 +2534,12 @@ private:
         // The boolean conjuncts (BU-S1), after the function ones. A step
         // carrying one takes no build annotation either.
         if (!step.bool_residual.empty()) {
-            auto bool_matched = EvaluateBoolConjuncts(schemas_, step.bool_residual, frame_);
+            // A key set's row asks the leaf its descent was made for first
+            // (CU-Q9); the conjunct evaluated is still the written one.
+            const bool set = step.key_set.has_value();
+            const BoolLeafFirst first{set ? step.key_set->conjunct : 0, key_set_leaf_};
+            auto bool_matched = EvaluateBoolConjuncts(schemas_, step.bool_residual, frame_,
+                                                      nullptr, set ? &first : nullptr);
             if (!bool_matched.ok()) return bool_matched.status();
             if (!bool_matched.value()) return Status::OK();
         }
@@ -2509,8 +2644,9 @@ private:
         // a lookup and never a search, so a kScan step's rows could only
         // ever be prefetched - and nothing prefetches. Recording them would
         // be paying a write per scanned row for a read nobody makes. The
-        // test is the step's *kind*, not how the row was found.
-        if (trail_ != nullptr && IsTrailReplayable(step.kind)) {
+        // test is the step's *kind* and its key set (CU-Q4), not how the row
+        // was found.
+        if (trail_ != nullptr && IsTrailReplayable(step)) {
             TouchedTuple touched;
             touched.rel_oid = access.oid;
             // Column 0 is the Keystone tuple key, already decoded into the frame
@@ -2641,6 +2777,12 @@ private:
     std::uint16_t memo_slot_ = 0;
     std::uint32_t memo_epoch_ = 0;  // the leaf's page epoch at the descent
 
+    // The conjunct leaf that names the value whose descent found the row a
+    // key set step is about to accept (`RunKeySetStep`, an index or Cabin
+    // step's phase 2), read by that step's own residual before anything
+    // deeper runs.
+    std::uint32_t key_set_leaf_ = 0;
+
     // ---- Cabin (docs/spec/cabin.md) --------------------------------------
     //
     // The instance's observed sets (one store for every core), or null when
@@ -2725,6 +2867,7 @@ private:
         PageId page_id = kInvalidPageId;
         std::uint16_t slot = 0;
         std::uint32_t epoch = 0;  // the page's page epoch the slot was valid under
+        std::uint32_t leaf = 0;   // its `ServedSet::leaf`
     };
     std::vector<Located> serve_scratch_;
     std::unordered_set<std::uint64_t> seen_tuple_keys_;
@@ -2886,7 +3029,8 @@ void UninstallSuspendAudit() noexcept {
 StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& store,
                                  const std::vector<const catalog::Schema*>& schemas,
                                  const Step& step, const ChainFrame& frame, ExecStats* stats,
-                                 const Budget& budget, const txn::Snapshot* snapshot) {
+                                 const Budget& budget, const txn::Snapshot* snapshot,
+                                 const BoolLeafFirst* first) {
     if (!EvaluateAllChecked(schemas, step.residual, frame)) return false;
     if (!step.fn_residual.empty()) {
         auto fn_matched = EvaluateFunctionConjuncts(step.fn_residual, frame);
@@ -2894,7 +3038,8 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
         if (!fn_matched.value()) return false;
     }
     if (!step.bool_residual.empty()) {
-        auto bool_matched = EvaluateBoolConjuncts(schemas, step.bool_residual, frame);
+        auto bool_matched =
+            EvaluateBoolConjuncts(schemas, step.bool_residual, frame, nullptr, first);
         if (!bool_matched.ok()) return bool_matched.status();
         if (!bool_matched.value()) return false;
     }

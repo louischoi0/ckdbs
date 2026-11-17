@@ -138,7 +138,7 @@ TEST_F(StepCorrelationTest, ACorrelatedProbeIsStillAProbe) {
     const SubChain& sub = chain.steps[0].sub_chains[0];
     ASSERT_EQ(sub.steps.size(), 1u);
     EXPECT_EQ(sub.steps[0].kind, AccessKind::kProbe);
-    EXPECT_TRUE(IsTrailReplayable(sub.steps[0].kind));
+    EXPECT_TRUE(IsTrailReplayable(sub.steps[0]));
 
     ASSERT_TRUE(sub.steps[0].key.has_value());
     EXPECT_EQ(sub.steps[0].key->kind, OperandKind::kColumn);

@@ -236,15 +236,17 @@ TEST(UniqueIndexRigTest, AMultiRowInsertsLaterRowMeetingABusyKeyIsRefusedNotPark
     EXPECT_EQ(r.rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
 }
 
-// An UPDATE that has written a row parks mid-walk on a busy key and resumes
-// at the row it stopped on (AO-S3b, BX-R4).
-void WalkParksMidStatement(const char* decide, const char* expected,
-                           const char* rows_after) {
+// An UPDATE that has written a row parks mid-statement on a busy key and
+// resumes at the row it stopped on (AO-S3b, BX-R4). `where` picks the path:
+// a walk, or - a list on the tuple key - one descent per value (CU-S3), whose
+// unique-key round is the point write's.
+void WalkParksMidStatement(const char* decide, const char* expected, const char* rows_after,
+                           const char* where = "note = 0") {
     UniqueRig r;
     ASSERT_NE(r.rig, nullptr);
     ASSERT_TRUE(r.Seed({kSeed[0], kSeed[1], "INSERT INTO t VALUES (1, 0), (2, 0)"}));
     r.Start({"BEGIN", "INSERT INTO t VALUES (20, 9)", decide},
-            {"UPDATE t SET owner = owner * 10 WHERE note = 0",
+            {std::string("UPDATE t SET owner = owner * 10 WHERE ") + where,
              "SELECT id, owner FROM t WHERE note = 0"});
     ASSERT_TRUE(r.Step(r.a, 0, 0));
     ASSERT_TRUE(r.Step(r.a, 0, 1));
@@ -272,6 +274,14 @@ TEST(UniqueIndexRigTest, AWalkParkedOnABusyKeyResumesAndWritesAtTheHoldersRollba
 
 TEST(UniqueIndexRigTest, AWalkParkedOnABusyKeyIsRefusedAtTheHoldersCommit) {
     WalkParksMidStatement("COMMIT", nullptr, "id,owner\\n1,1\\n2,2");
+}
+
+TEST(UniqueIndexRigTest, AListWriteParkedOnABusyKeyResumesAtItsValueAtTheHoldersRollback) {
+    WalkParksMidStatement("ROLLBACK", "UPDATED 2", "id,owner\\n1,10\\n2,20", "id IN (2, 1, 7)");
+}
+
+TEST(UniqueIndexRigTest, AListWriteParkedOnABusyKeyIsRefusedAtTheHoldersCommit) {
+    WalkParksMidStatement("COMMIT", nullptr, "id,owner\\n1,1\\n2,2", "id IN (2, 1, 7)");
 }
 
 TEST(UniqueIndexRigTest, AWriterPausedBetweenPlacementAndAppendHoldsItsKeyAgainstTheOther) {

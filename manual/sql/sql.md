@@ -1207,7 +1207,7 @@ is one of (verified — the `PredicateKind` enum):
 | `NOT EXISTS (SELECT ...)` | kNotExists | |
 | `col BETWEEN low AND high` | kBetween | inclusive both ends; lowers to `>= low AND <= high`, the range on the step is only a hint |
 | `col IS NULL` / `col IS NOT NULL` | kCompareValue | the one spelling that finds NULLs — answered from the stored bitmap |
-| `col IN (v, ...)` | kBoolTree (one item: kCompareValue) | since BU-S2: `col = v1 OR col = v2 ...`; at most 4,096 items |
+| `col IN (v, ...)` | kBoolTree (one item: kCompareValue) | since BU-S2: `col = v1 OR col = v2 ...`; at most 4,096 items. On the tuple key (CU-S1), on a column of an index's prefix and on a cabined column (CU-S2) it is a key set: one descent per value. An `UPDATE` or `DELETE` whose `WHERE` holds a list on the tuple key writes by one descent per value (CU-S3), beside any other condition but a subquery (CU-S3b) |
 | `col NOT IN (v, ...)` | kCompareValue `!=`, one per item | since BU-S2: `col != v1 AND col != v2 ...`, flattened into the AND-list where it stands at the top; a NULL item is unknown, so `NOT IN (1, NULL)` keeps no row |
 | `col NOT BETWEEN low AND high` | kBoolTree | since BU-S2: `NOT (col BETWEEN low AND high)` |
 | `col [NOT] LIKE 'pattern'` | kBoolTree | since BU-S2: `char`/`varchar` only; `%` any run, `_` one byte, case-sensitive bytes; no `ESCAPE` |
@@ -1235,10 +1235,52 @@ is one of (verified — the `PredicateKind` enum):
   at most `kMaxSubqueryDepth = 4` below the outermost block. The fifth level
   is refused with a position.
 - `IN (1, 2, 3)` — a value list — exists since BU-S2. Each item is coerced
-  to the column's type at compile, with its byte. A list of more than one
-  item, like `LIKE` and `NOT BETWEEN`, is a filter and never a key: `WHERE
-  id IN (1, 2)` walks the relation (`IN` of one item is `=`, keys and all;
-  `NOT IN` is a list of `!=`, which no access path keys on either).
+  to the column's type at compile, with its byte. `IN` of one item is `=`,
+  keys and all. **A list on the tuple key is a key set since CU-S1**:
+  `WHERE id IN (1, 7, 42)` and `WHERE id = 1 OR id = 7` descend once per
+  distinct value instead of walking the relation, `ANALYZE` shows `Lookup
+  ... key_set=<n>`, `ORDER BY id` over it costs no sort, and the answer is
+  the walk's: the list is still checked on every row found. **A list on an indexed or cabined column is a key
+  set since CU-S2.** `WHERE owner IN (1, 9)` enters an index on `owner`
+  once per value, and the list may be any one column of the index's
+  equality prefix: `owner = 2 AND qty IN (0, 7)` on an index over `(owner,
+  qty)`, or a list followed by a `BETWEEN` on the next key column;
+  `ANALYZE` shows `IndexProbe ... key_set=<n>`. One list an index: a
+  second is a filter. A list never moves a statement off an index that a
+  plain equality already entered unless it reaches a longer run of
+  equality columns, and in a join it is not read on a relation the join's
+  own key enters by an index or a Cabin - there it is a filter, as before.
+  On a column with a Cabin (`CREATE CABIN ON t(sym)`), `sym IN ('a', 'b')`
+  is answered from the Cabin once each of its values has been observed by
+  a single-value statement (`sym = 'a'`); until then, and whenever one
+  value is unobserved, it walks - a list observes nothing itself. A Cabin
+  is asked by list only where the statement would otherwise walk the whole
+  relation: any other Cabin form the statement matches, and a two-sided
+  tuple key range, keep it. The shape is
+  exact - one `OR` whose every term is `<that column> = <literal>`. An
+  `OR` that mixes columns, holds any other comparison, sits under `NOT` or
+  is nested in another `OR` or `AND` (`id IN (1, 2) OR id = 3`) is a
+  filter, and so is a list on a column with no such structure: each walks
+  the relation. **A write by a list of tuple keys descends once per value
+  since CU-S3**: `UPDATE t SET ... WHERE id IN (1, 7, 42)` and `DELETE FROM
+  t WHERE id = 1 OR id = 7` write the rows they name without walking the
+  relation, in key order, each row locked as it is written. **Other
+  conditions may stand beside the key since CU-S3b**: `id IN (1, 7) AND
+  status = 'open'` and `id = 1 AND status = 'open'` descend to the rows
+  their keys name and write those the other conditions keep. A range on
+  the tuple key beside a list (`id IN (1, 7) AND id < 100`) still
+  descends, and the rows are written under the range's lock window
+  instead of a lock each. A `WHERE` that holds a subquery is the
+  exception: `id = 1 AND status IN (SELECT ...)` walks the relation. So
+  does a write keyed only by a range (`id BETWEEN 10 AND 20`), and a
+  write never finds its rows through an
+  index or a Cabin. `PURGE` takes no list. (A
+  list on a relation a write only reads - `UPDATE ... FROM`, `DELETE ...
+  USING`, a subquery, `INSERT ... SELECT` - is a read and is keyed.) `LIKE`, `NOT BETWEEN` and `NOT IN` (a list of `!=`)
+  key nothing. A relation of a few dozen rows is read faster by its walk
+  than by a long list's descents; the engine takes the set at every size.
+  A statement driven by a list runs to its end without yielding its core,
+  taking a cancel or sending rows early, as one driven by `id = <v>` does.
 - **No type is converted implicitly** (types.md §3.1a). A literal must be
   written in the compared column's own spelling, and a statement that
   breaks the rule is refused at compile with the literal's byte - whether

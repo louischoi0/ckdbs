@@ -41,7 +41,7 @@ void TrailReplay::Build(const StepChain& chain,
         // recorder does not write them, so this drops nothing today; it is
         // here because "the trail said so" must never be able to turn a
         // scan into a lookup.
-        if (!IsTrailReplayable(step.kind)) continue;
+        if (!IsTrailReplayable(step)) continue;
 
         // **Last entry wins for a repeated key**, and it does not matter
         // which: the entries were recorded in one execution, and one

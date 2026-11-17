@@ -1,0 +1,6464 @@
+{
+ "args": {
+  "bin": "./kds_B",
+  "bin_a": "./kds_A",
+  "workdir": "/home/louis/bench-runs/cu-close/data",
+  "out": "/home/louis/bench-runs/cu-close/out/lists.json",
+  "port": 15631,
+  "rows": "1000,100000",
+  "n": "1,4,64,1024,4096",
+  "cols": "id,k",
+  "reps": 2,
+  "seconds": 2.0,
+  "heartbeat": "/home/louis/bench-runs/cu-close/out/lists.progress",
+  "status": "/home/louis/bench-runs/cu-close/out/lists.status"
+ },
+ "bin_sha256": "3a11e8ef7b1ffc52fb91220bbb3a65504b4ed04cf25842d5fb8a97ec338e079c",
+ "bin_a_sha256": "b0679f91b74379c7ecb013b3b37c78eb267385373b691636358c0df9ea888dfc",
+ "cells": [
+  {
+   "groups": 25981,
+   "gps": 13969.3,
+   "server_cpu_us_per_group": 26.2,
+   "server_cpu_s": 0.68,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 25981,
+    "p0_us": 49.6,
+    "p25_us": 54.0,
+    "p50_us": 66.4,
+    "p75_us": 75.2,
+    "p99_us": 170.2,
+    "max_us": 2381.8
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.67 4.98 4.89 3/677 1591419",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 29122,
+   "gps": 15695.1,
+   "server_cpu_us_per_group": 22.7,
+   "server_cpu_s": 0.66,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 29122,
+    "p0_us": 45.9,
+    "p25_us": 51.7,
+    "p50_us": 58.9,
+    "p75_us": 70.2,
+    "p99_us": 135.8,
+    "max_us": 1903.9
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.53 4.94 4.88 2/677 1591446",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 24302,
+   "gps": 14528.8,
+   "server_cpu_us_per_group": 29.2,
+   "server_cpu_s": 0.71,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 24302,
+    "p0_us": 52.9,
+    "p25_us": 56.2,
+    "p50_us": 59.5,
+    "p75_us": 73.2,
+    "p99_us": 142.6,
+    "max_us": 820.0
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.53 4.94 4.88 2/684 1591474",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 28421,
+   "gps": 15312.4,
+   "server_cpu_us_per_group": 24.3,
+   "server_cpu_s": 0.69,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 28421,
+    "p0_us": 49.1,
+    "p25_us": 52.8,
+    "p50_us": 61.8,
+    "p75_us": 72.0,
+    "p99_us": 134.3,
+    "max_us": 1170.6
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.53 4.94 4.88 3/684 1591483",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 28960,
+   "gps": 15592.9,
+   "server_cpu_us_per_group": 24.2,
+   "server_cpu_s": 0.7,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 28960,
+    "p0_us": 48.7,
+    "p25_us": 52.2,
+    "p50_us": 58.5,
+    "p75_us": 72.2,
+    "p99_us": 130.2,
+    "max_us": 4314.3
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.25 4.88 4.86 2/683 1591505",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 27139,
+   "gps": 14616.4,
+   "server_cpu_us_per_group": 24.3,
+   "server_cpu_s": 0.66,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 27139,
+    "p0_us": 49.1,
+    "p25_us": 52.9,
+    "p50_us": 68.0,
+    "p75_us": 72.7,
+    "p99_us": 153.9,
+    "max_us": 4109.3
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.25 4.88 4.86 3/684 1591509",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 28062,
+   "gps": 15131.9,
+   "server_cpu_us_per_group": 23.9,
+   "server_cpu_s": 0.67,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 28062,
+    "p0_us": 49.1,
+    "p25_us": 52.9,
+    "p50_us": 67.0,
+    "p75_us": 72.5,
+    "p99_us": 133.3,
+    "max_us": 1347.7
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.15 4.85 4.85 2/684 1591512",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 27036,
+   "gps": 14561.6,
+   "server_cpu_us_per_group": 24.4,
+   "server_cpu_s": 0.66,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 27036,
+    "p0_us": 49.4,
+    "p25_us": 53.7,
+    "p50_us": 67.4,
+    "p75_us": 73.0,
+    "p99_us": 145.8,
+    "max_us": 4679.4
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.15 4.85 4.85 3/681 1591568",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 21328,
+   "gps": 12659.6,
+   "server_cpu_us_per_group": 30.9,
+   "server_cpu_s": 0.66,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 21328,
+    "p0_us": 52.8,
+    "p25_us": 58.0,
+    "p50_us": 73.2,
+    "p75_us": 95.2,
+    "p99_us": 156.7,
+    "max_us": 3906.5
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.30 4.87 4.86 2/681 1591598",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 27577,
+   "gps": 14899.7,
+   "server_cpu_us_per_group": 25.0,
+   "server_cpu_s": 0.69,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 27577,
+    "p0_us": 48.3,
+    "p25_us": 53.7,
+    "p50_us": 68.8,
+    "p75_us": 71.6,
+    "p99_us": 136.7,
+    "max_us": 1664.2
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.30 4.87 4.86 3/681 1591619",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 22338,
+   "gps": 12126.8,
+   "server_cpu_us_per_group": 30.9,
+   "server_cpu_s": 0.69,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 22338,
+    "p0_us": 58.2,
+    "p25_us": 62.5,
+    "p50_us": 78.3,
+    "p75_us": 97.2,
+    "p99_us": 161.5,
+    "max_us": 1395.2
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.11 4.82 4.84 2/682 1591626",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7415,
+   "gps": 3829.9,
+   "server_cpu_us_per_group": 95.8,
+   "server_cpu_s": 0.71,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 7415,
+    "p0_us": 194.8,
+    "p25_us": 210.0,
+    "p50_us": 263.8,
+    "p75_us": 284.8,
+    "p99_us": 480.6,
+    "max_us": 3337.6
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.11 4.82 4.84 3/675 1591647",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 21091,
+   "gps": 12611.0,
+   "server_cpu_us_per_group": 31.8,
+   "server_cpu_s": 0.67,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 21091,
+    "p0_us": 58.7,
+    "p25_us": 62.6,
+    "p50_us": 68.9,
+    "p75_us": 84.3,
+    "p99_us": 165.4,
+    "max_us": 3420.3
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.11 4.82 4.84 2/675 1591653",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 23316,
+   "gps": 12632.2,
+   "server_cpu_us_per_group": 30.9,
+   "server_cpu_s": 0.72,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 23316,
+    "p0_us": 58.2,
+    "p25_us": 62.0,
+    "p50_us": 68.9,
+    "p75_us": 85.3,
+    "p99_us": 163.9,
+    "max_us": 1795.7
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.03 4.79 4.83 2/675 1591656",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 9267,
+   "gps": 4821.3,
+   "server_cpu_us_per_group": 140.3,
+   "server_cpu_s": 1.3,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 9267,
+    "p0_us": 146.4,
+    "p25_us": 165.0,
+    "p50_us": 205.5,
+    "p75_us": 223.0,
+    "p99_us": 362.3,
+    "max_us": 4276.7
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.03 4.79 4.83 2/676 1591678",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 23455,
+   "gps": 12728.5,
+   "server_cpu_us_per_group": 29.4,
+   "server_cpu_s": 0.69,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 23455,
+    "p0_us": 58.1,
+    "p25_us": 61.7,
+    "p50_us": 69.6,
+    "p75_us": 85.0,
+    "p99_us": 157.6,
+    "max_us": 4150.2
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "3.78 4.72 4.81 2/675 1591681",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 9727,
+   "gps": 5067.8,
+   "server_cpu_us_per_group": 133.6,
+   "server_cpu_s": 1.3,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 9727,
+    "p0_us": 147.7,
+    "p25_us": 164.1,
+    "p50_us": 189.4,
+    "p75_us": 216.0,
+    "p99_us": 350.0,
+    "max_us": 1406.4
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "3.78 4.72 4.81 2/680 1591711",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 23057,
+   "gps": 12486.8,
+   "server_cpu_us_per_group": 30.8,
+   "server_cpu_s": 0.71,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 23057,
+    "p0_us": 58.5,
+    "p25_us": 62.2,
+    "p50_us": 72.9,
+    "p75_us": 84.1,
+    "p99_us": 165.1,
+    "max_us": 4635.7
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "3.78 4.72 4.81 3/680 1591717",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 20458,
+   "gps": 12209.0,
+   "server_cpu_us_per_group": 33.2,
+   "server_cpu_s": 0.68,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 20458,
+    "p0_us": 58.8,
+    "p25_us": 63.0,
+    "p50_us": 75.1,
+    "p75_us": 91.7,
+    "p99_us": 167.7,
+    "max_us": 916.6
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "3.88 4.73 4.81 3/679 1591720",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7545,
+   "gps": 3900.3,
+   "server_cpu_us_per_group": 91.5,
+   "server_cpu_s": 0.69,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 7545,
+    "p0_us": 195.7,
+    "p25_us": 208.8,
+    "p50_us": 252.7,
+    "p75_us": 281.9,
+    "p99_us": 467.8,
+    "max_us": 3406.8
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "3.88 4.73 4.81 3/678 1591742",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6979,
+   "gps": 3883.4,
+   "server_cpu_us_per_group": 123.2,
+   "server_cpu_s": 0.86,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 6979,
+    "p0_us": 184.5,
+    "p25_us": 200.6,
+    "p50_us": 246.2,
+    "p75_us": 289.4,
+    "p99_us": 452.6,
+    "max_us": 1977.7
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "3.73 4.68 4.80 3/678 1591746",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 509,
+   "gps": 256.6,
+   "server_cpu_us_per_group": 1453.8,
+   "server_cpu_s": 0.74,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 509,
+    "p0_us": 3190.6,
+    "p25_us": 3347.8,
+    "p50_us": 3661.3,
+    "p75_us": 4456.8,
+    "p99_us": 5438.5,
+    "max_us": 8132.6
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "3.73 4.68 4.80 2/678 1591775",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7963,
+   "gps": 4628.0,
+   "server_cpu_us_per_group": 95.4,
+   "server_cpu_s": 0.76,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 7963,
+    "p0_us": 148.6,
+    "p25_us": 163.1,
+    "p50_us": 220.7,
+    "p75_us": 243.6,
+    "p99_us": 393.8,
+    "max_us": 1267.5
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "3.91 4.71 4.80 2/677 1591782",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7073,
+   "gps": 3923.8,
+   "server_cpu_us_per_group": 123.0,
+   "server_cpu_s": 0.87,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 7073,
+    "p0_us": 183.6,
+    "p25_us": 201.3,
+    "p50_us": 263.6,
+    "p75_us": 283.7,
+    "p99_us": 429.9,
+    "max_us": 1139.2
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "3.91 4.71 4.80 3/679 1591808",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 1864,
+   "gps": 968.2,
+   "server_cpu_us_per_group": 842.3,
+   "server_cpu_s": 1.57,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 1864,
+    "p0_us": 843.7,
+    "p25_us": 941.0,
+    "p50_us": 997.4,
+    "p75_us": 1076.8,
+    "p99_us": 1688.0,
+    "max_us": 1781.1
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "3.91 4.71 4.80 4/678 1591812",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6574,
+   "gps": 3662.0,
+   "server_cpu_us_per_group": 127.8,
+   "server_cpu_s": 0.84,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 6574,
+    "p0_us": 183.6,
+    "p25_us": 206.1,
+    "p50_us": 273.0,
+    "p75_us": 308.3,
+    "p99_us": 466.4,
+    "max_us": 1169.2
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "3.84 4.68 4.79 4/679 1591816",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 1743,
+   "gps": 902.4,
+   "server_cpu_us_per_group": 918.0,
+   "server_cpu_s": 1.6,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 1743,
+    "p0_us": 855.6,
+    "p25_us": 965.7,
+    "p50_us": 1034.8,
+    "p75_us": 1156.0,
+    "p99_us": 1760.3,
+    "max_us": 4170.3
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "3.84 4.68 4.79 4/672 1591838",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6235,
+   "gps": 3473.2,
+   "server_cpu_us_per_group": 134.7,
+   "server_cpu_s": 0.84,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 6235,
+    "p0_us": 184.5,
+    "p25_us": 218.5,
+    "p50_us": 282.3,
+    "p75_us": 328.0,
+    "p99_us": 494.1,
+    "max_us": 2613.3
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "4.01 4.70 4.80 3/672 1591847",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7597,
+   "gps": 4410.8,
+   "server_cpu_us_per_group": 98.7,
+   "server_cpu_s": 0.75,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 7597,
+    "p0_us": 146.5,
+    "p25_us": 171.3,
+    "p50_us": 229.8,
+    "p75_us": 251.6,
+    "p99_us": 406.8,
+    "max_us": 4245.5
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "4.01 4.70 4.80 2/671 1591868",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 473,
+   "gps": 238.8,
+   "server_cpu_us_per_group": 1479.9,
+   "server_cpu_s": 0.7,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 473,
+    "p0_us": 3215.0,
+    "p25_us": 3677.8,
+    "p50_us": 4317.1,
+    "p75_us": 4533.3,
+    "p99_us": 5678.5,
+    "max_us": 6700.0
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "4.01 4.70 4.80 2/663 1591871",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 698,
+   "gps": 395.5,
+   "server_cpu_us_per_group": 1361.0,
+   "server_cpu_s": 0.95,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 698,
+    "p0_us": 2177.8,
+    "p25_us": 2310.5,
+    "p50_us": 2378.5,
+    "p75_us": 2606.4,
+    "p99_us": 3868.2,
+    "max_us": 4302.1
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.01 4.69 4.80 2/669 1591904",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 31,
+   "gps": 15.4,
+   "server_cpu_us_per_group": 24193.5,
+   "server_cpu_s": 0.75,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 31,
+    "p0_us": 55523.7,
+    "p25_us": 61834.1,
+    "p50_us": 65194.8,
+    "p75_us": 69607.5,
+    "p99_us": 76810.1,
+    "max_us": 76810.1
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.01 4.68 4.79 2/676 1591920",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 905,
+   "gps": 531.1,
+   "server_cpu_us_per_group": 917.1,
+   "server_cpu_s": 0.83,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 905,
+    "p0_us": 1689.1,
+    "p25_us": 1777.2,
+    "p50_us": 1806.3,
+    "p75_us": 1871.1,
+    "p99_us": 2914.2,
+    "max_us": 4266.6
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.01 4.68 4.79 2/675 1591923",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 726,
+   "gps": 409.2,
+   "server_cpu_us_per_group": 1294.8,
+   "server_cpu_s": 0.94,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 726,
+    "p0_us": 2204.7,
+    "p25_us": 2289.8,
+    "p50_us": 2325.5,
+    "p75_us": 2465.5,
+    "p99_us": 3364.2,
+    "max_us": 6592.6
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.01 4.68 4.79 5/675 1591945",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 261,
+   "gps": 136.0,
+   "server_cpu_us_per_group": 6206.9,
+   "server_cpu_s": 1.62,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 261,
+    "p0_us": 6861.2,
+    "p25_us": 7047.3,
+    "p50_us": 7149.7,
+    "p75_us": 7494.5,
+    "p99_us": 9102.0,
+    "max_us": 10002.3
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.93 4.65 4.78 2/677 1591950",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 713,
+   "gps": 401.2,
+   "server_cpu_us_per_group": 1332.4,
+   "server_cpu_s": 0.95,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 713,
+    "p0_us": 2203.3,
+    "p25_us": 2310.4,
+    "p50_us": 2385.0,
+    "p75_us": 2542.6,
+    "p99_us": 3428.7,
+    "max_us": 4023.0
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.93 4.65 4.78 2/677 1591980",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 251,
+   "gps": 130.3,
+   "server_cpu_us_per_group": 6533.9,
+   "server_cpu_s": 1.64,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 251,
+    "p0_us": 6868.0,
+    "p25_us": 7104.6,
+    "p50_us": 7280.3,
+    "p75_us": 7655.0,
+    "p99_us": 13636.9,
+    "max_us": 13732.0
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.93 4.64 4.78 2/670 1591986",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 683,
+   "gps": 385.5,
+   "server_cpu_us_per_group": 1361.6,
+   "server_cpu_s": 0.93,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 683,
+    "p0_us": 2195.9,
+    "p25_us": 2308.0,
+    "p50_us": 2398.1,
+    "p75_us": 2935.6,
+    "p99_us": 3954.9,
+    "max_us": 4164.6
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.93 4.64 4.78 2/670 1591989",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 903,
+   "gps": 529.8,
+   "server_cpu_us_per_group": 908.1,
+   "server_cpu_s": 0.82,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 903,
+    "p0_us": 1692.5,
+    "p25_us": 1780.0,
+    "p50_us": 1810.6,
+    "p75_us": 1895.9,
+    "p99_us": 2589.8,
+    "max_us": 5354.0
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.93 4.64 4.78 2/677 1592017",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 31,
+   "gps": 15.2,
+   "server_cpu_us_per_group": 24193.5,
+   "server_cpu_s": 0.75,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 31,
+    "p0_us": 54331.8,
+    "p25_us": 63444.4,
+    "p50_us": 67008.5,
+    "p75_us": 69738.9,
+    "p99_us": 76575.7,
+    "max_us": 76575.7
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.02 4.64 4.78 2/678 1592022",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 219,
+   "gps": 124.6,
+   "server_cpu_us_per_group": 6484.0,
+   "server_cpu_s": 1.42,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 219,
+    "p0_us": 7220.3,
+    "p25_us": 7517.9,
+    "p50_us": 7716.4,
+    "p75_us": 8091.5,
+    "p99_us": 11388.3,
+    "max_us": 11427.3
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.10 4.65 4.78 2/670 1592049",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 9,
+   "gps": 4.1,
+   "server_cpu_us_per_group": 91111.1,
+   "server_cpu_s": 0.82,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 9,
+    "p0_us": 214790.1,
+    "p25_us": 233006.0,
+    "p50_us": 234648.9,
+    "p75_us": 246700.5,
+    "p99_us": 269849.2,
+    "max_us": 269849.2
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.10 4.65 4.78 2/670 1592052",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 409,
+   "gps": 282.7,
+   "server_cpu_us_per_group": 2347.2,
+   "server_cpu_s": 0.96,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 409,
+    "p0_us": 2966.7,
+    "p25_us": 3114.1,
+    "p50_us": 3457.6,
+    "p75_us": 3780.4,
+    "p99_us": 4987.9,
+    "max_us": 7056.4
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.10 4.65 4.78 2/664 1592074",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 225,
+   "gps": 129.7,
+   "server_cpu_us_per_group": 6044.4,
+   "server_cpu_s": 1.36,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 225,
+    "p0_us": 7131.8,
+    "p25_us": 7298.1,
+    "p50_us": 7481.4,
+    "p75_us": 8079.2,
+    "p99_us": 9300.1,
+    "max_us": 9791.7
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.09 4.64 4.78 3/666 1592079",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 68,
+   "gps": 35.2,
+   "server_cpu_us_per_group": 26911.8,
+   "server_cpu_s": 1.83,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 68,
+    "p0_us": 25539.5,
+    "p25_us": 26531.9,
+    "p50_us": 27014.2,
+    "p75_us": 28438.3,
+    "p99_us": 47714.0,
+    "max_us": 47714.0
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.09 4.64 4.78 3/672 1592109",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 222,
+   "gps": 127.2,
+   "server_cpu_us_per_group": 6306.3,
+   "server_cpu_s": 1.4,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 222,
+    "p0_us": 7258.5,
+    "p25_us": 7504.4,
+    "p50_us": 7704.7,
+    "p75_us": 8109.6,
+    "p99_us": 9452.1,
+    "max_us": 9937.3
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.92 4.59 4.76 5/679 1592122",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 68,
+   "gps": 34.9,
+   "server_cpu_us_per_group": 27058.8,
+   "server_cpu_s": 1.84,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 68,
+    "p0_us": 26102.0,
+    "p25_us": 27043.1,
+    "p50_us": 27698.1,
+    "p75_us": 28923.5,
+    "p99_us": 45836.9,
+    "max_us": 45836.9
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.92 4.59 4.76 2/679 1592125",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 210,
+   "gps": 119.8,
+   "server_cpu_us_per_group": 6666.7,
+   "server_cpu_s": 1.4,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 210,
+    "p0_us": 7244.6,
+    "p25_us": 7457.5,
+    "p50_us": 7742.0,
+    "p75_us": 8649.4,
+    "p99_us": 12787.3,
+    "max_us": 13130.4
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.92 4.59 4.76 10/680 1592149",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 364,
+   "gps": 244.1,
+   "server_cpu_us_per_group": 2774.7,
+   "server_cpu_s": 1.01,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 364,
+    "p0_us": 2986.1,
+    "p25_us": 3166.5,
+    "p50_us": 3850.4,
+    "p75_us": 4958.9,
+    "p99_us": 7853.3,
+    "max_us": 9369.8
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.25 4.65 4.78 11/678 1592152",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 8,
+   "gps": 3.9,
+   "server_cpu_us_per_group": 100000.0,
+   "server_cpu_s": 0.8,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 8,
+    "p0_us": 225024.7,
+    "p25_us": 228963.7,
+    "p50_us": 245623.4,
+    "p75_us": 262271.9,
+    "p99_us": 329235.5,
+    "max_us": 329235.5
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.25 4.65 4.78 2/675 1592182",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 27284,
+   "gps": 14651.6,
+   "server_cpu_us_per_group": 27.9,
+   "server_cpu_s": 0.76,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 27284,
+    "p0_us": 51.7,
+    "p25_us": 55.9,
+    "p50_us": 60.7,
+    "p75_us": 77.3,
+    "p99_us": 135.9,
+    "max_us": 4997.6
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "4.07 4.61 4.76 2/668 1592189",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 26637,
+   "gps": 14323.3,
+   "server_cpu_us_per_group": 28.5,
+   "server_cpu_s": 0.76,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 26637,
+    "p0_us": 50.7,
+    "p25_us": 55.6,
+    "p50_us": 68.4,
+    "p75_us": 76.9,
+    "p99_us": 137.6,
+    "max_us": 1142.5
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "4.07 4.61 4.76 2/675 1592217",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 21083,
+   "gps": 12422.9,
+   "server_cpu_us_per_group": 35.6,
+   "server_cpu_s": 0.75,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 21083,
+    "p0_us": 56.5,
+    "p25_us": 60.2,
+    "p50_us": 67.3,
+    "p75_us": 99.6,
+    "p99_us": 160.7,
+    "max_us": 1067.9
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.98 4.58 4.75 2/675 1592221",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 25131,
+   "gps": 13508.6,
+   "server_cpu_us_per_group": 27.9,
+   "server_cpu_s": 0.7,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 25131,
+    "p0_us": 51.6,
+    "p25_us": 58.0,
+    "p50_us": 71.7,
+    "p75_us": 78.6,
+    "p99_us": 167.8,
+    "max_us": 1306.5
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.98 4.58 4.75 2/668 1592224",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 25244,
+   "gps": 13558.0,
+   "server_cpu_us_per_group": 28.5,
+   "server_cpu_s": 0.72,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 25244,
+    "p0_us": 52.1,
+    "p25_us": 57.8,
+    "p50_us": 70.3,
+    "p75_us": 78.8,
+    "p99_us": 163.7,
+    "max_us": 1233.1
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.98 4.58 4.75 3/668 1592252",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 23523,
+   "gps": 12641.2,
+   "server_cpu_us_per_group": 29.8,
+   "server_cpu_s": 0.7,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 23523,
+    "p0_us": 52.4,
+    "p25_us": 64.4,
+    "p50_us": 75.1,
+    "p75_us": 81.6,
+    "p99_us": 179.9,
+    "max_us": 4206.6
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.90 4.55 4.75 4/668 1592255",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 25582,
+   "gps": 13748.8,
+   "server_cpu_us_per_group": 27.8,
+   "server_cpu_s": 0.71,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 25582,
+    "p0_us": 51.6,
+    "p25_us": 56.8,
+    "p50_us": 69.5,
+    "p75_us": 79.0,
+    "p99_us": 158.6,
+    "max_us": 1118.2
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.90 4.55 4.75 4/660 1592276",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 26707,
+   "gps": 14357.2,
+   "server_cpu_us_per_group": 28.1,
+   "server_cpu_s": 0.75,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 26707,
+    "p0_us": 52.2,
+    "p25_us": 56.5,
+    "p50_us": 63.7,
+    "p75_us": 78.2,
+    "p99_us": 139.3,
+    "max_us": 1078.9
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.67 4.49 4.72 2/661 1592280",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 20921,
+   "gps": 12259.1,
+   "server_cpu_us_per_group": 37.8,
+   "server_cpu_s": 0.79,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 20921,
+    "p0_us": 57.3,
+    "p25_us": 61.3,
+    "p50_us": 74.0,
+    "p75_us": 96.5,
+    "p99_us": 159.3,
+    "max_us": 3938.9
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.67 4.49 4.72 2/668 1592290",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 26510,
+   "gps": 14243.3,
+   "server_cpu_us_per_group": 27.5,
+   "server_cpu_s": 0.73,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 26510,
+    "p0_us": 51.0,
+    "p25_us": 56.1,
+    "p50_us": 67.9,
+    "p75_us": 76.0,
+    "p99_us": 152.6,
+    "max_us": 1184.4
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.67 4.49 4.72 2/675 1592325",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 19110,
+   "gps": 10249.2,
+   "server_cpu_us_per_group": 45.0,
+   "server_cpu_s": 0.86,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 19110,
+    "p0_us": 64.6,
+    "p25_us": 71.7,
+    "p50_us": 83.0,
+    "p75_us": 130.0,
+    "p99_us": 174.3,
+    "max_us": 1409.0
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.54 4.45 4.71 2/675 1592331",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6697,
+   "gps": 3454.6,
+   "server_cpu_us_per_group": 113.5,
+   "server_cpu_s": 0.76,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 6697,
+    "p0_us": 206.6,
+    "p25_us": 223.8,
+    "p50_us": 281.6,
+    "p75_us": 308.9,
+    "p99_us": 607.2,
+    "max_us": 7151.5
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.65 4.46 4.71 2/675 1592354",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 17047,
+   "gps": 9958.9,
+   "server_cpu_us_per_group": 44.6,
+   "server_cpu_s": 0.76,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 17047,
+    "p0_us": 64.9,
+    "p25_us": 71.9,
+    "p50_us": 88.7,
+    "p75_us": 126.3,
+    "p99_us": 186.5,
+    "max_us": 1333.1
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.65 4.46 4.71 4/684 1592367",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 19221,
+   "gps": 10330.6,
+   "server_cpu_us_per_group": 42.7,
+   "server_cpu_s": 0.82,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 19221,
+    "p0_us": 65.3,
+    "p25_us": 72.8,
+    "p50_us": 87.4,
+    "p75_us": 116.8,
+    "p99_us": 181.9,
+    "max_us": 1188.6
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.65 4.46 4.71 3/677 1592392",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 9296,
+   "gps": 4833.9,
+   "server_cpu_us_per_group": 142.0,
+   "server_cpu_s": 1.32,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 9296,
+    "p0_us": 149.0,
+    "p25_us": 164.7,
+    "p50_us": 215.4,
+    "p75_us": 226.2,
+    "p99_us": 350.9,
+    "max_us": 3327.7
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.52 4.42 4.70 2/669 1592395",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 17693,
+   "gps": 9488.6,
+   "server_cpu_us_per_group": 46.3,
+   "server_cpu_s": 0.82,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 17693,
+    "p0_us": 65.3,
+    "p25_us": 73.3,
+    "p50_us": 93.4,
+    "p75_us": 133.5,
+    "p99_us": 182.1,
+    "max_us": 2477.0
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.52 4.42 4.70 2/678 1592407",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 9520,
+   "gps": 4958.6,
+   "server_cpu_us_per_group": 136.6,
+   "server_cpu_s": 1.3,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 9520,
+    "p0_us": 150.1,
+    "p25_us": 164.7,
+    "p50_us": 193.2,
+    "p75_us": 222.2,
+    "p99_us": 343.6,
+    "max_us": 4550.2
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.40 4.38 4.68 2/679 1592430",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 17717,
+   "gps": 9524.4,
+   "server_cpu_us_per_group": 45.2,
+   "server_cpu_s": 0.8,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 17717,
+    "p0_us": 65.3,
+    "p25_us": 76.9,
+    "p50_us": 93.3,
+    "p75_us": 132.1,
+    "p99_us": 187.6,
+    "max_us": 3321.9
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.40 4.38 4.68 3/672 1592433",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 17185,
+   "gps": 10031.5,
+   "server_cpu_us_per_group": 44.8,
+   "server_cpu_s": 0.77,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 17185,
+    "p0_us": 65.6,
+    "p25_us": 71.0,
+    "p50_us": 88.3,
+    "p75_us": 127.4,
+    "p99_us": 193.4,
+    "max_us": 4013.4
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.40 4.38 4.68 3/673 1592461",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6759,
+   "gps": 3487.1,
+   "server_cpu_us_per_group": 113.9,
+   "server_cpu_s": 0.77,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 6759,
+    "p0_us": 206.9,
+    "p25_us": 229.0,
+    "p50_us": 290.8,
+    "p75_us": 310.2,
+    "p99_us": 524.1,
+    "max_us": 1882.8
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.37 4.36 4.67 3/673 1592464",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 4278,
+   "gps": 2317.5,
+   "server_cpu_us_per_group": 259.5,
+   "server_cpu_s": 1.11,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 4278,
+    "p0_us": 299.0,
+    "p25_us": 376.6,
+    "p50_us": 414.9,
+    "p75_us": 468.8,
+    "p99_us": 674.7,
+    "max_us": 1236.7
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.37 4.36 4.67 5/663 1592488",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 450,
+   "gps": 226.8,
+   "server_cpu_us_per_group": 1755.6,
+   "server_cpu_s": 0.79,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 450,
+    "p0_us": 3378.1,
+    "p25_us": 3729.7,
+    "p50_us": 4524.6,
+    "p75_us": 4846.5,
+    "p99_us": 6082.4,
+    "max_us": 11931.5
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.66 4.40 4.69 3/676 1592513",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 4481,
+   "gps": 2477.6,
+   "server_cpu_us_per_group": 241.0,
+   "server_cpu_s": 1.08,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 4481,
+    "p0_us": 273.0,
+    "p25_us": 351.0,
+    "p50_us": 374.7,
+    "p75_us": 425.6,
+    "p99_us": 642.3,
+    "max_us": 4358.3
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.66 4.40 4.69 3/671 1592528",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 4294,
+   "gps": 2320.2,
+   "server_cpu_us_per_group": 258.5,
+   "server_cpu_s": 1.11,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 4294,
+    "p0_us": 303.1,
+    "p25_us": 384.6,
+    "p50_us": 411.2,
+    "p75_us": 456.0,
+    "p99_us": 674.2,
+    "max_us": 1208.8
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.53 4.36 4.67 4/677 1592559",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 1879,
+   "gps": 974.2,
+   "server_cpu_us_per_group": 840.9,
+   "server_cpu_s": 1.58,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 1879,
+    "p0_us": 858.0,
+    "p25_us": 941.7,
+    "p50_us": 982.0,
+    "p75_us": 1050.8,
+    "p99_us": 1669.3,
+    "max_us": 5343.8
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.53 4.36 4.67 2/678 1592563",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 4283,
+   "gps": 2313.3,
+   "server_cpu_us_per_group": 261.5,
+   "server_cpu_s": 1.12,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 4283,
+    "p0_us": 301.9,
+    "p25_us": 377.9,
+    "p50_us": 408.6,
+    "p75_us": 462.6,
+    "p99_us": 726.8,
+    "max_us": 5608.7
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.53 4.36 4.67 3/678 1592585",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 1824,
+   "gps": 946.5,
+   "server_cpu_us_per_group": 855.3,
+   "server_cpu_s": 1.56,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 1824,
+    "p0_us": 852.7,
+    "p25_us": 954.2,
+    "p50_us": 1015.8,
+    "p75_us": 1103.6,
+    "p99_us": 1599.5,
+    "max_us": 5927.3
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.40 4.32 4.66 3/677 1592588",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 4315,
+   "gps": 2333.6,
+   "server_cpu_us_per_group": 257.2,
+   "server_cpu_s": 1.11,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 4315,
+    "p0_us": 302.3,
+    "p25_us": 378.6,
+    "p50_us": 411.7,
+    "p75_us": 462.1,
+    "p99_us": 667.0,
+    "max_us": 1104.5
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.40 4.32 4.66 3/678 1592599",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 4455,
+   "gps": 2476.6,
+   "server_cpu_us_per_group": 244.7,
+   "server_cpu_s": 1.09,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 4455,
+    "p0_us": 270.1,
+    "p25_us": 351.6,
+    "p50_us": 388.9,
+    "p75_us": 443.1,
+    "p99_us": 618.7,
+    "max_us": 1335.0
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.29 4.28 4.64 5/671 1592624",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 443,
+   "gps": 223.6,
+   "server_cpu_us_per_group": 1715.6,
+   "server_cpu_s": 0.76,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 443,
+    "p0_us": 3411.7,
+    "p25_us": 3886.4,
+    "p50_us": 4586.9,
+    "p75_us": 4858.4,
+    "p99_us": 6653.4,
+    "max_us": 6904.1
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.29 4.28 4.64 2/670 1592627",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 375,
+   "gps": 202.2,
+   "server_cpu_us_per_group": 3440.0,
+   "server_cpu_s": 1.29,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 375,
+    "p0_us": 4041.1,
+    "p25_us": 4409.6,
+    "p50_us": 4912.5,
+    "p75_us": 5137.4,
+    "p99_us": 7149.8,
+    "max_us": 7423.2
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.19 4.25 4.63 4/680 1592660",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 28,
+   "gps": 13.8,
+   "server_cpu_us_per_group": 28571.4,
+   "server_cpu_s": 0.8,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 28,
+    "p0_us": 60064.3,
+    "p25_us": 66801.4,
+    "p50_us": 74228.6,
+    "p75_us": 76789.8,
+    "p99_us": 82763.2,
+    "max_us": 82763.2
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.19 4.25 4.63 2/673 1592663",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 425,
+   "gps": 230.5,
+   "server_cpu_us_per_group": 3129.4,
+   "server_cpu_s": 1.33,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 425,
+    "p0_us": 3586.0,
+    "p25_us": 3872.3,
+    "p50_us": 4136.7,
+    "p75_us": 4541.6,
+    "p99_us": 6631.4,
+    "max_us": 6775.3
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.41 4.27 4.64 2/672 1592692",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 395,
+   "gps": 212.7,
+   "server_cpu_us_per_group": 3291.1,
+   "server_cpu_s": 1.3,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 395,
+    "p0_us": 4019.9,
+    "p25_us": 4245.5,
+    "p50_us": 4574.6,
+    "p75_us": 4981.9,
+    "p99_us": 7110.9,
+    "max_us": 7341.0
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.41 4.27 4.64 5/673 1592696",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 236,
+   "gps": 122.5,
+   "server_cpu_us_per_group": 6822.0,
+   "server_cpu_s": 1.61,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 236,
+    "p0_us": 6948.1,
+    "p25_us": 7236.2,
+    "p50_us": 7580.9,
+    "p75_us": 8181.8,
+    "p99_us": 13607.3,
+    "max_us": 14087.7
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.41 4.27 4.64 4/665 1592699",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 354,
+   "gps": 188.8,
+   "server_cpu_us_per_group": 3898.3,
+   "server_cpu_s": 1.38,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 354,
+    "p0_us": 4052.3,
+    "p25_us": 4415.1,
+    "p50_us": 4981.6,
+    "p75_us": 6244.0,
+    "p99_us": 7093.6,
+    "max_us": 7206.4
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.46 4.27 4.63 3/664 1592720",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 221,
+   "gps": 114.4,
+   "server_cpu_us_per_group": 7375.6,
+   "server_cpu_s": 1.63,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 221,
+    "p0_us": 6961.0,
+    "p25_us": 7399.9,
+    "p50_us": 8014.5,
+    "p75_us": 9398.0,
+    "p99_us": 13973.3,
+    "max_us": 14692.1
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.46 4.27 4.63 5/671 1592730",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 354,
+   "gps": 189.3,
+   "server_cpu_us_per_group": 3870.1,
+   "server_cpu_s": 1.37,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 354,
+    "p0_us": 4092.2,
+    "p25_us": 4492.5,
+    "p50_us": 4987.5,
+    "p75_us": 6060.3,
+    "p99_us": 7282.6,
+    "max_us": 11200.3
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.66 4.30 4.64 5/677 1592765",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 404,
+   "gps": 218.5,
+   "server_cpu_us_per_group": 3366.3,
+   "server_cpu_s": 1.36,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 404,
+    "p0_us": 3576.0,
+    "p25_us": 3831.9,
+    "p50_us": 4311.9,
+    "p75_us": 5097.0,
+    "p99_us": 6574.9,
+    "max_us": 10469.9
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.66 4.30 4.64 3/677 1592768",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 25,
+   "gps": 12.2,
+   "server_cpu_us_per_group": 32800.0,
+   "server_cpu_s": 0.82,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 25,
+    "p0_us": 64657.1,
+    "p25_us": 77270.7,
+    "p50_us": 78642.7,
+    "p75_us": 82702.2,
+    "p99_us": 114291.5,
+    "max_us": 114291.5
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.66 4.30 4.64 3/678 1592774",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 85,
+   "gps": 44.7,
+   "server_cpu_us_per_group": 20235.3,
+   "server_cpu_s": 1.72,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 85,
+    "p0_us": 18258.0,
+    "p25_us": 19345.4,
+    "p50_us": 21123.1,
+    "p75_us": 25021.9,
+    "p99_us": 31871.0,
+    "max_us": 31871.0
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.77 4.31 4.64 5/677 1592808",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7,
+   "gps": 3.3,
+   "server_cpu_us_per_group": 124285.7,
+   "server_cpu_s": 0.87,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 7,
+    "p0_us": 280679.7,
+    "p25_us": 280875.9,
+    "p50_us": 300810.8,
+    "p75_us": 307402.1,
+    "p99_us": 327230.2,
+    "max_us": 327230.2
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.79 4.31 4.64 4/670 1592834",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 101,
+   "gps": 54.0,
+   "server_cpu_us_per_group": 17128.7,
+   "server_cpu_s": 1.73,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 101,
+    "p0_us": 14019.0,
+    "p25_us": 15349.0,
+    "p50_us": 17220.9,
+    "p75_us": 21410.2,
+    "p99_us": 26320.3,
+    "max_us": 27439.1
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.79 4.31 4.64 4/670 1592837",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 82,
+   "gps": 43.3,
+   "server_cpu_us_per_group": 21097.6,
+   "server_cpu_s": 1.73,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 82,
+    "p0_us": 18411.7,
+    "p25_us": 19639.9,
+    "p50_us": 21232.0,
+    "p75_us": 25890.3,
+    "p99_us": 32508.5,
+    "max_us": 32508.5
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.79 4.31 4.64 3/676 1592848",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 57,
+   "gps": 29.5,
+   "server_cpu_us_per_group": 31578.9,
+   "server_cpu_s": 1.8,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 57,
+    "p0_us": 27541.2,
+    "p25_us": 28698.9,
+    "p50_us": 30534.2,
+    "p75_us": 38629.1,
+    "p99_us": 52973.9,
+    "max_us": 52973.9
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.89 4.32 4.64 3/675 1592871",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 82,
+   "gps": 42.8,
+   "server_cpu_us_per_group": 21219.5,
+   "server_cpu_s": 1.74,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 82,
+    "p0_us": 18278.5,
+    "p25_us": 19738.5,
+    "p50_us": 21724.1,
+    "p75_us": 26576.7,
+    "p99_us": 33208.3,
+    "max_us": 33208.3
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.89 4.32 4.64 4/669 1592876",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 55,
+   "gps": 28.3,
+   "server_cpu_us_per_group": 33090.9,
+   "server_cpu_s": 1.82,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 55,
+    "p0_us": 27215.1,
+    "p25_us": 29049.4,
+    "p50_us": 33869.9,
+    "p75_us": 41215.5,
+    "p99_us": 50296.7,
+    "max_us": 50296.7
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.98 4.33 4.64 4/669 1592901",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 86,
+   "gps": 45.4,
+   "server_cpu_us_per_group": 20000.0,
+   "server_cpu_s": 1.72,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 86,
+    "p0_us": 18007.8,
+    "p25_us": 19117.5,
+    "p50_us": 20596.1,
+    "p75_us": 23632.7,
+    "p99_us": 31740.8,
+    "max_us": 31740.8
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.98 4.33 4.64 4/661 1592904",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 105,
+   "gps": 56.2,
+   "server_cpu_us_per_group": 16476.2,
+   "server_cpu_s": 1.73,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 105,
+    "p0_us": 14000.7,
+    "p25_us": 15159.5,
+    "p50_us": 16609.6,
+    "p75_us": 20199.6,
+    "p99_us": 24609.8,
+    "max_us": 24908.5
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.98 4.33 4.64 5/662 1592908",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7,
+   "gps": 3.4,
+   "server_cpu_us_per_group": 121428.6,
+   "server_cpu_s": 0.85,
+   "rows_per_group": 1000.0,
+   "lat": {
+    "n": 7,
+    "p0_us": 279434.2,
+    "p25_us": 283470.0,
+    "p50_us": 297146.7,
+    "p75_us": 311033.0,
+    "p99_us": 319468.5,
+    "max_us": 319468.5
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.98 4.32 4.64 5/670 1592938",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 24127,
+   "gps": 12968.5,
+   "server_cpu_us_per_group": 28.2,
+   "server_cpu_s": 0.68,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 24127,
+    "p0_us": 50.2,
+    "p25_us": 65.7,
+    "p50_us": 73.1,
+    "p75_us": 78.5,
+    "p99_us": 171.0,
+    "max_us": 6011.5
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "5.18 4.57 4.71 5/683 1592992",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 24950,
+   "gps": 13422.2,
+   "server_cpu_us_per_group": 28.5,
+   "server_cpu_s": 0.71,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 24950,
+    "p0_us": 49.4,
+    "p25_us": 63.7,
+    "p50_us": 71.3,
+    "p75_us": 76.4,
+    "p99_us": 165.2,
+    "max_us": 4115.4
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "5.17 4.57 4.72 3/684 1593015",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 19441,
+   "gps": 11419.7,
+   "server_cpu_us_per_group": 36.5,
+   "server_cpu_s": 0.71,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 19441,
+    "p0_us": 53.9,
+    "p25_us": 68.4,
+    "p50_us": 78.8,
+    "p75_us": 98.5,
+    "p99_us": 186.7,
+    "max_us": 6095.6
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "5.17 4.57 4.72 4/684 1593025",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 24144,
+   "gps": 12974.2,
+   "server_cpu_us_per_group": 28.6,
+   "server_cpu_s": 0.69,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 24144,
+    "p0_us": 51.1,
+    "p25_us": 65.9,
+    "p50_us": 73.5,
+    "p75_us": 78.3,
+    "p99_us": 169.3,
+    "max_us": 4401.6
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "5.17 4.57 4.72 4/677 1593031",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 24433,
+   "gps": 13105.4,
+   "server_cpu_us_per_group": 28.6,
+   "server_cpu_s": 0.7,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 24433,
+    "p0_us": 50.6,
+    "p25_us": 65.1,
+    "p50_us": 72.6,
+    "p75_us": 78.3,
+    "p99_us": 167.9,
+    "max_us": 1143.4
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "5.07 4.56 4.71 7/677 1593053",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 23153,
+   "gps": 12438.5,
+   "server_cpu_us_per_group": 29.8,
+   "server_cpu_s": 0.69,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 23153,
+    "p0_us": 51.0,
+    "p25_us": 66.9,
+    "p50_us": 74.2,
+    "p75_us": 80.8,
+    "p99_us": 186.9,
+    "max_us": 4152.2
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "5.07 4.56 4.71 4/684 1593063",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 24064,
+   "gps": 12945.1,
+   "server_cpu_us_per_group": 28.3,
+   "server_cpu_s": 0.68,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 24064,
+    "p0_us": 50.5,
+    "p25_us": 65.7,
+    "p50_us": 73.3,
+    "p75_us": 78.4,
+    "p99_us": 172.8,
+    "max_us": 2357.7
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "5.07 4.57 4.71 4/685 1593085",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 22191,
+   "gps": 11907.8,
+   "server_cpu_us_per_group": 30.2,
+   "server_cpu_s": 0.67,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 22191,
+    "p0_us": 50.9,
+    "p25_us": 67.1,
+    "p50_us": 74.6,
+    "p75_us": 83.1,
+    "p99_us": 216.5,
+    "max_us": 3211.3
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "5.07 4.57 4.71 4/676 1593089",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 17363,
+   "gps": 10081.6,
+   "server_cpu_us_per_group": 38.0,
+   "server_cpu_s": 0.66,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 17363,
+    "p0_us": 53.9,
+    "p25_us": 68.4,
+    "p50_us": 85.7,
+    "p75_us": 109.6,
+    "p99_us": 307.2,
+    "max_us": 5640.2
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "5.07 4.57 4.71 9/678 1593127",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 22888,
+   "gps": 12296.0,
+   "server_cpu_us_per_group": 29.3,
+   "server_cpu_s": 0.67,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 22888,
+    "p0_us": 50.0,
+    "p25_us": 65.8,
+    "p50_us": 72.3,
+    "p75_us": 79.4,
+    "p99_us": 216.6,
+    "max_us": 2755.3
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "host": {
+    "loadavg": "4.82 4.53 4.70 3/678 1593150",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 20551,
+   "gps": 11055.7,
+   "server_cpu_us_per_group": 36.0,
+   "server_cpu_s": 0.74,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 20551,
+    "p0_us": 59.4,
+    "p25_us": 65.6,
+    "p50_us": 75.4,
+    "p75_us": 106.3,
+    "p99_us": 196.3,
+    "max_us": 4818.1
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.84 4.54 4.70 2/670 1593178",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7413,
+   "gps": 3823.5,
+   "server_cpu_us_per_group": 98.5,
+   "server_cpu_s": 0.73,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 7413,
+    "p0_us": 198.2,
+    "p25_us": 213.1,
+    "p50_us": 260.0,
+    "p75_us": 289.8,
+    "p99_us": 470.2,
+    "max_us": 1540.5
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.84 4.54 4.70 2/677 1593206",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 19942,
+   "gps": 11850.9,
+   "server_cpu_us_per_group": 34.6,
+   "server_cpu_s": 0.69,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 19942,
+    "p0_us": 58.9,
+    "p25_us": 63.9,
+    "p50_us": 77.6,
+    "p75_us": 94.8,
+    "p99_us": 165.7,
+    "max_us": 4130.8
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.84 4.54 4.70 3/677 1593215",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 22230,
+   "gps": 12020.3,
+   "server_cpu_us_per_group": 33.3,
+   "server_cpu_s": 0.74,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 22230,
+    "p0_us": 59.6,
+    "p25_us": 64.1,
+    "p50_us": 75.3,
+    "p75_us": 90.8,
+    "p99_us": 171.8,
+    "max_us": 1079.4
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.61 4.49 4.69 3/684 1593244",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 196,
+   "gps": 98.0,
+   "server_cpu_us_per_group": 10000.0,
+   "server_cpu_s": 1.96,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 196,
+    "p0_us": 9441.8,
+    "p25_us": 9685.2,
+    "p50_us": 9942.8,
+    "p75_us": 10406.1,
+    "p99_us": 14007.9,
+    "max_us": 14122.5
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.61 4.49 4.69 3/683 1593247",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 21488,
+   "gps": 11611.2,
+   "server_cpu_us_per_group": 34.0,
+   "server_cpu_s": 0.73,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 21488,
+    "p0_us": 59.8,
+    "p25_us": 64.1,
+    "p50_us": 78.5,
+    "p75_us": 98.6,
+    "p99_us": 181.7,
+    "max_us": 2851.8
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.56 4.49 4.68 2/682 1593251",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 196,
+   "gps": 98.2,
+   "server_cpu_us_per_group": 9949.0,
+   "server_cpu_s": 1.95,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 196,
+    "p0_us": 9410.5,
+    "p25_us": 9624.0,
+    "p50_us": 9937.7,
+    "p75_us": 10273.3,
+    "p99_us": 17250.2,
+    "max_us": 17314.0
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.56 4.49 4.68 3/689 1593279",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 21339,
+   "gps": 11526.3,
+   "server_cpu_us_per_group": 34.2,
+   "server_cpu_s": 0.73,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 21339,
+    "p0_us": 59.5,
+    "p25_us": 64.1,
+    "p50_us": 76.6,
+    "p75_us": 106.8,
+    "p99_us": 157.6,
+    "max_us": 1391.1
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.56 4.49 4.68 6/681 1593285",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 19665,
+   "gps": 11652.4,
+   "server_cpu_us_per_group": 36.1,
+   "server_cpu_s": 0.71,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 19665,
+    "p0_us": 59.4,
+    "p25_us": 63.6,
+    "p50_us": 76.2,
+    "p75_us": 105.2,
+    "p99_us": 162.6,
+    "max_us": 5889.6
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.43 4.46 4.67 3/674 1593305",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7256,
+   "gps": 3745.3,
+   "server_cpu_us_per_group": 97.9,
+   "server_cpu_s": 0.71,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 7256,
+    "p0_us": 197.4,
+    "p25_us": 213.2,
+    "p50_us": 264.7,
+    "p75_us": 288.9,
+    "p99_us": 523.9,
+    "max_us": 5096.3
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "host": {
+    "loadavg": "4.43 4.46 4.67 3/681 1593316",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6286,
+   "gps": 3469.6,
+   "server_cpu_us_per_group": 149.5,
+   "server_cpu_s": 0.94,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 6286,
+    "p0_us": 196.2,
+    "p25_us": 219.4,
+    "p50_us": 289.6,
+    "p75_us": 323.2,
+    "p99_us": 491.0,
+    "max_us": 5424.4
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "4.24 4.42 4.66 3/681 1593338",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 480,
+   "gps": 242.0,
+   "server_cpu_us_per_group": 1583.3,
+   "server_cpu_s": 0.76,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 480,
+    "p0_us": 3234.1,
+    "p25_us": 3507.1,
+    "p50_us": 4128.7,
+    "p75_us": 4557.4,
+    "p99_us": 5733.5,
+    "max_us": 5856.1
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "4.24 4.42 4.66 3/675 1593343",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7806,
+   "gps": 4526.8,
+   "server_cpu_us_per_group": 101.2,
+   "server_cpu_s": 0.79,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 7806,
+    "p0_us": 151.1,
+    "p25_us": 165.4,
+    "p50_us": 226.3,
+    "p75_us": 250.0,
+    "p99_us": 423.6,
+    "max_us": 1058.2
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "4.22 4.41 4.66 2/675 1593349",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6348,
+   "gps": 3501.1,
+   "server_cpu_us_per_group": 148.1,
+   "server_cpu_s": 0.94,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 6348,
+    "p0_us": 198.7,
+    "p25_us": 217.6,
+    "p50_us": 276.4,
+    "p75_us": 324.1,
+    "p99_us": 486.5,
+    "max_us": 6550.2
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "4.22 4.41 4.66 4/675 1593370",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 26,
+   "gps": 12.6,
+   "server_cpu_us_per_group": 78461.5,
+   "server_cpu_s": 2.04,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 26,
+    "p0_us": 74086.1,
+    "p25_us": 76031.1,
+    "p50_us": 77490.7,
+    "p75_us": 78267.0,
+    "p99_us": 112513.2,
+    "max_us": 112513.2
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "4.22 4.41 4.66 2/668 1593373",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6470,
+   "gps": 3566.6,
+   "server_cpu_us_per_group": 145.3,
+   "server_cpu_s": 0.94,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 6470,
+    "p0_us": 198.8,
+    "p25_us": 219.4,
+    "p50_us": 281.1,
+    "p75_us": 314.0,
+    "p99_us": 484.7,
+    "max_us": 1152.3
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "4.04 4.37 4.64 2/675 1593402",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 26,
+   "gps": 12.7,
+   "server_cpu_us_per_group": 77692.3,
+   "server_cpu_s": 2.02,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 26,
+    "p0_us": 73545.5,
+    "p25_us": 75891.1,
+    "p50_us": 76591.7,
+    "p75_us": 79656.4,
+    "p99_us": 95452.7,
+    "max_us": 95452.7
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "4.04 4.37 4.64 2/674 1593405",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6225,
+   "gps": 3428.3,
+   "server_cpu_us_per_group": 151.0,
+   "server_cpu_s": 0.94,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 6225,
+    "p0_us": 199.5,
+    "p25_us": 231.5,
+    "p50_us": 295.5,
+    "p75_us": 318.1,
+    "p99_us": 482.1,
+    "max_us": 1496.7
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "3.88 4.33 4.63 3/680 1593419",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7442,
+   "gps": 4313.5,
+   "server_cpu_us_per_group": 104.8,
+   "server_cpu_s": 0.78,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 7442,
+    "p0_us": 152.1,
+    "p25_us": 170.2,
+    "p50_us": 236.0,
+    "p75_us": 259.1,
+    "p99_us": 427.3,
+    "max_us": 2287.7
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "3.88 4.33 4.63 3/680 1593442",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 387,
+   "gps": 194.5,
+   "server_cpu_us_per_group": 1912.1,
+   "server_cpu_s": 0.74,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 387,
+    "p0_us": 3216.2,
+    "p25_us": 4426.1,
+    "p50_us": 4978.3,
+    "p75_us": 5882.4,
+    "p99_us": 9502.3,
+    "max_us": 18297.2
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "host": {
+    "loadavg": "3.88 4.33 4.63 8/681 1593447",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 627,
+   "gps": 351.3,
+   "server_cpu_us_per_group": 1626.8,
+   "server_cpu_s": 1.02,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 627,
+    "p0_us": 2503.6,
+    "p25_us": 2633.4,
+    "p50_us": 2705.7,
+    "p75_us": 2904.3,
+    "p99_us": 3920.3,
+    "max_us": 4460.3
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.25 4.40 4.65 2/672 1593503",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 31,
+   "gps": 15.1,
+   "server_cpu_us_per_group": 25806.5,
+   "server_cpu_s": 0.8,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 31,
+    "p0_us": 54111.7,
+    "p25_us": 61123.7,
+    "p50_us": 66557.4,
+    "p75_us": 71208.9,
+    "p99_us": 76598.0,
+    "max_us": 76598.0
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.25 4.40 4.65 6/679 1593513",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 778,
+   "gps": 447.7,
+   "server_cpu_us_per_group": 1208.2,
+   "server_cpu_s": 0.94,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 778,
+    "p0_us": 1979.7,
+    "p25_us": 2103.6,
+    "p50_us": 2147.4,
+    "p75_us": 2278.3,
+    "p99_us": 3101.4,
+    "max_us": 3865.4
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.07 4.36 4.63 4/680 1593517",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 587,
+   "gps": 330.8,
+   "server_cpu_us_per_group": 1686.5,
+   "server_cpu_s": 0.99,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 587,
+    "p0_us": 2521.9,
+    "p25_us": 2720.8,
+    "p50_us": 2888.9,
+    "p75_us": 3358.5,
+    "p99_us": 4209.3,
+    "max_us": 5763.5
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.07 4.36 4.63 2/673 1593539",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 2,
+   "gps": 0.9,
+   "server_cpu_us_per_group": 1160000.0,
+   "server_cpu_s": 2.32,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 2,
+    "p0_us": 1154069.3,
+    "p25_us": 1154069.3,
+    "p50_us": 1154069.3,
+    "p75_us": 1176090.2,
+    "p99_us": 1176090.2,
+    "max_us": 1176090.2
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.91 4.32 4.62 2/672 1593550",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 566,
+   "gps": 318.9,
+   "server_cpu_us_per_group": 1731.4,
+   "server_cpu_s": 0.98,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 566,
+    "p0_us": 2533.6,
+    "p25_us": 2783.9,
+    "p50_us": 2994.0,
+    "p75_us": 3451.3,
+    "p99_us": 4176.8,
+    "max_us": 7654.1
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.91 4.32 4.62 2/673 1593572",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 2,
+   "gps": 0.9,
+   "server_cpu_us_per_group": 1125000.0,
+   "server_cpu_s": 2.25,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 2,
+    "p0_us": 1105136.4,
+    "p25_us": 1105136.4,
+    "p50_us": 1105136.4,
+    "p75_us": 1168341.7,
+    "p99_us": 1168341.7,
+    "max_us": 1168341.7
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.91 4.32 4.62 3/675 1593578",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 634,
+   "gps": 353.6,
+   "server_cpu_us_per_group": 1624.6,
+   "server_cpu_s": 1.03,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 634,
+    "p0_us": 2498.6,
+    "p25_us": 2655.2,
+    "p50_us": 2745.9,
+    "p75_us": 2884.7,
+    "p99_us": 3794.4,
+    "max_us": 9426.7
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.75 4.28 4.60 3/682 1593588",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 757,
+   "gps": 435.1,
+   "server_cpu_us_per_group": 1241.7,
+   "server_cpu_s": 0.94,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 757,
+    "p0_us": 1972.8,
+    "p25_us": 2113.6,
+    "p50_us": 2172.8,
+    "p75_us": 2336.8,
+    "p99_us": 3545.0,
+    "max_us": 6778.4
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.75 4.28 4.60 2/682 1593613",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 32,
+   "gps": 15.6,
+   "server_cpu_us_per_group": 24687.5,
+   "server_cpu_s": 0.79,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 32,
+    "p0_us": 54138.7,
+    "p25_us": 57727.2,
+    "p50_us": 63423.7,
+    "p75_us": 67870.1,
+    "p99_us": 77602.9,
+    "max_us": 77602.9
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.61 4.25 4.59 2/682 1593619",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 140,
+   "gps": 76.4,
+   "server_cpu_us_per_group": 8642.9,
+   "server_cpu_s": 1.21,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 140,
+    "p0_us": 11621.5,
+    "p25_us": 12056.3,
+    "p50_us": 12354.8,
+    "p75_us": 13063.2,
+    "p99_us": 19381.7,
+    "max_us": 20537.9
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.33 4.15 4.55 3/674 1593702",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 8,
+   "gps": 3.8,
+   "server_cpu_us_per_group": 96250.0,
+   "server_cpu_s": 0.77,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 8,
+    "p0_us": 235142.8,
+    "p25_us": 244409.6,
+    "p50_us": 258674.4,
+    "p75_us": 271000.0,
+    "p99_us": 283876.2,
+    "max_us": 283876.2
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.33 4.15 4.55 5/674 1593730",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 201,
+   "gps": 116.0,
+   "server_cpu_us_per_group": 4427.9,
+   "server_cpu_s": 0.89,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 201,
+    "p0_us": 7674.9,
+    "p25_us": 7949.6,
+    "p50_us": 8160.5,
+    "p75_us": 8657.7,
+    "p99_us": 12380.5,
+    "max_us": 15937.6
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.39 4.15 4.55 3/674 1593733",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 136,
+   "gps": 75.4,
+   "server_cpu_us_per_group": 8161.8,
+   "server_cpu_s": 1.11,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 136,
+    "p0_us": 11501.5,
+    "p25_us": 12054.8,
+    "p50_us": 12605.2,
+    "p75_us": 14527.4,
+    "p99_us": 17551.7,
+    "max_us": 18568.9
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.39 4.15 4.55 2/667 1593753",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 1,
+   "gps": 0.2,
+   "server_cpu_us_per_group": 4160000.0,
+   "server_cpu_s": 4.16,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 1,
+    "p0_us": 4201407.6,
+    "p25_us": 4201407.6,
+    "p50_us": 4201407.6,
+    "p75_us": 4201407.6,
+    "p99_us": 4201407.6,
+    "max_us": 4201407.6
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.36 4.13 4.54 6/674 1593768",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 129,
+   "gps": 72.1,
+   "server_cpu_us_per_group": 8139.5,
+   "server_cpu_s": 1.05,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 129,
+    "p0_us": 11637.8,
+    "p25_us": 12230.4,
+    "p50_us": 14563.5,
+    "p75_us": 14909.3,
+    "p99_us": 18482.0,
+    "max_us": 18746.5
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.36 4.13 4.54 3/681 1593798",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 1,
+   "gps": 0.2,
+   "server_cpu_us_per_group": 4190000.0,
+   "server_cpu_s": 4.19,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 1,
+    "p0_us": 4223107.5,
+    "p25_us": 4223107.5,
+    "p50_us": 4223107.5,
+    "p75_us": 4223107.5,
+    "p99_us": 4223107.5,
+    "max_us": 4223107.5
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.41 4.13 4.54 2/679 1593821",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 133,
+   "gps": 74.2,
+   "server_cpu_us_per_group": 8195.5,
+   "server_cpu_s": 1.09,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 133,
+    "p0_us": 11600.6,
+    "p25_us": 12125.2,
+    "p50_us": 12906.8,
+    "p75_us": 14814.4,
+    "p99_us": 16842.7,
+    "max_us": 16921.9
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.46 4.12 4.53 5/679 1593824",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 202,
+   "gps": 116.6,
+   "server_cpu_us_per_group": 4455.4,
+   "server_cpu_s": 0.9,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 202,
+    "p0_us": 7684.4,
+    "p25_us": 7968.2,
+    "p50_us": 8155.5,
+    "p75_us": 8649.2,
+    "p99_us": 11300.5,
+    "max_us": 11556.1
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.46 4.12 4.53 2/679 1593852",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 8,
+   "gps": 3.8,
+   "server_cpu_us_per_group": 96250.0,
+   "server_cpu_s": 0.77,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 8,
+    "p0_us": 243205.1,
+    "p25_us": 256158.6,
+    "p50_us": 264898.2,
+    "p75_us": 276530.9,
+    "p99_us": 278466.2,
+    "max_us": 278466.2
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "host": {
+    "loadavg": "3.46 4.12 4.53 2/674 1593860",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 25229,
+   "gps": 13539.4,
+   "server_cpu_us_per_group": 29.3,
+   "server_cpu_s": 0.74,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 25229,
+    "p0_us": 52.8,
+    "p25_us": 58.0,
+    "p50_us": 71.2,
+    "p75_us": 80.8,
+    "p99_us": 154.4,
+    "max_us": 1409.4
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.42 4.11 4.53 2/682 1593893",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 25384,
+   "gps": 13641.1,
+   "server_cpu_us_per_group": 29.9,
+   "server_cpu_s": 0.76,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 25384,
+    "p0_us": 51.4,
+    "p25_us": 57.9,
+    "p50_us": 75.3,
+    "p75_us": 79.3,
+    "p99_us": 143.2,
+    "max_us": 761.6
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.23 4.05 4.51 4/681 1593897",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 19876,
+   "gps": 11703.3,
+   "server_cpu_us_per_group": 34.7,
+   "server_cpu_s": 0.69,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 19876,
+    "p0_us": 55.8,
+    "p25_us": 60.9,
+    "p50_us": 75.1,
+    "p75_us": 97.6,
+    "p99_us": 210.4,
+    "max_us": 4363.1
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.23 4.05 4.51 3/675 1593903",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 24477,
+   "gps": 13127.4,
+   "server_cpu_us_per_group": 29.8,
+   "server_cpu_s": 0.73,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 24477,
+    "p0_us": 53.0,
+    "p25_us": 58.4,
+    "p50_us": 71.8,
+    "p75_us": 81.0,
+    "p99_us": 175.5,
+    "max_us": 4387.9
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.23 4.05 4.51 4/675 1593927",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 25116,
+   "gps": 13452.8,
+   "server_cpu_us_per_group": 30.3,
+   "server_cpu_s": 0.76,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 25116,
+    "p0_us": 52.3,
+    "p25_us": 58.1,
+    "p50_us": 68.8,
+    "p75_us": 79.3,
+    "p99_us": 167.3,
+    "max_us": 4928.2
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.21 4.04 4.50 3/674 1593933",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 23326,
+   "gps": 12516.6,
+   "server_cpu_us_per_group": 30.4,
+   "server_cpu_s": 0.71,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 23326,
+    "p0_us": 52.7,
+    "p25_us": 65.1,
+    "p50_us": 75.6,
+    "p75_us": 83.3,
+    "p99_us": 174.9,
+    "max_us": 4609.6
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.21 4.04 4.50 5/666 1593955",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 22544,
+   "gps": 12090.5,
+   "server_cpu_us_per_group": 32.8,
+   "server_cpu_s": 0.74,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 22544,
+    "p0_us": 52.6,
+    "p25_us": 69.1,
+    "p50_us": 78.1,
+    "p75_us": 85.0,
+    "p99_us": 176.6,
+    "max_us": 5753.2
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.43 4.07 4.51 4/666 1593958",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 22462,
+   "gps": 12015.5,
+   "server_cpu_us_per_group": 33.4,
+   "server_cpu_s": 0.75,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 22462,
+    "p0_us": 52.7,
+    "p25_us": 68.3,
+    "p50_us": 77.2,
+    "p75_us": 84.9,
+    "p99_us": 188.3,
+    "max_us": 3293.5
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.43 4.07 4.51 8/674 1593969",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 17975,
+   "gps": 10481.5,
+   "server_cpu_us_per_group": 40.1,
+   "server_cpu_s": 0.72,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 17975,
+    "p0_us": 55.7,
+    "p25_us": 71.8,
+    "p50_us": 83.4,
+    "p75_us": 105.9,
+    "p99_us": 225.0,
+    "max_us": 5377.9
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.43 4.07 4.51 7/675 1593999",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 21973,
+   "gps": 11772.3,
+   "server_cpu_us_per_group": 33.7,
+   "server_cpu_s": 0.74,
+   "rows_per_group": 1.0,
+   "lat": {
+    "n": 21973,
+    "p0_us": 51.9,
+    "p25_us": 70.2,
+    "p50_us": 77.9,
+    "p75_us": 85.1,
+    "p99_us": 210.9,
+    "max_us": 1323.7
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "host": {
+    "loadavg": "3.40 4.05 4.50 5/682 1594035",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 11911,
+   "gps": 6354.1,
+   "server_cpu_us_per_group": 66.3,
+   "server_cpu_s": 0.79,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 11911,
+    "p0_us": 68.4,
+    "p25_us": 101.7,
+    "p50_us": 138.0,
+    "p75_us": 171.3,
+    "p99_us": 569.1,
+    "max_us": 5104.7
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.40 4.05 4.50 3/660 1594063",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6209,
+   "gps": 3198.7,
+   "server_cpu_us_per_group": 125.6,
+   "server_cpu_s": 0.78,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 6209,
+    "p0_us": 209.0,
+    "p25_us": 270.0,
+    "p50_us": 295.2,
+    "p75_us": 323.6,
+    "p99_us": 612.1,
+    "max_us": 8909.3
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.44 4.05 4.50 5/659 1594067",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 15575,
+   "gps": 9012.3,
+   "server_cpu_us_per_group": 51.4,
+   "server_cpu_s": 0.8,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 15575,
+    "p0_us": 67.0,
+    "p25_us": 86.0,
+    "p50_us": 95.8,
+    "p75_us": 131.4,
+    "p99_us": 226.3,
+    "max_us": 4503.1
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.44 4.05 4.50 4/667 1594098",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 16323,
+   "gps": 8731.8,
+   "server_cpu_us_per_group": 52.7,
+   "server_cpu_s": 0.86,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 16323,
+    "p0_us": 68.1,
+    "p25_us": 88.8,
+    "p50_us": 101.9,
+    "p75_us": 136.9,
+    "p99_us": 225.8,
+    "max_us": 967.0
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.41 4.03 4.49 4/660 1594104",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 160,
+   "gps": 80.0,
+   "server_cpu_us_per_group": 12250.0,
+   "server_cpu_s": 1.96,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 160,
+    "p0_us": 9672.5,
+    "p25_us": 10345.9,
+    "p50_us": 11358.4,
+    "p75_us": 14734.8,
+    "p99_us": 17536.8,
+    "max_us": 17559.2
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.41 4.03 4.49 3/668 1594115",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 16370,
+   "gps": 8742.2,
+   "server_cpu_us_per_group": 51.9,
+   "server_cpu_s": 0.85,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 16370,
+    "p0_us": 66.6,
+    "p25_us": 87.4,
+    "p50_us": 99.8,
+    "p75_us": 135.7,
+    "p99_us": 235.2,
+    "max_us": 4921.9
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.41 4.03 4.49 3/668 1594138",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 148,
+   "gps": 74.0,
+   "server_cpu_us_per_group": 13243.2,
+   "server_cpu_s": 1.96,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 148,
+    "p0_us": 9760.3,
+    "p25_us": 11054.3,
+    "p50_us": 13157.8,
+    "p75_us": 15931.0,
+    "p99_us": 18030.5,
+    "max_us": 21058.6
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.46 4.03 4.48 4/668 1594141",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 15587,
+   "gps": 8328.8,
+   "server_cpu_us_per_group": 54.5,
+   "server_cpu_s": 0.85,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 15587,
+    "p0_us": 67.4,
+    "p25_us": 90.5,
+    "p50_us": 113.2,
+    "p75_us": 138.9,
+    "p99_us": 241.1,
+    "max_us": 2821.7
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.46 4.03 4.48 5/662 1594165",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 15521,
+   "gps": 8983.4,
+   "server_cpu_us_per_group": 52.8,
+   "server_cpu_s": 0.82,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 15521,
+    "p0_us": 66.6,
+    "p25_us": 85.1,
+    "p50_us": 98.1,
+    "p75_us": 132.9,
+    "p99_us": 213.0,
+    "max_us": 5768.2
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.42 4.01 4.48 3/662 1594171",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 6005,
+   "gps": 3096.2,
+   "server_cpu_us_per_group": 128.2,
+   "server_cpu_s": 0.77,
+   "rows_per_group": 4.0,
+   "lat": {
+    "n": 6005,
+    "p0_us": 208.5,
+    "p25_us": 271.8,
+    "p50_us": 306.0,
+    "p75_us": 337.4,
+    "p99_us": 682.3,
+    "max_us": 5849.2
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "host": {
+    "loadavg": "3.42 4.01 4.48 4/665 1594177",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 3544,
+   "gps": 1895.9,
+   "server_cpu_us_per_group": 338.6,
+   "server_cpu_s": 1.2,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 3544,
+    "p0_us": 323.8,
+    "p25_us": 441.8,
+    "p50_us": 490.9,
+    "p75_us": 611.6,
+    "p99_us": 794.2,
+    "max_us": 3465.2
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.55 4.03 4.48 4/663 1594200",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 406,
+   "gps": 204.7,
+   "server_cpu_us_per_group": 2044.3,
+   "server_cpu_s": 0.83,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 406,
+    "p0_us": 3475.7,
+    "p25_us": 4435.9,
+    "p50_us": 4915.1,
+    "p75_us": 5268.5,
+    "p99_us": 6700.8,
+    "max_us": 7829.2
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.55 4.03 4.48 3/663 1594203",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 4014,
+   "gps": 2208.4,
+   "server_cpu_us_per_group": 286.5,
+   "server_cpu_s": 1.15,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 4014,
+    "p0_us": 277.8,
+    "p25_us": 368.5,
+    "p50_us": 418.5,
+    "p75_us": 541.5,
+    "p99_us": 697.5,
+    "max_us": 2277.4
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.66 4.05 4.48 4/663 1594228",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 3534,
+   "gps": 1888.9,
+   "server_cpu_us_per_group": 342.4,
+   "server_cpu_s": 1.21,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 3534,
+    "p0_us": 324.6,
+    "p25_us": 444.4,
+    "p50_us": 496.8,
+    "p75_us": 605.8,
+    "p99_us": 798.9,
+    "max_us": 4497.7
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.66 4.05 4.48 4/662 1594231",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 22,
+   "gps": 10.7,
+   "server_cpu_us_per_group": 92272.7,
+   "server_cpu_s": 2.03,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 22,
+    "p0_us": 74322.7,
+    "p25_us": 86184.4,
+    "p50_us": 92644.8,
+    "p75_us": 100515.8,
+    "p99_us": 113624.1,
+    "max_us": 113624.1
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.66 4.05 4.48 3/661 1594256",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 3627,
+   "gps": 1940.5,
+   "server_cpu_us_per_group": 333.6,
+   "server_cpu_s": 1.21,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 3627,
+    "p0_us": 326.8,
+    "p25_us": 430.7,
+    "p50_us": 476.3,
+    "p75_us": 596.1,
+    "p99_us": 788.5,
+    "max_us": 7383.3
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.61 4.03 4.47 4/661 1594259",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 22,
+   "gps": 10.9,
+   "server_cpu_us_per_group": 90909.1,
+   "server_cpu_s": 2.0,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 22,
+    "p0_us": 77897.2,
+    "p25_us": 82178.9,
+    "p50_us": 85656.9,
+    "p75_us": 98203.2,
+    "p99_us": 130879.1,
+    "max_us": 130879.1
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.61 4.03 4.47 3/668 1594269",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 3471,
+   "gps": 1850.6,
+   "server_cpu_us_per_group": 357.2,
+   "server_cpu_s": 1.24,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 3471,
+    "p0_us": 328.3,
+    "p25_us": 439.4,
+    "p50_us": 527.4,
+    "p75_us": 628.5,
+    "p99_us": 786.9,
+    "max_us": 5420.0
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.56 4.01 4.47 4/670 1594296",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 4054,
+   "gps": 2227.6,
+   "server_cpu_us_per_group": 286.1,
+   "server_cpu_s": 1.16,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 4054,
+    "p0_us": 274.4,
+    "p25_us": 366.2,
+    "p50_us": 409.6,
+    "p75_us": 527.7,
+    "p99_us": 740.6,
+    "max_us": 2773.1
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.56 4.01 4.47 5/670 1594311",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 402,
+   "gps": 202.7,
+   "server_cpu_us_per_group": 2039.8,
+   "server_cpu_s": 0.82,
+   "rows_per_group": 64.0,
+   "lat": {
+    "n": 402,
+    "p0_us": 3476.1,
+    "p25_us": 4558.1,
+    "p50_us": 4912.1,
+    "p75_us": 5257.7,
+    "p99_us": 6579.1,
+    "max_us": 7101.2
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "host": {
+    "loadavg": "3.56 4.01 4.47 5/669 1594332",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 324,
+   "gps": 173.0,
+   "server_cpu_us_per_group": 4382.7,
+   "server_cpu_s": 1.42,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 324,
+    "p0_us": 4435.9,
+    "p25_us": 4928.3,
+    "p50_us": 5492.5,
+    "p75_us": 6597.5,
+    "p99_us": 7858.8,
+    "max_us": 8161.9
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.79 4.05 4.47 5/664 1594367",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 25,
+   "gps": 12.4,
+   "server_cpu_us_per_group": 33200.0,
+   "server_cpu_s": 0.83,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 25,
+    "p0_us": 74345.0,
+    "p25_us": 76364.4,
+    "p50_us": 80437.9,
+    "p75_us": 83008.7,
+    "p99_us": 91508.4,
+    "max_us": 91508.4
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.79 4.05 4.47 6/657 1594371",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 353,
+   "gps": 190.1,
+   "server_cpu_us_per_group": 3966.0,
+   "server_cpu_s": 1.4,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 353,
+    "p0_us": 3979.7,
+    "p25_us": 4303.6,
+    "p50_us": 4881.8,
+    "p75_us": 6169.4,
+    "p99_us": 8890.3,
+    "max_us": 10444.7
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.73 4.03 4.46 4/657 1594403",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 327,
+   "gps": 174.6,
+   "server_cpu_us_per_group": 4342.5,
+   "server_cpu_s": 1.42,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 327,
+    "p0_us": 4445.5,
+    "p25_us": 4828.8,
+    "p50_us": 5255.2,
+    "p75_us": 6786.3,
+    "p99_us": 7898.9,
+    "max_us": 8116.9
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "3.73 4.03 4.46 4/657 1594406",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 2,
+   "gps": 0.7,
+   "server_cpu_us_per_group": 1345000.0,
+   "server_cpu_s": 2.69,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 2,
+    "p0_us": 1290503.1,
+    "p25_us": 1290503.1,
+    "p50_us": 1290503.1,
+    "p75_us": 1434831.6,
+    "p99_us": 1434831.6,
+    "max_us": 1434831.6
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.23 4.13 4.49 4/671 1594448",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 334,
+   "gps": 178.3,
+   "server_cpu_us_per_group": 4191.6,
+   "server_cpu_s": 1.4,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 334,
+    "p0_us": 4456.7,
+    "p25_us": 4789.1,
+    "p50_us": 5323.3,
+    "p75_us": 6249.7,
+    "p99_us": 7842.6,
+    "max_us": 10198.8
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.23 4.13 4.49 3/671 1594451",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 2,
+   "gps": 0.8,
+   "server_cpu_us_per_group": 1300000.0,
+   "server_cpu_s": 2.6,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 2,
+    "p0_us": 1292839.9,
+    "p25_us": 1292839.9,
+    "p50_us": 1292839.9,
+    "p75_us": 1331193.9,
+    "p99_us": 1331193.9,
+    "max_us": 1331193.9
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.29 4.14 4.50 4/671 1594472",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 336,
+   "gps": 179.9,
+   "server_cpu_us_per_group": 4166.7,
+   "server_cpu_s": 1.4,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 336,
+    "p0_us": 4395.5,
+    "p25_us": 4676.3,
+    "p50_us": 5232.0,
+    "p75_us": 6404.2,
+    "p99_us": 7846.3,
+    "max_us": 10395.2
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.29 4.14 4.50 4/670 1594475",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 358,
+   "gps": 192.5,
+   "server_cpu_us_per_group": 3994.4,
+   "server_cpu_s": 1.43,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 358,
+    "p0_us": 4030.4,
+    "p25_us": 4291.7,
+    "p50_us": 4860.6,
+    "p75_us": 6030.4,
+    "p99_us": 7149.7,
+    "max_us": 7386.4
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.29 4.14 4.50 6/670 1594481",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 25,
+   "gps": 12.4,
+   "server_cpu_us_per_group": 32400.0,
+   "server_cpu_s": 0.81,
+   "rows_per_group": 1024.0,
+   "lat": {
+    "n": 25,
+    "p0_us": 70609.7,
+    "p25_us": 77884.1,
+    "p50_us": 80063.4,
+    "p75_us": 82372.5,
+    "p99_us": 102075.5,
+    "max_us": 102075.5
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "host": {
+    "loadavg": "4.19 4.12 4.49 5/663 1594513",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 73,
+   "gps": 38.5,
+   "server_cpu_us_per_group": 20274.0,
+   "server_cpu_s": 1.48,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 73,
+    "p0_us": 19489.8,
+    "p25_us": 23076.4,
+    "p50_us": 26261.5,
+    "p75_us": 28937.0,
+    "p99_us": 33358.7,
+    "max_us": 33358.7
+   },
+   "arm": "L",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.06 4.10 4.47 4/670 1594657",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7,
+   "gps": 3.2,
+   "server_cpu_us_per_group": 127142.9,
+   "server_cpu_s": 0.89,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 7,
+    "p0_us": 300047.7,
+    "p25_us": 305271.1,
+    "p50_us": 306935.1,
+    "p75_us": 313826.6,
+    "p99_us": 325400.1,
+    "max_us": 325400.1
+   },
+   "arm": "D",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.06 4.10 4.47 5/671 1594661",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 81,
+   "gps": 43.5,
+   "server_cpu_us_per_group": 17160.5,
+   "server_cpu_s": 1.39,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 81,
+    "p0_us": 15506.6,
+    "p25_us": 19107.4,
+    "p50_us": 22999.4,
+    "p75_us": 26371.8,
+    "p99_us": 36383.2,
+    "max_us": 36383.2
+   },
+   "arm": "J",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.06 4.10 4.47 7/673 1594666",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 71,
+   "gps": 37.5,
+   "server_cpu_us_per_group": 20140.8,
+   "server_cpu_s": 1.43,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 71,
+    "p0_us": 20174.9,
+    "p25_us": 22335.0,
+    "p50_us": 26706.9,
+    "p75_us": 30446.7,
+    "p99_us": 37482.7,
+    "max_us": 37482.7
+   },
+   "arm": "L2",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.77 4.25 4.52 9/673 1594689",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 1,
+   "gps": 0.2,
+   "server_cpu_us_per_group": 5490000.0,
+   "server_cpu_s": 5.49,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 1,
+    "p0_us": 5558292.4,
+    "p25_us": 5558292.4,
+    "p50_us": 5558292.4,
+    "p75_us": 5558292.4,
+    "p99_us": 5558292.4,
+    "max_us": 5558292.4
+   },
+   "arm": "LA",
+   "rep": 0,
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.79 4.26 4.52 5/667 1594813",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 74,
+   "gps": 39.4,
+   "server_cpu_us_per_group": 19324.3,
+   "server_cpu_s": 1.43,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 74,
+    "p0_us": 20550.5,
+    "p25_us": 22755.9,
+    "p50_us": 24221.2,
+    "p75_us": 27981.4,
+    "p99_us": 34675.0,
+    "max_us": 34675.0
+   },
+   "arm": "L",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.79 4.26 4.52 4/674 1594823",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 1,
+   "gps": 0.2,
+   "server_cpu_us_per_group": 5430000.0,
+   "server_cpu_s": 5.43,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 1,
+    "p0_us": 5493404.8,
+    "p25_us": 5493404.8,
+    "p50_us": 5493404.8,
+    "p75_us": 5493404.8,
+    "p99_us": 5493404.8,
+    "max_us": 5493404.8
+   },
+   "arm": "LA",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "4.73 4.25 4.52 4/674 1594857",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 72,
+   "gps": 38.1,
+   "server_cpu_us_per_group": 20277.8,
+   "server_cpu_s": 1.46,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 72,
+    "p0_us": 19868.8,
+    "p25_us": 23611.2,
+    "p50_us": 26138.1,
+    "p75_us": 28745.7,
+    "p99_us": 33314.7,
+    "max_us": 33314.7
+   },
+   "arm": "L2",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "5.15 4.35 4.55 4/676 1594881",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 94,
+   "gps": 50.6,
+   "server_cpu_us_per_group": 15000.0,
+   "server_cpu_s": 1.41,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 94,
+    "p0_us": 15679.6,
+    "p25_us": 17400.5,
+    "p50_us": 18820.7,
+    "p75_us": 21677.8,
+    "p99_us": 28953.2,
+    "max_us": 28953.2
+   },
+   "arm": "J",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "5.15 4.35 4.55 3/668 1594884",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "groups": 7,
+   "gps": 3.3,
+   "server_cpu_us_per_group": 124285.7,
+   "server_cpu_s": 0.87,
+   "rows_per_group": 4096.0,
+   "lat": {
+    "n": 7,
+    "p0_us": 277191.9,
+    "p25_us": 289374.3,
+    "p50_us": 302314.8,
+    "p75_us": 317159.0,
+    "p99_us": 340593.0,
+    "max_us": 340593.0
+   },
+   "arm": "D",
+   "rep": 1,
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "host": {
+    "loadavg": "5.06 4.34 4.54 3/668 1594905",
+    "cc1plus": "0"
+   }
+  }
+ ],
+ "plans": [
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE id IN (311)",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x652dc280105f7aea fetch_id=0xec07565feed1404d",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=311",
+    "  filter 0:0.0 = 311",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.13 ms = CPU 0.13"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE id IN (311)",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x652dc280105f7aea fetch_id=0xec07565feed1404d",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=311",
+    "  filter 0:0.0 = 311",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.13 ms = CPU 0.13"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_1 AS v JOIN cu_t AS t ON t.id = v.rid",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=2 opens=2 pattern_id=0x41d77a746b0ed04d fetch_id=0x67076aaf877fd085",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_1 AS v",
+    "step 1 Probe cu_t AS t key=0:0.1",
+    "  filter 0:1.0 = 0:0.1",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_1 AS v opens=1 examined=1 matched=1 sel=100% pages=1",
+    "step 1 Probe cu_t AS t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.09 ms = CPU 0.09"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE id = 77",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x207dc3e32ec5053b fetch_id=0xd8b45cb18d55b324",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=77",
+    "  filter 0:0.0 = 77",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.04 ms = CPU 0.04"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE id IN (933, 838, 745, 666)",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=1 examined=4 pages=4 opens=1 pattern_id=0x37dac98f166831de fetch_id=0x69d4d7cd6d180d15",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key_set=4",
+    "  filter bool (0:0.0 = 933 OR 0:0.0 = 838 OR 0:0.0 = 745 OR 0:0.0 = 666)",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=4 matched=4 sel=100% pages=4",
+    "DB time 0.11 ms = CPU 0.11"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE id IN (933, 838, 745, 666)",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=1 examined=1000 pages=8 opens=1 pattern_id=0x37dac98f166831de fetch_id=0x69d4d7cd6d180d15",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.0 = 933 OR 0:0.0 = 838 OR 0:0.0 = 745 OR 0:0.0 = 666)",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=1000 matched=4 sel=0% pages=8",
+    "DB time 0.30 ms = CPU 0.30"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_4 AS v JOIN cu_t AS t ON t.id = v.rid",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=2 examined=8 pages=5 opens=5 pattern_id=0xc054b33f51ca54bc fetch_id=0x133730dc035e9b4",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_4 AS v",
+    "step 1 Probe cu_t AS t key=0:0.1",
+    "  filter 0:1.0 = 0:0.1",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_4 AS v opens=1 examined=4 matched=4 sel=100% pages=1",
+    "step 1 Probe cu_t AS t opens=4 examined=4 matched=4 sel=100% pages=4",
+    "DB time 0.12 ms = CPU 0.12"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE id = 77",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x207dc3e32ec5053b fetch_id=0xd8b45cb18d55b324",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=77",
+    "  filter 0:0.0 = 77",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.04 ms = CPU 0.04"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE id IN (372, 737, 185, 493, 852, 304, 240, 242, 345, 130, 535, 602, 578, 258, 816, 740, 6, 146, 965, 390, 586, 867, 549, 490, 829, 803, 731, 929, 277, 34, 796, 55, 746, 261, 89, 440, 590, 978, 896, 564, 717, 247, 485, 593, 254, 502, 325, 954, 7, 983, 955, 991, 826, 748, 191, ",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=1 examined=64 pages=64 opens=1 pattern_id=0x92a8d7e8ab2ad81e fetch_id=0xc4db4aa14dd48435",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key_set=64",
+    "  filter bool (0:0.0 = 372 OR 0:0.0 = 737 OR 0:0.0 = 185 OR 0:0.0 = 493 OR 0:0.0 = 852 OR 0:0.0 = 304 OR 0:0.0 = 240 OR 0:0.0 = 242 OR 0:0.0 = 345 OR 0:0.0 = 130 OR 0:0.0 = 535 OR 0:0.0 = 602 OR 0:0.0 = 578 OR 0:0.0 = 258 OR 0:0.0 = 816 OR 0:0.0 = 740 OR 0:0.0 = 6 OR 0:0.0 = 146 OR 0:0.0 = 965 OR 0:",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=64 matched=64 sel=100% pages=64",
+    "DB time 0.21 ms = CPU 0.21"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE id IN (372, 737, 185, 493, 852, 304, 240, 242, 345, 130, 535, 602, 578, 258, 816, 740, 6, 146, 965, 390, 586, 867, 549, 490, 829, 803, 731, 929, 277, 34, 796, 55, 746, 261, 89, 440, 590, 978, 896, 564, 717, 247, 485, 593, 254, 502, 325, 954, 7, 983, 955, 991, 826, 748, 191, ",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=1 examined=1000 pages=8 opens=1 pattern_id=0x92a8d7e8ab2ad81e fetch_id=0xc4db4aa14dd48435",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.0 = 372 OR 0:0.0 = 737 OR 0:0.0 = 185 OR 0:0.0 = 493 OR 0:0.0 = 852 OR 0:0.0 = 304 OR 0:0.0 = 240 OR 0:0.0 = 242 OR 0:0.0 = 345 OR 0:0.0 = 130 OR 0:0.0 = 535 OR 0:0.0 = 602 OR 0:0.0 = 578 OR 0:0.0 = 258 OR 0:0.0 = 816 OR 0:0.0 = 740 OR 0:0.0 = 6 OR 0:0.0 = 146 OR 0:0.0 = 965 OR 0:",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=1000 matched=64 sel=6% pages=8",
+    "DB time 0.91 ms = CPU 0.91"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_64 AS v JOIN cu_t AS t ON t.id = v.rid",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=2 examined=128 pages=65 opens=65 pattern_id=0xbf8f2d4fd680b62b fetch_id=0x57e063b572074a73",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_64 AS v",
+    "step 1 Probe cu_t AS t key=0:0.1",
+    "  filter 0:1.0 = 0:0.1",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_64 AS v opens=1 examined=64 matched=64 sel=100% pages=1",
+    "step 1 Probe cu_t AS t opens=64 examined=64 matched=64 sel=100% pages=64",
+    "DB time 0.14 ms = CPU 0.14"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE id = 77",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x207dc3e32ec5053b fetch_id=0xd8b45cb18d55b324",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=77",
+    "  filter 0:0.0 = 77",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.03 ms = CPU 0.03"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE id IN (389, 658, 274, 953, 228, 84, 1000, 650, 405, 556, 14, 964, 626, 326, 956, 633, 136, 244, 381, 333, 577, 354, 28, 936, 848, 426, 387, 347, 593, 660, 465, 491, 378, 640, 145, 673, 699, 896, 541, 186, 742, 197, 919, 834, 922, 402, 72, 900, 812, 106, 460, 759, 513, 92, 10",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=1 examined=1000 pages=1024 opens=1 pattern_id=0x473b0b0565eafc1e fetch_id=0xb4fe12389d82d635",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key_set=1024",
+    "  filter bool (0:0.0 = 389 OR 0:0.0 = 658 OR 0:0.0 = 274 OR 0:0.0 = 953 OR 0:0.0 = 228 OR 0:0.0 = 84 OR 0:0.0 = 1000 OR 0:0.0 = 650 OR 0:0.0 = 405 OR 0:0.0 = 556 OR 0:0.0 = 14 OR 0:0.0 = 964 OR 0:0.0 = 626 OR 0:0.0 = 326 OR 0:0.0 = 956 OR 0:0.0 = 633 OR 0:0.0 = 136 OR 0:0.0 = 244 OR 0:0.0 = 381 OR 0",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1000 matched=1000 sel=100% pages=1024",
+    "DB time 1.96 ms = CPU 1.96"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE id IN (389, 658, 274, 953, 228, 84, 1000, 650, 405, 556, 14, 964, 626, 326, 956, 633, 136, 244, 381, 333, 577, 354, 28, 936, 848, 426, 387, 347, 593, 660, 465, 491, 378, 640, 145, 673, 699, 896, 541, 186, 742, 197, 919, 834, 922, 402, 72, 900, 812, 106, 460, 759, 513, 92, 10",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=1 examined=1000 pages=8 opens=1 pattern_id=0x473b0b0565eafc1e fetch_id=0xb4fe12389d82d635",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.0 = 389 OR 0:0.0 = 658 OR 0:0.0 = 274 OR 0:0.0 = 953 OR 0:0.0 = 228 OR 0:0.0 = 84 OR 0:0.0 = 1000 OR 0:0.0 = 650 OR 0:0.0 = 405 OR 0:0.0 = 556 OR 0:0.0 = 14 OR 0:0.0 = 964 OR 0:0.0 = 626 OR 0:0.0 = 326 OR 0:0.0 = 956 OR 0:0.0 = 633 OR 0:0.0 = 136 OR 0:0.0 = 244 OR 0:0.0 = 381 OR 0",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=1000 matched=1000 sel=100% pages=8",
+    "DB time 7.41 ms = CPU 7.41"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_1024 AS v JOIN cu_t AS t ON t.id = v.rid",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=2 examined=2024 pages=1031 opens=1025 pattern_id=0xf6c6fb08aa204c56 fetch_id=0x89bbd53b8e1bd56e",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_1024 AS v",
+    "step 1 Probe cu_t AS t key=0:0.1",
+    "  filter 0:1.0 = 0:0.1",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_1024 AS v opens=1 examined=1024 matched=1024 sel=100% pages=7",
+    "step 1 Probe cu_t AS t opens=1024 examined=1000 matched=1000 sel=100% pages=1024",
+    "DB time 0.73 ms = CPU 0.73"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE id = 77",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x207dc3e32ec5053b fetch_id=0xd8b45cb18d55b324",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=77",
+    "  filter 0:0.0 = 77",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.03 ms = CPU 0.03"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE id IN (2350, 2291, 2465, 1878, 2434, 662, 1949, 4004, 419, 707, 2635, 784, 3840, 3257, 2968, 3382, 4027, 361, 557, 1870, 363, 1571, 1154, 3442, 539, 719, 1707, 312, 2368, 473, 2484, 2439, 3175, 876, 2739, 2947, 891, 1042, 3179, 2320, 619, 532, 2762, 1982, 2305, 3123, 2997, 2",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=1 examined=1000 pages=4096 opens=1 pattern_id=0x6628c2b4e1783c1e fetch_id=0xf3a667f801dd7635",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key_set=4096",
+    "  filter bool (0:0.0 = 2350 OR 0:0.0 = 2291 OR 0:0.0 = 2465 OR 0:0.0 = 1878 OR 0:0.0 = 2434 OR 0:0.0 = 662 OR 0:0.0 = 1949 OR 0:0.0 = 4004 OR 0:0.0 = 419 OR 0:0.0 = 707 OR 0:0.0 = 2635 OR 0:0.0 = 784 OR 0:0.0 = 3840 OR 0:0.0 = 3257 OR 0:0.0 = 2968 OR 0:0.0 = 3382 OR 0:0.0 = 4027 OR 0:0.0 = 361 OR 0:",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1000 matched=1000 sel=100% pages=4096",
+    "DB time 7.57 ms = CPU 7.57"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE id IN (2350, 2291, 2465, 1878, 2434, 662, 1949, 4004, 419, 707, 2635, 784, 3840, 3257, 2968, 3382, 4027, 361, 557, 1870, 363, 1571, 1154, 3442, 539, 719, 1707, 312, 2368, 473, 2484, 2439, 3175, 876, 2739, 2947, 891, 1042, 3179, 2320, 619, 532, 2762, 1982, 2305, 3123, 2997, 2",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=1 examined=1000 pages=8 opens=1 pattern_id=0x6628c2b4e1783c1e fetch_id=0xf3a667f801dd7635",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.0 = 2350 OR 0:0.0 = 2291 OR 0:0.0 = 2465 OR 0:0.0 = 1878 OR 0:0.0 = 2434 OR 0:0.0 = 662 OR 0:0.0 = 1949 OR 0:0.0 = 4004 OR 0:0.0 = 419 OR 0:0.0 = 707 OR 0:0.0 = 2635 OR 0:0.0 = 784 OR 0:0.0 = 3840 OR 0:0.0 = 3257 OR 0:0.0 = 2968 OR 0:0.0 = 3382 OR 0:0.0 = 4027 OR 0:0.0 = 361 OR 0:",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=1000 matched=1000 sel=100% pages=8",
+    "DB time 28.04 ms = CPU 28.04"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_4096 AS v JOIN cu_t AS t ON t.id = v.rid",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=2 examined=5096 pages=4121 opens=4097 pattern_id=0x2f7912f5125b5c26 fetch_id=0x3a2566d29224448e",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_4096 AS v",
+    "step 1 Probe cu_t AS t key=0:0.1",
+    "  filter 0:1.0 = 0:0.1",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_4096 AS v opens=1 examined=4096 matched=4096 sel=100% pages=25",
+    "step 1 Probe cu_t AS t opens=4096 examined=1000 matched=1000 sel=100% pages=4096",
+    "DB time 2.15 ms = CPU 2.15"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE id = 77",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x207dc3e32ec5053b fetch_id=0xd8b45cb18d55b324",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=77",
+    "  filter 0:0.0 = 77",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.04 ms = CPU 0.04"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE k IN (934)",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xa13419a9207fb103 fetch_id=0xdfa3e8ae1b49af3e",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 934",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.08 ms = CPU 0.08"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE k IN (934)",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xa13419a9207fb103 fetch_id=0xdfa3e8ae1b49af3e",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 934",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.11 ms = CPU 0.11"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_1 AS v JOIN cu_t AS t ON t.k = v.rk",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=3 opens=2 pattern_id=0xbf07ce1e540a8e41 fetch_id=0x4a09f938a5674879",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_1 AS v",
+    "step 1 IndexProbe cu_t AS t key=0:0.2",
+    "  filter 0:1.1 = 0:0.2",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_1 AS v opens=1 examined=1 matched=1 sel=100% pages=1",
+    "step 1 IndexProbe cu_t AS t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.09 ms = CPU 0.09"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE k = 232",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xe94e9ed3346cd4a2 fetch_id=0xa647081d39bbe5b7",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 232",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.04 ms = CPU 0.04"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE k IN (2800, 2515, 2236, 1999)",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=1 examined=4 pages=8 opens=1 pattern_id=0x1310e3352f39eb6b fetch_id=0x6b650e973563bea",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t key_set=4",
+    "  filter bool (0:0.1 = 2800 OR 0:0.1 = 2515 OR 0:0.1 = 2236 OR 0:0.1 = 1999)",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=4 matched=4 sel=100% pages=8 index_scanned=4 index_resolved=4",
+    "DB time 0.10 ms = CPU 0.10"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE k IN (2800, 2515, 2236, 1999)",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=1 examined=1000 pages=8 opens=1 pattern_id=0x1310e3352f39eb6b fetch_id=0x6b650e973563bea",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.1 = 2800 OR 0:0.1 = 2515 OR 0:0.1 = 2236 OR 0:0.1 = 1999)",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=1000 matched=4 sel=0% pages=8",
+    "DB time 0.22 ms = CPU 0.22"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_4 AS v JOIN cu_t AS t ON t.k = v.rk",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=2 examined=8 pages=9 opens=5 pattern_id=0xb569831e9ad879b0 fetch_id=0x6890c43fabf52fc8",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_4 AS v",
+    "step 1 IndexProbe cu_t AS t key=0:0.2",
+    "  filter 0:1.1 = 0:0.2",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_4 AS v opens=1 examined=4 matched=4 sel=100% pages=1",
+    "step 1 IndexProbe cu_t AS t opens=4 examined=4 matched=4 sel=100% pages=8 index_scanned=4 index_resolved=4",
+    "DB time 0.07 ms = CPU 0.07"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE k = 232",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xe94e9ed3346cd4a2 fetch_id=0xa647081d39bbe5b7",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 232",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.03 ms = CPU 0.03"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE k IN (1117, 2212, 556, 1480, 2557, 913, 721, 727, 1036, 391, 1606, 1807, 1735, 775, 2449, 2221, 19, 439, 2896, 1171, 1759, 2602, 1648, 1471, 2488, 2410, 2194, 2788, 832, 103, 2389, 166, 2239, 784, 268, 1321, 1771, 2935, 2689, 1693, 2152, 742, 1456, 1780, 763, 1507, 976, 2863",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=1 examined=64 pages=128 opens=1 pattern_id=0xe2ecb1c82edc690b fetch_id=0x80e503710013f42a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t key_set=64",
+    "  filter bool (0:0.1 = 1117 OR 0:0.1 = 2212 OR 0:0.1 = 556 OR 0:0.1 = 1480 OR 0:0.1 = 2557 OR 0:0.1 = 913 OR 0:0.1 = 721 OR 0:0.1 = 727 OR 0:0.1 = 1036 OR 0:0.1 = 391 OR 0:0.1 = 1606 OR 0:0.1 = 1807 OR 0:0.1 = 1735 OR 0:0.1 = 775 OR 0:0.1 = 2449 OR 0:0.1 = 2221 OR 0:0.1 = 19 OR 0:0.1 = 439 OR 0:0.1 ",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=64 matched=64 sel=100% pages=128 index_scanned=64 index_resolved=64",
+    "DB time 0.33 ms = CPU 0.33"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE k IN (1117, 2212, 556, 1480, 2557, 913, 721, 727, 1036, 391, 1606, 1807, 1735, 775, 2449, 2221, 19, 439, 2896, 1171, 1759, 2602, 1648, 1471, 2488, 2410, 2194, 2788, 832, 103, 2389, 166, 2239, 784, 268, 1321, 1771, 2935, 2689, 1693, 2152, 742, 1456, 1780, 763, 1507, 976, 2863",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=1 examined=1000 pages=8 opens=1 pattern_id=0xe2ecb1c82edc690b fetch_id=0x80e503710013f42a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.1 = 1117 OR 0:0.1 = 2212 OR 0:0.1 = 556 OR 0:0.1 = 1480 OR 0:0.1 = 2557 OR 0:0.1 = 913 OR 0:0.1 = 721 OR 0:0.1 = 727 OR 0:0.1 = 1036 OR 0:0.1 = 391 OR 0:0.1 = 1606 OR 0:0.1 = 1807 OR 0:0.1 = 1735 OR 0:0.1 = 775 OR 0:0.1 = 2449 OR 0:0.1 = 2221 OR 0:0.1 = 19 OR 0:0.1 = 439 OR 0:0.1 ",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=1000 matched=64 sel=6% pages=8",
+    "DB time 0.93 ms = CPU 0.93"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_64 AS v JOIN cu_t AS t ON t.k = v.rk",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=2 examined=128 pages=129 opens=65 pattern_id=0x78531c806ccef05b fetch_id=0x7bc0a3ff267c2d23",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_64 AS v",
+    "step 1 IndexProbe cu_t AS t key=0:0.2",
+    "  filter 0:1.1 = 0:0.2",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_64 AS v opens=1 examined=64 matched=64 sel=100% pages=1",
+    "step 1 IndexProbe cu_t AS t opens=64 examined=64 matched=64 sel=100% pages=128 index_scanned=64 index_resolved=64",
+    "DB time 0.23 ms = CPU 0.23"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE k = 232",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xe94e9ed3346cd4a2 fetch_id=0xa647081d39bbe5b7",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 232",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.03 ms = CPU 0.03"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE k IN (1168, 1975, 823, 2860, 685, 253, 3001, 1951, 1216, 1669, 43, 2893, 1879, 979, 2869, 1900, 409, 733, 1144, 1000, 1732, 1063, 85, 2809, 2545, 1279, 1162, 1042, 1780, 1981, 1396, 1474, 1135, 1921, 436, 2020, 2098, 2689, 1624, 559, 2227, 592, 2758, 2503, 2767, 1207, 217, 2",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=1 examined=1000 pages=2024 opens=1 pattern_id=0xc5cdb9180ebca30b fetch_id=0x58f5b9e91b53382a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t key_set=1024",
+    "  filter bool (0:0.1 = 1168 OR 0:0.1 = 1975 OR 0:0.1 = 823 OR 0:0.1 = 2860 OR 0:0.1 = 685 OR 0:0.1 = 253 OR 0:0.1 = 3001 OR 0:0.1 = 1951 OR 0:0.1 = 1216 OR 0:0.1 = 1669 OR 0:0.1 = 43 OR 0:0.1 = 2893 OR 0:0.1 = 1879 OR 0:0.1 = 979 OR 0:0.1 = 2869 OR 0:0.1 = 1900 OR 0:0.1 = 409 OR 0:0.1 = 733 OR 0:0.1",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1000 matched=1000 sel=100% pages=2024 index_scanned=1000 index_resolved=1000",
+    "DB time 3.76 ms = CPU 3.76"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE k IN (1168, 1975, 823, 2860, 685, 253, 3001, 1951, 1216, 1669, 43, 2893, 1879, 979, 2869, 1900, 409, 733, 1144, 1000, 1732, 1063, 85, 2809, 2545, 1279, 1162, 1042, 1780, 1981, 1396, 1474, 1135, 1921, 436, 2020, 2098, 2689, 1624, 559, 2227, 592, 2758, 2503, 2767, 1207, 217, 2",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=1 examined=1000 pages=8 opens=1 pattern_id=0xc5cdb9180ebca30b fetch_id=0x58f5b9e91b53382a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.1 = 1168 OR 0:0.1 = 1975 OR 0:0.1 = 823 OR 0:0.1 = 2860 OR 0:0.1 = 685 OR 0:0.1 = 253 OR 0:0.1 = 3001 OR 0:0.1 = 1951 OR 0:0.1 = 1216 OR 0:0.1 = 1669 OR 0:0.1 = 43 OR 0:0.1 = 2893 OR 0:0.1 = 1879 OR 0:0.1 = 979 OR 0:0.1 = 2869 OR 0:0.1 = 1900 OR 0:0.1 = 409 OR 0:0.1 = 733 OR 0:0.1",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=1000 matched=1000 sel=100% pages=8",
+    "DB time 6.85 ms = CPU 6.85"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_1024 AS v JOIN cu_t AS t ON t.k = v.rk",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=2 examined=2024 pages=2031 opens=1025 pattern_id=0x980b7d4d7002b7fe fetch_id=0x36e74e2a80dcde96",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_1024 AS v",
+    "step 1 IndexProbe cu_t AS t key=0:0.2",
+    "  filter 0:1.1 = 0:0.2",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_1024 AS v opens=1 examined=1024 matched=1024 sel=100% pages=7",
+    "step 1 IndexProbe cu_t AS t opens=1024 examined=1000 matched=1000 sel=100% pages=2024 index_scanned=1000 index_resolved=1000",
+    "DB time 2.61 ms = CPU 2.61"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE k = 232",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xe94e9ed3346cd4a2 fetch_id=0xa647081d39bbe5b7",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 232",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.04 ms = CPU 0.04"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE k IN (7051, 6874, 7396, 5635, 7303, 1987, 5848, 12013, 1258, 2122, 7906, 2353, 11521, 9772, 8905, 10147, 12082, 1084, 1672, 5611, 1090, 4714, 3463, 10327, 1618, 2158, 5122, 937, 7105, 1420, 7453, 7318, 9526, 2629, 8218, 8842, 2674, 3127, 9538, 6961, 1858, 1597, 8287, 5947, 6",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=1 examined=1000 pages=5096 opens=1 pattern_id=0x38f98fbf5403c30b fetch_id=0x6de3220b01aa782a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t key_set=4096",
+    "  filter bool (0:0.1 = 7051 OR 0:0.1 = 6874 OR 0:0.1 = 7396 OR 0:0.1 = 5635 OR 0:0.1 = 7303 OR 0:0.1 = 1987 OR 0:0.1 = 5848 OR 0:0.1 = 12013 OR 0:0.1 = 1258 OR 0:0.1 = 2122 OR 0:0.1 = 7906 OR 0:0.1 = 2353 OR 0:0.1 = 11521 OR 0:0.1 = 9772 OR 0:0.1 = 8905 OR 0:0.1 = 10147 OR 0:0.1 = 12082 OR 0:0.1 = 1",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1000 matched=1000 sel=100% pages=5096 index_scanned=1000 index_resolved=1000",
+    "DB time 28.18 ms = CPU 28.18"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE k IN (7051, 6874, 7396, 5635, 7303, 1987, 5848, 12013, 1258, 2122, 7906, 2353, 11521, 9772, 8905, 10147, 12082, 1084, 1672, 5611, 1090, 4714, 3463, 10327, 1618, 2158, 5122, 937, 7105, 1420, 7453, 7318, 9526, 2629, 8218, 8842, 2674, 3127, 9538, 6961, 1858, 1597, 8287, 5947, 6",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=1 examined=1000 pages=8 opens=1 pattern_id=0x38f98fbf5403c30b fetch_id=0x6de3220b01aa782a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.1 = 7051 OR 0:0.1 = 6874 OR 0:0.1 = 7396 OR 0:0.1 = 5635 OR 0:0.1 = 7303 OR 0:0.1 = 1987 OR 0:0.1 = 5848 OR 0:0.1 = 12013 OR 0:0.1 = 1258 OR 0:0.1 = 2122 OR 0:0.1 = 7906 OR 0:0.1 = 2353 OR 0:0.1 = 11521 OR 0:0.1 = 9772 OR 0:0.1 = 8905 OR 0:0.1 = 10147 OR 0:0.1 = 12082 OR 0:0.1 = 1",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=1000 matched=1000 sel=100% pages=8",
+    "DB time 43.29 ms = CPU 43.29"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_4096 AS v JOIN cu_t AS t ON t.k = v.rk",
+   "analyze": [
+    "analyze rows=1000 class=JoinSelect steps=2 examined=5096 pages=5121 opens=4097 pattern_id=0x526a2edb696bb84e fetch_id=0x2b9a828d897e85b6",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_4096 AS v",
+    "step 1 IndexProbe cu_t AS t key=0:0.2",
+    "  filter 0:1.1 = 0:0.2",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_4096 AS v opens=1 examined=4096 matched=4096 sel=100% pages=25",
+    "step 1 IndexProbe cu_t AS t opens=4096 examined=1000 matched=1000 sel=100% pages=5096 index_scanned=1000 index_resolved=1000",
+    "DB time 21.21 ms = CPU 21.21"
+   ]
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE k = 232",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xe94e9ed3346cd4a2 fetch_id=0xa647081d39bbe5b7",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 232",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.05 ms = CPU 0.05"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE id IN (55108)",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x652dc280105f7aea fetch_id=0xec07565feed1404d",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=55108",
+    "  filter 0:0.0 = 55108",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.21 ms = CPU 0.21"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE id IN (55108)",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x652dc280105f7aea fetch_id=0xec07565feed1404d",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=55108",
+    "  filter 0:0.0 = 55108",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.14 ms = CPU 0.14"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_1 AS v JOIN cu_t AS t ON t.id = v.rid",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=2 opens=2 pattern_id=0x41d77a746b0ed04d fetch_id=0x67076aaf877fd085",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_1 AS v",
+    "step 1 Probe cu_t AS t key=0:0.1",
+    "  filter 0:1.0 = 0:0.1",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_1 AS v opens=1 examined=1 matched=1 sel=100% pages=1",
+    "step 1 Probe cu_t AS t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.11 ms = CPU 0.11"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE id = 77",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x207dc3e32ec5053b fetch_id=0xd8b45cb18d55b324",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=77",
+    "  filter 0:0.0 = 77",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.04 ms = CPU 0.04"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE id IN (9228, 89109, 49376, 11113)",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=1 examined=4 pages=4 opens=1 pattern_id=0x37dac98f166831de fetch_id=0x69d4d7cd6d180d15",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key_set=4",
+    "  filter bool (0:0.0 = 9228 OR 0:0.0 = 89109 OR 0:0.0 = 49376 OR 0:0.0 = 11113)",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=4 matched=4 sel=100% pages=4",
+    "DB time 0.13 ms = CPU 0.13"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE id IN (9228, 89109, 49376, 11113)",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=1 examined=100000 pages=705 opens=1 pattern_id=0x37dac98f166831de fetch_id=0x69d4d7cd6d180d15",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.0 = 9228 OR 0:0.0 = 89109 OR 0:0.0 = 49376 OR 0:0.0 = 11113)",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=100000 matched=4 sel=0% pages=705",
+    "DB time 16.09 ms = CPU 16.09"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_4 AS v JOIN cu_t AS t ON t.id = v.rid",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=2 examined=8 pages=5 opens=5 pattern_id=0xc054b33f51ca54bc fetch_id=0x133730dc035e9b4",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_4 AS v",
+    "step 1 Probe cu_t AS t key=0:0.1",
+    "  filter 0:1.0 = 0:0.1",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_4 AS v opens=1 examined=4 matched=4 sel=100% pages=1",
+    "step 1 Probe cu_t AS t opens=4 examined=4 matched=4 sel=100% pages=4",
+    "DB time 0.14 ms = CPU 0.14"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE id = 77",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x207dc3e32ec5053b fetch_id=0xd8b45cb18d55b324",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=77",
+    "  filter 0:0.0 = 77",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.04 ms = CPU 0.04"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE id IN (77223, 57340, 68564, 12816, 47239, 6425, 33890, 60765, 30063, 16610, 86973, 56842, 95838, 28913, 2641, 31951, 90235, 85024, 4791, 55160, 54751, 95387, 13891, 72771, 73193, 10686, 22929, 11006, 6768, 28754, 63355, 61425, 95203, 77145, 1902, 24524, 66862, 29826, 74944, ",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=1 examined=64 pages=64 opens=1 pattern_id=0x92a8d7e8ab2ad81e fetch_id=0xc4db4aa14dd48435",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key_set=64",
+    "  filter bool (0:0.0 = 77223 OR 0:0.0 = 57340 OR 0:0.0 = 68564 OR 0:0.0 = 12816 OR 0:0.0 = 47239 OR 0:0.0 = 6425 OR 0:0.0 = 33890 OR 0:0.0 = 60765 OR 0:0.0 = 30063 OR 0:0.0 = 16610 OR 0:0.0 = 86973 OR 0:0.0 = 56842 OR 0:0.0 = 95838 OR 0:0.0 = 28913 OR 0:0.0 = 2641 OR 0:0.0 = 31951 OR 0:0.0 = 90235 O",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=64 matched=64 sel=100% pages=64",
+    "DB time 0.27 ms = CPU 0.27"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE id IN (77223, 57340, 68564, 12816, 47239, 6425, 33890, 60765, 30063, 16610, 86973, 56842, 95838, 28913, 2641, 31951, 90235, 85024, 4791, 55160, 54751, 95387, 13891, 72771, 73193, 10686, 22929, 11006, 6768, 28754, 63355, 61425, 95203, 77145, 1902, 24524, 66862, 29826, 74944, ",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=1 examined=100000 pages=705 opens=1 pattern_id=0x92a8d7e8ab2ad81e fetch_id=0xc4db4aa14dd48435",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.0 = 77223 OR 0:0.0 = 57340 OR 0:0.0 = 68564 OR 0:0.0 = 12816 OR 0:0.0 = 47239 OR 0:0.0 = 6425 OR 0:0.0 = 33890 OR 0:0.0 = 60765 OR 0:0.0 = 30063 OR 0:0.0 = 16610 OR 0:0.0 = 86973 OR 0:0.0 = 56842 OR 0:0.0 = 95838 OR 0:0.0 = 28913 OR 0:0.0 = 2641 OR 0:0.0 = 31951 OR 0:0.0 = 90235 O",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=100000 matched=64 sel=0% pages=705",
+    "DB time 80.51 ms = CPU 80.51"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_64 AS v JOIN cu_t AS t ON t.id = v.rid",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=2 examined=128 pages=65 opens=65 pattern_id=0xbf8f2d4fd680b62b fetch_id=0x57e063b572074a73",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_64 AS v",
+    "step 1 Probe cu_t AS t key=0:0.1",
+    "  filter 0:1.0 = 0:0.1",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_64 AS v opens=1 examined=64 matched=64 sel=100% pages=1",
+    "step 1 Probe cu_t AS t opens=64 examined=64 matched=64 sel=100% pages=64",
+    "DB time 0.23 ms = CPU 0.23"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE id = 77",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x207dc3e32ec5053b fetch_id=0xd8b45cb18d55b324",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=77",
+    "  filter 0:0.0 = 77",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.03 ms = CPU 0.03"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE id IN (40767, 33411, 50409, 21853, 43829, 92735, 71423, 48053, 2419, 53590, 57658, 11488, 52347, 94102, 96423, 91017, 71186, 52139, 67847, 82600, 81239, 70090, 35462, 18359, 83242, 44991, 88856, 86058, 85145, 66686, 38304, 25564, 62822, 95025, 94134, 56259, 90627, 72335, 239",
+   "analyze": [
+    "analyze rows=1024 class=JoinSelect steps=1 examined=1024 pages=1024 opens=1 pattern_id=0x473b0b0565eafc1e fetch_id=0xb4fe12389d82d635",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key_set=1024",
+    "  filter bool (0:0.0 = 40767 OR 0:0.0 = 33411 OR 0:0.0 = 50409 OR 0:0.0 = 21853 OR 0:0.0 = 43829 OR 0:0.0 = 92735 OR 0:0.0 = 71423 OR 0:0.0 = 48053 OR 0:0.0 = 2419 OR 0:0.0 = 53590 OR 0:0.0 = 57658 OR 0:0.0 = 11488 OR 0:0.0 = 52347 OR 0:0.0 = 94102 OR 0:0.0 = 96423 OR 0:0.0 = 91017 OR 0:0.0 = 71186 ",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1024 matched=1024 sel=100% pages=1024",
+    "DB time 4.51 ms = CPU 4.51"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE id IN (40767, 33411, 50409, 21853, 43829, 92735, 71423, 48053, 2419, 53590, 57658, 11488, 52347, 94102, 96423, 91017, 71186, 52139, 67847, 82600, 81239, 70090, 35462, 18359, 83242, 44991, 88856, 86058, 85145, 66686, 38304, 25564, 62822, 95025, 94134, 56259, 90627, 72335, 239",
+   "analyze": [
+    "analyze rows=1024 class=JoinSelect steps=1 examined=100000 pages=705 opens=1 pattern_id=0x473b0b0565eafc1e fetch_id=0xb4fe12389d82d635",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.0 = 40767 OR 0:0.0 = 33411 OR 0:0.0 = 50409 OR 0:0.0 = 21853 OR 0:0.0 = 43829 OR 0:0.0 = 92735 OR 0:0.0 = 71423 OR 0:0.0 = 48053 OR 0:0.0 = 2419 OR 0:0.0 = 53590 OR 0:0.0 = 57658 OR 0:0.0 = 11488 OR 0:0.0 = 52347 OR 0:0.0 = 94102 OR 0:0.0 = 96423 OR 0:0.0 = 91017 OR 0:0.0 = 71186 ",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=100000 matched=1024 sel=1% pages=705",
+    "DB time 1630.26 ms = CPU 1630.26"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_1024 AS v JOIN cu_t AS t ON t.id = v.rid",
+   "analyze": [
+    "analyze rows=1024 class=JoinSelect steps=2 examined=2048 pages=1031 opens=1025 pattern_id=0xf6c6fb08aa204c56 fetch_id=0x89bbd53b8e1bd56e",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_1024 AS v",
+    "step 1 Probe cu_t AS t key=0:0.1",
+    "  filter 0:1.0 = 0:0.1",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_1024 AS v opens=1 examined=1024 matched=1024 sel=100% pages=7",
+    "step 1 Probe cu_t AS t opens=1024 examined=1024 matched=1024 sel=100% pages=1024",
+    "DB time 1.98 ms = CPU 1.98"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE id = 77",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x207dc3e32ec5053b fetch_id=0xd8b45cb18d55b324",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=77",
+    "  filter 0:0.0 = 77",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.05 ms = CPU 0.05"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE id IN (65317, 68230, 82678, 33075, 53383, 37326, 72936, 59598, 36318, 82080, 28476, 15315, 88203, 87675, 92501, 21234, 63904, 34504, 64480, 68721, 61152, 33508, 65022, 37412, 50445, 55279, 74797, 57291, 75163, 42438, 24844, 62335, 98011, 37371, 45185, 3428, 69497, 46226, 785",
+   "analyze": [
+    "analyze rows=4096 class=JoinSelect steps=1 examined=4096 pages=4096 opens=1 pattern_id=0x6628c2b4e1783c1e fetch_id=0xf3a667f801dd7635",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key_set=4096",
+    "  filter bool (0:0.0 = 65317 OR 0:0.0 = 68230 OR 0:0.0 = 82678 OR 0:0.0 = 33075 OR 0:0.0 = 53383 OR 0:0.0 = 37326 OR 0:0.0 = 72936 OR 0:0.0 = 59598 OR 0:0.0 = 36318 OR 0:0.0 = 82080 OR 0:0.0 = 28476 OR 0:0.0 = 15315 OR 0:0.0 = 88203 OR 0:0.0 = 87675 OR 0:0.0 = 92501 OR 0:0.0 = 21234 OR 0:0.0 = 63904",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=4096 matched=4096 sel=100% pages=4096",
+    "DB time 9.82 ms = CPU 9.82"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE id IN (65317, 68230, 82678, 33075, 53383, 37326, 72936, 59598, 36318, 82080, 28476, 15315, 88203, 87675, 92501, 21234, 63904, 34504, 64480, 68721, 61152, 33508, 65022, 37412, 50445, 55279, 74797, 57291, 75163, 42438, 24844, 62335, 98011, 37371, 45185, 3428, 69497, 46226, 785",
+   "analyze": [
+    "analyze rows=4096 class=JoinSelect steps=1 examined=100000 pages=705 opens=1 pattern_id=0x6628c2b4e1783c1e fetch_id=0xf3a667f801dd7635",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.0 = 65317 OR 0:0.0 = 68230 OR 0:0.0 = 82678 OR 0:0.0 = 33075 OR 0:0.0 = 53383 OR 0:0.0 = 37326 OR 0:0.0 = 72936 OR 0:0.0 = 59598 OR 0:0.0 = 36318 OR 0:0.0 = 82080 OR 0:0.0 = 28476 OR 0:0.0 = 15315 OR 0:0.0 = 88203 OR 0:0.0 = 87675 OR 0:0.0 = 92501 OR 0:0.0 = 21234 OR 0:0.0 = 63904",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=100000 matched=4096 sel=4% pages=705",
+    "DB time 4240.79 ms = CPU 4240.79"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_4096 AS v JOIN cu_t AS t ON t.id = v.rid",
+   "analyze": [
+    "analyze rows=4096 class=JoinSelect steps=2 examined=8192 pages=4121 opens=4097 pattern_id=0x2f7912f5125b5c26 fetch_id=0x3a2566d29224448e",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_4096 AS v",
+    "step 1 Probe cu_t AS t key=0:0.1",
+    "  filter 0:1.0 = 0:0.1",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_4096 AS v opens=1 examined=4096 matched=4096 sel=100% pages=25",
+    "step 1 Probe cu_t AS t opens=4096 examined=4096 matched=4096 sel=100% pages=4096",
+    "DB time 4.45 ms = CPU 4.45"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE id = 77",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x207dc3e32ec5053b fetch_id=0xd8b45cb18d55b324",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cu_t key=77",
+    "  filter 0:0.0 = 77",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cu_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.06 ms = CPU 0.06"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE k IN (165325)",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xa13419a9207fb103 fetch_id=0xdfa3e8ae1b49af3e",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 165325",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.10 ms = CPU 0.10"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE k IN (165325)",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xa13419a9207fb103 fetch_id=0xdfa3e8ae1b49af3e",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 165325",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.11 ms = CPU 0.11"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_1 AS v JOIN cu_t AS t ON t.k = v.rk",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=3 opens=2 pattern_id=0xbf07ce1e540a8e41 fetch_id=0x4a09f938a5674879",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_1 AS v",
+    "step 1 IndexProbe cu_t AS t key=0:0.2",
+    "  filter 0:1.1 = 0:0.2",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_1 AS v opens=1 examined=1 matched=1 sel=100% pages=1",
+    "step 1 IndexProbe cu_t AS t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.09 ms = CPU 0.09"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE k = 232",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xe94e9ed3346cd4a2 fetch_id=0xa647081d39bbe5b7",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 232",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.04 ms = CPU 0.04"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE k IN (27685, 267328, 148129, 33340)",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=1 examined=4 pages=8 opens=1 pattern_id=0x1310e3352f39eb6b fetch_id=0x6b650e973563bea",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t key_set=4",
+    "  filter bool (0:0.1 = 27685 OR 0:0.1 = 267328 OR 0:0.1 = 148129 OR 0:0.1 = 33340)",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=4 matched=4 sel=100% pages=8 index_scanned=4 index_resolved=4",
+    "DB time 0.10 ms = CPU 0.10"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE k IN (27685, 267328, 148129, 33340)",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=1 examined=100000 pages=705 opens=1 pattern_id=0x1310e3352f39eb6b fetch_id=0x6b650e973563bea",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.1 = 27685 OR 0:0.1 = 267328 OR 0:0.1 = 148129 OR 0:0.1 = 33340)",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=100000 matched=4 sel=0% pages=705",
+    "DB time 11.26 ms = CPU 11.26"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_4 AS v JOIN cu_t AS t ON t.k = v.rk",
+   "analyze": [
+    "analyze rows=4 class=JoinSelect steps=2 examined=8 pages=9 opens=5 pattern_id=0xb569831e9ad879b0 fetch_id=0x6890c43fabf52fc8",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_4 AS v",
+    "step 1 IndexProbe cu_t AS t key=0:0.2",
+    "  filter 0:1.1 = 0:0.2",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_4 AS v opens=1 examined=4 matched=4 sel=100% pages=1",
+    "step 1 IndexProbe cu_t AS t opens=4 examined=4 matched=4 sel=100% pages=8 index_scanned=4 index_resolved=4",
+    "DB time 0.10 ms = CPU 0.10"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE k = 232",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xe94e9ed3346cd4a2 fetch_id=0xa647081d39bbe5b7",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 232",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.06 ms = CPU 0.06"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE k IN (231670, 172021, 205693, 38449, 141718, 19276, 101671, 182296, 90190, 49831, 260920, 170527, 287515, 86740, 7924, 95854, 270706, 255073, 14374, 165481, 164254, 286162, 41674, 218314, 219580, 32059, 68788, 33019, 20305, 86263, 190066, 184276, 285610, 231436, 5707, 73573,",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=1 examined=64 pages=128 opens=1 pattern_id=0xe2ecb1c82edc690b fetch_id=0x80e503710013f42a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t key_set=64",
+    "  filter bool (0:0.1 = 231670 OR 0:0.1 = 172021 OR 0:0.1 = 205693 OR 0:0.1 = 38449 OR 0:0.1 = 141718 OR 0:0.1 = 19276 OR 0:0.1 = 101671 OR 0:0.1 = 182296 OR 0:0.1 = 90190 OR 0:0.1 = 49831 OR 0:0.1 = 260920 OR 0:0.1 = 170527 OR 0:0.1 = 287515 OR 0:0.1 = 86740 OR 0:0.1 = 7924 OR 0:0.1 = 95854 OR 0:0.1",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=64 matched=64 sel=100% pages=128 index_scanned=64 index_resolved=64",
+    "DB time 0.58 ms = CPU 0.58"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE k IN (231670, 172021, 205693, 38449, 141718, 19276, 101671, 182296, 90190, 49831, 260920, 170527, 287515, 86740, 7924, 95854, 270706, 255073, 14374, 165481, 164254, 286162, 41674, 218314, 219580, 32059, 68788, 33019, 20305, 86263, 190066, 184276, 285610, 231436, 5707, 73573,",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=1 examined=100000 pages=705 opens=1 pattern_id=0xe2ecb1c82edc690b fetch_id=0x80e503710013f42a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.1 = 231670 OR 0:0.1 = 172021 OR 0:0.1 = 205693 OR 0:0.1 = 38449 OR 0:0.1 = 141718 OR 0:0.1 = 19276 OR 0:0.1 = 101671 OR 0:0.1 = 182296 OR 0:0.1 = 90190 OR 0:0.1 = 49831 OR 0:0.1 = 260920 OR 0:0.1 = 170527 OR 0:0.1 = 287515 OR 0:0.1 = 86740 OR 0:0.1 = 7924 OR 0:0.1 = 95854 OR 0:0.1",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=100000 matched=64 sel=0% pages=705",
+    "DB time 100.60 ms = CPU 100.60"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_64 AS v JOIN cu_t AS t ON t.k = v.rk",
+   "analyze": [
+    "analyze rows=64 class=JoinSelect steps=2 examined=128 pages=129 opens=65 pattern_id=0x78531c806ccef05b fetch_id=0x7bc0a3ff267c2d23",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_64 AS v",
+    "step 1 IndexProbe cu_t AS t key=0:0.2",
+    "  filter 0:1.1 = 0:0.2",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_64 AS v opens=1 examined=64 matched=64 sel=100% pages=1",
+    "step 1 IndexProbe cu_t AS t opens=64 examined=64 matched=64 sel=100% pages=128 index_scanned=64 index_resolved=64",
+    "DB time 0.35 ms = CPU 0.35"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE k = 232",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xe94e9ed3346cd4a2 fetch_id=0xa647081d39bbe5b7",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 232",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.04 ms = CPU 0.04"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE k IN (122302, 100234, 151228, 65560, 131488, 278206, 214270, 144160, 7258, 160771, 172975, 34465, 157042, 282307, 289270, 273052, 213559, 156418, 203542, 247801, 243718, 210271, 106387, 55078, 249727, 134974, 266569, 258175, 255436, 200059, 114913, 76693, 188467, 285076, 282",
+   "analyze": [
+    "analyze rows=1024 class=JoinSelect steps=1 examined=1024 pages=2048 opens=1 pattern_id=0xc5cdb9180ebca30b fetch_id=0x58f5b9e91b53382a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t key_set=1024",
+    "  filter bool (0:0.1 = 122302 OR 0:0.1 = 100234 OR 0:0.1 = 151228 OR 0:0.1 = 65560 OR 0:0.1 = 131488 OR 0:0.1 = 278206 OR 0:0.1 = 214270 OR 0:0.1 = 144160 OR 0:0.1 = 7258 OR 0:0.1 = 160771 OR 0:0.1 = 172975 OR 0:0.1 = 34465 OR 0:0.1 = 157042 OR 0:0.1 = 282307 OR 0:0.1 = 289270 OR 0:0.1 = 273052 OR 0",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1024 matched=1024 sel=100% pages=2048 index_scanned=1024 index_resolved=1024",
+    "DB time 4.38 ms = CPU 4.38"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE k IN (122302, 100234, 151228, 65560, 131488, 278206, 214270, 144160, 7258, 160771, 172975, 34465, 157042, 282307, 289270, 273052, 213559, 156418, 203542, 247801, 243718, 210271, 106387, 55078, 249727, 134974, 266569, 258175, 255436, 200059, 114913, 76693, 188467, 285076, 282",
+   "analyze": [
+    "analyze rows=1024 class=JoinSelect steps=1 examined=100000 pages=705 opens=1 pattern_id=0xc5cdb9180ebca30b fetch_id=0x58f5b9e91b53382a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.1 = 122302 OR 0:0.1 = 100234 OR 0:0.1 = 151228 OR 0:0.1 = 65560 OR 0:0.1 = 131488 OR 0:0.1 = 278206 OR 0:0.1 = 214270 OR 0:0.1 = 144160 OR 0:0.1 = 7258 OR 0:0.1 = 160771 OR 0:0.1 = 172975 OR 0:0.1 = 34465 OR 0:0.1 = 157042 OR 0:0.1 = 282307 OR 0:0.1 = 289270 OR 0:0.1 = 273052 OR 0",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=100000 matched=1024 sel=1% pages=705",
+    "DB time 1300.96 ms = CPU 1300.96"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_1024 AS v JOIN cu_t AS t ON t.k = v.rk",
+   "analyze": [
+    "analyze rows=1024 class=JoinSelect steps=2 examined=2048 pages=2055 opens=1025 pattern_id=0x980b7d4d7002b7fe fetch_id=0x36e74e2a80dcde96",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_1024 AS v",
+    "step 1 IndexProbe cu_t AS t key=0:0.2",
+    "  filter 0:1.1 = 0:0.2",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_1024 AS v opens=1 examined=1024 matched=1024 sel=100% pages=7",
+    "step 1 IndexProbe cu_t AS t opens=1024 examined=1024 matched=1024 sel=100% pages=2048 index_scanned=1024 index_resolved=1024",
+    "DB time 4.67 ms = CPU 4.67"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE k = 232",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xe94e9ed3346cd4a2 fetch_id=0xa647081d39bbe5b7",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 232",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.07 ms = CPU 0.07"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "arm": "L",
+   "sql": "SELECT * FROM cu_t WHERE k IN (195952, 204691, 248035, 99226, 160150, 111979, 218809, 178795, 108955, 246241, 85429, 45946, 264610, 263026, 277504, 63703, 191713, 103513, 193441, 206164, 183457, 100525, 195067, 112237, 151336, 165838, 224392, 171874, 225490, 127315, 74533, 187006, 294034, 112114, 13",
+   "analyze": [
+    "analyze rows=4096 class=JoinSelect steps=1 examined=4096 pages=8192 opens=1 pattern_id=0x38f98fbf5403c30b fetch_id=0x6de3220b01aa782a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t key_set=4096",
+    "  filter bool (0:0.1 = 195952 OR 0:0.1 = 204691 OR 0:0.1 = 248035 OR 0:0.1 = 99226 OR 0:0.1 = 160150 OR 0:0.1 = 111979 OR 0:0.1 = 218809 OR 0:0.1 = 178795 OR 0:0.1 = 108955 OR 0:0.1 = 246241 OR 0:0.1 = 85429 OR 0:0.1 = 45946 OR 0:0.1 = 264610 OR 0:0.1 = 263026 OR 0:0.1 = 277504 OR 0:0.1 = 63703 OR 0",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=4096 matched=4096 sel=100% pages=8192 index_scanned=4096 index_resolved=4096",
+    "DB time 22.12 ms = CPU 22.12"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "arm": "LA",
+   "sql": "SELECT * FROM cu_t WHERE k IN (195952, 204691, 248035, 99226, 160150, 111979, 218809, 178795, 108955, 246241, 85429, 45946, 264610, 263026, 277504, 63703, 191713, 103513, 193441, 206164, 183457, 100525, 195067, 112237, 151336, 165838, 224392, 171874, 225490, 127315, 74533, 187006, 294034, 112114, 13",
+   "analyze": [
+    "analyze rows=4096 class=JoinSelect steps=1 examined=100000 pages=705 opens=1 pattern_id=0x38f98fbf5403c30b fetch_id=0x6de3220b01aa782a",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cu_t",
+    "  filter bool (0:0.1 = 195952 OR 0:0.1 = 204691 OR 0:0.1 = 248035 OR 0:0.1 = 99226 OR 0:0.1 = 160150 OR 0:0.1 = 111979 OR 0:0.1 = 218809 OR 0:0.1 = 178795 OR 0:0.1 = 108955 OR 0:0.1 = 246241 OR 0:0.1 = 85429 OR 0:0.1 = 45946 OR 0:0.1 = 264610 OR 0:0.1 = 263026 OR 0:0.1 = 277504 OR 0:0.1 = 63703 OR 0",
+    "project * (4 column(s) of step 0)",
+    "step 0 Scan cu_t opens=1 examined=100000 matched=4096 sel=4% pages=705",
+    "DB time 5088.74 ms = CPU 5088.74"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "arm": "J",
+   "sql": "SELECT t.id, t.k, t.a, t.b FROM cu_v_4096 AS v JOIN cu_t AS t ON t.k = v.rk",
+   "analyze": [
+    "analyze rows=4096 class=JoinSelect steps=2 examined=8192 pages=8217 opens=4097 pattern_id=0x526a2edb696bb84e fetch_id=0x2b9a828d897e85b6",
+    "class=JoinSelect steps=2 hoisted=0",
+    "step 0 Scan cu_v_4096 AS v",
+    "step 1 IndexProbe cu_t AS t key=0:0.2",
+    "  filter 0:1.1 = 0:0.2",
+    "project t.id=0:1.0, t.k=0:1.1, t.a=0:1.2, t.b=0:1.3",
+    "step 0 Scan cu_v_4096 AS v opens=1 examined=4096 matched=4096 sel=100% pages=25",
+    "step 1 IndexProbe cu_t AS t opens=4096 examined=4096 matched=4096 sel=100% pages=8192 index_scanned=4096 index_resolved=4096",
+    "DB time 14.74 ms = CPU 14.74"
+   ]
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "arm": "D",
+   "sql": "SELECT * FROM cu_t WHERE k = 232",
+   "analyze": [
+    "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xe94e9ed3346cd4a2 fetch_id=0xa647081d39bbe5b7",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cu_t",
+    "  filter 0:0.1 = 232",
+    "project * (4 column(s) of step 0)",
+    "step 0 IndexProbe cu_t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+    "DB time 0.06 ms = CPU 0.06"
+   ]
+  }
+ ],
+ "checks": [
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 1,
+   "same_rows": true
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 4,
+   "same_rows": true
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 64,
+   "same_rows": true
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 1024,
+   "same_rows": true
+  },
+  {
+   "rows": 1000,
+   "col": "id",
+   "n": 4096,
+   "same_rows": true
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 1,
+   "same_rows": true
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 4,
+   "same_rows": true
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 64,
+   "same_rows": true
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 1024,
+   "same_rows": true
+  },
+  {
+   "rows": 1000,
+   "col": "k",
+   "n": 4096,
+   "same_rows": true
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 1,
+   "same_rows": true
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 4,
+   "same_rows": true
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 64,
+   "same_rows": true
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 1024,
+   "same_rows": true
+  },
+  {
+   "rows": 100000,
+   "col": "id",
+   "n": 4096,
+   "same_rows": true
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 1,
+   "same_rows": true
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 4,
+   "same_rows": true
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 64,
+   "same_rows": true
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 1024,
+   "same_rows": true
+  },
+  {
+   "rows": 100000,
+   "col": "k",
+   "n": 4096,
+   "same_rows": true
+  }
+ ]
+}

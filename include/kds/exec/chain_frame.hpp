@@ -178,9 +178,20 @@ using SubChainAnswer = FunctionRef<StatusOr<TriState>(std::uint32_t)>;
 // that runs last: with no `sub_chains`, the conjuncts that read no
 // sub-chain, beside the residual; with it, only the ones that do, beside
 // the step's sub-chains.
+//
+// `first` names one leaf of one conjunct to test before the rest of its
+// tree (CU-Q9): the leaf whose value a key set's descent was made for. Only
+// an `OR` root takes it, where a true leaf decides the conjunct and any
+// other answer falls through to the whole tree in written order, so it
+// changes what is evaluated first and never an answer.
+struct BoolLeafFirst {
+    std::uint32_t conjunct = 0;  // index into `predicates`
+    std::uint32_t leaf = 0;      // index into that conjunct's children
+};
 StatusOr<bool> EvaluateBoolConjuncts(const std::vector<const catalog::Schema*>& schemas,
                                      const std::vector<BoolPredicate>& predicates,
                                      const ChainFrame& frame,
-                                     const SubChainAnswer* sub_chains = nullptr);
+                                     const SubChainAnswer* sub_chains = nullptr,
+                                     const BoolLeafFirst* first = nullptr);
 
 }  // namespace kds::exec

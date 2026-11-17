@@ -187,7 +187,7 @@ TEST_F(AnalyzeTest, ABuiltStatementReportsItsMapAndItsProbes) {
     // of spec §3's "the build feeds no trail". The pin that would bite
     // belongs where a recorder is live - `waystone_contract_test.cpp` -
     // and the argument meanwhile is the `Scan` asserted above:
-    // recording is gated on `IsTrailReplayable(step.kind)` and the
+    // recording is gated on `IsTrailReplayable(step)` and the
     // annotation moves no kind.
     EXPECT_EQ(plan.find("replays="), std::string::npos) << plan;
 }

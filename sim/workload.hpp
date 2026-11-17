@@ -264,6 +264,28 @@ private:
     Rng read_only_rng_;
     bool read_only_txn_ = false;
     Op ReadOnlyTxnOp();
+    // **A key list** (CU, `instructions/v3.2.0/workorder-cu-key-set-access.md`),
+    // with the shapes only: a range read's keys named one by one in an `IN`
+    // list, shuffled, one of them twice. Still a `kSelectRange` with the
+    // range's `lo` and `hi`, so the oracle's expectation is the range's and
+    // only the spelling - and the access path - differs. Its own stream, so
+    // the op is drawn after the range drew and nothing else moves.
+    Rng key_list_rng_;
+    std::string KeyListSql(const std::string& table, std::uint64_t lo, std::uint64_t hi);
+    // **A write by key list** (CU-S3), with the shapes only: a by-key
+    // UPDATE's or DELETE's `id = k` spelled `id IN (k, 0, k)` - the key
+    // twice and a key no row holds (0 is outside the id space) - 40 times in
+    // 100. The op's kind and `key` are unchanged, so the oracle's expectation
+    // is the single key's and only the access - one descent per value -
+    // differs. Its own stream, for `key_list_rng_`'s reason.
+    Rng write_list_rng_;
+    // CU-S3b: with the shapes on, 30 in 100 by-key writes carry a second
+    // conjunct, `id != 0`. It holds of every row (no key is 0) and bounds no
+    // lock window, so the oracle's expectation and the units taken are the
+    // bare key's; the write descends with a conjunct to ask of the row it
+    // finds. Its own stream, so `write_list_rng_` draws what it drew.
+    Rng write_conjunct_rng_;
+    std::string KeyPredicate(std::uint64_t key);
     // p0, c0, a0: their own id-guessing counters (`Table::inserted`).
     std::vector<Table> constrained_;
     std::size_t constrained_ddl_ = 0;

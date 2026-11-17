@@ -377,11 +377,14 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
 // `snapshot` is threaded through for the sub-chains: a correlated subquery
 // inside an UPDATE's WHERE reads relations, and it must read them through
 // the same view the UPDATE does.
+// `first` is `EvaluateBoolConjuncts`' (chain_frame.hpp): the leaf a write's
+// key set descended for, asked before the rest of its conjunct (CU-Q9).
 StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& store,
                                  const std::vector<const catalog::Schema*>& schemas,
                                  const Step& step, const ChainFrame& frame,
                                  ExecStats* stats = nullptr, const Budget& budget = Budget(),
-                                 const txn::Snapshot* snapshot = nullptr);
+                                 const txn::Snapshot* snapshot = nullptr,
+                                 const BoolLeafFirst* first = nullptr);
 
 // Whether a debug-build page-span guard has fired during this process.
 // Exposed for the test that deliberately violates R1; production code has

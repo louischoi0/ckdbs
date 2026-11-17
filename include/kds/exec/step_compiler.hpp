@@ -135,6 +135,23 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                             PositionSink* declare = nullptr,
                             const StatementContext* context = nullptr);
 
+// **Where a write descends instead of walking** (CU-S3, CU-S3b), read off
+// `CompileWhere`'s step by the rules a read's step is keyed by: a conjunct
+// `<tuple key> = <literal>` names one key (`WriteKeyOf`), and a value list
+// on the tuple key names a set (`WriteKeySetOf`; `KeySet`, step_chain.hpp),
+// its items ascending and distinct. Any conjunct may stand beside either:
+// the descent picks the slot to look at and the caller tests the row it
+// finds against the whole WHERE, the key's own conjunct included (CU-R1),
+// so `id = 1 AND v = 3` writes what its walk writes.
+//
+// **A WHERE holding a subquery names neither**, in a conjunct or under a
+// boolean one. A write evaluates no subquery under the leaf it holds
+// exclusive, so such a statement collects its rows in a read walk first
+// (`CommandDispatcher::WriteWalk::CollectTargets`), and that pass is not
+// keyed (`docs/pending/keyed-write-beside-a-subquery.md`).
+std::optional<std::uint64_t> WriteKeyOf(const Step& where);
+std::optional<KeySet> WriteKeySetOf(const Step& where);
+
 // Resolve an UPDATE's SET list against the relation, before any storage is
 // touched (keystoneid-invariant.md K-M3).
 //
