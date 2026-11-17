@@ -179,15 +179,12 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
             touched = Moved(access, previous, col, value.value());
         }
     }
-    // The covered half's twin of the key's check in `EncodeKeyInto`: the
-    // loop above refuses an overrun and, alone, would let an underrun
-    // through - a `sys.indexes` row that covers fewer or narrower columns
-    // than its `entry_width` was computed from - and the tail of
-    // `covered_buf` is uninitialized stack, which `IndexInsert` would copy
-    // into the entry, its sort key and its log record (the audit's G36).
-    // No admitted DDL makes the widths disagree; a damaged row does, and
-    // "an entry whose length disagrees is Corruption, never interpreted"
-    // (index.md §4.2). Ahead of the untouched return, as the key's is.
+    // The covered half's twin of the key's check in `EncodeKeyInto`. The
+    // loop refuses an overrun only; an underrun - a damaged `sys.indexes`
+    // row covering less than its `entry_width` counts - would leave the
+    // tail of `covered_buf` uninitialized stack for `IndexInsert` to store
+    // (the audit's G36; index.md §4.2). Ahead of the untouched return, as
+    // the key's is.
     if (covered_at != covered.size()) {
         return Status::Corruption("index '" + std::to_string(ix.index_oid) +
                                   "' covered columns encoded to " + std::to_string(covered_at) +

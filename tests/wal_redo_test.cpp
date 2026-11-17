@@ -776,6 +776,9 @@ TEST_F(RedoHealTest, AnImageThatIsTheTornPagesFirstRecordCountsAsAHeal) {
     {
         auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok()) << s.status().message();
+        // Two images: the first heals, the second lands on a healed page
+        // and is an image like any other - one heal, not two.
+        AppendImage(*s.value(), /*rows=*/1);
         AppendImage(*s.value(), /*rows=*/1);
         ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0x40), 0u);
         ASSERT_TRUE(s.value()->Sync().ok());
@@ -787,7 +790,7 @@ TEST_F(RedoHealTest, AnImageThatIsTheTornPagesFirstRecordCountsAsAHeal) {
     auto redone = Redo(*device_, 0, *store, Analyzed());
     ASSERT_TRUE(redone.ok()) << redone.status().message();
     EXPECT_EQ(redone.value().pages_healed, 1u);
-    EXPECT_EQ(redone.value().page_images, 1u);
+    EXPECT_EQ(redone.value().page_images, 2u);
 
     auto page = store->Get(kPage);
     ASSERT_TRUE(page.ok()) << page.status().message();

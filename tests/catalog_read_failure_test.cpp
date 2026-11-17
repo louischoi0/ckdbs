@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -30,12 +31,21 @@
 // A catalog chain past its root page is an ordinary evictable frame
 // (`catalog.md` CT5), so the read can fail for want of a frame as well as
 // for damage. The cells refuse one fetch of the relation's root page
-// (`ActOnFetchStore::FailFetch`, a device that will not read, once) and
-// assert that the statement answers the read's failure and leaves the
-// catalog as it was. **Each ran red with its fix taken out.**
+// (`ActOnFetchStore::FailFetch`, a device that will not read, once).
+//
+// **Every fetch the statement makes of that page is refused in turn**, the
+// first, then the second, and on to `kFetches`: which fetch is the lookup
+// under test is the statement's business and moves with it, so no cell
+// names one. Whichever read the refusal lands on, the statement must answer
+// that read's failure - never "no such row" - and leave the catalog as it
+// was; a refusal past the statement's last fetch is not reached and the
+// statement simply succeeds. **Each cell ran red with its fix taken out.**
 
 namespace kds::server {
 namespace {
+
+// More fetches of one catalog root than any statement here makes.
+constexpr int kFetches = 12;
 
 bool IsErr(const std::string& reply) { return reply.rfind("ERR", 0) == 0; }
 
@@ -57,15 +67,34 @@ protected:
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
 
-    // The statement, with the `nth` fetch of `page` from here on refused.
+    // The statement, with the `nth` fetch of `page` from here on refused -
+    // and the refusal disarmed after it, reached or not, so that what the
+    // cell asks next is not what trips it.
     std::string RunRefusing(const std::string& sql, PageId page, int nth) {
         store_.FailFetch(page, nth);
-        return Run(sql);
+        std::string reply = Run(sql);
+        Disarm();
+        return reply;
+    }
+    void Disarm() { store_.FailFetch(kInvalidPageId, 0); }
+
+    // A refused statement answered the read's failure, in the read's words.
+    static void ExpectTheReadsFailure(const std::string& reply, const std::string& what,
+                                      const char* never) {
+        EXPECT_NE(reply.find("refused a read"), std::string::npos) << what << " -> " << reply;
+        EXPECT_EQ(reply.find(never), std::string::npos) << what << " -> " << reply;
     }
 
-    static void ExpectTheReadsFailure(const std::string& reply, const std::string& what) {
-        EXPECT_TRUE(IsErr(reply)) << what << " -> " << reply;
-        EXPECT_NE(reply.find("refused a read"), std::string::npos) << what << " -> " << reply;
+    // The oid of index `ix`, or 0 where there is none.
+    std::uint64_t IndexOid() {
+        auto row = boot_->catalog.LookupIndexByName("ix");
+        EXPECT_TRUE(row.ok()) << row.status().message();
+        return row.ok() && row.value().has_value() ? row.value()->index_oid : 0;
+    }
+    std::size_t Cabins() {
+        auto rows = boot_->catalog.ListCabins();
+        EXPECT_TRUE(rows.ok()) << rows.status().message();
+        return rows.ok() ? rows.value().size() : 0;
     }
 
     storage::InMemoryPageStore backing_{kFirstUserPageId};
@@ -77,81 +106,102 @@ protected:
     std::optional<CommandDispatcher> dispatcher_;
 };
 
-// G35. The first refused fetch of `sys.indexes` is the dispatcher's lookup,
-// the one that decides whether a relation is borrowed at all; the second is
-// the lookup under the relation's `X`. Either read as a miss answered "no
-// index named 'ix'" about an index that is there.
+// G35. Two lookups read `sys.indexes`: the dispatcher's, which decides
+// whether a relation is borrowed at all, and the one under the relation's
+// `X`. Either read as a miss answered "no index named 'ix'" about an index
+// that is there.
 TEST_F(CatalogReadFailureTest, ADropIndexWhoseCatalogReadFailedDoesNotAnswerNoSuchIndex) {
     ASSERT_FALSE(IsErr(Run("CREATE INDEX ix ON t (v)")));
-
-    // After each refused statement the index is asked for: whichever read
-    // the refusal landed on, the statement did not go on to drop or rebuild
-    // it. (A rebuild takes a new oid, which is how one is told.)
-    const auto index_oid = [&] {
-        auto row = boot_->catalog.LookupIndexByName("ix");
-        EXPECT_TRUE(row.ok() && row.value().has_value()) << "the index is gone";
-        return row.ok() && row.value().has_value() ? row.value()->index_oid : 0;
-    };
-    const auto created_as = index_oid();
-    for (int nth : {1, 2}) {
+    int refused = 0;
+    for (int nth = 1; nth <= kFetches; ++nth) {
+        const std::uint64_t before = IndexOid();
+        ASSERT_NE(before, 0u);
         const std::string reply =
             RunRefusing("DROP INDEX ix", ::kds::catalog::kCatalogPageIndexes, nth);
-        ExpectTheReadsFailure(reply, "DROP INDEX, fetch " + std::to_string(nth));
-        EXPECT_EQ(reply.find("no index named"), std::string::npos) << reply;
-        EXPECT_EQ(index_oid(), created_as);
+        if (!IsErr(reply)) {
+            // The refusal lay past the statement's last fetch: it dropped.
+            EXPECT_EQ(IndexOid(), 0u);
+            ASSERT_FALSE(IsErr(Run("CREATE INDEX ix ON t (v)")));
+            continue;
+        }
+        ++refused;
+        ExpectTheReadsFailure(reply, "DROP INDEX, fetch " + std::to_string(nth),
+                              "no index named");
+        EXPECT_EQ(IndexOid(), before) << "a refused drop dropped the index";
     }
-    for (int nth : {1, 2}) {
-        const std::string reply =
-            RunRefusing("REINDEX INDEX ix", ::kds::catalog::kCatalogPageIndexes, nth);
-        ExpectTheReadsFailure(reply, "REINDEX INDEX, fetch " + std::to_string(nth));
-        EXPECT_EQ(reply.find("no index named"), std::string::npos) << reply;
-        EXPECT_EQ(index_oid(), created_as);
-    }
+    EXPECT_GE(refused, 2) << "both lookups read sys.indexes";
 
-    // The index is still there, and a read that works still tells a miss
-    // from it.
+    // A read that works still tells a miss from it.
     const std::string miss = Run("DROP INDEX nothing_by_this_name");
     EXPECT_NE(miss.find("no index named 'nothing_by_this_name'"), std::string::npos) << miss;
-    EXPECT_FALSE(IsErr(Run("DROP INDEX ix")));
+}
+
+TEST_F(CatalogReadFailureTest, AReindexWhoseCatalogReadFailedDoesNotAnswerNoSuchIndex) {
+    ASSERT_FALSE(IsErr(Run("CREATE INDEX ix ON t (v)")));
+    int refused = 0;
+    for (int nth = 1; nth <= kFetches; ++nth) {
+        const std::uint64_t before = IndexOid();
+        ASSERT_NE(before, 0u);
+        const std::string reply =
+            RunRefusing("REINDEX INDEX ix", ::kds::catalog::kCatalogPageIndexes, nth);
+        if (!IsErr(reply)) {
+            EXPECT_NE(IndexOid(), before) << "a rebuild takes a new oid";
+            continue;
+        }
+        ++refused;
+        ExpectTheReadsFailure(reply, "REINDEX INDEX, fetch " + std::to_string(nth),
+                              "no index named");
+        EXPECT_EQ(IndexOid(), before) << "a refused rebuild replaced the index";
+    }
+    EXPECT_GE(refused, 2) << "both lookups read sys.indexes";
 }
 
 // G35's neighbour, the same collapse one statement over.
 TEST_F(CatalogReadFailureTest, ADropCabinWhoseCatalogReadFailedDoesNotAnswerNoSuchCabin) {
     ASSERT_FALSE(IsErr(Run("CREATE CABIN ON t (v)")));
-
-    const std::string reply =
-        RunRefusing("DROP CABIN ON t (v)", ::kds::catalog::kCatalogPageCabins, 1);
-    ExpectTheReadsFailure(reply, "DROP CABIN");
-    EXPECT_EQ(reply.find("no cabin on"), std::string::npos) << reply;
-
-    auto rows = boot_->catalog.ListCabins();
-    ASSERT_TRUE(rows.ok()) << rows.status().message();
-    EXPECT_EQ(rows.value().size(), 1u) << "the cabin was not dropped by a statement that failed";
-    EXPECT_FALSE(IsErr(Run("DROP CABIN ON t (v)")));
+    int refused = 0;
+    for (int nth = 1; nth <= kFetches; ++nth) {
+        ASSERT_EQ(Cabins(), 1u);
+        const std::string reply =
+            RunRefusing("DROP CABIN ON t (v)", ::kds::catalog::kCatalogPageCabins, nth);
+        if (!IsErr(reply)) {
+            EXPECT_EQ(Cabins(), 0u);
+            ASSERT_FALSE(IsErr(Run("CREATE CABIN ON t (v)")));
+            continue;
+        }
+        ++refused;
+        ExpectTheReadsFailure(reply, "DROP CABIN, fetch " + std::to_string(nth), "no cabin on");
+        EXPECT_EQ(Cabins(), 1u) << "a refused drop dropped the cabin";
+    }
+    EXPECT_GE(refused, 1);
 }
 
-// G40. `CreateCabin` holds `sys.cabins`' root (its first fetch) and then
-// scans for a row on the column (its second). A scan that failed was read
-// as "this column is bare", and the insert that followed wrote a second row
-// for one column - which `catalog.md` CT7 exists to prevent.
+// G40. `CreateCabin` scans `sys.cabins` for a row on the column under the
+// root's hold. A scan that failed was read as "this column is bare", and
+// the insert that followed wrote a second row for one column - which
+// `catalog.md` CT7 exists to prevent.
 TEST_F(CatalogReadFailureTest, ACreateCabinWhoseDuplicateScanFailedWritesNoSecondRow) {
     auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "t");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(boot_->catalog.CreateCabin(oid.value(), 1).ok());
 
-    store_.FailFetch(::kds::catalog::kCatalogPageCabins, 2);
-    auto second = boot_->catalog.CreateCabin(oid.value(), 1);
-    ASSERT_FALSE(second.ok()) << "a second cabin on one column was admitted";
-    EXPECT_EQ(second.status().code(), StatusCode::kIoError) << second.status().message();
-
-    auto rows = boot_->catalog.ListCabins();
-    ASSERT_TRUE(rows.ok()) << rows.status().message();
-    EXPECT_EQ(rows.value().size(), 1u);
-
-    // With the read working, the same call is the duplicate it always was.
-    auto third = boot_->catalog.CreateCabin(oid.value(), 1);
-    ASSERT_FALSE(third.ok());
-    EXPECT_EQ(third.status().code(), StatusCode::kAlreadyExists);
+    int refused = 0;
+    for (int nth = 1; nth <= kFetches; ++nth) {
+        store_.FailFetch(::kds::catalog::kCatalogPageCabins, nth);
+        auto second = boot_->catalog.CreateCabin(oid.value(), 1);
+        Disarm();
+        ASSERT_FALSE(second.ok()) << "a second cabin on one column was admitted, fetch " << nth;
+        // The read's failure where the refusal was reached, the duplicate it
+        // always was where it was not.
+        if (second.status().code() == StatusCode::kIoError) {
+            ++refused;
+        } else {
+            EXPECT_EQ(second.status().code(), StatusCode::kAlreadyExists)
+                << second.status().message();
+        }
+        ASSERT_EQ(Cabins(), 1u) << "fetch " << nth;
+    }
+    EXPECT_GE(refused, 1);
 }
 
 }  // namespace

@@ -467,7 +467,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             // failed its checksum - and not by whether an earlier record had
             // met the tear first (the audit's G33): a torn page whose first
             // record in range is its image is healed all the same, and used
-            // to count as nothing. One a heal either way: a poisoned page is
+            // to count as nothing. One heal either way: a poisoned page is
             // never created, so its image arrives through the same arm.
             poisoned.erase(page_id);
             if (healing) {

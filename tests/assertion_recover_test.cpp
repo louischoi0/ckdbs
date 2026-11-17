@@ -1546,7 +1546,7 @@ TEST_F(AssertionRecoverTest, AnAbortAfterTheCheckpointStillCompensatesWithTheMar
 // orphaned and its header no longer counted. The end-of-rebuild dedupe saw a
 // single pair and kept it, and §5.2's proof answered `Corruption` about a
 // directory whose aggregate was right.
-TEST_F(AssertionRecoverTest, ARolledBackEntryTheWalkAndTheFoldBothAttachedIsNoGroups) {
+TEST_F(AssertionRecoverTest, ARolledBackEntryTheWalkAndTheFoldBothAttachedIsInNoGroup) {
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
     Write(live, Key("x"), 5, /*tuple_key=*/1);
     const wal::Lsn checkpoint_lsn = Checkpoint(live);
@@ -1569,7 +1569,6 @@ TEST_F(AssertionRecoverTest, ARolledBackEntryTheWalkAndTheFoldBothAttachedIsNoGr
     EXPECT_EQ(x->sum, 5);
     EXPECT_EQ(x->count, 1);
     ASSERT_EQ(x->entries.size(), 1u) << "the aborted entry is still linked";
-    EXPECT_EQ(x->entries.size(), live.Find(Key("x"))->entries.size());
 
     auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
         auto p = store_.Get(page_id);

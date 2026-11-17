@@ -381,15 +381,20 @@ Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {
     // answered as "restored to latest", every commit after the stop
     // dropped. Asked before anything is laid out. An existing directory
     // holding no later segment still restores to the stop - that is what
-    // an archive with nothing newer means.
+    // an archive with nothing newer means. Absent, unreadable and not a
+    // directory are three answers, the segment loop's own three.
     if (to_target) {
+        const std::string named = "restore: the WAL archive " + request.archive_dir;
         std::error_code archive_ec;
-        if (!fs::is_directory(request.archive_dir, archive_ec)) {
-            return Status::NotFound(
-                "restore: the WAL archive " + request.archive_dir +
-                (archive_ec ? " cannot be read (" + archive_ec.message() + ")"
-                            : " is not a directory") +
-                "; a target past the stop reads it");
+        const fs::file_status archive = fs::status(request.archive_dir, archive_ec);
+        if (archive.type() == fs::file_type::not_found) {
+            return Status::NotFound(named + " does not exist; a target past the stop reads it");
+        }
+        if (archive_ec) {
+            return Status::IoError(named + " cannot be read: " + archive_ec.message());
+        }
+        if (!fs::is_directory(archive)) {
+            return Status::InvalidArgument(named + " is not a directory");
         }
     }
 
@@ -473,6 +478,9 @@ Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {
         for (std::uint64_t seg = manifest.stop_segment + 1;; ++seg) {
             const fs::path archived =
                 fs::path(request.archive_dir) / ArchiveName(manifest.lineage_id, seg);
+            if (request.target_lsn != 0 && seg * manifest.segment_size >= request.target_lsn) {
+                break;  // starts at or past the target: nothing in it is kept
+            }
             // Missing ends the archive; any other answer is a segment that
             // may be there and could not be asked about, which is a failed
             // restore and not a shorter history.
@@ -482,9 +490,6 @@ Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {
             if (status_ec) {
                 return Status::IoError("restore: archived segment " + archived.string() +
                                        " cannot be read: " + status_ec.message());
-            }
-            if (request.target_lsn != 0 && seg * manifest.segment_size >= request.target_lsn) {
-                break;  // starts at or past the target: nothing in it is kept
             }
             const std::string to = (fs::path(request.wal_dir) / SegmentFileName(seg)).string();
             std::uint64_t size = 0;

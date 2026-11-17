@@ -1456,7 +1456,9 @@ private:
     };
 
     // `IsPinnedClass` for a frame the caller already holds, so the sweep
-    // asks it per step without a second lookup.
+    // asks it per step without a second lookup. Called under the frame
+    // table's latch; takes the map latch for a frame whose first byte reads
+    // as a pinned kind (`IsHeaderless`), so never under a map hold.
     bool IsPinnedClassFrame(const Frame& frame) const noexcept;
 
     // The sweep body, with the structure latch **already held**: reclaims
@@ -1585,7 +1587,8 @@ private:
     // path holds the frame table across `Resolve`, which asks `IsAllocated`
     // (and on a miss `FaultIn` asks `IsHeaderless`) - free-map reads that would
     // re-acquire a non-recursive latch (`base/latch.hpp`) if the map shared
-    // `frames_latch_`.
+    // `frames_latch_`. The sweep and the other callers of
+    // `IsPinnedClassFrame` nest it the same way.
     //
     // **The declared order is `frames_latch_` then `map_latch_`, never the
     // reverse** (`docs/rules/rules.md` §3): the allocation paths end their

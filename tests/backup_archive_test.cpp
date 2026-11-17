@@ -295,10 +295,15 @@ TEST(WalArchiverTest, ACommandWhoseExitCannotBeReadIsNotCountedAsArchived) {
 
     // Ignored while a command runs, which `Start` cannot rule out: the
     // command fails, its exit is unreadable, and the segment stays owed.
+    // The command waits for a file made after the disposition is set, so
+    // the order is the cell's and not the scheduler's.
     {
-        WalArchiver archiver(wiring("sleep 0.3; false"));
+        const fs::path go = dir.path / "go";
+        WalArchiver archiver(
+            wiring("while [ ! -e " + go.string() + " ]; do sleep 0.01; done; false"));
         archiver.Start();
         ::signal(SIGCHLD, SIG_IGN);
+        std::ofstream(go) << "go";
         ASSERT_TRUE(WaitFor([&] { return !archiver.last_error().empty(); }));
         EXPECT_NE(archiver.last_error().find("could not be read"), std::string::npos)
             << archiver.last_error();
