@@ -51,3 +51,12 @@ the words were given: §3 and §4 were given in another session, on worktree
 | **Mark** | Branch `worktree-cu-key-set-access` is merged to `main` with `--no-ff` and pushed with `--no-verify`. **Skipped: the pre-push hook.** The full suite is not skipped: it ran green on the merged tree at `70a307ea`, 4565 of 4565 (`ctest -LE bs-nightly`, Debug), and every commit after it holds drivers under `tools/`, `bench/` and documents only. The stage's `critics-developer` review ran (the order's §7) |
 | **Does not settle** | a tag, a version; any option of `docs/pending/keyed-write-beside-a-subquery.md`; what the close did not measure (`docs/inflight/known-gaps.md`, "Key sets (CU)") |
 | **Recorded at** | this file; the order's header and §7; the CU row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 6. Version 3.4.12
+
+| | |
+|---|---|
+| **Word** | W6 (the fourth word of the CU session), on 2026-11-17, after CLA reported CU landed on `main` at `a0672010`: *"tag 3.4.12"* |
+| **Mark** | **`v3.4.12` is the version of record**, the operator's own naming: an annotated tag on `main` at `a0672010`, pushed. Its message carries what `main` gained since `v3.4.11` (`a61ab905`) - CU, CS, the audit's G21 and G23-G26, the two row-probe fixes - then the suite (4565 of 4565 at `70a307ea`), the close measurements and the gaps that bound it. `CLAUDE.md`'s version line moves in the commit this section arrives in |
+| **Does not settle** | G26-R and G21-R; any option of `docs/pending/keyed-write-beside-a-subquery.md`; the opening of CR, CV or CW |
+| **Recorded at** | this file; `CLAUDE.md`, "Version Management"; this file's row in `instructions/v3.2.0/index.md` |
