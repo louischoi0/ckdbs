@@ -187,6 +187,11 @@ TEST_F(CatalogReadFailureTest, ACreateCabinWhoseDuplicateScanFailedWritesNoSecon
 
     int refused = 0;
     for (int nth = 1; nth <= kFetches; ++nth) {
+        // The relation's memo is made current first, unrefused: opening the
+        // relation scans `sys.cabins` too, and a refusal spent there never
+        // reaches the scan under test - a create whose memo load failed
+        // answers that failure and stops, fix or no fix.
+        ASSERT_TRUE(boot_->catalog.InitTableAccess(oid.value()).ok());
         store_.FailFetch(::kds::catalog::kCatalogPageCabins, nth);
         auto second = boot_->catalog.CreateCabin(oid.value(), 1);
         Disarm();
@@ -201,7 +206,7 @@ TEST_F(CatalogReadFailureTest, ACreateCabinWhoseDuplicateScanFailedWritesNoSecon
         }
         ASSERT_EQ(Cabins(), 1u) << "fetch " << nth;
     }
-    EXPECT_GE(refused, 1);
+    EXPECT_GE(refused, 2) << "the root's hold and the scan under it both read sys.cabins";
 }
 
 }  // namespace
