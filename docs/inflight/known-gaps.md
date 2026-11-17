@@ -174,6 +174,17 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   parked. Bounds not widened; keep the next failure with
   `--output-on-failure`. Re-verified at `7dd9b789` by reading. Owner: none.
 
+- **A `strict` park cell failed once under `-j8` and did not reproduce.**
+  Seen once, on `worktree-fk-walk-ceiling-wait` at `448c35c1`, in
+  `StrictParkRigTest.AnExplicitStrictCommitParksAndPublishesAtItsSync`
+  (`tests/strict_park_rig_test.cpp:200`): after the gate's release the
+  `COMMIT` did not answer inside `Within(2000ms)`. Thirty repeats of the
+  file alone passed at the same commit, and the same `-j8` run passed at
+  `941d05e8`. The suspected cause is unconfirmed: nothing kicks core 1
+  after the release but the WAL writer's own kick, which is best-effort,
+  and a skipped one costs the rig's 5 s idle block. The commit it was seen
+  at changes no commit or park path. Bounds not widened. Owner: none.
+
 - **A rollback's schema-word move has no cell that kills its removal since
   AX-S2.** Removing `MoveSchemaWordIfCatalogWriter` from
   `TransactionManager::Abort` leaves
