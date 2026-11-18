@@ -172,3 +172,20 @@ took under them.
 | **Does not settle** | DA-Q0..Q7; the opening of DA; whether `SHOW ACCESS` is used at all; the branch `worktree-cz-access-stats-memory-resident` and its worktree, which this session did not touch and which still carry the order under its old name - not to be pushed as they stand; a push; a version |
 | **Recorded at** | this file; the DA order's header; the DA row and this file's row in `instructions/v3.2.0/index.md` |
 
+## 19. `bench/README.md` shortened
+
+| | |
+|---|---|
+| **Word** | W18 (the BL/CZ matter's): *"For now, shrink the current README.md a little. For old history (a month or more), leave a link and abbreviate the content, and the historical records other than the rules need their information compressed further."* (given in Korean; recorded in English) |
+| **Mark** | None. CLA read "README.md" as `bench/README.md`: the root `README.md` holds no history and no rules, and `bench/README.md` is the one README with both. The three deletion entries (2026-09-02, 2026-09-30, 2026-10-12) and the BTREE section's account of the `f6ed10c` re-measurement are folded into one table and its resolution list, with a link to the full text at `1ad75954`; 158 lines to 118. **The rules are byte-identical** from "Where a result goes" to the BTREE heading. Reviewed by `critics-developer`, which restored two rule passages CLA had shortened and corrected a resolution bullet that sent the `f6ed10c` scenario files to a commit that does not hold them |
+| **Does not settle** | Whether the root `README.md` was meant; the host notes inside rules 2, 4 and 5, which name the earlier box and were left as written; a push |
+| **Recorded at** | this file (written as §15 on the work branch and renumbered twice behind `origin/main`'s sections at its merges, §18 and then §19; the commit `dc884be6` cites it as §15); `bench/README.md`; this file's row in `instructions/v3.2.0/index.md` |
+
+## 20. `bench/README.md` pushed with the hook skipped; the same treatment asked for every README and for `CLAUDE.md`
+
+| | |
+|---|---|
+| **Word** | W19 (the BL/CZ matter's), on CLA's question of which file W18 meant: *"Not bench/readme - I mean all the README.md files."*, and bench/README.md's change to be kept. W20: *"Do the same for CLAUDE.md: leave only the rules, and replace the history with links, or compress it, or delete it."* W21: *"push no verify"*, given while the review of that work was still running (each given in Korean; recorded in English) |
+| **Mark** | None. On W21, `dc884be6` (§19) and this merge go to `main` with `--no-verify`; the hook and the suite are skipped, and this session ran no suite - its commits change documents only, and the source the merges brought is `origin/main`'s own. **The README and `CLAUDE.md` compaction of W19-W20 is not in this push**: it was uncommitted and under `critics-developer`'s review at the word, and follows in its own commit under the same word |
+| **Does not settle** | A version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
