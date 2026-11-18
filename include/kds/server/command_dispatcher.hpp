@@ -24,6 +24,7 @@
 #include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/admin_plans.hpp"
+#include "kds/exec/plan_advice.hpp"
 #include "kds/exec/captured_plans.hpp"
 #include "kds/exec/plan_catalog.hpp"
 #include "kds/exec/plan_memo.hpp"
@@ -457,6 +458,9 @@ struct OptimizerSurface {
     // The instance's administrator's plans (`exec/admin_plans.hpp`), read
     // under every `join_order`. A null leaves the dispatcher's own.
     exec::AdminPlans* admin_plans = nullptr;
+    // The instance's `ADVISE PLAN` rows (`exec/plan_advice.hpp`, CX-S7). A
+    // null leaves the dispatcher's own.
+    exec::PlanAdvices* plan_advices = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
     const stats::CabinOptimizer* controller = nullptr;
     const exec::CabinOptimizerExecutor* executor = nullptr;
@@ -1567,6 +1571,16 @@ private:
     // and edited. Admin, autocommit only, answered once durable.
     DispatchOutcome HandleCreatePlan(std::string_view line, Session& session);
     DispatchOutcome HandleAlterPlan(std::string_view line, Session& session);
+    // `ADVISE PLAN FOR <select>` (CX-S7): the search's order for the
+    // statement as a `CREATE PLAN` text, priced against the plan in force,
+    // recorded in `sys.plan_advice`. Admin; writes nothing durable.
+    DispatchOutcome HandleAdvisePlan(std::string_view line, Session& session);
+    // The `<select>` a plan statement holds at `[at, at + size)` of `line`,
+    // as every layer below sees it - the rest of the command blanked, so a
+    // byte any of them names is the command's own: refused where it is no
+    // SELECT, or holds a `?` (by example, with literals).
+    StatusOr<std::string> PlanExampleText(std::string_view line, std::size_t at,
+                                          std::size_t size, std::string_view command);
     // The `IS` of every relation `key` names, taken into `hold` and kept
     // until it is destroyed: what keeps a `DROP TABLE` from committing
     // under a plan DDL's install. A plan DDL is not a read that must never
@@ -2110,6 +2124,7 @@ public:
         if (surface.join_order != nullptr) join_order_ = surface.join_order;
         if (surface.captured_plans != nullptr) captured_plans_ = surface.captured_plans;
         if (surface.admin_plans != nullptr) admin_plans_ = surface.admin_plans;
+        if (surface.plan_advices != nullptr) plan_advices_ = surface.plan_advices;
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
         cabin_optimizer_view_latch_ = surface.view_latch;
@@ -2404,6 +2419,7 @@ private:
     StatusOr<exec::CatalogView> AssertionsView();
     StatusOr<exec::CatalogView> TransitionsView();
     StatusOr<exec::CatalogView> PlansView();
+    StatusOr<exec::CatalogView> PlanAdviceView();
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> StatementStatsView();
@@ -2680,6 +2696,9 @@ private:
     // The administrator's plans (CX-S1b), on the same terms.
     exec::AdminPlans own_admin_plans_;
     exec::AdminPlans* admin_plans_ = &own_admin_plans_;
+    // `ADVISE PLAN`'s rows (CX-S7), on the same terms.
+    exec::PlanAdvices own_plan_advices_;
+    exec::PlanAdvices* plan_advices_ = &own_plan_advices_;
     // `set_plan_stats`': the instance's store, and this core's view of it.
     stats::PlanStats* plan_stats_ = nullptr;
     stats::PlanStatsSource plan_source_;

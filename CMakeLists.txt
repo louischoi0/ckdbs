@@ -161,6 +161,7 @@ add_library(kds
     src/exec/join_order.cpp
     src/exec/plan_memo.cpp
     src/exec/admin_plans.cpp
+    src/exec/plan_advice.cpp
     src/exec/captured_plans.cpp
     src/exec/plan_catalog.cpp
     src/exec/plan_ddl.cpp

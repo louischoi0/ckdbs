@@ -1,10 +1,12 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include "kds/catalog/schema.hpp"
 #include "kds/exec/budget.hpp"
@@ -29,6 +31,8 @@
 // The unit is one row visited by a walk.
 
 namespace kds::exec {
+
+struct ArmPin;  // admin_plans.hpp
 
 // The rows a relation is assumed to hold. Only its size against the other
 // constants matters: a walk must cost far more than a descent.
@@ -121,6 +125,14 @@ struct PlanOptions {
     // on them (CC-S4); without them it is not read.
     std::uint64_t arg_hash = 0;
     bool literals_known = false;
+    // `ADVISE PLAN` (CX-S7, CX-Q32): the order - and the pins, or null - of
+    // the plan in force for this statement. Set, a searched block's answer
+    // is also priced against it, compiled through the ladder under the same
+    // cost inputs, into `PlanNote::in_force_ratio`. The caller hands no
+    // administrator's plans, captured map or memo, so the advice searches
+    // and records nothing.
+    const std::array<std::uint8_t, kMaxPlannedRelations>* advise_against = nullptr;
+    const std::vector<ArmPin>* advise_pins = nullptr;
 };
 
 // What the model reads besides the chain itself (CC-S1).

@@ -7,7 +7,8 @@
 // runs from the head of the call, so it holds the lex, the parse and the
 // fingerprint - which a cache keyed by the fetch id must still pay, the key
 // being made of them - beside the compile proper. This prices the two
-// apart for the shapes of the S6 cell:
+// apart for shapes like the S6 cell's - not its exact texts, indexes or
+// `join_order` (the results file's §7 lists the differences):
 //
 //   parse     `parser::Parser::Parse`, which lexes and fingerprints as it
 //             goes: what every statement pays, cached or not;
@@ -15,16 +16,18 @@
 //             access ladder, the chain - the most a cache could remove,
 //             before the cost of binding a cached chain's literals again.
 //
-// Each shape's compile runs with the options its S6 cell ran under: none
-// (one compile, as a captured order equal to the written one costs), a
+// Each shape's compile runs with one set of options: none (one compile, as
+// a captured order equal to the written one costs, less the map lookup), a
 // captured order that is not the written one (two compiles: the written,
-// then the captured), an administrator's plan of two variants (the second
-// lex of `AdminPlan::Choose`, then the variant's compile), a one-relation
-// plan (the unpinned compile and the pinned one).
+// then the captured; no S6 cell ran this), an administrator's plan of two
+// variants under `search` off (the second lex of `AdminPlan::Choose`, then
+// the variant's compile where it reorders), a one-relation plan (the
+// unpinned compile and the pinned one).
 //
 // Not measured: the dispatcher around the compile (the read borrow, the
-// name resolution under a minted view - this passes none), and a cache's
-// own costs (its lookup and the literal rebinding it would need).
+// name resolution under a minted view - this passes none), a cache's own
+// costs (its lookup and the literal rebinding it would need), and the
+// compile with its caches cold: each loop compiles back to back.
 //
 // Median of `--repeats` runs of `--iterations` statements each, ns per
 // statement, the minimum beside it. A Release build, or the number is

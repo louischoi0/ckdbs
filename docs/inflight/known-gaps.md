@@ -2063,12 +2063,15 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   force, so a captured order or a plan's variant that is not the written
   one pays two compiles: 5.3 µs against 2.5 µs for a three-relation join
   in release, in-process; a two-variant plan pays 4.2 µs against 1.6 µs,
-  the second lex included. S6 built no compiled-chain cache, its first
-  cell putting the most a cache could remove at 1.4 % to 4.0 % of a
-  statement's p50 (CX-Q37 (a)); skipping the discarded compile is the
-  cheaper saving and is not built. The line was drawn against a Python
-  client's p50; against the server's own time the removable part is about
-  8 % on a point read. Owned by `instructions/v3.2.0/workorder-cx-managed-plans.md`.
+  the second lex included. **S6 built no compiled-chain cache** (CX-Q37
+  (a)), and in the server the plan cells are where that costs: the
+  server's own `exec::Compile`, the most a cache could remove, is 5.7 %
+  (`cores = 1`) and 6.3 % (`cores = 2`) of a two-variant plan's client p50
+  and 5.3 % of a one-relation plan's at `cores = 2`, against 2.8 % to 4.1 %
+  for every plain shape; against the server's own time every cell is over
+  5 % (§8 of that file, a spike). Skipping the first compile is not built
+  and is not free: the written order's refusal is the statement's. Owned
+  by `instructions/v3.2.0/workorder-cx-managed-plans.md`.
 
 - **With the cabin controller on and no plan naming its Cabins, the
   controller accelerates nothing.** Verified at CX-S3b on

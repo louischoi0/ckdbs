@@ -768,6 +768,91 @@ TEST_F(AdminPlanTest, AsSearchedFixesTheSearchsOrderOfThatMomentUnderEveryValue)
     EXPECT_NE(searched.find("planned order=written"), std::string::npos) << searched;
 }
 
+// CX-S7: the search as an advisor.
+TEST_F(AdminPlanTest, AdviceProposesTheSearchsOrderAgainstThePlanInForceAndAppliesNothing) {
+    const std::string sql = Where("5");
+    // Captured under these priors: models first.
+    ASSERT_NE(Plan(sql).find(" capture=first"), std::string::npos);
+    const std::string same = Run("ADVISE PLAN FOR " + sql);
+    ASSERT_EQ(same.rfind("ADVISED PLAN fetch_id=", 0), 0u) << same;
+    EXPECT_NE(same.find(" in_force=captured searched=1 cost_ratio=1.000 "), std::string::npos)
+        << same;
+    EXPECT_NE(same.find(" order=(models, results) "), std::string::npos) << same;
+
+    // The statistics move past the captured order: the search now keeps the
+    // written order, cheaper than what runs.
+    PublishModelsLarge();
+    const std::string moved = Run("ADVISE PLAN FOR " + sql);
+    EXPECT_NE(moved.find(" in_force=captured searched=1 cost_ratio=0."), std::string::npos)
+        << moved;
+    EXPECT_NE(moved.find(" order=(results, models) "), std::string::npos) << moved;
+    // Nothing applied: the captured order still runs, no plan was made.
+    EXPECT_NE(Plan(sql).find("planned order=captured\\n"), std::string::npos);
+    EXPECT_TRUE(PlanRows().empty());
+    EXPECT_EQ(table().plans(), 0u);
+
+    // One row for the shape, the newer advice in it, the literal not kept.
+    const std::string view = Run("SELECT in_force, proposed_order, proposal FROM sys.plan_advice");
+    EXPECT_NE(view.find("captured,public.results, public.models,"), std::string::npos) << view;
+    EXPECT_NE(view.find("results.pnl > ?"), std::string::npos) << view;
+    EXPECT_EQ(view.find("results.pnl > 5"), std::string::npos) << view;
+    EXPECT_EQ(Rows("SELECT fetch_id FROM sys.plan_advice").size(), 1u) << view;
+
+    // The reply's text is issuable as it stands, literals and all; issued,
+    // it is the plan in force, and the advice agrees with it.
+    const std::size_t text_at = moved.find(" plan=CREATE PLAN ");
+    ASSERT_NE(text_at, std::string::npos) << moved;
+    Ok(moved.substr(text_at + 6));
+    EXPECT_NE(Plan(sql).find("planned order=plan plan=advised_"), std::string::npos);
+    const std::string adopted = Run("ADVISE PLAN FOR " + sql);
+    EXPECT_NE(adopted.find(" in_force=admin:advised_"), std::string::npos) << adopted;
+    EXPECT_NE(adopted.find("/advised searched=1 cost_ratio=1.000 "), std::string::npos)
+        << adopted;
+}
+
+TEST_F(AdminPlanTest, AdviceUnderEveryJoinOrderAndWhatItCannotAdvise) {
+    const std::string sql = Where("7");
+    // A `fixed` shape not yet captured: priced against nothing, and the
+    // advice captures nothing - the next compile is the shape's first.
+    const std::string uncaptured = Run("ADVISE PLAN FOR " + sql);
+    EXPECT_NE(uncaptured.find(" in_force=uncaptured searched=1 cost_ratio=1.000 "),
+              std::string::npos)
+        << uncaptured;
+    EXPECT_EQ(dispatcher_->captured_plans().shapes(), 0u);
+    EXPECT_NE(Plan(sql).find(" capture=first"), std::string::npos);
+    // `written` prices against the written order; `planned` against the
+    // search, which is the advice.
+    Ok("SET JOIN_ORDER written");
+    const std::string written = Run("ADVISE PLAN FOR " + sql);
+    EXPECT_NE(written.find(" in_force=written searched=1 cost_ratio=0."), std::string::npos)
+        << written;
+    Ok("SET JOIN_ORDER planned");
+    EXPECT_NE(Run("ADVISE PLAN FOR " + sql).find(" in_force=searched searched=1 cost_ratio=1.000 "),
+              std::string::npos);
+
+    // A chain of tuple key descents is never searched: its written order.
+    const std::string point =
+        Run("ADVISE PLAN FOR SELECT results.pnl, models.name FROM results JOIN models ON "
+            "results.model_id = models.id WHERE results.id = 5");
+    EXPECT_NE(point.find(" in_force=written searched=0 cost_ratio=1.000 "), std::string::npos)
+        << point;
+    EXPECT_NE(point.find(" order=(results, models) "), std::string::npos) << point;
+
+    // CX-Q33 (a), and the example's rules.
+    EXPECT_EQ(CodeOf("ADVISE PLAN FOR SELECT pnl FROM results WHERE pnl > 5"),
+              StatusCode::kUnsupported);
+    EXPECT_EQ(CodeOf("ADVISE PLAN FOR " + Where("?")), StatusCode::kNotImplemented);
+    EXPECT_EQ(CodeOf("ADVISE PLAN FOR INSERT INTO models VALUES (99)"),
+              StatusCode::kInvalidArgument);
+    const DispatchOutcome no_for = Do("ADVISE PLAN " + sql);
+    EXPECT_EQ(no_for.status.code(), StatusCode::kInvalidArgument) << no_for.response;
+    EXPECT_NE(no_for.response.find("(byte 12)"), std::string::npos) << no_for.response;
+    EXPECT_EQ(CodeOf("ADVISE PLAN FOR SELECT results.pnl FROM results JOIN nowhere ON "
+                     "results.model_id = nowhere.id"),
+              StatusCode::kNotFound);
+    EXPECT_EQ(Run("ADVISE INDEX FOR " + sql).rfind("ERR only ADVISE PLAN", 0), 0u);
+}
+
 TEST_F(AdminPlanTest, TheRowHoldsTheShapeAndNoLiteralOfTheExample) {
     Ok("CREATE PLAN p FOR " + Where("123456789") +
        " VARIANT low WHEN ARG(1) < 10 ORDER (models, results)"

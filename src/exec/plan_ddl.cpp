@@ -194,6 +194,33 @@ Status ExpectEnd(parser::Lexer& lexer, std::string_view what) {
 
 }  // namespace
 
+StatusOr<AdvisePlanStmt> ParseAdvisePlan(std::string_view line) {
+    std::vector<Token> tokens;
+    parser::Lexer lexer(line);
+    for (Token tok = lexer.Next(); tok.type != TokenType::kEof; tok = lexer.Next()) {
+        if (tok.type == TokenType::kError) {
+            return Status::InvalidArgument("unreadable character" + At(tok));
+        }
+        tokens.push_back(tok);
+    }
+    // ADVISE PLAN FOR: tokens 0..2, the routing having read the first two.
+    if (tokens.size() < 3 || !IsIdent(tokens[2], "FOR")) {
+        return Status::InvalidArgument(
+            "ADVISE PLAN is followed by FOR <select>" +
+            At(tokens.size() > 2 ? tokens[2].byte_offset : line.size()));
+    }
+    std::size_t last = tokens.size();
+    if (tokens.back().type == TokenType::kSemicolon) --last;
+    if (last == 3) {
+        return Status::InvalidArgument("ADVISE PLAN FOR takes a SELECT" + At(line.size()));
+    }
+    AdvisePlanStmt stmt;
+    stmt.statement_at = tokens[3].byte_offset;
+    stmt.statement_size =
+        tokens[last - 1].byte_offset + tokens[last - 1].length - stmt.statement_at;
+    return stmt;
+}
+
 StatusOr<CreatePlanStmt> ParseCreatePlan(std::string_view line) {
     CreatePlanStmt stmt;
     // Every token, so the statement's end can be found before anything

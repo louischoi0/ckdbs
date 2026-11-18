@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <charconv>
 #include <ctime>
@@ -1657,6 +1658,12 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return HandleAlterPlan(Trim(line), session);
         }
         return HandleAlter(Trim(line), session);
+    }
+    if (IEquals(cmd, "ADVISE")) {
+        if (IEquals(SplitFirstToken(rest).first, "PLAN")) {
+            return HandleAdvisePlan(Trim(line), session);
+        }
+        return {"ERR only ADVISE PLAN FOR <select> is supported", false};
     }
     if (IEquals(cmd, "DROP")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
@@ -13167,6 +13174,33 @@ Status CommandDispatcher::HoldPlanRelations(const exec::CapturedKey& key,
     return Status::OK();
 }
 
+StatusOr<std::string> CommandDispatcher::PlanExampleText(std::string_view line, std::size_t at,
+                                                         std::size_t size,
+                                                         std::string_view command) {
+    // The command's text with everything around the SELECT blanked, so a
+    // byte a parser or the compiler names is the command's own
+    // (`HandleWaystone`'s shape).
+    std::string padded(line);
+    const auto begin = padded.begin() + static_cast<std::ptrdiff_t>(at);
+    std::fill(padded.begin(), begin, ' ');
+    std::fill(begin + static_cast<std::ptrdiff_t>(size), padded.end(), ' ');
+    if (!IEquals(SplitFirstToken(Trim(padded)).first, "SELECT")) {
+        return Status::InvalidArgument(std::string(command) + " ... FOR takes a SELECT" +
+                                       ByteSuffix(at));
+    }
+    parser::Lexer lexer(padded);
+    for (parser::Token tok = lexer.Next(); tok.type != parser::TokenType::kEof;
+         tok = lexer.Next()) {
+        if (tok.type != parser::TokenType::kParam) continue;
+        return Status::NotImplemented(
+            std::string(command) +
+            " over a '?' placeholder is not implemented: write the statement with literals, "
+            "whose fetch id the placeholder form shares" +
+            ByteSuffix(tok.byte_offset));
+    }
+    return padded;
+}
+
 DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Session& session) {
     // CX-S1b (`exec/plan_ddl.hpp`, `exec/admin_plans.hpp`): `CREATE PLAN
     // <name> FOR <select>` with its variants, or `AS SEARCHED`. Admin
@@ -13194,29 +13228,9 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
             ByteSuffix(create.name_at)));
     }
 
-    // The statement every layer below sees is the command's with everything
-    // around the SELECT blanked, so a byte a parser or the compiler names is
-    // the command's own (`HandleWaystone`'s shape).
-    std::string padded(line);
-    const auto statement_begin = padded.begin() + static_cast<std::ptrdiff_t>(create.statement_at);
-    std::fill(padded.begin(), statement_begin, ' ');
-    std::fill(statement_begin + static_cast<std::ptrdiff_t>(create.statement_size), padded.end(),
-              ' ');
-    if (!IEquals(SplitFirstToken(Trim(padded)).first, "SELECT")) {
-        return Refused(Status::InvalidArgument("CREATE PLAN ... FOR takes a SELECT" +
-                                               ByteSuffix(create.statement_at)));
-    }
-    {
-        parser::Lexer lexer(padded);
-        for (parser::Token tok = lexer.Next(); tok.type != parser::TokenType::kEof;
-             tok = lexer.Next()) {
-            if (tok.type != parser::TokenType::kParam) continue;
-            return Refused(Status::NotImplemented(
-                "CREATE PLAN over a '?' placeholder is not implemented: write the statement "
-                "with literals, whose fetch id the placeholder form shares" +
-                ByteSuffix(tok.byte_offset)));
-        }
-    }
+    auto example = PlanExampleText(line, create.statement_at, create.statement_size, "CREATE PLAN");
+    if (!example.ok()) return Refused(example.status());
+    const std::string& padded = example.value();
     parser::Parser parser(padded);
     auto parsed = parser.Parse();
     if (!parsed.ok()) return Refused(parsed.status());
@@ -13492,6 +13506,142 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
     return {"ALTERED PLAN name=" + plan.name + " plan_id=" + std::to_string(plan.id) +
                 " state=" + (plan.enabled ? "enabled" : "disabled"),
             false};
+}
+
+DispatchOutcome CommandDispatcher::HandleAdvisePlan(std::string_view line, Session& session) {
+    // CX-S7 (`exec/plan_advice.hpp`): the join order search, run once for
+    // the statement as written with the statistics of this moment - whatever
+    // `join_order` is, with no memo, captured order or administrator's plan
+    // between it and its answer - proposed as a `CREATE PLAN` text and
+    // priced against the plan in force (CX-Q32). Admin (CX-Q29, by
+    // `RequiredRole`'s default). **Advice is never applied** (CX-R5): it
+    // captures nothing, memoises nothing, counts in no plan counter and
+    // writes no log; its one effect is its `sys.plan_advice` row.
+    auto ddl = exec::ParseAdvisePlan(line);
+    if (!ddl.ok()) return Refused(ddl.status());
+    const std::size_t at = ddl.value().statement_at;
+    auto example = PlanExampleText(line, at, ddl.value().statement_size, "ADVISE PLAN");
+    if (!example.ok()) return Refused(example.status());
+    const std::string& padded = example.value();
+    parser::Parser parser(padded);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) return Refused(parsed.status());
+    const auto fingerprint = parser.fingerprint();
+    if (!std::holds_alternative<parser::SelectStmt>(parsed.value()) || !fingerprint.has_value()) {
+        return Refused(Status::InvalidArgument("ADVISE PLAN ... FOR takes one SELECT" +
+                                               ByteSuffix(at)));
+    }
+    const auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+    // CX-Q33 (a): a statement over one relation has no order to propose.
+    if (stmt.joins.empty()) {
+        return Refused(Status::Unsupported(
+            "ADVISE PLAN takes a join: a statement over one relation has no join order to "
+            "search" + ByteSuffix(at)));
+    }
+    std::vector<std::string> bindings{stmt.from.binding()};
+    for (const parser::JoinClause& join : stmt.joins) bindings.push_back(join.relation.binding());
+    if (bindings.size() > exec::kMaxPlannedRelations) {
+        return Refused(Status::Unsupported("a plan orders at most " +
+                                           std::to_string(exec::kMaxPlannedRelations) +
+                                           " relations" + ByteSuffix(at)));
+    }
+
+    const exec::StatementContext context = StatementContextFor(session);
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
+    const auto compile = [&](const exec::PlanOptions* options) {
+        return ResolveNames(session, [&](const txn::ReadView* v) {
+            return exec::Compile(catalog_, stmt, v, &borrow, &context, options);
+        });
+    };
+    // The written order first: its refusal is the statement's, and its
+    // steps name the shape's relations in written order.
+    auto written = compile(nullptr);
+    if (!written.ok()) return Refused(AtByte(written.status(), at));
+    exec::CapturedKey key;
+    key.fetch_id = fingerprint->fetch_id;
+    key.n = static_cast<std::uint8_t>(bindings.size());
+    for (std::size_t w = 0; w < bindings.size(); ++w) {
+        key.oids[w] = written.value().steps[w].rel_oid;
+    }
+
+    // ---- The plan in force (CX-Q32 (a)) ----------------------------------
+    exec::CapturedOrder in_force_order{};
+    for (std::size_t k = 0; k < bindings.size(); ++k) {
+        in_force_order[k] = static_cast<std::uint8_t>(k);
+    }
+    const std::vector<exec::ArmPin>* in_force_pins = nullptr;
+    bool priced_against = true;
+    std::string in_force = "written";
+    const std::shared_ptr<const exec::AdminPlan> managed =
+        admin_plans_->any() ? admin_plans_->Find(key) : nullptr;
+    const exec::JoinOrder join_order = this->join_order();
+    if (managed != nullptr) {
+        const exec::PlanVariant& variant = managed->Choose(padded);
+        in_force_order = variant.order;
+        if (!variant.access.empty()) in_force_pins = &variant.access;
+        in_force = "admin:" + managed->name + "/" + variant.name;
+    } else if (join_order == exec::JoinOrder::kFixed) {
+        if (const auto captured = captured_plans_->Find(key); captured.has_value()) {
+            in_force_order = *captured;
+            in_force = "captured";
+        } else {
+            // The next compile searches and captures: the search's answer.
+            in_force = "uncaptured";
+            priced_against = false;
+        }
+    } else if (join_order == exec::JoinOrder::kPlanned) {
+        in_force = "searched";
+        priced_against = false;
+    }
+
+    exec::PlanOptions options;
+    options.join_build_max_rows = budget_.join_build_max_rows();
+    options.sort_max_rows = sort_max_rows_;
+    options.statistics = plan_stats_ != nullptr ? &plan_source_ : nullptr;
+    options.fetch_id = fingerprint->fetch_id;
+    options.statement = padded;
+    if (priced_against) {
+        options.advise_against = &in_force_order;
+        options.advise_pins = in_force_pins;
+    }
+    auto advised = compile(&options);
+    if (!advised.ok()) return Refused(AtByte(advised.status(), at));
+
+    exec::PlanAdvice advice;
+    advice.key = key;
+    advice.bindings = bindings;
+    const std::optional<exec::PlanNote>& note = advised.value().plan_note;
+    advice.searched = note.has_value();
+    for (std::size_t k = 0; k < bindings.size(); ++k) {
+        advice.order[k] = static_cast<std::uint8_t>(advised.value().steps[k].step_id);
+    }
+    if (note.has_value()) {
+        advice.cost_ratio = note->in_force_ratio.value_or(1.0);
+        advice.generation = note->generation;
+    } else if (managed == nullptr) {
+        // CX-Q33 (a): a block the search never orders runs as written.
+        in_force = "written";
+    }
+    advice.in_force = in_force;
+    advice.advised_at_us = exec::StatementContextNow().now_us;
+    char fetch_hex[17];
+    std::snprintf(fetch_hex, sizeof fetch_hex, "%016llx",
+                  static_cast<unsigned long long>(key.fetch_id));
+    const auto plan_text = [&](std::string_view statement) {
+        return "CREATE PLAN advised_" + std::string(fetch_hex) + " FOR " + std::string(statement) +
+               " VARIANT advised ELSE ORDER " + OrderText(advice.order, bindings);
+    };
+    advice.proposal = plan_text(parser::ShapeText(padded));
+    char ratio[32];
+    std::snprintf(ratio, sizeof ratio, "%.3f", advice.cost_ratio);
+    std::string reply = "ADVISED PLAN fetch_id=" + std::to_string(key.fetch_id) +
+                        " in_force=" + in_force + " searched=" + (advice.searched ? "1" : "0") +
+                        " cost_ratio=" + ratio + " generation=" +
+                        std::to_string(advice.generation) +
+                        " order=" + OrderText(advice.order, bindings) +
+                        " plan=" + plan_text(Trim(padded));
+    plan_advices_->Record(std::move(advice));
+    return {reply, false};
 }
 
 DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& session) {

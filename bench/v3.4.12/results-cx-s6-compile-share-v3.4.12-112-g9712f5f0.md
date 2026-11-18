@@ -1,6 +1,16 @@
 # CX-S6, first cell: the compile's share of a repeated statement's latency
 
-**Finding.** Every one of the 12 cells (6 statement shapes at `cores = 1` and
+**Read §8 first.** The server's own `exec::Compile`, timed inside the
+server by a spike (§8) - the most a compiled-chain cache keyed by the fetch
+id could remove - is **2.8 % to 4.1 % of the client's p50 in every plain
+shape at both core counts, and over CX-Q10's 5 % line only where a plan
+governs the statement**: a two-variant plan at 5.7 % (`cores = 1`) and 6.3 %
+(`cores = 2`), a one-relation plan at 5.3 % at `cores = 2` alone. Against
+the server's own time every cell is over 5 % (5.3 % to 15.2 %). §7's
+in-process figures ran in a hot loop and are superseded by §8. What follows
+in this paragraph and §1-§6 is the first run, as it was written.
+
+**Finding (the first run).** Every one of the 12 cells (6 statement shapes at `cores = 1` and
 `cores = 2`) puts the compile at **7.6 % to 11.1 % of the client's p50**,
 above CX-Q10's provisional 5 % line, and the cells repeat to within 0.3
 percentage points across five rounds, so no cell is close enough to the line
@@ -38,7 +48,13 @@ and `src/server/sys_views.cpp:1125` prints `Us(s.compile_ns)`, so the column is
 the total over every call that compiled a chain, in microseconds.** (A first
 probe on a fresh server read 4,141 µs on a point read, which is the sum, not
 a 4 ms compile.) The spec and the code disagree; this file did not change
-either.
+either. *(Review at `29401d0f`: they do not disagree. "Its last run's" in
+§6.1 is a call's last run against its re-runs (DF-S1's review item 2), the
+same words §6.1 uses for `rows`, which is a sum too; every cost column is a
+sum over calls, `tests/statement_stats_test.cpp` pins `compile_ns` as one,
+and §6.1 only fails to say "summed" for `compile_us` as it does for
+`rows_examined`. The clause is now in §6.1 (the bugs entry that first recorded this was
+deleted with the fix).)*
 
 Used as a sum it is a good instrument. The sum carries sub-microsecond time
 (it is summed in ns and truncated once), so the **per-call compile is
@@ -230,16 +246,90 @@ state, the plans' `sys.plans` rows, the final stats row), `cores1.log`,
 | Executed | 2026-11-18, after §1's run, at the same commit `9712f5f0` with `bench/compile_split_bench.cpp` and its `CMakeLists.txt` target added (no engine source changed; `git describe --dirty` = `v3.4.12-112-g9712f5f0-dirty`) |
 | Build | `build-release`, Release, reconfigured `-DKDS_BUILD_BENCH=ON`; copy `/home/louis/cxs6-split/kds_compile_split_bench`, sha256 `456135c0ee2fca77482e591e8892e99ab93baa3b4af396467f0e918df9723368` |
 | Pinning, load | `taskset -c 2`; load average 0.40 / 0.44 / 1.18 before, no build or ctest running (`archive/.../load-before.txt`) |
-| Method | one in-memory instance (`InMemoryPageStore`, no log), the shapes of §3 at 2,000 / 200 / 2,000 rows; 16 literals cycled; 7 runs of 20,000 statements per shape, the median and the minimum per statement (`archive/.../split.txt`) |
+| Method | one in-memory instance (`InMemoryPageStore`, no log), shapes *like* §3's at 2,000 / 200 / 2,000 rows; 16 literals cycled; 7 runs of 20,000 statements per shape, the median and the minimum per statement (`archive/.../split.txt`) |
+| **Not §3's shapes** (found at review) | The joins filter `u.member_code > <k>` (a walk of `pc_users`) where §3's cells filter `u.id = <k>` (a `Lookup`), and the benchmark creates no index on `pc_loans (user_id)`, so its chains are not §3's `Lookup` / `IndexProbe` / `Probe`; `member_code` and `title` are `int64`, not `varchar`. Cell 5's statement runs on `pb_bars`, not `t5`. The plain shapes compile with no options, where §3's server, under `fixed`, ran the captured path with a captured order equal to the written one (one compile, a map lookup); the plan shapes run with `search` off (`written`), not `fixed`. The two-variant shape's literals choose the reordering variant 7 times in 16, §3's about half. **The "captured order not the written one" row is no §3 cell**: §3's cells 2 and 3 captured the written order (`sys.plans` in `cores<N>.json`), so that row is a synthetic case set beside cell 3's p50 |
 
 | shape | parse p50 | compile p50 (removable at most) | removable / §3's cores 1 client p50 |
 |---|---|---|---|
 | pk point read | 1,409 ns | 574 ns | 1.4 % of 40.2 µs |
 | two-relation join, one compile | 3,280 ns | 1,555 ns | 1.6 % of 98.2 µs |
 | three-relation join, one compile | 4,654 ns | 2,462 ns | 1.9 % of 131.3 µs |
-| three-relation join, a captured order not the written one | 4,589 ns | 5,300 ns | 4.0 % of 131.3 µs |
+| three-relation join, a captured order not the written one (no §3 cell) | 4,589 ns | 5,300 ns | 4.0 % of 131.3 µs |
 | two-relation join, 2-variant plan | 3,184 ns | 4,198 ns | 3.8 % of 110.6 µs |
 | one-relation statement, no plan | 1,345 ns | 602 ns | 1.4 % of 44.4 µs |
 | one-relation statement, its plan | 1,341 ns | 1,419 ns | 3.1 % of 45.4 µs |
 
-Every minimum is within 3 % of its median. **Against the client's p50, as CX-Q10 is written, no cell's removable part reaches 5 %**: 1.4 % to 4.0 %. The two highest are not what a cache is for - a captured order that differs from the written one pays two compiles (the written order's, then the captured one's: `CompileBlock` compiles the written order first for its refusal and its fallback), and the two-variant plan pays the second lex of `AdminPlan::Choose` and the variant's compile - each removable by skipping work the compile already knows it will throw away, not by caching. **Against the server's own time the picture differs**: §3's point read spends about 7.2 µs in the server, of which 0.57 µs is 8 %; the line was drawn against a Python client's p50, whose 33 to 36 µs of client and socket (§4) the engine does not pay. A client that costs less would move every share up. Not measured: `cores = 2` in-process (the benchmark is one thread), and a cache's own lookup and rebinding, which would come off the removable part.
+Every minimum is within 4 % of its median (the three-relation compile's is 3.5 % below). **Against the client's p50, as CX-Q10 is written, no shape's hot-loop removable part reaches 5 %**: 1.4 % to 4.0 %. The highest are a compile that runs twice - a block run in an order other than its written one compiles the written order first (`CompileBlock`: its refusal is the statement's and it is the decline's fallback), then the order in force; the two-variant plan also pays the second lex of `AdminPlan::Choose`. Skipping the first compile is not free: the written order's refusal is what the statement answers, so a skip needs that refusal known without the compile.
+
+**What bounds the reading** (the review's, at `29401d0f`):
+
+- **The loop is hot.** Each shape compiles 20,000 times back to back, so its code and the catalog it reads stay in cache; in the server the run, the reply and the socket sit between two compiles, and §2 saw a compile triple when a view scan ran between them. In §3's server `compile_us` is 1.4x to 1.9x the in-process parse plus compile (3.41 µs against 1.98 µs on the point read); part of that gap is the dispatcher's borrow and name resolution, which no cache removes, and part is cache state, which a hot loop hides. Scaled by that ratio - an upper bound, since it counts the dispatcher's part as removable - the removable part is 2.5 % to 5.7 % of the client's p50: **cell 4 at about 5.7 % and cell 5 at about 5.1 %, on the line**. Only a timer around `exec::Compile` inside the server separates the two.
+- **Against the server's own time three cells cross 5 %**: the point read 8.0 % (0.57 of 7.2 µs), cell 4 6.7 %, cell 5 10.7 % (5b 4.9 %, cells 2 and 3 about 3 %), each from the hot loop, over a `total_us` that reads low by up to 1 µs a call (§2). The line was drawn against a Python client's p50, whose 33 to 36 µs of client and socket (§4) the engine does not pay; a client that costs less moves every share up.
+- **`cores = 2` is not measured in-process** (the benchmark is one thread). Scaled by §3's `compile_us` ratio between the core counts, the synthetic reorder row comes to about 4.6 % of cell 3's `cores = 2` p50 and the two-variant plan to about 4.1 %.
+- **A cache's own lookup and literal rebinding are not measured**; they come off the removable part.
+
+## 8. The server's own compile, timed (spike)
+
+**Finding.** With a `steady_clock` timer around the one `exec::Compile` call of a client SELECT inside the server, the part a compiled-chain cache keyed by the fetch id could at most remove is **2.8 % to 6.3 % of the client's p50**. Against CX-Q10's 5 % line (the client's p50, as written) **three of twelve cells cross: cell 4 (the two-variant plan) at both core counts (5.7 %, 6.3 %) and cell 5 (the one-relation `SCAN`-pin plan) at `cores = 2` (5.3 %)**; the other nine are under, cell 5 at `cores = 1` closest at 4.4 %. Against the server's own per-call time the line is crossed in **every cell at both core counts** (5.3 % to 15.2 %). The in-process hot loop of §7 (1.4 % to 4.0 %) understated the in-server number by 1.5x to 2x, as §7's review suspected. This measures only the removable ceiling: it excludes a cache's own lookup and literal rebinding, which come off it.
+
+### Stamp
+
+| | |
+|---|---|
+| Executed | 2026-11-18, 13:57:45 to 13:58:52 UTC (`cores = 1`, then `cores = 2`, one server each, one after the other; 67 s, inside the 20-minute budget) |
+| Branch / commit | `worktree-cx-plan-change-option` at `29401d0f`, `git describe --tags` = `v3.4.12-113-g29401d0f` (the order named `-114`; the describe at the run said `-113`, so the archive directory is `cx-s6-compile-spike-v3.4.12-113-g29401d0f`). Tree dirty: the next stage's work (see Binary) and this file's edits |
+| Binary | the caller's spiked build, **not built here**: `build-release` at `29401d0f` plus uncommitted next-stage work (`ADVISE PLAN` and its view, called by no cell) plus a two-line spike in `CommandDispatcher`'s SELECT compile, never committed: a `steady_clock` timer around the single `exec::Compile(...)` call of a client SELECT, summed into two process-wide counters that `sys.meta` prints as `spike_compile_ns` and `spike_compile_calls`. It counts binding, the access ladder, the order search or captured/admin plan path and the chain, and excludes lex, parse, fingerprint, the read borrow, name resolution's retry loop and everything after. Source `/home/louis/cxs6-spike/kds_server`, mtime 2026-11-18 13:56:39 UTC; run copy `/home/louis/cxs6-spike-run/kds_server`, `sha256` `2cefa37bd7deb0b6815c431b44a18caa46de7358df803ae0c56d8f80e5d17e3d` (equals the caller's; `archive/.../binary.sha256`). Every server started from the copy. The binary is newer than HEAD's commit and carries uncommitted code, so it is not the engine at `29401d0f` alone; the compile path the cells call is that commit's, but the diff beyond the spike was not audited here |
+| Device | data files and WAL under `/home/louis/cxs6-spike-run/run1`, `run2`: `/dev/nvme0n1p1`, ext4 (`df -T`), not tmpfs |
+| Server config | as §1: `cores` = 1 and 2, `durability = group`, `buffer_pool_frames = 16384`, `log_level = warn`, default `join_order = fixed` |
+| Ports, pinning | 25661 (`cores = 1`), 25662 (`cores = 2`); server `taskset -c 2` and `-c 2,3`; client `taskset -c 5` |
+| Load | load average 1.27 / 2.62 / 2.02 at the cell-4 reads of `cores = 1` and 1.20 / 2.45 / 1.98 at `cores = 2`'s (a decaying tail of earlier work; 1.67 / 2.89 / 2.07 four minutes before; top showed 96 % idle); no `cc1plus`, `cmake --build` or `ctest` before any cell (per cell, each JSON's `host`) |
+| Driver | `archive/cx-s6-compile-spike-v3.4.12-113-g29401d0f/cx_s6_compile_spike.py`: §1's driver, copied, with one method added (`spike()`, reads the two counters from `sys.meta`) and the counter deltas stored per round; data, statements, plans, cell order, 2,000 warm-up and 5 rounds x 10,000 unchanged. The counters are read immediately before and after each timed loop, with the `sys.statement_stats` reads outside them; `tools/` untouched |
+| Watchdog | a 60 s loop writing `/home/louis/cxs6-spike-run/watch.txt` from the drivers' status files; the run finished inside one interval |
+
+### The table
+
+All times in µs, medians of the five rounds. `spike` is `delta(spike_compile_ns) / delta(spike_compile_calls)` per pass; `compile_us` is `sys.statement_stats`' per-call mean as in §3; `front` is `compile_us - spike` (lex, fingerprint, parse, borrow, name resolution, and the view's own truncation). Server time is `total_us` per call, which reads low by up to 1 µs (§2).
+
+**Counter check.** In every one of the 60 passes `delta(spike_compile_calls)` equals the 10,000 timed statements exactly (0 excess): the `sys.meta` and `sys.statement_stats` reads, which are SELECTs, are not counted in the window, so nothing was subtracted.
+
+**`cores = 1`**
+
+| cell | client p50 | spike (server's `exec::Compile`) | `compile_us` | front (`compile_us - spike`) | spike / client p50 (rounds min-max) | spike / server time |
+|---|---|---|---|---|---|---|
+| 1 pk point read | 40.2 | 1.12 | 3.53 | 2.41 | 2.8 % (2.75-2.89) | 15.1 % |
+| 2 two-relation join, captured | 99.3 | 3.50 | 8.17 | 4.67 | 3.5 % (3.44-3.59) | 6.7 % |
+| 3 three-relation join, captured | 131.5 | 4.42 | 10.31 | 5.88 | 3.4 % (3.31-3.38) | 5.3 % |
+| 4 cell 2 under a 2-variant plan | 109.8 | 6.22 | 11.02 | 4.81 | **5.7 %** (5.60-5.75) | 9.9 % |
+| 5 one-relation plan, `SCAN` pin | 45.5 | 2.01 | 4.55 | 2.54 | 4.4 % (4.37-4.43) | 15.0 % |
+| 5b control, no plan | 44.7 | 1.29 | 3.82 | 2.53 | 2.9 % (2.84-2.94) | 10.2 % |
+
+**`cores = 2`**
+
+| cell | client p50 | spike | `compile_us` | front | spike / client p50 (rounds min-max) | spike / server time |
+|---|---|---|---|---|---|---|
+| 1 pk point read | 51.1 | 1.80 | 5.30 | 3.50 | 3.5 % (3.51-3.54) | 15.2 % |
+| 2 two-relation join, captured | 161.2 | 6.62 | 14.47 | 7.85 | 4.1 % (4.09-4.16) | 8.0 % |
+| 3 three-relation join, captured | 204.2 | 8.26 | 17.93 | 9.67 | 4.0 % (4.05-4.10) | 6.7 % |
+| 4 cell 2 under a 2-variant plan | 174.0 | 10.89 | 18.94 | 8.04 | **6.3 %** (6.23-6.28) | 11.4 % |
+| 5 one-relation plan, `SCAN` pin | 60.7 | 3.21 | 6.98 | 3.76 | **5.3 %** (5.26-5.32) | 14.6 % |
+| 5b control, no plan | 58.6 | 1.95 | 5.59 | 3.64 | 3.3 % (3.32-3.34) | 9.6 % |
+
+Server `total_us` per call behind the last column (µs): `cores = 1` 7.37, 51.86, 82.95, 62.70, 13.40, 12.68; `cores = 2` 11.83, 83.26, 123.70, 95.55, 21.96, 20.27. Noise floor: the five rounds of one cell span at most 0.15 points of share and 0.3 µs of spike; against §3 the same cells' client p50 and `compile_us` differ by 0 to 4 % (p50 40.2 against 40.2, 99.3 against 98.2, 131.5 against 131.3 at `cores = 1`), the only cross-run floor available (no cell was replicated inside this run). Cell 5 at `cores = 2` is 0.3 points over the line, which is inside that cross-run drift, so its crossing is not firm; cell 4's (0.7 and 1.3 points) is outside it.
+
+### Reading
+
+- **Crossing 5 % of client p50 (CX-Q10 as written):** cell 4 at both core counts (5.7 %, 6.3 %) and cell 5 at `cores = 2` (5.3 %, soft). Under it: cells 1, 2, 3, 5b at both core counts and cell 5 at `cores = 1` (4.4 %). Two cores raise every share by 0.6 to 1.0 point, as §3's did.
+- **Crossing 5 % of the server's own time:** all twelve cells, 5.3 % to 15.2 %. The point read and cell 5 are the largest (about 15 %): the cheapest statements spend the biggest part of their server time binding and laddering. Cell 3 at `cores = 1` (5.3 %) is the one near the line.
+- **What the parse side costs.** `front` is 2.4 to 9.7 µs and larger than the spike in every cell but cell 4 (where the spike is the larger, 6.2 against 4.8 µs and 10.9 against 8.0 µs): the lex, fingerprint, parse, borrow and resolution are 54 % to 68 % of `compile_us` in cells 1, 2, 3, 5 and 5b, and 42 % to 44 % in cell 4. A cache keyed by the fetch id pays all of `front`; it can remove only the spike column.
+- **Where the removable time is.** The plan cells carry more of it: cell 4's spike is 1.8x cell 2's (a variant is chosen at every compile, including `AdminPlan::Choose`'s second lex, and about half the literals compile a reordered block, whose written order compiles first, §7); cell 5's is 1.6x its twin's (the plan table's lookup plus the pinned arm's legality check). §7's hot loop understated cell 4 by about 2x (4.2 µs in the loop against 6.2 µs here, `cores = 1`).
+- **What the cell does not say.** It is a ceiling on removal, not a measured saving: a cache's own lookup, the rebinding of a cached chain's literals and the invalidation test are not subtracted. The client is Python and contributes 33 to 36 µs of every p50; a native client moves every client-p50 share up (the server-time column is that bound). `cores = 2`'s per-call spike is 1.5x to 1.8x `cores = 1`'s in every cell, in the compile itself; the cause was not investigated.
+- **For CX-Q37.** (a) as adopted (the removable compile against the client's p50, line at 5 %, `cores = 1`) is **crossed by one cell of six, cell 4 at 5.7 %**; the other five are 2.8 % to 4.4 %. So §7's "no shape reaches 5 %" holds for five of six and fails for the multi-variant plan, the shape the cache's variant key exists for. Cells 1, 2, 3 and 5b are under by 1.5 to 2.2 points, outside the floor. Against the server's time (CX-Q37 (c)) all six cross. Whether one crossing cell justifies a cache is the operator's choice among (a), (b), (c); this run settles the measurement, not that. A cheaper route to part of cell 4's cost is not a cache: the known second lex in `AdminPlan::Choose` (`known-gaps.md`).
+
+### What was cut
+
+- One server and one connection per core count, serial autocommit reads, `group` durability only; the row-count sweep (rule 9) not run (§5's cut stands); no PostgreSQL floor; cell 4 still mixes both variants (about half each) in one row.
+- No distribution of the spike, only the per-pass mean (the counters are sums); no replicate of one cell inside the run.
+- The binary carries uncommitted next-stage code beyond the spike; the engine suite was not run (this measurement edited only `bench/`).
+- Raw files: `archive/cx-s6-compile-spike-v3.4.12-113-g29401d0f/`: `cores1.json`, `cores2.json` (per round: client percentiles, `server_delta`, `spike_ns`, `spike_calls`), `cores1.log`, `cores2.log`, `summary-spike.txt`, `summary.txt` (§3's summariser over the same files), `summ2.py`, `times.txt`, `binary.sha256`, the driver and `summarize.py`. No data file or WAL segment is archived.
+
+Rerun: as §6, with `--bin /home/louis/cxs6-spike-run/kds_server`, ports 25661 / 25662, the driver above, then `python3 summ2.py <archive dir>`.

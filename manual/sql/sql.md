@@ -1311,6 +1311,27 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   - `CREATE PLAN <name> FOR <select> AS SEARCHED` stores the order the
     engine would choose right now as a plan of one variant, and prints it.
     Use it to fix a statement that is not captured.
+  - **`ADVISE PLAN FOR <select>` asks the engine what it would choose now,
+    without changing anything.** It is written with literals, as `CREATE
+    PLAN` is, and answers with the join order the engine's cost model
+    picks from the current statistics, what that order costs compared
+    with the plan the statement actually runs (`cost_ratio`; below 1 means
+    the proposal is cheaper), and a ready `CREATE PLAN` statement that
+    adopts it:
+
+    ```
+    ADVISE PLAN FOR
+      SELECT u.name, l.amount FROM users u JOIN loans l ON l.user_id = u.id
+      WHERE u.id BETWEEN 100 AND 164;
+    ```
+
+    `in_force` says which plan it was compared with: your own plan
+    (`admin:<plan>/<variant>`), the order fixed at the statement's first
+    run (`captured`), or the order as written. Nothing is applied until
+    you run the `CREATE PLAN` it gives you. Each statement shape's latest
+    advice is in `SELECT * FROM sys.plan_advice` until the server
+    restarts. A statement over one table has no join order and is
+    refused.
   - `ALTER PLAN <name> DISABLE` stops using a plan without removing it;
     `ENABLE` uses it again. `ALTER PLAN <name> REPLACE VARIANT <v> WHEN
     <rule> ORDER (...)` (or `... ELSE ORDER (...)`) changes one variant.

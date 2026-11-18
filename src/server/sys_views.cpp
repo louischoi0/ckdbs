@@ -3,6 +3,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <initializer_list>
 #include <limits>
 #include <span>
@@ -79,6 +80,7 @@ constexpr SysViewSpec kViews[] = {
     {"assertions"},
     {"transitions"},
     {"plans"},
+    {"plan_advice"},
     {"cabin_optimizer"},
     {"lock_waits"},
     {"statement_stats"},
@@ -169,6 +171,14 @@ public:
         const auto it = relations_.find(rel_oid);
         return it == relations_.end() ? Null() : Str(it->second.second);
     }
+    // `ns.name`, or `oid <n>` for a relation gone: a plan row's spelling.
+    std::string Qualified(catalog::Oid rel_oid) const {
+        const auto it = relations_.find(rel_oid);
+        if (it == relations_.end()) return "oid " + std::to_string(rel_oid);
+        const parser::AstValue ns = Spelling(it->second.first);
+        return (ns.type == parser::ValueType::kNull ? std::string() : ns.str_val + ".") +
+               it->second.second;
+    }
 
 private:
     std::unordered_map<catalog::Oid, std::string> namespaces_;
@@ -253,6 +263,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "assertions") return AssertionsView();
     if (n == "transitions") return TransitionsView();
     if (n == "plans") return PlansView();
+    if (n == "plan_advice") return PlanAdviceView();
     if (n == "cabin_optimizer") return CabinOptimizerView(byte);
     if (n == "lock_waits") return LockWaitsView();
     if (n == "statement_stats") return StatementStatsView();
@@ -861,13 +872,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
     if (!rows.ok()) return rows.status();
     auto labels = RelationLabels::Read(catalog_, nullptr);
     if (!labels.ok()) return labels.status();
-    const auto label = [&](catalog::Oid oid) {
-        const parser::AstValue name = labels.value().Name(oid);
-        if (name.type == parser::ValueType::kNull) return "oid " + std::to_string(oid);
-        const parser::AstValue ns = labels.value().Namespace(oid);
-        return (ns.type == parser::ValueType::kNull ? std::string() : ns.str_val + ".") +
-               name.str_val;
-    };
+    const auto label = [&](catalog::Oid oid) { return labels.value().Qualified(oid); };
     for (const exec::PlanRow& plan : rows.value()) {
         const parser::AstValue origin = Str(plan.captured ? "captured" : "admin");
         if (!plan.readable) {
@@ -914,6 +919,47 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
         view.rows.push_back({Int(plan.id), Str(plan.name), origin, Str(std::string(state)),
                              Int(plan.key.fetch_id), Str(relations), Str(join_order), variants,
                              Timestamp(plan.written_at_us), Str(plan.statement)});
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::PlanAdviceView() {
+    exec::CatalogView view;
+    // What `ADVISE PLAN` proposed (CX-S7, `exec/plan_advice.hpp`), one row a
+    // shape, oldest first - memory only, emptied by a restart (CX-Q30 (a)).
+    // `relations` in written order and `proposed_order` in the proposal's,
+    // resolved at read; `in_force` the plan it was priced against and
+    // `cost_ratio` the proposal's cost over that plan's, under 1 cheaper;
+    // `proposal` is the `CREATE PLAN` text over the statement's shape, its
+    // literals `?` (CX-Q31 (a)), last as a value that can hold commas.
+    Define(view, {{"fetch_id", kInt},
+                  {"relations", kStr},
+                  {"in_force", kStr},
+                  {"searched", kInt},
+                  {"proposed_order", kStr},
+                  {"cost_ratio", kStr},
+                  {"generation", kInt},
+                  {"advised_at", kTimestamp},
+                  {"proposal", kStr}});
+    auto labels = RelationLabels::Read(catalog_, nullptr);
+    if (!labels.ok()) return labels.status();
+    for (const exec::PlanAdvice& advice : plan_advices_->Snapshot()) {
+        std::string relations;
+        std::string order;
+        for (std::size_t i = 0; i < advice.key.n; ++i) {
+            if (i != 0) {
+                relations += ", ";
+                order += ", ";
+            }
+            relations += labels.value().Qualified(advice.key.oids[i]);
+            order += labels.value().Qualified(advice.key.oids[advice.order[i]]);
+        }
+        char ratio[32];
+        std::snprintf(ratio, sizeof ratio, "%.3f", advice.cost_ratio);
+        view.rows.push_back({Int(advice.key.fetch_id), Str(relations), Str(advice.in_force),
+                             Bool(advice.searched), Str(order), Str(ratio),
+                             Int(advice.generation), Timestamp(advice.advised_at_us),
+                             Str(advice.proposal)});
     }
     return view;
 }

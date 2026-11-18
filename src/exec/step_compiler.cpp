@@ -2870,6 +2870,29 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     inputs.step_rows = &note.estimated_rows;
     const double chosen_cost = EstimateChain(chosen, inputs).cost;
     note.cost_ratio = reordered && written_cost > 0 ? chosen_cost / written_cost : 1.0;
+    inputs.step_rows = nullptr;
+    // ---- `ADVISE PLAN` (CX-S7, CX-Q32): the answer against the plan in force
+    //
+    // The order and pins this statement's next compile would run, through
+    // the full ladder and priced by the same inputs, so the ratio compares
+    // like with like. A plan in force that does not compile here, or adds a
+    // sort the LIMIT does not bound, would be declined, the written order
+    // running instead, so that is its price.
+    if (plan->advise_against != nullptr) {
+        const std::vector<std::size_t> perm(plan->advise_against->begin(),
+                                            plan->advise_against->begin() + refs.size());
+        std::vector<std::size_t> chosen_order;
+        for (const Step& step : chosen.steps) chosen_order.push_back(step.step_id - base_step_id);
+        double in_force_cost = written_cost;
+        if (perm == chosen_order && plan->advise_pins == nullptr) {
+            in_force_cost = chosen_cost;
+        } else if (auto in_force = compile_order(perm, plan->advise_pins);
+                   in_force.ok() &&
+                   AddedSortCannotRefuse(in_force.value(), written_sorted, plan->sort_max_rows)) {
+            in_force_cost = EstimateChain(in_force.value(), inputs).cost;
+        }
+        note.in_force_ratio = in_force_cost > 0 ? chosen_cost / in_force_cost : 1.0;
+    }
     chosen.plan_note = std::move(note);
     return chosen;
 }

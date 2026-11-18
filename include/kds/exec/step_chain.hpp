@@ -937,6 +937,13 @@ struct PlanNote {
     std::vector<double> estimated_rows;
     std::uint64_t generation = 0;
     double cost_ratio = 1.0;
+    // `ADVISE PLAN` (CX-S7): the search's answer's cost over the plan in
+    // force's (`PlanOptions::advise_against`), under the same inputs; under
+    // 1 the answer is cheaper. Unset where no plan in force was handed, and
+    // the written order's ratio where the plan in force does not compile
+    // for this statement - it would be declined, so the written order is
+    // what runs.
+    std::optional<double> in_force_ratio;
     // The administrator's plan and the variant it chose for this statement
     // (`kAdmin`, `kAdminDeclined`); empty otherwise.
     std::string plan_name;
