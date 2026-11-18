@@ -6,8 +6,10 @@ Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
 (`raft-marks-2026-11-18.md` §33). The session was isolated in that worktree
 and could not open one named for this order; the branch carries the name.
 
-No stage is started. DF waits for the operator's word and for the marks on
-§4's items. **DF moves no format**: no superblock bump, no catalog relation,
+**DF-Q0..Q10 each marked (a), as CLA proposed, on the operator's word of
+2026-11-18** (`raft-marks-2026-11-18.md` §34). No stage is started: the
+word marks the items and does not open DF; the opening is the operator's.
+**DF moves no format**: no superblock bump, no catalog relation,
 no WAL record kind, no page byte (DF-R1). Every `[source-read]` claim below
 was read at `56d20394`, and the order was reviewed by `critics-developer`
 before it was committed (§7).
@@ -297,7 +299,15 @@ Binding once DF opens.
 
 ## 4. Items for the operator (DF-Q), CLA's proposals
 
-None is marked. (a) is CLA's proposal in each.
+**Every item is marked (a), the operator's mark of 2026-11-18**
+(`raft-marks-2026-11-18.md` §34: *"Follow the proposals"*). (a) was CLA's
+proposal in each. Three of the options are conditional on DF-S0, as each
+states: DF-Q4 (a) only if the read of a fingerprint's consumers finds no
+behaviour moved but the statistics key; DF-Q6 (a) the wait-statistics
+delta only if its two copies price inside DF-Q10's bar, else per-statement
+accumulators; DF-Q10 (a) sends a part over its bar back to the operator.
+**DF-Q9 (a) lifts BO-Q13's exclusion** for delete-marked slots and leaf
+divisions alone; spills and page counts stay excluded.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -379,7 +389,7 @@ manual's views; `CLAUDE.md`'s observability row.
 - No fix to what today's counts mean: `ON CONFLICT ... DO UPDATE`'s rows
   stay counted as `known-gaps.md` states, and a rolled-back statement's
   rows stay counted (BO-S6).
-- No key for the four BO stores unless DF-Q1 (b) is marked.
+- No key for the four BO stores (DF-Q1 (a)).
 - Nothing reads what DF records (DF-R3): no advisor, no automatic index
   drop, no purge trigger.
 
@@ -437,3 +447,12 @@ line is `56d20394`'s, and the merge moved `src/server/command_dispatcher.cpp`
 and `src/server/sys_views.cpp`, so the line numbers cited in those two
 files are stale on the merged tree and DF-S0's re-read at the opening
 commit is owed as §5 says.
+
+### DF-Q0..Q10 marked (a), 2026-11-18
+
+On worktree `da-q8-memory-bound-key`, branch
+`worktree-df-statistics-coverage`, from `84b29eea`, documents only. The
+operator's word on CLA's report of the order (`raft-marks-2026-11-18.md`
+§34) marks every item (a) and asks for the push with the hook skipped. The
+header and §4 carry the marks; no design text changed. DF is not opened by
+the word. No suite was executed: the commit changes no build input.
