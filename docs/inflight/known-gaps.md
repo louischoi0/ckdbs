@@ -2030,6 +2030,22 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   measured; the overhead measurement is owed at CX's close. Owned by
   `exec/admin_plans.hpp`.
 
+- **CX-S3 is built in part: controller-made Cabins are still eligible to
+  the ladder (CX-Q6 (a) not built), a Cabin's drop is not RESTRICTed, and
+  one relation's arm cannot be pinned.** Verified at CX-S3a on
+  `cx-plan-change-option`. CX-Q6 (a) would make an `auto`-origin Cabin
+  serve a read only through a plan that pins it; today the ladder takes
+  one as it takes a declared Cabin, so switching the cabin controller on
+  can still move a step's arm on its own (the controller is experimental
+  and off by default). A `CABIN` pin names no Cabin, so nothing ties a
+  plan to one: a dropped Cabin leaves the pin unmet and the variant
+  declined, counted in `plan_declined`. A statement over one relation
+  takes no plan (`NotImplemented`), because the compile asks for a plan
+  only at a join block and CX-R6 keeps the point read free of the probe.
+  Not reached by a cell: a pinned `CABIN` arm that is met (no cell builds
+  a Cabin and pins it), a pinned key set, and a pin beside a value list.
+  Owned by `instructions/v3.2.0/workorder-cx-managed-plans.md`.
+
 - **A renamed relation's plan reads `enabled` and matches nothing new.**
   A fetch id hashes names, so after `ALTER TABLE ... RENAME TO` or `RENAME
   COLUMN` of a name the statement writes, no statement in the new spelling

@@ -119,6 +119,64 @@ bool IsPermutation(const std::vector<std::uint64_t>& order, std::size_t n) {
     return true;
 }
 
+// A variant's pins as its line's ` access=` field, or nothing where it has
+// none.
+std::string EncodeAccess(const std::vector<ArmPin>& access) {
+    std::string out;
+    for (std::size_t w = 0; w < access.size(); ++w) {
+        const ArmPin& pin = access[w];
+        if (!pin.pins()) continue;
+        out.append(out.empty() ? " access=" : ";");
+        out.append(std::to_string(w)).push_back(':');
+        if (pin.forbid) out.push_back('!');
+        out.append(ArmName(pin.arm));
+        if (!pin.index.empty()) out.append(":").append(pin.index);
+    }
+    return out;
+}
+
+// The field's reading into `n` pins by written position; false where it is
+// not what `EncodeAccess` writes: a position out of range or pinned twice,
+// an unknown pin, a forbidden walk, a name on anything but a pinned index.
+bool DecodeAccess(std::string_view text, std::size_t n, std::vector<ArmPin>& out) {
+    std::vector<ArmPin> pins(n);
+    while (true) {
+        const std::size_t semi = text.find(';');
+        std::string_view item = text.substr(0, semi);
+        const std::size_t colon = item.find(':');
+        std::uint64_t position = 0;
+        if (colon == std::string_view::npos || !ReadNumber(item.substr(0, colon), position) ||
+            position >= n || pins[position].pins()) {
+            return false;
+        }
+        item.remove_prefix(colon + 1);
+        ArmPin pin;
+        if (item.starts_with("!")) {
+            pin.forbid = true;
+            item.remove_prefix(1);
+        }
+        const std::size_t name_at = item.find(':');
+        // The word as `EncodeAccess` writes it, and no other spelling.
+        const std::string_view word = item.substr(0, name_at);
+        const auto arm = ArmFromName(word);
+        if (!arm.has_value() || ArmName(*arm) != word) return false;
+        pin.arm = *arm;
+        if (pin.forbid && pin.arm == ArmPin::Arm::kScan) return false;
+        if (name_at != std::string_view::npos) {
+            const std::string_view name = item.substr(name_at + 1);
+            if (pin.arm != ArmPin::Arm::kIndex || pin.forbid || !parser::IsIdentifier(name)) {
+                return false;
+            }
+            pin.index = std::string(name);
+        }
+        pins[position] = std::move(pin);
+        if (semi == std::string_view::npos) break;
+        text.remove_prefix(semi + 1);
+    }
+    out = std::move(pins);
+    return true;
+}
+
 std::shared_ptr<const AdminPlan> ToAdminPlan(const PlanRow& row) {
     auto plan = std::make_shared<AdminPlan>();
     plan->name = row.name;
@@ -156,6 +214,7 @@ std::string EncodeAdminPlanText(const PlanRow& row, std::int64_t written_at_us) 
     for (const PlanVariant& variant : row.variants) {
         text.append(variant.name);
         AppendList(text, " ", variant.order, row.key.n);
+        text.append(EncodeAccess(variant.access));
         if (variant.rule.is_else()) {
             text.append(" ELSE");
         } else {
@@ -256,6 +315,14 @@ Status DecodeAdminPlanText(std::string_view text, PlanRow& out) {
             variant.order[i] = static_cast<std::uint8_t>(order[i]);
         }
         line.remove_prefix(order_end + 1);
+        if (line.starts_with("access=")) {
+            const std::size_t access_end = line.find(' ');
+            if (access_end == std::string_view::npos ||
+                !DecodeAccess(line.substr(7, access_end - 7), oids.size(), variant.access)) {
+                return corrupt("a variant's access pins do not read");
+            }
+            line.remove_prefix(access_end + 1);
+        }
         // `ELSE` last and only last (CX-R4).
         const bool last = v + 1 == count;
         if (line == "ELSE") {

@@ -1236,13 +1236,31 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
     values - text where a number is needed, a number too large - simply does
     not hold, and the statement goes on to the next variant. `OR`, `IS
     NULL` and `<` on strings are refused.
-  - A plan chooses the order only. How each relation is read (tuple key,
-    index, Cabin, walk) is still chosen from the catalog at every run, and
-    the rows returned are the same under every variant. A variant that
-    cannot be used for a particular statement - for example one that would
-    need a sort the statement's `LIMIT` no longer bounds - is skipped for
-    that statement, which runs in written order; `ANALYZE` and `SHOW META`
-    (`plan_declined`) say so.
+  - A plan chooses the order, and may **pin how a relation is read**. By
+    default each relation's access (tuple key, index, Cabin, walk) is
+    chosen from the catalog at every run. After a variant's `ORDER`,
+    `ACCESS <relation> <pin>, ...` restricts that choice for the relations
+    it names:
+
+    ```
+    VARIANT wide ELSE ORDER (l, u) ACCESS l SCAN, u TUPLE_KEY
+    VARIANT narrow WHEN ARG(2) - ARG(1) <= 64
+      ORDER (u, l) ACCESS l INDEX loans_user_idx
+    ```
+
+    A pin is `TUPLE_KEY`, `INDEX` (any index) or `INDEX <name>`, `CABIN`,
+    or `SCAN` (walk the relation); `NOT TUPLE_KEY`, `NOT INDEX` and `NOT
+    CABIN` rule one kind out and leave the rest to the engine. A pin never
+    forces an access the statement cannot use: `CREATE PLAN` refuses a pin
+    nothing can satisfy, and the rows returned are the same under every
+    variant and every pin. `ANALYZE` marks a pinned step `arm=plan`. An
+    index a plan pins by name cannot be dropped while the plan is enabled.
+    A plan is for a join: a statement over one table cannot be given one.
+  - A variant that cannot be used for a particular statement - one that
+    would need a sort the statement's `LIMIT` no longer bounds, or whose
+    pin that statement cannot satisfy - is skipped for that statement,
+    which runs in written order with the engine's own access choices;
+    `ANALYZE` and `SHOW META` (`plan_declined`) say so.
   - `CREATE PLAN <name> FOR <select> AS SEARCHED` stores the order the
     engine would choose right now as a plan of one variant, and prints it.
     Use it to fix a statement that is not captured.

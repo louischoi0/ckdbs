@@ -78,8 +78,13 @@ class WalManager;
 // is, autocommit only. Its text is
 //
 //   v1 fp=<v> oids=<o>,<o> bindings=<b>,<b> args=<n> at=<us> variants=<k>
-//   <name> <p>,<p> ELSE | WHEN <rule>        (k lines, in rule order)
+//   <name> <p>,<p> [access=<w>:<pin>;...] ELSE | WHEN <rule>   (k lines)
 //   <the statement's shape text>
+//
+// A variant's `access=` field is there only where it pins (CX-S3a): one
+// `<written position>:<pin>` a pinned relation, a pin being `TUPLE_KEY`,
+// `INDEX`, `INDEX:<name>`, `CABIN` or `SCAN` - the DDL's words
+// (`ArmName`) - with `!` before a forbidden one. A row with none reads as it did before pins existed.
 //
 // `bindings` are the statement's relations as it names them, in written
 // order - what an `ORDER (...)` list is resolved against, so `ALTER PLAN

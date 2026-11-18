@@ -12,6 +12,7 @@
 
 #include "kds/catalog/keystone_budget.hpp"
 #include "kds/catalog/well_known.hpp"
+#include "kds/exec/plan_ddl.hpp"
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/catalog_view.hpp"
 #include "kds/exec/transition_catalog.hpp"
@@ -838,7 +839,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
     // gone, or its fetch id is another fingerprint version's. Its
     // `join_order` is its `ELSE` variant's, and `variants` is every variant
     // in rule order, `<name> WHEN <rule> ORDER (<relation>, ...)` by the
-    // statement's bindings; NULL for a captured plan, which has one order.
+    // statement's bindings, with ` ACCESS <binding> <pin>, ...` where the
+    // variant pins an arm (CX-S3a); NULL for a captured plan, which has one
+    // order.
     Define(view, {{"plan_id", kInt},
                   {"name", kStr},
                   {"origin", kStr},
@@ -882,6 +885,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
                     text += plan.bindings[variant.order[k]];
                 }
                 text += ")";
+                text += exec::PlanAccessText(variant.access, plan.bindings);
             }
             variants = Str(text);
             state = !exec::PlanRowIsValid(catalog_, plan) ? "invalid"

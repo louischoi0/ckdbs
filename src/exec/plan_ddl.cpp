@@ -78,11 +78,58 @@ StatusOr<PlanVariantSpec> ParseVariant(parser::Lexer& lexer) {
             return Status::InvalidArgument("ORDER's relations are separated by ','" + At(sep));
         }
     }
-    // The clauses of the stages that pin more than an order.
-    if (const Token& next = lexer.Peek(); IsIdent(next, "ACCESS") || IsIdent(next, "BUILD")) {
-        return Status::NotImplemented(std::string(next.text) +
-                                      " in a plan variant is not implemented: a variant "
-                                      "states a join order only" + At(next));
+    // ACCESS <binding> <pin> {, <binding> <pin>} (CX-S3a).
+    if (IsIdent(lexer.Peek(), "ACCESS")) {
+        lexer.Next();
+        while (true) {
+            PlanVariantSpec::Access access;
+            const Token binding = lexer.Next();
+            if (binding.type != TokenType::kIdent) {
+                return Status::InvalidArgument(
+                    "ACCESS names a relation of the statement, then its pin" + At(binding));
+            }
+            access.binding = std::string(binding.text);
+            access.binding_at = binding.byte_offset;
+            Token arm = lexer.Next();
+            if (arm.type == TokenType::kKeyword && arm.kw == parser::Keyword::kNot) {
+                access.pin.forbid = true;
+                arm = lexer.Next();
+            }
+            const auto named = arm.type == TokenType::kIdent ? ArmFromName(arm.text)
+                                                             : std::nullopt;
+            if (!named.has_value()) {
+                return Status::InvalidArgument(
+                    "an ACCESS pin is TUPLE_KEY, INDEX [<name>], CABIN or SCAN, or NOT before "
+                    "one of the first three" + At(arm));
+            }
+            access.pin.arm = *named;
+            if (access.pin.forbid && access.pin.arm == ArmPin::Arm::kScan) {
+                return Status::InvalidArgument(
+                    "NOT SCAN is no pin: the walk is what every other arm falls back to" +
+                    At(arm));
+            }
+            // A pinned index may be named; a forbidden one is every index.
+            if (access.pin.arm == ArmPin::Arm::kIndex &&
+                lexer.Peek().type == TokenType::kIdent && !IsIdent(lexer.Peek(), "VARIANT") &&
+                !IsIdent(lexer.Peek(), "BUILD")) {
+                const Token index = lexer.Next();
+                if (access.pin.forbid) {
+                    return Status::InvalidArgument(
+                        "NOT INDEX takes no name: it rules out every index" + At(index));
+                }
+                access.pin.index = std::string(index.text);
+                access.index_at = index.byte_offset;
+            }
+            variant.access.push_back(std::move(access));
+            if (lexer.Peek().type != TokenType::kComma) break;
+            lexer.Next();
+        }
+    }
+    // The clause of the stage that pins a build.
+    if (const Token& next = lexer.Peek(); IsIdent(next, "BUILD")) {
+        return Status::NotImplemented(
+            "BUILD in a plan variant is not implemented: a variant states a join order and "
+            "access pins" + At(next));
     }
     return variant;
 }
@@ -234,7 +281,39 @@ StatusOr<PlanVariant> ResolvePlanVariant(const std::vector<std::string>& binding
     }
     auto order = ResolvePlanOrder(bindings, spec);
     if (!order.ok()) return order.status();
-    return PlanVariant{spec.name, spec.rule, order.value()};
+    PlanVariant variant{spec.name, spec.rule, order.value(), {}};
+    if (!spec.access.empty()) variant.access.resize(bindings.size());
+    for (const PlanVariantSpec::Access& access : spec.access) {
+        std::size_t position = bindings.size();
+        for (std::size_t w = 0; w < bindings.size(); ++w) {
+            if (SameName(bindings[w], access.binding)) position = w;
+        }
+        if (position == bindings.size()) {
+            return Status::InvalidArgument("variant '" + spec.name + "': ACCESS names '" +
+                                           access.binding +
+                                           "', which the statement does not bind" +
+                                           At(access.binding_at));
+        }
+        if (variant.access[position].pins()) {
+            return Status::InvalidArgument("variant '" + spec.name + "': ACCESS pins '" +
+                                           access.binding + "' twice" + At(access.binding_at));
+        }
+        variant.access[position] = access.pin;
+    }
+    return variant;
+}
+
+std::string PlanAccessText(const std::vector<ArmPin>& access,
+                           const std::vector<std::string>& bindings) {
+    std::string out;
+    for (std::size_t w = 0; w < access.size() && w < bindings.size(); ++w) {
+        const ArmPin& pin = access[w];
+        if (!pin.pins()) continue;
+        out.append(out.empty() ? " ACCESS " : ", ").append(bindings[w]);
+        out.append(pin.forbid ? " NOT " : " ").append(ArmName(pin.arm));
+        if (!pin.index.empty()) out.append(" ").append(pin.index);
+    }
+    return out;
 }
 
 StatusOr<AlterPlanStmt> ParseAlterPlan(std::string_view line) {

@@ -226,10 +226,10 @@ TEST(PlanDdlTest, ElseIsMandatoryAndLastAndEveryRefusalNamesItsByte) {
     EXPECT_EQ(refusal("VARIANT v WHEN ARG(1) = 1 ORDER (a, b) VARIANT V ELSE ORDER (b, a)").code(),
               StatusCode::kInvalidArgument)
         << "one name twice";
-    // The clauses of later stages, at their word.
-    s = refusal("VARIANT v ELSE ORDER (a, b) ACCESS a TUPLE_KEY");
+    // The clause of a later stage, at its word.
+    s = refusal("VARIANT v ELSE ORDER (a, b) BUILD a OFF");
     EXPECT_EQ(s.code(), StatusCode::kNotImplemented) << s.message();
-    EXPECT_EQ(refusal("VARIANT v ELSE ORDER (a, b) BUILD a OFF").code(),
+    EXPECT_EQ(refusal("VARIANT v ELSE ORDER (a, b) ACCESS a SCAN BUILD a OFF").code(),
               StatusCode::kNotImplemented);
     for (const std::string tail :
          {"", "VARIANT v ELSE", "VARIANT v ELSE ORDER a, b", "VARIANT v ELSE ORDER (a b)",
@@ -242,6 +242,51 @@ TEST(PlanDdlTest, ElseIsMandatoryAndLastAndEveryRefusalNamesItsByte) {
               StatusCode::kInvalidArgument);
     EXPECT_EQ(exec::ParseCreatePlan("CREATE PLAN 7 FOR SELECT 1 AS SEARCHED").status().code(),
               StatusCode::kInvalidArgument);
+}
+
+TEST(PlanDdlTest, AnAccessClausePinsOrForbidsOneArmARelation) {
+    const std::string head = "CREATE PLAN p FOR SELECT a.x FROM a JOIN b ON a.id = b.id ";
+    auto parsed = exec::ParseCreatePlan(
+        head + "VARIANT v WHEN ARG(1) = 1 ORDER (a, b) ACCESS a TUPLE_KEY, b INDEX b_ix "
+               "VARIANT w ELSE ORDER (b, a) ACCESS b NOT CABIN, a INDEX;");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& first = parsed.value().variants[0].access;
+    ASSERT_EQ(first.size(), 2u);
+    EXPECT_EQ(first[0].binding, "a");
+    EXPECT_EQ(first[0].pin, (exec::ArmPin{exec::ArmPin::Arm::kTupleKey, false, ""}));
+    EXPECT_EQ(first[1].pin, (exec::ArmPin{exec::ArmPin::Arm::kIndex, false, "b_ix"}));
+    const auto& second = parsed.value().variants[1].access;
+    ASSERT_EQ(second.size(), 2u);
+    EXPECT_EQ(second[0].pin, (exec::ArmPin{exec::ArmPin::Arm::kCabin, true, ""}));
+    EXPECT_EQ(second[1].pin, (exec::ArmPin{exec::ArmPin::Arm::kIndex, false, ""}));
+
+    // By written position, whatever order the clause names them in.
+    auto variant = exec::ResolvePlanVariant({"a", "b"}, 1, parsed.value().variants[1]);
+    ASSERT_TRUE(variant.ok()) << variant.status().message();
+    ASSERT_EQ(variant.value().access.size(), 2u);
+    EXPECT_EQ(variant.value().access[0].arm, exec::ArmPin::Arm::kIndex);
+    EXPECT_TRUE(variant.value().access[1].forbid);
+    EXPECT_EQ(exec::PlanAccessText(variant.value().access, {"a", "b"}),
+              " ACCESS a INDEX, b NOT CABIN");
+    // A variant that pins nothing carries nothing.
+    auto bare = exec::ParseCreatePlan(head + "VARIANT v ELSE ORDER (a, b)");
+    ASSERT_TRUE(bare.ok());
+    auto unpinned = exec::ResolvePlanVariant({"a", "b"}, 0, bare.value().variants[0]);
+    ASSERT_TRUE(unpinned.ok());
+    EXPECT_TRUE(unpinned.value().access.empty());
+
+    const auto refusal = [&](const std::string& access) {
+        auto bad = exec::ParseCreatePlan(head + "VARIANT v ELSE ORDER (a, b) ACCESS " + access);
+        if (!bad.ok()) return bad.status();
+        auto resolved = exec::ResolvePlanVariant({"a", "b"}, 0, bad.value().variants[0]);
+        EXPECT_FALSE(resolved.ok()) << access;
+        return resolved.ok() ? Status::OK() : resolved.status();
+    };
+    for (const std::string access :
+         {"a NOT SCAN", "a HASH", "a", "TUPLE_KEY", "a TUPLE_KEY b SCAN", "a NOT INDEX b_ix",
+          "c SCAN", "a SCAN, A TUPLE_KEY", "a TUPLE_KEY,"}) {
+        EXPECT_EQ(refusal(access).code(), StatusCode::kInvalidArgument) << access;
+    }
 }
 
 TEST(PlanDdlTest, AlterPlanReadsItsThreeActions) {
@@ -322,6 +367,35 @@ TEST(AdminPlanTextTest, ARowsTextReadsBackAsWhatWasWritten) {
     EXPECT_EQ(back.variants[0].order, row.variants[0].order);
     EXPECT_TRUE(back.variants[1].rule.is_else());
     EXPECT_EQ(back.variants[1].order, row.variants[1].order);
+}
+
+TEST(AdminPlanTextTest, AVariantsPinsReadBackAndARowWithNoneReadsAsBefore) {
+    exec::PlanRow row = SampleRow();
+    row.variants[0].access = {exec::ArmPin{exec::ArmPin::Arm::kTupleKey, false, ""},
+                              exec::ArmPin{exec::ArmPin::Arm::kIndex, false, "loans_user_idx"}};
+    row.variants[1].access = {exec::ArmPin{}, exec::ArmPin{exec::ArmPin::Arm::kCabin, true, ""}};
+    const std::string text = exec::EncodeAdminPlanText(row, 7);
+    EXPECT_NE(text.find("narrow 0,1 access=0:TUPLE_KEY;1:INDEX:loans_user_idx WHEN "),
+              std::string::npos)
+        << text;
+    EXPECT_NE(text.find("wide 1,0 access=1:!CABIN ELSE\n"), std::string::npos) << text;
+    exec::PlanRow back;
+    ASSERT_TRUE(exec::DecodeAdminPlanText(text, back).ok()) << text;
+    EXPECT_EQ(back.variants[0].access, row.variants[0].access);
+    EXPECT_EQ(back.variants[1].access, row.variants[1].access);
+    // No pin, no field: the text S1b wrote.
+    EXPECT_EQ(exec::EncodeAdminPlanText(SampleRow(), 7).find("access="), std::string::npos);
+
+    const std::string head = "v1 fp=2 oids=4001,4002 bindings=u,l args=2 at=5 variants=1\na 0,1 ";
+    for (const std::string access :
+         {"access=2:SCAN", "access=0:SCAN;0:CABIN", "access=0:HASH", "access=0:!SCAN",
+          "access=0:CABIN:x", "access=0:!INDEX:x", "access=0:INDEX:", "access=x:SCAN",
+          "access=", "access=0:SCAN;", "access=0:scan"}) {
+        exec::PlanRow kept;
+        EXPECT_EQ(exec::DecodeAdminPlanText(head + access + " ELSE\nS", kept).code(),
+                  StatusCode::kCorruption)
+            << access;
+    }
 }
 
 TEST(AdminPlanTextTest, ATextThatBreaksARuleOfThePlanIsCorruptionAndLeavesTheRow) {
@@ -920,6 +994,161 @@ TEST_F(AdminPlanTest, ForOneOrderTheChainIsTheSameWhoeverChoseTheOrder) {
     EXPECT_NE(sorted_turned, sorted_written);
     under_each_value(sorted, sorted_turned);
     EXPECT_EQ(Rows(sorted).size(), 3u);
+}
+
+// The step line ANALYZE prints for the relation at written position `id`.
+std::string StepLine(const std::string& plan, int id) {
+    const std::size_t at = plan.find("step " + std::to_string(id) + " ");
+    if (at == std::string::npos) return {};
+    return plan.substr(at, plan.find("\\n", at) - at);
+}
+
+TEST_F(AdminPlanTest, APinRestrictsTheLadderAndTheRowsAreTheSame) {
+    // CX-S3a: results is written first (step 0), models second (step 1),
+    // and results.model_id carries an index.
+    Ok("CREATE INDEX results_model ON results (model_id)");
+    const std::string sql = Where("5");
+    const std::vector<std::string> rows = Rows(sql);
+    ASSERT_EQ(rows.size(), 58u);
+    // Models first, unpinned: the ladder enters results by its index, and
+    // says nothing of whose choice that was.
+    Ok("CREATE PLAN p FOR " + sql + kModelsFirst);
+    std::string plan = Plan(sql);
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 IndexProbe ", 0), 0u) << plan;
+    EXPECT_EQ(plan.find("arm=plan"), std::string::npos) << plan;
+    Ok("DROP PLAN p");
+
+    const auto pinned = [&](const std::string& access) {
+        const std::string made = Run("CREATE PLAN p FOR " + sql + kModelsFirst + access);
+        EXPECT_EQ(made.rfind("CREATED PLAN", 0), 0u) << access << " -> " << made;
+        const std::string out = Plan(sql);
+        EXPECT_NE(out.find("planned order=plan plan=p/models_first\\n"), std::string::npos)
+            << access << ": " << out;
+        EXPECT_EQ(Rows(sql), rows) << access;  // CX-R2
+        Ok("DROP PLAN p");
+        return out;
+    };
+    // The walk, where the ladder would have taken the index.
+    plan = pinned(" ACCESS results SCAN");
+    EXPECT_EQ(StepLine(plan, 0).find("Index"), std::string::npos) << plan;
+    EXPECT_NE(StepLine(plan, 0).find(" arm=plan"), std::string::npos) << plan;
+    EXPECT_EQ(StepLine(plan, 1).find(" arm=plan"), std::string::npos) << plan;
+    // The same by forbidding the index.
+    plan = pinned(" ACCESS results NOT INDEX");
+    EXPECT_EQ(StepLine(plan, 0).find("Index"), std::string::npos) << plan;
+    EXPECT_NE(StepLine(plan, 0).find(" arm=plan"), std::string::npos) << plan;
+    // The index by name: what the ladder took anyway, now held to it.
+    plan = pinned(" ACCESS results INDEX results_model, models SCAN");
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 IndexProbe ", 0), 0u) << plan;
+    EXPECT_NE(StepLine(plan, 0).find(" arm=plan"), std::string::npos) << plan;
+    EXPECT_NE(StepLine(plan, 1).find(" arm=plan"), std::string::npos) << plan;
+
+    // In the written order models is a tuple key probe; kept from it, it is
+    // walked, and the join's rows are the same.
+    Ok("CREATE PLAN p FOR " + sql + std::string(kAsWritten) + " ACCESS models NOT TUPLE_KEY");
+    plan = Plan(sql);
+    EXPECT_EQ(StepLine(plan, 1).find("Probe"), std::string::npos) << plan;
+    EXPECT_NE(StepLine(plan, 1).find(" arm=plan"), std::string::npos) << plan;
+    EXPECT_EQ(Rows(sql), rows);
+    EXPECT_NE(Run("SELECT variants FROM sys.plans")
+                  .find("as_written ELSE ORDER (results, models) ACCESS models NOT TUPLE_KEY"),
+              std::string::npos);
+    Ok("DROP PLAN p");
+    Ok("CREATE PLAN p FOR " + sql + std::string(kAsWritten) + " ACCESS models TUPLE_KEY");
+    plan = Plan(sql);
+    EXPECT_EQ(StepLine(plan, 1).rfind("step 1 Probe ", 0), 0u) << plan;
+    EXPECT_NE(StepLine(plan, 1).find(" arm=plan"), std::string::npos) << plan;
+    EXPECT_EQ(Rows(sql), rows);
+}
+
+TEST_F(AdminPlanTest, AKeyedPinIsMetByTheStrictRangeAWalkRankWouldOtherwiseTake) {
+    // results' step carries a strict tuple key range and an unindexed
+    // equality: unpinned, the filter scan outranks the strict range (ruling
+    // (a) at TupleKeyRangeOf). The range is a tuple key arm the ladder can
+    // take for the step, so a TUPLE_KEY pin is met by it - the walk ranks are
+    // not the pin's class and do not stand in its way.
+    const std::string sql =
+        "SELECT results.pnl, models.name FROM results JOIN models ON results.model_id = "
+        "models.id WHERE results.id > 3 AND results.id < 40 AND results.pnl = 10";
+    const std::vector<std::string> rows = Rows(sql);
+    ASSERT_EQ(rows.size(), 1u);
+    Ok("CREATE PLAN p FOR " + sql + std::string(kAsWritten));
+    std::string plan = Plan(sql);
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 FilterScan ", 0), 0u) << plan;
+    Ok("DROP PLAN p");
+    const std::string made =
+        Run("CREATE PLAN p FOR " + sql + std::string(kAsWritten) + " ACCESS results TUPLE_KEY");
+    ASSERT_EQ(made.rfind("CREATED PLAN", 0), 0u) << made;
+    plan = Plan(sql);
+    EXPECT_NE(plan.find("planned order=plan plan=p/as_written\\n"), std::string::npos) << plan;
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 Range ", 0), 0u) << plan;
+    EXPECT_EQ(Rows(sql), rows);  // CX-R2
+}
+
+TEST_F(AdminPlanTest, APinNoArmMeetsIsRefusedAtCreateAndDeclinedAtACompile) {
+    Ok("CREATE INDEX results_model ON results (model_id)");
+    const std::string sql = Where("5");
+    const std::vector<std::string> rows = Rows(sql);
+    // CX-R2 at CREATE: a pin is never forced, so one nothing meets is no plan.
+    for (const std::string access :
+         {" ACCESS models CABIN", " ACCESS results INDEX no_such_index",
+          " ACCESS models INDEX results_model", " ACCESS results TUPLE_KEY"}) {
+        const DispatchOutcome out = Do("CREATE PLAN p FOR " + sql + kModelsFirst + access);
+        EXPECT_EQ(out.status.code(), StatusCode::kInvalidArgument) << access << out.response;
+        EXPECT_NE(out.response.find("cannot take the pinned arm"), std::string::npos)
+            << out.response;
+    }
+    EXPECT_TRUE(PlanRows().empty());
+
+    Ok("CREATE PLAN p FOR " + sql + kModelsFirst + " ACCESS results INDEX results_model");
+    // CX-Q4 (a): the pinned index cannot be dropped under an enabled plan.
+    const std::string refused = Run("DROP INDEX results_model");
+    EXPECT_EQ(refused.rfind("ERR plan 'p' pins this index", 0), 0u) << refused;
+    EXPECT_NE(Plan(sql).find("step 0 IndexProbe "), std::string::npos);
+    // Disabled, the plan declares nothing; enabled again over the missing
+    // index, its variant is declined statement by statement, never forced.
+    Ok("ALTER PLAN p DISABLE");
+    ASSERT_EQ(Run("DROP INDEX results_model").rfind("ERR", 0), std::string::npos);
+    Ok("ALTER PLAN p ENABLE");
+    const std::string declined = Plan(sql);
+    EXPECT_NE(declined.find("planned order=written plan=p/models_first plan_declined=1\\n"),
+              std::string::npos)
+        << declined;
+    EXPECT_EQ(declined.find("arm=plan"), std::string::npos) << declined;
+    EXPECT_EQ(Rows(sql), rows);
+    EXPECT_GE(table().declined(), 2u);
+
+    // `REPLACE VARIANT` compiles nothing, and still knows an index by name -
+    // refused at the name's own byte.
+    const std::string replace =
+        "ALTER PLAN p REPLACE VARIANT models_first ELSE ORDER (models, results) "
+        "ACCESS results INDEX results_model";
+    EXPECT_EQ(CodeOf(replace), StatusCode::kNotFound);
+    EXPECT_NE(Run(replace).find("(byte " + std::to_string(replace.rfind("results_model")) + ")"),
+              std::string::npos)
+        << Run(replace);
+    Ok("CREATE INDEX results_model ON results (model_id)");
+    Ok("ALTER PLAN p REPLACE VARIANT models_first ELSE ORDER (models, results) ACCESS results "
+       "INDEX results_model");
+    const std::string served = Plan(sql);
+    EXPECT_NE(served.find("planned order=plan plan=p/models_first\\n"), std::string::npos)
+        << served;
+    EXPECT_NE(StepLine(served, 0).find(" arm=plan"), std::string::npos) << served;
+
+    // The pins are the row's, and a mount's.
+    exec::CapturedPlans captured;
+    exec::AdminPlans next_run;
+    ASSERT_TRUE(exec::LoadPlans(boot_->catalog, store_, nullptr, captured, next_run).ok());
+    const std::vector<exec::PlanRow> stored = PlanRows();
+    ASSERT_EQ(stored.size(), 1u);
+    const auto loaded = next_run.Find(stored.front().key);
+    ASSERT_NE(loaded, nullptr);
+    ASSERT_EQ(loaded->variants.front().access.size(), 2u);
+    EXPECT_EQ(loaded->variants.front().access[0],
+              (exec::ArmPin{exec::ArmPin::Arm::kIndex, false, "results_model"}));
+    EXPECT_EQ(next_run.EnabledPinningIndex(results_, "RESULTS_MODEL"),
+              std::optional<std::string>("p"));
+    EXPECT_FALSE(next_run.EnabledPinningIndex(models_, "results_model").has_value());
 }
 
 TEST_F(AdminPlanTest, StatementStatsNameThePlanAndTheVariantThatRan) {

@@ -756,6 +756,11 @@ struct Step {
     // fc44ac6 vs 080f73a, 2026-08).
     std::optional<BuildKey> build;
 
+    // Whether an administrator's plan pinned this step's arm (CX-S3a,
+    // `admin_plans.hpp` `ArmPin`): the ladder chose it among the arms the
+    // pin left. Display only - `ANALYZE` prints `arm=plan`.
+    bool arm_pinned = false;
+
     // The function conjuncts placed at this step (see FunctionPredicate).
     // Below the hot fields with `build`, for `build`'s reason: most steps
     // carry none, and the evaluation sites test for empty first.
@@ -935,6 +940,9 @@ struct PlanNote {
     // (`kAdmin`, `kAdminDeclined`); empty otherwise.
     std::string plan_name;
     std::string variant;
+    // `kAdminDeclined`: why - the compile's own refusal of the variant's
+    // order or pin, or the sort rule. For `CREATE PLAN`'s refusal.
+    std::string declined_because;
 };
 
 // The relations a block the join planner searches may hold and still have
