@@ -13,6 +13,7 @@
 #include "kds/server/kwp_session.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/checkpoint_log.hpp"
+#include "kds/stats/refusal_stats.hpp"
 #include "kds/stats/relation_stats.hpp"
 #include "kds/stats/statement_stats.hpp"
 #include "kds/parser/fingerprint.hpp"
@@ -410,24 +411,44 @@ TEST_F(ShowSugarTest, OneShapeIsOneRowWhateverItsLiterals) {
 
 TEST_F(ShowSugarTest, AKindWithNoFingerprintIsOneRowAtFetchIdZero) {
     stats::StatementStats::ResetForTest();
-    ASSERT_EQ(Text("DELETE FROM t WHERE id = 1").rfind("ERR", 0), std::string::npos);
-    ASSERT_EQ(Text("DELETE FROM t WHERE id = 99").rfind("ERR", 0), std::string::npos);
+    // Two keys nothing ever bound: a PURGE of a live key is refused.
+    ASSERT_EQ(Text("PURGE FROM t WHERE id = 98"), "PURGED 0");
+    ASSERT_EQ(Text("PURGE FROM t WHERE id = 99"), "PURGED 0");
     ASSERT_EQ(Text("FLIBBERTIGIBBET EVERYTHING").rfind("ERR", 0), 0u);
     ASSERT_EQ(Text("INSERT INTO t VALUES (20, 'beta')").rfind("INSERTED", 0), 0u);
 
     const std::string reply =
         Text("SELECT kind, fetch_id, calls, refused FROM sys.statement_stats ORDER BY kind");
     const auto shown = testing_view::ReadViewText(reply);
-    EXPECT_EQ(shown.Column("kind"), (std::vector<std::string>{"DELETE", "INSERT", "OTHER"}))
+    EXPECT_EQ(shown.Column("kind"), (std::vector<std::string>{"INSERT", "OTHER", "PURGE"}))
         << reply;
-    EXPECT_EQ(shown.Find("kind", "DELETE", "fetch_id"), "0") << reply;
-    EXPECT_EQ(shown.Find("kind", "DELETE", "calls"), "2") << reply;
+    EXPECT_EQ(shown.Find("kind", "PURGE", "fetch_id"), "0") << reply;
+    EXPECT_EQ(shown.Find("kind", "PURGE", "calls"), "2") << reply;
     EXPECT_EQ(shown.Find("kind", "OTHER", "refused"), "1") << reply;
     // An INSERT carries its fingerprint, taken from the parse it ran.
     EXPECT_EQ(shown.Find("kind", "INSERT", "fetch_id"),
               std::to_string(parser::FingerprintOf("INSERT INTO t VALUES (20, 'beta')")->fetch_id))
         << reply;
     EXPECT_EQ(testing_view::MetaField(Text("SHOW META"), "statement_stats_dropped"), "0");
+}
+
+TEST_F(ShowSugarTest, TwoDeletesOfOneShapeAreOneRowApartFromTheirSelectTwins) {
+    // DF-Q11 (a): a DELETE is keyed by its shape, taken from the parse it ran.
+    stats::StatementStats::ResetForTest();
+    ASSERT_EQ(Text("DELETE FROM t WHERE id = 1"), "DELETED 1");
+    ASSERT_EQ(Text("DELETE FROM t WHERE id = 99"), "DELETED 0");
+    ASSERT_EQ(Text("SELECT * FROM t WHERE id = 1").rfind("ERR", 0), std::string::npos);
+
+    const std::string reply =
+        Text("SELECT kind, fetch_id, calls FROM sys.statement_stats ORDER BY kind");
+    const auto shown = testing_view::ReadViewText(reply);
+    EXPECT_EQ(shown.Column("kind"), (std::vector<std::string>{"DELETE", "SELECT"})) << reply;
+    EXPECT_EQ(shown.Find("kind", "DELETE", "calls"), "2") << reply;
+    EXPECT_EQ(shown.Find("kind", "DELETE", "fetch_id"),
+              std::to_string(parser::FingerprintOf("DELETE FROM t WHERE id = 1")->fetch_id))
+        << reply;
+    EXPECT_NE(shown.Find("kind", "DELETE", "fetch_id"), shown.Find("kind", "SELECT", "fetch_id"))
+        << reply;
 }
 
 TEST_F(ShowSugarTest, AnUpdateWithASubqueryIsKeyedByItsOwnShape) {
@@ -444,6 +465,310 @@ TEST_F(ShowSugarTest, AnUpdateWithASubqueryIsKeyedByItsOwnShape) {
               std::vector<std::string>{std::to_string(parser::FingerprintOf(update)->fetch_id)})
         << reply;
 }
+
+// ---- DF-S1: what a statement shape costs -------------------------------------
+//
+// `instructions/v3.2.0/workorder-df-statistics-coverage.md` §2 part A. The
+// fixture's dispatcher has no clock, so every elapsed time here is 0; the
+// timed cells install a wait clock of their own.
+
+TEST_F(ShowSugarTest, AShapesRowsAreWhatItAnsweredOrAffected) {
+    stats::StatementStats::ResetForTest();
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (300, 1, 'a'), (301, 2, 'b'), "
+                   "(302, 3, 'c')")
+                  .rfind("INSERTED", 0),
+              0u);
+    ASSERT_EQ(Text("SELECT id FROM t WHERE id >= 300"), "id\\n300\\n301\\n302");
+    ASSERT_EQ(Text("SELECT id FROM t WHERE id >= 301"), "id\\n301\\n302");
+    ASSERT_EQ(Text("UPDATE t SET v = v + 1 WHERE id >= 301"), "UPDATED 2");
+    ASSERT_EQ(Text("DELETE FROM t WHERE id = 302"), "DELETED 1");
+    // A fold answers its groups, a sorted statement what its quota let out,
+    // a view its rows: each through the one sink.
+    ASSERT_EQ(Text("SELECT count(*) FROM t WHERE id > 299"), "count(*)\\n2");
+    ASSERT_EQ(Text("SELECT id FROM t WHERE id >= 300 ORDER BY v DESC LIMIT 1"), "id\\n301");
+    ASSERT_EQ(Text("SELECT name FROM sys.tables WHERE name = 't'"), "name\\nt");
+
+    const auto shown = testing_view::ReadViewText(
+        Text("SELECT kind, rows, shape_text FROM sys.statement_stats"));
+    const auto rows_of = [&](std::string_view text) {
+        return shown.Find("shape_text", text, "rows");
+    };
+    EXPECT_EQ(shown.Find("kind", "INSERT", "rows"), "3");
+    EXPECT_EQ(rows_of("SELECT id FROM t WHERE id >= 300"), "5") << "two calls of one shape";
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "rows"), "2");
+    EXPECT_EQ(shown.Find("kind", "DELETE", "rows"), "1");
+    EXPECT_EQ(rows_of("SELECT count(*) FROM t WHERE id > 299"), "1");
+    EXPECT_EQ(rows_of("SELECT id FROM t WHERE id >= 300 ORDER BY v DESC LIMIT 1"), "1");
+    EXPECT_EQ(rows_of("SELECT name FROM sys.tables WHERE name = 't'"), "1");
+}
+
+TEST_F(ShowSugarTest, WhatAChainExaminedIsItsOwnShapesAndNullWhereNoChainRan) {
+    // ANALYZE runs the statement and prints what its chain counted; the
+    // shape's sums are those numbers once per call (DF-S1).
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (300, 1, 'a'), (301, 2, 'b')")
+                  .rfind("INSERTED", 0),
+              0u);
+    const std::string select = "SELECT name FROM t WHERE v >= 1";
+    const std::string plan = Text("ANALYZE " + select);
+    const auto counter = [&](std::string_view key) {
+        const std::size_t at = plan.find(key);
+        EXPECT_NE(at, std::string::npos) << plan;
+        return std::stoull(plan.substr(at + key.size()));
+    };
+    const std::uint64_t examined = counter(" examined=");
+    const std::uint64_t pages = counter(" pages=");
+    ASSERT_GT(examined, 0u) << plan;
+
+    stats::StatementStats::ResetForTest();
+    ASSERT_EQ(Text(select).rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Text(select).rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Text("ANALYZE " + select).rfind("ERR", 0), std::string::npos);
+    // `fetch_id` leaves the select list out, so the fold has a WHERE of its
+    // own to be a shape of its own.
+    ASSERT_EQ(Text("SELECT count(*) FROM t WHERE v > 0").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (303, 1, 'd')").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Text("UPDATE t SET v = 5 WHERE id = 303"), "UPDATED 1");
+    ASSERT_EQ(Text("SELECT name FROM sys.tables").rfind("ERR", 0), std::string::npos);
+    // A refused call ran no chain to its end: it adds nothing.
+    ASSERT_EQ(Text("SELECT name FROM nope WHERE v >= 1").rfind("ERR", 0), 0u);
+
+    const auto shown = testing_view::ReadViewText(Text(
+        "SELECT kind, rows_examined, pages, compile_us, shape_text FROM sys.statement_stats"));
+    const auto find = [&](std::string_view text, std::string_view column) {
+        return shown.Find("shape_text", text, column);
+    };
+    EXPECT_EQ(find(select, "rows_examined"), std::to_string(2 * examined));
+    EXPECT_EQ(find(select, "pages"), std::to_string(2 * pages));
+    // An ANALYZE is its own kind under the shape it names; its run is real.
+    EXPECT_EQ(shown.Find("kind", "ANALYZE", "rows_examined"), std::to_string(examined));
+    // A fold's chain counts as a walk's does.
+    EXPECT_NE(find("SELECT count(*) FROM t WHERE v > 0", "rows_examined"), "NULL");
+    // No step chain ran for an INSERT, an UPDATE's own walk or a view's rows:
+    // NULL, never 0 (DF-R7).
+    EXPECT_EQ(shown.Find("kind", "INSERT", "rows_examined"), "NULL");
+    EXPECT_EQ(shown.Find("kind", "INSERT", "pages"), "NULL");
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "rows_examined"), "NULL");
+    EXPECT_EQ(find("SELECT name FROM sys.tables", "rows_examined"), "NULL");
+    EXPECT_EQ(find("SELECT name FROM nope WHERE v >= 1", "rows_examined"), "NULL");
+    // `compile_us` is set by the statements that compile a chain of their
+    // own - 0 on this clockless dispatcher - and NULL for the rest.
+    EXPECT_EQ(find(select, "compile_us"), "0");
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "compile_us"), "0");
+    EXPECT_EQ(shown.Find("kind", "INSERT", "compile_us"), "NULL");
+    EXPECT_EQ(find("SELECT name FROM sys.tables", "compile_us"), "NULL");
+}
+
+TEST_F(ShowSugarTest, AnUpdatesSubqueryAddsNothingToTheUpdatesExaminedCount) {
+    // The SET subquery runs a chain through the SELECT path; its counters
+    // are no row's (DF-S0's census, §7 item 2), and its compile is not the
+    // UPDATE's.
+    stats::StatementStats::ResetForTest();
+    ASSERT_EQ(Text("UPDATE t SET v = (SELECT v FROM t WHERE id = 1) WHERE id = 1"), "UPDATED 1");
+    const auto shown = testing_view::ReadViewText(
+        Text("SELECT kind, rows, rows_examined, compile_us FROM sys.statement_stats"));
+    EXPECT_EQ(shown.Column("kind"), std::vector<std::string>{"UPDATE"});
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "rows"), "1");
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "rows_examined"), "NULL");
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "compile_us"), "0");
+}
+
+TEST_F(ShowSugarTest, AnInsertsConflictArmIsNotTheInsertsCompile) {
+    // `ON CONFLICT DO UPDATE` compiles its arm's WHERE once a conflicting
+    // row, inside a statement that compiles no chain of its own: the INSERT
+    // shape keeps a NULL `compile_us`.
+    stats::StatementStats::ResetForTest();
+    const std::string upsert =
+        "INSERT INTO t (id, v, name) VALUES (400, 1, 'a'), (1, 2, 'b') "
+        "ON CONFLICT (id) DO UPDATE SET v = 9";
+    ASSERT_EQ(Text(upsert).rfind("ERR", 0), std::string::npos) << Text(upsert);
+    const auto shown = testing_view::ReadViewText(
+        Text("SELECT kind, compile_us, rows_examined FROM sys.statement_stats"));
+    EXPECT_EQ(shown.Column("kind"), std::vector<std::string>{"INSERT"});
+    EXPECT_EQ(shown.Find("kind", "INSERT", "compile_us"), "NULL");
+    EXPECT_EQ(shown.Find("kind", "INSERT", "rows_examined"), "NULL");
+}
+
+TEST_F(ShowSugarTest, AReturningWritesRowsAreCountedOnce) {
+    // The rows went out through the sink and are the write's count too:
+    // `rows` is the count, not the two added.
+    stats::StatementStats::ResetForTest();
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (410, 1, 'a'), (411, 2, 'b') RETURNING id")
+                  .rfind("ERR", 0),
+              std::string::npos);
+    ASSERT_EQ(Text("UPDATE t SET v = 3 WHERE id >= 410 RETURNING v").rfind("ERR", 0),
+              std::string::npos);
+    const auto shown =
+        testing_view::ReadViewText(Text("SELECT kind, rows FROM sys.statement_stats"));
+    EXPECT_EQ(shown.Find("kind", "INSERT", "rows"), "2");
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "rows"), "2");
+}
+
+TEST_F(ShowSugarTest, EachSplitColumnIsItsOwnWaitClassAndOtherIsTheRest) {
+    // The view's mapping, pinned with a value of its own in every class: a
+    // swapped column, a class left out of `other_us` or one counted twice
+    // reads as another number here.
+    stats::StatementStats::ResetForTest();
+    const auto cls = [](stats::WaitClass c) { return static_cast<std::size_t>(c); };
+    sched::SessionCostSample delta;
+    delta.on_cpu_ns = 1'000'000;
+    delta.class_ns[cls(stats::WaitClass::kScheduler)] = 2'000'000;
+    delta.class_ns[cls(stats::WaitClass::kCommit)] = 3'000'000;
+    delta.class_ns[cls(stats::WaitClass::kUserIo)] = 4'000'000;
+    delta.class_ns[cls(stats::WaitClass::kNetwork)] = 5'000'000;
+    delta.class_ns[cls(stats::WaitClass::kApplication)] = 6'000'000;
+    // Everything else of DB time is `other_us`; idle is no DB time and no column.
+    delta.class_ns[cls(stats::WaitClass::kSystemIo)] = 10'000'000;
+    delta.class_ns[cls(stats::WaitClass::kCrossCore)] = 20'000'000;
+    delta.class_ns[cls(stats::WaitClass::kResource)] = 40'000'000;
+    delta.class_ns[cls(stats::WaitClass::kConcurrency)] = 80'000'000;
+    delta.class_ns[cls(stats::WaitClass::kIdle)] = 900'000'000;
+    delta.page_reads = 11;
+    delta.log_bytes = 12;
+    delta.log_records = 13;
+    stats::StatementCost cost;
+    cost.timed = delta;
+    stats::StatementStats::Record(0, 77, "SYNC", false, 1, 1, {}, {}, cost);
+
+    const auto shown = testing_view::ReadViewText(
+        Text("SELECT fetch_id, timed_calls, cpu_us, sched_us, commit_us, io_us, net_us, app_us, "
+             "other_us, page_reads, log_bytes, log_records FROM sys.statement_stats "
+             "WHERE fetch_id = 77"));
+    const auto column = [&](std::string_view name) { return shown.Find("fetch_id", "77", name); };
+    EXPECT_EQ(column("timed_calls"), "1");
+    EXPECT_EQ(column("cpu_us"), "1000");
+    EXPECT_EQ(column("sched_us"), "2000");
+    EXPECT_EQ(column("commit_us"), "3000");
+    EXPECT_EQ(column("io_us"), "4000");
+    EXPECT_EQ(column("net_us"), "5000");
+    EXPECT_EQ(column("app_us"), "6000");
+    EXPECT_EQ(column("other_us"), "150000");
+    EXPECT_EQ(column("page_reads"), "11");
+    EXPECT_EQ(column("log_bytes"), "12");
+    EXPECT_EQ(column("log_records"), "13");
+}
+
+TEST_F(ShowSugarTest, ARefusedCallIsAConflictOnlyWhenItsCodeIsTxnConflict) {
+    stats::StatementStats::ResetForTest();
+    stats::RefusalStats::ResetForTest();
+    // A second session's write of a row an open transaction wrote: the
+    // synchronous path cannot wait, so it answers the conflict.
+    Session other(txn::IsolationLevel::kReadCommitted);
+    ASSERT_EQ(Text("BEGIN").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Text("UPDATE t SET v = 7 WHERE id = 1"), "UPDATED 1");
+    const std::string lost = Text(other, "UPDATE t SET v = 8 WHERE id = 1");
+    ASSERT_EQ(lost.rfind("ERR TXN_CONFLICT", 0), 0u) << lost;
+    ASSERT_EQ(Text("COMMIT").rfind("ERR", 0), std::string::npos);
+    // A refusal that is no conflict: a key already bound.
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (1, 1, 'dup')").rfind("ERR", 0), 0u);
+    ASSERT_EQ(Text("FLIBBERTIGIBBET EVERYTHING").rfind("ERR", 0), 0u);
+
+    const auto shown = testing_view::ReadViewText(
+        Text("SELECT kind, calls, refused, conflicts FROM sys.statement_stats"));
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "calls"), "2");
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "refused"), "1");
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "conflicts"), "1");
+    EXPECT_EQ(shown.Find("kind", "INSERT", "refused"), "1");
+    EXPECT_EQ(shown.Find("kind", "INSERT", "conflicts"), "0");
+    EXPECT_EQ(shown.Find("kind", "OTHER", "conflicts"), "0");
+
+    // `sys.refusal_stats`: one row a code this core refused with, named as
+    // the wire's registry names it.
+    const auto codes = testing_view::ReadViewText(
+        Text("SELECT core, code, count FROM sys.refusal_stats ORDER BY code"));
+    EXPECT_EQ(codes.Column("code"),
+              (std::vector<std::string>{"ALREADY_EXISTS", "INVALID_ARGUMENT", "TXN_CONFLICT"}));
+    EXPECT_EQ(codes.Column("count"), (std::vector<std::string>{"1", "1", "1"}));
+    EXPECT_EQ(codes.Find("code", "TXN_CONFLICT", "core"), "0");
+    // A statement that answered is in no row.
+    ASSERT_EQ(Text("SELECT v FROM t WHERE id = 1").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(testing_view::ReadViewText(Text("SELECT count FROM sys.refusal_stats")).rows.size(),
+              3u);
+}
+
+TEST_F(ShowSugarTest, AShapesHistogramSumsToItsCalls) {
+    stats::StatementStats::ResetForTest();
+    for (int id : {1, 2, 3, 4}) {
+        ASSERT_EQ(Text("SELECT v FROM t WHERE id = " + std::to_string(id)).rfind("ERR", 0),
+                  std::string::npos);
+    }
+    ASSERT_EQ(Text("DELETE FROM t WHERE id = 99"), "DELETED 0");
+    const auto hist = testing_view::ReadViewText(
+        Text("SELECT fetch_id, kind, bucket, lo_us, count FROM sys.statement_histogram "
+             "ORDER BY kind"));
+    // No clock: every call took 0 us, bucket 0, whose lower bound is 0.
+    EXPECT_EQ(hist.Column("kind"), (std::vector<std::string>{"DELETE", "SELECT"}))
+        << "one row per shape and non-empty bucket";
+    EXPECT_EQ(hist.Find("kind", "SELECT", "bucket"), "0");
+    EXPECT_EQ(hist.Find("kind", "SELECT", "lo_us"), "0");
+    EXPECT_EQ(hist.Find("kind", "SELECT", "count"), "4");
+    EXPECT_EQ(hist.Find("kind", "SELECT", "fetch_id"),
+              std::to_string(parser::FingerprintOf("SELECT v FROM t WHERE id = 1")->fetch_id));
+    EXPECT_EQ(hist.Find("kind", "DELETE", "count"), "1");
+}
+
+TEST_F(ShowSugarTest, AStatementOutsideATaskOfItsSessionLeavesTheSplitNull) {
+    // DF-R7: nothing books this run's time or log to the session, so the
+    // split is NULL and the call is in no `timed_calls`.
+    stats::StatementStats::ResetForTest();
+    ASSERT_EQ(Text("SELECT v FROM t WHERE id = 1").rfind("ERR", 0), std::string::npos);
+    const auto shown = testing_view::ReadViewText(
+        Text("SELECT kind, timed_calls, cpu_us, sched_us, commit_us, io_us, net_us, app_us, "
+             "other_us, page_reads, log_bytes, log_records FROM sys.statement_stats"));
+    EXPECT_EQ(shown.Find("kind", "SELECT", "timed_calls"), "0");
+    for (const char* column : {"cpu_us", "sched_us", "commit_us", "io_us", "net_us", "app_us",
+                               "other_us", "page_reads", "log_bytes", "log_records"}) {
+        EXPECT_EQ(shown.Find("kind", "SELECT", column), "NULL") << column;
+    }
+}
+
+#ifndef KDS_WAIT_INSTRUMENTATION_OFF
+TEST_F(ShowSugarTest, AStatementInsideATaskOfItsSessionIsTimedByTheSessionsDelta) {
+    // DF-Q6 (a): the session's statistics at the statement's end less at its
+    // head. A wait clock that moves 1 ms per reading, so the statement's own
+    // CPU is above the column's microsecond however fast the machine is.
+    struct TickingClock final : sched::Clock {
+        mutable sched::MonoTimeNs now = 1'000'000;
+        sched::MonoTimeNs Now() const override { return now += 1'000'000; }
+    } clock;
+    sched::SetWaitClock(&clock);
+    struct Restore {
+        ~Restore() { sched::SetWaitClock(nullptr); }
+    } restore;
+    stats::StatementStats::ResetForTest();
+
+    Session session(txn::IsolationLevel::kReadCommitted);
+    // Time the session spent before the statement is not the statement's.
+    session.WaitStats()->on_cpu_ns.add(5'000'000'000);
+    session.WaitStats()->events[static_cast<std::size_t>(stats::WaitEvent::kCommitWalFlush)]
+        .total_ns.add(7'000'000'000);
+    std::string reply;
+    auto body = [&]() -> sched::Coro {
+        reply = Text(session, "SELECT v FROM t WHERE id = 1");
+        co_return Status::OK();
+    };
+    sched::CoroTask task(sched::SchedulingGroup::kForeground, body());
+    task.wait_state_mut().session = session.WaitStats();
+    ASSERT_EQ(task.Poll(), sched::PollResult::kDone);
+    ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+    // The same shape once more outside a task: counted, not timed.
+    ASSERT_EQ(Text("SELECT v FROM t WHERE id = 2").rfind("ERR", 0), std::string::npos);
+
+    const auto shown = testing_view::ReadViewText(
+        Text("SELECT kind, calls, timed_calls, cpu_us, sched_us, commit_us, io_us, net_us, "
+             "app_us, other_us, page_reads, log_bytes, log_records FROM sys.statement_stats"));
+    EXPECT_EQ(shown.Find("kind", "SELECT", "calls"), "2");
+    EXPECT_EQ(shown.Find("kind", "SELECT", "timed_calls"), "1");
+    const std::uint64_t cpu_us = std::stoull(*shown.Find("kind", "SELECT", "cpu_us"));
+    EXPECT_GE(cpu_us, 1'000u) << "at least one tick of the statement's own CPU";
+    EXPECT_LT(cpu_us, 1'000'000u) << "none of the session's 5 s before the statement";
+    // It waited on nothing, read no page from a device and, with no log,
+    // appended nothing: 0, not NULL - the call was timed.
+    for (const char* column : {"sched_us", "commit_us", "io_us", "net_us", "app_us", "other_us",
+                               "page_reads", "log_bytes", "log_records"}) {
+        EXPECT_EQ(shown.Find("kind", "SELECT", column), "0") << column;
+    }
+}
+#endif
 
 // ---- BO-S6: `sys.relation_stats`' activity columns --------------------------
 

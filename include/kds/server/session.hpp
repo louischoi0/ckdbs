@@ -127,6 +127,9 @@ public:
         if (wait_stats_ == nullptr) wait_stats_ = sched::MakeSessionWaitStats();
         return wait_stats_.get();
     }
+    // The same where they exist, and null for a session nothing has made
+    // them for: a reader that must not register the session by asking.
+    const sched::SessionWaitStats* wait_stats() const noexcept { return wait_stats_.get(); }
 
     State state() const noexcept { return state_; }
     bool in_explicit_txn() const noexcept { return state_ != State::kIdle; }

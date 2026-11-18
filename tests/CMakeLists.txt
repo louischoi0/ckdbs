@@ -7,6 +7,7 @@ add_executable(kds_tests
     waker_table_test.cpp
     sim_waker_table_test.cpp
     two_core_rig_test.cpp
+    statement_cost_rig_test.cpp
     peer_writeback_gate_rig_test.cpp
     lock_wake_rig_test.cpp
     fk_cross_core_rig_test.cpp
@@ -133,6 +134,7 @@ add_executable(kds_tests
     lock_wait_log_test.cpp
     relation_stats_test.cpp
     statement_stats_test.cpp
+    refusal_stats_test.cpp
     decay_test.cpp
     optimizer_signals_test.cpp
     cabin_optimizer_test.cpp

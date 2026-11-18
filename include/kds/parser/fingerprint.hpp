@@ -170,8 +170,8 @@ namespace kds::parser {
 // though neither hash moved.
 //
 // The distinction that is easy to get wrong: making a statement
-// fingerprintable that previously was not - adding `DELETE` to the
-// patternable leading words, say - **does not** require a bump. Nothing
+// fingerprintable that previously was not - as DF-Q11 (a) added `DELETE`
+// to the patternable leading words - **does not** require a bump. Nothing
 // already stored changes meaning; a shape that hashed to X still hashes to
 // X. Only a change that moves an existing statement's hash invalidates
 // what is on disk.

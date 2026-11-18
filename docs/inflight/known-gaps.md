@@ -1831,6 +1831,31 @@ Verified on `bo-relation-stats-checkpoints` at `86d1fe1a` (BO-S7). Owned by
   `docs/spec/wal.md` §11. Checking the generation first at each park closes
   it.
 
+### What a statement shape costs (DF-S1)
+
+Verified on `da-q8-memory-bound-key` (branch
+`worktree-df-statistics-coverage`) at `ee89842e`. Owned by
+`docs/spec/sys-views.md` §6.1-§6.1b.
+
+- **A write's read cost is in no column.** `rows_examined` and `pages` are
+  NULL for an `UPDATE` and a `DELETE` - their walk is the dispatcher's and
+  counts nothing - and for a query-layer `SELECT`, whose walks are not
+  summed; a subquery's chain is counted nowhere. `page_reads` and the time
+  split do cover them.
+- **The cost columns' statement path is not measured.** DF-S0's spike
+  priced another body of code; the measurement is the milestone's close.
+- **`sys.statement_stats` and `sys.statement_histogram` copy every shape
+  under each part's latch**, and a shape is 624 bytes, from 184: the delay
+  a read puts on a part's writer (above) grew with it, unmeasured.
+- **`sys.refusal_stats` assumes one writer a core** and checks nothing: two
+  threads recording as one core lose counts. Its bound, 64 codes, is
+  asserted against the wire registry's last entry as it stands, not against
+  a count, which the registry does not have.
+- **No cell** empties the stores across a process restart or a restore
+  (an in-process restart keeps them, above), counts a deadlock's victim in
+  `conflicts`, or reads `rows` under a KWP `max_rows`; the two-core cell has
+  not run under `tsan`.
+
 ## Wait events and ASH (CJ)
 
 Verified on `cj-wait-events-ash` at the milestone's close

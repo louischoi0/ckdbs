@@ -84,6 +84,21 @@ std::string FormatDbTimeLine(const SessionWaitStats& before, const SessionWaitSt
     return "DB time " + ms(total) + " ms" + parts;
 }
 
+SessionCostSample SampleSessionCost(const SessionWaitStats& session) noexcept {
+    SessionCostSample out;
+    out.on_cpu_ns = session.on_cpu_ns.get();
+    for (std::size_t i = 1; i < stats::kWaitEventCount; ++i) {
+        out.class_ns[static_cast<std::size_t>(stats::kWaitEvents[i].wait_class)] +=
+            session.events[i].total_ns.get();
+    }
+    out.page_reads = session.events[Index(stats::WaitEvent::kIoPageRead)].count.get() +
+                     session.events[Index(stats::WaitEvent::kIoVarHeapRead)].count.get() +
+                     session.events[Index(stats::WaitEvent::kIoScanRingRead)].count.get();
+    out.log_bytes = session.log_bytes.get();
+    out.log_records = session.log_records.get();
+    return out;
+}
+
 bool RunningTaskBooksTo(const SessionWaitStats* session) noexcept {
     const TaskWaitState* t = Ctx().current;
     return t != nullptr && session != nullptr && t->session == session;
@@ -237,6 +252,13 @@ void FlushOnCpu() noexcept {
     const MonoTimeNs now = WaitNow();
     BookCpu(c, *c.current, now - c.cpu_since);
     c.cpu_since = now;
+}
+
+void BookLogAppend(std::uint64_t bytes) noexcept {
+    const TaskWaitState* const task = Ctx().current;
+    if (task == nullptr || task->session == nullptr) return;
+    task->session->log_bytes.add(bytes);
+    task->session->log_records.add(1);
 }
 
 void WaitOnPollExit(TaskWaitState& task, bool parked, bool done) noexcept {
