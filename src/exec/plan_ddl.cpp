@@ -99,8 +99,8 @@ StatusOr<PlanVariantSpec> ParseVariant(parser::Lexer& lexer) {
                                                              : std::nullopt;
             if (!named.has_value()) {
                 return Status::InvalidArgument(
-                    "an ACCESS pin is TUPLE_KEY, INDEX [<name>], CABIN or SCAN, or NOT before "
-                    "one of the first three" + At(arm));
+                    "an ACCESS pin is TUPLE_KEY, INDEX [<name>], CABIN [(<column>)] or SCAN, or "
+                    "NOT before one of the first three" + At(arm));
             }
             access.pin.arm = *named;
             if (access.pin.forbid && access.pin.arm == ArmPin::Arm::kScan) {
@@ -117,8 +117,37 @@ StatusOr<PlanVariantSpec> ParseVariant(parser::Lexer& lexer) {
                     return Status::InvalidArgument(
                         "NOT INDEX takes no name: it rules out every index" + At(index));
                 }
-                access.pin.index = std::string(index.text);
-                access.index_at = index.byte_offset;
+                access.pin.name = std::string(index.text);
+                access.name_at = index.byte_offset;
+            }
+            // A pinned Cabin may be named by the column it is on (CX-S3b):
+            // the one spelling that admits a controller-made Cabin.
+            if (access.pin.arm == ArmPin::Arm::kCabin &&
+                lexer.Peek().type == TokenType::kLParen) {
+                const Token open = lexer.Next();
+                if (access.pin.forbid) {
+                    return Status::InvalidArgument(
+                        "NOT CABIN takes no name: it rules out every Cabin" + At(open));
+                }
+                const Token column = lexer.Next();
+                // `()` and a list never closed are simply wrong; anything
+                // else between the parentheses is a Cabin key this pin
+                // cannot name.
+                const Token& after = lexer.Peek();
+                if (column.type == TokenType::kRParen || column.type == TokenType::kEof ||
+                    (column.type == TokenType::kIdent && after.type == TokenType::kEof)) {
+                    return Status::InvalidArgument(
+                        "CABIN (<column>) names the column its Cabin is on" +
+                        At(column.type == TokenType::kIdent ? after : column));
+                }
+                if (column.type != TokenType::kIdent || after.type != TokenType::kRParen) {
+                    return Status::NotImplemented(
+                        "a pin naming an expression or predicate Cabin is not implemented: "
+                        "CABIN (<column>) names the Cabin on one column" + At(column));
+                }
+                lexer.Next();  // )
+                access.pin.name = std::string(column.text);
+                access.name_at = column.byte_offset;
             }
             variant.access.push_back(std::move(access));
             if (lexer.Peek().type != TokenType::kComma) break;
@@ -311,7 +340,12 @@ std::string PlanAccessText(const std::vector<ArmPin>& access,
         if (!pin.pins()) continue;
         out.append(out.empty() ? " ACCESS " : ", ").append(bindings[w]);
         out.append(pin.forbid ? " NOT " : " ").append(ArmName(pin.arm));
-        if (!pin.index.empty()) out.append(" ").append(pin.index);
+        if (pin.name.empty()) continue;
+        if (pin.arm == ArmPin::Arm::kCabin) {
+            out.append(" (").append(pin.name).append(")");
+        } else {
+            out.append(" ").append(pin.name);
+        }
     }
     return out;
 }

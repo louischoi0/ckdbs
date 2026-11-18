@@ -171,7 +171,8 @@ captured), `unkeyed`, `over_ceiling`, `declined` (a captured order declined
 for the statement), `admin_declined` (a plan's variant declined; `plan_name`
 and `variant` name it) or `written`. **NULL is a block the join planner
 did not order and no plan chose**: a statement over one relation under
-every `join_order`, and under `planned` and `fixed` also a join of tuple
+every `join_order` - unless it has an administrator's plan (CX-S3b), which
+reads `admin` or `admin_declined` - and under `planned` and `fixed` also a join of tuple
 key descents alone, a `SELECT *` join and a join with a subquery
 predicate, each of which runs its written order unsearched (under
 `written` those three read `written`). A subquery's compile never sets

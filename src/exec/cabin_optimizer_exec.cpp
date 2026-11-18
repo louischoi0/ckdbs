@@ -47,11 +47,25 @@ Status CabinOptimizerExecutor::Tick(stats::OptimizerSignals& signals,
 
 Status CabinOptimizerExecutor::Apply(const stats::ActionSet& actions,
                                      const std::function<bool()>& enabled) {
+    // A budget swap's DROP that a plan RESTRICTs (CX-S3b): the CREATE it was
+    // to pay for does not run, or the budget would grow by a Cabin at every
+    // such swap.
+    bool swap_refused = false;
     for (const stats::ActionItem& action : actions) {
         if (!enabled()) return Status::OK();  // PO8: checked between actions
         Status applied = Status::OK();
+        // The swap's CREATE is the action its DROP is followed by
+        // (`CabinOptimizer::Decide` emits the two back to back).
+        const bool pays_for_refused_swap = std::exchange(swap_refused, false);
         switch (action.action) {
             case stats::CabinAction::kCreate:
+                if (pays_for_refused_swap) {
+                    // The candidate waits (PO6), as it does where no victim
+                    // repays it: back to CANDIDATE, nothing built.
+                    controller_.NoteBuildFailed(action.rel_oid, action.col_pos);
+                    ++counters_.builds_deferred;
+                    break;
+                }
                 applied = ApplyCreate(action, enabled);
                 break;
             case stats::CabinAction::kExtend:
@@ -61,6 +75,19 @@ Status CabinOptimizerExecutor::Apply(const stats::ActionSet& actions,
                 applied = ApplyHeal(action);
                 break;
             case stats::CabinAction::kDrop:
+                // CX-Q4 (a), CX-S3b: a Cabin an enabled administrator's
+                // plan names is read through by that plan's statements, and
+                // dropping it on the engine's judgement would move their arm
+                // - the implicit change CX-Q6 (a) rules out. The entry stays
+                // as the decision left it (DECAYING; ACTIVE after a
+                // quality-collapse DROP) and is asked again at a later tick;
+                // a plan made between this check and the row's
+                // removal has its variant declined (CX-Q4 (b)).
+                if (NamedByAPlan(action)) {
+                    ++counters_.drops_restricted;
+                    swap_refused = action.reason == stats::ActionReason::kBudgetSwap;
+                    break;
+                }
                 applied = ApplyDrop(action);
                 break;
         }
@@ -420,6 +447,17 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
     }
     ++counters_.heals;
     return Status::OK();
+}
+
+bool CabinOptimizerExecutor::NamedByAPlan(const stats::ActionItem& action) {
+    if (plans_ == nullptr || !plans_->any()) return false;
+    auto access = catalog_.InitTableAccess(action.rel_oid);
+    if (!access.ok() || action.col_pos >= access.value()->schema.columns.size()) return false;
+    return plans_
+        ->EnabledPinningCabin(
+            action.rel_oid,
+            catalog::NameView(access.value()->schema.columns[action.col_pos].name))
+        .has_value();
 }
 
 Status CabinOptimizerExecutor::ApplyDrop(const stats::ActionItem& action) {

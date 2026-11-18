@@ -69,11 +69,14 @@ void AdminPlans::Install(std::shared_ptr<const AdminPlan> plan, bool enabled) {
     const CapturedKey key = plan->key;
     auto [it, fresh] = partition.plans.try_emplace(key);
     if (fresh) plans_.fetch_add(1, std::memory_order_relaxed);
-    if (it->second.enabled != enabled) {
-        if (enabled) enabled_.fetch_add(1, std::memory_order_relaxed);
-        else enabled_.fetch_sub(1, std::memory_order_relaxed);
-    }
+    if (it->second.enabled != enabled) CountEnabled(key, enabled);
     it->second = Entry{std::move(plan), enabled};
+}
+
+void AdminPlans::CountEnabled(const CapturedKey& key, bool enabled) noexcept {
+    const std::uint64_t one = enabled ? 1 : ~std::uint64_t{0};  // +1 or -1
+    enabled_.fetch_add(one, std::memory_order_relaxed);
+    if (key.n == 1) enabled_single_.fetch_add(one, std::memory_order_relaxed);
 }
 
 bool AdminPlans::Erase(const CapturedKey& key) {
@@ -81,7 +84,7 @@ bool AdminPlans::Erase(const CapturedKey& key) {
     const LatchGuard hold(&partition.latch);
     const auto it = partition.plans.find(key);
     if (it == partition.plans.end()) return false;
-    if (it->second.enabled) enabled_.fetch_sub(1, std::memory_order_relaxed);
+    if (it->second.enabled) CountEnabled(key, false);
     plans_.fetch_sub(1, std::memory_order_relaxed);
     partition.plans.erase(it);
     return true;
@@ -91,20 +94,30 @@ std::optional<std::string> AdminPlans::EnabledNaming(catalog::Oid oid) {
     return EnabledWhere([&](const CapturedKey& key, const AdminPlan&) { return key.Names(oid); });
 }
 
-std::optional<std::string> AdminPlans::EnabledPinningIndex(catalog::Oid oid,
-                                                           std::string_view index) {
+std::optional<std::string> AdminPlans::EnabledPinning(catalog::Oid oid, ArmPin::Arm arm,
+                                                      std::string_view name) {
     return EnabledWhere([&](const CapturedKey& key, const AdminPlan& plan) {
         for (const PlanVariant& variant : plan.variants) {
             for (std::size_t w = 0; w < variant.access.size() && w < key.n; ++w) {
                 const ArmPin& pin = variant.access[w];
-                if (key.oids[w] == oid && pin.arm == ArmPin::Arm::kIndex && !pin.forbid &&
-                    SameName(pin.index, index)) {
+                if (key.oids[w] == oid && pin.arm == arm && !pin.forbid &&
+                    SameName(pin.name, name)) {
                     return true;
                 }
             }
         }
         return false;
     });
+}
+
+std::optional<std::string> AdminPlans::EnabledPinningIndex(catalog::Oid oid,
+                                                           std::string_view index) {
+    return EnabledPinning(oid, ArmPin::Arm::kIndex, index);
+}
+
+std::optional<std::string> AdminPlans::EnabledPinningCabin(catalog::Oid oid,
+                                                           std::string_view column) {
+    return EnabledPinning(oid, ArmPin::Arm::kCabin, column);
 }
 
 void AdminPlans::ForgetRelation(catalog::Oid oid) {
@@ -116,7 +129,7 @@ void AdminPlans::ForgetRelation(catalog::Oid oid) {
                 ++it;
                 continue;
             }
-            if (it->second.enabled) enabled_.fetch_sub(1, std::memory_order_relaxed);
+            if (it->second.enabled) CountEnabled(it->first, false);
             plans_.fetch_sub(1, std::memory_order_relaxed);
             it = partition.plans.erase(it);
         }

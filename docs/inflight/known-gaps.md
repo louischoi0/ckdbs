@@ -2055,21 +2055,59 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   measured; the overhead measurement is owed at CX's close. Owned by
   `exec/admin_plans.hpp`.
 
-- **CX-S3 is built in part: controller-made Cabins are still eligible to
-  the ladder (CX-Q6 (a) not built), a Cabin's drop is not RESTRICTed, and
-  one relation's arm cannot be pinned.** Verified at CX-S3a on
-  `cx-plan-change-option`. CX-Q6 (a) would make an `auto`-origin Cabin
-  serve a read only through a plan that pins it; today the ladder takes
-  one as it takes a declared Cabin, so switching the cabin controller on
-  can still move a step's arm on its own (the controller is experimental
-  and off by default). A `CABIN` pin names no Cabin, so nothing ties a
-  plan to one: a dropped Cabin leaves the pin unmet and the variant
-  declined, counted in `plan_declined`. A statement over one relation
-  takes no plan (`NotImplemented`), because the compile asks for a plan
-  only at a join block and CX-R6 keeps the point read free of the probe.
-  Not reached by a cell: a pinned `CABIN` arm that is met (no cell builds
-  a Cabin and pins it), a pinned key set, and a pin beside a value list.
-  Owned by `instructions/v3.2.0/workorder-cx-managed-plans.md`.
+- **With the cabin controller on and no plan naming its Cabins, the
+  controller accelerates nothing.** Verified at CX-S3b on
+  `cx-plan-change-option`. Since CX-Q6 (a) a controller-made Cabin is read
+  through only by a statement whose administrator's plan names it
+  (`cabin-controller.md` PO11), so a `cabin_optimizer = on` that used to
+  turn a hot filter scan into a Cabin probe on its own now builds the
+  Cabin and leaves the scan: someone - a DBA, an agent - has to issue
+  `CREATE PLAN ... ACCESS <relation> CABIN (<column>)` for each shape that
+  should read through it, and nothing proposes that plan (`ADVISE PLAN`
+  is CX-S7). An unnamed Cabin is probed by no statement's step, so it
+  observes no value, HEAL never fires for it, and an EXTEND - which a
+  foreign key reverse check's misses on a child's Cabin can still
+  trigger - finds nothing sighted to seed; it holds
+  a `sys.cabins` row and a budget page while its fingerprint stays hot.
+  An instance that ran with the controller on before this stage loses
+  the serve at the upgrade, with no refusal: the statements walk. And a
+  DROP a plan RESTRICTs is decided again at every tick while its
+  condition holds - each one a skipped action, a `drops_restricted` count
+  and a decision-log record - since the decision core is not told why it
+  did not land; noise, not a wrong state. Owned by
+  `docs/spec/cabin-controller.md`.
+
+- **A one-relation plan puts every one-relation `SELECT` through the plan
+  table, a point read included.** Verified at CX-S3b on
+  `cx-plan-change-option`. While at least one enabled plan is for a
+  statement over one relation, every top-level one-relation `SELECT` with
+  a fetch id probes the administrator's table - one partition latch - and
+  a statement the plan governs is compiled twice, unpinned and pinned.
+  With none enabled the cost is one relaxed load. CX-R6's "zero cost for
+  the unmanaged point path" therefore holds only while no one-relation
+  plan is enabled. Not measured; owed at CX's close. Owned by
+  `exec/admin_plans.hpp`.
+
+- **A named Cabin pin is by the column's name, and its drop RESTRICT has
+  a window.** Verified at CX-S3b on `cx-plan-change-option`. `ACCESS t
+  CABIN (c)` stores `c` as written: after `ALTER TABLE ... RENAME COLUMN`
+  the pin names no column and the RESTRICT no longer finds the Cabin, so
+  it can be dropped under the enabled plan. No statement is moved by that:
+  a pin is met only on a column the statement writes, so a statement of
+  the plan's shape names the old column and no longer compiles, and the
+  new spelling is another shape (the entry below). Only a variant `REPLACE
+  VARIANT` gave a pin on a column its statement does not write - it checks
+  the Cabin exists, not that the pin is met - is declined statement by
+  statement (counted, `plan_declined`), before the rename as after. A column Cabin's `DROP
+  CABIN` and the controller's DROP hold no relation lock, so a `CREATE
+  PLAN` naming the Cabin that lands between their check and the row's
+  removal is not seen: its variant is declined (CX-Q4 (b)), no result
+  changes. An expression or predicate Cabin cannot be named
+  (`NotImplemented`) and its drop is not RESTRICTed. Not reached by a
+  cell: a pinned `CABIN` arm on an expression, predicate or cover Cabin;
+  plan DDL racing a Cabin's drop; a one-relation plan under a streamed
+  `SELECT` or across a restart. Owned by
+  `instructions/v3.2.0/workorder-cx-managed-plans.md`.
 
 - **A renamed relation's plan reads `enabled` and matches nothing new.**
   A fetch id hashes names, so after `ALTER TABLE ... RENAME TO` or `RENAME

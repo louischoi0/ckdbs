@@ -43,11 +43,13 @@
 // **`ACCESS`** (CX-S3a) follows a variant's `ORDER`:
 //
 //   ACCESS <binding> <pin> {, <binding> <pin>}
-//   pin := TUPLE_KEY | INDEX [<index name>] | CABIN | SCAN
+//   pin := TUPLE_KEY | INDEX [<index name>] | CABIN [(<column>)] | SCAN
 //        | NOT TUPLE_KEY | NOT INDEX | NOT CABIN
 //
 // one pin a relation at most (`ArmPin`, `admin_plans.hpp`). `NOT SCAN` is
-// refused: the walk is what every arm falls back to. A `BUILD` clause
+// refused: the walk is what every arm falls back to. `CABIN (<column>)`
+// names the Cabin on that column (CX-S3b); an expression or predicate
+// Cabin cannot be named (`NotImplemented`). A `BUILD` clause
 // (CX-S5) is refused `NotImplemented` at its word.
 //
 // Every refusal carries the byte of the offending token in the command's
@@ -66,7 +68,9 @@ struct PlanVariantSpec {
         std::string binding;
         std::size_t binding_at = 0;
         ArmPin pin;
-        std::size_t index_at = 0;  // a named index's token, where `pin.index` is set
+        // A named index's token or a named Cabin's column, where the pin
+        // names one.
+        std::size_t name_at = 0;
     };
     std::vector<Access> access;
 };
