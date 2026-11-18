@@ -79,7 +79,7 @@ removes exactly that. **No live defect was found** at `cores > 1`.
 
 - **Order**: `instructions/v3.2.0/workorder-cz-checkpoint-roll-wait.md`
   §5 (CZ-S0, M1-M4); the operator's word, `raft-marks-2026-11-18.md`
-  §30.
+  §31.
 - **Driver**: `tools/bl_mixed.py`, unmodified, at `a4d2fb3b`.
 - **Raw output**: `archive/cz-s0-premise-v3.4.12-42-ga4d2fb3b/`.
   - `out/r<run>/<cell>/` holds each cell's driver JSON and server log;

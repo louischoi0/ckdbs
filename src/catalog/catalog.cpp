@@ -803,7 +803,7 @@ Status Catalog::Bootstrap() {
         }
     }
 
-    // Phase 5: the three declaration relations, sys.assertions,
+    // Phase 5: the four declaration relations, sys.assertions, sys.plans,
     // sys.transitions and sys.cabin_exprs - the catalog relations stored in ordinary user tuple
     // format (well_known.hpp explains why). Built here by hand rather than
     // through CreateTable() for two reasons: CreateTable() takes its oids
@@ -833,6 +833,9 @@ Status Catalog::Bootstrap() {
         // AQ-S1: an expression or predicate Cabin's `F`, by `cabin_id`.
         {kSysCabinExprsTable, "cabin_exprs", kCatalogPageCabinExprs,
          kSysCabinExprsColumnOidBase, "cabin_id", kTypeValInt64, 8},
+        // CX-S1a: a managed plan, by its shape's fetch id.
+        {kSysPlansTable, "plans", kCatalogPagePlans, kSysPlansColumnOidBase, "fetch_id",
+         kTypeValInt64, 8},
     };
     for (const Declarations& d : kDeclarations) {
         if (Status s = BootstrapDeclarations(

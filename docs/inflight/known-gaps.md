@@ -1965,13 +1965,50 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 ## Captured plans (CX)
 
-- **Captured orders do not survive a restart.** Verified at CX-S0 on
-  `cx-plan-change-option`. The table of `join_order = fixed` is memory
-  only, so every shape is captured again after a restart, from the
-  statistics of that run - and after a crash or a restore, which keep no
-  prior (`plan-stats.md` PS16), from priors the steward has just seeded.
-  A shape may therefore run one order before a restart and another after
-  it. Owned by `parser-v2.md` I12.
+- **A capture is lost if the instance crashes within about a second of
+  it.** Verified at CX-S1a on `cx-plan-change-option`. A capture is in
+  memory at the compile and written to `sys.plans` by core 0's `system`
+  task, once a second (CX-Q14 (a): a statement writes no log). A crash in
+  between loses it, and the shape is captured again at its next compile,
+  from the statistics of that run - so it may run one order before the
+  crash and another after. The row is logged but its write is not synced
+  on its own: it is durable with the next commit's sync or the next
+  checkpoint, so under an instance that only reads, the window is the
+  checkpoint interval. `captured_pending` counts what is waiting. Owned
+  by `parser-v2.md` I12.
+
+- **A captured plan has no state but present.** `INVALID` (CX-Q16) and
+  `DISABLED` are not built: a captured order that stops compiling is
+  declined statement by statement and counted, its row unchanged, and the
+  only act on a row is `DROP PLAN`. No administrator's plan exists yet
+  (`CREATE PLAN`, CX-S1b), so a shape that stays uncaptured cannot be
+  given one. Owned by `instructions/v3.2.0/workorder-cx-managed-plans.md`.
+
+- **A row naming a dropped relation can outlive the drop until the next
+  mount.** The persisting task removes such rows in the step after the
+  drop commits; if that step's scan or its delete fails, the oids it took
+  are not asked again in the run and the rows stay, inert - an oid is
+  never reissued - until a mount removes them. **And a removed row's text
+  stays in the relation's var-heap until the next mount's sweep**, as a
+  dropped declaration's does: here the removal is the engine's, so a
+  workload that creates, joins and drops relations grows `sys.plans`'
+  var-heap through the run. A dispatcher with no log
+  (a test rig) forgets nothing at a drop inside a transaction, its commit
+  naming no LSN. Owned by `exec/plan_catalog.hpp`.
+
+- **A mount refuses on a `sys.plans` it cannot scan or cannot delete
+  from**, as it does for any logged catalog relation, although the state
+  lost would cost only a recapture. A row it can scan and cannot read is
+  skipped. Not ruled on by the operator. Owned by `exec/plan_catalog.hpp`.
+
+- **The persisting task's failure path has no cell.** A step whose insert
+  fails puts the rest back on the queue; the table's own cell pins the
+  requeue, and no cell makes `InsertDeclaration` fail under the step. No
+  cell runs the step on its `system` tick or at the shutdown tail - every
+  cell calls `Expeditor::PersistCapturedPlans` itself - so removing either
+  call would pass the suite. The writeback run's pin allowance has no cell
+  of its own: four simulation cells abort without it. The simulation harness's instance neither
+  loads nor persists plans. Owned by `exec/plan_catalog.hpp`.
 
 - **A shape whose relation never gets a prior is searched at every
   compile, with no memo.** A capture waits for every relation of the block
@@ -2008,7 +2045,7 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   `parser-v2.md` I12.
 
 - **A shape running uncaptured is visible only in aggregate.** `SHOW
-  META` counts deferred, unkeyed, refused and uncompiled blocks for the
+  META` counts deferred, unkeyed, over-ceiling and declined blocks for the
   instance and `ANALYZE` names the reason for one statement; no view lists
   the shapes. Owned by `instructions/v3.2.0/workorder-cx-managed-plans.md`
   CX-R11.

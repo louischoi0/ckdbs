@@ -371,9 +371,12 @@ TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     // `DROP NAMESPACE` joined the list at AF-T3 - the first edit in the
     // *growing* direction, and the one the comment above did not schedule.
     // `DROP TRANSITION` joined it at BV-S2 (`docs/spec/transition.md`).
+    // `DROP PLAN` joined the dispatcher's at CX-S1a and not the parser's: a
+    // plan's drop is routed on its tokens, as a session statement is, and no
+    // production of the grammar reads it.
     EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response,
-              "ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP ASSERTION and "
-              "DROP TRANSITION are supported");
+              "ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP ASSERTION, "
+              "DROP TRANSITION and DROP PLAN are supported");
     EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR no relation named 't' (byte 11)");
 
     const auto parsed = parser::Parse("DROP EVERYTHING");

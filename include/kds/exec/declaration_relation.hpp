@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,13 +15,14 @@ namespace kds::wal {
 class WalManager;
 }
 
-// The two row-codec **declaration relations**, `sys.assertions` and
-// `sys.transitions` (`Catalog::DeclarationSchema`): one shape, one reader.
-// Each row is a constraint's declaration verbatim plus four fixed fields;
-// the parsed form is recovered by re-parsing `source_text`
-// (`assertion.md` AS10's model), so nothing here knows what a declaration
-// says. `assertion_catalog.hpp` and `transition_catalog.hpp` are the typed
-// faces.
+// The four row-codec **declaration relations**, `sys.assertions`,
+// `sys.transitions`, `sys.cabin_exprs` and `sys.plans`
+// (`Catalog::DeclarationSchema`): one shape, one reader. Each row is a
+// declaration's text plus four fixed fields; the parsed form is recovered
+// by re-parsing `source_text` (`assertion.md` AS10's model), so nothing here
+// knows what a declaration says. `assertion_catalog.hpp`,
+// `transition_catalog.hpp`, `cabin_ddl.hpp` and `plan_catalog.hpp` are the
+// typed faces.
 //
 // ---- Why this is not in catalog/ ----------------------------------------
 //
@@ -61,7 +63,8 @@ struct DeclarationRow {
     // The relation's own fixed column: sys.assertions' `cabin_root`,
     // sys.transitions' `column_no`.
     std::int64_t aux = 0;
-    // Reserved; every writer passes 0.
+    // The relation's own bits: `sys.plans`' origin (`plan_catalog.hpp`); 0
+    // from every other writer.
     std::uint32_t flags = 0;
     std::string name;
     std::string source_text;
@@ -93,9 +96,16 @@ StatusOr<std::vector<DeclarationRow>> DeclarationsOnRelation(catalog::Catalog& c
 // `AlreadyExists` when the name is taken - checked under the root page's
 // exclusive hold, so no other core publishes the name in between;
 // `NotImplemented` when `source_text` is longer than one var-heap value.
+//
+// `kUniqueByConstruction` skips the name check - a full scan of the relation
+// that resolves every row's spills - for a writer whose names cannot collide
+// because each holds its own row id (`sys.plans`' captured rows, written 64
+// a step by a `system` task). The root page is held all the same.
+enum class DeclarationName { kChecked, kUniqueByConstruction };
 Status InsertDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
                          wal::WalManager* wal, catalog::Oid rel_oid, std::string_view kind,
-                         const DeclarationRow& row);
+                         const DeclarationRow& row,
+                         DeclarationName name = DeclarationName::kChecked);
 
 // Retires the row named `name` (`SLOT_RETIRE`, no transaction) and returns
 // it. `NotFound` if there is none. The var-heap bytes its text occupied are
@@ -103,5 +113,13 @@ Status InsertDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
 StatusOr<DeclarationRow> DeleteDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
                                            wal::WalManager* wal, catalog::Oid rel_oid,
                                            std::string_view kind, std::string_view name);
+
+// Retires every row whose id is in `ids`, in one walk of the chain, and
+// answers how many it found. For a caller that already holds the rows - a
+// scan it has just made - and would otherwise pay a name scan a row.
+StatusOr<std::size_t> DeleteDeclarationsById(catalog::Catalog& catalog,
+                                             storage::PageStore& store, wal::WalManager* wal,
+                                             catalog::Oid rel_oid,
+                                             std::span<const std::uint64_t> ids);
 
 }  // namespace kds::exec

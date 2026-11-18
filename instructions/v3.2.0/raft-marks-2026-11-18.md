@@ -273,11 +273,29 @@ took under them.
 | **Does not settle** | the opening of DA; DA-Q0..Q7; a tag, a version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
 
-## 30. CZ opened; CZ-S0 started
+## 30. CX-S1a pushed with the hook skipped; the session handed off
+
+| | |
+|---|---|
+| **Word** | W19 (the CX/CY matter's), on CLA's report of CX-S1a at `98e3f214` on worktree `cx-plan-change-option`: *"push no verify, and hand off for now"* |
+| **Mark** | **Pushed to `main` with `--no-verify`**: **CX-S1a** - `sys.plans`, the fourth declaration relation (root page 18, **superblock 37**, which refuses 36), the captured orders of `join_order = fixed` written off the statement by core 0's `system` task and at a clean shutdown and loaded at a mount, `DROP PLAN`, `SHOW PLANS` - with its review applied and its stage log (the work order's §8); and, outside CX, a writeback run's pins riding an allowance of their own in the Debug pin ceiling (`page.md` §3). The hook was skipped; the full Debug suite ran 4639/4639 at `98e3f214` (`v3.4.12-53-g98e3f214`), and the merge of `origin/main` after it (`56d20394`: DA-Q8) brought documents only, no source, test, CMake file or script. Overhead not measured; measured at the milestone's close. **The session stops here**: CX-S1b is not started |
+| **Does not settle** | a tag, a version; whether a mount should refuse on a `sys.plans` it cannot scan (`known-gaps.md`, Captured plans), which CLA put to the operator and the word does not answer; what S1a built differently from an adopted item (CX-Q24 (a), the stage log states it); the opening of CX-S1b, which the standing go-ahead of §16 covers and this word pauses |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 31. CZ opened; CZ-S0 started
 
 | | |
 |---|---|
 | **Word** | W23 (the BL/CZ matter's), in a new session: *"Proceed with the CZ milestone."* (given in Korean; recorded in English) |
 | **Mark** | None on any CZ-Q item. **CZ opened; CZ-S0 (the premise and the census) started** on worktree `cz-checkpoint-roll-wait`, branch `worktree-cz-checkpoint-roll-wait`, from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`). CLA reads the word as opening the order and its first stage, and not as a mark: S0 writes no engine code and rests on no unmarked item. CZ-Q9 (the letter) was settled by §18. The measurement runs inside the standing budget (`CLAUDE.md`, "A measurement has a time budget"), which is the rule in force and not CZ-Q8's mark. **V0's bar is CZ-Q1 and is unmarked**: S0 reports its numbers against CLA's proposed bar and the verdict is the operator's. The session's shell is rooted outside this repository, so the worktree was made with `git worktree add` and not `EnterWorktree` |
 | **Does not settle** | CZ-Q0..Q8 and CZ-Q10; V0's verdict; the opening of CZ-S1 or of any later stage; H6; a merge, a push, a version |
-| **Recorded at** | this file (written as §22 on the work branch and renumbered §30 behind `origin/main`'s §22-§29 at its merge; the commits `936f76cf` and `890523a6` cite it as §22); the CZ order's header and §7; the CZ row and this file's row in `instructions/v3.2.0/index.md` |
+| **Recorded at** | this file (written as §22 on the work branch and renumbered at its two merges behind `origin/main`'s sections, §30 and then §31; the commits `936f76cf` and `890523a6` cite it as §22, `2102edb7` as §30); the CZ order's header and §7; the CZ row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 32. CZ-S0 pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W24 (the BL/CZ matter's): *"push no verify"* - after CLA's report of CZ-S0 at `2102edb7` on worktree `cz-checkpoint-roll-wait`, two questions on what the cadence-off cell turns off, and a handoff |
+| **Mark** | None. **CZ's opening and CZ-S0 go to `main` with `--no-verify`**, in this section's commit: the results file `bench/v3.4.12/results-cz-s0-premise-v3.4.12-42-ga4d2fb3b.md` with its archive, the order's §7 entry, CZ-R3's new bullet and CZ-Q11..Q13. The hook and the suite are skipped; no suite was run for this work, which changes no build input, and the source the merges brought is `origin/main`'s own. Overhead not measured; measured at the milestone's close |
+| **Does not settle** | V0's verdict (CZ-Q1); CZ-Q0..Q8 and CZ-Q10..Q13, each CLA's proposal only; the opening of CZ-S1; whether the quiet gate's 25.8-minute hold counts against the stage's measurement budget; a version |
+| **Recorded at** | this file; the order's header; this file's row in `instructions/v3.2.0/index.md` |

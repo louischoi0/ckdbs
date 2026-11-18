@@ -107,7 +107,14 @@ namespace {
 // later record's LSN moves with them. The relation's own rows are unlogged
 // (CR6), so no other record joins and
 // no record's format changes.
-constexpr std::uint32_t kGoldenLogCrc = 0x0291f13eu;
+// **Re-pinned at CX-S1a** (on `cx-plan-change-option`,
+// `instructions/v3.2.0/workorder-cx-managed-plans.md`): bootstrap creates
+// `sys.plans`, the fourth declaration relation, so its `sys.objects`,
+// `sys.tables` and six `sys.columns` rows join the stream and every later
+// record's LSN moves with them; its var-heap root takes a page id, so every
+// user page named after it is one higher. The script captures no plan, so
+// no row of the relation is logged, and no record's format changes.
+constexpr std::uint32_t kGoldenLogCrc = 0x336dc6cdu;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

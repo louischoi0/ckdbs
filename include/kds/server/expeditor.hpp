@@ -647,6 +647,13 @@ public:
     // carries the pages out; a failure is logged and the shutdown goes on.
     // Public for the cells that stop a volume by hand, as `ReclaimStep` is.
     void WriteRelationPriors();
+    // **The captured plans' persisting step** (CX-S1a, `exec/plan_catalog.hpp`):
+    // the queued captures of `join_order = fixed` written as logged
+    // `sys.plans` rows, and a dropped relation's rows removed. Core 0's
+    // `system` task calls it once a second and the shutdown tail until the
+    // queue is empty; a failure is logged, once a run of failures, and the
+    // next call tries again.
+    Status PersistCapturedPlans();
     // The instance's join planner statistics (`plan-stats.md`).
     stats::PlanStats& plan_stats() noexcept { return *plan_stats_; }
     void SetReclaimCutForTest(std::function<void(const char*)> hook) {
@@ -848,9 +855,13 @@ private:
     // `join_order`, the instance's one value, seeded from the config and
     // flipped by any core's `SET JOIN_ORDER`; and the captured plans of
     // `fixed`, one table every core's compile reads and fills (CX-S0,
-    // `exec/captured_plans.hpp`). Memory only: a restart captures again.
+    // `exec/captured_plans.hpp`), loaded at the mount from `sys.plans` and
+    // written back to it by `PersistCapturedPlans` (CX-S1a).
     std::atomic<exec::JoinOrder> join_order_{exec::JoinOrder::kFixed};
     exec::CapturedPlans captured_plans_;
+    // Whether the persisting step's last call failed: its warning is logged
+    // when a run of failures starts, not once a second through it.
+    bool plans_persist_failing_ = false;
     Latch optimizer_signals_latch_{LatchKind::kOptimizer};
     Latch cabin_view_latch_{LatchKind::kOptimizer};
     wal::CheckpointGate checkpoint_gate_;
