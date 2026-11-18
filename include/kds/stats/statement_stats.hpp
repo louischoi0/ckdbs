@@ -48,6 +48,14 @@ struct StatementShape {
     std::int64_t first_seen_us = 0;  // UTC epoch microseconds (TIMESTAMP)
     std::int64_t last_seen_us = 0;
     std::string shape_text;          // the first statement seen, cut to kShapeTextBytes
+    // **Where the shape's join order last came from** (CX-R11, CX-S1b):
+    // `admin`, `captured`, `searched`, `deferred`, `unkeyed`, `over_ceiling`,
+    // `declined`, `admin_declined` or `written`; empty for a shape with no
+    // join block, or none compiled yet. `plan_label` is `<plan>/<variant>`
+    // where an administrator's plan chose it. The latest compile's, on the
+    // core that saw the shape last.
+    std::string plan_source;
+    std::string plan_label;
 };
 
 // The `kind` of a statement: its first whitespace-separated token,
@@ -62,9 +70,13 @@ public:
 
     // One statement, at its end; its kind is `StatementKindOf(line)`.
     // `fetch_id` is 0 where the kind carries no fingerprint; `elapsed_us` is
-    // the statement whole, re-runs included.
+    // the statement whole, re-runs included. `plan_source` is empty for a
+    // statement that compiled no join block, and then the shape keeps what
+    // it had.
     static void Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view line,
-                       bool refused, std::uint64_t elapsed_us, std::int64_t now_us) noexcept;
+                       bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
+                       std::string_view plan_source = {},
+                       std::string_view plan_label = {}) noexcept;
 
     // Every shape, the cores' parts merged by key: calls, refusals and time
     // summed, the longest call the longest, the first statement the

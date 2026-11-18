@@ -334,6 +334,11 @@ std::string FormatPlan(const StepChain& chain) {
     // on the search whose answer was captured, `capture=deferred` on one
     // that was not; and `order=written capture=unkeyed|over_ceiling|declined`
     // for a block that ran as written without a search.
+    //
+    // An administrator's plan (CX-S1b) prints `order=plan plan=<name>/
+    // <variant>`, under every `join_order`; where its variant was declined
+    // for this statement, `order=written plan=<name>/<variant>
+    // plan_declined=1`.
     if (chain.plan_note.has_value()) {
         const PlanNote& note = *chain.plan_note;
         os << "planned order=";
@@ -358,6 +363,13 @@ std::string FormatPlan(const StepChain& chain) {
             case PlanSource::kUnkeyed: os << "written capture=unkeyed"; break;
             case PlanSource::kOverCeiling: os << "written capture=over_ceiling"; break;
             case PlanSource::kDeclined: os << "written capture=declined"; break;
+            case PlanSource::kAdmin:
+                os << "plan plan=" << note.plan_name << '/' << note.variant;
+                break;
+            case PlanSource::kAdminDeclined:
+                os << "written plan=" << note.plan_name << '/' << note.variant
+                   << " plan_declined=1";
+                break;
         }
         os << '\n';
     }

@@ -859,6 +859,9 @@ private:
     // written back to it by `PersistCapturedPlans` (CX-S1a).
     std::atomic<exec::JoinOrder> join_order_{exec::JoinOrder::kFixed};
     exec::CapturedPlans captured_plans_;
+    // The instance's administrator's plans (`exec/admin_plans.hpp`), loaded
+    // at the mount from `sys.plans` and written by the plan DDL (CX-S1b).
+    exec::AdminPlans admin_plans_;
     // Whether the persisting step's last call failed: its warning is logged
     // when a run of failures starts, not once a second through it.
     bool plans_persist_failing_ = false;

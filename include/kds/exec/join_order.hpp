@@ -81,8 +81,16 @@ constexpr std::optional<JoinOrder> ParseJoinOrder(std::string_view text) noexcep
 
 // The statement limits the planner prices against, handed to `Compile` by a
 // client's SELECT under `join_order = planned` or `fixed` (CB-S2, CC-S1,
-// CX-S0); under `written` none is handed.
+// CX-S0); under `written` they are handed only while an administrator's
+// plan is enabled, with `search` off (CX-S1b).
 struct PlanOptions {
+    // The instance's administrator's plans (`admin_plans.hpp`), or null:
+    // the first source of a block's order under every `join_order` (CX-R1).
+    class AdminPlans* admin = nullptr;
+    // Whether a block with no administrator's plan is searched. False under
+    // `join_order = written`: such a block compiles as it would with no
+    // options at all - the written order, unstamped and with no note.
+    bool search = true;
     // The core's view of the published statistics (CC-S3), or null: the
     // compile pins it only for a block it searches, so a point read and a
     // tuple key chain never touch it.
@@ -94,8 +102,10 @@ struct PlanOptions {
     // only there (CX-R7): a searched block runs its shape's captured order
     // where one is held, and its search's answer is captured otherwise.
     class CapturedPlans* captured = nullptr;
-    // The statement's text, for the row a capture is persisted as
-    // (`plan_catalog.hpp`); read only where a capture is made.
+    // The statement's text: for the row a capture is persisted as
+    // (`plan_catalog.hpp`), read only where a capture is made, and for the
+    // arguments an administrator's plan's rules read, lexed only where a
+    // plan with more than one variant matches.
     std::string_view statement;
     // `join_build_max_rows`: a build the model expects to bucket more rows
     // is priced as the per-row walk the executor falls back to; 0, no build.

@@ -1093,22 +1093,29 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (!swept.ok()) return swept.status();
     expeditor->recovery_.varheap_slots_swept = swept.value().released;
 
-    // **The captured plans, back in force before any statement compiles**
-    // (CX-S1a, `exec/plan_catalog.hpp`): `sys.plans` is logged, so what
-    // recovery left is every capture a `system` step wrote, and a shape
-    // among them is not searched again. After the sweep above, so a row
-    // this removes - one naming a relation that is gone - leaves its text
-    // to the next mount's sweep, as any dropped declaration does.
+    // **The plans, back in force before any statement compiles** (CX-S1a,
+    // CX-S1b, `exec/plan_catalog.hpp`): `sys.plans` is logged, so what
+    // recovery left is every capture a `system` step wrote and every plan a
+    // `CREATE PLAN` made, and a shape among them is not searched again.
+    // After the sweep above, so a row this removes - a captured one naming a
+    // relation that is gone - leaves its text to the next mount's sweep, as
+    // any dropped declaration does.
     {
-        auto unreadable =
-            exec::LoadCapturedPlans(expeditor->database_->catalog, *expeditor->store_,
-                                    expeditor->wal_.get(), expeditor->captured_plans_);
+        auto unreadable = exec::LoadPlans(expeditor->database_->catalog, *expeditor->store_,
+                                          expeditor->wal_.get(), expeditor->captured_plans_,
+                                          expeditor->admin_plans_);
         if (!unreadable.ok()) return unreadable.status();
         if (unreadable.value() > 0) {
             expeditor->logger_->Warn(
                 "plans", std::to_string(unreadable.value()) +
-                             " sys.plans row(s) could not be read and were not loaded; their "
-                             "shapes are captured again");
+                             " sys.plans row(s) could not be read and were not loaded; a "
+                             "captured shape among them is captured again");
+        }
+        if (expeditor->admin_plans_.plans() > 0) {
+            expeditor->logger_->Info(
+                "plans", "loaded " + std::to_string(expeditor->admin_plans_.plans()) +
+                             " administrator's plan(s), " +
+                             std::to_string(expeditor->admin_plans_.enabled()) + " enabled");
         }
         if (expeditor->captured_plans_.loaded() > 0) {
             expeditor->logger_->Info("plans",
@@ -1422,6 +1429,7 @@ OptimizerSurface Expeditor::Optimizer() {
     surface.plan_stats = &*plan_stats_;
     surface.join_order = &join_order_;
     surface.captured_plans = &captured_plans_;
+    surface.admin_plans = &admin_plans_;
     surface.cabin_optimizer_on = &cabin_optimizer_on_;
     if (cabin_controller_) {
         surface.controller = &*cabin_controller_;

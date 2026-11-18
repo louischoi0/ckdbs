@@ -884,31 +884,57 @@ struct SortKey {
     bool descending = false;
 };
 
-// Where a planned block's order came from (CC-S4, CX-S0). Every value from
-// `kCaptured` down is `join_order = fixed`'s alone (`captured_plans.hpp`).
+// Where a planned block's order came from (CC-S4, CX-S0, CX-S1b). The
+// values from `kCaptured` to `kDeclined` are `join_order = fixed`'s alone
+// (`captured_plans.hpp`); the last two are an administrator's plan's, under
+// every value (`admin_plans.hpp`).
 enum class PlanSource : std::uint8_t {
-    kSearched,     // the search, at this compile
-    kMemo,         // the core's memo of an earlier search (`planned`)
-    kCaptured,     // the shape's captured order
-    kCapturing,    // the search, whose answer this compile captured
-    kDeferred,     // the search, not captured: a relation has no prior, or a DDL is open
-    kUnkeyed,      // the written order: no capture key fits the block
-    kOverCeiling,  // the written order: the captured table is full
-    kDeclined,     // the written order: the captured one was declined for this statement
+    kSearched,       // the search, at this compile
+    kMemo,           // the core's memo of an earlier search (`planned`)
+    kCaptured,       // the shape's captured order
+    kCapturing,      // the search, whose answer this compile captured
+    kDeferred,       // the search, not captured: a relation has no prior, or a DDL is open
+    kUnkeyed,        // the written order: no capture key fits the block
+    kOverCeiling,    // the written order: the captured table is full
+    kDeclined,       // the written order: the captured one was declined for this statement
+    kAdmin,          // an administrator's plan's variant
+    kAdminDeclined,  // the written order: the plan's variant was declined for this statement
 };
+
+// The name a plan source reads as in `sys.statement_stats`' `plan_source`
+// (CX-R11): which of CX-R1's sources ran, and for the written order why.
+constexpr std::string_view PlanSourceName(PlanSource source) noexcept {
+    switch (source) {
+        case PlanSource::kSearched:
+        case PlanSource::kMemo:
+        case PlanSource::kCapturing: return "searched";
+        case PlanSource::kCaptured: return "captured";
+        case PlanSource::kDeferred: return "deferred";
+        case PlanSource::kUnkeyed: return "unkeyed";
+        case PlanSource::kOverCeiling: return "over_ceiling";
+        case PlanSource::kDeclined: return "declined";
+        case PlanSource::kAdmin: return "admin";
+        case PlanSource::kAdminDeclined: return "admin_declined";
+    }
+    return "?";
+}
 
 // What the join planner says of a planned block (CC-S3): where its order
 // came from and, for a block priced at this compile, the rows it estimated
 // each executed slot passes on, the statistics generation the estimates
 // read (0: none published), and the chosen order's cost against the written
 // order's (1 when the written order runs). A block that was not priced - a
-// captured order, or the written one under `fixed` - read no statistic and
-// carries no estimate.
+// captured order, an administrator's plan, or the written one under `fixed`
+// - read no statistic and carries no estimate.
 struct PlanNote {
     PlanSource source = PlanSource::kSearched;
     std::vector<double> estimated_rows;
     std::uint64_t generation = 0;
     double cost_ratio = 1.0;
+    // The administrator's plan and the variant it chose for this statement
+    // (`kAdmin`, `kAdminDeclined`); empty otherwise.
+    std::string plan_name;
+    std::string variant;
 };
 
 // The relations a block the join planner searches may hold and still have
