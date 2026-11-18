@@ -1,7 +1,8 @@
 # Work order CZ - a checkpoint that does not hold its reactor on a segment roll: the premise measured before anything is built
 
-Status: **OPENED 2026-11-18; CZ-S0 and CZ-S1 done, S1's reading with the
-operator, CZ-S2 not started** on
+Status: **OPENED 2026-11-18; CZ-S0, CZ-S1 and CZ-S2 done; S1 read as C1
+alone; CZ-S2's items CZ-Q14 to CZ-Q22 with the operator, CZ-S3 not
+started** on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* S0
@@ -9,8 +10,9 @@ rested on no item of §4. **On the operator's word of the same day (§35
 there) V0 is passed, every item of §4 is marked (a) and CZ-S1 is opened.**
 CZ-S0 was pushed to `main` with the hook skipped on the operator's word
 (§32 there). **In CZ-S1's spike C1 alone met CZ-Q1 (a)'s bar as written,
-on a host builds reached; C0, C1 or C1 with C2 is the operator's to read**
-(§7, "CZ-S1"). CZ-S1 is not pushed. Written the same day on
+on a host builds reached, and the operator read S1 as C1 alone and opened
+CZ-S2** (§36 there). **CZ-S2's model is §8.** CZ-S1 and CZ-S2 are not
+pushed. Written the same day on
 worktree `bl-rung3-probe` from `3b3f4851` (`v3.4.12-25-g3b3f4851`) on the
 operator's word (§13 there): *"For now, leave it as a work order."* Every
 `[source-read]` claim of §1 and §2 was read at `3b3f4851`; §7's stage log
@@ -297,7 +299,9 @@ Binding from CZ-S2 on, if the order reaches it.
 
 **Every item is marked (a)**: CZ-Q9 by `raft-marks-2026-11-18.md` §18,
 the others by §35 there, which also passes V0 on CZ-Q1 (a)'s bar. (a) was
-CLA's proposal in each. CZ-Q11 to CZ-Q13 were added at CZ-S0.
+CLA's proposal in each. CZ-Q11 to CZ-Q13 were added at CZ-S0. **CZ-Q14 to
+CZ-Q22 were added at CZ-S2 and are not marked**; each is argued in §8,
+and CZ-S3 rests on them.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -315,6 +319,15 @@ CLA's proposal in each. CZ-Q11 to CZ-Q13 were added at CZ-S0.
 | CZ-Q11 | Added at CZ-S0. What the bar is read on beside p99: a run has 4,006 reader samples, its p99 is the 41st slowest, and S0's `levels` took 0-38 stall samples a run, so the stalls show at p99.9 (71.1 ms against 5.2 ms) and barely at p99 (3.2 ms against 2.3 ms). | the bar stays p99 (CZ-Q1); p99.9 and the count of samples at or above 10 ms are reported beside it at V0 and V1, with no bar | (b) a second clause on p99.9; (c) a clause on the stall count |
 | CZ-Q12 | Added at CZ-S0. The checkpoint's page writes on a read core: a read core's run writes the instance's dirty pages on its reactor, and one page write stalled readers for 164 ms in S0's `half` cell, with no roll beside it. C1 does not touch it. | out of CZ: it is `known-gaps.md`'s entry on the checkpoint's `pwrite`s on the reactor; S1 and the close report a run's longest page write beside the stalls | (b) into CZ as a candidate |
 | CZ-Q13 | Added at CZ-S0. M4 did not vary the roll rate: the inserter is closed-loop, so half the batch left 11 rolls a window against 10-12. | dropped: S1's spike answers what M4 stood in for | (b) M4 again with an inserter held to a rate, which is a driver change with its own review |
+| CZ-Q14 | Added at CZ-S2, `[quiet-wrong]`. The log park's flush when the latch is busy or another thread's flush is in flight (§8.3). | the flush is skipped and the writer asked for `flushed_lsn()` and nothing above it; the task takes the durability park with the wait of CZ-Q15 beside it and tries the flush again when that ends, to the bound of CZ-Q4 | (b) no second try: the park ends only by a roll's publication or core 0's drain, whose period is the setting `relaxed_flush_interval_us`; (c) the spike's form, a retry with no time between tries |
+| CZ-Q15 | Added at CZ-S2. The wait between two tries when no roll holds the latch (§8.3). | a park of 1 ms, by a deadline in the park's predicate, read at the reactor's next turn; every busy answer at a site counts against one bound of 16 | (b) a yield, which on an idle reactor is a spin of microseconds; (c) the blocking call at once |
+| CZ-Q16 | Added at CZ-S2, `[quiet-wrong]`. The assertion bases' appends, core 0's alone (§8.4). | they stay blocking, inside the directory latch's one hold, and the visit's whole time is counted | (b) the begin record and the whole run under one tried hold of the stream latch, a new held-append entry |
+| CZ-Q17 | Added at CZ-S2. The park on a roll (§8.3). | a flag the roll sets and a scope guard clears, read at the reactor's next turn, with a ceiling of 1 s on one park and no kick | (b) a kick to every core at a roll's end, the registry plumbed to the stream |
+| CZ-Q18 | Added at CZ-S2. The wait event the park is booked under (§8.7). | a new event, `sysio.wal_roll`, in `wait-events.md`'s registry | (b) `sysio.wal_write`, the log park's event, which names another wait |
+| CZ-Q19 | Added at CZ-S2. A tried append that takes the latch and must itself roll (§8.2). | it rolls on the task's reactor, as today, and the roll line's `core` counts it | (b) the tried append answers busy when it would roll and leaves the roll to the next appender, the blocking call past the bound |
+| CZ-Q20 | Added at CZ-S2. The owed test "a crash inside the park, in `scripts/sim.sh`'s corpus" (§8.6). | replaced by rig tests; the simulator is untouched | (b) the simulator is given a shared stream and the cadence task, a change larger than C1 |
+| CZ-Q21 | Added at CZ-S2; (b) is `[quiet-wrong]` as CZ-Q14 is. The park's flush when the latch is free: this thread writes the staged ring of every core (§8.3). | as today; CZ changes how the task waits for the latch, not what it writes | (b) a peer's checkpoint never flushes and always leaves it to core 0's drain |
+| CZ-Q22 | Added at CZ-S2. A recycle skipped on a busy latch, run after run (§8.4). CZ-Q10 (a) marked "left for the next run"; nothing bounds how many runs. | after 16 skips in a row the detach blocks, counted; a skip is counted on the run line | (b) no bound: V1 reports the longest row of skips beside the live segments |
 
 ## 5. Stages
 
@@ -352,21 +365,7 @@ CLA's proposal in each. CZ-Q11 to CZ-Q13 were added at CZ-S0.
 - **M4 - the rate.** One arm at half the inserter's batch, to see whether
   the excess follows the roll rate.
 
-**Tests CZ-S3 owes.** Each forced with a barrier and repeated:
-- a roll held while a checkpoint asks for the log park's flush;
-- a roll held across a begin record's append, with a page dirtied in the
-  gap;
-- the bound reached, and the blocking path taken;
-- the log stopped while the task is parked;
-- a crash inside the park, in `scripts/sim.sh`'s corpus;
-- two cores' checkpoints parked on one roll.
-- the latch held by a holder that is not a roll while the park's flush
-  is skipped;
-- the recycle skipped on a busy latch, and taken by the next run.
-
-Whether the simulator's instance has a shared stream was not read. CZ-S2
-reads it, and where it has none the armed multi-core rigs carry the latch
-cells.
+**Tests CZ-S3 owes**: §8.8, which replaced the list that stood here.
 
 ## 6. What CZ does not do
 
@@ -631,3 +630,339 @@ looked for a spike defect that would explain `c1`'s result; it found none.
    gained 53 % at `relaxed` on ext4, with the cost it moves to a commit's
    `fsync` not measured. Whether that is taken up, and under which order,
    is the operator's; CZ does not build it (CZ-Q3 (a)).
+
+### CZ-S2 - the model, on paper, 2026-11-18
+
+On worktree `cz-checkpoint-roll-wait`, from the operator's word
+(`raft-marks-2026-11-18.md` §36), which also reads S1 as C1 alone. No
+code. **The model is §8; CZ-Q14 to CZ-Q22 are its items for the operator
+and CZ-S3 is not opened.** The source was read at `fd96b5d3`'s tree, which
+is `origin/main`'s at `57d7c67f` for every file cited. Suite not executed:
+no build input changed.
+
+**Reviewed by `critics-developer`** against the source, before the commit.
+It opened every citation and tried the model for a page ahead of its
+record, a durable point over unwritten bytes, a begin record off its
+instant, a hang, a deadlock and a wrong assertion base. **The four safety
+claims held; liveness and completeness did not as first written.**
+- **Corrected by the review:** six citations (the fold, the drain's two
+  branches, the gate's admission, the once-a-round rule, the crash's
+  cover, the simulator's entries).
+- **Applied from its findings:**
+  - the roll flag carried the park's liveness while the text called it a
+    hint: it is now cleared by a scope guard and one park has a ceiling
+    (CZ-Q17);
+  - the first form of the flush site waited on core 0's drain alone, whose
+    period is a setting with no ceiling: the flush is now tried again
+    behind a timed park and the drain is the backstop (CZ-Q14);
+  - the skipped flush must leave core 0's loss-window clock alone, or
+    `relaxed`'s window doubles with no error (§8.3);
+  - a tried append on a full ring was an uncovered blocking flush (§8.2);
+  - a timed park is existing machinery, so CZ-Q15 (c) was stated
+    unfairly; it is now the proposal, and the two bounds are one;
+  - the recycle had no bound on skips in a row (CZ-Q22), its plumbing and
+    `BackupControl`'s latch are named, the bases' count times the whole
+    visit, a manager with no writer keeps its blocking arm, and the tests
+    gained six;
+  - §5's test list and this entry were cut to pointers.
+- **Rejected:** none.
+- **Left open by it, and stated in §8:** how often a park's first try at
+  the flush is busy, which only V1 can tell.
+
+**For the operator.** CZ-Q14 to CZ-Q22, and then the word for CZ-S3.
+
+## 8. The model for C1 (CZ-S2) `[design]`
+
+Every `[source-read]` claim below was read at `fd96b5d3`. Nothing here is
+built; CZ-S3 builds what the operator marks. CZ-S1's numbers are of the
+spike, which this model differs from at the flush and at the wait (§8.3):
+V1 measures the model.
+
+### 8.1 The change in one paragraph
+
+Only the cadence task (`Checkpointer::RunTask`) changes, and the entries
+it calls. At its begin record, its end record, its log park's flush and
+its recycle it asks for the stream latch with a try. If the latch is held
+it does not wait on its reactor thread: it parks and tries again, and at
+the recycle it leaves the work to a later run. The synchronous checkpoint
+(mount, shutdown, `RunToCompletion`), every commit, the drain,
+`EnsureDurable` and the roll itself are untouched (CZ-R1, CZ-R5), and so
+is a one-core instance, whose stream has no latch (CZ-R6).
+
+### 8.2 The entries
+
+- **Three tried entries on `WalStream`**, each beside the entry it
+  mirrors: a tried append, a tried flush and a tried detach. Each takes
+  the latch with `Latch::try_lock` (`include/kds/base/latch.hpp:77`) and
+  answers "busy" through an out-parameter when it is held. No status code
+  is added: busy is not an error and reaches no client.
+  - The tried flush and the tried detach also answer busy when another
+    thread's flush is in flight, where the blocking ones spin
+    (`src/wal/stream.cpp:493`, `:342`).
+  - A stopped stream answers its stop, as today, not busy.
+- **`WalManager` forwards them** as explicit entries. The spike's
+  thread-local switch is not kept.
+  - **A tried append on a full ring.** Today's append answers a full ring
+    with a blocking flush on the appender's thread, up to a bound
+    (`src/wal/manager.cpp:389-397`). The tried append answers it with the
+    tried flush: done, it appends again; busy, it answers busy with
+    nothing appended. A begin record of 120 KB in a ring of 1 MiB
+    (`include/kds/wal/stream.hpp:146`) meets a full ring far more often
+    than it meets a roll.
+  - **A manager with no writer** (a test's, a tool's) keeps today's arm at
+    the flush site, the blocking `Sync` (`manager.cpp:252-257`): there is
+    no writer to ask.
+- **A roll flag.** The stream sets an atomic flag under the latch for the
+  length of a roll (`src/wal/stream.cpp:420-437`), **cleared by a scope
+  guard**, so that an exit that does not stop the stream - the seal's
+  encode (`:371-374`), the header's (`:174-176`) - clears it too. It says
+  why the latch is busy. With the park's ceiling (§8.3) nothing's
+  correctness or liveness rests on it.
+- **A tried append can still roll** (CZ-Q19). When it takes the latch and
+  its record does not fit, the roll runs on the task's reactor, as today.
+  A begin record of 10,000 dirty pages is 120 KB (12 bytes an entry,
+  `include/kds/wal/payload.hpp:491`) of a 64 MiB segment, one such roll in
+  about 550 runs; the largest record `LogBegin` cuts to is 279 KB, one in
+  240. An end record is a few bytes.
+
+### 8.3 The wait
+
+One rule at the three sites that wait (the begin record, the end record,
+the flush): **a busy answer parks the task, the task tries again when the
+park ends, and after 16 busy answers at a site in one run it calls the
+blocking entry** (CZ-Q4 (a), CZ-R4). What the park waits for depends on
+the holder.
+
+- **A roll**, a quarter of a second at the median. The park ends when the
+  roll flag clears, when the log stops, or after 1 s (CZ-Q17).
+  - No wake is asked for. A parked task's predicate is asked at most once
+    a reactor iteration (`src/sched/scheduler.cpp:246-249`,
+    `include/kds/sched/coro.hpp:175-182`), and a reactor with nothing
+    ready blocks at most `max_idle_block_ms`, 10 ms
+    (`include/kds/sched/scheduler.hpp:78`). A roll's thread has no path to
+    the wake registry today: it is the writer's alone
+    (`include/kds/wal/manager.hpp:339-342`).
+  - Rolls that follow one another without the flag being seen clear are
+    one park. So the bound is reached by a roll only through the ceiling:
+    16 s of a latch that never came free.
+- **Any other holder**: another core's append, a flush's swap, a flush in
+  flight, a detach. In CZ-S1's `levels` over 99.9 % of the read cores'
+  latch wait was a roll's. The park ends after 1 ms or when the log stops
+  (CZ-Q15).
+  - The deadline is in the park's predicate, as a row wait's is
+    (`src/server/command_dispatcher.cpp:470-472`); no timer is armed, so
+    its resolution is the reactor's turn, at most one idle block.
+  - A yield in its place is a spin: CZ-S1 saw sixteen of them pass in tens
+    of microseconds on an idle reactor, and 49,805 in one run.
+- **At the flush the park is also the durability park** (CZ-Q14,
+  `[quiet-wrong]`). When the tried flush answers busy the task asks the
+  writer for `flushed_lsn()`, parks until its LSN is durable or the wait
+  above ends, and, not yet durable, tries the flush again.
+  - **Never above `flushed_lsn()`.** The writer publishes as durable
+    exactly what it was asked for (`src/wal/writer.cpp:105-109`, "the
+    snapshot rule"), on the promise that those bytes were written before
+    the ask. `flushed_lsn_` is stored only behind a write that returned
+    (`src/wal/stream.cpp:506`, `:538`), and today's ask reads it unlatched
+    too (`src/wal/manager.cpp:267`). A task that asked for its own LSN
+    with its flush skipped would have the writer publish a durable point
+    over bytes still in the ring, and a page could then reach the data
+    file ahead of its record (CZ-R2).
+  - **The skip leaves core 0's loss-window clock alone.** `RequestSyncNow`
+    stamps `last_sync_ns_` behind its flush (`manager.cpp:268`), and core
+    0's drain flushes when 10 ms have passed since that stamp. A skip on
+    core 0's own task that stamped it would put off the drain's flush
+    behind a flush that did not happen, and `relaxed`'s loss window would
+    reach twice its setting with no error.
+  - **Under a roll** the task's record is below the append point the roll
+    found. The roll's seal flushes the ring and `StartSegment` publishes
+    the stream's durable point after its sync
+    (`src/wal/stream.cpp:163-165`), and `durable_lsn()` is the larger of
+    the stream's and the writer's (`include/kds/wal/manager.hpp:262-266`).
+    The park ends durable, with no second try.
+  - **The backstop** is core 0's drain. It runs every iteration and on a
+    1 ms timer, cannot take its free-tick exit while any core has bytes
+    unflushed (`src/wal/manager.cpp:495-509`), and flushes the whole ring
+    once `relaxed_flush_interval` has passed since its last ask
+    (`:539-552`), at once with a group commit pending (`:510-526`), in
+    every durability class. The model does not rest on it: that interval
+    is a file key with no ceiling, and core 0 can be inside a long poll.
+  - **Not measured**: how often a park's first try is busy. CZ-S1 counted
+    busy answers, not parks that began with one. Each costs the task one
+    reactor turn more than today; V1 reports a run's wall time (CZ-Q2 (a)).
+- **When the latch is free the flush is today's** (CZ-Q21): this thread
+  writes the staged ring, every core's bytes. CZ-S1's 208 ms flush call
+  with 2 ms of latch wait may have been that write or the spin on a flush
+  in flight; the model removes the second and leaves the first.
+
+### 8.4 The sites
+
+- **The begin record (C1b)**, `[quiet-wrong]` by CZ-R3. The task tests the
+  roll flag first and parks on it, so that no snapshot is taken to be
+  thrown away. It then calls `Start` in its tried form: both snapshots,
+  then the tried append of the record, in one poll. Busy, nothing was
+  appended and no checkpoint is in progress; the task parks (§8.3) and
+  calls it again.
+  - **CZ-R3 holds by construction.** No suspension lies between the
+    snapshots and the append in any attempt, so what covers the active
+    table today - that `Start` is one poll - covers it in every attempt,
+    and the window for another core's append is shorter than today's,
+    there being no latch wait in it. The retake is the second call.
+  - A busy answer is not a refusal: it does not count in the census's
+    `start_refused`.
+- **The assertion bases** (CZ-Q16, `[quiet-wrong]`). Only core 0's
+  checkpoint writes them (`src/server/core_runtime.cpp:356-368`). They
+  are appended behind the begin record in the same poll, under one hold of
+  the directory latch (`src/exec/assertion_check.cpp:284-304`), and every
+  write that reserves against an assertion takes that latch and then the
+  stream's.
+  - **They stay blocking.** A run is a base only when it is whole, and an
+    assertion's pending list is accepted only directly behind its base
+    (`src/exec/assertion_recover.cpp:262-283`, `:313`). A task that gave
+    up between a base and its pending list would leave a base whose
+    undecided reservations are never compensated: counts too high at the
+    next mount, with no error. A task that released the directory latch
+    part-way and went on would log stale bases.
+  - **The exposure that leaves**: a roll another core starts between core
+    0's begin record and the last of its bases, or a reserving writer that
+    holds the directory latch while it waits on a roll. Core 0's reactor
+    then waits, as today. The count is the whole visit's time, not the
+    stream latch's wait.
+  - Giving up before the first base is safe - analysis merges every
+    `CHECKPOINT_BEGIN` in range (`src/wal/analysis.cpp:156-176`), and a
+    begin record with no end is already written today when `Start` fails
+    behind `LogBegin` (`src/wal/checkpointer.cpp:210-212`) - but it buys
+    only the first append of the run.
+- **The log park's flush (C1a).** §8.3.
+- **The end record (C1b).** The tried append and the park of §8.3. No
+  snapshot is behind it. A crash while the task is parked leaves a begin
+  record with no end, which a crash leaves today.
+- **The recycle (C1c).** The anchor's commit calls the recycler only when
+  the durable redo start advanced, having advanced it first
+  (`src/server/superblock_checkpoint_anchor.cpp:195-205`). The task's
+  commit asks for the tried detach; busy - the latch held, or a flush in
+  flight - it is skipped and counted, and is no recycle failure.
+  - **The plumbing.** "Tried" passes from the anchor's `Commit` through
+    `Landed` and the recycler's function to `BackupControl::Recycle` and
+    `RecycleBelow`. The synchronous `Publish` shares `Landed` and stays
+    blocking.
+  - **The next attempt** is the next publish, by any core, that advances
+    the durable redo start, and a detach is cumulative, so it covers what
+    was skipped. That start is the fold, the lowest of the cores' redo
+    starts (`superblock_checkpoint_anchor.cpp:38-64`), so it advances when
+    the core that holds the lowest publishes again: within one rotation of
+    the cores' runs, an idle instance's included, since a run with no
+    logged page in its snapshot takes its own begin record as its redo
+    start (`src/wal/checkpointer.cpp:214-229`).
+  - **Skips in a row are bounded at 16** (CZ-Q22), then the detach blocks.
+    Without that nothing bounds them: no count of live segments refuses
+    anything, a roll's hold covers 25-34 % of a window in this cell, and
+    CZ-R4's reason - a log that is not recycled - would hold only in
+    probability. What a skip costs until the next run is disk space and
+    the sync's walk of the live segments (about 50 µs a segment, BQ-S1).
+    CZ-S1 skipped 1 of 13 commits in `c1`.
+  - **Left**: the recycler takes `BackupControl`'s latch with a blocking
+    lock (`src/server/backup.cpp:476-479`), and `BACKUP START` holds that
+    latch across a blocking append (`:96-114`). A roll at that moment
+    stops the task's reactor whatever the detach does.
+- **The inline WAL gate** is untouched (CZ-Q10 (a), CZ-R5).
+
+### 8.5 What the task holds across a new suspension (CZ-R9)
+
+| suspension | where | what the task holds |
+|---|---|---|
+| the park before a begin record | before `Start` returns OK | the checkpoint gate's flag (`include/kds/wal/checkpointer.hpp:306-345`) and its run report; no page, pin, latch or claim - none is taken before `Start` succeeds |
+| the park before an end record | behind the last step's yield (`src/wal/checkpointer.cpp:517`) | what that yield holds today: the gate's flag and the report |
+| the park at the flush | where the durability park is today | what that park holds today |
+| the recycle | none | it is skipped, not waited for |
+
+A run that parks holds the gate longer, and the gate has no timeout: other
+cores' ticks skip, and the gate then admits the asking core whose last
+entry is oldest (`checkpointer.hpp:350-365`). CZ-S1's longest run was
+1,676 ms under C1 against 1,678 ms.
+
+### 8.6 The stop, the abandon and a crash
+
+- **The log's stop** ends every park (each predicate reads it), and the
+  tried entry called next answers the stop; the task ends with it, as an
+  append's refusal ends it today (CZ-R8).
+- **An abandoned task** (shutdown) is tested behind every new suspension,
+  as behind every existing one. The log park gains a second try, so it
+  takes the task's generation to test it there.
+- **A crash** inside a park at the begin record leaves nothing; at the end
+  record, a begin record with no end. Analysis over several begin records
+  with no end is covered (`tests/wal_analysis_test.cpp:337`), and the
+  simulator crashes behind an abandoned run (`sim/loop.cpp:1522-1528`).
+- **The simulator reaches no site of C1** (CZ-Q20): one core, an unshared
+  stream, and `RunToCompletion` or `Start`, one `Step` and `Abandon` by
+  hand, never the cadence task (`sim/instance.cpp:41`, `:197`,
+  `:223-234`).
+
+### 8.7 What is counted
+
+The run line keeps, a site: busy answers, parks on a roll, the bound
+reached, the time parked, and the time inside a blocking call past the
+bound. It keeps the assertion visit's whole time and the recycles
+skipped. The spike's other call times and its thread-local latch counter
+go. The park is a suspension and so needs a wait event (CZ-Q18).
+
+### 8.8 The tests CZ-S3 owes
+
+The rig is `tests/checkpoint_log_park_test.cpp`'s: a shared stream, core 1
+attached, reactors driven by hand on a manual clock, a log device whose
+sync can be held - and a held sync under a roll is a held roll
+(`tests/wal_roll_instruments_test.cpp:179`).
+
+1. A roll held while core 1's task reaches its begin record: the task
+   parks and no begin record is in the log. A transaction begun and a page
+   dirtied during the hold are in the record appended after the release
+   (CZ-R3).
+2. A roll held while the park's flush is asked: the flush is skipped,
+   `durable_lsn()` never passes `flushed_lsn()` at any step (CZ-R2), and
+   the park ends at the roll's publication.
+3. Another thread's flush in flight (a device that gates its write, as
+   `tests/wal_append_off_latch_test.cpp`'s does) while the park's flush is
+   asked: skipped, tried again behind the timed park, and done once the
+   write is released.
+4. The same with the write never released until core 0's drain is called:
+   the park ends by the drain, and core 0's own skipped flush leaves
+   `last_sync_ns_` where it was.
+5. A roll held at the end record: no end record until the release, and the
+   anchor is published after it.
+6. The bound: a roll held while the clock is moved a ceiling at a time;
+   the sixteenth busy answer is the last and the blocking entry is called,
+   released by a helper thread.
+7. The roll flag left set by a seam: the park ends at its ceiling.
+8. The log stopped while the task is parked at its begin record, at its
+   end record and at the flush: the task ends with the stop and publishes
+   no anchor.
+9. The task abandoned behind each new suspension: it does nothing more.
+10. A tried append on a full ring, with the tried flush busy and then
+    free.
+11. The recycle skipped on a held latch and taken by the next run that
+    advances the fold; sixteen skips, then the blocking detach
+    (`tests/two_core_rig.hpp`'s `fold_anchor` and `recycle`, with a
+    cadence task).
+12. Core 0's run with an assertion source and a roll held behind its begin
+    record: the run is whole and its pending lists follow their bases.
+13. One core: the tried entries never answer busy, and a run's records are
+    those of the blocking entries.
+
+Dropped from the list that stood in §5: two cores' checkpoints parked on
+one roll (the gate admits one run for the instance), and the simulator's
+crash (CZ-Q20).
+
+### 8.9 The texts CZ-S3 owes
+
+- `docs/spec/wal.md` §6, step 1: "every core's append, flush and drain
+  waits the roll out" gains the cadence checkpoint's exception and its
+  rule for the skipped flush; §11 the tried sites.
+- `docs/spec/sched.md` §4: the checkpoint task's new park.
+- `docs/spec/wait-events.md`: the event, if CZ-Q18 (a).
+- `include/kds/wal/stream.hpp`'s protocol header: the tried entries and
+  the roll flag.
+- The drain's comments (`src/wal/manager.cpp:495-509`,
+  `include/kds/wal/manager.hpp:70`): the free-tick rule gains a second
+  dependant, the checkpoint's skipped flush.
+- `Start`'s comment on pages dirtied "after this point" (CZ-S0).
+- At the close: `CLAUDE.md`'s WAL row, `known-gaps.md`'s roll entry and
+  BL-R7's remainder (CZ-Q6 (a)).
