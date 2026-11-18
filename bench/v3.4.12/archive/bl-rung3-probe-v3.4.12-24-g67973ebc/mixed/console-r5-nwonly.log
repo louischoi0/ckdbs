@@ -1,0 +1,1 @@
+bl-mixed-k4-kernel-isolated-relaxed-w0-slicedflt-levels-nw1-r0 load 1.46->1.63 errors=0 refusals=0 read p50=236.5 p99=603.7 p99.9=3837.3 sched p99=1350.2 p99.9=4396.0 max=5279.8 write p50=None p99=None p99.9=None sched p99=None p99.9=None max=None walker p50=None nwalker p50=406.7 ins p50=None rows/s=0.0 log B/s=76.4 moves=3 moves_in_window=2 cores=['1.0', '2.0', '3.0']
