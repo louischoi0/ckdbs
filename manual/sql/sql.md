@@ -282,8 +282,11 @@ difference between "nothing was said" and "the engine may decide".
 A column declared `AUTO` behaves exactly as an undeclared one: both are
 eligible for the Cabin controller (`docs/spec/cabin-controller.md`), which
 creates Cabins from runtime access statistics and drops the ones it created
-while `cabin_optimizer` is on (off by default, experimental). `NO CABIN` keeps
-a column out of every route, the controller's included.
+while `cabin_optimizer` is on (off by default, experimental). A Cabin the
+controller created is read only by a statement whose plan names it
+(`CREATE PLAN ... ACCESS <table> CABIN (<column>)`, under SELECT); until
+then it changes how no statement runs. `NO CABIN` keeps a column out of
+every route, the controller's included.
 
 **Foreign keys** (built and enforced, FK-M1..FK-M5):
 
@@ -1248,14 +1251,35 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
       ORDER (u, l) ACCESS l INDEX loans_user_idx
     ```
 
-    A pin is `TUPLE_KEY`, `INDEX` (any index) or `INDEX <name>`, `CABIN`,
-    or `SCAN` (walk the relation); `NOT TUPLE_KEY`, `NOT INDEX` and `NOT
-    CABIN` rule one kind out and leave the rest to the engine. A pin never
-    forces an access the statement cannot use: `CREATE PLAN` refuses a pin
-    nothing can satisfy, and the rows returned are the same under every
-    variant and every pin. `ANALYZE` marks a pinned step `arm=plan`. An
-    index a plan pins by name cannot be dropped while the plan is enabled.
-    A plan is for a join: a statement over one table cannot be given one.
+    A pin is `TUPLE_KEY`, `INDEX` (any index) or `INDEX <name>`, `CABIN`
+    (any Cabin you declared) or `CABIN (<column>)` (the Cabin on that
+    column), or `SCAN` (walk the relation); `NOT TUPLE_KEY`, `NOT INDEX`
+    and `NOT CABIN` rule one kind out and leave the rest to the engine. A
+    pin never forces an access the statement cannot use: `CREATE PLAN`
+    refuses a pin nothing can satisfy, and the rows returned are the same
+    under every variant and every pin. `ANALYZE` marks a pinned step
+    `arm=plan`. An index or a Cabin a plan pins by name cannot be dropped
+    while the plan is enabled.
+  - **A statement over one table can be given a plan too.** It has no
+    order to choose, so its variants each say `ORDER (<the table>)` and
+    pin how the table is read:
+
+    ```
+    CREATE PLAN p_open FOR SELECT * FROM orders WHERE state = 'open'
+    VARIANT v ELSE ORDER (orders) ACCESS orders CABIN (state);
+    ```
+
+    `AS SEARCHED` is refused for it (there is no order to search), and so
+    is a statement with a subquery in its `WHERE`.
+  - **A Cabin the Cabin controller created is used only by a plan that
+    names it.** With `cabin_optimizer` on, the engine builds Cabins for
+    columns it sees filtered often, and no statement reads through one on
+    its own: `ACCESS <table> CABIN (<column>)` is what puts it to use
+    (`CABIN` without a column never does). `SHOW CABIN_OPTIMIZER` and `SHOW
+    CABINS` (`origin = auto`) list what the controller has built. While an
+    enabled plan names a Cabin, neither `DROP CABIN` nor the controller
+    drops it. A Cabin you declared yourself is used as before, with or
+    without a plan.
   - A variant that cannot be used for a particular statement - one that
     would need a sort the statement's `LIMIT` no longer bounds, or whose
     pin that statement cannot satisfy - is skipped for that statement,

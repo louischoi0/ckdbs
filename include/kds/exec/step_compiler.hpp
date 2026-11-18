@@ -97,11 +97,12 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
                             const StatementContext* context = nullptr,
                             const PlanOptions* plan = nullptr);
 
-// Whether the join planner orders `stmt`'s top-level block - the one test
-// `Compile` applies before it considers any order but the written one - and
-// so whether a plan can state an order for it (CX-S1b): OK, or
-// `NotImplemented` saying which of the three it is - one relation, `*`, or
-// a subquery predicate (CB-Q4 (a)).
+// Whether an administrator's plan can be made for `stmt`'s top-level block
+// (CX-S1b, CX-S3b): a join block the join planner orders - the one test
+// `Compile` applies before it considers any order but the written one - or
+// a statement over one relation, which has no order and an arm to pin. OK,
+// or `NotImplemented` saying why: a joined `*`, or a subquery predicate
+// (CB-Q4 (a)).
 Status PlannableBlock(const parser::SelectStmt& stmt);
 
 // Compiles a single-relation WHERE clause - what UPDATE and, later,

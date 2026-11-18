@@ -97,6 +97,21 @@ std::uint64_t MakeAutoCabin(Instance& db, const char* table) {
     return created.value();
 }
 
+// The same, and a plan that names the Cabin for the `sym = <value>` shape
+// the cells below probe with: a controller-made Cabin is read through by no
+// statement until one does (CX-Q6 (a)), so without it no probe would sight
+// a value for a build to seed from.
+std::uint64_t MakeServedAutoCabin(Instance& db, const char* table) {
+    const std::uint64_t cabin_id = MakeAutoCabin(db, table);
+    const std::string name(table);
+    const std::string made =
+        db.Run("CREATE PLAN serve_" + name + " FOR SELECT * FROM " + name +
+               " WHERE sym = 'any' VARIANT v ELSE ORDER (" + name + ") ACCESS " + name +
+               " CABIN (sym)");
+    EXPECT_EQ(made.substr(0, 12), "CREATED PLAN") << made;
+    return cabin_id;
+}
+
 stats::ActionItem ExtendAction(Instance& db, const char* table, std::uint64_t cabin_id) {
     stats::ActionItem action;
     action.action = stats::CabinAction::kExtend;
@@ -143,7 +158,7 @@ TEST(CabinOptimizerExecTest, TheFullLoopCreatesACabinFromHotTraffic) {
 TEST(CabinOptimizerExecTest, ExtendBuildsEverySeededSetInOneCompleteWalk) {
     Instance db;
     LoadBtree(db);
-    const std::uint64_t cabin_id = MakeAutoCabin(db, "b");
+    const std::uint64_t cabin_id = MakeServedAutoCabin(db, "b");
 
     // Sight two values once each - below the auto n=2 record threshold, so
     // both are seeded-but-unobserved. 'zzz' matches nothing, which is the
@@ -186,7 +201,7 @@ TEST(CabinOptimizerExecTest, ExtendBuildsEverySeededSetInOneCompleteWalk) {
 TEST(CabinOptimizerExecTest, TheKillSwitchMidBuildDiscardsCleanly) {
     Instance db;
     LoadBtree(db);
-    const std::uint64_t cabin_id = MakeAutoCabin(db, "b");
+    const std::uint64_t cabin_id = MakeServedAutoCabin(db, "b");
     db.Run("SELECT * FROM b WHERE sym = 'aaa'");  // seed one value
 
     // On for the action boundary, off by the first page boundary: the
@@ -208,7 +223,7 @@ TEST(CabinOptimizerExecTest, TheKillSwitchMidBuildDiscardsCleanly) {
 TEST(CabinOptimizerExecTest, ABusyRowDefersTheBuildUntilItSettles) {
     Instance db;
     LoadBtree(db);
-    const std::uint64_t cabin_id = MakeAutoCabin(db, "b");
+    const std::uint64_t cabin_id = MakeServedAutoCabin(db, "b");
     db.Run("SELECT * FROM b WHERE sym = 'aaa'");  // seed
 
     // An in-flight row: counted, its abort leaves a phantom; skipped, its
@@ -239,7 +254,7 @@ TEST(CabinOptimizerExecTest, ABusyRowDefersTheBuildUntilItSettles) {
 TEST(CabinOptimizerExecTest, HealRepairsBrokenHintsAndErasesDanglingTupleKeys) {
     Instance db;
     LoadBtree(db);
-    const std::uint64_t cabin_id = MakeAutoCabin(db, "b");
+    const std::uint64_t cabin_id = MakeServedAutoCabin(db, "b");
     db.Run("SELECT * FROM b WHERE sym = 'aaa'");
     stats::CabinOptimizer controller;
     exec::CabinOptimizerExecutor executor(db.catalog(), db.store(), db.cabins(), controller);
@@ -384,10 +399,21 @@ TEST(CabinOptimizerExecTest, TheViewReportsTheLifecycleAndTheCountersCount) {
     EXPECT_EQ(shown.Find("rel_name", "h", "last_action"), "CREATE") << view;
     EXPECT_EQ(shown.Find("rel_name", "h", "reason"), "sustained-benefit") << view;
 
+    // CX-Q6 (a): the Cabin the controller made moved no statement's arm -
+    // the probe compiles as it did before there was one - and is read
+    // through by a plan that names it.
+    const std::string unpinned = db.Run("ANALYZE " + probe);
+    EXPECT_EQ(unpinned.find(" cabin="), std::string::npos) << unpinned;
+    ASSERT_EQ(db.Run("CREATE PLAN p FOR " + probe +
+                     " VARIANT v ELSE ORDER (h) ACCESS h CABIN (sym)")
+                  .substr(0, 12),
+              "CREATED PLAN");
+
     // ANALYZE marks the optimizer-managed probe (PO9): the operator can
     // see the serving structure is one the engine may drop on its own.
     const std::string analyzed = db.Run("ANALYZE " + probe);
     EXPECT_NE(analyzed.find("cabin_optimizer=true"), std::string::npos) << analyzed;
+    EXPECT_NE(analyzed.find("arm=plan"), std::string::npos) << analyzed;
 }
 
 // PHY08's E2E: the whole lifecycle in one scripted run, observed through
@@ -435,15 +461,23 @@ TEST(CabinOptimizerExecTest, TheFullLifecycleObservedThroughTheView) {
     EXPECT_EQ(state("last_action"), "CREATE");
     EXPECT_EQ(state("reason"), "sustained-benefit");
 
-    // Phase 2 - the Cabin serves: two probes observe the value (auto is
-    // n=2), the next is a served hit on a marked-managed probe, and the
-    // reply is byte-identical to the pre-optimizer baseline.
+    // Phase 2 - the Cabin serves, through a plan that names it (CX-Q6 (a)):
+    // two probes observe the value (auto is n=2), the next is a served hit
+    // on a marked-managed probe, and the reply is byte-identical to the
+    // pre-optimizer baseline.
+    ASSERT_EQ(db.Run("CREATE PLAN p FOR " + probe +
+                     " VARIANT v ELSE ORDER (h) ACCESS h CABIN (sym)")
+                  .substr(0, 12),
+              "CREATED PLAN");
     db.Run(probe);
     db.Run(probe);
     const std::string analyzed = db.Run("ANALYZE " + probe);
     EXPECT_NE(analyzed.find("cabin_hits=1"), std::string::npos) << analyzed;
     EXPECT_NE(analyzed.find("cabin_optimizer=true"), std::string::npos) << analyzed;
     EXPECT_EQ(db.Run(probe), baseline);
+    // The plan goes before the workload does: a named Cabin is the plan's
+    // to keep (`APlanNamingACabinRestrictsItsDrop`).
+    ASSERT_EQ(db.Run("DROP PLAN p").rfind("ERR", 0), std::string::npos);
 
     // Phase 3 - the workload shifts: 50 half-lives of silence zero every
     // score, and the next tick moves the entry to DECAYING.
@@ -462,6 +496,186 @@ TEST(CabinOptimizerExecTest, TheFullLifecycleObservedThroughTheView) {
     // walk it started as, and the reply still never moved.
     EXPECT_EQ(testing_view::ReadViewText(db.Run("SHOW CABINS")).rows.size(), 0u);
     EXPECT_EQ(db.Run("ANALYZE " + probe).find(" cabin="), std::string::npos);
+    EXPECT_EQ(db.Run(probe), baseline);
+}
+
+// ---- CX-S3b, CX-Q6 (a): a controller-made Cabin and the plan that names it ----
+
+// The step line ANALYZE prints for the relation at written position `id`.
+std::string StepLine(const std::string& plan, int id) {
+    const std::size_t at = plan.find("step " + std::to_string(id) + " ");
+    if (at == std::string::npos) return {};
+    return plan.substr(at, plan.find("\\n", at) - at);
+}
+
+bool Refused(const std::string& reply) { return reply.rfind("ERR", 0) == 0; }
+
+TEST(CabinOptimizerExecTest, AControllerMadeCabinIsReadOnlyThroughAPlanThatNamesIt) {
+    Instance db;
+    LoadBtree(db);
+    const std::string probe = "SELECT * FROM b WHERE sym = 'aaa'";
+    const std::string list = "SELECT * FROM b WHERE sym IN ('aaa', 'ccc')";
+    const std::string baseline = db.Run(probe);
+    const std::string list_baseline = db.Run(list);
+    const std::string before = db.Run("ANALYZE " + probe);
+    ASSERT_EQ(StepLine(before, 0).rfind("step 0 FilterScan ", 0), 0u) << before;
+
+    // The Cabin exists and no step moves: not the equality's, not the value
+    // list's, and a `CABIN` pin that names nothing does not reach it.
+    MakeAutoCabin(db, "b");
+    EXPECT_EQ(StepLine(db.Run("ANALYZE " + probe), 0), StepLine(before, 0));
+    EXPECT_EQ(db.Run("ANALYZE " + list).find(" cabin="), std::string::npos);
+    const std::string unnamed = db.Run("CREATE PLAN p FOR " + probe +
+                                       " VARIANT v ELSE ORDER (b) ACCESS b CABIN");
+    EXPECT_TRUE(Refused(unnamed)) << unnamed;
+    EXPECT_NE(unnamed.find("cannot take the pinned arm CABIN"), std::string::npos) << unnamed;
+    // Nor a name that is not the Cabin's column.
+    const std::string elsewhere = db.Run("CREATE PLAN p FOR " + probe +
+                                         " VARIANT v ELSE ORDER (b) ACCESS b CABIN (qty)");
+    EXPECT_TRUE(Refused(elsewhere)) << elsewhere;
+    EXPECT_NE(elsewhere.find("CABIN (qty)"), std::string::npos) << elsewhere;
+
+    // Named, it serves: the equality and the list, each by its own plan,
+    // and the rows are the walk's.
+    ASSERT_FALSE(Refused(db.Run("CREATE PLAN p FOR " + probe +
+                                " VARIANT v ELSE ORDER (b) ACCESS b CABIN (sym)")));
+    ASSERT_FALSE(Refused(db.Run("CREATE PLAN q FOR " + list +
+                                " VARIANT v ELSE ORDER (b) ACCESS b CABIN (SYM)")));
+    for (const std::string& statement : {probe, list}) {
+        const std::string plan = db.Run("ANALYZE " + statement);
+        EXPECT_EQ(StepLine(plan, 0).rfind("step 0 CabinProbe ", 0), 0u) << plan;
+        EXPECT_NE(StepLine(plan, 0).find("cabin_optimizer=true"), std::string::npos) << plan;
+        EXPECT_NE(StepLine(plan, 0).find("arm=plan"), std::string::npos) << plan;
+    }
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(db.Run(probe), baseline);
+        EXPECT_EQ(db.Run(list), list_baseline);
+    }
+    // Another binding of the shape is the plan's too; another shape is not.
+    EXPECT_EQ(StepLine(db.Run("ANALYZE SELECT * FROM b WHERE sym = 'bbb'"), 0)
+                  .rfind("step 0 CabinProbe ", 0),
+              0u);
+    // (A fetch id is the statement less its select list, so `SELECT qty`
+    // over the same WHERE is the same shape.)
+    EXPECT_NE(db.Run("ANALYZE SELECT qty FROM b WHERE sym = 'aaa'").find(" cabin="),
+              std::string::npos);
+    EXPECT_EQ(db.Run("ANALYZE SELECT * FROM b WHERE sym = 'aaa' AND qty = 10").find(" cabin="),
+              std::string::npos);
+    const std::string shown = db.Run("SHOW PLANS");
+    EXPECT_NE(shown.find("ACCESS b CABIN (sym)"), std::string::npos) << shown;
+
+    // What `REPLACE VARIANT` can ask of a named Cabin with no statement.
+    EXPECT_TRUE(Refused(
+        db.Run("ALTER PLAN p REPLACE VARIANT v ELSE ORDER (b) ACCESS b CABIN (qty)")));
+    EXPECT_TRUE(Refused(
+        db.Run("ALTER PLAN p REPLACE VARIANT v ELSE ORDER (b) ACCESS b CABIN (nowhere)")));
+}
+
+TEST(CabinOptimizerExecTest, AJoinsInnerSideReadsAControllerMadeCabinOnlyUnderItsName) {
+    Instance db;
+    LoadBtree(db);
+    ASSERT_EQ(db.Run("CREATE TABLE o (id int64, sym varchar) BTREE").substr(0, 7), "CREATED");
+    for (const char* sym : {"aaa", "ccc", "zzz"}) {
+        ASSERT_EQ(db.Run(std::string("INSERT INTO o VALUES ('") + sym + "')").substr(0, 8),
+                  "INSERTED");
+    }
+    MakeAutoCabin(db, "b");
+    const std::string join = "SELECT o.id, b.qty FROM o JOIN b ON o.sym = b.sym";
+    const std::string baseline = db.Run(join);
+    EXPECT_EQ(db.Run("ANALYZE " + join).find(" cabin="), std::string::npos);
+
+    ASSERT_FALSE(Refused(db.Run("CREATE PLAN p FOR " + join +
+                                " VARIANT v ELSE ORDER (o, b) ACCESS b CABIN (sym)")));
+    const std::string plan = db.Run("ANALYZE " + join);
+    EXPECT_EQ(StepLine(plan, 1).rfind("step 1 CabinProbe ", 0), 0u) << plan;
+    EXPECT_NE(StepLine(plan, 1).find("cabin_optimizer=true"), std::string::npos) << plan;
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(db.Run(join), baseline);
+}
+
+TEST(CabinOptimizerExecTest, APlanNamingACabinRestrictsItsDrop) {
+    Instance db;
+    LoadBtree(db);
+    const std::uint64_t cabin_id = MakeAutoCabin(db, "b");
+    stats::CabinOptimizer controller{stats::CabinOptimizerConfig{}};
+    exec::CabinOptimizerExecutor executor(db.catalog(), db.store(), db.cabins(), controller);
+    executor.set_plans(&db.dispatcher().admin_plans());
+    const std::string probe = "SELECT * FROM b WHERE sym = 'aaa'";
+    ASSERT_FALSE(Refused(db.Run("CREATE PLAN p FOR " + probe +
+                                " VARIANT v ELSE ORDER (b) ACCESS b CABIN (sym)")));
+    const auto cabins = [&db] {
+        return testing_view::ReadViewText(db.Run("SHOW CABINS")).rows.size();
+    };
+
+    // CX-Q4 (a): neither an operator nor the controller drops it.
+    const std::string refused = db.Run("DROP CABIN ON b(sym)");
+    EXPECT_EQ(refused.rfind("ERR plan 'p' names this cabin", 0), 0u) << refused;
+    stats::ActionItem drop;
+    drop.action = stats::CabinAction::kDrop;
+    drop.reason = stats::ActionReason::kSustainedDecay;
+    drop.cabin_id = cabin_id;
+    drop.rel_oid =
+        db.catalog().FindTableOidByName(::kds::catalog::kNamespacePublic, "b").value();
+    drop.col_pos = 1;
+    ASSERT_TRUE(executor.Apply({drop}, kAlwaysOn).ok());
+    EXPECT_EQ(executor.counters().drops, 0u);
+    EXPECT_EQ(executor.counters().drops_restricted, 1u);
+    EXPECT_EQ(cabins(), 1u);
+    EXPECT_EQ(StepLine(db.Run("ANALYZE " + probe), 0).rfind("step 0 CabinProbe ", 0), 0u);
+
+    // A budget swap that chose it as its victim builds nothing (PO6): the
+    // CREATE the DROP was to pay for waits.
+    stats::ActionItem swap = drop;
+    swap.reason = stats::ActionReason::kBudgetSwap;
+    stats::ActionItem create;
+    create.action = stats::CabinAction::kCreate;
+    create.reason = stats::ActionReason::kSustainedBenefit;
+    create.rel_oid = drop.rel_oid;
+    create.col_pos = 2;
+    ASSERT_TRUE(executor.Apply({swap, create}, kAlwaysOn).ok());
+    EXPECT_EQ(executor.counters().drops_restricted, 2u);
+    EXPECT_EQ(executor.counters().creates, 0u);
+    EXPECT_EQ(executor.counters().builds_deferred, 1u);
+    EXPECT_EQ(cabins(), 1u);
+
+    // Disabled, the plan declares nothing: the controller's DROP lands, and
+    // the plan enabled again over the missing Cabin is declined statement by
+    // statement, never forced.
+    ASSERT_FALSE(Refused(db.Run("ALTER PLAN p DISABLE")));
+    ASSERT_TRUE(executor.Apply({drop}, kAlwaysOn).ok());
+    EXPECT_EQ(executor.counters().drops, 1u);
+    EXPECT_EQ(cabins(), 0u);
+    ASSERT_FALSE(Refused(db.Run("ALTER PLAN p ENABLE")));
+    const std::string declined = db.Run("ANALYZE " + probe);
+    EXPECT_NE(declined.find("planned order=written plan=p/v plan_declined=1\\n"),
+              std::string::npos)
+        << declined;
+    EXPECT_EQ(StepLine(declined, 0).rfind("step 0 FilterScan ", 0), 0u) << declined;
+}
+
+// S3a left a met `CABIN` pin unreached by a cell: a declared Cabin meets it,
+// named or not, and is the plan's to keep as well.
+TEST(CabinOptimizerExecTest, ADeclaredCabinMeetsACabinPinNamedOrNot) {
+    Instance db;
+    LoadBtree(db);
+    ASSERT_EQ(db.Run("CREATE CABIN ON b(sym)").substr(0, 7), "CREATED");
+    const std::string probe = "SELECT * FROM b WHERE sym = 'aaa'";
+    const std::string baseline = db.Run(probe);
+    ASSERT_FALSE(Refused(db.Run("CREATE PLAN p FOR " + probe +
+                                " VARIANT v ELSE ORDER (b) ACCESS b CABIN")));
+    std::string plan = db.Run("ANALYZE " + probe);
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 CabinProbe ", 0), 0u) << plan;
+    EXPECT_NE(StepLine(plan, 0).find("arm=plan"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("cabin_optimizer=true"), std::string::npos) << plan;
+    // Unnamed, the pin names a class and no Cabin: the drop is not its.
+    ASSERT_FALSE(Refused(
+        db.Run("ALTER PLAN p REPLACE VARIANT v ELSE ORDER (b) ACCESS b CABIN (sym)")));
+    plan = db.Run("ANALYZE " + probe);
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 CabinProbe ", 0), 0u) << plan;
+    EXPECT_EQ(db.Run(probe), baseline);
+    EXPECT_EQ(db.Run("DROP CABIN ON b(sym)").rfind("ERR plan 'p' names this cabin", 0), 0u);
+    ASSERT_FALSE(Refused(db.Run("ALTER PLAN p REPLACE VARIANT v ELSE ORDER (b) ACCESS b CABIN")));
+    EXPECT_FALSE(Refused(db.Run("DROP CABIN ON b(sym)")));
+    EXPECT_NE(db.Run("ANALYZE " + probe).find("plan_declined=1"), std::string::npos);
     EXPECT_EQ(db.Run(probe), baseline);
 }
 

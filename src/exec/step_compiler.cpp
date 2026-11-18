@@ -1340,6 +1340,40 @@ std::optional<IndexChoice> IndexProbeOf(const catalog::TableAccess& access, cons
     return best;
 }
 
+// **Which Cabins a step's Cabin ranks may take** (CX-S3b, CX-Q6 (a)). A
+// Cabin the cabin optimizer made - `auto` origin, one the engine creates
+// and drops on its own judgement - is no input to a plan unless an
+// administrator's plan names it: under no pin, and under `CABIN` unnamed,
+// every rank reads the relation as though that Cabin were not there, so
+// switching the controller on moves no step's arm. A pin that names a
+// column (`CABIN (<column>)`) admits the column Cabin on it, whoever made
+// it, and nothing else - which is also what makes the pin's met-check the
+// class's: the one Cabin arm the ranks can take under it is the named one.
+//
+// Catalog state and the pin alone, as every rank is: the origin is a
+// `sys.cabins` byte on the relation's cache entry.
+struct CabinGate {
+    // The column a pin names. 0: none named - the tuple key carries no
+    // Cabin (cabin.md §2), so no pin can name position 0.
+    std::uint16_t named = 0;
+    // A named column the relation does not have: nothing is admitted.
+    static constexpr std::uint16_t kNoSuchColumn = 0xFFFF;
+
+    // The column Cabin on `col_pos` this step may take, or the empty ref.
+    catalog::TableAccess::CabinRef On(const catalog::TableAccess& access,
+                                      std::uint16_t col_pos) const noexcept {
+        const catalog::TableAccess::CabinRef cabin = access.CabinOn(col_pos);
+        if (named != 0) return col_pos == named ? cabin : catalog::TableAccess::CabinRef{};
+        return cabin.origin == catalog::kCabinOriginAuto ? catalog::TableAccess::CabinRef{}
+                                                         : cabin;
+    }
+    // Whether this step may take an expression or predicate Cabin: never
+    // under a pin naming a column, and never a controller-made one.
+    bool Admits(const catalog::TableAccess::ExprCabinRef& ref) const noexcept {
+        return named == 0 && ref.origin != catalog::kCabinOriginAuto;
+    }
+};
+
 // A column Cabin's probe, less what it is keyed by.
 CabinProbe ColumnProbeFor(const catalog::TableAccess::CabinRef& cabin, std::uint16_t col_pos) {
     CabinProbe probe;
@@ -1362,7 +1396,7 @@ struct CabinSetChoice {
     KeySet set;
 };
 std::optional<CabinSetChoice> CabinSetOf(const catalog::TableAccess& access, const Step& step,
-                                         std::uint16_t slot) {
+                                         std::uint16_t slot, const CabinGate& gate) {
     for (std::size_t c = 0; c < step.bool_residual.size(); ++c) {
         const BoolPredicate& pred = step.bool_residual[c];
         if (pred.op != BoolPredicate::Op::kOr || pred.children.empty() ||
@@ -1372,7 +1406,7 @@ std::optional<CabinSetChoice> CabinSetOf(const catalog::TableAccess& access, con
         const ColumnRef& column = pred.children.front().compare.lhs;
         if (!IsOwnColumn(column, slot) || IsTupleKey(column)) continue;
         if (ListConjunctOn(step, slot, column.col_pos, c) != static_cast<std::uint32_t>(c)) continue;
-        const catalog::TableAccess::CabinRef cabin = access.CabinOn(column.col_pos);
+        const catalog::TableAccess::CabinRef cabin = gate.On(access, column.col_pos);
         if (cabin.id == 0) continue;
 
         CabinSetChoice choice;
@@ -1474,13 +1508,13 @@ std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
 // same statement compile differently as the data changed - which is exactly
 // what a recorded pattern must not do.
 std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const Step& step,
-                                       std::uint16_t slot) {
+                                       std::uint16_t slot, const CabinGate& gate) {
     for (const StepPredicate& pred : step.residual) {
         if (pred.op != parser::CompareOp::kEq) continue;
         if (pred.rhs.kind != OperandKind::kLiteral) continue;
         if (!IsOwnColumn(pred.lhs, slot) || IsTupleKey(pred.lhs)) continue;
 
-        const catalog::TableAccess::CabinRef cabin = access.CabinOn(pred.lhs.col_pos);
+        const catalog::TableAccess::CabinRef cabin = gate.On(access, pred.lhs.col_pos);
         if (cabin.id == 0) continue;
 
         // A `$param` never probes a Cabin. Unreachable for
@@ -1537,7 +1571,7 @@ bool AnyShaped(const catalog::TableAccess& access, std::uint8_t shape) {
 // reads `fn_residual` and writes nothing but `Step::cabin`. The correlated
 // form (§4a) is not extended to `F`.
 std::optional<CabinProbe> ExprCabinProbeOf(const catalog::TableAccess& access, const Step& step,
-                                           std::uint16_t slot) {
+                                           std::uint16_t slot, const CabinGate& gate) {
     if (!AnyShaped(access, catalog::kCabinShapeExpression)) return std::nullopt;
     for (const FunctionPredicate& pred : step.fn_residual) {
         if (pred.op != parser::CompareOp::kEq || !pred.lhs.call.has_value()) continue;
@@ -1547,7 +1581,7 @@ std::optional<CabinProbe> ExprCabinProbeOf(const catalog::TableAccess& access, c
         const std::string text = CabinTermText(*term);
         for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
             if (ref.shape == catalog::kCabinShapeExpression && ref.f != nullptr &&
-                ref.f->text == text) {
+                ref.f->text == text && gate.Admits(ref)) {
                 return ProbeFor(ref, pred.rhs.plain.literal);
             }
         }
@@ -1569,7 +1603,8 @@ std::optional<CabinProbe> ExprCabinProbeOf(const catalog::TableAccess& access, c
 // stays where it is and re-checks the served rows. After the expression
 // arm, at the column Cabin's rank.
 std::optional<CabinProbe> PredicateCabinProbeOf(const catalog::TableAccess& access,
-                                                const Step& step, std::uint16_t slot) {
+                                                const Step& step, std::uint16_t slot,
+                                                const CabinGate& gate) {
     if (!AnyShaped(access, catalog::kCabinShapePredicate)) return std::nullopt;
     std::vector<std::string> own;
     for (const StepPredicate& pred : step.residual) {
@@ -1597,7 +1632,10 @@ std::optional<CabinProbe> PredicateCabinProbeOf(const catalog::TableAccess& acce
     std::sort(own.begin(), own.end());
 
     for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
-        if (ref.shape != catalog::kCabinShapePredicate || ref.f == nullptr) continue;
+        if (ref.shape != catalog::kCabinShapePredicate || ref.f == nullptr ||
+            !gate.Admits(ref)) {
+            continue;
+        }
         const bool implied = std::all_of(
             ref.f->conjuncts.begin(), ref.f->conjuncts.end(), [&](const CabinConjunct& c) {
                 return std::binary_search(own.begin(), own.end(), CabinConjunctText(c));
@@ -1615,10 +1653,13 @@ std::optional<CabinProbe> PredicateCabinProbeOf(const catalog::TableAccess& acce
 // cover of any pair is a superset of the rows passing them all. The bounds
 // stay in the residual and trim the cover's surplus.
 std::optional<CabinProbe> CoverCabinProbeOf(const catalog::TableAccess& access, const Step& step,
-                                            std::uint16_t slot) {
+                                            std::uint16_t slot, const CabinGate& gate) {
     if (!AnyShaped(access, catalog::kCabinShapeExpression)) return std::nullopt;
     for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
-        if (ref.shape != catalog::kCabinShapeExpression || ref.f == nullptr) continue;
+        if (ref.shape != catalog::kCabinShapeExpression || ref.f == nullptr ||
+            !gate.Admits(ref)) {
+            continue;
+        }
         const CabinTerm& term = ref.f->expr;
         if (term.fn->cover == nullptr || term.args.size() != 1) continue;
         std::optional<std::int64_t> low;
@@ -1670,7 +1711,8 @@ std::optional<CabinProbe> CoverCabinProbeOf(const catalog::TableAccess& access, 
 // serve beats any per-statement rebuild.
 std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
                                                  const catalog::TableAccess& access,
-                                                 const Step& step, std::uint16_t slot) {
+                                                 const Step& step, std::uint16_t slot,
+                                                 const CabinGate& gate) {
     for (const StepPredicate& pred : step.residual) {
         auto eq = CorrelatedEqualityOf(pred, slot);
         // The tuple key exclusion is this arm's own: an index's leading column can
@@ -1678,7 +1720,7 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
         // the tuple key reaches here and is already served better by the tuple key arm.
         if (!eq.has_value() || IsTupleKey(eq->own)) continue;
 
-        const catalog::TableAccess::CabinRef cabin = access.CabinOn(eq->own.col_pos);
+        const catalog::TableAccess::CabinRef cabin = gate.On(access, eq->own.col_pos);
         if (cabin.id == 0) continue;
         if (!SameDescriptor(access.schema.columns[eq->own.col_pos], ColumnAt(scope, eq->other))) {
             continue;
@@ -1699,17 +1741,19 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
 // where either correlated arm stands, the step is compiled as though the
 // list were any other filter, and takes whatever it took then.
 //
-// `cabin` is whether a plan's pin leaves the step its Cabin arms (CX-S3a):
-// a correlated Cabin probe the pin rules out is not one the step would have
+// `cabin` is the Cabins a plan's pin leaves the step (CX-S3a, CX-S3b), null
+// where it leaves none: a correlated Cabin probe the pin rules out - or
+// over a Cabin the gate does not admit - is not one the step would have
 // taken, so it does not stand in a list's way.
 std::optional<IndexChoice> LiteralIndexChoiceOf(const Scope& scope,
                                                 const catalog::TableAccess& access,
                                                 const Step& step, std::uint16_t slot,
-                                                std::string_view only = {}, bool cabin = true) {
+                                                std::string_view only, const CabinGate* cabin) {
     auto choice = IndexProbeOf(access, step, slot, /*with_lists=*/true, only);
     if (choice.has_value() && choice->set.has_value() &&
         (CorrelatedIndexProbeOf(scope, access, step, slot, only).has_value() ||
-         (cabin && CorrelatedCabinProbeOf(scope, access, step, slot).has_value()))) {
+         (cabin != nullptr &&
+          CorrelatedCabinProbeOf(scope, access, step, slot, *cabin).has_value()))) {
         return IndexProbeOf(access, step, slot, /*with_lists=*/false, only);
     }
     return choice;
@@ -2389,6 +2433,70 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // chain compiled over a permuted binding is that order's chain,
     // unchanged otherwise. The written order is compiled first and its
     // refusal is the statement's.
+    //
+    // ---- A statement over one relation (CX-S3b) ---------------------------
+    //
+    // It has no order, and it has an arm: an administrator's plan for it
+    // states `ORDER (<the relation>)` and pins that arm, which is the one
+    // way a controller-made Cabin - whose candidates are one-relation
+    // filters - is read through (CX-Q6 (a)). Asked only while a
+    // one-relation plan is enabled, which `any_single()` answers with one
+    // relaxed load, and then of every one-relation statement with a fetch
+    // id, a point read included: a plan made for a statement is applied to
+    // it (the rule section 1a' gives for a tuple key chain). A block with a
+    // subquery predicate takes none, as it takes no order (CB-Q4 (a)): its
+    // sub-chains are lowered with side effects a second compile would
+    // repeat.
+    //
+    // The variant's pin restricts the ladder and is **declined, never
+    // forced** (CX-R2), by the rules a join block's is: where no arm meets
+    // it, or the pinned arm adds a sort the statement's LIMIT does not
+    // bound, the statement runs unpinned and the note says so.
+    if (plan != nullptr && stmt.joins.empty() && plan->admin != nullptr &&
+        plan->admin->any_single() && plan->fetch_id != 0 && !HasSubqueryPredicate(stmt)) {
+        CapturedKey shape;
+        shape.fetch_id = plan->fetch_id;
+        shape.n = 1;
+        shape.oids[0] = scope.relations.front().access->oid;
+        if (const auto managed = plan->admin->Find(shape); managed != nullptr) {
+            plan->admin->CountServed();
+            const PlanVariant& variant = managed->Choose(plan->statement);
+            const std::uint32_t first_step_id = next_step_id;
+            auto unpinned = CompileBound(catalog, stmt, scope, refs, next_step_id, depth, view,
+                                         inner_build, declare);
+            if (!unpinned.ok()) return unpinned;
+            StepChain chain;
+            std::string declined_because;
+            if (variant.access.empty() || !variant.access.front().pins()) {
+                chain = std::move(unpinned.value());
+            } else {
+                Scope pinned = scope;  // whole, so no field is dropped
+                pinned.relations.front().pin = &variant.access.front();
+                std::uint32_t ids = first_step_id;
+                auto held = CompileBound(catalog, stmt, pinned, refs, ids, depth, view,
+                                         inner_build, declare);
+                if (!held.ok()) {
+                    declined_because = held.status().message();
+                } else if (!AddedSortCannotRefuse(held.value(), unpinned.value().sorted(),
+                                                  plan->sort_max_rows)) {
+                    declined_because = "its pin adds a sort the statement's LIMIT does not bound";
+                } else {
+                    chain = std::move(held.value());
+                }
+                if (!declined_because.empty()) {
+                    plan->admin->CountDeclined();
+                    chain = std::move(unpinned.value());
+                }
+            }
+            PlanNote& note = chain.plan_note.emplace();
+            note.source = declined_because.empty() ? PlanSource::kAdmin
+                                                   : PlanSource::kAdminDeclined;
+            note.plan_name = managed->name;
+            note.variant = variant.name;
+            note.declined_because = std::move(declined_because);
+            return chain;
+        }
+    }
     if (plan == nullptr || WhyUnplanned(stmt) != nullptr) {
         return CompileBound(catalog, stmt, scope, refs, next_step_id, depth, view, inner_build,
                             declare);
@@ -2993,6 +3101,21 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         const bool tuple_key = pin.Admits(ArmPin::Arm::kTupleKey);
         const bool index = pin.Admits(ArmPin::Arm::kIndex);
         const bool cabin = pin.Admits(ArmPin::Arm::kCabin);
+        // Which Cabins those ranks may take (CX-S3b): a controller-made one
+        // only where the pin names it, by its column. A name the relation
+        // does not have - renamed since the plan was made - admits nothing,
+        // and the met-check below refuses the variant.
+        CabinGate gate;
+        if (!pin.cabin.empty()) {
+            const auto named = scope.relations[i].access->schema.FindColumn(pin.cabin, 0);
+            gate.named = named.ok() && named.value() != nullptr
+                             ? static_cast<std::uint16_t>(named.value()->pos)
+                             : CabinGate::kNoSuchColumn;
+            // Position 0 is the tuple key, which carries no Cabin.
+            if (gate.named == 0) gate.named = CabinGate::kNoSuchColumn;
+        }
+        const catalog::TableAccess& rel = *scope.relations[i].access;
+        const auto slot = static_cast<std::uint16_t>(i);
         // The walk's own ranks (a filter scan, the build annotation) stand
         // aside under a keyed pin, so the strict tuple key range below them
         // is still the tuple key class's to take.
@@ -3077,9 +3200,8 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
             if (key_range.has_value() && !key_range->strict) {
                 step.kind = AccessKind::kRange;
                 step.range = key_range->bounds;
-            } else if (auto ix = index ? LiteralIndexChoiceOf(scope, *scope.relations[i].access,
-                                                              step, static_cast<std::uint16_t>(i),
-                                                              pin.index, cabin)
+            } else if (auto ix = index ? LiteralIndexChoiceOf(scope, rel, step, slot, pin.index,
+                                                              cabin ? &gate : nullptr)
                                        : std::nullopt;
                        ix.has_value()) {
                 // Ahead of the Cabin, per spec §9: an index is complete for
@@ -3107,33 +3229,26 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // contract untouched.
                 step.kind = AccessKind::kIndexProbe;
                 step.index = std::move(cx);
-            } else if (auto probe = cabin ? CabinProbeOf(*scope.relations[i].access, step,
-                                                          static_cast<std::uint16_t>(i))
-                                          : std::nullopt;
+            } else if (auto probe = cabin ? CabinProbeOf(rel, step, slot, gate) : std::nullopt;
                        probe.has_value()) {
                 // Ahead of kFilterScan, and only ahead of it: a cabined
                 // column's equality is exactly the shape a filter scan
                 // names, and the Cabin is the reason it need not be one.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(probe);
-            } else if (auto ep = cabin ? ExprCabinProbeOf(*scope.relations[i].access, step,
-                                                           static_cast<std::uint16_t>(i))
-                                       : std::nullopt;
+            } else if (auto ep = cabin ? ExprCabinProbeOf(rel, step, slot, gate) : std::nullopt;
                        ep.has_value()) {
                 // An expression Cabin at the column Cabin's rank (AQ-R5):
                 // a compile-time key, before the correlated form.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(ep);
-            } else if (auto pp = cabin ? PredicateCabinProbeOf(*scope.relations[i].access, step,
-                                                                static_cast<std::uint16_t>(i))
+            } else if (auto pp = cabin ? PredicateCabinProbeOf(rel, step, slot, gate)
                                        : std::nullopt;
                        pp.has_value()) {
                 // A predicate Cabin, after the expression arm: AQ-R6.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(pp);
-            } else if (auto cp = cabin ? CorrelatedCabinProbeOf(scope, *scope.relations[i].access,
-                                                                step,
-                                                                static_cast<std::uint16_t>(i))
+            } else if (auto cp = cabin ? CorrelatedCabinProbeOf(scope, rel, step, slot, gate)
                                        : std::nullopt;
                        cp.has_value()) {
                 // The correlated form, last of the *banked*-structure arms:
@@ -3146,9 +3261,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // serve beats any per-statement rebuild (spec §5).
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cp);
-            } else if (auto cv = cabin ? CoverCabinProbeOf(*scope.relations[i].access, step,
-                                                            static_cast<std::uint16_t>(i))
-                                       : std::nullopt;
+            } else if (auto cv = cabin ? CoverCabinProbeOf(rel, step, slot, gate) : std::nullopt;
                        cv.has_value()) {
                 // An expression Cabin's cover of a two-sided range (AQ-R8),
                 // after the correlated arm (AQ-Q16): a join's inner step keyed
@@ -3158,8 +3271,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 step.cabin = std::move(cv);
             } else if (auto cs = key_range.has_value() || !cabin
                                      ? std::nullopt
-                                     : CabinSetOf(*scope.relations[i].access, step,
-                                                  static_cast<std::uint16_t>(i));
+                                     : CabinSetOf(rel, step, slot, gate);
                        cs.has_value()) {
                 // A value list on a cabined column (CU), **last of the Cabin
                 // arms and only on a step that would otherwise walk its
@@ -3215,7 +3327,8 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 return Status::Unsupported(
                     "the statement's step over '" + scope.relations[i].binding +
                     "' cannot take the pinned arm " + std::string(ArmName(pin.arm)) +
-                    (pin.index.empty() ? "" : " " + pin.index));
+                    (pin.index.empty() ? "" : " " + pin.index) +
+                    (pin.cabin.empty() ? "" : " (" + pin.cabin + ")"));
             }
         }
 
@@ -3389,7 +3502,13 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
 }  // namespace
 
 Status PlannableBlock(const parser::SelectStmt& stmt) {
-    const char* const why = WhyUnplanned(stmt);
+    // A statement over one relation has no order and takes a plan for its
+    // arm (CX-S3b; `CompileBlock`), unless it holds a subquery predicate.
+    const char* const why = stmt.joins.empty() && !HasSubqueryPredicate(stmt)
+                                ? nullptr
+                                : stmt.joins.empty()
+                                      ? "a block with a subquery predicate takes no plan"
+                                      : WhyUnplanned(stmt);
     if (why == nullptr) return Status::OK();
     return Status::NotImplemented(std::string("a plan for this statement is not implemented: ") +
                                   why);

@@ -165,6 +165,14 @@ chooses a step's kind or its Cabin. The order of a planned join around a
 Cabin step may read the join planner's relation statistics
 (`plan-stats.md`), never a Cabin's runtime state.
 
+**Which Cabins the catalog state offers a step depends on who made them**
+(CX-Q6 (a), `parser-v2.md` I12): a declared Cabin (`origin = user`) is the
+ladder's for every step, as above; a controller-made one (`origin = auto`)
+is offered only to a step an administrator's plan pins `ACCESS <relation>
+CABIN (<column>)`, and to every other step the relation reads as though
+that Cabin were not there. Everything below - the probe, the witness, what
+a set speaks for - is the same for both once a step has one.
+
 At execution, for key value `v`:
 
 1. Probe the observed set (the instance's store, under the cabin's
@@ -653,7 +661,11 @@ ANALYZE's `cabin_optimizer=true` mark both read, and what separates a
 Cabin the engine may drop on its own judgement from one an operator
 declared — and is **off by default** (`cabin_optimizer`). With the
 controller off, a column declared `auto` behaves exactly as an undeclared
-one.
+one. **The policy answers who may decide the column carries a Cabin, not
+who decides a statement reads through it**: a Cabin the controller created
+serves a read only where an administrator's plan names it
+(`cabin-controller.md` PO11), so `auto` lets the engine build and leaves
+every statement's arm where it was.
 
 **Its input is the instance's** (AT-S8). A Cabin *probe* on any core
 reaches the signals, because the store that forwards to them is the
@@ -730,6 +742,10 @@ CABIN ON trade (state = 'closed' AND amount > 1000)` and the matching `DROP
 CABIN` are the user path; an expression or predicate form takes the
 relation `X` (AQ-Q13). The cabin optimizer's rows carry `origin = auto`,
 the tag that marks a Cabin the engine may drop on its own judgement.
+**A column Cabin an enabled administrator's plan names is dropped by
+nobody** (CX-Q4 (a); `parser-v2.md` I12): `DROP CABIN ON t(c)` is refused
+naming the plan, and the controller's DROP is skipped, until `DROP PLAN`
+or `ALTER PLAN ... DISABLE`.
 `SHOW CABINS` gives each Cabin's `shape` and `key`.
 
 ## 11. Out of scope / open

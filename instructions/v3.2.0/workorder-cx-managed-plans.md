@@ -1140,7 +1140,7 @@ legality at every compile, `ANALYZE`'s mark, `DROP INDEX` RESTRICTed.
 **S3b** is CX-Q6 (a) - a controller-made Cabin eligible to the ladder
 only through a plan that names it - which changes what the ladder takes
 with no plan in force and belongs to `cabin-controller.md` as much as
-here; it is not started.
+here; it is the section after this one.
 
 **S3a, as built** on worktree `cx-plan-change-option`:
 
@@ -1228,3 +1228,84 @@ is what it was.
 - **Not checked by the review**: the Waystone trail and the statistics
   fold under a pinned chain; a met `CABIN` pin, which no cell builds; a
   release build.
+
+### CX-S3b - built 2026-11-18
+
+CX-Q6 (a): a controller-made Cabin is eligible to the ladder only through
+a managed plan that names it. Built on worktree `cx-plan-change-option`
+on the operator's "continue the CX handoff" (2026-11-18, given in Korean),
+under the standing go-ahead (`raft-marks-2026-11-18.md` §16).
+
+**What the item costs, found while building it and not stated when it
+was adopted.** The cabin controller's candidates are one-relation
+filters - `SELECT ... FROM t WHERE c = <value>` is the shape its every
+end-to-end cell runs - and S1b and S3a gave a plan to a join block only.
+Built to its letter on that base, (a) would have left the controller
+with nothing that could ever read its Cabins. So S3b carries two things
+the item's one line does not name: **a plan for a statement over one
+relation**, and **a pin that names a Cabin**. And one consequence stands
+whatever is built: **with the controller on and no plan naming its
+Cabins, the controller accelerates nothing** (`known-gaps.md`), where
+before this stage switching it on moved a hot filter scan to a Cabin
+probe by itself. That is what (a) asks for - the item's own reason is
+that the switch was an implicit plan change - and it is the operator's
+to confirm or reverse, since it turns the controller from something that
+acts into something that prepares.
+
+**S3b, as built:**
+
+- **The gate** (`step_compiler.cpp` `CabinGate`): every Cabin rank of the
+  ladder - the literal probe, the expression and predicate probes, the
+  correlated probe, the cover, the value set - asks it which Cabins the
+  step may take. A Cabin of `auto` origin is admitted only where the
+  step's pin names its column; with no pin, under `CABIN` unnamed and
+  under `NOT` another class, the relation reads as though the Cabin were
+  not there. Under every `join_order`, and in a write's `WHERE` as in a
+  read. A declared Cabin is admitted as before.
+- **The named pin**: `ACCESS <binding> CABIN (<column>)`. It admits the
+  column Cabin on that column, whoever made it, and nothing else, so the
+  class's met-check is the named Cabin's. `NOT CABIN (<column>)` is
+  refused; an expression or predicate Cabin cannot be named
+  (`NotImplemented`); `REPLACE VARIANT` checks the column carries a Cabin
+  (`NotFound`). The row: `<w>:CABIN:<column>` in a variant's `access=`.
+- **A one-relation statement's plan**: `CREATE PLAN <name> FOR <select
+  over one relation> VARIANT ... ORDER (<the relation>) [ACCESS ...]`.
+  `AS SEARCHED` is refused `Unsupported` (no order to search) and a
+  subquery predicate `NotImplemented`. The compile asks
+  `AdminPlans::any_single()` - one relaxed load - and probes only while a
+  one-relation plan is enabled; it compiles the statement unpinned, then
+  under the variant's pin, and declines the pin where no arm meets it or
+  it adds a sort the `LIMIT` does not bound (CX-R2, CC-Q10).
+- **The drop** (CX-Q4 (a)): an enabled plan that names a Cabin RESTRICTs
+  `DROP CABIN ON t(<column>)`, and the controller's DROP of it is skipped
+  and counted (`sys.meta` `cabin_optimizer_drops_restricted`); a budget
+  swap whose victim is so restricted builds nothing.
+- **Seen**: `ANALYZE`'s `cabin_optimizer=true` now only beside `arm=plan`;
+  the clause in `sys.plans`' `variants`.
+
+**Where S3b differs from the order's text, each CLA's choice and none
+marked by the operator.**
+
+- **A one-relation statement takes a plan**, which S1b refused and S3a
+  kept refused for CX-R6. It is what makes (a) usable at all. CX-R6 as it
+  now stands: with no one-relation plan enabled a point read pays one
+  relaxed load and no probe; with one enabled, every top-level
+  one-relation `SELECT` with a fetch id pays the probe (`known-gaps.md`).
+- **"A plan that names it" is read as a pin naming the Cabin's column**,
+  and `CABIN` unnamed does not admit a controller-made Cabin. The
+  alternative - any `CABIN` pin admits it - would let a plan written for
+  a declared Cabin start reading a controller's the day one appears on
+  another column of the step.
+- **(a) holds under `planned` too.** `planned` is the operator's opt-in
+  to statistics choosing the join order (W3); the item names no value,
+  and a Cabin's appearance is not a statistic.
+- **The controller's DROP is RESTRICTed, not only `DROP CABIN`.** CX-Q4
+  (a) names "a Cabin drop"; the controller dropping a Cabin a plan reads
+  through is the implicit change (a) exists to exclude. The decision
+  core is untouched: the executor skips the action.
+- **The foreign key's reverse check still reads a controller-made Cabin**
+  (`foreign-keys.md` §3a): it is enforcement, not a statement's plan.
+- **Not built**: a named expression or predicate Cabin; a RESTRICT on
+  `RENAME COLUMN` of a named column (the pin goes unmet and the variant
+  is declined); a relation lock under a column Cabin's drop, so the
+  RESTRICT has a window (`known-gaps.md`).

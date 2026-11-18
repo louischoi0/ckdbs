@@ -963,6 +963,12 @@ TEST(FkCrossCoreRigTest, AChildMovedOntoASeedBehindTheControllersBuildIsInTheSet
     ASSERT_TRUE(c_oid.ok());
     auto cabin = catalog.CreateCabin(c_oid.value(), /*col_pos=*/1, catalog::kCabinOriginAuto);
     ASSERT_TRUE(cabin.ok()) << cabin.status().message();
+    // A statement reads through a controller-made Cabin only where a plan
+    // names it (CX-Q6 (a)), and the sighting below is such a read.
+    ASSERT_EQ(d0.Dispatch("CREATE PLAN serve_c FOR SELECT id FROM c WHERE pid = 0 VARIANT v "
+                          "ELSE ORDER (c) ACCESS c CABIN (pid)")
+                  .response.rfind("CREATED PLAN", 0),
+              0u);
     ASSERT_EQ(d0.Dispatch("SELECT id FROM c WHERE pid = 7").response, "id");
     stats::CabinStore& cabins = *r.rig->core(0).cabins();
     ASSERT_EQ(cabins.SightedUnobservedOf(cabin.value()).size(), 1u);
@@ -1030,6 +1036,12 @@ TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBan
     ASSERT_TRUE(c_oid.ok());
     auto cabin = catalog.CreateCabin(c_oid.value(), /*col_pos=*/1, catalog::kCabinOriginAuto);
     ASSERT_TRUE(cabin.ok()) << cabin.status().message();
+    // A statement reads through a controller-made Cabin only where a plan
+    // names it (CX-Q6 (a)), and the sighting below is such a read.
+    ASSERT_EQ(d0.Dispatch("CREATE PLAN serve_c FOR SELECT id FROM c WHERE pid = 0 VARIANT v "
+                          "ELSE ORDER (c) ACCESS c CABIN (pid)")
+                  .response.rfind("CREATED PLAN", 0),
+              0u);
     ASSERT_EQ(d0.Dispatch("SELECT id FROM c WHERE pid = 7").response, "id");
     stats::CabinStore& cabins = *r.rig->core(0).cabins();
     ASSERT_EQ(cabins.SightedUnobservedOf(cabin.value()).size(), 1u);

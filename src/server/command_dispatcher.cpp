@@ -1888,6 +1888,7 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
             os << " cabin_optimizer_ticks=" << c.ticks << " cabin_optimizer_creates=" << c.creates
                << " cabin_optimizer_extends=" << c.extends << " cabin_optimizer_heals=" << c.heals
                << " cabin_optimizer_drops=" << c.drops
+               << " cabin_optimizer_drops_restricted=" << c.drops_restricted
                << " cabin_optimizer_deferred=" << c.builds_deferred
                << " cabin_optimizer_failures=" << c.build_failures;
         }
@@ -3465,6 +3466,27 @@ DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt,
     // reply shape and differ only in which catalog call they reach - the same
     // reason CabinStmt is one struct (ast.hpp).
     if (stmt.drop) {
+        // CX-Q4 (a), CX-S3b: an enabled administrator's plan that names
+        // this Cabin - `ACCESS ... CABIN (<column>)` - is a declaration on
+        // it, as a named index pin is on its index. A column Cabin's drop
+        // holds no relation lock, so a plan made while it runs is not seen
+        // here: that plan's pin goes unmet and its variant is declined
+        // (CX-Q4 (b)), which changes no result.
+        if (stmt.shape == catalog::kCabinShapeColumn && admin_plans_->any()) {
+            const auto relation = catalog_.ResolveRelation(stmt.schema, stmt.table_name,
+                                                           default_namespace, 0, nullptr);
+            if (relation.ok()) {
+                if (const auto plan =
+                        admin_plans_->EnabledPinningCabin(relation.value(), stmt.column_name);
+                    plan.has_value()) {
+                    return DispatchOutcome{"ERR plan '" + *plan +
+                                               "' names this cabin; DROP PLAN or ALTER PLAN " +
+                                               *plan + " DISABLE first (byte " +
+                                               std::to_string(stmt.column_byte_offset) + ")",
+                                           false};
+                }
+            }
+        }
         auto cabin_id =
             exec::DropCabin(catalog_, page_store_, wal_, stmt, default_namespace);
         if (!cabin_id.ok()) {
@@ -13094,6 +13116,13 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
     if (Status s = exec::PlannableBlock(stmt); !s.ok()) {
         return Refused(AtByte(s, create.statement_at));
     }
+    // A statement over one relation has an arm to pin and no order (CX-S3b).
+    if (create.searched && stmt.joins.empty()) {
+        return Refused(Status::Unsupported(
+            "CREATE PLAN ... AS SEARCHED takes a join: a statement over one relation has no "
+            "join order to search; state its plan as VARIANT ... ORDER (...) ACCESS ..." +
+            ByteSuffix(create.statement_at)));
+    }
 
     exec::PlanRow row;
     row.name = create.name;
@@ -13300,15 +13329,31 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
                 }
                 auto variant = exec::ResolvePlanVariant(row.bindings, row.arguments, spec);
                 if (!variant.ok()) return variant.status();
-                // A pinned index is one the relation has, by name: the one
-                // thing of a pin that can be asked with no statement.
+                // A pinned index is one the relation has, by name, and a
+                // named Cabin one its column carries: the one thing of a
+                // pin that can be asked with no statement.
                 for (const exec::PlanVariantSpec::Access& written : spec.access) {
-                    if (written.pin.index.empty()) continue;
+                    if (written.pin.index.empty() && written.pin.cabin.empty()) continue;
                     // `ResolvePlanVariant` placed the binding already.
                     std::size_t w = 0;
                     while (!exec::SameName(row.bindings[w], written.binding)) ++w;
                     auto access = catalog_.InitTableAccess(row.key.oids[w]);
                     if (!access.ok()) return access.status();
+                    if (!written.pin.cabin.empty()) {
+                        auto column = access.value()->schema.FindColumn(
+                            written.pin.cabin, static_cast<std::uint32_t>(written.name_at));
+                        if (!column.ok()) return column.status();
+                        if (column.value() == nullptr ||
+                            access.value()
+                                    ->CabinOn(static_cast<std::uint16_t>(column.value()->pos))
+                                    .id == 0) {
+                            return Status::NotFound("variant '" + spec.name + "': '" +
+                                                    row.bindings[w] + "' has no cabin on '" +
+                                                    written.pin.cabin + "'" +
+                                                    ByteSuffix(written.name_at));
+                        }
+                        continue;
+                    }
                     const auto& indexes = access.value()->indexes;
                     if (std::none_of(indexes.begin(), indexes.end(), [&](const auto& ix) {
                             return exec::SameName(ix.name, written.pin.index);
@@ -13316,7 +13361,7 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
                         return Status::NotFound("variant '" + spec.name + "': '" +
                                                 row.bindings[w] + "' has no index named '" +
                                                 written.pin.index + "'" +
-                                                ByteSuffix(written.index_at));
+                                                ByteSuffix(written.name_at));
                     }
                 }
                 *old = std::move(variant.value());

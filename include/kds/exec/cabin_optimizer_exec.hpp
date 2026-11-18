@@ -5,6 +5,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/admin_plans.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/optimizer_signals.hpp"
@@ -86,6 +87,7 @@ public:
         std::uint64_t extends = 0;          // EXTENDs whose walk completed
         std::uint64_t heals = 0;            // HEAL passes run
         std::uint64_t drops = 0;            // DROPs applied
+        std::uint64_t drops_restricted = 0; // DROPs not applied: a plan names the Cabin
         std::uint64_t builds_deferred = 0;  // busy-row / kill-switch build aborts
         std::uint64_t build_failures = 0;   // failed builds (errors; deferrals excluded)
     };
@@ -106,7 +108,18 @@ public:
 
     const Counters& counters() const noexcept { return counters_; }
 
+    // The instance's administrator's plans (`admin_plans.hpp`), or null. **A
+    // Cabin an enabled plan names is not dropped** (CX-Q4 (a), CX-S3b): the
+    // DROP is skipped and counted, the controller's entry left as its
+    // decision left it, and a budget swap that chose it as its victim
+    // builds nothing. Set once, before the first tick.
+    void set_plans(AdminPlans* plans) noexcept { plans_ = plans; }
+
 private:
+    // Whether an enabled administrator's plan names the Cabin `action` is
+    // about, by its column.
+    bool NamedByAPlan(const stats::ActionItem& action);
+
     Status ApplyCreate(const stats::ActionItem& action, const std::function<bool()>& enabled);
     Status ApplyExtend(const stats::ActionItem& action, const std::function<bool()>& enabled);
     Status ApplyHeal(const stats::ActionItem& action);
@@ -131,6 +144,7 @@ private:
     stats::CabinStore& cabins_;
     stats::CabinOptimizer& controller_;
     txn::TransactionManager* txn_;
+    AdminPlans* plans_ = nullptr;
     Counters counters_;
 };
 

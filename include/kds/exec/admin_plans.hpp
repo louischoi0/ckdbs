@@ -55,11 +55,18 @@
 //
 // **Cost** (CX-R6): a compile asks `any()` - one relaxed load - and probes
 // only while at least one plan is enabled, and only for a top-level block
-// of two relations or more with a fetch id. A point read never reaches it.
-// Unlike the captured table, a block of tuple key descents **is** probed
-// while a plan is enabled: W4 makes an administrator's plan always
-// possible, and a plan created and then silently not applied would be a
-// spelling that enforces nothing.
+// of two relations or more with a fetch id. Unlike the captured table, a
+// block of tuple key descents **is** probed while a plan is enabled: W4
+// makes an administrator's plan always possible, and a plan created and
+// then silently not applied would be a spelling that enforces nothing.
+//
+// **A statement over one relation has a plan too** (CX-S3b): no order to
+// state, but an arm to pin - which is how a controller-made Cabin, whose
+// candidates are one-relation filters, is read through at all. Its compile
+// asks `any_single()` - one relaxed load - and probes only while a
+// one-relation plan is enabled; with none, a point read never reaches the
+// table, and with one, every top-level one-relation `SELECT` with a fetch
+// id pays the probe, a point read's included, for the reason above.
 //
 // **Latch protocol** (`docs/rules/rules.md` §3): a partition's latch guards
 // its map and is held for one lookup, install or erase, across no I/O;
@@ -86,11 +93,20 @@ inline constexpr std::size_t kMaxPlanVariants = 16;
 // A pin is met when the step's arm is of its class - and, for a named
 // index, is that index. `SCAN` cannot be forbidden: the walk is what every
 // other arm falls back to.
+//
+// **A pinned `kCabin` may name a Cabin, by the column it is on** (CX-S3b,
+// CX-Q6 (a)): `CABIN (<column>)`. It is then met only by that column
+// Cabin's arm, and it is **the one way a controller-made Cabin reaches the
+// ladder** - a Cabin of `auto` origin is tried by no rank of an unpinned
+// step and by no rank under `CABIN` unnamed, which admits the declared
+// Cabins alone. The cabin optimizer builds; a plan that names what it built
+// is what reads through it.
 struct ArmPin {
     enum class Arm : std::uint8_t { kLadder, kTupleKey, kIndex, kCabin, kScan };
     Arm arm = Arm::kLadder;
     bool forbid = false;
     std::string index;  // a pinned `kIndex`'s name; empty: any index
+    std::string cabin;  // a pinned `kCabin`'s column; empty: any declared Cabin
 
     bool pins() const noexcept { return arm != Arm::kLadder; }
     // Whether the ladder may try arms of class `tried`.
@@ -158,6 +174,12 @@ public:
     // Whether any plan is enabled. A hint a compile gates its probe on: a
     // plan enabled this instant is served from the next compile.
     bool any() const noexcept { return enabled_.load(std::memory_order_relaxed) != 0; }
+    // Whether any enabled plan is for a statement over one relation
+    // (CX-S3b): what a one-relation compile gates its probe on, so it asks
+    // the table only while such a plan exists.
+    bool any_single() const noexcept {
+        return enabled_single_.load(std::memory_order_relaxed) != 0;
+    }
 
     // The enabled plan for `key`, or null.
     std::shared_ptr<const AdminPlan> Find(const CapturedKey& key);
@@ -179,6 +201,11 @@ public:
     // `index` on relation `oid`, or nullopt: what RESTRICTs a `DROP INDEX`
     // (CX-Q4 (a)).
     std::optional<std::string> EnabledPinningIndex(catalog::Oid oid, std::string_view index);
+
+    // The same for the Cabin on relation `oid`'s column named `column`
+    // (CX-S3b): what RESTRICTs a `DROP CABIN` and the cabin optimizer's own
+    // DROP of a Cabin a plan reads through.
+    std::optional<std::string> EnabledPinningCabin(catalog::Oid oid, std::string_view column);
 
 private:
     // The name of the first enabled plan `test` holds for, or nullopt.
@@ -218,10 +245,17 @@ public:
 
 private:
     Partition& PartitionOf(const CapturedKey& key) noexcept;
+    // One enabled plan more, or one fewer, for `key`.
+    void CountEnabled(const CapturedKey& key, bool enabled) noexcept;
+    // The name of an enabled plan a variant of which pins, by name, the
+    // index (`arm == kIndex`) or the column's Cabin (`kCabin`) on `oid`.
+    std::optional<std::string> EnabledPinning(catalog::Oid oid, ArmPin::Arm arm,
+                                              std::string_view name);
 
     std::array<Partition, kPartitions> partitions_;
     std::atomic<std::uint64_t> plans_{0};
     std::atomic<std::uint64_t> enabled_{0};
+    std::atomic<std::uint64_t> enabled_single_{0};  // of `enabled_`, those with `key.n == 1`
     std::atomic<std::uint64_t> served_{0};
     std::atomic<std::uint64_t> declined_{0};
     std::atomic<bool> ddl_busy_{false};

@@ -90,7 +90,8 @@ std::string Lowered(std::string_view name) {
 // The head fields a captured and an administrator's row share, checked as
 // a pair: the fingerprint version, the oids and the time.
 Status ReadShared(std::string_view fp_text, std::string_view oids_text, std::string_view at_text,
-                  std::uint64_t& fp, std::vector<std::uint64_t>& oids, std::uint64_t& at) {
+                  std::uint64_t& fp, std::vector<std::uint64_t>& oids, std::uint64_t& at,
+                  std::size_t min_relations) {
     const auto corrupt = [](std::string_view what) {
         return Status::Corruption("sys.plans: " + std::string(what));
     };
@@ -100,8 +101,9 @@ Status ReadShared(std::string_view fp_text, std::string_view oids_text, std::str
     if (fp > UINT32_MAX || at > static_cast<std::uint64_t>(INT64_MAX)) {
         return corrupt("a row's version or time is out of range");
     }
-    // A join block has two relations or more.
-    if (oids.size() < 2) return corrupt("a row names fewer than two relations");
+    // A captured order is a join block's, two relations or more; an
+    // administrator's plan may be a one-relation statement's (CX-S3b).
+    if (oids.size() < min_relations) return corrupt("a row names too few relations");
     for (const std::uint64_t oid : oids) {
         if (oid > UINT32_MAX) return corrupt("a row names an oid past 32 bits");
     }
@@ -130,14 +132,17 @@ std::string EncodeAccess(const std::vector<ArmPin>& access) {
         out.append(std::to_string(w)).push_back(':');
         if (pin.forbid) out.push_back('!');
         out.append(ArmName(pin.arm));
+        // One name at most: a pinned index's, or a pinned Cabin's column.
         if (!pin.index.empty()) out.append(":").append(pin.index);
+        if (!pin.cabin.empty()) out.append(":").append(pin.cabin);
     }
     return out;
 }
 
 // The field's reading into `n` pins by written position; false where it is
 // not what `EncodeAccess` writes: a position out of range or pinned twice,
-// an unknown pin, a forbidden walk, a name on anything but a pinned index.
+// an unknown pin, a forbidden walk, a name on anything but a pinned index
+// or a pinned Cabin.
 bool DecodeAccess(std::string_view text, std::size_t n, std::vector<ArmPin>& out) {
     std::vector<ArmPin> pins(n);
     while (true) {
@@ -164,10 +169,12 @@ bool DecodeAccess(std::string_view text, std::size_t n, std::vector<ArmPin>& out
         if (pin.forbid && pin.arm == ArmPin::Arm::kScan) return false;
         if (name_at != std::string_view::npos) {
             const std::string_view name = item.substr(name_at + 1);
-            if (pin.arm != ArmPin::Arm::kIndex || pin.forbid || !parser::IsIdentifier(name)) {
+            const bool index = pin.arm == ArmPin::Arm::kIndex;
+            if ((!index && pin.arm != ArmPin::Arm::kCabin) || pin.forbid ||
+                !parser::IsIdentifier(name)) {
                 return false;
             }
-            pin.index = std::string(name);
+            (index ? pin.index : pin.cabin) = std::string(name);
         }
         pins[position] = std::move(pin);
         if (semi == std::string_view::npos) break;
@@ -266,7 +273,7 @@ Status DecodeAdminPlanText(std::string_view text, PlanRow& out) {
     std::vector<std::uint64_t> oids;
     std::uint64_t fp = 0;
     std::uint64_t at = 0;
-    if (Status s = ReadShared(fp_text, oids_text, at_text, fp, oids, at); !s.ok()) return s;
+    if (Status s = ReadShared(fp_text, oids_text, at_text, fp, oids, at, 1); !s.ok()) return s;
     std::uint64_t arguments = 0;
     std::uint64_t count = 0;
     if (!ReadNumber(args_text, arguments) || arguments > UINT32_MAX ||
@@ -401,7 +408,7 @@ Status DecodePlanText(std::string_view text, PlanRow& out) {
     std::vector<std::uint64_t> order;
     std::uint64_t fp = 0;
     std::uint64_t at = 0;
-    if (Status s = ReadShared(fp_text, oids_text, at_text, fp, oids, at); !s.ok()) return s;
+    if (Status s = ReadShared(fp_text, oids_text, at_text, fp, oids, at, 2); !s.ok()) return s;
     // An order names each written position once.
     if (!ReadList(order_text, order) || !IsPermutation(order, oids.size())) {
         return corrupt("a row's order is not a permutation of its relations");
