@@ -6,15 +6,31 @@
 
 namespace kds::exec {
 
+namespace {
+
+struct ArmWord {
+    ArmPin::Arm arm;
+    std::string_view word;
+};
+inline constexpr ArmWord kArmWords[] = {{ArmPin::Arm::kTupleKey, "TUPLE_KEY"},
+                                        {ArmPin::Arm::kIndex, "INDEX"},
+                                        {ArmPin::Arm::kCabin, "CABIN"},
+                                        {ArmPin::Arm::kScan, "SCAN"}};
+
+}  // namespace
+
 std::string_view ArmName(ArmPin::Arm arm) noexcept {
-    switch (arm) {
-        case ArmPin::Arm::kLadder: return "LADDER";
-        case ArmPin::Arm::kTupleKey: return "TUPLE_KEY";
-        case ArmPin::Arm::kIndex: return "INDEX";
-        case ArmPin::Arm::kCabin: return "CABIN";
-        case ArmPin::Arm::kScan: return "SCAN";
+    for (const ArmWord& entry : kArmWords) {
+        if (entry.arm == arm) return entry.word;
     }
-    return "?";
+    return "LADDER";
+}
+
+std::optional<ArmPin::Arm> ArmFromName(std::string_view word) noexcept {
+    for (const ArmWord& entry : kArmWords) {
+        if (SameName(entry.word, word)) return entry.arm;
+    }
+    return std::nullopt;
 }
 
 const PlanVariant& AdminPlan::Choose(std::string_view statement) const {
@@ -72,33 +88,23 @@ bool AdminPlans::Erase(const CapturedKey& key) {
 }
 
 std::optional<std::string> AdminPlans::EnabledNaming(catalog::Oid oid) {
-    for (Partition& partition : partitions_) {
-        const LatchGuard hold(&partition.latch);
-        for (const auto& [key, entry] : partition.plans) {
-            if (entry.enabled && key.Names(oid)) return entry.plan->name;
-        }
-    }
-    return std::nullopt;
+    return EnabledWhere([&](const CapturedKey& key, const AdminPlan&) { return key.Names(oid); });
 }
 
 std::optional<std::string> AdminPlans::EnabledPinningIndex(catalog::Oid oid,
                                                            std::string_view index) {
-    for (Partition& partition : partitions_) {
-        const LatchGuard hold(&partition.latch);
-        for (const auto& [key, entry] : partition.plans) {
-            if (!entry.enabled) continue;
-            for (const PlanVariant& variant : entry.plan->variants) {
-                for (std::size_t w = 0; w < variant.access.size() && w < key.n; ++w) {
-                    const ArmPin& pin = variant.access[w];
-                    if (key.oids[w] == oid && pin.arm == ArmPin::Arm::kIndex && !pin.forbid &&
-                        SameName(pin.index, index)) {
-                        return entry.plan->name;
-                    }
+    return EnabledWhere([&](const CapturedKey& key, const AdminPlan& plan) {
+        for (const PlanVariant& variant : plan.variants) {
+            for (std::size_t w = 0; w < variant.access.size() && w < key.n; ++w) {
+                const ArmPin& pin = variant.access[w];
+                if (key.oids[w] == oid && pin.arm == ArmPin::Arm::kIndex && !pin.forbid &&
+                    SameName(pin.index, index)) {
+                    return true;
                 }
             }
         }
-    }
-    return std::nullopt;
+        return false;
+    });
 }
 
 void AdminPlans::ForgetRelation(catalog::Oid oid) {

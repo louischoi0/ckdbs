@@ -129,13 +129,7 @@ std::string EncodeAccess(const std::vector<ArmPin>& access) {
         out.append(out.empty() ? " access=" : ";");
         out.append(std::to_string(w)).push_back(':');
         if (pin.forbid) out.push_back('!');
-        switch (pin.arm) {
-            case ArmPin::Arm::kTupleKey: out.append("tuple_key"); break;
-            case ArmPin::Arm::kIndex: out.append("index"); break;
-            case ArmPin::Arm::kCabin: out.append("cabin"); break;
-            case ArmPin::Arm::kScan: out.append("scan"); break;
-            case ArmPin::Arm::kLadder: break;
-        }
+        out.append(ArmName(pin.arm));
         if (!pin.index.empty()) out.append(":").append(pin.index);
     }
     return out;
@@ -162,12 +156,11 @@ bool DecodeAccess(std::string_view text, std::size_t n, std::vector<ArmPin>& out
             item.remove_prefix(1);
         }
         const std::size_t name_at = item.find(':');
-        const std::string_view arm = item.substr(0, name_at);
-        if (arm == "tuple_key") pin.arm = ArmPin::Arm::kTupleKey;
-        else if (arm == "index") pin.arm = ArmPin::Arm::kIndex;
-        else if (arm == "cabin") pin.arm = ArmPin::Arm::kCabin;
-        else if (arm == "scan") pin.arm = ArmPin::Arm::kScan;
-        else return false;
+        // The word as `EncodeAccess` writes it, and no other spelling.
+        const std::string_view word = item.substr(0, name_at);
+        const auto arm = ArmFromName(word);
+        if (!arm.has_value() || ArmName(*arm) != word) return false;
+        pin.arm = *arm;
         if (pin.forbid && pin.arm == ArmPin::Arm::kScan) return false;
         if (name_at != std::string_view::npos) {
             const std::string_view name = item.substr(name_at + 1);

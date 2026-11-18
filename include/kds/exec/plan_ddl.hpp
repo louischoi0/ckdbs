@@ -66,6 +66,7 @@ struct PlanVariantSpec {
         std::string binding;
         std::size_t binding_at = 0;
         ArmPin pin;
+        std::size_t index_at = 0;  // a named index's token, where `pin.index` is set
     };
     std::vector<Access> access;
 };

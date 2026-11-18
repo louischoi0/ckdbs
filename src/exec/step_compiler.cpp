@@ -1698,14 +1698,18 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
 // the step had before lists were read asks for one join key's rows; so
 // where either correlated arm stands, the step is compiled as though the
 // list were any other filter, and takes whatever it took then.
+//
+// `cabin` is whether a plan's pin leaves the step its Cabin arms (CX-S3a):
+// a correlated Cabin probe the pin rules out is not one the step would have
+// taken, so it does not stand in a list's way.
 std::optional<IndexChoice> LiteralIndexChoiceOf(const Scope& scope,
                                                 const catalog::TableAccess& access,
                                                 const Step& step, std::uint16_t slot,
-                                                std::string_view only = {}) {
+                                                std::string_view only = {}, bool cabin = true) {
     auto choice = IndexProbeOf(access, step, slot, /*with_lists=*/true, only);
     if (choice.has_value() && choice->set.has_value() &&
         (CorrelatedIndexProbeOf(scope, access, step, slot, only).has_value() ||
-         CorrelatedCabinProbeOf(scope, access, step, slot).has_value())) {
+         (cabin && CorrelatedCabinProbeOf(scope, access, step, slot).has_value()))) {
         return IndexProbeOf(access, step, slot, /*with_lists=*/false, only);
     }
     return choice;
@@ -2989,6 +2993,10 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         const bool tuple_key = pin.Admits(ArmPin::Arm::kTupleKey);
         const bool index = pin.Admits(ArmPin::Arm::kIndex);
         const bool cabin = pin.Admits(ArmPin::Arm::kCabin);
+        // The walk's own ranks (a filter scan, the build annotation) stand
+        // aside under a keyed pin, so the strict tuple key range below them
+        // is still the tuple key class's to take.
+        const bool walk = pin.Admits(ArmPin::Arm::kScan);
         step.arm_pinned = pin.pins();
         for (const StepPredicate& pred : step.residual) {
             if (!tuple_key) break;
@@ -3071,7 +3079,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 step.range = key_range->bounds;
             } else if (auto ix = index ? LiteralIndexChoiceOf(scope, *scope.relations[i].access,
                                                               step, static_cast<std::uint16_t>(i),
-                                                              pin.index)
+                                                              pin.index, cabin)
                                        : std::nullopt;
                        ix.has_value()) {
                 // Ahead of the Cabin, per spec §9: an index is complete for
@@ -3167,14 +3175,15 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cs->probe);
                 step.key_set = std::move(cs->set);
-            } else if (HasUnindexedEqualityFilter(*scope.relations[i].access, step,
-                                                   static_cast<std::uint16_t>(i))) {
+            } else if (walk && HasUnindexedEqualityFilter(*scope.relations[i].access, step,
+                                                           static_cast<std::uint16_t>(i))) {
                 // Ahead of the build annotation by decision, not
                 // impossibility (spec §8): the step's own literal already
                 // bounds what a walk visits, and v1 declines to also build
                 // for it.
                 step.kind = AccessKind::kFilterScan;
-            } else if (inner_build && step.fn_residual.empty() && step.bool_residual.empty()) {
+            } else if (walk && inner_build && step.fn_residual.empty() &&
+                       step.bool_residual.empty()) {
                 // A step carrying a function conjunct takes no build
                 // (AP-S4): the map holds the rows passing the
                 // *non-correlated* conjuncts, and a function conjunct is
@@ -3202,18 +3211,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // not something the ladder is held to by taking nothing else away,
         // so `SCAN` is met by what is left when no keyed arm is admitted.
         if (pin.pins() && !pin.forbid) {
-            ArmPin::Arm took = ArmPin::Arm::kScan;
-            switch (step.kind) {
-                case AccessKind::kLookup:
-                case AccessKind::kProbe:
-                case AccessKind::kRange: took = ArmPin::Arm::kTupleKey; break;
-                case AccessKind::kIndexProbe:
-                case AccessKind::kIndexRange: took = ArmPin::Arm::kIndex; break;
-                case AccessKind::kCabinProbe: took = ArmPin::Arm::kCabin; break;
-                case AccessKind::kFilterScan:
-                case AccessKind::kScan: took = ArmPin::Arm::kScan; break;
-            }
-            if (took != pin.arm) {
+            if (ArmClassOf(step.kind) != pin.arm) {
                 return Status::Unsupported(
                     "the statement's step over '" + scope.relations[i].binding +
                     "' cannot take the pinned arm " + std::string(ArmName(pin.arm)) +

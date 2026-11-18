@@ -375,10 +375,10 @@ TEST(AdminPlanTextTest, AVariantsPinsReadBackAndARowWithNoneReadsAsBefore) {
                               exec::ArmPin{exec::ArmPin::Arm::kIndex, false, "loans_user_idx"}};
     row.variants[1].access = {exec::ArmPin{}, exec::ArmPin{exec::ArmPin::Arm::kCabin, true, ""}};
     const std::string text = exec::EncodeAdminPlanText(row, 7);
-    EXPECT_NE(text.find("narrow 0,1 access=0:tuple_key;1:index:loans_user_idx WHEN "),
+    EXPECT_NE(text.find("narrow 0,1 access=0:TUPLE_KEY;1:INDEX:loans_user_idx WHEN "),
               std::string::npos)
         << text;
-    EXPECT_NE(text.find("wide 1,0 access=1:!cabin ELSE\n"), std::string::npos) << text;
+    EXPECT_NE(text.find("wide 1,0 access=1:!CABIN ELSE\n"), std::string::npos) << text;
     exec::PlanRow back;
     ASSERT_TRUE(exec::DecodeAdminPlanText(text, back).ok()) << text;
     EXPECT_EQ(back.variants[0].access, row.variants[0].access);
@@ -388,9 +388,9 @@ TEST(AdminPlanTextTest, AVariantsPinsReadBackAndARowWithNoneReadsAsBefore) {
 
     const std::string head = "v1 fp=2 oids=4001,4002 bindings=u,l args=2 at=5 variants=1\na 0,1 ";
     for (const std::string access :
-         {"access=2:scan", "access=0:scan;0:cabin", "access=0:hash", "access=0:!scan",
-          "access=0:cabin:x", "access=0:!index:x", "access=0:index:", "access=x:scan",
-          "access=", "access=0:scan;"}) {
+         {"access=2:SCAN", "access=0:SCAN;0:CABIN", "access=0:HASH", "access=0:!SCAN",
+          "access=0:CABIN:x", "access=0:!INDEX:x", "access=0:INDEX:", "access=x:SCAN",
+          "access=", "access=0:SCAN;", "access=0:scan"}) {
         exec::PlanRow kept;
         EXPECT_EQ(exec::DecodeAdminPlanText(head + access + " ELSE\nS", kept).code(),
                   StatusCode::kCorruption)
@@ -1061,6 +1061,30 @@ TEST_F(AdminPlanTest, APinRestrictsTheLadderAndTheRowsAreTheSame) {
     EXPECT_EQ(Rows(sql), rows);
 }
 
+TEST_F(AdminPlanTest, AKeyedPinIsMetByTheStrictRangeAWalkRankWouldOtherwiseTake) {
+    // results' step carries a strict tuple key range and an unindexed
+    // equality: unpinned, the filter scan outranks the strict range (ruling
+    // (a) at TupleKeyRangeOf). The range is a tuple key arm the ladder can
+    // take for the step, so a TUPLE_KEY pin is met by it - the walk ranks are
+    // not the pin's class and do not stand in its way.
+    const std::string sql =
+        "SELECT results.pnl, models.name FROM results JOIN models ON results.model_id = "
+        "models.id WHERE results.id > 3 AND results.id < 40 AND results.pnl = 10";
+    const std::vector<std::string> rows = Rows(sql);
+    ASSERT_EQ(rows.size(), 1u);
+    Ok("CREATE PLAN p FOR " + sql + std::string(kAsWritten));
+    std::string plan = Plan(sql);
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 FilterScan ", 0), 0u) << plan;
+    Ok("DROP PLAN p");
+    const std::string made =
+        Run("CREATE PLAN p FOR " + sql + std::string(kAsWritten) + " ACCESS results TUPLE_KEY");
+    ASSERT_EQ(made.rfind("CREATED PLAN", 0), 0u) << made;
+    plan = Plan(sql);
+    EXPECT_NE(plan.find("planned order=plan plan=p/as_written\\n"), std::string::npos) << plan;
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 Range ", 0), 0u) << plan;
+    EXPECT_EQ(Rows(sql), rows);  // CX-R2
+}
+
 TEST_F(AdminPlanTest, APinNoArmMeetsIsRefusedAtCreateAndDeclinedAtACompile) {
     Ok("CREATE INDEX results_model ON results (model_id)");
     const std::string sql = Where("5");
@@ -1094,10 +1118,15 @@ TEST_F(AdminPlanTest, APinNoArmMeetsIsRefusedAtCreateAndDeclinedAtACompile) {
     EXPECT_EQ(Rows(sql), rows);
     EXPECT_GE(table().declined(), 2u);
 
-    // `REPLACE VARIANT` compiles nothing, and still knows an index by name.
-    EXPECT_EQ(CodeOf("ALTER PLAN p REPLACE VARIANT models_first ELSE ORDER (models, results) "
-                     "ACCESS results INDEX results_model"),
-              StatusCode::kNotFound);
+    // `REPLACE VARIANT` compiles nothing, and still knows an index by name -
+    // refused at the name's own byte.
+    const std::string replace =
+        "ALTER PLAN p REPLACE VARIANT models_first ELSE ORDER (models, results) "
+        "ACCESS results INDEX results_model";
+    EXPECT_EQ(CodeOf(replace), StatusCode::kNotFound);
+    EXPECT_NE(Run(replace).find("(byte " + std::to_string(replace.rfind("results_model")) + ")"),
+              std::string::npos)
+        << Run(replace);
     Ok("CREATE INDEX results_model ON results (model_id)");
     Ok("ALTER PLAN p REPLACE VARIANT models_first ELSE ORDER (models, results) ACCESS results "
        "INDEX results_model");

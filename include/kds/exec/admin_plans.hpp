@@ -100,9 +100,27 @@ struct ArmPin {
     bool operator==(const ArmPin&) const = default;
 };
 
-// A pin's word in the DDL and in `sys.plans`: `TUPLE_KEY`, `INDEX`,
-// `CABIN`, `SCAN`.
+// A pin's word - `TUPLE_KEY`, `INDEX`, `CABIN`, `SCAN` - the one spelling
+// the DDL reads, a `sys.plans` row stores and `ANALYZE` and the view print;
+// and the arm a word names, case-insensitively, or nullopt.
 std::string_view ArmName(ArmPin::Arm arm) noexcept;
+std::optional<ArmPin::Arm> ArmFromName(std::string_view word) noexcept;
+
+// The class of arm a step's kind is: what a pin naming a class is met by.
+// No `default`, so a new kind is judged here too.
+constexpr ArmPin::Arm ArmClassOf(AccessKind kind) noexcept {
+    switch (kind) {
+        case AccessKind::kLookup:
+        case AccessKind::kProbe:
+        case AccessKind::kRange: return ArmPin::Arm::kTupleKey;
+        case AccessKind::kIndexProbe:
+        case AccessKind::kIndexRange: return ArmPin::Arm::kIndex;
+        case AccessKind::kCabinProbe: return ArmPin::Arm::kCabin;
+        case AccessKind::kFilterScan:
+        case AccessKind::kScan: return ArmPin::Arm::kScan;
+    }
+    return ArmPin::Arm::kScan;
+}
 
 struct PlanVariant {
     std::string name;
@@ -125,6 +143,15 @@ struct AdminPlan {
 };
 
 class AdminPlans {
+    struct Entry {
+        std::shared_ptr<const AdminPlan> plan;
+        bool enabled = false;
+    };
+    struct Partition {
+        Latch latch{LatchKind::kStatsRing};
+        std::unordered_map<CapturedKey, Entry, CapturedKeyHash> plans;
+    };
+
 public:
     static constexpr std::size_t kPartitions = 16;
 
@@ -153,6 +180,21 @@ public:
     // (CX-Q4 (a)).
     std::optional<std::string> EnabledPinningIndex(catalog::Oid oid, std::string_view index);
 
+private:
+    // The name of the first enabled plan `test` holds for, or nullopt.
+    template <typename Test>
+    std::optional<std::string> EnabledWhere(Test&& test) {
+        for (Partition& partition : partitions_) {
+            const LatchGuard hold(&partition.latch);
+            for (const auto& [key, entry] : partition.plans) {
+                if (entry.enabled && test(key, *entry.plan)) return entry.plan->name;
+            }
+        }
+        return std::nullopt;
+    }
+
+public:
+
     // A committed `DROP TABLE`'s: forgets every plan naming `oid`. Their
     // rows stay, shown `invalid` - an oid is never reissued, so they can
     // match nothing again.
@@ -175,14 +217,6 @@ public:
     void CountDeclined() noexcept { declined_.fetch_add(1, std::memory_order_relaxed); }
 
 private:
-    struct Entry {
-        std::shared_ptr<const AdminPlan> plan;
-        bool enabled = false;
-    };
-    struct Partition {
-        Latch latch{LatchKind::kStatsRing};
-        std::unordered_map<CapturedKey, Entry, CapturedKeyHash> plans;
-    };
     Partition& PartitionOf(const CapturedKey& key) noexcept;
 
     std::array<Partition, kPartitions> partitions_;

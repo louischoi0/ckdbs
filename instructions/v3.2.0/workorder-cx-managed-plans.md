@@ -1187,3 +1187,44 @@ here; it is not started.
   compile asks for a plan only where a block has two relations and a
   probe on every point read is what CX-R6 forbids
   (`known-gaps.md`).
+
+**The review of S3a** (`critics-developer`, of `4880575c`; its fixes and
+the ones taken from its findings are in the commit after it). It found no
+way for a pin to change a result: masking a rank never touches a step's
+residual, so a key, a value list and a derived conjunct are still asked of
+every located row; the sort decision reads the arm the step ended with;
+the pin's pointer does not outlive the compile; and with no pin the chain
+is what it was.
+
+- **Fixed by the review - a `TUPLE_KEY` pin was refused where a tuple key
+  arm was legal.** The filter scan and the build annotation were not
+  behind the pin, so under `TUPLE_KEY` they took a step with an equality
+  filter before it reached the strict tuple key range the ladder ranks
+  last, and the met-check then refused: `CREATE PLAN` failed for a
+  statement whose step is a `Range` under the pin. The walk's two ranks
+  now stand aside under a pin naming a keyed class. A cell.
+- **Fixed by the review**: `ALTER PLAN ... REPLACE VARIANT`'s refusal of a
+  missing index named the variant's byte, not the index name's.
+- **Taken**: `CREATE PLAN`'s probe checks the note is there before it
+  reads it; a variant's refusal carries one byte, the compile's where it
+  names one; `DROP INDEX`'s RESTRICT names the index's byte; `NOT INDEX
+  <name>` is refused at the name, not by the next clause's message; a
+  correlated Cabin probe the pin rules out no longer stands in a value
+  list's way at the index (`LiteralIndexChoiceOf`), so an `INDEX` pin is
+  not declined for a Cabin it forbade.
+- **Taken, as cuts**: the four spellings of an arm - the DDL's reader, the
+  row's writer and reader, the printer - are one table (`ArmName`,
+  `ArmFromName`), and the row stores the DDL's word; the two "which
+  enabled plan" walks are one (`EnabledWhere`); the met-check asks
+  `ArmClassOf`, a switch with no `default`.
+- **Confirmed and stated, not changed**: under `NOT TUPLE_KEY` or `CABIN`
+  the strict range is ruled out, so a value list on a cabined column is
+  served as a Cabin set where CU-Q12 kept the unpinned ladder on the
+  range. The rows are the same and the arm is the one asked for; I12 says
+  so.
+- **Not taken**: an `Admits` over a null pin, to drop the one `static
+  const` no-pin object - it saves a line and moves a null check into
+  every rank.
+- **Not checked by the review**: the Waystone trail and the statistics
+  fold under a pinned chain; a met `CABIN` pin, which no cell builds; a
+  release build.

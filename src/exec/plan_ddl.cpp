@@ -95,28 +95,30 @@ StatusOr<PlanVariantSpec> ParseVariant(parser::Lexer& lexer) {
                 access.pin.forbid = true;
                 arm = lexer.Next();
             }
-            if (IsIdent(arm, "TUPLE_KEY")) {
-                access.pin.arm = ArmPin::Arm::kTupleKey;
-            } else if (IsIdent(arm, "INDEX")) {
-                access.pin.arm = ArmPin::Arm::kIndex;
-                // A pinned index may be named; a forbidden one is every index.
-                if (!access.pin.forbid && lexer.Peek().type == TokenType::kIdent &&
-                    !IsIdent(lexer.Peek(), "VARIANT") && !IsIdent(lexer.Peek(), "BUILD")) {
-                    access.pin.index = std::string(lexer.Next().text);
-                }
-            } else if (IsIdent(arm, "CABIN")) {
-                access.pin.arm = ArmPin::Arm::kCabin;
-            } else if (IsIdent(arm, "SCAN")) {
-                if (access.pin.forbid) {
-                    return Status::InvalidArgument(
-                        "NOT SCAN is no pin: the walk is what every other arm falls back "
-                        "to" + At(arm));
-                }
-                access.pin.arm = ArmPin::Arm::kScan;
-            } else {
+            const auto named = arm.type == TokenType::kIdent ? ArmFromName(arm.text)
+                                                             : std::nullopt;
+            if (!named.has_value()) {
                 return Status::InvalidArgument(
                     "an ACCESS pin is TUPLE_KEY, INDEX [<name>], CABIN or SCAN, or NOT before "
                     "one of the first three" + At(arm));
+            }
+            access.pin.arm = *named;
+            if (access.pin.forbid && access.pin.arm == ArmPin::Arm::kScan) {
+                return Status::InvalidArgument(
+                    "NOT SCAN is no pin: the walk is what every other arm falls back to" +
+                    At(arm));
+            }
+            // A pinned index may be named; a forbidden one is every index.
+            if (access.pin.arm == ArmPin::Arm::kIndex &&
+                lexer.Peek().type == TokenType::kIdent && !IsIdent(lexer.Peek(), "VARIANT") &&
+                !IsIdent(lexer.Peek(), "BUILD")) {
+                const Token index = lexer.Next();
+                if (access.pin.forbid) {
+                    return Status::InvalidArgument(
+                        "NOT INDEX takes no name: it rules out every index" + At(index));
+                }
+                access.pin.index = std::string(index.text);
+                access.index_at = index.byte_offset;
             }
             variant.access.push_back(std::move(access));
             if (lexer.Peek().type != TokenType::kComma) break;
