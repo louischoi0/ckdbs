@@ -1298,6 +1298,16 @@ the procedures are `manual/server/backup-restore.md`.
 - **An `archive_command` that hangs holds the archive**: it is not timed out,
   only ended at shutdown; the archive's lag and `wal_archive_blocking` are
   what an operator watches.
+- **A backup starts a thread after startup, which `sched.md` §9's invariant
+  1 forbids and no document declares.** Read at `a4d2fb3b` while DE was
+  reviewed: `BACKUP COPY` starts the copier's thread and `BACKUP STOP` the
+  finisher's (`src/server/backup.cpp:166`, `:340`), each joined by the next
+  call. The invariant reads "no thread creation after startup"
+  (`docs/spec/sched.md:260`), and its declared exceptions - the WAL writer,
+  the data-sync thread - start at boot. `backup.md` names the archiver's
+  thread (`:116`) and not these two. Nothing is known to go wrong; the
+  spec and the code disagree, and neither `sched.md` nor `backup.md` says
+  which is meant.
 - **What BR costs when on** (BR-S10, `bench/v3.0.0/results-br-close-backup-restore-v2.7.0-913-ga8110b05.md`):
   the archive shares the WAL device's bandwidth - wide `INSERT`s lose 27-29 %
   with the archive on the data device, 3 % with it elsewhere; the archiver

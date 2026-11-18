@@ -1,0 +1,509 @@
+# Work order DC - `SELECT ... FOR UPDATE`: a read that claims the rows it returns
+
+Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
+`db-fpi-cadence-dc-for-update` from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`) on
+the operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §23): *"Write
+the work order for item 8, SELECT FOR UPDATE."* (given in Korean; recorded
+in English). No stage is started. DC waits for the operator's word and for
+the marks on §4's items. Every `[source-read]` claim below was read at
+`a4d2fb3b`; nothing was built, run or measured for this order. The letter
+DC is CLA's proposal.
+
+**Item 8** is the eighth item of a survey CLA gave the operator in
+conversation the same day ("what should this engine add, as an OLTP
+engine"): the parser and the manual have no `FOR UPDATE`, it is the
+standard tool for a read-modify-write, and the `U` mode exists since
+CP-S2b.
+
+**The motive is a result, not a speed.** Under `READ COMMITTED`, the
+default, every statement mints its own view (`docs/spec/txn.md:103-128`),
+and a write is checked against the view of the statement that writes
+(`src/txn/manager.cpp:190-209`). `[design]` So a client that reads a
+balance in one statement and writes a value computed from it in the next
+overwrites a commit that landed between the two, and nothing refuses it:
+the tools today are a `SET` expression over the before-image, `REPEATABLE
+READ`'s refusal, or a declared assertion. A locking read is the fourth: the
+row is claimed from the read to the decide.
+
+**What CLA told the operator, corrected against the tree.**
+
+- *"`U` exists, so the cost should be small"* (an estimate). The claim
+  machinery does exist whole - but on the **write** walk, which reaches
+  its rows through no index, yields its core nowhere, cannot be cancelled
+  mid-walk and dirties every leaf it visits
+  (`docs/inflight/known-gaps.md:2018-2026`, `:904-907`; §0, DC-Q9). A
+  locking read built on it inherits all four (§1.4, DC-Q0).
+- *"Rows reached by tuple key, index or scan"* (CLA's first sketch of the
+  shape). Under DC-Q0 (a) there is no index reach, and only an equality or
+  a list on the tuple key descends: everything else is a walk of the whole
+  relation, and on a `HEAP` relation every locking read is one (§0).
+- *"The standard tool for a read-modify-write"*, with `U` as its mode.
+  Under `U` the spelling `FOR UPDATE` gives what PostgreSQL calls `FOR NO
+  KEY UPDATE`, not its `FOR UPDATE`: a foreign key child's share passes
+  it. That is enough for the read-modify-write of one row and not for a
+  client that locks a parent to keep children out (§2, DC-Q1
+  `[quiet-wrong]`).
+- *"The `readonly` role must refuse it."* It must. The role gate reads
+  the routing token and admits `SELECT`; but a `readonly` connection's
+  transactions are `READ ONLY`, whose write scope refuses, so the gap is
+  autocommit's alone and DC-Q7 (a) closes it (§1.5, DC-R7).
+- **Not CLA's, found on the way**: CP's order calls `SELECT ... FOR UPDATE`
+  "out of scope (`txn.md` §9)"
+  (`workorder-cp-lock-model-exploration.md:592-593`), and `txn.md` §9 names
+  `SERIALIZABLE` and savepoints only (`docs/spec/txn.md:1291-1294`). No
+  ruling against a locking read is recorded; two orders left it out of
+  their own scope (CP, and `workorder-cq-column-reservation.md:388`).
+
+Tags: `[operator]` the operator's word; `[source-read]` read in the tree,
+with `path:line`; `[measured]` with the results file; `[design]` CLA's,
+unbuilt and unmeasured.
+
+Related: `docs/spec/txn.md` §1, §5, §9; `docs/spec/foreign-keys.md` §2c;
+`docs/spec/parser-v2.md` I10, I11, I19; `docs/spec/protocol.md` §10;
+`docs/spec/sched.md` §3; `docs/inflight/known-gaps.md` (Locks, Key sets);
+`instructions/v3.2.0/workorder-cp-lock-model-exploration.md` (CP-S2b's
+`U`, CP-Q10); `instructions/v3.2.0/workorder-cr-read-committed-rerun.md`
+(CR, written and not opened: DC-Q4);
+`instructions/v3.2.0/workorder-cs-read-only-transaction.md` (CS-R1, the
+gate); `instructions/v3.2.0/workorder-cu-key-set-access.md` (the write's
+point and list arms); `manual/sql/sql.md` §4, §5, §7;
+`manual/client/client.md` §4, §5.
+
+## 0. What DC is
+
+`[operator]` A work order for `SELECT ... FOR UPDATE`.
+
+`[design]` `SELECT <columns> FROM <relation> [WHERE ...] FOR UPDATE`,
+inside an explicit `READ WRITE` transaction, returns the rows an `UPDATE`
+with the same `WHERE` would write, each under the claim that `UPDATE`
+would take - the row's `U`, or the declared key window's - held until the
+transaction decides. It writes nothing and logs nothing. Until the decide,
+another transaction's `UPDATE`, `DELETE` or locking read of a returned row
+waits, and a foreign key's share on it is admitted.
+
+**In one sentence: it is an `UPDATE`'s row walk with no `SET` list and a
+`RETURNING` list** - the claim pass `UPDATE` already runs, then the emit
+pass `RETURNING` already runs, over the claimed keys in place of the
+written ones. DC-Q0 puts that choice to the operator with its alternative.
+
+**What that choice makes of it, said before anything else** (DC-Q0 (a),
+`[source-read]`):
+
+- **Only an equality or a list on the tuple key descends**
+  (`src/server/command_dispatcher.cpp:11020-11097`). A range on the tuple
+  key and every other predicate walk the whole relation, whatever index
+  the column has (`docs/inflight/known-gaps.md:2011-2021`).
+- **The walk does not yield and cannot be cancelled mid-walk**: it holds
+  its core to its end, and a `C_CANCEL` or a closed connection is seen at
+  the session's next frame (`known-gaps.md:2022-2023`, `:904-907`).
+- **On a `HEAP` relation the tuple key is hidden**, so no statement names
+  it and every locking read there is a whole walk taking a unit a row.
+- **The walk fetches leaves for writing, which dirties each one** (§1.3);
+  DC-Q9 asks whether a locking read may.
+- **A range on the tuple key declares a window**, and the window raises
+  the relation's fence counter until the transaction decides, so every
+  writer of the relation pays the all-partition probe for that long
+  (`docs/spec/txn.md:955-959`; a borrow is the transaction's,
+  `include/kds/server/command_dispatcher.hpp:1076-1079`).
+- **Under `U` a foreign key child's insert passes the claim** (DC-Q1).
+
+So the first build serves the point shape - `WHERE <tuple key> = ?` or
+`IN (...)` on a btree relation - at an `UPDATE`'s cost, and every other
+shape at a whole-relation write walk's.
+
+## 1. The tree as read
+
+### 1.1 What is measured `[measured]`
+
+Nothing, for a locking read. The nearest numbers are the hot-row refusal
+rates CR's order records - 7.9 % of autocommit `UPDATE`s of one row at
+eight sessions, 1.4-12.8 % of an explicit transaction's debits
+(`workorder-cr-read-committed-rerun.md:52-56`, citing CP-S0 and CQ-S0;
+the author did not open those results files, and the review found both
+numbers there: `bench/v3.4.7/results-cp-s0-premise-v3.4.7-1-gcc54a296.md:17`,
+`bench/v3.4.7/results-cq-s0-premise-v3.4.7-13-g92449e65.md:99-132`). They price the window
+a locking read keeps under DC-Q3 (a) and DC-Q4 (a), and say nothing of how
+often a locking read would meet it.
+
+### 1.2 The statement today `[source-read]`
+
+- **`FOR` after a `SELECT` is trailing text.** The native tail is `[ORDER
+  BY] [LIMIT] [OFFSET]`, each word an ordinary identifier matched by text
+  at clause position (`src/parser/parser.cpp:2953-2960`, `:2970-3067`),
+  and anything after it is refused `InvalidArgument` "unexpected token ...
+  after end of statement" with its byte (`:3808-3815`). The dispatcher
+  then offers the text to the query grammar (BU-Q9,
+  `src/server/command_dispatcher.cpp:8809-8816`), which refuses the same
+  token the same way (`parser.cpp:3914-3928`), so the native refusal is the
+  reply. Read, not run.
+- **No word of it is reserved and none needs to be.** Eleven words are
+  (`manual/sql/sql.md:2018-2026`); a relation's bare alias is not accepted
+  (`parser.cpp:2675-2685`), so no accepted statement has an identifier
+  where the clause would stand. A clause inside a subquery has a precedent
+  for its refusal, `ORDER BY` at `depth > 0` (`:2980-2985`).
+- **No test, simulator draw or tool spells a locking read**
+  (`grep -rni 'for update' tests sim scripts tools` finds one comment).
+
+### 1.3 The claim an `UPDATE` takes `[source-read]`
+
+- **Five modes; `U` is a version claim.** `U` admits `IS` and `S`, refuses
+  `IX`, `U` and `X`; `X` covers `U`, `S` does not
+  (`include/kds/txn/lock_table.hpp:225-231`, `:261-280`;
+  `docs/spec/txn.md:903-929`). **`S` admits `U`**: a key share protects a
+  row's existence and key and nothing else (`lock_table.hpp:253-255`).
+- **The row walk `UPDATE` and `DELETE` share** is `WriteWalk`, kept in one
+  copy "so that both judge and claim a row the same way"
+  (`command_dispatcher.cpp:10047-10057`). `Qualify` reads a row under the
+  statement's view and its `WHERE`, with F4's rule for a row whose writer
+  the view cannot see (`:10099-10184`; `txn.md:868-901`). `Claim` asks the
+  row's unit - skipped when a declared window covers it - then takes the
+  first-updater-wins verdict, and never admits a version reached through
+  undo (`:10197-10241`).
+- **How it finds rows**: one descent for a tuple key (`:11020-11068`), one
+  per value of a list on it (`:11089-11097`), and otherwise a walk of the
+  whole relation with leaves held for writing (`:11106-11124`). **A leaf
+  fetched for writing is dirtied whether or not a row of it is written**:
+  the walk's `kWrite` is `PageStore::Get`, an exclusive pin that is not
+  `for_read` (`include/kds/storage/page_store.hpp:266-277`), and leaving a
+  frame clean is the read fetch's opt-in (`:641-659`). A `WHERE`
+  holding a subquery is collected by a read pass first (`:10254-10271`). A
+  bound on the tuple key declares its window as a range unit in `U` before
+  the walk, and no `WHERE` declares the whole id space
+  (`:10615-10632`, `include/kds/server/command_dispatcher.hpp:1076-1087`,
+  `txn.md:931-959`).
+- **The unit's ancestor is the relation's `IX`**, held like the unit to
+  the decide (`command_dispatcher.cpp:11814-11833`), so a DDL's relation
+  `X` waits for the holder as for any open writer.
+- **The holder is a transaction.** Units are held under the transaction's
+  id (`:11775-11776`); an explicit `READ WRITE` transaction has one, a
+  `TXN_BEGIN` record and an in-flight slot from its `Begin`
+  (`src/txn/manager.cpp:126-166`). A `READ ONLY` transaction has none, and
+  a write scope refuses it (`command_dispatcher.cpp:11612-11621`).
+- **A held row is waited for, and a statement that wrote nothing is run
+  again whole.** A refused unit names its holder; a holder that wrote no
+  version of the row is one even a `REPEATABLE READ` waiter may wait on
+  (`:12184-12234`, `:12228-12230`; `txn.md:977-1024`). The walk stops at
+  the row, and a statement whose trail is at its mark is answered with the
+  conflict and re-run by `DispatchAsync` (`:10318-10336`, `:12259-12263`,
+  `:850-868`; the re-run itself in `AwaitWriteBlock`, `:504-505`). The
+  re-run passes the statement boundary
+  (`:1049-1055`, `:1367-1372`), where `READ COMMITTED` mints a fresh view
+  and `REPEATABLE READ` keeps its own (`manager.cpp:170-188`).
+- **What that leaves refused.** A row whose newest version committed
+  after the statement's view is `TxnConflict`: the level's contract under
+  `REPEATABLE READ`, and under `READ COMMITTED` the window between the
+  mint and the claim, "a deliberate simplification - there is no re-read
+  loop" (`txn.md:862-866`). CR is the order that would re-run it. **Inside
+  an explicit transaction that refusal fails the transaction**
+  (`session.Poison()`, `command_dispatcher.cpp:12301-12306`), and the
+  row's unit stays held until the `ROLLBACK`, because `Claim` borrows
+  before it checks (`:10209-10214`). A row inserted by a writer the view
+  cannot see has no version for it and is skipped, not waited on
+  (`include/kds/txn/visibility.hpp:70-75`, `:10118-10119`). And
+  **a wake is not a grant**: `TryAcquire` does not queue, so under
+  sustained contention a waiter can end at the 1 s fault net
+  (`known-gaps.md:629-632`; the decide slot is designed and not built,
+  `:658`).
+- **Nothing of a claim is persisted** (AO-R3, `txn.md:789-792`,
+  `:1163-1165`). The cap is 65,536 units a transaction, refused
+  `ResourceExhausted` and not retryable (`lock_table.hpp:184`, `:417`;
+  `txn.md:1184-1189`). An explicit transaction, and so its claims, ends at
+  `txn_lifetime_ceiling_ms` at the latest (`txn.md:22`).
+- **`RETURNING` is an emit pass after the walk**: the keys the statement
+  wrote, read off its trail, each found again by a shared descent and
+  rendered through the items; the reply completes under the write's tag
+  (`command_dispatcher.cpp:9818-9973`, `:9926-9969`;
+  `src/server/kwp_session.cpp:764-768`).
+
+### 1.4 The two executors `[source-read]`
+
+| | the read (`HandleSelect`, the step chain) | the write (`WriteWalk`) |
+|---|---|---|
+| finds rows by | tuple key, key set, index, Cabin, walk, join | tuple key, key set, walk (`known-gaps.md:2018-2021`) |
+| version it judges | the snapshot's, through undo | the page's newest, or refuses (`:10111-10117`) |
+| takes | the relation `IS`, nothing finer; never waits (`txn.md:1026-1061`) | relation `IX`, a unit or a window, waits |
+| yields its core | every 64 pages of the outermost walk | never (`known-gaps.md:2022-2023`) |
+| rows leave | while it runs (CE) | after the walk (`RETURNING`) |
+| consults | an opted Waystone trail, a Cabin | neither (a `WHERE` subquery's runner: `src/exec/step_vm.cpp:3054-3059`) |
+
+The left column's access paths, its 64-page slices and its streamed reply
+are as `CLAUDE.md`'s milestone rows state them; the author did not open
+`sched.md` §3 or `protocol.md` §7, and the review found both columns borne
+out there (`docs/spec/sched.md:43`: a write, a tuple key descent and an
+index walk do not yield; `docs/spec/protocol.md:104-108`: a tuple key
+lookup, an index step and a write's `RETURNING` are sent whole). DC-S0
+re-reads them before DC-Q0 (b) is weighed further.
+
+`[design]` A locking read on the right-hand column needs no new rule. On
+the left it needs four: a park on a lock inside a sliced walk, the write's
+version rule in the step VM, a re-run rule for a statement whose rows have
+left, and a gate keeping a trail or a Cabin from answering it.
+
+### 1.5 The gates `[source-read]`
+
+- **The role** is decided from the routing token: `SELECT` is `readonly`'s
+  (`command_dispatcher.cpp:1325-1343`, enforced `:1398`;
+  `docs/spec/protocol.md:140`).
+- **The `READ ONLY` gate** is an allowlist on the same token and admits
+  `SELECT` (`:171-179`, `:1456-1464`); its second line is the write
+  scope's refusal, which names byte 0 (`:11617-11621`).
+- So a clause at the statement's tail is seen by neither. **A `readonly`
+  connection's `BEGIN` is `READ ONLY` and `READ WRITE` is refused it**
+  (`docs/spec/txn.md:136-138`), so inside a transaction the write scope's
+  refusal catches it. `[design]` What is left is autocommit, where a
+  write scope begins a transaction of its own: there, and only there, a
+  `readonly` user could take a claim.
+
+### 1.6 The fingerprint `[source-read]`
+
+The version moves only when an already storable statement would hash
+differently; making an unparseable statement parse does not move it
+(`include/kds/parser/fingerprint.hpp:162-187`, `:203`). The clause's words
+are hashed as shape, so a locking statement has its own `pattern_id` and
+`fetch_id`, apart from the plain statement's.
+
+## 2. The design `[design]`
+
+As DC-Q0 (a), DC-Q1 (a) and the other proposals would have it; the marks
+decide.
+
+1. **The grammar.** After the pagination tail of a depth-0 block, `FOR
+   UPDATE` sets a lock field on `SelectStmt` with the byte of `FOR`. Every
+   other word after `FOR`, and every word after `UPDATE`, is refused by
+   name (DC-Q2, DC-Q6); a clause at `depth > 0` is refused at its byte.
+   The query grammar refuses the clause by name and is not taught to read
+   it (DC-R2).
+2. **The route.** `HandleSelect` branches on the parsed field before any
+   chain is compiled: a locking statement never reaches `SelectBody`,
+   `TryQueryLayer`, a catalog view, a trail or a Cabin. `ANALYZE`, a pinned
+   caller (a subquery's run) and `WAYSTONE ON` refuse it.
+3. **The gates**, after the parse and before anything is borrowed: the
+   role, the `READ ONLY` transaction, autocommit (DC-Q7), the shape
+   (DC-Q5).
+4. **The claim pass.** The session's write scope; the relation resolved
+   and the `WHERE` compiled as an `UPDATE`'s; the window declared in `U`
+   where the `WHERE` bounds the tuple key; then `UPDATE`'s arms in
+   `UPDATE`'s order - point, list, collection pass, walk - with `Qualify`
+   and `Claim(U)` per row and the row's key kept. No `SET`, no stage-2
+   decode, no hook, no trail entry.
+5. **A held row** stops the walk as it stops an `UPDATE`'s. The trail is
+   at its mark by construction, so the statement is always the re-run
+   arm: answered with its conflict, waited for, run again whole. Units the
+   first run took stay the transaction's.
+6. **The emit pass**, once the claim pass ends: `RETURNING`'s, over the
+   claimed keys in key order, the fields those of the select list, the
+   reply completing as a `SELECT`'s. Each row is the page's version, which
+   no other transaction can replace while the claim stands.
+7. **Leaf holds** (DC-Q9 (a)). The pass writes no page, so it fetches for
+   read: the walk as the collection pass takes it (`:10257-10258`) and a
+   shared descent for a key, where `LocateByTupleKey` holds its leaf
+   "exclusive and dirty" (`:11029-11031`). `Claim`'s no-re-read argument
+   is stated for a write hold (`:10199-10203`); DC-S0 re-argues it for a
+   shared one, and if it does not hold the item goes back to the operator.
+8. **Afterwards** the transaction holds the relation's `IX` and its units
+   or window until it decides, is poisoned, or meets the lifetime ceiling.
+   Its own `UPDATE` of a claimed row asks nothing new (`U` covers `U`);
+   its `DELETE` asks `X` and waits for any foreign key share, which is
+   CP-Q10's accepted class and no new one.
+9. **Counted by nothing new**: its own row in `sys.statement_stats`, its
+   waits in `sys.lock_waits`, and no row of `sys.relation_stats`' write
+   activity, since it writes none.
+
+**What `U` under the spelling `FOR UPDATE` does not give**
+`[quiet-wrong]` (DC-Q1). `U` admits a key share
+(`include/kds/txn/lock_table.hpp:265-266`), and a foreign key child's
+insert holds exactly that on its parent. So a client that locks a parent
+row to keep new children out, then sums its children, is wrong here: a
+second session's child `INSERT` passes the claim and commits, and the sum
+is stale with no refusal anywhere. And a `DELETE` of the locked row later
+in the same transaction can be refused RESTRICT by a child that committed
+meanwhile. PostgreSQL's `FOR UPDATE` blocks both; its `FOR NO KEY UPDATE`
+is what `U` is. `CLAUDE.md`'s rule - never accept a spelling and enforce
+something other than what was written - is why the mode is the operator's
+to mark and not CLA's to choose.
+
+## 3. Rules
+
+Binding once DC opens.
+
+- **DC-R1 - a row is returned only under a held claim, and only as the
+  version the claim admitted** `[quiet-wrong]`: the page's newest version,
+  written by a transaction the statement's view sees or by this one.
+  Never a version reached through undo. A stale row under a held lock is
+  the lost update the clause exists to prevent. **The other direction is
+  not promised: rows are claimed that are not returned** - every key of a
+  declared window, which is a superset of the rows; a row an earlier run
+  claimed that the re-run no longer collects; a row refused after its
+  unit was granted; rows a capped portal never delivers. **And what is
+  never skipped**: a row whose newest version matches the `WHERE` and is
+  newer than the view is waited on or refused, by `txn.md` §5's table
+  (`:868-901`). A row inserted after the view is invisible and skipped,
+  unless a declared window made its insert wait.
+- **DC-R2 - no path that does not claim answers a locking statement**
+  `[quiet-wrong]`: not the step chain, the query layer's fallback, a `sys`
+  view, `ANALYZE`, a Waystone trail or a Cabin. Each has a test that the
+  clause is refused there, not dropped.
+- **DC-R3 - under DC-Q0 (a), one copy of how a row is judged and
+  claimed.** `Qualify` and `Claim` decide for a locking read what they
+  decide for an `UPDATE`; DC adds no mode, no unit, no wait and no version
+  rule (but what DC-Q3 marks).
+- **DC-R4 - under DC-Q0 (a), no row leaves before the claim pass ends**,
+  so a re-run sends no row twice and every row of one reply was judged
+  under one view. Under (b) the stage states what replaces both.
+- **DC-R5 - a claim is the transaction's**: held to the decide, released
+  by nothing else, persisted nowhere - no record, page bit or superblock
+  field (AO-R3). The log is the same length after a locking read as
+  before it.
+- **DC-R6 - a locking read writes nothing**: no row, undo record, index
+  entry, Cabin witness, assertion reservation or trail entry, and it runs
+  no foreign key, assertion or transition check. **Under DC-Q9 (a) it
+  dirties no page either**, pinned by a test as CS's is; under (b) the
+  pages it dirties are counted in the close and named in `known-gaps.md`.
+- **DC-R7 - it is a write for authorization and access mode.** In a
+  `READ ONLY` transaction it is refused `READ_ONLY_TRANSACTION` at the
+  byte of `FOR`, unpoisoned and counted as CS-Q7 and CS-Q8 have it. **It
+  needs `readwrite`**: a `readonly` connection cannot open a `READ WRITE`
+  transaction (`txn.md:136-138`), so under DC-Q7 (a) it reaches no claim
+  whatever the role check says, and the check after the parse is the
+  second line; under DC-Q7 (b) that check is the only line and
+  `[quiet-wrong]` in the authorization sense - a read-only user holding
+  writers.
+- **DC-R8 - every refusal names its byte, in the right code.** A form
+  nobody built is `NotImplemented`; a `sys` view, which is no relation and
+  has no row to claim, is `Unsupported`. **`FOR SHARE` is never served by
+  the lock table's `S`** `[quiet-wrong]`: `S` admits another writer's `U`,
+  so the spelling would be accepted and something else enforced.
+- **DC-R9 - nothing is reserved and the fingerprint version does not
+  move.** The words are matched by text at clause position; the claim
+  that no accepted statement's hash changes is argued in the stage and
+  pinned by the golden corpus.
+- The standing rules: each stage reviewed, the full suite per stage, the
+  overhead measured once at the close in `build-release`, a stage's
+  measurement inside 20 minutes under a 60 s watchdog, nothing pushed or
+  merged without the operator's word.
+
+## 4. Items for the operator (DC-Q), CLA's proposals
+
+None is marked. (a) is CLA's proposal in each.
+
+| | item | (a) | other |
+|---|---|---|---|
+| DC-Q0 | Which executor carries it. | the write walk (§1.4's right column): no new rule, and no index, no yield and no streamed reply - a predicate other than an equality or a list on the tuple key, a range on it included (`known-gaps.md:2011-2014`), walks the whole relation holding its core, as an `UPDATE`'s does | (b) the step chain with a claim at the driving step: index reach, yields and a streamed reply, at the price of §1.4's four new rules and a second copy of the version rule `[quiet-wrong]` |
+| DC-Q1 | The mode the spelling `FOR UPDATE` takes `[quiet-wrong]` (§2's last paragraph). | `U`, the claim an `UPDATE` of the row takes in this engine: other writers of the row wait, a foreign key child's share passes, and the transaction's later `DELETE` asks `X` then and may be refused RESTRICT. The manual says in so many words that it is PostgreSQL's `FOR NO KEY UPDATE` | (b) `X`, the claim a `DELETE` takes, which a child's `S` waits for: what the spelling means elsewhere, and the pair CP-S2b removed for `UPDATE` (`foreign-keys.md:281-290`) returns for this statement; (c) the `U` form is spelled `FOR NO KEY UPDATE` and `FOR UPDATE` is refused `NotImplemented` until `X` is built |
+| DC-Q2 | The other strengths. | `FOR SHARE` and `FOR KEY SHARE` each refused `NotImplemented` by name, and `FOR NO KEY UPDATE` too unless DC-Q1 (c) makes it the spelling | (b) `FOR KEY SHARE` built as the tuple `S` a foreign key takes; (c) under DC-Q1 (a), `FOR NO KEY UPDATE` accepted as a second spelling of the `U`. `FOR SHARE` as `S` is not an option (DC-R8) |
+| DC-Q3 | Which version is returned when a newer one exists `[quiet-wrong]`. | the write's verdict, unchanged: `REPEATABLE READ` is refused first-updater-wins; `READ COMMITTED` waits for an undecided writer and is re-run under a fresh view, and in the window between its mint and its claim is refused retryably, as an `UPDATE` is today. **Either refusal fails the whole transaction** (§1.3) - every locking read being inside one under DC-Q7 (a) - with the row's `U` kept until the `ROLLBACK`, so the client retries the transaction, not the statement | (b) `READ COMMITTED` returns the newest committed version whatever the statement's view, PostgreSQL's re-check: a second version rule, for this statement only, and no failed transaction in that window |
+| DC-Q4 | DC and CR. | independent. DC lands on today's verdict and names the window as a known gap; when CR opens, CR-Q5's list gains the locking read, whose admission test holds by DC-R4 and DC-R6 | (b) CR first, DC after; (c) DC builds the decided-newer re-run for the locking read alone |
+| DC-Q5 | The shapes of the first build. | one relation that is not a `sys` view; the `WHERE` an `UPDATE` admits, a subquery in it included; a select list of `*` or plain columns. Refused `NotImplemented` at the byte: joins, aggregates and `GROUP BY`, `ORDER BY`, `LIMIT`, `OFFSET`, every query-layer form, a clause inside a subquery | (b) also `LIMIT`, and `ORDER BY <tuple key>` ascending, which is the walk's order - the job-queue shape; (c) also select-list expressions and aliases, typed as `RETURNING`'s items are |
+| DC-Q6 | `NOWAIT`, `SKIP LOCKED`, `OF <relation>`. | each refused `NotImplemented` by name | (b) `NOWAIT` built: a refused unit is answered `TxnConflict` naming the holder with no park; (c) `SKIP LOCKED` as well |
+| DC-Q7 | Autocommit. | refused `NotImplemented` at the byte of `FOR`: the claim would end with the statement, and holding it would cost an id, a `TXN_BEGIN` and a commit record (`manager.cpp:138-148`) | (b) admitted as an owned scope, like an autocommit `UPDATE` that matches rows |
+| DC-Q8 | What a predicate on the tuple key declares. | what an `UPDATE`'s does: a bound declares its window in `U`, no `WHERE` the whole id space, so an insert into the window waits for the decide and a keyed read never meets the cap; a predicate naming no key takes a unit a row and is refused at 65,536 | (b) a unit a row always: nothing but returned rows is fenced, and a wide read is refused at the cap |
+| DC-Q9 | Whether a locking read may dirty a page. Under DC-Q0 (a) as the walk stands it dirties every leaf it visits (§1.3), so a whole-relation locking read hands the checkpoint the relation. | no: it fetches for read (§2 step 7), a test pins that no frame is dirty after it, and DC-S0 reads whether the claim pass can - if not, back to the operator | (b) the dirtying accepted, its writeback priced in the close and entered in `known-gaps.md` |
+| DC-Q10 | The measurement. | DC-S0 is a read. The close: a point `SELECT` and a point `UPDATE` before against after, interleaved, the bar "no cell slower outside its own spread" - a statement without the clause pays one peek at its tail and one test of a parsed field; and one descriptive cell with no bar - eight sessions, one row, `BEGIN; SELECT ... FOR UPDATE; UPDATE; COMMIT` at `cores = 4` - reporting how many locking reads DC-Q3 (a)'s window refuses. The standing budget | (b) the close without the descriptive cell |
+
+## 5. Stages
+
+| stage | what | ends in |
+|---|---|---|
+| **DC-S0 - census** | No engine code, no benchmark. §1 re-read at the opening commit. **Read**: design step 7's read fetch and shared holds (DC-Q9); what a cancel and a closed connection do to a walk that does not yield; what bounds a `RETURNING` reply's rows and memory, since the emit pass inherits it; how a bound parameter and a KWP portal (`max_rows`, `C_DESCRIBE`) reach `HandleSelect` and a write handler, and where they differ; what an explicit transaction with an empty trail costs at `COMMIT`; whether access statistics record a write walk; every test that pins the `FOR` refusal's text or a fingerprint of a statement that does not parse; DC-R9's argument written out. | the list, and any item back to the operator |
+| **DC-S1 - the grammar and the refusals** | The clause parsed; the route's branch; every gate and every refusal of §2 steps 1-3, each with its byte. A well-formed locking read is itself refused `NotImplemented` at this stage. | review, the full suite |
+| **DC-S2 - the claim pass and the emit pass** | §2 steps 4-8 for every shape DC-Q5 admits. | review, the full suite |
+| **DC-S3 - the close** | DC-Q10's measurement; the documents below; the simulator's and the history checker's draws; the milestone rows. | closed |
+
+**Tests DC owes.** Each refused spelling and shape at its byte and code,
+and `for` and `update` still usable as column names; `INSERT ... SELECT
+... FOR UPDATE` and `WITH ... FOR UPDATE`, which the query grammar reads
+(`src/parser/parser.cpp:2526-2531`), refused there by name; the golden
+corpus unmoved and a locking statement's `fetch_id` apart from the plain
+one's.
+In a quiet instance the rows equal the plain statement's, byte for byte,
+on a btree relation and on a heap. Two sessions, at one core and across
+cores under `tsan`: an `UPDATE`, a `DELETE` and a second locking read each
+wait for the holder and proceed at its commit and at its rollback; a
+foreign key child insert passes the holder; an insert into a declared
+window waits; under `REPEATABLE READ` a waiter is refused after the holder
+wrote the row and proceeds after one that did not; two sessions claiming
+two rows in opposite orders end with one refused naming deadlock. **The
+motive's cell**: two `READ COMMITTED` sessions each read a counter, add
+one and write it back, each retrying its whole transaction on a refusal -
+with the clause no increment is lost, and the same cell without it loses
+one. **The refusals' cost**: a `READ COMMITTED` locking read refused in
+the window and a `REPEATABLE READ` one refused first-updater-wins each
+leave the transaction failed, `COMMIT` refused, and the row's unit held
+until `ROLLBACK`. **DC-Q1's cells**: a child `INSERT` passes the holder
+and commits, and the holder's later `DELETE` is then refused RESTRICT -
+or, under (b), the child waits. The cap's refusal carries `kLockCap`; a
+claim survives a failed statement until `ROLLBACK` and ends at the
+lifetime ceiling; a DDL's `X` waits for the holder, and an online `CREATE
+INDEX`'s drain waits on the holder's `IX`. A `C_CANCEL` sent during a
+walking locking read is seen at the next frame, and the claims the walk
+took are released at that transaction's end. No frame is dirty after a
+locking read (DC-Q9 (a)). The log's length is unchanged
+across a locking read (DC-R5); an opted Waystone shape and a Cabin over
+the predicate do not answer it (DC-R2); the `readonly` role, a `READ ONLY`
+transaction (unpoisoned, counted) and autocommit are refused. The
+simulator draws locking reads and reconciles them; the list-append checker
+runs read-modify-write cycles through the clause.
+
+**Documents DC-S3 owes**, each read at the close and amended where it
+states today's behaviour: `txn.md` §5 - the modes paragraph (`:903-929`),
+"KDS aborts retryably rather than re-reading" (`:862-866`), and the read
+borrow's "a read is never refused and never waits" and "a reader never
+waits, so it is always a sink" (`:1043-1061`), which stay true of a read
+that does not claim - §1's `READ ONLY` section (`:130` on) and §9
+(`:1291-1294`); `foreign-keys.md` §2c (`:281-296`); `parser-v2.md` I11
+(`:133`) and I19 (`:210`); `protocol.md` §10 (`:140`; the dispatcher's comments call it §14, a stale number); `sched.md` §3 (a
+locking read's walk does not yield); `known-gaps.md` Locks - the window
+DC-Q3 (a) leaves, the fault net under sustained contention (`:629`), and
+under DC-Q0 (a) the walk with no index and no yield (`:2018-2026`);
+`manual/sql/sql.md` §4 (`:1131`), §5 (`:1637`, and `:1690-1696`, whose
+`READ ONLY` list admits `SELECT`), §7 (`:1862`);
+`manual/client/client.md` §4, §5; `CLAUDE.md`'s rows for transactions and
+for the query language.
+
+## 6. What DC does not do
+
+- No index-driven or yielding write walk: both are the write path's gaps
+  and stay where `known-gaps.md` records them.
+- No queue behind a held row: a wake stays not a grant, and the decide
+  slot stays unbuilt.
+- No re-read loop and no change to first-updater-wins (but what DC-Q3 or
+  DC-Q4 mark).
+- No savepoint, no `SERIALIZABLE`, no predicate lock: a declared key
+  window fences its keys as an `UPDATE`'s does and nothing else is a
+  phantom guard.
+- No unlock statement, no lock timeout setting, no persisted lock.
+- No change to a `SELECT` without the clause: its view, its borrow, its
+  plan, its trail and its reply.
+
+## 7. Stage log (CLA, appended as stages land)
+
+### Written 2026-11-18
+
+Written on worktree `db-fpi-cadence-dc-for-update` from `a4d2fb3b`
+(`v3.4.12-42-ga4d2fb3b`), documents only. No suite was executed: the
+commit changes no build input. Nothing was measured for it; §1.1's numbers
+are CR's order's, at the versions it names.
+
+**Reviewed by `critics-developer` before the commit.** It opened the cited
+lines and the two results files §1.1 rests on. Corrected in place: the
+CP-S0 and CQ-S0 results paths and lines, which the author had cited
+through CR's order unopened; `:504-505` for the re-run itself; the
+subquery runner at `step_vm.cpp:3054-3059`; `sched.md` §3 and
+`protocol.md` §7, read in review and found to bear §1.4 out; DC-Q0's
+statement that a range on the tuple key walks the relation; and
+`protocol.md` §14, a stale number in the dispatcher's comments, to §10.
+Applied from its findings: DC-Q1 is `[quiet-wrong]`, with the stale-sum
+case and the RESTRICT refusal stated and a third option, the `U` form
+under its own spelling; DC-Q3 states that either refusal fails the
+transaction and keeps the row's unit; DC-R1 states both directions - what
+is claimed and not returned, what is never skipped; the walk's dirtying of
+every leaf it visits became DC-Q9, and DC-R6 follows its mark; §0 states
+the scope of DC-Q0 (a) plainly - the point shape descends, everything else
+is an unyielding, uncancellable whole walk, always so on a heap, and a
+window holds the fence counter to the decide; DC-R3 and DC-R4 are
+conditional on DC-Q0 (a); the role item was folded into DC-R7 and §1.5
+corrected, a `readonly` connection reaching a claim in autocommit only;
+the rule that restated the measurement's bar was cut and the counting item
+became §2 step 9, the measurement taking the number DC-Q10; four tests
+were added. The header's corrections of what the operator was told were
+extended by three of these. **Rejected: none.**
