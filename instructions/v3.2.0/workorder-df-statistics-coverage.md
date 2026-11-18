@@ -649,7 +649,8 @@ steward's and the division sites'.
 **9. Taken back to the operator, and marked.** (a) was CLA's proposal in
 each; **each is marked (a), the operator's mark of 2026-11-18**
 (`raft-marks-2026-11-18.md` §37). DF-Q12 (a) replaces DF-Q7 (a)'s
-mechanism, DF-Q13 (a) replaces the four counts of §2's part B, and
+mechanism and its scope - a record under no transaction is then the
+statement's own - DF-Q13 (a) replaces the four counts of §2's part B, and
 DF-Q11 (a) discharges DF-Q4 (a)'s condition by accepting what failed it;
 §2 and §4 keep their text as written and are read with this table.
 
@@ -708,8 +709,9 @@ the four items (a) and asks for the push with the hook skipped and a
 handoff. `origin/main` had moved to `5038f999` (CX-S1b, CX-S2) and was
 merged on the work branch; the opening's record took §36, §35 having gone
 to that session. **That merge brought source this session did not build
-or test**: `src/server/command_dispatcher.cpp` and `src/server/sys_views.cpp`
-among it, so DF-S0's line numbers in those files are `6e7f7095`'s and
-DF-S1 re-reads them, and `sys.statement_stats` gained `plan_source`,
+or test**: `src/server/command_dispatcher.cpp`,
+`include/kds/server/command_dispatcher.hpp`, `src/server/sys_views.cpp`
+and `src/exec/step_compiler.cpp` among it, so the line numbers this order
+cites in those files are `6e7f7095`'s and DF-S1 re-reads them, and `sys.statement_stats` gained `plan_source`,
 `plan_name` and `variant` from CX-S1b, which DF-S1's widened shape sits
 beside. No suite was executed. **Next: DF-S1**, part A - not started.
