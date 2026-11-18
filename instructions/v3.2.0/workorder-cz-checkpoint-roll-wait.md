@@ -1,11 +1,14 @@
 # Work order CZ - a checkpoint that does not hold its reactor on a segment roll: the premise measured before anything is built
 
-Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
-`bl-rung3-probe` from `3b3f4851` (`v3.4.12-25-g3b3f4851`) on the operator's
-word of 2026-11-18 (`raft-marks-2026-11-18.md` §13): *"For now, leave it as
-a work order."* No stage is started. CZ-S0 waits for the operator's word
-and for the marks on §4's items. Every `[source-read]` claim below was read
-at `3b3f4851`.
+Status: **OPENED 2026-11-18; CZ-S0 in progress** on worktree
+`cz-checkpoint-roll-wait` from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`), on the
+operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §22): *"Proceed
+with the CZ milestone."* No item of §4 is marked; S0 rests on none of them,
+and V0's verdict (CZ-Q1) is the operator's. Written the same day on
+worktree `bl-rung3-probe` from `3b3f4851` (`v3.4.12-25-g3b3f4851`) on the
+operator's word (§13 there): *"For now, leave it as a work order."* Every
+`[source-read]` claim of §1 and §2 was read at `3b3f4851`; §7's stage log
+names the commit of each later reading.
 
 **Exploratory, and the measurement comes first.** CZ-S0 and CZ-S1 can each
 end the order with nothing built, and that is a result, not a failure.
