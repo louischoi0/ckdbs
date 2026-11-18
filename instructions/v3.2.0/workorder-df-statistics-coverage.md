@@ -2,7 +2,9 @@
 
 Status: **OPENED 2026-11-18** on the operator's word
 (`raft-marks-2026-11-18.md` §35), from `57d7c67f`
-(`v3.4.12-67-g57d7c67f`); **DF-S0 in progress.** Written the same day on worktree
+(`v3.4.12-67-g57d7c67f`). **DF-S0 is done and at the operator** (§7): the
+census, the spike's price, and four items DF-Q11..Q14 that it takes back.
+No stage after it is started. Written the same day on worktree
 `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`, from
 `56d20394` (`v3.4.12-53-g56d20394`) on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §33). The session was isolated in that worktree
@@ -236,8 +238,9 @@ the session holding the horizon can be found (DF-Q8).
 - `stats::IndexStats`, a store the instance owns (DA-R6's reason), one part
   a core keyed by index oid: `probes`, `ranges`, `entries_scanned`,
   `rows_resolved`, `last_used`. Shown as columns of `sys.indexes`. Folded
-  from `StepStats` where a statement's chain ends, for every statement that
-  runs a chain; which statements those are is DF-S0's read.
+  from `StepStats` where a chain's run is recorded (`RecordExecution`): a
+  native `SELECT`'s, each query-layer walk's and a scalar subquery's; a
+  write's `WHERE` subquery runs a chain that is not recorded (DF-S0, §7).
 - `sys.access_stats`' shape gains `rows_examined` and `rows_matched`: the
   shape that reads a hundred rows to keep one is then a row of a view.
   **This part waits for DA-S1**: today the row is a 33-byte persisted
@@ -457,3 +460,238 @@ operator's word on CLA's report of the order (`raft-marks-2026-11-18.md`
 §34) marks every item (a) and asks for the push with the hook skipped. The
 header and §4 carry the marks; no design text changed. DF is not opened by
 the word. No suite was executed: the commit changes no build input.
+
+### DF-S0 - the census and the premise, 2026-11-18
+
+On worktree `da-q8-memory-bound-key`, branch
+`worktree-df-statistics-coverage`, from `6e7f7095` (the opening's record;
+its source is `57d7c67f`'s). Every line below is `6e7f7095`'s. No engine
+code is on this branch: the spike is commit `b2a4f70a` on branch
+`df-s0-spike`, unpushed, and never lands. **No suite was executed**: the
+work branch changes no build input, and the spike was built and measured,
+not tested.
+
+**1. The citations.** Every `path:line` of §1, §2 and §4 was re-read. In
+`src/server/command_dispatcher.cpp`, `include/kds/server/command_dispatcher.hpp`,
+`src/server/sys_views.cpp` and `docs/spec/sys-views.md` the merge moved the
+numbers and no cited code or sentence changed in substance; the other
+files keep theirs. One sentence of §1.1 is loose: a step names its index
+through `Step::index` (`include/kds/exec/step_chain.hpp:666`), an optional
+`IndexProbe` that carries the oid (`:308`), and `ExecStats` is indexed by
+`step_id`, not by executed position.
+
+**2. Which statements end with executor counters.** A native `SELECT`
+alone: its run borrows a `SelectScratch` whose `stats` the executor fills
+and `RecordExecution` reads (`command_dispatcher.hpp:2670`,
+`command_dispatcher.cpp:6271`). An `UPDATE` and a `DELETE` do not run the
+step VM over their own relation: each compiles its `WHERE` with
+`exec::CompileWhere` and walks it with the dispatcher's `WriteWalk`
+(`command_dispatcher.cpp:10616`, `:13326`, `:10178`), which reaches a row
+by a tuple key descent, a key set or a walk, never by a secondary index or
+a Cabin, and counts nothing. **A subquery in that `WHERE` is the
+exception**: `WriteWalk::MatchesWhere` evaluates it through
+`exec::EvaluateConjuncts` with no `ExecStats` (`:10489-10492`), whose
+sub-chain runs with indexes on and a local `ExecStats` it drops
+(`src/exec/step_vm.cpp:3048-3059`), so an index can serve it and nothing
+records it. The query layer holds no statement-wide `ExecStats`, but each
+relation it walks is a native `SelectRun` that reaches `RecordExecution`
+with its own (`WalkForLayer`, `:9924-9936`) - an `INSERT ... SELECT`'s
+source (`:6373`) among them - and an `UPDATE`'s scalar SET subquery runs
+through `HandleSelect` (`:9787`). A plain `INSERT` runs no chain. So under
+DF-R7 `rows_examined` and `pages` are filled for a native `SELECT` and
+NULL for every other kind, a layer `SELECT` included unless its walks are
+summed; and `stats::IndexStats`, folded at `RecordExecution`, sees every
+read an index serves but a write's `WHERE` subquery's. A unique index's
+check descents and a foreign key's are not a step and are not counted;
+`sys.indexes`' `unique` column is what says such an index is in use.
+
+**3. The fingerprint's consumers (DF-Q4).** Adding `delete` to the
+allow-list alone gives a `DELETE` no shape: `DeleteInner` parses with the
+free `parser::Parse` (`command_dispatcher.cpp:13294`), and only
+`InsertInner` and `UpdateInner` call `ParseKeepingShape` (`:6310`,
+`:10157`). With both changed, a `DELETE` reaches no planner, memo,
+captured plan, posterior, Waystone or Cabin path: it compiles through
+`CompileWhere`, which takes no `PlanOptions`, and its `USING` becomes an
+`EXISTS` lowered without a plan. **Three behaviours move besides the
+statistics key**: KWP's `S_PARSE_OK` returns a prepared `DELETE` a
+non-zero `pattern_id` (`src/server/kwp_session.cpp:552-561`, read by
+`tools/kwp.py:519-533`); `ANALYZE DELETE ...`, which is refused, is
+keyed by the `DELETE`'s shape before its refusal
+(`command_dispatcher.cpp:8917-8932`); and ASH samples a `DELETE` under
+its `fetch_id` instead of 0 (`:854-856`, `sys.ash`'s `fingerprint`,
+`sys_views.cpp:1241`). The Cabin controller's wait count
+(`src/sched/ash_sampler.cpp:149-152`) does not move: it touches only a
+`pattern_id` a `SELECT`'s execution registered
+(`src/stats/optimizer_signals.cpp:83-89`). Three tests pin today's answer:
+`tests/fingerprint_test.cpp:162`, `tests/testdata/parser_corpus.txt:481`
+and `tests/show_sugar_contract_test.cpp:411-423`. **DF-Q4 (a)'s condition
+is therefore not met as written, and the item is back at the operator as
+DF-Q11.**
+
+**4. Log appends (DF-Q7).** Every append passes
+`WalManager::AppendThrough` (`src/wal/manager.cpp:367-411`), which has the
+record's transaction id and size and no `Transaction` object; no thread
+holds a current transaction. A count on the transaction therefore needs a
+lookup of the id in the core's live transactions at every append, or the
+object threaded through about fifteen logging helpers. Either way it
+misses what a statement appends under no transaction: one
+`HEAP_OVERWRITE` for each key an `INSERT` is issued, a burned redraw's
+included (`Catalog::AllocateRowId`, `src/catalog/catalog.cpp:2903`), a
+`PURGE`'s records, a rename's. A
+checkpoint's `ASSERT_PENDING` carries a transaction's id and is not that
+transaction's statement's (`src/wal/checkpointer.cpp:161-163`). An
+autocommit statement's commit record is appended before
+`RecordStatement`, so the window is whole. **The mechanism DF-Q7 (a)
+names costs more and counts less than booking to the polled task's
+session, as a wait is booked; back at the operator as DF-Q12.**
+
+**5. The sites that decide a transaction (part B).** One site commits
+(`TransactionManager::FinishCommitBody`, `src/txn/manager.cpp:289`) and
+one rolls back (`Abort`, `:519`), and neither knows why. A `READ ONLY`
+transaction reaches neither: its `COMMIT` and `ROLLBACK` end at
+`Session::Finish` (`command_dispatcher.cpp:11435-11438`,
+`:11541-11544`). A failed explicit `COMMIT` rolls back through
+`RollbackLocal` (`:11459-11483`). The dispatcher's
+`ROLLBACK` handler takes no cause: the lifetime sweep and a closed
+connection dispatch the client's own text (`src/server/tcp_server.cpp:945`,
+`:1113`), and `Session::Expire` runs after the rollback. A failed
+statement inside an explicit transaction rolls nothing back - it poisons
+the session and the client's `ROLLBACK`, the sweep or the close decides
+later. **An autocommit write that parks before it has written a row
+aborts its own transaction and begins another when it re-runs**: the
+park is refused as the statement's verdict (`WriteWalk::ParkedOutcome`,
+`command_dispatcher.cpp:10448-10451`) and `EndWrite` aborts every failed
+autocommit write (`:12434-12436`); a relation-lock wait and a structural
+re-run end the same way. One that parks after writing keeps its
+transaction across the park and resumes it (`RunWalkWrite`,
+`:9629-9640`). So one client statement can make several aborts, and the
+lock-holder transaction a `CREATE ASSERTION`, `CREATE TRANSITION`,
+`DROP TRANSITION` or a rename takes is always rolled back
+(`DdlBuildLock::End`, `:4155-4160`). The log's three commit counts are
+per core; a staged `strict` commit a failed sync aborts
+(`FinishDeferredCommits`, `:1223`, not `EndWrite`) stays in
+`strict_commits`. No
+transaction, session or dispatcher holds a begin time: the listener
+stamps one when `BEGIN` completes (`tcp_server.cpp:976-980`), and the
+dispatcher can stamp its own at `HandleBegin` from the statement's head.
+**The four counts of §2 do not partition these; back at the operator as
+DF-Q13.**
+
+**6. The read horizon (part B).** A core's bound is recomputed whole at
+every publication: `PublishCoreBounds` scans the core's live transactions
+and its 256 reader slots (`src/txn/manager.cpp:632-673`), and the word
+has two writers, `PublishSnapshotBound` and `LowerSnapshotBound`
+(`src/txn/instance_visibility.cpp:55-72`). It is written up to three
+times a point `SELECT` and about five a point `UPDATE`. No view, lease or
+transaction records when it was minted, and the manager has no clock. An
+age therefore needs a mint stamp on every held view (a field beside
+`ReadView`'s LSN, an array beside the reader slots), the scan returning
+the oldest stamp, a store beside each of the two writes, and the
+statement's head instant handed to the mint. `HorizonLsn`'s loop can name
+the core of the minimum, which is briefly a core mid-mint. The session's
+two words are reachable wherever a transaction opens or a view is minted,
+and `Session::Finish` and `Expire` clear them. This is how DF-S2 builds
+DF-Q8 (a); the spike priced the stores and not the scan.
+
+**7. The tests that pin a widened view.** None pins a column list, count,
+position or whole row of the five views or of the `txn` section: every
+reader projects, looks a column up by name or compares `SHOW` with its
+own `SELECT *`. No test lists every view. **New columns of
+`sys.statement_stats` go before `shape_text`**, which is last because it
+holds commas (`sys_views.cpp:1001-1016`). `sys.access_stats`' row is the
+persisted 33-byte struct, which is why its two columns wait for DA-S1.
+`StatementStats::Record`'s callers in `tests/statement_stats_test.cpp`
+break only if its signature does.
+
+**8. The price `[measured]`**
+(`bench/v3.4.12/results-df-s0-spike-v3.4.12-69-gb2a4f70a.md`). One binary,
+the spike's paths behind a mask read from the environment: A and A2 with
+none, B with all, C with all but the wait-statistics delta. `cores = 1`,
+`relaxed`, one connection, a point `SELECT` and a point `UPDATE` over the
+literal and the prepared path, 15-17 paired runs a cell, server CPU a
+statement:
+
+| cell | A | B - A, every spiked path | B - C, the wait delta alone | largest A2 - A |
+|---|---|---|---|---|
+| `SELECT` literal | 20.46 us | +0.18 us (B above A in 15 of 17) | +0.27 us | 0.70 us |
+| `SELECT` prepared | 19.78 us | +0.35 us (13 of 15) | +0.23 us | 0.69 us |
+| `UPDATE` literal | 22.05 us | +0.23 us (15 of 16) | +0.07 us | 0.41 us |
+| `UPDATE` prepared | 21.27 us | +0.11 us (12 of 17) | +0.05 us | 1.00 us |
+
+**Every median is under DF-Q10 (a)'s bar of 0.5 us and none is resolved
+from the run's own noise**: the largest gap between the two identical
+arms is as large as the distance from a median to the bar. The cost is
+there by sign and not placed by size. The wait-statistics delta is most of the cost
+on a read and inside the bar by its median, so DF-Q6 (a)'s first branch
+stands; it was spiked as one copy at the head and a diff at the end, not
+two copies.
+
+What the number is not. A is the spike's binary with its mask at 0, so
+the residual branches and the larger shape and session are in A as well,
+and B - A under-prices against a build with no spike by a residual that
+was not measured. The spike prices the work and not the design's
+attribution (a thread-local for the log bytes, dispatcher members for the
+executor's totals). **Part C's per-index fold ran in no cell**: the
+driver's relation has no secondary index, the `SELECT` is a tuple key
+lookup and the `UPDATE` runs no chain, so bit 1 priced the executor's
+totals on the `SELECT` and the fold's latch and map not at all. The latch
+of a part was never contended. **`cores = 8`
+was not run**: `tools/bn_census.py` writes `cores = 1` and no unmodified
+tool runs these arms at eight cores with the server's CPU accounted
+(DF-Q14). A fourth invocation was cut to hold the budget, the
+measurement ran 14 s past 20 minutes, and seven cells that a foreign
+build or host load made unclean were dropped from the paired tables. Not
+priced because they are off a point statement's path: part C's lock
+columns, written where a wait is already recorded, and part D, the
+steward's and the division sites'.
+
+**9. Back at the operator.** (a) is CLA's proposal in each; none is
+marked, and DF-S1 and DF-S2 do not start on the parts they govern until
+they are.
+
+| | item | (a) | other |
+|---|---|---|---|
+| DF-Q11 | `DELETE`'s shape, DF-Q4 (a)'s condition having failed (3). | built with the three movements accepted and stated in `protocol.md` and `wait-events.md`: a prepared `DELETE`'s `S_PARSE_OK` carries its `pattern_id` as an `UPDATE`'s does, `ANALYZE DELETE` is counted under the shape it names, and `sys.ash` samples a `DELETE` under its `fetch_id`; `DeleteInner` keys through `ParseKeepingShape`; the three pinning tests move with it | (b) DF-Q4 (b): `DELETE` stays one row at `fetch_id = 0` and no fingerprint moves |
+| DF-Q12 | Where a statement's log bytes are counted, DF-Q7 (a)'s mechanism having been priced by the census (4). | booked at `AppendThrough` to the session of the task being polled, as a wait is, and read as part of DF-Q6's delta: no lookup, no helper changed, and what the statement appends under no transaction is its own. A statement outside a task of its own session records NULL, as its time split does | (b) DF-Q7 (a) as marked, by a lookup of the id at every append, `TXN_BEGIN` counted at `Begin` and `ASSERT_PENDING` excluded; (c) the object threaded through the logging helpers |
+| DF-Q13 | Part B's counts (5). | six, each where its cause is known: `commits` at `FinishCommitBody` (a `READ ONLY` transaction's `COMMIT` decides nothing and is not in it); `rollbacks`, the client's `ROLLBACK`; `ceiling_rollbacks` and `close_rollbacks`, the listener naming its cause on the session before it dispatches; `aborts`, a transaction rolled back because a statement or a commit failed - an autocommit statement's, an autocommit or explicit `COMMIT`'s, a deferred `strict` commit's whose sync never came; `wait_aborts`, the transaction an autocommit write gives up to wait before it has written a row, counted when it is given up, whether the wait ends in a re-run or in the fault net's refusal. The lock-holder transaction is in none | (b) the four of §2, `aborts` then counting every re-run and every close; (c) `commits` and one `rollbacks`, no cause |
+| DF-Q14 | What DF-Q10 (a) asked priced and DF-S0 has no data for: `cores = 8`, and part C's per-index fold, which no cell of the driver reaches (8). | accepted for DF-S0; the close measures both, with a `cores` flag and an index-served read added to the census driver in a commit of its own before the close, outside any measurement stage | (b) the driver changed and the spike re-measured, both cells, before DF-S1 opens; (c) `cores = 1` and a tuple key read are the bar's only cells |
+
+**What DF-S0 did not do.** It did not read the leaf-division and
+compaction sites part D counts at, nor whether a statement outside a task
+of its own session occurs on the KWP path - both are DF-S4's and DF-S1's
+first reads. It did not measure a contended part, a scan, an `INSERT` or
+a `DELETE`. For DF-Q12 (a) it read only this much: the WAL already opens
+`sched::WaitScope` (`src/wal/checkpointer.cpp:606`, `:648`) and the
+engine is one library, so no layering moves; an append runs on its
+caller's thread under the stream latch (`src/wal/stream.cpp:390-394`),
+where `WaitContext().current` is the polled task, the session's for a
+statement the listener submitted (`tcp_server.cpp:738`) and asked by
+`sched::RunningTaskBooksTo` (`src/sched/wait_state.cpp:87-90`). The
+sweep's and the close's `ROLLBACK` are dispatched outside that session's
+task (`tcp_server.cpp:945`, `:1113`); what their appends are booked to is
+not read.
+
+**Reviewed by `critics-developer` before the commit.** It opened every
+cited line of this entry, read the spike and re-derived the table from
+the run's analysis. **What it found wrong in CLA's draft, each corrected
+above**: a write's `WHERE` subquery, and a `DELETE ... USING`, can be
+served by an index through a chain whose counters are thrown away, so
+"never by a secondary index" and "every read an index serves" were false;
+the query layer's walks, an `INSERT ... SELECT`'s source and an `UPDATE`'s
+scalar subquery do reach `RecordExecution`, so only a statement-wide
+`ExecStats` is missing; a `DELETE`'s shape moves three behaviours, not
+two, `sys.ash`'s `fingerprint` among them; a parked write gives its
+transaction up only if it has written no row; **and the spike's per-index
+fold ran in no measured cell**, so the draft's "all of DF" over-claimed -
+the table, the results file's title and thesis and DF-Q14 now say so. In
+the results file it corrected four numbers quoted from the wrong analysis
+table, completed the account of host load, and put the unit into every
+cell. From its reading of DF-Q13, CLA rewrote option (a): `commits` does
+not hold a `READ ONLY` commit, `aborts` takes a failed explicit `COMMIT`
+and a deferred commit's abort, and `rerun_aborts` became `wait_aborts`,
+since the site sees a wait begin and not a re-run. **Not taken**: dropping
+the build's log from the archive - it is a log, not data, and says what
+was built. **Left unverified by the review, and so by this entry**: the
+count of writes of a core's bound a statement (6), "about fifteen" helpers
+(4), that no test pins a view's columns (7), and that `HorizonLsn` can
+name the core (6); each is one census's reading.
