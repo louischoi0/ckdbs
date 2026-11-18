@@ -1,8 +1,8 @@
 # Work order CZ - a checkpoint that does not hold its reactor on a segment roll: the premise measured before anything is built
 
 Status: **OPENED 2026-11-18; CZ-S0, CZ-S1 and CZ-S2 done; S1 read as C1
-alone; CZ-S2's items CZ-Q14 to CZ-Q22 with the operator, CZ-S3 not
-started** on
+alone; CZ-S2's items CZ-Q14 to CZ-Q22 marked (a) (§41 there), CZ-S3 not
+opened and not started, the session handed off** on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* S0
@@ -301,8 +301,9 @@ Binding from CZ-S2 on, if the order reaches it.
 **Every item is marked (a)**: CZ-Q9 by `raft-marks-2026-11-18.md` §18,
 the others by §39 there, which also passes V0 on CZ-Q1 (a)'s bar. (a) was
 CLA's proposal in each. CZ-Q11 to CZ-Q13 were added at CZ-S0. **CZ-Q14 to
-CZ-Q22 were added at CZ-S2 and are not marked**; each is argued in §8,
-and CZ-S3 rests on them.
+CZ-Q22 were added at CZ-S2 and are marked (a), each CLA's proposal, by
+§41 there**; each is argued in §8, and CZ-S3 rests on them. That word
+marks the items and asks for a handoff: it does not open CZ-S3.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -671,6 +672,9 @@ claims held; liveness and completeness did not as first written.**
   the flush is busy, which only V1 can tell.
 
 **For the operator.** CZ-Q14 to CZ-Q22, and then the word for CZ-S3.
+**Since marked**: CZ-Q14 to CZ-Q22 are each (a) on the operator's word of
+the same day (`raft-marks-2026-11-18.md` §41). The word for CZ-S3 is
+still owed.
 
 ### CZ-S1b - C2 priced further, 2026-11-18
 
@@ -737,7 +741,9 @@ is CLA's proposal.
 ## 8. The model for C1 (CZ-S2) `[design]`
 
 Every `[source-read]` claim below was read at `fd96b5d3`. Nothing here is
-built; CZ-S3 builds what the operator marks. CZ-S1's numbers are of the
+built; CZ-S3 builds what the operator marks, and CZ-Q14 to CZ-Q22 are
+each marked (a) (`raft-marks-2026-11-18.md` §41), so the model as written
+below is the one to build. CZ-S1's numbers are of the
 spike, which this model differs from at the flush and at the wait (§8.3):
 V1 measures the model.
 
@@ -1022,7 +1028,8 @@ crash (CZ-Q20).
   waits the roll out" gains the cadence checkpoint's exception and its
   rule for the skipped flush; §11 the tried sites.
 - `docs/spec/sched.md` §4: the checkpoint task's new park.
-- `docs/spec/wait-events.md`: the event, if CZ-Q18 (a).
+- `docs/spec/wait-events.md`: the event `sysio.wal_roll` (CZ-Q18 (a),
+  marked).
 - `include/kds/wal/stream.hpp`'s protocol header: the tried entries and
   the roll flag.
 - The drain's comments (`src/wal/manager.cpp:495-509`,
