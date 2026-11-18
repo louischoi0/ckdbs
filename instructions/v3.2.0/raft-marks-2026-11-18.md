@@ -189,3 +189,12 @@ took under them.
 | **Mark** | None. On W21, `dc884be6` (§19) and this merge go to `main` with `--no-verify`; the hook and the suite are skipped, and this session ran no suite - its commits change documents only, and the source the merges brought is `origin/main`'s own. **The README and `CLAUDE.md` compaction of W19-W20 is not in this push**: it was uncommitted and under `critics-developer`'s review at the word, and follows in its own commit under the same word |
 | **Does not settle** | A version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 21. `CLAUDE.md` and the READMEs compacted; pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W19 and W20 (§20). W22, while the review was still running: *"When the review is done, push CLAUDE.md with no verify too."* (given in Korean; recorded in English) |
+| **Mark** | None. **`CLAUDE.md`: 70,113 bytes to about 56,000.** Thirty milestone rows state the contract without the stage that built it, its superblock number or its date, and a row's work orders moved to its owning-docs cell; the header's compaction note, the "settled" paragraph and the reopening paragraph are shortened. **Everything from "Hard Invariants" to the end is byte-identical.** The prior text is at `abe870fc`. **READMEs**: `instructions/`, `docs/`, `docs/pending/` (its table's subjects shortened, entries linked), `docs/conceptnotes/` and `CIP/` ("Not cut, and why"), each with a `git show` link to its prior text; the root `README.md`, `docs/inflight/`'s two and `manual/`'s three hold no history worth cutting and are unchanged. **Reviewed by `critics-developer`**, which found CLA's first rewrite had cut past history - refusals by name, two `[quiet-wrong]` markers, hard limits, correctness premises and known-gap pointers in about two dozen rows, and four statements made wrong - and restored them; that is why the file is 56 KB and not CLA's 49 |
+| **Does not settle** | The dated operator quotations inside the rule sections, left as written; the mechanism detail the review chose not to restore (its report names it; the specs carry it); a version |
+| **Recorded at** | this file; `CLAUDE.md`'s header; this file's row in `instructions/v3.2.0/index.md` |

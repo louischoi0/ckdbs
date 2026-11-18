@@ -99,23 +99,16 @@ change that cannot regress is worth landing before a change that could.
 
 ## Not cut, and why
 
-- **Heap/btree INSERT's duplicate scan is O(slots per page)**
-  (`heap_chain.cpp:109-122`, `btree.cpp:632-645`): removable in
-  principle, since invariant 11's 2026-08-25 amendment says an omitted
-  key or a named key at or above the high-water mark needs **no page
-  read** — but it means threading a "uniqueness proven" flag from the id
-  issuer, and a wrong flag admits a duplicate pk silently. A
-  backwards-scan short-circuit would lean on within-page id ordering,
-  which **invariant 4 explicitly disclaims**. Needs the owner's
-  decision, not a patch.
-- **A last-frame memo in `GetForRead`**: real, but per *page* rather than
-  per row, and OPT-005 removes a whole fetch on the same shapes for less
-  risk.
-- **`stats::MakeValueKey` copies a `std::string` per bucketed row and
-  per probe** (`cabin_store.hpp:132-139`): only for string join keys,
-  and a `string_view`-keyed form is a wider `CabinKey` refactor.
-- **AP05** is already owned by `workplan-aggregate-perf.md`; it is not
-  re-reported here as a discovery.
-- **A compiled-plan cache** is excluded as a new subsystem, and it
-  collides with the catalog-invalidation soundness gap in
-  `catalog_version()`.
+Recorded at the survey so that a later run does not re-propose them. The
+reasoning in full: `git show 321331e2:CIP/README.md`.
+
+- **INSERT's duplicate scan, O(slots per page)**: a wrong "uniqueness
+  proven" flag admits a duplicate key silently. Needs the owner's decision,
+  not a patch.
+- **A last-frame memo in `GetForRead`**: OPT-005 removes a whole fetch on
+  the same shapes for less risk.
+- **`stats::MakeValueKey`'s `std::string` copy per bucketed row and probe**:
+  string join keys only, and the fix is a wider `CabinKey` refactor.
+- **AP05**: already owned by `workplan-aggregate-perf.md`.
+- **A compiled-plan cache**: a new subsystem, and it collides with the
+  catalog-invalidation soundness gap in `catalog_version()`.
