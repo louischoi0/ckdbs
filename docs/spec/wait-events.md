@@ -140,6 +140,19 @@ Reading a wait: `sys.wait_stats` (cumulative, per core), `sys.wait_histogram`
 - **Remedies:** A faster log device.
 - **Sites:** The checkpointer.
 
+### sysio.wal_roll
+
+- **Class:** System I/O
+- **Kind:** timed
+- **In DB time:** yes
+- **p1:** site — the cadence checkpoint's latch site: 1 its begin record, 2 its end record, 3 its log park's flush.
+- **p2:** rolling — 1 when a segment roll held the stream latch as the park began, 0 for another holder.
+- **p3:** (unused)
+- **Meaning:** The cadence checkpoint task found the WAL stream latch held at one of its latch sites and parked instead of waiting on its reactor thread (`wal.md` §6, `sched.md` §4). A park on a roll ends when the roll's flag clears, the log stops or 1 s passes; on any other holder it ends after 1 ms or at the stop. At the flush site it also ends once the task's LSN is durable. Booked to the checkpoint task, which has no session.
+- **Usual causes:** A segment roll waiting out the log writer's sync in flight (`workorder-bq-wal-segment-roll.md`); another core's append, flush or detach.
+- **Remedies:** A faster log device. The roll's length is BQ's subject; the park only keeps the core's other sessions running through it.
+- **Sites:** The checkpointer (`Checkpointer::RunTask`, `ParkOnLog`).
+
 ### xcore.step_response
 
 - **Class:** CrossCore

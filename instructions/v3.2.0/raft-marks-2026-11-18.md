@@ -434,3 +434,13 @@ took under them.
 | **Mark** | None. **The work branch goes to `main` with `--no-verify`**: CX-S5 - a variant pins a relation's join method, `BUILD <relation> ON | OFF`: `ON` holds the step to the statement-local build, the keyed arms standing aside, met only where the build's own rule annotates the step; `OFF` takes the build's rank away; neither forced, the cap's run-time decline a resource limit (CX-Q8 (a)) - with its review applied and its stage log (the order's §8), and §45's suite sentence corrected. No superblock moves. **The hook was skipped; the full Debug suite ran 0 failed of 4708 at `6948c875`**, and this section's commit adds documents only. Overhead not measured; measured at the milestone's close |
 | **Does not settle** | `ON`'s reading as a restriction to the build, which is CLA's and unmarked; CX-Q6 (a)'s consequence (§45); CX-S6 and S7; a tag, a version |
 | **Recorded at** | this file; the CX order's §8; the CX row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 47. CZ-S3 and CZ-S4 opened, every later item to CLA's proposal, a gate not met stops the order
+
+| | |
+|---|---|
+| **Context** | The CZ handoff of §43 and §44: CZ-S0, S1, S1b and S2 done, CZ-Q0..Q22 marked (a), CZ-S3 not opened. Given at 13:32 UTC to be acted on two hours later; CLA started at 15:33 UTC on worktree `cz-checkpoint-roll-wait`, fast-forwarded to `origin/main` at `9712f5f0` (`v3.4.12-112-g9712f5f0`) |
+| **Word** | W29 (the BL/CZ matter's): *"I will have the CZ milestone's work carried on from the handoff. Start the milestone two hours from now. Every decision follows the proposal; if a gate is not met, stop. Carry out the work until the milestone is stopped or ends."* (given in Korean; recorded in English) |
+| **Mark** | **CZ-S3 is opened, and CZ-S4 with it**: the build of §8 (S3a the log park's flush, S3b the begin and end records, S3c the recycle), each with its `critics-developer` review and the full suite, then the close. **Every item that arises from here on is marked as CLA proposes it**, recorded where it arises. **A gate not met stops the order**: a failed review not resolved, a suite not green, or at the close V1 (CZ-Q1 (a)), the bulk cell's 3 % (CZ-Q2 (a)) or a measured overhead regression - CLA reports and does not go on. CLA's reading: the push and any tag still wait for their own word (`CLAUDE.md`, Session Workflow step 4) |
+| **Does not settle** | a push, a tag, a version; DG-Q0..Q10 - DG stays unopened; C2's build (CZ-Q3 (a)) |
+| **Recorded at** | this file; the CZ order's header and §7; the CZ row and this file's row in `instructions/v3.2.0/index.md` |

@@ -115,7 +115,10 @@ public:
         page.value().bytes()[kPageBodyOffset] = std::byte{0x5A};
         return page_;
     }
-    void Commit() override { ++commits; }
+    wal::RecycleOutcome Commit() override {
+        ++commits;
+        return wal::RecycleOutcome::kNone;
+    }
     std::uint64_t commits = 0;
 
 private:

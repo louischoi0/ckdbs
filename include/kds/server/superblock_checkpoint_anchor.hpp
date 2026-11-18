@@ -138,9 +138,15 @@ public:
     // publishing core's thread, holding no latch. Its failure is the
     // recycler's to count: a publish that landed does not fail because a
     // removal did. `recycler` must outlive this.
-    void SetRecycler(std::function<void(wal::Lsn)> recycler) noexcept {
-        recycler_ = std::move(recycler);
-    }
+    //
+    // **`tried`** (CZ-S3, C1c) asks for the stream's tried detach; the
+    // recycler answers false when it skipped on a busy latch, true otherwise.
+    // Only the run task's `Commit` tries, and after `kRecycleSkipBound`
+    // skips in a row, instance-wide, it does not (CZ-Q22 (a)): nothing else
+    // bounds them, and a log that is not recycled is what CZ-R4 forbids.
+    using Recycler = std::function<bool(wal::Lsn redo_start, bool tried)>;
+    void SetRecycler(Recycler recycler) noexcept { recycler_ = std::move(recycler); }
+    static constexpr std::uint32_t kRecycleSkipBound = 16;
 
     // `D` (the header's recycling section): 0 until a publish's sync has
     // returned OK in this process.
@@ -156,7 +162,7 @@ public:
     // `D` and the recycler. One run at a time (`wal::CheckpointGate`), so
     // one encoded landing is pending at most.
     StatusOr<PageId> Encode(const wal::CheckpointAnchorRecord& anchor) override;
-    void Commit() override;
+    wal::RecycleOutcome Commit() override;
 
     // Anchors published through this object since it was constructed. The
     // checkpoint-duration/cadence counterpart of WalStats; also what the
@@ -198,8 +204,9 @@ private:
     StatusOr<wal::CheckpointAnchorRecord> EncodeLanding(const wal::CheckpointAnchorRecord& anchor);
     // One of `Publish`'s two store syncs, logged when it fails.
     Status SyncForAnchor(const char* what);
-    // After page 0's sync: the count, `D` and the recycler.
-    void Landed(const wal::CheckpointAnchorRecord& landing);
+    // After page 0's sync: the count, `D` and the recycler, tried when
+    // `tried` and the skips in a row are under the bound.
+    wal::RecycleOutcome Landed(const wal::CheckpointAnchorRecord& landing, bool tried);
     wal::CheckpointAnchorRecord encoded_landing_{};  // `Encode`'s, for `Commit`
 
     SuperBlock& superblock_;
@@ -213,7 +220,11 @@ private:
     // every later encode keeps to (the header's recycling section).
     wal::CheckpointAnchorRecord encoded_floor_{};
     std::atomic<wal::Lsn> durable_redo_start_{0};
-    std::function<void(wal::Lsn)> recycler_;
+    Recycler recycler_;
+    // Skips in a row (`kRecycleSkipBound`): one run publishes at a time
+    // (`wal::CheckpointGate`), so a plain count would do but for the
+    // synchronous `Publish`, which may land on another thread.
+    std::atomic<std::uint32_t> recycle_skips_in_row_{0};
 
     // Indexed by core id, with a bit per core that has published. An array
     // and a mask rather than a map, so that "every core has published" is

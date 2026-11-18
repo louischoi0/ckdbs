@@ -71,7 +71,9 @@
 // `system`-group task, once per reactor iteration (wal.md section 6-2/6-3
 // puts flushing and group-commit completion in that group). A D2 commit on
 // a manager nobody drains never becomes durable, and its waiter never
-// wakes.
+// wakes. Nor, since CZ-S3, do a cadence checkpoint's bytes when its tried
+// flush was skipped and nothing else flushes: core 0's drain is that park's
+// backstop (`TryRequestSyncNow`, `DrainOnce`'s free-tick rule).
 //
 // ---- What this layer does not do ----------------------------------------
 //
@@ -303,6 +305,29 @@ public:
     // refused `OutOfSpace` (stats().ring_full_drains / ring_full_refusals).
     StatusOr<Lsn> Append(const RecordSpec& spec, std::span<const std::byte> payload = {});
 
+    // **The cadence checkpoint's tried entries** (CZ-S3, `stream.hpp`'s
+    // concurrency section; wal.md §6). Each sets `*busy` and does nothing
+    // when the stream latch is held - or, for the flush, when another flush
+    // is in flight - and is otherwise the entry it mirrors.
+    //
+    // `TryAppend`: `Append` with the stream's tried append. A full ring is
+    // drained with the tried flush, so the record never waits on this
+    // thread: the drain busy, the append answers busy with nothing staged.
+    StatusOr<Lsn> TryAppend(const RecordSpec& spec, std::span<const std::byte> payload,
+                            bool* busy);
+    // `RequestSyncNow` with the tried flush. **Busy, the writer is asked for
+    // `flushed_lsn()` and nothing above it** (CZ-Q14 (a), `[quiet-wrong]`):
+    // the writer publishes as durable what it is asked for, on the promise
+    // that those bytes were written before the ask, and a task whose flush
+    // was skipped has bytes still in the ring. A skip also leaves the D3
+    // clock (`last_sync_ns_`) alone, which core 0's drain reads: stamped by a
+    // flush that did not happen, `relaxed`'s window would reach twice its
+    // setting. With no writer it is `RequestSyncNow`'s inline `Sync`, never
+    // busy.
+    Status TryRequestSyncNow(bool* busy);
+    // A roll holds the stream latch now (`WalStream::rolling`).
+    bool rolling() const noexcept { return stream_->rolling(); }
+
     // Appends TXN_COMMIT and applies `durability`, returning the commit
     // record's LSN. Under kStrict the record is durable on return; under
     // kGroup the caller waits for IsDurable() on that LSN; under kRelaxed
@@ -397,7 +422,11 @@ public:
     // cross-thread call, and the inline arm exists only where there is one
     // thread. A failed removal is counted, never returned to a checkpoint
     // whose anchor already landed.
-    void RecycleBelow(Lsn durable_redo_start);
+    //
+    // `tried` takes the stream's tried detach (CZ-S3, C1c): a latch held or a
+    // flush in flight skips the recycle and answers false - not a failure,
+    // and the next detach, which is cumulative, covers it. True otherwise.
+    bool RecycleBelow(Lsn durable_redo_start, bool tried = false);
 
     // Removals that failed, the writer's and the inline arm's (`SHOW META`'s
     // `wal_remove_failures`, BC-R6).
@@ -447,8 +476,13 @@ public:
 private:
     // `Append` and `AppendAndSeal`'s one body: the stream call, the ring's
     // bounded drain-and-retry, and the counters.
+    // With `busy`, the tried form (`TryAppend`).
     StatusOr<Lsn> AppendThrough(const RecordSpec& spec, std::span<const std::byte> payload,
-                                bool seal);
+                                bool seal, bool* busy = nullptr);
+    // `Flush`, the tried flush when `busy` is given.
+    Status FlushMaybeTried(bool* busy);
+    // `RequestSyncNow`, the tried form when `busy` is given.
+    Status RequestSyncNowMaybeTried(bool* busy);
 
     WalManager(WalStream* stream, std::unique_ptr<WalStream> owned_stream, WalWriter* writer,
                const sched::Clock& clock, std::uint32_t core_id, WalManagerConfig config);

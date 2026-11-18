@@ -69,6 +69,20 @@
 //   - `Sync`, from any thread: the unlatched flush, the device sync
 //     **outside** the latch, and the durable watermark published as a
 //     maximum, so two syncers can never pull it back.
+//   - **The tried entries** (CZ-S3, `workorder-cz-checkpoint-roll-wait.md`
+//     §8.2): `TryAppend`, `TryFlush` and `TryDetachBelow` take the latch with
+//     a try and answer "busy" through an out-parameter, with nothing done,
+//     when it is held - and the flush and the detach also when another
+//     thread's flush is in flight, where their blocking forms spin. Busy is
+//     not a Status. A stopped stream answers its stop first. Their one caller
+//     is the cadence checkpoint task, which parks on a busy answer instead of
+//     sleeping its reactor through a roll (wal.md §6, sched.md §4); every
+//     other caller keeps the blocking entries (CZ-R5). Unshared there is no
+//     latch and they are the blocking entries.
+//   - **The roll flag** (`rolling()`): set under the latch for the length
+//     of a roll and cleared by a scope guard on every exit, so it says why
+//     the latch is busy. Advisory: a parked task reads it, and its park has a
+//     ceiling, so nothing's correctness or liveness rests on it.
 //   - The gauges (`append_lsn`, `flushed_lsn`, `durable_lsn`, `ring_used`,
 //     `sealed`) are relaxed atomics: written under the latch, readable
 //     from any thread without it as the instantaneous values they are.
@@ -333,6 +347,18 @@ public:
     StatusOr<Lsn> Append(const RecordSpec& spec, std::span<const std::byte> payload = {},
                          RollRecord* rolled = nullptr);
 
+    // `Append` with the latch tried (the concurrency section): held, `*busy`
+    // is set and `kNoLsn` returned with nothing staged. Taken, it is
+    // `Append` - a record that does not fit rolls on this thread (CZ-Q19).
+    StatusOr<Lsn> TryAppend(const RecordSpec& spec, std::span<const std::byte> payload,
+                            bool* busy, RollRecord* rolled = nullptr);
+
+    // A roll holds the latch now (the concurrency section). Any thread.
+    bool rolling() const noexcept { return rolling_.load(std::memory_order_acquire); }
+    // Test seam: the flag set with no roll behind it, to prove a park does
+    // not rest on it (CZ-S3 test 7).
+    void SetRollingForTest(bool on) noexcept { rolling_.store(on, std::memory_order_release); }
+
     // The roll totals (`RollStat`). Any thread: written by one roller at a
     // time, under the latch, and read as a statistic without a fence.
     std::uint64_t roll_stat(RollStat stat) const noexcept {
@@ -348,6 +374,9 @@ public:
 
     // Writes the staged bytes to the device. Not durable until Sync().
     Status Flush();
+    // `Flush` with the latch tried, and busy too when another thread's flush
+    // is in flight: `*busy` set and nothing written. Otherwise `Flush`.
+    Status TryFlush(bool* busy);
 
     // Flush() plus a device sync; advances durable_lsn() to what that flush
     // had handed over, only if the device reports success, so a failed
@@ -366,6 +395,10 @@ public:
     // `lsn` says. The caller passes a durable redo start (BC-R1); the files
     // go at the device's next `ReclaimDetached`.
     Status DetachBelow(Lsn lsn);
+    // `DetachBelow` with the latch tried, and busy too when a flush is in
+    // flight: `*busy` set and nothing detached. A detach is cumulative, so
+    // the next one covers what this skipped.
+    Status TryDetachBelow(Lsn lsn, bool* busy);
 
 private:
     WalStream(LogDevice* device, std::uint32_t core_id, std::size_t ring_capacity, bool shared);
@@ -416,6 +449,11 @@ private:
     // latch to finish, so a caller may hold it.
     void WaitOutFlushInFlight() const noexcept;
     Status SealLocked();
+    // `DetachBelow`'s body, under the latch, no flush in flight.
+    Status DetachLocked(Lsn lsn);
+    // One attempt at `Flush`: `*again` is set, with nothing written, when
+    // the latch was tried and held (`tried`) or another flush is in flight.
+    Status FlushAttempt(bool tried, bool* again);
     // Append's body, under the latch the caller holds.
     StatusOr<Lsn> AppendLocked(const RecordSpec& spec, std::span<const std::byte> payload,
                                RollRecord* rolled);
@@ -460,6 +498,7 @@ private:
     std::atomic<Lsn> durable_lsn_{0};
     std::atomic<bool> sealed_{false};
     std::atomic<bool> stopped_{false};
+    std::atomic<bool> rolling_{false};  // `rolling()`
     // Serializes `SyncDevice`, held across the device sync only. Taken
     // under the stream latch by a roll (`StartSegment`), and with no latch
     // by `Sync` and the writer thread; nothing holding it takes the latch,

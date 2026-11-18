@@ -1,8 +1,10 @@
 # Work order CZ - a checkpoint that does not hold its reactor on a segment roll: the premise measured before anything is built
 
 Status: **OPENED 2026-11-18; CZ-S0, CZ-S1 and CZ-S2 done; S1 read as C1
-alone; CZ-S2's items CZ-Q14 to CZ-Q22 marked (a) (§43 there), CZ-S3 not
-opened and not started, the session handed off** on
+alone; CZ-S2's items CZ-Q14 to CZ-Q22 marked (a) (§43 there); CZ-S3 and
+CZ-S4 opened on the operator's W29 (§47 there), every later item to CLA's
+proposal and a gate not met stopping the order; CZ-S3 built** (§7, "CZ-S3")
+on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* S0
@@ -738,6 +740,76 @@ inference against the logs.
 on the prewrite, and not C2 as it stands. It is
 `workorder-dg-wal-segment-body.md`, written and not opened; the letter DG
 is CLA's proposal.
+
+### CZ-S3 - the build, 2026-11-18
+
+On worktree `cz-checkpoint-roll-wait`, from `origin/main` at `9712f5f0`
+(`v3.4.12-112-g9712f5f0`), on the operator's W29
+(`raft-marks-2026-11-18.md` §47). **The model of §8, built as written**,
+with the departures below. **The three parts were built as one step, not
+three** (§5 lists S3a, S3b and S3c): the tried entries on `WalStream` and
+`WalManager` serve all three, so one review and one suite cover them;
+CLA's choice, stated here.
+
+- **What is built**: `WalStream::TryAppend`, `TryFlush`, `TryDetachBelow`
+  and the roll flag (`rolling()`, a scope guard in `AppendLocked`'s roll
+  branch); a try form of `LatchGuard`; `WalManager::TryAppend` (a full
+  ring drained by the tried flush), `TryRequestSyncNow` (busy: the writer
+  asked for `flushed_lsn()`, the D3 clock unstamped) and
+  `RecycleBelow(lsn, tried)`; the cadence task's begin site (the roll flag
+  first, then `Start(bool*)`), end site and flush site, each to one bound
+  of 16 busy answers a run, then the blocking entry at once; `ParkOnBusy`
+  (1 s ceiling on a roll, 1 ms otherwise, the stop, and the durable LSN at
+  the flush site), booked as `sysio.wal_roll`; the recycle through
+  `CheckpointAnchor::Commit`, which now answers a `RecycleOutcome`, and
+  `SuperBlockCheckpointAnchor`'s skips in a row, bounded at 16; the run
+  line's per-site counters, the assertion visit's time and the recycle's
+  skips. The texts of §8.9 but the close's.
+- **Departures, each CLA's**:
+  - the bound at the flush site is the run's: once its 16 busy answers are
+    spent, every later flush of the run is blocking, each counted in
+    `latch_flush_bound`;
+  - `start_n` on the run line counts `Start`'s attempts, busy ones
+    included;
+  - §8.8 item 11 is a unit test of the anchor's bound and of the tried
+    detach on a held latch and a flush in flight, not a run of
+    `two_core_rig`'s cadence; item 4 is two tests, the drain ending a peer's
+    park and core 0's D3 clock at the manager;
+  - `sim/instance.cpp`'s recycler gains the new signature and is never
+    asked to try (CZ-Q20 (a) leaves the simulator's behaviour untouched).
+- **Tests**: `tests/checkpoint_roll_park_test.cpp`, 18 tests over §8.8's
+  items 1-13 with 1b (a busy begin record retakes its snapshot) and 6b (the
+  bound at the flush site); `SuperBlockAnchorTest.ARecycleSkippedSixteenTimesInARowIsTakenBlocking`;
+  the registry and view tests count 21 events. Five repeats of the new and
+  neighbouring tests passed.
+- **Suite**: the full Debug suite, **0 failed of 4727** on the reviewed
+  tree (2 disabled, 2 skipped); the tree before the review ran 0 failed of
+  4726. Overhead not measured; measured at the milestone's close.
+
+**Reviewed by `critics-developer`** against §8 and the source, before the
+commit.
+- **Fixed by the review**: the flush site's bound was counted per call of
+  `ParkOnLog`, not per run (a run parks on the log once per begin,
+  deferred step, end and publish write); the fixture's rebuild freed the
+  old log device while the old writer thread could be inside it.
+- **Applied from its findings**: no park after the sixteenth busy answer
+  (§8.8 item 6); `TryRequestSyncNow` and `RequestSyncNow` share one body;
+  `FlushAttempt` holds one optional guard; a flush-site bound test (6b).
+- **Found while applying them**: the fixture left the test thread named
+  core 1, which aborted a later test in the binary; `TearDown` names it
+  core 0 again.
+- **Rejected**:
+  - folding the three sites' loops into one helper coroutine: the begin
+    site's roll-flag test, the flush site's durable exit and its
+    `DurableWait` differ, and a helper over callables would carry them as
+    parameters; the three loops stay, each about twenty lines;
+  - merging `RecycleOutcome::kNone` and `kDone`: they are two facts of the
+    anchor's, and the anchor's test reads them;
+  - a public accessor in place of the test's `At()`: one test helper.
+- **Left as gaps, stated**: test 2 cannot by itself catch a durable point
+  asked above `flushed_lsn()` under a roll, where the seal has flushed the
+  ring - test 3's second try is what would break; the end site's blocking
+  path is not reached by a test.
 
 ## 8. The model for C1 (CZ-S2) `[design]`
 

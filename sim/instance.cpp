@@ -212,7 +212,11 @@ Status SimInstance::RunCheckpoint(bool at_mount) {
     // The boot's one anchor, built at its first checkpoint (BF-R12).
     if (!anchor_.has_value()) {
         anchor_.emplace(boot_->superblock, *store_);
-        anchor_->SetRecycler([this](wal::Lsn d) { Recycle(d); });
+        // Its publishes are synchronous, so it is never asked to try (CZ-Q20).
+        anchor_->SetRecycler([this](wal::Lsn d, bool /*tried*/) {
+            Recycle(d);
+            return true;
+        });
     }
     return server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, *anchor_,
                                            /*log=*/nullptr, /*clock=*/nullptr,

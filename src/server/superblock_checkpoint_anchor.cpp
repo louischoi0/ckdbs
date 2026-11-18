@@ -151,7 +151,9 @@ StatusOr<PageId> SuperBlockCheckpointAnchor::Encode(const wal::CheckpointAnchorR
     return kSuperBlockPageId;
 }
 
-void SuperBlockCheckpointAnchor::Commit() { Landed(encoded_landing_); }
+wal::RecycleOutcome SuperBlockCheckpointAnchor::Commit() {
+    return Landed(encoded_landing_, /*tried=*/true);
+}
 
 Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& anchor) {
     // **Every page the anchor stands for is synced before page 0 is encoded**,
@@ -167,7 +169,7 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
     if (!encoded.ok()) return encoded.status();
     if (Status s = SyncForAnchor("page 0"); !s.ok()) return s;
 
-    Landed(encoded.value());
+    (void)Landed(encoded.value(), /*tried=*/false);
     return Status::OK();
 }
 
@@ -186,7 +188,8 @@ Status SuperBlockCheckpointAnchor::SyncForAnchor(const char* what) {
     return s;
 }
 
-void SuperBlockCheckpointAnchor::Landed(const wal::CheckpointAnchorRecord& landing) {
+wal::RecycleOutcome SuperBlockCheckpointAnchor::Landed(const wal::CheckpointAnchorRecord& landing,
+                                                      bool tried) {
     ++publishes_;
 
     // `D` moves only on a sync that returned OK, and only forward: two
@@ -202,7 +205,18 @@ void SuperBlockCheckpointAnchor::Landed(const wal::CheckpointAnchorRecord& landi
             break;
         }
     }
-    if (advanced && recycler_) recycler_(landing.redo_start_lsn);
+    if (!advanced || !recycler_) return wal::RecycleOutcome::kNone;
+    // The anchor advances `D` before it recycles, so a skip is retried only
+    // when a later publish advances it again; the detach is cumulative and
+    // covers what this one skipped (CZ order §8.4).
+    const bool bounded =
+        tried && recycle_skips_in_row_.load(std::memory_order_relaxed) >= kRecycleSkipBound;
+    if (recycler_(landing.redo_start_lsn, tried && !bounded)) {
+        recycle_skips_in_row_.store(0, std::memory_order_relaxed);
+        return bounded ? wal::RecycleOutcome::kBlocked : wal::RecycleOutcome::kDone;
+    }
+    recycle_skips_in_row_.fetch_add(1, std::memory_order_relaxed);
+    return wal::RecycleOutcome::kSkipped;
 }
 
 }  // namespace kds::server

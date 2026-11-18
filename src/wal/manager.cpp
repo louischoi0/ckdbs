@@ -108,16 +108,19 @@ StatusOr<std::unique_ptr<WalManager>> WalManager::Attach(WalStream* stream, WalW
                                                       clock, core_id, config));
 }
 
-Status WalManager::Flush() {
+Status WalManager::Flush() { return FlushMaybeTried(nullptr); }
+
+Status WalManager::FlushMaybeTried(bool* busy) {
+    if (busy != nullptr) *busy = false;
     // The stream no-ops an empty flush; only count the ones that moved
     // bytes, or the metric stops meaning anything.
     if (stream_->ring_used() == 0) {
         return Status::OK();
     }
-    if (Status s = stream_->Flush(); !s.ok()) {
+    if (Status s = busy != nullptr ? stream_->TryFlush(busy) : stream_->Flush(); !s.ok()) {
         return s;
     }
-    ++stats_.flushes;
+    if (busy == nullptr || !*busy) ++stats_.flushes;
     return Status::OK();
 }
 
@@ -143,22 +146,28 @@ void WalManager::StartWriter() {
     }
 }
 
-void WalManager::RecycleBelow(Lsn durable_redo_start) {
-    if (Status s = stream_->DetachBelow(durable_redo_start); !s.ok()) {
+bool WalManager::RecycleBelow(Lsn durable_redo_start, bool tried) {
+    bool busy = false;
+    const Status detached = tried ? stream_->TryDetachBelow(durable_redo_start, &busy)
+                                  : stream_->DetachBelow(durable_redo_start);
+    if (busy) return false;
+    if (!detached.ok()) {
         recycle_failures_.fetch_add(1, std::memory_order_relaxed);
         if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
             log_->Error("wal", "recycling could not detach below lsn " +
-                                   std::to_string(durable_redo_start) + ": " + s.message());
+                                   std::to_string(durable_redo_start) + ": " +
+                                   detached.message());
         }
-        return;
+        return true;
     }
     if (writer_ != nullptr) {
         writer_->RequestReclaim();
-        return;
+        return true;
     }
     if (!stream_->device()->ReclaimDetached().ok()) {
         recycle_failures_.fetch_add(1, std::memory_order_relaxed);
     }
+    return true;
 }
 
 Status WalManager::Sync() {
@@ -249,24 +258,36 @@ Status WalManager::Sync() {
     return Status::OK();
 }
 
-Status WalManager::RequestSyncNow() {
+Status WalManager::RequestSyncNow() { return RequestSyncNowMaybeTried(nullptr); }
+
+Status WalManager::TryRequestSyncNow(bool* busy) { return RequestSyncNowMaybeTried(busy); }
+
+Status WalManager::RequestSyncNowMaybeTried(bool* busy) {
+    if (busy != nullptr) *busy = false;
     if (writer_ == nullptr) {
         // Nobody to ask - an owning manager that never started a writer,
         // which is every in-process test and tool. Its sync is its own, on
-        // this thread.
+        // this thread, and never busy.
         return Sync();
     }
+    // The stream's flush, never `Flush()`'s empty-ring early-out: a flush in
+    // flight empties the ring with the caller's record still being written,
+    // and the blocking flush waits that out (the tried one answers busy).
     const bool staged = stream_->ring_used() > 0;
-    if (Status s = stream_->Flush(); !s.ok()) {
+    if (Status s = busy != nullptr ? stream_->TryFlush(busy) : stream_->Flush(); !s.ok()) {
         ++stats_.sync_failures;
         return s;
     }
+    const bool skipped = busy != nullptr && *busy;
     // Counted here rather than by the caller, so every path through this
     // function reports its flush. `DrainOnce`'s D3 branch therefore does
     // not count one of its own.
-    if (staged) ++stats_.flushes;
+    if (staged && !skipped) ++stats_.flushes;
+    // **Never above `flushed_lsn()`** (manager.hpp): every byte below it was
+    // written before this read, whoever wrote it, so the writer's sync covers
+    // it. A skipped flush leaves the D3 clock unstamped: no flush happened.
     writer_->RequestSync(stream_->flushed_lsn());
-    last_sync_ns_ = clock_.Now();
+    if (!skipped) last_sync_ns_ = clock_.Now();
     // The batch is not resolved here: nothing is durable yet. A later
     // drain tick closes it, at `DrainOnce`'s opening `ResolveBatches`.
     return Status::OK();
@@ -365,12 +386,20 @@ StatusOr<Lsn> WalManager::AppendAndSeal(const RecordSpec& spec,
     return AppendThrough(spec, payload, /*seal=*/true);
 }
 
+StatusOr<Lsn> WalManager::TryAppend(const RecordSpec& spec, std::span<const std::byte> payload,
+                                    bool* busy) {
+    return AppendThrough(spec, payload, /*seal=*/false, busy);
+}
+
 StatusOr<Lsn> WalManager::AppendThrough(const RecordSpec& spec,
-                                        std::span<const std::byte> payload, bool seal) {
+                                        std::span<const std::byte> payload, bool seal,
+                                        bool* busy) {
+    if (busy != nullptr) *busy = false;
     RollRecord roll;
     const auto append = [&] {
-        auto appended = seal ? stream_->AppendAndSeal(spec, payload, &roll)
-                             : stream_->Append(spec, payload, &roll);
+        auto appended = busy != nullptr ? stream_->TryAppend(spec, payload, busy, &roll)
+                        : seal          ? stream_->AppendAndSeal(spec, payload, &roll)
+                                        : stream_->Append(spec, payload, &roll);
         if (roll.end_ns != 0) {
             LogRoll(log_, roll);
             roll = RollRecord{};
@@ -391,11 +420,15 @@ StatusOr<Lsn> WalManager::AppendThrough(const RecordSpec& spec,
                           lsn.status().code() == StatusCode::kOutOfSpace;
          ++attempt) {
         ++stats_.ring_full_drains;
-        if (Status s = Flush(); !s.ok()) {
+        // The tried append drains with the tried flush (CZ-S3): a full ring
+        // never makes the cadence checkpoint wait on its thread.
+        if (Status s = FlushMaybeTried(busy); !s.ok()) {
             return s;
         }
+        if (busy != nullptr && *busy) return kNoLsn;
         lsn = append();
     }
+    if (busy != nullptr && *busy) return kNoLsn;
     if (!lsn.ok()) {
         // Only the exhausted-bound case is the ring's: every other status
         // out of `Append` is the record's or the device's, and counting
@@ -508,6 +541,9 @@ Status WalManager::DrainOnce() {
     // unflushed, so it reaches the D3 branch and flushes them within one
     // `relaxed_flush_interval_ns`. Making it symmetric would leave every
     // peer's relaxed data unbounded, silently and with no test failing.
+    // **It has a second dependant since CZ-S3**: a cadence checkpoint whose
+    // tried flush was skipped (`TryRequestSyncNow`) leaves its bytes staged,
+    // and this flush is what makes them durable when nothing else does.
     if (!attached() && appended_lsn() == durable_lsn()) {
         return Status::OK();  // nothing to do; a tick must be free
     }
