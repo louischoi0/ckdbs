@@ -59,3 +59,30 @@ took under them.
 | **Mark** | **CY-Q0 (a)**: CY-S1 (persistence) is CX-S0's progress gate - `fixed` does not become the default until relation statistics survive a restart. **CY-Q1 (a)**: CY-S2 and CY-S3 are built only if CY-S0 finds at least one scenario statement whose order changes under true selectivities and runs 15 % or more faster at p50; S1 and S4's lock, export and import do not wait for it. **Pushed to `main` with `--no-verify`** on this word, documents only: no suite ran, and the `critics-developer` review of CY had not reported when the push went out |
 | **Does not settle** | the opening of CY, of CX or of any stage; CY-Q2..Q13; CX-Q2..Q11 and CX-Q19..Q27; item 4 (`docs/pending/statistics-staleness-and-regather.md`); a version |
 | **Recorded at** | this file; CY's header, §4 and §8; the CX order's §3 S4; the CY row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 7. CY-Q2..Q13 marked (a); CY opened, CY-S0 started
+
+| | |
+|---|---|
+| **Word** | W9: *"CY-Q2..Q13 $!a, proceed with CY-S0"* - after CLA's report of §6's push at `be205b83` |
+| **Mark** | **CY-Q2..Q13 (a)**, each CLA's proposal: the steward saves a relation prior when its band moves, beside `GATHER` (Q2); the newer of a live prior and a persisted object is published, a locked one always winning (Q3); a whole walk by default, `SAMPLE n PERCENT` by leaf (Q4); a most-common list and an equi-depth histogram, at most 100 each (Q5); no histogram for `char`/`varchar` (Q6); a view per slice (Q7); a `GATHER` publishes at once unless `PENDING` (Q8); a line-oriented export document (Q9); `card(T)` not persisted (Q10); one immutable snapshot with a byte ceiling (Q11); the last 8 versions kept (Q12); no statistics on an expression (Q13). **CY opened; CY-S0 started** on worktree `cx-plan-change-option` (a worktree-isolated session cannot create a second one). S0 writes no engine code |
+| **Does not settle** | the opening of CY-S1..S5 or of CX; CX-Q2..Q11 and CX-Q19..Q28; item 4; a push; a version |
+| **Recorded at** | this file; CY's header, §4 and §8; the CY row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 8. An uncaptured shape can always be given a fixed plan
+
+| | |
+|---|---|
+| **Word** | W10, given while §7 was being recorded: *"And when no capture was made - the capture deferred for lack of statistics, the plan made again at each execution of the SQL - the user must still always be able to create a plan and fix it."* (given in Korean; recorded in English) |
+| **Mark** | **CX-R11** added to `workorder-cx-managed-plans.md`: whatever keeps a shape uncaptured, a DBA or an agent can give it an administrator's plan that stays, written by hand or fixed from the search's answer of that moment, and a shape running uncaptured is visible with its reason. The second form is **CX-Q28**, CLA's proposal, unmarked |
+| **Does not settle** | CX-Q28's spelling; CX-Q19, which decides when a capture is deferred at all |
+| **Recorded at** | this file; the CX order's header, §2, §3 S1 and §4; the CX row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 9. Statistics work is behind OLTP
+
+| | |
+|---|---|
+| **Word** | W11, given while CY-S0 was being set up: *"And applying statistics is lower priority: it must not affect the processing of OLTP business logic, or must keep that effect to a minimum."* (given in Korean; recorded in English) |
+| **Mark** | **CY-R10** added to `workorder-cy-managed-statistics.md`: every act that makes or applies a statistic - a gather's walk and result write, the steward's save, the mount's seed, a publish, an import - runs at the `background` level, sliced and yielding, takes no lock a statement can wait on, adds nothing to a write or a point read, is budgeted in page reads and log writes, and is what waits or stops when resources are short. **CY-Q14**, the numeric bar, is CLA's proposal and unmarked |
+| **Does not settle** | CY-Q14's numbers; whether a re-gather is ever started by the engine (item 4, pending) |
+| **Recorded at** | this file; CY's header, §2, §4 and §6; the CY row and this file's row in `instructions/v3.2.0/index.md` |

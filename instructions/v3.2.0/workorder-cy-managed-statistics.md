@@ -1,6 +1,6 @@
 # Work order CY - managed statistics: persisted, per column, per column group, and operated by a DBA or an agent
 
-**Written 2026-11-18, not opened**, on worktree `cx-plan-change-option`
+**Written 2026-11-18 and opened the same day on W9** (CY-S0 started), on worktree `cx-plan-change-option`
 from `d4bda61f` (`v3.4.12-16-gd4bda61f`), on the operator's word, recorded
 in English (`raft-marks-2026-11-18.md` §5):
 
@@ -13,6 +13,13 @@ in English (`raft-marks-2026-11-18.md` §5):
 - **W8** (2026-11-18, `raft-marks-2026-11-18.md` §6): *"CY-Q0, CY-Q1 $!a
   push no verify"* - CY-S1 is CX-S0's progress gate, and S2 and S3 are
   built only if S0 meets CC's flip gate.
+- **W9** (2026-11-18, `raft-marks-2026-11-18.md` §7): *"CY-Q2..Q13 $!a,
+  proceed with CY-S0"* - every remaining item marked (a); CY opened,
+  S0 started.
+- **W11** (2026-11-18, `raft-marks-2026-11-18.md` §9): *"And applying
+  statistics is lower priority: it must not affect the processing of
+  OLTP business logic, or must keep that effect to a minimum."* -
+  CY-R10.
 
 **A new order, not a stage of CX**: CLA's choice, which W7 left open. CX-S4
 held items 1 and 5 in eleven lines; with items 2 and 3 the work has a
@@ -179,6 +186,28 @@ is built; it never changes a row a statement returns.
   (`plan-stats.md` PS5), so a re-gather that moves a value by a few
   percent publishes nothing and moves no plan. The stored value is exact;
   the band is the planner's view of it.
+- **CY-R10 - statistics work is behind OLTP** `[operator]` (W11). Every
+  act that makes or applies a statistic - a `GATHER`'s walk and its
+  result write, the steward's save (CY-Q2), the mount's seed, a publish,
+  an `IMPORT` - is background work and gives way to a transaction's
+  statements:
+  - it runs at the `background` priority level whatever the session
+    declared (`server/priority.hpp`; on the batch cores where there is
+    more than one core), sliced and yielding as CY-R8 says;
+  - it takes no lock a writer or a reader of the relation can wait on:
+    the relation's `IS` borrow only, never `X`, never a row unit;
+  - it adds nothing to `INSERT`, `UPDATE`, `DELETE` or a point read,
+    and a publish costs a statement one acquire load, only on a
+    planned compile (CY-Q11);
+  - its page reads and its log writes are budgeted per step, so a
+    `GATHER` on a cold relation does not turn the buffer pool over or
+    queue behind a commit's sync;
+  - when it cannot keep to that - the pool is full, the log is behind -
+    it waits or stops with what it has; it is never the statement that
+    is refused.
+  The mount's seed reads `sys.statistics` rows and walks no relation,
+  so it adds a catalog read to the mount and no more. **What "a
+  minimum" is, as a number, is CY-Q14.**
 
 ## 3. Stages
 
@@ -316,25 +345,27 @@ The measurement of §6, the owning specs (§7), CLAUDE.md's row.
 
 ## 4. Items
 
-Every item is CLA's proposal and unmarked, except CY-Q0 and CY-Q1, marked
-(a) by the operator (W8).
+Every item but CY-Q14 is the operator's mark, (a): CY-Q0 and CY-Q1 on W8,
+CY-Q2..Q13 on W9. Each (a) was CLA's proposal. CY-Q14 is W11's and is
+unmarked.
 
 | item | question | options | CLA proposes |
 |---|---|---|---|
 | CY-Q0 | CY against CX-S0 | (a) CY-S1 is CX-S0's progress gate: `fixed` does not become the default until relation statistics survive a restart; (b) the two are independent | **(a), the operator's mark** (W8). (a): without it every restart fixes a fresh set of blind plans (CX-Q19) |
 | CY-Q1 | the bar S0 must meet for S2 and S3 to be built | (a) at least one scenario statement whose order changes under true selectivities and runs 15 % or more faster at p50, CC's flip gate; (b) build regardless | **(a), the operator's mark** (W8). (a) for S2 and S3. S1 and S4's lock, export and import do not wait for it: persistence and reproducibility are W7's and CX's needs whatever S0 finds |
-| CY-Q2 | who writes the persisted relation priors | (a) `GATHER`, and the steward when a prior's band moves, off the statement; (b) `GATHER` only | (a): under (b) an instance nobody has gathered on restarts blind for ever. A band moves rarely (PS5), so the write is rare; it is the one automatic write in CY, and it moves no captured plan |
-| CY-Q3 | a live prior and a persisted object for one relation | (a) the newer one is published; a locked object always wins; (b) the gathered one always wins until re-gathered | (a): a gathered row count on a relation that has since doubled is the wrong one to keep, and a lock is how an operator says otherwise |
-| CY-Q4 | sampling | (a) a whole walk by default, `SAMPLE n PERCENT` by leaf, stratified by the root's children as PS1 is; (b) sampled by default | (a): a whole walk is exact, yields (CY-R8), and is the operator's act to schedule; a sample's distinct count needs an estimator whose error S0 does not price |
-| CY-Q5 | the histogram | (a) a most-common list of at most 100 values and an equi-depth histogram of at most 100 buckets, both sizes settable per `GATHER`; (b) a hybrid histogram that folds the two | (a): it is the simplest form that prices both a hot value and a range, and its two parts are inspectable separately |
-| CY-Q6 | `char`/`varchar` columns | (a) NULL fraction, distinct count and most-common list only, the list holding at most the inline cell's bytes of each value; no histogram, a range keeps its constant; (b) a histogram over a fixed prefix | (a): a prefix histogram misprices every column whose values share a prefix, and the scenarios' string predicates are equalities |
-| CY-Q7 | the walk's view | (a) a view per slice: no purge horizon is held for the length of the walk, and the counts are of a relation that moved under them; (b) one view for the whole walk, exact as of one instant, holding the instance's read horizon for its length | (a): a statistic is approximate by nature and changes no result (CY-R2), while (b) makes a gather on a large relation hold undo for minutes |
-| CY-Q8 | does a `GATHER` publish at once | (a) yes, unless `PENDING` is written; (b) pending by default | (a): under `fixed` a publish moves no captured plan, and under `planned` the operator has chosen that plans follow statistics. `PENDING` is there for the one who wants to look first |
-| CY-Q9 | the export document | (a) a line-oriented text form of this engine's own, versioned in its first line; (b) JSON | (a): the tree has no JSON reader or writer, and adding one for this is a dependency S4 does not need |
-| CY-Q10 | persisting `card(T)` posteriors | (a) not in CY: they are keyed by statement and re-measured by the first complete run; (b) persisted with the priors | (a) until S0 shows a shape whose blind first order is wrong for lack of a posterior and not of a prior |
-| CY-Q11 | the model's memory | (a) the published model is one immutable snapshot beside PlanStats', pinned by generation; a ceiling on its bytes, past which the least recently read column objects are not loaded and are priced by the constant, counted; (b) loaded on demand per relation | (a): one acquire load on a planned compile, nothing on a point read |
-| CY-Q12 | history retention | (a) the last 8 versions per object; (b) by age | (a), provisional |
-| CY-Q13 | expression and function conjuncts | (a) not in CY, the constant stays; (b) statistics on a Cabin's key function `F` | (a): (b) has a natural home (`cabin.md`'s `F`) and no measured consumer yet |
+| CY-Q2 | who writes the persisted relation priors | (a) `GATHER`, and the steward when a prior's band moves, off the statement; (b) `GATHER` only | **(a), the operator's mark** (W9). (a): under (b) an instance nobody has gathered on restarts blind for ever. A band moves rarely (PS5), so the write is rare; it is the one automatic write in CY, and it moves no captured plan |
+| CY-Q3 | a live prior and a persisted object for one relation | (a) the newer one is published; a locked object always wins; (b) the gathered one always wins until re-gathered | **(a), the operator's mark** (W9). (a): a gathered row count on a relation that has since doubled is the wrong one to keep, and a lock is how an operator says otherwise |
+| CY-Q4 | sampling | (a) a whole walk by default, `SAMPLE n PERCENT` by leaf, stratified by the root's children as PS1 is; (b) sampled by default | **(a), the operator's mark** (W9). (a): a whole walk is exact, yields (CY-R8), and is the operator's act to schedule; a sample's distinct count needs an estimator whose error S0 does not price |
+| CY-Q5 | the histogram | (a) a most-common list of at most 100 values and an equi-depth histogram of at most 100 buckets, both sizes settable per `GATHER`; (b) a hybrid histogram that folds the two | **(a), the operator's mark** (W9). (a): it is the simplest form that prices both a hot value and a range, and its two parts are inspectable separately |
+| CY-Q6 | `char`/`varchar` columns | (a) NULL fraction, distinct count and most-common list only, the list holding at most the inline cell's bytes of each value; no histogram, a range keeps its constant; (b) a histogram over a fixed prefix | **(a), the operator's mark** (W9). (a): a prefix histogram misprices every column whose values share a prefix, and the scenarios' string predicates are equalities |
+| CY-Q7 | the walk's view | (a) a view per slice: no purge horizon is held for the length of the walk, and the counts are of a relation that moved under them; (b) one view for the whole walk, exact as of one instant, holding the instance's read horizon for its length | **(a), the operator's mark** (W9). (a): a statistic is approximate by nature and changes no result (CY-R2), while (b) makes a gather on a large relation hold undo for minutes |
+| CY-Q8 | does a `GATHER` publish at once | (a) yes, unless `PENDING` is written; (b) pending by default | **(a), the operator's mark** (W9). (a): under `fixed` a publish moves no captured plan, and under `planned` the operator has chosen that plans follow statistics. `PENDING` is there for the one who wants to look first |
+| CY-Q9 | the export document | (a) a line-oriented text form of this engine's own, versioned in its first line; (b) JSON | **(a), the operator's mark** (W9). (a): the tree has no JSON reader or writer, and adding one for this is a dependency S4 does not need |
+| CY-Q10 | persisting `card(T)` posteriors | (a) not in CY: they are keyed by statement and re-measured by the first complete run; (b) persisted with the priors | **(a), the operator's mark** (W9). (a) until S0 shows a shape whose blind first order is wrong for lack of a posterior and not of a prior |
+| CY-Q11 | the model's memory | (a) the published model is one immutable snapshot beside PlanStats', pinned by generation; a ceiling on its bytes, past which the least recently read column objects are not loaded and are priced by the constant, counted; (b) loaded on demand per relation | **(a), the operator's mark** (W9). (a): one acquire load on a planned compile, nothing on a point read |
+| CY-Q12 | history retention | (a) the last 8 versions per object; (b) by age | **(a), the operator's mark** (W9). (a), provisional |
+| CY-Q13 | expression and function conjuncts | (a) not in CY, the constant stays; (b) statistics on a Cabin's key function `F` | **(a), the operator's mark** (W9). (a): (b) has a natural home (`cabin.md`'s `F`) and no measured consumer yet |
+| CY-Q14 | the bar for CY-R10 (W11): how much a running `GATHER` may move an OLTP workload | (a) the workload's p50 and p99 (point read, single-row `INSERT` and `UPDATE`, a three-relation tuple key join) with a `GATHER` of the largest scenario relation running stay inside the run's noise floor where the instance has a batch core, and within 5 % at `cores = 1`, `[provisional]` until S2's first cell measures it; a stage that misses it does not close; (b) no numeric bar, the mechanisms of CY-R10 only | (a): W11 is a requirement on an effect, and an effect is met by a measurement, not by a list of mechanisms. Unmarked |
 
 ## 5. `[quiet-wrong]` risks
 
@@ -364,8 +395,8 @@ within the milestone's hour.
   `INSERT` and `UPDATE` do not move under B' (nothing on the write path,
   nothing before the tuple key chain's skip); the statements S0 named run
   their flipped order under B' with the gain S0 predicted. A `GATHER` of
-  the largest scenario relation beside a point-read workload: the
-  workload's p99 with and without it.
+  the largest scenario relation beside the OLTP cells of CY-Q14: each
+  cell's p50 and p99 with and without it, against CY-Q14's bar (CY-R10).
 
 ## 7. Contracts amended (when the stages land)
 
@@ -386,5 +417,8 @@ within the milestone's hour.
 
 ## 8. Stage log
 
-Nothing has landed. CY is written and not opened. CY-Q0 and CY-Q1 marked
-(a) on W8 (`raft-marks-2026-11-18.md` §6), documents only.
+CY-Q0 and CY-Q1 marked (a) on W8 (`raft-marks-2026-11-18.md` §6);
+CY-Q2..Q13 marked (a) and **CY opened on W9** (§7).
+
+- **CY-S0** started 2026-11-18 on worktree `cx-plan-change-option`. No
+  engine code. Its report is appended here when the results file lands.

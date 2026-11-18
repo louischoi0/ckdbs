@@ -35,6 +35,10 @@
 - **W7** (2026-11-18, `raft-marks-2026-11-18.md` §5): the statistics
   features taken into an order of their own,
   `workorder-cy-managed-statistics.md`; S4 points there.
+- **W10** (2026-11-18, `raft-marks-2026-11-18.md` §8): *"And when no
+  capture was made - the capture deferred for lack of statistics, the
+  plan made again at each execution of the SQL - the user must still
+  always be able to create a plan and fix it."* - CX-R11.
 
 **Amended 2026-11-18 on W3-W5**, still not opened. W3 turns W0's third
 clause from an absolute rule into the option `join_order`, and W4-W5 give
@@ -305,6 +309,19 @@ item in §4.
   instance-wide value every core reads at its task boundary, as `SET
   CABIN_OPTIMIZER` flips the optimizer surface (AT-S8). No second setting
   names the same thing (CLAUDE.md, Working Rules).
+- **CX-R11 - a shape that is not captured can always be fixed by hand**
+  `[operator]` (W10). Whatever keeps a shape uncaptured - its capture
+  deferred for lack of statistics (CX-Q19), no key that fits it
+  (CX-Q20), the map's ceiling (CX-Q21), a minted view (CX-R7), or
+  `join_order` being `planned` or `written` - a DBA or an agent can
+  give it a plan and that plan stays: by writing one (`CREATE PLAN ...
+  VARIANT ...`), or by fixing the order the search gives at that moment
+  (`CREATE PLAN <name> FOR <statement> AS SEARCHED`, CX-Q28). Either is
+  an administrator's plan, source 1 of CX-R1, so it needs no statistic
+  to exist and waits for none. A shape running uncaptured is visible
+  with its reason (`sys.statement_stats`' `plan_source`: `searched`,
+  `deferred`, `unkeyed`, `over_ceiling`), so the one who would fix it
+  can find it.
 
 ## 3. Stages
 
@@ -400,8 +417,9 @@ measurement where §6 names one.
   plan serves the shape whether it arrives through `C_BIND` or as text.
   The variant is chosen from the literals at the compile. No protocol
   change is needed.
-- **`ANALYZE`** prints `plan=<name>/<variant>`, `plan=captured` or
-  `plan=default`.
+- **`ANALYZE`** prints `plan=<name>/<variant>`, `plan=captured`, or the
+  reason there is neither (CX-R11): `plan=searched`, `deferred`,
+  `unkeyed`, `over_ceiling`, `written`.
   `sys.statement_stats` gains `plan_name` and `variant`.
 - **Agents**: `sys.plans` is an ordinary table (BO-R3), so an agent reads
   it, the advice (S7) and ASH (CJ) through SQL, and acts through the same
@@ -496,7 +514,8 @@ from CX-R1.
 
 Every item is CLA's proposal and unmarked, except CX-Q0 and CX-Q1, which
 W3-W5 settled, and CX-Q12..Q18, marked (a) by the operator (W6). CX-Q19..Q27
-are what the review of the amendment raised (§8) and are unmarked. A
+are what the review of the amendment raised (§8) and CX-Q28 is W10's;
+all ten are unmarked. A
 finding that would change one goes back to the operator before it is
 built. The value names `planned`, `fixed` and `written` are
 CLA's proposal; renaming them is the operator's.
@@ -531,6 +550,7 @@ CLA's proposal; renaming them is the operator's.
 | CX-Q25 | what a captured row records of the statistics it read (review A10) | (a) one bit, informed or not, and the wall-clock time of the capture; (b) the generation number | (a): the generation is an in-memory counter a restart resets, so a persisted one compares with nothing. With CY's persisted model the row can instead name the model versions it read (CY-R6), which S7's "the statistics have moved past this plan" needs |
 | CX-Q26 | a captured order that fails to compile for one binding only (review A7; reachability not verified) | (a) that compile runs the written order and the row stays; `INVALID` (CX-Q16) is for a failure the catalog causes; (b) any failure marks the row `INVALID` | (a): under (b) one binding takes the captured plan away from every binding |
 | CX-Q27 | a boot change of `join_build_max_rows` or `sort_max_rows` after a capture (review A13; `PlanMemo` keys on both, PS6) | (a) captures stay: a limit is a resource bound checked at run time (CX-Q8 (a)), and `ADVISE PLAN` shows the difference; (b) a changed limit re-arms every capture | (a): (b) is a re-plan of the instance by a configuration edit |
+| CX-Q28 | how a user fixes a plan for an uncaptured shape (CX-R11, W10) | (a) both: `CREATE PLAN` written by hand, and `CREATE PLAN <name> FOR <statement> AS SEARCHED`, which runs the search once with the statistics of that moment, shows the order, and stores it as an administrator's plan; (b) `CREATE PLAN` by hand only | (a): W10 asks that the user can always fix a plan, and writing `ORDER (...)` by hand for a shape the engine is already planning is work the search has done. The stored row is an administrator's (`origin = admin`), not a captured one, so nothing re-arms or defers it |
 
 ## 5. `[quiet-wrong]` risks
 
