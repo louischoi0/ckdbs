@@ -73,7 +73,7 @@ statement (`docs/spec/protocol.md` §10):
 |---|---|
 | `readonly` | `SELECT`, `WITH`, `ANALYZE`, `SHOW *`, `DESCRIBE`, `PING`, `BEGIN`/`COMMIT`/`ROLLBACK`, `SET ISOLATION`, `SET DURABILITY`, `SET PRIORITY` (all but `TRANSACTIONAL`, which is `admin`'s) |
 | `readwrite` | everything above, plus `INSERT`, `UPDATE`, `DELETE` |
-| `admin` | everything, including `CREATE`/`DROP`/`ALTER`, `STOP`, `SYNC`, `SET CABIN_OPTIMIZER`, `SET JOIN_ORDER`, `SET ASH`, `DROP PLAN` |
+| `admin` | everything, including `CREATE`/`DROP`/`ALTER`, `STOP`, `SYNC`, `SET CABIN_OPTIMIZER`, `SET JOIN_ORDER`, `SET ASH`, `CREATE PLAN`, `ALTER PLAN`, `DROP PLAN` |
 
 A refused statement answers `ERR permission: <cmd> needs <role>; this
 connection is <role>`. Commands the server does not recognize also

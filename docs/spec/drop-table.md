@@ -91,7 +91,7 @@ whole price, and K3 calls a burned oid free.
 
 ## DT3 — RESTRICT in, dependents out
 
-Two things block a drop, each refused naming the blocker:
+Three things block a drop, each refused naming the blocker:
 - a **foreign key referencing the relation as parent** (`sys.fkeys` by
   `parent_rel_oid`) — declared-level, so an empty child table still
   blocks: the constraint exists whether or not rows do. Drop the child
@@ -99,6 +99,13 @@ Two things block a drop, each refused naming the blocker:
 - an **assertion on the relation** — `exec::AssertionsOnRelation()`,
   AL4's predicate. Same argument as ALTER's: an enforcing constraint is
   not allowed to die quietly.
+- an **enabled administrator's plan naming the relation** (CX-Q24 (a),
+  `parser-v2.md` I12) — asked of the instance's table
+  (`exec::AdminPlans::EnabledNaming`), before the `X` and again under it.
+  `DROP PLAN` or `ALTER PLAN ... DISABLE` first. A disabled plan does not
+  block: once the drop commits it is forgotten in the table and its row
+  reads `invalid` until its `DROP PLAN`. A **captured** plan never blocks
+  and goes with the relation.
 
 Everything the relation *owns* drops with it, in one statement:
 `sys.tables`, all `sys.columns` rows (their slots retire and are

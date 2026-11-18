@@ -14,6 +14,7 @@
 // value a predicate compares and the value a write keys on are identical by
 // construction.
 #include "kds/exec/cabin_expr.hpp"
+#include "kds/exec/admin_plans.hpp"
 #include "kds/exec/captured_plans.hpp"
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/join_order.hpp"
@@ -2299,6 +2300,17 @@ bool HasSubqueryPredicate(const parser::SelectStmt& stmt) {
     });
 }
 
+// Why the join planner leaves a block in its written order, or null where
+// it orders it: `PlannableBlock`'s rule, and `CompileBlock`'s.
+const char* WhyUnplanned(const parser::SelectStmt& stmt) {
+    if (stmt.joins.empty()) return "a statement over one relation has no join order";
+    if (stmt.star()) return "a SELECT * block is not ordered by the join planner";
+    if (HasSubqueryPredicate(stmt)) {
+        return "a block with a subquery predicate is not ordered by the join planner";
+    }
+    return nullptr;
+}
+
 StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope& scope,
                                  const std::vector<const parser::RelationRef*>& refs,
@@ -2361,7 +2373,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // chain compiled over a permuted binding is that order's chain,
     // unchanged otherwise. The written order is compiled first and its
     // refusal is the statement's.
-    if (plan == nullptr || refs.size() < 2 || stmt.star() || HasSubqueryPredicate(stmt)) {
+    if (plan == nullptr || WhyUnplanned(stmt) != nullptr) {
         return CompileBound(catalog, stmt, scope, refs, next_step_id, depth, view, inner_build,
                             declare);
     }
@@ -2392,6 +2404,91 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     auto best = compile_order(order);
     if (!best.ok()) return best;
     next_step_id = base_step_id + static_cast<std::uint32_t>(refs.size());
+
+    // The shape's exact key (CX-R3), which both plan tables are asked by:
+    // the fetch id and every relation's oid in written order. A block no key
+    // fits - no fetch id (a statement that came with no parse), or more
+    // relations than a key holds - has neither kind of plan.
+    std::optional<CapturedKey> shape;
+    if (plan->fetch_id != 0 && refs.size() <= kMaxPlannedRelations) {
+        shape.emplace();
+        shape->fetch_id = plan->fetch_id;
+        shape->n = static_cast<std::uint8_t>(refs.size());
+        for (std::size_t w = 0; w < refs.size(); ++w) {
+            shape->oids[w] = scope.relations[w].access->oid;
+        }
+    }
+    const bool written_sorted = best.value().sorted();
+    // The key the run's counts fold under and the posteriors are found by
+    // (CC-S2): a block of at most `kMaxPosteriorRelations` relations with a
+    // fetch id.
+    const auto statistics_key = [&]() -> std::optional<stats::PlanKey> {
+        if (plan->fetch_id == 0 || refs.size() > stats::kMaxPosteriorRelations) {
+            return std::nullopt;
+        }
+        stats::PlanKey key;
+        key.fetch_id = plan->fetch_id;
+        key.n = static_cast<std::uint8_t>(refs.size());
+        for (std::size_t w = 0; w < refs.size(); ++w) key.oids[w] = scope.relations[w].access->oid;
+        return key;
+    };
+
+    // ---- 1a'. An administrator's plan (CX-S1b; CX-R1's first source) -----
+    //
+    // Asked first and under every `join_order`: an enabled plan for the
+    // shape outranks its captured order, the search and the written order
+    // (CX-R9). **Before the descent skip**, unlike everything below: a plan
+    // created and then not applied would enforce nothing of what its
+    // administrator wrote, so a tuple key chain is probed too - while a plan
+    // is enabled anywhere, which `any()` answers with one relaxed load.
+    //
+    // The variant is the plan's own choice from this statement's arguments
+    // (CX-R4), made here at every compile. Its order goes through the full
+    // ladder, as a captured order's does, and is **declined, never forced**
+    // (CX-R2): where it does not compile for this statement or adds a sort
+    // its LIMIT does not bound (CC-Q10), the written order runs and the note
+    // says so. Read under a minted view too - a plan is an administrator's
+    // standing word, not a price.
+    if (plan->admin != nullptr && plan->admin->any() && shape.has_value()) {
+        if (const auto managed = plan->admin->Find(*shape); managed != nullptr) {
+            plan->admin->CountServed();
+            const PlanVariant& variant = managed->Choose(plan->statement);
+            const std::vector<std::size_t> perm(variant.order.begin(),
+                                                variant.order.begin() + refs.size());
+            PlanSource source = PlanSource::kAdmin;
+            StepChain chain;
+            if (perm == written) {
+                chain = std::move(best.value());
+            } else if (auto ordered = compile_order(perm);
+                       ordered.ok() && AddedSortCannotRefuse(ordered.value(), written_sorted,
+                                                             plan->sort_max_rows)) {
+                chain = std::move(ordered.value());
+            } else {
+                plan->admin->CountDeclined();
+                source = PlanSource::kAdminDeclined;
+                chain = std::move(best.value());
+            }
+            // The relations a run asks priors for and the key its counts
+            // fold under, as any planned block's (CX-Q2), so a `DROP PLAN`
+            // or an `AS SEARCHED` after it prices from what the shape's runs
+            // measured - but under `written`, which gathers nothing.
+            if (plan->search) {
+                for (const BoundRelation& relation : scope.relations) {
+                    chain.planned_relations.push_back(relation.access->oid);
+                }
+                chain.planned = statistics_key();
+            }
+            PlanNote& note = chain.plan_note.emplace();
+            note.source = source;
+            note.plan_name = managed->name;
+            note.variant = variant.name;
+            return chain;
+        }
+    }
+    // `join_order = written` with no plan for the shape: the written order,
+    // as a compile handed no options gives it.
+    if (!plan->search) return best;
+
     // A written chain of tuple key descents alone - a lookup, then probes -
     // reads one row per step (a key set, its values' rows), and every order
     // pays at least its driver's descent: no search can repay its compiles. Measured at CB's close: the
@@ -2403,16 +2500,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     if (std::all_of(best.value().steps.begin(), best.value().steps.end(), is_descent)) {
         return best;
     }
-    // The key the run's counts fold under and the posteriors are found by
-    // (CC-S2): a searched block of at most `kMaxPosteriorRelations`
-    // relations with a fetch id.
-    std::optional<stats::PlanKey> key;
-    if (plan->fetch_id != 0 && refs.size() <= stats::kMaxPosteriorRelations) {
-        key.emplace();
-        key->fetch_id = plan->fetch_id;
-        key->n = static_cast<std::uint8_t>(refs.size());
-        for (std::size_t w = 0; w < refs.size(); ++w) key->oids[w] = scope.relations[w].access->oid;
-    }
+    const std::optional<stats::PlanKey> key = statistics_key();
     // What a planned block's chain carries whatever chose its order: the
     // relations its run asks priors for and the key its counts fold under,
     // so the statistics are gathered under `fixed` as under `planned`
@@ -2442,7 +2530,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // follow the statistics for as long as one session held a DDL open.
     CapturedPlans* const captured = plan->captured;
     const bool may_capture = view == nullptr;
-    CapturedKey captured_key;
+    const CapturedKey captured_key = shape.value_or(CapturedKey{});
     // A chain this compile did not price: the written order or a captured
     // one.
     const auto unpriced = [&](StepChain chain, PlanSource source) {
@@ -2458,7 +2546,6 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // LIMIT is a literal and so outside the key, and a reordered chain's
     // top-N heap under `LIMIT 5` is a full sort under `LIMIT 5000000`, which
     // meets `sort_max_rows` where the written order streams.
-    const bool written_sorted = best.value().sorted();
     const auto run_captured = [&](const CapturedOrder& in_force, StepChain written_chain) {
         captured->CountServed();
         const std::vector<std::size_t> perm(in_force.begin(), in_force.begin() + refs.size());
@@ -2476,14 +2563,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // with no parse), or more relations than a key holds - runs as
         // written, since searching it at every compile is the implicit
         // change `fixed` excludes.
-        if (plan->fetch_id == 0 || refs.size() > kMaxPlannedRelations) {
+        if (!shape.has_value()) {
             captured->CountUnkeyed();
             return unpriced(std::move(best.value()), PlanSource::kUnkeyed);
-        }
-        captured_key.fetch_id = plan->fetch_id;
-        captured_key.n = static_cast<std::uint8_t>(refs.size());
-        for (std::size_t w = 0; w < refs.size(); ++w) {
-            captured_key.oids[w] = scope.relations[w].access->oid;
         }
         if (const auto in_force = captured->Find(captured_key); in_force.has_value()) {
             return run_captured(*in_force, std::move(best.value()));
@@ -3227,5 +3309,12 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
 }
 
 }  // namespace
+
+Status PlannableBlock(const parser::SelectStmt& stmt) {
+    const char* const why = WhyUnplanned(stmt);
+    if (why == nullptr) return Status::OK();
+    return Status::NotImplemented(std::string("a plan for this statement is not implemented: ") +
+                                  why);
+}
 
 }  // namespace kds::exec

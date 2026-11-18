@@ -1,10 +1,11 @@
 # Work order DF - the statistics the engine records, widened: what a statement shape costs, transactions and the read horizon, index and relation usage, space
 
 Status: **OPENED 2026-11-18** on the operator's word
-(`raft-marks-2026-11-18.md` §35), from `57d7c67f`
-(`v3.4.12-67-g57d7c67f`). **DF-S0 is done and at the operator** (§7): the
-census, the spike's price, and four items DF-Q11..Q14 that it takes back.
-No stage after it is started. Written the same day on worktree
+(`raft-marks-2026-11-18.md` §36), from `57d7c67f`
+(`v3.4.12-67-g57d7c67f`). **DF-S0 is done** (§7): the census, the spike's price, and four items
+it took back, DF-Q11..Q14, **each marked (a) on the operator's word**
+(`raft-marks-2026-11-18.md` §37). **DF-S1 is not started**; the session
+that ran DF-S0 handed off there. Written the same day on worktree
 `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`, from
 `56d20394` (`v3.4.12-53-g56d20394`) on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §33). The session was isolated in that worktree
@@ -12,7 +13,7 @@ and could not open one named for this order; the branch carries the name.
 
 **DF-Q0..Q10 each marked (a), as CLA proposed, on the operator's word of
 2026-11-18** (`raft-marks-2026-11-18.md` §34), a word that marked the
-items and opened nothing; §35 opened DF. **DF moves no format**: no superblock bump, no catalog relation,
+items and opened nothing; §36 opened DF. **DF moves no format**: no superblock bump, no catalog relation,
 no WAL record kind, no page byte (DF-R1). Every `[source-read]` claim below
 was read at `56d20394`, and the order was reviewed by `critics-developer`
 before it was committed (§7).
@@ -645,9 +646,12 @@ priced because they are off a point statement's path: part C's lock
 columns, written where a wait is already recorded, and part D, the
 steward's and the division sites'.
 
-**9. Back at the operator.** (a) is CLA's proposal in each; none is
-marked, and DF-S1 and DF-S2 do not start on the parts they govern until
-they are.
+**9. Taken back to the operator, and marked.** (a) was CLA's proposal in
+each; **each is marked (a), the operator's mark of 2026-11-18**
+(`raft-marks-2026-11-18.md` §37). DF-Q12 (a) replaces DF-Q7 (a)'s
+mechanism, DF-Q13 (a) replaces the four counts of §2's part B, and
+DF-Q11 (a) discharges DF-Q4 (a)'s condition by accepting what failed it;
+§2 and §4 keep their text as written and are read with this table.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -695,3 +699,17 @@ was built. **Left unverified by the review, and so by this entry**: the
 count of writes of a core's bound a statement (6), "about fifteen" helpers
 (4), that no test pins a view's columns (7), and that `HorizonLsn` can
 name the core (6); each is one census's reading.
+
+### DF-Q11..Q14 marked (a); merged with `origin/main` at `5038f999`; handed off, 2026-11-18
+
+On the same worktree and branch, from `011d1609`, documents only. The
+operator's word on DF-S0's report (`raft-marks-2026-11-18.md` §37) marks
+the four items (a) and asks for the push with the hook skipped and a
+handoff. `origin/main` had moved to `5038f999` (CX-S1b, CX-S2) and was
+merged on the work branch; the opening's record took §36, §35 having gone
+to that session. **That merge brought source this session did not build
+or test**: `src/server/command_dispatcher.cpp` and `src/server/sys_views.cpp`
+among it, so DF-S0's line numbers in those files are `6e7f7095`'s and
+DF-S1 re-reads them, and `sys.statement_stats` gained `plan_source`,
+`plan_name` and `variant` from CX-S1b, which DF-S1's widened shape sits
+beside. No suite was executed. **Next: DF-S1**, part A - not started.

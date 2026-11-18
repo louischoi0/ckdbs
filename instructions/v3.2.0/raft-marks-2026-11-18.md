@@ -320,7 +320,16 @@ took under them.
 | **Does not settle** | the opening of DF - the word marks the items and asks for the push, and names no stage; items 5-9 of CLA's list; DA's opening, which part C's access-shape columns wait for; a tag, a version |
 | **Recorded at** | this file; `workorder-df-statistics-coverage.md`'s header, §4 and §7; the DF row and this file's row in `instructions/v3.2.0/index.md` |
 
-## 35. DF opened; DF-S0 started
+## 35. CX-S1b and CX-S2 pushed with the hook skipped; CX-S3 to go on
+
+| | |
+|---|---|
+| **Word** | W20 (the CX/CY matter's), on CLA's report of CX-S1b and CX-S2 at `1fd03107` on worktree `cx-plan-change-option`: *"push no verify, and go on with CX-S3"* (given in Korean; recorded in English) |
+| **Mark** | **Pushed to `main` with `--no-verify`**: **CX-S1b** - the administrator's plan: `CREATE PLAN <name> FOR <select> VARIANT ... WHEN <rule> ORDER (...) ... ELSE ORDER (...)` and `AS SEARCHED`, `ALTER PLAN ENABLE | DISABLE | REPLACE VARIANT`, a total `WHEN` rule over the statement's arguments, an enabled plan the first source of a join order under every `join_order`, `DROP TABLE` RESTRICTed by one, `sys.statement_stats`' `plan_source`, `plan_name` and `variant` - and **CX-S2**, the rewrite inventory in `parser-v2.md` I12, which builds no engine code; each with its review applied and its stage log (the work order's §8). No superblock moves. The hook was skipped; the full Debug suite ran 0 failed of 4672 at `1fd03107` (`v3.4.12-72-g1fd03107`), and this section's commit after it changes documents only. Overhead not measured; measured at the milestone's close. **CX-S3 (access path pins) goes on** under the standing go-ahead of §16 |
+| **Does not settle** | a tag, a version; whether a mount should refuse on a `sys.plans` it cannot scan (`known-gaps.md`, Captured plans), still with the operator; what S1b built differently from an adopted item - no `IS NULL` in a rule (CX-Q5), a tuple key chain probed while a plan is enabled (CX-R6), `CREATE PLAN` by example with literals, `invalid` derived and a decline marking nothing (CX-Q4 (b), CX-Q16), `REPLACE VARIANT` not compiled, plan DDL not waiting for plan DDL - each stated in the stage log and reported, none marked by this word; the same for S2's two corrections of the order's classes |
+| **Recorded at** | this file; the CX row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 36. DF opened; DF-S0 started
 
 | | |
 |---|---|
@@ -329,3 +338,13 @@ took under them.
 | **Mark** | **DF opened**, from `57d7c67f` (`v3.4.12-67-g57d7c67f`), on worktree `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`. **DF-S0 started**: the census of the order's §5 and DF-Q10 (a)'s spike and cells |
 | **Does not settle** | whether the stages after DF-S0 run without a further word - "from S0" names where to start and CLA stops at DF-S0's report, as the Session Workflow's step 4 has it; anything DF-S0 takes back to the operator; a push; a tag, a version |
 | **Recorded at** | this file; `workorder-df-statistics-coverage.md`'s header; the DF row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 37. DF-Q11..Q14 marked (a); DF-S0 pushed with the hook skipped; the session handed off
+
+| | |
+|---|---|
+| **Context** | CLA's report of DF-S0 at `011d1609` on worktree `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`: the census; the spike's price at `cores = 1`, every median under DF-Q10 (a)'s 0.5 us and none resolved from the run's noise, `cores = 8` and part C's per-index fold not priced; and four items taken back with (a) CLA's proposal in each - DF-Q11 (`DELETE`'s shape, three behaviours moving besides the statistics key), DF-Q12 (a statement's log bytes booked to the polled task's session), DF-Q13 (part B's counts, six), DF-Q14 (the two cells with no data measured at the close after a driver change). CLA said DF-S1 would go on once the items were marked and that a push needed the word |
+| **Word** | This session's W5: *"Follow the proposals and push no verify; after that, prepare the handoff."* (given in Korean; recorded in English) |
+| **Mark** | **DF-Q11..Q14 each marked (a), as CLA proposed, the operator's mark**: `DELETE` takes a shape with its three movements accepted and stated; a statement's log bytes are booked at `AppendThrough` to the session of the task being polled; part B counts `commits`, `rollbacks`, `ceiling_rollbacks`, `close_rollbacks`, `aborts` and `wait_aborts`; `cores = 8` and an index-served read are measured at the close, the census driver changed in a commit of its own before it. DF-Q12 (a) replaces DF-Q7 (a)'s mechanism and DF-Q13 (a) replaces the four counts of the order's §2; DF-Q11 (a) discharges DF-Q4 (a)'s condition by accepting what failed it. **Pushed to `main` with `--no-verify`**: DF's opening (§36), DF-S0's census, its results file and archive, this section and the index. The hook was skipped and no suite was executed: the work branch changes no build input (bench and documents only), and the merge of `origin/main` before it (`5038f999`: CX-S1b, CX-S2) brought source that this session neither built nor tested. **The session stops here**: DF-S1 is not started, and the handoff is a memory entry outside the tree |
+| **Does not settle** | when DF-S1 starts and whether the stages after it run on one word - W4's "from S0" was read as a start, and this word asks for a handoff, not a stage; the spike's branch `df-s0-spike`, kept local and unpushed; what DF-S0's review left unverified (the order's §7); a tag, a version |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md`'s header, §2, §7; the DF row and this file's row in `instructions/v3.2.0/index.md` |
