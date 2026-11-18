@@ -410,24 +410,44 @@ TEST_F(ShowSugarTest, OneShapeIsOneRowWhateverItsLiterals) {
 
 TEST_F(ShowSugarTest, AKindWithNoFingerprintIsOneRowAtFetchIdZero) {
     stats::StatementStats::ResetForTest();
-    ASSERT_EQ(Text("DELETE FROM t WHERE id = 1").rfind("ERR", 0), std::string::npos);
-    ASSERT_EQ(Text("DELETE FROM t WHERE id = 99").rfind("ERR", 0), std::string::npos);
+    // Two keys nothing ever bound: a PURGE of a live key is refused.
+    ASSERT_EQ(Text("PURGE FROM t WHERE id = 98"), "PURGED 0");
+    ASSERT_EQ(Text("PURGE FROM t WHERE id = 99"), "PURGED 0");
     ASSERT_EQ(Text("FLIBBERTIGIBBET EVERYTHING").rfind("ERR", 0), 0u);
     ASSERT_EQ(Text("INSERT INTO t VALUES (20, 'beta')").rfind("INSERTED", 0), 0u);
 
     const std::string reply =
         Text("SELECT kind, fetch_id, calls, refused FROM sys.statement_stats ORDER BY kind");
     const auto shown = testing_view::ReadViewText(reply);
-    EXPECT_EQ(shown.Column("kind"), (std::vector<std::string>{"DELETE", "INSERT", "OTHER"}))
+    EXPECT_EQ(shown.Column("kind"), (std::vector<std::string>{"INSERT", "OTHER", "PURGE"}))
         << reply;
-    EXPECT_EQ(shown.Find("kind", "DELETE", "fetch_id"), "0") << reply;
-    EXPECT_EQ(shown.Find("kind", "DELETE", "calls"), "2") << reply;
+    EXPECT_EQ(shown.Find("kind", "PURGE", "fetch_id"), "0") << reply;
+    EXPECT_EQ(shown.Find("kind", "PURGE", "calls"), "2") << reply;
     EXPECT_EQ(shown.Find("kind", "OTHER", "refused"), "1") << reply;
     // An INSERT carries its fingerprint, taken from the parse it ran.
     EXPECT_EQ(shown.Find("kind", "INSERT", "fetch_id"),
               std::to_string(parser::FingerprintOf("INSERT INTO t VALUES (20, 'beta')")->fetch_id))
         << reply;
     EXPECT_EQ(testing_view::MetaField(Text("SHOW META"), "statement_stats_dropped"), "0");
+}
+
+TEST_F(ShowSugarTest, TwoDeletesOfOneShapeAreOneRowApartFromTheirSelectTwins) {
+    // DF-Q11 (a): a DELETE is keyed by its shape, taken from the parse it ran.
+    stats::StatementStats::ResetForTest();
+    ASSERT_EQ(Text("DELETE FROM t WHERE id = 1"), "DELETED 1");
+    ASSERT_EQ(Text("DELETE FROM t WHERE id = 99"), "DELETED 0");
+    ASSERT_EQ(Text("SELECT * FROM t WHERE id = 1").rfind("ERR", 0), std::string::npos);
+
+    const std::string reply =
+        Text("SELECT kind, fetch_id, calls FROM sys.statement_stats ORDER BY kind");
+    const auto shown = testing_view::ReadViewText(reply);
+    EXPECT_EQ(shown.Column("kind"), (std::vector<std::string>{"DELETE", "SELECT"})) << reply;
+    EXPECT_EQ(shown.Find("kind", "DELETE", "calls"), "2") << reply;
+    EXPECT_EQ(shown.Find("kind", "DELETE", "fetch_id"),
+              std::to_string(parser::FingerprintOf("DELETE FROM t WHERE id = 1")->fetch_id))
+        << reply;
+    EXPECT_NE(shown.Find("kind", "DELETE", "fetch_id"), shown.Find("kind", "SELECT", "fetch_id"))
+        << reply;
 }
 
 TEST_F(ShowSugarTest, AnUpdateWithASubqueryIsKeyedByItsOwnShape) {

@@ -229,6 +229,22 @@ TEST_F(KwpSessionTest, ParseReturnsThePatternIdAndTheSubstitutedFormSharesIt) {
     EXPECT_EQ(bound->pattern_id, *pattern_id);
 }
 
+TEST_F(KwpSessionTest, APreparedDeleteCarriesItsPatternIdAsAnUpdateDoes) {
+    // DF-Q11 (a): `delete` is a patternable leading word, so `S_PARSE_OK`
+    // answers a prepared DELETE its shape rather than 0.
+    Handshake();
+    auto frames = Feed(ClientFrameType::kParse, Parse("d", "DELETE FROM t WHERE id = ?"));
+    ASSERT_EQ(frames.size(), 1u);
+    ASSERT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kParseOk));
+    wire::PayloadReader r(frames[0].payload);
+    auto pattern_id = r.U64();
+    ASSERT_TRUE(pattern_id.has_value());
+    auto bound = parser::FingerprintOf("DELETE FROM t WHERE id = 20");
+    ASSERT_TRUE(bound.has_value());
+    EXPECT_EQ(*pattern_id, bound->pattern_id);
+    EXPECT_NE(*pattern_id, 0u);
+}
+
 TEST_F(KwpSessionTest, ASelectAnswersADescriptionRowsAndACompletion) {
     Handshake();
     auto frames = RunStatement("SELECT id, v FROM t");

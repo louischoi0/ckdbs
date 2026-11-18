@@ -171,8 +171,10 @@ predicate, each of which runs its written order unsearched (under
 `written` those three read `written`). A subquery's compile never sets
 it: the row is the statement's.
 It is how a DBA or an agent finds a shape that runs uncaptured. `kind` is the first whitespace-separated token, upper-cased, when
-it is a verb the dispatcher routes, else `OTHER`; only `SELECT`, `INSERT` and `UPDATE`
-carry a fingerprint, so every other kind is one row at `fetch_id = 0`.
+it is a verb the dispatcher routes, else `OTHER`; only `SELECT`, `INSERT`, `UPDATE`
+and `DELETE` carry a fingerprint, so every other kind is one row at `fetch_id = 0` -
+but `ANALYZE <statement>`, which is kind `ANALYZE` under the shape of the
+statement it names, a refused `ANALYZE DELETE` included.
 Recorded once per statement at its end, timed whole - a park, a re-run and
 the group commit are one call; a refused statement is a call. A statement
 the engine issues itself (a listener's `ROLLBACK`, a KWP load's
@@ -282,7 +284,8 @@ RUNNABLE (CJ-Q12); `sys.wait_stats` carries the exact figure.
 Columns: `sample_ts_us` (the instance's monotonic clock, not wall time), `core`,
 `session_id`, `session_kind`, `state`, `event`, `class`, `sched_group`, `late`,
 `arg_hash_valid` (1: `p1` is the statement's argument hash), `fingerprint` (the
-statement's `fetch_id`, 0 before a statement names one), `p1`-`p3`,
+statement's `fetch_id`, 0 before a statement names one and for a kind that
+carries none - a `SELECT`, an `INSERT`, an `UPDATE` and a `DELETE` carry one), `p1`-`p3`,
 `wait_elapsed_us`. The 64-byte record also holds `step_id`, `origin_session`
 and `trx_id`, which nothing fills yet and the view does not show.
 

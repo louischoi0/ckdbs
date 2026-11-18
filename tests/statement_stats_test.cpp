@@ -52,16 +52,16 @@ TEST_F(StatementStatsTest, OneShapeOnTwoCoresIsOneRowMerged) {
 }
 
 TEST_F(StatementStatsTest, KindsWithNoFingerprintAreOneRowEachAtFetchIdZero) {
-    StatementStats::Record(0, 0, "DELETE FROM t WHERE id = 1", false,
+    StatementStats::Record(0, 0, "PURGE FROM t WHERE id = 1", false,
                            1, 1);
-    StatementStats::Record(0, 0, "DELETE FROM u WHERE id = 9", false,
+    StatementStats::Record(0, 0, "PURGE FROM u WHERE id = 9", false,
                            1, 2);
     StatementStats::Record(0, 0, "CREATE TABLE x (id int64)", false,
                            1, 3);
     const std::vector<StatementShape> shapes = StatementStats::Snapshot();
     ASSERT_EQ(shapes.size(), 2u);
     EXPECT_EQ(shapes[0].kind, "CREATE");
-    EXPECT_EQ(shapes[1].kind, "DELETE");
+    EXPECT_EQ(shapes[1].kind, "PURGE");
     EXPECT_EQ(shapes[1].calls, 2u);
 }
 

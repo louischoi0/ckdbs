@@ -336,7 +336,7 @@ struct DispatchOutcome {
 
     // **The statement's shape for `sys.statement_stats`** (BO-S5): its
     // fingerprint's `fetch_id`, 0 for a kind that carries none (only
-    // `SELECT`, `INSERT` and `UPDATE` do). Carried for `poison_withheld`'s
+    // `SELECT`, `INSERT`, `UPDATE` and `DELETE` do). Carried for `poison_withheld`'s
     // reason: another statement of this core can run before this one ends.
     std::uint64_t fetch_id = 0;
     // The same fingerprint's shape (CJ WE13), for ASH. Its argument hash is

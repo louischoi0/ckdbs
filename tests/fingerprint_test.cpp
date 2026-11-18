@@ -158,9 +158,28 @@ TEST(FingerprintTest, SessionAndAdminStatementsHaveNoPattern) {
 
 TEST(FingerprintTest, UnknownLeadingWordHasNoPattern) {
     // The allow-list's whole point: a word this grammar has never heard of
-    // is not patternable, rather than being patternable by default.
-    EXPECT_FALSE(FingerprintOf("DELETE FROM t WHERE id = 1").has_value());
+    // is not patternable, rather than being patternable by default. `PURGE`
+    // is a statement head and still no pattern.
+    EXPECT_FALSE(FingerprintOf("PURGE FROM t WHERE id = 1").has_value());
     EXPECT_FALSE(FingerprintOf("VACUUM").has_value());
+}
+
+TEST(FingerprintTest, ADeleteHasAShapeOfItsOwn) {
+    // DF-Q11 (a): `delete` is a patternable leading word. Its shape is its
+    // tokens', so literals do not move it and its SELECT twin's is another.
+    const auto one = FingerprintOf("DELETE FROM t WHERE id = 1");
+    const auto other = FingerprintOf("delete from t where id = 99");
+    const auto twin = FingerprintOf("SELECT * FROM t WHERE id = 1");
+    ASSERT_TRUE(one.has_value());
+    ASSERT_TRUE(other.has_value());
+    ASSERT_TRUE(twin.has_value());
+    EXPECT_EQ(one->pattern_id, other->pattern_id);
+    EXPECT_EQ(one->fetch_id, other->fetch_id);
+    EXPECT_NE(one->arg_hash, other->arg_hash);
+    EXPECT_NE(one->fetch_id, twin->fetch_id);
+    // No select list to leave out: the fetch id is the whole shape.
+    EXPECT_EQ(one->fetch_id, one->pattern_id);
+    EXPECT_NE(one->fetch_id, FingerprintOf("DELETE FROM u WHERE id = 1")->fetch_id);
 }
 
 TEST(FingerprintTest, EmptyAndUnlexableInputHaveNoPattern) {
@@ -442,8 +461,8 @@ TEST(FingerprintTest, TheNamespaceSyntaxNeededNoFingerprintVersionBump) {
     EXPECT_TRUE(FingerprintOf("SELECT * FROM t WHERE namespace = 1").has_value());
 
     // `CREATE NAMESPACE` has no pattern at all, and neither has any other
-    // DDL: `IsPatternableLeadingWord` admits SELECT, INSERT and UPDATE and
-    // nothing else, so the new *statement* cannot move a stored hash even in
+    // DDL: `IsPatternableLeadingWord` admits SELECT, INSERT, UPDATE and
+    // DELETE and nothing else, so the new *statement* cannot move a stored hash even in
     // principle. Only the new *name shape* could have, and it did not.
     EXPECT_FALSE(FingerprintOf("CREATE NAMESPACE orders").has_value());
 

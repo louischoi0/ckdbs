@@ -18,8 +18,8 @@
 // ---- The key ---------------------------------------------------------------
 //
 // `(fetch_id, kind)` (BO-Q6 (a) as revised). `kind` is the statement's first
-// keyword; only `SELECT`, `INSERT` and `UPDATE` carry a fingerprint
-// (`parser/fingerprint.cpp`), so every other kind is one row at
+// keyword; only `SELECT`, `INSERT`, `UPDATE` and `DELETE` carry a
+// fingerprint (`parser/fingerprint.cpp`), so every other kind is one row at
 // `fetch_id = 0`. A first word that is no statement verb is `OTHER`, so a
 // client cannot mint a row per misspelling.
 //

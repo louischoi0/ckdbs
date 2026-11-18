@@ -50,7 +50,7 @@ public:
     //
     // nullopt is also the ordinary answer for a statement that simply has
     // no pattern - `CREATE TABLE`, `SHOW`, anything whose leading word is
-    // not SELECT/INSERT/UPDATE - which is not an error and never was.
+    // not SELECT/INSERT/UPDATE/DELETE - which is not an error and never was.
     std::optional<Fingerprint> fingerprint() const noexcept { return lexer_.fingerprint(); }
 
     // **The query grammar** (BU-S4, `workorder-bu-basic-query-surface.md`

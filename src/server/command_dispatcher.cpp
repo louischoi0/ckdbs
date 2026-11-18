@@ -13693,7 +13693,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                                                const txn::Snapshot& snapshot,
                                                WalkCursor resume_from,
                                                const exec::StatementContext& context) {
-    auto parsed = parser::Parse(line);
+    // Keyed by its shape, as an INSERT and an UPDATE are (DF-Q11 (a)).
+    auto parsed = ParseKeepingShape(line);
     if (!parsed.ok()) return Refused(parsed.status());
     if (!std::holds_alternative<parser::DeleteStmt>(parsed.value())) {
         return {"ERR expected a DELETE statement", false};
