@@ -1183,8 +1183,10 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   statistics do after: no plan changes on its own. Until then the engine
   chooses at each run. A captured order is written to `sys.plans` within
   about a second - never by the statement itself - and is in force again
-  after a restart or a crash; a new index still changes how a captured
-  shape reads each relation, never the order. `SHOW PLANS` (or `SELECT ...
+  after a restart. It survives a crash once the log has next been synced:
+  by the next commit, or the next checkpoint on a server that only reads;
+  one lost that way is simply captured again. A new index still changes
+  how a captured shape reads each relation, never the order. `SHOW PLANS` (or `SELECT ...
   FROM sys.plans`) lists them: each plan's name, the statement with its
   literals written `?`, its relations as written and in the order the plan
   runs them. `DROP PLAN <name>` (admin, outside a transaction) removes

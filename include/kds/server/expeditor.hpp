@@ -651,9 +651,9 @@ public:
     // the queued captures of `join_order = fixed` written as logged
     // `sys.plans` rows, and a dropped relation's rows removed. Core 0's
     // `system` task calls it once a second and the shutdown tail until the
-    // queue is empty; a failure is logged and the next call tries again.
-    // Answers whether the step failed.
-    bool PersistCapturedPlans();
+    // queue is empty; a failure is logged, once a run of failures, and the
+    // next call tries again.
+    Status PersistCapturedPlans();
     // The instance's join planner statistics (`plan-stats.md`).
     stats::PlanStats& plan_stats() noexcept { return *plan_stats_; }
     void SetReclaimCutForTest(std::function<void(const char*)> hook) {
@@ -859,6 +859,9 @@ private:
     // written back to it by `PersistCapturedPlans` (CX-S1a).
     std::atomic<exec::JoinOrder> join_order_{exec::JoinOrder::kFixed};
     exec::CapturedPlans captured_plans_;
+    // Whether the persisting step's last call failed: its warning is logged
+    // when a run of failures starts, not once a second through it.
+    bool plans_persist_failing_ = false;
     Latch optimizer_signals_latch_{LatchKind::kOptimizer};
     Latch cabin_view_latch_{LatchKind::kOptimizer};
     wal::CheckpointGate checkpoint_gate_;

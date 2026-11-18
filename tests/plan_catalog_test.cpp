@@ -14,6 +14,7 @@
 #include "kds/exec/captured_plans.hpp"
 #include "kds/exec/declaration_relation.hpp"
 #include "kds/exec/plan_catalog.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/parser/lexer.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/expeditor.hpp"
@@ -53,6 +54,15 @@ TEST(ShapeTextTest, EveryValueLiteralIsWrittenAsAMarkerAndNothingElseMoves) {
     EXPECT_EQ(parser::ShapeText("SELECT x FROM t WHERE a = 1"),
               parser::ShapeText("SELECT x  FROM t WHERE a = 'one' ;"));
     EXPECT_EQ(parser::ShapeText(""), "");
+    // A comment between two tokens is one space, like any run of white space.
+    EXPECT_EQ(parser::ShapeText("SELECT x -- the column\nFROM t WHERE a = 1"),
+              "SELECT x FROM t WHERE a = ?");
+    // Text the lexer cannot read is given as far as it could be read, and an
+    // unterminated string is still a value, never its bytes.
+    EXPECT_EQ(parser::ShapeText("SELECT x FROM t WHERE a = 1 $ b = 2"),
+              "SELECT x FROM t WHERE a = ?");
+    EXPECT_EQ(parser::ShapeText("SELECT x FROM t WHERE a = 'secret"),
+              "SELECT x FROM t WHERE a = ?");
 }
 
 // ---- The row's text -----------------------------------------------------------
@@ -75,9 +85,11 @@ TEST(PlanTextTest, ARowsTextReadsBackAsWhatWasWritten) {
         PlanOf(7, {4001, 4002, 4003}, {2, 0, 1}, "SELECT a.x FROM a JOIN b ON a.id = b.id\nWHERE 1");
     const std::string text = exec::EncodePlanText(plan, 1'700'000'000'000'000);
     EXPECT_EQ(text.substr(0, text.find('\n')),
-              "v1 oids=4001,4002,4003 order=2,0,1 at=1700000000000000");
+              "v1 fp=" + std::to_string(parser::kFingerprintVersion) +
+                  " oids=4001,4002,4003 order=2,0,1 at=1700000000000000");
     exec::PlanRow row;
     ASSERT_TRUE(exec::DecodePlanText(text, row).ok());
+    EXPECT_EQ(row.fingerprint_version, parser::kFingerprintVersion);
     EXPECT_EQ(row.key.n, 3u);
     EXPECT_EQ(row.key.oids, plan.key.oids);
     EXPECT_EQ(row.order, plan.order);
@@ -98,25 +110,33 @@ TEST(PlanTextTest, AStatementPastOneStoredValueIsCutAndTheKeyStillReads) {
 TEST(PlanTextTest, ATextThatIsNotARowIsCorruptionAndNeverAGuess) {
     for (const char* text : {
              "",
-             "v1 oids=4001,4002 order=1,0 at=5",              // no statement line
-             "v2 oids=4001,4002 order=1,0 at=5\nSELECT 1",    // another format
-             "v1 order=1,0 oids=4001,4002 at=5\nSELECT 1",    // fields out of order
-             "v1 oids=4001,4002 order=1,0\nSELECT 1",         // a field missing
-             "v1 oids=4001,4002 order=1,0 at=5 x=1\nSELECT 1",  // a field too many
-             "v1 oids=4001 order=0 at=5\nSELECT 1",           // one relation is no join
-             "v1 oids=4001,4002 order=1 at=5\nSELECT 1",      // an order too short
-             "v1 oids=4001,4002 order=1,1 at=5\nSELECT 1",    // not a permutation
-             "v1 oids=4001,4002 order=0,2 at=5\nSELECT 1",    // a position past the block
-             "v1 oids=4001,x order=1,0 at=5\nSELECT 1",       // not a number
-             "v1 oids=4001,4002, order=1,0 at=5\nSELECT 1",   // an empty element
-             "v1 oids=4001,99999999999 order=1,0 at=5\nSELECT 1",  // an oid past 32 bits
+             "v1 fp=2 oids=4001,4002 order=1,0 at=5",                // no statement line
+             "v2 fp=2 oids=4001,4002 order=1,0 at=5\nSELECT 1",      // another format
+             "v1 oids=4001,4002 order=1,0 at=5\nSELECT 1",           // no fingerprint version
+             "v1 fp=x oids=4001,4002 order=1,0 at=5\nSELECT 1",      // one that is no number
+             "v1 fp=99999999999 oids=4001,4002 order=1,0 at=5\nSELECT 1",  // or past 32 bits
+             "v1 fp=2 order=1,0 oids=4001,4002 at=5\nSELECT 1",      // fields out of order
+             "v1 fp=2 oids=4001,4002 order=1,0\nSELECT 1",           // a field missing
+             "v1 fp=2 oids=4001,4002 order=1,0 at=5 x=1\nSELECT 1",  // a field too many
+             "v1 fp=2 oids=4001,4002 order=1,0 at=5 \nSELECT 1",     // a trailing space
+             "v1 fp=2 oids=4001 order=0 at=5\nSELECT 1",             // one relation is no join
+             "v1 fp=2 oids=4001,4002 order=1 at=5\nSELECT 1",        // an order too short
+             "v1 fp=2 oids=4001,4002 order=1,1 at=5\nSELECT 1",      // not a permutation
+             "v1 fp=2 oids=4001,4002 order=0,2 at=5\nSELECT 1",      // a position past the block
+             "v1 fp=2 oids=4001,x order=1,0 at=5\nSELECT 1",         // not a number
+             "v1 fp=2 oids=4001,4002, order=1,0 at=5\nSELECT 1",     // an empty element
+             "v1 fp=2 oids=4001,99999999999 order=1,0 at=5\nSELECT 1",  // an oid past 32 bits
+             "v1 fp=2 oids=4001,4002 order=1,0 at=9223372036854775808\nSELECT 1",  // a time past int64
          }) {
         exec::PlanRow row;
+        row.statement = "untouched";
         const Status s = exec::DecodePlanText(text, row);
         EXPECT_EQ(s.code(), StatusCode::kCorruption) << '"' << text << '"';
+        EXPECT_EQ(row.statement, "untouched") << "a refused text wrote the row: " << text;
+        EXPECT_EQ(row.key.n, 0u) << text;
     }
     // Seventeen relations: one more than a key holds.
-    std::string wide = "v1 oids=";
+    std::string wide = "v1 fp=2 oids=";
     std::string order = " order=";
     for (int i = 0; i < 17; ++i) {
         wide += (i == 0 ? "" : ",") + std::to_string(4001 + i);
@@ -182,6 +202,11 @@ TEST(CapturedPlansQueueTest, ForgettingARelationTakesItsShapesHeldAndQueued) {
     EXPECT_FALSE(table.Find(queued.key).has_value());
     EXPECT_TRUE(table.Find(other.key).has_value());
     EXPECT_EQ(table.pending(), 1u);
+    EXPECT_EQ(table.TakeForgotten(), std::vector<catalog::Oid>{4001});
+    // A relation no shape names owes the task nothing - no scan for a drop
+    // that touched no plan.
+    table.ForgetRelation(4999);
+    EXPECT_TRUE(table.TakeForgotten().empty());
     // And one shape by its key, as `DROP PLAN` does.
     EXPECT_TRUE(table.Erase(other.key));
     EXPECT_FALSE(table.Erase(other.key));
@@ -420,6 +445,73 @@ TEST_F(PlanCatalogTest, AMountRemovesARowNamingARelationThatIsGone) {
     EXPECT_TRUE(Rows().empty());
 }
 
+TEST_F(PlanCatalogTest, AStatementPastOneStoredValueIsWrittenCutAndLoads) {
+    // The row's text is one var-heap value: the key and the order come
+    // first and the statement is cut to what is left.
+    const std::string huge =
+        "SELECT results.pnl FROM results JOIN models ON results.model_id = models.id WHERE " +
+        std::string(20000, 'x') + " = 1";
+    exec::CapturedKey key;
+    key.fetch_id = 99;
+    key.n = 2;
+    key.oids = {results_, models_};
+    ASSERT_TRUE(table().Capture(key, CapturedOrder{1, 0}, huge).has_value());
+    ASSERT_TRUE(Persist().ok());
+    const std::vector<exec::PlanRow> rows = Rows();
+    ASSERT_EQ(rows.size(), 1u);
+    ASSERT_TRUE(rows.front().readable);
+    EXPECT_EQ(rows.front().key, key);
+    EXPECT_LT(rows.front().statement.size(), varheap::kMaxValueSize);
+    EXPECT_GT(rows.front().statement.size(), 8000u);
+    CapturedPlans next_run;
+    ASSERT_TRUE(exec::LoadCapturedPlans(boot_->catalog, store_, nullptr, next_run).ok());
+    EXPECT_EQ(next_run.Find(key), (CapturedOrder{1, 0}));
+}
+
+TEST_F(PlanCatalogTest, AMountKeepsOneRowAShapeAndRemovesARowOfAnotherFingerprintVersion) {
+    // Two rows for one key - a shape captured again in a run whose mount
+    // could not load its first row - must not leave the order in force to
+    // which of them a mount meets first.
+    const exec::PlanRow first = CaptureAndPersist();
+    ASSERT_TRUE(table().Erase(first.key));
+    CapturedOrder other{};
+    other[0] = first.order[1];
+    other[1] = first.order[0];
+    ASSERT_TRUE(table().Capture(first.key, other, kWhere).has_value());
+    ASSERT_TRUE(Persist().ok());
+    ASSERT_EQ(Rows().size(), 2u);
+    // And a row keyed under a fingerprint version this build does not use.
+    exec::DeclarationRow old;
+    auto id = boot_->catalog.AllocateRowId(catalog::kSysPlansTable);
+    ASSERT_TRUE(id.ok());
+    old.id = id.value();
+    old.target_oid = models_;
+    old.aux = 5;
+    old.flags = exec::kPlanFlagCaptured;
+    old.name = "captured_5_old";
+    old.source_text = "v1 fp=" + std::to_string(parser::kFingerprintVersion + 1) + " oids=" +
+                      std::to_string(results_) + "," + std::to_string(models_) +
+                      " order=1,0 at=5\nSELECT 1";
+    ASSERT_TRUE(exec::InsertDeclaration(boot_->catalog, store_, nullptr, catalog::kSysPlansTable,
+                                        "plan", old)
+                    .ok());
+
+    CapturedPlans next_run;
+    auto unreadable = exec::LoadCapturedPlans(boot_->catalog, store_, nullptr, next_run);
+    ASSERT_TRUE(unreadable.ok()) << unreadable.status().message();
+    EXPECT_EQ(unreadable.value(), 0u);
+    EXPECT_EQ(next_run.shapes(), 1u);
+    const std::vector<exec::PlanRow> rows = Rows();
+    ASSERT_EQ(rows.size(), 1u) << "the duplicate and the old version are gone";
+    EXPECT_EQ(next_run.Find(rows.front().key), rows.front().order)
+        << "the row that stayed is the one in force";
+    // A second mount finds the same one row and the same order.
+    CapturedPlans third_run;
+    ASSERT_TRUE(exec::LoadCapturedPlans(boot_->catalog, store_, nullptr, third_run).ok());
+    EXPECT_EQ(third_run.Find(rows.front().key), rows.front().order);
+    EXPECT_EQ(Rows().size(), 1u);
+}
+
 TEST_F(PlanCatalogTest, ARowThisBuildCannotReadIsNotLoadedAndIsShownAsItIs) {
     CaptureAndPersist();
     exec::DeclarationRow odd;
@@ -521,6 +613,16 @@ void Populate(Expeditor& db) {
     db.plan_stats().SeedPriors(bands);
 }
 
+// The priors again, for a run that mounted the volume and has seeded none.
+void Inform(Expeditor& db) {
+    auto cargos = db.catalog().FindTableOidByName(catalog::kNamespacePublic, "cargos");
+    auto freights = db.catalog().FindTableOidByName(catalog::kNamespacePublic, "freights");
+    ASSERT_TRUE(cargos.ok() && freights.ok());
+    const std::vector<std::pair<catalog::Oid, std::int16_t>> bands = {
+        {cargos.value(), stats::BandOf(8.0)}, {freights.value(), stats::BandOf(9000.0)}};
+    db.plan_stats().SeedPriors(bands);
+}
+
 TEST(PlanMountTest, AServersDefaultCapturesAndAPersistedCaptureOutlivesACleanStopAndACrash) {
     TempDir live;
     TempDir crashed;
@@ -547,7 +649,7 @@ TEST(PlanMountTest, AServersDefaultCapturesAndAPersistedCaptureOutlivesACleanSto
         EXPECT_EQ(db.dispatcher().captured_plans().pending(), 1u);
 
         // The step writes it; the log reaches the device and the pages do not.
-        EXPECT_FALSE(db.PersistCapturedPlans());
+        EXPECT_TRUE(db.PersistCapturedPlans().ok());
         EXPECT_GT(db.wal().appended_lsn(), before);
         EXPECT_EQ(db.dispatcher().captured_plans().pending(), 0u);
         ASSERT_TRUE(db.wal().Flush().ok());
@@ -591,9 +693,15 @@ TEST(PlanMountTest, ACaptureACrashFindsStillQueuedIsLostAndMadeAgain) {
     Expeditor& db = *mounted.value();
     CurrentCoreGuard as(0);
     EXPECT_EQ(db.dispatcher().captured_plans().loaded(), 0u);
-    // CX-Q14 (a): captured again, once the run is informed.
+    EXPECT_EQ(Do(db, "SELECT name FROM sys.plans").find("captured_"), std::string::npos);
+    // CX-Q14 (a): searched again - deferred while this run knows no size,
+    // captured once it does.
     EXPECT_NE(Do(db, std::string("ANALYZE ") + kJoin).find(" capture=deferred"),
               std::string::npos);
+    Inform(db);
+    EXPECT_NE(Do(db, std::string("ANALYZE ") + kJoin).find(" capture=first"), std::string::npos);
+    EXPECT_TRUE(db.PersistCapturedPlans().ok());
+    EXPECT_NE(Do(db, "SELECT name FROM sys.plans").find("captured_"), std::string::npos);
     reclaim_census::CleanShutdownCheckpoint(db);
 }
 
@@ -605,7 +713,7 @@ TEST(PlanMountTest, ACommittedDropTableForgetsTheRelationsPlansAndTheStepRemoves
     CurrentCoreGuard as(0);
     Populate(db);
     ASSERT_NE(Do(db, std::string("ANALYZE ") + kJoin).find(" capture=first"), std::string::npos);
-    ASSERT_FALSE(db.PersistCapturedPlans());
+    ASSERT_TRUE(db.PersistCapturedPlans().ok());
     ASSERT_NE(Do(db, "SELECT name FROM sys.plans").find("captured_"), std::string::npos);
 
     // A drop that rolls back forgets nothing.
@@ -619,10 +727,27 @@ TEST(PlanMountTest, ACommittedDropTableForgetsTheRelationsPlansAndTheStepRemoves
     EXPECT_NE(Do(db, std::string("ANALYZE ") + kJoin).find("planned order=captured\\n"),
               std::string::npos);
 
-    // One that commits does (CX-Q24).
-    ASSERT_EQ(Do(db, "DROP TABLE freights").rfind("DROPPED", 0), 0u);
+    // One that commits does (CX-Q24) - here inside a transaction, at its
+    // `COMMIT` and not at the statement.
+    ASSERT_EQ(db.dispatcher().Dispatch("BEGIN", &txn).response.rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(db.dispatcher().Dispatch("DROP TABLE freights", &txn).response.rfind("DROPPED", 0),
+              0u);
+    EXPECT_EQ(db.dispatcher().captured_plans().shapes(), 1u) << "not before the commit";
+    ASSERT_EQ(db.dispatcher().Dispatch("COMMIT", &txn).response.rfind("ERR", 0), std::string::npos);
     EXPECT_EQ(db.dispatcher().captured_plans().shapes(), 0u);
-    ASSERT_FALSE(db.PersistCapturedPlans());
+    ASSERT_TRUE(db.PersistCapturedPlans().ok());
+    EXPECT_EQ(Do(db, "SELECT name FROM sys.plans").find("captured_"), std::string::npos);
+
+    // And in autocommit: a second pair, captured, written, dropped.
+    ASSERT_EQ(Do(db, "CREATE TABLE freights (id int64, cargo_id int64) BTREE").rfind("ERR", 0),
+              std::string::npos);
+    Inform(db);
+    ASSERT_NE(Do(db, std::string("ANALYZE ") + kJoin).find(" capture=first"), std::string::npos);
+    ASSERT_TRUE(db.PersistCapturedPlans().ok());
+    ASSERT_NE(Do(db, "SELECT name FROM sys.plans").find("captured_"), std::string::npos);
+    ASSERT_EQ(Do(db, "DROP TABLE cargos").rfind("DROPPED", 0), 0u);
+    EXPECT_EQ(db.dispatcher().captured_plans().shapes(), 0u);
+    ASSERT_TRUE(db.PersistCapturedPlans().ok());
     EXPECT_EQ(Do(db, "SELECT name FROM sys.plans").find("captured_"), std::string::npos);
     reclaim_census::CleanShutdownCheckpoint(db);
 }

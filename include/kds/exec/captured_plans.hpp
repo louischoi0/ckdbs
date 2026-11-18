@@ -73,6 +73,13 @@ struct CapturedKey {
     std::array<catalog::Oid, kMaxPlannedRelations> oids{};
 
     bool operator==(const CapturedKey&) const = default;
+    // Whether the shape binds `oid`.
+    bool Names(catalog::Oid oid) const noexcept {
+        for (std::size_t i = 0; i < n; ++i) {
+            if (oids[i] == oid) return true;
+        }
+        return false;
+    }
 };
 
 // Written positions in executed order; the slots past the block's relation
@@ -114,9 +121,9 @@ public:
     bool Erase(const CapturedKey& key);
 
     // A committed `DROP TABLE`'s (CX-Q24): forgets every shape naming `oid`,
-    // queued ones included, and owes the persisting task the removal of
-    // their rows. An oid is never reissued, so nothing could match them
-    // again; they would only count against the ceiling.
+    // queued ones included, and - where it forgot one - owes the persisting
+    // task the removal of their rows. An oid is never reissued, so nothing
+    // could match them again; they would only count against the ceiling.
     void ForgetRelation(catalog::Oid oid);
 
     // ---- The persisting task's (`plan_catalog.hpp`) ------------------------

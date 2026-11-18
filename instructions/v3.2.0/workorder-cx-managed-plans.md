@@ -787,7 +787,7 @@ is S3's and `BUILD` S5's, as §3 has them.
 
 - **`sys.plans`** is the fourth declaration relation (oid 161, root page
   18, **superblock 37**, which refuses 36): `aux` is the fetch id, `flags`
-  bit 0 says captured, and the text is `v1 oids=... order=... at=...` and,
+  bit 0 says captured, and the text is `v1 fp=... oids=... order=... at=...` and,
   after a newline, the capturing statement's **shape text** - the statement
   with every literal written `?` (`parser::ShapeText`, new), so no row
   holds a client's value. Logged at `kNoTxnId`, as every declaration is.
@@ -832,3 +832,49 @@ ceiling, so a full run under any caller that holds a pin of its own - the
 simulation harness's sync inside a statement did - aborted. The run's pins
 are now an allowance of their own (`device_page_store.cpp`, `page.md` §3),
 and the abort prints frames. A release build never checked.
+
+**The review of S1a** (`critics-developer`, of `4f62dd2a`; its fix and
+the ones taken from its findings are in the commit after it).
+
+- **Fixed by the review - a failed write could put back a capture whose
+  relation had just been dropped.** `Requeue` asked the table and then
+  queued, under two separate holds; a `ForgetRelation` passing between
+  them erased the shape, found the queue not yet holding it, and owed its
+  oid to a step that ran before the capture's row was written - a row for
+  a dropped relation that only the next mount removed. It now asks and
+  queues under one hold of the partition, as an install does.
+- **Taken - the persisting step was quadratic.** Every declaration insert
+  scans its whole relation for the name, resolving each row's spill, and a
+  step makes up to 64; every removal scanned again by name. A captured
+  row's name holds its own id, so its insert skips the check
+  (`DeclarationName::kUniqueByConstruction`), and a step's or a mount's
+  removals are one walk (`DeleteDeclarationsById`). Not measured; the
+  reviewer's estimate at the 65,536-shape ceiling was of the order of 10^9
+  spill fetches on core 0's reactor.
+- **Taken - one row a shape at a mount.** A row whose relation could not
+  be opened for a reason other than its absence is neither loaded nor
+  removed; its shape is captured again and a second row written. The next
+  mount then loaded whichever it met first, so the order in force could
+  change across a restart. A mount now removes a row for a key it has
+  already loaded.
+- **Taken**: the row records the fingerprint version, and a mount removes
+  a row of another one, which could match no statement and would only
+  count against the ceiling; `ForgetRelation` owes the task nothing where
+  no shape named the relation, so a drop no plan names costs no scan; the
+  shape text is made before any latch and cut to what a row keeps;
+  `Expeditor::PersistCapturedPlans` answers a `Status` and logs a run of
+  failures once; the step has its own tick constant; `DecodePlanText`
+  writes nothing on a refused text and refuses a trailing space and a time
+  past `int64`; `CapturedKey::Names` replaces two copies; cells for the
+  value limit through an insert, a drop committed inside a transaction,
+  the re-capture after a crash, a comment and unreadable text in the shape
+  text; the manuals say a written row survives a crash only once the log
+  has next been synced.
+- **Not taken**: a cell of its own for the writeback run's pin allowance -
+  four simulation cells abort without it, which is how it was found. The
+  two-line branch in `HandleDropTable` that forgets at once for a drop
+  under no transaction stays: only a hand-built dispatcher reaches it, and
+  without it those rigs could not show the forget at all.
+- **Left for the operator**: a mount refuses on a `sys.plans` it cannot
+  scan, as on any logged catalog relation, though what is lost would cost
+  a recapture (`known-gaps.md`).

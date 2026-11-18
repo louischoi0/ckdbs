@@ -1480,17 +1480,18 @@ void Expeditor::WriteRelationPriors() {
     }
 }
 
-bool Expeditor::PersistCapturedPlans() {
-    if (!database_.has_value()) return false;
+Status Expeditor::PersistCapturedPlans() {
+    if (!database_.has_value()) return Status::InvalidArgument("plans: no database is mounted");
     const std::int64_t now_us = static_cast<std::int64_t>(wall_clock_.NowUnixSeconds()) * 1'000'000;
     const Status s = exec::PersistCapturedPlans(database_->catalog, *store_, wal_.get(),
                                                 captured_plans_, now_us);
-    if (!s.ok() && logger_->enabled(LogLevel::kWarn)) {
-        logger_->Warn("plans", "captured plans were not all written to sys.plans; the next "
-                               "step tries again: " +
+    if (!s.ok() && !plans_persist_failing_ && logger_->enabled(LogLevel::kWarn)) {
+        logger_->Warn("plans", "captured plans were not all written to sys.plans; each step "
+                               "tries again: " +
                                    s.message());
     }
-    return !s.ok();
+    plans_persist_failing_ = !s.ok();
+    return s;
 }
 
 void Expeditor::BroadcastShutdown() {
@@ -2138,7 +2139,8 @@ Status Expeditor::Start() {
     // once a second on core 0's `system` group, a latch and a return when
     // nothing is queued. A capture is at most this long from its row, which
     // is the window a crash can lose (CX-Q14 (a)).
-    scheduler.SubmitEvery(kPlanStatsTickNs, [this] { (void)PersistCapturedPlans(); });
+    constexpr sched::MonoTimeNs kPlanPersistTickNs = 1'000'000'000;  // 1 s
+    scheduler.SubmitEvery(kPlanPersistTickNs, [this] { (void)PersistCapturedPlans(); });
 
     // An open backup with nothing running past `kAbandonNs` is ended (BR-S2).
     constexpr sched::MonoTimeNs kBackupTickNs = 1'000'000'000;  // 1 s
@@ -2370,7 +2372,7 @@ Status Expeditor::RunUntilStopped() {
     // **And the captures still queued** (CX-S1a): a clean stop loses none.
     // Logged rows, so the sync below carries them; a step that fails stops
     // the loop, and those captures are made again in the next run.
-    while (captured_plans_.pending() > 0 && !PersistCapturedPlans()) {
+    while (captured_plans_.pending() > 0 && PersistCapturedPlans().ok()) {
     }
     Status s = Sync();
     if (!s.ok()) {

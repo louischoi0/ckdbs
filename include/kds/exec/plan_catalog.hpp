@@ -48,10 +48,23 @@ class WalManager;
 // delete is physical and outside every transaction, and the rows are inert
 // from the commit on.
 //
-// The row's text is `v1 oids=<o>,<o> order=<p>,<p> at=<us>` and, after one
-// newline, the statement. `order` is written positions in executed order.
-// A row this build cannot read is skipped by a mount and shown as it is by
-// `sys.plans`; it is never guessed at.
+// The row's text is `v1 fp=<v> oids=<o>,<o> order=<p>,<p> at=<us>` and,
+// after one newline, the statement. `fp` is the fingerprint version the
+// fetch id was taken under (`parser::kFingerprintVersion`): a row of another
+// version can match no statement of this build, and a mount removes it.
+// `order` is written positions in executed order. A row this build cannot
+// read is skipped by a mount and shown as it is by `sys.plans`; it is never
+// guessed at.
+//
+// **One row a shape.** A mount that meets a second row for a key it has
+// already loaded removes it, so which row a later mount meets first never
+// decides an order.
+//
+// **Cost.** A step's inserts skip the declaration relations' name check -
+// a scan of the whole relation a row - because a captured row's name holds
+// its own id, and its removals are one walk for the step
+// (`DeleteDeclarationsById`), so a step is linear in what it writes, not in
+// what the relation holds.
 
 namespace kds::exec {
 
@@ -65,6 +78,7 @@ struct PlanRow {
     // False for a row whose text this build cannot read; `key`, `order` and
     // `written_at_us` are then unset and `statement` is the row's text.
     bool readable = false;
+    std::uint32_t fingerprint_version = 0;
     CapturedKey key;
     CapturedOrder order{};
     std::int64_t written_at_us = 0;  // UTC epoch microseconds
@@ -73,7 +87,8 @@ struct PlanRow {
 
 // The text a captured plan's row stores, and its reading. `Corruption`
 // where the text is not this format, names a count over the key's width,
-// or its order is not a permutation of its relations' positions.
+// or its order is not a permutation of its relations' positions; a refused
+// text leaves `out` as it was.
 std::string EncodePlanText(const CapturedPlan& plan, std::int64_t written_at_us);
 Status DecodePlanText(std::string_view text, PlanRow& out);
 
@@ -89,9 +104,10 @@ Status PersistCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store
                             wal::WalManager* wal, CapturedPlans& table, std::int64_t now_us,
                             std::size_t max_rows = kPlanPersistBatch);
 
-// A mount's: every readable captured row installed in `table`, and every
-// row naming a relation that no longer exists removed. Answers how many it
-// could not read, which stay where they are.
+// A mount's: every readable captured row installed in `table`, and removed
+// every row that names a relation that no longer exists, was keyed under
+// another fingerprint version, or repeats a key already loaded. Answers how
+// many it could not read, which stay where they are.
 StatusOr<std::size_t> LoadCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store,
                                         wal::WalManager* wal, CapturedPlans& table);
 

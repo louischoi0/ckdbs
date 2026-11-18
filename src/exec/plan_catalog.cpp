@@ -6,6 +6,7 @@
 
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/declaration_relation.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/storage/varheap.hpp"
 
 namespace kds::exec {
@@ -66,23 +67,16 @@ PlanRow ToPlanRow(DeclarationRow row) {
     if (plan.readable) {
         plan.key.fetch_id = static_cast<std::uint64_t>(row.aux);
     } else {
-        plan.key = CapturedKey{};
-        plan.order = CapturedOrder{};
-        plan.written_at_us = 0;
         plan.statement = std::move(row.source_text);
     }
     return plan;
-}
-
-bool Names(const CapturedKey& key, catalog::Oid oid) noexcept {
-    return std::find(key.oids.begin(), key.oids.begin() + key.n, oid) !=
-           key.oids.begin() + key.n;
 }
 
 }  // namespace
 
 std::string EncodePlanText(const CapturedPlan& plan, std::int64_t written_at_us) {
     std::string text(kVersion);
+    text.append(" fp=").append(std::to_string(parser::kFingerprintVersion));
     AppendList(text, " oids=", plan.key.oids, plan.key.n);
     AppendList(text, " order=", plan.order, plan.key.n);
     text.append(" at=").append(std::to_string(written_at_us));
@@ -107,18 +101,27 @@ Status DecodePlanText(std::string_view text, PlanRow& out) {
         return corrupt("a row's text is not format v1");
     }
     head.remove_prefix(kVersion.size() + 1);
+    std::string_view fp_text;
     std::string_view oids_text;
     std::string_view order_text;
     std::string_view at_text;
-    if (!TakeField(head, "oids", oids_text) || !TakeField(head, "order", order_text) ||
+    // `TakeField` eats the space after a value, so a line ending in one would
+    // read as whole.
+    if (head.ends_with(' ') || !TakeField(head, "fp", fp_text) ||
+        !TakeField(head, "oids", oids_text) || !TakeField(head, "order", order_text) ||
         !TakeField(head, "at", at_text) || !head.empty()) {
-        return corrupt("a row's text does not read oids, order and at, in that order");
+        return corrupt("a row's text does not read fp, oids, order and at, in that order");
     }
     std::vector<std::uint64_t> oids;
     std::vector<std::uint64_t> order;
+    std::uint64_t fp = 0;
     std::uint64_t at = 0;
-    if (!ReadList(oids_text, oids) || !ReadList(order_text, order) || !ReadNumber(at_text, at)) {
-        return corrupt("a row's oids, order or time is not a number list");
+    if (!ReadNumber(fp_text, fp) || !ReadList(oids_text, oids) || !ReadList(order_text, order) ||
+        !ReadNumber(at_text, at)) {
+        return corrupt("a row's version, oids, order or time is not a number list");
+    }
+    if (fp > UINT32_MAX || at > static_cast<std::uint64_t>(INT64_MAX)) {
+        return corrupt("a row's version or time is out of range");
     }
     // A join block has two relations or more, and an order names each
     // written position once.
@@ -126,17 +129,19 @@ Status DecodePlanText(std::string_view text, PlanRow& out) {
         return corrupt("a row's order does not cover its relations");
     }
     std::vector<bool> seen(oids.size(), false);
-    for (const std::uint64_t position : order) {
-        if (position >= oids.size() || seen[position]) {
+    for (std::size_t i = 0; i < oids.size(); ++i) {
+        if (oids[i] > UINT32_MAX) return corrupt("a row names an oid past 32 bits");
+        if (order[i] >= oids.size() || seen[order[i]]) {
             return corrupt("a row's order is not a permutation of its relations");
         }
-        seen[position] = true;
+        seen[order[i]] = true;
     }
+    // Nothing of `out` is written before this line: a refused text leaves it.
+    out.fingerprint_version = static_cast<std::uint32_t>(fp);
     out.key = CapturedKey{};
     out.order = CapturedOrder{};
     out.key.n = static_cast<std::uint8_t>(oids.size());
     for (std::size_t i = 0; i < oids.size(); ++i) {
-        if (oids[i] > UINT32_MAX) return corrupt("a row names an oid past 32 bits");
         out.key.oids[i] = static_cast<catalog::Oid>(oids[i]);
         out.order[i] = static_cast<std::uint8_t>(order[i]);
     }
@@ -174,11 +179,13 @@ Status PersistCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store
         row.flags = kPlanFlagCaptured;
         // The row id makes the name unique: one fetch id is two shapes when
         // one statement text binds other relations - another namespace's,
-        // or a relation created again under its name.
+        // or a relation created again under its name. And so no insert pays
+        // the name check's scan of the relation.
         row.name = "captured_" + std::to_string(plan.key.fetch_id) + "_" +
                    std::to_string(row.id);
         row.source_text = EncodePlanText(plan, now_us);
-        if (Status s = InsertDeclaration(catalog, store, wal, catalog::kSysPlansTable, kKind, row);
+        if (Status s = InsertDeclaration(catalog, store, wal, catalog::kSysPlansTable, kKind, row,
+                                         DeclarationName::kUniqueByConstruction);
             !s.ok()) {
             failed = s;
             break;
@@ -197,20 +204,18 @@ Status PersistCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store
     if (dropped.empty()) return failed;
     auto plans = ListPlans(catalog, store);
     if (!plans.ok()) return plans.status();
+    std::vector<std::uint64_t> gone;
     for (const PlanRow& plan : plans.value()) {
-        if (!plan.readable ||
-            std::none_of(dropped.begin(), dropped.end(),
-                         [&](catalog::Oid oid) { return Names(plan.key, oid); })) {
-            continue;
-        }
-        auto gone = DeleteDeclaration(catalog, store, wal, catalog::kSysPlansTable, kKind, plan.name);
-        // A row this step could not remove is inert, and the next mount
-        // removes it.
-        if (!gone.ok() && gone.status().code() != StatusCode::kNotFound && failed.ok()) {
-            failed = gone.status();
+        if (plan.readable && std::any_of(dropped.begin(), dropped.end(), [&](catalog::Oid oid) {
+                return plan.key.Names(oid);
+            })) {
+            gone.push_back(plan.id);
         }
     }
-    return failed;
+    // A row this step could not remove is inert, and the next mount removes
+    // it.
+    auto removed = DeleteDeclarationsById(catalog, store, wal, catalog::kSysPlansTable, gone);
+    return removed.ok() ? failed : removed.status();
 }
 
 StatusOr<std::size_t> LoadCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store,
@@ -218,33 +223,42 @@ StatusOr<std::size_t> LoadCapturedPlans(catalog::Catalog& catalog, storage::Page
     auto plans = ListPlans(catalog, store);
     if (!plans.ok()) return plans.status();
     std::size_t unreadable = 0;
+    std::vector<std::uint64_t> remove;
     for (const PlanRow& plan : plans.value()) {
         if (!plan.captured) continue;
         if (!plan.readable) {
             ++unreadable;
             continue;
         }
+        // A shape keyed by another fingerprint version matches no statement
+        // of this build: its fetch id is another function's.
+        if (plan.fingerprint_version != parser::kFingerprintVersion) {
+            remove.push_back(plan.id);
+            continue;
+        }
         // `NotFound` is a relation that is gone - its row goes too. Any
         // other failure says nothing of the relation: the row stays and is
         // not loaded, so its shape is captured again in this run.
         bool gone = false;
-        bool known = true;
+        bool unknown = false;
         for (std::size_t i = 0; i < plan.key.n; ++i) {
             auto access = catalog.InitTableAccess(plan.key.oids[i]);
             if (access.ok()) continue;
-            known = false;
-            if (access.status().code() == StatusCode::kNotFound) gone = true;
+            (access.status().code() == StatusCode::kNotFound ? gone : unknown) = true;
         }
-        if (gone) {
-            auto removed = DeleteDeclaration(catalog, store, wal, catalog::kSysPlansTable, kKind,
-                                             plan.name);
-            if (!removed.ok() && removed.status().code() != StatusCode::kNotFound) {
-                return removed.status();
-            }
+        if (unknown && !gone) continue;
+        // **One row a shape**: a second row for a key the table already
+        // holds - a shape captured again in a run whose mount could not load
+        // its first row - goes, or which of the two a later mount met first
+        // would decide the order in force.
+        if (gone || table.Find(plan.key).has_value()) {
+            remove.push_back(plan.id);
             continue;
         }
-        if (known) table.Load(plan.key, plan.order);
+        table.Load(plan.key, plan.order);
     }
+    auto removed = DeleteDeclarationsById(catalog, store, wal, catalog::kSysPlansTable, remove);
+    if (!removed.ok()) return removed.status();
     return unreadable;
 }
 
