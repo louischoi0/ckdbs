@@ -162,11 +162,30 @@ took under them.
 | **Does not settle** | a tag, a version; CX-S0 and the stages after it, which go on under §16's go-ahead and stop before the next push |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
 
-## 18. `bench/README.md` shortened
+## 18. Access statistics kept, their storage to move to memory: the order split from CZ as DA
+
+| | |
+|---|---|
+| **Context** | Written in another session of the day, on worktree `cz-access-stats-memory-resident`, and recorded there as that branch's §12; brought here unchanged but for the letter. A conversation that began at a two-priority WAL buffer and narrowed, on the operator's own turns, to writes that take no LSN, touch no visibility and may be lost. CLA read the tree for them and reported: the engine's statistics views are already memory-resident (`sys-views.md` §6); `sys.access_stats` is the one statistic still on pages - a catalog relation at page 11, unlogged by CR6, written under an exclusive hold by every statement, and emptied at every mount; it is on pages by history (the relayout planner's input, 2026-08-03; the planner deleted in BZ); its measured cost is 0.7 % of a point `SELECT` (BN-S1) and inside noise at `cores = 8` (CA-S0), so moving it is a cleanup and not a speed-up; and the feature itself - a count per relation, column set and access kind - is given by no other view. CLA recommended keeping the feature, moving the storage, and not raising the format for it alone |
+| **Word** | That session's W14: *"On 'keep the feature and move only the storage to a memory-resident statistics view, which is cleanest; what is seen stays the same (it is emptied at a restart today as well), and the unlogged exception rule, the mount's discard code and the exclusive latch at every statement go; the one thing in the way is a superblock bump, so bind it to the next milestone that raises the format' - write the milestone."* (given in Korean, the quoted part being CLA's own recommendation returned; recorded in English). Its W15: *"push no verify"*. **In this session**, after CLA reported that the letter CZ named two orders: *"And separate CZ."* (given in Korean; recorded in English) |
+| **Mark** | **The access-statistics order is `workorder-da-access-stats-memory-resident.md`, written and not opened; `workorder-cz-checkpoint-roll-wait.md` keeps CZ**, having reached `main` first (§13, §14). Every `CZ-` token of the access-statistics order is `DA-`; its text is otherwise as committed at `68d109d0`, with two notes in its header for what moved under it: the superblock is 36 since CY-S1a without the removal, and CY-S1a shares the discard walk the order deletes. **That session's push did not reach `main`**: `origin/main` at `59dcf2af` holds no file of it, and its landing merge `cd8e60cb` stands unpushed on its worktree. As that session recorded: the order's review corrected the ground its W14 stands on - a superblock bump is the cost of removing the relation's bootstrap rows and root only, the move of the storage changes no format - so DA-Q0's proposal is that only the removal (DA-S3) waits for a bump. DA-Q0..Q7 are unmarked |
+| **Does not settle** | DA-Q0..Q7; the opening of DA; whether `SHOW ACCESS` is used at all; the branch `worktree-cz-access-stats-memory-resident` and its worktree, which this session did not touch and which still carry the order under its old name - not to be pushed as they stand; a push; a version |
+| **Recorded at** | this file; the DA order's header; the DA row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 19. `bench/README.md` shortened
 
 | | |
 |---|---|
 | **Word** | W18 (the BL/CZ matter's): *"For now, shrink the current README.md a little. For old history (a month or more), leave a link and abbreviate the content, and the historical records other than the rules need their information compressed further."* (given in Korean; recorded in English) |
 | **Mark** | None. CLA read "README.md" as `bench/README.md`: the root `README.md` holds no history and no rules, and `bench/README.md` is the one README with both. The three deletion entries (2026-09-02, 2026-09-30, 2026-10-12) and the BTREE section's account of the `f6ed10c` re-measurement are folded into one table and its resolution list, with a link to the full text at `1ad75954`; 158 lines to 118. **The rules are byte-identical** from "Where a result goes" to the BTREE heading. Reviewed by `critics-developer`, which restored two rule passages CLA had shortened and corrected a resolution bullet that sent the `f6ed10c` scenario files to a commit that does not hold them |
 | **Does not settle** | Whether the root `README.md` was meant; the host notes inside rules 2, 4 and 5, which name the earlier box and were left as written; a push |
-| **Recorded at** | this file (written as §15 on the work branch and renumbered behind `origin/main`'s §15-§17 at the merge; the commit `dc884be6` cites it as §15); `bench/README.md`; this file's row in `instructions/v3.2.0/index.md` |
+| **Recorded at** | this file (written as §15 on the work branch and renumbered twice behind `origin/main`'s sections at its merges, §18 and then §19; the commit `dc884be6` cites it as §15); `bench/README.md`; this file's row in `instructions/v3.2.0/index.md` |
+
+## 20. `bench/README.md` pushed with the hook skipped; the same treatment asked for every README and for `CLAUDE.md`
+
+| | |
+|---|---|
+| **Word** | W19 (the BL/CZ matter's), on CLA's question of which file W18 meant: *"Not bench/readme - I mean all the README.md files."*, and bench/README.md's change to be kept. W20: *"Do the same for CLAUDE.md: leave only the rules, and replace the history with links, or compress it, or delete it."* W21: *"push no verify"*, given while the review of that work was still running (each given in Korean; recorded in English) |
+| **Mark** | None. On W21, `dc884be6` (§19) and this merge go to `main` with `--no-verify`; the hook and the suite are skipped, and this session ran no suite - its commits change documents only, and the source the merges brought is `origin/main`'s own. **The README and `CLAUDE.md` compaction of W19-W20 is not in this push**: it was uncommitted and under `critics-developer`'s review at the word, and follows in its own commit under the same word |
+| **Does not settle** | A version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
