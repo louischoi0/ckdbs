@@ -58,7 +58,8 @@ std::array<StatementStats::Part, kStatsParts>& StatementStats::parts() noexcept 
 void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view line,
                             bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
                             std::string_view plan_source,
-                            std::string_view plan_label) noexcept {
+                            std::string_view plan_label,
+                            const StatementCost& cost) noexcept {
     // Derived here, so every key's kind is `StatementKindOf`'s static
     // storage - the pointer `KeyHash` hashes by.
     const std::string_view kind = StatementKindOf(line);
@@ -99,6 +100,22 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
     shape.total_us += elapsed_us;
     shape.max_us = std::max(shape.max_us, elapsed_us);
     shape.last_seen_us = now_us;
+    ++shape.latency[sched::WaitBucketOf(elapsed_us * 1000)];
+    if (cost.conflict) ++shape.conflicts;
+    shape.rows += cost.rows;
+    if (cost.executed) {
+        ++shape.executed_calls;
+        shape.rows_examined += cost.rows_examined;
+        shape.pages += cost.pages;
+    }
+    if (cost.compiled) {
+        ++shape.compiled_calls;
+        shape.compile_ns += cost.compile_ns;
+    }
+    if (cost.timed.has_value()) {
+        ++shape.timed_calls;
+        shape.timed += *cost.timed;
+    }
     // Assigned only where it moved: a shape runs one source statement after
     // statement, so this is two compares and no allocation.
     if (!plan_source.empty() &&
@@ -127,6 +144,18 @@ std::vector<StatementShape> StatementStats::Snapshot() {
             into.refused += shape.refused;
             into.total_us += shape.total_us;
             into.max_us = std::max(into.max_us, shape.max_us);
+            into.conflicts += shape.conflicts;
+            into.rows += shape.rows;
+            into.executed_calls += shape.executed_calls;
+            into.rows_examined += shape.rows_examined;
+            into.pages += shape.pages;
+            into.compiled_calls += shape.compiled_calls;
+            into.compile_ns += shape.compile_ns;
+            into.timed_calls += shape.timed_calls;
+            into.timed += shape.timed;
+            for (std::size_t k = 0; k < into.latency.size(); ++k) {
+                into.latency[k] += shape.latency[k];
+            }
             if (shape.first_seen_us < into.first_seen_us) {
                 into.first_seen_us = shape.first_seen_us;
                 into.shape_text = shape.shape_text;

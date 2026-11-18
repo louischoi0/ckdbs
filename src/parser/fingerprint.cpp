@@ -120,15 +120,18 @@ bool IsWord(std::string_view word, std::string_view lower) noexcept {
     return true;
 }
 
-// Whether a statement whose first word is `word` has a pattern at all.
-// Everything else - CREATE, SET, SHOW, DESCRIBE, SYNC, and any word this
-// grammar does not know - reduces to nullopt.
+// Whether a statement whose first word is `word` has a pattern at all:
+// `SELECT`, `INSERT`, `UPDATE` and, since DF-Q11 (a), `DELETE` - a word
+// that joined without moving a stored hash (`fingerprint.hpp`'s bump rule).
+// Everything else - CREATE, SET, SHOW, DESCRIBE, SYNC, PURGE, and any word
+// this grammar does not know - reduces to nullopt.
 //
 // A list rather than a "not DDL" check: the safe default for an unknown
 // leading keyword is *not patternable*, and an allow-list is the only
 // shape that gets that right without being updated.
 bool IsPatternableLeadingWord(std::string_view word) noexcept {
-    return IsWord(word, "select") || IsWord(word, "insert") || IsWord(word, "update");
+    return IsWord(word, "select") || IsWord(word, "insert") || IsWord(word, "update") ||
+           IsWord(word, "delete");
 }
 
 bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {

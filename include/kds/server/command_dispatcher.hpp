@@ -336,7 +336,7 @@ struct DispatchOutcome {
 
     // **The statement's shape for `sys.statement_stats`** (BO-S5): its
     // fingerprint's `fetch_id`, 0 for a kind that carries none (only
-    // `SELECT`, `INSERT` and `UPDATE` do). Carried for `poison_withheld`'s
+    // `SELECT`, `INSERT`, `UPDATE` and `DELETE` do). Carried for `poison_withheld`'s
     // reason: another statement of this core can run before this one ends.
     std::uint64_t fetch_id = 0;
     // The same fingerprint's shape (CJ WE13), for ASH. Its argument hash is
@@ -360,6 +360,27 @@ struct DispatchOutcome {
     // rows went out through the session's sink, and `response` is still the
     // DML's tag, which a KWP `S_COMPLETE` carries in place of `SELECT`.
     bool returning = false;
+
+    // **What the statement's last run counted, for `sys.statement_stats`**
+    // (DF-S1, `instructions/v3.2.0/workorder-df-statistics-coverage.md` §2
+    // part A). Carried for `fetch_id`'s reason; a re-run's replaces the run
+    // before it, and a refusal built over the outcome drops them.
+    //
+    // `rows_returned`: the rows a result set's statement gave its sink - what
+    // was produced, not what a KWP `max_rows` let leave - and 0 for every
+    // other statement, whose count is `rows_affected`. `examined`: set where
+    // the statement's own step chain ran to its end and counted (a native
+    // `SELECT`'s, an `ANALYZE`'s); the chains of a subquery and of a query
+    // layer walk are counted on no outcome (DF-R7). `compile_ns`: the run's
+    // head to its own chain compiled, unset for a statement that compiles
+    // none.
+    std::uint64_t rows_returned = 0;
+    struct Examined {
+        std::uint64_t rows = 0;
+        std::uint64_t pages = 0;
+    };
+    std::optional<Examined> examined;
+    std::optional<std::uint64_t> compile_ns;
 };
 
 // The one spelling of an error reply on the newline protocol (docs/spec/txn.md
@@ -924,10 +945,31 @@ private:
     // first one's deadline instead of starting a fresh one.
     // `parser::Parse`, setting `statement_fetch_id_` from the parse (BO-S5).
     StatusOr<parser::Statement> ParseKeepingShape(std::string_view line);
-    // One statement's `sys.statement_stats` count, at its end (BO-S5):
-    // `began_ns` is when it entered, re-runs and waits included.
+    // **A statement's head, for what its end subtracts** (DF-Q6 (a),
+    // DF-Q12 (a)): the session's cost sample, and whether the statement runs
+    // inside a task of its own session - the only case in which the
+    // session's statistics hold its time and its log. A local of the
+    // statement's own frame, never a member: statements of one core
+    // interleave at a park.
+    struct StatementHead {
+        // The statistics the running task books to, null where it books to
+        // none of this session's: the statement is then not timed.
+        const sched::SessionWaitStats* booked_to = nullptr;
+        sched::SessionCostSample sample;
+    };
+    StatementHead BeginStatement(Session* session);
+    // One statement's `sys.statement_stats` count, at its end (BO-S5), and
+    // its refusal's `sys.refusal_stats` count: `began_ns` is when it
+    // entered, re-runs and waits included.
     void RecordStatement(std::string_view line, const DispatchOutcome& out,
-                         sched::MonoTimeNs began_ns) const;
+                         sched::MonoTimeNs began_ns, const StatementHead& head);
+    // The running statement's own chain is compiled: `compile_ns` is taken
+    // (DF-S1). Its own compile, so a later one - an UPDATE's WHERE after its
+    // SET subquery's - replaces an earlier.
+    void NoteStatementCompiled() noexcept {
+        const sched::MonoTimeNs now_ns = NowNs();
+        statement_compile_ns_ = now_ns > statement_head_ns_ ? now_ns - statement_head_ns_ : 0;
+    }
 
     sched::Coro AwaitWriteBlock(std::string_view line, Session* session, DispatchOutcome* out,
                                 sched::MonoTimeNs* statement_deadline_ns);
@@ -2365,6 +2407,8 @@ private:
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> StatementStatsView();
+    StatusOr<exec::CatalogView> StatementHistogramView();
+    StatusOr<exec::CatalogView> RefusalStatsView();
     StatusOr<exec::CatalogView> CheckpointsView();
     StatusOr<exec::CatalogView> WaitEventNamesView();
     StatusOr<exec::CatalogView> WaitStatsView();
@@ -2804,6 +2848,10 @@ private:
     // copied onto its outcome the same way (CX-R11).
     std::string_view statement_plan_source_;
     std::string statement_plan_label_;
+    // The running statement's head instant and, once its own chain is
+    // compiled, the time to it (DF-S1); copied onto its outcome the same way.
+    sched::MonoTimeNs statement_head_ns_ = 0;
+    std::optional<std::uint64_t> statement_compile_ns_;
 
     // **The fault net every wait in this file is bounded by**, and the
     // one thing `lock_wait_fault_net_ms` sets; defaults to the constant.

@@ -1,0 +1,680 @@
+diff --git a/include/kds/base/cz_spike.hpp b/include/kds/base/cz_spike.hpp
+new file mode 100644
+index 00000000..93672cd8
+--- /dev/null
++++ b/include/kds/base/cz_spike.hpp
+@@ -0,0 +1,122 @@
++#pragma once
++
++// **CZ-S1's spike** (`instructions/v3.2.0/workorder-cz-checkpoint-roll-wait.md`
++// §5): measurement only, never landed, and it carries no proof. One binary
++// runs every arm, chosen by the environment:
++//
++//   KDS_CZ_SPIKE=c1      the cadence checkpoint's stream-latch sites try the
++//                        latch and park when it is busy (C1a, C1b, C1c)
++//   KDS_CZ_SPIKE=c2      no zero prewrite where `posix_fallocate` reserved
++//   KDS_CZ_SPIKE=c1,c2   both
++//
++// Unset, the engine behaves as it did, and the sites are only timed.
++
++#include <array>
++#include <chrono>
++#include <cstddef>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++
++namespace kds::cz {
++
++inline unsigned Mode() noexcept {
++    static const unsigned mode = [] {
++        const char* v = std::getenv("KDS_CZ_SPIKE");
++        unsigned m = 0;
++        if (v != nullptr && std::strstr(v, "c1") != nullptr) m |= 1U;
++        if (v != nullptr && std::strstr(v, "c2") != nullptr) m |= 2U;
++        return m;
++    }();
++    return mode;
++}
++inline bool C1() noexcept { return (Mode() & 1U) != 0; }
++inline bool C2() noexcept { return (Mode() & 2U) != 0; }
++
++// This thread's next acquisitions of the stream latch are tries.
++inline thread_local bool tl_try = false;
++// A try found the latch held, or another thread's flush in flight.
++inline thread_local bool tl_busy = false;
++// The stream-latch wait this thread has paid, summed: a site reads it before
++// and after its call.
++inline thread_local std::uint64_t tl_latch_wait_ns = 0;
++// The publish's writeback is running on this thread: its inline gate is
++// counted apart from a step's.
++inline thread_local bool tl_in_publish = false;
++
++enum class Site : std::size_t {
++    kBegin,        // CHECKPOINT_BEGIN's append
++    kAssert,       // the assertion bases' appends, inside `Start`
++    kFlush,        // the log park's flush (`RequestSyncNow`)
++    kEnd,          // CHECKPOINT_END's append
++    kRecycle,      // the anchor's commit, which recycles when the redo start moved
++    kGateStep,     // the inline WAL gate, taken by a step
++    kGatePublish,  // the inline WAL gate, taken by the publish's writeback
++    kCount,
++};
++inline constexpr std::size_t kSiteCount = static_cast<std::size_t>(Site::kCount);
++inline constexpr std::array<const char*, kSiteCount> kSiteNames{
++    "begin", "assert", "flush", "end", "recycle", "gate_step", "gate_publish"};
++
++struct SiteStats {
++    std::uint64_t calls = 0;         // calls made, tries included
++    std::uint64_t busy = 0;          // tries answered busy
++    std::uint64_t parks = 0;         // of those, parked on a roll; the rest yielded once
++    std::uint64_t bound = 0;         // times the park bound was reached and the blocking call made
++    std::uint64_t call_ns = 0;       // reactor time inside the calls
++    std::uint64_t call_max_ns = 0;
++    std::uint64_t latch_ns = 0;      // of that, waiting for the stream latch
++    std::uint64_t latch_max_ns = 0;
++    std::uint64_t park_ns = 0;       // wall time parked for a busy latch; the reactor ran other work
++};
++
++struct Report {
++    std::array<SiteStats, kSiteCount> site{};
++    SiteStats& at(Site s) noexcept { return site[static_cast<std::size_t>(s)]; }
++};
++
++inline std::uint64_t NowNs() noexcept {
++    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                                          std::chrono::steady_clock::now().time_since_epoch())
++                                          .count());
++}
++
++// One call at a site: timed, its latch wait read off the thread's counter,
++// and the stream latch a try for its length when `try_latch`. The caller
++// reads `tl_busy` before the scope ends.
++class SiteCall {
++public:
++    SiteCall(Report* report, Site site, bool try_latch) noexcept
++        : report_(report),
++          site_(site),
++          saved_try_(tl_try),
++          start_(NowNs()),
++          latch_before_(tl_latch_wait_ns) {
++        tl_try = try_latch;
++        tl_busy = false;
++    }
++    ~SiteCall() {
++        tl_try = saved_try_;
++        if (report_ == nullptr) return;
++        SiteStats& s = report_->at(site_);
++        const std::uint64_t ns = NowNs() - start_;
++        const std::uint64_t latch = tl_latch_wait_ns - latch_before_;
++        ++s.calls;
++        if (tl_busy) ++s.busy;
++        s.call_ns += ns;
++        if (ns > s.call_max_ns) s.call_max_ns = ns;
++        s.latch_ns += latch;
++        if (latch > s.latch_max_ns) s.latch_max_ns = latch;
++    }
++    SiteCall(const SiteCall&) = delete;
++    SiteCall& operator=(const SiteCall&) = delete;
++
++private:
++    Report* report_;
++    Site site_;
++    bool saved_try_;
++    std::uint64_t start_;
++    std::uint64_t latch_before_;
++};
++
++}  // namespace kds::cz
+diff --git a/include/kds/sched/checkpoint_census.hpp b/include/kds/sched/checkpoint_census.hpp
+index bc64b250..aa1e97ec 100644
+--- a/include/kds/sched/checkpoint_census.hpp
++++ b/include/kds/sched/checkpoint_census.hpp
+@@ -1,10 +1,12 @@
+ #pragma once
+ 
++#include <optional>
+ #include <array>
+ #include <atomic>
+ #include <cstddef>
+ #include <cstdint>
+ 
++#include "kds/base/cz_spike.hpp"
+ #include "kds/base/current_core.hpp"
+ #include "kds/sched/clock.hpp"
+ 
+@@ -83,6 +85,8 @@ struct CheckpointRunReport {
+     // other work meanwhile - on the log and on the data file's sync.
+     std::uint64_t log_park_ns = 0;
+     std::uint64_t data_park_ns = 0;
++    // CZ-S1 spike: the stream-latch sites, each counted and timed.
++    cz::Report cz;
+ 
+     // The run's length on the injected clock, 0 for a report never ended.
+     std::uint64_t wall_ns() const noexcept { return end_ns > start_ns ? end_ns - start_ns : 0; }
+@@ -144,6 +148,23 @@ private:
+     sched::MonoTimeNs start_ = 0;
+ };
+ 
++// CZ-S1 spike: the inline WAL gate's call, timed into the run this thread
++// is inside (none outside a run), apart when the publish's writeback takes
++// it - the publish's phase timer covers it there.
++class CzGateCall {
++public:
++    CzGateCall() noexcept {
++        detail::CheckpointPhaseSink* sink = detail::g_checkpoint_sink;
++        if (sink == nullptr) return;
++        call_.emplace(&sink->report->cz,
++                      cz::tl_in_publish ? cz::Site::kGatePublish : cz::Site::kGateStep,
++                      /*try_latch=*/false);
++    }
++
++private:
++    std::optional<cz::SiteCall> call_;
++};
++
+ // The per-core record: whether a run is in flight, the runs it started, and
+ // its last run whole.
+ class CheckpointCensus {
+diff --git a/include/kds/wal/checkpointer.hpp b/include/kds/wal/checkpointer.hpp
+index 1935c00d..9d87629d 100644
+--- a/include/kds/wal/checkpointer.hpp
++++ b/include/kds/wal/checkpointer.hpp
+@@ -528,6 +528,11 @@ private:
+     // Parks until the log is durable past `lsn`, registered with the
+     // writer's kick; the log's fail-stop answers it.
+     sched::Coro ParkOnLog(Lsn lsn, std::uint32_t core_id);
++    // CZ-S1 spike: parks the task while a roll holds the stream latch, then
++    // yields once; the wall time goes to `site`'s `park_ns`.
++    sched::Coro ParkForLatch(cz::Site site);
++    cz::Report* CzReport() noexcept { return run_report_ != nullptr ? &run_report_->cz : nullptr; }
++    bool cz_try_begin_ = false;  // the task's next `Start` tries the latch for its begin record
+     // Parks until the data file is synced past everything written so far
+     // (BI-R2's second half). No kick: the data-sync thread has none, and the
+     // drain timer ends an idle block (BI-Q6 (b)). `ParkOnDataSyncTicket`
+diff --git a/include/kds/wal/stream.hpp b/include/kds/wal/stream.hpp
+index 169e1082..e2d57cca 100644
+--- a/include/kds/wal/stream.hpp
++++ b/include/kds/wal/stream.hpp
+@@ -6,9 +6,11 @@
+ #include <cstdint>
+ #include <memory>
+ #include <mutex>
++#include <optional>
+ #include <span>
+ #include <vector>
+ 
++#include "kds/base/cz_spike.hpp"
+ #include "kds/base/latch.hpp"
+ #include "kds/base/status.hpp"
+ #include "kds/wal/log_device.hpp"
+@@ -284,6 +286,8 @@ public:
+ 
+     // Fail-stop (above): true once a device write this stream issued failed.
+     bool stopped() const noexcept { return stopped_.load(std::memory_order_acquire); }
++    // CZ-S1 spike: a roll holds the latch right now.
++    bool rolling() const noexcept { return rolling_.load(std::memory_order_acquire); }
+ 
+     // **The one device sync** (fsync's fail-stop). Every syncer of this log
+     // - its own `Sync`, the writer thread for the peers and the loss-window
+@@ -403,15 +407,38 @@ private:
+     // and the roll-covered part of its wait charged once it is held.
+     class StreamLatchHold {
+     public:
+-        explicit StreamLatchHold(const WalStream& stream) noexcept
+-            : guard_(stream.latch_, &waited_) {
++        explicit StreamLatchHold(const WalStream& stream) noexcept {
++            Latch* latch = stream.latch_;
++            if (latch != nullptr && cz::tl_try) {
++                // CZ-S1 spike: a try. A busy latch is the entry's to answer
++                // (`busy()`), and nothing is charged.
++                if (latch->try_lock()) {
++                    tried_ = latch;
++                } else {
++                    busy_ = true;
++                    cz::tl_busy = true;
++                }
++                return;
++            }
++            guard_.emplace(latch, &waited_);
++            cz::tl_latch_wait_ns += waited_;
+             stream.ChargeRollOverlap(waited_);
+         }
++        ~StreamLatchHold() {
++            if (tried_ != nullptr) tried_->unlock();
++        }
++        StreamLatchHold(const StreamLatchHold&) = delete;
++        StreamLatchHold& operator=(const StreamLatchHold&) = delete;
++        bool busy() const noexcept { return busy_; }
+ 
+     private:
+         std::uint64_t waited_ = 0;  // before `guard_`, which writes it
+-        LatchGuard guard_;
++        std::optional<LatchGuard> guard_;
++        Latch* tried_ = nullptr;
++        bool busy_ = false;
+     };
++    // CZ-S1 spike: what a tried entry answers when the latch is held.
++    static Status BusyStatus();
+     // Yield-spins until no unlatched flush is in flight; that write needs no
+     // latch to finish, so a caller may hold it.
+     void WaitOutFlushInFlight() const noexcept;
+@@ -470,6 +497,9 @@ private:
+     // `latch_` points at `latch_storage_` when shared and is null when not
+     // (spin_latch.hpp: a null guard costs one branch and no atomic).
+     Latch latch_storage_{LatchKind::kWalStream};
++    // CZ-S1 spike: a roll is running under the latch; what a parked
++    // checkpoint task waits to see cleared.
++    std::atomic<bool> rolling_{false};
+     Latch* latch_ = nullptr;
+ 
+     // Preallocated so writing a segment header never allocates.
+diff --git a/src/storage/device_page_store.cpp b/src/storage/device_page_store.cpp
+index e2fad87f..23ec7bdd 100644
+--- a/src/storage/device_page_store.cpp
++++ b/src/storage/device_page_store.cpp
+@@ -1895,6 +1895,7 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids, wal::WalD
+     }
+ 
+     const PhaseTimer timed(CheckpointPhase::kLogGateBatch);  // BI-S1
++    const CzGateCall cz_timed;                                // CZ-S1 spike
+     if (Status s = gate->EnsureDurable(highest); !s.ok()) {
+         // Refusing the flush is the whole point: writing the page anyway
+         // would put data on disk ahead of the log that describes it.
+@@ -2175,6 +2176,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
+                 return written;
+             }
+             const PhaseTimer timed(CheckpointPhase::kLogGateRun);  // BI-S1
++            const CzGateCall cz_timed;                              // CZ-S1 spike
+             if (Status s = gate->EnsureDurable(run_lsn); !s.ok()) {
+                 if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                     log_->Error("pagestore", "WAL gate refused a writeback up to page_lsn " +
+diff --git a/src/wal/checkpointer.cpp b/src/wal/checkpointer.cpp
+index cde78f7d..46364b7e 100644
+--- a/src/wal/checkpointer.cpp
++++ b/src/wal/checkpointer.cpp
+@@ -195,7 +195,16 @@ Status Checkpointer::Start() {
+     const std::vector<CheckpointActiveTxn> active_txns = txns_.Snapshot();
+     const std::vector<CheckpointDirtyPage> dirty = target_.DirtyTable();
+ 
+-    if (Status s = LogBegin(active_txns, dirty); !s.ok()) {
++    Status begun;
++    {
++        // CZ-S1 spike: the begin record's append, timed, and a try when the
++        // task asked for one. A busy answer appended nothing: the task parks
++        // and calls `Start` again, which takes both snapshots again (CZ-R3).
++        const cz::SiteCall call(CzReport(), cz::Site::kBegin, cz_try_begin_);
++        begun = LogBegin(active_txns, dirty);
++        if (cz::tl_busy) return begun;
++    }
++    if (Status s = begun; !s.ok()) {
+         // BI-S1 counts it: the BEGIN ceiling refuses here, at the append.
+         // Only a gated run's, like every other census field.
+         if (run_report_ != nullptr) {
+@@ -207,8 +216,12 @@ Status Checkpointer::Start() {
+     // AS6a's base, immediately after BEGIN: ahead of every ASSERT_* record that
+     // will be folded onto it, and inside the checkpoint the anchor names, which
+     // is what lets replay find it without scanning to the cabin's birth.
+-    if (Status s = LogAssertionSnapshots(); !s.ok()) {
+-        return s;
++    {
++        // CZ-S1 spike: the bases' appends stay blocking and are timed.
++        const cz::SiteCall call(CzReport(), cz::Site::kAssert, /*try_latch=*/false);
++        if (Status s = LogAssertionSnapshots(); !s.ok()) {
++            return s;
++        }
+     }
+ 
+     // Redo start: the oldest LSN any page in the snapshot still needs
+@@ -470,7 +483,23 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
+     // `Complete`, a yield after each. A failed one ends the task with the
+     // run left in progress; the next tick's task resumes it.
+     if (!in_progress_) {
+-        if (Status s = Start(); !s.ok()) co_return FinishTask(core_id, s);
++        // CZ-S1 spike (C1b): the begin record's append tries the latch; a
++        // busy one parks the task, bounded as the log parks are (CZ-R4).
++        for (int tries = 0;; ++tries) {
++            cz_try_begin_ = cz::C1() && tries < kGateParks;
++            if (cz::C1() && !cz_try_begin_) ++task_report_.cz.at(cz::Site::kBegin).bound;
++            cz::tl_busy = false;
++            const Status s = Start();
++            const bool busy = cz_try_begin_ && cz::tl_busy;
++            cz_try_begin_ = false;
++            if (!busy) {
++                if (!s.ok()) co_return FinishTask(core_id, s);
++                break;
++            }
++            if (!wal_.stream()->rolling()) --tries;  // a short holder: yield and retry, uncounted
++            (void)co_await ParkForLatch(cz::Site::kBegin);
++            if (generation != task_generation_) co_return Status::OK();
++        }
+         co_await sched::Yield{};
+         if (generation != task_generation_) co_return Status::OK();
+     }
+@@ -520,7 +549,21 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
+     }
+ 
+     // `CHECKPOINT_END`, durable before anything points at it.
+-    auto end_lsn = AppendEnd();
++    StatusOr<Lsn> end_lsn = Lsn{0};
++    for (int tries = 0;; ++tries) {  // CZ-S1 spike (C1b), as the begin record
++        const bool try_latch = cz::C1() && tries < kGateParks;
++        if (cz::C1() && !try_latch) ++task_report_.cz.at(cz::Site::kEnd).bound;
++        bool busy = false;
++        {
++            const cz::SiteCall call(&task_report_.cz, cz::Site::kEnd, try_latch);
++            end_lsn = AppendEnd();
++            busy = cz::tl_busy;
++        }
++        if (!busy) break;
++        if (!wal_.stream()->rolling()) --tries;
++        (void)co_await ParkForLatch(cz::Site::kEnd);
++        if (generation != task_generation_) co_return Status::OK();
++    }
+     if (!end_lsn.ok()) co_return FinishTask(core_id, end_lsn.status());
+     if (!wal_.IsDurable(end_lsn.value())) ++task_report_.end_parks;
+     if (Status s = co_await ParkOnLog(end_lsn.value(), core_id); !s.ok()) {
+@@ -578,7 +621,12 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
+         if (generation != task_generation_) co_return Status::OK();
+         if (Status s = co_await ParkOnDataSync(); !s.ok()) co_return FinishTask(core_id, s);
+         if (generation != task_generation_) co_return Status::OK();
+-        anchor_.Commit();
++        {
++            // CZ-S1 spike (C1c): the commit's recycle tries the latch and,
++            // busy, is left for the next run.
++            const cz::SiteCall call(&task_report_.cz, cz::Site::kRecycle, cz::C1());
++            anchor_.Commit();
++        }
+     }
+     Published(anchor);
+     co_return FinishTask(core_id, Status::OK());
+@@ -618,8 +666,10 @@ sched::Coro Checkpointer::WriteForPublish(std::span<const PageId> pages, std::ui
+         {
+             const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+             const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
++            cz::tl_in_publish = true;  // CZ-S1 spike: its inline gate is counted apart
+             wrote = target_.WritePages(pages,
+                                        parks < kGateParks && !pages.empty() ? &deferred : nullptr);
++            cz::tl_in_publish = false;
+         }
+         if (!wrote.ok()) co_return wrote.status();
+         Contention::Add(Tally::kCheckpointPagesWritten, wrote.value());
+@@ -637,7 +687,29 @@ sched::Coro Checkpointer::WriteForPublish(std::span<const PageId> pages, std::ui
+ sched::Coro Checkpointer::ParkOnLog(Lsn lsn, std::uint32_t core_id) {
+     if (wal_.IsDurable(lsn)) co_return Status::OK();
+     if (wal_.stopped()) co_return LogStopped();
+-    if (Status s = wal_.RequestSyncNow(); !s.ok()) co_return s;
++    // CZ-S1 spike (C1a): the flush is timed, and under C1 it tries the
++    // latch. Busy, the writer is asked without this thread's flush and the
++    // task parks for the latch, then asks again - a roll's own sync may have
++    // answered meanwhile - up to the bound, past which the call blocks.
++    for (int tries = 0;; ++tries) {
++        const bool try_latch = cz::C1() && tries < kGateParks;
++        if (cz::C1() && !try_latch) ++task_report_.cz.at(cz::Site::kFlush).bound;
++        Status asked;
++        bool busy = false;
++        {
++            const cz::SiteCall call(&task_report_.cz, cz::Site::kFlush, try_latch);
++            asked = wal_.RequestSyncNow();
++            busy = cz::tl_busy;
++        }
++        if (!busy) {
++            if (!asked.ok()) co_return asked;
++            break;
++        }
++        if (!wal_.stream()->rolling()) --tries;
++        (void)co_await ParkForLatch(cz::Site::kFlush);
++        if (wal_.IsDurable(lsn)) co_return Status::OK();
++        if (wal_.stopped()) co_return LogStopped();
++    }
+     const std::function<bool()> durable = [this, lsn] {
+         return wal_.IsDurable(lsn) || wal_.stopped();
+     };
+@@ -653,6 +725,27 @@ sched::Coro Checkpointer::ParkOnLog(Lsn lsn, std::uint32_t core_id) {
+     co_return wal_.IsDurable(lsn) ? Status::OK() : LogStopped();
+ }
+ 
++sched::Coro Checkpointer::ParkForLatch(cz::Site site) {
++    // CZ-S1 spike: parked while a roll holds the stream latch; any shorter
++    // holder (an append, another thread's flush in flight) costs the one
++    // yield, and its caller does not count that try against the bound - a
++    // yield on an idle reactor returns at once, so sixteen of them are spent
++    // in microseconds. No wake is asked for: the predicate is read at this
++    // reactor's next turn, at most one idle block later.
++    const std::function<bool()> clear = [this] {
++        return !wal_.stream()->rolling() || wal_.stopped();
++    };
++    const std::uint64_t parked = cz::NowNs();
++    if (!clear()) {
++        ++task_report_.cz.at(site).parks;
++        sched::WaitScope wait(stats::WaitEvent::kSysioWalWrite);
++        co_await sched::WaitUntil{&clear};
++    }
++    co_await sched::Yield{};
++    task_report_.cz.at(site).park_ns += cz::NowNs() - parked;
++    co_return Status::OK();
++}
++
+ Status Checkpointer::FinishTask(std::uint32_t core_id, const Status& ran) {
+     EndRun(core_id, ran);
+     // A timer-driven run has no caller to return a status to, so a failure
+@@ -742,6 +835,20 @@ void Checkpointer::LogRun(std::uint32_t core_id, const CheckpointRunReport& r) c
+                 "_sum_us=" + std::to_string(r.sum_ns[i] / 1000) + " " +
+                 kCheckpointPhaseNames[i] + "_max_us=" + std::to_string(r.max_ns[i] / 1000);
+     }
++    // CZ-S1 spike: every stream-latch site of the run.
++    line += " cz_mode=" + std::to_string(cz::Mode());
++    for (std::size_t i = 0; i < cz::kSiteCount; ++i) {
++        const cz::SiteStats& s = r.cz.site[i];
++        const std::string name = std::string(" cz_") + cz::kSiteNames[i];
++        line += name + "_calls=" + std::to_string(s.calls) + name + "_busy=" +
++                std::to_string(s.busy) + name + "_parks=" + std::to_string(s.parks) + name + "_bound=" +
++                std::to_string(s.bound) + name +
++                "_call_us=" + std::to_string(s.call_ns / 1000) + name + "_call_max_us=" +
++                std::to_string(s.call_max_ns / 1000) + name + "_latch_us=" +
++                std::to_string(s.latch_ns / 1000) + name + "_latch_max_us=" +
++                std::to_string(s.latch_max_ns / 1000) + name + "_park_us=" +
++                std::to_string(s.park_ns / 1000);
++    }
+     log_->Info("checkpoint", line);
+ }
+ 
+diff --git a/src/wal/file_log_device.cpp b/src/wal/file_log_device.cpp
+index d2595e9f..137c2ec2 100644
+--- a/src/wal/file_log_device.cpp
++++ b/src/wal/file_log_device.cpp
+@@ -1,3 +1,4 @@
++#include "kds/base/cz_spike.hpp"
+ #include "kds/wal/file_log_device.hpp"
+ 
+ #include <fcntl.h>
+@@ -94,8 +95,9 @@ std::optional<std::uint64_t> ParseSegmentNo(const std::string& name, const std::
+ // Full-size reservation, or a sized sparse file where the filesystem cannot
+ // preallocate - the prewrite that follows then allocates the blocks for real,
+ // which restores the no-ENOSPC-at-append promise by another route.
+-Status Reserve(int fd, std::uint64_t size, const std::string& path) {
++Status Reserve(int fd, std::uint64_t size, const std::string& path, bool* fallocated) {
+     const int rc = ::posix_fallocate(fd, 0, static_cast<::off_t>(size));
++    *fallocated = rc == 0;  // CZ-S1 spike (C2): the extents are reserved
+     if (rc == 0) return Status::OK();
+     if (!FallocateUnsupported(rc)) {
+         return ErrnoStatus("FileLogDevice: posix_fallocate on " + path, rc);
+@@ -379,7 +381,20 @@ StatusOr<FileDescriptor> FileLogDevice::BuildBody(const std::string& temp) {
+     // Full-size reservation up front: an append issued after its record was
+     // already accepted into the ring must not be able to fail for space
+     // (file_log_device.hpp).
+-    if (Status s = Reserve(fd.value().get(), segment_size_, temp); !s.ok()) return abandon(s);
++    bool fallocated = false;
++    if (Status s = Reserve(fd.value().get(), segment_size_, temp, &fallocated); !s.ok()) {
++        return abandon(s);
++    }
++    if (cz::C2() && fallocated) {
++        // CZ-S1 spike (C2, BQ's H4 option 3): no zero prewrite where
++        // `posix_fallocate` reserved. The prewrite's `fsync` is kept, since
++        // it is what makes the file's size and extents durable.
++        while (::fsync(fd.value().get()) != 0) {
++            if (errno == EINTR) continue;
++            return abandon(ErrnoStatus("FileLogDevice: fsync after the reservation", errno));
++        }
++        return fd;
++    }
+     if (Status s = Prewrite(fd.value().get(), segment_size_); !s.ok()) return abandon(s);
+     return fd;
+ }
+diff --git a/src/wal/manager.cpp b/src/wal/manager.cpp
+index 8e2a3ae7..c4d68a8d 100644
+--- a/src/wal/manager.cpp
++++ b/src/wal/manager.cpp
+@@ -144,6 +144,9 @@ void WalManager::StartWriter() {
+ 
+ void WalManager::RecycleBelow(Lsn durable_redo_start) {
+     if (Status s = stream_->DetachBelow(durable_redo_start); !s.ok()) {
++        // CZ-S1 spike (C1c): a tried detach that found the latch busy is
++        // left for the next run's commit, and is no failure.
++        if (cz::tl_busy) return;
+         recycle_failures_.fetch_add(1, std::memory_order_relaxed);
+         if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+             log_->Error("wal", "recycling could not detach below lsn " +
+@@ -257,6 +260,14 @@ Status WalManager::RequestSyncNow() {
+     }
+     const bool staged = stream_->ring_used() > 0;
+     if (Status s = stream_->Flush(); !s.ok()) {
++        if (cz::tl_busy) {
++            // CZ-S1 spike (C1a): the latch is busy, so this thread's flush
++            // is skipped and the writer asked for what is flushed already;
++            // the caller parks. Under a roll the roll's own drain and sync
++            // publish the rest (`StartSegment`).
++            writer_->RequestSync(stream_->flushed_lsn());
++            return s;
++        }
+         ++stats_.sync_failures;
+         return s;
+     }
+diff --git a/src/wal/stream.cpp b/src/wal/stream.cpp
+index e97f1239..1ba4311e 100644
+--- a/src/wal/stream.cpp
++++ b/src/wal/stream.cpp
+@@ -328,17 +328,27 @@ void WalStream::ChargeRollOverlap(std::uint64_t waited_ns) const noexcept {
+     Contention::Add(Tally::kWalRollBlockedWaitNs, last_roll_end_ns_ - from);
+ }
+ 
++Status WalStream::BusyStatus() {
++    return Status::ResourceExhausted("WalStream: the stream latch is busy (CZ-S1 spike's try)");
++}
++
+ Status WalStream::Seal() {
+     const StreamLatchHold hold(*this);
++    if (hold.busy()) return BusyStatus();
+     if (stopped()) return StoppedStatus();
+     return SealLocked();
+ }
+ 
+ Status WalStream::DetachBelow(Lsn lsn) {
+     const StreamLatchHold hold(*this);
++    if (hold.busy()) return BusyStatus();
+     // A flush in flight is inside the device's `WriteAt`, which reads the
+     // segment table unlocked on the promise that no table change runs beside
+     // it (file_log_device.hpp); the detach waits it out, as a roll does.
++    if (cz::tl_try && flush_in_flight_.load(std::memory_order_acquire)) {
++        cz::tl_busy = true;  // CZ-S1 spike: a tried detach does not spin either
++        return BusyStatus();
++    }
+     WaitOutFlushInFlight();
+     const std::uint64_t end = device_->end_segment();
+     if (end == 0) return Status::OK();
+@@ -390,12 +400,14 @@ Status WalStream::SealLocked() {
+ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byte> payload,
+                                 RollRecord* rolled) {
+     const StreamLatchHold hold(*this);
++    if (hold.busy()) return BusyStatus();
+     return AppendLocked(spec, payload, rolled);
+ }
+ 
+ StatusOr<Lsn> WalStream::AppendAndSeal(const RecordSpec& spec,
+                                        std::span<const std::byte> payload, RollRecord* rolled) {
+     const StreamLatchHold hold(*this);
++    if (hold.busy()) return BusyStatus();
+     auto lsn = AppendLocked(spec, payload, rolled);
+     if (!lsn.ok()) return lsn;
+     if (Status s = SealLocked(); !s.ok()) return s;
+@@ -423,6 +435,14 @@ StatusOr<Lsn> WalStream::AppendLocked(const RecordSpec& spec, std::span<const st
+         RollRecord roll;
+         roll.core = CurrentCore();
+         roll.start_ns = SteadyNowNs();
++        // CZ-S1 spike: the roll's window, for a parked checkpoint task.
++        struct Rolling {
++            std::atomic<bool>& flag;
++            explicit Rolling(std::atomic<bool>& f) : flag(f) {
++                flag.store(true, std::memory_order_release);
++            }
++            ~Rolling() { flag.store(false, std::memory_order_release); }
++        } const rolling(rolling_);
+         if (Status s = SealLocked(); !s.ok()) {
+             return s;
+         }
+@@ -474,6 +494,7 @@ Status WalStream::Flush() {
+         Lsn to = 0;
+         {
+             const StreamLatchHold hold(*this);
++            if (hold.busy()) return BusyStatus();
+             // The claim is tested before the stop: a failed flush stops the
+             // log before it releases its claim, so a thread that sees the
+             // claim free sees that stop too.
+@@ -490,6 +511,10 @@ Status WalStream::Flush() {
+         }
+         if (used == 0) {
+             // Another thread's flush is writing; it finishes without the latch.
++            if (cz::tl_try) {
++                cz::tl_busy = true;  // CZ-S1 spike: a tried flush does not spin on it
++                return BusyStatus();
++            }
+             WaitOutFlushInFlight();
+             continue;
+         }
+diff --git a/tools/bl_mixed.py b/tools/bl_mixed.py
+index e29d13b1..805b7173 100644
+--- a/tools/bl_mixed.py
++++ b/tools/bl_mixed.py
+@@ -94,6 +94,9 @@ PAD = "x" * 200
+ # keeps at most SLOW_CAP of them and counts the rest as dropped.
+ SLOW_NS = 1_000_000
+ SLOW_CAP = 20_000
++# CZ-S1 (`--stall-cores`): a reader's kept sample at least this slow also keeps
++# the session's core, read after it.
++STALL_NS = 10_000_000
+ # SHOW META keys that describe the answering core rather than the instance:
+ # a delta between two reads answered on different cores is meaningless.
+ PER_CORE_PREFIXES = ("sched_", "wal_group_", "wal_ring_full", "checkpoint_")
+@@ -175,7 +178,13 @@ def client(args):
+         ns = round((t1 - t0 if late is None else late) * 1e9)
+         if ns >= SLOW_NS:
+             if len(out["slow"]) < SLOW_CAP:
+-                out["slow"].append([mono1 - ns, ns])
++                row = [mono1 - ns, ns]
++                if args.stall_cores and ns >= STALL_NS:
++                    # CZ-S1: the core that answers a SHOW META sent right
++                    # after a stalled sample - the session's core then, which
++                    # the placer may have moved at that head.
++                    row.append(meta_all(be.conn).get("core"))
++                out["slow"].append(row)
+             else:
+                 out["slow_dropped"] += 1
+         if kind == "refused":
+@@ -359,6 +368,8 @@ def run_one(args, run):
+                   "--seconds", str(args.seconds)]
+             if role in levels:
+                 cl += ["--level", levels[role]]
++            if args.stall_cores and role == "reader":
++                cl += ["--stall-cores"]
+             if args.client_cpus:
+                 cpus = args.client_cpus.split(",")
+                 cl = ["taskset", "-c", cpus[i % len(cpus)]] + cl
+@@ -572,6 +583,8 @@ def main():
+                    help="BL's rung-3 probe: walkers placed like readers, `normal` unless --levels names nwalker")
+     p.add_argument("--meta-cores", action="store_true",
+                    help="read SHOW META on every core at the window's edges (`meta_by_core`)")
++    p.add_argument("--stall-cores", action="store_true",
++                   help="CZ-S1: a reader appends its core (one SHOW META) to each kept sample of 10 ms or more")
+     p.add_argument("--rate", type=float, default=2000.0, help="point reads per second, all readers together")
+     p.add_argument("--writers", type=int, default=0, help="open-loop one-row pk UPDATE sessions")
+     p.add_argument("--writer-rate", type=float, default=800.0,

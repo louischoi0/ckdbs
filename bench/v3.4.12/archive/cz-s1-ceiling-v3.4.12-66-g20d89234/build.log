@@ -1,0 +1,45 @@
+build start 06:39:47
+    inlined from ‘constexpr _ForwardIterator std::__upper_bound(_ForwardIterator, _ForwardIterator, const _Tp&, _Compare) [with _ForwardIterator = __gnu_cxx::__normal_iterator<kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::Encoded*, vector<kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::Encoded> >; _Tp = kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::Encoded; _Compare = __gnu_cxx::__ops::_Val_comp_iter<kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::<lambda(const kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::Encoded&, const kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::Encoded&)> >]’ at /usr/include/c++/14/bits/stl_algo.h:1993:14,
+    inlined from ‘void std::__merge_adaptive_resize(_BidirectionalIterator, _BidirectionalIterator, _BidirectionalIterator, _Distance, _Distance, _Pointer, _Distance, _Compare) [with _BidirectionalIterator = __gnu_cxx::__normal_iterator<kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::Encoded*, vector<kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::Encoded> >; _Distance = long int; _Pointer = kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::Encoded*; _Compare = __gnu_cxx::__ops::_Iter_comp_iter<kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::<lambda(const kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::Encoded&, const kds::exec::{anonymous}::IndexChoiceOver(const kds::catalog::TableAccess&, const kds::exec::Step&, uint16_t, const kds::catalog::TableAccess::IndexRef&, bool, int)::Encoded&)> >]’ at /usr/include/c++/14/bits/stl_algo.h:2412:23:
+/usr/include/c++/14/bits/stl_algobase.h:1884:39: warning: ‘int __builtin_memcmp(const void*, const void*, long unsigned int)’ specified bound [9223372036854775808, 18446744073709551615] exceeds maximum object size 9223372036854775807 [-Wstringop-overread]
+ 1884 |                     = __builtin_memcmp(&*__first1, &*__first2, __blen) <=> 0;
+      |                       ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+[ 42%] Building CXX object CMakeFiles/kds.dir/src/exec/tuple_verify.cpp.o
+[ 42%] Building CXX object CMakeFiles/kds.dir/src/exec/wal_row_log.cpp.o
+[ 42%] Building CXX object CMakeFiles/kds.dir/src/exec/cabin_ddl.cpp.o
+[ 42%] Building CXX object CMakeFiles/kds.dir/src/exec/cabin_expr.cpp.o
+[ 45%] Building CXX object CMakeFiles/kds.dir/src/exec/index_ddl.cpp.o
+[ 45%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_build.cpp.o
+[ 45%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_catalog.cpp.o
+[ 45%] Building CXX object CMakeFiles/kds.dir/src/exec/declaration_relation.cpp.o
+[ 45%] Building CXX object CMakeFiles/kds.dir/src/exec/transition_catalog.cpp.o
+[ 48%] Building CXX object CMakeFiles/kds.dir/src/exec/transition.cpp.o
+[ 48%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_check.cpp.o
+[ 48%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_replay.cpp.o
+[ 48%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_violation.cpp.o
+In file included from /usr/include/c++/14/bits/hashtable_policy.h:36,
+                 from /usr/include/c++/14/bits/hashtable.h:35,
+                 from /usr/include/c++/14/bits/unordered_map.h:33,
+                 from /usr/include/c++/14/unordered_map:41,
+                 from /usr/include/c++/14/functional:63,
+                 from /home/louis/ckdbs/.claude/worktrees/cz-checkpoint-roll-wait/include/kds/server/command_dispatcher.hpp:5:
+In function ‘constexpr decltype (__comp((* __first1), (* __first2))) std::lexicographical_compare_three_way(_InputIter1, _InputIter1, _InputIter2, _InputIter2, _Comp) [with _InputIter1 = __gnu_cxx::__normal_iterator<const byte*, vector<byte> >; _InputIter2 = __gnu_cxx::__normal_iterator<const byte*, vector<byte> >; _Comp = __detail::_Synth3way]’,
+    inlined from ‘constexpr std::__detail::__synth3way_t<_Iterator> std::operator<=>(const vector<_Tp, _Alloc>&, const vector<_Tp, _Alloc>&) [with _Tp = byte; _Alloc = allocator<byte>]’ at /usr/include/c++/14/bits/stl_vector.h:2071:52,
+    inlined from ‘constexpr bool std::less<_Tp>::operator()(const _Tp&, const _Tp&) const [with _Tp = std::vector<std::byte>]’ at /usr/include/c++/14/bits/stl_function.h:405:20,
+    inlined from ‘std::pair<std::_Rb_tree_node_base*, std::_Rb_tree_node_base*> std::_Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::_M_get_insert_unique_pos(const key_type&) [with _Key = std::vector<std::byte>; _Val = std::pair<const std::vector<std::byte>, std::vector<long unsigned int> >; _KeyOfValue = std::_Select1st<std::pair<const std::vector<std::byte>, std::vector<long unsigned int> > >; _Compare = std::less<std::vector<std::byte> >; _Alloc = std::allocator<std::pair<const std::vector<std::byte>, std::vector<long unsigned int> > >]’ at /usr/include/c++/14/bits/stl_tree.h:2116:35:
+/usr/include/c++/14/bits/stl_algobase.h:1884:39: warning: ‘int __builtin_memcmp(const void*, const void*, long unsigned int)’ specified bound [9223372036854775808, 18446744073709551615] exceeds maximum object size 9223372036854775807 [-Wstringop-overread]
+ 1884 |                     = __builtin_memcmp(&*__first1, &*__first2, __blen) <=> 0;
+      |                       ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+[ 51%] Building CXX object CMakeFiles/kds.dir/src/exec/bound_cabin.cpp.o
+[ 51%] Building CXX object CMakeFiles/kds.dir/src/exec/cabin_optimizer_exec.cpp.o
+[ 51%] Building CXX object CMakeFiles/kds.dir/src/exec/index_maintain.cpp.o
+[ 51%] Building CXX object CMakeFiles/kds.dir/src/sched/scheduler.cpp.o
+[ 51%] Linking CXX static library libkds.a
+[100%] Built target kds
+[100%] Building CXX object CMakeFiles/kds_server.dir/src/server/main.cpp.o
+[100%] Linking CXX executable kds_server
+[100%] Built target kds_server
+build rc=0 end 06:40:45
+rebuild start 06:43:16
+[100%] Built target kds_server
+rebuild rc=0 end 06:43:59

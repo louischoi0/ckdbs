@@ -34,6 +34,8 @@ enum class WaitClass : std::uint8_t {
     kCount,
 };
 
+inline constexpr std::size_t kWaitClassCount = static_cast<std::size_t>(WaitClass::kCount);
+
 // The class's name as the event names spell it before the dot.
 constexpr std::string_view WaitClassPrefix(WaitClass c) noexcept {
     switch (c) {

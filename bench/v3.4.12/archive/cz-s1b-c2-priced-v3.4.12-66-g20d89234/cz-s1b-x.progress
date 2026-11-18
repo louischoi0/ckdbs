@@ -1,0 +1,87 @@
+09:06:34 start r1 c1x load=1.01 2.25 4.27 busy=[]
+09:06:53 done r1 c1x rc=0
+09:06:53 start r1 c1c2x load=1.25 2.24 4.23 busy=[]
+09:07:12 done r1 c1c2x rc=0
+09:07:17 gate waiting 5s load=3.06
+09:07:22 gate waiting 10s load=3.46
+09:07:27 gate waiting 15s load=3.82
+09:07:32 gate waiting 20s load=4.24
+09:07:37 gate waiting 25s load=4.54
+09:07:42 gate waiting 30s load=4.25
+09:07:47 gate waiting 35s load=4.39
+09:07:52 gate waiting 40s load=4.36
+09:07:57 gate waiting 45s load=4.73
+09:08:02 gate waiting 50s load=5.08
+09:08:07 gate waiting 55s load=5.31
+09:08:12 gate waiting 60s load=5.53
+09:08:17 gate waiting 65s load=5.72
+09:08:22 gate waiting 70s load=5.91
+09:08:27 gate waiting 75s load=6.08
+09:08:32 gate waiting 80s load=6.31
+09:08:37 gate waiting 85s load=6.53
+09:08:42 gate waiting 90s load=6.72
+09:08:47 gate waiting 95s load=6.91
+09:08:53 gate waiting 100s load=6.99
+09:08:58 gate waiting 105s load=7.15
+09:09:03 gate waiting 110s load=7.22
+09:09:08 gate waiting 115s load=7.29
+09:09:13 gate waiting 120s load=7.34
+09:09:18 gate waiting 125s load=7.40
+09:09:23 gate waiting 130s load=7.44
+09:09:28 gate waiting 135s load=7.49
+09:09:33 gate waiting 140s load=7.77
+09:09:38 gate waiting 145s load=7.87
+09:09:43 gate waiting 150s load=7.88
+09:09:48 gate waiting 155s load=7.97
+09:09:53 gate waiting 160s load=7.97
+09:09:58 gate waiting 165s load=7.97
+09:10:03 gate waiting 170s load=8.06
+09:10:08 gate waiting 175s load=8.13
+09:10:13 gate waiting 180s load=8.12
+09:10:18 gate waiting 185s load=8.11
+09:10:23 gate waiting 190s load=8.10
+09:10:28 gate waiting 195s load=8.17
+09:10:33 gate waiting 200s load=8.16
+09:10:38 gate waiting 205s load=8.63
+09:10:43 gate waiting 210s load=8.58
+09:10:48 gate waiting 215s load=8.53
+09:10:53 gate waiting 220s load=8.49
+09:10:59 gate waiting 225s load=8.53
+09:11:04 gate waiting 230s load=8.49
+09:11:09 gate waiting 235s load=8.05
+09:11:14 gate waiting 240s load=7.48
+09:11:19 gate waiting 245s load=6.96
+09:11:24 gate waiting 250s load=6.41
+09:11:29 gate waiting 255s load=5.89
+09:11:34 gate waiting 260s load=5.42
+09:11:39 gate waiting 265s load=5.07
+09:11:44 gate waiting 270s load=4.66
+09:11:49 gate waiting 275s load=4.17
+09:11:54 gate waiting 280s load=3.92
+09:11:59 gate waiting 285s load=3.60
+09:12:04 gate waiting 290s load=3.39
+09:12:09 gate waiting 295s load=3.20
+09:12:14 gate waiting 300s load=2.95
+09:12:19 gate waiting 305s load=2.71
+09:12:24 gate waiting 310s load=2.57
+09:12:29 gate waiting 315s load=2.37
+09:12:34 gate waiting 320s load=2.18
+09:12:39 gate waiting 325s load=2.08
+09:12:44 gate waiting 330s load=1.91
+09:12:44 start r2 c1c2x load=1.91 4.14 4.67 busy=[]
+09:13:23 done r2 c1c2x rc=0
+09:13:23 start r2 c1x load=1.28 3.73 4.51 busy=[]
+09:13:42 done r2 c1x rc=0
+09:13:42 start r3 c1x load=1.44 3.60 4.45 busy=[]
+09:14:01 done r3 c1x rc=0
+09:14:01 start r3 c1c2x load=1.54 3.48 4.39 busy=[]
+09:14:25 done r3 c1c2x rc=0
+09:14:25 start r4 c1c2x load=1.44 3.30 4.30 busy=[]
+09:14:43 done r4 c1c2x rc=0
+09:14:43 start r4 c1x load=1.49 3.22 4.26 busy=[]
+09:15:02 done r4 c1x rc=0
+09:15:02 start r5 c1x load=1.49 3.11 4.20 busy=[]
+09:15:22 done r5 c1x rc=0
+09:15:22 start r5 c1c2x load=1.59 3.02 4.15 busy=[]
+09:15:45 done r5 c1c2x rc=0
+09:15:45 CZS1BX-END

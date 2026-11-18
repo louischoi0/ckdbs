@@ -281,6 +281,83 @@ TEST_F(WaitStateTest, FlushOnCpuBooksTheOpenSegmentWithoutChangingTheTotal) {
     EXPECT_EQ(session->on_cpu_ns.get(), 150u);
 }
 
+// ---- DF-S1: a statement's cost is a session's sample less another -----------
+
+TEST_F(WaitStateTest, ASessionsCostSampleFoldsItsEventsByClassAndCountsItsReads) {
+    auto session = MakeSessionWaitStats();
+    const auto idx = [](WaitEvent e) { return static_cast<std::size_t>(e); };
+    const auto cls = [](stats::WaitClass c) { return static_cast<std::size_t>(c); };
+    session->on_cpu_ns.add(700);
+    session->events[idx(WaitEvent::kCommitWalFlush)].total_ns.add(100);
+    session->events[idx(WaitEvent::kCommitCeilingWait)].total_ns.add(20);
+    session->events[idx(WaitEvent::kIoPageRead)].total_ns.add(30);
+    session->events[idx(WaitEvent::kIoPageRead)].count.add(2);
+    session->events[idx(WaitEvent::kIoVarHeapRead)].count.add(1);
+    session->events[idx(WaitEvent::kIoScanRingRead)].count.add(4);
+    session->events[idx(WaitEvent::kSchedRunQueue)].total_ns.add(5);
+    // A counter event has a count and no time; it is no page read.
+    session->events[idx(WaitEvent::kAppLockConflict)].count.add(9);
+    session->log_bytes.add(64);
+    session->log_records.add(1);
+
+    const SessionCostSample sample = SampleSessionCost(*session);
+    EXPECT_EQ(sample.on_cpu_ns, 700u);
+    EXPECT_EQ(sample.class_ns[cls(stats::WaitClass::kCommit)], 120u);
+    EXPECT_EQ(sample.class_ns[cls(stats::WaitClass::kUserIo)], 30u);
+    EXPECT_EQ(sample.class_ns[cls(stats::WaitClass::kScheduler)], 5u);
+    EXPECT_EQ(sample.class_ns[cls(stats::WaitClass::kApplication)], 0u);
+    EXPECT_EQ(sample.class_ns[cls(stats::WaitClass::kCpu)], 0u) << "ON_CPU is beside the table";
+    EXPECT_EQ(sample.page_reads, 7u);
+    EXPECT_EQ(sample.log_bytes, 64u);
+    EXPECT_EQ(sample.log_records, 1u);
+
+    // A later sample less an earlier is what lay between, field by field,
+    // and two such differences add up.
+    session->on_cpu_ns.add(50);
+    session->events[idx(WaitEvent::kIoPageRead)].total_ns.add(8);
+    session->events[idx(WaitEvent::kIoPageRead)].count.add(1);
+    session->log_bytes.add(16);
+    session->log_records.add(1);
+    SessionCostSample between = SampleSessionCost(*session) - sample;
+    EXPECT_EQ(between.on_cpu_ns, 50u);
+    EXPECT_EQ(between.class_ns[cls(stats::WaitClass::kUserIo)], 8u);
+    EXPECT_EQ(between.class_ns[cls(stats::WaitClass::kCommit)], 0u);
+    EXPECT_EQ(between.page_reads, 1u);
+    EXPECT_EQ(between.log_bytes, 16u);
+    EXPECT_EQ(between.log_records, 1u);
+    between += between;
+    EXPECT_EQ(between.on_cpu_ns, 100u);
+    EXPECT_EQ(between.class_ns[cls(stats::WaitClass::kUserIo)], 16u);
+    EXPECT_EQ(between.page_reads, 2u);
+    EXPECT_EQ(between.log_bytes, 32u);
+    EXPECT_EQ(between.log_records, 2u);
+}
+
+#ifndef KDS_WAIT_INSTRUMENTATION_OFF
+TEST_F(WaitStateTest, ALogAppendIsBookedToThePolledTasksSessionAndToNobodyElse) {
+    // DF-Q12 (a): booked as a wait is, to the session of the task being polled.
+    auto session = MakeSessionWaitStats();
+    BookLogAppend(100);  // no task is being polled: nobody's
+    EXPECT_EQ(session->log_bytes.get(), 0u);
+
+    auto appends = [&]() -> Coro {
+        BookLogAppend(40);
+        BookLogAppend(24);
+        co_return Status::OK();
+    };
+    CoroTask own(SchedulingGroup::kForeground, appends());
+    own.wait_state_mut().session = session.get();
+    EXPECT_EQ(own.Poll(), PollResult::kDone);
+    EXPECT_EQ(session->log_bytes.get(), 64u);
+    EXPECT_EQ(session->log_records.get(), 2u);
+
+    // A task with no session - a background task's append - is no session's.
+    CoroTask background(SchedulingGroup::kForeground, appends());
+    EXPECT_EQ(background.Poll(), PollResult::kDone);
+    EXPECT_EQ(session->log_bytes.get(), 64u);
+}
+#endif
+
 #ifndef NDEBUG
 TEST_F(WaitStateTest, AStrictCoreRefusesAParkOutsideEveryScope) {
     SetStrictWaitScopes(true);
