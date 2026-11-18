@@ -846,6 +846,62 @@ TEST_F(AdminPlanTest, APlanServedRunStillFoldsItsCountsForTheStatistics) {
     EXPECT_FALSE(written.value().planned.has_value());
 }
 
+TEST_F(AdminPlanTest, ForOneOrderTheChainIsTheSameWhoeverChoseTheOrder) {
+    // CX-S2 (parser-v2.md I12, the rewrite inventory): every rewrite is
+    // decided by the text, the catalog and the order - never by `join_order`
+    // or by what chose the order. So ANALYZE's plan, less its `planned`
+    // line, is one text per order.
+    const std::string sql =
+        "SELECT results.pnl, models.name FROM results JOIN models ON results.model_id = "
+        "models.id WHERE models.id BETWEEN 2 AND 3";
+    const auto chain_of = [&] {
+        std::string plan = Plan(sql);
+        EXPECT_NE(plan.rfind("ERR", 0), 0u) << plan;
+        // Out: the `planned ...` line and the header's `reordered=1`, which
+        // say who chose and are not the chain.
+        if (const std::size_t at = plan.find("planned order="); at != std::string::npos) {
+            plan.erase(at, plan.find("\\n", at) + 2 - at);
+        }
+        return plan;
+    };
+    const auto derived_in = [](const std::string& plan) {
+        std::size_t n = 0;
+        for (std::size_t at = plan.find(" derived"); at != std::string::npos;
+             at = plan.find(" derived", at + 1)) {
+            ++n;
+        }
+        return n;
+    };
+    // The written order: the option's own, then an administrator's plan
+    // saying the same under each value.
+    Ok("SET JOIN_ORDER written");
+    const std::string written = chain_of();
+    ASSERT_EQ(written.find("reordered=1"), std::string::npos) << written;
+    // Class (a): both bounds cross to `results.model_id`, under `written` too.
+    EXPECT_EQ(derived_in(written), 2u) << written;
+    Ok("CREATE PLAN keep FOR " + sql + kAsWritten);
+    for (const char* value : {"written", "fixed", "planned"}) {
+        Ok(std::string("SET JOIN_ORDER ") + value);
+        EXPECT_EQ(chain_of(), written) << value;
+    }
+    Ok("DROP PLAN keep");
+
+    // The other order: the search's, the captured one, and a plan's.
+    Ok("SET JOIN_ORDER planned");
+    const std::string searched = chain_of();
+    ASSERT_NE(searched.find("reordered=1"), std::string::npos) << searched;
+    // The derived set does not depend on the order.
+    EXPECT_EQ(derived_in(searched), 2u) << searched;
+    Ok("SET JOIN_ORDER fixed");
+    ASSERT_NE(Plan(sql).find(" capture=first"), std::string::npos);
+    EXPECT_EQ(chain_of(), searched) << "captured";
+    Ok("CREATE PLAN turn FOR " + sql + kModelsFirst);
+    for (const char* value : {"written", "fixed", "planned"}) {
+        Ok(std::string("SET JOIN_ORDER ") + value);
+        EXPECT_EQ(chain_of(), searched) << value;
+    }
+}
+
 TEST_F(AdminPlanTest, StatementStatsNameThePlanAndTheVariantThatRan) {
     Ok("CREATE PLAN stats_plan FOR " + Where("5") +
        " VARIANT low WHEN ARG(1) < 10 ORDER (models, results)"

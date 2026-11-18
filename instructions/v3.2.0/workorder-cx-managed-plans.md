@@ -1045,3 +1045,52 @@ a result.
   private `IEquals` copies is outside the stage.
 - **Left as gaps** (`known-gaps.md`, Captured plans): what no cell reaches
   - plan DDL beside a held `DROP TABLE` `X` and from two cores among it.
+
+### CX-S2 - done 2026-11-18: the inventory; no code
+
+On worktree `cx-plan-change-option`. S2 builds nothing: CX-Q9 (a) keeps
+class (b) out of CX until a scenario statement is named as its consumer,
+and none is.
+
+- **The inventory** is `parser-v2.md` I12's "The rewrite inventory"
+  table, read off `CompileBound`, `PropagateEqualities`,
+  `PredicateReadyAt`, the scan kernel and the executor's hoist, build and
+  probe memo at `b11a5500`: ten rows, each with what decides it and what
+  it changes.
+- **Why nothing in it moves a plan on its own**: every item is in
+  `CompileBound`, which every path of `CompileBlock` calls - the early
+  return with no options, an administrator's plan, a captured order, the
+  memo and the search - and which is handed no `PlanOptions`, so none can
+  read a statistic or `join_order`. One cell pins it
+  (`AdminPlanTest.ForOneOrderTheChainIsTheSameWhoeverChoseTheOrder`):
+  `ANALYZE`'s plan less its `planned` line is one text for the written
+  order under `written` and under a plan saying the same at each value,
+  and one text for the other order whether the search, the capture or a
+  plan chose it; both carry the same two derived bounds.
+
+**Where the inventory differs from the order's text.**
+
+- **§1.4 and CX-S2 class the false uncorrelated `EXISTS` short-circuit
+  (a), "pure in the text and append-only". It is neither.** It adds no
+  conjunct: it is the hoist's consequence - the hoisted sub-chain runs
+  before the outer chain, and a false one ends the statement without
+  opening the outer relation - so it reschedules a read and is decided by
+  the run's rows. It is sanctioned all the same (I12: an uncorrelated
+  subquery's answer is one value), reads no statistic, and only ever runs
+  in written order, since a block with a subquery predicate is not
+  reordered. The table classes it "scheduling, sanctioned" beside the
+  hoist, and (b) is kept for what S2 forbids: a reschedule the engine
+  chooses.
+- **Two classes the order did not name** carry most of the rows:
+  *placement* (where a conjunct is evaluated, the scan kernel, the decode
+  masks, sort elision - a function of the text and the order that changes
+  no read) and *locate* (the key set, the probe memo, the inner build).
+  Splitting only into (a) and (b) would have put the inner build and the
+  key set in (b), which S2 says is never automatic, and both are
+  automatic by I12 and their own specs.
+- **Found and not listed in the order**: an uncorrelated `EXISTS` under
+  `OR` is not hoisted and is still answered once a statement where it
+  stands; a repeated probe key skips its descent (the probe memo).
+- **Not inventoried**: the query layer (`parser-v2.md` I19), which is
+  another executor over native single-relation walks and compiles no join
+  block; the write paths.
