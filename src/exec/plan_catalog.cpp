@@ -78,7 +78,7 @@ PlanRow ToPlanRow(DeclarationRow row) {
     return plan;
 }
 
-// An object's name, compared as every name in this engine is.
+// An object's name folded, as a map's key.
 std::string Lowered(std::string_view name) {
     std::string out(name);
     for (char& c : out) {
@@ -121,7 +121,6 @@ bool IsPermutation(const std::vector<std::uint64_t>& order, std::size_t n) {
 
 std::shared_ptr<const AdminPlan> ToAdminPlan(const PlanRow& row) {
     auto plan = std::make_shared<AdminPlan>();
-    plan->id = row.id;
     plan->name = row.name;
     plan->key = row.key;
     plan->variants = row.variants;
@@ -222,7 +221,7 @@ Status DecodeAdminPlanText(std::string_view text, PlanRow& out) {
         const std::string_view binding = bindings_text.substr(0, comma);
         if (!parser::IsIdentifier(binding)) return corrupt("a plan's binding is not a name");
         for (const std::string& earlier : bindings) {
-            if (Lowered(earlier) == Lowered(binding)) {
+            if (SameName(earlier, binding)) {
                 return corrupt("a plan names one binding twice");
             }
         }
@@ -242,7 +241,7 @@ Status DecodeAdminPlanText(std::string_view text, PlanRow& out) {
         variant.name = std::string(line.substr(0, name_end));
         if (!parser::IsIdentifier(variant.name)) return corrupt("a variant's name is not a name");
         for (const PlanVariant& earlier : variants) {
-            if (Lowered(earlier.name) == Lowered(variant.name)) {
+            if (SameName(earlier.name, variant.name)) {
                 return corrupt("a plan names one variant twice");
             }
         }
@@ -284,7 +283,7 @@ Status DecodeAdminPlanText(std::string_view text, PlanRow& out) {
     for (std::size_t i = 0; i < oids.size(); ++i) {
         out.key.oids[i] = static_cast<catalog::Oid>(oids[i]);
     }
-    out.order = variants.back().order;
+    out.order = CapturedOrder{};
     out.bindings = std::move(bindings);
     out.arguments = static_cast<std::uint32_t>(arguments);
     out.variants = std::move(variants);
@@ -427,7 +426,8 @@ Status PersistCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store
 bool PlanRowIsValid(catalog::Catalog& catalog, const PlanRow& row) {
     if (!row.readable || row.fingerprint_version != parser::kFingerprintVersion) return false;
     for (std::size_t i = 0; i < row.key.n; ++i) {
-        if (!catalog.InitTableAccess(row.key.oids[i]).ok()) return false;
+        auto access = catalog.InitTableAccess(row.key.oids[i]);
+        if (!access.ok() && access.status().code() == StatusCode::kNotFound) return false;
     }
     return true;
 }
@@ -453,7 +453,14 @@ StatusOr<std::size_t> LoadPlans(catalog::Catalog& catalog, storage::PageStore& s
         remove.push_back(std::min(at->second->id, plan.id));
         if (plan.id > at->second->id) at->second = &plan;
     }
-    for (const auto& [name, plan] : newest) {
+    // In id order, so which plan a shape runs never depends on a hash's
+    // order: the DDL admits one plan a shape, and were two rows ever to
+    // share one, the newer is the one installed last.
+    std::vector<const PlanRow*> kept;
+    for (const auto& [name, plan] : newest) kept.push_back(plan);
+    std::sort(kept.begin(), kept.end(),
+              [](const PlanRow* a, const PlanRow* b) { return a->id < b->id; });
+    for (const PlanRow* plan : kept) {
         // An invalid plan is the administrator's to drop, not a mount's.
         if (PlanRowIsValid(catalog, *plan)) admin.Install(ToAdminPlan(*plan), plan->enabled);
     }
@@ -504,10 +511,9 @@ StatusOr<std::vector<PlanRow>> RowsNamed(catalog::Catalog& catalog, storage::Pag
                                          std::string_view name) {
     auto plans = ListPlans(catalog, store);
     if (!plans.ok()) return plans.status();
-    const std::string wanted = Lowered(name);
     std::vector<PlanRow> named;
     for (PlanRow& plan : plans.value()) {
-        if (Lowered(plan.name) == wanted) named.push_back(std::move(plan));
+        if (SameName(plan.name, name)) named.push_back(std::move(plan));
     }
     if (named.empty()) {
         return Status::NotFound("no plan named \"" + std::string(name) + "\"");
@@ -536,7 +542,6 @@ StatusOr<PlanRow> CreateAdminPlan(catalog::Catalog& catalog, storage::PageStore&
     row.readable = true;
     row.fingerprint_version = parser::kFingerprintVersion;
     row.written_at_us = now_us;
-    row.order = row.variants.back().order;
     if (Status s = InsertDeclaration(catalog, store, wal, catalog::kSysPlansTable, kKind,
                                      ToDeclaration(row, now_us));
         !s.ok()) {
@@ -553,7 +558,6 @@ StatusOr<PlanRow> ReplaceAdminPlan(catalog::Catalog& catalog, storage::PageStore
     if (!id.ok()) return id.status();
     next.id = id.value();
     next.written_at_us = now_us;
-    next.order = next.variants.back().order;
     // The name is the old row's, which is still there: the check would
     // refuse it, and the DDL claim is what keeps the name this plan's.
     if (Status s = InsertDeclaration(catalog, store, wal, catalog::kSysPlansTable, kKind,

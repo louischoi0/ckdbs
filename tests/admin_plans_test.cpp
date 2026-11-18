@@ -17,7 +17,10 @@
 #include "kds/exec/plan_catalog.hpp"
 #include "kds/exec/plan_ddl.hpp"
 #include "kds/exec/plan_rule.hpp"
+#include "kds/exec/step_compiler.hpp"
+#include "kds/parser/parser.hpp"
 #include "kds/parser/lexer.hpp"
+#include "kds/sched/coro.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/expeditor.hpp"
 #include "kds/stats/plan_stats.hpp"
@@ -318,8 +321,7 @@ TEST(AdminPlanTextTest, ARowsTextReadsBackAsWhatWasWritten) {
     EXPECT_EQ(back.variants[0].rule, row.variants[0].rule);
     EXPECT_EQ(back.variants[0].order, row.variants[0].order);
     EXPECT_TRUE(back.variants[1].rule.is_else());
-    // The order a statement no rule holds for runs.
-    EXPECT_EQ(back.order, row.variants[1].order);
+    EXPECT_EQ(back.variants[1].order, row.variants[1].order);
 }
 
 TEST(AdminPlanTextTest, ATextThatBreaksARuleOfThePlanIsCorruptionAndLeavesTheRow) {
@@ -814,6 +816,36 @@ TEST_F(AdminPlanTest, ATupleKeyChainIsOrderedByItsPlanAndAnUnmanagedCompileAsksN
     EXPECT_EQ(written.find("planned order="), std::string::npos) << written;
 }
 
+TEST_F(AdminPlanTest, APlanServedRunStillFoldsItsCountsForTheStatistics) {
+    // CX-Q2: the statistics are gathered whatever chose the order, so a
+    // `DROP PLAN` or an `AS SEARCHED` after it prices from what the shape's
+    // runs measured - except under `written`, which gathers nothing.
+    Ok("CREATE PLAN p FOR " + Where("5") + kModelsFirst);
+    const std::string sql = Where("5");
+    parser::Parser parser(sql);
+    auto parsed = parser.Parse();
+    ASSERT_TRUE(parsed.ok());
+    ASSERT_TRUE(parser.fingerprint().has_value());
+    exec::PlanOptions options;
+    options.admin = &table();
+    options.fetch_id = parser.fingerprint()->fetch_id;
+    options.statement = sql;
+    const auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+    auto searched = exec::Compile(boot_->catalog, stmt, nullptr, nullptr, nullptr, &options);
+    ASSERT_TRUE(searched.ok()) << searched.status().message();
+    ASSERT_TRUE(searched.value().plan_note.has_value());
+    EXPECT_EQ(searched.value().plan_note->source, exec::PlanSource::kAdmin);
+    EXPECT_EQ(searched.value().planned_relations.size(), 2u);
+    ASSERT_TRUE(searched.value().planned.has_value());
+    EXPECT_EQ(searched.value().planned->fetch_id, options.fetch_id);
+    options.search = false;
+    auto written = exec::Compile(boot_->catalog, stmt, nullptr, nullptr, nullptr, &options);
+    ASSERT_TRUE(written.ok());
+    EXPECT_EQ(written.value().plan_note->source, exec::PlanSource::kAdmin);
+    EXPECT_TRUE(written.value().planned_relations.empty());
+    EXPECT_FALSE(written.value().planned.has_value());
+}
+
 TEST_F(AdminPlanTest, StatementStatsNameThePlanAndTheVariantThatRan) {
     Ok("CREATE PLAN stats_plan FOR " + Where("5") +
        " VARIANT low WHEN ARG(1) < 10 ORDER (models, results)"
@@ -832,6 +864,25 @@ TEST_F(AdminPlanTest, StatementStatsNameThePlanAndTheVariantThatRan) {
     view = Run("SELECT plan_source, plan_name, variant, kind FROM sys.statement_stats");
     EXPECT_EQ(view.find("stats_plan"), std::string::npos) << view;
     EXPECT_NE(view.find("searched,NULL,NULL,SELECT"), std::string::npos) << view;
+}
+
+TEST_F(AdminPlanTest, AStreamedSelectsStatementStatsNameThePlanThatRan) {
+    // The server's path: `DispatchAsync` hands a walking SELECT's walk on
+    // (BA-S15), and the walk's end rebuilds the outcome (`SelectRun::
+    // Execute`), which must keep the plan the compile recorded, or the
+    // shape's row reads NULL, or what an earlier statement left.
+    Ok("CREATE PLAN streamed_plan FOR " + Where("5") + kModelsFirst);
+    const std::string sql = Where("4");
+    DispatchOutcome out;
+    auto task = sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
+                                    dispatcher_->DispatchAsync(sql, nullptr, &out));
+    bool done = false;
+    for (int i = 0; i < 10000 && !done; ++i) done = task->Poll() == sched::PollResult::kDone;
+    ASSERT_TRUE(done);
+    ASSERT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
+    const std::string view =
+        Run("SELECT plan_source, plan_name, variant, kind FROM sys.statement_stats");
+    EXPECT_NE(view.find("admin,streamed_plan,models_first,SELECT"), std::string::npos) << view;
 }
 
 TEST_F(AdminPlanTest, AnEnabledPlanRestrictsItsRelationsDropAndADisabledOneReadsInvalid) {
@@ -900,8 +951,8 @@ TEST_F(AdminPlanTest, AMountServesAnEnabledPlanHoldsADisabledOneAndKeepsTheNewes
     EXPECT_EQ(next_run.enabled(), 1u);
     const auto served = next_run.Find(p.key);
     ASSERT_NE(served, nullptr);
-    EXPECT_EQ(served->id, raw.id) << "the newer row is the plan";
-    EXPECT_EQ(served->variants.front().order, newer.variants.front().order);
+    EXPECT_EQ(served->variants.front().order, newer.variants.front().order)
+        << "the newer row is the plan";
     // The older row of the name is gone; q is held and not served.
     const std::vector<exec::PlanRow> rows = PlanRows();
     ASSERT_EQ(rows.size(), 2u);

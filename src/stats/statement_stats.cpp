@@ -104,8 +104,11 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
     if (!plan_source.empty() &&
         (shape.plan_source != plan_source || shape.plan_label != plan_label)) {
         try {
-            shape.plan_source = std::string(plan_source);
-            shape.plan_label = std::string(plan_label);
+            // Both made before either is kept, so the pair never mixes.
+            std::string source(plan_source);
+            std::string label(plan_label);
+            shape.plan_source = std::move(source);
+            shape.plan_label = std::move(label);
         } catch (const std::bad_alloc&) {
             // The counts stand; the source stays the last one written.
         }

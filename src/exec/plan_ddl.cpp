@@ -13,23 +13,8 @@ namespace {
 using parser::Token;
 using parser::TokenType;
 
-bool IsWord(std::string_view word, std::string_view upper) noexcept {
-    return std::equal(word.begin(), word.end(), upper.begin(), upper.end(), [](char a, char b) {
-        return (a >= 'a' && a <= 'z' ? static_cast<char>(a - 'a' + 'A') : a) == b;
-    });
-}
-
-bool IsIdent(const Token& tok, std::string_view upper) noexcept {
-    return tok.type == TokenType::kIdent && IsWord(tok.text, upper);
-}
-
-bool SameName(std::string_view a, std::string_view b) noexcept {
-    return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char x, char y) {
-        const auto fold = [](char c) {
-            return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
-        };
-        return fold(x) == fold(y);
-    });
+bool IsIdent(const Token& tok, std::string_view word) noexcept {
+    return tok.type == TokenType::kIdent && SameName(tok.text, word);
 }
 
 std::string At(std::size_t byte) { return " (byte " + std::to_string(byte) + ")"; }
@@ -237,6 +222,19 @@ StatusOr<CapturedOrder> ResolvePlanOrder(const std::vector<std::string>& binding
                       std::to_string(bindings.size()) + " relations; it must name each once");
     }
     return order;
+}
+
+StatusOr<PlanVariant> ResolvePlanVariant(const std::vector<std::string>& bindings,
+                                         std::uint32_t arguments, const PlanVariantSpec& spec) {
+    if (spec.rule.max_arg() > arguments) {
+        return Status::InvalidArgument(
+            "variant '" + spec.name + "' reads ARG(" + std::to_string(spec.rule.max_arg()) +
+            "), and the statement has " + std::to_string(arguments) + " value position(s)" +
+            At(spec.name_at));
+    }
+    auto order = ResolvePlanOrder(bindings, spec);
+    if (!order.ok()) return order.status();
+    return PlanVariant{spec.name, spec.rule, order.value()};
 }
 
 StatusOr<AlterPlanStmt> ParseAlterPlan(std::string_view line) {

@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "kds/base/status.hpp"
-#include "kds/exec/captured_plans.hpp"
+#include "kds/exec/admin_plans.hpp"
 #include "kds/exec/plan_rule.hpp"
 
 // **The plan DDL's grammar** (CX-S1b, instructions/v3.2.0/
@@ -82,5 +82,12 @@ StatusOr<AlterPlanStmt> ParseAlterPlan(std::string_view line);
 // name, case-insensitively. `InvalidArgument` at the list's byte otherwise.
 StatusOr<CapturedOrder> ResolvePlanOrder(const std::vector<std::string>& bindings,
                                          const PlanVariantSpec& variant);
+
+// A written variant as the plan holds it, against the statement's bindings
+// and its count of value positions: its order resolved, and its rule
+// reading no `ARG(k)` the statement lacks (`InvalidArgument` at the
+// variant's name).
+StatusOr<PlanVariant> ResolvePlanVariant(const std::vector<std::string>& bindings,
+                                         std::uint32_t arguments, const PlanVariantSpec& spec);
 
 }  // namespace kds::exec

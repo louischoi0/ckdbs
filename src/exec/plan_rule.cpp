@@ -13,13 +13,6 @@ using parser::StatementArgument;
 using parser::Token;
 using parser::TokenType;
 
-// Whether `word` is `upper`, ASCII case-insensitively.
-bool IsWord(std::string_view word, std::string_view upper) noexcept {
-    return std::equal(word.begin(), word.end(), upper.begin(), upper.end(), [](char a, char b) {
-        return (a >= 'a' && a <= 'z' ? static_cast<char>(a - 'a' + 'A') : a) == b;
-    });
-}
-
 std::string At(const Token& tok) { return " (byte " + std::to_string(tok.byte_offset) + ")"; }
 
 // The integer `text` spells, or nullopt past 64 bits: the lexer's own
@@ -93,7 +86,7 @@ StatusOr<PlanRuleOperand> ParseOperand(parser::Lexer& lexer) {
             operand.text = std::string(tok.text);
             return operand;
         case TokenType::kIdent: {
-            if (!IsWord(tok.text, "ARG")) break;
+            if (!SameName(tok.text, "ARG")) break;
             if (lexer.Next().type != TokenType::kLParen) {
                 return Status::InvalidArgument("ARG takes a value position: ARG(k)" + At(tok));
             }
@@ -243,6 +236,15 @@ bool Holds(const PlanRuleComparison& term, std::span<const StatementArgument> ar
 
 }  // namespace
 
+bool SameName(std::string_view a, std::string_view b) noexcept {
+    return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char x, char y) {
+        const auto fold = [](char c) {
+            return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+        };
+        return fold(x) == fold(y);
+    });
+}
+
 std::uint32_t PlanRule::max_arg() const noexcept {
     std::uint32_t highest = 0;
     for (const PlanRuleComparison& term : terms) {
@@ -268,7 +270,7 @@ StatusOr<PlanRule> ParsePlanRule(parser::Lexer& lexer) {
         const Token op = lexer.Next();
         const auto parsed_op = OpOf(op.type);
         if (!parsed_op.has_value()) {
-            if (op.type == TokenType::kIdent && IsWord(op.text, "IS")) {
+            if (op.type == TokenType::kIdent && SameName(op.text, "IS")) {
                 return Status::Unsupported(
                     "IS NULL in a WHEN rule is not supported: a NULL in a value position is "
                     "another statement shape, with a plan of its own" + At(op));
@@ -303,11 +305,11 @@ StatusOr<PlanRule> ParsePlanRule(parser::Lexer& lexer) {
 
         const Token& next = lexer.Peek();
         if (next.type != TokenType::kIdent) break;
-        if (IsWord(next.text, "AND")) {
+        if (SameName(next.text, "AND")) {
             lexer.Next();
             continue;
         }
-        if (IsWord(next.text, "OR")) {
+        if (SameName(next.text, "OR")) {
             return Status::NotImplemented(
                 "OR in a WHEN rule is not implemented: a rule is comparisons joined by AND, "
                 "and another variant is its OR" + At(next));

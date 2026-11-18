@@ -6269,9 +6269,16 @@ sched::Coro SelectRun::Execute(DispatchOutcome* out) {
     const Status ran = co_await exec::ExecuteAsync(
         d_.catalog_, d_.page_store_, *chain, visit, &scratch.stats, d_.budget_, trail, replay,
         d_.cabins_, &snapshot->snap, d_.indexes_enabled_, slice_);
+    // The reply replaces the outcome; what the head recorded of the
+    // statement stays on it - its plan source among them, which
+    // `sys.statement_stats` reads off this outcome (CX-R11).
     const std::uint64_t statement = out->statement;
+    const std::string_view plan_source = out->plan_source;
+    std::string plan_label = std::move(out->plan_label);
     *out = Finish(ran);
     out->statement = statement;
+    out->plan_source = plan_source;
+    out->plan_label = std::move(plan_label);
     co_return Status::OK();
 }
 
@@ -9134,8 +9141,13 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // the grammar admits only for a single relation (V06).
     const exec::StepChain& compiled = run->chain.emplace(std::move(chain.value()));
 
-    // Where the join order came from, for `sys.statement_stats` (CX-R11).
-    if (compiled.plan_note.has_value()) {
+    // Where the join order came from, for `sys.statement_stats` (CX-R11) -
+    // of the statement's own SELECT, not of a subquery an UPDATE's SET runs
+    // through here, which `fetch_id` is guarded against the same way.
+    const auto own = run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
+    if (!own.has_value() || own->fetch_id != statement_fetch_id_) {
+        // Another statement's row: nothing of this compile is its plan.
+    } else if (compiled.plan_note.has_value()) {
         statement_plan_source_ = exec::PlanSourceName(compiled.plan_note->source);
         if (!compiled.plan_note->plan_name.empty()) {
             statement_plan_label_ =
@@ -12984,6 +12996,28 @@ std::string OrderText(const exec::CapturedOrder& order, const std::vector<std::s
 
 }  // namespace
 
+Status CommandDispatcher::HoldPlanRelations(const exec::CapturedKey& key,
+                                            std::optional<ReadBorrow>& hold) {
+    // A borrow of its own, so what is counted is these asks and nothing a
+    // compile declared: a compile can run twice (`ResolveNames`) and bind a
+    // name to two relations, and a grant on one must not stand for the
+    // other. Each oid is asked once; `read_borrows_` moves by one a grant.
+    const std::uint64_t holder = NextReadHolder();
+    const std::uint64_t before = read_borrows_;
+    hold.emplace(locks_, holder, &read_borrows_);
+    std::size_t distinct = 0;
+    for (std::size_t i = 0; i < key.n; ++i) {
+        const auto* const seen = std::find(key.oids.data(), key.oids.data() + i, key.oids[i]);
+        if (seen == key.oids.data() + i) ++distinct;
+        hold->Position(key.oids[i]);
+    }
+    if (holder != 0 && read_borrows_ - before < distinct) {
+        hold.reset();
+        return Status::TxnConflict("a DDL holds one of the plan's relations; retry (byte 0)");
+    }
+    return Status::OK();
+}
+
 DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Session& session) {
     // CX-S1b (`exec/plan_ddl.hpp`, `exec/admin_plans.hpp`): `CREATE PLAN
     // <name> FOR <select>` with its variants, or `AS SEARCHED`. Admin
@@ -13061,15 +13095,7 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
 
     const exec::StatementContext context = StatementContextFor(session);
     const auto create_row = [&]() -> StatusOr<exec::PlanRow> {
-        // **The relations' `IS`, held to the row's install.** A plan DDL is
-        // not a read that must never wait on a DDL: where an ask is refused
-        // - a `DROP TABLE` holds the relation `X` - the statement is, so no
-        // plan is installed for a relation whose drop then commits, and a
-        // drop that comes after waits and meets the plan under its `X`
-        // (CX-Q24's RESTRICT).
-        std::uint64_t granted = 0;
-        const std::uint64_t holder = NextReadHolder();
-        ReadBorrow borrow(locks_, holder, &granted);
+        ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
         const auto compile = [&](const exec::PlanOptions* options) {
             return ResolveNames(session, [&](const txn::ReadView* v) {
                 return exec::Compile(catalog_, stmt, v, &borrow, &context, options);
@@ -13081,30 +13107,29 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
         auto written = compile(nullptr);
         if (!written.ok()) return AtByte(written.status(), create.statement_at);
         for (const exec::PlanVariantSpec& spec : create.variants) {
-            if (spec.rule.max_arg() > row.arguments) {
-                return Status::InvalidArgument(
-                    "variant '" + spec.name + "' reads ARG(" +
-                    std::to_string(spec.rule.max_arg()) + "), and the statement has " +
-                    std::to_string(row.arguments) + " value position(s)" +
-                    ByteSuffix(spec.name_at));
-            }
-            auto order = exec::ResolvePlanOrder(row.bindings, spec);
-            if (!order.ok()) return order.status();
-            row.variants.push_back(exec::PlanVariant{spec.name, spec.rule, order.value()});
+            auto variant = exec::ResolvePlanVariant(row.bindings, row.arguments, spec);
+            if (!variant.ok()) return variant.status();
+            row.variants.push_back(std::move(variant.value()));
         }
         row.key.fetch_id = fingerprint->fetch_id;
         row.key.n = static_cast<std::uint8_t>(row.bindings.size());
-        std::vector<catalog::Oid> distinct;
         for (std::size_t w = 0; w < row.bindings.size(); ++w) {
-            const catalog::Oid oid = written.value().steps[w].rel_oid;
-            row.key.oids[w] = oid;
-            if (std::find(distinct.begin(), distinct.end(), oid) == distinct.end()) {
-                distinct.push_back(oid);
-            }
+            row.key.oids[w] = written.value().steps[w].rel_oid;
         }
-        if (holder != 0 && granted < distinct.size()) {
-            return Status::TxnConflict(
-                "a DDL holds one of the statement's relations; retry (byte 0)");
+        // **The relations' `IS`, held to the row's install**, asked of the
+        // key's own oids: so no plan is installed for a relation whose drop
+        // then commits, and a drop that comes after waits and meets the
+        // plan under its `X` (CX-Q24's RESTRICT). A drop that committed
+        // between the compile's bind and this hold is seen by the catalog.
+        std::optional<ReadBorrow> hold;
+        if (Status s = HoldPlanRelations(row.key, hold); !s.ok()) return s;
+        for (std::size_t w = 0; w < row.key.n; ++w) {
+            auto access = catalog_.InitTableAccess(row.key.oids[w]);
+            if (!access.ok() && access.status().code() == StatusCode::kNotFound) {
+                return Status::TxnConflict(
+                    "a relation of the statement was dropped while the plan was made; retry "
+                    "(byte 0)");
+            }
         }
 
         exec::PlanOptions options;
@@ -13130,15 +13155,15 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
             // path, alone, for the statement as written. One that is
             // declined here would be declined at every statement like it.
             options.search = false;
+            exec::AdminPlans probe;
+            options.admin = &probe;
             for (std::size_t i = 0; i < row.variants.size(); ++i) {
-                exec::AdminPlans probe;
                 auto candidate = std::make_shared<exec::AdminPlan>();
                 candidate->name = row.name;
                 candidate->key = row.key;
                 candidate->variants.push_back(
                     exec::PlanVariant{row.variants[i].name, {}, row.variants[i].order});
                 probe.Install(std::move(candidate), /*enabled=*/true);
-                options.admin = &probe;
                 auto chain = compile(&options);
                 if (!chain.ok() || !chain.value().plan_note.has_value() ||
                     chain.value().plan_note->source != exec::PlanSource::kAdmin) {
@@ -13174,7 +13199,9 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
                         " fetch_id=" + std::to_string(plan.key.fetch_id) +
                         " variants=" + std::to_string(plan.variants.size());
     // `AS SEARCHED` shows the order it fixed (CX-Q28 (a)).
-    if (create.searched) reply += " order=" + OrderText(plan.order, plan.bindings);
+    if (create.searched) {
+        reply += " order=" + OrderText(plan.variants.back().order, plan.bindings);
+    }
     return {reply, false};
 }
 
@@ -13210,19 +13237,13 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
                 "capture and CREATE PLAN for its statement overrides it" +
                 ByteSuffix(alter.name_at));
         }
-        // The relations' `IS`, as `CREATE PLAN` holds it, and under it
-        // whether the plan can serve anything at all.
-        std::uint64_t granted = 0;
-        const std::uint64_t holder = NextReadHolder();
-        ReadBorrow borrow(locks_, holder, &granted);
-        std::size_t distinct = 0;
+        // The relations' `IS`, as `CREATE PLAN` holds it, and - once it is
+        // granted, so an open `DROP TABLE` reads as the retryable conflict
+        // it is and not as a relation that is gone - whether the plan can
+        // serve anything at all.
+        std::optional<ReadBorrow> hold;
         if (row.readable) {
-            for (std::size_t i = 0; i < row.key.n; ++i) {
-                const auto first = std::find(row.key.oids.begin(), row.key.oids.begin() + i,
-                                             row.key.oids[i]);
-                if (first == row.key.oids.begin() + i) ++distinct;
-                borrow.Position(row.key.oids[i]);
-            }
+            if (Status s = HoldPlanRelations(row.key, hold); !s.ok()) return s;
         }
         if (!exec::PlanRowIsValid(catalog_, row)) {
             return Status::Unsupported(
@@ -13230,9 +13251,6 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
                 "' is invalid - a relation it names is gone, or its row is not this build's - "
                 "and can serve no statement; DROP PLAN it" +
                 ByteSuffix(alter.name_at));
-        }
-        if (holder != 0 && granted < distinct) {
-            return Status::TxnConflict("a DDL holds one of the plan's relations; retry (byte 0)");
         }
         switch (alter.action) {
             case exec::AlterPlanStmt::Action::kEnable:
@@ -13260,16 +13278,9 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
                                         : "a WHEN variant is replaced by a WHEN") +
                         ": every statement must keep a variant" + ByteSuffix(spec.name_at));
                 }
-                if (spec.rule.max_arg() > row.arguments) {
-                    return Status::InvalidArgument(
-                        "variant '" + spec.name + "' reads ARG(" +
-                        std::to_string(spec.rule.max_arg()) + "), and the plan's statement has " +
-                        std::to_string(row.arguments) + " value position(s)" +
-                        ByteSuffix(spec.name_at));
-                }
-                auto order = exec::ResolvePlanOrder(row.bindings, spec);
-                if (!order.ok()) return order.status();
-                *old = exec::PlanVariant{spec.name, spec.rule, order.value()};
+                auto variant = exec::ResolvePlanVariant(row.bindings, row.arguments, spec);
+                if (!variant.ok()) return variant.status();
+                *old = std::move(variant.value());
                 break;
             }
         }

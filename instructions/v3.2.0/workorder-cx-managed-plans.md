@@ -923,9 +923,11 @@ The administrator's plan, on worktree `cx-plan-change-option`.
 
 - **The §6 measurement for S1's close was not run.** Overhead is measured
   at the milestone's close. What S1b adds to a statement is named in
-  `known-gaps.md` (Captured plans) and not measured: one relaxed load on
-  every top-level join block's compile, a probe while any plan is enabled,
-  and a second lex of the statement for a plan with more than one variant.
+  `known-gaps.md` (Captured plans) and not measured: one relaxed load a
+  top-level join block's compile under `planned` and `fixed` - under
+  `written` the load is the dispatcher's, on every `SELECT`, a
+  single-relation one included - a probe while any plan is enabled, and a
+  second lex of the statement for a plan with more than one variant.
 - **`ACCESS` and `BUILD` clauses are refused `NotImplemented`** at their
   word; they are S3's and S5's.
 
@@ -987,3 +989,59 @@ The administrator's plan, on worktree `cx-plan-change-option`.
   until the plan is installed, refusing `TxnConflict` where a `DROP TABLE`
   holds the `X`, so no plan is installed over a relation whose drop then
   commits.
+
+**The review of S1b** (`critics-developer`, of `4f12b44d`; its fix and the
+ones taken from its findings are in the commit after it). It found no way
+for a plan's order to reach a statement it does not belong to or to change
+a result.
+
+- **Fixed by the review - a streamed `SELECT` lost its plan in
+  `sys.statement_stats`.** On the server's path a `SELECT` whose first step
+  walks pages is finished after its head returns, and the walk's end
+  rebuilt the outcome without `plan_source` and `plan_label`: every such
+  statement recorded NULL, or what an earlier one left. Every cell of the
+  stage went through `Dispatch`, which runs the walk inline. The walk now
+  keeps the two as it keeps the statement's id, and a cell drives
+  `DispatchAsync`.
+- **Taken - a plan-served chain folded no join statistics.** The plan's
+  branch named the chain's relations and not the key its counts fold
+  under, so a shape an administrator's plan served gathered no posterior
+  and a later `DROP PLAN` or `AS SEARCHED` priced from priors alone
+  (CX-Q2). The key is set there as the captured path sets it; a cell.
+- **Taken - `ALTER PLAN` could answer "invalid" for a drop that might
+  roll back.** Validity was asked before the relations' `IS`: beside an
+  open `DROP TABLE` the catalog can already show the relation gone, and
+  the refusal was `Unsupported`, "DROP PLAN it", where it is the
+  retryable `TxnConflict`. The hold is asked first.
+- **Taken - "every `IS` was granted" was counted across two compiles.**
+  `ResolveNames` can compile twice and bind a name to two relations, and
+  a grant on one counted for the other. `HoldPlanRelations` takes a borrow
+  of its own on the key's oids, for `CREATE PLAN` and `ALTER PLAN` both,
+  and `CREATE PLAN` asks the catalog once more under it.
+- **Taken - only `NotFound` says a plan's relation is gone**
+  (`PlanRowIsValid`), as for a captured row: any other failure at a mount
+  had left a valid plan out of the table, where it neither served nor
+  RESTRICTed, and let a second plan be made for its shape. A mount
+  installs in id order, so no hash order decides between two rows.
+- **Taken**: `plan_source` is recorded for the statement's own `SELECT`
+  only, not for a subquery an `UPDATE`'s `SET` runs; a shape's source and
+  label are replaced as a pair; `sys-views.md` §6.1 said NULL means "no
+  join block" where it is every block the planner does not order; a
+  rename's effect on a plan is stated (`parser-v2.md` I12, `known-gaps.md`);
+  this log's "one relaxed load" sentence is corrected for `written`.
+- **Taken, as cuts**: the variant checks `CREATE PLAN` and `ALTER PLAN`
+  each wrote out are one `exec::ResolvePlanVariant`; three case-folding
+  helpers are one `exec::SameName`; the validation probe is built once a
+  statement, not once a variant; `AdminPlan::id`, written and never read,
+  is gone, and an administrator's `PlanRow::order` is no longer kept
+  beside its variants.
+- **Not taken**: `IN`, `BETWEEN` and `NOT` in a rule stay `InvalidArgument`
+  - they are reserved words the rule grammar does not name, and naming
+  each one to say `NotImplemented` is a list with no end. A refused commit
+  rebuilding the outcome without the plan fields is left: a `SELECT`
+  commits nothing. `Snapshot`'s merge picking the latest part's source
+  rather than the latest non-empty one is left: the two differ only for a
+  shape one core has never compiled. A `base/` home for the tree's ten
+  private `IEquals` copies is outside the stage.
+- **Left as gaps** (`known-gaps.md`, Captured plans): what no cell reaches
+  - plan DDL beside a held `DROP TABLE` `X` and from two cores among it.

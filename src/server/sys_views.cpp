@@ -888,6 +888,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
                     : plan.enabled                         ? "enabled"
                                                            : "disabled";
         }
+        // An administrator's plan's `join_order` is its `ELSE` variant's:
+        // the order a statement no rule holds for runs.
+        const exec::CapturedOrder& order =
+            plan.captured ? plan.order : plan.variants.back().order;
         std::string relations;
         std::string join_order;
         for (std::size_t i = 0; i < plan.key.n; ++i) {
@@ -896,7 +900,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
                 join_order += ", ";
             }
             relations += label(plan.key.oids[i]);
-            join_order += label(plan.key.oids[plan.order[i]]);
+            join_order += label(plan.key.oids[order[i]]);
         }
         view.rows.push_back({Int(plan.id), Str(plan.name), origin, Str(std::string(state)),
                              Int(plan.key.fetch_id), Str(relations), Str(join_order), variants,

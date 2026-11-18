@@ -75,7 +75,6 @@ struct PlanVariant {
 };
 
 struct AdminPlan {
-    std::uint64_t id = 0;  // its `sys.plans` row
     std::string name;
     CapturedKey key;
     // In rule order; the last is `ELSE`. Never empty.

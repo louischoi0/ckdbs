@@ -2030,11 +2030,23 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   measured; the overhead measurement is owed at CX's close. Owned by
   `exec/admin_plans.hpp`.
 
+- **A renamed relation's plan reads `enabled` and matches nothing new.**
+  A fetch id hashes names, so after `ALTER TABLE ... RENAME TO` or `RENAME
+  COLUMN` of a name the statement writes, no statement in the new spelling
+  matches the plan; `sys.plans` still shows it `enabled` and it still
+  RESTRICTs the relation's `DROP TABLE`. Nothing tells the administrator
+  but `plan_served` not moving and `sys.statement_stats` naming another
+  source for the new shape. Verified at CX-S1b by reading. Owned by
+  `parser-v2.md` I12.
+
 - **What CX-S1b's cells do not reach.** A variant whose order does not
   compile for a statement (the decline has one cell, by the sort rule); a
   `CREATE PLAN` or `ALTER PLAN` refused because a `DROP TABLE` holds a
-  relation's `X` (the rig's lock table is not driven from two sessions
-  there); `ReplaceAdminPlan`'s failure between its insert and its removal
+  relation's `X`, and a `CREATE PLAN` that meets a drop committed between
+  its compile and its hold (`HoldPlanRelations` and the catalog check
+  after it are read, not run: the rig's lock table is not driven from two
+  sessions there, and the existence check reads this core's catalog memo,
+  whose refresh inside a statement was not verified); `ReplaceAdminPlan`'s failure between its insert and its removal
   (the state it leaves is built by hand in a cell, and a mount's handling
   of it pinned); a plan over more than 16 relations (`Unsupported`); a
   mount that meets an administrator's row of another fingerprint version

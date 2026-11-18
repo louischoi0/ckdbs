@@ -163,7 +163,13 @@ from at its latest compile, on the core that saw the shape last: `admin`
 NULL otherwise), `captured`, `searched`, `deferred` (searched, not
 captured), `unkeyed`, `over_ceiling`, `declined` (a captured order declined
 for the statement), `admin_declined` (a plan's variant declined; `plan_name`
-and `variant` name it) or `written`; NULL for a shape with no join block.
+and `variant` name it) or `written`. **NULL is a block the join planner
+did not order and no plan chose**: a statement over one relation under
+every `join_order`, and under `planned` and `fixed` also a join of tuple
+key descents alone, a `SELECT *` join and a join with a subquery
+predicate, each of which runs its written order unsearched (under
+`written` those three read `written`). A subquery's compile never sets
+it: the row is the statement's.
 It is how a DBA or an agent finds a shape that runs uncaptured. `kind` is the first whitespace-separated token, upper-cased, when
 it is a verb the dispatcher routes, else `OTHER`; only `SELECT`, `INSERT` and `UPDATE`
 carry a fingerprint, so every other kind is one row at `fetch_id = 0`.

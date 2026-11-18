@@ -134,6 +134,7 @@ struct MountRecovery;
 // A `SELECT` whose walk runs on after its head returns (BA-S15); defined
 // in `command_dispatcher.cpp`.
 class SelectRun;
+class ReadBorrow;  // `read_borrow.hpp`
 
 // A relation-X build - `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION`,
 // `CREATE TRANSITION` - whose walk runs on after its head returns (A1 stage
@@ -1524,6 +1525,11 @@ private:
     // and edited. Admin, autocommit only, answered once durable.
     DispatchOutcome HandleCreatePlan(std::string_view line, Session& session);
     DispatchOutcome HandleAlterPlan(std::string_view line, Session& session);
+    // The `IS` of every relation `key` names, taken into `hold` and kept
+    // until it is destroyed: what keeps a `DROP TABLE` from committing
+    // under a plan DDL's install. A plan DDL is not a read that must never
+    // wait on a DDL: `TxnConflict` where any ask is refused.
+    Status HoldPlanRelations(const exec::CapturedKey& key, std::optional<ReadBorrow>& hold);
     DispatchOutcome HandleSetAsh(std::string_view line, std::string_view rest);
 
 

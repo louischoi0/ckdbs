@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "kds/base/status.hpp"
@@ -53,6 +54,10 @@
 // canonical form and `ParsePlanRule` reads it back at a mount.
 
 namespace kds::exec {
+
+// Whether two names are one, ASCII case-insensitively: how the plan DDL, a
+// rule and a `sys.plans` row compare a word or an object's name.
+bool SameName(std::string_view a, std::string_view b) noexcept;
 
 struct PlanRuleOperand {
     enum class Kind : std::uint8_t { kArg, kInt, kStr };

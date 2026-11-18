@@ -124,8 +124,8 @@ struct PlanRow {
     bool readable = false;
     std::uint32_t fingerprint_version = 0;
     CapturedKey key;
-    // A captured plan's order. For an administrator's plan, its `ELSE`
-    // variant's - the order a statement no rule holds for runs.
+    // A captured plan's order; unset for an administrator's, whose orders
+    // are its variants'.
     CapturedOrder order{};
     std::int64_t written_at_us = 0;  // UTC epoch microseconds
     std::string statement;
@@ -179,7 +179,10 @@ StatusOr<PlanRow> FindPlan(catalog::Catalog& catalog, storage::PageStore& store,
                            std::string_view name);
 
 // Whether an administrator's row can match a statement of this build: its
-// fingerprint version is this build's and every relation it names exists.
+// fingerprint version is this build's and no relation it names is gone.
+// Only `NotFound` says a relation is gone; a relation that could not be
+// opened for another reason is taken to exist, so a fault at a mount does
+// not take a plan - and its `DROP TABLE` RESTRICT - out of force.
 bool PlanRowIsValid(catalog::Catalog& catalog, const PlanRow& row);
 
 // `CREATE PLAN`'s write: `row` - an administrator's, its `id` unset - as a

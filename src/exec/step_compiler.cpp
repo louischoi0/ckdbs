@@ -2419,6 +2419,19 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         }
     }
     const bool written_sorted = best.value().sorted();
+    // The key the run's counts fold under and the posteriors are found by
+    // (CC-S2): a block of at most `kMaxPosteriorRelations` relations with a
+    // fetch id.
+    const auto statistics_key = [&]() -> std::optional<stats::PlanKey> {
+        if (plan->fetch_id == 0 || refs.size() > stats::kMaxPosteriorRelations) {
+            return std::nullopt;
+        }
+        stats::PlanKey key;
+        key.fetch_id = plan->fetch_id;
+        key.n = static_cast<std::uint8_t>(refs.size());
+        for (std::size_t w = 0; w < refs.size(); ++w) key.oids[w] = scope.relations[w].access->oid;
+        return key;
+    };
 
     // ---- 1a'. An administrator's plan (CX-S1b; CX-R1's first source) -----
     //
@@ -2455,12 +2468,15 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 source = PlanSource::kAdminDeclined;
                 chain = std::move(best.value());
             }
-            // The relations a run asks priors for, as any planned block's
-            // (CX-Q2) - but under `written`, which gathers nothing.
+            // The relations a run asks priors for and the key its counts
+            // fold under, as any planned block's (CX-Q2), so a `DROP PLAN`
+            // or an `AS SEARCHED` after it prices from what the shape's runs
+            // measured - but under `written`, which gathers nothing.
             if (plan->search) {
                 for (const BoundRelation& relation : scope.relations) {
                     chain.planned_relations.push_back(relation.access->oid);
                 }
+                chain.planned = statistics_key();
             }
             PlanNote& note = chain.plan_note.emplace();
             note.source = source;
@@ -2484,16 +2500,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     if (std::all_of(best.value().steps.begin(), best.value().steps.end(), is_descent)) {
         return best;
     }
-    // The key the run's counts fold under and the posteriors are found by
-    // (CC-S2): a searched block of at most `kMaxPosteriorRelations`
-    // relations with a fetch id.
-    std::optional<stats::PlanKey> key;
-    if (plan->fetch_id != 0 && refs.size() <= stats::kMaxPosteriorRelations) {
-        key.emplace();
-        key->fetch_id = plan->fetch_id;
-        key->n = static_cast<std::uint8_t>(refs.size());
-        for (std::size_t w = 0; w < refs.size(); ++w) key->oids[w] = scope.relations[w].access->oid;
-    }
+    const std::optional<stats::PlanKey> key = statistics_key();
     // What a planned block's chain carries whatever chose its order: the
     // relations its run asks priors for and the key its counts fold under,
     // so the statistics are gathered under `fixed` as under `planned`
