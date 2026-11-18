@@ -49,8 +49,13 @@
 // one pin a relation at most (`ArmPin`, `admin_plans.hpp`). `NOT SCAN` is
 // refused: the walk is what every arm falls back to. `CABIN (<column>)`
 // names the Cabin on that column (CX-S3b); an expression or predicate
-// Cabin cannot be named (`NotImplemented`). A `BUILD` clause
-// (CX-S5) is refused `NotImplemented` at its word.
+// Cabin cannot be named (`NotImplemented`). **`BUILD`** (CX-S5) follows
+// `ACCESS`, or `ORDER` where there is none:
+//
+//   BUILD <binding> ON | OFF {, <binding> ON | OFF}
+//
+// one a relation at most; `ON` beside an `ACCESS` pin holding the relation
+// to a keyed class is refused, the build being a walk's.
 //
 // Every refusal carries the byte of the offending token in the command's
 // own text.
@@ -73,6 +78,13 @@ struct PlanVariantSpec {
         std::size_t name_at = 0;
     };
     std::vector<Access> access;
+    // The `BUILD` clause as written, in written order (CX-S5).
+    struct Build {
+        std::string binding;
+        std::size_t binding_at = 0;
+        ArmPin::Build build = ArmPin::Build::kLadder;
+    };
+    std::vector<Build> builds;
 };
 
 struct CreatePlanStmt {
@@ -101,6 +113,10 @@ StatusOr<AlterPlanStmt> ParseAlterPlan(std::string_view line);
 // A variant's `ORDER` list as written positions in executed order, against
 // the statement's `bindings` in written order: every binding named once, by
 // name, case-insensitively. `InvalidArgument` at the list's byte otherwise.
+// The written position of `binding` among the statement's `bindings`,
+// case-insensitively, or `bindings.size()` where it binds none.
+std::size_t BindingPosition(const std::vector<std::string>& bindings, std::string_view binding);
+
 StatusOr<CapturedOrder> ResolvePlanOrder(const std::vector<std::string>& bindings,
                                          const PlanVariantSpec& variant);
 

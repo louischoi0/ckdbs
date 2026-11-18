@@ -154,11 +154,30 @@ StatusOr<PlanVariantSpec> ParseVariant(parser::Lexer& lexer) {
             lexer.Next();
         }
     }
-    // The clause of the stage that pins a build.
-    if (const Token& next = lexer.Peek(); IsIdent(next, "BUILD")) {
-        return Status::NotImplemented(
-            "BUILD in a plan variant is not implemented: a variant states a join order and "
-            "access pins" + At(next));
+    // BUILD <binding> ON | OFF {, <binding> ON | OFF} (CX-S5).
+    if (IsIdent(lexer.Peek(), "BUILD")) {
+        lexer.Next();
+        while (true) {
+            PlanVariantSpec::Build build;
+            const Token binding = lexer.Next();
+            if (binding.type != TokenType::kIdent) {
+                return Status::InvalidArgument(
+                    "BUILD names a relation of the statement, then ON or OFF" + At(binding));
+            }
+            build.binding = std::string(binding.text);
+            build.binding_at = binding.byte_offset;
+            const Token word = lexer.Next();
+            if (word.type == TokenType::kKeyword && word.kw == parser::Keyword::kOn) {
+                build.build = ArmPin::Build::kOn;
+            } else if (IsIdent(word, "OFF")) {
+                build.build = ArmPin::Build::kOff;
+            } else {
+                return Status::InvalidArgument("a BUILD pin is ON or OFF" + At(word));
+            }
+            variant.builds.push_back(std::move(build));
+            if (lexer.Peek().type != TokenType::kComma) break;
+            lexer.Next();
+        }
     }
     return variant;
 }
@@ -272,6 +291,13 @@ StatusOr<CreatePlanStmt> ParseCreatePlan(std::string_view line) {
     return stmt;
 }
 
+std::size_t BindingPosition(const std::vector<std::string>& bindings, std::string_view binding) {
+    for (std::size_t w = 0; w < bindings.size(); ++w) {
+        if (SameName(bindings[w], binding)) return w;
+    }
+    return bindings.size();
+}
+
 StatusOr<CapturedOrder> ResolvePlanOrder(const std::vector<std::string>& bindings,
                                          const PlanVariantSpec& variant) {
     const auto refuse = [&](const std::string& what) {
@@ -281,10 +307,7 @@ StatusOr<CapturedOrder> ResolvePlanOrder(const std::vector<std::string>& binding
     CapturedOrder order{};
     std::vector<bool> placed(bindings.size(), false);
     for (std::size_t k = 0; k < variant.order.size(); ++k) {
-        std::size_t position = bindings.size();
-        for (std::size_t w = 0; w < bindings.size(); ++w) {
-            if (SameName(bindings[w], variant.order[k])) position = w;
-        }
+        const std::size_t position = BindingPosition(bindings, variant.order[k]);
         if (position == bindings.size()) {
             return refuse("ORDER names '" + variant.order[k] +
                           "', which the statement does not bind");
@@ -311,23 +334,41 @@ StatusOr<PlanVariant> ResolvePlanVariant(const std::vector<std::string>& binding
     auto order = ResolvePlanOrder(bindings, spec);
     if (!order.ok()) return order.status();
     PlanVariant variant{spec.name, spec.rule, order.value(), {}};
-    if (!spec.access.empty()) variant.access.resize(bindings.size());
+    if (!spec.access.empty() || !spec.builds.empty()) variant.access.resize(bindings.size());
+    const auto unbound = [&](std::string_view clause, const std::string& binding,
+                             std::size_t at) {
+        return Status::InvalidArgument("variant '" + spec.name + "': " + std::string(clause) +
+                                       " names '" + binding +
+                                       "', which the statement does not bind" + At(at));
+    };
     for (const PlanVariantSpec::Access& access : spec.access) {
-        std::size_t position = bindings.size();
-        for (std::size_t w = 0; w < bindings.size(); ++w) {
-            if (SameName(bindings[w], access.binding)) position = w;
-        }
+        const std::size_t position = BindingPosition(bindings, access.binding);
         if (position == bindings.size()) {
-            return Status::InvalidArgument("variant '" + spec.name + "': ACCESS names '" +
-                                           access.binding +
-                                           "', which the statement does not bind" +
-                                           At(access.binding_at));
+            return unbound("ACCESS", access.binding, access.binding_at);
         }
-        if (variant.access[position].pins()) {
+        if (variant.access[position].arm != ArmPin::Arm::kLadder) {
             return Status::InvalidArgument("variant '" + spec.name + "': ACCESS pins '" +
                                            access.binding + "' twice" + At(access.binding_at));
         }
         variant.access[position] = access.pin;
+    }
+    for (const PlanVariantSpec::Build& build : spec.builds) {
+        const std::size_t position = BindingPosition(bindings, build.binding);
+        if (position == bindings.size()) return unbound("BUILD", build.binding, build.binding_at);
+        ArmPin& pin = variant.access[position];
+        if (pin.build != ArmPin::Build::kLadder) {
+            return Status::InvalidArgument("variant '" + spec.name + "': BUILD pins '" +
+                                           build.binding + "' twice" + At(build.binding_at));
+        }
+        // The build is a walk's annotation: a pin holding the step to a
+        // keyed class leaves it none to take.
+        if (build.build == ArmPin::Build::kOn && pin.keyed()) {
+            return Status::InvalidArgument(
+                "variant '" + spec.name + "': BUILD " + build.binding + " ON is the walk's, and '" +
+                build.binding + "' is pinned to " + std::string(ArmName(pin.arm)) +
+                At(build.binding_at));
+        }
+        pin.build = build.build;
     }
     return variant;
 }
@@ -337,7 +378,7 @@ std::string PlanAccessText(const std::vector<ArmPin>& access,
     std::string out;
     for (std::size_t w = 0; w < access.size() && w < bindings.size(); ++w) {
         const ArmPin& pin = access[w];
-        if (!pin.pins()) continue;
+        if (pin.arm == ArmPin::Arm::kLadder) continue;
         out.append(out.empty() ? " ACCESS " : ", ").append(bindings[w]);
         out.append(pin.forbid ? " NOT " : " ").append(ArmName(pin.arm));
         if (pin.name.empty()) continue;
@@ -346,6 +387,13 @@ std::string PlanAccessText(const std::vector<ArmPin>& access,
         } else {
             out.append(" ").append(pin.name);
         }
+    }
+    bool first_build = true;
+    for (std::size_t w = 0; w < access.size() && w < bindings.size(); ++w) {
+        if (access[w].build == ArmPin::Build::kLadder) continue;
+        out.append(first_build ? " BUILD " : ", ").append(bindings[w]);
+        out.append(" ").append(BuildName(access[w].build));
+        first_build = false;
     }
     return out;
 }

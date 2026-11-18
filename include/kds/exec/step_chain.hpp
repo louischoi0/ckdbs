@@ -756,9 +756,10 @@ struct Step {
     // fc44ac6 vs 080f73a, 2026-08).
     std::optional<BuildKey> build;
 
-    // Whether an administrator's plan pinned this step's arm (CX-S3a,
-    // `admin_plans.hpp` `ArmPin`): the ladder chose it among the arms the
-    // pin left. Display only - `ANALYZE` prints `arm=plan`.
+    // Whether an administrator's plan pinned this step - its arm (CX-S3a),
+    // its build (CX-S5), or both (`admin_plans.hpp` `ArmPin`): the ladder
+    // chose among what the pin left. Display only - `ANALYZE` prints
+    // `arm=plan`.
     bool arm_pinned = false;
 
     // The function conjuncts placed at this step (see FunctionPredicate).

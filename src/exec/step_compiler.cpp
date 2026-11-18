@@ -1785,8 +1785,12 @@ std::optional<IndexChoice> LiteralIndexChoiceOf(const Scope& scope,
 // column would be judged for the first outer row alone, and every later
 // probe would miss the rows it admits for theirs (spec §8). The rule also
 // declines a multi-column join key (CB12's scope rule) and a
-// mixed-descriptor equality; a tuple key equality became kProbe in the kind
-// pass, so its decline here is defensive.
+// mixed-descriptor equality. **A tuple key equality is declined here, and
+// that decline is load-bearing**: with no pin it became kProbe in the kind
+// pass, but under a plan's pin that takes the tuple key class away (`SCAN`,
+// `NOT TUPLE_KEY`, `BUILD ON`; CX-S3a, CX-S5) it reaches this arm, and the
+// map is never keyed on a tuple key - so a join entered by the inner
+// relation's tuple key cannot meet `BUILD ON`.
 // The kFilterScan, CompileWhere and scalar-sub-chain declines are the call
 // site's - they gate whether this arm runs at all.
 std::optional<BuildKey> BuildKeyOf(const Scope& scope, const catalog::TableAccess& access,
@@ -3249,8 +3253,8 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // bounds what a walk visits, and v1 declines to also build
                 // for it.
                 step.kind = AccessKind::kFilterScan;
-            } else if (walk && inner_build && step.fn_residual.empty() &&
-                       step.bool_residual.empty()) {
+            } else if (walk && inner_build && pin.build != ArmPin::Build::kOff &&
+                       step.fn_residual.empty() && step.bool_residual.empty()) {
                 // A step carrying a function conjunct takes no build
                 // (AP-S4): the map holds the rows passing the
                 // *non-correlated* conjuncts, and a function conjunct is
@@ -3276,15 +3280,26 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // A pin naming one class is met only by an arm of it. The walk is
         // not something the ladder is held to by taking nothing else away,
         // so `SCAN` is met by what is left when no keyed arm is admitted.
-        if (pin.pins() && !pin.forbid) {
-            if (ArmClassOf(step.kind) != pin.arm) {
-                return Status::Unsupported(
-                    "the statement's step over '" + scope.relations[i].binding +
-                    "' cannot take the pinned arm " + std::string(ArmName(pin.arm)) +
-                    (pin.name.empty()                    ? ""
-                     : pin.arm == ArmPin::Arm::kCabin ? " (" + pin.name + ")"
-                                                       : " " + pin.name));
-            }
+        if (pin.arm != ArmPin::Arm::kLadder && !pin.forbid &&
+            ArmClassOf(step.kind) != pin.arm) {
+            return Status::Unsupported(
+                "the statement's step over '" + scope.relations[i].binding +
+                "' cannot take the pinned arm " + std::string(ArmName(pin.arm)) +
+                (pin.name.empty()                    ? ""
+                 : pin.arm == ArmPin::Arm::kCabin ? " (" + pin.name + ")"
+                                                   : " " + pin.name));
+        }
+        // `BUILD ON` is met only by a step that builds (CX-S5): the build's
+        // own rule declined it - no correlated equality to key on (the
+        // first step has none), a conjunct the map cannot bucket - or the
+        // filter scan's rank above it took the step.
+        // A met pin builds subject to `join_build_max_rows` at run time, as
+        // every build does: a cap of 0, or a map that outgrows it, walks
+        // per outer row (CX-Q8 (a)), and `ANALYZE` says so.
+        if (pin.build == ArmPin::Build::kOn && !step.build.has_value()) {
+            return Status::Unsupported("the statement's step over '" +
+                                       scope.relations[i].binding +
+                                       "' cannot take the pinned BUILD ON");
         }
 
         // The columns the kind was assigned for. Recorded here because the

@@ -33,6 +33,15 @@ std::optional<ArmPin::Arm> ArmFromName(std::string_view word) noexcept {
     return std::nullopt;
 }
 
+std::string_view BuildName(ArmPin::Build build) noexcept {
+    switch (build) {
+        case ArmPin::Build::kOn: return "ON";
+        case ArmPin::Build::kOff: return "OFF";
+        case ArmPin::Build::kLadder: return {};
+    }
+    return {};
+}
+
 const PlanVariant& AdminPlan::Choose(std::string_view statement) const {
     if (variants.size() == 1) return variants.front();
     const std::vector<parser::StatementArgument> args = parser::ArgumentsOf(statement);

@@ -78,14 +78,17 @@ class WalManager;
 // is, autocommit only. Its text is
 //
 //   v1 fp=<v> oids=<o>,<o> bindings=<b>,<b> args=<n> at=<us> variants=<k>
-//   <name> <p>,<p> [access=<w>:<pin>;...] ELSE | WHEN <rule>   (k lines)
+//   <name> <p>,<p> [access=<w>:<pin>;...] [build=<w>:ON|OFF;...] ELSE | WHEN <rule>
+//                                                              (k lines)
 //   <the statement's shape text>
 //
 // A variant's `access=` field is there only where it pins (CX-S3a): one
 // `<written position>:<pin>` a pinned relation, a pin being `TUPLE_KEY`,
 // `INDEX`, `INDEX:<name>`, `CABIN`, `CABIN:<column>` (CX-S3b) or `SCAN` -
 // the DDL's words (`ArmName`) - with `!` before a forbidden one. A row with
-// none reads as it did before pins existed. A one-relation statement's
+// none reads as it did before pins existed. A `build=` field (CX-S5) is
+// there only where the variant pins a relation's build, `ON` or `OFF`, and
+// `ON` never beside a keyed pin. A one-relation statement's
 // plan (CX-S3b) has one oid, one binding and the order `0`.
 //
 // `bindings` are the statement's relations as it names them, in written
