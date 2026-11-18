@@ -468,7 +468,74 @@ CY-Q0 and CY-Q1 marked (a) on W8 (`raft-marks-2026-11-18.md` §6);
 CY-Q2..Q13 marked (a) and **CY opened on W9** (§7).
 
 - **CY-S0** started 2026-11-18 on worktree `cx-plan-change-option`. No
-  engine code. Its report is appended here when the results file lands.
+  engine code.
+
+### CY-S0, 2026-11-18: the gate is not met on the scenarios; what a blind compile costs is measured; one case is owed
+
+`[measured]` on `v3.4.12-18-ge0cd5a93`, `build-release`,
+`bench/v3.4.12/results-cy-s0-premise-v3.4.12-18-ge0cd5a93.md`, 01:34 to
+01:52 UTC, inside the 20 minutes. An oracle bound: every order forced under
+`join_order = written` against the order the informed planner chose.
+
+- **The gate (CY-Q15 (a)) is not met, for S2 or for S3.** Over 15 cells -
+  five scenario join statements at 200, 1,000 and 10,000 rows - the
+  informed planner's order is the fastest forced order in 14, inside the
+  noise floor. No cell has a faster order with 15 % less server CPU in
+  every round (0 of 4 rounds wherever the orders differ). By p50, CY-Q1's
+  first wording, one cell (`cross-join-200`) shows 20 %, and the results
+  file rejects it: p0 and p25 are equal across the arms, server CPU is 63
+  against 65-67 µs, and both orders are eight tuple key probes, so no
+  selectivity enters the choice.
+- **The constants are wrong and it did not matter here.** Constant over
+  true selectivity runs from 0.08 (`model_id = k`, at every size) to 187
+  (`u.id <= 16` of 10,000). Once a shape has run complete, `ANALYZE`'s
+  `est=` equals `obs=`: the posterior `card(T)` (PS2) has replaced the
+  constant. So under `planned` a constant prices a shape's first compile
+  and nothing after it.
+- **S3 has no premise from the scenarios.** No scenario statement carries
+  two literal conjuncts on different columns of one relation; the one pair,
+  a `BETWEEN`, has joint over product 1.00.
+- **What does cost is the blind first compile** (CX-Q19, CY-S1). A fresh
+  server keeps the written order for four of the five statements. Two of
+  those are the slow order: `customer-statement` (`freights` first) runs
+  1.75x, 2.9x and 2.2x the informed order's p50 at the three sizes (131 /
+  500 / 4,186 µs against 75 / 171 / 1,919), `compare-all` 1.22x, 1.17x,
+  1.05x. The cause is the relation prior - `freights` priced at 100,000
+  rows - not a column constant.
+- **Not measured, stated as such**:
+  - **the compile `fixed` will capture once CY-S1 is built** - relation
+    priors published, no posterior yet for the shape. The blind arm had
+    neither and the informed arm had both, so S0 does not say what order a
+    constant picks when only the priors are right. That is the one compile
+    in which a column statistic could act under `fixed`, and it is owed
+    before S2's verdict is read as final for `fixed`;
+  - **a skewed column**: the scenario columns are uniform (one value in
+    k), and the optional synthetic Zipf cell was cut for the budget;
+  - the scenario drivers' own data and sizes (the data is synthetic to
+    the schemas' shapes, as CC-S0's was), a second literal per cell, and a
+    client pinned to its own CPU.
+- **The census** `[source-read]` at `e0cd5a93`:
+  - the three constants have one reader, the conjunct loop of
+    `src/exec/join_order.cpp:109-185` (equality `:160`, a range end
+    `:162`, other `:124`, `:149`, `:164`, `:171`, a key set `:182`);
+    `kAssumedRelationRows` has one, `src/exec/step_compiler.cpp:2431`;
+    `tests/join_planner_test.cpp` names them four times;
+  - **the loop never reads a literal's value**: it prices by the
+    operator and the column position, and the only values it reads are a
+    tuple key range's span (`step.range`) and a key set's size. An
+    estimator that looks a value up in a list or a histogram is the first
+    reader of a literal in the cost model, and needs the value in the
+    column's type - what `CompareValues` (`include/kds/exec/row_codec.hpp:398`)
+    already compares;
+  - a gather walk decodes cells through `storage::DecodeCell`
+    (`include/kds/storage/tagged_cell.hpp:183`) and can slice as a build's
+    walk does (64 pages, `docs/spec/sched.md` §3).
+
+**What follows** `[design]`, for the operator: by the gate as marked, S2
+and S3 are not built on this evidence, and S1 and S4's lock, export and
+import go on, as CY-Q1 (a) and CY-Q15 (a) say. The verdict is about the
+scenarios as much as about the engine - they hold no skewed column and no
+correlated pair - and it leaves the priors-only compile unmeasured.
 
 **The review of this order** (`critics-developer`, read at `fb65d7bd`,
 reported after W8's push and W9's marks). It verified the citations of
