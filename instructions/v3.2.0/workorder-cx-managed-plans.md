@@ -270,8 +270,8 @@ item in §4.
 - **CX-R6 - zero cost for the unmanaged point path** `[design]`. A point
   read or a tuple key chain leaves the compile before any plan lookup, as
   it leaves before the statistics today (`plan-stats.md` PS9). The lookup
-  is one probe of a per-core read-only map, and only for a statement whose
-  fetch id has a plan. The same holds for the captured map (CX-R7): a
+  is one probe of the plan map (its protocol is CX-Q22), and only for a
+  statement whose fetch id has a plan. The same holds for the captured map (CX-R7): a
   tuple key chain skips the search today and is never captured.
 - **CX-R7 - a capture is once per shape, instance-wide** `[design]` (W4,
   W5). Under `fixed`, a planned block's first compile with no
@@ -494,7 +494,7 @@ from CX-R1.
 
 ### CX-S7 - priority 6: the join order search, as an advisor
 
-- `ADVISE PLAN FOR <statement>` runs CB/CC's search with S4's model and
+- `ADVISE PLAN FOR <statement>` runs CB/CC's search with CY's model and
   PlanStats' facts. It returns the proposed plan as `CREATE PLAN` text,
   with its estimated cost ratio against **the plan in force** (an
   administrator's, a captured one, or the written order) and the
@@ -529,7 +529,7 @@ CLA's proposal; renaming them is the operator's.
 | CX-Q4 | an enabled plan whose arm becomes unservable | (a) refuse the DDL that would break it, RESTRICT, as `DROP TABLE` does for an assertion; (b) mark it `INVALID` and run the default plan, counted and visible; (c) refuse the statement | (a) for `DROP INDEX` and a Cabin drop, (b) for anything (a) cannot see. (c) turns a plan problem into an outage |
 | CX-Q5 | the `WHEN` language | (a) `ARG(k) op constant`, `AND`, `IS NULL` only; (b) arithmetic over arguments too (`ARG(2) - ARG(1)`) | (b) limited to `+ -` over integers, checked overflow, because range width is the case that needs variants |
 | CX-Q6 | controller-created Cabins (§1.5) | (a) a controller Cabin is ladder-eligible only through a managed plan that names it; (b) leave the ladder as it is | (a). Under (b), switching the controller on is an implicit plan change |
-| CX-Q7 | where S4's model lives | (a) a logged `sys` relation; (b) memory, like PlanStats | (a): a managed object that a restart erases is not managed |
+| CX-Q7 | where S4's model lives | (a) a logged `sys` relation; (b) memory, like PlanStats | **Withdrawn**: answered by CY-S1 (`workorder-cy-managed-statistics.md`), a logged `sys.statistics` |
 | CX-Q8 | the run-time build decline (§1.5) | (a) keep it as a resource limit, like `sort_max_rows`, visible in `ANALYZE`; (b) count it as a plan change and refuse instead | (a): it changes the locate mechanism, never the plan's shape, and a plan can say `BUILD OFF` |
 | CX-Q9 | class (b) rewrites and the hoisted hash join | (a) not in CX; (b) as plan options in S2/S5 | (a) until a scenario statement is named as the consumer |
 | CX-Q10 | S6's threshold for building the cache | a share of p50 latency, `[provisional]` | 5 % at `cores = 1`, provisional until S6's first cell |
@@ -615,7 +615,7 @@ AS-E epoch, `build-release`, results named by `git describe --tags`.
 - `docs/spec/cabin.md` §4e - under CX-Q6 (a).
 - `docs/spec/sys-views.md` - `sys.plans`, `sys.plan_advice`, the new
   `sys.statement_stats` columns.
-- `manual/` - `CREATE PLAN`, `GATHER STATISTICS`, `ADVISE PLAN`.
+- `manual/` - `CREATE PLAN`, `ADVISE PLAN`, `SET JOIN_ORDER`.
 
 ## 8. Stage log
 
@@ -623,15 +623,20 @@ Nothing has landed. CX is written and not opened. Amended 2026-11-18 on
 W3-W5 (`raft-marks-2026-11-18.md` §3), documents only. CX-Q12..Q18 marked (a) on W6 (§4), documents only.
 
 **The review of the amendment** (`critics-developer`, read at `d4bda61f`,
-reported after W6's push). Taken: its seventeen wording corrections; its
-design findings A1-A8, A10 and A12 as CX-Q19..Q27 and as CX-R7's `?` and
-minted-view sentences; A9 as CX-Q13's corrected reason; A11 as CX-S4's
+reported after W6's push). Taken: sixteen of its seventeen wording corrections (the
+overlong line it named in the header is not reflowed); its design findings
+A1-A8, A10 and A12, and the second half of A13, as CX-Q19..Q27 and as
+CX-R7's `?` and minted-view sentences; its duplicate §5 bullet, folded; A9 as CX-Q13's corrected reason; A11 as CX-S4's
 move to CY. Its largest finding is A1: under `fixed` a shape first compiled
 before the steward's first publish is fixed on the data-free order, which
 made S0's "costs nothing after warm-up" and its close gate false; both are
 restated. Not taken: folding the administrator's lookup and the captured
 map into one structure is left to CX-Q22 rather than decided in prose; the
-repetition it found between CX-R8, S0 and CX-Q14 is kept, each being the
-rule, the stage's fact and the operator's item. Its A13 note that
+repetition it found between CX-R8, S0 and CX-Q14, in the four statements
+that a capture is not adoption of advice, and in the steward's two
+mentions is kept, each being a rule, a stage's fact or the operator's
+item. A second review, of `fb65d7bd`, found A10 unapplied in S7 (the
+"statistics generation" an advice names is an in-run value and stays, the
+model being CY's) and three stale lines after S4's move, each corrected. Its A13 note that
 controller-made Cabins still reach the ladder under `fixed` is CX-Q6,
 unmarked before the amendment and still.

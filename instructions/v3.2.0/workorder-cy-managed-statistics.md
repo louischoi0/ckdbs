@@ -136,26 +136,27 @@ is built; it never changes a row a statement returns.
 - `[source-read]` A `SELECT`'s outermost walk yields every 64 pages, 16 for
   an `analytic` session (`docs/spec/sched.md` §3), holding its view and its
   relation borrow.
-- `[source-read]` A column keeps its oid for life; an `ADD COLUMN` that
-  reuses a cleaned dropped slot keeps the oid and bumps `generation`
-  (`docs/spec/alter.md` AL11).
-- `[source-read]` A restore replays the log from the backup's start, so
-  logged catalog state comes back and unlogged state is discarded
-  (`docs/spec/backup.md` B6a).
+- `[source-read]` A column's oid does not name one column for ever: an
+  `ADD COLUMN` that reuses a cleaned dropped slot takes that slot's oid
+  and bumps `generation` (`docs/spec/alter.md` AL11).
+- `[source-read]` A restore is mount recovery from the backup's start, so
+  logged catalog state comes back (`docs/spec/backup.md`), and unlogged
+  state is discarded at its mount (B6a).
 
 ## 2. Rules
 
 - **CY-R1 - one reader** `[design]`. The persisted model is read by
   `exec::EstimateChain` and by `ANALYZE`'s estimates, as CC's facts are
-  (`plan-stats.md` PS9), and so by exactly the compiles CX-R1 lets search:
-  `planned`'s every compile, a `fixed` first compile, `ADVISE PLAN`. No
-  access-ladder rung, legality test or executor path reads it.
+  (`plan-stats.md` PS9), and so by every compile in which CX-R1 runs the
+  search, and by `ADVISE PLAN`. No access-ladder rung, legality test or
+  executor path reads it.
 - **CY-R2 - a statistic never changes a result** `[quiet-wrong]`. No
   estimate declares a result empty, skips a step or shortens a walk. Every
-  rows value is clamped at 1 (PS9). A histogram that says "no row in this
-  range" prices one row.
+  rows value is clamped at 1 (PS9), so a histogram bucket that holds no
+  row prices one row and never none. A literal outside the histogram's
+  whole range is CY-Q17.
 - **CY-R3 - the persisted model changes only by an explicit act**
-  `[operator]`. `GATHER`, `IMPORT`, `RESTORE STATISTICS` and `PUBLISH`
+  `[design]`, from W7's deferral of item 4. `GATHER`, `IMPORT`, `RESTORE STATISTICS` and `PUBLISH`
   change it, and nothing else does, until item 4 is ruled on. The one
   exception CLA proposes is CY-Q2: the steward saving the relation priors
   it already computes, so that a restart does not start blind.
@@ -169,23 +170,29 @@ is built; it never changes a row a statement returns.
   to an estimate from any source.
 - **CY-R6 - every stored statistic has a version** `[design]`. A
   statistics object (a relation's, a column's, a group's) carries a
-  version that only grows and is logged with it. A plan decision can name
-  the versions it read (CX-Q25), history can restore one (CY-S4), and an
-  export names what it exported.
+  version that only grows and is logged with it. History can restore one
+  (CY-S4), an export names what it exported, and a plan decision could
+  name the versions it read if CX-Q25 is ruled that way.
 - **CY-R7 - identity is by oid and generation, never by name**
   `[quiet-wrong]`. A column statistic is keyed by `(relation oid, column
   oid, column generation)`, so a column added into a reused slot (§1.4)
   misses the dropped column's statistic instead of inheriting it.
-- **CY-R8 - gathering is a reader** `[design]`. `GATHER` walks as an
-  `analytic` read does - sliced, yielding, under the relation's `IS`
-  borrow - takes no `X`, blocks no writer, and writes its result in one
-  short transaction of its own at the end. It adds nothing to `INSERT`,
+- **CY-R8 - gathering is a reader** `[design]`. `GATHER` walks as a read
+  does - sliced, yielding, under the relation's `IS` borrow, at CY-R10's
+  level - takes no `X`, blocks no writer of rows, and writes its result in
+  one short transaction of its own at the end. **An `IS` held for a long
+  walk makes every DDL that takes the relation's `X` wait and be refused
+  `TxnConflict` at the 1 s fault net** (`txn.md` §5); how the borrow is
+  held is CY-Q21. `GATHER` is admin-classed, autocommit only, refused
+  inside `BEGIN` and on a `readonly` connection. It adds nothing to `INSERT`,
   `UPDATE` or `DELETE`.
 - **CY-R9 - published values are banded** `[design]`. What the planner
   reads of a statistic is its half-octave band with CC's hysteresis
   (`plan-stats.md` PS5), so a re-gather that moves a value by a few
-  percent publishes nothing and moves no plan. The stored value is exact;
-  the band is the planner's view of it.
+  percent publishes nothing and moves no plan. The stored value is what
+  the gather computed; the band is the planner's view of it. What a band
+  is for a list or a histogram, and what hysteresis does to an import, is
+  CY-Q19.
 - **CY-R10 - statistics work is behind OLTP** `[operator]` (W11). Every
   act that makes or applies a statistic - a `GATHER`'s walk and its
   result write, the steward's save (CY-Q2), the mount's seed, a publish,
@@ -223,9 +230,15 @@ built at all; S1 does not wait for it (CY-Q1).
   scenarios 1-4, each step's `est=` against `obs=` from `ANALYZE`
   (`plan-stats.md` §6), with the true selectivity of each literal conjunct
   computed by a `COUNT`.
-- **Which plans it costs**: the same statements re-planned with the true
-  selectivities injected through the planner's test seam, listing every
-  block whose order or build side changes and its p50 under both orders.
+- **Which plans it costs**: an oracle bound, because the cost model has
+  no seam that takes a selectivity (`CostInputs`,
+  `include/kds/exec/join_order.hpp:77-108`, carries rows and posteriors
+  only). Every order of each statement is forced under `join_order =
+  written`, CC-S0's method, and the fastest is set against the order the
+  informed planner chooses - p50 and server CPU per statement.
+- **Joint selectivity**: for every step with two or more literal conjuncts
+  on one relation, the joint selectivity against the product of the
+  single ones - S3's only premise.
 - **What a blind first compile costs**: each shape's order from an empty
   snapshot against its order once priors are published - the population
   CX-Q19 is about.
@@ -235,14 +248,16 @@ built at all; S1 does not wait for it (CY-Q1).
 
 ### CY-S1 - persistence (item 2)
 
-- **`sys.statistics`** `[design]`: a logged catalog relation (superblock
-  36), one row per statistics object, holding its key (CY-R7), kind
+- **`sys.statistics`** `[design]`: a logged catalog relation (the next
+  superblock version and the next free fixed root, coordinated with CX-S1's
+  `sys.plans`), one row per statistics object, holding its key (CY-R7), kind
   (relation, column, column group), origin (`gathered`, `observed`,
   `imported`), version (CY-R6), state (`published`, `pending`, `locked`
   as a flag), the time it was made, the rows sampled, and its values as
   one spilled cell.
 - **The relation object**: rows and leaves. `GATHER STATISTICS ON t`
-  with no column list writes it exactly, from a whole walk.
+  with no column list writes it from a whole walk - a count of a relation
+  that moves under the walk (CY-Q7 (a)), not of one instant.
 - **The mount seeds the snapshot before the listener opens** from the
   published relation objects, so the first compile after a restart or a
   restore prices from them, not from `kAssumedRelationRows`. The steward
@@ -256,12 +271,14 @@ built at all; S1 does not wait for it (CY-Q1).
   has; `ANALYZE` shows each object's age.
 - **Cells**: a restart and a restore each plan a scenario join at the
   first statement as the previous run did; a `READ ONLY` session's planned
-  statement appends no record; a volume at superblock 35 is refused.
+  statement appends no record; a volume at the previous superblock is
+  refused.
 
 ### CY-S2 - column statistics (item 1)
 
-- **`GATHER STATISTICS ON t (c, ...)`**, or `ALL COLUMNS`, `[SAMPLE n
-  PERCENT]` (CY-Q4). Per column: the NULL fraction, the number of distinct
+- **`GATHER STATISTICS ON t (c, ...)`**, or `ALL COLUMNS` (the declared
+  columns; a heap's hidden tuple key is never gathered or exported),
+  `[SAMPLE n PERCENT]` (CY-Q4). Per column: the NULL fraction, the number of distinct
   values, a most-common-values list with frequencies, and an equi-depth
   histogram over the values the list does not hold (CY-Q5). A
   `char`/`varchar` column is CY-Q6.
@@ -271,24 +288,32 @@ built at all; S1 does not wait for it (CY-Q1).
     non-listed fraction over the remaining distinct values;
   - a range end or `BETWEEN`: the histogram's fraction, interpolated
     inside a bucket for numeric, date and timestamp types, plus the listed
-    values inside the range;
+    values inside the range. A bucket whose two bounds are equal is not
+    interpolated (no 0/0), and a `decimal128` bound is compared exactly
+    and interpolated in the nearest double. A range on the tuple key
+    keeps its span pricing (`join_order.cpp:151-152`). A literal outside
+    the histogram's range is CY-Q17;
   - `IS NULL` / `IS NOT NULL`: the NULL fraction and its complement;
   - `c <> v`, `IN (...)`, `NOT IN (...)`: from the same parts;
   - a join-key equality with no measured `card(T)`: the product of both
     sides' rows over the larger distinct count, less each side's NULLs -
-    the standard containment estimate - in place of `1 / rows`.
+    the standard containment estimate - in place of today's `1 /
+    max(rows)`, or `1 / rows(parent)` on a key join
+    (`join_order.cpp:139-143`).
   A measured `card(T)` still outranks every estimate (PS2).
-- **A value arriving as `?`** is a literal by the compile (`C_BIND`
-  substitutes, `kwp_session.cpp:580-585`), so the estimator always sees
-  the value.
+- **A value arriving as `?`** is a literal by the compile when it is
+  bound at `C_BIND` (`kwp_session.cpp:580-585`). A compile that still
+  holds an unbound `?` (`literals_known` false,
+  `command_dispatcher.cpp:8909`) prices that conjunct from the column's
+  average, `1 / distinct`, not from a value.
 - **`ANALYZE`** names, per step, the source of each estimate: `const`,
   `bound`, `stat` or `obs`.
 - **Cells**: the differential matrix - for every storable type and each
   comparison, the estimate against a `COUNT` on uniform, skewed (Zipf) and
   heavily-NULL data, within a stated factor; the four contract suites
   (waystone, index, cabin, inner-build) run under an empty model and under
-  a gathered one and compare replies byte for byte, as CC-Q14 (a) did for
-  the snapshot; a dropped-and-re-added column reads no old statistic
+  a gathered one and compare replies as CC-Q14 (a) set for the snapshot -
+  as multisets where a statement has no `ORDER BY`; a dropped-and-re-added column reads no old statistic
   (CY-R7).
 
 ### CY-S3 - column-group statistics (item 3)
@@ -310,7 +335,8 @@ built at all; S1 does not wait for it (CY-Q1).
   independence assumption, stated in `known-gaps.md` when S3 lands.
 - **Cells**: a pair with `b = f(a)`; a pair that is independent (the group
   must not change the estimate beyond its band); a three-column group
-  queried on two of its columns.
+  queried on two of its columns, which the group does not cover: those
+  two stay independent unless a pair's dependency degree prices them.
 
 ### CY-S4 - the management surface (item 5)
 
@@ -323,8 +349,9 @@ state is a `sys` view read by `SELECT` (BO-R3).
   `PUBLISH STATISTICS ON t` makes it the planner's; `DISCARD PENDING`.
   `ADVISE PLAN ... USING PENDING` (CX-S7) shows which plans the pending
   model would choose, so the effect is seen before it is taken.
-- **History and restore**: a replaced version is kept in
-  `sys.statistics_history` (CY-Q12); `RESTORE STATISTICS ON t TO VERSION
+- **History and restore**: a replaced `gathered` or `imported` version
+  is kept in `sys.statistics_history` (CY-Q12); the steward's `observed`
+  saves do not enter it, so they cannot push an operator's versions out; `RESTORE STATISTICS ON t TO VERSION
   n` publishes it again as a new version.
 - **Export and import**: `EXPORT STATISTICS ON t` returns one text
   document per object, naming relations and columns by name with their
@@ -335,8 +362,8 @@ state is a `sys` view read by `SELECT` (BO-R3).
 - **Views**: `sys.statistics` (one row per object, its version, origin,
   state, age, sample), `sys.column_statistics` (the values, unpacked),
   `sys.statistics_history`.
-- **`DROP TABLE`, `DROP COLUMN`** delete the objects that name them, in
-  their own transaction; `DELETE STATISTICS ON t [(c, ...)]` is the
+- **`DROP TABLE`, `DROP COLUMN`** delete the objects that name them and
+  their history, in the DDL's transaction; `DELETE STATISTICS ON t [(c, ...)]` is the
   explicit form.
 
 ### CY-S5 - the close
@@ -345,13 +372,16 @@ The measurement of §6, the owning specs (§7), CLAUDE.md's row.
 
 ## 4. Items
 
-Every item but CY-Q14 is the operator's mark, (a): CY-Q0 and CY-Q1 on W8,
-CY-Q2..Q13 on W9. Each (a) was CLA's proposal. CY-Q14 is W11's and is
-unmarked.
+CY-Q0..Q13 are the operator's marks, (a): CY-Q0 and CY-Q1 on W8, CY-Q2..Q13
+on W9; each (a) was CLA's proposal. CY-Q14 is W11's. CY-Q15..Q23 are what
+the review of this order raised (§8); **three of them - CY-Q15, CY-Q16 and
+CY-Q22 - put a marked item back to the operator**, because the review
+found the marked text wrong or contradicting a rule. CY-Q14..Q23 are
+unmarked, and until they are marked the marked items stand as marked.
 
 | item | question | options | CLA proposes |
 |---|---|---|---|
-| CY-Q0 | CY against CX-S0 | (a) CY-S1 is CX-S0's progress gate: `fixed` does not become the default until relation statistics survive a restart; (b) the two are independent | **(a), the operator's mark** (W8). (a): without it every restart fixes a fresh set of blind plans (CX-Q19) |
+| CY-Q0 | CY against CX-S0 | (a) CY-S1 is CX-S0's progress gate: `fixed` does not become the default until relation statistics survive a restart; (b) the two are independent | **(a), the operator's mark** (W8). (a): without it every restart fixes a fresh set of blind plans (CX-Q19), until CX-S1 persists captures. Read as: CX-S0 may be built, and `fixed` does not become the default before CY-S1 lands. It is necessary and not sufficient - a fresh volume and a relation created after mount have no persisted prior - so CX-Q19 (b)'s deferral is still needed as the fallback (review M6) |
 | CY-Q1 | the bar S0 must meet for S2 and S3 to be built | (a) at least one scenario statement whose order changes under true selectivities and runs 15 % or more faster at p50, CC's flip gate; (b) build regardless | **(a), the operator's mark** (W8). (a) for S2 and S3. S1 and S4's lock, export and import do not wait for it: persistence and reproducibility are W7's and CX's needs whatever S0 finds |
 | CY-Q2 | who writes the persisted relation priors | (a) `GATHER`, and the steward when a prior's band moves, off the statement; (b) `GATHER` only | **(a), the operator's mark** (W9). (a): under (b) an instance nobody has gathered on restarts blind for ever. A band moves rarely (PS5), so the write is rare; it is the one automatic write in CY, and it moves no captured plan |
 | CY-Q3 | a live prior and a persisted object for one relation | (a) the newer one is published; a locked object always wins; (b) the gathered one always wins until re-gathered | **(a), the operator's mark** (W9). (a): a gathered row count on a relation that has since doubled is the wrong one to keep, and a lock is how an operator says otherwise |
@@ -366,6 +396,15 @@ unmarked.
 | CY-Q12 | history retention | (a) the last 8 versions per object; (b) by age | **(a), the operator's mark** (W9). (a), provisional |
 | CY-Q13 | expression and function conjuncts | (a) not in CY, the constant stays; (b) statistics on a Cabin's key function `F` | **(a), the operator's mark** (W9). (a): (b) has a natural home (`cabin.md`'s `F`) and no measured consumer yet |
 | CY-Q14 | the bar for CY-R10 (W11): how much a running `GATHER` may move an OLTP workload | (a) the workload's p50 and p99 (point read, single-row `INSERT` and `UPDATE`, a three-relation tuple key join) with a `GATHER` of the largest scenario relation running stay inside the run's noise floor where the instance has a batch core, and within 5 % at `cores = 1`, `[provisional]` until S2's first cell measures it; a stage that misses it does not close; (b) no numeric bar, the mechanisms of CY-R10 only | (a): W11 is a requirement on an effect, and an effect is met by a measurement, not by a list of mechanisms. Unmarked |
+| CY-Q15 | **CY-Q1's gate, put back** (review H2). CY-Q1 (a) calls "15 % or more faster at p50" CC's flip gate; CC's gate is 15 % of **server CPU per statement in each of 3 interleaved pairs** (`workorder-cc-plan-statistics.md:360`), which is also CLAUDE.md's metric for a per-statement cost. And S0's single-conjunct selectivities are evidence for S2 only | (a) the gate is CC's, on server CPU; S2 needs one scenario statement that meets it for want of a single column's selectivity, S3 one that meets it for want of a joint one (S0's joint-selectivity table); (b) p50, as CY-Q1 (a) was worded, one bar for both | (a). S0 reports both metrics, so the answer costs no re-run. Unmarked: it changes a marked item |
+| CY-Q16 | **CY-Q2 and CY-Q3, put back** (review H1). As marked, the steward's sampled prior - which PS1's own text says read a height-3 tree at 0.38x before stratifying - replaces a just-gathered row count whenever it is newer and in another band, and an imported model is overwritten by the target's live prior. That is an automatic re-gather of the relation object, the half of item 4 the operator deferred | (a) the steward's `observed` object is saved beside a `gathered` or `imported` one and never replaces it; the planner reads the gathered one while it exists; whether `observed` may ever supersede it joins item 4; (b) as marked, the newer wins | (a). It keeps CY-Q2's purpose - a restart does not start blind where nobody gathered - and keeps CY-R3 true. Unmarked: it changes two marked items |
+| CY-Q17 | a literal outside a histogram's range (review H4). With no re-gather, an append-mostly column - a timestamp, an issued key - leaves its histogram's range the day it is gathered, and CY-R2 as first written priced "recent rows" at one row: the costly direction, by more than CY-R5's margin covers | (a) out of range is priced by the constant, as if no statistic existed (CY-R4); (b) extrapolated from the live row prior's growth since the gather; (c) one row | (a): it is never worse than today. (b) is the better estimate and needs item 4's notion of growth since a gather |
+| CY-Q18 | value-dependent pricing under `fixed` (review H3). Today an equality costs 0.01 whatever the literal, so a captured order barely depends on the first binding. With a most-common list the first binding's value - hot or rare - decides the order every binding runs (CX-Q13 (a)) | (a) a compile that will be **captured** prices an equality from the column's average, `1 / distinct`, and a range from its span band, never from the literal's own frequency; `planned` and `ADVISE PLAN` price the literal; (b) always price the literal | (a): the capture is one plan for every binding, so it is priced for the average binding. A shape whose hot and rare values need different orders is what an administrator's `VARIANT ... WHEN ARG(k)` is for, and `ADVISE PLAN` shows it |
+| CY-Q19 | what a band and a publish are (review M1, M2, M3) | (a) the stored object is unbanded; the band with hysteresis applies to each **derived estimate** the planner reads (a selectivity, a distinct count), computed at publish; an `IMPORT`, a `RESTORE` and a mount publish fresh, with no hysteresis carried, so equal stored values give equal bands on every instance; only a committed gather or import is published; the steward's step rebuilds the model snapshot and bumps one model generation, which `PlanMemo`'s key gains; a `sys.statistics` write does not move the schema version word (CX-Q23's answer, for the same reason); a block is `informed` when a prior, a posterior **or a column statistic** priced it; (b) band the stored values | (a): under (b) two instances holding one export publish different models, which defeats S4's reason for export. "Publish" then has one meaning: the object state `published` is what the next snapshot rebuild reads |
+| CY-Q20 | a gather's memory (review H5). An exact distinct count, common-value list and equi-depth histogram over a whole walk need memory in proportion to the distinct values, where every other engine structure is capped (`sort_max_rows`, `join_build_max_rows`) | (a) bounded sketches in one pass - a distinct-count sketch, a top-k counter, a quantile sketch - under a per-gather byte cap, the stored object carrying each one's error bound; (b) exact, refusing a column past a cap; (c) two passes | (a): it fits CY-R10, and a statistic was never exact (CY-Q7 (a)). CY-Q4 (a)'s reason "a whole walk is exact" falls with it; its choice - a whole walk by default - stands on the other reason, that a sample's distinct count is the least reliable estimate |
+| CY-Q21 | how a gather holds the relation (review M4, W11) | (a) the `IS` borrow per slice: released at each yield, so a DDL waiting for `X` passes; the gather re-binds and stops with nothing published if the relation, a gathered column or its generation changed; (b) one `IS` for the whole walk, refusing every `X` DDL on the relation for its length | (a): under (b) a gather on a large relation makes `DROP TABLE`, `ADD`/`DROP COLUMN`, `CREATE ASSERTION`, a unique index build and `REINDEX` fail at the 1 s fault net for minutes, which is statistics work in front of the operator's own DDL |
+| CY-Q22 | the model's ceiling, put back (review M5). CY-Q11 (a) as marked unloads the least recently read column objects past the ceiling and prices them by the constant, so a plan depends on what was read lately and a `fixed` capture can be made blind because an object was evicted | (a) the ceiling is enforced at the write: a `GATHER` or `IMPORT` that would pass it is refused naming the setting, nothing published is ever unloaded; (b) as marked, unload | (a): one catalog and one model generation then give one plan. Unmarked: it changes a marked item |
+| CY-Q23 | the mount's seed (review L6, W11) | (a) the seed reads relation objects only - one row each, no spilled cell - and column objects load after the listener opens, a compile before then pricing by the constant and not being captured (CX-Q19 (b)); (b) everything before the listener | (a): the mount's added time is then one catalog chain's read, bounded by the relation count, not by the model's size |
 
 ## 5. `[quiet-wrong]` risks
 
@@ -406,7 +445,8 @@ within the milestone's hour.
 - `include/kds/exec/join_order.hpp` - the constants' comment: each is the
   price where no statistic is published for the conjunct.
 - `docs/spec/catalog.md`, `docs/spec/sys-views.md` - `sys.statistics`,
-  `sys.column_statistics`, `sys.statistics_history`; superblock 36.
+  `sys.column_statistics`, `sys.statistics_history`; the superblock
+  version.
 - `docs/spec/backup.md` - the model is logged state and is restored.
 - `docs/spec/alter.md`, `docs/spec/drop-table.md` - the objects a column
   or a relation takes with it.
@@ -422,3 +462,21 @@ CY-Q2..Q13 marked (a) and **CY opened on W9** (§7).
 
 - **CY-S0** started 2026-11-18 on worktree `cx-plan-change-option`. No
   engine code. Its report is appended here when the results file lands.
+
+**The review of this order** (`critics-developer`, read at `fb65d7bd`,
+reported after W8's push and W9's marks). It verified the citations of
+§1 and found five wrong, each corrected: CC-Q14 (a) is a multiset
+comparison, not byte for byte; CC's flip gate is server CPU per statement,
+not p50 (CY-Q15); B6a is the discard of unlogged state, not the replay;
+an unbound `?` reaches a compile, so the estimator does not always see a
+value; and the selectivity seam S0 named does not exist, so S0 measures
+an oracle bound. Taken as items: H1 (CY-Q16), H2 (CY-Q15, and S0's joint
+selectivity), H3 (CY-Q18), H4 (CY-Q17), H5 (CY-Q20), M1-M3 (CY-Q19), M4
+(CY-R8, CY-Q21), M5 (CY-Q22), L6 (CY-Q23). Taken as text: M6 on CY-Q0's
+row, M8 in CY-R6, L1-L5 and L7-L9, CY-R3 retagged `[design]`, CY-R1's
+list cut. **Three findings change an item the operator had marked
+(CY-Q1, CY-Q2 with CY-Q3, CY-Q11); the marks are left as marked and the
+change is put back as CY-Q15, CY-Q16 and CY-Q22.** Not taken: the cuts it
+proposed to §5's bullets and to the repeated statement that item 4 is
+out - §5 is the order's list of `[quiet-wrong]` risks and is read alone;
+and CY-Q5's per-gather sizes stay, being the operator's mark.
