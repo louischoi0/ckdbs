@@ -301,6 +301,19 @@ load, `waystone-concpets.md` §4b). Nothing records until an operator opts
 a shape in, so a config reading `waystone_recording = on` means less than it
 did, and this section, the boot log line and `WAYSTONE ON`'s reply say so.
 
+**The `join_order` section** (CX-S0, `parser-v2.md` I12) carries
+`join_order`, the instance's value in force (`planned`, `fixed` or
+`written` - the boot key's, or the last `SET JOIN_ORDER`'s), and the
+instance's captured-plan table, the same on every core: `captured_plans`,
+the shapes it holds; `captured_served`, the compiles that found a captured
+order; and the planned blocks that ran without one, by reason -
+`capture_deferred` (searched, not captured: a relation had no published
+prior, or a DDL was open), `capture_unkeyed` (no key fits the block),
+`capture_over_ceiling` (the table's ceiling) and `capture_declined` (the
+captured order did not compile for the statement, or adds a sort its
+`LIMIT` does not bound), the last three having run their written order.
+`captured_served` counts a declined compile too: it found an order.
+
 **The `txn` section** (CS-Q8 (a), `txn.md` §1) carries this core's
 `read_only_begins`, the `BEGIN ... READ ONLY` transactions it opened, and
 `read_only_write_refusals`, the statements it refused

@@ -484,7 +484,11 @@ What it deliberately does not change:
 > statistics** (`docs/spec/plan-stats.md`, `parser-v2.md` I12), and the order
 > decides which relations precede a step, so which correlated index (or
 > build, or Cabin arm) a step takes can move with a statistics generation.
-> The index a step takes, given its predecessors, cannot.
+> The index a step takes, given its predecessors, cannot. **That movement is
+> `join_order = planned`'s, the operator's choice since CX-S0** (`parser-v2.md`
+> I12): under `fixed`, the default, a shape's order is captured once and its
+> steps' predecessors no longer change with the data; under `written` they
+> never did.
 
 Among the relation's indexes, take the one matching the **longest usable key
 prefix** of the step's residual equalities; break a tie by **lowest

@@ -26,8 +26,13 @@ read at `3b3f4851`, before either:
   the delete-mark sweep. DA removes the `sys.access_stats` half of each and
   leaves the helper; CR6 keeps `sys.statistics` as its one relation, so
   `rules.md` §5's unlogged exception is narrowed, not deleted.
+
+**DA-Q8 added and marked (a) on 2026-11-18** (`raft-marks-2026-11-18.md`
+§28): a boot key in bytes sizes each core's part, which is a flat table of
+fixed-size slots. It is the one marked item (§4).
+
 No stage is started. DA waits for the operator's word and for the marks on
-§4's items. **Only one part of it needs a superblock bump** - removing the
+§4's other items. **Only one part of it needs a superblock bump** - removing the
 relation's bootstrap rows and root (DA-S3) - and that part waits for the
 stage that next moves the superblock, CY-S1 at 36 as the orders stand; the
 move itself changes no format (§1.4, DA-Q0, DA-Q1). Every `[source-read]`
@@ -248,9 +253,12 @@ still runs on the statement" (`:1543`), which becomes a memory add.
 
 - **`stats::AccessStats`**, a store the instance owns and hands to every
   core's dispatcher, as the Cabin store and the plan statistics are
-  handed: one part per core (`stats::kStatsParts`), each a map keyed
-  `(exec::AccessKind, rel_id, column_mask)` holding `uses` and
-  `last_seen`, under a `kStatsRing` latch, allocated on its first row.
+  handed: one part per core (`stats::kStatsParts`), each a flat table of
+  fixed-size slots keyed `(exec::AccessKind, rel_id, column_mask)` holding
+  `uses` and `last_seen`, under a `kStatsRing` latch, allocated whole,
+  once, and never grown. **Its bytes are a boot key's** (DA-Q8 (a)): a
+  part's table allocates no more than the key says. When it is allocated -
+  at its core's start or at its first row - is DA-S1's (§4).
 - **A record** is the executing core's add to its own part: find or admit
   the key, saturating add, `last_seen` set. It returns nothing.
 - **A read** copies each part under that part's latch and merges the
@@ -275,7 +283,7 @@ Binding once DA opens.
   per `(kind, rel_id, column_mask)` for the instance, and `SHOW ACCESS`
   stays `SELECT * FROM sys.access_stats` (SV1-SV5). **What a client can
   see change, all of it**: the order of rows (DA-Q2); more than 4,096 rows
-  in the view (DA-Q3); a new `sys.meta` field, `access_stats_dropped`; and,
+  in the view (DA-Q3, DA-Q8); a new `sys.meta` field, `access_stats_dropped`; and,
   from DA-S3 only, `sys.tables`, `sys.objects` and `SHOW TABLES` losing
   the `access_stats` row.
 - **DA-R2 - a count is in its core's part before the act that made it
@@ -283,7 +291,9 @@ Binding once DA opens.
   it runs, as today. No batch, tick or drain.
 - **DA-R3 - a record never fails or reorders what it describes, and waits
   for at most one copy of its own part** by a reader. A shape past the
-  bound, or one that cannot be allocated, is dropped and counted.
+  bound is dropped and counted. The part's table is its one allocation
+  since DA-Q8 (a): if DA-S1 makes it on a statement's path, a part whose
+  table cannot be allocated drops and counts every record.
 - **DA-R4 - a record writes its own core's part and nothing shared.**
 - **DA-R5 - a forget reaches every part before the `ADD COLUMN` that asked
   for it answers.** It gives what page 11's hold gives today: the writes
@@ -301,32 +311,71 @@ Binding once DA opens.
 
 ## 4. Items for the operator (DA-Q), CLA's proposals
 
-None is marked. (a) is CLA's proposal in each.
+**DA-Q8 is marked (a), the operator's mark of 2026-11-18**
+(`raft-marks-2026-11-18.md` §28). No other item is marked. (a) is CLA's
+proposal in each.
 
 | | item | (a) | other |
 |---|---|---|---|
 | DA-Q0 | How much of DA waits for a superblock bump. | only DA-S3. S0-S2 run when DA opens and land with no format change: every statement-path write, the unlogged writer CR6 names and the per-statement hold go then | (b) all of it, as W14 reads: nothing lands before the host's bump |
 | DA-Q1 | The dead bootstrap - page 11, oid 130, the row struct, the `sys.objects` row. | removed by one commit in the first bump any order makes - CY-S1 at 36 as the orders stand - merged into that order's branch so it shares the number | (b) left reserved and unused with no bump, as `sys.pattern_defs` is, DA-R8 naming it; (c) a bump of DA's own |
 | DA-Q2 | The order of the view's rows. Today it is page order, the order shapes were admitted in. | key order: `rel_oid`, then the kind's name, then `column_mask` | (b) admission order kept, by a sequence stamped at admission - a shared word on a record's path, against DA-R4 |
-| DA-Q3 | The bound. Today 4,096 shapes for the instance, a refusal past it counted nowhere. | 4,096 a core (BO-Q7's number), counted as `access_stats_dropped` | (b) 4,096 for the instance, by a shared count |
+| DA-Q3 | The bound. Today 4,096 shapes for the instance, a refusal past it counted nowhere. **Narrowed by DA-Q8 (a)** to the default of the key that sizes a core's part; for (b) see below the table. | 4,096 a core (BO-Q7's number), counted as `access_stats_dropped` | (b) 4,096 for the instance, by a shared count |
 | DA-Q4 | The `access_statistics` key. | kept, its meaning unchanged | (b) deleted and refused at boot by name, always on as the BO views are (BO-Q8) - which also changes the simulator's draw, its repro strings and its pinned arms (`sim/loop.cpp:1334`, `sim/minimize.cpp:117`, `:305`, `sim/sim_main.cpp:117-125`) |
 | DA-Q5 | Under DA-Q1 (a) or (c): page 11 and oid 130 afterwards. | retired, as page 10 and its oids are | (b) page 11 offered to the host's new relation, as page 15 was reused |
 | DA-Q6 | `rules.md` §5's exception, an operator-ratified rule (CR6). | deleted: every catalog write is logged, with no exception, and `ddl-transactional.md` §7 loses its paragraph | (b) kept with no member |
 | DA-Q7 | The measurement. | DA-S0 prices today's write - a point read at `cores` 1 and 8, `access_statistics` on against off, interleaved - and the close repeats those cells before against after, with an `INSERT` into a relation with a foreign key. The bar: no cell slower outside its own spread. The standing budget | (b) the close alone |
+| DA-Q8 | **Marked (a).** Whether the configuration sets the store's memory. As written the bound is a compile-time count (DA-Q3) and no key sizes it. Read at `a5581343`: none of BO's four stores has a key (`statement_stats.hpp:60`, `relation_stats.hpp:61`, `lock_wait_log.hpp:64`, `checkpoint_log.hpp:45`), and the one per-core memory key in the tree is `ash_ring_bytes_per_core` (`expeditor.hpp:287`, `expeditor.cpp:387`). | **a boot key in bytes for each core's part, and the part a flat table of fixed-size slots**, so a part's table allocates at most the bytes written; a node map's allocation is not bounded by a value written in bytes | (b) a boot key in shapes a core, exact over any structure; (c) no key, the constant kept as BO's stores keep theirs |
+
+**What DA-Q8 (a) settles, and what it leaves**
+(`raft-marks-2026-11-18.md` §28, which carries the words and CLA's reasons).
+
+- **Settled by the mark**: the unit is bytes, the scope is one core's part,
+  the setting is a boot key, and the part is a flat table of fixed-size
+  slots (§2), which allocates at most the bytes written.
+- **DA-Q3**, which stays unmarked: the bound is the key's bytes a core, so
+  DA-Q3 now asks the key's default - what admits 4,096 shapes a core under
+  its (a). Its (b), one count for the instance, would sit on top of the
+  key as a shared cap, against DA-R4, and the key's bytes would no longer
+  be the bound; it stays open to the operator.
+- **Left to DA-S1, CLA's proposals, unmarked**:
+  - the name, `access_stats_bytes_per_core`;
+  - under DA-Q4 (a) only, the key is separate from `access_statistics`,
+    which stays the switch, and `0` is refused rather than read as "off";
+    under DA-Q4 (b) what `0` means is open again;
+  - a value below what admits one shape is refused, and a value that is
+    not a whole number of slots admits the slots that fit;
+  - when the table is allocated: at its core's start, a failure refusing
+    the boot and nothing allocated on a statement's path, or at the first
+    row, a failure dropping and counting every record (DA-R3);
+  - the table's probing: with unbounded probing a full table makes every
+    dropped shape's record a walk of every slot under the part's latch,
+    and a schema past the bound stays in that state, so DA-S1 chooses a
+    load bound or a probe cap, and a forget's deletion scheme (a tombstone
+    counts against the bound). Under a load bound a part admits fewer
+    shapes than it has slots, and the default is sized for the shapes;
+  - the admitted capacity reported in `sys.meta` beside
+    `access_stats_dropped`, so the bytes written can be read as shapes.
+- **Why a key**: to raise the bound for a schema whose shapes pass it, not
+  to protect memory - a slot is tens of bytes by CLA's estimate,
+  unmeasured.
+- **A key for the four BO stores** is outside DA (§6) and not settled.
 
 ## 5. Stages
 
 | stage | what | ends in |
 |---|---|---|
 | **DA-S0 - census and premise** | No engine code. §1.3 re-read at the opening commit. **Read**: whether every record runs inside its statement's relation borrow (DA-R5); every walker of page 11's chain besides `RetireDeleteMarks` (§2); whether the cores' `last_seen` readings are one clock's; every test that pins the view's row order or a count of catalog rows. **DA-Q7's cell.** | the list, the number, and any item back to the operator |
-| **DA-S1 - the store and the switch** | `stats::AccessStats`; the three writers and the two readers moved to it; `access_stats_dropped`; the catalog's three functions and the stored-kind mapping deleted; the mount's discard deleted if S0 allows. No format change. | review, the full suite; at the push gate under DA-Q0 (a) |
+| **DA-S1 - the store and the switch** | `stats::AccessStats`; the three writers and the two readers moved to it; `access_stats_dropped`; the boot key that sizes a part and its refusals (DA-Q8 (a)); the catalog's three functions and the stored-kind mapping deleted; the mount's discard deleted if S0 allows. No format change. | review, the full suite; at the push gate under DA-Q0 (a) |
 | **DA-S2 - the close** | DA-Q7's A/B over S1; the documents below amended; the milestone row flipped, saying what DA-S3 still owes. | closed, DA-S3 owed |
 | **DA-S3 - the removal** | Under DA-Q1 (a) or (c): the bootstrap entry, the root, the `kCatalogRoots` and `kAllWellKnownOids` entries, `SysAccessStatRow`, any discard S1 kept; the superblock's history entry. One commit. | review, the full suite, with the bump it rides |
 
 **Tests DA owes.** The view's rows before against after for one fixed
 workload, equal as sets; `show_sugar_contract_test`'s `SHOW ACCESS` cell;
 two cores recording one shape answer one row with the sum; a shape past
-the bound is dropped, counted, and fails nothing; a restart and a restore
+the bound is dropped, counted, and fails nothing; a part's table is no
+larger than the key's bytes, and a key out of range is refused at boot
+(DA-Q8 (a)); a restart and a restore
 answer no rows, and so does a second instance in one process; a forget on
 one core removes another core's shape; an armed two-core rig reading the
 view while both cores record, under `tsan`. At DA-S3: `sys.tables` no
@@ -392,6 +441,30 @@ DA-S0 - the borrow read and DA-Q7's cell are still owed before code.
 
 The session that wrote the order was given a push word (*"push no verify"*,
 `raft-marks-2026-11-18.md` §18) and its push did not reach `main`. The
-order is DA on the branch that split it (`worktree-cx-plan-change-option`)
-and is on `main` only once that branch is next pushed;
+order reached `main` as DA at merge `0a91fd32`, the splitting commit merged
+unchanged and pushed with the hook skipped by the session that wrote it;
 documents only.
+
+### DA-Q8 added and marked (a), 2026-11-18
+
+On worktree `da-q8-memory-bound-key` from `a5581343`
+(`v3.4.12-51-ga5581343`), documents only. DA-Q8 recorded with the
+operator's mark (`raft-marks-2026-11-18.md` §28); §2's part, DA-R1, DA-R3,
+DA-Q3's row, DA-S1 and the tests owed amended to carry it. DA-Q0..Q7 are
+unmarked and DA is not opened. No suite was executed: the commit changes no
+build input. Nothing was measured.
+
+**Reviewed by `critics-developer` before the commit.** The citations
+stood; the one for BO's stores named one store of four and now names each.
+Applied from its findings: "the bytes written are the bytes allocated"
+became "at most", the order's own rounding rule contradicting the first;
+"settled by the mark" holds option (a)'s four facts only, and the name, the
+default, the separate switch and `0` moved to CLA's unmarked proposals, the
+last two stated as holding under DA-Q4 (a) alone; DA-Q3's row says it is
+narrowed, and its (b) is "against DA-R4", not "does not fit"; "DA alone
+gets a key" became "not settled"; DA-R3 fits a table allocated whole; the
+probing claim names its assumption and a forget's deletion; three
+restatements of the conversation were cut. **Not taken as a fix**: the
+review's choice between allocating at core start and at the first row -
+left to DA-S1 with both stated, since it changes what a statement's path
+may do.

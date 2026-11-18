@@ -1298,6 +1298,16 @@ the procedures are `manual/server/backup-restore.md`.
 - **An `archive_command` that hangs holds the archive**: it is not timed out,
   only ended at shutdown; the archive's lag and `wal_archive_blocking` are
   what an operator watches.
+- **A backup starts a thread after startup, which `sched.md` §9's invariant
+  1 forbids and no document declares.** Read at `a4d2fb3b` while DE was
+  reviewed: `BACKUP COPY` starts the copier's thread and `BACKUP STOP` the
+  finisher's (`src/server/backup.cpp:166`, `:340`), each joined by the next
+  call. The invariant reads "no thread creation after startup"
+  (`docs/spec/sched.md:260`), and its declared exceptions - the WAL writer,
+  the data-sync thread - start at boot. `backup.md` names the archiver's
+  thread (`:116`) and not these two. Nothing is known to go wrong; the
+  spec and the code disagree, and neither `sched.md` nor `backup.md` says
+  which is meant.
 - **What BR costs when on** (BR-S10, `bench/v3.0.0/results-br-close-backup-restore-v2.7.0-913-ga8110b05.md`):
   the archive shares the WAL device's bandwidth - wide `INSERT`s lose 27-29 %
   with the archive on the data device, 3 % with it elsewhere; the archiver
@@ -1952,6 +1962,56 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   back to the chain and a power loss between two of its page writes; it
   would seed stale priors, which price an order and never change a row.
   Owned by `plan-stats.md` PS16.
+
+## Captured plans (CX)
+
+- **Captured orders do not survive a restart.** Verified at CX-S0 on
+  `cx-plan-change-option`. The table of `join_order = fixed` is memory
+  only, so every shape is captured again after a restart, from the
+  statistics of that run - and after a crash or a restore, which keep no
+  prior (`plan-stats.md` PS16), from priors the steward has just seeded.
+  A shape may therefore run one order before a restart and another after
+  it. Owned by `parser-v2.md` I12.
+
+- **A shape whose relation never gets a prior is searched at every
+  compile, with no memo.** A capture waits for every relation of the block
+  to have a published prior; until then the block is searched as under
+  `planned` and, by CX-Q3, without the order memo, so each compile pays up
+  to 24 compiles of the block. The steward seeds a wanted relation within
+  its next steps, so the window is seconds - but a relation whose seed
+  keeps being discarded (a page whose type or owner does not match) keeps
+  its shapes there for good, and a shape first compiled while a DDL is
+  held open stays there until it closes, both counted in
+  `capture_deferred`. Not measured.
+  Owned by `parser-v2.md` I12.
+
+- **Four of the capture's paths have no cell that reaches them through a
+  compile.** A captured order that does not compile for a statement (no
+  statement that produces it was found; the other cause of
+  `capture_declined`, a sort a larger `LIMIT` no longer bounds, has its
+  cell), a block of more than 16 relations (the unkeyed path is reached by
+  a missing fetch id only), a compile that loses the install to another
+  core between its search and its capture, and one that loses the table's
+  last free slot there: the table's own cells pin first-install-wins and
+  the ceiling, and the compile's handling of each answer is read, not run.
+  No cell runs two reactors' statements under `fixed`, and the simulation
+  harness's instance runs `planned`, a bare dispatcher's value. Owned by
+  `parser-v2.md` I12.
+
+- **A capture can be made by a compile the statement then discards.**
+  `ResolveNames` compiles once unfiltered and, if a DDL opened meanwhile,
+  again under a minted view; the first pass may capture before its answer
+  is thrown away, so the order was priced against a catalog that may hold
+  an uncommitted DDL's rows - an index that rolls back, say. Oids are never
+  reissued and every order returns the same rows, so no result is at risk;
+  the shape keeps an order chosen in that window until a restart. Owned by
+  `parser-v2.md` I12.
+
+- **A shape running uncaptured is visible only in aggregate.** `SHOW
+  META` counts deferred, unkeyed, refused and uncompiled blocks for the
+  instance and `ANALYZE` names the reason for one statement; no view lists
+  the shapes. Owned by `instructions/v3.2.0/workorder-cx-managed-plans.md`
+  CX-R11.
 
 ## Key sets (CU)
 

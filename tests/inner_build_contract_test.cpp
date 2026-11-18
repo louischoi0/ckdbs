@@ -1,5 +1,7 @@
 #include "column_cycle.hpp"
 #include "inner_build_fixture.hpp"
+#include "learn_plan_stats.hpp"
+#include "unordered_reply.hpp"
 
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/wal/manager.hpp"
@@ -116,8 +118,14 @@ TEST_F(InnerBuildContractTest, TheExactFitCapStillPublishes) {
 // template - the same path an expeditor-parsed kds.conf key takes - and
 // the template rides into every Execute. The VM-level tests above cannot
 // see this plumbing; this one drives it end to end.
+//
+// `captured` runs the statement under `join_order = fixed` with its order
+// captured (CX-S0) instead of as written, and answers the rows sorted: the
+// order the search fixes with the build off need not be the one it fixes
+// with it on.
 std::string RunThroughDispatcher(bool knob_off, bool with_null_row,
-                                 testing_cycle::Added added = testing_cycle::Added::kNone) {
+                                 testing_cycle::Added added = testing_cycle::Added::kNone,
+                                 bool captured = false) {
     storage::InMemoryPageStore store{server::kFirstUserPageId};
     auto boot = bootstrap::BootstrapDatabase(store, 1000);
     EXPECT_TRUE(boot.ok()) << boot.status().message();
@@ -128,7 +136,7 @@ std::string RunThroughDispatcher(bool knob_off, bool with_null_row,
         /*cabins=*/nullptr);
     if (knob_off) dispatcher.set_join_build_max_rows(0);
     // The build is compared against its walk, so both run one order (CB-S2).
-    dispatcher.set_plan_join_order(false);
+    if (!captured) dispatcher.set_join_order(exec::JoinOrder::kWritten);
 
     EXPECT_EQ(dispatcher.Dispatch("CREATE TABLE au (id int64, name varchar)")
                   .response.substr(0, 7),
@@ -152,8 +160,29 @@ std::string RunThroughDispatcher(bool knob_off, bool with_null_row,
     testing_cycle::AddColumn(
         [&dispatcher](const std::string& sql) { return dispatcher.Dispatch(sql).response; }, "tr",
         added);
-    return dispatcher.Dispatch("SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id")
-        .response;
+    const std::string sql = "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id";
+    if (!captured) return dispatcher.Dispatch(sql).response;
+    stats::PlanStats plan_stats{1};
+    testing_plan::CapturePlans(dispatcher, plan_stats, boot.value().catalog, store, {sql});
+    const std::string reply = testing_reply::Unordered(dispatcher.Dispatch(sql).response, sql);
+    dispatcher.set_plan_stats(nullptr);  // `plan_stats` goes first
+    return reply;
+}
+
+// CX-S0: under `join_order = fixed`, the server's default, a captured order
+// answers the same rows built or walked, a NULL join value among them.
+TEST_F(InnerBuildContractTest, ACapturedOrderAnswersTheSameRowsBuiltOrWalked) {
+    const auto none = testing_cycle::Added::kNone;
+    for (const bool with_null_row : {false, true}) {
+        const std::string built = RunThroughDispatcher(false, with_null_row, none, true);
+        const std::string walked = RunThroughDispatcher(true, with_null_row, none, true);
+        EXPECT_EQ(built, walked) << "with_null_row=" << with_null_row;
+        EXPECT_NE(built.find("alice"), std::string::npos) << built;
+        // And what the written order answers.
+        const std::string sql = "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id";
+        EXPECT_EQ(built, testing_reply::Unordered(
+                             RunThroughDispatcher(false, with_null_row, none), sql));
+    }
 }
 
 TEST_F(InnerBuildContractTest, TheDispatcherKnobReachesTheExecutor) {

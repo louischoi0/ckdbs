@@ -199,11 +199,85 @@ took under them.
 | **Does not settle** | The dated operator quotations inside the rule sections, left as written; the mechanism detail the review chose not to restore (its report names it; the specs carry it); a version |
 | **Recorded at** | this file; `CLAUDE.md`'s header; this file's row in `instructions/v3.2.0/index.md` |
 
-## 22. CZ opened; CZ-S0 started
+## 22. A survey of what the engine lacks as an OLTP engine; the torn-page order written as DB
+
+| | |
+|---|---|
+| **Context** | A new conversation. W0: *"Looking at the kdbs code as it stands, are there layers or components to be filled in, or concepts to apply? From the standpoint of an engine specialized for OLTP."* CLA answered from the specs, `known-gaps.md`, `docs/pending/` and a search of the source at `origin/main` `0500200d`, measuring nothing, with eight items: (1) a torn page is refused and not healed; (2) no replication or standby; (3) a commit's outcome cannot be asked for after a lost connection (CN-5, a concept note only); (4) a pool miss is a blocking read on the reactor; (5) four cores deliver less than two (a pending entry); (6) a hot row's writers are refused and retry (CR, written and not opened); (7) index entries are never removed; (8) no `SELECT ... FOR UPDATE`. It recommended 1, then 4, then 6. **Four of CLA's statements in that answer and the turns after were wrong or incomplete on the tree, and the orders written under §22-§25 each say which**: item 2 holds of `origin/main` only - the unlanded branch `worktree-cm-physical-standby` carries an order CM and its stages S0-S2; item 1 was called "a design the spec already adopted", where BR had tried that rule and found no site for it (DB §1.3); item 7 said nothing measures index growth, where BY's close measured a rebuild and found a probe cost the same before and after (DD §1.1); item 8 said the cost should be small because `U` exists, where the claim machinery is on the write walk, which uses no index and does not yield (DC §0) |
+| **Word** | W1: *"Write the work order for item 1, the FPI cadence, first."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-db-torn-page-healing.md` is written and not opened.** The letter DB is CLA's proposal. Its one `[quiet-wrong]` decision, DB-Q1, is where the image is logged. CLA drafted the order around an image at the device write and told the operator so while the review ran; `critics-developer` found five obligations that placement had not stated - among them changes lost after a crash during recovery, and BF-R4's reclaim gate broken - and a single site for the spec's own placement. CLA rewrote the design and **moved its proposal to the image at the first exclusive fetch after a writeback copy** (F), keeping the device-write placement as (b). **F's soundness argument was written after the review and is not reviewed**; DB-S0 reads the tree against it before DB-Q1 is marked. No suite was run and nothing was measured: documents only |
+| **Does not settle** | DB-Q1..Q6; the opening of DB; a push; a version |
+| **Recorded at** | this file; the DB order; the DB row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 23. `SELECT ... FOR UPDATE`: the order written as DC
+
+| | |
+|---|---|
+| **Word** | W2, given while DB was being read for: *"Write the work order for item 8, SELECT FOR UPDATE."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-dc-select-for-update.md` is written and not opened.** The letter DC is CLA's proposal. Written by a fork of the session and reviewed by `critics-developer`, every finding applied. Two items are `[quiet-wrong]`: DC-Q1, the mode - under `U`, the claim an `UPDATE` takes here, the spelling `FOR UPDATE` gives what PostgreSQL calls `FOR NO KEY UPDATE`, because a foreign key child's share passes it - and DC-Q3, which version is returned. Under DC-Q0 (a) only an equality or a list on the tuple key descends; every other locking read walks the whole relation without yielding, and the order says so in its §0 |
+| **Does not settle** | DC-Q0..Q10; the opening of DC; a push; a version |
+| **Recorded at** | this file; the DC order; the DC row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 24. Index entries removed: the order written as DD, exploratory
+
+| | |
+|---|---|
+| **Word** | W3: *"Write the work order for item 7, index entry removal."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-dd-index-entry-purge.md` is written and not opened, exploratory by CLA's proposal.** The letter DD is CLA's proposal. Written by a fork of the session and reviewed by `critics-developer`, every finding applied. Its premise is weak as measured (§22), so DD-S0 measures before anything is built and may end the order with nothing. The driver CLA first weighed, a writer compacting its full index leaf, is not available as stated: the writer holds its clustered leaf while it maintains its indexes. The proposal is one statement, `PURGE INDEX`, under the relation `IX`, removing what a rebuild would leave out. DD-Q1..Q3 and DD-R1..R4 are `[quiet-wrong]` |
+| **Does not settle** | DD-Q0..Q7; the opening of DD; the numbers in DD-Q0's bar, which are CLA's; a push; a version |
+| **Recorded at** | this file; the DD order; the DD row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 25. A page read that does not stop its core: the order written as DE, exploratory
+
+| | |
+|---|---|
+| **Word** | W4: *"Explain item 4 in more detail."* - answered in conversation from the tree at `a4d2fb3b`. W5: *"Write the work order for item 4, asynchronous I/O, as well."* (each given in Korean; recorded in English) |
+| **Mark** | **`workorder-de-page-read-off-the-reactor.md` is written and not opened.** The letter DE is CLA's proposal, and so is its exploratory shape: the word does not ask for one, and DE-Q0 puts it to the operator. Reviewed by `critics-developer`; its findings applied but one, named in the order's §7. DE-S0 measures whether a miss's stall reaches sessions that did not miss once the page cache is kept from answering; DE-Q6 asks first whether a working set beyond the pool is a case the engine serves at all. **A side finding of that review is entered in `known-gaps.md`**: a backup starts threads after startup, against `sched.md` §9's invariant 1 |
+| **Does not settle** | DE-Q0..Q6; the opening of DE; the backup threads; a push; a version |
+| **Recorded at** | this file; the DE order; `docs/inflight/known-gaps.md` "Backup and restore (BR)"; the DE row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 26. DB, DC, DD and DE pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W6, on CLA's report of the four orders at `ebcbe67f` on worktree `db-fpi-cadence-dc-for-update`: *"push no verify"* |
+| **Mark** | None. **Pushed to `main` with `--no-verify`**: the four orders, §22-§25, their index rows and the `known-gaps.md` entry. The hook and the suite are skipped, and no suite was run: the commits change documents only. `origin/main` stood at `a4d2fb3b`, the branch's base, so nothing was merged |
+| **Does not settle** | Any DB-Q, DC-Q, DD-Q or DE-Q; the opening of any of the four; a re-review of DB §2.1's argument, which CLA offered and the word does not ask for; a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 27. CX-S0 pushed with the hook skipped; CX-S1 to go on
+
+| | |
+|---|---|
+| **Word** | W18 (the CX/CY matter's), on CLA's report of CX-S0 at `dbe3ddb5` on worktree `cx-plan-change-option`: *"push no verify, and go on with CX-S1"* |
+| **Mark** | **Pushed to `main` with `--no-verify`**: **CX-S0** - `join_order = planned | fixed | written` with `fixed` a server's default, `SET JOIN_ORDER`, the capture in memory - with its review applied, its stage log (the work order's §8) and the specs it amends. The hook was skipped; the full Debug suite ran 4619/4619 at `dbe3ddb5` (`v3.4.12-45-gdbe3ddb5`), and the merge of `origin/main` after it (`2bb06d30`: the DB-DE orders, the compacted `CLAUDE.md` and READMEs) brought documents only, no source, test, CMake file or script. Overhead not measured; measured at the milestone's close. The work order's §6 measurement for S0 was not run. **CX-S1 goes on** under §16's go-ahead |
+| **Does not settle** | a tag, a version; a ruling on what S0 built differently from an adopted item (CX-Q22 as (b), CX-Q19 tightened, CX-R7 amended - the stage log states each); the push of CX-S1, which stops before it |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 28. DA-Q8: the access-statistics store's memory set by a boot key, marked (a)
+
+| | |
+|---|---|
+| **Context** | A listing of the open milestones from CX on, read at `origin/main` `2bb06d30`, in which DA stood written and not opened. The operator asked of DA's store; CLA read the order at `a5581343` and answered that it is bounded - DA-Q3 (a), 4,096 shapes a core, a shape past it dropped and counted - by a compile-time count, with no key, as BO's four stores are, and that the one per-core memory key in the tree is `ash_ring_bytes_per_core`. CLA's view as given: a key is worth adding, not for memory protection (a slot is tens of bytes by CLA's estimate, unmeasured, so a core's part is hundreds of KiB) but because a schema whose shapes pass the bound has nothing to turn. On the operator's second question CLA answered that the 4,096 counts distinct `(access kind, relation, column mask)` shapes and neither statements nor bound values (the order's §6: columns, never values). CLA put three options: (a) a boot key in bytes a core over a flat table of fixed-size slots; (b) a boot key in shapes a core; (c) the constant kept |
+| **Word** | This session's W1, on CLA's listing of the open milestones: *"When DA turns access_stats into a memory-resident view, should a memory allocation policy not be set as well? By naming the maximum allocation in the configuration."* W2, on CLA's answer: *"Is 4096 the cap on queries times bound values that the access_stats memory view can manage?"* W3, on CLA's three options: *"Record it as DA-Q8, `$!a`."* (each given in Korean; recorded in English) |
+| **Mark** | **DA-Q8 (a), the operator's mark**: the store's memory is set by a boot key in bytes for each core's part, and a part is a flat table of fixed-size slots, so its table allocates at most the bytes written. Recorded in `workorder-da-access-stats-memory-resident.md` §4, with §2's part, DA-R1, DA-R3, DA-Q3's row, DA-S1 and the tests owed amended to carry it. **Said by CLA beside the option and not marked**: the key separate from `access_statistics`, the name `access_stats_bytes_per_core`, the default what admits 4,096 shapes a core |
+| **Does not settle** | DA-Q0..Q7, DA-Q3 among them - which the mark narrows to the key's default, its (b) (one count for the instance) then a shared cap on top of the key, against DA-R4, and open to the operator; the key's name, range and refusals, when the table is allocated, its probing and a capacity field in `sys.meta`, CLA's proposals left to DA-S1; a key for the four BO stores; the opening of DA; a push; a version |
+| **Recorded at** | this file; the DA order's header, §2, §3, §4, §5 and §7; the DA row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 29. DA-Q8's record pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | This session's W4, on CLA's report of §28's record at `479fb910` on worktree `da-q8-memory-bound-key`: *"push no verify"* |
+| **Mark** | **Pushed to `main` with `--no-verify`**: §28's record - DA-Q8 and its mark in the DA order, this file and the index - with its review applied. The hook was skipped and no suite was executed; the commits change no build input (documents only). `origin/main` stood at `a5581343`, the commit the record was written from, so nothing was merged |
+| **Does not settle** | the opening of DA; DA-Q0..Q7; a tag, a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 30. CZ opened; CZ-S0 started
 
 | | |
 |---|---|
 | **Word** | W23 (the BL/CZ matter's), in a new session: *"Proceed with the CZ milestone."* (given in Korean; recorded in English) |
 | **Mark** | None on any CZ-Q item. **CZ opened; CZ-S0 (the premise and the census) started** on worktree `cz-checkpoint-roll-wait`, branch `worktree-cz-checkpoint-roll-wait`, from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`). CLA reads the word as opening the order and its first stage, and not as a mark: S0 writes no engine code and rests on no unmarked item. CZ-Q9 (the letter) was settled by §18. The measurement runs inside the standing budget (`CLAUDE.md`, "A measurement has a time budget"), which is the rule in force and not CZ-Q8's mark. **V0's bar is CZ-Q1 and is unmarked**: S0 reports its numbers against CLA's proposed bar and the verdict is the operator's. The session's shell is rooted outside this repository, so the worktree was made with `git worktree add` and not `EnterWorktree` |
 | **Does not settle** | CZ-Q0..Q8 and CZ-Q10; V0's verdict; the opening of CZ-S1 or of any later stage; H6; a merge, a push, a version |
-| **Recorded at** | this file; the CZ order's header and §7; the CZ row and this file's row in `instructions/v3.2.0/index.md` |
+| **Recorded at** | this file (written as §22 on the work branch and renumbered §30 behind `origin/main`'s §22-§29 at its merge; the commits `936f76cf` and `890523a6` cite it as §22); the CZ order's header and §7; the CZ row and this file's row in `instructions/v3.2.0/index.md` |

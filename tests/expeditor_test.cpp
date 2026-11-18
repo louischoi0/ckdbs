@@ -598,6 +598,34 @@ TEST_F(ExpeditorTest, EveryPeerListensAndCarriesCoreZerosStatementLimits) {
     EXPECT_NE(surface.view_latch, nullptr) << "two cores and no view latch";
 }
 
+// CX-R10: the configured `join_order` is the instance's one value - core 0
+// and a peer read the same word and capture into the same table, and a `SET`
+// on one is what the other's next compile reads. Red if `Open` stops seeding
+// the instance's value from the config: it would then read its own default.
+TEST_F(ExpeditorTest, TheConfiguredJoinOrderIsTheOneValueEveryCoreReads) {
+    EXPECT_EQ(Expeditor::Config().join_order, exec::JoinOrder::kFixed);
+    for (const exec::JoinOrder configured :
+         {exec::JoinOrder::kWritten, exec::JoinOrder::kPlanned, exec::JoinOrder::kFixed}) {
+        Expeditor::Config config = ConfigAt(/*cores=*/2);
+        config.join_order = configured;
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        ASSERT_TRUE(Started(db.Start()));
+        ASSERT_EQ(db.cores().size(), 1u);
+        EXPECT_EQ(db.dispatcher().join_order(), configured);
+
+        const OptimizerSurface& surface = db.cores().front()->config().optimizer;
+        ASSERT_NE(surface.join_order, nullptr) << "the peer was handed no value";
+        EXPECT_EQ(surface.join_order->load(), configured);
+        EXPECT_EQ(surface.captured_plans, &db.dispatcher().captured_plans())
+            << "core 0 and the peer hold two tables";
+        db.dispatcher().set_join_order(exec::JoinOrder::kPlanned);
+        EXPECT_EQ(surface.join_order->load(), exec::JoinOrder::kPlanned)
+            << "core 0 and the peer hold two values";
+    }
+}
+
 // ---- D19's fallback (AT-S10c): core 0 accepts and hands off ------------
 //
 // Where the platform refuses `SO_REUSEPORT`, core 0 binds the port alone

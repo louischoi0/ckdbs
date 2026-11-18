@@ -439,9 +439,12 @@ public:
         // Whether a walk consults its scan kernel (BM-Q5 (a); exec/budget.hpp).
         bool scan_kernel = true;
 
-        // `join_order`: `planned` lets the join planner choose a block's
-        // order, `written` keeps the order the statement wrote (CB-S2).
-        bool plan_join_order = true;
+        // `join_order` (CX-R10, `exec/join_order.hpp`): who may change a
+        // join's plan. **`fixed` by default** (the operator's word of
+        // 2026-11-18): a shape's first priced search is captured and kept.
+        // `planned` searches at every compile, `written` keeps the order the
+        // statement wrote. `SET JOIN_ORDER` changes it for the run.
+        exec::JoinOrder join_order = exec::JoinOrder::kFixed;
 
         // **How long a statement may wait before the engine calls it a
         // fault** (AO-R8, the retired in-doubt ceiling's quantity,
@@ -530,8 +533,7 @@ public:
             return StatementLimits{indexes, max_insert_rows,
                                    exec::AggregateLimits{aggregate_max_groups,
                                                          aggregate_max_distinct},
-                                   sort_max_rows, join_build_max_rows, scan_kernel,
-                                   plan_join_order};
+                                   sort_max_rows, join_build_max_rows, scan_kernel};
         }
 
         // Every key a config file may set (config_file.hpp). Kept next to
@@ -843,6 +845,12 @@ private:
     // `SHOW CABIN_OPTIMIZER` on a peer sleeps that peer's reactor for a
     // build (`known-gaps.md`); a reader never holds it across I/O.
     std::atomic<bool> cabin_optimizer_on_{false};
+    // `join_order`, the instance's one value, seeded from the config and
+    // flipped by any core's `SET JOIN_ORDER`; and the captured plans of
+    // `fixed`, one table every core's compile reads and fills (CX-S0,
+    // `exec/captured_plans.hpp`). Memory only: a restart captures again.
+    std::atomic<exec::JoinOrder> join_order_{exec::JoinOrder::kFixed};
+    exec::CapturedPlans captured_plans_;
     Latch optimizer_signals_latch_{LatchKind::kOptimizer};
     Latch cabin_view_latch_{LatchKind::kOptimizer};
     wal::CheckpointGate checkpoint_gate_;

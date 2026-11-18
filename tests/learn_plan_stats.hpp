@@ -39,4 +39,25 @@ inline void LearnPlanStats(server::CommandDispatcher& dispatcher, stats::PlanSta
     EXPECT_GT(informed, 0u) << "no plan read the learned statistics";
 }
 
+// `join_order = fixed` over a query set (CX-S0), for the contract suites'
+// captured-plan cells: the statistics learned as above, then each statement
+// run once more under `fixed`, which captures every searched shape - its
+// relations' priors are published by then. A cell whose statements then ran
+// no captured order would prove nothing of the default configuration, so
+// that is asserted: a shape is held, and a later compile says it ran one.
+inline void CapturePlans(server::CommandDispatcher& dispatcher, stats::PlanStats& plan_stats,
+                         catalog::Catalog& catalog, storage::PageStore& store,
+                         const std::vector<std::string>& sqls) {
+    LearnPlanStats(dispatcher, plan_stats, catalog, store, sqls);
+    dispatcher.set_join_order(exec::JoinOrder::kFixed);
+    for (const std::string& sql : sqls) dispatcher.Dispatch(sql);
+    ASSERT_GT(dispatcher.captured_plans().shapes(), 0u) << "no shape was captured";
+    std::size_t captured = 0;
+    for (const std::string& sql : sqls) {
+        const std::string plan = dispatcher.Dispatch("ANALYZE " + sql).response;
+        if (plan.find("planned order=captured") != std::string::npos) ++captured;
+    }
+    EXPECT_GT(captured, 0u) << "no statement ran a captured order";
+}
+
 }  // namespace kds::testing_plan

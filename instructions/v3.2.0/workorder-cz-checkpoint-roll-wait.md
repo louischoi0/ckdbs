@@ -3,7 +3,7 @@
 Status: **OPENED 2026-11-18; CZ-S0 done, V0 with the operator** on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
-(`raft-marks-2026-11-18.md` §22): *"Proceed with the CZ milestone."* No
+(`raft-marks-2026-11-18.md` §30): *"Proceed with the CZ milestone."* No
 item of §4 is marked; S0 rested on none of them. **V0 passes on CLA's
 proposed bar and its verdict (CZ-Q1) is the operator's; CZ-S1 is not
 started** (§7, "CZ-S0"). Written the same day on
