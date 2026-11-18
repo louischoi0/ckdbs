@@ -1,0 +1,15 @@
+2026-11-18 07:07:54 UTC task began
+2026-11-18 07:07:54 UTC build start
+2026-11-18 07:09:16 UTC build done rc=0
+2026-11-18 07:10:36 UTC run.sh launched
+2026-11-18 07:10:36 UTC phase start w1 order A A2 B C (load 1.40 2.84 3.13, cc1plus 0)
+2026-11-18 07:16:19 UTC phase end w1 rc=0
+2026-11-18 07:16:19 UTC phase start w2 order B C A A2 (load 0.78 1.79 2.59, cc1plus 0)
+2026-11-18 07:22:37 UTC phase end w2 rc=0
+2026-11-18 07:22:37 UTC phase start w3 order A2 C B A (load 1.07 2.90 2.96, cc1plus 0)
+2026-11-18 07:30:50 UTC phase end w3 rc=0
+2026-11-18 07:30:51 UTC phase start w4 order C B A2 A (load 7.34 6.14 4.34, cc1plus 0)
+2026-11-18 07:30:51 UTC phase end w4 rc=143
+2026-11-18 07:30:51 UTC DONE
+2026-11-18 07:30:54 UTC w4 CUT for budget (killed at its start, nothing kept)
+2026-11-18 07:30:54 UTC DONE
