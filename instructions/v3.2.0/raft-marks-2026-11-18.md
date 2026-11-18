@@ -123,3 +123,12 @@ took under them.
 | **Mark** | None by the operator. **CZ written, not opened**: `instructions/v3.2.0/workorder-cz-checkpoint-roll-wait.md`, on worktree `bl-rung3-probe` from `3b3f4851`. Exploratory: CZ-S0 is the premise and the census with no engine code, CZ-S1 a spike that stays on the branch. CZ-Q0..Q10 carry CLA's proposals. The letter is CLA's proposal. **The order's review corrected the answer above**: the task reaches the latch at five kinds of site, not three (the inline WAL gate and the recycle at the anchor's commit besides), and the order's §1.2 is the account that stands |
 | **Does not settle** | Every CZ-Q item; the opening of any CZ stage; H6; whether rung 3 is ruled out; a merge, a push, a version |
 | **Recorded at** | this file; the order; the CZ row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 14. CZ pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W17: *"push no verify"* - after CLA's report at `ddc4fb31` on worktree `bl-rung3-probe` |
+| **Mark** | None. CZ's order, `ceiling.py` with its output, and §12-§13 go to `main` with `--no-verify`, in this section's commit. The hook and the suite are skipped; no suite was run for this work, which is documents and one analysis script |
+| **Does not settle** | Every CZ-Q item; the opening of any CZ stage; a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
