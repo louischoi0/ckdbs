@@ -112,13 +112,9 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
         ++shape.compiled_calls;
         shape.compile_ns += cost.compile_ns;
     }
-    if (cost.timed) {
+    if (cost.timed.has_value()) {
         ++shape.timed_calls;
-        shape.cpu_ns += cost.cpu_ns;
-        for (std::size_t i = 0; i < kWaitClassCount; ++i) shape.class_ns[i] += cost.class_ns[i];
-        shape.page_reads += cost.page_reads;
-        shape.log_bytes += cost.log_bytes;
-        shape.log_records += cost.log_records;
+        shape.timed += *cost.timed;
     }
     // Assigned only where it moved: a shape runs one source statement after
     // statement, so this is two compares and no allocation.
@@ -156,13 +152,7 @@ std::vector<StatementShape> StatementStats::Snapshot() {
             into.compiled_calls += shape.compiled_calls;
             into.compile_ns += shape.compile_ns;
             into.timed_calls += shape.timed_calls;
-            into.cpu_ns += shape.cpu_ns;
-            for (std::size_t i = 0; i < kWaitClassCount; ++i) {
-                into.class_ns[i] += shape.class_ns[i];
-            }
-            into.page_reads += shape.page_reads;
-            into.log_bytes += shape.log_bytes;
-            into.log_records += shape.log_records;
+            into.timed += shape.timed;
             for (std::size_t k = 0; k < into.latency.size(); ++k) {
                 into.latency[k] += shape.latency[k];
             }

@@ -75,13 +75,14 @@ TEST_F(StatementStatsTest, ACallsCostIsSummedWhereItWasCountedAndLeftOutWhereItW
     full.pages = 5;
     full.compiled = true;
     full.compile_ns = 7'000;
-    full.timed = true;
-    full.cpu_ns = 9'000;
-    full.class_ns[static_cast<std::size_t>(WaitClass::kCommit)] = 2'000;
-    full.class_ns[static_cast<std::size_t>(WaitClass::kUserIo)] = 1'000;
-    full.page_reads = 2;
-    full.log_bytes = 100;
-    full.log_records = 2;
+    sched::SessionCostSample delta;
+    delta.on_cpu_ns = 9'000;
+    delta.class_ns[static_cast<std::size_t>(WaitClass::kCommit)] = 2'000;
+    delta.class_ns[static_cast<std::size_t>(WaitClass::kUserIo)] = 1'000;
+    delta.page_reads = 2;
+    delta.log_bytes = 100;
+    delta.log_records = 2;
+    full.timed = delta;
     StatementCost conflict;  // counted nothing but its refusal's cause
     conflict.conflict = true;
 
@@ -105,13 +106,13 @@ TEST_F(StatementStatsTest, ACallsCostIsSummedWhereItWasCountedAndLeftOutWhereItW
     EXPECT_EQ(s.compiled_calls, 2u);
     EXPECT_EQ(s.compile_ns, 14'000u);
     EXPECT_EQ(s.timed_calls, 2u);
-    EXPECT_EQ(s.cpu_ns, 18'000u);
-    EXPECT_EQ(s.class_ns[static_cast<std::size_t>(WaitClass::kCommit)], 4'000u);
-    EXPECT_EQ(s.class_ns[static_cast<std::size_t>(WaitClass::kUserIo)], 2'000u);
-    EXPECT_EQ(s.class_ns[static_cast<std::size_t>(WaitClass::kApplication)], 0u);
-    EXPECT_EQ(s.page_reads, 4u);
-    EXPECT_EQ(s.log_bytes, 200u);
-    EXPECT_EQ(s.log_records, 4u);
+    EXPECT_EQ(s.timed.on_cpu_ns, 18'000u);
+    EXPECT_EQ(s.timed.class_ns[static_cast<std::size_t>(WaitClass::kCommit)], 4'000u);
+    EXPECT_EQ(s.timed.class_ns[static_cast<std::size_t>(WaitClass::kUserIo)], 2'000u);
+    EXPECT_EQ(s.timed.class_ns[static_cast<std::size_t>(WaitClass::kApplication)], 0u);
+    EXPECT_EQ(s.timed.page_reads, 4u);
+    EXPECT_EQ(s.timed.log_bytes, 200u);
+    EXPECT_EQ(s.timed.log_records, 4u);
 }
 
 TEST_F(StatementStatsTest, AShapeWithNoCountedCallHasNoCountBesideItsSums) {

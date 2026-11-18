@@ -150,6 +150,28 @@ struct SessionCostSample {
     std::uint64_t page_reads = 0;
     std::uint64_t log_bytes = 0;
     std::uint64_t log_records = 0;
+
+    // Field by field: a later sample less an earlier is what lay between,
+    // and such differences add up to a shape's sums.
+    SessionCostSample& operator+=(const SessionCostSample& o) noexcept {
+        on_cpu_ns += o.on_cpu_ns;
+        for (std::size_t i = 0; i < class_ns.size(); ++i) class_ns[i] += o.class_ns[i];
+        page_reads += o.page_reads;
+        log_bytes += o.log_bytes;
+        log_records += o.log_records;
+        return *this;
+    }
+    friend SessionCostSample operator-(SessionCostSample later,
+                                       const SessionCostSample& earlier) noexcept {
+        later.on_cpu_ns -= earlier.on_cpu_ns;
+        for (std::size_t i = 0; i < later.class_ns.size(); ++i) {
+            later.class_ns[i] -= earlier.class_ns[i];
+        }
+        later.page_reads -= earlier.page_reads;
+        later.log_bytes -= earlier.log_bytes;
+        later.log_records -= earlier.log_records;
+        return later;
+    }
 };
 SessionCostSample SampleSessionCost(const SessionWaitStats& session) noexcept;
 

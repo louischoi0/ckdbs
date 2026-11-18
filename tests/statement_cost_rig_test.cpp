@@ -131,18 +131,81 @@ TEST_F(StatementCostRig, AStatementInItsSessionsTaskOwnsItsTimeAndTheLogItAppend
     EXPECT_EQ(shape->rows, static_cast<std::uint64_t>(kInserts) + 1);
     EXPECT_EQ(shape->timed_calls, static_cast<std::uint64_t>(kInserts))
         << "the call outside a task is in no timed sum";
-    EXPECT_GT(shape->cpu_ns, 0u);
+    EXPECT_GT(shape->timed.on_cpu_ns, 0u);
     // Each autocommit INSERT appends at least its row's record and its
     // commit's, and nothing a statement appended is more than the log took.
-    EXPECT_GE(shape->log_records, 2u * kInserts);
-    EXPECT_GT(shape->log_bytes, 0u);
-    EXPECT_LE(shape->log_bytes, log_appended);
+    EXPECT_GE(shape->timed.log_records, 2u * kInserts);
+    EXPECT_GT(shape->timed.log_bytes, 0u);
+    EXPECT_LE(shape->timed.log_bytes, log_appended);
+}
+
+TEST_F(StatementCostRig, TwoSessionsOfOneCoreEachOwnTheLogTheyAppended) {
+    // DF-Q12 (a)'s point against a per-core delta: two sessions of one core
+    // whose `group` commits park, so each statement's span holds the
+    // other's appends. Booked to the polled task's session, the two shapes'
+    // logs add up to what the core appended; read off the core, each would
+    // also hold the other's and the sum would pass it.
+    ASSERT_EQ(rig_->core(0)
+                  .dispatcher()
+                  .Dispatch("CREATE TABLE q (id int64, v int64) BTREE")
+                  .response.substr(0, 3),
+              "CRE");
+    ASSERT_TRUE(rig_->store().Flush().ok());
+    stats::StatementStats::ResetForTest();
+    constexpr int kRounds = 12;
+    const std::string narrow = "INSERT INTO r (id, v) VALUES (100, 1)";
+    const std::string wide = "INSERT INTO q (id, v) VALUES (100, 1), (101, 1), (102, 1), (103, 1)";
+    for (Script& script : scripts_) script.session.set_durability(wal::DurabilityClass::kGroup);
+    for (int i = 0; i < kRounds; ++i) {
+        const std::string id = std::to_string(100 + 4 * i);
+        scripts_[0].lines.push_back("INSERT INTO r (id, v) VALUES (" + id + ", 1)");
+        std::string rows;
+        for (int k = 0; k < 4; ++k) {
+            rows += (k == 0 ? "(" : ", (") + std::to_string(100 + 4 * i + k) + ", 1)";
+        }
+        scripts_[1].lines.push_back("INSERT INTO q (id, v) VALUES " + rows);
+    }
+    const wal::WalStats& log = rig_->core(1).wal().stats();
+    const std::uint64_t bytes_before = log.bytes_appended;
+    const std::uint64_t records_before = log.records_appended;
+    SubmitAsItsSession(*rig_, 1, scripts_[0]);
+    SubmitAsItsSession(*rig_, 1, scripts_[1]);
+    rig_->Start();
+    ASSERT_TRUE(KickUntil(
+        *rig_, 1,
+        [&] {
+            return scripts_[0].done.load(std::memory_order_acquire) &&
+                   scripts_[1].done.load(std::memory_order_acquire);
+        },
+        15000ms));
+    rig_->Stop();
+    for (const Script& script : scripts_) {
+        for (const std::string& reply : script.replies) {
+            ASSERT_EQ(reply.rfind("INSERTED", 0), 0u) << reply;
+        }
+    }
+
+    const std::vector<stats::StatementShape> shapes = stats::StatementStats::Snapshot();
+    const stats::StatementShape* a = ShapeOf(shapes, "INSERT", narrow);
+    const stats::StatementShape* b = ShapeOf(shapes, "INSERT", wide);
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    ASSERT_NE(a, b);
+    EXPECT_EQ(a->timed_calls, static_cast<std::uint64_t>(kRounds));
+    EXPECT_EQ(b->timed_calls, static_cast<std::uint64_t>(kRounds));
+    EXPECT_EQ(a->timed.log_records + b->timed.log_records, log.records_appended - records_before);
+    EXPECT_EQ(a->timed.log_bytes + b->timed.log_bytes, log.bytes_appended - bytes_before);
+    EXPECT_GT(b->timed.log_bytes, a->timed.log_bytes) << "four rows a statement against one";
+    // Each `group` commit parked for its record to be durable: Commit time.
+    EXPECT_GT(a->timed.class_ns[static_cast<std::size_t>(stats::WaitClass::kCommit)], 0u);
 }
 #endif
 
 TEST_F(StatementCostRig, BothCoresRecordOneShapeAndRefusalsWhileEachReadsTheViews) {
     constexpr int kRounds = 40;
     const std::string select = "SELECT v FROM r WHERE id = 1";
+    // A walk, which `DispatchAsync` hands on and runs after the head returns.
+    const std::string scan = "SELECT id FROM r WHERE v >= 0";
     const std::string views[] = {"SELECT * FROM sys.statement_stats",
                                  "SELECT * FROM sys.statement_histogram",
                                  "SELECT * FROM sys.refusal_stats"};
@@ -152,6 +215,7 @@ TEST_F(StatementCostRig, BothCoresRecordOneShapeAndRefusalsWhileEachReadsTheView
             script.lines.push_back(select);
             script.lines.push_back(views[round % 3]);
         }
+        scripts[0].lines.push_back(scan);
         // Core 1 also writes, and is refused a key that is bound.
         scripts[1].lines.push_back("UPDATE r SET v = v + 1 WHERE id = 2");
         scripts[1].lines.push_back("INSERT INTO r (id, v) VALUES (1, 9)");
@@ -194,7 +258,19 @@ TEST_F(StatementCostRig, BothCoresRecordOneShapeAndRefusalsWhileEachReadsTheView
     for (std::uint64_t n : read->latency) in_buckets += n;
     EXPECT_EQ(in_buckets, read->calls) << "a shape's histogram sums to its calls";
 
-    const stats::StatementShape* write = ShapeOf(shapes, "UPDATE", "UPDATE r SET v = v + 1 WHERE id = 2");
+    // The handed-on walk keeps what its head compiled and what its end
+    // counted: the outcome is replaced by the walk's reply in between.
+    const stats::StatementShape* walked = ShapeOf(shapes, "SELECT", scan);
+    ASSERT_NE(walked, nullptr);
+    EXPECT_EQ(walked->calls, static_cast<std::uint64_t>(kRounds));
+    EXPECT_EQ(walked->rows, 2u * kRounds) << "two rows a call";
+    EXPECT_EQ(walked->executed_calls, static_cast<std::uint64_t>(kRounds));
+    EXPECT_GE(walked->rows_examined, 2u * kRounds);
+    EXPECT_EQ(walked->compiled_calls, static_cast<std::uint64_t>(kRounds));
+    EXPECT_EQ(walked->timed_calls, static_cast<std::uint64_t>(kRounds));
+
+    const stats::StatementShape* write =
+        ShapeOf(shapes, "UPDATE", "UPDATE r SET v = v + 1 WHERE id = 2");
     ASSERT_NE(write, nullptr);
     EXPECT_EQ(write->calls, static_cast<std::uint64_t>(kRounds));
     EXPECT_EQ(write->rows, static_cast<std::uint64_t>(kRounds));

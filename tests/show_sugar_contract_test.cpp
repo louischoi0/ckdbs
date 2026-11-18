@@ -572,6 +572,81 @@ TEST_F(ShowSugarTest, AnUpdatesSubqueryAddsNothingToTheUpdatesExaminedCount) {
     EXPECT_EQ(shown.Find("kind", "UPDATE", "compile_us"), "0");
 }
 
+TEST_F(ShowSugarTest, AnInsertsConflictArmIsNotTheInsertsCompile) {
+    // `ON CONFLICT DO UPDATE` compiles its arm's WHERE once a conflicting
+    // row, inside a statement that compiles no chain of its own: the INSERT
+    // shape keeps a NULL `compile_us`.
+    stats::StatementStats::ResetForTest();
+    const std::string upsert =
+        "INSERT INTO t (id, v, name) VALUES (400, 1, 'a'), (1, 2, 'b') "
+        "ON CONFLICT (id) DO UPDATE SET v = 9";
+    ASSERT_EQ(Text(upsert).rfind("ERR", 0), std::string::npos) << Text(upsert);
+    const auto shown = testing_view::ReadViewText(
+        Text("SELECT kind, compile_us, rows_examined FROM sys.statement_stats"));
+    EXPECT_EQ(shown.Column("kind"), std::vector<std::string>{"INSERT"});
+    EXPECT_EQ(shown.Find("kind", "INSERT", "compile_us"), "NULL");
+    EXPECT_EQ(shown.Find("kind", "INSERT", "rows_examined"), "NULL");
+}
+
+TEST_F(ShowSugarTest, AReturningWritesRowsAreCountedOnce) {
+    // The rows went out through the sink and are the write's count too:
+    // `rows` is the count, not the two added.
+    stats::StatementStats::ResetForTest();
+    ASSERT_EQ(Text("INSERT INTO t (id, v, name) VALUES (410, 1, 'a'), (411, 2, 'b') RETURNING id")
+                  .rfind("ERR", 0),
+              std::string::npos);
+    ASSERT_EQ(Text("UPDATE t SET v = 3 WHERE id >= 410 RETURNING v").rfind("ERR", 0),
+              std::string::npos);
+    const auto shown =
+        testing_view::ReadViewText(Text("SELECT kind, rows FROM sys.statement_stats"));
+    EXPECT_EQ(shown.Find("kind", "INSERT", "rows"), "2");
+    EXPECT_EQ(shown.Find("kind", "UPDATE", "rows"), "2");
+}
+
+TEST_F(ShowSugarTest, EachSplitColumnIsItsOwnWaitClassAndOtherIsTheRest) {
+    // The view's mapping, pinned with a value of its own in every class: a
+    // swapped column, a class left out of `other_us` or one counted twice
+    // reads as another number here.
+    stats::StatementStats::ResetForTest();
+    const auto cls = [](stats::WaitClass c) { return static_cast<std::size_t>(c); };
+    sched::SessionCostSample delta;
+    delta.on_cpu_ns = 1'000'000;
+    delta.class_ns[cls(stats::WaitClass::kScheduler)] = 2'000'000;
+    delta.class_ns[cls(stats::WaitClass::kCommit)] = 3'000'000;
+    delta.class_ns[cls(stats::WaitClass::kUserIo)] = 4'000'000;
+    delta.class_ns[cls(stats::WaitClass::kNetwork)] = 5'000'000;
+    delta.class_ns[cls(stats::WaitClass::kApplication)] = 6'000'000;
+    // Everything else of DB time is `other_us`; idle is no DB time and no column.
+    delta.class_ns[cls(stats::WaitClass::kSystemIo)] = 10'000'000;
+    delta.class_ns[cls(stats::WaitClass::kCrossCore)] = 20'000'000;
+    delta.class_ns[cls(stats::WaitClass::kResource)] = 40'000'000;
+    delta.class_ns[cls(stats::WaitClass::kConcurrency)] = 80'000'000;
+    delta.class_ns[cls(stats::WaitClass::kIdle)] = 900'000'000;
+    delta.page_reads = 11;
+    delta.log_bytes = 12;
+    delta.log_records = 13;
+    stats::StatementCost cost;
+    cost.timed = delta;
+    stats::StatementStats::Record(0, 77, "SYNC", false, 1, 1, {}, {}, cost);
+
+    const auto shown = testing_view::ReadViewText(
+        Text("SELECT fetch_id, timed_calls, cpu_us, sched_us, commit_us, io_us, net_us, app_us, "
+             "other_us, page_reads, log_bytes, log_records FROM sys.statement_stats "
+             "WHERE fetch_id = 77"));
+    const auto column = [&](std::string_view name) { return shown.Find("fetch_id", "77", name); };
+    EXPECT_EQ(column("timed_calls"), "1");
+    EXPECT_EQ(column("cpu_us"), "1000");
+    EXPECT_EQ(column("sched_us"), "2000");
+    EXPECT_EQ(column("commit_us"), "3000");
+    EXPECT_EQ(column("io_us"), "4000");
+    EXPECT_EQ(column("net_us"), "5000");
+    EXPECT_EQ(column("app_us"), "6000");
+    EXPECT_EQ(column("other_us"), "150000");
+    EXPECT_EQ(column("page_reads"), "11");
+    EXPECT_EQ(column("log_bytes"), "12");
+    EXPECT_EQ(column("log_records"), "13");
+}
+
 TEST_F(ShowSugarTest, ARefusedCallIsAConflictOnlyWhenItsCodeIsTxnConflict) {
     stats::StatementStats::ResetForTest();
     stats::RefusalStats::ResetForTest();

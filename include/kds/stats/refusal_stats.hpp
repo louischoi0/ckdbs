@@ -18,8 +18,10 @@
 // `(core, code)`, the code a number of the wire's pinned error registry
 // (`wire::ErrorCategory`, `protocol.md` §11) - the category the client was
 // told. Bounded by that registry and keyed by nothing a client can mint: a
-// code at or past `kRefusalCodes` is not recorded, and the registry's last
-// entry is asserted below it where the view is built.
+// code at or past `kRefusalCodes` is not recorded. The registry's last entry
+// today is asserted below the bound where the view is built; the registry
+// has no count to assert against, so one grown past 64 entries would drop
+// the codes past it, uncounted.
 //
 // ---- Where the counts live, and the protocol --------------------------------
 //
@@ -27,7 +29,11 @@
 // ran on is the only writer of its part, once per refused statement at its
 // end, with relaxed single-writer words (`sched::RelaxedU64`); a reader on
 // any core reads them unguarded, so a row's `count` and `last_seen` may
-// differ by one refusal in flight. Nothing in the engine reads them (DF-R3).
+// differ by one refusal in flight. **One writer a part is the caller's
+// premise, not this store's check**: two threads recording as one core -
+// a fixture driving one dispatcher from two threads - lose counts and
+// nothing else, as the wait totals do (`sched/wait_state.hpp`). Nothing in
+// the engine reads them (DF-R3).
 
 namespace kds::stats {
 

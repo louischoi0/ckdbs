@@ -340,12 +340,8 @@ DispatchOutcome Refused(const Status& status) { return {ErrorReply(status), fals
 // and the pages of every step. `pages_fetched` is exact on a walk and one a
 // keyed access (`exec::StepStats`).
 DispatchOutcome::Examined ExaminedBy(const exec::ExecStats& stats) noexcept {
-    DispatchOutcome::Examined total;
-    for (const exec::StepStats& step : stats.steps) {
-        total.rows += step.rows_examined;
-        total.pages += step.pages_fetched;
-    }
-    return total;
+    const exec::StepStats total = stats.Total();
+    return {total.rows_examined, total.pages_fetched};
 }
 
 // The catalog's bound on a name (`catalog::CheckNameFits`), refused at the
@@ -1020,7 +1016,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         FinishDeferredCommits();
         out->pending_lsn = wal::kNoLsn;
         if (Status refused = wal_->EnsureDurable(lsn); !refused.ok()) {
+            const std::optional<std::uint64_t> compile_ns = out->compile_ns;
             *out = {ErrorReply(refused), out->should_stop, 0, refused};
+            out->compile_ns = compile_ns;
             // A refused commit is no bound: a deferred one was aborted, so
             // no ceiling would ever cover it. The session's earlier bound
             // was covered before this statement ran (BA-R1c).
@@ -1029,7 +1027,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         }
     }
     out->fetch_id = fetch_id;
-    RecordStatement(line, *out, began_ns, head, session);
+    RecordStatement(line, *out, began_ns, head);
     co_return Status::OK();
 }
 
@@ -1290,7 +1288,7 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
     const sched::MonoTimeNs began_ns = NowNs();
     const StatementHead head = BeginStatement(session);
     DispatchOutcome outcome = DispatchInternal(line, session);
-    RecordStatement(line, outcome, began_ns, head, session);
+    RecordStatement(line, outcome, began_ns, head);
     return outcome;
 }
 
@@ -1300,20 +1298,19 @@ CommandDispatcher::StatementHead CommandDispatcher::BeginStatement(Session* sess
     // making them here would list it in `sys.session_state` for asking.
     const sched::SessionWaitStats* const waits =
         (session != nullptr ? session : &autocommit_session_)->wait_stats();
-    head.timed = sched::RunningTaskBooksTo(waits);
-    if (head.timed) {
+    if (sched::RunningTaskBooksTo(waits)) {
         // The open ON_CPU segment is the session's time before this
         // statement: booked now, so the end's sample less this one is the
         // statement's own.
         sched::FlushOnCpu();
+        head.booked_to = waits;
         head.sample = sched::SampleSessionCost(*waits);
     }
     return head;
 }
 
 void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOutcome& out,
-                                        sched::MonoTimeNs began_ns, const StatementHead& head,
-                                        Session* session) {
+                                        sched::MonoTimeNs began_ns, const StatementHead& head) {
     // Once per statement, at its end, the statement whole: a re-run, a wait
     // and the group commit are inside it (§3.1). A refusal is a call too.
     const sched::MonoTimeNs now_ns = NowNs();
@@ -1321,13 +1318,14 @@ void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOut
     const std::int64_t now_us = exec::StatementContextNow().now_us;
 
     stats::StatementCost cost;
-    cost.rows = out.rows_affected + out.rows_returned;
     if (refused) {
         // The code the client is told.
         const StatusCode code = RefusalCodeOf(out);
         cost.conflict = code == StatusCode::kTxnConflict;
         stats::RefusalStats::Record(core_id_, static_cast<std::uint16_t>(wire::CategoryOf(code)),
                                     now_us);
+    } else {
+        cost.rows = out.rows_affected + out.rows_returned;
     }
     if (out.examined.has_value()) {
         cost.executed = true;
@@ -1343,19 +1341,9 @@ void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOut
     // statement ran inside a task of its own session from its head to here;
     // anywhere else the session's statistics do not hold them and the call
     // is in no sum (DF-R7).
-    const sched::SessionWaitStats* const waits =
-        (session != nullptr ? session : &autocommit_session_)->wait_stats();
-    if (head.timed && sched::RunningTaskBooksTo(waits)) {
+    if (head.booked_to != nullptr && sched::RunningTaskBooksTo(head.booked_to)) {
         sched::FlushOnCpu();
-        const sched::SessionCostSample end = sched::SampleSessionCost(*waits);
-        cost.timed = true;
-        cost.cpu_ns = end.on_cpu_ns - head.sample.on_cpu_ns;
-        for (std::size_t i = 0; i < stats::kWaitClassCount; ++i) {
-            cost.class_ns[i] = end.class_ns[i] - head.sample.class_ns[i];
-        }
-        cost.page_reads = end.page_reads - head.sample.page_reads;
-        cost.log_bytes = end.log_bytes - head.sample.log_bytes;
-        cost.log_records = end.log_records - head.sample.log_records;
+        cost.timed = sched::SampleSessionCost(*head.booked_to) - head.sample;
     }
     stats::StatementStats::Record(core_id_, out.fetch_id, line, refused,
                                   now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0, now_us,
@@ -9071,7 +9059,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     }
     // The reply is the plan, so no row is returned; the run was real.
     DispatchOutcome out{os.str(), false};
-    out.examined = DispatchOutcome::Examined{total.rows_examined, total.pages_fetched};
+    out.examined = ExaminedBy(stats);
     return out;
 }
 
@@ -10839,7 +10827,9 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     if (!predicates.ok()) {
         return Refused(predicates.status());
     }
-    NoteStatementCompiled();
+    // An `ON CONFLICT DO UPDATE` arm compiles this once a conflicting row,
+    // inside an INSERT that compiles nothing of its own.
+    if (!arm_target.has_value()) NoteStatementCompiled();
     // The walk's first stage, its claim and its park are DELETE's too
     // (`WriteWalk`). `payload_copy` is the row in hand: its bytes, copied
     // out of the page.

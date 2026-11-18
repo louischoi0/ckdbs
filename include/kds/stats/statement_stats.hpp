@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -84,13 +85,10 @@ struct StatementShape {
     std::uint64_t compiled_calls = 0;
     std::uint64_t compile_ns = 0;
     // The calls that ran inside a task of their own session - the only ones
-    // whose time and log the session's statistics hold - and their sums.
+    // whose time and log the session's statistics hold - and the sum of
+    // each one's delta of those statistics.
     std::uint64_t timed_calls = 0;
-    std::uint64_t cpu_ns = 0;
-    std::array<std::uint64_t, kWaitClassCount> class_ns{};  // by `WaitClass`
-    std::uint64_t page_reads = 0;
-    std::uint64_t log_bytes = 0;
-    std::uint64_t log_records = 0;
+    sched::SessionCostSample timed;
     // Every call's elapsed time, in `sys.wait_histogram`'s buckets
     // (`sched::WaitBucketOf`); the buckets sum to `calls`.
     std::array<std::uint64_t, sched::kWaitHistogramBuckets> latency{};
@@ -106,12 +104,9 @@ struct StatementCost {
     std::uint64_t pages = 0;
     bool compiled = false;  // `compile_ns` is set
     std::uint64_t compile_ns = 0;
-    bool timed = false;     // the five below are the session's deltas
-    std::uint64_t cpu_ns = 0;
-    std::array<std::uint64_t, kWaitClassCount> class_ns{};
-    std::uint64_t page_reads = 0;
-    std::uint64_t log_bytes = 0;
-    std::uint64_t log_records = 0;
+    // The session's statistics at the call's end less at its head; unset
+    // for a call that ran outside a task of its own session.
+    std::optional<sched::SessionCostSample> timed;
 };
 
 // The `kind` of a statement: its first whitespace-separated token,

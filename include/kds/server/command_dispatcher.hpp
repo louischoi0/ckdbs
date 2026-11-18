@@ -952,7 +952,9 @@ private:
     // statement's own frame, never a member: statements of one core
     // interleave at a park.
     struct StatementHead {
-        bool timed = false;
+        // The statistics the running task books to, null where it books to
+        // none of this session's: the statement is then not timed.
+        const sched::SessionWaitStats* booked_to = nullptr;
         sched::SessionCostSample sample;
     };
     StatementHead BeginStatement(Session* session);
@@ -960,8 +962,7 @@ private:
     // its refusal's `sys.refusal_stats` count: `began_ns` is when it
     // entered, re-runs and waits included.
     void RecordStatement(std::string_view line, const DispatchOutcome& out,
-                         sched::MonoTimeNs began_ns, const StatementHead& head,
-                         Session* session);
+                         sched::MonoTimeNs began_ns, const StatementHead& head);
     // The running statement's own chain is compiled: `compile_ns` is taken
     // (DF-S1). Its own compile, so a later one - an UPDATE's WHERE after its
     // SET subquery's - replaces an earlier.

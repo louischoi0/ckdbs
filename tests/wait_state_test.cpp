@@ -310,6 +310,27 @@ TEST_F(WaitStateTest, ASessionsCostSampleFoldsItsEventsByClassAndCountsItsReads)
     EXPECT_EQ(sample.page_reads, 7u);
     EXPECT_EQ(sample.log_bytes, 64u);
     EXPECT_EQ(sample.log_records, 1u);
+
+    // A later sample less an earlier is what lay between, field by field,
+    // and two such differences add up.
+    session->on_cpu_ns.add(50);
+    session->events[idx(WaitEvent::kIoPageRead)].total_ns.add(8);
+    session->events[idx(WaitEvent::kIoPageRead)].count.add(1);
+    session->log_bytes.add(16);
+    session->log_records.add(1);
+    SessionCostSample between = SampleSessionCost(*session) - sample;
+    EXPECT_EQ(between.on_cpu_ns, 50u);
+    EXPECT_EQ(between.class_ns[cls(stats::WaitClass::kUserIo)], 8u);
+    EXPECT_EQ(between.class_ns[cls(stats::WaitClass::kCommit)], 0u);
+    EXPECT_EQ(between.page_reads, 1u);
+    EXPECT_EQ(between.log_bytes, 16u);
+    EXPECT_EQ(between.log_records, 1u);
+    between += between;
+    EXPECT_EQ(between.on_cpu_ns, 100u);
+    EXPECT_EQ(between.class_ns[cls(stats::WaitClass::kUserIo)], 16u);
+    EXPECT_EQ(between.page_reads, 2u);
+    EXPECT_EQ(between.log_bytes, 32u);
+    EXPECT_EQ(between.log_records, 2u);
 }
 
 #ifndef KDS_WAIT_INSTRUMENTATION_OFF

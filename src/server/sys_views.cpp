@@ -1123,18 +1123,18 @@ StatusOr<exec::CatalogView> CommandDispatcher::StatementStatsView() {
             Int(s.conflicts), Int(s.rows),
             executed ? Int(s.rows_examined) : Null(), executed ? Int(s.pages) : Null(),
             s.compiled_calls != 0 ? Int(Us(s.compile_ns)) : Null(),
-            Int(s.timed_calls), when_timed(Us(s.cpu_ns))};
+            Int(s.timed_calls), when_timed(Us(s.timed.on_cpu_ns))};
         std::uint64_t other_ns = 0;
         for (std::size_t c = 0; c < stats::kWaitClassCount; ++c) {
-            if (!InSplit(static_cast<stats::WaitClass>(c))) other_ns += s.class_ns[c];
+            if (!InSplit(static_cast<stats::WaitClass>(c))) other_ns += s.timed.class_ns[c];
         }
         for (const auto& [name, split] : kSplitClasses) {
-            row.push_back(when_timed(Us(s.class_ns[static_cast<std::size_t>(split)])));
+            row.push_back(when_timed(Us(s.timed.class_ns[static_cast<std::size_t>(split)])));
         }
         row.push_back(when_timed(Us(other_ns)));
-        row.push_back(when_timed(s.page_reads));
-        row.push_back(when_timed(s.log_bytes));
-        row.push_back(when_timed(s.log_records));
+        row.push_back(when_timed(s.timed.page_reads));
+        row.push_back(when_timed(s.timed.log_bytes));
+        row.push_back(when_timed(s.timed.log_records));
         row.push_back(Str(s.shape_text));
         view.rows.push_back(std::move(row));
     }
