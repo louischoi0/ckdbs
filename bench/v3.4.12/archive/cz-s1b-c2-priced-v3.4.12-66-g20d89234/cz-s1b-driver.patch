@@ -1,0 +1,41 @@
+diff --git a/tools/bl_mixed.py b/tools/bl_mixed.py
+index 805b7173..2c15503c 100644
+--- a/tools/bl_mixed.py
++++ b/tools/bl_mixed.py
+@@ -231,7 +231,18 @@ def client(args):
+             due += interval
+     else:
+         n = 0
++        # CZ-S1b (`--insert-rate`): the inserter held to a rate, so two arms
++        # carry one load. Statements are due at a fixed interval from the
++        # start; one that is late is sent at once, so a stall is caught up
++        # and the mean rate holds while the server can serve it.
++        held = args.role == "inserter" and args.insert_rate > 0
++        due = args.start_at
+         while time.time() < stop_at:
++            if held:
++                now = time.time()
++                if now < due:
++                    time.sleep(due - now)
++                due += 1.0 / args.insert_rate
+             if args.role in ("walker", "nwalker"):
+                 # Unindexed and not aggregated, so its outermost walk is the
+                 # one that reaches the slice boundary (an aggregate does not).
+@@ -370,6 +381,8 @@ def run_one(args, run):
+                 cl += ["--level", levels[role]]
+             if args.stall_cores and role == "reader":
+                 cl += ["--stall-cores"]
++            if args.insert_rate and role == "inserter":
++                cl += ["--insert-rate", str(args.insert_rate)]
+             if args.client_cpus:
+                 cpus = args.client_cpus.split(",")
+                 cl = ["taskset", "-c", cpus[i % len(cpus)]] + cl
+@@ -583,6 +596,8 @@ def main():
+                    help="BL's rung-3 probe: walkers placed like readers, `normal` unless --levels names nwalker")
+     p.add_argument("--meta-cores", action="store_true",
+                    help="read SHOW META on every core at the window's edges (`meta_by_core`)")
++    p.add_argument("--insert-rate", type=float, default=0.0,
++                   help="CZ-S1b: the inserter's statements per second (0: closed loop, as before)")
+     p.add_argument("--stall-cores", action="store_true",
+                    help="CZ-S1: a reader appends its core (one SHOW META) to each kept sample of 10 ms or more")
+     p.add_argument("--rate", type=float, default=2000.0, help="point reads per second, all readers together")

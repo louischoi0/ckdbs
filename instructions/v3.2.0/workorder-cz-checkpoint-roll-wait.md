@@ -11,8 +11,9 @@ there) V0 is passed, every item of §4 is marked (a) and CZ-S1 is opened.**
 CZ-S0 was pushed to `main` with the hook skipped on the operator's word
 (§32 there). **In CZ-S1's spike C1 alone met CZ-Q1 (a)'s bar as written,
 on a host builds reached, and the operator read S1 as C1 alone and opened
-CZ-S2** (§36 there). **CZ-S2's model is §8.** CZ-S1 and CZ-S2 are not
-pushed. Written the same day on
+CZ-S2** (§36 there). **CZ-S2's model is §8.** **C2 was priced further
+(CZ-S1b, §7) and is now DG's subject**, outside CZ. CZ-S1, CZ-S1b and
+CZ-S2 are not pushed. Written the same day on
 worktree `bl-rung3-probe` from `3b3f4851` (`v3.4.12-25-g3b3f4851`) on the
 operator's word (§13 there): *"For now, leave it as a work order."* Every
 `[source-read]` claim of §1 and §2 was read at `3b3f4851`; §7's stage log
@@ -671,6 +672,68 @@ claims held; liveness and completeness did not as first written.**
 
 **For the operator.** CZ-Q14 to CZ-Q22, and then the word for CZ-S3.
 
+### CZ-S1b - C2 priced further, 2026-11-18
+
+On worktree `cz-checkpoint-roll-wait`, from the operator's word
+(`raft-marks-2026-11-18.md` §36), under CZ-Q3 (a)'s "C2 is priced in S1".
+CZ-S1's spike binary, unchanged; the driver gained `--insert-rate` on the
+spike branch (`e9ee523f`), which that word admits against CZ-Q13 (a).
+**Results:
+`bench/v3.4.12/results-cz-s1b-c2-priced-v3.4.12-66-g20d89234.md`.** Suite
+not executed: no build input changed.
+
+**What ran.** 55 cells in two passes, every one rc=0 with 0 errors, 17.7
+minutes of cells inside the budget and 40.9 minutes held outside it. A
+build was on the host at 12 of them. The second pass was added when the
+first showed the rolls short at its rate.
+
+| measurement | reading | with the prewrite | without it (C2) |
+|---|---|---|---|
+| A, C1 in both arms, the inserter held to 120 statements a second | reader p99 / walker statements a window | 2.7 ms / 10,269 statements | 1.8 ms / 11,735 statements |
+| A, the same at 150 a second | reader p99 / walker statements a window | 1.7 ms / 5,532 statements | 1.3 ms / 9,029 statements |
+| B, a one-row commit at `group` | writer p50 from its schedule / service p95 | 799 µs / 985 µs | 809 µs (+1.3 %) / 1.6 ms (+65 %) |
+| B, the same at `strict` | writer p50 from its schedule / service p95 | 792 µs / 945 µs | 813 µs (+2.6 %) / 1.6 ms (+71 %) |
+| B, the bulk writer at `group` | rows a second / statement p50 / p99 | 121,469 rows/s / 5.6 ms / 66.8 ms | 146,073 rows/s (+20.3 %) / 6.7 ms / 11.1 ms |
+
+**What the table cannot carry.**
+- **The prewrite's cost is a disturbance of about half a second a
+  segment, from the half-segment mark**; a roll's hold is what is left of
+  it when the roll arrives (251 ms at 304 ms from the mark, 4 ms at
+  577 ms). The roll waits at the sync gate, not for the body.
+- **Neither C1 nor C1 with C2 meets CZ-Q1 (a)'s bar as written in these
+  cells**, but C1 with C2 at 120 a second. They are not V1's cell.
+- **For §8.3 and CZ-Q21**: the stall samples C1 alone kept here (27, in
+  two runs) are the checkpoint's own flush call with no latch wait, 51 ms
+  and 104 ms, inside that disturbance. That is the task writing the
+  staged ring on a read core's reactor.
+
+**Reviewed by `critics-developer`** against the raw data, before the
+commit. It recomputed every table from the 55 cells and tested each
+inference against the logs.
+- **Corrected by the review:** two roundings and one column of the
+  script (a per-core tally printed as the instance's).
+- **Applied from its findings, each of which changed a reading:**
+  - "a commit pays about 2 %" was the median's. The p95 separates the
+    arms in every run, +65 % and +71 %, and is now the file's first
+    finding;
+  - "a cliff in the log's rate, the log outrunning the fill" was the
+    wrong mechanism: the body was ready at every roll at the held rates,
+    and the hold is the sync gate's. The file now gives the disturbance's
+    place in a segment, computed in the script;
+  - "every session gains" contradicted the walker's -16 % at `group`;
+  - "C1's margin is thin" was two misses of the bar as written;
+  - the held inserter falls behind in the C1 arms, `group` did not group,
+    the commit cells never ran the preparer, the third long stall, and
+    `c1h`'s stalls read from their run lines are stated.
+- **Rejected:** rewriting the two run scripts as one. They are the record
+  of what ran. The script's dead helpers stay for the same reason the
+  copy does.
+
+**CLA's judgement, which §36 left to it**: the numbers support an order
+on the prewrite, and not C2 as it stands. It is
+`workorder-dg-wal-segment-body.md`, written and not opened; the letter DG
+is CLA's proposal.
+
 ## 8. The model for C1 (CZ-S2) `[design]`
 
 Every `[source-read]` claim below was read at `fd96b5d3`. Nothing here is
@@ -792,7 +855,9 @@ the holder.
 - **When the latch is free the flush is today's** (CZ-Q21): this thread
   writes the staged ring, every core's bytes. CZ-S1's 208 ms flush call
   with 2 ms of latch wait may have been that write or the spin on a flush
-  in flight; the model removes the second and leaves the first.
+  in flight; the model removes the second and leaves the first. CZ-S1b saw
+  the first twice under C1, 51 ms and 104 ms with no latch wait, and they
+  were C1's only stall samples there (§7, "CZ-S1b").
 
 ### 8.4 The sites
 
