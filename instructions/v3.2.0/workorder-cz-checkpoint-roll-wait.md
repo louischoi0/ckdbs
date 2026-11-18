@@ -1,10 +1,12 @@
 # Work order CZ - a checkpoint that does not hold its reactor on a segment roll: the premise measured before anything is built
 
-Status: **OPENED 2026-11-18; CZ-S0 in progress** on worktree
-`cz-checkpoint-roll-wait` from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`), on the
-operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §22): *"Proceed
-with the CZ milestone."* No item of §4 is marked; S0 rests on none of them,
-and V0's verdict (CZ-Q1) is the operator's. Written the same day on
+Status: **OPENED 2026-11-18; CZ-S0 done, V0 with the operator** on
+worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
+(`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
+(`raft-marks-2026-11-18.md` §22): *"Proceed with the CZ milestone."* No
+item of §4 is marked; S0 rested on none of them. **V0 passes on CLA's
+proposed bar and its verdict (CZ-Q1) is the operator's; CZ-S1 is not
+started** (§7, "CZ-S0"). Written the same day on
 worktree `bl-rung3-probe` from `3b3f4851` (`v3.4.12-25-g3b3f4851`) on the
 operator's word (§13 there): *"For now, leave it as a work order."* Every
 `[source-read]` claim of §1 and §2 was read at `3b3f4851`; §7's stage log
@@ -261,6 +263,16 @@ Binding from CZ-S2 on, if the order reaches it.
     `[quiet-wrong]` bug at `cores > 1` and not a rule for later: it goes
     to the operator at once as a `docs/inflight/bugs/` entry, outside CZ's
     stages.
+  - **CZ-S0's reading (2026-11-18, at `a4d2fb3b`): no live bug, and the
+    "unless" above does not apply.** The dirty table's gap is covered by
+    the fold and by the publish. The active table's is covered only by
+    `Start` being one poll, which a park between the snapshot and the
+    append removes. So under C1b the snapshot is taken again after a park.
+    Trying the latch before the snapshot and appending under that hold is
+    the alternative, unread: `Append` takes the latch itself. The
+    assertion bases are a third snapshot in `Start`, held under the
+    assertion directory's latch across their appends, and CZ-S2 owes that
+    site its own design (the results file's §6.2).
 - **CZ-R4 - a checkpoint always finishes.** The tries are bounded, and
   past the bound the task takes the blocking path, as `kGateParks` does
   today. A checkpoint that never completes keeps the log from recycling.
@@ -279,7 +291,8 @@ Binding from CZ-S2 on, if the order reaches it.
 
 ## 4. Items for the operator (CZ-Q), CLA's proposals
 
-None is marked. (a) is CLA's proposal in each.
+None is marked. (a) is CLA's proposal in each. CZ-Q11 to CZ-Q13 were
+added at CZ-S0.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -294,6 +307,9 @@ None is marked. (a) is CLA's proposal in each.
 | CZ-Q8 | The measurement budget. | the standing one: 20 minutes a stage, about an hour at the close, cuts named in the results file | (b) lifted for S0 |
 | CZ-Q9 | The letter. | CZ | (b) another |
 | CZ-Q10 | The two sites C1's first form did not reach. | the recycle joins C1 (C1c); the inline WAL gate stays blocking, and S1 counts how often and how long it is taken | (b) both stay blocking; (c) the inline gate is made parkable too |
+| CZ-Q11 | Added at CZ-S0. What the bar is read on beside p99: a run has 4,006 reader samples, its p99 is the 41st slowest, and S0's `levels` took 0-38 stall samples a run, so the stalls show at p99.9 (71.1 ms against 5.2 ms) and barely at p99 (3.2 ms against 2.3 ms). | the bar stays p99 (CZ-Q1); p99.9 and the count of samples at or above 10 ms are reported beside it at V0 and V1, with no bar | (b) a second clause on p99.9; (c) a clause on the stall count |
+| CZ-Q12 | Added at CZ-S0. The checkpoint's page writes on a read core: a read core's run writes the instance's dirty pages on its reactor, and one page write stalled readers for 164 ms in S0's `half` cell, with no roll beside it. C1 does not touch it. | out of CZ: it is `known-gaps.md`'s entry on the checkpoint's `pwrite`s on the reactor; S1 and the close report a run's longest page write beside the stalls | (b) into CZ as a candidate |
+| CZ-Q13 | Added at CZ-S0. M4 did not vary the roll rate: the inserter is closed-loop, so half the batch left 11 rolls a window against 10-12. | dropped: S1's spike answers what M4 stood in for | (b) M4 again with an inserter held to a rate, which is a driver change with its own review |
 
 ## 5. Stages
 
@@ -386,3 +402,105 @@ the probe's raw data, before the commit.
   - CZ-R3's gap is stated as present today;
   - the ceiling's caveats, and the 227 samples as 11 episodes.
 - **Rejected:** none.
+
+### CZ-S0 - the premise and the census, 2026-11-18
+
+On worktree `cz-checkpoint-roll-wait` at `a4d2fb3b`
+(`v3.4.12-42-ga4d2fb3b`). No engine code; the driver unmodified.
+**Results, with the census as its §6:
+`bench/v3.4.12/results-cz-s0-premise-v3.4.12-42-ga4d2fb3b.md`.** Suite
+not executed: no build input changed. Overhead not measured; measured at
+the milestone's close.
+
+**What ran.** The rung-3 probe's cell, 5 interleaved runs of five arms,
+25 cells, every one rc=0 with 0 errors: `isolated`, `levels`, `nockpt`
+(`checkpoint_interval_ms = 0`), `half` (`--batch 512`) and `iso0`
+(`isolated` with the cadence off, a control this order did not name).
+Building and running the cells took 14.2 minutes. The quiet gate held the
+matrix for another 25.8 minutes while two other sessions built and ran
+suites, so the measurement spanned 40.5 minutes of wall time, **over the
+20-minute budget on the clock**; whether such a hold counts is the
+operator's to say. Nothing was cut.
+
+**V0, on CLA's proposed bar (CZ-Q1 (a), unmarked): passed.** The verdict
+is the operator's.
+
+| reading | value |
+|---|---|
+| reader schedule p99, `nockpt` against `isolated` | 2.3 ms against 1.4 ms (medians of 5), 1.60x; 5 of 5 pairs within 2x |
+| reader schedule p99, `levels` | 3.2 ms, 2.27x, 2 of 5 pairs above 2x; without the one cell a build ran into, 2.8 ms, 1.99x, 1 of 4 |
+| reader schedule p99.9, `levels` / `nockpt` / `isolated` | 71.1 ms / 5.2 ms / 4.5 ms (medians) |
+| reader samples at or above 10 ms, 5 runs, `levels` / `nockpt` | 75 samples / 1 sample |
+| read cores' stream-latch wait a window, `levels` / `nockpt` | 19-702 ms / 0 µs in every run |
+
+**What S0 found.**
+- **The premise's direction holds.** The 10 ms stalls go with the cadence
+  checkpoint, and with it the read cores' whole wait on the stream latch,
+  while the log still rolls 12 times a window.
+- **Its size at p99 was small this day**: about 2x, not the probe's 19x,
+  on a host with a 2.2x higher floor and a third of the probe's stall
+  samples. At p99 the gate barely separates the arms; the p99.9 and the
+  latch counters do (CZ-Q11).
+- **Where the wait is** (M2): by timing, 5 of 6 stall episodes in `levels`
+  are the begin record's append. By latch time, at least 810 ms of the
+  read cores' 1,280 ms was taken at a site the run line does not time.
+- **What C1 would leave**: a page write stalled readers for 164 ms once
+  in `half`, no roll beside it (CZ-Q12). The cadence-off arm also loses
+  the long rolls and recycles nothing (M3).
+- **M4 answered nothing** (CZ-Q13).
+
+**The census.**
+- **Takers on a core with no write**: the cadence checkpoint at §1.2's
+  five kinds of site, and nothing else that this cell reaches. Not every
+  caller of `Append` was read; the measured zero stands in for that.
+- **Facts §1.2 did not have**: `WalStream::Flush` takes the latch with an
+  empty ring, spins on `yield` while another thread's write is in flight
+  (`src/wal/stream.cpp:493`, `:512-514`) and writes the staged ring on the
+  calling reactor; a peer's recycle runs through core 0's manager on the
+  peer's thread; a read core's run snapshots and writes the instance's
+  dirty pages.
+- **CZ-R3**: no live defect; the retake is required; `Start` has a third
+  snapshot, the assertion bases (CZ-R3's new bullet). The comment in
+  `Start` on pages dirtied "after this point" is wrong for the interval
+  between the snapshot and the append at `cores > 1`. CZ-S3 corrects it;
+  if the order closes before S3, the close does, in a comment-only change.
+- **BQ's rung-2 ceiling** bounds the drain, not the checkpoint, and does
+  not conflict with §1.1's.
+
+**What CZ-S1's spike must count**: the results file's §7.
+
+**Reviewed by `critics-developer`** against the raw data and the source,
+before the commit. It recomputed every figure from the 25 cells, opened
+every citation and tried four schedules against CZ-R3's gap; the stage's
+conclusions and "no live defect" stood.
+- **Corrected by the review:**
+  - live segments were one too high in every row (a roll line's `seg` is
+    the segment entered);
+  - "at least 833 ms" subtracted the begin append alone, and is 810 ms
+    with the inline gate;
+  - one of two "page write" episodes was a publish-phase call;
+  - the pool figures, three citations, two medians taken as upper medians
+    and five wordings the data did not bear.
+- **Applied from its findings:**
+  - `levels` r5 is flagged as contaminated beyond its end, and `levels`
+    is given with and without it;
+  - V0's pairs are stated as not all adjacent, with the pairs against
+    `iso0`;
+  - the reactors' two physical cores are stated;
+  - the budget is stated as over on the clock;
+  - CZ-R3's cover is two things, not three, with the anchor's clamp and
+    the no-yield premise named; the assertion bases and the unread
+    alternative were added;
+  - the script loads each cell once and names its thresholds.
+- **Rejected in part:** the cut of this entry to V0's rows and a pointer.
+  The findings that amend §1.2 and CZ-R3 stay here, in short, because this
+  order is their home.
+
+**For the operator.**
+1. V0's verdict (CZ-Q1). CLA's reading: passed on the proposed bar; the
+   premise's direction is confirmed and its size at p99 was small this
+   day. A second M1 on a quiet host would firm the size and costs about
+   10 minutes.
+2. The marks on CZ-Q0 to CZ-Q8 and CZ-Q10, and on the three added items,
+   CZ-Q11 to CZ-Q13. CZ-S1 needs CZ-Q3 and CZ-Q10 at the least.
+3. The word for CZ-S1.
