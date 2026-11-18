@@ -104,3 +104,22 @@ took under them.
 | **Mark** | None by the operator. CLA ran §5.2's cut probe on worktree `bl-rung3-probe` at `67973ebc` (`v3.4.12-24-g67973ebc`). `tools/bl_mixed.py` gained `--normal-walkers` and `--meta-cores`, reviewed by `critics-developer`, two driver bugs fixed. Results: `bench/v3.4.12/results-bl-rung3-probe-v3.4.12-24-g67973ebc.md`. **Rung 3 is not opened under §5.2's condition**: bar (v)'s excess is still the checkpoint on a roll (all 227 reader samples at or above 10 ms overlap a checkpoint run), and readers beside the `normal` walker took no more slow samples than the rest. Forced sharing is not a clean bound (median reader p99 535 µs against 506 µs, 2 of 5 pairs above 2x) |
 | **Does not settle** | Whether rung 3 is ruled out; rung 4; the checkpoint's roll wait (WAL work); a `normal` statement that does not yield; a merge, a push, a version |
 | **Recorded at** | this file; the BL order's §6 ("Rung 3's probe measured 2026-11-18"); `docs/inflight/known-gaps.md`'s BL-R7 remainder; this file's row in `instructions/v3.2.0/index.md` |
+
+## 12. The rung-3 probe pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W14: *"push no verify"* - after CLA's report at `3b3f4851` on worktree `bl-rung3-probe` |
+| **Mark** | None. `3b3f4851` pushed to `main` with `--no-verify` (`48857a5a..3b3f4851`, a fast-forward): the driver commit `67973ebc` and the results commit. The hook and the suite were skipped; the suite was never run for this work, which changes a tool and documents only. Recorded here after the push, in §13's commit |
+| **Does not settle** | Whether rung 3 is ruled out; a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 13. The checkpoint's wait on a roll, and a work order written
+
+| | |
+|---|---|
+| **Word** | W15, a question: *"Explain the part where the checkpoint waits on the segment roll, and explain the improvement options too."* W16, after CLA's answer: *"For now, leave it as a work order."* (each given in Korean; recorded in English) |
+| **CLA's answer to W15** | From the code at `3b3f4851` and BQ's order. The checkpoint task takes the stream latch with a blocking lock at its begin and end records and at its log park's flush, so a roll's hold stops the reader core's reactor. Three options were named: the checkpoint parks for the latch; no zero prewrite where `posix_fallocate` reserved (BQ's H4 option 3); the latch released for the roll's I/O (BQ's rung 4, H6). CLA proposed the first, after a premise run with the cadence checkpoint off. **One statement in that answer is corrected here**: CLA said BQ's rung-2 bound predates the partition. BQ-S1 did measure driver-forced segregated placements, so the bound is re-read by CZ-S0, not set aside |
+| **Mark** | None by the operator. **CZ written, not opened**: `instructions/v3.2.0/workorder-cz-checkpoint-roll-wait.md`, on worktree `bl-rung3-probe` from `3b3f4851`. Exploratory: CZ-S0 is the premise and the census with no engine code, CZ-S1 a spike that stays on the branch. CZ-Q0..Q10 carry CLA's proposals. The letter is CLA's proposal. **The order's review corrected the answer above**: the task reaches the latch at five kinds of site, not three (the inline WAL gate and the recycle at the anchor's commit besides), and the order's §1.2 is the account that stands |
+| **Does not settle** | Every CZ-Q item; the opening of any CZ stage; H6; whether rung 3 is ruled out; a merge, a push, a version |
+| **Recorded at** | this file; the order; the CZ row and this file's row in `instructions/v3.2.0/index.md` |
