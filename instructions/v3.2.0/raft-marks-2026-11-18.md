@@ -132,3 +132,32 @@ took under them.
 | **Mark** | None. CZ's order, `ceiling.py` with its output, and §12-§13 go to `main` with `--no-verify`, in this section's commit. The hook and the suite are skipped; no suite was run for this work, which is documents and one analysis script |
 | **Does not settle** | Every CZ-Q item; the opening of any CZ stage; a version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 15. CY-S0's gate taken as not passed: CY-S2 and CY-S3 are not built
+
+| | |
+|---|---|
+| **Context** | CLA's report of CY-S0 (`bench/v3.4.12/results-cy-s0-premise-v3.4.12-18-ge0cd5a93.md`, corrected after its review at `648d11ba`): over 15 cells no forced join order that differs from the informed planner's saves 15 % of server CPU, or of p50, in any round; the only different order is a tie; the scenario columns are uniform, and the compile with relation priors and no posterior was not measured. CLA recommended measuring two more cells before a final verdict |
+| **Word** | W13 (the CX/CY matter's; §11's W13 is BL's): *"For now, take this gate as not passed; what is the next work?"* (given in Korean; recorded in English) |
+| **Mark** | **CY-Q15 (a)'s gate is not passed. CY-S2 (column statistics) and CY-S3 (column-group statistics) are not built.** CY keeps S1 (persistence) and S4's lock, pending and publish, history and restore, export and import, over relation objects. The marks on the items that only S2 or S3 would use stay as marked and apply to nothing until an order reopens them. "For now" is the operator's: the verdict is not a ruling that column statistics are never built |
+| **Does not settle** | the opening of CY-S1; CX-Q2..Q11 and CX-Q19..Q27; item 4; a push of `fc705f97` and `648d11ba`; a version |
+| **Recorded at** | this file; CY's header, §3 and §8; the CY row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 16. Statistics unlogged; CY-S1 and CX opened; the standing go-ahead
+
+| | |
+|---|---|
+| **Context** | CLA's answer on which engine state is memory-only and which is unlogged but on disk, then its list of the next work (CY-S1, CY-S4's remainder, CX-S0, CX-S1, CX-S2 onward) |
+| **Word** | W14: *"For now, write every statistic as unlogged, and go on with: the statistics persisted to disk and the capture, the features around `CREATE PLAN`, the interface, and CX-S2 onward."* W15, the operator's answers to three questions CLA put before recording W14, each CLA's recommendation: (1) unlogged statistics are **kept across a clean shutdown only** - a mount after a crash or a restore discards them, as it discards every unlogged structure today (`DiscardAdvisoryState`, `src/server/expeditor.cpp:1043`); (2) **plans are logged**, the captured and the administrator's alike; (3) the unmarked CX items are **adopted as CLA proposed and the stages run one after another** (given in Korean; recorded in English) |
+| **Mark** | **CY-S1 opened**, its `sys.statistics` unlogged under CR6 (`crosscore.md` CC13) and kept across a clean shutdown only - this replaces CY-S1's "logged" and the restore sentence, and CX-Q7's withdrawal text. **CX opened.** CX-Q2..Q11 (CX-Q7 withdrawn) and CX-Q19..Q27 are **adopted on the operator's standing go-ahead of 2026-11-18**, each as CLA proposed, not marked by the operator item by item. The order of work: CY-S1, then CX-S0, CX-S1, CX-S2 onward, with CY-S4's relation-object surface where it fits; every stage with its `critics-developer` review and the full suite; **it stops before any push, tag or version** |
+| **Does not settle** | a push, a tag, a version; item 4; whether column statistics are ever built (§11's "for now"); `join_order`'s value names |
+| **Recorded at** | this file; CY's header, §3 S1, §7 and §8; the CX order's header, §4 and §8; the CX and CY rows and this file's row in `instructions/v3.2.0/index.md` |
+
+## 17. CY-S1a pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W16 (the CX/CY matter's): *"For now, push the current work to main, no verify"* - after CLA's report of CY-S1a at `e13efd80` on worktree `cx-plan-change-option` |
+| **Mark** | **Pushed to `main` with `--no-verify`**: CY-S0's results and their correction, §15's verdict, §16's opening, and **CY-S1a** - a relation's prior across a clean shutdown, unlogged `sys.statistics`, superblock 36. The hook was skipped; the full Debug suite ran 4595/4595 at `e13efd80` (`v3.4.12-26-ge13efd80`), and the two merges of `origin/main` after it (BL's rung-3 probe, the CZ order) brought documents, bench files and `tools/bl_mixed.py`, no source, test, CMake file or script. Overhead not measured; measured at the milestone's close |
+| **Does not settle** | a tag, a version; CX-S0 and the stages after it, which go on under §16's go-ahead and stop before the next push |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |

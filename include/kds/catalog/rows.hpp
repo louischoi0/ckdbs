@@ -786,6 +786,51 @@ inline constexpr std::size_t kMaxAccessShapes = 4096;
 // meant "unclassified" or "the first class in some list".
 inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 
+// ---- sys.statistics ---------------------------------------------------
+//
+// The join planner's relation priors as a completed shutdown wrote them
+// (`docs/spec/plan-stats.md` §8, PS14-PS16). **Unlogged** (CR6): one
+// `kStatisticsRelation` row a relation, then one `kStatisticsWhole` row
+// counting them. Advisory - a row prices a join order and nothing else
+// (PS9) - which is what lets it be kept with no log and believed on a
+// count.
+//
+// A mount empties the chain, so the layout can change with no migration: a
+// row of another size does not decode and the chain reads as not whole.
+struct SysStatisticsRow {
+    // The relation; 0 on the closing mark.
+    Oid rel_oid;
+
+    // On the closing mark, the relation rows before it; 0 on a relation row.
+    std::uint64_t count;
+
+    // The prior's half-octave band (PS5), which is what the planner read
+    // and what a mount seeds, so a prior comes back at the band it left at.
+    std::int16_t band;
+
+    // `kStatisticsRelation` or `kStatisticsWhole`; 0 is a zeroed row and
+    // names neither.
+    std::uint8_t kind;
+
+    static constexpr std::size_t kRelOidOffset = 0;
+    static constexpr std::size_t kCountOffset = 8;
+    static constexpr std::size_t kBandOffset = 16;
+    static constexpr std::size_t kKindOffset = 18;
+    static constexpr std::size_t kOnDiskSize = kKindOffset + sizeof(std::uint8_t);
+
+    std::array<std::byte, kOnDiskSize> Encode() const;
+    static StatusOr<SysStatisticsRow> Decode(std::span<const std::byte> bytes);
+};
+
+static_assert(offsetof(SysStatisticsRow, rel_oid) == SysStatisticsRow::kRelOidOffset);
+static_assert(offsetof(SysStatisticsRow, count) == SysStatisticsRow::kCountOffset);
+static_assert(offsetof(SysStatisticsRow, band) == SysStatisticsRow::kBandOffset);
+static_assert(offsetof(SysStatisticsRow, kind) == SysStatisticsRow::kKindOffset);
+static_assert(SysStatisticsRow::kOnDiskSize == 19);
+
+inline constexpr std::uint8_t kStatisticsRelation = 1;
+inline constexpr std::uint8_t kStatisticsWhole = 2;
+
 // ---- sys.cabins -------------------------------------------------------
 //
 // One row per Cabin: a per-`(relation, F)` store that is **authoritative for

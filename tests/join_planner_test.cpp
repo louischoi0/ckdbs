@@ -590,6 +590,31 @@ TEST_F(StatisticsPlannerTest, AZeroCardinalityNeverSkipsAStep) {
     dispatcher_->set_plan_stats(nullptr);
 }
 
+TEST_F(StatisticsPlannerTest, RelationPriorsAloneFixTheFilteredJoinsBlindOrder) {
+    // CY-S1's premise (workorder-cy-managed-statistics.md §8): scenario 2's
+    // customer-statement, written freights first. Blind - every relation at
+    // the constant - the written order is kept, which CY-S0 measured 1.75x
+    // to 2.9x slower. With the relations' priors and **no posterior**, the
+    // compile a persisted prior serves after a restart, the filtered
+    // cargos drive at each of CY-S0's sizes, so a prior is enough and the
+    // posterior need not be persisted for this shape (CY-Q10 (a)).
+    Ok("CREATE TABLE cargos (id int64, org_id int64, cbm int64) BTREE");
+    Ok("CREATE TABLE freights (id int64, cargo_id int64, cbm int64) BTREE");
+    const catalog::Oid cargos = OidOf("cargos");
+    const catalog::Oid freights = OidOf("freights");
+    const std::string sql =
+        "SELECT c.org_id, f.cbm FROM freights AS f JOIN cargos AS c ON f.cargo_id = c.id "
+        "WHERE c.org_id = 3";
+    EXPECT_EQ(Planned(sql).steps[0].step_id, 0u) << "blind: freights drives, as written";
+    for (const double n : {200.0, 1000.0, 10000.0}) {
+        stats_.PublishForTest({{cargos, stats::BandOf(n)}, {freights, stats::BandOf(0.9 * n)}},
+                              {});
+        const exec::StepChain chain = Planned(sql);
+        ASSERT_EQ(chain.steps.size(), 2u);
+        EXPECT_EQ(chain.steps[0].step_id, 1u) << "cargos drives at " << n << " rows";
+    }
+}
+
 TEST_F(StatisticsPlannerTest, ASelfJoinRunsEitherOrderUnderTwoGenerationsWithTheSameRows) {
     // PS11 and CB-Q3 across generations: one relation at two written
     // positions, a posterior saying first that position 0 alone is tiny and

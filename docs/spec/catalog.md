@@ -155,7 +155,7 @@ relation's oid (`page.md` §2a) and is logged with a `PAGE_INIT` carrying
 that owner, so redo rebuilds it like any page; it is counted in the free
 map and is an ordinary evictable frame (`eviction.md` EV3). `CreateNew`
 may grow the file under those holds, as a user leaf's growth already
-does; nothing in the allocator waits on a page latch. Ids 17..127 are
+does; nothing in the allocator waits on a page latch. Ids 18..127 are
 unused (`crosscore.md` CC9).
 
 **A walk of a catalog chain is bounded by the walk budget**

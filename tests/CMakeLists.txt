@@ -126,6 +126,7 @@ add_executable(kds_tests
     waystone_dir_test.cpp
     range_scan_test.cpp
     access_stats_test.cpp
+    statistics_persistence_test.cpp
     lock_wait_log_test.cpp
     relation_stats_test.cpp
     statement_stats_test.cpp

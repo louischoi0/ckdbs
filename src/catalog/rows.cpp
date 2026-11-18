@@ -306,6 +306,28 @@ StatusOr<SysAccessStatRow> SysAccessStatRow::Decode(std::span<const std::byte> b
     return row;
 }
 
+std::array<std::byte, SysStatisticsRow::kOnDiskSize> SysStatisticsRow::Encode() const {
+    std::array<std::byte, kOnDiskSize> buf{};
+    std::byte* base = buf.data();
+    std::memcpy(base + kRelOidOffset, &rel_oid, sizeof(rel_oid));
+    std::memcpy(base + kCountOffset, &count, sizeof(count));
+    std::memcpy(base + kBandOffset, &band, sizeof(band));
+    std::memcpy(base + kKindOffset, &kind, sizeof(kind));
+    return buf;
+}
+
+StatusOr<SysStatisticsRow> SysStatisticsRow::Decode(std::span<const std::byte> bytes) {
+    if (Status s = CheckSize(bytes, kOnDiskSize); !s.ok()) return s;
+
+    SysStatisticsRow row{};
+    const std::byte* base = bytes.data();
+    std::memcpy(&row.rel_oid, base + kRelOidOffset, sizeof(row.rel_oid));
+    std::memcpy(&row.count, base + kCountOffset, sizeof(row.count));
+    std::memcpy(&row.band, base + kBandOffset, sizeof(row.band));
+    std::memcpy(&row.kind, base + kKindOffset, sizeof(row.kind));
+    return row;
+}
+
 std::array<std::byte, SysCabinRow::kOnDiskSize> SysCabinRow::Encode() const {
     std::array<std::byte, kOnDiskSize> buf{};
     std::byte* base = buf.data();

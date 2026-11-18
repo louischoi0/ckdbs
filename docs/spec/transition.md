@@ -176,7 +176,8 @@ out. `DROP TRANSITION` lifts the refusal.
 ## 6. Storage
 
 `sys.transitions` is oid 146, with column oids 147..152 and a fixed root
-on page 16, the highest of the catalog's fixed roots (`kCatalogRoots`);
+on page 16, among the catalog's fixed roots (`kCatalogRoots`, the highest
+being `sys.statistics`' page 17 since CY-S1);
 past it the chain grows from the general supply (`crosscore.md` CC12
 CR3).
 

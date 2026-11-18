@@ -37,6 +37,11 @@ namespace kds::wal {
 class WalManager;
 }  // namespace kds::wal
 
+namespace kds::heap {
+// Forward-declared: the unlogged chain's walk hands its visitor a page.
+class PageView;
+}  // namespace kds::heap
+
 // SQL catalog: sys.objects, sys.tables, sys.columns, sys.types,
 // sys.indexes, sys.patterns. Four things to know before touching it:
 //
@@ -1057,6 +1062,23 @@ public:
     // (`drop-table.md` DT1's stated leaks).
     Status DiscardAccessStats();
 
+    // **`sys.statistics`, at a mount** (CY-S1, `plan-stats.md` PS16): the
+    // relation rows a completed shutdown wrote, and the chain left empty.
+    // Core 0's, after recovery and before the completion checkpoint, which
+    // persists the emptying before the listener binds.
+    //
+    // The rows are answered only when the chain read whole - every page of
+    // it one of its own, one closing mark, exactly as many rows as it
+    // counts - and none otherwise. Damage costs the statistic and is
+    // logged; it refuses the mount only where the store itself fails.
+    StatusOr<std::vector<SysStatisticsRow>> TakeStatisticsAtMount();
+
+    // **`sys.statistics`, at a shutdown** (PS15): a row for each prior and
+    // the closing mark, onto the chain the mount left empty. Unlogged and
+    // un-undone (CR6); the shutdown's final sync carries the pages out.
+    // Called with no statement running.
+    Status WriteStatisticsAtShutdown(std::span<const std::pair<Oid, std::int16_t>> priors);
+
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
 
     // Retires every `sys.access_stats` row of `rel_id` whose column mask
@@ -1545,6 +1567,17 @@ private:
     // Debug line. Call it *after* the page write succeeds - a failed
     // mutation staled nothing.
     void BumpVersion(std::string_view what, Tally cause = Tally::kWordMovesSchema);
+
+    // Empties an unlogged catalog chain in place (CR6's discard): every
+    // page of it re-formatted and kept, the chain cut before the first link
+    // that does not reach a heap page `owner` owns. `visit` sees each page
+    // of the chain before it is re-formatted. Answers whether the chain was
+    // whole - false where it was cut or, under `heal_head`, its unreadable
+    // head made again empty; without `heal_head` such a head is refused.
+    // `name` is for the damage report.
+    StatusOr<bool> DiscardUnloggedChain(PageId head, Oid owner, std::string_view name,
+                                        bool heal_head,
+                                        const std::function<void(heap::PageView&)>& visit = {});
 
     storage::PageStore& store_;
 

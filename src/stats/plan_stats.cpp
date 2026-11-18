@@ -421,6 +421,7 @@ Status PlanStats::Seed(catalog::Catalog& catalog, storage::PageStore& store, cat
     seeds_.fetch_add(1, std::memory_order_relaxed);
     Prior& prior = priors_[oid];
     prior.seeded_ns = now_ns;
+    prior.carried = false;
     if (Reband(prior.band, prior.banded, std::max(rows.value(), 1.0))) dirty_ = true;
     return Status::OK();
 }
@@ -436,11 +437,7 @@ void PlanStats::Install(std::vector<std::pair<catalog::Oid, std::int16_t>> prior
 }
 
 void PlanStats::Publish() {
-    std::vector<std::pair<catalog::Oid, std::int16_t>> priors;
-    priors.reserve(priors_.size());
-    for (const auto& [oid, prior] : priors_) {
-        if (prior.banded) priors.emplace_back(oid, prior.band);
-    }
+    std::vector<std::pair<catalog::Oid, std::int16_t>> priors = ExportPriors();
     std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors;
     posteriors.reserve(master_.size());
     for (const auto& [key, master] : master_) {
@@ -466,7 +463,8 @@ Status PlanStats::StewardStep(catalog::Catalog& catalog, storage::PageStore& sto
     while (!wanted_.empty() && seeded.ok()) {
         const catalog::Oid oid = wanted_.back();
         const auto known = priors_.find(oid);
-        if (known != priors_.end() && now_ns - known->second.seeded_ns < kReseedNs) {
+        if (known != priors_.end() && !known->second.carried &&
+            now_ns - known->second.seeded_ns < kReseedNs) {
             wanted_.pop_back();
             continue;
         }
@@ -477,7 +475,7 @@ Status PlanStats::StewardStep(catalog::Catalog& catalog, storage::PageStore& sto
         auto it = priors_.upper_bound(reseed_cursor_);
         if (it == priors_.end()) it = priors_.begin();
         reseed_cursor_ = it->first;
-        if (now_ns - it->second.seeded_ns < kReseedNs) continue;
+        if (!it->second.carried && now_ns - it->second.seeded_ns < kReseedNs) continue;
         seeded = Seed(catalog, store, it->first, now_ns, budget);
     }
 
@@ -495,6 +493,26 @@ Status PlanStats::StewardStep(catalog::Catalog& catalog, storage::PageStore& sto
 std::shared_ptr<const PlanStatsSnapshot> PlanStats::Current() const {
     const LatchGuard hold(&publish_latch_);
     return current_;
+}
+
+void PlanStats::SeedPriors(std::span<const std::pair<catalog::Oid, std::int16_t>> bands) {
+    if (bands.empty()) return;
+    for (const auto& [oid, band] : bands) {
+        Prior& prior = priors_[oid];
+        prior.band = band;
+        prior.banded = true;
+        prior.carried = true;
+    }
+    Publish();
+}
+
+std::vector<std::pair<catalog::Oid, std::int16_t>> PlanStats::ExportPriors() const {
+    std::vector<std::pair<catalog::Oid, std::int16_t>> out;
+    out.reserve(priors_.size());
+    for (const auto& [oid, prior] : priors_) {
+        if (prior.banded) out.emplace_back(oid, prior.band);
+    }
+    return out;
 }
 
 void PlanStats::PublishForTest(

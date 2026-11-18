@@ -1928,6 +1928,31 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   another core's undo purge runs. The purge cells cover `PURGE`'s horizon
   gate, not the undo purge's.
 
+## Plan statistics (CY)
+
+- **Relation priors are kept across a clean shutdown only.** Verified at
+  CY-S1a on `cx-plan-change-option`. After a crash or a restore
+  `sys.statistics` is empty and the planner prices every relation at
+  `kAssumedRelationRows` until the steward's first publish, as before
+  CY-S1 (`docs/spec/plan-stats.md` PS16). Posteriors and decline facts are
+  never kept. No statement gathers, reads, exports or imports a statistic.
+  Owned by `plan-stats.md` §8.
+
+- **The shutdown's write is covered by hand-driven cells only.** Every
+  restart cell calls `Expeditor::WriteRelationPriors` itself, then the
+  clean stop's checkpoint; none runs `RunUntilStopped` to its tail, so
+  removing the call there would pass the suite. No cell crashes a device
+  between the shutdown's page writes and its map write - the damaged-chain
+  cells build that state on the in-memory store, and one tears the head on
+  a file. The simulation harness's shutdown does not call the write, so
+  the corpus does not exercise the relation. Owned by `plan-stats.md` §8.
+
+- **The closing mark is a count, not a checksum.** A chain that mixes
+  pages of two shutdowns and still reads whole needs a cut-off page handed
+  back to the chain and a power loss between two of its page writes; it
+  would seed stale priors, which price an order and never change a row.
+  Owned by `plan-stats.md` PS16.
+
 ## Key sets (CU)
 
 Verified on `cu-key-set-access` at `04d9afe9` (CU-S3b); the measured
