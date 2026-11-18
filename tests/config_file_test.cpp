@@ -157,18 +157,25 @@ TEST(ExpeditorConfigTest, EveryKnownKeyIsApplied) {
     EXPECT_EQ(config.LogPath(), "/var/log/kds/server.log");
 }
 
-TEST(ExpeditorConfigTest, TheJoinOrderIsPlannedOrWrittenAndNothingElse) {
-    // CB-S2: `planned` by default, `written` keeps a join as written, and a
-    // third word refuses the file rather than reading as either.
+TEST(ExpeditorConfigTest, TheJoinOrderIsOneOfThreeValuesAndFixedByDefault) {
+    // CX-S0: `fixed` by default, `planned` and `written` by name, and a
+    // fourth word refuses the file rather than reading as any of them.
     Expeditor::Config config;
-    EXPECT_TRUE(config.Limits().plan_join_order);
+    EXPECT_EQ(config.join_order, exec::JoinOrder::kFixed);
     ASSERT_TRUE(config.ApplyFile(WithPool("join_order = written\n")).ok());
-    EXPECT_FALSE(config.Limits().plan_join_order);
+    EXPECT_EQ(config.join_order, exec::JoinOrder::kWritten);
     ASSERT_TRUE(config.ApplyFile(WithPool("join_order = planned\n")).ok());
-    EXPECT_TRUE(config.Limits().plan_join_order);
-    const Status s = config.ApplyFile(WithPool("join_order = cost\n"));
-    EXPECT_FALSE(s.ok());
-    EXPECT_NE(s.message().find("join_order"), std::string::npos) << s.message();
+    EXPECT_EQ(config.join_order, exec::JoinOrder::kPlanned);
+    ASSERT_TRUE(config.ApplyFile(WithPool("join_order = fixed\n")).ok());
+    EXPECT_EQ(config.join_order, exec::JoinOrder::kFixed);
+    for (const char* wrong : {"join_order = cost\n", "join_order = FIXED\n"}) {
+        const Status s = config.ApplyFile(WithPool(wrong));
+        EXPECT_FALSE(s.ok()) << wrong;
+        EXPECT_NE(s.message().find("join_order"), std::string::npos) << s.message();
+        EXPECT_NE(s.message().find("'fixed'"), std::string::npos) << s.message();
+    }
+    // A refused file leaves the value it found.
+    EXPECT_EQ(config.join_order, exec::JoinOrder::kFixed);
 }
 
 TEST(ExpeditorConfigTest, AnUnknownKeyRefusesTheWholeFile) {

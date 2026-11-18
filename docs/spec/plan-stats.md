@@ -143,7 +143,11 @@ line: `planned order=written|planned|memo gen=<g> switch=<r> est=<id>:<rows>,...
 - whether an order other than the written one was taken, the snapshot
 generation its prices read (0: none published), the chosen cost over the
 written order's, and each executed step's estimated rows labelled by its
-step id (its written position), in executed order.
+step id (its written position), in executed order. Under `join_order =
+fixed` the line ends ` capture=first` or ` capture=deferred` for a searched
+block, and a block that was not searched prints `planned order=captured` or
+`planned order=written capture=unkeyed|over_ceiling|declined` and nothing
+after it, having read no fact (`parser-v2.md` I12).
 
 `SHOW META`'s `plan_stats` block: `plan_stats_generation`, `_relations`,
 `_posteriors`, `_part_drops`, `_seeds`, `_seed_pages`, `_publishes` and
@@ -152,7 +156,10 @@ its band's centre) and `generation`; the planner never reads the view.
 
 ## 6a. The order memo (CC-S4)
 
-**PS6.** Each core remembers the order a searched block of at most four
+**PS6.** **Under `join_order = planned` only** (CX-S0: `fixed` and `written`
+never read or fill it, since its key holds the statistics generation and a
+hit would move a plan with the statistics), each core remembers the order a
+searched block of at most four
 relations chose (`exec::PlanMemo`, one per dispatcher, no latch), keyed by
 everything the search read besides the catalog facts it compiles from: the
 block's key (fetch id, written relation oids), **the statement's literals**
@@ -180,7 +187,12 @@ core's `plan_memo_hits` and `plan_memo_misses`.
   block's orders and nothing else. The compile pins the snapshot only for
   a block it searches, after the tuple key chain's skip. The fold's wanted
   check, `SHOW META` and `sys.relation_stats` read the snapshot for
-  themselves, never for a plan.
+  themselves, never for a plan. **Under `join_order = fixed` a fact is read
+  by a shape's compiles until one captures its order, and by no later
+  compile of the shape** (CX-S0, `parser-v2.md` I12): the captured order is
+  asked for before the snapshot is pinned. The capture itself asks one more
+  thing of the snapshot than a price does - whether every relation of the
+  block has a prior - and makes none without it.
 - **PS10 - no advisory input.** Waystone trails, `sys.patterns`,
   `sys.access_stats`, the optimizer signals, the Cabin store and index trees
   feed nothing here: `rows_matched` is the same whether a trail replayed, a
@@ -191,7 +203,10 @@ core's `plan_memo_hits` and `plan_memo_misses`.
   positions, the step ids CB-Q3 fixes; a planned compile reaches a chain
   only through the step id rewrite.
 - **PS12 - off.** `join_order = written` compiles no planned block, so
-  nothing is pinned or folded.
+  nothing is pinned or folded. Under `fixed` every planned block's run still
+  folds its counts and names its relations to the steward, a captured
+  shape's included, so the statistics stay current for a switch to
+  `planned` and for the shapes not yet captured.
 
 ## 8. Across a clean shutdown (CY-S1)
 

@@ -159,6 +159,7 @@ add_library(kds
     src/exec/step_compiler.cpp
     src/exec/join_order.cpp
     src/exec/plan_memo.cpp
+    src/exec/captured_plans.cpp
     src/exec/set_expr.cpp
     src/exec/query_layer.cpp
     src/exec/aggregate.cpp

@@ -266,6 +266,20 @@ StepEstimate Estimate(const Block& block, std::size_t slot) {
     return e;
 }
 
+// The rows a LIMIT lets out, `offset + limit`; none without one. In double:
+// `LIMIT` and `OFFSET` each reach 2^64-1, so their sum may wrap as integers.
+std::optional<double> Wanted(const StepChain& chain) noexcept {
+    if (!chain.limit.has_value()) return std::nullopt;
+    return static_cast<double>(*chain.limit) + static_cast<double>(chain.offset);
+}
+
+// A sort under LIMIT is a top-N heap of `Wanted` rows that cannot refuse when
+// the cap covers it (`OutputSort`, sort.cpp); any other sort holds the reply.
+bool HeapBounded(const StepChain& chain, std::size_t sort_max_rows) noexcept {
+    const std::optional<double> wanted = Wanted(chain);
+    return wanted.has_value() && *wanted <= static_cast<double>(sort_max_rows);
+}
+
 }  // namespace
 
 ChainEstimate EstimateChain(const StepChain& chain, const CostInputs& in) {
@@ -295,22 +309,13 @@ ChainEstimate EstimateChain(const StepChain& chain, const CostInputs& in) {
 
     ChainEstimate out;
     out.rows = std::max(rows, 1.0);
-    // In double: `LIMIT` and `OFFSET` each reach 2^64-1, so their sum may
-    // wrap as integers.
-    const std::optional<double> wanted =
-        chain.limit.has_value()
-            ? std::optional<double>(static_cast<double>(*chain.limit) +
-                                    static_cast<double>(chain.offset))
-            : std::nullopt;
+    const std::optional<double> wanted = Wanted(chain);
     if (chain.sorted()) {
-        // A sort under LIMIT is a top-N heap of `wanted` rows that cannot
-        // refuse (`OutputSort`, sort.cpp); any other sort holds the reply.
-        const bool bounded =
-            wanted.has_value() && *wanted <= static_cast<double>(in.limits.sort_max_rows);
-        if (!in.written_sorted && !bounded) {
+        if (!AddedSortCannotRefuse(chain, in.written_sorted, in.limits.sort_max_rows)) {
             out.cost = std::numeric_limits<double>::infinity();
             return out;
         }
+        const bool bounded = HeapBounded(chain, in.limits.sort_max_rows);
         const double held = bounded ? std::min(out.rows, *wanted) : out.rows;
         out.cost = once + per_row + out.rows * std::log2(std::max(held, 2.0));
         return out;
@@ -320,6 +325,11 @@ ChainEstimate EstimateChain(const StepChain& chain, const CostInputs& in) {
     const double fraction = wanted.has_value() ? std::min(1.0, *wanted / out.rows) : 1.0;
     out.cost = once + per_row * fraction;
     return out;
+}
+
+bool AddedSortCannotRefuse(const StepChain& chain, bool written_sorted,
+                           std::size_t sort_max_rows) noexcept {
+    return !chain.sorted() || written_sorted || HeapBounded(chain, sort_max_rows);
 }
 
 }  // namespace kds::exec

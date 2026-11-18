@@ -189,7 +189,7 @@ TEST_F(JoinPlannerTest, AFilteredSecondRelationDrivesASelfJoin) {
 
 TEST_F(JoinPlannerTest, JoinOrderWrittenKeepsTheWrittenChain) {
     Fill();
-    dispatcher_->set_plan_join_order(false);
+    dispatcher_->set_join_order(exec::JoinOrder::kWritten);
     const std::string plan = Plan("SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31");
     EXPECT_EQ(plan.find("reordered"), std::string::npos) << plan;
     EXPECT_EQ(Rows("SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31"),
@@ -750,7 +750,7 @@ TEST_F(PlanMemoTest, AHitCompilesTheOrderTheSearchChose) {
     EXPECT_EQ(Order(remembered), Order(searched));
     EXPECT_EQ(Order(remembered), (std::vector<std::uint32_t>{1, 0}));
     ASSERT_TRUE(remembered.plan_note.has_value());
-    EXPECT_TRUE(remembered.plan_note->from_memo);
+    EXPECT_EQ(remembered.plan_note->source, exec::PlanSource::kMemo);
     EXPECT_EQ(remembered.steps[1].build.has_value(), searched.steps[1].build.has_value());
 }
 

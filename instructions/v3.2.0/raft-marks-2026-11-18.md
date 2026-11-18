@@ -244,3 +244,12 @@ took under them.
 | **Mark** | None. **Pushed to `main` with `--no-verify`**: the four orders, §22-§25, their index rows and the `known-gaps.md` entry. The hook and the suite are skipped, and no suite was run: the commits change documents only. `origin/main` stood at `a4d2fb3b`, the branch's base, so nothing was merged |
 | **Does not settle** | Any DB-Q, DC-Q, DD-Q or DE-Q; the opening of any of the four; a re-review of DB §2.1's argument, which CLA offered and the word does not ask for; a version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 27. CX-S0 pushed with the hook skipped; CX-S1 to go on
+
+| | |
+|---|---|
+| **Word** | W18 (the CX/CY matter's), on CLA's report of CX-S0 at `dbe3ddb5` on worktree `cx-plan-change-option`: *"push no verify, and go on with CX-S1"* |
+| **Mark** | **Pushed to `main` with `--no-verify`**: **CX-S0** - `join_order = planned | fixed | written` with `fixed` a server's default, `SET JOIN_ORDER`, the capture in memory - with its review applied, its stage log (the work order's §8) and the specs it amends. The hook was skipped; the full Debug suite ran 4619/4619 at `dbe3ddb5` (`v3.4.12-45-gdbe3ddb5`), and the merge of `origin/main` after it (`2bb06d30`: the DB-DE orders, the compacted `CLAUDE.md` and READMEs) brought documents only, no source, test, CMake file or script. Overhead not measured; measured at the milestone's close. The work order's §6 measurement for S0 was not run. **CX-S1 goes on** under §16's go-ahead |
+| **Does not settle** | a tag, a version; a ruling on what S0 built differently from an adopted item (CX-Q22 as (b), CX-Q19 tightened, CX-R7 amended - the stage log states each); the push of CX-S1, which stops before it |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |

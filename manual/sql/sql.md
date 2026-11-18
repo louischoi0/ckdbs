@@ -1170,18 +1170,33 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   only schema; `public.t` is not accepted.
 - Joins: `JOIN <table> [AS <alias>] ON <rel.col> = <rel.col>` chains.
   Inner equi-join only, one equality per ON, both sides qualified.
-  **The engine chooses the join order** (`join_order = planned`, the
-  default): from the statement's shape, the catalog - which steps are tuple
-  key lookups, which columns carry an index or a Cabin, which literals
-  restrict which relation - and the engine's plan statistics: each
-  relation's approximate size, read from its tree, and a running average of
-  the row counts the same statement's joins produced on its past runs. The statistics move in
-  steps (each about +-30 %) published at most once a second, so a statement
-  keeps its plan until its data has moved well past that; after a restart
-  it plans without them until they are learned again. `ANALYZE` prints the
-  estimates and the statistics generation on a `planned` line.
-  `join_order = written` runs the relations in the order written. A
-  statement carrying a subquery predicate runs in written order either way.
+  **The engine chooses the join order, and by default it chooses once**
+  (`join_order = fixed`, the default). The choice is made from the
+  statement's shape, the catalog - which steps are tuple key lookups, which
+  columns carry an index or a Cabin, which literals restrict which relation
+  - and the engine's plan statistics: each relation's approximate size,
+  read from its tree, and a running average of the row counts the same
+  statement's joins produced on its past runs. Under `fixed` the order
+  chosen the first time every relation of the join has a published size is
+  **captured** for the statement's shape - the statement without its
+  literals - and every later run of the shape uses it, whatever the
+  statistics do after: no plan changes on its own. Until then the engine
+  chooses at each run. The captured orders are held in memory, so after a
+  restart each shape is captured again; a new index still changes how a
+  captured shape reads each relation, never the order.
+  `join_order = planned` chooses at every run instead: the statistics move
+  in steps (each about +-30 %) published at most once a second, so a
+  statement keeps its plan until its data has moved well past that.
+  `join_order = written` runs the relations in the order written. An
+  administrator changes the value for the running server with
+  `SET JOIN_ORDER planned | fixed | written`; it applies to every session
+  from its next statement and lasts until a restart, and the captured
+  orders are kept across a switch. `ANALYZE` prints the choice on a
+  `planned` line: `order=captured` for a captured order, the estimates and
+  the statistics generation where the engine chose at this run, with
+  `capture=first` when that choice was captured and `capture=deferred` when
+  a relation's size was not yet published. A statement carrying a subquery
+  predicate runs in written order under every value.
 - Every relation's binding must be distinct; `FROM t JOIN t` is refused, and
   `FROM t AS a JOIN t AS b` is how a self-join is spelled.
 - A join keyed on a relation's **tuple key** executes as a tuple key probe

@@ -1487,9 +1487,10 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "DURABILITY")) return HandleSetDurability(sub_rest, session);
         if (IEquals(sub, "PRIORITY")) return HandleSetPriority(line, sub_rest, session);
         if (IEquals(sub, "CABIN_OPTIMIZER")) return HandleSetCabinOptimizer(sub_rest);
+        if (IEquals(sub, "JOIN_ORDER")) return HandleSetJoinOrder(line, sub_rest);
         if (IEquals(sub, "ASH")) return HandleSetAsh(line, sub_rest);
         return {"ERR unknown SET target; SET ISOLATION LEVEL, SET DURABILITY, SET PRIORITY, "
-                "SET CABIN_OPTIMIZER and SET ASH are supported",
+                "SET CABIN_OPTIMIZER, SET JOIN_ORDER and SET ASH are supported",
                 false};
     }
     if (IEquals(cmd, "PING")) {
@@ -1905,6 +1906,20 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // counts, not the instance's.
     section("plan_memo");
     os << " plan_memo_hits=" << plan_memo_.hits() << " plan_memo_misses=" << plan_memo_.misses();
+    // **`join_order` and the captured plans of `fixed`** (CX-S0): the value
+    // in force, and the instance's one table - the shapes it holds, the
+    // compiles that ran a captured order, and the blocks that ran without
+    // one, by reason: `deferred` searched and not captured, for want of a
+    // relation's prior or under an open DDL; `unkeyed`, `over_ceiling` and
+    // `declined` ran their written order.
+    section("join_order");
+    os << " join_order=" << exec::JoinOrderName(join_order())
+       << " captured_plans=" << captured_plans_->shapes()
+       << " captured_served=" << captured_plans_->served()
+       << " capture_deferred=" << captured_plans_->deferred()
+       << " capture_unkeyed=" << captured_plans_->unkeyed()
+       << " capture_over_ceiling=" << captured_plans_->over_ceiling()
+       << " capture_declined=" << captured_plans_->declined();
 
     // **The Cabin store's instance-wide half** (cabin.md §6a), which `SHOW
     // CABINS`' header printed and no `sys.cabins` row can carry: a walk
@@ -2382,6 +2397,42 @@ DispatchOutcome CommandDispatcher::HandleSetCabinOptimizer(std::string_view rest
     }
     return {std::string("OK cabin_optimizer=") + (cabin_optimizer_enabled() ? "on" : "off"),
             false};
+}
+
+DispatchOutcome CommandDispatcher::HandleSetJoinOrder(std::string_view line,
+                                                      std::string_view rest) {
+    // CX-R10: `SET JOIN_ORDER [=] planned | fixed | written`, the run-time
+    // half of the `join_order` key. Admin (`RequiredRole`): it changes how
+    // every session's joins are planned. It flips the instance's one value,
+    // which every core's next compile reads, and writes nothing - a restart
+    // reads the boot key again (CX-Q15). **Non-destructive in every
+    // direction** (CX-Q18): leaving `fixed` keeps the captured plans, unread,
+    // and coming back reads them again; a shape with none is captured at its
+    // next compile from the statistics of that moment.
+    auto [value, extra] = SplitFirstToken(Trim(rest));
+    if (IEquals(value, "=")) std::tie(value, extra) = SplitFirstToken(Trim(extra));
+    // A refusal names the offending token's byte; a missing one is the line's end.
+    const auto refuse = [&](const std::string& message, std::string_view at) {
+        const std::size_t byte = at.data() == nullptr || at.empty()
+                                     ? line.size()
+                                     : static_cast<std::size_t>(at.data() - line.data());
+        return Refused(
+            Status::InvalidArgument(message + " (byte " + std::to_string(byte) + ")"));
+    };
+    if (value.empty() || !Trim(extra).empty()) {
+        return refuse("SET JOIN_ORDER takes exactly one value: planned, fixed or written",
+                      Trim(extra));
+    }
+    std::string lowered(value);
+    for (char& c : lowered) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::optional<exec::JoinOrder> parsed = exec::ParseJoinOrder(lowered);
+    if (!parsed.has_value()) {
+        return refuse("SET JOIN_ORDER takes planned, fixed or written, not '" +
+                          std::string(value) + "'",
+                      value);
+    }
+    set_join_order(*parsed);
+    return {"OK join_order=" + std::string(exec::JoinOrderName(*parsed)), false};
 }
 
 DispatchOutcome CommandDispatcher::HandleSetAsh(std::string_view line, std::string_view rest) {
@@ -8893,12 +8944,19 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // (BA-S15). A second compile declares into it again, which asks each
     // relation once (`ReadBorrow::Position`).
     ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
+    // `join_order`, read once a statement (CX-R10): a `SET JOIN_ORDER` on
+    // any core lands at the next compile.
+    const exec::JoinOrder join_order = this->join_order();
     auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
         exec::PlanOptions plan;
         plan.join_build_max_rows = budget_.join_build_max_rows();
         plan.sort_max_rows = sort_max_rows_;
         plan.statistics = plan_stats_ != nullptr ? &plan_source_ : nullptr;
-        plan.memo = &plan_memo_;
+        // The memo is `planned`'s and the captured plans `fixed`'s (CX-Q3):
+        // a memo's key holds the statistics generation, so reading it under
+        // `fixed` would let a plan move with the statistics.
+        if (join_order == exec::JoinOrder::kPlanned) plan.memo = &plan_memo_;
+        if (join_order == exec::JoinOrder::kFixed) plan.captured = captured_plans_;
         // A query layer walk (`WalkForLayer`) carries a statement and no
         // parser, so it has no fingerprint to key the memo by.
         if (const auto fingerprint =
@@ -8909,7 +8967,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
             plan.literals_known = fingerprint->param_count == 0;
         }
         return exec::Compile(catalog_, stmt, v, &borrow, context,
-                             plan_join_order_ ? &plan : nullptr);
+                             join_order != exec::JoinOrder::kWritten ? &plan : nullptr);
     });
     if (!chain.ok()) {
         // BU-Q9: a form the native compile declines goes to the query layer,

@@ -294,10 +294,19 @@ item in §4.
   search decides (CX-Q12). It serves every binding of the shape (CX-Q13),
   a statement with a `?` bound later included - the reverse of the memo,
   which does not remember one (`plan-stats.md` PS6), because the key holds
-  no literal. **Under a minted view (a DDL in flight in the transaction) no
-  capture is made and none is read**; the search runs uncaptured, as the
-  memo is not read there (PS6): an order priced against a catalog state
-  that may roll back is not fixed.
+  no literal. **Under a minted view (a DDL open anywhere in the instance)
+  no capture is made, and a held one is still run** (amended at S0's
+  review, §8: as first written none was read either): an order priced
+  against a catalog state that may roll back is not fixed, and a shape
+  with no captured order is searched uncaptured there; a captured order
+  was fixed outside any view for these exact oids and goes through the
+  ladder under the view, so it is read - otherwise one open DDL would let
+  every captured shape follow the statistics for as long as it stayed
+  open. **A captured order is declined for one statement, never forced**,
+  where it does not compile for it (CX-Q26) or adds a sort its `LIMIT`
+  does not bound (CC-Q10, asked of every binding, a `LIMIT` being a
+  literal outside the key): that statement runs its written order and
+  the capture stays.
 - **CX-R8 - a capture writes nothing on the statement** `[design]`. A
   `SELECT` writes no log and no catalog page (CF's rule; a `READ ONLY`
   transaction writes no record, `txn.md` §1). The capture is in memory at
@@ -652,3 +661,114 @@ item. A second review, of `fb65d7bd`, found A10 unapplied in S7 (the
 model being CY's) and three stale lines after S4's move, each corrected. Its A13 note that
 controller-made Cabins still reach the ladder under `fixed` is CX-Q6,
 unmarked before the amendment and still.
+
+### CX-S0 - built 2026-11-18; its §6 measurement not run
+
+On worktree `cx-plan-change-option`. `join_order` is `planned | fixed |
+written` at boot and by `SET JOIN_ORDER`; `Expeditor::Config`'s default is
+`fixed`; `exec::CapturedPlans` is the instance's table, and
+`CompileBlock` asks it after the tuple key chain's skip and before the
+statistics are pinned. `parser-v2.md` I12, `plan-stats.md` PS6, PS9 and
+PS12, `index.md` IX9, `join-inner-build.md` §2, `sys-views.md`,
+`protocol.md` §14's role sentence, `client-manual.md`, `kds.conf.sample`
+and `manual/` state it. The four contract suites each gained a cell under
+`fixed` with their shapes captured, and `tests/captured_plans_test.cpp`
+carries the capture's own cells.
+
+**Facts of the stage.**
+
+- **Memory only.** Until S1 persists a capture, a restart captures every
+  shape again (CX-R8).
+- **The §6 measurement for S0's close was not run.** Overhead is measured
+  at the milestone's close (CLAUDE.md, Session Workflow step 3). S0 is
+  built and its suite is green; it is not closed on a measurement.
+- **A dispatcher with no instance behind it runs `planned`**, as before CX:
+  every suite's rig builds one bare, and moving them to `fixed` would have
+  changed what several hundred cells run without one of them asking for
+  it. The server's default is the `Config`'s. The simulation harness's
+  instance is such a dispatcher, so the corpus runs `planned`.
+- `StatementLimits::plan_join_order` is deleted: the value is the
+  instance's atomic, handed with the table through `OptimizerSurface`, so
+  a boot value and a run-time value are one word and not two.
+
+**Where the build differs from an adopted item** (§4: "a finding that
+would change an adopted item is stated in the stage log where it is
+taken").
+
+- **CX-Q22: (b) is built, not the adopted (a).** The table is 64 latched
+  partitions that every core's compile probes, not a published snapshot
+  with per-core staging. Under (a) a shape compiled on two cores before
+  the next install runs two orders until it, and CX-R7 says no shape runs
+  two captured plans; (b) gives first-install-wins at the compile. Its
+  cost is one partition latch on a searched block's compile, and nothing
+  on a point read or a tuple key chain, which leave before it (CX-R6).
+  S1's persisting task reads the table; it does not install into it.
+- **CX-Q19: a capture waits for every relation's prior, not for "a
+  published fact".** (b) as adopted would capture a three-relation block
+  once one of its relations had a prior, two still priced at the constant.
+  The build captures only when every relation of the block has one. (c) is
+  CY-S1's seed at the mount, already built; a relation it does not cover
+  is seeded by the steward within its next steps after the first deferred
+  run names it.
+- **`informed=0|1` is not printed** (S0's `ANALYZE` bullet, CX-Q25). With
+  the rule above no uninformed capture exists, so the bit would be a
+  constant. S1's row can still carry the time of the capture.
+- **CX-Q3 kept as adopted, and its cost stated**: a deferred shape is
+  searched at every compile without the memo. `known-gaps.md` (Captured
+  plans) carries it; not measured.
+- **CX-R11's `plan_source` column of `sys.statement_stats` is not built in
+  S0.** `ANALYZE` names a statement's source and `SHOW META` counts the
+  uncaptured blocks by reason; the per-shape column goes with S1's
+  `plan_name` and `variant`, the stage that gives a reader something to do
+  with it.
+- **CX-Q20's key is the capture's own**, 16 relations wide
+  (`exec::CapturedKey`), not `stats::PlanKey`, which stays at four for the
+  posteriors.
+- **CX-Q18 (a)'s "the memo dropped"** is built as the memo left where it
+  is and not read under `fixed`. Its key holds the statistics generation
+  and both catalog stamps, so an entry made before a switch is still the
+  search's exact answer for its key when `planned` comes back.
+- **CX-R7 amended**: a captured order is read under a minted view (the
+  review's F1, below).
+
+**The review** (`critics-developer`, of `63ce2c93`; its fixes and the ones
+taken from its findings are in the commit after it).
+
+- **Fixed by the review - a captured order could refuse a statement that
+  `planned` answers.** `LIMIT` is a literal, so it is outside the key. A
+  reordered chain that adds a sort is admitted by the search only while
+  `LIMIT` bounds the sort to a top-N heap (CC-Q10); captured under `LIMIT
+  5`, the same order under `LIMIT 100` was an unbounded sort and met
+  `sort_max_rows` where the written order streams. Reproduced before the
+  fix with `sort_max_rows = 10`. CC-Q10's rule now has one home
+  (`exec::AddedSortCannotRefuse`), the search and a captured order's run
+  both ask it, and a binding it turns away runs as written
+  (`capture=declined`), the capture kept - CX-Q26 (a)'s answer.
+- **Fixed by the review**: `captured_served` counted a declined compile
+  and not one that lost the install to another core; it now counts every
+  compile that found an order in force. A comment said a minted view
+  means a DDL in this transaction; it is any DDL open in the instance.
+- **Taken - F1, a captured order is read under a minted view.** As built
+  first, one session holding a DDL open made every captured shape on
+  every core search against the current statistics for as long as it
+  stayed open: implicit change under `fixed`, and up to 24 compiles a
+  statement. Now a held order runs there and only the capture is withheld
+  (counted `capture_deferred`). CX-R7's sentence is amended to match.
+- **Taken**: the two reasons renamed to say what they are, one name each
+  in `ANALYZE`, `SHOW META` and the code (`over_ceiling`, as CX-R11 has
+  it, for `refused`; `declined` for `uncompiled`, which no longer
+  described a chain that compiles and is not run); the optional written
+  chain and its recompile in `CompileBlock` replaced by the chain that is
+  always at hand; `set_plan_join_order(bool)` deleted, its twelve call
+  sites naming the value; a cell that a configured `join_order` reaches
+  core 0 and a peer as one word and one table (F2); a cell that `fixed`
+  neither reads nor fills the memo; the table and the word declared in
+  `rules.md` §3 (F4).
+- **Not taken**: one loop building both `stats::PlanKey` and
+  `CapturedKey` - they differ in width, in type and in the condition
+  under which each exists, and the merged loop is no shorter. A latch kind
+  of its own for the table (F4's second half): `kStatsRing` is what
+  `PlanStats` uses for the same shape of hold, and a new kind adds a
+  contention tally to `sys.meta` for a latch not yet seen to wait.
+- **Left as gaps** (`known-gaps.md`, Captured plans): a capture made by a
+  compile `ResolveNames` then discards (F3); the paths no cell reaches.

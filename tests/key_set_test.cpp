@@ -227,7 +227,7 @@ std::string Walked(const std::string& list, const std::string& leaf) {
 
 TEST_F(KeySetTest, EveryStatementAnswersAsTheWalkOfItsListDoes) {
     // The written order, so which step a list lands on is the statement's.
-    db_.dispatcher->set_plan_join_order(false);
+    db_.dispatcher->set_join_order(exec::JoinOrder::kWritten);
     struct Case {
         const char* head;  // up to the list
         const char* list;
@@ -287,7 +287,7 @@ TEST_F(KeySetTest, EveryStatementAnswersAsTheWalkOfItsListDoes) {
 TEST_F(KeySetTest, TheAnswerIsTheSameWithIndexesOffAndInTheWrittenOrder) {
     Engine no_indexes(/*indexes=*/false);
     Engine written;
-    written.dispatcher->set_plan_join_order(false);
+    written.dispatcher->set_join_order(exec::JoinOrder::kWritten);
     for (const char* sql : {
              "SELECT * FROM t WHERE id IN (9, 2, 5, 7, 400)",
              "SELECT * FROM t WHERE id IN (9, 2, 5) AND v = 50",
@@ -313,7 +313,7 @@ TEST_F(KeySetTest, TheAnswerIsTheSameWithIndexesOffAndInTheWrittenOrder) {
 // In the written order `t` is the inner step, and its list keys it: two
 // descents per outer row where it walked the relation per outer row.
 TEST_F(KeySetTest, AJoinsInnerStepIsKeyedByAList) {
-    db_.dispatcher->set_plan_join_order(false);
+    db_.dispatcher->set_join_order(exec::JoinOrder::kWritten);
     const std::string sql =
         "SELECT u.id, t.id FROM u JOIN t ON t.g = u.id WHERE t.id IN (4, 8) ORDER BY u.id, t.id";
     const std::string plan = Plan(sql);
@@ -449,7 +449,7 @@ TEST_F(KeySetTest, ARangeAfterAListDoesNotOutrankASingleEquality) {
 // one of those rows. The planner's own order drives by the set instead.
 TEST_F(KeySetTest, AListDoesNotTakeAStepOffItsJoinKeysIndex) {
     Engine written;
-    written.dispatcher->set_plan_join_order(false);
+    written.dispatcher->set_join_order(exec::JoinOrder::kWritten);
     const std::string head = "SELECT u.id, t.id FROM u JOIN t ON t.g = u.id WHERE ";
     const std::string tail = " ORDER BY u.id, t.id";
     const std::string plan = written.Run("ANALYZE " + head + "t.v IN (40, 80, 110)" + tail);
@@ -467,7 +467,7 @@ TEST_F(KeySetTest, AListDoesNotTakeAStepOffItsJoinKeysIndex) {
 // The same for a join key's Cabin: `t` is asked for one `sym` per `s` row.
 TEST_F(KeySetTest, AListDoesNotTakeAStepOffItsJoinKeysCabin) {
     Engine written;
-    written.dispatcher->set_plan_join_order(false);
+    written.dispatcher->set_join_order(exec::JoinOrder::kWritten);
     written.Ok("CREATE TABLE s (id int64, sym varchar) BTREE");
     written.Ok("INSERT INTO s VALUES (1, 'a')");
     written.Ok("INSERT INTO s VALUES (2, 'c')");
@@ -700,7 +700,7 @@ TEST_F(KeySetTest, WaystoneOnOverAListAloneIsRefused) {
 // In an opted statement the probe step records and replays and the set step
 // beside it does neither.
 TEST_F(KeySetTest, ASetStepRecordsAndReplaysNoTrail) {
-    db_.dispatcher->set_plan_join_order(false);
+    db_.dispatcher->set_join_order(exec::JoinOrder::kWritten);
     const std::string sql =
         "SELECT u.id, t.name FROM u JOIN t ON t.id = u.tid WHERE u.id IN (1, 2, 4)";
     ASSERT_EQ(Run("WAYSTONE ON " + sql).rfind("OK WAYSTONE ON", 0), 0u);

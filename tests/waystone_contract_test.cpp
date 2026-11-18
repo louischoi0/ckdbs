@@ -79,10 +79,14 @@ public:
     bool OptIn(const std::string& sql) {
         return Run("WAYSTONE ON " + sql).rfind("OK WAYSTONE ON", 0) == 0;
     }
-    void KeepWrittenOrder() { dispatcher_->set_plan_join_order(false); }
+    void KeepWrittenOrder() { dispatcher_->set_join_order(exec::JoinOrder::kWritten); }
     // The join planner's statistics, learned from `sqls` (CC-S3).
     void Learn(const std::vector<std::string>& sqls) {
         testing_plan::LearnPlanStats(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);
+    }
+    // `join_order = fixed` with every searched shape of `sqls` captured (CX-S0).
+    void Capture(const std::vector<std::string>& sqls) {
+        testing_plan::CapturePlans(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);
     }
 
     catalog::Catalog& catalog() { return boot_->catalog; }
@@ -408,6 +412,23 @@ TEST(WaystoneContractTest, RecordingAndReplayingUnderLearnedStatisticsChangesNoR
     Instance db(/*record=*/true, /*replay=*/true);
     Load(db);
     db.Learn(Queries());
+    const std::vector<std::string> got = RunAll(db, 3);
+    const std::vector<std::string> want = Reference();
+    ASSERT_EQ(got.size(), want.size());
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        const std::string& sql = Queries()[i % Queries().size()];
+        EXPECT_EQ(testing_reply::Unordered(got[i], sql), testing_reply::Unordered(want[i], sql))
+            << "reply " << i << " (" << sql << ")";
+    }
+}
+
+// CX-S0: recording and replay under `join_order = fixed`, the server's
+// default, with every searched shape's order captured. A captured order is
+// one the search chose, so rows compare as under learned statistics.
+TEST(WaystoneContractTest, RecordingAndReplayingUnderCapturedPlansChangesNoRow) {
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    db.Capture(Queries());
     const std::vector<std::string> got = RunAll(db, 3);
     const std::vector<std::string> want = Reference();
     ASSERT_EQ(got.size(), want.size());
