@@ -145,7 +145,7 @@ std::string EncodeBuild(const std::vector<ArmPin>& access) {
         if (access[w].build == ArmPin::Build::kLadder) continue;
         out.append(out.empty() ? " build=" : ";");
         out.append(std::to_string(w));
-        out.append(access[w].build == ArmPin::Build::kOn ? ":ON" : ":OFF");
+        out.append(":").append(BuildName(access[w].build));
     }
     return out;
 }
@@ -163,15 +163,13 @@ bool DecodeBuild(std::string_view text, std::vector<ArmPin>& pins) {
             return false;
         }
         const std::string_view word = item.substr(colon + 1);
-        const ArmPin& pin = pins[position];
-        if (word == "ON") {
+        ArmPin& pin = pins[position];
+        if (word == BuildName(ArmPin::Build::kOn)) {
             // `ON` beside a keyed pin is what the DDL refuses.
-            if (pin.arm != ArmPin::Arm::kLadder && pin.arm != ArmPin::Arm::kScan && !pin.forbid) {
-                return false;
-            }
-            pins[position].build = ArmPin::Build::kOn;
-        } else if (word == "OFF") {
-            pins[position].build = ArmPin::Build::kOff;
+            if (pin.keyed()) return false;
+            pin.build = ArmPin::Build::kOn;
+        } else if (word == BuildName(ArmPin::Build::kOff)) {
+            pin.build = ArmPin::Build::kOff;
         } else {
             return false;
         }

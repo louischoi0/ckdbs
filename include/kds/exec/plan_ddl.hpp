@@ -113,6 +113,10 @@ StatusOr<AlterPlanStmt> ParseAlterPlan(std::string_view line);
 // A variant's `ORDER` list as written positions in executed order, against
 // the statement's `bindings` in written order: every binding named once, by
 // name, case-insensitively. `InvalidArgument` at the list's byte otherwise.
+// The written position of `binding` among the statement's `bindings`,
+// case-insensitively, or `bindings.size()` where it binds none.
+std::size_t BindingPosition(const std::vector<std::string>& bindings, std::string_view binding);
+
 StatusOr<CapturedOrder> ResolvePlanOrder(const std::vector<std::string>& bindings,
                                          const PlanVariantSpec& variant);
 

@@ -13448,8 +13448,7 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
                 for (const exec::PlanVariantSpec::Access& written : spec.access) {
                     if (written.pin.name.empty()) continue;
                     // `ResolvePlanVariant` placed the binding already.
-                    std::size_t w = 0;
-                    while (!exec::SameName(row.bindings[w], written.binding)) ++w;
+                    const std::size_t w = exec::BindingPosition(row.bindings, written.binding);
                     auto access = catalog_.InitTableAccess(row.key.oids[w]);
                     if (!access.ok()) return access.status();
                     if (written.pin.arm == exec::ArmPin::Arm::kCabin) {

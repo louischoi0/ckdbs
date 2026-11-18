@@ -1270,14 +1270,19 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
     VARIANT wide ELSE ORDER (u, l) BUILD l ON
     ```
 
-    `ON` works only where the join is an equality on a non-key column of
-    the inner table and nothing else in the `WHERE` ties the two tables
-    together, and not where the `WHERE` also compares one of the inner
-    table's unindexed columns with `=` to a constant; `CREATE PLAN`
-    refuses it otherwise, and refuses it beside an `ACCESS`
-    pin that names a key, an index or a Cabin. The in-memory copy is still
-    bounded by `join_build_max_rows`: past it, or with it set to `0`, the
-    statement looks rows up as usual and `ANALYZE` shows `inner_built=0`.
+    `ON` works only where exactly one condition ties the inner table to
+    the tables before it in the order - an `=` between one of its columns
+    other than its tuple key and a column of the same type - and not where
+    the `WHERE` also compares one of the inner table's unindexed columns
+    with `=` to a constant, or holds a condition on the inner table written
+    with `OR`, `NOT (...)`, an `IN` list, `LIKE` or `NOT BETWEEN`, or
+    calling `DATE()` or `NOW()`; `CREATE PLAN` refuses it otherwise, and
+    refuses it beside an `ACCESS` pin that names a key, an index or a
+    Cabin. The in-memory copy is still bounded by `join_build_max_rows`:
+    past it, or with it set to `0`, the statement reads the inner table
+    again for every row of the outer table - not through a key, an index
+    or a Cabin, which `ON` set aside - and `ANALYZE` shows
+    `inner_built=0`.
   - **A statement over one table can be given a plan too.** It has no
     order to choose, so its variants each say `ORDER (<the table>)` and
     pin how the table is read:

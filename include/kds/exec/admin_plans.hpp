@@ -125,6 +125,11 @@ struct ArmPin {
     // Whether the relation's step is pinned at all - its arm, its build, or
     // both.
     bool pins() const noexcept { return arm != Arm::kLadder || build != Build::kLadder; }
+    // Whether the pin holds the step to a keyed class - the tuple key, an
+    // index, a Cabin - which leaves `BUILD ON` nothing to take.
+    bool keyed() const noexcept {
+        return arm != Arm::kLadder && arm != Arm::kScan && !forbid;
+    }
     // Whether the ladder may try arms of class `tried`. Under `BUILD ON` the
     // walk is the one class left.
     bool Admits(Arm tried) const noexcept {
@@ -139,6 +144,9 @@ struct ArmPin {
 // and the arm a word names, case-insensitively, or nullopt.
 std::string_view ArmName(ArmPin::Arm arm) noexcept;
 std::optional<ArmPin::Arm> ArmFromName(std::string_view word) noexcept;
+// A build pin's word, `ON` or `OFF` - the DDL's, the row's and the view's
+// (CX-S5); empty for none.
+std::string_view BuildName(ArmPin::Build build) noexcept;
 
 // The class of arm a step's kind is: what a pin naming a class is met by.
 // No `default`, so a new kind is judged here too.
