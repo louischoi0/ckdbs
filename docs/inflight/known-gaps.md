@@ -2055,6 +2055,21 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   measured; the overhead measurement is owed at CX's close. Owned by
   `exec/admin_plans.hpp`.
 
+- **A block run in an order other than its written one compiles twice,
+  and there is no plan cache.** Verified at CX-S6 on
+  `cx-plan-change-option` (`bench/v3.4.12/results-cx-s6-compile-share-v3.4.12-112-g9712f5f0.md`
+  §7). `CompileBlock` compiles the written order first - its refusal is
+  the statement's and it is the decline's fallback - and then the order in
+  force, so a captured order or a plan's variant that is not the written
+  one pays two compiles: 5.3 µs against 2.5 µs for a three-relation join
+  in release, in-process; a two-variant plan pays 4.2 µs against 1.6 µs,
+  the second lex included. S6 built no compiled-chain cache, its first
+  cell putting the most a cache could remove at 1.4 % to 4.0 % of a
+  statement's p50 (CX-Q37 (a)); skipping the discarded compile is the
+  cheaper saving and is not built. The line was drawn against a Python
+  client's p50; against the server's own time the removable part is about
+  8 % on a point read. Owned by `instructions/v3.2.0/workorder-cx-managed-plans.md`.
+
 - **With the cabin controller on and no plan naming its Cabins, the
   controller accelerates nothing.** Verified at CX-S3b on
   `cx-plan-change-option`. Since CX-Q6 (a) a controller-made Cabin is read

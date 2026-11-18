@@ -1,0 +1,8 @@
+shape                                      parse p50 ns   parse min ns compile p50 ns compile min ns
+pk point read (no options)                         1409           1401            574            570
+two-relation join, one compile                     3280           3217           1555           1510
+three-relation join, one compile                   4654           4528           2462           2375
+three-relation join, captured reorder              4589           4494           5300           5145
+two-relation join, 2-variant plan                  3184           3170           4198           4146
+one-relation statement, no plan                    1345           1338            602            591
+one-relation statement, its plan                   1341           1331           1419           1407

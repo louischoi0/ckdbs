@@ -248,6 +248,8 @@ if(KDS_BUILD_BENCH)
     target_link_libraries(kds_read_view_bench PRIVATE kds)
     add_executable(kds_pool_sweep_bench bench/pool_sweep_bench.cpp)
     target_link_libraries(kds_pool_sweep_bench PRIVATE kds)
+    add_executable(kds_compile_split_bench bench/compile_split_bench.cpp)
+    target_link_libraries(kds_compile_split_bench PRIVATE kds)
 endif()
 
 # The simulation harness (bench/workplan-teststrategy SIM01-SIM14): the

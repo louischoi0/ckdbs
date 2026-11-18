@@ -434,3 +434,12 @@ took under them.
 | **Mark** | None. **The work branch goes to `main` with `--no-verify`**: CX-S5 - a variant pins a relation's join method, `BUILD <relation> ON | OFF`: `ON` holds the step to the statement-local build, the keyed arms standing aside, met only where the build's own rule annotates the step; `OFF` takes the build's rank away; neither forced, the cap's run-time decline a resource limit (CX-Q8 (a)) - with its review applied and its stage log (the order's §8), and §45's suite sentence corrected. No superblock moves. **The hook was skipped; the full Debug suite ran 0 failed of 4708 at `6948c875`**, and this section's commit adds documents only. Overhead not measured; measured at the milestone's close |
 | **Does not settle** | `ON`'s reading as a restriction to the build, which is CLA's and unmarked; CX-Q6 (a)'s consequence (§45); CX-S6 and S7; a tag, a version |
 | **Recorded at** | this file; the CX order's §8; the CX row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 47. CX to its close on the standing go-ahead; CX-Q29..Q36 adopted as CLA proposed
+
+| | |
+|---|---|
+| **Word** | The operator invoked `/go-ahead-achieving-milestone` after §46's push: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* The milestone is CX, the one this session and its worktree `cx-plan-change-option` are on |
+| **Mark** | None of the operator's per item. **Adopted on the operator's standing go-ahead of 2026-11-18 (go-ahead-achieving-milestone), each as CLA proposed** in the order's items table: CX-Q29 (a), `ADVISE PLAN` is `admin`'s; CX-Q30 (a), `sys.plan_advice` is memory, one table, bounded; CX-Q31 (a), the view keeps the shape text and the reply the literals; CX-Q32 (a), an advice is priced against the plan the statement's next compile would run; CX-Q33 (a), a one-relation statement is refused, an unsearched join advised as written; CX-Q34 (a), a mount still refuses a `sys.plans` it cannot scan; CX-Q35 (a), `BUILD ON` as S5 built it; CX-Q36 (a), CX-Q6 (a)'s consequence kept. None is `[quiet-wrong]`. The stages left - S6 (gated on its measurement, CX-Q10), S7 and the milestone's close measurement - run in this session; a push, a tag or a version still waits for the operator's word |
+| **Does not settle** | a push, a merge to `main`, a tag, a version; CX-Q36 (b), left for the operator |
+| **Recorded at** | this file; the CX order's items table and §8; the CX row and this file's row in `instructions/v3.2.0/index.md` |
