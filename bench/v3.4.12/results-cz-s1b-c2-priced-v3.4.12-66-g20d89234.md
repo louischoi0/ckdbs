@@ -16,8 +16,8 @@ spike: not landed, no test, no proof.**
   - Read as a sync that meets a never-written block costing about 1 ms
     more, which about one commit in sixteen of this size is (inferred,
     §2).
-  - This is C2's cost alone: no commit cell filled half a segment, so the
-    prewrite never ran in either arm and its own cost is not in B.
+  - This is C2's cost alone: no commit cell filled half a segment, so no
+    prewrite ran inside a window and its own cost is not in B.
 - **The bulk writer gains 20 % at `group`**, by trading its tail for its
   median (§3): 146,073 against 121,469 rows/s; a statement's p50 6.7 ms
   against 5.6 ms, its p99 11.1 ms against 66.8 ms. The walker beside it
@@ -208,7 +208,7 @@ Over the runs no build reached (`tables.md` §2.4):
   (about 8,000 syncs for 8,004 commits), so `group` did not group.
 - **B prices C2 alone.** No commit cell reached half a segment (the log
   is at 19 MiB at a window's end), so the preparer never ran in either
-  arm.
+  arm; the base arm's one segment was filled at the server's start.
 - **The writers were placed by the kernel**, unevenly: all four on one
   core in `g-c2` r5.
 - **Three long stalls, too few to read.** `g-base` r2, a build cell, has
@@ -263,9 +263,10 @@ closed-loop, medians of 5. The reader's columns are that file's.
 
 C1 moves the reader's tail and nothing else: the sessions on core 0 stop
 at every roll as before. C2 removes the slow sync a roll waits out; the
-gate stays, and 5 holds of 80 ms or more remain without the prewrite in
-the two files (447, 531, 609, 619 and 84 ms), all at the sync gate, four
-of them in cells a build reached.
+gate stays, and 6 holds of 80 ms or more remain without the prewrite in
+the two files (619, 609, 531, 447, 119 and 84 ms), five of them in cells
+a build reached. Five are 94 % or more at the sync gate; the 447 ms one
+is 310 ms at the gate and 134 ms in the roll's own sync.
 
 ## 5. Where the prewrite's disturbance falls in a segment
 
