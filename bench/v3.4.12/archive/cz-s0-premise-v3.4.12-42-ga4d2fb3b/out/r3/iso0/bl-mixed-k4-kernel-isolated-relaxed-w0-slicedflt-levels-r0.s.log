@@ -1,0 +1,48 @@
+1794978073 INFO [expeditor] opening database '/home/louis/bench-runs/cz-s0/work/bl-mixed-k4-kernel-isolated-relaxed-w0-slicedflt-levels-r0/d.db', wal dir '/home/louis/bench-runs/cz-s0/work/bl-mixed-k4-kernel-isolated-relaxed-w0-slicedflt-levels-r0/d.db.wal'
+1794978073 INFO [bootstrap] no superblock found; creating a fresh database (version 36, inline_cell_width 64, cores 4, one WAL stream)
+1794978073 INFO [catalog] bootstrapped 13 system tables and 13 types on the fixed catalog pages
+1794978073 INFO [wal] writer thread started; syncs leave the reactor from here on
+1794978073 INFO [recovery] core 0: stream holds no records, nothing to recover
+1794978073 INFO [recovery] post-recovery catalog audit: 0 relation(s) checked, all openable
+1794978073 INFO [plan_stats] relation priors kept from the last shutdown: 0
+1794978073 INFO [waystone] waystone_recording=on waystone_replay=on waystone_opted=0
+1794978073 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0
+1794978073 INFO [recovery] core 0: completion checkpoint at lsn 4096, the next recovery starts at 4096 (0 page(s) flushed)
+1794978073 INFO [expeditor] INSERT durability relaxed, isolation read committed
+1794978073 INFO [expeditor] database ready: 18 pages, superblock version 36
+1794978073 INFO [recovery] core 1: one stream, so core 0's mount pass covered this core's records; nothing recovered here
+1794978073 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4176 redo_start=4176 durable_lsn=4256 segment=0
+1794978073 INFO [recovery] core 1: completion checkpoint at lsn 4176, the next recovery starts at 4176 (0 page(s) flushed)
+1794978073 INFO [core] core 1 listening on port 15597 (SO_REUSEPORT)
+1794978073 INFO [recovery] core 2: one stream, so core 0's mount pass covered this core's records; nothing recovered here
+1794978073 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4256 redo_start=4256 durable_lsn=4336 segment=0
+1794978073 INFO [recovery] core 2: completion checkpoint at lsn 4256, the next recovery starts at 4256 (0 page(s) flushed)
+1794978073 INFO [core] core 2 listening on port 15597 (SO_REUSEPORT)
+1794978073 INFO [recovery] core 3: one stream, so core 0's mount pass covered this core's records; nothing recovered here
+1794978073 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=4336 redo_start=4336 durable_lsn=4416 segment=0
+1794978073 INFO [recovery] core 3: completion checkpoint at lsn 4336, the next recovery starts at 4336 (0 page(s) flushed)
+1794978073 INFO [core] core 3 listening on port 15597 (SO_REUSEPORT)
+1794978073 INFO [core] core 1 reactor running
+1794978073 INFO [expeditor] running 4 cores; every statement runs on the core its session is on
+1794978073 INFO [core] core 2 reactor running
+1794978073 INFO [core] core 3 reactor running
+1794978073 WARN [expeditor] checkpoint cadence disabled; durability is SYNC and shutdown only
+1794978073 INFO [expeditor] cabin optimizer cadence 10000ms, switch off
+1794978073 INFO [expeditor] listening on 127.0.0.1:15597
+1794978073 INFO [ddl] created table 'bl_point' oid=4000 columns=3
+1794978073 INFO [ddl] created table 'bl_walk' oid=4004 columns=3
+1794978073 INFO [ddl] created table 'bl_ins' oid=4008 columns=3
+1794978091 INFO [expeditor] stopping on signal 15; the shutdown sync and checkpoint follow
+1794978091 INFO [expeditor] stopping
+1794978091 INFO [core] core 2 reactor stopped
+1794978091 INFO [core] core 1 reactor stopped
+1794978091 INFO [core] core 3 reactor stopped
+1794978091 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=17217800 redo_start=17217800 durable_lsn=17217880 segment=0
+1794978091 INFO [checkpoint] run: core=1 completed=1 resumed=0 start_ns=435918051132788 end_ns=435918054297750 wall_us=3164 steps=1 pages=0 dirty_at_start=0 step_max_us=0 step_page_write_max_us=0 gate_parks=0 end_parks=0 log_park_us=0 data_park_us=0 start_n=1 start_sum_us=64 start_max_us=64 log_gate_batch_n=0 log_gate_batch_sum_us=0 log_gate_batch_max_us=0 log_gate_run_n=0 log_gate_run_sum_us=0 log_gate_run_max_us=0 page_write_n=0 page_write_sum_us=0 page_write_max_us=0 map_write_n=0 map_write_sum_us=0 map_write_max_us=0 claim_wait_n=0 claim_wait_sum_us=0 claim_wait_max_us=0 data_sync_n=0 data_sync_sum_us=0 data_sync_max_us=0 end_wait_n=1 end_wait_sum_us=1288 end_wait_max_us=1288 publish_writeback_n=2 publish_writeback_sum_us=71 publish_writeback_max_us=45 publish_sync_n=2 publish_sync_sum_us=1700 publish_sync_max_us=1621
+1794978091 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=17217880 redo_start=17217880 durable_lsn=17217960 segment=0
+1794978091 INFO [checkpoint] run: core=2 completed=1 resumed=0 start_ns=435918054430999 end_ns=435918055418805 wall_us=987 steps=1 pages=0 dirty_at_start=0 step_max_us=0 step_page_write_max_us=0 gate_parks=0 end_parks=0 log_park_us=0 data_park_us=0 start_n=1 start_sum_us=8 start_max_us=8 log_gate_batch_n=0 log_gate_batch_sum_us=0 log_gate_batch_max_us=0 log_gate_run_n=0 log_gate_run_sum_us=0 log_gate_run_max_us=0 page_write_n=0 page_write_sum_us=0 page_write_max_us=0 map_write_n=0 map_write_sum_us=0 map_write_max_us=0 claim_wait_n=0 claim_wait_sum_us=0 claim_wait_max_us=0 data_sync_n=0 data_sync_sum_us=0 data_sync_max_us=0 end_wait_n=1 end_wait_sum_us=370 end_wait_max_us=370 publish_writeback_n=2 publish_writeback_sum_us=34 publish_writeback_max_us=18 publish_sync_n=2 publish_sync_sum_us=558 publish_sync_max_us=489
+1794978091 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=17217960 redo_start=17217960 durable_lsn=17218040 segment=0
+1794978091 INFO [checkpoint] run: core=3 completed=1 resumed=0 start_ns=435918055527355 end_ns=435918057173904 wall_us=1646 steps=1 pages=0 dirty_at_start=0 step_max_us=0 step_page_write_max_us=0 gate_parks=0 end_parks=0 log_park_us=0 data_park_us=0 start_n=1 start_sum_us=8 start_max_us=8 log_gate_batch_n=0 log_gate_batch_sum_us=0 log_gate_batch_max_us=0 log_gate_run_n=0 log_gate_run_sum_us=0 log_gate_run_max_us=0 page_write_n=0 page_write_sum_us=0 page_write_max_us=0 map_write_n=0 map_write_sum_us=0 map_write_max_us=0 claim_wait_n=0 claim_wait_sum_us=0 claim_wait_max_us=0 data_sync_n=0 data_sync_sum_us=0 data_sync_max_us=0 end_wait_n=1 end_wait_sum_us=361 end_wait_max_us=361 publish_writeback_n=2 publish_writeback_sum_us=34 publish_writeback_max_us=20 publish_sync_n=2 publish_sync_sum_us=1220 publish_sync_max_us=1101
+1794978091 INFO [expeditor] stopped cleanly; 498 pages persisted
+1794978091 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=17218040 redo_start=17218040 durable_lsn=17218120 segment=0
+1794978091 INFO [checkpoint] run: core=0 completed=1 resumed=0 start_ns=435918057833549 end_ns=435918058791916 wall_us=958 steps=1 pages=0 dirty_at_start=0 step_max_us=0 step_page_write_max_us=0 gate_parks=0 end_parks=0 log_park_us=0 data_park_us=0 start_n=1 start_sum_us=19 start_max_us=19 log_gate_batch_n=0 log_gate_batch_sum_us=0 log_gate_batch_max_us=0 log_gate_run_n=0 log_gate_run_sum_us=0 log_gate_run_max_us=0 page_write_n=0 page_write_sum_us=0 page_write_max_us=0 map_write_n=0 map_write_sum_us=0 map_write_max_us=0 claim_wait_n=0 claim_wait_sum_us=0 claim_wait_max_us=0 data_sync_n=0 data_sync_sum_us=0 data_sync_max_us=0 end_wait_n=1 end_wait_sum_us=420 end_wait_max_us=420 publish_writeback_n=2 publish_writeback_sum_us=31 publish_writeback_max_us=16 publish_sync_n=2 publish_sync_sum_us=467 publish_sync_max_us=385
