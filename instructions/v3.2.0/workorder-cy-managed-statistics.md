@@ -23,6 +23,8 @@ in English (`raft-marks-2026-11-18.md` §5):
 - **W12** (2026-11-18, `raft-marks-2026-11-18.md` §10): *"CY-Q14..Q23,
   CX-Q28 $!a push no verify"* - every item the review and W11 raised
   marked (a).
+- **W13** (2026-11-18, `raft-marks-2026-11-18.md` §11): *"For now, take
+  this gate as not passed."* - CY-S2 and CY-S3 are not built.
 
 **A new order, not a stage of CX**: CLA's choice, which W7 left open. CX-S4
 held items 1 and 5 in eleven lines; with items 2 and 3 the work has a
@@ -224,6 +226,9 @@ is built; it never changes a row a statement returns.
 
 A stage opens on the operator's word. S0 decides whether S2 and S3 are
 built at all, each on its own bar (CY-Q15 (a)); S1 does not wait for it.
+**S0 ran and the operator took the gate as not passed (W13, §8): S2 and
+S3 are not built.** Their text below stands as the design a reopening
+would start from.
 
 ### CY-S0 - the premise and the census (no behaviour change)
 
@@ -570,6 +575,18 @@ and S3 are not built on this evidence, and S1 and S4's lock, export and
 import go on, as CY-Q1 (a) and CY-Q15 (a) say. The verdict is about the
 scenarios as much as about the engine - they hold no skewed column and no
 correlated pair - and it leaves the priors-only compile unmeasured.
+
+**The operator's verdict** (W13, `raft-marks-2026-11-18.md` §11): the
+gate is taken as not passed. **CY-S2 (column statistics) and CY-S3
+(column groups) are not built.** What stands of CY is S1 (persistence)
+and the part of S4 that does not need a column object - lock, pending
+and publish, history and restore, export and import of relation
+objects. CY-Q4..Q6, CY-Q13, CY-Q17, CY-Q18 and CY-Q20, and the column
+half of CY-Q19 and CY-Q22, have nothing to apply to while S2 is not
+built; they stay as marked for an order that reopens it. The two cases
+S0 did not measure - a skewed column, and the priors-only compile - are
+what a reopening would rest on. The priors-only compile is also S1's
+own premise and is measured as S1's first step.
 
 **The review of this order** (`critics-developer`, read at `fb65d7bd`,
 reported after W8's push and W9's marks). It verified the citations of
