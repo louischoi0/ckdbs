@@ -263,3 +263,12 @@ took under them.
 | **Mark** | **DA-Q8 (a), the operator's mark**: the store's memory is set by a boot key in bytes for each core's part, and a part is a flat table of fixed-size slots, so its table allocates at most the bytes written. Recorded in `workorder-da-access-stats-memory-resident.md` §4, with §2's part, DA-R1, DA-R3, DA-Q3's row, DA-S1 and the tests owed amended to carry it. **Said by CLA beside the option and not marked**: the key separate from `access_statistics`, the name `access_stats_bytes_per_core`, the default what admits 4,096 shapes a core |
 | **Does not settle** | DA-Q0..Q7, DA-Q3 among them - which the mark narrows to the key's default, its (b) (one count for the instance) then a shared cap on top of the key, against DA-R4, and open to the operator; the key's name, range and refusals, when the table is allocated, its probing and a capacity field in `sys.meta`, CLA's proposals left to DA-S1; a key for the four BO stores; the opening of DA; a push; a version |
 | **Recorded at** | this file; the DA order's header, §2, §3, §4, §5 and §7; the DA row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 29. DA-Q8's record pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | This session's W4, on CLA's report of §28's record at `479fb910` on worktree `da-q8-memory-bound-key`: *"push no verify"* |
+| **Mark** | **Pushed to `main` with `--no-verify`**: §28's record - DA-Q8 and its mark in the DA order, this file and the index - with its review applied. The hook was skipped and no suite was executed; the commits change no build input (documents only). `origin/main` stood at `a5581343`, the commit the record was written from, so nothing was merged |
+| **Does not settle** | the opening of DA; DA-Q0..Q7; a tag, a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
