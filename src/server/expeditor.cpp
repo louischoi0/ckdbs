@@ -1045,6 +1045,25 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         !s.ok()) {
         return s;
     }
+    // **The one unlogged state a mount may keep** (CY-S1, `plan-stats.md`
+    // PS16): the relation priors a completed shutdown wrote, believed on
+    // its closing mark and count. Emptied here whatever was found, in the
+    // discard's window, so the completion checkpoint persists the emptying
+    // before the listener binds and a crash after this mount finds none.
+    std::vector<std::pair<catalog::Oid, std::int16_t>> carried_priors;
+    {
+        auto taken = expeditor->database_->catalog.TakeStatisticsAtMount();
+        if (!taken.ok()) return taken.status();
+        carried_priors.reserve(taken.value().size());
+        for (const catalog::SysStatisticsRow& row : taken.value()) {
+            carried_priors.emplace_back(row.rel_oid, row.band);
+        }
+        if (expeditor->logger_->enabled(LogLevel::kInfo)) {
+            expeditor->logger_->Info("plan_stats",
+                                     "relation priors kept from the last shutdown: " +
+                                         std::to_string(carried_priors.size()));
+        }
+    }
     // **Nothing records until an operator opts a pattern in** (CF-S1b), so
     // a config reading `waystone_recording = on` means less than it used to;
     // the mount says what the ceilings are and how many patterns sit under
@@ -1289,6 +1308,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // S4 (CJ WE13) counts only while the controller's own switch is on.
     expeditor->optimizer_signals_->set_wait_gate(&expeditor->cabin_optimizer_on_);
     expeditor->plan_stats_.emplace(expeditor->config_.cores);
+    // CY-S1: the priors the mount took, published before any statement
+    // compiles, so the run's first planned compile is not blind.
+    expeditor->plan_stats_->SeedPriors(carried_priors);
     // PHY04: the decision core and its executor, only where a Cabin can
     // exist at all. The cadence task registers in Serve() beside the
     // checkpointer's.
@@ -1420,6 +1442,17 @@ void PinToCpu(pthread_t thread, std::uint32_t core_id, std::uint32_t cpu, Logger
 }
 
 }  // namespace
+
+void Expeditor::WriteRelationPriors() {
+    if (!plan_stats_.has_value() || !database_.has_value()) return;
+    if (Status s = database_->catalog.WriteStatisticsAtShutdown(plan_stats_->ExportPriors());
+        !s.ok()) {
+        logger_->Error("plan_stats",
+                       "the relation priors were not written, so the next mount plans blind "
+                       "until it observes: " +
+                           s.message());
+    }
+}
 
 void Expeditor::BroadcastShutdown() {
     // **AU-S3: a flag and a kick.** `Scheduler::stopped_` is atomic, so
@@ -2284,6 +2317,11 @@ Status Expeditor::RunUntilStopped() {
     // through the syncs above, and refusing to exit over a slower *next* start
     // would trade a real shutdown for a bounded inconvenience. Reported and
     // continued, the cadence path's rule.
+    //
+    // **The relation priors go out with it** (CY-S1, `plan-stats.md` PS15):
+    // here, with every core joined and every listener detached, and before
+    // the sync that carries the pages out.
+    WriteRelationPriors();
     Status s = Sync();
     if (!s.ok()) {
         logger_->Error("expeditor", "final sync failed: " + s.message());

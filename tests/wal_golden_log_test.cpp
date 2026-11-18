@@ -100,7 +100,14 @@ namespace {
 // a `sys.columns` row carries a `generation` word, so every column row image
 // the stream logs is four bytes longer and every later LSN moves. No record
 // kind's framing changes. Pinned again where the two met, on the merge.
-constexpr std::uint32_t kGoldenLogCrc = 0xeb74cb80u;
+// **Re-pinned at CY-S1** (on `cx-plan-change-option`,
+// `instructions/v3.2.0/workorder-cy-managed-statistics.md`): bootstrap
+// creates `sys.statistics`, so its `sys.objects` and `sys.tables` rows -
+// logged through `InsertRow` - join the stream after `sys.fkeys'`, and every
+// later record's LSN moves with them. The relation's own rows are unlogged
+// (CR6), so no other record joins and
+// no record's format changes.
+constexpr std::uint32_t kGoldenLogCrc = 0x0291f13eu;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

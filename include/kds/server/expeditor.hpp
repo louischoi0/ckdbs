@@ -638,6 +638,15 @@ public:
     // `kReclaimBatchPages` frees, gated on the durable redo start. What core
     // 0's system tick calls, exposed so a test drives it deterministically.
     Status ReclaimStep();
+
+    // CY-S1: writes the join planner's relation priors to `sys.statistics`
+    // with their closing mark (`plan-stats.md` §8). The shutdown tail's,
+    // after the cores are joined and before its final sync, which is what
+    // carries the pages out; a failure is logged and the shutdown goes on.
+    // Public for the cells that stop a volume by hand, as `ReclaimStep` is.
+    void WriteRelationPriors();
+    // The instance's join planner statistics (`plan-stats.md`).
+    stats::PlanStats& plan_stats() noexcept { return *plan_stats_; }
     void SetReclaimCutForTest(std::function<void(const char*)> hook) {
         reclaimer_->SetCutForTest(std::move(hook));
     }

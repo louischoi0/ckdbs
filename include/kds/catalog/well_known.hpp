@@ -238,6 +238,25 @@ inline constexpr Oid kSysCabinExprsTable = 153;
 // Fixed oids for sys.cabin_exprs' six sys.columns rows, 154..159.
 inline constexpr Oid kSysCabinExprsColumnOidBase = 154;
 
+// sys.statistics (docs/spec/plan-stats.md §8, CY-S1): the join planner's
+// relation priors as a completed shutdown wrote them, one fixed-offset row
+// a relation and a closing mark. **Unlogged, by CR6** (`crosscore.md`
+// CC13) - its content is only a statistic - and written at shutdown alone:
+// a mount reads it and leaves it empty, so no statement and no recovery
+// path ever meets a row of it.
+inline constexpr Oid kSysStatisticsTable = 160;
+
+// The catalog relations CR6 writes unlogged (`crosscore.md` CC13). Their
+// rows are inserted at the bootstrap id and never delete-marked, and
+// **nothing walks their chains but their own guarded walk**
+// (`Catalog::DiscardUnloggedChain`): an unlogged page can name a page the
+// free map never kept, or one another relation has since been handed, so
+// a walk that trusts the link - the delete-mark sweep over every catalog
+// root - must pass them by.
+constexpr bool IsUnloggedCatalogRelation(Oid oid) {
+    return oid == kSysAccessStatsTable || oid == kSysStatisticsTable;
+}
+
 // A Cabin's shape (`SysCabinRow::shape`, AR1-4: column, expression and
 // predicate are shapes of one key function), with **0 reserved for "unset"**
 // so a zeroed row reads as no Cabin of any shape. Here rather than in
@@ -292,7 +311,7 @@ inline constexpr Oid kAllWellKnownOids[] = {
     kSysPatternsTable,    kSysAssertionsTable,   kSysAccessStatsTable,
     kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,
     kSysTransitionsTable, kSysTransitionsColumnOidBase, kSysCabinExprsTable,
-    kSysCabinExprsColumnOidBase, kUserOidStart,
+    kSysCabinExprsColumnOidBase, kSysStatisticsTable, kUserOidStart,
 };
 
 // O(n^2) over ~39 values is ~750 compile-time comparisons - a sort would be
@@ -364,10 +383,14 @@ inline constexpr PageId kCatalogPageAssertions = 14;
 // root is allocated, as sys.assertions' is.
 inline constexpr PageId kCatalogPageCabinExprs = 15;
 
-// Root heap page of sys.transitions (superblock 24), the highest fixed
-// root. Ids 17..127 are unused, left for a future bootstrap root. Its
-// var-heap root is allocated, as sys.assertions' is.
+// Root heap page of sys.transitions (superblock 24). Its var-heap root is
+// allocated, as sys.assertions' is.
 inline constexpr PageId kCatalogPageTransitions = 16;
+
+// Root heap page of sys.statistics (superblock 36, CY-S1), the highest
+// fixed root. Ids 18..127 are unused, left for a future bootstrap root.
+// A fixed-offset typed row, like sys.access_stats, so it has no var-heap.
+inline constexpr PageId kCatalogPageStatistics = 17;
 
 // Every catalog relation's **root** page, in id order, with the relation
 // it heads.
@@ -413,6 +436,7 @@ inline constexpr CatalogRoot kCatalogRoots[] = {
     {kCatalogPageAssertions, kSysAssertionsTable},
     {kCatalogPageCabinExprs, kSysCabinExprsTable},
     {kCatalogPageTransitions, kSysTransitionsTable},
+    {kCatalogPageStatistics, kSysStatisticsTable},
 };
 
 // The relation whose chain starts at `root`; 0, unattributed, for a page

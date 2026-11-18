@@ -66,7 +66,11 @@ unlogged one was never written. At the restore's mount - as at every mount
 (`waystone-concpets.md` §4c) - every Waystone root is cleared, each opted
 pattern is given a fresh empty directory, and `sys.access_stats` is emptied
 in place (`DiscardAdvisoryState`), so nothing unlogged can reach a page
-given back (invariant 8, CR6). **The opt-in survives a restore and the
+given back (invariant 8, CR6). `sys.statistics` (CY-S1) is emptied at
+every mount too, after the rows a completed shutdown wrote are taken; a
+backup is copied from a running instance, whose mount emptied the chain
+before its listener bound, so a restore brings back no statistic
+(`plan-stats.md` PS16). **The opt-in survives a restore and the
 trails do not**: bit 0 of a `sys.patterns` row is logged and replayed like
 any catalog write, while every trail is unlogged and discarded
 (`BackupControlTest.ARestoreKeepsAWaystoneOptInAndNotItsTrail`).

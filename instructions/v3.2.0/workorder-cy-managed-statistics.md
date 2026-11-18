@@ -23,6 +23,14 @@ in English (`raft-marks-2026-11-18.md` §5):
 - **W12** (2026-11-18, `raft-marks-2026-11-18.md` §10): *"CY-Q14..Q23,
   CX-Q28 $!a push no verify"* - every item the review and W11 raised
   marked (a).
+- **W13** (2026-11-18, `raft-marks-2026-11-18.md` §15): *"For now, take
+  this gate as not passed."* - CY-S2 and CY-S3 are not built.
+- **W14** (2026-11-18, `raft-marks-2026-11-18.md` §16): *"For now, write
+  every statistic as unlogged, and go on with: the statistics persisted
+  to disk and the capture, the features around `CREATE PLAN`, the
+  interface, and CX-S2 onward."* With W15, the operator's answers:
+  unlogged statistics are kept across a clean shutdown only; plans,
+  captured and administrator's, are logged. **CY-S1 opened.**
 
 **A new order, not a stage of CX**: CLA's choice, which W7 left open. CX-S4
 held items 1 and 5 in eleven lines; with items 2 and 3 the work has a
@@ -224,6 +232,9 @@ is built; it never changes a row a statement returns.
 
 A stage opens on the operator's word. S0 decides whether S2 and S3 are
 built at all, each on its own bar (CY-Q15 (a)); S1 does not wait for it.
+**S0 ran and the operator took the gate as not passed (W13, §8): S2 and
+S3 are not built.** Their text below stands as the design a reopening
+would start from.
 
 ### CY-S0 - the premise and the census (no behaviour change)
 
@@ -252,7 +263,25 @@ built at all, each on its own bar (CY-Q15 (a)); S1 does not wait for it.
 
 ### CY-S1 - persistence (item 2)
 
-- **`sys.statistics`** `[design]`: a logged catalog relation (the next
+- **Unlogged since W14, kept across a clean shutdown only (W15).**
+  `sys.statistics` is written with no WAL record, under CR6 ("a catalog
+  relation whose content is only a statistic is written unlogged",
+  `docs/spec/crosscore.md` CC13), as `sys.access_stats` is. Every
+  unlogged structure the engine has is discarded at every mount
+  (`DiscardAdvisoryState`, `src/server/expeditor.cpp:1043`), because
+  after recovery an unlogged page may name a page the repaired free map
+  gave back. So statistics that outlive a restart are a new case, and
+  its rule is the narrow one: **a shutdown that completes writes the
+  statistics pages and marks them whole; a mount that finds the mark
+  keeps them and clears it; a mount without it - after a crash, a
+  restore, or a failed shutdown - discards them as it discards every
+  other unlogged structure.** No recovery path reads a statistics
+  page. What this gives up: after a crash or a restore the planner is
+  blind until it observes again, which CX-Q19 (b)'s deferral covers;
+  a lock, a pending version and the history are lost with the
+  statistics, and `EXPORT`/`IMPORT` is how a model is carried across
+  either. What it buys: no statistics write touches the log (CY-R10).
+- **`sys.statistics`** `[design]`: an unlogged catalog relation (the next
   superblock version and the next free fixed root, coordinated with CX-S1's
   `sys.plans`), one row per statistics object, holding its key (CY-R7), kind
   (relation, column, column group), origin (`gathered`, `observed`,
@@ -272,11 +301,12 @@ built at all, each on its own bar (CY-Q15 (a)); S1 does not wait for it.
   moves, the steward stages an `observed` relation object, written off the
   statement by a `system` task. It replaces only an earlier `observed`
   object, never a `gathered`, `imported` or locked one (CY-Q16 (a)).
-- **A restore** brings back the model the backup's log held. It describes
-  the restored data as of its last write, which is the property a backup
-  has; `ANALYZE` shows each object's age.
-- **Cells**: a restart and a restore each plan a scenario join at the
-  first statement as the previous run did; a `READ ONLY` session's planned
+- **A restore** brings back no statistic (B6a discards unlogged state);
+  the restored instance observes again, or takes an `IMPORT`.
+- **Cells**: a clean restart plans a scenario join at the first
+  statement as the previous run did; a crash and a restore each mount
+  with no statistic and no error, the pages of the discarded relation
+  given back; a `READ ONLY` session's planned
   statement appends no record; a volume at the previous superblock is
   refused.
 
@@ -454,7 +484,9 @@ within the milestone's hour.
 - `docs/spec/catalog.md`, `docs/spec/sys-views.md` - `sys.statistics`,
   `sys.column_statistics`, `sys.statistics_history`; the superblock
   version.
-- `docs/spec/backup.md` - the model is logged state and is restored.
+- `docs/spec/backup.md` B6a, `docs/spec/crosscore.md` CC13 - the model is
+  unlogged state: kept across a clean shutdown, discarded at every other
+  mount, never restored.
 - `docs/spec/alter.md`, `docs/spec/drop-table.md` - the objects a column
   or a relation takes with it.
 - `docs/inflight/known-gaps.md`, "The join planner (CB)" - the entries on
@@ -465,10 +497,193 @@ within the milestone's hour.
 ## 8. Stage log
 
 CY-Q0 and CY-Q1 marked (a) on W8 (`raft-marks-2026-11-18.md` §6);
-CY-Q2..Q13 marked (a) and **CY opened on W9** (§7).
+CY-Q2..Q13 marked (a) and **CY opened on W9** (§7). **CY-S1 opened on W14**
+(§16), with the statistics unlogged.
 
 - **CY-S0** started 2026-11-18 on worktree `cx-plan-change-option`. No
-  engine code. Its report is appended here when the results file lands.
+  engine code.
+
+### CY-S0, 2026-11-18: the gate is not met on the scenarios; what a blind compile costs is measured; two cases are owed
+
+`[measured]` on `v3.4.12-18-ge0cd5a93`, `build-release`,
+`bench/v3.4.12/results-cy-s0-premise-v3.4.12-18-ge0cd5a93.md`, 01:34 to
+01:52 UTC, inside the 20 minutes. An oracle bound: every order forced under
+`join_order = written` against the order the informed planner chose.
+
+- **The gate (CY-Q15 (a)) is not met, for S2 or for S3.** Over 15 cells -
+  five scenario join statements at 200, 1,000 and 10,000 rows - the
+  informed planner's order is the fastest forced order in 14. **Every
+  forced order that differs from the planner's**, not only the fastest,
+  has 15 % less server CPU in 0 of 4 rounds and a 15 % lower p50 in 0 of
+  4 rounds, in every cell (the review's recomputation from the raw file).
+  The one cell whose pooled p50 shows 20 % (`cross-join-200`) is not a
+  pass by either metric: per round the two orders' p50s differ by at most
+  3 µs (129 / 126 / 81 / 80 against 129 / 129 / 80 / 81), and the pooled
+  gap is a shift every arm took between rounds 2 and 3.
+- **The constants the model applies are wrong by 0.08x to 12.5x**
+  (constant over true selectivity: `model_id = k` 0.08 at every size,
+  `session_no = k` 12.5 at 10,000 rows). A range on the tuple key is not
+  priced by a constant at all - the span's band prices it
+  (`src/exec/join_order.cpp:152-153`) - so `u.id <= 16` is not an error of
+  the model.
+- **After a complete run, the executed order's prefixes are priced from
+  what was observed** - `est=` is `obs=` rounded to its half-octave band,
+  up to 19 % off (11,585 against 10,000) - **and every other order's
+  prefix keeps the constants at every compile** (`known-gaps.md`, "The
+  join planner (CB)"). So the constants do go on pricing the orders that
+  were not run; on this data that did not hide a faster order.
+- **S3 has no premise from the scenarios.** No scenario statement carries
+  two literal conjuncts on different columns of one relation; the one
+  pair is a tuple key `BETWEEN`, which the model prices as one span.
+- **A blind first compile costs** (CX-Q19, CY-S1). A fresh server, every
+  relation at 100,000 rows and no posterior, searched and kept the written
+  order for four of the five statements (`switch=1`: the cheapest under
+  those inputs). Two of those are the slow order: `customer-statement`
+  (`freights` first) runs 1.75x, 2.9x and 2.2x the informed order's p50
+  (131 / 500 / 4,186 µs against 75 / 171 / 1,919), `compare-all` 1.22x,
+  1.17x, 1.05x. **The run does not say which missing fact causes it**: the
+  blind arm lacked the priors and the posteriors and applied the 0.01
+  constant.
+- **Not measured, stated as such**:
+  - **the compile `fixed` will capture once CY-S1 is built** - relation
+    priors published, no posterior yet for the shape. It decides two
+    things S0 leaves open: whether persisted priors alone repair the blind
+    order, and whether a constant then picks a wrong one - the one compile
+    in which a column statistic could act under `fixed`;
+  - **a skewed column**: the scenario columns are uniform (one value in
+    k), and the optional synthetic Zipf cell was cut for the budget;
+  - the scenario drivers' own data and sizes (the data is synthetic to
+    the schemas' shapes, as CC-S0's was) and a second literal per cell.
+- **Limits of the run's validity**, from the review:
+  - a two-state shift on the host, about +55 µs of latency and +20-25 µs
+    of server CPU per statement at 200 rows, hit every server and
+    sometimes flipped inside a block. The three servers shared one CPU
+    and the client was not pinned; the cause is not verified. The verdict
+    survives it because every losing order loses in every round;
+  - the planner arm is slower than its own forced order beyond the noise
+    floor in six cells (its planning, memo and steward CPU), which biases
+    toward finding a flip, so the "no" is conservative;
+  - blocks were about 0.3 s, four rounds;
+  - **the worktree's HEAD moved during the stage**: this session committed
+    documents and, to land them on W12, checked `origin/main` out, merged
+    and checked the branch back out at 01:39:46-01:40:06, so the measured
+    run started with HEAD at `1ba204ab`. `git diff --stat e0cd5a93
+    1ba204ab` touches `docs/` and `instructions/` only: the engine and the
+    tools are the measured commit's. A measurement and a landing do not
+    share a worktree again.
+- **The census** `[source-read]` at `e0cd5a93`:
+  - the three selectivity constants have one reader, the conjunct loop of
+    `src/exec/join_order.cpp:109-185` (equality `:160`, a range end
+    `:162`, other `:124`, `:149`, `:164`, `:171`, a key set `:182`);
+    `kAssumedRelationRows` is read at `src/exec/step_compiler.cpp:2431`
+    and as a fallback at `join_order.cpp:58` and `:63`;
+    `tests/join_planner_test.cpp` names them four times;
+  - **the loop never reads a literal's value**: it prices by the
+    operator and the column position, and the only values it reads are a
+    tuple key range's span (`step.range`) and a key set's size. An
+    estimator that looks a value up in a list or a histogram is the first
+    reader of a literal in the cost model, and needs the value in the
+    column's type - what `CompareValues` (`include/kds/exec/row_codec.hpp:398`)
+    already compares;
+  - a gather walk decodes cells through `storage::DecodeCell`
+    (`include/kds/storage/tagged_cell.hpp:183`) and can slice as a build's
+    walk does (64 pages, `docs/spec/sched.md` §3).
+
+**The review of S0's results** (`critics-developer`, at `fc705f97`)
+recomputed the latency table, the noise floors, the round counts and the
+blind ratios from the raw file and found them to match; it found the
+verdict to hold and five statements around it stronger than the data, each
+corrected above and in the results file: that `est=` equals `obs=`, that a
+constant prices only a first compile, the 187x error (a constant the model
+never applies), the blind cost attributed to the relation prior alone, and
+a clock-skew note that was this session's own checkout.
+
+**What follows** `[design]`, for the operator: by the gate as marked, S2
+and S3 are not built on this evidence, and S1 and S4's lock, export and
+import go on, as CY-Q1 (a) and CY-Q15 (a) say. The verdict is about the
+scenarios as much as about the engine - they hold no skewed column and no
+correlated pair - and it leaves the priors-only compile unmeasured.
+
+**The operator's verdict** (W13, `raft-marks-2026-11-18.md` §15): the
+gate is taken as not passed. **CY-S2 (column statistics) and CY-S3
+(column groups) are not built.** What stands of CY is S1 (persistence)
+and the part of S4 that does not need a column object - lock, pending
+and publish, history and restore, export and import of relation
+objects. CY-Q4..Q6, CY-Q13, CY-Q17, CY-Q18 and CY-Q20, and the column
+half of CY-Q19 and CY-Q22, have nothing to apply to while S2 is not
+built; they stay as marked for an order that reopens it. The two cases
+S0 did not measure - a skewed column, and the priors-only compile - are
+what a reopening would rest on. The priors-only compile is also S1's
+own premise and is measured as S1's first step.
+
+### CY-S1a, 2026-11-18: relation priors across a clean shutdown
+
+Built on worktree `cx-plan-change-option` from `7bdb03b4`. **S1 is split**,
+adopted on the standing go-ahead: S1a is the storage, the shutdown's write
+and the mount's read; S1b is `GATHER STATISTICS ON t` for a relation and
+the `sys.statistics` view. S1a alone is what CY-Q0 gates CX-S0 on.
+
+- **The premise, before the build** (CLAUDE.md, "re-measure a premise"):
+  `StatisticsPlannerTest.RelationPriorsAloneFixTheFilteredJoinsBlindOrder`.
+  With the two relations' priors and no posterior, scenario 2's
+  customer-statement puts the filtered `cargos` first at each of CY-S0's
+  three sizes, where blind it keeps `freights` first. `compare-all` had the
+  same cell since CC-S3. So a prior is enough and CY-Q10 (a) stands.
+- **What was built**: `sys.statistics` (oid 160, root page 17, superblock
+  36), unlogged under CR6; `Catalog::TakeStatisticsAtMount` and
+  `WriteStatisticsAtShutdown`, with `DiscardAccessStats`' walk factored into
+  `DiscardUnloggedChain` for both relations; `PlanStats::SeedPriors` and
+  `ExportPriors`; the mount's take beside the advisory discard and the
+  shutdown tail's write before its final sync (`docs/spec/plan-stats.md`
+  §8, PS13-PS17).
+- **Narrower than §3's S1 text, and why**: the relation is written **at
+  shutdown only**, not when a band moves (CY-Q2 (a)'s steward save). W15
+  keeps a statistic across a clean shutdown only, so a write during the run
+  would be discarded by the only mount that could follow it without one;
+  and with no write during the run, statistics cost a running workload no
+  page and no log record (CY-R10). The row holds the prior's band, so a
+  prior comes back at the band it left at. It carries nothing else: an
+  object's value, version and lock (CY-R6, S4) get fields when a stage
+  reads them, which costs no migration since a mount empties the chain.
+- **The rule the storage class rests on** (PS16): a mount believes the
+  chain only on a closing mark and its count, and empties it whatever it
+  found, inside the discard window, so the emptying is on the device
+  before the listener binds.
+- **Cells**: 16 new in `tests/statistics_persistence_test.cpp` and one in
+  `tests/join_planner_test.cpp`, among them a clean stop kept for
+  exactly one mount, a crash after the mount that took the priors, a crash
+  with no stop, rows with no mark, a mark that counts more rows than the
+  chain holds, a link to a page that is not there. The golden log is
+  re-pinned (bootstrap's two rows for the new relation join the stream).
+- **Not built in S1a, stated**: no SQL statement reads or gathers the
+  relation; the sim's shutdown does not call the write, so the simulation
+  corpus does not exercise it; `IMPORT`/`EXPORT` do not exist, so after a
+  crash or a restore the planner is blind until it observes.
+- **Overhead not measured; measured at the milestone's close.**
+- **The review** (`critics-developer`, at `abe870fc`) attacked PS16 and
+  found the mark-and-count rule sound and the mount's emptying on the
+  device before any statement. It found one defect that would have
+  shipped, **confirmed by a probe**: the mount's delete-mark sweep walks
+  every catalog root, unguarded, before the discard window, so a shutdown
+  killed between page 17's write and the map's left a link that refused
+  that mount and every mount after it. Fixed: the sweep passes an unlogged
+  relation by (`catalog::IsUnloggedCatalogRelation`) - which closes the
+  same hole `sys.access_stats` already had, and makes PS15's "no tick
+  touches the pages" true. Also taken: an unreadable head is made again
+  empty where it was a refused mount (for `sys.statistics`;
+  `sys.access_stats` keeps its stated refusal); a carried prior is due a
+  seed by a flag, not by a zero timestamp that a clock under ten seconds
+  would not pass; the take and the discard are one walk; the row lost
+  four fields nothing read (`rows`, `made_at`, `version`, `origin`) and
+  the expeditor a member and a clock read; `ExportPriors` is `Publish`'s
+  loop; four stale root-range mentions. Five mutants, each killed: the
+  sweep's skip removed, the head not healed, the count ignored, the mark
+  ignored, a cut chain believed.
+  Not taken: nothing was rejected. **Left open, stated** (`known-gaps.md`,
+  "Plan statistics (CY)"): no cell drives `RunUntilStopped`'s own call of
+  the write; no cell crashes between the shutdown's page writes and its
+  map write on a device (the in-memory cells stand for it); the sim does
+  not exercise the path.
 
 **The review of this order** (`critics-developer`, read at `fb65d7bd`,
 reported after W8's push and W9's marks). It verified the citations of
