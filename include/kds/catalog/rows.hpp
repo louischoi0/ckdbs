@@ -786,6 +786,74 @@ inline constexpr std::size_t kMaxAccessShapes = 4096;
 // meant "unclassified" or "the first class in some list".
 inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 
+// ---- sys.statistics ---------------------------------------------------
+//
+// The join planner's relation priors as a completed shutdown wrote them
+// (`docs/spec/plan-stats.md` §8, CY-S1). **Unlogged** (CR6) and written at
+// shutdown alone: one `kStatisticsRelation` row a relation, then one
+// `kStatisticsWhole` row whose `rows` is how many rows came before it. A
+// mount that reads the closing mark and that many rows takes them; any
+// other mount takes none. Either way the mount leaves the chain empty, so
+// a row here was written by the shutdown before this mount and by nothing
+// else.
+//
+// **Advisory**: a row prices a join order and nothing else (PS9), so a row
+// that is wrong costs speed and never an answer - which is what lets it be
+// kept with no log and trusted on a count.
+struct SysStatisticsRow {
+    // The relation, or 0 on the closing mark.
+    Oid rel_oid;
+
+    // A relation's estimated rows, the centre of `band` rounded, for a
+    // reader; on the closing mark, the rows before it.
+    std::uint64_t rows;
+
+    // The wall-clock second the run that wrote the row was mounted at.
+    // Shown, never read by a plan.
+    std::uint64_t made_at;
+
+    // Reserved, written 0: an object's version (CY-R6) once one can be
+    // replaced by an explicit act.
+    std::uint32_t version;
+
+    // `kStatisticsRelation` or `kStatisticsWhole`; 0 is a zeroed row and
+    // names neither.
+    std::uint8_t kind;
+
+    // `kStatisticsObserved`: the steward's own prior. The other origins are
+    // reserved for an explicit act (CY-S4).
+    std::uint8_t origin;
+
+    // The prior's half-octave band (PS5), which is what the planner read
+    // and what a mount seeds, so a prior comes back at the band it left at.
+    std::int16_t band;
+
+    static constexpr std::size_t kRelOidOffset = 0;
+    static constexpr std::size_t kRowsOffset = 8;
+    static constexpr std::size_t kMadeAtOffset = 16;
+    static constexpr std::size_t kVersionOffset = 24;
+    static constexpr std::size_t kKindOffset = 28;
+    static constexpr std::size_t kOriginOffset = 29;
+    static constexpr std::size_t kBandOffset = 30;
+    static constexpr std::size_t kOnDiskSize = kBandOffset + sizeof(std::int16_t);
+
+    std::array<std::byte, kOnDiskSize> Encode() const;
+    static StatusOr<SysStatisticsRow> Decode(std::span<const std::byte> bytes);
+};
+
+static_assert(offsetof(SysStatisticsRow, rel_oid) == SysStatisticsRow::kRelOidOffset);
+static_assert(offsetof(SysStatisticsRow, rows) == SysStatisticsRow::kRowsOffset);
+static_assert(offsetof(SysStatisticsRow, made_at) == SysStatisticsRow::kMadeAtOffset);
+static_assert(offsetof(SysStatisticsRow, version) == SysStatisticsRow::kVersionOffset);
+static_assert(offsetof(SysStatisticsRow, kind) == SysStatisticsRow::kKindOffset);
+static_assert(offsetof(SysStatisticsRow, origin) == SysStatisticsRow::kOriginOffset);
+static_assert(offsetof(SysStatisticsRow, band) == SysStatisticsRow::kBandOffset);
+static_assert(SysStatisticsRow::kOnDiskSize == 32);
+
+inline constexpr std::uint8_t kStatisticsRelation = 1;
+inline constexpr std::uint8_t kStatisticsWhole = 2;
+inline constexpr std::uint8_t kStatisticsObserved = 1;
+
 // ---- sys.cabins -------------------------------------------------------
 //
 // One row per Cabin: a per-`(relation, F)` store that is **authoritative for

@@ -123,6 +123,20 @@ public:
     }
     std::shared_ptr<const PlanStatsSnapshot> Current() const;
 
+    // ---- Across a clean shutdown (CY-S1, plan-stats.md §8) -----------------
+    //
+    // Both run with no steward step and no statement in flight: the first at
+    // a mount, before the listener binds, the second at a shutdown, after
+    // the cores are joined.
+    //
+    // Seeds each relation's prior at its band and publishes them as the
+    // next generation, so the first compile of the run prices from them. A
+    // seeded prior is due a re-seed at once, so the tree's own pages
+    // replace it as the steward comes round (PS4).
+    void SeedPriors(std::span<const std::pair<catalog::Oid, std::int16_t>> bands);
+    // Every banded prior with its band, by oid.
+    std::vector<std::pair<catalog::Oid, std::int16_t>> ExportPriors() const;
+
     // A test's seam: publishes these facts as the next generation.
     void PublishForTest(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
                         std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors);

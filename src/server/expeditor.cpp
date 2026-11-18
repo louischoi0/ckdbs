@@ -13,6 +13,7 @@
 #include <cstring>
 #include <fstream>
 #include <charconv>
+#include <cmath>
 #include <limits>
 #include <sstream>
 #include <thread>
@@ -812,6 +813,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // it did during Open() is reported by the "database ready" line below.
     expeditor->store_->SetLogger(&*expeditor->logger_);
 
+    expeditor->mounted_at_unix_seconds_ = now_unix_seconds;
     auto database =
         bootstrap::BootstrapDatabase(*expeditor->store_, now_unix_seconds,
                                      expeditor->config_.inline_cell_width,
@@ -1044,6 +1046,30 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                         expeditor->config_.waystone_recording);
         !s.ok()) {
         return s;
+    }
+    // **The one unlogged state a mount may keep** (CY-S1, `plan-stats.md`
+    // §8): the relation priors a completed shutdown wrote. The reasoning
+    // above stands - a mount cannot tell a crash from a clean stop by
+    // itself - so the shutdown says so: it writes a closing mark after the
+    // rows, onto a chain no statement writes, and this mount takes the rows
+    // only where the mark and its count read whole. It empties the chain
+    // either way, in the same window as the discard above, so the
+    // completion checkpoint persists the emptying before the listener
+    // binds: a crash after this mount finds none, and the argument above -
+    // an unlogged page naming a child the map never kept - has no run of
+    // writes to arise from.
+    {
+        auto taken = expeditor->database_->catalog.TakeStatisticsAtMount();
+        if (!taken.ok()) return taken.status();
+        expeditor->mounted_priors_.reserve(taken.value().size());
+        for (const catalog::SysStatisticsRow& row : taken.value()) {
+            expeditor->mounted_priors_.emplace_back(row.rel_oid, row.band);
+        }
+        if (expeditor->logger_->enabled(LogLevel::kInfo)) {
+            expeditor->logger_->Info("plan_stats",
+                                     "relation priors kept from the last shutdown: " +
+                                         std::to_string(expeditor->mounted_priors_.size()));
+        }
     }
     // **Nothing records until an operator opts a pattern in** (CF-S1b), so
     // a config reading `waystone_recording = on` means less than it used to;
@@ -1289,6 +1315,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // S4 (CJ WE13) counts only while the controller's own switch is on.
     expeditor->optimizer_signals_->set_wait_gate(&expeditor->cabin_optimizer_on_);
     expeditor->plan_stats_.emplace(expeditor->config_.cores);
+    // CY-S1: the priors the mount took, published before any statement
+    // compiles, so the run's first planned compile is not blind.
+    expeditor->plan_stats_->SeedPriors(expeditor->mounted_priors_);
+    expeditor->mounted_priors_.clear();
+    expeditor->mounted_priors_.shrink_to_fit();
     // PHY04: the decision core and its executor, only where a Cabin can
     // exist at all. The cadence task registers in Serve() beside the
     // checkpointer's.
@@ -1420,6 +1451,29 @@ void PinToCpu(pthread_t thread, std::uint32_t core_id, std::uint32_t cpu, Logger
 }
 
 }  // namespace
+
+void Expeditor::WriteRelationPriors() {
+    if (!plan_stats_.has_value() || !database_.has_value()) return;
+    const auto bands = plan_stats_->ExportPriors();
+    std::vector<catalog::SysStatisticsRow> rows;
+    rows.reserve(bands.size());
+    for (const auto& [oid, band] : bands) {
+        catalog::SysStatisticsRow row{};
+        row.rel_oid = oid;
+        row.rows = static_cast<std::uint64_t>(std::llround(stats::BandCentre(band)));
+        row.made_at = mounted_at_unix_seconds_;
+        row.kind = catalog::kStatisticsRelation;
+        row.origin = catalog::kStatisticsObserved;
+        row.band = band;
+        rows.push_back(row);
+    }
+    if (Status s = database_->catalog.WriteStatisticsAtShutdown(rows); !s.ok()) {
+        logger_->Error("plan_stats",
+                       "the relation priors were not written, so the next mount plans blind "
+                       "until it observes: " +
+                           s.message());
+    }
+}
 
 void Expeditor::BroadcastShutdown() {
     // **AU-S3: a flag and a kick.** `Scheduler::stopped_` is atomic, so
@@ -2284,6 +2338,13 @@ Status Expeditor::RunUntilStopped() {
     // through the syncs above, and refusing to exit over a slower *next* start
     // would trade a real shutdown for a bounded inconvenience. Reported and
     // continued, the cadence path's rule.
+    //
+    // **The relation priors go out with it** (CY-S1, `plan-stats.md` §8):
+    // written here, with every core joined and every listener detached, so
+    // no statement and no steward step runs beside it, and before the sync
+    // that carries the pages out. Unlogged; a failure costs the next run
+    // its first second of blind planning and nothing else.
+    WriteRelationPriors();
     Status s = Sync();
     if (!s.ok()) {
         logger_->Error("expeditor", "final sync failed: " + s.message());

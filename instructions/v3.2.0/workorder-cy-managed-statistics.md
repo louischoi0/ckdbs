@@ -616,6 +616,50 @@ S0 did not measure - a skewed column, and the priors-only compile - are
 what a reopening would rest on. The priors-only compile is also S1's
 own premise and is measured as S1's first step.
 
+### CY-S1a, 2026-11-18: relation priors across a clean shutdown
+
+Built on worktree `cx-plan-change-option` from `7bdb03b4`. **S1 is split**,
+adopted on the standing go-ahead: S1a is the storage, the shutdown's write
+and the mount's read; S1b is `GATHER STATISTICS ON t` for a relation and
+the `sys.statistics` view. S1a alone is what CY-Q0 gates CX-S0 on.
+
+- **The premise, before the build** (CLAUDE.md, "re-measure a premise"):
+  `StatisticsPlannerTest.RelationPriorsAloneFixTheFilteredJoinsBlindOrder`.
+  With the two relations' priors and no posterior, scenario 2's
+  customer-statement puts the filtered `cargos` first at each of CY-S0's
+  three sizes, where blind it keeps `freights` first. `compare-all` had the
+  same cell since CC-S3. So a prior is enough and CY-Q10 (a) stands.
+- **What was built**: `sys.statistics` (oid 160, root page 17, superblock
+  36), unlogged under CR6; `Catalog::TakeStatisticsAtMount` and
+  `WriteStatisticsAtShutdown`, with `DiscardAccessStats`' walk factored into
+  `DiscardUnloggedChain` for both relations; `PlanStats::SeedPriors` and
+  `ExportPriors`; the mount's take beside the advisory discard and the
+  shutdown tail's write before its final sync (`docs/spec/plan-stats.md`
+  §8, PS13-PS17).
+- **Narrower than §3's S1 text, and why**: the relation is written **at
+  shutdown only**, not when a band moves (CY-Q2 (a)'s steward save). W15
+  keeps a statistic across a clean shutdown only, so a write during the run
+  would be discarded by the only mount that could follow it without one;
+  and with no write during the run, statistics cost a running workload no
+  page and no log record (CY-R10). The row holds the prior's band, so a
+  prior comes back at the band it left at; an object's value, version and
+  lock (CY-R6, S4) have their fields reserved.
+- **The rule the storage class rests on** (PS16): a mount believes the
+  chain only on a closing mark and its count, and empties it whatever it
+  found, inside the discard window, so the emptying is on the device
+  before the listener binds.
+- **Cells**: 13 new in `tests/statistics_persistence_test.cpp` and one in
+  `tests/join_planner_test.cpp`, among them a clean stop kept for
+  exactly one mount, a crash after the mount that took the priors, a crash
+  with no stop, rows with no mark, a mark that counts more rows than the
+  chain holds, a link to a page that is not there. The golden log is
+  re-pinned (bootstrap's two rows for the new relation join the stream).
+- **Not built in S1a, stated**: no SQL statement reads or gathers the
+  relation; the sim's shutdown does not call the write, so the simulation
+  corpus does not exercise it; `IMPORT`/`EXPORT` do not exist, so after a
+  crash or a restore the planner is blind until it observes.
+- **Overhead not measured; measured at the milestone's close.**
+
 **The review of this order** (`critics-developer`, read at `fb65d7bd`,
 reported after W8's push and W9's marks). It verified the citations of
 §1 and found five wrong, each corrected: CC-Q14 (a) is a multiset

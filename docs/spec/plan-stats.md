@@ -13,9 +13,11 @@ per-core part protocol adopted here).
 The facts the join planner prices an order with, beyond the statement and
 the catalog: **how many rows a relation holds**, and **how many rows a join
 of a set of a statement's relations produced** the last times it ran. One
-store for the instance, `stats::PlanStats`, **memory-resident** (CC-Q2): a
-restart or a restore empties it, nothing is logged, no catalog relation or
-page holds it, and the planner prices data-free until its first publish.
+store for the instance, `stats::PlanStats`, **memory-resident** (CC-Q2):
+nothing is logged, no statement writes a page of it, and the planner prices
+data-free until its first publish. **A relation's prior, and nothing else
+of it, outlives a clean shutdown since CY-S1** (§8): a crash or a restore
+still empties the whole store.
 
 **Advisory, and only to the order.** A fact here chooses which of a block's
 legal orders runs; it never chooses a step's kind, never skips a step,
@@ -190,3 +192,66 @@ core's `plan_memo_hits` and `plan_memo_misses`.
   only through the step id rewrite.
 - **PS12 - off.** `join_order = written` compiles no planned block, so
   nothing is pinned or folded.
+
+## 8. Across a clean shutdown (CY-S1)
+
+`instructions/v3.2.0/workorder-cy-managed-statistics.md`, on the operator's
+words of 2026-11-18 (`raft-marks-2026-11-18.md` §12): the statistics are
+unlogged, and kept across a clean shutdown only.
+
+**PS13 - what is kept.** The relation priors (PS1), each as its band. Not
+the posteriors and not the decline facts: a shape's first complete run
+measures the first again, and the second lapses in a minute. A prior alone
+is enough for the two scenario shapes CY-S0 found a blind compile to cost
+(`StatisticsPlannerTest.RelationPriorsAloneFixTheFilteredJoinsBlindOrder`
+and `...PutTheSmallRelationFirstAndBuildTheLarge`).
+
+**PS14 - where.** `sys.statistics` (oid 160), a catalog relation with a
+fixed root at page 17 (superblock 36), **unlogged by CR6** (`crosscore.md`
+CC13) as `sys.access_stats` is: its content is only a statistic. One
+fixed-offset row a relation (`catalog::SysStatisticsRow`, 32 bytes: the
+relation's oid, the band's centre rounded, the mount time of the run that
+wrote it, a reserved version, kind, origin, the band) and one closing row
+whose count is the rows before it.
+
+**PS15 - who writes it, and when.** The shutdown tail alone
+(`Expeditor::WriteRelationPriors`): after every core is joined and every
+listener detached, before the final sync that carries the pages out. **No
+statement, no steward step and no checkpoint of a running instance writes
+the relation**, so statistics cost a running workload no page write and no
+log record (CY-R10). A shutdown that fails after the write leaves a chain
+PS16 refuses.
+
+**PS16 - when a mount believes it** `[the rule the storage class rests on]`.
+Every other unlogged structure is discarded at every mount, because a mount
+cannot tell a crash from a clean stop and an unlogged page written during a
+run may name a page the map never kept (`restore.hpp`, B6a). This one is
+kept on three facts together:
+
+1. the rows were written by a shutdown, onto a chain nothing else writes;
+2. the shutdown said it finished: a closing mark, and exactly as many rows
+   before it as it counts, on pages that are each the chain's own by type
+   and owner (`Catalog::TakeStatisticsAtMount`);
+3. **the mount empties the chain whatever it found**, in the window of the
+   advisory discard - after recovery, before the completion checkpoint that
+   persists the emptying, before the listener binds. So the chain on the
+   device is non-empty only between a shutdown's sync and the next mount's
+   completion checkpoint, an interval in which no statement runs.
+
+A mount after a crash therefore finds an empty chain, or - if it crashed
+before its own completion checkpoint - the previous clean stop's rows over
+data no statement has touched since. A restore's copy is taken from a
+running instance and holds an empty chain. Damage - a page that fails, a
+foreign page at a link, a count that disagrees - takes none, cuts the chain
+as `DiscardAccessStats` does, and is logged; it never refuses a mount.
+
+**PS17 - what the mount does with them.** The priors are published as the
+first generation before any statement compiles (`PlanStats::SeedPriors`),
+each at the band it left at, so the first planned compile after a clean
+restart is priced as the last one before it was. A seeded prior is due a
+re-seed at the steward's first round, so the tree's own pages replace it; a
+relation that no longer resolves loses it (PS4).
+
+**What it does not do.** After a crash or a restore the planner is blind
+until it observes, as before CY-S1. Nothing here gathers, locks or exports
+a statistic, and no SQL statement reads the relation yet.

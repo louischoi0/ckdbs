@@ -497,6 +497,26 @@ std::shared_ptr<const PlanStatsSnapshot> PlanStats::Current() const {
     return current_;
 }
 
+void PlanStats::SeedPriors(std::span<const std::pair<catalog::Oid, std::int16_t>> bands) {
+    if (bands.empty()) return;
+    for (const auto& [oid, band] : bands) {
+        Prior& prior = priors_[oid];
+        prior.band = band;
+        prior.banded = true;
+        prior.seeded_ns = 0;  // due at the steward's first round
+    }
+    Publish();
+}
+
+std::vector<std::pair<catalog::Oid, std::int16_t>> PlanStats::ExportPriors() const {
+    std::vector<std::pair<catalog::Oid, std::int16_t>> out;
+    out.reserve(priors_.size());
+    for (const auto& [oid, prior] : priors_) {
+        if (prior.banded) out.emplace_back(oid, prior.band);
+    }
+    return out;
+}
+
 void PlanStats::PublishForTest(
     std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
     std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors) {

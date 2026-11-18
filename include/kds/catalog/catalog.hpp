@@ -1057,6 +1057,31 @@ public:
     // (`drop-table.md` DT1's stated leaks).
     Status DiscardAccessStats();
 
+    // **`sys.statistics`, at a mount** (CY-S1, `plan-stats.md` §8): the
+    // relation rows a completed shutdown wrote, and the chain left empty.
+    // Core 0's, after recovery and before the completion checkpoint, which
+    // is what persists the emptying before the listener binds.
+    //
+    // The rows are answered only when the chain read whole: every page of
+    // it one of its own and readable, a closing `kStatisticsWhole` row, and
+    // exactly as many rows before it as it says. Anything else - no mark
+    // (the previous run did not stop cleanly, or wrote none), a page that
+    // fails, a count that disagrees (a shutdown torn between its pages) -
+    // answers none. **Never a refused mount on the chain's account**: the
+    // relation is unlogged and advisory, so damage costs the statistic and
+    // is logged, as `DiscardAccessStats` says of its own.
+    //
+    // The chain is emptied whichever it was, so a crash after this mount
+    // finds none and the next shutdown writes onto empty pages.
+    StatusOr<std::vector<SysStatisticsRow>> TakeStatisticsAtMount();
+
+    // **`sys.statistics`, at a shutdown** (CY-S1): `rows` and the closing
+    // mark, onto the chain the mount left empty. Unlogged and un-undone
+    // (CR6); the shutdown's final sync is what carries the pages out, and
+    // a shutdown that fails after this leaves a chain the next mount's
+    // count refuses. Called with no statement running.
+    Status WriteStatisticsAtShutdown(std::span<const SysStatisticsRow> rows);
+
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
 
     // Retires every `sys.access_stats` row of `rel_id` whose column mask
@@ -1545,6 +1570,12 @@ private:
     // Debug line. Call it *after* the page write succeeds - a failed
     // mutation staled nothing.
     void BumpVersion(std::string_view what, Tally cause = Tally::kWordMovesSchema);
+
+    // Empties an unlogged catalog chain in place (CR6's discard): every
+    // page of it re-formatted and kept, the chain cut before the first link
+    // that does not reach a heap page `owner` owns. `sys.access_stats`' and
+    // `sys.statistics`'; `name` is for the damage report.
+    Status DiscardUnloggedChain(PageId head, Oid owner, std::string_view name);
 
     storage::PageStore& store_;
 

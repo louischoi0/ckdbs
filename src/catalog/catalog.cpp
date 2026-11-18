@@ -715,6 +715,9 @@ Status Catalog::Bootstrap() {
         // reason sys.cabins does - an `fk_id` comes from this relation's own
         // `next_id`, not from GenerateUserOid(), which numbers objects.
         {kSysFkeysTable, "fkeys", kCatalogPageFkeys},
+        // sys.statistics (CY-S1): a page and its two catalog rows, as
+        // sys.access_stats, and unlogged for the same reason (CR6).
+        {kSysStatisticsTable, "statistics", kCatalogPageStatistics},
     };
 
     // Phase 1: allocate the fixed catalog heap pages. min_key=0: catalog
@@ -3860,19 +3863,19 @@ StatusOr<std::optional<SysFkeyRow>> Catalog::FindForeignKeyOnColumn(
     return std::optional<SysFkeyRow>();
 }
 
-Status Catalog::DiscardAccessStats() {
+Status Catalog::DiscardUnloggedChain(PageId head, Oid owner, std::string_view name) {
     // Every page of the chain re-formatted in place, its link and its owner
     // kept, so the rows are gone and the pages stay the chain's for
     // `InsertRow` to fill again - a discard that left the growth pages
     // behind would spend a page per growth at every restore (BR-S8's
     // review). The head stays at its fixed id, so the `sys.objects` and
-    // `sys.tables` rows naming page 11 stay true.
+    // `sys.tables` rows naming it stay true.
     //
     // **A page is the chain's by what it says, not by where its id falls**:
-    // the head is page 11, and every page after it is a heap page owned by
-    // `sys.access_stats` - `InsertRow` stamps each growth page with the
-    // relation's oid (`kCatalogRoots`). Page 11 met again past the
-    // head is a cycle, and its own owner, bootstrap's 0, says so.
+    // the head is the fixed root, and every page after it is a heap page
+    // owned by the relation - `InsertRow` stamps each growth page with the
+    // relation's oid (`kCatalogRoots`). The head met again past the head is
+    // a cycle, and its own owner, bootstrap's 0, says so.
     //
     // **Bounded, because the damaged path comes through here**: a link to a
     // page that is not allocated (a growth whose free-map bit no crash kept:
@@ -3884,7 +3887,7 @@ Status Catalog::DiscardAccessStats() {
     // head that fails so is refused, since there is no page before it to
     // cut at, and any other failure is returned. A cut is the damage
     // report, and the one place it is logged.
-    PageId at = kCatalogPageAccessStats;
+    PageId at = head;
     PageId previous = kInvalidPageId;
     for (std::uint32_t step = 0; at != kInvalidPageId; ++step) {
         if (step >= storage::kMaxPageWalkLength) break;  // a cycle
@@ -3897,14 +3900,13 @@ Status Catalog::DiscardAccessStats() {
             page.ok() &&
             storage::RawPageType(page.value().bytes()) ==
                 static_cast<std::uint8_t>(PageType::kHeap) &&
-            (previous == kInvalidPageId ||
-             storage::GetOwnerOid(page.value().bytes()) == kSysAccessStatsTable);
+            (previous == kInvalidPageId || storage::GetOwnerOid(page.value().bytes()) == owner);
         if (!ours) break;
         const auto bytes = page.value().bytes();
         const PageId next = heap::PageView(bytes).next_page_id();
         // The head keeps bootstrap's owner, a growth page the relation's.
-        const std::uint64_t owner = storage::GetOwnerOid(bytes);
-        auto fresh = heap::PageView::CreateEmpty(bytes, 0, owner);
+        const std::uint64_t page_owner = storage::GetOwnerOid(bytes);
+        auto fresh = heap::PageView::CreateEmpty(bytes, 0, page_owner);
         if (!fresh.ok()) return fresh.status();
         fresh.value().set_next_page_id(next);
         previous = at;
@@ -3913,19 +3915,127 @@ Status Catalog::DiscardAccessStats() {
     if (at == kInvalidPageId) return Status::OK();
     // The walk stopped at a page that is not the chain's: cut before it.
     if (previous == kInvalidPageId) {
-        return Status::Corruption("catalog: sys.access_stats' head page is unreadable");
+        return Status::Corruption("catalog: " + std::string(name) + "' head page is unreadable");
     }
     auto before = store_.Get(previous);
     if (!before.ok()) return before.status();
     heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
     if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-        log_->Error("catalog", "sys.access_stats was damaged past page " +
+        log_->Error("catalog", std::string(name) + " was damaged past page " +
                                    std::to_string(previous) +
                                    " and its chain has been cut there: it is unlogged by CR6, "
                                    "so nothing redoes it, and an empty statistic is a slower "
                                    "optimizer rather than a wrong answer");
     }
     return Status::OK();
+}
+
+Status Catalog::DiscardAccessStats() {
+    return DiscardUnloggedChain(kCatalogPageAccessStats, kSysAccessStatsTable,
+                                "sys.access_stats");
+}
+
+StatusOr<std::vector<SysStatisticsRow>> Catalog::TakeStatisticsAtMount() {
+    // A bounded read of the chain by what each page says, as the discard
+    // below walks it, because the damaged path comes through here too: a
+    // page that cannot be fetched, is not a heap page, or is another
+    // relation's ends the read, and what was read is then not whole.
+    std::vector<SysStatisticsRow> rows;
+    std::uint64_t marks = 0;
+    std::uint64_t marked_rows = 0;
+    bool readable = true;
+    PageId at = kCatalogPageStatistics;
+    for (std::uint32_t step = 0; at != kInvalidPageId && readable; ++step) {
+        if (step >= storage::kMaxPageWalkLength) {
+            readable = false;  // a cycle
+            break;
+        }
+        auto page = store_.Get(at);
+        if (!page.ok()) {
+            if (page.status().code() != StatusCode::kCorruption &&
+                page.status().code() != StatusCode::kNotFound) {
+                return page.status();
+            }
+            readable = false;
+            break;
+        }
+        const auto bytes = page.value().bytes();
+        if (storage::RawPageType(bytes) != static_cast<std::uint8_t>(PageType::kHeap) ||
+            (step != 0 && storage::GetOwnerOid(bytes) != kSysStatisticsTable)) {
+            readable = false;
+            break;
+        }
+        heap::PageView view(bytes);
+        const std::uint16_t n = view.slot_count();
+        for (std::uint16_t slot = 0; slot < n && readable; ++slot) {
+            auto tuple = view.ReadTuple(slot);
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) continue;
+                readable = false;
+                break;
+            }
+            auto row = SysStatisticsRow::Decode(tuple.value().payload);
+            if (!row.ok()) {
+                readable = false;
+            } else if (row.value().kind == kStatisticsWhole) {
+                ++marks;
+                marked_rows = row.value().rows;
+            } else if (row.value().kind == kStatisticsRelation) {
+                rows.push_back(row.value());
+            } else {
+                readable = false;  // a kind this build did not write
+            }
+        }
+        at = view.next_page_id();
+    }
+    const bool whole = readable && marks == 1 && marked_rows == rows.size();
+    const bool held_something = marks != 0 || !rows.empty() || !readable;
+
+    // Emptied whichever it was: a taken statistic is the planner's from
+    // here, and one not taken is not kept for a later mount to trust.
+    if (Status s = DiscardUnloggedChain(kCatalogPageStatistics, kSysStatisticsTable,
+                                        "sys.statistics");
+        !s.ok()) {
+        return s;
+    }
+    if (!whole) {
+        if (held_something && log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
+            log_->Warn("catalog",
+                       "sys.statistics was not whole (" + std::to_string(rows.size()) +
+                           " rows, " + std::to_string(marks) + " closing marks naming " +
+                           std::to_string(marked_rows) +
+                           "): the shutdown that wrote it did not complete, so no relation "
+                           "prior is taken and the planner prices blind until it observes");
+        }
+        rows.clear();
+    }
+    return rows;
+}
+
+Status Catalog::WriteStatisticsAtShutdown(std::span<const SysStatisticsRow> rows) {
+    // Onto empty pages, whatever this run left on them: the mount emptied
+    // the chain and nothing writes it while statements run, so this is a
+    // second line, and it is what makes a second call harmless.
+    if (Status s = DiscardUnloggedChain(kCatalogPageStatistics, kSysStatisticsTable,
+                                        "sys.statistics");
+        !s.ok()) {
+        return s;
+    }
+    // Unlogged and un-undone, by CR6, as `RecordAccess` writes its rows; no
+    // `BumpVersion()`, since nothing cached is derived from them.
+    for (const SysStatisticsRow& row : rows) {
+        if (Status s = InsertRow(/*wal=*/nullptr, /*undo_hook=*/nullptr, store_,
+                                 kCatalogPageStatistics, row, kBootstrapXid);
+            !s.ok()) {
+            return s;
+        }
+    }
+    // The closing mark last: a failure above leaves a chain with none.
+    SysStatisticsRow mark{};
+    mark.kind = kStatisticsWhole;
+    mark.rows = rows.size();
+    return InsertRow(/*wal=*/nullptr, /*undo_hook=*/nullptr, store_, kCatalogPageStatistics,
+                     mark, kBootstrapXid);
 }
 
 StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {

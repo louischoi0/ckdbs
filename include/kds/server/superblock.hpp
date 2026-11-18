@@ -226,7 +226,17 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // forbids; a version-34 volume's checkpoints listed none, so this build could
 // not compensate a loser its base counts. Refused with no migration, the
 // standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 35;
+//
+// 36 (CY-S1, `instructions/v3.2.0/workorder-cy-managed-statistics.md`):
+// `sys.statistics`, an unlogged catalog relation with a fixed root at page
+// 17, which a completed shutdown writes the join planner's relation priors
+// to and a mount reads and empties. A version-35 volume has no page 17 and
+// no `sys.objects` or `sys.tables` row for the relation, so this build's
+// mount would walk a root that is not there; a version-35 binary would
+// leave the rows a shutdown of this build wrote where it never looks, and
+// hand page 17 to nobody, so nothing breaks there - the refusal is this
+// build's. Refused with no migration, the standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 36;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //
