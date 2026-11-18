@@ -1,0 +1,221 @@
+06:44:22 gate waiting 5s load=2.80
+06:44:27 gate waiting 10s load=2.58
+06:44:32 gate waiting 15s load=2.37
+06:44:37 gate waiting 20s load=2.18
+06:44:42 gate waiting 25s load=2.01
+06:44:47 gate waiting 30s load=1.85
+06:44:47 start r1 isolated load=1.85 1.82 1.92 busy=[]
+06:45:25 done r1 isolated rc=0
+06:45:25 start r1 levels load=1.15 1.65 1.85 busy=[]
+06:45:45 done r1 levels rc=0
+06:45:45 start r1 c1 load=1.42 1.67 1.86 busy=[]
+06:46:04 done r1 c1 rc=0
+06:46:04 start r1 c2 load=1.75 1.72 1.87 busy=[]
+06:46:38 done r1 c2 rc=0
+06:46:38 start r1 c1c2 load=1.33 1.61 1.83 busy=[]
+06:46:57 done r1 c1c2 rc=0
+06:47:02 gate waiting 5s load=3.51
+06:47:07 gate waiting 10s load=3.39
+06:47:12 gate waiting 15s load=2.95
+06:47:17 gate waiting 20s load=2.71
+06:47:22 gate waiting 25s load=2.49
+06:47:27 gate waiting 30s load=2.37
+06:47:32 gate waiting 35s load=2.98
+06:47:37 gate waiting 40s load=3.39
+06:47:42 gate waiting 45s load=3.75
+06:47:47 gate waiting 50s load=3.53
+06:47:52 gate waiting 55s load=3.65
+06:47:57 gate waiting 60s load=3.60
+06:48:02 gate waiting 65s load=3.31
+06:48:07 gate waiting 70s load=3.21
+06:48:12 gate waiting 75s load=3.03
+06:48:17 gate waiting 80s load=2.79
+06:48:22 gate waiting 85s load=2.64
+06:48:27 gate waiting 90s load=2.43
+06:48:32 gate waiting 95s load=2.24
+06:48:37 gate waiting 100s load=2.06
+06:48:42 gate waiting 105s load=1.89
+06:48:42 start r2 isolated load=1.89 2.05 1.98 busy=[]
+06:49:20 done r2 isolated rc=0
+06:49:20 start r2 c1 load=1.16 1.85 1.92 busy=[]
+06:49:40 done r2 c1 rc=0
+06:49:40 start r2 c2 load=1.82 1.95 1.95 busy=[]
+06:50:14 done r2 c2 rc=0
+06:50:14 start r2 c1c2 load=1.74 1.89 1.93 busy=[]
+06:50:48 done r2 c1c2 rc=0
+06:50:48 start r2 levels load=1.64 1.85 1.91 busy=[]
+06:51:17 done r2 levels rc=0
+06:51:22 gate waiting 5s load=1.98
+06:51:22 start r3 isolated load=1.98 1.90 1.92 busy=[]
+06:53:41 done r3 isolated rc=0
+06:53:46 gate waiting 5s load=7.74
+06:53:51 gate waiting 10s load=7.76
+06:53:56 gate waiting 15s load=7.78
+06:54:01 gate waiting 20s load=7.80
+06:54:06 gate waiting 25s load=7.81
+06:54:11 gate waiting 30s load=7.83
+06:54:16 gate waiting 35s load=7.84
+06:54:21 gate waiting 40s load=7.86
+06:54:26 gate waiting 45s load=7.87
+06:54:31 gate waiting 50s load=7.96
+06:54:36 gate waiting 55s load=8.04
+06:54:41 gate waiting 60s load=8.12
+06:54:46 gate waiting 65s load=8.11
+06:54:51 gate waiting 70s load=8.10
+06:54:56 gate waiting 75s load=8.01
+06:55:01 gate waiting 80s load=7.45
+06:55:06 gate waiting 85s load=6.93
+06:55:11 gate waiting 90s load=6.46
+06:55:16 gate waiting 95s load=5.94
+06:55:21 gate waiting 100s load=5.54
+06:55:27 gate waiting 105s load=5.10
+06:55:32 gate waiting 110s load=4.69
+06:55:37 gate waiting 115s load=4.40
+06:55:42 gate waiting 120s load=4.04
+06:55:47 gate waiting 125s load=3.72
+06:55:52 gate waiting 130s load=3.42
+06:55:57 gate waiting 135s load=3.15
+06:56:02 gate waiting 140s load=2.97
+06:56:07 gate waiting 145s load=2.82
+06:56:12 gate waiting 150s load=2.67
+06:56:17 gate waiting 155s load=2.78
+06:56:22 gate waiting 160s load=2.63
+06:56:27 gate waiting 165s load=2.58
+06:56:32 gate waiting 170s load=2.54
+06:56:37 gate waiting 175s load=2.33
+06:56:42 gate waiting 180s load=3.03
+06:56:47 gate waiting 185s load=3.51
+06:56:52 gate waiting 190s load=4.19
+06:56:57 gate waiting 195s load=4.65
+06:57:02 gate waiting 200s load=5.24
+06:57:07 gate waiting 205s load=5.62
+06:57:12 gate waiting 210s load=6.05
+06:57:17 gate waiting 215s load=6.37
+06:57:22 gate waiting 220s load=6.58
+06:57:27 gate waiting 225s load=6.77
+06:57:32 gate waiting 230s load=6.95
+06:57:37 gate waiting 235s load=7.04
+06:57:42 gate waiting 240s load=7.19
+06:57:47 gate waiting 245s load=7.26
+06:57:52 gate waiting 250s load=7.48
+06:57:57 gate waiting 255s load=7.52
+06:58:02 gate waiting 260s load=7.56
+06:58:07 gate waiting 265s load=7.67
+06:58:12 gate waiting 270s load=7.70
+06:58:17 gate waiting 275s load=7.73
+06:58:22 gate waiting 280s load=7.83
+06:58:27 gate waiting 285s load=8.16
+06:58:32 gate waiting 290s load=8.31
+06:58:37 gate waiting 295s load=8.12
+06:58:42 gate waiting 300s load=8.36
+06:58:47 gate waiting 305s load=8.98
+06:58:52 gate waiting 310s load=8.90
+06:58:57 gate waiting 315s load=9.31
+06:59:02 gate waiting 320s load=9.28
+06:59:07 gate waiting 325s load=9.26
+06:59:12 gate waiting 330s load=8.52
+06:59:18 gate waiting 335s load=8.00
+06:59:23 gate waiting 340s load=7.43
+06:59:28 gate waiting 345s load=6.84
+06:59:33 gate waiting 350s load=6.29
+06:59:38 gate waiting 355s load=5.79
+06:59:43 gate waiting 360s load=5.32
+06:59:48 gate waiting 365s load=4.98
+06:59:53 gate waiting 370s load=4.58
+06:59:58 gate waiting 375s load=4.21
+07:00:03 gate waiting 380s load=3.87
+07:00:08 gate waiting 385s load=4.85
+07:00:13 gate waiting 390s load=4.46
+07:00:18 gate waiting 395s load=4.18
+07:00:23 gate waiting 400s load=3.85
+07:00:28 gate waiting 405s load=3.54
+07:00:33 gate waiting 410s load=3.25
+07:00:38 gate waiting 415s load=2.99
+07:00:43 gate waiting 420s load=2.83
+07:00:48 gate waiting 425s load=2.61
+07:00:53 gate waiting 430s load=2.40
+07:00:58 gate waiting 435s load=2.28
+07:01:03 gate waiting 440s load=2.10
+07:01:08 gate waiting 445s load=1.93
+07:01:08 start r3 c2 load=1.93 4.44 3.57 busy=[]
+07:01:52 done r3 c2 rc=0
+07:01:52 start r3 c1c2 load=1.69 4.04 3.47 busy=[]
+07:02:21 done r3 c1c2 rc=0
+07:02:21 start r3 levels load=1.25 3.71 3.37 busy=[]
+07:02:40 done r3 levels rc=0
+07:02:40 start r3 c1 load=1.43 3.58 3.34 busy=[]
+07:03:00 done r3 c1 rc=0
+07:03:00 start r4 isolated load=1.98 3.56 3.33 busy=[]
+07:05:18 done r4 isolated rc=0
+07:05:23 gate waiting 5s load=2.56
+07:05:28 gate waiting 10s load=2.35
+07:05:33 gate waiting 15s load=2.16
+07:05:38 gate waiting 20s load=2.47
+07:05:43 gate waiting 25s load=2.75
+07:05:48 gate waiting 30s load=3.66
+07:05:53 gate waiting 35s load=3.84
+07:05:58 gate waiting 40s load=4.02
+07:06:03 gate waiting 45s load=4.18
+07:06:08 gate waiting 50s load=4.32
+07:06:13 gate waiting 55s load=4.46
+07:06:18 gate waiting 60s load=4.26
+07:06:23 gate waiting 65s load=4.00
+07:06:28 gate waiting 70s load=3.76
+07:06:33 gate waiting 75s load=3.46
+07:06:38 gate waiting 80s load=3.18
+07:06:43 gate waiting 85s load=3.01
+07:06:48 gate waiting 90s load=3.17
+07:06:53 gate waiting 95s load=2.91
+07:06:58 gate waiting 100s load=2.68
+07:07:03 gate waiting 105s load=2.54
+07:07:08 gate waiting 110s load=2.34
+07:07:13 gate waiting 115s load=2.15
+07:07:18 gate waiting 120s load=1.98
+07:07:18 start r4 c1c2 load=1.98 3.10 3.22 busy=[]
+07:07:57 done r4 c1c2 rc=0
+07:08:02 gate waiting 5s load=2.14
+07:08:07 gate waiting 10s load=2.45
+07:08:12 gate waiting 15s load=2.74
+07:08:17 gate waiting 20s load=3.08
+07:08:22 gate waiting 25s load=3.39
+07:08:27 gate waiting 30s load=3.68
+07:08:33 gate waiting 35s load=3.87
+07:08:38 gate waiting 40s load=4.04
+07:08:43 gate waiting 45s load=4.28
+07:08:48 gate waiting 50s load=4.41
+07:08:53 gate waiting 55s load=4.70
+07:08:58 gate waiting 60s load=4.81
+07:09:03 gate waiting 65s load=4.90
+07:09:08 gate waiting 70s load=5.07
+07:09:13 gate waiting 75s load=5.14
+07:09:18 gate waiting 80s load=4.81
+07:09:23 gate waiting 85s load=4.43
+07:09:28 gate waiting 90s load=4.15
+07:09:33 gate waiting 95s load=3.82
+07:09:38 gate waiting 100s load=3.23
+07:09:43 gate waiting 105s load=2.97
+07:09:48 gate waiting 110s load=2.73
+07:09:53 gate waiting 115s load=2.52
+07:09:58 gate waiting 120s load=2.31
+07:10:03 gate waiting 125s load=2.21
+07:10:08 gate waiting 130s load=2.03
+07:10:13 gate waiting 135s load=1.87
+07:10:13 start r4 levels load=1.87 3.02 3.19 busy=[]
+07:10:53 done r4 levels rc=0
+07:10:58 gate waiting 5s load=1.93
+07:10:58 start r4 c1 load=1.93 2.86 3.13 busy=[]
+07:11:32 done r4 c1 rc=0
+07:11:32 start r4 c2 load=1.60 2.66 3.05 busy=[]
+07:11:56 done r4 c2 rc=0
+07:11:56 start r5 isolated load=1.50 2.54 3.00 busy=[]
+07:12:14 done r5 isolated rc=0
+07:12:14 start r5 levels load=1.14 2.39 2.94 busy=[]
+07:12:34 done r5 levels rc=0
+07:12:34 start r5 c1 load=1.56 2.40 2.93 busy=[]
+07:12:58 done r5 c1 rc=0
+07:12:58 start r5 c2 load=1.61 2.34 2.90 busy=[]
+07:14:43 done r5 c2 rc=0
+07:14:48 gate waiting 5s load=1.44
+07:14:48 start r5 c1c2 load=1.44 2.13 2.76 busy=[2233944 /bin/bash -c source /home/louis/.claude/shell-snapshots/snapshot-bash-17;2233945 cmake --build build -j8 --target kds_tests;2233946 /bin/bash -c source /home/louis/.claude/shell-snapshots/snapshot-bash-17;]
+07:15:07 done r5 c1c2 rc=0
+07:15:07 CZS1-END

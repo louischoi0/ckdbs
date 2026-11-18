@@ -1,0 +1,7504 @@
+{
+ "arm": "isolated",
+ "cores": 4,
+ "placement": "kernel",
+ "targets": [
+  -1,
+  -1,
+  -1,
+  -1,
+  -1,
+  -1,
+  -1,
+  -1,
+  -1,
+  -1
+ ],
+ "roles": [
+  "reader",
+  "reader",
+  "reader",
+  "reader",
+  "reader",
+  "reader",
+  "writer",
+  "writer",
+  "writer",
+  "writer"
+ ],
+ "slice": 0,
+ "levels": "reader=transactional",
+ "run": 0,
+ "durability": "strict",
+ "rate": 400.0,
+ "readers": 6,
+ "writers": 4,
+ "writer_rate": 800.0,
+ "batch": 1024,
+ "walk_rows": 10000,
+ "seconds": 10.0,
+ "warmup": 2.0,
+ "log_level": "info",
+ "ctl_core": -1,
+ "wait_s": 0.0,
+ "host_before": {
+  "loadavg": "1.34 2.95 2.97 1/556 2296389",
+  "competing": []
+ },
+ "host_after": {
+  "loadavg": "1.19 2.84 2.93 4/548 2296561",
+  "competing": []
+ },
+ "read_service": {
+  "p0_us": 138.3,
+  "p25_us": 203.1,
+  "p50_us": 225.5,
+  "p95_us": 298.7,
+  "p99_us": 866.7,
+  "p99.9_us": 3923.4,
+  "max_us": 4992.5,
+  "n": 4006
+ },
+ "read_from_schedule": {
+  "p0_us": 215.1,
+  "p25_us": 288.7,
+  "p50_us": 315.9,
+  "p95_us": 407.9,
+  "p99_us": 1267.0,
+  "p99.9_us": 4240.0,
+  "max_us": 7617.2,
+  "n": 4006
+ },
+ "by_core_attribution": "connect_core",
+ "per_core_valid": true,
+ "moves": 0,
+ "moves_in_window": 0,
+ "read_by_core": {
+  "0.0": {
+   "p0_us": 223.6,
+   "p25_us": 293.7,
+   "p50_us": 319.2,
+   "p95_us": 411.0,
+   "p99_us": 1595.3,
+   "p99.9_us": 7617.2,
+   "max_us": 7617.2,
+   "n": 668
+  },
+  "1.0": {
+   "p0_us": 215.1,
+   "p25_us": 284.0,
+   "p50_us": 312.8,
+   "p95_us": 403.2,
+   "p99_us": 1246.0,
+   "p99.9_us": 3605.4,
+   "max_us": 4552.8,
+   "n": 2002
+  },
+  "2.0": {
+   "p0_us": 230.3,
+   "p25_us": 290.4,
+   "p50_us": 315.0,
+   "p95_us": 404.6,
+   "p99_us": 1210.9,
+   "p99.9_us": 5952.6,
+   "max_us": 5952.6,
+   "n": 668
+  },
+  "3.0": {
+   "p0_us": 229.1,
+   "p25_us": 298.7,
+   "p50_us": 322.8,
+   "p95_us": 423.4,
+   "p99_us": 1267.0,
+   "p99.9_us": 5080.5,
+   "max_us": 5080.5,
+   "n": 668
+  }
+ },
+ "read_by_core_end": {
+  "0.0": {
+   "p0_us": 223.6,
+   "p25_us": 293.7,
+   "p50_us": 319.2,
+   "p95_us": 411.0,
+   "p99_us": 1595.3,
+   "p99.9_us": 7617.2,
+   "max_us": 7617.2,
+   "n": 668
+  },
+  "1.0": {
+   "p0_us": 215.1,
+   "p25_us": 284.0,
+   "p50_us": 312.8,
+   "p95_us": 403.2,
+   "p99_us": 1246.0,
+   "p99.9_us": 3605.4,
+   "max_us": 4552.8,
+   "n": 2002
+  },
+  "2.0": {
+   "p0_us": 230.3,
+   "p25_us": 290.4,
+   "p50_us": 315.0,
+   "p95_us": 404.6,
+   "p99_us": 1210.9,
+   "p99.9_us": 5952.6,
+   "max_us": 5952.6,
+   "n": 668
+  },
+  "3.0": {
+   "p0_us": 229.1,
+   "p25_us": 298.7,
+   "p50_us": 322.8,
+   "p95_us": 423.4,
+   "p99_us": 1267.0,
+   "p99.9_us": 5080.5,
+   "max_us": 5080.5,
+   "n": 668
+  }
+ },
+ "readers_moved": 0,
+ "walker": {},
+ "normal_walkers": 0,
+ "nwalker": {},
+ "meta_by_core": {
+  "0": {
+   "undo_pages_live": 16.0,
+   "undo_pages_recycled": 0.0,
+   "wal_syncs": 7980.0,
+   "wal_interval_syncs": 0.0,
+   "wal_sync_failures": 0.0,
+   "wal_first_segment": 0.0,
+   "wal_segments_removed": 0.0,
+   "wal_remove_failures": 0.0,
+   "wal_group_commits": 0.0,
+   "wal_group_batches": 2001.0,
+   "wal_mean_group_batch": 0.0,
+   "wal_group_batch_max": 0.0,
+   "wal_group_batch_min": 0.0,
+   "wal_ring_full": 0.0,
+   "wal_ring_full_refusals": 0.0,
+   "sched_wall_us": 10067928.0,
+   "sched_iterations": 23519.0,
+   "sched_idle_blocks": 11701.0,
+   "sched_parked_idle_blocks": 11701.0,
+   "sched_idle_block_us": 9761076.0,
+   "sched_wakes_sent": 8395.0,
+   "sched_wakes_received": 2146.0,
+   "sched_foreground_polled_us": 206403.0,
+   "sched_foreground_polls": 7217.0,
+   "sched_foreground_consumed_us": 206403.0,
+   "sched_foreground_longest_poll_us": 2308.0,
+   "sched_foreground_polls_over_10ms": 0.0,
+   "sched_foreground_polls_over_100ms": 0.0,
+   "sched_maintenance_polled_us": 0.0,
+   "sched_maintenance_polls": 0.0,
+   "sched_maintenance_consumed_us": 0.0,
+   "sched_maintenance_longest_poll_us": 0.0,
+   "sched_maintenance_polls_over_10ms": 0.0,
+   "sched_maintenance_polls_over_100ms": 0.0,
+   "sched_system_polled_us": 5544.0,
+   "sched_system_polls": 23575.0,
+   "sched_system_consumed_us": 5544.0,
+   "sched_system_longest_poll_us": 352.0,
+   "sched_system_polls_over_10ms": 0.0,
+   "sched_system_polls_over_100ms": 0.0,
+   "sched_hold_in_run_longest_us": 1569.0,
+   "sched_hold_in_run_over_10ms": 0.0,
+   "sched_hold_in_run_over_100ms": 0.0,
+   "sched_hold_in_run_over_1s": 0.0,
+   "sched_hold_out_run_longest_us": 2343.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_1s": 0.0,
+   "sched_longest_unpolled_us": 1502.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "checkpoint_runs": 2.0,
+   "checkpoint_start_refused": 0.0,
+   "checkpoint_last_completed": 0.0,
+   "checkpoint_last_wall_us": -3642.0,
+   "checkpoint_last_step_max_us": -12.0,
+   "checkpoint_last_step_page_write_max_us": 15.0,
+   "checkpoint_last_steps": -6.0,
+   "checkpoint_last_pages": -413.0,
+   "checkpoint_last_dirty_at_start": -413.0,
+   "checkpoint_last_gate_parks": 1.0,
+   "checkpoint_last_end_parks": 0.0,
+   "checkpoint_last_start_sum_us": -16.0,
+   "checkpoint_last_start_max_us": -16.0,
+   "checkpoint_last_log_gate_batch_sum_us": 0.0,
+   "checkpoint_last_log_gate_batch_max_us": 0.0,
+   "checkpoint_last_log_gate_run_sum_us": 0.0,
+   "checkpoint_last_log_gate_run_max_us": 0.0,
+   "checkpoint_last_page_write_sum_us": -1287.0,
+   "checkpoint_last_page_write_max_us": -94.0,
+   "checkpoint_last_map_write_sum_us": 0.0,
+   "checkpoint_last_map_write_max_us": 0.0,
+   "checkpoint_last_claim_wait_sum_us": 0.0,
+   "checkpoint_last_claim_wait_max_us": 0.0,
+   "checkpoint_last_data_sync_sum_us": 0.0,
+   "checkpoint_last_data_sync_max_us": 0.0,
+   "checkpoint_last_end_wait_sum_us": 0.0,
+   "checkpoint_last_end_wait_max_us": 0.0,
+   "checkpoint_last_publish_writeback_sum_us": 14.0,
+   "checkpoint_last_publish_writeback_max_us": -3.0,
+   "checkpoint_last_publish_sync_sum_us": 0.0,
+   "checkpoint_last_publish_sync_max_us": 0.0
+  },
+  "1": {
+   "undo_pages_live": 0.0,
+   "undo_pages_recycled": 0.0,
+   "wal_syncs": 0.0,
+   "wal_interval_syncs": 0.0,
+   "wal_sync_failures": 0.0,
+   "wal_group_commits": 0.0,
+   "wal_group_batches": 0.0,
+   "wal_mean_group_batch": 0.0,
+   "wal_group_batch_max": 0.0,
+   "wal_group_batch_min": 0.0,
+   "wal_ring_full": 0.0,
+   "wal_ring_full_refusals": 0.0,
+   "sched_wall_us": 10067760.0,
+   "sched_iterations": 19970.0,
+   "sched_idle_blocks": 9952.0,
+   "sched_parked_idle_blocks": 9952.0,
+   "sched_idle_block_us": 9858822.0,
+   "sched_wakes_sent": 8394.0,
+   "sched_wakes_received": 7.0,
+   "sched_foreground_polled_us": 141133.0,
+   "sched_foreground_polls": 2006.0,
+   "sched_foreground_consumed_us": 141133.0,
+   "sched_foreground_longest_poll_us": 333.0,
+   "sched_foreground_polls_over_10ms": 0.0,
+   "sched_foreground_polls_over_100ms": 0.0,
+   "sched_maintenance_polled_us": 0.0,
+   "sched_maintenance_polls": 0.0,
+   "sched_maintenance_consumed_us": 0.0,
+   "sched_maintenance_longest_poll_us": 0.0,
+   "sched_maintenance_polls_over_10ms": 0.0,
+   "sched_maintenance_polls_over_100ms": 0.0,
+   "sched_system_polled_us": 5876.0,
+   "sched_system_polls": 20013.0,
+   "sched_system_consumed_us": 5876.0,
+   "sched_system_longest_poll_us": 441.0,
+   "sched_system_polls_over_10ms": 0.0,
+   "sched_system_polls_over_100ms": 0.0,
+   "sched_hold_in_run_longest_us": 448.0,
+   "sched_hold_in_run_over_10ms": 0.0,
+   "sched_hold_in_run_over_100ms": 0.0,
+   "sched_hold_in_run_over_1s": 0.0,
+   "sched_hold_out_run_longest_us": 1540.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_1s": 0.0,
+   "sched_longest_unpolled_us": 1472.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "checkpoint_runs": 2.0,
+   "checkpoint_start_refused": 0.0,
+   "checkpoint_last_completed": 0.0,
+   "checkpoint_last_wall_us": 356.0,
+   "checkpoint_last_step_max_us": 285.0,
+   "checkpoint_last_step_page_write_max_us": 169.0,
+   "checkpoint_last_steps": 2.0,
+   "checkpoint_last_pages": 70.0,
+   "checkpoint_last_dirty_at_start": 70.0,
+   "checkpoint_last_gate_parks": 1.0,
+   "checkpoint_last_end_parks": 0.0,
+   "checkpoint_last_start_sum_us": -14.0,
+   "checkpoint_last_start_max_us": -14.0,
+   "checkpoint_last_log_gate_batch_sum_us": 0.0,
+   "checkpoint_last_log_gate_batch_max_us": 0.0,
+   "checkpoint_last_log_gate_run_sum_us": 0.0,
+   "checkpoint_last_log_gate_run_max_us": 0.0,
+   "checkpoint_last_page_write_sum_us": 192.0,
+   "checkpoint_last_page_write_max_us": 22.0,
+   "checkpoint_last_map_write_sum_us": 0.0,
+   "checkpoint_last_map_write_max_us": 0.0,
+   "checkpoint_last_claim_wait_sum_us": 0.0,
+   "checkpoint_last_claim_wait_max_us": 0.0,
+   "checkpoint_last_data_sync_sum_us": 0.0,
+   "checkpoint_last_data_sync_max_us": 0.0,
+   "checkpoint_last_end_wait_sum_us": 0.0,
+   "checkpoint_last_end_wait_max_us": 0.0,
+   "checkpoint_last_publish_writeback_sum_us": 397.0,
+   "checkpoint_last_publish_writeback_max_us": 380.0,
+   "checkpoint_last_publish_sync_sum_us": 0.0,
+   "checkpoint_last_publish_sync_max_us": 0.0
+  },
+  "2": {
+   "undo_pages_live": -2.0,
+   "undo_pages_recycled": 4.0,
+   "wal_syncs": 0.0,
+   "wal_interval_syncs": 0.0,
+   "wal_sync_failures": 0.0,
+   "wal_group_commits": 0.0,
+   "wal_group_batches": 2001.0,
+   "wal_mean_group_batch": 0.0,
+   "wal_group_batch_max": 0.0,
+   "wal_group_batch_min": 0.0,
+   "wal_ring_full": 0.0,
+   "wal_ring_full_refusals": 0.0,
+   "sched_wall_us": 10067785.0,
+   "sched_iterations": 23644.0,
+   "sched_idle_blocks": 11573.0,
+   "sched_parked_idle_blocks": 11573.0,
+   "sched_idle_block_us": 9749345.0,
+   "sched_wakes_sent": 8393.0,
+   "sched_wakes_received": 2129.0,
+   "sched_foreground_polled_us": 213126.0,
+   "sched_foreground_polls": 7187.0,
+   "sched_foreground_consumed_us": 213126.0,
+   "sched_foreground_longest_poll_us": 558.0,
+   "sched_foreground_polls_over_10ms": 0.0,
+   "sched_foreground_polls_over_100ms": 0.0,
+   "sched_maintenance_polled_us": 0.0,
+   "sched_maintenance_polls": 0.0,
+   "sched_maintenance_consumed_us": 0.0,
+   "sched_maintenance_longest_poll_us": 0.0,
+   "sched_maintenance_polls_over_10ms": 0.0,
+   "sched_maintenance_polls_over_100ms": 0.0,
+   "sched_system_polled_us": 6231.0,
+   "sched_system_polls": 23678.0,
+   "sched_system_consumed_us": 6231.0,
+   "sched_system_longest_poll_us": 311.0,
+   "sched_system_polls_over_10ms": 0.0,
+   "sched_system_polls_over_100ms": 0.0,
+   "sched_hold_in_run_longest_us": 343.0,
+   "sched_hold_in_run_over_10ms": 0.0,
+   "sched_hold_in_run_over_100ms": 0.0,
+   "sched_hold_in_run_over_1s": 0.0,
+   "sched_hold_out_run_longest_us": 1541.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_1s": 0.0,
+   "sched_longest_unpolled_us": 1504.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "checkpoint_runs": 2.0,
+   "checkpoint_start_refused": 0.0,
+   "checkpoint_last_completed": 0.0,
+   "checkpoint_last_wall_us": 617.0,
+   "checkpoint_last_step_max_us": 138.0,
+   "checkpoint_last_step_page_write_max_us": 81.0,
+   "checkpoint_last_steps": 0.0,
+   "checkpoint_last_pages": 40.0,
+   "checkpoint_last_dirty_at_start": 40.0,
+   "checkpoint_last_gate_parks": 0.0,
+   "checkpoint_last_end_parks": 0.0,
+   "checkpoint_last_start_sum_us": 6.0,
+   "checkpoint_last_start_max_us": 6.0,
+   "checkpoint_last_log_gate_batch_sum_us": 0.0,
+   "checkpoint_last_log_gate_batch_max_us": 0.0,
+   "checkpoint_last_log_gate_run_sum_us": 0.0,
+   "checkpoint_last_log_gate_run_max_us": 0.0,
+   "checkpoint_last_page_write_sum_us": 119.0,
+   "checkpoint_last_page_write_max_us": 26.0,
+   "checkpoint_last_map_write_sum_us": 0.0,
+   "checkpoint_last_map_write_max_us": 0.0,
+   "checkpoint_last_claim_wait_sum_us": 0.0,
+   "checkpoint_last_claim_wait_max_us": 0.0,
+   "checkpoint_last_data_sync_sum_us": 0.0,
+   "checkpoint_last_data_sync_max_us": 0.0,
+   "checkpoint_last_end_wait_sum_us": 0.0,
+   "checkpoint_last_end_wait_max_us": 0.0,
+   "checkpoint_last_publish_writeback_sum_us": 24.0,
+   "checkpoint_last_publish_writeback_max_us": 15.0,
+   "checkpoint_last_publish_sync_sum_us": 0.0,
+   "checkpoint_last_publish_sync_max_us": 0.0
+  },
+  "3": {
+   "undo_pages_live": 2.0,
+   "undo_pages_recycled": 24.0,
+   "wal_syncs": 0.0,
+   "wal_interval_syncs": 0.0,
+   "wal_sync_failures": 0.0,
+   "wal_group_commits": 0.0,
+   "wal_group_batches": 3837.0,
+   "wal_mean_group_batch": -0.0030000000000001137,
+   "wal_group_batch_max": 0.0,
+   "wal_group_batch_min": 0.0,
+   "wal_ring_full": 0.0,
+   "wal_ring_full_refusals": 0.0,
+   "sched_wall_us": 10067793.0,
+   "sched_iterations": 26603.0,
+   "sched_idle_blocks": 12706.0,
+   "sched_parked_idle_blocks": 12706.0,
+   "sched_idle_block_us": 9563497.0,
+   "sched_wakes_sent": 8392.0,
+   "sched_wakes_received": 4111.0,
+   "sched_foreground_polled_us": 349643.0,
+   "sched_foreground_polls": 14685.0,
+   "sched_foreground_consumed_us": 349643.0,
+   "sched_foreground_longest_poll_us": 424.0,
+   "sched_foreground_polls_over_10ms": 0.0,
+   "sched_foreground_polls_over_100ms": 0.0,
+   "sched_maintenance_polled_us": 0.0,
+   "sched_maintenance_polls": 0.0,
+   "sched_maintenance_consumed_us": 0.0,
+   "sched_maintenance_longest_poll_us": 0.0,
+   "sched_maintenance_polls_over_10ms": 0.0,
+   "sched_maintenance_polls_over_100ms": 0.0,
+   "sched_system_polled_us": 6535.0,
+   "sched_system_polls": 26660.0,
+   "sched_system_consumed_us": 6535.0,
+   "sched_system_longest_poll_us": 332.0,
+   "sched_system_polls_over_10ms": 0.0,
+   "sched_system_polls_over_100ms": 0.0,
+   "sched_hold_in_run_longest_us": 334.0,
+   "sched_hold_in_run_over_10ms": 0.0,
+   "sched_hold_in_run_over_100ms": 0.0,
+   "sched_hold_in_run_over_1s": 0.0,
+   "sched_hold_out_run_longest_us": 1572.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_1s": 0.0,
+   "sched_longest_unpolled_us": 1572.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "checkpoint_runs": 2.0,
+   "checkpoint_start_refused": 0.0,
+   "checkpoint_last_completed": 0.0,
+   "checkpoint_last_wall_us": -558.0,
+   "checkpoint_last_step_max_us": 15.0,
+   "checkpoint_last_step_page_write_max_us": 4.0,
+   "checkpoint_last_steps": -2.0,
+   "checkpoint_last_pages": -1.0,
+   "checkpoint_last_dirty_at_start": -1.0,
+   "checkpoint_last_gate_parks": -3.0,
+   "checkpoint_last_end_parks": 0.0,
+   "checkpoint_last_start_sum_us": 8.0,
+   "checkpoint_last_start_max_us": 8.0,
+   "checkpoint_last_log_gate_batch_sum_us": 0.0,
+   "checkpoint_last_log_gate_batch_max_us": 0.0,
+   "checkpoint_last_log_gate_run_sum_us": 0.0,
+   "checkpoint_last_log_gate_run_max_us": 0.0,
+   "checkpoint_last_page_write_sum_us": 13.0,
+   "checkpoint_last_page_write_max_us": -2.0,
+   "checkpoint_last_map_write_sum_us": 0.0,
+   "checkpoint_last_map_write_max_us": 0.0,
+   "checkpoint_last_claim_wait_sum_us": 0.0,
+   "checkpoint_last_claim_wait_max_us": 0.0,
+   "checkpoint_last_data_sync_sum_us": 0.0,
+   "checkpoint_last_data_sync_max_us": 0.0,
+   "checkpoint_last_end_wait_sum_us": 0.0,
+   "checkpoint_last_end_wait_max_us": 0.0,
+   "checkpoint_last_publish_writeback_sum_us": -8.0,
+   "checkpoint_last_publish_writeback_max_us": -6.0,
+   "checkpoint_last_publish_sync_sum_us": 0.0,
+   "checkpoint_last_publish_sync_max_us": 0.0
+  }
+ },
+ "meta_core_rereads": 0,
+ "writer_service": {
+  "p0_us": 448.9,
+  "p25_us": 648.5,
+  "p50_us": 721.0,
+  "p95_us": 1616.7,
+  "p99_us": 2140.8,
+  "p99.9_us": 4901.9,
+  "max_us": 6665.5,
+  "n": 8004
+ },
+ "writer_from_schedule": {
+  "p0_us": 522.9,
+  "p25_us": 736.7,
+  "p50_us": 812.8,
+  "p95_us": 1751.7,
+  "p99_us": 2624.0,
+  "p99.9_us": 5363.9,
+  "max_us": 10072.9,
+  "n": 8004
+ },
+ "writer_by_session": [
+  {
+   "index": 6,
+   "core": 3.0,
+   "core_end": 3.0,
+   "service": {
+    "p0_us": 481.1,
+    "p25_us": 641.3,
+    "p50_us": 711.9,
+    "p95_us": 1642.9,
+    "p99_us": 2439.0,
+    "p99.9_us": 4901.9,
+    "max_us": 6349.1,
+    "n": 2001
+   },
+   "from_schedule": {
+    "p0_us": 559.1,
+    "p25_us": 731.5,
+    "p50_us": 805.9,
+    "p95_us": 1767.6,
+    "p99_us": 2995.3,
+    "p99.9_us": 4977.7,
+    "max_us": 6490.9,
+    "n": 2001
+   },
+   "errors": 0,
+   "refusals": 0
+  },
+  {
+   "index": 7,
+   "core": 3.0,
+   "core_end": 3.0,
+   "service": {
+    "p0_us": 448.9,
+    "p25_us": 643.0,
+    "p50_us": 716.0,
+    "p95_us": 1560.2,
+    "p99_us": 1978.9,
+    "p99.9_us": 3669.0,
+    "max_us": 5558.0,
+    "n": 2001
+   },
+   "from_schedule": {
+    "p0_us": 524.5,
+    "p25_us": 728.1,
+    "p50_us": 805.9,
+    "p95_us": 1701.1,
+    "p99_us": 2213.0,
+    "p99.9_us": 5217.3,
+    "max_us": 10072.9,
+    "n": 2001
+   },
+   "errors": 0,
+   "refusals": 0
+  },
+  {
+   "index": 8,
+   "core": 2.0,
+   "core_end": 2.0,
+   "service": {
+    "p0_us": 494.5,
+    "p25_us": 665.4,
+    "p50_us": 737.4,
+    "p95_us": 1635.3,
+    "p99_us": 2293.3,
+    "p99.9_us": 4820.8,
+    "max_us": 5289.8,
+    "n": 2001
+   },
+   "from_schedule": {
+    "p0_us": 574.8,
+    "p25_us": 753.9,
+    "p50_us": 832.8,
+    "p95_us": 1777.6,
+    "p99_us": 2807.1,
+    "p99.9_us": 5363.9,
+    "max_us": 6882.0,
+    "n": 2001
+   },
+   "errors": 0,
+   "refusals": 0
+  },
+  {
+   "index": 9,
+   "core": 0.0,
+   "core_end": 0.0,
+   "service": {
+    "p0_us": 474.2,
+    "p25_us": 647.5,
+    "p50_us": 718.1,
+    "p95_us": 1613.9,
+    "p99_us": 2106.2,
+    "p99.9_us": 4665.6,
+    "max_us": 6665.5,
+    "n": 2001
+   },
+   "from_schedule": {
+    "p0_us": 522.9,
+    "p25_us": 732.4,
+    "p50_us": 805.9,
+    "p95_us": 1738.5,
+    "p99_us": 2526.0,
+    "p99.9_us": 4814.4,
+    "max_us": 6743.2,
+    "n": 2001
+   },
+   "errors": 0,
+   "refusals": 0
+  }
+ ],
+ "writer_by_core": {
+  "0.0": {
+   "p0_us": 522.9,
+   "p25_us": 732.4,
+   "p50_us": 805.9,
+   "p95_us": 1738.5,
+   "p99_us": 2526.0,
+   "p99.9_us": 4814.4,
+   "max_us": 6743.2,
+   "n": 2001
+  },
+  "2.0": {
+   "p0_us": 574.8,
+   "p25_us": 753.9,
+   "p50_us": 832.8,
+   "p95_us": 1777.6,
+   "p99_us": 2807.1,
+   "p99.9_us": 5363.9,
+   "max_us": 6882.0,
+   "n": 2001
+  },
+  "3.0": {
+   "p0_us": 524.5,
+   "p25_us": 729.3,
+   "p50_us": 805.9,
+   "p95_us": 1746.2,
+   "p99_us": 2619.5,
+   "p99.9_us": 5217.3,
+   "max_us": 10072.9,
+   "n": 4002
+  }
+ },
+ "inserter": {},
+ "inserter_rows_per_s": 0.0,
+ "log_bytes_per_s": 198292.9,
+ "cores_seen": [
+  1.0,
+  1.0,
+  3.0,
+  1.0,
+  2.0,
+  0.0,
+  3.0,
+  3.0,
+  2.0,
+  0.0
+ ],
+ "cores_end": [
+  1.0,
+  1.0,
+  3.0,
+  1.0,
+  2.0,
+  0.0,
+  3.0,
+  3.0,
+  2.0,
+  0.0
+ ],
+ "errors": 0,
+ "refusals": 0,
+ "first_error": null,
+ "measure_from_mono_ns": 447833132061443,
+ "stop_at_mono_ns": 447843132061443,
+ "m0_mono_ns": 447833137920973,
+ "m1_mono_ns": 447843200125286,
+ "slow_threshold_us": 1000.0,
+ "slow_cap_per_client": 20000,
+ "slow_dropped": 0,
+ "clients": [
+  {
+   "role": "reader",
+   "index": 0,
+   "core": 1.0,
+   "core_end": 1.0,
+   "ok": 667,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447833982081146,
+     2162933
+    ],
+    [
+     447835512091610,
+     1237869
+    ],
+    [
+     447835737093741,
+     1405954
+    ],
+    [
+     447837942109160,
+     1169920
+    ],
+    [
+     447837987109296,
+     1702785
+    ],
+    [
+     447838587113214,
+     1159430
+    ],
+    [
+     447839607120581,
+     1059532
+    ],
+    [
+     447839652120980,
+     1501083
+    ],
+    [
+     447839877122612,
+     3051519
+    ],
+    [
+     447842742142462,
+     1119852
+    ],
+    [
+     447842832143290,
+     2110243
+    ]
+   ],
+   "first_t0": 1794990006.6749501,
+   "last_t1": 1794990016.6652443
+  },
+  {
+   "role": "reader",
+   "index": 1,
+   "core": 1.0,
+   "core_end": 1.0,
+   "ok": 667,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447833429577323,
+     1033306
+    ],
+    [
+     447834134582247,
+     1090527
+    ],
+    [
+     447835829594372,
+     4240036
+    ],
+    [
+     447836354597741,
+     1245975
+    ],
+    [
+     447836594599679,
+     1643658
+    ],
+    [
+     447838829615115,
+     2595901
+    ],
+    [
+     447839024616591,
+     2708197
+    ],
+    [
+     447839534620048,
+     1686811
+    ],
+    [
+     447839564620666,
+     3605366
+    ],
+    [
+     447839849622063,
+     2590418
+    ],
+    [
+     447839879622948,
+     1520395
+    ],
+    [
+     447840074624255,
+     2429485
+    ],
+    [
+     447840134624250,
+     1968861
+    ],
+    [
+     447840539626655,
+     1688480
+    ],
+    [
+     447841379633245,
+     4552841
+    ]
+   ],
+   "first_t0": 1794990006.6774502,
+   "last_t1": 1794990016.6677916
+  },
+  {
+   "role": "reader",
+   "index": 2,
+   "core": 3.0,
+   "core_end": 3.0,
+   "ok": 668,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447833312076753,
+     1266956
+    ],
+    [
+     447839552120687,
+     4130840
+    ],
+    [
+     447839777122113,
+     1266956
+    ],
+    [
+     447839852122118,
+     4083633
+    ],
+    [
+     447839927123281,
+     2041101
+    ],
+    [
+     447840347125860,
+     5080462
+    ],
+    [
+     447842492143259,
+     1576185
+    ]
+   ],
+   "first_t0": 1794990006.6649628,
+   "last_t1": 1794990016.6702123
+  },
+  {
+   "role": "reader",
+   "index": 3,
+   "core": 1.0,
+   "core_end": 1.0,
+   "ok": 668,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447835399591080,
+     1172781
+    ],
+    [
+     447835624592591,
+     1326799
+    ],
+    [
+     447838699614238,
+     1169443
+    ],
+    [
+     447838924616041,
+     1501083
+    ],
+    [
+     447839929622726,
+     1070023
+    ],
+    [
+     447843139645299,
+     1077175
+    ]
+   ],
+   "first_t0": 1794990006.6674538,
+   "last_t1": 1794990016.6735163
+  },
+  {
+   "role": "reader",
+   "index": 4,
+   "core": 2.0,
+   "core_end": 2.0,
+   "ok": 668,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447836017095266,
+     1210928
+    ],
+    [
+     447836857101136,
+     1867771
+    ],
+    [
+     447838432112253,
+     1934290
+    ],
+    [
+     447840832128977,
+     3703594
+    ],
+    [
+     447841177131553,
+     2083778
+    ],
+    [
+     447841837136427,
+     1442909
+    ],
+    [
+     447843142145300,
+     5952597
+    ]
+   ],
+   "first_t0": 1794990006.6699548,
+   "last_t1": 1794990016.6808918
+  },
+  {
+   "role": "reader",
+   "index": 5,
+   "core": 0.0,
+   "core_end": 0.0,
+   "ok": 668,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447833514577644,
+     1595259
+    ],
+    [
+     447837414604998,
+     1099825
+    ],
+    [
+     447838749615051,
+     1412868
+    ],
+    [
+     447838929615961,
+     1645565
+    ],
+    [
+     447839454619113,
+     1371145
+    ],
+    [
+     447839949622914,
+     1684904
+    ],
+    [
+     447840069623929,
+     2587080
+    ],
+    [
+     447841929636966,
+     2570391
+    ],
+    [
+     447842469640505,
+     1142025
+    ],
+    [
+     447842724642936,
+     3584862
+    ],
+    [
+     447843144645528,
+     7617235
+    ]
+   ],
+   "first_t0": 1794990006.6724532,
+   "last_t1": 1794990016.6850564
+  },
+  {
+   "role": "writer",
+   "index": 6,
+   "core": 3.0,
+   "core_end": 3.0,
+   "ok": 2001,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447833217108389,
+     1593828
+    ],
+    [
+     447833247109562,
+     1329184
+    ],
+    [
+     447833267110292,
+     2017498
+    ],
+    [
+     447833287110909,
+     1618147
+    ],
+    [
+     447833312111437,
+     1928091
+    ],
+    [
+     447833347112485,
+     1317263
+    ],
+    [
+     447833412113563,
+     1028299
+    ],
+    [
+     447833427114141,
+     3164530
+    ],
+    [
+     447833432113845,
+     1883268
+    ],
+    [
+     447833442114638,
+     1250505
+    ],
+    [
+     447833452114338,
+     1716375
+    ],
+    [
+     447833467115204,
+     4535913
+    ],
+    [
+     447833572117239,
+     1456976
+    ],
+    [
+     447833577117582,
+     1081705
+    ],
+    [
+     447833597118113,
+     1171827
+    ],
+    [
+     447833617118399,
+     1624823
+    ],
+    [
+     447833637119011,
+     1836538
+    ],
+    [
+     447833667119828,
+     1624823
+    ],
+    [
+     447833732120704,
+     1034498
+    ],
+    [
+     447833757121224,
+     1608610
+    ],
+    [
+     447833767121609,
+     1167536
+    ],
+    [
+     447833777121694,
+     1748085
+    ],
+    [
+     447833797122463,
+     2674341
+    ],
+    [
+     447833807122956,
+     1036882
+    ],
+    [
+     447833827123315,
+     1087666
+    ],
+    [
+     447833837123788,
+     1571417
+    ],
+    [
+     447833867124127,
+     1016855
+    ],
+    [
+     447833877124535,
+     1494408
+    ],
+    [
+     447833902124755,
+     1053572
+    ],
+    [
+     447833922125375,
+     1072645
+    ],
+    [
+     447833942126152,
+     1797438
+    ],
+    [
+     447833947125930,
+     3196716
+    ],
+    [
+     447833962125894,
+     1745701
+    ],
+    [
+     447834007127340,
+     1094341
+    ],
+    [
+     447834022127460,
+     1839399
+    ],
+    [
+     447834062127838,
+     1021147
+    ],
+    [
+     447834067128356,
+     1088619
+    ],
+    [
+     447834107129525,
+     1953840
+    ],
+    [
+     447834127130023,
+     2096415
+    ],
+    [
+     447834172130862,
+     1085997
+    ],
+    [
+     447834292133472,
+     1369953
+    ],
+    [
+     447834312134329,
+     1746178
+    ],
+    [
+     447834357135429,
+     1455545
+    ],
+    [
+     447834377135886,
+     1004457
+    ],
+    [
+     447834397136520,
+     1590729
+    ],
+    [
+     447834457137886,
+     1707077
+    ],
+    [
+     447834467138051,
+     6490946
+    ],
+    [
+     447834472138098,
+     2526045
+    ],
+    [
+     447834477138160,
+     1785040
+    ],
+    [
+     447834542138928,
+     1069069
+    ],
+    [
+     447834577140429,
+     1090050
+    ],
+    [
+     447834622141624,
+     1855135
+    ],
+    [
+     447834642142010,
+     1790524
+    ],
+    [
+     447834667141913,
+     1024723
+    ],
+    [
+     447834692143069,
+     1051426
+    ],
+    [
+     447834747144353,
+     1089573
+    ],
+    [
+     447834767145113,
+     1811743
+    ],
+    [
+     447834782144499,
+     1050949
+    ],
+    [
+     447834787145315,
+     2026081
+    ],
+    [
+     447834807145608,
+     1971245
+    ],
+    [
+     447834827145863,
+     1237392
+    ],
+    [
+     447834927148147,
+     1315832
+    ],
+    [
+     447834942149075,
+     1618147
+    ],
+    [
+     447834947148919,
+     1753807
+    ],
+    [
+     447834967149254,
+     1599550
+    ],
+    [
+     447835007150440,
+     1354933
+    ],
+    [
+     447835092152458,
+     1042128
+    ],
+    [
+     447835112152684,
+     1660585
+    ],
+    [
+     447835132153304,
+     1936436
+    ],
+    [
+     447835147153097,
+     1210690
+    ],
+    [
+     447835202154807,
+     1127481
+    ],
+    [
+     447835277156689,
+     1667261
+    ],
+    [
+     447835297156185,
+     1781225
+    ],
+    [
+     447835317157431,
+     1868248
+    ],
+    [
+     447835352158604,
+     1109123
+    ],
+    [
+     447835372158545,
+     1069069
+    ],
+    [
+     447835462160683,
+     1888990
+    ],
+    [
+     447835467160614,
+     4152775
+    ],
+    [
+     447835482161042,
+     1828909
+    ],
+    [
+     447835487160756,
+     1092434
+    ],
+    [
+     447835507161031,
+     1150846
+    ],
+    [
+     447835607163874,
+     1040936
+    ],
+    [
+     447835627164473,
+     1674175
+    ],
+    [
+     447835647164984,
+     1590967
+    ],
+    [
+     447835752167316,
+     1078129
+    ],
+    [
+     447835772168214,
+     1650810
+    ],
+    [
+     447835792167941,
+     1860857
+    ],
+    [
+     447835812168557,
+     1773834
+    ],
+    [
+     447835962171671,
+     1000881
+    ],
+    [
+     447835977172014,
+     1605272
+    ],
+    [
+     447835997173121,
+     2256155
+    ],
+    [
+     447836032173383,
+     1047850
+    ],
+    [
+     447836142177133,
+     1744270
+    ],
+    [
+     447836162176350,
+     1993895
+    ],
+    [
+     447836267179311,
+     1020908
+    ],
+    [
+     447836282178753,
+     1306295
+    ],
+    [
+     447836302180176,
+     1592398
+    ],
+    [
+     447836307180221,
+     1848459
+    ],
+    [
+     447836322180301,
+     1533031
+    ],
+    [
+     447836412182409,
+     1177549
+    ],
+    [
+     447836467183978,
+     4415512
+    ],
+    [
+     447836472183503,
+     1112938
+    ],
+    [
+     447836487184608,
+     1730442
+    ],
+    [
+     447836492184595,
+     1236439
+    ],
+    [
+     447836537184187,
+     1029015
+    ],
+    [
+     447836592186372,
+     1056433
+    ],
+    [
+     447836612186582,
+     1015902
+    ],
+    [
+     447836632187643,
+     1078606
+    ],
+    [
+     447836642187879,
+     1103163
+    ],
+    [
+     447836652187949,
+     1565218
+    ],
+    [
+     447836672188861,
+     1702547
+    ],
+    [
+     447836757189716,
+     1071215
+    ],
+    [
+     447836777190059,
+     1101732
+    ],
+    [
+     447836797191450,
+     1441002
+    ],
+    [
+     447836817191802,
+     1765013
+    ],
+    [
+     447836832191786,
+     1174212
+    ],
+    [
+     447836837192319,
+     1763821
+    ],
+    [
+     447836947195216,
+     1028776
+    ],
+    [
+     447836982195417,
+     1756668
+    ],
+    [
+     447836992195134,
+     1209497
+    ],
+    [
+     447837002195509,
+     1909971
+    ],
+    [
+     447837147199319,
+     1688242
+    ],
+    [
+     447837167200315,
+     1589298
+    ],
+    [
+     447837257201978,
+     1142502
+    ],
+    [
+     447837292202618,
+     1379251
+    ],
+    [
+     447837312203024,
+     1841307
+    ],
+    [
+     447837332203180,
+     1958370
+    ],
+    [
+     447837427205926,
+     1035213
+    ],
+    [
+     447837457206524,
+     1043558
+    ],
+    [
+     447837467207016,
+     2571583
+    ],
+    [
+     447837472206271,
+     2330303
+    ],
+    [
+     447837492206891,
+     2011538
+    ],
+    [
+     447837607210166,
+     1095057
+    ],
+    [
+     447837612209978,
+     1131535
+    ],
+    [
+     447837617210000,
+     1262188
+    ],
+    [
+     447837637210491,
+     2136230
+    ],
+    [
+     447837657210364,
+     1784563
+    ],
+    [
+     447837697211279,
+     1028299
+    ],
+    [
+     447837732212590,
+     1000166
+    ],
+    [
+     447837767213733,
+     1124382
+    ],
+    [
+     447837782214080,
+     1059055
+    ],
+    [
+     447837802214254,
+     2002478
+    ],
+    [
+     447837822214859,
+     1601458
+    ],
+    [
+     447837842214522,
+     1872540
+    ],
+    [
+     447837867215289,
+     1089096
+    ],
+    [
+     447837927217068,
+     1059294
+    ],
+    [
+     447837947217602,
+     1640558
+    ],
+    [
+     447837967218239,
+     1231194
+    ],
+    [
+     447837982218387,
+     2619505
+    ],
+    [
+     447837987218387,
+     1834631
+    ],
+    [
+     447838007218960,
+     1785755
+    ],
+    [
+     447838152224416,
+     1463890
+    ],
+    [
+     447838157222163,
+     1281738
+    ],
+    [
+     447838172222238,
+     1826763
+    ],
+    [
+     447838272225113,
+     1103163
+    ],
+    [
+     447838297225194,
+     1046658
+    ],
+    [
+     447838317225748,
+     1708746
+    ],
+    [
+     447838337226601,
+     1645088
+    ],
+    [
+     447838452229346,
+     1029968
+    ],
+    [
+     447838462229000,
+     1081705
+    ],
+    [
+     447838467229229,
+     3336668
+    ],
+    [
+     447838502230626,
+     2279520
+    ],
+    [
+     447838522230097,
+     1756191
+    ],
+    [
+     447838627233592,
+     1053572
+    ],
+    [
+     447838632233096,
+     1250267
+    ],
+    [
+     447838637232959,
+     1185417
+    ],
+    [
+     447838647233897,
+     1148462
+    ],
+    [
+     447838662233890,
+     1041889
+    ],
+    [
+     447838667234535,
+     1583815
+    ],
+    [
+     447838707234813,
+     1177549
+    ],
+    [
+     447838737235249,
+     1017332
+    ],
+    [
+     447838757235687,
+     1186371
+    ],
+    [
+     447838767236633,
+     1389265
+    ],
+    [
+     447838807236972,
+     1758099
+    ],
+    [
+     447838827237667,
+     4817724
+    ],
+    [
+     447838842238259,
+     1819372
+    ],
+    [
+     447838852238491,
+     1034260
+    ],
+    [
+     447838977240874,
+     3864288
+    ],
+    [
+     447838992241534,
+     1526833
+    ],
+    [
+     447839002241326,
+     1084805
+    ],
+    [
+     447839012242211,
+     2182722
+    ],
+    [
+     447839022242531,
+     2116919
+    ],
+    [
+     447839042242691,
+     1109123
+    ],
+    [
+     447839047243049,
+     1609087
+    ],
+    [
+     447839067243228,
+     1783133
+    ],
+    [
+     447839082243760,
+     4977703
+    ],
+    [
+     447839092243623,
+     1062393
+    ],
+    [
+     447839102243647,
+     1285315
+    ],
+    [
+     447839127244237,
+     1121759
+    ],
+    [
+     447839137249728,
+     1028061
+    ],
+    [
+     447839157245588,
+     1567602
+    ],
+    [
+     447839172245362,
+     1017094
+    ],
+    [
+     447839177245703,
+     1651287
+    ],
+    [
+     447839197246362,
+     1111269
+    ],
+    [
+     447839322249163,
+     1969099
+    ],
+    [
+     447839327249093,
+     1015663
+    ],
+    [
+     447839332249609,
+     1228571
+    ],
+    [
+     447839342249630,
+     1845598
+    ],
+    [
+     447839372250097,
+     1006126
+    ],
+    [
+     447839467252113,
+     2731800
+    ],
+    [
+     447839487252457,
+     1042366
+    ],
+    [
+     447839497253272,
+     1153708
+    ],
+    [
+     447839507253271,
+     1650572
+    ],
+    [
+     447839527253428,
+     1881123
+    ],
+    [
+     447839552254487,
+     4755259
+    ],
+    [
+     447839562254649,
+     2530813
+    ],
+    [
+     447839652256333,
+     1083612
+    ],
+    [
+     447839672256277,
+     1607656
+    ],
+    [
+     447839692257488,
+     1788855
+    ],
+    [
+     447839747258785,
+     1098633
+    ],
+    [
+     447839757259028,
+     1194715
+    ],
+    [
+     447839762258961,
+     1100540
+    ],
+    [
+     447839777259488,
+     1714706
+    ],
+    [
+     447839817260070,
+     1070976
+    ],
+    [
+     447839837261082,
+     1914024
+    ],
+    [
+     447839852260594,
+     4829168
+    ],
+    [
+     447839857260637,
+     1811743
+    ],
+    [
+     447839862261265,
+     2512693
+    ],
+    [
+     447839877262110,
+     1072407
+    ],
+    [
+     447839902262531,
+     1067400
+    ],
+    [
+     447839927262925,
+     2995253
+    ],
+    [
+     447839937263083,
+     1108885
+    ],
+    [
+     447839957263676,
+     1285076
+    ],
+    [
+     447839967263973,
+     1030684
+    ],
+    [
+     447839977264314,
+     1767635
+    ],
+    [
+     447839992264303,
+     3797770
+    ],
+    [
+     447839997265072,
+     1763582
+    ],
+    [
+     447840022265182,
+     1028538
+    ],
+    [
+     447840072268618,
+     1123667
+    ],
+    [
+     447840102267350,
+     1227379
+    ],
+    [
+     447840142267180,
+     1100302
+    ],
+    [
+     447840162267795,
+     1538992
+    ],
+    [
+     447840182268400,
+     1552582
+    ],
+    [
+     447840217269541,
+     1900196
+    ],
+    [
+     447840222269261,
+     1024008
+    ],
+    [
+     447840257270523,
+     1045227
+    ],
+    [
+     447840282271190,
+     1001835
+    ],
+    [
+     447840322272104,
+     1538038
+    ],
+    [
+     447840327271387,
+     1749039
+    ],
+    [
+     447840347272458,
+     6322861
+    ],
+    [
+     447840352272648,
+     1977682
+    ],
+    [
+     447840467275474,
+     2305269
+    ],
+    [
+     447840472275154,
+     2373219
+    ],
+    [
+     447840492275670,
+     1498938
+    ],
+    [
+     447840502276241,
+     1893520
+    ],
+    [
+     447840512275939,
+     1727343
+    ],
+    [
+     447840517276568,
+     1030445
+    ],
+    [
+     447840622279300,
+     1034975
+    ],
+    [
+     447840642279411,
+     1025677
+    ],
+    [
+     447840677279702,
+     1750469
+    ],
+    [
+     447840697280337,
+     1701117
+    ],
+    [
+     447840727281030,
+     1898289
+    ],
+    [
+     447840732281441,
+     1977682
+    ],
+    [
+     447840752281816,
+     1048088
+    ],
+    [
+     447840762281932,
+     1628160
+    ],
+    [
+     447840782282764,
+     1178265
+    ],
+    [
+     447840822283454,
+     1224279
+    ],
+    [
+     447840842283947,
+     1457691
+    ],
+    [
+     447840862284302,
+     1817226
+    ],
+    [
+     447840892285129,
+     1444817
+    ],
+    [
+     447840927285811,
+     1573324
+    ],
+    [
+     447840942286317,
+     1112461
+    ],
+    [
+     447841007287458,
+     2117634
+    ],
+    [
+     447841012286900,
+     1031399
+    ],
+    [
+     447841027288094,
+     1865149
+    ],
+    [
+     447841132291030,
+     2489567
+    ],
+    [
+     447841172290621,
+     1597881
+    ],
+    [
+     447841212292362,
+     2860069
+    ],
+    [
+     447841227291751,
+     1249313
+    ],
+    [
+     447841277293170,
+     1048326
+    ],
+    [
+     447841307294570,
+     1367331
+    ],
+    [
+     447841312294080,
+     1179457
+    ],
+    [
+     447841332295486,
+     1805305
+    ],
+    [
+     447841347295108,
+     1123428
+    ],
+    [
+     447841352295286,
+     1727581
+    ],
+    [
+     447841387295962,
+     1025200
+    ],
+    [
+     447841402296219,
+     1094341
+    ],
+    [
+     447841412296873,
+     1253843
+    ],
+    [
+     447841457297337,
+     1096249
+    ],
+    [
+     447841467298230,
+     3046751
+    ],
+    [
+     447841492298823,
+     1889706
+    ],
+    [
+     447841497299208,
+     1871347
+    ],
+    [
+     447841517299192,
+     1691580
+    ],
+    [
+     447841537299615,
+     3774643
+    ],
+    [
+     447841622301907,
+     1827002
+    ],
+    [
+     447841642301880,
+     1026630
+    ],
+    [
+     447841662302836,
+     3351212
+    ],
+    [
+     447841682303439,
+     1497746
+    ],
+    [
+     447841767304820,
+     1796961
+    ],
+    [
+     447841812305726,
+     2326965
+    ],
+    [
+     447841827306468,
+     1795053
+    ],
+    [
+     447841832305827,
+     1027822
+    ],
+    [
+     447841842306300,
+     1025677
+    ],
+    [
+     447841847307084,
+     1707315
+    ],
+    [
+     447841867306994,
+     1563072
+    ],
+    [
+     447841872306681,
+     2395153
+    ],
+    [
+     447842002310341,
+     1423359
+    ],
+    [
+     447842012310806,
+     1687527
+    ],
+    [
+     447842017310267,
+     4030466
+    ],
+    [
+     447842032311571,
+     1692533
+    ],
+    [
+     447842087312392,
+     1209021
+    ],
+    [
+     447842092312045,
+     1077890
+    ],
+    [
+     447842102312474,
+     1103401
+    ],
+    [
+     447842127313279,
+     3108978
+    ],
+    [
+     447842137313160,
+     1038074
+    ],
+    [
+     447842177314322,
+     1376390
+    ],
+    [
+     447842197315057,
+     1837492
+    ],
+    [
+     447842217315056,
+     1091719
+    ],
+    [
+     447842257316772,
+     1046658
+    ],
+    [
+     447842292316374,
+     1079321
+    ],
+    [
+     447842342318176,
+     1476288
+    ],
+    [
+     447842362318991,
+     1755476
+    ],
+    [
+     447842402319532,
+     1003265
+    ],
+    [
+     447842437319981,
+     1040220
+    ],
+    [
+     447842467321111,
+     3359079
+    ],
+    [
+     447842492321037,
+     2069473
+    ],
+    [
+     447842502321425,
+     1496077
+    ],
+    [
+     447842522321982,
+     1770496
+    ],
+    [
+     447842562323496,
+     1170635
+    ],
+    [
+     447842577323910,
+     1599550
+    ],
+    [
+     447842632325019,
+     2818823
+    ],
+    [
+     447842687325620,
+     1568794
+    ],
+    [
+     447842722326909,
+     1008034
+    ],
+    [
+     447842767328003,
+     1045465
+    ],
+    [
+     447842782327831,
+     1295805
+    ],
+    [
+     447842802328410,
+     1742363
+    ],
+    [
+     447842852329978,
+     1731396
+    ],
+    [
+     447842872330313,
+     1746416
+    ],
+    [
+     447842907330667,
+     1573801
+    ],
+    [
+     447842977332412,
+     1032591
+    ],
+    [
+     447842997333232,
+     1582861
+    ],
+    [
+     447843017334375,
+     1763344
+    ],
+    [
+     447843037333728,
+     1828194
+    ],
+    [
+     447843057334603,
+     1441956
+    ]
+   ],
+   "first_t0": 1794990006.665028,
+   "last_t1": 1794990016.6657999
+  },
+  {
+   "role": "writer",
+   "index": 7,
+   "core": 3.0,
+   "core_end": 3.0,
+   "ok": 2001,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447833143357036,
+     1729012
+    ],
+    [
+     447833163357098,
+     1522064
+    ],
+    [
+     447833268360282,
+     1070738
+    ],
+    [
+     447833308361252,
+     1978159
+    ],
+    [
+     447833313361159,
+     1001596
+    ],
+    [
+     447833328361566,
+     2007961
+    ],
+    [
+     447833433363791,
+     1055717
+    ],
+    [
+     447833468364877,
+     3751516
+    ],
+    [
+     447833473364420,
+     1574516
+    ],
+    [
+     447833493364861,
+     1710892
+    ],
+    [
+     447833553366684,
+     2213001
+    ],
+    [
+     447833658369295,
+     1806736
+    ],
+    [
+     447833708370456,
+     1041889
+    ],
+    [
+     447833778371627,
+     2260447
+    ],
+    [
+     447833793372008,
+     1108885
+    ],
+    [
+     447833798372755,
+     1931190
+    ],
+    [
+     447833818372789,
+     1756430
+    ],
+    [
+     447833863374674,
+     1037598
+    ],
+    [
+     447833878374442,
+     3380537
+    ],
+    [
+     447833898375162,
+     1028538
+    ],
+    [
+     447833983376580,
+     1865387
+    ],
+    [
+     447833998376690,
+     2055168
+    ],
+    [
+     447834003376845,
+     1623869
+    ],
+    [
+     447834023377367,
+     1016378
+    ],
+    [
+     447834038377928,
+     1086950
+    ],
+    [
+     447834108379815,
+     1163960
+    ],
+    [
+     447834128380298,
+     1296997
+    ],
+    [
+     447834148380556,
+     1741886
+    ],
+    [
+     447834168380411,
+     1917601
+    ],
+    [
+     447834203381890,
+     1080990
+    ],
+    [
+     447834283383479,
+     1112461
+    ],
+    [
+     447834333384198,
+     1565695
+    ],
+    [
+     447834353385356,
+     1990080
+    ],
+    [
+     447834398386467,
+     1038790
+    ],
+    [
+     447834433387242,
+     1166105
+    ],
+    [
+     447834468388091,
+     5217314
+    ],
+    [
+     447834473388172,
+     1242638
+    ],
+    [
+     447834488388297,
+     1265287
+    ],
+    [
+     447834498387817,
+     1535892
+    ],
+    [
+     447834508388896,
+     1023769
+    ],
+    [
+     447834518388744,
+     1935959
+    ],
+    [
+     447834543389867,
+     1046658
+    ],
+    [
+     447834583390746,
+     1017332
+    ],
+    [
+     447834663391865,
+     1602650
+    ],
+    [
+     447834708393309,
+     1099348
+    ],
+    [
+     447834723393900,
+     1116037
+    ],
+    [
+     447834778395366,
+     1138449
+    ],
+    [
+     447834783395093,
+     1010895
+    ],
+    [
+     447834788394974,
+     1384735
+    ],
+    [
+     447834808395876,
+     1044035
+    ],
+    [
+     447834828395400,
+     1811028
+    ],
+    [
+     447834848396316,
+     1571655
+    ],
+    [
+     447834868397396,
+     2199650
+    ],
+    [
+     447834923398501,
+     1118183
+    ],
+    [
+     447834928398541,
+     1056671
+    ],
+    [
+     447834958398939,
+     1045704
+    ],
+    [
+     447834988399418,
+     1643181
+    ],
+    [
+     447835008399723,
+     1835823
+    ],
+    [
+     447835028401091,
+     1179695
+    ],
+    [
+     447835098402082,
+     2152681
+    ],
+    [
+     447835133402678,
+     1021624
+    ],
+    [
+     447835138403256,
+     1046658
+    ],
+    [
+     447835153403277,
+     1798153
+    ],
+    [
+     447835173403739,
+     1809835
+    ],
+    [
+     447835218405203,
+     1003504
+    ],
+    [
+     447835308407396,
+     1003504
+    ],
+    [
+     447835338407339,
+     1981020
+    ],
+    [
+     447835358407771,
+     1765490
+    ],
+    [
+     447835408409455,
+     1045704
+    ],
+    [
+     447835463410373,
+     1024723
+    ],
+    [
+     447835468411042,
+     3330946
+    ],
+    [
+     447835483411174,
+     1001596
+    ],
+    [
+     447835503410826,
+     1634121
+    ],
+    [
+     447835523412259,
+     1791000
+    ],
+    [
+     447835668414956,
+     1595974
+    ],
+    [
+     447835688415640,
+     1602173
+    ],
+    [
+     447835793418081,
+     1108170
+    ],
+    [
+     447835813418907,
+     1202583
+    ],
+    [
+     447835833419290,
+     1785040
+    ],
+    [
+     447835853419655,
+     1513481
+    ],
+    [
+     447835898420748,
+     1028776
+    ],
+    [
+     447835968421698,
+     1932621
+    ],
+    [
+     447835998422858,
+     1433611
+    ],
+    [
+     447836018423540,
+     1745939
+    ],
+    [
+     447836038423722,
+     1691103
+    ],
+    [
+     447836163426404,
+     1149893
+    ],
+    [
+     447836178427095,
+     2012491
+    ],
+    [
+     447836198427723,
+     1645088
+    ],
+    [
+     447836218427391,
+     1043558
+    ],
+    [
+     447836258428845,
+     1063347
+    ],
+    [
+     447836308430334,
+     1034260
+    ],
+    [
+     447836343430251,
+     1374722
+    ],
+    [
+     447836348431061,
+     1000166
+    ],
+    [
+     447836363431861,
+     1537323
+    ],
+    [
+     447836468433982,
+     3695965
+    ],
+    [
+     447836483433722,
+     1363516
+    ],
+    [
+     447836508433920,
+     1891136
+    ],
+    [
+     447836523435081,
+     1163006
+    ],
+    [
+     447836528435261,
+     1822472
+    ],
+    [
+     447836583436118,
+     1000404
+    ],
+    [
+     447836598436690,
+     1009226
+    ],
+    [
+     447836693438589,
+     1732111
+    ],
+    [
+     447836713438689,
+     1627445
+    ],
+    [
+     447836828441556,
+     1010895
+    ],
+    [
+     447836838442181,
+     1090288
+    ],
+    [
+     447836858442200,
+     1588345
+    ],
+    [
+     447836878443082,
+     1701117
+    ],
+    [
+     447837003446085,
+     1042604
+    ],
+    [
+     447837023445942,
+     1636982
+    ],
+    [
+     447837048446950,
+     1098394
+    ],
+    [
+     447837083447414,
+     1201868
+    ],
+    [
+     447837188449785,
+     1712799
+    ],
+    [
+     447837208450241,
+     1494408
+    ],
+    [
+     447837228450972,
+     1941204
+    ],
+    [
+     447837298452833,
+     1035213
+    ],
+    [
+     447837313452889,
+     1057625
+    ],
+    [
+     447837333453409,
+     1424074
+    ],
+    [
+     447837353453362,
+     1675367
+    ],
+    [
+     447837373454469,
+     1425743
+    ],
+    [
+     447837383454134,
+     1674414
+    ],
+    [
+     447837393454831,
+     1861811
+    ],
+    [
+     447837468456832,
+     1764536
+    ],
+    [
+     447837473455950,
+     1482964
+    ],
+    [
+     447837488457375,
+     1344681
+    ],
+    [
+     447837508457121,
+     1001358
+    ],
+    [
+     447837513457519,
+     1769543
+    ],
+    [
+     447837523457525,
+     1047134
+    ],
+    [
+     447837528457804,
+     1265764
+    ],
+    [
+     447837533458033,
+     1672506
+    ],
+    [
+     447837548458508,
+     1002550
+    ],
+    [
+     447837588459492,
+     1207590
+    ],
+    [
+     447837638460065,
+     1181364
+    ],
+    [
+     447837678461004,
+     1643658
+    ],
+    [
+     447837693461895,
+     1944065
+    ],
+    [
+     447837698462037,
+     1694202
+    ],
+    [
+     447837718462213,
+     1675606
+    ],
+    [
+     447837753463113,
+     1143694
+    ],
+    [
+     447837783463897,
+     1111031
+    ],
+    [
+     447837803463990,
+     1347780
+    ],
+    [
+     447837833464469,
+     1718998
+    ],
+    [
+     447837843464580,
+     1071692
+    ],
+    [
+     447837863465468,
+     2169847
+    ],
+    [
+     447837883465457,
+     1779556
+    ],
+    [
+     447837908466302,
+     1046419
+    ],
+    [
+     447837933467026,
+     1085758
+    ],
+    [
+     447837988468897,
+     1123905
+    ],
+    [
+     447837993468519,
+     1059771
+    ],
+    [
+     447838008468363,
+     2044916
+    ],
+    [
+     447838018468819,
+     1026869
+    ],
+    [
+     447838028469238,
+     1829863
+    ],
+    [
+     447838038469024,
+     1928806
+    ],
+    [
+     447838048469160,
+     1804113
+    ],
+    [
+     447838058469585,
+     1864672
+    ],
+    [
+     447838088471052,
+     1033545
+    ],
+    [
+     447838163472948,
+     1010418
+    ],
+    [
+     447838173472973,
+     1004934
+    ],
+    [
+     447838193473414,
+     1423836
+    ],
+    [
+     447838213473630,
+     1702070
+    ],
+    [
+     447838253474294,
+     1067877
+    ],
+    [
+     447838293475136,
+     1424789
+    ],
+    [
+     447838323476379,
+     1073122
+    ],
+    [
+     447838358476720,
+     1963377
+    ],
+    [
+     447838378477330,
+     1844883
+    ],
+    [
+     447838468479487,
+     2645254
+    ],
+    [
+     447838503480203,
+     1357079
+    ],
+    [
+     447838518480850,
+     1073837
+    ],
+    [
+     447838523480447,
+     1067638
+    ],
+    [
+     447838543481161,
+     2063274
+    ],
+    [
+     447838553481361,
+     1141310
+    ],
+    [
+     447838558480989,
+     1366138
+    ],
+    [
+     447838618482706,
+     1029491
+    ],
+    [
+     447838643483528,
+     1006603
+    ],
+    [
+     447838683484414,
+     1765490
+    ],
+    [
+     447838703484528,
+     1672268
+    ],
+    [
+     447838738485936,
+     1096487
+    ],
+    [
+     447838798486998,
+     1050234
+    ],
+    [
+     447838828487502,
+     4554987
+    ],
+    [
+     447838848487980,
+     2283573
+    ],
+    [
+     447838868488122,
+     1661539
+    ],
+    [
+     447838888488851,
+     3247261
+    ],
+    [
+     447838928490251,
+     1008987
+    ],
+    [
+     447838958490281,
+     1597643
+    ],
+    [
+     447838963490301,
+     1154661
+    ],
+    [
+     447838998491388,
+     1042604
+    ],
+    [
+     447839013491762,
+     1402140
+    ],
+    [
+     447839023492386,
+     1260519
+    ],
+    [
+     447839033491910,
+     1920223
+    ],
+    [
+     447839053492179,
+     1579762
+    ],
+    [
+     447839058492901,
+     1216650
+    ],
+    [
+     447839198495768,
+     1850367
+    ],
+    [
+     447839203495679,
+     1058817
+    ],
+    [
+     447839218497147,
+     1753807
+    ],
+    [
+     447839323498961,
+     1060247
+    ],
+    [
+     447839348499256,
+     1544952
+    ],
+    [
+     447839363500016,
+     1845837
+    ],
+    [
+     447839378500294,
+     1286983
+    ],
+    [
+     447839383499991,
+     1827478
+    ],
+    [
+     447839393500479,
+     1325846
+    ],
+    [
+     447839398500824,
+     1044273
+    ],
+    [
+     447839438501374,
+     1709938
+    ],
+    [
+     447839468501912,
+     1497746
+    ],
+    [
+     447839498502940,
+     1090527
+    ],
+    [
+     447839518503886,
+     1089096
+    ],
+    [
+     447839538503751,
+     2343655
+    ],
+    [
+     447839548504001,
+     1787901
+    ],
+    [
+     447839553504480,
+     3481388
+    ],
+    [
+     447839563504671,
+     1286745
+    ],
+    [
+     447839713507451,
+     1501799
+    ],
+    [
+     447839718508302,
+     1084328
+    ],
+    [
+     447839728508425,
+     1056194
+    ],
+    [
+     447839733507951,
+     1732349
+    ],
+    [
+     447839763509012,
+     1084328
+    ],
+    [
+     447839768508592,
+     3041744
+    ],
+    [
+     447839833510548,
+     1874208
+    ],
+    [
+     447839838510823,
+     1127243
+    ],
+    [
+     447839853510485,
+     3587484
+    ],
+    [
+     447839863511438,
+     1265049
+    ],
+    [
+     447839878512086,
+     1564026
+    ],
+    [
+     447839898511589,
+     1632214
+    ],
+    [
+     447839928512968,
+     1300097
+    ],
+    [
+     447839943513393,
+     1055002
+    ],
+    [
+     447840008515022,
+     1063347
+    ],
+    [
+     447840018515195,
+     1936197
+    ],
+    [
+     447840038515145,
+     1441479
+    ],
+    [
+     447840168518217,
+     1006126
+    ],
+    [
+     447840173518808,
+     1043797
+    ],
+    [
+     447840203519183,
+     1879930
+    ],
+    [
+     447840208518668,
+     1123190
+    ],
+    [
+     447840218519133,
+     1247406
+    ],
+    [
+     447840223519264,
+     1570225
+    ],
+    [
+     447840343522485,
+     10072947
+    ],
+    [
+     447840348522374,
+     5671501
+    ],
+    [
+     447840353522821,
+     1447439
+    ],
+    [
+     447840363522905,
+     1005650
+    ],
+    [
+     447840368522686,
+     1646757
+    ],
+    [
+     447840388523517,
+     1830816
+    ],
+    [
+     447840433524257,
+     1072645
+    ],
+    [
+     447840468524701,
+     1657248
+    ],
+    [
+     447840473525250,
+     1129389
+    ],
+    [
+     447840503526286,
+     1089334
+    ],
+    [
+     447840518526328,
+     1852751
+    ],
+    [
+     447840533526377,
+     1643896
+    ],
+    [
+     447840553526591,
+     1689434
+    ],
+    [
+     447840663529010,
+     1467943
+    ],
+    [
+     447840668529614,
+     1506090
+    ],
+    [
+     447840678530124,
+     1017809
+    ],
+    [
+     447840708530785,
+     1012802
+    ],
+    [
+     447840718530943,
+     1567841
+    ],
+    [
+     447840728531595,
+     1292944
+    ],
+    [
+     447840733531463,
+     1123667
+    ],
+    [
+     447840738531115,
+     1452684
+    ],
+    [
+     447840743531473,
+     1022100
+    ],
+    [
+     447840778532781,
+     1075029
+    ],
+    [
+     447840833533727,
+     1121759
+    ],
+    [
+     447840863533506,
+     1085520
+    ],
+    [
+     447840883534462,
+     1784325
+    ],
+    [
+     447840903535559,
+     1918316
+    ],
+    [
+     447840943536347,
+     1001835
+    ],
+    [
+     447841003537746,
+     2468586
+    ],
+    [
+     447841008537585,
+     1377344
+    ],
+    [
+     447841028538222,
+     1013994
+    ],
+    [
+     447841048538373,
+     1500607
+    ],
+    [
+     447841068538119,
+     1443624
+    ],
+    [
+     447841133540447,
+     1245022
+    ],
+    [
+     447841188541225,
+     1591921
+    ],
+    [
+     447841208541959,
+     1756907
+    ],
+    [
+     447841213542241,
+     1961946
+    ],
+    [
+     447841353545400,
+     1096249
+    ],
+    [
+     447841363545627,
+     1060963
+    ],
+    [
+     447841373545788,
+     2199173
+    ],
+    [
+     447841383546353,
+     1986980
+    ],
+    [
+     447841393546384,
+     1820326
+    ],
+    [
+     447841468548276,
+     2296925
+    ],
+    [
+     447841493549159,
+     1049519
+    ],
+    [
+     447841558549669,
+     1705170
+    ],
+    [
+     447841623551944,
+     1162767
+    ],
+    [
+     447841663552942,
+     2114296
+    ],
+    [
+     447841703553206,
+     1596451
+    ],
+    [
+     447841723553732,
+     2778292
+    ],
+    [
+     447841768555222,
+     1079321
+    ],
+    [
+     447841813555655,
+     1464128
+    ],
+    [
+     447841843556476,
+     1009464
+    ],
+    [
+     447841888557358,
+     1605034
+    ],
+    [
+     447841908557414,
+     1466513
+    ],
+    [
+     447842023560526,
+     1042843
+    ],
+    [
+     447842053560950,
+     1436710
+    ],
+    [
+     447842073561536,
+     1464844
+    ],
+    [
+     447842183564268,
+     1497984
+    ],
+    [
+     447842218565078,
+     1747370
+    ],
+    [
+     447842238565465,
+     1528263
+    ],
+    [
+     447842333568014,
+     1391888
+    ],
+    [
+     447842363567821,
+     1058102
+    ],
+    [
+     447842383568648,
+     1626253
+    ],
+    [
+     447842403568921,
+     1804590
+    ],
+    [
+     447842468571121,
+     2625465
+    ],
+    [
+     447842543572373,
+     1732826
+    ],
+    [
+     447842563572584,
+     2023935
+    ],
+    [
+     447842583573046,
+     1655579
+    ],
+    [
+     447842633575068,
+     1618862
+    ],
+    [
+     447842708576501,
+     1745939
+    ],
+    [
+     447842723577285,
+     1063347
+    ],
+    [
+     447842728577070,
+     1568556
+    ],
+    [
+     447842748577295,
+     1968384
+    ],
+    [
+     447842803578458,
+     1285791
+    ],
+    [
+     447842828579285,
+     1380920
+    ],
+    [
+     447842838579646,
+     1415014
+    ],
+    [
+     447842893581016,
+     1648903
+    ],
+    [
+     447842898580736,
+     1018524
+    ],
+    [
+     447842913581003,
+     1993656
+    ],
+    [
+     447842978582425,
+     1049519
+    ],
+    [
+     447842988582357,
+     1730204
+    ],
+    [
+     447843003583374,
+     1148701
+    ],
+    [
+     447843058584721,
+     1889944
+    ],
+    [
+     447843078584942,
+     1521111
+    ]
+   ],
+   "first_t0": 1794990006.6662402,
+   "last_t1": 1794990016.6671035
+  },
+  {
+   "role": "writer",
+   "index": 8,
+   "core": 2.0,
+   "core_end": 2.0,
+   "ok": 2001,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447833159607807,
+     1051188
+    ],
+    [
+     447833184608168,
+     1728773
+    ],
+    [
+     447833204609199,
+     1678705
+    ],
+    [
+     447833254609391,
+     1051664
+    ],
+    [
+     447833284610705,
+     1742125
+    ],
+    [
+     447833309611255,
+     1266718
+    ],
+    [
+     447833339612171,
+     1037836
+    ],
+    [
+     447833344611994,
+     1054525
+    ],
+    [
+     447833349612517,
+     1658678
+    ],
+    [
+     447833369612471,
+     1687765
+    ],
+    [
+     447833429614472,
+     1228333
+    ],
+    [
+     447833469614755,
+     2506495
+    ],
+    [
+     447833474615023,
+     1311541
+    ],
+    [
+     447833499615689,
+     1411200
+    ],
+    [
+     447833509615681,
+     1789808
+    ],
+    [
+     447833514615678,
+     1659393
+    ],
+    [
+     447833534616630,
+     1714230
+    ],
+    [
+     447833539616724,
+     1065493
+    ],
+    [
+     447833554616578,
+     2032280
+    ],
+    [
+     447833649618444,
+     1028061
+    ],
+    [
+     447833674619807,
+     1710892
+    ],
+    [
+     447833694619729,
+     1935720
+    ],
+    [
+     447833714620786,
+     2225161
+    ],
+    [
+     447833719620848,
+     1764297
+    ],
+    [
+     447833764621788,
+     1032352
+    ],
+    [
+     447833794622630,
+     1237154
+    ],
+    [
+     447833834623315,
+     6881952
+    ],
+    [
+     447833839623915,
+     2839804
+    ],
+    [
+     447833859623489,
+     1613855
+    ],
+    [
+     447833899624984,
+     1009703
+    ],
+    [
+     447833944626566,
+     2202272
+    ],
+    [
+     447833949626074,
+     1049757
+    ],
+    [
+     447833994627265,
+     1762152
+    ],
+    [
+     447833999627551,
+     1967192
+    ],
+    [
+     447834004627212,
+     1132250
+    ],
+    [
+     447834024627946,
+     1877308
+    ],
+    [
+     447834044627870,
+     1696348
+    ],
+    [
+     447834054628419,
+     1036644
+    ],
+    [
+     447834094629178,
+     1036167
+    ],
+    [
+     447834124629535,
+     1232862
+    ],
+    [
+     447834169631298,
+     2069712
+    ],
+    [
+     447834179631525,
+     1065016
+    ],
+    [
+     447834189631876,
+     1751423
+    ],
+    [
+     447834209631849,
+     1642942
+    ],
+    [
+     447834219632406,
+     1873970
+    ],
+    [
+     447834224632055,
+     1070261
+    ],
+    [
+     447834229632093,
+     1009226
+    ],
+    [
+     447834349635233,
+     1045227
+    ],
+    [
+     447834354635422,
+     1158237
+    ],
+    [
+     447834374635639,
+     1678705
+    ],
+    [
+     447834419636669,
+     1216412
+    ],
+    [
+     447834424637211,
+     1001596
+    ],
+    [
+     447834444637080,
+     1891375
+    ],
+    [
+     447834469637542,
+     3468037
+    ],
+    [
+     447834474637938,
+     1093149
+    ],
+    [
+     447834479638310,
+     1530647
+    ],
+    [
+     447834484638503,
+     1029253
+    ],
+    [
+     447834519639120,
+     1099110
+    ],
+    [
+     447834539639755,
+     1802206
+    ],
+    [
+     447834544639550,
+     1040697
+    ],
+    [
+     447834559640142,
+     1583099
+    ],
+    [
+     447834579640647,
+     1673222
+    ],
+    [
+     447834669642873,
+     1640320
+    ],
+    [
+     447834684642880,
+     1475096
+    ],
+    [
+     447834704643546,
+     1866579
+    ],
+    [
+     447834724643760,
+     1687527
+    ],
+    [
+     447834829645918,
+     1418829
+    ],
+    [
+     447834869646547,
+     1338959
+    ],
+    [
+     447834889647377,
+     1672268
+    ],
+    [
+     447834929648063,
+     4982948
+    ],
+    [
+     447834964649349,
+     1743555
+    ],
+    [
+     447835004650586,
+     1039743
+    ],
+    [
+     447835029650825,
+     2532721
+    ],
+    [
+     447835049651084,
+     2024889
+    ],
+    [
+     447835079651882,
+     1086473
+    ],
+    [
+     447835099652380,
+     1169920
+    ],
+    [
+     447835129653233,
+     1003027
+    ],
+    [
+     447835179654183,
+     1025438
+    ],
+    [
+     447835194654660,
+     1857996
+    ],
+    [
+     447835214655237,
+     1728058
+    ],
+    [
+     447835259656078,
+     1605749
+    ],
+    [
+     447835339658180,
+     1051903
+    ],
+    [
+     447835379659380,
+     1629829
+    ],
+    [
+     447835399661932,
+     2042532
+    ],
+    [
+     447835414659604,
+     1580477
+    ],
+    [
+     447835449660621,
+     1069307
+    ],
+    [
+     447835459660360,
+     1373768
+    ],
+    [
+     447835464660376,
+     1771212
+    ],
+    [
+     447835469660441,
+     2126455
+    ],
+    [
+     447835479660481,
+     1050711
+    ],
+    [
+     447835484661223,
+     1342297
+    ],
+    [
+     447835489661565,
+     2390385
+    ],
+    [
+     447835504661562,
+     1152515
+    ],
+    [
+     447835524662001,
+     1013994
+    ],
+    [
+     447835544662696,
+     1782417
+    ],
+    [
+     447835564662755,
+     1634836
+    ],
+    [
+     447835589663730,
+     1042843
+    ],
+    [
+     447835599663375,
+     1057863
+    ],
+    [
+     447835709666680,
+     1794100
+    ],
+    [
+     447835729666534,
+     1541615
+    ],
+    [
+     447835774667871,
+     1024485
+    ],
+    [
+     447835794668541,
+     1261473
+    ],
+    [
+     447835829669268,
+     1001596
+    ],
+    [
+     447835849669566,
+     1020670
+    ],
+    [
+     447835874669996,
+     1777649
+    ],
+    [
+     447835894670552,
+     1908779
+    ],
+    [
+     447835914670705,
+     1630783
+    ],
+    [
+     447835929670711,
+     2867460
+    ],
+    [
+     447835964671601,
+     1060009
+    ],
+    [
+     447835969671897,
+     1139879
+    ],
+    [
+     447836034673625,
+     1196384
+    ],
+    [
+     447836059674167,
+     1563072
+    ],
+    [
+     447836079674955,
+     2423048
+    ],
+    [
+     447836119675790,
+     1009226
+    ],
+    [
+     447836129675713,
+     1500607
+    ],
+    [
+     447836134676038,
+     1089096
+    ],
+    [
+     447836174677052,
+     1059771
+    ],
+    [
+     447836179677376,
+     2521038
+    ],
+    [
+     447836219678161,
+     1771212
+    ],
+    [
+     447836239677795,
+     1621008
+    ],
+    [
+     447836304680048,
+     1049519
+    ],
+    [
+     447836309680708,
+     1037836
+    ],
+    [
+     447836344680985,
+     2158642
+    ],
+    [
+     447836384681858,
+     2085209
+    ],
+    [
+     447836404682403,
+     1415968
+    ],
+    [
+     447836469683375,
+     2464533
+    ],
+    [
+     447836509684583,
+     1100540
+    ],
+    [
+     447836529685056,
+     1138210
+    ],
+    [
+     447836549685373,
+     1706600
+    ],
+    [
+     447836569686092,
+     1773596
+    ],
+    [
+     447836579686284,
+     1136780
+    ],
+    [
+     447836599686690,
+     1009703
+    ],
+    [
+     447836619687379,
+     1074791
+    ],
+    [
+     447836644687539,
+     1135111
+    ],
+    [
+     447836704688524,
+     1205683
+    ],
+    [
+     447836714689173,
+     1280069
+    ],
+    [
+     447836734689863,
+     1764774
+    ],
+    [
+     447836759690508,
+     1129150
+    ],
+    [
+     447836764690004,
+     1013994
+    ],
+    [
+     447836829691228,
+     3225088
+    ],
+    [
+     447836899693675,
+     1780748
+    ],
+    [
+     447836919693305,
+     1762629
+    ],
+    [
+     447836999696483,
+     1041412
+    ],
+    [
+     447837024696256,
+     1003981
+    ],
+    [
+     447837039697181,
+     1319408
+    ],
+    [
+     447837044697092,
+     1724482
+    ],
+    [
+     447837064697620,
+     1631498
+    ],
+    [
+     447837079697694,
+     1083374
+    ],
+    [
+     447837084698172,
+     1566410
+    ],
+    [
+     447837139699053,
+     1282454
+    ],
+    [
+     447837184700590,
+     1502991
+    ],
+    [
+     447837189699979,
+     1082897
+    ],
+    [
+     447837229700449,
+     1101971
+    ],
+    [
+     447837249701396,
+     2049446
+    ],
+    [
+     447837319702793,
+     1112461
+    ],
+    [
+     447837334703549,
+     1005650
+    ],
+    [
+     447837414705518,
+     1577854
+    ],
+    [
+     447837469707047,
+     1024961
+    ],
+    [
+     447837479707135,
+     1066446
+    ],
+    [
+     447837494706865,
+     1082659
+    ],
+    [
+     447837519707374,
+     1011372
+    ],
+    [
+     447837554708169,
+     1568079
+    ],
+    [
+     447837574709057,
+     2392054
+    ],
+    [
+     447837609709894,
+     1188993
+    ],
+    [
+     447837674710805,
+     1024246
+    ],
+    [
+     447837684715747,
+     1036644
+    ],
+    [
+     447837694711821,
+     1096010
+    ],
+    [
+     447837734713075,
+     6166935
+    ],
+    [
+     447837739712280,
+     2807140
+    ],
+    [
+     447837779713423,
+     1109362
+    ],
+    [
+     447837849714701,
+     1031399
+    ],
+    [
+     447837864714823,
+     1182318
+    ],
+    [
+     447837904716790,
+     1596212
+    ],
+    [
+     447837919717136,
+     1288414
+    ],
+    [
+     447837924717222,
+     1743317
+    ],
+    [
+     447837969718192,
+     1157284
+    ],
+    [
+     447838009719016,
+     1168728
+    ],
+    [
+     447838039719408,
+     2070665
+    ],
+    [
+     447838049720094,
+     1034021
+    ],
+    [
+     447838059720381,
+     1073837
+    ],
+    [
+     447838069719880,
+     2020597
+    ],
+    [
+     447838089719767,
+     1646519
+    ],
+    [
+     447838234723798,
+     1521826
+    ],
+    [
+     447838254724247,
+     1965284
+    ],
+    [
+     447838264724025,
+     1385927
+    ],
+    [
+     447838359726877,
+     1088858
+    ],
+    [
+     447838399727998,
+     2057791
+    ],
+    [
+     447838419728496,
+     1943588
+    ],
+    [
+     447838439729284,
+     1947880
+    ],
+    [
+     447838469729265,
+     1353502
+    ],
+    [
+     447838479730270,
+     1041174
+    ],
+    [
+     447838539731580,
+     1101255
+    ],
+    [
+     447838544731588,
+     1152515
+    ],
+    [
+     447838549730986,
+     1209021
+    ],
+    [
+     447838564731844,
+     1438856
+    ],
+    [
+     447838584731898,
+     1721382
+    ],
+    [
+     447838589732386,
+     1389265
+    ],
+    [
+     447838604732142,
+     1925707
+    ],
+    [
+     447838654733249,
+     1000166
+    ],
+    [
+     447838689734615,
+     1188040
+    ],
+    [
+     447838724735351,
+     1820087
+    ],
+    [
+     447838744735898,
+     2094507
+    ],
+    [
+     447838754736172,
+     1007557
+    ],
+    [
+     447838759736294,
+     1004696
+    ],
+    [
+     447838794736887,
+     1401901
+    ],
+    [
+     447838829737356,
+     2388716
+    ],
+    [
+     447838849738334,
+     1471758
+    ],
+    [
+     447838889739388,
+     2702236
+    ],
+    [
+     447838899739807,
+     1007557
+    ],
+    [
+     447838909739284,
+     1358986
+    ],
+    [
+     447838924740046,
+     1294374
+    ],
+    [
+     447838929740078,
+     1732588
+    ],
+    [
+     447838949740959,
+     1268864
+    ],
+    [
+     447838964740978,
+     1046181
+    ],
+    [
+     447838979740986,
+     1066208
+    ],
+    [
+     447838999741674,
+     1461983
+    ],
+    [
+     447839009741454,
+     3097296
+    ],
+    [
+     447839034741843,
+     1066446
+    ],
+    [
+     447839059742781,
+     1116037
+    ],
+    [
+     447839064743173,
+     1115799
+    ],
+    [
+     447839074743555,
+     1720190
+    ],
+    [
+     447839094743784,
+     1691818
+    ],
+    [
+     447839124744316,
+     1004457
+    ],
+    [
+     447839194745869,
+     1896143
+    ],
+    [
+     447839199746027,
+     1002073
+    ],
+    [
+     447839219746785,
+     1682281
+    ],
+    [
+     447839239747312,
+     1914024
+    ],
+    [
+     447839259747311,
+     1635075
+    ],
+    [
+     447839299748600,
+     1066923
+    ],
+    [
+     447839344748905,
+     1742601
+    ],
+    [
+     447839364749545,
+     1041651
+    ],
+    [
+     447839384749786,
+     1196623
+    ],
+    [
+     447839404750954,
+     1773119
+    ],
+    [
+     447839409751005,
+     1152039
+    ],
+    [
+     447839424751114,
+     1872301
+    ],
+    [
+     447839474753002,
+     1498461
+    ],
+    [
+     447839539753997,
+     1520872
+    ],
+    [
+     447839549754789,
+     1023293
+    ],
+    [
+     447839569754970,
+     1570940
+    ],
+    [
+     447839579754946,
+     4873991
+    ],
+    [
+     447839589755260,
+     2456188
+    ],
+    [
+     447839609755711,
+     1589537
+    ],
+    [
+     447839674757610,
+     1530886
+    ],
+    [
+     447839709757574,
+     3041267
+    ],
+    [
+     447839739758734,
+     1689911
+    ],
+    [
+     447839744758324,
+     4040241
+    ],
+    [
+     447839754759189,
+     1754761
+    ],
+    [
+     447839769758985,
+     2838850
+    ],
+    [
+     447839774759310,
+     1862288
+    ],
+    [
+     447839834760490,
+     1131296
+    ],
+    [
+     447839849761381,
+     1065016
+    ],
+    [
+     447839864761215,
+     3915310
+    ],
+    [
+     447839919762674,
+     1816034
+    ],
+    [
+     447840009764671,
+     1015663
+    ],
+    [
+     447840019764810,
+     1164675
+    ],
+    [
+     447840039765539,
+     4892588
+    ],
+    [
+     447840049765549,
+     1316547
+    ],
+    [
+     447840059766174,
+     1870871
+    ],
+    [
+     447840074766410,
+     1977921
+    ],
+    [
+     447840079766686,
+     1903057
+    ],
+    [
+     447840099766666,
+     1796007
+    ],
+    [
+     447840124767233,
+     1162291
+    ],
+    [
+     447840204769322,
+     1143932
+    ],
+    [
+     447840244770296,
+     1855135
+    ],
+    [
+     447840264770305,
+     1693249
+    ],
+    [
+     447840279770659,
+     1017809
+    ],
+    [
+     447840409773391,
+     1784325
+    ],
+    [
+     447840429773928,
+     1528502
+    ],
+    [
+     447840464775398,
+     1014233
+    ],
+    [
+     447840479775709,
+     1257181
+    ],
+    [
+     447840559777719,
+     1095295
+    ],
+    [
+     447840574777376,
+     1481056
+    ],
+    [
+     447840594778301,
+     1668930
+    ],
+    [
+     447840599778154,
+     1044512
+    ],
+    [
+     447840654779760,
+     1032352
+    ],
+    [
+     447840669780037,
+     2444506
+    ],
+    [
+     447840679780608,
+     1421690
+    ],
+    [
+     447840759782043,
+     1830101
+    ],
+    [
+     447840779782696,
+     3678322
+    ],
+    [
+     447840784781649,
+     1185417
+    ],
+    [
+     447840799783238,
+     1035690
+    ],
+    [
+     447840809783360,
+     1032114
+    ],
+    [
+     447840829783297,
+     5363941
+    ],
+    [
+     447840834782756,
+     1076698
+    ],
+    [
+     447840839783728,
+     1906633
+    ],
+    [
+     447840844783206,
+     1027107
+    ],
+    [
+     447840854783689,
+     1102209
+    ],
+    [
+     447840874784700,
+     1045704
+    ],
+    [
+     447840899784723,
+     1533508
+    ],
+    [
+     447840904785244,
+     1069546
+    ],
+    [
+     447840924785331,
+     1722813
+    ],
+    [
+     447840939785706,
+     3123283
+    ],
+    [
+     447840944785899,
+     1535654
+    ],
+    [
+     447840964786816,
+     1080751
+    ],
+    [
+     447840974786867,
+     1148462
+    ],
+    [
+     447840984786747,
+     1026630
+    ],
+    [
+     447841064788742,
+     1353741
+    ],
+    [
+     447841089789615,
+     1783609
+    ],
+    [
+     447841109789575,
+     1777649
+    ],
+    [
+     447841139790385,
+     1116276
+    ],
+    [
+     447841159790900,
+     1583099
+    ],
+    [
+     447841229792791,
+     1551628
+    ],
+    [
+     447841249793348,
+     2032995
+    ],
+    [
+     447841259793412,
+     1189709
+    ],
+    [
+     447841269793520,
+     1611948
+    ],
+    [
+     447841279793364,
+     1005173
+    ],
+    [
+     447841284793173,
+     2726555
+    ],
+    [
+     447841289793762,
+     1593351
+    ],
+    [
+     447841349795459,
+     2054930
+    ],
+    [
+     447841374796263,
+     1407862
+    ],
+    [
+     447841394796325,
+     1039743
+    ],
+    [
+     447841409796587,
+     3189087
+    ],
+    [
+     447841414796336,
+     1776695
+    ],
+    [
+     447841434797421,
+     1605749
+    ],
+    [
+     447841469797818,
+     1078606
+    ],
+    [
+     447841539799383,
+     1598358
+    ],
+    [
+     447841549799303,
+     1022577
+    ],
+    [
+     447841574800025,
+     1364946
+    ],
+    [
+     447841579800809,
+     1645803
+    ],
+    [
+     447841599800528,
+     1630545
+    ],
+    [
+     447841634801971,
+     1082182
+    ],
+    [
+     447841644801976,
+     1206875
+    ],
+    [
+     447841664802778,
+     1169205
+    ],
+    [
+     447841719804013,
+     1112700
+    ],
+    [
+     447841724803575,
+     1979589
+    ],
+    [
+     447841734804396,
+     1022577
+    ],
+    [
+     447841744804753,
+     1929998
+    ],
+    [
+     447841759805045,
+     1056671
+    ],
+    [
+     447841764805324,
+     1475096
+    ],
+    [
+     447841784804836,
+     1234770
+    ],
+    [
+     447841834805903,
+     4025459
+    ],
+    [
+     447841869808369,
+     1286268
+    ],
+    [
+     447841879807131,
+     1023769
+    ],
+    [
+     447841929808921,
+     1672983
+    ],
+    [
+     447841934808588,
+     1028061
+    ],
+    [
+     447841939808901,
+     1008511
+    ],
+    [
+     447841949809188,
+     1855373
+    ],
+    [
+     447841969809873,
+     1003504
+    ],
+    [
+     447841974809571,
+     1030922
+    ],
+    [
+     447841994809686,
+     1003981
+    ],
+    [
+     447842004810769,
+     1885414
+    ],
+    [
+     447842019811005,
+     1040936
+    ],
+    [
+     447842059812074,
+     1037121
+    ],
+    [
+     447842094812422,
+     2070904
+    ],
+    [
+     447842114813503,
+     1404762
+    ],
+    [
+     447842179814736,
+     2198219
+    ],
+    [
+     447842239816365,
+     1471519
+    ],
+    [
+     447842254816438,
+     1993179
+    ],
+    [
+     447842259816253,
+     2014875
+    ],
+    [
+     447842279817039,
+     1720428
+    ],
+    [
+     447842304816639,
+     1010656
+    ],
+    [
+     447842334817954,
+     1088142
+    ],
+    [
+     447842349818374,
+     1014948
+    ],
+    [
+     447842384819190,
+     1783371
+    ],
+    [
+     447842424819715,
+     2010345
+    ],
+    [
+     447842434820413,
+     1081944
+    ],
+    [
+     447842439820684,
+     1903534
+    ],
+    [
+     447842464821153,
+     1579285
+    ],
+    [
+     447842469820993,
+     1370192
+    ],
+    [
+     447842484821850,
+     1018047
+    ],
+    [
+     447842529822103,
+     1126051
+    ],
+    [
+     447842564823185,
+     1277924
+    ],
+    [
+     447842579823463,
+     1029015
+    ],
+    [
+     447842604824089,
+     1723289
+    ],
+    [
+     447842624824501,
+     1683712
+    ],
+    [
+     447842669825704,
+     1021147
+    ],
+    [
+     447842674825727,
+     1157045
+    ],
+    [
+     447842729826625,
+     2854109
+    ],
+    [
+     447842749827380,
+     1016378
+    ],
+    [
+     447842754827598,
+     1780272
+    ],
+    [
+     447842769828219,
+     1819134
+    ],
+    [
+     447842779828221,
+     1784563
+    ],
+    [
+     447842789828771,
+     1745462
+    ],
+    [
+     447842819828254,
+     1000404
+    ],
+    [
+     447842829829369,
+     1010180
+    ],
+    [
+     447842844829639,
+     1050234
+    ],
+    [
+     447842904831109,
+     1840115
+    ],
+    [
+     447842914831169,
+     1133680
+    ],
+    [
+     447842924831493,
+     1127958
+    ],
+    [
+     447842934831733,
+     1712322
+    ],
+    [
+     447842954832220,
+     2034903
+    ],
+    [
+     447842979832890,
+     2063036
+    ],
+    [
+     447843024834117,
+     1146555
+    ],
+    [
+     447843099834627,
+     1705170
+    ],
+    [
+     447843119836109,
+     1766443
+    ],
+    [
+     447843129836095,
+     1121044
+    ],
+    [
+     447843134836405,
+     1955271
+    ]
+   ],
+   "first_t0": 1794990006.6675196,
+   "last_t1": 1794990016.6695852
+  },
+  {
+   "role": "writer",
+   "index": 9,
+   "core": 0.0,
+   "core_end": 0.0,
+   "ok": 2001,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447833225859886,
+     1750946
+    ],
+    [
+     447833245860085,
+     2210379
+    ],
+    [
+     447833260860478,
+     1245737
+    ],
+    [
+     447833300860915,
+     1007795
+    ],
+    [
+     447833310861591,
+     1096725
+    ],
+    [
+     447833390862384,
+     1420259
+    ],
+    [
+     447833410863657,
+     1792192
+    ],
+    [
+     447833430864323,
+     1993656
+    ],
+    [
+     447833440869247,
+     1601934
+    ],
+    [
+     447833455864175,
+     1051426
+    ],
+    [
+     447833470864546,
+     1248121
+    ],
+    [
+     447833490865523,
+     1387119
+    ],
+    [
+     447833520866038,
+     1055479
+    ],
+    [
+     447833540866760,
+     1044989
+    ],
+    [
+     447833555866970,
+     1194715
+    ],
+    [
+     447833575867243,
+     1834869
+    ],
+    [
+     447833595867663,
+     1837492
+    ],
+    [
+     447833650868790,
+     1023293
+    ],
+    [
+     447833675869923,
+     1584768
+    ],
+    [
+     447833695870150,
+     1075745
+    ],
+    [
+     447833715870355,
+     4173756
+    ],
+    [
+     447833720870428,
+     1092672
+    ],
+    [
+     447833735870897,
+     1572609
+    ],
+    [
+     447833755871572,
+     2460480
+    ],
+    [
+     447833760871559,
+     3864527
+    ],
+    [
+     447833765871561,
+     1035690
+    ],
+    [
+     447833840873548,
+     1109838
+    ],
+    [
+     447833875874498,
+     1939535
+    ],
+    [
+     447833880874487,
+     1261473
+    ],
+    [
+     447833900875032,
+     1794100
+    ],
+    [
+     447833920875714,
+     1788139
+    ],
+    [
+     447833940875565,
+     1040459
+    ],
+    [
+     447833945875694,
+     1336813
+    ],
+    [
+     447833955876378,
+     1037359
+    ],
+    [
+     447834025878023,
+     1268148
+    ],
+    [
+     447834060878632,
+     1023293
+    ],
+    [
+     447834065879008,
+     1893282
+    ],
+    [
+     447834085879515,
+     1516581
+    ],
+    [
+     447834170881408,
+     1001596
+    ],
+    [
+     447834210882316,
+     1005173
+    ],
+    [
+     447834230882652,
+     1766682
+    ],
+    [
+     447834250883422,
+     1573324
+    ],
+    [
+     447834265882763,
+     1029253
+    ],
+    [
+     447834270883120,
+     1585484
+    ],
+    [
+     447834395886539,
+     2766609
+    ],
+    [
+     447834415886741,
+     1969099
+    ],
+    [
+     447834425887301,
+     1199484
+    ],
+    [
+     447834435887387,
+     1810312
+    ],
+    [
+     447834445887379,
+     1171112
+    ],
+    [
+     447834470888332,
+     2228260
+    ],
+    [
+     447834480887990,
+     1048565
+    ],
+    [
+     447834490888146,
+     1563549
+    ],
+    [
+     447834505888849,
+     3523827
+    ],
+    [
+     447834535889288,
+     1064777
+    ],
+    [
+     447834540889835,
+     1108170
+    ],
+    [
+     447834580890858,
+     1652002
+    ],
+    [
+     447834600891141,
+     1813173
+    ],
+    [
+     447834620897256,
+     1829624
+    ],
+    [
+     447834650892291,
+     1198292
+    ],
+    [
+     447834680892828,
+     1179695
+    ],
+    [
+     447834705892965,
+     1054764
+    ],
+    [
+     447834745894390,
+     1887321
+    ],
+    [
+     447834750894497,
+     1477242
+    ],
+    [
+     447834755894661,
+     1005888
+    ],
+    [
+     447834765895022,
+     2624035
+    ],
+    [
+     447834880897134,
+     1476049
+    ],
+    [
+     447834895897313,
+     1224279
+    ],
+    [
+     447834910897668,
+     1477242
+    ],
+    [
+     447834970899464,
+     1527786
+    ],
+    [
+     447835035901003,
+     1060486
+    ],
+    [
+     447835050900863,
+     1087427
+    ],
+    [
+     447835070901361,
+     1562119
+    ],
+    [
+     447835090902771,
+     1767397
+    ],
+    [
+     447835190904254,
+     1314402
+    ],
+    [
+     447835235905474,
+     1710892
+    ],
+    [
+     447835255906003,
+     1649141
+    ],
+    [
+     447835400909192,
+     1065016
+    ],
+    [
+     447835420909163,
+     1808882
+    ],
+    [
+     447835435910474,
+     1088142
+    ],
+    [
+     447835440910301,
+     1780987
+    ],
+    [
+     447835485911366,
+     1096010
+    ],
+    [
+     447835495911256,
+     1029730
+    ],
+    [
+     447835525912426,
+     1093388
+    ],
+    [
+     447835545912979,
+     1061440
+    ],
+    [
+     447835585913519,
+     1881599
+    ],
+    [
+     447835605914149,
+     1767397
+    ],
+    [
+     447835615914098,
+     1236439
+    ],
+    [
+     447835750917474,
+     1885891
+    ],
+    [
+     447835755917453,
+     1064301
+    ],
+    [
+     447835770918145,
+     2436876
+    ],
+    [
+     447835780918220,
+     1069307
+    ],
+    [
+     447835885920634,
+     1436234
+    ],
+    [
+     447835935921905,
+     1592875
+    ],
+    [
+     447835955922193,
+     1748323
+    ],
+    [
+     447836025923057,
+     1051903
+    ],
+    [
+     447836030923527,
+     1043797
+    ],
+    [
+     447836080924628,
+     1018524
+    ],
+    [
+     447836100925377,
+     1731634
+    ],
+    [
+     447836120925720,
+     1819611
+    ],
+    [
+     447836150926551,
+     1034260
+    ],
+    [
+     447836175927346,
+     1524210
+    ],
+    [
+     447836260929135,
+     1696110
+    ],
+    [
+     447836280929362,
+     2170563
+    ],
+    [
+     447836305930408,
+     2334833
+    ],
+    [
+     447836335930801,
+     1072407
+    ],
+    [
+     447836345930273,
+     1204491
+    ],
+    [
+     447836385931992,
+     1349211
+    ],
+    [
+     447836425932423,
+     1850128
+    ],
+    [
+     447836445933109,
+     1637936
+    ],
+    [
+     447836470933204,
+     1204252
+    ],
+    [
+     447836490934257,
+     2105951
+    ],
+    [
+     447836500934760,
+     1215935
+    ],
+    [
+     447836515934221,
+     1031637
+    ],
+    [
+     447836555936180,
+     1021862
+    ],
+    [
+     447836570936015,
+     1086235
+    ],
+    [
+     447836580936175,
+     1049042
+    ],
+    [
+     447836590936707,
+     1865149
+    ],
+    [
+     447836605936752,
+     1111031
+    ],
+    [
+     447836610937198,
+     1951933
+    ],
+    [
+     447836630937357,
+     1766682
+    ],
+    [
+     447836660938013,
+     1044989
+    ],
+    [
+     447836755941010,
+     1685381
+    ],
+    [
+     447836775940982,
+     1933575
+    ],
+    [
+     447836795941324,
+     1715183
+    ],
+    [
+     447836830941687,
+     1011848
+    ],
+    [
+     447836890943049,
+     1382113
+    ],
+    [
+     447836940944588,
+     1893520
+    ],
+    [
+     447836960944908,
+     1669168
+    ],
+    [
+     447836995950384,
+     1008511
+    ],
+    [
+     447837005946225,
+     2008915
+    ],
+    [
+     447837010946633,
+     1067877
+    ],
+    [
+     447837025946115,
+     1034737
+    ],
+    [
+     447837045947171,
+     1001120
+    ],
+    [
+     447837105948436,
+     1575947
+    ],
+    [
+     447837125948716,
+     1716852
+    ],
+    [
+     447837185949934,
+     1019001
+    ],
+    [
+     447837215950559,
+     1109838
+    ],
+    [
+     447837250951791,
+     1323700
+    ],
+    [
+     447837270952453,
+     1507044
+    ],
+    [
+     447837290952566,
+     2189159
+    ],
+    [
+     447837310952729,
+     1440525
+    ],
+    [
+     447837430956266,
+     1567125
+    ],
+    [
+     447837450956426,
+     1776218
+    ],
+    [
+     447837470956845,
+     1814127
+    ],
+    [
+     447837480957537,
+     3923655
+    ],
+    [
+     447837490956956,
+     1482964
+    ],
+    [
+     447837495957796,
+     1063108
+    ],
+    [
+     447837575959569,
+     1498222
+    ],
+    [
+     447837595959629,
+     1539469
+    ],
+    [
+     447837615959652,
+     2092123
+    ],
+    [
+     447837690961840,
+     1187563
+    ],
+    [
+     447837695961989,
+     1926422
+    ],
+    [
+     447837715961981,
+     1082182
+    ],
+    [
+     447837740962822,
+     1935720
+    ],
+    [
+     447837755963445,
+     1110077
+    ],
+    [
+     447837760963014,
+     1749992
+    ],
+    [
+     447837770963890,
+     1009703
+    ],
+    [
+     447837780963903,
+     1891851
+    ],
+    [
+     447837865966358,
+     1345396
+    ],
+    [
+     447837945967233,
+     2526045
+    ],
+    [
+     447837965968451,
+     1860380
+    ],
+    [
+     447837975967907,
+     1021147
+    ],
+    [
+     447838000968523,
+     1447439
+    ],
+    [
+     447838005968318,
+     1148939
+    ],
+    [
+     447838015968876,
+     1067877
+    ],
+    [
+     447838070970474,
+     1255512
+    ],
+    [
+     447838085970747,
+     1184464
+    ],
+    [
+     447838110971446,
+     1553774
+    ],
+    [
+     447838130972085,
+     1839638
+    ],
+    [
+     447838135971665,
+     1044989
+    ],
+    [
+     447838170972735,
+     1839638
+    ],
+    [
+     447838245974554,
+     1104355
+    ],
+    [
+     447838255974602,
+     1134872
+    ],
+    [
+     447838275974580,
+     1532793
+    ],
+    [
+     447838295975816,
+     1968861
+    ],
+    [
+     447838400977861,
+     1110077
+    ],
+    [
+     447838440978940,
+     1215458
+    ],
+    [
+     447838460979526,
+     1974583
+    ],
+    [
+     447838480979725,
+     1727104
+    ],
+    [
+     447838485980103,
+     6743193
+    ],
+    [
+     447838490979277,
+     2588987
+    ],
+    [
+     447838520980835,
+     1301289
+    ],
+    [
+     447838605982595,
+     1046181
+    ],
+    [
+     447838620983095,
+     1460552
+    ],
+    [
+     447838625983022,
+     1730442
+    ],
+    [
+     447838645983624,
+     1943827
+    ],
+    [
+     447838675984649,
+     1037359
+    ],
+    [
+     447838725985166,
+     1026154
+    ],
+    [
+     447838745986330,
+     1221180
+    ],
+    [
+     447838765986095,
+     2032995
+    ],
+    [
+     447838770986797,
+     1100302
+    ],
+    [
+     447838785986758,
+     1749039
+    ],
+    [
+     447838790986328,
+     4750729
+    ],
+    [
+     447838830987549,
+     2054930
+    ],
+    [
+     447838845988523,
+     1156807
+    ],
+    [
+     447838890989408,
+     1450300
+    ],
+    [
+     447838950990524,
+     1561642
+    ],
+    [
+     447838970991378,
+     1663446
+    ],
+    [
+     447839060993137,
+     1018763
+    ],
+    [
+     447839115994133,
+     1482010
+    ],
+    [
+     447839135994867,
+     1675844
+    ],
+    [
+     447839190995956,
+     1838446
+    ],
+    [
+     447839195995313,
+     1002550
+    ],
+    [
+     447839240996975,
+     1068354
+    ],
+    [
+     447839280998383,
+     1535892
+    ],
+    [
+     447839300998294,
+     1472712
+    ],
+    [
+     447839305998539,
+     1045704
+    ],
+    [
+     447839421003668,
+     1186371
+    ],
+    [
+     447839426000807,
+     1137972
+    ],
+    [
+     447839446001676,
+     1426935
+    ],
+    [
+     447839451001970,
+     4751205
+    ],
+    [
+     447839466002091,
+     3081799
+    ],
+    [
+     447839486002651,
+     1911402
+    ],
+    [
+     447839556004626,
+     1505136
+    ],
+    [
+     447839561004729,
+     1096249
+    ],
+    [
+     447839591005607,
+     1649141
+    ],
+    [
+     447839631005808,
+     1784086
+    ],
+    [
+     447839651006638,
+     1738548
+    ],
+    [
+     447839656005912,
+     1044750
+    ],
+    [
+     447839741008174,
+     4061699
+    ],
+    [
+     447839746007942,
+     1011610
+    ],
+    [
+     447839751009168,
+     1310349
+    ],
+    [
+     447839756009031,
+     2040863
+    ],
+    [
+     447839761009031,
+     1187801
+    ],
+    [
+     447839771009022,
+     1582146
+    ],
+    [
+     447839776009555,
+     1107454
+    ],
+    [
+     447839796010102,
+     1894712
+    ],
+    [
+     447839816010219,
+     1938343
+    ],
+    [
+     447839876011605,
+     1254320
+    ],
+    [
+     447839886011141,
+     1034975
+    ],
+    [
+     447839921012861,
+     1004934
+    ],
+    [
+     447839936012766,
+     1625299
+    ],
+    [
+     447839956013736,
+     2031803
+    ],
+    [
+     447840036014801,
+     1108408
+    ],
+    [
+     447840046015383,
+     2660513
+    ],
+    [
+     447840071015915,
+     1973867
+    ],
+    [
+     447840076016472,
+     5651474
+    ],
+    [
+     447840081016850,
+     1360893
+    ],
+    [
+     447840121017574,
+     1789093
+    ],
+    [
+     447840141017287,
+     1767635
+    ],
+    [
+     447840151018171,
+     1126766
+    ],
+    [
+     447840246019691,
+     1105070
+    ],
+    [
+     447840256020387,
+     1118422
+    ],
+    [
+     447840276021070,
+     1588583
+    ],
+    [
+     447840286021398,
+     1659870
+    ],
+    [
+     447840306021660,
+     1491308
+    ],
+    [
+     447840351022848,
+     1827240
+    ],
+    [
+     447840411023604,
+     1286745
+    ],
+    [
+     447840451025182,
+     1735210
+    ],
+    [
+     447840471026004,
+     3224611
+    ],
+    [
+     447840521026125,
+     1002312
+    ],
+    [
+     447840566027623,
+     2025843
+    ],
+    [
+     447840586027914,
+     1268387
+    ],
+    [
+     447840611028698,
+     1079082
+    ],
+    [
+     447840616028857,
+     1629114
+    ],
+    [
+     447840636029341,
+     1640320
+    ],
+    [
+     447840656029635,
+     1882553
+    ],
+    [
+     447840671029704,
+     1409531
+    ],
+    [
+     447840761031637,
+     1284361
+    ],
+    [
+     447840766031469,
+     1019955
+    ],
+    [
+     447840781032290,
+     2044916
+    ],
+    [
+     447840801033149,
+     1608610
+    ],
+    [
+     447840821033125,
+     1676083
+    ],
+    [
+     447840841033853,
+     1037836
+    ],
+    [
+     447840851034183,
+     1338720
+    ],
+    [
+     447840876034930,
+     1146793
+    ],
+    [
+     447840966036283,
+     1617908
+    ],
+    [
+     447840986039421,
+     1704931
+    ],
+    [
+     447841006037808,
+     1073360
+    ],
+    [
+     447841131040206,
+     3324032
+    ],
+    [
+     447841136040595,
+     1051664
+    ],
+    [
+     447841151041250,
+     1751661
+    ],
+    [
+     447841176041543,
+     1364231
+    ],
+    [
+     447841251042766,
+     1188517
+    ],
+    [
+     447841266043493,
+     1011848
+    ],
+    [
+     447841291043598,
+     1486301
+    ],
+    [
+     447841311044564,
+     1935959
+    ],
+    [
+     447841456047875,
+     1815796
+    ],
+    [
+     447841476048611,
+     1705647
+    ],
+    [
+     447841551050070,
+     1161814
+    ],
+    [
+     447841586053631,
+     1150131
+    ],
+    [
+     447841621051794,
+     2531767
+    ],
+    [
+     447841641052451,
+     1663685
+    ],
+    [
+     447841686053260,
+     2133608
+    ],
+    [
+     447841726053680,
+     1035690
+    ],
+    [
+     447841746054913,
+     1058578
+    ],
+    [
+     447841786055211,
+     1646280
+    ],
+    [
+     447841806055993,
+     1499176
+    ],
+    [
+     447841886057990,
+     1741409
+    ],
+    [
+     447841931058492,
+     1699924
+    ],
+    [
+     447841951059248,
+     1183748
+    ],
+    [
+     447841971059379,
+     1485109
+    ],
+    [
+     447841991060320,
+     1659870
+    ],
+    [
+     447842066061709,
+     1759768
+    ],
+    [
+     447842096062436,
+     1227379
+    ],
+    [
+     447842136063681,
+     1743078
+    ],
+    [
+     447842156063704,
+     1540899
+    ],
+    [
+     447842181064630,
+     1427889
+    ],
+    [
+     447842261065938,
+     1430750
+    ],
+    [
+     447842301067689,
+     1591682
+    ],
+    [
+     447842321068238,
+     1708508
+    ],
+    [
+     447842401069429,
+     1046419
+    ],
+    [
+     447842426070105,
+     1173973
+    ],
+    [
+     447842461069899,
+     1594305
+    ],
+    [
+     447842481071186,
+     1805544
+    ],
+    [
+     447842516072596,
+     1805305
+    ],
+    [
+     447842571073451,
+     1178026
+    ],
+    [
+     447842591074275,
+     1344442
+    ],
+    [
+     447842606073322,
+     1035452
+    ],
+    [
+     447842646074330,
+     1565218
+    ],
+    [
+     447842666075512,
+     1659870
+    ],
+    [
+     447842671075378,
+     1201153
+    ],
+    [
+     447842691076514,
+     1439810
+    ],
+    [
+     447842726076642,
+     2642632
+    ],
+    [
+     447842771077827,
+     1082182
+    ],
+    [
+     447842811078744,
+     1778126
+    ],
+    [
+     447842831079516,
+     1656055
+    ],
+    [
+     447842866080276,
+     1051903
+    ],
+    [
+     447842931082273,
+     1719475
+    ],
+    [
+     447842956082495,
+     1164198
+    ],
+    [
+     447842966082245,
+     1262426
+    ],
+    [
+     447842976082814,
+     1774788
+    ],
+    [
+     447842981082279,
+     1119137
+    ],
+    [
+     447843066084678,
+     2893686
+    ],
+    [
+     447843136086171,
+     4814386
+    ]
+   ],
+   "first_t0": 1794990006.6687586,
+   "last_t1": 1794990016.6736944
+  }
+ ],
+ "meta_core": 0.0,
+ "meta_core_m0": 0.0,
+ "meta_core_mid": 0.0,
+ "meta_core_m1": 0.0,
+ "meta_ctl_moved": false,
+ "meta_rereads": 0,
+ "meta_delta": {
+  "version": 0.0,
+  "create_time": 0.0,
+  "last_mount_time": 0.0,
+  "wal_lineage": 0.0,
+  "core": 0.0,
+  "catalog_marks_purged": 0.0,
+  "catalog_purge_sweeps": 0.0,
+  "cabin_optimizer_managed": 0.0,
+  "cabin_optimizer_pages_committed": 0.0,
+  "cabin_optimizer_page_budget": 0.0,
+  "cabin_optimizer_ticks": 0.0,
+  "cabin_optimizer_creates": 0.0,
+  "cabin_optimizer_extends": 0.0,
+  "cabin_optimizer_heals": 0.0,
+  "cabin_optimizer_drops": 0.0,
+  "cabin_optimizer_deferred": 0.0,
+  "cabin_optimizer_failures": 0.0,
+  "waystone_opted": 0.0,
+  "plan_stats_generation": 0.0,
+  "plan_stats_relations": 0.0,
+  "plan_stats_posteriors": 0.0,
+  "plan_stats_part_drops": 0.0,
+  "plan_stats_seeds": 0.0,
+  "plan_stats_seed_pages": 0.0,
+  "plan_stats_publishes": 0.0,
+  "plan_stats_steward_us_max": 0.0,
+  "plan_memo_hits": 0.0,
+  "plan_memo_misses": 0.0,
+  "captured_plans": 0.0,
+  "captured_served": 0.0,
+  "capture_deferred": 0.0,
+  "capture_unkeyed": 0.0,
+  "capture_over_ceiling": 0.0,
+  "capture_declined": 0.0,
+  "captured_pending": 0.0,
+  "captured_persisted": 0.0,
+  "captured_loaded": 0.0,
+  "cabins_unbankable_views": 0.0,
+  "cabins_cap_refusals": 0.0,
+  "map_regions": 0.0,
+  "map_pages_resident": 0.0,
+  "map_coverage_ids": 0.0,
+  "headerless_pages": 0.0,
+  "pages_allocated": 39.0,
+  "pages_freed": 0.0,
+  "pages_reused": 0.0,
+  "reclaim_pending": 0.0,
+  "reclaim_deferred": 0.0,
+  "reclaim_skipped": 0.0,
+  "reclaim_refused": 0.0,
+  "pool_budget": 0.0,
+  "pool_resident": 39.0,
+  "pool_slots": 0.0,
+  "pool_hits": 72034.0,
+  "pool_misses": 39.0,
+  "pool_reclaimed_inline": 0.0,
+  "pool_reclaimed_background": 0.0,
+  "pool_batches_inline": 0.0,
+  "pool_batches_background": 0.0,
+  "pool_batches_partial": 0.0,
+  "pool_batch_steps": 0.0,
+  "pool_batch_steps_background": 0.0,
+  "pool_dirty_queued": 0.0,
+  "pool_dirty_drained": 0.0,
+  "pool_refused": 0.0,
+  "undo_pages_live": 16.0,
+  "undo_pages_recycled": 0.0,
+  "read_only_begins": 0.0,
+  "read_only_write_refusals": 0.0,
+  "wal_durable_lsn": 1995264.0,
+  "wal_syncs": 7976.0,
+  "wal_interval_syncs": 0.0,
+  "wal_sync_failures": 0.0,
+  "wal_first_segment": 0.0,
+  "wal_segments_removed": 0.0,
+  "wal_remove_failures": 0.0,
+  "wal_group_commits": 0.0,
+  "wal_group_batches": 2000.0,
+  "wal_mean_group_batch": 0.0,
+  "wal_group_batch_max": 0.0,
+  "wal_group_batch_min": 0.0,
+  "wal_ring_full": 0.0,
+  "wal_ring_full_refusals": 0.0,
+  "wal_append_lsn": 1995264.0,
+  "wal_rolls": 0.0,
+  "wal_roll_hold_us": 0.0,
+  "wal_roll_hold_max_us": 0.0,
+  "wal_roll_seal_us": 0.0,
+  "wal_roll_flush_us": 0.0,
+  "wal_roll_sync_gate_us": 0.0,
+  "wal_roll_sync_us": 0.0,
+  "wal_roll_sync_tail_us": 0.0,
+  "wal_roll_sync_rest_us": 0.0,
+  "wal_roll_sync_segments": 0.0,
+  "wal_roll_sync_segments_max": 0.0,
+  "wal_roll_create_us": 0.0,
+  "wal_roll_body_wait_us": 0.0,
+  "wal_roll_body_us": 0.0,
+  "wal_roll_header_us": 0.0,
+  "wal_roll_rename_us": 0.0,
+  "wal_roll_dirsync_us": 0.0,
+  "wal_roll_body_hit": 0.0,
+  "wal_roll_body_waited": 0.0,
+  "wal_roll_body_inline": 0.0,
+  "sched_wall_us": 10062169.0,
+  "sched_iterations": 23504.0,
+  "sched_idle_blocks": 11694.0,
+  "sched_parked_idle_blocks": 11694.0,
+  "sched_idle_block_us": 9756063.0,
+  "sched_wakes_sent": 8391.0,
+  "sched_wakes_received": 2145.0,
+  "sched_foreground_polled_us": 205713.0,
+  "sched_foreground_polls": 7212.0,
+  "sched_foreground_consumed_us": 205713.0,
+  "sched_foreground_longest_poll_us": 0.0,
+  "sched_foreground_polls_over_10ms": 0.0,
+  "sched_foreground_polls_over_100ms": 0.0,
+  "sched_maintenance_polled_us": 0.0,
+  "sched_maintenance_polls": 0.0,
+  "sched_maintenance_consumed_us": 0.0,
+  "sched_maintenance_longest_poll_us": 0.0,
+  "sched_maintenance_polls_over_10ms": 0.0,
+  "sched_maintenance_polls_over_100ms": 0.0,
+  "sched_system_polled_us": 5542.0,
+  "sched_system_polls": 23560.0,
+  "sched_system_consumed_us": 5542.0,
+  "sched_system_longest_poll_us": 0.0,
+  "sched_system_polls_over_10ms": 0.0,
+  "sched_system_polls_over_100ms": 0.0,
+  "sched_hold_in_run_over_10ms": 0.0,
+  "sched_hold_in_run_over_100ms": 0.0,
+  "sched_hold_in_run_over_1s": 0.0,
+  "sched_hold_out_run_over_10ms": 0.0,
+  "sched_hold_out_run_over_100ms": 0.0,
+  "sched_hold_out_run_over_1s": 0.0,
+  "sched_longest_unpolled_us": 0.0,
+  "sched_unpolled_over_100ms": 0.0,
+  "checkpoint_runs": 2.0,
+  "checkpoint_start_refused": 0.0,
+  "checkpoint_last_completed": 0.0,
+  "checkpoint_last_wall_us": -3642.0,
+  "checkpoint_last_step_max_us": -12.0,
+  "checkpoint_last_step_page_write_max_us": 15.0,
+  "checkpoint_last_steps": -6.0,
+  "checkpoint_last_pages": -413.0,
+  "checkpoint_last_dirty_at_start": -413.0,
+  "checkpoint_last_gate_parks": 1.0,
+  "checkpoint_last_end_parks": 0.0,
+  "checkpoint_last_start_sum_us": -16.0,
+  "checkpoint_last_start_max_us": -16.0,
+  "checkpoint_last_log_gate_batch_sum_us": 0.0,
+  "checkpoint_last_log_gate_batch_max_us": 0.0,
+  "checkpoint_last_log_gate_run_sum_us": 0.0,
+  "checkpoint_last_log_gate_run_max_us": 0.0,
+  "checkpoint_last_page_write_sum_us": -1287.0,
+  "checkpoint_last_page_write_max_us": -94.0,
+  "checkpoint_last_map_write_sum_us": 0.0,
+  "checkpoint_last_map_write_max_us": 0.0,
+  "checkpoint_last_claim_wait_sum_us": 0.0,
+  "checkpoint_last_claim_wait_max_us": 0.0,
+  "checkpoint_last_data_sync_sum_us": 0.0,
+  "checkpoint_last_data_sync_max_us": 0.0,
+  "checkpoint_last_end_wait_sum_us": 0.0,
+  "checkpoint_last_end_wait_max_us": 0.0,
+  "checkpoint_last_publish_writeback_sum_us": 14.0,
+  "checkpoint_last_publish_writeback_max_us": -3.0,
+  "checkpoint_last_publish_sync_sum_us": 0.0,
+  "checkpoint_last_publish_sync_max_us": 0.0,
+  "batch_sessions": 0.0,
+  "batch_cores": 0.0,
+  "load_c0_active_sessions": -1.0,
+  "load_c0_heads": 2672.0,
+  "load_c0_inside": 0.0,
+  "load_c0_moves_out": 0.0,
+  "load_c0_partition_moves_out": 0.0,
+  "load_c0_waited_frame_table_us": 114.0,
+  "load_c0_waited_window_us": 20.0,
+  "load_c0_waited_lock_partition_us": 22.0,
+  "load_c0_waited_wal_stream_us": 3.0,
+  "load_c0_wal_drain_latch_wait_us": 1.0,
+  "load_c0_visibility_window_lookups": 4555.0,
+  "load_c1_active_sessions": 0.0,
+  "load_c1_heads": 2004.0,
+  "load_c1_inside": 0.0,
+  "load_c1_moves_out": 0.0,
+  "load_c1_partition_moves_out": 0.0,
+  "load_c1_waited_other_us": 0.0,
+  "load_c1_waited_frame_table_us": 146.0,
+  "load_c1_waited_window_us": 2.0,
+  "load_c1_waited_lock_partition_us": 10.0,
+  "load_c1_visibility_window_lookups": 1600.0,
+  "load_c2_active_sessions": -1.0,
+  "load_c2_heads": 2670.0,
+  "load_c2_inside": 0.0,
+  "load_c2_moves_out": 0.0,
+  "load_c2_partition_moves_out": 0.0,
+  "load_c2_waited_frame_table_us": 116.0,
+  "load_c2_waited_window_us": 5.0,
+  "load_c2_waited_lock_partition_us": 11.0,
+  "load_c2_waited_wal_stream_us": 1.0,
+  "load_c2_wal_drain_latch_wait_us": 0.0,
+  "load_c2_visibility_window_lookups": 4032.0,
+  "load_c3_active_sessions": 0.0,
+  "load_c3_heads": 4670.0,
+  "load_c3_inside": 0.0,
+  "load_c3_moves_out": 0.0,
+  "load_c3_partition_moves_out": 0.0,
+  "load_c3_waited_frame_table_us": 135.0,
+  "load_c3_waited_window_us": 110.0,
+  "load_c3_waited_lock_partition_us": 4.0,
+  "load_c3_waited_wal_stream_us": 0.0,
+  "load_c3_wal_drain_latch_wait_us": 0.0,
+  "load_c3_visibility_window_lookups": 5939.0,
+  "recovery_records": 0.0,
+  "recovery_committed": 0.0,
+  "recovery_rolled_back": 0.0,
+  "recovery_compensations": 0.0,
+  "recovery_redo_applied": 0.0,
+  "recovery_pages_healed": 0.0,
+  "recovery_torn_tail": 0.0,
+  "recovery_analysis_us": 0.0,
+  "recovery_redo_us": 0.0,
+  "recovery_high_water_us": 0.0,
+  "recovery_undo_us": 0.0,
+  "recovery_checkpoint_us": 0.0,
+  "recovery_relations_checked": 0.0,
+  "recovery_relations_missing_pages": 0.0,
+  "catalog_recovered": 0.0,
+  "catalog_marks_finalized": 0.0,
+  "ddl_durable": 0.0,
+  "recovery_assertions_enforcing": 0.0,
+  "recovery_assertions_unrecovered": 0.0,
+  "backup_log_bytes_copied": 0.0,
+  "backup_fence_writes_waited": 0.0,
+  "backup_pages_verified": 0.0,
+  "backups_completed": 0.0,
+  "backups_failed": 0.0,
+  "lock_waits_recorded": 0.0,
+  "lock_waits_overwritten": 0.0,
+  "lock_waits_dropped": 0.0,
+  "statement_stats_dropped": 0.0,
+  "relation_stats_dropped": 0.0,
+  "checkpoints_recorded": 8.0,
+  "checkpoints_overwritten": 0.0,
+  "checkpoints_dropped": 0.0,
+  "contention_other_waits": 0.0,
+  "contention_other_wait_us": 0.0,
+  "contention_frame_table_waits": 492.0,
+  "contention_frame_table_wait_us": 511.0,
+  "contention_free_map_waits": 0.0,
+  "contention_free_map_wait_us": 0.0,
+  "contention_free_map_flush_waits": 0.0,
+  "contention_free_map_flush_wait_us": 0.0,
+  "contention_window_waits": 30.0,
+  "contention_window_wait_us": 137.0,
+  "contention_lock_partition_waits": 47.0,
+  "contention_lock_partition_wait_us": 47.0,
+  "contention_lock_wait_for_waits": 0.0,
+  "contention_lock_wait_for_wait_us": 0.0,
+  "contention_wal_stream_waits": 8.0,
+  "contention_wal_stream_wait_us": 4.0,
+  "contention_wal_sync_gate_waits": 0.0,
+  "contention_wal_sync_gate_wait_us": 0.0,
+  "contention_assertion_dir_waits": 0.0,
+  "contention_assertion_dir_wait_us": 0.0,
+  "contention_optimizer_waits": 0.0,
+  "contention_optimizer_wait_us": 0.0,
+  "contention_superblock_waits": 0.0,
+  "contention_superblock_wait_us": 0.0,
+  "contention_cabin_partition_waits": 0.0,
+  "contention_cabin_partition_wait_us": 0.0,
+  "contention_cabin_stats_waits": 0.0,
+  "contention_cabin_stats_wait_us": 0.0,
+  "contention_handoff_waits": 0.0,
+  "contention_handoff_wait_us": 0.0,
+  "contention_stats_ring_waits": 0.0,
+  "contention_stats_ring_wait_us": 0.0,
+  "contention_page_latch_waits": 2.0,
+  "contention_page_latch_spin_turns": 172.0,
+  "contention_syncs_inline": 0.0,
+  "contention_syncs_writer": 7976.0,
+  "contention_drain_passes_pending": 27706.0,
+  "contention_ceiling_waits": 2.0,
+  "contention_ceiling_wait_us": 607.0,
+  "contention_carves": 3.0,
+  "contention_checkpoint_runs": 8.0,
+  "contention_refused_btree_descend": 0.0,
+  "contention_refused_btree_parent": 0.0,
+  "contention_refused_btree_secure": 0.0,
+  "contention_refused_btree_lookup": 0.0,
+  "contention_refused_index_descend": 0.0,
+  "contention_refused_index_parent": 0.0,
+  "contention_refused_index_secure": 0.0,
+  "contention_structural_reruns": 0.0,
+  "contention_catalog_memo_drops": 0.0,
+  "contention_word_moves_root": 0.0,
+  "contention_word_moves_cabin": 0.0,
+  "contention_word_moves_schema": 0.0,
+  "contention_word_moves_resolve": 0.0,
+  "contention_inflight_asks": 0.0,
+  "contention_inflight_misses": 0.0,
+  "contention_inflight_miss_ids_read": 0.0,
+  "contention_checkpoint_pages_written": 596.0,
+  "contention_data_syncs": 27.0,
+  "contention_fence_walks": 0.0,
+  "contention_wal_drain_latch_wait_us": 1.0,
+  "contention_wal_roll_blocked_waits": 0.0,
+  "contention_wal_roll_blocked_wait_us": 0.0,
+  "contention_visibility_window_lookups": 16126.0
+ },
+ "meta_gauges_mid": {
+  "load_c0_busy_ppm": 29530.0,
+  "load_c0_foreground_ppm": 19855.0,
+  "load_c0_queued_foreground": 1.0,
+  "load_c0_sessions": 4.0,
+  "load_c1_busy_ppm": 19330.0,
+  "load_c1_foreground_ppm": 13564.0,
+  "load_c1_queued_foreground": 0.0,
+  "load_c1_sessions": 4.0,
+  "load_c2_busy_ppm": 28500.0,
+  "load_c2_foreground_ppm": 19757.0,
+  "load_c2_queued_foreground": 0.0,
+  "load_c2_sessions": 3.0,
+  "load_c3_busy_ppm": 47179.0,
+  "load_c3_foreground_ppm": 33122.0,
+  "load_c3_queued_foreground": 0.0,
+  "load_c3_sessions": 4.0
+ },
+ "meta_longest": {
+  "sched_hold_in_run_longest_us": 1569.0,
+  "sched_hold_out_run_longest_us": 2343.0,
+  "contention_carve_longest_us": 1478.0,
+  "contention_checkpoint_longest_us": 11505.0
+ },
+ "meta_m0": {
+  "version": 37.0,
+  "create_time": 1794989997.0,
+  "last_mount_time": 1794989997.0,
+  "wal_lineage": 1.5079542780178475e+19,
+  "core": 0.0,
+  "catalog_marks_purged": 0.0,
+  "catalog_purge_sweeps": 0.0,
+  "cabin_optimizer_managed": 0.0,
+  "cabin_optimizer_pages_committed": 0.0,
+  "cabin_optimizer_page_budget": 1024.0,
+  "cabin_optimizer_ticks": 0.0,
+  "cabin_optimizer_creates": 0.0,
+  "cabin_optimizer_extends": 0.0,
+  "cabin_optimizer_heals": 0.0,
+  "cabin_optimizer_drops": 0.0,
+  "cabin_optimizer_deferred": 0.0,
+  "cabin_optimizer_failures": 0.0,
+  "waystone_opted": 0.0,
+  "plan_stats_generation": 0.0,
+  "plan_stats_relations": 0.0,
+  "plan_stats_posteriors": 0.0,
+  "plan_stats_part_drops": 0.0,
+  "plan_stats_seeds": 0.0,
+  "plan_stats_seed_pages": 0.0,
+  "plan_stats_publishes": 0.0,
+  "plan_stats_steward_us_max": 39.0,
+  "plan_memo_hits": 0.0,
+  "plan_memo_misses": 0.0,
+  "captured_plans": 0.0,
+  "captured_served": 0.0,
+  "capture_deferred": 0.0,
+  "capture_unkeyed": 0.0,
+  "capture_over_ceiling": 0.0,
+  "capture_declined": 0.0,
+  "captured_pending": 0.0,
+  "captured_persisted": 0.0,
+  "captured_loaded": 0.0,
+  "cabins_unbankable_views": 0.0,
+  "cabins_cap_refusals": 0.0,
+  "map_regions": 1.0,
+  "map_pages_resident": 1.0,
+  "map_coverage_ids": 65280.0,
+  "headerless_pages": 0.0,
+  "pages_allocated": 515.0,
+  "pages_freed": 0.0,
+  "pages_reused": 0.0,
+  "reclaim_pending": 0.0,
+  "reclaim_deferred": 0.0,
+  "reclaim_skipped": 0.0,
+  "reclaim_refused": 0.0,
+  "pool_budget": 65536.0,
+  "pool_resident": 514.0,
+  "pool_slots": 1024.0,
+  "pool_hits": 115212.0,
+  "pool_misses": 514.0,
+  "pool_reclaimed_inline": 0.0,
+  "pool_reclaimed_background": 0.0,
+  "pool_batches_inline": 0.0,
+  "pool_batches_background": 0.0,
+  "pool_batches_partial": 0.0,
+  "pool_batch_steps": 0.0,
+  "pool_batch_steps_background": 0.0,
+  "pool_dirty_queued": 0.0,
+  "pool_dirty_drained": 0.0,
+  "pool_refused": 0.0,
+  "undo_pages_live": 113.0,
+  "undo_pages_recycled": 0.0,
+  "read_only_begins": 0.0,
+  "read_only_write_refusals": 0.0,
+  "wal_durable_lsn": 17623792.0,
+  "wal_syncs": 1761.0,
+  "wal_interval_syncs": 3.0,
+  "wal_sync_failures": 0.0,
+  "wal_first_segment": 0.0,
+  "wal_segments_removed": 0.0,
+  "wal_remove_failures": 0.0,
+  "wal_group_commits": 0.0,
+  "wal_group_batches": 551.0,
+  "wal_mean_group_batch": 1.0,
+  "wal_group_batch_max": 1.0,
+  "wal_group_batch_min": 1.0,
+  "wal_ring_full": 0.0,
+  "wal_ring_full_refusals": 0.0,
+  "wal_append_lsn": 17623792.0,
+  "wal_rolls": 0.0,
+  "wal_roll_hold_us": 0.0,
+  "wal_roll_hold_max_us": 0.0,
+  "wal_roll_seal_us": 0.0,
+  "wal_roll_flush_us": 0.0,
+  "wal_roll_sync_gate_us": 0.0,
+  "wal_roll_sync_us": 0.0,
+  "wal_roll_sync_tail_us": 0.0,
+  "wal_roll_sync_rest_us": 0.0,
+  "wal_roll_sync_segments": 0.0,
+  "wal_roll_sync_segments_max": 0.0,
+  "wal_roll_create_us": 0.0,
+  "wal_roll_body_wait_us": 0.0,
+  "wal_roll_body_us": 0.0,
+  "wal_roll_header_us": 0.0,
+  "wal_roll_rename_us": 0.0,
+  "wal_roll_dirsync_us": 0.0,
+  "wal_roll_body_hit": 0.0,
+  "wal_roll_body_waited": 0.0,
+  "wal_roll_body_inline": 0.0,
+  "sched_wall_us": 9462337.0,
+  "sched_iterations": 19289.0,
+  "sched_idle_blocks": 9300.0,
+  "sched_parked_idle_blocks": 9300.0,
+  "sched_idle_block_us": 9251514.0,
+  "sched_wakes_sent": 1844.0,
+  "sched_wakes_received": 583.0,
+  "sched_foreground_polled_us": 135657.0,
+  "sched_foreground_polls": 2301.0,
+  "sched_foreground_consumed_us": 135657.0,
+  "sched_foreground_longest_poll_us": 2308.0,
+  "sched_foreground_polls_over_10ms": 0.0,
+  "sched_foreground_polls_over_100ms": 0.0,
+  "sched_maintenance_polled_us": 0.0,
+  "sched_maintenance_polls": 0.0,
+  "sched_maintenance_consumed_us": 0.0,
+  "sched_maintenance_longest_poll_us": 0.0,
+  "sched_maintenance_polls_over_10ms": 0.0,
+  "sched_maintenance_polls_over_100ms": 0.0,
+  "sched_system_polled_us": 6254.0,
+  "sched_system_polls": 19316.0,
+  "sched_system_consumed_us": 6254.0,
+  "sched_system_longest_poll_us": 352.0,
+  "sched_system_polls_over_10ms": 0.0,
+  "sched_system_polls_over_100ms": 0.0,
+  "sched_hold_in_run_longest_us": 1569.0,
+  "sched_hold_in_run_over_10ms": 0.0,
+  "sched_hold_in_run_over_100ms": 0.0,
+  "sched_hold_in_run_over_1s": 0.0,
+  "sched_hold_out_run_longest_us": 2343.0,
+  "sched_hold_out_run_over_10ms": 0.0,
+  "sched_hold_out_run_over_100ms": 0.0,
+  "sched_hold_out_run_over_1s": 0.0,
+  "sched_longest_unpolled_us": 1502.0,
+  "sched_unpolled_over_100ms": 0.0,
+  "checkpoint_runs": 1.0,
+  "checkpoint_start_refused": 0.0,
+  "checkpoint_last_completed": 1.0,
+  "checkpoint_last_wall_us": 11505.0,
+  "checkpoint_last_step_max_us": 349.0,
+  "checkpoint_last_step_page_write_max_us": 207.0,
+  "checkpoint_last_steps": 8.0,
+  "checkpoint_last_pages": 483.0,
+  "checkpoint_last_dirty_at_start": 483.0,
+  "checkpoint_last_gate_parks": 1.0,
+  "checkpoint_last_end_parks": 1.0,
+  "checkpoint_last_start_sum_us": 70.0,
+  "checkpoint_last_start_max_us": 70.0,
+  "checkpoint_last_log_gate_batch_sum_us": 0.0,
+  "checkpoint_last_log_gate_batch_max_us": 0.0,
+  "checkpoint_last_log_gate_run_sum_us": 0.0,
+  "checkpoint_last_log_gate_run_max_us": 0.0,
+  "checkpoint_last_page_write_sum_us": 1540.0,
+  "checkpoint_last_page_write_max_us": 125.0,
+  "checkpoint_last_map_write_sum_us": 0.0,
+  "checkpoint_last_map_write_max_us": 0.0,
+  "checkpoint_last_claim_wait_sum_us": 0.0,
+  "checkpoint_last_claim_wait_max_us": 0.0,
+  "checkpoint_last_data_sync_sum_us": 0.0,
+  "checkpoint_last_data_sync_max_us": 0.0,
+  "checkpoint_last_end_wait_sum_us": 0.0,
+  "checkpoint_last_end_wait_max_us": 0.0,
+  "checkpoint_last_publish_writeback_sum_us": 32.0,
+  "checkpoint_last_publish_writeback_max_us": 22.0,
+  "checkpoint_last_publish_sync_sum_us": 0.0,
+  "checkpoint_last_publish_sync_max_us": 0.0,
+  "batch_sessions": 0.0,
+  "batch_cores": 0.0,
+  "load_c0_busy_ppm": 35874.0,
+  "load_c0_foreground_ppm": 26482.0,
+  "load_c0_queued_foreground": 0.0,
+  "load_c0_sessions": 4.0,
+  "load_c0_active_sessions": 3.0,
+  "load_c0_heads": 693.0,
+  "load_c0_inside": 0.0,
+  "load_c0_moves_out": 0.0,
+  "load_c0_partition_moves_out": 0.0,
+  "load_c0_waited_frame_table_us": 97.0,
+  "load_c0_waited_window_us": 0.0,
+  "load_c0_waited_lock_partition_us": 31.0,
+  "load_c0_waited_wal_stream_us": 0.0,
+  "load_c0_wal_drain_latch_wait_us": 0.0,
+  "load_c0_visibility_window_lookups": 941.0,
+  "load_c1_busy_ppm": 23682.0,
+  "load_c1_foreground_ppm": 16793.0,
+  "load_c1_queued_foreground": 0.0,
+  "load_c1_sessions": 4.0,
+  "load_c1_active_sessions": 3.0,
+  "load_c1_heads": 411.0,
+  "load_c1_inside": 0.0,
+  "load_c1_moves_out": 0.0,
+  "load_c1_partition_moves_out": 0.0,
+  "load_c1_waited_other_us": 1.0,
+  "load_c1_waited_frame_table_us": 182.0,
+  "load_c1_waited_window_us": 15.0,
+  "load_c1_waited_lock_partition_us": 35.0,
+  "load_c1_visibility_window_lookups": 402.0,
+  "load_c2_busy_ppm": 27866.0,
+  "load_c2_foreground_ppm": 19150.0,
+  "load_c2_queued_foreground": 0.0,
+  "load_c2_sessions": 3.0,
+  "load_c2_active_sessions": 2.0,
+  "load_c2_heads": 544.0,
+  "load_c2_inside": 0.0,
+  "load_c2_moves_out": 0.0,
+  "load_c2_partition_moves_out": 0.0,
+  "load_c2_waited_frame_table_us": 205.0,
+  "load_c2_waited_window_us": 3.0,
+  "load_c2_waited_lock_partition_us": 6.0,
+  "load_c2_waited_wal_stream_us": 0.0,
+  "load_c2_wal_drain_latch_wait_us": 0.0,
+  "load_c2_visibility_window_lookups": 935.0,
+  "load_c3_busy_ppm": 45821.0,
+  "load_c3_foreground_ppm": 32488.0,
+  "load_c3_queued_foreground": 0.0,
+  "load_c3_sessions": 4.0,
+  "load_c3_active_sessions": 3.0,
+  "load_c3_heads": 944.0,
+  "load_c3_inside": 0.0,
+  "load_c3_moves_out": 0.0,
+  "load_c3_partition_moves_out": 0.0,
+  "load_c3_waited_frame_table_us": 163.0,
+  "load_c3_waited_window_us": 16.0,
+  "load_c3_waited_lock_partition_us": 13.0,
+  "load_c3_waited_wal_stream_us": 0.0,
+  "load_c3_wal_drain_latch_wait_us": 0.0,
+  "load_c3_visibility_window_lookups": 1738.0,
+  "recovery_records": 0.0,
+  "recovery_committed": 0.0,
+  "recovery_rolled_back": 0.0,
+  "recovery_compensations": 0.0,
+  "recovery_redo_applied": 0.0,
+  "recovery_pages_healed": 0.0,
+  "recovery_torn_tail": 0.0,
+  "recovery_analysis_us": 42280.0,
+  "recovery_redo_us": 7.0,
+  "recovery_high_water_us": 5.0,
+  "recovery_undo_us": 0.0,
+  "recovery_checkpoint_us": 6057.0,
+  "recovery_relations_checked": 0.0,
+  "recovery_relations_missing_pages": 0.0,
+  "catalog_recovered": 1.0,
+  "catalog_marks_finalized": 0.0,
+  "ddl_durable": 1.0,
+  "recovery_assertions_enforcing": 0.0,
+  "recovery_assertions_unrecovered": 0.0,
+  "backup_log_bytes_copied": 0.0,
+  "backup_fence_writes_waited": 0.0,
+  "backup_pages_verified": 0.0,
+  "backups_completed": 0.0,
+  "backups_failed": 0.0,
+  "lock_waits_recorded": 0.0,
+  "lock_waits_overwritten": 0.0,
+  "lock_waits_dropped": 0.0,
+  "statement_stats_dropped": 0.0,
+  "relation_stats_dropped": 0.0,
+  "checkpoints_recorded": 4.0,
+  "checkpoints_overwritten": 0.0,
+  "checkpoints_dropped": 0.0,
+  "contention_other_waits": 1.0,
+  "contention_other_wait_us": 1.0,
+  "contention_frame_table_waits": 891.0,
+  "contention_frame_table_wait_us": 648.0,
+  "contention_free_map_waits": 0.0,
+  "contention_free_map_wait_us": 0.0,
+  "contention_free_map_flush_waits": 0.0,
+  "contention_free_map_flush_wait_us": 0.0,
+  "contention_window_waits": 123.0,
+  "contention_window_wait_us": 36.0,
+  "contention_lock_partition_waits": 134.0,
+  "contention_lock_partition_wait_us": 86.0,
+  "contention_lock_wait_for_waits": 0.0,
+  "contention_lock_wait_for_wait_us": 0.0,
+  "contention_wal_stream_waits": 3.0,
+  "contention_wal_stream_wait_us": 0.0,
+  "contention_wal_sync_gate_waits": 0.0,
+  "contention_wal_sync_gate_wait_us": 0.0,
+  "contention_assertion_dir_waits": 0.0,
+  "contention_assertion_dir_wait_us": 0.0,
+  "contention_optimizer_waits": 0.0,
+  "contention_optimizer_wait_us": 0.0,
+  "contention_superblock_waits": 0.0,
+  "contention_superblock_wait_us": 0.0,
+  "contention_cabin_partition_waits": 0.0,
+  "contention_cabin_partition_wait_us": 0.0,
+  "contention_cabin_stats_waits": 0.0,
+  "contention_cabin_stats_wait_us": 0.0,
+  "contention_handoff_waits": 0.0,
+  "contention_handoff_wait_us": 0.0,
+  "contention_stats_ring_waits": 0.0,
+  "contention_stats_ring_wait_us": 0.0,
+  "contention_page_latch_waits": 6.0,
+  "contention_page_latch_spin_turns": 497.0,
+  "contention_syncs_inline": 5.0,
+  "contention_syncs_writer": 1756.0,
+  "contention_drain_passes_pending": 7044.0,
+  "contention_ceiling_waits": 0.0,
+  "contention_ceiling_wait_us": 0.0,
+  "contention_carves": 4.0,
+  "contention_checkpoint_runs": 4.0,
+  "contention_refused_btree_descend": 0.0,
+  "contention_refused_btree_parent": 0.0,
+  "contention_refused_btree_secure": 0.0,
+  "contention_refused_btree_lookup": 0.0,
+  "contention_refused_index_descend": 0.0,
+  "contention_refused_index_parent": 0.0,
+  "contention_refused_index_secure": 0.0,
+  "contention_structural_reruns": 0.0,
+  "contention_catalog_memo_drops": 6.0,
+  "contention_word_moves_root": 2.0,
+  "contention_word_moves_cabin": 0.0,
+  "contention_word_moves_schema": 15.0,
+  "contention_word_moves_resolve": 6.0,
+  "contention_inflight_asks": 0.0,
+  "contention_inflight_misses": 0.0,
+  "contention_inflight_miss_ids_read": 0.0,
+  "contention_checkpoint_pages_written": 593.0,
+  "contention_data_syncs": 25.0,
+  "contention_fence_walks": 0.0,
+  "contention_wal_drain_latch_wait_us": 0.0,
+  "contention_wal_roll_blocked_waits": 0.0,
+  "contention_wal_roll_blocked_wait_us": 0.0,
+  "contention_visibility_window_lookups": 4016.0,
+  "contention_carve_longest_us": 1445.0,
+  "contention_checkpoint_longest_us": 11505.0
+ },
+ "meta_m1": {
+  "version": 37.0,
+  "create_time": 1794989997.0,
+  "last_mount_time": 1794989997.0,
+  "wal_lineage": 1.5079542780178475e+19,
+  "core": 0.0,
+  "catalog_marks_purged": 0.0,
+  "catalog_purge_sweeps": 0.0,
+  "cabin_optimizer_managed": 0.0,
+  "cabin_optimizer_pages_committed": 0.0,
+  "cabin_optimizer_page_budget": 1024.0,
+  "cabin_optimizer_ticks": 0.0,
+  "cabin_optimizer_creates": 0.0,
+  "cabin_optimizer_extends": 0.0,
+  "cabin_optimizer_heals": 0.0,
+  "cabin_optimizer_drops": 0.0,
+  "cabin_optimizer_deferred": 0.0,
+  "cabin_optimizer_failures": 0.0,
+  "waystone_opted": 0.0,
+  "plan_stats_generation": 0.0,
+  "plan_stats_relations": 0.0,
+  "plan_stats_posteriors": 0.0,
+  "plan_stats_part_drops": 0.0,
+  "plan_stats_seeds": 0.0,
+  "plan_stats_seed_pages": 0.0,
+  "plan_stats_publishes": 0.0,
+  "plan_stats_steward_us_max": 39.0,
+  "plan_memo_hits": 0.0,
+  "plan_memo_misses": 0.0,
+  "captured_plans": 0.0,
+  "captured_served": 0.0,
+  "capture_deferred": 0.0,
+  "capture_unkeyed": 0.0,
+  "capture_over_ceiling": 0.0,
+  "capture_declined": 0.0,
+  "captured_pending": 0.0,
+  "captured_persisted": 0.0,
+  "captured_loaded": 0.0,
+  "cabins_unbankable_views": 0.0,
+  "cabins_cap_refusals": 0.0,
+  "map_regions": 1.0,
+  "map_pages_resident": 1.0,
+  "map_coverage_ids": 65280.0,
+  "headerless_pages": 0.0,
+  "pages_allocated": 554.0,
+  "pages_freed": 0.0,
+  "pages_reused": 0.0,
+  "reclaim_pending": 0.0,
+  "reclaim_deferred": 0.0,
+  "reclaim_skipped": 0.0,
+  "reclaim_refused": 0.0,
+  "pool_budget": 65536.0,
+  "pool_resident": 553.0,
+  "pool_slots": 1024.0,
+  "pool_hits": 187246.0,
+  "pool_misses": 553.0,
+  "pool_reclaimed_inline": 0.0,
+  "pool_reclaimed_background": 0.0,
+  "pool_batches_inline": 0.0,
+  "pool_batches_background": 0.0,
+  "pool_batches_partial": 0.0,
+  "pool_batch_steps": 0.0,
+  "pool_batch_steps_background": 0.0,
+  "pool_dirty_queued": 0.0,
+  "pool_dirty_drained": 0.0,
+  "pool_refused": 0.0,
+  "undo_pages_live": 129.0,
+  "undo_pages_recycled": 0.0,
+  "read_only_begins": 0.0,
+  "read_only_write_refusals": 0.0,
+  "wal_durable_lsn": 19619056.0,
+  "wal_syncs": 9737.0,
+  "wal_interval_syncs": 3.0,
+  "wal_sync_failures": 0.0,
+  "wal_first_segment": 0.0,
+  "wal_segments_removed": 0.0,
+  "wal_remove_failures": 0.0,
+  "wal_group_commits": 0.0,
+  "wal_group_batches": 2551.0,
+  "wal_mean_group_batch": 1.0,
+  "wal_group_batch_max": 1.0,
+  "wal_group_batch_min": 1.0,
+  "wal_ring_full": 0.0,
+  "wal_ring_full_refusals": 0.0,
+  "wal_append_lsn": 19619056.0,
+  "wal_rolls": 0.0,
+  "wal_roll_hold_us": 0.0,
+  "wal_roll_hold_max_us": 0.0,
+  "wal_roll_seal_us": 0.0,
+  "wal_roll_flush_us": 0.0,
+  "wal_roll_sync_gate_us": 0.0,
+  "wal_roll_sync_us": 0.0,
+  "wal_roll_sync_tail_us": 0.0,
+  "wal_roll_sync_rest_us": 0.0,
+  "wal_roll_sync_segments": 0.0,
+  "wal_roll_sync_segments_max": 0.0,
+  "wal_roll_create_us": 0.0,
+  "wal_roll_body_wait_us": 0.0,
+  "wal_roll_body_us": 0.0,
+  "wal_roll_header_us": 0.0,
+  "wal_roll_rename_us": 0.0,
+  "wal_roll_dirsync_us": 0.0,
+  "wal_roll_body_hit": 0.0,
+  "wal_roll_body_waited": 0.0,
+  "wal_roll_body_inline": 0.0,
+  "sched_wall_us": 19524506.0,
+  "sched_iterations": 42793.0,
+  "sched_idle_blocks": 20994.0,
+  "sched_parked_idle_blocks": 20994.0,
+  "sched_idle_block_us": 19007577.0,
+  "sched_wakes_sent": 10235.0,
+  "sched_wakes_received": 2728.0,
+  "sched_foreground_polled_us": 341370.0,
+  "sched_foreground_polls": 9513.0,
+  "sched_foreground_consumed_us": 341370.0,
+  "sched_foreground_longest_poll_us": 2308.0,
+  "sched_foreground_polls_over_10ms": 0.0,
+  "sched_foreground_polls_over_100ms": 0.0,
+  "sched_maintenance_polled_us": 0.0,
+  "sched_maintenance_polls": 0.0,
+  "sched_maintenance_consumed_us": 0.0,
+  "sched_maintenance_longest_poll_us": 0.0,
+  "sched_maintenance_polls_over_10ms": 0.0,
+  "sched_maintenance_polls_over_100ms": 0.0,
+  "sched_system_polled_us": 11796.0,
+  "sched_system_polls": 42876.0,
+  "sched_system_consumed_us": 11796.0,
+  "sched_system_longest_poll_us": 352.0,
+  "sched_system_polls_over_10ms": 0.0,
+  "sched_system_polls_over_100ms": 0.0,
+  "sched_hold_in_run_longest_us": 1569.0,
+  "sched_hold_in_run_over_10ms": 0.0,
+  "sched_hold_in_run_over_100ms": 0.0,
+  "sched_hold_in_run_over_1s": 0.0,
+  "sched_hold_out_run_longest_us": 2343.0,
+  "sched_hold_out_run_over_10ms": 0.0,
+  "sched_hold_out_run_over_100ms": 0.0,
+  "sched_hold_out_run_over_1s": 0.0,
+  "sched_longest_unpolled_us": 1502.0,
+  "sched_unpolled_over_100ms": 0.0,
+  "checkpoint_runs": 3.0,
+  "checkpoint_start_refused": 0.0,
+  "checkpoint_last_completed": 1.0,
+  "checkpoint_last_wall_us": 7863.0,
+  "checkpoint_last_step_max_us": 337.0,
+  "checkpoint_last_step_page_write_max_us": 222.0,
+  "checkpoint_last_steps": 2.0,
+  "checkpoint_last_pages": 70.0,
+  "checkpoint_last_dirty_at_start": 70.0,
+  "checkpoint_last_gate_parks": 2.0,
+  "checkpoint_last_end_parks": 1.0,
+  "checkpoint_last_start_sum_us": 54.0,
+  "checkpoint_last_start_max_us": 54.0,
+  "checkpoint_last_log_gate_batch_sum_us": 0.0,
+  "checkpoint_last_log_gate_batch_max_us": 0.0,
+  "checkpoint_last_log_gate_run_sum_us": 0.0,
+  "checkpoint_last_log_gate_run_max_us": 0.0,
+  "checkpoint_last_page_write_sum_us": 253.0,
+  "checkpoint_last_page_write_max_us": 31.0,
+  "checkpoint_last_map_write_sum_us": 0.0,
+  "checkpoint_last_map_write_max_us": 0.0,
+  "checkpoint_last_claim_wait_sum_us": 0.0,
+  "checkpoint_last_claim_wait_max_us": 0.0,
+  "checkpoint_last_data_sync_sum_us": 0.0,
+  "checkpoint_last_data_sync_max_us": 0.0,
+  "checkpoint_last_end_wait_sum_us": 0.0,
+  "checkpoint_last_end_wait_max_us": 0.0,
+  "checkpoint_last_publish_writeback_sum_us": 46.0,
+  "checkpoint_last_publish_writeback_max_us": 19.0,
+  "checkpoint_last_publish_sync_sum_us": 0.0,
+  "checkpoint_last_publish_sync_max_us": 0.0,
+  "batch_sessions": 0.0,
+  "batch_cores": 0.0,
+  "load_c0_busy_ppm": 18110.0,
+  "load_c0_foreground_ppm": 12922.0,
+  "load_c0_queued_foreground": 0.0,
+  "load_c0_sessions": 2.0,
+  "load_c0_active_sessions": 2.0,
+  "load_c0_heads": 3365.0,
+  "load_c0_inside": 0.0,
+  "load_c0_moves_out": 0.0,
+  "load_c0_partition_moves_out": 0.0,
+  "load_c0_waited_frame_table_us": 211.0,
+  "load_c0_waited_window_us": 20.0,
+  "load_c0_waited_lock_partition_us": 53.0,
+  "load_c0_waited_wal_stream_us": 3.0,
+  "load_c0_wal_drain_latch_wait_us": 1.0,
+  "load_c0_visibility_window_lookups": 5496.0,
+  "load_c1_busy_ppm": 32169.0,
+  "load_c1_foreground_ppm": 24586.0,
+  "load_c1_queued_foreground": 0.0,
+  "load_c1_sessions": 1.0,
+  "load_c1_active_sessions": 3.0,
+  "load_c1_heads": 2415.0,
+  "load_c1_inside": 0.0,
+  "load_c1_moves_out": 0.0,
+  "load_c1_partition_moves_out": 0.0,
+  "load_c1_waited_other_us": 1.0,
+  "load_c1_waited_frame_table_us": 328.0,
+  "load_c1_waited_window_us": 17.0,
+  "load_c1_waited_lock_partition_us": 45.0,
+  "load_c1_visibility_window_lookups": 2002.0,
+  "load_c2_busy_ppm": 12510.0,
+  "load_c2_foreground_ppm": 6196.0,
+  "load_c2_queued_foreground": 0.0,
+  "load_c2_sessions": 1.0,
+  "load_c2_active_sessions": 1.0,
+  "load_c2_heads": 3214.0,
+  "load_c2_inside": 0.0,
+  "load_c2_moves_out": 0.0,
+  "load_c2_partition_moves_out": 0.0,
+  "load_c2_waited_frame_table_us": 321.0,
+  "load_c2_waited_window_us": 8.0,
+  "load_c2_waited_lock_partition_us": 17.0,
+  "load_c2_waited_wal_stream_us": 1.0,
+  "load_c2_wal_drain_latch_wait_us": 0.0,
+  "load_c2_visibility_window_lookups": 4967.0,
+  "load_c3_busy_ppm": 29080.0,
+  "load_c3_foreground_ppm": 19843.0,
+  "load_c3_queued_foreground": 0.0,
+  "load_c3_sessions": 1.0,
+  "load_c3_active_sessions": 3.0,
+  "load_c3_heads": 5614.0,
+  "load_c3_inside": 0.0,
+  "load_c3_moves_out": 0.0,
+  "load_c3_partition_moves_out": 0.0,
+  "load_c3_waited_frame_table_us": 298.0,
+  "load_c3_waited_window_us": 126.0,
+  "load_c3_waited_lock_partition_us": 17.0,
+  "load_c3_waited_wal_stream_us": 0.0,
+  "load_c3_wal_drain_latch_wait_us": 0.0,
+  "load_c3_visibility_window_lookups": 7677.0,
+  "recovery_records": 0.0,
+  "recovery_committed": 0.0,
+  "recovery_rolled_back": 0.0,
+  "recovery_compensations": 0.0,
+  "recovery_redo_applied": 0.0,
+  "recovery_pages_healed": 0.0,
+  "recovery_torn_tail": 0.0,
+  "recovery_analysis_us": 42280.0,
+  "recovery_redo_us": 7.0,
+  "recovery_high_water_us": 5.0,
+  "recovery_undo_us": 0.0,
+  "recovery_checkpoint_us": 6057.0,
+  "recovery_relations_checked": 0.0,
+  "recovery_relations_missing_pages": 0.0,
+  "catalog_recovered": 1.0,
+  "catalog_marks_finalized": 0.0,
+  "ddl_durable": 1.0,
+  "recovery_assertions_enforcing": 0.0,
+  "recovery_assertions_unrecovered": 0.0,
+  "backup_log_bytes_copied": 0.0,
+  "backup_fence_writes_waited": 0.0,
+  "backup_pages_verified": 0.0,
+  "backups_completed": 0.0,
+  "backups_failed": 0.0,
+  "lock_waits_recorded": 0.0,
+  "lock_waits_overwritten": 0.0,
+  "lock_waits_dropped": 0.0,
+  "statement_stats_dropped": 0.0,
+  "relation_stats_dropped": 0.0,
+  "checkpoints_recorded": 12.0,
+  "checkpoints_overwritten": 0.0,
+  "checkpoints_dropped": 0.0,
+  "contention_other_waits": 1.0,
+  "contention_other_wait_us": 1.0,
+  "contention_frame_table_waits": 1383.0,
+  "contention_frame_table_wait_us": 1159.0,
+  "contention_free_map_waits": 0.0,
+  "contention_free_map_wait_us": 0.0,
+  "contention_free_map_flush_waits": 0.0,
+  "contention_free_map_flush_wait_us": 0.0,
+  "contention_window_waits": 153.0,
+  "contention_window_wait_us": 173.0,
+  "contention_lock_partition_waits": 181.0,
+  "contention_lock_partition_wait_us": 133.0,
+  "contention_lock_wait_for_waits": 0.0,
+  "contention_lock_wait_for_wait_us": 0.0,
+  "contention_wal_stream_waits": 11.0,
+  "contention_wal_stream_wait_us": 4.0,
+  "contention_wal_sync_gate_waits": 0.0,
+  "contention_wal_sync_gate_wait_us": 0.0,
+  "contention_assertion_dir_waits": 0.0,
+  "contention_assertion_dir_wait_us": 0.0,
+  "contention_optimizer_waits": 0.0,
+  "contention_optimizer_wait_us": 0.0,
+  "contention_superblock_waits": 0.0,
+  "contention_superblock_wait_us": 0.0,
+  "contention_cabin_partition_waits": 0.0,
+  "contention_cabin_partition_wait_us": 0.0,
+  "contention_cabin_stats_waits": 0.0,
+  "contention_cabin_stats_wait_us": 0.0,
+  "contention_handoff_waits": 0.0,
+  "contention_handoff_wait_us": 0.0,
+  "contention_stats_ring_waits": 0.0,
+  "contention_stats_ring_wait_us": 0.0,
+  "contention_page_latch_waits": 8.0,
+  "contention_page_latch_spin_turns": 669.0,
+  "contention_syncs_inline": 5.0,
+  "contention_syncs_writer": 9732.0,
+  "contention_drain_passes_pending": 34750.0,
+  "contention_ceiling_waits": 2.0,
+  "contention_ceiling_wait_us": 607.0,
+  "contention_carves": 7.0,
+  "contention_checkpoint_runs": 12.0,
+  "contention_refused_btree_descend": 0.0,
+  "contention_refused_btree_parent": 0.0,
+  "contention_refused_btree_secure": 0.0,
+  "contention_refused_btree_lookup": 0.0,
+  "contention_refused_index_descend": 0.0,
+  "contention_refused_index_parent": 0.0,
+  "contention_refused_index_secure": 0.0,
+  "contention_structural_reruns": 0.0,
+  "contention_catalog_memo_drops": 6.0,
+  "contention_word_moves_root": 2.0,
+  "contention_word_moves_cabin": 0.0,
+  "contention_word_moves_schema": 15.0,
+  "contention_word_moves_resolve": 6.0,
+  "contention_inflight_asks": 0.0,
+  "contention_inflight_misses": 0.0,
+  "contention_inflight_miss_ids_read": 0.0,
+  "contention_checkpoint_pages_written": 1189.0,
+  "contention_data_syncs": 52.0,
+  "contention_fence_walks": 0.0,
+  "contention_wal_drain_latch_wait_us": 1.0,
+  "contention_wal_roll_blocked_waits": 0.0,
+  "contention_wal_roll_blocked_wait_us": 0.0,
+  "contention_visibility_window_lookups": 20142.0,
+  "contention_carve_longest_us": 1478.0,
+  "contention_checkpoint_longest_us": 11505.0
+ },
+ "bin_sha256": "ebaf66561336c35e8a69c9e1cbe096e7ee7b373eb8f1df4496b59eb15762d7c7",
+ "data_device": "/dev/nvme0n1p1 ext4"
+}

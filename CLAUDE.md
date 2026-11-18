@@ -218,6 +218,10 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
   inside about an hour, building included; a design that cannot fit is cut
   to what fits - fewer runs, fewer cells - and the results file says what
   was cut. Only the operator's word for that measurement lifts the budget.
+  **The time a quiet gate holds a measurement is outside the budget**
+  (operator, 2026-11-18): waiting for another session's build or suite to
+  end is not counted, and the results file states the hold beside the time
+  spent building and running.
 - Every refusal carries the byte position of the offending token, and
   "understood and declined" is **two** codes: `Unsupported` is what the
   architecture cannot admit, `NotImplemented` is what nobody built, and

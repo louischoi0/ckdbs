@@ -1,0 +1,4423 @@
+{
+ "arm": "isolated",
+ "cores": 4,
+ "placement": "kernel",
+ "targets": [
+  -1,
+  -1,
+  -1,
+  -1,
+  -1,
+  -1,
+  -1,
+  -1,
+  -1,
+  -1
+ ],
+ "roles": [
+  "reader",
+  "reader",
+  "reader",
+  "reader",
+  "reader",
+  "reader",
+  "writer",
+  "writer",
+  "writer",
+  "writer"
+ ],
+ "slice": 0,
+ "levels": "reader=transactional",
+ "run": 0,
+ "durability": "group",
+ "rate": 400.0,
+ "readers": 6,
+ "writers": 4,
+ "writer_rate": 800.0,
+ "batch": 1024,
+ "walk_rows": 10000,
+ "seconds": 10.0,
+ "warmup": 2.0,
+ "log_level": "info",
+ "ctl_core": -1,
+ "wait_s": 0.0,
+ "host_before": {
+  "loadavg": "1.33 3.33 3.09 2/548 2295780",
+  "competing": []
+ },
+ "host_after": {
+  "loadavg": "1.10 3.14 3.03 1/549 2295869",
+  "competing": []
+ },
+ "read_service": {
+  "p0_us": 131.1,
+  "p25_us": 196.7,
+  "p50_us": 219.8,
+  "p95_us": 289.2,
+  "p99_us": 347.4,
+  "p99.9_us": 1948.4,
+  "max_us": 4174.0,
+  "n": 4006
+ },
+ "read_from_schedule": {
+  "p0_us": 182.4,
+  "p25_us": 281.1,
+  "p50_us": 309.0,
+  "p95_us": 390.8,
+  "p99_us": 567.2,
+  "p99.9_us": 2951.1,
+  "max_us": 8189.2,
+  "n": 4006
+ },
+ "by_core_attribution": "connect_core",
+ "per_core_valid": true,
+ "moves": 0,
+ "moves_in_window": 0,
+ "read_by_core": {
+  "0.0": {
+   "p0_us": 188.6,
+   "p25_us": 275.1,
+   "p50_us": 306.6,
+   "p95_us": 388.6,
+   "p99_us": 595.3,
+   "p99.9_us": 2859.8,
+   "max_us": 4976.5,
+   "n": 1335
+  },
+  "2.0": {
+   "p0_us": 182.4,
+   "p25_us": 278.0,
+   "p50_us": 306.4,
+   "p95_us": 387.2,
+   "p99_us": 511.2,
+   "p99.9_us": 1796.0,
+   "max_us": 3059.6,
+   "n": 2003
+  },
+  "3.0": {
+   "p0_us": 212.9,
+   "p25_us": 296.4,
+   "p50_us": 319.0,
+   "p95_us": 402.0,
+   "p99_us": 797.7,
+   "p99.9_us": 8189.2,
+   "max_us": 8189.2,
+   "n": 668
+  }
+ },
+ "read_by_core_end": {
+  "0.0": {
+   "p0_us": 188.6,
+   "p25_us": 275.1,
+   "p50_us": 306.6,
+   "p95_us": 388.6,
+   "p99_us": 595.3,
+   "p99.9_us": 2859.8,
+   "max_us": 4976.5,
+   "n": 1335
+  },
+  "2.0": {
+   "p0_us": 182.4,
+   "p25_us": 278.0,
+   "p50_us": 306.4,
+   "p95_us": 387.2,
+   "p99_us": 511.2,
+   "p99.9_us": 1796.0,
+   "max_us": 3059.6,
+   "n": 2003
+  },
+  "3.0": {
+   "p0_us": 212.9,
+   "p25_us": 296.4,
+   "p50_us": 319.0,
+   "p95_us": 402.0,
+   "p99_us": 797.7,
+   "p99.9_us": 8189.2,
+   "max_us": 8189.2,
+   "n": 668
+  }
+ },
+ "readers_moved": 0,
+ "walker": {},
+ "normal_walkers": 0,
+ "nwalker": {},
+ "meta_by_core": {
+  "0": {
+   "undo_pages_live": 0.0,
+   "undo_pages_recycled": 10.0,
+   "wal_syncs": 8006.0,
+   "wal_interval_syncs": 0.0,
+   "wal_sync_failures": 0.0,
+   "wal_first_segment": 0.0,
+   "wal_segments_removed": 0.0,
+   "wal_remove_failures": 0.0,
+   "wal_group_commits": 4002.0,
+   "wal_group_batches": 3982.0,
+   "wal_mean_group_batch": 0.0009999999999998899,
+   "wal_group_batch_max": 0.0,
+   "wal_group_batch_min": 0.0,
+   "wal_ring_full": 0.0,
+   "wal_ring_full_refusals": 0.0,
+   "sched_wall_us": 10066938.0,
+   "sched_iterations": 26918.0,
+   "sched_idle_blocks": 13197.0,
+   "sched_parked_idle_blocks": 13197.0,
+   "sched_idle_block_us": 9566644.0,
+   "sched_wakes_sent": 8086.0,
+   "sched_wakes_received": 4021.0,
+   "sched_foreground_polled_us": 353196.0,
+   "sched_foreground_polls": 13503.0,
+   "sched_foreground_consumed_us": 353196.0,
+   "sched_foreground_longest_poll_us": 431.0,
+   "sched_foreground_polls_over_10ms": 0.0,
+   "sched_foreground_polls_over_100ms": 0.0,
+   "sched_maintenance_polled_us": 0.0,
+   "sched_maintenance_polls": 0.0,
+   "sched_maintenance_consumed_us": 0.0,
+   "sched_maintenance_longest_poll_us": 0.0,
+   "sched_maintenance_polls_over_10ms": 0.0,
+   "sched_maintenance_polls_over_100ms": 0.0,
+   "sched_system_polled_us": 5489.0,
+   "sched_system_polls": 26972.0,
+   "sched_system_consumed_us": 5489.0,
+   "sched_system_longest_poll_us": 359.0,
+   "sched_system_polls_over_10ms": 0.0,
+   "sched_system_polls_over_100ms": 0.0,
+   "sched_hold_in_run_longest_us": 1061.0,
+   "sched_hold_in_run_over_10ms": 0.0,
+   "sched_hold_in_run_over_100ms": 0.0,
+   "sched_hold_in_run_over_1s": 0.0,
+   "sched_hold_out_run_longest_us": 1680.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_1s": 0.0,
+   "sched_longest_unpolled_us": 1680.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "checkpoint_runs": 2.0,
+   "checkpoint_start_refused": 0.0,
+   "checkpoint_last_completed": 0.0,
+   "checkpoint_last_wall_us": -2511.0,
+   "checkpoint_last_step_max_us": -75.0,
+   "checkpoint_last_step_page_write_max_us": -35.0,
+   "checkpoint_last_steps": -5.0,
+   "checkpoint_last_pages": -412.0,
+   "checkpoint_last_dirty_at_start": -412.0,
+   "checkpoint_last_gate_parks": 2.0,
+   "checkpoint_last_end_parks": 0.0,
+   "checkpoint_last_start_sum_us": -46.0,
+   "checkpoint_last_start_max_us": -46.0,
+   "checkpoint_last_log_gate_batch_sum_us": 0.0,
+   "checkpoint_last_log_gate_batch_max_us": 0.0,
+   "checkpoint_last_log_gate_run_sum_us": 0.0,
+   "checkpoint_last_log_gate_run_max_us": 0.0,
+   "checkpoint_last_page_write_sum_us": -1249.0,
+   "checkpoint_last_page_write_max_us": 3.0,
+   "checkpoint_last_map_write_sum_us": 0.0,
+   "checkpoint_last_map_write_max_us": 0.0,
+   "checkpoint_last_claim_wait_sum_us": 0.0,
+   "checkpoint_last_claim_wait_max_us": 0.0,
+   "checkpoint_last_data_sync_sum_us": 0.0,
+   "checkpoint_last_data_sync_max_us": 0.0,
+   "checkpoint_last_end_wait_sum_us": 0.0,
+   "checkpoint_last_end_wait_max_us": 0.0,
+   "checkpoint_last_publish_writeback_sum_us": 12.0,
+   "checkpoint_last_publish_writeback_max_us": 1.0,
+   "checkpoint_last_publish_sync_sum_us": 0.0,
+   "checkpoint_last_publish_sync_max_us": 0.0
+  },
+  "1": {
+   "undo_pages_live": 0.0,
+   "undo_pages_recycled": 0.0,
+   "wal_syncs": 0.0,
+   "wal_interval_syncs": 0.0,
+   "wal_sync_failures": 0.0,
+   "wal_group_commits": 0.0,
+   "wal_group_batches": 0.0,
+   "wal_mean_group_batch": 0.0,
+   "wal_group_batch_max": 0.0,
+   "wal_group_batch_min": 0.0,
+   "wal_ring_full": 0.0,
+   "wal_ring_full_refusals": 0.0,
+   "sched_wall_us": 10066717.0,
+   "sched_iterations": 18525.0,
+   "sched_idle_blocks": 9228.0,
+   "sched_parked_idle_blocks": 9228.0,
+   "sched_idle_block_us": 10031854.0,
+   "sched_wakes_sent": 8085.0,
+   "sched_wakes_received": 10.0,
+   "sched_foreground_polled_us": 322.0,
+   "sched_foreground_polls": 1.0,
+   "sched_foreground_consumed_us": 322.0,
+   "sched_foreground_longest_poll_us": 322.0,
+   "sched_foreground_polls_over_10ms": 0.0,
+   "sched_foreground_polls_over_100ms": 0.0,
+   "sched_maintenance_polled_us": 0.0,
+   "sched_maintenance_polls": 0.0,
+   "sched_maintenance_consumed_us": 0.0,
+   "sched_maintenance_longest_poll_us": 0.0,
+   "sched_maintenance_polls_over_10ms": 0.0,
+   "sched_maintenance_polls_over_100ms": 0.0,
+   "sched_system_polled_us": 5638.0,
+   "sched_system_polls": 18573.0,
+   "sched_system_consumed_us": 5638.0,
+   "sched_system_longest_poll_us": 342.0,
+   "sched_system_polls_over_10ms": 0.0,
+   "sched_system_polls_over_100ms": 0.0,
+   "sched_hold_in_run_longest_us": 344.0,
+   "sched_hold_in_run_over_10ms": 0.0,
+   "sched_hold_in_run_over_100ms": 0.0,
+   "sched_hold_in_run_over_1s": 0.0,
+   "sched_hold_out_run_longest_us": 1976.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_1s": 0.0,
+   "sched_longest_unpolled_us": 1976.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "checkpoint_runs": 2.0,
+   "checkpoint_start_refused": 0.0,
+   "checkpoint_last_completed": 0.0,
+   "checkpoint_last_wall_us": 3719.0,
+   "checkpoint_last_step_max_us": 332.0,
+   "checkpoint_last_step_page_write_max_us": 180.0,
+   "checkpoint_last_steps": 2.0,
+   "checkpoint_last_pages": 73.0,
+   "checkpoint_last_dirty_at_start": 73.0,
+   "checkpoint_last_gate_parks": 2.0,
+   "checkpoint_last_end_parks": 0.0,
+   "checkpoint_last_start_sum_us": -3.0,
+   "checkpoint_last_start_max_us": -3.0,
+   "checkpoint_last_log_gate_batch_sum_us": 0.0,
+   "checkpoint_last_log_gate_batch_max_us": 0.0,
+   "checkpoint_last_log_gate_run_sum_us": 0.0,
+   "checkpoint_last_log_gate_run_max_us": 0.0,
+   "checkpoint_last_page_write_sum_us": 236.0,
+   "checkpoint_last_page_write_max_us": 29.0,
+   "checkpoint_last_map_write_sum_us": 0.0,
+   "checkpoint_last_map_write_max_us": 0.0,
+   "checkpoint_last_claim_wait_sum_us": 0.0,
+   "checkpoint_last_claim_wait_max_us": 0.0,
+   "checkpoint_last_data_sync_sum_us": 0.0,
+   "checkpoint_last_data_sync_max_us": 0.0,
+   "checkpoint_last_end_wait_sum_us": 0.0,
+   "checkpoint_last_end_wait_max_us": 0.0,
+   "checkpoint_last_publish_writeback_sum_us": 48.0,
+   "checkpoint_last_publish_writeback_max_us": 10.0,
+   "checkpoint_last_publish_sync_sum_us": 0.0,
+   "checkpoint_last_publish_sync_max_us": 0.0
+  },
+  "2": {
+   "undo_pages_live": 2.0,
+   "undo_pages_recycled": 9.0,
+   "wal_syncs": 0.0,
+   "wal_interval_syncs": 0.0,
+   "wal_sync_failures": 0.0,
+   "wal_group_commits": 2001.0,
+   "wal_group_batches": 2001.0,
+   "wal_mean_group_batch": 0.0,
+   "wal_group_batch_max": 0.0,
+   "wal_group_batch_min": 0.0,
+   "wal_ring_full": 0.0,
+   "wal_ring_full_refusals": 0.0,
+   "sched_wall_us": 10066828.0,
+   "sched_iterations": 25572.0,
+   "sched_idle_blocks": 12485.0,
+   "sched_parked_idle_blocks": 12485.0,
+   "sched_idle_block_us": 9660027.0,
+   "sched_wakes_sent": 8084.0,
+   "sched_wakes_received": 2021.0,
+   "sched_foreground_polled_us": 285600.0,
+   "sched_foreground_polls": 8079.0,
+   "sched_foreground_consumed_us": 285600.0,
+   "sched_foreground_longest_poll_us": 335.0,
+   "sched_foreground_polls_over_10ms": 0.0,
+   "sched_foreground_polls_over_100ms": 0.0,
+   "sched_maintenance_polled_us": 0.0,
+   "sched_maintenance_polls": 0.0,
+   "sched_maintenance_consumed_us": 0.0,
+   "sched_maintenance_longest_poll_us": 0.0,
+   "sched_maintenance_polls_over_10ms": 0.0,
+   "sched_maintenance_polls_over_100ms": 0.0,
+   "sched_system_polled_us": 6257.0,
+   "sched_system_polls": 25624.0,
+   "sched_system_consumed_us": 6257.0,
+   "sched_system_longest_poll_us": 284.0,
+   "sched_system_polls_over_10ms": 0.0,
+   "sched_system_polls_over_100ms": 0.0,
+   "sched_hold_in_run_longest_us": 286.0,
+   "sched_hold_in_run_over_10ms": 0.0,
+   "sched_hold_in_run_over_100ms": 0.0,
+   "sched_hold_in_run_over_1s": 0.0,
+   "sched_hold_out_run_longest_us": 2015.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_1s": 0.0,
+   "sched_longest_unpolled_us": 2015.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "checkpoint_runs": 2.0,
+   "checkpoint_start_refused": 0.0,
+   "checkpoint_last_completed": 0.0,
+   "checkpoint_last_wall_us": 614.0,
+   "checkpoint_last_step_max_us": -6.0,
+   "checkpoint_last_step_page_write_max_us": -2.0,
+   "checkpoint_last_steps": 2.0,
+   "checkpoint_last_pages": 13.0,
+   "checkpoint_last_dirty_at_start": 13.0,
+   "checkpoint_last_gate_parks": 1.0,
+   "checkpoint_last_end_parks": 0.0,
+   "checkpoint_last_start_sum_us": -16.0,
+   "checkpoint_last_start_max_us": -16.0,
+   "checkpoint_last_log_gate_batch_sum_us": 0.0,
+   "checkpoint_last_log_gate_batch_max_us": 0.0,
+   "checkpoint_last_log_gate_run_sum_us": 0.0,
+   "checkpoint_last_log_gate_run_max_us": 0.0,
+   "checkpoint_last_page_write_sum_us": 17.0,
+   "checkpoint_last_page_write_max_us": -7.0,
+   "checkpoint_last_map_write_sum_us": 0.0,
+   "checkpoint_last_map_write_max_us": 0.0,
+   "checkpoint_last_claim_wait_sum_us": 0.0,
+   "checkpoint_last_claim_wait_max_us": 0.0,
+   "checkpoint_last_data_sync_sum_us": 0.0,
+   "checkpoint_last_data_sync_max_us": 0.0,
+   "checkpoint_last_end_wait_sum_us": 0.0,
+   "checkpoint_last_end_wait_max_us": 0.0,
+   "checkpoint_last_publish_writeback_sum_us": -12.0,
+   "checkpoint_last_publish_writeback_max_us": 0.0,
+   "checkpoint_last_publish_sync_sum_us": 0.0,
+   "checkpoint_last_publish_sync_max_us": 0.0
+  },
+  "3": {
+   "undo_pages_live": -104.0,
+   "undo_pages_recycled": 11.0,
+   "wal_syncs": 0.0,
+   "wal_interval_syncs": 0.0,
+   "wal_sync_failures": 0.0,
+   "wal_group_commits": 2000.0,
+   "wal_group_batches": 2000.0,
+   "wal_mean_group_batch": 0.0,
+   "wal_group_batch_max": 0.0,
+   "wal_group_batch_min": 0.0,
+   "wal_ring_full": 0.0,
+   "wal_ring_full_refusals": 0.0,
+   "sched_wall_us": 10066662.0,
+   "sched_iterations": 24561.0,
+   "sched_idle_blocks": 11411.0,
+   "sched_parked_idle_blocks": 11411.0,
+   "sched_idle_block_us": 9742359.0,
+   "sched_wakes_sent": 8083.0,
+   "sched_wakes_received": 2033.0,
+   "sched_foreground_polled_us": 216212.0,
+   "sched_foreground_polls": 7920.0,
+   "sched_foreground_consumed_us": 216212.0,
+   "sched_foreground_longest_poll_us": 878.0,
+   "sched_foreground_polls_over_10ms": 0.0,
+   "sched_foreground_polls_over_100ms": 0.0,
+   "sched_maintenance_polled_us": 0.0,
+   "sched_maintenance_polls": 0.0,
+   "sched_maintenance_consumed_us": 0.0,
+   "sched_maintenance_longest_poll_us": 0.0,
+   "sched_maintenance_polls_over_10ms": 0.0,
+   "sched_maintenance_polls_over_100ms": 0.0,
+   "sched_system_polled_us": 6416.0,
+   "sched_system_polls": 24606.0,
+   "sched_system_consumed_us": 6416.0,
+   "sched_system_longest_poll_us": 296.0,
+   "sched_system_polls_over_10ms": 0.0,
+   "sched_system_polls_over_100ms": 0.0,
+   "sched_hold_in_run_longest_us": 297.0,
+   "sched_hold_in_run_over_10ms": 0.0,
+   "sched_hold_in_run_over_100ms": 0.0,
+   "sched_hold_in_run_over_1s": 0.0,
+   "sched_hold_out_run_longest_us": 2002.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_1s": 0.0,
+   "sched_longest_unpolled_us": 2002.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "checkpoint_runs": 2.0,
+   "checkpoint_start_refused": 0.0,
+   "checkpoint_last_completed": 0.0,
+   "checkpoint_last_wall_us": 346.0,
+   "checkpoint_last_step_max_us": 0.0,
+   "checkpoint_last_step_page_write_max_us": 9.0,
+   "checkpoint_last_steps": -1.0,
+   "checkpoint_last_pages": 0.0,
+   "checkpoint_last_dirty_at_start": 0.0,
+   "checkpoint_last_gate_parks": -2.0,
+   "checkpoint_last_end_parks": 0.0,
+   "checkpoint_last_start_sum_us": 3.0,
+   "checkpoint_last_start_max_us": 3.0,
+   "checkpoint_last_log_gate_batch_sum_us": 0.0,
+   "checkpoint_last_log_gate_batch_max_us": 0.0,
+   "checkpoint_last_log_gate_run_sum_us": 0.0,
+   "checkpoint_last_log_gate_run_max_us": 0.0,
+   "checkpoint_last_page_write_sum_us": -8.0,
+   "checkpoint_last_page_write_max_us": -23.0,
+   "checkpoint_last_map_write_sum_us": 0.0,
+   "checkpoint_last_map_write_max_us": 0.0,
+   "checkpoint_last_claim_wait_sum_us": 0.0,
+   "checkpoint_last_claim_wait_max_us": 0.0,
+   "checkpoint_last_data_sync_sum_us": 0.0,
+   "checkpoint_last_data_sync_max_us": 0.0,
+   "checkpoint_last_end_wait_sum_us": 0.0,
+   "checkpoint_last_end_wait_max_us": 0.0,
+   "checkpoint_last_publish_writeback_sum_us": -10.0,
+   "checkpoint_last_publish_writeback_max_us": -5.0,
+   "checkpoint_last_publish_sync_sum_us": 0.0,
+   "checkpoint_last_publish_sync_max_us": 0.0
+  }
+ },
+ "meta_core_rereads": 0,
+ "writer_service": {
+  "p0_us": 395.3,
+  "p25_us": 632.0,
+  "p50_us": 699.3,
+  "p95_us": 948.0,
+  "p99_us": 1486.3,
+  "p99.9_us": 4647.5,
+  "max_us": 5609.3,
+  "n": 8004
+ },
+ "writer_from_schedule": {
+  "p0_us": 478.5,
+  "p25_us": 718.8,
+  "p50_us": 788.9,
+  "p95_us": 1066.2,
+  "p99_us": 1867.1,
+  "p99.9_us": 5333.2,
+  "max_us": 6414.7,
+  "n": 8004
+ },
+ "writer_by_session": [
+  {
+   "index": 6,
+   "core": 0.0,
+   "core_end": 0.0,
+   "service": {
+    "p0_us": 395.3,
+    "p25_us": 618.7,
+    "p50_us": 687.1,
+    "p95_us": 934.1,
+    "p99_us": 1242.2,
+    "p99.9_us": 3237.5,
+    "max_us": 4099.4,
+    "n": 2001
+   },
+   "from_schedule": {
+    "p0_us": 478.5,
+    "p25_us": 709.1,
+    "p50_us": 782.5,
+    "p95_us": 1064.3,
+    "p99_us": 1854.9,
+    "p99.9_us": 4237.4,
+    "max_us": 5595.0,
+    "n": 2001
+   },
+   "errors": 0,
+   "refusals": 0
+  },
+  {
+   "index": 7,
+   "core": 0.0,
+   "core_end": 0.0,
+   "service": {
+    "p0_us": 427.5,
+    "p25_us": 624.7,
+    "p50_us": 692.8,
+    "p95_us": 941.5,
+    "p99_us": 1361.6,
+    "p99.9_us": 3677.6,
+    "max_us": 5242.1,
+    "n": 2001
+   },
+   "from_schedule": {
+    "p0_us": 511.9,
+    "p25_us": 708.8,
+    "p50_us": 781.5,
+    "p95_us": 1040.0,
+    "p99_us": 1589.8,
+    "p99.9_us": 3759.6,
+    "max_us": 5336.0,
+    "n": 2001
+   },
+   "errors": 0,
+   "refusals": 0
+  },
+  {
+   "index": 8,
+   "core": 3.0,
+   "core_end": 3.0,
+   "service": {
+    "p0_us": 493.3,
+    "p25_us": 656.1,
+    "p50_us": 716.0,
+    "p95_us": 959.4,
+    "p99_us": 1466.8,
+    "p99.9_us": 4699.9,
+    "max_us": 5609.3,
+    "n": 2001
+   },
+   "from_schedule": {
+    "p0_us": 574.1,
+    "p25_us": 746.0,
+    "p50_us": 804.7,
+    "p95_us": 1066.7,
+    "p99_us": 1975.3,
+    "p99.9_us": 5181.8,
+    "max_us": 5703.0,
+    "n": 2001
+   },
+   "errors": 0,
+   "refusals": 0
+  },
+  {
+   "index": 9,
+   "core": 2.0,
+   "core_end": 2.0,
+   "service": {
+    "p0_us": 456.3,
+    "p25_us": 630.6,
+    "p50_us": 693.6,
+    "p95_us": 966.1,
+    "p99_us": 1709.9,
+    "p99.9_us": 5420.2,
+    "max_us": 5538.9,
+    "n": 2001
+   },
+   "from_schedule": {
+    "p0_us": 536.4,
+    "p25_us": 715.7,
+    "p50_us": 781.8,
+    "p95_us": 1114.8,
+    "p99_us": 1989.8,
+    "p99.9_us": 5538.2,
+    "max_us": 6414.7,
+    "n": 2001
+   },
+   "errors": 0,
+   "refusals": 0
+  }
+ ],
+ "writer_by_core": {
+  "0.0": {
+   "p0_us": 478.5,
+   "p25_us": 708.8,
+   "p50_us": 781.8,
+   "p95_us": 1049.8,
+   "p99_us": 1633.4,
+   "p99.9_us": 4237.4,
+   "max_us": 5595.0,
+   "n": 4002
+  },
+  "2.0": {
+   "p0_us": 536.4,
+   "p25_us": 715.7,
+   "p50_us": 781.8,
+   "p95_us": 1114.8,
+   "p99_us": 1989.8,
+   "p99.9_us": 5538.2,
+   "max_us": 6414.7,
+   "n": 2001
+  },
+  "3.0": {
+   "p0_us": 574.1,
+   "p25_us": 746.0,
+   "p50_us": 804.7,
+   "p95_us": 1066.7,
+   "p99_us": 1975.3,
+   "p99.9_us": 5181.8,
+   "max_us": 5703.0,
+   "n": 2001
+  }
+ },
+ "inserter": {},
+ "inserter_rows_per_s": 0.0,
+ "log_bytes_per_s": 198322.5,
+ "cores_seen": [
+  2.0,
+  0.0,
+  2.0,
+  2.0,
+  0.0,
+  3.0,
+  0.0,
+  0.0,
+  3.0,
+  2.0
+ ],
+ "cores_end": [
+  2.0,
+  0.0,
+  2.0,
+  2.0,
+  0.0,
+  3.0,
+  0.0,
+  0.0,
+  3.0,
+  2.0
+ ],
+ "errors": 0,
+ "refusals": 0,
+ "first_error": null,
+ "measure_from_mono_ns": 447773671419137,
+ "stop_at_mono_ns": 447783671419137,
+ "m0_mono_ns": 447773677274149,
+ "m1_mono_ns": 447783738463390,
+ "slow_threshold_us": 1000.0,
+ "slow_cap_per_client": 20000,
+ "slow_dropped": 0,
+ "clients": [
+  {
+   "role": "reader",
+   "index": 0,
+   "core": 2.0,
+   "core_end": 2.0,
+   "ok": 667,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447775466445489,
+     1149893
+    ],
+    [
+     447776231451084,
+     1595736
+    ],
+    [
+     447779591474358,
+     1202345
+    ],
+    [
+     447780911483453,
+     1463890
+    ],
+    [
+     447781601488637,
+     1118898
+    ],
+    [
+     447782786496877,
+     1796007
+    ]
+   ],
+   "first_t0": 1794989947.2143278,
+   "last_t1": 1794989957.204639
+  },
+  {
+   "role": "reader",
+   "index": 1,
+   "core": 0.0,
+   "core_end": 0.0,
+   "ok": 667,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447778003963390,
+     1706362
+    ],
+    [
+     447778363965790,
+     2034664
+    ],
+    [
+     447779533974141,
+     1658201
+    ]
+   ],
+   "first_t0": 1794989947.2168612,
+   "last_t1": 1794989957.2070887
+  },
+  {
+   "role": "reader",
+   "index": 2,
+   "core": 2.0,
+   "core_end": 2.0,
+   "ok": 668,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447783676503525,
+     1657486
+    ]
+   ],
+   "first_t0": 1794989947.2043257,
+   "last_t1": 1794989957.2109544
+  },
+  {
+   "role": "reader",
+   "index": 3,
+   "core": 2.0,
+   "core_end": 2.0,
+   "ok": 668,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447774543939005,
+     3059626
+    ],
+    [
+     447775923948929,
+     1046658
+    ],
+    [
+     447783183999200,
+     2366304
+    ]
+   ],
+   "first_t0": 1794989947.2068107,
+   "last_t1": 1794989957.2122037
+  },
+  {
+   "role": "reader",
+   "index": 4,
+   "core": 0.0,
+   "core_end": 0.0,
+   "ok": 668,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447773706433609,
+     1241922
+    ],
+    [
+     447777951462859,
+     1211166
+    ],
+    [
+     447779181471447,
+     2859831
+    ],
+    [
+     447783681502985,
+     4976511
+    ]
+   ],
+   "first_t0": 1794989947.209319,
+   "last_t1": 1794989957.2192733
+  },
+  {
+   "role": "reader",
+   "index": 5,
+   "core": 3.0,
+   "core_end": 3.0,
+   "ok": 668,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447777908962427,
+     2951145
+    ],
+    [
+     447779513974423,
+     1661062
+    ],
+    [
+     447779543974944,
+     1182079
+    ],
+    [
+     447782543995291,
+     4234552
+    ],
+    [
+     447782708996024,
+     1686096
+    ],
+    [
+     447783684003544,
+     8189201
+    ]
+   ],
+   "first_t0": 1794989947.2118123,
+   "last_t1": 1794989957.224986
+  },
+  {
+   "role": "writer",
+   "index": 6,
+   "core": 0.0,
+   "core_end": 0.0,
+   "ok": 2001,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447773671467474,
+     1192570
+    ],
+    [
+     447773681465645,
+     1031637
+    ],
+    [
+     447773761467033,
+     1014709
+    ],
+    [
+     447773771467414,
+     1087666
+    ],
+    [
+     447773781467640,
+     1194239
+    ],
+    [
+     447773806467266,
+     1020193
+    ],
+    [
+     447773966471301,
+     5594969
+    ],
+    [
+     447773971470762,
+     1250029
+    ],
+    [
+     447774021472789,
+     1970768
+    ],
+    [
+     447774051473396,
+     1101255
+    ],
+    [
+     447774071473403,
+     1405954
+    ],
+    [
+     447774216477013,
+     1086950
+    ],
+    [
+     447774236477697,
+     1511097
+    ],
+    [
+     447774296479040,
+     1494646
+    ],
+    [
+     447774441482256,
+     1370430
+    ],
+    [
+     447774471483430,
+     1076698
+    ],
+    [
+     447774511484590,
+     1102924
+    ],
+    [
+     447774541484651,
+     3361702
+    ],
+    [
+     447774561485419,
+     1092911
+    ],
+    [
+     447774576485896,
+     1032352
+    ],
+    [
+     447774591485503,
+     1051426
+    ],
+    [
+     447774666487868,
+     1427174
+    ],
+    [
+     447774891492547,
+     1902819
+    ],
+    [
+     447774906492878,
+     1028299
+    ],
+    [
+     447775031495937,
+     1238585
+    ],
+    [
+     447775066496319,
+     1352310
+    ],
+    [
+     447775116498206,
+     1425982
+    ],
+    [
+     447775156498452,
+     1051188
+    ],
+    [
+     447775166499071,
+     1257896
+    ],
+    [
+     447775171498914,
+     1017809
+    ],
+    [
+     447775201499497,
+     1004934
+    ],
+    [
+     447775221500850,
+     1033068
+    ],
+    [
+     447775241501219,
+     1015663
+    ],
+    [
+     447775276501776,
+     1008272
+    ],
+    [
+     447775326502581,
+     1020670
+    ],
+    [
+     447775386504586,
+     1121998
+    ],
+    [
+     447775426507182,
+     1003504
+    ],
+    [
+     447775456505594,
+     1091957
+    ],
+    [
+     447775471505505,
+     1029491
+    ],
+    [
+     447775481506580,
+     1097679
+    ],
+    [
+     447775491506069,
+     1083374
+    ],
+    [
+     447775536507668,
+     3958702
+    ],
+    [
+     447775646510370,
+     1004696
+    ],
+    [
+     447775656510377,
+     1363516
+    ],
+    [
+     447775671510821,
+     1058817
+    ],
+    [
+     447775691511128,
+     1111746
+    ],
+    [
+     447775751512254,
+     1067877
+    ],
+    [
+     447775921516161,
+     1013041
+    ],
+    [
+     447776036518855,
+     3334761
+    ],
+    [
+     447776056519670,
+     1193523
+    ],
+    [
+     447776121521115,
+     1187563
+    ],
+    [
+     447776211523040,
+     1048326
+    ],
+    [
+     447776226523153,
+     1179934
+    ],
+    [
+     447776341526418,
+     1068354
+    ],
+    [
+     447776521529661,
+     1096249
+    ],
+    [
+     447776531530173,
+     1309156
+    ],
+    [
+     447776631532353,
+     1116991
+    ],
+    [
+     447776676533446,
+     1441240
+    ],
+    [
+     447776711534299,
+     1015663
+    ],
+    [
+     447776736535188,
+     1241684
+    ],
+    [
+     447776761535367,
+     1043558
+    ],
+    [
+     447776776535601,
+     1002550
+    ],
+    [
+     447776901538972,
+     1064539
+    ],
+    [
+     447776981540903,
+     1133442
+    ],
+    [
+     447777086543103,
+     2457142
+    ],
+    [
+     447777126543707,
+     1074314
+    ],
+    [
+     447777176544793,
+     1104355
+    ],
+    [
+     447777201545943,
+     1003742
+    ],
+    [
+     447777211545949,
+     1016140
+    ],
+    [
+     447777216545701,
+     4237413
+    ],
+    [
+     447777281547665,
+     1099348
+    ],
+    [
+     447777321548439,
+     1562357
+    ],
+    [
+     447777441551110,
+     3107309
+    ],
+    [
+     447777551553125,
+     5198956
+    ],
+    [
+     447777621555169,
+     1026154
+    ],
+    [
+     447777666556037,
+     2375126
+    ],
+    [
+     447777696556726,
+     1019478
+    ],
+    [
+     447777836560329,
+     2949953
+    ],
+    [
+     447777951563172,
+     1730442
+    ],
+    [
+     447777981564022,
+     1015186
+    ],
+    [
+     447777986564011,
+     1162052
+    ],
+    [
+     447778001564814,
+     1255751
+    ],
+    [
+     447778031564331,
+     3301620
+    ],
+    [
+     447778086566459,
+     1035929
+    ],
+    [
+     447778096566031,
+     1047373
+    ],
+    [
+     447778121567126,
+     1103640
+    ],
+    [
+     447778146566724,
+     1108646
+    ],
+    [
+     447778296571132,
+     1974821
+    ],
+    [
+     447778376573079,
+     1050234
+    ],
+    [
+     447778381572249,
+     1080990
+    ],
+    [
+     447778406572831,
+     1053333
+    ],
+    [
+     447778441573756,
+     1122952
+    ],
+    [
+     447778801582079,
+     1027107
+    ],
+    [
+     447778806582637,
+     1577377
+    ],
+    [
+     447778811583001,
+     1577139
+    ],
+    [
+     447778846582502,
+     1036167
+    ],
+    [
+     447778916584397,
+     1002550
+    ],
+    [
+     447778951585766,
+     1115084
+    ],
+    [
+     447779001586412,
+     1010656
+    ],
+    [
+     447779081588466,
+     1111746
+    ],
+    [
+     447779171590983,
+     1013994
+    ],
+    [
+     447779346595292,
+     1020670
+    ],
+    [
+     447779396596335,
+     2019644
+    ],
+    [
+     447779466597469,
+     3795147
+    ],
+    [
+     447779696603203,
+     1095057
+    ],
+    [
+     447779846605911,
+     1011848
+    ],
+    [
+     447779881607496,
+     1034498
+    ],
+    [
+     447779931608393,
+     1103878
+    ],
+    [
+     447779966608558,
+     1293421
+    ],
+    [
+     447779986609509,
+     1057863
+    ],
+    [
+     447779996609215,
+     1971722
+    ],
+    [
+     447780031610136,
+     1042843
+    ],
+    [
+     447780236614875,
+     2795696
+    ],
+    [
+     447780331616828,
+     1030684
+    ],
+    [
+     447780521621924,
+     1482487
+    ],
+    [
+     447780531621819,
+     1419783
+    ],
+    [
+     447780576622612,
+     1256466
+    ],
+    [
+     447780631624674,
+     1201868
+    ],
+    [
+     447780706625453,
+     1179934
+    ],
+    [
+     447780721626785,
+     1032352
+    ],
+    [
+     447780846629143,
+     1267672
+    ],
+    [
+     447780911630445,
+     1017809
+    ],
+    [
+     447780916630338,
+     1163483
+    ],
+    [
+     447780976632248,
+     1160860
+    ],
+    [
+     447781001632955,
+     1146078
+    ],
+    [
+     447781066634445,
+     1030922
+    ],
+    [
+     447781181637074,
+     4177094
+    ],
+    [
+     447781236638402,
+     1114607
+    ],
+    [
+     447781556644860,
+     1000643
+    ],
+    [
+     447781826651278,
+     1721144
+    ],
+    [
+     447781866652595,
+     1019478
+    ],
+    [
+     447781886652249,
+     1059771
+    ],
+    [
+     447781946654737,
+     1036167
+    ],
+    [
+     447782061657222,
+     1549959
+    ],
+    [
+     447782086658066,
+     1418352
+    ],
+    [
+     447782186659720,
+     1061678
+    ],
+    [
+     447782196659753,
+     1585484
+    ],
+    [
+     447782251661701,
+     1103401
+    ],
+    [
+     447782261661787,
+     1145124
+    ],
+    [
+     447782281661316,
+     1049757
+    ],
+    [
+     447782306662551,
+     1011848
+    ],
+    [
+     447782336663661,
+     1064301
+    ],
+    [
+     447782341663096,
+     1125574
+    ],
+    [
+     447782371663644,
+     1043081
+    ],
+    [
+     447782381663876,
+     1192331
+    ],
+    [
+     447782431665695,
+     1016378
+    ],
+    [
+     447782606669856,
+     1010895
+    ],
+    [
+     447782711672016,
+     1787901
+    ],
+    [
+     447782726672769,
+     1427650
+    ],
+    [
+     447782746672339,
+     1148224
+    ],
+    [
+     447782796674293,
+     1030684
+    ],
+    [
+     447782811673908,
+     1052141
+    ],
+    [
+     447782831674864,
+     1022339
+    ],
+    [
+     447782941676704,
+     1035213
+    ],
+    [
+     447782951677804,
+     1854897
+    ],
+    [
+     447783116681200,
+     1322508
+    ],
+    [
+     447783176682379,
+     1584291
+    ],
+    [
+     447783181682578,
+     3179550
+    ],
+    [
+     447783211682807,
+     1123190
+    ],
+    [
+     447783381687374,
+     1005888
+    ],
+    [
+     447783411687609,
+     1518965
+    ],
+    [
+     447783436687770,
+     1001596
+    ],
+    [
+     447783441688376,
+     1011372
+    ],
+    [
+     447783571690890,
+     1030207
+    ]
+   ],
+   "first_t0": 1794989947.2044048,
+   "last_t1": 1794989957.20531
+  },
+  {
+   "role": "writer",
+   "index": 7,
+   "core": 0.0,
+   "core_end": 0.0,
+   "ok": 2001,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447773757716975,
+     1381159
+    ],
+    [
+     447773762717220,
+     1032352
+    ],
+    [
+     447773767717383,
+     1134634
+    ],
+    [
+     447773782717329,
+     1005411
+    ],
+    [
+     447773787717971,
+     1053333
+    ],
+    [
+     447773942720902,
+     1006126
+    ],
+    [
+     447773987722266,
+     1420736
+    ],
+    [
+     447773997722501,
+     1028061
+    ],
+    [
+     447774022723021,
+     1082659
+    ],
+    [
+     447774032723312,
+     1076698
+    ],
+    [
+     447774087724214,
+     1135588
+    ],
+    [
+     447774187727359,
+     1294613
+    ],
+    [
+     447774347730725,
+     1036406
+    ],
+    [
+     447774367731180,
+     1080513
+    ],
+    [
+     447774467732875,
+     2103567
+    ],
+    [
+     447774487733677,
+     1019239
+    ],
+    [
+     447774542735059,
+     2124071
+    ],
+    [
+     447774582735529,
+     1176596
+    ],
+    [
+     447774657737760,
+     1039267
+    ],
+    [
+     447774892742756,
+     1254559
+    ],
+    [
+     447775037746556,
+     1002073
+    ],
+    [
+     447775077746733,
+     1041651
+    ],
+    [
+     447775087746809,
+     1042843
+    ],
+    [
+     447775147748247,
+     1030445
+    ],
+    [
+     447775152748930,
+     1033545
+    ],
+    [
+     447775267751197,
+     1098871
+    ],
+    [
+     447775287751936,
+     1070261
+    ],
+    [
+     447775312752314,
+     1217365
+    ],
+    [
+     447775417755154,
+     1062155
+    ],
+    [
+     447775427755305,
+     1027107
+    ],
+    [
+     447775467755611,
+     1550674
+    ],
+    [
+     447775492757113,
+     1171827
+    ],
+    [
+     447775682760284,
+     1633406
+    ],
+    [
+     447775692761105,
+     1134157
+    ],
+    [
+     447775757762746,
+     1006603
+    ],
+    [
+     447775772763163,
+     1316786
+    ],
+    [
+     447775807763910,
+     1014948
+    ],
+    [
+     447776102771137,
+     1086712
+    ],
+    [
+     447776232773335,
+     1160383
+    ],
+    [
+     447776262774546,
+     1008749
+    ],
+    [
+     447776467779053,
+     1387835
+    ],
+    [
+     447776612781924,
+     1076698
+    ],
+    [
+     447776637782746,
+     1008034
+    ],
+    [
+     447776767786123,
+     1002073
+    ],
+    [
+     447776782785970,
+     1062632
+    ],
+    [
+     447777042791729,
+     1048088
+    ],
+    [
+     447777072793788,
+     1103401
+    ],
+    [
+     447777077792586,
+     1019478
+    ],
+    [
+     447777082793418,
+     5336046
+    ],
+    [
+     447777087792638,
+     1657724
+    ],
+    [
+     447777127794517,
+     1042843
+    ],
+    [
+     447777142794769,
+     1254320
+    ],
+    [
+     447777147794875,
+     1025915
+    ],
+    [
+     447777272797213,
+     1125097
+    ],
+    [
+     447777277797289,
+     4821539
+    ],
+    [
+     447777302797824,
+     1054287
+    ],
+    [
+     447777322798257,
+     1041412
+    ],
+    [
+     447777347798558,
+     1645088
+    ],
+    [
+     447777437801028,
+     1016617
+    ],
+    [
+     447777452801471,
+     1056671
+    ],
+    [
+     447777467801983,
+     2448559
+    ],
+    [
+     447777582804189,
+     1710176
+    ],
+    [
+     447777627805936,
+     1027822
+    ],
+    [
+     447777697807262,
+     1008272
+    ],
+    [
+     447777767808879,
+     1187801
+    ],
+    [
+     447777817809660,
+     1083612
+    ],
+    [
+     447777837809943,
+     1709223
+    ],
+    [
+     447777862811379,
+     1140833
+    ],
+    [
+     447777877811430,
+     1039982
+    ],
+    [
+     447777992813834,
+     1086235
+    ],
+    [
+     447778032814689,
+     2687693
+    ],
+    [
+     447778047815399,
+     1044989
+    ],
+    [
+     447778112816895,
+     1083136
+    ],
+    [
+     447778127816699,
+     1247644
+    ],
+    [
+     447778147817513,
+     1068592
+    ],
+    [
+     447778162818121,
+     1134396
+    ],
+    [
+     447778212819401,
+     1195431
+    ],
+    [
+     447778242819660,
+     1018047
+    ],
+    [
+     447778282820679,
+     1005411
+    ],
+    [
+     447778317821193,
+     1025915
+    ],
+    [
+     447778357822326,
+     1024723
+    ],
+    [
+     447778442824590,
+     1056433
+    ],
+    [
+     447778467824493,
+     1589775
+    ],
+    [
+     447778497825128,
+     1004934
+    ],
+    [
+     447778507825678,
+     1104116
+    ],
+    [
+     447778597827845,
+     1082182
+    ],
+    [
+     447778647828836,
+     1183748
+    ],
+    [
+     447778662829125,
+     1040220
+    ],
+    [
+     447778802832942,
+     1002073
+    ],
+    [
+     447778807832416,
+     1056671
+    ],
+    [
+     447778822832822,
+     1035690
+    ],
+    [
+     447778872834197,
+     1104116
+    ],
+    [
+     447778887834275,
+     3759623
+    ],
+    [
+     447778937835821,
+     1060486
+    ],
+    [
+     447779122839930,
+     1085758
+    ],
+    [
+     447779167840792,
+     1041651
+    ],
+    [
+     447779192841419,
+     1024485
+    ],
+    [
+     447779232842095,
+     1028776
+    ],
+    [
+     447779317850944,
+     1092196
+    ],
+    [
+     447779352845192,
+     1046181
+    ],
+    [
+     447779397846435,
+     1282692
+    ],
+    [
+     447779407846652,
+     1070261
+    ],
+    [
+     447779447847422,
+     1133204
+    ],
+    [
+     447779467847527,
+     3414631
+    ],
+    [
+     447779512849010,
+     1016140
+    ],
+    [
+     447779527848956,
+     2609015
+    ],
+    [
+     447779537849591,
+     1059294
+    ],
+    [
+     447779632851231,
+     1002073
+    ],
+    [
+     447779687851978,
+     1470566
+    ],
+    [
+     447779692852359,
+     1080751
+    ],
+    [
+     447779782854948,
+     1028538
+    ],
+    [
+     447779947858376,
+     1008749
+    ],
+    [
+     447779957859123,
+     1033545
+    ],
+    [
+     447780077861971,
+     1008034
+    ],
+    [
+     447780147863023,
+     1027822
+    ],
+    [
+     447780242865544,
+     1063824
+    ],
+    [
+     447780247865696,
+     1064539
+    ],
+    [
+     447780377868157,
+     1027346
+    ],
+    [
+     447780427869855,
+     1161814
+    ],
+    [
+     447780467870003,
+     1504660
+    ],
+    [
+     447780907881193,
+     1100779
+    ],
+    [
+     447780947881660,
+     1058578
+    ],
+    [
+     447781132886293,
+     1008749
+    ],
+    [
+     447781202886676,
+     1454592
+    ],
+    [
+     447781207887784,
+     1277685
+    ],
+    [
+     447781217887823,
+     1107216
+    ],
+    [
+     447781287889527,
+     1048565
+    ],
+    [
+     447781322890435,
+     1034021
+    ],
+    [
+     447781402891903,
+     1265049
+    ],
+    [
+     447781417892498,
+     1864672
+    ],
+    [
+     447781467893627,
+     1324415
+    ],
+    [
+     447781682898377,
+     1012802
+    ],
+    [
+     447781747900356,
+     1108885
+    ],
+    [
+     447781867902759,
+     1013041
+    ],
+    [
+     447782072907021,
+     1024723
+    ],
+    [
+     447782252911373,
+     1009464
+    ],
+    [
+     447782467915751,
+     1532793
+    ],
+    [
+     447782532917788,
+     1613855
+    ],
+    [
+     447782697921935,
+     1005173
+    ],
+    [
+     447782827924345,
+     1000881
+    ],
+    [
+     447783147931956,
+     1612902
+    ],
+    [
+     447783162932124,
+     1067400
+    ],
+    [
+     447783182932594,
+     1913548
+    ],
+    [
+     447783267934315,
+     1060963
+    ],
+    [
+     447783372937167,
+     1594067
+    ],
+    [
+     447783467939521,
+     2293825
+    ],
+    [
+     447783597942336,
+     1263380
+    ]
+   ],
+   "first_t0": 1794989947.2056086,
+   "last_t1": 1794989957.2064323
+  },
+  {
+   "role": "writer",
+   "index": 8,
+   "core": 3.0,
+   "core_end": 3.0,
+   "ok": 2001,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447773768966713,
+     1086235
+    ],
+    [
+     447773783967497,
+     1075506
+    ],
+    [
+     447773933971144,
+     1035452
+    ],
+    [
+     447773938971249,
+     1094103
+    ],
+    [
+     447773968972050,
+     1020193
+    ],
+    [
+     447774003972248,
+     1655817
+    ],
+    [
+     447774018972776,
+     1011848
+    ],
+    [
+     447774148976095,
+     1019716
+    ],
+    [
+     447774338980644,
+     1011372
+    ],
+    [
+     447774348980254,
+     1340628
+    ],
+    [
+     447774458982484,
+     1064301
+    ],
+    [
+     447774468983309,
+     1379728
+    ],
+    [
+     447774498984029,
+     2045155
+    ],
+    [
+     447774503983375,
+     1204491
+    ],
+    [
+     447774513984381,
+     1087904
+    ],
+    [
+     447774543984939,
+     1161814
+    ],
+    [
+     447774668987897,
+     1004219
+    ],
+    [
+     447774778990595,
+     1175404
+    ],
+    [
+     447774793990468,
+     1078844
+    ],
+    [
+     447774838991977,
+     1255274
+    ],
+    [
+     447774898992766,
+     1041889
+    ],
+    [
+     447774918993630,
+     5702972
+    ],
+    [
+     447774923992543,
+     1335621
+    ],
+    [
+     447775003995572,
+     1975298
+    ],
+    [
+     447775178999766,
+     1031876
+    ],
+    [
+     447775229000653,
+     1316071
+    ],
+    [
+     447775324002604,
+     1078129
+    ],
+    [
+     447775379003640,
+     1091480
+    ],
+    [
+     447775384003636,
+     1009226
+    ],
+    [
+     447775469006031,
+     1141310
+    ],
+    [
+     447775489006642,
+     1265526
+    ],
+    [
+     447775599008529,
+     1103640
+    ],
+    [
+     447775634010110,
+     1056194
+    ],
+    [
+     447775689011457,
+     1113176
+    ],
+    [
+     447775739012575,
+     1006365
+    ],
+    [
+     447775839014366,
+     1051664
+    ],
+    [
+     447776019018660,
+     1066208
+    ],
+    [
+     447776119020512,
+     3132582
+    ],
+    [
+     447776209022996,
+     1110077
+    ],
+    [
+     447776219023587,
+     1001120
+    ],
+    [
+     447776309024798,
+     1044512
+    ],
+    [
+     447776329026100,
+     1060486
+    ],
+    [
+     447776559031264,
+     1064777
+    ],
+    [
+     447776564031180,
+     1007557
+    ],
+    [
+     447776574031315,
+     1036406
+    ],
+    [
+     447776584030992,
+     4731417
+    ],
+    [
+     447776614032474,
+     1185179
+    ],
+    [
+     447776659033418,
+     1044989
+    ],
+    [
+     447776724035347,
+     1075983
+    ],
+    [
+     447776734035417,
+     1427412
+    ],
+    [
+     447776849037639,
+     1387119
+    ],
+    [
+     447777024041351,
+     1031160
+    ],
+    [
+     447777059042054,
+     1018524
+    ],
+    [
+     447777119044063,
+     1006842
+    ],
+    [
+     447777154044472,
+     1129389
+    ],
+    [
+     447777209045783,
+     1056194
+    ],
+    [
+     447777219045998,
+     1018286
+    ],
+    [
+     447777249046970,
+     1065731
+    ],
+    [
+     447777274047500,
+     1004219
+    ],
+    [
+     447777434050842,
+     1024485
+    ],
+    [
+     447777469052195,
+     1755953
+    ],
+    [
+     447777494052492,
+     1010418
+    ],
+    [
+     447777524052722,
+     1035690
+    ],
+    [
+     447777544053713,
+     1081228
+    ],
+    [
+     447777584054504,
+     1008272
+    ],
+    [
+     447777619055154,
+     1076460
+    ],
+    [
+     447777709057106,
+     1209497
+    ],
+    [
+     447777809059610,
+     1066208
+    ],
+    [
+     447777849060931,
+     1021624
+    ],
+    [
+     447777909061382,
+     3859043
+    ],
+    [
+     447777914062207,
+     1015425
+    ],
+    [
+     447777919061826,
+     1071453
+    ],
+    [
+     447777924061980,
+     1330853
+    ],
+    [
+     447777929062460,
+     1226902
+    ],
+    [
+     447777969063562,
+     1118183
+    ],
+    [
+     447778099066561,
+     1198053
+    ],
+    [
+     447778134067149,
+     2634525
+    ],
+    [
+     447778174068585,
+     1081705
+    ],
+    [
+     447778259069836,
+     1052380
+    ],
+    [
+     447778339071927,
+     1079559
+    ],
+    [
+     447778379073060,
+     1077175
+    ],
+    [
+     447778474074534,
+     2489567
+    ],
+    [
+     447778494074894,
+     1043081
+    ],
+    [
+     447778534075841,
+     1092672
+    ],
+    [
+     447778544076158,
+     1063108
+    ],
+    [
+     447778634078610,
+     5181789
+    ],
+    [
+     447778699080363,
+     1736641
+    ],
+    [
+     447778724080245,
+     1025438
+    ],
+    [
+     447778744081605,
+     1003504
+    ],
+    [
+     447778764082114,
+     1076221
+    ],
+    [
+     447778804082995,
+     1460552
+    ],
+    [
+     447778859083244,
+     1586676
+    ],
+    [
+     447778889084023,
+     2973557
+    ],
+    [
+     447778924085380,
+     1011848
+    ],
+    [
+     447778959086097,
+     1053333
+    ],
+    [
+     447779019087191,
+     1113653
+    ],
+    [
+     447779024087757,
+     1553059
+    ],
+    [
+     447779029087248,
+     1085520
+    ],
+    [
+     447779064088522,
+     1171589
+    ],
+    [
+     447779189090917,
+     1178741
+    ],
+    [
+     447779399095806,
+     1278877
+    ],
+    [
+     447779469097083,
+     2160072
+    ],
+    [
+     447779479097791,
+     1030445
+    ],
+    [
+     447779484097835,
+     1060963
+    ],
+    [
+     447779519099324,
+     1012802
+    ],
+    [
+     447779544099659,
+     1947880
+    ],
+    [
+     447779619101393,
+     1084805
+    ],
+    [
+     447779664102659,
+     1081467
+    ],
+    [
+     447779684102660,
+     4781246
+    ],
+    [
+     447779694102821,
+     1042604
+    ],
+    [
+     447779809105347,
+     1004696
+    ],
+    [
+     447779884106998,
+     1089573
+    ],
+    [
+     447779929108360,
+     1045942
+    ],
+    [
+     447779944108709,
+     1012087
+    ],
+    [
+     447779999109236,
+     1006126
+    ],
+    [
+     447780024110706,
+     2000570
+    ],
+    [
+     447780384118091,
+     1123428
+    ],
+    [
+     447780469120592,
+     1273632
+    ],
+    [
+     447780499121378,
+     1124620
+    ],
+    [
+     447780509121505,
+     1040936
+    ],
+    [
+     447780529121796,
+     1008034
+    ],
+    [
+     447780554122700,
+     1092434
+    ],
+    [
+     447780599123659,
+     1021624
+    ],
+    [
+     447780709126302,
+     1021862
+    ],
+    [
+     447780734126617,
+     2540588
+    ],
+    [
+     447780844128685,
+     3202915
+    ],
+    [
+     447781004132952,
+     1813889
+    ],
+    [
+     447781024133565,
+     1917362
+    ],
+    [
+     447781054134102,
+     1094818
+    ],
+    [
+     447781149135974,
+     1099586
+    ],
+    [
+     447781169136465,
+     1720190
+    ],
+    [
+     447781174136313,
+     1412392
+    ],
+    [
+     447781234138034,
+     3143549
+    ],
+    [
+     447781419142594,
+     1141548
+    ],
+    [
+     447781459143159,
+     5525112
+    ],
+    [
+     447781464142383,
+     1137257
+    ],
+    [
+     447781624147176,
+     1378775
+    ],
+    [
+     447781744149835,
+     4480124
+    ],
+    [
+     447781784150103,
+     3543377
+    ],
+    [
+     447781849152269,
+     1330853
+    ],
+    [
+     447781989155162,
+     1029730
+    ],
+    [
+     447782174159120,
+     1119852
+    ],
+    [
+     447782179159800,
+     1014471
+    ],
+    [
+     447782199160544,
+     1003981
+    ],
+    [
+     447782279162232,
+     1250982
+    ],
+    [
+     447782344163696,
+     1130819
+    ],
+    [
+     447782399165246,
+     1072884
+    ],
+    [
+     447782534167534,
+     1101494
+    ],
+    [
+     447782544167872,
+     4609823
+    ],
+    [
+     447782829174541,
+     1121998
+    ],
+    [
+     447782929176888,
+     1066685
+    ],
+    [
+     447783079180395,
+     1030207
+    ],
+    [
+     447783099181187,
+     1413107
+    ],
+    [
+     447783139181871,
+     1038551
+    ],
+    [
+     447783149182280,
+     1160860
+    ],
+    [
+     447783164182094,
+     1399040
+    ],
+    [
+     447783184182462,
+     1089811
+    ],
+    [
+     447783469188571,
+     1653671
+    ],
+    [
+     447783484189010,
+     1123428
+    ],
+    [
+     447783674194141,
+     2692223
+    ]
+   ],
+   "first_t0": 1794989947.206835,
+   "last_t1": 1794989957.2096798
+  },
+  {
+   "role": "writer",
+   "index": 9,
+   "core": 2.0,
+   "core_end": 2.0,
+   "ok": 2001,
+   "errors": 0,
+   "refusals": 0,
+   "slow_dropped": 0,
+   "slow": [
+    [
+     447773740216379,
+     1831293
+    ],
+    [
+     447773750216998,
+     1020670
+    ],
+    [
+     447773765216555,
+     1077890
+    ],
+    [
+     447773985222220,
+     5538225
+    ],
+    [
+     447773990221737,
+     1462936
+    ],
+    [
+     447774260228404,
+     1218081
+    ],
+    [
+     447774335230216,
+     1038551
+    ],
+    [
+     447774350230435,
+     1061440
+    ],
+    [
+     447774500234096,
+     1163721
+    ],
+    [
+     447774530234379,
+     1023293
+    ],
+    [
+     447774535234879,
+     4663944
+    ],
+    [
+     447774545235012,
+     2508879
+    ],
+    [
+     447774690238047,
+     1201630
+    ],
+    [
+     447774830241251,
+     1158476
+    ],
+    [
+     447774895242926,
+     2066135
+    ],
+    [
+     447774935243423,
+     1127005
+    ],
+    [
+     447775005245665,
+     1137257
+    ],
+    [
+     447775035245919,
+     4997730
+    ],
+    [
+     447775090247764,
+     1553774
+    ],
+    [
+     447775225250531,
+     1066208
+    ],
+    [
+     447775265251474,
+     1236916
+    ],
+    [
+     447775315252363,
+     1061201
+    ],
+    [
+     447775365253551,
+     1009941
+    ],
+    [
+     447775460255880,
+     1327753
+    ],
+    [
+     447775510257370,
+     1008511
+    ],
+    [
+     447775530257224,
+     1004219
+    ],
+    [
+     447775540257760,
+     1607180
+    ],
+    [
+     447775690261184,
+     1103401
+    ],
+    [
+     447775765263348,
+     1867533
+    ],
+    [
+     447775770262894,
+     1083612
+    ],
+    [
+     447775800263455,
+     1035213
+    ],
+    [
+     447775810263694,
+     1006126
+    ],
+    [
+     447775850264925,
+     1113415
+    ],
+    [
+     447775925266528,
+     1463175
+    ],
+    [
+     447775990268085,
+     2011538
+    ],
+    [
+     447776005268848,
+     2173185
+    ],
+    [
+     447776025268975,
+     1248360
+    ],
+    [
+     447776035269076,
+     1213789
+    ],
+    [
+     447776050269443,
+     1088619
+    ],
+    [
+     447776095270648,
+     1033545
+    ],
+    [
+     447776120270803,
+     1016140
+    ],
+    [
+     447776130271382,
+     1114845
+    ],
+    [
+     447776185272099,
+     1193523
+    ],
+    [
+     447776215273397,
+     2122164
+    ],
+    [
+     447776270274731,
+     1153469
+    ],
+    [
+     447776350276346,
+     1015663
+    ],
+    [
+     447776600281963,
+     1295090
+    ],
+    [
+     447776625282289,
+     1192808
+    ],
+    [
+     447776650282808,
+     1540422
+    ],
+    [
+     447776735284227,
+     4404783
+    ],
+    [
+     447777125294154,
+     1235485
+    ],
+    [
+     447777220295551,
+     1072645
+    ],
+    [
+     447777275297221,
+     1844883
+    ],
+    [
+     447777300297991,
+     1015902
+    ],
+    [
+     447777350299057,
+     1118898
+    ],
+    [
+     447777360299475,
+     1014948
+    ],
+    [
+     447777775308995,
+     1652241
+    ],
+    [
+     447777820310534,
+     1577854
+    ],
+    [
+     447777885311136,
+     1098156
+    ],
+    [
+     447777910312034,
+     1320362
+    ],
+    [
+     447777955313137,
+     1023531
+    ],
+    [
+     447777965312774,
+     1036644
+    ],
+    [
+     447778000314047,
+     1805305
+    ],
+    [
+     447778100316422,
+     1397133
+    ],
+    [
+     447778220319167,
+     1097441
+    ],
+    [
+     447778225319089,
+     1923800
+    ],
+    [
+     447778260319461,
+     1799345
+    ],
+    [
+     447778325321496,
+     1034260
+    ],
+    [
+     447778385322471,
+     1055956
+    ],
+    [
+     447778405323500,
+     1013517
+    ],
+    [
+     447778450324258,
+     1952887
+    ],
+    [
+     447778810332941,
+     2132416
+    ],
+    [
+     447778840334388,
+     1063347
+    ],
+    [
+     447778890333911,
+     1715183
+    ],
+    [
+     447778915334833,
+     1132965
+    ],
+    [
+     447778950335766,
+     1986504
+    ],
+    [
+     447779000336692,
+     1234770
+    ],
+    [
+     447779015336468,
+     4417181
+    ],
+    [
+     447779030338914,
+     1783133
+    ],
+    [
+     447779045337209,
+     1108885
+    ],
+    [
+     447779160340518,
+     1327038
+    ],
+    [
+     447779185340936,
+     1131058
+    ],
+    [
+     447779245342375,
+     1043081
+    ],
+    [
+     447779265342981,
+     1472473
+    ],
+    [
+     447779395345910,
+     4426003
+    ],
+    [
+     447779455347680,
+     1989841
+    ],
+    [
+     447779460347077,
+     1119852
+    ],
+    [
+     447779470346995,
+     1242161
+    ],
+    [
+     447779735353768,
+     5502462
+    ],
+    [
+     447779740352946,
+     1062155
+    ],
+    [
+     447779800355001,
+     1042843
+    ],
+    [
+     447779930358213,
+     1055479
+    ],
+    [
+     447780000359722,
+     1550674
+    ],
+    [
+     447780010359995,
+     1789093
+    ],
+    [
+     447780230364846,
+     1114607
+    ],
+    [
+     447780235365229,
+     1534224
+    ],
+    [
+     447780250365641,
+     1052380
+    ],
+    [
+     447780270366232,
+     1633167
+    ],
+    [
+     447780380368269,
+     4528761
+    ],
+    [
+     447780415369239,
+     1326561
+    ],
+    [
+     447780425369214,
+     1091242
+    ],
+    [
+     447780470370959,
+     1867056
+    ],
+    [
+     447780560372315,
+     1552343
+    ],
+    [
+     447780640374489,
+     1000643
+    ],
+    [
+     447780650374723,
+     1024008
+    ],
+    [
+     447780720376251,
+     1942396
+    ],
+    [
+     447780830378568,
+     1061440
+    ],
+    [
+     447780845379074,
+     1204252
+    ],
+    [
+     447780855378932,
+     1051903
+    ],
+    [
+     447780900380318,
+     1145601
+    ],
+    [
+     447780905380760,
+     1037359
+    ],
+    [
+     447780990382238,
+     1733065
+    ],
+    [
+     447781000382605,
+     1251698
+    ],
+    [
+     447781055384217,
+     1064062
+    ],
+    [
+     447781275389234,
+     1260042
+    ],
+    [
+     447781280388786,
+     1205683
+    ],
+    [
+     447781290389350,
+     1152992
+    ],
+    [
+     447781400392093,
+     1037836
+    ],
+    [
+     447781545395167,
+     1255274
+    ],
+    [
+     447781585396276,
+     1743555
+    ],
+    [
+     447781625397221,
+     1093388
+    ],
+    [
+     447781685398445,
+     1101494
+    ],
+    [
+     447781705398201,
+     1111746
+    ],
+    [
+     447781745400006,
+     1412392
+    ],
+    [
+     447781820401109,
+     1100779
+    ],
+    [
+     447781835402165,
+     1086950
+    ],
+    [
+     447781915403358,
+     1122713
+    ],
+    [
+     447782000405549,
+     1684189
+    ],
+    [
+     447782010406152,
+     1074553
+    ],
+    [
+     447782015405609,
+     1194239
+    ],
+    [
+     447782045406992,
+     1733541
+    ],
+    [
+     447782080407145,
+     1168966
+    ],
+    [
+     447782170409954,
+     1342297
+    ],
+    [
+     447782280412356,
+     1327038
+    ],
+    [
+     447782315413086,
+     1000166
+    ],
+    [
+     447782430415258,
+     5297899
+    ],
+    [
+     447782550417773,
+     1456976
+    ],
+    [
+     447782555418365,
+     1013279
+    ],
+    [
+     447782615419687,
+     1258850
+    ],
+    [
+     447782675420983,
+     1131773
+    ],
+    [
+     447782785423223,
+     3452063
+    ],
+    [
+     447782790423568,
+     1060724
+    ],
+    [
+     447782865425422,
+     1073360
+    ],
+    [
+     447782980427797,
+     1290798
+    ],
+    [
+     447783025428902,
+     1468182
+    ],
+    [
+     447783050429559,
+     1422644
+    ],
+    [
+     447783055429907,
+     1329422
+    ],
+    [
+     447783065429701,
+     1423120
+    ],
+    [
+     447783100430711,
+     1067638
+    ],
+    [
+     447783110430541,
+     1066208
+    ],
+    [
+     447783120430786,
+     1193047
+    ],
+    [
+     447783180432400,
+     6414652
+    ],
+    [
+     447783185431997,
+     2465248
+    ],
+    [
+     447783205433128,
+     1058817
+    ],
+    [
+     447783255434399,
+     1390457
+    ],
+    [
+     447783275434466,
+     1015902
+    ],
+    [
+     447783280434719,
+     1038551
+    ],
+    [
+     447783290435562,
+     1658678
+    ],
+    [
+     447783345436097,
+     1027107
+    ],
+    [
+     447783565441006,
+     1049042
+    ],
+    [
+     447783570441829,
+     5620956
+    ],
+    [
+     447783575441497,
+     1425028
+    ],
+    [
+     447783615442754,
+     1058102
+    ],
+    [
+     447783675443891,
+     5333185
+    ]
+   ],
+   "first_t0": 1794989947.208122,
+   "last_t1": 1794989957.2135708
+  }
+ ],
+ "meta_core": 3.0,
+ "meta_core_m0": 3.0,
+ "meta_core_mid": 3.0,
+ "meta_core_m1": 3.0,
+ "meta_ctl_moved": false,
+ "meta_rereads": 0,
+ "meta_delta": {
+  "version": 0.0,
+  "create_time": 0.0,
+  "last_mount_time": 0.0,
+  "wal_lineage": 0.0,
+  "core": 0.0,
+  "catalog_marks_purged": 0.0,
+  "catalog_purge_sweeps": 0.0,
+  "cabin_optimizer_managed": 0.0,
+  "cabin_optimizer_pages_committed": 0.0,
+  "cabin_optimizer_page_budget": 0.0,
+  "cabin_optimizer_ticks": 0.0,
+  "cabin_optimizer_creates": 0.0,
+  "cabin_optimizer_extends": 0.0,
+  "cabin_optimizer_heals": 0.0,
+  "cabin_optimizer_drops": 0.0,
+  "cabin_optimizer_deferred": 0.0,
+  "cabin_optimizer_failures": 0.0,
+  "waystone_opted": 0.0,
+  "plan_stats_generation": 0.0,
+  "plan_stats_relations": 0.0,
+  "plan_stats_posteriors": 0.0,
+  "plan_stats_part_drops": 0.0,
+  "plan_stats_seeds": 0.0,
+  "plan_stats_seed_pages": 0.0,
+  "plan_stats_publishes": 0.0,
+  "plan_stats_steward_us_max": 0.0,
+  "plan_memo_hits": 0.0,
+  "plan_memo_misses": 0.0,
+  "captured_plans": 0.0,
+  "captured_served": 0.0,
+  "capture_deferred": 0.0,
+  "capture_unkeyed": 0.0,
+  "capture_over_ceiling": 0.0,
+  "capture_declined": 0.0,
+  "captured_pending": 0.0,
+  "captured_persisted": 0.0,
+  "captured_loaded": 0.0,
+  "cabins_unbankable_views": 0.0,
+  "cabins_cap_refusals": 0.0,
+  "map_regions": 0.0,
+  "map_pages_resident": 0.0,
+  "map_coverage_ids": 0.0,
+  "headerless_pages": 0.0,
+  "pages_allocated": 37.0,
+  "pages_freed": 0.0,
+  "pages_reused": 0.0,
+  "reclaim_pending": 0.0,
+  "reclaim_deferred": 0.0,
+  "reclaim_skipped": 0.0,
+  "reclaim_refused": 0.0,
+  "pool_budget": 0.0,
+  "pool_resident": 37.0,
+  "pool_slots": 0.0,
+  "pool_hits": 72037.0,
+  "pool_misses": 37.0,
+  "pool_reclaimed_inline": 0.0,
+  "pool_reclaimed_background": 0.0,
+  "pool_batches_inline": 0.0,
+  "pool_batches_background": 0.0,
+  "pool_batches_partial": 0.0,
+  "pool_batch_steps": 0.0,
+  "pool_batch_steps_background": 0.0,
+  "pool_dirty_queued": 0.0,
+  "pool_dirty_drained": 0.0,
+  "pool_refused": 0.0,
+  "undo_pages_live": -104.0,
+  "undo_pages_recycled": 11.0,
+  "read_only_begins": 0.0,
+  "read_only_write_refusals": 0.0,
+  "wal_durable_lsn": 1995360.0,
+  "wal_syncs": 0.0,
+  "wal_interval_syncs": 0.0,
+  "wal_sync_failures": 0.0,
+  "wal_group_commits": 2000.0,
+  "wal_group_batches": 2000.0,
+  "wal_mean_group_batch": 0.0,
+  "wal_group_batch_max": 0.0,
+  "wal_group_batch_min": 0.0,
+  "wal_ring_full": 0.0,
+  "wal_ring_full_refusals": 0.0,
+  "wal_append_lsn": 1995360.0,
+  "wal_rolls": 0.0,
+  "wal_roll_hold_us": 0.0,
+  "wal_roll_hold_max_us": 0.0,
+  "wal_roll_seal_us": 0.0,
+  "wal_roll_flush_us": 0.0,
+  "wal_roll_sync_gate_us": 0.0,
+  "wal_roll_sync_us": 0.0,
+  "wal_roll_sync_tail_us": 0.0,
+  "wal_roll_sync_rest_us": 0.0,
+  "wal_roll_sync_segments": 0.0,
+  "wal_roll_sync_segments_max": 0.0,
+  "wal_roll_create_us": 0.0,
+  "wal_roll_body_wait_us": 0.0,
+  "wal_roll_body_us": 0.0,
+  "wal_roll_header_us": 0.0,
+  "wal_roll_rename_us": 0.0,
+  "wal_roll_dirsync_us": 0.0,
+  "wal_roll_body_hit": 0.0,
+  "wal_roll_body_waited": 0.0,
+  "wal_roll_body_inline": 0.0,
+  "sched_wall_us": 10061091.0,
+  "sched_iterations": 24550.0,
+  "sched_idle_blocks": 11406.0,
+  "sched_parked_idle_blocks": 11406.0,
+  "sched_idle_block_us": 9737426.0,
+  "sched_wakes_sent": 8082.0,
+  "sched_wakes_received": 2033.0,
+  "sched_foreground_polled_us": 215600.0,
+  "sched_foreground_polls": 7918.0,
+  "sched_foreground_consumed_us": 215600.0,
+  "sched_foreground_longest_poll_us": 0.0,
+  "sched_foreground_polls_over_10ms": 0.0,
+  "sched_foreground_polls_over_100ms": 0.0,
+  "sched_maintenance_polled_us": 0.0,
+  "sched_maintenance_polls": 0.0,
+  "sched_maintenance_consumed_us": 0.0,
+  "sched_maintenance_longest_poll_us": 0.0,
+  "sched_maintenance_polls_over_10ms": 0.0,
+  "sched_maintenance_polls_over_100ms": 0.0,
+  "sched_system_polled_us": 6414.0,
+  "sched_system_polls": 24595.0,
+  "sched_system_consumed_us": 6414.0,
+  "sched_system_longest_poll_us": 6.0,
+  "sched_system_polls_over_10ms": 0.0,
+  "sched_system_polls_over_100ms": 0.0,
+  "sched_hold_in_run_over_10ms": 0.0,
+  "sched_hold_in_run_over_100ms": 0.0,
+  "sched_hold_in_run_over_1s": 0.0,
+  "sched_hold_out_run_over_10ms": 0.0,
+  "sched_hold_out_run_over_100ms": 0.0,
+  "sched_hold_out_run_over_1s": 0.0,
+  "sched_longest_unpolled_us": 0.0,
+  "sched_unpolled_over_100ms": 0.0,
+  "checkpoint_runs": 2.0,
+  "checkpoint_start_refused": 0.0,
+  "checkpoint_last_completed": 0.0,
+  "checkpoint_last_wall_us": 346.0,
+  "checkpoint_last_step_max_us": 0.0,
+  "checkpoint_last_step_page_write_max_us": 9.0,
+  "checkpoint_last_steps": -1.0,
+  "checkpoint_last_pages": 0.0,
+  "checkpoint_last_dirty_at_start": 0.0,
+  "checkpoint_last_gate_parks": -2.0,
+  "checkpoint_last_end_parks": 0.0,
+  "checkpoint_last_start_sum_us": 3.0,
+  "checkpoint_last_start_max_us": 3.0,
+  "checkpoint_last_log_gate_batch_sum_us": 0.0,
+  "checkpoint_last_log_gate_batch_max_us": 0.0,
+  "checkpoint_last_log_gate_run_sum_us": 0.0,
+  "checkpoint_last_log_gate_run_max_us": 0.0,
+  "checkpoint_last_page_write_sum_us": -8.0,
+  "checkpoint_last_page_write_max_us": -23.0,
+  "checkpoint_last_map_write_sum_us": 0.0,
+  "checkpoint_last_map_write_max_us": 0.0,
+  "checkpoint_last_claim_wait_sum_us": 0.0,
+  "checkpoint_last_claim_wait_max_us": 0.0,
+  "checkpoint_last_data_sync_sum_us": 0.0,
+  "checkpoint_last_data_sync_max_us": 0.0,
+  "checkpoint_last_end_wait_sum_us": 0.0,
+  "checkpoint_last_end_wait_max_us": 0.0,
+  "checkpoint_last_publish_writeback_sum_us": -10.0,
+  "checkpoint_last_publish_writeback_max_us": -5.0,
+  "checkpoint_last_publish_sync_sum_us": 0.0,
+  "checkpoint_last_publish_sync_max_us": 0.0,
+  "batch_sessions": 0.0,
+  "batch_cores": 0.0,
+  "load_c0_active_sessions": 0.0,
+  "load_c0_heads": 5339.0,
+  "load_c0_inside": 0.0,
+  "load_c0_moves_out": 0.0,
+  "load_c0_partition_moves_out": 0.0,
+  "load_c0_waited_frame_table_us": 146.0,
+  "load_c0_waited_window_us": 3.0,
+  "load_c0_waited_lock_partition_us": 6.0,
+  "load_c0_waited_wal_stream_us": 1.0,
+  "load_c0_waited_stats_ring_us": 0.0,
+  "load_c0_wal_drain_latch_wait_us": 0.0,
+  "load_c0_visibility_window_lookups": 4430.0,
+  "load_c1_active_sessions": 0.0,
+  "load_c1_heads": 0.0,
+  "load_c1_inside": 0.0,
+  "load_c1_moves_out": 0.0,
+  "load_c1_partition_moves_out": 0.0,
+  "load_c1_waited_frame_table_us": 8.0,
+  "load_c1_waited_window_us": 116.0,
+  "load_c2_active_sessions": 0.0,
+  "load_c2_heads": 4005.0,
+  "load_c2_inside": 0.0,
+  "load_c2_moves_out": 0.0,
+  "load_c2_partition_moves_out": 0.0,
+  "load_c2_waited_frame_table_us": 136.0,
+  "load_c2_waited_window_us": 84.0,
+  "load_c2_waited_lock_partition_us": 12.0,
+  "load_c2_waited_stats_ring_us": 0.0,
+  "load_c2_visibility_window_lookups": 2495.0,
+  "load_c3_active_sessions": 0.0,
+  "load_c3_heads": 2672.0,
+  "load_c3_inside": 0.0,
+  "load_c3_moves_out": 0.0,
+  "load_c3_partition_moves_out": 0.0,
+  "load_c3_waited_frame_table_us": 149.0,
+  "load_c3_waited_window_us": 479.0,
+  "load_c3_waited_lock_partition_us": 1.0,
+  "load_c3_waited_wal_stream_us": 1.0,
+  "load_c3_visibility_window_lookups": 1841.0,
+  "recovery_records": 0.0,
+  "recovery_committed": 0.0,
+  "recovery_rolled_back": 0.0,
+  "recovery_compensations": 0.0,
+  "recovery_redo_applied": 0.0,
+  "recovery_pages_healed": 0.0,
+  "recovery_torn_tail": 0.0,
+  "recovery_analysis_us": 0.0,
+  "recovery_redo_us": 0.0,
+  "recovery_high_water_us": 0.0,
+  "recovery_undo_us": 0.0,
+  "recovery_checkpoint_us": 0.0,
+  "recovery_relations_checked": 0.0,
+  "recovery_relations_missing_pages": 0.0,
+  "catalog_recovered": 0.0,
+  "catalog_marks_finalized": 0.0,
+  "ddl_durable": 0.0,
+  "recovery_assertions_enforcing": 0.0,
+  "recovery_assertions_unrecovered": 0.0,
+  "backup_log_bytes_copied": 0.0,
+  "backup_fence_writes_waited": 0.0,
+  "backup_pages_verified": 0.0,
+  "backups_completed": 0.0,
+  "backups_failed": 0.0,
+  "lock_waits_recorded": 0.0,
+  "lock_waits_overwritten": 0.0,
+  "lock_waits_dropped": 0.0,
+  "statement_stats_dropped": 0.0,
+  "relation_stats_dropped": 0.0,
+  "checkpoints_recorded": 8.0,
+  "checkpoints_overwritten": 0.0,
+  "checkpoints_dropped": 0.0,
+  "contention_other_waits": 0.0,
+  "contention_other_wait_us": 0.0,
+  "contention_frame_table_waits": 299.0,
+  "contention_frame_table_wait_us": 438.0,
+  "contention_free_map_waits": 0.0,
+  "contention_free_map_wait_us": 0.0,
+  "contention_free_map_flush_waits": 0.0,
+  "contention_free_map_flush_wait_us": 0.0,
+  "contention_window_waits": 18.0,
+  "contention_window_wait_us": 683.0,
+  "contention_lock_partition_waits": 30.0,
+  "contention_lock_partition_wait_us": 18.0,
+  "contention_lock_wait_for_waits": 0.0,
+  "contention_lock_wait_for_wait_us": 0.0,
+  "contention_wal_stream_waits": 3.0,
+  "contention_wal_stream_wait_us": 3.0,
+  "contention_wal_sync_gate_waits": 0.0,
+  "contention_wal_sync_gate_wait_us": 0.0,
+  "contention_assertion_dir_waits": 0.0,
+  "contention_assertion_dir_wait_us": 0.0,
+  "contention_optimizer_waits": 0.0,
+  "contention_optimizer_wait_us": 0.0,
+  "contention_superblock_waits": 0.0,
+  "contention_superblock_wait_us": 0.0,
+  "contention_cabin_partition_waits": 0.0,
+  "contention_cabin_partition_wait_us": 0.0,
+  "contention_cabin_stats_waits": 0.0,
+  "contention_cabin_stats_wait_us": 0.0,
+  "contention_handoff_waits": 0.0,
+  "contention_handoff_wait_us": 0.0,
+  "contention_stats_ring_waits": 0.0,
+  "contention_stats_ring_wait_us": 0.0,
+  "contention_page_latch_waits": 2.0,
+  "contention_page_latch_spin_turns": 249.0,
+  "contention_syncs_inline": 0.0,
+  "contention_syncs_writer": 8002.0,
+  "contention_drain_passes_pending": 26068.0,
+  "contention_ceiling_waits": 0.0,
+  "contention_ceiling_wait_us": 0.0,
+  "contention_carves": 4.0,
+  "contention_checkpoint_runs": 8.0,
+  "contention_refused_btree_descend": 0.0,
+  "contention_refused_btree_parent": 0.0,
+  "contention_refused_btree_secure": 0.0,
+  "contention_refused_btree_lookup": 0.0,
+  "contention_refused_index_descend": 0.0,
+  "contention_refused_index_parent": 0.0,
+  "contention_refused_index_secure": 0.0,
+  "contention_structural_reruns": 0.0,
+  "contention_catalog_memo_drops": 0.0,
+  "contention_word_moves_root": 0.0,
+  "contention_word_moves_cabin": 0.0,
+  "contention_word_moves_schema": 0.0,
+  "contention_word_moves_resolve": 0.0,
+  "contention_inflight_asks": 0.0,
+  "contention_inflight_misses": 0.0,
+  "contention_inflight_miss_ids_read": 0.0,
+  "contention_checkpoint_pages_written": 612.0,
+  "contention_data_syncs": 29.0,
+  "contention_fence_walks": 0.0,
+  "contention_wal_drain_latch_wait_us": 0.0,
+  "contention_wal_roll_blocked_waits": 0.0,
+  "contention_wal_roll_blocked_wait_us": 0.0,
+  "contention_visibility_window_lookups": 8766.0
+ },
+ "meta_gauges_mid": {
+  "load_c0_busy_ppm": 49287.0,
+  "load_c0_foreground_ppm": 35157.0,
+  "load_c0_queued_foreground": 0.0,
+  "load_c0_sessions": 5.0,
+  "load_c1_busy_ppm": 2638.0,
+  "load_c1_foreground_ppm": 0.0,
+  "load_c1_queued_foreground": 0.0,
+  "load_c1_sessions": 1.0,
+  "load_c2_busy_ppm": 41204.0,
+  "load_c2_foreground_ppm": 28764.0,
+  "load_c2_queued_foreground": 0.0,
+  "load_c2_sessions": 5.0,
+  "load_c3_busy_ppm": 34106.0,
+  "load_c3_foreground_ppm": 23485.0,
+  "load_c3_queued_foreground": 0.0,
+  "load_c3_sessions": 4.0
+ },
+ "meta_longest": {
+  "sched_hold_in_run_longest_us": 297.0,
+  "sched_hold_out_run_longest_us": 2002.0,
+  "contention_carve_longest_us": 2005.0,
+  "contention_checkpoint_longest_us": 10261.0
+ },
+ "meta_m0": {
+  "version": 37.0,
+  "create_time": 1794989937.0,
+  "last_mount_time": 1794989937.0,
+  "wal_lineage": 3.305963835527691e+18,
+  "core": 3.0,
+  "catalog_marks_purged": 0.0,
+  "catalog_purge_sweeps": 0.0,
+  "cabin_optimizer_managed": 0.0,
+  "cabin_optimizer_pages_committed": 0.0,
+  "cabin_optimizer_page_budget": 1024.0,
+  "cabin_optimizer_ticks": 0.0,
+  "cabin_optimizer_creates": 0.0,
+  "cabin_optimizer_extends": 0.0,
+  "cabin_optimizer_heals": 0.0,
+  "cabin_optimizer_drops": 0.0,
+  "cabin_optimizer_deferred": 0.0,
+  "cabin_optimizer_failures": 0.0,
+  "waystone_opted": 0.0,
+  "plan_stats_generation": 0.0,
+  "plan_stats_relations": 0.0,
+  "plan_stats_posteriors": 0.0,
+  "plan_stats_part_drops": 0.0,
+  "plan_stats_seeds": 0.0,
+  "plan_stats_seed_pages": 0.0,
+  "plan_stats_publishes": 0.0,
+  "plan_stats_steward_us_max": 36.0,
+  "plan_memo_hits": 0.0,
+  "plan_memo_misses": 0.0,
+  "captured_plans": 0.0,
+  "captured_served": 0.0,
+  "capture_deferred": 0.0,
+  "capture_unkeyed": 0.0,
+  "capture_over_ceiling": 0.0,
+  "capture_declined": 0.0,
+  "captured_pending": 0.0,
+  "captured_persisted": 0.0,
+  "captured_loaded": 0.0,
+  "cabins_unbankable_views": 0.0,
+  "cabins_cap_refusals": 0.0,
+  "map_regions": 1.0,
+  "map_pages_resident": 1.0,
+  "map_coverage_ids": 65280.0,
+  "headerless_pages": 0.0,
+  "pages_allocated": 515.0,
+  "pages_freed": 0.0,
+  "pages_reused": 0.0,
+  "reclaim_pending": 0.0,
+  "reclaim_deferred": 0.0,
+  "reclaim_skipped": 0.0,
+  "reclaim_refused": 0.0,
+  "pool_budget": 65536.0,
+  "pool_resident": 514.0,
+  "pool_slots": 1024.0,
+  "pool_hits": 115199.0,
+  "pool_misses": 514.0,
+  "pool_reclaimed_inline": 0.0,
+  "pool_reclaimed_background": 0.0,
+  "pool_batches_inline": 0.0,
+  "pool_batches_background": 0.0,
+  "pool_batches_partial": 0.0,
+  "pool_batch_steps": 0.0,
+  "pool_batch_steps_background": 0.0,
+  "pool_dirty_queued": 0.0,
+  "pool_dirty_drained": 0.0,
+  "pool_refused": 0.0,
+  "undo_pages_live": 113.0,
+  "undo_pages_recycled": 0.0,
+  "read_only_begins": 0.0,
+  "read_only_write_refusals": 0.0,
+  "wal_durable_lsn": 17624120.0,
+  "wal_syncs": 0.0,
+  "wal_interval_syncs": 0.0,
+  "wal_sync_failures": 0.0,
+  "wal_group_commits": 554.0,
+  "wal_group_batches": 554.0,
+  "wal_mean_group_batch": 1.0,
+  "wal_group_batch_max": 1.0,
+  "wal_group_batch_min": 1.0,
+  "wal_ring_full": 0.0,
+  "wal_ring_full_refusals": 0.0,
+  "wal_append_lsn": 17624120.0,
+  "wal_rolls": 0.0,
+  "wal_roll_hold_us": 0.0,
+  "wal_roll_hold_max_us": 0.0,
+  "wal_roll_seal_us": 0.0,
+  "wal_roll_flush_us": 0.0,
+  "wal_roll_sync_gate_us": 0.0,
+  "wal_roll_sync_us": 0.0,
+  "wal_roll_sync_tail_us": 0.0,
+  "wal_roll_sync_rest_us": 0.0,
+  "wal_roll_sync_segments": 0.0,
+  "wal_roll_sync_segments_max": 0.0,
+  "wal_roll_create_us": 0.0,
+  "wal_roll_body_wait_us": 0.0,
+  "wal_roll_body_us": 0.0,
+  "wal_roll_header_us": 0.0,
+  "wal_roll_rename_us": 0.0,
+  "wal_roll_dirsync_us": 0.0,
+  "wal_roll_body_hit": 0.0,
+  "wal_roll_body_waited": 0.0,
+  "wal_roll_body_inline": 0.0,
+  "sched_wall_us": 9329057.0,
+  "sched_iterations": 18854.0,
+  "sched_idle_blocks": 8994.0,
+  "sched_parked_idle_blocks": 8994.0,
+  "sched_idle_block_us": 9127129.0,
+  "sched_wakes_sent": 1790.0,
+  "sched_wakes_received": 568.0,
+  "sched_foreground_polled_us": 128620.0,
+  "sched_foreground_polls": 2090.0,
+  "sched_foreground_consumed_us": 128620.0,
+  "sched_foreground_longest_poll_us": 878.0,
+  "sched_foreground_polls_over_10ms": 0.0,
+  "sched_foreground_polls_over_100ms": 0.0,
+  "sched_maintenance_polled_us": 0.0,
+  "sched_maintenance_polls": 0.0,
+  "sched_maintenance_consumed_us": 0.0,
+  "sched_maintenance_longest_poll_us": 0.0,
+  "sched_maintenance_polls_over_10ms": 0.0,
+  "sched_maintenance_polls_over_100ms": 0.0,
+  "sched_system_polled_us": 4702.0,
+  "sched_system_polls": 18876.0,
+  "sched_system_consumed_us": 4702.0,
+  "sched_system_longest_poll_us": 290.0,
+  "sched_system_polls_over_10ms": 0.0,
+  "sched_system_polls_over_100ms": 0.0,
+  "sched_hold_in_run_longest_us": 292.0,
+  "sched_hold_in_run_over_10ms": 0.0,
+  "sched_hold_in_run_over_100ms": 0.0,
+  "sched_hold_in_run_over_1s": 0.0,
+  "sched_hold_out_run_longest_us": 2002.0,
+  "sched_hold_out_run_over_10ms": 0.0,
+  "sched_hold_out_run_over_100ms": 0.0,
+  "sched_hold_out_run_over_1s": 0.0,
+  "sched_longest_unpolled_us": 2002.0,
+  "sched_unpolled_over_100ms": 0.0,
+  "checkpoint_runs": 1.0,
+  "checkpoint_start_refused": 0.0,
+  "checkpoint_last_completed": 1.0,
+  "checkpoint_last_wall_us": 6275.0,
+  "checkpoint_last_step_max_us": 287.0,
+  "checkpoint_last_step_page_write_max_us": 163.0,
+  "checkpoint_last_steps": 3.0,
+  "checkpoint_last_pages": 73.0,
+  "checkpoint_last_dirty_at_start": 73.0,
+  "checkpoint_last_gate_parks": 3.0,
+  "checkpoint_last_end_parks": 1.0,
+  "checkpoint_last_start_sum_us": 41.0,
+  "checkpoint_last_start_max_us": 41.0,
+  "checkpoint_last_log_gate_batch_sum_us": 0.0,
+  "checkpoint_last_log_gate_batch_max_us": 0.0,
+  "checkpoint_last_log_gate_run_sum_us": 0.0,
+  "checkpoint_last_log_gate_run_max_us": 0.0,
+  "checkpoint_last_page_write_sum_us": 205.0,
+  "checkpoint_last_page_write_max_us": 35.0,
+  "checkpoint_last_map_write_sum_us": 0.0,
+  "checkpoint_last_map_write_max_us": 0.0,
+  "checkpoint_last_claim_wait_sum_us": 0.0,
+  "checkpoint_last_claim_wait_max_us": 0.0,
+  "checkpoint_last_data_sync_sum_us": 0.0,
+  "checkpoint_last_data_sync_max_us": 0.0,
+  "checkpoint_last_end_wait_sum_us": 0.0,
+  "checkpoint_last_end_wait_max_us": 0.0,
+  "checkpoint_last_publish_writeback_sum_us": 47.0,
+  "checkpoint_last_publish_writeback_max_us": 27.0,
+  "checkpoint_last_publish_sync_sum_us": 0.0,
+  "checkpoint_last_publish_sync_max_us": 0.0,
+  "batch_sessions": 0.0,
+  "batch_cores": 0.0,
+  "load_c0_busy_ppm": 50602.0,
+  "load_c0_foreground_ppm": 36260.0,
+  "load_c0_queued_foreground": 0.0,
+  "load_c0_sessions": 5.0,
+  "load_c0_active_sessions": 4.0,
+  "load_c0_heads": 1080.0,
+  "load_c0_inside": 0.0,
+  "load_c0_moves_out": 0.0,
+  "load_c0_partition_moves_out": 0.0,
+  "load_c0_waited_frame_table_us": 185.0,
+  "load_c0_waited_window_us": 1.0,
+  "load_c0_waited_lock_partition_us": 5.0,
+  "load_c0_waited_stats_ring_us": 0.0,
+  "load_c0_visibility_window_lookups": 1871.0,
+  "load_c1_busy_ppm": 3457.0,
+  "load_c1_foreground_ppm": 0.0,
+  "load_c1_queued_foreground": 0.0,
+  "load_c1_sessions": 1.0,
+  "load_c1_active_sessions": 0.0,
+  "load_c1_heads": 5.0,
+  "load_c1_inside": 0.0,
+  "load_c1_moves_out": 0.0,
+  "load_c1_partition_moves_out": 0.0,
+  "load_c1_waited_window_us": 54.0,
+  "load_c2_busy_ppm": 42058.0,
+  "load_c2_foreground_ppm": 30367.0,
+  "load_c2_queued_foreground": 0.0,
+  "load_c2_sessions": 5.0,
+  "load_c2_active_sessions": 4.0,
+  "load_c2_heads": 817.0,
+  "load_c2_inside": 0.0,
+  "load_c2_moves_out": 0.0,
+  "load_c2_partition_moves_out": 0.0,
+  "load_c2_waited_frame_table_us": 152.0,
+  "load_c2_waited_window_us": 2.0,
+  "load_c2_waited_lock_partition_us": 28.0,
+  "load_c2_waited_stats_ring_us": 0.0,
+  "load_c2_visibility_window_lookups": 1204.0,
+  "load_c3_busy_ppm": 30104.0,
+  "load_c3_foreground_ppm": 20207.0,
+  "load_c3_queued_foreground": 0.0,
+  "load_c3_sessions": 4.0,
+  "load_c3_active_sessions": 2.0,
+  "load_c3_heads": 696.0,
+  "load_c3_inside": 0.0,
+  "load_c3_moves_out": 0.0,
+  "load_c3_partition_moves_out": 0.0,
+  "load_c3_waited_frame_table_us": 89.0,
+  "load_c3_waited_window_us": 0.0,
+  "load_c3_waited_lock_partition_us": 21.0,
+  "load_c3_visibility_window_lookups": 941.0,
+  "recovery_records": 0.0,
+  "recovery_committed": 0.0,
+  "recovery_rolled_back": 0.0,
+  "recovery_compensations": 0.0,
+  "recovery_redo_applied": 0.0,
+  "recovery_pages_healed": 0.0,
+  "recovery_torn_tail": 0.0,
+  "recovery_analysis_us": 0.0,
+  "recovery_redo_us": 0.0,
+  "recovery_high_water_us": 0.0,
+  "recovery_undo_us": 0.0,
+  "recovery_checkpoint_us": 1068.0,
+  "recovery_relations_checked": 0.0,
+  "recovery_relations_missing_pages": 0.0,
+  "catalog_recovered": 1.0,
+  "catalog_marks_finalized": 0.0,
+  "ddl_durable": 1.0,
+  "recovery_assertions_enforcing": 0.0,
+  "recovery_assertions_unrecovered": 0.0,
+  "backup_log_bytes_copied": 0.0,
+  "backup_fence_writes_waited": 0.0,
+  "backup_pages_verified": 0.0,
+  "backups_completed": 0.0,
+  "backups_failed": 0.0,
+  "lock_waits_recorded": 0.0,
+  "lock_waits_overwritten": 0.0,
+  "lock_waits_dropped": 0.0,
+  "statement_stats_dropped": 0.0,
+  "relation_stats_dropped": 0.0,
+  "checkpoints_recorded": 4.0,
+  "checkpoints_overwritten": 0.0,
+  "checkpoints_dropped": 0.0,
+  "contention_other_waits": 0.0,
+  "contention_other_wait_us": 0.0,
+  "contention_frame_table_waits": 524.0,
+  "contention_frame_table_wait_us": 428.0,
+  "contention_free_map_waits": 0.0,
+  "contention_free_map_wait_us": 0.0,
+  "contention_free_map_flush_waits": 0.0,
+  "contention_free_map_flush_wait_us": 0.0,
+  "contention_window_waits": 22.0,
+  "contention_window_wait_us": 58.0,
+  "contention_lock_partition_waits": 44.0,
+  "contention_lock_partition_wait_us": 55.0,
+  "contention_lock_wait_for_waits": 0.0,
+  "contention_lock_wait_for_wait_us": 0.0,
+  "contention_wal_stream_waits": 0.0,
+  "contention_wal_stream_wait_us": 0.0,
+  "contention_wal_sync_gate_waits": 0.0,
+  "contention_wal_sync_gate_wait_us": 0.0,
+  "contention_assertion_dir_waits": 0.0,
+  "contention_assertion_dir_wait_us": 0.0,
+  "contention_optimizer_waits": 0.0,
+  "contention_optimizer_wait_us": 0.0,
+  "contention_superblock_waits": 0.0,
+  "contention_superblock_wait_us": 0.0,
+  "contention_cabin_partition_waits": 0.0,
+  "contention_cabin_partition_wait_us": 0.0,
+  "contention_cabin_stats_waits": 0.0,
+  "contention_cabin_stats_wait_us": 0.0,
+  "contention_handoff_waits": 0.0,
+  "contention_handoff_wait_us": 0.0,
+  "contention_stats_ring_waits": 3.0,
+  "contention_stats_ring_wait_us": 0.0,
+  "contention_page_latch_waits": 5.0,
+  "contention_page_latch_spin_turns": 346.0,
+  "contention_syncs_inline": 2.0,
+  "contention_syncs_writer": 1769.0,
+  "contention_drain_passes_pending": 5837.0,
+  "contention_ceiling_waits": 0.0,
+  "contention_ceiling_wait_us": 0.0,
+  "contention_carves": 4.0,
+  "contention_checkpoint_runs": 4.0,
+  "contention_refused_btree_descend": 0.0,
+  "contention_refused_btree_parent": 0.0,
+  "contention_refused_btree_secure": 0.0,
+  "contention_refused_btree_lookup": 0.0,
+  "contention_refused_index_descend": 0.0,
+  "contention_refused_index_parent": 0.0,
+  "contention_refused_index_secure": 0.0,
+  "contention_structural_reruns": 0.0,
+  "contention_catalog_memo_drops": 6.0,
+  "contention_word_moves_root": 2.0,
+  "contention_word_moves_cabin": 0.0,
+  "contention_word_moves_schema": 15.0,
+  "contention_word_moves_resolve": 6.0,
+  "contention_inflight_asks": 0.0,
+  "contention_inflight_misses": 0.0,
+  "contention_inflight_miss_ids_read": 0.0,
+  "contention_checkpoint_pages_written": 624.0,
+  "contention_data_syncs": 24.0,
+  "contention_fence_walks": 0.0,
+  "contention_wal_drain_latch_wait_us": 0.0,
+  "contention_wal_roll_blocked_waits": 0.0,
+  "contention_wal_roll_blocked_wait_us": 0.0,
+  "contention_visibility_window_lookups": 4016.0,
+  "contention_carve_longest_us": 2005.0,
+  "contention_checkpoint_longest_us": 10261.0
+ },
+ "meta_m1": {
+  "version": 37.0,
+  "create_time": 1794989937.0,
+  "last_mount_time": 1794989937.0,
+  "wal_lineage": 3.305963835527691e+18,
+  "core": 3.0,
+  "catalog_marks_purged": 0.0,
+  "catalog_purge_sweeps": 0.0,
+  "cabin_optimizer_managed": 0.0,
+  "cabin_optimizer_pages_committed": 0.0,
+  "cabin_optimizer_page_budget": 1024.0,
+  "cabin_optimizer_ticks": 0.0,
+  "cabin_optimizer_creates": 0.0,
+  "cabin_optimizer_extends": 0.0,
+  "cabin_optimizer_heals": 0.0,
+  "cabin_optimizer_drops": 0.0,
+  "cabin_optimizer_deferred": 0.0,
+  "cabin_optimizer_failures": 0.0,
+  "waystone_opted": 0.0,
+  "plan_stats_generation": 0.0,
+  "plan_stats_relations": 0.0,
+  "plan_stats_posteriors": 0.0,
+  "plan_stats_part_drops": 0.0,
+  "plan_stats_seeds": 0.0,
+  "plan_stats_seed_pages": 0.0,
+  "plan_stats_publishes": 0.0,
+  "plan_stats_steward_us_max": 36.0,
+  "plan_memo_hits": 0.0,
+  "plan_memo_misses": 0.0,
+  "captured_plans": 0.0,
+  "captured_served": 0.0,
+  "capture_deferred": 0.0,
+  "capture_unkeyed": 0.0,
+  "capture_over_ceiling": 0.0,
+  "capture_declined": 0.0,
+  "captured_pending": 0.0,
+  "captured_persisted": 0.0,
+  "captured_loaded": 0.0,
+  "cabins_unbankable_views": 0.0,
+  "cabins_cap_refusals": 0.0,
+  "map_regions": 1.0,
+  "map_pages_resident": 1.0,
+  "map_coverage_ids": 65280.0,
+  "headerless_pages": 0.0,
+  "pages_allocated": 552.0,
+  "pages_freed": 0.0,
+  "pages_reused": 0.0,
+  "reclaim_pending": 0.0,
+  "reclaim_deferred": 0.0,
+  "reclaim_skipped": 0.0,
+  "reclaim_refused": 0.0,
+  "pool_budget": 65536.0,
+  "pool_resident": 551.0,
+  "pool_slots": 1024.0,
+  "pool_hits": 187236.0,
+  "pool_misses": 551.0,
+  "pool_reclaimed_inline": 0.0,
+  "pool_reclaimed_background": 0.0,
+  "pool_batches_inline": 0.0,
+  "pool_batches_background": 0.0,
+  "pool_batches_partial": 0.0,
+  "pool_batch_steps": 0.0,
+  "pool_batch_steps_background": 0.0,
+  "pool_dirty_queued": 0.0,
+  "pool_dirty_drained": 0.0,
+  "pool_refused": 0.0,
+  "undo_pages_live": 9.0,
+  "undo_pages_recycled": 11.0,
+  "read_only_begins": 0.0,
+  "read_only_write_refusals": 0.0,
+  "wal_durable_lsn": 19619480.0,
+  "wal_syncs": 0.0,
+  "wal_interval_syncs": 0.0,
+  "wal_sync_failures": 0.0,
+  "wal_group_commits": 2554.0,
+  "wal_group_batches": 2554.0,
+  "wal_mean_group_batch": 1.0,
+  "wal_group_batch_max": 1.0,
+  "wal_group_batch_min": 1.0,
+  "wal_ring_full": 0.0,
+  "wal_ring_full_refusals": 0.0,
+  "wal_append_lsn": 19619480.0,
+  "wal_rolls": 0.0,
+  "wal_roll_hold_us": 0.0,
+  "wal_roll_hold_max_us": 0.0,
+  "wal_roll_seal_us": 0.0,
+  "wal_roll_flush_us": 0.0,
+  "wal_roll_sync_gate_us": 0.0,
+  "wal_roll_sync_us": 0.0,
+  "wal_roll_sync_tail_us": 0.0,
+  "wal_roll_sync_rest_us": 0.0,
+  "wal_roll_sync_segments": 0.0,
+  "wal_roll_sync_segments_max": 0.0,
+  "wal_roll_create_us": 0.0,
+  "wal_roll_body_wait_us": 0.0,
+  "wal_roll_body_us": 0.0,
+  "wal_roll_header_us": 0.0,
+  "wal_roll_rename_us": 0.0,
+  "wal_roll_dirsync_us": 0.0,
+  "wal_roll_body_hit": 0.0,
+  "wal_roll_body_waited": 0.0,
+  "wal_roll_body_inline": 0.0,
+  "sched_wall_us": 19390148.0,
+  "sched_iterations": 43404.0,
+  "sched_idle_blocks": 20400.0,
+  "sched_parked_idle_blocks": 20400.0,
+  "sched_idle_block_us": 18864555.0,
+  "sched_wakes_sent": 9872.0,
+  "sched_wakes_received": 2601.0,
+  "sched_foreground_polled_us": 344220.0,
+  "sched_foreground_polls": 10008.0,
+  "sched_foreground_consumed_us": 344220.0,
+  "sched_foreground_longest_poll_us": 878.0,
+  "sched_foreground_polls_over_10ms": 0.0,
+  "sched_foreground_polls_over_100ms": 0.0,
+  "sched_maintenance_polled_us": 0.0,
+  "sched_maintenance_polls": 0.0,
+  "sched_maintenance_consumed_us": 0.0,
+  "sched_maintenance_longest_poll_us": 0.0,
+  "sched_maintenance_polls_over_10ms": 0.0,
+  "sched_maintenance_polls_over_100ms": 0.0,
+  "sched_system_polled_us": 11116.0,
+  "sched_system_polls": 43471.0,
+  "sched_system_consumed_us": 11116.0,
+  "sched_system_longest_poll_us": 296.0,
+  "sched_system_polls_over_10ms": 0.0,
+  "sched_system_polls_over_100ms": 0.0,
+  "sched_hold_in_run_longest_us": 297.0,
+  "sched_hold_in_run_over_10ms": 0.0,
+  "sched_hold_in_run_over_100ms": 0.0,
+  "sched_hold_in_run_over_1s": 0.0,
+  "sched_hold_out_run_longest_us": 2002.0,
+  "sched_hold_out_run_over_10ms": 0.0,
+  "sched_hold_out_run_over_100ms": 0.0,
+  "sched_hold_out_run_over_1s": 0.0,
+  "sched_longest_unpolled_us": 2002.0,
+  "sched_unpolled_over_100ms": 0.0,
+  "checkpoint_runs": 3.0,
+  "checkpoint_start_refused": 0.0,
+  "checkpoint_last_completed": 1.0,
+  "checkpoint_last_wall_us": 6621.0,
+  "checkpoint_last_step_max_us": 287.0,
+  "checkpoint_last_step_page_write_max_us": 172.0,
+  "checkpoint_last_steps": 2.0,
+  "checkpoint_last_pages": 73.0,
+  "checkpoint_last_dirty_at_start": 73.0,
+  "checkpoint_last_gate_parks": 1.0,
+  "checkpoint_last_end_parks": 1.0,
+  "checkpoint_last_start_sum_us": 44.0,
+  "checkpoint_last_start_max_us": 44.0,
+  "checkpoint_last_log_gate_batch_sum_us": 0.0,
+  "checkpoint_last_log_gate_batch_max_us": 0.0,
+  "checkpoint_last_log_gate_run_sum_us": 0.0,
+  "checkpoint_last_log_gate_run_max_us": 0.0,
+  "checkpoint_last_page_write_sum_us": 197.0,
+  "checkpoint_last_page_write_max_us": 12.0,
+  "checkpoint_last_map_write_sum_us": 0.0,
+  "checkpoint_last_map_write_max_us": 0.0,
+  "checkpoint_last_claim_wait_sum_us": 0.0,
+  "checkpoint_last_claim_wait_max_us": 0.0,
+  "checkpoint_last_data_sync_sum_us": 0.0,
+  "checkpoint_last_data_sync_max_us": 0.0,
+  "checkpoint_last_end_wait_sum_us": 0.0,
+  "checkpoint_last_end_wait_max_us": 0.0,
+  "checkpoint_last_publish_writeback_sum_us": 37.0,
+  "checkpoint_last_publish_writeback_max_us": 22.0,
+  "checkpoint_last_publish_sync_sum_us": 0.0,
+  "checkpoint_last_publish_sync_max_us": 0.0,
+  "batch_sessions": 0.0,
+  "batch_cores": 0.0,
+  "load_c0_busy_ppm": 57526.0,
+  "load_c0_foreground_ppm": 43614.0,
+  "load_c0_queued_foreground": 0.0,
+  "load_c0_sessions": 1.0,
+  "load_c0_active_sessions": 4.0,
+  "load_c0_heads": 6419.0,
+  "load_c0_inside": 0.0,
+  "load_c0_moves_out": 0.0,
+  "load_c0_partition_moves_out": 0.0,
+  "load_c0_waited_frame_table_us": 331.0,
+  "load_c0_waited_window_us": 4.0,
+  "load_c0_waited_lock_partition_us": 11.0,
+  "load_c0_waited_wal_stream_us": 1.0,
+  "load_c0_waited_stats_ring_us": 0.0,
+  "load_c0_wal_drain_latch_wait_us": 0.0,
+  "load_c0_visibility_window_lookups": 6301.0,
+  "load_c1_busy_ppm": 2997.0,
+  "load_c1_foreground_ppm": 0.0,
+  "load_c1_queued_foreground": 0.0,
+  "load_c1_sessions": 1.0,
+  "load_c1_active_sessions": 0.0,
+  "load_c1_heads": 5.0,
+  "load_c1_inside": 0.0,
+  "load_c1_moves_out": 0.0,
+  "load_c1_partition_moves_out": 0.0,
+  "load_c1_waited_frame_table_us": 8.0,
+  "load_c1_waited_window_us": 170.0,
+  "load_c2_busy_ppm": 55070.0,
+  "load_c2_foreground_ppm": 42292.0,
+  "load_c2_queued_foreground": 0.0,
+  "load_c2_sessions": 1.0,
+  "load_c2_active_sessions": 4.0,
+  "load_c2_heads": 4822.0,
+  "load_c2_inside": 0.0,
+  "load_c2_moves_out": 0.0,
+  "load_c2_partition_moves_out": 0.0,
+  "load_c2_waited_frame_table_us": 288.0,
+  "load_c2_waited_window_us": 86.0,
+  "load_c2_waited_lock_partition_us": 40.0,
+  "load_c2_waited_stats_ring_us": 0.0,
+  "load_c2_visibility_window_lookups": 3699.0,
+  "load_c3_busy_ppm": 34364.0,
+  "load_c3_foreground_ppm": 24774.0,
+  "load_c3_queued_foreground": 0.0,
+  "load_c3_sessions": 2.0,
+  "load_c3_active_sessions": 2.0,
+  "load_c3_heads": 3368.0,
+  "load_c3_inside": 0.0,
+  "load_c3_moves_out": 0.0,
+  "load_c3_partition_moves_out": 0.0,
+  "load_c3_waited_frame_table_us": 238.0,
+  "load_c3_waited_window_us": 479.0,
+  "load_c3_waited_lock_partition_us": 22.0,
+  "load_c3_waited_wal_stream_us": 1.0,
+  "load_c3_visibility_window_lookups": 2782.0,
+  "recovery_records": 0.0,
+  "recovery_committed": 0.0,
+  "recovery_rolled_back": 0.0,
+  "recovery_compensations": 0.0,
+  "recovery_redo_applied": 0.0,
+  "recovery_pages_healed": 0.0,
+  "recovery_torn_tail": 0.0,
+  "recovery_analysis_us": 0.0,
+  "recovery_redo_us": 0.0,
+  "recovery_high_water_us": 0.0,
+  "recovery_undo_us": 0.0,
+  "recovery_checkpoint_us": 1068.0,
+  "recovery_relations_checked": 0.0,
+  "recovery_relations_missing_pages": 0.0,
+  "catalog_recovered": 1.0,
+  "catalog_marks_finalized": 0.0,
+  "ddl_durable": 1.0,
+  "recovery_assertions_enforcing": 0.0,
+  "recovery_assertions_unrecovered": 0.0,
+  "backup_log_bytes_copied": 0.0,
+  "backup_fence_writes_waited": 0.0,
+  "backup_pages_verified": 0.0,
+  "backups_completed": 0.0,
+  "backups_failed": 0.0,
+  "lock_waits_recorded": 0.0,
+  "lock_waits_overwritten": 0.0,
+  "lock_waits_dropped": 0.0,
+  "statement_stats_dropped": 0.0,
+  "relation_stats_dropped": 0.0,
+  "checkpoints_recorded": 12.0,
+  "checkpoints_overwritten": 0.0,
+  "checkpoints_dropped": 0.0,
+  "contention_other_waits": 0.0,
+  "contention_other_wait_us": 0.0,
+  "contention_frame_table_waits": 823.0,
+  "contention_frame_table_wait_us": 866.0,
+  "contention_free_map_waits": 0.0,
+  "contention_free_map_wait_us": 0.0,
+  "contention_free_map_flush_waits": 0.0,
+  "contention_free_map_flush_wait_us": 0.0,
+  "contention_window_waits": 40.0,
+  "contention_window_wait_us": 741.0,
+  "contention_lock_partition_waits": 74.0,
+  "contention_lock_partition_wait_us": 73.0,
+  "contention_lock_wait_for_waits": 0.0,
+  "contention_lock_wait_for_wait_us": 0.0,
+  "contention_wal_stream_waits": 3.0,
+  "contention_wal_stream_wait_us": 3.0,
+  "contention_wal_sync_gate_waits": 0.0,
+  "contention_wal_sync_gate_wait_us": 0.0,
+  "contention_assertion_dir_waits": 0.0,
+  "contention_assertion_dir_wait_us": 0.0,
+  "contention_optimizer_waits": 0.0,
+  "contention_optimizer_wait_us": 0.0,
+  "contention_superblock_waits": 0.0,
+  "contention_superblock_wait_us": 0.0,
+  "contention_cabin_partition_waits": 0.0,
+  "contention_cabin_partition_wait_us": 0.0,
+  "contention_cabin_stats_waits": 0.0,
+  "contention_cabin_stats_wait_us": 0.0,
+  "contention_handoff_waits": 0.0,
+  "contention_handoff_wait_us": 0.0,
+  "contention_stats_ring_waits": 3.0,
+  "contention_stats_ring_wait_us": 0.0,
+  "contention_page_latch_waits": 7.0,
+  "contention_page_latch_spin_turns": 595.0,
+  "contention_syncs_inline": 2.0,
+  "contention_syncs_writer": 9771.0,
+  "contention_drain_passes_pending": 31905.0,
+  "contention_ceiling_waits": 0.0,
+  "contention_ceiling_wait_us": 0.0,
+  "contention_carves": 8.0,
+  "contention_checkpoint_runs": 12.0,
+  "contention_refused_btree_descend": 0.0,
+  "contention_refused_btree_parent": 0.0,
+  "contention_refused_btree_secure": 0.0,
+  "contention_refused_btree_lookup": 0.0,
+  "contention_refused_index_descend": 0.0,
+  "contention_refused_index_parent": 0.0,
+  "contention_refused_index_secure": 0.0,
+  "contention_structural_reruns": 0.0,
+  "contention_catalog_memo_drops": 6.0,
+  "contention_word_moves_root": 2.0,
+  "contention_word_moves_cabin": 0.0,
+  "contention_word_moves_schema": 15.0,
+  "contention_word_moves_resolve": 6.0,
+  "contention_inflight_asks": 0.0,
+  "contention_inflight_misses": 0.0,
+  "contention_inflight_miss_ids_read": 0.0,
+  "contention_checkpoint_pages_written": 1236.0,
+  "contention_data_syncs": 53.0,
+  "contention_fence_walks": 0.0,
+  "contention_wal_drain_latch_wait_us": 0.0,
+  "contention_wal_roll_blocked_waits": 0.0,
+  "contention_wal_roll_blocked_wait_us": 0.0,
+  "contention_visibility_window_lookups": 12782.0,
+  "contention_carve_longest_us": 2005.0,
+  "contention_checkpoint_longest_us": 10261.0
+ },
+ "bin_sha256": "ebaf66561336c35e8a69c9e1cbe096e7ee7b373eb8f1df4496b59eb15762d7c7",
+ "data_device": "/dev/nvme0n1p1 ext4"
+}
