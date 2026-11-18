@@ -2023,6 +2023,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     };
     for (std::size_t i = 0; i < ordered.size();) {
         std::size_t run = 0;
+        std::size_t run_pins = 0;  // the allowance the run's pins ride (below)
         std::uint64_t run_lsn = wal::kNoLsn;
         copied.clear();
         const ClaimRelease claims{*this, copied};
@@ -2058,6 +2059,19 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 // The claim and the dirty mark keep the frame resident - only
                 // the claim's holder cleans it - and the pin is the half of
                 // the page latch `UnpinFrame` gives back after the copy.
+                //
+                // **The run's pins ride an allowance of their own**, given
+                // back when the copy below has returned the last of them. A
+                // run holds up to `kWritebackRunPages` pins, which is the
+                // whole of `kPinCeiling`, and a writeback is reached from
+                // inside operations that hold pins of their own - a fault's
+                // inline drain, a harness's sync inside a statement - so
+                // counted against the per-operation ceiling a full run under
+                // any such caller would abort a Debug build for a bound it
+                // did not exceed. Found when bootstrap's fixed catalog roots
+                // reached eight consecutive pages (11..18, CX-S1a).
+                pin_allowance_ += run;
+                run_pins = run;
                 for (std::size_t k = 0; k < run; ++k) {
                     Frame& frame = frames_.find(ordered[i + k])->second;
                     CountPin(frame);
@@ -2139,6 +2153,9 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 scratch.data() + k * kPageSize, kPageSize));
             if (lsn > run_lsn) run_lsn = lsn;
         }
+        // Every pin the claim took is back - by `UnpinFrame`, or uncounted
+        // with the held suffix - and nothing above leaves the loop early.
+        if (run_pins != 0) RevokePins(run_pins);
 
         if (run == 0) {  // the run's first frame was held: nothing to write
             ++i;
@@ -2693,6 +2710,11 @@ void DevicePageStore::CountPin(Frame& frame) noexcept {
                      "(kPinCeiling %zu x the concurrent pinners SetLatchArmed was told "
                      "about, plus %zu allowed; docs/spec/page.md §3)\n",
                      live_pins_, pin_ceiling_ + pin_allowance_, kPinCeiling, pin_allowance_);
+        // Raw frames, for `addr2line -e <binary>`, as the upgrade check
+        // below prints them: the ceiling's value is naming the site.
+        void* frames_out[48];
+        const int depth = backtrace(frames_out, 48);
+        backtrace_symbols_fd(frames_out, depth, 2);
         std::abort();
     }
 #endif

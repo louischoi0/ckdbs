@@ -3,7 +3,7 @@
 Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
 `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`, from
 `56d20394` (`v3.4.12-53-g56d20394`) on the operator's word of 2026-11-18
-(`raft-marks-2026-11-18.md` §30). The session was isolated in that worktree
+(`raft-marks-2026-11-18.md` §33). The session was isolated in that worktree
 and could not open one named for this order; the branch carries the name.
 
 No stage is started. DF waits for the operator's word and for the marks on
@@ -44,7 +44,7 @@ dead entries, not DF's).
 
 `[operator]` Asked what kinds of statistics would be worth adding beside
 what a commercial database records, CLA listed nine; the operator took the
-first four as one work order (`raft-marks-2026-11-18.md` §30).
+first four as one work order (`raft-marks-2026-11-18.md` §33).
 
 `[design]` Four parts, each a stage that lands alone:
 
@@ -306,7 +306,7 @@ None is marked. (a) is CLA's proposal in each.
 | DF-Q2 | The latency distribution. | a log2 histogram a shape, `sys.wait_histogram`'s buckets, shown as `sys.statement_histogram` | (b) `min_us` and a sum of squares, a mean and a deviation and no percentile; (c) none |
 | DF-Q3 | Refusals by cause. | `conflicts` a shape, and `sys.refusal_stats` by pinned code a core | (b) a view keyed `(fetch_id, kind, code)`, bounded by shapes times codes; (c) `conflicts` alone |
 | DF-Q4 | `DELETE`'s shape. | `delete` added to the fingerprint's leading words, after DF-S0 reads every consumer of a fingerprint - the pattern system, ASH, the Cabin controller's count, the plan memo, captured plans and PS2's posteriors (each keyed by `fetch_id`, 0 meaning none: `src/exec/step_compiler.cpp:2410`, `:2479`), the `pattern_id` a KWP `S_PARSE_OK` returns (`src/server/kwp_session.cpp:552-562`, client-visible), the golden corpus, and `tests/fingerprint_test.cpp:162`, which pins `DELETE` unpatternable - and finds no behaviour moved but the statistics key | (b) left one row at `fetch_id = 0` |
-| DF-Q5 | The identity of the order a shape ran. CLA's list named it. | **not built**: read against the tree, a memory-resident column is emptied by the restart across which a captured order can change (`known-gaps.md`, Captured plans), so it could not show the one change the gap names; `sys.plans` (CX-S1) owns a shape's order | (b) an `order_hash` and a count of changes a shape, of use under `join_order = planned` alone |
+| DF-Q5 | The identity of the order a shape ran. CLA's list named it. | **not built**: `sys.plans` owns a shape's order and, since CX-S1a, shows it - `fetch_id` and `join_order` as run, kept across a restart (`sys-views.md` §5, read at `db1880da`) - so a column here would be a second name for it (DF-R5), and one a restart empties | (b) an `order_hash` and a count of changes a shape, of use under `join_order = planned` alone |
 | DF-Q6 | The time split's source. | the session's wait statistics after less before, as `ANALYZE` reads them, if DF-S0 prices the two copies inside DF-Q10's bar; else per-statement accumulators on the task | (b) `cpu_us` alone; (c) no split, `sys.session_waits` and ASH stay the only source |
 | DF-Q7 | Log bytes a statement. | a count on the transaction, bumped where an append names its transaction; a record that names none (`PURGE`'s) is no statement's | (b) not recorded by shape; the instance's total added to `sys.meta` |
 | DF-Q8 | Who holds the horizon. `sys.sessions` is excluded (BO's W2, `workorder-bo-sys-statistics-show-sugar.md:21`; `sys-views.md` §8). | the three instance fields, and `txn_age_us` and `view_age_us` on `sys.session_state`, which exists | (b) the instance fields alone, the session found from ASH - which shows no `trx_id` (`src/server/sys_views.cpp:1172-1173`) |
@@ -423,3 +423,17 @@ token colliding with this session's W2; a DF-S0 read no part used, cut.
 awkwardly beside the word "a work order", and it stays because how the
 parts are split is the operator's to say. **Left to DF-S0 by the review**:
 whether a `DELETE`'s write path hands a `fetch_id` to a planned compile.
+
+### Merged with `origin/main` at `db1880da`, 2026-11-18
+
+`origin/main` had moved from `56d20394` to `db1880da` (CX-S1a, CZ-S0) when
+the order was committed, and was merged on the work branch. The record of
+the operator's word took §33, §30-§32 having gone to those sessions.
+**DF-Q5 (a)'s ground was re-read and rewritten**: as drafted it cited the
+gap "captured orders do not survive a restart", which CX-S1a closed by
+persisting them in `sys.plans`; the proposal stands on that view instead.
+**No other `[source-read]` claim was re-read at the merge**: every cited
+line is `56d20394`'s, and the merge moved `src/server/command_dispatcher.cpp`
+and `src/server/sys_views.cpp`, so the line numbers cited in those two
+files are stale on the merged tree and DF-S0's re-read at the opening
+commit is owed as §5 says.

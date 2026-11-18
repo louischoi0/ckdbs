@@ -94,6 +94,9 @@ struct PlanOptions {
     // only there (CX-R7): a searched block runs its shape's captured order
     // where one is held, and its search's answer is captured otherwise.
     class CapturedPlans* captured = nullptr;
+    // The statement's text, for the row a capture is persisted as
+    // (`plan_catalog.hpp`); read only where a capture is made.
+    std::string_view statement;
     // `join_build_max_rows`: a build the model expects to bucket more rows
     // is priced as the per-row walk the executor falls back to; 0, no build.
     std::size_t join_build_max_rows = kDefaultJoinBuildMaxRows;

@@ -380,7 +380,7 @@ TEST_F(DmlFormsTest, ReturningRidesWithTheOtherForms) {
                 "w.id,tier\\n4,7\\nUPDATED 1");
     ExpectReply("INSERT INTO w SELECT id + 100, name, region, tier FROM cust WHERE id = 3 "
                 "RETURNING id, tier",
-                "id,tier\\n103,NULL\\nINSERTED oid=4005 id=103 page=135 slot=7");
+                "id,tier\\n103,NULL\\nINSERTED oid=4005 id=103 page=136 slot=7");
 }
 
 // RETURNING is read before the statement ends, so its failure fails it.
@@ -450,7 +450,7 @@ TEST_F(DmlFormsTest, AnInsertCarryingNoRowPlacesAndCountsNone) {
 // column carries one. Only a decimal's `len` is part of its type.
 TEST_F(DmlFormsTest, InsertSelectTakesALiteralForAColumnOfItsType) {
     ExpectReply("INSERT INTO w SELECT 90, name, region, tier FROM cust WHERE id = 1",
-                "INSERTED oid=4005 id=90 page=135 slot=6");
+                "INSERTED oid=4005 id=90 page=136 slot=6");
 }
 
 // A decimal is matched to its column by scale, so its precision is checked

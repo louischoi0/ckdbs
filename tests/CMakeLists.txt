@@ -102,6 +102,7 @@ add_executable(kds_tests
     index_compile_test.cpp
     join_planner_test.cpp
     captured_plans_test.cpp
+    plan_catalog_test.cpp
     plan_stats_test.cpp
     index_contract_test.cpp
     superblock_test.cpp

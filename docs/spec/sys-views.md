@@ -108,6 +108,7 @@ returns only what it names, so that conjunct is not compared again.
 | `cabins` | engine | - | a Cabin and its store counters |
 | `assertions` | engine | - | an assertion, whether it is enforcing, and its counters |
 | `transitions` | engine | - | a declared Transition, verbatim |
+| `plans` | engine | - | a managed plan's `sys.plans` row: at CX-S1a, a captured join order (`plan_id`, `name`, `origin`, `state`, `fetch_id`, `relations` as written, `join_order` as run, `written_at`, `statement` with its literals written `?`); a row this build cannot read shows `unreadable` and its text as stored |
 | `cabin_optimizer` | engine | - | a managed entry of the Cabin controller; refused where no controller runs |
 | `lock_waits` | engine | - | one lock wait (§6.3) |
 | `statement_stats` | engine | - | one statement shape (§6.1) |
@@ -124,7 +125,7 @@ returns only what it names, so that conjunct is not compared again.
 | spelling | answers with |
 |---|---|
 | `SHOW META` | `SELECT * FROM sys.meta` |
-| `SHOW TABLES`, `NAMESPACES`, `PATTERNS`, `ACCESS`, `CABINS`, `INDEXES`, `FKEYS`, `ASSERTIONS`, `TRANSITIONS`, `CABIN_OPTIMIZER` | `SELECT * FROM sys.tables`, `sys.namespaces`, `sys.patterns`, `sys.access_stats`, `sys.cabins`, `sys.indexes`, `sys.fkeys`, `sys.assertions`, `sys.transitions`, `sys.cabin_optimizer` |
+| `SHOW TABLES`, `NAMESPACES`, `PATTERNS`, `ACCESS`, `CABINS`, `INDEXES`, `FKEYS`, `ASSERTIONS`, `TRANSITIONS`, `PLANS`, `CABIN_OPTIMIZER` | `SELECT * FROM sys.tables`, `sys.namespaces`, `sys.patterns`, `sys.access_stats`, `sys.cabins`, `sys.indexes`, `sys.fkeys`, `sys.assertions`, `sys.transitions`, `sys.plans`, `sys.cabin_optimizer` |
 | `SHOW BUDGET` | `SELECT oid, namespace, name, next_id, ids_issued, ids_remaining, budget_used_ppm, budget_warning, budget_exhausted FROM sys.relation_stats` |
 | `SHOW PAGE <id>` | the header and slot columns of `sys.page_slots WHERE page_id = <id>`; `SHOW PAGE <id> VALUES` adds `value`, the payload in hex |
 | `DESCRIBE <t>`, `DESC <t>` | `SELECT * FROM sys.columns WHERE rel_name = <t>` |
@@ -312,7 +313,7 @@ prior, or a DDL was open), `capture_unkeyed` (no key fits the block),
 `capture_over_ceiling` (the table's ceiling) and `capture_declined` (the
 captured order did not compile for the statement, or adds a sort its
 `LIMIT` does not bound), the last three having run their written order.
-`captured_served` counts a declined compile too: it found an order.
+`captured_served` counts a declined compile too: it found an order. Then `sys.plans`' side (CX-S1a): `captured_pending`, the captures waiting for the persisting task; `captured_persisted`, the rows it wrote in this run; `captured_loaded`, the captures this mount installed from the relation.
 
 **The `txn` section** (CS-Q8 (a), `txn.md` §1) carries this core's
 `read_only_begins`, the `BEGIN ... READ ONLY` transactions it opened, and
