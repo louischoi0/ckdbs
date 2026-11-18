@@ -2103,8 +2103,23 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   a statement the plan governs is compiled twice, unpinned and pinned.
   With none enabled the cost is one relaxed load. CX-R6's "zero cost for
   the unmanaged point path" therefore holds only while no one-relation
-  plan is enabled. Not measured; owed at CX's close. Owned by
-  `exec/admin_plans.hpp`.
+  plan is enabled. Measured at CX's close (`a32528a4`,
+  `bench/v3.4.12/results-cx-close-v3.4.12-115-ga32528a4.md`): +0.17 to
+  +0.25 µs of server CPU on a point read against a control's +0.06 to
+  +0.11 µs, 0.5 % to 1 % of its throughput; an enabled join plan costs it
+  nothing resolvable. Owned by `exec/admin_plans.hpp`.
+
+- **Point statements are 1.2 % to 2.0 % slower at CX's close than where
+  CX opened, and the cause is not attributed.** Measured at `a32528a4` on
+  `cx-plan-change-option` against `8b584cf6`, `cores = 1`
+  (`bench/v3.4.12/results-cx-close-v3.4.12-115-ga32528a4.md`): a point
+  read and a two- and three-relation tuple key join spend +0.4 to +0.8 µs
+  more server CPU, under `fixed` and `planned` alike, above the noise
+  floor in two runs; join blocks are unchanged. CX-S0..S3a are within the
+  floor; DF-S1's statement statistics, inside the same span, carry part;
+  the rest falls in CX-S3b..S7, whose point-path additions read as
+  nanoseconds. A bisect of `ee89842e..a32528a4` is owed. Owned by
+  `instructions/v3.2.0/workorder-cx-managed-plans.md`.
 
 - **A named Cabin pin is by the column's name, and its drop RESTRICT has
   a window.** Verified at CX-S3b on `cx-plan-change-option`. `ACCESS t

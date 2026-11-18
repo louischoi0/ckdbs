@@ -1,0 +1,9 @@
+2026-11-18T15:02:54Z alive 
+2026-11-18T15:03:54Z alive 2026-11-18T15:03:48Z round 2 model-join A elapsed 47s
+2026-11-18T15:04:54Z alive 2026-11-18T15:04:49Z round 3 model-join B elapsed 108s
+2026-11-18T15:05:54Z alive 2026-11-18T15:05:51Z round 5 model-join B elapsed 170s
+2026-11-18T15:06:54Z alive 2026-11-18T15:06:54Z round 7 pk-point-read Bp elapsed 233s
+2026-11-18T15:07:54Z alive 2026-11-18T15:07:47Z round 8 model-join B elapsed 286s
+2026-11-18T15:08:54Z alive 2026-11-18T15:08:54Z round 10 point-join-2rel A2 elapsed 353s
+2026-11-18T15:09:54Z alive 2026-11-18T15:09:50Z round 11 model-join A elapsed 409s
+2026-11-18T15:10:54Z driver exited: 2026-11-18T15:10:43Z DONE

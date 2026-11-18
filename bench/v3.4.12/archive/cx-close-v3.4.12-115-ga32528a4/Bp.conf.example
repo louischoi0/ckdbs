@@ -1,0 +1,9 @@
+data_file = /home/louis/cxclose/run/wd1/Bp.db
+port = 25604
+cores = 1
+durability = group
+buffer_pool_frames = 65536
+join_order = planned
+log_file = Bp.log
+log_dir = /home/louis/cxclose/run/wd1
+log_level = warn

@@ -1,0 +1,6 @@
+2026-11-18T15:10:46Z alive 
+2026-11-18T15:11:46Z alive 2026-11-18T15:11:45Z round 5 pk-point-read P2 elapsed 53s
+2026-11-18T15:12:46Z alive 2026-11-18T15:12:45Z round 10 pk-point-read P1 elapsed 113s
+2026-11-18T15:13:46Z alive 2026-11-18T15:13:45Z round 15 pk-point-read P1 elapsed 174s
+2026-11-18T15:14:46Z alive 2026-11-18T15:14:45Z round 20 pk-point-read P0 elapsed 233s
+2026-11-18T15:15:46Z driver exited: 2026-11-18T15:14:54Z DONE
