@@ -4,8 +4,10 @@ Status: **OPENED 2026-11-18** on the operator's word
 (`raft-marks-2026-11-18.md` §36), from `57d7c67f`
 (`v3.4.12-67-g57d7c67f`). **DF-S0 is done** (§7): the census, the spike's price, and four items
 it took back, DF-Q11..Q14, **each marked (a) on the operator's word**
-(`raft-marks-2026-11-18.md` §37). **DF-S1 is not started**; the session
-that ran DF-S0 handed off there. Written the same day on worktree
+(`raft-marks-2026-11-18.md` §37). **DF-S1 is done and at the push gate**
+(§7): part A, started on the operator's word (`raft-marks-2026-11-18.md`
+§39), reviewed, the full suite 0 failed of 4700 at `ee89842e`, overhead
+not measured; **DF-S2 is not started**. Written the same day on worktree
 `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`, from
 `56d20394` (`v3.4.12-53-g56d20394`) on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §33). The session was isolated in that worktree
@@ -715,3 +717,126 @@ and `src/exec/step_compiler.cpp` among it, so the line numbers this order
 cites in those files are `6e7f7095`'s and DF-S1 re-reads them, and `sys.statement_stats` gained `plan_source`,
 `plan_name` and `variant` from CX-S1b, which DF-S1's widened shape sits
 beside. No suite was executed. **Next: DF-S1**, part A - not started.
+
+### DF-S1 - part A, 2026-11-18
+
+On worktree `da-q8-memory-bound-key`, branch
+`worktree-df-statistics-coverage`, from `6f52c652`, on the operator's word
+(`raft-marks-2026-11-18.md` §39). Three commits and a merge: `9f9b207b`
+(`DELETE`'s shape, a commit of its own as §5 asks), `44dddd27` (the widened
+shape and the two views), `63395374` (the merge of `origin/main` at
+`2ca42fea`, CX-S3a, clean) and `ee89842e` (the review applied).
+
+**What is built**, as `docs/spec/sys-views.md` §6.1, §6.1a and §6.1b now
+state it. `delete` is a patternable leading word and `DeleteInner` parses
+through `ParseKeepingShape` (DF-Q11 (a)); its three movements are in
+`protocol.md` §5 and `sys-views.md` §6.1 and §6.7 - **not in
+`wait-events.md`**, which DF-Q11 (a) names: `sys.ash`'s `fingerprint`
+column is described in `sys-views.md` and nowhere in that file.
+`sys.statement_stats` carries sixteen columns between `variant` and
+`shape_text`; `sys.statement_histogram` and `sys.refusal_stats` are new
+views with no `SHOW` spelling. A shape's slot is 624 bytes, from 184, in
+the node map BO built, the count bound unchanged (DF-Q1 (a)).
+
+**How, where §2 left it open.**
+
+- **The split's source** (DF-Q6 (a)): one folded sample of the session's
+  statistics at the statement's head and one at its end
+  (`sched::SampleSessionCost`: CPU, time by wait class, the three read
+  counts, the log's two words - 120 bytes, a local of `Dispatch`'s and
+  `DispatchAsync`'s own frame), each behind a `FlushOnCpu`, taken only
+  where `RunningTaskBooksTo` holds; the difference is the call's.
+- **The log** (DF-Q12 (a)): `sched::BookLogAppend`, called once in
+  `WalManager::AppendThrough`, adds to two words on the polled task's
+  `SessionWaitStats`. No view shows the pair.
+- **`rows` and the chain's counts ride `DispatchOutcome`**
+  (`rows_returned`, `examined`, `compile_ns`), set by the handler that
+  returns the statement's outcome, so a nested `SELECT`'s - a scalar
+  subquery's, a query-layer walk's - are dropped with its outcome.
+  `compile_ns` goes through a dispatcher member reset and exchanged in
+  `StageStatement`, as `fetch_id` does, and is kept across the two places
+  that rebuild an outcome (`SelectRun::Execute`, a refused group commit).
+- **A refusal's code** is read with no `Status` built (`RefusalCodeOf`),
+  so the record allocates nothing (DF-R2).
+
+**What was built differently from §2's text, or decided where it was
+silent - each CLA's, none marked by the operator, each stated in
+`sys-views.md` §6.1:**
+
+1. **The split is seven columns that sum to DB time, not "one column a
+   wait class a statement's task can wait in"**: `cpu_us`, `sched_us`,
+   `commit_us`, `io_us`, `net_us`, `app_us`, and `other_us` for every
+   other class. Three classes have no site in a statement's task today
+   (System I/O, CrossCore, Resource; Concurrency is reserved), and a
+   column each would read 0 for ever; `other_us` keeps the sum true if one
+   gains a site.
+2. **`compile_us` is measured from the run's head, not the statement's**,
+   by one more clock read a run: a re-run's waits would otherwise be in a
+   compile time.
+3. **`rows` of a `SELECT` is what it gave its sink**, not what a KWP
+   `max_rows` let leave; a refused call adds none.
+4. **`rows_examined` and `pages` include a fold's and an `ANALYZE`'s
+   chain**, beside a native `SELECT`'s, and are NULL for every write and
+   for a query-layer `SELECT` (DF-S0's census, item 2; the layer's walks
+   are not summed).
+5. **`sys.refusal_stats` is keyed by the wire's pinned category**, the
+   code the client was told, in a latch-free table of single-writer words
+   - the one statistics store with no latch. The registry has no count to
+   assert against, so the bound (64) is asserted above its last entry
+   today.
+6. **No count column beside `rows_examined` or `compile_us`**: the store
+   keeps `executed_calls` and `compiled_calls` to decide NULL, and the
+   view shows only `timed_calls`, which §2 names.
+
+**DF-S0's two first reads.** A statement outside a task of its own
+session does not occur on a listener's path: the listener hands the
+session's statistics to every statement's task at its submit
+(`src/server/tcp_server.cpp:738`), KWP and the newline protocol alike. It
+occurs for a synchronous `Dispatch` from no task - tests, and whatever
+calls it off a reactor. The listener's sweep and close `ROLLBACK` go
+through `DispatchInternal` (`tcp_server.cpp:945`, `:1113`), are recorded
+as no statement, and what they append is inside no statement's two
+samples: no shape's.
+
+**Reviewed by `critics-developer`** at `63395374`; it ran 59 cells and
+edited nothing, on CLA's instruction (a build was running). **Applied**
+(`ee89842e`): **one wrong number** - an `INSERT ... ON CONFLICT DO UPDATE`
+took a `compile_us`, its arm's `WHERE` compiling through `UpdateParsed`
+once a conflicting row; a refused group commit dropped the statement's
+compile; `rows` of a refused call was 0 by every refusal path's luck and
+is now so by the record; the five timed fields, kept three times and
+walked by three loops, folded into `SessionCostSample` with an
+`operator-` and an `operator+=`; `ExaminedBy` made `ExecStats::Total()`'s;
+the head carries the statistics pointer. **Cells added on its reading**:
+the conflict arm; a `RETURNING` write's rows counted once; every split
+column against a value of its own; a handed-on walk (`DispatchAsync`, a
+scan) keeping its compile and its counts; two sessions of one core, their
+`group` commits parking across each other, whose logs add up to what the
+core appended. Two mutations were run against the new cells and each
+failed its cell: the conflict arm's guard removed, and the walk's
+`compile_ns` not carried across its reply. **Not taken**: a count on
+`wire::ErrorCategory` to assert the store's bound against - the header
+states the limit instead, and a registry of 64 categories is not near;
+`WaitBucketOf(elapsed_us * 1000)`, cosmetic; a narrower copy for
+`sys.statement_histogram`'s read, which is off a statement's path and is
+in `known-gaps.md`. **Left unread by the review**: CX-S3a, the KWP portal's
+`max_rows` path, the query layer beyond `WalkForLayer`, a `tsan` run.
+
+**Tests §5 owes for part A and DF-S1 did not build.** Every store empty
+after a process restart and a restore: the stores are process-wide
+statics as BO's are, no cell starts a process, and an in-process restart
+keeps them (`known-gaps.md`, BO). A deadlock's victim in `conflicts` and a
+KWP `max_rows` portal's `rows`: no cell. **The two-core cell was not run
+under `tsan`**: the nightly's clang is not on this host
+(`scripts/bs/config.sh`'s `KDS_LLVM`), so it runs there first under the
+nightly.
+
+**Suite.** The full suite - `ctest -LE bs-nightly` - 0 failed of 4700
+at `ee89842e`, on the merged tree (two disabled and two skipped, as before
+the stage); before the review, 0 failed of 4696 at `63395374`.
+**Overhead not measured; measured at the milestone's close** (DF-Q10 (a),
+DF-Q14 (a)); DF-S0's spike priced one cost-faithful way to do this stage
+and is not this code. **Documents**: `sys-views.md`, `protocol.md`,
+`manual/sql/sql.md`'s statistics reports, `known-gaps.md` and
+`CLAUDE.md`'s observability row are amended with the stage; the rest of
+§5's list is DF-S5's. **Next: DF-S2**, part B - not started.
