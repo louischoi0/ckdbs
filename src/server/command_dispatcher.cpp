@@ -3354,6 +3354,19 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             // Only an index on the relation held above (`exec::DropIndex`'s
             // contract): a name that took no hold, or that another
             // transaction moved since, writes nothing.
+            // CX-Q4 (a): an enabled administrator's plan that pins this
+            // index is a declaration on it. Asked under the relation `X`,
+            // which a plan DDL's `IS` on the relation waits out.
+            if (relation.has_value()) {
+                if (const auto plan =
+                        admin_plans_->EnabledPinningIndex(*relation, stmt.index_name);
+                    plan.has_value()) {
+                    return DispatchOutcome{"ERR plan '" + *plan +
+                                               "' pins this index; DROP PLAN or ALTER PLAN " +
+                                               *plan + " DISABLE first",
+                                           false};
+                }
+            }
             auto index_oid = exec::DropIndex(catalog_, stmt, relation,
                                              name_view.has_value() ? &*name_view : nullptr,
                                              ddl.trx_id, ddl.txn != nullptr ? &change : nullptr);
@@ -13161,16 +13174,19 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
                 auto candidate = std::make_shared<exec::AdminPlan>();
                 candidate->name = row.name;
                 candidate->key = row.key;
-                candidate->variants.push_back(
-                    exec::PlanVariant{row.variants[i].name, {}, row.variants[i].order});
+                candidate->variants.push_back(exec::PlanVariant{
+                    row.variants[i].name, {}, row.variants[i].order, row.variants[i].access});
                 probe.Install(std::move(candidate), /*enabled=*/true);
                 auto chain = compile(&options);
-                if (!chain.ok() || !chain.value().plan_note.has_value() ||
-                    chain.value().plan_note->source != exec::PlanSource::kAdmin) {
+                if (!chain.ok()) return AtByte(chain.status(), create.statement_at);
+                const exec::PlanNote& note = *chain.value().plan_note;
+                if (note.source != exec::PlanSource::kAdmin) {
+                    // Why, in the compile's own words: its order does not
+                    // compile, a pin no arm of the step meets, or a sort the
+                    // LIMIT does not bound.
                     return Status::InvalidArgument(
                         "variant '" + row.variants[i].name +
-                        "': its order does not compile for this statement, or adds a sort the "
-                        "statement's LIMIT does not bound" +
+                        "' cannot run for this statement: " + note.declined_because +
                         ByteSuffix(create.variants[i].order_at));
                 }
             }
@@ -13280,6 +13296,22 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
                 }
                 auto variant = exec::ResolvePlanVariant(row.bindings, row.arguments, spec);
                 if (!variant.ok()) return variant.status();
+                // A pinned index is one the relation has, by name: the one
+                // thing of a pin that can be asked with no statement.
+                for (std::size_t w = 0; w < variant.value().access.size(); ++w) {
+                    const exec::ArmPin& pin = variant.value().access[w];
+                    if (pin.index.empty()) continue;
+                    auto access = catalog_.InitTableAccess(row.key.oids[w]);
+                    if (!access.ok()) return access.status();
+                    const auto& indexes = access.value()->indexes;
+                    if (std::none_of(indexes.begin(), indexes.end(), [&](const auto& ix) {
+                            return exec::SameName(ix.name, pin.index);
+                        })) {
+                        return Status::NotFound("variant '" + spec.name + "': '" +
+                                                row.bindings[w] + "' has no index named '" +
+                                                pin.index + "'" + ByteSuffix(spec.name_at));
+                    }
+                }
                 *old = std::move(variant.value());
                 break;
             }

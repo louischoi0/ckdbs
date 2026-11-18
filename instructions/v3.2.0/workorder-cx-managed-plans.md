@@ -1132,3 +1132,58 @@ found four statements of the table false.
   reordered, which is the reason the hoist cannot differ by `join_order`.
 - **Not checked by the review**: the scan kernel's behaviour beyond its
   comments, `chain_frame.cpp`, the Cabin run-time fallback.
+
+### CX-S3 split; CX-S3a - built 2026-11-18
+
+S3 is taken in two parts. **S3a** is the pin: `ACCESS` in a variant,
+legality at every compile, `ANALYZE`'s mark, `DROP INDEX` RESTRICTed.
+**S3b** is CX-Q6 (a) - a controller-made Cabin eligible to the ladder
+only through a plan that names it - which changes what the ladder takes
+with no plan in force and belongs to `cabin-controller.md` as much as
+here; it is not started.
+
+**S3a, as built** on worktree `cx-plan-change-option`:
+
+- **The clause**: `ACCESS <binding> <pin> {, <binding> <pin>}` after a
+  variant's `ORDER`, in `CREATE PLAN` and in `REPLACE VARIANT`; a pin is
+  `TUPLE_KEY`, `INDEX [<name>]`, `CABIN`, `SCAN`, or `NOT` before one of
+  the first three. One pin a relation.
+- **A pin restricts the ladder** (`exec::ArmPin`, `CompileBound` section
+  4): it travels with its relation through the permutation
+  (`BoundRelation::pin`), each rank of the ladder is tried only where the
+  pin admits its class, and a pin naming a class is checked against the
+  arm the ladder then took. No rank's own rule is changed, so no arm is
+  taken that the ladder could not take (CX-R2).
+- **A pin no arm meets** refuses that compile of the variant: at `CREATE
+  PLAN` the statement's refusal, naming the relation and the pin; later,
+  a decline - the written order, unpinned, counted.
+- **The row**: a variant's line gains ` access=<w>:<pin>;...` only where
+  it pins, so a row S1b wrote reads as it did. No superblock moves.
+- **`DROP INDEX`** is RESTRICTed by an enabled plan that pins the index by
+  name (CX-Q4 (a)); `ALTER PLAN ... REPLACE VARIANT` refuses a named index
+  its relation does not have.
+- **Seen**: `ANALYZE`'s `arm=plan` on a pinned step; the clause in
+  `sys.plans`' `variants`.
+
+**Where S3a differs from the order's text.**
+
+- **CX-S3: "`ANALYZE` names, per step, whether its arm came from the
+  ladder or from the plan."** Built as a mark on the pinned step alone,
+  `arm=plan`; an unmarked step is the ladder's. Printing `arm=ladder` on
+  every step of every statement would move the text the four contract
+  suites compare for a fact that is true of every step they have.
+- **And a pinned step's arm is still the ladder's choice**, among what the
+  pin left: `arm=plan` says the plan constrained it, not that the plan
+  chose it. The order's "pin an arm" reads as a force; CX-R2 says it is
+  not one, and the build follows CX-R2.
+- **CX-Q4 (a) names "a Cabin drop" beside `DROP INDEX`. Not built for a
+  Cabin**: `CABIN` names a class and no Cabin, so there is nothing for a
+  drop to be restricted by. CX-Q4 (b) covers it - the variant is declined
+  and counted. A pin naming a Cabin goes with S3b, which needs it.
+- **`INDEX` may be written without a name** (any index), and `NOT INDEX`
+  takes none; the order's sketch showed the named form only.
+- **A plan is still a join block's.** S1b's refusal of a one-relation
+  statement said access pins were S3's; S3a does not lift it, because the
+  compile asks for a plan only where a block has two relations and a
+  probe on every point read is what CX-R6 forbids
+  (`known-gaps.md`).

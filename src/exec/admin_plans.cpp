@@ -6,6 +6,17 @@
 
 namespace kds::exec {
 
+std::string_view ArmName(ArmPin::Arm arm) noexcept {
+    switch (arm) {
+        case ArmPin::Arm::kLadder: return "LADDER";
+        case ArmPin::Arm::kTupleKey: return "TUPLE_KEY";
+        case ArmPin::Arm::kIndex: return "INDEX";
+        case ArmPin::Arm::kCabin: return "CABIN";
+        case ArmPin::Arm::kScan: return "SCAN";
+    }
+    return "?";
+}
+
 const PlanVariant& AdminPlan::Choose(std::string_view statement) const {
     if (variants.size() == 1) return variants.front();
     const std::vector<parser::StatementArgument> args = parser::ArgumentsOf(statement);
@@ -65,6 +76,26 @@ std::optional<std::string> AdminPlans::EnabledNaming(catalog::Oid oid) {
         const LatchGuard hold(&partition.latch);
         for (const auto& [key, entry] : partition.plans) {
             if (entry.enabled && key.Names(oid)) return entry.plan->name;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> AdminPlans::EnabledPinningIndex(catalog::Oid oid,
+                                                           std::string_view index) {
+    for (Partition& partition : partitions_) {
+        const LatchGuard hold(&partition.latch);
+        for (const auto& [key, entry] : partition.plans) {
+            if (!entry.enabled) continue;
+            for (const PlanVariant& variant : entry.plan->variants) {
+                for (std::size_t w = 0; w < variant.access.size() && w < key.n; ++w) {
+                    const ArmPin& pin = variant.access[w];
+                    if (key.oids[w] == oid && pin.arm == ArmPin::Arm::kIndex && !pin.forbid &&
+                        SameName(pin.index, index)) {
+                        return entry.plan->name;
+                    }
+                }
+            }
         }
     }
     return std::nullopt;

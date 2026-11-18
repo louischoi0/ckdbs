@@ -29,12 +29,19 @@
 // (`ELSE`), so every statement of the shape has one. The choice is made at
 // every compile from that statement's literals and is never remembered.
 //
-// **What a variant holds is an order and nothing else**, as a captured plan
-// does (`captured_plans.hpp`, CX-Q12 (a)): each step's access arm and build
-// annotation are the compile's, through the full ladder, so a variant
-// cannot force an arm a statement cannot use (CX-R2). A variant whose order
-// does not compile for a statement, or adds a sort its LIMIT does not bound
-// (CC-Q10), is **declined for that statement** and the written order runs,
+// **A variant holds an order and, per relation, at most one access pin**
+// (CX-S3a). The order is all a captured plan holds (`captured_plans.hpp`,
+// CX-Q12 (a)); each step's access arm and build annotation are the
+// compile's, through the full ladder. **A pin restricts that ladder and
+// never replaces it** (`ArmPin`): it names the one class of arm the step
+// may take, or one it may not, and the ladder then chooses among what is
+// left by its own rules - so a pinned step runs an arm the ladder could
+// legally take for it, located rows are re-checked against the whole
+// residual as under any arm, and a variant cannot force an arm a statement
+// cannot use (CX-R2). A variant whose order does not compile for a
+// statement, whose pin the statement's step cannot meet, or which adds a
+// sort its LIMIT does not bound (CC-Q10), is **declined for that
+// statement** and the written order runs with the ladder unrestricted,
 // counted and named in `ANALYZE`; the plan stays as it is.
 //
 // **Exact matching** (CX-R3) `[quiet-wrong]-adjacent`: the captured plans'
@@ -68,10 +75,42 @@ namespace kds::exec {
 // The variants one plan may hold: a rule list a compile walks, so bounded.
 inline constexpr std::size_t kMaxPlanVariants = 16;
 
+// **One relation's access pin** (CX-S3a, CX-R2): the class of arm the
+// ladder is held to for that relation's step, or - `forbid` - the one it
+// is kept from. The classes are the ladder's own ranks
+// (`step_compiler.cpp`, section 4): the tuple key (a lookup, a probe, a key
+// set, a range), a secondary index (`index` naming which, or any), a Cabin
+// (every Cabin arm), and the walk (a filter scan or a bare scan, with or
+// without the statement-local build). `kLadder` is no pin.
+//
+// A pin is met when the step's arm is of its class - and, for a named
+// index, is that index. `SCAN` cannot be forbidden: the walk is what every
+// other arm falls back to.
+struct ArmPin {
+    enum class Arm : std::uint8_t { kLadder, kTupleKey, kIndex, kCabin, kScan };
+    Arm arm = Arm::kLadder;
+    bool forbid = false;
+    std::string index;  // a pinned `kIndex`'s name; empty: any index
+
+    bool pins() const noexcept { return arm != Arm::kLadder; }
+    // Whether the ladder may try arms of class `tried`.
+    bool Admits(Arm tried) const noexcept {
+        return arm == Arm::kLadder || (forbid ? arm != tried : arm == tried);
+    }
+    bool operator==(const ArmPin&) const = default;
+};
+
+// A pin's word in the DDL and in `sys.plans`: `TUPLE_KEY`, `INDEX`,
+// `CABIN`, `SCAN`.
+std::string_view ArmName(ArmPin::Arm arm) noexcept;
+
 struct PlanVariant {
     std::string name;
     PlanRule rule;          // empty: `ELSE`
     CapturedOrder order{};  // written positions in executed order
+    // By written position; empty where the variant pins nothing, else one
+    // entry a relation.
+    std::vector<ArmPin> access;
 };
 
 struct AdminPlan {
@@ -108,6 +147,11 @@ public:
     // The name of an enabled plan naming `oid`, or nullopt: what RESTRICTs
     // a `DROP TABLE` (CX-Q24).
     std::optional<std::string> EnabledNaming(catalog::Oid oid);
+
+    // The name of an enabled plan a variant of which pins the index named
+    // `index` on relation `oid`, or nullopt: what RESTRICTs a `DROP INDEX`
+    // (CX-Q4 (a)).
+    std::optional<std::string> EnabledPinningIndex(catalog::Oid oid, std::string_view index);
 
     // A committed `DROP TABLE`'s: forgets every plan naming `oid`. Their
     // rows stay, shown `invalid` - an oid is never reissued, so they can
