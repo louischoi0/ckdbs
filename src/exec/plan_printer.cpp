@@ -236,6 +236,9 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     // A key set's distinct values (CU): how many descents the step makes.
     // Its values are the leaves of the `filter bool` line below.
     if (step.key_set.has_value()) os << " key_set=" << step.key_set->items.size();
+    // CX-S3a: the arm is the ladder's choice among what an administrator's
+    // plan's pin left it. A step with no mark took the ladder's own.
+    if (step.arm_pinned) os << " arm=plan";
     os << '\n';
 
     for (const StepPredicate& pred : step.residual) {

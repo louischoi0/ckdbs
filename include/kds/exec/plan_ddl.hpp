@@ -38,8 +38,17 @@
 // An `ORDER` list names the statement's relations by their **bindings** -
 // the alias where one was written, the table's name otherwise - which this
 // file keeps as written; resolving them against the statement is the
-// caller's. `ACCESS` and `BUILD` clauses (CX-S3, CX-S5) are refused
-// `NotImplemented` at their word.
+// caller's.
+//
+// **`ACCESS`** (CX-S3a) follows a variant's `ORDER`:
+//
+//   ACCESS <binding> <pin> {, <binding> <pin>}
+//   pin := TUPLE_KEY | INDEX [<index name>] | CABIN | SCAN
+//        | NOT TUPLE_KEY | NOT INDEX | NOT CABIN
+//
+// one pin a relation at most (`ArmPin`, `admin_plans.hpp`). `NOT SCAN` is
+// refused: the walk is what every arm falls back to. A `BUILD` clause
+// (CX-S5) is refused `NotImplemented` at its word.
 //
 // Every refusal carries the byte of the offending token in the command's
 // own text.
@@ -52,6 +61,14 @@ struct PlanVariantSpec {
     PlanRule rule;  // empty: `ELSE`
     std::vector<std::string> order;
     std::size_t order_at = 0;  // the `(` of the list
+    // The `ACCESS` clause as written, in written order.
+    struct Access {
+        std::string binding;
+        std::size_t binding_at = 0;
+        ArmPin pin;
+        std::size_t index_at = 0;  // a named index's token, where `pin.index` is set
+    };
+    std::vector<Access> access;
 };
 
 struct CreatePlanStmt {
@@ -84,10 +101,17 @@ StatusOr<CapturedOrder> ResolvePlanOrder(const std::vector<std::string>& binding
                                          const PlanVariantSpec& variant);
 
 // A written variant as the plan holds it, against the statement's bindings
-// and its count of value positions: its order resolved, and its rule
-// reading no `ARG(k)` the statement lacks (`InvalidArgument` at the
-// variant's name).
+// and its count of value positions: its order resolved, its rule reading
+// no `ARG(k)` the statement lacks (`InvalidArgument` at the variant's
+// name), and each `ACCESS` pin placed at its relation's written position -
+// a binding the statement does not have, or one pinned twice, refused at
+// the binding.
 StatusOr<PlanVariant> ResolvePlanVariant(const std::vector<std::string>& bindings,
                                          std::uint32_t arguments, const PlanVariantSpec& spec);
+
+// A variant's pins as the DDL writes them - ` ACCESS u TUPLE_KEY, l NOT
+// CABIN` - by the statement's bindings, or empty where it pins nothing.
+std::string PlanAccessText(const std::vector<ArmPin>& access,
+                           const std::vector<std::string>& bindings);
 
 }  // namespace kds::exec

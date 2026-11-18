@@ -349,8 +349,8 @@ struct DispatchOutcome {
     // `written`; empty for a statement with no join block. `plan_label` is
     // `<plan>/<variant>` where an administrator's plan chose it. Carried
     // for `fetch_id`'s reason.
-    std::string_view plan_source;
-    std::string plan_label;
+    std::string_view plan_source = {};
+    std::string plan_label = {};
 
     // **The relation `rows_affected` counts rows of** (BO-S6), for
     // `sys.relation_stats`: set beside a write's count, 0 everywhere else.
