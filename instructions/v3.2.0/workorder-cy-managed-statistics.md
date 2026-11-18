@@ -470,7 +470,7 @@ CY-Q2..Q13 marked (a) and **CY opened on W9** (§7).
 - **CY-S0** started 2026-11-18 on worktree `cx-plan-change-option`. No
   engine code.
 
-### CY-S0, 2026-11-18: the gate is not met on the scenarios; what a blind compile costs is measured; one case is owed
+### CY-S0, 2026-11-18: the gate is not met on the scenarios; what a blind compile costs is measured; two cases are owed
 
 `[measured]` on `v3.4.12-18-ge0cd5a93`, `build-release`,
 `bench/v3.4.12/results-cy-s0-premise-v3.4.12-18-ge0cd5a93.md`, 01:34 to
@@ -479,46 +479,71 @@ CY-Q2..Q13 marked (a) and **CY opened on W9** (§7).
 
 - **The gate (CY-Q15 (a)) is not met, for S2 or for S3.** Over 15 cells -
   five scenario join statements at 200, 1,000 and 10,000 rows - the
-  informed planner's order is the fastest forced order in 14, inside the
-  noise floor. No cell has a faster order with 15 % less server CPU in
-  every round (0 of 4 rounds wherever the orders differ). By p50, CY-Q1's
-  first wording, one cell (`cross-join-200`) shows 20 %, and the results
-  file rejects it: p0 and p25 are equal across the arms, server CPU is 63
-  against 65-67 µs, and both orders are eight tuple key probes, so no
-  selectivity enters the choice.
-- **The constants are wrong and it did not matter here.** Constant over
-  true selectivity runs from 0.08 (`model_id = k`, at every size) to 187
-  (`u.id <= 16` of 10,000). Once a shape has run complete, `ANALYZE`'s
-  `est=` equals `obs=`: the posterior `card(T)` (PS2) has replaced the
-  constant. So under `planned` a constant prices a shape's first compile
-  and nothing after it.
+  informed planner's order is the fastest forced order in 14. **Every
+  forced order that differs from the planner's**, not only the fastest,
+  has 15 % less server CPU in 0 of 4 rounds and a 15 % lower p50 in 0 of
+  4 rounds, in every cell (the review's recomputation from the raw file).
+  The one cell whose pooled p50 shows 20 % (`cross-join-200`) is not a
+  pass by either metric: per round the two orders' p50s differ by at most
+  3 µs (129 / 126 / 81 / 80 against 129 / 129 / 80 / 81), and the pooled
+  gap is a shift every arm took between rounds 2 and 3.
+- **The constants the model applies are wrong by 0.08x to 12.5x**
+  (constant over true selectivity: `model_id = k` 0.08 at every size,
+  `session_no = k` 12.5 at 10,000 rows). A range on the tuple key is not
+  priced by a constant at all - the span's band prices it
+  (`src/exec/join_order.cpp:152-153`) - so `u.id <= 16` is not an error of
+  the model.
+- **After a complete run, the executed order's prefixes are priced from
+  what was observed** - `est=` is `obs=` rounded to its half-octave band,
+  up to 19 % off (11,585 against 10,000) - **and every other order's
+  prefix keeps the constants at every compile** (`known-gaps.md`, "The
+  join planner (CB)"). So the constants do go on pricing the orders that
+  were not run; on this data that did not hide a faster order.
 - **S3 has no premise from the scenarios.** No scenario statement carries
-  two literal conjuncts on different columns of one relation; the one pair,
-  a `BETWEEN`, has joint over product 1.00.
-- **What does cost is the blind first compile** (CX-Q19, CY-S1). A fresh
-  server keeps the written order for four of the five statements. Two of
-  those are the slow order: `customer-statement` (`freights` first) runs
-  1.75x, 2.9x and 2.2x the informed order's p50 at the three sizes (131 /
-  500 / 4,186 µs against 75 / 171 / 1,919), `compare-all` 1.22x, 1.17x,
-  1.05x. The cause is the relation prior - `freights` priced at 100,000
-  rows - not a column constant.
+  two literal conjuncts on different columns of one relation; the one
+  pair is a tuple key `BETWEEN`, which the model prices as one span.
+- **A blind first compile costs** (CX-Q19, CY-S1). A fresh server, every
+  relation at 100,000 rows and no posterior, searched and kept the written
+  order for four of the five statements (`switch=1`: the cheapest under
+  those inputs). Two of those are the slow order: `customer-statement`
+  (`freights` first) runs 1.75x, 2.9x and 2.2x the informed order's p50
+  (131 / 500 / 4,186 µs against 75 / 171 / 1,919), `compare-all` 1.22x,
+  1.17x, 1.05x. **The run does not say which missing fact causes it**: the
+  blind arm lacked the priors and the posteriors and applied the 0.01
+  constant.
 - **Not measured, stated as such**:
   - **the compile `fixed` will capture once CY-S1 is built** - relation
-    priors published, no posterior yet for the shape. The blind arm had
-    neither and the informed arm had both, so S0 does not say what order a
-    constant picks when only the priors are right. That is the one compile
-    in which a column statistic could act under `fixed`, and it is owed
-    before S2's verdict is read as final for `fixed`;
+    priors published, no posterior yet for the shape. It decides two
+    things S0 leaves open: whether persisted priors alone repair the blind
+    order, and whether a constant then picks a wrong one - the one compile
+    in which a column statistic could act under `fixed`;
   - **a skewed column**: the scenario columns are uniform (one value in
     k), and the optional synthetic Zipf cell was cut for the budget;
   - the scenario drivers' own data and sizes (the data is synthetic to
-    the schemas' shapes, as CC-S0's was), a second literal per cell, and a
-    client pinned to its own CPU.
+    the schemas' shapes, as CC-S0's was) and a second literal per cell.
+- **Limits of the run's validity**, from the review:
+  - a two-state shift on the host, about +55 µs of latency and +20-25 µs
+    of server CPU per statement at 200 rows, hit every server and
+    sometimes flipped inside a block. The three servers shared one CPU
+    and the client was not pinned; the cause is not verified. The verdict
+    survives it because every losing order loses in every round;
+  - the planner arm is slower than its own forced order beyond the noise
+    floor in six cells (its planning, memo and steward CPU), which biases
+    toward finding a flip, so the "no" is conservative;
+  - blocks were about 0.3 s, four rounds;
+  - **the worktree's HEAD moved during the stage**: this session committed
+    documents and, to land them on W12, checked `origin/main` out, merged
+    and checked the branch back out at 01:39:46-01:40:06, so the measured
+    run started with HEAD at `1ba204ab`. `git diff --stat e0cd5a93
+    1ba204ab` touches `docs/` and `instructions/` only: the engine and the
+    tools are the measured commit's. A measurement and a landing do not
+    share a worktree again.
 - **The census** `[source-read]` at `e0cd5a93`:
-  - the three constants have one reader, the conjunct loop of
+  - the three selectivity constants have one reader, the conjunct loop of
     `src/exec/join_order.cpp:109-185` (equality `:160`, a range end
     `:162`, other `:124`, `:149`, `:164`, `:171`, a key set `:182`);
-    `kAssumedRelationRows` has one, `src/exec/step_compiler.cpp:2431`;
+    `kAssumedRelationRows` is read at `src/exec/step_compiler.cpp:2431`
+    and as a fallback at `join_order.cpp:58` and `:63`;
     `tests/join_planner_test.cpp` names them four times;
   - **the loop never reads a literal's value**: it prices by the
     operator and the column position, and the only values it reads are a
@@ -530,6 +555,15 @@ CY-Q2..Q13 marked (a) and **CY opened on W9** (§7).
   - a gather walk decodes cells through `storage::DecodeCell`
     (`include/kds/storage/tagged_cell.hpp:183`) and can slice as a build's
     walk does (64 pages, `docs/spec/sched.md` §3).
+
+**The review of S0's results** (`critics-developer`, at `fc705f97`)
+recomputed the latency table, the noise floors, the round counts and the
+blind ratios from the raw file and found them to match; it found the
+verdict to hold and five statements around it stronger than the data, each
+corrected above and in the results file: that `est=` equals `obs=`, that a
+constant prices only a first compile, the 187x error (a constant the model
+never applies), the blind cost attributed to the relation prior alone, and
+a clock-skew note that was this session's own checkout.
 
 **What follows** `[design]`, for the operator: by the gate as marked, S2
 and S3 are not built on this evidence, and S1 and S4's lock, export and

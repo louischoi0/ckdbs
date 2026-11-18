@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """Analysis of cy_s0.py output. usage: an.py results.json > tables.md"""
 import json, re, statistics, sys
-R = json.load(open(sys.argv[1])); PL = json.load(open(sys.argv[1] + ".plans.json"))
+import gzip
+_p = sys.argv[1]
+R = json.load(gzip.open(_p) if _p.endswith(".gz") else open(_p))
+PL = json.load(open((_p[:-3] if _p.endswith(".gz") else _p) + ".plans.json"))
+# server CPU is stored divided by the PLANNED ops; a time-capped block completed fewer. Rescale to completed ops.
+_planned = {}
+for b in R["blocks"]:
+    _planned[(b["cell"], b["round"])] = max(_planned.get((b["cell"], b["round"]), 0), b["ops"])
+for b in R["blocks"]:
+    b["cpu_us"] = b["cpu_us"] * _planned[(b["cell"], b["round"])] / b["ops"]
 INI = {"models": "m", "model_results": "r", "freights": "f", "cargos": "c", "daily_stats": "t", "daily_bars": "b",
        "symbols": "s", "users": "u", "loans": "l"}
 
@@ -78,3 +87,27 @@ bad = [(b["cell"], b["round"]) for b in R["blocks"]]
 rows = {}
 for b in R["blocks"]: rows.setdefault((b["cell"], b["round"]), set()).add(b["rows"])
 print("rows-per-cell-round equal across arms:", all(len(v) == 1 for v in rows.values()))
+
+print("\n## Every forced order that differs from the planner's order (all rounds)\n")
+print("| cell | forced order | rounds p50 >= 15 % below P | rounds CPU >= 15 % below P | per-round p50 us (P/forced) |\n|---|---|---|---|---|")
+for c in cells:
+    po = order_of(PL["informed"][c])
+    pa = [a for (cc, a) in G if cc == c and a.startswith("P:")][0]
+    for (cc, a) in sorted(G):
+        if cc != c or not a.startswith("W:") or a.split(":")[1] == po: continue
+        f = G[(c, a)]; P = G[(c, pa)]
+        n50 = [r for r in P["p50r"] if f["p50r"][r] <= 0.85 * P["p50r"][r]]
+        ncp = [r for r in P["cpur"] if f["cpur"][r] <= 0.85 * P["cpur"][r]]
+        print(f"| {c} | {a} | {len(n50)}/4 | {len(ncp)}/4 | " + ", ".join(f"{P['p50r'][r]:.0f}/{f['p50r'][r]:.0f}" for r in sorted(P["p50r"])) + " |")
+print("\n## Same-order gap: P vs its own forced order (planned-path overhead)\n")
+print("| cell | P p50 us | same-order forced p50 us | gap | noise floor (W2 vs W:first) |\n|---|---|---|---|---|")
+for c in cells:
+    po = order_of(PL["informed"][c]); pa = [a for (cc, a) in G if cc == c and a.startswith("P:")][0]
+    first = [a.split(":")[1] for (cc, a) in G if cc == c and a.startswith("W2:")][0]
+    fo = G[(c, "W:" + po)]["p50"]; P = G[(c, pa)]["p50"]
+    nf = abs(G[(c, "W2:" + first)]["p50"] - G[(c, "W:" + first)]["p50"]) / G[(c, "W:" + first)]["p50"]
+    print(f"| {c} | {P:.0f} | {fo:.0f} | {(P - fo) / fo * 100:.1f} % | {nf * 100:.1f} % |")
+print("\n## Per-round p50 us, 200-row cells (arm: rounds 1-4)\n")
+for c in cells:
+    if c.endswith("-200"):
+        print(c, {a: [round(G[(c, a)]["p50r"][r]) for r in sorted(G[(c, a)]["p50r"])] for (cc, a) in G if cc == c}, "\n")

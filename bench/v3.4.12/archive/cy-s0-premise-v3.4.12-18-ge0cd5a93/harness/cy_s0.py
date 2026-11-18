@@ -147,7 +147,7 @@ def block(srv, gen, ops, seed):
         t0 = time.perf_counter(); _t, n, _b, e = srv.conn.query(q); lat.append((time.perf_counter() - t0) * 1e6)
         if e is not None: sys.exit(f"{q[:90]} -> {e}")
         rows += n
-    return {"ops": len(lat), "lat_us": lat, "cpu_us": (sched_ns(srv.proc.pid) - cpu0) / 1e3 / ops, "rows": rows}
+    return {"ops": len(lat), "lat_us": lat, "cpu_us": (sched_ns(srv.proc.pid) - cpu0) / 1e3 / len(lat), "rows": rows}   # NOTE: run 3 ran with "/ ops" (planned ops); an.py rescales to completed ops
 
 
 def host():
