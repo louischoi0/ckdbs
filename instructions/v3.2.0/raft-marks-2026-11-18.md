@@ -281,3 +281,41 @@ took under them.
 | **Mark** | **Pushed to `main` with `--no-verify`**: **CX-S1a** - `sys.plans`, the fourth declaration relation (root page 18, **superblock 37**, which refuses 36), the captured orders of `join_order = fixed` written off the statement by core 0's `system` task and at a clean shutdown and loaded at a mount, `DROP PLAN`, `SHOW PLANS` - with its review applied and its stage log (the work order's §8); and, outside CX, a writeback run's pins riding an allowance of their own in the Debug pin ceiling (`page.md` §3). The hook was skipped; the full Debug suite ran 4639/4639 at `98e3f214` (`v3.4.12-53-g98e3f214`), and the merge of `origin/main` after it (`56d20394`: DA-Q8) brought documents only, no source, test, CMake file or script. Overhead not measured; measured at the milestone's close. **The session stops here**: CX-S1b is not started |
 | **Does not settle** | a tag, a version; whether a mount should refuse on a `sys.plans` it cannot scan (`known-gaps.md`, Captured plans), which CLA put to the operator and the word does not answer; what S1a built differently from an adopted item (CX-Q24 (a), the stage log states it); the opening of CX-S1b, which the standing go-ahead of §16 covers and this word pauses |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 31. CZ opened; CZ-S0 started
+
+| | |
+|---|---|
+| **Word** | W23 (the BL/CZ matter's), in a new session: *"Proceed with the CZ milestone."* (given in Korean; recorded in English) |
+| **Mark** | None on any CZ-Q item. **CZ opened; CZ-S0 (the premise and the census) started** on worktree `cz-checkpoint-roll-wait`, branch `worktree-cz-checkpoint-roll-wait`, from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`). CLA reads the word as opening the order and its first stage, and not as a mark: S0 writes no engine code and rests on no unmarked item. CZ-Q9 (the letter) was settled by §18. The measurement runs inside the standing budget (`CLAUDE.md`, "A measurement has a time budget"), which is the rule in force and not CZ-Q8's mark. **V0's bar is CZ-Q1 and is unmarked**: S0 reports its numbers against CLA's proposed bar and the verdict is the operator's. The session's shell is rooted outside this repository, so the worktree was made with `git worktree add` and not `EnterWorktree` |
+| **Does not settle** | CZ-Q0..Q8 and CZ-Q10; V0's verdict; the opening of CZ-S1 or of any later stage; H6; a merge, a push, a version |
+| **Recorded at** | this file (written as §22 on the work branch and renumbered at its two merges behind `origin/main`'s sections, §30 and then §31; the commits `936f76cf` and `890523a6` cite it as §22, `2102edb7` as §30); the CZ order's header and §7; the CZ row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 32. CZ-S0 pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W24 (the BL/CZ matter's): *"push no verify"* - after CLA's report of CZ-S0 at `2102edb7` on worktree `cz-checkpoint-roll-wait`, two questions on what the cadence-off cell turns off, and a handoff |
+| **Mark** | None. **CZ's opening and CZ-S0 go to `main` with `--no-verify`**, in this section's commit: the results file `bench/v3.4.12/results-cz-s0-premise-v3.4.12-42-ga4d2fb3b.md` with its archive, the order's §7 entry, CZ-R3's new bullet and CZ-Q11..Q13. The hook and the suite are skipped; no suite was run for this work, which changes no build input, and the source the merges brought is `origin/main`'s own. Overhead not measured; measured at the milestone's close |
+| **Does not settle** | V0's verdict (CZ-Q1); CZ-Q0..Q8 and CZ-Q10..Q13, each CLA's proposal only; the opening of CZ-S1; whether the quiet gate's 25.8-minute hold counts against the stage's measurement budget; a version |
+| **Recorded at** | this file; the order's header; this file's row in `instructions/v3.2.0/index.md` |
+
+## 33. DF written: the statistics the engine records, widened
+
+| | |
+|---|---|
+| **Context** | A new session on worktree `da-q8-memory-bound-key` at `56d20394`. Asked by the operator, CLA read `docs/spec/sys-views.md` §5-§8, `plan-stats.md` §2, `known-gaps.md` and `sys.meta`'s field names, and listed nine kinds of statistic the engine does not record and a commercial database does, the comparison from CLA's own knowledge and looked up nowhere: (1) what a statement shape costs - rows, pages and pool hits and misses, log bytes, the split of its time, a latency distribution, compile time, refusals by cause, the executed order, a `DELETE` shape; (2) transactions and the MVCC read horizon; (3) index and relation usage; (4) space - delete-marked slots, an index's dead entries, var-heap bytes - noted as BO-Q13's exclusion and the operator's to reopen; (5) a history of counters over time; (6) a memory view; (7) I/O and log detail; (8) progress of long operations; (9) column statistics for the planner |
+| **Word** | This session's W1: *"In terms of the kinds of statistics recorded now, set out the items it would be good to add compared with a commercial database."* W2, on CLA's list: *"Write items 1 to 4 up as a work order."* (each given in Korean; recorded in English) |
+| **Mark** | **DF written, not opened**: `workorder-df-statistics-coverage.md`, four parts - the statement shape, transactions and the read horizon, usage, space - each a stage that lands alone, no format moved. The letter DF is CLA's proposal. **Corrected by the tree against CLA's list as given**: the executed order is proposed not built (DF-Q5 (a): `sys.plans` owns a shape's order and shows it since CX-S1a, read at the merge with `db1880da`); a pool hit is not countable per statement (`pages_fetched` counts one a keyed access), and a miss only through the session's wait statistics, DF-Q6's source; an index's dead entries are DD's. **The session was isolated in its worktree and could not open one named for the order**; the work is on branch `worktree-df-statistics-coverage` in that worktree |
+| **Does not settle** | DF-Q0..Q10, each unmarked, DF-Q9 among them - whether BO-Q13's exclusion is lifted, which W2's "items 1 to 4" asks to be written up and does not mark; the opening of DF; items 5-9 of the list; a push; a version |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md`; the DF row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 34. DF-Q0..Q10 marked (a); DF pushed with the hook skipped
+
+| | |
+|---|---|
+| **Context** | CLA's report of §33's order at `84b29eea` on worktree `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`: the four parts, what the review corrected, what the merge with `db1880da` changed, and that DF-Q0..Q10 stood unmarked with (a) CLA's proposal in each - DF-Q9 (whether BO-Q13's exclusion is lifted) and DF-Q10 (the cost bar, 0.5 us of server CPU a point statement) named as the two to settle first. CLA offered the push with `--no-verify`, the change being documents only |
+| **Word** | This session's W3: *"Follow the proposals, and push no verify."* (given in Korean; recorded in English) |
+| **Mark** | **DF-Q0..Q10 each marked (a), as CLA proposed, the operator's mark.** Among them: DF-Q0 (a), one order of four parts; DF-Q5 (a), the executed order not built; DF-Q9 (a), BO-Q13's exclusion lifted for delete-marked slots (the steward's sampled estimate) and leaf divisions (counted in memory at their sites, compactions beside them), and for nothing else of its list; DF-Q10 (a), DF-S0 prices each part and the bar is BO's recording, 0.5 us at `cores = 1`. DF-Q4 (a), DF-Q6 (a) and DF-Q10 (a) are each conditional on what DF-S0 reads or prices, as the order's §4 states. **Pushed to `main` with `--no-verify`**: the order, §33, this section and the index. The hook was skipped and no suite was executed; the commits change no build input (documents only) |
+| **Does not settle** | the opening of DF - the word marks the items and asks for the push, and names no stage; items 5-9 of CLA's list; DA's opening, which part C's access-shape columns wait for; a tag, a version |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md`'s header, §4 and §7; the DF row and this file's row in `instructions/v3.2.0/index.md` |
