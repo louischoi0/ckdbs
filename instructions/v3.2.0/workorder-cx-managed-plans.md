@@ -2,7 +2,7 @@
 
 **Written 2026-11-18, not opened**, on `main` at `286889cc`
 (`v3.4.12-12-g286889cc`), on the operator's words, recorded in English
-(`raft-marks-2026-11-18.md` §1-§2):
+(`raft-marks-2026-11-18.md` §1-§5):
 
 - **W0**: *"Keep the 'the query is the plan' contract for now. But go in the
   direction of letting the user set and manage the plan directly according
@@ -14,7 +14,9 @@
   priorities of CLA's optimizer proposal of the same morning, before W0:
   (1) rule-based rewrites, (2) access path selection, (3) data distribution
   statistics, (4) join method selection, (5) the plan cache, (6) the join
-  order search. W0 turns (6) into an advisor. §3 maps each one to a stage.
+  order search. W0 turned (6) into an advisor; since W3 it is also
+  `planned`'s plan source and a `fixed` first compile's. §3 maps each one
+  to a stage.
 - **W3** (2026-11-18, `raft-marks-2026-11-18.md` §3): *"For now, whether to
   allow implicit plan regressions or changes - plan changes made at the
   database level, driven by statistics according to the cost model and its
@@ -30,6 +32,9 @@
   is off - the first plan fixed.
 - **W6** (2026-11-18, `raft-marks-2026-11-18.md` §4): *"CX-Q12..Q18 $!a
   push no verify"* - CX-Q12..Q18 marked (a).
+- **W7** (2026-11-18, `raft-marks-2026-11-18.md` §5): the statistics
+  features taken into an order of their own,
+  `workorder-cy-managed-statistics.md`; S4 points there.
 
 **Amended 2026-11-18 on W3-W5**, still not opened. W3 turns W0's third
 clause from an absolute rule into the option `join_order`, and W4-W5 give
@@ -39,7 +44,7 @@ W3 disagree, W3 is the later word and stands.
 **Claim tags**: `[source-read]` with `path:line` at `286889cc`; `[design]`
 for reasoning about code not yet written; `[measured]` with its commit;
 `[quiet-wrong]` where a wrong choice turns a correct answer into a wrong
-one with no error; `[operator]` for W0-W2.
+one with no error; `[operator]` for W0-W7.
 
 **The letter.** `[source-read]` CW is the last work order under
 `instructions/v3.2.0/` at `286889cc`, and no file, branch or commit subject
@@ -112,7 +117,8 @@ never what is visible.
 ### 0.1 Not in CX
 
 - A hoisted hash join or a decorrelating rewrite chosen by the engine.
-  I12 forbids it, and W0 forbids it again. As a managed-plan option it is
+  I12 forbids it under every value of `join_order`: W3's option admits a
+  statistics-driven order, never a rewrite. As a managed-plan option it is
   CX-Q9, gated on a consumer.
 - Adaptive execution: switching plans mid-statement on observed rows.
 - Any change to what an advisory structure (Waystone, a hint) may do.
@@ -177,12 +183,12 @@ and W3 makes the operator's choice (`planned`), off by default (W5).
   since CB-S1").
 - `[source-read]` A literal's value does reach the default plan, but only
   as text. A negative or NULL tuple key literal names no key (I10), and the
-  range span band enters the cost only on the planned path. So without
-  `planned`, the plan is `f(text, catalog)` with the literals inside "text".
+  range span band enters the cost only on the planned path. So under
+  `written`, the plan is `f(text, catalog)` with the literals inside "text".
 
 ### 1.5 Inputs to a plan that are neither text nor DDL
 
-These are the cases W0's third clause reaches besides §1.1. Each is an
+These are the cases §0's third part reaches besides §1.1. Each is an
 item in §4.
 
 - `[source-read]` **Controller-created Cabins.** The cabin optimizer
@@ -271,20 +277,27 @@ item in §4.
   compile the shape at once race to install; the first install wins and
   the other core runs the winner's plan, so no shape runs two captured
   plans. The captured plan is the order and the build side - what the
-  search decides (CX-Q12). It serves every binding of the shape (CX-Q13).
+  search decides (CX-Q12). It serves every binding of the shape (CX-Q13),
+  a statement with a `?` bound later included - the reverse of the memo,
+  which does not remember one (`plan-stats.md` PS6), because the key holds
+  no literal. **Under a minted view (a DDL in flight in the transaction) no
+  capture is made and none is read**; the search runs uncaptured, as the
+  memo is not read there (PS6): an order priced against a catalog state
+  that may roll back is not fixed.
 - **CX-R8 - a capture writes nothing on the statement** `[design]`. A
   `SELECT` writes no log and no catalog page (CF's rule; a `READ ONLY`
   transaction writes no record, `txn.md` §1). The capture is in memory at
   the compile; a `system` task persists it as a logged `sys.plans` row with
-  `origin = captured`, carrying the statistics generation it read. A
+  `origin = captured`, carrying whether its capture was informed (CX-Q25). A
   restart before that task ran loses the capture, and the shape is captured
   again at its next compile (CX-Q14).
 - **CX-R9 - an administrator's plan outranks every value** `[operator]`
   (W4). `CREATE PLAN`, `ALTER PLAN` and `DROP PLAN` are admitted whatever
   `join_order` is, and a matching enabled plan is source 1 of CX-R1 under
-  `planned`, `fixed` and `written`. A DBA or an agent replaces a captured
-  plan with `CREATE PLAN` for the shape, or discards it with `DROP PLAN`,
-  after which the next compile captures again - an explicit act, so inside
+  `planned`, `fixed` and `written`. A DBA or an agent overrides a captured
+  plan with `CREATE PLAN` for the shape, the captured row kept beneath it
+  (CX-S1), or discards the captured row with `DROP PLAN`, after which the
+  next compile under `fixed` captures again - an explicit act, so inside
   CX-R1.
 - **CX-R10 - the option is one switch for the instance** `[operator]` (W5).
   `join_order` is read at boot and changed at run time by an admin-classed
@@ -295,7 +308,7 @@ item in §4.
 
 ## 3. Stages
 
-S0 and S1 are the foundation W0 needs. S2-S7 are W2's priorities 1-6, in
+S0 and S1 are the foundation W0 and W4 need. S2-S7 are W2's priorities 1-6, in
 that order. A stage opens on the operator's word, and each one closes on a
 measurement where §6 names one.
 
@@ -314,9 +327,9 @@ measurement where §6 names one.
   the written order and then the captured one through the full ladder,
   which is what a `PlanMemo` hit does today (`plan-stats.md` PS6), so
   every refusal stays the written order's. A captured order that no longer
-  compiles - a relation's oid it names is gone, which CX-R3's key already
-  misses - is never forced: the compile runs the written order and counts
-  it (CX-Q16).
+  compiles is never forced: the compile runs the written order and counts
+  it (CX-Q16). A relation's oid being gone is not this case: CX-R3's key
+  misses it (CX-Q24).
 - Until S1 the map is memory only, so a restart re-captures every shape
   (CX-R8). S0's report states this as a fact of the stage.
 - I12 is rewritten around CX-R1's three sources. CB's and CC's amendments
@@ -327,14 +340,22 @@ measurement where §6 names one.
 - The search, `EstimateChain` and `PlanStats` keep a plan consumer at every
   value but `written`: `planned`'s every compile and `fixed`'s first. The
   steward keeps running (CX-Q2 (a), now forced by W5).
-- `ANALYZE` prints `order=captured gen=<g>` for a captured plan, `gen`
-  being the generation the capture read (0: none published, the data-free
-  model).
+- `ANALYZE` prints `order=captured` for a captured plan, with whether its
+  capture read a published fact (`informed=0|1`). The generation number is
+  an in-memory counter a restart resets (`plan-stats.md` PS5), so it is not
+  persisted as a comparable value (CX-Q25).
 - **Expected cost** `[design]`: under `fixed` a shape runs the plan
-  `planned` would have chosen at its first compile, so for a stable
-  workload the default costs nothing against `planned` after warm-up. What
-  it gives up is every later improvement the statistics would have made,
-  and what it buys is that no plan regresses on its own. §6 measures both.
+  `planned` would have chosen at its first compile. **That compile is
+  data-free until the steward's first publish** (`plan-stats.md` §1: a
+  restart or a restore empties the store, and a publish comes at most once
+  a second), so every shape first compiled before it is fixed on the
+  data-free model's order, and warm-up does not repair a capture. Until S1
+  persists captures, that repeats at every restart. What decides how many
+  shapes this reaches is CX-Q19; what removes its cause is statistics that
+  survive a restart (`workorder-cy-managed-statistics.md`, CY-S1). What
+  `fixed` gives up beyond that is every later improvement the statistics
+  would have made, and what it buys is that no plan regresses on its own.
+  §6 measures both.
 
 ### CX-S1 - the plan as a catalog object, with bind-value variants (foundation)
 
@@ -342,14 +363,14 @@ measurement where §6 names one.
   `sys.assertions` (logged, `source_text` form). It holds the name, the
   statement text with `?` in its value positions, the fetch id, the relation oids in
   written order, the variant list, the state (`ENABLED`, `DISABLED`,
-  `INVALID`), its creator, its **origin** (`admin` or `captured`), the
-  statistics generation a captured row read, and a reference list (indexes
+  `INVALID`), its creator, its **origin** (`admin` or `captured`), whether
+  a captured row's compile was informed (CX-Q25), and a reference list (indexes
   and Cabins it names). One shape holds at most one row of each origin; an
   `admin` row outranks a `captured` one (CX-R9).
 - **Captured rows persisted** (CX-R8): a `system` task drains the captured
   map into `captured` rows, logged, off the statement. A captured row is
   named by the engine (`captured_<fetch_id>`), has one variant (`ELSE`) and
-  is read by every core at mount into the captured map. `DROP PLAN` on it
+  is read at mount into the instance's captured map. `DROP PLAN` on it
   re-arms the capture; `CREATE PLAN` for its shape adds the `admin` row
   beside it, so a `DROP PLAN` of the admin row falls back to the captured
   one, never to a fresh search (CX-Q17).
@@ -392,8 +413,8 @@ measurement where §6 names one.
   (a) pure in the text and append-only, or (b) changing read scheduling.
   At `286889cc`, equality propagation, CB-S1's range bounds and the false
   uncorrelated `EXISTS` short-circuit are class (a) (§1.4).
-- **Class (a) stays automatic**: it is part of the default plan, which is
-  `f(text)`, so CX-R1 holds.
+- **Class (a) stays automatic**: it is computed from the text alone under
+  every value of `join_order`, so it moves no plan on its own (CX-R1).
 - **Class (b) is never automatic**. Subquery unnesting and semi-join
   conversion may exist only as a managed-plan option (`REWRITE UNNEST
   (subquery k)`), and only once a scenario statement is named as its
@@ -412,14 +433,17 @@ measurement where §6 names one.
 
 ### CX-S4 - priority 3: data distribution statistics, as a managed model
 
-- **Explicit collection** `[design]`: `GATHER STATISTICS ON t [ (c, ...) ]`
-  collects row count, per-column NDV, MCV list and an equi-depth
-  histogram, run as a background task that yields to OLTP (CA's W1 rule).
-- **The model is an object**: stored per CX-Q7, with `LOCK STATISTICS`,
-  `EXPORT` and `IMPORT`, so a plan decision can be reproduced on another
-  instance or in a test.
-- **Readers**: the advisor (S7) and `ANALYZE`'s estimates only. Never a
-  plan (CX-R1). PS1/PS2's observed facts feed the same advisor beside it.
+**Moved to its own order on W7** (`raft-marks-2026-11-18.md` §5):
+`workorder-cy-managed-statistics.md`. CY builds the persisted relation
+priors, the column statistics, the column-group statistics and the
+management surface (`GATHER`, `LOCK`, `EXPORT`, `IMPORT`, history). What
+stays here is the dependency: CX-S0's `fixed` default is only as good as
+the statistics a first compile reads (CX-Q19), so **CY-S1 is CX-S0's
+progress gate as CLA proposes it** (CY-Q0). Which compiles read CY's model
+is CY-R1: the search wherever CX-R1 runs it - `planned`'s every compile, a
+`fixed` first compile, `ADVISE PLAN` - and `ANALYZE`'s estimates. The
+sentence this section carried before W3, "never a plan", no longer follows
+from CX-R1.
 
 ### CX-S5 - priority 4: join method selection
 
@@ -469,8 +493,10 @@ measurement where §6 names one.
 ## 4. Items
 
 Every item is CLA's proposal and unmarked, except CX-Q0 and CX-Q1, which
-W3-W5 settled, and CX-Q12..Q18, marked (a) by the operator (W6). A finding that would change one goes back to the operator
-before it is built. The value names `planned`, `fixed` and `written` are
+W3-W5 settled, and CX-Q12..Q18, marked (a) by the operator (W6). CX-Q19..Q27
+are what the review of the amendment raised (§8) and are unmarked. A
+finding that would change one goes back to the operator before it is
+built. The value names `planned`, `fixed` and `written` are
 CLA's proposal; renaming them is the operator's.
 
 | item | question | options | CLA proposes |
@@ -488,16 +514,26 @@ CLA's proposal; renaming them is the operator's.
 | CX-Q10 | S6's threshold for building the cache | a share of p50 latency, `[provisional]` | 5 % at `cores = 1`, provisional until S6's first cell |
 | CX-Q11 | background advising | (a) on demand only; (b) a background task too | (a) first |
 | CX-Q12 | what a capture holds (CX-R7) | (a) the order and the build side; each step's access arm stays the ladder's `f(shape, catalog)` given its predecessors; (b) the whole plan, arms included | **(a), the operator's mark** (W6). (a): W3's subject is statistics-driven change, and the ladder reads no statistic. Under (a) a `CREATE INDEX` can change a captured shape's arm, as DDL does under `written` - an explicit act. Under (b) a new index serves no captured shape until a DBA acts |
-| CX-Q13 | one capture per shape or per binding | (a) one per shape, from its first compile's literals, serving every binding; (b) one per range-span band or per `arg_hash` | **(a), the operator's mark** (W6). (a): bindings that need different plans are an administrator's variants (`VARIANT ... WHEN ARG(k)`). (b) grows a literal-dependent set of plans on its own, which is the history dependence W4 rules out |
+| CX-Q13 | one capture per shape or per binding | (a) one per shape, from its first compile's literals, serving every binding; (b) one per range-span band or per `arg_hash` | **(a), the operator's mark** (W6). (a): bindings that need different plans are an administrator's variants (`VARIANT ... WHEN ARG(k)`). Both options depend on history - under (a) the first binding compiled decides for every binding - and (a) keeps it to one visible row per shape, where (b) grows a set of plans on its own |
 | CX-Q14 | a restart before a capture is persisted (CX-R8) | (a) accept it: the shape is captured again at its next compile, possibly differently, the window bounded by the persisting task's period; (b) persist at the compile, so a `SELECT` writes the log | **(a), the operator's mark** (W6). (a): (b) breaks CF's rule that no `SELECT` writes the log and makes a `READ ONLY` transaction write a record. The window and its count are in `sys.meta` |
 | CX-Q15 | does a run-time `SET JOIN_ORDER` survive a restart | (a) no: memory-resident, the boot key is read again, as for `SET CABIN_OPTIMIZER` and `SET ASH`; (b) yes, persisted | **(a), the operator's mark** (W6). (a): a persisted run-time value is a second source of the setting beside the boot file |
 | CX-Q16 | a captured plan that no longer compiles | (a) run the written order, mark the row `INVALID`, count it, never re-capture on its own; (b) re-capture | **(a), the operator's mark** (W6). (a): (b) is the engine changing a plan on its own. A DBA or an agent re-arms the capture with `DROP PLAN` (CX-Q17) |
 | CX-Q17 | what re-arms a capture | (a) only `DROP PLAN` of the captured row, an explicit act; (b) also any DDL on a relation the shape names | **(a), the operator's mark** (W6). (a): W4's "the first plan is fixed". Under (b) a `CREATE INDEX` silently re-plans every shape over its relation from the statistics of that moment |
-| CX-Q18 | switching values at run time | (a) `planned` to `fixed`: shapes capture at their next compile from the current statistics, the memo dropped; `fixed` to `planned`: captured rows kept and not read; back to `fixed`: read again; (b) leaving `fixed` deletes the captured rows | **(a), the operator's mark** (W6). (a): the rows are the operator's record of what ran, and deleting them on a switch is a destructive side effect of a setting (cf. `cabin-controller.md` PO8: disabling leaves existing state untouched) |
+| CX-Q18 | switching values at run time | (a) `planned` to `fixed`: a shape with no captured row captures at its next compile from the current statistics, the memo dropped; `fixed` to `planned`: captured rows kept and not read; back to `fixed`: read again; (b) leaving `fixed` deletes the captured rows | **(a), the operator's mark** (W6). (a): the rows are the operator's record of what ran, and deleting them on a switch is a destructive side effect of a setting (cf. `cabin-controller.md` PO8: disabling leaves existing state untouched) |
+| CX-Q19 | a `fixed` first compile before any statistic is published (S0, review A1) | (a) capture at once, as W5 reads: the data-free order is fixed; (b) defer the capture until the block's prices read a published fact, searching uncaptured until then; (c) seed the relations' priors before the listener opens, from persisted statistics (CY-S1), and capture at once | (c) with (b) as its fallback for a relation that has no persisted statistic yet. (a) fixes most of a freshly mounted instance's shapes on a plan chosen blind. (b) alone lets a plan move once, from blind to informed, which is the one change every reading of W4 would want |
+| CX-Q20 | a planned block no capture key fits: more than 4 relations (`stats::PlanKey`, `plan_key.hpp:18`) or `fetch_id == 0` (`step_compiler.cpp:2408`) (review A2) | (a) widen the captured key to the planner's ceiling, 16 relations, so a greedy block is captured too; (b) run the written order for such a block under `fixed`; (c) search at every compile | (a): (c) is implicit change under the default, and (b) takes the planner away from exactly the blocks with the most orders. A `fetch_id == 0` statement runs the written order |
+| CX-Q21 | the captured map's bound (review A4) | (a) a ceiling on captured shapes (`[provisional]` 65,536), past which a new shape runs the written order and is counted in `sys.meta`, nothing evicted; (b) no ceiling; (c) evict the least recently used | (a): (c) followed by a re-capture is an implicit change, and (b) lets a client that generates shapes grow a logged relation without limit |
+| CX-Q22 | the map's cross-core protocol (review A5) | (a) one instance map for both origins, published as an immutable snapshot each core pins by generation (PlanStats' protocol, `plan-stats.md` PS5), captures staged in a per-core part and installed by the persisting task, first key wins; (b) a latched shared table probed at every planned compile | (a): the probe is one acquire load on a planned compile and nothing on a point read (CX-R6). Its cost: a shape compiled again before the task's next step is searched again and may run a different order until the install, which is CX-Q14 (a)'s window inside one run. CX-R6's "per-core read-only map" becomes this one snapshot |
+| CX-Q23 | does persisting captured rows move the schema version word (review A12) | (a) no: a `sys.plans` write bumps a plan generation of its own, which the map's snapshot carries; (b) yes, as every catalog write does | (a): under (b) every capture batch makes every core revalidate its catalog memo and empties `PlanMemo`, whose key holds `catalog_version` (`step_compiler.cpp:2462`) |
+| CX-Q24 | plans over a dropped or renamed relation (review A6) | (a) `DROP TABLE` deletes the captured rows naming its oid in its own transaction and is RESTRICTed by an enabled administrator's plan, as by an assertion; a rename orphans a captured row (its fetch id hashes names, `fingerprint.hpp:44-48`), which stays until `DROP PLAN`; (b) RESTRICT for both origins | (a): (b) refuses every `DROP TABLE` of a relation that was ever joined under the default |
+| CX-Q25 | what a captured row records of the statistics it read (review A10) | (a) one bit, informed or not, and the wall-clock time of the capture; (b) the generation number | (a): the generation is an in-memory counter a restart resets, so a persisted one compares with nothing. With CY's persisted model the row can instead name the model versions it read (CY-R6), which S7's "the statistics have moved past this plan" needs |
+| CX-Q26 | a captured order that fails to compile for one binding only (review A7; reachability not verified) | (a) that compile runs the written order and the row stays; `INVALID` (CX-Q16) is for a failure the catalog causes; (b) any failure marks the row `INVALID` | (a): under (b) one binding takes the captured plan away from every binding |
+| CX-Q27 | a boot change of `join_build_max_rows` or `sort_max_rows` after a capture (review A13; `PlanMemo` keys on both, PS6) | (a) captures stay: a limit is a resource bound checked at run time (CX-Q8 (a)), and `ADVISE PLAN` shows the difference; (b) a changed limit re-arms every capture | (a): (b) is a re-plan of the instance by a configuration edit |
 
 ## 5. `[quiet-wrong]` risks
 
-- **A plan applied to the wrong statement**: closed by CX-R3. Matching
+- **A plan, an administrator's or a captured one, applied to the wrong
+  statement**: closed by CX-R3 (and CX-R7, which uses its key). Matching
   compares every oid exactly. A fetch id hashes names, not oids
   (`include/kds/parser/fingerprint.hpp:44-48`), so a renamed and
   recreated table must not inherit a plan. The oid vector is what makes
@@ -511,9 +547,6 @@ CLA's proposal; renaming them is the operator's.
   risk to correctness, because I11 makes that prefix no contract. It is a
   visible behaviour change between plans, though, so the client manual
   states it beside `CREATE PLAN`.
-- **A captured plan applied to the wrong statement**: closed by CX-R7 using
-  CX-R3's key, exactly as for an administrator's plan. A hash never matches
-  alone.
 - **Two cores running two captured plans for one shape**: closed by
   CX-R7's first-install-wins. Even if it happened, every order of an inner
   block returns the same rows (CB-S2's premise), so the risk is to "no
@@ -529,10 +562,11 @@ AS-E epoch, `build-release`, results named by `git describe --tags`.
 - **S0's close**: scenarios 1-4 on the opening commit (A, `planned`)
   against the S0 build under `fixed` (B) and under `planned` (B'). Gates:
   B' equals A within noise (the `planned` value unchanged); B equals A
-  within noise after warm-up (the first plan is the one `planned` chose);
+  within noise **for shapes captured informed** (CX-Q19), each cell's
+  `informed=` asserted;
   the captured-map probe costs nothing on a point read (CX-R6). Then the
   one thing `fixed` gives up, measured once: a shape captured from an empty
-  snapshot (`gen=0`) against the same shape under `planned` once the
+  snapshot (`informed=0`) against the same shape under `planned` once the
   statistics are published, listed with p50 and p99. This is the price of
   W4's "the first plan is fixed", recorded and not optimised away.
 - **S1's close**: the same statements with an administrator's plan that
@@ -565,3 +599,17 @@ AS-E epoch, `build-release`, results named by `git describe --tags`.
 
 Nothing has landed. CX is written and not opened. Amended 2026-11-18 on
 W3-W5 (`raft-marks-2026-11-18.md` §3), documents only. CX-Q12..Q18 marked (a) on W6 (§4), documents only.
+
+**The review of the amendment** (`critics-developer`, read at `d4bda61f`,
+reported after W6's push). Taken: its seventeen wording corrections; its
+design findings A1-A8, A10 and A12 as CX-Q19..Q27 and as CX-R7's `?` and
+minted-view sentences; A9 as CX-Q13's corrected reason; A11 as CX-S4's
+move to CY. Its largest finding is A1: under `fixed` a shape first compiled
+before the steward's first publish is fixed on the data-free order, which
+made S0's "costs nothing after warm-up" and its close gate false; both are
+restated. Not taken: folding the administrator's lookup and the captured
+map into one structure is left to CX-Q22 rather than decided in prose; the
+repetition it found between CX-R8, S0 and CX-Q14 is kept, each being the
+rule, the stage's fact and the operator's item. Its A13 note that
+controller-made Cabins still reach the ladder under `fixed` is CX-Q6,
+unmarked before the amendment and still.
