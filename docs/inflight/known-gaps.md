@@ -1981,8 +1981,13 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   put on a batch core unless the session declared `SET PRIORITY
   background` first - and its page reads come through the buffer pool, so a
   gather of a cold relation larger than the pool turns the pool over (CY-R10
-  asks a page budget that does not). No measurement has priced its effect
-  on a running workload (CY-Q14's bar). Owned by `plan-stats.md` §9.
+  asks a page budget that does not). Its pace (CY-Q31 (a), 16 leaves per
+  2 ms at most) is a floor and not a period: nothing wakes the park at its
+  deadline, so on an idle core a slice waits for the reactor's idle-block
+  ceiling (10 ms) and a gather runs at about a fifth of its ceiling; the
+  fix is a scheduler timer the dispatcher has no handle to arm. No cell runs
+  the paced branch - every gather fixture has no clock - so it is covered by
+  CY-S5's measurement alone. Owned by `plan-stats.md` §9.
 
 - **No column or column-group statistics** (the operator's W13, CY-S2 and
   CY-S3 not built), so selectivity is still the three constants of

@@ -327,7 +327,15 @@ as PS1 does (CY-Q26 (a)). Pages, not rows: no view, no purge horizon, so the
 count is of a relation that moved under the walk (CY-Q7 (a)). **Sliced**:
 16 leaves a slice, the `analytic` slice, whatever level the session
 declared (CY-Q27 (a)), the core yielded between slices (`GatherRun`, a
-`BuildRun` with no transaction). **The relation's `IS` per slice**, a read
+`BuildRun` with no transaction). **Paced** (CY-Q31 (a)): a slice and the
+wait after it take at least 2 ms, parked under `idle.background`, so a
+gather reads at most 8,000 leaves a second, the ceiling on what it takes of
+the instance's one buffer pool. The 2 ms is a floor: nothing wakes the park,
+so on a core with no other work it ends at the reactor's idle-block ceiling
+(10 ms), about 1,600 leaves a second (`sched.md` §7's table). A paced
+gather's session reads as idle, outside DB time, for most of its walk. A republish installs a generation only
+where a published band moved, so a re-gather inside its band costs no core
+a compile. **The relation's `IS` per slice**, a read
 borrow taken at the slice's start and given back at its end (CY-Q21 (a)), so
 a DDL waiting for the relation `X` passes between two slices; across a yield
 the leaf the walk resumes at is held in place by the statement epoch, as

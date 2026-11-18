@@ -2912,14 +2912,16 @@ sched::Coro BuildRun::Execute(DispatchOutcome* out) {
         if (ran = slice_.TakeCancel(); !ran.ok()) break;
         // **A paced run** (`pace_ns_`, a gather's, CY-Q31 (a)) parks until its
         // slice's interval has passed, so its page rate has a ceiling; every
-        // other run yields. No clock, no pace: a fixture's dispatcher.
+        // other run yields. The predicate is re-asked, never kicked, so the
+        // park ends at the deadline or at the core's idle-block ceiling.
+        // **The clock test is load-bearing**: with no clock `NowNs()` is 0
+        // and the predicate would never hold.
         const sched::MonoTimeNs resume_at = slice_began + pace_ns_;
         if (pace_ns_ > 0 && d_.clock_ != nullptr && d_.NowNs() < resume_at) {
-            CommandDispatcher& d = d_;
-            std::atomic<bool>* const cancel = slice_.cancel;
-            const std::function<bool()> due = [&d, resume_at, cancel] {
-                return d.NowNs() >= resume_at ||
-                       (cancel != nullptr && cancel->load(std::memory_order_acquire));
+            const std::function<bool()> due = [this, resume_at] {
+                return d_.NowNs() >= resume_at ||
+                       (slice_.cancel != nullptr &&
+                        slice_.cancel->load(std::memory_order_acquire));
             };
             sched::WaitScope wait(stats::WaitEvent::kIdleBackground);
             co_await sched::WaitUntil{&due};
@@ -3324,8 +3326,11 @@ public:
     static constexpr std::uint32_t kGatherLeavesPerSlice = PagesPerSlice(Priority::kAnalytic);
     // CY-Q31 (a): a slice of 16 leaves takes at least 2 ms with its wait, so
     // a gather reads at most 8,000 leaves a second (64 MiB/s of 8 KiB pages)
-    // whatever the device could give it; a million-leaf relation takes about
-    // two minutes. Its close measurement found an unpaced loop of gathers
+    // whatever the device could give it. **A floor, not a period**: nothing
+    // wakes the park at its deadline, so on a core with no other work it
+    // ends at the reactor's idle-block ceiling (`max_idle_block_ms`, 10 ms) -
+    // about 1,600 leaves a second, a million-leaf relation in some ten
+    // minutes. Its close measurement found an unpaced loop of gathers
     // slowing OLTP on another core by up to 48 % at p99.
     static constexpr sched::MonoTimeNs kGatherSliceIntervalNs = 2'000'000;
 

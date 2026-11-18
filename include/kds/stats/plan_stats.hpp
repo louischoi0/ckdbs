@@ -167,8 +167,9 @@ public:
     // `RepublishManaged`, so the next compile on every core prices from them.
     ManagedStatistics& managed() noexcept { return managed_; }
     const ManagedStatistics& managed() const noexcept { return managed_; }
-    // The next generation: the published snapshot's steward facts as they
-    // stand, with the managed objects' bands read again. Any thread.
+    // The next generation - the published snapshot's steward facts as they
+    // stand, with the managed objects' bands read again - where a published
+    // band moved; nothing where none did (CY-Q31 (a)). Any thread.
     void RepublishManaged();
 
     // A test's seam: publishes these facts as the next generation.

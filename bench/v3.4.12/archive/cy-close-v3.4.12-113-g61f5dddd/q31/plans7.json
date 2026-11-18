@@ -1,0 +1,128 @@
+{
+ "cores": 1,
+ "bp_gathers": {
+  "pb_exchanges": [],
+  "pb_symbols": [],
+  "pb_bars": [],
+  "pc_users": [],
+  "pc_loans": [],
+  "pc_models": [],
+  "pc_results": [],
+  "pc_oltp": []
+ },
+ "bp_sys_statistics": [
+  "\ufffd\u000f\u0000\u0000\u0000\u0000\u0000\u0000 | public | pb_exchanges | relation | published | gathered | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0002\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \ufffd\ufffdp]\ufffd`\u0006\u0000 | \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | KDS-STATISTICS 1 RELATION rows=2 leaves=1 origin=gathered version=1 made_at=1795035904397965 relation=public.pb_exchanges",
+  "\ufffd\u000f\u0000\u0000\u0000\u0000\u0000\u0000 | public | pb_symbols | relation | published | gathered | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \b\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \ufffd\ufffdp]\ufffd`\u0006\u0000 | \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | KDS-STATISTICS 1 RELATION rows=8 leaves=1 origin=gathered version=1 made_at=1795035904398074 relation=public.pb_symbols",
+  "\ufffd\u000f\u0000\u0000\u0000\u0000\u0000\u0000 | public | pb_bars | relation | published | gathered | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | @\ufffd\u0000\u0000\u0000\u0000\u0000\u0000 | }\u0002\u0000\u0000\u0000\u0000\u0000\u0000 | %\u001cr]\ufffd`\u0006\u0000 | \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | KDS-STATISTICS 1 RELATION rows=60480 leaves=637 origin=gathered version=1 made_at=1795035904482341 relation=public.pb_bars",
+  "\ufffd\u000f\u0000\u0000\u0000\u0000\u0000\u0000 | public | pc_users | relation | published | gathered | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \ufffd\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \ufffd\u001cr]\ufffd`\u0006\u0000 | \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | KDS-STATISTICS 1 RELATION rows=200 leaves=3 origin=gathered version=1 made_at=1795035904482540 relation=public.pc_users",
+  "\ufffd\u000f\u0000\u0000\u0000\u0000\u0000\u0000 | public | pc_loans | relation | published | gathered | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0010'\u0000\u0000\u0000\u0000\u0000\u0000 | =\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \ufffd6r]\ufffd`\u0006\u0000 | \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | KDS-STATISTICS 1 RELATION rows=10000 leaves=61 origin=gathered version=1 made_at=1795035904489131 relation=public.pc_loans",
+  "\ufffd\u000f\u0000\u0000\u0000\u0000\u0000\u0000 | public | pc_models | relation | published | gathered | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \b\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | R7r]\ufffd`\u0006\u0000 | \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | KDS-STATISTICS 1 RELATION rows=8 leaves=1 origin=gathered version=1 made_at=1795035904489298 relation=public.pc_models",
+  "\ufffd\u000f\u0000\u0000\u0000\u0000\u0000\u0000 | public | pc_results | relation | published | gathered | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | 8\u000b\u0000\u0000\u0000\u0000\u0000\u0000 | \u0015\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \ufffd@r]\ufffd`\u0006\u0000 | \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | KDS-STATISTICS 1 RELATION rows=2872 leaves=21 origin=gathered version=1 made_at=1795035904491690 relation=public.pc_results",
+  "\ufffd\u000f\u0000\u0000\u0000\u0000\u0000\u0000 | public | pc_oltp | relation | published | gathered | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \ufffd\u0007\u0000\u0000\u0000\u0000\u0000\u0000 | \u000b\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | 4Ar]\ufffd`\u0006\u0000 | \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | \u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000 | KDS-STATISTICS 1 RELATION rows=2000 leaves=11 origin=gathered version=1 made_at=1795035904491828 relation=public.pc_oltp"
+ ],
+ "b_sys_statistics": [],
+ "pk-point-read": {
+  "stmt": "SELECT * FROM pb_bars WHERE id = 29873",
+  "A": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.10 ms = CPU 0.10"
+  ],
+  "B": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.07 ms = CPU 0.07"
+  ],
+  "A2": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.07 ms = CPU 0.07"
+  ],
+  "Bp": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.05 ms = CPU 0.05"
+  ],
+  "multiset_equal_all": true
+ },
+ "point-join-3rel": {
+  "stmt": "SELECT b.id, b.close, s.ticker, e.code FROM pb_bars AS b JOIN pb_symbols AS s ON b.symbol_id = s.id JOIN pb_exchanges AS e ON s.exchange_id = e.id WHERE b.id = 29873",
+  "A": [
+   "analyze rows=1 class=JoinSelect steps=3 examined=3 pages=3 opens=3 pattern_id=0x403c178e362be946 fetch_id=0x19691f6e0d154b25",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe pb_exchanges AS e key=0:1.2",
+   "  filter 0:1.2 = 0:2.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1, e.code=0:2.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 2 Probe pb_exchanges AS e opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.09 ms = CPU 0.09"
+  ],
+  "B": [
+   "analyze rows=1 class=JoinSelect steps=3 examined=3 pages=3 opens=3 pattern_id=0x403c178e362be946 fetch_id=0x19691f6e0d154b25",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe pb_exchanges AS e key=0:1.2",
+   "  filter 0:1.2 = 0:2.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1, e.code=0:2.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 2 Probe pb_exchanges AS e opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.08 ms = CPU 0.08"
+  ],
+  "A2": [
+   "analyze rows=1 class=JoinSelect steps=3 examined=3 pages=3 opens=3 pattern_id=0x403c178e362be946 fetch_id=0x19691f6e0d154b25",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe pb_exchanges AS e key=0:1.2",
+   "  filter 0:1.2 = 0:2.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1, e.code=0:2.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 2 Probe pb_exchanges AS e opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.08 ms = CPU 0.08"
+  ],
+  "Bp": [
+   "analyze rows=1 class=JoinSelect steps=3 examined=3 pages=3 opens=3 pattern_id=0x403c178e362be946 fetch_id=0x19691f6e0d154b25",
+   "class=JoinSelect steps=3 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "step 2 Probe pb_exchanges AS e key=0:1.2",
+   "  filter 0:1.2 = 0:2.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1, e.code=0:2.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 2 Probe pb_exchanges AS e opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.07 ms = CPU 0.07"
+  ],
+  "multiset_equal_all": true
+ }
+}
