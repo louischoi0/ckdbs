@@ -196,7 +196,7 @@ core's `plan_memo_hits` and `plan_memo_misses`.
 ## 8. Across a clean shutdown (CY-S1)
 
 `instructions/v3.2.0/workorder-cy-managed-statistics.md`, on the operator's
-words of 2026-11-18 (`raft-marks-2026-11-18.md` §12): the statistics are
+words of 2026-11-18 (`raft-marks-2026-11-18.md` §13): the statistics are
 unlogged, and kept across a clean shutdown only.
 
 **PS13 - what is kept.** The relation priors (PS1), each as its band. Not

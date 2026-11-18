@@ -1017,8 +1017,20 @@ holds the history, and the mechanisms are `docs/spec/crosscore.md` CC1 and
   `bench/v3.4.0/results-bl-close-v3.4.1-10-gf4bad273.md`): 6.5 ms median
   against 0.47 ms isolated. Where it was read, the excess is the checkpoint
   task, rotating over cores, holding a reader core's reactor on the stream
-  latch during a segment roll. Rung 3's probe was cut, so whether a
-  two-tier pick would help is not known. What else v0 does not separate:
+  latch during a segment roll. **Rung 3's probe was run on 2026-11-18**
+  (`bench/v3.4.12/results-bl-rung3-probe-v3.4.12-24-g67973ebc.md`, on
+  worktree `bl-rung3-probe` at `67973ebc`) and **rung 3 is not opened**
+  under §5.2's condition:
+  - The `levels` excess (12.2 ms against 649 µs isolated, on that host)
+    is the checkpoint on a roll: all 227 reader samples at or above 10 ms
+    overlap a checkpoint run, and 216 also overlap a roll hold.
+  - Under the balancer, readers that connected beside the `normal` walker
+    took no more slow samples than the others.
+  - Forced onto one core with the balancer off, the walker costs a reader
+    535 µs against 506 µs p99 on the medians. The paired runs, though,
+    range from 0.91x to 3.14x, so this is not a clean bound.
+  Whether rung 3 is ruled out is the operator's mark. What else v0 does not
+  separate:
   - a `normal` session's statement that does not yield holds an
     interactive core from a `transactional` one, and a `background` write
     batch holds a batch core from an `analytic` read - the pick inside

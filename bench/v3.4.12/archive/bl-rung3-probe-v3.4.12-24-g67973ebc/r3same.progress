@@ -1,0 +1,21 @@
+02:05:47 start r1 same-iso load=1.14 1.27 1.12
+02:06:05 done r1 same-iso rc=0
+02:06:05 start r1 same-nw load=0.95 1.22 1.11
+02:06:23 done r1 same-nw rc=0
+02:06:23 start r2 same-iso load=1.28 1.27 1.13
+02:06:42 done r2 same-iso rc=0
+02:06:42 start r2 same-nw load=1.06 1.22 1.11
+02:07:00 done r2 same-nw rc=0
+02:07:00 start r3 same-iso load=1.05 1.21 1.11
+02:07:18 done r3 same-iso rc=0
+02:07:18 start r3 same-nw load=0.89 1.16 1.10
+02:07:37 done r3 same-nw rc=0
+02:07:37 start r4 same-iso load=1.07 1.19 1.10
+02:07:55 done r4 same-iso rc=0
+02:07:55 start r4 same-nw load=0.84 1.12 1.08
+02:08:13 done r4 same-nw rc=0
+02:08:13 start r5 same-iso load=0.81 1.10 1.08
+02:08:32 done r5 same-iso rc=0
+02:08:32 start r5 same-nw load=0.85 1.09 1.08
+02:08:50 done r5 same-nw rc=0
+02:08:50 MIXED-END

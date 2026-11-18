@@ -41,7 +41,7 @@
   always be able to create a plan and fix it."* - CX-R11.
 - **W12** (2026-11-18, `raft-marks-2026-11-18.md` §10): CX-Q28 marked
   (a).
-- **W14, W15** (2026-11-18, `raft-marks-2026-11-18.md` §12): *"go on
+- **W14, W15** (2026-11-18, `raft-marks-2026-11-18.md` §13): *"go on
   with ... the capture, the features around `CREATE PLAN`, the
   interface, and CX-S2 onward"*. **CX opened.** Plans, captured and
   administrator's, are logged (the operator's answer). CX-Q2..Q11 and
@@ -630,7 +630,7 @@ AS-E epoch, `build-release`, results named by `git describe --tags`.
 
 ## 8. Stage log
 
-**CX opened on W14** (`raft-marks-2026-11-18.md` §12); its stages run
+**CX opened on W14** (`raft-marks-2026-11-18.md` §13); its stages run
 after CY-S1 (CY-Q0). Amended 2026-11-18 on
 W3-W5 (`raft-marks-2026-11-18.md` §3), documents only. CX-Q12..Q18 marked (a) on W6 (§4), documents only.
 

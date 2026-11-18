@@ -1163,3 +1163,25 @@ listed above, BL-Q10 (a) and BL-Q11 (a) as CLA built and wrote them. What
 BL leaves stands in the specs it changed (`sched.md` §3-§5 and §9,
 `crosscore.md` CC1, `protocol.md` §8, `rules.md` §3) and in
 `known-gaps.md`'s BL section, which owns it from here.
+
+### Rung 3's probe measured 2026-11-18, after the close
+
+The operator's word is in `instructions/v3.2.0/raft-marks-2026-11-18.md`
+§11. §5.2's cut probe was run on worktree `bl-rung3-probe` at `67973ebc`
+(`v3.4.12-24-g67973ebc`): the mixed cell with a second 10,000-row walker
+at `normal`, placed by the balancer, and the same walker forced onto the
+readers' core with the balancer off. The results are in
+`bench/v3.4.12/results-bl-rung3-probe-v3.4.12-24-g67973ebc.md`.
+
+- **§5.2's condition for opening rung 3 is not met.**
+  - Bar (v)'s excess is still the checkpoint on a roll. All 227 reader
+    samples at or above 10 ms overlap a checkpoint run.
+  - Readers that connected beside the `normal` walker took no more slow
+    samples than the others. BL-S3 moved the walker between cores inside
+    the window.
+- **Forced sharing is not a clean bound.** The median reader p99 is 535 µs
+  against 506 µs, but 2 of 5 paired runs were above 2x.
+- **Rung 3 stays unbuilt and rung 4 stays behind it.** Ruling rung 3 out
+  is not marked.
+- **The record is not reopened.** The close above stands, and nothing in
+  BL is reopened.

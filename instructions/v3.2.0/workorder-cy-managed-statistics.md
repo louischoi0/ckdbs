@@ -23,9 +23,9 @@ in English (`raft-marks-2026-11-18.md` §5):
 - **W12** (2026-11-18, `raft-marks-2026-11-18.md` §10): *"CY-Q14..Q23,
   CX-Q28 $!a push no verify"* - every item the review and W11 raised
   marked (a).
-- **W13** (2026-11-18, `raft-marks-2026-11-18.md` §11): *"For now, take
+- **W13** (2026-11-18, `raft-marks-2026-11-18.md` §12): *"For now, take
   this gate as not passed."* - CY-S2 and CY-S3 are not built.
-- **W14** (2026-11-18, `raft-marks-2026-11-18.md` §12): *"For now, write
+- **W14** (2026-11-18, `raft-marks-2026-11-18.md` §13): *"For now, write
   every statistic as unlogged, and go on with: the statistics persisted
   to disk and the capture, the features around `CREATE PLAN`, the
   interface, and CX-S2 onward."* With W15, the operator's answers:
@@ -498,7 +498,7 @@ within the milestone's hour.
 
 CY-Q0 and CY-Q1 marked (a) on W8 (`raft-marks-2026-11-18.md` §6);
 CY-Q2..Q13 marked (a) and **CY opened on W9** (§7). **CY-S1 opened on W14**
-(§12), with the statistics unlogged.
+(§13), with the statistics unlogged.
 
 - **CY-S0** started 2026-11-18 on worktree `cx-plan-change-option`. No
   engine code.
@@ -604,7 +604,7 @@ import go on, as CY-Q1 (a) and CY-Q15 (a) say. The verdict is about the
 scenarios as much as about the engine - they hold no skewed column and no
 correlated pair - and it leaves the priors-only compile unmeasured.
 
-**The operator's verdict** (W13, `raft-marks-2026-11-18.md` §11): the
+**The operator's verdict** (W13, `raft-marks-2026-11-18.md` §12): the
 gate is taken as not passed. **CY-S2 (column statistics) and CY-S3
 (column groups) are not built.** What stands of CY is S1 (persistence)
 and the part of S4 that does not need a column object - lock, pending

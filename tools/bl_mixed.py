@@ -46,6 +46,18 @@ run records the stamps of the measured window's edges. The server log is
 copied to `--out` as `<tag>.s.log` before the run's directory is removed;
 `--log-level info` is what keeps Info-level lines in it.
 
+`--normal-walkers N` adds N walkers at `normal` (BL §5.2's rung-3 probe,
+`instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
+BL-R7): the walker's statement, declaring nothing unless `--levels` names
+`nwalker`, placed like a reader, so under the partition it shares the
+interactive cores with the readers. `--meta-cores` reads SHOW META on every
+core at the window's edges, from one control session per core opened before
+the window, so each core's own keys (`is_per_core`: scheduler, checkpoint, WAL
+group) have a delta of their own (`meta_by_core`; under BL-S4's partition the batch cores are not read,
+an undeclared session being moved off them); `read_by_core_end` groups
+readers by the core they ended on, among those whose connect core it is (one
+that moved away and back counts as unmoved).
+
 `--slice` needs a measurement build that reads `KDS_BL_PAGES_PER_SLICE`; the
 override is never committed (`bench/v3.0.0/results-bl-s1-*.md` names the
 patch), and a build without it ignores the variable.
@@ -75,6 +87,8 @@ from ba_census import Kds, data_device, is_gauge, start_kds  # noqa: E402
 
 ARMS = ("isolated", "walk", "insert", "mixed")
 OPEN_LOOP = ("reader", "writer")
+# Placed on the readers' cores by the driver's own placements.
+INTERACTIVE = OPEN_LOOP + ("nwalker",)
 PAD = "x" * 200
 # A measured sample at least this slow keeps its monotonic stamp; a client
 # keeps at most SLOW_CAP of them and counts the rest as dropped.
@@ -209,7 +223,7 @@ def client(args):
     else:
         n = 0
         while time.time() < stop_at:
-            if args.role == "walker":
+            if args.role in ("walker", "nwalker"):
                 # Unindexed and not aggregated, so its outermost walk is the
                 # one that reaches the slice boundary (an aggregate does not).
                 sql = f"SELECT * FROM bl_walk WHERE c0 = {rng.randrange(args.walk_rows)}"
@@ -261,7 +275,7 @@ def placement_targets(args, roles):
         span = max(1, batch - first)
     out, r = [], 0
     for role in roles:
-        if role in OPEN_LOOP:
+        if role in INTERACTIVE:
             out.append(first + r % span)
             r += 1
         else:
@@ -271,7 +285,8 @@ def placement_targets(args, roles):
 
 def run_one(args, run):
     tag = (f"bl-mixed-k{args.cores}-{args.placement}-{args.arm}-{args.durability}-w{args.writers}"
-           f"-slice{args.slice or 'dflt'}{'-levels' if args.levels else ''}-r{run}")
+           f"-slice{args.slice or 'dflt'}{'-levels' if args.levels else ''}"
+           f"{f'-nw{args.normal_walkers}' if args.normal_walkers else ''}-r{run}")
     wait = wait_for_load(args.max_load, args.max_wait)
     before = host_state()
     wd = os.path.join(args.workdir, tag)
@@ -310,7 +325,19 @@ def run_one(args, run):
             roles.append("walker")
         if args.arm in ("insert", "mixed"):
             roles.append("inserter")
+        roles += ["nwalker"] * args.normal_walkers
         targets = placement_targets(args, roles)
+        levels = dict(kv.split("=", 1) for kv in args.levels.split(",") if kv)
+        # One idle control session per core, opened before the window, so a
+        # core's tallies are read without a connect inside it. A role declared
+        # at a batch level activates BL-S4's partition, which moves an
+        # undeclared session off a batch core (`LoadPlacer::IsBatchCore`:
+        # core 0 and the last cores/4) at its next head - so no control
+        # session could answer on one, and those cores are not read.
+        partition = args.cores > 1 and any(v in ("analytic", "background") for v in levels.values())
+        nb = max(1, args.cores // 4)
+        core_ctl = {c: connect_on(args.port, c) for c in range(args.cores)
+                    if not (partition and (c == 0 or c + nb - 1 >= args.cores))} if args.meta_cores else {}
         start_at = time.time() + 3.0 + 0.1 * len(roles) * args.cores
         # The monotonic equivalent of a wall instant the clients schedule by,
         # for lining the window up with the server's log.
@@ -319,7 +346,6 @@ def run_one(args, run):
         def mono_of(t):
             return mono0 + round((t - wall0) * 1e9)
 
-        levels = dict(kv.split("=", 1) for kv in args.levels.split(",") if kv)
         rates = {"reader": args.rate / max(1, args.readers),
                  "writer": args.writer_rate / max(1, args.writers)}
         for i, role in enumerate(roles):
@@ -348,7 +374,27 @@ def run_one(args, run):
                 rereads += 1
             return m
 
+        core_rereads = 0
+
+        def core_metas():
+            """SHOW META answered on each core; a session the placer moved
+            is replaced by one on its core (`meta_on`)."""
+            nonlocal core_rereads
+            got = {}
+            for c, be in core_ctl.items():
+                m = meta_all(be.conn)
+                if m.get("core") != c:
+                    be.conn.close()
+                    core_ctl[c], m = meta_on(args.port, c)
+                    core_rereads += 1
+                got[c] = m
+            return got
+
         time.sleep(max(0.0, start_at + args.warmup - time.time()))
+        cm0 = core_metas()
+        # Moves of control sessions before m1, which `moves` counts; cm1's
+        # come after it.
+        core_rereads_m1 = core_rereads
         m0 = ctl_meta()
         # Stamped after the read that counts: a re-read moves the snapshot.
         m0_mono = time.monotonic_ns()
@@ -360,6 +406,13 @@ def run_one(args, run):
             outs.append(json.loads(o.strip().splitlines()[-1]))
         m1 = ctl_meta()
         m1_mono = time.monotonic_ns()
+        cm1 = core_metas()
+        # Each core's own keys (`is_per_core`: scheduler, checkpoint, WAL
+        # group) over the window; a `*longest*` is a maximum since the
+        # server's start, so m1's raw value is kept.
+        meta_by_core = {str(c): {k: v - (0 if "longest" in k else cm0[c].get(k, 0))
+                                 for k, v in cm1[c].items() if is_per_core(k)}
+                        for c in core_ctl}
         # Without `--ctl-core` the placer may have answered the three reads on
         # different cores; the delta then keeps only the instance-wide keys.
         ctl_cores = (m0.get("core"), m_mid.get("core"), m1.get("core"))
@@ -405,11 +458,20 @@ def run_one(args, run):
             "read_from_schedule": pct([x for o in readers for x in o["late"]]),
             # `read_by_core` and `writer_by_core` group by each session's
             # connect core; sound only while `per_core_valid` (no move).
-            "by_core_attribution": "connect_core", "per_core_valid": moves - rereads == 0,  # the control session's own moves excluded
+            "by_core_attribution": "connect_core", "per_core_valid": moves - rereads - core_rereads_m1 == 0,  # the control sessions' own moves excluded
             "moves": moves, "moves_in_window": moves_in_window,
             "read_by_core": {str(c): pct([x for o in readers if o["core"] == c for x in o["late"]])
                              for c in sorted({o["core"] for o in readers})},
+            # Readers that ended on their connect core, by that core: sound
+            # per session even when other sessions moved.
+            "read_by_core_end": {str(c): pct([x for o in readers if o["core"] == o["core_end"] == c
+                                              for x in o["late"]])
+                                 for c in sorted({o["core_end"] for o in readers if o["core"] == o["core_end"]})},
+            "readers_moved": sum(o["core"] != o["core_end"] for o in readers),
             "walker": pct([x for o in outs if o["role"] == "walker" for x in o["lat"]]),
+            "normal_walkers": args.normal_walkers,
+            "nwalker": pct([x for o in outs if o["role"] == "nwalker" for x in o["lat"]]),
+            "meta_by_core": meta_by_core, "meta_core_rereads": core_rereads,
             "writer_service": pct([x for o in writers for x in o["lat"]]),
             "writer_from_schedule": pct([x for o in writers for x in o["late"]]),
             "writer_by_session": [{"index": o["index"], "core": o["core"], "core_end": o["core_end"],
@@ -466,7 +528,7 @@ def run_one(args, run):
               f"sched p99={rs.get('p99_us')} p99.9={rs.get('p99.9_us')} max={rs.get('max_us')} "
               f"write p50={wl.get('p50_us')} p99={wl.get('p99_us')} p99.9={wl.get('p99.9_us')} "
               f"sched p99={ws.get('p99_us')} p99.9={ws.get('p99.9_us')} max={ws.get('max_us')} "
-              f"walker p50={res['walker'].get('p50_us')} "
+              f"walker p50={res['walker'].get('p50_us')} nwalker p50={res['nwalker'].get('p50_us')} "
               f"ins p50={res['inserter'].get('p50_us')} rows/s={res['inserter_rows_per_s']} "
               f"log B/s={res['log_bytes_per_s']} moves={moves} moves_in_window={moves_in_window} "
               f"cores={sorted(set(map(str, res['cores_seen'])))}",
@@ -506,6 +568,10 @@ def main():
     p.add_argument("--extra-conf", action="append", default=[],
                    help="a `key = value` line appended to the KDS config (repeatable)")
     p.add_argument("--readers", type=int, default=4)
+    p.add_argument("--normal-walkers", type=int, default=0,
+                   help="BL's rung-3 probe: walkers placed like readers, `normal` unless --levels names nwalker")
+    p.add_argument("--meta-cores", action="store_true",
+                   help="read SHOW META on every core at the window's edges (`meta_by_core`)")
     p.add_argument("--rate", type=float, default=2000.0, help="point reads per second, all readers together")
     p.add_argument("--writers", type=int, default=0, help="open-loop one-row pk UPDATE sessions")
     p.add_argument("--writer-rate", type=float, default=800.0,

@@ -96,17 +96,26 @@ took under them.
 | **Does not settle** | CX-Q2..Q11 and CX-Q19..Q27; the opening of CY-S1..S5 or of CX; item 4; a version |
 | **Recorded at** | this file; CY's header, §2, §3, §4 and §8; the CX order's header, §2 and §4; the CX and CY rows and this file's row in `instructions/v3.2.0/index.md` |
 
-## 11. CY-S0's gate taken as not passed: CY-S2 and CY-S3 are not built
+## 11. BL's rung-3 probe measured
+
+| | |
+|---|---|
+| **Word** | W13: *"measure rung 3 first"* - after CLA's answer that BL-R7's rungs 3 and 4 were neither discarded on cost nor merely unstarted: rung 3 waits on a condition, and the BL close cut the probe that tests it (given in Korean; recorded in English) |
+| **Mark** | None by the operator. CLA ran §5.2's cut probe on worktree `bl-rung3-probe` at `67973ebc` (`v3.4.12-24-g67973ebc`). `tools/bl_mixed.py` gained `--normal-walkers` and `--meta-cores`, reviewed by `critics-developer`, two driver bugs fixed. Results: `bench/v3.4.12/results-bl-rung3-probe-v3.4.12-24-g67973ebc.md`. **Rung 3 is not opened under §5.2's condition**: bar (v)'s excess is still the checkpoint on a roll (all 227 reader samples at or above 10 ms overlap a checkpoint run), and readers beside the `normal` walker took no more slow samples than the rest. Forced sharing is not a clean bound (median reader p99 535 µs against 506 µs, 2 of 5 pairs above 2x) |
+| **Does not settle** | Whether rung 3 is ruled out; rung 4; the checkpoint's roll wait (WAL work); a `normal` statement that does not yield; a merge, a push, a version |
+| **Recorded at** | this file; the BL order's §6 ("Rung 3's probe measured 2026-11-18"); `docs/inflight/known-gaps.md`'s BL-R7 remainder; this file's row in `instructions/v3.2.0/index.md` |
+
+## 12. CY-S0's gate taken as not passed: CY-S2 and CY-S3 are not built
 
 | | |
 |---|---|
 | **Context** | CLA's report of CY-S0 (`bench/v3.4.12/results-cy-s0-premise-v3.4.12-18-ge0cd5a93.md`, corrected after its review at `648d11ba`): over 15 cells no forced join order that differs from the informed planner's saves 15 % of server CPU, or of p50, in any round; the only different order is a tie; the scenario columns are uniform, and the compile with relation priors and no posterior was not measured. CLA recommended measuring two more cells before a final verdict |
-| **Word** | W13: *"For now, take this gate as not passed; what is the next work?"* (given in Korean; recorded in English) |
+| **Word** | W13 (the CX/CY matter's; §11's W13 is BL's): *"For now, take this gate as not passed; what is the next work?"* (given in Korean; recorded in English) |
 | **Mark** | **CY-Q15 (a)'s gate is not passed. CY-S2 (column statistics) and CY-S3 (column-group statistics) are not built.** CY keeps S1 (persistence) and S4's lock, pending and publish, history and restore, export and import, over relation objects. The marks on the items that only S2 or S3 would use stay as marked and apply to nothing until an order reopens them. "For now" is the operator's: the verdict is not a ruling that column statistics are never built |
 | **Does not settle** | the opening of CY-S1; CX-Q2..Q11 and CX-Q19..Q27; item 4; a push of `fc705f97` and `648d11ba`; a version |
 | **Recorded at** | this file; CY's header, §3 and §8; the CY row and this file's row in `instructions/v3.2.0/index.md` |
 
-## 12. Statistics unlogged; CY-S1 and CX opened; the standing go-ahead
+## 13. Statistics unlogged; CY-S1 and CX opened; the standing go-ahead
 
 | | |
 |---|---|
