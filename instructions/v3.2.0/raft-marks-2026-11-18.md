@@ -235,3 +235,12 @@ took under them.
 | **Mark** | **`workorder-de-page-read-off-the-reactor.md` is written and not opened.** The letter DE is CLA's proposal, and so is its exploratory shape: the word does not ask for one, and DE-Q0 puts it to the operator. Reviewed by `critics-developer`; its findings applied but one, named in the order's §7. DE-S0 measures whether a miss's stall reaches sessions that did not miss once the page cache is kept from answering; DE-Q6 asks first whether a working set beyond the pool is a case the engine serves at all. **A side finding of that review is entered in `known-gaps.md`**: a backup starts threads after startup, against `sched.md` §9's invariant 1 |
 | **Does not settle** | DE-Q0..Q6; the opening of DE; the backup threads; a push; a version |
 | **Recorded at** | this file; the DE order; `docs/inflight/known-gaps.md` "Backup and restore (BR)"; the DE row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 26. DB, DC, DD and DE pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W6, on CLA's report of the four orders at `ebcbe67f` on worktree `db-fpi-cadence-dc-for-update`: *"push no verify"* |
+| **Mark** | None. **Pushed to `main` with `--no-verify`**: the four orders, §22-§25, their index rows and the `known-gaps.md` entry. The hook and the suite are skipped, and no suite was run: the commits change documents only. `origin/main` stood at `a4d2fb3b`, the branch's base, so nothing was merged |
+| **Does not settle** | Any DB-Q, DC-Q, DD-Q or DE-Q; the opening of any of the four; a re-review of DB §2.1's argument, which CLA offered and the word does not ask for; a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
