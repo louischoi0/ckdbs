@@ -4,7 +4,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <unordered_map>
 
@@ -43,6 +42,12 @@
 // CX-R7 says none does; the cost is one partition latch on a searched
 // block's compile, never on a point read or a tuple key chain, which leave
 // the compile before the table is asked (CX-R6).
+//
+// **Latch protocol** (`docs/rules/rules.md` §3): a partition's latch guards
+// its map and is held for one lookup or one install, across no I/O and with
+// no other latch taken under it, so it orders against nothing. The shape
+// count and the counters are relaxed atomics; the ceiling is taken by an
+// increment that is given back, under the partition's latch.
 //
 // **Bounded, never evicted** (CX-Q21 (a)): past `kMaxShapes` a new shape is
 // refused and runs its written order. Evicting one and capturing it again
@@ -86,26 +91,30 @@ public:
 
     // ---- Counters, for `sys.meta` ------------------------------------------
     std::uint64_t shapes() const noexcept { return shapes_.load(std::memory_order_relaxed); }
-    // Compiles that ran a captured order.
+    // Compiles that found a captured order in force - by `Find`, or as the
+    // answer to a `Capture` another core's install won - whether it then
+    // ran or was declined (`declined`).
     std::uint64_t served() const noexcept { return served_.load(std::memory_order_relaxed); }
     // Searched blocks not captured: a relation of theirs had no published
-    // prior yet (CX-Q19).
+    // prior yet (CX-Q19), or a DDL was open (a minted view).
     std::uint64_t deferred() const noexcept { return deferred_.load(std::memory_order_relaxed); }
     // Blocks no key fits - no fetch id, or more relations than a key holds
     // (CX-Q20) - which ran their written order.
     std::uint64_t unkeyed() const noexcept { return unkeyed_.load(std::memory_order_relaxed); }
-    // New shapes refused past the ceiling, which ran their written order.
-    std::uint64_t refused() const noexcept { return refused_.load(std::memory_order_relaxed); }
-    // Captured orders that did not compile for a statement, which ran its
-    // written order (CX-Q26).
-    std::uint64_t uncompiled() const noexcept {
-        return uncompiled_.load(std::memory_order_relaxed);
+    // New shapes past the ceiling, which ran their written order.
+    std::uint64_t over_ceiling() const noexcept {
+        return over_ceiling_.load(std::memory_order_relaxed);
     }
+    // Captured orders declined for a statement, which ran its written order:
+    // one that did not compile for it (CX-Q26), or one that adds a sort its
+    // LIMIT does not bound (CC-Q10).
+    std::uint64_t declined() const noexcept { return declined_.load(std::memory_order_relaxed); }
 
+    void CountServed() noexcept { served_.fetch_add(1, std::memory_order_relaxed); }
     void CountDeferred() noexcept { deferred_.fetch_add(1, std::memory_order_relaxed); }
     void CountUnkeyed() noexcept { unkeyed_.fetch_add(1, std::memory_order_relaxed); }
-    void CountRefused() noexcept { refused_.fetch_add(1, std::memory_order_relaxed); }
-    void CountUncompiled() noexcept { uncompiled_.fetch_add(1, std::memory_order_relaxed); }
+    void CountOverCeiling() noexcept { over_ceiling_.fetch_add(1, std::memory_order_relaxed); }
+    void CountDeclined() noexcept { declined_.fetch_add(1, std::memory_order_relaxed); }
 
 private:
     struct KeyHash {
@@ -122,8 +131,8 @@ private:
     std::atomic<std::uint64_t> served_{0};
     std::atomic<std::uint64_t> deferred_{0};
     std::atomic<std::uint64_t> unkeyed_{0};
-    std::atomic<std::uint64_t> refused_{0};
-    std::atomic<std::uint64_t> uncompiled_{0};
+    std::atomic<std::uint64_t> over_ceiling_{0};
+    std::atomic<std::uint64_t> declined_{0};
 };
 
 }  // namespace kds::exec

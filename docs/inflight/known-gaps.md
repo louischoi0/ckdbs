@@ -1970,18 +1970,32 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   to 24 compiles of the block. The steward seeds a wanted relation within
   its next steps, so the window is seconds - but a relation whose seed
   keeps being discarded (a page whose type or owner does not match) keeps
-  its shapes there for good, counted in `capture_deferred`. Not measured.
+  its shapes there for good, and a shape first compiled while a DDL is
+  held open stays there until it closes, both counted in
+  `capture_deferred`. Not measured.
   Owned by `parser-v2.md` I12.
 
-- **Three of the capture's paths have no cell that reaches them through a
-  compile.** A captured order that does not compile for a statement
-  (`capture_uncompiled`; no statement that produces it was found), a
-  compile that loses the install to another core between its search and
-  its capture, and one that loses the table's last free slot there: the
-  table's own cells pin first-install-wins and the ceiling, and the
-  compile's handling of each answer is read, not run. No cell runs two
-  reactors under `fixed`, and the simulation harness's instance runs
-  `planned`, a bare dispatcher's value. Owned by `parser-v2.md` I12.
+- **Four of the capture's paths have no cell that reaches them through a
+  compile.** A captured order that does not compile for a statement (no
+  statement that produces it was found; the other cause of
+  `capture_declined`, a sort a larger `LIMIT` no longer bounds, has its
+  cell), a block of more than 16 relations (the unkeyed path is reached by
+  a missing fetch id only), a compile that loses the install to another
+  core between its search and its capture, and one that loses the table's
+  last free slot there: the table's own cells pin first-install-wins and
+  the ceiling, and the compile's handling of each answer is read, not run.
+  No cell runs two reactors' statements under `fixed`, and the simulation
+  harness's instance runs `planned`, a bare dispatcher's value. Owned by
+  `parser-v2.md` I12.
+
+- **A capture can be made by a compile the statement then discards.**
+  `ResolveNames` compiles once unfiltered and, if a DDL opened meanwhile,
+  again under a minted view; the first pass may capture before its answer
+  is thrown away, so the order was priced against a catalog that may hold
+  an uncommitted DDL's rows - an index that rolls back, say. Oids are never
+  reissued and every order returns the same rows, so no result is at risk;
+  the shape keeps an order chosen in that window until a restart. Owned by
+  `parser-v2.md` I12.
 
 - **A shape running uncaptured is visible only in aggregate.** `SHOW
   META` counts deferred, unkeyed, refused and uncompiled blocks for the

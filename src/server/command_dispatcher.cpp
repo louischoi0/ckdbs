@@ -1909,17 +1909,17 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // **`join_order` and the captured plans of `fixed`** (CX-S0): the value
     // in force, and the instance's one table - the shapes it holds, the
     // compiles that ran a captured order, and the blocks that ran without
-    // one, by reason: `deferred` searched and not captured for want of a
-    // relation's prior; `unkeyed`, `refused` (the ceiling) and `uncompiled`
-    // ran their written order.
+    // one, by reason: `deferred` searched and not captured, for want of a
+    // relation's prior or under an open DDL; `unkeyed`, `over_ceiling` and
+    // `declined` ran their written order.
     section("join_order");
     os << " join_order=" << exec::JoinOrderName(join_order())
        << " captured_plans=" << captured_plans_->shapes()
        << " captured_served=" << captured_plans_->served()
        << " capture_deferred=" << captured_plans_->deferred()
        << " capture_unkeyed=" << captured_plans_->unkeyed()
-       << " capture_refused=" << captured_plans_->refused()
-       << " capture_uncompiled=" << captured_plans_->uncompiled();
+       << " capture_over_ceiling=" << captured_plans_->over_ceiling()
+       << " capture_declined=" << captured_plans_->declined();
 
     // **The Cabin store's instance-wide half** (cabin.md §6a), which `SHOW
     // CABINS`' header printed and no `sys.cabins` row can carry: a walk

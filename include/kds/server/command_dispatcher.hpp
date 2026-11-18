@@ -1870,10 +1870,6 @@ public:
     exec::JoinOrder join_order() const noexcept {
         return join_order_->load(std::memory_order_relaxed);
     }
-    // The two values CB-S2 had: false keeps every join in its written order.
-    void set_plan_join_order(bool planned) noexcept {
-        set_join_order(planned ? exec::JoinOrder::kPlanned : exec::JoinOrder::kWritten);
-    }
     // The captured plans `fixed` reads and fills: the instance's, or this
     // dispatcher's own.
     exec::CapturedPlans& captured_plans() noexcept { return *captured_plans_; }

@@ -332,7 +332,7 @@ std::string FormatPlan(const StepChain& chain) {
     // the capture: `order=captured` for a shape's captured order, which was
     // not priced at this compile and so prints no estimate; `capture=first`
     // on the search whose answer was captured, `capture=deferred` on one
-    // that was not; and `order=written capture=unkeyed|refused|uncompiled`
+    // that was not; and `order=written capture=unkeyed|over_ceiling|declined`
     // for a block that ran as written without a search.
     if (chain.plan_note.has_value()) {
         const PlanNote& note = *chain.plan_note;
@@ -356,8 +356,8 @@ std::string FormatPlan(const StepChain& chain) {
             case PlanSource::kDeferred: priced("deferred"); break;
             case PlanSource::kCaptured: os << "captured"; break;
             case PlanSource::kUnkeyed: os << "written capture=unkeyed"; break;
-            case PlanSource::kOverCeiling: os << "written capture=refused"; break;
-            case PlanSource::kUncompiled: os << "written capture=uncompiled"; break;
+            case PlanSource::kOverCeiling: os << "written capture=over_ceiling"; break;
+            case PlanSource::kDeclined: os << "written capture=declined"; break;
         }
         os << '\n';
     }

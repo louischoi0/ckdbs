@@ -308,9 +308,11 @@ instance's captured-plan table, the same on every core: `captured_plans`,
 the shapes it holds; `captured_served`, the compiles that found a captured
 order; and the planned blocks that ran without one, by reason -
 `capture_deferred` (searched, not captured: a relation had no published
-prior), `capture_unkeyed` (no key fits the block), `capture_refused` (the
-table's ceiling) and `capture_uncompiled` (the captured order did not
-compile for the statement), the last three having run their written order.
+prior, or a DDL was open), `capture_unkeyed` (no key fits the block),
+`capture_over_ceiling` (the table's ceiling) and `capture_declined` (the
+captured order did not compile for the statement, or adds a sort its
+`LIMIT` does not bound), the last three having run their written order.
+`captured_served` counts a declined compile too: it found an order.
 
 **The `txn` section** (CS-Q8 (a), `txn.md` §1) carries this core's
 `read_only_begins`, the `BEGIN ... READ ONLY` transactions it opened, and

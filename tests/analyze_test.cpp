@@ -53,7 +53,7 @@ protected:
 
     std::string Run(const std::string& sql) {
         CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-        d.set_plan_join_order(false);  // the plan as written (CB-S2)
+        d.set_join_order(exec::JoinOrder::kWritten);  // the plan as written (CB-S2)
         return d.Dispatch(sql).response;
     }
 
@@ -63,7 +63,7 @@ protected:
     // contriving a relation larger than the default 65536.
     std::string RunWithoutTheBuild(const std::string& sql) {
         CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-        d.set_plan_join_order(false);
+        d.set_join_order(exec::JoinOrder::kWritten);
         d.set_join_build_max_rows(0);
         return d.Dispatch(sql).response;
     }

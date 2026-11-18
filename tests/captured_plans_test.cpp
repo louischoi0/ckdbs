@@ -278,10 +278,43 @@ TEST_F(CapturedPlansTest, PastTheCeilingANewShapeRunsAsWrittenAndAHeldOneStillRu
     const exec::StepChain fresh = Fixed(std::string(kCompareAll) + " WHERE results.pnl > 5");
     EXPECT_EQ(Order(fresh), kWritten);
     EXPECT_EQ(SourceOf(fresh), PlanSource::kOverCeiling);
-    EXPECT_EQ(table_.refused(), 1u);
+    EXPECT_EQ(table_.over_ceiling(), 1u);
     const exec::StepChain held = Fixed(kCompareAll);
     EXPECT_EQ(SourceOf(held), PlanSource::kCaptured);
     EXPECT_EQ(Order(held), kModelsFirst);
+}
+
+TEST_F(CapturedPlansTest, ACapturedSortThisBindingsLimitNoLongerBoundsRunsAsWritten) {
+    // CC-Q10 is asked per binding: LIMIT is a literal, so a captured order
+    // whose added sort was a top-N heap under its first binding's LIMIT is
+    // an unbounded sort under a larger one, which would meet `sort_max_rows`
+    // where the written order streams. That binding runs as written.
+    Ok("CREATE TABLE a (id int64, v int64) BTREE");
+    Ok("CREATE TABLE b (id int64, a_id int64) BTREE");
+    for (int i = 1; i <= 64; ++i) {
+        Ok("INSERT INTO a VALUES (" + std::to_string(i) + ", " + std::to_string(i) + ")");
+    }
+    for (int i = 1; i <= 16; ++i) {
+        Ok("INSERT INTO b VALUES (" + std::to_string(i) + ", " + std::to_string(i) + ")");
+    }
+    stats_.PublishForTest({{OidOf("a"), stats::BandOf(1000000)}, {OidOf("b"), stats::BandOf(16)}},
+                          {});
+    dispatcher_->set_sort_max_rows(10);
+    dispatcher_->set_join_build_max_rows(0);
+    Ok("SET JOIN_ORDER fixed");
+    const std::string head =
+        "SELECT a.v, b.id FROM a JOIN b ON a.id = b.a_id ORDER BY a.id LIMIT ";
+    const std::string first = Plan(head + "5");
+    ASSERT_NE(first.find("reordered=1"), std::string::npos) << first;
+    ASSERT_NE(first.find(" capture=first"), std::string::npos) << first;
+    // A LIMIT the cap still covers runs the captured order.
+    EXPECT_NE(Plan(head + "6").find("planned order=captured\\n"), std::string::npos);
+    // One it does not: the written order, every row, no refusal.
+    const std::string wide = Plan(head + "100");
+    EXPECT_NE(wide.find("planned order=written capture=declined"), std::string::npos) << wide;
+    EXPECT_EQ(RowCount(head + "100"), 16u);
+    EXPECT_EQ(dispatcher_->captured_plans().declined(), 2u);
+    EXPECT_EQ(dispatcher_->captured_plans().served(), 3u);
 }
 
 // ---- The table ---------------------------------------------------------------
@@ -410,36 +443,68 @@ TEST_F(CapturedPlansTest, ADeferredShapeIsCapturedOnceTheStewardSeedsItsRelation
     EXPECT_EQ(dispatcher_->captured_plans().deferred(), 1u);
 }
 
-TEST_F(CapturedPlansTest, UnderAMintedViewNoCaptureIsMadeAndNoneIsRead) {
-    // CX-R7: while a DDL is open the catalog a compile prices against may
-    // roll back, so its order is not fixed - and a captured one is not read.
+TEST_F(CapturedPlansTest, WhileADdlIsOpenNoCaptureIsMadeAndAHeldOneIsStillRun) {
+    // CX-R7: while a DDL is open anywhere the catalog a compile prices
+    // against may roll back, so its order is not fixed. A captured order is
+    // still read - one open DDL must not let every captured shape follow the
+    // statistics.
     FillModels();
     PublishModelsSmall();
     Ok("SET JOIN_ORDER fixed");
     Session ddl;
-    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &ddl).response.rfind("ERR", 0), std::string::npos);
-    const std::string created =
-        dispatcher_->Dispatch("CREATE TABLE side (id int64) BTREE", &ddl).response;
-    ASSERT_EQ(created.rfind("CREATED", 0), 0u) << created;
+    const auto open_ddl = [&] {
+        ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &ddl).response.rfind("ERR", 0),
+                  std::string::npos);
+        const std::string created =
+            dispatcher_->Dispatch("CREATE TABLE side (id int64) BTREE", &ddl).response;
+        ASSERT_EQ(created.rfind("CREATED", 0), 0u) << created;
+    };
+    const auto close_ddl = [&] {
+        ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &ddl).response.rfind("ERR", 0),
+                  std::string::npos);
+    };
 
+    open_ddl();
     const std::string open = Plan(kCompareAll);
     EXPECT_NE(open.find("planned order=planned gen="), std::string::npos) << open;
-    EXPECT_EQ(open.find("capture="), std::string::npos) << open;
+    EXPECT_NE(open.find(" capture=deferred"), std::string::npos) << open;
     EXPECT_EQ(dispatcher_->captured_plans().shapes(), 0u);
-    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &ddl).response.rfind("ERR", 0), std::string::npos);
-
+    close_ddl();
     EXPECT_NE(Plan(kCompareAll).find(" capture=first"), std::string::npos);
-    // And with one held: a DDL open again, the search runs and it is not read.
+
+    // The statistics turn round and a DDL opens again: the held order runs.
     PublishModelsLarge();
-    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &ddl).response.rfind("ERR", 0), std::string::npos);
-    ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE side (id int64) BTREE", &ddl)
-                  .response.rfind("CREATED", 0),
-              0u);
-    const std::string searched = Plan(kCompareAll);
-    EXPECT_NE(searched.find("planned order=written gen="), std::string::npos) << searched;
-    EXPECT_EQ(dispatcher_->captured_plans().served(), 0u);
-    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &ddl).response.rfind("ERR", 0), std::string::npos);
-    EXPECT_NE(Plan(kCompareAll).find("planned order=captured\\n"), std::string::npos);
+    open_ddl();
+    const std::string held = Plan(kCompareAll);
+    EXPECT_NE(held.find("reordered=1"), std::string::npos) << held;
+    EXPECT_NE(held.find("planned order=captured\\n"), std::string::npos) << held;
+    EXPECT_EQ(RowCount(kCompareAll), 64u);
+    close_ddl();
+    EXPECT_EQ(dispatcher_->captured_plans().shapes(), 1u);
+}
+
+TEST_F(CapturedPlansTest, FixedNeitherReadsNorFillsTheOrderMemo) {
+    // CX-Q3: the memo's key holds the statistics generation, so a hit would
+    // move a plan with the statistics. Deferred or captured, `fixed` leaves
+    // it alone; `planned` uses it as before.
+    FillModels();
+    const auto memo = [&] {
+        const std::string meta = Run("SHOW META");
+        const std::size_t at = meta.find("plan_memo,plan_memo_hits,");
+        EXPECT_NE(at, std::string::npos);
+        return meta.substr(at, meta.find("\\njoin_order,", at) - at);
+    };
+    Ok("SET JOIN_ORDER fixed");
+    Plan(kCompareAll);  // deferred: searched
+    Plan(kCompareAll);
+    PublishModelsSmall();
+    Plan(kCompareAll);  // captured
+    Plan(kCompareAll);  // served
+    EXPECT_EQ(memo(), "plan_memo,plan_memo_hits,0\\nplan_memo,plan_memo_misses,0");
+    Ok("SET JOIN_ORDER planned");
+    Plan(kCompareAll);
+    Plan(kCompareAll);
+    EXPECT_EQ(memo(), "plan_memo,plan_memo_hits,1\\nplan_memo,plan_memo_misses,1");
 }
 
 TEST_F(CapturedPlansTest, AnInstancesValueAndTableAreTheOnesEveryDispatcherUses) {
@@ -456,7 +521,7 @@ TEST_F(CapturedPlansTest, AnInstancesValueAndTableAreTheOnesEveryDispatcherUses)
     EXPECT_EQ(dispatcher_->join_order(), exec::JoinOrder::kFixed);
     EXPECT_NE(Plan(kCompareAll).find(" capture=first"), std::string::npos);
     EXPECT_EQ(table_.shapes(), 1u);
-    // What another core captured is what this one runs.
+    // And what is in the instance's table is what a compile handed it runs.
     EXPECT_EQ(SourceOf(Fixed(kCompareAll)), PlanSource::kCaptured);
     Ok("SET JOIN_ORDER written");
     EXPECT_EQ(instance_value.load(), exec::JoinOrder::kWritten);

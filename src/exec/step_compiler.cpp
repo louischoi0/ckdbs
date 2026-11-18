@@ -2430,11 +2430,18 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     //
     // Asked after the descent skip, so a point read and a tuple key chain
     // never reach the table (CX-R6), and before the statistics are pinned:
-    // a captured shape's compile reads no fact (plan-stats.md PS9). Never
-    // under a minted view (CX-R7): a DDL is in flight in the transaction,
-    // and an order priced against a catalog state that may roll back is
-    // neither fixed nor read - the block is searched, as under `planned`.
-    CapturedPlans* const captured = view == nullptr ? plan->captured : nullptr;
+    // a captured shape's compile reads no fact (plan-stats.md PS9).
+    //
+    // **Under a minted view a captured order is read and none is made.** A
+    // view is minted while a DDL is open anywhere in the instance
+    // (`CommandDispatcher::ViewFor`), so an order priced then is priced
+    // against a catalog state that may roll back and is not fixed. Reading
+    // one is another matter: it was captured outside any view for these
+    // exact oids, and it goes through the ladder under this view like any
+    // order - were it not read, every captured shape on every core would
+    // follow the statistics for as long as one session held a DDL open.
+    CapturedPlans* const captured = plan->captured;
+    const bool may_capture = view == nullptr;
     CapturedKey captured_key;
     // A chain this compile did not price: the written order or a captured
     // one.
@@ -2443,31 +2450,26 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         chain.plan_note.emplace().source = source;
         return chain;
     };
-    // The written order's chain where the caller still holds it, else
-    // compiled again - it compiled above, so only the paths that have
-    // already moved it pay.
-    const auto written_chain = [&](std::optional<StepChain> held) -> StatusOr<StepChain> {
-        if (held.has_value()) return std::move(*held);
-        return compile_order(written);
-    };
     // Runs the order in force for the shape: through the full ladder, as a
     // memo hit's is, so no chain, literal or page id is reused and every
-    // refusal stays the written order's. One that does not compile for this
-    // statement is never forced (CX-Q16, CX-Q26): the written order runs.
-    const auto run_captured = [&](const CapturedOrder& in_force,
-                                  std::optional<StepChain> held) -> StatusOr<StepChain> {
+    // refusal stays the written order's. It is declined, and `written_chain`
+    // runs, where it does not compile for this statement (CX-Q16, CX-Q26)
+    // and where it adds a sort this binding's LIMIT does not bound (CC-Q10):
+    // LIMIT is a literal and so outside the key, and a reordered chain's
+    // top-N heap under `LIMIT 5` is a full sort under `LIMIT 5000000`, which
+    // meets `sort_max_rows` where the written order streams.
+    const bool written_sorted = best.value().sorted();
+    const auto run_captured = [&](const CapturedOrder& in_force, StepChain written_chain) {
+        captured->CountServed();
         const std::vector<std::size_t> perm(in_force.begin(), in_force.begin() + refs.size());
-        PlanSource source = PlanSource::kCaptured;
-        if (perm != written) {
-            if (auto chain = compile_order(perm); chain.ok()) {
-                return unpriced(std::move(chain.value()), source);
-            }
-            captured->CountUncompiled();
-            source = PlanSource::kUncompiled;
+        if (perm == written) return unpriced(std::move(written_chain), PlanSource::kCaptured);
+        if (auto chain = compile_order(perm);
+            chain.ok() &&
+            AddedSortCannotRefuse(chain.value(), written_sorted, plan->sort_max_rows)) {
+            return unpriced(std::move(chain.value()), PlanSource::kCaptured);
         }
-        auto chain = written_chain(std::move(held));
-        if (!chain.ok()) return chain;
-        return unpriced(std::move(chain.value()), source);
+        captured->CountDeclined();
+        return unpriced(std::move(written_chain), PlanSource::kDeclined);
     };
     if (captured != nullptr) {
         // CX-Q20: a block no key fits - no fetch id (a statement that came
@@ -2488,7 +2490,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         }
         // CX-Q21: past the ceiling a new shape runs as written, unsearched.
         if (captured->full()) {
-            captured->CountRefused();
+            captured->CountOverCeiling();
             return unpriced(std::move(best.value()), PlanSource::kOverCeiling);
         }
     }
@@ -2517,7 +2519,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         written_rows.push_back(prior.has_value() ? std::max(*prior, 1.0) : kAssumedRelationRows);
     }
     inputs.limits = *plan;
-    inputs.written_sorted = best.value().sorted();
+    inputs.written_sorted = written_sorted;
     inputs.base_step_id = base_step_id;
     inputs.written_access = written_access;
     inputs.written_rows = written_rows;
@@ -2627,14 +2629,15 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     if (captured != nullptr) {
         // **The capture** (CX-R7): the search's answer becomes the shape's
         // order for the life of the instance - once every relation of the
-        // block has a published prior. CX-Q19 (b) defers a capture "until
-        // the block's prices read a published fact"; this is tighter - one
-        // prior of three leaves two relations priced at the constant, and
-        // that order would be fixed half blind. Until then the block is
-        // searched at each compile and its answer runs uncaptured; the run
-        // names its relations to the steward, which seeds them within its
-        // next steps (plan-stats.md PS4).
-        if (!every_prior) {
+        // block has a published prior, and never under a minted view
+        // (above). CX-Q19 (b) defers a capture "until the block's prices
+        // read a published fact"; this is tighter - one prior of three
+        // leaves two relations priced at the constant, and that order would
+        // be fixed half blind. Until then the block is searched at each
+        // compile and its answer runs uncaptured; the run names its
+        // relations to the steward, which seeds them within its next steps
+        // (plan-stats.md PS4).
+        if (!every_prior || !may_capture) {
             captured->CountDeferred();
             source = PlanSource::kDeferred;
         } else {
@@ -2643,21 +2646,20 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 mine[k] = static_cast<std::uint8_t>(chosen.steps[k].step_id - base_step_id);
             }
             const auto in_force = captured->Capture(captured_key, mine);
-            std::optional<StepChain> held;
-            if (!reordered) held = std::move(chosen);
-            if (!in_force.has_value()) {
-                // The last free slot went to another shape meanwhile.
-                captured->CountRefused();
-                auto chain = written_chain(std::move(held));
-                if (!chain.ok()) return chain;
-                return unpriced(std::move(chain.value()), PlanSource::kOverCeiling);
-            }
-            if (*in_force != mine) {
+            if (!in_force.has_value() || *in_force != mine) {
+                // The written order's chain: `chosen` itself, or `best`,
+                // which a reordered choice left where it was.
+                StepChain written_chain =
+                    reordered ? std::move(best.value()) : std::move(chosen);
+                if (!in_force.has_value()) {
+                    // The last free slot went to another shape meanwhile.
+                    captured->CountOverCeiling();
+                    return unpriced(std::move(written_chain), PlanSource::kOverCeiling);
+                }
                 // Another core captured the shape while this one searched:
                 // its order runs here too, so no shape runs two.
-                return run_captured(*in_force, std::move(held));
+                return run_captured(*in_force, std::move(written_chain));
             }
-            if (held.has_value()) chosen = std::move(*held);
             source = PlanSource::kCapturing;
         }
     }

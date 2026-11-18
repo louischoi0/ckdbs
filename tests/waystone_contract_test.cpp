@@ -79,7 +79,7 @@ public:
     bool OptIn(const std::string& sql) {
         return Run("WAYSTONE ON " + sql).rfind("OK WAYSTONE ON", 0) == 0;
     }
-    void KeepWrittenOrder() { dispatcher_->set_plan_join_order(false); }
+    void KeepWrittenOrder() { dispatcher_->set_join_order(exec::JoinOrder::kWritten); }
     // The join planner's statistics, learned from `sqls` (CC-S3).
     void Learn(const std::vector<std::string>& sqls) {
         testing_plan::LearnPlanStats(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);

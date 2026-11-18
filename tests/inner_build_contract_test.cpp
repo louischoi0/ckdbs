@@ -136,7 +136,7 @@ std::string RunThroughDispatcher(bool knob_off, bool with_null_row,
         /*cabins=*/nullptr);
     if (knob_off) dispatcher.set_join_build_max_rows(0);
     // The build is compared against its walk, so both run one order (CB-S2).
-    if (!captured) dispatcher.set_plan_join_order(false);
+    if (!captured) dispatcher.set_join_order(exec::JoinOrder::kWritten);
 
     EXPECT_EQ(dispatcher.Dispatch("CREATE TABLE au (id int64, name varchar)")
                   .response.substr(0, 7),

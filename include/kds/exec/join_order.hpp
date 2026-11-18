@@ -159,4 +159,13 @@ inline constexpr double kBuildCapMargin = 4.0;
 // block carries none.
 ChainEstimate EstimateChain(const StepChain& chain, const CostInputs& in);
 
+// CC-Q10's rule, which is the statement's and reads no statistic: whether an
+// order's chain may run where the written order's would - it sorts no more
+// than the written one does, or its added sort is a top-N heap of `offset +
+// limit` rows that `sort_max_rows` covers and so cannot refuse. LIMIT and
+// OFFSET are literals, so a captured order (`join_order = fixed`) is asked
+// again for every binding (CX-Q26 (a)).
+bool AddedSortCannotRefuse(const StepChain& chain, bool written_sorted,
+                           std::size_t sort_max_rows) noexcept;
+
 }  // namespace kds::exec

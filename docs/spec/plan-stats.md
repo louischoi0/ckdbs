@@ -146,7 +146,7 @@ written order's, and each executed step's estimated rows labelled by its
 step id (its written position), in executed order. Under `join_order =
 fixed` the line ends ` capture=first` or ` capture=deferred` for a searched
 block, and a block that was not searched prints `planned order=captured` or
-`planned order=written capture=unkeyed|refused|uncompiled` and nothing
+`planned order=written capture=unkeyed|over_ceiling|declined` and nothing
 after it, having read no fact (`parser-v2.md` I12).
 
 `SHOW META`'s `plan_stats` block: `plan_stats_generation`, `_relations`,

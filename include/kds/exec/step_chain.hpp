@@ -891,10 +891,10 @@ enum class PlanSource : std::uint8_t {
     kMemo,         // the core's memo of an earlier search (`planned`)
     kCaptured,     // the shape's captured order
     kCapturing,    // the search, whose answer this compile captured
-    kDeferred,     // the search, not captured: a relation has no published prior
+    kDeferred,     // the search, not captured: a relation has no prior, or a DDL is open
     kUnkeyed,      // the written order: no capture key fits the block
     kOverCeiling,  // the written order: the captured table is full
-    kUncompiled,   // the written order: the captured one did not compile
+    kDeclined,     // the written order: the captured one was declined for this statement
 };
 
 // What the join planner says of a planned block (CC-S3): where its order

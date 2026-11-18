@@ -33,7 +33,6 @@ std::optional<CapturedOrder> CapturedPlans::Find(const CapturedKey& key) {
     const LatchGuard hold(&partition.latch);
     const auto it = partition.plans.find(key);
     if (it == partition.plans.end()) return std::nullopt;
-    served_.fetch_add(1, std::memory_order_relaxed);
     return it->second;
 }
 
