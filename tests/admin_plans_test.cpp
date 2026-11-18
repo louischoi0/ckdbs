@@ -854,11 +854,12 @@ TEST_F(AdminPlanTest, ForOneOrderTheChainIsTheSameWhoeverChoseTheOrder) {
     const std::string sql =
         "SELECT results.pnl, models.name FROM results JOIN models ON results.model_id = "
         "models.id WHERE models.id BETWEEN 2 AND 3";
-    const auto chain_of = [&] {
-        std::string plan = Plan(sql);
+    const auto chain_of = [&](const std::string& statement) {
+        std::string plan = Plan(statement);
         EXPECT_NE(plan.rfind("ERR", 0), 0u) << plan;
-        // Out: the `planned ...` line and the header's `reordered=1`, which
-        // say who chose and are not the chain.
+        // Out: the `planned ...` line, which says who chose and is not the
+        // chain. The header's `reordered=1` stays: it is read off the
+        // chain's step ids, so it is the same for one order.
         if (const std::size_t at = plan.find("planned order="); at != std::string::npos) {
             plan.erase(at, plan.find("\\n", at) + 2 - at);
         }
@@ -872,34 +873,53 @@ TEST_F(AdminPlanTest, ForOneOrderTheChainIsTheSameWhoeverChoseTheOrder) {
         }
         return n;
     };
+    // The chain under each value of `join_order`, a plan in force.
+    const auto under_each_value = [&](const std::string& statement, const std::string& want) {
+        for (const char* value : {"written", "fixed", "planned"}) {
+            Ok(std::string("SET JOIN_ORDER ") + value);
+            EXPECT_EQ(chain_of(statement), want) << value << ": " << statement;
+        }
+    };
     // The written order: the option's own, then an administrator's plan
     // saying the same under each value.
     Ok("SET JOIN_ORDER written");
-    const std::string written = chain_of();
+    const std::string written = chain_of(sql);
     ASSERT_EQ(written.find("reordered=1"), std::string::npos) << written;
     // Class (a): both bounds cross to `results.model_id`, under `written` too.
     EXPECT_EQ(derived_in(written), 2u) << written;
     Ok("CREATE PLAN keep FOR " + sql + kAsWritten);
-    for (const char* value : {"written", "fixed", "planned"}) {
-        Ok(std::string("SET JOIN_ORDER ") + value);
-        EXPECT_EQ(chain_of(), written) << value;
-    }
+    under_each_value(sql, written);
     Ok("DROP PLAN keep");
 
     // The other order: the search's, the captured one, and a plan's.
     Ok("SET JOIN_ORDER planned");
-    const std::string searched = chain_of();
+    const std::string searched = chain_of(sql);
     ASSERT_NE(searched.find("reordered=1"), std::string::npos) << searched;
     // The derived set does not depend on the order.
     EXPECT_EQ(derived_in(searched), 2u) << searched;
     Ok("SET JOIN_ORDER fixed");
     ASSERT_NE(Plan(sql).find(" capture=first"), std::string::npos);
-    EXPECT_EQ(chain_of(), searched) << "captured";
+    EXPECT_EQ(chain_of(sql), searched) << "captured";
     Ok("CREATE PLAN turn FOR " + sql + kModelsFirst);
-    for (const char* value : {"written", "fixed", "planned"}) {
-        Ok(std::string("SET JOIN_ORDER ") + value);
-        EXPECT_EQ(chain_of(), searched) << value;
-    }
+    under_each_value(sql, searched);
+    Ok("DROP PLAN turn");
+
+    // With a sort in play: in the written order `ORDER BY results.id` is
+    // the driving step's tuple key order and sorts nothing; in the other it
+    // is a top-N heap. Each is one text whatever the value.
+    const std::string sorted = sql + " ORDER BY results.id LIMIT 3";
+    Ok("SET JOIN_ORDER written");
+    const std::string sorted_written = chain_of(sorted);
+    Ok("CREATE PLAN keep_sorted FOR " + sorted + kAsWritten);
+    under_each_value(sorted, sorted_written);
+    Ok("DROP PLAN keep_sorted");
+    Ok("CREATE PLAN turn_sorted FOR " + sorted + kModelsFirst);
+    Ok("SET JOIN_ORDER written");
+    const std::string sorted_turned = chain_of(sorted);
+    EXPECT_NE(sorted_turned.find("reordered=1"), std::string::npos) << sorted_turned;
+    EXPECT_NE(sorted_turned, sorted_written);
+    under_each_value(sorted, sorted_turned);
+    EXPECT_EQ(Rows(sorted).size(), 3u);
 }
 
 TEST_F(AdminPlanTest, StatementStatsNameThePlanAndTheVariantThatRan) {

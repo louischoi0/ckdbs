@@ -1055,8 +1055,8 @@ and none is.
 - **The inventory** is `parser-v2.md` I12's "The rewrite inventory"
   table, read off `CompileBound`, `PropagateEqualities`,
   `PredicateReadyAt`, the scan kernel and the executor's hoist, build and
-  probe memo at `b11a5500`: ten rows, each with what decides it and what
-  it changes.
+  probe memo at `b11a5500`: eleven rows, each with what decides it and
+  what it changes.
 - **Why nothing in it moves a plan on its own**: every item is in
   `CompileBound`, which every path of `CompileBlock` calls - the early
   return with no options, an administrator's plan, a captured order, the
@@ -1066,7 +1066,9 @@ and none is.
   `ANALYZE`'s plan less its `planned` line is one text for the written
   order under `written` and under a plan saying the same at each value,
   and one text for the other order whether the search, the capture or a
-  plan chose it; both carry the same two derived bounds.
+  plan chose it; both carry the same two derived bounds. The same again
+  with `ORDER BY ... LIMIT`, where one order elides the sort and the other
+  keeps a top-N heap.
 
 **Where the inventory differs from the order's text.**
 
@@ -1094,3 +1096,39 @@ and none is.
 - **Not inventoried**: the query layer (`parser-v2.md` I19), which is
   another executor over native single-relation walks and compiles no join
   block; the write paths.
+
+**The review of S2** (`critics-developer`, of `d08a31a2`; its corrections
+and the ones taken from it are in the commit after it). It confirmed the
+inventory's conclusion - nothing that rewrites a statement reads the plan
+options, a statistic or `join_order` - and both corrections above, and
+found four statements of the table false.
+
+- **Fixed by the review - sort elision was classed "the sink; no read".**
+  An unsorted walk under `LIMIT` stops at `offset + limit` emitted rows; a
+  sorted one reads every row, a top-N heap included. So eliding the sort
+  bounds the read, and the row says so.
+- **Fixed by the review - "all of it is in `CompileBound`" and "none
+  reads ... time".** The literal-on-the-left mirror is the parser's;
+  `NOW()` reads the clock once into the statement's context; and the probe
+  memo, the build's decline, the hoist's short-circuit and the scan kernel
+  are decided at run time, the first two by the run's rows. The sentence
+  now separates the compile-time items, which are `CompileBound`'s, from
+  the run-time ones.
+- **Fixed by the review - Waystone replay was missing**: armed after the
+  compile for an opted shape and asked after the probe memo, before the
+  descent. A row of its own, "locate, advisory".
+- **Fixed by the review**: the probe memo is one entry a step, matching
+  the key its previous descent found, not "a repeated key"; the scan
+  kernel is also under the `scan_kernel` boot flag; a comment of the cell
+  said `reordered=1` is erased, which it is not and should not be.
+- **Taken**: the table's scope is said - a native `SELECT`'s chain, the
+  query layer outside, and the key set and the inner build listed though
+  they are ladder arms; the cell runs a second statement with `ORDER BY
+  ... LIMIT`, so the elision and the top-N heap are in it.
+- **Not taken**: comparing the decode masks through `exec::Compile` - they
+  are not printed by `ANALYZE` and the cell stays on what a client sees. A
+  statement with an uncorrelated `EXISTS` cannot be put through the cell's
+  loop: a block with a subquery predicate takes no plan and is not
+  reordered, which is the reason the hoist cannot differ by `join_order`.
+- **Not checked by the review**: the scan kernel's behaviour beyond its
+  comments, `chain_frame.cpp`, the Cabin run-time fallback.
