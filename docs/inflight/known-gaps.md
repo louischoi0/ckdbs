@@ -1965,13 +1965,30 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 ## Plan statistics (CY)
 
-- **Relation priors are kept across a clean shutdown only.** Verified at
-  CY-S1a on `cx-plan-change-option`. After a crash or a restore
-  `sys.statistics` is empty and the planner prices every relation at
-  `kAssumedRelationRows` until the steward's first publish, as before
-  CY-S1 (`docs/spec/plan-stats.md` PS16). Posteriors and decline facts are
-  never kept. No statement gathers, reads, exports or imports a statistic.
-  Owned by `plan-stats.md` §8.
+- **Relation priors and managed objects are kept across a clean shutdown
+  only.** Verified at CY-S1b on `cy-managed-statistics`. After a crash or a
+  restore `sys.statistics` is empty: the planner prices every relation at
+  `kAssumedRelationRows` until the steward's first publish, as before CY-S1
+  (`docs/spec/plan-stats.md` PS16), and every gathered, imported, pending or
+  locked object and its history is gone - `EXPORT`/`IMPORT` is how a model
+  is carried across either. Posteriors and decline facts are never kept.
+  Owned by `plan-stats.md` §8, §9.
+
+- **A `GATHER` is behind OLTP by its slicing only.** Verified at CY-S1b on
+  `cy-managed-statistics`. Its walk yields every 16 leaves and holds the
+  relation's `IS` a slice at a time (PS20), but it stays on the session's
+  core - a session moves only at a transaction head (BL-S3), so it is not
+  put on a batch core unless the session declared `SET PRIORITY
+  background` first - and its page reads come through the buffer pool, so a
+  gather of a cold relation larger than the pool turns the pool over (CY-R10
+  asks a page budget that does not). No measurement has priced its effect
+  on a running workload (CY-Q14's bar). Owned by `plan-stats.md` §9.
+
+- **No column or column-group statistics** (the operator's W13, CY-S2 and
+  CY-S3 not built), so selectivity is still the three constants of
+  `exec/join_order.hpp`; and **no `ADVISE PLAN ... USING PENDING`**
+  (CY-Q30 (a)): a pending version's effect on a plan is not shown before it
+  is published. Owned by `plan-stats.md` §9.
 
 - **The shutdown's write is covered by hand-driven cells only.** Every
   restart cell calls `Expeditor::WriteRelationPriors` itself, then the

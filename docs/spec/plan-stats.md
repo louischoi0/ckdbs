@@ -15,9 +15,10 @@ the catalog: **how many rows a relation holds**, and **how many rows a join
 of a set of a statement's relations produced** the last times it ran. One
 store for the instance, `stats::PlanStats`, **memory-resident** (CC-Q2):
 nothing is logged, no statement writes a page of it, and the planner prices
-data-free until its first publish. **A relation's prior, and nothing else
-of it, outlives a clean shutdown since CY-S1** (§8): a crash or a restore
-still empties the whole store.
+data-free until its first publish. **A relation's prior outlives a clean
+shutdown since CY-S1** (§8), **and an operator's managed statistics objects
+since CY-S1b** (§9); the posteriors and the decline facts do not, and a crash
+or a restore still empties the whole store.
 
 **Advisory, and only to the order.** A fact here chooses which of a block's
 legal orders runs; it never chooses a step's kind, never skips a step,
@@ -286,3 +287,100 @@ longer resolves loses it.
 **What it does not do.** After a crash or a restore the planner is blind
 until it observes, as before CY-S1. Nothing here gathers, locks or exports
 a statistic, and no SQL statement reads the relation yet.
+
+## 9. Managed statistics (CY-S1b, CY-S4)
+
+`instructions/v3.2.0/workorder-cy-managed-statistics.md`, CY-Q24..Q30 adopted
+on the operator's standing go-ahead of 2026-11-18. **A relation's statistics
+object**: what an operator - a DBA or an agent, by the same statements -
+gathers, locks, publishes, restores, exports and imports. Column and
+column-group statistics are not built (CY-S2 and CY-S3, the operator's ruling
+W13): a column list, `ALL COLUMNS`, `GROUP` and `SAMPLE` are refused
+`NotImplemented`.
+
+**PS18 - the object.** Per relation (`stats::ManagedStatistics`, one store for
+the instance, latched): a **published** version the planner reads, a
+**pending** version it does not, the **replaced** versions (the last 8,
+CY-Q12 (a)), a **lock**, and a version counter that only grows (CY-R6) -
+`DELETE STATISTICS` keeps the lock and the counter. A version holds the
+relation's live rows and its leaves, its origin (`gathered` or `imported`)
+and the instant it was made. Nothing but an operator's statement changes it
+(CY-R3): the steward's sampled prior (PS1) sits beside it and never enters
+it.
+
+**PS19 - what the planner reads.** A published version's band outranks the
+steward's prior while it exists (CY-Q16 (a)): `PlanStatsSnapshot::
+RelationRows` reads the managed band first. A gather publishing over a
+gather moves the band with PS5's hysteresis; an import, a restore and a
+mount publish fresh (CY-Q19 (a)), so one stored value gives one band on every
+instance. Every act that changes a published version publishes the next
+generation at once (`PlanStats::RepublishManaged`), under `publish_latch_`
+and then the store's latch, never the reverse; the order memo's key carries
+the generation (§6a), so the next compile on every core prices from it.
+Under `join_order = fixed` a captured order does not move (CX).
+
+**PS20 - a gather** (`GATHER STATISTICS ON t [PENDING] [FORCE]`). Every leaf
+of the clustered tree through the sibling chain, one page at a time, each
+checked to be a leaf the relation owns, under a cycle check
+(`stats::RelationGather`), counting live slots - read, not delete-marked -
+as PS1 does (CY-Q26 (a)). Pages, not rows: no view, no purge horizon, so the
+count is of a relation that moved under the walk (CY-Q7 (a)). **Sliced**:
+16 leaves a slice, the `analytic` slice, whatever level the session
+declared (CY-Q27 (a)), the core yielded between slices (`GatherRun`, a
+`BuildRun` with no transaction). **The relation's `IS` per slice**, a read
+borrow taken at the slice's start and given back at its end (CY-Q21 (a)), so
+a DDL waiting for the relation `X` passes between two slices; across a yield
+the leaf the walk resumes at is held in place by the statement epoch, as
+every reader's is. A relation dropped since the head ends the gather
+`NotFound` with nothing published.
+
+**PS21 - the statements.** Admin-classed, autocommit only (a `ROLLBACK`
+could not take an act back: none is logged), a catalog relation refused
+`Unsupported`:
+
+| statement | does |
+|---|---|
+| `GATHER STATISTICS ON t [PENDING] [FORCE]` | PS20; published at once unless `PENDING` (CY-Q8 (a)) |
+| `PUBLISH STATISTICS ON t [FORCE]` | the pending version becomes the published one |
+| `DISCARD PENDING STATISTICS ON t` | the pending version is dropped |
+| `RESTORE STATISTICS ON t TO VERSION n [FORCE]` | a replaced (or the published) version published again as a new version |
+| `LOCK STATISTICS ON t` / `UNLOCK STATISTICS ON t` | a lock on the relation's slot, object or no |
+| `DELETE STATISTICS ON t [FORCE]` | the published, pending and replaced versions |
+| `EXPORT STATISTICS ON t` | the document of the row the planner reads (a `SELECT` over `sys.statistics`) |
+| `IMPORT STATISTICS ON t FROM '<document>' [PENDING] [FORCE]` | a new `imported` version from a document |
+
+**A lock** refuses every act that would change the published object without
+`FORCE` - `GATHER` and `IMPORT` without `PENDING`, `PUBLISH`, `RESTORE`,
+`DELETE` - with `InvalidArgument` (CY-Q28 (a)).
+
+**PS22 - the document** (CY-Q9 (a), CY-Q29 (a)). One line, versioned in its
+first words: `KDS-STATISTICS 1 RELATION rows=<n> leaves=<n> origin=<o>
+version=<n> made_at=<us> relation=<ns.t>`. `IMPORT` takes `rows` (required)
+and `leaves`, reads the rest as provenance, and refuses a field, a version
+or a kind it does not know, at the byte inside the document. It writes into
+the relation its `ON` names; a steward prior exports as `origin=observed`.
+
+**PS23 - the views.** `sys.statistics`: per relation, the `published` and
+`pending` managed versions and the steward's prior as an `observed` row,
+`used = 1` on the row the planner reads, `locked`, and each row's `document`;
+a locked relation with nothing shows one `none` row. `sys.statistics_history`:
+the replaced versions, oldest first.
+
+**PS24 - across a stop and a drop.** The managed store rides PS15-PS16's
+chain: a clean shutdown writes a slot row (lock, counter) and a version row
+for each published, pending and replaced version beside the priors, one
+closing mark counting them all (`SysStatisticsRow`, 56 bytes; no superblock
+moves - a mount empties the chain, so a row of the older size reads as a
+chain not whole); a replaced version's row carries its place in the history
+in `count`, oldest 0, since a chain keeps no row order and the history is in
+replacement order, not version order; the next mount loads them before any
+compile. A crash or a
+restore keeps none (W15). A committed `DROP TABLE` forgets the relation's
+objects and refuses every later act on its oid; `DROP COLUMN` touches
+nothing, a relation object naming no column.
+
+**What it does not do.** No column statistics (W13). Nothing gathers again on
+its own (item 4, `docs/pending/statistics-staleness-and-regather.md`).
+`ADVISE PLAN ... USING PENDING` is not built (CY-Q30 (a)). A gather is not
+moved to a batch core, and its page reads come through the pool
+(`known-gaps.md`).

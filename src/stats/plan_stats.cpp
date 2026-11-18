@@ -6,6 +6,7 @@
 
 #include "kds/catalog/catalog.hpp"
 #include "kds/storage/anchor_page.hpp"
+#include "kds/storage/btree/btree.hpp"
 #include "kds/storage/btree/btree_page.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/page_header.hpp"
@@ -42,6 +43,32 @@ Status CheckOwned(std::span<std::byte, kPageSize> page, PageType type, catalog::
     return Status::OK();
 }
 
+// A leaf's live slots: read, and not delete-marked - undecided versions as
+// they lie (PS1).
+std::size_t LiveSlots(heap::PageView& leaf) {
+    const std::uint16_t slots = leaf.slot_count();
+    heap::PageView::Tuple tuple{};
+    std::size_t live = 0;
+    for (std::uint16_t slot = 0; slot < slots; ++slot) {
+        if (leaf.TryReadTupleIn(slot, slots, tuple) == heap::PageView::TupleRead::kRead &&
+            !tuple.deleted) {
+            ++live;
+        }
+    }
+    return live;
+}
+
+// The relation's clustered root: its anchor's, else its descriptor.
+StatusOr<PageId> ClusteredRoot(storage::PageStore& store, const catalog::TableAccess& access) {
+    if (access.anchor_page_id == kInvalidPageId) return access.desc_page_id;
+    auto anchor = store.GetForRead(access.anchor_page_id);
+    if (!anchor.ok()) return anchor.status();
+    if (Status s = CheckOwned(anchor.value().bytes(), PageType::kAnchor, access.oid); !s.ok()) {
+        return s;
+    }
+    return storage::AnchorClusteredRoot(anchor.value().bytes());
+}
+
 Status SpentBudget() { return Status::ResourceExhausted("the steward's seed budget is spent"); }
 
 // What one page of a prior's read gives, copied out under its hold. The page
@@ -74,14 +101,7 @@ StatusOr<NodeFacts> ReadNode(storage::PageStore& store, PageId id, catalog::Oid 
         if (Status s = CheckOwned(page.value().bytes(), PageType::kBtreeLeaf, oid); !s.ok()) return s;
         facts.leaf = true;
         heap::PageView leaf(page.value().bytes());
-        const std::uint16_t slots = leaf.slot_count();
-        heap::PageView::Tuple tuple{};
-        for (std::uint16_t slot = 0; slot < slots; ++slot) {
-            if (leaf.TryReadTupleIn(slot, slots, tuple) == heap::PageView::TupleRead::kRead &&
-                !tuple.deleted) {
-                ++facts.live;
-            }
-        }
+        facts.live = LiveSlots(leaf);
         return facts;
     }
     if (Status s = CheckOwned(page.value().bytes(), PageType::kBtreeInternal, oid); !s.ok()) {
@@ -240,19 +260,42 @@ StatusOr<double> ReadRelationPrior(storage::PageStore& store, const catalog::Tab
 
 PlanStatsSnapshot::PlanStatsSnapshot(std::uint64_t generation,
                                      std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
-                                     std::vector<std::pair<PlanKey, Posterior>> posteriors)
-    : generation_(generation), priors_(std::move(priors)), posteriors_(std::move(posteriors)) {
+                                     std::vector<std::pair<PlanKey, Posterior>> posteriors,
+                                     std::vector<std::pair<catalog::Oid, std::int16_t>> managed)
+    : generation_(generation),
+      priors_(std::move(priors)),
+      posteriors_(std::move(posteriors)),
+      managed_(std::move(managed)) {
     std::sort(priors_.begin(), priors_.end());
+    std::sort(managed_.begin(), managed_.end());
     std::sort(posteriors_.begin(), posteriors_.end(),
               [](const auto& a, const auto& b) { return a.first < b.first; });
 }
 
-std::optional<double> PlanStatsSnapshot::RelationRows(catalog::Oid oid) const noexcept {
+namespace {
+
+std::optional<double> BandIn(const std::vector<std::pair<catalog::Oid, std::int16_t>>& bands,
+                             catalog::Oid oid) noexcept {
     const auto it = std::lower_bound(
-        priors_.begin(), priors_.end(), oid,
+        bands.begin(), bands.end(), oid,
         [](const std::pair<catalog::Oid, std::int16_t>& p, catalog::Oid o) { return p.first < o; });
-    if (it == priors_.end() || it->first != oid) return std::nullopt;
+    if (it == bands.end() || it->first != oid) return std::nullopt;
     return BandCentre(it->second);
+}
+
+}  // namespace
+
+std::optional<double> PlanStatsSnapshot::RelationRows(catalog::Oid oid) const noexcept {
+    if (std::optional<double> managed = BandIn(managed_, oid); managed.has_value()) return managed;
+    return BandIn(priors_, oid);
+}
+
+std::optional<double> PlanStatsSnapshot::ObservedRows(catalog::Oid oid) const noexcept {
+    return BandIn(priors_, oid);
+}
+
+bool PlanStatsSnapshot::Managed(catalog::Oid oid) const noexcept {
+    return BandIn(managed_, oid).has_value();
 }
 
 const PlanStatsSnapshot::Posterior* PlanStatsSnapshot::Find(const PlanKey& key) const noexcept {
@@ -428,12 +471,31 @@ Status PlanStats::Seed(catalog::Catalog& catalog, storage::PageStore& store, cat
 
 void PlanStats::Install(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
                         std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors) {
-    const std::uint64_t next = generation_.load(std::memory_order_relaxed) + 1;
-    auto snapshot =
-        std::make_shared<const PlanStatsSnapshot>(next, std::move(priors), std::move(posteriors));
+    // Under the latch, whole: the steward and an operator's statement on
+    // another core both install, and each reads the other's half here.
     const LatchGuard hold(&publish_latch_);
-    current_ = std::move(snapshot);
+    InstallLocked(std::move(priors), std::move(posteriors));
+}
+
+void PlanStats::InstallLocked(
+    std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
+    std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors) {
+    const std::uint64_t next = generation_.load(std::memory_order_relaxed) + 1;
+    current_ = std::make_shared<const PlanStatsSnapshot>(
+        next, std::move(priors), std::move(posteriors), managed_.PublishedBands());
     generation_.store(next, std::memory_order_release);
+}
+
+void PlanStats::RepublishManaged() {
+    const LatchGuard hold(&publish_latch_);
+    std::vector<std::pair<catalog::Oid, std::int16_t>> priors;
+    std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors;
+    if (current_ != nullptr) {
+        priors = current_->priors_;
+        posteriors = current_->posteriors_;
+    }
+    InstallLocked(std::move(priors), std::move(posteriors));
+    publishes_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void PlanStats::Publish() {
@@ -515,6 +577,109 @@ std::vector<std::pair<catalog::Oid, std::int16_t>> PlanStats::ExportPriors() con
     return out;
 }
 
+std::vector<catalog::SysStatisticsRow> PlanStats::ExportStatistics() const {
+    std::vector<catalog::SysStatisticsRow> out;
+    for (const auto& [oid, band] : ExportPriors()) {
+        catalog::SysStatisticsRow row{};
+        row.kind = catalog::kStatisticsRelation;
+        row.rel_oid = oid;
+        row.band = band;
+        out.push_back(row);
+    }
+    const auto version_row = [&out](catalog::Oid oid, const RelationStatistic& stat,
+                                    std::uint8_t state, std::uint64_t ordinal = 0) {
+        catalog::SysStatisticsRow row{};
+        row.kind = catalog::kStatisticsVersion;
+        row.rel_oid = oid;
+        row.count = ordinal;
+        row.state = state;
+        row.origin = static_cast<std::uint8_t>(stat.origin);
+        row.version = stat.version;
+        row.rows = stat.rows;
+        row.leaves = stat.leaves;
+        row.made_us = stat.made_us;
+        out.push_back(row);
+    };
+    for (const StatisticsSlotView& slot : managed_.Slots()) {
+        catalog::SysStatisticsRow row{};
+        row.kind = catalog::kStatisticsSlot;
+        row.rel_oid = slot.oid;
+        row.count = slot.last_version;
+        row.flags = slot.locked ? catalog::kStatisticsLocked : 0;
+        out.push_back(row);
+        if (slot.published.has_value()) {
+            version_row(slot.oid, *slot.published, catalog::kStatisticsPublished);
+        }
+        if (slot.pending.has_value()) {
+            version_row(slot.oid, *slot.pending, catalog::kStatisticsPending);
+        }
+        // The history is in replacement order, which is not version order
+        // (a `PUBLISH` of an older pending version replaces a newer one), and
+        // a catalog chain keeps no row order (invariant 4): each replaced
+        // row carries its place.
+        for (std::size_t at = 0; at < slot.history.size(); ++at) {
+            version_row(slot.oid, slot.history[at], catalog::kStatisticsReplaced, at);
+        }
+    }
+    return out;
+}
+
+void PlanStats::LoadStatistics(std::span<const catalog::SysStatisticsRow> rows) {
+    std::vector<std::pair<catalog::Oid, std::int16_t>> priors;
+    std::map<catalog::Oid, StatisticsSlotView> slots;
+    // Each relation's replaced versions with their place in its history.
+    std::map<catalog::Oid, std::vector<std::pair<std::uint64_t, RelationStatistic>>> replaced;
+    for (const catalog::SysStatisticsRow& row : rows) {
+        if (row.kind == catalog::kStatisticsRelation) {
+            priors.emplace_back(row.rel_oid, row.band);
+            continue;
+        }
+        StatisticsSlotView& slot = slots[row.rel_oid];
+        slot.oid = row.rel_oid;
+        if (row.kind == catalog::kStatisticsSlot) {
+            slot.locked = (row.flags & catalog::kStatisticsLocked) != 0;
+            slot.last_version = std::max(slot.last_version, row.count);
+            continue;
+        }
+        if (row.kind != catalog::kStatisticsVersion) continue;
+        const auto origin = static_cast<StatisticsOrigin>(row.origin);
+        if (origin != StatisticsOrigin::kGathered && origin != StatisticsOrigin::kImported) {
+            continue;  // an origin this build does not know prices nothing
+        }
+        RelationStatistic stat;
+        stat.version = row.version;
+        stat.origin = origin;
+        stat.rows = row.rows;
+        stat.leaves = row.leaves;
+        stat.made_us = row.made_us;
+        // Versions only grow, whatever a slot row said (CY-R6).
+        slot.last_version = std::max(slot.last_version, stat.version);
+        if (row.state == catalog::kStatisticsPublished) {
+            slot.published = stat;
+        } else if (row.state == catalog::kStatisticsPending) {
+            slot.pending = stat;
+        } else if (row.state == catalog::kStatisticsReplaced) {
+            replaced[row.rel_oid].emplace_back(row.count, stat);
+        }
+    }
+    std::vector<StatisticsSlotView> loaded;
+    loaded.reserve(slots.size());
+    for (auto& [oid, slot] : slots) {
+        std::vector<std::pair<std::uint64_t, RelationStatistic>>& kept = replaced[oid];
+        std::stable_sort(kept.begin(), kept.end(),
+                         [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& [at, stat] : kept) slot.history.push_back(stat);
+        loaded.push_back(std::move(slot));
+    }
+    const bool any_managed = !loaded.empty();
+    managed_.Load(std::move(loaded));
+    if (priors.empty()) {
+        if (any_managed) RepublishManaged();  // the managed objects alone
+    } else {
+        SeedPriors(priors);  // publishes, the managed bands with it
+    }
+}
+
 void PlanStats::PublishForTest(
     std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
     std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors) {
@@ -541,6 +706,36 @@ std::shared_ptr<const PlanStatsSnapshot> PlanStatsSource::Pin() {
         cached_generation_ = cached_ != nullptr ? cached_->generation() : generation;
     }
     return cached_;
+}
+
+// ---- A `GATHER STATISTICS` walk (CY-S1b) -----------------------------------
+
+Status RelationGather::Start(storage::PageStore& store, const catalog::TableAccess& access) {
+    auto root = ClusteredRoot(store, access);
+    if (!root.ok()) return root.status();
+    auto first = btree::BtreeLeftmostLeaf(store, root.value());
+    if (!first.ok()) return first.status();
+    next_ = first.value();
+    started_ = true;
+    return Status::OK();
+}
+
+Status RelationGather::Step(storage::PageStore& store, std::uint32_t leaves) {
+    for (std::uint32_t walked = 0; walked < leaves && next_ != kInvalidPageId; ++walked) {
+        if (Status s = chain_.Visit(next_); !s.ok()) return s;
+        auto page = store.GetForRead(next_);
+        if (!page.ok()) return page.status();
+        if (!CheckOwned(page.value().bytes(), PageType::kBtreeLeaf, oid_).ok()) {
+            return Status::TxnConflict(
+                "page " + std::to_string(next_) + " is no longer a leaf of relation oid " +
+                std::to_string(oid_) + "; the gather stopped and published nothing");
+        }
+        heap::PageView leaf(page.value().bytes());
+        rows_ += LiveSlots(leaf);
+        ++leaves_;
+        next_ = leaf.next_page_id();
+    }  // each leaf let go before its sibling is asked for
+    return Status::OK();
 }
 
 }  // namespace kds::stats
