@@ -1577,6 +1577,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "TRANSITION")) {
             return HandleTransition(Trim(line), session);
         }
+        if (IEquals(sub, "PLAN")) {
+            return HandleDropPlan(Trim(line), session);
+        }
         if (IEquals(sub, "NAMESPACE")) {
             return HandleNamespace(Trim(line), session);
         }
@@ -1584,7 +1587,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return HandleDropTable(Trim(line), session);
         }
         return {"ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP "
-                "ASSERTION and DROP TRANSITION are supported",
+                "ASSERTION, DROP TRANSITION and DROP PLAN are supported",
                 false};
     }
     if (IEquals(cmd, "INSERT")) {
@@ -1919,7 +1922,12 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
        << " capture_deferred=" << captured_plans_->deferred()
        << " capture_unkeyed=" << captured_plans_->unkeyed()
        << " capture_over_ceiling=" << captured_plans_->over_ceiling()
-       << " capture_declined=" << captured_plans_->declined();
+       << " capture_declined=" << captured_plans_->declined()
+       // `sys.plans`' side (CX-S1a): captures waiting for the persisting
+       // task, rows it wrote in this run, and captures the mount loaded.
+       << " captured_pending=" << captured_plans_->pending()
+       << " captured_persisted=" << captured_plans_->persisted()
+       << " captured_loaded=" << captured_plans_->loaded();
 
     // **The Cabin store's instance-wide half** (cabin.md §6a), which `SHOW
     // CABINS`' header printed and no `sys.cabins` row can carry: a walk
@@ -2433,6 +2441,49 @@ DispatchOutcome CommandDispatcher::HandleSetJoinOrder(std::string_view line,
     }
     set_join_order(*parsed);
     return {"OK join_order=" + std::string(exec::JoinOrderName(*parsed)), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleDropPlan(std::string_view line, Session& session) {
+    // CX-S1a, CX-Q17: `DROP PLAN <name>` removes the plan's `sys.plans` row
+    // and forgets its shape in the instance's table, so the shape's next
+    // compile under `fixed` captures again from the statistics of that
+    // moment - the one way a captured plan is re-armed, and an explicit act.
+    // Admin (`RequiredRole`). Autocommit only: a declaration relation's
+    // delete is physical and outside every transaction
+    // (`declaration_relation.hpp`), so a `ROLLBACK` could not bring the row
+    // back. Answered once durable at the session's rung.
+    const auto refuse = [&](Status s, std::string_view at) {
+        const std::size_t byte = at.data() == nullptr || at.empty()
+                                     ? line.size()
+                                     : static_cast<std::size_t>(at.data() - line.data());
+        return Refused(s.WithMessage(s.message() + " (byte " + std::to_string(byte) + ")"));
+    };
+    if (session.in_explicit_txn()) {
+        return Refused(Status::NotImplemented(
+            "DROP PLAN inside a transaction is not implemented; run it in autocommit (byte 0)"));
+    }
+    std::string_view rest = SplitFirstToken(SplitFirstToken(line).second).second;  // past DROP PLAN
+    while (!rest.empty() && rest.back() == ';') rest = Trim(rest.substr(0, rest.size() - 1));
+    const auto [name, extra] = SplitFirstToken(Trim(rest));
+    if (name.empty() || !parser::IsIdentifier(name)) {
+        return refuse(Status::InvalidArgument("DROP PLAN takes a plan's name"), name);
+    }
+    if (!Trim(extra).empty()) {
+        return refuse(Status::InvalidArgument("DROP PLAN takes one name and nothing after it"),
+                      Trim(extra));
+    }
+    auto dropped = exec::DropPlan(catalog_, page_store_, wal_, *captured_plans_, name);
+    if (!dropped.ok()) {
+        if (dropped.status().code() == StatusCode::kNotFound) {
+            return refuse(Status::NotFound("no plan named \"" + std::string(name) + "\""), name);
+        }
+        return Refused(dropped.status());
+    }
+    if (Status s = AwaitDdlDurability(); !s.ok()) return Refused(s);
+    if (logging(LogLevel::kInfo)) log_->Info("ddl", "dropped plan '" + dropped.value().name + "'");
+    return {"DROPPED PLAN name=" + dropped.value().name +
+                " plan_id=" + std::to_string(dropped.value().id),
+            false};
 }
 
 DispatchOutcome CommandDispatcher::HandleSetAsh(std::string_view line, std::string_view rest) {
@@ -3979,9 +4030,13 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             return Refused(s);
         }
         // What the drop owes (BF-R9), queued at its transaction's commit by
-        // `EndDdlScopeById`: the roots its retype wrote into the tombstone.
-        if (reclaim_queue_ != nullptr && scope.txn != nullptr) {
+        // `EndDdlScopeById`: the roots its retype wrote into the tombstone,
+        // and the relation's captured plans to forget (CX-Q24). A drop under
+        // no transaction - a hand-built dispatcher's - has committed here.
+        if (scope.txn != nullptr) {
             owed_drops_.push_back(OwedDrop{scope.txn->id(), oid.value(), owed});
+        } else {
+            captured_plans_->ForgetRelation(oid.value());
         }
         // The catalog rows are gone and the compiler stops emitting probes;
         // the in-memory sets would only leak, so they are forgotten, not
@@ -8005,9 +8060,15 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
             ++owed;
             continue;
         }
-        if (committed_lsn != wal::kNoLsn && reclaim_queue_ != nullptr) {
-            reclaim_queue_->EnqueueCommittedDrop(owed->oid, owed->roots, committed_lsn,
-                                                 catalog_.schema_word_now());
+        if (committed_lsn != wal::kNoLsn) {
+            if (reclaim_queue_ != nullptr) {
+                reclaim_queue_->EnqueueCommittedDrop(owed->oid, owed->roots, committed_lsn,
+                                                     catalog_.schema_word_now());
+            }
+            // CX-Q24: the dropped relation's captured plans can match
+            // nothing again; forgotten here and their rows removed by the
+            // persisting task (`exec/plan_catalog.hpp`).
+            captured_plans_->ForgetRelation(owed->oid);
         }
         owed = owed_drops_.erase(owed);
     }
@@ -8207,7 +8268,8 @@ DispatchOutcome CommandDispatcher::HandleShow(std::string_view line, std::string
         {"CABINS", "cabins"},       {"INDEXES", "indexes"},
         {"FKEYS", "fkeys"},         {"ASSERTIONS", "assertions"},
         {"CABIN_OPTIMIZER", "cabin_optimizer"},
-        {"PAGE", "page_slots"},     {"TRANSITIONS", "transitions"}};
+        {"PAGE", "page_slots"},     {"TRANSITIONS", "transitions"},
+        {"PLANS", "plans"}};
 
     std::string_view view;
     // `DESCRIBE <t>` / `DESC <t>`: the target is the statement's own verb,
@@ -8957,6 +9019,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
         // `fixed` would let a plan move with the statistics.
         if (join_order == exec::JoinOrder::kPlanned) plan.memo = &plan_memo_;
         if (join_order == exec::JoinOrder::kFixed) plan.captured = captured_plans_;
+        plan.statement = line;
         // A query layer walk (`WalkForLayer`) carries a statement and no
         // parser, so it has no fingerprint to key the memo by.
         if (const auto fingerprint =

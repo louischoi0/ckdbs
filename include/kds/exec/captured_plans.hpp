@@ -5,7 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "kds/base/latch.hpp"
 #include "kds/catalog/oid.hpp"
@@ -44,16 +47,23 @@
 // the compile before the table is asked (CX-R6).
 //
 // **Latch protocol** (`docs/rules/rules.md` §3): a partition's latch guards
-// its map and is held for one lookup or one install, across no I/O and with
-// no other latch taken under it, so it orders against nothing. The shape
-// count and the counters are relaxed atomics; the ceiling is taken by an
-// increment that is given back, under the partition's latch.
+// its map and is held for one lookup, one install or one erase, across no
+// I/O. The queue latch guards the two queues the persisting task drains and
+// is taken alone or **under** a partition's (an install queues its capture
+// before it lets the partition go, so the queue never names an order the
+// table does not hold); nothing is taken under it. The shape count and the
+// counters are relaxed atomics; the ceiling is taken by an increment that
+// is given back, under the partition's latch.
 //
 // **Bounded, never evicted** (CX-Q21 (a)): past `kMaxShapes` a new shape is
 // refused and runs its written order. Evicting one and capturing it again
 // would be the engine changing a plan on its own.
 //
-// Memory only until CX-S1 persists it: a restart captures every shape again.
+// **Persisted off the statement** (CX-R8, CX-S1a): an install queues the
+// capture with its statement's shape text, and core 0's `system` task
+// drains the queue into logged `sys.plans` rows (`plan_catalog.hpp`); a
+// mount loads them back. A capture a crash finds still queued is lost and
+// made again at the shape's next compile.
 
 namespace kds::exec {
 
@@ -69,6 +79,14 @@ struct CapturedKey {
 // count are 0.
 using CapturedOrder = std::array<std::uint8_t, kMaxPlannedRelations>;
 
+// A capture as the persisting task takes it: the shape, its order and the
+// capturing statement's shape text (`parser::ShapeText`).
+struct CapturedPlan {
+    CapturedKey key;
+    CapturedOrder order{};
+    std::string statement;
+};
+
 class CapturedPlans {
 public:
     static constexpr std::size_t kPartitions = 64;
@@ -82,8 +100,36 @@ public:
 
     // Installs `order` for `key` unless the key holds one, and answers the
     // order in force - this one, or the earlier install's. Nullopt past the
-    // ceiling, where nothing is installed.
-    std::optional<CapturedOrder> Capture(const CapturedKey& key, const CapturedOrder& order);
+    // ceiling, where nothing is installed. An install is queued for the
+    // persisting task with `statement`'s shape text.
+    std::optional<CapturedOrder> Capture(const CapturedKey& key, const CapturedOrder& order,
+                                         std::string_view statement = {});
+
+    // A mount's: installs a persisted capture, queueing nothing. False where
+    // the key already holds an order or the table is full.
+    bool Load(const CapturedKey& key, const CapturedOrder& order);
+
+    // `DROP PLAN`'s: forgets the shape, so its next compile under `fixed`
+    // captures again (CX-Q17). False where the key held nothing.
+    bool Erase(const CapturedKey& key);
+
+    // A committed `DROP TABLE`'s (CX-Q24): forgets every shape naming `oid`,
+    // queued ones included, and owes the persisting task the removal of
+    // their rows. An oid is never reissued, so nothing could match them
+    // again; they would only count against the ceiling.
+    void ForgetRelation(catalog::Oid oid);
+
+    // ---- The persisting task's (`plan_catalog.hpp`) ------------------------
+    // Up to `max` queued captures, oldest first, removed from the queue.
+    std::vector<CapturedPlan> TakePending(std::size_t max);
+    // Puts back captures a step could not write, ahead of the queue, unless
+    // their shape was forgotten meanwhile.
+    void Requeue(std::vector<CapturedPlan> plans);
+    // The relations dropped since the last call.
+    std::vector<catalog::Oid> TakeForgotten();
+    void CountPersisted(std::uint64_t rows) noexcept {
+        persisted_.fetch_add(rows, std::memory_order_relaxed);
+    }
 
     // Whether a new shape would be refused. A hint: a capture that races the
     // last free slot is answered by `Capture` itself.
@@ -109,6 +155,11 @@ public:
     // one that did not compile for it (CX-Q26), or one that adds a sort its
     // LIMIT does not bound (CC-Q10).
     std::uint64_t declined() const noexcept { return declined_.load(std::memory_order_relaxed); }
+    // Captures waiting for the persisting task, rows it has written in this
+    // run, and captures a mount loaded.
+    std::uint64_t pending() const noexcept { return pending_count_.load(std::memory_order_relaxed); }
+    std::uint64_t persisted() const noexcept { return persisted_.load(std::memory_order_relaxed); }
+    std::uint64_t loaded() const noexcept { return loaded_.load(std::memory_order_relaxed); }
 
     void CountServed() noexcept { served_.fetch_add(1, std::memory_order_relaxed); }
     void CountDeferred() noexcept { deferred_.fetch_add(1, std::memory_order_relaxed); }
@@ -127,6 +178,12 @@ private:
     Partition& PartitionOf(const CapturedKey& key) noexcept;
 
     std::array<Partition, kPartitions> partitions_;
+    Latch queue_latch_{LatchKind::kStatsRing};
+    std::vector<CapturedPlan> pending_;
+    std::vector<catalog::Oid> forgotten_;
+    std::atomic<std::uint64_t> pending_count_{0};
+    std::atomic<std::uint64_t> persisted_{0};
+    std::atomic<std::uint64_t> loaded_{0};
     std::atomic<std::uint64_t> shapes_{0};
     std::atomic<std::uint64_t> served_{0};
     std::atomic<std::uint64_t> deferred_{0};

@@ -347,7 +347,7 @@ TEST(SuperBlockTest, AVersion33VolumeDoesNotMount) {
 // binary refuses the record kind or leaves the loser's departure counted.
 TEST(SuperBlockTest, AVersion34VolumeDoesNotMount) {
     ExpectRefusedNamingBoth(34);
-    EXPECT_EQ(kSuperBlockVersion, 36u);
+    EXPECT_EQ(kSuperBlockVersion, 37u);
 }
 
 // AY-Q6 (C): a version-18 volume's log may hold an ASSERT_SNAPSHOT with no

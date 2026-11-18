@@ -246,6 +246,20 @@ inline constexpr Oid kSysCabinExprsColumnOidBase = 154;
 // path ever meets a row of it.
 inline constexpr Oid kSysStatisticsTable = 160;
 
+// sys.plans (instructions/v3.2.0/workorder-cx-managed-plans.md CX-S1,
+// docs/spec/parser-v2.md I12): one row per managed plan - at CX-S1a, the
+// join orders `join_order = fixed` captured, persisted off the statement by
+// core 0's `system` task and read back at a mount. The fourth declaration
+// relation, for sys.assertions' reason: a plan's statement text and its
+// relation list are neither fixed-width nor bounded. `aux` is the shape's
+// fetch id; `flags` bit 0 says the row is a captured plan
+// (`exec/plan_catalog.hpp`). **Logged**: a plan is a decision, not a
+// statistic, and a crash or a restore keeps it.
+inline constexpr Oid kSysPlansTable = 161;
+
+// Fixed oids for sys.plans' six sys.columns rows, 162..167.
+inline constexpr Oid kSysPlansColumnOidBase = 162;
+
 // The catalog relations CR6 writes unlogged (`crosscore.md` CC13). Their
 // rows are inserted at the bootstrap id and never delete-marked, and
 // **nothing walks their chains but their own guarded walk**
@@ -311,7 +325,8 @@ inline constexpr Oid kAllWellKnownOids[] = {
     kSysPatternsTable,    kSysAssertionsTable,   kSysAccessStatsTable,
     kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,
     kSysTransitionsTable, kSysTransitionsColumnOidBase, kSysCabinExprsTable,
-    kSysCabinExprsColumnOidBase, kSysStatisticsTable, kUserOidStart,
+    kSysCabinExprsColumnOidBase, kSysStatisticsTable, kSysPlansTable,
+    kSysPlansColumnOidBase, kUserOidStart,
 };
 
 // O(n^2) over ~39 values is ~750 compile-time comparisons - a sort would be
@@ -387,10 +402,14 @@ inline constexpr PageId kCatalogPageCabinExprs = 15;
 // allocated, as sys.assertions' is.
 inline constexpr PageId kCatalogPageTransitions = 16;
 
-// Root heap page of sys.statistics (superblock 36, CY-S1), the highest
-// fixed root. Ids 18..127 are unused, left for a future bootstrap root.
-// A fixed-offset typed row, like sys.access_stats, so it has no var-heap.
+// Root heap page of sys.statistics (superblock 36, CY-S1). A fixed-offset
+// typed row, like sys.access_stats, so it has no var-heap.
 inline constexpr PageId kCatalogPageStatistics = 17;
+
+// Root heap page of sys.plans (superblock 37, CX-S1a), the highest fixed
+// root. Ids 19..127 are unused, left for a future bootstrap root. Its
+// var-heap root is allocated, as sys.assertions' is.
+inline constexpr PageId kCatalogPagePlans = 18;
 
 // Every catalog relation's **root** page, in id order, with the relation
 // it heads.
@@ -437,6 +456,7 @@ inline constexpr CatalogRoot kCatalogRoots[] = {
     {kCatalogPageCabinExprs, kSysCabinExprsTable},
     {kCatalogPageTransitions, kSysTransitionsTable},
     {kCatalogPageStatistics, kSysStatisticsTable},
+    {kCatalogPagePlans, kSysPlansTable},
 };
 
 // The relation whose chain starts at `root`; 0, unattributed, for a page

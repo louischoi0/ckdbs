@@ -540,7 +540,9 @@ scan_kernel = on
 #            (docs/spec/plan-stats.md), the first time every relation of the
 #            join has a published size - and runs that order from then on,
 #            whatever the statistics do after. No plan changes on its own.
-#            The captured orders are in memory: a restart captures again.
+#            A captured order is written to sys.plans within about a second
+#            and is in force again after a restart; DROP PLAN <name>
+#            (admin) removes one, and its shape is captured again.
 #   planned  The engine chooses at every compile, so a plan moves when the
 #            statistics move: one statement over one catalog and one
 #            statistics generation runs one plan.

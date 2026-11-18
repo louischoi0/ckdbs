@@ -18,6 +18,7 @@
 #include <thread>
 #include <utility>
 
+#include "kds/exec/plan_catalog.hpp"
 #include "kds/exec/varheap_sweep.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/core_load.hpp"
@@ -1091,6 +1092,30 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                           expeditor->wal_.get());
     if (!swept.ok()) return swept.status();
     expeditor->recovery_.varheap_slots_swept = swept.value().released;
+
+    // **The captured plans, back in force before any statement compiles**
+    // (CX-S1a, `exec/plan_catalog.hpp`): `sys.plans` is logged, so what
+    // recovery left is every capture a `system` step wrote, and a shape
+    // among them is not searched again. After the sweep above, so a row
+    // this removes - one naming a relation that is gone - leaves its text
+    // to the next mount's sweep, as any dropped declaration does.
+    {
+        auto unreadable =
+            exec::LoadCapturedPlans(expeditor->database_->catalog, *expeditor->store_,
+                                    expeditor->wal_.get(), expeditor->captured_plans_);
+        if (!unreadable.ok()) return unreadable.status();
+        if (unreadable.value() > 0) {
+            expeditor->logger_->Warn(
+                "plans", std::to_string(unreadable.value()) +
+                             " sys.plans row(s) could not be read and were not loaded; their "
+                             "shapes are captured again");
+        }
+        if (expeditor->captured_plans_.loaded() > 0) {
+            expeditor->logger_->Info("plans",
+                                     "loaded " + std::to_string(expeditor->captured_plans_.loaded()) +
+                                         " captured plan(s)");
+        }
+    }
     if (swept.value().released > 0) {
         expeditor->logger_->Info(
             "varheap", "swept " + std::to_string(swept.value().released) +
@@ -1453,6 +1478,19 @@ void Expeditor::WriteRelationPriors() {
                        "until it observes: " +
                            s.message());
     }
+}
+
+bool Expeditor::PersistCapturedPlans() {
+    if (!database_.has_value()) return false;
+    const std::int64_t now_us = static_cast<std::int64_t>(wall_clock_.NowUnixSeconds()) * 1'000'000;
+    const Status s = exec::PersistCapturedPlans(database_->catalog, *store_, wal_.get(),
+                                                captured_plans_, now_us);
+    if (!s.ok() && logger_->enabled(LogLevel::kWarn)) {
+        logger_->Warn("plans", "captured plans were not all written to sys.plans; the next "
+                               "step tries again: " +
+                                   s.message());
+    }
+    return !s.ok();
 }
 
 void Expeditor::BroadcastShutdown() {
@@ -2096,6 +2134,12 @@ Status Expeditor::Start() {
         }
     });
 
+    // **The captured plans' persisting step** (CX-R8, `exec/plan_catalog.hpp`):
+    // once a second on core 0's `system` group, a latch and a return when
+    // nothing is queued. A capture is at most this long from its row, which
+    // is the window a crash can lose (CX-Q14 (a)).
+    scheduler.SubmitEvery(kPlanStatsTickNs, [this] { (void)PersistCapturedPlans(); });
+
     // An open backup with nothing running past `kAbandonNs` is ended (BR-S2).
     constexpr sched::MonoTimeNs kBackupTickNs = 1'000'000'000;  // 1 s
     scheduler.SubmitEvery(kBackupTickNs, [this] { backup_->ExpireIfAbandoned(); });
@@ -2323,6 +2367,11 @@ Status Expeditor::RunUntilStopped() {
     // here, with every core joined and every listener detached, and before
     // the sync that carries the pages out.
     WriteRelationPriors();
+    // **And the captures still queued** (CX-S1a): a clean stop loses none.
+    // Logged rows, so the sync below carries them; a step that fails stops
+    // the loop, and those captures are made again in the next run.
+    while (captured_plans_.pending() > 0 && !PersistCapturedPlans()) {
+    }
     Status s = Sync();
     if (!s.ok()) {
         logger_->Error("expeditor", "final sync failed: " + s.message());

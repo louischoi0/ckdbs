@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <iterator>
+#include <string>
 #include <string_view>
 
 namespace kds::parser {
@@ -293,6 +294,30 @@ Token Lexer::Next() {
         return std::move(peeked_);
     }
     return ReadToken();
+}
+
+std::string ShapeText(std::string_view sql) {
+    std::string out;
+    out.reserve(sql.size());
+    Lexer lexer(sql);
+    std::size_t end_of_last = 0;
+    for (Token tok = lexer.Next(); tok.type != TokenType::kEof && tok.type != TokenType::kError;
+         tok = lexer.Next()) {
+        if (tok.type == TokenType::kSemicolon) break;
+        if (!out.empty() && tok.byte_offset > end_of_last) out.push_back(' ');
+        end_of_last = static_cast<std::size_t>(tok.byte_offset) + tok.length;
+        switch (tok.type) {
+            case TokenType::kIntLit:
+            case TokenType::kNumLit:
+            case TokenType::kStrLit:
+                out.push_back('?');
+                break;
+            default:
+                out.append(sql.substr(tok.byte_offset, tok.length));
+                break;
+        }
+    }
+    return out;
 }
 
 }  // namespace kds::parser
