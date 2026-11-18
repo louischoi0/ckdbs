@@ -439,7 +439,9 @@ priors, the column statistics, the column-group statistics and the
 management surface (`GATHER`, `LOCK`, `EXPORT`, `IMPORT`, history). What
 stays here is the dependency: CX-S0's `fixed` default is only as good as
 the statistics a first compile reads (CX-Q19), so **CY-S1 is CX-S0's
-progress gate as CLA proposes it** (CY-Q0). Which compiles read CY's model
+progress gate** (CY-Q0 (a), the operator's mark, `raft-marks-2026-11-18.md`
+§6): `fixed` does not become the default until relation statistics survive
+a restart. Which compiles read CY's model
 is CY-R1: the search wherever CX-R1 runs it - `planned`'s every compile, a
 `fixed` first compile, `ADVISE PLAN` - and `ANALYZE`'s estimates. The
 sentence this section carried before W3, "never a plan", no longer follows

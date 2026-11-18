@@ -10,6 +10,9 @@ in English (`raft-marks-2026-11-18.md` §5):
   statistics against commercial systems: (1) no column statistics, (2) no
   persistence, (3) no multi-column correlation or functional dependency,
   (4) no rule for when to gather again, (5) no management surface.
+- **W8** (2026-11-18, `raft-marks-2026-11-18.md` §6): *"CY-Q0, CY-Q1 $!a
+  push no verify"* - CY-S1 is CX-S0's progress gate, and S2 and S3 are
+  built only if S0 meets CC's flip gate.
 
 **A new order, not a stage of CX**: CLA's choice, which W7 left open. CX-S4
 held items 1 and 5 in eleven lines; with items 2 and 3 the work has a
@@ -313,12 +316,13 @@ The measurement of §6, the owning specs (§7), CLAUDE.md's row.
 
 ## 4. Items
 
-Every item is CLA's proposal and unmarked.
+Every item is CLA's proposal and unmarked, except CY-Q0 and CY-Q1, marked
+(a) by the operator (W8).
 
 | item | question | options | CLA proposes |
 |---|---|---|---|
-| CY-Q0 | CY against CX-S0 | (a) CY-S1 is CX-S0's progress gate: `fixed` does not become the default until relation statistics survive a restart; (b) the two are independent | (a): without it every restart fixes a fresh set of blind plans (CX-Q19) |
-| CY-Q1 | the bar S0 must meet for S2 and S3 to be built | (a) at least one scenario statement whose order changes under true selectivities and runs 15 % or more faster at p50, CC's flip gate; (b) build regardless | (a) for S2 and S3. S1 and S4's lock, export and import do not wait for it: persistence and reproducibility are W7's and CX's needs whatever S0 finds |
+| CY-Q0 | CY against CX-S0 | (a) CY-S1 is CX-S0's progress gate: `fixed` does not become the default until relation statistics survive a restart; (b) the two are independent | **(a), the operator's mark** (W8). (a): without it every restart fixes a fresh set of blind plans (CX-Q19) |
+| CY-Q1 | the bar S0 must meet for S2 and S3 to be built | (a) at least one scenario statement whose order changes under true selectivities and runs 15 % or more faster at p50, CC's flip gate; (b) build regardless | **(a), the operator's mark** (W8). (a) for S2 and S3. S1 and S4's lock, export and import do not wait for it: persistence and reproducibility are W7's and CX's needs whatever S0 finds |
 | CY-Q2 | who writes the persisted relation priors | (a) `GATHER`, and the steward when a prior's band moves, off the statement; (b) `GATHER` only | (a): under (b) an instance nobody has gathered on restarts blind for ever. A band moves rarely (PS5), so the write is rare; it is the one automatic write in CY, and it moves no captured plan |
 | CY-Q3 | a live prior and a persisted object for one relation | (a) the newer one is published; a locked object always wins; (b) the gathered one always wins until re-gathered | (a): a gathered row count on a relation that has since doubled is the wrong one to keep, and a lock is how an operator says otherwise |
 | CY-Q4 | sampling | (a) a whole walk by default, `SAMPLE n PERCENT` by leaf, stratified by the root's children as PS1 is; (b) sampled by default | (a): a whole walk is exact, yields (CY-R8), and is the operator's act to schedule; a sample's distinct count needs an estimator whose error S0 does not price |
@@ -382,4 +386,5 @@ within the milestone's hour.
 
 ## 8. Stage log
 
-Nothing has landed. CY is written and not opened.
+Nothing has landed. CY is written and not opened. CY-Q0 and CY-Q1 marked
+(a) on W8 (`raft-marks-2026-11-18.md` §6), documents only.
