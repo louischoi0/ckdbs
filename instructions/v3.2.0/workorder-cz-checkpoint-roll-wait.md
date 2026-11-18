@@ -12,8 +12,9 @@ CZ-S0 was pushed to `main` with the hook skipped on the operator's word
 (§32 there). **In CZ-S1's spike C1 alone met CZ-Q1 (a)'s bar as written,
 on a host builds reached, and the operator read S1 as C1 alone and opened
 CZ-S2** (§42 there). **CZ-S2's model is §8.** **C2 was priced further
-(CZ-S1b, §7) and is now DG's subject**, outside CZ. CZ-S1, CZ-S1b and
-CZ-S2 are not pushed. Written the same day on
+(CZ-S1b, §7) and is now DG's subject**, outside CZ. CZ-S1, CZ-S1b, CZ-S2
+and the marks were pushed to `main` with the hook skipped on the
+operator's word (§44 there). Written the same day on
 worktree `bl-rung3-probe` from `3b3f4851` (`v3.4.12-25-g3b3f4851`) on the
 operator's word (§13 there): *"For now, leave it as a work order."* Every
 `[source-read]` claim of §1 and §2 was read at `3b3f4851`; §7's stage log
