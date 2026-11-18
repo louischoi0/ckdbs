@@ -392,6 +392,6 @@ DA-S0 - the borrow read and DA-Q7's cell are still owed before code.
 
 The session that wrote the order was given a push word (*"push no verify"*,
 `raft-marks-2026-11-18.md` §18) and its push did not reach `main`. The
-order is DA on the branch that split it (`worktree-cx-plan-change-option`)
-and is on `main` only once that branch is next pushed;
+order reached `main` as DA at merge `0a91fd32`, the splitting commit merged
+unchanged and pushed with the hook skipped by the session that wrote it;
 documents only.
