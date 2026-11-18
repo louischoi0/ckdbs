@@ -93,6 +93,9 @@ declared; every arm ran 5 times.
   - `r3-mixed.sh` and `r3-same.sh` are the run scripts; `watch.sh` is the
     60 s watchdog; `nobal.patch` is the measurement build's patch.
   - `tables.py` and its output `tables-mixed.md` hold every run's rows.
+  - `ceiling.py` and `ceiling.md`, added on 2026-11-18 for work order CZ:
+    the `levels` arm's slow samples against the roll holds and checkpoint
+    runs, and the p99 each run keeps without them (arithmetic on samples).
 
 | Item | Value |
 |---|---|

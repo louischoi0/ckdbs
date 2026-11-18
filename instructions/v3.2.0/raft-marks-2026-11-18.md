@@ -105,7 +105,35 @@ took under them.
 | **Does not settle** | Whether rung 3 is ruled out; rung 4; the checkpoint's roll wait (WAL work); a `normal` statement that does not yield; a merge, a push, a version |
 | **Recorded at** | this file; the BL order's §6 ("Rung 3's probe measured 2026-11-18"); `docs/inflight/known-gaps.md`'s BL-R7 remainder; this file's row in `instructions/v3.2.0/index.md` |
 
-## 12. CY-S0's gate taken as not passed: CY-S2 and CY-S3 are not built
+## 12. The rung-3 probe pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W14: *"push no verify"* - after CLA's report at `3b3f4851` on worktree `bl-rung3-probe` |
+| **Mark** | None. `3b3f4851` pushed to `main` with `--no-verify` (`48857a5a..3b3f4851`, a fast-forward): the driver commit `67973ebc` and the results commit. The hook and the suite were skipped; the suite was never run for this work, which changes a tool and documents only. Recorded here after the push, in §13's commit |
+| **Does not settle** | Whether rung 3 is ruled out; a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 13. The checkpoint's wait on a roll, and a work order written
+
+| | |
+|---|---|
+| **Word** | W15, a question: *"Explain the part where the checkpoint waits on the segment roll, and explain the improvement options too."* W16, after CLA's answer: *"For now, leave it as a work order."* (each given in Korean; recorded in English) |
+| **CLA's answer to W15** | From the code at `3b3f4851` and BQ's order. The checkpoint task takes the stream latch with a blocking lock at its begin and end records and at its log park's flush, so a roll's hold stops the reader core's reactor. Three options were named: the checkpoint parks for the latch; no zero prewrite where `posix_fallocate` reserved (BQ's H4 option 3); the latch released for the roll's I/O (BQ's rung 4, H6). CLA proposed the first, after a premise run with the cadence checkpoint off. **One statement in that answer is corrected here**: CLA said BQ's rung-2 bound predates the partition. BQ-S1 did measure driver-forced segregated placements, so the bound is re-read by CZ-S0, not set aside |
+| **Mark** | None by the operator. **CZ written, not opened**: `instructions/v3.2.0/workorder-cz-checkpoint-roll-wait.md`, on worktree `bl-rung3-probe` from `3b3f4851`. Exploratory: CZ-S0 is the premise and the census with no engine code, CZ-S1 a spike that stays on the branch. CZ-Q0..Q10 carry CLA's proposals. The letter is CLA's proposal. **The order's review corrected the answer above**: the task reaches the latch at five kinds of site, not three (the inline WAL gate and the recycle at the anchor's commit besides), and the order's §1.2 is the account that stands |
+| **Does not settle** | Every CZ-Q item; the opening of any CZ stage; H6; whether rung 3 is ruled out; a merge, a push, a version |
+| **Recorded at** | this file; the order; the CZ row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 14. CZ pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W17: *"push no verify"* - after CLA's report at `ddc4fb31` on worktree `bl-rung3-probe` |
+| **Mark** | None. CZ's order, `ceiling.py` with its output, and §12-§13 go to `main` with `--no-verify`, in this section's commit. The hook and the suite are skipped; no suite was run for this work, which is documents and one analysis script |
+| **Does not settle** | Every CZ-Q item; the opening of any CZ stage; a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 15. CY-S0's gate taken as not passed: CY-S2 and CY-S3 are not built
 
 | | |
 |---|---|
@@ -115,7 +143,7 @@ took under them.
 | **Does not settle** | the opening of CY-S1; CX-Q2..Q11 and CX-Q19..Q27; item 4; a push of `fc705f97` and `648d11ba`; a version |
 | **Recorded at** | this file; CY's header, §3 and §8; the CY row and this file's row in `instructions/v3.2.0/index.md` |
 
-## 13. Statistics unlogged; CY-S1 and CX opened; the standing go-ahead
+## 16. Statistics unlogged; CY-S1 and CX opened; the standing go-ahead
 
 | | |
 |---|---|
@@ -124,3 +152,12 @@ took under them.
 | **Mark** | **CY-S1 opened**, its `sys.statistics` unlogged under CR6 (`crosscore.md` CC13) and kept across a clean shutdown only - this replaces CY-S1's "logged" and the restore sentence, and CX-Q7's withdrawal text. **CX opened.** CX-Q2..Q11 (CX-Q7 withdrawn) and CX-Q19..Q27 are **adopted on the operator's standing go-ahead of 2026-11-18**, each as CLA proposed, not marked by the operator item by item. The order of work: CY-S1, then CX-S0, CX-S1, CX-S2 onward, with CY-S4's relation-object surface where it fits; every stage with its `critics-developer` review and the full suite; **it stops before any push, tag or version** |
 | **Does not settle** | a push, a tag, a version; item 4; whether column statistics are ever built (§11's "for now"); `join_order`'s value names |
 | **Recorded at** | this file; CY's header, §3 S1, §7 and §8; the CX order's header, §4 and §8; the CX and CY rows and this file's row in `instructions/v3.2.0/index.md` |
+
+## 17. CY-S1a pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W16 (the CX/CY matter's): *"For now, push the current work to main, no verify"* - after CLA's report of CY-S1a at `e13efd80` on worktree `cx-plan-change-option` |
+| **Mark** | **Pushed to `main` with `--no-verify`**: CY-S0's results and their correction, §15's verdict, §16's opening, and **CY-S1a** - a relation's prior across a clean shutdown, unlogged `sys.statistics`, superblock 36. The hook was skipped; the full Debug suite ran 4595/4595 at `e13efd80` (`v3.4.12-26-ge13efd80`), and the two merges of `origin/main` after it (BL's rung-3 probe, the CZ order) brought documents, bench files and `tools/bl_mixed.py`, no source, test, CMake file or script. Overhead not measured; measured at the milestone's close |
+| **Does not settle** | a tag, a version; CX-S0 and the stages after it, which go on under §16's go-ahead and stop before the next push |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
