@@ -5,7 +5,7 @@ operator, CZ-S2 not started** on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* S0
-rested on no item of §4. **On the operator's word of the same day (§33
+rested on no item of §4. **On the operator's word of the same day (§35
 there) V0 is passed, every item of §4 is marked (a) and CZ-S1 is opened.**
 CZ-S0 was pushed to `main` with the hook skipped on the operator's word
 (§32 there). **In CZ-S1's spike C1 alone met CZ-Q1 (a)'s bar as written,
@@ -296,7 +296,7 @@ Binding from CZ-S2 on, if the order reaches it.
 ## 4. Items for the operator (CZ-Q), CLA's proposals
 
 **Every item is marked (a)**: CZ-Q9 by `raft-marks-2026-11-18.md` §18,
-the others by §33 there, which also passes V0 on CZ-Q1 (a)'s bar. (a) was
+the others by §35 there, which also passes V0 on CZ-Q1 (a)'s bar. (a) was
 CLA's proposal in each. CZ-Q11 to CZ-Q13 were added at CZ-S0.
 
 | | item | (a) | other |
@@ -525,7 +525,7 @@ cadence task's latch sites try and park), `c2` (no zero prewrite where
 `posix_fallocate` reserved) and `c1c2`. Building, a smoke cell and the
 cells took 10.0 minutes; the quiet gate and the driver's wait for load
 held the matrix another 22.8 minutes, outside the budget
-(`raft-marks-2026-11-18.md` §33). Nothing was cut. The driver ran with the
+(`raft-marks-2026-11-18.md` §35). Nothing was cut. The driver ran with the
 spike's `--stall-cores`, which CZ-S0's §7 asked for and `bench/README.md`
 counts as a driver change. Another session's build reached 6 of the 25
 cells, two of them `isolated`; none of `levels` or `c1`.

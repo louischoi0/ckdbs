@@ -51,7 +51,7 @@ earn a place in CZ on this cell; its effect on the roll and on the bulk
 writer is large and is a different question from CZ's (§4, §8).
 
 - **Order**: `instructions/v3.2.0/workorder-cz-checkpoint-roll-wait.md`
-  §5 (CZ-S1); the operator's word, `raft-marks-2026-11-18.md` §33.
+  §5 (CZ-S1); the operator's word, `raft-marks-2026-11-18.md` §35.
 - **The spike**: `archive/cz-s1-ceiling-v3.4.12-66-g20d89234/cz-s1-spike.patch`,
   the diff of branch `worktree-cz-s1-spike` (`455342ad`, `20d89234`)
   against the work branch at `bf8d7a56`. §7 says what it does.
@@ -80,7 +80,7 @@ writer is large and is a different question from CZ's (§4, §8).
 | Item | Value |
 |---|---|
 | Executed | 2026-11-18 UTC. Release builds 06:39:47-06:40:45 and 06:43:16-06:43:59. Matrix 06:44:17-07:15:07, 25 cells, every cell rc=0 and 0 errors |
-| Budget | The standing one, 20 minutes a stage (CZ-Q8 (a)). Building took 1.7 minutes, one smoke cell 0.3 minutes and the 25 cells 8.0 minutes of running: 10.0 minutes. The run script's quiet gate held the matrix 14.2 minutes and the driver's own wait for load another 8.7 minutes; those holds are outside the budget (`raft-marks-2026-11-18.md` §33). Nothing was cut |
+| Budget | The standing one, 20 minutes a stage (CZ-Q8 (a)). Building took 1.7 minutes, one smoke cell 0.3 minutes and the 25 cells 8.0 minutes of running: 10.0 minutes. The run script's quiet gate held the matrix 14.2 minutes and the driver's own wait for load another 8.7 minutes; those holds are outside the budget (`raft-marks-2026-11-18.md` §35). Nothing was cut |
 | Binary | Release, built in this worktree at `20d89234`, run from a copy: `kds_server.20d89234`, sha256 `ebaf66561336c35e8a69c9e1cbe096e7ee7b373eb8f1df4496b59eb15762d7c7`. One binary for every arm; `KDS_CZ_SPIKE` chooses the arm and each run line carries it as `cz_mode` (`tables.md` §0) |
 | Host / device | 8 vCPU Intel Xeon Platinum 8581C, Linux 6.12.116+deb13-cloud-amd64; data and WAL on `/dev/nvme0n1p1`, ext4, not tmpfs, 44 % full. CZ-S0's host. A sandbox `kds_server`, an Oracle container and other agent sessions were resident |
 | CPUs | Servers on CPUs 0,2,4,6, clients on 1,3,5,7, as in CZ-S0: the four reactors sit on two physical cores |
