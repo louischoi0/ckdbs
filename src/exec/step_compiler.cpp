@@ -1356,8 +1356,21 @@ struct CabinGate {
     // The column a pin names. 0: none named - the tuple key carries no
     // Cabin (cabin.md §2), so no pin can name position 0.
     std::uint16_t named = 0;
-    // A named column the relation does not have: nothing is admitted.
+    // A named column the relation does not have, or the tuple key: nothing
+    // is admitted, and the pin's met-check refuses the variant.
     static constexpr std::uint16_t kNoSuchColumn = 0xFFFF;
+
+    // The gate `pin` sets on a step over `access`.
+    static CabinGate For(const ArmPin& pin, const catalog::TableAccess& access) {
+        CabinGate gate;
+        if (pin.arm != ArmPin::Arm::kCabin || pin.name.empty()) return gate;
+        gate.named = kNoSuchColumn;
+        const auto column = access.schema.FindColumn(pin.name, 0);
+        if (column.ok() && column.value() != nullptr && column.value()->pos != 0) {
+            gate.named = static_cast<std::uint16_t>(column.value()->pos);
+        }
+        return gate;
+    }
 
     // The column Cabin on `col_pos` this step may take, or the empty ref.
     catalog::TableAccess::CabinRef On(const catalog::TableAccess& access,
@@ -2434,70 +2447,22 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // unchanged otherwise. The written order is compiled first and its
     // refusal is the statement's.
     //
-    // ---- A statement over one relation (CX-S3b) ---------------------------
-    //
-    // It has no order, and it has an arm: an administrator's plan for it
-    // states `ORDER (<the relation>)` and pins that arm, which is the one
-    // way a controller-made Cabin - whose candidates are one-relation
-    // filters - is read through (CX-Q6 (a)). Asked only while a
-    // one-relation plan is enabled, which `any_single()` answers with one
-    // relaxed load, and then of every one-relation statement with a fetch
-    // id, a point read included: a plan made for a statement is applied to
-    // it (the rule section 1a' gives for a tuple key chain). A block with a
-    // subquery predicate takes none, as it takes no order (CB-Q4 (a)): its
-    // sub-chains are lowered with side effects a second compile would
-    // repeat.
-    //
-    // The variant's pin restricts the ladder and is **declined, never
-    // forced** (CX-R2), by the rules a join block's is: where no arm meets
-    // it, or the pinned arm adds a sort the statement's LIMIT does not
-    // bound, the statement runs unpinned and the note says so.
-    if (plan != nullptr && stmt.joins.empty() && plan->admin != nullptr &&
-        plan->admin->any_single() && plan->fetch_id != 0 && !HasSubqueryPredicate(stmt)) {
-        CapturedKey shape;
-        shape.fetch_id = plan->fetch_id;
-        shape.n = 1;
-        shape.oids[0] = scope.relations.front().access->oid;
-        if (const auto managed = plan->admin->Find(shape); managed != nullptr) {
-            plan->admin->CountServed();
-            const PlanVariant& variant = managed->Choose(plan->statement);
-            const std::uint32_t first_step_id = next_step_id;
-            auto unpinned = CompileBound(catalog, stmt, scope, refs, next_step_id, depth, view,
-                                         inner_build, declare);
-            if (!unpinned.ok()) return unpinned;
-            StepChain chain;
-            std::string declined_because;
-            if (variant.access.empty() || !variant.access.front().pins()) {
-                chain = std::move(unpinned.value());
-            } else {
-                Scope pinned = scope;  // whole, so no field is dropped
-                pinned.relations.front().pin = &variant.access.front();
-                std::uint32_t ids = first_step_id;
-                auto held = CompileBound(catalog, stmt, pinned, refs, ids, depth, view,
-                                         inner_build, declare);
-                if (!held.ok()) {
-                    declined_because = held.status().message();
-                } else if (!AddedSortCannotRefuse(held.value(), unpinned.value().sorted(),
-                                                  plan->sort_max_rows)) {
-                    declined_because = "its pin adds a sort the statement's LIMIT does not bound";
-                } else {
-                    chain = std::move(held.value());
-                }
-                if (!declined_because.empty()) {
-                    plan->admin->CountDeclined();
-                    chain = std::move(unpinned.value());
-                }
-            }
-            PlanNote& note = chain.plan_note.emplace();
-            note.source = declined_because.empty() ? PlanSource::kAdmin
-                                                   : PlanSource::kAdminDeclined;
-            note.plan_name = managed->name;
-            note.variant = variant.name;
-            note.declined_because = std::move(declined_because);
-            return chain;
-        }
-    }
-    if (plan == nullptr || WhyUnplanned(stmt) != nullptr) {
+    // **A statement over one relation (CX-S3b)** has no order and an arm:
+    // an administrator's plan for it states `ORDER (<the relation>)` and
+    // pins that arm, which is the one way a controller-made Cabin - whose
+    // candidates are one-relation filters - is read through (CX-Q6 (a)).
+    // It enters only while a one-relation plan is enabled, which
+    // `any_single()` answers with one relaxed load, and with a fetch id;
+    // then section 1a' asks for its plan, as for a join's, and it leaves
+    // there whatever the answer - no search, capture or statistics fold
+    // reads a block with no order. A block with a subquery predicate takes
+    // none, as it takes no order (CB-Q4 (a)): its sub-chains are lowered
+    // with side effects a second compile would repeat.
+    const bool single = stmt.joins.empty();
+    const bool single_planned = single && plan != nullptr && plan->admin != nullptr &&
+                                plan->admin->any_single() && plan->fetch_id != 0 &&
+                                !HasSubqueryPredicate(stmt);
+    if (plan == nullptr || (single ? !single_planned : WhyUnplanned(stmt) != nullptr)) {
         return CompileBound(catalog, stmt, scope, refs, next_step_id, depth, view, inner_build,
                             declare);
     }
@@ -2600,7 +2565,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 declined_because = ordered.status().message();
             } else if (!AddedSortCannotRefuse(ordered.value(), written_sorted,
                                               plan->sort_max_rows)) {
-                declined_because = "its order adds a sort the statement's LIMIT does not bound";
+                declined_because = single
+                                       ? "its pin adds a sort the statement's LIMIT does not bound"
+                                       : "its order adds a sort the statement's LIMIT does not "
+                                         "bound";
             } else {
                 chain = std::move(ordered.value());
             }
@@ -2612,8 +2580,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             // The relations a run asks priors for and the key its counts
             // fold under, as any planned block's (CX-Q2), so a `DROP PLAN`
             // or an `AS SEARCHED` after it prices from what the shape's runs
-            // measured - but under `written`, which gathers nothing.
-            if (plan->search) {
+            // measured - but under `written`, which gathers nothing, and
+            // over one relation, which has no order to price.
+            if (plan->search && !single) {
                 for (const BoundRelation& relation : scope.relations) {
                     chain.planned_relations.push_back(relation.access->oid);
                 }
@@ -2627,9 +2596,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             return chain;
         }
     }
-    // `join_order = written` with no plan for the shape: the written order,
-    // as a compile handed no options gives it.
-    if (!plan->search) return best;
+    // `join_order = written` with no plan for the shape, or a statement over
+    // one relation without one: the written order, as a compile handed no
+    // options gives it.
+    if (!plan->search || single) return best;
 
     // A written chain of tuple key descents alone - a lookup, then probes -
     // reads one row per step (a key set, its values' rows), and every order
@@ -3101,21 +3071,10 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         const bool tuple_key = pin.Admits(ArmPin::Arm::kTupleKey);
         const bool index = pin.Admits(ArmPin::Arm::kIndex);
         const bool cabin = pin.Admits(ArmPin::Arm::kCabin);
-        // Which Cabins those ranks may take (CX-S3b): a controller-made one
-        // only where the pin names it, by its column. A name the relation
-        // does not have - renamed since the plan was made - admits nothing,
-        // and the met-check below refuses the variant.
-        CabinGate gate;
-        if (!pin.cabin.empty()) {
-            const auto named = scope.relations[i].access->schema.FindColumn(pin.cabin, 0);
-            gate.named = named.ok() && named.value() != nullptr
-                             ? static_cast<std::uint16_t>(named.value()->pos)
-                             : CabinGate::kNoSuchColumn;
-            // Position 0 is the tuple key, which carries no Cabin.
-            if (gate.named == 0) gate.named = CabinGate::kNoSuchColumn;
-        }
         const catalog::TableAccess& rel = *scope.relations[i].access;
         const auto slot = static_cast<std::uint16_t>(i);
+        // Which Cabins those ranks may take (CX-S3b).
+        const CabinGate gate = CabinGate::For(pin, rel);
         // The walk's own ranks (a filter scan, the build annotation) stand
         // aside under a keyed pin, so the strict tuple key range below them
         // is still the tuple key class's to take.
@@ -3183,7 +3142,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // shape, as each of them is. An annotation - the kind is the
         // single-value kind and `Step::key` stays empty (`KeySet`).
         if (tuple_key && step.kind == AccessKind::kScan && !step.bool_residual.empty()) {
-            if (auto set = TupleKeySetOf(step, static_cast<std::uint16_t>(i)); set.has_value()) {
+            if (auto set = TupleKeySetOf(step, slot); set.has_value()) {
                 step.kind = AccessKind::kLookup;
                 step.key_set = std::move(set);
             }
@@ -3196,11 +3155,11 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // of these could serve it.
         if (step.kind == AccessKind::kScan) {
             const auto key_range =
-                tuple_key ? TupleKeyRangeOf(step, static_cast<std::uint16_t>(i)) : std::nullopt;
+                tuple_key ? TupleKeyRangeOf(step, slot) : std::nullopt;
             if (key_range.has_value() && !key_range->strict) {
                 step.kind = AccessKind::kRange;
                 step.range = key_range->bounds;
-            } else if (auto ix = index ? LiteralIndexChoiceOf(scope, rel, step, slot, pin.index,
+            } else if (auto ix = index ? LiteralIndexChoiceOf(scope, rel, step, slot, pin.name,
                                                               cabin ? &gate : nullptr)
                                        : std::nullopt;
                        ix.has_value()) {
@@ -3215,10 +3174,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 step.kind = ix->probe.ranged ? AccessKind::kIndexRange : AccessKind::kIndexProbe;
                 step.key_set = std::move(ix->set);
                 step.index = std::move(ix->probe);
-            } else if (auto cx = index ? CorrelatedIndexProbeOf(scope, *scope.relations[i].access,
-                                                                step,
-                                                                static_cast<std::uint16_t>(i),
-                                                                pin.index)
+            } else if (auto cx = index ? CorrelatedIndexProbeOf(scope, rel, step, slot, pin.name)
                                        : std::nullopt;
                        cx.has_value()) {
                 // The correlated form, after the literal one for the reason
@@ -3287,8 +3243,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cs->probe);
                 step.key_set = std::move(cs->set);
-            } else if (walk && HasUnindexedEqualityFilter(*scope.relations[i].access, step,
-                                                           static_cast<std::uint16_t>(i))) {
+            } else if (walk && HasUnindexedEqualityFilter(rel, step, slot)) {
                 // Ahead of the build annotation by decision, not
                 // impossibility (spec §8): the step's own literal already
                 // bounds what a walk visits, and v1 declines to also build
@@ -3307,8 +3262,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // the walked join. An annotation, never a kind - `kind`
                 // stays kScan, and `BuildKey` (step_chain.hpp) owns the
                 // contract.
-                step.build = BuildKeyOf(scope, *scope.relations[i].access, step,
-                                        static_cast<std::uint16_t>(i));
+                step.build = BuildKeyOf(scope, rel, step, slot);
             }
             // A strict tuple key range, last (ruling (a), at
             // TupleKeyRangeOf): only a step still a bare walk takes it.
@@ -3327,8 +3281,9 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 return Status::Unsupported(
                     "the statement's step over '" + scope.relations[i].binding +
                     "' cannot take the pinned arm " + std::string(ArmName(pin.arm)) +
-                    (pin.index.empty() ? "" : " " + pin.index) +
-                    (pin.cabin.empty() ? "" : " (" + pin.cabin + ")"));
+                    (pin.name.empty()                    ? ""
+                     : pin.arm == ArmPin::Arm::kCabin ? " (" + pin.name + ")"
+                                                       : " " + pin.name));
             }
         }
 
@@ -3336,7 +3291,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // compiler is the only place that already knows them; the statistics
         // layer would otherwise re-walk the residual per statement to answer
         // a question that was settled at compile time.
-        step.access_columns = AccessColumnsOf(step, static_cast<std::uint16_t>(i));
+        step.access_columns = AccessColumnsOf(step, slot);
     }
 
     // ---- 5. Projection, or the fold --------------------------------------
@@ -3504,11 +3459,12 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
 Status PlannableBlock(const parser::SelectStmt& stmt) {
     // A statement over one relation has no order and takes a plan for its
     // arm (CX-S3b; `CompileBlock`), unless it holds a subquery predicate.
-    const char* const why = stmt.joins.empty() && !HasSubqueryPredicate(stmt)
-                                ? nullptr
-                                : stmt.joins.empty()
-                                      ? "a block with a subquery predicate takes no plan"
-                                      : WhyUnplanned(stmt);
+    const char* why = nullptr;
+    if (!stmt.joins.empty()) {
+        why = WhyUnplanned(stmt);
+    } else if (HasSubqueryPredicate(stmt)) {
+        why = "a block with a subquery predicate takes no plan";
+    }
     if (why == nullptr) return Status::OK();
     return Status::NotImplemented(std::string("a plan for this statement is not implemented: ") +
                                   why);

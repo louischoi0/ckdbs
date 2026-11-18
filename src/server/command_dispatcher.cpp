@@ -13333,15 +13333,15 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
                 // named Cabin one its column carries: the one thing of a
                 // pin that can be asked with no statement.
                 for (const exec::PlanVariantSpec::Access& written : spec.access) {
-                    if (written.pin.index.empty() && written.pin.cabin.empty()) continue;
+                    if (written.pin.name.empty()) continue;
                     // `ResolvePlanVariant` placed the binding already.
                     std::size_t w = 0;
                     while (!exec::SameName(row.bindings[w], written.binding)) ++w;
                     auto access = catalog_.InitTableAccess(row.key.oids[w]);
                     if (!access.ok()) return access.status();
-                    if (!written.pin.cabin.empty()) {
+                    if (written.pin.arm == exec::ArmPin::Arm::kCabin) {
                         auto column = access.value()->schema.FindColumn(
-                            written.pin.cabin, static_cast<std::uint32_t>(written.name_at));
+                            written.pin.name, static_cast<std::uint32_t>(written.name_at));
                         if (!column.ok()) return column.status();
                         if (column.value() == nullptr ||
                             access.value()
@@ -13349,18 +13349,18 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
                                     .id == 0) {
                             return Status::NotFound("variant '" + spec.name + "': '" +
                                                     row.bindings[w] + "' has no cabin on '" +
-                                                    written.pin.cabin + "'" +
+                                                    written.pin.name + "'" +
                                                     ByteSuffix(written.name_at));
                         }
                         continue;
                     }
                     const auto& indexes = access.value()->indexes;
                     if (std::none_of(indexes.begin(), indexes.end(), [&](const auto& ix) {
-                            return exec::SameName(ix.name, written.pin.index);
+                            return exec::SameName(ix.name, written.pin.name);
                         })) {
                         return Status::NotFound("variant '" + spec.name + "': '" +
                                                 row.bindings[w] + "' has no index named '" +
-                                                written.pin.index + "'" +
+                                                written.pin.name + "'" +
                                                 ByteSuffix(written.name_at));
                     }
                 }

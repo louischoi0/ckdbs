@@ -298,20 +298,32 @@ TEST(PlanDdlTest, ACabinPinMayNameItsColumn) {
     const auto& access = parsed.value().variants[0].access;
     ASSERT_EQ(access.size(), 2u);
     EXPECT_EQ(access[0].pin.arm, exec::ArmPin::Arm::kCabin);
-    EXPECT_EQ(access[0].pin.cabin, "sym");
+    EXPECT_EQ(access[0].pin.name, "sym");
     EXPECT_EQ(parsed.value().variants[0].access[0].name_at,
               (head + "VARIANT v ELSE ORDER (a, b) ACCESS a CABIN (").size());
-    EXPECT_TRUE(access[1].pin.cabin.empty());
+    EXPECT_TRUE(access[1].pin.name.empty());
     auto variant = exec::ResolvePlanVariant({"a", "b"}, 0, parsed.value().variants[0]);
     ASSERT_TRUE(variant.ok()) << variant.status().message();
     EXPECT_EQ(exec::PlanAccessText(variant.value().access, {"a", "b"}),
               " ACCESS a CABIN (sym), b CABIN");
 
     // A named Cabin is a column's: an expression or a predicate is not read.
-    for (const std::string key : {"(DATE(ts))", "(x = 1)", "()", "(x, y)"}) {
+    for (const std::string key : {"(DATE(ts))", "(x = 1)", "(x, y)"}) {
         auto bad = exec::ParseCreatePlan(head + "VARIANT v ELSE ORDER (a, b) ACCESS a CABIN " +
                                          key);
         EXPECT_EQ(bad.status().code(), StatusCode::kNotImplemented) << key;
+    }
+    // An empty or unclosed list names nothing: simply wrong, at the token
+    // where the column should be or the list should close.
+    const std::string pinned = head + "VARIANT v ELSE ORDER (a, b) ACCESS a CABIN (";
+    for (const std::string key : {")", "", "x"}) {
+        auto bad = exec::ParseCreatePlan(pinned + key);
+        EXPECT_EQ(bad.status().code(), StatusCode::kInvalidArgument) << key;
+        EXPECT_NE(bad.status().message().find("(byte " + std::to_string(pinned.size() +
+                                                                        (key == "x" ? 1 : 0)) +
+                                              ")"),
+                  std::string::npos)
+            << key << ": " << bad.status().message();
     }
 }
 
@@ -414,7 +426,7 @@ TEST(AdminPlanTextTest, AVariantsPinsReadBackAndARowWithNoneReadsAsBefore) {
     // A named Cabin's column travels as a pinned index's name does (CX-S3b).
     exec::PlanRow named = SampleRow();
     named.variants[0].access = {exec::ArmPin{},
-                                exec::ArmPin{exec::ArmPin::Arm::kCabin, false, "", "sym"}};
+                                exec::ArmPin{exec::ArmPin::Arm::kCabin, false, "sym"}};
     const std::string named_text = exec::EncodeAdminPlanText(named, 7);
     EXPECT_NE(named_text.find("narrow 0,1 access=1:CABIN:sym WHEN "), std::string::npos)
         << named_text;

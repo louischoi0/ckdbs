@@ -101,7 +101,7 @@ std::optional<std::string> AdminPlans::EnabledPinning(catalog::Oid oid, ArmPin::
             for (std::size_t w = 0; w < variant.access.size() && w < key.n; ++w) {
                 const ArmPin& pin = variant.access[w];
                 if (key.oids[w] == oid && pin.arm == arm && !pin.forbid &&
-                    SameName(arm == ArmPin::Arm::kIndex ? pin.index : pin.cabin, name)) {
+                    SameName(pin.name, name)) {
                     return true;
                 }
             }

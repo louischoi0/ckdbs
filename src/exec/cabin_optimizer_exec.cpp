@@ -54,9 +54,9 @@ Status CabinOptimizerExecutor::Apply(const stats::ActionSet& actions,
     for (const stats::ActionItem& action : actions) {
         if (!enabled()) return Status::OK();  // PO8: checked between actions
         Status applied = Status::OK();
-        // The swap's CREATE is the action its DROP is followed by.
-        const bool pays_for_refused_swap = swap_refused;
-        swap_refused = false;
+        // The swap's CREATE is the action its DROP is followed by
+        // (`CabinOptimizer::Decide` emits the two back to back).
+        const bool pays_for_refused_swap = std::exchange(swap_refused, false);
         switch (action.action) {
             case stats::CabinAction::kCreate:
                 if (pays_for_refused_swap) {
@@ -79,8 +79,9 @@ Status CabinOptimizerExecutor::Apply(const stats::ActionSet& actions,
                 // plan names is read through by that plan's statements, and
                 // dropping it on the engine's judgement would move their arm
                 // - the implicit change CX-Q6 (a) rules out. The entry stays
-                // as the decision left it (DECAYING) and is asked again at a
-                // later tick; a plan made between this check and the row's
+                // as the decision left it (DECAYING; ACTIVE after a
+                // quality-collapse DROP) and is asked again at a later tick;
+                // a plan made between this check and the row's
                 // removal has its variant declined (CX-Q4 (b)).
                 if (NamedByAPlan(action)) {
                     ++counters_.drops_restricted;

@@ -2039,12 +2039,18 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   Cabin and leaves the scan: someone - a DBA, an agent - has to issue
   `CREATE PLAN ... ACCESS <relation> CABIN (<column>)` for each shape that
   should read through it, and nothing proposes that plan (`ADVISE PLAN`
-  is CX-S7). An unnamed Cabin is probed by nothing, so it observes no
-  value and the controller's EXTEND and HEAL never fire for it; it holds
+  is CX-S7). An unnamed Cabin is probed by no statement's step, so it
+  observes no value, HEAL never fires for it, and an EXTEND - which a
+  foreign key reverse check's misses on a child's Cabin can still
+  trigger - finds nothing sighted to seed; it holds
   a `sys.cabins` row and a budget page while its fingerprint stays hot.
   An instance that ran with the controller on before this stage loses
-  the serve at the upgrade, with no refusal: the statements walk. Owned
-  by `docs/spec/cabin-controller.md`.
+  the serve at the upgrade, with no refusal: the statements walk. And a
+  DROP a plan RESTRICTs is decided again at every tick while its
+  condition holds - each one a skipped action, a `drops_restricted` count
+  and a decision-log record - since the decision core is not told why it
+  did not land; noise, not a wrong state. Owned by
+  `docs/spec/cabin-controller.md`.
 
 - **A one-relation plan puts every one-relation `SELECT` through the plan
   table, a point read included.** Verified at CX-S3b on
@@ -2060,9 +2066,14 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 - **A named Cabin pin is by the column's name, and its drop RESTRICT has
   a window.** Verified at CX-S3b on `cx-plan-change-option`. `ACCESS t
   CABIN (c)` stores `c` as written: after `ALTER TABLE ... RENAME COLUMN`
-  the pin names no column, the variant is declined statement by statement
-  (counted, `plan_declined`), and the RESTRICT no longer finds the Cabin,
-  so it can be dropped under the enabled plan. A column Cabin's `DROP
+  the pin names no column and the RESTRICT no longer finds the Cabin, so
+  it can be dropped under the enabled plan. No statement is moved by that:
+  a pin is met only on a column the statement writes, so a statement of
+  the plan's shape names the old column and no longer compiles, and the
+  new spelling is another shape (the entry below). Only a variant `REPLACE
+  VARIANT` gave a pin on a column its statement does not write - it checks
+  the Cabin exists, not that the pin is met - is declined statement by
+  statement (counted, `plan_declined`), before the rename as after. A column Cabin's `DROP
   CABIN` and the controller's DROP hold no relation lock, so a `CREATE
   PLAN` naming the Cabin that lands between their check and the row's
   removal is not seen: its variant is declined (CX-Q4 (b)), no result

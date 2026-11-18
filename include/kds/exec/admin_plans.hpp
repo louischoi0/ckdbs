@@ -105,8 +105,10 @@ struct ArmPin {
     enum class Arm : std::uint8_t { kLadder, kTupleKey, kIndex, kCabin, kScan };
     Arm arm = Arm::kLadder;
     bool forbid = false;
-    std::string index;  // a pinned `kIndex`'s name; empty: any index
-    std::string cabin;  // a pinned `kCabin`'s column; empty: any declared Cabin
+    // What a pin names: a pinned `kIndex`'s index, or a pinned `kCabin`'s
+    // column. Empty: any index, or any declared Cabin. Never set on another
+    // arm, nor on a forbidden one.
+    std::string name;
 
     bool pins() const noexcept { return arm != Arm::kLadder; }
     // Whether the ladder may try arms of class `tried`.

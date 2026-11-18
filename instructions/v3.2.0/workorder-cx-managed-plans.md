@@ -1260,8 +1260,9 @@ acts into something that prepares.
   step may take. A Cabin of `auto` origin is admitted only where the
   step's pin names its column; with no pin, under `CABIN` unnamed and
   under `NOT` another class, the relation reads as though the Cabin were
-  not there. Under every `join_order`, and in a write's `WHERE` as in a
-  read. A declared Cabin is admitted as before.
+  not there. Under every `join_order`, and in a subquery of a write as
+  in a read (a write's own `WHERE` takes no Cabin arm). A declared Cabin
+  is admitted as before.
 - **The named pin**: `ACCESS <binding> CABIN (<column>)`. It admits the
   column Cabin on that column, whoever made it, and nothing else, so the
   class's met-check is the named Cabin's. `NOT CABIN (<column>)` is
@@ -1306,6 +1307,42 @@ marked by the operator.**
 - **The foreign key's reverse check still reads a controller-made Cabin**
   (`foreign-keys.md` §3a): it is enforcement, not a statement's plan.
 - **Not built**: a named expression or predicate Cabin; a RESTRICT on
-  `RENAME COLUMN` of a named column (the pin goes unmet and the variant
-  is declined); a relation lock under a column Cabin's drop, so the
+  `RENAME COLUMN` of a named column (the pin names nothing, and the
+  plan's statement, which names the old column, matches no statement); a
+  relation lock under a column Cabin's drop, so the
   RESTRICT has a window (`known-gaps.md`).
+
+**The review of S3b** (`critics-developer`, of `ae77630f`; its fixes and
+the cuts taken from it are in the commit after it). It found no way for
+the stage to change a result. It confirmed by reading that the gate is
+the one place a Cabin arm is chosen, that the one-relation compile's step
+ids and side effects are those of a single compile, and that the enabled
+counters cannot drift; and it ran the full suite on its fixes, 0 failed
+of 4683.
+
+- **Fixed by the review**: an empty or unclosed `CABIN (...)` was refused
+  `NotImplemented` (as though it named an expression); it is
+  `InvalidArgument`, at the offending token. A cell.
+- **Fixed by the review, in the documents**: an unnamed controller-made
+  Cabin can still be asked for an EXTEND, by the foreign key reverse
+  check's misses, which finds nothing to seed; a restricted
+  quality-collapse DROP leaves its entry ACTIVE, not DECAYING; a write's
+  own `WHERE` takes no Cabin arm, so the gate binds a write's subqueries;
+  after a `RENAME COLUMN` a plan naming the column matches no statement,
+  rather than being declined statement by statement.
+- **Taken, as cuts**: the one-relation branch is section 1a' itself - a
+  one-relation block enters the join path's plan lookup while
+  `any_single()` holds and leaves right after it, with no statistics
+  stamp - instead of 45 lines repeating it; `ArmPin`'s two name fields
+  are one (`name`), which also removes the warnings the commit added;
+  `CabinGate::For`; `PlannableBlock` as an if/else; the ladder's `rel`
+  and `slot` locals used at every call; `Apply`'s two flags as one
+  `std::exchange`.
+- **Not taken**: rate-limiting a restricted DROP, which the decision core
+  emits again at every tick while its condition holds. It is noise in a
+  counter and the decision log, not a wrong state, and stopping it needs
+  the pure decision core to be told why an action did not land; stated in
+  `known-gaps.md`.
+- **Not checked by the review**: a streamed one-relation plan; one across
+  a restart; plan DDL racing a Cabin's drop; `CREATE PLAN` over a `sys.*`
+  view; overhead.

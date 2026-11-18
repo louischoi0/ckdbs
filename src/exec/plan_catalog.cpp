@@ -132,9 +132,7 @@ std::string EncodeAccess(const std::vector<ArmPin>& access) {
         out.append(std::to_string(w)).push_back(':');
         if (pin.forbid) out.push_back('!');
         out.append(ArmName(pin.arm));
-        // One name at most: a pinned index's, or a pinned Cabin's column.
-        if (!pin.index.empty()) out.append(":").append(pin.index);
-        if (!pin.cabin.empty()) out.append(":").append(pin.cabin);
+        if (!pin.name.empty()) out.append(":").append(pin.name);
     }
     return out;
 }
@@ -169,12 +167,11 @@ bool DecodeAccess(std::string_view text, std::size_t n, std::vector<ArmPin>& out
         if (pin.forbid && pin.arm == ArmPin::Arm::kScan) return false;
         if (name_at != std::string_view::npos) {
             const std::string_view name = item.substr(name_at + 1);
-            const bool index = pin.arm == ArmPin::Arm::kIndex;
-            if ((!index && pin.arm != ArmPin::Arm::kCabin) || pin.forbid ||
-                !parser::IsIdentifier(name)) {
+            if ((pin.arm != ArmPin::Arm::kIndex && pin.arm != ArmPin::Arm::kCabin) ||
+                pin.forbid || !parser::IsIdentifier(name)) {
                 return false;
             }
-            (index ? pin.index : pin.cabin) = std::string(name);
+            pin.name = std::string(name);
         }
         pins[position] = std::move(pin);
         if (semi == std::string_view::npos) break;
