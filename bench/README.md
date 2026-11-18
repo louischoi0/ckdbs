@@ -1,66 +1,10 @@
 # `bench/` — reopened 2026-09-03 for v3.0.0
 
-Emptied on 2026-09-02 ahead of the big-bang change to the architecture,
-rules and constraints; reopened by AL-R8 of
-`instructions/v3.0.0/workorder-al-m0-single-wal.md` once there was a v3
-engine to price. **`bench/v3.0.0/` is a fresh series and carries no delta
-against any v2.x number** (AR0 D15): every number under `v2.2.0`..`v2.8.0`
+Results files, by the version of record they were measured at, and the
+rules a run is invalid without. **`bench/v3.0.0/` is a fresh series and
+carries no delta against any v2.x number** (AR0 D15): every v2.x number
 measured the engine AR0 replaces, and a per-core-WAL number set beside a
 single-stream one reads as a regression or a win that neither ran.
-
-What left, and where it is: the five C++ microbenchmarks
-(`bench_main.cpp`, `keystone_alloc_bench.cpp`, `txn_layers_bench.cpp`,
-`crosscore_pipeline_bench.cpp`, `session_step_state_bench.cpp`), the probe
-drivers, `bench/docs/`, the three scenario documents, and every results
-file from `v2.2.0` through `v2.8.0`. The last commit holding them is
-`1769487`:
-
-    git ls-tree -r --name-only 1769487 bench     # what was here
-    git show 1769487:bench/<path>                # any one file
-
-A citation to `bench/...` in a spec, the manual, a test or a source comment
-points at that commit unless it names a `v3.` path.
-
-## Emptied again on 2026-09-30 — the scenario rebaseline
-
-On the operator's word, every results file and archive directory under
-`bench/v3.0.0/` written from AL-S8 (`f6ed10c`) through AY-S11's overhead
-run (`0552d55`) was deleted, and each scenario driver was re-run at
-`9a0525d` (`v2.7.0-531-g9a0525d`, AY closed). The last commit holding the
-deleted files is `9a0525d`:
-
-    git ls-tree -r --name-only 9a0525d bench/v3.0.0   # what was here
-    git show 9a0525d:bench/v3.0.0/<path>              # any one file
-
-One exception: AY-S11's overhead file
-(`results-ay-s11-overhead-v2.7.0-530-g0552d55.md` and its archive) was
-corrected on `main` after `9a0525d`, and its last version is at `a59da9c`.
-
-**A citation to a `bench/v3.0.0/` path that does not exist in the working
-tree resolves against `9a0525d`** (the AY-S11 overhead file against
-`a59da9c`, the rebaseline's own files against `36449d28`) — `known-gaps.md`, the concept notes and
-`instructions/v3.0.0/` cite several. The rebaseline's files are the
-comparator for every later delta of the same driver and shape; a delta
-against a deleted file names `9a0525d` and states how far apart the two
-runs are, in commits and milestones (the rebaseline's own deltas against
-the `f6ed10c` BTREE pair say 374 commits).
-
-## Scenario results deleted on 2026-10-12
-
-On the operator's word, the 2026-09-30 rebaseline's results were deleted:
-every `results-scenario*` file and `archive/scenario*` directory under
-`bench/v3.0.0/` (the KDS runs at `9a0525d`, the PostgreSQL 18 runs at
-`f2f1ee7`), with `results-rebaseline-summary-v2.7.0-531-g9a0525d.md` and
-`results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`. The last commit
-holding them is `36449d28`:
-
-    git ls-tree -r --name-only 36449d28 bench/v3.0.0   # what was here
-    git show 36449d28:bench/v3.0.0/<path>              # any one file
-
-A citation to one of those paths resolves against `36449d28`, not
-`9a0525d`. They remain the comparator for a later delta of the same driver
-and shape until a scenario is re-run; such a delta names `36449d28` as
-where the file is held and `9a0525d` / `f2f1ee7` as what it measured.
 
 ## Where a result goes
 
@@ -131,28 +75,44 @@ The operator's mark on AS-Q6 (`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.m
 **every relation a driver creates is `BTREE`, and a delta is taken only
 against a BTREE baseline of the same driver** — a driver still emitting
 `HEAP` is refused at `CREATE TABLE` and produces no v3 number until AS-S3
-changes it. Heap relations are suspended
-(SUS-1), so a post-2026-09-05 engine refuses the shape the AL-S8 files at
-`f6ed10c` measured — `trades`/`user_periodic_profit` and
-`freights`/`charges` were `HEAP` there. Those files stay as history (at
-`9a0525d` since 2026-09-30) and are compared against nothing: a heap number
-beside a btree number is two workloads. Until the 2026-09-30 rebaseline
-replaced it, the comparator for every later delta was `f6ed10c` re-measured
-with the changed drivers, on the same host and from the archived binary
-AL-S8's stamp names — **measured 2026-09-08**, eight cells, all of
-AL-S8's own arguments and its cell order (both files deleted on 2026-09-30
-and held at `9a0525d`):
+changes it. Heap relations are suspended (SUS-1).
 
-- `results-scenario0-stockmarket-btree-v2.7.0-157-gf6ed10c.md`
-- `results-scenario2-freight-btree-v2.7.0-157-gf6ed10c.md`
+A heap number beside a btree number is two workloads. Where one commit has
+both series, the `-btree-` in the benchmark name keeps them apart, and **a
+delta is read against the `-btree-` files and never against the others.**
 
-The `-btree-` in the benchmark name is what keeps the two series apart,
-and it is load-bearing: the same commit now has two results files per
-scenario, measuring two workloads. **A delta is read against the
-`-btree-` pair and never against the other.** Each carries, once and
-marked not to be reused, the difference between the two — which prices
-the driver change and the five days between the runs together, and
-separates neither, because a statement whose storage class did not change
-moved as well. The driver change itself was a tools stage outside any
-measurement stage, which is what the rule above requires and why the
-baseline was re-measured rather than reused.
+## What was deleted, and where it is held
+
+Each deletion was on the operator's word. The last commit holding the files
+is the one to read them at:
+
+    git ls-tree -r --name-only <commit> bench    # what was there
+    git show <commit>:bench/<path>               # any one file
+
+| deleted | what left | held at |
+|---|---|---|
+| 2026-09-02, ahead of the big-bang change; reopened 2026-09-03 by AL-R8 (`instructions/v3.0.0/workorder-al-m0-single-wal.md`) | everything: the five C++ microbenchmarks, the probe drivers, `bench/docs/`, the three scenario documents, every v2.x results file | `1769487` |
+| 2026-09-30, the scenario rebaseline | every results file and archive under `bench/v3.0.0/` from AL-S8 (`f6ed10c`) through AY-S11's overhead run (`0552d55`), the `f6ed10c` HEAP files and their 2026-09-08 `-btree-` re-measurement among them; each scenario driver was re-run at `9a0525d` | `9a0525d`; AY-S11's overhead file, corrected on `main` afterwards, at `a59da9c` |
+| 2026-10-12 | the rebaseline's own results: every `results-scenario*` file and `archive/scenario*` directory under `bench/v3.0.0/` (KDS at `9a0525d`, PostgreSQL 18 at `f2f1ee7`), `results-rebaseline-summary-v2.7.0-531-g9a0525d.md` and `results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` | `36449d28` |
+
+**A citation to a `bench/` path that is not in the working tree** resolves
+by this table:
+
+- a path that names no `v3.` directory: `1769487`;
+- a `bench/v3.0.0/` path: `9a0525d`;
+- AY-S11's overhead file: `a59da9c`;
+- the rebaseline's own files (the `results-scenario*` files and
+  `archive/scenario*` directories measured at `9a0525d` or `f2f1ee7`, and
+  the two summaries): `36449d28`. The `f6ed10c` scenario files and archives
+  match the same globs and are held at `9a0525d`.
+
+**The rebaseline's files stay the comparator** for a later delta of the
+same driver and shape until the scenario is re-run. A delta against any
+deleted file names the commit that holds it and the commit it measured, and
+says how far apart the two runs are in commits and milestones. The
+`f6ed10c` HEAP files are compared against nothing.
+
+The three entries as they were last written in full, with the 2026-09-08
+re-measurement's account:
+[`bench/README.md` at `1ad75954`](https://github.com/louischoi0/ckdbs/blob/1ad759540c612efb2d96bc8c6dcc695f4001f6c8/bench/README.md),
+or `git show 1ad75954:bench/README.md`.

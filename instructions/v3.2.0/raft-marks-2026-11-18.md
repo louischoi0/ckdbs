@@ -132,3 +132,12 @@ took under them.
 | **Mark** | None. CZ's order, `ceiling.py` with its output, and §12-§13 go to `main` with `--no-verify`, in this section's commit. The hook and the suite are skipped; no suite was run for this work, which is documents and one analysis script |
 | **Does not settle** | Every CZ-Q item; the opening of any CZ stage; a version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 15. `bench/README.md` shortened
+
+| | |
+|---|---|
+| **Word** | W18: *"For now, shrink the current README.md a little. For old history (a month or more), leave a link and abbreviate the content, and the historical records other than the rules need their information compressed further."* (given in Korean; recorded in English) |
+| **Mark** | None. CLA read "README.md" as `bench/README.md`: the root `README.md` holds no history and no rules, and `bench/README.md` is the one README with both. The three deletion entries (2026-09-02, 2026-09-30, 2026-10-12) and the BTREE section's account of the `f6ed10c` re-measurement are folded into one table and its resolution list, with a link to the full text at `1ad75954`; 158 lines to 118. **The rules are byte-identical** from "Where a result goes" to the BTREE heading. Reviewed by `critics-developer`, which restored two rule passages CLA had shortened and corrected a resolution bullet that sent the `f6ed10c` scenario files to a commit that does not hold them |
+| **Does not settle** | Whether the root `README.md` was meant; the host notes inside rules 2, 4 and 5, which name the earlier box and were left as written; a push |
+| **Recorded at** | this file; `bench/README.md`; this file's row in `instructions/v3.2.0/index.md` |
