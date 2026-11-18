@@ -23,6 +23,7 @@
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/captured_plans.hpp"
 #include "kds/exec/plan_memo.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/stats/plan_stats.hpp"
@@ -401,8 +402,6 @@ struct StatementLimits {
     std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
     std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
     bool scan_kernel = true;
-    // `join_order = planned` (true) or `written` (CB-S2).
-    bool plan_join_order = true;
 };
 
 // **The Cabin controller's surface, as one value** (AT-S8, on the
@@ -417,6 +416,12 @@ struct OptimizerSurface {
     // The join planner's statistics (docs/spec/plan-stats.md), the
     // instance's one store.
     stats::PlanStats* plan_stats = nullptr;
+    // `join_order`, the instance's one value (CX-R10): the boot key seeds
+    // it and any core's `SET JOIN_ORDER` flips it. With it, the instance's
+    // captured plans (`exec/captured_plans.hpp`). A null leaves the
+    // dispatcher's own.
+    std::atomic<exec::JoinOrder>* join_order = nullptr;
+    exec::CapturedPlans* captured_plans = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
     const stats::CabinOptimizer* controller = nullptr;
     const exec::CabinOptimizerExecutor* executor = nullptr;
@@ -1499,6 +1504,7 @@ private:
                                            std::string_view relation_name, std::string_view verb,
                                            DdlBuildLock& out);
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
+    DispatchOutcome HandleSetJoinOrder(std::string_view line, std::string_view rest);
     DispatchOutcome HandleSetAsh(std::string_view line, std::string_view rest);
 
 
@@ -1853,8 +1859,24 @@ public:
     void set_join_build_max_rows(std::size_t rows) noexcept {
         budget_.set_join_build_max_rows(rows);
     }
-    // `join_order` (CB-S2): false keeps every join in its written order.
-    void set_plan_join_order(bool planned) noexcept { plan_join_order_ = planned; }
+    // `join_order` (CX-R10): the boot key seeds it, `SET JOIN_ORDER` flips
+    // it at run time, `SHOW META` reports it, and every SELECT's compile
+    // reads it once. **A dispatcher that is never told runs `planned`**, as
+    // it did before CX - the suites' rigs build one bare; a server's default
+    // is `fixed` (`Expeditor::Config::join_order`).
+    void set_join_order(exec::JoinOrder value) noexcept {
+        join_order_->store(value, std::memory_order_relaxed);
+    }
+    exec::JoinOrder join_order() const noexcept {
+        return join_order_->load(std::memory_order_relaxed);
+    }
+    // The two values CB-S2 had: false keeps every join in its written order.
+    void set_plan_join_order(bool planned) noexcept {
+        set_join_order(planned ? exec::JoinOrder::kPlanned : exec::JoinOrder::kWritten);
+    }
+    // The captured plans `fixed` reads and fills: the instance's, or this
+    // dispatcher's own.
+    exec::CapturedPlans& captured_plans() noexcept { return *captured_plans_; }
     // The join planner's statistics store, or null - every hand-built
     // dispatcher, which then plans data-free and folds nothing.
     void set_plan_stats(stats::PlanStats* plan_stats) noexcept {
@@ -1871,7 +1893,6 @@ public:
         set_sort_max_rows(limits.sort_max_rows);
         set_join_build_max_rows(limits.join_build_max_rows);
         budget_.set_scan_kernel(limits.scan_kernel);
-        set_plan_join_order(limits.plan_join_order);
     }
 
 
@@ -2020,6 +2041,8 @@ public:
     void set_optimizer_surface(const OptimizerSurface& surface) noexcept {
         set_optimizer_signals(surface.signals);
         set_plan_stats(surface.plan_stats);
+        if (surface.join_order != nullptr) join_order_ = surface.join_order;
+        if (surface.captured_plans != nullptr) captured_plans_ = surface.captured_plans;
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
         cabin_optimizer_view_latch_ = surface.view_latch;
@@ -2575,8 +2598,15 @@ private:
     // value and handed to each execution, which takes its own copy - so
     // one statement's spend never carries into the next.
     exec::Budget budget_;
-    // `join_order = planned` (CB-S2).
-    bool plan_join_order_ = true;
+    // `join_order` and the captured plans of `fixed` (CX-S0). **The
+    // instance's** where an `OptimizerSurface` handed them - a `SET
+    // JOIN_ORDER` on any core flips the one value every core's next compile
+    // reads, and every core captures into and runs from the one table; a
+    // dispatcher handed none points at its own.
+    std::atomic<exec::JoinOrder> own_join_order_{exec::JoinOrder::kPlanned};
+    std::atomic<exec::JoinOrder>* join_order_ = &own_join_order_;
+    exec::CapturedPlans own_captured_plans_;
+    exec::CapturedPlans* captured_plans_ = &own_captured_plans_;
     // `set_plan_stats`': the instance's store, and this core's view of it.
     stats::PlanStats* plan_stats_ = nullptr;
     stats::PlanStatsSource plan_source_;

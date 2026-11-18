@@ -750,7 +750,7 @@ TEST_F(PlanMemoTest, AHitCompilesTheOrderTheSearchChose) {
     EXPECT_EQ(Order(remembered), Order(searched));
     EXPECT_EQ(Order(remembered), (std::vector<std::uint32_t>{1, 0}));
     ASSERT_TRUE(remembered.plan_note.has_value());
-    EXPECT_TRUE(remembered.plan_note->from_memo);
+    EXPECT_EQ(remembered.plan_note->source, exec::PlanSource::kMemo);
     EXPECT_EQ(remembered.steps[1].build.has_value(), searched.steps[1].build.has_value());
 }
 

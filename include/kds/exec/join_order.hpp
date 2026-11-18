@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <string_view>
 
 #include "kds/catalog/schema.hpp"
 #include "kds/exec/budget.hpp"
@@ -48,8 +50,38 @@ inline constexpr double kOtherSelectivity = 0.5;
 inline constexpr double kBuildInsertCost = 2.0;
 inline constexpr double kBuildProbeCost = 1.0;
 
+// **`join_order`, the instance's one switch over who may change a plan**
+// (CX-S0, instructions/v3.2.0/workorder-cx-managed-plans.md CX-R1, CX-R10):
+//   - `written`: every block runs the order the statement wrote;
+//   - `fixed`: a shape's first priced search is captured and every later
+//     compile of the shape runs it, whatever the statistics do after
+//     (`captured_plans.hpp`);
+//   - `planned`: the search runs at every compile, so a plan moves when the
+//     statistics move (CB-S2, CC).
+// The boot key and `SET JOIN_ORDER` set it; a server's default is `fixed`.
+enum class JoinOrder : std::uint8_t { kWritten, kFixed, kPlanned };
+
+constexpr std::string_view JoinOrderName(JoinOrder value) noexcept {
+    switch (value) {
+        case JoinOrder::kWritten: return "written";
+        case JoinOrder::kFixed: return "fixed";
+        case JoinOrder::kPlanned: return "planned";
+    }
+    return "?";
+}
+
+// The value `text` names, in lower case as the config file and the manual
+// write it, or nullopt.
+constexpr std::optional<JoinOrder> ParseJoinOrder(std::string_view text) noexcept {
+    for (const JoinOrder value : {JoinOrder::kWritten, JoinOrder::kFixed, JoinOrder::kPlanned}) {
+        if (text == JoinOrderName(value)) return value;
+    }
+    return std::nullopt;
+}
+
 // The statement limits the planner prices against, handed to `Compile` by a
-// client's SELECT under `join_order = planned` (CB-S2, CC-S1).
+// client's SELECT under `join_order = planned` or `fixed` (CB-S2, CC-S1,
+// CX-S0); under `written` none is handed.
 struct PlanOptions {
     // The core's view of the published statistics (CC-S3), or null: the
     // compile pins it only for a block it searches, so a point read and a
@@ -58,6 +90,10 @@ struct PlanOptions {
     // The core's order memo (CC-S4, plan_memo.hpp), or null: every searched
     // block searches.
     class PlanMemo* memo = nullptr;
+    // The instance's captured plans, set under `join_order = fixed` and
+    // only there (CX-R7): a searched block runs its shape's captured order
+    // where one is held, and its search's answer is captured otherwise.
+    class CapturedPlans* captured = nullptr;
     // `join_build_max_rows`: a build the model expects to bucket more rows
     // is priced as the per-row walk the executor falls back to; 0, no build.
     std::size_t join_build_max_rows = kDefaultJoinBuildMaxRows;

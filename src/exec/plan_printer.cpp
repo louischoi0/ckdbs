@@ -327,16 +327,37 @@ std::string FormatPlan(const StepChain& chain) {
     // the written order's.
     // Each estimate is labelled with its step's id - its written position -
     // in executed order; one past 2^63 prints as that bound.
+    //
+    // Under `join_order = fixed` (CX-S0) the line also says what became of
+    // the capture: `order=captured` for a shape's captured order, which was
+    // not priced at this compile and so prints no estimate; `capture=first`
+    // on the search whose answer was captured, `capture=deferred` on one
+    // that was not; and `order=written capture=unkeyed|refused|uncompiled`
+    // for a block that ran as written without a search.
     if (chain.plan_note.has_value()) {
         const PlanNote& note = *chain.plan_note;
-        os << "planned order=" << (note.from_memo ? "memo" : reordered ? "planned" : "written")
-           << " gen=" << note.generation
-           << " switch=" << note.cost_ratio << " est=";
-        for (std::size_t i = 0; i < note.estimated_rows.size() && i < chain.steps.size(); ++i) {
-            constexpr double kMaxPrinted = 9.2e18;
-            const double rows = std::min(std::max(note.estimated_rows[i], 0.0), kMaxPrinted);
-            os << (i == 0 ? "" : ",") << chain.steps[i].step_id << ':'
-               << static_cast<std::uint64_t>(rows + 0.5);
+        os << "planned order=";
+        const auto priced = [&](std::string_view capture) {
+            os << (note.source == PlanSource::kMemo ? "memo" : reordered ? "planned" : "written")
+               << " gen=" << note.generation << " switch=" << note.cost_ratio << " est=";
+            for (std::size_t i = 0; i < note.estimated_rows.size() && i < chain.steps.size();
+                 ++i) {
+                constexpr double kMaxPrinted = 9.2e18;
+                const double rows = std::min(std::max(note.estimated_rows[i], 0.0), kMaxPrinted);
+                os << (i == 0 ? "" : ",") << chain.steps[i].step_id << ':'
+                   << static_cast<std::uint64_t>(rows + 0.5);
+            }
+            if (!capture.empty()) os << " capture=" << capture;
+        };
+        switch (note.source) {
+            case PlanSource::kSearched:
+            case PlanSource::kMemo: priced(""); break;
+            case PlanSource::kCapturing: priced("first"); break;
+            case PlanSource::kDeferred: priced("deferred"); break;
+            case PlanSource::kCaptured: os << "captured"; break;
+            case PlanSource::kUnkeyed: os << "written capture=unkeyed"; break;
+            case PlanSource::kOverCeiling: os << "written capture=refused"; break;
+            case PlanSource::kUncompiled: os << "written capture=uncompiled"; break;
         }
         os << '\n';
     }

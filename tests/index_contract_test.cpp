@@ -90,6 +90,10 @@ public:
     void Learn(const std::vector<std::string>& sqls) {
         testing_plan::LearnPlanStats(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);
     }
+    // `join_order = fixed` with every searched shape of `sqls` captured (CX-S0).
+    void Capture(const std::vector<std::string>& sqls) {
+        testing_plan::CapturePlans(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);
+    }
 
 private:
     storage::InMemoryPageStore store_{kFirstUserPageId};
@@ -328,6 +332,36 @@ TEST(IndexContractTest, EveryConfigurationReturnsTheSameRowsUnderLearnedStatisti
     LoadPlain(plain);
     LoadRebuilt(rebuilt);
     for (Instance* db : {&maintained, &backfilled, &ignored, &plain, &rebuilt}) db->Learn(Queries());
+
+    using testing_reply::Unordered;
+    for (const std::string& sql : Queries()) {
+        const std::string expected = Unordered(plain.Run(sql), sql);
+        EXPECT_EQ(Unordered(maintained.Run(sql), sql), expected) << "write-hook-filled index: " << sql;
+        EXPECT_EQ(Unordered(backfilled.Run(sql), sql), expected) << "backfilled index: " << sql;
+        EXPECT_EQ(Unordered(ignored.Run(sql), sql), expected) << "indexes = off: " << sql;
+        EXPECT_EQ(Unordered(rebuilt.Run(sql), sql), expected) << "rebuilt index: " << sql;
+    }
+}
+
+// CX-S0: the same five configurations under `join_order = fixed`, the
+// server's default, each with its searched shapes' orders captured. An
+// order is captured per instance, so two configurations may hold different
+// ones for a shape - `indexes = off` prices no index arm - and the rows
+// still agree.
+TEST(IndexContractTest, EveryConfigurationReturnsTheSameRowsUnderCapturedPlans) {
+    Instance maintained(/*indexes=*/true);
+    Instance backfilled(/*indexes=*/true);
+    Instance ignored(/*indexes=*/false);
+    Instance plain(/*indexes=*/true);
+    Instance rebuilt(/*indexes=*/true);
+    LoadMaintained(maintained);
+    LoadBackfilled(backfilled);
+    LoadMaintained(ignored);
+    LoadPlain(plain);
+    LoadRebuilt(rebuilt);
+    for (Instance* db : {&maintained, &backfilled, &ignored, &plain, &rebuilt}) {
+        db->Capture(Queries());
+    }
 
     using testing_reply::Unordered;
     for (const std::string& sql : Queries()) {

@@ -438,14 +438,12 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
     if (file.Has("join_order")) {
         auto v = file.GetString("join_order");
         if (!v.ok()) return v.status();
-        if (v.value() == "planned") {
-            plan_join_order = true;
-        } else if (v.value() == "written") {
-            plan_join_order = false;
-        } else {
-            return Status::InvalidArgument("join_order must be 'planned' or 'written', not '" +
-                                           v.value() + "'");
+        const std::optional<exec::JoinOrder> parsed = exec::ParseJoinOrder(v.value());
+        if (!parsed.has_value()) {
+            return Status::InvalidArgument(
+                "join_order must be 'planned', 'fixed' or 'written', not '" + v.value() + "'");
         }
+        join_order = *parsed;
     }
     // 0 is the off-switch, not a refusal: no statement is refused by
     // this knob at any value. The semantics have one home, at
@@ -1305,6 +1303,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->optimizer_signals_->SetLatch(&expeditor->optimizer_signals_latch_);
     }
     expeditor->cabin_optimizer_on_.store(expeditor->config_.cabin_optimizer);
+    expeditor->join_order_.store(expeditor->config_.join_order);
     // S4 (CJ WE13) counts only while the controller's own switch is on.
     expeditor->optimizer_signals_->set_wait_gate(&expeditor->cabin_optimizer_on_);
     expeditor->plan_stats_.emplace(expeditor->config_.cores);
@@ -1396,6 +1395,8 @@ OptimizerSurface Expeditor::Optimizer() {
     OptimizerSurface surface;
     surface.signals = &*optimizer_signals_;
     surface.plan_stats = &*plan_stats_;
+    surface.join_order = &join_order_;
+    surface.captured_plans = &captured_plans_;
     surface.cabin_optimizer_on = &cabin_optimizer_on_;
     if (cabin_controller_) {
         surface.controller = &*cabin_controller_;

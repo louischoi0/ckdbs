@@ -47,7 +47,11 @@ planner chooses which relation is the inner step - the one whose build its
 cost model prices cheapest, and a build it expects past `join_build_max_rows`
 is priced as the per-row walk it falls back to. §3 below is the argument for
 the build inside one chain; the chain's order is no longer written order
-(`parser-v2.md` I12).
+(`parser-v2.md` I12). **Under `join_order = fixed` (CX-S0) the side is
+fixed with the order**: a captured order names which relation is inside,
+and the annotation is the compile's again at every compile given that
+order, so the build side of a captured shape moves only with the catalog
+or `join_build_max_rows`, never with the statistics.
 
 ## 3. Why this does not break the chain's contract
 

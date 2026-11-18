@@ -86,6 +86,10 @@ public:
     void Learn(const std::vector<std::string>& sqls) {
         testing_plan::LearnPlanStats(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);
     }
+    // `join_order = fixed` with every searched shape of `sqls` captured (CX-S0).
+    void Capture(const std::vector<std::string>& sqls) {
+        testing_plan::CapturePlans(*dispatcher_, plan_stats_, boot_->catalog, store_, sqls);
+    }
 
 private:
     storage::InMemoryPageStore store_{kFirstUserPageId};
@@ -295,6 +299,16 @@ TEST(CabinContractTest, ServingFromACabinUnderLearnedStatisticsChangesNoReply) {
     DeclareCabins(db);
     db.Learn(Queries());
     ExpectSame(RunAll(db, 4), Reference(), "cabins serving, statistics learned");
+}
+
+// CX-S0: and under `join_order = fixed`, the server's default, with every
+// searched shape's order captured.
+TEST(CabinContractTest, ServingFromACabinUnderCapturedPlansChangesNoReply) {
+    Instance db(/*cabins=*/true);
+    Load(db);
+    DeclareCabins(db);
+    db.Capture(Queries());
+    ExpectSame(RunAll(db, 4), Reference(), "cabins serving, plans captured");
 }
 
 TEST(CabinContractTest, DroppingACabinMidRunChangesNoReply) {
