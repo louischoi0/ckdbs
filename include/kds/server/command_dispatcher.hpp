@@ -1578,9 +1578,10 @@ private:
     // The `<select>` a plan statement holds at `[at, at + size)` of `line`,
     // as every layer below sees it - the rest of the command blanked, so a
     // byte any of them names is the command's own: refused where it is no
-    // SELECT, or holds a `?` (by example, with literals).
+    // SELECT (`<head> takes a SELECT`), or holds a `?` (by example, with
+    // literals).
     StatusOr<std::string> PlanExampleText(std::string_view line, std::size_t at,
-                                          std::size_t size, std::string_view command);
+                                          std::size_t size, std::string_view head);
     // The `IS` of every relation `key` names, taken into `hold` and kept
     // until it is destroyed: what keeps a `DROP TABLE` from committing
     // under a plan DDL's install. A plan DDL is not a read that must never

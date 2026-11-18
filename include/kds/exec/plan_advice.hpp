@@ -30,8 +30,6 @@ namespace kds::exec {
 
 struct PlanAdvice {
     CapturedKey key;
-    // The statement's bindings in written order, as `CREATE PLAN` names them.
-    std::vector<std::string> bindings;
     // Where the plan in force comes from (CX-Q32): `admin <plan>/<variant>`,
     // `captured`, `uncaptured` (a `fixed` shape the next compile captures),
     // `searched` (`planned`), or `written`.
@@ -42,9 +40,14 @@ struct PlanAdvice {
     CapturedOrder order{};       // the proposal, written positions in executed order
     double cost_ratio = 1.0;     // the proposal's cost over the plan in force's
     std::uint64_t generation = 0;  // the statistics generation the search read
-    std::string proposal;        // `CREATE PLAN ...` over the shape text
+    // `CREATE PLAN ...` over the shape text; empty where `CREATE PLAN` would
+    // refuse the statement (CX-Q33 (a)).
+    std::string proposal;
     std::int64_t advised_at_us = 0;
 };
+
+// A cost ratio as the reply and the view print it: three decimals.
+std::string RatioText(double ratio);
 
 class PlanAdvices {
 public:

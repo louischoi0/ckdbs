@@ -1,9 +1,17 @@
 #include "kds/exec/plan_advice.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <string>
 #include <utility>
 
 namespace kds::exec {
+
+std::string RatioText(double ratio) {
+    char text[32];
+    std::snprintf(text, sizeof text, "%.3f", ratio);
+    return text;
+}
 
 void PlanAdvices::Record(PlanAdvice advice) {
     const LatchGuard hold(&latch_);

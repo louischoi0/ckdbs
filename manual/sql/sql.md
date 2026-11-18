@@ -1328,10 +1328,13 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
     `in_force` says which plan it was compared with: your own plan
     (`admin:<plan>/<variant>`), the order fixed at the statement's first
     run (`captured`), or the order as written. Nothing is applied until
-    you run the `CREATE PLAN` it gives you. Each statement shape's latest
+    you run the `CREATE PLAN` it gives you; a statement has one plan, so if
+    it already has one of yours, `DROP PLAN` that first. Each statement shape's latest
     advice is in `SELECT * FROM sys.plan_advice` until the server
     restarts. A statement over one table has no join order and is
-    refused.
+    refused. Where the engine would not reorder a join at all, the reply
+    says why (`why=`), and for a join with a subquery in its `WHERE` -
+    which `CREATE PLAN` does not take - it gives no `CREATE PLAN` text.
   - `ALTER PLAN <name> DISABLE` stops using a plan without removing it;
     `ENABLE` uses it again. `ALTER PLAN <name> REPLACE VARIANT <v> WHEN
     <rule> ORDER (...)` (or `... ELSE ORDER (...)`) changes one variant.

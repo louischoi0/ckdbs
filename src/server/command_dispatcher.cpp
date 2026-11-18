@@ -32,7 +32,6 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
-#include <cstdio>
 #include <cstring>
 #include <charconv>
 #include <ctime>
@@ -1663,7 +1662,11 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(SplitFirstToken(rest).first, "PLAN")) {
             return HandleAdvisePlan(Trim(line), session);
         }
-        return {"ERR only ADVISE PLAN FOR <select> is supported", false};
+        const std::string_view head = Trim(line);
+        const std::string_view target = Trim(SplitFirstToken(head).second);
+        return Refused(Status::InvalidArgument(
+            "only ADVISE PLAN FOR <select> is supported (byte " +
+            std::to_string(target.data() - head.data()) + ")"));
     }
     if (IEquals(cmd, "DROP")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
@@ -13176,7 +13179,7 @@ Status CommandDispatcher::HoldPlanRelations(const exec::CapturedKey& key,
 
 StatusOr<std::string> CommandDispatcher::PlanExampleText(std::string_view line, std::size_t at,
                                                          std::size_t size,
-                                                         std::string_view command) {
+                                                         std::string_view head) {
     // The command's text with everything around the SELECT blanked, so a
     // byte a parser or the compiler names is the command's own
     // (`HandleWaystone`'s shape).
@@ -13185,9 +13188,10 @@ StatusOr<std::string> CommandDispatcher::PlanExampleText(std::string_view line, 
     std::fill(padded.begin(), begin, ' ');
     std::fill(begin + static_cast<std::ptrdiff_t>(size), padded.end(), ' ');
     if (!IEquals(SplitFirstToken(Trim(padded)).first, "SELECT")) {
-        return Status::InvalidArgument(std::string(command) + " ... FOR takes a SELECT" +
-                                       ByteSuffix(at));
+        return Status::InvalidArgument(std::string(head) + " takes a SELECT" + ByteSuffix(at));
     }
+    // The statement's two words, `CREATE PLAN` or `ADVISE PLAN`.
+    const std::string_view command = head.substr(0, head.find(' ', head.find(' ') + 1));
     parser::Lexer lexer(padded);
     for (parser::Token tok = lexer.Next(); tok.type != parser::TokenType::kEof;
          tok = lexer.Next()) {
@@ -13228,7 +13232,8 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
             ByteSuffix(create.name_at)));
     }
 
-    auto example = PlanExampleText(line, create.statement_at, create.statement_size, "CREATE PLAN");
+    auto example = PlanExampleText(line, create.statement_at, create.statement_size,
+                                   "CREATE PLAN ... FOR");
     if (!example.ok()) return Refused(example.status());
     const std::string& padded = example.value();
     parser::Parser parser(padded);
@@ -13520,7 +13525,7 @@ DispatchOutcome CommandDispatcher::HandleAdvisePlan(std::string_view line, Sessi
     auto ddl = exec::ParseAdvisePlan(line);
     if (!ddl.ok()) return Refused(ddl.status());
     const std::size_t at = ddl.value().statement_at;
-    auto example = PlanExampleText(line, at, ddl.value().statement_size, "ADVISE PLAN");
+    auto example = PlanExampleText(line, at, ddl.value().statement_size, "ADVISE PLAN FOR");
     if (!example.ok()) return Refused(example.status());
     const std::string& padded = example.value();
     parser::Parser parser(padded);
@@ -13528,7 +13533,7 @@ DispatchOutcome CommandDispatcher::HandleAdvisePlan(std::string_view line, Sessi
     if (!parsed.ok()) return Refused(parsed.status());
     const auto fingerprint = parser.fingerprint();
     if (!std::holds_alternative<parser::SelectStmt>(parsed.value()) || !fingerprint.has_value()) {
-        return Refused(Status::InvalidArgument("ADVISE PLAN ... FOR takes one SELECT" +
+        return Refused(Status::InvalidArgument("ADVISE PLAN FOR takes one SELECT" +
                                                ByteSuffix(at)));
     }
     const auto& stmt = std::get<parser::SelectStmt>(parsed.value());
@@ -13584,11 +13589,12 @@ DispatchOutcome CommandDispatcher::HandleAdvisePlan(std::string_view line, Sessi
         if (const auto captured = captured_plans_->Find(key); captured.has_value()) {
             in_force_order = *captured;
             in_force = "captured";
-        } else {
+        } else if (!captured_plans_->full()) {
             // The next compile searches and captures: the search's answer.
             in_force = "uncaptured";
             priced_against = false;
         }
+        // Past the ceiling a new shape runs as written (CX-Q21): `written`.
     } else if (join_order == exec::JoinOrder::kPlanned) {
         in_force = "searched";
         priced_against = false;
@@ -13609,37 +13615,42 @@ DispatchOutcome CommandDispatcher::HandleAdvisePlan(std::string_view line, Sessi
 
     exec::PlanAdvice advice;
     advice.key = key;
-    advice.bindings = bindings;
     const std::optional<exec::PlanNote>& note = advised.value().plan_note;
     advice.searched = note.has_value();
     for (std::size_t k = 0; k < bindings.size(); ++k) {
         advice.order[k] = static_cast<std::uint8_t>(advised.value().steps[k].step_id);
     }
+    // CX-Q33 (a): why the search did not order the block - a block
+    // `CREATE PLAN` takes (tuple key descents alone) is advised its written
+    // order and a plan text; one it refuses (a subquery predicate) gets the
+    // reason and no text, so the engine never proposes a plan it refuses.
+    std::string why;
+    bool plannable = true;
     if (note.has_value()) {
         advice.cost_ratio = note->in_force_ratio.value_or(1.0);
         advice.generation = note->generation;
-    } else if (managed == nullptr) {
-        // CX-Q33 (a): a block the search never orders runs as written.
-        in_force = "written";
+    } else {
+        if (managed == nullptr) in_force = "written";  // the block runs as written
+        const Status refusal = exec::PlannableBlock(stmt);
+        plannable = refusal.ok();
+        why = plannable ? "a chain of tuple key descents is not searched"
+                        : std::string(refusal.message());
     }
     advice.in_force = in_force;
     advice.advised_at_us = exec::StatementContextNow().now_us;
-    char fetch_hex[17];
-    std::snprintf(fetch_hex, sizeof fetch_hex, "%016llx",
-                  static_cast<unsigned long long>(key.fetch_id));
     const auto plan_text = [&](std::string_view statement) {
-        return "CREATE PLAN advised_" + std::string(fetch_hex) + " FOR " + std::string(statement) +
-               " VARIANT advised ELSE ORDER " + OrderText(advice.order, bindings);
+        return "CREATE PLAN advised_" + std::to_string(key.fetch_id) + " FOR " +
+               std::string(statement) + " VARIANT advised ELSE ORDER " +
+               OrderText(advice.order, bindings);
     };
-    advice.proposal = plan_text(parser::ShapeText(padded));
-    char ratio[32];
-    std::snprintf(ratio, sizeof ratio, "%.3f", advice.cost_ratio);
+    if (plannable) advice.proposal = plan_text(parser::ShapeText(padded));
     std::string reply = "ADVISED PLAN fetch_id=" + std::to_string(key.fetch_id) +
                         " in_force=" + in_force + " searched=" + (advice.searched ? "1" : "0") +
-                        " cost_ratio=" + ratio + " generation=" +
-                        std::to_string(advice.generation) +
-                        " order=" + OrderText(advice.order, bindings) +
-                        " plan=" + plan_text(Trim(padded));
+                        " cost_ratio=" + exec::RatioText(advice.cost_ratio) +
+                        " generation=" + std::to_string(advice.generation) +
+                        " order=" + OrderText(advice.order, bindings);
+    if (!why.empty()) reply += " why=" + why;
+    if (plannable) reply += " plan=" + plan_text(Trim(padded));
     plan_advices_->Record(std::move(advice));
     return {reply, false};
 }

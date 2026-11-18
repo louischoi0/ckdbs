@@ -3,7 +3,6 @@
 #include <cmath>
 #include <algorithm>
 #include <cctype>
-#include <cstdio>
 #include <initializer_list>
 #include <limits>
 #include <span>
@@ -872,7 +871,6 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
     if (!rows.ok()) return rows.status();
     auto labels = RelationLabels::Read(catalog_, nullptr);
     if (!labels.ok()) return labels.status();
-    const auto label = [&](catalog::Oid oid) { return labels.value().Qualified(oid); };
     for (const exec::PlanRow& plan : rows.value()) {
         const parser::AstValue origin = Str(plan.captured ? "captured" : "admin");
         if (!plan.readable) {
@@ -913,8 +911,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
                 relations += ", ";
                 join_order += ", ";
             }
-            relations += label(plan.key.oids[i]);
-            join_order += label(plan.key.oids[order[i]]);
+            relations += labels.value().Qualified(plan.key.oids[i]);
+            join_order += labels.value().Qualified(plan.key.oids[order[i]]);
         }
         view.rows.push_back({Int(plan.id), Str(plan.name), origin, Str(std::string(state)),
                              Int(plan.key.fetch_id), Str(relations), Str(join_order), variants,
@@ -954,12 +952,12 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlanAdviceView() {
             relations += labels.value().Qualified(advice.key.oids[i]);
             order += labels.value().Qualified(advice.key.oids[advice.order[i]]);
         }
-        char ratio[32];
-        std::snprintf(ratio, sizeof ratio, "%.3f", advice.cost_ratio);
+        // No proposal where `CREATE PLAN` would refuse the statement.
         view.rows.push_back({Int(advice.key.fetch_id), Str(relations), Str(advice.in_force),
-                             Bool(advice.searched), Str(order), Str(ratio),
+                             Bool(advice.searched), Str(order),
+                             Str(exec::RatioText(advice.cost_ratio)),
                              Int(advice.generation), Timestamp(advice.advised_at_us),
-                             Str(advice.proposal)});
+                             advice.proposal.empty() ? Null() : Str(advice.proposal)});
     }
     return view;
 }

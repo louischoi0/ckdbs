@@ -182,6 +182,19 @@ StatusOr<PlanVariantSpec> ParseVariant(parser::Lexer& lexer) {
     return variant;
 }
 
+// Every token of `line`, an unreadable character refused at its byte.
+StatusOr<std::vector<Token>> LexAll(std::string_view line) {
+    std::vector<Token> tokens;
+    parser::Lexer lexer(line);
+    for (Token tok = lexer.Next(); tok.type != TokenType::kEof; tok = lexer.Next()) {
+        if (tok.type == TokenType::kError) {
+            return Status::InvalidArgument("unreadable character" + At(tok));
+        }
+        tokens.push_back(tok);
+    }
+    return tokens;
+}
+
 // What may follow a statement's last clause: one `;`, then nothing.
 Status ExpectEnd(parser::Lexer& lexer, std::string_view what) {
     Token tok = lexer.Next();
@@ -195,14 +208,9 @@ Status ExpectEnd(parser::Lexer& lexer, std::string_view what) {
 }  // namespace
 
 StatusOr<AdvisePlanStmt> ParseAdvisePlan(std::string_view line) {
-    std::vector<Token> tokens;
-    parser::Lexer lexer(line);
-    for (Token tok = lexer.Next(); tok.type != TokenType::kEof; tok = lexer.Next()) {
-        if (tok.type == TokenType::kError) {
-            return Status::InvalidArgument("unreadable character" + At(tok));
-        }
-        tokens.push_back(tok);
-    }
+    auto lexed = LexAll(line);
+    if (!lexed.ok()) return lexed.status();
+    const std::vector<Token>& tokens = lexed.value();
     // ADVISE PLAN FOR: tokens 0..2, the routing having read the first two.
     if (tokens.size() < 3 || !IsIdent(tokens[2], "FOR")) {
         return Status::InvalidArgument(
@@ -225,16 +233,9 @@ StatusOr<CreatePlanStmt> ParseCreatePlan(std::string_view line) {
     CreatePlanStmt stmt;
     // Every token, so the statement's end can be found before anything
     // parses it.
-    std::vector<Token> tokens;
-    {
-        parser::Lexer lexer(line);
-        for (Token tok = lexer.Next(); tok.type != TokenType::kEof; tok = lexer.Next()) {
-            if (tok.type == TokenType::kError) {
-                return Status::InvalidArgument("unreadable character" + At(tok));
-            }
-            tokens.push_back(tok);
-        }
-    }
+    auto lexed = LexAll(line);
+    if (!lexed.ok()) return lexed.status();
+    const std::vector<Token>& tokens = lexed.value();
     {
         parser::Lexer head(line);
         if (Status s = ParseHead(head, "CREATE", stmt.name, stmt.name_at); !s.ok()) return s;

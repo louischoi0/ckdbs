@@ -2816,11 +2816,14 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     }
     const bool reordered = cheapest.has_value();
     StepChain chosen = reordered ? std::move(*cheapest) : std::move(best.value());
+    // The written position of the chosen chain's k-th step: what the memo,
+    // the capture and an advice hold of the order.
+    const auto written_position = [&](std::size_t k) {
+        return static_cast<std::uint8_t>(chosen.steps[k].step_id - base_step_id);
+    };
     if (memo != nullptr && !from_memo) {
         std::array<std::uint8_t, stats::kMaxPosteriorRelations> remembered{};
-        for (std::size_t k = 0; k < chosen.steps.size(); ++k) {
-            remembered[k] = static_cast<std::uint8_t>(chosen.steps[k].step_id - base_step_id);
-        }
+        for (std::size_t k = 0; k < chosen.steps.size(); ++k) remembered[k] = written_position(k);
         memo->Store(memo_key, remembered);
     }
     PlanSource source = from_memo ? PlanSource::kMemo : PlanSource::kSearched;
@@ -2840,9 +2843,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             source = PlanSource::kDeferred;
         } else {
             CapturedOrder mine{};
-            for (std::size_t k = 0; k < chosen.steps.size(); ++k) {
-                mine[k] = static_cast<std::uint8_t>(chosen.steps[k].step_id - base_step_id);
-            }
+            for (std::size_t k = 0; k < chosen.steps.size(); ++k) mine[k] = written_position(k);
             const auto in_force = captured->Capture(captured_key, mine, plan->statement);
             if (!in_force.has_value() || *in_force != mine) {
                 // The written order's chain: `chosen` itself, or `best`,
@@ -2882,10 +2883,15 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         const std::vector<std::size_t> perm(plan->advise_against->begin(),
                                             plan->advise_against->begin() + refs.size());
         std::vector<std::size_t> chosen_order;
-        for (const Step& step : chosen.steps) chosen_order.push_back(step.step_id - base_step_id);
+        for (std::size_t k = 0; k < chosen.steps.size(); ++k) {
+            chosen_order.push_back(written_position(k));
+        }
+        // An unpinned order the search already compiled is priced as it was.
         double in_force_cost = written_cost;
         if (perm == chosen_order && plan->advise_pins == nullptr) {
             in_force_cost = chosen_cost;
+        } else if (perm == written && plan->advise_pins == nullptr) {
+            in_force_cost = written_cost;
         } else if (auto in_force = compile_order(perm, plan->advise_pins);
                    in_force.ok() &&
                    AddedSortCannotRefuse(in_force.value(), written_sorted, plan->sort_max_rows)) {

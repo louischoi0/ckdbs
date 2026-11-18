@@ -2056,7 +2056,7 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   `exec/admin_plans.hpp`.
 
 - **A block run in an order other than its written one compiles twice,
-  and there is no plan cache.** Verified at CX-S6 on
+  and there is no plan cache.** Verified at CX-S6 (`29401d0f`) on
   `cx-plan-change-option` (`bench/v3.4.12/results-cx-s6-compile-share-v3.4.12-112-g9712f5f0.md`
   §7). `CompileBlock` compiles the written order first - its refusal is
   the statement's and it is the decline's fallback - and then the order in

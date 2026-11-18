@@ -298,7 +298,7 @@ All times in µs, medians of the five rounds. `spike` is `delta(spike_compile_ns
 |---|---|---|---|---|---|---|
 | 1 pk point read | 40.2 | 1.12 | 3.53 | 2.41 | 2.8 % (2.75-2.89) | 15.1 % |
 | 2 two-relation join, captured | 99.3 | 3.50 | 8.17 | 4.67 | 3.5 % (3.44-3.59) | 6.7 % |
-| 3 three-relation join, captured | 131.5 | 4.42 | 10.31 | 5.88 | 3.4 % (3.31-3.38) | 5.3 % |
+| 3 three-relation join, captured | 131.5 | 4.42 | 10.31 | 5.88 | 3.36 % (3.31-3.38) | 5.3 % |
 | 4 cell 2 under a 2-variant plan | 109.8 | 6.22 | 11.02 | 4.81 | **5.7 %** (5.60-5.75) | 9.9 % |
 | 5 one-relation plan, `SCAN` pin | 45.5 | 2.01 | 4.55 | 2.54 | 4.4 % (4.37-4.43) | 15.0 % |
 | 5b control, no plan | 44.7 | 1.29 | 3.82 | 2.53 | 2.9 % (2.84-2.94) | 10.2 % |
@@ -309,7 +309,7 @@ All times in µs, medians of the five rounds. `spike` is `delta(spike_compile_ns
 |---|---|---|---|---|---|---|
 | 1 pk point read | 51.1 | 1.80 | 5.30 | 3.50 | 3.5 % (3.51-3.54) | 15.2 % |
 | 2 two-relation join, captured | 161.2 | 6.62 | 14.47 | 7.85 | 4.1 % (4.09-4.16) | 8.0 % |
-| 3 three-relation join, captured | 204.2 | 8.26 | 17.93 | 9.67 | 4.0 % (4.05-4.10) | 6.7 % |
+| 3 three-relation join, captured | 204.2 | 8.26 | 17.93 | 9.67 | 4.05 % (4.05-4.10) | 6.7 % |
 | 4 cell 2 under a 2-variant plan | 174.0 | 10.89 | 18.94 | 8.04 | **6.3 %** (6.23-6.28) | 11.4 % |
 | 5 one-relation plan, `SCAN` pin | 60.7 | 3.21 | 6.98 | 3.76 | **5.3 %** (5.26-5.32) | 14.6 % |
 | 5b control, no plan | 58.6 | 1.95 | 5.59 | 3.64 | 3.3 % (3.32-3.34) | 9.6 % |
@@ -323,7 +323,7 @@ Server `total_us` per call behind the last column (µs): `cores = 1` 7.37, 51.86
 - **What the parse side costs.** `front` is 2.4 to 9.7 µs and larger than the spike in every cell but cell 4 (where the spike is the larger, 6.2 against 4.8 µs and 10.9 against 8.0 µs): the lex, fingerprint, parse, borrow and resolution are 54 % to 68 % of `compile_us` in cells 1, 2, 3, 5 and 5b, and 42 % to 44 % in cell 4. A cache keyed by the fetch id pays all of `front`; it can remove only the spike column.
 - **Where the removable time is.** The plan cells carry more of it: cell 4's spike is 1.8x cell 2's (a variant is chosen at every compile, including `AdminPlan::Choose`'s second lex, and about half the literals compile a reordered block, whose written order compiles first, §7); cell 5's is 1.6x its twin's (the plan table's lookup plus the pinned arm's legality check). §7's hot loop understated cell 4 by about 2x (4.2 µs in the loop against 6.2 µs here, `cores = 1`).
 - **What the cell does not say.** It is a ceiling on removal, not a measured saving: a cache's own lookup, the rebinding of a cached chain's literals and the invalidation test are not subtracted. The client is Python and contributes 33 to 36 µs of every p50; a native client moves every client-p50 share up (the server-time column is that bound). `cores = 2`'s per-call spike is 1.5x to 1.8x `cores = 1`'s in every cell, in the compile itself; the cause was not investigated.
-- **For CX-Q37.** (a) as adopted (the removable compile against the client's p50, line at 5 %, `cores = 1`) is **crossed by one cell of six, cell 4 at 5.7 %**; the other five are 2.8 % to 4.4 %. So §7's "no shape reaches 5 %" holds for five of six and fails for the multi-variant plan, the shape the cache's variant key exists for. Cells 1, 2, 3 and 5b are under by 1.5 to 2.2 points, outside the floor. Against the server's time (CX-Q37 (c)) all six cross. Whether one crossing cell justifies a cache is the operator's choice among (a), (b), (c); this run settles the measurement, not that. A cheaper route to part of cell 4's cost is not a cache: the known second lex in `AdminPlan::Choose` (`known-gaps.md`).
+- **For CX-Q37.** (a) as adopted (the removable compile against the client's p50, line at 5 %, `cores = 1`) is **crossed by one cell of six, cell 4 at 5.7 %**; the other five are 2.8 % to 4.4 %. So §7's "no shape reaches 5 %" holds for five of six and fails for the multi-variant plan, the shape the cache's variant key exists for. Cells 1, 2, 3 and 5b are under by 1.5 to 2.2 points, outside the floor. Against the server's time (CX-Q37 (c)) all six cross. *(Added after the run: CX-Q37 (a) was revised to these numbers and adopted on the standing go-ahead - no cache built, the crossing cells being a plan's own extra work; (b), a cache for planned statements, and (c), the line against server time, stay with the operator.)* A cheaper route to part of cell 4's cost is not a cache: the known second lex in `AdminPlan::Choose` (`known-gaps.md`).
 
 ### What was cut
 

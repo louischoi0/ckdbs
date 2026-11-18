@@ -850,7 +850,95 @@ TEST_F(AdminPlanTest, AdviceUnderEveryJoinOrderAndWhatItCannotAdvise) {
     EXPECT_EQ(CodeOf("ADVISE PLAN FOR SELECT results.pnl FROM results JOIN nowhere ON "
                      "results.model_id = nowhere.id"),
               StatusCode::kNotFound);
-    EXPECT_EQ(Run("ADVISE INDEX FOR " + sql).rfind("ERR only ADVISE PLAN", 0), 0u);
+    const DispatchOutcome other = Do("ADVISE INDEX FOR " + sql);
+    EXPECT_EQ(other.status.code(), StatusCode::kInvalidArgument) << other.response;
+    EXPECT_NE(other.response.find("only ADVISE PLAN FOR <select> is supported (byte 7)"),
+              std::string::npos)
+        << other.response;
+
+    // A join `CREATE PLAN` refuses is told why and given no plan text, so
+    // the engine never proposes a plan it would refuse (CX-Q33 (a)).
+    const std::string subquery =
+        Run("ADVISE PLAN FOR SELECT results.pnl, models.name FROM results JOIN models ON "
+            "results.model_id = models.id WHERE results.pnl IN (SELECT id FROM models)");
+    EXPECT_NE(subquery.find(" searched=0 cost_ratio=1.000 "), std::string::npos) << subquery;
+    EXPECT_NE(subquery.find(" why=a plan for this statement is not implemented: a block with a "
+                            "subquery predicate"),
+              std::string::npos)
+        << subquery;
+    EXPECT_EQ(subquery.find(" plan="), std::string::npos) << subquery;
+    EXPECT_NE(point.find(" why=a chain of tuple key descents is not searched plan=CREATE PLAN "),
+              std::string::npos)
+        << point;
+    EXPECT_NE(Run("SELECT searched, proposal FROM sys.plan_advice").find("0,NULL"),
+              std::string::npos);
+}
+
+// The reply's `cost_ratio`, or -1.
+double AdvisedRatio(const std::string& reply) {
+    const std::size_t at = reply.find(" cost_ratio=");
+    return at == std::string::npos ? -1.0 : std::stod(reply.substr(at + 12));
+}
+
+TEST_F(AdminPlanTest, AdviceIsPricedAgainstThePinsAndTheDeclineOfThePlanInForce) {
+    const std::string sql = Where("5");
+    // The written order unpinned, then with models kept from its tuple key
+    // probe: the same order under another pin is another chain and another
+    // price, so the ratio moves - the pins were priced, not just the order.
+    Ok("CREATE PLAN p FOR " + sql + std::string(kAsWritten));
+    const double unpinned = AdvisedRatio(Run("ADVISE PLAN FOR " + sql));
+    Ok("DROP PLAN p");
+    Ok("CREATE PLAN p FOR " + sql + std::string(kAsWritten) + " ACCESS models NOT TUPLE_KEY");
+    const std::uint64_t served = table().served();
+    const std::string pinned = Run("ADVISE PLAN FOR " + sql);
+    EXPECT_NE(pinned.find(" in_force=admin:p/as_written searched=1 "), std::string::npos) << pinned;
+    EXPECT_GT(unpinned, 0.0);
+    EXPECT_NE(AdvisedRatio(pinned), unpinned) << pinned;
+    EXPECT_EQ(table().served(), served) << "an advice counts in no plan counter";
+    Ok("DROP PLAN p");
+
+    // CC-Q10 per binding: a variant whose added sort this LIMIT does not
+    // bound is declined, so the written order is what runs and its price.
+    Ok("CREATE TABLE a (id int64, v int64) BTREE");
+    Ok("CREATE TABLE b (id int64, a_id int64) BTREE");
+    for (int i = 1; i <= 64; ++i) {
+        Ok("INSERT INTO a VALUES (" + std::to_string(i) + ", " + std::to_string(i) + ")");
+    }
+    for (int i = 1; i <= 16; ++i) {
+        Ok("INSERT INTO b VALUES (" + std::to_string(i) + ", " + std::to_string(i) + ")");
+    }
+    dispatcher_->set_sort_max_rows(10);
+    dispatcher_->set_join_build_max_rows(0);
+    const std::string head = "SELECT a.v, b.id FROM a JOIN b ON a.id = b.a_id ORDER BY a.id LIMIT ";
+    Ok("CREATE PLAN p FOR " + head + "5 VARIANT v ELSE ORDER (b, a)");
+    const std::string bounded = Run("ADVISE PLAN FOR " + head + "6");
+    EXPECT_NE(bounded.find(" in_force=admin:p/v searched=1 "), std::string::npos) << bounded;
+    EXPECT_LT(AdvisedRatio(bounded), 1.0) << bounded;
+    const std::uint64_t declined = table().declined();
+    const std::string wide = Run("ADVISE PLAN FOR " + head + "100");
+    EXPECT_NE(wide.find(" in_force=admin:p/v searched=1 cost_ratio=1.000 "), std::string::npos)
+        << wide;
+    EXPECT_NE(wide.find(" order=(a, b) "), std::string::npos) << wide;
+    EXPECT_EQ(table().declined(), declined);
+}
+
+TEST_F(AdminPlanTest, AdvicePastTheCaptureCeilingIsPricedAgainstTheWrittenOrder) {
+    // CX-Q21: past the ceiling a new shape runs as written under `fixed`,
+    // so that is the plan in force, not the search's answer.
+    exec::CapturedPlans& captured = dispatcher_->captured_plans();
+    exec::CapturedKey filler;
+    filler.n = 2;
+    for (std::uint64_t k = 1; captured.shapes() < exec::CapturedPlans::kMaxShapes; ++k) {
+        filler.fetch_id = k;
+        ASSERT_TRUE(captured.Capture(filler, exec::CapturedOrder{}).has_value());
+    }
+    ASSERT_TRUE(captured.full());
+    const std::string sql = Where("5");
+    ASSERT_NE(Plan(sql).find("planned order=written capture=over_ceiling"), std::string::npos);
+    const std::string advice = Run("ADVISE PLAN FOR " + sql);
+    EXPECT_NE(advice.find(" in_force=written searched=1 cost_ratio=0."), std::string::npos)
+        << advice;
+    EXPECT_NE(advice.find(" order=(models, results) "), std::string::npos) << advice;
 }
 
 TEST_F(AdminPlanTest, TheRowHoldsTheShapeAndNoLiteralOfTheExample) {
