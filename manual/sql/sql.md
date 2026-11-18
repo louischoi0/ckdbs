@@ -1205,6 +1205,79 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   `capture=first` when that choice was captured and `capture=deferred` when
   a relation's size was not yet published. A statement carrying a subquery
   predicate runs in written order under every value.
+- **An administrator can set a join's order by hand**, under every
+  `join_order`, and that plan outranks everything above:
+
+  ```
+  CREATE PLAN p_loans FOR
+    SELECT u.name, l.amount FROM users u JOIN loans l ON l.user_id = u.id
+    WHERE u.id BETWEEN 100 AND 164
+  VARIANT narrow WHEN ARG(2) - ARG(1) <= 64 ORDER (u, l)
+  VARIANT wide ELSE ORDER (l, u);
+  ```
+
+  The plan belongs to the statement's shape - the statement without its
+  literals - and applies to every later statement of that shape, whether
+  its values are written in the text or bound. Write the statement with
+  literals (a `?` is refused): each variant's order is checked by compiling
+  it for the statement as written. The literals are not kept.
+  - **A variant** is a join order, naming each relation once by its alias
+    (or its table name where it has none). The variants are tried in the
+    order written and the first whose `WHEN` holds is used; the last must
+    be `ELSE`. A plan with one variant is just `VARIANT <name> ELSE ORDER
+    (...)`.
+  - **A `WHEN` rule** reads the statement's values: `ARG(k)` is its k-th
+    literal, counted from 1 in the order written (a `LIMIT`'s number is one
+    too; `NULL` is not). A rule is comparisons (`=`, `!=`, `<`, `<=`, `>`,
+    `>=`) joined by `AND`. Integers can be added and subtracted
+    (`ARG(2) - ARG(1) <= 64`); a string can only be compared with `=` or
+    `!=` (`ARG(1) = 'gold'`), and a number with a decimal point is compared
+    as the text written. A comparison that makes no sense for a statement's
+    values - text where a number is needed, a number too large - simply does
+    not hold, and the statement goes on to the next variant. `OR`, `IS
+    NULL` and `<` on strings are refused.
+  - A plan chooses the order, and may **pin how a relation is read**. By
+    default each relation's access (tuple key, index, Cabin, walk) is
+    chosen from the catalog at every run. After a variant's `ORDER`,
+    `ACCESS <relation> <pin>, ...` restricts that choice for the relations
+    it names:
+
+    ```
+    VARIANT wide ELSE ORDER (l, u) ACCESS l SCAN, u TUPLE_KEY
+    VARIANT narrow WHEN ARG(2) - ARG(1) <= 64
+      ORDER (u, l) ACCESS l INDEX loans_user_idx
+    ```
+
+    A pin is `TUPLE_KEY`, `INDEX` (any index) or `INDEX <name>`, `CABIN`,
+    or `SCAN` (walk the relation); `NOT TUPLE_KEY`, `NOT INDEX` and `NOT
+    CABIN` rule one kind out and leave the rest to the engine. A pin never
+    forces an access the statement cannot use: `CREATE PLAN` refuses a pin
+    nothing can satisfy, and the rows returned are the same under every
+    variant and every pin. `ANALYZE` marks a pinned step `arm=plan`. An
+    index a plan pins by name cannot be dropped while the plan is enabled.
+    A plan is for a join: a statement over one table cannot be given one.
+  - A variant that cannot be used for a particular statement - one that
+    would need a sort the statement's `LIMIT` no longer bounds, or whose
+    pin that statement cannot satisfy - is skipped for that statement,
+    which runs in written order with the engine's own access choices;
+    `ANALYZE` and `SHOW META` (`plan_declined`) say so.
+  - `CREATE PLAN <name> FOR <select> AS SEARCHED` stores the order the
+    engine would choose right now as a plan of one variant, and prints it.
+    Use it to fix a statement that is not captured.
+  - `ALTER PLAN <name> DISABLE` stops using a plan without removing it;
+    `ENABLE` uses it again. `ALTER PLAN <name> REPLACE VARIANT <v> WHEN
+    <rule> ORDER (...)` (or `... ELSE ORDER (...)`) changes one variant.
+    `DROP PLAN <name>` removes the plan; the statement then runs its
+    captured order if it has one. All are admin statements, outside a
+    transaction; if two are issued at once the second is refused and can be
+    retried.
+  - One statement shape has at most one such plan. A table cannot be
+    dropped while an enabled plan names it; a disabled plan whose table was
+    dropped shows `invalid` in `sys.plans` and can only be dropped.
+  - `ANALYZE` prints `planned order=plan plan=<name>/<variant>`;
+    `sys.plans` lists each plan with its variants; `sys.statement_stats`
+    shows, per statement shape, where its order last came from
+    (`plan_source`) and the plan and variant that chose it.
 - Every relation's binding must be distinct; `FROM t JOIN t` is refused, and
   `FROM t AS a JOIN t AS b` is how a self-join is spelled.
 - A join keyed on a relation's **tuple key** executes as a tuple key probe

@@ -22,7 +22,7 @@ std::uint64_t Mix(std::uint64_t x) noexcept {
 
 }  // namespace
 
-std::size_t CapturedPlans::KeyHash::operator()(const CapturedKey& key) const noexcept {
+std::size_t CapturedKeyHash::operator()(const CapturedKey& key) const noexcept {
     std::uint64_t h = Mix(key.fetch_id ^ key.n);
     for (std::size_t k = 0; k < key.n && k < key.oids.size(); ++k) h = Mix(h ^ key.oids[k]);
     return static_cast<std::size_t>(h);
@@ -31,7 +31,7 @@ std::size_t CapturedPlans::KeyHash::operator()(const CapturedKey& key) const noe
 CapturedPlans::Partition& CapturedPlans::PartitionOf(const CapturedKey& key) noexcept {
     // The high bits, so a partition's own table - which reads the low ones -
     // spreads within it.
-    return partitions_[(KeyHash{}(key) >> 32) % kPartitions];
+    return partitions_[(CapturedKeyHash{}(key) >> 32) % kPartitions];
 }
 
 std::optional<CapturedOrder> CapturedPlans::Find(const CapturedKey& key) {

@@ -23,6 +23,7 @@
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/admin_plans.hpp"
 #include "kds/exec/captured_plans.hpp"
 #include "kds/exec/plan_catalog.hpp"
 #include "kds/exec/plan_memo.hpp"
@@ -133,6 +134,7 @@ struct MountRecovery;
 // A `SELECT` whose walk runs on after its head returns (BA-S15); defined
 // in `command_dispatcher.cpp`.
 class SelectRun;
+class ReadBorrow;  // `read_borrow.hpp`
 
 // A relation-X build - `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION`,
 // `CREATE TRANSITION` - whose walk runs on after its head returns (A1 stage
@@ -342,6 +344,14 @@ struct DispatchOutcome {
     // the hash covers bind values, which WD11 forbids recording.
     std::uint64_t pattern_id = 0;
 
+    // **Where a `SELECT`'s join order came from** (CX-R11), for
+    // `sys.statement_stats`: `exec::PlanSourceName`'s static text, or
+    // `written`; empty for a statement with no join block. `plan_label` is
+    // `<plan>/<variant>` where an administrator's plan chose it. Carried
+    // for `fetch_id`'s reason.
+    std::string_view plan_source = {};
+    std::string plan_label = {};
+
     // **The relation `rows_affected` counts rows of** (BO-S6), for
     // `sys.relation_stats`: set beside a write's count, 0 everywhere else.
     catalog::Oid written_oid = 0;
@@ -423,6 +433,9 @@ struct OptimizerSurface {
     // dispatcher's own.
     std::atomic<exec::JoinOrder>* join_order = nullptr;
     exec::CapturedPlans* captured_plans = nullptr;
+    // The instance's administrator's plans (`exec/admin_plans.hpp`), read
+    // under every `join_order`. A null leaves the dispatcher's own.
+    exec::AdminPlans* admin_plans = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
     const stats::CabinOptimizer* controller = nullptr;
     const exec::CabinOptimizerExecutor* executor = nullptr;
@@ -1507,6 +1520,16 @@ private:
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
     DispatchOutcome HandleSetJoinOrder(std::string_view line, std::string_view rest);
     DispatchOutcome HandleDropPlan(std::string_view line, Session& session);
+    // `CREATE PLAN` and `ALTER PLAN` (CX-S1b, `exec/plan_ddl.hpp`): an
+    // administrator's plan for a statement shape, made, enabled, disabled
+    // and edited. Admin, autocommit only, answered once durable.
+    DispatchOutcome HandleCreatePlan(std::string_view line, Session& session);
+    DispatchOutcome HandleAlterPlan(std::string_view line, Session& session);
+    // The `IS` of every relation `key` names, taken into `hold` and kept
+    // until it is destroyed: what keeps a `DROP TABLE` from committing
+    // under a plan DDL's install. A plan DDL is not a read that must never
+    // wait on a DDL: `TxnConflict` where any ask is refused.
+    Status HoldPlanRelations(const exec::CapturedKey& key, std::optional<ReadBorrow>& hold);
     DispatchOutcome HandleSetAsh(std::string_view line, std::string_view rest);
 
 
@@ -1875,6 +1898,9 @@ public:
     // The captured plans `fixed` reads and fills: the instance's, or this
     // dispatcher's own.
     exec::CapturedPlans& captured_plans() noexcept { return *captured_plans_; }
+    // The administrator's plans every compile asks first: the instance's,
+    // or this dispatcher's own.
+    exec::AdminPlans& admin_plans() noexcept { return *admin_plans_; }
     // The join planner's statistics store, or null - every hand-built
     // dispatcher, which then plans data-free and folds nothing.
     void set_plan_stats(stats::PlanStats* plan_stats) noexcept {
@@ -2041,6 +2067,7 @@ public:
         set_plan_stats(surface.plan_stats);
         if (surface.join_order != nullptr) join_order_ = surface.join_order;
         if (surface.captured_plans != nullptr) captured_plans_ = surface.captured_plans;
+        if (surface.admin_plans != nullptr) admin_plans_ = surface.admin_plans;
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
         cabin_optimizer_view_latch_ = surface.view_latch;
@@ -2606,6 +2633,9 @@ private:
     std::atomic<exec::JoinOrder>* join_order_ = &own_join_order_;
     exec::CapturedPlans own_captured_plans_;
     exec::CapturedPlans* captured_plans_ = &own_captured_plans_;
+    // The administrator's plans (CX-S1b), on the same terms.
+    exec::AdminPlans own_admin_plans_;
+    exec::AdminPlans* admin_plans_ = &own_admin_plans_;
     // `set_plan_stats`': the instance's store, and this core's view of it.
     stats::PlanStats* plan_stats_ = nullptr;
     stats::PlanStatsSource plan_source_;
@@ -2770,6 +2800,10 @@ private:
     // copied onto its outcome by `DispatchAndStage` (BO-S5).
     std::uint64_t statement_fetch_id_ = 0;
     std::uint64_t statement_pattern_id_ = 0;
+    // The running `SELECT`'s plan source and plan, set by its compile and
+    // copied onto its outcome the same way (CX-R11).
+    std::string_view statement_plan_source_;
+    std::string statement_plan_label_;
 
     // **The fault net every wait in this file is bounded by**, and the
     // one thing `lock_wait_fault_net_ms` sets; defaults to the constant.

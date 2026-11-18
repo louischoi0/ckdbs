@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/token.hpp"
@@ -44,6 +46,22 @@ bool IsIdentifier(std::string_view text) noexcept;
 // values (`sys.plans`); nothing compares it. Text the lexer cannot read is
 // returned as far as it could be read.
 std::string ShapeText(std::string_view sql);
+
+// A statement's **arguments**: its value positions in token order - every
+// integer, numeric and string literal and every `?`, the tokens `ShapeText`
+// writes `?` and the fingerprint counts (`Fingerprint::literal_count` and
+// `param_count`); NULL is shape and is not one. What a managed plan's
+// `ARG(k)` reads, 1-based (`exec/plan_rule.hpp`). `text` views `sql`: a
+// string's value with its quotes stripped, a number as written. A numeric
+// literal with a point is a string, as it is everywhere (`token.hpp`).
+// Text the lexer cannot read gives the arguments before the unreadable
+// byte.
+struct StatementArgument {
+    enum class Kind : std::uint8_t { kInt, kStr, kUnbound };
+    Kind kind = Kind::kUnbound;
+    std::string_view text;
+};
+std::vector<StatementArgument> ArgumentsOf(std::string_view sql);
 
 class Lexer {
 public:

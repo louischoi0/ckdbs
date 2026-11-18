@@ -14,6 +14,7 @@
 // value a predicate compares and the value a write keys on are identical by
 // construction.
 #include "kds/exec/cabin_expr.hpp"
+#include "kds/exec/admin_plans.hpp"
 #include "kds/exec/captured_plans.hpp"
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/join_order.hpp"
@@ -39,6 +40,10 @@ bool IEquals(std::string_view a, std::string_view b) {
 struct BoundRelation {
     std::string binding;  // alias if written, else the table name
     const catalog::TableAccess* access = nullptr;
+    // An administrator's plan's pin on this relation's step, or null
+    // (CX-S3a; `admin_plans.hpp` `ArmPin`). It travels with the relation
+    // through a permutation, and restricts the ladder in section 4.
+    const ArmPin* pin = nullptr;
 
     const catalog::Schema& schema() const noexcept { return access->schema; }
 };
@@ -1309,13 +1314,18 @@ std::optional<IndexChoice> IndexChoiceOver(const catalog::TableAccess& access, c
 // `with_lists`, each index is first asked with one value list as a prefix
 // column: where that form stands it outscores the same index's plain form,
 // which is asked only when it does not.
+//
+// `only`, when not empty, is the one index a plan's pin names (CX-S3a):
+// every other index is passed over.
 std::optional<IndexChoice> IndexProbeOf(const catalog::TableAccess& access, const Step& step,
-                                        std::uint16_t slot, bool with_lists) {
+                                        std::uint16_t slot, bool with_lists,
+                                        std::string_view only = {}) {
     std::optional<IndexChoice> best;
     int best_score = 0;
     for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
         // A building index's entries are not complete (CI-R1).
         if (ix.building) continue;
+        if (!only.empty() && !SameName(ix.name, only)) continue;
         std::optional<IndexChoice> choice;
         if (with_lists && !step.bool_residual.empty()) {
             choice = IndexChoiceOver(access, step, slot, ix, /*with_list=*/true, best_score);
@@ -1412,11 +1422,13 @@ std::optional<CabinSetChoice> CabinSetOf(const catalog::TableAccess& access, con
 //    when the descent happens; same rule as the tuple-key-probe arm.
 std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
                                                  const catalog::TableAccess& access,
-                                                 const Step& step, std::uint16_t slot) {
+                                                 const Step& step, std::uint16_t slot,
+                                                 std::string_view only = {}) {
     if (access.indexes.empty()) return std::nullopt;
 
     for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
         if (ix.building || ix.nkeys == 0) continue;  // CI-R1
+        if (!only.empty() && !SameName(ix.name, only)) continue;  // a plan's pin
         const std::uint16_t k0 = ix.keys()[0];
 
         // Index-level facts, settled once per index rather than once per
@@ -1686,14 +1698,19 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
 // the step had before lists were read asks for one join key's rows; so
 // where either correlated arm stands, the step is compiled as though the
 // list were any other filter, and takes whatever it took then.
+//
+// `cabin` is whether a plan's pin leaves the step its Cabin arms (CX-S3a):
+// a correlated Cabin probe the pin rules out is not one the step would have
+// taken, so it does not stand in a list's way.
 std::optional<IndexChoice> LiteralIndexChoiceOf(const Scope& scope,
                                                 const catalog::TableAccess& access,
-                                                const Step& step, std::uint16_t slot) {
-    auto choice = IndexProbeOf(access, step, slot, /*with_lists=*/true);
+                                                const Step& step, std::uint16_t slot,
+                                                std::string_view only = {}, bool cabin = true) {
+    auto choice = IndexProbeOf(access, step, slot, /*with_lists=*/true, only);
     if (choice.has_value() && choice->set.has_value() &&
-        (CorrelatedIndexProbeOf(scope, access, step, slot).has_value() ||
-         CorrelatedCabinProbeOf(scope, access, step, slot).has_value())) {
-        return IndexProbeOf(access, step, slot, /*with_lists=*/false);
+        (CorrelatedIndexProbeOf(scope, access, step, slot, only).has_value() ||
+         (cabin && CorrelatedCabinProbeOf(scope, access, step, slot).has_value()))) {
+        return IndexProbeOf(access, step, slot, /*with_lists=*/false, only);
     }
     return choice;
 }
@@ -2299,6 +2316,17 @@ bool HasSubqueryPredicate(const parser::SelectStmt& stmt) {
     });
 }
 
+// Why the join planner leaves a block in its written order, or null where
+// it orders it: `PlannableBlock`'s rule, and `CompileBlock`'s.
+const char* WhyUnplanned(const parser::SelectStmt& stmt) {
+    if (stmt.joins.empty()) return "a statement over one relation has no join order";
+    if (stmt.star()) return "a SELECT * block is not ordered by the join planner";
+    if (HasSubqueryPredicate(stmt)) {
+        return "a block with a subquery predicate is not ordered by the join planner";
+    }
+    return nullptr;
+}
+
 StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope& scope,
                                  const std::vector<const parser::RelationRef*>& refs,
@@ -2361,17 +2389,24 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // chain compiled over a permuted binding is that order's chain,
     // unchanged otherwise. The written order is compiled first and its
     // refusal is the statement's.
-    if (plan == nullptr || refs.size() < 2 || stmt.star() || HasSubqueryPredicate(stmt)) {
+    if (plan == nullptr || WhyUnplanned(stmt) != nullptr) {
         return CompileBound(catalog, stmt, scope, refs, next_step_id, depth, view, inner_build,
                             declare);
     }
     const std::uint32_t base_step_id = next_step_id;
-    const auto compile_order = [&](const std::vector<std::size_t>& order) -> StatusOr<StepChain> {
+    // `pins`, when given, is an administrator's plan's variant's, by written
+    // position (CX-S3a): each travels with its relation.
+    const auto compile_order = [&](const std::vector<std::size_t>& order,
+                                   const std::vector<ArmPin>* pins =
+                                       nullptr) -> StatusOr<StepChain> {
         Scope permuted = scope;  // whole, so no field is dropped
         permuted.relations.clear();
         std::vector<const parser::RelationRef*> permuted_refs;
         for (const std::size_t written : order) {
             permuted.relations.push_back(scope.relations[written]);
+            if (pins != nullptr && written < pins->size() && (*pins)[written].pins()) {
+                permuted.relations.back().pin = &(*pins)[written];
+            }
             permuted_refs.push_back(refs[written]);
         }
         std::uint32_t ids = base_step_id;
@@ -2392,6 +2427,102 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     auto best = compile_order(order);
     if (!best.ok()) return best;
     next_step_id = base_step_id + static_cast<std::uint32_t>(refs.size());
+
+    // The shape's exact key (CX-R3), which both plan tables are asked by:
+    // the fetch id and every relation's oid in written order. A block no key
+    // fits - no fetch id (a statement that came with no parse), or more
+    // relations than a key holds - has neither kind of plan.
+    std::optional<CapturedKey> shape;
+    if (plan->fetch_id != 0 && refs.size() <= kMaxPlannedRelations) {
+        shape.emplace();
+        shape->fetch_id = plan->fetch_id;
+        shape->n = static_cast<std::uint8_t>(refs.size());
+        for (std::size_t w = 0; w < refs.size(); ++w) {
+            shape->oids[w] = scope.relations[w].access->oid;
+        }
+    }
+    const bool written_sorted = best.value().sorted();
+    // The key the run's counts fold under and the posteriors are found by
+    // (CC-S2): a block of at most `kMaxPosteriorRelations` relations with a
+    // fetch id.
+    const auto statistics_key = [&]() -> std::optional<stats::PlanKey> {
+        if (plan->fetch_id == 0 || refs.size() > stats::kMaxPosteriorRelations) {
+            return std::nullopt;
+        }
+        stats::PlanKey key;
+        key.fetch_id = plan->fetch_id;
+        key.n = static_cast<std::uint8_t>(refs.size());
+        for (std::size_t w = 0; w < refs.size(); ++w) key.oids[w] = scope.relations[w].access->oid;
+        return key;
+    };
+
+    // ---- 1a'. An administrator's plan (CX-S1b; CX-R1's first source) -----
+    //
+    // Asked first and under every `join_order`: an enabled plan for the
+    // shape outranks its captured order, the search and the written order
+    // (CX-R9). **Before the descent skip**, unlike everything below: a plan
+    // created and then not applied would enforce nothing of what its
+    // administrator wrote, so a tuple key chain is probed too - while a plan
+    // is enabled anywhere, which `any()` answers with one relaxed load.
+    //
+    // The variant is the plan's own choice from this statement's arguments
+    // (CX-R4), made here at every compile. Its order goes through the full
+    // ladder, as a captured order's does, and is **declined, never forced**
+    // (CX-R2): where it does not compile for this statement or adds a sort
+    // its LIMIT does not bound (CC-Q10), the written order runs and the note
+    // says so. Read under a minted view too - a plan is an administrator's
+    // standing word, not a price.
+    if (plan->admin != nullptr && plan->admin->any() && shape.has_value()) {
+        if (const auto managed = plan->admin->Find(*shape); managed != nullptr) {
+            plan->admin->CountServed();
+            const PlanVariant& variant = managed->Choose(plan->statement);
+            const std::vector<std::size_t> perm(variant.order.begin(),
+                                                variant.order.begin() + refs.size());
+            PlanSource source = PlanSource::kAdmin;
+            StepChain chain;
+            std::string declined_because;
+            // The written order with no pin is the chain already at hand;
+            // anything else goes through the ladder again, under the
+            // variant's pins.
+            const std::vector<ArmPin>* const pins =
+                variant.access.empty() ? nullptr : &variant.access;
+            if (perm == written && pins == nullptr) {
+                chain = std::move(best.value());
+            } else if (auto ordered = compile_order(perm, pins); !ordered.ok()) {
+                declined_because = ordered.status().message();
+            } else if (!AddedSortCannotRefuse(ordered.value(), written_sorted,
+                                              plan->sort_max_rows)) {
+                declined_because = "its order adds a sort the statement's LIMIT does not bound";
+            } else {
+                chain = std::move(ordered.value());
+            }
+            if (!declined_because.empty()) {
+                plan->admin->CountDeclined();
+                source = PlanSource::kAdminDeclined;
+                chain = std::move(best.value());
+            }
+            // The relations a run asks priors for and the key its counts
+            // fold under, as any planned block's (CX-Q2), so a `DROP PLAN`
+            // or an `AS SEARCHED` after it prices from what the shape's runs
+            // measured - but under `written`, which gathers nothing.
+            if (plan->search) {
+                for (const BoundRelation& relation : scope.relations) {
+                    chain.planned_relations.push_back(relation.access->oid);
+                }
+                chain.planned = statistics_key();
+            }
+            PlanNote& note = chain.plan_note.emplace();
+            note.source = source;
+            note.plan_name = managed->name;
+            note.variant = variant.name;
+            note.declined_because = std::move(declined_because);
+            return chain;
+        }
+    }
+    // `join_order = written` with no plan for the shape: the written order,
+    // as a compile handed no options gives it.
+    if (!plan->search) return best;
+
     // A written chain of tuple key descents alone - a lookup, then probes -
     // reads one row per step (a key set, its values' rows), and every order
     // pays at least its driver's descent: no search can repay its compiles. Measured at CB's close: the
@@ -2403,16 +2534,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     if (std::all_of(best.value().steps.begin(), best.value().steps.end(), is_descent)) {
         return best;
     }
-    // The key the run's counts fold under and the posteriors are found by
-    // (CC-S2): a searched block of at most `kMaxPosteriorRelations`
-    // relations with a fetch id.
-    std::optional<stats::PlanKey> key;
-    if (plan->fetch_id != 0 && refs.size() <= stats::kMaxPosteriorRelations) {
-        key.emplace();
-        key->fetch_id = plan->fetch_id;
-        key->n = static_cast<std::uint8_t>(refs.size());
-        for (std::size_t w = 0; w < refs.size(); ++w) key->oids[w] = scope.relations[w].access->oid;
-    }
+    const std::optional<stats::PlanKey> key = statistics_key();
     // What a planned block's chain carries whatever chose its order: the
     // relations its run asks priors for and the key its counts fold under,
     // so the statistics are gathered under `fixed` as under `planned`
@@ -2442,7 +2564,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // follow the statistics for as long as one session held a DDL open.
     CapturedPlans* const captured = plan->captured;
     const bool may_capture = view == nullptr;
-    CapturedKey captured_key;
+    const CapturedKey captured_key = shape.value_or(CapturedKey{});
     // A chain this compile did not price: the written order or a captured
     // one.
     const auto unpriced = [&](StepChain chain, PlanSource source) {
@@ -2458,7 +2580,6 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // LIMIT is a literal and so outside the key, and a reordered chain's
     // top-N heap under `LIMIT 5` is a full sort under `LIMIT 5000000`, which
     // meets `sort_max_rows` where the written order streams.
-    const bool written_sorted = best.value().sorted();
     const auto run_captured = [&](const CapturedOrder& in_force, StepChain written_chain) {
         captured->CountServed();
         const std::vector<std::size_t> perm(in_force.begin(), in_force.begin() + refs.size());
@@ -2476,14 +2597,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // with no parse), or more relations than a key holds - runs as
         // written, since searching it at every compile is the implicit
         // change `fixed` excludes.
-        if (plan->fetch_id == 0 || refs.size() > kMaxPlannedRelations) {
+        if (!shape.has_value()) {
             captured->CountUnkeyed();
             return unpriced(std::move(best.value()), PlanSource::kUnkeyed);
-        }
-        captured_key.fetch_id = plan->fetch_id;
-        captured_key.n = static_cast<std::uint8_t>(refs.size());
-        for (std::size_t w = 0; w < refs.size(); ++w) {
-            captured_key.oids[w] = scope.relations[w].access->oid;
         }
         if (const auto in_force = captured->Find(captured_key); in_force.has_value()) {
             return run_captured(*in_force, std::move(best.value()));
@@ -2862,9 +2978,28 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     // on the located row before it is accepted, so a conjunct beside the
     // equality does not degrade the step to a scan. A write's point arm
     // reads a literal target the same way (`WriteKeyOf`).
+    //
+    // **An administrator's plan's pin restricts the ladder below and never
+    // replaces it** (CX-S3a, CX-R2; `admin_plans.hpp` `ArmPin`): each rank
+    // is tried only where the pin admits its class, by the rank's own rule,
+    // so a pinned step takes an arm the ladder could legally take for it
+    // and every located row still meets the whole residual. A pin no arm
+    // meets refuses this compile - the plan's order and pins - and the
+    // caller runs the statement as written, unpinned.
     for (std::size_t i = 0; i < chain.steps.size(); ++i) {
         Step& step = chain.steps[i];
+        static const ArmPin kNoPin;
+        const ArmPin& pin = scope.relations[i].pin != nullptr ? *scope.relations[i].pin : kNoPin;
+        const bool tuple_key = pin.Admits(ArmPin::Arm::kTupleKey);
+        const bool index = pin.Admits(ArmPin::Arm::kIndex);
+        const bool cabin = pin.Admits(ArmPin::Arm::kCabin);
+        // The walk's own ranks (a filter scan, the build annotation) stand
+        // aside under a keyed pin, so the strict tuple key range below them
+        // is still the tuple key class's to take.
+        const bool walk = pin.Admits(ArmPin::Arm::kScan);
+        step.arm_pinned = pin.pins();
         for (const StepPredicate& pred : step.residual) {
+            if (!tuple_key) break;
             if (pred.op != parser::CompareOp::kEq) continue;
 
             // Equality is symmetric, and an ON clause can be written
@@ -2924,7 +3059,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // it, and above every arm that follows: a pure function of the
         // shape, as each of them is. An annotation - the kind is the
         // single-value kind and `Step::key` stays empty (`KeySet`).
-        if (step.kind == AccessKind::kScan && !step.bool_residual.empty()) {
+        if (tuple_key && step.kind == AccessKind::kScan && !step.bool_residual.empty()) {
             if (auto set = TupleKeySetOf(step, static_cast<std::uint16_t>(i)); set.has_value()) {
                 step.kind = AccessKind::kLookup;
                 step.key_set = std::move(set);
@@ -2937,12 +3072,15 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // relation with a tuple key equality is already served better than either
         // of these could serve it.
         if (step.kind == AccessKind::kScan) {
-            const auto key_range = TupleKeyRangeOf(step, static_cast<std::uint16_t>(i));
+            const auto key_range =
+                tuple_key ? TupleKeyRangeOf(step, static_cast<std::uint16_t>(i)) : std::nullopt;
             if (key_range.has_value() && !key_range->strict) {
                 step.kind = AccessKind::kRange;
                 step.range = key_range->bounds;
-            } else if (auto ix = LiteralIndexChoiceOf(scope, *scope.relations[i].access, step,
-                                                       static_cast<std::uint16_t>(i));
+            } else if (auto ix = index ? LiteralIndexChoiceOf(scope, *scope.relations[i].access,
+                                                              step, static_cast<std::uint16_t>(i),
+                                                              pin.index, cabin)
+                                       : std::nullopt;
                        ix.has_value()) {
                 // Ahead of the Cabin, per spec §9: an index is complete for
                 // every key value where a Cabin is authoritative only for
@@ -2955,8 +3093,11 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 step.kind = ix->probe.ranged ? AccessKind::kIndexRange : AccessKind::kIndexProbe;
                 step.key_set = std::move(ix->set);
                 step.index = std::move(ix->probe);
-            } else if (auto cx = CorrelatedIndexProbeOf(scope, *scope.relations[i].access, step,
-                                                         static_cast<std::uint16_t>(i));
+            } else if (auto cx = index ? CorrelatedIndexProbeOf(scope, *scope.relations[i].access,
+                                                                step,
+                                                                static_cast<std::uint16_t>(i),
+                                                                pin.index)
+                                       : std::nullopt;
                        cx.has_value()) {
                 // The correlated form, after the literal one for the reason
                 // its comment gives, and ahead of the Cabin per spec §9's
@@ -2966,29 +3107,34 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // contract untouched.
                 step.kind = AccessKind::kIndexProbe;
                 step.index = std::move(cx);
-            } else if (auto probe = CabinProbeOf(*scope.relations[i].access, step,
-                                                  static_cast<std::uint16_t>(i));
+            } else if (auto probe = cabin ? CabinProbeOf(*scope.relations[i].access, step,
+                                                          static_cast<std::uint16_t>(i))
+                                          : std::nullopt;
                        probe.has_value()) {
                 // Ahead of kFilterScan, and only ahead of it: a cabined
                 // column's equality is exactly the shape a filter scan
                 // names, and the Cabin is the reason it need not be one.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(probe);
-            } else if (auto ep = ExprCabinProbeOf(*scope.relations[i].access, step,
-                                                   static_cast<std::uint16_t>(i));
+            } else if (auto ep = cabin ? ExprCabinProbeOf(*scope.relations[i].access, step,
+                                                           static_cast<std::uint16_t>(i))
+                                       : std::nullopt;
                        ep.has_value()) {
                 // An expression Cabin at the column Cabin's rank (AQ-R5):
                 // a compile-time key, before the correlated form.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(ep);
-            } else if (auto pp = PredicateCabinProbeOf(*scope.relations[i].access, step,
-                                                        static_cast<std::uint16_t>(i));
+            } else if (auto pp = cabin ? PredicateCabinProbeOf(*scope.relations[i].access, step,
+                                                                static_cast<std::uint16_t>(i))
+                                       : std::nullopt;
                        pp.has_value()) {
                 // A predicate Cabin, after the expression arm: AQ-R6.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(pp);
-            } else if (auto cp = CorrelatedCabinProbeOf(scope, *scope.relations[i].access, step,
-                                                         static_cast<std::uint16_t>(i));
+            } else if (auto cp = cabin ? CorrelatedCabinProbeOf(scope, *scope.relations[i].access,
+                                                                step,
+                                                                static_cast<std::uint16_t>(i))
+                                       : std::nullopt;
                        cp.has_value()) {
                 // The correlated form, last of the *banked*-structure arms:
                 // after both index forms (an index is complete for every
@@ -3000,8 +3146,9 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // serve beats any per-statement rebuild (spec §5).
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cp);
-            } else if (auto cv = CoverCabinProbeOf(*scope.relations[i].access, step,
-                                                    static_cast<std::uint16_t>(i));
+            } else if (auto cv = cabin ? CoverCabinProbeOf(*scope.relations[i].access, step,
+                                                            static_cast<std::uint16_t>(i))
+                                       : std::nullopt;
                        cv.has_value()) {
                 // An expression Cabin's cover of a two-sided range (AQ-R8),
                 // after the correlated arm (AQ-Q16): a join's inner step keyed
@@ -3009,7 +3156,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // a cover would re-serve its whole union for every outer row.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cv);
-            } else if (auto cs = key_range.has_value()
+            } else if (auto cs = key_range.has_value() || !cabin
                                      ? std::nullopt
                                      : CabinSetOf(*scope.relations[i].access, step,
                                                   static_cast<std::uint16_t>(i));
@@ -3028,14 +3175,15 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cs->probe);
                 step.key_set = std::move(cs->set);
-            } else if (HasUnindexedEqualityFilter(*scope.relations[i].access, step,
-                                                   static_cast<std::uint16_t>(i))) {
+            } else if (walk && HasUnindexedEqualityFilter(*scope.relations[i].access, step,
+                                                           static_cast<std::uint16_t>(i))) {
                 // Ahead of the build annotation by decision, not
                 // impossibility (spec §8): the step's own literal already
                 // bounds what a walk visits, and v1 declines to also build
                 // for it.
                 step.kind = AccessKind::kFilterScan;
-            } else if (inner_build && step.fn_residual.empty() && step.bool_residual.empty()) {
+            } else if (walk && inner_build && step.fn_residual.empty() &&
+                       step.bool_residual.empty()) {
                 // A step carrying a function conjunct takes no build
                 // (AP-S4): the map holds the rows passing the
                 // *non-correlated* conjuncts, and a function conjunct is
@@ -3056,6 +3204,18 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 key_range.has_value()) {
                 step.kind = AccessKind::kRange;
                 step.range = key_range->bounds;
+            }
+        }
+
+        // A pin naming one class is met only by an arm of it. The walk is
+        // not something the ladder is held to by taking nothing else away,
+        // so `SCAN` is met by what is left when no keyed arm is admitted.
+        if (pin.pins() && !pin.forbid) {
+            if (ArmClassOf(step.kind) != pin.arm) {
+                return Status::Unsupported(
+                    "the statement's step over '" + scope.relations[i].binding +
+                    "' cannot take the pinned arm " + std::string(ArmName(pin.arm)) +
+                    (pin.index.empty() ? "" : " " + pin.index));
             }
         }
 
@@ -3227,5 +3387,12 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
 }
 
 }  // namespace
+
+Status PlannableBlock(const parser::SelectStmt& stmt) {
+    const char* const why = WhyUnplanned(stmt);
+    if (why == nullptr) return Status::OK();
+    return Status::NotImplemented(std::string("a plan for this statement is not implemented: ") +
+                                  why);
+}
 
 }  // namespace kds::exec

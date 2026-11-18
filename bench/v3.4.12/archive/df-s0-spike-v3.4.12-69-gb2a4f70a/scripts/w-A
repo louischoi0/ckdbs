@@ -1,0 +1,2 @@
+#!/bin/sh
+KDS_DF_SPIKE=0 exec /home/louis/bench-runs/df-s0/bin/kds_server "$@"

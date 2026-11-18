@@ -3,7 +3,7 @@
 **Thesis.** Measured on worktree `cz-checkpoint-roll-wait` with CZ-S1's
 spike binary, `20d89234` (`v3.4.12-66-g20d89234`), and the spike branch's
 driver at `e9ee523f`: two measurements the operator asked for before any
-order for C2 (`raft-marks-2026-11-18.md` §36), 55 cells. C2 is "no zero
+order for C2 (`raft-marks-2026-11-18.md` §40), 55 cells. C2 is "no zero
 prewrite where `posix_fallocate` reserved the extents". **The binary is a
 spike: not landed, no test, no proof.**
 
@@ -38,7 +38,7 @@ spike: not landed, no test, no proof.**
   cells** but C1 with C2 at 120 a second (§1). They are not CZ-S1's cell;
   V1 is the close's.
 
-**CLA's judgement, which §36 left to it.** The numbers support an order
+**CLA's judgement, which §40 left to it.** The numbers support an order
 on the prewrite, and not C2 as it stands. The fill costs a bulk writer
 and whatever shares its core half a second a segment; dropping it costs
 one commit in sixteen about a millisecond. Extents that are written and
@@ -46,14 +46,14 @@ were never filled - a recycled segment - would owe neither, by these
 numbers (inferred). The order is exploratory.
 
 - **Order**: `instructions/v3.2.0/workorder-cz-checkpoint-roll-wait.md`
-  §7, "CZ-S1b"; the operator's word, `raft-marks-2026-11-18.md` §36.
+  §7, "CZ-S1b"; the operator's word, `raft-marks-2026-11-18.md` §40.
 - **The spike**: CZ-S1's, unchanged
   (`archive/cz-s1-ceiling-v3.4.12-66-g20d89234/cz-s1-spike.patch`).
 - **Driver**: `tools/bl_mixed.py` with the spike's `--stall-cores` and a
   second change, `--insert-rate`
   (`archive/cz-s1b-c2-priced-v3.4.12-66-g20d89234/cz-s1b-driver.patch`):
   the inserter's statements are due at a fixed interval and a late one is
-  sent at once. CZ-Q13 (a) had dropped a rate-held inserter; §36 admits it
+  sent at once. CZ-Q13 (a) had dropped a rate-held inserter; §40 admits it
   for this measurement. `bench/README.md` counts both as driver changes.
 - **Raw output**: `archive/cz-s1b-c2-priced-v3.4.12-66-g20d89234/`:
   `out/r<run>/<cell>/`, the run scripts `cz-s1b.sh` and `cz-s1b-x.sh` with
@@ -65,7 +65,7 @@ numbers (inferred). The order is exploratory.
 | Item | Value |
 |---|---|
 | Executed | 2026-11-18 UTC. First pass 08:16:46-09:06:25, 45 cells; second pass 09:06:34-09:15:45, 10 cells. Every cell rc=0 and 0 errors. No build: CZ-S1's binary |
-| Budget | The standing one, 20 minutes a stage. The 55 cells ran 17.7 minutes and two smoke cells under a minute. The quiet gate held the passes 33.7 minutes and the driver's wait for load another 7.3 minutes, outside the budget (`raft-marks-2026-11-18.md` §35). The second pass was added, not cut: the first showed that at 120 statements a second the rolls are short with the prewrite too |
+| Budget | The standing one, 20 minutes a stage. The 55 cells ran 17.7 minutes and two smoke cells under a minute. The quiet gate held the passes 33.7 minutes and the driver's wait for load another 7.3 minutes, outside the budget (`raft-marks-2026-11-18.md` §39). The second pass was added, not cut: the first showed that at 120 statements a second the rolls are short with the prewrite too |
 | Binary | `kds_server.20d89234`, sha256 `ebaf66561336c35e8a69c9e1cbe096e7ee7b373eb8f1df4496b59eb15762d7c7`, CZ-S1's copy. `KDS_CZ_SPIKE` chooses the arm; each run line carries it (`tables.md` §0). The arms with the spike off run the instrumented binary, not `bf8d7a56`'s |
 | Host / device | 8 vCPU Intel Xeon Platinum 8581C, Linux 6.12.116+deb13-cloud-amd64; data and WAL on `/dev/nvme0n1p1`, **ext4**, not tmpfs. CZ-S1's host; other sessions built and ran suites on it throughout (§0) |
 | Server configuration | `cores = 4`, `buffer_pool_frames = 65536`, `log_level = info`, `reactor_cpus = 0,2,4,6`, clients on CPUs 1,3,5,7; a fresh server and data file per cell; port 15597; `durability` as the cell says |

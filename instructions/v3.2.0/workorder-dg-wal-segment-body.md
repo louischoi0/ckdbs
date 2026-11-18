@@ -2,7 +2,7 @@
 
 Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
 `cz-checkpoint-roll-wait` at `860d36f9` (`v3.4.12-72-g860d36f9`) on the operator's word
-of 2026-11-18 (`raft-marks-2026-11-18.md` §36). The worktree is CZ's: the
+of 2026-11-18 (`raft-marks-2026-11-18.md` §40). The worktree is CZ's: the
 order rests on results files that are on that branch and not yet on
 `main`. The letter DG is CLA's proposal. **Exploratory by CLA's proposal,
 not by the operator's word** (DG-Q0).
@@ -116,7 +116,7 @@ a bulk statement of 30 ms or more.
   447 ms one is 310 ms at the gate and 134 ms in the roll's own sync.
   CZ-S1b's results file counts 5 and omits the 119 ms one.
 
-**CLA's judgement, which §36 left to it.** The numbers do not support C2
+**CLA's judgement, which §40 left to it.** The numbers do not support C2
 as it stands: it moves a cost of about a millisecond onto one small
 commit in sixteen and onto every large one, in an engine whose purpose is
 OLTP. They do support asking the question. The fill costs a bulk writer
@@ -292,7 +292,7 @@ None is marked. (a) is CLA's proposal in each.
 
 | | item | (a) | other |
 |---|---|---|---|
-| DG-Q0 | Is there an order, and is it exploratory? §36's condition - that the numbers support C2 - is not met as it was put. | yes, on the fill, and DG-S0 may close it with nothing built | (b) build P1 on CZ-S1b's numbers; (c) no order: the finding goes into CZ's order and `known-gaps.md`'s roll entry, and this file is deleted |
+| DG-Q0 | Is there an order, and is it exploratory? §40's condition - that the numbers support C2 - is not met as it was put. | yes, on the fill, and DG-S0 may close it with nothing built | (b) build P1 on CZ-S1b's numbers; (c) no order: the finding goes into CZ's order and `known-gaps.md`'s roll entry, and this file is deleted |
 | DG-Q1 | The bar. The trade is between kinds of session - a small commit's p95 against a bulk writer's rate and tail - and CLA has no ground to weigh one against the other. | none before DG-S0. DG-S0 ends in one table - each candidate's commit p50 and p95 at two commit sizes, the bulk writer's rate and longest run of long statements, the roll's hold - and **V0 is the operator's reading of it**. V1 is set then | (b) a commit clause now: p50 within 3 % and p95 within 10 % of written extents with no fill (M2), which P1 misses on CZ-S1b's numbers; (c) a bulk clause now |
 | DG-Q2 | Which candidate is built? | the one the operator names at V0, chosen on paper in DG-S1. P2 and P3 are `[quiet-wrong]` and each needs its own mark | (b) P1 now, the commit's p95 accepted; (c) P4 now, as the one with neither P1's price nor P3's hazards, unmeasured |
 | DG-Q3 | A setting? PostgreSQL has two (`wal_init_zero`, `wal_recycle`). | none: one behaviour, chosen by what the filesystem promises | (b) a boot key, for a volume whose commits are small and many against one that loads in bulk |
@@ -365,7 +365,7 @@ the source, before the commit.
   - two candidates were missing (P4, P5), and M2 is named a ceiling;
   - the first draft's bar was drawn after its numbers and passed only
     candidates with no evidence; DG-Q1 now proposes none before DG-S0;
-  - the order is wider than §36's word, and DG-Q0 (c) is "no order";
+  - the order is wider than §40's word, and DG-Q0 (c) is "no order";
   - the driver, the host and the budget's cut are items; the title, §0
     and §6 were cut.
 - **Rejected:** none.

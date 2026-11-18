@@ -878,3 +878,353 @@ the ones taken from its findings are in the commit after it).
 - **Left for the operator**: a mount refuses on a `sys.plans` it cannot
   scan, as on any logged catalog relation, though what is lost would cost
   a recapture (`known-gaps.md`).
+
+### CX-S1b - built 2026-11-18; its §6 measurement not run
+
+The administrator's plan, on worktree `cx-plan-change-option`.
+
+**As built.**
+
+- **The DDL** (`exec/plan_ddl.hpp`): `CREATE PLAN <name> FOR <select>
+  VARIANT <v> WHEN <rule> ORDER (...) ... VARIANT <w> ELSE ORDER (...)`,
+  `CREATE PLAN <name> FOR <select> AS SEARCHED`, `ALTER PLAN <name> ENABLE
+  | DISABLE`, `ALTER PLAN <name> REPLACE VARIANT <v> (WHEN <rule> | ELSE)
+  ORDER (...)`, and S1a's `DROP PLAN`. Admin, autocommit only, answered
+  once durable. No word is reserved: the `<select>` ends at the first
+  `VARIANT <identifier> WHEN|ELSE` outside parentheses or at a closing `AS
+  SEARCHED`, neither of which a statement a plan can be made for holds.
+- **The rule** (`exec/plan_rule.hpp`, CX-R4): comparisons joined by `AND`
+  over sums of `ARG(k)` and integers, checked for overflow; total - a
+  comparison that cannot be decided is false. `ARG(k)` is the statement's
+  k-th value position (`parser::ArgumentsOf`, new): every integer, numeric
+  and string literal in token order, a `LIMIT`'s among them.
+- **The table** (`exec/admin_plans.hpp`): one for the instance, 16 latched
+  partitions, holding every administrator's plan whose relations exist and
+  serving the enabled ones. `CompileBlock` asks it first, under every
+  `join_order` (CX-R1's source 1); under `written` the dispatcher hands the
+  compile its options only while a plan is enabled, so an instance with
+  none compiles as it did.
+- **The row** (`exec/plan_catalog.hpp`): `flags` bit 0 clear, bit 1
+  `DISABLED`; text `v1 fp= oids= bindings= args= at= variants=`, one line a
+  variant, then the shape text. A mount loads both origins (`LoadPlans`).
+- **`DROP TABLE`** is RESTRICTed by an enabled plan naming the relation
+  (CX-Q24 (a)); a committed drop forgets a disabled one in the table and
+  leaves its row.
+- **Seen**: `ANALYZE`'s `planned order=plan plan=<name>/<variant>`;
+  `sys.plans`' `variants` column and its `disabled` and `invalid` states;
+  `sys.statement_stats`' `plan_source`, `plan_name` and `variant`; `SHOW
+  META`'s `admin_plans`, `admin_plans_enabled`, `plan_served`,
+  `plan_declined`.
+- `tests/admin_plans_test.cpp` carries the stage's cells; `parser-v2.md`
+  I12, `sys-views.md`, `drop-table.md` DT3, `rules.md` §3, `client-manual.md`
+  and `manual/sql/sql.md` state it.
+
+**Facts of the stage.**
+
+- **The §6 measurement for S1's close was not run.** Overhead is measured
+  at the milestone's close. What S1b adds to a statement is named in
+  `known-gaps.md` (Captured plans) and not measured: one relaxed load a
+  top-level join block's compile under `planned` and `fixed` - under
+  `written` the load is the dispatcher's, on every `SELECT`, a
+  single-relation one included - a probe while any plan is enabled, and a
+  second lex of the statement for a plan with more than one variant.
+- **`ACCESS` and `BUILD` clauses are refused `NotImplemented`** at their
+  word; they are S3's and S5's.
+
+**Where the build differs from an adopted item.**
+
+- **CX-Q5: `IS NULL` is not built, and is refused `Unsupported`.** NULL is
+  shape to the fingerprint (`fingerprint.hpp`: "NULL is shape"), and a
+  `C_BIND` of NULL substitutes the word into the text, so a statement with
+  a NULL in a value position has another fetch id and matches another
+  plan. No argument of a matching statement is ever NULL, and CX-R4's "a
+  NULL argument matches no comparison and reaches `ELSE`" has no case. A
+  spelling that can never hold is not accepted.
+- **CX-Q5: a string compares, by `=` and `!=` only.** (b) as adopted is
+  arithmetic "over integers"; (a)'s `ARG(k) op constant` did not say what
+  a constant is. A skewed categorical value (`status = 'CLOSED'`) is the
+  other case that needs variants, so a string constant is admitted for
+  equality, by its bytes. Ordering strings is `NotImplemented`: a numeric
+  with a point is a string here and its byte order is not its order.
+  `OR` is `NotImplemented`; another variant is a rule's `OR`.
+- **CX-R6: a tuple key chain is probed while a plan is enabled.** As
+  written, "a point read or a tuple key chain leaves the compile before
+  any plan lookup". A point read still does - one relation never reaches
+  the table. A block of tuple key descents is asked, because W4 makes an
+  administrator's plan "always possible" and a plan created for such a
+  shape and then never applied would enforce nothing of what was written.
+  The cost is a relaxed load while no plan is enabled and one partition
+  latch while one is.
+- **CX-S1's grammar: by example, with literals.** The sketch wrote the
+  statement with `?`. The native grammar reads no `?` and validation
+  needs "representative bindings", so `CREATE PLAN` takes the statement
+  with literals and refuses a `?` `NotImplemented`, as `WAYSTONE ON` does
+  (CF-O-Q11 (a)). The row stores the shape text, so no literal is kept.
+- **CX-Q4 (b), CX-Q16: `INVALID` is derived, and a decline marks
+  nothing.** A plan reads `invalid` where a relation it names is gone or
+  its fetch id is another fingerprint version's - facts read at the
+  moment, never a stored bit - and then serves nothing, refuses `ALTER
+  PLAN` and stays until `DROP PLAN`. A variant that does not fit one
+  statement is declined for it, CX-Q26 (a)'s answer for a captured order:
+  marking the row would take the plan from every binding for one
+  binding's sake.
+- **A declined variant runs the written order**, not "the default plan"
+  (CX-Q4 (b)): the captured order's decline does the same, and falling to
+  the search would let a plan's failure start a capture.
+- **`REPLACE VARIANT` is not compiled** - the row holds no literal to
+  compile with. It is checked as a permutation of the plan's bindings and
+  against the argument count (`known-gaps.md`).
+- **The row carries no creator and no reference list** (CX-S1's `sys.plans`
+  bullet): a session has a role and no name, and a variant names no index
+  or Cabin until S3. It carries the bindings and the argument count
+  instead, which `REPLACE VARIANT` reads.
+- **CX-S1's `ANALYZE` spellings.** `plan=<name>/<variant>` is built. The
+  reasons a shape has no plan keep the names S0 gave them on the `planned`
+  line (`order=captured`, `capture=deferred|unkeyed|over_ceiling|
+  declined`); `sys.statement_stats`' `plan_source` carries CX-R11's names.
+- **Plan DDL takes one claim and never waits** (`known-gaps.md`): CX-Q22
+  left the map's protocol open for the administrator's side, and "one
+  plan a shape" and an `ALTER`'s insert-then-remove need one writer at a
+  time. And `CREATE PLAN` and `ALTER PLAN` hold their relations' `IS`
+  until the plan is installed, refusing `TxnConflict` where a `DROP TABLE`
+  holds the `X`, so no plan is installed over a relation whose drop then
+  commits.
+
+**The review of S1b** (`critics-developer`, of `4f12b44d`; its fix and the
+ones taken from its findings are in the commit after it). It found no way
+for a plan's order to reach a statement it does not belong to or to change
+a result.
+
+- **Fixed by the review - a streamed `SELECT` lost its plan in
+  `sys.statement_stats`.** On the server's path a `SELECT` whose first step
+  walks pages is finished after its head returns, and the walk's end
+  rebuilt the outcome without `plan_source` and `plan_label`: every such
+  statement recorded NULL, or what an earlier one left. Every cell of the
+  stage went through `Dispatch`, which runs the walk inline. The walk now
+  keeps the two as it keeps the statement's id, and a cell drives
+  `DispatchAsync`.
+- **Taken - a plan-served chain folded no join statistics.** The plan's
+  branch named the chain's relations and not the key its counts fold
+  under, so a shape an administrator's plan served gathered no posterior
+  and a later `DROP PLAN` or `AS SEARCHED` priced from priors alone
+  (CX-Q2). The key is set there as the captured path sets it; a cell.
+- **Taken - `ALTER PLAN` could answer "invalid" for a drop that might
+  roll back.** Validity was asked before the relations' `IS`: beside an
+  open `DROP TABLE` the catalog can already show the relation gone, and
+  the refusal was `Unsupported`, "DROP PLAN it", where it is the
+  retryable `TxnConflict`. The hold is asked first.
+- **Taken - "every `IS` was granted" was counted across two compiles.**
+  `ResolveNames` can compile twice and bind a name to two relations, and
+  a grant on one counted for the other. `HoldPlanRelations` takes a borrow
+  of its own on the key's oids, for `CREATE PLAN` and `ALTER PLAN` both,
+  and `CREATE PLAN` asks the catalog once more under it.
+- **Taken - only `NotFound` says a plan's relation is gone**
+  (`PlanRowIsValid`), as for a captured row: any other failure at a mount
+  had left a valid plan out of the table, where it neither served nor
+  RESTRICTed, and let a second plan be made for its shape. A mount
+  installs in id order, so no hash order decides between two rows.
+- **Taken**: `plan_source` is recorded for the statement's own `SELECT`
+  only, not for a subquery an `UPDATE`'s `SET` runs; a shape's source and
+  label are replaced as a pair; `sys-views.md` §6.1 said NULL means "no
+  join block" where it is every block the planner does not order; a
+  rename's effect on a plan is stated (`parser-v2.md` I12, `known-gaps.md`);
+  this log's "one relaxed load" sentence is corrected for `written`.
+- **Taken, as cuts**: the variant checks `CREATE PLAN` and `ALTER PLAN`
+  each wrote out are one `exec::ResolvePlanVariant`; three case-folding
+  helpers are one `exec::SameName`; the validation probe is built once a
+  statement, not once a variant; `AdminPlan::id`, written and never read,
+  is gone, and an administrator's `PlanRow::order` is no longer kept
+  beside its variants.
+- **Not taken**: `IN`, `BETWEEN` and `NOT` in a rule stay `InvalidArgument`
+  - they are reserved words the rule grammar does not name, and naming
+  each one to say `NotImplemented` is a list with no end. A refused commit
+  rebuilding the outcome without the plan fields is left: a `SELECT`
+  commits nothing. `Snapshot`'s merge picking the latest part's source
+  rather than the latest non-empty one is left: the two differ only for a
+  shape one core has never compiled. A `base/` home for the tree's ten
+  private `IEquals` copies is outside the stage.
+- **Left as gaps** (`known-gaps.md`, Captured plans): what no cell reaches
+  - plan DDL beside a held `DROP TABLE` `X` and from two cores among it.
+
+### CX-S2 - done 2026-11-18: the inventory; no code
+
+On worktree `cx-plan-change-option`. S2 builds nothing: CX-Q9 (a) keeps
+class (b) out of CX until a scenario statement is named as its consumer,
+and none is.
+
+- **The inventory** is `parser-v2.md` I12's "The rewrite inventory"
+  table, read off `CompileBound`, `PropagateEqualities`,
+  `PredicateReadyAt`, the scan kernel and the executor's hoist, build and
+  probe memo at `b11a5500`: eleven rows, each with what decides it and
+  what it changes.
+- **Why nothing in it moves a plan on its own**: every item is in
+  `CompileBound`, which every path of `CompileBlock` calls - the early
+  return with no options, an administrator's plan, a captured order, the
+  memo and the search - and which is handed no `PlanOptions`, so none can
+  read a statistic or `join_order`. One cell pins it
+  (`AdminPlanTest.ForOneOrderTheChainIsTheSameWhoeverChoseTheOrder`):
+  `ANALYZE`'s plan less its `planned` line is one text for the written
+  order under `written` and under a plan saying the same at each value,
+  and one text for the other order whether the search, the capture or a
+  plan chose it; both carry the same two derived bounds. The same again
+  with `ORDER BY ... LIMIT`, where one order elides the sort and the other
+  keeps a top-N heap.
+
+**Where the inventory differs from the order's text.**
+
+- **§1.4 and CX-S2 class the false uncorrelated `EXISTS` short-circuit
+  (a), "pure in the text and append-only". It is neither.** It adds no
+  conjunct: it is the hoist's consequence - the hoisted sub-chain runs
+  before the outer chain, and a false one ends the statement without
+  opening the outer relation - so it reschedules a read and is decided by
+  the run's rows. It is sanctioned all the same (I12: an uncorrelated
+  subquery's answer is one value), reads no statistic, and only ever runs
+  in written order, since a block with a subquery predicate is not
+  reordered. The table classes it "scheduling, sanctioned" beside the
+  hoist, and (b) is kept for what S2 forbids: a reschedule the engine
+  chooses.
+- **Two classes the order did not name** carry most of the rows:
+  *placement* (where a conjunct is evaluated, the scan kernel, the decode
+  masks, sort elision - a function of the text and the order that changes
+  no read) and *locate* (the key set, the probe memo, the inner build).
+  Splitting only into (a) and (b) would have put the inner build and the
+  key set in (b), which S2 says is never automatic, and both are
+  automatic by I12 and their own specs.
+- **Found and not listed in the order**: an uncorrelated `EXISTS` under
+  `OR` is not hoisted and is still answered once a statement where it
+  stands; a repeated probe key skips its descent (the probe memo).
+- **Not inventoried**: the query layer (`parser-v2.md` I19), which is
+  another executor over native single-relation walks and compiles no join
+  block; the write paths.
+
+**The review of S2** (`critics-developer`, of `d08a31a2`; its corrections
+and the ones taken from it are in the commit after it). It confirmed the
+inventory's conclusion - nothing that rewrites a statement reads the plan
+options, a statistic or `join_order` - and both corrections above, and
+found four statements of the table false.
+
+- **Fixed by the review - sort elision was classed "the sink; no read".**
+  An unsorted walk under `LIMIT` stops at `offset + limit` emitted rows; a
+  sorted one reads every row, a top-N heap included. So eliding the sort
+  bounds the read, and the row says so.
+- **Fixed by the review - "all of it is in `CompileBound`" and "none
+  reads ... time".** The literal-on-the-left mirror is the parser's;
+  `NOW()` reads the clock once into the statement's context; and the probe
+  memo, the build's decline, the hoist's short-circuit and the scan kernel
+  are decided at run time, the first two by the run's rows. The sentence
+  now separates the compile-time items, which are `CompileBound`'s, from
+  the run-time ones.
+- **Fixed by the review - Waystone replay was missing**: armed after the
+  compile for an opted shape and asked after the probe memo, before the
+  descent. A row of its own, "locate, advisory".
+- **Fixed by the review**: the probe memo is one entry a step, matching
+  the key its previous descent found, not "a repeated key"; the scan
+  kernel is also under the `scan_kernel` boot flag; a comment of the cell
+  said `reordered=1` is erased, which it is not and should not be.
+- **Taken**: the table's scope is said - a native `SELECT`'s chain, the
+  query layer outside, and the key set and the inner build listed though
+  they are ladder arms; the cell runs a second statement with `ORDER BY
+  ... LIMIT`, so the elision and the top-N heap are in it.
+- **Not taken**: comparing the decode masks through `exec::Compile` - they
+  are not printed by `ANALYZE` and the cell stays on what a client sees. A
+  statement with an uncorrelated `EXISTS` cannot be put through the cell's
+  loop: a block with a subquery predicate takes no plan and is not
+  reordered, which is the reason the hoist cannot differ by `join_order`.
+- **Not checked by the review**: the scan kernel's behaviour beyond its
+  comments, `chain_frame.cpp`, the Cabin run-time fallback.
+
+### CX-S3 split; CX-S3a - built 2026-11-18
+
+S3 is taken in two parts. **S3a** is the pin: `ACCESS` in a variant,
+legality at every compile, `ANALYZE`'s mark, `DROP INDEX` RESTRICTed.
+**S3b** is CX-Q6 (a) - a controller-made Cabin eligible to the ladder
+only through a plan that names it - which changes what the ladder takes
+with no plan in force and belongs to `cabin-controller.md` as much as
+here; it is not started.
+
+**S3a, as built** on worktree `cx-plan-change-option`:
+
+- **The clause**: `ACCESS <binding> <pin> {, <binding> <pin>}` after a
+  variant's `ORDER`, in `CREATE PLAN` and in `REPLACE VARIANT`; a pin is
+  `TUPLE_KEY`, `INDEX [<name>]`, `CABIN`, `SCAN`, or `NOT` before one of
+  the first three. One pin a relation.
+- **A pin restricts the ladder** (`exec::ArmPin`, `CompileBound` section
+  4): it travels with its relation through the permutation
+  (`BoundRelation::pin`), each rank of the ladder is tried only where the
+  pin admits its class, and a pin naming a class is checked against the
+  arm the ladder then took. No rank's own rule is changed, so no arm is
+  taken that the ladder could not take (CX-R2).
+- **A pin no arm meets** refuses that compile of the variant: at `CREATE
+  PLAN` the statement's refusal, naming the relation and the pin; later,
+  a decline - the written order, unpinned, counted.
+- **The row**: a variant's line gains ` access=<w>:<pin>;...` only where
+  it pins, so a row S1b wrote reads as it did. No superblock moves.
+- **`DROP INDEX`** is RESTRICTed by an enabled plan that pins the index by
+  name (CX-Q4 (a)); `ALTER PLAN ... REPLACE VARIANT` refuses a named index
+  its relation does not have.
+- **Seen**: `ANALYZE`'s `arm=plan` on a pinned step; the clause in
+  `sys.plans`' `variants`.
+
+**Where S3a differs from the order's text.**
+
+- **CX-S3: "`ANALYZE` names, per step, whether its arm came from the
+  ladder or from the plan."** Built as a mark on the pinned step alone,
+  `arm=plan`; an unmarked step is the ladder's. Printing `arm=ladder` on
+  every step of every statement would move the text the four contract
+  suites compare for a fact that is true of every step they have.
+- **And a pinned step's arm is still the ladder's choice**, among what the
+  pin left: `arm=plan` says the plan constrained it, not that the plan
+  chose it. The order's "pin an arm" reads as a force; CX-R2 says it is
+  not one, and the build follows CX-R2.
+- **CX-Q4 (a) names "a Cabin drop" beside `DROP INDEX`. Not built for a
+  Cabin**: `CABIN` names a class and no Cabin, so there is nothing for a
+  drop to be restricted by. CX-Q4 (b) covers it - the variant is declined
+  and counted. A pin naming a Cabin goes with S3b, which needs it.
+- **`INDEX` may be written without a name** (any index), and `NOT INDEX`
+  takes none; the order's sketch showed the named form only.
+- **A plan is still a join block's.** S1b's refusal of a one-relation
+  statement said access pins were S3's; S3a does not lift it, because the
+  compile asks for a plan only where a block has two relations and a
+  probe on every point read is what CX-R6 forbids
+  (`known-gaps.md`).
+
+**The review of S3a** (`critics-developer`, of `4880575c`; its fixes and
+the ones taken from its findings are in the commit after it). It found no
+way for a pin to change a result: masking a rank never touches a step's
+residual, so a key, a value list and a derived conjunct are still asked of
+every located row; the sort decision reads the arm the step ended with;
+the pin's pointer does not outlive the compile; and with no pin the chain
+is what it was.
+
+- **Fixed by the review - a `TUPLE_KEY` pin was refused where a tuple key
+  arm was legal.** The filter scan and the build annotation were not
+  behind the pin, so under `TUPLE_KEY` they took a step with an equality
+  filter before it reached the strict tuple key range the ladder ranks
+  last, and the met-check then refused: `CREATE PLAN` failed for a
+  statement whose step is a `Range` under the pin. The walk's two ranks
+  now stand aside under a pin naming a keyed class. A cell.
+- **Fixed by the review**: `ALTER PLAN ... REPLACE VARIANT`'s refusal of a
+  missing index named the variant's byte, not the index name's.
+- **Taken**: `CREATE PLAN`'s probe checks the note is there before it
+  reads it; a variant's refusal carries one byte, the compile's where it
+  names one; `DROP INDEX`'s RESTRICT names the index's byte; `NOT INDEX
+  <name>` is refused at the name, not by the next clause's message; a
+  correlated Cabin probe the pin rules out no longer stands in a value
+  list's way at the index (`LiteralIndexChoiceOf`), so an `INDEX` pin is
+  not declined for a Cabin it forbade.
+- **Taken, as cuts**: the four spellings of an arm - the DDL's reader, the
+  row's writer and reader, the printer - are one table (`ArmName`,
+  `ArmFromName`), and the row stores the DDL's word; the two "which
+  enabled plan" walks are one (`EnabledWhere`); the met-check asks
+  `ArmClassOf`, a switch with no `default`.
+- **Confirmed and stated, not changed**: under `NOT TUPLE_KEY` or `CABIN`
+  the strict range is ruled out, so a value list on a cabined column is
+  served as a Cabin set where CU-Q12 kept the unpinned ladder on the
+  range. The rows are the same and the arm is the one asked for; I12 says
+  so.
+- **Not taken**: an `Admits` over a null pin, to drop the one `static
+  const` no-pin object - it saves a line and moves a null check into
+  every rank.
+- **Not checked by the review**: the Waystone trail and the statistics
+  fold under a pinned chain; a met `CABIN` pin, which no cell builds; a
+  release build.

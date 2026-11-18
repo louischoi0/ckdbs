@@ -6,12 +6,12 @@ started** on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* S0
-rested on no item of §4. **On the operator's word of the same day (§35
+rested on no item of §4. **On the operator's word of the same day (§39
 there) V0 is passed, every item of §4 is marked (a) and CZ-S1 is opened.**
 CZ-S0 was pushed to `main` with the hook skipped on the operator's word
 (§32 there). **In CZ-S1's spike C1 alone met CZ-Q1 (a)'s bar as written,
 on a host builds reached, and the operator read S1 as C1 alone and opened
-CZ-S2** (§36 there). **CZ-S2's model is §8.** **C2 was priced further
+CZ-S2** (§40 there). **CZ-S2's model is §8.** **C2 was priced further
 (CZ-S1b, §7) and is now DG's subject**, outside CZ. CZ-S1, CZ-S1b and
 CZ-S2 are not pushed. Written the same day on
 worktree `bl-rung3-probe` from `3b3f4851` (`v3.4.12-25-g3b3f4851`) on the
@@ -299,7 +299,7 @@ Binding from CZ-S2 on, if the order reaches it.
 ## 4. Items for the operator (CZ-Q), CLA's proposals
 
 **Every item is marked (a)**: CZ-Q9 by `raft-marks-2026-11-18.md` §18,
-the others by §35 there, which also passes V0 on CZ-Q1 (a)'s bar. (a) was
+the others by §39 there, which also passes V0 on CZ-Q1 (a)'s bar. (a) was
 CLA's proposal in each. CZ-Q11 to CZ-Q13 were added at CZ-S0. **CZ-Q14 to
 CZ-Q22 were added at CZ-S2 and are not marked**; each is argued in §8,
 and CZ-S3 rests on them.
@@ -525,7 +525,7 @@ cadence task's latch sites try and park), `c2` (no zero prewrite where
 `posix_fallocate` reserved) and `c1c2`. Building, a smoke cell and the
 cells took 10.0 minutes; the quiet gate and the driver's wait for load
 held the matrix another 22.8 minutes, outside the budget
-(`raft-marks-2026-11-18.md` §35). Nothing was cut. The driver ran with the
+(`raft-marks-2026-11-18.md` §39). Nothing was cut. The driver ran with the
 spike's `--stall-cores`, which CZ-S0's §7 asked for and `bench/README.md`
 counts as a driver change. Another session's build reached 6 of the 25
 cells, two of them `isolated`; none of `levels` or `c1`.
@@ -635,7 +635,7 @@ looked for a spike defect that would explain `c1`'s result; it found none.
 ### CZ-S2 - the model, on paper, 2026-11-18
 
 On worktree `cz-checkpoint-roll-wait`, from the operator's word
-(`raft-marks-2026-11-18.md` §36), which also reads S1 as C1 alone. No
+(`raft-marks-2026-11-18.md` §40), which also reads S1 as C1 alone. No
 code. **The model is §8; CZ-Q14 to CZ-Q22 are its items for the operator
 and CZ-S3 is not opened.** The source was read at `fd96b5d3`'s tree, which
 is `origin/main`'s at `57d7c67f` for every file cited. Suite not executed:
@@ -675,7 +675,7 @@ claims held; liveness and completeness did not as first written.**
 ### CZ-S1b - C2 priced further, 2026-11-18
 
 On worktree `cz-checkpoint-roll-wait`, from the operator's word
-(`raft-marks-2026-11-18.md` §36), under CZ-Q3 (a)'s "C2 is priced in S1".
+(`raft-marks-2026-11-18.md` §40), under CZ-Q3 (a)'s "C2 is priced in S1".
 CZ-S1's spike binary, unchanged; the driver gained `--insert-rate` on the
 spike branch (`e9ee523f`), which that word admits against CZ-Q13 (a).
 **Results:
@@ -729,7 +729,7 @@ inference against the logs.
   of what ran. The script's dead helpers stay for the same reason the
   copy does.
 
-**CLA's judgement, which §36 left to it**: the numbers support an order
+**CLA's judgement, which §40 left to it**: the numbers support an order
 on the prewrite, and not C2 as it stands. It is
 `workorder-dg-wal-segment-body.md`, written and not opened; the letter DG
 is CLA's proposal.

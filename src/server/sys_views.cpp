@@ -12,6 +12,7 @@
 
 #include "kds/catalog/keystone_budget.hpp"
 #include "kds/catalog/well_known.hpp"
+#include "kds/exec/plan_ddl.hpp"
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/catalog_view.hpp"
 #include "kds/exec/transition_catalog.hpp"
@@ -832,6 +833,15 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
     // that is gone reads its oid. A row this build cannot read shows
     // `unreadable` and its text as stored. `statement` is last, as a value
     // that can hold commas.
+    //
+    // An administrator's plan (CX-S1b) reads `enabled`, `disabled`, or
+    // `invalid` where it can serve no statement - a relation it names is
+    // gone, or its fetch id is another fingerprint version's. Its
+    // `join_order` is its `ELSE` variant's, and `variants` is every variant
+    // in rule order, `<name> WHEN <rule> ORDER (<relation>, ...)` by the
+    // statement's bindings, with ` ACCESS <binding> <pin>, ...` where the
+    // variant pins an arm (CX-S3a); NULL for a captured plan, which has one
+    // order.
     Define(view, {{"plan_id", kInt},
                   {"name", kStr},
                   {"origin", kStr},
@@ -839,6 +849,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
                   {"fetch_id", kInt},
                   {"relations", kStr},
                   {"join_order", kStr},
+                  {"variants", kStr},
                   {"written_at", kTimestamp},
                   {"statement", kStr}});
     auto rows = exec::ListPlans(catalog_, page_store_);
@@ -856,9 +867,35 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
         const parser::AstValue origin = Str(plan.captured ? "captured" : "admin");
         if (!plan.readable) {
             view.rows.push_back({Int(plan.id), Str(plan.name), origin, Str("unreadable"), Null(),
-                                 Null(), Null(), Null(), Str(plan.statement)});
+                                 Null(), Null(), Null(), Null(), Str(plan.statement)});
             continue;
         }
+        parser::AstValue variants = Null();
+        std::string_view state = "enabled";
+        if (!plan.captured) {
+            std::string text;
+            for (const exec::PlanVariant& variant : plan.variants) {
+                if (!text.empty()) text += "; ";
+                text += variant.name;
+                text += variant.rule.is_else() ? " ELSE"
+                                               : " WHEN " + exec::PlanRuleText(variant.rule);
+                text += " ORDER (";
+                for (std::size_t k = 0; k < plan.key.n; ++k) {
+                    if (k != 0) text += ", ";
+                    text += plan.bindings[variant.order[k]];
+                }
+                text += ")";
+                text += exec::PlanAccessText(variant.access, plan.bindings);
+            }
+            variants = Str(text);
+            state = !exec::PlanRowIsValid(catalog_, plan) ? "invalid"
+                    : plan.enabled                         ? "enabled"
+                                                           : "disabled";
+        }
+        // An administrator's plan's `join_order` is its `ELSE` variant's:
+        // the order a statement no rule holds for runs.
+        const exec::CapturedOrder& order =
+            plan.captured ? plan.order : plan.variants.back().order;
         std::string relations;
         std::string join_order;
         for (std::size_t i = 0; i < plan.key.n; ++i) {
@@ -867,10 +904,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
                 join_order += ", ";
             }
             relations += label(plan.key.oids[i]);
-            join_order += label(plan.key.oids[plan.order[i]]);
+            join_order += label(plan.key.oids[order[i]]);
         }
-        view.rows.push_back({Int(plan.id), Str(plan.name), origin, Str("enabled"),
-                             Int(plan.key.fetch_id), Str(relations), Str(join_order),
+        view.rows.push_back({Int(plan.id), Str(plan.name), origin, Str(std::string(state)),
+                             Int(plan.key.fetch_id), Str(relations), Str(join_order), variants,
                              Timestamp(plan.written_at_us), Str(plan.statement)});
     }
     return view;
@@ -1003,8 +1040,11 @@ StatusOr<exec::CatalogView> CommandDispatcher::StatementStatsView() {
     // What each statement shape costs (BO-S5, §3.1): one row per
     // `(fetch_id, kind)` for the instance, the cores' parts merged at read
     // - an engine-state view, so it filters nothing. `fetch_id` is 0 for a
-    // kind with no fingerprint. `shape_text` is the first statement of the
-    // shape seen, cut to 256 bytes - last, as a value that can hold commas.
+    // kind with no fingerprint. `plan_source` is where the shape's join
+    // order last came from (CX-R11), NULL for a shape with no join block;
+    // `plan_name` and `variant` are the administrator's plan that chose it,
+    // NULL where none did. `shape_text` is the first statement of the shape
+    // seen, cut to 256 bytes - last, as a value that can hold commas.
     Define(view, {{"fetch_id", kInt},
                   {"kind", kStr},
                   {"calls", kInt},
@@ -1013,11 +1053,21 @@ StatusOr<exec::CatalogView> CommandDispatcher::StatementStatsView() {
                   {"max_us", kInt},
                   {"first_seen", kTimestamp},
                   {"last_seen", kTimestamp},
+                  {"plan_source", kStr},
+                  {"plan_name", kStr},
+                  {"variant", kStr},
                   {"shape_text", kStr}});
     for (const stats::StatementShape& s : stats::StatementStats::Snapshot()) {
+        // `<plan>/<variant>`: neither is a name that holds a `/`.
+        const std::size_t slash = s.plan_label.find('/');
+        const bool managed = slash != std::string::npos;
         view.rows.push_back({Int(s.fetch_id), Str(s.kind), Int(s.calls), Int(s.refused),
                              Int(s.total_us), Int(s.max_us), Timestamp(s.first_seen_us),
-                             Timestamp(s.last_seen_us), Str(s.shape_text)});
+                             Timestamp(s.last_seen_us),
+                             s.plan_source.empty() ? Null() : Str(s.plan_source),
+                             managed ? Str(s.plan_label.substr(0, slash)) : Null(),
+                             managed ? Str(s.plan_label.substr(slash + 1)) : Null(),
+                             Str(s.shape_text)});
     }
     return view;
 }

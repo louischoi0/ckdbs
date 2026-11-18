@@ -628,6 +628,11 @@ under the `X` a writer of the relation among them waits on it like any other - a
 a cancel ends the build at the next boundary with nothing published
 (`protocol.md` §10).
 
+**`DROP INDEX` is RESTRICTed by an enabled administrator's plan that pins the
+index by name** (CX-S3a, CX-Q4 (a); `parser-v2.md` I12): refused naming the
+plan, under the relation `X`, until `DROP PLAN` or `ALTER PLAN ... DISABLE`.
+`REINDEX INDEX` keeps the name and is not restricted.
+
 An index's **name is unique instance-wide**, so `DROP INDEX` names only it.
 That is where an index and a Cabin differ and why: `(relation, column)`
 identifies a Cabin uniquely because C3 keeps it to one column, while two
