@@ -34,7 +34,11 @@ threshold, PostgreSQL's autovacuum analyze threshold, Oracle's 10 % rule.
   and has no notion of "since the last gather".
 - `[design]` CY makes the model change only by an explicit act (CY-R3),
   so until this is ruled on a gathered statistic is as old as its last
-  `GATHER`, and `sys.statistics` shows its age and nothing else.
+  `GATHER`, and `sys.statistics` shows its age and nothing else. **CY's
+  one automatic write is the steward saving a relation's row prior when
+  its band moves (CY-Q2 (a))** - option (d) below, applied to the
+  relation object. Whether that save may ever replace a gathered row
+  count is CY-Q16, and a ruling here should cover it.
 
 ## Why it is not a detail
 
