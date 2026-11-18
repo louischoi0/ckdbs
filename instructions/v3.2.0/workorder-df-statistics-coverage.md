@@ -1,15 +1,16 @@
 # Work order DF - the statistics the engine records, widened: what a statement shape costs, transactions and the read horizon, index and relation usage, space
 
-Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
+Status: **OPENED 2026-11-18** on the operator's word
+(`raft-marks-2026-11-18.md` §35), from `57d7c67f`
+(`v3.4.12-67-g57d7c67f`); **DF-S0 in progress.** Written the same day on worktree
 `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`, from
 `56d20394` (`v3.4.12-53-g56d20394`) on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §33). The session was isolated in that worktree
 and could not open one named for this order; the branch carries the name.
 
 **DF-Q0..Q10 each marked (a), as CLA proposed, on the operator's word of
-2026-11-18** (`raft-marks-2026-11-18.md` §34). No stage is started: the
-word marks the items and does not open DF; the opening is the operator's.
-**DF moves no format**: no superblock bump, no catalog relation,
+2026-11-18** (`raft-marks-2026-11-18.md` §34), a word that marked the
+items and opened nothing; §35 opened DF. **DF moves no format**: no superblock bump, no catalog relation,
 no WAL record kind, no page byte (DF-R1). Every `[source-read]` claim below
 was read at `56d20394`, and the order was reviewed by `critics-developer`
 before it was committed (§7).

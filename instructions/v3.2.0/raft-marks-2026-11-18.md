@@ -319,3 +319,13 @@ took under them.
 | **Mark** | **DF-Q0..Q10 each marked (a), as CLA proposed, the operator's mark.** Among them: DF-Q0 (a), one order of four parts; DF-Q5 (a), the executed order not built; DF-Q9 (a), BO-Q13's exclusion lifted for delete-marked slots (the steward's sampled estimate) and leaf divisions (counted in memory at their sites, compactions beside them), and for nothing else of its list; DF-Q10 (a), DF-S0 prices each part and the bar is BO's recording, 0.5 us at `cores = 1`. DF-Q4 (a), DF-Q6 (a) and DF-Q10 (a) are each conditional on what DF-S0 reads or prices, as the order's §4 states. **Pushed to `main` with `--no-verify`**: the order, §33, this section and the index. The hook was skipped and no suite was executed; the commits change no build input (documents only) |
 | **Does not settle** | the opening of DF - the word marks the items and asks for the push, and names no stage; items 5-9 of CLA's list; DA's opening, which part C's access-shape columns wait for; a tag, a version |
 | **Recorded at** | this file; `workorder-df-statistics-coverage.md`'s header, §4 and §7; the DF row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 35. DF opened; DF-S0 started
+
+| | |
+|---|---|
+| **Context** | CLA's report of §34's push at `57d7c67f`, which said DF was not opened by that word and that an opening would start at DF-S0 - no engine code on `main`, the cited lines re-read, and each part's statement-path cost priced against DF-Q10's bar |
+| **Word** | This session's W4: *"Open DF and proceed from S0."* (given in Korean; recorded in English) |
+| **Mark** | **DF opened**, from `57d7c67f` (`v3.4.12-67-g57d7c67f`), on worktree `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`. **DF-S0 started**: the census of the order's §5 and DF-Q10 (a)'s spike and cells |
+| **Does not settle** | whether the stages after DF-S0 run without a further word - "from S0" names where to start and CLA stops at DF-S0's report, as the Session Workflow's step 4 has it; anything DF-S0 takes back to the operator; a push; a tag, a version |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md`'s header; the DF row and this file's row in `instructions/v3.2.0/index.md` |
