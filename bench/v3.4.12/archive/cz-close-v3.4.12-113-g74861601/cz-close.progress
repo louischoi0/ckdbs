@@ -1,0 +1,75 @@
+16:32:12 start r1-isolated-B load=1.28 4.32 4.97 busy=[]
+16:32:30 done r1-isolated-B rc=0
+16:32:30 start r1-levels-A load=0.92 4.04 4.86 busy=[]
+16:32:50 done r1-levels-A rc=0
+16:32:50 start r1-levels-B load=1.14 3.89 4.79 busy=[]
+16:33:10 done r1-levels-B rc=0
+16:33:10 start r1-bulk-B load=1.50 3.83 4.76 busy=[]
+16:33:26 done r1-bulk-B rc=0
+16:33:31 gate waiting 5s load=1.95
+16:33:31 start r1-bulk-A load=1.95 3.75 4.70 busy=[]
+16:34:08 done r1-bulk-A rc=0
+16:34:08 start r2-isolated-B load=1.47 3.41 4.55 busy=[]
+16:34:26 done r2-isolated-B rc=0
+16:34:26 start r2-levels-B load=1.19 3.22 4.47 busy=[]
+16:34:46 done r2-levels-B rc=0
+16:34:46 start r2-levels-A load=1.37 3.13 4.41 busy=[]
+16:35:05 done r2-levels-A rc=0
+16:35:05 start r2-bulk-A load=1.62 3.07 4.36 busy=[]
+16:35:27 done r2-bulk-A rc=0
+16:35:27 start r2-bulk-B load=1.73 3.00 4.31 busy=[]
+16:35:54 done r2-bulk-B rc=0
+16:35:54 start r3-isolated-B load=1.44 2.82 4.22 busy=[]
+16:36:12 done r3-isolated-B rc=0
+16:36:12 start r3-levels-A load=1.09 2.66 4.13 busy=[]
+16:36:32 done r3-levels-A rc=0
+16:36:32 start r3-levels-B load=1.57 2.66 4.10 busy=[]
+16:36:56 done r3-levels-B rc=0
+16:36:56 start r3-bulk-B load=1.75 2.61 4.04 busy=[]
+16:37:23 done r3-bulk-B rc=0
+16:37:23 start r3-bulk-A load=1.53 2.48 3.96 busy=[]
+16:37:45 done r3-bulk-A rc=0
+16:37:45 start r4-isolated-B load=1.80 2.47 3.93 busy=[]
+16:38:18 done r4-isolated-B rc=0
+16:38:18 start r4-levels-B load=1.13 2.23 3.79 busy=[]
+16:38:38 done r4-levels-B rc=0
+16:38:38 start r4-levels-A load=1.31 2.20 3.75 busy=[]
+16:38:57 done r4-levels-A rc=0
+16:38:57 start r4-bulk-A load=1.68 2.22 3.72 busy=[]
+16:39:24 done r4-bulk-A rc=0
+16:39:24 start r4-bulk-B load=1.40 2.10 3.64 busy=[]
+16:39:41 done r4-bulk-B rc=0
+16:39:46 gate waiting 5s load=2.18
+16:39:51 gate waiting 10s load=2.00
+16:39:56 gate waiting 15s load=1.92
+16:39:56 start r5-isolated-B load=1.92 2.18 3.61 busy=[]
+16:40:34 done r5-isolated-B rc=0
+16:40:34 start r5-levels-A load=1.20 1.97 3.49 busy=[]
+16:40:54 done r5-levels-A rc=0
+16:40:54 start r5-levels-B load=1.40 1.96 3.45 busy=[]
+16:41:13 done r5-levels-B rc=0
+16:41:13 start r5-bulk-B load=1.38 1.91 3.40 busy=[]
+16:41:30 done r5-bulk-B rc=0
+16:41:30 start r5-bulk-A load=1.68 1.95 3.39 busy=[]
+16:41:57 done r5-bulk-A rc=0
+16:41:57 start r1-g-isolated-B load=1.66 1.91 3.33 busy=[]
+16:42:25 done r1-g-isolated-B rc=0
+16:42:25 start r1-g-levels-B load=1.17 1.77 3.24 busy=[]
+16:42:44 done r1-g-levels-B rc=0
+16:42:44 start r1-g-levels-A load=1.50 1.80 3.22 busy=[]
+16:43:03 done r1-g-levels-A rc=0
+16:43:03 start r2-g-isolated-B load=1.29 1.73 3.17 busy=[]
+16:43:21 done r2-g-isolated-B rc=0
+16:43:22 start r2-g-levels-A load=0.92 1.62 3.10 busy=[]
+16:43:41 done r2-g-levels-A rc=0
+16:43:41 start r2-g-levels-B load=1.35 1.66 3.08 busy=[]
+16:44:00 done r2-g-levels-B rc=0
+16:44:00 start r3-g-isolated-B load=1.34 1.65 3.05 busy=[]
+16:44:18 done r3-g-isolated-B rc=0
+16:44:18 start r3-g-levels-B load=1.02 1.56 2.99 busy=[]
+16:44:37 done r3-g-levels-B rc=0
+16:44:37 start r3-g-levels-A load=1.38 1.60 2.98 busy=[]
+16:44:57 done r3-g-levels-A rc=0
+16:44:57 start overhead
+16:45:57 done overhead rc=0
+16:45:57 CZCLOSE-END

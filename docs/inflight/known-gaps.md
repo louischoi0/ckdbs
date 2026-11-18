@@ -323,8 +323,15 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `[quiet-wrong]` and unlicensed without the operator's word
   (`instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7). The
   re-dirtied-page recLSN fix that kept the log from recycling is at
-  `0e88060a`, not re-measured. Re-verified at `7dd9b789` by reading. Owner:
-  `docs/spec/wal.md` §6.
+  `0e88060a`, not re-measured. Re-verified at `7dd9b789` by reading.
+  **Since CZ (closed 2026-11-18, on worktree `cz-checkpoint-roll-wait` at
+  `74861601`) the cadence checkpoint no longer waits a roll out on its
+  reactor**: it tries the latch and parks (`wal.md` §11). Every other
+  taker still waits a roll out - a commit, a drain, `EnsureDurable` and a
+  foreground statement on a page latch a roll's appender holds - and the
+  roll's own length is unchanged (hold median about 250 ms in CZ's close
+  cell, `bench/v3.4.12/results-cz-close-v3.4.12-113-g74861601.md`). The zero prewrite's cost is DG's,
+  unopened. Owner: `docs/spec/wal.md` §6.
 
 ## Multi-core state
 
@@ -1029,7 +1036,14 @@ holds the history, and the mechanisms are `docs/spec/crosscore.md` CC1 and
   - Forced onto one core with the balancer off, the walker costs a reader
     535 µs against 506 µs p99 on the medians. The paired runs, though,
     range from 0.91x to 3.14x, so this is not a clean bound.
-  Whether rung 3 is ruled out is the operator's mark. What else v0 does not
+  Whether rung 3 is ruled out is the operator's mark. **CZ's close
+  re-measured bar (v) on 2026-11-18** (CZ-Q6 (a); worktree
+  `cz-checkpoint-roll-wait` at `74861601`, `bench/v3.4.12/results-cz-close-v3.4.12-113-g74861601.md`):
+  in the probe's `levels` cell with the cadence checkpoint parking on a
+  busy stream latch the reader p99 is 1.55x isolated with 5 of 5 pairs
+  within 2x, against 3.17x and 2 of 5 without it. **Bar (v) is met in
+  that cell on that build.** BL's other mixed cells and placements are
+  not re-run, and the cell was read on one host. What else v0 does not
   separate:
   - a `normal` session's statement that does not yield holds an
     interactive core from a `transactional` one, and a `background` write

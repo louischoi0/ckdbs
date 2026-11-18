@@ -3,8 +3,9 @@
 Status: **OPENED 2026-11-18; CZ-S0, CZ-S1 and CZ-S2 done; S1 read as C1
 alone; CZ-S2's items CZ-Q14 to CZ-Q22 marked (a) (§43 there); CZ-S3 and
 CZ-S4 opened on the operator's W29 (§47 there), every later item to CLA's
-proposal and a gate not met stopping the order; CZ-S3 built** (§7, "CZ-S3")
-on
+proposal and a gate not met stopping the order; CZ-S3 built; CZ-S4 done,
+every gate met - CLOSED 2026-11-18 with C1 built** (§7, "CZ-S3" and
+"CZ-S4"), not merged and not pushed, on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* S0
@@ -810,6 +811,67 @@ commit.
   asked above `flushed_lsn()` under a roll, where the seal has flushed the
   ring - test 3's second try is what would break; the end site's blocking
   path is not reached by a test.
+
+### CZ-S4 - the close, 2026-11-18
+
+On worktree `cz-checkpoint-roll-wait`, B at `74861601`
+(`v3.4.12-113-g74861601`) against A at `9712f5f0`, the commit CZ-S3
+branched from. **Results:
+`bench/v3.4.12/results-cz-close-v3.4.12-113-g74861601.md`.** 34 cells
+and the overhead, every one rc=0 with 0 errors. No cell found a competing
+build. 16.1 minutes of building and running, inside the hour; the
+script's quiet gate held 20 s and the driver's load gate 120 s, both
+inside those minutes.
+
+| gate | item | reading | |
+|---|---|---|---|
+| V1 | CZ-Q1 (a) | B 1.55x the isolated median, 5 of 5 pairs within 2x (A: 3.17x, 2 of 5) | **met** |
+| the bulk cell | CZ-Q2 (a), at most 3 % lost | 0.999 of A, median of 5 | **met** |
+| the overhead | Session Workflow step 3 | every shape at `cores = 1` inside the A2 floor or below it; at `cores = 4` C3 and V1's inserter equal | **no regression** |
+| BL's bar (v) | CZ-Q6 (a) | the same reading as V1 | met in this cell |
+| beside the bar | CZ-Q11 (a) | p99.9 4.3 ms against 63.2 ms; stall samples 3 against 114 | reported |
+| the checkpoint | CZ-Q2 (a) | wall 1.0-1.6 s median; live segments 14, nothing recycled in a B window; the bound never reached; 1 recycle skipped in the 12 runs inside the windows | reported |
+| `group` | CZ-Q5 (a) | B 1.31x, A 1.36x, 3 of 3 each | reported |
+
+- **What the close leaves**: B r4's one 56.2 ms system poll on a read
+  core, inside that core's checkpoint run with no blocking latch entry
+  (the results file's §2), is not attributed. The run line rules out a
+  page write (CZ-Q12; the run's longest 500 µs) and the inline gate (not
+  taken); the park's flush (CZ-Q21 (a)) or an untimed part of the run's
+  completion is left.
+- **The texts the close owed**: `CLAUDE.md`'s WAL row, `known-gaps.md`'s
+  roll entry and BL-R7's remainder, and BL's §6 ("Bar (v) re-measured by
+  CZ's close"). BL is not reopened.
+- **Reviewed by `critics-developer`** against the raw data before the
+  commit. It re-ran both table scripts, which reproduce the tables, and
+  checked every cell's binary hash and its 0 errors. **No gate's verdict
+  moved.**
+  - **Corrected by the review**:
+    - A's roll-hold range (231-296 ms, not B's 249-254 ms);
+    - the overhead's largest cost not excluded is `update-in64`'s, about
+      +3.8 %, not `select-pk`'s +3.2 %;
+    - the recycle was skipped once in B's 12 runs in the V1 windows, not
+      25, and once more in a C3 cell;
+    - A's excess is a little narrower than CZ-S1's, not wider;
+    - the driver's own load gate held another 120 s;
+    - the busy answers are a window's, not a run's;
+    - A's read cores waited at most 8 µs at `group`, not nothing.
+  - **Applied from its findings**:
+    - B's zero latch wait is true by construction, and the run line's
+      blocking time is the evidence;
+    - B r4's poll is not a page write or the inline gate, by that run's
+      own line;
+    - the 14 live segments are every segment written: nothing was
+      recycled in a B window;
+    - the rotation's part in A's segment counts is not shown;
+    - BL's "is gone" softened to the 3 samples left;
+    - count cells carry their units (`bench/README.md`).
+  - **Method, stated and not re-run**: `isolated-B` ran first in every
+    run and was never rotated. Against the isolated median, B's pairs
+    are 1.31-1.95x, still 5 of 5. The margin is thin: r4 is 1.98x against
+    its own pair, and the worst cross-pairing is 2.09x.
+  - **Rejected**: cutting §2's in-run-hold and roll columns, which are the
+    evidence the bullets under that table read.
 
 ## 8. The model for C1 (CZ-S2) `[design]`
 
