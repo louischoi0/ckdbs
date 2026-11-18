@@ -189,3 +189,58 @@ took under them.
 | **Mark** | None. On W21, `dc884be6` (§19) and this merge go to `main` with `--no-verify`; the hook and the suite are skipped, and this session ran no suite - its commits change documents only, and the source the merges brought is `origin/main`'s own. **The README and `CLAUDE.md` compaction of W19-W20 is not in this push**: it was uncommitted and under `critics-developer`'s review at the word, and follows in its own commit under the same word |
 | **Does not settle** | A version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 21. `CLAUDE.md` and the READMEs compacted; pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W19 and W20 (§20). W22, while the review was still running: *"When the review is done, push CLAUDE.md with no verify too."* (given in Korean; recorded in English) |
+| **Mark** | None. **`CLAUDE.md`: 70,113 bytes to about 56,000.** Thirty milestone rows state the contract without the stage that built it, its superblock number or its date, and a row's work orders moved to its owning-docs cell; the header's compaction note, the "settled" paragraph and the reopening paragraph are shortened. **Everything from "Hard Invariants" to the end is byte-identical.** The prior text is at `abe870fc`. **READMEs**: `instructions/`, `docs/`, `docs/pending/` (its table's subjects shortened, entries linked), `docs/conceptnotes/` and `CIP/` ("Not cut, and why"), each with a `git show` link to its prior text; the root `README.md`, `docs/inflight/`'s two and `manual/`'s three hold no history worth cutting and are unchanged. **Reviewed by `critics-developer`**, which found CLA's first rewrite had cut past history - refusals by name, two `[quiet-wrong]` markers, hard limits, correctness premises and known-gap pointers in about two dozen rows, and four statements made wrong - and restored them; that is why the file is 56 KB and not CLA's 49 |
+| **Does not settle** | The dated operator quotations inside the rule sections, left as written; the mechanism detail the review chose not to restore (its report names it; the specs carry it); a version |
+| **Recorded at** | this file; `CLAUDE.md`'s header; this file's row in `instructions/v3.2.0/index.md` |
+
+## 22. A survey of what the engine lacks as an OLTP engine; the torn-page order written as DB
+
+| | |
+|---|---|
+| **Context** | A new conversation. W0: *"Looking at the kdbs code as it stands, are there layers or components to be filled in, or concepts to apply? From the standpoint of an engine specialized for OLTP."* CLA answered from the specs, `known-gaps.md`, `docs/pending/` and a search of the source at `origin/main` `0500200d`, measuring nothing, with eight items: (1) a torn page is refused and not healed; (2) no replication or standby; (3) a commit's outcome cannot be asked for after a lost connection (CN-5, a concept note only); (4) a pool miss is a blocking read on the reactor; (5) four cores deliver less than two (a pending entry); (6) a hot row's writers are refused and retry (CR, written and not opened); (7) index entries are never removed; (8) no `SELECT ... FOR UPDATE`. It recommended 1, then 4, then 6. **Four of CLA's statements in that answer and the turns after were wrong or incomplete on the tree, and the orders written under §22-§25 each say which**: item 2 holds of `origin/main` only - the unlanded branch `worktree-cm-physical-standby` carries an order CM and its stages S0-S2; item 1 was called "a design the spec already adopted", where BR had tried that rule and found no site for it (DB §1.3); item 7 said nothing measures index growth, where BY's close measured a rebuild and found a probe cost the same before and after (DD §1.1); item 8 said the cost should be small because `U` exists, where the claim machinery is on the write walk, which uses no index and does not yield (DC §0) |
+| **Word** | W1: *"Write the work order for item 1, the FPI cadence, first."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-db-torn-page-healing.md` is written and not opened.** The letter DB is CLA's proposal. Its one `[quiet-wrong]` decision, DB-Q1, is where the image is logged. CLA drafted the order around an image at the device write and told the operator so while the review ran; `critics-developer` found five obligations that placement had not stated - among them changes lost after a crash during recovery, and BF-R4's reclaim gate broken - and a single site for the spec's own placement. CLA rewrote the design and **moved its proposal to the image at the first exclusive fetch after a writeback copy** (F), keeping the device-write placement as (b). **F's soundness argument was written after the review and is not reviewed**; DB-S0 reads the tree against it before DB-Q1 is marked. No suite was run and nothing was measured: documents only |
+| **Does not settle** | DB-Q1..Q6; the opening of DB; a push; a version |
+| **Recorded at** | this file; the DB order; the DB row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 23. `SELECT ... FOR UPDATE`: the order written as DC
+
+| | |
+|---|---|
+| **Word** | W2, given while DB was being read for: *"Write the work order for item 8, SELECT FOR UPDATE."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-dc-select-for-update.md` is written and not opened.** The letter DC is CLA's proposal. Written by a fork of the session and reviewed by `critics-developer`, every finding applied. Two items are `[quiet-wrong]`: DC-Q1, the mode - under `U`, the claim an `UPDATE` takes here, the spelling `FOR UPDATE` gives what PostgreSQL calls `FOR NO KEY UPDATE`, because a foreign key child's share passes it - and DC-Q3, which version is returned. Under DC-Q0 (a) only an equality or a list on the tuple key descends; every other locking read walks the whole relation without yielding, and the order says so in its §0 |
+| **Does not settle** | DC-Q0..Q10; the opening of DC; a push; a version |
+| **Recorded at** | this file; the DC order; the DC row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 24. Index entries removed: the order written as DD, exploratory
+
+| | |
+|---|---|
+| **Word** | W3: *"Write the work order for item 7, index entry removal."* (given in Korean; recorded in English) |
+| **Mark** | **`workorder-dd-index-entry-purge.md` is written and not opened, exploratory by CLA's proposal.** The letter DD is CLA's proposal. Written by a fork of the session and reviewed by `critics-developer`, every finding applied. Its premise is weak as measured (§22), so DD-S0 measures before anything is built and may end the order with nothing. The driver CLA first weighed, a writer compacting its full index leaf, is not available as stated: the writer holds its clustered leaf while it maintains its indexes. The proposal is one statement, `PURGE INDEX`, under the relation `IX`, removing what a rebuild would leave out. DD-Q1..Q3 and DD-R1..R4 are `[quiet-wrong]` |
+| **Does not settle** | DD-Q0..Q7; the opening of DD; the numbers in DD-Q0's bar, which are CLA's; a push; a version |
+| **Recorded at** | this file; the DD order; the DD row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 25. A page read that does not stop its core: the order written as DE, exploratory
+
+| | |
+|---|---|
+| **Word** | W4: *"Explain item 4 in more detail."* - answered in conversation from the tree at `a4d2fb3b`. W5: *"Write the work order for item 4, asynchronous I/O, as well."* (each given in Korean; recorded in English) |
+| **Mark** | **`workorder-de-page-read-off-the-reactor.md` is written and not opened.** The letter DE is CLA's proposal, and so is its exploratory shape: the word does not ask for one, and DE-Q0 puts it to the operator. Reviewed by `critics-developer`; its findings applied but one, named in the order's §7. DE-S0 measures whether a miss's stall reaches sessions that did not miss once the page cache is kept from answering; DE-Q6 asks first whether a working set beyond the pool is a case the engine serves at all. **A side finding of that review is entered in `known-gaps.md`**: a backup starts threads after startup, against `sched.md` §9's invariant 1 |
+| **Does not settle** | DE-Q0..Q6; the opening of DE; the backup threads; a push; a version |
+| **Recorded at** | this file; the DE order; `docs/inflight/known-gaps.md` "Backup and restore (BR)"; the DE row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 26. DB, DC, DD and DE pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | W6, on CLA's report of the four orders at `ebcbe67f` on worktree `db-fpi-cadence-dc-for-update`: *"push no verify"* |
+| **Mark** | None. **Pushed to `main` with `--no-verify`**: the four orders, §22-§25, their index rows and the `known-gaps.md` entry. The hook and the suite are skipped, and no suite was run: the commits change documents only. `origin/main` stood at `a4d2fb3b`, the branch's base, so nothing was merged |
+| **Does not settle** | Any DB-Q, DC-Q, DD-Q or DE-Q; the opening of any of the four; a re-review of DB §2.1's argument, which CLA offered and the word does not ask for; a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
