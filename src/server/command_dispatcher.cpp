@@ -2869,6 +2869,9 @@ protected:
     // down only once its statement has ended (`TcpServer::CloseClient`).
     Session& session_;
     exec::SlicePolicy slice_;
+    // The least a slice and the wait after it take, or 0: a gather's
+    // (CY-Q31 (a)); a DDL build yields and goes on.
+    sched::MonoTimeNs pace_ns_ = 0;
     bool decided_ = false;
 
 private:
@@ -2895,6 +2898,7 @@ sched::Coro BuildRun::Execute(DispatchOutcome* out) {
     Status ran = slice_.TakeCancel();
     if (ran.ok()) co_await Drain(&ran);
     while (ran.ok() && !walked()) {
+        const sched::MonoTimeNs slice_began = d_.NowNs();
         {
             // The slice writes pages as this dispatcher's core, as
             // `DispatchAndStage` runs - and only the slice: across the yield
@@ -2906,7 +2910,22 @@ sched::Coro BuildRun::Execute(DispatchOutcome* out) {
         if (!ran.ok() || walked()) break;
         // ---- The slice boundary: no pin, no span (the suspend audit) ----
         if (ran = slice_.TakeCancel(); !ran.ok()) break;
-        co_await sched::Yield{};
+        // **A paced run** (`pace_ns_`, a gather's, CY-Q31 (a)) parks until its
+        // slice's interval has passed, so its page rate has a ceiling; every
+        // other run yields. No clock, no pace: a fixture's dispatcher.
+        const sched::MonoTimeNs resume_at = slice_began + pace_ns_;
+        if (pace_ns_ > 0 && d_.clock_ != nullptr && d_.NowNs() < resume_at) {
+            CommandDispatcher& d = d_;
+            std::atomic<bool>* const cancel = slice_.cancel;
+            const std::function<bool()> due = [&d, resume_at, cancel] {
+                return d.NowNs() >= resume_at ||
+                       (cancel != nullptr && cancel->load(std::memory_order_acquire));
+            };
+            sched::WaitScope wait(stats::WaitEvent::kIdleBackground);
+            co_await sched::WaitUntil{&due};
+        } else {
+            co_await sched::Yield{};
+        }
         // **Reported at the resume**: the waiters' net measures the holder's
         // silence, and a build waiting its turn on its core is not stuck -
         // the count moves each time the core comes back to it, however long
@@ -3303,6 +3322,12 @@ DispatchOutcome TransitionBuildRun::Publish(const Status& ran) {
 class GatherRun final : public BuildRun {
 public:
     static constexpr std::uint32_t kGatherLeavesPerSlice = PagesPerSlice(Priority::kAnalytic);
+    // CY-Q31 (a): a slice of 16 leaves takes at least 2 ms with its wait, so
+    // a gather reads at most 8,000 leaves a second (64 MiB/s of 8 KiB pages)
+    // whatever the device could give it; a million-leaf relation takes about
+    // two minutes. Its close measurement found an unpaced loop of gathers
+    // slowing OLTP on another core by up to 48 % at p99.
+    static constexpr sched::MonoTimeNs kGatherSliceIntervalNs = 2'000'000;
 
     GatherRun(CommandDispatcher& d, Session& session, catalog::Oid oid, std::string label,
               bool pending, bool force)
@@ -3312,6 +3337,7 @@ public:
           pending_(pending),
           force_(force) {
         slice_.pages_per_slice = kGatherLeavesPerSlice;
+        pace_ns_ = kGatherSliceIntervalNs;
     }
 
     DispatchOutcome Start() { return HandOn(/*fenced=*/true); }

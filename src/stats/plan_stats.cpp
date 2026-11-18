@@ -488,6 +488,10 @@ void PlanStats::InstallLocked(
 
 void PlanStats::RepublishManaged() {
     const LatchGuard hold(&publish_latch_);
+    // **Only when a band moved** (CY-Q31 (a)): a new generation re-keys every
+    // core's order memo (§6a), so a re-gather that lands in its band - most
+    // of them, by PS5's hysteresis - costs no core a compile.
+    if (current_ != nullptr && current_->managed_ == managed_.PublishedBands()) return;
     std::vector<std::pair<catalog::Oid, std::int16_t>> priors;
     std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors;
     if (current_ != nullptr) {

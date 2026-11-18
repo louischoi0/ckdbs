@@ -227,6 +227,22 @@ TEST(ManagedStatisticsPlanTest, TheHistoryComesBackInReplacementOrderNotVersionO
     EXPECT_EQ(after[0].history[1].version, 1u);
 }
 
+TEST(ManagedStatisticsPlanTest, ARepublishWhoseBandsDidNotMoveKeepsTheGeneration) {
+    stats::PlanStats ps(1);
+    ASSERT_TRUE(ps.managed().Store(7, Gathered(1000), false, false).ok());
+    ps.RepublishManaged();
+    const std::uint64_t published = ps.generation();
+    // A re-gather inside the band (PS5) and a pending store move no band, so
+    // no core's order memo is re-keyed (CY-Q31 (a)).
+    ASSERT_TRUE(ps.managed().Store(7, Gathered(1010), false, false).ok());
+    ASSERT_TRUE(ps.managed().Store(7, Gathered(90000), /*pending=*/true, false).ok());
+    ps.RepublishManaged();
+    EXPECT_EQ(ps.generation(), published);
+    ASSERT_TRUE(ps.managed().PublishPending(7, false).ok());
+    ps.RepublishManaged();
+    EXPECT_GT(ps.generation(), published);
+}
+
 TEST(ManagedStatisticsPlanTest, LoadingNothingPublishesNothing) {
     stats::PlanStats ps(1);
     ps.LoadStatistics({});
