@@ -24,6 +24,7 @@
 #include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/captured_plans.hpp"
+#include "kds/exec/plan_catalog.hpp"
 #include "kds/exec/plan_memo.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/stats/plan_stats.hpp"
@@ -1505,6 +1506,7 @@ private:
                                            DdlBuildLock& out);
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
     DispatchOutcome HandleSetJoinOrder(std::string_view line, std::string_view rest);
+    DispatchOutcome HandleDropPlan(std::string_view line, Session& session);
     DispatchOutcome HandleSetAsh(std::string_view line, std::string_view rest);
 
 
@@ -2332,6 +2334,7 @@ private:
     StatusOr<exec::CatalogView> CabinsView();
     StatusOr<exec::CatalogView> AssertionsView();
     StatusOr<exec::CatalogView> TransitionsView();
+    StatusOr<exec::CatalogView> PlansView();
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> StatementStatsView();

@@ -76,6 +76,7 @@ constexpr SysViewSpec kViews[] = {
     {"cabins"},
     {"assertions"},
     {"transitions"},
+    {"plans"},
     {"cabin_optimizer"},
     {"lock_waits"},
     {"statement_stats"},
@@ -247,6 +248,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "cabins") return CabinsView();
     if (n == "assertions") return AssertionsView();
     if (n == "transitions") return TransitionsView();
+    if (n == "plans") return PlansView();
     if (n == "cabin_optimizer") return CabinOptimizerView(byte);
     if (n == "lock_waits") return LockWaitsView();
     if (n == "statement_stats") return StatementStatsView();
@@ -815,6 +817,61 @@ StatusOr<exec::CatalogView> CommandDispatcher::AssertionsView() {
         }
         out.push_back(Str(def.source_text));
         view.rows.push_back(std::move(out));
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
+    exec::CatalogView view;
+    // Every row of `sys.plans` (CX-S1a, `exec/plan_catalog.hpp`) - an
+    // engine-state view as `sys.assertions` is: the rows, not the instance's
+    // table, so a capture the persisting task has not written yet is not
+    // here (`sys.meta`'s `captured_pending` counts those). `relations` is
+    // the shape's relations in written order and `join_order` the same
+    // relations in the order the plan runs them, each resolved at read: one
+    // that is gone reads its oid. A row this build cannot read shows
+    // `unreadable` and its text as stored. `statement` is last, as a value
+    // that can hold commas.
+    Define(view, {{"plan_id", kInt},
+                  {"name", kStr},
+                  {"origin", kStr},
+                  {"state", kStr},
+                  {"fetch_id", kInt},
+                  {"relations", kStr},
+                  {"join_order", kStr},
+                  {"written_at", kTimestamp},
+                  {"statement", kStr}});
+    auto rows = exec::ListPlans(catalog_, page_store_);
+    if (!rows.ok()) return rows.status();
+    auto labels = RelationLabels::Read(catalog_, nullptr);
+    if (!labels.ok()) return labels.status();
+    const auto label = [&](catalog::Oid oid) {
+        const parser::AstValue name = labels.value().Name(oid);
+        if (name.type == parser::ValueType::kNull) return "oid " + std::to_string(oid);
+        const parser::AstValue ns = labels.value().Namespace(oid);
+        return (ns.type == parser::ValueType::kNull ? std::string() : ns.str_val + ".") +
+               name.str_val;
+    };
+    for (const exec::PlanRow& plan : rows.value()) {
+        const parser::AstValue origin = Str(plan.captured ? "captured" : "admin");
+        if (!plan.readable) {
+            view.rows.push_back({Int(plan.id), Str(plan.name), origin, Str("unreadable"), Null(),
+                                 Null(), Null(), Null(), Str(plan.statement)});
+            continue;
+        }
+        std::string relations;
+        std::string join_order;
+        for (std::size_t i = 0; i < plan.key.n; ++i) {
+            if (i != 0) {
+                relations += ", ";
+                join_order += ", ";
+            }
+            relations += label(plan.key.oids[i]);
+            join_order += label(plan.key.oids[plan.order[i]]);
+        }
+        view.rows.push_back({Int(plan.id), Str(plan.name), origin, Str("enabled"),
+                             Int(plan.key.fetch_id), Str(relations), Str(join_order),
+                             Timestamp(plan.written_at_us), Str(plan.statement)});
     }
     return view;
 }

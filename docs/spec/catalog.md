@@ -145,7 +145,7 @@ pages CT5 opens with are the fixed roots (`kCatalogRoots`,
 past its root through `store.CreateNew()`, taken by `InsertRow` under the
 exclusive hold of the full tail - and of the root, where CT7 holds it -
 as `heap::ChainInsert` grows a declaration relation (`sys.assertions`,
-`sys.transitions`, `sys.cabin_exprs`). What admits exactly one caller per id is the allocator under the
+`sys.transitions`, `sys.cabin_exprs`, `sys.plans`). What admits exactly one caller per id is the allocator under the
 structure latch and the map latch: the free list first, then the cursor,
 which starts at `kFirstUserPageId` and only rises, so a grown catalog page
 is never below 128, and a freed user id taken here is a new creation

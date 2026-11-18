@@ -272,3 +272,12 @@ took under them.
 | **Mark** | **Pushed to `main` with `--no-verify`**: §28's record - DA-Q8 and its mark in the DA order, this file and the index - with its review applied. The hook was skipped and no suite was executed; the commits change no build input (documents only). `origin/main` stood at `a5581343`, the commit the record was written from, so nothing was merged |
 | **Does not settle** | the opening of DA; DA-Q0..Q7; a tag, a version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 30. CX-S1a pushed with the hook skipped; the session handed off
+
+| | |
+|---|---|
+| **Word** | W19 (the CX/CY matter's), on CLA's report of CX-S1a at `98e3f214` on worktree `cx-plan-change-option`: *"push no verify, and hand off for now"* |
+| **Mark** | **Pushed to `main` with `--no-verify`**: **CX-S1a** - `sys.plans`, the fourth declaration relation (root page 18, **superblock 37**, which refuses 36), the captured orders of `join_order = fixed` written off the statement by core 0's `system` task and at a clean shutdown and loaded at a mount, `DROP PLAN`, `SHOW PLANS` - with its review applied and its stage log (the work order's §8); and, outside CX, a writeback run's pins riding an allowance of their own in the Debug pin ceiling (`page.md` §3). The hook was skipped; the full Debug suite ran 4639/4639 at `98e3f214` (`v3.4.12-53-g98e3f214`), and the merge of `origin/main` after it (`56d20394`: DA-Q8) brought documents only, no source, test, CMake file or script. Overhead not measured; measured at the milestone's close. **The session stops here**: CX-S1b is not started |
+| **Does not settle** | a tag, a version; whether a mount should refuse on a `sys.plans` it cannot scan (`known-gaps.md`, Captured plans), which CLA put to the operator and the word does not answer; what S1a built differently from an adopted item (CX-Q24 (a), the stage log states it); the opening of CX-S1b, which the standing go-ahead of §16 covers and this word pauses |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |

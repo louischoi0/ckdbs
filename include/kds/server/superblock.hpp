@@ -236,7 +236,15 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // leave the rows a shutdown of this build wrote where it never looks, and
 // hand page 17 to nobody, so nothing breaks there - the refusal is this
 // build's. Refused with no migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 36;
+//
+// 37 (CX-S1a, `instructions/v3.2.0/workorder-cx-managed-plans.md`):
+// `sys.plans`, a logged declaration relation with a fixed root at page 18,
+// which core 0's `system` task writes the captured join orders of
+// `join_order = fixed` to and a mount reads back. A version-36 volume has
+// no page 18 and no `sys.objects`, `sys.tables` or `sys.columns` row for the
+// relation, so this build's mount would open a relation that is not there.
+// Refused with no migration, the standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 37;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

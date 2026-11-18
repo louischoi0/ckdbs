@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "kds/parser/fingerprint.hpp"
@@ -33,6 +34,16 @@ namespace kds::parser {
 bool IsIdentStart(char c) noexcept;
 bool IsIdentCont(char c) noexcept;
 bool IsIdentifier(std::string_view text) noexcept;
+
+// A statement's **shape as text**: `sql` with every value literal written
+// `?`, a run of white space or a comment between two tokens written as one
+// space, and a trailing semicolon dropped - the text form of what
+// `Fingerprint::pattern_id` hashes, so two statements of one shape give one
+// text up to the case and spelling of their identifiers, which are kept as
+// written. For a reader, and for a catalog row that must not hold a client's
+// values (`sys.plans`); nothing compares it. Text the lexer cannot read is
+// returned as far as it could be read.
+std::string ShapeText(std::string_view sql);
 
 class Lexer {
 public:

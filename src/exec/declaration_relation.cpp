@@ -1,5 +1,6 @@
 #include "kds/exec/declaration_relation.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <utility>
 
@@ -156,7 +157,7 @@ StatusOr<std::vector<DeclarationRow>> DeclarationsOnRelation(catalog::Catalog& c
 
 Status InsertDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
                          wal::WalManager* wal, catalog::Oid rel_oid, std::string_view kind,
-                         const DeclarationRow& row) {
+                         const DeclarationRow& row, DeclarationName name) {
     // Refused here, naming the limit, rather than letting EncodeRow report
     // it as an anonymous over-long varchar: the number that matters to the
     // client is how long a declaration may be.
@@ -181,11 +182,13 @@ Status InsertDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
     // var-heap, and never the other way.
     auto names = store.Get(rel.desc_page_id);
     if (!names.ok()) return names.status();
-    auto existing = FindDeclarationByName(catalog, store, rel_oid, row.name);
-    if (!existing.ok()) return existing.status();
-    if (existing.value().has_value()) {
-        return Status::AlreadyExists(std::string(kind) + " \"" + row.name +
-                                     "\" already exists");
+    if (name == DeclarationName::kChecked) {
+        auto existing = FindDeclarationByName(catalog, store, rel_oid, row.name);
+        if (!existing.ok()) return existing.status();
+        if (existing.value().has_value()) {
+            return Status::AlreadyExists(std::string(kind) + " \"" + row.name +
+                                         "\" already exists");
+        }
     }
 
     // The tuple key is carried by the Keystone word and never also as a body
@@ -238,10 +241,6 @@ Status InsertDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
 StatusOr<DeclarationRow> DeleteDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
                                            wal::WalManager* wal, catalog::Oid rel_oid,
                                            std::string_view kind, std::string_view name) {
-    auto access = OpenDeclarations(catalog, rel_oid);
-    if (!access.ok()) return access.status();
-    const catalog::TableAccess& rel = *access.value();
-
     // This walk **cannot** stop early on its match: it matches on `name`,
     // which may be spilled, and resolving a spill under a live page span is
     // what I15's R1 forbids. So the row is found by a full scan first and
@@ -253,8 +252,27 @@ StatusOr<DeclarationRow> DeleteDeclaration(catalog::Catalog& catalog, storage::P
                                 "\"");
     }
     const std::uint64_t target_id = found.value()->id;
+    auto retired = DeleteDeclarationsById(catalog, store, wal, rel_oid, {&target_id, 1});
+    if (!retired.ok()) return retired.status();
+    if (retired.value() == 0) {
+        return Status::NotFound("no " + std::string(kind) + " named \"" + std::string(name) +
+                                "\"");
+    }
+    return std::move(*found.value());
+}
 
-    bool retired = false;
+StatusOr<std::size_t> DeleteDeclarationsById(catalog::Catalog& catalog,
+                                             storage::PageStore& store, wal::WalManager* wal,
+                                             catalog::Oid rel_oid,
+                                             std::span<const std::uint64_t> ids) {
+    if (ids.empty()) return std::size_t{0};
+    auto access = OpenDeclarations(catalog, rel_oid);
+    if (!access.ok()) return access.status();
+    const catalog::TableAccess& rel = *access.value();
+
+    // Matched on the tuple key, which is always on the page - no spill is
+    // resolved under the walk's span (I15's R1).
+    std::size_t retired = 0;
     Status walked = heap::ChainVisit(
         store, rel.desc_page_id, storage::PageAccess::kWrite,
         [&](PageId page_id, heap::PageView& page,
@@ -270,20 +288,18 @@ StatusOr<DeclarationRow> DeleteDeclaration(catalog::Catalog& catalog, storage::P
 
             auto id = KeystoneIdOfPayload(tuple.value().payload);
             if (!id.ok()) return id.status();
-            if (id.value() != target_id) return storage::VisitControl::kContinue;
+            if (std::find(ids.begin(), ids.end(), id.value()) == ids.end()) {
+                return storage::VisitControl::kContinue;
+            }
             if (Status s = page.RetireSlot(slot); !s.ok()) return s;
             if (Status s = LogSlotRetire(wal, store, wal::kNoTxnId, page_id, slot); !s.ok()) {
                 return s;
             }
-            retired = true;
-            return storage::VisitControl::kStop;
+            return ++retired == ids.size() ? storage::VisitControl::kStop
+                                           : storage::VisitControl::kContinue;
         });
     if (!walked.ok()) return walked;
-    if (!retired) {
-        return Status::NotFound("no " + std::string(kind) + " named \"" + std::string(name) +
-                                "\"");
-    }
-    return std::move(*found.value());
+    return retired;
 }
 
 }  // namespace kds::exec

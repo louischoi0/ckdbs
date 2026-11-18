@@ -2645,7 +2645,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             for (std::size_t k = 0; k < chosen.steps.size(); ++k) {
                 mine[k] = static_cast<std::uint8_t>(chosen.steps[k].step_id - base_step_id);
             }
-            const auto in_force = captured->Capture(captured_key, mine);
+            const auto in_force = captured->Capture(captured_key, mine, plan->statement);
             if (!in_force.has_value() || *in_force != mine) {
                 // The written order's chain: `chosen` itself, or `best`,
                 // which a reordered choice left where it was.
