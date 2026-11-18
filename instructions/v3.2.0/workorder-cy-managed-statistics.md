@@ -25,6 +25,12 @@ in English (`raft-marks-2026-11-18.md` §5):
   marked (a).
 - **W13** (2026-11-18, `raft-marks-2026-11-18.md` §11): *"For now, take
   this gate as not passed."* - CY-S2 and CY-S3 are not built.
+- **W14** (2026-11-18, `raft-marks-2026-11-18.md` §12): *"For now, write
+  every statistic as unlogged, and go on with: the statistics persisted
+  to disk and the capture, the features around `CREATE PLAN`, the
+  interface, and CX-S2 onward."* With W15, the operator's answers:
+  unlogged statistics are kept across a clean shutdown only; plans,
+  captured and administrator's, are logged. **CY-S1 opened.**
 
 **A new order, not a stage of CX**: CLA's choice, which W7 left open. CX-S4
 held items 1 and 5 in eleven lines; with items 2 and 3 the work has a
@@ -257,7 +263,25 @@ would start from.
 
 ### CY-S1 - persistence (item 2)
 
-- **`sys.statistics`** `[design]`: a logged catalog relation (the next
+- **Unlogged since W14, kept across a clean shutdown only (W15).**
+  `sys.statistics` is written with no WAL record, under CR6 ("a catalog
+  relation whose content is only a statistic is written unlogged",
+  `docs/spec/crosscore.md` CC13), as `sys.access_stats` is. Every
+  unlogged structure the engine has is discarded at every mount
+  (`DiscardAdvisoryState`, `src/server/expeditor.cpp:1043`), because
+  after recovery an unlogged page may name a page the repaired free map
+  gave back. So statistics that outlive a restart are a new case, and
+  its rule is the narrow one: **a shutdown that completes writes the
+  statistics pages and marks them whole; a mount that finds the mark
+  keeps them and clears it; a mount without it - after a crash, a
+  restore, or a failed shutdown - discards them as it discards every
+  other unlogged structure.** No recovery path reads a statistics
+  page. What this gives up: after a crash or a restore the planner is
+  blind until it observes again, which CX-Q19 (b)'s deferral covers;
+  a lock, a pending version and the history are lost with the
+  statistics, and `EXPORT`/`IMPORT` is how a model is carried across
+  either. What it buys: no statistics write touches the log (CY-R10).
+- **`sys.statistics`** `[design]`: an unlogged catalog relation (the next
   superblock version and the next free fixed root, coordinated with CX-S1's
   `sys.plans`), one row per statistics object, holding its key (CY-R7), kind
   (relation, column, column group), origin (`gathered`, `observed`,
@@ -277,11 +301,12 @@ would start from.
   moves, the steward stages an `observed` relation object, written off the
   statement by a `system` task. It replaces only an earlier `observed`
   object, never a `gathered`, `imported` or locked one (CY-Q16 (a)).
-- **A restore** brings back the model the backup's log held. It describes
-  the restored data as of its last write, which is the property a backup
-  has; `ANALYZE` shows each object's age.
-- **Cells**: a restart and a restore each plan a scenario join at the
-  first statement as the previous run did; a `READ ONLY` session's planned
+- **A restore** brings back no statistic (B6a discards unlogged state);
+  the restored instance observes again, or takes an `IMPORT`.
+- **Cells**: a clean restart plans a scenario join at the first
+  statement as the previous run did; a crash and a restore each mount
+  with no statistic and no error, the pages of the discarded relation
+  given back; a `READ ONLY` session's planned
   statement appends no record; a volume at the previous superblock is
   refused.
 
@@ -459,7 +484,9 @@ within the milestone's hour.
 - `docs/spec/catalog.md`, `docs/spec/sys-views.md` - `sys.statistics`,
   `sys.column_statistics`, `sys.statistics_history`; the superblock
   version.
-- `docs/spec/backup.md` - the model is logged state and is restored.
+- `docs/spec/backup.md` B6a, `docs/spec/crosscore.md` CC13 - the model is
+  unlogged state: kept across a clean shutdown, discarded at every other
+  mount, never restored.
 - `docs/spec/alter.md`, `docs/spec/drop-table.md` - the objects a column
   or a relation takes with it.
 - `docs/inflight/known-gaps.md`, "The join planner (CB)" - the entries on
@@ -470,7 +497,8 @@ within the milestone's hour.
 ## 8. Stage log
 
 CY-Q0 and CY-Q1 marked (a) on W8 (`raft-marks-2026-11-18.md` §6);
-CY-Q2..Q13 marked (a) and **CY opened on W9** (§7).
+CY-Q2..Q13 marked (a) and **CY opened on W9** (§7). **CY-S1 opened on W14**
+(§12), with the statistics unlogged.
 
 - **CY-S0** started 2026-11-18 on worktree `cx-plan-change-option`. No
   engine code.

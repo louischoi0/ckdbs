@@ -105,3 +105,13 @@ took under them.
 | **Mark** | **CY-Q15 (a)'s gate is not passed. CY-S2 (column statistics) and CY-S3 (column-group statistics) are not built.** CY keeps S1 (persistence) and S4's lock, pending and publish, history and restore, export and import, over relation objects. The marks on the items that only S2 or S3 would use stay as marked and apply to nothing until an order reopens them. "For now" is the operator's: the verdict is not a ruling that column statistics are never built |
 | **Does not settle** | the opening of CY-S1; CX-Q2..Q11 and CX-Q19..Q27; item 4; a push of `fc705f97` and `648d11ba`; a version |
 | **Recorded at** | this file; CY's header, §3 and §8; the CY row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 12. Statistics unlogged; CY-S1 and CX opened; the standing go-ahead
+
+| | |
+|---|---|
+| **Context** | CLA's answer on which engine state is memory-only and which is unlogged but on disk, then its list of the next work (CY-S1, CY-S4's remainder, CX-S0, CX-S1, CX-S2 onward) |
+| **Word** | W14: *"For now, write every statistic as unlogged, and go on with: the statistics persisted to disk and the capture, the features around `CREATE PLAN`, the interface, and CX-S2 onward."* W15, the operator's answers to three questions CLA put before recording W14, each CLA's recommendation: (1) unlogged statistics are **kept across a clean shutdown only** - a mount after a crash or a restore discards them, as it discards every unlogged structure today (`DiscardAdvisoryState`, `src/server/expeditor.cpp:1043`); (2) **plans are logged**, the captured and the administrator's alike; (3) the unmarked CX items are **adopted as CLA proposed and the stages run one after another** (given in Korean; recorded in English) |
+| **Mark** | **CY-S1 opened**, its `sys.statistics` unlogged under CR6 (`crosscore.md` CC13) and kept across a clean shutdown only - this replaces CY-S1's "logged" and the restore sentence, and CX-Q7's withdrawal text. **CX opened.** CX-Q2..Q11 (CX-Q7 withdrawn) and CX-Q19..Q27 are **adopted on the operator's standing go-ahead of 2026-11-18**, each as CLA proposed, not marked by the operator item by item. The order of work: CY-S1, then CX-S0, CX-S1, CX-S2 onward, with CY-S4's relation-object surface where it fits; every stage with its `critics-developer` review and the full suite; **it stops before any push, tag or version** |
+| **Does not settle** | a push, a tag, a version; item 4; whether column statistics are ever built (§11's "for now"); `join_order`'s value names |
+| **Recorded at** | this file; CY's header, §3 S1, §7 and §8; the CX order's header, §4 and §8; the CX and CY rows and this file's row in `instructions/v3.2.0/index.md` |
