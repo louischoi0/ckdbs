@@ -310,12 +310,9 @@ std::array<std::byte, SysStatisticsRow::kOnDiskSize> SysStatisticsRow::Encode() 
     std::array<std::byte, kOnDiskSize> buf{};
     std::byte* base = buf.data();
     std::memcpy(base + kRelOidOffset, &rel_oid, sizeof(rel_oid));
-    std::memcpy(base + kRowsOffset, &rows, sizeof(rows));
-    std::memcpy(base + kMadeAtOffset, &made_at, sizeof(made_at));
-    std::memcpy(base + kVersionOffset, &version, sizeof(version));
-    std::memcpy(base + kKindOffset, &kind, sizeof(kind));
-    std::memcpy(base + kOriginOffset, &origin, sizeof(origin));
+    std::memcpy(base + kCountOffset, &count, sizeof(count));
     std::memcpy(base + kBandOffset, &band, sizeof(band));
+    std::memcpy(base + kKindOffset, &kind, sizeof(kind));
     return buf;
 }
 
@@ -325,12 +322,9 @@ StatusOr<SysStatisticsRow> SysStatisticsRow::Decode(std::span<const std::byte> b
     SysStatisticsRow row{};
     const std::byte* base = bytes.data();
     std::memcpy(&row.rel_oid, base + kRelOidOffset, sizeof(row.rel_oid));
-    std::memcpy(&row.rows, base + kRowsOffset, sizeof(row.rows));
-    std::memcpy(&row.made_at, base + kMadeAtOffset, sizeof(row.made_at));
-    std::memcpy(&row.version, base + kVersionOffset, sizeof(row.version));
-    std::memcpy(&row.kind, base + kKindOffset, sizeof(row.kind));
-    std::memcpy(&row.origin, base + kOriginOffset, sizeof(row.origin));
+    std::memcpy(&row.count, base + kCountOffset, sizeof(row.count));
     std::memcpy(&row.band, base + kBandOffset, sizeof(row.band));
+    std::memcpy(&row.kind, base + kKindOffset, sizeof(row.kind));
     return row;
 }
 

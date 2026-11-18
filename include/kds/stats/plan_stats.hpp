@@ -131,8 +131,8 @@ public:
     //
     // Seeds each relation's prior at its band and publishes them as the
     // next generation, so the first compile of the run prices from them. A
-    // seeded prior is due a re-seed at once, so the tree's own pages
-    // replace it as the steward comes round (PS4).
+    // carried prior is due a seed whatever the clock reads, so the tree's
+    // own pages replace it as the steward comes round (PS4).
     void SeedPriors(std::span<const std::pair<catalog::Oid, std::int16_t>> bands);
     // Every banded prior with its band, by oid.
     std::vector<std::pair<catalog::Oid, std::int16_t>> ExportPriors() const;
@@ -181,6 +181,9 @@ private:
     struct Prior {
         std::int16_t band = 0;
         bool banded = false;
+        // Seeded at a mount from the previous run (`SeedPriors`), and so due
+        // a seed from the tree's own pages whatever the clock reads.
+        bool carried = false;
         std::uint64_t seeded_ns = 0;
     };
 

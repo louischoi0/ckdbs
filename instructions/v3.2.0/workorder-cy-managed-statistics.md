@@ -642,13 +642,14 @@ the `sys.statistics` view. S1a alone is what CY-Q0 gates CX-S0 on.
   would be discarded by the only mount that could follow it without one;
   and with no write during the run, statistics cost a running workload no
   page and no log record (CY-R10). The row holds the prior's band, so a
-  prior comes back at the band it left at; an object's value, version and
-  lock (CY-R6, S4) have their fields reserved.
+  prior comes back at the band it left at. It carries nothing else: an
+  object's value, version and lock (CY-R6, S4) get fields when a stage
+  reads them, which costs no migration since a mount empties the chain.
 - **The rule the storage class rests on** (PS16): a mount believes the
   chain only on a closing mark and its count, and empties it whatever it
   found, inside the discard window, so the emptying is on the device
   before the listener binds.
-- **Cells**: 13 new in `tests/statistics_persistence_test.cpp` and one in
+- **Cells**: 16 new in `tests/statistics_persistence_test.cpp` and one in
   `tests/join_planner_test.cpp`, among them a clean stop kept for
   exactly one mount, a crash after the mount that took the priors, a crash
   with no stop, rows with no mark, a mark that counts more rows than the
@@ -659,6 +660,30 @@ the `sys.statistics` view. S1a alone is what CY-Q0 gates CX-S0 on.
   corpus does not exercise it; `IMPORT`/`EXPORT` do not exist, so after a
   crash or a restore the planner is blind until it observes.
 - **Overhead not measured; measured at the milestone's close.**
+- **The review** (`critics-developer`, at `abe870fc`) attacked PS16 and
+  found the mark-and-count rule sound and the mount's emptying on the
+  device before any statement. It found one defect that would have
+  shipped, **confirmed by a probe**: the mount's delete-mark sweep walks
+  every catalog root, unguarded, before the discard window, so a shutdown
+  killed between page 17's write and the map's left a link that refused
+  that mount and every mount after it. Fixed: the sweep passes an unlogged
+  relation by (`catalog::IsUnloggedCatalogRelation`) - which closes the
+  same hole `sys.access_stats` already had, and makes PS15's "no tick
+  touches the pages" true. Also taken: an unreadable head is made again
+  empty where it was a refused mount (for `sys.statistics`;
+  `sys.access_stats` keeps its stated refusal); a carried prior is due a
+  seed by a flag, not by a zero timestamp that a clock under ten seconds
+  would not pass; the take and the discard are one walk; the row lost
+  four fields nothing read (`rows`, `made_at`, `version`, `origin`) and
+  the expeditor a member and a clock read; `ExportPriors` is `Publish`'s
+  loop; four stale root-range mentions. Five mutants, each killed: the
+  sweep's skip removed, the head not healed, the count ignored, the mark
+  ignored, a cut chain believed.
+  Not taken: nothing was rejected. **Left open, stated** (`known-gaps.md`,
+  "Plan statistics (CY)"): no cell drives `RunUntilStopped`'s own call of
+  the write; no cell crashes between the shutdown's page writes and its
+  map write on a device (the in-memory cells stand for it); the sim does
+  not exercise the path.
 
 **The review of this order** (`critics-developer`, read at `fb65d7bd`,
 reported after W8's push and W9's marks). It verified the citations of

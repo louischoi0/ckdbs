@@ -37,6 +37,11 @@ namespace kds::wal {
 class WalManager;
 }  // namespace kds::wal
 
+namespace kds::heap {
+// Forward-declared: the unlogged chain's walk hands its visitor a page.
+class PageView;
+}  // namespace kds::heap
+
 // SQL catalog: sys.objects, sys.tables, sys.columns, sys.types,
 // sys.indexes, sys.patterns. Four things to know before touching it:
 //
@@ -1057,30 +1062,22 @@ public:
     // (`drop-table.md` DT1's stated leaks).
     Status DiscardAccessStats();
 
-    // **`sys.statistics`, at a mount** (CY-S1, `plan-stats.md` §8): the
+    // **`sys.statistics`, at a mount** (CY-S1, `plan-stats.md` PS16): the
     // relation rows a completed shutdown wrote, and the chain left empty.
     // Core 0's, after recovery and before the completion checkpoint, which
-    // is what persists the emptying before the listener binds.
+    // persists the emptying before the listener binds.
     //
-    // The rows are answered only when the chain read whole: every page of
-    // it one of its own and readable, a closing `kStatisticsWhole` row, and
-    // exactly as many rows before it as it says. Anything else - no mark
-    // (the previous run did not stop cleanly, or wrote none), a page that
-    // fails, a count that disagrees (a shutdown torn between its pages) -
-    // answers none. **Never a refused mount on the chain's account**: the
-    // relation is unlogged and advisory, so damage costs the statistic and
-    // is logged, as `DiscardAccessStats` says of its own.
-    //
-    // The chain is emptied whichever it was, so a crash after this mount
-    // finds none and the next shutdown writes onto empty pages.
+    // The rows are answered only when the chain read whole - every page of
+    // it one of its own, one closing mark, exactly as many rows as it
+    // counts - and none otherwise. Damage costs the statistic and is
+    // logged; it refuses the mount only where the store itself fails.
     StatusOr<std::vector<SysStatisticsRow>> TakeStatisticsAtMount();
 
-    // **`sys.statistics`, at a shutdown** (CY-S1): `rows` and the closing
-    // mark, onto the chain the mount left empty. Unlogged and un-undone
-    // (CR6); the shutdown's final sync is what carries the pages out, and
-    // a shutdown that fails after this leaves a chain the next mount's
-    // count refuses. Called with no statement running.
-    Status WriteStatisticsAtShutdown(std::span<const SysStatisticsRow> rows);
+    // **`sys.statistics`, at a shutdown** (PS15): a row for each prior and
+    // the closing mark, onto the chain the mount left empty. Unlogged and
+    // un-undone (CR6); the shutdown's final sync carries the pages out.
+    // Called with no statement running.
+    Status WriteStatisticsAtShutdown(std::span<const std::pair<Oid, std::int16_t>> priors);
 
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
 
@@ -1573,9 +1570,14 @@ private:
 
     // Empties an unlogged catalog chain in place (CR6's discard): every
     // page of it re-formatted and kept, the chain cut before the first link
-    // that does not reach a heap page `owner` owns. `sys.access_stats`' and
-    // `sys.statistics`'; `name` is for the damage report.
-    Status DiscardUnloggedChain(PageId head, Oid owner, std::string_view name);
+    // that does not reach a heap page `owner` owns. `visit` sees each page
+    // of the chain before it is re-formatted. Answers whether the chain was
+    // whole - false where it was cut or, under `heal_head`, its unreadable
+    // head made again empty; without `heal_head` such a head is refused.
+    // `name` is for the damage report.
+    StatusOr<bool> DiscardUnloggedChain(PageId head, Oid owner, std::string_view name,
+                                        bool heal_head,
+                                        const std::function<void(heap::PageView&)>& visit = {});
 
     storage::PageStore& store_;
 

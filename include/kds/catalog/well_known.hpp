@@ -246,6 +246,17 @@ inline constexpr Oid kSysCabinExprsColumnOidBase = 154;
 // path ever meets a row of it.
 inline constexpr Oid kSysStatisticsTable = 160;
 
+// The catalog relations CR6 writes unlogged (`crosscore.md` CC13). Their
+// rows are inserted at the bootstrap id and never delete-marked, and
+// **nothing walks their chains but their own guarded walk**
+// (`Catalog::DiscardUnloggedChain`): an unlogged page can name a page the
+// free map never kept, or one another relation has since been handed, so
+// a walk that trusts the link - the delete-mark sweep over every catalog
+// root - must pass them by.
+constexpr bool IsUnloggedCatalogRelation(Oid oid) {
+    return oid == kSysAccessStatsTable || oid == kSysStatisticsTable;
+}
+
 // A Cabin's shape (`SysCabinRow::shape`, AR1-4: column, expression and
 // predicate are shapes of one key function), with **0 reserved for "unset"**
 // so a zeroed row reads as no Cabin of any shape. Here rather than in

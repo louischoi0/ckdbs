@@ -2,10 +2,13 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
@@ -23,10 +26,13 @@
 // relation priors across a clean shutdown. The relation is unlogged, so the
 // decision this file pins is when a mount may believe it: only where the
 // shutdown's closing mark and its count read whole, and never twice - a
-// mount leaves the chain empty whatever it found.
+// mount leaves the chain empty whatever it found. And damage to it costs
+// the statistic, never the mount.
 
 namespace kds::catalog {
 namespace {
+
+using Priors = std::vector<std::pair<Oid, std::int16_t>>;
 
 class StatisticsPersistenceTest : public ::testing::Test {
 protected:
@@ -35,30 +41,28 @@ protected:
         ASSERT_TRUE(catalog_->Bootstrap().ok());
     }
 
-    static SysStatisticsRow Relation(Oid oid, std::int16_t band) {
-        SysStatisticsRow row{};
-        row.rel_oid = oid;
-        row.rows = static_cast<std::uint64_t>(stats::BandCentre(band));
-        row.made_at = 1000;
-        row.kind = kStatisticsRelation;
-        row.origin = kStatisticsObserved;
-        row.band = band;
-        return row;
-    }
-
-    // Rows for `n` relations, oids from 5000.
-    static std::vector<SysStatisticsRow> Relations(std::size_t n) {
-        std::vector<SysStatisticsRow> rows;
+    // Priors for `n` relations, oids from 5000.
+    static Priors Relations(std::size_t n) {
+        Priors priors;
         for (std::size_t i = 0; i < n; ++i) {
-            rows.push_back(Relation(5000 + i, static_cast<std::int16_t>(i % 40)));
+            priors.emplace_back(5000 + i, static_cast<std::int16_t>(i % 40));
         }
-        return rows;
+        return priors;
     }
 
-    std::vector<SysStatisticsRow> Take() {
+    // What a mount takes, as priors in oid order.
+    Priors Take() {
         auto taken = catalog_->TakeStatisticsAtMount();
         EXPECT_TRUE(taken.ok()) << taken.status().message();
-        return taken.ok() ? taken.value() : std::vector<SysStatisticsRow>{};
+        Priors priors;
+        if (taken.ok()) {
+            for (const SysStatisticsRow& row : taken.value()) {
+                EXPECT_EQ(row.kind, kStatisticsRelation);
+                priors.emplace_back(row.rel_oid, row.band);
+            }
+        }
+        std::sort(priors.begin(), priors.end());
+        return priors;
     }
 
     PageId NextOf(PageId page_id) {
@@ -77,15 +81,9 @@ TEST_F(StatisticsPersistenceTest, AFreshVolumeHoldsNoneAndItsMountIsNotRefused) 
 }
 
 TEST_F(StatisticsPersistenceTest, WhatAShutdownWroteTheNextMountTakesOnce) {
-    const std::vector<SysStatisticsRow> written = Relations(3);
+    const Priors written = Relations(3);
     ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(written).ok());
-    const std::vector<SysStatisticsRow> taken = Take();
-    ASSERT_EQ(taken.size(), 3u);
-    for (std::size_t i = 0; i < 3; ++i) {
-        EXPECT_EQ(taken[i].rel_oid, written[i].rel_oid);
-        EXPECT_EQ(taken[i].band, written[i].band) << "a prior comes back at the band it left at";
-        EXPECT_EQ(taken[i].kind, kStatisticsRelation);
-    }
+    EXPECT_EQ(Take(), written) << "each prior comes back at the band it left at";
     // Emptied by the mount that took it: a crash after that mount leaves
     // the next one nothing to believe.
     EXPECT_TRUE(Take().empty());
@@ -123,17 +121,15 @@ TEST_F(StatisticsPersistenceTest, RowsWithNoClosingMarkAreNotTaken) {
 
 TEST_F(StatisticsPersistenceTest, AMarkThatCountsMoreRowsThanTheChainHoldsIsNotBelieved) {
     // A shutdown torn between its pages: the page with the mark reached the
-    // device and a page of rows did not. Here, a page of rows cut off the
-    // chain after the mark was written.
-    const std::vector<SysStatisticsRow> written = Relations(600);
-    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(written).ok());
+    // device and a page of rows did not. Here, a page's rows are gone after
+    // the mark was written, and the link past it is kept so the mark is
+    // still read.
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(900)).ok());
     const PageId second = NextOf(kCatalogPageStatistics);
-    ASSERT_NE(second, kInvalidPageId) << "600 rows of 32 bytes did not grow the chain";
+    ASSERT_NE(second, kInvalidPageId) << "900 rows did not grow the chain";
     const PageId third = NextOf(second);
     ASSERT_NE(third, kInvalidPageId) << "the fixture needs a page to lose between head and tail";
     {
-        // The second page's rows vanish; the link past it is kept, so the
-        // mark on a later page is still read.
         auto bytes = store_.Get(second);
         ASSERT_TRUE(bytes.ok());
         const std::uint64_t owner = storage::GetOwnerOid(bytes.value().bytes());
@@ -145,7 +141,7 @@ TEST_F(StatisticsPersistenceTest, AMarkThatCountsMoreRowsThanTheChainHoldsIsNotB
 }
 
 TEST_F(StatisticsPersistenceTest, AChainOfSeveralPagesComesBackWholeAndKeepsItsPages) {
-    const std::vector<SysStatisticsRow> written = Relations(600);
+    const Priors written = Relations(900);
     ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(written).ok());
     const PageId grown = NextOf(kCatalogPageStatistics);
     ASSERT_NE(grown, kInvalidPageId);
@@ -155,16 +151,7 @@ TEST_F(StatisticsPersistenceTest, AChainOfSeveralPagesComesBackWholeAndKeepsItsP
         EXPECT_EQ(storage::GetOwnerOid(bytes.value().bytes()), kSysStatisticsTable)
             << "a growth page that does not say whose it is would be cut at the next mount";
     }
-    std::vector<SysStatisticsRow> taken = Take();
-    ASSERT_EQ(taken.size(), 600u);
-    std::sort(taken.begin(), taken.end(),
-              [](const SysStatisticsRow& a, const SysStatisticsRow& b) {
-                  return a.rel_oid < b.rel_oid;
-              });
-    for (std::size_t i = 0; i < 600; ++i) {
-        EXPECT_EQ(taken[i].rel_oid, written[i].rel_oid);
-        EXPECT_EQ(taken[i].band, written[i].band);
-    }
+    EXPECT_EQ(Take(), written);
     EXPECT_EQ(NextOf(kCatalogPageStatistics), grown)
         << "the emptied chain keeps its growth pages for the next shutdown";
     // And the next shutdown writes onto them.
@@ -179,11 +166,54 @@ TEST_F(StatisticsPersistenceTest, ALinkToAPageThatIsNotThereTakesNoneAndCutsTheC
         ASSERT_TRUE(head.ok());
         heap::PageView(head.value().bytes()).set_next_page_id(9999);
     }
-    // Not a refused mount: the relation is unlogged and advisory.
-    EXPECT_TRUE(Take().empty());
+    EXPECT_TRUE(Take().empty()) << "rows before a cut are not whole";
     EXPECT_EQ(NextOf(kCatalogPageStatistics), kInvalidPageId);
     ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(1)).ok());
     EXPECT_EQ(Take().size(), 1u);
+}
+
+TEST_F(StatisticsPersistenceTest, TheMountsDeleteMarkSweepPassesADamagedChainBy) {
+    // The mount finalizes delete marks over every catalog root before its
+    // discard window, with a walk that trusts every link. A kill during a
+    // shutdown can leave the head written and the map that carries its
+    // growth page's bit not: followed there, the link refuses the mount -
+    // and every mount after it, since nothing logs or repairs the page.
+    // The sweep therefore passes an unlogged relation by
+    // (`IsUnloggedCatalogRelation`), and the guarded take cuts the link.
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(3)).ok());
+    {
+        auto head = store_.Get(kCatalogPageStatistics);
+        ASSERT_TRUE(head.ok());
+        heap::PageView(head.value().bytes()).set_next_page_id(9999);
+    }
+    auto finalized = catalog_->FinalizeDeleteMarksAtMount();
+    ASSERT_TRUE(finalized.ok()) << "the mount is refused: " << finalized.status().message();
+    EXPECT_TRUE(Take().empty());
+    // The same holds for the relation that had the hole before this one.
+    {
+        auto head = store_.Get(kCatalogPageAccessStats);
+        ASSERT_TRUE(head.ok());
+        heap::PageView(head.value().bytes()).set_next_page_id(9999);
+    }
+    finalized = catalog_->FinalizeDeleteMarksAtMount();
+    EXPECT_TRUE(finalized.ok()) << finalized.status().message();
+    EXPECT_TRUE(catalog_->DiscardAccessStats().ok());
+}
+
+TEST_F(StatisticsPersistenceTest, AHeadThatIsNoHeapPageIsMadeAgainEmptyAndTheMountGoesOn) {
+    // The head is rewritten at every clean shutdown and nothing logs it, so
+    // a write torn there has no image to heal from. It is advisory: made
+    // again empty, never a refused mount.
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(3)).ok());
+    {
+        auto head = store_.Get(kCatalogPageStatistics);
+        ASSERT_TRUE(head.ok());
+        std::fill(head.value().bytes().begin(), head.value().bytes().end(), std::byte{0});
+    }
+    EXPECT_TRUE(Take().empty());
+    const Priors again = Relations(2);
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(again).ok());
+    EXPECT_EQ(Take(), again) << "the healed head does not hold the next shutdown's rows";
 }
 
 TEST_F(StatisticsPersistenceTest, ASecondShutdownWriteReplacesTheFirst) {
@@ -197,7 +227,7 @@ TEST_F(StatisticsPersistenceTest, ASecondShutdownWriteReplacesTheFirst) {
 TEST(StatisticsSeedTest, SeededPriorsArePublishedAtTheirBandsAndExportedBack) {
     stats::PlanStats plan_stats(1);
     EXPECT_EQ(plan_stats.generation(), 0u);
-    const std::vector<std::pair<Oid, std::int16_t>> bands = {{5000, 1}, {5001, 15}, {5002, 27}};
+    const Priors bands = {{5000, 1}, {5001, 15}, {5002, 27}};
     plan_stats.SeedPriors(bands);
     EXPECT_EQ(plan_stats.generation(), 1u) << "published before any statement compiles";
     const auto snapshot = plan_stats.Current();
@@ -226,6 +256,7 @@ namespace kds::server {
 namespace {
 
 namespace fs = std::filesystem;
+using Priors = std::vector<std::pair<catalog::Oid, std::int16_t>>;
 
 struct TempDir {
     fs::path path;
@@ -252,32 +283,40 @@ catalog::Oid OidOf(Expeditor& db, const std::string& name) {
 // A run that made two relations and came to know their sizes - seeded, as
 // the steward's own observation would leave them - and answers the priors
 // it holds.
-std::vector<std::pair<catalog::Oid, std::int16_t>> RunThatObserved(Expeditor& db) {
+Priors RunThatObserved(Expeditor& db) {
     for (const char* line : {"CREATE TABLE cargos (id int64, org_id int64) BTREE",
                              "CREATE TABLE freights (id int64, cargo_id int64) BTREE"}) {
         const std::string reply = db.dispatcher().Dispatch(line).response;
         EXPECT_EQ(reply.rfind("ERR", 0), std::string::npos) << line << " -> " << reply;
     }
-    const std::vector<std::pair<catalog::Oid, std::int16_t>> bands = {
-        {OidOf(db, "cargos"), stats::BandOf(10000.0)},
-        {OidOf(db, "freights"), stats::BandOf(9000.0)}};
+    const Priors bands = {{OidOf(db, "cargos"), stats::BandOf(10000.0)},
+                          {OidOf(db, "freights"), stats::BandOf(9000.0)}};
     db.plan_stats().SeedPriors(bands);
     return db.plan_stats().ExportPriors();
 }
 
+// A run that observed and stopped cleanly, leaving its priors on the volume.
+Priors CleanStopThatWrote(const fs::path& dir) {
+    auto opened = reclaim_census::Mount(dir);
+    EXPECT_TRUE(opened.ok()) << opened.status().message();
+    if (!opened.ok()) return {};
+    CurrentCoreGuard as(0);
+    const Priors observed = RunThatObserved(*opened.value());
+    opened.value()->WriteRelationPriors();
+    reclaim_census::CleanShutdownCheckpoint(*opened.value());
+    return observed;
+}
+
 TEST(StatisticsMountTest, ACleanStopKeepsTheRelationPriorsForOneMount) {
     TempDir live;
-    std::vector<std::pair<catalog::Oid, std::int16_t>> observed;
     {
-        auto opened = reclaim_census::Mount(live.path);
-        ASSERT_TRUE(opened.ok()) << opened.status().message();
-        CurrentCoreGuard as(0);
-        EXPECT_EQ(opened.value()->plan_stats().generation(), 0u) << "a fresh volume is blind";
-        observed = RunThatObserved(*opened.value());
-        ASSERT_EQ(observed.size(), 2u);
-        opened.value()->WriteRelationPriors();
-        reclaim_census::CleanShutdownCheckpoint(*opened.value());
+        auto fresh = reclaim_census::Mount(live.path);
+        ASSERT_TRUE(fresh.ok()) << fresh.status().message();
+        EXPECT_EQ(fresh.value()->plan_stats().generation(), 0u) << "a fresh volume is blind";
+        reclaim_census::CleanShutdownCheckpoint(*fresh.value());
     }
+    const Priors observed = CleanStopThatWrote(live.path);
+    ASSERT_EQ(observed.size(), 2u);
     {
         // The next mount is informed before its first statement.
         auto mounted = reclaim_census::Mount(live.path);
@@ -297,20 +336,13 @@ TEST(StatisticsMountTest, ACleanStopKeepsTheRelationPriorsForOneMount) {
 }
 
 TEST(StatisticsMountTest, ACrashAfterTheMountThatTookThemKeepsNone) {
-    // [quiet-wrong]-adjacent, and the reason the mount empties the chain
-    // inside its discard window: the emptying must be on the device before
-    // the listener binds, so a crash at any later instant finds none. A
-    // mount that kept the rows for the run would let a crashed run's next
-    // mount believe a chain whose pages recovery never vouched for.
+    // The reason the mount empties the chain inside its discard window: the
+    // emptying must be on the device before the listener binds, so a crash
+    // at any later instant finds none. A mount that kept the rows for the
+    // run would let a crashed run's next mount believe a chain whose pages
+    // recovery never vouched for.
     TempDir live, image;
-    {
-        auto opened = reclaim_census::Mount(live.path);
-        ASSERT_TRUE(opened.ok()) << opened.status().message();
-        CurrentCoreGuard as(0);
-        ASSERT_EQ(RunThatObserved(*opened.value()).size(), 2u);
-        opened.value()->WriteRelationPriors();
-        reclaim_census::CleanShutdownCheckpoint(*opened.value());
-    }
+    ASSERT_EQ(CleanStopThatWrote(live.path).size(), 2u);
     {
         auto mounted = reclaim_census::Mount(live.path);
         ASSERT_TRUE(mounted.ok()) << mounted.status().message();
@@ -343,6 +375,49 @@ TEST(StatisticsMountTest, ACrashWithNoStopKeepsNone) {
     // The relations themselves came back from the log.
     CurrentCoreGuard as(0);
     EXPECT_NE(OidOf(*crashed.value(), "cargos"), 0u);
+}
+
+TEST(StatisticsMountTest, AHeadPageTornOnTheDeviceCostsTheStatisticAndNotTheMount) {
+    // The shutdown's own write of page 17, torn: bytes of its body changed
+    // on the device, so its checksum fails at the next fetch. Nothing logs
+    // the page, so there is no image to heal it from - and a mount refused
+    // on it would be refused for the life of the file.
+    TempDir live;
+    ASSERT_EQ(CleanStopThatWrote(live.path).size(), 2u);
+    {
+        std::fstream file(live.path / "kds.db", std::ios::in | std::ios::out | std::ios::binary);
+        ASSERT_TRUE(file.good());
+        const std::streamoff at =
+            static_cast<std::streamoff>(catalog::kCatalogPageStatistics) * kPageSize + 512;
+        const std::string garbage(64, '\x5a');
+        file.seekp(at);
+        file.write(garbage.data(), static_cast<std::streamsize>(garbage.size()));
+        ASSERT_TRUE(file.good());
+    }
+    {
+        auto mounted = reclaim_census::Mount(live.path);
+        ASSERT_TRUE(mounted.ok()) << "the mount is refused: " << mounted.status().message();
+        EXPECT_EQ(mounted.value()->plan_stats().generation(), 0u)
+            << "a torn head was believed";
+        reclaim_census::CleanShutdownCheckpoint(*mounted.value());
+    }
+    // The head was made again: the next clean stop's priors come back.
+    const Priors observed = [&] {
+        auto opened = reclaim_census::Mount(live.path);
+        EXPECT_TRUE(opened.ok()) << opened.status().message();
+        if (!opened.ok()) return Priors{};
+        CurrentCoreGuard as(0);
+        const Priors bands = {{OidOf(*opened.value(), "cargos"), stats::BandOf(64.0)}};
+        opened.value()->plan_stats().SeedPriors(bands);
+        const Priors held = opened.value()->plan_stats().ExportPriors();
+        opened.value()->WriteRelationPriors();
+        reclaim_census::CleanShutdownCheckpoint(*opened.value());
+        return held;
+    }();
+    ASSERT_EQ(observed.size(), 1u);
+    auto again = reclaim_census::Mount(live.path);
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    EXPECT_EQ(again.value()->plan_stats().ExportPriors(), observed);
 }
 
 }  // namespace

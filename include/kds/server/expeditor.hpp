@@ -757,12 +757,6 @@ private:
     // The join planner's statistics, one store for the instance
     // (docs/spec/plan-stats.md); its steward runs on core 0's tick.
     std::optional<stats::PlanStats> plan_stats_;
-    // The relation priors the mount took from `sys.statistics` (CY-S1),
-    // held from the mount's discard window until `plan_stats_` exists.
-    std::vector<std::pair<catalog::Oid, std::int16_t>> mounted_priors_;
-    // The wall-clock second `Open` was given, which a `sys.statistics` row
-    // carries as the run that wrote it.
-    std::uint64_t mounted_at_unix_seconds_ = 0;
 
     std::optional<stats::CabinStore> cabin_store_;
 

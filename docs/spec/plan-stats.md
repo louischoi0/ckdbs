@@ -209,18 +209,22 @@ and `...PutTheSmallRelationFirstAndBuildTheLarge`).
 **PS14 - where.** `sys.statistics` (oid 160), a catalog relation with a
 fixed root at page 17 (superblock 36), **unlogged by CR6** (`crosscore.md`
 CC13) as `sys.access_stats` is: its content is only a statistic. One
-fixed-offset row a relation (`catalog::SysStatisticsRow`, 32 bytes: the
-relation's oid, the band's centre rounded, the mount time of the run that
-wrote it, a reserved version, kind, origin, the band) and one closing row
-whose count is the rows before it.
+fixed-offset row a relation (`catalog::SysStatisticsRow`, 19 bytes: the
+relation's oid, the band, the kind) and one closing row counting the
+relation rows. A mount empties the chain, so the row's layout can change
+with no migration: a row of another size reads as a chain that is not
+whole.
 
 **PS15 - who writes it, and when.** The shutdown tail alone
 (`Expeditor::WriteRelationPriors`): after every core is joined and every
 listener detached, before the final sync that carries the pages out. **No
-statement, no steward step and no checkpoint of a running instance writes
-the relation**, so statistics cost a running workload no page write and no
-log record (CY-R10). A shutdown that fails after the write leaves a chain
-PS16 refuses.
+statement, no steward step, no tick and no checkpoint of a running instance
+touches the relation's pages**, so statistics cost a running workload no
+page write and no log record (CY-R10). The one walk that visits every
+catalog root, the delete-mark sweep (`Catalog::RetireDeleteMarks`, at the
+mount and on core 0's tick), passes an unlogged relation by
+(`catalog::IsUnloggedCatalogRelation`): such a relation holds no delete
+mark, and its chain is no walk's to trust but its own guarded one.
 
 **PS16 - when a mount believes it** `[the rule the storage class rests on]`.
 Every other unlogged structure is discarded at every mount, because a mount
@@ -229,28 +233,40 @@ run may name a page the map never kept (`restore.hpp`, B6a). This one is
 kept on three facts together:
 
 1. the rows were written by a shutdown, onto a chain nothing else writes;
-2. the shutdown said it finished: a closing mark, and exactly as many rows
-   before it as it counts, on pages that are each the chain's own by type
-   and owner (`Catalog::TakeStatisticsAtMount`);
+2. the shutdown said it finished: one closing mark, and exactly as many
+   relation rows as it counts, on a chain that read to its end over pages
+   that are each its own by type and owner
+   (`Catalog::TakeStatisticsAtMount`, one walk with the discard);
 3. **the mount empties the chain whatever it found**, in the window of the
    advisory discard - after recovery, before the completion checkpoint that
    persists the emptying, before the listener binds. So the chain on the
-   device is non-empty only between a shutdown's sync and the next mount's
+   device is non-empty only from a shutdown's write to the next mount's
    completion checkpoint, an interval in which no statement runs.
 
 A mount after a crash therefore finds an empty chain, or - if it crashed
 before its own completion checkpoint - the previous clean stop's rows over
 data no statement has touched since. A restore's copy is taken from a
-running instance and holds an empty chain. Damage - a page that fails, a
-foreign page at a link, a count that disagrees - takes none, cuts the chain
-as `DiscardAccessStats` does, and is logged; it never refuses a mount.
+running instance and holds an empty chain.
+
+**Damage costs the statistic and never the mount.** A shutdown killed
+between its page writes and its map write can leave the head linking to a
+page the map does not hold; a write torn on the head has no logged image to
+heal from. A link that does not reach one of the chain's own pages is cut
+and what was read before it is not taken; a head that is unreadable or no
+heap page is made again empty in place (`CreateOverTorn`, redo's heal); each
+is logged. The mount is refused on this relation's account only where the
+store itself fails. **The count is a count, not a checksum**: pages of two
+different shutdowns combining into a chain that reads whole would need a
+cut-off page's id handed back to the chain and a power loss between two of
+its page writes, and would cost stale priors - an order, never a row.
 
 **PS17 - what the mount does with them.** The priors are published as the
 first generation before any statement compiles (`PlanStats::SeedPriors`),
 each at the band it left at, so the first planned compile after a clean
-restart is priced as the last one before it was. A seeded prior is due a
-re-seed at the steward's first round, so the tree's own pages replace it; a
-relation that no longer resolves loses it (PS4).
+restart is priced as the last one before it was. A carried prior is due a
+seed whatever the clock reads, so the tree's own pages replace it as the
+steward comes round, within its page budget (PS4); a relation that no
+longer resolves loses it.
 
 **What it does not do.** After a crash or a restore the planner is blind
 until it observes, as before CY-S1. Nothing here gathers, locks or exports

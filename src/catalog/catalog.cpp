@@ -35,7 +35,7 @@ namespace kds::catalog {
 // map hands out, and no two share one (well_known.hpp).
 static_assert(CatalogRootsAreDistinctAndFixed(server::kFirstUserPageId),
               "every fixed catalog root must be unique and sit below the first user page; "
-              "add a new root past the highest, in the unused ids 17..127");
+              "add a new root past the highest, in the unused ids 18..127");
 
 namespace {
 
@@ -1109,6 +1109,11 @@ StatusOr<std::uint64_t> Catalog::RetireDeleteMarks(
     const std::function<bool(std::uint64_t deleter)>& settled, std::uint64_t* remaining_out) {
     std::uint64_t retired = 0;
     for (const CatalogRoot& relation : kCatalogRoots) {
+        // An unlogged relation holds no delete mark, and its chain is not
+        // this walk's to trust (`IsUnloggedCatalogRelation`): followed
+        // unguarded at a mount, a link a torn shutdown left would refuse
+        // the mount before the relation's own discard could cut it.
+        if (IsUnloggedCatalogRelation(relation.oid)) continue;
         const PageId root = relation.page;
         Status inner = Status::OK();
         // **kWrite**, and one forward pass per page is enough:
@@ -3863,7 +3868,9 @@ StatusOr<std::optional<SysFkeyRow>> Catalog::FindForeignKeyOnColumn(
     return std::optional<SysFkeyRow>();
 }
 
-Status Catalog::DiscardUnloggedChain(PageId head, Oid owner, std::string_view name) {
+StatusOr<bool> Catalog::DiscardUnloggedChain(
+    PageId head, Oid owner, std::string_view name, bool heal_head,
+    const std::function<void(heap::PageView&)>& visit) {
     // Every page of the chain re-formatted in place, its link and its owner
     // kept, so the rows are gone and the pages stay the chain's for
     // `InsertRow` to fill again - a discard that left the growth pages
@@ -3883,10 +3890,10 @@ Status Catalog::DiscardUnloggedChain(PageId head, Oid owner, std::string_view na
     // fails its checksum, a page that is not a heap page or is another
     // relation's, or more steps than any walk may take (a cycle) ends the
     // chain at the page before it - never a page of another relation
-    // re-formatted, never a mount refused or one that does not return. A
-    // head that fails so is refused, since there is no page before it to
-    // cut at, and any other failure is returned. A cut is the damage
-    // report, and the one place it is logged.
+    // re-formatted, never one that does not return. A cut is the damage
+    // report, and the one place it is logged. A head that fails so has no
+    // page before it to cut at: it is refused, or with `heal_head` made
+    // again empty in place, which loses a statistic and nothing else.
     PageId at = head;
     PageId previous = kInvalidPageId;
     for (std::uint32_t step = 0; at != kInvalidPageId; ++step) {
@@ -3903,7 +3910,9 @@ Status Catalog::DiscardUnloggedChain(PageId head, Oid owner, std::string_view na
             (previous == kInvalidPageId || storage::GetOwnerOid(page.value().bytes()) == owner);
         if (!ours) break;
         const auto bytes = page.value().bytes();
-        const PageId next = heap::PageView(bytes).next_page_id();
+        heap::PageView rows(bytes);
+        if (visit) visit(rows);
+        const PageId next = rows.next_page_id();
         // The head keeps bootstrap's owner, a growth page the relation's.
         const std::uint64_t page_owner = storage::GetOwnerOid(bytes);
         auto fresh = heap::PageView::CreateEmpty(bytes, 0, page_owner);
@@ -3912,128 +3921,117 @@ Status Catalog::DiscardUnloggedChain(PageId head, Oid owner, std::string_view na
         previous = at;
         at = next;
     }
-    if (at == kInvalidPageId) return Status::OK();
-    // The walk stopped at a page that is not the chain's: cut before it.
+    if (at == kInvalidPageId) return true;
+    // The walk stopped at a page that is not the chain's.
     if (previous == kInvalidPageId) {
-        return Status::Corruption("catalog: " + std::string(name) + "' head page is unreadable");
+        if (!heal_head) {
+            return Status::Corruption("catalog: " + std::string(name) +
+                                      "' head page is unreadable");
+        }
+        // The head itself: a readable page of the wrong type is re-formatted
+        // where it is, one that fails its checksum is created over
+        // (`CreateOverTorn`, redo's heal); it is the fixed root, bootstrap's
+        // owner 0, and empty.
+        auto readable = store_.Get(head);
+        auto made = readable.ok() ? std::move(readable) : store_.CreateOverTorn(head);
+        if (!made.ok()) return made.status();
+        auto fresh = heap::PageView::CreateEmpty(made.value().bytes(), 0, /*owner=*/0);
+        if (!fresh.ok()) return fresh.status();
+    } else {
+        // Cut before it.
+        auto before = store_.Get(previous);
+        if (!before.ok()) return before.status();
+        heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
     }
-    auto before = store_.Get(previous);
-    if (!before.ok()) return before.status();
-    heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
     if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-        log_->Error("catalog", std::string(name) + " was damaged past page " +
-                                   std::to_string(previous) +
-                                   " and its chain has been cut there: it is unlogged by CR6, "
-                                   "so nothing redoes it, and an empty statistic is a slower "
-                                   "optimizer rather than a wrong answer");
+        log_->Error("catalog",
+                    std::string(name) +
+                        (previous == kInvalidPageId
+                             ? "' head page was unreadable and has been made again empty"
+                             : " was damaged past page " + std::to_string(previous) +
+                                   " and its chain has been cut there") +
+                        ": it is unlogged by CR6, so nothing redoes it, and an empty statistic "
+                        "is a slower optimizer rather than a wrong answer");
     }
-    return Status::OK();
+    return false;
 }
 
 Status Catalog::DiscardAccessStats() {
-    return DiscardUnloggedChain(kCatalogPageAccessStats, kSysAccessStatsTable,
-                                "sys.access_stats");
+    auto discarded = DiscardUnloggedChain(kCatalogPageAccessStats, kSysAccessStatsTable,
+                                          "sys.access_stats", /*heal_head=*/false);
+    return discarded.ok() ? Status::OK() : discarded.status();
 }
 
 StatusOr<std::vector<SysStatisticsRow>> Catalog::TakeStatisticsAtMount() {
-    // A bounded read of the chain by what each page says, as the discard
-    // below walks it, because the damaged path comes through here too: a
-    // page that cannot be fetched, is not a heap page, or is another
-    // relation's ends the read, and what was read is then not whole.
+    // One walk: each page's rows are read as the discard reaches it, before
+    // it is re-formatted, so what is read is exactly what the guarded walk
+    // vouches for.
     std::vector<SysStatisticsRow> rows;
     std::uint64_t marks = 0;
-    std::uint64_t marked_rows = 0;
-    bool readable = true;
-    PageId at = kCatalogPageStatistics;
-    for (std::uint32_t step = 0; at != kInvalidPageId && readable; ++step) {
-        if (step >= storage::kMaxPageWalkLength) {
-            readable = false;  // a cycle
-            break;
-        }
-        auto page = store_.Get(at);
-        if (!page.ok()) {
-            if (page.status().code() != StatusCode::kCorruption &&
-                page.status().code() != StatusCode::kNotFound) {
-                return page.status();
+    std::uint64_t marked = 0;
+    bool decoded = true;
+    auto intact = DiscardUnloggedChain(
+        kCatalogPageStatistics, kSysStatisticsTable, "sys.statistics", /*heal_head=*/true,
+        [&](heap::PageView& page) {
+            const std::uint16_t n = page.slot_count();
+            for (std::uint16_t slot = 0; slot < n && decoded; ++slot) {
+                auto tuple = page.ReadTuple(slot);
+                if (!tuple.ok()) {
+                    if (tuple.status().code() != StatusCode::kNotFound) decoded = false;
+                    continue;
+                }
+                auto row = SysStatisticsRow::Decode(tuple.value().payload);
+                if (!row.ok()) {
+                    decoded = false;
+                } else if (row.value().kind == kStatisticsWhole) {
+                    ++marks;
+                    marked = row.value().count;
+                } else if (row.value().kind == kStatisticsRelation) {
+                    rows.push_back(row.value());
+                } else {
+                    decoded = false;  // a kind this build did not write
+                }
             }
-            readable = false;
-            break;
-        }
-        const auto bytes = page.value().bytes();
-        if (storage::RawPageType(bytes) != static_cast<std::uint8_t>(PageType::kHeap) ||
-            (step != 0 && storage::GetOwnerOid(bytes) != kSysStatisticsTable)) {
-            readable = false;
-            break;
-        }
-        heap::PageView view(bytes);
-        const std::uint16_t n = view.slot_count();
-        for (std::uint16_t slot = 0; slot < n && readable; ++slot) {
-            auto tuple = view.ReadTuple(slot);
-            if (!tuple.ok()) {
-                if (tuple.status().code() == StatusCode::kNotFound) continue;
-                readable = false;
-                break;
-            }
-            auto row = SysStatisticsRow::Decode(tuple.value().payload);
-            if (!row.ok()) {
-                readable = false;
-            } else if (row.value().kind == kStatisticsWhole) {
-                ++marks;
-                marked_rows = row.value().rows;
-            } else if (row.value().kind == kStatisticsRelation) {
-                rows.push_back(row.value());
-            } else {
-                readable = false;  // a kind this build did not write
-            }
-        }
-        at = view.next_page_id();
+        });
+    if (!intact.ok()) return intact.status();
+    if (intact.value() && decoded && marks == 1 && marked == rows.size()) return rows;
+    if ((marks != 0 || !rows.empty() || !decoded) && log_ != nullptr &&
+        log_->enabled(LogLevel::kWarn)) {
+        log_->Warn("catalog",
+                   "sys.statistics was not whole (" + std::to_string(rows.size()) + " rows, " +
+                       std::to_string(marks) + " closing marks counting " +
+                       std::to_string(marked) +
+                       "): the shutdown that wrote it did not complete, so no relation prior "
+                       "is taken and the planner prices blind until it observes");
     }
-    const bool whole = readable && marks == 1 && marked_rows == rows.size();
-    const bool held_something = marks != 0 || !rows.empty() || !readable;
-
-    // Emptied whichever it was: a taken statistic is the planner's from
-    // here, and one not taken is not kept for a later mount to trust.
-    if (Status s = DiscardUnloggedChain(kCatalogPageStatistics, kSysStatisticsTable,
-                                        "sys.statistics");
-        !s.ok()) {
-        return s;
-    }
-    if (!whole) {
-        if (held_something && log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
-            log_->Warn("catalog",
-                       "sys.statistics was not whole (" + std::to_string(rows.size()) +
-                           " rows, " + std::to_string(marks) + " closing marks naming " +
-                           std::to_string(marked_rows) +
-                           "): the shutdown that wrote it did not complete, so no relation "
-                           "prior is taken and the planner prices blind until it observes");
-        }
-        rows.clear();
-    }
-    return rows;
+    return std::vector<SysStatisticsRow>{};
 }
 
-Status Catalog::WriteStatisticsAtShutdown(std::span<const SysStatisticsRow> rows) {
+Status Catalog::WriteStatisticsAtShutdown(
+    std::span<const std::pair<Oid, std::int16_t>> priors) {
     // Onto empty pages, whatever this run left on them: the mount emptied
     // the chain and nothing writes it while statements run, so this is a
     // second line, and it is what makes a second call harmless.
-    if (Status s = DiscardUnloggedChain(kCatalogPageStatistics, kSysStatisticsTable,
-                                        "sys.statistics");
-        !s.ok()) {
-        return s;
-    }
+    auto emptied = DiscardUnloggedChain(kCatalogPageStatistics, kSysStatisticsTable,
+                                        "sys.statistics", /*heal_head=*/true);
+    if (!emptied.ok()) return emptied.status();
     // Unlogged and un-undone, by CR6, as `RecordAccess` writes its rows; no
-    // `BumpVersion()`, since nothing cached is derived from them.
-    for (const SysStatisticsRow& row : rows) {
+    // `BumpVersion()`, since nothing cached is derived from them. The
+    // closing mark last: a failure before it leaves a chain with none.
+    SysStatisticsRow row{};
+    row.kind = kStatisticsRelation;
+    for (const auto& [oid, band] : priors) {
+        row.rel_oid = oid;
+        row.band = band;
         if (Status s = InsertRow(/*wal=*/nullptr, /*undo_hook=*/nullptr, store_,
                                  kCatalogPageStatistics, row, kBootstrapXid);
             !s.ok()) {
             return s;
         }
     }
-    // The closing mark last: a failure above leaves a chain with none.
     SysStatisticsRow mark{};
     mark.kind = kStatisticsWhole;
-    mark.rows = rows.size();
+    mark.count = priors.size();
     return InsertRow(/*wal=*/nullptr, /*undo_hook=*/nullptr, store_, kCatalogPageStatistics,
                      mark, kBootstrapXid);
 }
