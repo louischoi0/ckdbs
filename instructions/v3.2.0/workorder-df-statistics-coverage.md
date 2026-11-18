@@ -4,10 +4,12 @@ Status: **OPENED 2026-11-18** on the operator's word
 (`raft-marks-2026-11-18.md` §36), from `57d7c67f`
 (`v3.4.12-67-g57d7c67f`). **DF-S0 is done** (§7): the census, the spike's price, and four items
 it took back, DF-Q11..Q14, **each marked (a) on the operator's word**
-(`raft-marks-2026-11-18.md` §37). **DF-S1 is done and at the push gate**
-(§7): part A, started on the operator's word (`raft-marks-2026-11-18.md`
-§39), reviewed, the full suite 0 failed of 4700 at `ee89842e`, overhead
-not measured; **DF-S2 is not started**. Written the same day on worktree
+(`raft-marks-2026-11-18.md` §37). **DF-S1 is done and pushed** (§7):
+part A, started on the operator's word (`raft-marks-2026-11-18.md` §39),
+reviewed, the full suite 0 failed of 4700 at `ee89842e`, overhead not
+measured, pushed with the hook skipped on the operator's word (§40);
+**DF-S2 is not started**, and the session handed off there. Written the
+same day on worktree
 `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`, from
 `56d20394` (`v3.4.12-53-g56d20394`) on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §33). The session was isolated in that worktree
@@ -840,3 +842,15 @@ and is not this code. **Documents**: `sys-views.md`, `protocol.md`,
 `manual/sql/sql.md`'s statistics reports, `known-gaps.md` and
 `CLAUDE.md`'s observability row are amended with the stage; the rest of
 §5's list is DF-S5's. **Next: DF-S2**, part B - not started.
+
+### DF-S1 pushed; handed off, 2026-11-18
+
+On the operator's word (`raft-marks-2026-11-18.md` §40) DF-S1 went to
+`main` with `--no-verify` from `0e6605ce` and this record: the hook was
+skipped, the suite that stands behind the push is the full suite at
+`ee89842e` (0 failed of 4700), and nothing after that commit changes a
+build input. The operator was shown the six things above that were built
+differently from §2 and marked none; they stand as CLA's until one is.
+The cells §5 owes for part A and the two-core cell's `tsan` run are still
+owed (`known-gaps.md`). **The session handed off here. Next: DF-S2**, part
+B - not started, and it starts on the operator's word.
