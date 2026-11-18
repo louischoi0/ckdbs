@@ -2,13 +2,16 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include "kds/base/latch.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/stats/per_core_ring.hpp"
+#include "kds/stats/wait_event.hpp"
 
 // **`sys.statement_stats`' rows: what a statement shape costs**
 // (`instructions/v3.0.0/workorder-bo-sys-statistics-show-sugar.md` §3.1,
@@ -18,8 +21,8 @@
 // ---- The key ---------------------------------------------------------------
 //
 // `(fetch_id, kind)` (BO-Q6 (a) as revised). `kind` is the statement's first
-// keyword; only `SELECT`, `INSERT` and `UPDATE` carry a fingerprint
-// (`parser/fingerprint.cpp`), so every other kind is one row at
+// keyword; only `SELECT`, `INSERT`, `UPDATE` and `DELETE` carry a
+// fingerprint (`parser/fingerprint.cpp`), so every other kind is one row at
 // `fetch_id = 0`. A first word that is no statement verb is `OTHER`, so a
 // client cannot mint a row per misspelling.
 //
@@ -35,6 +38,18 @@
 // **A write never fails, delays or reorders the statement it describes.** A
 // new shape past `kShapesPerCore` is dropped and counted (a `sys.meta`
 // field, SV3); a shape that cannot be allocated is dropped the same way.
+//
+// ---- What a shape costs (DF-S1) --------------------------------------------
+//
+// Beside how often a shape ran and how long
+// (`instructions/v3.2.0/workorder-df-statistics-coverage.md` §2, part A): the
+// rows it answered, what its chain examined, the log it appended, where its
+// time went, how its latency is distributed and how often it lost a race.
+// **A number the engine could not take for a call is left out of the sum
+// and of the count beside it, and a shape with no such call reads NULL**
+// (DF-R7): `executed_calls`, `compiled_calls` and `timed_calls` are those
+// counts. No value of a statement enters a shape (DF-R6), and nothing in the
+// engine reads one (DF-R3).
 
 namespace kds::stats {
 
@@ -56,6 +71,42 @@ struct StatementShape {
     // core that saw the shape last.
     std::string plan_source;
     std::string plan_label;
+
+    // ---- DF-S1 --------------------------------------------------------------
+    std::uint64_t conflicts = 0;  // the calls refused `TxnConflict`, within `refused`
+    std::uint64_t rows = 0;       // rows answered by a SELECT, affected by a write
+    // The calls whose own step chain ran to its end, and what it counted
+    // (`exec::StepStats`): a native `SELECT`'s and an `ANALYZE`'s.
+    std::uint64_t executed_calls = 0;
+    std::uint64_t rows_examined = 0;
+    std::uint64_t pages = 0;
+    // The calls that compiled a chain of their own, and the time from the
+    // run's head to it.
+    std::uint64_t compiled_calls = 0;
+    std::uint64_t compile_ns = 0;
+    // The calls that ran inside a task of their own session - the only ones
+    // whose time and log the session's statistics hold - and the sum of
+    // each one's delta of those statistics.
+    std::uint64_t timed_calls = 0;
+    sched::SessionCostSample timed;
+    // Every call's elapsed time, in `sys.wait_histogram`'s buckets
+    // (`sched::WaitBucketOf`); the buckets sum to `calls`.
+    std::array<std::uint64_t, sched::kWaitHistogramBuckets> latency{};
+};
+
+// What one call hands `Record` beyond its outcome and its elapsed time. A
+// default one is a call the engine counted nothing for.
+struct StatementCost {
+    std::uint64_t rows = 0;
+    bool conflict = false;
+    bool executed = false;  // `rows_examined` and `pages` are a chain's
+    std::uint64_t rows_examined = 0;
+    std::uint64_t pages = 0;
+    bool compiled = false;  // `compile_ns` is set
+    std::uint64_t compile_ns = 0;
+    // The session's statistics at the call's end less at its head; unset
+    // for a call that ran outside a task of its own session.
+    std::optional<sched::SessionCostSample> timed;
 };
 
 // The `kind` of a statement: its first whitespace-separated token,
@@ -76,10 +127,11 @@ public:
     static void Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view line,
                        bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
                        std::string_view plan_source = {},
-                       std::string_view plan_label = {}) noexcept;
+                       std::string_view plan_label = {},
+                       const StatementCost& cost = {}) noexcept;
 
-    // Every shape, the cores' parts merged by key: calls, refusals and time
-    // summed, the longest call the longest, the first statement the
+    // Every shape, the cores' parts merged by key: every count and sum
+    // added, the longest call the longest, the first statement the
     // earliest seen. Ordered by (fetch_id, kind).
     static std::vector<StatementShape> Snapshot();
 

@@ -10,6 +10,7 @@
 #include "kds/txn/lock_table.hpp"
 
 #include "kds/sched/checkpoint_census.hpp"
+#include "kds/stats/refusal_stats.hpp"
 #include "kds/sched/core_load.hpp"
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
@@ -284,15 +285,39 @@ Status DeadlockVictim(const std::string& waited_for) {
         "the other proceed");
 }
 
-Status StatusFromErrorReply(std::string_view reply) {
-    constexpr std::string_view kPrefix = "ERR ";
-    if (reply.rfind(kPrefix, 0) != 0) return Status::OK();
-    reply.remove_prefix(kPrefix.size());
+namespace {
 
+constexpr std::string_view kErrorPrefix = "ERR ";
+
+// The spelling a rendered refusal's body - the line after its `ERR ` - opens
+// with, or null for the bare arm.
+const ErrorSpelling* SpellingOf(std::string_view body) noexcept {
     for (const ErrorSpelling& spelling : kErrorSpellings) {
-        if (reply.rfind(spelling.token, 0) != 0) continue;
-        reply.remove_prefix(spelling.token.size());
-        return Status::FromWire(static_cast<std::uint32_t>(spelling.code), std::string(reply));
+        if (body.rfind(spelling.token, 0) == 0) return &spelling;
+    }
+    return nullptr;
+}
+
+// The code `OutcomeStatus` carries for a refused statement, with no `Status`
+// built: `sys.statement_stats`' record allocates nothing (DF-R2). A refusal
+// built from a bare message is `InvalidArgument`, as its line reads back.
+StatusCode RefusalCodeOf(const DispatchOutcome& outcome) noexcept {
+    if (!outcome.status.ok()) return outcome.status.code();
+    std::string_view body = outcome.response;
+    if (body.rfind(kErrorPrefix, 0) == 0) body.remove_prefix(kErrorPrefix.size());
+    const ErrorSpelling* const spelling = SpellingOf(body);
+    return spelling != nullptr ? spelling->code : StatusCode::kInvalidArgument;
+}
+
+}  // namespace
+
+Status StatusFromErrorReply(std::string_view reply) {
+    if (reply.rfind(kErrorPrefix, 0) != 0) return Status::OK();
+    reply.remove_prefix(kErrorPrefix.size());
+
+    if (const ErrorSpelling* const spelling = SpellingOf(reply)) {
+        reply.remove_prefix(spelling->token.size());
+        return Status::FromWire(static_cast<std::uint32_t>(spelling->code), std::string(reply));
     }
     // The bare arm. kInvalidArgument stands for every code that renders
     // bare - which is what makes this lossy, and harmless: `ErrorReply`
@@ -310,6 +335,14 @@ namespace {
 // A statement's refusal: the line and the `Status` it was rendered from,
 // so no site carries one without the other.
 DispatchOutcome Refused(const Status& status) { return {ErrorReply(status), false, 0, status}; }
+
+// What a statement's own chain examined, for its outcome (DF-S1): the rows
+// and the pages of every step. `pages_fetched` is exact on a walk and one a
+// keyed access (`exec::StepStats`).
+DispatchOutcome::Examined ExaminedBy(const exec::ExecStats& stats) noexcept {
+    const exec::StepStats total = stats.Total();
+    return {total.rows_examined, total.pages_fetched};
+}
 
 // The catalog's bound on a name (`catalog::CheckNameFits`), refused at the
 // name's byte: a name its fixed-width field cannot hold is never stored
@@ -810,6 +843,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // `sys.statement_stats` times the statement from here to its reply
     // (BO-S5); a frame destroyed at a park never replies and is no call.
     const sched::MonoTimeNs began_ns = NowNs();
+    const StatementHead head = BeginStatement(session);
     out->statement = statement;
     // The shape ASH samples this statement under (CJ WE07): none until the
     // dispatch below names it, so a sample of the waits before it (the run
@@ -982,7 +1016,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         FinishDeferredCommits();
         out->pending_lsn = wal::kNoLsn;
         if (Status refused = wal_->EnsureDurable(lsn); !refused.ok()) {
+            const std::optional<std::uint64_t> compile_ns = out->compile_ns;
             *out = {ErrorReply(refused), out->should_stop, 0, refused};
+            out->compile_ns = compile_ns;
             // A refused commit is no bound: a deferred one was aborted, so
             // no ceiling would ever cover it. The session's earlier bound
             // was covered before this statement ran (BA-R1c).
@@ -991,7 +1027,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         }
     }
     out->fetch_id = fetch_id;
-    RecordStatement(line, *out, began_ns);
+    RecordStatement(line, *out, began_ns, head);
     co_return Status::OK();
 }
 
@@ -1107,12 +1143,15 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     statement_pattern_id_ = 0;
     statement_plan_source_ = {};
     statement_plan_label_.clear();
+    statement_head_ns_ = NowNs();
+    statement_compile_ns_.reset();
 
     DispatchOutcome outcome = body(active);
     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
     outcome.pattern_id = std::exchange(statement_pattern_id_, 0);
     outcome.plan_source = std::exchange(statement_plan_source_, {});
     outcome.plan_label = std::exchange(statement_plan_label_, {});
+    outcome.compile_ns = std::exchange(statement_compile_ns_, std::nullopt);
     // Read back out of the member the write paths set: threading it through
     // InsertInner/UpdateInner/EndWrite and every handler between would be a
     // parameter on a dozen signatures for one number, and one statement runs
@@ -1247,21 +1286,68 @@ wal::Lsn CommandDispatcher::UncoveredCommit(Session* session) {
 
 DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
     const sched::MonoTimeNs began_ns = NowNs();
+    const StatementHead head = BeginStatement(session);
     DispatchOutcome outcome = DispatchInternal(line, session);
-    RecordStatement(line, outcome, began_ns);
+    RecordStatement(line, outcome, began_ns, head);
     return outcome;
 }
 
+CommandDispatcher::StatementHead CommandDispatcher::BeginStatement(Session* session) {
+    StatementHead head;
+    // Asked, never made: a session no task books to has no statistics, and
+    // making them here would list it in `sys.session_state` for asking.
+    const sched::SessionWaitStats* const waits =
+        (session != nullptr ? session : &autocommit_session_)->wait_stats();
+    if (sched::RunningTaskBooksTo(waits)) {
+        // The open ON_CPU segment is the session's time before this
+        // statement: booked now, so the end's sample less this one is the
+        // statement's own.
+        sched::FlushOnCpu();
+        head.booked_to = waits;
+        head.sample = sched::SampleSessionCost(*waits);
+    }
+    return head;
+}
+
 void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOutcome& out,
-                                        sched::MonoTimeNs began_ns) const {
+                                        sched::MonoTimeNs began_ns, const StatementHead& head) {
     // Once per statement, at its end, the statement whole: a re-run, a wait
     // and the group commit are inside it (§3.1). A refusal is a call too.
     const sched::MonoTimeNs now_ns = NowNs();
     const bool refused = !out.status.ok() || out.response.rfind("ERR", 0) == 0;
+    const std::int64_t now_us = exec::StatementContextNow().now_us;
+
+    stats::StatementCost cost;
+    if (refused) {
+        // The code the client is told.
+        const StatusCode code = RefusalCodeOf(out);
+        cost.conflict = code == StatusCode::kTxnConflict;
+        stats::RefusalStats::Record(core_id_, static_cast<std::uint16_t>(wire::CategoryOf(code)),
+                                    now_us);
+    } else {
+        cost.rows = out.rows_affected + out.rows_returned;
+    }
+    if (out.examined.has_value()) {
+        cost.executed = true;
+        cost.rows_examined = out.examined->rows;
+        cost.pages = out.examined->pages;
+    }
+    if (out.compile_ns.has_value()) {
+        cost.compiled = true;
+        cost.compile_ns = *out.compile_ns;
+    }
+    // **The time split, the page reads and the log are the session's
+    // statistics now less at the head** (DF-Q6 (a), DF-Q12 (a)), where the
+    // statement ran inside a task of its own session from its head to here;
+    // anywhere else the session's statistics do not hold them and the call
+    // is in no sum (DF-R7).
+    if (head.booked_to != nullptr && sched::RunningTaskBooksTo(head.booked_to)) {
+        sched::FlushOnCpu();
+        cost.timed = sched::SampleSessionCost(*head.booked_to) - head.sample;
+    }
     stats::StatementStats::Record(core_id_, out.fetch_id, line, refused,
-                                  now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0,
-                                  exec::StatementContextNow().now_us, out.plan_source,
-                                  out.plan_label);
+                                  now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0, now_us,
+                                  out.plan_source, out.plan_label, cost);
 }
 
 DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Session* session) {
@@ -6219,7 +6305,7 @@ private:
     std::string row_scratch_;
     Status encode_error_ = Status::OK();
     exec::SlicePolicy slice_;
-    std::uint64_t rows_emitted_ = 0;  // counted only for the test seam
+    std::uint64_t rows_emitted_ = 0;  // the rows the sink took (`rows_returned`)
 };
 
 void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept {
@@ -6265,8 +6351,9 @@ sched::Coro SelectRun::Execute(DispatchOutcome* out) {
         render(frame, row_scratch_);
         if (!encode_error_.ok()) return encode_error_;
         if (Status s = sink->Emit(row_scratch_); !s.ok()) return s;
+        ++rows_emitted_;
         if (d_.select_row_emitted_for_test_) {
-            if (Status s = d_.select_row_emitted_for_test_(++rows_emitted_); !s.ok()) return s;
+            if (Status s = d_.select_row_emitted_for_test_(rows_emitted_); !s.ok()) return s;
         }
         return verdict == exec::QuotaVerdict::kEmitThenStop ? storage::VisitControl::kStop
                                                             : storage::VisitControl::kContinue;
@@ -6289,10 +6376,12 @@ sched::Coro SelectRun::Execute(DispatchOutcome* out) {
     const std::uint64_t statement = out->statement;
     const std::string_view plan_source = out->plan_source;
     std::string plan_label = std::move(out->plan_label);
+    const std::optional<std::uint64_t> compile_ns = out->compile_ns;
     *out = Finish(ran);
     out->statement = statement;
     out->plan_source = plan_source;
     out->plan_label = std::move(plan_label);
+    out->compile_ns = compile_ns;
     co_return Status::OK();
 }
 
@@ -6338,6 +6427,7 @@ DispatchOutcome SelectRun::Finish(const Status& ran) {
         exec::DrainSorted(*quota, scratch.sorter.rows(), [&](const exec::OutputSort::Row& row) {
             if (!drained.ok()) return;
             drained = sink->Emit(row.text);
+            if (drained.ok()) ++rows_emitted_;
         });
         if (!drained.ok()) return Refused(drained);
     }
@@ -6349,7 +6439,10 @@ DispatchOutcome SelectRun::Finish(const Status& ran) {
                                     " step(s), class " +
                                     std::to_string(static_cast<int>(chain->klass)));
     }
-    return {text_sink.Take(), false};
+    DispatchOutcome out{text_sink.Take(), false};
+    out.rows_returned = rows_emitted_;
+    out.examined = ExaminedBy(scratch.stats);
+    return out;
 }
 
 sched::Coro CommandDispatcher::CompleteSelect(std::string_view line, DispatchOutcome* out) {
@@ -8701,6 +8794,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     exec::EmissionQuota quota(stmt.offset, stmt.limit);
     std::vector<parser::AstValue> values(project.size());
     std::string encoded;
+    std::uint64_t emitted = 0;
     for (const std::vector<parser::AstValue>* row : qualifying) {
         const exec::QuotaVerdict verdict = quota.Note();
         if (verdict == exec::QuotaVerdict::kStop) break;
@@ -8709,9 +8803,12 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         Status s = sink.EncodeValueRow(types, values, encoded);
         if (s.ok()) s = sink.Emit(encoded);
         if (!s.ok()) return Refused(s);
+        ++emitted;
         if (verdict == exec::QuotaVerdict::kEmitThenStop) break;
     }
-    return {text_sink.Take(), false};
+    DispatchOutcome out{text_sink.Take(), false};
+    out.rows_returned = emitted;
+    return out;
 }
 
 namespace {
@@ -8799,10 +8896,13 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // Through the one sink every row path emits by: two formatters for a
     // folded row is how one of them comes to forget an item's `type_val`.
     std::string row_scratch;
+    std::uint64_t rows = 0;
     Status emitted = aggregator_.Finish(
         [&](std::span<const parser::AstValue> row) -> Status {
             if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) return s;
-            return sink.Emit(row_scratch);
+            if (Status s = sink.Emit(row_scratch); !s.ok()) return s;
+            ++rows;
+            return Status::OK();
         });
     if (!emitted.ok()) {
         return Refused(emitted);
@@ -8812,7 +8912,10 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // is downstream of all three, so an aggregated statement records the
     // trail, the access shape and the signals its unaggregated twin would.
     RecordExecution(identity, trail, chain, stats);
-    return {text_sink.Take(), false};
+    DispatchOutcome out{text_sink.Take(), false};
+    out.rows_returned = rows;
+    out.examined = ExaminedBy(stats);
+    return out;
 }
 
 // Executes `chain` for its counters rather than its rows, and reports the
@@ -8954,7 +9057,10 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
         os << "\\n";
         AppendEscaped(os, per_step);
     }
-    return {os.str(), false};
+    // The reply is the plan, so no row is returned; the run was real.
+    DispatchOutcome out{os.str(), false};
+    out.examined = ExaminedBy(stats);
+    return out;
 }
 
 DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& session,
@@ -9159,7 +9265,9 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // of the statement's own SELECT, not of a subquery an UPDATE's SET runs
     // through here, which `fetch_id` is guarded against the same way.
     const auto own = run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
-    if (!own.has_value() || own->fetch_id != statement_fetch_id_) {
+    const bool statements_own = own.has_value() && own->fetch_id == statement_fetch_id_;
+    if (statements_own) NoteStatementCompiled();
+    if (!statements_own) {
         // Another statement's row: nothing of this compile is its plan.
     } else if (compiled.plan_note.has_value()) {
         statement_plan_source_ = exec::PlanSourceName(compiled.plan_note->source);
@@ -10244,7 +10352,9 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
             return Refused(s);
         }
     }
-    return DispatchOutcome{text_sink.Take(), false};
+    DispatchOutcome out{text_sink.Take(), false};
+    out.rows_returned = rs.rows.size();
+    return out;
 }
 
 DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope& scope,
@@ -10717,6 +10827,9 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     if (!predicates.ok()) {
         return Refused(predicates.status());
     }
+    // An `ON CONFLICT DO UPDATE` arm compiles this once a conflicting row,
+    // inside an INSERT that compiles nothing of its own.
+    if (!arm_target.has_value()) NoteStatementCompiled();
     // The walk's first stage, its claim and its park are DELETE's too
     // (`WriteWalk`). `payload_copy` is the row in hand: its bytes, copied
     // out of the page.
@@ -13732,7 +13845,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                                                const txn::Snapshot& snapshot,
                                                WalkCursor resume_from,
                                                const exec::StatementContext& context) {
-    auto parsed = parser::Parse(line);
+    // Keyed by its shape, as an INSERT and an UPDATE are (DF-Q11 (a)).
+    auto parsed = ParseKeepingShape(line);
     if (!parsed.ok()) return Refused(parsed.status());
     if (!std::holds_alternative<parser::DeleteStmt>(parsed.value())) {
         return {"ERR expected a DELETE statement", false};
@@ -13768,6 +13882,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                                   &context);
     });
     if (!predicates.ok()) return Refused(predicates.status());
+    NoteStatementCompiled();
     // The walk's first stage, its claim and its park are UPDATE's too
     // (`WriteWalk`). Stage 1 decodes only what the WHERE reads; `mark`
     // completes a row that qualified.

@@ -1890,12 +1890,28 @@ newline protocol.
 | `SYNC` | forces log + store durability: `OK synced` |
 | `STOP` | answers `OK bye` and shuts the whole server down; admin's, and over KWP an ordinary statement (`docs/spec/client-manual.md`) |
 
-**Four statistics reports have no `SHOW` spelling** - read them with
+**Six statistics reports have no `SHOW` spelling** - read them with
 `SELECT` (nor do `sys.types` and `sys.objects`):
 
-- `sys.statement_stats`: what each statement shape costs - `calls`,
-  `refused`, `total_us`, `max_us`, `first_seen`, `last_seen` and the first
-  statement seen, one row per `(fetch_id, kind)`.
+- `sys.statement_stats`: what each statement shape costs, one row per
+  `(fetch_id, kind)` - a `SELECT`, an `INSERT`, an `UPDATE` and a `DELETE`
+  each have a shape, every other kind is one row. `calls`, `refused`,
+  `total_us`, `max_us`, `first_seen`, `last_seen`, where its join order
+  came from, and the first statement seen; and what the shape cost:
+  `conflicts` (the calls refused `TXN_CONFLICT`), `rows` (answered or
+  affected), `rows_examined` and `pages` (what a `SELECT`'s own step chain
+  read), `compile_us`, and - over `timed_calls`, the calls a connection
+  ran - `cpu_us`, the wait time by class (`sched_us`, `commit_us`, `io_us`,
+  `net_us`, `app_us`, `other_us`), `page_reads` (the statement's own
+  blocking reads), `log_bytes` and `log_records`. **A column that could not
+  be counted for a shape is NULL, not 0**: an `INSERT`, an `UPDATE` and a
+  `DELETE` have no `rows_examined` or `pages`.
+- `sys.statement_histogram`: a shape's latency distribution, one row per
+  `(fetch_id, kind)` and non-empty bucket - bucket k counts the calls that
+  took `[2^k, 2^(k+1))` microseconds; a shape's counts sum to its `calls`.
+- `sys.refusal_stats`: how statements were refused - one row per core and
+  error code (`TXN_CONFLICT`, `ALREADY_EXISTS`, ...), its `count` and
+  `last_seen`.
 - `sys.relation_stats`' activity columns: `inserts`, `updates`, `deletes`,
   `purged` - the rows each relation's write statements reported since the
   instance started (a statement counts when it answers, so rows a
@@ -1907,10 +1923,11 @@ newline protocol.
   `pages_flushed`, the waits on the log and on the data file, `resumed`, and
   `outcome` (`completed`, `failed`).
 
-These four are kept in memory: a restart or a restore empties them. Each is
+These six are kept in memory: a restart or a restore empties them. Each is
 bounded per core, and the rows it gives up are counted in `sys.meta`
 (`statement_stats_dropped`, `relation_stats_dropped`, `lock_waits_*`,
-`checkpoints_*`).
+`checkpoints_*`); `sys.refusal_stats` is bounded by the error codes and
+gives up none.
 
 `SELECT ... FROM sys.<view>` admits a projection, `*`, a qualified column,
 `WHERE column op literal` and `column BETWEEN literal AND literal`,

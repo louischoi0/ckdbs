@@ -8,6 +8,7 @@
 
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
+#include "kds/sched/wait_state.hpp"
 
 namespace kds::wal {
 namespace {
@@ -409,6 +410,9 @@ StatusOr<Lsn> WalManager::AppendThrough(const RecordSpec& spec,
     }
     ++stats_.records_appended;
     stats_.bytes_appended += EncodedRecordSize(payload.size());
+    // The appending statement's own count (DF-Q12 (a)): this runs on the
+    // appender's thread, where the task being polled is the statement's.
+    sched::BookLogAppend(EncodedRecordSize(payload.size()));
 
     // One line per WAL record. Trace only: an append accompanies every
     // logged page mutation, so this is a per-mutation syscall when enabled.

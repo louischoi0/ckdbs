@@ -124,7 +124,56 @@ struct SessionWaitStats {
     // The statement's shape (`pattern_id`), which the Cabin controller counts
     // by (WE13); `fingerprint` is its `fetch_id`.
     RelaxedU64 pattern_id;
+    // **The log the session's task appended** (DF-Q12 (a)): every record's
+    // encoded bytes, booked where it is appended (`BookLogAppend`) to the
+    // session of the task being polled, as a wait is - so a record a
+    // statement appends under no transaction is its own. Read only through
+    // `SampleSessionCost`; no view shows the pair.
+    RelaxedU64 log_bytes;
+    RelaxedU64 log_records;
 };
+
+// **A session's statistics folded to what one statement's cost is read
+// from** (DF-Q6 (a), `instructions/v3.2.0/workorder-df-statistics-coverage.md`
+// §7): its CPU time, its wait time by class, its blocking page reads and the
+// log it appended. Taken on the session's own task at a statement's head and
+// again at its end, each after a `FlushOnCpu`; the difference is the
+// statement's, because a session runs one statement at a time. Meaningful
+// only where `RunningTaskBooksTo(session)` held at both.
+struct SessionCostSample {
+    std::uint64_t on_cpu_ns = 0;
+    // By `stats::WaitClass`: the total of every event of the class. `kCpu`
+    // stays 0 - ON_CPU is `on_cpu_ns` - and a counter event adds no time.
+    std::array<std::uint64_t, stats::kWaitClassCount> class_ns{};
+    // The counts of `io.page_read`, `io.var_heap_read` and
+    // `io.scan_ring_read`: the session's own blocking reads.
+    std::uint64_t page_reads = 0;
+    std::uint64_t log_bytes = 0;
+    std::uint64_t log_records = 0;
+
+    // Field by field: a later sample less an earlier is what lay between,
+    // and such differences add up to a shape's sums.
+    SessionCostSample& operator+=(const SessionCostSample& o) noexcept {
+        on_cpu_ns += o.on_cpu_ns;
+        for (std::size_t i = 0; i < class_ns.size(); ++i) class_ns[i] += o.class_ns[i];
+        page_reads += o.page_reads;
+        log_bytes += o.log_bytes;
+        log_records += o.log_records;
+        return *this;
+    }
+    friend SessionCostSample operator-(SessionCostSample later,
+                                       const SessionCostSample& earlier) noexcept {
+        later.on_cpu_ns -= earlier.on_cpu_ns;
+        for (std::size_t i = 0; i < later.class_ns.size(); ++i) {
+            later.class_ns[i] -= earlier.class_ns[i];
+        }
+        later.page_reads -= earlier.page_reads;
+        later.log_bytes -= earlier.log_bytes;
+        later.log_records -= earlier.log_records;
+        return later;
+    }
+};
+SessionCostSample SampleSessionCost(const SessionWaitStats& session) noexcept;
 
 struct TaskWaitState {
     TaskState state = TaskState::kRunnable;  // a task not yet polled waits its turn
@@ -250,6 +299,10 @@ void WaitOnPollExit(TaskWaitState& task, bool parked, bool done) noexcept;
 // ends. Segments are additive: this changes no total, only when it is booked.
 // A no-op when no task is being polled.
 void FlushOnCpu() noexcept;
+// One log record of `bytes` encoded bytes, appended by the calling thread:
+// booked to the session of the task being polled, and to nobody where no
+// task is polled or the task has no session (a background task, the mount).
+void BookLogAppend(std::uint64_t bytes) noexcept;
 
 #else
 
@@ -263,6 +316,7 @@ inline void RecordCounterEvent(stats::WaitEvent) noexcept {}
 inline void WaitOnPollEnter(TaskWaitState&) noexcept {}
 inline void WaitOnPollExit(TaskWaitState&, bool, bool) noexcept {}
 inline void FlushOnCpu() noexcept {}
+inline void BookLogAppend(std::uint64_t) noexcept {}
 
 #endif
 

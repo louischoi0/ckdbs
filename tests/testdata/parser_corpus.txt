@@ -3,7 +3,7 @@
 # Format:  verdict  pattern_id  arg_hash  fetch_id  sql
 #   verdict     "ok", or the StatusCode name the parse was rejected with.
 #   pattern_id  16 hex digits, or "-" when FingerprintOf() returns nothing
-#   arg_hash    (leading word not SELECT/INSERT/UPDATE, or the text does
+#   arg_hash    (leading word not SELECT/INSERT/UPDATE/DELETE, or the text does
 #   fetch_id    not lex). The three are "-" together or none is. fetch_id
 #               is pattern_id without the leading SELECT's select list
 #               (AP-S1), so it equals pattern_id on every other line.
@@ -20,10 +20,13 @@
 #
 #   pattern_id  must not move from one hash to another, ever: the v2
 #   arg_hash    language is additive shape, and a moved hash retires every
-#               stored waystone. Two permitted transitions. "-" to a hash,
+#               stored waystone. Three permitted transitions. "-" to a hash,
 #               when a statement that could not be lexed becomes lexable
 #               (V04's dot token) — nothing already stored changes meaning,
-#               since a shape that hashed to X still hashes to X. And a
+#               since a shape that hashed to X still hashes to X. "-" to a
+#               hash again, when a leading word becomes patternable
+#               (DF-Q11 (a)'s `delete`), on the same ground: fingerprint.hpp's
+#               bump rule names the case. And a
 #               hash that could never be stored may move (TY3 phase 2's
 #               numeric token): a statement that lexed but parsed in no
 #               production was fingerprintable yet unrecordable, so its
@@ -475,10 +478,11 @@ ok	-	-	-	drop table t;
 InvalidArgument	-	-	-	SELECTX * FROM t
 # [txn T10] DELETE became a statement head - the transaction work needed it
 # (docs/spec/txn.md section 10 tests it), so the flip is owned by that task
-# rather than by a parser one. It stays unfingerprinted: adding a
-# patternable leading word does **not** move any hash already stored, which
-# is the case fingerprint.hpp's bump rule names explicitly.
-ok	-	-	-	DELETE FROM t WHERE id = 1
+# rather than by a parser one. [DF-Q11 (a)] made `delete` a patternable
+# leading word (instructions/v3.2.0/workorder-df-statistics-coverage.md §7),
+# so the three hashes went from "-" to these: the third permitted
+# transition above, which moves no hash already stored.
+ok	80188c821b5657bf	b5d414774c8002cc	80188c821b5657bf	DELETE FROM t WHERE id = 1
 # [V12] session and admin statements.
 InvalidArgument	-	-	-	SET DURABILITY STRICT
 InvalidArgument	-	-	-	SHOW TABLES

@@ -112,6 +112,8 @@ returns only what it names, so that conjunct is not compared again.
 | `cabin_optimizer` | engine | - | a managed entry of the Cabin controller; refused where no controller runs |
 | `lock_waits` | engine | - | one lock wait (§6.3) |
 | `statement_stats` | engine | - | one statement shape (§6.1) |
+| `statement_histogram` | engine | - | one non-empty log2 latency bucket of one statement shape (§6.1a) |
+| `refusal_stats` | engine | - | one error code a core has refused a statement with (§6.1b) |
 | `checkpoints` | engine | - | one checkpoint run (§6.4) |
 | `wait_event_names` | engine | - | one wait event of the registry (§6.5) |
 | `wait_stats` | engine | - | one event on one core, plus a NULL-core total row per event (§6.6) |
@@ -130,7 +132,8 @@ returns only what it names, so that conjunct is not compared again.
 | `SHOW PAGE <id>` | the header and slot columns of `sys.page_slots WHERE page_id = <id>`; `SHOW PAGE <id> VALUES` adds `value`, the payload in hex |
 | `DESCRIBE <t>`, `DESC <t>` | `SELECT * FROM sys.columns WHERE rel_name = <t>` |
 
-`lock_waits`, `statement_stats`, `checkpoints` and `relation_stats`'
+`lock_waits`, `statement_stats`, `statement_histogram`, `refusal_stats`,
+`checkpoints` and `relation_stats`'
 activity have no `SHOW` spelling (BO-Q10), and neither do `types`,
 `objects` or an unkeyed `columns`. `SHOW TRACES`, `SHOW TRACE` and
 `TRACE ON` are retired with the trace sink nothing ever installed (BO-Q9);
@@ -149,13 +152,16 @@ bound or an allocation that fails is dropped and counted in `sys.meta`
 or wrong row costs a reader's insight, never an answer. **No switch**
 (BO-Q8): recording is always on. At BO's close it cost 0.35-0.52 us of
 server CPU per point statement, inside the measurement's spread
-(`bench/v3.3.0/results-bo-close-v3.3.0-23-g86d1fe1a.md`).
+(`bench/v3.3.0/results-bo-close-v3.3.0-23-g86d1fe1a.md`); that number is of
+the statement's record before §6.1's cost columns were added, whose path is
+not measured. `sys.refusal_stats` (§6.1b) is the one store with no latch: a
+fixed table of single-writer words a core.
 
 ### 6.1 `sys.statement_stats` (`stats/statement_stats.hpp`)
 
 One row per `(fetch_id, kind)` for the instance, the cores' parts merged at
 read: `calls`, `refused`, `total_us`, `max_us`, `first_seen`, `last_seen`,
-`plan_source`, `plan_name`, `variant`
+`plan_source`, `plan_name`, `variant`, the cost columns below
 and `shape_text`, the first statement seen, cut to 256 bytes at a character
 boundary. **`plan_source`** (CX-R11) is where the shape's join order came
 from at its latest compile, on the core that saw the shape last: `admin`
@@ -171,13 +177,96 @@ predicate, each of which runs its written order unsearched (under
 `written` those three read `written`). A subquery's compile never sets
 it: the row is the statement's.
 It is how a DBA or an agent finds a shape that runs uncaptured. `kind` is the first whitespace-separated token, upper-cased, when
-it is a verb the dispatcher routes, else `OTHER`; only `SELECT`, `INSERT` and `UPDATE`
-carry a fingerprint, so every other kind is one row at `fetch_id = 0`.
+it is a verb the dispatcher routes, else `OTHER`; only `SELECT`, `INSERT`, `UPDATE`
+and `DELETE` carry a fingerprint, so every other kind is one row at `fetch_id = 0` -
+but `ANALYZE <statement>`, which is kind `ANALYZE` under the shape of the
+statement it names, a refused `ANALYZE DELETE` included.
 Recorded once per statement at its end, timed whole - a park, a re-run and
 the group commit are one call; a refused statement is a call. A statement
 the engine issues itself (a listener's `ROLLBACK`, a KWP load's
 `BEGIN`/`COMMIT`) and a load chunk are not counted. 4096 shapes per core;
-`statement_stats_dropped`.
+`statement_stats_dropped`. **A shape's slot is 624 bytes** beside its key
+and its text - about 1 KB a shape with a 256-byte text - so a core's part
+holds at most about 4 MB and 64 cores' about 250 MB, each allocated on a
+shape's first statement and kept until the instance stops.
+
+**What a shape costs**, between `variant` and `shape_text`: `conflicts`,
+`rows`, `rows_examined`, `pages`, `compile_us`, `timed_calls`, `cpu_us`,
+`sched_us`, `commit_us`, `io_us`, `net_us`, `app_us`, `other_us`,
+`page_reads`, `log_bytes`, `log_records`. **A column the engine could not
+fill for any call of the shape is NULL, never 0, and a call it could not
+fill for is in no sum.** The time split, the page reads and the log are
+the statement's whole, its re-runs and waits included; `rows`, the chain's
+counts and `compile_us` are its last run's. A refused call adds no `rows`
+and no chain count; it keeps its time, its log and, where it got that far,
+its compile.
+
+- `conflicts`: the calls refused `TxnConflict`, a subset of `refused`, by
+  the code the client was told - so a deadlock's victim is one.
+- `rows`: what a statement gave its result sink - produced, not what a KWP
+  `max_rows` let leave - or reported affected; a `RETURNING` write's rows
+  are counted once, as affected.
+- `rows_examined`, `pages`: the rows and pages the statement's own step
+  chain counted (`pages` exact on a walk and one a keyed access, whatever
+  the tree's height), summed over the calls whose chain ran to its end: a
+  native `SELECT`'s, a fold's, an `ANALYZE`'s. **NULL where no chain of
+  the statement's own counts**: an `INSERT`; an `UPDATE` and a `DELETE`,
+  whose walk is the dispatcher's; a query-layer `SELECT`; a view's
+  `SELECT`. A subquery's chain and a query-layer walk's are in no row.
+- `compile_us`: from the head of the call's last run to its own chain
+  compiled - a `SELECT`'s chain, an `UPDATE`'s or `DELETE`'s `WHERE` - so
+  the parse and the name resolution are inside it, and for an `UPDATE` so
+  are its `SET` subqueries, which run before its `WHERE` compiles. NULL for
+  a shape that compiles none.
+- `timed_calls`: the calls that ran inside a task of their own session,
+  which is every statement a listener submits and no statement a
+  synchronous dispatch runs outside a task. **Only those have a time split,
+  page reads and a log count**, and each of the columns below is NULL where
+  `timed_calls` is 0.
+- `cpu_us` and the six after it: the session's wait statistics at the
+  statement's end less at its head, what `ANALYZE`'s DB-time line reads
+  (§6.6). `cpu_us` is ON_CPU time; `sched_us`, `commit_us`, `io_us`,
+  `net_us` and `app_us` are the wait classes Scheduler, Commit, User I/O,
+  Network and Application (`wait-events.md`); `other_us` is every other
+  class of DB time, so the seven sum to the timed calls' DB time. The
+  stall a blocking read puts on the core's other tasks is no statement's
+  (CJ-Q8).
+- `page_reads`: the statement's own blocking reads, the counts of
+  `io.page_read`, `io.var_heap_read` and `io.scan_ring_read` in that
+  delta. There is no hit count: `pages` is a logical count.
+- `log_bytes`, `log_records`: the log records the statement's task
+  appended, by encoded size, booked at the append to the session of the
+  task being polled (`sched::BookLogAppend`). They include what a statement
+  appends under no transaction (an issued key's mark, a `PURGE`'s records)
+  and an autocommit statement's commit record; an explicit transaction's
+  commit record is its `COMMIT`'s. A record appended outside a statement
+  of the session - a checkpoint's, the listener's `ROLLBACK` at a close or
+  at the lifetime ceiling - is no shape's.
+
+### 6.1a `sys.statement_histogram` (`stats/statement_stats.hpp`)
+
+A shape's latency distribution: `fetch_id`, `kind`, `bucket`, `lo_us`,
+`count`. Every call's elapsed time - `total_us`'s, a refused call's
+included - falls in one of `sys.wait_histogram`'s 32 buckets (§6.6): bucket
+k holds `[2^k, 2^(k+1))` microseconds, the last is open-ended, and bucket 0
+takes everything under 2 us. One row per shape and non-empty bucket, the
+cores' parts merged as `sys.statement_stats`' are; a shape's counts sum to
+its `calls`. It shares the shape's slot and bound.
+
+### 6.1b `sys.refusal_stats` (`stats/refusal_stats.hpp`)
+
+How statements were refused: `core`, `code`, `count`, `last_seen`. One row
+per core and code with at least one refusal; `code` is the name of the
+wire's pinned category the client was told (`protocol.md` §11:
+`TXN_CONFLICT`, `ALREADY_EXISTS`, ...), and a refusal built from a bare
+message reads `INVALID_ARGUMENT`, as its line reads back. A deadlock's
+victim reads `TXN_CONFLICT`; `sys.lock_waits`' `outcome` tells the two
+apart, in a ring that overwrites. Counted once per refused statement at
+its end, where `sys.statement_stats`' call is, so a refusal the session
+layer answers before the dispatcher - a protocol error - is in neither.
+Bounded by the registry: 64 codes a core, a fixed 1 KB, no allocation, and
+keyed by nothing a client can mint. Read without a latch, so a row's
+`count` and `last_seen` may differ by a refusal in flight.
 
 ### 6.2 `sys.relation_stats`' activity (`stats/relation_stats.hpp`)
 
@@ -282,7 +371,8 @@ RUNNABLE (CJ-Q12); `sys.wait_stats` carries the exact figure.
 Columns: `sample_ts_us` (the instance's monotonic clock, not wall time), `core`,
 `session_id`, `session_kind`, `state`, `event`, `class`, `sched_group`, `late`,
 `arg_hash_valid` (1: `p1` is the statement's argument hash), `fingerprint` (the
-statement's `fetch_id`, 0 before a statement names one), `p1`-`p3`,
+statement's `fetch_id`, 0 before a statement names one and for a kind that
+carries none - a `SELECT`, an `INSERT`, an `UPDATE` and a `DELETE` carry one), `p1`-`p3`,
 `wait_elapsed_us`. The 64-byte record also holds `step_id`, `origin_session`
 and `trx_id`, which nothing fills yet and the view does not show.
 

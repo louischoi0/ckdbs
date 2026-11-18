@@ -25,6 +25,7 @@
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/stats/checkpoint_log.hpp"
 #include "kds/stats/optimizer_signals.hpp"
+#include "kds/stats/refusal_stats.hpp"
 #include "kds/stats/relation_stats.hpp"
 #include "kds/stats/wait_event.hpp"
 #include "kds/stats/statement_stats.hpp"
@@ -81,6 +82,8 @@ constexpr SysViewSpec kViews[] = {
     {"cabin_optimizer"},
     {"lock_waits"},
     {"statement_stats"},
+    {"statement_histogram"},
+    {"refusal_stats"},
     {"checkpoints"},
     {"wait_event_names"},
     {"wait_stats"},
@@ -253,6 +256,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "cabin_optimizer") return CabinOptimizerView(byte);
     if (n == "lock_waits") return LockWaitsView();
     if (n == "statement_stats") return StatementStatsView();
+    if (n == "statement_histogram") return StatementHistogramView();
+    if (n == "refusal_stats") return RefusalStatsView();
     if (n == "checkpoints") return CheckpointsView();
     if (n == "wait_event_names") return WaitEventNamesView();
     if (n == "wait_stats") return WaitStatsView();
@@ -1035,16 +1040,49 @@ StatusOr<exec::CatalogView> CommandDispatcher::LockWaitsView() {
     return view;
 }
 
+namespace {
+
+std::uint64_t Us(std::uint64_t ns) { return ns / 1000; }
+
+// `sys.statement_stats`' time split (DF-Q6 (a)): the wait classes a
+// statement's task waits in, each a column, and everything else of DB time
+// as `other_us` - so the columns from `cpu_us` to `other_us` sum to the timed
+// calls' DB time, as `ANALYZE`'s line does. Idle is not DB time (I3).
+constexpr std::pair<const char*, stats::WaitClass> kSplitClasses[] = {
+    {"sched_us", stats::WaitClass::kScheduler},
+    {"commit_us", stats::WaitClass::kCommit},
+    {"io_us", stats::WaitClass::kUserIo},
+    {"net_us", stats::WaitClass::kNetwork},
+    {"app_us", stats::WaitClass::kApplication},
+};
+
+bool InSplit(stats::WaitClass c) {
+    for (const auto& [name, split] : kSplitClasses) {
+        if (split == c) return true;
+    }
+    return c == stats::WaitClass::kCpu || c == stats::WaitClass::kIdle;
+}
+
+}  // namespace
+
 StatusOr<exec::CatalogView> CommandDispatcher::StatementStatsView() {
     exec::CatalogView view;
-    // What each statement shape costs (BO-S5, §3.1): one row per
+    // What each statement shape costs (BO-S5, §3.1; DF-S1): one row per
     // `(fetch_id, kind)` for the instance, the cores' parts merged at read
     // - an engine-state view, so it filters nothing. `fetch_id` is 0 for a
     // kind with no fingerprint. `plan_source` is where the shape's join
     // order last came from (CX-R11), NULL for a shape with no join block;
     // `plan_name` and `variant` are the administrator's plan that chose it,
-    // NULL where none did. `shape_text` is the first statement of the shape
-    // seen, cut to 256 bytes - last, as a value that can hold commas.
+    // NULL where none did.
+    //
+    // **DF-S1's columns are NULL where no call of the shape could be
+    // counted, never 0** (DF-R7): `rows_examined` and `pages` are summed
+    // over the calls whose own chain ran to its end, `compile_us` over those
+    // that compiled one, and the columns from `cpu_us` to `log_records` over
+    // `timed_calls`, the calls that ran inside a task of their own session.
+    //
+    // `shape_text` is the first statement of the shape seen, cut to 256
+    // bytes - last, as a value that can hold commas.
     Define(view, {{"fetch_id", kInt},
                   {"kind", kStr},
                   {"calls", kInt},
@@ -1056,18 +1094,93 @@ StatusOr<exec::CatalogView> CommandDispatcher::StatementStatsView() {
                   {"plan_source", kStr},
                   {"plan_name", kStr},
                   {"variant", kStr},
+                  {"conflicts", kInt},
+                  {"rows", kInt},
+                  {"rows_examined", kInt},
+                  {"pages", kInt},
+                  {"compile_us", kInt},
+                  {"timed_calls", kInt},
+                  {"cpu_us", kInt}});
+    for (const auto& [name, split] : kSplitClasses) Define(view, {{name, kInt}});
+    Define(view, {{"other_us", kInt},
+                  {"page_reads", kInt},
+                  {"log_bytes", kInt},
+                  {"log_records", kInt},
                   {"shape_text", kStr}});
     for (const stats::StatementShape& s : stats::StatementStats::Snapshot()) {
         // `<plan>/<variant>`: neither is a name that holds a `/`.
         const std::size_t slash = s.plan_label.find('/');
         const bool managed = slash != std::string::npos;
-        view.rows.push_back({Int(s.fetch_id), Str(s.kind), Int(s.calls), Int(s.refused),
-                             Int(s.total_us), Int(s.max_us), Timestamp(s.first_seen_us),
-                             Timestamp(s.last_seen_us),
-                             s.plan_source.empty() ? Null() : Str(s.plan_source),
-                             managed ? Str(s.plan_label.substr(0, slash)) : Null(),
-                             managed ? Str(s.plan_label.substr(slash + 1)) : Null(),
-                             Str(s.shape_text)});
+        const bool executed = s.executed_calls != 0;
+        const bool timed = s.timed_calls != 0;
+        const auto when_timed = [timed](std::uint64_t v) { return timed ? Int(v) : Null(); };
+        std::vector<parser::AstValue> row = {
+            Int(s.fetch_id), Str(s.kind), Int(s.calls), Int(s.refused), Int(s.total_us),
+            Int(s.max_us), Timestamp(s.first_seen_us), Timestamp(s.last_seen_us),
+            s.plan_source.empty() ? Null() : Str(s.plan_source),
+            managed ? Str(s.plan_label.substr(0, slash)) : Null(),
+            managed ? Str(s.plan_label.substr(slash + 1)) : Null(),
+            Int(s.conflicts), Int(s.rows),
+            executed ? Int(s.rows_examined) : Null(), executed ? Int(s.pages) : Null(),
+            s.compiled_calls != 0 ? Int(Us(s.compile_ns)) : Null(),
+            Int(s.timed_calls), when_timed(Us(s.timed.on_cpu_ns))};
+        std::uint64_t other_ns = 0;
+        for (std::size_t c = 0; c < stats::kWaitClassCount; ++c) {
+            if (!InSplit(static_cast<stats::WaitClass>(c))) other_ns += s.timed.class_ns[c];
+        }
+        for (const auto& [name, split] : kSplitClasses) {
+            row.push_back(when_timed(Us(s.timed.class_ns[static_cast<std::size_t>(split)])));
+        }
+        row.push_back(when_timed(Us(other_ns)));
+        row.push_back(when_timed(s.timed.page_reads));
+        row.push_back(when_timed(s.timed.log_bytes));
+        row.push_back(when_timed(s.timed.log_records));
+        row.push_back(Str(s.shape_text));
+        view.rows.push_back(std::move(row));
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::StatementHistogramView() {
+    exec::CatalogView view;
+    // A shape's latency distribution (DF-Q2 (a)): every call's elapsed time
+    // in `sys.wait_histogram`'s buckets - bucket k holds [2^k, 2^(k+1))
+    // microseconds, 32 buckets, the last open-ended and bucket 0 taking
+    // everything under 2 us. One row per shape and non-empty bucket, the
+    // cores' parts merged as `sys.statement_stats`' are; a shape's counts
+    // sum to its `calls`. `lo_us` is the bucket's lower bound.
+    Define(view, {{"fetch_id", kInt},
+                  {"kind", kStr},
+                  {"bucket", kInt},
+                  {"lo_us", kInt},
+                  {"count", kInt}});
+    for (const stats::StatementShape& s : stats::StatementStats::Snapshot()) {
+        for (std::size_t k = 0; k < s.latency.size(); ++k) {
+            if (s.latency[k] == 0) continue;
+            view.rows.push_back({Int(s.fetch_id), Str(s.kind), Int(k),
+                                 Int(k == 0 ? 0 : std::uint64_t{1} << k), Int(s.latency[k])});
+        }
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::RefusalStatsView() {
+    exec::CatalogView view;
+    // How statements were refused (DF-Q3 (a)): one row per core and code
+    // that refused at least one, the code the name of the wire's pinned
+    // category the client was told (`protocol.md` §11). A deadlock's victim
+    // reads `TXN_CONFLICT`, as its reply does; `sys.lock_waits`' `outcome`
+    // tells the two apart. Engine-state: reads no session view and no latch
+    // (`stats/refusal_stats.hpp`).
+    static_assert(static_cast<std::size_t>(wire::ErrorCategory::kReadOnlyTransaction) <
+                      stats::RefusalStats::kRefusalCodes,
+                  "the store indexes by the wire's category number");
+    Define(view, {{"core", kInt}, {"code", kStr}, {"count", kInt}, {"last_seen", kTimestamp}});
+    for (const stats::RefusalCount& r : stats::RefusalStats::Snapshot()) {
+        view.rows.push_back(
+            {Int(r.core),
+             Str(wire::ErrorCategoryName(static_cast<wire::ErrorCategory>(r.code))),
+             Int(r.count), Timestamp(r.last_seen_us)});
     }
     return view;
 }
@@ -1129,8 +1242,6 @@ StatusOr<exec::CatalogView> CommandDispatcher::WaitEventNamesView() {
 }
 
 namespace {
-
-std::uint64_t Us(std::uint64_t ns) { return ns / 1000; }
 
 const char* TaskStateName(sched::TaskState s) {
     switch (s) {
