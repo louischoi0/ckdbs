@@ -878,3 +878,112 @@ the ones taken from its findings are in the commit after it).
 - **Left for the operator**: a mount refuses on a `sys.plans` it cannot
   scan, as on any logged catalog relation, though what is lost would cost
   a recapture (`known-gaps.md`).
+
+### CX-S1b - built 2026-11-18; its §6 measurement not run
+
+The administrator's plan, on worktree `cx-plan-change-option`.
+
+**As built.**
+
+- **The DDL** (`exec/plan_ddl.hpp`): `CREATE PLAN <name> FOR <select>
+  VARIANT <v> WHEN <rule> ORDER (...) ... VARIANT <w> ELSE ORDER (...)`,
+  `CREATE PLAN <name> FOR <select> AS SEARCHED`, `ALTER PLAN <name> ENABLE
+  | DISABLE`, `ALTER PLAN <name> REPLACE VARIANT <v> (WHEN <rule> | ELSE)
+  ORDER (...)`, and S1a's `DROP PLAN`. Admin, autocommit only, answered
+  once durable. No word is reserved: the `<select>` ends at the first
+  `VARIANT <identifier> WHEN|ELSE` outside parentheses or at a closing `AS
+  SEARCHED`, neither of which a statement a plan can be made for holds.
+- **The rule** (`exec/plan_rule.hpp`, CX-R4): comparisons joined by `AND`
+  over sums of `ARG(k)` and integers, checked for overflow; total - a
+  comparison that cannot be decided is false. `ARG(k)` is the statement's
+  k-th value position (`parser::ArgumentsOf`, new): every integer, numeric
+  and string literal in token order, a `LIMIT`'s among them.
+- **The table** (`exec/admin_plans.hpp`): one for the instance, 16 latched
+  partitions, holding every administrator's plan whose relations exist and
+  serving the enabled ones. `CompileBlock` asks it first, under every
+  `join_order` (CX-R1's source 1); under `written` the dispatcher hands the
+  compile its options only while a plan is enabled, so an instance with
+  none compiles as it did.
+- **The row** (`exec/plan_catalog.hpp`): `flags` bit 0 clear, bit 1
+  `DISABLED`; text `v1 fp= oids= bindings= args= at= variants=`, one line a
+  variant, then the shape text. A mount loads both origins (`LoadPlans`).
+- **`DROP TABLE`** is RESTRICTed by an enabled plan naming the relation
+  (CX-Q24 (a)); a committed drop forgets a disabled one in the table and
+  leaves its row.
+- **Seen**: `ANALYZE`'s `planned order=plan plan=<name>/<variant>`;
+  `sys.plans`' `variants` column and its `disabled` and `invalid` states;
+  `sys.statement_stats`' `plan_source`, `plan_name` and `variant`; `SHOW
+  META`'s `admin_plans`, `admin_plans_enabled`, `plan_served`,
+  `plan_declined`.
+- `tests/admin_plans_test.cpp` carries the stage's cells; `parser-v2.md`
+  I12, `sys-views.md`, `drop-table.md` DT3, `rules.md` §3, `client-manual.md`
+  and `manual/sql/sql.md` state it.
+
+**Facts of the stage.**
+
+- **The §6 measurement for S1's close was not run.** Overhead is measured
+  at the milestone's close. What S1b adds to a statement is named in
+  `known-gaps.md` (Captured plans) and not measured: one relaxed load on
+  every top-level join block's compile, a probe while any plan is enabled,
+  and a second lex of the statement for a plan with more than one variant.
+- **`ACCESS` and `BUILD` clauses are refused `NotImplemented`** at their
+  word; they are S3's and S5's.
+
+**Where the build differs from an adopted item.**
+
+- **CX-Q5: `IS NULL` is not built, and is refused `Unsupported`.** NULL is
+  shape to the fingerprint (`fingerprint.hpp`: "NULL is shape"), and a
+  `C_BIND` of NULL substitutes the word into the text, so a statement with
+  a NULL in a value position has another fetch id and matches another
+  plan. No argument of a matching statement is ever NULL, and CX-R4's "a
+  NULL argument matches no comparison and reaches `ELSE`" has no case. A
+  spelling that can never hold is not accepted.
+- **CX-Q5: a string compares, by `=` and `!=` only.** (b) as adopted is
+  arithmetic "over integers"; (a)'s `ARG(k) op constant` did not say what
+  a constant is. A skewed categorical value (`status = 'CLOSED'`) is the
+  other case that needs variants, so a string constant is admitted for
+  equality, by its bytes. Ordering strings is `NotImplemented`: a numeric
+  with a point is a string here and its byte order is not its order.
+  `OR` is `NotImplemented`; another variant is a rule's `OR`.
+- **CX-R6: a tuple key chain is probed while a plan is enabled.** As
+  written, "a point read or a tuple key chain leaves the compile before
+  any plan lookup". A point read still does - one relation never reaches
+  the table. A block of tuple key descents is asked, because W4 makes an
+  administrator's plan "always possible" and a plan created for such a
+  shape and then never applied would enforce nothing of what was written.
+  The cost is a relaxed load while no plan is enabled and one partition
+  latch while one is.
+- **CX-S1's grammar: by example, with literals.** The sketch wrote the
+  statement with `?`. The native grammar reads no `?` and validation
+  needs "representative bindings", so `CREATE PLAN` takes the statement
+  with literals and refuses a `?` `NotImplemented`, as `WAYSTONE ON` does
+  (CF-O-Q11 (a)). The row stores the shape text, so no literal is kept.
+- **CX-Q4 (b), CX-Q16: `INVALID` is derived, and a decline marks
+  nothing.** A plan reads `invalid` where a relation it names is gone or
+  its fetch id is another fingerprint version's - facts read at the
+  moment, never a stored bit - and then serves nothing, refuses `ALTER
+  PLAN` and stays until `DROP PLAN`. A variant that does not fit one
+  statement is declined for it, CX-Q26 (a)'s answer for a captured order:
+  marking the row would take the plan from every binding for one
+  binding's sake.
+- **A declined variant runs the written order**, not "the default plan"
+  (CX-Q4 (b)): the captured order's decline does the same, and falling to
+  the search would let a plan's failure start a capture.
+- **`REPLACE VARIANT` is not compiled** - the row holds no literal to
+  compile with. It is checked as a permutation of the plan's bindings and
+  against the argument count (`known-gaps.md`).
+- **The row carries no creator and no reference list** (CX-S1's `sys.plans`
+  bullet): a session has a role and no name, and a variant names no index
+  or Cabin until S3. It carries the bindings and the argument count
+  instead, which `REPLACE VARIANT` reads.
+- **CX-S1's `ANALYZE` spellings.** `plan=<name>/<variant>` is built. The
+  reasons a shape has no plan keep the names S0 gave them on the `planned`
+  line (`order=captured`, `capture=deferred|unkeyed|over_ceiling|
+  declined`); `sys.statement_stats`' `plan_source` carries CX-R11's names.
+- **Plan DDL takes one claim and never waits** (`known-gaps.md`): CX-Q22
+  left the map's protocol open for the administrator's side, and "one
+  plan a shape" and an `ALTER`'s insert-then-remove need one writer at a
+  time. And `CREATE PLAN` and `ALTER PLAN` hold their relations' `IS`
+  until the plan is installed, refusing `TxnConflict` where a `DROP TABLE`
+  holds the `X`, so no plan is installed over a relation whose drop then
+  commits.

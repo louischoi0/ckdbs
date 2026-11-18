@@ -1978,11 +1978,69 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   by `parser-v2.md` I12.
 
 - **A captured plan has no state but present.** `INVALID` (CX-Q16) and
-  `DISABLED` are not built: a captured order that stops compiling is
-  declined statement by statement and counted, its row unchanged, and the
-  only act on a row is `DROP PLAN`. No administrator's plan exists yet
-  (`CREATE PLAN`, CX-S1b), so a shape that stays uncaptured cannot be
-  given one. Owned by `instructions/v3.2.0/workorder-cx-managed-plans.md`.
+  `DISABLED` are not built for one: a captured order that stops compiling
+  is declined statement by statement and counted, its row unchanged, and
+  the only acts on it are `DROP PLAN` and a `CREATE PLAN` over its shape
+  (`ALTER PLAN` on a captured row is refused `NotImplemented`). Verified
+  at CX-S1b on `cx-plan-change-option`. Owned by
+  `instructions/v3.2.0/workorder-cx-managed-plans.md`.
+
+- **An administrator's plan is checked against one statement, once.**
+  Verified at CX-S1b on `cx-plan-change-option`. `CREATE PLAN` compiles
+  each variant's order for the statement as written, with the example's
+  literals; another binding of the shape can still meet a variant that
+  does not fit it (a `LIMIT` that no longer bounds an added sort is the
+  case with a cell), and that statement runs its written order, counted in
+  `plan_declined`. **`ALTER PLAN ... REPLACE VARIANT` compiles nothing**:
+  the row holds the shape and no literal, so the new order is checked only
+  as a permutation of the plan's bindings and the rule only against the
+  argument count. A replaced order that fits no statement is declined at
+  every compile and visible only there. Owned by `parser-v2.md` I12.
+
+- **A declined variant marks nothing.** CX-Q4 (b) reads "mark it
+  `INVALID` and run the default plan". Built: the statement runs its
+  **written** order - not the shape's captured order or the search - the
+  decline is counted and named by `ANALYZE` and `sys.statement_stats`
+  (`admin_declined`), and the row's state does not move, because a decline
+  can be one binding's (CX-Q26's reasoning). `invalid` is derived: a
+  relation the plan names is gone, or its fetch id is another fingerprint
+  version's. A plan every statement declines therefore reads `enabled`.
+  Owned by `parser-v2.md` I12.
+
+- **Plan DDL does not wait for plan DDL.** `CREATE PLAN`, `ALTER PLAN` and
+  `DROP PLAN` take one claim for the instance and a second one meanwhile
+  is refused `TxnConflict` at once, where every other DDL waits up to the
+  lock family's fault net. And they hold their relations' `IS` by a
+  non-queueing ask: beside a `DROP TABLE` that holds the `X` they are
+  refused `TxnConflict` rather than waiting for its decide. No cell runs
+  plan DDL from two cores. Owned by `exec/admin_plans.hpp`.
+
+- **Every `ALTER PLAN` leaves its old row's text in `sys.plans`' var-heap
+  until the next mount's sweep**, as a dropped declaration's does: an
+  `ALTER` is a new row and the old one's removal, so an agent that tunes a
+  plan's thresholds in a loop grows the var-heap through the run. Not
+  measured. Owned by `exec/plan_catalog.hpp`.
+
+- **A multi-variant plan lexes the statement a second time at every
+  compile**, to read its arguments (`parser::ArgumentsOf`); a one-variant
+  plan does not. And while any plan is enabled, every top-level join
+  block's compile on every core probes the administrator's table - one
+  partition latch - a tuple key chain's included, which the captured table
+  is never asked of (CX-R6 as amended in the stage log). Neither is
+  measured; the overhead measurement is owed at CX's close. Owned by
+  `exec/admin_plans.hpp`.
+
+- **What CX-S1b's cells do not reach.** A variant whose order does not
+  compile for a statement (the decline has one cell, by the sort rule); a
+  `CREATE PLAN` or `ALTER PLAN` refused because a `DROP TABLE` holds a
+  relation's `X` (the rig's lock table is not driven from two sessions
+  there); `ReplaceAdminPlan`'s failure between its insert and its removal
+  (the state it leaves is built by hand in a cell, and a mount's handling
+  of it pinned); a plan over more than 16 relations (`Unsupported`); a
+  mount that meets an administrator's row of another fingerprint version
+  (no second version exists to write one). The simulation harness's
+  instance neither loads nor makes plans. Owned by
+  `tests/admin_plans_test.cpp`.
 
 - **A row naming a dropped relation can outlive the drop until the next
   mount.** The persisting task removes such rows in the step after the
@@ -1994,7 +2052,8 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   workload that creates, joins and drops relations grows `sys.plans`'
   var-heap through the run. A dispatcher with no log
   (a test rig) forgets nothing at a drop inside a transaction, its commit
-  naming no LSN. Owned by `exec/plan_catalog.hpp`.
+  naming no LSN - in the captured table or the administrator's. Owned by
+  `exec/plan_catalog.hpp`.
 
 - **A mount refuses on a `sys.plans` it cannot scan or cannot delete
   from**, as it does for any logged catalog relation, although the state

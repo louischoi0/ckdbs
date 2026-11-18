@@ -82,6 +82,12 @@ struct CapturedKey {
     }
 };
 
+// A key's hash, for the two tables keyed by it: this one and the
+// administrator's plans (`admin_plans.hpp`).
+struct CapturedKeyHash {
+    std::size_t operator()(const CapturedKey& key) const noexcept;
+};
+
 // Written positions in executed order; the slots past the block's relation
 // count are 0.
 using CapturedOrder = std::array<std::uint8_t, kMaxPlannedRelations>;
@@ -175,12 +181,9 @@ public:
     void CountDeclined() noexcept { declined_.fetch_add(1, std::memory_order_relaxed); }
 
 private:
-    struct KeyHash {
-        std::size_t operator()(const CapturedKey& key) const noexcept;
-    };
     struct Partition {
         Latch latch{LatchKind::kStatsRing};
-        std::unordered_map<CapturedKey, CapturedOrder, KeyHash> plans;
+        std::unordered_map<CapturedKey, CapturedOrder, CapturedKeyHash> plans;
     };
     Partition& PartitionOf(const CapturedKey& key) noexcept;
 

@@ -291,6 +291,8 @@ protected:
     std::optional<txn::UndoLog> undo_;
     std::optional<txn::TransactionManager> mgr_;
     stats::PlanStats stats_{1};
+    // A later run's administrator table, for the mount cells.
+    exec::AdminPlans admin_;
     std::optional<CommandDispatcher> dispatcher_;
     catalog::Oid models_ = 0;
     catalog::Oid results_ = 0;
@@ -337,7 +339,7 @@ TEST_F(PlanCatalogTest, AMountLoadsTheRowAndTheShapeIsNotSearchedAgain) {
     // A new run: an empty table, and statistics that would now choose the
     // other order.
     CapturedPlans next_run;
-    auto unreadable = exec::LoadCapturedPlans(boot_->catalog, store_, nullptr, next_run);
+    auto unreadable = exec::LoadPlans(boot_->catalog, store_, nullptr, next_run, admin_);
     ASSERT_TRUE(unreadable.ok()) << unreadable.status().message();
     EXPECT_EQ(unreadable.value(), 0u);
     EXPECT_EQ(next_run.loaded(), 1u);
@@ -439,7 +441,7 @@ TEST_F(PlanCatalogTest, AMountRemovesARowNamingARelationThatIsGone) {
     Ok("DROP TABLE results");
     ASSERT_EQ(Rows().size(), 1u);
     CapturedPlans next_run;
-    auto unreadable = exec::LoadCapturedPlans(boot_->catalog, store_, nullptr, next_run);
+    auto unreadable = exec::LoadPlans(boot_->catalog, store_, nullptr, next_run, admin_);
     ASSERT_TRUE(unreadable.ok()) << unreadable.status().message();
     EXPECT_EQ(next_run.shapes(), 0u);
     EXPECT_TRUE(Rows().empty());
@@ -464,7 +466,7 @@ TEST_F(PlanCatalogTest, AStatementPastOneStoredValueIsWrittenCutAndLoads) {
     EXPECT_LT(rows.front().statement.size(), varheap::kMaxValueSize);
     EXPECT_GT(rows.front().statement.size(), 8000u);
     CapturedPlans next_run;
-    ASSERT_TRUE(exec::LoadCapturedPlans(boot_->catalog, store_, nullptr, next_run).ok());
+    ASSERT_TRUE(exec::LoadPlans(boot_->catalog, store_, nullptr, next_run, admin_).ok());
     EXPECT_EQ(next_run.Find(key), (CapturedOrder{1, 0}));
 }
 
@@ -497,7 +499,7 @@ TEST_F(PlanCatalogTest, AMountKeepsOneRowAShapeAndRemovesARowOfAnotherFingerprin
                     .ok());
 
     CapturedPlans next_run;
-    auto unreadable = exec::LoadCapturedPlans(boot_->catalog, store_, nullptr, next_run);
+    auto unreadable = exec::LoadPlans(boot_->catalog, store_, nullptr, next_run, admin_);
     ASSERT_TRUE(unreadable.ok()) << unreadable.status().message();
     EXPECT_EQ(unreadable.value(), 0u);
     EXPECT_EQ(next_run.shapes(), 1u);
@@ -507,7 +509,7 @@ TEST_F(PlanCatalogTest, AMountKeepsOneRowAShapeAndRemovesARowOfAnotherFingerprin
         << "the row that stayed is the one in force";
     // A second mount finds the same one row and the same order.
     CapturedPlans third_run;
-    ASSERT_TRUE(exec::LoadCapturedPlans(boot_->catalog, store_, nullptr, third_run).ok());
+    ASSERT_TRUE(exec::LoadPlans(boot_->catalog, store_, nullptr, third_run, admin_).ok());
     EXPECT_EQ(third_run.Find(rows.front().key), rows.front().order);
     EXPECT_EQ(Rows().size(), 1u);
 }
@@ -526,7 +528,7 @@ TEST_F(PlanCatalogTest, ARowThisBuildCannotReadIsNotLoadedAndIsShownAsItIs) {
                                         "plan", odd)
                     .ok());
     CapturedPlans next_run;
-    auto unreadable = exec::LoadCapturedPlans(boot_->catalog, store_, nullptr, next_run);
+    auto unreadable = exec::LoadPlans(boot_->catalog, store_, nullptr, next_run, admin_);
     ASSERT_TRUE(unreadable.ok());
     EXPECT_EQ(unreadable.value(), 1u);
     EXPECT_EQ(next_run.shapes(), 1u) << "the readable row is loaded";

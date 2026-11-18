@@ -8,6 +8,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/admin_plans.hpp"
 #include "kds/exec/captured_plans.hpp"
 #include "kds/storage/page_store.hpp"
 
@@ -17,11 +18,15 @@ class WalManager;
 
 // **`sys.plans`: the plans a statement shape is held to, as catalog rows**
 // (CX-S1a, instructions/v3.2.0/workorder-cx-managed-plans.md CX-R8;
-// docs/spec/parser-v2.md I12). At this stage every row is a **captured**
-// plan: the join order `join_order = fixed` fixed for a shape
-// (`captured_plans.hpp`), written here so it outlives the run.
+// docs/spec/parser-v2.md I12). A row is one of two origins: a **captured**
+// plan, the join order `join_order = fixed` fixed for a shape
+// (`captured_plans.hpp`), written here so it outlives the run; or an
+// **administrator's** plan, made by `CREATE PLAN` (CX-S1b,
+// `admin_plans.hpp`; the second half of this comment). One shape holds at
+// most one row of each origin, and the administrator's outranks the
+// captured one, which stays beneath it (CX-R9).
 //
-// **Who writes, and when.** Never a statement: a `SELECT` writes no log
+// **Who writes a captured row, and when.** Never a statement: a `SELECT` writes no log
 // (CF's rule), and a `READ ONLY` transaction no record. The compile installs
 // a capture in memory and queues it; core 0's `system` task calls
 // `PersistCapturedPlans` once a second and a clean shutdown calls it once
@@ -33,7 +38,7 @@ class WalManager;
 // **A row is the capture, whole**: the shape's key - the fetch id in the
 // relation's `aux` column, every relation oid in written order in the text -
 // the order, when it was written, and the capturing statement's shape text
-// for a reader. A mount (`LoadCapturedPlans`) installs each row's order in
+// for a reader. A mount (`LoadPlans`) installs each row's order in
 // the instance's table before any statement compiles, so a captured shape is
 // never searched again after a restart, a crash or a restore.
 //
@@ -65,24 +70,70 @@ class WalManager;
 // its own id, and its removals are one walk for the step
 // (`DeleteDeclarationsById`), so a step is linear in what it writes, not in
 // what the relation holds.
+//
+// ---- An administrator's row (CX-S1b) --------------------------------------
+//
+// Written by the plan DDL, at its statement, under the instance's DDL claim
+// (`AdminPlans::TryBeginDdl`): logged at `kNoTxnId` as every declaration
+// is, autocommit only. Its text is
+//
+//   v1 fp=<v> oids=<o>,<o> bindings=<b>,<b> args=<n> at=<us> variants=<k>
+//   <name> <p>,<p> ELSE | WHEN <rule>        (k lines, in rule order)
+//   <the statement's shape text>
+//
+// `bindings` are the statement's relations as it names them, in written
+// order - what an `ORDER (...)` list is resolved against, so `ALTER PLAN
+// ... REPLACE VARIANT` needs no statement to parse - and `args` its value
+// positions, the bound on `ARG(k)`. No row holds a client's value: the
+// statement is kept as its shape text and a rule holds only what the
+// administrator wrote.
+//
+// **`flags` bit 1 is `DISABLED`.** A disabled plan stays a row and is
+// served to no statement; it does not RESTRICT a `DROP TABLE`.
+//
+// **A change is a new row, then the old row's removal** (`ReplaceAdminPlan`):
+// a declaration relation has no update and its delete is physical, so the
+// new row is inserted first and a crash between the two leaves two rows of
+// one name. A mount keeps the one with the higher id and removes the other.
+//
+// **`invalid` is derived, never stored** (CX-Q4 (b), CX-Q16): a plan whose
+// relation is gone or whose fetch id was taken under another fingerprint
+// version can match no statement of this build. The engine does not delete
+// an administrator's object: the row stays, is not loaded, and reads
+// `invalid` until `DROP PLAN`.
+//
+// **A captured row's name begins `captured_`**, and no administrator's plan
+// may: a captured row's insert skips the name check on the strength of it.
 
 namespace kds::exec {
 
 // `DeclarationRow::flags` bit 0: the row is a captured plan.
 inline constexpr std::uint32_t kPlanFlagCaptured = 1u << 0;
+// Bit 1: an administrator's plan that is disabled.
+inline constexpr std::uint32_t kPlanFlagDisabled = 1u << 1;
+
+// The prefix of every captured row's name, reserved to them.
+inline constexpr std::string_view kCapturedPlanPrefix = "captured_";
 
 struct PlanRow {
     std::uint64_t id = 0;
     std::string name;
     bool captured = false;
-    // False for a row whose text this build cannot read; `key`, `order` and
-    // `written_at_us` are then unset and `statement` is the row's text.
+    // False for a row whose text this build cannot read; every field below
+    // but `statement` is then unset, and `statement` is the row's text.
     bool readable = false;
     std::uint32_t fingerprint_version = 0;
     CapturedKey key;
+    // A captured plan's order. For an administrator's plan, its `ELSE`
+    // variant's - the order a statement no rule holds for runs.
     CapturedOrder order{};
     std::int64_t written_at_us = 0;  // UTC epoch microseconds
     std::string statement;
+    // ---- An administrator's plan's alone ----------------------------------
+    bool enabled = true;
+    std::vector<std::string> bindings;  // written order
+    std::uint32_t arguments = 0;        // the statement's value positions
+    std::vector<PlanVariant> variants;  // rule order, the last `ELSE`
 };
 
 // The text a captured plan's row stores, and its reading. `Corruption`
@@ -91,6 +142,14 @@ struct PlanRow {
 // text leaves `out` as it was.
 std::string EncodePlanText(const CapturedPlan& plan, std::int64_t written_at_us);
 Status DecodePlanText(std::string_view text, PlanRow& out);
+
+// The same pair for an administrator's row, from and into `row`'s key,
+// bindings, argument count, variants and statement. The decode re-parses
+// each rule (`ParsePlanRule`) and checks what the DDL checked: one binding
+// a relation, each order a permutation, `ELSE` last and only last, no rule
+// reading past the argument count.
+std::string EncodeAdminPlanText(const PlanRow& row, std::int64_t written_at_us);
+Status DecodeAdminPlanText(std::string_view text, PlanRow& out);
 
 // Every row of `sys.plans`, in chain order.
 StatusOr<std::vector<PlanRow>> ListPlans(catalog::Catalog& catalog, storage::PageStore& store);
@@ -104,17 +163,47 @@ Status PersistCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store
                             wal::WalManager* wal, CapturedPlans& table, std::int64_t now_us,
                             std::size_t max_rows = kPlanPersistBatch);
 
-// A mount's: every readable captured row installed in `table`, and removed
-// every row that names a relation that no longer exists, was keyed under
-// another fingerprint version, or repeats a key already loaded. Answers how
-// many it could not read, which stay where they are.
-StatusOr<std::size_t> LoadCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store,
-                                        wal::WalManager* wal, CapturedPlans& table);
+// A mount's. Every readable captured row is installed in `captured`, and
+// removed where it names a relation that no longer exists, was keyed under
+// another fingerprint version, or repeats a key already loaded. Every
+// administrator's row whose relations exist is installed in `admin`, served
+// if it is enabled; the older of two rows of one name is removed (a change
+// a crash cut short), and an invalid row is left where it is. Answers how
+// many rows it could not read, which stay too.
+StatusOr<std::size_t> LoadPlans(catalog::Catalog& catalog, storage::PageStore& store,
+                                wal::WalManager* wal, CapturedPlans& captured,
+                                AdminPlans& admin);
 
-// `DROP PLAN <name>`: removes the row and, for a captured plan, forgets its
-// shape, so the shape's next compile under `fixed` captures again (CX-Q17).
-// `NotFound` if no row has the name.
+// The row named `name`, or `NotFound`.
+StatusOr<PlanRow> FindPlan(catalog::Catalog& catalog, storage::PageStore& store,
+                           std::string_view name);
+
+// Whether an administrator's row can match a statement of this build: its
+// fingerprint version is this build's and every relation it names exists.
+bool PlanRowIsValid(catalog::Catalog& catalog, const PlanRow& row);
+
+// `CREATE PLAN`'s write: `row` - an administrator's, its `id` unset - as a
+// new row under a checked name, installed in `admin` and served. The caller
+// holds the DDL claim and has asked `AdminPlans::Holder` of the shape.
+// `AlreadyExists` where the name is taken.
+StatusOr<PlanRow> CreateAdminPlan(catalog::Catalog& catalog, storage::PageStore& store,
+                                  wal::WalManager* wal, AdminPlans& admin, PlanRow row,
+                                  std::int64_t now_us);
+
+// `ALTER PLAN`'s write: `next` in place of the row `old_id`, under the same
+// name - a new row first, then the old one's removal - and installed in
+// `admin`, served if `next.enabled`. The caller holds the DDL claim.
+StatusOr<PlanRow> ReplaceAdminPlan(catalog::Catalog& catalog, storage::PageStore& store,
+                                   wal::WalManager* wal, AdminPlans& admin,
+                                   std::uint64_t old_id, PlanRow next, std::int64_t now_us);
+
+// `DROP PLAN <name>`: removes the row. A captured plan's shape is forgotten,
+// so its next compile under `fixed` captures again (CX-Q17); an
+// administrator's plan leaves its shape to the captured row beneath it, or
+// to the search. `NotFound` if no row has the name. The caller holds the
+// DDL claim.
 StatusOr<PlanRow> DropPlan(catalog::Catalog& catalog, storage::PageStore& store,
-                           wal::WalManager* wal, CapturedPlans& table, std::string_view name);
+                           wal::WalManager* wal, CapturedPlans& captured, AdminPlans& admin,
+                           std::string_view name);
 
 }  // namespace kds::exec

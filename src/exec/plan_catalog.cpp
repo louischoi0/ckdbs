@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <charconv>
+#include <memory>
+#include <unordered_map>
 #include <utility>
 
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/declaration_relation.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/parser/lexer.hpp"
 #include "kds/storage/varheap.hpp"
 
 namespace kds::exec {
@@ -63,7 +66,10 @@ PlanRow ToPlanRow(DeclarationRow row) {
     plan.id = row.id;
     plan.name = std::move(row.name);
     plan.captured = (row.flags & kPlanFlagCaptured) != 0;
-    plan.readable = DecodePlanText(row.source_text, plan).ok();
+    plan.enabled = (row.flags & kPlanFlagDisabled) == 0;
+    plan.readable = (plan.captured ? DecodePlanText(row.source_text, plan)
+                                   : DecodeAdminPlanText(row.source_text, plan))
+                        .ok();
     if (plan.readable) {
         plan.key.fetch_id = static_cast<std::uint64_t>(row.aux);
     } else {
@@ -72,7 +78,220 @@ PlanRow ToPlanRow(DeclarationRow row) {
     return plan;
 }
 
+// An object's name, compared as every name in this engine is.
+std::string Lowered(std::string_view name) {
+    std::string out(name);
+    for (char& c : out) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    return out;
+}
+
+// The head fields a captured and an administrator's row share, checked as
+// a pair: the fingerprint version, the oids and the time.
+Status ReadShared(std::string_view fp_text, std::string_view oids_text, std::string_view at_text,
+                  std::uint64_t& fp, std::vector<std::uint64_t>& oids, std::uint64_t& at) {
+    const auto corrupt = [](std::string_view what) {
+        return Status::Corruption("sys.plans: " + std::string(what));
+    };
+    if (!ReadNumber(fp_text, fp) || !ReadList(oids_text, oids) || !ReadNumber(at_text, at)) {
+        return corrupt("a row's version, oids or time is not a number list");
+    }
+    if (fp > UINT32_MAX || at > static_cast<std::uint64_t>(INT64_MAX)) {
+        return corrupt("a row's version or time is out of range");
+    }
+    // A join block has two relations or more.
+    if (oids.size() < 2) return corrupt("a row names fewer than two relations");
+    for (const std::uint64_t oid : oids) {
+        if (oid > UINT32_MAX) return corrupt("a row names an oid past 32 bits");
+    }
+    return Status::OK();
+}
+
+// Whether `order` names each of `n` written positions once.
+bool IsPermutation(const std::vector<std::uint64_t>& order, std::size_t n) {
+    if (order.size() != n) return false;
+    std::vector<bool> seen(n, false);
+    for (const std::uint64_t position : order) {
+        if (position >= n || seen[position]) return false;
+        seen[position] = true;
+    }
+    return true;
+}
+
+std::shared_ptr<const AdminPlan> ToAdminPlan(const PlanRow& row) {
+    auto plan = std::make_shared<AdminPlan>();
+    plan->id = row.id;
+    plan->name = row.name;
+    plan->key = row.key;
+    plan->variants = row.variants;
+    return plan;
+}
+
+DeclarationRow ToDeclaration(const PlanRow& row, std::int64_t now_us) {
+    DeclarationRow out;
+    out.id = row.id;
+    out.target_oid = row.key.oids[0];
+    out.aux = static_cast<std::int64_t>(row.key.fetch_id);
+    out.flags = row.enabled ? 0 : kPlanFlagDisabled;
+    out.name = row.name;
+    out.source_text = EncodeAdminPlanText(row, now_us);
+    return out;
+}
+
 }  // namespace
+
+std::string EncodeAdminPlanText(const PlanRow& row, std::int64_t written_at_us) {
+    std::string text(kVersion);
+    text.append(" fp=").append(std::to_string(parser::kFingerprintVersion));
+    AppendList(text, " oids=", row.key.oids, row.key.n);
+    text.append(" bindings=");
+    for (std::size_t i = 0; i < row.bindings.size(); ++i) {
+        if (i != 0) text.push_back(',');
+        text.append(row.bindings[i]);
+    }
+    text.append(" args=").append(std::to_string(row.arguments));
+    text.append(" at=").append(std::to_string(written_at_us));
+    text.append(" variants=").append(std::to_string(row.variants.size()));
+    text.push_back('\n');
+    for (const PlanVariant& variant : row.variants) {
+        text.append(variant.name);
+        AppendList(text, " ", variant.order, row.key.n);
+        if (variant.rule.is_else()) {
+            text.append(" ELSE");
+        } else {
+            text.append(" WHEN ").append(PlanRuleText(variant.rule));
+        }
+        text.push_back('\n');
+    }
+    // The statement is for a reader and is cut to what one var-heap value
+    // has left; a head and rules that leave none are the insert's refusal.
+    if (text.size() < varheap::kMaxValueSize) {
+        text.append(std::string_view(row.statement)
+                        .substr(0, varheap::kMaxValueSize - text.size()));
+    }
+    return text;
+}
+
+Status DecodeAdminPlanText(std::string_view text, PlanRow& out) {
+    const auto corrupt = [](std::string_view what) {
+        return Status::Corruption("sys.plans: " + std::string(what));
+    };
+    const auto take_line = [&](std::string_view& line) {
+        const std::size_t newline = text.find('\n');
+        if (newline == std::string_view::npos) return false;
+        line = text.substr(0, newline);
+        text.remove_prefix(newline + 1);
+        return true;
+    };
+    std::string_view head;
+    if (!take_line(head)) return corrupt("a plan's text has no head line");
+    if (!head.starts_with(kVersion) || head.size() <= kVersion.size() ||
+        head[kVersion.size()] != ' ') {
+        return corrupt("a plan's text is not format v1");
+    }
+    head.remove_prefix(kVersion.size() + 1);
+    std::string_view fp_text;
+    std::string_view oids_text;
+    std::string_view bindings_text;
+    std::string_view args_text;
+    std::string_view at_text;
+    std::string_view variants_text;
+    if (head.ends_with(' ') || !TakeField(head, "fp", fp_text) ||
+        !TakeField(head, "oids", oids_text) || !TakeField(head, "bindings", bindings_text) ||
+        !TakeField(head, "args", args_text) || !TakeField(head, "at", at_text) ||
+        !TakeField(head, "variants", variants_text) || !head.empty()) {
+        return corrupt(
+            "a plan's text does not read fp, oids, bindings, args, at and variants, in that "
+            "order");
+    }
+    std::vector<std::uint64_t> oids;
+    std::uint64_t fp = 0;
+    std::uint64_t at = 0;
+    if (Status s = ReadShared(fp_text, oids_text, at_text, fp, oids, at); !s.ok()) return s;
+    std::uint64_t arguments = 0;
+    std::uint64_t count = 0;
+    if (!ReadNumber(args_text, arguments) || arguments > UINT32_MAX ||
+        !ReadNumber(variants_text, count) || count < 1 || count > kMaxPlanVariants) {
+        return corrupt("a plan's argument or variant count is out of range");
+    }
+    // One binding a relation, each a name and no two the same.
+    std::vector<std::string> bindings;
+    while (true) {
+        const std::size_t comma = bindings_text.find(',');
+        const std::string_view binding = bindings_text.substr(0, comma);
+        if (!parser::IsIdentifier(binding)) return corrupt("a plan's binding is not a name");
+        for (const std::string& earlier : bindings) {
+            if (Lowered(earlier) == Lowered(binding)) {
+                return corrupt("a plan names one binding twice");
+            }
+        }
+        bindings.emplace_back(binding);
+        if (comma == std::string_view::npos) break;
+        bindings_text.remove_prefix(comma + 1);
+    }
+    if (bindings.size() != oids.size()) return corrupt("a plan's bindings do not cover its relations");
+
+    std::vector<PlanVariant> variants;
+    for (std::uint64_t v = 0; v < count; ++v) {
+        std::string_view line;
+        if (!take_line(line)) return corrupt("a plan's text ends inside its variants");
+        const std::size_t name_end = line.find(' ');
+        if (name_end == std::string_view::npos) return corrupt("a variant has no order");
+        PlanVariant variant;
+        variant.name = std::string(line.substr(0, name_end));
+        if (!parser::IsIdentifier(variant.name)) return corrupt("a variant's name is not a name");
+        for (const PlanVariant& earlier : variants) {
+            if (Lowered(earlier.name) == Lowered(variant.name)) {
+                return corrupt("a plan names one variant twice");
+            }
+        }
+        line.remove_prefix(name_end + 1);
+        const std::size_t order_end = line.find(' ');
+        if (order_end == std::string_view::npos) return corrupt("a variant has no rule");
+        std::vector<std::uint64_t> order;
+        if (!ReadList(line.substr(0, order_end), order) || !IsPermutation(order, oids.size())) {
+            return corrupt("a variant's order is not a permutation of the plan's relations");
+        }
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            variant.order[i] = static_cast<std::uint8_t>(order[i]);
+        }
+        line.remove_prefix(order_end + 1);
+        // `ELSE` last and only last (CX-R4).
+        const bool last = v + 1 == count;
+        if (line == "ELSE") {
+            if (!last) return corrupt("a plan's ELSE variant is not its last");
+        } else {
+            if (last || !line.starts_with("WHEN ")) {
+                return corrupt("a plan's last variant is not ELSE, or a variant has no rule");
+            }
+            parser::Lexer lexer(line.substr(5));
+            auto rule = ParsePlanRule(lexer);
+            if (!rule.ok() || lexer.Next().type != parser::TokenType::kEof) {
+                return corrupt("a variant's rule does not read");
+            }
+            if (rule.value().max_arg() > arguments) {
+                return corrupt("a variant's rule reads past the statement's arguments");
+            }
+            variant.rule = std::move(rule.value());
+        }
+        variants.push_back(std::move(variant));
+    }
+    // Nothing of `out` is written before this line: a refused text leaves it.
+    out.fingerprint_version = static_cast<std::uint32_t>(fp);
+    out.key = CapturedKey{};
+    out.key.n = static_cast<std::uint8_t>(oids.size());
+    for (std::size_t i = 0; i < oids.size(); ++i) {
+        out.key.oids[i] = static_cast<catalog::Oid>(oids[i]);
+    }
+    out.order = variants.back().order;
+    out.bindings = std::move(bindings);
+    out.arguments = static_cast<std::uint32_t>(arguments);
+    out.variants = std::move(variants);
+    out.written_at_us = static_cast<std::int64_t>(at);
+    out.statement = std::string(text);
+    return Status::OK();
+}
 
 std::string EncodePlanText(const CapturedPlan& plan, std::int64_t written_at_us) {
     std::string text(kVersion);
@@ -116,25 +335,10 @@ Status DecodePlanText(std::string_view text, PlanRow& out) {
     std::vector<std::uint64_t> order;
     std::uint64_t fp = 0;
     std::uint64_t at = 0;
-    if (!ReadNumber(fp_text, fp) || !ReadList(oids_text, oids) || !ReadList(order_text, order) ||
-        !ReadNumber(at_text, at)) {
-        return corrupt("a row's version, oids, order or time is not a number list");
-    }
-    if (fp > UINT32_MAX || at > static_cast<std::uint64_t>(INT64_MAX)) {
-        return corrupt("a row's version or time is out of range");
-    }
-    // A join block has two relations or more, and an order names each
-    // written position once.
-    if (oids.size() < 2 || order.size() != oids.size()) {
-        return corrupt("a row's order does not cover its relations");
-    }
-    std::vector<bool> seen(oids.size(), false);
-    for (std::size_t i = 0; i < oids.size(); ++i) {
-        if (oids[i] > UINT32_MAX) return corrupt("a row names an oid past 32 bits");
-        if (order[i] >= oids.size() || seen[order[i]]) {
-            return corrupt("a row's order is not a permutation of its relations");
-        }
-        seen[order[i]] = true;
+    if (Status s = ReadShared(fp_text, oids_text, at_text, fp, oids, at); !s.ok()) return s;
+    // An order names each written position once.
+    if (!ReadList(order_text, order) || !IsPermutation(order, oids.size())) {
+        return corrupt("a row's order is not a permutation of its relations");
     }
     // Nothing of `out` is written before this line: a refused text leaves it.
     out.fingerprint_version = static_cast<std::uint32_t>(fp);
@@ -205,10 +409,12 @@ Status PersistCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store
     auto plans = ListPlans(catalog, store);
     if (!plans.ok()) return plans.status();
     std::vector<std::uint64_t> gone;
+    // A captured row only: an administrator's plan over a dropped relation
+    // stays, `invalid`, until its `DROP PLAN` (`plan_catalog.hpp`).
     for (const PlanRow& plan : plans.value()) {
-        if (plan.readable && std::any_of(dropped.begin(), dropped.end(), [&](catalog::Oid oid) {
-                return plan.key.Names(oid);
-            })) {
+        if (plan.captured && plan.readable &&
+            std::any_of(dropped.begin(), dropped.end(),
+                        [&](catalog::Oid oid) { return plan.key.Names(oid); })) {
             gone.push_back(plan.id);
         }
     }
@@ -218,12 +424,40 @@ Status PersistCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store
     return removed.ok() ? failed : removed.status();
 }
 
-StatusOr<std::size_t> LoadCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store,
-                                        wal::WalManager* wal, CapturedPlans& table) {
+bool PlanRowIsValid(catalog::Catalog& catalog, const PlanRow& row) {
+    if (!row.readable || row.fingerprint_version != parser::kFingerprintVersion) return false;
+    for (std::size_t i = 0; i < row.key.n; ++i) {
+        if (!catalog.InitTableAccess(row.key.oids[i]).ok()) return false;
+    }
+    return true;
+}
+
+StatusOr<std::size_t> LoadPlans(catalog::Catalog& catalog, storage::PageStore& store,
+                                wal::WalManager* wal, CapturedPlans& table, AdminPlans& admin) {
     auto plans = ListPlans(catalog, store);
     if (!plans.ok()) return plans.status();
     std::size_t unreadable = 0;
     std::vector<std::uint64_t> remove;
+    // ---- The administrator's rows ----------------------------------------
+    // The newest row of a name is the plan: an `ALTER PLAN` a crash cut
+    // short left its old row beside the new one (`ReplaceAdminPlan`).
+    std::unordered_map<std::string, const PlanRow*> newest;
+    for (const PlanRow& plan : plans.value()) {
+        if (plan.captured) continue;
+        if (!plan.readable) {
+            ++unreadable;
+            continue;
+        }
+        auto [at, fresh] = newest.try_emplace(Lowered(plan.name), &plan);
+        if (fresh) continue;
+        remove.push_back(std::min(at->second->id, plan.id));
+        if (plan.id > at->second->id) at->second = &plan;
+    }
+    for (const auto& [name, plan] : newest) {
+        // An invalid plan is the administrator's to drop, not a mount's.
+        if (PlanRowIsValid(catalog, *plan)) admin.Install(ToAdminPlan(*plan), plan->enabled);
+    }
+    // ---- The captured rows -----------------------------------------------
     for (const PlanRow& plan : plans.value()) {
         if (!plan.captured) continue;
         if (!plan.readable) {
@@ -262,12 +496,103 @@ StatusOr<std::size_t> LoadCapturedPlans(catalog::Catalog& catalog, storage::Page
     return unreadable;
 }
 
+namespace {
+
+// Every row named `name`, the newest last: one, but where a crash cut an
+// `ALTER PLAN` short.
+StatusOr<std::vector<PlanRow>> RowsNamed(catalog::Catalog& catalog, storage::PageStore& store,
+                                         std::string_view name) {
+    auto plans = ListPlans(catalog, store);
+    if (!plans.ok()) return plans.status();
+    const std::string wanted = Lowered(name);
+    std::vector<PlanRow> named;
+    for (PlanRow& plan : plans.value()) {
+        if (Lowered(plan.name) == wanted) named.push_back(std::move(plan));
+    }
+    if (named.empty()) {
+        return Status::NotFound("no plan named \"" + std::string(name) + "\"");
+    }
+    std::sort(named.begin(), named.end(),
+              [](const PlanRow& a, const PlanRow& b) { return a.id < b.id; });
+    return named;
+}
+
+}  // namespace
+
+StatusOr<PlanRow> FindPlan(catalog::Catalog& catalog, storage::PageStore& store,
+                           std::string_view name) {
+    auto named = RowsNamed(catalog, store, name);
+    if (!named.ok()) return named.status();
+    return std::move(named.value().back());
+}
+
+StatusOr<PlanRow> CreateAdminPlan(catalog::Catalog& catalog, storage::PageStore& store,
+                                  wal::WalManager* wal, AdminPlans& admin, PlanRow row,
+                                  std::int64_t now_us) {
+    auto id = catalog.AllocateRowId(catalog::kSysPlansTable);
+    if (!id.ok()) return id.status();
+    row.id = id.value();
+    row.captured = false;
+    row.readable = true;
+    row.fingerprint_version = parser::kFingerprintVersion;
+    row.written_at_us = now_us;
+    row.order = row.variants.back().order;
+    if (Status s = InsertDeclaration(catalog, store, wal, catalog::kSysPlansTable, kKind,
+                                     ToDeclaration(row, now_us));
+        !s.ok()) {
+        return s;
+    }
+    admin.Install(ToAdminPlan(row), row.enabled);
+    return row;
+}
+
+StatusOr<PlanRow> ReplaceAdminPlan(catalog::Catalog& catalog, storage::PageStore& store,
+                                   wal::WalManager* wal, AdminPlans& admin,
+                                   std::uint64_t old_id, PlanRow next, std::int64_t now_us) {
+    auto id = catalog.AllocateRowId(catalog::kSysPlansTable);
+    if (!id.ok()) return id.status();
+    next.id = id.value();
+    next.written_at_us = now_us;
+    next.order = next.variants.back().order;
+    // The name is the old row's, which is still there: the check would
+    // refuse it, and the DDL claim is what keeps the name this plan's.
+    if (Status s = InsertDeclaration(catalog, store, wal, catalog::kSysPlansTable, kKind,
+                                     ToDeclaration(next, now_us),
+                                     DeclarationName::kUniqueByConstruction);
+        !s.ok()) {
+        return s;
+    }
+    // From here the new row is the plan, whatever becomes of the old one: it
+    // has the higher id, which is what a mount and `FindPlan` go by.
+    admin.Install(ToAdminPlan(next), next.enabled);
+    const std::uint64_t old_ids[] = {old_id};
+    if (auto removed = DeleteDeclarationsById(catalog, store, wal, catalog::kSysPlansTable,
+                                              old_ids);
+        !removed.ok()) {
+        return removed.status();
+    }
+    return next;
+}
+
 StatusOr<PlanRow> DropPlan(catalog::Catalog& catalog, storage::PageStore& store,
-                           wal::WalManager* wal, CapturedPlans& table, std::string_view name) {
-    auto row = DeleteDeclaration(catalog, store, wal, catalog::kSysPlansTable, kKind, name);
-    if (!row.ok()) return row.status();
-    PlanRow plan = ToPlanRow(std::move(row.value()));
-    if (plan.captured && plan.readable) table.Erase(plan.key);
+                           wal::WalManager* wal, CapturedPlans& table, AdminPlans& admin,
+                           std::string_view name) {
+    auto named = RowsNamed(catalog, store, name);
+    if (!named.ok()) return named.status();
+    std::vector<std::uint64_t> ids;
+    for (const PlanRow& row : named.value()) ids.push_back(row.id);
+    auto removed = DeleteDeclarationsById(catalog, store, wal, catalog::kSysPlansTable, ids);
+    if (!removed.ok()) return removed.status();
+    PlanRow plan = std::move(named.value().back());
+    if (plan.readable) {
+        if (plan.captured) {
+            table.Erase(plan.key);
+        } else if (admin.Holder(plan.key) == plan.name) {
+            // The shape's plan is this one - not another's made for the
+            // shape while this row stood invalid.
+            admin.Erase(plan.key);
+        }
+    }
     return plan;
 }
 

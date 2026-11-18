@@ -108,7 +108,7 @@ returns only what it names, so that conjunct is not compared again.
 | `cabins` | engine | - | a Cabin and its store counters |
 | `assertions` | engine | - | an assertion, whether it is enforcing, and its counters |
 | `transitions` | engine | - | a declared Transition, verbatim |
-| `plans` | engine | - | a managed plan's `sys.plans` row: at CX-S1a, a captured join order (`plan_id`, `name`, `origin`, `state`, `fetch_id`, `relations` as written, `join_order` as run, `written_at`, `statement` with its literals written `?`); a row this build cannot read shows `unreadable` and its text as stored |
+| `plans` | engine | - | a managed plan's `sys.plans` row (`plan_id`, `name`, `origin`, `state`, `fetch_id`, `relations` as written, `join_order` as run, `variants`, `written_at`, `statement` with its literals written `?`). `origin` is `captured` (a captured join order, CX-S1a; `state` `enabled`, `variants` NULL) or `admin` (an administrator's plan, CX-S1b): its `state` is `enabled`, `disabled`, or `invalid` where a relation it names is gone or its fetch id is another fingerprint version's, its `join_order` its `ELSE` variant's, and `variants` every variant in rule order as `<name> WHEN <rule> ORDER (<binding>, ...)` or `<name> ELSE ORDER (...)`, joined by `; `. A row this build cannot read shows `unreadable` and its text as stored |
 | `cabin_optimizer` | engine | - | a managed entry of the Cabin controller; refused where no controller runs |
 | `lock_waits` | engine | - | one lock wait (§6.3) |
 | `statement_stats` | engine | - | one statement shape (§6.1) |
@@ -154,9 +154,17 @@ server CPU per point statement, inside the measurement's spread
 ### 6.1 `sys.statement_stats` (`stats/statement_stats.hpp`)
 
 One row per `(fetch_id, kind)` for the instance, the cores' parts merged at
-read: `calls`, `refused`, `total_us`, `max_us`, `first_seen`, `last_seen`
+read: `calls`, `refused`, `total_us`, `max_us`, `first_seen`, `last_seen`,
+`plan_source`, `plan_name`, `variant`
 and `shape_text`, the first statement seen, cut to 256 bytes at a character
-boundary. `kind` is the first whitespace-separated token, upper-cased, when
+boundary. **`plan_source`** (CX-R11) is where the shape's join order came
+from at its latest compile, on the core that saw the shape last: `admin`
+(an administrator's plan, named by `plan_name` and `variant`, which are
+NULL otherwise), `captured`, `searched`, `deferred` (searched, not
+captured), `unkeyed`, `over_ceiling`, `declined` (a captured order declined
+for the statement), `admin_declined` (a plan's variant declined; `plan_name`
+and `variant` name it) or `written`; NULL for a shape with no join block.
+It is how a DBA or an agent finds a shape that runs uncaptured. `kind` is the first whitespace-separated token, upper-cased, when
 it is a verb the dispatcher routes, else `OTHER`; only `SELECT`, `INSERT` and `UPDATE`
 carry a fingerprint, so every other kind is one row at `fetch_id = 0`.
 Recorded once per statement at its end, timed whole - a park, a re-run and
@@ -313,7 +321,7 @@ prior, or a DDL was open), `capture_unkeyed` (no key fits the block),
 `capture_over_ceiling` (the table's ceiling) and `capture_declined` (the
 captured order did not compile for the statement, or adds a sort its
 `LIMIT` does not bound), the last three having run their written order.
-`captured_served` counts a declined compile too: it found an order. Then `sys.plans`' side (CX-S1a): `captured_pending`, the captures waiting for the persisting task; `captured_persisted`, the rows it wrote in this run; `captured_loaded`, the captures this mount installed from the relation.
+`captured_served` counts a declined compile too: it found an order. Then `sys.plans`' side (CX-S1a): `captured_pending`, the captures waiting for the persisting task; `captured_persisted`, the rows it wrote in this run; `captured_loaded`, the captures this mount installed from the relation. And the administrator's plans (CX-S1b): `admin_plans`, the plans the instance's table holds - every one whose relations exist; `admin_plans_enabled`, how many of them are served; `plan_served`, the compiles that found an enabled plan; `plan_declined`, the variants declined for a statement, which ran its written order.
 
 **The `txn` section** (CS-Q8 (a), `txn.md` §1) carries this core's
 `read_only_begins`, the `BEGIN ... READ ONLY` transactions it opened, and

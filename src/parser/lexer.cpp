@@ -320,4 +320,28 @@ std::string ShapeText(std::string_view sql) {
     return out;
 }
 
+std::vector<StatementArgument> ArgumentsOf(std::string_view sql) {
+    std::vector<StatementArgument> out;
+    Lexer lexer(sql);
+    for (Token tok = lexer.Next(); tok.type != TokenType::kEof && tok.type != TokenType::kError;
+         tok = lexer.Next()) {
+        switch (tok.type) {
+            case TokenType::kIntLit:
+                out.push_back({StatementArgument::Kind::kInt, tok.text});
+                break;
+            case TokenType::kNumLit:
+            case TokenType::kStrLit:
+                out.push_back({StatementArgument::Kind::kStr, tok.text});
+                break;
+            case TokenType::kParam:
+            case TokenType::kNamedParam:
+                out.push_back({StatementArgument::Kind::kUnbound, {}});
+                break;
+            default:
+                break;
+        }
+    }
+    return out;
+}
+
 }  // namespace kds::parser

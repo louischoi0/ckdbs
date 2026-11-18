@@ -57,6 +57,7 @@
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/pagination.hpp"
 #include "kds/exec/clean_dropped.hpp"
+#include "kds/exec/plan_ddl.hpp"
 #include "kds/exec/purge_key.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
@@ -1104,10 +1105,14 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     statement_trail_mark_ = 0;
     statement_fetch_id_ = 0;
     statement_pattern_id_ = 0;
+    statement_plan_source_ = {};
+    statement_plan_label_.clear();
 
     DispatchOutcome outcome = body(active);
     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
     outcome.pattern_id = std::exchange(statement_pattern_id_, 0);
+    outcome.plan_source = std::exchange(statement_plan_source_, {});
+    outcome.plan_label = std::exchange(statement_plan_label_, {});
     // Read back out of the member the write paths set: threading it through
     // InsertInner/UpdateInner/EndWrite and every handler between would be a
     // parameter on a dozen signatures for one number, and one statement runs
@@ -1255,7 +1260,8 @@ void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOut
     const bool refused = !out.status.ok() || out.response.rfind("ERR", 0) == 0;
     stats::StatementStats::Record(core_id_, out.fetch_id, line, refused,
                                   now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0,
-                                  exec::StatementContextNow().now_us);
+                                  exec::StatementContextNow().now_us, out.plan_source,
+                                  out.plan_label);
 }
 
 DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Session* session) {
@@ -1533,6 +1539,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "TRANSITION")) {
             return HandleTransition(Trim(line), session);
         }
+        if (IEquals(sub, "PLAN")) {
+            return HandleCreatePlan(Trim(line), session);
+        }
         // `CREATE UNIQUE INDEX` (BX); `UNIQUE` before anything else is
         // refused by the parser at that word's byte.
         if (IEquals(sub, "INDEX") || IEquals(sub, "UNIQUE")) {
@@ -1556,6 +1565,11 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return {"ERR unknown CREATE target", false};
     }
     if (IEquals(cmd, "ALTER")) {
+        // `ALTER PLAN` is the plan DDL's (`exec/plan_ddl.hpp`); every other
+        // ALTER is the parser's `ALTER TABLE`.
+        if (IEquals(SplitFirstToken(rest).first, "PLAN")) {
+            return HandleAlterPlan(Trim(line), session);
+        }
         return HandleAlter(Trim(line), session);
     }
     if (IEquals(cmd, "DROP")) {
@@ -1927,7 +1941,14 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
        // task, rows it wrote in this run, and captures the mount loaded.
        << " captured_pending=" << captured_plans_->pending()
        << " captured_persisted=" << captured_plans_->persisted()
-       << " captured_loaded=" << captured_plans_->loaded();
+       << " captured_loaded=" << captured_plans_->loaded()
+       // The administrator's plans (CX-S1b): how many the table holds and
+       // how many are enabled, the compiles that found one, and the
+       // variants declined for a statement, which ran its written order.
+       << " admin_plans=" << admin_plans_->plans()
+       << " admin_plans_enabled=" << admin_plans_->enabled()
+       << " plan_served=" << admin_plans_->served()
+       << " plan_declined=" << admin_plans_->declined();
 
     // **The Cabin store's instance-wide half** (cabin.md §6a), which `SHOW
     // CABINS`' header printed and no `sys.cabins` row can carry: a walk
@@ -2443,11 +2464,24 @@ DispatchOutcome CommandDispatcher::HandleSetJoinOrder(std::string_view line,
     return {"OK join_order=" + std::string(exec::JoinOrderName(*parsed)), false};
 }
 
+namespace {
+
+// What a plan DDL answers while another holds the claim: retryable, as
+// every "wait and retry" is.
+Status PlanDdlBusy() {
+    return Status::TxnConflict(
+        "another CREATE PLAN, ALTER PLAN or DROP PLAN is running; retry (byte 0)");
+}
+
+}  // namespace
+
 DispatchOutcome CommandDispatcher::HandleDropPlan(std::string_view line, Session& session) {
     // CX-S1a, CX-Q17: `DROP PLAN <name>` removes the plan's `sys.plans` row
     // and forgets its shape in the instance's table, so the shape's next
     // compile under `fixed` captures again from the statistics of that
     // moment - the one way a captured plan is re-armed, and an explicit act.
+    // An administrator's plan's shape falls to the captured order beneath
+    // it, or to the search (CX-R9).
     // Admin (`RequiredRole`). Autocommit only: a declaration relation's
     // delete is physical and outside every transaction
     // (`declaration_relation.hpp`), so a `ROLLBACK` could not bring the row
@@ -2472,7 +2506,14 @@ DispatchOutcome CommandDispatcher::HandleDropPlan(std::string_view line, Session
         return refuse(Status::InvalidArgument("DROP PLAN takes one name and nothing after it"),
                       Trim(extra));
     }
-    auto dropped = exec::DropPlan(catalog_, page_store_, wal_, *captured_plans_, name);
+    // The plan DDL's claim (`exec/admin_plans.hpp`), held for the write and
+    // let go before the durability wait.
+    const auto drop = [&]() -> StatusOr<exec::PlanRow> {
+        const exec::PlanDdlClaim claim(*admin_plans_);
+        if (!claim.held()) return PlanDdlBusy();
+        return exec::DropPlan(catalog_, page_store_, wal_, *captured_plans_, *admin_plans_, name);
+    };
+    auto dropped = drop();
     if (!dropped.ok()) {
         if (dropped.status().code() == StatusCode::kNotFound) {
             return refuse(Status::NotFound("no plan named \"" + std::string(name) + "\""), name);
@@ -3973,6 +4014,17 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                            "' is declared on this relation; DROP ASSERTION first",
                                        false};
             }
+            // CX-Q24 (a): an enabled administrator's plan is a declaration
+            // on the relations it names, and is not allowed to die quietly
+            // either. Asked of the instance's table, which holds every such
+            // plan; a disabled one does not restrict, and its row reads
+            // `invalid` once the relation is gone.
+            if (const auto plan = admin_plans_->EnabledNaming(oid.value()); plan.has_value()) {
+                return DispatchOutcome{"ERR plan '" + *plan +
+                                           "' names this relation; DROP PLAN or ALTER PLAN " +
+                                           *plan + " DISABLE first",
+                                       false};
+            }
             // CN-4 T7 as revised in BV-S2: a Transition goes with its
             // relation - but its row commits at its own statement and a drop
             // inside an explicit transaction can still roll back, so there
@@ -4037,6 +4089,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             owed_drops_.push_back(OwedDrop{scope.txn->id(), oid.value(), owed});
         } else {
             captured_plans_->ForgetRelation(oid.value());
+            admin_plans_->ForgetRelation(oid.value());
         }
         // The catalog rows are gone and the compiler stops emitting probes;
         // the in-memory sets would only leak, so they are forgotten, not
@@ -8069,6 +8122,9 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
             // nothing again; forgotten here and their rows removed by the
             // persisting task (`exec/plan_catalog.hpp`).
             captured_plans_->ForgetRelation(owed->oid);
+            // And a disabled administrator's plan naming it: forgotten in
+            // the table, its row kept (`exec/plan_catalog.hpp`).
+            admin_plans_->ForgetRelation(owed->oid);
         }
         owed = owed_drops_.erase(owed);
     }
@@ -9019,6 +9075,9 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
         // `fixed` would let a plan move with the statistics.
         if (join_order == exec::JoinOrder::kPlanned) plan.memo = &plan_memo_;
         if (join_order == exec::JoinOrder::kFixed) plan.captured = captured_plans_;
+        // An administrator's plan is asked under every value (CX-R9).
+        plan.admin = admin_plans_;
+        plan.search = join_order != exec::JoinOrder::kWritten;
         plan.statement = line;
         // A query layer walk (`WalkForLayer`) carries a statement and no
         // parser, so it has no fingerprint to key the memo by.
@@ -9029,8 +9088,10 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
             plan.arg_hash = fingerprint->arg_hash;
             plan.literals_known = fingerprint->param_count == 0;
         }
+        // Under `written` the options are handed only while a plan is
+        // enabled, so an instance with none compiles as it always did.
         return exec::Compile(catalog_, stmt, v, &borrow, context,
-                             join_order != exec::JoinOrder::kWritten ? &plan : nullptr);
+                             plan.search || admin_plans_->any() ? &plan : nullptr);
     });
     if (!chain.ok()) {
         // BU-Q9: a form the native compile declines goes to the query layer,
@@ -9072,6 +9133,17 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // by index, and `SELECT *` means every column of the one step - which
     // the grammar admits only for a single relation (V06).
     const exec::StepChain& compiled = run->chain.emplace(std::move(chain.value()));
+
+    // Where the join order came from, for `sys.statement_stats` (CX-R11).
+    if (compiled.plan_note.has_value()) {
+        statement_plan_source_ = exec::PlanSourceName(compiled.plan_note->source);
+        if (!compiled.plan_note->plan_name.empty()) {
+            statement_plan_label_ =
+                compiled.plan_note->plan_name + "/" + compiled.plan_note->variant;
+        }
+    } else if (join_order == exec::JoinOrder::kWritten && compiled.steps.size() > 1) {
+        statement_plan_source_ = "written";
+    }
 
     // ---- Waystone: the instance, taken from the parse -------------------
     //
@@ -12894,6 +12966,325 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
     }
     if (!wrote.value().written) reply += " unchanged";
     return {reply, false};
+}
+
+namespace {
+
+std::string ByteSuffix(std::size_t byte) { return " (byte " + std::to_string(byte) + ")"; }
+
+// `(a, b)`: an order's relations by the names in `bindings`.
+std::string OrderText(const exec::CapturedOrder& order, const std::vector<std::string>& bindings) {
+    std::string out = "(";
+    for (std::size_t k = 0; k < bindings.size(); ++k) {
+        if (k != 0) out += ", ";
+        out += bindings[order[k]];
+    }
+    return out + ")";
+}
+
+}  // namespace
+
+DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Session& session) {
+    // CX-S1b (`exec/plan_ddl.hpp`, `exec/admin_plans.hpp`): `CREATE PLAN
+    // <name> FOR <select>` with its variants, or `AS SEARCHED`. Admin
+    // (`RequiredRole`), under every `join_order` (CX-R9). Autocommit only: a
+    // declaration's row is written outside every transaction, so a
+    // `ROLLBACK` could not take it back. Answered once durable.
+    //
+    // **By example, with literals** (`WAYSTONE ON`'s rule, CF-O-Q11 (a)):
+    // every variant's order is compiled for the statement as written, which
+    // is what makes "this order runs" true of something (CX-R2), and the
+    // native grammar reads no `?`. The row keeps the shape text, so no
+    // literal of the example is stored.
+    if (session.in_explicit_txn()) {
+        return Refused(Status::NotImplemented(
+            "CREATE PLAN inside a transaction is not implemented; run it in autocommit (byte 0)"));
+    }
+    auto ddl = exec::ParseCreatePlan(line);
+    if (!ddl.ok()) return Refused(ddl.status());
+    const exec::CreatePlanStmt& create = ddl.value();
+    if (create.name.size() >= exec::kCapturedPlanPrefix.size() &&
+        IEquals(std::string_view(create.name).substr(0, exec::kCapturedPlanPrefix.size()),
+                exec::kCapturedPlanPrefix)) {
+        return Refused(Status::InvalidArgument(
+            "a plan's name does not begin 'captured_': those names are the captured plans'" +
+            ByteSuffix(create.name_at)));
+    }
+
+    // The statement every layer below sees is the command's with everything
+    // around the SELECT blanked, so a byte a parser or the compiler names is
+    // the command's own (`HandleWaystone`'s shape).
+    std::string padded(line);
+    const auto statement_begin = padded.begin() + static_cast<std::ptrdiff_t>(create.statement_at);
+    std::fill(padded.begin(), statement_begin, ' ');
+    std::fill(statement_begin + static_cast<std::ptrdiff_t>(create.statement_size), padded.end(),
+              ' ');
+    if (!IEquals(SplitFirstToken(Trim(padded)).first, "SELECT")) {
+        return Refused(Status::InvalidArgument("CREATE PLAN ... FOR takes a SELECT" +
+                                               ByteSuffix(create.statement_at)));
+    }
+    {
+        parser::Lexer lexer(padded);
+        for (parser::Token tok = lexer.Next(); tok.type != parser::TokenType::kEof;
+             tok = lexer.Next()) {
+            if (tok.type != parser::TokenType::kParam) continue;
+            return Refused(Status::NotImplemented(
+                "CREATE PLAN over a '?' placeholder is not implemented: write the statement "
+                "with literals, whose fetch id the placeholder form shares" +
+                ByteSuffix(tok.byte_offset)));
+        }
+    }
+    parser::Parser parser(padded);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) return Refused(parsed.status());
+    const auto fingerprint = parser.fingerprint();
+    if (!std::holds_alternative<parser::SelectStmt>(parsed.value()) || !fingerprint.has_value()) {
+        return Refused(Status::InvalidArgument("CREATE PLAN ... FOR takes one SELECT" +
+                                               ByteSuffix(create.statement_at)));
+    }
+    const auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+    if (Status s = exec::PlannableBlock(stmt); !s.ok()) {
+        return Refused(AtByte(s, create.statement_at));
+    }
+
+    exec::PlanRow row;
+    row.name = create.name;
+    row.arguments = fingerprint->literal_count;
+    row.statement = parser::ShapeText(padded);
+    row.bindings.push_back(stmt.from.binding());
+    for (const parser::JoinClause& join : stmt.joins) row.bindings.push_back(join.relation.binding());
+    if (row.bindings.size() > exec::kMaxPlannedRelations) {
+        return Refused(Status::Unsupported(
+            "a plan orders at most " + std::to_string(exec::kMaxPlannedRelations) +
+            " relations" + ByteSuffix(create.statement_at)));
+    }
+
+    const exec::StatementContext context = StatementContextFor(session);
+    const auto create_row = [&]() -> StatusOr<exec::PlanRow> {
+        // **The relations' `IS`, held to the row's install.** A plan DDL is
+        // not a read that must never wait on a DDL: where an ask is refused
+        // - a `DROP TABLE` holds the relation `X` - the statement is, so no
+        // plan is installed for a relation whose drop then commits, and a
+        // drop that comes after waits and meets the plan under its `X`
+        // (CX-Q24's RESTRICT).
+        std::uint64_t granted = 0;
+        const std::uint64_t holder = NextReadHolder();
+        ReadBorrow borrow(locks_, holder, &granted);
+        const auto compile = [&](const exec::PlanOptions* options) {
+            return ResolveNames(session, [&](const txn::ReadView* v) {
+                return exec::Compile(catalog_, stmt, v, &borrow, &context, options);
+            });
+        };
+        // The written order first: its refusal is the statement's - an
+        // unknown relation, a binding two relations share - and is given
+        // before anything is said of the variants.
+        auto written = compile(nullptr);
+        if (!written.ok()) return AtByte(written.status(), create.statement_at);
+        for (const exec::PlanVariantSpec& spec : create.variants) {
+            if (spec.rule.max_arg() > row.arguments) {
+                return Status::InvalidArgument(
+                    "variant '" + spec.name + "' reads ARG(" +
+                    std::to_string(spec.rule.max_arg()) + "), and the statement has " +
+                    std::to_string(row.arguments) + " value position(s)" +
+                    ByteSuffix(spec.name_at));
+            }
+            auto order = exec::ResolvePlanOrder(row.bindings, spec);
+            if (!order.ok()) return order.status();
+            row.variants.push_back(exec::PlanVariant{spec.name, spec.rule, order.value()});
+        }
+        row.key.fetch_id = fingerprint->fetch_id;
+        row.key.n = static_cast<std::uint8_t>(row.bindings.size());
+        std::vector<catalog::Oid> distinct;
+        for (std::size_t w = 0; w < row.bindings.size(); ++w) {
+            const catalog::Oid oid = written.value().steps[w].rel_oid;
+            row.key.oids[w] = oid;
+            if (std::find(distinct.begin(), distinct.end(), oid) == distinct.end()) {
+                distinct.push_back(oid);
+            }
+        }
+        if (holder != 0 && granted < distinct.size()) {
+            return Status::TxnConflict(
+                "a DDL holds one of the statement's relations; retry (byte 0)");
+        }
+
+        exec::PlanOptions options;
+        options.join_build_max_rows = budget_.join_build_max_rows();
+        options.sort_max_rows = sort_max_rows_;
+        options.fetch_id = fingerprint->fetch_id;
+        options.statement = padded;
+        if (create.searched) {
+            // CX-Q28 (a): the search, once, with the statistics of this
+            // moment - whatever `join_order` is, and with no memo and no
+            // captured order between it and its answer.
+            options.statistics = plan_stats_ != nullptr ? &plan_source_ : nullptr;
+            auto searched = compile(&options);
+            if (!searched.ok()) return AtByte(searched.status(), create.statement_at);
+            exec::PlanVariant variant;
+            variant.name = "searched";
+            for (std::size_t k = 0; k < row.bindings.size(); ++k) {
+                variant.order[k] = static_cast<std::uint8_t>(searched.value().steps[k].step_id);
+            }
+            row.variants.push_back(std::move(variant));
+        } else {
+            // CX-R2: each variant's order through the compile's own plan
+            // path, alone, for the statement as written. One that is
+            // declined here would be declined at every statement like it.
+            options.search = false;
+            for (std::size_t i = 0; i < row.variants.size(); ++i) {
+                exec::AdminPlans probe;
+                auto candidate = std::make_shared<exec::AdminPlan>();
+                candidate->name = row.name;
+                candidate->key = row.key;
+                candidate->variants.push_back(
+                    exec::PlanVariant{row.variants[i].name, {}, row.variants[i].order});
+                probe.Install(std::move(candidate), /*enabled=*/true);
+                options.admin = &probe;
+                auto chain = compile(&options);
+                if (!chain.ok() || !chain.value().plan_note.has_value() ||
+                    chain.value().plan_note->source != exec::PlanSource::kAdmin) {
+                    return Status::InvalidArgument(
+                        "variant '" + row.variants[i].name +
+                        "': its order does not compile for this statement, or adds a sort the "
+                        "statement's LIMIT does not bound" +
+                        ByteSuffix(create.variants[i].order_at));
+                }
+            }
+        }
+
+        const exec::PlanDdlClaim claim(*admin_plans_);
+        if (!claim.held()) return PlanDdlBusy();
+        // One administrator's plan a shape (CX-S1).
+        if (const auto other = admin_plans_->Holder(row.key); other.has_value()) {
+            return Status::AlreadyExists("plan '" + *other +
+                                         "' already holds this statement's shape; ALTER PLAN "
+                                         "or DROP PLAN it" +
+                                         ByteSuffix(create.name_at));
+        }
+        auto created = exec::CreateAdminPlan(catalog_, page_store_, wal_, *admin_plans_,
+                                             std::move(row), exec::StatementContextNow().now_us);
+        if (!created.ok()) return AtByte(created.status(), create.name_at);
+        return created;
+    };
+    auto created = create_row();
+    if (!created.ok()) return Refused(created.status());
+    if (Status s = AwaitDdlDurability(); !s.ok()) return Refused(s);
+    const exec::PlanRow& plan = created.value();
+    if (logging(LogLevel::kInfo)) log_->Info("ddl", "created plan '" + plan.name + "'");
+    std::string reply = "CREATED PLAN name=" + plan.name + " plan_id=" + std::to_string(plan.id) +
+                        " fetch_id=" + std::to_string(plan.key.fetch_id) +
+                        " variants=" + std::to_string(plan.variants.size());
+    // `AS SEARCHED` shows the order it fixed (CX-Q28 (a)).
+    if (create.searched) reply += " order=" + OrderText(plan.order, plan.bindings);
+    return {reply, false};
+}
+
+DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Session& session) {
+    // CX-S1b: `ALTER PLAN <name> ENABLE | DISABLE | REPLACE VARIANT ...`.
+    // Admin, autocommit only, answered once durable. Each is the plan's row
+    // written again under a new id and the old row removed
+    // (`exec::ReplaceAdminPlan`), under the plan DDL's claim.
+    //
+    // **`REPLACE VARIANT` is checked against the plan, not compiled**: the
+    // row holds the statement's shape and no literal, so there is no
+    // statement to compile the new order for. Its `ORDER` must name each of
+    // the plan's bindings once and its rule read no argument the statement
+    // lacks; whether the order fits a statement is asked at that statement's
+    // compile, where one that does not is declined (CX-R2).
+    if (session.in_explicit_txn()) {
+        return Refused(Status::NotImplemented(
+            "ALTER PLAN inside a transaction is not implemented; run it in autocommit (byte 0)"));
+    }
+    auto ddl = exec::ParseAlterPlan(line);
+    if (!ddl.ok()) return Refused(ddl.status());
+    const exec::AlterPlanStmt& alter = ddl.value();
+
+    const auto alter_row = [&]() -> StatusOr<exec::PlanRow> {
+        const exec::PlanDdlClaim claim(*admin_plans_);
+        if (!claim.held()) return PlanDdlBusy();
+        auto found = exec::FindPlan(catalog_, page_store_, alter.name);
+        if (!found.ok()) return AtByte(found.status(), alter.name_at);
+        exec::PlanRow row = std::move(found.value());
+        if (row.captured) {
+            return Status::NotImplemented(
+                "ALTER PLAN on a captured plan is not implemented: DROP PLAN re-arms its "
+                "capture and CREATE PLAN for its statement overrides it" +
+                ByteSuffix(alter.name_at));
+        }
+        // The relations' `IS`, as `CREATE PLAN` holds it, and under it
+        // whether the plan can serve anything at all.
+        std::uint64_t granted = 0;
+        const std::uint64_t holder = NextReadHolder();
+        ReadBorrow borrow(locks_, holder, &granted);
+        std::size_t distinct = 0;
+        if (row.readable) {
+            for (std::size_t i = 0; i < row.key.n; ++i) {
+                const auto first = std::find(row.key.oids.begin(), row.key.oids.begin() + i,
+                                             row.key.oids[i]);
+                if (first == row.key.oids.begin() + i) ++distinct;
+                borrow.Position(row.key.oids[i]);
+            }
+        }
+        if (!exec::PlanRowIsValid(catalog_, row)) {
+            return Status::Unsupported(
+                "plan '" + row.name +
+                "' is invalid - a relation it names is gone, or its row is not this build's - "
+                "and can serve no statement; DROP PLAN it" +
+                ByteSuffix(alter.name_at));
+        }
+        if (holder != 0 && granted < distinct) {
+            return Status::TxnConflict("a DDL holds one of the plan's relations; retry (byte 0)");
+        }
+        switch (alter.action) {
+            case exec::AlterPlanStmt::Action::kEnable:
+            case exec::AlterPlanStmt::Action::kDisable: {
+                const bool enable = alter.action == exec::AlterPlanStmt::Action::kEnable;
+                if (row.enabled == enable) return row;  // already so: nothing is written
+                row.enabled = enable;
+                break;
+            }
+            case exec::AlterPlanStmt::Action::kReplaceVariant: {
+                const exec::PlanVariantSpec& spec = alter.variant;
+                const auto old = std::find_if(row.variants.begin(), row.variants.end(),
+                                              [&](const exec::PlanVariant& v) {
+                                                  return IEquals(v.name, spec.name);
+                                              });
+                if (old == row.variants.end()) {
+                    return Status::NotFound("plan '" + row.name + "' has no variant named '" +
+                                            spec.name + "'" + ByteSuffix(spec.name_at));
+                }
+                // CX-R4: the list keeps its `ELSE`, and keeps it last.
+                if (old->rule.is_else() != spec.rule.is_else()) {
+                    return Status::InvalidArgument(
+                        std::string(old->rule.is_else()
+                                        ? "the plan's ELSE variant is replaced by an ELSE"
+                                        : "a WHEN variant is replaced by a WHEN") +
+                        ": every statement must keep a variant" + ByteSuffix(spec.name_at));
+                }
+                if (spec.rule.max_arg() > row.arguments) {
+                    return Status::InvalidArgument(
+                        "variant '" + spec.name + "' reads ARG(" +
+                        std::to_string(spec.rule.max_arg()) + "), and the plan's statement has " +
+                        std::to_string(row.arguments) + " value position(s)" +
+                        ByteSuffix(spec.name_at));
+                }
+                auto order = exec::ResolvePlanOrder(row.bindings, spec);
+                if (!order.ok()) return order.status();
+                *old = exec::PlanVariant{spec.name, spec.rule, order.value()};
+                break;
+            }
+        }
+        const std::uint64_t old_id = row.id;
+        return exec::ReplaceAdminPlan(catalog_, page_store_, wal_, *admin_plans_, old_id,
+                                      std::move(row), exec::StatementContextNow().now_us);
+    };
+    auto altered = alter_row();
+    if (!altered.ok()) return Refused(altered.status());
+    if (Status s = AwaitDdlDurability(); !s.ok()) return Refused(s);
+    const exec::PlanRow& plan = altered.value();
+    if (logging(LogLevel::kInfo)) log_->Info("ddl", "altered plan '" + plan.name + "'");
+    return {"ALTERED PLAN name=" + plan.name + " plan_id=" + std::to_string(plan.id) +
+                " state=" + (plan.enabled ? "enabled" : "disabled"),
+            false};
 }
 
 DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& session) {

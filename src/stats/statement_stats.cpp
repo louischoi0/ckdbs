@@ -56,7 +56,9 @@ std::array<StatementStats::Part, kStatsParts>& StatementStats::parts() noexcept 
 }
 
 void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view line,
-                            bool refused, std::uint64_t elapsed_us, std::int64_t now_us) noexcept {
+                            bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
+                            std::string_view plan_source,
+                            std::string_view plan_label) noexcept {
     // Derived here, so every key's kind is `StatementKindOf`'s static
     // storage - the pointer `KeyHash` hashes by.
     const std::string_view kind = StatementKindOf(line);
@@ -97,6 +99,17 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
     shape.total_us += elapsed_us;
     shape.max_us = std::max(shape.max_us, elapsed_us);
     shape.last_seen_us = now_us;
+    // Assigned only where it moved: a shape runs one source statement after
+    // statement, so this is two compares and no allocation.
+    if (!plan_source.empty() &&
+        (shape.plan_source != plan_source || shape.plan_label != plan_label)) {
+        try {
+            shape.plan_source = std::string(plan_source);
+            shape.plan_label = std::string(plan_label);
+        } catch (const std::bad_alloc&) {
+            // The counts stand; the source stays the last one written.
+        }
+    }
 }
 
 std::vector<StatementShape> StatementStats::Snapshot() {
@@ -114,6 +127,11 @@ std::vector<StatementShape> StatementStats::Snapshot() {
             if (shape.first_seen_us < into.first_seen_us) {
                 into.first_seen_us = shape.first_seen_us;
                 into.shape_text = shape.shape_text;
+            }
+            // The source of the core that saw the shape last.
+            if (shape.last_seen_us > into.last_seen_us && !shape.plan_source.empty()) {
+                into.plan_source = shape.plan_source;
+                into.plan_label = shape.plan_label;
             }
             into.last_seen_us = std::max(into.last_seen_us, shape.last_seen_us);
         }
