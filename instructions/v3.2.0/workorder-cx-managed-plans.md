@@ -28,6 +28,8 @@
   shape's first compile; the option is a boot key and an instance-wide
   administrator statement at run time, re-scoping `join_order`; the default
   is off - the first plan fixed.
+- **W6** (2026-11-18, `raft-marks-2026-11-18.md` §4): *"CX-Q12..Q18 $!a
+  push no verify"* - CX-Q12..Q18 marked (a).
 
 **Amended 2026-11-18 on W3-W5**, still not opened. W3 turns W0's third
 clause from an absolute rule into the option `join_order`, and W4-W5 give
@@ -467,7 +469,7 @@ measurement where §6 names one.
 ## 4. Items
 
 Every item is CLA's proposal and unmarked, except CX-Q0 and CX-Q1, which
-W3-W5 settled. A finding that would change one goes back to the operator
+W3-W5 settled, and CX-Q12..Q18, marked (a) by the operator (W6). A finding that would change one goes back to the operator
 before it is built. The value names `planned`, `fixed` and `written` are
 CLA's proposal; renaming them is the operator's.
 
@@ -485,13 +487,13 @@ CLA's proposal; renaming them is the operator's.
 | CX-Q9 | class (b) rewrites and the hoisted hash join | (a) not in CX; (b) as plan options in S2/S5 | (a) until a scenario statement is named as the consumer |
 | CX-Q10 | S6's threshold for building the cache | a share of p50 latency, `[provisional]` | 5 % at `cores = 1`, provisional until S6's first cell |
 | CX-Q11 | background advising | (a) on demand only; (b) a background task too | (a) first |
-| CX-Q12 | what a capture holds (CX-R7) | (a) the order and the build side; each step's access arm stays the ladder's `f(shape, catalog)` given its predecessors; (b) the whole plan, arms included | (a): W3's subject is statistics-driven change, and the ladder reads no statistic. Under (a) a `CREATE INDEX` can change a captured shape's arm, as DDL does under `written` - an explicit act. Under (b) a new index serves no captured shape until a DBA acts |
-| CX-Q13 | one capture per shape or per binding | (a) one per shape, from its first compile's literals, serving every binding; (b) one per range-span band or per `arg_hash` | (a): bindings that need different plans are an administrator's variants (`VARIANT ... WHEN ARG(k)`). (b) grows a literal-dependent set of plans on its own, which is the history dependence W4 rules out |
-| CX-Q14 | a restart before a capture is persisted (CX-R8) | (a) accept it: the shape is captured again at its next compile, possibly differently, the window bounded by the persisting task's period; (b) persist at the compile, so a `SELECT` writes the log | (a): (b) breaks CF's rule that no `SELECT` writes the log and makes a `READ ONLY` transaction write a record. The window and its count are in `sys.meta` |
-| CX-Q15 | does a run-time `SET JOIN_ORDER` survive a restart | (a) no: memory-resident, the boot key is read again, as for `SET CABIN_OPTIMIZER` and `SET ASH`; (b) yes, persisted | (a): a persisted run-time value is a second source of the setting beside the boot file |
-| CX-Q16 | a captured plan that no longer compiles | (a) run the written order, mark the row `INVALID`, count it, never re-capture on its own; (b) re-capture | (a): (b) is the engine changing a plan on its own. A DBA or an agent re-arms the capture with `DROP PLAN` (CX-Q17) |
-| CX-Q17 | what re-arms a capture | (a) only `DROP PLAN` of the captured row, an explicit act; (b) also any DDL on a relation the shape names | (a): W4's "the first plan is fixed". Under (b) a `CREATE INDEX` silently re-plans every shape over its relation from the statistics of that moment |
-| CX-Q18 | switching values at run time | (a) `planned` to `fixed`: shapes capture at their next compile from the current statistics, the memo dropped; `fixed` to `planned`: captured rows kept and not read; back to `fixed`: read again; (b) leaving `fixed` deletes the captured rows | (a): the rows are the operator's record of what ran, and deleting them on a switch is a destructive side effect of a setting (cf. `cabin-controller.md` PO8: disabling leaves existing state untouched) |
+| CX-Q12 | what a capture holds (CX-R7) | (a) the order and the build side; each step's access arm stays the ladder's `f(shape, catalog)` given its predecessors; (b) the whole plan, arms included | **(a), the operator's mark** (W6). (a): W3's subject is statistics-driven change, and the ladder reads no statistic. Under (a) a `CREATE INDEX` can change a captured shape's arm, as DDL does under `written` - an explicit act. Under (b) a new index serves no captured shape until a DBA acts |
+| CX-Q13 | one capture per shape or per binding | (a) one per shape, from its first compile's literals, serving every binding; (b) one per range-span band or per `arg_hash` | **(a), the operator's mark** (W6). (a): bindings that need different plans are an administrator's variants (`VARIANT ... WHEN ARG(k)`). (b) grows a literal-dependent set of plans on its own, which is the history dependence W4 rules out |
+| CX-Q14 | a restart before a capture is persisted (CX-R8) | (a) accept it: the shape is captured again at its next compile, possibly differently, the window bounded by the persisting task's period; (b) persist at the compile, so a `SELECT` writes the log | **(a), the operator's mark** (W6). (a): (b) breaks CF's rule that no `SELECT` writes the log and makes a `READ ONLY` transaction write a record. The window and its count are in `sys.meta` |
+| CX-Q15 | does a run-time `SET JOIN_ORDER` survive a restart | (a) no: memory-resident, the boot key is read again, as for `SET CABIN_OPTIMIZER` and `SET ASH`; (b) yes, persisted | **(a), the operator's mark** (W6). (a): a persisted run-time value is a second source of the setting beside the boot file |
+| CX-Q16 | a captured plan that no longer compiles | (a) run the written order, mark the row `INVALID`, count it, never re-capture on its own; (b) re-capture | **(a), the operator's mark** (W6). (a): (b) is the engine changing a plan on its own. A DBA or an agent re-arms the capture with `DROP PLAN` (CX-Q17) |
+| CX-Q17 | what re-arms a capture | (a) only `DROP PLAN` of the captured row, an explicit act; (b) also any DDL on a relation the shape names | **(a), the operator's mark** (W6). (a): W4's "the first plan is fixed". Under (b) a `CREATE INDEX` silently re-plans every shape over its relation from the statistics of that moment |
+| CX-Q18 | switching values at run time | (a) `planned` to `fixed`: shapes capture at their next compile from the current statistics, the memo dropped; `fixed` to `planned`: captured rows kept and not read; back to `fixed`: read again; (b) leaving `fixed` deletes the captured rows | **(a), the operator's mark** (W6). (a): the rows are the operator's record of what ran, and deleting them on a switch is a destructive side effect of a setting (cf. `cabin-controller.md` PO8: disabling leaves existing state untouched) |
 
 ## 5. `[quiet-wrong]` risks
 
@@ -562,4 +564,4 @@ AS-E epoch, `build-release`, results named by `git describe --tags`.
 ## 8. Stage log
 
 Nothing has landed. CX is written and not opened. Amended 2026-11-18 on
-W3-W5 (`raft-marks-2026-11-18.md` §3), documents only.
+W3-W5 (`raft-marks-2026-11-18.md` §3), documents only. CX-Q12..Q18 marked (a) on W6 (§4), documents only.
