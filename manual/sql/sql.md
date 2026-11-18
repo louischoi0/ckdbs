@@ -1260,6 +1260,24 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
     under every variant and every pin. `ANALYZE` marks a pinned step
     `arm=plan`. An index or a Cabin a plan pins by name cannot be dropped
     while the plan is enabled.
+  - A plan may also choose **how a join reads its inner table**. After
+    `ACCESS` (or right after `ORDER`), `BUILD <table> ON` reads the inner
+    table once and keeps its rows in memory for the rest of the statement,
+    instead of looking it up again for every row of the outer table;
+    `BUILD <table> OFF` never does that for it:
+
+    ```
+    VARIANT wide ELSE ORDER (u, l) BUILD l ON
+    ```
+
+    `ON` works only where the join is an equality on a non-key column of
+    the inner table and nothing else in the `WHERE` ties the two tables
+    together, and not where the `WHERE` also compares one of the inner
+    table's unindexed columns with `=` to a constant; `CREATE PLAN`
+    refuses it otherwise, and refuses it beside an `ACCESS`
+    pin that names a key, an index or a Cabin. The in-memory copy is still
+    bounded by `join_build_max_rows`: past it, or with it set to `0`, the
+    statement looks rows up as usual and `ANALYZE` shows `inner_built=0`.
   - **A statement over one table can be given a plan too.** It has no
     order to choose, so its variants each say `ORDER (<the table>)` and
     pin how the table is read:

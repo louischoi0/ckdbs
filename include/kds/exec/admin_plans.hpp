@@ -101,18 +101,34 @@ inline constexpr std::size_t kMaxPlanVariants = 16;
 // step and by no rank under `CABIN` unnamed, which admits the declared
 // Cabins alone. The cabin optimizer builds; a plan that names what it built
 // is what reads through it.
+//
+// **A relation's join method may be pinned too** (CX-S5): `BUILD <binding>
+// ON` holds the step to the statement-local inner build
+// (`join-inner-build.md`) - every keyed class stands aside, so the walk's
+// ranks are what the ladder has left, and the pin is met only where the
+// step ends with the build annotation; `OFF` takes the build's rank away,
+// so the step walks per outer row, or takes what ranks below it. Neither
+// forces a build: the build's own rule (`BuildKeyOf`) and the filter scan's
+// rank above it are unchanged, and `join_build_max_rows`' run-time decline
+// is a resource limit, not a plan change (CX-Q8 (a)).
 struct ArmPin {
     enum class Arm : std::uint8_t { kLadder, kTupleKey, kIndex, kCabin, kScan };
+    enum class Build : std::uint8_t { kLadder, kOn, kOff };
     Arm arm = Arm::kLadder;
     bool forbid = false;
     // What a pin names: a pinned `kIndex`'s index, or a pinned `kCabin`'s
     // column. Empty: any index, or any declared Cabin. Never set on another
     // arm, nor on a forbidden one.
     std::string name;
+    Build build = Build::kLadder;
 
-    bool pins() const noexcept { return arm != Arm::kLadder; }
-    // Whether the ladder may try arms of class `tried`.
+    // Whether the relation's step is pinned at all - its arm, its build, or
+    // both.
+    bool pins() const noexcept { return arm != Arm::kLadder || build != Build::kLadder; }
+    // Whether the ladder may try arms of class `tried`. Under `BUILD ON` the
+    // walk is the one class left.
     bool Admits(Arm tried) const noexcept {
+        if (build == Build::kOn && tried != Arm::kScan) return false;
         return arm == Arm::kLadder || (forbid ? arm != tried : arm == tried);
     }
     bool operator==(const ArmPin&) const = default;

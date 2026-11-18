@@ -1346,3 +1346,24 @@ of 4683.
 - **Not checked by the review**: a streamed one-relation plan; one across
   a restart; plan DDL racing a Cabin's drop; `CREATE PLAN` over a `sys.*`
   view; overhead.
+
+### CX-S5 - built 2026-11-18
+
+Built on worktree `cx-plan-change-option` on the operator's "go on with CX-S5" (2026-11-18, given in Korean), under the standing go-ahead (`raft-marks-2026-11-18.md` §16).
+
+**S5, as built:**
+
+- **The clause**: `BUILD <binding> ON | OFF {, <binding> ON | OFF}` after a variant's `ORDER` and any `ACCESS`, in `CREATE PLAN` and `REPLACE VARIANT`; one a relation (`ArmPin::Build`, beside the access pin).
+- **`OFF`** takes the build's rank from the step's ladder: a walked join walks per outer row, or takes the strict tuple key range below it.
+- **`ON`** holds the step to the build - every keyed class stands aside, as under `ACCESS ... SCAN` - and is met only where the step then carries the build annotation. `BuildKeyOf`'s rule and the filter scan's rank above it are unchanged, so no build is made that the ladder's own last rank could not make. Unmet, it is S3a's unmet pin: refused at `CREATE PLAN`, declined at a compile. Beside an `ACCESS` pin naming a keyed class it is refused (`InvalidArgument`).
+- **The cap** (CX-Q8 (a)): a met `ON` builds subject to `join_build_max_rows` at run time, as every build does - `0` or an outgrown map walks, `ANALYZE` showing `inner_built=0`. The pin is not a plan change when it does.
+- **The row**: ` build=<w>:ON|OFF;...` after `access=`, only where a variant pins a build, so every row written before reads as it did. No superblock moves.
+
+**Where S5 differs from the order's text, each CLA's choice and none marked by the operator.**
+
+- **`ON` is read as a restriction to the build, not a bare check.** The order gives the clause and its example (`BUILD u OFF`) and no meaning for `ON`. A check alone would add nothing - the ladder already builds where it can - and the order's subject is choosing the join method, so `ON` takes the nested-loop probes (tuple key, index, Cabin) away for that step, within CX-R2: the build is an arm the ladder's last rank takes for the shape.
+- **The filter scan stays above the build under `ON`.** `join-inner-build.md` §8 declines building for a step a literal equality already filter-scans, "a decision, not an impossibility"; S5 does not reopen it, so such a step cannot meet `ON`.
+- **A captured order holds no build pin** (CX-Q12 (a) as marked): its build side is the compile's given its order.
+- **CX-S5's "A plan that orders a relation inner picks its build side through ORDER"** needed no code: an order already decides which step is inner.
+
+**Also in this stage**: §45's sentence that the merge at `4e0a1649` was not suite-run is corrected - that run finished 0 failed of 4706 after the push.

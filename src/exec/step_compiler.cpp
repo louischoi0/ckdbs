@@ -3249,8 +3249,8 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // bounds what a walk visits, and v1 declines to also build
                 // for it.
                 step.kind = AccessKind::kFilterScan;
-            } else if (walk && inner_build && step.fn_residual.empty() &&
-                       step.bool_residual.empty()) {
+            } else if (walk && inner_build && pin.build != ArmPin::Build::kOff &&
+                       step.fn_residual.empty() && step.bool_residual.empty()) {
                 // A step carrying a function conjunct takes no build
                 // (AP-S4): the map holds the rows passing the
                 // *non-correlated* conjuncts, and a function conjunct is
@@ -3276,15 +3276,26 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // A pin naming one class is met only by an arm of it. The walk is
         // not something the ladder is held to by taking nothing else away,
         // so `SCAN` is met by what is left when no keyed arm is admitted.
-        if (pin.pins() && !pin.forbid) {
-            if (ArmClassOf(step.kind) != pin.arm) {
-                return Status::Unsupported(
-                    "the statement's step over '" + scope.relations[i].binding +
-                    "' cannot take the pinned arm " + std::string(ArmName(pin.arm)) +
-                    (pin.name.empty()                    ? ""
-                     : pin.arm == ArmPin::Arm::kCabin ? " (" + pin.name + ")"
-                                                       : " " + pin.name));
-            }
+        if (pin.arm != ArmPin::Arm::kLadder && !pin.forbid &&
+            ArmClassOf(step.kind) != pin.arm) {
+            return Status::Unsupported(
+                "the statement's step over '" + scope.relations[i].binding +
+                "' cannot take the pinned arm " + std::string(ArmName(pin.arm)) +
+                (pin.name.empty()                    ? ""
+                 : pin.arm == ArmPin::Arm::kCabin ? " (" + pin.name + ")"
+                                                   : " " + pin.name));
+        }
+        // `BUILD ON` is met only by a step that builds (CX-S5): the build's
+        // own rule declined it - no correlated equality to key on, a
+        // conjunct the map cannot bucket, the filter scan's rank above it,
+        // a step that may not build (a write's sub-chain, the first step).
+        // A met pin builds subject to `join_build_max_rows` at run time, as
+        // every build does: a cap of 0, or a map that outgrows it, walks
+        // per outer row (CX-Q8 (a)), and `ANALYZE` says so.
+        if (pin.build == ArmPin::Build::kOn && !step.build.has_value()) {
+            return Status::Unsupported("the statement's step over '" +
+                                       scope.relations[i].binding +
+                                       "' cannot take the pinned BUILD ON");
         }
 
         // The columns the kind was assigned for. Recorded here because the

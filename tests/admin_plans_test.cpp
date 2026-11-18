@@ -226,11 +226,13 @@ TEST(PlanDdlTest, ElseIsMandatoryAndLastAndEveryRefusalNamesItsByte) {
     EXPECT_EQ(refusal("VARIANT v WHEN ARG(1) = 1 ORDER (a, b) VARIANT V ELSE ORDER (b, a)").code(),
               StatusCode::kInvalidArgument)
         << "one name twice";
-    // The clause of a later stage, at its word.
-    s = refusal("VARIANT v ELSE ORDER (a, b) BUILD a OFF");
-    EXPECT_EQ(s.code(), StatusCode::kNotImplemented) << s.message();
-    EXPECT_EQ(refusal("VARIANT v ELSE ORDER (a, b) ACCESS a SCAN BUILD a OFF").code(),
-              StatusCode::kNotImplemented);
+    // A BUILD clause's refusal is at its word (CX-S5).
+    const std::string build_head = head + "VARIANT v ELSE ORDER (a, b) BUILD a ";
+    s = refusal("VARIANT v ELSE ORDER (a, b) BUILD a MAYBE");
+    EXPECT_EQ(s.code(), StatusCode::kInvalidArgument) << s.message();
+    EXPECT_NE(s.message().find("(byte " + std::to_string(build_head.size()) + ")"),
+              std::string::npos)
+        << s.message();
     for (const std::string tail :
          {"", "VARIANT v ELSE", "VARIANT v ELSE ORDER a, b", "VARIANT v ELSE ORDER (a b)",
           "VARIANT v ELSE ORDER ()", "VARIANT v ELSE ORDER (a, b) extra"}) {
@@ -286,6 +288,51 @@ TEST(PlanDdlTest, AnAccessClausePinsOrForbidsOneArmARelation) {
          {"a NOT SCAN", "a HASH", "a", "TUPLE_KEY", "a TUPLE_KEY b SCAN", "a NOT INDEX b_ix",
           "c SCAN", "a SCAN, A TUPLE_KEY", "a TUPLE_KEY,", "a NOT CABIN (x)", "a SCAN (x)"}) {
         EXPECT_EQ(refusal(access).code(), StatusCode::kInvalidArgument) << access;
+    }
+}
+
+// CX-S5: `BUILD <binding> ON | OFF`, after `ACCESS` or alone.
+TEST(PlanDdlTest, ABuildClausePinsARelationsJoinMethod) {
+    const std::string head = "CREATE PLAN p FOR SELECT a.x FROM a JOIN b ON a.id = b.id ";
+    auto parsed = exec::ParseCreatePlan(
+        head + "VARIANT v WHEN ARG(1) = 1 ORDER (a, b) ACCESS b SCAN BUILD b ON "
+               "VARIANT w ELSE ORDER (b, a) BUILD a OFF, b OFF;");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    auto first = exec::ResolvePlanVariant({"a", "b"}, 1, parsed.value().variants[0]);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    ASSERT_EQ(first.value().access.size(), 2u);
+    EXPECT_FALSE(first.value().access[0].pins());
+    EXPECT_EQ(first.value().access[1].arm, exec::ArmPin::Arm::kScan);
+    EXPECT_EQ(first.value().access[1].build, exec::ArmPin::Build::kOn);
+    EXPECT_EQ(exec::PlanAccessText(first.value().access, {"a", "b"}),
+              " ACCESS b SCAN BUILD b ON");
+    auto second = exec::ResolvePlanVariant({"a", "b"}, 1, parsed.value().variants[1]);
+    ASSERT_TRUE(second.ok()) << second.status().message();
+    EXPECT_EQ(exec::PlanAccessText(second.value().access, {"a", "b"}), " BUILD a OFF, b OFF");
+    // ON holds the step to the walk: no keyed class is left to it. OFF
+    // leaves every class; it takes away the build alone.
+    EXPECT_TRUE(second.value().access[0].Admits(exec::ArmPin::Arm::kIndex));
+    EXPECT_FALSE(first.value().access[1].Admits(exec::ArmPin::Arm::kTupleKey));
+    EXPECT_FALSE(first.value().access[1].Admits(exec::ArmPin::Arm::kIndex));
+    EXPECT_TRUE(first.value().access[1].Admits(exec::ArmPin::Arm::kScan));
+
+    // The parse's and the resolution's answer for one clause.
+    const auto verdict = [&](const std::string& clause) {
+        auto written = exec::ParseCreatePlan(head + "VARIANT v ELSE ORDER (a, b) " + clause);
+        if (!written.ok()) return written.status();
+        auto resolved = exec::ResolvePlanVariant({"a", "b"}, 0, written.value().variants[0]);
+        return resolved.ok() ? Status::OK() : resolved.status();
+    };
+    for (const std::string clause :
+         {"BUILD a", "BUILD a MAYBE", "BUILD c ON", "BUILD a ON, A OFF", "BUILD ON",
+          "ACCESS a TUPLE_KEY BUILD a ON", "ACCESS a INDEX BUILD a ON",
+          "ACCESS a CABIN (x) BUILD a ON", "BUILD a ON,"}) {
+        EXPECT_EQ(verdict(clause).code(), StatusCode::kInvalidArgument) << clause;
+    }
+    // A forbidden class beside ON is consistent, and so is OFF beside any pin.
+    for (const std::string clause : {"ACCESS a NOT INDEX BUILD a ON",
+                                     "ACCESS a TUPLE_KEY BUILD a OFF"}) {
+        EXPECT_TRUE(verdict(clause).ok()) << clause << ": " << verdict(clause).message();
     }
 }
 
@@ -433,13 +480,28 @@ TEST(AdminPlanTextTest, AVariantsPinsReadBackAndARowWithNoneReadsAsBefore) {
     exec::PlanRow named_back;
     ASSERT_TRUE(exec::DecodeAdminPlanText(named_text, named_back).ok()) << named_text;
     EXPECT_EQ(named_back.variants[0].access, named.variants[0].access);
+    // A build pin travels in its own field, after the access pins (CX-S5).
+    exec::PlanRow built = SampleRow();
+    built.variants[0].access = {exec::ArmPin{}, exec::ArmPin{}};
+    built.variants[0].access[0].build = exec::ArmPin::Build::kOff;
+    built.variants[0].access[1].arm = exec::ArmPin::Arm::kScan;
+    built.variants[0].access[1].build = exec::ArmPin::Build::kOn;
+    const std::string built_text = exec::EncodeAdminPlanText(built, 7);
+    EXPECT_NE(built_text.find("narrow 0,1 access=1:SCAN build=0:OFF;1:ON WHEN "),
+              std::string::npos)
+        << built_text;
+    exec::PlanRow built_back;
+    ASSERT_TRUE(exec::DecodeAdminPlanText(built_text, built_back).ok()) << built_text;
+    EXPECT_EQ(built_back.variants[0].access, built.variants[0].access);
 
     const std::string head = "v1 fp=2 oids=4001,4002 bindings=u,l args=2 at=5 variants=1\na 0,1 ";
     for (const std::string access :
          {"access=2:SCAN", "access=0:SCAN;0:CABIN", "access=0:HASH", "access=0:!SCAN",
           "access=0:SCAN:x", "access=0:TUPLE_KEY:x", "access=0:!CABIN:x", "access=0:CABIN:",
           "access=0:!INDEX:x", "access=0:INDEX:", "access=x:SCAN",
-          "access=", "access=0:SCAN;", "access=0:scan"}) {
+          "access=", "access=0:SCAN;", "access=0:scan", "build=2:ON", "build=0:ON;0:OFF",
+          "build=0:on", "build=0", "build=", "build=0:ON;", "access=0:INDEX build=0:ON",
+          "build=0:ON access=0:SCAN"}) {
         exec::PlanRow kept;
         EXPECT_EQ(exec::DecodeAdminPlanText(head + access + " ELSE\nS", kept).code(),
                   StatusCode::kCorruption)
@@ -1202,6 +1264,68 @@ TEST_F(AdminPlanTest, APinNoArmMeetsIsRefusedAtCreateAndDeclinedAtACompile) {
     EXPECT_EQ(next_run.EnabledPinningIndex(results_, "RESULTS_MODEL"),
               std::optional<std::string>("p"));
     EXPECT_FALSE(next_run.EnabledPinningIndex(models_, "results_model").has_value());
+}
+
+// CX-S5: a variant pins a relation's join method - the statement-local
+// build, or the walk without it.
+TEST_F(AdminPlanTest, ABuildPinChoosesTheJoinMethodAndTheRowsAreTheSame) {
+    const std::string sql = Where("5");
+    const std::vector<std::string> rows = Rows(sql);
+    ASSERT_EQ(rows.size(), 58u);
+    // Models first: results is the inner step, walked per model and built
+    // by the ladder's last rank.
+    Ok("CREATE PLAN p FOR " + sql + kModelsFirst);
+    std::string plan = Plan(sql);
+    ASSERT_NE(StepLine(plan, 0).find(" build on=col1"), std::string::npos) << plan;
+    Ok("DROP PLAN p");
+
+    // OFF: the same order, the build's rank taken away.
+    Ok("CREATE PLAN p FOR " + sql + kModelsFirst + " BUILD results OFF");
+    plan = Plan(sql);
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 Scan results", 0), 0u) << plan;
+    EXPECT_EQ(StepLine(plan, 0).find(" build on="), std::string::npos) << plan;
+    EXPECT_NE(StepLine(plan, 0).find("arm=plan"), std::string::npos) << plan;
+    EXPECT_EQ(Rows(sql), rows);
+    Ok("DROP PLAN p");
+
+    // ON over an index the ladder would probe: the keyed ranks stand aside
+    // and the step builds.
+    Ok("CREATE INDEX results_model ON results (model_id)");
+    Ok("CREATE PLAN p FOR " + sql + kModelsFirst);
+    EXPECT_EQ(StepLine(Plan(sql), 0).rfind("step 0 IndexProbe ", 0), 0u) << Plan(sql);
+    Ok("DROP PLAN p");
+    Ok("CREATE PLAN p FOR " + sql + kModelsFirst + " BUILD results ON");
+    plan = Plan(sql);
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 Scan results", 0), 0u) << plan;
+    EXPECT_NE(StepLine(plan, 0).find(" build on=col1"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("inner_built=1"), std::string::npos) << plan;
+    EXPECT_EQ(Rows(sql), rows);
+    // The row and the view say it as it was written, the access pins first.
+    Ok("ALTER PLAN p REPLACE VARIANT models_first ELSE ORDER (models, results) ACCESS results "
+       "NOT INDEX BUILD results ON");
+    const std::vector<exec::PlanRow> stored = PlanRows();
+    ASSERT_EQ(stored.size(), 1u);
+    ASSERT_EQ(stored[0].variants.size(), 1u);
+    EXPECT_EQ(exec::PlanAccessText(stored[0].variants[0].access, stored[0].bindings),
+              " ACCESS results NOT INDEX BUILD results ON");
+    EXPECT_NE(Run("SELECT variants FROM sys.plans").find("BUILD results ON"), std::string::npos);
+    EXPECT_NE(StepLine(Plan(sql), 0).find(" build on=col1"), std::string::npos);
+    Ok("DROP PLAN p");
+
+    // ON where no build can be: models is entered by its tuple key, which
+    // the build never keys on, so the pin is refused at CREATE - and a
+    // keyed ACCESS pin beside ON contradicts it before anything compiles.
+    const DispatchOutcome keyed =
+        Do("CREATE PLAN p FOR " + sql + kAsWritten + " BUILD models ON");
+    EXPECT_EQ(keyed.status.code(), StatusCode::kInvalidArgument) << keyed.response;
+    EXPECT_NE(keyed.response.find("cannot take the pinned BUILD ON"), std::string::npos)
+        << keyed.response;
+    const DispatchOutcome contradiction =
+        Do("CREATE PLAN p FOR " + sql + kModelsFirst + " ACCESS results INDEX BUILD results ON");
+    EXPECT_EQ(contradiction.status.code(), StatusCode::kInvalidArgument) << contradiction.response;
+    EXPECT_NE(contradiction.response.find("is the walk's"), std::string::npos)
+        << contradiction.response;
+    EXPECT_TRUE(PlanRows().empty());
 }
 
 // CX-S3b: a statement over one relation has no order and an arm to pin.

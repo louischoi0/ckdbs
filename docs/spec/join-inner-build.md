@@ -51,7 +51,13 @@ the build inside one chain; the chain's order is no longer written order
 fixed with the order**: a captured order names which relation is inside,
 and the annotation is the compile's again at every compile given that
 order, so the build side of a captured shape moves only with the catalog
-or `join_build_max_rows`, never with the statistics.
+or `join_build_max_rows`, never with the statistics. **An administrator's
+plan may pin it** (CX-S5, `parser-v2.md` I12): `BUILD <relation> OFF`
+takes the build's rank from that step, and `BUILD <relation> ON` holds
+the step to the build - the keyed arms ranked above it stand aside - met
+only where this spec's rule would annotate the step; neither changes the
+rule, the rank of the filter scan above it, or the cap's run-time decline
+(§7).
 
 ## 3. Why this does not break the chain's contract
 

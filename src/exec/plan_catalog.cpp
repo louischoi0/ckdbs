@@ -127,7 +127,7 @@ std::string EncodeAccess(const std::vector<ArmPin>& access) {
     std::string out;
     for (std::size_t w = 0; w < access.size(); ++w) {
         const ArmPin& pin = access[w];
-        if (!pin.pins()) continue;
+        if (pin.arm == ArmPin::Arm::kLadder) continue;
         out.append(out.empty() ? " access=" : ";");
         out.append(std::to_string(w)).push_back(':');
         if (pin.forbid) out.push_back('!');
@@ -135,6 +135,49 @@ std::string EncodeAccess(const std::vector<ArmPin>& access) {
         if (!pin.name.empty()) out.append(":").append(pin.name);
     }
     return out;
+}
+
+// A variant's build pins as its line's ` build=` field (CX-S5), after
+// `access=`, or nothing where it has none.
+std::string EncodeBuild(const std::vector<ArmPin>& access) {
+    std::string out;
+    for (std::size_t w = 0; w < access.size(); ++w) {
+        if (access[w].build == ArmPin::Build::kLadder) continue;
+        out.append(out.empty() ? " build=" : ";");
+        out.append(std::to_string(w));
+        out.append(access[w].build == ArmPin::Build::kOn ? ":ON" : ":OFF");
+    }
+    return out;
+}
+
+// The field's reading onto `pins`, sized to the plan's relations already;
+// false where it is not what `EncodeBuild` writes.
+bool DecodeBuild(std::string_view text, std::vector<ArmPin>& pins) {
+    while (true) {
+        const std::size_t semi = text.find(';');
+        const std::string_view item = text.substr(0, semi);
+        const std::size_t colon = item.find(':');
+        std::uint64_t position = 0;
+        if (colon == std::string_view::npos || !ReadNumber(item.substr(0, colon), position) ||
+            position >= pins.size() || pins[position].build != ArmPin::Build::kLadder) {
+            return false;
+        }
+        const std::string_view word = item.substr(colon + 1);
+        const ArmPin& pin = pins[position];
+        if (word == "ON") {
+            // `ON` beside a keyed pin is what the DDL refuses.
+            if (pin.arm != ArmPin::Arm::kLadder && pin.arm != ArmPin::Arm::kScan && !pin.forbid) {
+                return false;
+            }
+            pins[position].build = ArmPin::Build::kOn;
+        } else if (word == "OFF") {
+            pins[position].build = ArmPin::Build::kOff;
+        } else {
+            return false;
+        }
+        if (semi == std::string_view::npos) return true;
+        text.remove_prefix(semi + 1);
+    }
 }
 
 // The field's reading into `n` pins by written position; false where it is
@@ -219,6 +262,7 @@ std::string EncodeAdminPlanText(const PlanRow& row, std::int64_t written_at_us) 
         text.append(variant.name);
         AppendList(text, " ", variant.order, row.key.n);
         text.append(EncodeAccess(variant.access));
+        text.append(EncodeBuild(variant.access));
         if (variant.rule.is_else()) {
             text.append(" ELSE");
         } else {
@@ -326,6 +370,15 @@ Status DecodeAdminPlanText(std::string_view text, PlanRow& out) {
                 return corrupt("a variant's access pins do not read");
             }
             line.remove_prefix(access_end + 1);
+        }
+        if (line.starts_with("build=")) {
+            const std::size_t build_end = line.find(' ');
+            if (variant.access.empty()) variant.access.resize(oids.size());
+            if (build_end == std::string_view::npos ||
+                !DecodeBuild(line.substr(6, build_end - 6), variant.access)) {
+                return corrupt("a variant's build pins do not read");
+            }
+            line.remove_prefix(build_end + 1);
         }
         // `ELSE` last and only last (CX-R4).
         const bool last = v + 1 == count;
