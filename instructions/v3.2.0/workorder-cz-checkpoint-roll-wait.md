@@ -1,13 +1,13 @@
 # Work order CZ - a checkpoint that does not hold its reactor on a segment roll: the premise measured before anything is built
 
-Status: **OPENED 2026-11-18; CZ-S0 done, V0 with the operator** on
+Status: **OPENED 2026-11-18; CZ-S0 done, V0 passed, CZ-S1 opened** on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
-(`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* No
-item of §4 is marked; S0 rested on none of them. **V0 passes on CLA's
-proposed bar and its verdict (CZ-Q1) is the operator's; CZ-S1 is not
-started** (§7, "CZ-S0"). Pushed to `main` with the hook skipped on the
-operator's word (§32 there). Written the same day on
+(`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* S0
+rested on no item of §4. **On the operator's word of the same day (§33
+there) V0 is passed, every item of §4 is marked (a) and CZ-S1 is opened.**
+CZ-S0 was pushed to `main` with the hook skipped on the operator's word
+(§32 there). Written the same day on
 worktree `bl-rung3-probe` from `3b3f4851` (`v3.4.12-25-g3b3f4851`) on the
 operator's word (§13 there): *"For now, leave it as a work order."* Every
 `[source-read]` claim of §1 and §2 was read at `3b3f4851`; §7's stage log
@@ -292,8 +292,9 @@ Binding from CZ-S2 on, if the order reaches it.
 
 ## 4. Items for the operator (CZ-Q), CLA's proposals
 
-None is marked. (a) is CLA's proposal in each. CZ-Q11 to CZ-Q13 were
-added at CZ-S0.
+**Every item is marked (a)**: CZ-Q9 by `raft-marks-2026-11-18.md` §18,
+the others by §33 there, which also passes V0 on CZ-Q1 (a)'s bar. (a) was
+CLA's proposal in each. CZ-Q11 to CZ-Q13 were added at CZ-S0.
 
 | | item | (a) | other |
 |---|---|---|---|
