@@ -1,13 +1,16 @@
 # Work order CZ - a checkpoint that does not hold its reactor on a segment roll: the premise measured before anything is built
 
-Status: **OPENED 2026-11-18; CZ-S0 done, V0 passed, CZ-S1 opened** on
+Status: **OPENED 2026-11-18; CZ-S0 and CZ-S1 done, S1's reading with the
+operator, CZ-S2 not started** on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* S0
 rested on no item of §4. **On the operator's word of the same day (§33
 there) V0 is passed, every item of §4 is marked (a) and CZ-S1 is opened.**
 CZ-S0 was pushed to `main` with the hook skipped on the operator's word
-(§32 there). Written the same day on
+(§32 there). **In CZ-S1's spike C1 alone met CZ-Q1 (a)'s bar as written,
+on a host builds reached; C0, C1 or C1 with C2 is the operator's to read**
+(§7, "CZ-S1"). CZ-S1 is not pushed. Written the same day on
 worktree `bl-rung3-probe` from `3b3f4851` (`v3.4.12-25-g3b3f4851`) on the
 operator's word (§13 there): *"For now, leave it as a work order."* Every
 `[source-read]` claim of §1 and §2 was read at `3b3f4851`; §7's stage log
@@ -506,3 +509,125 @@ conclusions and "no live defect" stood.
 2. The marks on CZ-Q0 to CZ-Q8 and CZ-Q10, and on the three added items,
    CZ-Q11 to CZ-Q13. CZ-S1 needs CZ-Q3 and CZ-Q10 at the least.
 3. The word for CZ-S1.
+
+### CZ-S1 - the ceiling, 2026-11-18
+
+On worktree `cz-checkpoint-roll-wait`. The spike is on branch
+`worktree-cz-s1-spike` at `20d89234` (`v3.4.12-66-g20d89234`) and is not
+merged; its diff is in the results file's archive. **Results:
+`bench/v3.4.12/results-cz-s1-ceiling-v3.4.12-66-g20d89234.md`.** Suite not
+executed: the spike is not landed and the work branch changes no build
+input. Overhead not measured; measured at the milestone's close.
+
+**What ran.** CZ-S0's cell, 5 interleaved runs of five arms on one binary,
+25 cells, every one rc=0 with 0 errors: `isolated`, `levels`, `c1` (the
+cadence task's latch sites try and park), `c2` (no zero prewrite where
+`posix_fallocate` reserved) and `c1c2`. Building, a smoke cell and the
+cells took 10.0 minutes; the quiet gate and the driver's wait for load
+held the matrix another 22.8 minutes, outside the budget
+(`raft-marks-2026-11-18.md` §33). Nothing was cut. The driver ran with the
+spike's `--stall-cores`, which CZ-S0's §7 asked for and `bench/README.md`
+counts as a driver change. Another session's build reached 6 of the 25
+cells, two of them `isolated`; none of `levels` or `c1`.
+
+**The ceiling, against CZ-Q1 (a)'s bar.**
+
+| reading | `isolated` | `levels` | `c1` | `c2` | `c1c2` |
+|---|---|---|---|---|---|
+| reader schedule p99, median of 5 | 1.5 ms | 5.1 ms | 1.4 ms | 3.2 ms | 3.4 ms |
+| against `isolated`'s median | 1.00x | 3.42x | 0.95x | 2.11x | 2.29x |
+| pairs within 2x | 5 of 5 | 2 of 5 | 5 of 5 | 2 of 5 | 2 of 5 |
+| p99.9, median of 5 | 4.5 ms | 138.8 ms | 4.4 ms | 5.9 ms | 6.2 ms |
+| samples at or above 10 ms, 5 runs | 0 samples | 174 samples | 0 samples | 46 samples | 9 samples |
+| holds over 10 ms inside a read core's checkpoint run, 5 runs | 0 holds | 14 holds | 0 holds | 7 holds | 1 hold |
+| roll hold, median | no roll | 250.9 ms | 251.4 ms | 5.7 ms | 5.7 ms |
+| inserter, median, against `levels` | - | 158,412 rows/s | +2.0 % | +53.4 % | +38.6 % |
+
+**What S1 found.**
+- **C1 alone met the bar as it is written, in the spike, on a host builds
+  reached.** Two of its five pairs rest on an isolated cell that ran under
+  a build. The three pairs with no build on either side are 0.95x, 1.26x
+  and 1.07x; against the three isolated cells no build reached `c1` is
+  1.21x with 3 of 5 runs within 2x.
+- **The wait's sites** (`levels`, the read cores, by the spike's
+  counters): the log park's flush 1,240.7 ms, the begin record 556.1 ms,
+  the end record 7.8 ms, the recycle and the inline gate none. The flush
+  is the site CZ-S0 could not time.
+- **C2 alone does not meet the bar.** It shortens the common roll and
+  keeps a tail, and because the inserter is closed-loop the C2 arms carry
+  39-54 % more log: a heavier cell, not `levels` with one change. C1 with
+  C2 was not better than C1 at p99; builds reached 3 of its 5 cells, so
+  the size of that is not established.
+- **What C1 leaves on a read core**: the inline gate (41 calls in 13
+  logged runs, the longest 3.8 ms), page writes (the longest 6.2 ms), and
+  holds of about 100 ms that are not the latch, each seen once in the 25
+  cells and none inside a `c1` window - a flush call of 208.4 ms with
+  2.1 ms of latch wait, a hold of 116.8 ms in a run that logged no line,
+  and a publish-phase call of 96.6 ms.
+- **Facts §1.2 did not have**:
+  - a flush call can hold a read core with almost no latch wait: the spin
+    on another thread's flush in flight, or this thread's own write of the
+    staged ring;
+  - a run in flight at the server's stop is abandoned and writes no run
+    line, so run-line totals are lower bounds;
+  - the anchor advances the durable redo start before it calls the
+    recycler (`src/server/superblock_checkpoint_anchor.cpp:197-205`), so a
+    skipped recycle is retried only when a later commit advances it again;
+  - a foreground statement can spin on a page latch for a roll's hold
+    (one poll of 117.5 ms on a read core in `c1c2`, inferred). No
+    checkpoint site is in that, and C1 does not touch it.
+
+**What CZ-S2 owes that the spike skipped.**
+- A busy latch that no roll holds. The spike yields and retries with no
+  bound - 7,391 times in `c1`'s 5 windows, and 49,805 times in one run of
+  `c1c2`, about 61 ms of spin. A yield on an idle reactor returns at once.
+  Another thread's flush in flight is such a holder too.
+- What a skipped flush rests on when the holder is not a roll.
+- The recycle skipped on a busy latch, against the retry condition above
+  and the live-segment bound.
+- The park's wake: the spike asks for none and is read at the reactor's
+  next turn.
+- The task's holds across the new parks (CZ-R9).
+- The assertion bases' site, which the cell does not exercise, and the
+  blocking call past 16 parks, which no run reached.
+- The fail-stop and a crash inside a park.
+
+**Reviewed by `critics-developer`** against the raw data and the spike's
+source, before the commit. It recomputed every quoted figure from the 25
+cells, read the spike site by site against the results file's §7, and
+looked for a spike defect that would explain `c1`'s result; it found none.
+- **Corrected by the review:**
+  - `c2`'s stall samples overlap a run, a roll and neither in 21, 20 and
+    25, not 22, 21 and 24; 11 of `levels`' 13 episodes name their run's
+    core, not 12;
+  - the C2 arms carry 39-54 % more log (39-53 % was the row rate); the
+    holds were 22.8 minutes;
+  - only the driver's wait gave up before the two isolated cells a build
+    reached, not both gates; `start` is the whole phase, not the append.
+- **Applied from its findings:**
+  - the read cores' zero latch wait under C1 is by construction (a tried
+    latch charges nothing); the evidence is now the scheduler's holds and
+    polls, added to the tables;
+  - "the stalls go, all of them" is "the stream-latch stalls go", with
+    the non-latch holds listed;
+  - `c2` r5's 24 samples are read as an unlogged checkpoint run's hold,
+    not as the build's, and `c1c2` r5's 8 as a foreground statement's;
+  - the pairs with no build on either side are given, and the bar is
+    stated as met as written, on a host builds reached;
+  - `--stall-cores` can only add stall samples where it fires, so
+    `levels`' count is not set beside CZ-S0's;
+  - the recycle's retry condition, the unlogged runs, the spike's
+    `tl_busy` defect (no effect on these runs) and the unbalanced arm
+    order are stated; the thesis was cut and the lists given one home.
+- **Rejected in part:** importing CZ-S0's loaders into `cz_s1.py`. The
+  copy stays, and the script says so, so that the archive stands alone;
+  its three unused names were removed.
+
+**For the operator.**
+1. S1's reading: C0, C1 or C1 with C2. CLA's: C1 alone, as CZ-Q3 (a) has
+   it.
+2. The word for CZ-S2 (the model on paper, no code).
+3. C2 outside CZ: the roll hold's median fell 44-fold and the bulk writer
+   gained 53 % at `relaxed` on ext4, with the cost it moves to a commit's
+   `fsync` not measured. Whether that is taken up, and under which order,
+   is the operator's; CZ does not build it (CZ-Q3 (a)).
