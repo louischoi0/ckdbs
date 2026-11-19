@@ -1434,6 +1434,7 @@ OptimizerSurface Expeditor::Optimizer() {
     surface.captured_plans = &captured_plans_;
     surface.admin_plans = &admin_plans_;
     surface.plan_advices = &plan_advices_;
+    surface.index_stats = &index_stats_;
     surface.cabin_optimizer_on = &cabin_optimizer_on_;
     if (cabin_controller_) {
         surface.controller = &*cabin_controller_;

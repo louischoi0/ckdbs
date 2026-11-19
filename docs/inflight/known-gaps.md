@@ -1913,6 +1913,31 @@ Owned by `docs/spec/sys-views.md` §6.1c, §6.6 and §7.
   and no cell checks that a process restart or a restore empties the store
   (an in-process restart keeps it, as it keeps the BO stores above).
 
+### Index and relation usage (DF-S3)
+
+Verified on `da-q8-memory-bound-key` (branch
+`worktree-df-statistics-coverage`) at the commit that adds this section.
+Owned by `docs/spec/sys-views.md` §6.2a and §6.2b.
+
+- **`sys.access_stats` has no `rows_examined` and `rows_matched`.** The
+  work order's part C names them; the row is a 33-byte persisted struct
+  until DA-S1 moves the store to memory, and widening it is a format event
+  DF does not make (DF-R1). Owed to DA.
+- **An index a write's `WHERE` subquery reads through is counted nowhere**:
+  that chain's counters are dropped where it runs. An index that reads 0
+  is therefore not proven unused by the count alone; neither is a unique
+  index, nor a foreign key's.
+- **`lock_deadlocks` is not every deadlock**: the two paths that write no
+  `sys.lock_waits` row (a victim whose slot had flipped, an online build's
+  drain) are in no column.
+- **The index store's latch is on an index-served read's path**, once per
+  index step of a recorded run, uncontended but for a reader of the view;
+  not measured - no cell of DF-S0's spike reached an index.
+- **No cell** counts an index step under an outer step (one walk a row of
+  the outer), a sub-chain's or a hoisted step's, or a step that named an
+  index and walked its relation instead (`indexes = off`, an index dropped
+  under a compiled chain); the two-core cell has not run under `tsan`.
+
 ## Wait events and ASH (CJ)
 
 Verified on `cj-wait-events-ash` at the milestone's close

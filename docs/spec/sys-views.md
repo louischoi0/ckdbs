@@ -101,10 +101,10 @@ returns only what it names, so that conjunct is not compared again.
 | `types` | engine | - | a registered type |
 | `patterns` | engine | - | a `sys.patterns` row - a shape ever opted in to Waystone (`waystone-concpets.md` §4): `oid`, `fetch_id` (decimal), `fingerprint_version`, `stmt_class`, `waystone`, `use_count`, `last_seen`, `waystone_root`, `dir_depth`. `waystone` (1 or 0) replaced `origin` and `pinned` at CF-S1b, and is 1 only for a current-version row with the opt-in bit set, so a lapsed row reads 0 and its `fingerprint_version` says why; `use_count`/`last_seen` frozen at 0 since BL-S4; root and depth NULL where the row has no directory |
 | `namespaces` | schema | - | a namespace, `sys` and `public` first |
-| `indexes` | schema | - | a secondary index, its keys, covered columns, height and entries |
+| `indexes` | schema | - | a secondary index, its keys, covered columns, height and entries, and how often it served a read (§6.2b) |
 | `fkeys` | schema | - | a declared foreign key, listed where its child is visible |
 | `access_stats` | engine | - | an access shape `(rel, kind, columns)` of `sys.access_stats` |
-| `relation_stats` | engine | - | a relation's Keystone budget, its tree's shape, the join planner's prior, and its write activity (§6.2) |
+| `relation_stats` | engine | - | a relation's Keystone budget, its tree's shape, the join planner's prior, its write activity (§6.2) and its lock waits (§6.2a) |
 | `cabins` | engine | - | a Cabin and its store counters |
 | `assertions` | engine | - | an assertion, whether it is enforcing, and its counters |
 | `transitions` | engine | - | a declared Transition, verbatim |
@@ -306,6 +306,61 @@ per core, counts every relation a core has written since the instance
 started, dropped ones included** (BO-Q15 (b)): past it, that core's writes
 of a relation new to it are dropped, the view under-counts the relation,
 and `relation_stats_dropped` above 0 says so.
+
+### 6.2a `sys.relation_stats`' lock waits (`stats/relation_stats.hpp`)
+
+`lock_waits`, `lock_wait_us`, `lock_deadlocks`, `lock_fault_nets`: the lock
+waits registered on a unit of the relation since the instance started,
+every core's summed - how many, their time, and how many of them ended
+`deadlock` and `fault_net`. **Counted where a `sys.lock_waits` row is
+written** (§6.3), from that row's relation, time and outcome, so the four
+keep what that ring has overwritten and are bounded by it in nothing else:
+what writes no row there is in none of them. `lock_deadlocks` summed is
+therefore the deadlocks that wrote a row, not every deadlock refusal - a
+victim whose slot had already flipped writes none, nor does an online index
+build's drain - and a wait a destroyed frame ended (`cancelled`) is in
+`lock_waits` and `lock_wait_us` alone. They share §6.2's store, part and
+bound: a relation's first wait on a core is that core's first sight of it.
+
+### 6.2b `sys.indexes`' usage (`stats/index_stats.hpp`)
+
+`probes`, `ranges`, `entries_scanned`, `rows_resolved`, `last_used`: how
+often each secondary index served a read since the instance started, every
+core's summed. Folded from the executor's per-step counters where a chain's
+run is recorded: for every step an index served, the times the step walked
+it between one pair of bounds - `probes` for an equality step, `ranges` for
+a range step - the entries it read there and the tuple keys it then
+descended for, and the instant of the latest such run; `last_used` is NULL
+for an index no read has used. **A walk is counted where the index is
+read**: an index step under another step counts once per row of the outer,
+a value list once per value (`index.md` IX8b), and a step that names an
+index and walks its relation instead - the `indexes` key off, the index
+dropped under a compiled chain, a correlated probe that could not key -
+counts nothing.
+
+**A run is folded when it completes.** A stopped run (a `LIMIT`) folds the
+prefix it ran; an `ANALYZE` runs its statement, and that run is a use like
+any other; a statement refused before or during its run folds nothing of
+it. Each relation walk of a query-layer statement is a run of its own, so
+a layer statement refused after a walk finished has folded that walk.
+
+**What is not a step is not counted.** A unique index's check descents and
+a foreign key's are not a step: `unique` is what says such an index is in
+use. A write's maintenance of an index is no use, and the dispatcher's walk
+of an `UPDATE`'s or a `DELETE`'s `WHERE` reads none; a write's own read
+through the query layer - `INSERT ... SELECT`'s source - is a run and is
+counted. The chain a write's `WHERE` subquery runs can be served by an
+index, and its counters are dropped where it runs, so that use is counted
+nowhere. `REINDEX` builds under a new oid, so a rebuilt index starts at 0.
+
+**The instance owns the store**, unlike §6's others: a restart, a restore
+and a second instance in one process each start empty with no reset. One
+part per core under its own latch (`stats/oid_parts.hpp`, §6.2's shape),
+the core a statement ran on its only
+writer; the one allocation is a part's first sight of an index. Bounded at
+4096 indexes a core, dropped ones included; past it a new index's counts
+are dropped and `index_stats_dropped` (`sys.meta`) says so. **Nothing reads
+a count**: no advisor, no automatic drop (DF-R3).
 
 ### 6.3 `sys.lock_waits` (`stats/lock_wait_log.hpp`)
 

@@ -2043,7 +2043,17 @@ newline protocol.
 - `sys.relation_stats`' activity columns: `inserts`, `updates`, `deletes`,
   `purged` - the rows each relation's write statements reported since the
   instance started (a statement counts when it answers, so rows a
-  transaction later rolls back stay counted).
+  transaction later rolls back stay counted) - and its lock columns:
+  `lock_waits`, `lock_wait_us`, `lock_deadlocks`, `lock_fault_nets`, the
+  lock waits on the relation since the instance started, which keep
+  counting after `sys.lock_waits` has overwritten the rows.
+- `sys.indexes`' usage columns: `probes` and `ranges` (the times an
+  equality or a range read walked the index), `entries_scanned`,
+  `rows_resolved` and `last_used` (NULL while no read has used it). An
+  index that stays at 0 is one no `SELECT` has read through - though a
+  unique index is still checked by every write, and a foreign key's checks
+  and a write's own maintenance are not counted either. `REINDEX` starts an
+  index's counts again.
 - `sys.lock_waits`: one row per lock wait, with what waited on what, for
   how long, and how it ended (`granted`, `deadlock`, `fault_net`,
   `cancelled`).

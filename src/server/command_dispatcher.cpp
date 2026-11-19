@@ -2523,6 +2523,10 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // relations a full part could not take, whose counts the view lacks.
     section("relation_stats");
     os << " relation_stats_dropped=" << stats::RelationStats::Dropped();
+    // **`sys.indexes`' usage store** (DF-S3), the instance's: new indexes a
+    // full part could not take, whose counts the view lacks.
+    section("index_stats");
+    os << " index_stats_dropped=" << index_stats_->Dropped();
     // **`sys.checkpoints`' store** (BO-S7), the instance's, as `lock_waits`'
     // above: what the view no longer holds, and why.
     section("checkpoints");
@@ -10068,6 +10072,33 @@ void CommandDispatcher::RecordExecution(const std::optional<StatementIdentity>& 
     RecordAccessShapes(chain);
     RecordOptimizerSignals(identity, chain, stats);
     RecordPlanStats(chain, stats);
+    RecordIndexUse(chain, stats);
+}
+
+void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
+                                       const exec::ExecStats& stats) {
+    // Every step an index served, sub-chains and hoisted ones included - a
+    // step's id is global to the statement, and so is `stats`. A chain with
+    // no index step, which is most, pays the walk and nothing else: the
+    // wall clock is read at the first one.
+    std::optional<std::int64_t> now_us;
+    exec::ForEachStep(chain, [&](const exec::Step& step) {
+        if (!step.index.has_value() || step.step_id >= stats.steps.size()) return true;
+        const exec::StepStats& counts = stats.steps[step.step_id];
+        // A step the run never reached - an outer step kept no row - and one
+        // that walked its relation instead (`StepStats::index_walks`) used
+        // nothing.
+        if (counts.index_walks == 0) return true;
+        if (!now_us.has_value()) now_us = exec::StatementContextNow().now_us;
+        stats::IndexUse use;
+        (step.kind == exec::AccessKind::kIndexRange ? use.ranges : use.probes) =
+            counts.index_walks;
+        use.entries_scanned = counts.index_entries_scanned;
+        use.rows_resolved = counts.index_rows_resolved;
+        use.last_used_us = *now_us;
+        index_stats_->Record(core_id_, step.index->index_oid, use);
+        return true;
+    });
 }
 
 void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,

@@ -563,7 +563,16 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
                   {"entry_width", kInt},
                   {"height", kInt},
                   {"entries", kInt},
-                  {"unique", kInt}});
+                  {"unique", kInt},
+                  {"probes", kInt},
+                  {"ranges", kInt},
+                  {"entries_scanned", kInt},
+                  {"rows_resolved", kInt},
+                  {"last_used", kTimestamp}});
+    // How often each index served a read since the instance started
+    // (DF-S3, `stats/index_stats.hpp` says what counts): every core's part
+    // summed, 0 for an index no read has used, `last_used` NULL then.
+    const std::unordered_map<catalog::Oid, stats::IndexUse> uses = index_stats_->Snapshot();
     auto rows = catalog_.ListIndexes(view_of);
     if (!rows.ok()) return rows.status();
     auto labels = RelationLabels::Read(catalog_, nullptr);
@@ -594,6 +603,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
             static_cast<std::uint16_t>(row.entry_width - row.key_width - index::kIndexTupleKeyWidth)};
         auto height = index::IndexHeight(page_store_, root, layout);
         auto entries = index::IndexEntryCount(page_store_, root, layout);
+        const auto used = uses.find(row.index_oid);
+        const stats::IndexUse use = used == uses.end() ? stats::IndexUse{} : used->second;
         view.rows.push_back(
             {Int(row.index_oid), Str(catalog::NameView(row.name)), Int(row.table_oid),
              labels.value().Namespace(row.table_oid), labels.value().Name(row.table_oid), Str(columns(row.key_cols.data(), row.nkeys)),
@@ -601,7 +612,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
              Int(root), Int(row.key_width),
              Int(row.entry_width), height.ok() ? Int(height.value()) : Null(),
              entries.ok() ? Int(entries.value()) : Null(),
-             Int((row.flags & catalog::kIndexFlagUnique) != 0 ? 1 : 0)});
+             Int((row.flags & catalog::kIndexFlagUnique) != 0 ? 1 : 0), Int(use.probes),
+             Int(use.ranges), Int(use.entries_scanned), Int(use.rows_resolved),
+             use.last_used_us == 0 ? Null() : Timestamp(use.last_used_us)});
     }
     return view;
 }
@@ -694,7 +707,11 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
                   {"inserts", kInt},
                   {"updates", kInt},
                   {"deletes", kInt},
-                  {"purged", kInt}});
+                  {"purged", kInt},
+                  {"lock_waits", kInt},
+                  {"lock_wait_us", kInt},
+                  {"lock_deadlocks", kInt},
+                  {"lock_fault_nets", kInt}});
     // The join planner's published prior and the snapshot it is from
     // (plan-stats.md §6): NULL where none is published. Read here for the
     // operator; the planner never reads this view.
@@ -740,7 +757,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
                              std::move(height), std::move(leaves), est_rows(obj.oid),
                              plan_snapshot != nullptr ? Int(plan_snapshot->generation())
                                                       : Null(),
-                             Int(a.inserts), Int(a.updates), Int(a.deletes), Int(a.purged)});
+                             Int(a.inserts), Int(a.updates), Int(a.deletes), Int(a.purged),
+                             Int(a.lock_waits), Int(a.lock_wait_us), Int(a.lock_deadlocks),
+                             Int(a.lock_fault_nets)});
     }
     return view;
 }

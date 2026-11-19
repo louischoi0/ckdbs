@@ -44,6 +44,7 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
+#include "kds/stats/index_stats.hpp"
 #include "kds/stats/lock_wait_log.hpp"
 #include "kds/stats/relation_stats.hpp"
 #include "kds/sched/clock.hpp"
@@ -468,6 +469,9 @@ struct OptimizerSurface {
     // The instance's `ADVISE PLAN` rows (`exec/plan_advice.hpp`, CX-S7). A
     // null leaves the dispatcher's own.
     exec::PlanAdvices* plan_advices = nullptr;
+    // The instance's index usage counts (`stats/index_stats.hpp`, DF-S3). A
+    // null leaves the dispatcher's own.
+    stats::IndexStats* index_stats = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
     const stats::CabinOptimizer* controller = nullptr;
     const exec::CabinOptimizerExecutor* executor = nullptr;
@@ -2145,6 +2149,7 @@ public:
         if (surface.captured_plans != nullptr) captured_plans_ = surface.captured_plans;
         if (surface.admin_plans != nullptr) admin_plans_ = surface.admin_plans;
         if (surface.plan_advices != nullptr) plan_advices_ = surface.plan_advices;
+        if (surface.index_stats != nullptr) index_stats_ = surface.index_stats;
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
         cabin_optimizer_view_latch_ = surface.view_latch;
@@ -2245,6 +2250,9 @@ private:
     // Folds a planned block's complete run into the planner's statistics
     // (docs/spec/plan-stats.md PS2, PS3).
     void RecordPlanStats(const exec::StepChain& chain, const exec::ExecStats& stats);
+    // What each index step of a recorded run did, into `sys.indexes`' usage
+    // counts (DF-S3, `stats/index_stats.hpp`).
+    void RecordIndexUse(const exec::StepChain& chain, const exec::ExecStats& stats);
     void RecordExecution(const std::optional<StatementIdentity>& identity,
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);
@@ -2722,6 +2730,9 @@ private:
     // `ADVISE PLAN`'s rows (CX-S7), on the same terms.
     exec::PlanAdvices own_plan_advices_;
     exec::PlanAdvices* plan_advices_ = &own_plan_advices_;
+    // `sys.indexes`' usage counts (DF-S3), on the same terms.
+    stats::IndexStats own_index_stats_;
+    stats::IndexStats* index_stats_ = &own_index_stats_;
     // `set_plan_stats`': the instance's store, and this core's view of it.
     stats::PlanStats* plan_stats_ = nullptr;
     stats::PlanStatsSource plan_source_;

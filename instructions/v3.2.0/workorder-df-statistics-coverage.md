@@ -10,7 +10,10 @@ reviewed, the full suite 0 failed of 4700 at `ee89842e`, overhead not
 measured, pushed with the hook skipped on the operator's word (§40).
 **DF-S2 is done** (§7): part B, started on the operator's word
 (`raft-marks-2026-11-19.md` §5), reviewed, the full suite 0 failed of 4766,
-overhead not measured, not pushed. **The rest of DF runs on the operator's
+overhead not measured, not pushed. **DF-S3 is done** (§7): part C - index
+usage and a relation's lock waits; the access shape's two columns owed to
+DA - reviewed, the full suite 0 failed of 4773, overhead not measured, not
+pushed. **The rest of DF runs on the operator's
 standing go-ahead of 2026-11-19** (§6 there, go-ahead-achieving-milestone):
 an item a stage raises is adopted as CLA proposes it and recorded in §4 as
 adopted on that word, never as the operator's own mark. Written on
@@ -365,6 +368,7 @@ operator's own mark.** (a) is CLA's proposal in each.
 | DF-Q18 | What `wait_aborts` takes beside a wait (DF-S2). DF-S0's census says a structural re-run ends the same way; DF-Q13 (a) names a wait. | the transaction an autocommit write gives up to run again after a stale descent is a `wait_abort` too: the statement did not fail | (b) it is an `abort` |
 | DF-Q19 | Where an explicit transaction's life ends (DF-S2). | where its end is handled - the `COMMIT`, the `ROLLBACK`, the listener's rollback - so a parked `strict` commit's wait for its sync is not in it | (b) at the commit's publish, a second site and a stamp carried across the park |
 | DF-Q20 | A KWP load stream's ends (DF-S2). Its listener dispatches `ROLLBACK` itself at five sites. | its own abort is `rollbacks`; a failed chunk and a frame not legal inside a load are `aborts`; a closed connection and a detaching listener are `close_rollbacks` | (b) all five the client's `rollbacks` |
+| DF-Q21 | What `probes` and `ranges` count (DF-S3). §2 names the columns and not their unit. | the times a step walked its index between one pair of bounds, counted where the index is read (`StepStats::index_walks`): once a row of the outer for a step under another, once a value for a value list, and nothing for a step that named an index and walked its relation instead | (b) the step's openings, which credit an index the run never read (`indexes = off`, an index dropped under a compiled chain) and count a value list of N values as one; (c) recorded statements, one a statement whatever it did |
 
 ## 5. Stages
 
@@ -1025,3 +1029,83 @@ and published, two words on the session, and a count where a transaction
 is decided. **Documents**: `sys-views.md`, `txn.md` §1,
 `manual/sql/sql.md`, `known-gaps.md` and `CLAUDE.md`'s observability row
 are amended with the stage. **Next: DF-S3**, part C.
+
+### DF-S3 - part C, 2026-11-19
+
+On the same worktree and branch, from `c2925b6e`, on the operator's
+standing go-ahead (`raft-marks-2026-11-19.md` §6).
+
+**What is built**, as `docs/spec/sys-views.md` §6.2a and §6.2b now state
+it. `sys.indexes` has five usage columns - `probes`, `ranges`,
+`entries_scanned`, `rows_resolved`, `last_used` - and `sys.relation_stats`
+four cumulative lock columns - `lock_waits`, `lock_wait_us`,
+`lock_deadlocks`, `lock_fault_nets`. **The access shape's two columns are
+not built and are owed to DA**: DA-S1 has not landed, the row is still a
+33-byte persisted struct, and widening it is a format event (DF-R1), as §5
+provides.
+
+**How.**
+
+- **Index usage** is folded in `CommandDispatcher::RecordIndexUse`, called
+  from `RecordExecution`, over every step of the chain `exec::ForEachStep`
+  visits, from the step's `StepStats`. The store, `stats::IndexStats`, is
+  the instance's: `Expeditor` owns one and hands it to every core through
+  `OptimizerSurface`, and a dispatcher handed none uses its own (DA-R6's
+  reason, as §2 asks). A chain with no index step pays the walk of its
+  steps and nothing else; the wall clock and the part's latch are touched
+  at the first index step that walked.
+- **`probes` and `ranges` are the index's walks** (DF-Q21 (a)), a new
+  per-step counter bumped where the index is sought,
+  `StepStats::index_walks`, printed nowhere.
+- **The lock columns** are counted in `LockWaitLog::Record`, the one place
+  a `sys.lock_waits` row is written, into `stats::RelationStats`, so they
+  keep what that ring overwrites.
+- **One store shape, once**: `stats::OidParts` is the latched, bounded,
+  per-core map by oid that `RelationStats` had and `IndexStats` needed; both
+  are built on it.
+
+**Reviewed by `critics-developer`**, report only, on the uncommitted tree.
+It checked that step ids and the `ExecStats` are the statement's at all
+three call sites, that only a completed run folds, that every lock wait
+row goes through the one call with no latch nested, and the store's
+lifetime against the cores that hold it. **Applied**: **one wrong count** -
+`probes` and `ranges` were the step's openings, and a step that names an
+index can walk its relation instead (the `indexes` key off, an index
+dropped under a compiled chain, a correlated probe that could not key),
+which credited an index the run never read; and a value list of N values
+counted one. Both are DF-Q21 (a)'s counter. `IndexStats` re-wrote the
+find-or-insert this stage had just factored out of `RelationStats`: one
+template, the second copy and the eight hand-listed merges deleted. In the
+documents: "a refused statement folds nothing" holds a run and not a
+statement, since each walk of a query-layer statement is a run; "a write
+uses none" was too strong for `INSERT ... SELECT`'s source; `ANALYZE`'s run
+is a use; `relation_stats.hpp`'s header still described writes alone.
+**Not taken**: a null pointer in place of each dispatcher's own store,
+6 KB a core the instance never uses - it is `own_plan_advices_`'s idiom.
+**Left unread by the review**: `SelectRun::Execute` whole and a KWP portal
+closed mid-run, the `UPDATE ... FROM`, `DELETE ... USING` and `SET`
+subquery paths, the allocation sweep's failure model
+(`tests/bs/alloc_sweep_test.cpp` reads `sys.indexes`, and
+`IndexStats::Snapshot` can throw there as `RelationStats::Snapshot` can),
+and the compiler's key set on an index.
+
+**Tests.** `tests/index_stats_test.cpp` (the store);
+`tests/index_usage_rig_test.cpp` on the two-core rig - an index no read
+names at 0 with `last_used` NULL, an equality read on each core summed in
+one row read from either, a value list one probe a value, a strict range
+walked and counted nowhere, an inclusive one a `range`, `ANALYZE`'s run a
+use, a write maintaining both indexes and using neither, a rebuilt index
+at 0; and the lock columns on `LockWaitsViewTest`'s granted, fault-net and
+deadlock cells, the first read again after the ring is emptied. **Owed**
+(`known-gaps.md`): a step under an outer step, a sub-chain's and a hoisted
+one's, a step that walked instead of reading its index; the two-core cell
+under `tsan`.
+
+**Suite.** The full suite - `ctest -LE bs-nightly` - 0 failed of 4773 on
+the tree this stage's commit holds (two disabled and two skipped, as
+before); before the review's fixes, 0 failed of 4773 too. **Overhead not
+measured; measured at the milestone's close** (DF-Q10 (a), DF-Q14 (a)): an
+index-served read pays the fold's latch once an index step, and every
+recorded `SELECT` the walk of its steps. **Documents**: `sys-views.md`,
+`index.md`, `manual/sql/sql.md`, `known-gaps.md` and `CLAUDE.md`'s
+observability row. **Next: DF-S4**, part D.

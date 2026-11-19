@@ -159,6 +159,12 @@ struct StepStats {
     std::uint64_t index_entries_scanned = 0;
     std::uint64_t index_entries_filtered = 0;
     std::uint64_t index_rows_resolved = 0;
+    // The times the step walked its index between one pair of bounds: one
+    // an opening of an equality or a range step, one a value of a key set
+    // (CU), and none where the step fell back to a walk of its relation -
+    // which `relation_opens` cannot tell from a use. Printed nowhere;
+    // `sys.indexes`' `probes` and `ranges` are folded from it (DF-S3).
+    std::uint64_t index_walks = 0;
 
     // Cabin (docs/spec/cabin.md §7's "ANALYZE narrates all three").
     //
