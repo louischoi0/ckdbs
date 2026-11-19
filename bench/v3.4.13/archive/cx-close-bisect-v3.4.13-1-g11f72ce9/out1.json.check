@@ -1,0 +1,14 @@
+{
+ "pk-point-read": {
+  "rows": 1,
+  "multiset_equal_all": true
+ },
+ "point-join-2rel": {
+  "rows": 1,
+  "multiset_equal_all": true
+ },
+ "point-join-3rel": {
+  "rows": 1,
+  "multiset_equal_all": true
+ }
+}

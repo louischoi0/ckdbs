@@ -1428,3 +1428,25 @@ On the operator's standing go-ahead of 2026-11-18 (go-ahead-achieving-milestone;
 - **Point statements are slower**: a point read and a two- and three-relation tuple key join lose 1.2 % to 2.0 % of throughput against A in two runs, above an A2 floor of 0.2 % to 0.9 %, at +0.4 to +0.8 µs of server CPU each. X is within the floor of A; Y (DF-S1, not CX) carries part; the rest falls in S3b-S7 and this run does not separate it. CLA read what S3b-S7 put on a point read - the one-relation plan gate (an atomic load), `CabinGate::For`'s early return and a pin's build check per rank, one routing compare for `ADVISE` - and names no cause of that size. **Not remedied within the milestone**: a bisect of `ee89842e..a32528a4` with a spike on `sys.statement_stats` would attribute it, and the milestone's measurement budget is spent; the landing waited for the operator's word on it, and **the operator's "push no verify" landed CX on `main` with the regression standing** (`raft-marks-2026-11-18.md` §49).
 - **The plan-lookup probes (CX-R6)**: an enabled join plan costs a point read or a tuple key join nothing resolvable; an enabled one-relation plan costs a point read +0.17 to +0.25 µs of CPU against a control's +0.06 to +0.11 µs - small, the same sign in both runs (`known-gaps.md`).
 - **Not measured**: `cores = 2` (the control moved 2.8 %, unresolved); the price of a capture from an empty snapshot, which CX-Q19 as built never makes (a shape defers for about a second instead, untimed); a point read under a plan that matches; a restart's `sys.plans` load.
+
+### The close regression bisected, 2026-11-19: it enters at DF-S1, and no CX stage is shown to carry any
+
+On the operator's word (`raft-marks-2026-11-19.md`), the bisect the close
+did not run: ten arms in one server lifetime - at CX's opening, after
+CX-S3a, after DF-S1, and at every stage from CX-S3b to `main` at `11f72ce9`,
+with two same-binary controls - then four server lifetimes of a DF-S1 knob
+spike (`bench/v3.4.13/results-cx-close-bisect-v3.4.13-1-g11f72ce9.md`,
+worktree `cx-close-regression-bisect` at `11f72ce9`). The regression is
+reproduced (+0.32, +0.39 and +0.53 µs of server CPU a point statement on
+`main` against A, pooled over the four lifetimes) and, in the lifetime that
+has the arms, enters at one step, `58d258a3` to `ee89842e`: DF-S1, merged
+into CX's span from DF's work branch. CX-S0 to CX-S3a are at zero (X - A:
+-0.13, +0.09, +0.11 µs pooled); CX-S3b to the close move by up to one and a
+half times the widest same-binary control in both directions and sum to
+nothing (B - Y: -0.01, -0.02, -0.21 µs, upper ends +0.21, +0.11, +0.10); CY
+adds nothing (M - B within 0.04 µs). **The close's reading that the later CX
+stages carried +0.29, +0.50 and -0.03 µs is withdrawn**: its Y and B were
+one process each over 12 rounds. CX-R6 (zero for the unmanaged point path)
+therefore holds for the state with no plan enabled at this method's
+resolution, 0.2 to 0.3 µs. What DF-S1's cost is made of is in
+`workorder-df-statistics-coverage.md` §7. `cores = 2` is still unresolved.

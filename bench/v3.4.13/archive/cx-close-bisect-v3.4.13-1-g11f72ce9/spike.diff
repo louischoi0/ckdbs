@@ -1,0 +1,53 @@
+--- src11f72ce9/src/server/command_dispatcher.cpp	2026-11-19 02:16:18.000000000 +0000
++++ srcK/src/server/command_dispatcher.cpp	2026-11-19 04:14:40.491642728 +0000
+@@ -1143,7 +1143,9 @@
+     statement_pattern_id_ = 0;
+     statement_plan_source_ = {};
+     statement_plan_label_.clear();
++#ifndef KDS_SPIKE_NO_COMPILE_NS
+     statement_head_ns_ = NowNs();
++#endif
+     statement_compile_ns_.reset();
+ 
+     DispatchOutcome outcome = body(active);
+@@ -1294,6 +1296,10 @@
+ 
+ CommandDispatcher::StatementHead CommandDispatcher::BeginStatement(Session* session) {
+     StatementHead head;
++#ifdef KDS_SPIKE_NO_SAMPLE
++    (void)session;
++    return head;
++#endif
+     // Asked, never made: a session no task books to has no statistics, and
+     // making them here would list it in `sys.session_state` for asking.
+     const sched::SessionWaitStats* const waits =
+@@ -1318,6 +1324,7 @@
+     const std::int64_t now_us = exec::StatementContextNow().now_us;
+ 
+     stats::StatementCost cost;
++#ifndef KDS_SPIKE_NO_COST
+     if (refused) {
+         // The code the client is told.
+         const StatusCode code = RefusalCodeOf(out);
+@@ -1345,6 +1352,9 @@
+         sched::FlushOnCpu();
+         cost.timed = sched::SampleSessionCost(*head.booked_to) - head.sample;
+     }
++#else
++    (void)head;
++#endif
+     stats::StatementStats::Record(core_id_, out.fetch_id, line, refused,
+                                   now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0, now_us,
+                                   out.plan_source, out.plan_label, cost);
+--- src11f72ce9/include/kds/server/command_dispatcher.hpp	2026-11-19 02:16:18.000000000 +0000
++++ srcK/include/kds/server/command_dispatcher.hpp	2026-11-19 04:14:40.491642728 +0000
+@@ -978,6 +978,9 @@
+     // (DF-S1). Its own compile, so a later one - an UPDATE's WHERE after its
+     // SET subquery's - replaces an earlier.
+     void NoteStatementCompiled() noexcept {
++#ifdef KDS_SPIKE_NO_COMPILE_NS
++        return;
++#endif
+         const sched::MonoTimeNs now_ns = NowNs();
+         statement_compile_ns_ = now_ns > statement_head_ns_ ? now_ns - statement_head_ns_ : 0;
+     }

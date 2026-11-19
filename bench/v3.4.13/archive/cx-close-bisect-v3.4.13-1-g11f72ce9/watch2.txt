@@ -1,0 +1,23 @@
+2026-11-19T04:18:47Z 
+2026-11-19T04:19:47Z 2026-11-19T04:19:46Z round 3/12 point-join-3rel X elapsed 52s
+2026-11-19T04:20:47Z 2026-11-19T04:20:47Z round 6/12 point-join-3rel M elapsed 113s
+2026-11-19T04:21:47Z 2026-11-19T04:21:47Z round 9/12 point-join-3rel KC elapsed 173s
+2026-11-19T04:22:47Z 2026-11-19T04:22:46Z round 12/12 pk-point-read M elapsed 233s
+2026-11-19T04:23:47Z 2026-11-19T04:23:46Z round 1/12 point-join-3rel A elapsed 22s
+2026-11-19T04:24:47Z 2026-11-19T04:24:46Z round 3/12 point-join-2rel X elapsed 82s
+2026-11-19T04:25:47Z 2026-11-19T04:25:46Z round 5/12 pk-point-read KC elapsed 143s
+2026-11-19T04:26:47Z 2026-11-19T04:26:47Z round 7/12 pk-point-read M elapsed 204s
+2026-11-19T04:27:48Z 2026-11-19T04:27:47Z round 9/12 pk-point-read KC elapsed 263s
+2026-11-19T04:28:48Z 2026-11-19T04:28:46Z round 11/12 pk-point-read KALL elapsed 323s
+2026-11-19T04:29:48Z 2026-11-19T04:29:47Z DONE
+2026-11-19T04:30:48Z 2026-11-19T04:30:47Z round 3/12 point-join-3rel X elapsed 52s
+2026-11-19T04:31:48Z 2026-11-19T04:31:47Z round 6/12 point-join-3rel KALL elapsed 112s
+2026-11-19T04:32:48Z 2026-11-19T04:32:47Z round 9/12 point-join-3rel KALL elapsed 172s
+2026-11-19T04:34:09Z 
+2026-11-19T04:35:09Z 2026-11-19T04:35:09Z round 3/12 point-join-3rel KS elapsed 53s
+2026-11-19T04:36:09Z 2026-11-19T04:36:09Z round 6/12 point-join-3rel A elapsed 113s
+2026-11-19T04:37:09Z 2026-11-19T04:37:09Z round 10/12 pk-point-read M elapsed 173s
+2026-11-19T04:38:09Z 2026-11-19T04:38:07Z DONE
+2026-11-19T04:39:09Z 2026-11-19T04:39:08Z round 3/12 point-join-3rel KS elapsed 53s
+2026-11-19T04:40:09Z 2026-11-19T04:40:09Z round 6/12 point-join-3rel A elapsed 113s
+2026-11-19T04:41:09Z 2026-11-19T04:41:09Z round 10/12 pk-point-read M elapsed 174s

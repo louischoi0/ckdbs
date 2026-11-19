@@ -854,3 +854,33 @@ differently from §2 and marked none; they stand as CLA's until one is.
 The cells §5 owes for part A and the two-core cell's `tsan` run are still
 owed (`known-gaps.md`). **The session handed off here. Next: DF-S2**, part
 B - not started, and it starts on the operator's word.
+
+### DF-S1's overhead measured, 2026-11-19
+
+DF-S1 landed with its overhead unmeasured. It is measured now, by the
+bisect of CX's close regression
+(`bench/v3.4.13/results-cx-close-bisect-v3.4.13-1-g11f72ce9.md`, worktree
+`cx-close-regression-bisect` at `11f72ce9`): **that regression enters at
+DF-S1's step**, in the one server lifetime measured with an arm at every
+stage (`58d258a3` to `ee89842e`: +0.25, +0.57 and +0.79 µs of server CPU on
+a point read and a two- and three-relation tuple key join, `cores = 1`).
+Pooled over four lifetimes, `main` at `11f72ce9` costs +0.44, +0.31 and
++0.39 µs more than `58d258a3`, 0.7 to 0.8 % of throughput against CX's
+opening commit. That is at and above the top of DF-S0's forecast (+0.11 to
++0.35 µs, which priced no join cell). **Against DF-Q10 (a)'s 0.5 µs it is
+under by the pooled median and not resolved from it**: the pooled intervals
+reach +0.54 and +0.57 µs, and the single lifetime's step is over the bar on
+both joins. Whether the part is over the bar is the operator's reading.
+
+A spike that compiles the per-statement pieces out (`spike.diff` in that
+file's archive) says: the compile-time clock (`NoteStatementCompiled`) costs
+nothing measurable; the session cost sample at the head and the end
+(`BeginStatement`, and `RecordStatement`'s second `FlushOnCpu` and
+`SampleSessionCost`) is the likeliest carrier, at a plausible +0.1 to
++0.3 µs, and is not separated from what a binary's layout moves (0.2 to
+0.3 µs); what no knob removes - the wider `DispatchOutcome`, the latency
+bucket, the emit loop's count, `ExaminedBy` - is not resolved. **Not
+measured**: a write's share (`BookLogAppend` is reached by no `SELECT`),
+`cores` above 1, and any remedy. A cheaper sample - class totals kept
+where a wait is booked - is CLA's proposal in that file and nothing is built
+on it: it is the operator's to open.
