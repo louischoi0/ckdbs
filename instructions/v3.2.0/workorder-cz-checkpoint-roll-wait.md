@@ -1,8 +1,13 @@
 # Work order CZ - a checkpoint that does not hold its reactor on a segment roll: the premise measured before anything is built
 
 Status: **OPENED 2026-11-18; CZ-S0, CZ-S1 and CZ-S2 done; S1 read as C1
-alone; CZ-S2's items CZ-Q14 to CZ-Q22 marked (a) (§43 there), CZ-S3 not
-opened and not started, the session handed off** on
+alone; CZ-S2's items CZ-Q14 to CZ-Q22 marked (a) (§43 there); CZ-S3 and
+CZ-S4 opened on the operator's W29 (§50 there), every later item to CLA's
+proposal and a gate not met stopping the order; CZ-S3 built; CZ-S4 done,
+every gate met - CLOSED 2026-11-18 with C1 built** (§7, "CZ-S3" and
+"CZ-S4"), **landed on `main` 2026-11-19 with the hook skipped on the
+operator's word, the merged tree not suite-run**
+(`raft-marks-2026-11-19.md` §2; §7, "Landed"), on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* S0
@@ -738,6 +743,157 @@ inference against the logs.
 on the prewrite, and not C2 as it stands. It is
 `workorder-dg-wal-segment-body.md`, written and not opened; the letter DG
 is CLA's proposal.
+
+### CZ-S3 - the build, 2026-11-18
+
+On worktree `cz-checkpoint-roll-wait`, from `origin/main` at `9712f5f0`
+(`v3.4.12-112-g9712f5f0`), on the operator's W29
+(`raft-marks-2026-11-18.md` §50). **The model of §8, built as written**,
+with the departures below. **The three parts were built as one step, not
+three** (§5 lists S3a, S3b and S3c): the tried entries on `WalStream` and
+`WalManager` serve all three, so one review and one suite cover them;
+CLA's choice, stated here.
+
+- **What is built**: `WalStream::TryAppend`, `TryFlush`, `TryDetachBelow`
+  and the roll flag (`rolling()`, a scope guard in `AppendLocked`'s roll
+  branch); a try form of `LatchGuard`; `WalManager::TryAppend` (a full
+  ring drained by the tried flush), `TryRequestSyncNow` (busy: the writer
+  asked for `flushed_lsn()`, the D3 clock unstamped) and
+  `RecycleBelow(lsn, tried)`; the cadence task's begin site (the roll flag
+  first, then `Start(bool*)`), end site and flush site, each to one bound
+  of 16 busy answers a run, then the blocking entry at once; `ParkOnBusy`
+  (1 s ceiling on a roll, 1 ms otherwise, the stop, and the durable LSN at
+  the flush site), booked as `sysio.wal_roll`; the recycle through
+  `CheckpointAnchor::Commit`, which now answers a `RecycleOutcome`, and
+  `SuperBlockCheckpointAnchor`'s skips in a row, bounded at 16; the run
+  line's per-site counters, the assertion visit's time and the recycle's
+  skips. The texts of §8.9 but the close's.
+- **Departures, each CLA's**:
+  - the bound at the flush site is the run's: once its 16 busy answers are
+    spent, every later flush of the run is blocking, each counted in
+    `latch_flush_bound`;
+  - `start_n` on the run line counts `Start`'s attempts, busy ones
+    included;
+  - §8.8 item 11 is a unit test of the anchor's bound and of the tried
+    detach on a held latch and a flush in flight, not a run of
+    `two_core_rig`'s cadence; item 4 is two tests, the drain ending a peer's
+    park and core 0's D3 clock at the manager;
+  - `sim/instance.cpp`'s recycler gains the new signature and is never
+    asked to try (CZ-Q20 (a) leaves the simulator's behaviour untouched).
+- **Tests**: `tests/checkpoint_roll_park_test.cpp`, 18 tests over §8.8's
+  items 1-13 with 1b (a busy begin record retakes its snapshot) and 6b (the
+  bound at the flush site); `SuperBlockAnchorTest.ARecycleSkippedSixteenTimesInARowIsTakenBlocking`;
+  the registry and view tests count 21 events. Five repeats of the new and
+  neighbouring tests passed.
+- **Suite**: the full Debug suite, **0 failed of 4727** on the reviewed
+  tree (2 disabled, 2 skipped); the tree before the review ran 0 failed of
+  4726. Overhead not measured; measured at the milestone's close.
+
+**Reviewed by `critics-developer`** against §8 and the source, before the
+commit.
+- **Fixed by the review**: the flush site's bound was counted per call of
+  `ParkOnLog`, not per run (a run parks on the log once per begin,
+  deferred step, end and publish write); the fixture's rebuild freed the
+  old log device while the old writer thread could be inside it.
+- **Applied from its findings**: no park after the sixteenth busy answer
+  (§8.8 item 6); `TryRequestSyncNow` and `RequestSyncNow` share one body;
+  `FlushAttempt` holds one optional guard; a flush-site bound test (6b).
+- **Found while applying them**: the fixture left the test thread named
+  core 1, which aborted a later test in the binary; `TearDown` names it
+  core 0 again.
+- **Rejected**:
+  - folding the three sites' loops into one helper coroutine: the begin
+    site's roll-flag test, the flush site's durable exit and its
+    `DurableWait` differ, and a helper over callables would carry them as
+    parameters; the three loops stay, each about twenty lines;
+  - merging `RecycleOutcome::kNone` and `kDone`: they are two facts of the
+    anchor's, and the anchor's test reads them;
+  - a public accessor in place of the test's `At()`: one test helper.
+- **Left as gaps, stated**: test 2 cannot by itself catch a durable point
+  asked above `flushed_lsn()` under a roll, where the seal has flushed the
+  ring - test 3's second try is what would break; the end site's blocking
+  path is not reached by a test.
+
+### CZ-S4 - the close, 2026-11-18
+
+On worktree `cz-checkpoint-roll-wait`, B at `74861601`
+(`v3.4.12-113-g74861601`) against A at `9712f5f0`, the commit CZ-S3
+branched from. **Results:
+`bench/v3.4.12/results-cz-close-v3.4.12-113-g74861601.md`.** 34 cells
+and the overhead, every one rc=0 with 0 errors. No cell found a competing
+build. 16.1 minutes of building and running, inside the hour; the
+script's quiet gate held 20 s and the driver's load gate 120 s, both
+inside those minutes.
+
+| gate | item | reading | |
+|---|---|---|---|
+| V1 | CZ-Q1 (a) | B 1.55x the isolated median, 5 of 5 pairs within 2x (A: 3.17x, 2 of 5) | **met** |
+| the bulk cell | CZ-Q2 (a), at most 3 % lost | 0.999 of A, median of 5 | **met** |
+| the overhead | Session Workflow step 3 | every shape at `cores = 1` inside the A2 floor or below it; at `cores = 4` C3 and V1's inserter equal | **no regression** |
+| BL's bar (v) | CZ-Q6 (a) | the same reading as V1 | met in this cell |
+| beside the bar | CZ-Q11 (a) | p99.9 4.3 ms against 63.2 ms; stall samples 3 against 114 | reported |
+| the checkpoint | CZ-Q2 (a) | wall 1.0-1.6 s median; live segments 14, nothing recycled in a B window; the bound never reached; 1 recycle skipped in the 12 runs inside the windows | reported |
+| `group` | CZ-Q5 (a) | B 1.31x, A 1.36x, 3 of 3 each | reported |
+
+- **What the close leaves**: B r4's one 56.2 ms system poll on a read
+  core, inside that core's checkpoint run with no blocking latch entry
+  (the results file's §2), is not attributed. The run line rules out a
+  page write (CZ-Q12; the run's longest 500 µs) and the inline gate (not
+  taken); the park's flush (CZ-Q21 (a)) or an untimed part of the run's
+  completion is left.
+- **The texts the close owed**: `CLAUDE.md`'s WAL row, `known-gaps.md`'s
+  roll entry and BL-R7's remainder, and BL's §6 ("Bar (v) re-measured by
+  CZ's close"). BL is not reopened.
+- **Reviewed by `critics-developer`** against the raw data before the
+  commit. It re-ran both table scripts, which reproduce the tables, and
+  checked every cell's binary hash and its 0 errors. **No gate's verdict
+  moved.**
+  - **Corrected by the review**:
+    - A's roll-hold range (231-296 ms, not B's 249-254 ms);
+    - the overhead's largest cost not excluded is `update-in64`'s, about
+      +3.8 %, not `select-pk`'s +3.2 %;
+    - the recycle was skipped once in B's 12 runs in the V1 windows, not
+      25, and once more in a C3 cell;
+    - A's excess is a little narrower than CZ-S1's, not wider;
+    - the driver's own load gate held another 120 s;
+    - the busy answers are a window's, not a run's;
+    - A's read cores waited at most 8 µs at `group`, not nothing.
+  - **Applied from its findings**:
+    - B's zero latch wait is true by construction, and the run line's
+      blocking time is the evidence;
+    - B r4's poll is not a page write or the inline gate, by that run's
+      own line;
+    - the 14 live segments are every segment written: nothing was
+      recycled in a B window;
+    - the rotation's part in A's segment counts is not shown;
+    - BL's "is gone" softened to the 3 samples left;
+    - count cells carry their units (`bench/README.md`).
+  - **Method, stated and not re-run**: `isolated-B` ran first in every
+    run and was never rotated. Against the isolated median, B's pairs
+    are 1.31-1.95x, still 5 of 5. The margin is thin: r4 is 1.98x against
+    its own pair, and the worst cross-pairing is 2.09x.
+  - **Rejected**: cutting §2's in-run-hold and roll columns, which are the
+    evidence the bullets under that table read.
+
+### Landed, 2026-11-19
+
+On the operator's word (`raft-marks-2026-11-19.md` §2): *"Push CZ, C1
+only, no verify."* `origin/main` at `11f72ce9` (`v3.4.13` and the tag's
+record; CX and CY behind it) was merged into this branch at `44de9abc`,
+and that tree was pushed to `main` with `--no-verify`.
+
+- **The merge**: conflicts in `instructions/v3.2.0/index.md` and
+  `raft-marks-2026-11-18.md` only, both sides kept; the section that
+  opened CZ-S3 and CZ-S4, written as §47, is §50 there. Git merged
+  `src/server/expeditor.cpp` and `tests/CMakeLists.txt` with no conflict.
+- **C1 alone**: C2 is not in the push. `src/wal/file_log_device.cpp` is
+  unchanged, and `worktree-cz-s1-spike` is not merged.
+- **Not executed**: the full suite on the merged tree. It ran 0 failed of
+  4727 at `74861601`'s build inputs, before CX and CY were on `main`; the
+  Debug build of `44de9abc` was about half done when the operator asked
+  for the push at once. No review of the merge was run. The overhead is
+  the close's, on `74861601` against `9712f5f0`.
+- **Owed**: the full suite at `44de9abc`'s build inputs.
 
 ## 8. The model for C1 (CZ-S2) `[design]`
 

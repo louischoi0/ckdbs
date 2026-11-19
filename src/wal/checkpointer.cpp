@@ -16,7 +16,7 @@ Checkpointer::Checkpointer(WalManager& wal, CheckpointTarget& target, ActiveTran
     : wal_(wal), target_(target), txns_(txns), anchor_(anchor), config_(config) {}
 
 Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
-                              std::span<const CheckpointDirtyPage> dirty_pages) {
+                              std::span<const CheckpointDirtyPage> dirty_pages, bool* busy) {
     // **The dirty table is cut to what one record carries** (wal.md §11-1),
     // keeping the highest page id - the allocation floor analysis takes from
     // a recLSN-0 page, which no record names; the redo start and the
@@ -43,11 +43,13 @@ Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
         return encoded.status();
     }
 
-    auto lsn = wal_.Append({RecordType::kCheckpointBegin, kNoTxnId, kInvalidPageId},
-                           std::span(payload_scratch_).first(encoded.value()));
+    const RecordSpec spec{RecordType::kCheckpointBegin, kNoTxnId, kInvalidPageId};
+    const std::span<const std::byte> payload = std::span(payload_scratch_).first(encoded.value());
+    auto lsn = busy != nullptr ? wal_.TryAppend(spec, payload, busy) : wal_.Append(spec, payload);
     if (!lsn.ok()) {
         return lsn.status();
     }
+    if (busy != nullptr && *busy) return Status::OK();  // nothing appended
     begin_lsn_ = lsn.value();
     return Status::OK();
 }
@@ -183,7 +185,10 @@ Status Checkpointer::LogAssertionSnapshots() {
         });
 }
 
-Status Checkpointer::Start() {
+Status Checkpointer::Start() { return Start(nullptr); }
+
+Status Checkpointer::Start(bool* busy) {
+    if (busy != nullptr) *busy = false;
     if (in_progress_) {
         return Status::AlreadyExists("checkpointer: a checkpoint is already in progress");
     }
@@ -192,10 +197,14 @@ Status Checkpointer::Start() {
 
     // Both tables are snapshotted before the record is written, so what
     // BEGIN carries is exactly what recovery's analysis phase will see.
+    // **No suspension lies between them and the append** (CZ-R3): a tried
+    // append that answers busy appends nothing, and the task's next call
+    // takes both again, so the record describes the instant it is appended
+    // at in every attempt.
     const std::vector<CheckpointActiveTxn> active_txns = txns_.Snapshot();
     const std::vector<CheckpointDirtyPage> dirty = target_.DirtyTable();
 
-    if (Status s = LogBegin(active_txns, dirty); !s.ok()) {
+    if (Status s = LogBegin(active_txns, dirty, busy); !s.ok()) {
         // BI-S1 counts it: the BEGIN ceiling refuses here, at the append.
         // Only a gated run's, like every other census field.
         if (run_report_ != nullptr) {
@@ -203,12 +212,24 @@ Status Checkpointer::Start() {
         }
         return s;
     }
+    // Busy is not a refusal: not counted in `start_refused`.
+    if (busy != nullptr && *busy) return Status::OK();
 
     // AS6a's base, immediately after BEGIN: ahead of every ASSERT_* record that
     // will be folded onto it, and inside the checkpoint the anchor names, which
     // is what lets replay find it without scanning to the cabin's birth.
-    if (Status s = LogAssertionSnapshots(); !s.ok()) {
-        return s;
+    // **Blocking, inside the directory latch's one hold** (CZ-Q16 (a),
+    // `[quiet-wrong]`): a run is a base only whole and its pending list is
+    // read only directly behind it, so a task that gave up part-way would
+    // leave undecided reservations no mount compensates. The visit's whole
+    // time is counted.
+    {
+        const sched::MonoTimeNs visit = wal_.clock().Now();
+        const Status s = LogAssertionSnapshots();
+        if (run_report_ != nullptr && assertions_ != nullptr) {
+            run_report_->assertion_visit_ns += wal_.clock().Now() - visit;
+        }
+        if (!s.ok()) return s;
     }
 
     // Redo start: the oldest LSN any page in the snapshot still needs
@@ -218,9 +239,15 @@ Status Checkpointer::Start() {
     // in. With no logged page in the snapshot, nothing before this
     // checkpoint matters and the redo start is the checkpoint itself.
     //
-    // Pages dirtied *after* this point need no special handling: their
+    // Pages dirtied after the record need no special handling: their
     // recLSNs are necessarily above begin_lsn_, which is itself an upper
-    // bound on what this computes.
+    // bound on what this computes. **Not so between the snapshot and the
+    // append at `cores > 1`** (CZ-S0's census): another core can dirty and
+    // log a page there, below begin_lsn_ and absent from the snapshot. Two
+    // things cover it - the fold, whose minimum keeps that core's own last
+    // redo start, below this record, until its next run snapshots the page;
+    // and the publish, which writes every page dirty before the anchor's
+    // page. Both rest on no core yielding between an append and its stamp.
     // §11-3's rule lives in RedoStartFrom (wal/analysis.hpp), shared with
     // recovery's analysis phase, which recomputes the same number backward
     // from the table it rebuilds. Two copies of "skip a recLSN of 0" is two
@@ -315,7 +342,8 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
     return next_page_ >= pending_pages_.size();
 }
 
-StatusOr<Lsn> Checkpointer::AppendEnd() {
+StatusOr<Lsn> Checkpointer::AppendEnd(bool* busy) {
+    if (busy != nullptr) *busy = false;
     if (!in_progress_) {
         return Status::OutOfRange("checkpointer: no checkpoint in progress");
     }
@@ -335,8 +363,9 @@ StatusOr<Lsn> Checkpointer::AppendEnd() {
     if (!encoded.ok()) {
         return encoded.status();
     }
-    return wal_.Append({RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId},
-                       std::span(payload_scratch_).first(encoded.value()));
+    const RecordSpec spec{RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId};
+    const std::span<const std::byte> payload = std::span(payload_scratch_).first(encoded.value());
+    return busy != nullptr ? wal_.TryAppend(spec, payload, busy) : wal_.Append(spec, payload);
 }
 
 Status Checkpointer::Complete() {
@@ -469,8 +498,38 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // **One synchronous call per poll** (BI-R1): `Start`, each `Step`, and
     // `Complete`, a yield after each. A failed one ends the task with the
     // run left in progress; the next tick's task resumes it.
+    //
+    // **The begin record is tried** (CZ-S3, C1b): on a roll the task parks
+    // before it snapshots anything, so no snapshot is taken to be thrown
+    // away; a tried `Start` that finds the latch held appends nothing and is
+    // called again after the park, snapshots and all (CZ-R3). Each busy
+    // answer, the roll flag's included, counts against `kLatchTries`.
     if (!in_progress_) {
-        if (Status s = Start(); !s.ok()) co_return FinishTask(core_id, s);
+        CheckpointRunReport::LatchSite& site = Site(CheckpointLatchSite::kBegin);
+        for (int answers = 0;; ++answers) {
+            bool busy = false;
+            if (answers < kLatchTries) {
+                busy = wal_.rolling();
+                if (!busy) {
+                    if (Status s = Start(&busy); !s.ok()) co_return FinishTask(core_id, s);
+                }
+            } else {
+                ++site.bound;
+                const sched::MonoTimeNs blocked = wal_.clock().Now();
+                const Status s = Start();
+                site.blocking_ns += wal_.clock().Now() - blocked;
+                if (!s.ok()) co_return FinishTask(core_id, s);
+            }
+            if (!busy) break;
+            ++site.busy;
+            // The sixteenth busy answer is the last: the blocking entry next,
+            // with no park before it (§8.8 item 6).
+            if (site.busy >= static_cast<std::uint64_t>(kLatchTries)) continue;
+            if (Status s = co_await ParkOnBusy(CheckpointLatchSite::kBegin, kNoLsn, generation); !s.ok()) {
+                co_return FinishTask(core_id, s);
+            }
+            if (generation != task_generation_) co_return Status::OK();
+        }
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
     }
@@ -479,7 +538,7 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // that record a step defers only for a page changed since - where a park per step cost each of a run's steps a
     // reactor iteration, and under load an iteration is a statement long.
     if (!wal_.IsDurable(begin_lsn_)) ++task_report_.gate_parks;
-    if (Status s = co_await ParkOnLog(begin_lsn_, core_id); !s.ok()) {
+    if (Status s = co_await ParkOnLog(begin_lsn_, core_id, generation); !s.ok()) {
         co_return FinishTask(core_id, s);
     }
     if (generation != task_generation_) co_return Status::OK();
@@ -507,7 +566,7 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
             }
             ++parks;
             ++task_report_.gate_parks;
-            if (Status s = co_await ParkOnLog(deferred, core_id); !s.ok()) {
+            if (Status s = co_await ParkOnLog(deferred, core_id, generation); !s.ok()) {
                 co_return FinishTask(core_id, s);
             }
             if (generation != task_generation_) co_return Status::OK();
@@ -519,11 +578,40 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
         if (done.value()) break;
     }
 
-    // `CHECKPOINT_END`, durable before anything points at it.
-    auto end_lsn = AppendEnd();
-    if (!end_lsn.ok()) co_return FinishTask(core_id, end_lsn.status());
-    if (!wal_.IsDurable(end_lsn.value())) ++task_report_.end_parks;
-    if (Status s = co_await ParkOnLog(end_lsn.value(), core_id); !s.ok()) {
+    // `CHECKPOINT_END`, durable before anything points at it. **Tried**
+    // (CZ-S3, C1b): no snapshot is behind it, so a busy answer parks and
+    // appends again, to `kLatchTries` answers and then the blocking append.
+    Lsn end_lsn = kNoLsn;
+    {
+        CheckpointRunReport::LatchSite& site = Site(CheckpointLatchSite::kEnd);
+        for (int answers = 0;; ++answers) {
+            bool busy = false;
+            StatusOr<Lsn> appended = kNoLsn;
+            if (answers < kLatchTries) {
+                appended = AppendEnd(&busy);
+            } else {
+                ++site.bound;
+                const sched::MonoTimeNs blocked = wal_.clock().Now();
+                appended = AppendEnd();
+                site.blocking_ns += wal_.clock().Now() - blocked;
+            }
+            if (!appended.ok()) co_return FinishTask(core_id, appended.status());
+            if (!busy) {
+                end_lsn = appended.value();
+                break;
+            }
+            ++site.busy;
+            // The sixteenth busy answer is the last: the blocking entry next,
+            // with no park before it (§8.8 item 6).
+            if (site.busy >= static_cast<std::uint64_t>(kLatchTries)) continue;
+            if (Status s = co_await ParkOnBusy(CheckpointLatchSite::kEnd, kNoLsn, generation); !s.ok()) {
+                co_return FinishTask(core_id, s);
+            }
+            if (generation != task_generation_) co_return Status::OK();
+        }
+    }
+    if (!wal_.IsDurable(end_lsn)) ++task_report_.end_parks;
+    if (Status s = co_await ParkOnLog(end_lsn, core_id, generation); !s.ok()) {
         co_return FinishTask(core_id, s);
     }
     if (generation != task_generation_) co_return Status::OK();
@@ -578,7 +666,14 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
         if (generation != task_generation_) co_return Status::OK();
         if (Status s = co_await ParkOnDataSync(); !s.ok()) co_return FinishTask(core_id, s);
         if (generation != task_generation_) co_return Status::OK();
-        anchor_.Commit();
+        // The recycle it owes, tried (C1c): skipped on a busy latch, and
+        // counted either way it went past the try.
+        switch (anchor_.Commit()) {
+            case RecycleOutcome::kSkipped: ++task_report_.recycle_skips; break;
+            case RecycleOutcome::kBlocked: ++task_report_.recycle_blocked; break;
+            case RecycleOutcome::kNone:
+            case RecycleOutcome::kDone: break;
+        }
     }
     Published(anchor);
     co_return FinishTask(core_id, Status::OK());
@@ -629,15 +724,79 @@ sched::Coro Checkpointer::WriteForPublish(std::span<const PageId> pages, std::ui
             continue;
         }
         ++task_report_.gate_parks;
-        if (Status s = co_await ParkOnLog(deferred, core_id); !s.ok()) co_return s;
+        if (Status s = co_await ParkOnLog(deferred, core_id, generation); !s.ok()) co_return s;
         if (generation != task_generation_) co_return Status::OK();
     }
 }
 
-sched::Coro Checkpointer::ParkOnLog(Lsn lsn, std::uint32_t core_id) {
+sched::Coro Checkpointer::ParkOnBusy(CheckpointLatchSite site, Lsn durable,
+                                     std::uint64_t generation) {
+    const bool on_roll = wal_.rolling();
+    const sched::MonoTimeNs parked = wal_.clock().Now();
+    const sched::MonoTimeNs deadline = parked + (on_roll ? kRollParkCeilingNs : kBusyParkNs);
+    const std::function<bool()> ended = [this, on_roll, deadline, durable] {
+        if (wal_.stopped() || wal_.clock().Now() >= deadline) return true;
+        if (durable != kNoLsn && wal_.IsDurable(durable)) return true;
+        return on_roll && !wal_.rolling();
+    };
+    CheckpointRunReport::LatchSite& counted = Site(site);
+    if (on_roll) ++counted.roll_parks;
+    if (!ended()) {
+        sched::WaitScope wait(stats::WaitEvent::kSysioWalRoll, static_cast<std::uint64_t>(site),
+                              on_roll ? 1u : 0u);
+        co_await sched::WaitUntil{&ended};
+    }
+    if (generation != task_generation_) co_return Status::OK();
+    counted.park_ns += wal_.clock().Now() - parked;
+    // The stop ends every park, and the task ends with it (CZ-R8).
+    co_return wal_.stopped() ? LogStopped() : Status::OK();
+}
+
+sched::Coro Checkpointer::ParkOnLog(Lsn lsn, std::uint32_t core_id, std::uint64_t generation) {
     if (wal_.IsDurable(lsn)) co_return Status::OK();
     if (wal_.stopped()) co_return LogStopped();
-    if (Status s = wal_.RequestSyncNow(); !s.ok()) co_return s;
+    // **The flush is tried** (C1a, CZ-Q14 (a) and CZ-Q15 (a)). Busy, the
+    // writer was asked for `flushed_lsn()` alone (`TryRequestSyncNow`), and
+    // the park below is also the durability park: under a roll it ends
+    // durable, the roll's seal having flushed the ring and its sync
+    // published it, with no second try; on any other holder it ends after
+    // 1 ms and the flush is tried again. Core 0's drain, which flushes the
+    // whole ring within `relaxed_flush_interval`, is the backstop the model
+    // does not rest on.
+    {
+        // The bound is the run's at this site (CZ-Q15 (a), "one bound of 16"),
+        // not this call's: a run parks on the log once per begin, deferred
+        // step, end and publish write, so a per-call count would let one run
+        // take 16 busy answers at each.
+        CheckpointRunReport::LatchSite& site = Site(CheckpointLatchSite::kFlush);
+        for (;;) {
+            bool busy = false;
+            if (site.busy < static_cast<std::uint64_t>(kLatchTries)) {
+                if (Status s = wal_.TryRequestSyncNow(&busy); !s.ok()) co_return s;
+            } else {
+                ++site.bound;
+                const sched::MonoTimeNs blocked = wal_.clock().Now();
+                const Status s = wal_.RequestSyncNow();
+                site.blocking_ns += wal_.clock().Now() - blocked;
+                if (!s.ok()) co_return s;
+            }
+            if (!busy) break;
+            ++site.busy;
+            // The sixteenth busy answer is the last: the blocking entry next,
+            // with no park before it (§8.8 item 6).
+            if (site.busy >= static_cast<std::uint64_t>(kLatchTries)) continue;
+            {
+                // Counted into the writer's kick for the length of the park:
+                // the writer's sync of `flushed_lsn()` may be what ends it.
+                const WalManager::DurableWait waiting(wal_, core_id);
+                if (Status s = co_await ParkOnBusy(CheckpointLatchSite::kFlush, lsn, generation); !s.ok()) {
+                    co_return s;
+                }
+            }
+            if (generation != task_generation_) co_return Status::OK();
+            if (wal_.IsDurable(lsn)) co_return Status::OK();
+        }
+    }
     const std::function<bool()> durable = [this, lsn] {
         return wal_.IsDurable(lsn) || wal_.stopped();
     };
@@ -736,6 +895,20 @@ void Checkpointer::LogRun(std::uint32_t core_id, const CheckpointRunReport& r) c
                        " end_parks=" + std::to_string(r.end_parks) +
                        " log_park_us=" + std::to_string(r.log_park_ns / 1000) +
                        " data_park_us=" + std::to_string(r.data_park_ns / 1000);
+    // CZ-S3's sites (§8.7 of the CZ order), then the assertion visit and the
+    // recycle.
+    for (std::size_t i = 0; i < r.latch_sites.size(); ++i) {
+        const CheckpointRunReport::LatchSite& site = r.latch_sites[i];
+        const std::string at = std::string(" latch_") + kCheckpointLatchSiteNames[i];
+        line += at + "_busy=" + std::to_string(site.busy) + at +
+                "_roll_parks=" + std::to_string(site.roll_parks) + at +
+                "_bound=" + std::to_string(site.bound) + at +
+                "_park_us=" + std::to_string(site.park_ns / 1000) + at +
+                "_blocking_us=" + std::to_string(site.blocking_ns / 1000);
+    }
+    line += " assertion_visit_us=" + std::to_string(r.assertion_visit_ns / 1000) +
+            " recycle_skips=" + std::to_string(r.recycle_skips) +
+            " recycle_blocked=" + std::to_string(r.recycle_blocked);
     for (std::size_t i = 0; i < kCheckpointPhaseCount; ++i) {
         line += std::string(" ") + kCheckpointPhaseNames[i] +
                 "_n=" + std::to_string(r.count[i]) + " " + kCheckpointPhaseNames[i] +

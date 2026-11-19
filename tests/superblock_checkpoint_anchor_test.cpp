@@ -550,7 +550,10 @@ TEST_F(SuperBlockAnchorTest, TheRecyclerIsHandedOnlyARedoStartThePlatterHolds) {
 
     SuperBlockCheckpointAnchor anchor(sb, store);
     std::vector<wal::Lsn> handed;
-    anchor.SetRecycler([&](wal::Lsn d) { handed.push_back(d); });
+    anchor.SetRecycler([&](wal::Lsn d, bool) {
+        handed.push_back(d);
+        return true;
+    });
 
     ASSERT_TRUE(anchor.Publish({0, 100, 200, 300, 0}).ok());
     store.FailSync(true);
@@ -561,6 +564,40 @@ TEST_F(SuperBlockAnchorTest, TheRecyclerIsHandedOnlyARedoStartThePlatterHolds) {
     ASSERT_TRUE(anchor.Publish({0, 400, 500, 600, 0}).ok());  // no advance, no call
 
     EXPECT_EQ(handed, (std::vector<wal::Lsn>{200, 500}));
+}
+
+// CZ-S3 (C1c, CZ-Q22 (a)): the run task's commit tries the recycle; a busy
+// answer is a skip, the sixteenth skip in a row sends the next commit to the
+// blocking detach, and a commit that advances nothing owes none.
+TEST_F(SuperBlockAnchorTest, ARecycleSkippedSixteenTimesInARowIsTakenBlocking) {
+    SuperBlockCheckpointAnchor anchor(superblock_, store_);
+    bool busy = true;
+    std::vector<bool> asked_tried;
+    anchor.SetRecycler([&](wal::Lsn, bool tried) {
+        asked_tried.push_back(tried);
+        return !(tried && busy);
+    });
+    wal::Lsn redo = 1'000;
+    const auto commit = [&] {
+        redo += 100;
+        EXPECT_TRUE(anchor.Encode({0, redo, redo, redo, 0}).ok());
+        return anchor.Commit();
+    };
+    for (std::uint32_t i = 0; i < SuperBlockCheckpointAnchor::kRecycleSkipBound; ++i) {
+        EXPECT_EQ(commit(), wal::RecycleOutcome::kSkipped) << i;
+    }
+    EXPECT_EQ(commit(), wal::RecycleOutcome::kBlocked);
+    EXPECT_FALSE(asked_tried.back()) << "past the bound the detach was still tried";
+    EXPECT_EQ(commit(), wal::RecycleOutcome::kSkipped) << "the row did not restart";
+    busy = false;
+    EXPECT_EQ(commit(), wal::RecycleOutcome::kDone);
+    EXPECT_TRUE(asked_tried.back());
+    // No advance: nothing owed.
+    EXPECT_TRUE(anchor.Encode({0, redo, redo, redo, 0}).ok());
+    EXPECT_EQ(anchor.Commit(), wal::RecycleOutcome::kNone);
+    // The synchronous publish never tries.
+    ASSERT_TRUE(anchor.Publish({0, redo + 100, redo + 100, redo + 100, 0}).ok());
+    EXPECT_FALSE(asked_tried.back());
 }
 
 // The whole path: a published anchor's redo start reaches the log, and
@@ -578,7 +615,7 @@ TEST_F(SuperBlockAnchorTest, APublishRemovesExactlyTheSegmentsWhollyBelowItsRedo
     ASSERT_TRUE(wal.value()->SyncAll().ok());
 
     SuperBlockCheckpointAnchor anchor(superblock_, store_);
-    anchor.SetRecycler([&](wal::Lsn d) { wal.value()->RecycleBelow(d); });
+    anchor.SetRecycler([&](wal::Lsn d, bool tried) { return wal.value()->RecycleBelow(d, tried); });
 
     // Inside segment 2: segments 0 and 1 are wholly below it, 2 is not.
     const wal::Lsn inside_two = 2 * wal::kMinSegmentSize + wal::kSegmentHeaderSize;
@@ -631,7 +668,7 @@ TEST_F(SuperBlockAnchorTest, LeftoversBelowTheMountAnchorGoWithTheFirstPublishNo
     ASSERT_TRUE(wal.ok()) << wal.status().message();
 
     SuperBlockCheckpointAnchor anchor(superblock_, store_);
-    anchor.SetRecycler([&](wal::Lsn d) { wal.value()->RecycleBelow(d); });
+    anchor.SetRecycler([&](wal::Lsn d, bool tried) { return wal.value()->RecycleBelow(d, tried); });
     const wal::Lsn in_two = 2 * kSegment + wal::kSegmentHeaderSize;
     ASSERT_TRUE(anchor.Publish({0, in_two, in_two, in_two, 2}).ok());
     EXPECT_FALSE(present(0) || present(1));

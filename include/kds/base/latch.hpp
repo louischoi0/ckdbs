@@ -117,6 +117,16 @@ public:
         }
         if (waited_ns != nullptr) *waited_ns = waited;
     }
+    // **A try, never a wait** (CZ-S3): holds `latch` only if it was free;
+    // `owns()` says which. A null latch is owned, as the blocking form's is.
+    // Charges no wait - nothing was waited for.
+    LatchGuard(Latch* latch, std::try_to_lock_t) noexcept
+        : latch_(latch != nullptr && !latch->try_lock() ? nullptr : latch), owns_(latch_ == latch) {
+#ifndef NDEBUG
+        if (latch_ != nullptr) detail::held_latches.push_back(latch_);
+#endif
+    }
+    bool owns() const noexcept { return owns_; }
     ~LatchGuard() {
         if (latch_ != nullptr) {
 #ifndef NDEBUG
@@ -138,6 +148,7 @@ public:
 
 private:
     Latch* latch_;
+    bool owns_ = true;
 };
 
 }  // namespace kds

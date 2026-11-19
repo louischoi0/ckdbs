@@ -451,7 +451,9 @@ private:
             if (options_.recycle) {
                 // Recycling as `Expeditor` wires it (BC-R5).
                 fold_anchor_->SetRecycler(
-                    [wal = wal_.get()](wal::Lsn redo_start) { wal->RecycleBelow(redo_start); });
+                    [wal = wal_.get()](wal::Lsn redo_start, bool tried) {
+                        return wal->RecycleBelow(redo_start, tried);
+                    });
             }
         }
 
