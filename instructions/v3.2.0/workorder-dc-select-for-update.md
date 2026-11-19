@@ -1,8 +1,10 @@
 # Work order DC - `SELECT ... FOR UPDATE`: a read that claims the rows it returns
 
 Status: **CLOSED 2026-11-19 on worktree `dc-select-for-update`, its code
-at `7e18598d` (`v3.4.13-16-g7e18598d`), not merged and not pushed: every
-stage is done (§7) and the close is measured
+at `7e18598d` (`v3.4.13-16-g7e18598d`), and landed on `main` the same day
+on the operator's word "push no verify" (`raft-marks-2026-11-19.md` §6) -
+a `--no-ff` merge pushed with `--no-verify`, the suite 0 failed of 4794 on
+those build inputs: every stage is done (§7) and the close is measured
 (`bench/v3.4.13/results-dc-close-v3.4.13-14-gcd80d31d.md`,
 `bench/v3.4.13/results-dc-close-v3.4.13-16-g7e18598d.md`). Opened the same
 day on the operator's standing go-ahead (go-ahead-achieving-milestone,
@@ -812,3 +814,11 @@ opened from, so the merge brought nothing.
 
 DC is closed on the work branch. It is not merged, not pushed and not
 tagged: each waits for the operator's word.
+
+### Landed (2026-11-19)
+
+On the operator's word "push no verify" (`raft-marks-2026-11-19.md` §6):
+the work branch at its close merged `--no-ff` onto `origin/main` at
+`8e7c820f`, which had not moved, and pushed with `--no-verify`. The hook
+was skipped; the suite ran 0 failed of 4794 at `7e18598d`, on the build
+inputs pushed. Not tagged, and no version named.
