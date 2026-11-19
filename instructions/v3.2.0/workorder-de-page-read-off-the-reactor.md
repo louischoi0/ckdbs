@@ -2,7 +2,10 @@
 
 Status: **CLOSED NARROW 2026-11-19 on worktree
 `de-page-read-off-the-reactor`, on the operator's standing go-ahead
-(go-ahead-achieving-milestone); not merged, not pushed, not tagged.** Opened
+(go-ahead-achieving-milestone), and landed on `main` the same day on the
+operator's word "push no verify" (`raft-marks-2026-11-19.md` §9): a `--no-ff`
+merge of the work branch, its code at `f06bd733`, pushed with `--no-verify`;
+not tagged.** Opened
 the same day from `35086008` (`v3.4.13-19-g35086008`, since tagged
 `v3.4.14`); DE-S0 to DE-S3 landed (§7). **Narrow** is DE-Q7 (a): a read
 that would wait leaves its reactor for a top-level `SELECT`'s descent and
