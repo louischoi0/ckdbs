@@ -30,3 +30,12 @@ took under them.
 | **Mark** | None; an investigation. **The cost enters at DF-S1** (`58d258a3` to `ee89842e`) in the one server lifetime measured with an arm at every stage; CX-S0 to CX-S3a are at zero, CX-S3b to the close and CY sum to nothing; on `main` at `11f72ce9` the regression is +0.32, +0.39 and +0.53 µs of server CPU a point statement at `cores = 1`, pooled over four lifetimes. Inside DF-S1 the compile-time clock costs nothing and the session cost sample is the likeliest carrier, not separated from a binary's layout. The CX close's attribution of +0.29 to +0.50 µs to the later CX stages is withdrawn. No engine source changed; the suite was not executed (bench and documents only) |
 | **Does not settle** | whether DF-S1 is over DF-Q10 (a)'s 0.5 µs bar (under by the pooled median, not resolved from it; over on both joins in the single lifetime); any remedy - CLA's proposal, a cheaper session sample, is unbuilt and the operator's to open; a write's share of DF-S1; `cores` above 1 |
 | **Recorded at** | `bench/v3.4.13/results-cx-close-bisect-v3.4.13-1-g11f72ce9.md`; `workorder-df-statistics-coverage.md` §7; `workorder-cx-managed-plans.md` §8; this file's row in `instructions/v3.2.0/index.md` |
+
+## 4. The bisect closed; DF-S1 stands with its measured cost
+
+| | |
+|---|---|
+| **Word** | *"push no verify; close the bisect for now and confirm every feature built so far (the feature that causes the cost is not reverted)"* - after CLA's report of §3 and its answer that the statistics widening, DF-S1, is where the cost enters, at 0.7 to 0.8 % of a point statement's throughput pooled |
+| **Mark** | **The bisect is closed. DF-S1 is not reverted**: `sys.statement_stats`' widening, `sys.statement_histogram` and `sys.refusal_stats` stand as built, with the cost §3 measured, and so does every other feature on `main`. §3's work goes to `main` with `--no-verify`: the hook was skipped and no suite was executed (bench and documents only, no build input changed) |
+| **Does not settle** | a remedy for the cost - CLA's proposal of a cheaper session sample stays unbuilt and unopened; DF-Q10 (a)'s reading for the parts DF has still to build (B to E), each priced at its own stage; a write's share of DF-S1 and `cores` above 1, unmeasured; no version is named by this word and no tag is made |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md` §7; this file's row in `instructions/v3.2.0/index.md` |

@@ -870,7 +870,9 @@ opening commit. That is at and above the top of DF-S0's forecast (+0.11 to
 +0.35 µs, which priced no join cell). **Against DF-Q10 (a)'s 0.5 µs it is
 under by the pooled median and not resolved from it**: the pooled intervals
 reach +0.54 and +0.57 µs, and the single lifetime's step is over the bar on
-both joins. Whether the part is over the bar is the operator's reading.
+both joins. **The operator's reading, 2026-11-19
+(`raft-marks-2026-11-19.md` §4): DF-S1 stands as built with this cost and
+is not reverted.**
 
 A spike that compiles the per-statement pieces out (`spike.diff` in that
 file's archive) says: the compile-time clock (`NoteStatementCompiled`) costs
@@ -883,4 +885,5 @@ bucket, the emit loop's count, `ExaminedBy` - is not resolved. **Not
 measured**: a write's share (`BookLogAppend` is reached by no `SELECT`),
 `cores` above 1, and any remedy. A cheaper sample - class totals kept
 where a wait is booked - is CLA's proposal in that file and nothing is built
-on it: it is the operator's to open.
+on it: it is the operator's to open, and §4 of that day's marks does not
+open it.
