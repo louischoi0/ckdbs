@@ -2418,7 +2418,7 @@ numbers at `70a307ea` (CU-S4, the close). Owned by `docs/spec/parser-v2.md` I10;
 
 ## Locking reads (DC)
 
-Verified on `dc-select-for-update` at `f6a12f5d` (DC-S2). Owned by
+Verified on `dc-select-for-update` at `7e18598d` (DC's close). Owned by
 `docs/spec/txn.md` §5 ("A locking read") and `docs/spec/parser-v2.md` I11a;
 the order is `instructions/v3.2.0/workorder-dc-select-for-update.md`.
 
@@ -2445,8 +2445,9 @@ the order is `instructions/v3.2.0/workorder-dc-select-for-update.md`.
   and the row's unit stays held until the `ROLLBACK`, so the client
   retries the whole transaction. There is no re-read loop; CR
   (`workorder-cr-read-committed-rerun.md`, written and not opened) is the
-  order that would re-run it. How often the window is met is the close's
-  descriptive cell, not a bound.
+  order that would re-run it. Measured once, not a bound: eight sessions
+  on one row at `cores = 4` had 2.70 % of their locking reads refused so
+  (`bench/v3.4.13/results-dc-close-v3.4.13-14-gcd80d31d.md`).
 - **A wake is not a grant** for a locking read either ("Locks", above):
   under sustained contention on one row a waiter can be re-run into a
   third session's claim until the 1 s fault net refuses it, which fails
@@ -2474,6 +2475,12 @@ the order is `instructions/v3.2.0/workorder-dc-select-for-update.md`.
 - **`sys.statement_stats` counts a locking read's calls, time and rows and
   not what it examined**: `rows_examined` and `pages` are NULL for its
   shape, the write walk counting neither.
+- **A point `SELECT` without the clause reads 0.10 to 0.13 us slower at
+  DC's close than at its opening**, about 0.5 % of its server CPU, inside
+  the 0.3 us floor between two servers of one binary and with an interval
+  that barely clears zero: a cost of that size is neither shown nor
+  excluded, and the host has no PMU to separate it from a binary's layout
+  (`bench/v3.4.13/results-dc-close-v3.4.13-16-g7e18598d.md`).
 - **What the cells do not cover**: a locking read under `tsan` (the
   `bs-nightly` build runs the same cells; no `tsan` run was made for DC); a
   capped KWP portal (`max_rows`) over a locking read's rows, which is the

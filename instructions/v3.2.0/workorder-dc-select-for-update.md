@@ -1,10 +1,14 @@
 # Work order DC - `SELECT ... FOR UPDATE`: a read that claims the rows it returns
 
-Status: **OPENED 2026-11-19 on the operator's standing go-ahead
-(go-ahead-achieving-milestone, `raft-marks-2026-11-19.md` §5), on worktree
-`dc-select-for-update` from `8e7c820f` (`v3.4.13-10-g8e7c820f`). DC-Q0..Q12
-are each adopted (a) as CLA proposed, none the operator's own mark** (§4);
-§7 logs the stages. Written on worktree
+Status: **CLOSED 2026-11-19 on worktree `dc-select-for-update`, its code
+at `7e18598d` (`v3.4.13-16-g7e18598d`), not merged and not pushed: every
+stage is done (§7) and the close is measured
+(`bench/v3.4.13/results-dc-close-v3.4.13-14-gcd80d31d.md`,
+`bench/v3.4.13/results-dc-close-v3.4.13-16-g7e18598d.md`). Opened the same
+day on the operator's standing go-ahead (go-ahead-achieving-milestone,
+`raft-marks-2026-11-19.md` §5), from `8e7c820f` (`v3.4.13-10-g8e7c820f`).
+DC-Q0..Q12 are each adopted (a) as CLA proposed, none the operator's own
+mark** (§4). Written on worktree
 `db-fpi-cadence-dc-for-update` from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`) on
 the operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §23): *"Write
 the work order for item 8, SELECT FOR UPDATE."* (given in Korean; recorded
@@ -720,3 +724,91 @@ Overhead not measured; measured at the milestone's close.
 cell (the `bs-nightly` build's; not executed for DC), and a portal's
 `max_rows` over a locking read, which is the session's code for any
 described reply. Both are in `known-gaps.md` ("Locking reads (DC)").
+
+### DC-S3 - the close (2026-11-19)
+
+On worktree `dc-select-for-update`, the code at `7e18598d`
+(`v3.4.13-16-g7e18598d`).
+
+**The simulator and the history checker** (`cd80d31d`). With the shapes on,
+40 in 100 of the simulator's reads by tuple key, by range and by `v` inside
+a `READ WRITE` transaction carry `FOR UPDATE`, drawn from a stream of their
+own so the pinned corpus is unmoved; the oracle reconciles each as the
+plain read it replaces. `scripts/sim.sh` (Debug, 4 fresh seeds): 280 runs,
+0 failures. A suite cell runs a clean shapes run that must reconcile its
+locking reads. The list-append checker (`bs-nightly`) gained a
+read-modify-write cycle - a key's list read, then written back whole with
+one more element - and
+`BsHistory.ReadModifyWriteThroughALockingReadLosesNoAppend`: a control by a
+plain read under `READ COMMITTED` must lose committed appends, and the same
+seeds through the clause, and one `REPEATABLE READ` seed, must show no
+anomaly. `kds_bs_tests BsHistory.*`: 4 of 4 passed, run by hand; no
+`bs-nightly` run was made. **Reviewed by `critics-developer`**: no bug.
+Applied: the control counted any anomaly and now counts the checker's own
+"was lost" and fails on every other kind; the suite cell above, which the
+stage lacked; a comment's layout. **Rejected, one nit**: `MaybeLock`'s
+`READ ONLY` test cannot be false as the stream is drawn today, and stays
+as the rule the workload cell asserts.
+
+**The close measurement** (DC-Q10 (a); `ck-tester`, Release, A `8e7c820f`
+against B `cd80d31d`, then against C `7e18598d`; two servers of A's binary
+as the floor).
+
+- **The descriptive cell** (B, `cores = 4`, `group`, `READ COMMITTED`,
+  eight sessions on one row, three cells of 6 s): `BEGIN; SELECT ... FOR
+  UPDATE; UPDATE; COMMIT` committed 90,681 transactions and **lost no
+  increment** - each cell's final value equals its committed count - at
+  5,574, 5,408 and 4,128 transactions a second. The same loop with a plain
+  `SELECT` committed 111,545 and lost 77,905 increments (69.8 %), with no
+  error. **DC-Q3 (a)'s window refused 2,512 of 93,193 locking reads
+  (2.70 %)**, every one `TXN_CONFLICT ... was written by transaction`; no
+  deadlock and no fault net. The clause cost 11 to 33 % of the plain
+  loop's rate, in the tail: p99 1.7 to 3.7 times the plain loop's.
+- **The barred cells** (a point `SELECT` and a point `UPDATE` without the
+  clause, `cores = 1`, server CPU a statement, pooled over clean
+  lifetimes). At B the `SELECT` read +0.10, +0.23 and +0.17 us against A
+  at 200, 1K and 10K rows - inside the floor, a lean not excluded - and
+  the `UPDATE` was not resolved from a floor of 2 to 3 us.
+- **A remedy, applied and measured again** (`7e18598d`). Two refactors of
+  DC-S2's review cost a statement without the clause what it had not
+  paid: a select list built and moved into the chain (one allocation a
+  compile) and a write's outcome passed by value through `EndWriteWith`
+  (two moves a write). Both are gone; **reviewed by `critics-developer`**,
+  correct and equivalent, one nit rejected as it advised (a second
+  four-byte prefix test in `FinishWrite`). At C: **the `SELECT` is +0.13,
+  +0.10 and +0.10 us against A - the bar met, inside the floor, the lean
+  of about 0.5 % of 20.4 us not excluded and not moved by the remedy** (C
+  against B within 0.05 us); **the `UPDATE` is not resolved from its
+  floor** (+0.19, -0.35, -1.12 us of about 75 us), the remedy reading -1.59
+  us at 200 rows and nothing at the other two sizes. No cell is slower
+  outside its own spread. What a statement without the clause still pays
+  is a peek at its tail, a test of a parsed field in `HandleSelect` and in
+  `exec::Compile`, and eight vector moves; the residue of the lean is not
+  separated from a binary's layout on a host with no PMU.
+- **Cut**: three and four arms in place of the CX bisect's ten; lifetimes
+  that ran beside another session's build or suite excluded (three of
+  eight, then two of seven); no PostgreSQL twin. **Time**: about 41 minutes
+  for the first run and about 23 for the second, building included, about
+  9 minutes held by the quiet gate outside both.
+
+**Suite**: 0 failed of 4794 at `7e18598d`'s tree, and at `cd80d31d`'s.
+
+**The documents** (`7c36f610` and the close's commit): `txn.md` §5 ("A
+locking read"), §1 and the verdict table's paragraph; `parser-v2.md` I11a
+and I19; `protocol.md` §7 and §10; `sched.md` §3; `foreign-keys.md` §2c;
+`known-gaps.md` ("Locking reads (DC)"); `manual/sql/sql.md` §4, §5, §7;
+`manual/client/client.md` §5; `CLAUDE.md`'s rows for transactions and for
+the query language. `txn.md` §9 needed no change: it names `SERIALIZABLE`
+and savepoints, and no ruling against a locking read stood there.
+
+**Not done, stated**: no `tsan` and no `bs-nightly` run for DC; the
+overhead bar is met by the floor and the 0.1 us lean on a point `SELECT`
+is neither shown nor excluded; DC-Q0 (b), DC-Q1 (b)/(c), DC-Q3 (b), DC-Q5
+(b)/(c), DC-Q6 (b)/(c), DC-Q7 (b) and DC-Q12 (b) are not built and stay
+open to the operator's own mark.
+
+**The sync**: `origin/main` was `8e7c820f` at the close, the commit DC
+opened from, so the merge brought nothing.
+
+DC is closed on the work branch. It is not merged, not pushed and not
+tagged: each waits for the operator's word.
