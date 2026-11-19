@@ -94,6 +94,8 @@ std::string_view StatusCodeName(StatusCode code) {
         case StatusCode::kTransitionViolation: return "TransitionViolation";
         // A transaction's declaration, never a parse's (CS).
         case StatusCode::kReadOnlyTransaction: return "ReadOnlyTransaction";
+        // A fetch's, never a parse's (DE).
+        case StatusCode::kNotResident: return "NotResident";
     }
     return "<unknown>";
 }

@@ -58,6 +58,7 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
+#include "kds/storage/page_reader.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wire/error_registry.hpp"
@@ -277,6 +278,16 @@ struct DispatchOutcome {
         std::uint64_t epoch = 0;   // waiting for every statement epoch, not a writer
     };
     std::optional<PurgeWait> purge_wait = std::nullopt;
+
+    // **DE: a fetch of this statement's body would have had to wait for the
+    // device, and the body was discarded** (`storage/miss_refusal.hpp`,
+    // DE-Q10). The page it was refused. `DispatchAsync` hands the page to
+    // the page reader, parks until it is read and runs the statement again;
+    // `Dispatch` does the same with nowhere to park. Set only where
+    // `StageStatement` found the thread's note, and then the reply beside it
+    // is the refusal, never what the body answered: a caller that recovered
+    // from the refusal may have answered anything.
+    std::optional<PageId> page_wait = std::nullopt;
 
     // **The walk stopped inside the statement and the scope is still open**
     // (AO-S3b). `write_block` says which row and holder; this says the
@@ -1846,9 +1857,12 @@ private:
     // the transaction the UPDATE holds keeps the horizon beneath it for as long
     // as the subquery runs. `context` is pinned with it: the subquery's
     // `NOW()` is the UPDATE's.
+    // `top_level`: the statement is itself this `SELECT` (`DispatchInner`'s
+    // word), so its body may be refused a page (DE-Q10 (i)).
     DispatchOutcome HandleSelect(std::string_view line, Session& session, bool analyze = false,
                                  const txn::Snapshot* pinned = nullptr,
-                                 const exec::StatementContext* context = nullptr);
+                                 const exec::StatementContext* context = nullptr,
+                                 bool top_level = false);
 
     // Everything `HandleSelect` does once `run` holds its snapshot and its
     // parsed statement: the compile, the trail, the walk or its hand-off.
@@ -2125,6 +2139,19 @@ public:
     // and only a transaction holding nothing waits (AO-S3's guard), so no
     // cycle can form without a detector.
     void set_locks(txn::LockTable* locks) noexcept { locks_ = locks; }
+
+    // **DE: where a page read leaves this core** (`storage/page_reader.hpp`).
+    // With one, a top-level `SELECT` whose head is run inline is refused a
+    // page that would have to be waited for, and is run again once the
+    // reader has read it (`AwaitPageRead`). Null - the default, and every
+    // dispatcher a test or a tool builds without one - reads every page
+    // synchronously, as before DE.
+    void set_page_reader(storage::PageReader* reader) noexcept { page_reader_ = reader; }
+    const storage::PageReader* page_reader() const noexcept { return page_reader_; }
+    // **How many runs of one statement may be refused a page** (DE-Q11): the
+    // run after the last reads synchronously. Eight covers a clustered
+    // descent and an index descent missed at every level.
+    static constexpr std::uint32_t kMaxMissReruns = 8;
     // The statements `max_locks_per_txn` refused since this dispatcher was
     // built - a refusal, never a truncation (AO-S6c-c).
     std::uint64_t borrow_cap_stops() const noexcept { return borrow_cap_stops_; }
@@ -2640,6 +2667,7 @@ private:
     // statements re-run at all is `EndWrite`'s call, made by clearing
     // `storage::StructuralRefusalNoted()` for any it ends otherwise.
     bool structural_poison_withheld_ = false;
+    storage::PageReader* page_reader_ = nullptr;  // DE; see `set_page_reader`
 
     // **`strict` commits parked before their publish** (BA-S7 part 2,
     // BA-Q3 (b)). A commit that may park stages its record for the writer
@@ -2722,6 +2750,25 @@ private:
     // Counts the re-run it admits, and rewinds the session's result sink for
     // it (CE-A1); declines one whose rows a client may already have read
     // (CE-R4).
+    // **DE: the park for `out->page_wait`, and the run after it.** Rewinds
+    // the session's sink, hands the page to the reader, parks under
+    // `io.page_read` until the read is made - or the statement's deadline
+    // passes, or its cancel flag is raised, after either of which no later
+    // run of this statement is refused a page - and runs `line` again.
+    // Called only where `page_reader_` is set and the statement may park.
+    sched::Coro AwaitPageRead(std::string_view line, Session* session, DispatchOutcome* out,
+                              sched::MonoTimeNs* statement_deadline_ns);
+    // The bookkeeping both entry points share before a statement is run
+    // again for a page: takes `out->page_wait`, rewinds the session's sink,
+    // counts the refused run. Returns the page, or `kInvalidPageId` where a
+    // row had already left - `*out` is then the refusal, and nothing is run.
+    PageId BeginMissRerun(Session& waiting, DispatchOutcome* out);
+    // Whether a `SELECT` body about to run inline for `session` may be
+    // refused a page (DE-Q10's conditions the dispatcher can see): a reader
+    // to hand the page to, a statement the caller can run again here, fewer
+    // than `kMaxMissReruns` runs refused, and no row handed on yet.
+    bool MissRefusalAdmitted(const Session& session) const noexcept;
+
     bool StructuralRerunDue(const DispatchOutcome& out, Session* session,
                             sched::MonoTimeNs& deadline_ns);
     // The `DispatchAsync` call whose synchronous window is running, and the

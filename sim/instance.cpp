@@ -149,6 +149,13 @@ Status SimInstance::Boot() {
                         options_.access_statistics,
                         cabin_store_ ? &*cabin_store_ : nullptr, &*txn_);
     session_ = server::Session();
+    if (options_.read_off_reactor) {
+        // DE-Q12. The mode outlives a crash - it is the device's - and is set
+        // again here so a reboot's first statement meets it too.
+        page_device_->SetNoWait(storage::MemoryPageDevice::NoWait::kUntilWarmed);
+        page_reader_.emplace(*page_device_);
+        dispatcher_->set_page_reader(&*page_reader_);
+    }
 
     // Assertion enforcement and the completion checkpoint, in the expeditor's
     // order and for its reason (RC07/RC08): the registry lives on the dispatcher
@@ -247,6 +254,7 @@ void SimInstance::TearDown() {
     reclaim_counters_.Reset();
     anchor_.reset();
     dispatcher_.reset();
+    page_reader_.reset();
     trail_recorder_.reset();
     cabin_store_.reset();
     txn_.reset();

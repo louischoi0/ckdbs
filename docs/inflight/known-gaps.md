@@ -257,6 +257,14 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## WAL
 
+- **The server manual still says WAL recovery is not implemented.**
+  `manual/server/server.md` §6 ("What a restart loses") reads "WAL recovery
+  is not implemented" and "`enforcing=0` after a restart until recovery
+  exists", against §5 of the same file, `wal.md` §8 and `assertion.md`:
+  recovery runs at every mount and assertions enforce immediately after a
+  restart. Read on `de-page-read-off-the-reactor` at `1942cb9a`,
+  2026-11-19; DE's close corrected the same claim in §5 ("Durability
+  points") and left §6 as found - it is not DE's.
 - **A refused catalog report on a new page, or a catalog row no empty page
   holds, spends one page.** Re-read on `worktree-fix-catalog-page-ceiling`
   at `0e539d46`, 2026-10-18. `InsertRow` leaves the page allocated, empty
@@ -888,6 +896,84 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 
   Each holds its core until it ends or `exec::Budget` stops it. 64 is
   BA-Q11's value, not re-measured in BA-S15.
+- **A page read still stops its core for every reader but two** (DE,
+  verified at `1942cb9a`; `page.md` §12). A read that would have to wait
+  for the device leaves the reactor only for a statement that is itself a
+  plain `SELECT` whose head is a descent run inline, and for a `SELECT`'s
+  outermost walk awaited on a reactor. A blocking `pread` on the reactor,
+  for the device's whole time, is still what these make:
+  - a write and its read phase - an `UPDATE`'s or `DELETE`'s locate, an
+    `INSERT`'s descent, a foreign-key or unique check (DE-Q7 (a): an issued
+    key's first page write comes before its descent, and a write path's
+    callers recover from a failed fetch in ways a refusal cannot pass
+    through);
+  - a locking read, a `SELECT` run inside another statement, a traced
+    (`ANALYZE`) `SELECT`, a walk the query layer or a write's subquery
+    drives to its end where it stands;
+  - a walk's own descent to its first leaf (`BtreeSeekLeaf`,
+    `BtreeLeftmostLeaf`), and every fetch under a walk's leaf - an undo
+    chain, a spilled value, an index walk's base fetch, a join's inner step;
+  - a build's walk, `GATHER STATISTICS`, recovery and every background
+    task.
+- **What the read that leaves costs, and where it stops** (DE, verified at
+  `1942cb9a`):
+  - a descent's statement is **run again from its head** for each page it
+    is refused, at most eight times (`CommandDispatcher::kMaxMissReruns`)
+    and inside the fault net; after either, and after a cancel, it reads
+    the rest synchronously. A head with more cold pages than eight - a long
+    key set, a probe into a cold inner relation - blocks its core for the
+    remainder, as before DE. Each run is parsed and compiled again, and
+    `sys.statement_stats`' per-shape page reads and rows count the
+    discarded runs, as BA-S14's re-runs do;
+  - **the page parks and every other wait of the statement share one
+    deadline**: a `SELECT` that spent the fault net parked on pages and then
+    meets a relation wait (a DDL's `X`) is refused `TxnConflict` at once,
+    sooner than before DE;
+  - a park's deadline, like every wait's, is read when the reactor turns:
+    on an otherwise idle core it is late by up to `max_idle_block_ms`;
+  - the path rests on the operating system's page cache: the reader's
+    thread leaves the page there and the statement's next fetch copies it.
+    Under memory pressure that drops the page in between, that fetch waits
+    for the device on the reactor after all - a slow read, never a wrong
+    one. `O_DIRECT` is not built, and with it this path would leave nothing
+    behind;
+  - on a file system whose `RWF_NOWAIT` can answer "would wait" for a lock
+    rather than for the device (XFS's inode lock), a statement is parked
+    that need not have been. ext4 is what was measured;
+  - `PageReader::kPageReadThreads` is 4, `[provisional]`: no cell has
+    priced another number, and reads past four in flight queue behind
+    them;
+  - at `cores = 1` the instance now runs the reader's threads and core 0
+    has a wake descriptor in its readiness set, the two departures from
+    "build nothing at one core" DE-Q14 names.
+
+- **What DE costs work that never misses** (measured at the close and its
+  spike, `bench/v3.4.14/results-de-close-v3.4.14-6-g1942cb9a.md`; A is
+  `35086008`, the commit DE opened from):
+  - a resident point `SELECT` at `cores = 1` costs about 0.2 to 0.4 us more
+    server CPU a statement at the closing code than at A (medians of four
+    server lifetimes, 20 to 24 us a statement; +0.33 to +0.66 us at
+    `1942cb9a`), where two servers of A's own binary differ by -0.18 to
+    +0.02 us and a single lifetime by up to 0.6 us. A build with no page
+    reader, no arm and no one-core wake table carries the same, so it is
+    not those; it is not separated from DE's per-statement code - the
+    refusal's admission test, the note's read, a larger `DispatchOutcome`
+    and `SelectRun` - or from binary layout, on a host with no PMU;
+  - a resident walk read 8 % fewer pages a second at `1942cb9a` than at A;
+    at the closing code it is within about 1 % (two runs each, ranges
+    overlapping). What the 8 % was is not isolated;
+  - a cold point `SELECT` that parks is itself 2 to 3 % slower at its p50
+    (+13 to +21 us of about 640 us) than when it blocked its core, and
+    spends 41 to 49 us more CPU: the refused run, the wake and the run
+    after it;
+  - `pool_misses` counts a refused fetch and the fetch after it, so it is
+    about two a cold read where a read parks, not one; `io.page_read` is
+    still one a device read.
+
+  Not covered: a `tsan` build of `tests/de_page_read_rig_test.cpp`; the
+  park's own `io.page_read` count on a reactor (the synchronous loop's is
+  pinned); a re-run over a real KWP sink (a counting session sink pins the
+  rewind); a session closed while its read is in flight.
 - **A yielding build still stalls its core at a WAL segment roll.** A
   roll holds the append latch across its sync (the WAL entry above), and a
   build that logs per row - `CREATE ASSERTION`'s `ASSERT_BUILD`, about 129 B

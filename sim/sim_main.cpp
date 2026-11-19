@@ -117,11 +117,15 @@ int main(int argc, char** argv) {
                 pinned.access_statistics = false;
             } else if (toggles == "on") {
                 pinned.waystone = pinned.cabins = pinned.access_statistics = true;
+                pinned.read_off_reactor = true;
             } else if (toggles == "cabins") {
                 pinned.cabins = true;
                 pinned.access_statistics = false;
             } else if (toggles == "waystone") {
                 pinned.waystone = true;
+                pinned.access_statistics = false;
+            } else if (toggles == "offreactor") {
+                pinned.read_off_reactor = true;
                 pinned.access_statistics = false;
             } else {
                 return Usage(argv[0]);

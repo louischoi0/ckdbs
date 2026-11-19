@@ -123,18 +123,26 @@ TEST(KwpErrorRegistryTest, EveryStatusCodeMapsToACategory) {
         {StatusCode::kReadOnlyTransaction, ErrorCategory::kReadOnlyTransaction},
         {StatusCode::kUnknownOutcome, ErrorCategory::kUnknownOutcome},
         {StatusCode::kNotImplemented, ErrorCategory::kNotImplemented},
+        // DE's internal refusal: the dispatcher answers it by running the
+        // statement again, so it has no category of its own and one that
+        // reached a client is a defect - `kInternal`, as `kOk` is.
+        {StatusCode::kNotResident, ErrorCategory::kInternal},
     };
     for (const Case& c : kCases) {
         EXPECT_EQ(CategoryOf(c.code), c.expect)
             << "StatusCode " << static_cast<int>(c.code) << " changed category";
     }
     // And nothing folds: no two engine codes share a category, which is R2
-    // stated as a property rather than as advice. `kOk` is skipped - it is
-    // not an engine failure and shares `kInternal` deliberately.
+    // stated as a property rather than as advice. `kOk` and `kNotResident`
+    // are skipped - neither is a failure a client is meant to see, and they
+    // share `kInternal` deliberately.
+    const auto internal = [](StatusCode code) {
+        return code == StatusCode::kOk || code == StatusCode::kNotResident;
+    };
     for (const Case& a : kCases) {
-        if (a.code == StatusCode::kOk) continue;
+        if (internal(a.code)) continue;
         for (const Case& b : kCases) {
-            if (b.code == StatusCode::kOk || a.code == b.code) continue;
+            if (internal(b.code) || a.code == b.code) continue;
             EXPECT_NE(a.expect, b.expect)
                 << "two engine codes now share one wire category; a client can no longer tell "
                    "them apart, and the message is not a surface";

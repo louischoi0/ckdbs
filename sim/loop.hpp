@@ -102,6 +102,11 @@ struct FeatureToggles {
     bool waystone = false;          // trail recording and replay
     bool cabins = false;            // the value-observed store
     bool access_statistics = true;  // sys.access_stats, the server default
+    // DE: a `SELECT`'s descent refused a page that would have to be waited
+    // for, discarded and run again (`storage/miss_refusal.hpp`). Not
+    // advisory, but under the same promise - a result may never change
+    // with it (DE-R1) - so it is drawn and paired with the three above.
+    bool read_off_reactor = false;
 
     std::string Describe() const;
 };

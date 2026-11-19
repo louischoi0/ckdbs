@@ -1,0 +1,11 @@
+spike2 start 2026-11-19T11:14:15Z
+K5 build exit 0 11:14:50
+3bb495965dc7d5059c69a32233d784283bc7d8bd023deae3deb927926a9d9f3c  /home/louis/bench-runs/de/close/kds_server_K5
+11:15:35 V round 0 arm A
+11:16:10 V round 0 arm K3
+11:16:46 V round 0 arm K5
+11:17:21 V round 1 arm K5
+11:17:57 V round 1 arm A
+11:18:33 V round 1 arm K3
+11:19:08 P start
+spike2 exit 0 2026-11-19T11:21:19Z

@@ -329,6 +329,12 @@ tree. Each carries CLA's proposal; none is the operator's mark.
   blocking read stalls every task on the core, not only the one that
   faulted; a reader of `sys.wait_stats` must remember that such an event's
   time is the core's stall (stated in WE12's dictionary).
+  *(Note, 2026-11-19, DE: no longer the whole of it. For a top-level
+  `SELECT`'s descent and a `SELECT`'s walk awaited on a reactor, a read
+  that would wait for the device is a suspension - the statement parks
+  under `io.page_read` and the core runs on - so the event's time is the
+  core's stall only for the readers `page.md` §12 lists as still blocking.
+  `workorder-de-page-read-off-the-reactor.md` DE-R9.)*
 
 - **CJ-Q9 - the spec's 16 events leave four waits unclassified, and its
   cross-core class has no site (found at WE04, `[source-read]`).** I3 needs

@@ -76,12 +76,15 @@ Status Scheduler::ArmWaker() {
     return Status::OK();
 }
 
-Status Scheduler::AttachWakerTable(WakeRegistry* table, std::uint32_t core_id) {
+Status Scheduler::AttachWakerTable(WakeRegistry* table, std::uint32_t core_id,
+                                   bool publish_load) {
     core_id_ = core_id;
     ash_.set_core_id(core_id);
     wakers_ = table;
+    publishes_load_ = table != nullptr && publish_load;
     if (table == nullptr) return Status::OK();
-    CoreLoad::Reset(core_id_);  // this reactor's slot from here on (core_load.hpp)
+    // This reactor's slot from here on (core_load.hpp), where one is read.
+    if (publish_load) CoreLoad::Reset(core_id_);
     if (Status s = ArmWaker(); !s.ok()) return s;
     // Published last, so no peer can find a half-registered entry. Safe
     // unsynchronised: this runs on the startup thread before this core's
@@ -505,8 +508,9 @@ void Scheduler::RecordIterationHold(MonoTimeNs start_ns, MonoTimeNs block_ns,
 
     // The load another core reads (core_load.hpp, BL-S1): no clock read of
     // its own, only the span and hold this function already has, and only
-    // where another core exists to read it (BL-R9).
-    if (wakers_ == nullptr) return;
+    // where another core exists to read it (BL-R9) - not a table attached
+    // for the page reader alone at one core (DE-Q14).
+    if (!publishes_load_) return;
     const auto kFg = static_cast<std::size_t>(SchedulingGroupIndex(SchedulingGroup::kForeground));
     CoreLoad::Slot& load = CoreLoad::Of(core_id_);
     load.queued_foreground.store(static_cast<std::uint32_t>(ready_queues_[kFg].size()),

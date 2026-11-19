@@ -10,8 +10,10 @@
 // file/disk I/O to be injectable so engine logic can run under
 // deterministic simulation; this is the socket-readiness analog of that
 // rule, scoped to what TcpServer needs today (level-triggered readiness,
-// not a completion queue). A real disk I/O backend (O_DIRECT vs io_uring)
-// is a separate, still-open decision (CLAUDE.md) and is not this.
+// not a completion queue). Disk I/O is not this: a page read that leaves a
+// reactor goes to a thread (`storage/page_reader.hpp`, `docs/spec/page.md`
+// §12), and `O_DIRECT` and a completion queue for the data file are not
+// built.
 
 namespace kds::sched {
 
