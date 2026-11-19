@@ -1,7 +1,7 @@
 # DF close, attributed with knob binaries: removing all three groups of additions takes out about three quarters of B - A on a read, and no single knob is separated from the binaries' own offsets
 
 On worktree `da-q8-memory-bound-key` (branch `worktree-df-statistics-coverage`)
-at `ec5ddfe8` (`v3.4.13-14-gec5ddfe8`, B), whose tree the coordinator reports `0e180fc6` (HEAD after the
+at `ec5ddfe8` (`v3.4.13-14-gec5ddfe8`, B), whose tree the coordinator reports `35f8cce4` (HEAD after the
 remedy `9f588fa2` was reverted) to repeat byte for byte, four patched exports of
 B each remove one group of what DF-S2 to DF-S4 put on a read's path, and a
 seventh arm in every lifetime is A (`8e7c820f`, B's parent) again. At `cores = 1`,
@@ -39,7 +39,7 @@ manager, and the code's layout; this run cannot split them.
 | Branch / worktree | `worktree-df-statistics-coverage`, worktree `da-q8-memory-bound-key`; the patches were applied to exports under `/home/louis/dfclose/`, never to the worktree; nothing committed |
 | A | `8e7c820f` (`v3.4.13-10-g8e7c820f`), sha256 `ab5b9ee7cc7875bbe199ee402214b8e12176c8a00f909eb6e0ca1aae4cba9437` (the first file's binary) |
 | A' | A's binary again, a second server of it in every lifetime: the floor |
-| B | `ec5ddfe8` (`v3.4.13-14-gec5ddfe8`), sha256 `35bac562e5bfcc23614cd70aa35e9fda44359b52a5fa3f6eb9b8024fb4021604` (the first file's binary; HEAD `0e180fc6` has the same tree) |
+| B | `ec5ddfe8` (`v3.4.13-14-gec5ddfe8`), sha256 `35bac562e5bfcc23614cd70aa35e9fda44359b52a5fa3f6eb9b8024fb4021604` (the first file's binary; HEAD `35f8cce4` has the same tree) |
 | K1 | B's export with `RecordIndexUse(chain, stats);` removed from `CommandDispatcher::RecordExecution`; sha256 `905b56677f4316c9e86be3aec37349ae901e23756c2b9252bddfd068d6aaaeee` |
 | K2 | B's export with the bodies of `Session::NoteViewMinted` and `EndStatementView` empty and `NoteTxnBegan` keeping only `txn_began_ns_ = ns;`; sha256 `fbdc40101d292573b2211161cf78b8f45152561a4ca654ac83390e1cb8a393af` |
 | K3 | B's export without the `min_snapshot_minted_ns` store in `PublishSnapshotBound`, the two `view_minted_ns_ = now_ns` assignments and the two `reader_minted_ns_[...] = now_ns` stores in `manager.cpp`; sha256 `63650ca1f655e5f975d462977693e99f2627c0b29f605101d0aac8995507ebf3` |

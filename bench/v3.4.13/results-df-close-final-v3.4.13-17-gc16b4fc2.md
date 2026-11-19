@@ -46,7 +46,7 @@ by +0.10 and +0.11 µs, a sign nothing in D's change explains (below).
 | File | What it measured | Reading |
 |---|---|---|
 | `results-df-close-v3.4.13-14-gec5ddfe8.md` | B against A, ten lifetimes, three row counts, one `cores = 8` lifetime | DF-S2 to DF-S4 cost a tuple key read +0.17 µs and an index-served read +0.35 µs, writes inside the floor; the same at 200 and 10,000 rows; `cores = 8` not resolved on this host |
-| `results-df-close-remedy-v3.4.13-15-g9f588fa2.md` | C = B with a cheaper session cost sample (`9f588fa2`), ten lifetimes | C - B +0.00 to +0.04 µs on reads: the remedy bought nothing resolvable, and it was reverted (HEAD `0e180fc6`, B's tree); the file stays as the record of why |
+| `results-df-close-remedy-v3.4.13-15-g9f588fa2.md` | C = B with a cheaper session cost sample (`9f588fa2`), ten lifetimes | C - B +0.00 to +0.04 µs on reads: the remedy bought nothing resolvable, and it was reverted (HEAD `35f8cce4`, B's tree); the file stays as the record of why |
 | `results-df-close-knobs-v3.4.13-14-gec5ddfe8.md` | four patched exports of B (no index fold, no session words, no published stamp, all three), ten lifetimes | the three knobs together remove about three quarters of B - A on a read (+0.14 of +0.18 µs, +0.24 of +0.33 µs); no single knob is separated from the binaries' offsets; the fold's removal alone, `B - K1`, was +0.21 µs on `select-index` and +0.08 µs on `select-pk` |
 | this file | D, the cached index fold | D - B -0.18 µs on `select-index`, the one move the code made, in the direction and about the size the knob run said it could |
 

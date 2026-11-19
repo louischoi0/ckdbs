@@ -1248,7 +1248,7 @@ AM-S6 found of this host; no delta is claimed.
    the cheaper sample the bisect of 2026-11-19 proposed for DF-S1's cost.
    C - B is +0.00 to +0.04 us on the reads; a saving above about 0.03 us on
    a tuple key read is ruled out. **It bought nothing and is reverted**
-   (`0e180fc6`): the walk of the wait registry was not the carrier of
+   (`35f8cce4`): the walk of the wait registry was not the carrier of
    DF-S1's cost, which stays unattributed.
 2. **An attribution by knob binaries**, no engine change: B with the index
    fold, the session's two words and the mint stamps compiled out, each
@@ -1289,7 +1289,7 @@ issued (the cache reads oid 0 as empty), `sim/instance.cpp`'s wiring.
 **Suite.** The full suite - `ctest -LE bs-nightly` - 0 failed of 4778 on
 the tree this entry's commit holds (two disabled and two skipped); 0 failed
 of 4778 at `c16b4fc2`, 0 failed of 4777 at `9f588fa2` and at `29810582`,
-whose tree `0e180fc6` is again.
+whose tree `35f8cce4` is again.
 
 **Documents.** §5's list, each read: `sys-views.md` §5, §6 (the measured
 cost beside BO's), §6.1c, §6.2a-§6.2c, §6.6, §7, §8; `plan-stats.md` §6;
