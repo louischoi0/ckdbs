@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/stats/txn_stats.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -435,6 +436,85 @@ TEST_F(TxnManagerTest, ALeasedReaderBoundsTheHorizonUntilItsLeaseDies) {
     // Idempotent: a second release withdraws nothing twice.
     lease.value().Release();
     EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
+}
+
+TEST_F(TxnManagerTest, TheBoundIsPublishedWithTheStampOfTheOldestViewThatHoldsIt) {
+    // DF-S2: every held view carries the instant its minter stamped it with,
+    // and the core publishes the oldest stamp among the views at its bound -
+    // what `read_horizon_age_us` is read from.
+    const auto held = [&] { return mgr_->visibility().HorizonHeldBy(); };
+    EXPECT_EQ(held().lsn, kUnboundedBound);
+
+    // A transaction's view, stamped at `Begin`.
+    auto begun = mgr_->Begin(IsolationLevel::kReadCommitted, /*now_ns=*/1'000);
+    ASSERT_TRUE(begun.ok());
+    Transaction* txn = begun.value();
+    EXPECT_EQ(held().lsn, txn->view().snapshot_lsn);
+    EXPECT_EQ(held().minted_ns, 1'000u);
+
+    // A leased reader at the same LSN, minted later: the older stamp stands.
+    const ReadView view = mgr_->MintReadView(kNoTrxId);
+    ASSERT_EQ(view.snapshot_lsn, txn->view().snapshot_lsn);
+    auto lease = mgr_->RegisterReader(view, /*now_ns=*/4'000);
+    ASSERT_TRUE(lease.ok());
+    EXPECT_EQ(held().minted_ns, 1'000u);
+
+    // READ COMMITTED re-mints at a statement boundary and takes the new stamp;
+    // the lease is then the older view.
+    ASSERT_TRUE(mgr_->StartStatement(*txn, /*now_ns=*/7'000).ok());
+    EXPECT_EQ(held().minted_ns, 4'000u);
+    // A lease re-pointed at a newer view takes its stamp (CS-R3's refresh).
+    mgr_->RefreshReader(lease.value(), mgr_->MintReadView(kNoTrxId), /*now_ns=*/9'000);
+    EXPECT_EQ(held().minted_ns, 7'000u);
+
+    // The transaction ends: the lease alone holds the bound.
+    ASSERT_TRUE(mgr_->Commit(*txn, wal::DurabilityClass::kRelaxed).ok());
+    mgr_->Release(*txn);
+    EXPECT_EQ(held().minted_ns, 9'000u);
+    lease.value().Release();
+    EXPECT_EQ(held().lsn, kUnboundedBound);
+
+    // REPEATABLE READ keeps `Begin`'s view, and so its stamp, at a boundary.
+    auto rr = mgr_->Begin(IsolationLevel::kRepeatableRead, /*now_ns=*/20'000);
+    ASSERT_TRUE(rr.ok());
+    ASSERT_TRUE(mgr_->StartStatement(*rr.value(), /*now_ns=*/30'000).ok());
+    EXPECT_EQ(held().minted_ns, 20'000u);
+    ASSERT_TRUE(mgr_->Abort(*rr.value()).ok());
+    mgr_->Release(*rr.value());
+
+    // A caller with no clock stamps nothing, and the age is then not known.
+    auto unstamped = mgr_->RegisterReader(mgr_->MintReadView(kNoTrxId));
+    ASSERT_TRUE(unstamped.ok());
+    EXPECT_NE(held().lsn, kUnboundedBound);
+    EXPECT_EQ(held().minted_ns, kNoMintStamp);
+}
+
+TEST_F(TxnManagerTest, ACommitIsCountedWhereItIsPublishedAndARollbackIsNot) {
+    // DF-Q13 (a): `commits` is counted at the one site that commits. The
+    // manager's `Abort` knows no cause, so it counts nothing - its callers do.
+    const auto commits = [] {
+        return stats::TxnStats::CountsOf(0)[static_cast<std::size_t>(stats::TxnEnd::kCommit)];
+    };
+    const auto all = [] {
+        std::uint64_t sum = 0;
+        for (std::uint64_t n : stats::TxnStats::CountsOf(0)) sum += n;
+        return sum;
+    };
+    const std::uint64_t commits_before = commits();
+    const std::uint64_t all_before = all();
+
+    Transaction* committed = Begin();
+    ASSERT_NE(committed, nullptr);
+    ASSERT_TRUE(mgr_->Commit(*committed, wal::DurabilityClass::kRelaxed).ok());
+    mgr_->Release(*committed);
+    EXPECT_EQ(commits(), commits_before + 1);
+
+    Transaction* aborted = Begin();
+    ASSERT_NE(aborted, nullptr);
+    ASSERT_TRUE(mgr_->Abort(*aborted).ok());
+    mgr_->Release(*aborted);
+    EXPECT_EQ(commits(), commits_before + 1);
+    EXPECT_EQ(all(), all_before + 1) << "the manager counted an end it cannot name";
 }
 
 TEST_F(TxnManagerTest, AnInFlightWriterKeepsBindingThroughAViewThatSawIt) {

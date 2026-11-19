@@ -263,6 +263,42 @@ TEST(InstanceVisibilityTest, HorizonIsTheMinimumOverCores) {
     EXPECT_EQ(vis.HorizonLsn(), 900u);
 }
 
+TEST(InstanceVisibilityTest, TheHorizonsHolderIsTheCoreOfTheMinimumWithItsStamp) {
+    // DF-S2: `sys.meta`'s `read_horizon_*` are read from this.
+    InstanceVisibility vis;
+    EXPECT_EQ(vis.HorizonHeldBy().lsn, kUnboundedBound) << "no view held anywhere";
+
+    vis.PublishSnapshotBound(kCore0, 900, /*minted_ns=*/5'000);
+    InstanceVisibility::HorizonHolder held = vis.HorizonHeldBy();
+    EXPECT_EQ(held.lsn, 900u);
+    EXPECT_EQ(held.core, kCore0);
+    EXPECT_EQ(held.minted_ns, 5'000u);
+
+    // A lower bound on another core takes it, whatever its stamp.
+    vis.PublishSnapshotBound(kCore1, 400, /*minted_ns=*/9'000);
+    held = vis.HorizonHeldBy();
+    EXPECT_EQ(held.lsn, 400u);
+    EXPECT_EQ(held.core, kCore1);
+    EXPECT_EQ(held.minted_ns, 9'000u);
+    EXPECT_EQ(held.lsn, vis.HorizonLsn()) << "one horizon, read two ways";
+
+    // Two cores at one LSN: the older view is the holder.
+    vis.PublishSnapshotBound(kCore0, 400, /*minted_ns=*/2'000);
+    held = vis.HorizonHeldBy();
+    EXPECT_EQ(held.core, kCore0);
+    EXPECT_EQ(held.minted_ns, 2'000u);
+    // ... and a view nobody stamped counts as oldest: its age is not known,
+    // and a known age beside it would understate what holds the horizon.
+    vis.PublishSnapshotBound(kCore1, 400);
+    held = vis.HorizonHeldBy();
+    EXPECT_EQ(held.core, kCore1);
+    EXPECT_EQ(held.minted_ns, kNoMintStamp);
+
+    vis.PublishSnapshotBound(kCore0, kUnboundedBound);
+    vis.PublishSnapshotBound(kCore1, kUnboundedBound);
+    EXPECT_EQ(vis.HorizonHeldBy().lsn, kUnboundedBound);
+}
+
 // The window is not a leak: a commit stream with nothing holding the floor
 // reclaims as it goes, and the amortised threshold is what keeps the pass
 // off every commit.

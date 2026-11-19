@@ -141,6 +141,16 @@ public:
     }
     std::shared_ptr<const PlanStatsSnapshot> Current() const;
 
+    // ---- Space (DF-S4, DF-Q9 (a)) -------------------------------------------
+    //
+    // A relation's delete-marked rows as the steward's last seed that read
+    // a leaf sampled them: the delete-marked slots of the leaves it read for
+    // the prior, scaled as PS1 scales their live slots. `nullopt` for a
+    // relation no seed has sampled a leaf of. **Not a planner fact** (DF-R8): a side
+    // table only `sys.relation_stats` reads, in no snapshot, moving no
+    // generation. Any core; the steward is its one writer.
+    std::optional<std::uint64_t> EstDeleteMarked(catalog::Oid oid) const;
+
     // ---- Across a clean shutdown (CY-S1, plan-stats.md §8) -----------------
     //
     // Both run with no steward step and no statement in flight: the first at
@@ -239,6 +249,10 @@ private:
     std::map<catalog::Oid, Prior> priors_;
     catalog::Oid reseed_cursor_ = 0;
     bool dirty_ = false;
+    // `EstDeleteMarked`'s side table, under its own latch: the steward
+    // writes, a view on any core reads, and nothing else touches it.
+    mutable Latch space_latch_{LatchKind::kStatsRing};
+    std::unordered_map<catalog::Oid, std::uint64_t> delete_marked_;
 
     // Taken before `managed_`'s latch, never after it: `Install` and
     // `RepublishManaged` read the bands under this one.
@@ -306,8 +320,12 @@ private:
 std::size_t LeafRowCapacity(std::uint32_t row_size) noexcept;
 
 // PS1's prior for one relation, reading at most `budget` pages, one at a
-// time, and decrementing it. Exposed for its tests.
+// time, and decrementing it. Exposed for its tests. `delete_marked`, where
+// given, takes the delete-marked slots of the leaves the prior read, scaled
+// as their live slots are (DF-S4); it is left as it was where no leaf was
+// read.
 StatusOr<double> ReadRelationPrior(storage::PageStore& store, const catalog::TableAccess& access,
-                                   std::size_t& budget);
+                                   std::size_t& budget,
+                                   std::optional<double>* delete_marked = nullptr);
 
 }  // namespace kds::stats

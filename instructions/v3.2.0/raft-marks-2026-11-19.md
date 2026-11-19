@@ -68,3 +68,30 @@ took under them.
 | **The record's push** | *"push no verify"* - after CLA's report that the tag was pushed and its record (`CLAUDE.md`'s line, this section, the index row) was committed on `worktree-dc-select-for-update` and not pushed. The record goes to `main` with `--no-verify`, a fast-forward of two documents-only commits; the hook was skipped and no suite was executed for them (no build input changed) |
 | **Does not settle** | anything after `35086008` but this record; the options DC's standing go-ahead did not take |
 | **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
+
+## 8. DF-S2 started
+
+| | |
+|---|---|
+| **Word** | *"proceed with DF-S2"* - after CLA's list of the open milestones, which named DF with DF-S2 (part B) as its next stage, not started |
+| **Mark** | **DF-S2 started**, on worktree `da-q8-memory-bound-key` (branch `worktree-df-statistics-coverage`), fast-forwarded from `3adf8810` to `origin/main` at `8e7c820f`. No item is marked by the word: DF-Q0..Q14 were each marked (a) on 2026-11-18 |
+| **Does not settle** | DF-S3 onward; any push |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md` §7 |
+
+## 9. DF to its close on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | the skill `go-ahead-achieving-milestone`, invoked with the argument *"DF"* while DF-S2's build was running: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"* |
+| **Mark** | **DF runs to its close in this session**: DF-S2, DF-S3, DF-S4 and DF-S5, each reviewed and suite-run as the Session Workflow asks. **An item a stage raises is adopted as CLA proposes it, on this word and not as the operator's own mark**; each is recorded in the order's §4 and §7 as adopted on the standing go-ahead of 2026-11-19. The six things DF-S1 built differently from §2, shown to the operator on 2026-11-18 and marked by no word, stand under this one as CLA proposed them |
+| **Does not settle** | a push, a merge to `main`, a tag, a version - each waits for the operator's word; DA-S1, so part C's two `sys.access_stats` columns stay owed; anything outside DF |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md` header, §4 and §7; `instructions/v3.2.0/index.md`'s DF row and this file's |
+
+## 10. DF closed with its measured cost, and pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"close milestone and push no verify"* - after CLA's report that every stage of DF was on its work branch at `3f4f0214`, that the close measured a tuple key read at about +0.51 us of server CPU for all of DF against DF-Q10 (a)'s 0.5 us bar, not resolved, after three remedies, and that whether DF closes over that was DF-Q24 and the operator's |
+| **Mark** | **DF is closed, the operator's own reading of DF-Q24**: with the cost the close measured and no part reverted - DF-S1 +0.44 us on a tuple key read, DF-S2..S4 +0.07 us more and +0.18 us on an index-served read, a write inside the floor (`bench/v3.4.13/results-df-close-final-v3.4.13-17-gc16b4fc2.md`). The bar of DF-Q10 (a) is not declared met: the centre is at it and the interval straddles it. **Pushed to `main` with `--no-verify`**: the hook was skipped; the suite that stands behind the push is the full suite at `3f4f0214`, 0 failed of 4821, and nothing after that commit changes a build input (this record is documents only) |
+| **Does not settle** | DF-Q15..DF-Q23, which stay adopted on the standing go-ahead of §9 and are not the operator's own marks; DF-S1's share on an index-served read and on a write, and `cores` above 1, unmeasured; the two timing cells that each failed once under load in this session's runs (the order's §7); `sys.access_stats`' two columns, DA's; a tag, a version |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md` header, §4 and §7; `instructions/v3.2.0/index.md`'s DF row and this file's |

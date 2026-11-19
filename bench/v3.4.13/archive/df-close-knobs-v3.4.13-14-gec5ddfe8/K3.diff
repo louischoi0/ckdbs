@@ -1,0 +1,51 @@
+diff -ru srcec5ddfe8/src/txn/instance_visibility.cpp srcK3/src/txn/instance_visibility.cpp
+--- srcec5ddfe8/src/txn/instance_visibility.cpp	2026-11-19 06:43:48.000000000 +0000
++++ srcK3/src/txn/instance_visibility.cpp	2026-11-19 07:55:51.065142004 +0000
+@@ -58,7 +58,7 @@
+     // `seq_cst`: the header's Concurrency note, the store-buffer pattern
+     // between a mint and a pass.
+     slots_[core].min_snapshot_lsn.store(lsn);
+-    slots_[core].min_snapshot_minted_ns.store(minted_ns, std::memory_order_relaxed);
++    (void)minted_ns;  // KNOB K3: the stamp is not published
+     NoteSlot(core);
+ }
+ 
+diff -ru srcec5ddfe8/src/txn/manager.cpp srcK3/src/txn/manager.cpp
+--- srcec5ddfe8/src/txn/manager.cpp	2026-11-19 06:43:48.000000000 +0000
++++ srcK3/src/txn/manager.cpp	2026-11-19 07:55:51.065142004 +0000
+@@ -145,7 +145,7 @@
+     txn->isolation_ = isolation;
+     txn->active_ = true;
+     txn->view_ = MintReadView(id.value());
+-    txn->view_minted_ns_ = now_ns;
++    (void)now_ns;  // KNOB K3
+ 
+     if (wal_ != nullptr) {
+         if (auto begun = wal_->Append(wal::RecordSpec{wal::RecordType::kTxnBegin, id.value()});
+@@ -182,7 +182,7 @@
+     if (txn.isolation_ == IsolationLevel::kRepeatableRead) return Status::OK();
+ 
+     txn.view_ = MintReadView(txn.id_);
+-    txn.view_minted_ns_ = now_ns;
++    (void)now_ns;  // KNOB K3
+     // The view this transaction held is gone, and it may have been the one
+     // holding this core's snapshot bound down. A bound left stale-low costs
+     // retention, never correctness, but an RC session that never ends would
+@@ -772,7 +772,7 @@
+         // holds the horizon below every commit - which is what that view
+         // means.
+         reader_slots_[slot] = view.snapshot_lsn;
+-        reader_minted_ns_[slot] = now_ns;
++        (void)now_ns;  // KNOB K3
+         // Published before the lease is handed back, so the slot is never
+         // held by a reader the instance cannot see. AN-R1 says why the gap
+         // between the mint and this store is harmless anyway.
+@@ -787,7 +787,7 @@
+                                        std::uint64_t now_ns) noexcept {
+     assert(lease.mgr_ == this);
+     reader_slots_[lease.slot_] = view.snapshot_lsn;
+-    reader_minted_ns_[lease.slot_] = now_ns;
++    (void)now_ns;  // KNOB K3
+     PublishCoreBounds();
+ }
+ 

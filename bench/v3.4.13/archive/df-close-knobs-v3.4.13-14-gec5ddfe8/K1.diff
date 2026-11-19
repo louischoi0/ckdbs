@@ -1,0 +1,12 @@
+diff -ru srcec5ddfe8/src/server/command_dispatcher.cpp srcK1/src/server/command_dispatcher.cpp
+--- srcec5ddfe8/src/server/command_dispatcher.cpp	2026-11-19 06:43:48.000000000 +0000
++++ srcK1/src/server/command_dispatcher.cpp	2026-11-19 07:55:48.929141793 +0000
+@@ -10077,7 +10077,7 @@
+     RecordAccessShapes(chain);
+     RecordOptimizerSignals(identity, chain, stats);
+     RecordPlanStats(chain, stats);
+-    RecordIndexUse(chain, stats);
++    // KNOB K1: RecordIndexUse(chain, stats);
+ }
+ 
+ void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,

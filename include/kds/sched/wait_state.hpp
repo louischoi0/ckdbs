@@ -131,6 +131,14 @@ struct SessionWaitStats {
     // `SampleSessionCost`; no view shows the pair.
     RelaxedU64 log_bytes;
     RelaxedU64 log_records;
+    // **What the session holds open** (DF-Q8 (a)), for `sys.session_state`'s
+    // `txn_age_us` and `view_age_us`: when its explicit transaction began,
+    // and when the read view it holds was minted - its transaction's, or its
+    // running autocommit statement's - each the head of the statement that
+    // did it, on the instance's monotonic clock; 0 with none held, or with
+    // no clock. Written by `server::Session` on the core the session runs on.
+    RelaxedU64 txn_began_ns;
+    RelaxedU64 view_minted_ns;
 };
 
 // **A session's statistics folded to what one statement's cost is read

@@ -108,6 +108,8 @@ add_library(kds
     src/stats/relation_stats.cpp
     src/stats/statement_stats.cpp
     src/stats/refusal_stats.cpp
+    src/stats/txn_stats.cpp
+    src/stats/leaf_stats.cpp
     src/stats/trail_recorder.cpp
     src/stats/access_stats.cpp
     src/stats/cabin_store.cpp

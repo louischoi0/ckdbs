@@ -1,0 +1,192 @@
+## per cell, per lifetime (median over blocks of the block-paired delta, us a statement)
+
+### select-pk / literal
+
+| Lifetime | A | A' | B | C | B - A | D - A | D - B | A' - A (floor) | blocks D < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 20.69 us | 20.81 us | 20.73 us | 20.64 us | +0.02 us | -0.08 us | -0.08 us | +0.01 us | 16 of 24 | yes (1) |
+| 2 | 20.59 us | 20.53 us | 21.15 us | 20.99 us | +0.26 us | +0.16 us | -0.05 us | -0.02 us | 14 of 24 | yes (1) |
+| 3 | 20.80 us | 20.42 us | 20.69 us | 20.49 us | +0.02 us | -0.24 us | -0.23 us | -0.41 us | 20 of 24 | yes (1) |
+| 4 | 20.67 us | 20.82 us | 20.72 us | 20.84 us | +0.04 us | +0.12 us | +0.05 us | +0.02 us | 11 of 24 | yes (1) |
+| 5 | 21.37 us | 21.37 us | 21.58 us | 21.46 us | +0.24 us | +0.04 us | -0.16 us | -0.03 us | 16 of 24 | yes (1) |
+| 6 | 20.78 us | 20.94 us | 21.04 us | 21.40 us | +0.40 us | +0.33 us | +0.17 us | +0.13 us | 8 of 24 | yes (1) |
+| 7 | 21.81 us | 21.68 us | 21.99 us | 22.06 us | +0.21 us | +0.29 us | +0.11 us | -0.10 us | 9 of 24 | yes (2) |
+| 8 | 21.10 us | 20.91 us | 21.32 us | 21.67 us | +0.15 us | +0.23 us | +0.04 us | -0.17 us | 10 of 24 | yes (1) |
+| 9 | 22.15 us | 21.73 us | 21.75 us | 21.79 us | -0.09 us | -0.28 us | -0.13 us | -0.44 us | 13 of 24 | yes (2) |
+| 10 | 20.61 us | 21.28 us | 21.17 us | 20.80 us | +0.22 us | +0.25 us | -0.13 us | +0.24 us | 17 of 24 | yes (1) |
+| **pooled** | 21.06 us | 21.05 us | 21.21 us | 21.21 us | **+0.16 us** [+0.13, +0.21] | **+0.09 us** [+0.02, +0.16] | **-0.08 us** [-0.13, +0.01] | **-0.06 us** [-0.12, -0.00] | 134 of 240 | 10 clean |
+
+### select-pk / prepared
+
+| Lifetime | A | A' | B | C | B - A | D - A | D - B | A' - A (floor) | blocks D < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 20.40 us | 20.41 us | 20.00 us | 20.04 us | -0.12 us | -0.04 us | +0.04 us | +0.02 us | 11 of 24 | yes (1) |
+| 2 | 20.69 us | 20.70 us | 20.98 us | 21.03 us | +0.19 us | +0.08 us | -0.17 us | -0.01 us | 14 of 24 | yes (1) |
+| 3 | 20.05 us | 19.85 us | 20.30 us | 20.03 us | +0.09 us | -0.18 us | -0.24 us | -0.24 us | 16 of 24 | yes (1) |
+| 4 | 19.88 us | 19.89 us | 19.92 us | 19.94 us | +0.07 us | +0.11 us | +0.00 us | +0.04 us | 12 of 24 | yes (1) |
+| 5 | 20.80 us | 20.72 us | 20.80 us | 20.79 us | +0.07 us | +0.00 us | -0.04 us | +0.02 us | 13 of 24 | yes (1) |
+| 6 | 20.18 us | 20.13 us | 20.28 us | 20.16 us | +0.26 us | +0.14 us | -0.07 us | -0.10 us | 15 of 24 | yes (1) |
+| 7 | 20.96 us | 21.00 us | 21.19 us | 21.18 us | +0.15 us | +0.12 us | -0.00 us | +0.03 us | 12 of 24 | yes (1) |
+| 8 | 20.94 us | 21.11 us | 21.12 us | 21.18 us | +0.14 us | +0.21 us | +0.03 us | +0.12 us | 11 of 24 | yes (3) |
+| 9 | 20.98 us | 20.73 us | 20.99 us | 20.93 us | +0.00 us | -0.15 us | -0.03 us | -0.38 us | 13 of 24 | yes (2) |
+| 10 | 21.51 us | 21.56 us | 21.63 us | 21.73 us | +0.13 us | +0.30 us | -0.06 us | +0.23 us | 13 of 24 | yes (1) |
+| **pooled** | 20.64 us | 20.61 us | 20.72 us | 20.70 us | **+0.11 us** [+0.07, +0.17] | **+0.04 us** [+0.00, +0.09] | **-0.02 us** [-0.07, +0.01] | **-0.03 us** [-0.07, +0.04] | 130 of 240 | 10 clean |
+
+### select-index / literal
+
+| Lifetime | A | A' | B | C | B - A | D - A | D - B | A' - A (floor) | blocks D < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 23.72 us | 23.70 us | 24.26 us | 23.62 us | +0.37 us | -0.13 us | -0.34 us | +0.14 us | 20 of 24 | yes (1) |
+| 2 | 23.88 us | 23.94 us | 24.41 us | 24.28 us | +0.57 us | +0.25 us | -0.11 us | -0.05 us | 13 of 24 | yes (1) |
+| 3 | 23.66 us | 23.30 us | 23.85 us | 23.52 us | +0.28 us | -0.17 us | -0.41 us | -0.34 us | 21 of 24 | yes (1) |
+| 4 | 23.74 us | 23.96 us | 24.17 us | 24.21 us | +0.37 us | +0.46 us | +0.06 us | +0.04 us | 10 of 24 | yes (1) |
+| 5 | 24.31 us | 24.15 us | 24.63 us | 24.63 us | +0.29 us | +0.36 us | -0.00 us | -0.30 us | 12 of 24 | yes (1) |
+| 6 | 23.91 us | 23.69 us | 24.49 us | 24.19 us | +0.32 us | +0.21 us | -0.18 us | -0.32 us | 14 of 24 | yes (1) |
+| 7 | 25.30 us | 25.45 us | 25.68 us | 25.44 us | +0.41 us | +0.05 us | -0.28 us | +0.14 us | 20 of 24 | yes (1) |
+| 8 | 25.04 us | 24.97 us | 25.43 us | 25.24 us | +0.30 us | +0.26 us | -0.06 us | -0.14 us | 13 of 24 | yes (1) |
+| 9 | 24.83 us | 24.56 us | 25.33 us | 24.86 us | +0.56 us | +0.03 us | -0.49 us | -0.34 us | 21 of 24 | yes (1) |
+| 10 | 24.90 us | 25.36 us | 25.51 us | 25.43 us | +0.49 us | +0.37 us | -0.15 us | +0.38 us | 16 of 24 | yes (1) |
+| **pooled** | 24.33 us | 24.31 us | 24.78 us | 24.54 us | **+0.40 us** [+0.34, +0.43] | **+0.20 us** [+0.10, +0.26] | **-0.21 us** [-0.27, -0.15] | **-0.12 us** [-0.18, -0.04] | 160 of 240 | 10 clean |
+
+### select-index / prepared
+
+| Lifetime | A | A' | B | C | B - A | D - A | D - B | A' - A (floor) | blocks D < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 23.08 us | 23.02 us | 23.13 us | 22.86 us | +0.09 us | -0.11 us | -0.25 us | +0.02 us | 19 of 24 | yes (1) |
+| 2 | 24.42 us | 24.23 us | 24.80 us | 24.63 us | +0.50 us | +0.21 us | -0.28 us | -0.24 us | 17 of 24 | yes (2) |
+| 3 | 23.10 us | 22.65 us | 23.26 us | 22.81 us | +0.02 us | -0.28 us | -0.40 us | -0.39 us | 20 of 24 | yes (1) |
+| 4 | 23.09 us | 23.27 us | 23.46 us | 23.53 us | +0.48 us | +0.42 us | +0.11 us | +0.13 us | 10 of 24 | yes (1) |
+| 5 | 23.70 us | 23.51 us | 23.95 us | 23.87 us | +0.25 us | +0.22 us | -0.05 us | -0.20 us | 13 of 24 | yes (1) |
+| 6 | 23.95 us | 24.02 us | 24.01 us | 24.07 us | +0.00 us | +0.30 us | -0.12 us | +0.06 us | 13 of 24 | yes (1) |
+| 7 | 24.19 us | 24.27 us | 24.45 us | 23.67 us | +0.38 us | +0.16 us | -0.11 us | +0.10 us | 14 of 24 | yes (2) |
+| 8 | 24.01 us | 23.86 us | 24.21 us | 24.28 us | +0.21 us | +0.45 us | +0.20 us | -0.01 us | 8 of 24 | yes (2) |
+| 9 | 23.92 us | 23.60 us | 24.50 us | 23.71 us | +0.21 us | -0.13 us | -0.32 us | -0.39 us | 15 of 24 | yes (1) |
+| 10 | 24.23 us | 25.00 us | 24.65 us | 24.61 us | +0.46 us | +0.42 us | -0.13 us | +0.54 us | 14 of 24 | yes (1) |
+| **pooled** | 23.77 us | 23.74 us | 24.04 us | 23.81 us | **+0.30 us** [+0.18, +0.38] | **+0.18 us** [+0.08, +0.26] | **-0.14 us** [-0.21, -0.06] | **-0.08 us** [-0.15, +0.01] | 143 of 240 | 10 clean |
+
+### update-lit / literal
+
+| Lifetime | A | A' | B | C | B - A | D - A | D - B | A' - A (floor) | blocks D < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 20.52 us | 20.55 us | 20.52 us | 20.84 us | +0.02 us | +0.11 us | +0.07 us | +0.02 us | 9 of 24 | yes (1) |
+| 2 | 22.15 us | 22.40 us | 21.95 us | 22.17 us | -0.30 us | -0.03 us | +0.19 us | +0.09 us | 7 of 24 | yes (1) |
+| 3 | 20.69 us | 20.55 us | 20.61 us | 20.54 us | -0.13 us | -0.08 us | -0.01 us | -0.19 us | 12 of 24 | yes (1) |
+| 4 | 20.70 us | 20.61 us | 20.52 us | 20.89 us | -0.22 us | -0.06 us | +0.21 us | -0.04 us | 6 of 24 | yes (1) |
+| 5 | 21.33 us | 21.43 us | 21.30 us | 21.29 us | -0.07 us | +0.03 us | -0.01 us | +0.05 us | 12 of 24 | yes (1) |
+| 6 | 20.78 us | 20.85 us | 20.85 us | 20.86 us | -0.11 us | +0.05 us | +0.22 us | -0.01 us | 7 of 24 | yes (1) |
+| 7 | 21.69 us | 21.75 us | 21.75 us | 21.95 us | +0.00 us | +0.19 us | +0.14 us | +0.02 us | 4 of 24 | yes (1) |
+| 8 | 20.59 us | 20.65 us | 20.59 us | 20.69 us | +0.01 us | +0.05 us | +0.07 us | +0.11 us | 7 of 24 | yes (1) |
+| 9 | 22.29 us | 21.93 us | 22.22 us | 22.38 us | -0.07 us | -0.07 us | +0.07 us | -0.15 us | 10 of 24 | yes (1) |
+| 10 | 22.06 us | 22.22 us | 22.05 us | 22.05 us | +0.05 us | +0.18 us | -0.01 us | +0.21 us | 12 of 24 | yes (1) |
+| **pooled** | 21.28 us | 21.30 us | 21.24 us | 21.37 us | **-0.05 us** [-0.11, -0.01] | **+0.03 us** [-0.01, +0.08] | **+0.08 us** [+0.04, +0.13] | **+0.01 us** [-0.06, +0.05] | 86 of 240 | 10 clean |
+
+### update-lit / prepared
+
+| Lifetime | A | A' | B | C | B - A | D - A | D - B | A' - A (floor) | blocks D < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 19.90 us | 19.82 us | 19.87 us | 19.82 us | +0.00 us | -0.07 us | +0.02 us | -0.06 us | 11 of 24 | yes (1) |
+| 2 | 21.20 us | 21.26 us | 21.30 us | 21.09 us | -0.02 us | -0.04 us | +0.01 us | +0.07 us | 12 of 24 | yes (1) |
+| 3 | 19.92 us | 19.78 us | 19.73 us | 20.04 us | -0.21 us | +0.14 us | +0.36 us | -0.15 us | 4 of 24 | yes (1) |
+| 4 | 19.91 us | 19.98 us | 19.69 us | 20.01 us | -0.09 us | +0.08 us | +0.23 us | -0.05 us | 4 of 24 | yes (1) |
+| 5 | 20.72 us | 20.53 us | 20.55 us | 20.56 us | -0.10 us | -0.04 us | +0.06 us | -0.02 us | 10 of 24 | yes (1) |
+| 6 | 20.44 us | 20.91 us | 20.28 us | 20.74 us | -0.05 us | +0.08 us | +0.25 us | +0.03 us | 8 of 24 | yes (1) |
+| 7 | 21.86 us | 21.29 us | 21.18 us | 21.34 us | -0.11 us | -0.07 us | +0.19 us | -0.09 us | 6 of 24 | yes (2) |
+| 8 | 19.99 us | 19.96 us | 19.86 us | 19.96 us | -0.03 us | +0.05 us | +0.14 us | -0.04 us | 6 of 24 | yes (1) |
+| 9 | 21.35 us | 21.18 us | 21.17 us | 21.05 us | -0.22 us | -0.27 us | -0.07 us | -0.22 us | 14 of 24 | yes (1) |
+| 10 | 21.15 us | 21.25 us | 21.02 us | 21.11 us | -0.08 us | +0.07 us | +0.10 us | +0.06 us | 6 of 24 | yes (2) |
+| **pooled** | 20.64 us | 20.60 us | 20.47 us | 20.57 us | **-0.08 us** [-0.13, -0.03] | **+0.01 us** [-0.04, +0.06] | **+0.11 us** [+0.06, +0.14] | **-0.05 us** [-0.10, +0.02] | 81 of 240 | 10 clean |
+
+### insert / literal
+
+| Lifetime | A | A' | B | C | B - A | D - A | D - B | A' - A (floor) | blocks D < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 19.77 us | 19.56 us | 19.57 us | 19.58 us | -0.22 us | -0.12 us | +0.08 us | -0.22 us | 8 of 24 | yes (1) |
+| 2 | 20.75 us | 20.44 us | 20.99 us | 20.62 us | -0.04 us | -0.11 us | -0.04 us | -0.22 us | 13 of 24 | NO (1) |
+| 3 | 19.69 us | 19.50 us | 19.82 us | 19.54 us | +0.02 us | +0.08 us | +0.24 us | -0.17 us | 8 of 24 | yes (1) |
+| 4 | 19.65 us | 19.53 us | 19.45 us | 19.78 us | -0.29 us | -0.06 us | +0.11 us | -0.19 us | 8 of 24 | yes (1) |
+| 5 | 20.69 us | 20.71 us | 20.55 us | 20.64 us | -0.10 us | -0.12 us | +0.09 us | -0.21 us | 8 of 24 | yes (1) |
+| 6 | 19.71 us | 19.44 us | 19.64 us | 19.91 us | +0.06 us | +0.19 us | +0.19 us | -0.24 us | 4 of 24 | yes (1) |
+| 7 | 19.83 us | 19.55 us | 19.71 us | 19.77 us | -0.01 us | -0.08 us | +0.12 us | -0.21 us | 10 of 24 | yes (1) |
+| 8 | 19.60 us | 19.59 us | 19.71 us | 19.67 us | +0.23 us | +0.24 us | +0.05 us | +0.04 us | 10 of 24 | yes (1) |
+| 9 | 20.81 us | 20.68 us | 20.82 us | 20.76 us | -0.03 us | +0.05 us | +0.04 us | -0.12 us | 10 of 24 | NO (1) |
+| 10 | 19.94 us | 19.77 us | 20.21 us | 20.30 us | +0.18 us | +0.22 us | +0.07 us | +0.09 us | 11 of 24 | yes (1) |
+| **pooled** | 19.86 us | 19.71 us | 19.83 us | 19.90 us | **-0.05 us** [-0.15, +0.05] | **+0.05 us** [-0.03, +0.08] | **+0.11 us** [+0.06, +0.18] | **-0.18 us** [-0.22, -0.11] | 67 of 192 | 8 clean |
+
+### insert / prepared
+
+| Lifetime | A | A' | B | C | B - A | D - A | D - B | A' - A (floor) | blocks D < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 18.79 us | 18.63 us | 18.60 us | 18.59 us | -0.18 us | -0.17 us | +0.04 us | -0.14 us | 11 of 24 | yes (1) |
+| 2 | 19.94 us | 19.82 us | 19.83 us | 19.98 us | -0.19 us | -0.03 us | +0.01 us | -0.08 us | 10 of 24 | yes (1) |
+| 3 | 19.09 us | 18.97 us | 18.84 us | 18.99 us | -0.13 us | -0.08 us | +0.15 us | -0.29 us | 10 of 24 | yes (1) |
+| 4 | 18.68 us | 18.71 us | 18.65 us | 18.78 us | -0.12 us | +0.13 us | +0.13 us | +0.03 us | 6 of 24 | yes (1) |
+| 5 | 20.05 us | 19.67 us | 19.90 us | 19.99 us | -0.22 us | +0.03 us | +0.09 us | -0.30 us | 7 of 24 | yes (1) |
+| 6 | 19.54 us | 19.11 us | 19.07 us | 19.52 us | -0.07 us | +0.15 us | +0.25 us | -0.31 us | 5 of 24 | yes (1) |
+| 7 | 19.59 us | 19.33 us | 19.49 us | 19.63 us | -0.13 us | -0.02 us | +0.16 us | -0.29 us | 4 of 24 | yes (1) |
+| 8 | 19.14 us | 19.70 us | 19.18 us | 19.30 us | +0.15 us | +0.14 us | +0.14 us | +0.07 us | 9 of 24 | yes (1) |
+| 9 | 19.54 us | 19.74 us | 19.51 us | 19.77 us | +0.14 us | +0.01 us | +0.05 us | +0.03 us | 10 of 24 | yes (1) |
+| 10 | 18.35 us | 18.40 us | 18.55 us | 18.72 us | +0.11 us | +0.26 us | +0.11 us | +0.06 us | 6 of 24 | yes (1) |
+| **pooled** | 19.27 us | 19.21 us | 19.16 us | 19.33 us | **-0.09 us** [-0.12, -0.03] | **+0.04 us** [-0.02, +0.11] | **+0.11 us** [+0.06, +0.15] | **-0.12 us** [-0.17, -0.07] | 78 of 240 | 10 clean |
+
+## headline per cell (pooled over clean lifetimes; median of block-paired deltas [95 % bootstrap over blocks]; lifetimes above 0)
+
+| Cell | A server CPU | B - A | D - A | D - B | A' - A (floor) | lifetime medians of A' - A: range | blocks D < B | D - B as share of A |
+|---|---|---|---|---|---|---|---|---|
+| select-pk literal | 21.06 us | +0.16 us [+0.13, +0.21], 9 of 10 | +0.09 us [+0.02, +0.16], 7 of 10 | -0.08 us [-0.13, +0.01], 4 of 10 | -0.06 us [-0.12, -0.00], 4 of 10 | -0.44..+0.24 us | 134 of 240 | -0.38 % |
+| select-pk prepared | 20.64 us | +0.11 us [+0.07, +0.17], 9 of 10 | +0.04 us [+0.00, +0.09], 7 of 10 | -0.02 us [-0.07, +0.01], 3 of 10 | -0.03 us [-0.07, +0.04], 6 of 10 | -0.38..+0.23 us | 130 of 240 | -0.10 % |
+| select-index literal | 24.33 us | +0.40 us [+0.34, +0.43], 10 of 10 | +0.20 us [+0.10, +0.26], 8 of 10 | -0.21 us [-0.27, -0.15], 1 of 10 | -0.12 us [-0.18, -0.04], 4 of 10 | -0.34..+0.38 us | 160 of 240 | -0.86 % |
+| select-index prepared | 23.77 us | +0.30 us [+0.18, +0.38], 10 of 10 | +0.18 us [+0.08, +0.26], 7 of 10 | -0.14 us [-0.21, -0.06], 2 of 10 | -0.08 us [-0.15, +0.01], 5 of 10 | -0.39..+0.54 us | 143 of 240 | -0.59 % |
+| update-lit literal | 21.28 us | -0.05 us [-0.11, -0.01], 4 of 10 | +0.03 us [-0.01, +0.08], 6 of 10 | +0.08 us [+0.04, +0.13], 7 of 10 | +0.01 us [-0.06, +0.05], 6 of 10 | -0.19..+0.21 us | 86 of 240 | +0.38 % |
+| update-lit prepared | 20.64 us | -0.08 us [-0.13, -0.03], 1 of 10 | +0.01 us [-0.04, +0.06], 5 of 10 | +0.11 us [+0.06, +0.14], 9 of 10 | -0.05 us [-0.10, +0.02], 3 of 10 | -0.22..+0.07 us | 81 of 240 | +0.53 % |
+| insert literal | 19.86 us | -0.05 us [-0.15, +0.05], 4 of 8 | +0.05 us [-0.03, +0.08], 4 of 8 | +0.11 us [+0.06, +0.18], 8 of 8 | -0.18 us [-0.22, -0.11], 2 of 8 | -0.24..+0.09 us | 67 of 192 | +0.58 % |
+| insert prepared | 19.27 us | -0.09 us [-0.12, -0.03], 3 of 10 | +0.04 us [-0.02, +0.11], 6 of 10 | +0.11 us [+0.06, +0.15], 10 of 10 | -0.12 us [-0.17, -0.07], 4 of 10 | -0.31..+0.07 us | 78 of 240 | +0.57 % |
+
+## per shape, both paths pooled
+
+| Shape | A server CPU | B - A | D - A | D - B | A' - A (floor) | lifetime-median D - B: median [95 % bootstrap over lifetimes], range, lifetimes above 0 | blocks D < B |
+|---|---|---|---|---|---|---|---|
+| select-pk | 20.85 us | +0.14 us [+0.10, +0.17] | +0.07 us [+0.02, +0.10] | -0.04 us [-0.08, -0.01] | -0.05 us [-0.07, +0.00] | -0.05 us [-0.10, +0.04], -0.23..+0.05, 4 of 10 | 264 of 480 |
+| select-index | 24.05 us | +0.35 us [+0.29, +0.40] | +0.18 us [+0.12, +0.25] | -0.18 us [-0.22, -0.13] | -0.09 us [-0.15, -0.04] | -0.17 us [-0.30, -0.03], -0.41..+0.08, 2 of 10 | 303 of 480 |
+| update-lit | 20.96 us | -0.07 us [-0.11, -0.03] | +0.02 us [-0.01, +0.06] | +0.10 us [+0.07, +0.13] | -0.02 us [-0.06, +0.02] | +0.10 us [+0.03, +0.19], -0.00..+0.23, 9 of 10 | 167 of 480 |
+| insert | 19.57 us | -0.08 us [-0.12, -0.03] | +0.04 us [+0.00, +0.08] | +0.11 us [+0.08, +0.15] | -0.13 us [-0.18, -0.10] | +0.12 us [+0.10, +0.14], +0.06..+0.19, 8 of 8 | 145 of 432 |
+
+## latency, driver-side (median over lifetimes of each lifetime's per-arm statistic)
+
+| Cell | Arm | statements | QPS (1e6 / mean) | p0 | p25 | p50 | p90 | p99 | server CPU | driver CPU |
+|---|---|---|---|---|---|---|---|---|---|---|
+| select-pk literal | A | 120,000 | 18,590 qps | 47.7 us | 49.6 us | 50.7 us | 58.1 us | 72.9 us | 20.79 us | 31.98 us |
+| select-pk literal | A' | 120,000 | 18,456 qps | 47.5 us | 49.5 us | 50.8 us | 58.2 us | 74.9 us | 20.93 us | 31.98 us |
+| select-pk literal | B | 120,000 | 18,333 qps | 47.8 us | 49.8 us | 50.8 us | 59.0 us | 76.2 us | 21.16 us | 32.07 us |
+| select-pk literal | D | 120,000 | 18,485 qps | 47.8 us | 49.8 us | 50.8 us | 58.4 us | 74.4 us | 21.20 us | 31.90 us |
+| select-pk prepared | A | 120,000 | 19,402 qps | 44.1 us | 46.2 us | 47.4 us | 57.6 us | 74.7 us | 20.75 us | 29.38 us |
+| select-pk prepared | A' | 120,000 | 19,458 qps | 44.3 us | 46.0 us | 47.4 us | 57.2 us | 73.2 us | 20.71 us | 29.11 us |
+| select-pk prepared | B | 120,000 | 19,308 qps | 44.4 us | 46.2 us | 47.5 us | 57.8 us | 74.4 us | 20.89 us | 29.31 us |
+| select-pk prepared | D | 120,000 | 19,265 qps | 44.1 us | 46.1 us | 47.3 us | 57.6 us | 76.6 us | 20.86 us | 29.17 us |
+| select-index literal | A | 120,000 | 17,308 qps | 49.5 us | 52.7 us | 54.0 us | 66.0 us | 90.3 us | 24.11 us | 32.55 us |
+| select-index literal | A' | 120,000 | 17,304 qps | 49.4 us | 52.5 us | 54.0 us | 66.2 us | 91.1 us | 24.05 us | 32.77 us |
+| select-index literal | B | 120,000 | 17,149 qps | 49.9 us | 53.0 us | 54.4 us | 66.8 us | 95.3 us | 24.56 us | 32.58 us |
+| select-index literal | D | 120,000 | 17,195 qps | 49.6 us | 52.7 us | 54.2 us | 66.7 us | 98.9 us | 24.45 us | 32.41 us |
+| select-index prepared | A | 120,000 | 18,308 qps | 46.1 us | 48.8 us | 50.4 us | 61.2 us | 81.8 us | 23.94 us | 29.10 us |
+| select-index prepared | A' | 120,000 | 18,151 qps | 46.2 us | 48.8 us | 50.3 us | 61.0 us | 83.3 us | 23.73 us | 29.12 us |
+| select-index prepared | B | 120,000 | 18,253 qps | 46.1 us | 49.0 us | 50.6 us | 62.0 us | 82.3 us | 24.11 us | 29.19 us |
+| select-index prepared | D | 120,000 | 18,300 qps | 46.0 us | 48.9 us | 50.3 us | 61.4 us | 82.5 us | 23.79 us | 29.21 us |
+| update-lit literal | A | 120,000 | 21,613 qps | 36.1 us | 41.3 us | 42.1 us | 50.5 us | 68.1 us | 21.05 us | 23.71 us |
+| update-lit literal | A' | 120,000 | 21,506 qps | 36.2 us | 41.2 us | 42.1 us | 52.3 us | 69.9 us | 21.14 us | 23.73 us |
+| update-lit literal | B | 120,000 | 21,674 qps | 36.7 us | 41.1 us | 42.0 us | 51.2 us | 70.5 us | 21.08 us | 23.66 us |
+| update-lit literal | D | 120,000 | 21,706 qps | 36.0 us | 41.2 us | 42.0 us | 51.1 us | 69.7 us | 21.09 us | 23.74 us |
+| update-lit prepared | A | 120,000 | 23,387 qps | 34.2 us | 38.1 us | 38.7 us | 48.0 us | 75.7 us | 20.58 us | 21.01 us |
+| update-lit prepared | A' | 120,000 | 23,254 qps | 34.3 us | 38.1 us | 38.7 us | 48.6 us | 80.0 us | 20.72 us | 21.00 us |
+| update-lit prepared | B | 120,000 | 23,193 qps | 34.6 us | 38.0 us | 38.6 us | 48.0 us | 80.1 us | 20.41 us | 21.17 us |
+| update-lit prepared | D | 120,000 | 23,327 qps | 34.2 us | 38.1 us | 38.8 us | 48.2 us | 75.3 us | 20.65 us | 21.03 us |
+| insert literal | A | 120,000 | 22,232 qps | 37.9 us | 40.2 us | 41.0 us | 48.8 us | 67.8 us | 19.80 us | 23.56 us |
+| insert literal | A' | 120,000 | 22,409 qps | 38.5 us | 40.2 us | 40.8 us | 49.4 us | 67.5 us | 19.58 us | 23.63 us |
+| insert literal | B | 120,000 | 22,409 qps | 38.1 us | 40.1 us | 40.8 us | 49.1 us | 69.1 us | 19.76 us | 23.49 us |
+| insert literal | D | 120,000 | 22,175 qps | 38.7 us | 40.3 us | 40.9 us | 49.4 us | 67.3 us | 19.85 us | 23.52 us |
+| insert prepared | A | 120,000 | 23,992 qps | 35.0 us | 37.3 us | 38.0 us | 45.9 us | 64.4 us | 19.34 us | 21.11 us |
+| insert prepared | A' | 120,000 | 24,013 qps | 35.1 us | 37.2 us | 38.0 us | 46.9 us | 65.4 us | 19.22 us | 21.08 us |
+| insert prepared | B | 120,000 | 24,076 qps | 35.2 us | 37.2 us | 37.9 us | 46.1 us | 64.3 us | 19.12 us | 21.07 us |
+| insert prepared | D | 120,000 | 24,022 qps | 35.4 us | 37.3 us | 38.0 us | 45.8 us | 66.2 us | 19.41 us | 21.13 us |
+
+bad replies: 0
+unclean cells: 2 of 80; cell-gate seconds waited (sum over cells): 416
+1-minute load at the cells: 1.05..4.33

@@ -205,7 +205,10 @@ is no session default and no `SET TRANSACTION` spelling (CS-Q2 (a)); KWP's
   `trx_id=none`. A transaction never crosses cores (`sched.md`), and a
   read-only one does not either.
 - **Counted** per core in `sys.meta`: `read_only_begins` and
-  `read_only_write_refusals` (CS-Q8 (a)).
+  `read_only_write_refusals` (CS-Q8 (a)). It decides nothing, so it is in
+  none of the six counts of how a read-write transaction ended; its life is
+  in `sys.txn_histogram` under `read only`, and the view it holds is in the
+  read horizon's three fields (`sys-views.md` §6.1c, §7).
 
 `SERIALIZABLE` is out of scope and is **not** `[OPEN]`: it needs predicate
 locking or SSI read-tracking, and this engine has neither. **It does have a

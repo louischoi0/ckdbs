@@ -1861,8 +1861,14 @@ Verified on `da-q8-memory-bound-key` (branch
   counts nothing - and for a query-layer `SELECT`, whose walks are not
   summed; a subquery's chain is counted nowhere. `page_reads` and the time
   split do cover them.
-- **The cost columns' statement path is not measured.** DF-S0's spike
-  priced another body of code; the measurement is the milestone's close.
+- **The cost columns cost a point read +0.44 us of server CPU** at
+  `cores = 1` (+0.27 to +0.54;
+  `bench/v3.4.13/results-cx-close-bisect-v3.4.13-1-g11f72ce9.md`), kept on
+  the operator's word of 2026-11-19 and **not attributed**: folding the
+  session's sample where a wait is booked recovered nothing
+  (`bench/v3.4.13/results-df-close-remedy-v3.4.13-15-g9f588fa2.md`). Their
+  share of an index-served read and of a write is not measured, nor
+  anything at `cores` above 1.
 - **`sys.statement_stats` and `sys.statement_histogram` copy every shape
   under each part's latch**, and a shape is 624 bytes, from 184: the delay
   a read puts on a part's writer (above) grew with it, unmeasured.
@@ -1874,6 +1880,113 @@ Verified on `da-q8-memory-bound-key` (branch
   (an in-process restart keeps them, above), counts a deadlock's victim in
   `conflicts`, or reads `rows` under a KWP `max_rows`; the two-core cell has
   not run under `tsan`.
+
+### Transactions and the read horizon (DF-S2)
+
+Verified on `da-q8-memory-bound-key` (branch
+`worktree-df-statistics-coverage`) at the commit that adds this section.
+Owned by `docs/spec/sys-views.md` §6.1c, §6.6 and §7.
+
+- **A view's age is its minter's statement head, not a clock read at the
+  mint.** `read_horizon_age_us` and `view_age_us` overstate a view's age by
+  the time from the statement's head to the mint: its parse and its
+  catalog revalidation. The waits a statement takes before it runs - the
+  commit ceiling, its core's run queue - are before the head, and a re-run
+  after a lock wait takes a new one. No clock is read on a statement's path
+  for the stamp; a KWP load chunk, which is no staged statement, reads one a
+  chunk. A statement resumed after a park mints, if it mints then, under
+  the head of whichever statement its core staged last.
+- **The horizon's three fields are not one snapshot.** Each core publishes
+  its bound and its stamp in two stores, and a reader pairs them unguarded:
+  a core in the middle of a mint answers the bound it lowered with the
+  stamp its slot held before, `none` where it held no view.
+- **A reader of the fields reads its own view** where nothing older is
+  held: no `SELECT` can see `none` for the horizon's LSN or its core. The
+  age reads `none` on an instance with no clock.
+- **A view the engine holds outside a session has no row in
+  `sys.session_state`**: a declaration build's lock-holder transaction is
+  in the horizon's fields and in no session's `view_age_us`, and a session
+  the listener has not run a statement for has no row at all.
+- **The counts assume one writer a core** and check nothing, as
+  `sys.refusal_stats` does. `commits` is counted by the transaction
+  manager, so a fixture's manager that names no core counts into core 0.
+- **Measured with DF-S3 and DF-S4, not apart**: the three stages cost a
+  tuple key `SELECT` +0.07 us of server CPU at `cores = 1` and a write
+  nothing the floor shows
+  (`bench/v3.4.13/results-df-close-final-v3.4.13-17-gc16b4fc2.md`); a knob
+  run could attribute none of it to the stamps or to the session's words
+  alone. `cores` above 1 did not resolve.
+- **`wait_aborts` takes a statement whose descent noted a stale path**
+  and which then failed, having written nothing, for another reason: the
+  site tests the note, not the refusal's code, and such a statement is not
+  run again. Read, not reproduced.
+- **No cell** drives a failed `COMMIT`, a parked `strict` commit whose sync
+  never comes, a load stream's failed chunk or a structural re-run into
+  `aborts` and `wait_aborts`, or reads a load chunk's stamp; the two-core
+  cells have not run under `tsan`;
+  and no cell checks that a process restart or a restore empties the store
+  (an in-process restart keeps it, as it keeps the BO stores above).
+
+### Index and relation usage (DF-S3)
+
+Verified on `da-q8-memory-bound-key` (branch
+`worktree-df-statistics-coverage`) at the commit that adds this section.
+Owned by `docs/spec/sys-views.md` §6.2a and §6.2b.
+
+- **`sys.access_stats` has no `rows_examined` and `rows_matched`.** The
+  work order's part C names them; the row is a 33-byte persisted struct
+  until DA-S1 moves the store to memory, and widening it is a format event
+  DF does not make (DF-R1). Owed to DA.
+- **An index a write's `WHERE` subquery reads through is counted nowhere**:
+  that chain's counters are dropped where it runs. An index that reads 0
+  is therefore not proven unused by the count alone; neither is a unique
+  index, nor a foreign key's.
+- **`lock_deadlocks` is not every deadlock**: the two paths that write no
+  `sys.lock_waits` row (a victim whose slot had flipped, an online build's
+  drain) are in no column.
+- **`last_used` is a statement's head, not the run's own instant**, and a
+  statement resumed after a park stamps the head of whichever statement its
+  core staged last. An index whose slot in the dispatcher's eight-slot cache
+  another index took pays the part's latch and a lookup at its next read.
+  No cell puts two indexes in one slot, or swaps the store under a cache.
+- **An index-served read pays +0.18 us of server CPU** for DF-S2..S4 at
+  `cores = 1`, +0.11 us over a tuple key read's share
+  (`bench/v3.4.13/results-df-close-final-v3.4.13-17-gc16b4fc2.md`): what is
+  left of the fold after its latch, lookup and clock read went (-0.18 us),
+  the per-seek counter and the wider per-step counters, not told apart.
+- **No cell** counts an index step under an outer step (one walk a row of
+  the outer), a sub-chain's or a hoisted step's, or a step that named an
+  index and walked its relation instead (`indexes = off`, an index dropped
+  under a compiled chain); the two-core cell has not run under `tsan`.
+
+### Space (DF-S4)
+
+Verified on `da-q8-memory-bound-key` (branch
+`worktree-df-statistics-coverage`) at the commit that adds this section.
+Owned by `docs/spec/sys-views.md` §6.2c and `docs/spec/plan-stats.md` §6.
+
+- **`est_delete_marked` exists only for a relation the steward seeds**: one
+  a searched join block named, or whose prior a clean shutdown carried. A
+  relation read and written by single-relation statements alone reads NULL
+  for good. Nothing gathers it on request; `GATHER STATISTICS` counts live
+  rows and does not fill it.
+- **It is a sample of at most four leaves** above height 1, scaled by the
+  prior's leaf count: deletes clustered in leaves the sample missed read 0,
+  and ones clustered in a sampled leaf read many times their number.
+- **An append is counted nowhere**, so `leaf_divisions` says nothing of how
+  fast a tree grows; `leaves` does.
+- **The count is taken under the divided leaf's exclusive hold**: a latch
+  of the store's and, at a tree's first division on a core, an allocation
+  (DF-Q22 (a)). A reader of the view holds that latch for its copy of the
+  part, which allocates, and a division on that core waits for it. Not
+  measured.
+- **`est_delete_marked` can be older than the relation's last seed**: a
+  seed that read no leaf keeps the estimate the one before it made.
+- **`leaf_divisions` and `leaf_compactions` are the process's**, not the
+  instance's: an in-process restart keeps them, as it keeps the BO stores.
+- **No cell** samples a tree of height 2 or more for delete-marked rows,
+  counts a division on a second core, drives a division that fails, or
+  reaches the store's bound.
 
 ## Wait events and ASH (CJ)
 
