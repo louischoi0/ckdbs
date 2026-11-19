@@ -2172,25 +2172,42 @@ private:
         // kind's, never the thread's, because the walk yields.
         const bool parks_at_reads =
             outermost && slice_ != nullptr && slice_->hand_page != nullptr;
+        // `cur` was refused, parked for, and is being fetched once more: the
+        // pass that follows a park. **One call of `visit_leaf` in the loop,
+        // whichever pass it is**: with one call site the compiler inlines
+        // the slot loop into this coroutine. DE's first form called it at
+        // two, and at the close a resident walk read 8 % fewer pages a
+        // second than before DE; with this form it is within about 1 %
+        // (`bench/v3.4.14/results-de-close-v3.4.14-6-g1942cb9a.md`). The
+        // cause of the 8 % was not isolated.
+        bool refetch = false;
         for (;;) {
-            if (Status s = guard.Visit(cur); !s.ok()) co_return s;
-            // Per page, not once per walk: the VM makes these fetches
-            // itself now, so R1's guard gets to see each one.
-            NoteFetch();
-            auto next = visit_leaf(
-                cur, parks_at_reads ? storage::PageAccess::kScanNoWait : walk_access);
-            if (parks_at_reads && !next.ok() &&
+            if (!refetch) {
+                if (Status s = guard.Visit(cur); !s.ok()) co_return s;
+                // Per page, not once per walk: the VM makes these fetches
+                // itself now, so R1's guard gets to see each one.
+                NoteFetch();
+            }
+            // The fetch after a park is synchronous - whatever the read
+            // did, the walk gets its leaf - and books no second
+            // `io.page_read`: the park was the event (DE-R9).
+            std::optional<storage::ParkedReadScope> parked;
+            if (refetch) parked.emplace(cur);
+            auto next = visit_leaf(cur, parks_at_reads && !refetch
+                                            ? storage::PageAccess::kScanNoWait
+                                            : walk_access);
+            parked.reset();
+            if (parks_at_reads && !refetch && !next.ok() &&
                 next.status().code() == StatusCode::kNotResident) {
                 // Refused at the fetch, before a slot was visited, and
                 // nothing is held: no pin, no span (the suspend audit
                 // checks), the view and the borrow as at a slice boundary.
                 // The leaf goes to the page reader and this task parks; the
-                // fetch below is the same leaf's, made once more and
-                // synchronously - past the guard and the count above, which
-                // have seen this leaf already - so a refused leaf is
-                // visited exactly once whatever the read did.
-                // What is sealed leaves first, as at a slice boundary: the
-                // client reads while the device works.
+                // next pass fetches the same leaf once more - past the
+                // guard and the count above, which have seen it - so a
+                // refused leaf is visited exactly once whatever the read
+                // did. What is sealed leaves first, as at a slice boundary:
+                // the client reads while the device works.
                 if (slice_->at_boundary) slice_->at_boundary();
                 const std::function<bool()>* const read = slice_->hand_page(cur);
                 {
@@ -2202,9 +2219,10 @@ private:
                 // core back, DE-Q15).
                 storage::ClearStructuralRefusal();
                 if (Status s = TakeCancel(); !s.ok()) co_return s;
-                const storage::ParkedReadScope parked(cur);  // the park was the event (DE-R9)
-                next = visit_leaf(cur, walk_access);
+                refetch = true;
+                continue;
             }
+            refetch = false;
             if (!inner.ok()) co_return inner;
             if (!next.ok()) co_return next.status();
             if (next.value() == kInvalidPageId) {

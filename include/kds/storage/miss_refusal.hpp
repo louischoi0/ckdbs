@@ -78,9 +78,10 @@ private:
 };
 inline PageId ParkedReadPage() noexcept { return detail::g_parked_read_page; }
 
-// Before a statement runs, and once its note has been read: drops the arm
-// too, so a statement that left it set - an early return between an arm and
-// its drop - cannot refuse the next one's fetches.
+// Once a statement's note has been read: the note, and the arm with it. The
+// dispatcher also drops the arm alone at every statement's head
+// (`StageStatement`), so a statement that left it set cannot refuse the
+// next one's fetches.
 inline void ClearMissRefusal() noexcept {
     detail::g_miss_refusal_armed = false;
     detail::g_miss_refusal_page = kInvalidPageId;

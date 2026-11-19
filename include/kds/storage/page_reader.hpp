@@ -44,7 +44,8 @@
 // best-effort kick leaves open, and one idle block is twenty times a read.
 //
 // Lock protocol: `mu_` guards the queue and the two run flags and is never
-// held across the device call or the wake. A request's `done` is an atomic
+// held across the device call or the wake; `threaded_` mirrors "the threads
+// run" in an atomic written under `mu_` and read with no lock. A request's `done` is an atomic
 // the asker's reactor polls with no lock. Nothing is taken under `mu_`, and
 // no reactor parks holding it: `Submit` takes it for a push.
 
@@ -71,11 +72,11 @@ public:
     // page itself. Idempotent. **Called before the device's descriptor
     // closes and before any reactor registered in `wake` goes.**
     void Stop() noexcept;
-    // The threads run: after `Start`, until `Stop` has joined them.
-    bool threaded() const {
-        std::lock_guard lock(mu_);
-        return !threads_.empty();
-    }
+    // The threads run: after `Start`, until `Stop` begins. Read with no
+    // lock - a `SELECT` asks it as its walk is handed on - and a stale
+    // answer is harmless either way: `Submit` decides under `mu_`, and a
+    // request made of a reader with no thread is served where it is made.
+    bool threaded() const noexcept { return threaded_.load(std::memory_order_relaxed); }
 
     // One page's read, as its asker holds it. Copyable, and safe to drop at
     // any time: the read does not need it.
@@ -114,6 +115,7 @@ private:
     std::deque<std::shared_ptr<Ticket::Request>> queue_;  // under mu_
     std::vector<std::thread> threads_;                    // under mu_
     bool stopping_ = false;                               // under mu_
+    std::atomic<bool> threaded_{false};                   // written under mu_
     const sched::WakeRegistry* wake_ = nullptr;           // set before the threads start
     std::atomic<std::uint64_t> submitted_{0};
     std::atomic<std::uint64_t> completed_{0};

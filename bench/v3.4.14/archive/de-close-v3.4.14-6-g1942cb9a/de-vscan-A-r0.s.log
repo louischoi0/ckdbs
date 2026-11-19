@@ -1,0 +1,1 @@
+1795084222 WARN [query] "SELECT id FROM de_big WHERE c0 = -1" -> ERR cancelled by request in 54276us

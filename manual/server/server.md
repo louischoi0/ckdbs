@@ -205,10 +205,30 @@ A connection that closes with a transaction open gets it rolled back.
 **Durability points.** Dirty pages reach the data file on the checkpoint
 cadence, on client `SYNC`, and at clean shutdown. The WAL narrows the gap
 for logged statements (INSERT/UPDATE/DELETE at the configured durability
-class) — but **recovery is not implemented**: nothing reads the log back,
-so a crash is protected only by what the last checkpoint/SYNC persisted.
-WAL-before-data is store-enforced regardless (a frame is not flushed until
+class), and every mount runs recovery from the log (below), so a crash loses
+only what the log had not yet made durable, which the durability class
+bounds. WAL-before-data is store-enforced regardless (a frame is not flushed until
 its log is durable).
+
+**A read that misses the buffer pool.** A page that is not in the pool is
+read from the data file. For most statements that read is made on the
+core's own thread, and every other session on that core waits for the
+device while it lasts (`io.page_read` in `sys.wait_stats` is where the time
+shows). Two kinds of statement give the core back instead, when the page is
+not in the operating system's cache either: a plain `SELECT` by tuple key,
+key list or probe, and a `SELECT` that walks a relation. Such a statement
+is suspended while a reader thread fetches the page, and the core serves
+its other sessions meanwhile; `pool_would_wait` in `SHOW META` counts the
+reads that left a core this way and `contention_miss_reruns` the point
+reads that were started over for one. Writes, locking reads, a `SELECT`
+under `ANALYZE`, a query the engine answers through its general query layer
+(for example outer joins and set operations), joins' inner lookups
+and the reads under a walked page (an index's row fetch, a spilled value)
+still read on the core. The server starts four
+reader threads at boot for this, at every `cores` setting; there is no
+setting for them. A pool sized to the working set (`buffer_pool_frames`)
+remains the remedy: the mechanism bounds what a miss costs the sessions
+that did not miss, not what it costs the one that did.
 
 **The log.** One line per event:
 `<unix_seconds> <LEVEL> [component] message`, opened append-only so a

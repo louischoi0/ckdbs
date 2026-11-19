@@ -388,7 +388,7 @@ one `contention_refused_<site>` per site a stale descent is refused
 `btree_lookup`, `index_descend`, `index_parent`, `index_secure`).
 Since BA-S14 a clustered-tree refusal is re-run inside the engine rather
 answered, for a statement that wrote nothing before it, and
-`contention_structural_reruns` counts the re-runs. Every
+`contention_structural_reruns` counts the re-runs. A `SELECT` discarded and run again for a page whose read left its reactor (`page.md` §12) is counted apart, as `contention_miss_reruns`, and is never answered as a refusal. Every
 field is printed at every core count; at `cores = 1` only the latches that
 are armed there (the window, the superblock, the WAL sync gate) can move, and only if another thread takes them - the sync gate
 does, since the WAL writer thread syncs through it beside the reactor.

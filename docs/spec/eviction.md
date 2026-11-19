@@ -28,7 +28,11 @@ that follows directly from standing engine contracts:
   of this.
 - **Cooperative event loop** ⇒ blocking is not an available primitive.
   Exhaustion is handled by a bounded retry and a truthful error,
-  never by waiting (consistent with fail-fast semantics elsewhere).
+  never by waiting (consistent with fail-fast semantics elsewhere). A
+  miss's read itself still blocks - a `pread` on the reactor, or a wait
+  for another core's read of the same page - for every reader but the two
+  `page.md` §12 names, whose read leaves the reactor while the statement
+  parks.
 - **WAL-before-data** ⇒ extended to eviction as *flush-before-evict*: a
   dirty page may leave memory only after WAL is durable up to that page's
   last-modification LSN.

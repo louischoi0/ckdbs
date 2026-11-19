@@ -1205,7 +1205,12 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     // BA-S14's two per-statement facts, cleared before the statement runs.
     structural_poison_withheld_ = false;
     storage::ClearStructuralRefusal();
-    storage::ClearMissRefusal();  // DE's, on the same terms
+    // **No statement starts armed** (DE, `storage/miss_refusal.hpp`). The
+    // arm is set and dropped around one body (`SelectRun::Execute`), and no
+    // path leaves it set today; one that did - a frame destroyed between the
+    // two - would have the next statement's fetches refused, a write's in
+    // the middle of its mutation. One thread-local store a statement.
+    storage::DisarmMissRefusal();
     // The statement boundary is where the catalog asks whether the schema
     // moved (AT-S2; `Catalog::Revalidate`): before this statement resolves
     // anything and after the previous one released everything it held. And
@@ -1257,8 +1262,11 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
             " would have had to be waited for; the statement is run again once it is read");
         outcome = DispatchOutcome{ErrorReply(refused), false, 0, refused};
         outcome.page_wait = storage::MissRefusalPage();
+        // Cleared where it was read, so the thread carries no note into the
+        // statement it runs next; the arm was dropped as the body returned
+        // (`SelectRun::Execute`).
+        storage::ClearMissRefusal();
     }
-    storage::ClearMissRefusal();
     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
     outcome.pattern_id = std::exchange(statement_pattern_id_, 0);
     outcome.plan_source = std::exchange(statement_plan_source_, {});
@@ -6964,6 +6972,12 @@ public:
     // would be made here anyway.
     void ParkAtReads() {
         if (d_.page_reader_ == nullptr || !d_.page_reader_->threaded()) return;
+        // What ends a park: the leaf's read, the park's deadline, or the
+        // session's cancel, which the walk takes as it resumes.
+        page_read_ = [this] {
+            return page_ticket_.done() || d_.NowNs() >= park_deadline_ns_ ||
+                   (slice_.cancel != nullptr && slice_.cancel->load(std::memory_order_relaxed));
+        };
         slice_.hand_page = [this](PageId page) {
             page_ticket_ = d_.page_reader_->Submit(page, d_.core_id_);
             // DE-R7: each park is bounded by the fault net, and what ends
@@ -7020,15 +7034,12 @@ private:
     Status encode_error_ = Status::OK();
     exec::SlicePolicy slice_;
     std::uint64_t rows_emitted_ = 0;  // the rows the sink took (`rows_returned`)
-    // DE-Q8: the leaf the walk is parked on, and what ends the park - its
-    // read, the park's deadline, or the session's cancel, which the walk
-    // takes as it resumes.
+    // DE-Q8: the leaf the walk is parked on, its park's deadline, and what
+    // the walk parks on - set by `ParkAtReads`, empty for every run that
+    // never parks.
     storage::PageReader::Ticket page_ticket_;
     sched::MonoTimeNs park_deadline_ns_ = 0;
-    const std::function<bool()> page_read_ = [this] {
-        return page_ticket_.done() || d_.NowNs() >= park_deadline_ns_ ||
-               (slice_.cancel != nullptr && slice_.cancel->load(std::memory_order_relaxed));
-    };
+    std::function<bool()> page_read_;
 };
 
 void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept {

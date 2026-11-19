@@ -333,7 +333,7 @@ def snapshot(ctl, pid):
 
 def run_cell(args, cell, run, cold_rate, wd):
     cold_on, scan_on, pool, cache, limit, cores = CELLS[cell]
-    tag = f"de-{cell}-r{run}"
+    tag = f"de-{cell}{'-' + args.arm if args.arm else ''}-r{run}"
     frames = args.frames_quarter if pool == "quarter" else args.frames_all
     wait = wait_for_load(args.max_load, args.max_wait)
     before = host_state()
@@ -433,7 +433,8 @@ def run_cell(args, cell, run, cold_rate, wd):
         hot = [o for o in outs if o["role"] == "hot"]
         cold = [o for o in outs if o["role"] == "cold"]
         res = {
-            "cell": cell, "run": run, "cores": cores, "frames": frames, "pool": pool,
+            "cell": cell, "arm": args.arm, "run": run, "cores": cores, "frames": frames,
+            "pool": pool,
             "cache": cache, "cached_fraction_before_mount": round(cached0, 4),
             "limited": limit, "memory_max": mem_max, "mem_slack_mb": args.mem_slack_mb,
             "cgroup": mem, "prewarm_s": round(prewarm_s, 2),
@@ -454,7 +455,15 @@ def run_cell(args, cell, run, cold_rate, wd):
             "first_error": next((o["first_error"] for o in outs if o["first_error"]), None),
             "waits_delta": wd_, "io_hist_delta": hist,
             "reads_in_window": reads, "read_us_in_window": read_us,
+            # Before DE this is the core's stall; where a read leaves its
+            # reactor (DE-S1) it is time parked, and the core's own time is
+            # `on_cpu_share_of_one_core` beside it.
             "read_share_of_one_core": round(read_us / (span * 1e6), 4),
+            "on_cpu_share_of_one_core": round(
+                wd_.get("cpu.on_cpu", {}).get("total_us", 0) / (span * 1e6), 4),
+            "pool_would_wait": s1["meta"].get("pool_would_wait", 0) - s0["meta"].get("pool_would_wait", 0),
+            "miss_reruns": s1["meta"].get("contention_miss_reruns", 0)
+            - s0["meta"].get("contention_miss_reruns", 0),
             "proc_io_delta": io,
             "device_bytes_per_read": round(io["read_bytes"] / reads, 1) if reads else None,
             "rss_anon_kb_end": s1["rss_anon_kb"],
@@ -488,6 +497,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--cells", default="i,ii,iii,iv,v,vscan,iii4")
     p.add_argument("--runs", type=int, default=2)
+    p.add_argument("--run-base", type=int, default=0,
+                   help="the first run's number, for an invocation that is one round of several")
+    p.add_argument("--arm", default="",
+                   help="a label for the binary, written into every file's name and JSON "
+                        "(an A/B driven by one invocation an arm a round)")
     p.add_argument("--rows", type=int, default=900_000)
     p.add_argument("--pad", type=int, default=1000, help="the pad column's width: about 7 rows a page at 1000")
     p.add_argument("--load-batch", type=int, default=100)
@@ -542,7 +556,7 @@ def main():
     os.environ.setdefault("KDS_CLIENT_TIMEOUT", "900")
     os.makedirs(args.workdir, exist_ok=True)
     os.makedirs(args.out, exist_ok=True)
-    copy =os.path.join(args.workdir, "kds_server.de")
+    copy = os.path.join(args.workdir, f"kds_server.de{args.arm}")
     shutil.copy2(args.bin, copy)
     args.bin = copy
     with open(copy, "rb") as f:
@@ -559,11 +573,12 @@ def main():
     cold_rate = args.cold_rate or min(args.cold_rate_cap, args.cold_util / p50)
     summary["cold_rate"] = round(cold_rate, 1)
     print(f"probe {summary['probe_o_direct_8k_qd1']} cold_rate={cold_rate:.1f}/s", flush=True)
-    for run in range(args.runs):
+    for run in range(args.run_base, args.run_base + args.runs):
         for cell in cells:
             run_cell(args, cell, run, cold_rate, args.workdir)
     summary["total_s"] = round(time.time() - t_all, 1)
-    with open(os.path.join(args.out, "summary.json"), "w") as f:
+    with open(os.path.join(args.out, f"summary{'-' + args.arm if args.arm else ''}"
+                                     f"-r{args.run_base}.json"), "w") as f:
         json.dump(summary, f, indent=1)
     print(f"done in {summary['total_s']} s", flush=True)
     if not args.keep:

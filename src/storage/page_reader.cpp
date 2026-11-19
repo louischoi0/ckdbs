@@ -11,6 +11,7 @@ void PageReader::Start(unsigned threads, const sched::WakeRegistry* wake) {
     wake_ = wake;
     threads_.reserve(threads);
     for (unsigned i = 0; i < threads; ++i) threads_.emplace_back([this] { Run(); });
+    threaded_.store(!threads_.empty(), std::memory_order_relaxed);
 }
 
 void PageReader::Stop() noexcept {
@@ -19,6 +20,7 @@ void PageReader::Stop() noexcept {
         std::lock_guard lock(mu_);
         if (threads_.empty()) return;
         stopping_ = true;
+        threaded_.store(false, std::memory_order_relaxed);
         joining.swap(threads_);
     }
     cv_.notify_all();

@@ -1,0 +1,38 @@
+{
+ "argv": [
+  "--bin",
+  "/home/louis/bench-runs/de/close/kds_server_B",
+  "--arm",
+  "B",
+  "--port",
+  "32750",
+  "--workdir",
+  "/home/louis/bench-runs/de/work",
+  "--out",
+  "/home/louis/ckdbs/.claude/worktrees/de-page-read-off-the-reactor/bench/v3.4.14/archive/de-close-v3.4.14-6-g1942cb9a",
+  "--keep",
+  "--runs",
+  "1",
+  "--run-base",
+  "1",
+  "--cells",
+  "iii4",
+  "--cold-rate",
+  "650",
+  "--probe-reads",
+  "200"
+ ],
+ "started": "2026-11-19T10:39:30Z",
+ "probe_o_direct_8k_qd1": {
+  "p0_us": 251.2,
+  "p25_us": 420.3,
+  "p50_us": 466.0,
+  "p95_us": 651.1,
+  "p99_us": 737.5,
+  "p99.9_us": 962.1,
+  "max_us": 962.1,
+  "n": 200
+ },
+ "cold_rate": 650.0,
+ "total_s": 45.8
+}

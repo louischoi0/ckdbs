@@ -1,8 +1,16 @@
 # Work order DE - a page read that does not stop its core: the foreground miss off the reactor, the premise measured before anything is built
 
-Status: **OPENED 2026-11-19 on the operator's standing go-ahead
-(go-ahead-achieving-milestone), on worktree `de-page-read-off-the-reactor`
-from `35086008` (`v3.4.13-19-g35086008`); DE-S0, DE-S1 and DE-S2 done.** Written 2026-11-18
+Status: **CLOSED NARROW 2026-11-19 on worktree
+`de-page-read-off-the-reactor`, on the operator's standing go-ahead
+(go-ahead-achieving-milestone); not merged, not pushed, not tagged.** Opened
+the same day from `35086008` (`v3.4.13-19-g35086008`, since tagged
+`v3.4.14`); DE-S0 to DE-S3 landed (§7). **Narrow** is DE-Q7 (a): a read
+that would wait leaves its reactor for a top-level `SELECT`'s descent and
+for a `SELECT`'s walk, and for no other reader. The close
+(`bench/v3.4.14/results-de-close-v3.4.14-6-g1942cb9a.md`): beside cold point
+reads the never-miss sessions' p95 is 358 to 386 us where it was 748 to
+820 us, and beside a cold scan they keep their schedule where they fell
+5.75 s behind; a resident point `SELECT` costs about 0.2 to 0.4 us more. Written 2026-11-18
 on worktree `db-fpi-cadence-dc-for-update` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`) on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §25). **Exploratory by CLA's proposal, not by
@@ -782,3 +790,110 @@ runs. **Not executed**: a `tsan` build, and the nightly corpus.
 `build-release` at this stage's tree before the review's fixes, the host
 building at the time. It showed a parked walk's core serving its other
 sessions on the real device; no number is taken from it.
+
+### DE-S3, 2026-11-19 - the close
+
+On worktree `de-page-read-off-the-reactor`, on `1942cb9a`
+(`v3.4.14-6-g1942cb9a`). **DE is closed narrow** on the operator's standing
+go-ahead: every stage landed on the work branch; not merged, not pushed,
+not tagged.
+
+**The measurement** (`bench/v3.4.14/results-de-close-v3.4.14-6-g1942cb9a.md`,
+raw output under `bench/v3.4.14/archive/de-close-v3.4.14-6-g1942cb9a/`; run
+by `ck-tester`). A is `35086008`, the commit DE opened from; B is
+`1942cb9a`, DE-S2. DE-S0's cells, the two arms back to back in every cell
+and round, `build-release`, `cores = 1`, the cold sessions at 650 reads a
+second in both arms; two rounds a cell, four for (iii) and (iv). The
+never-miss sessions, from their schedule:
+
+| cell | A | B |
+|---|---|---|
+| (iii) beside cold point reads, page cache kept from answering: p95 | 748 us to 820 us | 358 us to 386 us |
+| (iii): p99 | 1,009 us to 1,022 us (a fourth round met one 188 ms device read) | 412 us to 448 us |
+| (iii) over (ii): p95 | +395 us to +461 us (2.1 to 2.3 times) | +4.6 us to +4.8 us |
+| (iv) beside one scanner: p50, p95, p99 | 5.75 s, 8.77 s, 9.04 s behind; 10,900 of 20,004 statements sent | 283 to 309 us, 456 to 484 us, 587 to 623 us; every statement sent |
+| (iv): the scanner | 19,790 pages a second | 19,490 to 19,800 pages a second |
+
+- **DE-Q1 (a)'s bar, as the data carries it.** (1) The resident cells - (i),
+  (ii), (v), and (iii) at `cores = 4` - are within 1.4 % at p50 and 0.4 %
+  at p95 between the arms, their two-round ranges overlapping; two rounds
+  carry no claim at p99, where (v)'s B is 0.6 % above A's. (2) The three
+  numbers after: the excess of (iii) over (ii) is in the table; 24 % of the
+  window is spent in `io.page_read` in both arms, a stall of the core in A
+  and a park in B, where the core's own time is 6.9 to 8.0 % against 4.8
+  to 5.7 %; the device's read is 439 us at the probes' pooled p50.
+- **What a park costs the statement that parks**: 41 to 49 us more CPU a
+  cold read - the refused run, the wake and the run after it - and 13 to
+  21 us more at the cold sessions' own p50 (2 to 3 % of about 640 us). The
+  device is read once a cold read in both arms.
+- **What the close found on resident work**, and the spike that followed
+  it. At B a resident point `SELECT` cost 0.33 to 0.66 us more server CPU
+  than at A and a resident walk read 8 % fewer pages a second. Three
+  builds were set beside A and B: with the walk's leaf visit called at one
+  site, with no descent armed, and with no page reader at all. The
+  point `SELECT`'s cost is in every one of them - no reader, no arm and no
+  one-core wake table, and it is still there - so it is none of those
+  three; nothing separates it from DE's per-statement code or from binary
+  layout on this host. **The remedy applied**: the walk's page loop calls
+  its leaf visit at one site, which the compiler then inlines; the walk's
+  park predicate is built only for a walk that can park; `threaded()` reads
+  an atomic; the note is cleared once, where it is read. With them a
+  resident walk is within about 1 % of A (two runs each, ranges
+  overlapping) and a resident point `SELECT` is about 0.2 to 0.4 us above
+  A, where two servers of A's own binary differ by up to 0.6 us in a
+  lifetime. **What the walk's 8 % was is not isolated**, and the closing
+  code - the spike's last build plus one thread-local store a statement,
+  put back by the review - was not measured again. `known-gaps.md` carries
+  the costs.
+
+**Documents**, each read at the close: `page.md` §11, §12 (the miss path,
+the two callers, who still blocks); `sched.md` §1, §3, §5, §7, §9 (the
+blocking-syscall rule's exception, the reader's threads and lock, the
+one-core wake table); `rules.md` §3 (the reader's row); `eviction.md` §1;
+`wait-events.md` (`io.page_read`'s two shapes, `io.var_heap_read`);
+`client-manual.md` (`contention_miss_reruns`); `known-gaps.md` ("Statement
+scheduling": who still blocks, what the read that leaves costs and where it
+stops, what work that never misses pays); `manual/server/server.md` §5;
+CJ-Q8, by a note; `include/kds/sched/io_backend.hpp`'s comment;
+`CLAUDE.md`'s rows for buffer-pool eviction and cross-core execution. **Read
+and left as they were**: `sys-views.md` (it defers `sys.meta`'s fields to
+the code) and `docs/pending/multicore-scaling-cores4-below-cores2.md` - the
+one `cores = 4` cell shows a cold session's stall staying on its own core
+in both arms and says nothing of that entry's question.
+
+**The step's code**, beside the remedy above: `StageStatement` drops the
+arm at every statement's head.
+
+**Reviewed by `critics-developer`**, read-only for the code. It found the
+walk's new loop equivalent to DE-S2's and no stale note possible, and:
+**applied** - with the start-of-statement clear gone nothing reset the arm,
+and though no path leaves it set today, a frame destroyed between the arm
+and its drop would have had the next statement's writes refused pages in
+the middle of a mutation, so the unconditional drop is back; the loop's
+comment said a lost inlining had been restored, and the binaries' symbols
+say B never had it - reworded, and the record above says the 8 % is not
+isolated; "within A's spread" for the walk became "within about 1 %";
+eleven sentences in `page.md`, `sched.md`, `rules.md`, `eviction.md`,
+`wait-events.md`, `known-gaps.md` and the manual that were false of the
+code, corrected in place by the review - among them that a one-core build
+"arms nothing", that the WAL writer is the one kicker with a thread, and
+that an index probe's head still reads on its core. **A side fix, not
+DE's**: the review corrected `manual/server/server.md` §5's "recovery is
+not implemented"; §6 of the same file still says it, and `known-gaps.md`
+("WAL") records that. **Rejected**: none.
+
+**§5's lists, at the close.** Tests: the cells DE-S1 and DE-S2 list stand;
+with no subject under DE-Q7 (a) and DE-Q9 (a), and so not written, are the
+three DE-S1 names. Not written: a re-run over a real KWP sink, the park's
+own `io.page_read` count on a reactor, a session closed mid-read. Not
+executed: a `tsan` build of the rig cells, and the nightly corpus
+(`scripts/bs/nightly.sh`) with the simulator's fourth toggle.
+
+**The suite**: 0 failed of 4819 at the closing tree, every cell `scripts/test.sh`
+runs.
+
+**Adopted on the standing go-ahead and not the operator's marks**: DE-Q0 to
+DE-Q15, each (a) - DE-Q7 (the ruling DE-Q1 (a) names the operator's),
+DE-Q9 `[quiet-wrong]` as revised at DE-S0's review, DE-Q10 `[quiet-wrong]`,
+DE-Q15 as amended at DE-S2's. Every option not taken stays open to the
+operator's own mark.
