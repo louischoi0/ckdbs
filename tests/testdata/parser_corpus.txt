@@ -725,3 +725,28 @@ InvalidArgument	79d41c37107c3d4e	84710b9045511414	79d41c37107c3d4e	UPDATE t SET 
 ok	f8a690980db518c8	cbf29ce484222325	f8a690980db518c8	UPDATE t SET a = a + (SELECT SUM(a) FROM t)
 ok	f0cb38943f1b9114	78f79099c419719c	f0cb38943f1b9114	UPDATE t SET a = (SELECT MAX(x) FROM u WHERE y > 1) * 2
 NotImplemented	48790938db579aec	cbf29ce484222325	48790938db579aec	UPDATE t SET (a, b) = (SELECT x, y FROM u)
+# [DC - done] the locking clause, `FOR UPDATE` after the pagination tail
+# of the outermost block (parser-v2.md I11a). Every line here was
+# unparseable before DC - `FOR` was a trailing token - so none of its
+# hashes was ever storable and DC-R9 holds: no line above moved. The
+# words are matched by text at clause position and reserve nothing, which
+# the last line pins. A join under the clause parses; the dispatcher
+# refuses the shape (DC-Q5).
+ok	5144cfd012a6833e	b5d414774c8002cc	4c2ca8673b2852dd	SELECT * FROM t WHERE id = 1 FOR UPDATE
+ok	82a2f0c5cc5d81b5	cbf29ce484222325	bc118a4d1b6ec1d4	SELECT a, b FROM t FOR UPDATE
+ok	62582db8e9a7972e	cbf29ce484222325	ec36d9f9ccff031d	SELECT t.a FROM t JOIN u ON t.id = u.id FOR UPDATE
+ok	5144cfd012a6833e	b5d414774c8002cc	4c2ca8673b2852dd	SELECT * FROM t WHERE id = 1 FOR UPDATE;
+NotImplemented	aee38322bd423e0a	cbf29ce484222325	bb576084a3e45fb5	SELECT * FROM t FOR SHARE
+NotImplemented	81608907bc077879	cbf29ce484222325	e729a422189c6ca6	SELECT * FROM t FOR KEY SHARE
+NotImplemented	0af49d7846747bc8	cbf29ce484222325	bd20537e39fdd59b	SELECT * FROM t FOR NO KEY UPDATE
+NotImplemented	da2900e3d8863938	cbf29ce484222325	f4e96df4b01cb5eb	SELECT * FROM t FOR UPDATE NOWAIT
+NotImplemented	b5e623f9dc6a39a6	cbf29ce484222325	a11fec366e64d673	SELECT * FROM t FOR UPDATE SKIP LOCKED
+NotImplemented	b687c37f7b73a1b9	cbf29ce484222325	1ee51352962b7dda	SELECT * FROM t FOR UPDATE OF t
+NotImplemented	b4cb7b12535294c0	cbf29ce484222325	2e12b72d8df5b65b	SELECT * FROM t WHERE id IN (SELECT id FROM u FOR UPDATE)
+NotImplemented	a8d8b5307593b744	cbf29ce484222325	a8d8b5307593b744	UPDATE t SET a = (SELECT MAX(x) FROM u FOR UPDATE)
+NotImplemented	554dddf96214a457	cbf29ce484222325	554dddf96214a457	INSERT INTO t SELECT * FROM u FOR UPDATE
+InvalidArgument	e80659818519102b	cbf29ce484222325	24ca6d9aa35bf6f8	SELECT * FROM t FOR
+InvalidArgument	1f1c5279079e6d38	cbf29ce484222325	7e5a2c5ecdb0efb5	SELECT * FROM t FOR KEY UPDATE
+InvalidArgument	62ecec3467d3d8b9	cbf29ce484222325	8a9d97d28c3016f8	SELECT * FROM t FOR UPDATE extra
+InvalidArgument	7d0d77315629c39a	cbf29ce484222325	4fd2b7d6bc347d01	SELECT * FROM t FOR UPDATE FOR UPDATE
+ok	37286aacce785f51	78f79099c419719c	9436d9c8e306c734	SELECT for, update FROM t WHERE for = 1 AND update = 2

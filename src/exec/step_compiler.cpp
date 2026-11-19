@@ -2166,6 +2166,17 @@ StatusOr<SubChain> LowerSubquery(catalog::Catalog& catalog, const Scope& scope,
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                             const txn::ReadView* view, PositionSink* declare,
                             const StatementContext* context, const PlanOptions* plan) {
+    // **No chain is compiled for a locking statement** (DC-R2): a chain's
+    // walk claims nothing, so whatever ran one - `ANALYZE`, a Waystone
+    // opt-in, a plan's example - would answer the statement with its clause
+    // dropped. The dispatcher's locking read never comes here.
+    if (stmt.lock.has_value()) {
+        return Status::NotImplemented(
+            "a SELECT ... FOR UPDATE is not supported here (byte " +
+            std::to_string(stmt.lock->byte_offset) +
+            "): a locking read runs on the write's row walk and compiles to no step chain, "
+            "so it has no plan to analyze, record a trail for, or manage");
+    }
     std::uint32_t next_step_id = 0;
     auto chain = CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
                               view, /*inner_build=*/true, declare, context, plan);

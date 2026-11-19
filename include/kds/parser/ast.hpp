@@ -796,6 +796,22 @@ struct SelectStmt {
     // needed to tell the two apart.
     std::uint64_t offset = 0;
 
+    // ---- The locking clause (docs/spec/parser-v2.md I11a; DC) ------------
+    //
+    // `FOR UPDATE`, written after the pagination tail of the outermost
+    // block: the statement claims the rows it returns (docs/spec/txn.md §5,
+    // "A locking read"). Set means the clause was written; `byte_offset` is
+    // the byte of `FOR`, which every refusal of the statement's shape names.
+    //
+    // **No reader may drop it.** A statement carrying it is answered by the
+    // dispatcher's locking read and by nothing else: `exec::Compile` refuses
+    // it, so no step chain - and so no trail, plan, `ANALYZE` or Cabin -
+    // answers a locking statement without its claim (DC-R2).
+    struct LockClause {
+        std::uint32_t byte_offset = 0;
+    };
+    std::optional<LockClause> lock;
+
     // Every relation's binding is distinct - the parser refuses the
     // statement otherwise, rather than picking one silently. That refusal
     // is what makes a self-join expressible: `FROM t AS a JOIN t AS b` is

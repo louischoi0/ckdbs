@@ -53,6 +53,12 @@ public:
     // not SELECT/INSERT/UPDATE/DELETE - which is not an error and never was.
     std::optional<Fingerprint> fingerprint() const noexcept { return lexer_.fingerprint(); }
 
+    // Whether the parse met a locking clause (`ParseLockClause` consumed a
+    // `FOR`), accepted or refused. A statement that reached one is answered
+    // by the grammar that read it up to there, never by a fallback to the
+    // other grammar's refusal (DC-R2): the dispatcher reads this.
+    bool met_lock_clause() const noexcept { return met_lock_clause_; }
+
     // **The query grammar** (BU-S4, `workorder-bu-basic-query-surface.md`
     // BU-Q8, BU-Q9): one SELECT, or set operations over several, with value
     // expressions wherever a value stands, `DISTINCT`, every join kind,
@@ -191,6 +197,18 @@ private:
     // aggregate key on a statement with no fold to answer it, `LIMIT` over
     // a fold - so there is one answer to what the tail admits.
     Status ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint32_t depth);
+
+    // The locking clause at a query's end (DC, docs/spec/parser-v2.md I11a):
+    // `FOR UPDATE`, absent-is-ok. `FOR` and every word after it are ordinary
+    // identifiers matched by text at clause position, as the tail's are. One
+    // production for both grammars, so a spelling is refused the same way
+    // wherever it is written: `FOR SHARE`, `FOR KEY SHARE`, `FOR NO KEY
+    // UPDATE`, `OF`, `NOWAIT` and `SKIP LOCKED` by name at their own byte.
+    // `into` null says this position admits no locking clause, and
+    // `declined_here` names the position in that refusal, which carries the
+    // byte of `FOR`.
+    Status ParseLockClause(std::optional<SelectStmt::LockClause>* into,
+                           std::string_view declined_here);
 
     // One count clause of the tail - `LIMIT <n>` or `OFFSET <m>` -
     // absent-is-ok, refused over aggregated output and inside a subquery
@@ -338,7 +356,8 @@ private:
     // The query blocks open around the one being parsed, bounded by
     // `kMaxSubqueryDepth`.
     std::uint32_t query_depth_ = 0;
-
+    // Set once `ParseLockClause` consumes a `FOR` (`met_lock_clause()`).
+    bool met_lock_clause_ = false;
 };
 
 // Convenience free function: Parser(sql).Parse().

@@ -1846,6 +1846,14 @@ private:
                                bool analyze, const exec::StatementContext* context,
                                std::string_view line);
 
+    // **A locking read** (DC; `docs/spec/txn.md` §5): a parsed `SELECT ...
+    // FOR UPDATE`, which `HandleSelect` hands here before anything compiles
+    // a chain for it. The gates first, each refused at the byte of `FOR`
+    // with nothing asked or held: `ANALYZE` and a pinned caller, the
+    // `readwrite` role, a `READ ONLY` transaction, autocommit, the shape.
+    DispatchOutcome HandleLockingRead(const parser::SelectStmt& stmt, Session& session,
+                                      bool analyze, bool pinned);
+
     // The query layer's host (`exec::LayerHost`): a relation's description
     // and its walks, at the statement's snapshot.
     class LayerHostImpl;
@@ -1857,7 +1865,9 @@ private:
     // **The query layer's door** (BU-S4, BU-Q9): `line` as the query
     // grammar reads it, run by `exec::RunQuery` at `snap`, its reply emitted
     // through the session's sink. nullopt when the query grammar refuses
-    // the text too, and the caller's native refusal is then the answer.
+    // the text too, and the caller's native refusal is then the answer -
+    // but a locking clause this grammar met is refused here, by name, its
+    // own refusal being the true one (DC-R2).
     std::optional<DispatchOutcome> TryQueryLayer(std::string_view line, Session& session,
                                                  const txn::Snapshot& snap,
                                                  const exec::StatementContext* context);

@@ -9639,7 +9639,11 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     }
     if (!parsed.ok()) {
         // BU-Q9: what the native grammar refuses, the query layer may read.
-        if (!analyze) {
+        // Not a statement this grammar read as far as a locking clause:
+        // everything before the clause was native, and the query grammar
+        // refuses every clause it meets, so its refusal - of a form the
+        // query layer answers - would be false of this statement.
+        if (!analyze && !parser.met_lock_clause()) {
             if (auto layered = TryQueryLayer(line, session, snap, context); layered.has_value()) {
                 return std::move(*layered);
             }
@@ -9650,7 +9654,96 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return {"ERR expected a SELECT statement", false};
     }
     run->statement.emplace(std::move(parsed.value()));
+    // **A locking read leaves here** (DC-R2), before a catalog view, a
+    // chain, a trail, a Cabin or the query layer can answer it unclaimed.
+    if (const auto& stmt = std::get<parser::SelectStmt>(*run->statement); stmt.lock.has_value()) {
+        return HandleLockingRead(stmt, session, analyze, pinned != nullptr);
+    }
     return SelectBody(run, session, analyze, context, line);
+}
+
+DispatchOutcome CommandDispatcher::HandleLockingRead(const parser::SelectStmt& stmt,
+                                                     Session& session, bool analyze,
+                                                     bool pinned) {
+    const std::string at = " (byte " + std::to_string(stmt.lock->byte_offset) + ")";
+
+    // ---- The route (DC-R2) ----------------------------------------------
+    //
+    // `ANALYZE` describes a step chain's run and a locking read has none; a
+    // pinned caller is a statement running this one as its subquery, whose
+    // rows it would neither hold nor return. The parser refuses the second
+    // by name, so that arm is this function's own line behind it.
+    if (analyze) {
+        return Refused(Status::NotImplemented(
+            "ANALYZE of a SELECT ... FOR UPDATE is not supported" + at +
+            ": a locking read runs on the write's row walk and has no step chain to report"));
+    }
+    if (pinned) {
+        return Refused(Status::NotImplemented("FOR UPDATE is not supported inside a subquery" +
+                                              at));
+    }
+
+    // ---- The gates (DC-R7), before anything is asked or held -------------
+    //
+    // **It is a write for authorization and for access mode**, and both
+    // gates above this function read the routing token, which is `SELECT`
+    // (`RequiredRole`, `ReadOnlyAdmits`). A `readonly` connection's
+    // transactions are `READ ONLY`, so the role is the first line and the
+    // access mode the second; neither refusal fails a transaction (CS-Q7).
+    if (!RoleCovers(session.role(), Role::kReadWrite)) {
+        return {"ERR permission: SELECT ... FOR UPDATE needs " +
+                    std::string(RoleName(Role::kReadWrite)) + at + "; this connection is " +
+                    std::string(RoleName(session.role())),
+                false};
+    }
+    if (session.in_read_only_txn()) {
+        ++read_only_write_refusals_;
+        return Refused(Status::ReadOnlyTransaction(
+            "SELECT ... FOR UPDATE is not admitted in a READ ONLY transaction" + at +
+            "; the transaction is unchanged - COMMIT or ROLLBACK it, then lock under BEGIN "
+            "READ WRITE"));
+    }
+    // DC-Q7 (a): a claim is held to its transaction's decide, and an
+    // autocommit statement's transaction ends with it.
+    if (!session.in_explicit_txn()) {
+        return Refused(Status::NotImplemented(
+            "SELECT ... FOR UPDATE outside a transaction is not supported" + at +
+            ": the claim is held until the transaction decides, and an autocommit "
+            "statement's ends with the statement; BEGIN first"));
+    }
+
+    // ---- The shape (DC-Q5 (a)) -------------------------------------------
+    //
+    // One relation, the WHERE an UPDATE admits, `*` or plain columns.
+    if (IEquals(stmt.from.schema, exec::kCatalogSchema) &&
+        FindSysView(stmt.from.table_name) != nullptr) {
+        // No relation and no row to claim (DC-R8): the architecture's, not
+        // an unbuilt form.
+        return Refused(Status::Unsupported(
+            "FOR UPDATE over a catalog view is not supported" + at +
+            ": sys.* rows are produced by the catalog's readers, so there is no row to claim"));
+    }
+    // `aggregated()` covers a GROUP BY and a HAVING: either makes a fold.
+    const char* unbuilt = nullptr;
+    if (!stmt.joins.empty()) {
+        unbuilt = "over a join";
+    } else if (stmt.aggregated()) {
+        unbuilt = "over an aggregate or GROUP BY";
+    } else if (!stmt.order_by.empty()) {
+        unbuilt = "with ORDER BY";
+    } else if (stmt.limit.has_value()) {
+        unbuilt = "with LIMIT";
+    } else if (stmt.offset != 0) {
+        unbuilt = "with OFFSET";
+    }
+    if (unbuilt != nullptr) {
+        return Refused(Status::NotImplemented(
+            std::string("FOR UPDATE ") + unbuilt + " is not supported" + at +
+            ": a locking read is one SELECT of * or plain columns over one relation, its rows "
+            "returned in tuple key order"));
+    }
+
+    return Refused(Status::NotImplemented("SELECT ... FOR UPDATE is not built yet" + at));
 }
 
 DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& run,
@@ -10851,7 +10944,13 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
     const exec::StatementContext* context) {
     parser::Parser parser(line);
     auto query = parser.ParseQuery();
-    if (!query.ok()) return std::nullopt;
+    if (!query.ok()) {
+        // **A locking clause is this grammar's own refusal** (DC-R2): it read
+        // the statement up to the clause, so the native refusal - of a form
+        // the query layer answers - would be false of it.
+        if (parser.met_lock_clause()) return Refused(query.status());
+        return std::nullopt;
+    }
 
     const exec::StatementContext now =
         context != nullptr ? *context : StatementContextFor(session);
