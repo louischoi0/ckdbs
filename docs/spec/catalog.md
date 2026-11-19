@@ -239,9 +239,9 @@ answering whichever it met first. Every *new* row of a catalog relation enters i
 so a writer holding the root is the only one adding a row; an in-place
 rewrite (a rename, a retype, a rollback's compensation by page and slot)
 does not pass through it, and what keeps those from admitting a name is
-what the check asks, below, not the latch. `RecordAccess` (page 11) and
-the pattern registration of the time (page 9) were the shape, for their
-admissions, at AT-S7; since CF-S1b page 9's hold is `SetPatternWaystone`'s,
+what the check asks, below, not the latch. `RecordAccess` (page 11, until
+DA moved the access statistics to memory) and the pattern registration of
+the time (page 9) were the shape, for their admissions, at AT-S7; since CF-S1b page 9's hold is `SetPatternWaystone`'s,
 the one inserter of a `sys.patterns` row (`waystone-concpets.md` §4a).
 
 | write | relation (root page) | held across |

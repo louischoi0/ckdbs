@@ -154,7 +154,8 @@ out-of-range values, each naming the file and line.
 | `checkpoint_interval_ms` | `5000` | Dirty-page flush cadence. `0` disables — durability then rests on `SYNC` and clean shutdown alone. |
 | `max_rows_touched` | `100000000` | Per-statement tuple ceiling; exceeding it is `ResourceExhausted`. An availability knob, not a performance one. `0` = unlimited. |
 | `waystone_recording` / `waystone_replay` | `on` / `on` | **Ceilings over the shapes an operator opted in** with `WAYSTONE ON` (`manual/sql/sql.md`), boot-only. Since superblock 33 nothing records until a shape is opted in, so `on` here no longer means every repeated `SELECT` records: it means an opted shape may record (and replay). With `waystone_recording = off` an opt-in is accepted, gets no trail directory and records nothing; the next start with it on gives it one. Turning either off must never change a reply (invariant 8). The boot log and `SHOW META`'s `waystone` section print both with the opted count. |
-| `access_statistics` | `on` | Per-shape access recording for `SHOW ACCESS`. +1-2% on a point lookup. |
+| `access_statistics` | `on` | Per-shape access recording for `SHOW ACCESS`, into memory (emptied by a restart). Off records nothing and allocates nothing. |
+| `access_stats_bytes_per_core` | `327680` | The bytes of one core's part of the access statistics: 40-byte slots, half of them admitted as shapes - the default admits 4,096 a core. `[80, 268435456]`; `0` refused. A shape past a part's bound is dropped and counted in `SHOW META`'s `access_stats_dropped`. |
 | `decay_half_life` | `600` | Seconds for an untouched decay score to halve. `0` refused. |
 | `cabin_optimizer` | `off` | The Cabin controller (PHY04): `on` lets it CREATE/EXTEND/HEAL/DROP Observational Cabins for `CABIN AUTO` columns. Tuning keys (`cabin_optimizer_page_budget`, `_theta_*_pct`, `_confirm_snapshots`, `_amort_windows` — 64, the build-cost amortization window ratified from `bench/results-cabin-optimizer-days.md` — `_cooldown_half_lives` — 128, the DECAYING dwell, its own parameter since 2026-08-10 and the one that provides overnight survival — and `_snapshot_interval_ms`) documented in `kds.conf.sample`. |
 | `max_insert_rows` | `1024` | Cap on rows in one multi-row `INSERT ... VALUES (...), (...)`. Over-cap refuses the whole statement, inserting nothing. |
@@ -253,8 +254,9 @@ appends through it — so a peer's `SHOW META` WAL block reads zero syncs by
 construction and the instance's durability cost is read on core 0
 (`docs/spec/wal.md` §3). `waystone_recording` and `access_statistics` mean
 the same thing on every core: a peer records an opted shape's trail and
-writes `sys.access_stats` itself, and `sys.patterns`, `sys.access_stats`
-and the trails are the instance's one. A `WAYSTONE ON` on one core reaches
+its own access shapes itself, and `sys.patterns`, `sys.access_stats`
+and the trails are the instance's one - the access statistics one store
+with a part per core, merged when read. A `WAYSTONE ON` on one core reaches
 every other core within one statement.
 Recovery runs once, on core 0, before any peer exists.
 `SHOW META`'s `contention_*` fields, and since BQ-S1 `wal_append_lsn` and the

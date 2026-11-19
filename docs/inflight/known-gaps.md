@@ -66,7 +66,8 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   Owned by `docs/spec/eviction.md` (§3.3) and `docs/spec/txn.md`.
 
 - **Writers outside a statement meet the ordinary refusal.** Verified at
-  `2f08b71c`: access statistics, Waystone trails, the delete-mark purge,
+  `2f08b71c` (access statistics, then a page writer, write no page since
+  DA): Waystone trails, the delete-mark purge,
   Cabin and assertion builds, and DDL page creation open no window. Census
   B classified each as refusing before its first write. No cell drives one
   into a full pool. **A declaration insert does write before its refusal**
@@ -807,9 +808,9 @@ pages and the cases it does not reach.
 - **Every restart, and every `WAYSTONE OFF`, leaves Waystone pages
   allocated.** Narrowed by CF-S1b; verified on `cf-waystone-premise` at
   `46c632aa` (first verified on `fix-sync-publish-and-waystone-crash` at
-  `ec440c2d`). Every mount clears every directory root, gives each opted
-  pattern a fresh one, and empties `sys.access_stats`
-  (`server::DiscardAdvisoryState`, `waystone-concpets.md` §4c), because
+  `ec440c2d`). Every mount clears every directory root and gives each opted
+  pattern a fresh one (`server::DiscardAdvisoryState`,
+  `waystone-concpets.md` §4c), because
   after a crash a directory page can name a child whose allocation bit never
   reached the device. Only opted patterns have directories now, but the leak
   is not bounded per mount: each mount strands every opted row's previous
@@ -1394,8 +1395,9 @@ the procedures are `manual/server/backup-restore.md`.
   path D needs a freezing snapshot.
 - **A restore leaks**: a page the source freed after the copier read its
   map region stays allocated in the restore, as after a crash; Waystone
-  pages and `sys.access_stats`' chain, made unreachable at the restore's
-  mount (`DiscardAdvisoryState`), stay allocated where they were written.
+  pages, made unreachable at the restore's mount (`DiscardAdvisoryState`),
+  stay allocated where they were written, and so do the growth pages a
+  pre-DA build gave `sys.access_stats`' chain, which nothing reaches since DA.
 - **PITR targets an LSN, not a time**: the commit record carries no time
   (BR-Q5 (b)). An operator notes `SHOW META`'s `wal_durable_lsn`.
 - **`kds_backup` reaches the admin role only on an `auth = off` server**:
@@ -1658,8 +1660,10 @@ Verified on `worktree-bz-background-advisory-optimizer` at `954abc20`
 (`instructions/v3.2.0/workorder-ca-background-advisory-optimizer.md` §7).
 
 - **The advisory work still runs on the statement.** Trail recording, replay's
-  directory walk and `sys.access_stats`' exclusive page are written by the
-  statement that executed, as §1.1 of the order reads them. Narrowed by
+  directory walk and the access statistics are written by the statement that
+  executed, as §1.1 of the order reads them; the access statistics are a
+  memory add to the core's own part since DA, where they were page 11's
+  exclusive hold. Narrowed by
   CF-S1b (on `cf-waystone-premise` at `46c632aa`): the Waystone half runs
   only for a shape an operator opted in. CA did not move
   them: CA-S0 measured them at 0.2-0.6 % of sampled server CPU on scenarios 1-4,
@@ -1821,20 +1825,23 @@ change's stages found and left.
   and the settlement's progress), so its cost is the whole catalog's size,
   which the old 128-step bound used to cap. Performance only: what it
   retires is correct. **No owner.**
-- **A cycle among `sys.access_stats` growth pages that all carry its oid is
+- **A cycle among `sys.statistics` growth pages that all carry its oid is
   re-formatted for the whole walk budget before it is cut.**
-  `Catalog::DiscardAccessStats` cuts at once a link back to page 11 (its
+  `Catalog::DiscardUnloggedChain` cuts at once a link back to page 17 (its
   owner, bootstrap's 0, is not the relation's) and at any foreign,
   non-heap, unallocated or unreadable page, but a cycle such as 200 -> 201
   -> 200 between pages it owns is walked, re-formatting a page per step, until
   `kMaxPageWalkLength` (2^20 steps) is spent: bounded, but seconds of a
   mount. Reachable only through damage that passes the checksum, since
-  nothing frees or relinks a `sys.access_stats` page. A visited set would
-  cut it at the first repeat. **No owner.**
+  nothing frees or relinks such a page. A visited set would cut it at the
+  first repeat. `sys.access_stats`' chain, where this was first found, is
+  walked by nothing since DA. **No owner.** (Re-read on
+  `da-access-stats-memory-resident` at DA-S1.)
 - **The sim's restore with `skip_recovery` runs no advisory discard.**
   `SimInstance::CreateFromBackup` leaves the discard to `Boot`, which runs
   it only when it runs recovery, so a restored image booted with
-  `skip_recovery` keeps its Waystone roots and `sys.access_stats` rows,
+  `skip_recovery` keeps its Waystone roots (its access statistics start
+  empty at every boot since DA, being the boot's dispatcher's memory),
   and since CF-S1b skips the directory renewal too; it sets the opted count
   by `RecountOptedPatterns` instead (on `cf-waystone-premise` at
   `46c632aa`).
@@ -2021,10 +2028,11 @@ Verified on `da-q8-memory-bound-key` (branch
 `worktree-df-statistics-coverage`) at the commit that adds this section.
 Owned by `docs/spec/sys-views.md` §6.2a and §6.2b.
 
-- **`sys.access_stats` has no `rows_examined` and `rows_matched`.** The
-  work order's part C names them; the row is a 33-byte persisted struct
-  until DA-S1 moves the store to memory, and widening it is a format event
-  DF does not make (DF-R1). Owed to DA.
+- **`sys.access_stats` has no `rows_examined` and `rows_matched`.** DF's
+  part C names them. The format event that stood in the way went with DA-S1,
+  which moved the store to memory, but DA changes nothing that is counted
+  (its §6, DA-R1), so it did not add them either. **No owner.** (Re-read on
+  `da-access-stats-memory-resident` at DA-S1.)
 - **An index a write's `WHERE` subquery reads through is counted nowhere**:
   that chain's counters are dropped where it runs. An index that reads 0
   is therefore not proven unused by the count alone; neither is a unique
@@ -2738,6 +2746,29 @@ Owned by `docs/spec/index.md` §10.3. The order is
   waiting `X` has no queue position (`lock_table.cpp`), as writers already
   can.
 
+## Access statistics in memory (DA)
+
+Verified on `da-access-stats-memory-resident` at DA-S1
+(`instructions/v3.2.0/workorder-da-access-stats-memory-resident.md`; owner
+`docs/spec/sys-views.md` §6.2d, `docs/spec/heap-and-tuple.md` §7).
+
+- **DA-S3 is owed: page 11's bootstrap stays.** Bootstrap still makes page
+  11 and its `sys.objects` and `sys.tables` rows (oid 130), so `SHOW TABLES`
+  and `sys.tables` still list `access_stats`, and `SysAccessStatRow`, the
+  `kCatalogRoots` entry, `IsUnloggedCatalogRelation`'s and
+  `RegisterUnloggedClasses`' page-11 halves stay with it (DA-Q9 (a)). No
+  build since DA writes or reads the page. Removing them is a format event,
+  bound to the first superblock bump after 37 any order makes (DA-Q1 (a)).
+- **A forget orders the writes, not the statements** (DA-R5): a `SELECT`
+  whose borrow was refused and that records after an `ADD COLUMN`'s forget
+  can re-admit the reused position's shape, as page 11's hold allowed.
+- **A part's bound is per core**: a schema whose shapes pass 4,096 a core
+  drops on the cores that run them and keeps counting the known ones; the
+  merged view may then hold more than 4,096 rows. `access_stats_dropped` says
+  how many were lost; the key raises the bound.
+- **A dropped relation's shapes stay until a restart** and count against
+  their cores' bounds, as they stayed until a mount before.
+
 ## Assertion admission
 
 - **A departure that raises a SUM is never admitted** `[quiet-wrong]` (a
@@ -2825,9 +2856,9 @@ Verified on `bs-test-hardening` from `5d58f3ca`
   naming `Corruption` - and lost to the instance until a restore:
   - **page 0 and the two map regions** (DB-Q3): read before recovery, never
     imaged, so a tear refuses the mount; no second copy exists;
-  - **a page of an unlogged class** (`sys.access_stats`, `sys.statistics`,
-    a fenced index build's tree before its `LogBuiltTree`), whose content no
-    record describes;
+  - **a page of an unlogged class** (`sys.statistics`, page 11 - which no
+    build since DA writes - and a fenced index build's tree before its
+    `LogBuiltTree`), whose content no record describes;
   - **a tear of the mount's own write**: images are off through the mount
     (DB-R2), so a page redo or the mount wrote back and a crash tore before
     the completion checkpoint is refused when its last image is below the

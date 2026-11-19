@@ -378,17 +378,25 @@ waystone_replay = on
 # A shape is `(kind, relation, columns)` - `Lookup`, `Probe`, `Range`,
 # `FilterScan` or `Scan`, the relation, and the columns the access was keyed
 # or filtered on. **Never the values**: `WHERE flag = 1` and `WHERE flag = 2`
-# are one shape with two uses. That is what bounds the relation by the schema
-# instead of by the data, so it needs no eviction and no cap beyond a
-# backstop.
+# are one shape with two uses. That is what bounds the store by the schema
+# instead of by the data, so it needs no eviction; the per-core bound below
+# is a backstop.
 #
 # What it is for: "this relation was filter-scanned on `flag` 40,000
 # times" is the signal that would justify indexing it. SHOW ACCESS reports
 # it; nothing acts on it automatically.
 #
-# Measured cost: +1-2% on a point lookup, unmeasurable on anything slower.
+# Memory-resident: one part per core, merged when read, emptied by a
+# restart (docs/spec/sys-views.md section 6.2d, which carries its cost).
 # Independent of the Waystone switches above.
 access_statistics = on
+
+# The bytes of one core's part: 40-byte slots, half of them admitted as
+# shapes, allocated at the core's first record. The default admits 4,096
+# shapes a core; [80, 268435456], 0 refused (access_statistics is the
+# switch). A shape past the bound is dropped and counted in SHOW META's
+# access_stats_dropped.
+# access_stats_bytes_per_core = 327680
 
 # ---- Decay score and the Cabin controller ---------------------------------
 

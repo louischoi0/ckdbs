@@ -234,7 +234,7 @@ and `...PutTheSmallRelationFirstAndBuildTheLarge`).
 
 **PS14 - where.** `sys.statistics` (oid 160), a catalog relation with a
 fixed root at page 17 (superblock 36), **unlogged by CR6** (`crosscore.md`
-CC13) as `sys.access_stats` is: its content is only a statistic. One
+CC13), its one relation since DA: its content is only a statistic. One
 fixed-offset row a relation (`catalog::SysStatisticsRow`, 19 bytes: the
 relation's oid, the band, the kind) and one closing row counting the
 relation rows. A mount empties the chain, so the row's layout can change
