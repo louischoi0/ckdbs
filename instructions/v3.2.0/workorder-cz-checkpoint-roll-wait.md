@@ -5,7 +5,9 @@ alone; CZ-S2's items CZ-Q14 to CZ-Q22 marked (a) (§43 there); CZ-S3 and
 CZ-S4 opened on the operator's W29 (§50 there), every later item to CLA's
 proposal and a gate not met stopping the order; CZ-S3 built; CZ-S4 done,
 every gate met - CLOSED 2026-11-18 with C1 built** (§7, "CZ-S3" and
-"CZ-S4"), not merged and not pushed, on
+"CZ-S4"), **landed on `main` 2026-11-19 with the hook skipped on the
+operator's word, the merged tree not suite-run**
+(`raft-marks-2026-11-19.md` §2; §7, "Landed"), on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §31): *"Proceed with the CZ milestone."* S0
@@ -872,6 +874,26 @@ inside those minutes.
     its own pair, and the worst cross-pairing is 2.09x.
   - **Rejected**: cutting §2's in-run-hold and roll columns, which are the
     evidence the bullets under that table read.
+
+### Landed, 2026-11-19
+
+On the operator's word (`raft-marks-2026-11-19.md` §2): *"Push CZ, C1
+only, no verify."* `origin/main` at `11f72ce9` (`v3.4.13` and the tag's
+record; CX and CY behind it) was merged into this branch at `44de9abc`,
+and that tree was pushed to `main` with `--no-verify`.
+
+- **The merge**: conflicts in `instructions/v3.2.0/index.md` and
+  `raft-marks-2026-11-18.md` only, both sides kept; the section that
+  opened CZ-S3 and CZ-S4, written as §47, is §50 there. Git merged
+  `src/server/expeditor.cpp` and `tests/CMakeLists.txt` with no conflict.
+- **C1 alone**: C2 is not in the push. `src/wal/file_log_device.cpp` is
+  unchanged, and `worktree-cz-s1-spike` is not merged.
+- **Not executed**: the full suite on the merged tree. It ran 0 failed of
+  4727 at `74861601`'s build inputs, before CX and CY were on `main`; the
+  Debug build of `44de9abc` was about half done when the operator asked
+  for the push at once. No review of the merge was run. The overhead is
+  the close's, on `74861601` against `9712f5f0`.
+- **Owed**: the full suite at `44de9abc`'s build inputs.
 
 ## 8. The model for C1 (CZ-S2) `[design]`
 
