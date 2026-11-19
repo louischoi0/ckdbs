@@ -1,0 +1,18 @@
+2026-11-19T18:58:08Z master=none alive=n status_age=0s status=
+2026-11-19T18:58:08Z ORPHAN: master gone, restarting
+2026-11-19T18:59:08Z master=3141649 alive=y status_age=24s status=2026-11-19T18:58:44Z s1-c8-g start
+2026-11-19T19:00:08Z master=3141649 alive=y status_age=13s status=2026-11-19T18:59:55Z r2-s1-c1-g start
+2026-11-19T19:01:08Z master=3141649 alive=y status_age=0s status=2026-11-19T19:01:08Z r2-s1-c1-s start
+2026-11-19T19:02:08Z master=3141649 alive=y status_age=25s status=2026-11-19T19:01:43Z r3-s1-c1-g start
+2026-11-19T19:03:08Z master=3141649 alive=y status_age=14s status=2026-11-19T19:02:54Z r3-s1-c1-s start
+2026-11-19T19:04:08Z master=3141649 alive=y status_age=1s status=2026-11-19T19:04:07Z r2-s1s-n10080-c1-g start
+2026-11-19T19:05:09Z master=3141649 alive=y status_age=3s status=2026-11-19T19:05:05Z s2-c1-g start
+2026-11-19T19:06:09Z master=3141649 alive=y status_age=5s status=2026-11-19T19:06:04Z r2-s2-c8-g start
+2026-11-19T19:07:09Z master=3141649 alive=y status_age=7s status=2026-11-19T19:07:02Z x-b1-s2-c8-g start
+2026-11-19T19:08:09Z master=3141649 alive=y status_age=11s status=2026-11-19T19:07:58Z x-b4-s2-c8-g start
+2026-11-19T19:09:09Z master=3141649 alive=y status_age=10s status=2026-11-19T19:08:59Z b1-s2-c1-s start
+2026-11-19T19:10:09Z master=3141649 alive=y status_age=14s status=2026-11-19T19:09:55Z r3-b1-s2-c1-s start
+2026-11-19T19:11:09Z master=3141649 alive=y status_age=2s status=2026-11-19T19:11:07Z s3-c1-n10000-all start
+2026-11-19T19:12:09Z master=3141649 alive=y status_age=15s status=2026-11-19T19:11:54Z s3-c8-n10000-all start
+2026-11-19T19:13:09Z master=3141649 alive=y status_age=5s status=2026-11-19T19:13:04Z r3-s3-c1-n1000-none start
+2026-11-19T19:14:09Z all.done seen, watchdog exits

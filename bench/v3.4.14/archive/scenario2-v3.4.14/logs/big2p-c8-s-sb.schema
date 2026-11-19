@@ -1,0 +1,12 @@
+created 8 relations with suffix _sb:
+  organizations_sb
+  ships_sb
+  operations_sb
+  cargos_sb
+  fees_sb
+  recipes_sb
+  freights_sb
+  charges_sb
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/louis/bench-runs/scenarios-v3.4.14/src/tools/scenario2_freight.py --suffix sb [--load-only]

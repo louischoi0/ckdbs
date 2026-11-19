@@ -1,0 +1,15 @@
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 256000, revenue = 1419700 WHERE id = 514" -> ERR TXN_CONFLICT retryable=1 row id=514 was written by transaction 53257 in 18us
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 1139000, revenue = 7768153 WHERE id = 455" -> ERR TXN_CONFLICT retryable=1 row id=455 was written by transaction 49162 in 50us
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 134000, revenue = 753560 WHERE id = 488" -> ERR TXN_CONFLICT retryable=1 row id=488 was written by transaction 73849 in 21us
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 1892000, revenue = 13735554 WHERE id = 582" -> ERR TXN_CONFLICT retryable=1 row id=582 was written by transaction 73894 in 20us
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 919000, revenue = 7857033 WHERE id = 466" -> ERR TXN_CONFLICT retryable=1 row id=466 was written by transaction 57436 in 34us
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 893000, revenue = 5178571 WHERE id = 540" -> ERR TXN_CONFLICT retryable=1 row id=540 was written by transaction 73901 in 33us
+1795115173 WARN [query] "UPDATE organizations_s2c8g SET outstanding = 5659199 WHERE id = 434" -> ERR TXN_CONFLICT retryable=1 row id=434 was written by transaction 66274 in 29us
+1795115173 WARN [query] "UPDATE organizations_s2c8g SET outstanding = 3114792 WHERE id = 469" -> ERR TXN_CONFLICT retryable=1 row id=469 was written by transaction 73932 in 18us
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 740000, revenue = 6102981 WHERE id = 418" -> ERR TXN_CONFLICT retryable=1 row id=418 was written by transaction 57468 in 20us
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 1032000, revenue = 7068992 WHERE id = 460" -> ERR TXN_CONFLICT retryable=1 row id=460 was written by transaction 57537 in 33us
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 1676000, revenue = 11918247 WHERE id = 303" -> ERR TXN_CONFLICT retryable=1 row id=303 was written by transaction 57543 in 19us
+1795115173 WARN [query] "UPDATE organizations_s2c8g SET outstanding = 9412403 WHERE id = 596" -> ERR TXN_CONFLICT retryable=1 row id=596 was written by transaction 61655 in 50us
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 765000, revenue = 4421357 WHERE id = 592" -> ERR TXN_CONFLICT retryable=1 row id=592 was written by transaction 53303 in 24us
+1795115173 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 1892000, revenue = 17103186 WHERE id = 402" -> ERR TXN_CONFLICT retryable=1 row id=402 was written by transaction 49351 in 30us
+1795115174 WARN [query] "UPDATE operations_s2c8g SET booked_cbm = 2149000, revenue = 12030494 WHERE id = 404" -> ERR TXN_CONFLICT retryable=1 row id=404 was written by transaction 61820 in 139us

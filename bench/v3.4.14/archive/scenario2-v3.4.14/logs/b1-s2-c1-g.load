@@ -1,0 +1,33 @@
+created 8 relations with suffix _b1c1g:
+  organizations_b1c1g
+  ships_b1c1g
+  operations_b1c1g
+  cargos_b1c1g
+  fees_b1c1g
+  recipes_b1c1g
+  freights_b1c1g
+  charges_b1c1g
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/louis/bench-runs/scenarios-v3.4.14/src/tools/scenario2_freight.py --suffix b1c1g
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15604  table scenario2_b1c1g
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0     487.7    353.2    392.0    429.3    741.3    741.3     741.3     0
+load-organizations         300         0     475.3    284.3    402.7    463.0    630.4    768.0    1022.8     0
+load-ships                  30         0     627.1    408.6    497.3    556.7    946.1   1136.4    1136.4     0
+load-operations            300         0     466.2    322.9    406.7    451.8    623.4    674.9     706.0     0
+load-fees                   12         0     487.9    375.0    411.7    490.3    574.3    574.3     574.3     0
+load-recipes                93         0     487.7    336.5    417.5    480.9    640.4    893.3     893.3     0
+load-cargos               4000         0     505.1    278.8    435.5    489.0    683.3    797.1    2165.8     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.
