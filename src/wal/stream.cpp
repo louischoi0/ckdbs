@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -340,6 +341,22 @@ Status WalStream::DetachBelow(Lsn lsn) {
     // segment table unlocked on the promise that no table change runs beside
     // it (file_log_device.hpp); the detach waits it out, as a roll does.
     WaitOutFlushInFlight();
+    return DetachLocked(lsn);
+}
+
+Status WalStream::TryDetachBelow(Lsn lsn, bool* busy) {
+    *busy = false;
+    const LatchGuard hold(latch_, std::try_to_lock);
+    // The flush in flight is answered busy rather than waited out, for the
+    // reason `DetachBelow` waits it out.
+    if (!hold.owns() || flush_in_flight_.load(std::memory_order_acquire)) {
+        *busy = true;
+        return Status::OK();
+    }
+    return DetachLocked(lsn);
+}
+
+Status WalStream::DetachLocked(Lsn lsn) {
     const std::uint64_t end = device_->end_segment();
     if (end == 0) return Status::OK();
     // Segment `s` is wholly below `lsn` exactly when `s < lsn / segment_size`;
@@ -393,6 +410,20 @@ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byt
     return AppendLocked(spec, payload, rolled);
 }
 
+StatusOr<Lsn> WalStream::TryAppend(const RecordSpec& spec, std::span<const std::byte> payload,
+                                   bool* busy, RollRecord* rolled) {
+    *busy = false;
+    // The stop is answered before the try, so a stopped stream never reads
+    // as busy (CZ-R8).
+    if (stopped()) return StoppedStatus();
+    const LatchGuard hold(latch_, std::try_to_lock);
+    if (!hold.owns()) {
+        *busy = true;
+        return kNoLsn;
+    }
+    return AppendLocked(spec, payload, rolled);
+}
+
 StatusOr<Lsn> WalStream::AppendAndSeal(const RecordSpec& spec,
                                        std::span<const std::byte> payload, RollRecord* rolled) {
     const StreamLatchHold hold(*this);
@@ -423,6 +454,15 @@ StatusOr<Lsn> WalStream::AppendLocked(const RecordSpec& spec, std::span<const st
         RollRecord roll;
         roll.core = CurrentCore();
         roll.start_ns = SteadyNowNs();
+        // The roll flag (stream.hpp), cleared on every exit below, the
+        // encodes' refusals among them.
+        struct RollingFlag {
+            std::atomic<bool>& flag;
+            explicit RollingFlag(std::atomic<bool>& f) noexcept : flag(f) {
+                flag.store(true, std::memory_order_release);
+            }
+            ~RollingFlag() { flag.store(false, std::memory_order_release); }
+        } const rolling_flag(rolling_);
         if (Status s = SealLocked(); !s.ok()) {
             return s;
         }
@@ -469,44 +509,67 @@ Status WalStream::Flush() {
     // returns: this thread writes what is staged when it claims the flush,
     // and a flush already in flight is waited out and the claim retried.
     for (;;) {
-        std::size_t used = 0;
-        Lsn from = 0;
-        Lsn to = 0;
-        {
-            const StreamLatchHold hold(*this);
-            // The claim is tested before the stop: a failed flush stops the
-            // log before it releases its claim, so a thread that sees the
-            // claim free sees that stop too.
-            if (!flush_in_flight_.load(std::memory_order_acquire)) {
-                if (stopped()) return StoppedStatus();
-                used = ring_used();
-                if (used == 0) return Status::OK();
-                std::swap(ring_, flush_buf_);
-                ring_used_.store(0, std::memory_order_relaxed);
-                from = flushed_lsn();
-                to = append_lsn();
-                flush_in_flight_.store(true, std::memory_order_relaxed);
-            }
-        }
-        if (used == 0) {
-            // Another thread's flush is writing; it finishes without the latch.
-            WaitOutFlushInFlight();
-            continue;
-        }
-        // The ring never spans a segment boundary - the seal drains before a
-        // roll, and a roll waits out this write - so this is one write into
-        // one segment.
-        const Status status =
-            device_->WriteAt(SegmentOf(from), OffsetOf(from), std::span(flush_buf_).first(used));
-        // Fail-stop (stream.hpp), as `FlushLocked` says - and **before the
-        // claim is released**: released first, another thread could claim,
-        // write the bytes above this failed range, sync them and publish
-        // them durable before the stop landed - a hole acknowledged.
-        const Status result = status.ok() ? status : FailStop(status);
-        if (status.ok()) flushed_lsn_.store(to, std::memory_order_release);
-        flush_in_flight_.store(false, std::memory_order_release);
-        return result;
+        bool again = false;
+        const Status s = FlushAttempt(/*tried=*/false, &again);
+        if (!again) return s;
+        // Another thread's flush is writing; it finishes without the latch.
+        WaitOutFlushInFlight();
     }
+}
+
+Status WalStream::TryFlush(bool* busy) {
+    // The stop first, so a stopped stream never reads as busy (CZ-R8).
+    if (stopped()) {
+        *busy = false;
+        return StoppedStatus();
+    }
+    return FlushAttempt(/*tried=*/true, busy);
+}
+
+Status WalStream::FlushAttempt(bool tried, bool* again) {
+    *again = false;
+    std::size_t used = 0;
+    Lsn from = 0;
+    Lsn to = 0;
+    {
+        // Tried, the try guard holds the latch; not, it holds nothing and the
+        // blocking hold does.
+        const LatchGuard attempted(tried ? latch_ : nullptr, std::try_to_lock);
+        if (!attempted.owns()) {
+            *again = true;
+            return Status::OK();
+        }
+        std::optional<StreamLatchHold> waited;
+        if (!tried) waited.emplace(*this);
+        // The claim is tested before the stop: a failed flush stops the log
+        // before it releases its claim, so a thread that sees the claim free
+        // sees that stop too.
+        if (flush_in_flight_.load(std::memory_order_acquire)) {
+            *again = true;
+            return Status::OK();
+        }
+        if (stopped()) return StoppedStatus();
+        used = ring_used();
+        if (used == 0) return Status::OK();
+        std::swap(ring_, flush_buf_);
+        ring_used_.store(0, std::memory_order_relaxed);
+        from = flushed_lsn();
+        to = append_lsn();
+        flush_in_flight_.store(true, std::memory_order_relaxed);
+    }
+    // The ring never spans a segment boundary - the seal drains before a
+    // roll, and a roll waits out this write - so this is one write into one
+    // segment.
+    const Status status =
+        device_->WriteAt(SegmentOf(from), OffsetOf(from), std::span(flush_buf_).first(used));
+    // Fail-stop (stream.hpp), as `FlushLocked` says - and **before the claim
+    // is released**: released first, another thread could claim, write the
+    // bytes above this failed range, sync them and publish them durable
+    // before the stop landed - a hole acknowledged.
+    const Status result = status.ok() ? status : FailStop(status);
+    if (status.ok()) flushed_lsn_.store(to, std::memory_order_release);
+    flush_in_flight_.store(false, std::memory_order_release);
+    return result;
 }
 
 void WalStream::WaitOutFlushInFlight() const noexcept {

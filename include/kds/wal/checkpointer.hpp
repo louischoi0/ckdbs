@@ -238,6 +238,15 @@ struct CheckpointAnchorRecord {
     std::uint64_t segment_no = 0;
 };
 
+// What a run task's commit did with the recycle its landing owed (C1c,
+// `workorder-cz-checkpoint-roll-wait.md` §8.4).
+enum class RecycleOutcome : std::uint8_t {
+    kNone,     // no recycle was owed: the durable redo start did not advance
+    kDone,     // detached, by the tried entry
+    kSkipped,  // the stream latch was busy; the next advance covers it
+    kBlocked,  // the bound on skips in a row was reached: the blocking detach
+};
+
 class CheckpointAnchor {
 public:
     virtual ~CheckpointAnchor() = default;
@@ -253,7 +262,10 @@ public:
         if (Status s = Publish(anchor); !s.ok()) return s;
         return kInvalidPageId;
     }
-    virtual void Commit() {}
+    // The run task's commit asks for the recycle it owes with the stream's
+    // tried detach (CZ-S3, C1c): a busy latch skips it, and the anchor bounds
+    // the skips in a row. An anchor with no recycler owes none.
+    virtual RecycleOutcome Commit() { return RecycleOutcome::kNone; }
 };
 
 // Holds the last anchor in memory. Correct only for a process that never
@@ -421,6 +433,12 @@ public:
     // and a second one would publish an anchor built from the first one's
     // half-flushed state.
     Status Start();
+    // **The cadence's tried form** (CZ-S3, C1b): both snapshots, then the
+    // begin record by the tried append, in one call. Busy, nothing was
+    // appended, no checkpoint is in progress and `*busy` is set; the task
+    // parks and calls it again, so the snapshot is retaken (CZ-R3). The
+    // assertion bases behind the record stay blocking (CZ-Q16 (a)).
+    Status Start(bool* busy);
 
     // Flushes up to `pages_per_step` of the snapshot. Returns true once
     // every page in it has been written back, at which point Complete()
@@ -473,6 +491,17 @@ public:
 
     // A run task is queued or parked on this checkpointer.
     bool run_in_flight() const noexcept { return task_in_flight_; }
+    // The cadence task's run report: the run in flight's, or the last one's
+    // once it ended. The tests read CZ-S3's latch-site counters here.
+    const CheckpointRunReport& task_report() const noexcept { return task_report_; }
+
+    // **The bound on busy answers at one latch site in one run** (CZ-Q4 (a),
+    // CZ-R4): `kGateParks`' number. Past it the site calls the blocking entry.
+    static constexpr int kLatchTries = 16;
+    // `ParkOnBusy`'s two waits: on a roll, a ceiling (CZ-Q17 (a)); on any
+    // other holder, the park itself (CZ-Q15 (a)).
+    static constexpr std::uint64_t kRollParkCeilingNs = 1'000'000'000;  // 1 s
+    static constexpr std::uint64_t kBusyParkNs = 1'000'000;             // 1 ms
 
     // **Shutdown's first act, for every core, before any shutdown checkpoint**
     // (BI-R4): releases a parked run's gate hold and drops its snapshot and
@@ -485,8 +514,9 @@ public:
     void Abandon() noexcept;
 
 private:
+    // `busy` given: the tried append (`Start(bool*)`).
     Status LogBegin(std::span<const CheckpointActiveTxn> active_txns,
-                    std::span<const CheckpointDirtyPage> dirty_pages);
+                    std::span<const CheckpointDirtyPage> dirty_pages, bool* busy = nullptr);
 
     // AS6a: every live cabin's group headers, chunked so no record outgrows
     // `shared_record_payload_bytes()`. Emitted immediately after
@@ -496,7 +526,8 @@ private:
 
     // Complete's halves: the end record appended (its LSN), and the anchor
     // published once that record is durable - the caller's to ensure.
-    StatusOr<Lsn> AppendEnd();
+    // `busy` given: the tried append, `kNoLsn` and `*busy` set when held.
+    StatusOr<Lsn> AppendEnd(bool* busy = nullptr);
     Status PublishAnchor();
     // The record this run's publish carries, and the bookkeeping and log
     // line of a publish that landed.
@@ -527,7 +558,24 @@ private:
     static constexpr int kGateParks = 16;
     // Parks until the log is durable past `lsn`, registered with the
     // writer's kick; the log's fail-stop answers it.
-    sched::Coro ParkOnLog(Lsn lsn, std::uint32_t core_id);
+    //
+    // **Its flush is tried** (CZ-S3, C1a): a busy latch or another flush in
+    // flight skips it, the writer is asked for `flushed_lsn()` alone, and the
+    // task parks (`ParkOnBusy`) until it is durable or that park ends, then
+    // tries again - to `kLatchTries` busy answers, then the blocking flush.
+    // Its second try is behind a park, so it tests `generation` there.
+    sched::Coro ParkOnLog(Lsn lsn, std::uint32_t core_id, std::uint64_t generation);
+    // **One park on a busy stream latch** (CZ-S3, §8.3, `sysio.wal_roll`): on
+    // a roll, until its flag clears, the log stops or `kRollParkCeilingNs`
+    // passes (CZ-Q17 (a)); on any other holder, `kBusyParkNs` or the stop
+    // (CZ-Q15 (a)). A deadline in the predicate, no timer and no kick, so it
+    // is read at the reactor's next turn. `durable`, when not `kNoLsn`, also
+    // ends it once the log is durable past that LSN (the flush site).
+    // An abandoned run's frame, if polled, counts nothing (`generation`).
+    sched::Coro ParkOnBusy(CheckpointLatchSite site, Lsn durable, std::uint64_t generation);
+    CheckpointRunReport::LatchSite& Site(CheckpointLatchSite site) noexcept {
+        return task_report_.latch_sites[static_cast<std::size_t>(site) - 1];
+    }
     // Parks until the data file is synced past everything written so far
     // (BI-R2's second half). No kick: the data-sync thread has none, and the
     // drain timer ends an idle block (BI-Q6 (b)). `ParkOnDataSyncTicket`

@@ -1283,11 +1283,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     }
     expeditor->checkpoint_anchor_->SetRecycler(
         [wal = expeditor->wal_.get(), backup = &*expeditor->backup_,
-         archiver = expeditor->archiver()](wal::Lsn redo_start) {
-            backup->Recycle(redo_start, [wal, archiver](wal::Lsn bound) {
-                wal->RecycleBelow(archiver != nullptr ? std::min(bound, archiver->floor())
-                                                      : bound);
+         archiver = expeditor->archiver()](wal::Lsn redo_start, bool tried) {
+            // `BackupControl`'s latch stays blocking (CZ order §8.4, "Left").
+            bool done = true;
+            backup->Recycle(redo_start, [&](wal::Lsn bound) {
+                done = wal->RecycleBelow(
+                    archiver != nullptr ? std::min(bound, archiver->floor()) : bound, tried);
             });
+            return done;
         });
     if (Status s = CheckpointAfterRecovery(/*core_id=*/0, *expeditor->wal_,
                                            *expeditor->checkpoint_target_,

@@ -1185,3 +1185,25 @@ readers' core with the balancer off. The results are in
   is not marked.
 - **The record is not reopened.** The close above stands, and nothing in
   BL is reopened.
+
+### Bar (v) re-measured by CZ's close, 2026-11-18
+
+CZ-Q6 (a) (`instructions/v3.2.0/workorder-cz-checkpoint-roll-wait.md`):
+CZ re-measures bar (v) at its close and appends here, and BL is not
+reopened. On worktree `cz-checkpoint-roll-wait` at `74861601`
+(`v3.4.12-113-g74861601`), in rung 3's probe `levels` cell
+(`--placement kernel`, the balancer placing), with the cadence checkpoint
+parking on a busy stream latch, the `transactional` reader's p99 is
+**1.55x** its isolated p99 (673 µs against 435 µs, medians of 5), with
+**5 of 5** interleaved pairs within 2x. The same cell at `9712f5f0`,
+without CZ, is 3.17x with 2 of 5
+(`bench/v3.4.12/results-cz-close-v3.4.12-113-g74861601.md`).
+
+- **Bar (v) is met in this cell on this build.** The excess rung 3's probe
+  attributed to the checkpoint on a roll no longer shows in this cell: the
+  reader samples at or above 10 ms fell from 114 to 3 over 5 runs, the 3
+  in one run, inside a checkpoint run with no roll beside it.
+- **Not re-run:** BL's close cell, its other placements, and `cores` other
+  than 4.
+- **BL's row and close stand.** Whether this closes BL-R7's remainder is
+  the operator's to mark.

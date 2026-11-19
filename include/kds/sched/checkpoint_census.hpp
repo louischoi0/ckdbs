@@ -56,6 +56,12 @@ inline constexpr std::array<const char*, kCheckpointPhaseCount> kCheckpointPhase
 };
 static_assert(kCheckpointPhaseNames.back() != nullptr, "a CheckpointPhase without a name");
 
+// The cadence checkpoint's three latch sites that wait (CZ-S3), indexing
+// `CheckpointRunReport::latch_sites` and named on the run line. The value is
+// also `sysio.wal_roll`'s p1, so it starts at 1.
+enum class CheckpointLatchSite : std::uint8_t { kBegin = 1, kEnd = 2, kFlush = 3 };
+inline constexpr std::array<const char*, 3> kCheckpointLatchSiteNames = {"begin", "end", "flush"};
+
 // One run, accumulated while it runs and published whole at its end.
 struct CheckpointRunReport {
     sched::MonoTimeNs start_ns = 0;  // the gate's entry
@@ -83,6 +89,28 @@ struct CheckpointRunReport {
     // other work meanwhile - on the log and on the data file's sync.
     std::uint64_t log_park_ns = 0;
     std::uint64_t data_park_ns = 0;
+    // CZ-S3 (`workorder-cz-checkpoint-roll-wait.md` §8.7): each of the task's
+    // three waiting latch sites - its begin record, its end record and its
+    // log park's flush (`CheckpointLatchSite`) - with the busy answers it
+    // met, the parks among them that began on a roll, the calls made to the
+    // blocking entry once the run's 16 answers at the site were spent, the
+    // wall time parked and the time inside those blocking calls.
+    struct LatchSite {
+        std::uint64_t busy = 0;
+        std::uint64_t roll_parks = 0;
+        std::uint64_t bound = 0;
+        std::uint64_t park_ns = 0;
+        std::uint64_t blocking_ns = 0;
+    };
+    std::array<LatchSite, 3> latch_sites{};
+    // Core 0's assertion bases, which stay blocking (CZ-Q16 (a)): the whole
+    // visit - the directory latch's wait and the appends inside it.
+    std::uint64_t assertion_visit_ns = 0;
+    // The recycle at the anchor's commit (C1c, CZ-Q22 (a)): skipped on a
+    // busy latch, or taken blocking after the instance's sixteenth skip in
+    // a row.
+    std::uint64_t recycle_skips = 0;
+    std::uint64_t recycle_blocked = 0;
 
     // The run's length on the injected clock, 0 for a report never ended.
     std::uint64_t wall_ns() const noexcept { return end_ns > start_ns ? end_ns - start_ns : 0; }
