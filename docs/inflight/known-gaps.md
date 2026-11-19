@@ -1856,8 +1856,14 @@ Verified on `da-q8-memory-bound-key` (branch
   counts nothing - and for a query-layer `SELECT`, whose walks are not
   summed; a subquery's chain is counted nowhere. `page_reads` and the time
   split do cover them.
-- **The cost columns' statement path is not measured.** DF-S0's spike
-  priced another body of code; the measurement is the milestone's close.
+- **The cost columns cost a point read +0.44 us of server CPU** at
+  `cores = 1` (+0.27 to +0.54;
+  `bench/v3.4.13/results-cx-close-bisect-v3.4.13-1-g11f72ce9.md`), kept on
+  the operator's word of 2026-11-19 and **not attributed**: folding the
+  session's sample where a wait is booked recovered nothing
+  (`bench/v3.4.13/results-df-close-remedy-v3.4.13-15-g9f588fa2.md`). Their
+  share of an index-served read and of a write is not measured, nor
+  anything at `cores` above 1.
 - **`sys.statement_stats` and `sys.statement_histogram` copy every shape
   under each part's latch**, and a shape is 624 bytes, from 184: the delay
   a read puts on a part's writer (above) grew with it, unmeasured.
@@ -1899,9 +1905,12 @@ Owned by `docs/spec/sys-views.md` §6.1c, §6.6 and §7.
 - **The counts assume one writer a core** and check nothing, as
   `sys.refusal_stats` does. `commits` is counted by the transaction
   manager, so a fixture's manager that names no core counts into core 0.
-- **Not measured.** The stamps and the counts are on every statement's
-  path - a store at each mint and at each publication, a count at each
-  decide - and their cost is the milestone's close's.
+- **Measured with DF-S3 and DF-S4, not apart**: the three stages cost a
+  tuple key `SELECT` +0.07 us of server CPU at `cores = 1` and a write
+  nothing the floor shows
+  (`bench/v3.4.13/results-df-close-final-v3.4.13-17-gc16b4fc2.md`); a knob
+  run could attribute none of it to the stamps or to the session's words
+  alone. `cores` above 1 did not resolve.
 - **`wait_aborts` takes a statement whose descent noted a stale path**
   and which then failed, having written nothing, for another reason: the
   site tests the note, not the refusal's code, and such a statement is not
@@ -1934,6 +1943,12 @@ Owned by `docs/spec/sys-views.md` §6.2a and §6.2b.
   statement resumed after a park stamps the head of whichever statement its
   core staged last. An index whose slot in the dispatcher's eight-slot cache
   another index took pays the part's latch and a lookup at its next read.
+  No cell puts two indexes in one slot, or swaps the store under a cache.
+- **An index-served read pays +0.18 us of server CPU** for DF-S2..S4 at
+  `cores = 1`, +0.11 us over a tuple key read's share
+  (`bench/v3.4.13/results-df-close-final-v3.4.13-17-gc16b4fc2.md`): what is
+  left of the fold after its latch, lookup and clock read went (-0.18 us),
+  the per-seek counter and the wider per-step counters, not told apart.
 - **No cell** counts an index step under an outer step (one walk a row of
   the outer), a sub-chain's or a hoisted step's, or a step that named an
   index and walked its relation instead (`indexes = off`, an index dropped

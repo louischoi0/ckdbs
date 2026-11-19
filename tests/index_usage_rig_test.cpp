@@ -103,18 +103,26 @@ TEST_F(IndexUsageRig, AnIndexNoReadNamesStaysAtZeroAndOneItNamesMoves) {
         EXPECT_EQ(v.rows_resolved, 4u);
     }
 
+    // Core 1 again: its second read of the index adds through the pointer
+    // its dispatcher kept at the first, and is counted all the same.
+    ASSERT_EQ(Run(1, "SELECT id FROM t WHERE v = 0 ORDER BY id"), "id\\n5\\n10");
+    v = UsageOf(0, "t_v");
+    EXPECT_EQ(v.probes, 3u);
+    EXPECT_EQ(v.entries_scanned, 6u);
+    EXPECT_EQ(v.rows_resolved, 6u);
+
     // A value list is a key set (CU): one walk a value, so two probes.
     ASSERT_EQ(Run(0, "SELECT id FROM t WHERE v IN (1, 2) ORDER BY id"), "id\\n1\\n2\\n6\\n7");
     v = UsageOf(0, "t_v");
-    EXPECT_EQ(v.probes, 4u);
-    EXPECT_EQ(v.entries_scanned, 8u);
-    EXPECT_EQ(v.rows_resolved, 8u);
+    EXPECT_EQ(v.probes, 5u);
+    EXPECT_EQ(v.entries_scanned, 10u);
+    EXPECT_EQ(v.rows_resolved, 10u);
 
     // The index no read named has not moved; nor does a read by tuple key
     // move either, nor a refused statement.
     ASSERT_EQ(Run(0, "SELECT v FROM t WHERE id = 4"), "v\\n4");
     ASSERT_TRUE(StartsWith(Run(0, "SELECT nope FROM t WHERE v = 3"), "ERR"));
-    EXPECT_EQ(UsageOf(0, "t_v").probes, 4u);
+    EXPECT_EQ(UsageOf(0, "t_v").probes, 5u);
     const Usage w = UsageOf(0, "t_w");
     EXPECT_EQ(w.probes + w.ranges + w.entries_scanned + w.rows_resolved, 0u);
     EXPECT_EQ(w.last_used, "NULL");

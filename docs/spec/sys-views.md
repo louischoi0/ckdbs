@@ -157,8 +157,13 @@ or wrong row costs a reader's insight, never an answer. **No switch**
 (BO-Q8): recording is always on. At BO's close it cost 0.35-0.52 us of
 server CPU per point statement, inside the measurement's spread
 (`bench/v3.3.0/results-bo-close-v3.3.0-23-g86d1fe1a.md`); that number is of
-the statement's record before §6.1's cost columns were added, whose path is
-not measured. `sys.refusal_stats` (§6.1b) and the transaction statistics
+the statement's record before DF widened it. What DF added costs a tuple
+key read about +0.5 us more at `cores = 1` - §6.1's cost columns +0.44 us
+(`bench/v3.4.13/results-cx-close-bisect-v3.4.13-1-g11f72ce9.md`), §6.1c,
+§6.2b, §6.6's two ages and §7's `txn` fields +0.07 us together - and an
+index-served read +0.18 us beyond §6.1's share, which was not measured on
+that shape; a write is inside the measurement's floor
+(`bench/v3.4.13/results-df-close-final-v3.4.13-17-gc16b4fc2.md`). `sys.refusal_stats` (§6.1b) and the transaction statistics
 (§6.1c, §7's `txn` counts) are the two stores with no latch: each a fixed
 table of single-writer words a core.
 

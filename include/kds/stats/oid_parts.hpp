@@ -33,7 +33,10 @@ public:
     OidParts& operator=(const OidParts&) = delete;
 
     // `fn(V&)` on `core`'s counts for `oid`, under the part's latch; where
-    // the part cannot take a new oid, nothing but the drop's count.
+    // the part cannot take a new oid, nothing but the drop's count. **The
+    // `V` it is handed stays where it is until `Reset`**: nothing else
+    // removes or moves a part's counts, so a store may hand the address out
+    // (`IndexStats::CountsOf`) - and such a store is never reset.
     template <typename Fn>
     void With(std::uint32_t core, catalog::Oid oid, Fn&& fn) noexcept {
         Part& part = parts_[core % kStatsParts];
@@ -74,7 +77,8 @@ public:
         return total;
     }
 
-    // Empties every part.
+    // Empties every part, and with it every address `With` ever handed
+    // out: for a store nothing keeps a pointer into.
     void Reset() noexcept {
         for (Part& part : parts_) {
             const LatchGuard held(&part.latch);

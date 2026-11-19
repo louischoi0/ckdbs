@@ -1,0 +1,95 @@
+2026-11-19T06:51:42Z c1 lifetime 1 start
+2026-11-19T06:52:23Z c1 lifetime 1 exit 0
+2026-11-19T06:52:23Z c1 lifetime 2 start
+2026-11-19T06:53:08Z c1 lifetime 2 exit 0
+2026-11-19T06:53:08Z c1 lifetime 3 start
+2026-11-19T06:53:57Z c1 lifetime 3 exit 0
+2026-11-19T06:53:57Z c1 lifetime 4 start
+2026-11-19T06:54:38Z c1 lifetime 4 exit 0
+2026-11-19T06:54:38Z c1 lifetime 5 start
+2026-11-19T06:55:19Z c1 lifetime 5 exit 0
+2026-11-19T06:55:19Z c1 lifetime 6 start
+2026-11-19T06:56:00Z c1 lifetime 6 exit 0
+2026-11-19T06:56:00Z c1 lifetime 7 start
+2026-11-19T06:56:43Z c1 lifetime 7 exit 0
+2026-11-19T06:56:43Z c1 lifetime 8 start
+2026-11-19T06:57:28Z c1 lifetime 8 exit 0
+2026-11-19T06:57:28Z c1 lifetime 9 start
+2026-11-19T06:58:15Z c1 lifetime 9 exit 0
+2026-11-19T06:58:15Z c1 lifetime 10 start
+2026-11-19T06:59:00Z c1 lifetime 10 exit 0
+2026-11-19T06:59:00Z c1 ALLDONE
+2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:14:06Z c8 lifetime 1 exit 0
+2026-11-19T07:14:06Z c8 lifetime 2 start
+2026-11-19T07:14:06Z c8 lifetime 2 HELD by build/test
+2026-11-19T07:14:16Z c8 lifetime 2 HELD by build/test
+2026-11-19T07:14:22Z c8 cut after lifetime 1 (all cells unclean under host load; lifetime 2 never started)
+2026-11-19T07:14:29Z r200 lifetime 1 start
+2026-11-19T07:14:29Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:14:39Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:14:49Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:14:59Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:15:09Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:15:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:15:29Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:15:39Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:15:49Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:15:59Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:16:09Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:16:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:16:29Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:16:39Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:16:49Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:16:59Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:17:09Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:17:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:17:29Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:17:39Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:17:49Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:17:59Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:18:09Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:18:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:18:29Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:18:39Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:18:49Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:18:59Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:19:09Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:19:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:19:29Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:19:39Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:19:49Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:19:59Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:20:09Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:20:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:20:29Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:20:39Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:21:23Z r200 lifetime 1 exit 0
+2026-11-19T07:21:23Z r200 lifetime 2 start
+2026-11-19T07:21:56Z r200 lifetime 2 exit 0
+2026-11-19T07:21:56Z r200 ALLDONE
+2026-11-19T07:21:56Z r10k lifetime 1 start
+2026-11-19T07:22:36Z r10k lifetime 1 exit 0
+2026-11-19T07:22:36Z r10k lifetime 2 start
+2026-11-19T07:23:15Z r10k lifetime 2 exit 0
+2026-11-19T07:23:15Z r10k ALLDONE
+2026-11-19T07:23:15Z sweep ALLDONE
+2026-11-19T07:23:25Z r200 lifetime 3 start
+2026-11-19T07:23:58Z r200 lifetime 3 exit 0
+2026-11-19T07:23:58Z r200 lifetime 4 start
+2026-11-19T07:24:31Z r200 lifetime 4 exit 0
+2026-11-19T07:24:32Z r200 lifetime 5 start
+2026-11-19T07:25:05Z r200 lifetime 5 exit 0
+2026-11-19T07:25:05Z r200 lifetime 6 start
+2026-11-19T07:25:38Z r200 lifetime 6 exit 0
+2026-11-19T07:25:38Z r200 ALLDONE
+2026-11-19T07:25:38Z r10k lifetime 3 start
+2026-11-19T07:26:18Z r10k lifetime 3 exit 0
+2026-11-19T07:26:18Z r10k lifetime 4 start
+2026-11-19T07:26:57Z r10k lifetime 4 exit 0
+2026-11-19T07:26:57Z r10k lifetime 5 start
+2026-11-19T07:27:36Z r10k lifetime 5 exit 0
+2026-11-19T07:27:36Z r10k lifetime 6 start
+2026-11-19T07:28:15Z r10k lifetime 6 exit 0
+2026-11-19T07:28:15Z r10k ALLDONE
+2026-11-19T07:28:15Z sweep2 ALLDONE

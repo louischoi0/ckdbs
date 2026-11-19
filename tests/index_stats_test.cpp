@@ -8,23 +8,21 @@
 namespace kds::stats {
 namespace {
 
-// One run on `core`: `probes` equality walks, `ranges` range walks.
-void OneRun(IndexStats& stats, std::uint32_t core, catalog::Oid oid, std::uint64_t probes,
-         std::uint64_t ranges, std::uint64_t scanned, std::uint64_t resolved,
-         std::uint64_t at_ns) {
+// One run on `core`: `walks` walks of the index, equality or range.
+void OneRun(IndexStats& stats, std::uint32_t core, catalog::Oid oid, bool range,
+            std::uint64_t walks, std::uint64_t scanned, std::uint64_t resolved,
+            std::uint64_t at_ns) {
     IndexUse* counts = stats.CountsOf(core, oid);
     ASSERT_NE(counts, nullptr);
-    if (probes != 0) counts->Add(/*range=*/false, probes, scanned, resolved, at_ns);
-    if (ranges != 0) counts->Add(/*range=*/true, ranges, probes != 0 ? 0 : scanned,
-                                 probes != 0 ? 0 : resolved, at_ns);
+    counts->Add(range, walks, scanned, resolved, at_ns);
 }
 
 TEST(IndexStatsTest, AnIndexsCountsAreTheSumOfEveryCoresAndItsLastUseTheLatest) {
     IndexStats stats;
-    OneRun(stats,0, 100, 1, 0, 4, 3, 5'000);
-    OneRun(stats,0, 100, 2, 0, 6, 6, 9'000);
-    OneRun(stats,1, 100, 0, 1, 50, 40, 7'000);  // another core, an older use
-    OneRun(stats,1, 200, 0, 3, 1, 1, 2'000);
+    OneRun(stats, 0, 100, /*range=*/false, 1, 4, 3, 5'000);
+    OneRun(stats, 0, 100, /*range=*/false, 2, 6, 6, 9'000);
+    OneRun(stats, 1, 100, /*range=*/true, 1, 50, 40, 7'000);  // another core, an older use
+    OneRun(stats, 1, 200, /*range=*/true, 3, 1, 1, 2'000);
 
     const auto uses = stats.Snapshot();
     ASSERT_EQ(uses.size(), 2u);
@@ -58,7 +56,7 @@ TEST(IndexStatsTest, ACoresCountsOfAnIndexAreOneObjectForTheStoresLife) {
 TEST(IndexStatsTest, TheStoreIsItsOwnersAndANewOneStartsEmpty) {
     // DA-R6's reason: a second instance in one process shares nothing.
     IndexStats first;
-    OneRun(first, 0, 100, 1, 0, 1, 1, 1);
+    OneRun(first, 0, 100, /*range=*/false, 1, 1, 1, 1);
     IndexStats second;
     EXPECT_TRUE(second.Snapshot().empty());
     EXPECT_EQ(first.Snapshot().size(), 1u);
@@ -67,7 +65,7 @@ TEST(IndexStatsTest, TheStoreIsItsOwnersAndANewOneStartsEmpty) {
 TEST(IndexStatsTest, AnIndexPastAPartsBoundIsDroppedAndCountedAndTheOthersStand) {
     IndexStats stats;
     for (std::size_t i = 0; i < IndexStats::kIndexesPerCore; ++i) {
-        OneRun(stats,2, static_cast<catalog::Oid>(1000 + i), 1, 0, 1, 1, 1);
+        OneRun(stats, 2, static_cast<catalog::Oid>(1000 + i), /*range=*/false, 1, 1, 1, 1);
     }
     EXPECT_EQ(stats.Dropped(), 0u);
     EXPECT_EQ(stats.CountsOf(2, 999'999), nullptr);
@@ -75,8 +73,8 @@ TEST(IndexStatsTest, AnIndexPastAPartsBoundIsDroppedAndCountedAndTheOthersStand)
     EXPECT_EQ(stats.Dropped(), 2u);
     // An index the part already holds is still counted, and another core's
     // part has its own bound.
-    OneRun(stats,2, 1000, 1, 0, 1, 1, 1);
-    OneRun(stats,3, 999'999, 1, 0, 1, 1, 1);
+    OneRun(stats, 2, 1000, /*range=*/false, 1, 1, 1, 1);
+    OneRun(stats, 3, 999'999, /*range=*/false, 1, 1, 1, 1);
     const auto uses = stats.Snapshot();
     EXPECT_EQ(uses.size(), IndexStats::kIndexesPerCore + 1);
     EXPECT_EQ(uses.at(1000).probes, 2u);

@@ -1,0 +1,10 @@
+2026-11-19T07:44:32Z newest= age=0s load=7.25 last=2026-11-19T07:44:32Z r4 lifetime 1 start
+2026-11-19T07:45:32Z newest=log_r4_2.txt age=10s load=4.08 last=2026-11-19T07:45:22Z r4 lifetime 2 start
+2026-11-19T07:46:33Z newest=log_r4_3.txt age=2s load=2.31 last=2026-11-19T07:46:11Z r4 lifetime 3 start
+2026-11-19T07:47:33Z newest=log_r4_4.txt age=1s load=1.11 last=2026-11-19T07:47:00Z r4 lifetime 4 start
+2026-11-19T07:48:33Z newest=log_r4_5.txt age=3s load=0.71 last=2026-11-19T07:47:49Z r4 lifetime 5 start
+2026-11-19T07:49:33Z newest=log_r4_7.txt age=4s load=1.00 last=2026-11-19T07:49:29Z r4 lifetime 7 start
+2026-11-19T07:50:33Z newest=log_r4_8.txt age=15s load=0.63 last=2026-11-19T07:50:18Z r4 lifetime 8 start
+2026-11-19T07:51:33Z newest=log_r4_9.txt age=2s load=0.90 last=2026-11-19T07:51:08Z r4 lifetime 9 start
+2026-11-19T07:52:33Z newest=log_r4_10.txt age=4s load=0.96 last=2026-11-19T07:51:57Z r4 lifetime 10 start
+2026-11-19T07:53:33Z newest=log_r4_10.txt age=48s load=0.56 last=2026-11-19T07:52:46Z r4 ALLDONE

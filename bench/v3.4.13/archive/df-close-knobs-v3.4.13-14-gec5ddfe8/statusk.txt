@@ -1,0 +1,30 @@
+2026-11-19T08:01:03Z k lifetime 1 start
+2026-11-19T08:01:56Z k lifetime 1 exit 0
+2026-11-19T08:01:56Z k lifetime 2 start
+2026-11-19T08:02:49Z k lifetime 2 exit 0
+2026-11-19T08:02:49Z k lifetime 3 start
+2026-11-19T08:03:42Z k lifetime 3 exit 0
+2026-11-19T08:03:42Z k lifetime 4 start
+2026-11-19T08:03:42Z k lifetime 4 HELD
+2026-11-19T08:03:52Z k lifetime 4 HELD
+2026-11-19T08:04:02Z k lifetime 4 HELD
+2026-11-19T08:04:12Z k lifetime 4 HELD
+2026-11-19T08:04:22Z k lifetime 4 HELD
+2026-11-19T08:04:32Z k lifetime 4 HELD
+2026-11-19T08:04:42Z k lifetime 4 HELD
+2026-11-19T08:04:52Z k lifetime 4 HELD
+2026-11-19T08:05:02Z k lifetime 4 HELD
+2026-11-19T08:06:03Z k lifetime 4 exit 0
+2026-11-19T08:06:03Z k lifetime 5 start
+2026-11-19T08:06:55Z k lifetime 5 exit 0
+2026-11-19T08:06:55Z k lifetime 6 start
+2026-11-19T08:07:46Z k lifetime 6 exit 0
+2026-11-19T08:07:46Z k lifetime 7 start
+2026-11-19T08:08:38Z k lifetime 7 exit 0
+2026-11-19T08:08:38Z k lifetime 8 start
+2026-11-19T08:09:36Z k lifetime 8 exit 0
+2026-11-19T08:09:36Z k lifetime 9 start
+2026-11-19T08:10:28Z k lifetime 9 exit 0
+2026-11-19T08:10:28Z k lifetime 10 start
+2026-11-19T08:11:21Z k lifetime 10 exit 0
+2026-11-19T08:11:21Z k ALLDONE

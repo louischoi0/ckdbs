@@ -15,7 +15,13 @@ usage and a relation's lock waits; the access shape's two columns owed to
 DA - reviewed, the full suite 0 failed of 4773, overhead not measured, not
 pushed. **DF-S4 is done** (§7): part D - a relation's delete-marked
 estimate and its leaf divisions and compactions - reviewed, the full suite
-0 failed of 4777, overhead not measured, not pushed. **The rest of DF runs
+0 failed of 4777, overhead not measured, not pushed. **DF-S5 ran and DF
+is not closed** (§7): the close measured DF-S2..S4 at +0.07 us of server
+CPU on a tuple key read and +0.18 us on an index-served one after three
+remedies (one reverted, one an attribution, one kept), which with DF-S1's
++0.44 us puts a point read at about +0.51 us - **not resolved against
+DF-Q10 (a)'s 0.5 us, and the operator's to read** (DF-Q24); the full suite
+0 failed of 4778; not pushed. **The rest of DF ran
 on the operator's
 standing go-ahead of 2026-11-19** (§6 there, go-ahead-achieving-milestone):
 an item a stage raises is adopted as CLA proposes it and recorded in §4 as
@@ -374,6 +380,7 @@ operator's own mark.** (a) is CLA's proposal in each.
 | DF-Q21 | What `probes` and `ranges` count (DF-S3). §2 names the columns and not their unit. | the times a step walked its index between one pair of bounds, counted where the index is read (`StepStats::index_walks`): once a row of the outer for a step under another, once a value for a value list, and nothing for a step that named an index and walked its relation instead | (b) the step's openings, which credit an index the run never read (`indexes = off`, an index dropped under a compiled chain) and count a value list of N values as one; (c) recorded statements, one a statement whatever it did |
 | DF-Q22 | The allocation a leaf count makes (DF-S4). DF-R2 admits no allocation on a statement's path but a store's own and `stats::IndexStats`' first sight of an index; the leaf counts' store is new, and its first division of a tree on a core allocates under the divided leaf's hold. | DF-R2's first-sight exception is read to reach this store: one allocation a tree a core, at an act that already claims and formats a page, and a failure drops the count, never the split | (b) a relation's counts folded into `stats::RelationStats`, whose entry a write statement makes anyway, an index's kept apart; (c) a fixed table of words, no allocation, a bound that drops sooner |
 | DF-Q23 | What `leaf_divisions` counts, and on which views (DF-S4). §2 names divisions and compactions for both `sys.relation_stats` and `sys.indexes`. | a division is a full leaf giving half its rows to a new one; a clustered tree's append of a fresh leaf, nothing moved, is not one and is counted nowhere; `sys.indexes` has `leaf_divisions` alone, an index leaf being never compacted - a column that could only read 0 is not shown | (b) appends counted as divisions; (c) a `leaf_appends` column beside them; (d) `leaf_compactions` on `sys.indexes`, always 0 |
+| DF-Q24 | The close measured DF at or over DF-Q10 (a)'s bar on a point read (DF-S5, §7): DF-S1 +0.44 us, DF-S2..S4 +0.17 us on a tuple key `SELECT` and +0.35 us on an index-served one. DF-Q10 (a) sends a part over the bar back to the operator; the standing go-ahead asks for a remedy within the milestone first. | one remedy, then the measurement again and whatever it shows reported as it is: the session cost sample of DF-S1, which the bisect of 2026-11-19 named as the likeliest carrier and whose cheaper form was CLA's proposal there, folded where a wait is booked. Nothing is reverted, no switch is added (DF-R9), and **whether DF closes over an unmet or unresolved bar stays the operator's** | (b) no remedy, the bar's reading straight to the operator; (c) the stamps of DF-S2 or the fold of DF-S3 behind a boot key, against DF-R9; (d) a stage reverted |
 
 ## 5. Stages
 
@@ -1190,3 +1197,117 @@ nothing to a point statement's path - a latch at a division, a count in
 the steward's leaf read. **Documents**: `sys-views.md`, `plan-stats.md`,
 `manual/sql/sql.md`, `known-gaps.md`, `CLAUDE.md`'s observability row.
 **Next: DF-S5**, the close.
+
+### DF-S5 - the close's measurement and its three remedies; the bar not resolved, 2026-11-19
+
+On the same worktree and branch, from `29810582`, on the operator's
+standing go-ahead (`raft-marks-2026-11-19.md` §6). **Every stage of DF is
+on the work branch. DF is not closed**: DF-Q10 (a)'s bar is not resolved
+on a point read with its central estimate at the bar, and DF-Q10 (a) sends
+that to the operator (DF-Q24). Nothing is pushed.
+
+**The driver first** (DF-Q14 (a)), a commit of its own, `ec5ddfe8`:
+`tools/bn_census.py` takes `--cores` and has `select-index`, an equality a
+secondary index serves.
+
+**The measurement** `[measured]`, by `ck-tester`, four files under
+`bench/v3.4.13/`, each with its archive. Release `kds_server` from
+`git archive` exports, `cores = 1`, `relaxed`, one connection, 1,000 rows,
+ten server lifetimes a file with the baseline's binary run twice in every
+lifetime (A and A') as that lifetime's floor, server CPU a statement, both
+driver paths pooled, medians of block-paired deltas with 95 % intervals. A
+is `8e7c820f`, `main` before DF-S2 with DF-S1 in it.
+
+| file | arm against A | tuple key `SELECT` | index-served `SELECT` | `UPDATE` | `INSERT` |
+|---|---|---|---|---|---|
+| `results-df-close-v3.4.13-14-gec5ddfe8.md` | B = `ec5ddfe8`, DF-S2..S4 | +0.17 us [+0.13, +0.22] | +0.35 us [+0.30, +0.38] | -0.03 us | +0.07 us |
+| `results-df-close-remedy-v3.4.13-15-g9f588fa2.md` | C = `9f588fa2`, the first remedy | +0.16 us [+0.13, +0.20] | +0.36 us [+0.31, +0.41] | -0.03 us | +0.02 us |
+| `results-df-close-knobs-v3.4.13-14-gec5ddfe8.md` | B with the fold, the session words and the stamps compiled out together | +0.07 us [+0.00, +0.09] | +0.15 us [+0.11, +0.22] | - | - |
+| `results-df-close-final-v3.4.13-17-gc16b4fc2.md` | D = `c16b4fc2`, the code as it stands | **+0.07 us [+0.02, +0.10]** | **+0.18 us [+0.12, +0.25]** | +0.02 us | +0.04 us |
+
+B - A replicated in every later file within 0.07 us (+0.11 to +0.18 us on
+the tuple key read, +0.33 to +0.35 us on the index-served one). The floor
+A' - A pooled is -0.15 to +0.07 us by file and cell, and a single
+lifetime's reaches 0.45 us: only ten lifetimes pooled resolve a read.
+
+**Against the bar.** DF-S1's measured cost on a tuple key read is +0.44 us
+[+0.27, +0.54] (above). With D - A the whole of DF is **about +0.51 us on a
+tuple key read, a naive interval of +0.29 to +0.64 us: not resolved against
+0.5 us, its centre at the bar**. On an index-served read DF-S2..S4 cost
++0.18 us and DF-S1 was never measured on that shape; on a write DF-S2..S4
+are inside the floor and DF-S1's share was never measured. The two sources
+are different drivers and durability classes and are not strictly
+additive. **`cores = 8` was run for one lifetime and did not resolve**: two
+servers of one binary stood 9 us apart and all four cells were unclean, as
+AM-S6 found of this host; no delta is claimed.
+
+**Three remedies, as the standing go-ahead asks of a regression at a close
+(DF-Q24 (a)), and no fourth.**
+
+1. **The session cost sample folded where a wait is booked** (`9f588fa2`),
+   the cheaper sample the bisect of 2026-11-19 proposed for DF-S1's cost.
+   C - B is +0.00 to +0.04 us on the reads; a saving above about 0.03 us on
+   a tuple key read is ruled out. **It bought nothing and is reverted**
+   (`0e180fc6`): the walk of the wait registry was not the carrier of
+   DF-S1's cost, which stays unattributed.
+2. **An attribution by knob binaries**, no engine change: B with the index
+   fold, the session's two words and the mint stamps compiled out, each
+   alone and all together. Together they remove about three quarters of
+   B - A (+0.14 of +0.18 us, +0.24 of +0.33 us); **no single knob is
+   attributed** - the removals sum to more than the whole, and a knob
+   binary differs from its parent in layout by as much as the floor. The
+   largest was the index fold's on an index-served read, +0.21 us
+   [+0.18, +0.25].
+3. **The index fold without a latch, a lookup or a clock** (`c16b4fc2`): an
+   index's counts are single-writer relaxed words reached through a pointer
+   the dispatcher keeps in an eight-slot cache, the part's latch guards its
+   map alone, and `last_used` is the statement head's monotonic instant
+   shown as a wall instant at the read. **D - B is -0.18 us [-0.22, -0.13]
+   on an index-served read**, below zero in 8 of 10 lifetimes; -0.04 us,
+   not resolved, on a tuple key read. Kept.
+
+What no remedy reached: +0.07 us on a tuple key read that the knobs do not
+remove either - the wider `StepStats`, the per-seek counter, the larger
+`Transaction` and manager, a binary's layout - and all of DF-S1.
+
+**Reviews.** `critics-developer`, report only, on each remedy's commit.
+Of `9f588fa2` it found no defect and one test the fold had weakened; both
+went with the revert. Of `c16b4fc2` it found no defect: the pointer's
+stability across a rehash, that nothing erases or resets an index store,
+the one swap of the store clearing the cache, the destruction order in
+`Expeditor`, the rig and a dispatcher's own store, the words the two sides
+share being atomics, and the stamp never 0 where a clock exists.
+**Applied**: the template's contract that an address it hands out holds
+until `Reset`, written where `Reset` is; a test helper reduced to what its
+callers pass; a read on a second core through the kept pointer added to
+the rig cell. **Not taken**: an unlatched `find` in the store in place of
+the dispatcher's cache - it keeps a hash lookup a read and turns two
+threads recording as one core from lost counts into a race on the map.
+**Left unread**: which clock core 0's dispatcher holds, where oids are
+issued (the cache reads oid 0 as empty), `sim/instance.cpp`'s wiring.
+
+**Suite.** The full suite - `ctest -LE bs-nightly` - 0 failed of 4778 on
+the tree this entry's commit holds (two disabled and two skipped); 0 failed
+of 4778 at `c16b4fc2`, 0 failed of 4777 at `9f588fa2` and at `29810582`,
+whose tree `0e180fc6` is again.
+
+**Documents.** §5's list, each read: `sys-views.md` §5, §6 (the measured
+cost beside BO's), §6.1c, §6.2a-§6.2c, §6.6, §7, §8; `plan-stats.md` §6;
+`txn.md` §1; `index.md`; `known-gaps.md`, where "not measured" now carries
+the numbers; `manual/sql/sql.md`; `CLAUDE.md`'s observability row.
+`wait-events.md` names no column DF added and is unchanged. **The index's
+DF row is not flipped to closed.**
+
+**Time.** The four measurement rounds took about 44, 10, 20 and 15 minutes
+wall, building included, of which the quiet gate held about 16 minutes in
+the first and 1.5 in the third; together past the hour a close is given,
+because three rounds followed the first's finding. Cut: `cores = 8` after
+one lifetime of six; no `strict` class, no scan, no multi-statement
+transaction, no per-stage binaries.
+
+**Owed, beside each stage's list**: DF-S1's share on an index-served read
+and on a write; `cores` above 1; the cells no stage built
+(`known-gaps.md`); `sys.access_stats`' two columns, DA's.
+
+**Next: the operator's reading of DF-Q24** - close DF with its measured
+cost, as DF-S1 was kept on 2026-11-19, or ask for more; and the push.

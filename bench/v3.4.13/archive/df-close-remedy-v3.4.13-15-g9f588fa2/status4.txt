@@ -1,0 +1,21 @@
+2026-11-19T07:44:32Z r4 lifetime 1 start
+2026-11-19T07:45:22Z r4 lifetime 1 exit 0
+2026-11-19T07:45:22Z r4 lifetime 2 start
+2026-11-19T07:46:11Z r4 lifetime 2 exit 0
+2026-11-19T07:46:11Z r4 lifetime 3 start
+2026-11-19T07:47:00Z r4 lifetime 3 exit 0
+2026-11-19T07:47:00Z r4 lifetime 4 start
+2026-11-19T07:47:49Z r4 lifetime 4 exit 0
+2026-11-19T07:47:49Z r4 lifetime 5 start
+2026-11-19T07:48:38Z r4 lifetime 5 exit 0
+2026-11-19T07:48:38Z r4 lifetime 6 start
+2026-11-19T07:49:29Z r4 lifetime 6 exit 0
+2026-11-19T07:49:29Z r4 lifetime 7 start
+2026-11-19T07:50:18Z r4 lifetime 7 exit 0
+2026-11-19T07:50:18Z r4 lifetime 8 start
+2026-11-19T07:51:08Z r4 lifetime 8 exit 0
+2026-11-19T07:51:08Z r4 lifetime 9 start
+2026-11-19T07:51:57Z r4 lifetime 9 exit 0
+2026-11-19T07:51:57Z r4 lifetime 10 start
+2026-11-19T07:52:45Z r4 lifetime 10 exit 0
+2026-11-19T07:52:46Z r4 ALLDONE
