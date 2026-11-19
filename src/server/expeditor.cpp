@@ -1049,16 +1049,18 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // its closing mark and count. Emptied here whatever was found, in the
     // discard's window, so the completion checkpoint persists the emptying
     // before the listener binds and a crash after this mount finds none.
-    // Since CY-S1b the operator's managed objects ride the same chain (§9).
-    std::vector<catalog::SysStatisticsRow> carried_statistics;
+    std::vector<std::pair<catalog::Oid, std::int16_t>> carried_priors;
     {
         auto taken = expeditor->database_->catalog.TakeStatisticsAtMount();
         if (!taken.ok()) return taken.status();
-        carried_statistics = std::move(taken.value());
+        carried_priors.reserve(taken.value().size());
+        for (const catalog::SysStatisticsRow& row : taken.value()) {
+            carried_priors.emplace_back(row.rel_oid, row.band);
+        }
         if (expeditor->logger_->enabled(LogLevel::kInfo)) {
             expeditor->logger_->Info("plan_stats",
-                                     "statistics rows kept from the last shutdown: " +
-                                         std::to_string(carried_statistics.size()));
+                                     "relation priors kept from the last shutdown: " +
+                                         std::to_string(carried_priors.size()));
         }
     }
     // **Nothing records until an operator opts a pattern in** (CF-S1b), so
@@ -1337,10 +1339,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // S4 (CJ WE13) counts only while the controller's own switch is on.
     expeditor->optimizer_signals_->set_wait_gate(&expeditor->cabin_optimizer_on_);
     expeditor->plan_stats_.emplace(expeditor->config_.cores);
-    // CY-S1: the priors and managed objects the mount took, published
-    // before any statement compiles, so the run's first planned compile is
-    // not blind.
-    expeditor->plan_stats_->LoadStatistics(carried_statistics);
+    // CY-S1: the priors the mount took, published before any statement
+    // compiles, so the run's first planned compile is not blind.
+    expeditor->plan_stats_->SeedPriors(carried_priors);
     // PHY04: the decision core and its executor, only where a Cabin can
     // exist at all. The cadence task registers in Serve() beside the
     // checkpointer's.
@@ -1430,6 +1431,7 @@ OptimizerSurface Expeditor::Optimizer() {
     surface.join_order = &join_order_;
     surface.captured_plans = &captured_plans_;
     surface.admin_plans = &admin_plans_;
+    surface.plan_advices = &plan_advices_;
     surface.cabin_optimizer_on = &cabin_optimizer_on_;
     if (cabin_controller_) {
         surface.controller = &*cabin_controller_;
@@ -1479,7 +1481,7 @@ void PinToCpu(pthread_t thread, std::uint32_t core_id, std::uint32_t cpu, Logger
 
 void Expeditor::WriteRelationPriors() {
     if (!plan_stats_.has_value() || !database_.has_value()) return;
-    if (Status s = database_->catalog.WriteStatisticsAtShutdown(plan_stats_->ExportStatistics());
+    if (Status s = database_->catalog.WriteStatisticsAtShutdown(plan_stats_->ExportPriors());
         !s.ok()) {
         logger_->Error("plan_stats",
                        "the relation priors were not written, so the next mount plans blind "

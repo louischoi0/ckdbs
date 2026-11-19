@@ -15,11 +15,8 @@
 #include "kds/base/latch.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/oid.hpp"
-#include "kds/catalog/rows.hpp"
 #include "kds/catalog/schema.hpp"
-#include "kds/stats/managed_statistics.hpp"
 #include "kds/stats/plan_key.hpp"
-#include "kds/storage/visit.hpp"
 
 namespace kds::catalog {
 class Catalog;
@@ -73,34 +70,19 @@ public:
     PlanStatsSnapshot() = default;
     PlanStatsSnapshot(std::uint64_t generation,
                       std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
-                      std::vector<std::pair<PlanKey, Posterior>> posteriors,
-                      std::vector<std::pair<catalog::Oid, std::int16_t>> managed = {});
+                      std::vector<std::pair<PlanKey, Posterior>> posteriors);
 
     std::uint64_t generation() const noexcept { return generation_; }
-    // The relation's rows as the planner prices them: a published managed
-    // object's band centre (CY-Q16 (a): it outranks the steward's prior
-    // while it exists), else the steward's prior's, else nullopt.
+    // The prior's band centre, or nullopt for a relation not yet seeded.
     std::optional<double> RelationRows(catalog::Oid oid) const noexcept;
-    // The steward's prior alone (PS1), whatever a managed object says - what
-    // `sys.statistics` shows as the `observed` row.
-    std::optional<double> ObservedRows(catalog::Oid oid) const noexcept;
-    // Whether a managed object prices the relation.
-    bool Managed(catalog::Oid oid) const noexcept;
-    // The steward's priors, by oid.
-    const std::vector<std::pair<catalog::Oid, std::int16_t>>& observed() const noexcept {
-        return priors_;
-    }
     const Posterior* Find(const PlanKey& key) const noexcept;
     std::size_t relations() const noexcept { return priors_.size(); }
     std::size_t posteriors() const noexcept { return posteriors_.size(); }
 
 private:
-    friend class PlanStats;  // a managed publish carries the steward's facts over
-
     std::uint64_t generation_ = 0;
     std::vector<std::pair<catalog::Oid, std::int16_t>> priors_;     // by oid
     std::vector<std::pair<PlanKey, Posterior>> posteriors_;         // by key
-    std::vector<std::pair<catalog::Oid, std::int16_t>> managed_;    // by oid
 };
 
 class PlanStats {
@@ -154,23 +136,6 @@ public:
     void SeedPriors(std::span<const std::pair<catalog::Oid, std::int16_t>> bands);
     // Every banded prior with its band, by oid.
     std::vector<std::pair<catalog::Oid, std::int16_t>> ExportPriors() const;
-    // What a shutdown writes: every banded prior, then every managed slot's
-    // versions and its slot row (plan-stats.md §9). No closing mark.
-    std::vector<catalog::SysStatisticsRow> ExportStatistics() const;
-    // What a mount does with the rows a whole chain held: the managed store
-    // loaded, the priors seeded (`SeedPriors`), one generation published.
-    void LoadStatistics(std::span<const catalog::SysStatisticsRow> rows);
-
-    // ---- Managed statistics (CY-S1b, CY-S4; plan-stats.md §9) -------------
-    //
-    // The operator's objects. Any core's statement changes them, then asks
-    // `RepublishManaged`, so the next compile on every core prices from them.
-    ManagedStatistics& managed() noexcept { return managed_; }
-    const ManagedStatistics& managed() const noexcept { return managed_; }
-    // The next generation - the published snapshot's steward facts as they
-    // stand, with the managed objects' bands read again - where a published
-    // band moved; nothing where none did (CY-Q31 (a)). Any thread.
-    void RepublishManaged();
 
     // A test's seam: publishes these facts as the next generation.
     void PublishForTest(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
@@ -229,9 +194,6 @@ private:
     // Builds a snapshot of these facts as the next generation and swaps it in.
     void Install(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
                  std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors);
-    // `Install`'s body, `publish_latch_` held: the managed bands read here.
-    void InstallLocked(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
-                       std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors);
 
     std::vector<std::unique_ptr<Part>> parts_;
     std::vector<catalog::Oid> wanted_;  // merged, the steward's
@@ -240,10 +202,7 @@ private:
     catalog::Oid reseed_cursor_ = 0;
     bool dirty_ = false;
 
-    // Taken before `managed_`'s latch, never after it: `Install` and
-    // `RepublishManaged` read the bands under this one.
     mutable Latch publish_latch_{LatchKind::kStatsRing};
-    ManagedStatistics managed_;
     std::shared_ptr<const PlanStatsSnapshot> current_;
     std::atomic<std::uint64_t> generation_{0};
 
@@ -266,40 +225,6 @@ private:
     const PlanStats* stats_;
     std::uint64_t cached_generation_ = 0;
     std::shared_ptr<const PlanStatsSnapshot> cached_;
-};
-
-// **A `GATHER STATISTICS` walk** (CY-S1b; CY-Q26 (a)): every leaf of a
-// relation's clustered tree, through the sibling links, counting its live
-// slots as PS1's prior does - so a gathered count and an observed one are
-// one quantity - and its leaves. Pages, not rows: no view is read and no
-// purge horizon held, so the count is of a relation that moved under the
-// walk (CY-Q7 (a)), undecided versions as they lie. One page at a time, each
-// checked to be a leaf the relation owns, the chain under a cycle check.
-// Its caller owns the slicing, the borrow and the yields.
-class RelationGather {
-public:
-    explicit RelationGather(catalog::Oid oid) noexcept : oid_(oid) {}
-
-    // The leftmost leaf, from the relation's anchor or descriptor.
-    Status Start(storage::PageStore& store, const catalog::TableAccess& access);
-    // Up to `leaves` more leaves. A page that is not one of the relation's
-    // leaves - the tree moved under the walk in a way no live relation's
-    // does - ends the walk `TxnConflict`, with nothing to publish.
-    Status Step(storage::PageStore& store, std::uint32_t leaves);
-
-    bool started() const noexcept { return started_; }
-    bool done() const noexcept { return started_ && next_ == kInvalidPageId; }
-    catalog::Oid oid() const noexcept { return oid_; }
-    std::uint64_t rows() const noexcept { return rows_; }
-    std::uint64_t leaves() const noexcept { return leaves_; }
-
-private:
-    catalog::Oid oid_;
-    bool started_ = false;
-    PageId next_ = kInvalidPageId;
-    std::uint64_t rows_ = 0;
-    std::uint64_t leaves_ = 0;
-    storage::PageChainGuard chain_{"a statistics gather's leaf chain"};
 };
 
 // The rows a leaf of a relation with `row_size`-byte rows holds when full.

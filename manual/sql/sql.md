@@ -1311,6 +1311,30 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   - `CREATE PLAN <name> FOR <select> AS SEARCHED` stores the order the
     engine would choose right now as a plan of one variant, and prints it.
     Use it to fix a statement that is not captured.
+  - **`ADVISE PLAN FOR <select>` asks the engine what it would choose now,
+    without changing anything.** It is written with literals, as `CREATE
+    PLAN` is, and answers with the join order the engine's cost model
+    picks from the current statistics, what that order costs compared
+    with the plan the statement actually runs (`cost_ratio`; below 1 means
+    the proposal is cheaper), and a ready `CREATE PLAN` statement that
+    adopts it:
+
+    ```
+    ADVISE PLAN FOR
+      SELECT u.name, l.amount FROM users u JOIN loans l ON l.user_id = u.id
+      WHERE u.id BETWEEN 100 AND 164;
+    ```
+
+    `in_force` says which plan it was compared with: your own plan
+    (`admin:<plan>/<variant>`), the order fixed at the statement's first
+    run (`captured`), or the order as written. Nothing is applied until
+    you run the `CREATE PLAN` it gives you; a statement has one plan, so if
+    it already has one of yours, `DROP PLAN` that first. Each statement shape's latest
+    advice is in `SELECT * FROM sys.plan_advice` until the server
+    restarts. A statement over one table has no join order and is
+    refused. Where the engine would not reorder a join at all, the reply
+    says why (`why=`), and for a join with a subquery in its `WHERE` -
+    which `CREATE PLAN` does not take - it gives no `CREATE PLAN` text.
   - `ALTER PLAN <name> DISABLE` stops using a plan without removing it;
     `ENABLE` uses it again. `ALTER PLAN <name> REPLACE VARIANT <v> WHEN
     <rule> ORDER (...)` (or `... ELSE ORDER (...)`) changes one variant.
@@ -1774,59 +1798,6 @@ opted, one row each: `oid`, `fetch_id` (decimal), `fingerprint_version`,
 (the shape's trail directory; NULL when it has none, as under
 `waystone_recording = off`). `SHOW META`'s `waystone` section prints the
 two keys and `waystone_opted`, how many shapes are opted now.
-
-### GATHER, LOCK, PUBLISH, RESTORE, EXPORT, IMPORT, DELETE STATISTICS (built 2026-11-18, CY-S1b, CY-S4)
-
-The join planner prices a relation's size from a sampled estimate the engine
-keeps by itself. A **relation's statistics object** is the operator's own
-count, which the planner reads in its place while it is published. Nothing
-gathers one on its own: every change below is a statement you run.
-
-```sql
-GATHER STATISTICS ON loans;                 -- count every leaf; published at once
-GATHER STATISTICS ON loans PENDING;         -- stored, not read by the planner yet
-PUBLISH STATISTICS ON loans;                -- the pending version becomes the published one
-DISCARD PENDING STATISTICS ON loans;
-LOCK STATISTICS ON loans;                   -- no act replaces the published version ...
-GATHER STATISTICS ON loans FORCE;           -- ... unless FORCE is written
-UNLOCK STATISTICS ON loans;
-RESTORE STATISTICS ON loans TO VERSION 3;   -- an earlier version, published again as a new one
-DELETE STATISTICS ON loans;                 -- the planner goes back to its own estimate
-EXPORT STATISTICS ON loans;                 -- one row: the document below
-IMPORT STATISTICS ON loans_copy FROM 'KDS-STATISTICS 1 RELATION rows=120000 leaves=610';
-```
-
-- **Admin only, autocommit only.** Each statement is refused inside `BEGIN`
-  (`NOT_IMPLEMENTED`): none is logged, so a `ROLLBACK` could not undo it. A
-  `sys` relation is refused `UNSUPPORTED`.
-- **Relations only.** `GATHER STATISTICS ON t (col)`, `ALL COLUMNS`, `GROUP`
-  and `SAMPLE` are refused `NOT_IMPLEMENTED`: column statistics are not
-  built.
-- **`GATHER`** reads every leaf of the relation's tree and counts the live
-  rows and the leaves. It does not hold a snapshot, so the count is of a
-  table that may change while it is read. It gives its core away every 16
-  leaves and holds the table only one slice at a time, so a `DROP TABLE` or
-  an `ALTER TABLE` waiting on the table runs between two slices. Answers
-  `GATHERED STATISTICS relation=<t> version=<n> rows=<n> leaves=<n>
-  state=published|pending`.
-- **A lock** stops every statement that would change the published version -
-  `GATHER` and `IMPORT` without `PENDING`, `PUBLISH`, `RESTORE`, `DELETE` -
-  until `FORCE` is written. A pending `GATHER` is allowed.
-- **Versions only grow**, `DELETE STATISTICS` included. The last 8 replaced
-  versions are kept for `RESTORE`.
-- **The document** is one line: `KDS-STATISTICS 1 RELATION rows=<n>
-  leaves=<n> origin=<o> version=<n> made_at=<us> relation=<ns.t>`. `IMPORT`
-  needs `rows=`, takes `leaves=`, and refuses a field it does not know.
-- **`sys.statistics`** shows, per table, the `published` and `pending`
-  versions and the engine's own estimate as an `observed` row; `used = 1`
-  marks the row the planner reads. **`sys.statistics_history`** lists the
-  replaced versions.
-- **Kept across a clean shutdown only.** After a crash or a restore every
-  object is gone; export before, import after. `DROP TABLE` removes the
-  table's objects.
-- Under `join_order = fixed` (the default) a plan already captured does not
-  change when statistics do; a shape captured after the publish is priced
-  from them.
 
 ---
 

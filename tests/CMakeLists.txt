@@ -106,7 +106,6 @@ add_executable(kds_tests
     plan_catalog_test.cpp
     admin_plans_test.cpp
     plan_stats_test.cpp
-    managed_statistics_test.cpp
     index_contract_test.cpp
     superblock_test.cpp
     core_runtime_test.cpp

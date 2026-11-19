@@ -1,7 +1,5 @@
 # Work order CY - managed statistics: persisted, per column, per column group, and operated by a DBA or an agent
 
-**Closed 2026-11-18 on the operator's standing go-ahead (go-ahead-achieving-milestone), not landed**: CY-S1b, CY-S4's relation-object surface and CY-S5 on worktree `cy-managed-statistics` (§8), CY-Q24..Q31 adopted as CLA proposed (`raft-marks-2026-11-18.md` §48); S2 and S3 not built (W13). A push, a tag or a version waits for the operator's word.
-
 **Written 2026-11-18 and opened the same day on W9** (CY-S0 started), on worktree `cx-plan-change-option`
 from `d4bda61f` (`v3.4.12-16-gd4bda61f`), on the operator's word, recorded
 in English (`raft-marks-2026-11-18.md` §5):
@@ -445,23 +443,6 @@ and nothing published is unloaded).
 | CY-Q22 | the model's ceiling, put back (review M5). CY-Q11 (a) as marked unloads the least recently read column objects past the ceiling and prices them by the constant, so a plan depends on what was read lately and a `fixed` capture can be made blind because an object was evicted | (a) the ceiling is enforced at the write: a `GATHER` or `IMPORT` that would pass it is refused naming the setting, nothing published is ever unloaded; (b) as marked, unload | **(a), the operator's mark** (W12). (a): one catalog and one model generation then give one plan. |
 | CY-Q23 | the mount's seed (review L6, W11) | (a) the seed reads relation objects only - one row each, no spilled cell - and column objects load after the listener opens, a compile before then pricing by the constant and not being captured (CX-Q19 (b)); (b) everything before the listener | **(a), the operator's mark** (W12). (a): the mount's added time is then one catalog chain's read, bounded by the relation count, not by the model's size |
 
-**CY-Q24..Q31** were raised by CY-S1b and CY-S4's build and CY-S5's measurement and are **adopted on
-the operator's standing go-ahead of 2026-11-18 (go-ahead-achieving-milestone)**,
-each as CLA proposed (`raft-marks-2026-11-18.md` §48) - not the operator's
-per-item marks. None is `[quiet-wrong]`: a relation object prices a join
-order and nothing else (CY-R1, CY-R2).
-
-| item | question | options | CLA proposes |
-|---|---|---|---|
-| CY-Q24 | what S1b and S4 build once W13 took S2 and S3 out | (a) the relation object alone - rows and leaves - with the whole of S4's surface over it; a column list, `ALL COLUMNS`, `GROUP` and `SAMPLE` refused `NotImplemented` naming the ruling; no `sys.column_statistics`; (b) the column surface built empty | **(a), adopted on the standing go-ahead.** (a): W13's "not built" is the operator's; an empty surface is a spelling accepted and nothing enforced |
-| CY-Q25 | where an operator's object lives during a run, under W14 and W15 | (a) in memory, one store for the instance beside the steward's facts (`stats::ManagedStatistics`, latched), written into `sys.statistics` by the shutdown tail alone (PS15) and read back by the next mount (PS16), so a crash or a restore loses it; (b) a page write at each act | **(a), adopted on the standing go-ahead.** (a): any mount after a crash discards the chain whatever a run wrote to it (PS16), so a write during the run buys nothing and costs a page the workload pays (CY-R10). §3's "one short transaction of its own at the end" (CY-R8) has nothing to transact: no act here is logged or undone, which is why every one is refused inside `BEGIN` |
-| CY-Q26 | what a relation object counts | (a) every leaf's live slots - read, not delete-marked - and the leaves, through the sibling chain one page at a time, each checked to be a leaf the relation owns: PS1's quantity, with no view and no purge horizon; (b) the rows visible to a per-slice view | **(a), adopted on the standing go-ahead.** (a): the gathered count and the steward's observed one are then one quantity, so one replacing the other moves no plan by a change of definition; an undecided insert is counted and an undecided delete is not subtracted, inside CY-Q7 (a)'s "a relation that moved under the walk" |
-| CY-Q27 | what CY-R10's level means for a `GATHER` | (a) its walk slices at the `analytic` slice (16 leaves, `PagesPerSlice`) whatever level the session declared, and stays on the session's core: a session moves between cores only at a transaction head (BL-S3), and a statement cannot move mid-walk; its page reads come through the pool; both stated in `known-gaps.md`; (b) move the session to a batch core mid-statement | **(a), adopted on the standing go-ahead.** (a): (b) needs a session to cross cores inside a statement, which no statement does. A DBA who wants the batch cores declares `SET PRIORITY background` first, as for any statement. CY-Q14's measurement prices what is left |
-| CY-Q28 | what a lock stops, and the refusals' codes | (a) a lock is on the relation's slot, object or no; every act that would change the published object - `GATHER` and `IMPORT` without `PENDING`, `PUBLISH`, `RESTORE`, `DELETE STATISTICS` - is refused `InvalidArgument` on a locked slot unless `FORCE` is written; a pending `GATHER` or `IMPORT` and `DISCARD PENDING` are admitted; `DELETE` keeps the lock and the version counter, so a later version is still newer (CY-R6); inside `BEGIN` every statement is refused `NotImplemented` as `DROP PLAN` is; a catalog relation is `Unsupported`; (b) a lock stops `GATHER` and `IMPORT` only | **(a), adopted on the standing go-ahead.** (a): §3's "replaced by no `GATHER`, no steward save and no `IMPORT` without `FORCE`" names the replacing acts S4 had then; `PUBLISH`, `RESTORE` and `DELETE` replace the published object as surely |
-| CY-Q29 | the export's surface and document (CY-Q9 (a)'s form) | (a) `EXPORT STATISTICS ON t` is one `SELECT` over `sys.statistics`' `document` column, the row the planner reads (`used = 1`) - the gathered or imported version, or the steward's prior as `origin=observed` where none is - so it answers as every report does (SV1); the document is one line, `KDS-STATISTICS 1 RELATION rows=<n> leaves=<n> origin=<o> version=<n> made_at=<us> relation=<ns.t>`, and `IMPORT` takes `rows` and `leaves`, reads the rest as provenance and refuses a field it does not know; (b) a reply line carrying the document | **(a), adopted on the standing go-ahead.** (a): a KWP client reads rows as it reads every view; a column object, if S2 is ever built, is one more kind on the same first line |
-| CY-Q31 | **the close's remedy** (raised by CY-S5's measurement, `bench/v3.4.12/results-cy-close-v3.4.12-113-g61f5dddd.md`): an unpaced loop of gathers of a 637-leaf relation - 2,000 to 2,750 a second - slowed OLTP on *another* core by up to +48 % at p99 at `cores = 2`, a `PENDING` loop that published nothing as much, and every gather published a generation (1,633 for 1,636) | (a) **a paced slice**: a gather's slice of 16 leaves takes at least 2 ms with the wait after it (`BuildRun::pace_ns_`, parked under `idle.background`), so a gather reads at most 8,000 leaves a second whatever the device gives - CY-R10's "page reads budgeted per step"; and **a republish only where a published band moved**, so a re-gather inside its band re-keys no core's order memo; (b) a cap on gathers per second; (c) accept the bar as missed | **(a), adopted on the standing go-ahead.** (a): CY-R10 asked for a page budget S1b did not build - the slice bounded the time a gather holds its core and not the rate it reads the instance's one pool at; (b) leaves one long gather unpaced. The pace is `[provisional]` until CY-S5's re-measurement prices it against CY-Q14 |
-| CY-Q30 | `ADVISE PLAN ... USING PENDING` (§3's S4) | (a) not built in CY: `ADVISE PLAN` (CX-S7) is not on `main` at CY-S1b's opening commit `9712f5f0`, and building it here crosses into CX; stated in `known-gaps.md`; (b) build it here | **(a), adopted on the standing go-ahead.** (a): the skill this session runs does not cross into a second milestone; CX's close is where the clause belongs |
-
 ## 5. `[quiet-wrong]` risks
 
 - **A statistic used as a fact about the data**: closed by CY-R1 and
@@ -722,108 +703,3 @@ all three (a) on W12, with CY-Q14 and CY-Q17..Q23. Not taken: the cuts it
 proposed to §5's bullets and to the repeated statement that item 4 is
 out - §5 is the order's list of `[quiet-wrong]` risks and is read alone;
 and CY-Q5's per-gather sizes stay, being the operator's mark.
-
-### CY-S1b and CY-S4's relation-object surface, 2026-11-18: built
-
-Built on worktree `cy-managed-statistics` from `origin/main` at `9712f5f0`
-(`v3.4.12-*`), on the operator's standing go-ahead (`raft-marks-2026-11-18.md`
-§48); CX's worktree is another live session's, so CY took one of its own.
-CY-Q24..Q30 adopted as CLA proposed (§4).
-
-- **What was built**: `stats::ManagedStatistics` (PS18) - per relation a
-  published, a pending and the last 8 replaced versions, a lock and a
-  counter; `PlanStatsSnapshot`'s managed overlay, read before the steward's
-  prior (PS19), and `PlanStats::RepublishManaged`; `stats::RelationGather`,
-  the leaf-chain count (PS20), driven by the dispatcher's `GatherRun` - a
-  `BuildRun` with no transaction, a read borrow per slice, 16 leaves a
-  slice; `GATHER`, `LOCK`, `UNLOCK`, `PUBLISH`, `DISCARD PENDING`,
-  `RESTORE`, `EXPORT`, `IMPORT`, `DELETE STATISTICS` (PS21-PS22), as
-  dispatcher verbs that reserve no word and move no fingerprint;
-  `sys.statistics` and `sys.statistics_history` (PS23); the widened
-  `SysStatisticsRow` and the shutdown's and mount's round trip (PS24); a
-  committed drop forgets the relation's objects.
-- **Narrower than §3, and why**: no column objects, no `SAMPLE`, no
-  `sys.column_statistics` (W13, CY-Q24); no steward save of an `observed`
-  object during the run - the steward's priors were already written at
-  shutdown by S1a, which is CY-Q2's purpose under W15; no result
-  transaction (CY-Q25); no `ADVISE PLAN ... USING PENDING` (CY-Q30). §3's
-  "keyed by `(relation oid, column oid, column generation)`" (CY-R7) has no
-  column key to carry; a relation object's key is its oid, never reissued.
-- **Cells**: `tests/managed_statistics_test.cpp`, 19: the store's versions,
-  history, pending, lock, restore, delete, forget and bands; the snapshot's
-  precedence; the rows' round trip, the history's order across an unordered
-  chain; through a dispatcher - a gather's exact count and leaves, a sliced
-  gather yielding once per 16 leaves through `DispatchAsync`, every
-  statement's refusals at their bytes, a lock, export and import, restore
-  and delete in the views, the role; a whole instance - a clean stop keeps
-  every object and its counter, a crash keeps none, a committed drop
-  forgets. `statistics_persistence_test.cpp`'s writes go through the new
-  row.
-- **The review** (`critics-developer`, on the uncommitted tree over
-  `9712f5f0`) found the latch order, the walk across yields, the routing and
-  the role sound, and two defects, both fixed by it: the replaced versions
-  came back from a mount in version order, where the history is in
-  replacement order (a `PUBLISH` of an older pending version breaks the
-  equation) - a replaced row now carries its place in `count`; and a gather
-  over an *imported* version kept the hysteresis PS19 gives a gather over a
-  gather only. It also found the hysteresis cell testing nothing (1000 and
-  1150 share a band either way; now 1260). Taken after it: a byte past an
-  escaped `''` in a document drifted one per escape (now mapped); a field
-  named twice is refused; the steward's and the managed installs share
-  `InstallLocked`; a fresh band is `BandOf`; a drop moves the generation only
-  where a published version went with it, so a drop of an unmeasured
-  relation invalidates no core's memo; the lock's refusal has one source
-  (`CheckPublishable`); the unreachable `kBtree` test is gone and the
-  dropped-mid-walk branch's message says what refuses the result.
-  **Rejected**, with reasons: merging the store's `Slot` into
-  `StatisticsSlotView` - the view is the export boundary and the store keeps
-  its own container; a helper for the export's `SelectStmt` - none exists
-  and one caller does not earn it; a restored gathered version counting as
-  "not a gather" for the next gather's hysteresis - a restore publishes
-  fresh already, and the next gather over it is a gather over a gathered
-  value, which PS19 names. **Left open, stated**: no cell cancels a gather
-  or drops its relation between two slices.
-- **Overhead not measured; measured at the milestone's close.**
-
-### CY-S5, 2026-11-18: the close measured; CY-Q14's bar missed, remedied, met
-
-On worktree `cy-managed-statistics`, by `ck-tester`, in `build-release`.
-
-- **At `v3.4.12-113-g61f5dddd`** (`bench/v3.4.12/results-cy-close-v3.4.12-113-g61f5dddd.md`),
-  A = `v3.4.12-112-g9712f5f0`, CY-S1b's base: CY-S1a, below A, put nothing
-  on a statement's path (PS15), so A against B is CY's statement-path
-  delta. **B equals A** (CY-R4): p50 within 1.4 %, p99 within 3.4 %, against
-  an A-to-A2 control of 0.9 % and 4.6 %, server CPU equal. **B' moves no
-  OLTP cell**: point read, tuple-key chain, single-row `INSERT` and
-  `UPDATE` inside the noise. S0's flipped statements: moot, S0 found none.
-  **CY-Q14's bar was not met**: an unpaced loop of `GATHER`s of `pb_bars`
-  (637 leaves, 2,000-2,750 a second) moved `cores = 1` p50 up to +5.6 % and
-  p99 up to +13.2 %, and at `cores = 2` and 4, the gatherer on its own core
-  at `background`, the point read +22.5 % and the chain +42.5 % at p50,
-  p99 up to +48.2 %; a `PENDING` loop, which publishes nothing, as much.
-- **The remedy, CY-Q31 (a)**, at `127e5c34`: a gather's slice paced to 16
-  leaves per 2 ms at least, and a republish only where a band moved.
-- **At `v3.4.12-114-g127e5c34`** (`bench/v3.4.12/results-cy-close-v3.4.12-114-g127e5c34.md`):
-  **CY-Q14's bar met** at `cores = 1` (every OLTP cell within +1.1 % at p50
-  and +3.2 % at p99) and at `cores = 2` (inside the floor but one: the
-  `INSERT`'s p99 +3.6 % against a 3.1 % floor, stated as a near-miss); the
-  loop now runs 12-18 gathers a second, each 79-90 ms, and published no
-  generation; B'' equals A. The run cannot separate the pace's share from
-  the republish's; the earlier `PENDING` diagnostic points at the pace.
-- **Cut, stated in the files**: `cores = 8`, `strict`, the row-count sweep,
-  a gather larger than `pb_bars` and colder than the pool, the PostgreSQL
-  floor, the S1 restart gate, the costs of the statements other than
-  `GATHER`.
-- **The remedy's review** (`critics-developer`, read only, at `127e5c34`)
-  found it correct - no dangling capture, no hang, the cancel and the
-  wait-scope rule kept, the republish skip equal to the install it replaces
-  - and the pace's duration claim false: nothing wakes the park, so on an
-  idle core a slice ends at the 10 ms idle-block ceiling. Taken: the claim
-  corrected in the code, PS20 and `known-gaps.md`; `sched.md` §7's park
-  table and `wait-events.md`'s `idle.background` name the new park; a stale
-  comment; the predicate captures `this`. **Not taken**: a scheduler timer
-  at the deadline - the dispatcher holds no handle that can arm one
-  (`Scheduler::ArmTimer` is private), a scheduler change outside CY; and a
-  new in-DB-time wait event for the pace - `idle.background` is kept, the
-  pace being a background act giving way, which leaves the event registry
-  unchanged; both stated.

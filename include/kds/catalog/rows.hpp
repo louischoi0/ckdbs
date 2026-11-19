@@ -788,13 +788,10 @@ inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 
 // ---- sys.statistics ---------------------------------------------------
 //
-// The planner's statistics as a completed shutdown wrote them
-// (`docs/spec/plan-stats.md` §8, PS14-PS16, and §9). **Unlogged** (CR6):
-// the steward's relation priors (`kStatisticsRelation`, one a relation),
-// the operator's managed objects (`kStatisticsVersion`, one a published,
-// pending or replaced version; `kStatisticsSlot`, one a relation with a
-// lock or a version counter), then one `kStatisticsWhole` row counting every
-// row before it. Advisory - a row prices a join order and nothing else
+// The join planner's relation priors as a completed shutdown wrote them
+// (`docs/spec/plan-stats.md` §8, PS14-PS16). **Unlogged** (CR6): one
+// `kStatisticsRelation` row a relation, then one `kStatisticsWhole` row
+// counting them. Advisory - a row prices a join order and nothing else
 // (PS9) - which is what lets it be kept with no log and believed on a
 // count.
 //
@@ -804,47 +801,22 @@ struct SysStatisticsRow {
     // The relation; 0 on the closing mark.
     Oid rel_oid;
 
-    // On the closing mark, the rows before it; on a slot row, the relation's
-    // last version number (CY-R6); on a replaced version row, its place in
-    // the relation's history, oldest 0 (replacement order is not version
-    // order, and a chain keeps no row order); 0 on every other row.
+    // On the closing mark, the relation rows before it; 0 on a relation row.
     std::uint64_t count;
 
-    // A relation row's prior band (PS5), which is what the planner read and
-    // what a mount seeds, so a prior comes back at the band it left at.
+    // The prior's half-octave band (PS5), which is what the planner read
+    // and what a mount seeds, so a prior comes back at the band it left at.
     std::int16_t band;
 
-    // `kStatisticsRelation`, `kStatisticsWhole`, `kStatisticsVersion` or
-    // `kStatisticsSlot`; 0 is a zeroed row and names none.
+    // `kStatisticsRelation` or `kStatisticsWhole`; 0 is a zeroed row and
+    // names neither.
     std::uint8_t kind;
-
-    // A version row's: `kStatisticsPublished`, `kStatisticsPending` or
-    // `kStatisticsReplaced`, and its `stats::StatisticsOrigin`.
-    std::uint8_t state;
-    std::uint8_t origin;
-
-    // A slot row's: `kStatisticsLocked`.
-    std::uint8_t flags;
-
-    // A version row's object (`stats::RelationStatistic`).
-    std::uint64_t version;
-    std::uint64_t rows;
-    std::uint64_t leaves;
-    std::int64_t made_us;
 
     static constexpr std::size_t kRelOidOffset = 0;
     static constexpr std::size_t kCountOffset = 8;
     static constexpr std::size_t kBandOffset = 16;
     static constexpr std::size_t kKindOffset = 18;
-    static constexpr std::size_t kStateOffset = 19;
-    static constexpr std::size_t kOriginOffset = 20;
-    static constexpr std::size_t kFlagsOffset = 21;
-    // 22..23 unused, the version's 8-byte alignment.
-    static constexpr std::size_t kVersionOffset = 24;
-    static constexpr std::size_t kRowsOffset = 32;
-    static constexpr std::size_t kLeavesOffset = 40;
-    static constexpr std::size_t kMadeUsOffset = 48;
-    static constexpr std::size_t kOnDiskSize = kMadeUsOffset + sizeof(std::int64_t);
+    static constexpr std::size_t kOnDiskSize = kKindOffset + sizeof(std::uint8_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysStatisticsRow> Decode(std::span<const std::byte> bytes);
@@ -854,25 +826,10 @@ static_assert(offsetof(SysStatisticsRow, rel_oid) == SysStatisticsRow::kRelOidOf
 static_assert(offsetof(SysStatisticsRow, count) == SysStatisticsRow::kCountOffset);
 static_assert(offsetof(SysStatisticsRow, band) == SysStatisticsRow::kBandOffset);
 static_assert(offsetof(SysStatisticsRow, kind) == SysStatisticsRow::kKindOffset);
-static_assert(offsetof(SysStatisticsRow, state) == SysStatisticsRow::kStateOffset);
-static_assert(offsetof(SysStatisticsRow, origin) == SysStatisticsRow::kOriginOffset);
-static_assert(offsetof(SysStatisticsRow, flags) == SysStatisticsRow::kFlagsOffset);
-static_assert(offsetof(SysStatisticsRow, version) == SysStatisticsRow::kVersionOffset);
-static_assert(offsetof(SysStatisticsRow, rows) == SysStatisticsRow::kRowsOffset);
-static_assert(offsetof(SysStatisticsRow, leaves) == SysStatisticsRow::kLeavesOffset);
-static_assert(offsetof(SysStatisticsRow, made_us) == SysStatisticsRow::kMadeUsOffset);
-static_assert(SysStatisticsRow::kOnDiskSize == 56);
+static_assert(SysStatisticsRow::kOnDiskSize == 19);
 
 inline constexpr std::uint8_t kStatisticsRelation = 1;
 inline constexpr std::uint8_t kStatisticsWhole = 2;
-inline constexpr std::uint8_t kStatisticsVersion = 3;
-inline constexpr std::uint8_t kStatisticsSlot = 4;
-
-inline constexpr std::uint8_t kStatisticsPublished = 1;
-inline constexpr std::uint8_t kStatisticsPending = 2;
-inline constexpr std::uint8_t kStatisticsReplaced = 3;
-
-inline constexpr std::uint8_t kStatisticsLocked = 1;
 
 // ---- sys.cabins -------------------------------------------------------
 //

@@ -1,0 +1,5 @@
+2026-11-18T15:14:57Z alive 
+2026-11-18T15:15:57Z alive 2026-11-18T15:15:56Z round 5 pk-point-read Bp elapsed 53s
+2026-11-18T15:16:57Z alive 2026-11-18T15:16:56Z round 10 pk-point-read Bp elapsed 113s
+2026-11-18T15:17:57Z alive 2026-11-18T15:17:56Z round 15 pk-point-read A2 elapsed 173s
+2026-11-18T15:18:57Z alive 2026-11-18T15:18:56Z round 19 point-join-2rel B elapsed 233s

@@ -50,19 +50,6 @@ protected:
         return priors;
     }
 
-    // A shutdown's write of `priors` alone, as relation rows.
-    Status Write(const Priors& priors) {
-        std::vector<SysStatisticsRow> rows;
-        for (const auto& [oid, band] : priors) {
-            SysStatisticsRow row{};
-            row.kind = kStatisticsRelation;
-            row.rel_oid = oid;
-            row.band = band;
-            rows.push_back(row);
-        }
-        return catalog_->WriteStatisticsAtShutdown(rows);
-    }
-
     // What a mount takes, as priors in oid order.
     Priors Take() {
         auto taken = catalog_->TakeStatisticsAtMount();
@@ -95,7 +82,7 @@ TEST_F(StatisticsPersistenceTest, AFreshVolumeHoldsNoneAndItsMountIsNotRefused) 
 
 TEST_F(StatisticsPersistenceTest, WhatAShutdownWroteTheNextMountTakesOnce) {
     const Priors written = Relations(3);
-    ASSERT_TRUE(Write(written).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(written).ok());
     EXPECT_EQ(Take(), written) << "each prior comes back at the band it left at";
     // Emptied by the mount that took it: a crash after that mount leaves
     // the next one nothing to believe.
@@ -103,14 +90,14 @@ TEST_F(StatisticsPersistenceTest, WhatAShutdownWroteTheNextMountTakesOnce) {
 }
 
 TEST_F(StatisticsPersistenceTest, AShutdownWithNoPriorWritesAMarkAndTheMountTakesNone) {
-    ASSERT_TRUE(Write({}).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown({}).ok());
     EXPECT_TRUE(Take().empty());
 }
 
 TEST_F(StatisticsPersistenceTest, RowsWithNoClosingMarkAreNotTaken) {
     // A shutdown that failed before its mark: the rows are there and
     // nothing says they are all of them.
-    ASSERT_TRUE(Write(Relations(3)).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(3)).ok());
     {
         auto head = store_.Get(kCatalogPageStatistics);
         ASSERT_TRUE(head.ok());
@@ -137,7 +124,7 @@ TEST_F(StatisticsPersistenceTest, AMarkThatCountsMoreRowsThanTheChainHoldsIsNotB
     // device and a page of rows did not. Here, a page's rows are gone after
     // the mark was written, and the link past it is kept so the mark is
     // still read.
-    ASSERT_TRUE(Write(Relations(900)).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(900)).ok());
     const PageId second = NextOf(kCatalogPageStatistics);
     ASSERT_NE(second, kInvalidPageId) << "900 rows did not grow the chain";
     const PageId third = NextOf(second);
@@ -155,7 +142,7 @@ TEST_F(StatisticsPersistenceTest, AMarkThatCountsMoreRowsThanTheChainHoldsIsNotB
 
 TEST_F(StatisticsPersistenceTest, AChainOfSeveralPagesComesBackWholeAndKeepsItsPages) {
     const Priors written = Relations(900);
-    ASSERT_TRUE(Write(written).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(written).ok());
     const PageId grown = NextOf(kCatalogPageStatistics);
     ASSERT_NE(grown, kInvalidPageId);
     {
@@ -168,12 +155,12 @@ TEST_F(StatisticsPersistenceTest, AChainOfSeveralPagesComesBackWholeAndKeepsItsP
     EXPECT_EQ(NextOf(kCatalogPageStatistics), grown)
         << "the emptied chain keeps its growth pages for the next shutdown";
     // And the next shutdown writes onto them.
-    ASSERT_TRUE(Write(Relations(2)).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(2)).ok());
     EXPECT_EQ(Take().size(), 2u);
 }
 
 TEST_F(StatisticsPersistenceTest, ALinkToAPageThatIsNotThereTakesNoneAndCutsTheChain) {
-    ASSERT_TRUE(Write(Relations(3)).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(3)).ok());
     {
         auto head = store_.Get(kCatalogPageStatistics);
         ASSERT_TRUE(head.ok());
@@ -181,7 +168,7 @@ TEST_F(StatisticsPersistenceTest, ALinkToAPageThatIsNotThereTakesNoneAndCutsTheC
     }
     EXPECT_TRUE(Take().empty()) << "rows before a cut are not whole";
     EXPECT_EQ(NextOf(kCatalogPageStatistics), kInvalidPageId);
-    ASSERT_TRUE(Write(Relations(1)).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(1)).ok());
     EXPECT_EQ(Take().size(), 1u);
 }
 
@@ -193,7 +180,7 @@ TEST_F(StatisticsPersistenceTest, TheMountsDeleteMarkSweepPassesADamagedChainBy)
     // and every mount after it, since nothing logs or repairs the page.
     // The sweep therefore passes an unlogged relation by
     // (`IsUnloggedCatalogRelation`), and the guarded take cuts the link.
-    ASSERT_TRUE(Write(Relations(3)).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(3)).ok());
     {
         auto head = store_.Get(kCatalogPageStatistics);
         ASSERT_TRUE(head.ok());
@@ -217,7 +204,7 @@ TEST_F(StatisticsPersistenceTest, AHeadThatIsNoHeapPageIsMadeAgainEmptyAndTheMou
     // The head is rewritten at every clean shutdown and nothing logs it, so
     // a write torn there has no image to heal from. It is advisory: made
     // again empty, never a refused mount.
-    ASSERT_TRUE(Write(Relations(3)).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(3)).ok());
     {
         auto head = store_.Get(kCatalogPageStatistics);
         ASSERT_TRUE(head.ok());
@@ -225,13 +212,13 @@ TEST_F(StatisticsPersistenceTest, AHeadThatIsNoHeapPageIsMadeAgainEmptyAndTheMou
     }
     EXPECT_TRUE(Take().empty());
     const Priors again = Relations(2);
-    ASSERT_TRUE(Write(again).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(again).ok());
     EXPECT_EQ(Take(), again) << "the healed head does not hold the next shutdown's rows";
 }
 
 TEST_F(StatisticsPersistenceTest, ASecondShutdownWriteReplacesTheFirst) {
-    ASSERT_TRUE(Write(Relations(5)).ok());
-    ASSERT_TRUE(Write(Relations(2)).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(5)).ok());
+    ASSERT_TRUE(catalog_->WriteStatisticsAtShutdown(Relations(2)).ok());
     EXPECT_EQ(Take().size(), 2u) << "two marks, or seven rows, would not read whole";
 }
 

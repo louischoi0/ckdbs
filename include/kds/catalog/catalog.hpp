@@ -1073,12 +1073,11 @@ public:
     // logged; it refuses the mount only where the store itself fails.
     StatusOr<std::vector<SysStatisticsRow>> TakeStatisticsAtMount();
 
-    // **`sys.statistics`, at a shutdown** (PS15): `rows` - priors, managed
-    // versions and slots, none a closing mark - and the closing mark
-    // counting them, onto the chain the mount left empty. Unlogged and
+    // **`sys.statistics`, at a shutdown** (PS15): a row for each prior and
+    // the closing mark, onto the chain the mount left empty. Unlogged and
     // un-undone (CR6); the shutdown's final sync carries the pages out.
     // Called with no statement running.
-    Status WriteStatisticsAtShutdown(std::span<const SysStatisticsRow> rows);
+    Status WriteStatisticsAtShutdown(std::span<const std::pair<Oid, std::int16_t>> priors);
 
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
 

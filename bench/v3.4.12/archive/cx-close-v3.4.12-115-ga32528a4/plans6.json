@@ -1,0 +1,128 @@
+{
+ "cores": 1,
+ "show_plans": {
+  "P0": [],
+  "P1": [
+   [
+    "\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+    "px_join",
+    "admin",
+    "enabled",
+    "\u0011\ufffd4V\ufffd\ufffd4\ufffd",
+    "public.pc_users, public.pc_loans",
+    "public.pc_users, public.pc_loans",
+    "v ELSE ORDER (u, l)",
+    "\u0005\ufffd\ufffdj\ufffd`\u0006\u0000",
+    "SELECT l.book_id, u.member_code FROM pc_users AS u JOIN pc_loans AS l ON l.user_id = u.id WHERE u.id BETWEEN ? AND ?"
+   ]
+  ],
+  "P2": [
+   [
+    "\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+    "px_one",
+    "admin",
+    "enabled",
+    "\ufffdD\ufffd\u0011\u0314\ufffdz",
+    "public.pc_users",
+    "public.pc_users",
+    "v ELSE ORDER (pc_users)",
+    "\ufffd\ufffd\ufffdj\ufffd`\u0006\u0000",
+    "SELECT * FROM pc_users WHERE member_code = ?"
+   ]
+  ]
+ },
+ "pk-point-read": {
+  "stmt": "SELECT * FROM pb_bars WHERE id = 29873",
+  "P0": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.08 ms = CPU 0.08"
+  ],
+  "P1": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.06 ms = CPU 0.06"
+  ],
+  "P0b": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.05 ms = CPU 0.05"
+  ],
+  "P2": [
+   "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8f4bb2ba1e884010 fetch_id=0xdeb23a36649f70c9",
+   "class=PointSelect steps=1 hoisted=0",
+   "step 0 Lookup pb_bars key=29873",
+   "  filter 0:0.0 = 29873",
+   "project * (8 column(s) of step 0)",
+   "step 0 Lookup pb_bars opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.05 ms = CPU 0.05"
+  ],
+  "rows": 1,
+  "multiset_equal_all": true
+ },
+ "point-join-2rel": {
+  "stmt": "SELECT b.id, b.close, s.ticker FROM pb_bars AS b JOIN pb_symbols AS s ON b.symbol_id = s.id WHERE b.id = 29873",
+  "P0": [
+   "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=2 opens=2 pattern_id=0xab8f431438adbabb fetch_id=0x86ec3732b6416743",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.06 ms = CPU 0.06"
+  ],
+  "P1": [
+   "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=2 opens=2 pattern_id=0xab8f431438adbabb fetch_id=0x86ec3732b6416743",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.06 ms = CPU 0.06"
+  ],
+  "P0b": [
+   "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=2 opens=2 pattern_id=0xab8f431438adbabb fetch_id=0x86ec3732b6416743",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.06 ms = CPU 0.06"
+  ],
+  "P2": [
+   "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=2 opens=2 pattern_id=0xab8f431438adbabb fetch_id=0x86ec3732b6416743",
+   "class=JoinSelect steps=2 hoisted=0",
+   "step 0 Lookup pb_bars AS b key=29873",
+   "  filter 0:0.0 = 29873",
+   "step 1 Probe pb_symbols AS s key=0:0.1",
+   "  filter 0:0.1 = 0:1.0",
+   "project b.id=0:0.0, b.close=0:0.6, s.ticker=0:1.1",
+   "step 0 Lookup pb_bars AS b opens=1 examined=1 matched=1 sel=100% pages=1",
+   "step 1 Probe pb_symbols AS s opens=1 examined=1 matched=1 sel=100% pages=1",
+   "DB time 0.06 ms = CPU 0.06"
+  ],
+  "rows": 1,
+  "multiset_equal_all": true
+ }
+}

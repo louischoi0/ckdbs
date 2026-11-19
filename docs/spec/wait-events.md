@@ -278,7 +278,7 @@ Reading a wait: `sys.wait_stats` (cumulative, per core), `sys.wait_histogram`
 - **p1:** (unused)
 - **p2:** (unused)
 - **p3:** (unused)
-- **Meaning:** A background task waiting for work, or background work giving way. Outside DB time. Two sites book it: the server's host loop, parked until a connection is handed to its core or the server stops; and a `GATHER STATISTICS` walk between two slices, parked for its pace (CY-Q31 (a), `plan-stats.md` PS20) - so a session running a gather reads as idle for most of its walk.
+- **Meaning:** A background task waiting for work. Outside DB time. Today only the server's host loop books it, parked until a connection is handed to its core or the server stops.
 - **Usual causes:** Normal operation.
 - **Remedies:** None.
-- **Sites:** The server's host loop; `BuildRun::Execute`'s paced park (a gather).
+- **Sites:** The server's host loop.
