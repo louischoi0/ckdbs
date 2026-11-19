@@ -1,20 +1,31 @@
 # Work order DE - a page read that does not stop its core: the foreground miss off the reactor, the premise measured before anything is built
 
-Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
-`db-fpi-cadence-dc-for-update` from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`) on
-the operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §25).
-**Exploratory by CLA's proposal, not by the operator's word** (DE-Q0).
+Status: **OPENED 2026-11-19 on the operator's standing go-ahead
+(go-ahead-achieving-milestone), on worktree `de-page-read-off-the-reactor`
+from `35086008` (`v3.4.13-19-g35086008`); DE-S0 done.** Written 2026-11-18
+on worktree `db-fpi-cadence-dc-for-update` from `a4d2fb3b`
+(`v3.4.12-42-ga4d2fb3b`) on the operator's word of 2026-11-18
+(`raft-marks-2026-11-18.md` §25). **Exploratory by CLA's proposal, not by
+the operator's word** (DE-Q0). **No DE-Q item is the operator's own mark**:
+DE-Q0..Q6 are each adopted (a), as CLA proposed them, on the operator's
+standing go-ahead of 2026-11-19 (`raft-marks-2026-11-19.md` §8), and so is
+every item a stage raises (§4, DE-Q7 on).
 
-No stage is started. DE waits for the operator's word and for the marks on
-§4's items. Every `[source-read]` claim below was read at `a4d2fb3b`.
-Nothing was measured for this order and no suite was run: it changes no
-build input.
-
-**DE builds nothing until DE-S0 has measured its premise**, and one of its
-outcomes is that nothing is built (C0, §2). The premise is not that a miss
+**DE built nothing until DE-S0 had measured its premise**, and one of its
+outcomes was that nothing is built (C0, §2). The premise is not that a miss
 blocks - the tree says so itself (§1.1) - but that the block costs
 sessions that did not miss enough to be worth a second way of reading a
-page. No results file prices that (§1.4).
+page. **DE-S0 measured it and it holds** (§7,
+`bench/v3.4.13/results-de-s0-premise-v3.4.13-19-g35086008.md`): with the
+page cache kept from answering, sessions that never miss wait behind the
+ones that do, and beside one scanning session their schedule falls seconds
+behind. DE-Q1 (a) leaves the ruling on those numbers to the operator; under
+the standing go-ahead it is DE-Q7, adopted (a): **build, narrow** - a read
+thread, the yielding walk parked at a miss, a read statement's head run
+again; a write reads synchronously as today.
+
+Every `[source-read]` claim in §1 and §2 was read at `a4d2fb3b`; §7's
+DE-S0 entry re-reads the ones DE builds on at `35086008`.
 
 Tags: `[operator]` the operator's word; `[source-read]` read in the tree,
 with `path:line`; `[measured]` with the results file; `[design]` CLA's,
@@ -260,7 +271,13 @@ Binding once DE opens, whatever candidate is marked.
 
 ## 4. Items for the operator (DE-Q), CLA's proposals
 
-None is marked. (a) is CLA's proposal in each.
+**None is the operator's own mark.** (a) is CLA's proposal in each, and each
+is **adopted (a) on the operator's standing go-ahead of 2026-11-19
+(go-ahead-achieving-milestone)**, recorded in `raft-marks-2026-11-19.md` §8:
+DE-Q0..Q6 at the opening, DE-Q7..Q14 as DE-S0 and its review raised them
+(§7), each written
+here with its options before it was adopted. An option not taken stays open
+to the operator's own mark.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -271,6 +288,14 @@ None is marked. (a) is CLA's proposal in each.
 | DE-Q4 | `O_DIRECT`. | not in DE. With it every miss reaches the device, so it is worth asking only after a miss no longer stops a core; cells (iii) and (iv) show what it would expose | (b) decided with DE - an alignment rule for every frame and scratch buffer, and the write path's too |
 | DE-Q5 | The mechanism. `io_backend.hpp` leaves it open. | M1, the number of threads fixed and not a setting; the simulator replaces it with a queue | (b) M2, `io_uring`, a new dependency on a kernel interface; (c) M1 with a boot key for the thread count |
 | DE-Q6 | The served case. `buffer_pool_frames` is required and is the pool's hard ceiling, sized by the operator. | a working set beyond the pool is served, and a cold start is too: the engine does not get to assume its operator sized the pool right | (b) not served - a miss is a sizing fault the wait event already reports - and DE closes at C0 without measuring |
+| DE-Q7 | **The ruling DE-Q1 (a) leaves to the operator, on DE-S0's numbers** (§7): the never-miss sessions' p99 in (iii) is outside (v)'s spread, so C0 is not the verdict. | **build, narrow**: the read thread; the yielding walk parks at a miss (DE-Q8); a **read** statement's head - a `SELECT` without a locking clause, run inline - is run again after its page is read (C2). A write statement, a locking read and a DDL read synchronously as today. The reasons are the census's: an `INSERT` opens its no-refuse window before its clustered descent and an issued key's first page write (the `sys.tables` mark) comes before it, so it has no re-runnable read phase that one refusing point could cover; an `UPDATE`'s and a `DELETE`'s locate falls back to a walk on any failed descent and a named-key `INSERT` reads a failed undo read as "decided" (§7, list B) - on a write path a swallowed refusal can reach a page write before the dispatcher sees it, and on a read path it cannot | (b) build as §2 wrote it, a write's read phase included, each swallowing site on the write path changed to test the code first; (c) the walk alone - (iv)'s seconds, without (iii)'s factor of two to three; (d) nothing |
+| DE-Q8 | **What the walk does at a miss.** §2's C1 hands on one leaf and never parks. DE-S0's cell (iv): the walk reads about 19,700 pages a second - the disk's sequential rate - and the core is inside the read 93 % of the time; reading one leaf ahead does not give the core back. | **the walk parks at a read that would wait**: its own next-leaf fetch, made at the top of its page loop where it holds no pin and no span (`src/exec/step_vm.cpp:2158-2163`), refuses a page the device cannot hand over at once (DE-Q9); the walk hands the page to the read thread, parks, and makes that fetch again. **The refusal is a property of that one fetch - an access kind of its own - never of the thread**, since the walk yields; and the retry re-issues the fetch alone, without passing the walk's cycle guard or its fetch count a second time (`step_vm.cpp:2159-2162`), so a refused leaf is visited once. Fetches under a leaf - an undo chain, a spilled value, a join's inner step - read synchronously as today. This is §6's own rule, "a statement gives its core back at a miss", applied to the one place a walk holds nothing | (b) C1 as written; (c) nothing for the walk |
+| DE-Q9 `[quiet-wrong]` | **How a page read off the reactor reaches the pool, and which read leaves the reactor.** §2's M1 has the thread read into the reserved frame and the asker's core publish it. | **Revised at DE-S0's review, before anything was built.** (1) **A fetch that may be refused first asks the device for the page without waiting** (`preadv2` with `RWF_NOWAIT` on the file device). A page the operating system holds is copied into the reserved frame where the statement stands, exactly as today: cell (ii)'s 4 us copy and the 92 % of cell (iv)'s reads that return in under 4 us never leave the reactor and are never refused. Only a read that would wait is refused - and on this host's kernel the refused call has already started the device read (read at `35086008`'s build: 200 of 200 uncached pages answered `EAGAIN` and were readable 468 us later with no other reader). (2) **The thread then reads the page into a buffer of its own and drops it.** What the read leaves is the page in the operating system's cache, and the statement's next fetch finds it there by (1) - one reservation, one checksum check, one `InsertFrame`, on a reactor. No second image of a page exists outside the pool's protocol, no frame is owned across a cancelled asker, and nobody waits for a publish a reactor owes, at any core count. A device that cannot answer without waiting - any but the file device - is read as today. It rests on DE-Q4 (a): with `O_DIRECT` nothing is left behind. The threads are joined before the device's descriptor closes | (b) the thread's buffer adopted into a frame on the asker's core - saves the second copy, and owes a guard on every path that writes back, frees or re-creates the page while the buffer is in flight: a buffer read before a write-back and adopted after the eviction is a stale image `[quiet-wrong]`; it is what `O_DIRECT` would need; (c) §2's M1 as written, the read into the reserved frame; (d) the first draft of (a): every pool miss refused - a run-again would meet the same miss, and a page the operating system holds would pay a park for a 4 us copy |
+| DE-Q10 `[quiet-wrong]` | **The refusal's form, and what stops a caller swallowing it.** DE-S0's passes listed some thirty statement-path sites that recover from any failed fetch (§7, list B). | **a status code of its own, `kNotResident`, that never reaches a client, and a per-thread note set where the refusal is made.** The dispatcher reads the note, not the outcome: a head whose note is set is discarded whole and run again, whatever it answered. So a caller that read the refusal as "absent", or took another plan, produced an answer nobody sees. Sound only under four conditions, each built in DE-S1: **(i) the arm covers a top-level `SELECT`'s body and nothing else** - not a nested `SELECT` (`RunToEnd`, an `INSERT ... SELECT`, a write's scalar subquery), not a locking read; **(ii) the tails obey the note** - `SelectRun::Finish` records nothing (no trail, no access statistics, no optimizer signal) for a run whose note is set, and the arm is dropped before the recording's own fetches (§7, list C); **(iii) the arm is dropped when the sink first hands a row on**, so no refusal is made once a re-run is impossible (CE-R4); **(iv) the note is read before the head's coroutine can yield**, as BA-S14's is. A specific-code test anywhere in the tree does not match the new code | (b) every swallowing site changed to test the code; (c) `TxnConflict` under BA-S14's structural note - seven retry loops test that code; (d) the arm on the two descents' node fetches only, by a parameter threaded through them - it leaves a cold row's undo and spill reads on the reactor, and the body writes nothing the discard does not already cover |
+| DE-Q11 | **The bound on running a head again** (DE-R7). | at most `kMaxMissReruns` = 8 runs refused, and BA-S14's deadline (the lock family's fault net, 1 s); the run after either reads every page synchronously, as today. A cancel is taken at the park. Eight covers a clustered descent and an index descent missed at every level; a head with more cold pages than that - a long key set, a join probing a cold inner relation - reads the rest on its core as it does today. **What a run-again costs is stated, not hidden**: the statement is parsed and compiled again each time, and the per-shape page-read and row counters of `sys.statement_stats` include the discarded runs, as BA-S14's re-runs already do | (b) the deadline alone; (c) another number |
+| DE-Q12 | **DE-R5 on the simulator, which drives `CommandDispatcher::Dispatch` and has no reactor to park on** (`sim/instance.cpp:473`). | the synchronous `Dispatch` runs the same refuse, discard and run-again loop when its instance was given a reader, and the simulator's reader has no thread: a request completes where it is made and reads nothing. So the corpus exercises the refusal and the re-run under its crashes on one thread, and the device sees the reads the statements make, in statement order | (b) the simulator reads synchronously and the path is not in the corpus |
+| DE-Q13 | **Whether the path has a switch.** DE-Q5 (a) fixes the thread count and makes it no setting. | no key. A server always has the reader; a dispatcher built without one - a test, a tool - reads synchronously. The thread count is `kPageReadThreads` = 4, `[provisional]`, until a cell prices another | (b) a boot key that turns the path off |
+| DE-Q14 | **How the read thread ends a reactor's idle block at `cores = 1`**, where the server builds no wake registry and starts no thread (`src/server/expeditor.cpp:1837-1851`, "G2 asks for zero overhead on the single-core path") - a parked statement would wait out `max_idle_block_ms`, 10 ms, for a 0.5 ms read. Raised after §4 was written, by CLA's reading and the review's. | the wake registry is built at one core too and core 0 registers in it; the reader **writes the wake whatever the destination's sleeping flag says**, because a read can complete inside the window a best-effort kick leaves open and the price there, one idle block, is twenty times the read. **Two departures from G2's "build nothing" at one core, named here**: the registry with its descriptor in core 0's readiness set, and DE-R8's read threads. The close prices both on the resident `cores = 1` cells (DE-R4) | (b) the best-effort kick every other waiter uses, priced at one idle block; (c) no park at one core: the path is built above one core only |
 
 ## 5. Stages
 
@@ -280,6 +305,17 @@ None is marked. (a) is CLA's proposal in each.
 | **DE-S1 - the read off the reactor, and the statement head** | Under the marks: the mechanism behind the `PageDevice` seam and its simulator twin; §2's publish and ownership rules written down first; the refusal that names a page; the dispatcher's park and re-run for the heads DE-S0 listed, the last attempt synchronous; the second asker. | review, the full suite |
 | **DE-S2 - the walk** | C1, if DE-Q3 marks it. | review, the full suite |
 | **DE-S3 - the close** | DE-S0's cells before against after, interleaved; the documents below; the milestone row. | closed, or closed narrow |
+
+**The stages as DE-S0 re-aimed them** (DE-Q7..Q13, §7). DE-S1 is the reader
+(threads, a ticket, a kick, and an arm with no thread), the refusal (the
+code, the per-thread note, the fetch's refusing arm on its miss branch only)
+and the park and re-run of a **read** statement's head, in `DispatchAsync`
+and in the synchronous `Dispatch`. "The second asker" needs nothing: under
+DE-Q9 (a) a second asker reads the page itself. DE-S2 is the walk's park at
+a miss, not C1. The tests below stand where their subject was kept; the
+ones written for a publish a reactor owes, a frame returned after the device
+call and a write's head have no subject under DE-Q7 (a) and DE-Q9 (a), and
+DE-S3 says so beside each.
 
 **Tests DE owes.** Each statement kind DE-S1 covers answers the same rows
 with the pool at its floor and at its ceiling (DE-R1); a statement at the
@@ -359,3 +395,201 @@ the stages, as in CZ.
 STOP` create threads after startup (`src/server/backup.cpp:166`, `:340`),
 against `sched.md` §9's invariant 1; entered in `known-gaps.md` under
 "Backup and restore (BR)" in the same commit.
+
+### DE-S0, 2026-11-19 - the census and the premise
+
+On worktree `de-page-read-off-the-reactor` from `35086008`
+(`v3.4.13-19-g35086008`), no engine code. Opened on the operator's standing
+go-ahead (go-ahead-achieving-milestone, `raft-marks-2026-11-19.md` §8):
+DE-Q0..Q6 adopted (a) as CLA proposed them, none the operator's own mark.
+
+**The census**, read at `35086008` by two read-only passes and spot-checked
+by CLA at the lines cited. Line numbers are that commit's.
+
+*A. Who reaches `FaultIn`, and what it holds.* Every accessor of
+`page_store.hpp` goes through `FetchPinned` (`:255`) to
+`DevicePageStore::FetchAndPin` (`src/storage/device_page_store.cpp:2456`),
+which reaches `FaultIn` (`:1089`) unarmed through `Resolve` (`:2474`) and
+armed directly (`:2544`). Pages of the pinned class fault only at their
+first touch after a mount.
+
+| class | who | holds at the fetch |
+|---|---|---|
+| a statement head that has written nothing | the bind (`catalog.cpp:2688`, `step_vm.cpp:320`); a tuple key, key set, probe or index `SELECT`, always run inline (`command_dispatcher.cpp:10139-10140`), descending through `btree.cpp:169/183` with **no latch coupling** (`btree.cpp:139-141`: a node is released before its child is asked for); an `INSERT`'s foreign-key resolve and unique check; an `UPDATE`'s or `DELETE`'s locate of its first row (`command_dispatcher.cpp:8925`) | nothing at a descent; a sibling fetch holds the leaf (`btree.cpp:101`, `:1205`); a reverse foreign-key check holds the parent leaf exclusive across a whole child walk |
+| a walk between pages | `SelectRun`'s outermost walk (`step_vm.cpp:2163`), an index build's backfill, an assertion's and a Transition's build, `GATHER STATISTICS` | **nothing** at the top of the page loop (`step_vm.cpp:2158-2163`); under a leaf - an undo chain, a spilled value, a join's inner step - the leaf, pinned and shared |
+| a mutation past its first write | an `INSERT` from its no-refuse window on (`command_dispatcher.cpp:8107`) - **an issued key's first page write is the `sys.tables` mark bump, before its clustered descent** (`:8169` issues, `:8181` descends); a named key's may be a spill (`:8137`), the mark (`:8147`, written only when the key is at or above it) or the leaf itself, after the descent (`:8151`), and its `NamedKeyVerdict` lookup and key borrow come before the window; a division; index maintenance; undo placement; an `UPDATE`'s or `DELETE`'s second row on; a statement's tail (`Catalog::RecordAccess`, `catalog.cpp:3494`, under the access-statistics root held exclusive) | the leaf, the secured parents, an open no-refuse window |
+| recovery and the mount | redo, undo, the spill sweep, the unlogged chains' discard | the page being fetched |
+| a background task | the reclaim tick, the plan-statistics steward, the Cabin controller's build (the scan ring's one user, under its view latch), a runtime rollback | as listed |
+
+No fetch is made under a lock-table partition latch or the WAL stream latch,
+and the store's structure latch is dropped before `FaultIn`
+(`device_page_store.cpp:2534-2544`). There is no catalog mutex; what a
+catalog reader holds is a root page's latch.
+
+*B. Who recovers from a failed fetch* (§2's `[quiet-wrong]` list). The two
+read passes listed 31 statement-path sites that recover from any failure -
+19 falling back to another path, 12 reading it as absent, empty or false -
+and 11 more that ignore one on an advisory path; **those counts are the
+passes', not re-enumerated**, and only the rows below were re-read at the
+lines cited. The ones a refusal would turn into a wrong answer or a wrong
+write:
+
+| site | what a refusal would become |
+|---|---|
+| `UndecidedInsert` (`command_dispatcher.cpp:7438-7446`) | a failed undo read is "not an undecided insert", so a named key reads as placed: `INSERT ... ON CONFLICT DO NOTHING` drops the row, a plain named-key `INSERT` is refused as a duplicate |
+| `StillOwned` (`step_vm.cpp:317-330`) | `NotFound`: "relation ... no longer exists" |
+| `LocateByTupleKey` (`command_dispatcher.cpp:8925-8943`) | any failure but `NotFound` falls to a whole walk, which then writes |
+| `NamedKeyVerdict` (`command_dispatcher.cpp:7466-7472`) | a failed lookup admits the key, left to the placement's own descent |
+| the expression-Cabin DDL's resolve (`command_dispatcher.cpp:4044-4048`) | the relation `X` borrow is skipped |
+| an online index build's version walk (`index_ddl.cpp:332-339`, `:400-407`) | a version read as resolved |
+| `VerifyTupleAt` (`tuple_verify.cpp:15-18`) and its six callers | a hint miss: the descent answers, the hint statistics are skewed |
+| the walk's head seek (`step_vm.cpp:2114-2122`) | a walk from the leftmost leaf |
+| the Waystone trail read (`command_dispatcher.cpp:10022-10027`), the access statistics (`access_stats.cpp:37`), the trail recorder | no replay; nothing recorded |
+
+Specific-code tests - `NotFound` at recovery's four sites, `TxnConflict` at
+the seven stale-descent restarts, `ResourceExhausted` at the pool's retries
+- do not match a new code. The pool-full arm inside a no-refuse window
+fail-stops (`device_page_store.cpp:955-964`), which is BE-Q11 and the reason
+no refusal may be made there.
+
+*C. What a head has done before its first fetch, against BA-S14's answer.*
+`StageStatement` clears every per-statement member before a run
+(`command_dispatcher.cpp:1112-1147`) and enters and leaves the core's
+statement epoch around it (`:1119`); a re-run goes through
+`DispatchAndStage` whole (`:920-927`), so the bind, the view of a
+`READ COMMITTED` statement and the borrow are made again. `EndWrite` decides
+that a statement is re-runnable from its transaction's trail
+(`:13444-13468`), which a read never grows; a sink that has streamed ends
+the re-runs (`:1044`) and one that has not is rewound (`:1052`). Counted
+twice by a re-run, as BA-S14 leaves them: the executor's counters and the
+hint statistics. **The tails are not the dispatcher's**: a `SELECT`'s
+`RecordExecution` - the Waystone trail, `Catalog::RecordAccess`'s
+`sys.access_stats` write under its root held exclusive, the optimizer
+signals and the plan-statistics fold - runs in `SelectRun::Finish`
+(`command_dispatcher.cpp:6955-6988`, "the recording below writes catalog
+and Waystone pages"), inside the inline head, before the dispatcher sees an
+outcome. So a run whose refusal a caller swallowed has already recorded,
+and written pages, by the time the note is read; DE-Q10 (a) holds only if
+`Finish` reads the note and skips the recording, and the refusing arm is
+disarmed before the recording's own fetches (a refusal inside
+`RecordAccess`'s chain insert would come after a page write). **Not read at
+DE-S0 and owed before DE-S1 touches the dispatcher**: where an inline head's
+rows can leave before it returns.
+
+*D. The simulator.* It drives `CommandDispatcher::Dispatch` on one thread
+(`sim/instance.cpp:473`) over `MemoryPageDevice`, whose reads are already
+safe against each other (`memory_page_device.hpp`, "Concurrency"). It has no
+reactor to park on and runs no thread, so DE-R5 is met by a reader with no
+thread, not by a device change (DE-Q12).
+
+**The measurement** (`bench/v3.4.13/results-de-s0-premise-v3.4.13-19-g35086008.md`,
+raw output under `bench/v3.4.13/archive/de-s0-premise-v3.4.13-19-g35086008/`;
+`tools/de_premise.py`, `tools/bl_mixed.py`'s helpers extended into a driver
+of its own because one load is shared by every cell). `build-release` at
+`v3.4.13-19-g35086008`, `cores = 1`, a relation of 128,960 pages, a pool of
+32,768 frames, four sessions reading 700 resident keys at 1,000 statements a
+second open-loop, four reading uniformly at 648 a second - 0.3 of a core
+over the device's own 463 us for an 8 KiB read. The commit was described
+`v3.4.13-19-g35086008` when the run started and has carried the tag
+`v3.4.14` since 08:02 UTC that day; the file keeps the name it was measured
+under. Two runs a cell; each pair
+below is the two runs, the never-miss sessions' latency from their
+schedule's due instant.
+
+| cell | never-miss p50 | p95 | p99 | the core inside the read |
+|---|---|---|---|---|
+| (i) alone | 251 us, 248 us | 353 us, 359 us | 415 us, 889 us | 0 % |
+| (ii) beside cold sessions, page cache warm | 230 us, 256 us | 327 us, 381 us | 383 us, 580 us | 0.22 %, 0.24 % (4.4 us, 4.8 us a read) |
+| (iii) the same, page cache kept from answering | 261 us, 258 us | 797 us, 793 us | 1,088 us, 1,263 us | 27.5 %, 27.0 % (551 us, 540 us a read) |
+| (v) the same, a pool that holds the relation | 234 us, 233 us | 334 us, 336 us | 387 us, 545 us | 0 % |
+| (iv) beside one scanner, page cache kept from answering | 7.2 s, 5.8 s | 9.9 s, 8.8 s | 10.2 s, 9.1 s | 92.8 %, 93.0 % (47 us a read) |
+| (vscan) the same, a pool that holds the relation | 268 us, 277 us | 336 us, 348 us | 378 us, 391 us | 0 % |
+| (iii) at `cores = 4`, the cold sessions on core 0, these on 1 to 3 | 285 us, 280 us | 379 us, 368 us | 552 us, 421 us | 28.4 %, 28.7 % of core 0 |
+
+- **A warm page cache hides the whole cost**: in (ii) a miss is a 4 to 5 us
+  copy and the never-miss sessions are where (i) and (v) have them.
+- **With the device answering, the never-miss sessions wait behind the
+  reads**: DE-Q1 (a)'s test fails - (iii)'s p99 is 1,088 us and 1,263 us
+  against (v)'s 387 us and 545 us - and its three numbers are: (iii) over
+  (ii), run by run, p50 +31 us and +1 us, p95 +470 us and +412 us (2.4 and
+  2.1 times), p99 +704 us and +684 us (2.8 and 2.2 times); 27 % of the
+  core's time inside
+  `io.page_read`; 463 us for the device's own read at queue depth 1 and 540
+  to 551 us for the server's. A p99 moves by up to a factor of two between
+  two runs of one cell ((i): 415 us, 889 us), so the p95 is the number that
+  carries the claim.
+- **Beside a scan it is not a factor**: in (iv) the walk reads 19,700 pages
+  a second, each a 47 us blocking read, so a 64-page slice is about 3 ms
+  where (vscan)'s is tens of microseconds; a never-miss statement waits
+  6.4 ms from its send, the four sessions together get about half of the
+  1,000 statements a second their schedule asks for, and the schedule falls
+  behind for as long as the scan runs. The same scan over a resident
+  relation leaves their p95 and p99 where (i) and (v) have them and their
+  p50 34 to 43 us above (v)'s, unresolved at two runs.
+- **The stall does not cross cores**, as §1.1 read: at `cores = 4` the
+  never-miss sessions on other cores keep their p95. That cell has no
+  resident twin at `cores = 4`, and its clients ran on CPUs 2, 3, 6 and 7,
+  two of which the reactors of cores 2 and 3 were pinned to, so it says no
+  more.
+- The never-miss sessions' lifetime counts of `io.page_read` (18, 24, 27
+  and 32 or 33) are, to one read, the same in (i), whose window has no pool
+  miss, as in (ii) and (iii): their reads are their first touches, before
+  the window. The view is cumulative, so this bounds a session's misses
+  inside a window at one and does not show it is none.
+
+What was cut for the 20-minute budget, and that the stage spent about 23
+with its build and an aborted first attempt, is in the results file.
+
+**The verdict.** DE-Q1 (a): not C0. The ruling it leaves to the operator is
+written as **DE-Q7 and adopted (a) on the standing go-ahead: build,
+narrow** - with DE-Q8 (the walk parks at a miss; C1 as written cannot give
+back a core that is 93 % inside sequential reads), DE-Q9 (the read thread
+leaves the page in the operating system's cache and the pool reads it as it
+reads every page), DE-Q10 (a code of its own and a note the dispatcher
+obeys), DE-Q11 (eight runs and BA-S14's deadline, then a synchronous run),
+DE-Q12 (the simulator's reader has no thread), DE-Q13 (no switch) and
+DE-Q14 (the wake at one core), each (a), each CLA's proposal and none the
+operator's mark; DE-Q8 to DE-Q11 stand as the review left them (below). **The two
+`[quiet-wrong]` items were adopted after their premises were read on the
+tree at `35086008`**: DE-Q9 (a)'s, that a fetch has one path to a frame
+(`FaultIn`, `device_page_store.cpp:1089-1168`) and that nothing but a
+reactor touches the frame table; DE-Q10 (a)'s, that the heads DE-Q7 (a)
+admits write no page before the dispatcher reads their outcome - true of a
+`SELECT`'s body, and **false of its tails as the tree stands**: they record
+inside the head (list C), so DE-Q10 (a) needs `SelectRun::Finish` to obey
+the note too, which is DE-S1's first step.
+
+DE-Q3 (a) is met by DE-Q7 (a) and DE-Q8 (a) together: C2 for a read
+statement's head, and for the walk the park that cell (iv) asks for in
+place of C1. DE-Q4 (a) and DE-Q5 (a) stand as proposed.
+
+**Not executed at DE-S0**: the test suite - the stage changes no build
+input (`tools/` and documents only).
+
+**Reviewed by `critics-developer` before the commit**; it opened the cited
+lines, checked the headline numbers against the JSON, and built and ran
+nothing. **Applied**, in place by the review: list C and the verdict - a
+`SELECT`'s tails record inside the head, so DE-Q10 (a)'s premise was false
+of them as written; list A's and DE-Q7's `INSERT` claim, true of an issued
+key only; the census counts softened to what the passes listed;
+`NamedKeyVerdict`'s row; (vscan)'s p50 gap; two caveats in the results file
+(the `cores = 4` cell's client CPUs, and that cell (iv)'s percentiles cover
+only the requests sent). **Applied by CLA from its findings**: DE-Q9 (a)
+revised - a fetch that may be refused asks first without waiting, so only a
+read that would wait is refused, a run-again is admitted by the page being
+in the operating system's cache, and a page already there never pays a park
+(the review's first two findings, and CLA's own test of `RWF_NOWAIT` on the
+host made while the review ran); DE-Q8 (a)'s retry made exact - the fetch
+re-issued alone, the refusal a property of the fetch and not of the thread;
+DE-Q10 (a)'s four conditions - the top-level `SELECT`'s body only, the
+tails obeying the note, the arm dropped at the sink's first hand-on, the
+note read before a yield; DE-Q11's costs stated; DE-Q14 written for
+`cores = 1`, with G2's two departures named; the driver hashing its binary
+once and recording each session's last core. **Rejected**: arming only the
+two descents' node fetches (the review's narrowing of DE-Q7) - it is
+DE-Q10 (d), and it leaves a cold row's undo and spill reads on the reactor
+while the body writes nothing the discard does not cover; `proc.pid` in
+place of the driver's `/proc` scan - that `systemd-run --scope` runs the
+server in its own process was not checked on this host and the scan is
+known to work; folding the results file's closing section into its tables -
+it is the insight the bench rule asks for.
