@@ -143,3 +143,12 @@ took under them.
 | **Mark** | None of the operator's own but DA-Q8 (a) (`raft-marks-2026-11-18.md` §28), which stands. **DA opened** on worktree `da-access-stats-memory-resident` from `origin/main` at `673f025d` (`v3.4.14-30-g673f025d`), under the skill's standing word: **DA-Q0, DA-Q2, DA-Q3, DA-Q4, DA-Q5 and DA-Q7 adopted (a)**, and **DA-Q1 (a) and DA-Q6 (a) adopted as revised against the tree** - DA-Q1's host is the first bump after 37, CX-S1a having moved the superblock to 37 without DA-S3, and DA-Q6's exception is narrowed to `sys.statistics`, which CY-S1a made its second member, not deleted; **DA-Q9..Q12, added at DA-S0 and DA-S1, adopted (a)** - each on the operator's standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone) |
 | **Does not settle** | a push, a merge to `main`, a tag or a version; DA-S3, which waits for a host's bump; the options the standing go-ahead did not take (DA-Q0 (b), DA-Q1 (b)/(c), DA-Q2 (b), DA-Q3 (b), DA-Q4 (b), DA-Q5 (b), DA-Q6 (b), DA-Q7 (b), DA-Q9..Q12 (b)), which stay open to the operator's own mark |
 | **Recorded at** | this file; the DA order's header, §4 and §7; the DA row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 16. DA closed on the work branch, on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | the same standing go-ahead as §15; no new word |
+| **Mark** | None of the operator's own. DA-S0 (`75bbf9f2`), DA-S1 (`89c26252`) and DA-S2 (the documents at `ffe7c501` and the close, `bench/v3.4.14/results-da-close-v3.4.14-32-g89c26252.md`: no cell slower, +13.5 % throughput at `cores = 8`) landed on `worktree-da-access-stats-memory-resident`; DA-S3 owed to the first superblock bump after 37 |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; DA-S3's host |
+| **Recorded at** | this file; the DA order's header and §7; the DA row in `instructions/v3.2.0/index.md` |

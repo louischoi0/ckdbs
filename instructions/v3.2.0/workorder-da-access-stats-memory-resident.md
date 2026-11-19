@@ -1,6 +1,6 @@
 # Work order DA - access statistics kept, their storage moved to memory: `sys.access_stats` as a memory-resident view
 
-Status: **OPENED 2026-11-19** on worktree `da-access-stats-memory-resident`
+Status: **CLOSED 2026-11-19 on the work branch, DA-S3 owed, not landed** (DA-S0 `75bbf9f2`, DA-S1 `89c26252`, DA-S2 the documents at `ffe7c501` and the close `bench/v3.4.14/results-da-close-v3.4.14-32-g89c26252.md`: no cell slower, +13.5 % throughput at `cores = 8`; no push, merge to `main` or tag). **OPENED 2026-11-19** on worktree `da-access-stats-memory-resident`
 from `origin/main` at `673f025d` (`v3.4.14-30-g673f025d`), on the
 operator's standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone,
 `raft-marks-2026-11-19.md` §15): every unmarked item adopted as CLA
@@ -614,3 +614,31 @@ the review asked to confirm, already names `SysAccessStatRow` (§5), its
 codec going with it.
 
 Overhead not measured; measured at the milestone's close.
+
+### DA-S2 - the close, 2026-11-19
+
+**DA-Q7 (a)'s A/B** (`bench/v3.4.14/results-da-close-v3.4.14-32-g89c26252.md`,
+`ck-tester`, Release, six interleaved lifetimes an arm, nothing cut, 11 min
+with the builds): `673f025d` (`v3.4.14-30-g673f025d`, the opening) against
+`89c26252` (`v3.4.14-32-g89c26252`, DA-S1), `access_statistics = on`.
+
+| cell | server CPU, after - before | throughput | verdict |
+|---|---|---|---|
+| point `SELECT`, `cores = 1` | -0.22 us | +0.9 % | inside the spread |
+| point `SELECT`, `cores = 8` | -8.32 us (42.71 to 34.39) | **+13.5 %**, 6 of 6 | gain, about six times the spread |
+| FK child `INSERT`, `cores = 1` | -0.45 us | +1.6 % | inside the spread |
+| control, `cores = 8`, statistics off | -0.06 us | +0.4 % | inside the spread |
+
+**The bar is met: no cell slower.** At `cores = 8` the store lands where
+DA-S0's statistics-off engine did (34.39 against 33.98 us, 110.5k against
+110.6k qps), so what DA-S0 priced was page 11's exclusive hold, not the
+counting. At `cores = 1` the write's cost is below this host's ~1 us floor
+before and after: met, not shown free. Limits: 10k rows, `relaxed` only,
+the clients sharing the server's 8 vCPUs.
+
+**Documents** amended at `ffe7c501` (§5's list, reviewed by
+`critics-developer`, six corrections applied, the cost figures given one
+home in `sys-views.md` §6.2d). The milestone row says what DA-S3 owes.
+
+**DA closes with DA-S3 owed**: the bootstrap's removal waits for the first
+superblock bump after 37 any order makes (DA-Q1 (a) as revised).

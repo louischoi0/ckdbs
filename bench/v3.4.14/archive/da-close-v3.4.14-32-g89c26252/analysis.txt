@@ -1,0 +1,36 @@
+== select1
+A cpu/stmt [22.62, 22.54, 22.22, 22.4, 23.2, 22.19] mean 22.53 range 1.01
+A qps [23695, 23716, 24170, 23981, 22989, 23980] mean 23755 range 1180
+  pcts(median of lifetimes) {'p0': 35.0, 'p25': 39.0, 'p50': 40.0, 'p90': 45.5, 'p99': 55.5} stmts 1141070 bad 0 n 6
+B cpu/stmt [22.78, 22.0, 22.35, 22.03, 21.87, 22.78] mean 22.30 range 0.91
+B qps [23521, 24355, 23972, 24213, 24325, 23357] mean 23957 range 998
+  pcts(median of lifetimes) {'p0': 34.5, 'p25': 39.0, 'p50': 39.0, 'p90': 46.0, 'p99': 54.5} stmts 1150780 bad 0 n 6
+paired cpu delta B-A [0.17, -0.54, 0.13, -0.37, -1.33, 0.59] mean -0.22 B>A in 3 / 6
+paired qps delta % [-0.7, 2.7, -0.8, 1.0, 5.8, -2.6] mean 0.9
+== select8
+A cpu/stmt [43.31, 43.53, 42.86, 41.31, 41.98, 43.25] mean 42.71 range 2.23
+A qps [96782, 97838, 100632, 97466, 96515, 94989] mean 97370 range 5643
+  pcts(median of lifetimes) {'p0': 33.5, 'p25': 98.0, 'p50': 139.5, 'p90': 271.0, 'p99': 513.0} stmts 4686400 bad 0 n 6
+B cpu/stmt [34.85, 35.01, 34.32, 33.67, 34.66, 33.82] mean 34.39 range 1.34
+B qps [108872, 109265, 110421, 110924, 111549, 112023] mean 110509 range 3151
+  pcts(median of lifetimes) {'p0': 30.5, 'p25': 86.5, 'p50': 126.5, 'p90': 237.5, 'p99': 399.5} stmts 5319180 bad 0 n 6
+paired cpu delta B-A [-8.46, -8.52, -8.54, -7.64, -7.32, -9.43] mean -8.32 B>A in 0 / 6
+paired qps delta % [12.5, 11.7, 9.7, 13.8, 15.6, 17.9] mean 13.5
+== fk1
+A cpu/stmt [22.64, 23.9, 23.17, 22.69, 23.68, 23.18] mean 23.21 range 1.26
+A qps [23450, 22314, 23286, 23564, 22626, 23276] mean 23086 range 1250
+  pcts(median of lifetimes) {'p0': 33.0, 'p25': 37.0, 'p50': 38.0, 'p90': 44.5, 'p99': 62.0} stmts 1108920 bad 0 n 6
+B cpu/stmt [22.75, 22.73, 23.14, 22.92, 22.4, 22.6] mean 22.76 range 0.75
+B qps [23341, 23628, 22991, 23383, 23700, 23597] mean 23440 range 709
+  pcts(median of lifetimes) {'p0': 32.5, 'p25': 37.0, 'p50': 38.0, 'p90': 43.5, 'p99': 62.0} stmts 1125932 bad 0 n 6
+paired cpu delta B-A [0.11, -1.17, -0.03, 0.23, -1.29, -0.58] mean -0.45 B>A in 2 / 6
+paired qps delta % [-0.5, 5.9, -1.3, -0.8, 4.7, 1.4] mean 1.6
+== select8off
+A cpu/stmt [33.89, 34.73, 34.2, 34.37, 34.85, 35.01] mean 34.51 range 1.11
+A qps [110442, 107527, 113392, 107218, 106261, 108253] mean 108849 range 7131
+  pcts(median of lifetimes) {'p0': 30.5, 'p25': 88.5, 'p50': 129.5, 'p90': 238.0, 'p99': 402.5} stmts 5238470 bad 0 n 6
+B cpu/stmt [34.91, 34.24, 35.33, 34.3, 34.33, 33.62] mean 34.45 range 1.72
+B qps [108629, 111917, 107924, 109211, 106318, 111681] mean 109280 range 5600
+  pcts(median of lifetimes) {'p0': 31.5, 'p25': 87.5, 'p50': 126.5, 'p90': 242.0, 'p99': 422.5} stmts 5259672 bad 0 n 6
+paired cpu delta B-A [1.01, -0.49, 1.13, -0.07, -0.53, -1.39] mean -0.06 B>A in 2 / 6
+paired qps delta % [-1.6, 4.1, -4.8, 1.9, 0.1, 3.2] mean 0.4
