@@ -634,3 +634,89 @@ two `[quiet-wrong]` items were re-read before they were adopted:
 DC-Q12 (the reply's bound), both (a), in §4.
 
 **No item goes back to the operator.**
+
+### DC-S1 - the grammar and the refusals (2026-11-19)
+
+On worktree `dc-select-for-update` at `eaeb26ea`. The clause is one
+production, `Parser::ParseLockClause`, read after the pagination tail of
+the outermost native block into `SelectStmt::lock` and refused by name
+everywhere else, by both grammars. `exec::Compile` refuses a statement
+carrying it; `HandleSelect` hands a parsed one to `HandleLockingRead`
+before anything else is asked; the gates are refused at the byte of `FOR`
+and fail no transaction. A well-formed locking read was itself refused
+`NotImplemented` at this commit. The golden corpus gained 18 locking lines
+and none of its existing lines moved, which is DC-R9's pin.
+
+**Reviewed by `critics-developer`**, which found no path dropping the
+clause. Applied, all seven: a statement whose clause the native grammar
+accepted and which then failed for a trailing token was answered with the
+query grammar's refusal - the parser now says a clause was *met*
+(`met_lock_clause()`), and such a statement is answered by the grammar
+that read it; the gate cells could not tell their gate from the stage's
+own last refusal, so each now asserts the words of its own; the role's
+refusal carries its byte; three comments that named a file that does not
+exist or a neighbour that had moved; `sys.<unknown>` no longer answered as
+a catalog view; a redundant `GROUP BY` test and an unused parameter cut; a
+plans check that searched for the letter `p`. **Rejected: none.**
+
+**Suite**: 0 failed of 4766 at `eaeb26ea`'s tree (0 failed of 4765 before
+the review's fixes). Overhead not measured; measured at the milestone's
+close.
+
+### DC-S2 - the claim pass and the emit pass (2026-11-19)
+
+On worktree `dc-select-for-update` at `f6a12f5d`. `RunLockingRead` is an
+`UPDATE`'s row walk with no `SET` list, under the session's transaction:
+the relation's `IX`, the declared window or each row's unit in `U`,
+`UPDATE`'s arms in `UPDATE`'s order, the leaves fetched for read; a held
+row ends the pass with the conflict `DispatchAsync` waits on and the
+statement is run again whole; then the emit pass, through the `SELECT`'s
+own description and encoder. What the stage found and fixed in the design
+as written:
+
+- **§2 step 6's "the page's version, which no other transaction can
+  replace" is asked, not assumed**: the emit checks the row it re-reads -
+  present, not delete-marked, its writer this transaction or one the view
+  sees - and answers `Corruption` otherwise, so a breach of DC-R1 is a
+  refusal and never a row.
+- **DC-Q11 as built**: the resolve and the compile return without ending
+  the write scope, so they fail nothing; every later end is
+  `EndWriteWith`, `FinishWrite` less its `sys.relation_stats` count.
+- **The statement's view is the one `HandleSelect` took**, handed down:
+  inside an explicit transaction the boundary is taken once a statement.
+- **`sys.<unknown> FOR UPDATE`** is answered by the relation's resolve, as
+  any missing relation is.
+
+**Reviewed by `critics-developer`**, which traced every other writer of a
+claimed row, the shared hold, the re-run and the early exits and found no
+wrong or skipped row. Applied, all thirteen: **DC-R4 had no pin** - the
+walked cell ran on the text protocol, whose sink is rebuilt each run, so
+rows sent during the claim pass would have passed it; the cell is now on a
+session's own sink, which a re-run does not rewind, and asserts nothing
+has left while row 1 is claimed and row 2 held; a claimed row not found at
+the emit answered `NotFound` and is now the same `Corruption`;
+`CompileSelectList` decided `*` from an empty list, which an aggregated
+statement's is too, and takes `star()` from its caller; **a deterministic
+cell for the `READ COMMITTED` window** through the after-view seam, with
+the commit made by the other core's dispatcher
+(`LockingReadRigTest.AReadCommittedReadRefusedInItsWindowFailsItsTransactionAndKeepsTheUnit`),
+which the order had thought unreachable on one core; the cells §5 owed and
+lacked - the transaction's own version returned, a claim outliving a later
+failed statement, a cancel during a locking read, each waiter at both
+decides; three duplications cut (`EndWriteWith`, `ReadRowByKey` shared
+with `RETURNING`, `RenderedThrough` shared with `SelectBody`);
+`ProjectColumns` returns its list; the `WHERE` compiled before the select
+list, as a chain's is; a redundant scratch clear; a `sys.relation_stats`
+assertion that could not fail, cut; and the Cabin cell now shows the plain
+statement is a Cabin probe. **Rejected: none.**
+
+**Suite**: 0 failed of 4792 at `f6a12f5d`'s tree. A first run failed one
+cell, `StrictParkRigTest.AnExplicitStrictCommitParksAndPublishesAtItsSync`,
+the one-off `known-gaps.md` (Testing) records, beside another session's
+build; eight repeats of it passed and the run repeated whole passed.
+Overhead not measured; measured at the milestone's close.
+
+**Tests §5 owes that DC-S2 did not write**: a `tsan` run of the cross-core
+cell (the `bs-nightly` build's; not executed for DC), and a portal's
+`max_rows` over a locking read, which is the session's code for any
+described reply. Both are in `known-gaps.md` ("Locking reads (DC)").

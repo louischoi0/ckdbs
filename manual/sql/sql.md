@@ -1659,6 +1659,76 @@ some `n` rows of the reply. Write `ORDER BY` for a defined slice.
 KWP/1's portal suspension (`docs/spec/protocol.md`) remains the designed
 protocol-level pagination surface; only its frame codec is built.
 
+### FOR UPDATE - a read that claims its rows (DC, v3.2.0)
+
+```sql
+BEGIN;
+SELECT balance FROM accounts WHERE id = 7 FOR UPDATE;   -- returns the row, and holds it
+UPDATE accounts SET balance = 90 WHERE id = 7;           -- computed from what was read
+COMMIT;                                                  -- the claim ends here
+```
+
+Verified in `HandleLockingRead` / `RunLockingRead` and
+`tests/locking_read_test.cpp`; the contract is `docs/spec/txn.md` §5 ("A
+locking read").
+
+`SELECT <* or plain columns> FROM <one relation> [WHERE ...] FOR UPDATE`
+returns the rows an `UPDATE` with the same `WHERE` would write, and holds
+each one until the transaction commits or rolls back. While it is held,
+another transaction's `UPDATE`, `DELETE` or `SELECT ... FOR UPDATE` of that
+row **waits**, then runs against what the holder left. It is the tool for a
+read-modify-write under `READ COMMITTED`: without it, two sessions that each
+read a value in one statement and write a value computed from it in the next
+lose one of the two writes, and nothing refuses either.
+
+- **Inside a transaction only, and a `READ WRITE` one.** In autocommit it is
+  refused `NOT_IMPLEMENTED` - the claim would end with the statement - and
+  inside `BEGIN READ ONLY` it is refused `READ_ONLY_TRANSACTION`, the
+  transaction left usable. It needs the `readwrite` role.
+- **What it holds is this engine's `UPDATE` claim, which is PostgreSQL's
+  `FOR NO KEY UPDATE`, not its `FOR UPDATE`.** Other writers of the row
+  wait. **A foreign key child's `INSERT` naming the row does not**: it
+  proceeds and commits while the row is held. So do not lock a parent row
+  to keep new children out and then count its children: *[quiet-wrong] if
+  assumed - the count is stale with no error.* And a `DELETE` of the locked
+  row later in the same transaction can be refused by a child that
+  committed meanwhile.
+- **The rows are the plain statement's**, same columns, same values, in
+  tuple key order - but they are sent only once every one of them is
+  claimed, not while the statement runs, and the server holds the whole
+  reply in memory until then. Nothing bounds that reply: a
+  `SELECT ... FOR UPDATE` with no `WHERE` returns, and fences, the whole
+  relation.
+- **A row whose newest version your snapshot does not see is refused, never
+  returned stale**: `TXN_CONFLICT retryable=1`, as an `UPDATE` of it would
+  be. Under `REPEATABLE READ` that is any row committed since your
+  `BEGIN`; under `READ COMMITTED` only one committed in the instant between
+  the statement's start and its claim. **That refusal fails the
+  transaction**: `ROLLBACK` and run the transaction again. A row held by a
+  transaction that has not decided is waited for instead (a
+  `REPEATABLE READ` reader waits only if the holder has not written the
+  row).
+- **Two transactions that lock rows in opposite orders deadlock**, and one
+  of them is refused naming deadlock - lock in one order, lowest key first.
+- **Cost.** `WHERE <tuple key> = k` and `WHERE <tuple key> IN (...)` descend
+  to their rows and cost what the `UPDATE` would. **Every other predicate
+  walks the whole relation, whatever index the column has, without
+  yielding its core**, and a range on the tuple key also fences every key
+  of the range against inserts until the decide. On a `HEAP` relation no
+  statement names the key, so every locking read there is a whole walk.
+  One transaction holds at most 65,536 row claims; a read that needs more
+  is refused `RESOURCE_EXHAUSTED` (a range or a `WHERE`-less read takes one).
+- **Refused by name, at the byte**: a join, an aggregate or `GROUP BY`,
+  `ORDER BY`, `LIMIT`, `OFFSET`, expressions or `DISTINCT` in the select
+  list, a set operation, a clause inside a subquery or an `INSERT`'s
+  source, `ANALYZE`, `WAYSTONE ON` and a plan over it; `FOR SHARE`,
+  `FOR KEY SHARE`, `FOR NO KEY UPDATE`, `OF`, `NOWAIT` and `SKIP LOCKED`.
+  A `sys` view is `UNSUPPORTED`: it has no row to hold. None of these
+  refusals fails the transaction.
+- There is no unlock statement and no lock timeout setting; a holder that
+  never decides is rolled back at `txn_lifetime_ceiling_ms`.
+- Nothing is reserved: columns may still be named `for` and `update`.
+
 ### ANALYZE
 
 `ANALYZE <select>` is a dispatcher prefix, not a parser keyword: the
@@ -1912,8 +1982,9 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   `STOP`, `BACKUP STATUS` and transaction control run, and every other
   statement is refused `ERR READ_ONLY_TRANSACTION retryable=0 <verb> is not
   admitted in a READ ONLY transaction (byte <n>); ...` **without poisoning
-  it**. Its snapshot holds one of the core's 256 reader slots until it
-  ends; the 257th holder is refused `OutOfSpace`.
+  it**. **A `SELECT ... FOR UPDATE` is a write here** and is refused the
+  same way, at the byte of `FOR`. Its snapshot holds one of the core's 256
+  reader slots until it ends; the 257th holder is refused `OutOfSpace`.
 - No nested transactions, no savepoints: a second `BEGIN` is an error.
   `SET ISOLATION LEVEL` inside an open transaction is an error.
 - **A transaction commits or rolls back whole.** `SAVEPOINT`, `RELEASE`,
@@ -2118,6 +2189,14 @@ worth anything:
 Neither is retryable, and the message and its byte position are the same as
 they were before the split.
 
+- **`FOR UPDATE` is the one locking clause, on one shape.** `FOR SHARE`,
+  `FOR KEY SHARE`, `FOR NO KEY UPDATE`, `OF`, `NOWAIT`, `SKIP LOCKED`, and the
+  clause over a join, an aggregate, `ORDER BY`, `LIMIT`, `OFFSET`, a
+  query-layer form or inside a subquery are `NOT_IMPLEMENTED`, each by
+  name; over a `sys` view it is `UNSUPPORTED` (§4, "FOR UPDATE"). *`FOR
+  SHARE` is refused rather than served by a weaker lock: the engine's
+  shared row lock admits another writer's claim, so the spelling would be
+  accepted and something else enforced.*
 - **No CTEs.** `WITH` is answered by name at the statement head: a CTE is
   table-position nesting, and the inner result would have to become a
   relation with a schema. *"common table expressions (WITH) are not
@@ -2209,6 +2288,8 @@ in §7 below now carries and which both used to reach a client as a bare
 | `PURGE` of a relation carrying a Transition | `Unsupported` — `ERR UNSUPPORTED retryable=0 '<t>' carries transition '<name>', whose state history a freed key would restart; PURGE frees no key of a relation that carries a Transition (byte <n>)` |
 | Statement in a poisoned transaction | `ERR current transaction is aborted; commands are ignored until ROLLBACK` |
 | A write (`INSERT`, `UPDATE`, `DELETE`, `PURGE`, any DDL, `WAYSTONE`, ...) inside `BEGIN READ ONLY` | `ERR READ_ONLY_TRANSACTION retryable=0 <verb> is not admitted in a READ ONLY transaction (byte <n>); the transaction is unchanged - ...`; the transaction stays open and usable |
+| `SELECT ... FOR UPDATE` outside a transaction | `ERR NOT_IMPLEMENTED retryable=0 SELECT ... FOR UPDATE outside a transaction is not supported (byte <n of FOR>): ...; BEGIN first` |
+| `SELECT ... FOR UPDATE` of a row whose newest version the statement's snapshot does not see | `ERR TXN_CONFLICT retryable=1 row id=<k> was written by transaction <id>`; the transaction is failed - `ROLLBACK` and run it again |
 | `BEGIN` inside a transaction | `ERR a transaction is already open; COMMIT or ROLLBACK first` |
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
 | A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including tuple key column '<name>', or <n-1> to have it issued; got <k> (byte <b>)` |

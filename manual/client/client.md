@@ -166,6 +166,28 @@ nothing else.
   and is ended at the same lifetime ceiling, so keep it short. Over KWP,
   send `BEGIN READ ONLY` as a statement: `C_TXN_BEGIN` has no access
   byte.
+- **To write a value computed from one you read, read it with `FOR
+  UPDATE`** (`manual/sql/sql.md` §4). Under `READ COMMITTED` every
+  statement takes its own snapshot, so `SELECT balance ...` followed by
+  `UPDATE ... SET balance = <computed>` overwrites a commit that landed
+  between the two, with no error. `BEGIN; SELECT ... WHERE id = k FOR
+  UPDATE; UPDATE ...; COMMIT` holds the row from the read: another
+  session's locking read or write of it waits for your `COMMIT`, and then
+  sees your value. Where the new value is an expression over the old
+  (`SET balance = balance - 10`), one `UPDATE` needs no read at all and is
+  cheaper. What the locking read costs a client:
+  - **It can be refused `TXN_CONFLICT` with `retryable = 1`** (§4), which
+    fails the transaction: `ROLLBACK` and run the whole transaction again,
+    the read included.
+  - **It holds what it read until `COMMIT`**, so read the shared row
+    last, as you would write it last (below), and do not wait on a user
+    while holding it.
+  - **Lock by tuple key** (`WHERE id = k` or `IN (...)`). Any other
+    predicate walks the whole relation.
+  - It is a `SELECT` on the wire - a description, rows, `SELECT` as the
+    completion - but its rows arrive together at the end, not as the
+    statement runs.
+  - It does not keep a foreign key's children out of the row it holds.
 - A `recv()` of zero bytes means the server closed the socket (after
   `STOP`, or a crash) — reconnect, do not spin.
 - **Write the row many transactions share last.** An `UPDATE` holds its
