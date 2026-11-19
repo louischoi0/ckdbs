@@ -872,6 +872,9 @@ private:
     exec::AdminPlans admin_plans_;
     // `ADVISE PLAN`'s rows (`exec/plan_advice.hpp`, CX-S7): memory only.
     exec::PlanAdvices plan_advices_;
+    // `sys.indexes`' usage counts (`stats/index_stats.hpp`, DF-S3): one
+    // store every core's reads fold into, memory only, this instance's.
+    stats::IndexStats index_stats_;
     // Whether the persisting step's last call failed: its warning is logged
     // when a run of failures starts, not once a second through it.
     bool plans_persist_failing_ = false;

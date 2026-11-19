@@ -1556,6 +1556,7 @@ private:
           if (!first.ok()) return first.status();
           NoteFetch();
           ++step_stats.pages_fetched;
+          ++step_stats.index_walks;
 
           return index::IndexVisitFrom(
             store_, first.value(), layout, storage::PageAccess::kRead,
@@ -3019,6 +3020,7 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     index_entries_scanned += other.index_entries_scanned;
     index_entries_filtered += other.index_entries_filtered;
     index_rows_resolved += other.index_rows_resolved;
+    index_walks += other.index_walks;
     cabin_hits += other.cabin_hits;
     cabin_misses += other.cabin_misses;
     cabin_entries_served += other.cabin_entries_served;

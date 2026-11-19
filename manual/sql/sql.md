@@ -2107,10 +2107,34 @@ newline protocol.
 - `sys.refusal_stats`: how statements were refused - one row per core and
   error code (`TXN_CONFLICT`, `ALREADY_EXISTS`, ...), its `count` and
   `last_seen`.
+- `sys.txn_histogram`: how long explicit transactions live, `BEGIN` to
+  their end - one row per core, `access` (`read write` or `read only`) and
+  non-empty bucket, in the same buckets. An autocommit statement is not a
+  row here; it is in `sys.statement_histogram`.
 - `sys.relation_stats`' activity columns: `inserts`, `updates`, `deletes`,
   `purged` - the rows each relation's write statements reported since the
   instance started (a statement counts when it answers, so rows a
-  transaction later rolls back stay counted).
+  transaction later rolls back stay counted) - and its lock columns:
+  `lock_waits`, `lock_wait_us`, `lock_deadlocks`, `lock_fault_nets`, the
+  lock waits on the relation since the instance started, which keep
+  counting after `sys.lock_waits` has overwritten the rows.
+- `sys.relation_stats`' space columns: `est_delete_marked`, an estimate
+  of the rows a `DELETE` marked and no `PURGE` has retired - sampled, ten
+  seconds old or more (the more relations the engine samples, the older),
+  and NULL for a relation no join has made the engine sample;
+  and `leaf_divisions` and `leaf_compactions`, how often the relation's
+  leaves divided or were compacted in place since the server process
+  started. A
+  table loaded in rising key order grows by appending leaves and reads 0
+  divisions; keys arriving inside full leaves divide them. `sys.indexes`
+  has `leaf_divisions` too.
+- `sys.indexes`' usage columns: `probes` and `ranges` (the times an
+  equality or a range read walked the index), `entries_scanned`,
+  `rows_resolved` and `last_used` (NULL while no read has used it). An
+  index that stays at 0 is one no `SELECT` has read through - though a
+  unique index is still checked by every write, and a foreign key's checks
+  and a write's own maintenance are not counted either. `REINDEX` starts an
+  index's counts again.
 - `sys.lock_waits`: one row per lock wait, with what waited on what, for
   how long, and how it ended (`granted`, `deadlock`, `fault_net`,
   `cancelled`).
@@ -2118,11 +2142,37 @@ newline protocol.
   `pages_flushed`, the waits on the log and on the data file, `resumed`, and
   `outcome` (`completed`, `failed`).
 
-These six are kept in memory: a restart or a restore empties them. Each is
+These seven are kept in memory: a restart or a restore empties them. Each is
 bounded per core, and the rows it gives up are counted in `sys.meta`
-(`statement_stats_dropped`, `relation_stats_dropped`, `lock_waits_*`,
-`checkpoints_*`); `sys.refusal_stats` is bounded by the error codes and
-gives up none.
+(`statement_stats_dropped`, `relation_stats_dropped`, `index_stats_dropped`,
+`leaf_stats_dropped`, `lock_waits_*`,
+`checkpoints_*`); `sys.refusal_stats` is bounded by the error codes,
+`sys.txn_histogram` by its buckets, and neither gives up any.
+
+**How transactions ended, and what holds the read horizon**, are fields of
+`sys.meta`'s `txn` section:
+
+- Six counts of the answering core's read-write transactions since the
+  instance started: `commits`; `rollbacks` (your `ROLLBACK`);
+  `ceiling_rollbacks` (rolled back at `txn_lifetime_ceiling_ms`);
+  `close_rollbacks` (the connection went away); `aborts` (the engine rolled
+  it back because a statement or a commit failed); and `wait_aborts` (an
+  autocommit write that had written nothing gave its transaction up to wait
+  for a lock or to run again - one statement can make several, and it is
+  not a failure). A `READ ONLY` transaction is in none of them.
+- `read_horizon_lsn`, `read_horizon_core` and `read_horizon_age_us`: the
+  oldest snapshot any open read view holds on the instance, the core it is
+  held on, and how long ago that view was taken. An old horizon is what
+  keeps `PURGE` and the undo log from reclaiming. The statement that reads
+  them holds a view of its own while it runs, so with nothing older open
+  you read your own: your core, and an age near 0.
+
+To find the session holding the horizon, read `sys.session_state`:
+`txn_age_us` is how long its explicit transaction has been open and
+`view_age_us` how old the read view it holds is - NULL when it holds none.
+Under READ COMMITTED a transaction takes a new view at each statement, so
+an idle one holds its last statement's; under REPEATABLE READ it holds the
+view its `BEGIN` took.
 
 `SELECT ... FROM sys.<view>` admits a projection, `*`, a qualified column,
 `WHERE column op literal` and `column BETWEEN literal AND literal`,

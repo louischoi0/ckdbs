@@ -1,0 +1,21 @@
+2026-11-19T08:26:53Z f lifetime 1 start
+2026-11-19T08:27:42Z f lifetime 1 exit 0
+2026-11-19T08:27:42Z f lifetime 2 start
+2026-11-19T08:28:31Z f lifetime 2 exit 0
+2026-11-19T08:28:31Z f lifetime 3 start
+2026-11-19T08:30:16Z f lifetime 3 exit 0
+2026-11-19T08:30:16Z f lifetime 4 start
+2026-11-19T08:31:18Z f lifetime 4 exit 0
+2026-11-19T08:31:18Z f lifetime 5 start
+2026-11-19T08:32:08Z f lifetime 5 exit 0
+2026-11-19T08:32:08Z f lifetime 6 start
+2026-11-19T08:33:52Z f lifetime 6 exit 0
+2026-11-19T08:33:52Z f lifetime 7 start
+2026-11-19T08:35:39Z f lifetime 7 exit 0
+2026-11-19T08:35:39Z f lifetime 8 start
+2026-11-19T08:37:31Z f lifetime 8 exit 0
+2026-11-19T08:37:31Z f lifetime 9 start
+2026-11-19T08:38:31Z f lifetime 9 exit 0
+2026-11-19T08:38:31Z f lifetime 10 start
+2026-11-19T08:39:57Z f lifetime 10 exit 0
+2026-11-19T08:39:57Z f ALLDONE

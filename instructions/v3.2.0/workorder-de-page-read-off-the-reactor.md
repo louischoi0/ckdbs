@@ -3,9 +3,10 @@
 Status: **CLOSED NARROW 2026-11-19 on worktree
 `de-page-read-off-the-reactor`, on the operator's standing go-ahead
 (go-ahead-achieving-milestone), and landed on `main` the same day on the
-operator's word "push no verify" (`raft-marks-2026-11-19.md` §9): a `--no-ff`
-merge of the work branch, its code at `f06bd733`, pushed with `--no-verify`;
-not tagged.** Opened
+operator's word "push no verify" (`raft-marks-2026-11-19.md` §12): a `--no-ff`
+merge of the work branch pushed with `--no-verify`, DE's own code at
+`f06bd733`, after `origin/main` - by then DF's merge, `135d2570` - was
+merged into the branch (§7, "The landing"); not tagged.** Opened
 the same day from `35086008` (`v3.4.13-19-g35086008`, since tagged
 `v3.4.14`); DE-S0 to DE-S3 landed (§7). **Narrow** is DE-Q7 (a): a read
 that would wait leaves its reactor for a top-level `SELECT`'s descent and
@@ -19,7 +20,7 @@ on worktree `db-fpi-cadence-dc-for-update` from `a4d2fb3b`
 (`raft-marks-2026-11-18.md` §25). **Exploratory by CLA's proposal, not by
 the operator's word** (DE-Q0). **No DE-Q item is the operator's own mark**:
 DE-Q0..Q6 are each adopted (a), as CLA proposed them, on the operator's
-standing go-ahead of 2026-11-19 (`raft-marks-2026-11-19.md` §8), and so is
+standing go-ahead of 2026-11-19 (`raft-marks-2026-11-19.md` §11), and so is
 every item a stage raises (§4, DE-Q7 on).
 
 **DE built nothing until DE-S0 had measured its premise**, and one of its
@@ -284,7 +285,7 @@ Binding once DE opens, whatever candidate is marked.
 
 **None is the operator's own mark.** (a) is CLA's proposal in each, and each
 is **adopted (a) on the operator's standing go-ahead of 2026-11-19
-(go-ahead-achieving-milestone)**, recorded in `raft-marks-2026-11-19.md` §8:
+(go-ahead-achieving-milestone)**, recorded in `raft-marks-2026-11-19.md` §11:
 DE-Q0..Q6 at the opening, DE-Q7..Q14 as DE-S0 and its review raised them,
 DE-Q15 as DE-S1's review did (§7), each written
 here with its options before it was adopted. An option not taken stays open
@@ -412,7 +413,7 @@ against `sched.md` §9's invariant 1; entered in `known-gaps.md` under
 
 On worktree `de-page-read-off-the-reactor` from `35086008`
 (`v3.4.13-19-g35086008`), no engine code. Opened on the operator's standing
-go-ahead (go-ahead-achieving-milestone, `raft-marks-2026-11-19.md` §8):
+go-ahead (go-ahead-achieving-milestone, `raft-marks-2026-11-19.md` §11):
 DE-Q0..Q6 adopted (a) as CLA proposed them, none the operator's own mark.
 
 **The census**, read at `35086008` by two read-only passes and spot-checked
@@ -900,3 +901,17 @@ DE-Q15, each (a) - DE-Q7 (the ruling DE-Q1 (a) names the operator's),
 DE-Q9 `[quiet-wrong]` as revised at DE-S0's review, DE-Q10 `[quiet-wrong]`,
 DE-Q15 as amended at DE-S2's. Every option not taken stays open to the
 operator's own mark.
+
+### The landing, 2026-11-19
+
+On the operator's word "push no verify" (`raft-marks-2026-11-19.md` §12).
+A first push, of a merge onto `origin/main` at `734484ca`, was refused by
+the remote: DF's merge `135d2570` had landed between the fetch and the
+push. `origin/main` was merged into the work branch. DF and DE change
+eleven source and test files in common and none conflicted; the two files
+that did are the day's marks and the index, resolved by keeping both
+records, DE's two sections renumbered §11 and §12. The merged tree was
+built and the suite run on it before the push, as a check of the merge:
+0 failed of 4846. **The merged tree was not measured**: DE's close priced DE against
+`35086008`, which has none of DF-S2 to DF-S5, and no cell has run the two
+together. Pushed with the hook skipped; not tagged.

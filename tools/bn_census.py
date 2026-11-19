@@ -8,7 +8,7 @@
                  --out OUT.json
 
 `instructions/v3.0.0/workorder-bn-opt-read-update-path.md` §3 (BN-S1) and §5
-(the close). Per run a fresh server per binary (`cores = 1`,
+(the close). Per run a fresh server per binary (`cores = 1` unless `--cores`,
 `durability = relaxed`, a fresh data file), the same relations loaded into
 each, then every shape below over both driver paths:
 
@@ -19,7 +19,8 @@ each, then every shape below over both driver paths:
 
 The shapes: `noop` (a C_PING frame, answered by the session without the
 dispatcher - the request path alone), `ping` (SHOW META, the BJ-era floor),
-point SELECT, point UPDATE (literal, `v + 1`, a row whose `varchar` cell
+point SELECT, `select-index` (an equality a secondary index serves, one row;
+DF-Q14 (a)), point UPDATE (literal, `v + 1`, a row whose `varchar` cell
 spills and is not assigned, and one assigning a spilled value), INSERT,
 DELETE by pk (its rows inserted untimed before the arm), an every-row UPDATE
 of `--rows` rows, and an unindexed equality over `--scan-rows`.
@@ -210,6 +211,9 @@ def shapes(a):
         ("noop", None, lambda q: [], "", "point"),
         ("ping", "SHOW META", lambda q: [], "", "point"),
         ("select-pk", "SELECT * FROM t WHERE id = ?", lambda q: [i64(key(q))], "SELECT", "point"),
+        # A read a secondary index serves (DF-Q14 (a)): one entry, one row.
+        ("select-index", "SELECT * FROM x WHERE v = ?", lambda q: [i64(key(q))], "SELECT",
+         "point"),
         ("update-lit", "UPDATE t SET v = ? WHERE id = ?",
          lambda q: [i64(q), i64(key(q))], "UPDATED 1", "point"),
         ("update-expr", "UPDATE t SET v = v + 1 WHERE id = ?",
@@ -298,6 +302,8 @@ def setup(a, conn):
              lambda i: f"({i}, {i}, '{SPILL}')")
     must(conn, "CREATE TABLE i (id int64, v int64, w int64) BTREE", "CREATE")
     must(conn, "CREATE TABLE d (id int64, v int64, w int64) BTREE", "CREATE")
+    load(conn, "x", a.rows)
+    must(conn, "CREATE INDEX x_v ON x (v)", "CREATE")
 
 
 def preload_deletes(conn, first, count):
@@ -621,6 +627,13 @@ def main():
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--port", type=int, default=31931)
     ap.add_argument("--pin-server", default="2")
+    ap.add_argument("--cores", type=int, default=1,
+                    help="the server's `cores` (default 1, BN's cell). Above 1 give "
+                         "--pin-server a CPU list wide enough for every reactor, or "
+                         "they share one CPU; the driver's one connection runs on one "
+                         "core, and the server's CPU is summed over its threads")
+    ap.add_argument("--reactor-cpus",
+                    help="the server's `reactor_cpus` key, a reactor to a CPU each")
     ap.add_argument("--pin-driver", default="4")
     ap.add_argument("--rows", type=int, default=1000)
     ap.add_argument("--scan-rows", type=int, default=10000)

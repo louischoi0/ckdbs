@@ -1,0 +1,368 @@
+# DF close, with the remedy: the cheaper session sample buys nothing resolvable on a point statement, and all of DF is still not resolved against the 0.5 µs bar
+
+On worktree `da-q8-memory-bound-key` (branch `worktree-df-statistics-coverage`)
+at `9f588fa2` (`v3.4.13-15-g9f588fa2`), the remedy commit - a statement's two
+session cost samples (DF-S1's `SampleSessionCost`, at the head and the end of
+every statement) no longer walk the wait-event registry by class: each wait's
+booking adds to a per-session class total and the sample copies a dozen words;
+`SnapshotFor` returns the autocommit snapshot without a move again - changes a
+point statement's server CPU, against its parent `ec5ddfe8` (`v3.4.13-14-gec5ddfe8`,
+B), by **+0.03 µs [-0.03, +0.08] on a tuple key `SELECT`, +0.02 µs
+[-0.02, +0.06] on an index-served `SELECT`, +0.04 µs [+0.01, +0.09] on an
+`UPDATE` and -0.08 µs [-0.11, -0.03] on an `INSERT`** (both driver paths
+pooled; `cores = 1`, `relaxed`, 1,000 rows, ten lifetimes). **On the reads the
+remedy is at zero**: the interval of C - B on a tuple key read excludes a
+saving larger than about 0.03 µs. The `INSERT` is lower by 0.08 µs and the
+`UPDATE` higher by 0.04 µs, of the size of the floor, and they point in
+opposite directions.
+
+**Verdict against DF-Q10 (a)'s bar** (all of DF at most 0.5 µs of server CPU
+a point statement at `cores = 1`): **not resolved, the central estimate for a
+point read over it.** DF-S1's +0.44 µs [+0.27, +0.54]
+(`bench/v3.4.13/results-cx-close-bisect-v3.4.13-1-g11f72ce9.md`) plus this
+run's C - A on a tuple key read, +0.16 µs [+0.13, +0.20], is about +0.60 µs,
+naive interval +0.40 to +0.74 µs, which straddles the bar; the remedy did not
+move it, because C - B is at zero. An index-served read costs C - A = +0.36 µs
+from DF-S2 to DF-S4 and the remedy together, 72 % of the bar before DF-S1 is
+added. Writes: C - A is -0.03 µs (`UPDATE`) and +0.02 µs (`INSERT`), DF-S1's
+write share still unmeasured, so the bar is not decided for a write. Nothing is
+rounded into a pass.
+
+This file is the second of two (the first: `bench/v3.4.13/results-df-close-v3.4.13-14-gec5ddfe8.md`,
+which measured A and B). Its method, host and caveats are that file's and are
+not repeated beyond what a reader needs; the differences are stated here.
+Raw output: `archive/df-close-remedy-v3.4.13-15-g9f588fa2/`; `tools/bn_census.py`
+unmodified (git blob `a6aee7135c964c75a01a695627055ef95d54b5b7`), `life4.sh` the
+four-arm wrapper, `an4.py` the analysis every table here is generated from
+(`an_r4.txt`), `build.py` the build.
+
+## Run stamp
+
+| Item | Value |
+|---|---|
+| Executed | 2026-11-19, builds 07:43 to 07:44:27 UTC; ten lifetimes 07:44:32 to 07:52:46 UTC |
+| Branch / worktree | `worktree-df-statistics-coverage`, worktree `da-q8-memory-bound-key`, tree clean at `9f588fa2` |
+| A | `8e7c820f` (`v3.4.13-10-g8e7c820f`), the baseline; sha256 `ab5b9ee7cc7875bbe199ee402214b8e12176c8a00f909eb6e0ca1aae4cba9437` (the first file's binary, reused) |
+| A' | A's binary again, a second server of it in every lifetime: the floor |
+| B | `ec5ddfe8` (`v3.4.13-14-gec5ddfe8`), sha256 `35bac562e5bfcc23614cd70aa35e9fda44359b52a5fa3f6eb9b8024fb4021604` (reused) |
+| C | `9f588fa2` (`v3.4.13-15-g9f588fa2`), the remedy; sha256 `952f551d48274bf705facaccffe0f5407f45fb6c4ea4b45475fe0e1f5c90243c`, built 07:44:27 UTC from a `git archive` export under `/home/louis/dfclose/src9f588fa2`, Release, tests and sim off, 86 s; newer than its commit |
+| Provenance | every server started from a copy in `/home/louis/dfclose/run/` (`kds_server_A`, `_B`, `_C`), hashed after the copy |
+| Device | data files and WAL under `/home/louis/dfclose/run/wd_r4_*/` on `/dev/nvme0n1p1`, ext4; not tmpfs |
+| Host | Intel Xeon Platinum 8581C @ 2.10 GHz, 8 CPUs, Linux 6.12.116+deb13-cloud-amd64, no PMU; server on CPU 3, driver on CPU 5 (SMT siblings 7 and 1 watched) |
+| Server config | `cores = 1`, `durability = relaxed`, `buffer_pool_frames = 65536`, `log_level = warn`, every other key default; port 32500 |
+| Host load | 1-minute load 0.53 to 6.08 at the cells' arm records; 80 of 80 cells clean; the process-level gate never held (0 holds); the cell gate's waits total 162 s, which is the driver's own 2 s window per cell (80 cells) |
+
+## Method
+
+The first file's design with a fourth arm: ten lifetimes, each four fresh
+servers (A, A', B, C), fresh data files, arms interleaved in blocks of 500
+statements (24 blocks, 12,000 statements an arm, cell and lifetime), the
+order of a block rotating by one server per block and the order of the
+`--arm` flags by `lifetime mod 4`. Cells `select-pk`, `select-index`,
+`update-lit`, `insert`, each `literal` and `prepared`; one connection, 1,000
+rows (`--rows 1000`; the point statements do not scale with rows, the first
+file's sweep at 200 and 10,000 rows is the evidence and is not repeated).
+A delta is the median over blocks of the block-paired difference, pooled over
+the lifetimes with a 2,000-resample bootstrap over blocks; A' - A is the floor.
+
+```
+python3 tools/bn_census.py --arm A=<run>/kds_server_A --arm A2=<run>/kds_server_A \
+  --arm B=<run>/kds_server_B --arm C=<run>/kds_server_C --workdir <run>/wd_r4_i --port 32500 \
+  --pin-server 3 --pin-driver 5 --cores 1 --rows 1000 --scan-rows 1000 --ops 12000 --blocks 24 \
+  --runs 1 --only select-pk,select-index,update-lit,insert --cell-quiet-pct 15 --cell-quiet-wait 60 \
+  --cell-retries 2 --cell-clean-pct 25 --out <run>/out_r4_i.json
+```
+(`life4.sh r4 1 10 12000 24 select-pk,select-index,update-lit,insert 1000 32500 5 3`; `A2` is the driver's label for A'.) 0 bad replies over every arm, cell and lifetime.
+
+## Result: the pooled deltas
+
+Server CPU a statement, pooled over ten lifetimes; each cell is the median of
+the block-paired deltas [95 % bootstrap over blocks] and the number of
+lifetime medians above zero:
+
+| Cell | A server CPU | B - A | C - A | C - B | A' - A (floor) | lifetime medians of A' - A: range | blocks C < B | C - B as share of A |
+|---|---|---|---|---|---|---|---|---|
+| select-pk literal | 20.70 us | +0.13 us [+0.07, +0.20], 8 of 10 | +0.21 us [+0.15, +0.28], 9 of 10 | +0.04 us [-0.03, +0.12], 4 of 10 | -0.05 us [-0.10, +0.01], 2 of 10 | -0.23..+0.07 us | 114 of 240 | +0.17 % |
+| select-pk prepared | 19.97 us | +0.09 us [+0.05, +0.14], 8 of 10 | +0.13 us [+0.08, +0.16], 9 of 10 | +0.01 us [-0.05, +0.09], 5 of 10 | -0.04 us [-0.09, +0.02], 4 of 10 | -0.19..+0.13 us | 115 of 240 | +0.05 % |
+| select-index literal | 23.72 us | +0.40 us [+0.34, +0.45], 10 of 10 | +0.39 us [+0.34, +0.46], 10 of 10 | +0.00 us [-0.06, +0.09], 5 of 10 | -0.04 us [-0.10, +0.02], 3 of 10 | -0.32..+0.13 us | 119 of 240 | +0.02 % |
+| select-index prepared | 23.08 us | +0.30 us [+0.23, +0.39], 10 of 10 | +0.32 us [+0.28, +0.38], 10 of 10 | +0.03 us [-0.02, +0.06], 4 of 10 | -0.06 us [-0.10, -0.00], 4 of 10 | -0.22..+0.06 us | 112 of 240 | +0.11 % |
+| update-lit literal | 20.75 us | -0.01 us [-0.06, +0.06], 7 of 10 | +0.00 us [-0.06, +0.05], 5 of 10 | -0.01 us [-0.05, +0.04], 5 of 10 | -0.08 us [-0.12, -0.02], 2 of 10 | -0.29..+0.05 us | 121 of 240 | -0.05 % |
+| update-lit prepared | 20.28 us | -0.13 us [-0.20, -0.09], 1 of 10 | -0.04 us [-0.09, +0.01], 4 of 10 | +0.10 us [+0.04, +0.18], 8 of 10 | -0.11 us [-0.17, -0.06], 1 of 10 | -0.34..+0.05 us | 89 of 240 | +0.49 % |
+| insert literal | 19.53 us | +0.11 us [+0.07, +0.16], 8 of 10 | +0.00 us [-0.05, +0.05], 4 of 10 | -0.11 us [-0.16, -0.05], 1 of 10 | -0.08 us [-0.13, -0.04], 3 of 10 | -0.23..+0.06 us | 144 of 240 | -0.56 % |
+| insert prepared | 18.78 us | +0.03 us [+0.00, +0.09], 6 of 10 | +0.03 us [-0.05, +0.10], 6 of 10 | -0.04 us [-0.09, +0.02], 3 of 10 | -0.03 us [-0.09, +0.00], 4 of 10 | -0.15..+0.11 us | 130 of 240 | -0.21 % |
+
+By shape, the two paths pooled (the lifetime-median column is for C - B):
+
+| Shape | A server CPU | B - A | C - A | C - B | A' - A (floor) | lifetime-median C - B: median [95 % bootstrap over lifetimes], range, lifetimes above 0 | blocks C < B |
+|---|---|---|---|---|---|---|---|
+| select-pk | 20.34 us | +0.11 us [+0.08, +0.14] | +0.16 us [+0.13, +0.20] | +0.03 us [-0.03, +0.08] | -0.04 us [-0.08, +0.00] | -0.00 us [-0.09, +0.17], -0.12..+0.33, 5 of 10 | 229 of 480 |
+| select-index | 23.40 us | +0.35 us [+0.30, +0.40] | +0.36 us [+0.31, +0.41] | +0.02 us [-0.02, +0.06] | -0.05 us [-0.09, -0.02] | -0.02 us [-0.05, +0.17], -0.12..+0.21, 5 of 10 | 231 of 480 |
+| update-lit | 20.51 us | -0.08 us [-0.11, -0.05] | -0.03 us [-0.06, +0.01] | +0.04 us [+0.01, +0.09] | -0.09 us [-0.14, -0.06] | +0.06 us [-0.03, +0.12], -0.11..+0.22, 7 of 10 | 210 of 480 |
+| insert | 19.16 us | +0.08 us [+0.03, +0.11] | +0.02 us [-0.04, +0.05] | -0.08 us [-0.11, -0.03] | -0.07 us [-0.10, -0.02] | -0.09 us [-0.16, +0.02], -0.25..+0.16, 2 of 10 | 274 of 480 |
+
+**The remedy's reads are at zero.** C - B is +0.04, +0.01, +0.00 and +0.03 µs
+on the four read cells, every interval spanning zero and C below B in 112 to
+119 of 240 blocks, no better than a coin. If the sample walk it removed cost
+0.1 to 0.3 µs (the bisect's plausible figure), it was not on this path at that
+size, or its replacement costs as much. **The writes move by the floor**: `update-lit prepared`
+C - B +0.10 µs [+0.04, +0.18] (8 of 10 lifetimes up) and `insert literal` -0.11
+µs [-0.16, -0.05] (1 of 10 up) are the two cells with an interval off zero, in
+opposite directions, and A' - A on the same cells is -0.11 and -0.08 µs;
+with the pooled floor at -0.03 to -0.11 µs on write cells in this run, they
+are not a finding.
+
+**B - A replicates.** The first file's B - A against this run's, the same
+engine states and the same arm A and B binaries:
+
+| Cell | first file B - A | this run B - A | difference |
+|---|---|---|---|
+| select-pk literal | +0.20 µs [+0.11, +0.29] | +0.13 µs [+0.07, +0.20] | -0.07 µs |
+| select-pk prepared | +0.16 µs [+0.09, +0.21] | +0.09 µs [+0.05, +0.14] | -0.07 µs |
+| select-index literal | +0.35 µs [+0.29, +0.41] | +0.40 µs [+0.34, +0.45] | +0.05 µs |
+| select-index prepared | +0.32 µs [+0.27, +0.38] | +0.30 µs [+0.23, +0.39] | -0.02 µs |
+| update-lit literal | +0.02 µs [-0.04, +0.08] | -0.01 µs [-0.06, +0.06] | -0.03 µs |
+| update-lit prepared | -0.06 µs [-0.12, +0.01] | -0.13 µs [-0.20, -0.09] | -0.07 µs |
+| insert literal | +0.09 µs [+0.03, +0.16] | +0.11 µs [+0.07, +0.16] | +0.02 µs |
+| insert prepared | +0.05 µs [-0.02, +0.12] | +0.03 µs [+0.00, +0.09] | -0.02 µs |
+
+All eight agree in sign and within 0.07 µs, the size of the floor of a pooled
+estimate; the `select-index` figure replicates (+0.35 µs both runs, both paths
+pooled) and the tuple key read is +0.11 µs here against +0.17 µs there, with
+overlapping intervals. The B - A of this run sits lower by about 0.05 µs on
+the tuple key read, which is a lifetime-set difference and is the reason for
+quoting C - A with it and not against the first file's.
+
+### Every lifetime
+
+#### select-pk / literal
+
+| Lifetime | A | A' | B | C | B - A | C - A | C - B | A' - A (floor) | blocks C < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 20.90 us | 20.87 us | 21.21 us | 21.16 us | +0.24 us | +0.24 us | -0.09 us | +0.07 us | 16 of 24 | yes (1) |
+| 2 | 20.50 us | 20.60 us | 20.66 us | 20.88 us | +0.23 us | +0.24 us | +0.08 us | +0.02 us | 11 of 24 | yes (1) |
+| 3 | 20.77 us | 21.22 us | 21.53 us | 22.03 us | +0.20 us | +0.47 us | +0.37 us | -0.09 us | 4 of 24 | yes (1) |
+| 4 | 20.70 us | 20.71 us | 20.81 us | 20.78 us | +0.14 us | +0.09 us | -0.08 us | -0.00 us | 13 of 24 | yes (1) |
+| 5 | 20.66 us | 20.45 us | 20.80 us | 20.89 us | +0.05 us | +0.15 us | -0.04 us | -0.23 us | 13 of 24 | yes (1) |
+| 6 | 20.68 us | 20.78 us | 20.82 us | 20.96 us | -0.03 us | +0.22 us | +0.24 us | -0.02 us | 5 of 24 | yes (1) |
+| 7 | 20.85 us | 20.79 us | 21.09 us | 21.17 us | +0.21 us | +0.27 us | -0.05 us | -0.00 us | 13 of 24 | yes (1) |
+| 8 | 20.74 us | 20.69 us | 20.82 us | 20.95 us | +0.18 us | +0.21 us | +0.12 us | -0.10 us | 11 of 24 | yes (1) |
+| 9 | 20.55 us | 20.48 us | 20.60 us | 20.75 us | +0.00 us | +0.03 us | -0.03 us | -0.03 us | 13 of 24 | yes (1) |
+| 10 | 20.64 us | 20.63 us | 20.77 us | 20.76 us | +0.16 us | -0.01 us | -0.18 us | -0.06 us | 15 of 24 | yes (1) |
+| **pooled** | 20.70 us | 20.72 us | 20.91 us | 21.03 us | **+0.13 us** [+0.07, +0.20] | **+0.21 us** [+0.15, +0.28] | **+0.04 us** [-0.03, +0.12] | **-0.05 us** [-0.10, +0.01] | 114 of 240 | 10 clean |
+
+#### select-pk / prepared
+
+| Lifetime | A | A' | B | C | B - A | C - A | C - B | A' - A (floor) | blocks C < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 20.38 us | 20.40 us | 20.93 us | 20.37 us | +0.16 us | +0.03 us | -0.08 us | -0.17 us | 14 of 24 | yes (1) |
+| 2 | 19.88 us | 19.74 us | 19.99 us | 19.97 us | +0.07 us | +0.08 us | +0.03 us | -0.13 us | 11 of 24 | yes (1) |
+| 3 | 20.11 us | 20.19 us | 20.23 us | 20.58 us | +0.13 us | +0.37 us | +0.29 us | +0.10 us | 6 of 24 | yes (1) |
+| 4 | 19.99 us | 19.81 us | 20.20 us | 19.96 us | +0.18 us | +0.06 us | -0.16 us | -0.19 us | 18 of 24 | yes (1) |
+| 5 | 20.03 us | 20.01 us | 20.13 us | 19.95 us | +0.11 us | +0.00 us | -0.09 us | -0.02 us | 16 of 24 | yes (1) |
+| 6 | 19.89 us | 19.93 us | 19.82 us | 20.14 us | -0.09 us | +0.14 us | +0.20 us | +0.09 us | 6 of 24 | yes (1) |
+| 7 | 19.80 us | 19.70 us | 19.99 us | 19.94 us | +0.18 us | +0.15 us | -0.10 us | -0.12 us | 15 of 24 | yes (1) |
+| 8 | 19.79 us | 19.93 us | 19.95 us | 20.10 us | +0.10 us | +0.24 us | +0.11 us | +0.04 us | 9 of 24 | yes (1) |
+| 9 | 19.79 us | 20.13 us | 19.92 us | 20.01 us | -0.05 us | +0.21 us | +0.27 us | +0.13 us | 6 of 24 | yes (1) |
+| 10 | 20.07 us | 20.03 us | 20.16 us | 20.13 us | +0.22 us | +0.07 us | -0.06 us | -0.11 us | 14 of 24 | yes (1) |
+| **pooled** | 19.97 us | 19.99 us | 20.13 us | 20.11 us | **+0.09 us** [+0.05, +0.14] | **+0.13 us** [+0.08, +0.16] | **+0.01 us** [-0.05, +0.09] | **-0.04 us** [-0.09, +0.02] | 115 of 240 | 10 clean |
+
+#### select-index / literal
+
+| Lifetime | A | A' | B | C | B - A | C - A | C - B | A' - A (floor) | blocks C < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 23.86 us | 23.68 us | 24.30 us | 24.63 us | +0.44 us | +0.76 us | +0.40 us | -0.12 us | 5 of 24 | yes (1) |
+| 2 | 23.58 us | 23.52 us | 23.91 us | 23.85 us | +0.41 us | +0.36 us | -0.04 us | +0.08 us | 13 of 24 | yes (1) |
+| 3 | 23.61 us | 23.88 us | 23.99 us | 24.33 us | +0.35 us | +0.53 us | +0.19 us | +0.13 us | 7 of 24 | yes (1) |
+| 4 | 24.12 us | 23.87 us | 25.14 us | 25.15 us | +0.54 us | +0.23 us | -0.11 us | -0.09 us | 16 of 24 | yes (1) |
+| 5 | 23.79 us | 23.82 us | 24.23 us | 24.17 us | +0.40 us | +0.52 us | -0.01 us | -0.05 us | 12 of 24 | yes (1) |
+| 6 | 23.43 us | 23.50 us | 23.76 us | 23.79 us | +0.22 us | +0.34 us | +0.08 us | +0.02 us | 8 of 24 | yes (1) |
+| 7 | 23.76 us | 23.49 us | 24.06 us | 23.95 us | +0.30 us | +0.30 us | -0.13 us | -0.32 us | 14 of 24 | yes (1) |
+| 8 | 23.68 us | 23.43 us | 24.03 us | 23.99 us | +0.45 us | +0.48 us | +0.01 us | -0.19 us | 12 of 24 | yes (1) |
+| 9 | 23.61 us | 23.60 us | 23.89 us | 24.08 us | +0.36 us | +0.38 us | +0.02 us | +0.00 us | 12 of 24 | yes (1) |
+| 10 | 23.75 us | 23.64 us | 24.27 us | 24.11 us | +0.42 us | +0.20 us | -0.22 us | -0.15 us | 20 of 24 | yes (1) |
+| **pooled** | 23.72 us | 23.64 us | 24.16 us | 24.20 us | **+0.40 us** [+0.34, +0.45] | **+0.39 us** [+0.34, +0.46] | **+0.00 us** [-0.06, +0.09] | **-0.04 us** [-0.10, +0.02] | 119 of 240 | 10 clean |
+
+#### select-index / prepared
+
+| Lifetime | A | A' | B | C | B - A | C - A | C - B | A' - A (floor) | blocks C < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 23.49 us | 23.11 us | 23.66 us | 23.66 us | +0.29 us | +0.39 us | +0.00 us | -0.19 us | 12 of 24 | yes (1) |
+| 2 | 22.91 us | 23.05 us | 23.12 us | 23.39 us | +0.19 us | +0.21 us | +0.05 us | +0.04 us | 10 of 24 | yes (1) |
+| 3 | 23.15 us | 23.11 us | 23.33 us | 23.55 us | +0.17 us | +0.45 us | +0.22 us | -0.07 us | 7 of 24 | yes (1) |
+| 4 | 23.00 us | 23.11 us | 23.41 us | 23.18 us | +0.54 us | +0.29 us | +0.00 us | +0.05 us | 12 of 24 | yes (1) |
+| 5 | 23.21 us | 23.29 us | 23.72 us | 23.46 us | +0.41 us | +0.40 us | +0.04 us | +0.04 us | 11 of 24 | yes (1) |
+| 6 | 23.16 us | 23.01 us | 23.25 us | 23.52 us | +0.06 us | +0.45 us | +0.25 us | -0.11 us | 5 of 24 | yes (1) |
+| 7 | 23.07 us | 22.94 us | 23.36 us | 23.24 us | +0.29 us | +0.16 us | -0.11 us | -0.22 us | 14 of 24 | yes (1) |
+| 8 | 23.07 us | 22.90 us | 23.55 us | 23.40 us | +0.42 us | +0.38 us | -0.10 us | -0.15 us | 14 of 24 | yes (1) |
+| 9 | 22.73 us | 22.80 us | 23.31 us | 23.09 us | +0.44 us | +0.34 us | -0.10 us | +0.06 us | 16 of 24 | yes (1) |
+| 10 | 23.02 us | 22.90 us | 23.33 us | 23.24 us | +0.33 us | +0.29 us | +0.00 us | -0.11 us | 11 of 24 | yes (1) |
+| **pooled** | 23.08 us | 23.02 us | 23.40 us | 23.37 us | **+0.30 us** [+0.23, +0.39] | **+0.32 us** [+0.28, +0.38] | **+0.03 us** [-0.02, +0.06] | **-0.06 us** [-0.10, -0.00] | 112 of 240 | 10 clean |
+
+#### update-lit / literal
+
+| Lifetime | A | A' | B | C | B - A | C - A | C - B | A' - A (floor) | blocks C < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 20.82 us | 20.78 us | 21.05 us | 21.01 us | +0.08 us | +0.11 us | -0.09 us | -0.08 us | 14 of 24 | yes (1) |
+| 2 | 20.67 us | 20.72 us | 20.84 us | 20.71 us | +0.24 us | +0.01 us | -0.25 us | +0.04 us | 19 of 24 | yes (1) |
+| 3 | 21.09 us | 20.92 us | 21.11 us | 21.04 us | +0.09 us | -0.07 us | +0.00 us | -0.16 us | 12 of 24 | yes (1) |
+| 4 | 20.58 us | 20.47 us | 20.68 us | 20.75 us | +0.10 us | +0.13 us | +0.05 us | -0.10 us | 10 of 24 | yes (1) |
+| 5 | 20.45 us | 20.51 us | 20.48 us | 20.60 us | +0.01 us | +0.09 us | +0.10 us | +0.05 us | 10 of 24 | yes (1) |
+| 6 | 20.60 us | 20.75 us | 20.60 us | 20.57 us | +0.02 us | -0.02 us | -0.03 us | -0.01 us | 14 of 24 | yes (1) |
+| 7 | 20.74 us | 20.65 us | 20.54 us | 20.73 us | -0.18 us | +0.01 us | +0.21 us | -0.13 us | 7 of 24 | yes (1) |
+| 8 | 20.79 us | 20.75 us | 20.59 us | 20.56 us | -0.16 us | -0.18 us | -0.01 us | -0.08 us | 12 of 24 | yes (1) |
+| 9 | 20.81 us | 20.71 us | 20.74 us | 20.67 us | +0.04 us | -0.04 us | -0.05 us | -0.03 us | 12 of 24 | yes (1) |
+| 10 | 20.95 us | 20.72 us | 20.81 us | 20.79 us | -0.10 us | -0.15 us | +0.02 us | -0.29 us | 11 of 24 | yes (1) |
+| **pooled** | 20.75 us | 20.70 us | 20.74 us | 20.74 us | **-0.01 us** [-0.06, +0.06] | **+0.00 us** [-0.06, +0.05] | **-0.01 us** [-0.05, +0.04] | **-0.08 us** [-0.12, -0.02] | 121 of 240 | 10 clean |
+
+#### update-lit / prepared
+
+| Lifetime | A | A' | B | C | B - A | C - A | C - B | A' - A (floor) | blocks C < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 20.46 us | 20.13 us | 20.24 us | 20.65 us | -0.13 us | +0.22 us | +0.36 us | -0.08 us | 5 of 24 | yes (1) |
+| 2 | 19.85 us | 19.85 us | 19.86 us | 20.08 us | +0.01 us | +0.12 us | +0.04 us | -0.01 us | 7 of 24 | yes (1) |
+| 3 | 19.92 us | 19.60 us | 19.99 us | 20.16 us | -0.04 us | +0.08 us | +0.19 us | -0.30 us | 8 of 24 | yes (1) |
+| 4 | 20.22 us | 19.97 us | 20.07 us | 20.52 us | -0.04 us | -0.01 us | +0.03 us | -0.18 us | 11 of 24 | yes (1) |
+| 5 | 19.84 us | 19.83 us | 19.82 us | 19.92 us | -0.10 us | +0.12 us | +0.14 us | +0.05 us | 9 of 24 | yes (1) |
+| 6 | 20.30 us | 20.18 us | 20.02 us | 20.28 us | -0.27 us | -0.06 us | +0.14 us | -0.08 us | 7 of 24 | yes (1) |
+| 7 | 21.48 us | 21.17 us | 20.63 us | 20.83 us | -0.31 us | -0.12 us | +0.23 us | -0.15 us | 4 of 24 | yes (1) |
+| 8 | 20.37 us | 20.25 us | 20.00 us | 20.25 us | -0.26 us | -0.15 us | +0.12 us | -0.04 us | 8 of 24 | yes (1) |
+| 9 | 20.37 us | 20.07 us | 19.98 us | 19.94 us | -0.20 us | -0.26 us | -0.02 us | -0.16 us | 12 of 24 | yes (1) |
+| 10 | 19.99 us | 19.85 us | 19.87 us | 19.74 us | -0.10 us | -0.26 us | -0.09 us | -0.34 us | 18 of 24 | yes (1) |
+| **pooled** | 20.28 us | 20.09 us | 20.05 us | 20.24 us | **-0.13 us** [-0.20, -0.09] | **-0.04 us** [-0.09, +0.01] | **+0.10 us** [+0.04, +0.18] | **-0.11 us** [-0.17, -0.06] | 89 of 240 | 10 clean |
+
+#### insert / literal
+
+| Lifetime | A | A' | B | C | B - A | C - A | C - B | A' - A (floor) | blocks C < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 19.69 us | 19.54 us | 19.77 us | 19.66 us | +0.12 us | -0.02 us | -0.16 us | -0.23 us | 14 of 24 | yes (1) |
+| 2 | 19.33 us | 19.27 us | 19.47 us | 19.27 us | +0.18 us | -0.04 us | -0.18 us | -0.03 us | 19 of 24 | yes (1) |
+| 3 | 19.47 us | 19.62 us | 19.71 us | 19.69 us | +0.23 us | +0.28 us | -0.01 us | +0.04 us | 12 of 24 | yes (1) |
+| 4 | 19.53 us | 19.60 us | 19.65 us | 19.77 us | +0.10 us | +0.03 us | -0.15 us | -0.05 us | 14 of 24 | yes (1) |
+| 5 | 19.43 us | 19.44 us | 19.40 us | 19.37 us | +0.03 us | -0.08 us | -0.09 us | +0.01 us | 15 of 24 | yes (1) |
+| 6 | 19.62 us | 19.49 us | 19.69 us | 19.73 us | +0.12 us | +0.15 us | +0.13 us | -0.18 us | 7 of 24 | yes (1) |
+| 7 | 19.78 us | 19.45 us | 19.66 us | 19.58 us | -0.03 us | -0.18 us | -0.13 us | -0.18 us | 14 of 24 | yes (1) |
+| 8 | 19.53 us | 19.48 us | 19.53 us | 19.55 us | -0.07 us | -0.04 us | -0.10 us | -0.10 us | 13 of 24 | yes (1) |
+| 9 | 19.51 us | 19.52 us | 19.58 us | 19.59 us | +0.16 us | +0.17 us | -0.08 us | +0.06 us | 15 of 24 | yes (1) |
+| 10 | 19.43 us | 19.29 us | 19.61 us | 19.26 us | +0.13 us | -0.12 us | -0.24 us | -0.22 us | 21 of 24 | yes (1) |
+| **pooled** | 19.53 us | 19.47 us | 19.61 us | 19.55 us | **+0.11 us** [+0.07, +0.16] | **+0.00 us** [-0.05, +0.05] | **-0.11 us** [-0.16, -0.05] | **-0.08 us** [-0.13, -0.04] | 144 of 240 | 10 clean |
+
+#### insert / prepared
+
+| Lifetime | A | A' | B | C | B - A | C - A | C - B | A' - A (floor) | blocks C < B | clean (attempts) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 18.86 us | 18.82 us | 19.25 us | 19.05 us | +0.31 us | +0.02 us | -0.35 us | -0.12 us | 17 of 24 | yes (1) |
+| 2 | 18.78 us | 18.67 us | 18.82 us | 18.75 us | +0.04 us | -0.06 us | -0.11 us | -0.09 us | 14 of 24 | yes (1) |
+| 3 | 18.98 us | 18.65 us | 18.74 us | 19.13 us | -0.06 us | +0.21 us | +0.22 us | -0.15 us | 6 of 24 | yes (1) |
+| 4 | 18.73 us | 18.67 us | 19.18 us | 19.14 us | +0.26 us | +0.20 us | -0.17 us | +0.02 us | 13 of 24 | yes (1) |
+| 5 | 18.67 us | 18.86 us | 18.83 us | 18.97 us | +0.24 us | +0.07 us | -0.12 us | +0.11 us | 18 of 24 | yes (1) |
+| 6 | 18.69 us | 18.63 us | 18.64 us | 18.88 us | -0.02 us | +0.18 us | +0.20 us | -0.05 us | 6 of 24 | yes (1) |
+| 7 | 18.59 us | 18.58 us | 18.72 us | 18.80 us | +0.03 us | +0.10 us | +0.01 us | +0.03 us | 10 of 24 | yes (1) |
+| 8 | 19.02 us | 18.92 us | 18.82 us | 18.80 us | -0.08 us | -0.17 us | -0.02 us | +0.02 us | 14 of 24 | yes (1) |
+| 9 | 18.58 us | 18.54 us | 18.60 us | 18.59 us | +0.09 us | -0.04 us | -0.06 us | -0.02 us | 14 of 24 | yes (1) |
+| 10 | 18.91 us | 18.72 us | 18.72 us | 18.59 us | -0.10 us | -0.18 us | -0.10 us | -0.13 us | 18 of 24 | yes (1) |
+| **pooled** | 18.78 us | 18.71 us | 18.83 us | 18.87 us | **+0.03 us** [+0.00, +0.09] | **+0.03 us** [-0.05, +0.10] | **-0.04 us** [-0.09, +0.02] | **-0.03 us** [-0.09, +0.00] | 130 of 240 | 10 clean |
+
+### Latency and throughput (driver-side)
+
+QPS is derived (`1,000,000 / mean µs`, serial single connection); each
+statistic is the median over lifetimes of each lifetime's per-arm value; the
+driver emits p0, p25, p50, p90 and p99, not p95, and no wait-event
+decomposition. 120,000 statements an arm and cell.
+
+| Cell | Arm | statements | QPS (1e6 / mean) | p0 | p25 | p50 | p90 | p99 | server CPU | driver CPU |
+|---|---|---|---|---|---|---|---|---|---|---|
+| select-pk literal | A | 120,000 | 18,749 qps | 47.4 us | 49.3 us | 50.1 us | 57.1 us | 72.3 us | 20.69 us | 31.42 us |
+| select-pk literal | A' | 120,000 | 18,678 qps | 47.4 us | 49.2 us | 50.2 us | 57.0 us | 72.5 us | 20.70 us | 31.53 us |
+| select-pk literal | B | 120,000 | 18,707 qps | 47.4 us | 49.4 us | 50.3 us | 57.1 us | 70.2 us | 20.81 us | 31.45 us |
+| select-pk literal | C | 120,000 | 18,681 qps | 47.5 us | 49.4 us | 50.3 us | 57.1 us | 71.1 us | 20.92 us | 31.43 us |
+| select-pk prepared | A | 120,000 | 20,334 qps | 43.9 us | 45.7 us | 46.3 us | 52.4 us | 64.8 us | 19.94 us | 28.16 us |
+| select-pk prepared | A' | 120,000 | 20,328 qps | 44.1 us | 45.7 us | 46.3 us | 52.5 us | 65.2 us | 19.97 us | 28.18 us |
+| select-pk prepared | B | 120,000 | 20,312 qps | 44.2 us | 45.8 us | 46.5 us | 52.4 us | 64.8 us | 20.06 us | 28.15 us |
+| select-pk prepared | C | 120,000 | 20,308 qps | 44.2 us | 45.7 us | 46.4 us | 52.3 us | 65.9 us | 20.06 us | 28.16 us |
+| select-index literal | A | 120,000 | 17,775 qps | 49.1 us | 51.9 us | 53.1 us | 60.5 us | 75.5 us | 23.72 us | 31.40 us |
+| select-index literal | A' | 120,000 | 17,816 qps | 49.2 us | 51.9 us | 53.3 us | 60.6 us | 74.0 us | 23.62 us | 31.50 us |
+| select-index literal | B | 120,000 | 17,585 qps | 49.4 us | 52.2 us | 53.4 us | 60.5 us | 75.8 us | 24.04 us | 31.37 us |
+| select-index literal | C | 120,000 | 17,744 qps | 49.4 us | 52.3 us | 53.4 us | 61.2 us | 75.8 us | 24.09 us | 31.38 us |
+| select-index prepared | A | 120,000 | 18,961 qps | 46.0 us | 48.5 us | 49.6 us | 56.4 us | 71.6 us | 23.07 us | 28.39 us |
+| select-index prepared | A' | 120,000 | 19,008 qps | 46.0 us | 48.6 us | 49.7 us | 56.5 us | 71.1 us | 23.03 us | 28.36 us |
+| select-index prepared | B | 120,000 | 18,884 qps | 45.9 us | 48.8 us | 49.9 us | 56.8 us | 71.0 us | 23.34 us | 28.30 us |
+| select-index prepared | C | 120,000 | 18,913 qps | 46.2 us | 48.8 us | 49.9 us | 56.7 us | 70.2 us | 23.40 us | 28.30 us |
+| update-lit literal | A | 120,000 | 22,254 qps | 35.8 us | 41.2 us | 41.9 us | 48.5 us | 63.4 us | 20.77 us | 23.31 us |
+| update-lit literal | A' | 120,000 | 22,232 qps | 35.2 us | 41.1 us | 41.8 us | 48.5 us | 63.4 us | 20.72 us | 23.32 us |
+| update-lit literal | B | 120,000 | 22,303 qps | 36.3 us | 41.0 us | 41.7 us | 48.3 us | 63.3 us | 20.71 us | 23.34 us |
+| update-lit literal | C | 120,000 | 22,289 qps | 36.1 us | 41.1 us | 41.8 us | 48.5 us | 63.3 us | 20.72 us | 23.37 us |
+| update-lit prepared | A | 120,000 | 23,911 qps | 35.0 us | 38.0 us | 38.5 us | 45.3 us | 61.7 us | 20.26 us | 20.64 us |
+| update-lit prepared | A' | 120,000 | 23,974 qps | 35.0 us | 37.9 us | 38.5 us | 45.0 us | 60.9 us | 20.02 us | 20.66 us |
+| update-lit prepared | B | 120,000 | 23,989 qps | 35.4 us | 37.8 us | 38.4 us | 45.2 us | 60.8 us | 19.99 us | 20.75 us |
+| update-lit prepared | C | 120,000 | 23,869 qps | 36.3 us | 37.9 us | 38.5 us | 45.4 us | 61.5 us | 20.21 us | 20.85 us |
+| insert literal | A | 120,000 | 22,917 qps | 38.3 us | 39.9 us | 40.6 us | 47.4 us | 65.1 us | 19.52 us | 23.14 us |
+| insert literal | A' | 120,000 | 22,834 qps | 38.5 us | 40.0 us | 40.6 us | 47.6 us | 64.7 us | 19.48 us | 23.22 us |
+| insert literal | B | 120,000 | 22,940 qps | 38.4 us | 40.0 us | 40.6 us | 47.3 us | 64.6 us | 19.63 us | 23.17 us |
+| insert literal | C | 120,000 | 22,795 qps | 38.5 us | 39.9 us | 40.6 us | 47.6 us | 66.2 us | 19.58 us | 23.24 us |
+| insert prepared | A | 120,000 | 24,714 qps | 35.0 us | 37.0 us | 37.6 us | 43.6 us | 61.7 us | 18.75 us | 20.87 us |
+| insert prepared | A' | 120,000 | 24,678 qps | 34.5 us | 37.1 us | 37.6 us | 43.8 us | 60.8 us | 18.67 us | 20.84 us |
+| insert prepared | B | 120,000 | 24,658 qps | 34.3 us | 37.0 us | 37.6 us | 43.6 us | 61.4 us | 18.78 us | 20.84 us |
+| insert prepared | C | 120,000 | 24,660 qps | 34.7 us | 36.9 us | 37.5 us | 43.9 us | 62.7 us | 18.84 us | 20.89 us |
+
+The server's share of a round trip is about 40 % (select-pk literal: 20.7 µs
+on-CPU of a mean of about 53.7 µs; the rest is the client's 32 µs and the
+socket, overlapping); `relaxed` has no fsync wait and one connection no lock
+wait, so no wait-type share is booked beyond that split. Throughput and the
+percentiles do not separate the arms: the 0.2 to 0.4 µs of server CPU is under
+1 % of the round trip.
+
+## What the remedy bought, and what it did not
+
+- **Reads: nothing resolvable** (C - B +0.00 to +0.04 µs). The remedy was
+  meant to recover part of DF-S1's cost, and on a point `SELECT` the data says
+  it recovered at most about 0.03 µs (the lower interval end on the tuple key
+  read). The per-class walk's cost was therefore not the carrier of the +0.44
+  µs, or not on a path that does a few waits; the bisect's own spike had put
+  the sample pair at +0.14 to +0.47 µs, "not separated from what a binary's
+  layout moves", and this is consistent with the bisect's reading that the sample pair
+  was not separable from what a binary's layout moves. The statement-path cost that remains in C against A, +0.16
+  µs on a tuple key read and +0.36 µs on an index-served one, is the same
+  as B's (S2's stamps and S3's step walk and per-index fold).
+- **Writes: inside the floor**, C - B between -0.11 and +0.10 µs with the
+  largest cells in opposite directions.
+- **No cell resolves a gain**, so the remedy is neither shown to help nor
+  shown to hurt; it is a simplification of the sample's mechanism with no
+  measured price at this resolution. The floor of a single lifetime is up to
+  0.3 µs (A' - A lifetime medians -0.34 to +0.13 µs), and only the pooled
+  ten lifetimes resolve the +0.1 µs scale at all.
+
+## Against the bar
+
+| Item | Cell | Server CPU a statement | Source |
+|---|---|---|---|
+| DF-S1 | tuple key read | +0.44 µs [+0.27, +0.54] | bisect file, `group` durability, its own arms driver |
+| DF-S2 to S4 with the remedy (C - A) | `select-pk`, both paths | +0.16 µs [+0.13, +0.20] | this file |
+| all of DF, summed | tuple key read | about +0.60 µs, naive interval +0.40 to +0.74 | the two rows above |
+| C - A | `select-index`, both paths | +0.36 µs [+0.31, +0.41] | this file; DF-S1 not priced on this shape |
+| C - A | `update-lit`, `insert` | -0.03 µs [-0.06, +0.01]; +0.02 µs [-0.04, +0.05] | this file; DF-S1's write share not measured |
+| bar (DF-Q10 (a)) | a point statement, `cores = 1` | 0.5 µs | the work order |
+
+**Not resolved.** The two terms come from different drivers and durabilities
+and are not strictly additive, and a binary's layout moves a result by 0.2
+to 0.3 µs; the central estimate is 0.10 µs over the bar and the interval
+spans it. This file takes no decision on the bar (DF-Q10 (a) sends a part over
+it back to the operator).
+
+## Time spent
+
+| What | Time |
+|---|---|
+| Building C | 86 s (build started about 07:43, finished 07:44:27) |
+| Running, ten four-arm lifetimes | 8 min 14 s (07:44:32 to 07:52:46) |
+| Held by the process-level quiet gate | none (0 holds; this run's own poll commands carried no gate pattern) |
+| Cell gate | 162 s of 2 s windows, 80 cells, no cell retried |
+| First command to last result | about 10 min, inside the 20 minute budget |
+
+## What was cut
+
+Nothing within the asked design: ten lifetimes, every cell and both paths.
+As asked, no `cores = 8` and no row-count sweep (the first file's, at B, is
+the evidence that the point statements do not scale with rows; it was not
+re-run at C). Not measured: `strict` durability, scans, multi-statement
+transactions, and a case where a statement waits many times (the remedy's
+change is per booked wait, and these cells book almost none).

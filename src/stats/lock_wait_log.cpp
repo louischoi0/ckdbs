@@ -1,5 +1,7 @@
 #include "kds/stats/lock_wait_log.hpp"
 
+#include "kds/stats/relation_stats.hpp"
+
 namespace kds::stats {
 
 const char* LockWaitOutcomeName(LockWaitOutcome outcome) noexcept {
@@ -15,6 +17,13 @@ const char* LockWaitOutcomeName(LockWaitOutcome outcome) noexcept {
 LockWaitLog::Ring& LockWaitLog::ring() noexcept {
     static Ring r;
     return r;
+}
+
+void LockWaitLog::Record(LockWaitRecord row) noexcept {
+    ring().Record(row.core, row);
+    RelationStats::RecordLockWait(row.core, row.rel_oid, row.waited_us,
+                                  row.outcome == LockWaitOutcome::kDeadlock,
+                                  row.outcome == LockWaitOutcome::kFaultNet);
 }
 
 PendingLockWait::PendingLockWait(const sched::Clock* clock, LockWaitRecord row) noexcept

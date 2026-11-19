@@ -1,0 +1,56 @@
+## per cell, per lifetime: median over blocks of the block-paired delta (us a statement)
+
+### select-pk / literal
+
+| Lifetime | A | A' | B | B - A (median of blocks) | A' - A (floor) | blocks B > A | clean (attempts) |
+|---|---|---|---|---|---|---|---|
+| 1 | 35.57 us | 26.15 us | 26.37 us | -9.22 us | -9.46 us | 0 of 24 | NO (3) |
+
+### select-pk / prepared
+
+| Lifetime | A | A' | B | B - A (median of blocks) | A' - A (floor) | blocks B > A | clean (attempts) |
+|---|---|---|---|---|---|---|---|
+| 1 | 33.32 us | 25.37 us | 25.24 us | -8.13 us | -7.87 us | 0 of 24 | NO (3) |
+
+### update-lit / literal
+
+| Lifetime | A | A' | B | B - A (median of blocks) | A' - A (floor) | blocks B > A | clean (attempts) |
+|---|---|---|---|---|---|---|---|
+| 1 | 44.96 us | 51.64 us | 51.78 us | +8.11 us | +9.04 us | 22 of 24 | NO (3) |
+
+### update-lit / prepared
+
+| Lifetime | A | A' | B | B - A (median of blocks) | A' - A (floor) | blocks B > A | clean (attempts) |
+|---|---|---|---|---|---|---|---|
+| 1 | 34.79 us | 40.28 us | 38.59 us | +5.57 us | +4.84 us | 20 of 24 | NO (3) |
+
+## headline per cell (pooled over clean lifetimes)
+
+| Cell | A server CPU | B - A pooled median [95 % bootstrap over blocks] | lifetime medians of B - A above 0 | A' - A pooled median (floor) | lifetime medians of A' - A: range | blocks B > A | server CPU delta as share of A |
+|---|---|---|---|---|---|---|---|
+
+## per shape, both paths pooled (blocks of literal and prepared together)
+
+| Shape | A server CPU | B - A pooled median [95 % bootstrap over blocks] | A' - A pooled median | lifetime-median B - A: median [95 % bootstrap over lifetimes], range, lifetimes above 0 | lifetime-median A' - A: median [95 % bootstrap over lifetimes], range, lifetimes above 0 | blocks B > A |
+|---|---|---|---|---|---|---|
+
+## latency, driver-side, median over lifetimes of each lifetime's per-arm statistic (the driver reports p90, not p95)
+
+| Cell | Arm | statements an arm | QPS (1e6 / mean) | p0 | p25 | p50 | p90 | p99 | server CPU | driver CPU |
+|---|---|---|---|---|---|---|---|---|---|---|
+| select-pk literal | A | 12,000 | 12,123 qps | 70.2 us | 73.9 us | 75.6 us | 95.0 us | 132.9 us | 35.57 us | 48.90 us |
+| select-pk literal | A' | 12,000 | 17,045 qps | 48.5 us | 51.7 us | 54.1 us | 66.0 us | 87.3 us | 26.15 us | 34.57 us |
+| select-pk literal | B | 12,000 | 17,077 qps | 49.2 us | 51.9 us | 54.1 us | 66.0 us | 88.3 us | 26.37 us | 34.65 us |
+| select-pk prepared | A | 12,000 | 13,329 qps | 64.2 us | 67.5 us | 69.0 us | 83.1 us | 119.7 us | 33.32 us | 43.82 us |
+| select-pk prepared | A' | 12,000 | 18,231 qps | 45.4 us | 48.2 us | 50.6 us | 61.9 us | 82.4 us | 25.37 us | 31.40 us |
+| select-pk prepared | B | 12,000 | 18,362 qps | 46.1 us | 48.4 us | 50.4 us | 61.1 us | 80.7 us | 25.24 us | 31.20 us |
+| update-lit literal | A | 12,000 | 10,597 qps | 47.2 us | 56.6 us | 61.3 us | 91.3 us | 1026.5 us | 44.96 us | 40.91 us |
+| update-lit literal | A' | 12,000 | 10,093 qps | 49.8 us | 64.7 us | 70.0 us | 101.5 us | 927.6 us | 51.64 us | 44.71 us |
+| update-lit literal | B | 12,000 | 10,210 qps | 46.5 us | 64.0 us | 69.6 us | 101.9 us | 759.6 us | 51.78 us | 44.28 us |
+| update-lit prepared | A | 12,000 | 9,397 qps | 41.5 us | 43.9 us | 45.7 us | 62.4 us | 731.5 us | 34.79 us | 30.69 us |
+| update-lit prepared | A' | 12,000 | 6,719 qps | 44.7 us | 50.0 us | 51.2 us | 67.4 us | 485.5 us | 40.28 us | 33.91 us |
+| update-lit prepared | B | 12,000 | 7,561 qps | 47.4 us | 50.2 us | 51.8 us | 65.2 us | 454.8 us | 38.59 us | 33.03 us |
+
+bad replies over every arm, cell and lifetime: 0
+idle server CPU (us per second) per lifetime: [{'A2': 59284, 'B': 61288, 'A': 61621}]
+unclean cells: 4 of 4; quiet waited s per cell (sum): 582

@@ -167,6 +167,9 @@ private:
     std::uint64_t id_ = 0;
     IsolationLevel isolation_ = IsolationLevel::kReadCommitted;
     ReadView view_;
+    // When `view_` was minted, as its minter stamped it (`Begin`,
+    // `StartStatement`); `kNoMintStamp` where it passed none. A statistic.
+    std::uint64_t view_minted_ns_ = kNoMintStamp;
     std::vector<TrailEntry> trail_;
     // **The borrows this transaction holds** (AO-R6). Bounded by
     // `max_locks_per_txn`, released as the last act of a decide - after the
@@ -364,13 +367,20 @@ public:
     // snapshot LSN and tracks no set, so nothing here bounds how many are
     // live; the per-core in-flight table does (`kInFlightSlotsPerCore`,
     // refused `ResourceExhausted` past it).
-    StatusOr<Transaction*> Begin(IsolationLevel isolation);
+    //
+    // **`now_ns` stamps the view** (DF-S2), here and wherever a view that
+    // will be held is minted or registered: the instant its minter already
+    // has - a statement's head - on the instance's monotonic clock, never a
+    // clock read of this manager's. It is what `read_horizon_age_us` is
+    // read from, and nothing else: a statistic (DF-R3), `kNoMintStamp`
+    // where the caller has no clock.
+    StatusOr<Transaction*> Begin(IsolationLevel isolation, std::uint64_t now_ns = kNoMintStamp);
 
     // Re-mints the read view at a statement boundary. A no-op under
     // REPEATABLE READ, which is the entire difference between the two
     // levels (section 1) - stated as one branch in one function so it
-    // cannot drift.
-    Status StartStatement(Transaction& txn);
+    // cannot drift - and the view then keeps the stamp it was minted with.
+    Status StartStatement(Transaction& txn, std::uint64_t now_ns = kNoMintStamp);
 
     // Ends the transaction. The trail is dropped: a committed write needs
     // no compensation, and the undo records stay for readers whose
@@ -664,7 +674,8 @@ public:
     // OutOfSpace past kMaxRegisteredReaders: a reader the registry cannot
     // see is a reader a purge would purge under, so the bound refuses the
     // reader, never the accounting.
-    StatusOr<ReaderLease> RegisterReader(const ReadView& view);
+    StatusOr<ReaderLease> RegisterReader(const ReadView& view,
+                                         std::uint64_t now_ns = kNoMintStamp);
 
     // **Re-points a held lease at a newer view** (CS-R3): a `READ ONLY`
     // transaction's `READ COMMITTED` statement boundary. The slot stays
@@ -674,7 +685,8 @@ public:
     // `view` must be minted by `MintReadView` on this manager, which lowered
     // the core's bound before it read the ceiling, and `lease` must be one
     // this manager handed out.
-    void RefreshReader(const ReaderLease& lease, const ReadView& view) noexcept;
+    void RefreshReader(const ReaderLease& lease, const ReadView& view,
+                       std::uint64_t now_ns = kNoMintStamp) noexcept;
 
     // ---- Unpinning the instance's commit-order floor (AN-R13, AN-S1b) ----
     //
@@ -783,8 +795,9 @@ private:
     std::uint64_t OldestActiveTrxId() const noexcept;
 
     // The horizon's term: the oldest `snapshot_lsn` over this core's active
-    // transactions and leased readers, `kUnboundedBound` with none.
-    std::uint64_t LocalSnapshotBound() const noexcept;
+    // transactions and leased readers, `kUnboundedBound` with none - and the
+    // stamp of the view that holds it (`HeldBound`).
+    HeldBound LocalSnapshotBound() const noexcept;
 
     TrxIdSequence& ids_;
     UndoLog& undo_;
@@ -831,6 +844,8 @@ private:
     // rule. `LocalSnapshotBound()` visits only set bits.
     std::array<std::uint64_t, kMaxRegisteredReaders> reader_slots_{};
     std::array<std::uint64_t, kMaxRegisteredReaders / 64> reader_used_{};
+    // Each held slot's stamp (`Begin`'s `now_ns`), beside its LSN.
+    std::array<std::uint64_t, kMaxRegisteredReaders> reader_minted_ns_{};
 };
 
 inline void ReaderLease::Release() noexcept {
@@ -870,10 +885,11 @@ struct LeasedSnapshot {
 // writer visible, no undo log, which is the pre-MVCC engine exactly and
 // what a caller without a manager got before - and nothing to register,
 // because with no manager there is no purge either.
-inline StatusOr<LeasedSnapshot> AutocommitSnapshot(TransactionManager* manager) {
+inline StatusOr<LeasedSnapshot> AutocommitSnapshot(TransactionManager* manager,
+                                                   std::uint64_t now_ns = kNoMintStamp) {
     if (manager == nullptr) return LeasedSnapshot{};
     const ReadView view = manager->MintReadView(kNoTrxId);
-    auto lease = manager->RegisterReader(view);
+    auto lease = manager->RegisterReader(view, now_ns);
     if (!lease.ok()) return lease.status();
     LeasedSnapshot out;
     out.snap.view = view;

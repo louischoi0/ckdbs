@@ -1,0 +1,28 @@
+diff -ru srcec5ddfe8/include/kds/server/session.hpp srcK2/include/kds/server/session.hpp
+--- srcec5ddfe8/include/kds/server/session.hpp	2026-11-19 06:43:48.000000000 +0000
++++ srcK2/include/kds/server/session.hpp	2026-11-19 07:55:50.001141899 +0000
+@@ -355,21 +355,13 @@
+     std::uint64_t txn_began_ns() const noexcept { return txn_began_ns_; }
+     // `BEGIN` of either kind: the transaction, and the view it took.
+     void NoteTxnBegan(std::uint64_t ns) noexcept {
+-        txn_began_ns_ = ns;
+-        if (wait_stats_ != nullptr) {
+-            wait_stats_->txn_began_ns.set(ns);
+-            wait_stats_->view_minted_ns.set(ns);
+-        }
++        txn_began_ns_ = ns;  // KNOB K2: the wait-statistics words are not set
+     }
+     // The session's statement minted the view it holds now.
+-    void NoteViewMinted(std::uint64_t ns) noexcept {
+-        if (wait_stats_ != nullptr) wait_stats_->view_minted_ns.set(ns);
+-    }
++    void NoteViewMinted(std::uint64_t) noexcept {}  // KNOB K2
+     // An autocommit statement ended: the view it held is gone with it. A
+     // transaction's view is its own to give up, at `Finish` or `Expire`.
+-    void EndStatementView() noexcept {
+-        if (state_ == State::kIdle && wait_stats_ != nullptr) wait_stats_->view_minted_ns.set(0);
+-    }
++    void EndStatementView() noexcept {}  // KNOB K2
+ 
+     // **Why the next `ROLLBACK` ends the transaction**, where it is not the
+     // client's (DF-Q13 (a)): the listener's lifetime sweep, a connection's

@@ -1,0 +1,40 @@
+2026-11-19T06:51:42Z newest= age=0s drivers=0 load=1.80 last_status=2026-11-19T06:51:42Z c1 lifetime 1 start
+2026-11-19T06:52:42Z newest=log_c1_2.txt age=1s drivers=1 load=1.73 last_status=2026-11-19T06:52:23Z c1 lifetime 2 start
+2026-11-19T06:53:42Z newest=log_c1_3.txt age=4s drivers=1 load=1.86 last_status=2026-11-19T06:53:08Z c1 lifetime 3 start
+2026-11-19T06:54:42Z newest=log_c1_5.txt age=4s drivers=1 load=1.47 last_status=2026-11-19T06:54:38Z c1 lifetime 5 start
+2026-11-19T06:55:42Z newest=log_c1_6.txt age=1s drivers=1 load=1.65 last_status=2026-11-19T06:55:19Z c1 lifetime 6 start
+2026-11-19T06:56:42Z newest=log_c1_7.txt age=3s drivers=1 load=1.58 last_status=2026-11-19T06:56:00Z c1 lifetime 7 start
+2026-11-19T06:57:42Z newest=log_c1_9.txt age=14s drivers=1 load=1.76 last_status=2026-11-19T06:57:28Z c1 lifetime 9 start
+2026-11-19T06:58:42Z newest=log_c1_10.txt age=0s drivers=1 load=2.06 last_status=2026-11-19T06:58:15Z c1 lifetime 10 start
+2026-11-19T06:59:42Z newest=log_c8_1.txt age=30s drivers=1 load=1.90 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:00:14Z newest=log_c8_1.txt age=62s drivers=1 load=1.74 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:01:14Z newest=log_c8_1.txt age=122s drivers=1 load=1.28 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:02:14Z newest=log_c8_1.txt age=182s drivers=1 load=1.84 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:03:14Z newest=log_c8_1.txt age=242s drivers=1 load=1.99 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:04:14Z newest=log_c8_1.txt age=302s drivers=1 load=1.71 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:05:14Z newest=log_c8_1.txt age=362s drivers=1 load=3.11 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:06:14Z newest=log_c8_1.txt age=422s drivers=1 load=3.52 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:07:14Z newest=log_c8_1.txt age=16s drivers=1 load=1.74 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:08:14Z newest=log_c8_1.txt age=76s drivers=1 load=1.00 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:09:14Z newest=log_c8_1.txt age=50s drivers=1 load=1.40 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:10:14Z newest=log_c8_1.txt age=110s drivers=1 load=1.94 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:11:14Z newest=log_c8_1.txt age=20s drivers=1 load=5.89 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:12:14Z newest=log_c8_1.txt age=80s drivers=1 load=8.18 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:13:14Z newest=log_c8_1.txt age=140s drivers=1 load=8.53 last_status=2026-11-19T06:59:12Z c8 lifetime 1 start
+2026-11-19T07:14:14Z newest=log_c8_1.txt age=8s drivers=0 load=8.91 last_status=2026-11-19T07:14:06Z c8 lifetime 2 HELD by build/test
+2026-11-19T07:14:29Z newest=log_c8_1.txt age=23s drivers=0 load=8.85 last_status=2026-11-19T07:14:29Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:15:29Z newest=log_c8_1.txt age=83s drivers=0 load=9.10 last_status=2026-11-19T07:15:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:16:29Z newest=log_c8_1.txt age=143s drivers=0 load=6.93 last_status=2026-11-19T07:16:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:17:29Z newest=log_c8_1.txt age=203s drivers=0 load=4.94 last_status=2026-11-19T07:17:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:18:29Z newest=log_c8_1.txt age=263s drivers=0 load=5.34 last_status=2026-11-19T07:18:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:19:29Z newest=log_c8_1.txt age=323s drivers=0 load=2.00 last_status=2026-11-19T07:19:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:20:29Z newest=log_c8_1.txt age=383s drivers=0 load=0.84 last_status=2026-11-19T07:20:19Z r200 lifetime 1 HELD by build/test
+2026-11-19T07:21:29Z newest=log_r200_2.txt age=6s drivers=1 load=1.06 last_status=2026-11-19T07:21:23Z r200 lifetime 2 start
+2026-11-19T07:22:29Z newest=log_r10k_1.txt age=3s drivers=1 load=1.70 last_status=2026-11-19T07:21:56Z r10k lifetime 1 start
+2026-11-19T07:23:25Z newest=log_r10k_2.txt age=10s drivers=0 load=1.74 last_status=2026-11-19T07:23:25Z r200 lifetime 3 start
+2026-11-19T07:23:29Z newest=log_r200_3.txt age=4s drivers=1 load=1.68 last_status=2026-11-19T07:23:25Z r200 lifetime 3 start
+2026-11-19T07:24:25Z newest=log_r200_4.txt age=1s drivers=1 load=1.66 last_status=2026-11-19T07:23:58Z r200 lifetime 4 start
+2026-11-19T07:25:25Z newest=log_r200_6.txt age=2s drivers=1 load=1.65 last_status=2026-11-19T07:25:05Z r200 lifetime 6 start
+2026-11-19T07:26:25Z newest=log_r10k_4.txt age=7s drivers=1 load=1.55 last_status=2026-11-19T07:26:18Z r10k lifetime 4 start
+2026-11-19T07:27:25Z newest=log_r10k_5.txt age=3s drivers=1 load=1.47 last_status=2026-11-19T07:26:57Z r10k lifetime 5 start
+2026-11-19T07:28:25Z newest=log_r10k_6.txt age=10s drivers=0 load=1.53 last_status=2026-11-19T07:28:15Z sweep2 ALLDONE

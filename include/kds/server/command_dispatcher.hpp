@@ -44,6 +44,7 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
+#include "kds/stats/index_stats.hpp"
 #include "kds/stats/lock_wait_log.hpp"
 #include "kds/stats/relation_stats.hpp"
 #include "kds/sched/clock.hpp"
@@ -479,6 +480,9 @@ struct OptimizerSurface {
     // The instance's `ADVISE PLAN` rows (`exec/plan_advice.hpp`, CX-S7). A
     // null leaves the dispatcher's own.
     exec::PlanAdvices* plan_advices = nullptr;
+    // The instance's index usage counts (`stats/index_stats.hpp`, DF-S3). A
+    // null leaves the dispatcher's own.
+    stats::IndexStats* index_stats = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
     const stats::CabinOptimizer* controller = nullptr;
     const exec::CabinOptimizerExecutor* executor = nullptr;
@@ -894,7 +898,10 @@ private:
     // where there was one, so the answer names what actually went wrong
     // rather than the compensation that followed it. `Status::OK()` means
     // the caller has no answer of its own and wants the unwind's.
-    Status AbortOwnedScope(WriteScope& scope, const Status& reported);
+    // `cause` is the end it is counted under (`stats::TxnEnd`): an abort, or
+    // the transaction a write gave up to wait (DF-Q13 (a)).
+    Status AbortOwnedScope(WriteScope& scope, const Status& reported,
+                           stats::TxnEnd cause = stats::TxnEnd::kAbort);
 
     // The trx_id a write stamps: the scope's transaction, or
     // kBootstrapXid when there is no manager.
@@ -989,7 +996,8 @@ private:
     // its refusal's `sys.refusal_stats` count: `began_ns` is when it
     // entered, re-runs and waits included.
     void RecordStatement(std::string_view line, const DispatchOutcome& out,
-                         sched::MonoTimeNs began_ns, const StatementHead& head);
+                         sched::MonoTimeNs began_ns, const StatementHead& head,
+                         Session* session);
     // The running statement's own chain is compiled: `compile_ns` is taken
     // (DF-S1). Its own compile, so a later one - an UPDATE's WHERE after its
     // SET subquery's - replaces an earlier.
@@ -2198,6 +2206,10 @@ public:
         if (surface.captured_plans != nullptr) captured_plans_ = surface.captured_plans;
         if (surface.admin_plans != nullptr) admin_plans_ = surface.admin_plans;
         if (surface.plan_advices != nullptr) plan_advices_ = surface.plan_advices;
+        if (surface.index_stats != nullptr) {
+            index_stats_ = surface.index_stats;
+            index_use_cache_ = {};  // pointers into the store it replaces
+        }
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
         cabin_optimizer_view_latch_ = surface.view_latch;
@@ -2298,6 +2310,9 @@ private:
     // Folds a planned block's complete run into the planner's statistics
     // (docs/spec/plan-stats.md PS2, PS3).
     void RecordPlanStats(const exec::StepChain& chain, const exec::ExecStats& stats);
+    // What each index step of a recorded run did, into `sys.indexes`' usage
+    // counts (DF-S3, `stats/index_stats.hpp`).
+    void RecordIndexUse(const exec::StepChain& chain, const exec::ExecStats& stats);
     void RecordExecution(const std::optional<StatementIdentity>& identity,
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);
@@ -2504,6 +2519,7 @@ private:
     StatusOr<exec::CatalogView> WaitEventNamesView();
     StatusOr<exec::CatalogView> WaitStatsView();
     StatusOr<exec::CatalogView> WaitHistogramView();
+    StatusOr<exec::CatalogView> TxnHistogramView();
     StatusOr<exec::CatalogView> SessionWaitsView();
     StatusOr<exec::CatalogView> AshView();
     StatusOr<exec::CatalogView> SessionStateView();
@@ -2797,6 +2813,19 @@ private:
     // `ADVISE PLAN`'s rows (CX-S7), on the same terms.
     exec::PlanAdvices own_plan_advices_;
     exec::PlanAdvices* plan_advices_ = &own_plan_advices_;
+    // `sys.indexes`' usage counts (DF-S3), on the same terms.
+    stats::IndexStats own_index_stats_;
+    stats::IndexStats* index_stats_ = &own_index_stats_;
+    // **This core's counts of the indexes it last read through**, direct
+    // mapped by oid: a pointer into `index_stats_`'s part of this core, which
+    // holds for the store's life (`stats/index_stats.hpp`), so a repeated
+    // read of an index adds through it with no latch and no lookup. A slot
+    // names another index after a collision and is filled again.
+    struct IndexUseSlot {
+        catalog::Oid oid = 0;
+        stats::IndexUse* counts = nullptr;
+    };
+    std::array<IndexUseSlot, 8> index_use_cache_{};
     // `set_plan_stats`': the instance's store, and this core's view of it.
     stats::PlanStats* plan_stats_ = nullptr;
     stats::PlanStatsSource plan_source_;
@@ -3062,7 +3091,13 @@ private:
 
     // The local commit and rollback - the whole of both.
     DispatchOutcome CommitLocal(Session& session);
-    DispatchOutcome RollbackLocal(Session& session);
+    // `cause` is the end the rollback is counted under (DF-Q13 (a)).
+    DispatchOutcome RollbackLocal(Session& session, stats::TxnEnd cause);
+    // **The one way an explicit transaction leaves its session**: its life,
+    // from the head of its `BEGIN`, goes to `sys.txn_histogram` (DF-S2) -
+    // a dispatcher with no clock measures nothing and records nothing - and
+    // then `Session::Finish`, which forgets when it began.
+    void FinishExplicitTxn(Session& session, bool read_only) noexcept;
 
 
 

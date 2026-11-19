@@ -941,7 +941,9 @@ void TcpServer::ExpireOverdueTransactions() {
         const std::uint64_t id = open != nullptr ? open->id() : 0;
         const std::string id_text = open != nullptr ? std::to_string(id) : "none";
         // The connection-close path's own rollback (`CloseClient`), so the
-        // sweep adds no second way to end a transaction.
+        // sweep adds no second way to end a transaction. Its cause is
+        // named first, for the count (DF-Q13 (a)).
+        conn.session.set_rollback_cause(stats::TxnEnd::kCeilingRollback);
         const DispatchOutcome rolled = dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         // A failure is logged whichever side of the transaction's end it
         // fell on: the client's refusal will say its writes are undone,
@@ -1110,6 +1112,7 @@ void TcpServer::CloseClient(int client_fd) {
             log_->Info("client", "fd=" + std::to_string(client_fd) +
                                      " closed with a transaction open; rolling it back");
         }
+        conn.session.set_rollback_cause(stats::TxnEnd::kCloseRollback);
         (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
     }
 

@@ -4,6 +4,7 @@
 #include <string>
 
 #include "kds/base/contention.hpp"
+#include "kds/stats/leaf_stats.hpp"
 #include "kds/storage/page_header.hpp"
 
 namespace kds::index {
@@ -442,6 +443,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     IndexLeafView& left = leaf;
 
     if (Status s = left.SplitInto(new_leaf.value()); !s.ok()) return s;
+    stats::LeafStats::CountDivision(owner_oid);  // DF-S4
 
     // The separator is the **first entry of the right sibling**, copied up:
     // its sort key stays in the leaf, unlike an internal node's median,
