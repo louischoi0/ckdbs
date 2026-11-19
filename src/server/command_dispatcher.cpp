@@ -12561,9 +12561,11 @@ StatusOr<txn::LeasedSnapshot> CommandDispatcher::SnapshotFor(Session& session) {
     // and says plainly that
     // *this* holder's statement never parks with it: the dispatch path is
     // synchronous, and the statement drops this object before any wait).
-    auto leased = txn::AutocommitSnapshot(txn_, statement_head_ns_);
-    if (leased.ok()) session.NoteViewMinted(statement_head_ns_);
-    return leased;
+    // The view's word first: the snapshot is returned as it is made, with no
+    // move of it, and a refused lease leaves a word the statement's record
+    // clears.
+    session.NoteViewMinted(statement_head_ns_);
+    return txn::AutocommitSnapshot(txn_, statement_head_ns_);
 }
 
 StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(

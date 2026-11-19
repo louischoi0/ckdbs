@@ -131,6 +131,14 @@ struct SessionWaitStats {
     // `SampleSessionCost`; no view shows the pair.
     RelaxedU64 log_bytes;
     RelaxedU64 log_records;
+    // **The same waits, already folded for `SampleSessionCost`** (DF-S5,
+    // DF-Q24 (a)): the total of every event of each class, and the count of
+    // the three blocking reads, kept where a wait is booked - one add a
+    // wait - so a statement's two samples copy a dozen words in place of
+    // walking the registry twice. `events` stays the authority; no view
+    // shows these.
+    std::array<RelaxedU64, stats::kWaitClassCount> class_ns{};
+    RelaxedU64 page_reads;
     // **What the session holds open** (DF-Q8 (a)), for `sys.session_state`'s
     // `txn_age_us` and `view_age_us`: when its explicit transaction began,
     // and when the read view it holds was minted - its transaction's, or its

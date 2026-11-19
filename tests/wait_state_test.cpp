@@ -283,20 +283,51 @@ TEST_F(WaitStateTest, FlushOnCpuBooksTheOpenSegmentWithoutChangingTheTotal) {
 
 // ---- DF-S1: a statement's cost is a session's sample less another -----------
 
+// Waits of four classes and three kinds of read, each a scope that never
+// suspends, with 700 ns of CPU before them.
+Coro WaitsOfEveryKind(ManualClock* clock) {
+    clock->Advance(700);
+    {
+        WaitScope w(WaitEvent::kCommitWalFlush);
+        clock->Advance(100);
+    }
+    {
+        WaitScope w(WaitEvent::kCommitCeilingWait);
+        clock->Advance(20);
+    }
+    {
+        WaitScope w(WaitEvent::kIoPageRead);
+        clock->Advance(30);
+    }
+    { WaitScope w(WaitEvent::kIoPageRead); }
+    { WaitScope w(WaitEvent::kIoVarHeapRead); }
+    for (int i = 0; i < 4; ++i) { WaitScope w(WaitEvent::kIoScanRingRead); }
+    // A counter event has a count and no time; it is no page read.
+    for (int i = 0; i < 9; ++i) RecordCounterEvent(WaitEvent::kAppLockConflict);
+    co_return Status::OK();
+}
+
+Coro OneMoreRead(ManualClock* clock) {
+    clock->Advance(50);
+    WaitScope w(WaitEvent::kIoPageRead);
+    clock->Advance(8);
+    co_return Status::OK();
+}
+
 TEST_F(WaitStateTest, ASessionsCostSampleFoldsItsEventsByClassAndCountsItsReads) {
+    // The sample copies a fold kept where each wait is booked (DF-Q24 (a)):
+    // it must be what a walk of the session's events by class would sum.
     auto session = MakeSessionWaitStats();
     const auto idx = [](WaitEvent e) { return static_cast<std::size_t>(e); };
     const auto cls = [](stats::WaitClass c) { return static_cast<std::size_t>(c); };
-    session->on_cpu_ns.add(700);
-    session->events[idx(WaitEvent::kCommitWalFlush)].total_ns.add(100);
-    session->events[idx(WaitEvent::kCommitCeilingWait)].total_ns.add(20);
-    session->events[idx(WaitEvent::kIoPageRead)].total_ns.add(30);
-    session->events[idx(WaitEvent::kIoPageRead)].count.add(2);
-    session->events[idx(WaitEvent::kIoVarHeapRead)].count.add(1);
-    session->events[idx(WaitEvent::kIoScanRingRead)].count.add(4);
-    session->events[idx(WaitEvent::kSchedRunQueue)].total_ns.add(5);
-    // A counter event has a count and no time; it is no page read.
-    session->events[idx(WaitEvent::kAppLockConflict)].count.add(9);
+    // `queued_ns` is the task's run-queue time before its one poll.
+    const auto run = [&](Coro body, std::uint64_t queued_ns) {
+        CoroTask task(SchedulingGroup::kForeground, std::move(body));
+        task.wait_state_mut().session = session.get();
+        clock_.Advance(queued_ns);
+        EXPECT_EQ(task.Poll(), PollResult::kDone);
+    };
+    run(WaitsOfEveryKind(&clock_), 5);
     session->log_bytes.add(64);
     session->log_records.add(1);
 
@@ -310,12 +341,21 @@ TEST_F(WaitStateTest, ASessionsCostSampleFoldsItsEventsByClassAndCountsItsReads)
     EXPECT_EQ(sample.page_reads, 7u);
     EXPECT_EQ(sample.log_bytes, 64u);
     EXPECT_EQ(sample.log_records, 1u);
+    // The events are the authority, and the fold agrees with them class by
+    // class and read by read.
+    std::array<std::uint64_t, stats::kWaitClassCount> by_class{};
+    for (std::size_t i = 1; i < stats::kWaitEventCount; ++i) {
+        by_class[cls(stats::kWaitEvents[i].wait_class)] += session->events[i].total_ns.get();
+    }
+    EXPECT_EQ(sample.class_ns, by_class);
+    EXPECT_EQ(sample.page_reads, session->events[idx(WaitEvent::kIoPageRead)].count.get() +
+                                     session->events[idx(WaitEvent::kIoVarHeapRead)].count.get() +
+                                     session->events[idx(WaitEvent::kIoScanRingRead)].count.get());
+    EXPECT_EQ(session->events[idx(WaitEvent::kAppLockConflict)].count.get(), 9u);
 
     // A later sample less an earlier is what lay between, field by field,
     // and two such differences add up.
-    session->on_cpu_ns.add(50);
-    session->events[idx(WaitEvent::kIoPageRead)].total_ns.add(8);
-    session->events[idx(WaitEvent::kIoPageRead)].count.add(1);
+    run(OneMoreRead(&clock_), 0);
     session->log_bytes.add(16);
     session->log_records.add(1);
     SessionCostSample between = SampleSessionCost(*session) - sample;

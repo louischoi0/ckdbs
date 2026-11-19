@@ -87,13 +87,10 @@ std::string FormatDbTimeLine(const SessionWaitStats& before, const SessionWaitSt
 SessionCostSample SampleSessionCost(const SessionWaitStats& session) noexcept {
     SessionCostSample out;
     out.on_cpu_ns = session.on_cpu_ns.get();
-    for (std::size_t i = 1; i < stats::kWaitEventCount; ++i) {
-        out.class_ns[static_cast<std::size_t>(stats::kWaitEvents[i].wait_class)] +=
-            session.events[i].total_ns.get();
+    for (std::size_t c = 0; c < out.class_ns.size(); ++c) {
+        out.class_ns[c] = session.class_ns[c].get();
     }
-    out.page_reads = session.events[Index(stats::WaitEvent::kIoPageRead)].count.get() +
-                     session.events[Index(stats::WaitEvent::kIoVarHeapRead)].count.get() +
-                     session.events[Index(stats::WaitEvent::kIoScanRingRead)].count.get();
+    out.page_reads = session.page_reads.get();
     out.log_bytes = session.log_bytes.get();
     out.log_records = session.log_records.get();
     return out;
@@ -154,6 +151,13 @@ void Book(CoreWaitContext& c, stats::WaitEvent event, MonoTimeNs elapsed_ns,
         SessionWaitStats::PerEvent& e = session->events[Index(event)];
         e.count.add(1);
         e.total_ns.add(elapsed_ns);
+        // The fold `SampleSessionCost` reads, kept in step here.
+        session->class_ns[static_cast<std::size_t>(stats::kWaitEvents[Index(event)].wait_class)]
+            .add(elapsed_ns);
+        if (event == stats::WaitEvent::kIoPageRead || event == stats::WaitEvent::kIoVarHeapRead ||
+            event == stats::WaitEvent::kIoScanRingRead) {
+            session->page_reads.add(1);
+        }
     }
 }
 
