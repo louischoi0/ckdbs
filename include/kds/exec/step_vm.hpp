@@ -342,6 +342,15 @@ struct SlicePolicy {
     std::atomic<bool>* cancel = nullptr;
     std::function<void()> at_boundary;
     const std::function<bool()>* resume_when = nullptr;
+    // **Where the outermost walk hands a leaf whose read would wait**
+    // (DE-Q8, `storage/miss_refusal.hpp`). Set, the walk fetches each leaf
+    // with `PageAccess::kScanNoWait`; a leaf the device cannot hand over at
+    // once is given to this call, which returns what the walk parks on, and
+    // the walk then fetches that leaf again, synchronously. The walk holds
+    // no pin and no span there - it is the top of its page loop. Unset -
+    // every walk run where it cannot park - a leaf is read as it always
+    // was.
+    std::function<const std::function<bool()>*(PageId)> hand_page;
 
     // The session's cancel, taken at a slice boundary (`protocol.md` §10):
     // `Cancelled` once, the flag cleared - one cancel, one statement.

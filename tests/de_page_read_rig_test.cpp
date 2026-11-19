@@ -20,6 +20,7 @@
 
 #include "two_core_rig.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -109,9 +110,12 @@ class DePageReadRigTest : public ::testing::Test {
 protected:
     const WithoutFrameBudgetOverride exact_capacity_;  // residency is the subject
 
-    void Open() {
+    // `idle_block_ms`: long by default, so a park that is not woken fails
+    // its cell; a cell whose park ends on a deadline sets it short, since a
+    // deadline is read when the reactor turns.
+    void Open(int idle_block_ms = 5000) {
         TwoCoreRig::Options options;
-        options.max_idle_block_ms = 5000;  // a park that is not woken fails the cell
+        options.max_idle_block_ms = idle_block_ms;
         options.buffer_pool_frames = kFrames;
         auto opened = TwoCoreRig::Open(options);
         ASSERT_TRUE(opened.ok()) << opened.status().message();
@@ -271,6 +275,184 @@ TEST_F(DePageReadRigTest, ACancelEndsTheParkAndTheStatementReadsSynchronously) {
     // at the next frame): the statement answers, having read its page itself.
     EXPECT_NE(a.outs[0].response.find(Row(23)), std::string::npos) << a.outs[0].response;
     gated.Open();
+}
+
+// ---- DE-S2: the walk ---------------------------------------------------------
+
+TEST_F(DePageReadRigTest, AWalkParksAtALeafThatWouldWaitAndAnswersEveryRowOnce) {
+    // DE-Q8, DE-R1. A walk handed on fetches each leaf refusing a wait; a
+    // leaf the device cannot hand over is read by a thread while the walk
+    // is parked, then fetched again. Every row is answered, once - a
+    // refused leaf is neither skipped nor visited twice - and the walk is
+    // never run again from its head.
+    Open();
+    Arm(2);
+    const std::uint64_t reruns_before = Contention::Read().of(Tally::kMissReruns);
+    const std::uint64_t refused_before = rig_->store().pool_counters().would_wait;
+
+    Session s0, s1;
+    Script a{&s0}, b{&s1};
+    a.lines.push_back("SELECT id FROM t WHERE grp = 5");
+    b.lines.push_back("SELECT id FROM t WHERE grp = 96");
+    Submit(0, a);
+    Submit(1, b);
+    rig_->Start();
+    ASSERT_TRUE(Within(60000ms, [&] { return a.done.load() == 1 && b.done.load() == 1; }))
+        << "a parked walk was never resumed";
+
+    const auto expect = [](const std::string& reply, int grp) {
+        ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+        std::vector<std::string> rows;
+        for (std::size_t at = reply.find("\\n"); at != std::string::npos;) {
+            const std::size_t next = reply.find("\\n", at + 2);
+            rows.push_back(reply.substr(at + 2, next == std::string::npos ? next : next - at - 2));
+            at = next;
+        }
+        std::vector<std::string> want;
+        for (int k = 1; k <= kRows; ++k) {
+            if (k % 97 == grp) want.push_back(std::to_string(k));
+        }
+        std::sort(rows.begin(), rows.end());
+        std::sort(want.begin(), want.end());
+        EXPECT_EQ(rows, want) << "grp " << grp;
+    };
+    expect(a.outs[0].response, 5);
+    expect(b.outs[0].response, 96);
+    EXPECT_GT(rig_->store().pool_counters().would_wait, refused_before)
+        << "no leaf was refused, so the walk never parked";
+    EXPECT_GT(reader_->completed(), 0u);
+    EXPECT_EQ(Contention::Read().of(Tally::kMissReruns), reruns_before)
+        << "a walk is resumed where it parked, never run again";
+}
+
+TEST_F(DePageReadRigTest, WhileAWalkIsParkedOnItsReadTheCoreRunsOtherStatements) {
+    // What DE is for. The reader's device does not finish the walk's read,
+    // so the walk stays parked - and the core it would have been stalling
+    // creates a relation, writes to it and reads it back meanwhile.
+    Open();
+    Arm(1, /*gated=*/true);
+    // A deadline the cell would time out before: only the gate ends the park.
+    rig_->core(0).dispatcher().set_lock_wait_fault_net_ns(120'000'000'000);
+    Session s0, s1;
+    Script walk{&s0}, other{&s1};
+    walk.lines.push_back("SELECT id FROM t WHERE grp = 7");
+    other.lines = {"CREATE TABLE u (id int64, v int64)", "INSERT INTO u VALUES (1, 10)",
+                   "SELECT id, v FROM u WHERE id = 1"};
+    Submit(0, walk);
+    rig_->Start();
+    ASSERT_TRUE(Within(30000ms, [&] { return gated_->waiting() == 1; }))
+        << "the walk never parked on a leaf";
+    rig_->Post(0, sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
+                                      RunScript(rig_->core(0).dispatcher(), other)));
+    ASSERT_TRUE(Within(30000ms, [&] { return other.done.load() == other.lines.size(); }))
+        << "the core ran nothing while the walk waited for its read";
+    EXPECT_EQ(walk.done.load(), 0u) << "the walk finished with its read still at the gate";
+    EXPECT_NE(other.outs[2].response.find("1,10"), std::string::npos) << other.outs[2].response;
+
+    gated_->Open();
+    ASSERT_TRUE(KickUntil(*rig_, 0, [&] { return walk.done.load() == 1; }, 60000ms));
+    EXPECT_EQ(walk.outs[0].response.rfind("ERR", 0), std::string::npos) << walk.outs[0].response;
+    EXPECT_NE(walk.outs[0].response.find("\\n7"), std::string::npos);
+}
+
+TEST_F(DePageReadRigTest, ACancelIsTakenByAWalkParkedOnItsRead) {
+    // A walk takes a cancel where it yields (`protocol.md` §10), and a park
+    // on a read is such a place: the statement ends `CANCELLED`, as it
+    // would have at its next slice boundary.
+    Open();
+    Arm(1, /*gated=*/true);
+    rig_->core(0).dispatcher().set_lock_wait_fault_net_ns(120'000'000'000);
+    Session s0;
+    Script walk{&s0};
+    walk.lines.push_back("SELECT id FROM t WHERE grp = 9");
+    Submit(0, walk);
+    rig_->Start();
+    ASSERT_TRUE(Within(30000ms, [&] { return gated_->waiting() == 1; }));
+    s0.cancel_flag()->store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig_, 0, [&] { return walk.done.load() == 1; }, 30000ms))
+        << "the cancel did not end the walk's park";
+    EXPECT_EQ(walk.outs[0].status.code(), StatusCode::kCancelled) << walk.outs[0].response;
+    // Taken at the park, not at the slice boundary after it: the walk
+    // fetched no leaf past the one it was parked on, so it asked the reader
+    // for no second page.
+    EXPECT_EQ(reader_->submitted(), 1u);
+}
+
+TEST_F(DePageReadRigTest, AWalksSecondFetchOfALeafIsSynchronous) {
+    // DE-Q8, DE-R7. Every read the device is asked for without waiting
+    // would wait, whatever a thread has read: the fetch after the park must
+    // be the blocking one, or the walk could never get its leaf.
+    Open();
+    Arm(2);
+    rig_->memory_device()->SetNoWait(storage::MemoryPageDevice::NoWait::kAlways);
+    Session s0;
+    Script walk{&s0};
+    walk.lines.push_back("SELECT id FROM t WHERE grp = 11");
+    Submit(0, walk);
+    rig_->Start();
+    ASSERT_TRUE(Within(60000ms, [&] { return walk.done.load() == 1; }));
+    const std::string& reply = walk.outs[0].response;
+    ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+    for (int k = 11; k <= kRows; k += 97) {
+        EXPECT_NE(reply.find("\\n" + std::to_string(k)), std::string::npos) << k;
+    }
+    EXPECT_GT(reader_->completed(), 0u);
+}
+
+TEST_F(DePageReadRigTest, AWalksParkPastItsDeadlineEndsInASynchronousRead) {
+    // DE-R7. The reader never finishes a read; each park ends at the fault
+    // net, set short, and the walk reads its leaf itself and goes on.
+    Open(/*idle_block_ms=*/5);
+    Arm(1, /*gated=*/true);
+    rig_->core(0).dispatcher().set_lock_wait_fault_net_ns(10'000'000);  // 10 ms
+    Session s0;
+    Script walk{&s0};
+    walk.lines.push_back("SELECT id FROM t WHERE id >= 1 AND id <= 40");
+    Submit(0, walk);
+    rig_->Start();
+    ASSERT_TRUE(Within(60000ms, [&] { return walk.done.load() == 1; }))
+        << "a walk outlived its parks' deadlines";
+    EXPECT_GE(gated_->waiting(), 1) << "the walk never parked";
+    EXPECT_EQ(reader_->completed(), 0u) << "the gate never opened: no read was made by a thread";
+    const std::string& reply = walk.outs[0].response;
+    ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+    for (int k = 1; k <= 40; ++k) {
+        const std::string row = "\\n" + std::to_string(k);
+        EXPECT_TRUE(reply.find(row + "\\n") != std::string::npos || reply.ends_with(row))
+            << k << " in " << reply;
+    }
+}
+
+TEST_F(DePageReadRigTest, AWalkDrivenToItsEndWhereItStandsNeverParks) {
+    // A walk handed on and then driven synchronously - the query layer's
+    // walks, a write's subquery - can only yield. It must read as it always
+    // has: with the reader's threads running and every leaf cold, these
+    // statements answer. (Found by DE-S2's review: armed at the hand-off,
+    // such a walk was refused "parked on a wait under a synchronous
+    // dispatch".)
+    Open();
+    Arm(2);
+    Session s0;
+    Script a{&s0};
+    a.lines = {
+        "SELECT grp, COUNT(*) FROM t GROUP BY grp HAVING COUNT(*) > 12",
+        "CREATE TABLE side (id int64, v int64)",
+        "INSERT INTO side VALUES (1, 0)",
+        "UPDATE side SET v = (SELECT MAX(id) FROM t WHERE grp = 3) WHERE id = 1",
+        "SELECT id, v FROM side WHERE id = 1",
+    };
+    Submit(0, a);
+    rig_->Start();
+    ASSERT_TRUE(Within(60000ms, [&] { return a.done.load() == a.lines.size(); }));
+    for (std::size_t i = 0; i < a.lines.size(); ++i) {
+        EXPECT_EQ(a.outs[i].response.rfind("ERR", 0), std::string::npos)
+            << a.lines[i] << " -> " << a.outs[i].response;
+    }
+    // 1200 rows over 97 groups: groups 1 to 36 hold 13 rows, the rest 12.
+    EXPECT_NE(a.outs[0].response.find("\\n1,13"), std::string::npos) << a.outs[0].response;
+    EXPECT_EQ(a.outs[0].response.find("\\n37,"), std::string::npos) << a.outs[0].response;
+    // The largest id in group 3 is 3 + 97 * 12 = 1167.
+    EXPECT_NE(a.outs[4].response.find("1,1167"), std::string::npos) << a.outs[4].response;
 }
 
 }  // namespace

@@ -2544,6 +2544,16 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
             return *pinned;
         }
         if (loading_.find(page_id) != loading_.end()) {
+            // **A fetch that may be refused does not wait here either**
+            // (DE-Q9): the other core's read may be a blocking one, and
+            // waiting it out on this thread is the wait the refusal is for.
+            // Nothing is held and nothing of this fetch is in `loading_`.
+            if (heat == FetchHeat::kScanNoWait || MissRefusalArmed()) {
+                would_wait_.Add();
+                if (heat != FetchHeat::kScanNoWait) NoteMissRefusal(page_id);
+                return Status::NotResident("DevicePageStore: page " + std::to_string(page_id) +
+                                           " is being read by another core");
+            }
             // Another core is faulting this page. Wait rather than issue a
             // second read, and **re-check from the top** on waking, which is
             // what lets a failed load simply erase and broadcast.

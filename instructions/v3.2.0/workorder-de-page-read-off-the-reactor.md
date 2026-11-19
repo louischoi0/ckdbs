@@ -2,7 +2,7 @@
 
 Status: **OPENED 2026-11-19 on the operator's standing go-ahead
 (go-ahead-achieving-milestone), on worktree `de-page-read-off-the-reactor`
-from `35086008` (`v3.4.13-19-g35086008`); DE-S0 and DE-S1 done.** Written 2026-11-18
+from `35086008` (`v3.4.13-19-g35086008`); DE-S0, DE-S1 and DE-S2 done.** Written 2026-11-18
 on worktree `db-fpi-cadence-dc-for-update` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`) on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §25). **Exploratory by CLA's proposal, not by
@@ -296,7 +296,7 @@ to the operator's own mark.
 | DE-Q12 | **DE-R5 on the simulator, which drives `CommandDispatcher::Dispatch` and has no reactor to park on** (`sim/instance.cpp:473`). | the synchronous `Dispatch` runs the same refuse, discard and run-again loop when its instance was given a reader, and the simulator's reader has no thread: a request completes where it is made and reads nothing. So the corpus exercises the refusal and the re-run under its crashes on one thread, and the device sees the reads the statements make, in statement order | (b) the simulator reads synchronously and the path is not in the corpus |
 | DE-Q13 | **Whether the path has a switch.** DE-Q5 (a) fixes the thread count and makes it no setting. | no key. A server always has the reader; a dispatcher built without one - a test, a tool - reads synchronously. The thread count is `kPageReadThreads` = 4, `[provisional]`, until a cell prices another | (b) a boot key that turns the path off |
 | DE-Q14 | **How the read thread ends a reactor's idle block at `cores = 1`**, where the server builds no wake registry and starts no thread (`src/server/expeditor.cpp:1837-1851`, "G2 asks for zero overhead on the single-core path") - a parked statement would wait out `max_idle_block_ms`, 10 ms, for a 0.5 ms read. Raised after §4 was written, by CLA's reading and the review's. | the wake registry is built at one core too and core 0 registers in it; the reader **writes the wake whatever the destination's sleeping flag says**, because a read can complete inside the window a best-effort kick leaves open and the price there, one idle block, is twenty times the read. **Two departures from G2's "build nothing" at one core, named here**: the registry with its descriptor in core 0's readiness set, and DE-R8's read threads. The close prices both on the resident `cores = 1` cells (DE-R4) | (b) the best-effort kick every other waiter uses, priced at one idle block; (c) no park at one core: the path is built above one core only |
-| DE-Q15 | **What a cancel does to a statement parked on a read.** DE-Q11 (a) first said "a cancel is taken at the park"; DE-S1 built, and its review pointed out, something else. Today a descent takes no cancel: one is taken at a walk's slice boundary or at the next frame (`protocol.md` §7). | **the park ends, no later run of the statement is refused, and the statement answers what it answers today** - a descent's rows, read synchronously. A cancel is taken nowhere it is not taken today (DE-R1) | (b) the statement is answered `CANCELLED` at the park - a new place a cancel is taken, and a point `SELECT` that today returns its row would return the cancel |
+| DE-Q15 | **What a cancel does to a statement parked on a read.** DE-Q11 (a) first said "a cancel is taken at the park"; DE-S1 built, and its review pointed out, something else. Today a descent takes no cancel: one is taken at a walk's slice boundary or at the next frame (`protocol.md` §7). | **the park ends, no later run of the statement is refused, and the statement answers what it answers today** - a descent's rows, read synchronously: a descent takes no cancel, parked or not (DE-R1). **A walk takes one where it gives its core back, and its park at a read is such a place** (added at DE-S2's review): it ends `CANCELLED` there, as it would at the slice boundary that follows | (b) the statement is answered `CANCELLED` at a descent's park - a new place a cancel is taken, and a point `SELECT` that today returns its row would return the cancel; (c) a walk's park takes no cancel and the slice boundary after it does |
 
 ## 5. Stages
 
@@ -721,3 +721,64 @@ runs.
 (iii) once on `build-release` at this stage's tree, on a host building at
 the time. It showed the park, the thread's read and the wake working at
 `cores = 1` on the real device; no number is taken from it.
+
+### DE-S2, 2026-11-19 - the walk
+
+On worktree `de-page-read-off-the-reactor`, on `0d3ee8fe`. **Overhead not
+measured; measured at the milestone's close.**
+
+**Built** (DE-Q8 (a)). `exec::SlicePolicy::hand_page`: set, a `SELECT`'s
+outermost walk fetches each leaf with `PageAccess::kScanNoWait`; a leaf the
+device cannot hand over at once comes back `kNotResident` before a slot is
+visited, and the walk - at the top of its page loop, holding no pin and no
+span - ships what its sink has sealed, hands the leaf to the page reader,
+parks under `io.page_read`, takes a cancel if one was raised, and fetches
+that leaf again with `kScan`, synchronously, past the cycle guard and the
+fetch count it had already passed (`src/exec/step_vm.cpp`). The park ends at
+the read, at the fault net's deadline, or at a cancel. `SelectRun` sets
+`hand_page` in `ParkAtReads`, called by `CompleteSelect` alone. A fetch that
+may be refused is also refused where another core is reading the page
+(`DevicePageStore::FetchAndPin`'s `loading_` wait), instead of waiting that
+read out on its thread. A build's walk, `GATHER STATISTICS` and a walk
+driven to its end where it stands read as before.
+
+**Tests** (`tests/de_page_read_rig_test.cpp`, six cells on the two-core rig
+under the suspend audit): a walk on each core parks at leaves that would
+wait and answers every row once, and is never run again from its head;
+while a walk is parked on a read the device does not finish, its core
+creates a relation, writes it and reads it back; a cancel is taken at the
+park, the walk asking the reader for no second leaf; with every no-wait
+read refused whatever a thread has read, the walk still gets its leaves
+(the second fetch is the blocking one); with the reader never finishing a
+read, each park ends at its deadline and the walk answers (DE-R7); a walk
+handed on and then driven synchronously - a `GROUP BY` through the query
+layer, an `UPDATE`'s subquery - never parks and answers. Two mutants were
+run: the park armed at the hand-off fails the last cell ("a SELECT's walk
+parked on a wait under a synchronous dispatch"), as the review said it
+would.
+
+**Reviewed by `critics-developer`**, read-only, while the suite ran. It
+found the retry exact and nothing held at the park, and four things to
+change. **Applied**: **the park was armed where a walk is handed on, and a
+walk handed on can still be driven to its end where it stands**
+(`RunToEnd`: the query layer's walks, a write's subquery) - on a server,
+such a statement over a relation that is not resident would have been
+refused; armed now by the one driver that parks, with a cell that fails
+without the fix; **the park had no bound** (DE-R7) - each is now under the
+fault net, followed by a synchronous read; a no-wait fetch waited on
+another core's read of the same page - refused there too; sealed batches
+are shipped before the park; cells for the two mutants its table found
+alive (a second fetch that refuses again; a cancel left for the next
+boundary). **DE-Q15 amended, and adopted as amended**: a walk takes a
+cancel at its park, which the first wording ("nowhere it is not taken
+today") did not allow. **Rejected**: making `PageReader::threaded()` a
+relaxed atomic read - one uncontended lock per handed-on `SELECT`, on no
+row's path.
+
+**The suite**: 0 failed of 4819 at this stage's tree, every cell `scripts/test.sh`
+runs. **Not executed**: a `tsan` build, and the nightly corpus.
+
+**A smoke run, not a measurement**: cells (iii), (iv) and (vscan) once on
+`build-release` at this stage's tree before the review's fixes, the host
+building at the time. It showed a parked walk's core serving its other
+sessions on the real device; no number is taken from it.

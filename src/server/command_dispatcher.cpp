@@ -6955,6 +6955,24 @@ public:
     // the word it revalidated against.
     void HoldAcrossSuspension() { hold_.emplace(d_); }
 
+    // **DE-Q8: the walk parks at a leaf whose read would wait**, where a
+    // reader's thread can read it meanwhile. Called by the one driver that
+    // can park - `CompleteSelect`, on a reactor - and by no other: a run
+    // that was handed on and is then driven to its end where it stands
+    // (`RunToEnd`: a write's subquery, the query layer's walks) must only
+    // ever yield, so it reads as it always has. With no thread the read
+    // would be made here anyway.
+    void ParkAtReads() {
+        if (d_.page_reader_ == nullptr || !d_.page_reader_->threaded()) return;
+        slice_.hand_page = [this](PageId page) {
+            page_ticket_ = d_.page_reader_->Submit(page, d_.core_id_);
+            // DE-R7: each park is bounded by the fault net, and what ends
+            // it without the read is followed by a synchronous one.
+            park_deadline_ns_ = d_.NowNs() + d_.lock_wait_fault_net_ns_;
+            return &page_read_;
+        };
+    }
+
     // The walk, yielding every `slice.pages_per_slice` pages, then the
     // sorted drain and the recording; the reply is written over `*out`.
     sched::Coro Execute(DispatchOutcome* out);
@@ -7002,6 +7020,15 @@ private:
     Status encode_error_ = Status::OK();
     exec::SlicePolicy slice_;
     std::uint64_t rows_emitted_ = 0;  // the rows the sink took (`rows_returned`)
+    // DE-Q8: the leaf the walk is parked on, and what ends the park - its
+    // read, the park's deadline, or the session's cancel, which the walk
+    // takes as it resumes.
+    storage::PageReader::Ticket page_ticket_;
+    sched::MonoTimeNs park_deadline_ns_ = 0;
+    const std::function<bool()> page_read_ = [this] {
+        return page_ticket_.done() || d_.NowNs() >= park_deadline_ns_ ||
+               (slice_.cancel != nullptr && slice_.cancel->load(std::memory_order_relaxed));
+    };
 };
 
 void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept {
@@ -7162,6 +7189,7 @@ sched::Coro CommandDispatcher::CompleteSelect(std::string_view line, DispatchOut
     // (`CoreRuntime`'s `DiscardTasks`). A connection closed mid-walk is not
     // torn down until the statement ends (`TcpServer::CloseClient`).
     const std::shared_ptr<SelectRun> run = std::move(out->select_run);
+    run->ParkAtReads();  // DE-Q8: this driver can park
     co_await run->Execute(out);
     LogStatement(line, *out, run->started_ns);
     co_return Status::OK();

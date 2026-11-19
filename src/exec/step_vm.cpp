@@ -2167,12 +2167,44 @@ private:
         // Across the slice boundaries below too: the guard is the whole
         // walk's, and a yield resumes at a leaf the walk has not visited.
         storage::PageChainGuard guard("relation walk");
+        // **DE-Q8: the walk gives its core back at a read that would wait.**
+        // Its own leaf fetch, and only that: the refusal is this access
+        // kind's, never the thread's, because the walk yields.
+        const bool parks_at_reads =
+            outermost && slice_ != nullptr && slice_->hand_page != nullptr;
         for (;;) {
             if (Status s = guard.Visit(cur); !s.ok()) co_return s;
             // Per page, not once per walk: the VM makes these fetches
             // itself now, so R1's guard gets to see each one.
             NoteFetch();
-            auto next = visit_leaf(cur, walk_access);
+            auto next = visit_leaf(
+                cur, parks_at_reads ? storage::PageAccess::kScanNoWait : walk_access);
+            if (parks_at_reads && !next.ok() &&
+                next.status().code() == StatusCode::kNotResident) {
+                // Refused at the fetch, before a slot was visited, and
+                // nothing is held: no pin, no span (the suspend audit
+                // checks), the view and the borrow as at a slice boundary.
+                // The leaf goes to the page reader and this task parks; the
+                // fetch below is the same leaf's, made once more and
+                // synchronously - past the guard and the count above, which
+                // have seen this leaf already - so a refused leaf is
+                // visited exactly once whatever the read did.
+                // What is sealed leaves first, as at a slice boundary: the
+                // client reads while the device works.
+                if (slice_->at_boundary) slice_->at_boundary();
+                const std::function<bool()>* const read = slice_->hand_page(cur);
+                {
+                    sched::WaitScope wait(stats::WaitEvent::kIoPageRead, cur);
+                    co_await sched::WaitUntil{read};
+                }
+                // As after a yield: other statements ran here meanwhile, and
+                // a cancel is taken (a walk takes one where it gives its
+                // core back, DE-Q15).
+                storage::ClearStructuralRefusal();
+                if (Status s = TakeCancel(); !s.ok()) co_return s;
+                const storage::ParkedReadScope parked(cur);  // the park was the event (DE-R9)
+                next = visit_leaf(cur, walk_access);
+            }
             if (!inner.ok()) co_return inner;
             if (!next.ok()) co_return next.status();
             if (next.value() == kInvalidPageId) {
