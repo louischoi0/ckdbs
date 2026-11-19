@@ -52,11 +52,13 @@ void InstanceVisibility::PublishOldestUnresolved(std::uint32_t core,
     NoteSlot(core);
 }
 
-void InstanceVisibility::PublishSnapshotBound(std::uint32_t core, std::uint64_t lsn) noexcept {
+void InstanceVisibility::PublishSnapshotBound(std::uint32_t core, std::uint64_t lsn,
+                                              std::uint64_t minted_ns) noexcept {
     if (core >= slots_.size()) return;
     // `seq_cst`: the header's Concurrency note, the store-buffer pattern
     // between a mint and a pass.
     slots_[core].min_snapshot_lsn.store(lsn);
+    slots_[core].min_snapshot_minted_ns.store(minted_ns, std::memory_order_relaxed);
     NoteSlot(core);
 }
 
@@ -175,6 +177,20 @@ std::uint64_t InstanceVisibility::HorizonLsn() const noexcept {
         if (bound < horizon) horizon = bound;
     }
     return horizon;
+}
+
+InstanceVisibility::HorizonHolder InstanceVisibility::HorizonHeldBy() const noexcept {
+    HorizonHolder holder;
+    const std::uint32_t in_use = slots_in_use_.load(std::memory_order_acquire);
+    for (std::uint32_t core = 0; core < in_use; ++core) {
+        const std::uint64_t bound = slots_[core].min_snapshot_lsn.load();
+        if (bound == kUnboundedBound) continue;
+        if (holder.Take(bound, slots_[core].min_snapshot_minted_ns.load(
+                                   std::memory_order_relaxed))) {
+            holder.core = core;
+        }
+    }
+    return holder;
 }
 
 std::uint64_t InstanceVisibility::FloorCandidate() const noexcept {

@@ -119,6 +119,9 @@ enum class Tally : std::uint8_t {
     // (`ResolvedForEveryReader`); under the window latch above one core
     // (BP-H2).
     kWindowLookups,
+    // DE (`storage/miss_refusal.hpp`): a statement head discarded and run
+    // again because a page it fetched would have had to be waited for.
+    kMissReruns,
     kCount,
 };
 
@@ -136,7 +139,7 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
     "inflight_miss_ids_read", "checkpoint_pages_written", "data_syncs",
     "fence_walks",            "wal_drain_latch_wait_us",
     "wal_roll_blocked_waits", "wal_roll_blocked_wait_us",
-    "visibility_window_lookups",
+    "visibility_window_lookups", "miss_reruns",
 };
 static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
 

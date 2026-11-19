@@ -80,6 +80,39 @@ Status MemoryPageDevice::ReadPage(PageId page_id, std::span<std::byte, kPageSize
     return ReadPageRun(page_id, 1, out);
 }
 
+void MemoryPageDevice::SetNoWait(NoWait mode) {
+    std::lock_guard<std::mutex> guard(mu_);
+    no_wait_ = mode;
+    warmed_.clear();
+}
+
+Status MemoryPageDevice::ReadPageNoWait(PageId page_id, std::span<std::byte, kPageSize> out,
+                                        bool* would_wait) {
+    *would_wait = false;
+    {
+        std::lock_guard<std::mutex> guard(mu_);
+        // Past the capacity is `ReadPage`'s refusal, never a wait.
+        if (no_wait_ != NoWait::kNever &&
+            page_id < page_capacity_.load(std::memory_order_relaxed) &&
+            (no_wait_ == NoWait::kAlways || warmed_.erase(page_id) == 0)) {
+            ++would_wait_answers_;
+            *would_wait = true;
+            return Status::OK();
+        }
+    }
+    return ReadPage(page_id, out);
+}
+
+void MemoryPageDevice::WarmPage(PageId page_id) noexcept {
+    std::lock_guard<std::mutex> guard(mu_);
+    if (no_wait_ == NoWait::kUntilWarmed) warmed_.insert(page_id);
+}
+
+std::uint64_t MemoryPageDevice::would_wait_answers() const {
+    std::lock_guard<std::mutex> guard(mu_);
+    return would_wait_answers_;
+}
+
 Status MemoryPageDevice::WritePage(PageId page_id, std::span<const std::byte, kPageSize> in) {
     return WritePageRun(page_id, 1, in);
 }

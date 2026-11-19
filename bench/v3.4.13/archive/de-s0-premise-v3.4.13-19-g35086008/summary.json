@@ -1,0 +1,30 @@
+{
+ "argv": [
+  "--bin",
+  "build-release/kds_server",
+  "--port",
+  "32750",
+  "--workdir",
+  "/home/louis/bench-runs/de/work",
+  "--out",
+  "/home/louis/ckdbs/.claude/worktrees/de-page-read-off-the-reactor/bench/v3.4.13/archive/de-s0-premise-v3.4.13-19-g35086008",
+  "--runs",
+  "2",
+  "--keep",
+  "--cells",
+  "i,ii,iii,iv,v,vscan,iii4"
+ ],
+ "started": "2026-11-19T08:31:59Z",
+ "probe_o_direct_8k_qd1": {
+  "p0_us": 5.3,
+  "p25_us": 412.3,
+  "p50_us": 462.9,
+  "p95_us": 712.7,
+  "p99_us": 989.6,
+  "p99.9_us": 1587.4,
+  "max_us": 2381.1,
+  "n": 2000
+ },
+ "cold_rate": 648.1,
+ "total_s": 557.6
+}

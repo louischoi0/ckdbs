@@ -16,6 +16,7 @@
 #include "kds/stats/refusal_stats.hpp"
 #include "kds/stats/relation_stats.hpp"
 #include "kds/stats/statement_stats.hpp"
+#include "kds/stats/txn_stats.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
@@ -877,6 +878,43 @@ TEST_F(ShowSugarTest, TheWaitStatisticsViewsAnswerWithTheirColumns) {
     const auto state = testing_view::ReadViewText(
         Text("SELECT session_id, state, event, p1, p2, p3, elapsed_us FROM sys.session_state"));
     EXPECT_EQ(state.Column("state").size(), state.rows.size());
+}
+
+// ---- DF-S2: transactions and the read horizon --------------------------------
+
+TEST_F(ShowSugarTest, TheTransactionFieldsAndViewsAnswerAndAnInstanceWithNoClockShowsNoAge) {
+    // The six counts and the horizon's three fields are `txn` fields of
+    // `sys.meta`, each with a value (a field with none is refused whole).
+    const std::string meta = Text("SELECT * FROM sys.meta");
+    for (const char* field : {"commits", "rollbacks", "ceiling_rollbacks", "close_rollbacks",
+                              "aborts", "wait_aborts", "read_horizon_lsn", "read_horizon_core",
+                              "read_horizon_age_us"}) {
+        EXPECT_TRUE(testing_view::MetaField(meta, field).has_value()) << field;
+    }
+    EXPECT_EQ(Text("SELECT section FROM sys.meta WHERE field = 'wait_aborts'"), "section\\ntxn");
+    // The statement reading them holds a view of its own, so there is a
+    // horizon and a core; this dispatcher has no clock, so no age (DF-R7).
+    EXPECT_NE(testing_view::MetaField(meta, "read_horizon_lsn"), "none");
+    EXPECT_EQ(testing_view::MetaField(meta, "read_horizon_core"), "0");
+    EXPECT_EQ(testing_view::MetaField(meta, "read_horizon_age_us"), "none");
+
+    // `sys.session_state`'s two ages are columns, and `sys.txn_histogram` a
+    // view with no `SHOW` spelling.
+    const auto state = testing_view::ReadViewText(
+        Text("SELECT session_id, txn_age_us, view_age_us FROM sys.session_state"));
+    EXPECT_EQ(state.Column("txn_age_us").size(), state.rows.size());
+    stats::TxnStats::ResetForTest();
+    Session s;
+    ASSERT_EQ(Text(s, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(Text(s, "COMMIT").rfind("COMMIT", 0), 0u);
+    const auto lives = testing_view::ReadViewText(
+        Text("SELECT core, access, bucket, lo_us, count FROM sys.txn_histogram"));
+    EXPECT_TRUE(lives.rows.empty()) << "a life was recorded with no clock to measure it";
+    EXPECT_EQ(lives.columns, (std::vector<std::string>{"core", "access", "bucket", "lo_us",
+                                                        "count"}));
+    // The commit is counted all the same: a count needs no clock.
+    EXPECT_EQ(testing_view::MetaField(Text("SELECT * FROM sys.meta"), "commits"), "1");
+    stats::TxnStats::ResetForTest();
 }
 
 // ---- CJ's WE08: `sys.ash` ---------------------------------------------------

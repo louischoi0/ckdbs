@@ -27,7 +27,9 @@
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/stats/checkpoint_log.hpp"
 #include "kds/stats/optimizer_signals.hpp"
+#include "kds/stats/leaf_stats.hpp"
 #include "kds/stats/refusal_stats.hpp"
+#include "kds/stats/txn_stats.hpp"
 #include "kds/stats/relation_stats.hpp"
 #include "kds/stats/wait_event.hpp"
 #include "kds/stats/statement_stats.hpp"
@@ -93,6 +95,7 @@ constexpr SysViewSpec kViews[] = {
     {"wait_event_names"},
     {"wait_stats"},
     {"wait_histogram"},
+    {"txn_histogram"},
     {"session_waits"},
     {"session_state"},
     {"ash"},
@@ -278,6 +281,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "wait_event_names") return WaitEventNamesView();
     if (n == "wait_stats") return WaitStatsView();
     if (n == "wait_histogram") return WaitHistogramView();
+    if (n == "txn_histogram") return TxnHistogramView();
     if (n == "session_waits") return SessionWaitsView();
     if (n == "session_state") return SessionStateView();
     if (n == "ash") return AshView();
@@ -560,7 +564,30 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
                   {"entry_width", kInt},
                   {"height", kInt},
                   {"entries", kInt},
-                  {"unique", kInt}});
+                  {"unique", kInt},
+                  {"probes", kInt},
+                  {"ranges", kInt},
+                  {"entries_scanned", kInt},
+                  {"rows_resolved", kInt},
+                  {"last_used", kTimestamp},
+                  {"leaf_divisions", kInt}});
+    // How often each index served a read since the instance started
+    // (DF-S3, `stats/index_stats.hpp` says what counts): every core's part
+    // summed, 0 for an index no read has used, `last_used` NULL then.
+    const std::unordered_map<catalog::Oid, stats::IndexUse> uses = index_stats_->Snapshot();
+    // `last_used` is kept as the statement head's monotonic instant, so the
+    // fold reads no clock; it is shown as the wall instant that long ago.
+    const std::int64_t wall_us = exec::StatementContextNow().now_us;
+    const std::uint64_t mono_ns = NowNs();
+    const auto last_used = [&](std::uint64_t used_ns) {
+        if (used_ns == 0 || clock_ == nullptr) return Null();
+        const std::uint64_t ago_ns = mono_ns > used_ns ? mono_ns - used_ns : 0;
+        return Timestamp(wall_us - static_cast<std::int64_t>(ago_ns / 1000));
+    };
+    // The leaf splits of each index's tree since the process started
+    // (DF-S4, `stats/leaf_stats.hpp`).
+    const std::unordered_map<catalog::Oid, stats::LeafActivity> leaf_acts =
+        stats::LeafStats::Snapshot();
     auto rows = catalog_.ListIndexes(view_of);
     if (!rows.ok()) return rows.status();
     auto labels = RelationLabels::Read(catalog_, nullptr);
@@ -591,6 +618,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
             static_cast<std::uint16_t>(row.entry_width - row.key_width - index::kIndexTupleKeyWidth)};
         auto height = index::IndexHeight(page_store_, root, layout);
         auto entries = index::IndexEntryCount(page_store_, root, layout);
+        const auto used = uses.find(row.index_oid);
+        const stats::IndexUse use = used == uses.end() ? stats::IndexUse{} : used->second;
+        const auto divided = leaf_acts.find(row.index_oid);
         view.rows.push_back(
             {Int(row.index_oid), Str(catalog::NameView(row.name)), Int(row.table_oid),
              labels.value().Namespace(row.table_oid), labels.value().Name(row.table_oid), Str(columns(row.key_cols.data(), row.nkeys)),
@@ -598,7 +628,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
              Int(root), Int(row.key_width),
              Int(row.entry_width), height.ok() ? Int(height.value()) : Null(),
              entries.ok() ? Int(entries.value()) : Null(),
-             Int((row.flags & catalog::kIndexFlagUnique) != 0 ? 1 : 0)});
+             Int((row.flags & catalog::kIndexFlagUnique) != 0 ? 1 : 0), Int(use.probes.get()),
+             Int(use.ranges.get()), Int(use.entries_scanned.get()),
+             Int(use.rows_resolved.get()), last_used(use.last_used_ns.get()),
+             Int(divided == leaf_acts.end() ? 0 : divided->second.divisions)});
     }
     return view;
 }
@@ -691,7 +724,14 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
                   {"inserts", kInt},
                   {"updates", kInt},
                   {"deletes", kInt},
-                  {"purged", kInt}});
+                  {"purged", kInt},
+                  {"lock_waits", kInt},
+                  {"lock_wait_us", kInt},
+                  {"lock_deadlocks", kInt},
+                  {"lock_fault_nets", kInt},
+                  {"est_delete_marked", kInt},
+                  {"leaf_divisions", kInt},
+                  {"leaf_compactions", kInt}});
     // The join planner's published prior and the snapshot it is from
     // (plan-stats.md §6): NULL where none is published. Read here for the
     // operator; the planner never reads this view.
@@ -703,6 +743,17 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
     };
     const std::unordered_map<catalog::Oid, stats::RelationActivity> activity =
         stats::RelationStats::Snapshot();
+    // Space (DF-S4): the steward's sampled delete-marked rows - NULL where
+    // no seed has sampled a leaf of the relation, and never a planner fact
+    // (DF-R8) - and the clustered tree's leaf divisions and in-place
+    // compactions since the process started.
+    const auto est_delete_marked = [this](catalog::Oid oid) {
+        if (plan_stats_ == nullptr) return Null();
+        const std::optional<std::uint64_t> marked = plan_stats_->EstDeleteMarked(oid);
+        return marked.has_value() ? Int(*marked) : Null();
+    };
+    const std::unordered_map<catalog::Oid, stats::LeafActivity> leaf_acts =
+        stats::LeafStats::Snapshot();
     auto tables = catalog_.ListTables();
     if (!tables.ok()) return tables.status();
     auto labels = RelationLabels::Read(catalog_, nullptr);
@@ -730,6 +781,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
         const auto counted = activity.find(obj.oid);
         const stats::RelationActivity a =
             counted == activity.end() ? stats::RelationActivity{} : counted->second;
+        const auto shaped = leaf_acts.find(obj.oid);
+        const stats::LeafActivity leaf_act =
+            shaped == leaf_acts.end() ? stats::LeafActivity{} : shaped->second;
         view.rows.push_back({Int(obj.oid), labels.value().Spelling(obj.namespace_oid),
                              Str(catalog::NameView(obj.name)),
                              Int(row.value().next_id), Int(budget.issued), Int(budget.remaining),
@@ -737,7 +791,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
                              std::move(height), std::move(leaves), est_rows(obj.oid),
                              plan_snapshot != nullptr ? Int(plan_snapshot->generation())
                                                       : Null(),
-                             Int(a.inserts), Int(a.updates), Int(a.deletes), Int(a.purged)});
+                             Int(a.inserts), Int(a.updates), Int(a.deletes), Int(a.purged),
+                             Int(a.lock_waits), Int(a.lock_wait_us), Int(a.lock_deadlocks),
+                             Int(a.lock_fault_nets), est_delete_marked(obj.oid),
+                             Int(leaf_act.divisions), Int(leaf_act.compactions)});
     }
     return view;
 }
@@ -1494,6 +1551,30 @@ StatusOr<exec::CatalogView> CommandDispatcher::WaitHistogramView() {
     return view;
 }
 
+StatusOr<exec::CatalogView> CommandDispatcher::TxnHistogramView() {
+    exec::CatalogView view;
+    // How long explicit transactions live (DF-S2, `stats/txn_stats.hpp`): the
+    // head of `BEGIN` to the instant the transaction's end is handled, in
+    // `sys.wait_histogram`'s buckets - bucket k holds [2^k, 2^(k+1))
+    // microseconds, 32 buckets, the last open-ended and bucket 0 taking
+    // everything under 2 us. One row per core, access mode and non-empty
+    // bucket; `access` is `read write` or `read only`, and `lo_us` the
+    // bucket's lower bound. An autocommit statement's transaction is in
+    // `sys.statement_histogram`, not here. Engine-state: reads no session
+    // view and no latch.
+    Define(view, {{"core", kInt},
+                  {"access", kStr},
+                  {"bucket", kInt},
+                  {"lo_us", kInt},
+                  {"count", kInt}});
+    for (const stats::TxnLifeBucket& b : stats::TxnStats::SnapshotLives()) {
+        view.rows.push_back({Int(b.core), Str(b.read_only ? "read only" : "read write"),
+                             Int(b.bucket), Int(b.bucket == 0 ? 0 : std::uint64_t{1} << b.bucket),
+                             Int(b.count)});
+    }
+    return view;
+}
+
 StatusOr<exec::CatalogView> CommandDispatcher::SessionWaitsView() {
     exec::CatalogView view;
     // Cumulative wait statistics per session and event (CJ WE05); a session's
@@ -1524,14 +1605,30 @@ StatusOr<exec::CatalogView> CommandDispatcher::SessionStateView() {
     // it is not waiting), the parameters the event defines and how long it
     // has been in that state, by this core's clock. A session between
     // statements shows the state its last statement ended in.
+    //
+    // **What it holds open** (DF-Q8 (a)), which is how the session holding
+    // the read horizon is found: `txn_age_us`, the time since its explicit
+    // transaction's `BEGIN`, and `view_age_us`, the time since the read view
+    // it holds was minted - its transaction's (re-minted at each statement
+    // under READ COMMITTED, `BEGIN`'s under REPEATABLE READ) or its running
+    // autocommit statement's. Each from the head of the statement that did
+    // it; NULL with none held, and on an instance with no clock.
     Define(view, {{"session_id", kInt},
                   {"state", kStr},
                   {"event", kStr},
                   {"p1", kInt},
                   {"p2", kInt},
                   {"p3", kInt},
-                  {"elapsed_us", kInt}});
+                  {"elapsed_us", kInt},
+                  {"txn_age_us", kInt},
+                  {"view_age_us", kInt}});
     const std::uint64_t now = sched::WaitNow();
+    // The dispatcher's clock, which stamped them (`Session::NoteTxnBegan`).
+    const std::uint64_t held_now = NowNs();
+    const auto age = [&](std::uint64_t since_ns) {
+        if (since_ns == 0 || clock_ == nullptr) return Null();
+        return Int(held_now > since_ns ? Us(held_now - since_ns) : 0);
+    };
     for (const sched::SessionWaitStats& s : sched::SnapshotSessionWaits()) {
         const std::size_t ev = s.current_event.get();
         const std::uint64_t since = s.current_since_ns.get();
@@ -1539,7 +1636,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::SessionStateView() {
             {Int(s.session_id),
              Str(TaskStateName(static_cast<sched::TaskState>(s.current_state.get()))),
              Str(stats::kWaitEvents[ev].name), Int(s.current_p1.get()), Int(s.current_p2.get()),
-             Int(s.current_p3.get()), Int(now > since ? Us(now - since) : 0)});
+             Int(s.current_p3.get()), Int(now > since ? Us(now - since) : 0),
+             age(s.txn_began_ns.get()), age(s.view_minted_ns.get())});
     }
     return view;
 }

@@ -131,6 +131,14 @@ struct SessionWaitStats {
     // `SampleSessionCost`; no view shows the pair.
     RelaxedU64 log_bytes;
     RelaxedU64 log_records;
+    // **What the session holds open** (DF-Q8 (a)), for `sys.session_state`'s
+    // `txn_age_us` and `view_age_us`: when its explicit transaction began,
+    // and when the read view it holds was minted - its transaction's, or its
+    // running autocommit statement's - each the head of the statement that
+    // did it, on the instance's monotonic clock; 0 with none held, or with
+    // no clock. Written by `server::Session` on the core the session runs on.
+    RelaxedU64 txn_began_ns;
+    RelaxedU64 view_minted_ns;
 };
 
 // **A session's statistics folded to what one statement's cost is read
@@ -276,6 +284,11 @@ public:
     // learns its page's kind from the bytes it read). The span and its start
     // are unchanged.
     void Reclassify(stats::WaitEvent event, std::uint32_t p2 = 0) noexcept;
+    // **The wait did not happen**: the span is the task's ON_CPU time and
+    // the event is not counted. For a scope opened before its caller knew
+    // whether it would wait - a read asked for without waiting and refused
+    // (DE-R9).
+    void Abandon() noexcept { abandoned_ = true; }
     WaitScope(const WaitScope&) = delete;
     WaitScope& operator=(const WaitScope&) = delete;
 
@@ -283,6 +296,7 @@ private:
     stats::WaitEvent event_;
     MonoTimeNs start_ns_;
     TaskWaitState* task_;
+    bool abandoned_ = false;
 };
 
 // A `counter` event (WD10): a conflict that did not wait. Raises the count;
@@ -311,6 +325,7 @@ public:
     explicit WaitScope(stats::WaitEvent, std::uint64_t = 0, std::uint32_t = 0,
                        std::uint32_t = 0) noexcept {}
     void Reclassify(stats::WaitEvent, std::uint32_t = 0) noexcept {}
+    void Abandon() noexcept {}
 };
 inline void RecordCounterEvent(stats::WaitEvent) noexcept {}
 inline void WaitOnPollEnter(TaskWaitState&) noexcept {}

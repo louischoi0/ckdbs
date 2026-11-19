@@ -1,15 +1,36 @@
 # Work order DF - the statistics the engine records, widened: what a statement shape costs, transactions and the read horizon, index and relation usage, space
 
-Status: **OPENED 2026-11-18** on the operator's word
+Status: **CLOSED 2026-11-19 on the operator's word**
+(`raft-marks-2026-11-19.md` §10), with the cost its close measured and no
+part reverted: a tuple key read about +0.51 us of server CPU for all of DF
+at `cores = 1`, DF-Q10 (a)'s 0.5 us bar not declared met (§7, DF-S5).
+Every stage is on `main`. **Opened 2026-11-18** on the operator's word
 (`raft-marks-2026-11-18.md` §36), from `57d7c67f`
 (`v3.4.12-67-g57d7c67f`). **DF-S0 is done** (§7): the census, the spike's price, and four items
 it took back, DF-Q11..Q14, **each marked (a) on the operator's word**
 (`raft-marks-2026-11-18.md` §37). **DF-S1 is done and pushed** (§7):
 part A, started on the operator's word (`raft-marks-2026-11-18.md` §39),
 reviewed, the full suite 0 failed of 4700 at `ee89842e`, overhead not
-measured, pushed with the hook skipped on the operator's word (§40);
-**DF-S2 is not started**, and the session handed off there. Written the
-same day on worktree
+measured, pushed with the hook skipped on the operator's word (§40).
+**DF-S2 is done** (§7): part B, started on the operator's word
+(`raft-marks-2026-11-19.md` §8), reviewed, the full suite 0 failed of 4766,
+overhead not measured, not pushed. **DF-S3 is done** (§7): part C - index
+usage and a relation's lock waits; the access shape's two columns owed to
+DA - reviewed, the full suite 0 failed of 4773, overhead not measured, not
+pushed. **DF-S4 is done** (§7): part D - a relation's delete-marked
+estimate and its leaf divisions and compactions - reviewed, the full suite
+0 failed of 4777, overhead not measured, not pushed. **DF-S5 ran** (§7), and stopped short of the close: the close measured DF-S2..S4 at +0.07 us of server
+CPU on a tuple key read and +0.18 us on an index-served one after three
+remedies (one reverted, one an attribution, one kept), which with DF-S1's
++0.44 us puts a point read at about +0.51 us - **not resolved against
+DF-Q10 (a)'s 0.5 us, and the operator's to read** (DF-Q24), **who read
+it as closed**; the full suite 0 failed of 4821 on the tree merged with
+`origin/main`. **The rest of DF ran
+on the operator's
+standing go-ahead of 2026-11-19** (§9 there, go-ahead-achieving-milestone):
+an item a stage raises is adopted as CLA proposes it and recorded in §4 as
+adopted on that word, never as the operator's own mark. Written on
+2026-11-18 on worktree
 `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`, from
 `56d20394` (`v3.4.12-53-g56d20394`) on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §33). The session was isolated in that worktree
@@ -346,6 +367,26 @@ statement's is the stall the read puts on every other task of the core
 (`sys-views.md:238-239`, `wait-events.md:73`, CJ-Q8). §2's `page_reads`
 is that delta, so it stands or falls with DF-Q6 (a): under (b) or (c) it
 is not built. DF-S0 re-reads this.
+
+**Items the stages raised after the operator's standing go-ahead of
+2026-11-19** (`raft-marks-2026-11-19.md` §9, go-ahead-achieving-milestone).
+**Each is adopted as CLA proposed it, on that word, and is not the
+operator's own mark.** (a) is CLA's proposal in each. **DF-Q24's last
+clause was then read by the operator** (`raft-marks-2026-11-19.md` §10):
+DF closes with its measured cost.
+
+| | item | (a), adopted | other |
+|---|---|---|---|
+| DF-Q15 | Where a view's age is read from (DF-S2). DF-S0 named a mint stamp and "the statement's head instant handed to the mint". | the head of the statement that minted the view, carried as a stamp on every held view and published beside its core's bound: no clock is read on a statement's path, and the age overstates by the head-to-mint time | (b) a clock read at every mint, exact, about three reads a point `SELECT`; (c) the time since the core's bound last changed, no stamp a view, which calls an idle instance's horizon old |
+| DF-Q16 | What the horizon's fields and a session's ages show with nothing held or nothing measured (DF-S2). | `none` in `sys.meta` and NULL in `sys.session_state` (DF-R7): no view held, or a view nobody stamped | (b) 0, which reads as "held, and new" |
+| DF-Q17 | Which transactions the six counts hold (DF-S2). DF-Q13 (a) leaves a `READ ONLY` `COMMIT` out of `commits` and is silent on the rest. | read-write transactions alone: a `READ ONLY` one is in none of the six, whichever way it ends, a sweep's and a close's included; its life is in `sys.txn_histogram` under its own access mode | (b) a `READ ONLY` transaction's rollbacks counted by cause |
+| DF-Q18 | What `wait_aborts` takes beside a wait (DF-S2). DF-S0's census says a structural re-run ends the same way; DF-Q13 (a) names a wait. | the transaction an autocommit write gives up to run again after a stale descent is a `wait_abort` too: the statement did not fail | (b) it is an `abort` |
+| DF-Q19 | Where an explicit transaction's life ends (DF-S2). | where its end is handled - the `COMMIT`, the `ROLLBACK`, the listener's rollback - so a parked `strict` commit's wait for its sync is not in it | (b) at the commit's publish, a second site and a stamp carried across the park |
+| DF-Q20 | A KWP load stream's ends (DF-S2). Its listener dispatches `ROLLBACK` itself at five sites. | its own abort is `rollbacks`; a failed chunk and a frame not legal inside a load are `aborts`; a closed connection and a detaching listener are `close_rollbacks` | (b) all five the client's `rollbacks` |
+| DF-Q21 | What `probes` and `ranges` count (DF-S3). §2 names the columns and not their unit. | the times a step walked its index between one pair of bounds, counted where the index is read (`StepStats::index_walks`): once a row of the outer for a step under another, once a value for a value list, and nothing for a step that named an index and walked its relation instead | (b) the step's openings, which credit an index the run never read (`indexes = off`, an index dropped under a compiled chain) and count a value list of N values as one; (c) recorded statements, one a statement whatever it did |
+| DF-Q22 | The allocation a leaf count makes (DF-S4). DF-R2 admits no allocation on a statement's path but a store's own and `stats::IndexStats`' first sight of an index; the leaf counts' store is new, and its first division of a tree on a core allocates under the divided leaf's hold. | DF-R2's first-sight exception is read to reach this store: one allocation a tree a core, at an act that already claims and formats a page, and a failure drops the count, never the split | (b) a relation's counts folded into `stats::RelationStats`, whose entry a write statement makes anyway, an index's kept apart; (c) a fixed table of words, no allocation, a bound that drops sooner |
+| DF-Q23 | What `leaf_divisions` counts, and on which views (DF-S4). §2 names divisions and compactions for both `sys.relation_stats` and `sys.indexes`. | a division is a full leaf giving half its rows to a new one; a clustered tree's append of a fresh leaf, nothing moved, is not one and is counted nowhere; `sys.indexes` has `leaf_divisions` alone, an index leaf being never compacted - a column that could only read 0 is not shown | (b) appends counted as divisions; (c) a `leaf_appends` column beside them; (d) `leaf_compactions` on `sys.indexes`, always 0 |
+| DF-Q24 | The close measured DF at or over DF-Q10 (a)'s bar on a point read (DF-S5, §7): DF-S1 +0.44 us, DF-S2..S4 +0.17 us on a tuple key `SELECT` and +0.35 us on an index-served one. DF-Q10 (a) sends a part over the bar back to the operator; the standing go-ahead asks for a remedy within the milestone first. | one remedy, then the measurement again and whatever it shows reported as it is: the session cost sample of DF-S1, which the bisect of 2026-11-19 named as the likeliest carrier and whose cheaper form was CLA's proposal there, folded where a wait is booked. Nothing is reverted, no switch is added (DF-R9), and **whether DF closes over an unmet or unresolved bar stays the operator's** | (b) no remedy, the bar's reading straight to the operator; (c) the stamps of DF-S2 or the fold of DF-S3 behind a boot key, against DF-R9; (d) a stage reverted |
 
 ## 5. Stages
 
@@ -887,3 +928,447 @@ measured**: a write's share (`BookLogAppend` is reached by no `SELECT`),
 where a wait is booked - is CLA's proposal in that file and nothing is built
 on it: it is the operator's to open, and §4 of that day's marks does not
 open it.
+
+### DF-S2 - part B, 2026-11-19
+
+On worktree `da-q8-memory-bound-key`, branch
+`worktree-df-statistics-coverage`, fast-forwarded from `3adf8810` to
+`origin/main` at `8e7c820f`, on the operator's word
+(`raft-marks-2026-11-19.md` §8); the operator's standing go-ahead for the
+rest of DF came while the stage's first build ran (§9 there).
+
+**What is built**, as `docs/spec/sys-views.md` §6.1c, §6.6 and §7 now
+state it. `sys.meta`'s `txn` section carries six counts of how the core's
+read-write transactions ended and the instance's read horizon in three
+fields; `sys.txn_histogram` is a new view with no `SHOW` spelling;
+`sys.session_state` has `txn_age_us` and `view_age_us`. One store,
+`stats::TxnStats`: 560 bytes a core, single-writer relaxed words, no latch.
+
+**How.**
+
+- **The counts** (DF-Q13 (a)). `commits` is counted in
+  `TransactionManager::FinishCommitBody`, the one site that commits. The
+  other five are counted by the dispatcher where the cause is known:
+  `RollbackLocal` takes the cause - the client's by default, the cause the
+  listener named on the session (`Session::set_rollback_cause`) before it
+  dispatched its own `ROLLBACK`, or `aborts` from a failed `COMMIT` - and
+  `AbortOwnedScope` takes `aborts` or `wait_aborts` from `EndWrite`, which
+  is where a statement that wrote nothing and is about to wait or run again
+  is told from one that failed. A deferred commit a stopped log aborts is
+  counted in `FinishDeferredCommits`. `DdlBuildLock::End` counts nothing.
+- **The life** is recorded by `FinishExplicitTxn`, the one call through
+  which an explicit transaction leaves its session, from the head of its
+  `BEGIN` kept on the `Session`.
+- **The horizon's age** (DF-Q8 (a), DF-Q15 (a)). Every held view carries the
+  instant its minter stamped it with: `now_ns` on `Begin`,
+  `StartStatement`, `RegisterReader`, `RefreshReader` and
+  `AutocommitSnapshot`, kept on the `Transaction` and beside each reader
+  slot. `LocalSnapshotBound` returns the bound with the stamp of the view
+  that holds it, `PublishSnapshotBound` stores the stamp beside the bound -
+  the bound's own store is as it was - and
+  `InstanceVisibility::HorizonHeldBy` names the core. The stamp is the
+  dispatcher's `statement_head_ns_`, which DF-S1 already reads: **no clock
+  read is added to a statement's path**. The two reads that are added are
+  off it: one a slice of an online index build and of a declaration's
+  build, one a KWP load chunk.
+- **A session's two ages** are two words on its `SessionWaitStats`, written
+  by `Session` where its transaction begins, where its statement mints a
+  view, and cleared where the transaction ends and where an autocommit
+  statement is recorded.
+
+**DF-S0's census, corrected by the build.** Its item 6 has a view's stamp
+as "a field beside `ReadView`'s LSN"; the stamp is on the holder instead -
+the transaction, the reader slot - so `ReadView`, which is copied into
+every snapshot, is the size it was. Its count of the writes of a core's
+bound a statement stays unverified; the stage adds one relaxed store to
+each.
+
+**Six items the stage raised are DF-Q15..DF-Q20** (§4), each adopted as
+CLA proposed on the operator's standing go-ahead of 2026-11-19, none the
+operator's own mark.
+
+**Reviewed by `critics-developer`**, report only, on the uncommitted tree:
+it walked every caller of `Commit`, `CommitDeferred`,
+`FinishDeferredCommit` and `Abort` and found each end in exactly one count
+and each life recorded once, the bound's store and the horizon unchanged,
+and no race beyond the documented pairing of two stores. **Applied**:
+**one wrong number** - a KWP load chunk is no staged statement, so the view
+it re-mints was stamped with whichever statement its core staged last, and
+a long load, the transaction likeliest to hold the horizon, could read as
+old as its whole run; `ExecuteInsert` takes a head instant of its own. The
+ranking of "who holds the bound", written once for a core's views and
+again for the instance's cores, is one type (`txn::HeldBound`); the record
+of a life and `Session::Finish`, paired at five sites, are one call;
+`NoteTxnBegan` stamps the view it always came with; the rollback cause is
+read, not exchanged, `Finish` and `Expire` already dropping it; the view's
+word is set once its lease is held. In the documents: a caveat in
+`known-gaps.md` that named waits which are before a statement's head, the
+three places that said a reader could see `none`, a sentence that read as
+"the store is not emptied", and the load stream's two ends no document
+listed. **Not taken**: reading the lifetime sweep's stamp from the session
+in place of the listener's own - it moves the ceiling from `BEGIN`'s
+completion to its head and is not DF's; an opaque declaration of `TxnEnd`
+in `session.hpp`, whose default needs the enumerator; one helper for three
+saturating subtractions. **Read by the review and not reproduced**: a
+statement whose descent noted a stale path and which then failed for
+another reason, having written nothing, is a `wait_abort`
+(`known-gaps.md`). **Seen beside the stage and not DF's**: a load chunk
+does not reset the dispatcher's statement-boundary flag, so whether it
+re-mints its READ COMMITTED view depends on the statement its core ran
+before it; read by the review, not verified, no entry filed. **Left unread
+by the review**: the cells in `tests/txn_manager_test.cpp` and
+`tests/show_sugar_contract_test.cpp`, the two CMake lists, DF-R1..R9 one
+by one, and whether a `ROLLBACK` can be refused before its handler.
+
+**Tests.** `tests/txn_stats_test.cpp` (the store);
+`tests/txn_stats_rig_test.cpp` on the two-core rig - a commit, a client
+rollback and an engine abort each moving one count of their core, a
+`READ ONLY` transaction moving none, a named cause counted once, a write
+that waits counted a `wait_abort` and not an `abort` across two reactors,
+a life recorded once by access mode, the horizon's age growing while a
+`READ ONLY` transaction is held on the other core and returning when it
+ends, and a READ COMMITTED transaction's view as old as its last
+statement; cells in `tests/txn_manager_test.cpp`,
+`tests/instance_visibility_test.cpp` and
+`tests/show_sugar_contract_test.cpp`; and one on a whole instance,
+`ExpeditorTest.TheSweepAClosedConnectionAndTheClientEachCountTheirOwnRollback`,
+the listener's sweep and close through the debug text port. **Owed**
+(`known-gaps.md`): a failed `COMMIT`, a deferred commit whose sync never
+comes, a load stream's ends and its chunk's stamp, a structural re-run;
+the two-core cells under `tsan`, which this host cannot build; the store
+empty after a process restart and a restore.
+
+**Suite.** The full suite - `ctest -LE bs-nightly` - 0 failed of 4766 on
+the tree this stage's commit holds (two disabled and two skipped, as
+before the stage); before the review's fixes, 0 failed of 4766 too.
+**Overhead not measured; measured at the milestone's close** (DF-Q10 (a)):
+the stage adds to every statement's path a stamp where a view is minted
+and published, two words on the session, and a count where a transaction
+is decided. **Documents**: `sys-views.md`, `txn.md` §1,
+`manual/sql/sql.md`, `known-gaps.md` and `CLAUDE.md`'s observability row
+are amended with the stage. **Next: DF-S3**, part C.
+
+### DF-S3 - part C, 2026-11-19
+
+On the same worktree and branch, from `c2925b6e`, on the operator's
+standing go-ahead (`raft-marks-2026-11-19.md` §9).
+
+**What is built**, as `docs/spec/sys-views.md` §6.2a and §6.2b now state
+it. `sys.indexes` has five usage columns - `probes`, `ranges`,
+`entries_scanned`, `rows_resolved`, `last_used` - and `sys.relation_stats`
+four cumulative lock columns - `lock_waits`, `lock_wait_us`,
+`lock_deadlocks`, `lock_fault_nets`. **The access shape's two columns are
+not built and are owed to DA**: DA-S1 has not landed, the row is still a
+33-byte persisted struct, and widening it is a format event (DF-R1), as §5
+provides.
+
+**How.**
+
+- **Index usage** is folded in `CommandDispatcher::RecordIndexUse`, called
+  from `RecordExecution`, over every step of the chain `exec::ForEachStep`
+  visits, from the step's `StepStats`. The store, `stats::IndexStats`, is
+  the instance's: `Expeditor` owns one and hands it to every core through
+  `OptimizerSurface`, and a dispatcher handed none uses its own (DA-R6's
+  reason, as §2 asks). A chain with no index step pays the walk of its
+  steps and nothing else; the wall clock and the part's latch are touched
+  at the first index step that walked.
+- **`probes` and `ranges` are the index's walks** (DF-Q21 (a)), a new
+  per-step counter bumped where the index is sought,
+  `StepStats::index_walks`, printed nowhere.
+- **The lock columns** are counted in `LockWaitLog::Record`, the one place
+  a `sys.lock_waits` row is written, into `stats::RelationStats`, so they
+  keep what that ring overwrites.
+- **One store shape, once**: `stats::OidParts` is the latched, bounded,
+  per-core map by oid that `RelationStats` had and `IndexStats` needed; both
+  are built on it.
+
+**Reviewed by `critics-developer`**, report only, on the uncommitted tree.
+It checked that step ids and the `ExecStats` are the statement's at all
+three call sites, that only a completed run folds, that every lock wait
+row goes through the one call with no latch nested, and the store's
+lifetime against the cores that hold it. **Applied**: **one wrong count** -
+`probes` and `ranges` were the step's openings, and a step that names an
+index can walk its relation instead (the `indexes` key off, an index
+dropped under a compiled chain, a correlated probe that could not key),
+which credited an index the run never read; and a value list of N values
+counted one. Both are DF-Q21 (a)'s counter. `IndexStats` re-wrote the
+find-or-insert this stage had just factored out of `RelationStats`: one
+template, the second copy and the eight hand-listed merges deleted. In the
+documents: "a refused statement folds nothing" holds a run and not a
+statement, since each walk of a query-layer statement is a run; "a write
+uses none" was too strong for `INSERT ... SELECT`'s source; `ANALYZE`'s run
+is a use; `relation_stats.hpp`'s header still described writes alone.
+**Not taken**: a null pointer in place of each dispatcher's own store,
+6 KB a core the instance never uses - it is `own_plan_advices_`'s idiom.
+**Left unread by the review**: `SelectRun::Execute` whole and a KWP portal
+closed mid-run, the `UPDATE ... FROM`, `DELETE ... USING` and `SET`
+subquery paths, the allocation sweep's failure model
+(`tests/bs/alloc_sweep_test.cpp` reads `sys.indexes`, and
+`IndexStats::Snapshot` can throw there as `RelationStats::Snapshot` can),
+and the compiler's key set on an index.
+
+**Tests.** `tests/index_stats_test.cpp` (the store);
+`tests/index_usage_rig_test.cpp` on the two-core rig - an index no read
+names at 0 with `last_used` NULL, an equality read on each core summed in
+one row read from either, a value list one probe a value, a strict range
+walked and counted nowhere, an inclusive one a `range`, `ANALYZE`'s run a
+use, a write maintaining both indexes and using neither, a rebuilt index
+at 0; and the lock columns on `LockWaitsViewTest`'s granted, fault-net and
+deadlock cells, the first read again after the ring is emptied. **Owed**
+(`known-gaps.md`): a step under an outer step, a sub-chain's and a hoisted
+one's, a step that walked instead of reading its index; the two-core cell
+under `tsan`.
+
+**Suite.** The full suite - `ctest -LE bs-nightly` - 0 failed of 4773 on
+the tree this stage's commit holds (two disabled and two skipped, as
+before); before the review's fixes, 0 failed of 4773 too. **Overhead not
+measured; measured at the milestone's close** (DF-Q10 (a), DF-Q14 (a)): an
+index-served read pays the fold's latch once an index step, and every
+recorded `SELECT` the walk of its steps. **Documents**: `sys-views.md`,
+`index.md`, `manual/sql/sql.md`, `known-gaps.md` and `CLAUDE.md`'s
+observability row. **Next: DF-S4**, part D.
+
+### DF-S4 - part D, 2026-11-19
+
+On the same worktree and branch, from `83aad532`, on the operator's
+standing go-ahead (`raft-marks-2026-11-19.md` §9), under DF-Q9 (a).
+
+**What is built**, as `docs/spec/sys-views.md` §6.2c and
+`docs/spec/plan-stats.md` §6 now state it. `sys.relation_stats` has
+`est_delete_marked`, `leaf_divisions` and `leaf_compactions`;
+`sys.indexes` has `leaf_divisions` (DF-Q23 (a)). §8 of `sys-views.md` keeps
+BO-Q13's exclusion for page counts and spills alone.
+
+**How.**
+
+- **The estimate.** The steward's read of a leaf for a prior (`SlotsOf`)
+  counts its delete-marked slots beside its live ones;
+  `ReadRelationPrior` hands the scaled total out beside the prior, and
+  `PlanStats::Seed` keeps it in a side table of its own under a latch of its
+  own, which `PlanStats::EstDeleteMarked` and the view alone read. The seed
+  reads no page it did not read before. **DF-R8 holds by construction**:
+  the table is written after the prior's own entry and beside it, sets no
+  `dirty_`, is in no snapshot, export or load, and no plan can reach it.
+- **The counts.** `stats::LeafStats`, the process's, on `stats::OidParts`,
+  keyed by the oid that owns the tree's pages and counted in the storage
+  layer: a clustered division and a compaction in `PlaceUnderHold`
+  (`btree.cpp`) once the act returned, an index's leaf split in
+  `IndexInsert` (`index_tree.cpp`) once its entries moved. The append path
+  counts nothing. A mount's replay applies images and reaches neither site.
+
+**Reviewed by `critics-developer`**, report only, on the uncommitted tree.
+It proved DF-R8 path by path - the one writer, the one reader, every
+publish, export and load - that the prior's value is unchanged in every
+branch and `GATHER`'s leaf count the same number, the scaling in each
+branch of the read, the two latches never nested, and each count site
+against its callers, the redo and the undo. **It found no defect in the
+code.** **Applied**: the store's header claimed a division that fails
+after it began is counted, which is true of an index's and false of a
+clustered one's - reworded to what each site does; the freshness the
+documents claimed ("about every 10 s", "a few seconds old") is the
+steward's floor and not its period - restated with the budget that sets
+it; "the process's, as §6's others are" was false of the instance-owned
+index store; the manual said "since the instance started"; the estimate is
+now written after the prior's entry, so an allocation failure between them
+cannot leave an estimate no erase finds; the out-parameter is an optional
+and not a sentinel; `NodeFacts` holds the leaf's counts once. **DF-Q22**,
+which the review raised, is in §4. **Not taken**: folding a relation's
+counts into `RelationStats` (DF-Q22 (b)). **Left unread by the review**:
+`TryReadTupleIn`'s reading of a retired slot, `PromoteSeparator` and
+`SecureParents`, the `REINDEX` and online-build paths beyond their use of
+`IndexInsert`, and whether `InitTableAccess` fails for a tombstoned
+relation, which the drop's cell asserts.
+
+**Tests.** `tests/space_stats_test.cpp`: a relation's estimate NULL before
+a seed, exact for one leaf, 3 after three rows are delete-marked with the
+planner's generation unmoved (the cell fails if the estimate sets
+`dirty_`), 0 after a `PURGE` and a later seed, gone with a dropped
+relation; a relation of 600 rising keys at 0 divisions and 1 after a key
+arrives inside its full first leaf; a full leaf with a purged slot
+compacted and not divided; an index's leaf splits its own and not its
+relation's, a rebuild's counted to the new oid. **Owed** (`known-gaps.md`):
+an estimate over a tree of height 2 or more, a division on a second core,
+a division that fails, the store's bound.
+
+**Suite.** The full suite - `ctest -LE bs-nightly` - 0 failed of 4777 on
+the tree this stage's commit holds (two disabled and two skipped). **The
+run before the review's fixes failed one cell of 4777**,
+`RowWaitCeilingRigTest.AParentDeleteWaitsForTheLiftOfAMarkerOnItsOwnCore`,
+at its 1 s bound on the marker's lift while the review ran beside the
+suite; it passed 30 of 30 alone on the same binary and in the run after.
+It reads no statistic this milestone adds; no entry is filed, and it is
+named here so a second failure is not met as a first. **Overhead not
+measured; measured at the milestone's close** (DF-Q10 (a)): the stage adds
+nothing to a point statement's path - a latch at a division, a count in
+the steward's leaf read. **Documents**: `sys-views.md`, `plan-stats.md`,
+`manual/sql/sql.md`, `known-gaps.md`, `CLAUDE.md`'s observability row.
+**Next: DF-S5**, the close.
+
+### DF-S5 - the close's measurement and its three remedies; the bar not resolved, 2026-11-19
+
+On the same worktree and branch, from `29810582`, on the operator's
+standing go-ahead (`raft-marks-2026-11-19.md` §9). **Every stage of DF is
+on the work branch. DF is not closed**: DF-Q10 (a)'s bar is not resolved
+on a point read with its central estimate at the bar, and DF-Q10 (a) sends
+that to the operator (DF-Q24). Nothing is pushed.
+
+**The driver first** (DF-Q14 (a)), a commit of its own, `ec5ddfe8`:
+`tools/bn_census.py` takes `--cores` and has `select-index`, an equality a
+secondary index serves.
+
+**The measurement** `[measured]`, by `ck-tester`, four files under
+`bench/v3.4.13/`, each with its archive. Release `kds_server` from
+`git archive` exports, `cores = 1`, `relaxed`, one connection, 1,000 rows,
+ten server lifetimes a file with the baseline's binary run twice in every
+lifetime (A and A') as that lifetime's floor, server CPU a statement, both
+driver paths pooled, medians of block-paired deltas with 95 % intervals. A
+is `8e7c820f`, `main` before DF-S2 with DF-S1 in it.
+
+| file | arm against A | tuple key `SELECT` | index-served `SELECT` | `UPDATE` | `INSERT` |
+|---|---|---|---|---|---|
+| `results-df-close-v3.4.13-14-gec5ddfe8.md` | B = `ec5ddfe8`, DF-S2..S4 | +0.17 us [+0.13, +0.22] | +0.35 us [+0.30, +0.38] | -0.03 us | +0.07 us |
+| `results-df-close-remedy-v3.4.13-15-g9f588fa2.md` | C = `9f588fa2`, the first remedy | +0.16 us [+0.13, +0.20] | +0.36 us [+0.31, +0.41] | -0.03 us | +0.02 us |
+| `results-df-close-knobs-v3.4.13-14-gec5ddfe8.md` | B with the fold, the session words and the stamps compiled out together | +0.07 us [+0.00, +0.09] | +0.15 us [+0.11, +0.22] | - | - |
+| `results-df-close-final-v3.4.13-17-gc16b4fc2.md` | D = `c16b4fc2`, the code as it stands | **+0.07 us [+0.02, +0.10]** | **+0.18 us [+0.12, +0.25]** | +0.02 us | +0.04 us |
+
+B - A replicated in every later file within 0.07 us (+0.11 to +0.18 us on
+the tuple key read, +0.33 to +0.35 us on the index-served one). The floor
+A' - A pooled is -0.15 to +0.07 us by file and cell, and a single
+lifetime's reaches 0.45 us: only ten lifetimes pooled resolve a read.
+
+**Against the bar.** DF-S1's measured cost on a tuple key read is +0.44 us
+[+0.27, +0.54] (above). With D - A the whole of DF is **about +0.51 us on a
+tuple key read, a naive interval of +0.29 to +0.64 us: not resolved against
+0.5 us, its centre at the bar**. On an index-served read DF-S2..S4 cost
++0.18 us and DF-S1 was never measured on that shape; on a write DF-S2..S4
+are inside the floor and DF-S1's share was never measured. The two sources
+are different drivers and durability classes and are not strictly
+additive. **`cores = 8` was run for one lifetime and did not resolve**: two
+servers of one binary stood 9 us apart and all four cells were unclean, as
+AM-S6 found of this host; no delta is claimed.
+
+**Three remedies, as the standing go-ahead asks of a regression at a close
+(DF-Q24 (a)), and no fourth.**
+
+1. **The session cost sample folded where a wait is booked** (`9f588fa2`),
+   the cheaper sample the bisect of 2026-11-19 proposed for DF-S1's cost.
+   C - B is +0.00 to +0.04 us on the reads; a saving above about 0.03 us on
+   a tuple key read is ruled out. **It bought nothing and is reverted**
+   (`35f8cce4`): the walk of the wait registry was not the carrier of
+   DF-S1's cost, which stays unattributed.
+2. **An attribution by knob binaries**, no engine change: B with the index
+   fold, the session's two words and the mint stamps compiled out, each
+   alone and all together. Together they remove about three quarters of
+   B - A (+0.14 of +0.18 us, +0.24 of +0.33 us); **no single knob is
+   attributed** - the removals sum to more than the whole, and a knob
+   binary differs from its parent in layout by as much as the floor. The
+   largest was the index fold's on an index-served read, +0.21 us
+   [+0.18, +0.25].
+3. **The index fold without a latch, a lookup or a clock** (`c16b4fc2`): an
+   index's counts are single-writer relaxed words reached through a pointer
+   the dispatcher keeps in an eight-slot cache, the part's latch guards its
+   map alone, and `last_used` is the statement head's monotonic instant
+   shown as a wall instant at the read. **D - B is -0.18 us [-0.22, -0.13]
+   on an index-served read**, below zero in 8 of 10 lifetimes; -0.04 us,
+   not resolved, on a tuple key read. Kept.
+
+What no remedy reached: +0.07 us on a tuple key read that the knobs do not
+remove either - the wider `StepStats`, the per-seek counter, the larger
+`Transaction` and manager, a binary's layout - and all of DF-S1.
+
+**Reviews.** `critics-developer`, report only, on each remedy's commit.
+Of `9f588fa2` it found no defect and one test the fold had weakened; both
+went with the revert. Of `c16b4fc2` it found no defect: the pointer's
+stability across a rehash, that nothing erases or resets an index store,
+the one swap of the store clearing the cache, the destruction order in
+`Expeditor`, the rig and a dispatcher's own store, the words the two sides
+share being atomics, and the stamp never 0 where a clock exists.
+**Applied**: the template's contract that an address it hands out holds
+until `Reset`, written where `Reset` is; a test helper reduced to what its
+callers pass; a read on a second core through the kept pointer added to
+the rig cell. **Not taken**: an unlatched `find` in the store in place of
+the dispatcher's cache - it keeps a hash lookup a read and turns two
+threads recording as one core from lost counts into a race on the map.
+**Left unread**: which clock core 0's dispatcher holds, where oids are
+issued (the cache reads oid 0 as empty), `sim/instance.cpp`'s wiring.
+
+**Suite.** The full suite - `ctest -LE bs-nightly` - 0 failed of 4778 on
+the tree this entry's commit holds (two disabled and two skipped); 0 failed
+of 4778 at `c16b4fc2`, 0 failed of 4777 at `9f588fa2` and at `29810582`,
+whose tree `35f8cce4` is again.
+
+**Documents.** §5's list, each read: `sys-views.md` §5, §6 (the measured
+cost beside BO's), §6.1c, §6.2a-§6.2c, §6.6, §7, §8; `plan-stats.md` §6;
+`txn.md` §1; `index.md`; `known-gaps.md`, where "not measured" now carries
+the numbers; `manual/sql/sql.md`; `CLAUDE.md`'s observability row.
+`wait-events.md` names no column DF added and is unchanged. **The index's
+DF row is not flipped to closed.**
+
+**Time.** The four measurement rounds took about 44, 10, 20 and 15 minutes
+wall, building included, of which the quiet gate held about 16 minutes in
+the first and 1.5 in the third; together past the hour a close is given,
+because three rounds followed the first's finding. Cut: `cores = 8` after
+one lifetime of six; no `strict` class, no scan, no multi-statement
+transaction, no per-stage binaries.
+
+**Owed, beside each stage's list**: DF-S1's share on an index-served read
+and on a write; `cores` above 1; the cells no stage built
+(`known-gaps.md`); `sys.access_stats`' two columns, DA's.
+
+**Next: the operator's reading of DF-Q24** - close DF with its measured
+cost, as DF-S1 was kept on 2026-11-19, or ask for more; and the push.
+
+### Merged with `origin/main` at `734484ca`, 2026-11-19
+
+`origin/main` had moved from `8e7c820f` to `734484ca` while DF-S5 ran: DC
+(`SELECT ... FOR UPDATE`, `35086008`) and the tag `v3.4.14` on it. Merged
+on the work branch. **Two files conflicted, both records**: the day's
+marks, where DC's session had taken §5 to §7 - **DF's two words are §8 and
+§9 there now**, and every citation in this order and in the index row was
+moved with them; the stage commits' messages, which cannot move, still say
+§5 and §6 - and the index's row for that file. Source merged without a
+conflict: `command_dispatcher.cpp` and its header, `tests/lock_family_test.cpp`
+(DC moved its fixture into a header; the lock columns' cells came across),
+`tests/expeditor_test.cpp`, `tests/CMakeLists.txt`.
+
+**Suite on the merged tree.** The full suite - `ctest -LE bs-nightly` -
+0 failed of 4821 (two disabled and two skipped). **The run before it
+failed one cell of 4821**,
+`StrictParkRigTest.StrictCommitsStagedDuringOneSyncShareTheNext`, at its
+2 s bound, on a host whose one-minute load was above 11 from another
+session; it passed 30 of 30 alone on the same binary and in the run after.
+With DF-S4's `RowWaitCeilingRigTest` cell that is two cells, each once,
+each a bound of one or two seconds on a wake across reactors, in eleven
+full runs of this session - **not shown to be this change's and not shown
+not to be**: DF-S2 touches the transaction manager's publication, which
+both cells cross. No entry is filed; they are named so the next failure of
+either is read against these two. **The close's measurement is of
+`c16b4fc2`, before the merge**: DC is in neither arm, and nothing after it
+was measured.
+
+### DF closed on the operator's word, and pushed, 2026-11-19
+
+On the operator's word (`raft-marks-2026-11-19.md` §10) **DF is closed
+with the cost its close measured, no part reverted**, and went to `main`
+with `--no-verify` from `3f4f0214` and this record: the hook was skipped;
+the suite that stands behind the push is the full suite at `3f4f0214`,
+0 failed of 4821 on the tree merged with `origin/main` at `734484ca`, and
+nothing after that commit changes a build input. `origin/main` had not
+moved since that merge.
+
+**What the close claims and what it does not.** DF enforces nothing: every
+number it records is read by no part of the engine (DF-R3). What it shows
+is parts A to D but `sys.access_stats`' two columns, which are DA's.
+**DF-Q10 (a)'s bar is not declared met**: all of DF costs a tuple key read
+about +0.51 us of server CPU at `cores = 1`, an interval of +0.29 to
++0.64 us around a 0.5 us bar; an index-served read +0.18 us beyond DF-S1's
+share, which was never measured on that shape; a write nothing the floor
+shows beyond DF-S1's, also unmeasured; nothing at `cores` above 1. The
+operator's reading is that DF stands with that cost, as DF-S1 did on
+2026-11-19.
+
+**What stays owed** is in `known-gaps.md` under DF's four headings and in
+each stage's entry above: the cells no stage built, the `tsan` runs this
+host cannot make, the two timing cells that each failed once under load,
+and DA-S1's two columns. DF-Q15..DF-Q23 stay adopted on the standing
+go-ahead and are not the operator's own marks.

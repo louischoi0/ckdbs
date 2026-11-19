@@ -2,7 +2,7 @@
 
 Status: **CLOSED 2026-11-19 on the work branch, not landed** (DB-S0..S3, §7; closing code commit `ec057c06`, `v3.4.14-5-gec057c06`; close measurement `bench/v3.4.14/results-db-close-v3.4.14-5-gec057c06.md`; no push, merge to `main` or tag). **OPENED 2026-11-19** on the operator's standing go-ahead
 (go-ahead-achieving-milestone, scheduled by the operator at 08:38 UTC for
-12:38 UTC; `raft-marks-2026-11-19.md` §8), on worktree
+12:38 UTC; `raft-marks-2026-11-19.md` §13), on worktree
 `db-torn-page-healing` from `734484ca` (`v3.4.14-2-g734484ca`). **DB-Q1..Q6
 adopted as CLA proposed, DB-Q1 (a) and DB-Q2 (a) as revised at DB-S0, and
 DB-Q7 added at DB-S0 and adopted (a)** - each on the operator's standing

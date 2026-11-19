@@ -34,6 +34,7 @@
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wire/error_registry.hpp"
+#include "kds/stats/relation_stats.hpp"
 #include "kds/stats/statement_stats.hpp"
 #include "lock_family_fixture.hpp"
 #include "view_text.hpp"
@@ -3768,6 +3769,24 @@ protected:
     void SetUp() override {
         LockDeadlockTest::SetUp();
         stats::LockWaitLog::ResetForTest();
+        stats::RelationStats::ResetForTest();
+    }
+    void TearDown() override {
+        stats::RelationStats::ResetForTest();
+        LockDeadlockTest::TearDown();
+    }
+
+    // `t`'s four cumulative lock columns in `sys.relation_stats` (DF-S3):
+    // waits, their time, and how many ended `deadlock` and `fault_net`.
+    std::vector<std::string> LockColumns() {
+        const auto shown = testing_view::ReadViewText(
+            Local("SELECT name, lock_waits, lock_wait_us, lock_deadlocks, lock_fault_nets "
+                  "FROM sys.relation_stats WHERE name = 't'"));
+        if (shown.rows.size() != 1) {
+            ADD_FAILURE() << "sys.relation_stats has no one row for t";
+            return {};
+        }
+        return {shown.rows[0].begin() + 1, shown.rows[0].end()};
     }
 
     testing_view::ViewText Waits() {
@@ -3817,6 +3836,12 @@ TEST_F(LockWaitsViewTest, AGrantedRowWaitIsOneRowNamingItsUnitModeAndHolder) {
     EXPECT_EQ(Local("SELECT seq, core FROM sys.lock_waits WHERE started = '1970-01-02 00:00:00'"),
               "seq,core\\n1,0");
     EXPECT_EQ(testing_view::MetaField(Local("SHOW META"), "lock_waits_recorded"), "1");
+    // And the wait is in its relation's cumulative columns (DF-S3), which
+    // keep it when the ring has overwritten the row.
+    EXPECT_EQ(LockColumns(), (std::vector<std::string>{"1", "5000", "0", "0"}));
+    stats::LockWaitLog::ResetForTest();
+    EXPECT_TRUE(Waits().rows.empty());
+    EXPECT_EQ(LockColumns(), (std::vector<std::string>{"1", "5000", "0", "0"}));
 }
 
 // A `DELETE`'s row is an existence claim and asks `X` (CP-S2b, `txn.md`
@@ -3903,6 +3928,9 @@ TEST_F(LockWaitsViewTest, AWaitTheFaultNetEndsIsAFaultNetRow) {
     EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"fault_net"});
     EXPECT_EQ(waits.Column("waited_us"),
               std::vector<std::string>{std::to_string((txn::kLockWaitFaultNetNs + 1) / 1000)});
+    EXPECT_EQ(LockColumns(),
+              (std::vector<std::string>{
+                  "1", std::to_string((txn::kLockWaitFaultNetNs + 1) / 1000), "0", "1"}));
     ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
 }
 
@@ -3936,6 +3964,12 @@ TEST_F(LockWaitsViewTest, TheWaiterThatClosesACycleIsADeadlockRowAndTheSurvivors
     EXPECT_EQ(waits.Column("holder_trx"), (std::vector<std::string>{a_trx, b_trx}));
     EXPECT_EQ(waits.Column("key"), (std::vector<std::string>{"7", "8"}));
     EXPECT_EQ(waits.Column("waited_us").front(), "0") << "a victim never parked";
+    // Two waits on `t`, one of them the victim's (DF-S3).
+    const std::vector<std::string> columns = LockColumns();
+    ASSERT_EQ(columns.size(), 4u);
+    EXPECT_EQ(columns[0], "2");
+    EXPECT_EQ(columns[2], "1");
+    EXPECT_EQ(columns[3], "0");
 }
 
 // BO-S5 (§3.1): a statement is timed whole - its park, its re-run and its

@@ -6,7 +6,7 @@ The reactor: how work is scheduled on a core. Consistent with `docs/rules/rules.
 
 ## 1. Model
 
-KDS does **not** schedule OS threads. At startup the engine spawns exactly one worker thread per core, pins each with CPU affinity, and never creates threads afterward. Each worker runs a **reactor**: a cooperative, run-to-completion event loop that owns the engine state assigned to that core. "The scheduler" is the policy inside each reactor that decides which ready task runs next. All **scheduler** data structures are core-local and lock-free by construction, with one documented exception: the reactor's sleep flag and its `Waker`, which other cores' threads read and write to end an idle block (§7).
+KDS does **not** schedule OS threads. At startup the engine spawns exactly one worker thread per core, pins each with CPU affinity, and never creates threads afterward. Each worker runs a **reactor**: a cooperative, run-to-completion event loop that owns the engine state assigned to that core. "The scheduler" is the policy inside each reactor that decides which ready task runs next. All **scheduler** data structures are core-local and lock-free by construction, with one documented exception: the reactor's sleep flag and its `Waker`, which other cores' threads - and the WAL writer's and the page reader's - read and write to end an idle block (§7).
 
 **Core-local is the default; shared state is declared** (AR0-2): state may be shared where a subsystem's spec says it is and says what serializes it. `rules.md` §3 indexes what is declared — among them the WAL stream, this section's wake flag, the data file's capacity, the visibility window (AN-S1), the page frame's latch word (AM-S1) and M2's lock table; §9-2 below states the boundary for the reactor thread.
 
@@ -39,7 +39,7 @@ Rules:
 ## 3. Tasks
 
 - A task is a unit of work executed run-to-completion until it finishes or **yields**.
-- **Cooperative yielding is mandatory:** every task must yield within its budget (work-item count or injected-clock time). Any loop that cannot statically prove boundedness must contain an explicit yield check. Blocking syscalls inside tasks are forbidden; all waiting is expressed as suspension on I/O, timer, or message events.
+- **Cooperative yielding is mandatory:** every task must yield within its budget (work-item count or injected-clock time). Any loop that cannot statically prove boundedness must contain an explicit yield check. Blocking syscalls inside tasks are forbidden; all waiting is expressed as suspension on I/O, timer, or message events. **A buffer-pool miss is the standing exception** - a blocking `pread` on the reactor's thread - but for the two callers `page.md` §12 names, whose read leaves the reactor.
 - **A statement's walk yields** (BA-S15): a `SELECT`'s outermost walk gives its core back every `exec::SlicePolicy::pages_per_slice` pages - 64, or 16 for a session that declared `analytic` (BL-S4, `server/priority.hpp`'s `PagesPerSlice`; a build's walk below keeps 64) - at the bottom of its page loop, so a long scan no longer holds every other session on its core until it ends; `DispatchAsync` awaits it after the statement's head returns (`server::SelectRun`). What it holds across a yield - its read view, its read borrow, its core's statement epoch at the word it revalidated against, and a pin on the catalog memo - is statement-scoped and holds no page. A write, a locking read (`SELECT ... FOR UPDATE`, whose claim pass is a write's row walk, `txn.md` §5), a tuple key descent, a key set's descents (CU-Q8: a statement driven by one is run inline, as a single descent is; a conjunct's cap of 4,096 conditions bounds the descents and nothing bounds what the rest of the chain does under each but `exec::Budget`), a join's inner walk under one outer page and an index walk do not yield; `exec::Budget` bounds them. **Every relation-`X` build yields too** (A1 stage 2): a `CREATE INDEX` or `REINDEX INDEX` backfill and a `CREATE ASSERTION` or `CREATE TRANSITION` build give their core back every `pages_per_slice` relation leaves, walked by an `exec::LeafCursor`, handed on after the head in `DispatchOutcome::build_run` (`server::BuildRun`: `IndexBuildRun`, and `AssertionBuildRun` and `TransitionBuildRun` under `DeclarationBuildRun`). A run is handed on only where the statement may park and its relation is held - the `X`, or for an online `CREATE INDEX` (CI, `index.md` §10.3) the `IS`, with a drain of the older writers before its first slice; otherwise it runs whole inside its head. Across a yield it holds the `X` - so no writer or positioned reader moves the leaf it resumes at - or the online build's `IS`, under which writers run but no leaf is freed and no row moves left, its progress registration, its core's statement epoch and a pin on the catalog memo, and no page. An index build holds the `X`, or online the `IS`, through its write scope's transaction; the catalog's DDL undo hook is the dispatcher's, so it is uninstalled before the first yield and installed again for the tail, which logs the tree and writes the row - online, clears the row's building flag instead - and decides in a statement frame of its own. A declaration build holds it through a transaction of the statement's own (`DdlBuildLock`), which the run owns from the ask; each slice reads under a settled view minted for it, after the holder's own view is re-minted so the snapshot bound its core announces advances between slices, and the tail, in a statement frame of its own, publishes, syncs and then releases the `X`. A cancel already pending is taken before the first slice, and one is taken at each boundary (`protocol.md` §10); the holder's progress is reported again at each resume (`txn.md` §5). **The boundary is also where a plain `SELECT`'s rows leave** (CE, `protocol.md` §7): an armed `SlicePolicy::at_boundary` sends the sealed batches, and `resume_when` replaces the yield with a park while bytes the kernel refused wait on a write interest, resumed when they drain, the connection closes or the cancel flag is set. Each suspended walk holds one of its core's `txn::kMaxRegisteredReaders` (256) reader-lease slots, and so does each open `READ ONLY` transaction for its whole life (CS, `txn.md` §1), so a 257th holder at once on one core - a walk at its head, or a `BEGIN READ ONLY` - is refused `OutOfSpace` rather than read unregistered. A walk inside a `READ ONLY` transaction reads under the transaction's lease and takes no second slot.
 - **No preemption.** Signal- or timer-driven preemption is forbidden — it destroys deterministic simulation.
 - **Suspension safety.** A coroutine must not be parked while holding a resource that only makes sense within a call — above all a page span (`docs/spec/parser-v2.md` I15's R1). `sched::SetSuspendAudit` is the hook a higher layer installs to answer that, checked in debug builds at every suspension; `exec::InstallSuspendAudit()` is the executor's answer, installed per core on the thread that runs statements: a live page span, a page pin **this thread** holds (`storage::PinsHeldOnThisThread()`, never a store's total, so a peer core's pin on the one pool is not counted), or an open no-refuse window.
@@ -113,13 +113,16 @@ costs latency and never the wake.
 **A registry entry leaves with its reactor, and no kicker may be inside
 it then.** `~Scheduler` takes its own entry out (`WakeRegistry::Unregister`),
 unsynchronised, and its sleeping flag and `Waker` die right after; a
-kicker on the teardown thread is ordered by that thread, and the one
-kicker with a thread of its own - the WAL writer, which kicks parked
-committers' cores after each sync and lives until `~WalManager` - is
-stopped first. Every teardown joins the reactors, then calls
-`WalManager::StopKicking`, which clears the writer's registry under the
-latch each kick round holds (`WalWriter::SetWakeRegistry`, `wal.md` §3) and
-so returns only once no kick is in flight and none can start, and only
+kicker on the teardown thread is ordered by that thread, and the kickers
+with a thread of their own - the WAL writer, which kicks parked
+committers' cores after each sync and lives until `~WalManager`, and since
+DE the page reader's threads, which wake an asker's core after each read
+(`storage/page_reader.hpp`) - are stopped first. Every teardown joins the
+reactors, then calls `WalManager::StopKicking`, which clears the writer's
+registry under the latch each kick round holds (`WalWriter::SetWakeRegistry`,
+`wal.md` §3) and so returns only once no kick is in flight and none can
+start, then - where the instance built one - `PageReader::Stop`, which
+joins the reader's threads, and only
 then destroys a runtime: `Expeditor`'s tail and `StopStartedCores` (which
 a failed `Start` and the destructor of an instance never run both reach),
 and the two-core rig.
@@ -144,8 +147,12 @@ the sum of the cores' `sched_wakes_received`.
 
 **The wake, and its one atomic.** One `Waker` (an eventfd) per reactor,
 armed by `AttachWakerTable` and registered with that reactor's backend like
-any other readable handle — so a single-core build, which attaches no
-table, arms nothing and pays nothing. The same call registers the reactor
+any other readable handle. A single-core server attaches one table since
+DE, of one entry that only the page reader's threads write to
+(`Expeditor`, `publish_load = false`, DE-Q14), so its reactor has a wake
+descriptor in its readiness set and writes its sleeping flag around each
+block; a single-core build with no page reader - a test, a tool - attaches
+no table, arms nothing and pays nothing. The same call registers the reactor
 in the instance's one wake registry (`sched/waker_table.hpp`), which is
 where every write-then-kick consumer (§5) goes. **The attach point takes an
 interface, `WakeRegistry`, and `WakerTable` is its one production
@@ -159,7 +166,11 @@ wraps a real table, logs `(tick, dst)` per kick and forwards at
 advances and never wall time. A kicker wakes **only a destination that is
 actually asleep**, reading that core's `sleeping` flag first, because an
 eventfd write is a syscall on the kicker's critical path and a busy
-destination is never asleep.
+destination is never asleep. **One caller does not read the flag**: the
+page reader's thread ends each read with `WakeRegistry::Wake`, a write
+whatever the flag says (DE-Q14), because a read can complete inside the
+window below and one idle block is many times a read; it is counted with
+the kicks.
 
 **The flag can be missed, and that is the stated cost** (AR0-6-R1). A
 kicker that published just before the destination raised its flag reads it
@@ -258,7 +269,7 @@ clock, so a held kick ends a real idle block only when the cell says so.
 
 ## 9. Invariants
 
-1. One pinned worker thread per core; no thread creation after startup.
+1. One pinned worker thread per core; no thread creation after startup. The threads that are not a core's are started at startup and are the instance's: the WAL writer, the data file's sync thread, and since DE the page reader's four (`storage/page_reader.hpp`, `PageReader::kPageReadThreads`), at every core count.
 2. All scheduler state is core-local but the sleep flag and `Waker` of §7 and, since BL-S1, the core's **load slot** (`sched/core_load.hpp`): above one core the reactor publishes, at its iteration end, the fraction of the last 50 ms window it was busy and spent polling `foreground`, and its queued `foreground` count, for any core to read with relaxed loads; every field has the one writer (beside the slots, since BL-S4, the instance's count of live batch-level sessions has many: `rules.md` §3), a stale value places a transaction on a busier core and never on a wrong one, and at one core nothing is written (`rules.md` §3). `SHOW META` prints each core's slot as `load_c<k>_*`, none at one core, with that core's contention slot beside it as `load_c<k>_waited_<latch>_us` and, since BQ-S1, `load_c<k>_wal_drain_latch_wait_us`, `load_c<k>_wal_roll_blocked_waits` and `load_c<k>_wal_roll_blocked_wait_us`, and since BM-S1 `load_c<k>_visibility_window_lookups`, each absent when 0; slot 0 also carries the threads that declared no core. The scheduler takes no lock. **The reactor is not lock-free, and the exception is named rather than general** (AR0-2): a task appending to the WAL takes the log's latch (`wal.md` §3), a task syncing takes the log device's segment-table lock under it, and a peer's wait on the writer takes the writer's mutex with the latch released. **The enumeration is the invariant** (AO-S8 recounted it against the tree): a lock missing from it is a defect, not a documentation debt. Each carries its order in `rules.md` §3's table and in its own header:
 
     - the **visibility window latch** (`txn/instance_visibility.hpp`, AN-S1), a leaf;
@@ -268,6 +279,7 @@ clock, so a held kick ends a real idle block only when the cell says so.
     - since M2, the **lock table's partition latch** (`txn/lock_table.hpp`, AO-R2) — one `std::mutex` per partition, null at `cores = 1`, taken with no WAL latch and no window latch held and never parked under a page latch (`txn.md` §5), one partition at a time, and released before any park;
     - the lock table's **wait-for latch** (`lock_table.hpp`'s `wait_latch_`), which is deliberately *not* a partition's: the graph spans relations, so an edge is recorded under its own lock and never under the partition the waiter was refused by;
     - since BI-S4 the **data file's sync gate** (`storage/data_syncer.hpp`): `mu_` over its queue state and failure, never held across the device call, and `sync_mu_` around that call, one sync at a time, the innermost lock any caller of it takes; a checkpoint task never holds either across a park - it parks on a ticket, read through atomics - and its thread is the one `sched.md` invariant 1 allows at startup beside the WAL writer;
+    - since DE the **page reader's queue lock** (`storage/page_reader.hpp`): `mu_` over its queue and run flags (`threaded_` written under it, read without it), taken by a reactor for one push and never held across the device call or the wake; a statement parks on a ticket's atomic, with no lock;
     - and since AT-S5d the **assertion registry's two** (`exec/assertion_check.hpp`, `assertion.md` §6.1): its **directory latch**, which never spans page work and does span the WAL append that describes a header change, and one **chain latch** per assertion, which spans its Bound Cabin's appends. Both null at `cores = 1`; the order is the chain latch, a cabin page's latch, the directory latch, the WAL stream latch.
 
     `wal/stream.hpp` and `wal/writer.hpp` state the WAL's order. **Three of these orders are stated and not checked** — the page latch's, the lock table's and the assertion registry's — which `rules.md` §3 calls a comment rather than a rule; the free map's is checked in debug by `HoldsLatch`. A subsystem may add another only by stating it in its own spec, with what it serializes and why a core-local alternative was rejected; an unstated lock in the reactor is a defect.

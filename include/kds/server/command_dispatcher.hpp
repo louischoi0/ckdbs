@@ -44,6 +44,7 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
+#include "kds/stats/index_stats.hpp"
 #include "kds/stats/lock_wait_log.hpp"
 #include "kds/stats/relation_stats.hpp"
 #include "kds/sched/clock.hpp"
@@ -57,6 +58,7 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
+#include "kds/storage/page_reader.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wire/error_registry.hpp"
@@ -277,6 +279,16 @@ struct DispatchOutcome {
     };
     std::optional<PurgeWait> purge_wait = std::nullopt;
 
+    // **DE: a fetch of this statement's body would have had to wait for the
+    // device, and the body was discarded** (`storage/miss_refusal.hpp`,
+    // DE-Q10). The page it was refused. `DispatchAsync` hands the page to
+    // the page reader, parks until it is read and runs the statement again;
+    // `Dispatch` does the same with nowhere to park. Set only where
+    // `StageStatement` found the thread's note, and then the reply beside it
+    // is the refusal, never what the body answered: a caller that recovered
+    // from the refusal may have answered anything.
+    std::optional<PageId> page_wait = std::nullopt;
+
     // **The walk stopped inside the statement and the scope is still open**
     // (AO-S3b). `write_block` says which row and holder; this says the
     // statement is *resumable* rather than re-runnable - it has written rows,
@@ -468,6 +480,9 @@ struct OptimizerSurface {
     // The instance's `ADVISE PLAN` rows (`exec/plan_advice.hpp`, CX-S7). A
     // null leaves the dispatcher's own.
     exec::PlanAdvices* plan_advices = nullptr;
+    // The instance's index usage counts (`stats/index_stats.hpp`, DF-S3). A
+    // null leaves the dispatcher's own.
+    stats::IndexStats* index_stats = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
     const stats::CabinOptimizer* controller = nullptr;
     const exec::CabinOptimizerExecutor* executor = nullptr;
@@ -883,7 +898,10 @@ private:
     // where there was one, so the answer names what actually went wrong
     // rather than the compensation that followed it. `Status::OK()` means
     // the caller has no answer of its own and wants the unwind's.
-    Status AbortOwnedScope(WriteScope& scope, const Status& reported);
+    // `cause` is the end it is counted under (`stats::TxnEnd`): an abort, or
+    // the transaction a write gave up to wait (DF-Q13 (a)).
+    Status AbortOwnedScope(WriteScope& scope, const Status& reported,
+                           stats::TxnEnd cause = stats::TxnEnd::kAbort);
 
     // The trx_id a write stamps: the scope's transaction, or
     // kBootstrapXid when there is no manager.
@@ -978,7 +996,8 @@ private:
     // its refusal's `sys.refusal_stats` count: `began_ns` is when it
     // entered, re-runs and waits included.
     void RecordStatement(std::string_view line, const DispatchOutcome& out,
-                         sched::MonoTimeNs began_ns, const StatementHead& head);
+                         sched::MonoTimeNs began_ns, const StatementHead& head,
+                         Session* session);
     // The running statement's own chain is compiled: `compile_ns` is taken
     // (DF-S1). Its own compile, so a later one - an UPDATE's WHERE after its
     // SET subquery's - replaces an earlier.
@@ -1838,9 +1857,12 @@ private:
     // the transaction the UPDATE holds keeps the horizon beneath it for as long
     // as the subquery runs. `context` is pinned with it: the subquery's
     // `NOW()` is the UPDATE's.
+    // `top_level`: the statement is itself this `SELECT` (`DispatchInner`'s
+    // word), so its body may be refused a page (DE-Q10 (i)).
     DispatchOutcome HandleSelect(std::string_view line, Session& session, bool analyze = false,
                                  const txn::Snapshot* pinned = nullptr,
-                                 const exec::StatementContext* context = nullptr);
+                                 const exec::StatementContext* context = nullptr,
+                                 bool top_level = false);
 
     // Everything `HandleSelect` does once `run` holds its snapshot and its
     // parsed statement: the compile, the trail, the walk or its hand-off.
@@ -2117,6 +2139,19 @@ public:
     // and only a transaction holding nothing waits (AO-S3's guard), so no
     // cycle can form without a detector.
     void set_locks(txn::LockTable* locks) noexcept { locks_ = locks; }
+
+    // **DE: where a page read leaves this core** (`storage/page_reader.hpp`).
+    // With one, a top-level `SELECT` whose head is run inline is refused a
+    // page that would have to be waited for, and is run again once the
+    // reader has read it (`AwaitPageRead`). Null - the default, and every
+    // dispatcher a test or a tool builds without one - reads every page
+    // synchronously, as before DE.
+    void set_page_reader(storage::PageReader* reader) noexcept { page_reader_ = reader; }
+    const storage::PageReader* page_reader() const noexcept { return page_reader_; }
+    // **How many runs of one statement may be refused a page** (DE-Q11): the
+    // run after the last reads synchronously. Eight covers a clustered
+    // descent and an index descent missed at every level.
+    static constexpr std::uint32_t kMaxMissReruns = 8;
     // The statements `max_locks_per_txn` refused since this dispatcher was
     // built - a refusal, never a truncation (AO-S6c-c).
     std::uint64_t borrow_cap_stops() const noexcept { return borrow_cap_stops_; }
@@ -2171,6 +2206,10 @@ public:
         if (surface.captured_plans != nullptr) captured_plans_ = surface.captured_plans;
         if (surface.admin_plans != nullptr) admin_plans_ = surface.admin_plans;
         if (surface.plan_advices != nullptr) plan_advices_ = surface.plan_advices;
+        if (surface.index_stats != nullptr) {
+            index_stats_ = surface.index_stats;
+            index_use_cache_ = {};  // pointers into the store it replaces
+        }
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
         cabin_optimizer_view_latch_ = surface.view_latch;
@@ -2271,6 +2310,9 @@ private:
     // Folds a planned block's complete run into the planner's statistics
     // (docs/spec/plan-stats.md PS2, PS3).
     void RecordPlanStats(const exec::StepChain& chain, const exec::ExecStats& stats);
+    // What each index step of a recorded run did, into `sys.indexes`' usage
+    // counts (DF-S3, `stats/index_stats.hpp`).
+    void RecordIndexUse(const exec::StepChain& chain, const exec::ExecStats& stats);
     void RecordExecution(const std::optional<StatementIdentity>& identity,
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);
@@ -2477,6 +2519,7 @@ private:
     StatusOr<exec::CatalogView> WaitEventNamesView();
     StatusOr<exec::CatalogView> WaitStatsView();
     StatusOr<exec::CatalogView> WaitHistogramView();
+    StatusOr<exec::CatalogView> TxnHistogramView();
     StatusOr<exec::CatalogView> SessionWaitsView();
     StatusOr<exec::CatalogView> AshView();
     StatusOr<exec::CatalogView> SessionStateView();
@@ -2624,6 +2667,7 @@ private:
     // statements re-run at all is `EndWrite`'s call, made by clearing
     // `storage::StructuralRefusalNoted()` for any it ends otherwise.
     bool structural_poison_withheld_ = false;
+    storage::PageReader* page_reader_ = nullptr;  // DE; see `set_page_reader`
 
     // **`strict` commits parked before their publish** (BA-S7 part 2,
     // BA-Q3 (b)). A commit that may park stages its record for the writer
@@ -2706,6 +2750,25 @@ private:
     // Counts the re-run it admits, and rewinds the session's result sink for
     // it (CE-A1); declines one whose rows a client may already have read
     // (CE-R4).
+    // **DE: the park for `out->page_wait`, and the run after it.** Rewinds
+    // the session's sink, hands the page to the reader, parks under
+    // `io.page_read` until the read is made - or the statement's deadline
+    // passes, or its cancel flag is raised, after either of which no later
+    // run of this statement is refused a page - and runs `line` again.
+    // Called only where `page_reader_` is set and the statement may park.
+    sched::Coro AwaitPageRead(std::string_view line, Session* session, DispatchOutcome* out,
+                              sched::MonoTimeNs* statement_deadline_ns);
+    // The bookkeeping both entry points share before a statement is run
+    // again for a page: takes `out->page_wait`, rewinds the session's sink,
+    // counts the refused run. Returns the page, or `kInvalidPageId` where a
+    // row had already left - `*out` is then the refusal, and nothing is run.
+    PageId BeginMissRerun(Session& waiting, DispatchOutcome* out);
+    // Whether a `SELECT` body about to run inline for `session` may be
+    // refused a page (DE-Q10's conditions the dispatcher can see): a reader
+    // to hand the page to, a statement the caller can run again here, fewer
+    // than `kMaxMissReruns` runs refused, and no row handed on yet.
+    bool MissRefusalAdmitted(const Session& session) const noexcept;
+
     bool StructuralRerunDue(const DispatchOutcome& out, Session* session,
                             sched::MonoTimeNs& deadline_ns);
     // The `DispatchAsync` call whose synchronous window is running, and the
@@ -2750,6 +2813,19 @@ private:
     // `ADVISE PLAN`'s rows (CX-S7), on the same terms.
     exec::PlanAdvices own_plan_advices_;
     exec::PlanAdvices* plan_advices_ = &own_plan_advices_;
+    // `sys.indexes`' usage counts (DF-S3), on the same terms.
+    stats::IndexStats own_index_stats_;
+    stats::IndexStats* index_stats_ = &own_index_stats_;
+    // **This core's counts of the indexes it last read through**, direct
+    // mapped by oid: a pointer into `index_stats_`'s part of this core, which
+    // holds for the store's life (`stats/index_stats.hpp`), so a repeated
+    // read of an index adds through it with no latch and no lookup. A slot
+    // names another index after a collision and is filled again.
+    struct IndexUseSlot {
+        catalog::Oid oid = 0;
+        stats::IndexUse* counts = nullptr;
+    };
+    std::array<IndexUseSlot, 8> index_use_cache_{};
     // `set_plan_stats`': the instance's store, and this core's view of it.
     stats::PlanStats* plan_stats_ = nullptr;
     stats::PlanStatsSource plan_source_;
@@ -3015,7 +3091,13 @@ private:
 
     // The local commit and rollback - the whole of both.
     DispatchOutcome CommitLocal(Session& session);
-    DispatchOutcome RollbackLocal(Session& session);
+    // `cause` is the end the rollback is counted under (DF-Q13 (a)).
+    DispatchOutcome RollbackLocal(Session& session, stats::TxnEnd cause);
+    // **The one way an explicit transaction leaves its session**: its life,
+    // from the head of its `BEGIN`, goes to `sys.txn_histogram` (DF-S2) -
+    // a dispatcher with no clock measures nothing and records nothing - and
+    // then `Session::Finish`, which forgets when it began.
+    void FinishExplicitTxn(Session& session, bool read_only) noexcept;
 
 
 

@@ -1,0 +1,12 @@
+spike start 2026-11-19T11:03:33Z
+11:03:33 V round 0 arm A
+11:04:08 V round 0 arm B
+11:04:44 V round 0 arm K1
+11:05:20 V round 1 arm K1
+11:05:55 V round 1 arm A
+11:06:31 V round 1 arm B
+11:07:07 V round 2 arm B
+11:07:42 V round 2 arm K1
+11:08:18 V round 2 arm A
+11:08:54 P start
+spike exit 0 2026-11-19T11:11:55Z

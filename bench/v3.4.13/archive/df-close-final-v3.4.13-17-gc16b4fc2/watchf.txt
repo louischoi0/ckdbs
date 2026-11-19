@@ -1,0 +1,15 @@
+2026-11-19T08:26:53Z newest= age=0s load=5.47 last=2026-11-19T08:26:53Z f lifetime 1 start
+2026-11-19T08:27:53Z newest=log_f_2.txt age=11s load=2.60 last=2026-11-19T08:27:42Z f lifetime 2 start
+2026-11-19T08:28:53Z newest=log_f_3.txt age=22s load=1.78 last=2026-11-19T08:28:31Z f lifetime 3 start
+2026-11-19T08:29:53Z newest=log_f_3.txt age=3s load=2.08 last=2026-11-19T08:28:31Z f lifetime 3 start
+2026-11-19T08:30:53Z newest=log_f_4.txt age=0s load=1.05 last=2026-11-19T08:30:16Z f lifetime 4 start
+2026-11-19T08:31:53Z newest=log_f_5.txt age=2s load=1.51 last=2026-11-19T08:31:18Z f lifetime 5 start
+2026-11-19T08:32:53Z newest=log_f_6.txt age=0s load=1.39 last=2026-11-19T08:32:08Z f lifetime 6 start
+2026-11-19T08:33:53Z newest=log_f_7.txt age=1s load=1.44 last=2026-11-19T08:33:52Z f lifetime 7 start
+2026-11-19T08:34:53Z newest=log_f_7.txt age=14s load=1.20 last=2026-11-19T08:33:52Z f lifetime 7 start
+2026-11-19T08:35:53Z newest=log_f_8.txt age=14s load=1.38 last=2026-11-19T08:35:39Z f lifetime 8 start
+2026-11-19T08:36:53Z newest=log_f_8.txt age=2s load=1.56 last=2026-11-19T08:35:39Z f lifetime 8 start
+2026-11-19T08:37:53Z newest=log_f_9.txt age=4s load=1.41 last=2026-11-19T08:37:31Z f lifetime 9 start
+2026-11-19T08:38:53Z newest=log_f_10.txt age=3s load=1.40 last=2026-11-19T08:38:31Z f lifetime 10 start
+2026-11-19T08:39:53Z newest=log_f_10.txt age=1s load=1.60 last=2026-11-19T08:38:31Z f lifetime 10 start
+2026-11-19T08:40:53Z newest=log_f_10.txt age=57s load=1.26 last=2026-11-19T08:39:57Z f ALLDONE

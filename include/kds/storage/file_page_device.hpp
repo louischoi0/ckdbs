@@ -85,6 +85,16 @@ public:
     const std::string& path() const noexcept { return path_; }
 
     Status ReadPage(PageId page_id, std::span<std::byte, kPageSize> out) override;
+    // `preadv2` with `RWF_NOWAIT`: a page the operating system's cache holds
+    // is copied out; one it does not hold answers "would wait", and the
+    // kernel has by then queued its read. A kernel or file system that
+    // refuses the flag is remembered and read with `pread` from then on.
+    Status ReadPageNoWait(PageId page_id, std::span<std::byte, kPageSize> out,
+                          bool* would_wait) override;
+    // A `pread` into a buffer of this call's own, dropped: what it leaves is
+    // the page in the operating system's cache. No lock, like every read
+    // here; a write racing it tears bytes nobody keeps.
+    void WarmPage(PageId page_id) noexcept override;
     Status WritePage(PageId page_id, std::span<const std::byte, kPageSize> in) override;
 
     // Overridden to move the whole run in one pread/pwrite: consecutive
@@ -120,6 +130,10 @@ private:
     // Serialises `EnsureCapacity`'s grow (the header's concurrency
     // paragraph): a leaf, never held across a park.
     std::mutex grow_mu_;
+    // Set once the kernel or the file system has refused `RWF_NOWAIT`:
+    // every later `ReadPageNoWait` is a `ReadPage`. Relaxed - a reader that
+    // misses the store asks once more and is refused the same way.
+    std::atomic<bool> nowait_refused_{false};
 };
 
 }  // namespace kds::storage

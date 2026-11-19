@@ -101,10 +101,10 @@ returns only what it names, so that conjunct is not compared again.
 | `types` | engine | - | a registered type |
 | `patterns` | engine | - | a `sys.patterns` row - a shape ever opted in to Waystone (`waystone-concpets.md` §4): `oid`, `fetch_id` (decimal), `fingerprint_version`, `stmt_class`, `waystone`, `use_count`, `last_seen`, `waystone_root`, `dir_depth`. `waystone` (1 or 0) replaced `origin` and `pinned` at CF-S1b, and is 1 only for a current-version row with the opt-in bit set, so a lapsed row reads 0 and its `fingerprint_version` says why; `use_count`/`last_seen` frozen at 0 since BL-S4; root and depth NULL where the row has no directory |
 | `namespaces` | schema | - | a namespace, `sys` and `public` first |
-| `indexes` | schema | - | a secondary index, its keys, covered columns, height and entries |
+| `indexes` | schema | - | a secondary index, its keys, covered columns, height and entries, how often it served a read (§6.2b) and how often its leaves split (§6.2c) |
 | `fkeys` | schema | - | a declared foreign key, listed where its child is visible |
 | `access_stats` | engine | - | an access shape `(rel, kind, columns)` of `sys.access_stats` |
-| `relation_stats` | engine | - | a relation's Keystone budget, its tree's shape, the join planner's prior, and its write activity (§6.2) |
+| `relation_stats` | engine | - | a relation's Keystone budget, its tree's shape, the join planner's prior, its write activity (§6.2), its lock waits (§6.2a) and its space (§6.2c) |
 | `cabins` | engine | - | a Cabin and its store counters |
 | `assertions` | engine | - | an assertion, whether it is enforcing, and its counters |
 | `transitions` | engine | - | a declared Transition, verbatim |
@@ -121,6 +121,7 @@ returns only what it names, so that conjunct is not compared again.
 | `wait_event_names` | engine | - | one wait event of the registry (§6.5) |
 | `wait_stats` | engine | - | one event on one core, plus a NULL-core total row per event (§6.6) |
 | `wait_histogram` | engine | - | one non-empty log2 bucket of one event on one core (§6.6) |
+| `txn_histogram` | engine | - | one non-empty log2 bucket of the lives of one core's explicit transactions, by access mode (§6.1c) |
 | `session_waits` | engine | - | one event a session has waited on, cumulative (§6.6) |
 | `session_state` | engine | - | one session's statement task as last published (§6.6) |
 | `ash` | engine | - | one active-session sample (§6.7) |
@@ -136,7 +137,7 @@ returns only what it names, so that conjunct is not compared again.
 | `DESCRIBE <t>`, `DESC <t>` | `SELECT * FROM sys.columns WHERE rel_name = <t>` |
 
 `lock_waits`, `statement_stats`, `statement_histogram`, `refusal_stats`,
-`checkpoints` and `relation_stats`'
+`txn_histogram`, `checkpoints` and `relation_stats`'
 activity have no `SHOW` spelling (BO-Q10), and neither do `types`,
 `objects` or an unkeyed `columns`. `SHOW TRACES`, `SHOW TRACE` and
 `TRACE ON` are retired with the trace sink nothing ever installed (BO-Q9);
@@ -156,9 +157,15 @@ or wrong row costs a reader's insight, never an answer. **No switch**
 (BO-Q8): recording is always on. At BO's close it cost 0.35-0.52 us of
 server CPU per point statement, inside the measurement's spread
 (`bench/v3.3.0/results-bo-close-v3.3.0-23-g86d1fe1a.md`); that number is of
-the statement's record before §6.1's cost columns were added, whose path is
-not measured. `sys.refusal_stats` (§6.1b) is the one store with no latch: a
-fixed table of single-writer words a core.
+the statement's record before DF widened it. What DF added costs a tuple
+key read about +0.5 us more at `cores = 1` - §6.1's cost columns +0.44 us
+(`bench/v3.4.13/results-cx-close-bisect-v3.4.13-1-g11f72ce9.md`), §6.1c,
+§6.2b, §6.6's two ages and §7's `txn` fields +0.07 us together - and an
+index-served read +0.18 us beyond §6.1's share, which was not measured on
+that shape; a write is inside the measurement's floor
+(`bench/v3.4.13/results-df-close-final-v3.4.13-17-gc16b4fc2.md`). `sys.refusal_stats` (§6.1b) and the transaction statistics
+(§6.1c, §7's `txn` counts) are the two stores with no latch: each a fixed
+table of single-writer words a core.
 
 ### 6.1 `sys.statement_stats` (`stats/statement_stats.hpp`)
 
@@ -274,6 +281,21 @@ Bounded by the registry: 64 codes a core, a fixed 1 KB, no allocation, and
 keyed by nothing a client can mint. Read without a latch, so a row's
 `count` and `last_seen` may differ by a refusal in flight.
 
+### 6.1c `sys.txn_histogram` (`stats/txn_stats.hpp`)
+
+How long explicit transactions live: `core`, `access`, `bucket`, `lo_us`,
+`count`. A life runs from the head of the transaction's `BEGIN` to the
+instant its end is handled - its `COMMIT`, its `ROLLBACK`, the listener's
+rollback at the lifetime ceiling or at a close - and falls in one of
+`sys.wait_histogram`'s 32 buckets (§6.6). A `strict` commit that parks for
+its sync is recorded before that park, so its wait is not in its life.
+`access` is `read write` or `read only`: a `BEGIN ... READ ONLY`
+transaction's life is kept apart. One row per core, access mode and
+non-empty bucket. **An autocommit statement's transaction is not here**;
+its statement is in `sys.statement_histogram`. The store is §7's `txn`
+counts' (a fixed 0.6 KB a core, no latch, no allocation), and an instance
+with no clock records no life.
+
 ### 6.2 `sys.relation_stats`' activity (`stats/relation_stats.hpp`)
 
 `inserts`, `updates`, `deletes`, `purged`: the rows a relation's write
@@ -289,6 +311,109 @@ per core, counts every relation a core has written since the instance
 started, dropped ones included** (BO-Q15 (b)): past it, that core's writes
 of a relation new to it are dropped, the view under-counts the relation,
 and `relation_stats_dropped` above 0 says so.
+
+### 6.2a `sys.relation_stats`' lock waits (`stats/relation_stats.hpp`)
+
+`lock_waits`, `lock_wait_us`, `lock_deadlocks`, `lock_fault_nets`: the lock
+waits registered on a unit of the relation since the instance started,
+every core's summed - how many, their time, and how many of them ended
+`deadlock` and `fault_net`. **Counted where a `sys.lock_waits` row is
+written** (§6.3), from that row's relation, time and outcome, so the four
+keep what that ring has overwritten and are bounded by it in nothing else:
+what writes no row there is in none of them. `lock_deadlocks` summed is
+therefore the deadlocks that wrote a row, not every deadlock refusal - a
+victim whose slot had already flipped writes none, nor does an online index
+build's drain - and a wait a destroyed frame ended (`cancelled`) is in
+`lock_waits` and `lock_wait_us` alone. They share §6.2's store, part and
+bound: a relation's first wait on a core is that core's first sight of it.
+
+### 6.2b `sys.indexes`' usage (`stats/index_stats.hpp`)
+
+`probes`, `ranges`, `entries_scanned`, `rows_resolved`, `last_used`: how
+often each secondary index served a read since the instance started, every
+core's summed. Folded from the executor's per-step counters where a chain's
+run is recorded: for every step an index served, the times the step walked
+it between one pair of bounds - `probes` for an equality step, `ranges` for
+a range step - the entries it read there and the tuple keys it then
+descended for, and the instant of the latest such run: `last_used` is the
+head of that run's statement - kept on the monotonic clock, so the fold
+reads no clock, and shown as the wall instant that long before the read -
+and is NULL for an index no read has used and on an instance with no
+clock. **A walk is counted where the index is
+read**: an index step under another step counts once per row of the outer,
+a value list once per value (`index.md` IX8b), and a step that names an
+index and walks its relation instead - the `indexes` key off, the index
+dropped under a compiled chain, a correlated probe that could not key -
+counts nothing.
+
+**A run is folded when it completes.** A stopped run (a `LIMIT`) folds the
+prefix it ran; an `ANALYZE` runs its statement, and that run is a use like
+any other; a statement refused before or during its run folds nothing of
+it. Each relation walk of a query-layer statement is a run of its own, so
+a layer statement refused after a walk finished has folded that walk.
+
+**What is not a step is not counted.** A unique index's check descents and
+a foreign key's are not a step: `unique` is what says such an index is in
+use. A write's maintenance of an index is no use, and the dispatcher's walk
+of an `UPDATE`'s or a `DELETE`'s `WHERE` reads none; a write's own read
+through the query layer - `INSERT ... SELECT`'s source - is a run and is
+counted. The chain a write's `WHERE` subquery runs can be served by an
+index, and its counters are dropped where it runs, so that use is counted
+nowhere. `REINDEX` builds under a new oid, so a rebuilt index starts at 0.
+
+**The instance owns the store**, unlike §6's others: a restart, a restore
+and a second instance in one process each start empty with no reset. One
+part per core (`stats/oid_parts.hpp`, §6.2's shape), the core a statement
+ran on its only writer. **The part's latch guards its map, not its
+counts**: a core's first sight of an index takes the latch and makes the
+one allocation; the counts are single-writer relaxed words that are never
+moved or erased, so the core keeps the pointer to an index's counts (its
+dispatcher's eight-slot cache, by oid) and a repeated read adds through it
+with no latch, no lookup and no allocation. A reader takes each part's
+latch for the map and reads the words as they stand, so a row's columns
+may differ by a run in flight. Bounded at
+4096 indexes a core, dropped ones included; past it a new index's counts
+are dropped and `index_stats_dropped` (`sys.meta`) says so. **Nothing reads
+a count**: no advisor, no automatic drop (DF-R3).
+
+### 6.2c Space (`stats/plan_stats.hpp`, `stats/leaf_stats.hpp`)
+
+**`est_delete_marked`** on `sys.relation_stats`: an estimate of the
+relation's delete-marked rows - rows a `DELETE` marked that no `PURGE` has
+retired, which still take their room. It is the join planner's steward's
+sample (`plan-stats.md` §4): the delete-marked slots of the leaves it read
+for the relation's prior, scaled as it scales their live slots, exact for a
+tree of one leaf. **As old as the relation's last seed that read a leaf**:
+the steward comes back to a relation no sooner than 10 s after its last
+seed, and later the more relations it keeps - it spends 16 page reads a
+1 s step, a relation of height 2 costing about six - and **NULL for a
+relation it has not sampled a leaf of**: it seeds a relation a searched
+join block named, or one whose prior a clean shutdown carried, and no
+other. Undecided
+versions count as they lie, as PS1's do. **It is not a planner fact**
+(DF-R8): it is kept beside the prior in a table this view alone reads, it
+is in no snapshot, and it moves no `generation`.
+
+**`leaf_divisions` and `leaf_compactions`** on `sys.relation_stats`, and
+**`leaf_divisions`** on `sys.indexes`: how often the tree's leaves divided,
+and how often a clustered leaf was compacted in place, since the process
+started. Counted where the act is done, by the oid that owns the tree's
+pages. **A division moves rows**: a full leaf whose new key sorts inside it
+gives half its rows to a new leaf. **An append is not one**: a clustered
+tree grown by a fresh leaf to the right of a full one, nothing moved - what
+a rising key produces - is counted nowhere, so a relation loaded in key
+order reads 0 however many leaves it has. An index leaf has no append
+shape, so every split of one is a division, a build's and a rebuild's
+included. A compaction is the rebuild in place of a full clustered leaf
+over slots a rollback or a `PURGE` retired, taken in place of a division
+(`heap-and-tuple.md` §5); an index leaf is never compacted, no index entry
+being removed, and `sys.indexes` has no such column. A mount's replay
+counts nothing. The store is the process's, as §6's are but §6.2b's -
+the storage layer has no instance to ask - bounded at 8192 trees a core,
+relations and indexes together; past it a new tree's counts are dropped and
+`leaf_stats_dropped` (`sys.meta`) says so. A tree's first division on a
+core allocates its count, under the divided leaf's hold; a failed
+allocation drops the count, never the split.
 
 ### 6.3 `sys.lock_waits` (`stats/lock_wait_log.hpp`)
 
@@ -353,9 +478,19 @@ two columns of one row may differ by a wait in flight.
 - `session_waits`: `session_id`, `event`, `count`, `total_us`; a session's
   `cpu.on_cpu` row is its ON_CPU time and its RUNNABLE time is `sched.run_queue`.
   A session's rows leave with it; a background task is no session.
-- `session_state`: `session_id`, `state`, `event`, `p1`-`p3`, `elapsed_us`. A
+- `session_state`: `session_id`, `state`, `event`, `p1`-`p3`, `elapsed_us`,
+  `txn_age_us`, `view_age_us`. A
   session between statements shows IDLE on `idle.client`. `session_id` is the
-  engine's private counter, not the KWP handshake id.
+  engine's private counter, not the KWP handshake id. **The two ages are what
+  the session holds open** (DF-Q8 (a)), which is how the session holding the
+  read horizon (§7) is found: `txn_age_us` is the time since its explicit
+  transaction's `BEGIN`, of either access mode, and `view_age_us` the time
+  since the read view it holds was minted - its transaction's, which under
+  READ COMMITTED is re-minted at each statement and under REPEATABLE READ is
+  `BEGIN`'s, or its running autocommit statement's. Each is counted from the
+  head of the statement that did it, on the answering core's clock; each is
+  NULL with nothing held, and on an instance with no clock. An online index
+  build's view is re-minted at every slice and its age follows.
 
 **DB time** (I3) is ON_CPU + `sched.run_queue` + every timed event outside
 `idle.*`; `ANALYZE` prints a statement's as `DB time 4.21 ms = CPU 1.02 +
@@ -433,11 +568,59 @@ line). Both are per core, count from the process's start, and are absent
 on a dispatcher with no transaction manager. No wait event goes with them:
 a read-only transaction adds no wait.
 
+**How this core's read-write transactions ended** (DF-Q13 (a),
+`stats/txn_stats.hpp`), six counts from the process's start, each counted
+where its cause is known, so the six partition the transactions the core
+decided:
+
+- `commits`: a commit published - autocommit and explicit alike, a parked
+  `strict` commit once its record is durable. Not a second name for the
+  log's commit counts: those count records appended, by rung, and keep a
+  staged `strict` commit a failed sync then aborts.
+- `rollbacks`: the client's `ROLLBACK`, and a load stream's own abort. A
+  `ROLLBACK` that ends nothing - after the lifetime sweep has already rolled
+  the transaction back - is not counted.
+- `ceiling_rollbacks`: the listener's sweep at `txn_lifetime_ceiling_ms`.
+- `close_rollbacks`: a connection that went away with a transaction open,
+  and a load listener detaching with a load in progress.
+- `aborts`: the engine rolled the transaction back because a statement or a
+  commit failed - an autocommit statement's, an autocommit or explicit
+  `COMMIT`'s, a parked `strict` commit's whose sync never came, a load
+  stream's failed chunk or a frame not legal inside it. A failed statement
+  inside an explicit transaction decides nothing and counts nothing: the
+  rollback that follows does.
+- `wait_aborts`: an autocommit write gave its transaction up before it had
+  written a row - to wait for a row's writer or a relation's lock, or to run
+  again after a stale descent (`txn.md` §5) - counted when it is given up,
+  whether the statement then runs again or is refused. One client statement
+  can make several.
+
+A `READ ONLY` transaction decides nothing and is in none of the six; nor is
+the lock-holder transaction a declaration's build takes and always rolls
+back, nor a mount's losers (`recovery_rolled_back`).
+
+**The read horizon, the instance's** (DF-Q8 (a)): `read_horizon_lsn`, the
+oldest snapshot LSN a live read view holds on any core, which bounds every
+purge (`txn.md` §4.1); `read_horizon_core`, the core whose bound that is;
+and `read_horizon_age_us`, how long ago the view holding it was minted -
+the oldest such view of that core, counted from the head of the statement
+that minted it. The three read the same on every core. **The statement
+that reads them holds a view of its own while it runs**, so with nothing
+older held it reads its own - its core, and an age near 0 - and no `SELECT`
+sees the `none` the LSN and the core hold with no view held anywhere. The
+age is `none` for a view nobody stamped (an instance with no clock). A KWP
+load chunk's view is stamped by a clock read of its own, a chunk being no
+staged statement. The three are read without a latch from words
+each core publishes for itself, so they are a moment's view: a core in the
+middle of minting a view has lowered its bound and not yet published the
+stamp. `sys.session_state`'s `view_age_us` names the session (§6.6).
+
 ## 8. What is not here
 
 - `sys.sessions` (W2: excluded by the operator).
-- Per-relation page counts, leaf splits, spills and delete-marked slots
-  (BO-Q13).
+- Per-relation page counts and spills (BO-Q13). Delete-marked rows and
+  leaf divisions, which BO-Q13 also excluded, are §6.2c's (DF-Q9 (a)).
+- An exact count of a relation's delete-marked rows: §6.2c's is a sample.
 - A cross-core `sys.meta`: every core's fields readable from one session
   needs a field-by-field census of what is readable across cores
   (`known-gaps.md`).

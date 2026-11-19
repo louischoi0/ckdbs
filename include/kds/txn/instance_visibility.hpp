@@ -240,6 +240,29 @@ namespace kds::txn {
 // one of the four is consumed by a `min`.
 inline constexpr std::uint64_t kUnboundedBound = std::numeric_limits<std::uint64_t>::max();
 
+// A view nobody stamped: minted by a caller with no clock, or by a fixture
+// that passes none. Its age is not known, and is shown as none (DF-R7).
+inline constexpr std::uint64_t kNoMintStamp = 0;
+
+// **The oldest snapshot among some views, and when the view holding it was
+// minted**: the reduction a core runs over its own views and the instance
+// over its cores, so the two cannot rank differently. The lower LSN holds;
+// between views at one LSN the older stamp, an unstamped one counting as
+// oldest - its age is not known, and a known age beside it would understate
+// what holds the bound.
+struct HeldBound {
+    std::uint64_t lsn = kUnboundedBound;
+    std::uint64_t minted_ns = kNoMintStamp;
+
+    // True when `held` became the holder.
+    bool Take(std::uint64_t held_lsn, std::uint64_t held_minted_ns) noexcept {
+        if (held_lsn > lsn || (held_lsn == lsn && held_minted_ns >= minted_ns)) return false;
+        lsn = held_lsn;
+        minted_ns = held_minted_ns;
+        return true;
+    }
+};
+
 // A window miss. `wal::kNoLsn` is 0 and no commit record ever sits at LSN 0,
 // so the sentinel and the type's own null agree.
 inline constexpr std::uint64_t kNoCommitLsn = 0;
@@ -250,6 +273,14 @@ struct CoreVisibilitySlot {
     // transactions' views and its leased readers - or `kUnboundedBound`
     // with none. The instance horizon is the minimum of these.
     std::atomic<std::uint64_t> min_snapshot_lsn{kUnboundedBound};
+
+    // **When the view holding `min_snapshot_lsn` was minted** (DF-S2), on
+    // the instance's monotonic clock: the oldest stamp among this core's
+    // views at that LSN, `kNoMintStamp` with no view or with one nobody
+    // stamped. A statistic and nothing else (DF-R3): relaxed, stored beside
+    // the bound and not with it, so a reader on another core can pair one
+    // publication's LSN with the next one's stamp. `HorizonHeldBy` reads it.
+    std::atomic<std::uint64_t> min_snapshot_minted_ns{kNoMintStamp};
 
     // `TrxIdSequence::peek()` - the next id this core would issue. Below
     // it, this core will never issue again. `kUnboundedBound` means the
@@ -422,8 +453,10 @@ public:
         return false;
     }
 
-    // This core's oldest live snapshot LSN, `kUnboundedBound` with none.
-    void PublishSnapshotBound(std::uint32_t core, std::uint64_t lsn) noexcept;
+    // This core's oldest live snapshot LSN, `kUnboundedBound` with none, and
+    // when the view holding it was minted (`CoreVisibilitySlot`).
+    void PublishSnapshotBound(std::uint32_t core, std::uint64_t lsn,
+                              std::uint64_t minted_ns = kNoMintStamp) noexcept;
 
     // **Before a mint reads the ceiling**: lowers this core's slot to `lsn`
     // if it is above it, and never raises it. The header's "reclamation"
@@ -556,6 +589,18 @@ public:
     // The oldest snapshot LSN any core holds; `kUnboundedBound` with none.
     // `TransactionManager::ReadHorizon()` on every core answers this.
     std::uint64_t HorizonLsn() const noexcept;
+
+    // **Who holds the horizon** (DF-S2, `sys.meta`'s `read_horizon_*`): the
+    // core whose bound is the minimum, that bound, and the stamp it
+    // published with it (`HeldBound`'s ranking, over cores). `lsn` is
+    // `kUnboundedBound`, and the rest meaningless, with no view held
+    // anywhere. A statistic: the three are read unguarded, and a core in the
+    // middle of a mint has lowered its bound and not yet published the
+    // stamp, so it answers the stamp its slot held before.
+    struct HorizonHolder : HeldBound {
+        std::uint32_t core = 0;
+    };
+    HorizonHolder HorizonHeldBy() const noexcept;
 
     // How far the floor could rise if no reader held it back: the minimum
     // over attached cores of that core's cursor and its oldest unresolved

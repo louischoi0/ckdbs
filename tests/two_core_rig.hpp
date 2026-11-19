@@ -189,6 +189,10 @@ public:
         // `Expeditor` wires it. Off by default, so a cell that compares a
         // recovery reading below the anchor still has the segments to read.
         bool recycle = false;
+        // The pool's capacity. Roomy by default, so nothing a cell touches is
+        // evicted; a cell about a page that is not resident (DE) sets it
+        // small and writes its load back as it goes.
+        std::size_t buffer_pool_frames = 4096;
     };
 
     static StatusOr<std::unique_ptr<TwoCoreRig>> Open() { return Open(Options{}); }
@@ -260,6 +264,13 @@ public:
         return Status::OK();
     }
     storage::DevicePageStore& store() noexcept { return *store_; }
+    // The volume's device, and - unless the rig is file-backed - the memory
+    // device it is, for a cell that sets its modes.
+    storage::PageDevice& device() noexcept { return *device_; }
+    storage::MemoryPageDevice* memory_device() noexcept {
+        return options_.file_backed ? nullptr
+                                    : static_cast<storage::MemoryPageDevice*>(device_.get());
+    }
     // The instance's one stream and its device: what a cell checkpoints
     // into, and what a mount's scan reads back.
     wal::WalManager& wal() noexcept { return *wal_; }
@@ -391,7 +402,8 @@ private:
             if (!device.ok()) return device.status();
             device_ = std::move(device.value());
         }
-        auto store = storage::DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(
+            *device_, ::kds::storage::FrameCapacity{options_.buffer_pool_frames}, kFirstUserPageId);
         if (!store.ok()) return store.status();
         store_ = std::move(store.value());
         // EV3's floor, `Expeditor::Open`'s one install site.
@@ -476,6 +488,9 @@ private:
             // stop being able to see.
             config.cabins_store = &cabins_;
             config.assertions = &assertions_;
+            // The instance's index usage counts (DF-S3), as `Expeditor`
+            // hands them: one store both cores' reads fold into.
+            config.optimizer.index_stats = &index_stats_;
             // The peer's checkpointer publishes into an anchor, as
             // `Expeditor`'s peers do (AT-S8); a rig never remounts, so an
             // in-memory one stands in for page 0. Core 0's is `Expeditor`'s
@@ -513,6 +528,7 @@ private:
     Options options_;
     std::filesystem::path dir_;
     sched::SystemClock clock_;
+    stats::IndexStats index_stats_;  // outlives both cores' dispatchers
     std::unique_ptr<storage::PageDevice> device_;
     std::unique_ptr<storage::DevicePageStore> store_;
     std::optional<bootstrap::BootstrapResult> boot_;

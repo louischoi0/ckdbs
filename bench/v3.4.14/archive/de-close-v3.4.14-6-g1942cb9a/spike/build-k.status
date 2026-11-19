@@ -1,0 +1,9 @@
+K start 11:01:12
+K1 exit 0 11:01:57
+K2 exit 0 11:02:26
+K3 exit 0 11:02:54
+restored exit 0 11:03:03 dirty:  M include/kds/sched/io_backend.hpp  M src/exec/step_vm.cpp 
+23d06ee45d6ba6db4aeed7af18d51e948a6b9b407fb97da78efdf0cf75824f81  /home/louis/bench-runs/de/close/kds_server_K1
+73d19c76a3773481095310cfa696a6de1dcc6abe404411bc494f766f1fa86fe0  /home/louis/bench-runs/de/close/kds_server_K2
+b9c67ca646be05a0b834c37ad7d5ea20ff840dbf5e161be4b849583a5ed503d6  /home/louis/bench-runs/de/close/kds_server_K3
+23d06ee45d6ba6db4aeed7af18d51e948a6b9b407fb97da78efdf0cf75824f81  build-release/kds_server

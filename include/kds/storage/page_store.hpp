@@ -42,6 +42,13 @@ enum class PageAccess {
     // faults in enters cold, so a scan larger than the pool does not
     // displace the working set; a page it finds resident warms as any hit.
     kScan,
+    // `kScan`, and **the fetch is refused where its page would have to be
+    // waited for** (DE-Q8, `miss_refusal.hpp`): `StatusCode::kNotResident`,
+    // nothing fetched and nothing pinned. For the one caller that can park
+    // holding nothing and make the fetch again - the yielding walk at the
+    // top of its page loop. A hit, and a miss the device answers at once,
+    // are `kScan`'s.
+    kScanNoWait,
 };
 
 // How a fetch counts toward its frame's CLOCK usage (`eviction.md` §3.1).
@@ -51,6 +58,9 @@ enum class FetchHeat : std::uint8_t {
     kWarm,  // a fault enters at usage 1, a hit bumps: every ordinary fetch
     kScan,  // a fault enters at usage 0, a hit bumps: `PageAccess::kScan` (BE-R5)
     kRing,  // a fault enters at usage 0, a hit never bumps: the scan ring (§5)
+    // `kScan`'s heat; a fault that would wait for the device is refused
+    // instead (`PageAccess::kScanNoWait`). Tested on the miss path only.
+    kScanNoWait,
 };
 
 // How a bulk sequential reader fetches pages (docs/spec/eviction.md §5).
@@ -272,12 +282,14 @@ public:
 
     // The accessor a page walk's `PageAccess` names, so a visitor does not
     // spell the mapping itself: `kWrite` is `Get`, `kRead` is `GetForRead`,
-    // and `kScan` is `GetForRead` with a fault entering cold (BE-R5).
+    // `kScan` is `GetForRead` with a fault entering cold (BE-R5), and
+    // `kScanNoWait` is `kScan` refused where it would wait (DE-Q8).
     StatusOr<PageRef> Fetch(PageId page_id, PageAccess access) {
         if (access == PageAccess::kWrite) return Get(page_id);
         auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true,
-                                 access == PageAccess::kScan ? FetchHeat::kScan
-                                                             : FetchHeat::kWarm);
+                                 access == PageAccess::kScan         ? FetchHeat::kScan
+                                 : access == PageAccess::kScanNoWait ? FetchHeat::kScanNoWait
+                                                                     : FetchHeat::kWarm);
         if (!bytes.ok()) return bytes.status();
         return PageRef(this, page_id, bytes.value());
     }
@@ -454,6 +466,9 @@ public:
         // FULL_PAGE_IMAGEs the write fetch logged (DB-R6); each is
         // `wal::RecordSize(kPageSize)` bytes of log.
         std::uint64_t fetch_images = 0;
+        // Fetches refused because the device would have had to be waited
+        // for (DE, `miss_refusal.hpp`): each is a read that left its reactor.
+        std::uint64_t would_wait = 0;
     };
     virtual PoolCounters pool_counters() const { return {}; }
 

@@ -78,6 +78,7 @@ add_library(kds
     src/storage/in_memory_page_store.cpp
     src/storage/cabin_bound_page.cpp
     src/storage/data_syncer.cpp
+    src/storage/page_reader.cpp
     src/storage/device_page_store.cpp
     src/storage/page_mgr/page_mgr.cpp
     src/server/superblock.cpp
@@ -108,6 +109,8 @@ add_library(kds
     src/stats/relation_stats.cpp
     src/stats/statement_stats.cpp
     src/stats/refusal_stats.cpp
+    src/stats/txn_stats.cpp
+    src/stats/leaf_stats.cpp
     src/stats/trail_recorder.cpp
     src/stats/access_stats.cpp
     src/stats/cabin_store.cpp

@@ -1,0 +1,108 @@
+probe {'p0_us': 278.0, 'p25_us': 404.4, 'p50_us': 448.3, 'p95_us': 690.7, 'p99_us': 1007.8, 'p99.9_us': 2638.6, 'max_us': 2638.6, 'n': 200} cold_rate=650.0/s
+de-i-A-r0 load 1.43 cached=1.00 hot p50=262.0 p95=368.4 p99=517.1 max=7543.1 n=20003 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 35.2 s
+probe {'p0_us': 219.7, 'p25_us': 402.3, 'p50_us': 453.9, 'p95_us': 603.0, 'p99_us': 817.7, 'p99.9_us': 3019.3, 'max_us': 3019.3, 'n': 200} cold_rate=650.0/s
+de-i-B-r0 load 0.97 cached=1.00 hot p50=258.9 p95=365.3 p99=525.5 max=8247.9 n=20004 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 35.2 s
+probe {'p0_us': 268.0, 'p25_us': 430.6, 'p50_us': 473.5, 'p95_us': 707.4, 'p99_us': 891.5, 'p99.9_us': 1061.6, 'max_us': 1061.6, 'n': 200} cold_rate=650.0/s
+de-ii-A-r0 load 0.80 cached=1.00 hot p50=245.1 p95=359.3 p99=413.2 max=4531.4 n=20004 cold p50=160.7 reads=10020 read_share=0.0025 dev_bytes/read=0.0 errors=0
+done in 36.0 s
+probe {'p0_us': 340.1, 'p25_us': 435.6, 'p50_us': 497.9, 'p95_us': 851.5, 'p99_us': 1783.9, 'p99.9_us': 3552.6, 'max_us': 3552.6, 'n': 200} cold_rate=650.0/s
+de-ii-B-r0 load 0.55 cached=1.00 hot p50=243.9 p95=355.7 p99=412.0 max=5986.9 n=20004 cold p50=159.7 reads=10023 read_share=0.0025 dev_bytes/read=0.0 errors=0
+done in 36.0 s
+probe {'p0_us': 285.2, 'p25_us': 414.7, 'p50_us': 466.6, 'p95_us': 653.6, 'p99_us': 977.9, 'p99.9_us': 1464.3, 'max_us': 1464.3, 'n': 200} cold_rate=650.0/s
+de-iii-A-r0 load 1.12 cached=0.00 hot p50=272.5 p95=819.9 p99=148869.0 max=234408.1 n=20004 cold p50=621.8 reads=10073 read_share=0.2607 dev_bytes/read=8257.9 errors=0
+done in 35.9 s
+probe {'p0_us': 231.2, 'p25_us': 319.7, 'p50_us': 387.1, 'p95_us': 611.6, 'p99_us': 818.9, 'p99.9_us': 1263.1, 'max_us': 1263.1, 'n': 200} cold_rate=650.0/s
+de-iii-B-r0 load 1.00 cached=0.00 hot p50=247.7 p95=360.3 p99=416.3 max=4098.9 n=20004 cold p50=643.0 reads=10026 read_share=0.2418 dev_bytes/read=8267.2 errors=0
+done in 35.9 s
+probe {'p0_us': 228.3, 'p25_us': 327.5, 'p50_us': 387.0, 'p95_us': 573.0, 'p99_us': 668.2, 'p99.9_us': 1159.9, 'max_us': 1159.9, 'n': 200} cold_rate=650.0/s
+de-iv-A-r0 load 0.66 cached=0.00 hot p50=5759164.3 p95=8772265.9 p99=9042312.6 max=9110828.9 n=10895 cold p50=None reads=395848 read_share=0.9272 dev_bytes/read=8203.4 errors=0
+done in 35.2 s
+probe {'p0_us': 231.0, 'p25_us': 328.5, 'p50_us': 379.4, 'p95_us': 892.2, 'p99_us': 1617.5, 'p99.9_us': 1896.4, 'max_us': 1896.4, 'n': 200} cold_rate=650.0/s
+de-iv-B-r0 load 0.83 cached=0.00 hot p50=282.8 p95=455.9 p99=587.7 max=4652.5 n=20003 cold p50=None reads=395924 read_share=0.9053 dev_bytes/read=8203.5 errors=0
+done in 35.2 s
+probe {'p0_us': 219.2, 'p25_us': 311.2, 'p50_us': 360.1, 'p95_us': 511.6, 'p99_us': 717.3, 'p99.9_us': 1209.2, 'max_us': 1209.2, 'n': 200} cold_rate=650.0/s
+de-v-A-r0 load 0.97 cached=1.00 hot p50=239.1 p95=351.2 p99=397.7 max=3410.6 n=20004 cold p50=149.3 reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 36.3 s
+probe {'p0_us': 236.6, 'p25_us': 400.9, 'p50_us': 447.4, 'p95_us': 656.7, 'p99_us': 798.4, 'p99.9_us': 1284.0, 'max_us': 1284.0, 'n': 200} cold_rate=650.0/s
+de-v-B-r0 load 0.95 cached=1.00 hot p50=237.9 p95=348.8 p99=399.6 max=6044.9 n=20003 cold p50=151.2 reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 36.3 s
+probe {'p0_us': 334.6, 'p25_us': 435.0, 'p50_us': 488.7, 'p95_us': 957.1, 'p99_us': 1461.6, 'p99.9_us': 2547.2, 'max_us': 2547.2, 'n': 200} cold_rate=650.0/s
+de-vscan-A-r0 load 0.72 cached=1.00 hot p50=280.4 p95=351.7 p99=395.5 max=4818.9 n=20003 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 35.8 s
+probe {'p0_us': 282.2, 'p25_us': 445.3, 'p50_us': 487.1, 'p95_us': 958.4, 'p99_us': 2173.0, 'p99.9_us': 2481.9, 'max_us': 2481.9, 'n': 200} cold_rate=650.0/s
+de-vscan-B-r0 load 1.04 cached=1.00 hot p50=278.0 p95=346.7 p99=381.7 max=8275.5 n=20004 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 35.6 s
+probe {'p0_us': 336.7, 'p25_us': 421.2, 'p50_us': 462.5, 'p95_us': 648.2, 'p99_us': 1056.2, 'p99.9_us': 3271.7, 'max_us': 3271.7, 'n': 200} cold_rate=650.0/s
+de-iii4-A-r0 load 1.18 cached=0.00 hot p50=294.9 p95=380.0 p99=435.1 max=4889.2 n=20004 cold p50=668.8 reads=10025 read_share=0.2573 dev_bytes/read=8257.4 errors=0
+done in 40.7 s
+probe {'p0_us': 237.7, 'p25_us': 353.5, 'p50_us': 411.3, 'p95_us': 568.5, 'p99_us': 1497.5, 'p99.9_us': 3222.2, 'max_us': 3222.2, 'n': 200} cold_rate=650.0/s
+de-iii4-B-r0 load 0.83 cached=0.00 hot p50=298.5 p95=384.3 p99=431.5 max=6490.5 n=20004 cold p50=691.2 reads=10027 read_share=0.239 dev_bytes/read=8262.3 errors=0
+done in 40.7 s
+probe {'p0_us': 237.7, 'p25_us': 349.4, 'p50_us': 401.5, 'p95_us': 585.0, 'p99_us': 677.9, 'p99.9_us': 738.3, 'max_us': 738.3, 'n': 200} cold_rate=650.0/s
+de-i-B-r1 load 1.00 cached=1.00 hot p50=259.6 p95=361.9 p99=403.2 max=8358.5 n=20004 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 35.1 s
+probe {'p0_us': 271.5, 'p25_us': 410.1, 'p50_us': 458.0, 'p95_us': 613.3, 'p99_us': 745.1, 'p99.9_us': 810.8, 'max_us': 810.8, 'n': 200} cold_rate=650.0/s
+de-i-A-r1 load 1.07 cached=1.00 hot p50=257.0 p95=361.7 p99=409.1 max=5913.7 n=20004 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 35.4 s
+probe {'p0_us': 283.0, 'p25_us': 394.1, 'p50_us': 434.3, 'p95_us': 599.5, 'p99_us': 675.7, 'p99.9_us': 985.2, 'max_us': 985.2, 'n': 200} cold_rate=650.0/s
+de-ii-B-r1 load 0.75 cached=1.00 hot p50=240.3 p95=353.3 p99=400.8 max=3962.5 n=20004 cold p50=155.7 reads=10020 read_share=0.0025 dev_bytes/read=0.0 errors=0
+done in 36.1 s
+probe {'p0_us': 293.6, 'p25_us': 423.4, 'p50_us': 457.7, 'p95_us': 626.8, 'p99_us': 838.9, 'p99.9_us': 1158.2, 'max_us': 1158.2, 'n': 200} cold_rate=650.0/s
+de-ii-A-r1 load 0.56 cached=1.00 hot p50=238.9 p95=352.9 p99=404.8 max=4631.8 n=20004 cold p50=154.5 reads=10010 read_share=0.0024 dev_bytes/read=0.0 errors=0
+done in 36.0 s
+probe {'p0_us': 293.7, 'p25_us': 401.8, 'p50_us': 451.4, 'p95_us': 676.4, 'p99_us': 1116.7, 'p99.9_us': 1503.7, 'max_us': 1503.7, 'n': 200} cold_rate=650.0/s
+de-iii-B-r1 load 0.44 cached=0.00 hot p50=244.4 p95=358.1 p99=411.5 max=4354.0 n=20004 cold p50=634.0 reads=10001 read_share=0.2387 dev_bytes/read=8264.9 errors=0
+done in 35.9 s
+probe {'p0_us': 253.1, 'p25_us': 340.1, 'p50_us': 405.9, 'p95_us': 665.9, 'p99_us': 1033.5, 'p99.9_us': 2084.1, 'max_us': 2084.1, 'n': 200} cold_rate=650.0/s
+de-iii-A-r1 load 0.77 cached=0.00 hot p50=272.5 p95=747.9 p99=1022.1 max=7190.2 n=20004 cold p50=616.8 reads=10025 read_share=0.249 dev_bytes/read=8266.4 errors=0
+done in 35.9 s
+probe {'p0_us': 241.2, 'p25_us': 327.1, 'p50_us': 385.3, 'p95_us': 562.8, 'p99_us': 650.0, 'p99.9_us': 747.2, 'max_us': 747.2, 'n': 200} cold_rate=650.0/s
+de-iv-B-r1 load 0.91 cached=0.00 hot p50=284.2 p95=459.9 p99=605.8 max=6588.0 n=20004 cold p50=None reads=389789 read_share=0.905 dev_bytes/read=8204.2 errors=0
+done in 35.2 s
+probe {'p0_us': 229.3, 'p25_us': 296.8, 'p50_us': 344.5, 'p95_us': 524.8, 'p99_us': 811.0, 'p99.9_us': 1643.5, 'max_us': 1643.5, 'n': 200} cold_rate=650.0/s
+de-iv-A-r1 load 1.43 cached=0.00 hot p50=5745940.0 p95=8763262.3 p99=9032592.8 max=9101137.2 n=10908 cold p50=None reads=395912 read_share=0.9271 dev_bytes/read=8204.1 errors=0
+done in 35.5 s
+probe {'p0_us': 222.9, 'p25_us': 296.7, 'p50_us': 338.1, 'p95_us': 508.3, 'p99_us': 592.8, 'p99.9_us': 1159.1, 'max_us': 1159.1, 'n': 200} cold_rate=650.0/s
+de-v-B-r1 load 1.24 cached=1.00 hot p50=241.3 p95=352.4 p99=400.1 max=4990.6 n=20003 cold p50=152.3 reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 36.1 s
+probe {'p0_us': 230.4, 'p25_us': 387.8, 'p50_us': 443.4, 'p95_us': 598.3, 'p99_us': 743.9, 'p99.9_us': 2466.8, 'max_us': 2466.8, 'n': 200} cold_rate=650.0/s
+de-v-A-r1 load 0.87 cached=1.00 hot p50=234.8 p95=348.6 p99=397.2 max=2929.2 n=20004 cold p50=147.8 reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 36.3 s
+probe {'p0_us': 280.5, 'p25_us': 417.4, 'p50_us': 467.1, 'p95_us': 739.6, 'p99_us': 1128.7, 'p99.9_us': 2124.0, 'max_us': 2124.0, 'n': 200} cold_rate=650.0/s
+de-vscan-B-r1 load 1.01 cached=1.00 hot p50=275.6 p95=347.1 p99=386.2 max=5394.7 n=20004 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 35.6 s
+probe {'p0_us': 254.0, 'p25_us': 402.2, 'p50_us': 454.0, 'p95_us': 624.6, 'p99_us': 676.9, 'p99.9_us': 778.1, 'max_us': 778.1, 'n': 200} cold_rate=650.0/s
+de-vscan-A-r1 load 1.15 cached=1.00 hot p50=282.8 p95=354.1 p99=401.7 max=5548.2 n=20003 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 35.8 s
+probe {'p0_us': 251.2, 'p25_us': 420.3, 'p50_us': 466.0, 'p95_us': 651.1, 'p99_us': 737.5, 'p99.9_us': 962.1, 'max_us': 962.1, 'n': 200} cold_rate=650.0/s
+de-iii4-B-r1 load 1.39 cached=0.00 hot p50=315.7 p95=399.8 p99=462.1 max=6103.8 n=20003 cold p50=728.8 reads=10003 read_share=0.2515 dev_bytes/read=8257.5 errors=0
+done in 45.8 s
+probe {'p0_us': 252.9, 'p25_us': 359.6, 'p50_us': 422.2, 'p95_us': 700.7, 'p99_us': 1600.9, 'p99.9_us': 1989.1, 'max_us': 1989.1, 'n': 200} cold_rate=650.0/s
+de-iii4-A-r1 load 1.17 cached=0.00 hot p50=319.0 p95=402.9 p99=452.8 max=5916.8 n=20004 cold p50=697.1 reads=10005 read_share=0.2601 dev_bytes/read=8254.2 errors=0
+done in 40.7 s
+probe {'p0_us': 258.7, 'p25_us': 438.8, 'p50_us': 497.0, 'p95_us': 847.9, 'p99_us': 1635.6, 'p99.9_us': 70107.6, 'max_us': 70107.6, 'n': 200} cold_rate=650.0/s
+de-iii-A-r2 load 0.40 cached=0.00 hot p50=296.6 p95=775.6 p99=1009.0 max=3794.0 n=20004 cold p50=648.5 reads=10000 read_share=0.2496 dev_bytes/read=8266.5 errors=0
+done in 35.9 s
+probe {'p0_us': 239.2, 'p25_us': 354.1, 'p50_us': 421.9, 'p95_us': 668.4, 'p99_us': 992.5, 'p99.9_us': 1151.0, 'max_us': 1151.0, 'n': 200} cold_rate=650.0/s
+de-iii-B-r2 load 1.04 cached=0.00 hot p50=270.8 p95=386.2 p99=448.2 max=5545.1 n=20003 cold p50=664.5 reads=10025 read_share=0.2373 dev_bytes/read=8267.2 errors=0
+done in 35.9 s
+probe {'p0_us': 279.6, 'p25_us': 378.7, 'p50_us': 448.5, 'p95_us': 623.4, 'p99_us': 913.0, 'p99.9_us': 1630.9, 'max_us': 1630.9, 'n': 200} cold_rate=650.0/s
+de-iv-A-r2 load 0.94 cached=0.00 hot p50=5751174.2 p95=8769881.5 p99=9038975.0 max=9109644.2 n=10899 cold p50=None reads=395912 read_share=0.9255 dev_bytes/read=8203.8 errors=0
+done in 35.2 s
+probe {'p0_us': 215.5, 'p25_us': 279.4, 'p50_us': 329.0, 'p95_us': 480.9, 'p99_us': 852.8, 'p99.9_us': 1404.0, 'max_us': 1404.0, 'n': 200} cold_rate=650.0/s
+de-iv-B-r2 load 0.97 cached=0.00 hot p50=302.3 p95=469.0 p99=587.0 max=4257.0 n=20004 cold p50=None reads=395908 read_share=0.9026 dev_bytes/read=8203.5 errors=0
+done in 35.2 s
+probe {'p0_us': 248.5, 'p25_us': 316.8, 'p50_us': 365.2, 'p95_us': 511.0, 'p99_us': 622.2, 'p99.9_us': 2007.0, 'max_us': 2007.0, 'n': 200} cold_rate=650.0/s
+de-iii-B-r3 load 0.98 cached=0.00 hot p50=270.6 p95=382.4 p99=432.7 max=4909.8 n=20003 cold p50=663.3 reads=10026 read_share=0.2391 dev_bytes/read=8267.2 errors=0
+done in 35.8 s
+probe {'p0_us': 265.2, 'p25_us': 359.7, 'p50_us': 412.7, 'p95_us': 593.8, 'p99_us': 763.7, 'p99.9_us': 883.6, 'max_us': 883.6, 'n': 200} cold_rate=650.0/s
+de-iii-A-r3 load 0.83 cached=0.00 hot p50=299.7 p95=782.0 p99=1011.1 max=3422.7 n=20004 cold p50=650.4 reads=10006 read_share=0.2528 dev_bytes/read=8266.5 errors=0
+done in 35.8 s
+probe {'p0_us': 249.6, 'p25_us': 329.6, 'p50_us': 388.7, 'p95_us': 602.8, 'p99_us': 761.6, 'p99.9_us': 868.2, 'max_us': 868.2, 'n': 200} cold_rate=650.0/s
+de-iv-B-r3 load 0.81 cached=0.00 hot p50=309.0 p95=484.0 p99=622.5 max=6080.6 n=20003 cold p50=None reads=395476 read_share=0.9028 dev_bytes/read=8203.8 errors=0
+done in 35.2 s
+probe {'p0_us': 225.5, 'p25_us': 309.1, 'p50_us': 335.9, 'p95_us': 490.0, 'p99_us': 711.9, 'p99.9_us': 777.5, 'max_us': 777.5, 'n': 200} cold_rate=650.0/s
+de-iv-A-r3 load 0.84 cached=0.00 hot p50=5763443.9 p95=8777697.8 p99=9047026.6 max=9117613.8 n=10892 cold p50=None reads=395848 read_share=0.9262 dev_bytes/read=8204.4 errors=0
+done in 35.2 s

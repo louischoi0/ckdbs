@@ -593,7 +593,7 @@ SHOW INDEXES
 
 `CREATE UNIQUE INDEX` declares a unique one (IX11); it is the one spelling
 of a unique key, and `UNIQUE` before anything but `INDEX` is refused
-`InvalidArgument` at the next token's byte. `sys.indexes` (and so `SHOW INDEXES`) prints `unique`.
+`InvalidArgument` at the next token's byte. `sys.indexes` (and so `SHOW INDEXES`) prints `unique`, and, since the instance started, how often each index served a read: `probes`, `ranges`, `entries_scanned`, `rows_resolved`, `last_used` (`sys-views.md` §6.2b; a statistic nothing in the engine reads).
 
 > **IX10 — nothing is reserved.** `index` and `covering` follow the rule the
 > aggregate function names settled: a keyword hashes exactly as the

@@ -77,6 +77,34 @@ public:
     // at or beyond page_capacity(), IoError on a device failure.
     virtual Status ReadPage(PageId page_id, std::span<std::byte, kPageSize> out) = 0;
 
+    // ---- A read that does not wait (DE-Q9) --------------------------------
+    //
+    // Reads `page_id` into `out` **only if the device can hand it over
+    // without waiting**. `*would_wait` is set where it could not; `out` is
+    // then unspecified and the call has transferred nothing a caller may
+    // use. An implementation that answers "would wait" has, where it can,
+    // started the read, so a later call finds the page sooner. Failures are
+    // `ReadPage`'s.
+    //
+    // **The default cannot tell and reads**: a device with no way to ask
+    // behaves as it always has, and its caller is never refused a page.
+    // Callable wherever `ReadPage` is.
+    virtual Status ReadPageNoWait(PageId page_id, std::span<std::byte, kPageSize> out,
+                                  bool* would_wait) {
+        *would_wait = false;
+        return ReadPage(page_id, out);
+    }
+
+    // Brings `page_id` to where a later `ReadPageNoWait` finds it, waiting
+    // for the device as long as that takes, and returns nothing: the caller
+    // that wants the page reads it, and reads the failure with it. The
+    // bytes go nowhere a caller can see - no second image of a page leaves
+    // this seam. Called by the page reader's threads
+    // (`storage/page_reader.hpp`), concurrently with every other operation
+    // here; the default, for a device whose `ReadPageNoWait` never waits,
+    // does nothing.
+    virtual void WarmPage(PageId /*page_id*/) noexcept {}
+
     // Writes `in` to page `page_id`. Not durable until Sync(). Same
     // failure modes as ReadPage().
     virtual Status WritePage(PageId page_id, std::span<const std::byte, kPageSize> in) = 0;

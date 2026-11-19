@@ -197,6 +197,7 @@ void KwpLoadServer::Detach() noexcept {
     if (scheduler_ == nullptr) return;
     for (auto& [fd, conn] : clients_) {
         if (conn.phase == Phase::kLoading && dispatcher_ != nullptr) {
+            conn.session.set_rollback_cause(stats::TxnEnd::kCloseRollback);
             (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         }
         (void)scheduler_->UnregisterIoHandler(fd);
@@ -357,6 +358,7 @@ bool KwpLoadServer::HandleFrame(int client_fd, Connection& conn,
                     // KW4's modality: the load is dead and the transaction
                     // with it - v0's collapse of §5's discard-to-sync.
                     SendError(conn, wire::ProtocolDetail::kUnexpectedFrame, "frame not legal inside a load session");
+                    conn.session.set_rollback_cause(stats::TxnEnd::kAbort);
                     (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
                     conn.phase = Phase::kIdle;
                     conn.load = LoadState{};
@@ -457,6 +459,8 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     const CommandDispatcher::StatementEpochScope epoch(*dispatcher_);  // BF-R9
     const auto fail_load = [&](const Status& status) {
         SendError(conn, status);
+        // The load failed: the engine's rollback, not the client's (DF-Q13 (a)).
+        conn.session.set_rollback_cause(stats::TxnEnd::kAbort);
         (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         conn.phase = Phase::kIdle;
         conn.load = LoadState{};
@@ -642,6 +646,7 @@ void KwpLoadServer::CloseClient(int client_fd) {
     }
     if (it->second.phase == Phase::kLoading && dispatcher_ != nullptr) {
         // BI11: a connection dying mid-load unwinds its transaction.
+        it->second.session.set_rollback_cause(stats::TxnEnd::kCloseRollback);
         (void)dispatcher_->DispatchInternal("ROLLBACK", &it->second.session);
     }
     if (scheduler_ != nullptr) (void)scheduler_->UnregisterIoHandler(client_fd);

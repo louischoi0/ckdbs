@@ -1,5 +1,7 @@
 #include "kds/storage/device_page_store.hpp"
 
+#include "kds/storage/miss_refusal.hpp"
+
 #include <unordered_set>
 
 #include "kds/sched/checkpoint_census.hpp"
@@ -1110,6 +1112,11 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FaultIn(PageId page_i
     if (!reserved.ok()) return reserved.status();
     ReservedFrame slot(*this, reserved.value());
     const std::span<std::byte, kPageSize> bytes = slot.bytes();
+    // **A fetch that may be refused asks first without waiting** (DE-Q9,
+    // `miss_refusal.hpp`): the walk's own leaf fetch by its access kind, a
+    // re-runnable statement's body by the thread's arm. Read here, on the
+    // miss path; a hit never asks.
+    const bool may_refuse = heat == FetchHeat::kScanNoWait || MissRefusalArmed();
     {
         // CJ WE03: the read is a blocking `pread` on the reactor, so it is a
         // scope that never suspends - the time is the event's, not ON_CPU's.
@@ -1118,7 +1125,28 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FaultIn(PageId page_i
         sched::WaitScope wait(heat == FetchHeat::kRing ? stats::WaitEvent::kIoScanRingRead
                                                        : stats::WaitEvent::kIoPageRead,
                               page_id);
-        if (Status s = device_.ReadPage(page_id, bytes); !s.ok()) return s;
+        if (may_refuse) {
+            bool would_wait = false;
+            if (Status s = device_.ReadPageNoWait(page_id, bytes, &would_wait); !s.ok()) return s;
+            if (would_wait) {
+                // **Refused: nothing was read, so nothing is booked** (DE-R9)
+                // - the wait is the park its caller is about to take. The
+                // reserved slot goes back as `slot` leaves. An armed refusal
+                // is noted for the dispatcher, which obeys the note whatever
+                // the statement goes on to answer; the walk reads its own
+                // off this status and must leave the thread no word.
+                wait.Abandon();
+                would_wait_.Add();
+                if (heat != FetchHeat::kScanNoWait) NoteMissRefusal(page_id);
+                return Status::NotResident("DevicePageStore: page " + std::to_string(page_id) +
+                                           " is not in the pool and its read would wait");
+            }
+        } else if (Status s = device_.ReadPage(page_id, bytes); !s.ok()) {
+            return s;
+        }
+        // The fetch a park was taken for: the park is the event, this copy
+        // is not a second one (DE-R9).
+        if (page_id == ParkedReadPage()) wait.Abandon();
         if (!IsHeaderless(page_id)) {
             const PageHeaderFields header =
                 ReadPageHeader(std::span<const std::byte, kPageSize>(bytes));
@@ -2627,6 +2655,16 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
             return *pinned;
         }
         if (loading_.find(page_id) != loading_.end()) {
+            // **A fetch that may be refused does not wait here either**
+            // (DE-Q9): the other core's read may be a blocking one, and
+            // waiting it out on this thread is the wait the refusal is for.
+            // Nothing is held and nothing of this fetch is in `loading_`.
+            if (heat == FetchHeat::kScanNoWait || MissRefusalArmed()) {
+                would_wait_.Add();
+                if (heat != FetchHeat::kScanNoWait) NoteMissRefusal(page_id);
+                return Status::NotResident("DevicePageStore: page " + std::to_string(page_id) +
+                                           " is being read by another core");
+            }
             // Another core is faulting this page. Wait rather than issue a
             // second read, and **re-check from the top** on waking, which is
             // what lets a failed load simply erase and broadcast.
@@ -3228,6 +3266,7 @@ DevicePageStore::PoolCounters DevicePageStore::pool_counters() const {
     out.dirty_drained = dirty_drained_.Load();
     out.refused = refused_.Load();
     out.fetch_images = fetch_images_logged_.Load();
+    out.would_wait = would_wait_.Load();
     return out;
 }
 

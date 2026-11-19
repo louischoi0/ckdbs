@@ -1,0 +1,96 @@
+lifetimes: 6
+run 0 unclean cells: 0 of 18 max attempts 1 quiet waited s (sum over cells) 12.0
+run 1 unclean cells: 0 of 18 max attempts 1 quiet waited s (sum over cells) 12.0
+run 2 unclean cells: 0 of 18 max attempts 1 quiet waited s (sum over cells) 12.0
+run 3 unclean cells: 0 of 18 max attempts 1 quiet waited s (sum over cells) 12.0
+run 4 unclean cells: 0 of 18 max attempts 1 quiet waited s (sum over cells) 12.0
+run 5 unclean cells: 0 of 18 max attempts 1 quiet waited s (sum over cells) 12.0
+
+| shape | path | lifetime | A cpu | A2 cpu | B cpu | A2-A | B-A | B-A2 | bad | clean |
+|---|---|---|---|---|---|---|---|---|---|---|
+| select-index | literal | 0 | 23.80 | 23.48 | 24.29 | -0.28 | +0.47 | +0.66 | 0 | True |
+| select-index | literal | 1 | 24.04 | 23.90 | 24.53 | -0.09 | +0.43 | +0.59 | 0 | True |
+| select-index | literal | 2 | 23.75 | 23.79 | 24.31 | +0.06 | +0.54 | +0.48 | 0 | True |
+| select-index | literal | 3 | 23.95 | 23.93 | 24.41 | +0.00 | +0.43 | +0.38 | 0 | True |
+| select-index | literal | 4 | 23.93 | 23.67 | 24.49 | -0.10 | +0.60 | +0.55 | 0 | True |
+| select-index | literal | 5 | 23.97 | 23.87 | 24.48 | -0.07 | +0.55 | +0.54 | 0 | True |
+| select-index | prepared | 0 | 23.15 | 23.11 | 23.65 | +0.05 | +0.48 | +0.53 | 0 | True |
+| select-index | prepared | 1 | 23.28 | 23.48 | 23.84 | +0.27 | +0.52 | +0.37 | 0 | True |
+| select-index | prepared | 2 | 22.75 | 22.81 | 23.52 | +0.15 | +0.62 | +0.56 | 0 | True |
+| select-index | prepared | 3 | 23.43 | 23.21 | 23.75 | -0.15 | +0.45 | +0.58 | 0 | True |
+| select-index | prepared | 4 | 23.51 | 23.33 | 24.03 | -0.18 | +0.46 | +0.69 | 0 | True |
+| select-index | prepared | 5 | 23.24 | 23.21 | 23.79 | -0.06 | +0.62 | +0.61 | 0 | True |
+| select-pk | literal | 0 | 20.82 | 20.53 | 20.91 | -0.14 | +0.25 | +0.40 | 0 | True |
+| select-pk | literal | 1 | 20.69 | 20.77 | 21.23 | +0.04 | +0.43 | +0.46 | 0 | True |
+| select-pk | literal | 2 | 20.79 | 20.90 | 21.22 | +0.18 | +0.43 | +0.34 | 0 | True |
+| select-pk | literal | 3 | 20.68 | 20.72 | 21.02 | -0.02 | +0.26 | +0.38 | 0 | True |
+| select-pk | literal | 4 | 20.86 | 20.83 | 21.24 | -0.05 | +0.38 | +0.36 | 0 | True |
+| select-pk | literal | 5 | 20.98 | 20.93 | 21.32 | -0.04 | +0.42 | +0.39 | 0 | True |
+| select-pk | prepared | 0 | 19.86 | 19.89 | 20.21 | +0.00 | +0.23 | +0.29 | 0 | True |
+| select-pk | prepared | 1 | 20.22 | 20.33 | 20.60 | +0.07 | +0.47 | +0.17 | 0 | True |
+| select-pk | prepared | 2 | 20.01 | 20.23 | 20.44 | +0.28 | +0.51 | +0.37 | 0 | True |
+| select-pk | prepared | 3 | 20.01 | 19.95 | 20.18 | -0.14 | +0.22 | +0.22 | 0 | True |
+| select-pk | prepared | 4 | 19.93 | 19.97 | 20.42 | +0.00 | +0.56 | +0.51 | 0 | True |
+| select-pk | prepared | 5 | 20.39 | 20.24 | 20.79 | -0.07 | +0.40 | +0.49 | 0 | True |
+| update-lit | literal | 0 | 21.12 | 21.09 | 20.93 | +0.06 | -0.17 | -0.13 | 0 | True |
+| update-lit | literal | 1 | 20.95 | 20.93 | 20.73 | -0.03 | -0.20 | -0.14 | 0 | True |
+| update-lit | literal | 2 | 20.76 | 20.90 | 20.67 | +0.12 | -0.10 | -0.17 | 0 | True |
+| update-lit | literal | 3 | 20.98 | 20.81 | 20.84 | -0.01 | -0.09 | -0.00 | 0 | True |
+| update-lit | literal | 4 | 21.05 | 20.89 | 20.89 | -0.12 | -0.13 | -0.06 | 0 | True |
+| update-lit | literal | 5 | 21.20 | 20.80 | 20.59 | -0.18 | -0.27 | -0.18 | 0 | True |
+| update-lit | prepared | 0 | 20.21 | 20.15 | 19.86 | -0.09 | -0.33 | -0.26 | 0 | True |
+| update-lit | prepared | 1 | 20.04 | 20.31 | 19.96 | +0.28 | -0.14 | -0.27 | 0 | True |
+| update-lit | prepared | 2 | 20.25 | 20.31 | 20.18 | +0.04 | -0.11 | -0.16 | 0 | True |
+| update-lit | prepared | 3 | 20.09 | 20.03 | 20.06 | -0.03 | -0.11 | +0.07 | 0 | True |
+| update-lit | prepared | 4 | 20.13 | 20.10 | 20.03 | -0.05 | -0.10 | +0.02 | 0 | True |
+| update-lit | prepared | 5 | 20.32 | 20.11 | 20.21 | -0.25 | -0.24 | +0.03 | 0 | True |
+
+| shape | path | n lifetimes | mean A cpu | A2-A median (range) | B-A median (range) | B-A2 median (range) |
+|---|---|---|---|---|---|---|
+| select-index | literal | 6 | 23.91 | -0.08 (-0.28..+0.06) | +0.50 (+0.43..+0.60) | +0.55 (+0.38..+0.66) |
+| select-index | prepared | 6 | 23.23 | -0.01 (-0.18..+0.27) | +0.50 (+0.45..+0.62) | +0.57 (+0.37..+0.69) |
+| select-pk | literal | 6 | 20.80 | -0.03 (-0.14..+0.18) | +0.40 (+0.25..+0.43) | +0.39 (+0.34..+0.46) |
+| select-pk | prepared | 6 | 20.07 | +0.00 (-0.14..+0.28) | +0.44 (+0.22..+0.56) | +0.33 (+0.17..+0.51) |
+| update-lit | literal | 6 | 21.01 | -0.02 (-0.18..+0.12) | -0.15 (-0.27..-0.09) | -0.14 (-0.18..-0.00) |
+| update-lit | prepared | 6 | 20.17 | -0.04 (-0.25..+0.28) | -0.13 (-0.33..-0.10) | -0.07 (-0.27..+0.07) |
+
+| shape | path | arm | mean wall us | QPS (1e6/mean wall) | p0 | p25 | p50 | p99 (median of lifetimes' values) |
+|---|---|---|---|---|---|---|---|---|
+| select-index | literal | A | 56.45 | 17,715 | 49.2 | 52.0 | 53.3 | 74.4 |
+| select-index | literal | A2 | 56.13 | 17,817 | 49.3 | 52.0 | 53.2 | 73.1 |
+| select-index | literal | B | 56.92 | 17,569 | 49.8 | 52.6 | 53.8 | 74.9 |
+| select-index | prepared | A | 52.67 | 18,986 | 46.2 | 48.8 | 49.9 | 68.9 |
+| select-index | prepared | A2 | 52.52 | 19,039 | 46.1 | 48.7 | 49.8 | 68.8 |
+| select-index | prepared | B | 53.20 | 18,795 | 46.7 | 49.3 | 50.4 | 69.8 |
+| select-pk | literal | A | 53.34 | 18,749 | 47.5 | 49.5 | 50.4 | 69.3 |
+| select-pk | literal | A2 | 53.29 | 18,765 | 46.7 | 49.5 | 50.3 | 69.1 |
+| select-pk | literal | B | 53.77 | 18,599 | 47.8 | 49.8 | 50.7 | 69.8 |
+| select-pk | prepared | A | 49.37 | 20,256 | 44.1 | 45.9 | 46.6 | 64.2 |
+| select-pk | prepared | A2 | 49.48 | 20,212 | 44.3 | 45.9 | 46.6 | 65.3 |
+| select-pk | prepared | B | 49.77 | 20,091 | 44.6 | 46.3 | 47.1 | 65.4 |
+| update-lit | literal | A | 45.09 | 22,176 | 36.0 | 41.3 | 41.9 | 64.4 |
+| update-lit | literal | A2 | 45.01 | 22,218 | 35.9 | 41.3 | 42.0 | 63.3 |
+| update-lit | literal | B | 44.81 | 22,317 | 35.3 | 41.2 | 41.8 | 62.6 |
+| update-lit | prepared | A | 41.59 | 24,042 | 36.7 | 38.1 | 38.7 | 60.2 |
+| update-lit | prepared | A2 | 41.64 | 24,013 | 35.5 | 38.1 | 38.6 | 59.3 |
+| update-lit | prepared | B | 41.57 | 24,053 | 35.1 | 38.0 | 38.6 | 59.2 |
+
+pooled block-paired (all lifetimes x blocks):
+('select-index', 'literal') A2-A median -0.055 [-0.110,+0.000] n=144
+('select-index', 'literal') B-A median +0.530 [+0.430,+0.590] n=144
+('select-index', 'literal') B-A2 median +0.540 [+0.480,+0.630] n=144
+('select-index', 'prepared') A2-A median -0.010 [-0.080,+0.100] n=144
+('select-index', 'prepared') B-A median +0.500 [+0.470,+0.580] n=144
+('select-index', 'prepared') B-A2 median +0.550 [+0.475,+0.620] n=144
+('select-pk', 'literal') A2-A median -0.020 [-0.070,+0.030] n=144
+('select-pk', 'literal') B-A median +0.340 [+0.280,+0.405] n=144
+('select-pk', 'literal') B-A2 median +0.380 [+0.350,+0.420] n=144
+('select-pk', 'prepared') A2-A median +0.015 [-0.045,+0.070] n=144
+('select-pk', 'prepared') B-A median +0.375 [+0.290,+0.450] n=144
+('select-pk', 'prepared') B-A2 median +0.390 [+0.265,+0.465] n=144
+('update-lit', 'literal') A2-A median -0.020 [-0.085,+0.030] n=144
+('update-lit', 'literal') B-A median -0.170 [-0.245,-0.095] n=144
+('update-lit', 'literal') B-A2 median -0.120 [-0.180,-0.050] n=144
+('update-lit', 'prepared') A2-A median -0.030 [-0.090,+0.045] n=144
+('update-lit', 'prepared') B-A median -0.180 [-0.220,-0.120] n=144
+('update-lit', 'prepared') B-A2 median -0.130 [-0.170,-0.020] n=144

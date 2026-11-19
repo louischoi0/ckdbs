@@ -555,6 +555,33 @@ TEST_F(ExpeditorTest, AtOneCoreTheDispatcherHoldsTheInstancesLockTable) {
         << "core 0's dispatcher records its edges in some other table, or none";
 }
 
+TEST_F(ExpeditorTest, ThePageReaderRunsAtEveryCoreCountAndEveryDispatcherHoldsIt) {
+    // DE-Q14. At one core the instance builds no wake registry, so a read
+    // that left the reactor would have nothing to end its idle block with:
+    // `Start` builds the reader, starts its threads, and hands core 0 a wake
+    // table of its own - while the lock table still kicks nobody and no
+    // load word is published, as before (BL-R9).
+    for (const std::uint32_t cores : {1U, 2U}) {
+        Expeditor::Config config = ConfigAt(cores);
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        EXPECT_EQ(db.page_reader(), nullptr) << "built before `Start`";
+        ASSERT_TRUE(Started(db.Start()));
+
+        ASSERT_NE(db.page_reader(), nullptr) << cores << " core(s)";
+        EXPECT_TRUE(db.page_reader()->threaded()) << cores << " core(s)";
+        EXPECT_EQ(db.dispatcher().page_reader(), db.page_reader());
+        if (cores == 1) {
+            EXPECT_EQ(db.wakers(), nullptr) << "the instance's registry is still not built";
+            EXPECT_EQ(db.locks()->wake_registry(), nullptr);
+            EXPECT_EQ(sched::CoreLoad::Cores(), 0u);
+        } else {
+            ASSERT_NE(db.wakers(), nullptr);
+        }
+    }
+}
+
 // ---- AT-S8: a session runs where it was accepted --------------------------
 //
 // Every core listens on the port, so what a peer is handed decides what a
@@ -1703,6 +1730,66 @@ TEST_F(ExpeditorTest, AStatementInFlightPastTheCeilingRunsToItsEnd) {
     EXPECT_NE(row.find("10"), std::string::npos) << row;
     ::close(a);
     ::close(b);
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+TEST_F(ExpeditorTest, TheSweepAClosedConnectionAndTheClientEachCountTheirOwnRollback) {
+    // DF-Q13 (a): the listener's sweep and its close path dispatch the
+    // client's own `ROLLBACK`, so each names its cause first. **The
+    // mutation**: drop either `set_rollback_cause` in `tcp_server.cpp`, and
+    // that rollback is counted as the client's.
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.txn_lifetime_ceiling_ns = kCellCeilingMs * 1'000'000ULL;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    const int reader = running.client();
+    const int swept = ConnectToLoopback(config.debug_text_port);
+    const int closed = ConnectToLoopback(config.debug_text_port);
+    ASSERT_GE(swept, 0);
+    ASSERT_GE(closed, 0);
+
+    const auto count = [&](std::string_view field) {
+        const auto value =
+            testing_view::MetaField(SendLine(reader, "SELECT * FROM sys.meta"), field);
+        EXPECT_TRUE(value.has_value()) << field;
+        return std::stoull(value.value_or("0"));
+    };
+    ASSERT_EQ(SendLine(reader, "CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
+    const std::uint64_t rollbacks = count("rollbacks");
+    const std::uint64_t ceiling = count("ceiling_rollbacks");
+    const std::uint64_t closes = count("close_rollbacks");
+    const std::uint64_t aborts = count("aborts");
+
+    // A connection that goes away with a transaction open.
+    ASSERT_EQ(SendLine(closed, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(SendLine(closed, "INSERT INTO t VALUES (1, 10)").rfind("INSERTED", 0), 0u);
+    ::close(closed);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (count("close_rollbacks") == closes && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_EQ(count("close_rollbacks"), closes + 1);
+
+    // A transaction past its lifetime: the sweep's, and the client's
+    // `ROLLBACK` after it ends nothing and is not counted.
+    ASSERT_EQ(SendLine(swept, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(SendLine(swept, "INSERT INTO t VALUES (2, 20)").rfind("INSERTED", 0), 0u);
+    std::this_thread::sleep_for(kWellPastTheCeiling);
+    EXPECT_EQ(count("ceiling_rollbacks"), ceiling + 1);
+    EXPECT_EQ(SendLine(swept, "ROLLBACK").rfind("ROLLBACK trx_id=", 0), 0u);
+    EXPECT_EQ(count("ceiling_rollbacks"), ceiling + 1);
+    EXPECT_EQ(count("rollbacks"), rollbacks) << "a ROLLBACK that ended nothing was counted";
+
+    // The client's own.
+    ASSERT_EQ(SendLine(swept, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(SendLine(swept, "ROLLBACK").rfind("ROLLBACK trx_id=", 0), 0u);
+    EXPECT_EQ(count("rollbacks"), rollbacks + 1);
+    EXPECT_EQ(count("close_rollbacks"), closes + 1);
+    EXPECT_EQ(count("aborts"), aborts);
+    ::close(swept);
     EXPECT_TRUE(running.Stop().ok());
 }
 

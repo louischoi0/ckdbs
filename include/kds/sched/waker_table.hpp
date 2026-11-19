@@ -70,6 +70,17 @@ public:
     // it wants seen; this ends the destination's idle block if it is in one.
     virtual void Kick(std::uint32_t core) const noexcept = 0;
 
+    // **A wake written whatever the destination's flag says** (DE-Q14).
+    // `Kick` is best-effort, priced at one idle block when its publisher
+    // lands between the destination's last look and its raising the flag.
+    // That price is wrong for a publisher whose event can complete inside
+    // that window and whose waiter's whole wait is a fraction of a block -
+    // a page read handed off a reactor (`storage/page_reader.hpp`): its
+    // wake is written unconditionally, so a destination that was not asleep
+    // finds the descriptor readable at its next poll and does not block.
+    // One write per call; a registry with no stronger wake than `Kick`
+    // answers with `Kick`.
+    virtual void Wake(std::uint32_t core) const noexcept { Kick(core); }
     // Kicks actually written - what `Scheduler::wakes_sent()` reports.
     virtual std::uint64_t kicks() const noexcept = 0;
 };
@@ -114,6 +125,16 @@ public:
             skipped_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
+        entry.waker->Wake();
+        kicks_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // The flag is not read (`WakeRegistry::Wake`): a write, always. Counted
+    // with the kicks, so `sched_wakes_sent` still equals what was written.
+    void Wake(std::uint32_t core) const noexcept override {
+        if (core >= entries_.size()) return;
+        const Entry& entry = entries_[core];
+        if (entry.waker == nullptr) return;
         entry.waker->Wake();
         kicks_.fetch_add(1, std::memory_order_relaxed);
     }

@@ -5,11 +5,13 @@
 #include "kds/server/page_reclaim.hpp"
 #include "kds/server/statement_epoch.hpp"
 #include "kds/server/load_placer.hpp"
+#include "kds/storage/miss_refusal.hpp"
 #include "kds/server/read_borrow.hpp"
 
 #include "kds/txn/lock_table.hpp"
 
 #include "kds/sched/checkpoint_census.hpp"
+#include "kds/stats/leaf_stats.hpp"
 #include "kds/stats/refusal_stats.hpp"
 #include "kds/sched/core_load.hpp"
 #include "kds/base/contention.hpp"
@@ -637,6 +639,12 @@ sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Sessio
     // function, so the first dispatch and a foreign-key probe's resume
     // cannot diverge.
     for (;;) {
+        // DE: a discarded run carries nothing but its page; the run after
+        // the read is a fresh statement and can meet either wait below.
+        if (out->page_wait.has_value()) {
+            co_await AwaitPageRead(line, session, out, statement_deadline_ns);
+            continue;
+        }
         if (out->write_block.has_value()) {
             co_await AwaitWriteBlock(line, session, out, statement_deadline_ns);
             continue;
@@ -679,6 +687,89 @@ sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Sessio
     // Here for the walk's reason: a head that handed a build on carries no
     // wait, and nothing after a dispatch reads the outcome before this.
     if (out->build_run != nullptr) co_await CompleteBuild(line, out);
+    co_return Status::OK();
+}
+
+bool CommandDispatcher::MissRefusalAdmitted(const Session& session) const noexcept {
+    if (page_reader_ == nullptr || session.miss_refusals() >= kMaxMissReruns) return false;
+    // A caller with nowhere to park runs the statement again only inside
+    // `Dispatch`'s loop, and only where the read is made at the request - a
+    // reader with no thread. One with threads would have this thread wait
+    // for another's read, which is the wait a synchronous read already is.
+    if (!may_park_ && (!reruns_structural_ || page_reader_->threaded())) return false;
+    const ResultSink* const sink = session.result_sink();
+    return sink == nullptr || !sink->Streamed();
+}
+
+PageId CommandDispatcher::BeginMissRerun(Session& waiting, DispatchOutcome* out) {
+    const PageId page = *out->page_wait;
+    out->page_wait.reset();
+    ResultSink* const sink = waiting.result_sink();
+    // **Never after a row has left** (CE-R4, `[quiet-wrong]`). A guard, and
+    // nothing reaches it today: an armed body is a descent, which meets no
+    // slice boundary and so hands no row on before it returns, and the arm
+    // is dropped where a sink first does (`WireResultSink::TakeSealed`). A
+    // refusal noted before a hand-on would be answered as BA-S14 answers
+    // its own - retryable, and by the protocol's rule rows followed by an
+    // error are no result.
+    if (sink != nullptr && sink->Streamed()) {
+        const Status refused = Status::TxnConflict(
+            "a page this statement read would have had to be waited for after rows had been "
+            "sent; the statement was not run again - retry it");
+        *out = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+        return kInvalidPageId;
+    }
+    // The run after the read starts with no rows, as BA-S14's does (CE-A1).
+    if (sink != nullptr) sink->Rewind();
+    waiting.set_miss_refusals(waiting.miss_refusals() + 1);
+    Contention::Add(Tally::kMissReruns);
+    return page;
+}
+
+sched::Coro CommandDispatcher::AwaitPageRead(std::string_view line, Session* session,
+                                             DispatchOutcome* out,
+                                             sched::MonoTimeNs* statement_deadline_ns) {
+    // ---- DE: a read leaves this reactor ---------------------------------
+    //
+    // The statement's body was refused a page the device could not hand
+    // over at once, and `StageStatement` discarded it. Nothing of it is
+    // held: its view, its borrow and its pins ended with the run. The page
+    // goes to the reader, whose thread waits for the device; this task
+    // parks, so every other session of the core runs; then the statement is
+    // run again from the top and finds the page where a read that does not
+    // wait can take it.
+    Session& waiting = session != nullptr ? *session : autocommit_session_;
+    const std::uint64_t statement = out->statement;
+    const PageId page = BeginMissRerun(waiting, out);
+    if (page == kInvalidPageId) co_return Status::OK();
+
+    // One deadline for the statement, the fault net, as every wait here.
+    if (*statement_deadline_ns == 0) *statement_deadline_ns = NowNs() + lock_wait_fault_net_ns_;
+    const sched::MonoTimeNs deadline_ns = *statement_deadline_ns;
+    const storage::PageReader::Ticket ticket = page_reader_->Submit(page, core_id_);
+    const std::atomic<bool>* const cancel = waiting.cancel_flag().get();
+    const std::function<bool()> read = [this, &ticket, deadline_ns, cancel] {
+        return ticket.done() || NowNs() >= deadline_ns ||
+               (cancel != nullptr && cancel->load(std::memory_order_relaxed));
+    };
+    {
+        // DE-R9: the read's event, a suspension here where it was a
+        // synchronous scope. The run below books none for this page.
+        sched::WaitScope wait(stats::WaitEvent::kIoPageRead, page);
+        co_await sched::WaitUntil{&read};
+    }
+    // **A wait that ended without its read ends the refusals** (DE-R7): the
+    // deadline passed, or the client cancelled. Every later run of this
+    // statement reads synchronously - a slow answer, never a refused one -
+    // and a cancel is then taken where the statement would have taken it.
+    if (!ticket.done()) waiting.set_miss_refusals(kMaxMissReruns);
+
+    // The park was this page's one `io.page_read` only if its read was made
+    // (DE-R9): after a deadline or a cancel the run below reads it itself,
+    // and that read is the event.
+    const storage::ParkedReadScope parked(ticket.done() ? page : kInvalidPageId);
+    const MayParkScope parking(*this, /*allowed=*/true, statement);
+    *out = DispatchAndStage(line, session);
     co_return Status::OK();
 }
 
@@ -845,6 +936,8 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     const sched::MonoTimeNs began_ns = NowNs();
     const StatementHead head = BeginStatement(session);
     out->statement = statement;
+    // DE: this statement's refused runs are counted from here.
+    (session != nullptr ? *session : autocommit_session_).set_miss_refusals(0);
     // The shape ASH samples this statement under (CJ WE07): none until the
     // dispatch below names it, so a sample of the waits before it (the run
     // queue, BA-R1c's ceiling) does not carry the previous statement's.
@@ -1027,7 +1120,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         }
     }
     out->fetch_id = fetch_id;
-    RecordStatement(line, *out, began_ns, head);
+    RecordStatement(line, *out, began_ns, head, session);
     co_return Status::OK();
 }
 
@@ -1102,7 +1195,9 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
         SetBuildRunStart(*outcome.build_run, started_ns);
         return outcome;
     }
-    LogStatement(line, outcome, started_ns);
+    // A run discarded for a page (DE) is not the statement's answer and is
+    // not logged as one; the run that answers is.
+    if (!outcome.page_wait.has_value()) LogStatement(line, outcome, started_ns);
     return outcome;
 }
 
@@ -1111,6 +1206,12 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     // BA-S14's two per-statement facts, cleared before the statement runs.
     structural_poison_withheld_ = false;
     storage::ClearStructuralRefusal();
+    // **No statement starts armed** (DE, `storage/miss_refusal.hpp`). The
+    // arm is set and dropped around one body (`SelectRun::Execute`), and no
+    // path leaves it set today; one that did - a frame destroyed between the
+    // two - would have the next statement's fetches refused, a write's in
+    // the middle of its mutation. One thread-local store a statement.
+    storage::DisarmMissRefusal();
     // The statement boundary is where the catalog asks whether the schema
     // moved (AT-S2; `Catalog::Revalidate`): before this statement resolves
     // anything and after the previous one released everything it held. And
@@ -1147,6 +1248,26 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     statement_compile_ns_.reset();
 
     DispatchOutcome outcome = body(active);
+    // ---- DE: the body was refused a page (DE-Q10, `[quiet-wrong]`) -------
+    //
+    // **The note decides, never the outcome.** The store noted the refusal
+    // on this thread where it made it; between there and here a caller may
+    // have turned it into any answer. So the body's outcome is dropped
+    // whole and replaced by the refusal, carrying the page: `DispatchAsync`
+    // and `Dispatch` have the page read and run the statement again. Read
+    // and cleared here, before this statement's task can yield and before
+    // another statement of the thread runs.
+    if (storage::MissRefusalNoted()) {
+        const Status refused = Status::NotResident(
+            "page " + std::to_string(storage::MissRefusalPage()) +
+            " would have had to be waited for; the statement is run again once it is read");
+        outcome = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+        outcome.page_wait = storage::MissRefusalPage();
+        // Cleared where it was read, so the thread carries no note into the
+        // statement it runs next; the arm was dropped as the body returned
+        // (`SelectRun::Execute`).
+        storage::ClearMissRefusal();
+    }
     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
     outcome.pattern_id = std::exchange(statement_pattern_id_, 0);
     outcome.plan_source = std::exchange(statement_plan_source_, {});
@@ -1265,6 +1386,8 @@ void CommandDispatcher::FinishDeferredCommits() {
             txn_->FinishDeferredCommit(*d.txn);
         } else if (wal_->stopped()) {
             (void)txn_->Abort(*d.txn, RowLocatorForRollback());
+            // A commit whose sync never came (DF-Q13 (a)).
+            stats::TxnStats::Count(core_id_, stats::TxnEnd::kAbort);
         } else {
             break;
         }
@@ -1288,7 +1411,7 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
     const sched::MonoTimeNs began_ns = NowNs();
     const StatementHead head = BeginStatement(session);
     DispatchOutcome outcome = DispatchInternal(line, session);
-    RecordStatement(line, outcome, began_ns, head);
+    RecordStatement(line, outcome, began_ns, head, session);
     return outcome;
 }
 
@@ -1310,9 +1433,13 @@ CommandDispatcher::StatementHead CommandDispatcher::BeginStatement(Session* sess
 }
 
 void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOutcome& out,
-                                        sched::MonoTimeNs began_ns, const StatementHead& head) {
+                                        sched::MonoTimeNs began_ns, const StatementHead& head,
+                                        Session* session) {
     // Once per statement, at its end, the statement whole: a re-run, a wait
     // and the group commit are inside it (§3.1). A refusal is a call too.
+    // An autocommit statement's view ended with it (`sys.session_state`'s
+    // `view_age_us`); a transaction's is its own.
+    (session != nullptr ? session : &autocommit_session_)->EndStatementView();
     const sched::MonoTimeNs now_ns = NowNs();
     const bool refused = !out.status.ok() || out.response.rfind("ERR", 0) == 0;
     const std::int64_t now_us = exec::StatementContextNow().now_us;
@@ -1380,9 +1507,30 @@ DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Sessi
     DispatchOutcome outcome;
     {
         const RerunScope rerunning(*this);
+        Session& waiting = session != nullptr ? *session : autocommit_session_;
+        waiting.set_miss_refusals(0);
         outcome = DispatchAndStage(line, session);
         sched::MonoTimeNs deadline_ns = 0;
-        while (StructuralRerunDue(outcome, session, deadline_ns)) {
+        for (;;) {
+            // `DispatchAsync`'s DE park, with nowhere to park: armed only
+            // where the reader has no thread (`MissRefusalAdmitted`), so the
+            // request reads the page on this thread and the run after it
+            // finds it. Bounded by `kMaxMissReruns`, after which no run is
+            // refused.
+            if (outcome.page_wait.has_value()) {
+                const PageId page = BeginMissRerun(waiting, &outcome);
+                if (page == kInvalidPageId) break;
+                {
+                    // The read itself, made on this thread: the page's one
+                    // `io.page_read` (DE-R9), as the park is `DispatchAsync`'s.
+                    sched::WaitScope wait(stats::WaitEvent::kIoPageRead, page);
+                    (void)page_reader_->Submit(page, core_id_);
+                }
+                const storage::ParkedReadScope parked(page);
+                outcome = DispatchAndStage(line, session);
+                continue;
+            }
+            if (!StructuralRerunDue(outcome, session, deadline_ns)) break;
             std::this_thread::yield();
             outcome = DispatchAndStage(line, session);
         }
@@ -1709,7 +1857,8 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return HandleInsert(Trim(line), session);
     }
     if (IEquals(cmd, "SELECT")) {
-        return HandleSelect(Trim(line), session);
+        return HandleSelect(Trim(line), session, /*analyze=*/false, /*pinned=*/nullptr,
+                            /*context=*/nullptr, /*top_level=*/true);
     }
     // ANALYZE is a dispatcher prefix, not a parser keyword: it is stripped
     // here and the remainder goes down the ordinary SELECT path with stats
@@ -1794,7 +1943,8 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // word alone would hide that behind a generic refusal, and a client
     // would have no idea whether the word was unrecognized or declined.
     if (IEquals(cmd, "WITH")) {
-        return HandleSelect(Trim(line), session);
+        return HandleSelect(Trim(line), session, /*analyze=*/false, /*pinned=*/nullptr,
+                            /*context=*/nullptr, /*top_level=*/true);
     }
     return {"ERR unknown command", false};
 }
@@ -2130,7 +2280,8 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
        << " pool_dirty_drained=" << pool.dirty_drained << " pool_refused=" << pool.refused
        // DB-R6: the write fetch's images, each `wal::RecordSize(kPageSize)`
        // bytes of log.
-       << " pool_fetch_images=" << pool.fetch_images;
+       << " pool_fetch_images=" << pool.fetch_images
+       << " pool_would_wait=" << pool.would_wait;
 
     // The undo purge's two numbers (docs/inflight/in-progress/workplan-undo-purge.md UP3):
     // live pages plateauing under a write-heavy loop is the feature, and
@@ -2150,6 +2301,32 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     if (txn_ != nullptr) {
         os << " read_only_begins=" << read_only_begins_
            << " read_only_write_refusals=" << read_only_write_refusals_;
+        // **How this core's read-write transactions ended** (DF-Q13 (a),
+        // `stats/txn_stats.hpp`): six counts, each counted where its cause
+        // is known, so they partition the transactions this core decided.
+        const auto ends = stats::TxnStats::CountsOf(core_id_);
+        for (std::size_t i = 0; i < ends.size(); ++i) {
+            os << ' ' << stats::TxnEndFieldName(static_cast<stats::TxnEnd>(i)) << '=' << ends[i];
+        }
+        // **The read horizon, the instance's** (DF-Q8 (a)): the oldest
+        // snapshot LSN a live view holds on any core, the core holding it
+        // and how long ago that view was minted - `none` with no view held,
+        // and for the age of a view nobody stamped. The statement that reads
+        // this holds a view of its own while it runs, so with nothing older
+        // held it reads its own.
+        const txn::InstanceVisibility::HorizonHolder held = txn_->visibility().HorizonHeldBy();
+        if (held.lsn == txn::kUnboundedBound) {
+            os << " read_horizon_lsn=none read_horizon_core=none read_horizon_age_us=none";
+        } else {
+            os << " read_horizon_lsn=" << held.lsn << " read_horizon_core=" << held.core
+               << " read_horizon_age_us=";
+            const sched::MonoTimeNs now_ns = NowNs();
+            if (held.minted_ns == txn::kNoMintStamp || clock_ == nullptr) {
+                os << "none";
+            } else {
+                os << (now_ns > held.minted_ns ? (now_ns - held.minted_ns) / 1000 : 0);
+            }
+        }
     }
 
     // **The device syncs, read off counters that already increment** (XD0,
@@ -2494,6 +2671,14 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // relations a full part could not take, whose counts the view lacks.
     section("relation_stats");
     os << " relation_stats_dropped=" << stats::RelationStats::Dropped();
+    // **`sys.indexes`' usage store** (DF-S3), the instance's: new indexes a
+    // full part could not take, whose counts the view lacks.
+    section("index_stats");
+    os << " index_stats_dropped=" << index_stats_->Dropped();
+    // **The leaf division and compaction counts** (DF-S4), the process's:
+    // trees a full part could not take.
+    section("leaf_stats");
+    os << " leaf_stats_dropped=" << stats::LeafStats::Dropped();
     // **`sys.checkpoints`' store** (BO-S7), the instance's, as `lock_waits`'
     // above: what the view no longer holds, and why.
     section("checkpoints");
@@ -3069,7 +3254,9 @@ Status IndexBuildRun::Step(std::uint32_t leaves) {
     // moves between slices. The backfill reads no view (it asks
     // `ResolvedForEveryReader`), and the transaction's view is read only by
     // the write-conflict check of its own catalog rows.
-    (void)d_.txn_->StartStatement(*scope_.txn);
+    const sched::MonoTimeNs now_ns = d_.NowNs();
+    (void)d_.txn_->StartStatement(*scope_.txn, now_ns);
+    if (scope_.session != nullptr) scope_.session->NoteViewMinted(now_ns);
     return build_->Step(leaves, log_ ? &log_ : nullptr);
 }
 
@@ -3223,7 +3410,7 @@ protected:
 
     // A fresh check view for the slice, the holder's view re-minted first.
     txn::ReadView SliceView() {
-        if (lock.txn != nullptr) (void)d_.txn_->StartStatement(*lock.txn);
+        if (lock.txn != nullptr) (void)d_.txn_->StartStatement(*lock.txn, d_.NowNs());
         return d_.SettledView();
     }
 
@@ -4875,7 +5062,7 @@ std::optional<Status> CommandDispatcher::TakeDdlBuildLock(Session& session, cata
                                    std::string(verb) +
                                    " cannot wait for - retry when it has ended");
     }
-    auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
+    auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted, statement_head_ns_);
     if (!begun.ok()) return begun.status();
     out.manager = txn_;
     out.txn = begun.value();
@@ -6822,6 +7009,30 @@ public:
     // the word it revalidated against.
     void HoldAcrossSuspension() { hold_.emplace(d_); }
 
+    // **DE-Q8: the walk parks at a leaf whose read would wait**, where a
+    // reader's thread can read it meanwhile. Called by the one driver that
+    // can park - `CompleteSelect`, on a reactor - and by no other: a run
+    // that was handed on and is then driven to its end where it stands
+    // (`RunToEnd`: a write's subquery, the query layer's walks) must only
+    // ever yield, so it reads as it always has. With no thread the read
+    // would be made here anyway.
+    void ParkAtReads() {
+        if (d_.page_reader_ == nullptr || !d_.page_reader_->threaded()) return;
+        // What ends a park: the leaf's read, the park's deadline, or the
+        // session's cancel, which the walk takes as it resumes.
+        page_read_ = [this] {
+            return page_ticket_.done() || d_.NowNs() >= park_deadline_ns_ ||
+                   (slice_.cancel != nullptr && slice_.cancel->load(std::memory_order_relaxed));
+        };
+        slice_.hand_page = [this](PageId page) {
+            page_ticket_ = d_.page_reader_->Submit(page, d_.core_id_);
+            // DE-R7: each park is bounded by the fault net, and what ends
+            // it without the read is followed by a synchronous one.
+            park_deadline_ns_ = d_.NowNs() + d_.lock_wait_fault_net_ns_;
+            return &page_read_;
+        };
+    }
+
     // The walk, yielding every `slice.pages_per_slice` pages, then the
     // sorted drain and the recording; the reply is written over `*out`.
     sched::Coro Execute(DispatchOutcome* out);
@@ -6846,6 +7057,13 @@ public:
     std::span<const exec::ColumnRef> projection;
     std::span<const std::uint32_t> types;
     sched::MonoTimeNs started_ns = 0;
+    // DE: the body may be refused a page that would have to be waited for.
+    // Set by the head for a run it drives inline and can run again; never
+    // for a walk handed on, whose body spans suspensions and other
+    // statements of the thread. `top_level`: this run is the statement
+    // itself, not a `SELECT` inside one (DE-Q10 (i)); `HandleSelect`'s.
+    bool top_level = false;
+    bool arm_miss_refusal = false;
 
 private:
     DispatchOutcome Finish(const Status& ran);
@@ -6862,6 +7080,12 @@ private:
     Status encode_error_ = Status::OK();
     exec::SlicePolicy slice_;
     std::uint64_t rows_emitted_ = 0;  // the rows the sink took (`rows_returned`)
+    // DE-Q8: the leaf the walk is parked on, its park's deadline, and what
+    // the walk parks on - set by `ParkAtReads`, empty for every run that
+    // never parks.
+    storage::PageReader::Ticket page_ticket_;
+    sched::MonoTimeNs park_deadline_ns_ = 0;
+    std::function<bool()> page_read_;
 };
 
 void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept {
@@ -6923,9 +7147,15 @@ sched::Coro SelectRun::Execute(DispatchOutcome* out) {
         slice_.at_boundary = [this] { sink->AtSliceBoundary(); };
         slice_.resume_when = sink->ResumeWhen();
     }
+    // **The arm is the body's and nothing else's** (DE-Q10 (ii)): set here,
+    // dropped as the walk returns, before `Finish` records or writes
+    // anything. An armed run is driven by `RunInline`, so no suspension
+    // inside it lets another statement of this thread run.
+    if (arm_miss_refusal) storage::ArmMissRefusal();
     const Status ran = co_await exec::ExecuteAsync(
         d_.catalog_, d_.page_store_, *chain, visit, &scratch.stats, d_.budget_, trail, replay,
         d_.cabins_, &snapshot->snap, d_.indexes_enabled_, slice_);
+    if (arm_miss_refusal) storage::DisarmMissRefusal();
     // The reply replaces the outcome; what the head recorded of the
     // statement stays on it - its plan source among them, which
     // `sys.statement_stats` reads off this outcome (CX-R11).
@@ -6960,6 +7190,14 @@ DispatchOutcome SelectRun::Finish(const Status& ran) {
     // The recording below writes catalog and Waystone pages, outside the
     // head's guard: as this dispatcher's core, as `DispatchAndStage` runs.
     const CurrentCoreGuard as_this_core(d_.core_id_);
+    // **A body that was refused a page records nothing** (DE-Q10 (ii),
+    // `[quiet-wrong]`): whatever `ran` says - a caller between the fetch and
+    // here may have read the refusal as "absent" or taken another path - the
+    // run is discarded by `StageStatement` and made again, so no trail, no
+    // access statistics and no optimizer signal may describe it.
+    if (arm_miss_refusal && storage::MissRefusalNoted()) {
+        return Refused(Status::NotResident("discarded"));  // replaced by `StageStatement`
+    }
     if (!ran.ok()) {
         // A cancelled statement leaves its transaction failed (§10's
         // "post-cancel session state = failed-txn rules"), whatever a
@@ -7008,6 +7246,7 @@ sched::Coro CommandDispatcher::CompleteSelect(std::string_view line, DispatchOut
     // (`CoreRuntime`'s `DiscardTasks`). A connection closed mid-walk is not
     // torn down until the statement ends (`TcpServer::CloseClient`).
     const std::shared_ptr<SelectRun> run = std::move(out->select_run);
+    run->ParkAtReads();  // DE-Q8: this driver can park
     co_await run->Execute(out);
     LogStatement(line, *out, run->started_ns);
     co_return Status::OK();
@@ -7062,7 +7301,11 @@ StatusOr<catalog::Oid> CommandDispatcher::ResolveRelationName(Session& session,
 
 DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
                                                  Session& session) {
-    // The KWP load stream comes in here, past `DispatchInner`'s gate.
+    // The KWP load stream comes in here, past `DispatchInner`'s gate - and
+    // past `StageStatement`, so a chunk takes its own head instant: the view
+    // it may re-mint is stamped with it (DF-S2), not with whichever statement
+    // this core staged last.
+    statement_head_ns_ = NowNs();
     if (auto refused = ArchiveRefusal(); refused.has_value()) return *refused;
     // HandleInsert's body around the parsed half: same scope, same verdict
     // rule, so a load chunk and a textual statement are indistinguishable
@@ -8648,14 +8891,19 @@ Status CommandDispatcher::EnsureStatementBoundary(Session& session) {
         // never dropped and taken again (CS-R3).
         if (ro->isolation == txn::IsolationLevel::kReadCommitted) {
             ro->view = txn_->MintReadView(txn::kNoTrxId);
-            txn_->RefreshReader(ro->lease, ro->view);
+            txn_->RefreshReader(ro->lease, ro->view, statement_head_ns_);
+            session.NoteViewMinted(statement_head_ns_);
         }
         statement_boundary_taken_ = true;
         return Status::OK();
     }
     txn::Transaction* txn = session.transaction();
     if (txn == nullptr) return Status::OK();
-    if (Status s = txn_->StartStatement(*txn); !s.ok()) return s;
+    if (Status s = txn_->StartStatement(*txn, statement_head_ns_); !s.ok()) return s;
+    // Re-minted under READ COMMITTED alone; REPEATABLE READ keeps `BEGIN`'s.
+    if (txn->isolation() == txn::IsolationLevel::kReadCommitted) {
+        session.NoteViewMinted(statement_head_ns_);
+    }
     statement_boundary_taken_ = true;
     return Status::OK();
 }
@@ -9641,7 +9889,8 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
 
 DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& session,
                                                 bool analyze, const txn::Snapshot* pinned,
-                                                const exec::StatementContext* context) {
+                                                const exec::StatementContext* context,
+                                                bool top_level) {
     // The statement boundary. Under READ COMMITTED this is where a new read
     // view is taken - so two SELECTs in one transaction can see different
     // data, which is the level's entire definition.
@@ -9649,6 +9898,11 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // **Everything the statement reads lives on its run** (BA-S15), which
     // the plain path hands on so its walk can outlive this function.
     const auto run = std::make_shared<SelectRun>(*this, session);
+    // **DE-Q10 (i): only a statement that is itself a `SELECT`** may have
+    // its body refused a page - `DispatchInner` alone says so; a `SELECT`
+    // run inside another statement does not. Not a traced statement: its
+    // reply is the run's own account.
+    run->top_level = top_level && !analyze && pinned == nullptr;
     // The statement's constants, the session's namespace among them, taken
     // here when no caller carries its own; read only by the compile below.
     exec::StatementContext own_context;
@@ -10140,7 +10394,15 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // conditions bounds it, and `known-gaps.md` states the bound.
     const exec::AccessKind outer = compiled.steps.front().kind;
     const bool descends = outer == exec::AccessKind::kLookup || outer == exec::AccessKind::kProbe;
-    if (!may_park_ || descends) return run->RunInline();
+    if (!may_park_ || descends) {
+        // **DE: a descent run here may be refused a page it would have to
+        // wait for** (`storage/miss_refusal.hpp`), and is then discarded and
+        // run again after the page is read off this reactor. A descent
+        // only: a walk run here would start over at every cold leaf, and
+        // the walk that is handed on parks at its own (DE-Q8).
+        run->arm_miss_refusal = run->top_level && descends && MissRefusalAdmitted(session);
+        return run->RunInline();
+    }
     run->HoldAcrossSuspension();
     DispatchOutcome handed;
     handed.select_run = run;
@@ -10155,6 +10417,35 @@ void CommandDispatcher::RecordExecution(const std::optional<StatementIdentity>& 
     RecordAccessShapes(chain);
     RecordOptimizerSignals(identity, chain, stats);
     RecordPlanStats(chain, stats);
+    RecordIndexUse(chain, stats);
+}
+
+void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
+                                       const exec::ExecStats& stats) {
+    // Every step an index served, sub-chains and hoisted ones included - a
+    // step's id is global to the statement, and so is `stats`. A chain with
+    // no index step, which is most, pays the walk and nothing else; one that
+    // reads an index this core read before adds through the pointer it kept
+    // - no latch, no lookup, no clock.
+    exec::ForEachStep(chain, [&](const exec::Step& step) {
+        if (!step.index.has_value() || step.step_id >= stats.steps.size()) return true;
+        const exec::StepStats& counts = stats.steps[step.step_id];
+        // A step the run never reached - an outer step kept no row - and one
+        // that walked its relation instead (`StepStats::index_walks`) used
+        // nothing.
+        if (counts.index_walks == 0) return true;
+        const catalog::Oid oid = step.index->index_oid;
+        IndexUseSlot& slot = index_use_cache_[oid % index_use_cache_.size()];
+        if (slot.oid != oid) {
+            stats::IndexUse* const found = index_stats_->CountsOf(core_id_, oid);
+            if (found == nullptr) return true;  // the part is full: dropped, counted
+            slot = {oid, found};
+        }
+        slot.counts->Add(step.kind == exec::AccessKind::kIndexRange, counts.index_walks,
+                         counts.index_entries_scanned, counts.index_rows_resolved,
+                         static_cast<std::uint64_t>(statement_head_ns_));
+        return true;
+    });
 }
 
 void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
@@ -12433,13 +12724,14 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
     }
     if (read_only.value_or(false)) return BeginReadOnly(level, session);
 
-    auto begun = txn_->Begin(level);
+    auto begun = txn_->Begin(level, statement_head_ns_);
     // ErrorReply, not a bare "ERR ": the id this draws can fail to carve,
     // and inside an explicit transaction that refusal lands *here* rather
     // than at the INSERT - the id is drawn once, at BEGIN - so this is the
     // site a retryable refusal has to reach the wire from.
     if (!begun.ok()) return Refused(begun.status());
     session.Adopt(begun.value());
+    session.NoteTxnBegan(statement_head_ns_);
     // After `Adopt`, which is what makes `EffectiveDurability` read the
     // transaction rung at all - and after `Begin`, so a refused BEGIN
     // leaves no class behind on the session.
@@ -12465,7 +12757,7 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
 // accepted and binds nothing (CS-Q10): a commit that acknowledges no write
 // keeps every class's promise.
 DispatchOutcome CommandDispatcher::BeginReadOnly(txn::IsolationLevel level, Session& session) {
-    auto leased = txn::AutocommitSnapshot(txn_);
+    auto leased = txn::AutocommitSnapshot(txn_, statement_head_ns_);
     if (!leased.ok()) {
         const Status& s = leased.status();
         return Refused(s.WithMessage(s.message() +
@@ -12477,6 +12769,7 @@ DispatchOutcome CommandDispatcher::BeginReadOnly(txn::IsolationLevel level, Sess
     ro.isolation = level;
     ro.lease = std::move(leased.value().lease);
     session.AdoptReadOnly(std::move(ro));
+    session.NoteTxnBegan(statement_head_ns_);
     // The statement that opened it has taken its boundary: under READ
     // COMMITTED the next statement re-mints, this one already did.
     statement_boundary_taken_ = true;
@@ -12500,7 +12793,7 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
     // A `READ ONLY` transaction ends by dropping its lease (CS): nothing
     // was written, so nothing is appended and nothing waited for.
     if (session.in_read_only_txn()) {
-        session.Finish();
+        FinishExplicitTxn(session, /*read_only=*/true);
         return {"COMMIT trx_id=none", false};
     }
     // The cross-owner commit fork retired (AT-S6); its history is at
@@ -12547,7 +12840,7 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
         // set (CL-R5), and no one else gives it back - then the abort, the
         // DDL scope, the session and the release. The copy that stood here
         // discarded the reservations' status.
-        const DispatchOutcome rolled = RollbackLocal(session);
+        const DispatchOutcome rolled = RollbackLocal(session, stats::TxnEnd::kAbort);
         // The commit failure is the client's answer; a failure to unwind
         // on top of it is a second, worse fact and is not swallowed - and
         // the answer keeps the commit's code beside its line.
@@ -12566,7 +12859,7 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
         // catalog write is in this transaction (`DefersCommit`), so
         // `EndDdlScope` has nothing to settle and the session's own
         // bookkeeping can go now.
-        session.Finish();
+        FinishExplicitTxn(session, /*read_only=*/false);
         session.set_acknowledged_commit_lsn(committed.value());
         DeferCommit(txn, committed.value());
         return {"COMMIT trx_id=" + std::to_string(id), false};
@@ -12577,7 +12870,7 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
     // session's transaction pointer this reads. A drop it made is queued
     // for reclamation at this commit (BF-R9).
     EndDdlScope(session, committed.value());
-    session.Finish();
+    FinishExplicitTxn(session, /*read_only=*/false);
     // The session's next statement mints no snapshot below this (BA-R1c).
     session.set_acknowledged_commit_lsn(committed.value());
 
@@ -12606,18 +12899,30 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     }
 
     if (session.in_read_only_txn()) {
-        session.Finish();
+        FinishExplicitTxn(session, /*read_only=*/true);
         return {"ROLLBACK trx_id=none", false};
     }
 
-    DispatchOutcome out = RollbackLocal(session);
+    // The client's own, unless the listener named another cause first
+    // (DF-Q13 (a)): its lifetime sweep, a closed connection, a failed load.
+    DispatchOutcome out = RollbackLocal(session, session.rollback_cause());
 
     // The participants' abort notice retired (AT-S6); its history is at cf889b63.
 
     return out;
 }
 
-DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {
+void CommandDispatcher::FinishExplicitTxn(Session& session, bool read_only) noexcept {
+    if (clock_ != nullptr) {
+        const sched::MonoTimeNs now_ns = NowNs();
+        const std::uint64_t began_ns = session.txn_began_ns();
+        stats::TxnStats::RecordLife(core_id_, read_only,
+                                    now_ns > began_ns ? now_ns - began_ns : 0);
+    }
+    session.Finish();
+}
+
+DispatchOutcome CommandDispatcher::RollbackLocal(Session& session, stats::TxnEnd cause) {
     txn::Transaction* txn = session.transaction();
     const std::uint64_t id = txn->id();
 
@@ -12638,7 +12943,8 @@ DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {
     // cached about them (DT3c, DT4). Before `Finish()`, which clears the
     // pointer this reads.
     EndDdlScope(session);
-    session.Finish();
+    stats::TxnStats::Count(core_id_, cause);
+    FinishExplicitTxn(session, /*read_only=*/false);
     txn_->Release(*txn);
     if (!aborted.ok()) return Refused(aborted);
     return {"ROLLBACK trx_id=" + std::to_string(id), false};
@@ -12788,7 +13094,9 @@ StatusOr<txn::LeasedSnapshot> CommandDispatcher::SnapshotFor(Session& session) {
     // and says plainly that
     // *this* holder's statement never parks with it: the dispatch path is
     // synchronous, and the statement drops this object before any wait).
-    return txn::AutocommitSnapshot(txn_);
+    auto leased = txn::AutocommitSnapshot(txn_, statement_head_ns_);
+    if (leased.ok()) session.NoteViewMinted(statement_head_ns_);
+    return leased;
 }
 
 StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(
@@ -12818,8 +13126,9 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(
         return scope;
     }
 
-    auto begun = txn_->Begin(isolation.value_or(session.isolation()));
+    auto begun = txn_->Begin(isolation.value_or(session.isolation()), statement_head_ns_);
     if (!begun.ok()) return begun.status();
+    session.NoteViewMinted(statement_head_ns_);
     scope.txn = begun.value();
     scope.owned = true;
     // An owned scope's trail starts empty, so this is 0 - written rather
@@ -13499,7 +13808,13 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     // Autocommit: this statement is the whole transaction, so behaviour
     // here *is* statement-atomic - reservations included, on both arms.
     if (!result.ok()) {
-        return AbortOwnedScope(scope, /*reported=*/Status::OK());
+        // **Given up to wait, or failed** (DF-Q13 (a)): a blocker, a lock
+        // wait or a structural re-run still standing here is a statement
+        // that wrote nothing and is about to wait or run again - the tests
+        // above dropped each where it wrote a row.
+        const bool waits = blocking_writer_ != 0 || lock_wait_.has_value() || structural_rerun;
+        return AbortOwnedScope(scope, /*reported=*/Status::OK(),
+                               waits ? stats::TxnEnd::kWaitAbort : stats::TxnEnd::kAbort);
     }
 
     // The reservations commit by dropping the pending set (§6.2 step 4,
@@ -13533,8 +13848,10 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     return Status::OK();
 }
 
-Status CommandDispatcher::AbortOwnedScope(WriteScope& scope, const Status& reported) {
+Status CommandDispatcher::AbortOwnedScope(WriteScope& scope, const Status& reported,
+                                          stats::TxnEnd cause) {
     const std::uint64_t id = scope.txn->id();
+    stats::TxnStats::Count(core_id_, cause);
 
     // **The enforcer's failure does not skip the transaction's own unwind**
     // (AO-S6d): unsettled assertion entries say nothing about whether the

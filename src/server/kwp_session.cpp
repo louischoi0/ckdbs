@@ -1,5 +1,7 @@
 #include "kds/server/kwp_session.hpp"
 
+#include "kds/storage/miss_refusal.hpp"
+
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -308,7 +310,14 @@ void WireResultSink::Reset() {
 }
 
 std::vector<WireResultSink::Batch> WireResultSink::TakeSealed() {
-    if (!batches_.empty()) streamed_ = true;
+    if (!batches_.empty()) {
+        streamed_ = true;
+        // **A row has left, so the statement cannot be run again** (CE-R4),
+        // and from here no fetch of its body may be refused a page
+        // (DE-Q10 (iii), `storage/miss_refusal.hpp`): a refusal it could not
+        // answer by a re-run would have to be answered by a wrong reply.
+        storage::DisarmMissRefusal();
+    }
     return std::exchange(batches_, {});
 }
 

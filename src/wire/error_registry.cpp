@@ -44,6 +44,10 @@ ErrorCategory CategoryOf(StatusCode code) noexcept {
         case StatusCode::kReadOnlyTransaction: return ErrorCategory::kReadOnlyTransaction;
         // The wire's category since KWP/1; the engine code since BA-S15.
         case StatusCode::kCancelled: return ErrorCategory::kCancelled;
+        // Never a client's (status.hpp): the dispatcher runs the statement
+        // again or reads the page itself. One that got this far is a defect,
+        // and is named as one.
+        case StatusCode::kNotResident: return ErrorCategory::kInternal;
         // Not an error, and reached only by a caller that ignored the
         // header's contract. kInternal rather than a crash: a server that
         // dies because it was asked to frame a success is worse than one

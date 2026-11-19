@@ -1,0 +1,119 @@
+## per cell, per lifetime: median over blocks of the block-paired delta (us a statement)
+
+### select-pk / literal
+
+| Lifetime | A | A' | B | B - A (median of blocks) | A' - A (floor) | blocks B > A | clean (attempts) |
+|---|---|---|---|---|---|---|---|
+| 1 | 21.63 us | 21.54 us | 22.43 us | +0.11 us | +0.01 us | 15 of 24 | yes (1) |
+| 2 | 21.25 us | 20.63 us | 21.26 us | +0.14 us | -0.34 us | 18 of 24 | yes (1) |
+| 3 | 20.83 us | 21.14 us | 21.14 us | +0.25 us | +0.29 us | 19 of 24 | yes (1) |
+| 4 | 21.19 us | 20.94 us | 21.28 us | +0.18 us | -0.23 us | 15 of 24 | yes (1) |
+| 5 | 21.04 us | 20.86 us | 21.11 us | +0.15 us | -0.12 us | 14 of 24 | yes (1) |
+| 6 | 20.96 us | 20.94 us | 21.23 us | +0.37 us | +0.02 us | 17 of 24 | yes (1) |
+| **pooled, 6 clean lifetimes** | 21.15 us | 21.01 us | 21.41 us | **+0.21 us** [+0.12, +0.31] blocks; lifetime medians median +0.16 [+0.13, +0.31], range +0.11..+0.37 | -0.06 us; lifetime medians -0.05, range -0.34..+0.29 | 98 of 144 | |
+
+### select-pk / prepared
+
+| Lifetime | A | A' | B | B - A (median of blocks) | A' - A (floor) | blocks B > A | clean (attempts) |
+|---|---|---|---|---|---|---|---|
+| 1 | 20.46 us | 20.36 us | 20.57 us | -0.06 us | -0.03 us | 11 of 24 | yes (1) |
+| 2 | 20.27 us | 20.01 us | 20.26 us | -0.14 us | -0.36 us | 10 of 24 | yes (1) |
+| 3 | 20.09 us | 20.19 us | 20.29 us | +0.22 us | +0.29 us | 18 of 24 | yes (1) |
+| 4 | 20.16 us | 20.07 us | 20.41 us | +0.19 us | -0.21 us | 18 of 24 | yes (1) |
+| 5 | 19.97 us | 20.04 us | 20.12 us | +0.22 us | +0.03 us | 17 of 24 | yes (1) |
+| 6 | 20.17 us | 20.18 us | 20.35 us | +0.30 us | -0.04 us | 16 of 24 | yes (1) |
+| **pooled, 6 clean lifetimes** | 20.19 us | 20.14 us | 20.33 us | **+0.15 us** [+0.07, +0.22] blocks; lifetime medians median +0.20 [-0.10, +0.26], range -0.14..+0.30 | -0.04 us; lifetime medians -0.03, range -0.36..+0.29 | 90 of 144 | |
+
+### select-index / literal
+
+| Lifetime | A | A' | B | B - A (median of blocks) | A' - A (floor) | blocks B > A | clean (attempts) |
+|---|---|---|---|---|---|---|---|
+| 1 | 24.19 us | 23.79 us | 24.19 us | +0.11 us | -0.12 us | 14 of 24 | yes (1) |
+| 2 | 24.20 us | 23.72 us | 24.03 us | -0.14 us | -0.37 us | 10 of 24 | yes (1) |
+| 3 | 23.82 us | 24.05 us | 24.02 us | +0.30 us | +0.38 us | 18 of 24 | yes (1) |
+| 4 | 24.07 us | 23.99 us | 24.07 us | +0.14 us | -0.06 us | 14 of 24 | yes (1) |
+| 5 | 25.29 us | 25.44 us | 25.68 us | +0.15 us | -0.15 us | 18 of 24 | yes (1) |
+| 6 | 23.90 us | 24.22 us | 24.42 us | +0.54 us | +0.09 us | 21 of 24 | yes (1) |
+| **pooled, 6 clean lifetimes** | 24.25 us | 24.20 us | 24.40 us | **+0.21 us** [+0.12, +0.33] blocks; lifetime medians median +0.15 [-0.02, +0.42], range -0.14..+0.54 | -0.09 us; lifetime medians -0.09, range -0.37..+0.38 | 95 of 144 | |
+
+### select-index / prepared
+
+| Lifetime | A | A' | B | B - A (median of blocks) | A' - A (floor) | blocks B > A | clean (attempts) |
+|---|---|---|---|---|---|---|---|
+| 1 | 23.44 us | 23.27 us | 23.59 us | +0.21 us | -0.03 us | 16 of 24 | yes (1) |
+| 2 | 23.47 us | 23.17 us | 23.26 us | -0.09 us | -0.37 us | 9 of 24 | yes (1) |
+| 3 | 23.03 us | 23.46 us | 23.51 us | +0.45 us | +0.36 us | 24 of 24 | yes (1) |
+| 4 | 23.46 us | 23.32 us | 23.71 us | +0.21 us | -0.10 us | 16 of 24 | yes (1) |
+| 5 | 23.25 us | 23.73 us | 23.98 us | +0.03 us | +0.00 us | 13 of 24 | yes (1) |
+| 6 | 23.18 us | 23.33 us | 23.55 us | +0.38 us | +0.01 us | 20 of 24 | yes (1) |
+| **pooled, 6 clean lifetimes** | 23.30 us | 23.38 us | 23.60 us | **+0.20 us** [+0.12, +0.28] blocks; lifetime medians median +0.21 [-0.03, +0.41], range -0.09..+0.45 | -0.01 us; lifetime medians -0.01, range -0.37..+0.36 | 98 of 144 | |
+
+### update-lit / literal
+
+| Lifetime | A | A' | B | B - A (median of blocks) | A' - A (floor) | blocks B > A | clean (attempts) |
+|---|---|---|---|---|---|---|---|
+| 1 | 21.02 us | 21.46 us | 21.16 us | +0.09 us | -0.12 us | 14 of 24 | yes (1) |
+| 2 | 21.10 us | 20.77 us | 20.77 us | -0.34 us | -0.33 us | 4 of 24 | yes (1) |
+| 3 | 20.63 us | 20.87 us | 20.69 us | +0.04 us | +0.20 us | 15 of 24 | yes (1) |
+| 4 | 20.79 us | 20.59 us | 20.71 us | -0.14 us | -0.11 us | 8 of 24 | yes (1) |
+| 5 | 20.79 us | 20.95 us | 20.95 us | +0.19 us | +0.11 us | 16 of 24 | yes (1) |
+| 6 | 20.65 us | 20.64 us | 20.89 us | +0.21 us | -0.01 us | 18 of 24 | yes (1) |
+| **pooled, 6 clean lifetimes** | 20.83 us | 20.88 us | 20.86 us | **+0.02 us** [-0.07, +0.10] blocks; lifetime medians median +0.07 [-0.24, +0.20], range -0.34..+0.21 | -0.01 us; lifetime medians -0.06, range -0.33..+0.20 | 75 of 144 | |
+
+### update-lit / prepared
+
+| Lifetime | A | A' | B | B - A (median of blocks) | A' - A (floor) | blocks B > A | clean (attempts) |
+|---|---|---|---|---|---|---|---|
+| 1 | 23.08 us | 22.96 us | 23.17 us | -0.08 us | -0.14 us | 10 of 24 | yes (1) |
+| 2 | 20.26 us | 20.32 us | 20.46 us | -0.01 us | -0.03 us | 12 of 24 | yes (1) |
+| 3 | 20.04 us | 20.30 us | 20.25 us | +0.08 us | +0.20 us | 14 of 24 | yes (1) |
+| 4 | 20.34 us | 20.15 us | 20.25 us | -0.05 us | -0.06 us | 11 of 24 | yes (1) |
+| 5 | 20.43 us | 20.43 us | 20.67 us | +0.20 us | +0.01 us | 14 of 24 | yes (1) |
+| 6 | 20.21 us | 20.40 us | 20.29 us | +0.09 us | +0.10 us | 13 of 24 | yes (1) |
+| **pooled, 6 clean lifetimes** | 20.73 us | 20.76 us | 20.85 us | **+0.03 us** [-0.04, +0.15] blocks; lifetime medians median +0.04 [-0.07, +0.15], range -0.08..+0.20 | +0.06 us; lifetime medians -0.01, range -0.14..+0.20 | 74 of 144 | |
+
+## headline per cell (pooled over clean lifetimes)
+
+| Cell | A server CPU | B - A pooled median [95 % bootstrap over blocks] | lifetime medians of B - A above 0 | A' - A pooled median (floor) | lifetime medians of A' - A: range | blocks B > A | server CPU delta as share of A |
+|---|---|---|---|---|---|---|---|
+| select-pk literal | 21.15 us | +0.21 us [+0.12, +0.31] | 6 of 6 | -0.06 us | -0.34..+0.29 us | 98 of 144 | +0.99 % |
+| select-pk prepared | 20.19 us | +0.15 us [+0.07, +0.22] | 4 of 6 | -0.04 us | -0.36..+0.29 us | 90 of 144 | +0.74 % |
+| select-index literal | 24.25 us | +0.21 us [+0.12, +0.33] | 5 of 6 | -0.09 us | -0.37..+0.38 us | 95 of 144 | +0.85 % |
+| select-index prepared | 23.30 us | +0.20 us [+0.12, +0.28] | 5 of 6 | -0.01 us | -0.37..+0.36 us | 98 of 144 | +0.84 % |
+| update-lit literal | 20.83 us | +0.02 us [-0.07, +0.10] | 4 of 6 | -0.01 us | -0.33..+0.20 us | 75 of 144 | +0.10 % |
+| update-lit prepared | 20.73 us | +0.03 us [-0.04, +0.15] | 3 of 6 | +0.06 us | -0.14..+0.20 us | 74 of 144 | +0.12 % |
+
+## per shape, both paths pooled (blocks of literal and prepared together)
+
+| Shape | A server CPU | B - A pooled median [95 % bootstrap over blocks] | A' - A pooled median | lifetime-median B - A: median [95 % bootstrap over lifetimes], range, lifetimes above 0 | lifetime-median A' - A: median [95 % bootstrap over lifetimes], range, lifetimes above 0 | blocks B > A |
+|---|---|---|---|---|---|---|
+| select-pk | 20.67 us | +0.18 us [+0.12, +0.22] | -0.05 us | +0.18 us [+0.01, +0.29], +0.00..+0.33, 6 of 6 | -0.03 us [-0.28, +0.14], -0.35..+0.29, 1 of 6 | 188 of 288 |
+| select-index | 23.78 us | +0.20 us [+0.14, +0.26] | -0.05 us | +0.17 us [-0.02, +0.42], -0.12..+0.46, 5 of 6 | -0.08 us [-0.23, +0.21], -0.37..+0.37, 2 of 6 | 193 of 288 |
+| update-lit | 20.78 us | +0.03 us [-0.03, +0.08] | +0.01 us | +0.03 us [-0.14, +0.17], -0.18..+0.19, 4 of 6 | -0.02 us [-0.15, +0.13], -0.18..+0.20, 3 of 6 | 149 of 288 |
+
+## latency, driver-side, median over lifetimes of each lifetime's per-arm statistic (the driver reports p90, not p95)
+
+| Cell | Arm | statements an arm | QPS (1e6 / mean) | p0 | p25 | p50 | p90 | p99 | server CPU | driver CPU |
+|---|---|---|---|---|---|---|---|---|---|---|
+| select-pk literal | A | 72,000 | 18,613 qps | 47.7 us | 49.8 us | 50.7 us | 57.4 us | 72.3 us | 21.12 us | 31.70 us |
+| select-pk literal | A' | 72,000 | 18,587 qps | 47.6 us | 49.7 us | 50.6 us | 57.3 us | 71.6 us | 20.94 us | 31.80 us |
+| select-pk literal | B | 72,000 | 18,482 qps | 47.9 us | 49.8 us | 50.8 us | 57.6 us | 73.5 us | 21.25 us | 31.82 us |
+| select-pk prepared | A | 72,000 | 20,196 qps | 44.4 us | 46.0 us | 46.7 us | 52.7 us | 65.9 us | 20.16 us | 28.38 us |
+| select-pk prepared | A' | 72,000 | 20,207 qps | 44.4 us | 46.0 us | 46.8 us | 52.7 us | 65.4 us | 20.12 us | 28.44 us |
+| select-pk prepared | B | 72,000 | 20,117 qps | 44.5 us | 46.1 us | 46.8 us | 52.7 us | 65.9 us | 20.32 us | 28.46 us |
+| select-index literal | A | 72,000 | 17,645 qps | 49.6 us | 52.5 us | 53.6 us | 60.4 us | 77.3 us | 24.13 us | 31.48 us |
+| select-index literal | A' | 72,000 | 17,643 qps | 49.7 us | 52.5 us | 53.7 us | 60.8 us | 75.3 us | 24.02 us | 31.57 us |
+| select-index literal | B | 72,000 | 17,617 qps | 49.8 us | 52.5 us | 53.7 us | 60.7 us | 76.6 us | 24.13 us | 31.49 us |
+| select-index prepared | A | 72,000 | 18,946 qps | 46.4 us | 49.0 us | 50.1 us | 56.7 us | 70.8 us | 23.34 us | 28.39 us |
+| select-index prepared | A' | 72,000 | 18,900 qps | 46.2 us | 48.9 us | 50.0 us | 57.3 us | 71.7 us | 23.33 us | 28.61 us |
+| select-index prepared | B | 72,000 | 18,746 qps | 46.4 us | 49.0 us | 50.2 us | 57.8 us | 73.0 us | 23.57 us | 28.66 us |
+| update-lit literal | A | 72,000 | 22,170 qps | 35.9 us | 41.2 us | 41.9 us | 48.8 us | 63.7 us | 20.79 us | 23.45 us |
+| update-lit literal | A' | 72,000 | 22,282 qps | 36.2 us | 41.2 us | 41.9 us | 48.2 us | 62.8 us | 20.82 us | 23.32 us |
+| update-lit literal | B | 72,000 | 22,222 qps | 36.1 us | 41.2 us | 41.9 us | 48.3 us | 63.0 us | 20.83 us | 23.39 us |
+| update-lit prepared | A | 72,000 | 23,768 qps | 35.0 us | 38.3 us | 39.0 us | 45.2 us | 61.6 us | 20.30 us | 20.89 us |
+| update-lit prepared | A' | 72,000 | 23,622 qps | 35.6 us | 38.3 us | 39.0 us | 45.4 us | 62.7 us | 20.36 us | 21.00 us |
+| update-lit prepared | B | 72,000 | 23,478 qps | 35.1 us | 38.3 us | 39.0 us | 45.4 us | 63.8 us | 20.37 us | 21.04 us |
+
+bad replies over every arm, cell and lifetime: 0
+idle server CPU (us per second) per lifetime: [{'A2': 6271, 'B': 6094, 'A': 5870}, {'B': 6916, 'A': 6141, 'A2': 5929}, {'A': 6235, 'A2': 5793, 'B': 5821}, {'A2': 5764, 'B': 6744, 'A': 6045}, {'B': 6949, 'A': 7247, 'A2': 6115}, {'A': 6416, 'A2': 6430, 'B': 7325}]
+unclean cells: 0 of 36; quiet waited s per cell (sum): 72

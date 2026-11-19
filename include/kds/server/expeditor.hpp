@@ -40,6 +40,7 @@
 #include "kds/server/tcp_server.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/page_device.hpp"
+#include "kds/storage/page_reader.hpp"
 #include "kds/storage/page_store_checkpoint_target.hpp"
 #include "kds/wal/checkpointer.hpp"
 #include "kds/wal/file_log_device.hpp"
@@ -710,6 +711,13 @@ public:
     const sched::WakerTable* wakers() const noexcept {
         return wakers_.has_value() ? &*wakers_ : nullptr;
     }
+    // **The page reader** (DE, `storage/page_reader.hpp`), null before
+    // `Start`. Exposed as the two above are: that its threads run at every
+    // core count, and that every dispatcher was handed it, are wiring facts
+    // whose failure is a read that stops its core, not a wrong answer.
+    const storage::PageReader* page_reader() const noexcept {
+        return page_reader_.has_value() ? &*page_reader_ : nullptr;
+    }
 
     // The `SIGTERM`/`SIGINT` descriptor the platform layer installed
     // (`server/stop_signal.hpp`). `Serve()` registers it with its reactor, so a
@@ -864,6 +872,9 @@ private:
     exec::AdminPlans admin_plans_;
     // `ADVISE PLAN`'s rows (`exec/plan_advice.hpp`, CX-S7): memory only.
     exec::PlanAdvices plan_advices_;
+    // `sys.indexes`' usage counts (`stats/index_stats.hpp`, DF-S3): one
+    // store every core's reads fold into, memory only, this instance's.
+    stats::IndexStats index_stats_;
     // Whether the persisting step's last call failed: its warning is logged
     // when a run of failures starts, not once a second through it.
     bool plans_persist_failing_ = false;
@@ -915,6 +926,17 @@ private:
     // by each core, so a `Stop()` from this thread is followed by a kick
     // that ends the block the peer is in.
     std::optional<sched::WakerTable> wakers_;
+    // **DE: the data file's reads that leave a reactor**
+    // (`storage/page_reader.hpp`), built by `Start` and stopped before any
+    // reactor goes. Its threads wake an asker's core through `wakers_` -
+    // and at `cores = 1`, where that table is not built, through
+    // `page_read_wakers_`, a table of one entry that only the reader writes
+    // to. **Two departures from G2's "build nothing" at one core** (DE-Q14):
+    // this table, with its descriptor in core 0's readiness set, and the
+    // reader's threads. Declared after both tables and after `device_`, so
+    // the reader - whose destructor joins its threads - dies first.
+    std::optional<sched::WakerTable> page_read_wakers_;
+    std::optional<storage::PageReader> page_reader_;
     // D19's fallback (AT-S10c): the inboxes core 0's listener hands
     // connections into, built only where the port cannot be shared. After
     // `wakers_`, which it kicks through, and before `cores_` and
@@ -970,6 +992,10 @@ private:
     // The services every core's dispatcher is handed, core 0's and each
     // peer's alike, so one added here reaches all of them.
     void WireInstanceServices(CommandDispatcher& dispatcher);
+    // Joins the page reader's threads; a no-op before `Start` built it.
+    // Called beside `wal_->StopKicking()`, for its reason: a thread that
+    // wakes cores is quiesced before any reactor leaves the registry.
+    void StopPageReader() noexcept;
 
     // The optimizer surface every core's dispatcher is handed (AT-S8,
     // `OptimizerSurface`): the collector, the switch, and

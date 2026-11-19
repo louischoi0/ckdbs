@@ -70,10 +70,10 @@ Reading a wait: `sys.wait_stats` (cumulative, per core), `sys.wait_histogram`
 - **p1:** page_id — the page being read.
 - **p2:** page_class — not filled yet.
 - **p3:** core — not filled yet.
-- **Meaning:** A foreground page fault read the page from the data file. The read is a blocking `pread` on the reactor, so the whole core stalls for its duration (CJ-Q8); the time is booked to the event, not to ON_CPU.
+- **Meaning:** A foreground page fault read the page from the data file. **Two shapes, one event, one count a read** (DE-R9). Where the read is a blocking `pread` on the reactor, the whole core stalls for its duration (CJ-Q8) and the scope never suspends. Where the read left the reactor (`page.md` §12: a top-level `SELECT`'s descent, a `SELECT`'s walk awaited on a reactor), the event is the statement's park until the page reader has read the page, and the core runs its other sessions meanwhile; the copy into the pool that follows is not counted again, and a refused attempt is not counted at all. Either way the time is booked to the event, not to ON_CPU. A parked read is `io.page_read` whatever its page turns out to be: the park does not know the page's kind.
 - **Usual causes:** A buffer pool smaller than the working set; a cold start; a scan over a cold relation.
 - **Remedies:** Raise `buffer_pool_frames`; an index that touches fewer pages.
-- **Sites:** The device page store's read.
+- **Sites:** The device page store's read; the dispatcher's park for a discarded head (`AwaitPageRead`) and its synchronous twin; the walk's park at a leaf.
 
 ### io.var_heap_read
 
@@ -83,7 +83,7 @@ Reading a wait: `sys.wait_stats` (cumulative, per core), `sys.wait_histogram`
 - **p1:** page_id
 - **p2:** rel_oid — the owning relation, from the page header.
 - **p3:** (unused)
-- **Meaning:** A page fault whose page turned out to be a var-heap page (a spilled value). Booked as `io.page_read` until the header is read, then renamed.
+- **Meaning:** A page fault whose page turned out to be a var-heap page (a spilled value). Booked as `io.page_read` until the header is read, then renamed. A spilled value's read that left its reactor (`page.md` §12) stays `io.page_read`: the park is booked before any byte is read, and the copy after it books nothing.
 - **Usual causes:** Wide values read through a cold pool.
 - **Remedies:** As `io.page_read`; keep hot values inline with a larger `varchar(N)` width.
 - **Sites:** The device page store's read, by reclassification.

@@ -64,8 +64,10 @@ public:
     static constexpr std::size_t kRingCapacity = 4096;  // BO-Q7 (a), per core
     using Ring = PerCoreRing<LockWaitRecord, kRingCapacity>;
 
-    // Appends `row` to `row.core`'s part, stamping its `seq`.
-    static void Record(LockWaitRecord row) noexcept { ring().Record(row.core, row); }
+    // Appends `row` to `row.core`'s part, stamping its `seq` - and counts
+    // it into its relation's cumulative lock columns (`sys.relation_stats`,
+    // DF-S3), which keep what this ring overwrites.
+    static void Record(LockWaitRecord row) noexcept;
 
     // Every part's rows: by core, then oldest first.
     static std::vector<LockWaitRecord> Snapshot() { return ring().Snapshot(); }

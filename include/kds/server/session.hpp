@@ -16,6 +16,7 @@
 #include "kds/server/priority.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/role.hpp"
+#include "kds/stats/txn_stats.hpp"
 #include "kds/txn/manager.hpp"
 
 // One client connection's transaction state (docs/spec/txn.md sections 1, 5, 6).
@@ -331,6 +332,14 @@ public:
         std::vector<exec::SubqueryResult> subqueries{};
     };
 
+    // DE (`storage/miss_refusal.hpp`): how many runs of the statement now
+    // running were discarded for a page. The dispatcher's, cleared at a
+    // statement's first run and compared with
+    // `CommandDispatcher::kMaxMissReruns`; the session's because it is what
+    // a statement keeps across its parks.
+    std::uint32_t miss_refusals() const noexcept { return miss_refusals_; }
+    void set_miss_refusals(std::uint32_t n) noexcept { miss_refusals_ = n; }
+
     const std::optional<ParkedWrite>& parked_write() const noexcept { return parked_write_; }
     void set_parked_write(ParkedWrite parked) noexcept { parked_write_ = std::move(parked); }
     void clear_parked_write() noexcept { parked_write_.reset(); }
@@ -342,6 +351,42 @@ public:
         if (state_ == State::kInTxn) state_ = State::kFailedTxn;
     }
 
+    // ---- What the session holds open, for the statistics (DF-S2) ---------
+    //
+    // Three instants on the dispatcher's clock, each the head of the
+    // statement that did it, and none of them read by the engine (DF-R3).
+    // `txn_began_ns` is kept here for the life recorded at the transaction's
+    // end (`stats::TxnStats::RecordLife`); it and the view's are published
+    // on the session's wait statistics, where those exist, for
+    // `sys.session_state`. 0 is "none", and what a dispatcher with no clock
+    // stamps.
+    std::uint64_t txn_began_ns() const noexcept { return txn_began_ns_; }
+    // `BEGIN` of either kind: the transaction, and the view it took.
+    void NoteTxnBegan(std::uint64_t ns) noexcept {
+        txn_began_ns_ = ns;
+        if (wait_stats_ != nullptr) {
+            wait_stats_->txn_began_ns.set(ns);
+            wait_stats_->view_minted_ns.set(ns);
+        }
+    }
+    // The session's statement minted the view it holds now.
+    void NoteViewMinted(std::uint64_t ns) noexcept {
+        if (wait_stats_ != nullptr) wait_stats_->view_minted_ns.set(ns);
+    }
+    // An autocommit statement ended: the view it held is gone with it. A
+    // transaction's view is its own to give up, at `Finish` or `Expire`.
+    void EndStatementView() noexcept {
+        if (state_ == State::kIdle && wait_stats_ != nullptr) wait_stats_->view_minted_ns.set(0);
+    }
+
+    // **Why the next `ROLLBACK` ends the transaction**, where it is not the
+    // client's (DF-Q13 (a)): the listener's lifetime sweep, a connection's
+    // close and a load stream's failure dispatch the client's own text, so
+    // each names its cause here first. Dropped with the transaction
+    // (`Finish`, `Expire`), so it names one rollback.
+    void set_rollback_cause(stats::TxnEnd cause) noexcept { rollback_cause_ = cause; }
+    stats::TxnEnd rollback_cause() const noexcept { return rollback_cause_; }
+
     // The transaction ended (committed or aborted). Returns the handle so
     // the caller can Release() it against the manager after replying.
     txn::Transaction* Finish() noexcept {
@@ -350,6 +395,7 @@ public:
         read_only_.reset();
         state_ = State::kIdle;
         expired_trx_id_.reset();
+        ClearHeldStamps();
         // The class this transaction was begun under belongs to the
         // transaction, not the connection: `BEGIN ... DURABILITY strict`
         // binds one transaction, and a session whose next statement is
@@ -370,6 +416,7 @@ public:
         state_ = State::kFailedTxn;
         expired_trx_id_ = trx_id;
         txn_durability_.reset();
+        ClearHeldStamps();
     }
 
     // The home core, the ship identity and the participant list retired
@@ -419,7 +466,19 @@ private:
         return true;
     }
 
+    // The transaction and its view are gone: nothing is held (DF-S2).
+    void ClearHeldStamps() noexcept {
+        txn_began_ns_ = 0;
+        rollback_cause_ = stats::TxnEnd::kRollback;
+        if (wait_stats_ != nullptr) {
+            wait_stats_->txn_began_ns.set(0);
+            wait_stats_->view_minted_ns.set(0);
+        }
+    }
+
     State state_ = State::kIdle;
+    std::uint64_t txn_began_ns_ = 0;                            // DF-S2
+    stats::TxnEnd rollback_cause_ = stats::TxnEnd::kRollback;  // DF-Q13 (a)
     std::shared_ptr<sched::SessionWaitStats> wait_stats_;
     txn::IsolationLevel isolation_ = txn::IsolationLevel::kReadCommitted;
     catalog::Oid default_namespace_ = catalog::kNamespacePublic;
@@ -437,6 +496,7 @@ private:
     // AO-S3b. Absent on every session that is not parked mid-walk, which
     // is every session almost all of the time.
     std::optional<ParkedWrite> parked_write_ = std::nullopt;
+    std::uint32_t miss_refusals_ = 0;  // DE; see `miss_refusals`
     std::uint64_t moved_at_ns_ = 0;
     std::uint64_t counted_in_window_ = UINT64_MAX;
     PrioritySeat priority_;
