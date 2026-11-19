@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "kds/base/injected_failure.hpp"
@@ -129,6 +130,28 @@ public:
     Status EnsureCapacity(std::uint32_t nr_pages) override;
     Status Sync() override;
 
+    // ---- The no-wait read's twin (DE-Q9, DE-Q12) --------------------------
+    //
+    // A real device answers "would wait" by what the operating system's
+    // cache holds, which no test can set. Here it is a mode, so a refusal is
+    // reachable on one thread and in the same order on every run:
+    //  - `kNever` (the default): `ReadPageNoWait` reads, as the base does.
+    //  - `kUntilWarmed`: a page would wait until `WarmPage` names it, and one
+    //    no-wait read **spends** that - so every pool miss made under a
+    //    refusing fetch is refused once and admitted once.
+    //  - `kAlways`: every no-wait read would wait and `WarmPage` changes
+    //    nothing - the page a statement can only get by reading it
+    //    synchronously.
+    // A "would wait" answer transfers nothing: it is no entry in the trace,
+    // no read in the statistics, and takes no injected failure.
+    enum class NoWait : std::uint8_t { kNever, kUntilWarmed, kAlways };
+    void SetNoWait(NoWait mode);
+    Status ReadPageNoWait(PageId page_id, std::span<std::byte, kPageSize> out,
+                          bool* would_wait) override;
+    void WarmPage(PageId page_id) noexcept override;
+    // `ReadPageNoWait` calls answered "would wait", since construction.
+    std::uint64_t would_wait_answers() const;
+
     // ---- Fault injection -------------------------------------------------
 
     // The next matching operation reports `status` and has no effect. Each
@@ -243,6 +266,9 @@ private:
     std::unordered_map<PageId, Page> durable_;
     std::unordered_map<PageId, Page> pending_;
 
+    NoWait no_wait_ = NoWait::kNever;
+    std::unordered_set<PageId> warmed_;  // `kUntilWarmed`'s pages a `WarmPage` named
+    std::uint64_t would_wait_answers_ = 0;
     InjectedFailure fail_next_read_;
     InjectedFailure fail_next_write_;
     InjectedFailure fail_next_sync_;

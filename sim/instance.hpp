@@ -42,6 +42,7 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
+#include "kds/storage/page_reader.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
@@ -90,6 +91,15 @@ struct SimInstanceOptions {
     bool waystone = false;           // trail recording *and* replay
     bool cabins = false;             // the value-observed store
     bool access_statistics = true;   // sys.access_stats, the server default
+
+    // **DE-Q12: the read that leaves a reactor, on one thread.** The page
+    // device answers "would wait" for a page until the reader has named it
+    // (`MemoryPageDevice::NoWait::kUntilWarmed`), and the dispatcher is
+    // given a page reader with no thread, so a refused `SELECT` is
+    // discarded and run again inside `Dispatch` with the read made at the
+    // request. Nothing real waits; what runs is the refusal, the discard and
+    // the run-again, under every crash the harness takes.
+    bool read_off_reactor = false;
 };
 
 // A base backup the harness took (BR-S8): the data pages as the fuzzy copy
@@ -288,6 +298,8 @@ private:
 
     // Device layer — survives crash and reboot.
     std::unique_ptr<storage::MemoryPageDevice> page_device_;
+    // DE-Q12; after the device it reads, before the dispatcher that holds it.
+    std::optional<storage::PageReader> page_reader_;
     std::unique_ptr<wal::MemoryLogDevice> log_device_;
 
     // Engine stack — rebuilt per boot. The recorder and the Cabin store

@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -151,6 +152,44 @@ Status FilePageDevice::WriteAt(PageId first_page_id, std::uint32_t nr_pages,
 
 Status FilePageDevice::ReadPage(PageId page_id, std::span<std::byte, kPageSize> out) {
     return ReadAt(page_id, 1, out.data());
+}
+
+Status FilePageDevice::ReadPageNoWait(PageId page_id, std::span<std::byte, kPageSize> out,
+                                      bool* would_wait) {
+    *would_wait = false;
+    if (nowait_refused_.load(std::memory_order_relaxed)) return ReadAt(page_id, 1, out.data());
+    if (Status status = CheckPageRunRange(page_id, 1, page_capacity_.load(std::memory_order_acquire));
+        !status.ok()) {
+        return status;
+    }
+    struct ::iovec iov {};
+    iov.iov_base = out.data();
+    iov.iov_len = kPageSize;
+    for (;;) {
+        const ::ssize_t n = ::preadv2(fd_.get(), &iov, 1, static_cast<::off_t>(PageOffset(page_id)),
+                                      RWF_NOWAIT);
+        if (n == static_cast<::ssize_t>(kPageSize)) return Status::OK();
+        if (n < 0 && errno == EINTR) continue;
+        // Nothing of the page, or only its head, is in the cache: the rest
+        // would wait. A short transfer is not finished here - the caller is
+        // about to give its buffer back.
+        if ((n < 0 && errno == EAGAIN) || n > 0) {
+            *would_wait = true;
+            return Status::OK();
+        }
+        if (n < 0 && (errno == EOPNOTSUPP || errno == ENOSYS || errno == EINVAL)) {
+            nowait_refused_.store(true, std::memory_order_relaxed);
+        }
+        // An unexpected end of file or a device error: `ReadAt` reads the
+        // page as `ReadPage` would and words the failure as it does.
+        return ReadAt(page_id, 1, out.data());
+    }
+}
+
+void FilePageDevice::WarmPage(PageId page_id) noexcept {
+    std::byte scratch[kPageSize];
+    // The status is the asker's to read, from its own fetch.
+    (void)ReadAt(page_id, 1, scratch);
 }
 
 Status FilePageDevice::WritePage(PageId page_id, std::span<const std::byte, kPageSize> in) {

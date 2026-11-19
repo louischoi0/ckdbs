@@ -2,7 +2,7 @@
 
 Status: **OPENED 2026-11-19 on the operator's standing go-ahead
 (go-ahead-achieving-milestone), on worktree `de-page-read-off-the-reactor`
-from `35086008` (`v3.4.13-19-g35086008`); DE-S0 done.** Written 2026-11-18
+from `35086008` (`v3.4.13-19-g35086008`); DE-S0 and DE-S1 done.** Written 2026-11-18
 on worktree `db-fpi-cadence-dc-for-update` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`) on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §25). **Exploratory by CLA's proposal, not by
@@ -274,8 +274,8 @@ Binding once DE opens, whatever candidate is marked.
 **None is the operator's own mark.** (a) is CLA's proposal in each, and each
 is **adopted (a) on the operator's standing go-ahead of 2026-11-19
 (go-ahead-achieving-milestone)**, recorded in `raft-marks-2026-11-19.md` §8:
-DE-Q0..Q6 at the opening, DE-Q7..Q14 as DE-S0 and its review raised them
-(§7), each written
+DE-Q0..Q6 at the opening, DE-Q7..Q14 as DE-S0 and its review raised them,
+DE-Q15 as DE-S1's review did (§7), each written
 here with its options before it was adopted. An option not taken stays open
 to the operator's own mark.
 
@@ -292,10 +292,11 @@ to the operator's own mark.
 | DE-Q8 | **What the walk does at a miss.** §2's C1 hands on one leaf and never parks. DE-S0's cell (iv): the walk reads about 19,700 pages a second - the disk's sequential rate - and the core is inside the read 93 % of the time; reading one leaf ahead does not give the core back. | **the walk parks at a read that would wait**: its own next-leaf fetch, made at the top of its page loop where it holds no pin and no span (`src/exec/step_vm.cpp:2158-2163`), refuses a page the device cannot hand over at once (DE-Q9); the walk hands the page to the read thread, parks, and makes that fetch again. **The refusal is a property of that one fetch - an access kind of its own - never of the thread**, since the walk yields; and the retry re-issues the fetch alone, without passing the walk's cycle guard or its fetch count a second time (`step_vm.cpp:2159-2162`), so a refused leaf is visited once. Fetches under a leaf - an undo chain, a spilled value, a join's inner step - read synchronously as today. This is §6's own rule, "a statement gives its core back at a miss", applied to the one place a walk holds nothing | (b) C1 as written; (c) nothing for the walk |
 | DE-Q9 `[quiet-wrong]` | **How a page read off the reactor reaches the pool, and which read leaves the reactor.** §2's M1 has the thread read into the reserved frame and the asker's core publish it. | **Revised at DE-S0's review, before anything was built.** (1) **A fetch that may be refused first asks the device for the page without waiting** (`preadv2` with `RWF_NOWAIT` on the file device). A page the operating system holds is copied into the reserved frame where the statement stands, exactly as today: cell (ii)'s 4 us copy and the 92 % of cell (iv)'s reads that return in under 4 us never leave the reactor and are never refused. Only a read that would wait is refused - and on this host's kernel the refused call has already started the device read (read at `35086008`'s build: 200 of 200 uncached pages answered `EAGAIN` and were readable 468 us later with no other reader). (2) **The thread then reads the page into a buffer of its own and drops it.** What the read leaves is the page in the operating system's cache, and the statement's next fetch finds it there by (1) - one reservation, one checksum check, one `InsertFrame`, on a reactor. No second image of a page exists outside the pool's protocol, no frame is owned across a cancelled asker, and nobody waits for a publish a reactor owes, at any core count. A device that cannot answer without waiting - any but the file device - is read as today. It rests on DE-Q4 (a): with `O_DIRECT` nothing is left behind. The threads are joined before the device's descriptor closes | (b) the thread's buffer adopted into a frame on the asker's core - saves the second copy, and owes a guard on every path that writes back, frees or re-creates the page while the buffer is in flight: a buffer read before a write-back and adopted after the eviction is a stale image `[quiet-wrong]`; it is what `O_DIRECT` would need; (c) §2's M1 as written, the read into the reserved frame; (d) the first draft of (a): every pool miss refused - a run-again would meet the same miss, and a page the operating system holds would pay a park for a 4 us copy |
 | DE-Q10 `[quiet-wrong]` | **The refusal's form, and what stops a caller swallowing it.** DE-S0's passes listed some thirty statement-path sites that recover from any failed fetch (§7, list B). | **a status code of its own, `kNotResident`, that never reaches a client, and a per-thread note set where the refusal is made.** The dispatcher reads the note, not the outcome: a head whose note is set is discarded whole and run again, whatever it answered. So a caller that read the refusal as "absent", or took another plan, produced an answer nobody sees. Sound only under four conditions, each built in DE-S1: **(i) the arm covers a top-level `SELECT`'s body and nothing else** - not a nested `SELECT` (`RunToEnd`, an `INSERT ... SELECT`, a write's scalar subquery), not a locking read; **(ii) the tails obey the note** - `SelectRun::Finish` records nothing (no trail, no access statistics, no optimizer signal) for a run whose note is set, and the arm is dropped before the recording's own fetches (§7, list C); **(iii) the arm is dropped when the sink first hands a row on**, so no refusal is made once a re-run is impossible (CE-R4); **(iv) the note is read before the head's coroutine can yield**, as BA-S14's is. A specific-code test anywhere in the tree does not match the new code | (b) every swallowing site changed to test the code; (c) `TxnConflict` under BA-S14's structural note - seven retry loops test that code; (d) the arm on the two descents' node fetches only, by a parameter threaded through them - it leaves a cold row's undo and spill reads on the reactor, and the body writes nothing the discard does not already cover |
-| DE-Q11 | **The bound on running a head again** (DE-R7). | at most `kMaxMissReruns` = 8 runs refused, and BA-S14's deadline (the lock family's fault net, 1 s); the run after either reads every page synchronously, as today. A cancel is taken at the park. Eight covers a clustered descent and an index descent missed at every level; a head with more cold pages than that - a long key set, a join probing a cold inner relation - reads the rest on its core as it does today. **What a run-again costs is stated, not hidden**: the statement is parsed and compiled again each time, and the per-shape page-read and row counters of `sys.statement_stats` include the discarded runs, as BA-S14's re-runs already do | (b) the deadline alone; (c) another number |
+| DE-Q11 | **The bound on running a head again** (DE-R7). | at most `kMaxMissReruns` = 8 runs refused, and BA-S14's deadline (the lock family's fault net, 1 s); the run after either reads every page synchronously, as today. A cancel ends the park (DE-Q15). Eight covers a clustered descent and an index descent missed at every level; a head with more cold pages than that - a long key set, a join probing a cold inner relation - reads the rest on its core as it does today. **What a run-again costs is stated, not hidden**: the statement is parsed and compiled again each time, and the per-shape page-read and row counters of `sys.statement_stats` include the discarded runs, as BA-S14's re-runs already do | (b) the deadline alone; (c) another number |
 | DE-Q12 | **DE-R5 on the simulator, which drives `CommandDispatcher::Dispatch` and has no reactor to park on** (`sim/instance.cpp:473`). | the synchronous `Dispatch` runs the same refuse, discard and run-again loop when its instance was given a reader, and the simulator's reader has no thread: a request completes where it is made and reads nothing. So the corpus exercises the refusal and the re-run under its crashes on one thread, and the device sees the reads the statements make, in statement order | (b) the simulator reads synchronously and the path is not in the corpus |
 | DE-Q13 | **Whether the path has a switch.** DE-Q5 (a) fixes the thread count and makes it no setting. | no key. A server always has the reader; a dispatcher built without one - a test, a tool - reads synchronously. The thread count is `kPageReadThreads` = 4, `[provisional]`, until a cell prices another | (b) a boot key that turns the path off |
 | DE-Q14 | **How the read thread ends a reactor's idle block at `cores = 1`**, where the server builds no wake registry and starts no thread (`src/server/expeditor.cpp:1837-1851`, "G2 asks for zero overhead on the single-core path") - a parked statement would wait out `max_idle_block_ms`, 10 ms, for a 0.5 ms read. Raised after §4 was written, by CLA's reading and the review's. | the wake registry is built at one core too and core 0 registers in it; the reader **writes the wake whatever the destination's sleeping flag says**, because a read can complete inside the window a best-effort kick leaves open and the price there, one idle block, is twenty times the read. **Two departures from G2's "build nothing" at one core, named here**: the registry with its descriptor in core 0's readiness set, and DE-R8's read threads. The close prices both on the resident `cores = 1` cells (DE-R4) | (b) the best-effort kick every other waiter uses, priced at one idle block; (c) no park at one core: the path is built above one core only |
+| DE-Q15 | **What a cancel does to a statement parked on a read.** DE-Q11 (a) first said "a cancel is taken at the park"; DE-S1 built, and its review pointed out, something else. Today a descent takes no cancel: one is taken at a walk's slice boundary or at the next frame (`protocol.md` §7). | **the park ends, no later run of the statement is refused, and the statement answers what it answers today** - a descent's rows, read synchronously. A cancel is taken nowhere it is not taken today (DE-R1) | (b) the statement is answered `CANCELLED` at the park - a new place a cancel is taken, and a point `SELECT` that today returns its row would return the cancel |
 
 ## 5. Stages
 
@@ -593,3 +594,130 @@ place of the driver's `/proc` scan - that `systemd-run --scope` runs the
 server in its own process was not checked on this host and the scan is
 known to work; folding the results file's closing section into its tables -
 it is the insight the bench rule asks for.
+
+### DE-S1, 2026-11-19 - the read off the reactor, and a `SELECT`'s head
+
+On worktree `de-page-read-off-the-reactor`, on `721d0732`
+(`v3.4.14-4-g721d0732`). **Overhead not measured; measured at the
+milestone's close.**
+
+**List C's owed item, read first.** An inline head's rows leave a wire sink
+only at `WireResultSink::TakeSealed`, which a walk reaches at a slice
+boundary (`src/server/kwp_session.cpp`, `AtSliceBoundary`) and a statement
+at its end; a descent meets no slice boundary (`src/exec/step_vm.cpp`, the
+`outermost && slice_` test), so an armed body hands no row on before it
+returns. The tails are `SelectRun::Finish`'s, as the DE-S0 review found.
+
+**Built.**
+
+- **The device** (`storage/page_device.hpp`). `ReadPageNoWait` reads a page
+  only where the device can hand it over without waiting; `WarmPage` brings
+  one to where that read finds it and keeps nothing. The file device is
+  `preadv2` with `RWF_NOWAIT` and a `pread` into a buffer it drops; a kernel
+  or file system that refuses the flag is remembered and read with `pread`.
+  The memory device has the twin a test can set
+  (`MemoryPageDevice::NoWait`): never, until warmed and spent by one read,
+  or always. Every other device reads, as before.
+- **The refusal** (`storage/miss_refusal.hpp`, `StatusCode::kNotResident`,
+  `DevicePageStore::FaultIn`). On the miss path only, a fetch made under the
+  thread's arm, or with `PageAccess::kScanNoWait` (DE-S2's, its store half
+  built here), asks without waiting; a read that would wait gives its
+  reserved slot back and is refused, an armed one noted on the thread. A
+  hit reads and writes no word it did not before (DE-R4).
+- **The reader** (`storage/page_reader.hpp`): four threads started at boot,
+  a queue under one mutex, a ticket the asker polls, a wake written
+  whatever the destination's flag says (`WakeRegistry::Wake`). With no
+  thread a request is served where it is made.
+- **The dispatcher.** A statement that is itself a plain `SELECT`, whose
+  head is a descent run inline, runs its body armed (`SelectRun::Execute`),
+  the arm dropped as the walk returns. `StageStatement` reads the thread's
+  note: a body that was refused is replaced whole by the refusal carrying
+  its page (`DispatchOutcome::page_wait`), whatever it answered, and
+  `SelectRun::Finish` records nothing for it. `AwaitStatementWaits` takes
+  the page as a third wait: `AwaitPageRead` rewinds the sink, hands the
+  page to the reader, parks under `io.page_read` until the read is made,
+  the statement's deadline passes or its cancel flag is raised, and runs
+  the statement again. `Dispatch` does the same with nowhere to park, where
+  the reader has no thread. Eight refused runs, or a wait that ended
+  without its read, and no later run of the statement is refused
+  (`Session::miss_refusals`, `kMaxMissReruns`).
+- **The server** (`Expeditor::Start`). The reader is built before a core can
+  run a statement and stopped beside the WAL writer's quiesce, before a
+  reactor leaves the wake table. At `cores = 1` core 0 registers in a table
+  of one entry that only the reader writes to, and publishes no load word
+  through it (`Scheduler::AttachWakerTable`'s `publish_load`).
+- **The simulator** (DE-Q12): a fourth toggle, `read_off_reactor`, drawn
+  after the three it had and paired with them
+  (`RunTogglePairing`), so half of every seed's iterations run their point
+  reads refused once a miss and run again, under every crash and fault
+  mode the corpus has.
+- `sys.meta` gains `pool_would_wait` and `contention_miss_reruns`.
+
+**Tests** (`tests/de_page_read_test.cpp`, `tests/de_page_read_rig_test.cpp`,
+one cell each in `tests/expeditor_test.cpp` and `tests/kwp_error_test.cpp`):
+the two devices; the store's arm - refused, noted, the slot returned, a hit
+never asked, the walk's access kind leaving no note, an I/O error, a torn
+page and a full pool answering as unarmed (DE-R6); the reader with and
+without threads, and `Wake` against `Kick`; through the dispatcher over a
+simulator instance - a refused head answers what a synchronous one does
+(DE-R1), a discarded run records nothing, **a run whose refusal a caller
+swallowed is discarded whole** (planted by the row hook: the row taken
+back, the statement made again, the access counts those of one run),
+nothing but a top-level `SELECT` is ever refused (a write, a locking read,
+an `INSERT ... SELECT`, a write's subquery, a traced `SELECT`; DE-R2), the
+run after the eighth refused one reads synchronously (DE-R7), and every
+device read is one `io.page_read` on either path (DE-R9); on the two-core
+rig, under the suspend audit and strict wait scopes (DE-R3) - a read that
+would wait parks, is read by a thread and answers on both cores over the
+same keys, a wait past its deadline ends in a synchronous read, and a
+cancel ends the park. One mutant was run: with `Finish`'s note test
+removed the swallowed-refusal cell fails, the access count one too many.
+
+**§5's cells with no subject under DE-Q7 (a) and DE-Q9 (a)**: a synchronous
+caller meeting a read in flight for a parked asker (nobody waits for a
+publish; a second asker reads the page itself); a frame returned after the
+device call (no frame is held across a refusal); a statement that has
+streamed a row meeting a refusal (an armed body is a descent and hands no
+row on; `BeginMissRerun` keeps the guard and nothing reaches it). **Not
+written**: a re-run over a real KWP sink (the cell above pins the rewind
+through a counting session sink), the park's own `io.page_read` count (the
+synchronous loop's is pinned), a cell for a session closed mid-read. **Not
+executed**: a `tsan` build of the rig cells, and the nightly corpus
+(`scripts/bs/nightly.sh`).
+
+**Reviewed by `critics-developer`**, read-only, while the suite ran; it
+found no wrong answer on the paths it traced and six things to change.
+**Applied**: at `cores = 1` the reader's wake table made core 0 publish a
+load word each iteration, against BL-R9 - `AttachWakerTable` takes
+`publish_load` and the reader's table passes false; **a refused body commits
+no Cabin set** (`step_vm.cpp`, before `cabins_->Commit`) - the review could
+not show a swallowed refusal that makes a recording walk miss a row, and
+the guard closes the premise instead of resting on that; the rig cells'
+reader and gate moved to the fixture, whose teardown opens the gate, stops
+the reader and takes it from both dispatchers; a wait that ended on its
+deadline or a cancel no longer has the run after it book no event for the
+page (DE-R9); DE-Q11's "a cancel is taken at the park" was not what was
+built or what DE-R1 allows, and is now **DE-Q15, adopted (a)** as built;
+the top-level word became a parameter of `HandleSelect`, the note's flag
+merged into its page, `Finish`'s refusal text cut, three comments
+shortened; cells for four surviving mutants (the tail ignoring the note,
+the arm left set, a leaked slot, `Wake` as `Kick`), a full pool under the
+arm, the one-core wiring and the wire registry's row. **Stated, not
+changed**: a `SELECT` that spent its deadline on page parks has none left
+for a relation wait the same statement meets, so that wait is refused at
+once - DE-Q11 (a) as adopted; DE-S3 enters it in `known-gaps.md`. On XFS
+`RWF_NOWAIT` can answer "would wait" for an inode lock, a spurious park,
+and a short read at the end of a file is "would wait" until the eighth
+run: both bounded by DE-Q11, neither a wrong answer. **Rejected**:
+shrinking `ParkedReadScope` to a set and a clear - DE-S2's walk nests it
+inside nothing, but the scope is what makes the clear unmissable on every
+exit; a cell that the cap's removal fails by assertion - it fails by
+ctest's timeout, which is a failure.
+
+**The suite**: 0 failed of 4813 at this stage's tree, every cell `scripts/test.sh`
+runs.
+
+**A smoke run, not a measurement**: `tools/de_premise.py`'s cells (ii) and
+(iii) once on `build-release` at this stage's tree, on a host building at
+the time. It showed the park, the thread's read and the wake working at
+`cores = 1` on the real device; no number is taken from it.

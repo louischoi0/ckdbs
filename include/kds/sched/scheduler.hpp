@@ -137,7 +137,13 @@ public:
     // is returned rather than swallowed because the consequence is silent -
     // every kick to this core would pay the idle block, which is a
     // millisecond nobody would think to look for.
-    Status AttachWakerTable(WakeRegistry* table, std::uint32_t core_id);
+    //
+    // `publish_load`: this reactor writes its `CoreLoad` slot each iteration,
+    // for the cores that read it (BL-S1). True wherever another core exists.
+    // False for the one table a single-core instance attaches - the page
+    // reader's (DE-Q14) - where nothing reads a load word and BL-R9 says
+    // none is written.
+    Status AttachWakerTable(WakeRegistry* table, std::uint32_t core_id, bool publish_load = true);
 
     std::uint32_t core_id() const noexcept { return core_id_; }
 
@@ -342,6 +348,7 @@ private:
     // registering into it: `wakes_sent()` reads its counter, and after
     // AU-S1b that counter is the only one there is.
     const WakeRegistry* wakers_ = nullptr;
+    bool publishes_load_ = false;  // `AttachWakerTable`'s `publish_load`
     // The table this reactor registered in, to unregister from.
     WakeRegistry* registered_in_ = nullptr;
 

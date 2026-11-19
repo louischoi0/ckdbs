@@ -203,7 +203,12 @@ WaitScope::~WaitScope() {
     if (task_ != nullptr && task_ != Ctx().current) return;
     const MonoTimeNs now = WaitNow();
     CoreWaitContext& c = Ctx();
-    Book(c, event_, now - start_ns_, task_ != nullptr ? task_->session : nullptr);
+    if (abandoned_) {
+        // No event: the span was the task's own time (`Abandon`).
+        if (task_ != nullptr) BookCpu(c, *task_, now - start_ns_);
+    } else {
+        Book(c, event_, now - start_ns_, task_ != nullptr ? task_->session : nullptr);
+    }
     if (task_ == nullptr) return;
     c.cpu_since = now;  // a new ON_CPU segment
     task_->scoped = false;

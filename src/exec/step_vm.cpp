@@ -21,6 +21,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/keystone.hpp"
+#include "kds/storage/miss_refusal.hpp"
 #include "kds/storage/index/index_tree.hpp"
 
 namespace kds::exec {
@@ -1128,6 +1129,17 @@ private:
         // completion license survived ran to the relation's end *through*
         // the stop, so its set is whole.
         if (stopped_ && !walked_through_stops) {
+            cabins_->CancelRecording(key);
+            co_return Status::OK();
+        }
+
+        // **A body that was refused a page commits nothing** (DE-Q10,
+        // `storage/miss_refusal.hpp`): the run is discarded and made again,
+        // and a caller between the refused fetch and here may have read the
+        // refusal as an absent row - a set recorded from that walk would
+        // outlive the discard and be authoritative for a value it did not
+        // see whole.
+        if (storage::MissRefusalNoted()) {
             cabins_->CancelRecording(key);
             co_return Status::OK();
         }

@@ -115,6 +115,7 @@ std::string TogglesField(const FeatureToggles& toggles) {
     out += toggles.waystone ? '1' : '0';
     out += toggles.cabins ? '1' : '0';
     out += toggles.access_statistics ? '1' : '0';
+    out += toggles.read_off_reactor ? '1' : '0';
     return out;
 }
 
@@ -297,12 +298,16 @@ StatusOr<LoadedCase> ReadCase(const std::string& path) {
                         return Status::InvalidArgument("case file: fail-nth is not KIND:N");
                     }
                 } else if (Field(f[i], "toggles=", v)) {
-                    if (v.size() != 3) {
-                        return Status::InvalidArgument("case file: toggles is not three digits");
+                    // Three digits is a case file written before DE: its
+                    // run had no fourth toggle, which is the fourth off.
+                    if (v.size() != 3 && v.size() != 4) {
+                        return Status::InvalidArgument(
+                            "case file: toggles is not three or four digits");
                     }
                     loaded.plan.toggles.waystone = v[0] == '1';
                     loaded.plan.toggles.cabins = v[1] == '1';
                     loaded.plan.toggles.access_statistics = v[2] == '1';
+                    loaded.plan.toggles.read_off_reactor = v.size() == 4 && v[3] == '1';
                 } else {
                     return Status::InvalidArgument("case file: unknown config field '" + f[i] +
                                                    "'");

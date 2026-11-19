@@ -273,6 +273,8 @@ add_executable(kds_tests
     sim_rng_test.cpp
     sim_loop_test.cpp
     bounded_pool_test.cpp
+    de_page_read_test.cpp
+    de_page_read_rig_test.cpp
     half_done_mutation_test.cpp
     wal_golden_log_test.cpp
     wal_shared_stream_test.cpp

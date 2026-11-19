@@ -1834,12 +1834,35 @@ Status Expeditor::Start() {
     // (exec/step_vm.hpp, sched/coro.hpp).
     exec::InstallSuspendAudit();
 
+    // ---- DE: the page reader (`storage/page_reader.hpp`) ----------------
+    //
+    // Built before any core can run a statement, so every dispatcher is
+    // handed it before it dispatches. **At `cores = 1` it is what the
+    // paragraph below no longer says nothing of** (DE-Q14): a read that
+    // left the reactor has to end the reactor's idle block when it
+    // completes, so core 0 registers in a wake table of one entry that only
+    // the reader writes to, and the reader's threads are started. Nothing
+    // else of the fan-out is built there.
+    page_reader_.emplace(*device_);
+    dispatcher_->set_page_reader(&*page_reader_);
+    if (config_.cores == 1) {
+        page_read_wakers_.emplace(1U);
+        // No load word is published: no other core reads one (BL-R9).
+        if (Status s = scheduler.AttachWakerTable(&*page_read_wakers_, /*core_id=*/0,
+                                                  /*publish_load=*/false);
+            !s.ok()) {
+            return s;
+        }
+        page_reader_->Start(storage::PageReader::kPageReadThreads, &*page_read_wakers_);
+    }
+
     // ---- The fan-out (workplan-crosscore.md P2) -------------------------
     //
-    // At `cores = 1` none of this runs: no wake registry is built, no thread
-    // is spawned, and the reactor below is the same single one that has
-    // always served. G2 asks for zero overhead on the single-core path, and
-    // the cheapest way to mean it is to build nothing.
+    // At `cores = 1` none of this runs: no instance wake registry is built,
+    // no reactor thread is spawned, and the reactor below is the same single
+    // one that has always served. G2 asks for zero overhead on the
+    // single-core path, and the cheapest way to mean it is to build nothing
+    // - but for the page reader above.
     //
     // BL-S1: the cores whose load every core may read (`core_load.hpp`) -
     // none at one core, where nothing writes a load word (BL-R9).
@@ -1849,6 +1872,10 @@ Status Expeditor::Start() {
         // this one - since AT-S10d the only cross-core path the instance
         // has (AR0-6-R1: write the shared state, then kick).
         wakers_.emplace(config_.cores);
+        // DE: a finished page read wakes its asker's core through the same
+        // table. Started here; a core is woken only once a statement of its
+        // own has parked, which is after it registered.
+        page_reader_->Start(storage::PageReader::kPageReadThreads, &*wakers_);
         // BL-S3: every transaction is placed above one core, by the test's
         // placer or the instance's balancer, so the inboxes moves cross
         // through always exist here.
@@ -2226,7 +2253,14 @@ Status Expeditor::Start() {
     return Status::OK();
 }
 
+void Expeditor::StopPageReader() noexcept {
+    if (page_reader_.has_value()) page_reader_->Stop();
+}
+
 void Expeditor::WireInstanceServices(CommandDispatcher& dispatcher) {
+    // Null for core 0's own wiring, which runs at the mount, before `Start`
+    // builds the reader and hands it over itself.
+    dispatcher.set_page_reader(page_reader_.has_value() ? &*page_reader_ : nullptr);
     dispatcher.SetReclaimCounters(&reclaim_counters_);
     dispatcher.set_backup(&*backup_);
     dispatcher.set_archiver(archiver());
@@ -2262,6 +2296,7 @@ void Expeditor::StopStartedCores() {
     // a `Waker` being destroyed (`WalManager::StopKicking`). Whether or not
     // a worker was spawned - `Start` sets the registry before the first.
     if (wal_ != nullptr) wal_->StopKicking();
+    StopPageReader();  // DE: the other thread that wakes cores
     // **No final sync and no shutdown checkpoint here**, unlike the tail:
     // an instance that never entered core 0's reactor ran no client
     // statement, and the only thing a peer wrote is the completion
@@ -2312,6 +2347,7 @@ Status Expeditor::RunUntilStopped() {
     // makes that harmless. Nothing past the join needs a kick: no reactor
     // turns, and every wait below blocks this thread or syncs inline.
     wal_->StopKicking();
+    StopPageReader();  // DE: the other thread that wakes cores
     // After the join, so nothing is still appending to the stream being
     // synced.
     // A peer's listener teardown rolls back open

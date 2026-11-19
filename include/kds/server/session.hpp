@@ -331,6 +331,14 @@ public:
         std::vector<exec::SubqueryResult> subqueries{};
     };
 
+    // DE (`storage/miss_refusal.hpp`): how many runs of the statement now
+    // running were discarded for a page. The dispatcher's, cleared at a
+    // statement's first run and compared with
+    // `CommandDispatcher::kMaxMissReruns`; the session's because it is what
+    // a statement keeps across its parks.
+    std::uint32_t miss_refusals() const noexcept { return miss_refusals_; }
+    void set_miss_refusals(std::uint32_t n) noexcept { miss_refusals_ = n; }
+
     const std::optional<ParkedWrite>& parked_write() const noexcept { return parked_write_; }
     void set_parked_write(ParkedWrite parked) noexcept { parked_write_ = std::move(parked); }
     void clear_parked_write() noexcept { parked_write_.reset(); }
@@ -437,6 +445,7 @@ private:
     // AO-S3b. Absent on every session that is not parked mid-walk, which
     // is every session almost all of the time.
     std::optional<ParkedWrite> parked_write_ = std::nullopt;
+    std::uint32_t miss_refusals_ = 0;  // DE; see `miss_refusals`
     std::uint64_t moved_at_ns_ = 0;
     std::uint64_t counted_in_window_ = UINT64_MAX;
     PrioritySeat priority_;

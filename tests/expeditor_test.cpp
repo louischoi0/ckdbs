@@ -555,6 +555,33 @@ TEST_F(ExpeditorTest, AtOneCoreTheDispatcherHoldsTheInstancesLockTable) {
         << "core 0's dispatcher records its edges in some other table, or none";
 }
 
+TEST_F(ExpeditorTest, ThePageReaderRunsAtEveryCoreCountAndEveryDispatcherHoldsIt) {
+    // DE-Q14. At one core the instance builds no wake registry, so a read
+    // that left the reactor would have nothing to end its idle block with:
+    // `Start` builds the reader, starts its threads, and hands core 0 a wake
+    // table of its own - while the lock table still kicks nobody and no
+    // load word is published, as before (BL-R9).
+    for (const std::uint32_t cores : {1U, 2U}) {
+        Expeditor::Config config = ConfigAt(cores);
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        EXPECT_EQ(db.page_reader(), nullptr) << "built before `Start`";
+        ASSERT_TRUE(Started(db.Start()));
+
+        ASSERT_NE(db.page_reader(), nullptr) << cores << " core(s)";
+        EXPECT_TRUE(db.page_reader()->threaded()) << cores << " core(s)";
+        EXPECT_EQ(db.dispatcher().page_reader(), db.page_reader());
+        if (cores == 1) {
+            EXPECT_EQ(db.wakers(), nullptr) << "the instance's registry is still not built";
+            EXPECT_EQ(db.locks()->wake_registry(), nullptr);
+            EXPECT_EQ(sched::CoreLoad::Cores(), 0u);
+        } else {
+            ASSERT_NE(db.wakers(), nullptr);
+        }
+    }
+}
+
 // ---- AT-S8: a session runs where it was accepted --------------------------
 //
 // Every core listens on the port, so what a peer is handed decides what a

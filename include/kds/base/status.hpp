@@ -163,6 +163,18 @@ enum class StatusCode {
     // the transaction's declaration is what refuses it. Not retryable: the
     // same statement in the same transaction is refused the same way.
     kReadOnlyTransaction,
+    // **A page the device could not hand over without waiting** (DE,
+    // `storage/miss_refusal.hpp`): a fetch made under an armed refusal, or
+    // with the walk's refusing access kind, found the page outside the pool
+    // and outside the operating system's cache. **Internal, and never a
+    // client's**: the statement that receives it is discarded and run again
+    // once the page has been read off its reactor, and its last run reads
+    // synchronously, so this code ends at the dispatcher or at the walk's
+    // page loop. Its own code so that no test of another code - `NotFound`
+    // as "absent", `TxnConflict` as "descend again", `ResourceExhausted` as
+    // "the pool is full" - can match it. Not retryable by a client: a
+    // client never sees it.
+    kNotResident,
 };
 
 // True for a Status a caller may sensibly re-issue the same statement for.
@@ -233,6 +245,9 @@ public:
     static Status ReadOnlyTransaction(std::string msg) {
         return Status(StatusCode::kReadOnlyTransaction, std::move(msg));
     }
+    static Status NotResident(std::string msg) {
+        return Status(StatusCode::kNotResident, std::move(msg));
+    }
 
     // A status decoded off a wire: the code as the integer it travelled as,
     // and a message the receiver chose. **A code outside the enum degrades
@@ -263,6 +278,7 @@ public:
             case StatusCode::kCancelled: return Cancelled(std::move(msg));
             case StatusCode::kTransitionViolation: return TransitionViolation(std::move(msg));
             case StatusCode::kReadOnlyTransaction: return ReadOnlyTransaction(std::move(msg));
+            case StatusCode::kNotResident: return NotResident(std::move(msg));
         }
         return IoError(std::move(msg));
     }

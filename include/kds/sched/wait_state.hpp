@@ -276,6 +276,11 @@ public:
     // learns its page's kind from the bytes it read). The span and its start
     // are unchanged.
     void Reclassify(stats::WaitEvent event, std::uint32_t p2 = 0) noexcept;
+    // **The wait did not happen**: the span is the task's ON_CPU time and
+    // the event is not counted. For a scope opened before its caller knew
+    // whether it would wait - a read asked for without waiting and refused
+    // (DE-R9).
+    void Abandon() noexcept { abandoned_ = true; }
     WaitScope(const WaitScope&) = delete;
     WaitScope& operator=(const WaitScope&) = delete;
 
@@ -283,6 +288,7 @@ private:
     stats::WaitEvent event_;
     MonoTimeNs start_ns_;
     TaskWaitState* task_;
+    bool abandoned_ = false;
 };
 
 // A `counter` event (WD10): a conflict that did not wait. Raises the count;
@@ -311,6 +317,7 @@ public:
     explicit WaitScope(stats::WaitEvent, std::uint64_t = 0, std::uint32_t = 0,
                        std::uint32_t = 0) noexcept {}
     void Reclassify(stats::WaitEvent, std::uint32_t = 0) noexcept {}
+    void Abandon() noexcept {}
 };
 inline void RecordCounterEvent(stats::WaitEvent) noexcept {}
 inline void WaitOnPollEnter(TaskWaitState&) noexcept {}

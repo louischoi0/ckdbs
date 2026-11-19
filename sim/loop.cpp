@@ -54,6 +54,7 @@ std::string FeatureToggles::Describe() const {
     out += waystone ? "waystone" : "-";
     out += cabins ? "/cabins" : "/-";
     out += access_statistics ? "/access" : "/-";
+    out += read_off_reactor ? "/offreactor" : "/-";
     return out;
 }
 
@@ -1323,7 +1324,7 @@ void ReconcileDrops(Iteration& it) {
     }
 }
 
-// The three advisory switches for one iteration: whatever the config
+// The advisory switches, and DE's read path, for one iteration: whatever the config
 // pinned, or a seeded draw. Drawing them is the point — the oracle does
 // not know they exist, so every iteration is also a test that they
 // changed nothing.
@@ -1334,6 +1335,9 @@ FeatureToggles TogglesFor(const SimConfig& config, const Rng& iteration_rng) {
     toggles.waystone = rng.Chance(50);
     toggles.cabins = rng.Chance(50);
     toggles.access_statistics = rng.Chance(50);
+    // Drawn last, so the three draws above are the ones every seed made
+    // before DE.
+    toggles.read_off_reactor = rng.Chance(50);
     return toggles;
 }
 
@@ -1376,6 +1380,7 @@ SimInstance::Options InstanceOptions(const SimConfig& config, const FeatureToggl
     options.waystone = toggles.waystone;
     options.cabins = toggles.cabins;
     options.access_statistics = toggles.access_statistics;
+    options.read_off_reactor = toggles.read_off_reactor;
     // A cap per seed (BE-Q2): two of the three sit near the floor (128
     // system pages plus a working minimum of 256), so a seed's workload runs
     // against reclaim, and the third leaves room, so the corpus keeps the
@@ -1953,9 +1958,9 @@ SimVerdict RunTogglePairing(const SimConfig& config) {
     // injected error lands on whichever instance reaches the device first,
     // which would diverge the pair for a reason that is not the features'.
     FeatureToggles off;
-    off.waystone = off.cabins = off.access_statistics = false;
+    off.waystone = off.cabins = off.access_statistics = off.read_off_reactor = false;
     FeatureToggles on;
-    on.waystone = on.cabins = on.access_statistics = true;
+    on.waystone = on.cabins = on.access_statistics = on.read_off_reactor = true;
 
     // The op stream is the plan's, not a second copy of the generator's
     // seeding: the same `.sim` case file that replays a crash run replays

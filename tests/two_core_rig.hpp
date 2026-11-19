@@ -189,6 +189,10 @@ public:
         // `Expeditor` wires it. Off by default, so a cell that compares a
         // recovery reading below the anchor still has the segments to read.
         bool recycle = false;
+        // The pool's capacity. Roomy by default, so nothing a cell touches is
+        // evicted; a cell about a page that is not resident (DE) sets it
+        // small and writes its load back as it goes.
+        std::size_t buffer_pool_frames = 4096;
     };
 
     static StatusOr<std::unique_ptr<TwoCoreRig>> Open() { return Open(Options{}); }
@@ -260,6 +264,13 @@ public:
         return Status::OK();
     }
     storage::DevicePageStore& store() noexcept { return *store_; }
+    // The volume's device, and - unless the rig is file-backed - the memory
+    // device it is, for a cell that sets its modes.
+    storage::PageDevice& device() noexcept { return *device_; }
+    storage::MemoryPageDevice* memory_device() noexcept {
+        return options_.file_backed ? nullptr
+                                    : static_cast<storage::MemoryPageDevice*>(device_.get());
+    }
     // The instance's one stream and its device: what a cell checkpoints
     // into, and what a mount's scan reads back.
     wal::WalManager& wal() noexcept { return *wal_; }
@@ -391,7 +402,8 @@ private:
             if (!device.ok()) return device.status();
             device_ = std::move(device.value());
         }
-        auto store = storage::DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(
+            *device_, ::kds::storage::FrameCapacity{options_.buffer_pool_frames}, kFirstUserPageId);
         if (!store.ok()) return store.status();
         store_ = std::move(store.value());
         // EV3's floor, `Expeditor::Open`'s one install site.
