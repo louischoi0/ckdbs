@@ -72,6 +72,7 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
     if (read_only_transactions != 0) {
         out += " read_only_txns=" + std::to_string(read_only_transactions);
     }
+    if (locking_reads != 0) out += " locking_reads=" + std::to_string(locking_reads);
     if (config.faults != FaultProfile::kNone || config.nth_fault.has_value()) {
         out += " faults=";
         out += config.nth_fault.has_value() ? "nth:" + config.nth_fault->Describe()
@@ -314,6 +315,7 @@ bool CheckRead(Iteration& it, const Op& op, const std::string& reply,
         return false;
     }
     ++it.verdict.reads_checked;
+    if (op.sql.ends_with(" FOR UPDATE")) ++it.verdict.locking_reads;
     return true;
 }
 
@@ -1778,6 +1780,7 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     writes_checked += other.writes_checked;
     transactions += other.transactions;
     read_only_transactions += other.read_only_transactions;
+    locking_reads += other.locking_reads;
     faults_armed += other.faults_armed;
     faults_fired += other.faults_fired;
     errored_ops += other.errored_ops;

@@ -9,7 +9,7 @@ part A, started on the operator's word (`raft-marks-2026-11-18.md` §39),
 reviewed, the full suite 0 failed of 4700 at `ee89842e`, overhead not
 measured, pushed with the hook skipped on the operator's word (§40).
 **DF-S2 is done** (§7): part B, started on the operator's word
-(`raft-marks-2026-11-19.md` §5), reviewed, the full suite 0 failed of 4766,
+(`raft-marks-2026-11-19.md` §8), reviewed, the full suite 0 failed of 4766,
 overhead not measured, not pushed. **DF-S3 is done** (§7): part C - index
 usage and a relation's lock waits; the access shape's two columns owed to
 DA - reviewed, the full suite 0 failed of 4773, overhead not measured, not
@@ -23,7 +23,7 @@ remedies (one reverted, one an attribution, one kept), which with DF-S1's
 DF-Q10 (a)'s 0.5 us, and the operator's to read** (DF-Q24); the full suite
 0 failed of 4778; not pushed. **The rest of DF ran
 on the operator's
-standing go-ahead of 2026-11-19** (§6 there, go-ahead-achieving-milestone):
+standing go-ahead of 2026-11-19** (§9 there, go-ahead-achieving-milestone):
 an item a stage raises is adopted as CLA proposes it and recorded in §4 as
 adopted on that word, never as the operator's own mark. Written on
 2026-11-18 on worktree
@@ -365,7 +365,7 @@ is that delta, so it stands or falls with DF-Q6 (a): under (b) or (c) it
 is not built. DF-S0 re-reads this.
 
 **Items the stages raised after the operator's standing go-ahead of
-2026-11-19** (`raft-marks-2026-11-19.md` §6, go-ahead-achieving-milestone).
+2026-11-19** (`raft-marks-2026-11-19.md` §9, go-ahead-achieving-milestone).
 **Each is adopted as CLA proposed it, on that word, and is not the
 operator's own mark.** (a) is CLA's proposal in each.
 
@@ -928,8 +928,8 @@ open it.
 On worktree `da-q8-memory-bound-key`, branch
 `worktree-df-statistics-coverage`, fast-forwarded from `3adf8810` to
 `origin/main` at `8e7c820f`, on the operator's word
-(`raft-marks-2026-11-19.md` §5); the operator's standing go-ahead for the
-rest of DF came while the stage's first build ran (§6 there).
+(`raft-marks-2026-11-19.md` §8); the operator's standing go-ahead for the
+rest of DF came while the stage's first build ran (§9 there).
 
 **What is built**, as `docs/spec/sys-views.md` §6.1c, §6.6 and §7 now
 state it. `sys.meta`'s `txn` section carries six counts of how the core's
@@ -1045,7 +1045,7 @@ are amended with the stage. **Next: DF-S3**, part C.
 ### DF-S3 - part C, 2026-11-19
 
 On the same worktree and branch, from `c2925b6e`, on the operator's
-standing go-ahead (`raft-marks-2026-11-19.md` §6).
+standing go-ahead (`raft-marks-2026-11-19.md` §9).
 
 **What is built**, as `docs/spec/sys-views.md` §6.2a and §6.2b now state
 it. `sys.indexes` has five usage columns - `probes`, `ranges`,
@@ -1125,7 +1125,7 @@ observability row. **Next: DF-S4**, part D.
 ### DF-S4 - part D, 2026-11-19
 
 On the same worktree and branch, from `83aad532`, on the operator's
-standing go-ahead (`raft-marks-2026-11-19.md` §6), under DF-Q9 (a).
+standing go-ahead (`raft-marks-2026-11-19.md` §9), under DF-Q9 (a).
 
 **What is built**, as `docs/spec/sys-views.md` §6.2c and
 `docs/spec/plan-stats.md` §6 now state it. `sys.relation_stats` has
@@ -1201,7 +1201,7 @@ the steward's leaf read. **Documents**: `sys-views.md`, `plan-stats.md`,
 ### DF-S5 - the close's measurement and its three remedies; the bar not resolved, 2026-11-19
 
 On the same worktree and branch, from `29810582`, on the operator's
-standing go-ahead (`raft-marks-2026-11-19.md` §6). **Every stage of DF is
+standing go-ahead (`raft-marks-2026-11-19.md` §9). **Every stage of DF is
 on the work branch. DF is not closed**: DF-Q10 (a)'s bar is not resolved
 on a point read with its central estimate at the bar, and DF-Q10 (a) sends
 that to the operator (DF-Q24). Nothing is pushed.
@@ -1311,3 +1311,31 @@ and on a write; `cores` above 1; the cells no stage built
 
 **Next: the operator's reading of DF-Q24** - close DF with its measured
 cost, as DF-S1 was kept on 2026-11-19, or ask for more; and the push.
+
+### Merged with `origin/main` at `734484ca`, 2026-11-19
+
+`origin/main` had moved from `8e7c820f` to `734484ca` while DF-S5 ran: DC
+(`SELECT ... FOR UPDATE`, `35086008`) and the tag `v3.4.14` on it. Merged
+on the work branch. **Two files conflicted, both records**: the day's
+marks, where DC's session had taken §5 to §7 - **DF's two words are §8 and
+§9 there now**, and every citation in this order and in the index row was
+moved with them; the stage commits' messages, which cannot move, still say
+§5 and §6 - and the index's row for that file. Source merged without a
+conflict: `command_dispatcher.cpp` and its header, `tests/lock_family_test.cpp`
+(DC moved its fixture into a header; the lock columns' cells came across),
+`tests/expeditor_test.cpp`, `tests/CMakeLists.txt`.
+
+**Suite on the merged tree.** The full suite - `ctest -LE bs-nightly` -
+0 failed of 4821 (two disabled and two skipped). **The run before it
+failed one cell of 4821**,
+`StrictParkRigTest.StrictCommitsStagedDuringOneSyncShareTheNext`, at its
+2 s bound, on a host whose one-minute load was above 11 from another
+session; it passed 30 of 30 alone on the same binary and in the run after.
+With DF-S4's `RowWaitCeilingRigTest` cell that is two cells, each once,
+each a bound of one or two seconds on a wake across reactors, in eleven
+full runs of this session - **not shown to be this change's and not shown
+not to be**: DF-S2 touches the transaction manager's publication, which
+both cells cross. No entry is filed; they are named so the next failure of
+either is read against these two. **The close's measurement is of
+`c16b4fc2`, before the merge**: DC is in neither arm, and nothing after it
+was measured.

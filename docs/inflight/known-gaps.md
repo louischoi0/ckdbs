@@ -184,6 +184,11 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   after the release but the WAL writer's own kick, which is best-effort,
   and a skipped one costs the rig's 5 s idle block. The commit it was seen
   at changes no commit or park path. Bounds not widened. Owner: none.
+  **Seen a second time**, on `dc-select-for-update` at `f6a12f5d`'s tree,
+  at the same line, in a `-j8` run beside another session's build (load
+  average 13): eight repeats of the cell alone passed, and the same `-j8`
+  run passed whole when repeated. That tree changes no commit or park path
+  either.
 
 - **A rollback's schema-word move has no cell that kills its removal since
   AX-S2.** Removing `MoveSchemaWordIfCatalogWriter` from
@@ -2523,6 +2528,79 @@ numbers at `70a307ea` (CU-S4, the close). Owned by `docs/spec/parser-v2.md` I10;
   `max_rows` over a set-driven statement; and whether a recorded trail
   holds no entry for a set step, which is pinned only through
   `IsTrailReplayable(const Step&)` and the absence of `replays=`.
+
+## Locking reads (DC)
+
+Verified on `dc-select-for-update` at `7e18598d` (DC's close). Owned by
+`docs/spec/txn.md` §5 ("A locking read") and `docs/spec/parser-v2.md` I11a;
+the order is `instructions/v3.2.0/workorder-dc-select-for-update.md`.
+
+- **`FOR UPDATE` takes `U`, which is PostgreSQL's `FOR NO KEY UPDATE`**
+  (DC-Q1 (a), `[quiet-wrong]` for a client that assumes the other). A
+  foreign key child's `INSERT` naming a locked parent proceeds and commits
+  while the claim stands, so a count of the parent's children taken under
+  the lock is stale with no refusal, and the holder's later `DELETE` of the
+  parent can be refused RESTRICT. No strength that keeps a key share out
+  is built: `X` under this spelling is DC-Q1 (b), and `FOR SHARE`, `FOR KEY
+  SHARE` and the spelling `FOR NO KEY UPDATE` are refused by name.
+- **Only an equality or a list on the tuple key descends.** Every other
+  predicate - a range on the tuple key included, and every predicate on a
+  `HEAP` relation, whose key no statement names - walks the whole
+  relation, whatever index or Cabin the column has, without yielding its
+  core and without reading the cancel flag: the write walk's gaps ("Key
+  sets (CU)", "Statement scheduling"), inherited whole (DC-Q0 (a)). A
+  cancel or a closed connection is seen at the session's next frame.
+  DC-Q0 (b), the step chain with a claim at its driving step, is not
+  built.
+- **A `READ COMMITTED` locking read can be refused in the window between
+  its view and its claim** (DC-Q3 (a), DC-Q4 (a)): a row whose newest
+  version committed inside it is `TxnConflict`, the transaction is failed
+  and the row's unit stays held until the `ROLLBACK`, so the client
+  retries the whole transaction. There is no re-read loop; CR
+  (`workorder-cr-read-committed-rerun.md`, written and not opened) is the
+  order that would re-run it. Measured once, not a bound: eight sessions
+  on one row at `cores = 4` had 2.70 % of their locking reads refused so
+  (`bench/v3.4.13/results-dc-close-v3.4.13-14-gcd80d31d.md`).
+- **A wake is not a grant** for a locking read either ("Locks", above):
+  under sustained contention on one row a waiter can be re-run into a
+  third session's claim until the 1 s fault net refuses it, which fails
+  its transaction.
+- **A range on the tuple key, and a read with no `WHERE`, declare a
+  window held to the decide** (DC-Q8 (a)): the relation's fence counter
+  stays raised for the transaction's length, not a statement's, so every
+  writer of the relation pays the all-partition probe for that long, and a
+  `WHERE`-less locking read holds every writer of the relation out until
+  it decides.
+- **Nothing bounds the reply** (DC-Q12 (a)): every row is encoded before
+  the statement ends - none leaves while it runs (DC-R4) - and a KWP
+  session holds the sealed batches in memory, as it does for a write's
+  `RETURNING`, which has no bound either. A row-unit read stops at the
+  lock cap's 65,536 rows; a window's is unbounded.
+- **Rows are claimed that are not returned, and nothing gives one back
+  before the decide**: every key of a declared window; a row an earlier
+  run claimed that the re-run no longer matches; a row refused after its
+  unit was granted. There is no unlock statement and no lock timeout
+  setting.
+- **Not built, refused by name**: autocommit (DC-Q7 (a)); `NOWAIT`, `SKIP
+  LOCKED`, `OF <relation>` (DC-Q6 (a)); `ORDER BY`, `LIMIT`, `OFFSET` -
+  the job-queue shape, DC-Q5 (b) - a join, an aggregate, expressions in the
+  select list and every query-layer form.
+- **`sys.statement_stats` counts a locking read's calls, time and rows and
+  not what it examined**: `rows_examined` and `pages` are NULL for its
+  shape, the write walk counting neither.
+- **A point `SELECT` without the clause reads 0.10 to 0.13 us slower at
+  DC's close than at its opening**, about 0.5 % of its server CPU, inside
+  the 0.3 us floor between two servers of one binary and with an interval
+  that barely clears zero: a cost of that size is neither shown nor
+  excluded, and the host has no PMU to separate it from a binary's layout
+  (`bench/v3.4.13/results-dc-close-v3.4.13-16-g7e18598d.md`).
+- **What the cells do not cover**: a locking read under `tsan` (the
+  `bs-nightly` build runs the same cells; no `tsan` run was made for DC); a
+  capped KWP portal (`max_rows`) over a locking read's rows, which is the
+  session's code for any described reply; a locking read whose leaf
+  another core divides between its claim pass and its emit pass (the emit
+  descends by key, as a write's `RETURNING` does); a cancel while a
+  locking read is parked on a held row, which the wait does not read.
 
 ## The online index build (CI)
 

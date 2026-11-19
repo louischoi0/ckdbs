@@ -76,7 +76,8 @@ Workload::Workload(Rng rng, Profile profile, bool shapes)
       read_only_rng_(rng_.Fork("read_only")),
       key_list_rng_(rng_.Fork("key_list")),
       write_list_rng_(rng_.Fork("write_list")),
-      write_conjunct_rng_(rng_.Fork("write_conjunct")) {
+      write_conjunct_rng_(rng_.Fork("write_conjunct")),
+      lock_rng_(rng_.Fork("lock")) {
     for (const char* name : {kFkParent, kFkChild, kAsserted}) {
         constrained_.emplace_back();
         constrained_.back().name = name;
@@ -320,6 +321,10 @@ Op Workload::Purge(Table& table) {
     return op;
 }
 
+void Workload::MaybeLock(Op& op) {
+    if (shapes_ && in_txn_ && !read_only_txn_ && lock_rng_.Chance(40)) op.sql += " FOR UPDATE";
+}
+
 Op Workload::DataOp() {
     const std::uint64_t roll = rng_.Below(100);
     if (roll < 42) return Insert(PickTableMutable());
@@ -346,6 +351,7 @@ Op Workload::DataOp() {
         op.table = table.name;
         op.key = GuessKey(table);
         op.sql = std::string("SELECT ") + kReadColumns + " FROM " + table.name + " WHERE id = " + std::to_string(op.key);
+        MaybeLock(op);
         return op;
     }
     if (roll < 88) {
@@ -358,6 +364,7 @@ Op Workload::DataOp() {
         op.sql = std::string("SELECT ") + kReadColumns + " FROM " + table.name + " WHERE id BETWEEN " + std::to_string(op.lo) +
                  " AND " + std::to_string(op.hi);
         if (shapes_ && key_list_rng_.Chance(40)) op.sql = KeyListSql(table.name, op.lo, op.hi);
+        MaybeLock(op);
         return op;
     }
     const Table& table = PickTable();
@@ -366,6 +373,7 @@ Op Workload::DataOp() {
     op.table = table.name;
     op.v = NextValue();
     op.sql = std::string("SELECT ") + kReadColumns + " FROM " + table.name + " WHERE v = " + std::to_string(op.v);
+    MaybeLock(op);
     return op;
 }
 

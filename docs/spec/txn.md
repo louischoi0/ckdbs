@@ -180,7 +180,9 @@ is no session default and no `SET TRANSACTION` spelling (CS-Q2 (a)); KWP's
   wire category 19) with the verb's byte - an allowlist, so a statement
   added later is refused by default. The refusal **does not poison** the
   transaction: nothing was written and the view is the one it held
-  (CS-Q7 (a)). The ground is that a write reaching a write path under no
+  (CS-Q7 (a)). **One write routes as a read**: `SELECT ... FOR UPDATE`
+  passes this gate on its token and is refused after its parse, by the
+  same code and count, at the byte of `FOR` (DC-R7, §5 "A locking read"). The ground is that a write reaching a write path under no
   transaction would be stamped `kBootstrapXid`, which every view answers
   as always visible and no rollback undoes. `BeginWrite` refuses a
   read-only session too, a second line for a route that enters below the
@@ -866,7 +868,8 @@ Under `REPEATABLE READ` this is exactly first-updater-wins. Under `READ
 COMMITTED` the last arm can still fire in the narrow window between a statement's
 snapshot and its write; KDS aborts retryably rather than re-reading. That is
 stricter than PostgreSQL's `READ COMMITTED` and was a deliberate simplification —
-there is no re-read loop.
+there is no re-read loop. A locking read's claim meets the same arm ("A
+locking read", below).
 
 **Which version selects a row** (F4, the operator's ruling `$!a` of
 2026-11-15, `instructions/v3.2.0/raft-marks-2026-11-15.md` §1;
@@ -910,8 +913,8 @@ new version of the row - or of every row of its window - under the same
 key and nothing else; the row keeps its existence and its key whichever
 way the holder decides. **`X` is an existence claim**: a placement, a
 delete-mark, a retire. `UPDATE` asks `U` on its tuple or its declared
-window, and so does `ON CONFLICT ... DO UPDATE`'s update arm on the row a
-unique arbiter found; `DELETE` asks `X` on its tuple and its window; every
+window, and so do `ON CONFLICT ... DO UPDATE`'s update arm on the row a
+unique arbiter found and a locking read on each row it returns (below); `DELETE` asks `X` on its tuple and its window; every
 `INSERT` asks `X` on its key, `ON CONFLICT DO UPDATE` on the tuple key
 included, whose up-front unit covers an insert. `U` admits a foreign key's
 share `S` and refuses `U` and `X`; `U` covers `S` and `IS`, `X` covers
@@ -1026,6 +1029,74 @@ That is PostgreSQL's shape, and it is the intended one: what the wait buys
 is the case where the holder never touches the row, which is every fence
 declared over a window wider than what it wrote.
 
+**A locking read** (DC, `instructions/v3.2.0/workorder-dc-select-for-update.md`;
+the grammar and its refusals are `parser-v2.md` I11a). `SELECT ... FOR
+UPDATE`, inside an explicit `READ WRITE` transaction, returns the rows an
+`UPDATE` with the same `WHERE` would write, each under the claim that
+`UPDATE` would take, held until the transaction decides. It writes nothing
+and logs nothing; until the decide another transaction's `UPDATE`, `DELETE`
+or locking read of a returned row waits.
+
+- **It is the write's row walk with no `SET` list** (`WriteWalk`; one copy
+  of how a row is judged and claimed, DC-R3). The relation's `IX`, then
+  `U` on each row's tuple unit - or, where the `WHERE` bounds the tuple
+  key, the window declared in `U` before the walk, and with no `WHERE` the
+  whole id space - exactly as the paragraphs above state for an `UPDATE`.
+  It reaches rows as an `UPDATE` does: an equality or a list on the tuple
+  key descends, and every other predicate walks the whole relation without
+  yielding its core (`known-gaps.md`, Locks).
+- **`U` under the spelling `FOR UPDATE`** (DC-Q1 (a), `[quiet-wrong]`). A
+  foreign key child's share passes the claim, so a child `INSERT` naming a
+  locked parent proceeds and commits, and the holder's later `DELETE` of
+  that row asks `X` then and can be refused RESTRICT. **This is
+  PostgreSQL's `FOR NO KEY UPDATE`, not its `FOR UPDATE`**: it serves the
+  read-modify-write of a row, and does not keep children out of a parent.
+- **Which version is returned** (DC-R1, `[quiet-wrong]`; DC-Q3 (a)). A row
+  is returned only under a held claim and only as the version the claim
+  admitted: the page's newest, written by this transaction or by one the
+  statement's view sees - the verdict table above, unchanged - and never a
+  version reached through undo. A row whose newest version matches the
+  `WHERE` and is newer than the view is waited on or refused, never
+  skipped. A held row is waited for as an `UPDATE` waits, and the statement
+  - which wrote nothing - is run again whole: under a fresh view at `READ
+  COMMITTED`, and at `REPEATABLE READ` only behind a holder that wrote no
+  version of the row. **A version committed after the view is
+  `TxnConflict`**: first-updater-wins at `REPEATABLE READ`, and at `READ
+  COMMITTED` the window between the view and the claim, there being no
+  re-read loop. That refusal fails the transaction, as an `UPDATE`'s does,
+  and the row's unit - borrowed before the verdict - stays held until the
+  `ROLLBACK`; the client retries the transaction.
+- **No row leaves before every row is claimed** (DC-R4): the claim pass
+  ends, then each claimed key is read again by a shared descent, in key
+  order, and rendered as a `SELECT`'s row is. So a re-run sends no row
+  twice and every row of a reply was judged under one view. The re-read
+  asks DC-R1 of the bytes about to leave - the row present, not
+  delete-marked, its writer this transaction or one the view sees - and a
+  row that fails it is `Corruption`, never a row.
+- **Rows are claimed that are not returned**: every key of a declared
+  window; a row an earlier run claimed that the re-run no longer matches; a
+  row refused after its unit was granted. Nothing releases one before the
+  decide; there is no unlock statement.
+- **It dirties no page** (DC-Q9 (a)). The pass fetches its leaves for
+  read: a shared pin is the page latch held shared, which excludes every
+  writer of a tuple header, and the pass carries no suspension, so the
+  writer `Qualify` read cannot change before `Claim`'s grant - `Claim`'s
+  no-re-read argument, for a shared hold.
+- **Which refusals fail the transaction** (DC-Q11 (a)). Once the claim
+  pass begins, as the write whose claim it takes: a conflict, the lock cap
+  (`ResourceExhausted`, `kLockCap`, at 65,536 units) and an error of a
+  walk - the collection pass of a `WHERE` holding a subquery included - or
+  of the emit. Before it nothing is held and nothing fails: the parse, the
+  gates, the relation's resolve and the compile are refused as a
+  `SELECT`'s are.
+- **The gates**: `READ_ONLY_TRANSACTION` inside a `READ ONLY` transaction,
+  unpoisoned and counted (§1); `NotImplemented` in autocommit, where the
+  claim would end with the statement (DC-Q7 (a)); the `readwrite` role.
+- **Afterwards** the transaction holds the relation's `IX` and its units or
+  its window until it commits, rolls back or meets the lifetime ceiling
+  (§1); nothing of a claim is persisted. Its own `UPDATE` of a claimed row
+  asks nothing new, `U` covering `U`; its `DELETE` asks `X`.
+
 **What a read borrows, and what that borrow is for** (AO-S6e-b; AR2 §3's
 `SELECT` row, AO-R12; **at the bind since AT-S1**, AT-R1). A statement
 declares **every relation it binds** — `IS` on the relation, asked by the
@@ -1041,7 +1112,9 @@ position unit when one exists. E12's unit was un-ratified on that ground on 2026
 E12's reason - a move must wait for a positioned reader - was not. The
 scope is **the statement**, not the transaction, so two `SELECT`s in one
 transaction declare twice and hold nothing between them. Every step of a
-statement runs under the session's borrow.
+statement runs under the session's borrow. **A locking read is not this
+read**: it claims as a write does (above), so what follows - never refused,
+never waiting, always a sink - is said of a `SELECT` without the clause.
 
 - **It is a declaration, never a permission.** Visibility is the snapshot's
   and nothing here changes it. A borrow the table refuses leaves the reader

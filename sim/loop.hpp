@@ -205,6 +205,9 @@ struct SimVerdict {
     std::size_t transactions = 0;
     // Of them, the `BEGIN ... READ ONLY` ones the shapes draw (CS).
     std::size_t read_only_transactions = 0;
+    // Of `reads_checked`, the ones the shapes drew with `FOR UPDATE` (DC):
+    // locking reads whose rows agreed with the oracle's.
+    std::size_t locking_reads = 0;
 
     // Fault bookkeeping (SIM05). `faults_fired` is what the devices
     // actually consumed: a schedule whose faults never fire proved

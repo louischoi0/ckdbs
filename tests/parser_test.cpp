@@ -494,5 +494,129 @@ TEST(ParserTest, NotWithoutNullInAColumnIsRefusedWithTheByte) {
     EXPECT_NE(stmt.status().message().find("byte"), std::string::npos);
 }
 
+// ---- The locking clause (DC, parser-v2.md I11a) ---------------------------
+
+// What a refused statement is refused with: its code, and the byte of `word`.
+void ExpectRefusedAt(const std::string& sql, StatusCode code, const std::string& word) {
+    auto stmt = Parse(sql);
+    ASSERT_FALSE(stmt.ok()) << sql;
+    EXPECT_EQ(stmt.status().code(), code) << sql << ": " << stmt.status().message();
+    const std::string at = "(byte " + std::to_string(sql.rfind(word)) + ")";
+    EXPECT_NE(stmt.status().message().find(at), std::string::npos)
+        << sql << " should name " << at << ": " << stmt.status().message();
+}
+
+TEST(ParserTest, ForUpdateSetsTheLockClauseWithTheByteOfFor) {
+    const std::string sql = "SELECT a, b FROM t WHERE id = 1 FOR UPDATE";
+    auto stmt = Parse(sql);
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    const auto* select = std::get_if<SelectStmt>(&stmt.value());
+    ASSERT_NE(select, nullptr);
+    ASSERT_TRUE(select->lock.has_value());
+    EXPECT_EQ(select->lock->byte_offset, sql.find("FOR"));
+    EXPECT_EQ(select->projection.size(), 2u);
+    EXPECT_EQ(select->where.size(), 1u);
+
+    // The clause is case-blind and takes the statement's semicolon after it.
+    auto lower = Parse("select * from t for update;");
+    ASSERT_TRUE(lower.ok()) << lower.status().message();
+    EXPECT_TRUE(std::get<SelectStmt>(lower.value()).lock.has_value());
+
+    // A statement without it carries none.
+    auto plain = Parse("SELECT a, b FROM t WHERE id = 1");
+    ASSERT_TRUE(plain.ok());
+    EXPECT_FALSE(std::get<SelectStmt>(plain.value()).lock.has_value());
+}
+
+TEST(ParserTest, ForUpdateStandsAfterThePaginationTail) {
+    // Parsed there, so the dispatcher refuses the shape by name (DC-Q5)
+    // rather than the grammar refusing a trailing token.
+    auto stmt = Parse("SELECT * FROM t ORDER BY a LIMIT 3 OFFSET 1 FOR UPDATE");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    const auto& select = std::get<SelectStmt>(stmt.value());
+    EXPECT_TRUE(select.lock.has_value());
+    EXPECT_EQ(select.order_by.size(), 1u);
+    ASSERT_TRUE(select.limit.has_value());
+
+    // Before the tail it is not the clause's position.
+    EXPECT_FALSE(Parse("SELECT * FROM t FOR UPDATE LIMIT 3").ok());
+}
+
+TEST(ParserTest, EveryOtherLockStrengthAndOptionIsRefusedByName) {
+    for (const char* strength : {"FOR SHARE", "FOR KEY SHARE", "FOR NO KEY UPDATE"}) {
+        const std::string sql = std::string("SELECT * FROM t WHERE id = 1 ") + strength;
+        ExpectRefusedAt(sql, StatusCode::kNotImplemented, "FOR");
+        EXPECT_NE(Parse(sql).status().message().find(strength), std::string::npos) << sql;
+    }
+    ExpectRefusedAt("SELECT * FROM t FOR UPDATE NOWAIT", StatusCode::kNotImplemented, "NOWAIT");
+    ExpectRefusedAt("SELECT * FROM t FOR UPDATE SKIP LOCKED", StatusCode::kNotImplemented,
+                    "SKIP");
+    ExpectRefusedAt("SELECT * FROM t FOR UPDATE OF t", StatusCode::kNotImplemented, "OF");
+
+    // A word that spells no strength is simply wrong, at its own byte.
+    ExpectRefusedAt("SELECT * FROM t FOR KEEPS", StatusCode::kInvalidArgument, "KEEPS");
+    ExpectRefusedAt("SELECT * FROM t FOR KEY UPDATE", StatusCode::kInvalidArgument, "UPDATE");
+    ExpectRefusedAt("SELECT * FROM t FOR NO UPDATE", StatusCode::kInvalidArgument, "UPDATE");
+    EXPECT_EQ(Parse("SELECT * FROM t FOR").status().code(), StatusCode::kInvalidArgument);
+    // And a word after the clause is the trailing token it always was.
+    ExpectRefusedAt("SELECT * FROM t FOR UPDATE extra", StatusCode::kInvalidArgument, "extra");
+}
+
+TEST(ParserTest, ForUpdateInsideASubqueryIsRefusedAtItsByte) {
+    ExpectRefusedAt("SELECT * FROM t WHERE id IN (SELECT id FROM u FOR UPDATE)",
+                    StatusCode::kNotImplemented, "FOR");
+    ExpectRefusedAt("SELECT * FROM t WHERE EXISTS (SELECT * FROM u FOR UPDATE)",
+                    StatusCode::kNotImplemented, "FOR");
+    // A SET value's subquery parses as an outermost block and is one still.
+    ExpectRefusedAt("UPDATE t SET a = (SELECT MAX(x) FROM u FOR UPDATE)",
+                    StatusCode::kNotImplemented, "FOR");
+    // An INSERT's source is the query grammar's, refused there by name.
+    ExpectRefusedAt("INSERT INTO t SELECT * FROM u FOR UPDATE", StatusCode::kNotImplemented,
+                    "FOR");
+}
+
+TEST(ParserTest, TheQueryGrammarRefusesTheLockClauseByNameAndSaysSo) {
+    // Forms the native grammar declines and the query grammar reads.
+    for (const char* sql :
+         {"SELECT a + 1 FROM t FOR UPDATE", "SELECT DISTINCT a FROM t FOR UPDATE",
+          "SELECT * FROM t LEFT JOIN u ON t.id = u.id FOR UPDATE",
+          "SELECT a FROM t UNION SELECT a FROM u FOR UPDATE",
+          "SELECT * FROM (SELECT a FROM t FOR UPDATE) AS d"}) {
+        Parser parser(sql);
+        auto query = parser.ParseQuery();
+        ASSERT_FALSE(query.ok()) << sql;
+        EXPECT_EQ(query.status().code(), StatusCode::kNotImplemented)
+            << sql << ": " << query.status().message();
+        EXPECT_TRUE(parser.met_lock_clause()) << sql;
+        const std::string text(sql);
+        EXPECT_NE(query.status().message().find("(byte " + std::to_string(text.find("FOR")) + ")"),
+                  std::string::npos)
+            << query.status().message();
+    }
+    // A parse that reached no clause leaves the flag clear.
+    Parser other("SELECT a + FROM t");
+    EXPECT_FALSE(other.ParseQuery().ok());
+    EXPECT_FALSE(other.met_lock_clause());
+    // An accepted clause is a clause met: a later refusal of the statement
+    // is this grammar's to answer, not the other's.
+    Parser accepted("SELECT * FROM t FOR UPDATE");
+    EXPECT_TRUE(accepted.Parse().ok());
+    EXPECT_TRUE(accepted.met_lock_clause());
+    Parser trailing("SELECT * FROM t FOR UPDATE extra");
+    EXPECT_FALSE(trailing.Parse().ok());
+    EXPECT_TRUE(trailing.met_lock_clause());
+}
+
+TEST(ParserTest, ForAndUpdateAreStillColumnNames) {
+    // DC-R9: nothing is reserved; the words are read at clause position only.
+    auto stmt = Parse("SELECT for, update FROM t WHERE for = 1 AND update = 2 FOR UPDATE");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    const auto& select = std::get<SelectStmt>(stmt.value());
+    EXPECT_EQ(select.projection.size(), 2u);
+    EXPECT_EQ(select.where.size(), 2u);
+    EXPECT_TRUE(select.lock.has_value());
+    EXPECT_TRUE(Parse("CREATE TABLE q (id int64, for int64, update int64)").ok());
+}
+
 }  // namespace
 }  // namespace kds::parser

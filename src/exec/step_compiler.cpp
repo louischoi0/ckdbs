@@ -2161,11 +2161,55 @@ StatusOr<SubChain> LowerSubquery(catalog::Catalog& catalog, const Scope& scope,
     return sub;
 }
 
+// A select list's plain columns as a chain carries them: for each written
+// column its reference, its heading as written, its type and its type mod -
+// resolved here so the emission boundary never asks the catalog per row
+// (TY06) - or, for `*`, the headings of the one relation's visible columns.
+//
+// `*` leaves the references empty, since the executor emits the whole
+// decoded row in that case: a dropped column is not in `*` (BW-R6), nor a
+// heap's hidden tuple key (BZ-R3), and the dispatcher's `DescribeStar`
+// skips the same columns, so names and values stay aligned.
+//
+// **Appended to `out`**, whose headings may already hold an aggregated
+// statement's labels: a chain's lists are filled in place, and its compile
+// builds no list to move.
+Status ProjectColumns(const Scope& scope, const std::vector<parser::ColumnName>& list, bool star,
+                      SelectList& out) {
+    for (const parser::ColumnName& col : list) {
+        auto ref = ResolveColumn(scope, col);
+        if (!ref.ok()) return ref.status();
+        out.projection.push_back(ref.value());
+        out.names.push_back(col.qualified() ? col.qualifier + "." + col.name : col.name);
+        const catalog::SysColumnRow& projected = ColumnAt(scope, ref.value());
+        out.types.push_back(projected.type_val);
+        out.type_mods.push_back(catalog::TypeModOf(projected.type_val, projected.len));
+    }
+    if (star) {
+        for (const auto& column : scope.relations[0].access->schema.columns) {
+            if (!column.visible()) continue;
+            out.names.push_back(std::string(catalog::NameView(column.name)));
+        }
+    }
+    return Status::OK();
+}
+
 }  // namespace
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                             const txn::ReadView* view, PositionSink* declare,
                             const StatementContext* context, const PlanOptions* plan) {
+    // **No chain is compiled for a locking statement** (DC-R2): a chain's
+    // walk claims nothing, so whatever ran one - `ANALYZE`, a Waystone
+    // opt-in, a plan's example - would answer the statement with its clause
+    // dropped. The dispatcher's locking read never comes here.
+    if (stmt.lock.has_value()) {
+        return Status::NotImplemented(
+            "a SELECT ... FOR UPDATE is not supported here (byte " +
+            std::to_string(stmt.lock->byte_offset) +
+            "): a locking read runs on the write's row walk and compiles to no step chain, "
+            "so it has no plan to analyze, record a trail for, or manage");
+    }
     std::uint32_t next_step_id = 0;
     auto chain = CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
                               view, /*inner_build=*/true, declare, context, plan);
@@ -2345,6 +2389,16 @@ std::optional<std::uint64_t> WriteKeyOf(const Step& where) {
 std::optional<KeySet> WriteKeySetOf(const Step& where) {
     if (!where.sub_chains.empty()) return std::nullopt;
     return TupleKeySetOf(where, /*slot=*/0);
+}
+
+StatusOr<SelectList> CompileSelectList(const catalog::TableAccess& access,
+                                       std::string_view binding,
+                                       const std::vector<parser::ColumnName>& list, bool star) {
+    Scope scope;
+    scope.relations.push_back(BoundRelation{std::string(binding), &access});
+    SelectList out;
+    if (Status s = ProjectColumns(scope, list, star, out); !s.ok()) return s;
+    return out;
 }
 
 namespace {
@@ -3376,36 +3430,23 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
             chain.column_names.push_back(AggregateLabel(item));
         }
     }
-    for (const parser::ColumnName& col : stmt.projection) {
-        auto ref = ResolveColumn(scope, col);
-        if (!ref.ok()) return ref.status();
-        chain.projection.push_back(ref.value());
-        chain.column_names.push_back(col.qualified() ? col.qualifier + "." + col.name : col.name);
-        // Resolved here so the emission boundary never asks the catalog
-        // per row (TY06). Same list, same order, same lifetime as the
-        // names beside it.
-        const catalog::SysColumnRow& projected = ColumnAt(scope, ref.value());
-        chain.projection_types.push_back(projected.type_val);
-        chain.projection_type_mods.push_back(
-            catalog::TypeModOf(projected.type_val, projected.len));
-    }
-    if (stmt.star()) {
-        // `SELECT *`, which the grammar admits only for a single relation
-        // (V06) - so it means every column of the one step, in schema
-        // order. Left as an empty projection with names filled in, since
-        // the executor emits the whole decoded row in that case.
-        //
-        // `star()`, not `projection.empty()`: an aggregated statement leaves
-        // the projection empty too, and labelling its output with the
-        // relation's columns would name a row it never emits.
-        for (const auto& column : scope.relations[0].access->schema.columns) {
-            // A dropped column is not in `*` (BW-R6), nor a heap's hidden
-            // tuple key (BZ-R3); `DescribeStar` skips the same columns, so
-            // names and values stay aligned.
-            if (!column.visible()) continue;
-            chain.column_names.push_back(std::string(catalog::NameView(column.name)));
-        }
-    }
+    // The plain columns, or `SELECT *` - which the grammar admits only for a
+    // single relation (V06), so it means every column of the one step, in
+    // schema order (`ProjectColumns`).
+    //
+    // `star()`, not `projection.empty()`: an aggregated statement leaves
+    // the projection empty too, and labelling its output with the
+    // relation's columns would name a row it never emits.
+    // The chain's own lists, lent and taken back: the headings follow an
+    // aggregated statement's labels, and nothing is copied or allocated twice.
+    SelectList list{std::move(chain.projection), std::move(chain.column_names),
+                    std::move(chain.projection_types), std::move(chain.projection_type_mods)};
+    const Status projected = ProjectColumns(scope, stmt.projection, stmt.star(), list);
+    chain.projection = std::move(list.projection);
+    chain.column_names = std::move(list.names);
+    chain.projection_types = std::move(list.types);
+    chain.projection_type_mods = std::move(list.type_mods);
+    if (!projected.ok()) return projected;
 
     // ---- 5a. The pagination tail (spec I11, V09; sort per OB3) -----------
     //
