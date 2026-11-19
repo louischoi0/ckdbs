@@ -245,10 +245,10 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
 ## Version Management
 
 The version of record is an **annotated git tag on `main`**. **The current
-version of record is `v3.4.12`**, taken on `main` at `a0672010` (CU: a
-value list is a key set; with CS's `BEGIN ... READ ONLY` and the audit's
-G21, G23-G26), operator-named on 2026-11-17 ("tag 3.4.12"); read its tag
-message.
+version of record is `v3.4.13`**, taken on `main` at `8dc37b80` (CX:
+managed plans; with CY's managed statistics, DF-S1's statement cost and
+the audit's G27-G42 fixes), operator-named on 2026-11-19 ("tag 3.4.13");
+read its tag message.
 
 - **The operator names the version; CLA may move only `z`.** A version is
   set by the operator saying it — *"it is version x.y.z"* — and nothing
