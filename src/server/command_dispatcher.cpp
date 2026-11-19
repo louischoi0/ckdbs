@@ -1429,6 +1429,11 @@ Role RequiredRole(std::string_view cmd, std::string_view rest) {
         // readonly session is told why rather than that it lacks a role.
         return Role::kReadOnly;
     }
+    // `DELETE STATISTICS` (CY-S4) is the statistics surface's, so admin's,
+    // as every statistics statement is; `DELETE FROM` is the row write.
+    if (IEquals(cmd, "DELETE") && IEquals(SplitFirstToken(rest).first, "STATISTICS")) {
+        return Role::kAdmin;
+    }
     if (IEquals(cmd, "INSERT") || IEquals(cmd, "UPDATE") || IEquals(cmd, "DELETE")) {
         return Role::kReadWrite;
     }
@@ -1744,6 +1749,23 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     }
     if (IEquals(cmd, "UPDATE")) {
         return HandleUpdate(Trim(line), session);
+    }
+    // **The statistics statements** (CY-S1b, CY-S4): dispatcher verbs as
+    // `WAYSTONE` is, so they need no grammar production, reserve no word and
+    // move no fingerprint. Each takes `STATISTICS` second (`DISCARD PENDING
+    // STATISTICS` third); unclassified in `RequiredRole`, so admin's, and
+    // `DELETE STATISTICS` named there.
+    {
+        const std::string_view second = SplitFirstToken(rest).first;
+        const bool statistics_second = IEquals(second, "STATISTICS");
+        if ((statistics_second &&
+             (IEquals(cmd, "GATHER") || IEquals(cmd, "LOCK") || IEquals(cmd, "UNLOCK") ||
+              IEquals(cmd, "PUBLISH") || IEquals(cmd, "RESTORE") || IEquals(cmd, "EXPORT") ||
+              IEquals(cmd, "IMPORT") || IEquals(cmd, "DELETE"))) ||
+            (IEquals(cmd, "DISCARD") && IEquals(second, "PENDING")) ||
+            IEquals(cmd, "GATHER")) {
+            return HandleStatistics(Trim(line), session);
+        }
     }
     if (IEquals(cmd, "DELETE")) {
         return HandleDelete(Trim(line), session);
@@ -2857,6 +2879,9 @@ protected:
     // down only once its statement has ended (`TcpServer::CloseClient`).
     Session& session_;
     exec::SlicePolicy slice_;
+    // The least a slice and the wait after it take, or 0: a gather's
+    // (CY-Q31 (a)); a DDL build yields and goes on.
+    sched::MonoTimeNs pace_ns_ = 0;
     bool decided_ = false;
 
 private:
@@ -2883,6 +2908,7 @@ sched::Coro BuildRun::Execute(DispatchOutcome* out) {
     Status ran = slice_.TakeCancel();
     if (ran.ok()) co_await Drain(&ran);
     while (ran.ok() && !walked()) {
+        const sched::MonoTimeNs slice_began = d_.NowNs();
         {
             // The slice writes pages as this dispatcher's core, as
             // `DispatchAndStage` runs - and only the slice: across the yield
@@ -2894,7 +2920,24 @@ sched::Coro BuildRun::Execute(DispatchOutcome* out) {
         if (!ran.ok() || walked()) break;
         // ---- The slice boundary: no pin, no span (the suspend audit) ----
         if (ran = slice_.TakeCancel(); !ran.ok()) break;
-        co_await sched::Yield{};
+        // **A paced run** (`pace_ns_`, a gather's, CY-Q31 (a)) parks until its
+        // slice's interval has passed, so its page rate has a ceiling; every
+        // other run yields. The predicate is re-asked, never kicked, so the
+        // park ends at the deadline or at the core's idle-block ceiling.
+        // **The clock test is load-bearing**: with no clock `NowNs()` is 0
+        // and the predicate would never hold.
+        const sched::MonoTimeNs resume_at = slice_began + pace_ns_;
+        if (pace_ns_ > 0 && d_.clock_ != nullptr && d_.NowNs() < resume_at) {
+            const std::function<bool()> due = [this, resume_at] {
+                return d_.NowNs() >= resume_at ||
+                       (slice_.cancel != nullptr &&
+                        slice_.cancel->load(std::memory_order_acquire));
+            };
+            sched::WaitScope wait(stats::WaitEvent::kIdleBackground);
+            co_await sched::WaitUntil{&due};
+        } else {
+            co_await sched::Yield{};
+        }
         // **Reported at the resume**: the waiters' net measures the holder's
         // silence, and a build waiting its turn on its core is not stuck -
         // the count moves each time the core comes back to it, however long
@@ -3271,6 +3314,464 @@ DispatchOutcome TransitionBuildRun::Publish(const Status& ran) {
                 " on=" + stmt.table_name + " column=" + stmt.column +
                 " rows=" + std::to_string(created.value().rows_checked),
             false};
+}
+
+// ---- `GATHER STATISTICS ON <relation>` (CY-S1b) ------------------------------
+//
+// A `BuildRun` with no transaction and no `X`: the walk (`stats::
+// RelationGather`) reads pages, not rows, so it holds no view and no purge
+// horizon (CY-Q7 (a), CY-Q26 (a)). **The relation's `IS` per slice, released
+// at each yield** (CY-Q21 (a)): a read borrow taken at the slice's start and
+// given back at its end, so a DDL waiting for the relation `X` passes between
+// two slices. What keeps a leaf the walk resumes at in place across a yield
+// is what keeps every reader's (`read_borrow.hpp`): the statement epoch the
+// run's `SuspensionHold` holds, under which no page of a dropped relation is
+// freed. Each slice re-resolves the relation first; a relation dropped since
+// the head stops the gather with nothing published.
+//
+// **Behind OLTP** (CY-R10): `kGatherLeavesPerSlice` leaves a slice, the
+// `analytic` level's slice, whatever level the session declared.
+class GatherRun final : public BuildRun {
+public:
+    static constexpr std::uint32_t kGatherLeavesPerSlice = PagesPerSlice(Priority::kAnalytic);
+    // CY-Q31 (a): a slice of 16 leaves takes at least 2 ms with its wait, so
+    // a gather reads at most 8,000 leaves a second (64 MiB/s of 8 KiB pages)
+    // whatever the device could give it. **A floor, not a period**: nothing
+    // wakes the park at its deadline, so on a core with no other work it
+    // ends at the reactor's idle-block ceiling (`max_idle_block_ms`, 10 ms) -
+    // about 1,600 leaves a second, a million-leaf relation in some ten
+    // minutes. Its close measurement found an unpaced loop of gathers
+    // slowing OLTP on another core by up to 48 % at p99.
+    static constexpr sched::MonoTimeNs kGatherSliceIntervalNs = 2'000'000;
+
+    GatherRun(CommandDispatcher& d, Session& session, catalog::Oid oid, std::string label,
+              bool pending, bool force)
+        : BuildRun(d, session),
+          gather_(oid),
+          label_(std::move(label)),
+          pending_(pending),
+          force_(force) {
+        slice_.pages_per_slice = kGatherLeavesPerSlice;
+        pace_ns_ = kGatherSliceIntervalNs;
+    }
+
+    DispatchOutcome Start() { return HandOn(/*fenced=*/true); }
+
+private:
+    Status Step(std::uint32_t leaves) override {
+        // This slice's `IS`, given back when the slice returns.
+        const ReadBorrow borrow(d_.locks_, d_.NextReadHolder(), &d_.read_borrows_, gather_.oid());
+        // The pinned memo still resolves a relation dropped since the head;
+        // what refuses that gather's result is the store (`Forget`).
+        auto access = d_.catalog_.InitTableAccess(gather_.oid());
+        if (!access.ok()) {
+            return access.status().WithContext("the gather of " + label_ +
+                                               " stopped and published nothing");
+        }
+        if (!gather_.started()) {
+            if (Status s = gather_.Start(d_.page_store_, *access.value()); !s.ok()) return s;
+        }
+        return gather_.Step(d_.page_store_, leaves);
+    }
+    bool walked() const override { return gather_.done(); }
+    DispatchOutcome Tail(const Status& ran) override {
+        if (!ran.ok()) return Refused(ran);
+        stats::RelationStatistic stat;
+        stat.origin = stats::StatisticsOrigin::kGathered;
+        stat.rows = gather_.rows();
+        stat.leaves = gather_.leaves();
+        stat.made_us = exec::StatementContextNow().now_us;
+        auto stored = d_.plan_stats_->managed().Store(gather_.oid(), stat, pending_, force_);
+        if (!stored.ok()) return Refused(stored.status());
+        if (!pending_) d_.plan_stats_->RepublishManaged();
+        if (d_.logging(LogLevel::kInfo)) {
+            d_.log_->Info("statistics", "gathered " + label_ + " version " +
+                                            std::to_string(stored.value().version) +
+                                            (pending_ ? " (pending)" : ""));
+        }
+        return {"GATHERED STATISTICS relation=" + label_ +
+                    " version=" + std::to_string(stored.value().version) +
+                    " rows=" + std::to_string(stat.rows) +
+                    " leaves=" + std::to_string(stat.leaves) +
+                    " state=" + (pending_ ? "pending" : "published"),
+                false};
+    }
+    DispatchOutcome FramedTail(Session&, const Status& ran) override { return Tail(ran); }
+    txn::HolderProgress::Scope* progress_scope() override { return nullptr; }
+
+    stats::RelationGather gather_;
+    std::string label_;
+    bool pending_;
+    bool force_;
+};
+
+namespace {
+
+// **The export document** (CY-Q9 (a), CY-Q29 (a)): one line, versioned in its
+// first two words, the relation object's fields as `key=value`. `relation=`
+// names where it came from and is informational: an `IMPORT` writes into the
+// relation its `ON` names.
+constexpr std::string_view kStatisticsDocumentMagic = "KDS-STATISTICS";
+constexpr std::string_view kStatisticsDocumentVersion = "1";
+
+struct ImportedStatistic {
+    std::uint64_t rows = 0;
+    std::uint64_t leaves = 0;
+};
+
+// Parses a document; a refusal names the byte inside it.
+StatusOr<ImportedStatistic> ParseStatisticsDocument(std::string_view doc, std::size_t& bad_at) {
+    std::size_t at = 0;
+    const auto next = [&]() -> std::string_view {
+        while (at < doc.size() && doc[at] == ' ') ++at;
+        const std::size_t start = at;
+        while (at < doc.size() && doc[at] != ' ') ++at;
+        bad_at = start;
+        return doc.substr(start, at - start);
+    };
+    if (next() != kStatisticsDocumentMagic) {
+        return Status::InvalidArgument("a statistics document starts with KDS-STATISTICS");
+    }
+    if (const std::string_view v = next(); v != kStatisticsDocumentVersion) {
+        return Status::NotImplemented("statistics document version '" + std::string(v) +
+                                      "' is not one this build reads (it reads 1)");
+    }
+    if (const std::string_view kind = next(); !IEquals(kind, "RELATION")) {
+        return Status::NotImplemented(
+            "a statistics document of kind '" + std::string(kind) +
+            "' is not implemented; only a relation object is (column statistics, CY-S2, are "
+            "not built)");
+    }
+    ImportedStatistic out;
+    bool rows_seen = false;
+    std::vector<std::string_view> seen;
+    for (std::string_view field = next(); !field.empty(); field = next()) {
+        const std::size_t eq = field.find('=');
+        const std::string_view key = field.substr(0, eq);
+        if (std::find(seen.begin(), seen.end(), key) != seen.end()) {
+            return Status::InvalidArgument("a statistics document names '" + std::string(key) +
+                                           "' twice");
+        }
+        seen.push_back(key);
+        const std::string_view value = eq == std::string_view::npos ? "" : field.substr(eq + 1);
+        const auto number = [&](std::uint64_t& into) -> Status {
+            const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), into);
+            if (value.empty() || ec != std::errc() || ptr != value.data() + value.size()) {
+                return Status::InvalidArgument("'" + std::string(key) +
+                                               "' takes an unsigned integer");
+            }
+            return Status::OK();
+        };
+        if (key == "rows") {
+            if (Status s = number(out.rows); !s.ok()) return s;
+            rows_seen = true;
+        } else if (key == "leaves") {
+            if (Status s = number(out.leaves); !s.ok()) return s;
+        } else if (key == "origin" || key == "version" || key == "made_at" || key == "relation") {
+            // Where the object came from: carried by the document, not taken.
+        } else {
+            return Status::InvalidArgument("a statistics document has no field '" +
+                                           std::string(key) + "'");
+        }
+    }
+    if (!rows_seen) {
+        bad_at = doc.size();
+        return Status::InvalidArgument("a relation's statistics document needs rows=");
+    }
+    return out;
+}
+
+}  // namespace
+
+std::string StatisticsDocument(std::string_view label, const stats::RelationStatistic* stat,
+                               std::uint64_t observed_rows) {
+    std::string doc(kStatisticsDocumentMagic);
+    doc.append(" ").append(kStatisticsDocumentVersion).append(" RELATION");
+    if (stat != nullptr) {
+        doc.append(" rows=").append(std::to_string(stat->rows));
+        doc.append(" leaves=").append(std::to_string(stat->leaves));
+        doc.append(" origin=").append(stats::StatisticsOriginName(stat->origin));
+        doc.append(" version=").append(std::to_string(stat->version));
+        doc.append(" made_at=").append(std::to_string(stat->made_us));
+    } else {
+        doc.append(" rows=").append(std::to_string(observed_rows));
+        doc.append(" origin=observed");
+    }
+    doc.append(" relation=").append(label);
+    return doc;
+}
+
+void CommandDispatcher::ForgetRelationStatistics(catalog::Oid oid) {
+    if (plan_stats_ == nullptr) return;
+    if (plan_stats_->managed().Forget(oid)) plan_stats_->RepublishManaged();
+}
+
+DispatchOutcome CommandDispatcher::HandleStatistics(std::string_view line, Session& session) {
+    // `<VERB> STATISTICS ON <relation> [options]`, `DISCARD PENDING
+    // STATISTICS ON <relation>`. Every refusal names its byte.
+    const auto byte_at = [&](std::string_view at) {
+        return at.data() == nullptr || at.empty() ? line.size()
+                                                  : static_cast<std::size_t>(at.data() - line.data());
+    };
+    const auto refuse = [&](Status s, std::string_view at) {
+        return Refused(s.WithMessage(s.message() + " (byte " + std::to_string(byte_at(at)) + ")"));
+    };
+    const auto [verb, after_verb] = SplitFirstToken(Trim(line));
+    std::string spelled(verb);
+    for (char& c : spelled) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    std::string_view rest = after_verb;
+    if (spelled == "DISCARD") {
+        const auto [pending, r] = SplitFirstToken(rest);
+        if (!IEquals(pending, "PENDING")) {
+            return refuse(Status::InvalidArgument("DISCARD takes PENDING STATISTICS ON <relation>"),
+                          pending);
+        }
+        spelled = "DISCARD PENDING";
+        rest = r;
+    }
+    const auto [statistics, after_statistics] = SplitFirstToken(rest);
+    if (!IEquals(statistics, "STATISTICS")) {
+        return refuse(Status::InvalidArgument(spelled + " takes STATISTICS ON <relation>"),
+                      statistics);
+    }
+    if (plan_stats_ == nullptr) {
+        return refuse(Status::NotImplemented("this dispatcher keeps no planner statistics"), verb);
+    }
+    if (session.in_explicit_txn()) {
+        // CY-R8: the managed store is outside every transaction - a
+        // `ROLLBACK` could not take an act back.
+        return refuse(Status::NotImplemented(spelled +
+                                             " STATISTICS inside a transaction is not "
+                                             "implemented; run it in autocommit"),
+                      verb);
+    }
+    const auto [on, after_on] = SplitFirstToken(after_statistics);
+    if (!IEquals(on, "ON")) {
+        return refuse(Status::InvalidArgument(spelled + " STATISTICS takes ON <relation>"), on);
+    }
+    std::string_view tail = Trim(after_on);
+    while (!tail.empty() && tail.back() == ';') tail = Trim(tail.substr(0, tail.size() - 1));
+    // The relation's name ends at a space or at a column list's `(`.
+    std::size_t name_end = 0;
+    while (name_end < tail.size() && tail[name_end] != ' ' && tail[name_end] != '\t' &&
+           tail[name_end] != '(') {
+        ++name_end;
+    }
+    const std::string_view written = tail.substr(0, name_end);
+    std::string_view options = Trim(tail.substr(name_end));
+    if (written.empty()) {
+        return refuse(Status::InvalidArgument(spelled + " STATISTICS ON takes a relation"),
+                      written);
+    }
+    // W13: column and column-group statistics (CY-S2, CY-S3) are not built.
+    if (const std::string_view first = SplitFirstToken(options).first;
+        !options.empty() && (options.front() == '(' || IEquals(first, "ALL") ||
+                             IEquals(first, "GROUP") || IEquals(first, "SAMPLE"))) {
+        return refuse(Status::NotImplemented(
+                          "column and column-group statistics are not built (CY-S2 and CY-S3, "
+                          "the operator's ruling of 2026-11-18); a relation's statistics "
+                          "object is"),
+                      options);
+    }
+    const std::size_t dot = written.find('.');
+    const std::string_view qualifier =
+        dot == std::string_view::npos ? std::string_view{} : written.substr(0, dot);
+    const std::string_view name = dot == std::string_view::npos ? written : written.substr(dot + 1);
+    if (name.empty() || !parser::IsIdentifier(name) ||
+        (!qualifier.empty() && !parser::IsIdentifier(qualifier))) {
+        return refuse(Status::InvalidArgument("'" + std::string(written) +
+                                              "' is not a relation name"),
+                      written);
+    }
+    auto oid = ResolveRelationName(session, qualifier, name);
+    if (!oid.ok()) return refuse(oid.status(), written);
+    if (oid.value() < catalog::kUserOidStart) {
+        return refuse(Status::Unsupported("statistics are kept for user relations; '" +
+                                          std::string(written) + "' is a catalog relation"),
+                      written);
+    }
+    const std::string label(written);
+
+    // ---- The options: each verb's words, each at most once ------------------
+    bool pending = false;
+    bool force = false;
+    std::optional<std::uint64_t> to_version;
+    std::optional<std::string> document;
+    std::size_t document_at = 0;
+    // Each document character's byte past `document_at`, the opening quote:
+    // an escaped `''` is two bytes and one character.
+    std::vector<std::size_t> document_bytes;
+    const bool takes_force = spelled == "GATHER" || spelled == "IMPORT" ||
+                             spelled == "RESTORE" || spelled == "PUBLISH" || spelled == "DELETE";
+    const bool takes_pending = spelled == "GATHER" || spelled == "IMPORT";
+    while (!options.empty()) {
+        const auto [word, after_word] = SplitFirstToken(options);
+        if (IEquals(word, "PENDING") && takes_pending && !pending) {
+            pending = true;
+        } else if (IEquals(word, "FORCE") && takes_force && !force) {
+            force = true;
+        } else if (IEquals(word, "TO") && spelled == "RESTORE" && !to_version.has_value()) {
+            const auto [version_word, r] = SplitFirstToken(after_word);
+            const auto [n, r2] = SplitFirstToken(r);
+            std::uint64_t v = 0;
+            const auto [ptr, ec] = std::from_chars(n.data(), n.data() + n.size(), v);
+            if (!IEquals(version_word, "VERSION") || n.empty() || ec != std::errc() ||
+                ptr != n.data() + n.size()) {
+                return refuse(Status::InvalidArgument("RESTORE STATISTICS takes TO VERSION <n>"),
+                              version_word);
+            }
+            to_version = v;
+            options = Trim(r2);
+            continue;
+        } else if (IEquals(word, "FROM") && spelled == "IMPORT" && !document.has_value()) {
+            std::string_view q = Trim(after_word);
+            if (q.empty() || q.front() != '\'') {
+                return refuse(Status::InvalidArgument(
+                                  "IMPORT STATISTICS takes FROM '<document>', a quoted string"),
+                              q);
+            }
+            document_at = byte_at(q);
+            document_bytes.clear();
+            std::string text;
+            std::size_t i = 1;
+            bool closed = false;
+            for (; i < q.size(); ++i) {
+                if (q[i] == '\'') {
+                    if (i + 1 < q.size() && q[i + 1] == '\'') {
+                        text.push_back('\'');
+                        document_bytes.push_back(i);
+                        ++i;
+                        continue;
+                    }
+                    closed = true;
+                    break;
+                }
+                text.push_back(q[i]);
+                document_bytes.push_back(i);
+            }
+            document_bytes.push_back(i);  // the document's end, its closing quote
+            if (!closed) {
+                return refuse(Status::InvalidArgument("the document's quote is not closed"), q);
+            }
+            document = std::move(text);
+            options = Trim(q.substr(i + 1));
+            continue;
+        } else {
+            return refuse(Status::InvalidArgument("'" + std::string(word) + "' is not an option of " +
+                                                  spelled + " STATISTICS here"),
+                          word);
+        }
+        options = Trim(after_word);
+    }
+    if (spelled == "RESTORE" && !to_version.has_value()) {
+        return refuse(Status::InvalidArgument("RESTORE STATISTICS takes TO VERSION <n>"), tail.substr(tail.size()));
+    }
+    if (spelled == "IMPORT" && !document.has_value()) {
+        return refuse(Status::InvalidArgument("IMPORT STATISTICS takes FROM '<document>'"),
+                      tail.substr(tail.size()));
+    }
+
+    stats::ManagedStatistics& managed = plan_stats_->managed();
+    const auto version_reply = [&](std::string_view tag, const stats::RelationStatistic& stat,
+                                   std::string_view state) -> DispatchOutcome {
+        if (state == "published") plan_stats_->RepublishManaged();
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("statistics", std::string(tag) + " " + label + " version " +
+                                         std::to_string(stat.version));
+        }
+        return {std::string(tag) + " relation=" + label + " version=" +
+                    std::to_string(stat.version) + " rows=" + std::to_string(stat.rows) +
+                    " leaves=" + std::to_string(stat.leaves) + " state=" + std::string(state),
+                false};
+    };
+    const auto answered = [&](const Status& s, std::string reply) -> DispatchOutcome {
+        if (!s.ok()) return refuse(s, written);
+        return {std::move(reply), false};
+    };
+
+    if (spelled == "GATHER") {
+        // Asked here too, so a locked relation is not walked for nothing; the
+        // tail's store asks again.
+        if (!pending) {
+            if (Status s = managed.CheckPublishable(oid.value(), force); !s.ok()) {
+                return refuse(s, written);
+            }
+        }
+        // Every user relation is a clustered tree since BZ; a catalog chain
+        // was refused above.
+        auto run = std::make_shared<GatherRun>(*this, session, oid.value(), label, pending, force);
+        return run->Start();
+    }
+    if (spelled == "LOCK") {
+        return answered(managed.Lock(oid.value()), "LOCKED STATISTICS relation=" + label);
+    }
+    if (spelled == "UNLOCK") {
+        return answered(managed.Unlock(oid.value()), "UNLOCKED STATISTICS relation=" + label);
+    }
+    if (spelled == "DISCARD PENDING") {
+        return answered(managed.DiscardPending(oid.value()),
+                        "DISCARDED PENDING STATISTICS relation=" + label);
+    }
+    if (spelled == "DELETE") {
+        const Status s = managed.Delete(oid.value(), force);
+        if (s.ok()) plan_stats_->RepublishManaged();
+        return answered(s, "DELETED STATISTICS relation=" + label);
+    }
+    if (spelled == "PUBLISH") {
+        auto published = managed.PublishPending(oid.value(), force);
+        if (!published.ok()) return refuse(published.status(), written);
+        return version_reply("PUBLISHED STATISTICS", published.value(), "published");
+    }
+    if (spelled == "RESTORE") {
+        auto restored = managed.Restore(oid.value(), *to_version, force);
+        if (!restored.ok()) return refuse(restored.status(), written);
+        return version_reply("RESTORED STATISTICS", restored.value(), "published");
+    }
+    if (spelled == "IMPORT") {
+        std::size_t bad_at = 0;
+        auto parsed = ParseStatisticsDocument(*document, bad_at);
+        if (!parsed.ok()) {
+            return Refused(parsed.status().WithMessage(parsed.status().message() +
+                                                       " (byte " +
+                                                       std::to_string(document_at +
+                                                                      document_bytes[bad_at]) +
+                                                       ")"));
+        }
+        stats::RelationStatistic stat;
+        stat.origin = stats::StatisticsOrigin::kImported;
+        stat.rows = parsed.value().rows;
+        stat.leaves = parsed.value().leaves;
+        stat.made_us = exec::StatementContextNow().now_us;
+        auto stored = managed.Store(oid.value(), stat, pending, force);
+        if (!stored.ok()) return refuse(stored.status(), written);
+        return version_reply("IMPORTED STATISTICS", stored.value(),
+                             pending ? "pending" : "published");
+    }
+    // EXPORT: one `SELECT` over `sys.statistics` (SV1), the rows the planner
+    // reads for the relation - each carrying its document.
+    parser::SelectStmt stmt;
+    stmt.from.schema = std::string(exec::kCatalogSchema);
+    stmt.from.table_name = "statistics";
+    stmt.from.byte_offset = static_cast<std::uint32_t>(byte_at(written));
+    parser::ColumnName column;
+    column.name = "document";
+    column.byte_offset = stmt.from.byte_offset;
+    stmt.projection.push_back(std::move(column));
+    const auto where_int = [&](std::string_view col, std::uint64_t v) {
+        parser::Condition cond;
+        cond.kind = parser::PredicateKind::kCompareValue;
+        cond.op = parser::CompareOp::kEq;
+        cond.rhs_kind = parser::RhsKind::kLiteral;
+        cond.col.name = std::string(col);
+        cond.col.byte_offset = stmt.from.byte_offset;
+        cond.val.byte_offset = stmt.from.byte_offset;
+        cond.val.type = parser::ValueType::kInt;
+        cond.val.int_val = static_cast<std::int64_t>(v);
+        stmt.where.push_back(std::move(cond));
+    };
+    where_int("relation_oid", oid.value());
+    where_int("used", 1);
+    return HandleCatalogView(stmt, session);
 }
 
 sched::Coro CommandDispatcher::CompleteBuild(std::string_view line, DispatchOutcome* out) {
@@ -4222,6 +4723,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         } else {
             captured_plans_->ForgetRelation(oid.value());
             admin_plans_->ForgetRelation(oid.value());
+            ForgetRelationStatistics(oid.value());
         }
         // The catalog rows are gone and the compiler stops emitting probes;
         // the in-memory sets would only leak, so they are forgotten, not
@@ -8271,6 +8773,7 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
             // And a disabled administrator's plan naming it: forgotten in
             // the table, its row kept (`exec/plan_catalog.hpp`).
             admin_plans_->ForgetRelation(owed->oid);
+            ForgetRelationStatistics(owed->oid);
         }
         owed = owed_drops_.erase(owed);
     }

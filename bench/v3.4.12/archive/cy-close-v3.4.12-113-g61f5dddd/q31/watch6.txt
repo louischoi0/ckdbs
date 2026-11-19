@@ -1,0 +1,6 @@
+2026-11-18T21:00:15Z alive 
+2026-11-18T21:01:15Z alive 2026-11-18T21:01:13Z round 2 join-no-literal OFF2 elapsed 56s
+2026-11-18T21:02:15Z alive 2026-11-18T21:02:14Z round 4 update-1row OFF elapsed 117s
+2026-11-18T21:03:15Z alive 2026-11-18T21:03:13Z round 6 insert-1row OFF elapsed 177s
+2026-11-18T21:04:15Z alive 2026-11-18T21:04:11Z round 7 join-no-literal OFF2 elapsed 234s
+2026-11-18T21:05:15Z driver exited: 2026-11-18T21:04:54Z DONE

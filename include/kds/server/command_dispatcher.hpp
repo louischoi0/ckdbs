@@ -393,6 +393,13 @@ struct DispatchOutcome {
 // surface, can be pinned by a test that owns no socket and no dispatcher.
 std::string ErrorReply(const Status& status);
 
+// **A relation's statistics export document** (CY-S4, `plan-stats.md` §9):
+// one line, `KDS-STATISTICS 1 RELATION rows=<n> ...`, of a managed version -
+// or, with `stat` null, of the steward's observed prior of `observed_rows` -
+// naming the relation as `label`. `IMPORT STATISTICS` reads it back.
+std::string StatisticsDocument(std::string_view label, const stats::RelationStatistic* stat,
+                               std::uint64_t observed_rows);
+
 // **The inverse**, for the paths that hold a rendered `ERR` line and need
 // the *code* back: the KWP session and the KWP load server, as the fallback
 // where `DispatchOutcome::status` is OK on a refusal built from a bare
@@ -1566,6 +1573,14 @@ private:
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
     DispatchOutcome HandleSetJoinOrder(std::string_view line, std::string_view rest);
     DispatchOutcome HandleDropPlan(std::string_view line, Session& session);
+    // **The statistics statements** (CY-S1b, CY-S4; `plan-stats.md` §9):
+    // `GATHER`, `LOCK`, `UNLOCK`, `PUBLISH`, `DISCARD PENDING`, `RESTORE`,
+    // `EXPORT`, `IMPORT` and `DELETE STATISTICS ON <relation> ...`.
+    // Admin-classed, autocommit only.
+    DispatchOutcome HandleStatistics(std::string_view line, Session& session);
+    // A committed `DROP TABLE`: the relation's managed statistics and their
+    // history, and every later store for its oid (CY-S4).
+    void ForgetRelationStatistics(catalog::Oid oid);
     // `CREATE PLAN` and `ALTER PLAN` (CX-S1b, `exec/plan_ddl.hpp`): an
     // administrator's plan for a statement shape, made, enabled, disabled
     // and edited. Admin, autocommit only, answered once durable.
@@ -2421,6 +2436,8 @@ private:
     StatusOr<exec::CatalogView> TransitionsView();
     StatusOr<exec::CatalogView> PlansView();
     StatusOr<exec::CatalogView> PlanAdviceView();
+    StatusOr<exec::CatalogView> StatisticsView();
+    StatusOr<exec::CatalogView> StatisticsHistoryView();
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> StatementStatsView();
@@ -2769,6 +2786,7 @@ private:
     friend class BuildRun;
     friend class IndexBuildRun;
     friend class DeclarationBuildRun;
+    friend class GatherRun;
     template <typename Build>
     friend class DeclarationBuildRunOf;
 

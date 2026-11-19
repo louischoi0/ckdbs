@@ -5,6 +5,8 @@
 #include <cctype>
 #include <initializer_list>
 #include <limits>
+#include <map>
+#include <set>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -80,6 +82,8 @@ constexpr SysViewSpec kViews[] = {
     {"transitions"},
     {"plans"},
     {"plan_advice"},
+    {"statistics"},
+    {"statistics_history"},
     {"cabin_optimizer"},
     {"lock_waits"},
     {"statement_stats"},
@@ -263,6 +267,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "transitions") return TransitionsView();
     if (n == "plans") return PlansView();
     if (n == "plan_advice") return PlanAdviceView();
+    if (n == "statistics") return StatisticsView();
+    if (n == "statistics_history") return StatisticsHistoryView();
     if (n == "cabin_optimizer") return CabinOptimizerView(byte);
     if (n == "lock_waits") return LockWaitsView();
     if (n == "statement_stats") return StatementStatsView();
@@ -958,6 +964,124 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlanAdviceView() {
                              Str(exec::RatioText(advice.cost_ratio)),
                              Int(advice.generation), Timestamp(advice.advised_at_us),
                              advice.proposal.empty() ? Null() : Str(advice.proposal)});
+    }
+    return view;
+}
+
+namespace {
+
+// `ns.name`, or `oid N` for a relation no longer live.
+std::string StatisticsLabel(const RelationLabels& labels, catalog::Oid oid) {
+    const parser::AstValue name = labels.Name(oid);
+    if (name.type == parser::ValueType::kNull) return "oid " + std::to_string(oid);
+    const parser::AstValue ns = labels.Namespace(oid);
+    return (ns.type == parser::ValueType::kNull ? std::string() : ns.str_val + ".") + name.str_val;
+}
+
+}  // namespace
+
+StatusOr<exec::CatalogView> CommandDispatcher::StatisticsView() {
+    exec::CatalogView view;
+    // **The planner's relation statistics** (CY-S1b, CY-S4, `plan-stats.md`
+    // §9), an engine-state view: per relation, the operator's managed
+    // versions - `published`, `pending` - and the steward's sampled prior as
+    // an `observed` row (PS1). `used` is 1 on the row the planner prices the
+    // relation from (CY-Q16 (a): a published managed version outranks the
+    // prior). A relation whose statistics are locked and hold nothing shows
+    // one `none` row. `document` is the row's export text (`EXPORT
+    // STATISTICS` reads it), last as a value with spaces.
+    Define(view, {{"relation_oid", kInt},
+                  {"namespace", kStr},
+                  {"name", kStr},
+                  {"kind", kStr},
+                  {"state", kStr},
+                  {"origin", kStr},
+                  {"version", kInt},
+                  {"rows", kInt},
+                  {"leaves", kInt},
+                  {"made_at", kTimestamp},
+                  {"locked", kInt},
+                  {"used", kInt},
+                  {"document", kStr}});
+    if (plan_stats_ == nullptr) return view;
+    auto labels = RelationLabels::Read(catalog_, nullptr);
+    if (!labels.ok()) return labels.status();
+    const std::shared_ptr<const stats::PlanStatsSnapshot> snapshot = plan_source_.Pin();
+    std::map<catalog::Oid, stats::StatisticsSlotView> slots;
+    for (stats::StatisticsSlotView& slot : plan_stats_->managed().Slots()) {
+        slots.emplace(slot.oid, std::move(slot));
+    }
+    std::set<catalog::Oid> oids;
+    for (const auto& [oid, slot] : slots) oids.insert(oid);
+    if (snapshot != nullptr) {
+        for (const auto& [oid, band] : snapshot->observed()) oids.insert(oid);
+    }
+    for (const catalog::Oid oid : oids) {
+        const std::string label = StatisticsLabel(labels.value(), oid);
+        const auto slot = slots.find(oid);
+        const bool locked = slot != slots.end() && slot->second.locked;
+        const bool managed = slot != slots.end() && slot->second.published.has_value();
+        const auto version_row = [&](const stats::RelationStatistic& stat, std::string_view state,
+                                     bool used) {
+            view.rows.push_back({Int(oid), labels.value().Namespace(oid), labels.value().Name(oid),
+                                 Str("relation"), Str(state),
+                                 Str(stats::StatisticsOriginName(stat.origin)), Int(stat.version),
+                                 Int(stat.rows), Int(stat.leaves), Timestamp(stat.made_us),
+                                 Bool(locked), Bool(used),
+                                 Str(StatisticsDocument(label, &stat, 0))});
+        };
+        bool any = false;
+        if (managed) {
+            version_row(*slot->second.published, "published", true);
+            any = true;
+        }
+        if (slot != slots.end() && slot->second.pending.has_value()) {
+            version_row(*slot->second.pending, "pending", false);
+            any = true;
+        }
+        if (snapshot != nullptr) {
+            if (const std::optional<double> rows = snapshot->ObservedRows(oid); rows.has_value()) {
+                const auto n = static_cast<std::uint64_t>(std::llround(*rows));
+                view.rows.push_back({Int(oid), labels.value().Namespace(oid),
+                                     labels.value().Name(oid), Str("relation"), Str("published"),
+                                     Str("observed"), Null(), Int(n), Null(), Null(),
+                                     Bool(locked), Bool(!managed),
+                                     Str(StatisticsDocument(label, nullptr, n))});
+                any = true;
+            }
+        }
+        if (!any && locked) {
+            view.rows.push_back({Int(oid), labels.value().Namespace(oid), labels.value().Name(oid),
+                                 Str("relation"), Str("none"), Null(), Null(), Null(), Null(),
+                                 Null(), Bool(true), Bool(false), Null()});
+        }
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::StatisticsHistoryView() {
+    exec::CatalogView view;
+    // The replaced managed versions (CY-S4, CY-Q12 (a): the last 8 per
+    // relation), oldest first; `RESTORE STATISTICS ... TO VERSION` takes any
+    // of them back. The steward's observed priors never enter it.
+    Define(view, {{"relation_oid", kInt},
+                  {"namespace", kStr},
+                  {"name", kStr},
+                  {"version", kInt},
+                  {"origin", kStr},
+                  {"rows", kInt},
+                  {"leaves", kInt},
+                  {"made_at", kTimestamp}});
+    if (plan_stats_ == nullptr) return view;
+    auto labels = RelationLabels::Read(catalog_, nullptr);
+    if (!labels.ok()) return labels.status();
+    for (const stats::StatisticsSlotView& slot : plan_stats_->managed().Slots()) {
+        for (const stats::RelationStatistic& stat : slot.history) {
+            view.rows.push_back({Int(slot.oid), labels.value().Namespace(slot.oid),
+                                 labels.value().Name(slot.oid), Int(stat.version),
+                                 Str(stats::StatisticsOriginName(stat.origin)), Int(stat.rows),
+                                 Int(stat.leaves), Timestamp(stat.made_us)});
+        }
     }
     return view;
 }
