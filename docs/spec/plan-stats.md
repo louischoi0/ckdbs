@@ -155,6 +155,16 @@ after it, having read no fact (`parser-v2.md` I12).
 `_steward_us_max`, the steward's longest step. `sys.relation_stats` gains `est_rows` (the published prior,
 its band's centre) and `generation`; the planner never reads the view.
 
+**The steward's side table** (DF-S4, `sys-views.md` §6.2c). A seed that
+reads a leaf for a prior also counts that leaf's delete-marked slots, and
+keeps the relation's scaled total in a table of its own under its own
+latch, written by the steward and read by `sys.relation_stats`'
+`est_delete_marked` alone. **It is no fact of §2**: it is in no snapshot,
+it sets no band, a change of it publishes nothing and moves no generation,
+and `exec::EstimateChain` cannot reach it (PS9). It costs the seed no page
+read it did not already make. A dropped relation's entry goes when the
+steward next finds the relation gone.
+
 ## 6a. The order memo (CC-S4)
 
 **PS6.** **Under `join_order = planned` only** (CX-S0: `fixed` and `written`

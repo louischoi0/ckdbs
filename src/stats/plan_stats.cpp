@@ -43,19 +43,21 @@ Status CheckOwned(std::span<std::byte, kPageSize> page, PageType type, catalog::
     return Status::OK();
 }
 
-// A leaf's live slots: read, and not delete-marked - undecided versions as
-// they lie (PS1).
-std::size_t LiveSlots(heap::PageView& leaf) {
+// A leaf's live slots - read, and not delete-marked - and its delete-marked
+// ones, undecided versions as they lie (PS1). A retired slot is neither.
+struct LeafSlots {
+    std::size_t live = 0;
+    std::size_t marked = 0;
+};
+LeafSlots SlotsOf(heap::PageView& leaf) {
     const std::uint16_t slots = leaf.slot_count();
     heap::PageView::Tuple tuple{};
-    std::size_t live = 0;
+    LeafSlots out;
     for (std::uint16_t slot = 0; slot < slots; ++slot) {
-        if (leaf.TryReadTupleIn(slot, slots, tuple) == heap::PageView::TupleRead::kRead &&
-            !tuple.deleted) {
-            ++live;
-        }
+        if (leaf.TryReadTupleIn(slot, slots, tuple) != heap::PageView::TupleRead::kRead) continue;
+        ++(tuple.deleted ? out.marked : out.live);
     }
-    return live;
+    return out;
 }
 
 // The relation's clustered root: its anchor's, else its descriptor.
@@ -81,7 +83,7 @@ struct NodeFacts {
     // The children asked for, by position: up to `kPriorDescents` of them.
     std::array<PageId, PlanStats::kPriorDescents> children{};
     std::size_t nchildren = 0;
-    std::size_t live = 0;  // a leaf's live slots
+    LeafSlots slots;  // a leaf's
 };
 
 // Reads one page. For an internal node `want` children are named: with
@@ -101,7 +103,7 @@ StatusOr<NodeFacts> ReadNode(storage::PageStore& store, PageId id, catalog::Oid 
         if (Status s = CheckOwned(page.value().bytes(), PageType::kBtreeLeaf, oid); !s.ok()) return s;
         facts.leaf = true;
         heap::PageView leaf(page.value().bytes());
-        facts.live = LiveSlots(leaf);
+        facts.slots = SlotsOf(leaf);
         return facts;
     }
     if (Status s = CheckOwned(page.value().bytes(), PageType::kBtreeInternal, oid); !s.ok()) {
@@ -162,7 +164,8 @@ std::size_t LeafRowCapacity(std::uint32_t row_size) noexcept {
 }
 
 StatusOr<double> ReadRelationPrior(storage::PageStore& store, const catalog::TableAccess& access,
-                                   std::size_t& budget) {
+                                   std::size_t& budget,
+                                   std::optional<double>* delete_marked) {
     PageId root = access.desc_page_id;
     if (access.anchor_page_id != kInvalidPageId) {
         if (budget == 0) return SpentBudget();
@@ -178,7 +181,12 @@ StatusOr<double> ReadRelationPrior(storage::PageStore& store, const catalog::Tab
     auto top = ReadNode(store, root, access.oid, budget, PlanStats::kPriorDescents, 0);
     if (!top.ok()) return top.status();
     // Height 1: the root's live slots, exact up to undecided versions.
-    if (top.value().leaf) return static_cast<double>(top.value().live);
+    if (top.value().leaf) {
+        if (delete_marked != nullptr) {
+            *delete_marked = static_cast<double>(top.value().slots.marked);
+        }
+        return static_cast<double>(top.value().slots.live);
+    }
 
     // Height 2 or more, stratified by the root's children (CC-Q6 (c)): a
     // descent under each child the root named - every child when there are
@@ -193,6 +201,7 @@ StatusOr<double> ReadRelationPrior(storage::PageStore& store, const catalog::Tab
     std::size_t rest_done = 0;
     std::optional<double> rightmost;
     double live_sum = 0;
+    double marked_sum = 0;
     std::size_t sampled = 0;
     bool spent = false;
     for (std::size_t c = 0; c < root_facts.nchildren && !spent; ++c) {
@@ -229,7 +238,8 @@ StatusOr<double> ReadRelationPrior(storage::PageStore& store, const catalog::Tab
             continue;
         }
         if (!leaf.value().leaf) continue;  // the tree moved under the read
-        live_sum += static_cast<double>(leaf.value().live);
+        live_sum += static_cast<double>(leaf.value().slots.live);
+        marked_sum += static_cast<double>(leaf.value().slots.marked);
         ++sampled;
     }
     // No leaf read: a later step retries with a whole budget rather than
@@ -253,6 +263,11 @@ StatusOr<double> ReadRelationPrior(storage::PageStore& store, const catalog::Tab
         sampled > 0 ? live_sum / static_cast<double>(sampled)
                     : static_cast<double>(LeafRowCapacity(access.layout.row_size)) *
                           PlanStats::kAssumedLeafFill;
+    // The delete-marked slots of the same leaves, scaled the same way
+    // (DF-S4); left as it was where no leaf was read.
+    if (delete_marked != nullptr && sampled > 0) {
+        *delete_marked = leaves * marked_sum / static_cast<double>(sampled);
+    }
     return leaves * per_leaf;
 }
 
@@ -452,10 +467,13 @@ Status PlanStats::Seed(catalog::Catalog& catalog, storage::PageStore& store, cat
         // Dropped or unreadable: its prior is gone; posteriors naming it are
         // unreachable, since oids are never reissued.
         if (priors_.erase(oid) != 0) dirty_ = true;
+        const LatchGuard hold(&space_latch_);
+        delete_marked_.erase(oid);
         return Status::OK();
     }
     const std::size_t before = budget;
-    auto rows = ReadRelationPrior(store, *access.value(), budget);
+    std::optional<double> marked;  // empty: no leaf sampled
+    auto rows = ReadRelationPrior(store, *access.value(), budget, &marked);
     seed_pages_.fetch_add(before - budget, std::memory_order_relaxed);
     if (!rows.ok()) {
         if (rows.status().code() == StatusCode::kResourceExhausted) return rows.status();
@@ -463,6 +481,15 @@ Status PlanStats::Seed(catalog::Catalog& catalog, storage::PageStore& store, cat
     }
     seeds_.fetch_add(1, std::memory_order_relaxed);
     Prior& prior = priors_[oid];
+    // **The space estimate, beside the prior and never in it** (DF-R8): the
+    // side table is read by `sys.relation_stats` alone; `dirty_` does not
+    // move for it, so no snapshot is published and no generation moves.
+    // After the prior's own entry, so every relation here has one there and
+    // the erase above finds both.
+    if (marked.has_value()) {
+        const LatchGuard hold(&space_latch_);
+        delete_marked_[oid] = static_cast<std::uint64_t>(std::llround(*marked));
+    }
     prior.seeded_ns = now_ns;
     prior.carried = false;
     if (Reband(prior.band, prior.banded, std::max(rows.value(), 1.0))) dirty_ = true;
@@ -554,6 +581,13 @@ Status PlanStats::StewardStep(catalog::Catalog& catalog, storage::PageStore& sto
     // A spent budget is the step's normal end, not a failure.
     if (!seeded.ok() && seeded.code() != StatusCode::kResourceExhausted) return seeded;
     return Status::OK();
+}
+
+std::optional<std::uint64_t> PlanStats::EstDeleteMarked(catalog::Oid oid) const {
+    const LatchGuard hold(&space_latch_);
+    const auto found = delete_marked_.find(oid);
+    if (found == delete_marked_.end()) return std::nullopt;
+    return found->second;
 }
 
 std::shared_ptr<const PlanStatsSnapshot> PlanStats::Current() const {
@@ -735,7 +769,7 @@ Status RelationGather::Step(storage::PageStore& store, std::uint32_t leaves) {
                 std::to_string(oid_) + "; the gather stopped and published nothing");
         }
         heap::PageView leaf(page.value().bytes());
-        rows_ += LiveSlots(leaf);
+        rows_ += SlotsOf(leaf).live;
         ++leaves_;
         next_ = leaf.next_page_id();
     }  // each leaf let go before its sibling is asked for

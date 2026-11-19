@@ -22,8 +22,9 @@
 // an autocommit statement's whose deferred commit a fail-stopped log then
 // aborts (`FinishDeferredCommits`). A `PURGE`'s keys are
 // counted whatever its decide does, its records being no transaction's
-// (PU6). Leaf splits, spills, page counts and delete-marked slots are not
-// here (BO-Q13).
+// (PU6). Spills and page counts are recorded nowhere (BO-Q13); a tree's
+// leaf divisions are `stats/leaf_stats.hpp`'s and a relation's delete-marked
+// rows the planner's steward's (`sys-views.md` §6.2c).
 //
 // **A lock wait is counted where its `sys.lock_waits` row is written**
 // (`LockWaitLog::Record`), from that row's relation, time and outcome, so

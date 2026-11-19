@@ -101,10 +101,10 @@ returns only what it names, so that conjunct is not compared again.
 | `types` | engine | - | a registered type |
 | `patterns` | engine | - | a `sys.patterns` row - a shape ever opted in to Waystone (`waystone-concpets.md` §4): `oid`, `fetch_id` (decimal), `fingerprint_version`, `stmt_class`, `waystone`, `use_count`, `last_seen`, `waystone_root`, `dir_depth`. `waystone` (1 or 0) replaced `origin` and `pinned` at CF-S1b, and is 1 only for a current-version row with the opt-in bit set, so a lapsed row reads 0 and its `fingerprint_version` says why; `use_count`/`last_seen` frozen at 0 since BL-S4; root and depth NULL where the row has no directory |
 | `namespaces` | schema | - | a namespace, `sys` and `public` first |
-| `indexes` | schema | - | a secondary index, its keys, covered columns, height and entries, and how often it served a read (§6.2b) |
+| `indexes` | schema | - | a secondary index, its keys, covered columns, height and entries, how often it served a read (§6.2b) and how often its leaves split (§6.2c) |
 | `fkeys` | schema | - | a declared foreign key, listed where its child is visible |
 | `access_stats` | engine | - | an access shape `(rel, kind, columns)` of `sys.access_stats` |
-| `relation_stats` | engine | - | a relation's Keystone budget, its tree's shape, the join planner's prior, its write activity (§6.2) and its lock waits (§6.2a) |
+| `relation_stats` | engine | - | a relation's Keystone budget, its tree's shape, the join planner's prior, its write activity (§6.2), its lock waits (§6.2a) and its space (§6.2c) |
 | `cabins` | engine | - | a Cabin and its store counters |
 | `assertions` | engine | - | an assertion, whether it is enforcing, and its counters |
 | `transitions` | engine | - | a declared Transition, verbatim |
@@ -362,6 +362,45 @@ writer; the one allocation is a part's first sight of an index. Bounded at
 are dropped and `index_stats_dropped` (`sys.meta`) says so. **Nothing reads
 a count**: no advisor, no automatic drop (DF-R3).
 
+### 6.2c Space (`stats/plan_stats.hpp`, `stats/leaf_stats.hpp`)
+
+**`est_delete_marked`** on `sys.relation_stats`: an estimate of the
+relation's delete-marked rows - rows a `DELETE` marked that no `PURGE` has
+retired, which still take their room. It is the join planner's steward's
+sample (`plan-stats.md` §4): the delete-marked slots of the leaves it read
+for the relation's prior, scaled as it scales their live slots, exact for a
+tree of one leaf. **As old as the relation's last seed that read a leaf**:
+the steward comes back to a relation no sooner than 10 s after its last
+seed, and later the more relations it keeps - it spends 16 page reads a
+1 s step, a relation of height 2 costing about six - and **NULL for a
+relation it has not sampled a leaf of**: it seeds a relation a searched
+join block named, or one whose prior a clean shutdown carried, and no
+other. Undecided
+versions count as they lie, as PS1's do. **It is not a planner fact**
+(DF-R8): it is kept beside the prior in a table this view alone reads, it
+is in no snapshot, and it moves no `generation`.
+
+**`leaf_divisions` and `leaf_compactions`** on `sys.relation_stats`, and
+**`leaf_divisions`** on `sys.indexes`: how often the tree's leaves divided,
+and how often a clustered leaf was compacted in place, since the process
+started. Counted where the act is done, by the oid that owns the tree's
+pages. **A division moves rows**: a full leaf whose new key sorts inside it
+gives half its rows to a new leaf. **An append is not one**: a clustered
+tree grown by a fresh leaf to the right of a full one, nothing moved - what
+a rising key produces - is counted nowhere, so a relation loaded in key
+order reads 0 however many leaves it has. An index leaf has no append
+shape, so every split of one is a division, a build's and a rebuild's
+included. A compaction is the rebuild in place of a full clustered leaf
+over slots a rollback or a `PURGE` retired, taken in place of a division
+(`heap-and-tuple.md` §5); an index leaf is never compacted, no index entry
+being removed, and `sys.indexes` has no such column. A mount's replay
+counts nothing. The store is the process's, as §6's are but §6.2b's -
+the storage layer has no instance to ask - bounded at 8192 trees a core,
+relations and indexes together; past it a new tree's counts are dropped and
+`leaf_stats_dropped` (`sys.meta`) says so. A tree's first division on a
+core allocates its count, under the divided leaf's hold; a failed
+allocation drops the count, never the split.
+
 ### 6.3 `sys.lock_waits` (`stats/lock_wait_log.hpp`)
 
 One row per lock wait that parked, written when it ends: `seq`, `core`,
@@ -565,8 +604,9 @@ stamp. `sys.session_state`'s `view_age_us` names the session (§6.6).
 ## 8. What is not here
 
 - `sys.sessions` (W2: excluded by the operator).
-- Per-relation page counts, leaf splits, spills and delete-marked slots
-  (BO-Q13).
+- Per-relation page counts and spills (BO-Q13). Delete-marked rows and
+  leaf divisions, which BO-Q13 also excluded, are §6.2c's (DF-Q9 (a)).
+- An exact count of a relation's delete-marked rows: §6.2c's is a sample.
 - A cross-core `sys.meta`: every core's fields readable from one session
   needs a field-by-field census of what is readable across cores
   (`known-gaps.md`).

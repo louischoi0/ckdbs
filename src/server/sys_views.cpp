@@ -27,6 +27,7 @@
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/stats/checkpoint_log.hpp"
 #include "kds/stats/optimizer_signals.hpp"
+#include "kds/stats/leaf_stats.hpp"
 #include "kds/stats/refusal_stats.hpp"
 #include "kds/stats/txn_stats.hpp"
 #include "kds/stats/relation_stats.hpp"
@@ -568,11 +569,16 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
                   {"ranges", kInt},
                   {"entries_scanned", kInt},
                   {"rows_resolved", kInt},
-                  {"last_used", kTimestamp}});
+                  {"last_used", kTimestamp},
+                  {"leaf_divisions", kInt}});
     // How often each index served a read since the instance started
     // (DF-S3, `stats/index_stats.hpp` says what counts): every core's part
     // summed, 0 for an index no read has used, `last_used` NULL then.
     const std::unordered_map<catalog::Oid, stats::IndexUse> uses = index_stats_->Snapshot();
+    // The leaf splits of each index's tree since the process started
+    // (DF-S4, `stats/leaf_stats.hpp`).
+    const std::unordered_map<catalog::Oid, stats::LeafActivity> leaf_acts =
+        stats::LeafStats::Snapshot();
     auto rows = catalog_.ListIndexes(view_of);
     if (!rows.ok()) return rows.status();
     auto labels = RelationLabels::Read(catalog_, nullptr);
@@ -605,6 +611,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
         auto entries = index::IndexEntryCount(page_store_, root, layout);
         const auto used = uses.find(row.index_oid);
         const stats::IndexUse use = used == uses.end() ? stats::IndexUse{} : used->second;
+        const auto divided = leaf_acts.find(row.index_oid);
         view.rows.push_back(
             {Int(row.index_oid), Str(catalog::NameView(row.name)), Int(row.table_oid),
              labels.value().Namespace(row.table_oid), labels.value().Name(row.table_oid), Str(columns(row.key_cols.data(), row.nkeys)),
@@ -614,7 +621,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
              entries.ok() ? Int(entries.value()) : Null(),
              Int((row.flags & catalog::kIndexFlagUnique) != 0 ? 1 : 0), Int(use.probes),
              Int(use.ranges), Int(use.entries_scanned), Int(use.rows_resolved),
-             use.last_used_us == 0 ? Null() : Timestamp(use.last_used_us)});
+             use.last_used_us == 0 ? Null() : Timestamp(use.last_used_us),
+             Int(divided == leaf_acts.end() ? 0 : divided->second.divisions)});
     }
     return view;
 }
@@ -711,7 +719,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
                   {"lock_waits", kInt},
                   {"lock_wait_us", kInt},
                   {"lock_deadlocks", kInt},
-                  {"lock_fault_nets", kInt}});
+                  {"lock_fault_nets", kInt},
+                  {"est_delete_marked", kInt},
+                  {"leaf_divisions", kInt},
+                  {"leaf_compactions", kInt}});
     // The join planner's published prior and the snapshot it is from
     // (plan-stats.md §6): NULL where none is published. Read here for the
     // operator; the planner never reads this view.
@@ -723,6 +734,17 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
     };
     const std::unordered_map<catalog::Oid, stats::RelationActivity> activity =
         stats::RelationStats::Snapshot();
+    // Space (DF-S4): the steward's sampled delete-marked rows - NULL where
+    // no seed has sampled a leaf of the relation, and never a planner fact
+    // (DF-R8) - and the clustered tree's leaf divisions and in-place
+    // compactions since the process started.
+    const auto est_delete_marked = [this](catalog::Oid oid) {
+        if (plan_stats_ == nullptr) return Null();
+        const std::optional<std::uint64_t> marked = plan_stats_->EstDeleteMarked(oid);
+        return marked.has_value() ? Int(*marked) : Null();
+    };
+    const std::unordered_map<catalog::Oid, stats::LeafActivity> leaf_acts =
+        stats::LeafStats::Snapshot();
     auto tables = catalog_.ListTables();
     if (!tables.ok()) return tables.status();
     auto labels = RelationLabels::Read(catalog_, nullptr);
@@ -750,6 +772,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
         const auto counted = activity.find(obj.oid);
         const stats::RelationActivity a =
             counted == activity.end() ? stats::RelationActivity{} : counted->second;
+        const auto shaped = leaf_acts.find(obj.oid);
+        const stats::LeafActivity leaf_act =
+            shaped == leaf_acts.end() ? stats::LeafActivity{} : shaped->second;
         view.rows.push_back({Int(obj.oid), labels.value().Spelling(obj.namespace_oid),
                              Str(catalog::NameView(obj.name)),
                              Int(row.value().next_id), Int(budget.issued), Int(budget.remaining),
@@ -759,7 +784,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
                                                       : Null(),
                              Int(a.inserts), Int(a.updates), Int(a.deletes), Int(a.purged),
                              Int(a.lock_waits), Int(a.lock_wait_us), Int(a.lock_deadlocks),
-                             Int(a.lock_fault_nets)});
+                             Int(a.lock_fault_nets), est_delete_marked(obj.oid),
+                             Int(leaf_act.divisions), Int(leaf_act.compactions)});
     }
     return view;
 }

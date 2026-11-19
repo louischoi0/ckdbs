@@ -2047,6 +2047,16 @@ newline protocol.
   `lock_waits`, `lock_wait_us`, `lock_deadlocks`, `lock_fault_nets`, the
   lock waits on the relation since the instance started, which keep
   counting after `sys.lock_waits` has overwritten the rows.
+- `sys.relation_stats`' space columns: `est_delete_marked`, an estimate
+  of the rows a `DELETE` marked and no `PURGE` has retired - sampled, ten
+  seconds old or more (the more relations the engine samples, the older),
+  and NULL for a relation no join has made the engine sample;
+  and `leaf_divisions` and `leaf_compactions`, how often the relation's
+  leaves divided or were compacted in place since the server process
+  started. A
+  table loaded in rising key order grows by appending leaves and reads 0
+  divisions; keys arriving inside full leaves divide them. `sys.indexes`
+  has `leaf_divisions` too.
 - `sys.indexes`' usage columns: `probes` and `ranges` (the times an
   equality or a range read walked the index), `entries_scanned`,
   `rows_resolved` and `last_used` (NULL while no read has used it). An
@@ -2063,7 +2073,8 @@ newline protocol.
 
 These seven are kept in memory: a restart or a restore empties them. Each is
 bounded per core, and the rows it gives up are counted in `sys.meta`
-(`statement_stats_dropped`, `relation_stats_dropped`, `lock_waits_*`,
+(`statement_stats_dropped`, `relation_stats_dropped`, `index_stats_dropped`,
+`leaf_stats_dropped`, `lock_waits_*`,
 `checkpoints_*`); `sys.refusal_stats` is bounded by the error codes,
 `sys.txn_histogram` by its buckets, and neither gives up any.
 

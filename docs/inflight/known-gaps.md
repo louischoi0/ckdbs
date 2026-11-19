@@ -1938,6 +1938,35 @@ Owned by `docs/spec/sys-views.md` §6.2a and §6.2b.
   index and walked its relation instead (`indexes = off`, an index dropped
   under a compiled chain); the two-core cell has not run under `tsan`.
 
+### Space (DF-S4)
+
+Verified on `da-q8-memory-bound-key` (branch
+`worktree-df-statistics-coverage`) at the commit that adds this section.
+Owned by `docs/spec/sys-views.md` §6.2c and `docs/spec/plan-stats.md` §6.
+
+- **`est_delete_marked` exists only for a relation the steward seeds**: one
+  a searched join block named, or whose prior a clean shutdown carried. A
+  relation read and written by single-relation statements alone reads NULL
+  for good. Nothing gathers it on request; `GATHER STATISTICS` counts live
+  rows and does not fill it.
+- **It is a sample of at most four leaves** above height 1, scaled by the
+  prior's leaf count: deletes clustered in leaves the sample missed read 0,
+  and ones clustered in a sampled leaf read many times their number.
+- **An append is counted nowhere**, so `leaf_divisions` says nothing of how
+  fast a tree grows; `leaves` does.
+- **The count is taken under the divided leaf's exclusive hold**: a latch
+  of the store's and, at a tree's first division on a core, an allocation
+  (DF-Q22 (a)). A reader of the view holds that latch for its copy of the
+  part, which allocates, and a division on that core waits for it. Not
+  measured.
+- **`est_delete_marked` can be older than the relation's last seed**: a
+  seed that read no leaf keeps the estimate the one before it made.
+- **`leaf_divisions` and `leaf_compactions` are the process's**, not the
+  instance's: an in-process restart keeps them, as it keeps the BO stores.
+- **No cell** samples a tree of height 2 or more for delete-marked rows,
+  counts a division on a second core, drives a division that fails, or
+  reaches the store's bound.
+
 ## Wait events and ASH (CJ)
 
 Verified on `cj-wait-events-ash` at the milestone's close

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "kds/base/contention.hpp"
+#include "kds/stats/leaf_stats.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/page_header.hpp"
@@ -1025,7 +1026,10 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     {
         auto compacted = CompactLeafAndInsert(descent, leaf_id, id, payload, trx_id);
         if (!compacted.ok()) return compacted.status();
-        if (compacted.value().has_value()) return std::move(*compacted.value());
+        if (compacted.value().has_value()) {
+            stats::LeafStats::CountCompaction(owner_oid);  // DF-S4
+            return std::move(*compacted.value());
+        }
     }
 
     //
@@ -1067,7 +1071,10 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     if (!appends) {
         auto divided = SplitLeafAndInsert(claims.value(), descent, parents.value(), leaf_id, id,
                                           payload, trx_id, owner_oid);
-        if (divided.ok()) hand_out(divided.value());
+        if (divided.ok()) {
+            stats::LeafStats::CountDivision(owner_oid);  // DF-S4
+            hand_out(divided.value());
+        }
         return divided;
     }
 

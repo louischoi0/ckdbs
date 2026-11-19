@@ -140,6 +140,7 @@ add_executable(kds_tests
     refusal_stats_test.cpp
     txn_stats_test.cpp
     index_stats_test.cpp
+    space_stats_test.cpp
     decay_test.cpp
     optimizer_signals_test.cpp
     cabin_optimizer_test.cpp

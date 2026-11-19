@@ -10,6 +10,7 @@
 #include "kds/txn/lock_table.hpp"
 
 #include "kds/sched/checkpoint_census.hpp"
+#include "kds/stats/leaf_stats.hpp"
 #include "kds/stats/refusal_stats.hpp"
 #include "kds/sched/core_load.hpp"
 #include "kds/base/contention.hpp"
@@ -2527,6 +2528,10 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // full part could not take, whose counts the view lacks.
     section("index_stats");
     os << " index_stats_dropped=" << index_stats_->Dropped();
+    // **The leaf division and compaction counts** (DF-S4), the process's:
+    // trees a full part could not take.
+    section("leaf_stats");
+    os << " leaf_stats_dropped=" << stats::LeafStats::Dropped();
     // **`sys.checkpoints`' store** (BO-S7), the instance's, as `lock_waits`'
     // above: what the view no longer holds, and why.
     section("checkpoints");

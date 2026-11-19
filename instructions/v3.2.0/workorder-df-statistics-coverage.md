@@ -13,7 +13,10 @@ measured, pushed with the hook skipped on the operator's word (§40).
 overhead not measured, not pushed. **DF-S3 is done** (§7): part C - index
 usage and a relation's lock waits; the access shape's two columns owed to
 DA - reviewed, the full suite 0 failed of 4773, overhead not measured, not
-pushed. **The rest of DF runs on the operator's
+pushed. **DF-S4 is done** (§7): part D - a relation's delete-marked
+estimate and its leaf divisions and compactions - reviewed, the full suite
+0 failed of 4777, overhead not measured, not pushed. **The rest of DF runs
+on the operator's
 standing go-ahead of 2026-11-19** (§6 there, go-ahead-achieving-milestone):
 an item a stage raises is adopted as CLA proposes it and recorded in §4 as
 adopted on that word, never as the operator's own mark. Written on
@@ -369,6 +372,8 @@ operator's own mark.** (a) is CLA's proposal in each.
 | DF-Q19 | Where an explicit transaction's life ends (DF-S2). | where its end is handled - the `COMMIT`, the `ROLLBACK`, the listener's rollback - so a parked `strict` commit's wait for its sync is not in it | (b) at the commit's publish, a second site and a stamp carried across the park |
 | DF-Q20 | A KWP load stream's ends (DF-S2). Its listener dispatches `ROLLBACK` itself at five sites. | its own abort is `rollbacks`; a failed chunk and a frame not legal inside a load are `aborts`; a closed connection and a detaching listener are `close_rollbacks` | (b) all five the client's `rollbacks` |
 | DF-Q21 | What `probes` and `ranges` count (DF-S3). §2 names the columns and not their unit. | the times a step walked its index between one pair of bounds, counted where the index is read (`StepStats::index_walks`): once a row of the outer for a step under another, once a value for a value list, and nothing for a step that named an index and walked its relation instead | (b) the step's openings, which credit an index the run never read (`indexes = off`, an index dropped under a compiled chain) and count a value list of N values as one; (c) recorded statements, one a statement whatever it did |
+| DF-Q22 | The allocation a leaf count makes (DF-S4). DF-R2 admits no allocation on a statement's path but a store's own and `stats::IndexStats`' first sight of an index; the leaf counts' store is new, and its first division of a tree on a core allocates under the divided leaf's hold. | DF-R2's first-sight exception is read to reach this store: one allocation a tree a core, at an act that already claims and formats a page, and a failure drops the count, never the split | (b) a relation's counts folded into `stats::RelationStats`, whose entry a write statement makes anyway, an index's kept apart; (c) a fixed table of words, no allocation, a bound that drops sooner |
+| DF-Q23 | What `leaf_divisions` counts, and on which views (DF-S4). §2 names divisions and compactions for both `sys.relation_stats` and `sys.indexes`. | a division is a full leaf giving half its rows to a new one; a clustered tree's append of a fresh leaf, nothing moved, is not one and is counted nowhere; `sys.indexes` has `leaf_divisions` alone, an index leaf being never compacted - a column that could only read 0 is not shown | (b) appends counted as divisions; (c) a `leaf_appends` column beside them; (d) `leaf_compactions` on `sys.indexes`, always 0 |
 
 ## 5. Stages
 
@@ -1109,3 +1114,79 @@ index-served read pays the fold's latch once an index step, and every
 recorded `SELECT` the walk of its steps. **Documents**: `sys-views.md`,
 `index.md`, `manual/sql/sql.md`, `known-gaps.md` and `CLAUDE.md`'s
 observability row. **Next: DF-S4**, part D.
+
+### DF-S4 - part D, 2026-11-19
+
+On the same worktree and branch, from `83aad532`, on the operator's
+standing go-ahead (`raft-marks-2026-11-19.md` §6), under DF-Q9 (a).
+
+**What is built**, as `docs/spec/sys-views.md` §6.2c and
+`docs/spec/plan-stats.md` §6 now state it. `sys.relation_stats` has
+`est_delete_marked`, `leaf_divisions` and `leaf_compactions`;
+`sys.indexes` has `leaf_divisions` (DF-Q23 (a)). §8 of `sys-views.md` keeps
+BO-Q13's exclusion for page counts and spills alone.
+
+**How.**
+
+- **The estimate.** The steward's read of a leaf for a prior (`SlotsOf`)
+  counts its delete-marked slots beside its live ones;
+  `ReadRelationPrior` hands the scaled total out beside the prior, and
+  `PlanStats::Seed` keeps it in a side table of its own under a latch of its
+  own, which `PlanStats::EstDeleteMarked` and the view alone read. The seed
+  reads no page it did not read before. **DF-R8 holds by construction**:
+  the table is written after the prior's own entry and beside it, sets no
+  `dirty_`, is in no snapshot, export or load, and no plan can reach it.
+- **The counts.** `stats::LeafStats`, the process's, on `stats::OidParts`,
+  keyed by the oid that owns the tree's pages and counted in the storage
+  layer: a clustered division and a compaction in `PlaceUnderHold`
+  (`btree.cpp`) once the act returned, an index's leaf split in
+  `IndexInsert` (`index_tree.cpp`) once its entries moved. The append path
+  counts nothing. A mount's replay applies images and reaches neither site.
+
+**Reviewed by `critics-developer`**, report only, on the uncommitted tree.
+It proved DF-R8 path by path - the one writer, the one reader, every
+publish, export and load - that the prior's value is unchanged in every
+branch and `GATHER`'s leaf count the same number, the scaling in each
+branch of the read, the two latches never nested, and each count site
+against its callers, the redo and the undo. **It found no defect in the
+code.** **Applied**: the store's header claimed a division that fails
+after it began is counted, which is true of an index's and false of a
+clustered one's - reworded to what each site does; the freshness the
+documents claimed ("about every 10 s", "a few seconds old") is the
+steward's floor and not its period - restated with the budget that sets
+it; "the process's, as §6's others are" was false of the instance-owned
+index store; the manual said "since the instance started"; the estimate is
+now written after the prior's entry, so an allocation failure between them
+cannot leave an estimate no erase finds; the out-parameter is an optional
+and not a sentinel; `NodeFacts` holds the leaf's counts once. **DF-Q22**,
+which the review raised, is in §4. **Not taken**: folding a relation's
+counts into `RelationStats` (DF-Q22 (b)). **Left unread by the review**:
+`TryReadTupleIn`'s reading of a retired slot, `PromoteSeparator` and
+`SecureParents`, the `REINDEX` and online-build paths beyond their use of
+`IndexInsert`, and whether `InitTableAccess` fails for a tombstoned
+relation, which the drop's cell asserts.
+
+**Tests.** `tests/space_stats_test.cpp`: a relation's estimate NULL before
+a seed, exact for one leaf, 3 after three rows are delete-marked with the
+planner's generation unmoved (the cell fails if the estimate sets
+`dirty_`), 0 after a `PURGE` and a later seed, gone with a dropped
+relation; a relation of 600 rising keys at 0 divisions and 1 after a key
+arrives inside its full first leaf; a full leaf with a purged slot
+compacted and not divided; an index's leaf splits its own and not its
+relation's, a rebuild's counted to the new oid. **Owed** (`known-gaps.md`):
+an estimate over a tree of height 2 or more, a division on a second core,
+a division that fails, the store's bound.
+
+**Suite.** The full suite - `ctest -LE bs-nightly` - 0 failed of 4777 on
+the tree this stage's commit holds (two disabled and two skipped). **The
+run before the review's fixes failed one cell of 4777**,
+`RowWaitCeilingRigTest.AParentDeleteWaitsForTheLiftOfAMarkerOnItsOwnCore`,
+at its 1 s bound on the marker's lift while the review ran beside the
+suite; it passed 30 of 30 alone on the same binary and in the run after.
+It reads no statistic this milestone adds; no entry is filed, and it is
+named here so a second failure is not met as a first. **Overhead not
+measured; measured at the milestone's close** (DF-Q10 (a)): the stage adds
+nothing to a point statement's path - a latch at a division, a count in
+the steward's leaf read. **Documents**: `sys-views.md`, `plan-stats.md`,
+`manual/sql/sql.md`, `known-gaps.md`, `CLAUDE.md`'s observability row.
+**Next: DF-S5**, the close.
