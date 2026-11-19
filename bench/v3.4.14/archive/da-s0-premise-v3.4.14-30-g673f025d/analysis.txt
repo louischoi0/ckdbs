@@ -1,0 +1,27 @@
+== select cores=1
+on cpu/stmt [22.99, 22.9, 22.24, 22.79, 22.82, 22.6] mean 22.72 range 0.75
+on qps [23369, 23506, 24097, 23734, 23482, 23603] mean 23632 range 728
+  pcts(median of lifetimes) {'p0': 34.0, 'p25': 39.0, 'p50': 40.0, 'p90': 48.0, 'p99': 58.0} stmts 1135205 bad 0
+off cpu/stmt [21.9, 22.14, 22.66, 22.04, 21.87, 22.1] mean 22.12 range 0.78
+off qps [24295, 24257, 23429, 24198, 24214, 23962] mean 24059 range 865
+  pcts(median of lifetimes) {'p0': 34.0, 'p25': 38.0, 'p50': 39.0, 'p90': 44.5, 'p99': 55.0} stmts 1155728 bad 0
+paired cpu delta on-off [1.08, 0.76, -0.42, 0.75, 0.94, 0.5] mean 0.60 on>off in 5 /6
+paired qps delta % [-3.8, -3.1, 2.9, -1.9, -3.0, -1.5] mean -1.8
+== select cores=8
+on cpu/stmt [41.75, 41.08, 42.62, 42.71, 42.68, 42.2] mean 42.18 range 1.63
+on qps [98346, 100446, 96248, 95539, 98260, 97479] mean 97720 range 4907
+  pcts(median of lifetimes) {'p0': 31.0, 'p25': 95.5, 'p50': 137.0, 'p90': 268.5, 'p99': 534.5} stmts 4703857 bad 0
+off cpu/stmt [33.89, 33.51, 34.71, 33.95, 33.54, 34.3] mean 33.98 range 1.20
+off qps [112527, 111932, 109621, 108537, 110386, 110568] mean 110595 range 3990
+  pcts(median of lifetimes) {'p0': 29.0, 'p25': 85.5, 'p50': 123.0, 'p90': 236.5, 'p99': 420.0} stmts 5323378 bad 0
+paired cpu delta on-off [7.87, 7.57, 7.91, 8.76, 9.14, 7.91] mean 8.19 on>off in 6 /6
+paired qps delta % [-12.6, -10.3, -12.2, -12.0, -11.0, -11.8] mean -11.6
+== fk cores=1
+on cpu/stmt [22.87, 23.3, 22.81, 22.99, 23.06, 22.99] mean 23.00 range 0.49
+on qps [23652, 23161, 23439, 23357, 23347, 23197] mean 23359 range 490
+  pcts(median of lifetimes) {'p0': 32.0, 'p25': 37.0, 'p50': 38.0, 'p90': 44.0, 'p99': 61.5} stmts 1122081 bad 0
+off cpu/stmt [22.5, 22.98, 22.93, 23.1, 23.49, 22.52] mean 22.92 range 0.98
+off qps [23813, 23212, 23317, 23197, 22814, 23574] mean 23321 range 999
+  pcts(median of lifetimes) {'p0': 31.5, 'p25': 37.0, 'p50': 38.0, 'p90': 45.0, 'p99': 64.5} stmts 1120279 bad 0
+paired cpu delta on-off [0.37, 0.32, -0.12, -0.1, -0.43, 0.47] mean 0.08 on>off in 3 /6
+paired qps delta % [-0.7, -0.2, 0.5, 0.7, 2.3, -1.6] mean 0.2

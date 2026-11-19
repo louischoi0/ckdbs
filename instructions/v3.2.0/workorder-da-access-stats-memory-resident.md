@@ -1,6 +1,14 @@
 # Work order DA - access statistics kept, their storage moved to memory: `sys.access_stats` as a memory-resident view
 
-Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
+Status: **OPENED 2026-11-19** on worktree `da-access-stats-memory-resident`
+from `origin/main` at `673f025d` (`v3.4.14-30-g673f025d`), on the
+operator's standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone,
+`raft-marks-2026-11-19.md` §15): every unmarked item adopted as CLA
+proposed, DA-Q1 and DA-Q6 as revised against the tree, and DA-Q9..Q12
+added and adopted (§4). None is the operator's own mark but DA-Q8 (a).
+The stage log is §7.
+
+**Written 2026-11-18.** Written on worktree
 `cz-access-stats-memory-resident` from `3b3f4851` (`v3.4.12-25-g3b3f4851`)
 on the operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §18).
 
@@ -312,8 +320,11 @@ Binding once DA opens.
 ## 4. Items for the operator (DA-Q), CLA's proposals
 
 **DA-Q8 is marked (a), the operator's mark of 2026-11-18**
-(`raft-marks-2026-11-18.md` §28). No other item is marked. (a) is CLA's
-proposal in each.
+(`raft-marks-2026-11-18.md` §28). **Every other item is adopted (a) on the
+operator's standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone,
+`raft-marks-2026-11-19.md` §15)**, none the operator's own mark; DA-Q1 and
+DA-Q6 as revised below the table, and DA-Q9..Q12 added at DA-S0 and
+DA-S1. (a) is CLA's proposal in each.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -326,6 +337,22 @@ proposal in each.
 | DA-Q6 | `rules.md` §5's exception, an operator-ratified rule (CR6). | deleted: every catalog write is logged, with no exception, and `ddl-transactional.md` §7 loses its paragraph | (b) kept with no member |
 | DA-Q7 | The measurement. | DA-S0 prices today's write - a point read at `cores` 1 and 8, `access_statistics` on against off, interleaved - and the close repeats those cells before against after, with an `INSERT` into a relation with a foreign key. The bar: no cell slower outside its own spread. The standing budget | (b) the close alone |
 | DA-Q8 | **Marked (a).** Whether the configuration sets the store's memory. As written the bound is a compile-time count (DA-Q3) and no key sizes it. Read at `a5581343`: none of BO's four stores has a key (`statement_stats.hpp:60`, `relation_stats.hpp:61`, `lock_wait_log.hpp:64`, `checkpoint_log.hpp:45`), and the one per-core memory key in the tree is `ash_ring_bytes_per_core` (`expeditor.hpp:287`, `expeditor.cpp:387`). | **a boot key in bytes for each core's part, and the part a flat table of fixed-size slots**, so a part's table allocates at most the bytes written; a node map's allocation is not bounded by a value written in bytes | (b) a boot key in shapes a core, exact over any structure; (c) no key, the constant kept as BO's stores keep theirs |
+| DA-Q9 | *Added at DA-S0.* The mount's discard of page 11's chain, and what keeps naming page 11 until DA-S3. | **deleted in DA-S1**: S0 found no walker but `RetireDeleteMarks`, which already passes page 11 by (`IsUnloggedCatalogRelation`, `catalog.cpp:1119`), so with no statement writing the page nothing reads its chain; page 11 stays in `IsUnloggedCatalogRelation` and in DB's unlogged registration (`RegisterUnloggedClasses`) until DA-S3, because a volume a pre-DA build wrote may hold a damaged chain the sweep must still pass by, and bootstrap still makes the page | (b) the discard kept until DA-S3 |
+| DA-Q10 | *Added at DA-S1* (§4's "left to DA-S1"). When a part's table is allocated. | **at the part's first record**, a failure dropping and counting every record and never retried: a core that records nothing, the `access_statistics = off` instance and a dispatcher's own fallback store (replaced by the instance's) allocate nothing | (b) at the core's start, a failure refusing the boot |
+| DA-Q11 | *Added at DA-S1.* The table's probing and a forget's deletion. | linear probing from a 64-bit mix of the key, modulo the slot count, **at most half the slots live** (a part admits `slots / 2` shapes), and a forget deletes by **backward shift**, so no tombstone counts against the bound and a dropped shape's walk stays short | (b) a probe cap with tombstones |
+| DA-Q12 | *Added at DA-S1.* The key's name, range and report. | `access_stats_bytes_per_core`, in `[80, 256 MiB]` (80 bytes admits one shape; `0` refused - `access_statistics` stays the switch), default 327,680 (4,096 shapes a core at 40-byte slots); a value not a whole number of slots admits the slots that fit; `sys.meta` reports `access_stats_dropped` and `access_stats_shapes_per_core` | (b) the range unbounded above |
+
+**Adopted as revised against the tree** (the skill's rule: a proposal's
+premise is re-read before it is adopted).
+
+- **DA-Q1 (a)**: "the first bump any order makes - CY-S1 at 36" is past
+  twice: CY-S1a moved the superblock to 36 and CX-S1a to 37 (`superblock.hpp:247`),
+  neither carrying DA-S3. Adopted as **the first bump after 37 any order
+  makes**, DA-S3's one commit merged into that order's branch.
+- **DA-Q6 (a)**: "deleted: every catalog write is logged" no longer holds -
+  CY-S1a made `sys.statistics` a second unlogged catalog relation under
+  CR6, which DA does not touch. Adopted as **narrowed**: the exception's
+  one member is `sys.statistics`, and `ddl-transactional.md` §7 says so.
 
 **What DA-Q8 (a) settles, and what it leaves**
 (`raft-marks-2026-11-18.md` §28, which carries the words and CLA's reasons).
@@ -468,3 +495,56 @@ restatements of the conversation were cut. **Not taken as a fix**: the
 review's choice between allocating at core start and at the first row -
 left to DA-S1 with both stated, since it changes what a statement's path
 may do.
+
+### Opened 2026-11-19
+
+On worktree `da-access-stats-memory-resident` from `origin/main` at
+`673f025d` (`v3.4.14-30-g673f025d`), on the operator's standing go-ahead
+of 2026-11-19 (go-ahead-achieving-milestone, `raft-marks-2026-11-19.md`
+§15). DA-Q0, DA-Q2..Q5 and DA-Q7 adopted (a); DA-Q1 (a) and DA-Q6 (a)
+adopted as revised against the tree (§4, below the table); DA-Q9..Q12
+added and adopted (a). None is the operator's own mark but DA-Q8 (a).
+
+### DA-S0 - census and premise, 2026-11-19
+
+No engine code. §1.3 re-read at `673f025d`; what moved since `3b3f4851`:
+
+- **The superblock is 37** (`superblock.hpp:247`, CX-S1a), not 35 or 36.
+- **DB added a third holder of page 11's identity**: `RegisterUnloggedClasses`
+  (`catalog.cpp`) registers oid 130 and page 11 with the store so a write
+  fetch logs no full-page image for them. Nothing it does reads the chain.
+- **The four reads §5 asks for**:
+  1. *Whether every record runs inside its statement's borrow* (DA-R5): a
+     `SELECT`'s record runs at its successful end inside `SelectRun`
+     (`command_dispatcher.cpp`, `RecordExecution`), under the statement's
+     borrow; but a borrow the table refuses leaves the reader reading on
+     (`txn.md` §5, "never refused, never waiting"), so an `ADD COLUMN`'s
+     `X` does not order every such reader. **DA-R5 stays as written**: the
+     forget's writes are ordered, the statements are not.
+  2. *Every walker of page 11's chain besides `RetireDeleteMarks`*: none.
+     `RetireDeleteMarks` already passes it by (`IsUnloggedCatalogRelation`),
+     `ScanAll` in `ListAccessStats` and the mount's `DiscardAccessStats`
+     are the only others, and DA-S1 deletes both. So the discard goes in
+     DA-S1 (DA-Q9 (a)).
+  3. *Whether the cores' `last_seen` readings are one clock's*: yes - every
+     core's dispatcher reads `NowNs()` off the clock its runtime is handed,
+     the expeditor's one `clock_` (`core_runtime.cpp`); the merge's
+     "latest" is therefore well defined.
+  4. *Tests pinning the view's row order or a count of catalog rows*: no
+     cell reads `sys.access_stats`' row order; the catalog row counts do
+     not move, since page 11's bootstrap stays until DA-S3. Settled by
+     DA-S1's suite.
+- **DA-Q7's cell** (`bench/v3.4.14/results-da-s0-premise-v3.4.14-30-g673f025d.md`,
+  `ck-tester`, Release, six lifetimes an arm, interleaved, 9 min of the
+  20): `access_statistics` on against off costs **+0.60 us of server CPU a
+  point `SELECT` at `cores = 1`** (5 of 6 rounds, inside the 0.75-0.78 us
+  same-binary spread, BO's 0.35-0.52 us order), **+8.19 us and -11.6 % of
+  throughput at `cores = 8`** (6 of 6, about five times the spread - the
+  page-11 exclusive hold §1.1 named as unmeasured), and nothing on an
+  `INSERT` into a child relation with a foreign key (+0.08 us, 3 of 6).
+  **So §0's "a smaller engine, not a faster one" holds at one core and not
+  above it**: the close's bar stays DA-Q7 (a)'s "no cell slower", and a
+  gain at `cores = 8` is reported, not required.
+
+No item goes back to the operator: nothing read needs a fact only the
+operator holds. Overhead not measured; measured at the milestone's close.
