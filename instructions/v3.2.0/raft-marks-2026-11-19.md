@@ -58,3 +58,12 @@ took under them.
 | **Mark** | None. **DC goes to `main` with `--no-verify`**: a `--no-ff` merge of `worktree-dc-select-for-update` onto `origin/main` at `8e7c820f`, which had not moved since DC opened from it, so the merged tree is the work branch's and no build input differs from the one the suite ran on. **The hook was skipped.** The suite it would have run was executed on these build inputs before the push: 0 failed of 4794 at `7e18598d` (the commits after it are bench and documents only). Not executed for DC: a `tsan` build and the `bs-nightly` run. The overhead was measured at the close (`bench/v3.4.13/results-dc-close-v3.4.13-14-gcd80d31d.md`, `bench/v3.4.13/results-dc-close-v3.4.13-16-g7e18598d.md`) |
 | **Does not settle** | a tag, a version - no version is named by this word and no tag is made; the options the standing go-ahead did not take (DC-Q0 (b), DC-Q1 (b)/(c), DC-Q3 (b), DC-Q5 (b)/(c), DC-Q6 (b)/(c), DC-Q7 (b), DC-Q12 (b)), which stay open to the operator's own mark; the point `SELECT`'s 0.1 us lean, neither shown nor excluded; CR, written and not opened |
 | **Recorded at** | this file; the DC order's header and §7; the DC row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 7. v3.4.14 named and tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.14"* - after CLA's report that DC landed on `main` at `35086008` with the hook skipped and the full suite 0 failed of 4794 on its build inputs (§6) |
+| **Mark** | **The version of record is `v3.4.14`**, the operator's own word: an annotated tag on `main` at `35086008`, pushed. Its message states what is built since `v3.4.13` (DC, and CZ's C1), that the superblock did not move, the suite, DC's close measurement, and the gaps that bound it - first that `FOR UPDATE` takes `U`, PostgreSQL's `FOR NO KEY UPDATE` |
+| **Does not settle** | anything after `35086008`; the options DC's standing go-ahead did not take; this record's own push - `CLAUDE.md`'s line and this section are committed on `worktree-dc-select-for-update` and wait for a push word |
+| **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
