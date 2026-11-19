@@ -286,6 +286,17 @@ private:
     // finds. Its own stream, so `write_list_rng_` draws what it drew.
     Rng write_conjunct_rng_;
     std::string KeyPredicate(std::uint64_t key);
+    // **A locking read** (DC, `instructions/v3.2.0/workorder-dc-select-for-
+    // update.md`), with the shapes only: inside a `READ WRITE` transaction,
+    // 40 in 100 of the stream's reads by tuple key, by range and by `v`
+    // carry `FOR UPDATE`. The op's kind and fields are unchanged, so the
+    // oracle's expectation is the plain read's - one session runs the
+    // stream, so nothing is ever held against it - and what differs is the
+    // path: the write's row walk, a claim on every row returned, and the
+    // claims' release at the transaction's decide or at a crash. Its own
+    // stream, drawn after the read drew, for `key_list_rng_`'s reason.
+    Rng lock_rng_;
+    void MaybeLock(Op& op);
     // p0, c0, a0: their own id-guessing counters (`Table::inserted`).
     std::vector<Table> constrained_;
     std::size_t constrained_ddl_ = 0;

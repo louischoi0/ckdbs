@@ -176,11 +176,21 @@ constexpr std::uint64_t kKeys = 6;
 constexpr int kSessions = 4;
 
 struct Planned {
-    enum Kind : std::uint8_t { kReadPoint, kReadRange, kAppendPoint, kAppendRange } kind;
+    // `kRmwPoint` is a read-modify-write cycle (DC): the key's list read in
+    // one statement, and written back whole with `value` after it in the
+    // next - a value computed from a read, where an append is an expression
+    // over the row.
+    enum Kind : std::uint8_t { kReadPoint, kReadRange, kAppendPoint, kAppendRange, kRmwPoint } kind;
     std::uint64_t lo = 0;
     std::uint64_t hi = 0;  // == lo for a point
     std::uint64_t value = 0;
+    bool locked = false;  // the read carries `FOR UPDATE`
 };
+
+// How a history's read-modify-write cycles read: none drawn, a plain read,
+// or a locking one (`SELECT ... FOR UPDATE`, with some plain reads locked
+// too).
+enum class Rmw : std::uint8_t { kNone, kPlainRead, kLockingRead };
 
 struct SessionRun {
     Session session;
@@ -241,7 +251,8 @@ std::string SqlOf(const Planned& p) {
     switch (p.kind) {
         case Planned::kReadPoint:
         case Planned::kReadRange:
-            return "SELECT k, val FROM kv WHERE " + where;
+        case Planned::kRmwPoint:  // its read; `RunSession` builds its write
+            return "SELECT k, val FROM kv WHERE " + where + (p.locked ? " FOR UPDATE" : "");
         case Planned::kAppendPoint:
         case Planned::kAppendRange:
             return "UPDATE kv SET val = val || ';" + std::to_string(p.value) + "' WHERE " + where;
@@ -261,6 +272,37 @@ sched::Coro RunSession(CommandDispatcher& d, SessionRun& s) {
         bool failed = out.response.rfind("BEGIN", 0) != 0;
         for (const Planned& p : s.plan[t]) {
             if (failed) break;
+            if (p.kind == Planned::kRmwPoint) {
+                const std::string read = SqlOf(p);
+                co_await d.DispatchAsync(read, &s.session, &out);
+                if (out.response.rfind("ERR", 0) == 0) {
+                    failed = true;
+                    break;
+                }
+                const auto lists = Lists(out.response);
+                const auto it = lists.find(p.lo);
+                if (it == lists.end()) {
+                    s.failure = read + " -> " + out.response;
+                    continue;
+                }
+                txn.ops.push_back(Read(p.lo, it->second));
+                // The list as read, and this cycle's element after it.
+                std::string val;
+                for (const std::uint64_t element : it->second) val += ";" + std::to_string(element);
+                const std::string write = "UPDATE kv SET val = '" + val + ";" +
+                                          std::to_string(p.value) + "' WHERE k = " +
+                                          std::to_string(p.lo);
+                co_await d.DispatchAsync(write, &s.session, &out);
+                // Its element is the transaction's, written or not, as an
+                // append's is below.
+                txn.ops.push_back(Append(p.lo, p.value));
+                if (out.response.rfind("ERR", 0) == 0) {
+                    failed = true;
+                    break;
+                }
+                if (out.response != "UPDATED 1") s.failure = write + " -> " + out.response;
+                continue;
+            }
             co_await d.DispatchAsync(SqlOf(p), &s.session, &out);
             const bool append = p.kind == Planned::kAppendPoint || p.kind == Planned::kAppendRange;
             if (out.response.rfind("ERR", 0) == 0) {
@@ -305,21 +347,30 @@ sched::Coro RunSession(CommandDispatcher& d, SessionRun& s) {
     co_return Status::OK();
 }
 
+// What the READ COMMITTED histories' G-single and G-nonadjacent come to,
+// summed by the cell that asks for them.
+std::size_t g_read_skew_seen = 0;
+
 // `crash`: S4's crash composed with it (BS-A14). The rig is file-backed, every
 // session commits `strict` - acknowledged is durable - and once half the
 // transactions are done the reactors are joined mid-history and what a
 // crash would leave is mounted through production's mount: the recovered
 // lists must hold every acknowledged append, no aborted one, and either for
 // a transaction the crash cut off.
-// What the READ COMMITTED histories' G-single and G-nonadjacent come to,
-// summed by the cell that asks for them.
-std::size_t g_read_skew_seen = 0;
-
+//
+// `rmw`: some point appends become read-modify-write cycles (DC), read as it
+// says. `lost_out`, when given, makes the history a control that is meant to
+// lose appends: it takes the count of committed appends the final lists
+// lack, and the reads a lost append leaves out of order are passed over.
+// Every other anomaly is a failure there as everywhere.
 void RunHistory(std::uint64_t seed, bool repeatable_read, int txns_per_session,
-                bool crash = false) {
+                bool crash = false, Rmw rmw = Rmw::kNone, std::size_t* lost_out = nullptr) {
     SCOPED_TRACE("seed " + std::to_string(seed) +
                  (repeatable_read ? " REPEATABLE READ" : " READ COMMITTED") +
-                 (crash ? " crash" : ""));
+                 (crash ? " crash" : "") +
+                 (rmw == Rmw::kPlainRead     ? " rmw by a plain read"
+                  : rmw == Rmw::kLockingRead ? " rmw by a locking read"
+                                             : ""));
     // Before the rig: a crash leaves sessions parked on its reactors, whose
     // frames name these until the rig is destroyed.
     std::vector<std::unique_ptr<SessionRun>> runs;
@@ -338,6 +389,9 @@ void RunHistory(std::uint64_t seed, bool repeatable_read, int txns_per_session,
     }
 
     sim::Rng rng(seed);
+    // The cycles' own stream, so a seed's plan is the one it always drew
+    // with some of its ops respelled.
+    sim::Rng rmw_rng = rng.Fork("rmw");
     for (int s = 0; s < kSessions; ++s) {
         auto run = std::make_unique<SessionRun>();
         run->repeatable_read = repeatable_read;
@@ -358,6 +412,17 @@ void RunHistory(std::uint64_t seed, bool repeatable_read, int txns_per_session,
                            : p.lo;
                 // Unique per key: session, transaction, op.
                 p.value = (static_cast<std::uint64_t>(s + 1) * 1000 + t) * 10 + i;
+                if (rmw != Rmw::kNone) {
+                    const bool locking = rmw == Rmw::kLockingRead;
+                    if (p.kind == Planned::kAppendPoint) {
+                        if (rmw_rng.Chance(60)) {
+                            p.kind = Planned::kRmwPoint;
+                            p.locked = locking;
+                        }
+                    } else if (p.kind == Planned::kReadPoint || p.kind == Planned::kReadRange) {
+                        p.locked = locking && rmw_rng.Chance(50);
+                    }
+                }
                 ops.push_back(p);
             }
             run->plan.push_back(std::move(ops));
@@ -416,7 +481,13 @@ void RunHistory(std::uint64_t seed, bool repeatable_read, int txns_per_session,
     const auto fin = Lists(reader.Dispatch("SELECT k, val FROM kv").response);
     ASSERT_EQ(fin.size(), kKeys);
     const history::Result r = history::Check(all, fin, repeatable_read);
-    for (const auto& a : r.anomalies) ADD_FAILURE() << a.kind << ": " << a.detail;
+    for (const auto& a : r.anomalies) {
+        if (lost_out != nullptr && a.kind == "order") {
+            *lost_out += a.detail.ends_with(" was lost");
+            continue;
+        }
+        ADD_FAILURE() << a.kind << ": " << a.detail;
+    }
     // Not vacuous: transactions committed, and they depended on each other.
     EXPECT_GT(committed, all.size() / 4) << "too few commits to say anything";
     EXPECT_GT(r.edges, 0u);
@@ -450,6 +521,30 @@ TEST(BsHistory, ReadCommittedHistoriesShowNoDirtyOrCircularRead) {
     // The read skew READ COMMITTED allows, seen: what says the REPEATABLE
     // READ cells' silence is the engine's and not a checker that sees nothing.
     EXPECT_GT(g_read_skew_seen, 0u) << "four READ COMMITTED histories and no read skew in any";
+}
+
+// DC (`instructions/v3.2.0/workorder-dc-select-for-update.md`): a value
+// computed from a read and written in the next statement.
+TEST(BsHistory, ReadModifyWriteThroughALockingReadLosesNoAppend) {
+    // The control first. Under READ COMMITTED the cycle by a plain read
+    // overwrites a commit that landed between its two statements, and
+    // nothing refuses either write: the checker sees appends lost. That is
+    // what says the clean verdicts below are the clause's, and not a
+    // workload whose cycles never interleave.
+    std::size_t lost = 0;
+    for (std::uint64_t seed : {31u, 32u}) {
+        RunHistory(seed, /*repeatable_read=*/false, kTxnsPerSession, /*crash=*/false,
+                   Rmw::kPlainRead, &lost);
+    }
+    EXPECT_GT(lost, 0u) << "two READ COMMITTED histories of unlocked cycles and no lost append";
+
+    // The same seeds through the clause: every anomaly is a failure, and a
+    // lost append is `order`.
+    for (std::uint64_t seed : {31u, 32u}) {
+        RunHistory(seed, /*repeatable_read=*/false, kTxnsPerSession, /*crash=*/false,
+                   Rmw::kLockingRead);
+    }
+    RunHistory(33, /*repeatable_read=*/true, kTxnsPerSession, /*crash=*/false, Rmw::kLockingRead);
 }
 
 TEST(BsHistory, AHistoryCutByACrashRecoversEveryAcknowledgedAppend) {
