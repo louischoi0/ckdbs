@@ -167,7 +167,12 @@ where the tree still falls short of them.
   boundary. With no FPI cadence (F7) the obligation is the loud one: **every
   read of a torn page is refused `Corruption`, never served**, at whatever
   point it is read. Healing is asserted only when an owner builds the
-  cadence and the allocated-page bug is fixed (BS-Q5).
+  cadence and the allocated-page bug is fixed (BS-Q5). **DB owned it**
+  (`instructions/v3.2.0/workorder-db-torn-page-healing.md` DB-Q6, adopted on
+  the operator's standing go-ahead of 2026-11-19): since DB the sim asserts
+  the heal of a logged-class tear outside a mount, and the refusal only of
+  what DB leaves unhealed (page 0, the maps, unlogged and headerless pages,
+  the mount's own writes).
 
 ### BS-S5 - Coverage-guided fuzzing ∥ (after S1)
 

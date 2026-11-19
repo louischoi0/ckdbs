@@ -138,10 +138,8 @@ public:
 
     // H2: `Crash()` with the **log** cut inside its unsynced run rather
     // than at the last `Sync()`, keeping its first `keep_bytes`. The page
-    // device still takes the whole crash - a torn page is unhealable until
-    // the full-page-image cadence exists, so cutting it would only produce
-    // a mount refusal that says nothing about recovery's logic
-    // (`sim/faults.hpp` draws the same line).
+    // device still takes the whole crash; the page half of a power cut, a
+    // torn page among it, is `CrashWithPowerCut`'s.
     //
     // What this reaches that `Crash()` cannot: a log whose readable prefix
     // ends part-way through one statement's records. Use

@@ -77,3 +77,12 @@ took under them.
 | **Mark** | None of the operator's own. **DB opened** on worktree `db-torn-page-healing` from `origin/main` at `734484ca` (`v3.4.14-2-g734484ca`), under the skill's standing word: CLA's proposals are adopted. **DB-Q1..Q6 adopted (a)**, DB-Q1 and DB-Q2 as DB-S0 revised them against the tree (the order's §4 and §7), and **DB-Q7, added at DB-S0, adopted (a)** - each on the operator's standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone) |
 | **Does not settle** | a push, a merge to `main`, a tag or a version; the options the standing go-ahead did not take (DB-Q1 (b)/(c), DB-Q2 (b), DB-Q3 (b), DB-Q4 (b), DB-Q5 (b)/(c), DB-Q6 (b), DB-Q7 (b)), which stay open to the operator's own mark |
 | **Recorded at** | this file; the DB order's header, §4 and §7; the DB row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 9. DB closed on the work branch, on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | the same standing go-ahead as §8; no new word |
+| **Mark** | None of the operator's own. DB-S1 (`c802fac9`), DB-S2 (`ec057c06`) and DB-S3 (documents and the close measurement) landed on `worktree-db-torn-page-healing`; DB-Q5's deltas recorded with no bar applied (`bench/v3.4.14/results-db-close-v3.4.14-5-gec057c06.md`) |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; the operator's ruling on the -11.7 % (100K-row updates, `cores = 4`) and -25.3 % (pool pressure) deltas |
+| **Recorded at** | this file; the DB order's header and §7; the DB row in `instructions/v3.2.0/index.md` |

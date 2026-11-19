@@ -38,8 +38,9 @@
 // "the torn record is the end of the stream"). So torn injection is a crash's
 // and never a fault's: **BS-S4** cuts the log inside its unsynced run
 // (`SimConfig::power_cut`), and the `power-loss-at-page-write` Nth fault
-// leaves a page torn at a sector boundary, which with no full-page-image
-// cadence (`docs/inflight/known-gaps.md`) the restart may only refuse.
+// leaves a page torn at a sector boundary, which the restart heals where
+// the page is of a logged class and its tear outside a mount (DB-R1), and
+// may otherwise refuse (`docs/inflight/known-gaps.md`).
 
 #include <cstddef>
 #include <cstdint>

@@ -1,0 +1,8 @@
+18:32:17 A-update-lit-1000000-c1: 70530 stmts 3526/s cpu/stmt 58.3us bad=0 ck=4 load1=1.24
+18:32:49 B-update-lit-1000000-c1: 53049 stmts 2652/s cpu/stmt 69.6us bad=0 ck=4 load1=1.33
+18:32:49 ALL DONE
+18:33:29 A-recovery-100000-600000-r1: work 38.4s lsn 86601584 mount 0.341s
+18:34:09 B-recovery-100000-600000-r1: work 38.1s lsn 86626320 mount 0.343s
+18:34:49 A-recovery-100000-600000-r2: work 38.0s lsn 86601584 mount 0.348s
+18:35:28 B-recovery-100000-600000-r2: work 38.2s lsn 86626320 mount 0.348s
+18:35:28 ALL DONE

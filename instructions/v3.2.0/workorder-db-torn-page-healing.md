@@ -1,6 +1,6 @@
 # Work order DB - a torn page healed, not refused: the full-page image the log owes
 
-Status: **OPENED 2026-11-19** on the operator's standing go-ahead
+Status: **CLOSED 2026-11-19 on the work branch, not landed** (DB-S0..S3, §7; closing code commit `ec057c06`, `v3.4.14-5-gec057c06`; close measurement `bench/v3.4.14/results-db-close-v3.4.14-5-gec057c06.md`; no push, merge to `main` or tag). **OPENED 2026-11-19** on the operator's standing go-ahead
 (go-ahead-achieving-milestone, scheduled by the operator at 08:38 UTC for
 12:38 UTC; `raft-marks-2026-11-19.md` §8), on worktree
 `db-torn-page-healing` from `734484ca` (`v3.4.14-2-g734484ca`). **DB-Q1..Q6
@@ -504,3 +504,123 @@ At the standard setup the log would grow 1.01x to 2.0x at `cores = 1` and
 pressure - a 6,060-page table in a 2,048-frame pool - eviction writes 2,534
 pages a second and the log would grow **27.5x**. One run a cell; no `strict`
 or `relaxed` cell.
+
+### DB-S1 - the image, 2026-11-19
+
+On worktree `db-torn-page-healing` at `c802fac9` (`v3.4.14-4-gc802fac9`),
+under DB-Q1 (a) as revised: `Frame::owes_image` (set at the fault-in and at
+every writeback copy, in the frame's padding, the 56-byte frame unchanged);
+`DevicePageStore::FetchPinned` for write logs the owed image once the page
+latch is granted (`LogOwedImage`, through the gate's new
+`WalDurability::LogPageImage`, at `kNoTxnId`, stamping the page); the class
+test `ImagedClass` (page 0, headerless, the whitelist, the unlogged
+registry `AddUnloggedOwner` / `AddUnloggedPage`, filled by
+`catalog::RegisterUnloggedClasses` and by a fenced `IndexBuild` for its
+life); images enabled at the end of `Expeditor::Open` and
+`SimInstance::Boot` (DB-R2); redo heals at a `PAGE_INIT` as at an image;
+`pool_fetch_images` in `sys.meta`; `LogFullPageImage` appends the held
+bytes without a copy. The sim's DB-Q6 flip landed in the same commit.
+
+**Reviewed by `critics-developer`.** Applied: D1, `CreatePinned`'s resident
+branch now clears the debt under the page latch (a create over a resident
+frame owed an image of bytes it then formats); D2's text; D3's redo
+comment; cut #2 (the identity copy in `LogFullPageImage`), #4 (comment
+trims), #5 (dead test lines). Rejected: #1, skipping the image on the
+undo recycle - a behaviour change for one class, and the rule stays one
+rule; #3, folding the bit test into the re-mark - measured first, at the
+close; #6, kept. D4 (the documents that now contradict the code) is
+DB-S3's; D5 (the overhead) the close's.
+
+**Suite**: the first run found five cells red, each the premise holding and
+the consequence moved: `WalGoldenLog` re-pinned (`0x0124c937u`), the drop
+reclaim's premise cell (images re-allocate the leaf at `cores = 2`), two
+backup cells (the fuzzy image's rows put in a new table), and
+`SortedLeafRigTest.NamedKeysFromTwoCoresInterleaveIntoOneLeafInKeyOrder`, a
+retryable `TXN_CONFLICT` that passed 50 of 50 on repeat and whose rig never
+enables images. A second run built while the S2 sim edits were landing
+mixed two trees (66 SEGFAULTs and one cell hung 3.5 h on a futex); every one
+passed on a consistent rebuild, and the full suite then ran **0 failed of
+4802**. Overhead not measured; measured at the milestone's close.
+
+### DB-S2 - the proof, 2026-11-19
+
+On worktree `db-torn-page-healing` at `ec057c06` (`v3.4.14-5-gec057c06`).
+The sim fails a run that refuses a logged-class tear made outside a mount
+(DB-Q6); the verdict merge had dropped `tears_healed`, so a summed run read
+0 heals, and now carries it. A tear is classed off the bytes the torn write
+carried (`PowerCut::torn_written`), not the resident frame. Cells, in
+`tests/sim_loop_test.cpp`: a healed mount crashed and mounted again heals
+nothing more and serves the same rows (recovery twice a no-op); a page
+written back twice heals after the second write; a healing mount cut at its
+first write heals at the next (DB-R2); a tear with no image or `PAGE_INIT`
+in range is still refused (the pre-DB volume); and every power-loss point
+of a seeded run heals or refuses within §2.3. The DB-Q2 cells (page 0 and
+an unlogged class log no image) and the counter's once-per-heal are
+`tests/fetch_image_test.cpp` and `wal_redo_test.cpp` (DB-S1).
+
+**Reviewed by `critics-developer`.** It fixed in place: the written-twice
+cell's premise (checkpoints put its `PAGE_INIT` and first image behind the
+redo start, and the cell checks the torn page is the first write's; a
+probe clearing the copy's re-arm makes it fail), the twice-mounted cell's
+"no-op" asserted (`pages_healed == 0` at the second mount), the grid cell's
+`healed + refused == tears` loosened to `<=` (an unhealable tear nothing
+reads is counted in neither), and it added the DB-R2 cell. Applied by CLA
+from its findings: the class read off the written bytes (a page freed and
+re-created after the cut read as the new class), the counter's comment.
+Rejected: a fixture helper for the shared tail of four cells, a returned
+pair in place of `last_tear_imaged_`, and one helper for the
+`RegisterUnloggedClasses` + `EnableFetchImages` pair - each a few lines,
+and the pair sits in two modules (`server`, `sim`) that share no header
+for it. Not taken up: a `"/mount"` cut that tears nothing forgets the first
+cut's tear (pre-DB; a refused unhealable first tear then fails the run -
+never seen).
+
+**Not built of §5's list**: the two-core `tsan` cell (a `bs-nightly` build,
+not run), restore and PITR over a log holding images (the backup cells of
+DB-S1 restore over such a log, no PITR cell added), and "a crash-image
+backup restored with a planted tear", which DB-Q7 (a) removed. DB-R3 (a
+dropped and reused id) is carried by the sim's `ReconcileDrops` and the
+amended `drop_table_reclaim_test.cpp`, with no new cell.
+
+**Gates**: suite **0 failed of 4807**; `scripts/bs/io_sweep.py --kinds
+power-loss-at-page-write --ops 300 --jobs 6` 252 runs, 172 points fired, 0
+failures (over seeds 1-5 and 20260826003, page writes 1-14: 28 tears, 23
+healed, 1 refused at a mount-phase tear, 4 unread); `scripts/sim.sh` (Release)
+280 runs, 0 failures. `bs-nightly` cells: none run. Overhead not measured;
+measured at the milestone's close.
+
+### DB-S3 - the close, 2026-11-19
+
+On worktree `db-torn-page-healing`, the code at `ec057c06`
+(`v3.4.14-5-gec057c06`). **DB-Q5's A/B** (`ck-tester`,
+`bench/v3.4.14/results-db-close-v3.4.14-5-gec057c06.md`, driver
+`tools/db_close.py`): `734484ca` against `ec057c06`, Release, interleaved
+ABAB, two rounds, 20 s windows, `cores` 1 and 4, `group`; about 37 minutes,
+no quiet-gate hold. The noise floor between two runs of one binary is
+about 4 %. **No throughput delta outside it** on the standard cells (update
+200/1K/10K, spill, insert, the select control) at either core count. **Two
+outside it**: update over 100,000 rows at `cores = 4`, -11.7 % (log a
+statement 250 -> 1,228 B); and the pool-pressure cell (1,000,000 rows,
+2,048 frames, `cores = 1`), -25.3 %, p50 996 -> 1,329 us, p99 1,860 -> 2,276
+us, server CPU +11.6 us a statement, the log 28x. The log grows by the image
+volume to within 1 %, `pool_fetch_images` equals the pages written in the
+pressure cell, and the wait that moves is `commit.wal_flush`. Checkpoint
+duration and the mount time of one fixed log (kill -9, 10K and 100K rows,
+two cadences) show no change readable above their noise. **No bar is
+applied (DB-Q5 (a)): the deltas are the operator's to rule on.** Cut:
+`strict`/`relaxed` cells, a `cores = 4` pressure cell, a recovery over a
+log dense with images.
+
+**Documents amended**: `wal.md` :7, §10, §16-4, the observability list;
+`page.md` §10, §18-5; `backup.md` B5 and §5; `known-gaps.md` (the power-cut
+entry rewritten with what stays refused, the backup path D entry, the
+unverified `ANCHOR_SLOT_REMOVE` race); `undo_log.hpp`'s FPI comment (undo
+pages are now imaged); `log_page_image.hpp:16-19`; `sim/instance.hpp`,
+`sim/faults.hpp`, `sim/loop.hpp`; BS-Q5's text in
+`workorder-bs-test-hardening.md`; `manual/server/backup-restore.md`;
+`CLAUDE.md`'s WAL row. Not amended: `sys-views.md` lists no `pool_` field
+(the counter is named in `wal.md`'s observability list);
+`manual/server/server.md` states nothing of torn pages - its §6 says WAL
+recovery is not implemented, which is stale beyond DB's scope and left for
+the operator. The next tag message owes the bound that page 0, the maps,
+headerless and unlogged pages and the mount's own writes still refuse.

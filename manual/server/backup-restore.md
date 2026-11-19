@@ -79,7 +79,9 @@ half in it. An LVM, ZFS or btrfs snapshot is; so is
 server process (`SIGSTOP`), copies the data file and resumes it - for hosts
 with no snapshot-capable volume (the server stalls for the copy). A cloud
 disk snapshot that does not freeze the filesystem is a crash image and may
-hold a torn page, which the restore refuses (§8).
+hold a torn page, which the backup and the restore refuse (§8). A power
+cut of the running server is different: its mount heals a torn data page
+from the page image the log holds for it.
 
 **The log does not come from the snapshot.** `BACKUP STOP` copies the
 window's segments into the backup after the snapshot, so a separate WAL
@@ -216,8 +218,9 @@ An open backup idle for an hour with nothing running is aborted
 ## 9. What a backup does not do
 
 No incremental backup, compression, encryption, object-storage target,
-parallel copy, concurrent backups, logical dump or standby. A torn page from
-the device itself (a crash-consistent snapshot) is refused, not healed: the
-engine logs no per-checkpoint page images (`docs/inflight/known-gaps.md`).
+parallel copy, concurrent backups, logical dump or standby. A torn page in a
+crash-consistent snapshot is refused, not healed: the backup's checks do not
+lean on the log's page images, which heal a power cut at mount
+(`docs/inflight/known-gaps.md`).
 `kds_backup` reaches the admin role only on an `auth = off` server (its KWP
 client has no SCRAM).

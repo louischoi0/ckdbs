@@ -1297,13 +1297,15 @@ the procedures are `manual/server/backup-restore.md`.
 - **Not built** (BR §0.2): incremental backup, compression and encryption of
   a backup or the archive, a native object-storage target, a parallel copy,
   concurrent backups, a logical dump, a streaming standby.
-- **A torn page from the device is refused, not healed.** A snapshot that
-  does not freeze the filesystem (a cloud disk snapshot) is a crash image,
-  and the per-checkpoint image cadence of `wal.md` §10 is not built. Every
-  data page's CRC32C is checked when the backup stops, at `verify` and at the
+- **A torn page in a path D copy is refused, not healed** (verified on
+  `db-torn-page-healing` at `c802fac9`; DB-Q7 (a)). A snapshot that does not
+  freeze the filesystem (a cloud disk snapshot) is a crash image. Every data
+  page's CRC32C is checked when the backup stops, at `verify` and at the
   restore's layout, so the torn page is named there rather than at the
-  mount; it is not repaired. Path B's copy cannot tear (the fence); path D
-  needs a freezing snapshot.
+  mount; it is not repaired, though since DB the restore's mount would heal
+  one whose image lies in `[start, stop]` - no cell shows it, and relaxing
+  the three checks is a successor's. Path B's copy cannot tear (the fence);
+  path D needs a freezing snapshot.
 - **A restore leaks**: a page the source freed after the copier read its
   map region stays allocated in the restore, as after a crash; Waystone
   pages and `sys.access_stats`' chain, made unreachable at the restore's
@@ -2614,15 +2616,37 @@ a stopped log (CL-S0) - is given back by the next one (`assertion.md` §6.2,
 Verified on `bs-test-hardening` from `5d58f3ca`
 (`instructions/v3.0.0/workorder-bs-test-hardening.md` BS-S4, BS-A8, BS-A9).
 
-- **A torn page is refused, not healed** (`wal.md` §16-4 asks for both). No
-  page class has a full-page-image cadence, so a page a power cut tore at a
-  sector boundary is unhealable: the restart refuses it - the mount, the
-  reclaim or the integrity sweep naming `Corruption` - and whatever it held is
-  lost to the instance until a restore. A headerless page - a Waystone
-  directory page - carries no checksum, so a tear there is served, and only
-  invariant 9's fall-through stands between it and an answer. The sim asserts the refusal and only
-  it (BS-Q5 (a)): over seeds 1-5 and page writes 1-40, 34 of 65 tears were
-  refused, the rest left nothing a read reached or a page recovery rebuilt.
+- **A torn page of a logged class is healed; four tears are still refused**
+  (DB, verified on `db-torn-page-healing` at `c802fac9`,
+  `instructions/v3.2.0/workorder-db-torn-page-healing.md`). Since DB a page
+  a power cut tore at a sector boundary is healed at the mount from the
+  image its first write fetch after a fault-in or a writeback logged, or
+  from its `PAGE_INIT` (`wal.md` §10), and the sim fails a run that refuses
+  one (DB-Q6). Still refused - the mount, the reclaim or the integrity sweep
+  naming `Corruption` - and lost to the instance until a restore:
+  - **page 0 and the two map regions** (DB-Q3): read before recovery, never
+    imaged, so a tear refuses the mount; no second copy exists;
+  - **a page of an unlogged class** (`sys.access_stats`, `sys.statistics`,
+    a fenced index build's tree before its `LogBuiltTree`), whose content no
+    record describes;
+  - **a tear of the mount's own write**: images are off through the mount
+    (DB-R2), so a page redo or the mount wrote back and a crash tore before
+    the completion checkpoint is refused when its last image is below the
+    scan start;
+  - **a headerless page** - a Waystone directory page - carries no
+    checksum, so a tear there is served, and only invariant 9's
+    fall-through stands between it and an answer.
+
+  Over `scripts/bs/io_sweep.py --kinds power-loss-at-page-write --ops 300`
+  at `c802fac9`, seeds 1-5 and 20260826003, page writes 1-14 in both modes
+  and both phases: 28 tears, 23 healed, 1 refused (a mount-phase tear), 4
+  left nothing a read reached; no run failed.
+- **Unverified: an index job's `ANCHOR_SLOT_REMOVE` beside a `DROP TABLE`
+  reclaim** (`[source-read]`, found at DB-S0 on `db-torn-page-healing` at
+  `734484ca`). The index job removes a slot from a relation's anchor page
+  (`src/catalog/catalog.cpp:990`) while a concurrent `DROP TABLE` of that
+  relation may free the anchor's page (`src/server/page_reclaim.cpp:122-127`);
+  read, not reproduced, and independent of DB.
 - **The simulated cuts are narrower than a disk's.** The log is cut as a
   suffix of its unsynced run, never scattered; the page device keeps one
   pending image a page, so a page written twice since its sync persists as
