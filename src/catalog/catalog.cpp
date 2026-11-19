@@ -4471,4 +4471,17 @@ StatusOr<SysIndexRow> Catalog::FindIndexOnColumn(Oid table_oid, std::uint32_t co
     return Status::NotFound("no index on this column");
 }
 
+Status RegisterUnloggedClasses(storage::PageStore& store) {
+    static_assert(IsUnloggedCatalogRelation(kSysAccessStatsTable) &&
+                      IsUnloggedCatalogRelation(kSysStatisticsTable),
+                  "the registration names every unlogged catalog relation");
+    for (const Oid owner : {kSysAccessStatsTable, kSysStatisticsTable}) {
+        if (Status s = store.AddUnloggedOwner(owner); !s.ok()) return s;
+    }
+    for (const PageId head : {kCatalogPageAccessStats, kCatalogPageStatistics}) {
+        if (Status s = store.AddUnloggedPage(head); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
 }  // namespace kds::catalog

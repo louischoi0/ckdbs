@@ -431,13 +431,11 @@ TEST_F(SimIntegrityCorruption, ATornPageWriteSurfacesAsAPageHeaderFinding) {
 }
 
 // RV3's stronger arm of the same scenario: with catalog mutations logged,
-// redo now *names* the torn catalog page, finds no full page image to
-// heal it with (wal.md §10's first-write-per-checkpoint FPI is still
-// unbuilt for every page class), and **refuses the mount** - the same
-// contract a torn heap page already lives under, extended to the catalog.
-// Before RV3 this boot succeeded and served the corruption; refusing is
-// the honest interim until §10's FPI cadence exists.
-TEST_F(SimIntegrityCorruption, ATornCatalogPageRefusesTheMountInsteadOfServingIt) {
+// redo *names* the torn catalog page. Until DB it found no image to heal it
+// with and refused the mount; since DB the page's write fetch logged one
+// after the page's last copy, so the mount heals the tear and serves what
+// was committed (wal.md §10, DB-R1).
+TEST_F(SimIntegrityCorruption, ATornCatalogPageIsHealedAtTheMount) {
     MakeTables();
     for (int i = 0; i < 20; ++i) Insert("h", i, "short");
 
@@ -446,9 +444,13 @@ TEST_F(SimIntegrityCorruption, ATornCatalogPageRefusesTheMountInsteadOfServingIt
     instance_->Crash();
 
     Status rebooted = instance_->Reboot();
-    ASSERT_FALSE(rebooted.ok()) << "a recovered mount served a torn catalog page";
-    EXPECT_NE(rebooted.message().find("no full page image"), std::string::npos)
-        << rebooted.message();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    EXPECT_GE(instance_->recovery().pages_healed, 1u) << "the mount healed no page";
+    EXPECT_NE(instance_->Execute("SELECT COUNT(*) FROM h").find("20"), std::string::npos)
+        << instance_->Execute("SELECT COUNT(*) FROM h");
+    const IntegrityReport report =
+        CheckInstance(instance_->store(), instance_->page_device(), instance_->catalog());
+    EXPECT_TRUE(report.ok()) << report.Summary();
 }
 
 // ---- RV3: DDL is durable (docs/workplan-rv3-catalog-recovery.md) ----------

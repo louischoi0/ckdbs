@@ -30,14 +30,11 @@ inline Status LogFullPageImage(wal::WalManager* wal, PageStore& store, std::uint
 
     auto bytes = store.Get(page_id);
     if (!bytes.ok()) return bytes.status();
-    std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-    if (auto n = wal::EncodeFullPageImage(
-            image, std::span<const std::byte, kPageSize>(bytes.value().bytes()));
-        !n.ok()) {
-        return n.status();
-    }
+    // The payload is the page itself (`payload.hpp`: no prefix), so the
+    // held bytes are appended as they stand.
+    static_assert(wal::kFullPageImagePayloadSize == kPageSize);
     auto fpi = wal->Append(wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, page_id},
-                           image);
+                           bytes.value().bytes());
     if (!fpi.ok()) return fpi.status();
     return store.StampPageLsn(page_id, fpi.value());
 }

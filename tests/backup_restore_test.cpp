@@ -98,9 +98,11 @@ std::vector<std::uint64_t> Range(std::uint64_t first, std::uint64_t last) {
     return out;
 }
 
-void Insert(Expeditor& db, std::uint64_t first, std::uint64_t last) {
+void Insert(Expeditor& db, std::uint64_t first, std::uint64_t last,
+            const std::string& table = "t") {
     for (std::uint64_t id = first; id <= last; ++id) {
-        Ok(db, "INSERT INTO t VALUES (" + std::to_string(id) + ", " + std::to_string(id) + ")");
+        Ok(db, "INSERT INTO " + table + " VALUES (" + std::to_string(id) + ", " +
+                   std::to_string(id) + ")");
     }
 }
 
@@ -134,6 +136,12 @@ void WritePage(const fs::path& file, PageId id, const PageBytes& page) {
 // checkpoint wrote it (its anchor past rows 11..20's records), and the whole
 // log. Returns {start, stop}: the start a backup would have taken and the
 // durable end of the log.
+//
+// **Rows 21..30 go to a second relation, `u`** (DB): a write fetch of t's
+// leaf after the later checkpoint would log the leaf's image above the
+// copied anchor, and that image alone repairs the stale copy - so t's leaf
+// is left untouched after it, the shape BR-R4 is about: a page the device
+// holds old whose records lie below the copied anchor.
 struct FuzzyImage {
     wal::Lsn start = 0;
     wal::Lsn copied_anchor = 0;
@@ -148,6 +156,7 @@ FuzzyImage BuildFuzzyImage(const fs::path& live, const fs::path& image) {
     Expeditor& db = *opened.value();
     CurrentCoreGuard as(0);
     Ok(db, "CREATE TABLE t (id int64, v int64)");
+    Ok(db, "CREATE TABLE u (id int64, v int64)");
     Insert(db, 1, 10);
     CleanCheckpoint(db);
     out.start = db.superblock().wal_anchor(0).redo_start_lsn;
@@ -157,7 +166,7 @@ FuzzyImage BuildFuzzyImage(const fs::path& live, const fs::path& image) {
     Insert(db, 11, 20);
     CleanCheckpoint(db);
     out.copied_anchor = db.superblock().wal_anchor(0).redo_start_lsn;
-    Insert(db, 21, 30);
+    Insert(db, 21, 30, "u");
     EXPECT_TRUE(db.Sync().ok());
     out.stop = db.wal().durable_lsn();
 
@@ -196,7 +205,7 @@ void RestoreStartsAtTheBackupsStart(std::uint32_t cores) {
         // with every row.
         auto plain = Mount(image.path);
         CurrentCoreGuard as(0);
-        EXPECT_TRUE(!plain.ok() || Ids(*plain.value(), "SELECT id FROM t") != Range(1, 30))
+        EXPECT_TRUE(!plain.ok() || Ids(*plain.value(), "SELECT id FROM t") != Range(1, 20))
             << "the copied anchor alone recovered every row - the cell no longer shows the "
                "hazard BR-R4 guards";
     }
@@ -211,7 +220,8 @@ void RestoreStartsAtTheBackupsStart(std::uint32_t cores) {
         ASSERT_TRUE(opened.ok()) << opened.status().message();
         Expeditor& db = *opened.value();
         CurrentCoreGuard as(0);
-        EXPECT_EQ(Ids(db, "SELECT id FROM t"), Range(1, 30));
+        EXPECT_EQ(Ids(db, "SELECT id FROM t"), Range(1, 20));
+        EXPECT_EQ(Ids(db, "SELECT id FROM u"), Range(21, 30));
         EXPECT_EQ(db.recovery().restore_backup_id, 77u);
         EXPECT_EQ(db.recovery().restore_stop_lsn, fuzzy.stop);
         EXPECT_FALSE(db.superblock().restore_owed());
@@ -228,7 +238,9 @@ void RestoreStartsAtTheBackupsStart(std::uint32_t cores) {
         auto again = Mount(restored.path, cores);
         ASSERT_TRUE(again.ok()) << again.status().message();
         CurrentCoreGuard as(0);
-        EXPECT_EQ(Ids(*again.value(), "SELECT id FROM t"), Range(1, 31));
+        std::vector<std::uint64_t> expected = Range(1, 20);
+        expected.push_back(31);
+        EXPECT_EQ(Ids(*again.value(), "SELECT id FROM t"), expected);
         EXPECT_EQ(again.value()->recovery().restore_backup_id, 0u);
         EXPECT_EQ(again.value()->superblock().lineage_id(), lineage);
     }

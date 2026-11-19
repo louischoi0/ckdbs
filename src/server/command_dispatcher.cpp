@@ -2127,7 +2127,10 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
        << " pool_batch_steps=" << pool.batch_steps
        << " pool_batch_steps_background=" << pool.batch_steps_background
        << " pool_dirty_queued=" << pool.dirty_queued
-       << " pool_dirty_drained=" << pool.dirty_drained << " pool_refused=" << pool.refused;
+       << " pool_dirty_drained=" << pool.dirty_drained << " pool_refused=" << pool.refused
+       // DB-R6: the write fetch's images, each `wal::RecordSize(kPageSize)`
+       // bytes of log.
+       << " pool_fetch_images=" << pool.fetch_images;
 
     // The undo purge's two numbers (docs/inflight/in-progress/workplan-undo-purge.md UP3):
     // live pages plateauing under a write-heavy loop is the feature, and

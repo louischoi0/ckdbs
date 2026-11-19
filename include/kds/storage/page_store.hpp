@@ -451,10 +451,36 @@ public:
         std::uint64_t dirty_queued = 0;     // dirty victims queued for writeback
         std::uint64_t dirty_drained = 0;    // queued pages the drain wrote clean
         std::uint64_t refused = 0;          // reservations refused at the cap
+        // FULL_PAGE_IMAGEs the write fetch logged (DB-R6); each is
+        // `wal::RecordSize(kPageSize)` bytes of log.
+        std::uint64_t fetch_images = 0;
     };
     virtual PoolCounters pool_counters() const { return {}; }
 
+    // **The page classes no record describes** (DB-Q2 (a),
+    // `DevicePageStore`'s "The write fetch's image"): a store that logs an
+    // image at the write fetch skips a page whose `owner_oid` or id is
+    // registered here. The defaults do nothing, which is the whole of it for
+    // a store that logs no image.
+    virtual Status AddUnloggedOwner(std::uint64_t owner_oid) {
+        (void)owner_oid;
+        return Status::OK();
+    }
+    virtual void RemoveUnloggedOwner(std::uint64_t owner_oid) noexcept { (void)owner_oid; }
+    virtual Status AddUnloggedPage(PageId page_id) {
+        (void)page_id;
+        return Status::OK();
+    }
+
     // ---- Where a full pool may refuse (BE-R4, BE-Q11) -------------------
+    //
+    // **A write fetch can also be refused by its image's append** (DB,
+    // `DevicePageStore`'s "The write fetch's image"), inside a window too,
+    // after the mutation has written other pages. That is sound for the
+    // reason a refused delta is: every refusal the append can give is a
+    // fail-stop of the log or follows one (`wal/manager.cpp`), so nothing
+    // the mutation half did reaches the device, and the restart's recovery
+    // rebuilds from the durable prefix.
     //
     // A pool at its cap with nothing reclaimable refuses a fault or a
     // creation `ResourceExhausted`. That is safe only where the mutation

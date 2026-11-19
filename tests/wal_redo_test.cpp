@@ -833,6 +833,43 @@ TEST_F(RedoHealTest, AFullPageImageHealsAnAllocatedPageThatFailedItsChecksum) {
               Bytes(24, 0x40));
 }
 
+// DB: a page created and never copied owes no image, so the tear of its
+// first write is healed by its PAGE_INIT - a whole-page format, laid over a
+// zeroed page as the creation laid it - and the records after it. A delta
+// met before the PAGE_INIT poisons the page and the PAGE_INIT lifts it.
+TEST_F(RedoHealTest, APageInitHealsATornPageAndTheRecordsAfterItLand) {
+    WriteTornPage();
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0x30), 0u);
+        std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
+        const PageInitPayload fields{/*min_key=*/1, static_cast<std::uint8_t>(PageType::kHeap),
+                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/0};
+        ASSERT_TRUE(EncodePageInit(init, fields).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kPageInit, 1, kPage}, init).ok());
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/0, 0x50), 0u);
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    auto store = OpenPages();
+    ASSERT_NE(store, nullptr);
+    ASSERT_EQ(store->Get(kPage).status().code(), StatusCode::kCorruption) << "the page is not torn";
+    auto redone = Redo(*device_, 0, *store, Analyzed());
+    ASSERT_TRUE(redone.ok()) << redone.status().message();
+    EXPECT_EQ(redone.value().pages_healed, 1u);
+    EXPECT_EQ(redone.value().page_images, 0u) << "a PAGE_INIT is not an image";
+
+    auto page = store->Get(kPage);
+    ASSERT_TRUE(page.ok()) << page.status().message();
+    heap::PageView view(page.value().bytes());
+    ASSERT_EQ(view.slot_count(), 1u) << "the PAGE_INIT did not format a fresh page";
+    auto row = view.ReadTuple(0);
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(std::vector<std::byte>(row.value().payload.begin(), row.value().payload.end()),
+              Bytes(24, 0x50));
+}
+
 TEST_F(RedoHealTest, ATornPageNoImageRestoresIsStillRefusedByName) {
     WriteTornPage();
     {
