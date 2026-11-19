@@ -1,0 +1,33 @@
+created 8 relations with suffix _satb32c8s:
+  organizations_satb32c8s
+  ships_satb32c8s
+  operations_satb32c8s
+  cargos_satb32c8s
+  fees_satb32c8s
+  recipes_satb32c8s
+  freights_satb32c8s
+  charges_satb32c8s
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/louis/bench-runs/scenarios-v3.4.14/src/tools/scenario2_freight.py --suffix satb32c8s
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15607  table scenario2_satb32c8s
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0     741.3    430.9    440.5    556.6   1884.9   1884.9    1884.9     0
+load-organizations         300         0     539.8    379.7    459.3    518.9    713.8    792.8    1820.2     0
+load-ships                  30         0     556.5    431.5    494.9    546.3    663.3    946.0     946.0     0
+load-operations            300         0     527.5    331.5    452.2    509.0    687.3    815.5    2647.9     0
+load-fees                   12         0     504.6    433.2    448.9    486.0    676.3    676.3     676.3     0
+load-recipes                93         0     545.8    375.3    471.7    536.4    727.4    841.6     841.6     0
+load-cargos               4000         0     521.9    315.0    455.0    508.2    694.9    806.5    2104.4     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.

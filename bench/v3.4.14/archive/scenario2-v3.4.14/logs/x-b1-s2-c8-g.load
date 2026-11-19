@@ -1,0 +1,33 @@
+created 8 relations with suffix _xb1c8g:
+  organizations_xb1c8g
+  ships_xb1c8g
+  operations_xb1c8g
+  cargos_xb1c8g
+  fees_xb1c8g
+  recipes_xb1c8g
+  freights_xb1c8g
+  charges_xb1c8g
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/louis/bench-runs/scenarios-v3.4.14/src/tools/scenario2_freight.py --suffix xb1c8g
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15605  table scenario2_xb1c8g
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0     539.5    474.7    484.6    503.6    658.5    658.5     658.5     0
+load-organizations         300         0     570.1    344.3    488.1    551.4    794.8    965.7    1638.9     0
+load-ships                  30         0     596.1    446.4    520.0    556.1    825.4    857.1     857.1     0
+load-operations            300         0     504.7    333.5    445.5    492.2    642.4    732.3     807.7     0
+load-fees                   12         0     507.9    348.7    470.4    492.6    597.9    597.9     597.9     0
+load-recipes                93         0     521.1    344.9    449.0    499.2    706.5    776.6     776.6     0
+load-cargos               4000         0     529.4    323.1    458.4    516.8    704.2    806.7    1902.5     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.
