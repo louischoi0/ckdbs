@@ -119,7 +119,8 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
         out += " page_cuts=" + std::to_string(page_cuts) + " unsynced_pages=" +
                std::to_string(unsynced_pages) + " kept_pages=" + std::to_string(kept_pages) +
                " in_flight_pages=" + std::to_string(in_flight_pages) +
-               " tears=" + std::to_string(tears) + " tears_refused=" + std::to_string(tears_refused);
+               " tears=" + std::to_string(tears) + " tears_refused=" + std::to_string(tears_refused) +
+               " tears_healed=" + std::to_string(tears_healed);
     }
     if (fail_stops != 0) {
         out += " fail_stops=" + std::to_string(fail_stops);
@@ -206,6 +207,8 @@ struct Iteration {
 
     // The page a power loss tore, which the restart may refuse.
     std::optional<PageId> torn_page;
+    // The torn page is one DB heals: refusing it is a failure (CutPower).
+    bool tear_healable = false;
 
     // Whether the asserted relation's assertion stands (BS-A12): declared
     // only by its acknowledged CREATE - one a fault refused may or may not
@@ -1426,6 +1429,12 @@ void CutPower(Iteration& it, std::string_view at = {}) {
     const bool tear = cut.Chance(25);
     const auto cut_pages = it.instance.CrashWithPowerCut(keep, page_seed, tear);
     it.torn_page = cut_pages.torn;
+    // **DB heals a tear of a logged page written outside a mount** (DB-R1,
+    // DB-Q6): its image or its PAGE_INIT is in the replay range. A tear the
+    // mount's own writes took - images are off through a mount (DB-R2) - or
+    // of a class no record describes may still be refused.
+    it.tear_healable = cut_pages.torn.has_value() && at.empty() &&
+                       it.instance.last_tear_imaged();
     ++it.verdict.page_cuts;
     it.verdict.unsynced_pages += cut_pages.unsynced;
     it.verdict.kept_pages += cut_pages.kept;
@@ -1695,14 +1704,21 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
             rebooted = it.instance.Reboot();
         }
     }
-    // **A torn page is refused, never served** (BS-S4, BS-Q5 (a)): with no
-    // full-page image to heal it from, the restart may refuse it - the mount
-    // naming `Corruption`, the reclaim's read, or the integrity sweep's cold
-    // read of that page and no other - and the iteration then has nothing
-    // left to reconcile. A torn page no read reaches, or one recovery
-    // rebuilt whole, leaves the run's whole contract standing.
+    // **A torn page is healed, or refused, never served** (BS-S4, BS-Q5 (a)
+    // as DB-Q6 flipped it): a logged page torn outside a mount is healed -
+    // its image or its PAGE_INIT is in the replay range (DB-R1) - so refusing
+    // one is a failure and the run goes on to reconcile it. A tear DB leaves
+    // unhealed (page 0, a map page, a headerless or unlogged page, the
+    // mount's own write) may be refused - the mount naming `Corruption`, the
+    // reclaim's read, or the integrity sweep's cold read of that page and no
+    // other - and the iteration then has nothing left to reconcile.
     const auto refused_torn = [&](const Status& s) {
         if (!it.torn_page.has_value() || s.code() != StatusCode::kCorruption) return false;
+        if (it.tear_healable) {
+            Fail(it, "torn page " + std::to_string(*it.torn_page) +
+                         " of a logged class was refused, not healed (DB-R1): " + s.message());
+            return false;
+        }
         ++verdict.tears_refused;
         it.trace.Note("the restart refused torn page " + std::to_string(*it.torn_page) + ": " +
                       s.message());
@@ -1736,6 +1752,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     Reconcile(it);
     ReconcileDrops(it);
     ReconcileAssertion(it);
+    if (it.tear_healable && verdict.ok) ++verdict.tears_healed;
     record_recycling();
     if (!verdict.ok || !backup.has_value()) return verdict.ok;
 
@@ -1822,6 +1839,7 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     in_flight_pages += other.in_flight_pages;
     tears += other.tears;
     tears_refused += other.tears_refused;
+    tears_healed += other.tears_healed;
     unlogged_ddl_lost_tables += other.unlogged_ddl_lost_tables;
     if (ok && !other.ok) {
         ok = false;

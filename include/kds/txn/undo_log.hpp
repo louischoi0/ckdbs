@@ -59,10 +59,11 @@
 // derivable by replaying a page's `UNDO_WRITE`s in LSN order, so there is
 // no undo-page-header record type and none is needed.
 //
-// **No `FULL_PAGE_IMAGE` for undo pages.** One is fully reconstructible
-// from its `PAGE_INIT` plus its `UNDO_WRITE`s, which makes it FPI-exempt on
-// the merits rather than by omission - unlike a heap page, whose link edits
-// no record type describes.
+// **An undo page is imaged as every logged page is** (DB, `wal.md` §10):
+// its first write fetch after a fault-in or a writeback copy logs a
+// `FULL_PAGE_IMAGE`, so a torn undo page heals where its `PAGE_INIT` has
+// left the replay range. Its content is otherwise its `PAGE_INIT` plus its
+// `UNDO_WRITE`s, which is what redo applies after the image.
 //
 // ---- The purge: pages recycle within the log ------------------------------
 //

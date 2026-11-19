@@ -244,6 +244,13 @@ private:
     catalog::Oid replaced_oid_ = 0;
     bool tree_logged_ = false;
     bool finished_ = false;
+    // **A fenced build's pages are an unlogged class until `LogBuiltTree`**
+    // (DB-R3): registered with the store under the index's oid, every page's
+    // `owner_oid`, so no write fetch images a page the build may free
+    // ungated (`FreeUnbuiltTree`). Given back once the tree is imaged or
+    // freed; `ReleaseUnlogged` is idempotent.
+    void ReleaseUnlogged() noexcept;
+    bool unlogged_registered_ = false;
 };
 
 // What a successful CREATE INDEX has to say besides its row (the

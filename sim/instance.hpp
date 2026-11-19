@@ -148,10 +148,8 @@ public:
 
     // H2: `Crash()` with the **log** cut inside its unsynced run rather
     // than at the last `Sync()`, keeping its first `keep_bytes`. The page
-    // device still takes the whole crash - a torn page is unhealable until
-    // the full-page-image cadence exists, so cutting it would only produce
-    // a mount refusal that says nothing about recovery's logic
-    // (`sim/faults.hpp` draws the same line).
+    // device still takes the whole crash; the page half of a power cut, a
+    // torn page among it, is `CrashWithPowerCut`'s.
     //
     // What this reaches that `Crash()` cannot: a log whose readable prefix
     // ends part-way through one statement's records. Use
@@ -167,10 +165,14 @@ public:
     // unsynced writes, one maybe torn (`MemoryPageDevice::CrashPersisting`).
     // Every write-back waits for the log past its page's LSN to be durable
     // (`EnsureDurable`), so any subset is one a recovery owes the whole
-    // contract over; a torn page it may only refuse, there being no image to
-    // heal it from (BS-Q5 (a)).
+    // contract over; a torn page of a logged class it heals (DB-R1), any
+    // other it may refuse (DB-Q6).
     storage::MemoryPageDevice::PowerCut CrashWithPowerCut(std::uint64_t keep_log_bytes,
                                                           std::uint64_t page_seed, bool tear);
+    // Whether the last power cut's torn page was of a class the write fetch
+    // images (`DevicePageStore::ImagedClass`), read off the bytes the torn
+    // write carried.
+    bool last_tear_imaged() const noexcept { return last_tear_imaged_; }
 
     // Log sync + store sync through the dispatcher's own SYNC — the same
     // path a client's SYNC takes — then a checkpoint, then tear the stack down
@@ -293,6 +295,7 @@ private:
         return backup_.has_value() ? std::min(d, backup_->image.start) : d;
     }
     std::uint64_t recycles_ = 0;
+    bool last_tear_imaged_ = false;
     std::uint64_t crashes_reviving_segments_ = 0;
     std::uint64_t detach_refusals_ = 0;
 

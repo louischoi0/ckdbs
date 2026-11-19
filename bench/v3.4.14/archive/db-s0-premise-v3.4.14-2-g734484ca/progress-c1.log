@@ -1,0 +1,15 @@
+12:53:57 select-pk-10000-c1: warm 4s
+12:54:26 select-pk-10000-c1: done 827297 stmts in 25.0s, bad=0, ckpt_runs=5
+12:54:27 update-lit-200-c1: warm 4s
+12:54:56 update-lit-200-c1: done 105643 stmts in 25.0s, bad=0, ckpt_runs=5
+12:54:56 update-lit-1000-c1: warm 4s
+12:55:25 update-lit-1000-c1: done 101754 stmts in 25.0s, bad=0, ckpt_runs=5
+12:55:25 update-lit-10000-c1: warm 4s
+12:55:54 update-lit-10000-c1: done 102694 stmts in 25.0s, bad=0, ckpt_runs=5
+12:55:56 update-lit-100000-c1: warm 4s
+12:56:25 update-lit-100000-c1: done 101614 stmts in 25.0s, bad=0, ckpt_runs=5
+12:56:25 update-spill-assign-10000-c1: warm 4s
+12:56:54 update-spill-assign-10000-c1: done 91875 stmts in 25.0s, bad=0, ckpt_runs=5
+12:56:55 insert-0-c1: warm 4s
+12:57:24 insert-0-c1: done 105673 stmts in 25.0s, bad=0, ckpt_runs=5
+12:57:24 ALL DONE

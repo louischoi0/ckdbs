@@ -203,6 +203,9 @@ public:
         std::size_t kept = 0;          // of them, persisted whole
         std::size_t in_flight = 0;     // of them, the power loss's in-flight run
         std::optional<PageId> torn;    // the one persisted torn, if any
+        // The image the torn write carried: what the page's class is read
+        // off, since the frame may be freed or re-created after the cut.
+        std::optional<std::array<std::byte, kPageSize>> torn_written;
     };
     PowerCut CrashPersisting(std::uint64_t seed, bool tear);
 

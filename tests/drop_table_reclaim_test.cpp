@@ -151,9 +151,11 @@ PageId VolumeWithADroppedLeafInItsReplayRange(const fs::path& dir) {
 }
 
 // Mounts the volume at `cores`, takes the crash image its completion
-// checkpoint leaves, clears `leaf`'s bit in it, and mounts that.
-Status MountAfterTheBitIsClearedAtTheCompletionCheckpoint(const fs::path& volume, PageId leaf,
-                                                          std::uint32_t cores) {
+// checkpoint leaves, clears `leaf`'s bit in it, and mounts that. Answers
+// whether the second mount holds `leaf` allocated again.
+StatusOr<bool> MountAfterTheBitIsClearedAtTheCompletionCheckpoint(const fs::path& volume,
+                                                                  PageId leaf,
+                                                                  std::uint32_t cores) {
     TempDir cut;
     {
         auto first = Mount(volume, cores);
@@ -164,7 +166,8 @@ Status MountAfterTheBitIsClearedAtTheCompletionCheckpoint(const fs::path& volume
     }
     ClearMapBit(cut.path / "kds.db", leaf);
     auto second = Mount(cut.path, cores);
-    return second.ok() ? Status::OK() : second.status();
+    if (!second.ok()) return second.status();
+    return second.value()->store().IsAllocated(leaf);
 }
 
 TEST(DropTableReclaimPremiseTest, AClearedBitRefusesTheNextMountUntilEveryCoreHasPublished) {
@@ -176,21 +179,28 @@ TEST(DropTableReclaimPremiseTest, AClearedBitRefusesTheNextMountUntilEveryCoreHa
         TempDir two;
         const PageId leaf2 = VolumeWithADroppedLeafInItsReplayRange(two.path);
         ASSERT_NE(leaf2, kInvalidPageId);
-        const Status at_two = MountAfterTheBitIsClearedAtTheCompletionCheckpoint(two.path, leaf2, 2);
-        EXPECT_FALSE(at_two.ok())
+        // **At cores = 2 the anchor stays where it was, so the next mount
+        // replays a record that names the cleared leaf.** Before DB that
+        // record was a row's, and the mount refused it naming the page; since
+        // DB the leaf's first write fetch after the checkpoint logged its
+        // image, so the first record naming it is a whole page, which
+        // recreates the cleared id over a relation nobody names: a leak where
+        // the gate is missing, the refusal no longer. Either way BF-R4's gate
+        // is what keeps the reclaim from reaching a page the log can replay.
+        auto at_two = MountAfterTheBitIsClearedAtTheCompletionCheckpoint(two.path, leaf2, 2);
+        ASSERT_TRUE(at_two.ok()) << at_two.status().message();
+        EXPECT_TRUE(at_two.value())
             << "at cores = 2 the completion checkpoint left the anchor where it was, so the "
-               "next mount replays a record that names the cleared leaf";
-        EXPECT_NE(at_two.message().find("names page " + std::to_string(leaf2) + ","),
-                  std::string::npos)
-            << "refused for another reason: " << at_two.message();
+               "next mount replays the leaf's image and holds it again";
 
         TempDir one;
         const PageId leaf1 = VolumeWithADroppedLeafInItsReplayRange(one.path);
         ASSERT_NE(leaf1, kInvalidPageId);
-        const Status at_one = MountAfterTheBitIsClearedAtTheCompletionCheckpoint(one.path, leaf1, 1);
-        EXPECT_TRUE(at_one.ok())
+        auto at_one = MountAfterTheBitIsClearedAtTheCompletionCheckpoint(one.path, leaf1, 1);
+        ASSERT_TRUE(at_one.ok())
             << "at cores = 1 the completion checkpoint moves D past the replayed log: "
-            << at_one.message();
+            << at_one.status().message();
+        EXPECT_FALSE(at_one.value()) << "at cores = 1 nothing in the replay range names the leaf";
     }
 }
 

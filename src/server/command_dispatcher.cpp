@@ -2278,6 +2278,9 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
        << " pool_batch_steps_background=" << pool.batch_steps_background
        << " pool_dirty_queued=" << pool.dirty_queued
        << " pool_dirty_drained=" << pool.dirty_drained << " pool_refused=" << pool.refused
+       // DB-R6: the write fetch's images, each `wal::RecordSize(kPageSize)`
+       // bytes of log.
+       << " pool_fetch_images=" << pool.fetch_images
        << " pool_would_wait=" << pool.would_wait;
 
     // The undo purge's two numbers (docs/inflight/in-progress/workplan-undo-purge.md UP3):

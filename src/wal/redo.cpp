@@ -394,16 +394,29 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // that arm's closing brace, leaving `page_bytes` pointing into a
         // frame nothing holds (page.md §3's pin model).
         storage::PageRef created_ref;
-        bool healing = false;  // this record is an image laid over a torn page
+        bool healing = false;  // this record is laid over a torn page
+        // **A whole-page record heals a tear** (page.md §10): an image, and a
+        // PAGE_INIT (DB), which formats a zeroed page as its creation did.
+        // A page created and never copied owes no image (the store's
+        // `Frame::owes_image`): it was created after the last anchor's
+        // publish listed the dirty pages, or that publish would have
+        // written and synced it, so its PAGE_INIT is in this replay range,
+        // and the PAGE_INIT and every record after it rebuild it. **Every
+        // PAGE_INIT applier is a whole-page format** - `FormatPage` zeroes the
+        // page, and the heap, var-heap and Bound Cabin formats go through it -
+        // so a PAGE_INIT laid over a torn page yields what replaying it over
+        // an untorn one does, a re-format in place (the undo recycle)
+        // included.
+        const bool heals = is_image || record.type() == RecordType::kPageInit;
         auto got = store.Get(page_id);
         if (got.ok()) {
             page_bytes = got.value().bytes();
         } else if (got.status().code() == StatusCode::kCorruption) {
-            // Checksum failure. Held, not failed: an image later in the
-            // stream is exactly what heals this (page.md §10). The id is
-            // allocated and its bytes are not zeros, which `CreateAt`
+            // Checksum failure. Held, not failed: a whole-page record later
+            // in the stream is exactly what heals this (page.md §10). The id
+            // is allocated and its bytes are not zeros, which `CreateAt`
             // refuses as in use; `CreateOverTorn` takes it.
-            if (!is_image) {
+            if (!heals) {
                 poisoned.insert(page_id);
                 return Status::OK();
             }
@@ -442,7 +455,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
 
         // A page still poisoned is one no image has healed yet; its
         // ordinary records cannot be applied to bytes nobody trusts.
-        if (poisoned.count(page_id) != 0 && !is_image) {
+        if (poisoned.count(page_id) != 0 && !heals) {
             return Status::OK();
         }
 
@@ -461,14 +474,15 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
                                        " at lsn " + std::to_string(record.header.lsn) +
                                        " on page " + std::to_string(page_id));
         }
-        if (is_image) {
-            ++stats.page_images;
-            // Counted by what this image did - it was laid over a page that
+        if (is_image) ++stats.page_images;
+        if (heals) {
+            // Counted by what this record did - it was laid over a page that
             // failed its checksum - and not by whether an earlier record had
             // met the tear first (the audit's G33): a torn page whose first
             // record in range is its image is healed all the same, and used
             // to count as nothing. One heal either way: a poisoned page is
-            // never created, so its image arrives through the same arm.
+            // never created, so its whole-page record arrives through the
+            // same arm.
             poisoned.erase(page_id);
             if (healing) {
                 ++stats.pages_healed;

@@ -114,7 +114,13 @@ namespace {
 // record's LSN moves with them; its var-heap root takes a page id, so every
 // user page named after it is one higher. The script captures no plan, so
 // no row of the relation is logged, and no record's format changes.
-constexpr std::uint32_t kGoldenLogCrc = 0x336dc6cdu;
+// **Re-pinned at DB-S1** (on `db-torn-page-healing`,
+// `instructions/v3.2.0/workorder-db-torn-page-healing.md` DB-R1): a write
+// fetch of a page the device holds logs that page's FULL_PAGE_IMAGE first,
+// so the script's stream gains one image of every bootstrap page it writes
+// after the boot's flush, each at `kNoTxnId`, and every later LSN moves. No
+// record kind is added and none changes its framing (DB-R5).
+constexpr std::uint32_t kGoldenLogCrc = 0x0124c937u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

@@ -305,6 +305,13 @@ public:
     // refused `OutOfSpace` (stats().ring_full_drains / ring_full_refusals).
     StatusOr<Lsn> Append(const RecordSpec& spec, std::span<const std::byte> payload = {});
 
+    // The write fetch's image (`durability.hpp`): a FULL_PAGE_IMAGE at
+    // `kNoTxnId`, the page itself its payload (`payload.hpp`: no prefix).
+    StatusOr<Lsn> LogPageImage(PageId page_id,
+                               std::span<const std::byte, kPageSize> page) override {
+        return Append(RecordSpec{RecordType::kFullPageImage, kNoTxnId, page_id}, page);
+    }
+
     // **The cadence checkpoint's tried entries** (CZ-S3, `stream.hpp`'s
     // concurrency section; wal.md §6). Each sets `*busy` and does nothing
     // when the stream latch is held - or, for the flush, when another flush

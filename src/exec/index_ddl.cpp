@@ -704,6 +704,13 @@ IndexBuild::~IndexBuild() {
     if (!finished_ && !tree_logged_ && tree_.root_page_id != kInvalidPageId) {
         FreeUnbuiltTree(store_, tree_.root_page_id, def_.index_oid);
     }
+    ReleaseUnlogged();
+}
+
+void IndexBuild::ReleaseUnlogged() noexcept {
+    if (!unlogged_registered_) return;
+    store_.RemoveUnloggedOwner(def_.index_oid);
+    unlogged_registered_ = false;
 }
 
 StatusOr<std::unique_ptr<IndexBuild>> IndexBuild::ForCreate(
@@ -802,6 +809,14 @@ Status IndexBuild::Begin() {
     layout.key_width = def_.key_width;
     layout.covered_width = static_cast<std::uint16_t>(def_.entry_width - def_.key_width -
                                                       index::kIndexTupleKeyWidth);
+
+    // **Fenced, the tree is unlogged until `LogBuiltTree`** (DB-R3): its
+    // pages carry the index's oid, registered before the first one exists.
+    // A full registry refuses the build rather than let it be imaged.
+    if (!online_) {
+        if (Status s = store_.AddUnloggedOwner(def_.index_oid); !s.ok()) return s;
+        unlogged_registered_ = true;
+    }
 
     // The root, scoped so its pin drops before the walk fetches pages.
     {
@@ -925,6 +940,7 @@ StatusOr<IndexDdlResult> IndexBuild::Finish(const Status& ran, catalog::CatalogR
         // Nothing has logged the tree yet and nothing names it, so its pages
         // go back now rather than leaking for the volume's life (BX-Q6 (b)).
         FreeUnbuiltTree(store_, tree_.root_page_id, def_.index_oid);
+        ReleaseUnlogged();
         return Refusal(ran);
     }
 
@@ -939,6 +955,8 @@ StatusOr<IndexDdlResult> IndexBuild::Finish(const Status& ran, catalog::CatalogR
         !s.ok()) {
         return Refusal(s.WithContext("logging the built tree"));
     }
+    // Every page is imaged now, so from here the tree is a logged class.
+    ReleaseUnlogged();
     def_.root_page_id = tree_.root_page_id;
 
     auto index_oid = catalog_.CreateIndex(def_, trx_id_, written);

@@ -1,0 +1,4 @@
+18:32:45 age=28s 18:32:17 A-update-lit-1000000-c1: 70530 stmts 3526/s cpu/stmt 58.3us bad=0 ck=4 load1=1.24
+18:33:45 age=16s 18:33:29 A-recovery-100000-600000-r1: work 38.4s lsn 86601584 mount 0.341s
+18:34:45 age=36s 18:34:09 B-recovery-100000-600000-r1: work 38.1s lsn 86626320 mount 0.343s
+18:35:45 age=17s 18:35:28 ALL DONE

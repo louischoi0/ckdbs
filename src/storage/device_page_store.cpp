@@ -803,6 +803,10 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::InsertFrame(
     // not heat, and the ring's own slot release depends on usage staying
     // zero.
     slot->usage = warm ? std::uint8_t{1} : std::uint8_t{0};
+    // **A faulted frame owes an image** (DB-R1): the device holds these
+    // bytes, so a write that tears them later is healed from the image the
+    // next write fetch logs. A created one owes none until its first copy.
+    slot->owes_image = why == Inserting::kFault;
     return std::span<std::byte, kPageSize>(*slot->bytes);
 }
 
@@ -2151,6 +2155,12 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 // waits on the claim.
                 page.dirty_gen = page.frame->dirty_gen;
                 page.frame->stamped_since_copy = wal::kNoLsn;
+                // **The copy is what the device will hold, so the page owes
+                // an image again** (DB-R1): the next write fetch logs it
+                // before changing it. Set at the copy, not the clean, so a
+                // write fetched before this copy and latched after it - the
+                // generation's case above - pays it too.
+                page.frame->owes_image = true;
 
                 // (2) checksum, the last thing that touches a page before it
                 // goes out (page.md section 8) - skipped for a headerless
@@ -2478,7 +2488,108 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId page_id, PinMode mode,
                                                                       bool for_read,
                                                                       FetchHeat heat) {
-    return FetchAndPin(page_id, mode, for_read, heat, /*faulted=*/nullptr);
+    auto bytes = FetchAndPin(page_id, mode, for_read, heat, /*faulted=*/nullptr);
+    if (!bytes.ok() || for_read) return bytes;
+    // **The write fetch pays the image its frame owes** (DB-R1, the
+    // header's "The write fetch's image"), holding the page exclusive and
+    // pinned, before its caller has changed a byte. A refusal gives both
+    // back and is the fetch's.
+    if (Status s = LogOwedImage(page_id, bytes.value()); !s.ok()) {
+        UnpinFrame(page_id);
+        return s;
+    }
+    return bytes;
+}
+
+Status DevicePageStore::LogOwedImage(PageId page_id, std::span<const std::byte, kPageSize> bytes) {
+    if (!fetch_images_.load(std::memory_order_acquire)) return Status::OK();
+    {
+        // The pin keeps the frame resident. The latch orders the bit
+        // against a copy on another core, which this exclusive hold already
+        // excludes, so the bit read here reflects every copy before it.
+        LatchGuard structure(structure_latch());
+        auto it = frames_.find(page_id);
+        if (it == frames_.end() || !it->second.owes_image) return Status::OK();
+        it->second.owes_image = false;
+    }
+    // A class no record describes owes nothing: its debt is dropped, and
+    // the next copy sets it again for nothing.
+    if (!ImagedClass(page_id, bytes)) return Status::OK();
+    wal::WalDurability* const gate = GateForCaller();
+    if (gate == nullptr) return Status::OK();  // a store that logs nothing
+    auto lsn = gate->LogPageImage(page_id, bytes);
+    if (!lsn.ok()) {
+        // Still owed: the fetch fails, and a later one - after a restart,
+        // since a refused append fail-stops the log - pays it.
+        LatchGuard structure(structure_latch());
+        if (auto it = frames_.find(page_id); it != frames_.end()) it->second.owes_image = true;
+        return lsn.status().WithContext("logging page " + std::to_string(page_id) +
+                                        "'s image at its write fetch");
+    }
+    if (lsn.value() == wal::kNoLsn) return Status::OK();  // a gate that logs no image
+    fetch_images_logged_.Add();
+    // The stamp is the image's recLSN too (`StampPageLsn` keeps the
+    // minimum): a checkpoint that collects this page carries a redo start
+    // at or below the image, or redo's dirty filter would skip it.
+    return StampPageLsn(page_id, lsn.value());
+}
+
+bool DevicePageStore::ImagedClass(PageId page_id,
+                                  std::span<const std::byte, kPageSize> bytes) const {
+    // Page 0 is the superblock: no record describes it, and an image of it
+    // laid at redo would put an old anchor over the one the mount read.
+    if (page_id == 0 || IsHeaderless(page_id)) return false;
+    const PageHeaderFields header = ReadPageHeader(bytes);
+    // **The logged types, listed** (`base/common.hpp`), so a class added
+    // later is unimaged - refused when torn, as before DB - until it is
+    // named here. Not listed: kInvalid (a created frame not yet formatted,
+    // a Waystone target), kCatalog (assigned, unused), kSuperBlock, the two
+    // map types, and kWaystone (trails are unlogged, `stats/trail_store.hpp`).
+    switch (static_cast<PageType>(header.page_type)) {
+        case PageType::kHeap:
+        case PageType::kBtreeInternal:
+        case PageType::kBtreeLeaf:
+        case PageType::kUndo:
+        case PageType::kVarHeap:
+        case PageType::kIndexInternal:
+        case PageType::kIndexLeaf:
+        case PageType::kCabinBound:
+        case PageType::kAnchor:
+            break;
+        default:
+            return false;
+    }
+    return !IsUnlogged(header.owner_oid) && !IsUnlogged(kUnloggedPageTag | page_id);
+}
+
+Status DevicePageStore::AddUnlogged(std::uint64_t word) {
+    // Owner 0 is every bootstrap root's, logged chains among them.
+    if (word == 0) return Status::InvalidArgument("owner oid 0 cannot be registered unlogged");
+    if (IsUnlogged(word)) return Status::OK();
+    for (auto& slot : unlogged_) {
+        std::uint64_t empty = 0;
+        if (slot.compare_exchange_strong(empty, word, std::memory_order_acq_rel)) {
+            return Status::OK();
+        }
+    }
+    return Status::ResourceExhausted("DevicePageStore: the unlogged-class table holds " +
+                                     std::to_string(kUnloggedSlots) +
+                                     " entries and every one is in use");
+}
+
+void DevicePageStore::RemoveUnlogged(std::uint64_t word) noexcept {
+    for (auto& slot : unlogged_) {
+        std::uint64_t present = word;
+        if (slot.compare_exchange_strong(present, 0, std::memory_order_acq_rel)) return;
+    }
+}
+
+bool DevicePageStore::IsUnlogged(std::uint64_t word) const noexcept {
+    if (word == 0) return false;
+    for (const auto& slot : unlogged_) {
+        if (slot.load(std::memory_order_acquire) == word) return true;
+    }
+    return false;
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId page_id, PinMode mode,
@@ -2677,6 +2788,13 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
         // `PinFrame`'s order - and through `AcquirePageLatch`, which carries
         // AM-S1's never-upgrade census.
         AcquirePageLatch(id, *frame, PinMode::kExclusive);
+        // A writeback can copy the just-created frame between the raw create
+        // and this latch and set its debt. The creator writes it first and a
+        // nested write fetch of its own held page would log the image
+        // mid-mutation, behind changes it holds; the bytes the copy took are
+        // the creation's, which its PAGE_INIT heals, so the debt is dropped.
+        LatchGuard structure(latch);
+        frame->owes_image = false;
         return made;
     }
 
@@ -3147,6 +3265,7 @@ DevicePageStore::PoolCounters DevicePageStore::pool_counters() const {
     out.dirty_queued = dirty_queued_.Load();
     out.dirty_drained = dirty_drained_.Load();
     out.refused = refused_.Load();
+    out.fetch_images = fetch_images_logged_.Load();
     out.would_wait = would_wait_.Load();
     return out;
 }

@@ -1658,4 +1658,11 @@ private:
     InstanceWords* words_ = nullptr;
 };
 
+// **The catalog's unlogged classes, named to the store** (DB-Q2 (a)): the
+// two unlogged chains (`IsUnloggedCatalogRelation`), their heads by page id
+// (owner 0, as every bootstrap root's) and their growth pages by owner oid,
+// so no write fetch logs an image of a page no record describes. Called once
+// a mount has opened the store, before its write-fetch images are enabled.
+Status RegisterUnloggedClasses(storage::PageStore& store);
+
 }  // namespace kds::catalog

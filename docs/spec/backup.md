@@ -43,8 +43,9 @@ copier reads the data file through the device's write fence: armed, a write
 and the copier's read of an overlapping page range never run at once, so no
 copied page is torn by the engine's own write - headered, headerless, free
 map or superblock. Disarmed, a data-file write pays three atomic operations
-(BR-R6). No full-page images are logged (`br-s0-census.md` H5: there is no
-single decision site).
+(BR-R6). The fence is what keeps path B's copy whole: the full-page images
+the write fetch logs since DB (`wal.md` §10) heal a crash, and the backup
+does not lean on them - its checks still refuse a torn copied page.
 
 **B6 - The copy is bounded by the stop on both sides.** The copier copies to
 the capacity read at START; STOP copies the tail the file grew, **then**
@@ -153,7 +154,11 @@ and it must exist.
 
 Incremental backup, compression, encryption, an object-storage target,
 parallel copy, concurrent backups, a logical dump and a streaming standby
-are not built. A torn page from the device itself (a snapshot that does not
-freeze the filesystem, a power cut) is refused, not healed - the image
-cadence of `wal.md` §10 is not built. A page the original freed after its map
+are not built. A torn page in a path D copy (a snapshot that does not
+freeze the filesystem) is refused by the backup's checks at STOP, by
+`--verify-backup` and by the restore's layout, not healed - though since DB
+the restore's mount would heal one whose image is in `[start, stop]`, the
+checks are not relaxed (`workorder-db-torn-page-healing.md` DB-Q7). A power
+cut of the running instance is mount recovery's, which heals a logged-class
+tear (`wal.md` §10). A page the original freed after its map
 region was copied stays allocated in the restore: a leak, as after a crash.

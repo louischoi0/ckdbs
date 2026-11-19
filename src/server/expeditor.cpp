@@ -1305,6 +1305,13 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // BE-Q6, once the mount has made resident everything that stays.
     if (Status s = expeditor->store_->ApplyMountFloor(); !s.ok()) return s;
 
+    // **The write fetch's image, on from here** (DB-R2, `device_page_store.hpp`):
+    // redo, undo, the assertion fold and the completion checkpoint ran with
+    // it off, and every page they faulted or copied owes its image to the
+    // first write fetch after this. Before any peer and any listener.
+    if (Status s = catalog::RegisterUnloggedClasses(*expeditor->store_); !s.ok()) return s;
+    expeditor->store_->EnableFetchImages(true);
+
     // **DROP TABLE page reclamation, collected** (BF-R8): after the
     // completion checkpoint, which is what moves `D` past this mount's scan
     // at `cores = 1`, and before any listener binds. Executed on core 0's

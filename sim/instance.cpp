@@ -176,6 +176,10 @@ Status SimInstance::Boot() {
         if (Status s = reclaimer_->CollectAtMount(reclaim_gate); !s.ok()) return s;
         reclaim_gate_ = reclaim_gate;
     }
+    // The write fetch's image, on once the mount is done (DB-R2), where the
+    // expeditor turns it on.
+    if (Status s = catalog::RegisterUnloggedClasses(*store_); !s.ok()) return s;
+    store_->EnableFetchImages(true);
     return Status::OK();
 }
 
@@ -306,6 +310,10 @@ storage::MemoryPageDevice::PowerCut SimInstance::CrashWithPowerCut(std::uint64_t
                                                                     std::uint64_t page_seed,
                                                                     bool tear) {
     const storage::MemoryPageDevice::PowerCut cut = page_device_->CrashPersisting(page_seed, tear);
+    // Classed off the bytes the torn write carried, by the store that wrote
+    // them (DB-Q6): the frame itself may be freed or re-created by then.
+    last_tear_imaged_ = cut.torn_written.has_value() && store_ != nullptr &&
+                        store_->ImagedClass(*cut.torn, *cut.torn_written);
     CrashLog(keep_log_bytes);
     TearDown();
     return cut;

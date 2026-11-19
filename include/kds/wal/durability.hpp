@@ -44,6 +44,20 @@ public:
     // from the durable prefix alone.
     virtual bool stopped() const noexcept { return false; }
 
+    // **The image a write fetch owes** (DB, wal.md §10): appends one
+    // FULL_PAGE_IMAGE of `page` as it stands, naming `page_id`, at
+    // `kNoTxnId` - an image belongs to no transaction, and a real id whose
+    // commit a later scan starts above would read as a loser - and answers
+    // its LSN. The store stamps the page with it. A gate that logs no image
+    // answers `kNoLsn`, which is the default: a hand-built store's gate and
+    // a test's. A refusal is the append's, a fail-stop included.
+    virtual StatusOr<Lsn> LogPageImage(PageId page_id,
+                                       std::span<const std::byte, kPageSize> page) {
+        (void)page_id;
+        (void)page;
+        return kNoLsn;
+    }
+
     // durable_lsn() > lsn, spelled out so callers never write the
     // comparison themselves and get the strictness wrong.
     bool IsDurable(Lsn lsn) const noexcept { return durable_lsn() > lsn; }

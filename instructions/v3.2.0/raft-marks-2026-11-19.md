@@ -116,3 +116,21 @@ took under them.
 | **Mark** | None. **DE goes to `main` with `--no-verify`**: a `--no-ff` merge of `worktree-de-page-read-off-the-reactor` onto `origin/main` at `135d2570`. **The hook was skipped.** Because the merged tree is no longer the tree the close's suite ran on, CLA built it and ran the suite the hook would have run on it before pushing, to check its own merge and not to re-open the word: 0 failed of 4846 on the merged tree's build inputs. Not executed for DE: a `tsan` build of the new rig cells and the `bs-nightly` run. **Not measured: the merged tree.** The close (`bench/v3.4.14/results-de-close-v3.4.14-6-g1942cb9a.md`) priced DE against the commit it opened from, `35086008`, which has none of DF-S2 to DF-S5; what a resident point `SELECT` costs with both on `main` is the sum of two closes that were each measured alone - DE's about 0.2 to 0.4 us at its closing code and not isolated, DF's in its own close - and no cell has run them together. DE's closing code - its spike's last build plus one thread-local store a statement - was not measured again either |
 | **Does not settle** | a tag, a version - no version is named by this word and no tag is made; the ruling DE-Q1 (a) names the operator's, which went in as CLA's DE-Q7 (a), build narrow, and stays open to the operator's own mark with every other option not taken (DE-Q7 (b)/(c)/(d), DE-Q8 (b)/(c), DE-Q9 (b)/(c), DE-Q10 (b)/(c)/(d), DE-Q11 (b)/(c), DE-Q12 (b), DE-Q13 (b), DE-Q14 (b)/(c), DE-Q15 (b)/(c)); the point `SELECT`'s cost, neither removed nor placed |
 | **Recorded at** | this file; the DE order's header and §7; the DE row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 13. DB opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | *"schedule the DB work for 4 hours from now /go-ahead-achieving-milestone"* (given in Korean, recorded in English) - at 08:38 UTC, after CLA listed the open milestones; the scheduled run started at 12:38 UTC |
+| **Mark** | None of the operator's own. **DB opened** on worktree `db-torn-page-healing` from `origin/main` at `734484ca` (`v3.4.14-2-g734484ca`), under the skill's standing word: CLA's proposals are adopted. **DB-Q1..Q6 adopted (a)**, DB-Q1 and DB-Q2 as DB-S0 revised them against the tree (the order's §4 and §7), and **DB-Q7, added at DB-S0, adopted (a)** - each on the operator's standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone) |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; the options the standing go-ahead did not take (DB-Q1 (b)/(c), DB-Q2 (b), DB-Q3 (b), DB-Q4 (b), DB-Q5 (b)/(c), DB-Q6 (b), DB-Q7 (b)), which stay open to the operator's own mark |
+| **Recorded at** | this file; the DB order's header, §4 and §7; the DB row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 14. DB closed on the work branch, on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | the same standing go-ahead as §13; no new word |
+| **Mark** | None of the operator's own. DB-S1 (`c802fac9`), DB-S2 (`ec057c06`) and DB-S3 (documents and the close measurement) landed on `worktree-db-torn-page-healing`; DB-Q5's deltas recorded with no bar applied (`bench/v3.4.14/results-db-close-v3.4.14-5-gec057c06.md`) |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; the operator's ruling on the -11.7 % (100K-row updates, `cores = 4`) and -25.3 % (pool pressure) deltas |
+| **Recorded at** | this file; the DB order's header and §7; the DB row in `instructions/v3.2.0/index.md` |

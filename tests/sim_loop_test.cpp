@@ -1,7 +1,9 @@
 #include "sim/loop.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -431,13 +433,11 @@ TEST_F(SimIntegrityCorruption, ATornPageWriteSurfacesAsAPageHeaderFinding) {
 }
 
 // RV3's stronger arm of the same scenario: with catalog mutations logged,
-// redo now *names* the torn catalog page, finds no full page image to
-// heal it with (wal.md §10's first-write-per-checkpoint FPI is still
-// unbuilt for every page class), and **refuses the mount** - the same
-// contract a torn heap page already lives under, extended to the catalog.
-// Before RV3 this boot succeeded and served the corruption; refusing is
-// the honest interim until §10's FPI cadence exists.
-TEST_F(SimIntegrityCorruption, ATornCatalogPageRefusesTheMountInsteadOfServingIt) {
+// redo *names* the torn catalog page. Until DB it found no image to heal it
+// with and refused the mount; since DB the page's write fetch logged one
+// after the page's last copy, so the mount heals the tear and serves what
+// was committed (wal.md §10, DB-R1).
+TEST_F(SimIntegrityCorruption, ATornCatalogPageIsHealedAtTheMount) {
     MakeTables();
     for (int i = 0; i < 20; ++i) Insert("h", i, "short");
 
@@ -446,9 +446,125 @@ TEST_F(SimIntegrityCorruption, ATornCatalogPageRefusesTheMountInsteadOfServingIt
     instance_->Crash();
 
     Status rebooted = instance_->Reboot();
-    ASSERT_FALSE(rebooted.ok()) << "a recovered mount served a torn catalog page";
-    EXPECT_NE(rebooted.message().find("no full page image"), std::string::npos)
-        << rebooted.message();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    EXPECT_GE(instance_->recovery().pages_healed, 1u) << "the mount healed no page";
+    EXPECT_NE(instance_->Execute("SELECT COUNT(*) FROM h").find("20"), std::string::npos)
+        << instance_->Execute("SELECT COUNT(*) FROM h");
+    const IntegrityReport report =
+        CheckInstance(instance_->store(), instance_->page_device(), instance_->catalog());
+    EXPECT_TRUE(report.ok()) << report.Summary();
+}
+
+// DB's tests (workorder-db-torn-page-healing.md §5): recovery run twice is
+// a no-op - the second mount, crashed into with nothing run between, finds
+// the healed page whole and serves the same rows.
+TEST_F(SimIntegrityCorruption, AHealedMountCrashedAndMountedAgainServesTheSameRows) {
+    MakeTables();
+    for (int i = 0; i < 20; ++i) Insert("h", i, "short");
+    instance_->page_device().TearNextWrite(100);
+    ASSERT_EQ(instance_->Execute("SYNC"), "OK synced");
+    instance_->Crash();
+    Status rebooted = instance_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    ASSERT_GE(instance_->recovery().pages_healed, 1u);
+
+    instance_->Crash();
+    rebooted = instance_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    EXPECT_EQ(instance_->recovery().pages_healed, 0u) << "the first mount left a page torn";
+    EXPECT_NE(instance_->Execute("SELECT COUNT(*) FROM h").find("20"), std::string::npos)
+        << instance_->Execute("SELECT COUNT(*) FROM h");
+    const IntegrityReport report =
+        CheckInstance(instance_->store(), instance_->page_device(), instance_->catalog());
+    EXPECT_TRUE(report.ok()) << report.Summary();
+}
+
+// DB-R2: the healing mount loses its power at its own first page write, so
+// the torn page is still torn when the second mount replays the same range
+// - which nothing the first mount did may have moved under it.
+TEST_F(SimIntegrityCorruption, AHealingMountCutAtItsFirstWriteHealsAtTheNext) {
+    MakeTables();
+    for (int i = 0; i < 20; ++i) Insert("h", i, "short");
+    instance_->page_device().TearNextWrite(100);
+    ASSERT_EQ(instance_->Execute("SYNC"), "OK synced");
+    instance_->Crash();
+    instance_->page_device().LosePowerAtWrite(0, nullptr);
+    (void)instance_->Reboot();  // a mount the power left is no mount
+    ASSERT_TRUE(instance_->page_device().power_lost()) << "the mount wrote no page";
+    instance_->Crash();
+    const Status rebooted = instance_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    EXPECT_GE(instance_->recovery().pages_healed, 1u);
+    EXPECT_NE(instance_->Execute("SELECT COUNT(*) FROM h").find("20"), std::string::npos)
+        << instance_->Execute("SELECT COUNT(*) FROM h");
+    const IntegrityReport report =
+        CheckInstance(instance_->store(), instance_->page_device(), instance_->catalog());
+    EXPECT_TRUE(report.ok()) << report.Summary();
+}
+
+// A page written back twice is healable after the second write: the first
+// write's copy re-armed the debt, the next write fetch logged a second
+// image, and the tear of the second write heals from it. The checkpoints
+// are what make the second image the only one in range: the first puts
+// the PAGE_INIT behind the redo start, and the second - with the page
+// clean, so not copied - puts the first image behind it too.
+TEST_F(SimIntegrityCorruption, APageWrittenBackTwiceIsHealedAfterTheSecondWrite) {
+    MakeTables();
+    for (int i = 0; i < 10; ++i) Insert("h", i, "short");
+    ASSERT_TRUE(instance_->RunCheckpoint().ok());
+    for (int i = 10; i < 15; ++i) Insert("h", i, "short");
+    instance_->page_device().ClearTrace();
+    ASSERT_EQ(instance_->Execute("SYNC"), "OK synced");  // the first write
+    std::set<PageId> written;
+    for (const auto& e : instance_->page_device().trace()) {
+        if (e.kind != storage::MemoryPageDevice::OpKind::kWrite) continue;
+        for (std::uint32_t i = 0; i < e.nr_pages; ++i) written.insert(e.first_page_id + i);
+    }
+    ASSERT_TRUE(instance_->RunCheckpoint().ok());
+    for (int i = 15; i < 20; ++i) Insert("h", i, "short");
+    instance_->page_device().ClearTrace();
+    instance_->page_device().TearNextWrite(100);
+    ASSERT_EQ(instance_->Execute("SYNC"), "OK synced");  // the second, torn
+    const auto& trace = instance_->page_device().trace();
+    const auto torn = std::find_if(trace.begin(), trace.end(), [](const auto& e) {
+        return e.kind == storage::MemoryPageDevice::OpKind::kWrite;
+    });
+    ASSERT_NE(torn, trace.end());
+    ASSERT_EQ(written.count(torn->first_page_id), 1u)
+        << "the torn page " << torn->first_page_id << " was not written the first time";
+    instance_->Crash();
+    Status rebooted = instance_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    EXPECT_GE(instance_->recovery().pages_healed, 1u);
+    EXPECT_NE(instance_->Execute("SELECT COUNT(*) FROM h").find("20"), std::string::npos)
+        << instance_->Execute("SELECT COUNT(*) FROM h");
+    const IntegrityReport report =
+        CheckInstance(instance_->store(), instance_->page_device(), instance_->catalog());
+    EXPECT_TRUE(report.ok()) << report.Summary();
+}
+
+// A torn page with no image and no PAGE_INIT in the replay range - a page
+// a pre-DB engine wrote, stood for by a run with the images off from its
+// creation and a checkpoint past every PAGE_INIT - is still refused, never
+// served.
+TEST_F(SimIntegrityCorruption, ATornPageWithNoImageInRangeIsStillRefused) {
+    instance_->store().EnableFetchImages(false);
+    MakeTables();
+    for (int i = 0; i < 20; ++i) Insert("h", i, "short");
+    ASSERT_TRUE(instance_->RunCheckpoint().ok());
+    for (int i = 20; i < 25; ++i) Insert("h", i, "short");
+    instance_->page_device().TearNextWrite(100);
+    ASSERT_EQ(instance_->Execute("SYNC"), "OK synced");
+    instance_->Crash();
+    const Status rebooted = instance_->Reboot();
+    if (!rebooted.ok()) {
+        EXPECT_EQ(rebooted.code(), StatusCode::kCorruption) << rebooted.message();
+        return;
+    }
+    EXPECT_EQ(instance_->recovery().pages_healed, 0u);
+    const IntegrityReport report =
+        CheckInstance(instance_->store(), instance_->page_device(), instance_->catalog());
+    EXPECT_FALSE(report.ok()) << "a torn page with nothing to heal it was served";
 }
 
 // ---- RV3: DDL is durable (docs/workplan-rv3-catalog-recovery.md) ----------
@@ -694,6 +810,34 @@ TEST(SimFaults, EveryModeSurvivesInjectedDeviceErrorsOnEveryCommittedSeed) {
             EXPECT_GT(verdict.faults_armed, 0u) << verdict.Summary(config);
         }
     }
+}
+
+// DB-Q6: a power lost at a page write that tears a logged page is healed
+// and reconciled. Every power-loss point of a seeded run outside the mount,
+// the sweep's grid in small: a tear of a logged class refused there fails
+// the run (DB-R1); one of page 0, a map or an unlogged class may be refused
+// (§2.3), or never read at all, so it is counted in neither. Asked here:
+// some tear was healed.
+TEST(SimFaults, APowerLossThatTearsALoggedPageIsHealed) {
+    std::uint64_t tears = 0;
+    std::uint64_t refused = 0;
+    std::uint64_t healed = 0;
+    for (std::uint64_t n = 1; n <= 16; ++n) {
+        SimConfig config;
+        config.seed = 2;
+        config.ops = 300;
+        config.mode = SimMode::kClean;
+        config.iterations = 1;
+        config.nth_fault = ParseNthFault("power-loss-at-page-write:" + std::to_string(n));
+        ASSERT_TRUE(config.nth_fault.has_value());
+        const SimVerdict verdict = RunSimulation(config);
+        ASSERT_TRUE(verdict.ok) << verdict.Summary(config);
+        tears += verdict.tears;
+        refused += verdict.tears_refused;
+        healed += verdict.tears_healed;
+    }
+    EXPECT_GE(healed, 1u) << "no point of the grid healed a tear";
+    EXPECT_LE(healed + refused, tears);
 }
 
 // A fault run whose injections never fired proves nothing, so the corpus

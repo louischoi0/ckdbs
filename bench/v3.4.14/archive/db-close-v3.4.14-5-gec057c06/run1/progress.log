@@ -1,0 +1,69 @@
+18:07:10 A-select-pk-10000-c1: 654512 stmts 32724/s cpu/stmt 23.1us bad=0 ck=4 load1=3.93
+18:07:35 B-select-pk-10000-c1: 658149 stmts 32906/s cpu/stmt 22.6us bad=0 ck=4 load1=3.59
+18:07:58 A-update-lit-200-c1: 87639 stmts 4382/s cpu/stmt 42.7us bad=0 ck=4 load1=3.13
+18:08:21 B-update-lit-200-c1: 87217 stmts 4361/s cpu/stmt 43.6us bad=0 ck=4 load1=2.33
+18:08:45 A-update-lit-1000-c1: 87491 stmts 4374/s cpu/stmt 42.9us bad=0 ck=4 load1=2.16
+18:09:08 B-update-lit-1000-c1: 85789 stmts 4289/s cpu/stmt 43.2us bad=0 ck=4 load1=1.89
+18:09:32 A-update-lit-10000-c1: 86957 stmts 4348/s cpu/stmt 43.5us bad=0 ck=4 load1=1.72
+18:09:55 B-update-lit-10000-c1: 87705 stmts 4385/s cpu/stmt 43.2us bad=0 ck=4 load1=1.54
+18:10:20 A-update-lit-100000-c1: 84006 stmts 4200/s cpu/stmt 43.6us bad=0 ck=4 load1=1.36
+18:10:44 B-update-lit-100000-c1: 83690 stmts 4184/s cpu/stmt 44.2us bad=0 ck=4 load1=1.35
+18:11:08 A-update-spill-assign-10000-c1: 75408 stmts 3770/s cpu/stmt 53.8us bad=0 ck=4 load1=1.17
+18:11:31 B-update-spill-assign-10000-c1: 72537 stmts 3627/s cpu/stmt 54.9us bad=0 ck=4 load1=1.34
+18:11:55 A-insert-0-c1: 87607 stmts 4380/s cpu/stmt 40.1us bad=0 ck=4 load1=1.37
+18:12:18 B-insert-0-c1: 87341 stmts 4367/s cpu/stmt 39.7us bad=0 ck=4 load1=1.41
+18:12:42 A-select-pk-10000-c4: 600923 stmts 30045/s cpu/stmt 32.8us bad=0 ck=15 load1=2.14
+18:13:06 B-select-pk-10000-c4: 597770 stmts 29887/s cpu/stmt 33.0us bad=0 ck=15 load1=2.29
+18:13:30 A-update-lit-200-c4: 103967 stmts 5198/s cpu/stmt 73.9us bad=9 ck=15 load1=2.02
+18:13:53 B-update-lit-200-c4: 103935 stmts 5197/s cpu/stmt 73.9us bad=7 ck=15 load1=2.17
+18:14:17 A-update-lit-1000-c4: 104691 stmts 5234/s cpu/stmt 86.0us bad=5 ck=15 load1=2.00
+18:14:40 B-update-lit-1000-c4: 104635 stmts 5231/s cpu/stmt 88.8us bad=1 ck=15 load1=1.91
+18:15:04 A-update-lit-10000-c4: 103976 stmts 5198/s cpu/stmt 78.7us bad=0 ck=15 load1=2.49
+18:15:27 B-update-lit-10000-c4: 103048 stmts 5152/s cpu/stmt 88.5us bad=1 ck=15 load1=2.45
+18:15:52 A-update-lit-100000-c4: 104342 stmts 5217/s cpu/stmt 98.8us bad=0 ck=16 load1=2.65
+18:16:16 B-update-lit-100000-c4: 92366 stmts 4618/s cpu/stmt 106.3us bad=0 ck=16 load1=2.29
+18:16:40 A-update-spill-assign-10000-c4: 90928 stmts 4546/s cpu/stmt 116.6us bad=0 ck=15 load1=2.33
+18:17:03 B-update-spill-assign-10000-c4: 90122 stmts 4506/s cpu/stmt 117.2us bad=1 ck=15 load1=2.29
+18:17:27 A-insert-0-c4: 102291 stmts 5114/s cpu/stmt 87.1us bad=0 ck=15 load1=2.57
+18:17:50 B-insert-0-c4: 105418 stmts 5271/s cpu/stmt 69.0us bad=0 ck=15 load1=2.29
+18:18:15 A-select-pk-10000-c1: 658307 stmts 32914/s cpu/stmt 22.8us bad=0 ck=4 load1=2.72
+18:18:39 B-select-pk-10000-c1: 658499 stmts 32924/s cpu/stmt 22.7us bad=0 ck=4 load1=2.79
+18:19:02 A-update-lit-200-c1: 89288 stmts 4464/s cpu/stmt 43.1us bad=0 ck=4 load1=2.18
+18:19:26 B-update-lit-200-c1: 87923 stmts 4396/s cpu/stmt 42.8us bad=0 ck=4 load1=2.54
+18:19:49 A-update-lit-1000-c1: 87270 stmts 4363/s cpu/stmt 44.0us bad=0 ck=4 load1=2.25
+18:20:13 B-update-lit-1000-c1: 87943 stmts 4397/s cpu/stmt 43.0us bad=0 ck=4 load1=1.88
+18:20:36 A-update-lit-10000-c1: 87214 stmts 4360/s cpu/stmt 43.7us bad=0 ck=4 load1=1.58
+18:21:00 B-update-lit-10000-c1: 86550 stmts 4327/s cpu/stmt 43.9us bad=0 ck=4 load1=1.45
+18:21:24 A-update-lit-100000-c1: 87020 stmts 4351/s cpu/stmt 44.4us bad=0 ck=4 load1=1.46
+18:21:48 B-update-lit-100000-c1: 83859 stmts 4193/s cpu/stmt 45.1us bad=0 ck=4 load1=1.50
+18:22:12 A-update-spill-assign-10000-c1: 75160 stmts 3758/s cpu/stmt 54.7us bad=0 ck=4 load1=1.48
+18:22:35 B-update-spill-assign-10000-c1: 75533 stmts 3776/s cpu/stmt 55.1us bad=0 ck=4 load1=1.38
+18:22:59 A-insert-0-c1: 88055 stmts 4403/s cpu/stmt 41.0us bad=0 ck=4 load1=1.34
+18:23:22 B-insert-0-c1: 86760 stmts 4338/s cpu/stmt 40.7us bad=0 ck=4 load1=1.42
+18:23:46 A-select-pk-10000-c4: 590349 stmts 29516/s cpu/stmt 32.5us bad=0 ck=15 load1=1.72
+18:24:10 B-select-pk-10000-c4: 592728 stmts 29635/s cpu/stmt 32.6us bad=0 ck=15 load1=2.29
+18:24:34 A-update-lit-200-c4: 108113 stmts 5405/s cpu/stmt 84.0us bad=22 ck=15 load1=1.98
+18:24:57 B-update-lit-200-c4: 102933 stmts 5146/s cpu/stmt 89.5us bad=18 ck=15 load1=1.71
+18:25:21 A-update-lit-1000-c4: 104048 stmts 5202/s cpu/stmt 95.3us bad=2 ck=15 load1=1.55
+18:25:44 B-update-lit-1000-c4: 103363 stmts 5168/s cpu/stmt 93.0us bad=5 ck=15 load1=1.75
+18:26:08 A-update-lit-10000-c4: 104648 stmts 5232/s cpu/stmt 93.4us bad=0 ck=15 load1=1.79
+18:26:32 B-update-lit-10000-c4: 104355 stmts 5217/s cpu/stmt 78.1us bad=0 ck=15 load1=2.08
+18:26:56 A-update-lit-100000-c4: 105179 stmts 5259/s cpu/stmt 98.3us bad=0 ck=16 load1=2.13
+18:27:21 B-update-lit-100000-c4: 92637 stmts 4632/s cpu/stmt 105.6us bad=0 ck=16 load1=1.97
+18:27:44 A-update-spill-assign-10000-c4: 93335 stmts 4667/s cpu/stmt 108.3us bad=1 ck=15 load1=2.19
+18:28:08 B-update-spill-assign-10000-c4: 90991 stmts 4549/s cpu/stmt 109.4us bad=1 ck=15 load1=2.08
+18:28:31 A-insert-0-c4: 103696 stmts 5184/s cpu/stmt 83.1us bad=0 ck=15 load1=1.91
+18:28:55 B-insert-0-c4: 104888 stmts 5244/s cpu/stmt 75.3us bad=0 ck=15 load1=1.80
+18:29:04 A-recovery-0-r1: work 9.1s lsn 14631464 mount 0.115s
+18:29:14 B-recovery-0-r1: work 8.8s lsn 15215368 mount 0.111s
+18:29:23 A-recovery-600000-r1: work 9.1s lsn 14630544 mount 0.120s
+18:29:33 B-recovery-600000-r1: work 9.2s lsn 14655216 mount 0.116s
+18:29:43 A-recovery-0-r2: work 9.6s lsn 14631464 mount 0.110s
+18:29:53 B-recovery-0-r2: work 8.9s lsn 15223592 mount 0.110s
+18:30:03 A-recovery-600000-r2: work 9.6s lsn 14630544 mount 0.116s
+18:30:13 B-recovery-600000-r2: work 9.4s lsn 14655216 mount 0.121s
+18:30:23 A-recovery-0-r3: work 9.4s lsn 14631464 mount 0.110s
+18:30:33 B-recovery-0-r3: work 9.5s lsn 15231816 mount 0.126s
+18:30:42 A-recovery-600000-r3: work 9.1s lsn 14630544 mount 0.121s
+18:30:52 B-recovery-600000-r3: work 8.9s lsn 14655216 mount 0.116s
+18:30:52 ALL DONE

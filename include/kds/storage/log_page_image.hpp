@@ -13,10 +13,14 @@
 #include "kds/wal/record.hpp"
 #include "kds/wal/stream.hpp"
 
-// The one FULL_PAGE_IMAGE writer: append the image, then stamp the page.
-// One function so the stamp cannot be lost from a hand-copied block - redo
-// gates on `page_lsn`, so an unstamped image replays a record whose effect
-// the page already holds.
+// The FULL_PAGE_IMAGE writer of the paths that image a page they changed (an
+// index build's tree, a chain's link edit, a Bound Cabin's old tail):
+// append the image, then stamp the page. One function so the stamp cannot
+// be lost from a hand-copied block - redo gates on `page_lsn`, so an
+// unstamped image replays a record whose effect the page already holds.
+// The write fetch's owed image (DB, `wal.md` §10) is the store's own
+// (`DevicePageStore::LogOwedImage`), which appends and stamps the same way
+// through the gate's `LogPageImage`.
 //
 // Lives in storage rather than wal because the WAL layer owns no
 // PageStore by design (wal.md: segments are not pages); storage already
@@ -30,14 +34,11 @@ inline Status LogFullPageImage(wal::WalManager* wal, PageStore& store, std::uint
 
     auto bytes = store.Get(page_id);
     if (!bytes.ok()) return bytes.status();
-    std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-    if (auto n = wal::EncodeFullPageImage(
-            image, std::span<const std::byte, kPageSize>(bytes.value().bytes()));
-        !n.ok()) {
-        return n.status();
-    }
+    // The payload is the page itself (`payload.hpp`: no prefix), so the
+    // held bytes are appended as they stand.
+    static_assert(wal::kFullPageImagePayloadSize == kPageSize);
     auto fpi = wal->Append(wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, page_id},
-                           image);
+                           bytes.value().bytes());
     if (!fpi.ok()) return fpi.status();
     return store.StampPageLsn(page_id, fpi.value());
 }

@@ -477,6 +477,57 @@ public:
     // alone. A no-op past the bound.
     void ClearCoreWalGate(std::uint32_t core, const wal::WalDurability* gate) noexcept;
 
+    // ---- The write fetch's image (DB, wal.md §10) ------------------------
+    //
+    // **A torn write is healed from the image the page's last write fetch
+    // logged.** A frame owes an image from the moment the device holds its
+    // bytes - its fault-in, and every writeback copy (`Frame::owes_image`) -
+    // and the first write fetch after that logs the page as it stands,
+    // before its holder changes anything, through the calling core's gate
+    // (`WalDurability::LogPageImage`), and stamps it. Every later change of
+    // the page is a record after the image, so redo laying the image over a
+    // tear and replaying the rest rebuilds the page exactly (DB-R1); a
+    // checkpoint's copy sets the debt, so the image of every page a write
+    // can tear lies above the anchor it is written under.
+    //
+    // **The decision site is the write fetch** (`FetchPinned` with
+    // `for_read` false), after the page latch is granted: no copy can fall
+    // between the decision and the holder's first write, armed or not. A
+    // nested write fetch of a page the task already holds finds the debt
+    // paid by the outer one. A refused append fails the fetch - before the
+    // holder has changed the page - with the fail-stop the append's own
+    // refusal is (`wal/manager.cpp`).
+    //
+    // **Off until `EnableFetchImages`** (DB-R2): a mount runs with it off,
+    // through redo, undo, the assertion fold and the completion checkpoint,
+    // because a fetch image logged mid-replay would sit above records it
+    // already holds and revert the page at the next mount. The bit is set
+    // all the same, so the first write fetch after the mount pays it.
+    void EnableFetchImages(bool on) noexcept {
+        fetch_images_.store(on, std::memory_order_release);
+    }
+
+    // **The classes no record describes**, named by the layer that knows
+    // them (DB-Q2 (a)): a page whose `owner_oid` is a registered owner, or
+    // whose id is a registered page, logs no image. Page 0, a headerless
+    // page and every page type outside the logged set (`ImagedClass`) are
+    // the store's own and need no registration. A registration that finds
+    // the table full is refused `ResourceExhausted`, and its caller refuses
+    // what it was for: an unregistered unlogged page would be imaged, and a
+    // fenced build's pages freed with an image naming them (DB-R3).
+    Status AddUnloggedOwner(std::uint64_t owner_oid) override {
+        return AddUnlogged(owner_oid);
+    }
+    void RemoveUnloggedOwner(std::uint64_t owner_oid) noexcept override {
+        RemoveUnlogged(owner_oid);
+    }
+    Status AddUnloggedPage(PageId page_id) override { return AddUnlogged(kUnloggedPageTag | page_id); }
+
+    // Whether a write fetch of `page_id` holding `bytes` would log its image,
+    // by the class test. Public for a harness that must tell a tear DB heals
+    // from one it leaves refused, from the bytes the torn write carried.
+    bool ImagedClass(PageId page_id, std::span<const std::byte, kPageSize> bytes) const;
+
     // `SetStreamCoreId` and `core_id()` retired (AM-S2 step 3); their
     // history is at cf889b63. `CurrentCore()` is set by the thread, and
     // `CoreRuntime::Open`'s guard supplies it for the whole mount pass.
@@ -928,6 +979,12 @@ private:
         // (`kSkip`). In the padding after `usage`, so the frame's size does
         // not move.
         bool writing = false;
+
+        // **The page owes an image at its next write fetch**: set at the
+        // fault-in and every writeback copy, cleared by the fetch that pays
+        // it ("The write fetch's image", above). In the padding after
+        // `writing`, under the structure latch like it.
+        bool owes_image = false;
 
         // **Moved at every dirty mark** (AT-S8, step 1b), under the
         // structure latch like `dirty` itself, to the next value of the
@@ -1760,7 +1817,21 @@ private:
     };
     Counter hits_, misses_, reclaimed_inline_, reclaimed_background_, batches_inline_,
         batches_background_, batches_partial_, batch_steps_, batch_steps_background_,
-        dirty_queued_, dirty_drained_, refused_, would_wait_;
+        dirty_queued_, dirty_drained_, refused_, would_wait_, fetch_images_logged_;
+
+    // The write fetch's image (the public section). The registry: 0 an
+    // empty slot, an owner oid as itself, a page id with `kUnloggedPageTag`.
+    Status LogOwedImage(PageId page_id, std::span<const std::byte, kPageSize> bytes);
+    Status AddUnlogged(std::uint64_t word);
+    void RemoveUnlogged(std::uint64_t word) noexcept;
+    bool IsUnlogged(std::uint64_t word) const noexcept;
+    static constexpr std::uint64_t kUnloggedPageTag = std::uint64_t{1} << 63;
+    // Four standing entries (the two unlogged catalog chains' heads and
+    // owners) and one per fenced index build running at once; 32 leaves
+    // 28 builds, each under its own relation `X`.
+    static constexpr std::size_t kUnloggedSlots = 32;
+    std::array<std::atomic<std::uint64_t>, kUnloggedSlots> unlogged_{};
+    std::atomic<bool> fetch_images_{false};
 };
 
 }  // namespace kds::storage
