@@ -866,9 +866,9 @@ private:
                                 stats::RelationWrite kind);
     // `FinishWrite` without the count: ends a write scope with `out` as its
     // verdict (`EndWrite`), an `ERR` reply being a failed statement. `out`
-    // again, or the scope's own refusal when a statement that succeeded
-    // could not be ended.
-    DispatchOutcome EndWriteWith(Session& session, WriteScope& scope, DispatchOutcome out);
+    // is left as it was, or replaced by the scope's own refusal when a
+    // statement that succeeded could not be ended.
+    void EndWriteWith(Session& session, WriteScope& scope, DispatchOutcome& out);
 
     // **The one way an owned scope ends without committing** (AO-S6d,
     // AO-0 item 15). Three arms of `EndWrite` reach it: the statement

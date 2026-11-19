@@ -6559,7 +6559,7 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
 
 DispatchOutcome CommandDispatcher::FinishWrite(Session& session, WriteScope& scope,
                                                DispatchOutcome out, stats::RelationWrite kind) {
-    out = EndWriteWith(session, scope, std::move(out));
+    EndWriteWith(session, scope, out);
     // `sys.relation_stats`' count (BO-S6), once the statement has answered.
     if (out.response.rfind("ERR ", 0) != 0) {
         stats::RelationStats::Record(core_id_, out.written_oid, kind, out.rows_affected);
@@ -6567,15 +6567,13 @@ DispatchOutcome CommandDispatcher::FinishWrite(Session& session, WriteScope& sco
     return out;
 }
 
-DispatchOutcome CommandDispatcher::EndWriteWith(Session& session, WriteScope& scope,
-                                                DispatchOutcome out) {
+void CommandDispatcher::EndWriteWith(Session& session, WriteScope& scope, DispatchOutcome& out) {
     // The reply is the verdict, which is the same rule Dispatch() itself
     // applies one level up. A statement that answered ERR did not happen as
     // far as the client is concerned, so an autocommit scope unwinds it.
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     const Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
-    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) return Refused(s);
-    return out;
+    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) out = Refused(s);
 }
 
 Status CommandDispatcher::CheckWriteAdmission(const catalog::TableAccess& access) {
@@ -12202,7 +12200,8 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
     // `DispatchAsync` then waits on and re-runs - always whole, the trail
     // being at its mark. No row of `sys.relation_stats`: nothing is written.
     const auto ended = [&](DispatchOutcome out) {
-        return EndWriteWith(session, scope, std::move(out));
+        EndWriteWith(session, scope, out);
+        return out;
     };
 
     // ---- The claim pass ----------------------------------------------------

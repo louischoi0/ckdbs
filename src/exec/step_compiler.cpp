@@ -2170,9 +2170,12 @@ StatusOr<SubChain> LowerSubquery(catalog::Catalog& catalog, const Scope& scope,
 // decoded row in that case: a dropped column is not in `*` (BW-R6), nor a
 // heap's hidden tuple key (BZ-R3), and the dispatcher's `DescribeStar`
 // skips the same columns, so names and values stay aligned.
-StatusOr<SelectList> ProjectColumns(const Scope& scope,
-                                    const std::vector<parser::ColumnName>& list, bool star) {
-    SelectList out;
+//
+// **Appended to `out`**, whose headings may already hold an aggregated
+// statement's labels: a chain's lists are filled in place, and its compile
+// builds no list to move.
+Status ProjectColumns(const Scope& scope, const std::vector<parser::ColumnName>& list, bool star,
+                      SelectList& out) {
     for (const parser::ColumnName& col : list) {
         auto ref = ResolveColumn(scope, col);
         if (!ref.ok()) return ref.status();
@@ -2188,7 +2191,7 @@ StatusOr<SelectList> ProjectColumns(const Scope& scope,
             out.names.push_back(std::string(catalog::NameView(column.name)));
         }
     }
-    return out;
+    return Status::OK();
 }
 
 }  // namespace
@@ -2393,7 +2396,9 @@ StatusOr<SelectList> CompileSelectList(const catalog::TableAccess& access,
                                        const std::vector<parser::ColumnName>& list, bool star) {
     Scope scope;
     scope.relations.push_back(BoundRelation{std::string(binding), &access});
-    return ProjectColumns(scope, list, star);
+    SelectList out;
+    if (Status s = ProjectColumns(scope, list, star, out); !s.ok()) return s;
+    return out;
 }
 
 namespace {
@@ -3432,16 +3437,16 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     // `star()`, not `projection.empty()`: an aggregated statement leaves
     // the projection empty too, and labelling its output with the
     // relation's columns would name a row it never emits.
-    // The headings follow an aggregated statement's labels, of which a
-    // plain statement has none.
-    auto list = ProjectColumns(scope, stmt.projection, stmt.star());
-    if (!list.ok()) return list.status();
-    chain.projection = std::move(list.value().projection);
-    chain.projection_types = std::move(list.value().types);
-    chain.projection_type_mods = std::move(list.value().type_mods);
-    chain.column_names.insert(chain.column_names.end(),
-                              std::make_move_iterator(list.value().names.begin()),
-                              std::make_move_iterator(list.value().names.end()));
+    // The chain's own lists, lent and taken back: the headings follow an
+    // aggregated statement's labels, and nothing is copied or allocated twice.
+    SelectList list{std::move(chain.projection), std::move(chain.column_names),
+                    std::move(chain.projection_types), std::move(chain.projection_type_mods)};
+    const Status projected = ProjectColumns(scope, stmt.projection, stmt.star(), list);
+    chain.projection = std::move(list.projection);
+    chain.column_names = std::move(list.names);
+    chain.projection_types = std::move(list.types);
+    chain.projection_type_mods = std::move(list.type_mods);
+    if (!projected.ok()) return projected;
 
     // ---- 5a. The pagination tail (spec I11, V09; sort per OB3) -----------
     //
