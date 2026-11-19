@@ -2,7 +2,7 @@
 
 Status: **OPENED 2026-11-18; CZ-S0, CZ-S1 and CZ-S2 done; S1 read as C1
 alone; CZ-S2's items CZ-Q14 to CZ-Q22 marked (a) (§43 there); CZ-S3 and
-CZ-S4 opened on the operator's W29 (§47 there), every later item to CLA's
+CZ-S4 opened on the operator's W29 (§50 there), every later item to CLA's
 proposal and a gate not met stopping the order; CZ-S3 built; CZ-S4 done,
 every gate met - CLOSED 2026-11-18 with C1 built** (§7, "CZ-S3" and
 "CZ-S4"), not merged and not pushed, on
@@ -746,7 +746,7 @@ is CLA's proposal.
 
 On worktree `cz-checkpoint-roll-wait`, from `origin/main` at `9712f5f0`
 (`v3.4.12-112-g9712f5f0`), on the operator's W29
-(`raft-marks-2026-11-18.md` §47). **The model of §8, built as written**,
+(`raft-marks-2026-11-18.md` §50). **The model of §8, built as written**,
 with the departures below. **The three parts were built as one step, not
 three** (§5 lists S3a, S3b and S3c): the tried entries on `WalStream` and
 `WalManager` serve all three, so one review and one suite cover them;

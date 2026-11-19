@@ -435,7 +435,36 @@ took under them.
 | **Does not settle** | `ON`'s reading as a restriction to the build, which is CLA's and unmarked; CX-Q6 (a)'s consequence (§45); CX-S6 and S7; a tag, a version |
 | **Recorded at** | this file; the CX order's §8; the CX row and this file's row in `instructions/v3.2.0/index.md` |
 
-## 47. CZ-S3 and CZ-S4 opened, every later item to CLA's proposal, a gate not met stops the order
+## 47. CX to its close on the standing go-ahead; CX-Q29..Q37 adopted as CLA proposed
+
+| | |
+|---|---|
+| **Word** | The operator invoked `/go-ahead-achieving-milestone` after §46's push: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* The milestone is CX, the one this session and its worktree `cx-plan-change-option` are on |
+| **Mark** | None of the operator's per item. **Adopted on the operator's standing go-ahead of 2026-11-18 (go-ahead-achieving-milestone), each as CLA proposed** in the order's items table: CX-Q29 (a), `ADVISE PLAN` is `admin`'s; CX-Q30 (a), `sys.plan_advice` is memory, one table, bounded; CX-Q31 (a), the view keeps the shape text and the reply the literals; CX-Q32 (a), an advice is priced against the plan the statement's next compile would run; CX-Q33 (a), a one-relation statement is refused, an unsearched join advised as written; CX-Q34 (a), a mount still refuses a `sys.plans` it cannot scan; CX-Q35 (a), `BUILD ON` as S5 built it; CX-Q36 (a), CX-Q6 (a)'s consequence kept; CX-Q37 (a), S6's measurement read against the removable compile, so no plan cache is built (its bounds in the order's items table). None is `[quiet-wrong]`. The stages left - S6 (gated on its measurement, CX-Q10; done, CX-Q37), S7 and the milestone's close measurement - run in this session; a push, a tag or a version still waits for the operator's word |
+| **Does not settle** | a push, a merge to `main`, a tag, a version; CX-Q36 (b), left for the operator |
+| **Recorded at** | this file; the CX order's items table and §8; the CX row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 48. CY to its close on the standing go-ahead; CY-Q24..Q30 adopted as CLA proposed
+
+Numbered after §47, which is on CX's work branch `worktree-cx-plan-change-option` and not on `main` when this was written.
+
+| | |
+|---|---|
+| **Word** | Given at 13:33 UTC and run six hours later, as asked: *"start the CY milestone 6 hours from now /go-ahead-achieving-milestone"* (given in Korean; recorded in English) - the skill's standing word, *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* The milestone is CY, named in the skill's argument. It runs on a worktree of its own, `cy-managed-statistics`, from `origin/main` at `9712f5f0`, because CX's worktree `cx-plan-change-option` is held by another live session |
+| **Mark** | None of the operator's per item. **Adopted on the operator's standing go-ahead of 2026-11-18 (go-ahead-achieving-milestone), each as CLA proposed** in the CY order's items table: CY-Q24 (a), the relation object alone, the column surface refused by name; CY-Q25 (a), the managed store in memory, written by the shutdown tail; CY-Q26 (a), a gather counts live slots and leaves, PS1's quantity, with no view; CY-Q27 (a), the `analytic` slice whatever the session declared, on the session's core; CY-Q28 (a), a lock stops every act that changes the published object without `FORCE`; CY-Q29 (a), `EXPORT` a `SELECT` over `sys.statistics`, a one-line document; CY-Q30 (a), `ADVISE PLAN ... USING PENDING` not built in CY; and CY-Q31 (a), raised by the close's measurement, a gather paced to 16 leaves per 2 ms and a republish only where a band moved. None is `[quiet-wrong]`. The stages left - S1b, S4's relation-object surface, the close's measurement (CY-S5) - run in this session; a push, a tag or a version still waits for the operator's word |
+| **Does not settle** | a push, a merge to `main`, a tag, a version; item 4 (`docs/pending/statistics-staleness-and-regather.md`); S2 and S3, which W13 keeps unbuilt |
+| **Recorded at** | this file; the CY order's items table and §8; the CY row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 49. CX pushed with the hook skipped, the close's regression standing; a first merge that dropped CY, fixed forward
+
+| | |
+|---|---|
+| **Word** | *"push no verify"* - after CLA's stop report of CX's close at `b1c0307a` on worktree `cx-plan-change-option` (§47), which stopped at the measured regression: point statements 1.2 % to 2.0 % slower than at `8b584cf6` at `cores = 1`, part DF-S1's and the rest unattributed (`bench/v3.4.12/results-cx-close-v3.4.12-115-ga32528a4.md`) |
+| **Mark** | None. **CX-S6, CX-S7 with its review, and CX's close go to `main` with `--no-verify`, the regression standing and unattributed**; no bisect is run. **The hook was skipped. The full Debug suite ran 0 failed of 4712 at `a32528a4`; `b1c0307a` changed `bench/` and documents only. The merge with CY (`647ad6d4`) brought code, so that suite does not cover the merged tree**, and the reply says what ran on it. **A first push went wrong**: `origin/main` moved to CY's merge `647ad6d4` between CLA's fetch and its `commit-tree`, the shared ref was read at the new value, and the commit `828899f6` - parents `647ad6d4` and `b1c0307a` - carried the work branch's tree, which drops CY's change. It was fixed forward by a commit on top of it carrying the real merge of the two (conflicts in `command_dispatcher.hpp`, `sys_views.cpp`, this file and the index, each resolved by keeping both sides); no force push |
+| **Does not settle** | the regression's cause (a bisect of `ee89842e..a32528a4` with a `sys.statement_stats` spike, waiting for a measurement budget); CX-Q36 (b) and CX-Q37 (b)/(c); a tag, a version |
+| **Recorded at** | this file; the CX order's §8; the CX row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 50. CZ-S3 and CZ-S4 opened, every later item to CLA's proposal, a gate not met stops the order
 
 | | |
 |---|---|
@@ -443,4 +472,4 @@ took under them.
 | **Word** | W29 (the BL/CZ matter's): *"I will have the CZ milestone's work carried on from the handoff. Start the milestone two hours from now. Every decision follows the proposal; if a gate is not met, stop. Carry out the work until the milestone is stopped or ends."* (given in Korean; recorded in English) |
 | **Mark** | **CZ-S3 is opened, and CZ-S4 with it**: the build of §8 (S3a the log park's flush, S3b the begin and end records, S3c the recycle), each with its `critics-developer` review and the full suite, then the close. **Every item that arises from here on is marked as CLA proposes it**, recorded where it arises. **A gate not met stops the order**: a failed review not resolved, a suite not green, or at the close V1 (CZ-Q1 (a)), the bulk cell's 3 % (CZ-Q2 (a)) or a measured overhead regression - CLA reports and does not go on. CLA's reading: the push and any tag still wait for their own word (`CLAUDE.md`, Session Workflow step 4) |
 | **Does not settle** | a push, a tag, a version; DG-Q0..Q10 - DG stays unopened; C2's build (CZ-Q3 (a)) |
-| **Recorded at** | this file; the CZ order's header and §7; the CZ row and this file's row in `instructions/v3.2.0/index.md` |
+| **Recorded at** | this file (written as §47 on the work branch and renumbered §50 at its merge behind `origin/main`'s §47 to §49; the commits `74861601` and `f8ffccea` cite it as §47); the CZ order's header and §7; the CZ row and this file's row in `instructions/v3.2.0/index.md` |

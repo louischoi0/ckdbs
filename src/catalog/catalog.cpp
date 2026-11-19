@@ -3989,7 +3989,9 @@ StatusOr<std::vector<SysStatisticsRow>> Catalog::TakeStatisticsAtMount() {
                 } else if (row.value().kind == kStatisticsWhole) {
                     ++marks;
                     marked = row.value().count;
-                } else if (row.value().kind == kStatisticsRelation) {
+                } else if (row.value().kind == kStatisticsRelation ||
+                           row.value().kind == kStatisticsVersion ||
+                           row.value().kind == kStatisticsSlot) {
                     rows.push_back(row.value());
                 } else {
                     decoded = false;  // a kind this build did not write
@@ -4010,8 +4012,7 @@ StatusOr<std::vector<SysStatisticsRow>> Catalog::TakeStatisticsAtMount() {
     return std::vector<SysStatisticsRow>{};
 }
 
-Status Catalog::WriteStatisticsAtShutdown(
-    std::span<const std::pair<Oid, std::int16_t>> priors) {
+Status Catalog::WriteStatisticsAtShutdown(std::span<const SysStatisticsRow> rows) {
     // Onto empty pages, whatever this run left on them: the mount emptied
     // the chain and nothing writes it while statements run, so this is a
     // second line, and it is what makes a second call harmless.
@@ -4021,11 +4022,10 @@ Status Catalog::WriteStatisticsAtShutdown(
     // Unlogged and un-undone, by CR6, as `RecordAccess` writes its rows; no
     // `BumpVersion()`, since nothing cached is derived from them. The
     // closing mark last: a failure before it leaves a chain with none.
-    SysStatisticsRow row{};
-    row.kind = kStatisticsRelation;
-    for (const auto& [oid, band] : priors) {
-        row.rel_oid = oid;
-        row.band = band;
+    for (const SysStatisticsRow& row : rows) {
+        if (row.kind == kStatisticsWhole) {
+            return Status::InvalidArgument("sys.statistics: a closing mark is the write's own");
+        }
         if (Status s = InsertRow(/*wal=*/nullptr, /*undo_hook=*/nullptr, store_,
                                  kCatalogPageStatistics, row, kBootstrapXid);
             !s.ok()) {
@@ -4034,7 +4034,7 @@ Status Catalog::WriteStatisticsAtShutdown(
     }
     SysStatisticsRow mark{};
     mark.kind = kStatisticsWhole;
-    mark.count = priors.size();
+    mark.count = rows.size();
     return InsertRow(/*wal=*/nullptr, /*undo_hook=*/nullptr, store_, kCatalogPageStatistics,
                      mark, kBootstrapXid);
 }

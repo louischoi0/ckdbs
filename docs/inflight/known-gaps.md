@@ -1979,13 +1979,35 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 ## Plan statistics (CY)
 
-- **Relation priors are kept across a clean shutdown only.** Verified at
-  CY-S1a on `cx-plan-change-option`. After a crash or a restore
-  `sys.statistics` is empty and the planner prices every relation at
-  `kAssumedRelationRows` until the steward's first publish, as before
-  CY-S1 (`docs/spec/plan-stats.md` PS16). Posteriors and decline facts are
-  never kept. No statement gathers, reads, exports or imports a statistic.
-  Owned by `plan-stats.md` §8.
+- **Relation priors and managed objects are kept across a clean shutdown
+  only.** Verified at CY-S1b on `cy-managed-statistics`. After a crash or a
+  restore `sys.statistics` is empty: the planner prices every relation at
+  `kAssumedRelationRows` until the steward's first publish, as before CY-S1
+  (`docs/spec/plan-stats.md` PS16), and every gathered, imported, pending or
+  locked object and its history is gone - `EXPORT`/`IMPORT` is how a model
+  is carried across either. Posteriors and decline facts are never kept.
+  Owned by `plan-stats.md` §8, §9.
+
+- **A `GATHER` is behind OLTP by its slicing only.** Verified at CY-S1b on
+  `cy-managed-statistics`. Its walk yields every 16 leaves and holds the
+  relation's `IS` a slice at a time (PS20), but it stays on the session's
+  core - a session moves only at a transaction head (BL-S3), so it is not
+  put on a batch core unless the session declared `SET PRIORITY
+  background` first - and its page reads come through the buffer pool, so a
+  gather of a cold relation larger than the pool turns the pool over (CY-R10
+  asks a page budget that does not). Its pace (CY-Q31 (a), 16 leaves per
+  2 ms at most) is a floor and not a period: nothing wakes the park at its
+  deadline, so on an idle core a slice waits for the reactor's idle-block
+  ceiling (10 ms) and a gather runs at about a fifth of its ceiling; the
+  fix is a scheduler timer the dispatcher has no handle to arm. No cell runs
+  the paced branch - every gather fixture has no clock - so it is covered by
+  CY-S5's measurement alone. Owned by `plan-stats.md` §9.
+
+- **No column or column-group statistics** (the operator's W13, CY-S2 and
+  CY-S3 not built), so selectivity is still the three constants of
+  `exec/join_order.hpp`; and **no `ADVISE PLAN ... USING PENDING`**
+  (CY-Q30 (a)): a pending version's effect on a plan is not shown before it
+  is published. Owned by `plan-stats.md` §9.
 
 - **The shutdown's write is covered by hand-driven cells only.** Every
   restart cell calls `Expeditor::WriteRelationPriors` itself, then the
@@ -2069,6 +2091,24 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   measured; the overhead measurement is owed at CX's close. Owned by
   `exec/admin_plans.hpp`.
 
+- **A block run in an order other than its written one compiles twice,
+  and there is no plan cache.** Verified at CX-S6 (`29401d0f`) on
+  `cx-plan-change-option` (`bench/v3.4.12/results-cx-s6-compile-share-v3.4.12-112-g9712f5f0.md`
+  §7). `CompileBlock` compiles the written order first - its refusal is
+  the statement's and it is the decline's fallback - and then the order in
+  force, so a captured order or a plan's variant that is not the written
+  one pays two compiles: 5.3 µs against 2.5 µs for a three-relation join
+  in release, in-process; a two-variant plan pays 4.2 µs against 1.6 µs,
+  the second lex included. **S6 built no compiled-chain cache** (CX-Q37
+  (a)), and in the server the plan cells are where that costs: the
+  server's own `exec::Compile`, the most a cache could remove, is 5.7 %
+  (`cores = 1`) and 6.3 % (`cores = 2`) of a two-variant plan's client p50
+  and 5.3 % of a one-relation plan's at `cores = 2`, against 2.8 % to 4.1 %
+  for every plain shape; against the server's own time every cell is over
+  5 % (§8 of that file, a spike). Skipping the first compile is not built
+  and is not free: the written order's refusal is the statement's. Owned
+  by `instructions/v3.2.0/workorder-cx-managed-plans.md`.
+
 - **With the cabin controller on and no plan naming its Cabins, the
   controller accelerates nothing.** Verified at CX-S3b on
   `cx-plan-change-option`. Since CX-Q6 (a) a controller-made Cabin is read
@@ -2099,8 +2139,23 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   a statement the plan governs is compiled twice, unpinned and pinned.
   With none enabled the cost is one relaxed load. CX-R6's "zero cost for
   the unmanaged point path" therefore holds only while no one-relation
-  plan is enabled. Not measured; owed at CX's close. Owned by
-  `exec/admin_plans.hpp`.
+  plan is enabled. Measured at CX's close (`a32528a4`,
+  `bench/v3.4.12/results-cx-close-v3.4.12-115-ga32528a4.md`): +0.17 to
+  +0.25 µs of server CPU on a point read against a control's +0.06 to
+  +0.11 µs, 0.5 % to 1 % of its throughput; an enabled join plan costs it
+  nothing resolvable. Owned by `exec/admin_plans.hpp`.
+
+- **Point statements are 1.2 % to 2.0 % slower at CX's close than where
+  CX opened, and the cause is not attributed.** Measured at `a32528a4` on
+  `cx-plan-change-option` against `8b584cf6`, `cores = 1`
+  (`bench/v3.4.12/results-cx-close-v3.4.12-115-ga32528a4.md`): a point
+  read and a two- and three-relation tuple key join spend +0.4 to +0.8 µs
+  more server CPU, under `fixed` and `planned` alike, above the noise
+  floor in two runs; join blocks are unchanged. CX-S0..S3a are within the
+  floor; DF-S1's statement statistics, inside the same span, carry part;
+  the rest falls in CX-S3b..S7, whose point-path additions read as
+  nanoseconds. A bisect of `ee89842e..a32528a4` is owed. Owned by
+  `instructions/v3.2.0/workorder-cx-managed-plans.md`.
 
 - **A named Cabin pin is by the column's name, and its drop RESTRICT has
   a window.** Verified at CX-S3b on `cx-plan-change-option`. `ACCESS t

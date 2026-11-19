@@ -24,6 +24,7 @@
 #include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/admin_plans.hpp"
+#include "kds/exec/plan_advice.hpp"
 #include "kds/exec/captured_plans.hpp"
 #include "kds/exec/plan_catalog.hpp"
 #include "kds/exec/plan_memo.hpp"
@@ -392,6 +393,13 @@ struct DispatchOutcome {
 // surface, can be pinned by a test that owns no socket and no dispatcher.
 std::string ErrorReply(const Status& status);
 
+// **A relation's statistics export document** (CY-S4, `plan-stats.md` §9):
+// one line, `KDS-STATISTICS 1 RELATION rows=<n> ...`, of a managed version -
+// or, with `stat` null, of the steward's observed prior of `observed_rows` -
+// naming the relation as `label`. `IMPORT STATISTICS` reads it back.
+std::string StatisticsDocument(std::string_view label, const stats::RelationStatistic* stat,
+                               std::uint64_t observed_rows);
+
 // **The inverse**, for the paths that hold a rendered `ERR` line and need
 // the *code* back: the KWP session and the KWP load server, as the fallback
 // where `DispatchOutcome::status` is OK on a refusal built from a bare
@@ -457,6 +465,9 @@ struct OptimizerSurface {
     // The instance's administrator's plans (`exec/admin_plans.hpp`), read
     // under every `join_order`. A null leaves the dispatcher's own.
     exec::AdminPlans* admin_plans = nullptr;
+    // The instance's `ADVISE PLAN` rows (`exec/plan_advice.hpp`, CX-S7). A
+    // null leaves the dispatcher's own.
+    exec::PlanAdvices* plan_advices = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
     const stats::CabinOptimizer* controller = nullptr;
     const exec::CabinOptimizerExecutor* executor = nullptr;
@@ -1562,11 +1573,30 @@ private:
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
     DispatchOutcome HandleSetJoinOrder(std::string_view line, std::string_view rest);
     DispatchOutcome HandleDropPlan(std::string_view line, Session& session);
+    // **The statistics statements** (CY-S1b, CY-S4; `plan-stats.md` §9):
+    // `GATHER`, `LOCK`, `UNLOCK`, `PUBLISH`, `DISCARD PENDING`, `RESTORE`,
+    // `EXPORT`, `IMPORT` and `DELETE STATISTICS ON <relation> ...`.
+    // Admin-classed, autocommit only.
+    DispatchOutcome HandleStatistics(std::string_view line, Session& session);
+    // A committed `DROP TABLE`: the relation's managed statistics and their
+    // history, and every later store for its oid (CY-S4).
+    void ForgetRelationStatistics(catalog::Oid oid);
     // `CREATE PLAN` and `ALTER PLAN` (CX-S1b, `exec/plan_ddl.hpp`): an
     // administrator's plan for a statement shape, made, enabled, disabled
     // and edited. Admin, autocommit only, answered once durable.
     DispatchOutcome HandleCreatePlan(std::string_view line, Session& session);
     DispatchOutcome HandleAlterPlan(std::string_view line, Session& session);
+    // `ADVISE PLAN FOR <select>` (CX-S7): the search's order for the
+    // statement as a `CREATE PLAN` text, priced against the plan in force,
+    // recorded in `sys.plan_advice`. Admin; writes nothing durable.
+    DispatchOutcome HandleAdvisePlan(std::string_view line, Session& session);
+    // The `<select>` a plan statement holds at `[at, at + size)` of `line`,
+    // as every layer below sees it - the rest of the command blanked, so a
+    // byte any of them names is the command's own: refused where it is no
+    // SELECT (`<head> takes a SELECT`), or holds a `?` (by example, with
+    // literals).
+    StatusOr<std::string> PlanExampleText(std::string_view line, std::size_t at,
+                                          std::size_t size, std::string_view head);
     // The `IS` of every relation `key` names, taken into `hold` and kept
     // until it is destroyed: what keeps a `DROP TABLE` from committing
     // under a plan DDL's install. A plan DDL is not a read that must never
@@ -2110,6 +2140,7 @@ public:
         if (surface.join_order != nullptr) join_order_ = surface.join_order;
         if (surface.captured_plans != nullptr) captured_plans_ = surface.captured_plans;
         if (surface.admin_plans != nullptr) admin_plans_ = surface.admin_plans;
+        if (surface.plan_advices != nullptr) plan_advices_ = surface.plan_advices;
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
         cabin_optimizer_view_latch_ = surface.view_latch;
@@ -2404,6 +2435,9 @@ private:
     StatusOr<exec::CatalogView> AssertionsView();
     StatusOr<exec::CatalogView> TransitionsView();
     StatusOr<exec::CatalogView> PlansView();
+    StatusOr<exec::CatalogView> PlanAdviceView();
+    StatusOr<exec::CatalogView> StatisticsView();
+    StatusOr<exec::CatalogView> StatisticsHistoryView();
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> StatementStatsView();
@@ -2680,6 +2714,9 @@ private:
     // The administrator's plans (CX-S1b), on the same terms.
     exec::AdminPlans own_admin_plans_;
     exec::AdminPlans* admin_plans_ = &own_admin_plans_;
+    // `ADVISE PLAN`'s rows (CX-S7), on the same terms.
+    exec::PlanAdvices own_plan_advices_;
+    exec::PlanAdvices* plan_advices_ = &own_plan_advices_;
     // `set_plan_stats`': the instance's store, and this core's view of it.
     stats::PlanStats* plan_stats_ = nullptr;
     stats::PlanStatsSource plan_source_;
@@ -2749,6 +2786,7 @@ private:
     friend class BuildRun;
     friend class IndexBuildRun;
     friend class DeclarationBuildRun;
+    friend class GatherRun;
     template <typename Build>
     friend class DeclarationBuildRunOf;
 

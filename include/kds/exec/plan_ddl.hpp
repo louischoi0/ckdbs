@@ -108,6 +108,14 @@ struct AlterPlanStmt {
 };
 
 StatusOr<CreatePlanStmt> ParseCreatePlan(std::string_view line);
+
+// `ADVISE PLAN FOR <select>` (CX-S7): the `<select>` as a range of the
+// command's bytes, an optional `;` past it.
+struct AdvisePlanStmt {
+    std::size_t statement_at = 0;
+    std::size_t statement_size = 0;
+};
+StatusOr<AdvisePlanStmt> ParseAdvisePlan(std::string_view line);
 StatusOr<AlterPlanStmt> ParseAlterPlan(std::string_view line);
 
 // A variant's `ORDER` list as written positions in executed order, against

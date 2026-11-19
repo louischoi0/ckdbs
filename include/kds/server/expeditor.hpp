@@ -862,6 +862,8 @@ private:
     // The instance's administrator's plans (`exec/admin_plans.hpp`), loaded
     // at the mount from `sys.plans` and written by the plan DDL (CX-S1b).
     exec::AdminPlans admin_plans_;
+    // `ADVISE PLAN`'s rows (`exec/plan_advice.hpp`, CX-S7): memory only.
+    exec::PlanAdvices plan_advices_;
     // Whether the persisting step's last call failed: its warning is logged
     // when a run of failures starts, not once a second through it.
     bool plans_persist_failing_ = false;

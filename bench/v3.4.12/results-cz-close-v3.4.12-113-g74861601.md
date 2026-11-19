@@ -52,7 +52,7 @@ bar (v) is met in the rung-3 probe's cell on this build. That is a record
 for BL's texts (CZ-Q6 (a)), not a reopening of BL.
 
 - **Order**: `instructions/v3.2.0/workorder-cz-checkpoint-roll-wait.md`
-  §5 (CZ-S4); the operator's word, `raft-marks-2026-11-18.md` §47.
+  §5 (CZ-S4); the operator's word, `raft-marks-2026-11-18.md` §50.
 - **Driver**: `tools/bl_mixed.py` as on `main`, without CZ-S1's
   `--stall-cores`, which never fired in an `isolated` or `c1` cell, and
   `tools/cu_close_overhead.py` for the overhead.

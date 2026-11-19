@@ -102,6 +102,7 @@ add_library(kds
     src/stats/waystone_dir.cpp
     src/stats/trail_store.cpp
     src/stats/plan_stats.cpp
+    src/stats/managed_statistics.cpp
     src/stats/checkpoint_log.cpp
     src/stats/lock_wait_log.cpp
     src/stats/relation_stats.cpp
@@ -161,6 +162,7 @@ add_library(kds
     src/exec/join_order.cpp
     src/exec/plan_memo.cpp
     src/exec/admin_plans.cpp
+    src/exec/plan_advice.cpp
     src/exec/captured_plans.cpp
     src/exec/plan_catalog.cpp
     src/exec/plan_ddl.cpp
@@ -248,6 +250,8 @@ if(KDS_BUILD_BENCH)
     target_link_libraries(kds_read_view_bench PRIVATE kds)
     add_executable(kds_pool_sweep_bench bench/pool_sweep_bench.cpp)
     target_link_libraries(kds_pool_sweep_bench PRIVATE kds)
+    add_executable(kds_compile_split_bench bench/compile_split_bench.cpp)
+    target_link_libraries(kds_compile_split_bench PRIVATE kds)
 endif()
 
 # The simulation harness (bench/workplan-teststrategy SIM01-SIM14): the
