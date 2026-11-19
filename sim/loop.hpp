@@ -293,7 +293,8 @@ struct SimVerdict {
     std::size_t in_flight_pages = 0; // of them, a power loss's in-flight run
     std::size_t tears = 0;
     std::size_t tears_refused = 0;
-    // Tears of a logged class (DB-R1) the restart healed and reconciled.
+    // Tears of a logged class (DB-R1) whose restart mounted and reconciled
+    // against the oracle - healed, or never read before being rewritten.
     std::size_t tears_healed = 0;
 
     std::string Summary(const SimConfig& config) const;

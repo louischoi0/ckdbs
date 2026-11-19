@@ -333,6 +333,7 @@ MemoryPageDevice::PowerCut MemoryPageDevice::CrashPersisting(std::uint64_t seed,
         if (image != pending_.at(id) && image != old_image) {
             torn = id;
             torn_image = image;
+            cut.torn_written = pending_.at(id);
         }
     }
     for (const PageId id : ids) {

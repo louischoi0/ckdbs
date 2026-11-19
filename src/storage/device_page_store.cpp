@@ -2534,17 +2534,6 @@ bool DevicePageStore::ImagedClass(PageId page_id,
     return !IsUnlogged(header.owner_oid) && !IsUnlogged(kUnloggedPageTag | page_id);
 }
 
-bool DevicePageStore::ImagedClassOfResident(PageId page_id) const {
-    std::array<std::byte, kPageSize> copy{};
-    {
-        LatchGuard structure(structure_latch());
-        auto it = frames_.find(page_id);
-        if (it == frames_.end()) return false;
-        std::memcpy(copy.data(), it->second.bytes->data(), kPageSize);
-    }
-    return ImagedClass(page_id, copy);
-}
-
 Status DevicePageStore::AddUnlogged(std::uint64_t word) {
     // Owner 0 is every bootstrap root's, logged chains among them.
     if (word == 0) return Status::InvalidArgument("owner oid 0 cannot be registered unlogged");

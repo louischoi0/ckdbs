@@ -523,10 +523,10 @@ public:
     }
     Status AddUnloggedPage(PageId page_id) override { return AddUnlogged(kUnloggedPageTag | page_id); }
 
-    // Whether a write fetch of `page_id` would log its image, by the class
-    // test, read off its resident frame; false for a page not resident. For
-    // a harness that must tell a tear DB heals from one it leaves refused.
-    bool ImagedClassOfResident(PageId page_id) const;
+    // Whether a write fetch of `page_id` holding `bytes` would log its image,
+    // by the class test. Public for a harness that must tell a tear DB heals
+    // from one it leaves refused, from the bytes the torn write carried.
+    bool ImagedClass(PageId page_id, std::span<const std::byte, kPageSize> bytes) const;
 
     // `SetStreamCoreId` and `core_id()` retired (AM-S2 step 3); their
     // history is at cf889b63. `CurrentCore()` is set by the thread, and
@@ -1822,7 +1822,6 @@ private:
     // The write fetch's image (the public section). The registry: 0 an
     // empty slot, an owner oid as itself, a page id with `kUnloggedPageTag`.
     Status LogOwedImage(PageId page_id, std::span<const std::byte, kPageSize> bytes);
-    bool ImagedClass(PageId page_id, std::span<const std::byte, kPageSize> bytes) const;
     Status AddUnlogged(std::uint64_t word);
     void RemoveUnlogged(std::uint64_t word) noexcept;
     bool IsUnlogged(std::uint64_t word) const noexcept;

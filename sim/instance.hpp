@@ -162,8 +162,8 @@ public:
     storage::MemoryPageDevice::PowerCut CrashWithPowerCut(std::uint64_t keep_log_bytes,
                                                           std::uint64_t page_seed, bool tear);
     // Whether the last power cut's torn page was of a class the write fetch
-    // images (`DevicePageStore::ImagedClassOfResident`), read before the store
-    // went down.
+    // images (`DevicePageStore::ImagedClass`), read off the bytes the torn
+    // write carried.
     bool last_tear_imaged() const noexcept { return last_tear_imaged_; }
 
     // Log sync + store sync through the dispatcher's own SYNC — the same

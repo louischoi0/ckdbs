@@ -302,10 +302,10 @@ storage::MemoryPageDevice::PowerCut SimInstance::CrashWithPowerCut(std::uint64_t
                                                                     std::uint64_t page_seed,
                                                                     bool tear) {
     const storage::MemoryPageDevice::PowerCut cut = page_device_->CrashPersisting(page_seed, tear);
-    // Classed while the store that wrote it still stands: an in-flight
-    // write's frame is resident, claimed by its writeback (DB-Q6).
-    last_tear_imaged_ = cut.torn.has_value() && store_ != nullptr &&
-                        store_->ImagedClassOfResident(*cut.torn);
+    // Classed off the bytes the torn write carried, by the store that wrote
+    // them (DB-Q6): the frame itself may be freed or re-created by then.
+    last_tear_imaged_ = cut.torn_written.has_value() && store_ != nullptr &&
+                        store_->ImagedClass(*cut.torn, *cut.torn_written);
     CrashLog(keep_log_bytes);
     TearDown();
     return cut;
